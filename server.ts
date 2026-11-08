@@ -4222,7 +4222,8 @@ app.get("/api/agent/schema", (req, res) => {
         body: { path: "explicit mod folder, mutually exclusive with workspace", workspace: "explicit ModWorkspace, mutually exclusive with path",
           dryRun: "true to preview without writes", expectedModId: "required on apply, from preview",
           expectedSourceHash: "required on apply, from preview", expectedArtifactHash: "required on apply, from preview",
-          expectedBindingHash: "required on apply, from preview", acceptances: "optional exact {findingId,bindingHash,reason}[]; deploy permission required" },
+          expectedBindingHash: "required on apply, from preview", expectedTargetFingerprint: "optional targetFingerprint from preview",
+          acceptances: "optional exact {findingId,bindingHash,reason}[]; deploy permission required" },
         purpose: "Alias of deploy-verify with identical guards and receipt contract. Never defaults to the active workspace. Preview first, then apply with all four expected identities. Workspace-bound agent keys can only preview or deploy the mod identified by their addressed workspace."
       },
       {
@@ -4239,6 +4240,7 @@ app.get("/api/agent/schema", (req, res) => {
           expectedSourceHash: "required on apply: sourceHash from preview (semantic validation inputs)",
           expectedArtifactHash: "required on apply: artifactHash from preview (all output and included disk bytes)",
           expectedBindingHash: "required on apply: bindingHash from preview (source, artifact, validator, corpus and target)",
+          expectedTargetFingerprint: "optional targetFingerprint from preview",
           acceptances: "optional array, max127, of {findingId,bindingHash,reason}; authenticated deploy-permitted identity is recorded, never supplied in the body",
         },
         purpose: "Preview first, then guarded apply with expected identities. Workspace-bound agent keys must address a workspace whose mod matches the requested path or inline workspace, including after auto-reimport; mismatch returns DEPLOY_WORKSPACE_MOD_MISMATCH before writes. Exact accepted mod findings and unavailable checks produce a qualified deployment, not clean validation or game proof. Successful writes return durable deployRecord and acceptanceRecords. Safety/integrity gates cannot be overridden; only complete unaccepted-error-free validation promotes a baseline. warningReviews lists known/new/resolved/invalidated/revoked reviews. Only unchanged warning evidence is reused automatically; all validation-input bytes, corpus, validator and coverage must match. Reuse receipts retain the original approver/reason."
@@ -11343,6 +11345,13 @@ function pathHasEntry(filePath: string): boolean {
   }
 }
 
+function deploymentTargetFingerprint(targetPath: string): string {
+  if (!pathHasEntry(targetPath)) return 'absent';
+  const stat = fs.lstatSync(targetPath);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Deployment target is not a regular directory.');
+  return regularTreeFingerprint(targetPath);
+}
+
 function assertDeploymentRecoveryTarget(record: DeploymentRecoveryRecord, currentTargetRoot: string): void {
   const targetRoot = path.resolve(record.targetRoot);
   const targetPath = path.resolve(record.targetPath);
@@ -11813,6 +11822,7 @@ function replaceLockedDeploymentInPlace(
       throw new Error(`Locked-root backup verification failed: expected ${originalFingerprint}, got ${backupFingerprint}`);
     }
     backupVerified = true;
+    hooks.beforeActivate?.();
 
     targetMutated = true;
     synchronizeRegularTree(stage, targetPath);
@@ -13253,13 +13263,15 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
   let writeAttempted = false;
   let snapshot: DeploymentSnapshot | undefined;
   let deployReceipt: ActionReceipt | undefined;
-  const recordFailedDeploy = (rolledBack: boolean) => {
+  const recordFailedDeploy = (rolledBack: boolean, targetConflict = false) => {
     if (!deployReceipt) return;
     try {
       const current = actionReceiptStore.read(deployReceipt.id);
+      const code = rolledBack ? 'DEPLOY_ROLLED_BACK' : targetConflict ? 'DEPLOY_TARGET_CHANGED' : 'DEPLOY_FAILED';
+      const failure = { validation: { ...current.validation, status: 'failed' as const, code }, failure: { code } };
       const terminal = rolledBack
-        ? actionReceiptStore.rollBack(current.id, { rollbackStatus: 'performed', failure: { code: 'DEPLOY_ROLLED_BACK' } })
-        : current.status === 'prepared' ? actionReceiptStore.fail(current.id, { failure: { code: 'DEPLOY_FAILED' } }) : current;
+        ? actionReceiptStore.rollBack(current.id, { ...failure, rollbackStatus: 'performed' })
+        : current.status === 'prepared' ? actionReceiptStore.fail(current.id, failure) : current;
       captureActionReceiptProjection(req, terminal);
     } catch { /* Storage failure never becomes a success; retain recovery and report refusal. */ }
   };
@@ -13288,10 +13300,12 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
   try {
     const body = req.body;
     const allowed = new Set(['path', 'workspace', 'dryRun', 'deployFormat', 'autoReimport', 'allowStaleOverwrite',
-      'expectedModId', 'expectedSourceHash', 'expectedArtifactHash', 'expectedBindingHash', 'acceptances']);
+      'expectedModId', 'expectedSourceHash', 'expectedArtifactHash', 'expectedBindingHash', 'expectedTargetFingerprint', 'acceptances']);
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(k => !allowed.has(k))
       || (body.workspace !== undefined && (!body.workspace || typeof body.workspace !== 'object' || Array.isArray(body.workspace)))
       || (body.path !== undefined && (typeof body.path !== 'string' || !body.path.trim()))
+      || (body.expectedTargetFingerprint !== undefined && (typeof body.expectedTargetFingerprint !== 'string'
+        || !/^(?:absent|[a-f0-9]{64})$/.test(body.expectedTargetFingerprint)))
       || ['dryRun', 'autoReimport', 'allowStaleOverwrite'].some(k => body[k] !== undefined && typeof body[k] !== 'boolean')) {
       return res.status(400).json(failWith('config', { code: 'DEPLOY_INPUT_INVALID', error: 'Unknown or malformed deployment fields.' }));
     }
@@ -13500,6 +13514,17 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
         message: String(d.message || d.code || 'Validation finding') })), preflight.evidence?.coverage.gaps || []);
     const extensionsPath = path.join(x4GamePath, 'extensions');
     const targetRoot = path.join(extensionsPath, effectiveModId(activeBuildWorkspace(ws)));
+    const targetFingerprint = deploymentTargetFingerprint(targetRoot);
+    const targetChanged = () => Object.assign(
+      new Error('Deployment target contents changed. Review a new dry-run preview before retrying.'),
+      { code: 'DEPLOY_TARGET_CHANGED' },
+    );
+    const assertCurrentTarget = () => {
+      let current: string;
+      try { current = deploymentTargetFingerprint(targetRoot); }
+      catch { throw targetChanged(); }
+      if (current !== targetFingerprint) throw targetChanged();
+    };
     const subject: AcceptanceSubject = { evidence, artifactHash, validatorHash: deployValidatorHash, corpusHash,
       targetHash: trustHash([process.platform === 'win32' ? path.resolve(targetRoot).toLowerCase() : path.resolve(targetRoot), deployFormat]) };
     const reviewSource = modSourceDir || ws.sourceStamp?.dir;
@@ -13512,7 +13537,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
       artifactHash, validation: { evidence } };
     const decision = evaluateFindingAcceptances(subject, acceptances, principal);
     responseIdentity = { ...responseIdentity, modId: evidence.modId, modVersion: evidence.modVersion, sourceHash: evidence.sourceHash,
-      artifactHash, bindingHash: decision.binding.hash, validation: { outcome: decision.outcome,
+        artifactHash, bindingHash: decision.binding.hash, targetFingerprint, validation: { outcome: decision.outcome,
         clean: decision.validationClean, evidence, review: projectFindingReview(decision, principal) }, binding: decision.binding };
     if (body.dryRun !== true) {
       const expectedIdentity = {
@@ -13537,6 +13562,11 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
         return res.status(409).json(failWith('preflight', { code: 'DEPLOY_IDENTITY_MISMATCH',
           error: details, identityMismatch: { missing, mismatched } }));
       }
+      if (body.expectedTargetFingerprint !== undefined && body.expectedTargetFingerprint !== targetFingerprint) {
+        const { code, message } = targetChanged();
+        check('preflight', 'Deployment target contents', 'fail', message);
+        return res.status(409).json(failWith('preflight', { code, error: message }));
+      }
     }
     if (!decision.validationAllowsDeploy) {
       const blockingFindings = evidence.findings.filter(finding => decision.unacceptedErrorIds.includes(finding.findingId));
@@ -13545,6 +13575,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
           ...(body.autoReimport !== undefined ? { autoReimport: body.autoReimport } : {}),
           dryRun: false, expectedModId: evidence.modId, expectedSourceHash: evidence.sourceHash,
           expectedArtifactHash: artifactHash, expectedBindingHash: decision.binding.hash,
+          expectedTargetFingerprint: targetFingerprint,
           acceptances: [...acceptances, ...blockingFindings.map(finding => ({ findingId: finding.findingId, bindingHash: decision.binding.hash, reason: '' }))] },
         instruction: 'Supply a nonempty reason for each exact finding before POSTing this body. Deploy permission is required. Stale evidence and safety gates still refuse.' };
       check('preflight', 'Full validation (schema/cues/lints)', 'fail',
@@ -13581,6 +13612,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
       }
     };
     assertCurrentSource();
+    assertCurrentTarget();
 
     // B93.6 — DRY RUN. Deletion is the direction that cannot be undone, and the author previously
     // only learned what a deploy removed by diffing afterwards. This reports the exact effect and
@@ -13600,7 +13632,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
         checklist,
         validationDelta,
         baselinePromotion: { recorded: false, reason: 'Dry-run deploys never change the last-green baseline.' },
-        note: 'No staging or installed files were written. Validation used a temporary verified artifact snapshot. Apply with expectedModId, expectedSourceHash, expectedArtifactHash and expectedBindingHash from this preview.',
+        note: 'No staging or installed files were written. Validation used a temporary verified artifact snapshot. Apply with the four expected identities and expectedTargetFingerprint from targetFingerprint to guard the reviewed destination contents.',
       });
     }
 
@@ -13628,6 +13660,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
         error: `Deploy refused before touching the extensions directory: ${error instanceof Error ? error.message : String(error)}`,
       }));
     }
+    if (pendingDeployRecovery.beforeFingerprint !== targetFingerprint) throw targetChanged();
     deployReceipt = prepareDeployRecord(actionReceiptStore, subject, decision, principal, approvalRecords,
       pendingDeployRecovery.id, pendingDeployRecovery.beforeFingerprint, snapshot.manifest.hash);
     assertWriteAuthority();
@@ -13638,7 +13671,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
       stagingPath = compileWorkspaceToFolder(ws, stagingRoot, 'store', true, 'loose', { beforeActivate: assertWriteAuthority }, frozenPlan);
     }
     const deployedPath = compileWorkspaceToFolder(ws, extensionsPath, 'store', false, deployFormat,
-      { beforeActivate: assertWriteAuthority }, frozenPlan);
+      { beforeActivate: () => { assertWriteAuthority(); assertCurrentTarget(); } }, frozenPlan);
     const formatReport = describeDeployFormat(deployFormat, lastArtifactReport);
 
     // 4. Bytes confirm — deployed content.xml exists, non-empty, id matches modId.
@@ -13818,12 +13851,12 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
     let rollback: { applied: boolean; detail: string } | undefined;
     if (pendingDeployRecovery) {
       try {
-        const exists = fs.existsSync(pendingDeployRecovery.targetPath);
-        const currentFingerprint = exists ? regularTreeFingerprint(pendingDeployRecovery.targetPath) : 'absent';
-        if (currentFingerprint === pendingDeployRecovery.beforeFingerprint) {
+        const conflict = error?.code === 'DEPLOY_TARGET_CHANGED';
+        const currentFingerprint = conflict ? undefined : deploymentTargetFingerprint(pendingDeployRecovery.targetPath);
+        if (conflict || currentFingerprint === pendingDeployRecovery.beforeFingerprint) {
           destructiveRecoveryStore.abandon(pendingDeployRecovery.id);
           rollback = { applied: false, detail: 'The deploy transaction failed before changing the target; the unused recovery receipt was removed.' };
-        } else if (exists) {
+        } else if (currentFingerprint !== undefined && currentFingerprint !== 'absent') {
           const restored = restoreDeploymentRecovery(pendingDeployRecovery, pendingDeployRecovery.targetRoot, currentFingerprint);
           destructiveRecoveryStore.abandon(pendingDeployRecovery.id);
           rollback = { applied: true, detail: `The exceptional deploy was rolled back to ${restored.restoredFingerprint}.` };
@@ -13834,7 +13867,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
         rollback = { applied: false, detail: `Automatic recovery also failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}` };
       }
     }
-    recordFailedDeploy(rollback?.applied === true);
+    recordFailedDeploy(rollback?.applied === true, error?.code === 'DEPLOY_TARGET_CHANGED');
     const code = String(error?.code || 'DEPLOY_FAILED');
     const status = code === 'DEPLOY_APPROVAL_FORBIDDEN' ? 403 : /STALE|CHANGED|MISMATCH/.test(code) ? 409
       : /INPUT_INVALID/.test(code) ? 400 : /RECEIPT_/.test(code) ? 507 : 500;

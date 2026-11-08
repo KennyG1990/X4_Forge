@@ -60,6 +60,8 @@ test('authenticated deployment binds bytes and persists exact approvals, with fa
     expect(findings.some((f: any) => f.code === 'lua.syntax_error')).toBe(true);
     const reason = 'Scratch API proof: intentionally invalid Lua, never a real game deployment.';
     const acceptances = findings.map((f: any) => ({ findingId: f.findingId, bindingHash: preview.body.bindingHash, reason }));
+    expect(preview.body.targetFingerprint).toBe('absent');
+    expect(preview.body.acceptanceRequest.body.expectedTargetFingerprint).toBe('absent');
     const apply = { path: 'trust_fixture', ...identities(preview.body), acceptances };
     const blocked = await post(route, { ...apply, acceptances: [] }, keys.deploy.token);
     expect(blocked.body.ok).toBe(false);
@@ -88,6 +90,22 @@ test('authenticated deployment binds bytes and persists exact approvals, with fa
     }
     expect((await post(route, { ...apply, acceptances: [{ ...acceptances[0], bindingHash: '0'.repeat(64) }] }, keys.deploy.token)).status).toBe(409);
     expect(fs.existsSync(target)).toBe(false);
+
+    const externalPath = path.join(target, 'unreviewed-update.txt');
+    fs.mkdirSync(target, { recursive: true });
+    fs.writeFileSync(externalPath, 'changed after preview');
+    try {
+      for (const alias of [route, '/api/agent/deploy']) {
+        const stale = await post(alias, { ...apply, expectedTargetFingerprint: preview.body.targetFingerprint }, keys.deploy.token);
+        expect(stale.status).toBe(409);
+        expect(stale.body).toMatchObject({ code: 'DEPLOY_TARGET_CHANGED', deployment: { writeAttempted: false } });
+        expect(fs.readFileSync(externalPath, 'utf8')).toBe('changed after preview');
+      }
+    } finally {
+      fs.unlinkSync(externalPath);
+      fs.rmdirSync(target);
+      fs.rmdirSync(path.dirname(target));
+    }
 
     // C03 previews read durable warning-review history. Capture the clean binding while
     // that store is healthy; the fault below must refuse previews as well as writes.

@@ -5,12 +5,14 @@ export async function fetchVerifiedDeploy(init: RequestInit, fetcher: typeof fet
   const preview = await fetcher('/api/agent/deploy-verify', { ...init, body: JSON.stringify({ ...body, dryRun: true }) });
   const data = await preview.clone().json();
   if (!preview.ok || !data.ok || body.dryRun === true) return preview;
-  if (!data.modId || !['sourceHash', 'artifactHash', 'bindingHash'].every(k => /^[a-f0-9]{64}$/.test(data[k] || ''))) {
+  if (!data.modId || !['sourceHash', 'artifactHash', 'bindingHash'].every(k => /^[a-f0-9]{64}$/.test(data[k] || ''))
+    || (data.targetFingerprint !== 'absent' && !/^[a-f0-9]{64}$/.test(data.targetFingerprint || ''))) {
     throw new Error('Forge did not provide a deploy identity. No deployment was attempted.');
   }
   return fetcher('/api/agent/deploy-verify', { ...init, body: JSON.stringify({ ...body, dryRun: false,
     expectedModId: data.modId, expectedSourceHash: data.sourceHash,
-    expectedArtifactHash: data.artifactHash, expectedBindingHash: data.bindingHash }) });
+    expectedArtifactHash: data.artifactHash, expectedBindingHash: data.bindingHash,
+    expectedTargetFingerprint: data.targetFingerprint }) });
 }
 
 export interface DeployReviewData {
