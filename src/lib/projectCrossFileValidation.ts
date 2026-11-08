@@ -22,7 +22,7 @@ import { parseModManifest, type ModDependency, type ModManifest } from './modDep
 import { classifyCueRef } from './cueLineage';
 import { normPath, parseXmlLenient, walkElements } from './xmlLite';
 import { parse } from 'luaparse';
-import { DOMParser } from '@xmldom/xmldom';
+import { DOMParser, type Element as XmlElement } from '@xmldom/xmldom';
 import { stripLuaComments } from './luaStaticAnalysis';
 import { buildX4UiSourceBundle } from './x4UiSourceBundle';
 
@@ -41,6 +41,7 @@ export type ProjectCrossFileFindingCode =
   | 'dep.self'
   | 'md.signal_library'
   | 'md.run_actions_nonlibrary'
+  | 'md.cue_library_ref_unresolved'
   | 'validation.lua_ast_unavailable'
   | 'ui.invalid_registration';
 
@@ -48,6 +49,8 @@ export interface ProjectCrossFileFinding {
   code: ProjectCrossFileFindingCode;
   severity: 'error' | 'warning' | 'info';
   file?: string;
+  line?: number;
+  column?: number;
   event?: string;
   dependencyId?: string;
   detail: string;
@@ -80,6 +83,7 @@ export interface ProjectCrossFileValidationResult {
     findings: number;
     errors: number;
     structuralErrors: number;
+    cueReferences: number;
     unresolvedCueRefs: number;
     mdLuaMissingRegisters: number;
     luaMdMissingListeners: number;
@@ -553,6 +557,59 @@ function findContentManifest(project: ExtensionProject): ModManifest | null {
   return content ? parseModManifest(project.id || 'project', content.content || '') : null;
 }
 
+function validateCueLibraryReferences(mdFiles: ExtensionProject['files']) {
+  const scripts = new Map<string, { name: string; file: string; root: XmlElement; declarations: Set<string> } | null>();
+  const findings: ProjectCrossFileFinding[] = [];
+  let checked = 0;
+  for (const file of mdFiles) {
+    if (typeof file.content !== 'string') continue;
+    let malformed = false;
+    let root: XmlElement | null;
+    try {
+      root = new DOMParser({ onError: () => { malformed = true; } })
+        .parseFromString(file.content.replace(/^\uFEFF/, ''), 'text/xml').documentElement;
+    } catch {
+      continue;
+    }
+    if (malformed || root?.nodeName !== 'mdscript') continue;
+    const name = root.getAttribute('name');
+    if (!name) continue;
+    const key = name.toLowerCase();
+    if (scripts.has(key)) {
+      scripts.set(key, null);
+      continue;
+    }
+    const declarations = new Set<string>();
+    for (const node of Array.from(root.getElementsByTagName('*'))) {
+      if (node.nodeName !== 'cue' && node.nodeName !== 'library') continue;
+      const declaration = node.getAttribute('name');
+      if (declaration) declarations.add(declaration.toLowerCase());
+    }
+    scripts.set(key, { name, file: file.path, root, declarations });
+  }
+
+  for (const script of scripts.values()) {
+    if (!script) continue;
+    for (const cue of Array.from(script.root.getElementsByTagName('cue'))) {
+      const name = cue.getAttribute('name');
+      const attribute = cue.getAttributeNode('ref');
+      if (!name || !attribute) continue;
+      const ref = attribute.value.trim();
+      const literal = /^(?:md\.([A-Za-z_][\w]*)\.)?([A-Za-z_][\w]*)$/.exec(ref);
+      if (!literal || classifyCueRef(ref).kind === 'keyword') continue;
+      const targetName = literal[1] || script.name;
+      const target = scripts.get(targetName.toLowerCase());
+      if (target?.name !== targetName) continue;
+      checked++;
+      if (target.declarations.has(literal[2].toLowerCase())) continue;
+      findings.push({ code: 'md.cue_library_ref_unresolved', severity: 'error', file: script.file,
+        line: attribute.lineNumber ?? cue.lineNumber, column: attribute.columnNumber ?? cue.columnNumber,
+        detail: `Cue "${name}" references library "${ref}", which has no declaration in MD script "${targetName}".` });
+    }
+  }
+  return { checked, findings };
+}
+
 export function validateProjectCrossFile(project: ExtensionProject): ProjectCrossFileValidationResult {
   const files = Array.isArray(project?.files) ? project.files : [];
   const structure = validateProjectStructure(project);
@@ -746,6 +803,8 @@ export function validateProjectCrossFile(project: ExtensionProject): ProjectCros
     }
   }
 
+  const libraryReferences = validateCueLibraryReferences(mdFiles);
+  findings.push(...libraryReferences.findings);
   const errors = findings.filter(f => f.severity === 'error').length;
   return {
     ok: errors === 0,
@@ -754,7 +813,8 @@ export function validateProjectCrossFile(project: ExtensionProject): ProjectCros
       findings: findings.length,
       errors,
       structuralErrors: structure.filter(i => i.severity === 'error').length,
-      unresolvedCueRefs: cueIndex.unresolved.length,
+      cueReferences: cueIndex.references.length + libraryReferences.checked,
+      unresolvedCueRefs: cueIndex.unresolved.length + libraryReferences.findings.length,
       mdLuaMissingRegisters: missingRegisters.length,
       luaMdMissingListeners: missingListeners.length,
       luaRegistrationUnavailable: parseUnavailable.length,
@@ -1050,6 +1110,45 @@ AddUITriggeredEvent("ai_influence", "chat.response", {})`,
   });
   const raCue = validateProjectCrossFile(runActionsCue);
   ok('flags_run_actions_targeting_nonlibrary', raCue.findings.some(f => f.code === 'md.run_actions_nonlibrary' && f.severity === 'warning'), raCue.findings);
+
+  let instanceProject = addFile(fixtureProject(), {
+    path: 'md/instances.xml',
+    kind: 'md',
+    content: [
+      '<mdscript name="Instances"><cues>',
+      '  <library name="Here"><cues><library name="Nested"/></cues></library>',
+      '  <cue name="Cross" ref="md.Contract.RenamedLibrary"/>',
+      "  <cue name='Local' ref='RenamedHere'/>",
+      '  <cue name="GoodCross" ref="md.Contract.Call_chat"/>',
+      '  <cue name="GoodLocal" ref="Here"/>',
+      '  <cue name="GoodNested" ref="Nested"/>',
+      '  <cue name="CaseVariant" ref="here"/>',
+      '  <cue name="External" ref="md.External.Missing"/>',
+      '  <cue name="Dynamic" ref="$library"/>',
+      '  <cue name="Compound" ref="md.Contract.Call_chat.member"/>',
+      '  <cue name="MalformedTarget" ref="md.Broken.Missing"/>',
+      '  <!-- <cue name="Comment" ref="Missing"/> -->',
+      '</cues></mdscript>',
+    ].join('\n'),
+  });
+  instanceProject = addFile(instanceProject, {
+    path: 'md/broken.xml', kind: 'md', content: '<mdscript name="Broken"><cues></mdscript>',
+  });
+  const instanceFindings = (project: ExtensionProject) => validateProjectCrossFile(project).findings
+    .filter(f => f.code === 'md.cue_library_ref_unresolved');
+  const instanceResult = validateProjectCrossFile(instanceProject);
+  const missingInstances = instanceResult.findings.filter(f => f.code === 'md.cue_library_ref_unresolved');
+  ok('cue_instances_report_only_missing_direct_project_refs_at_source',
+    missingInstances.length === 2 && missingInstances.every(f => f.severity === 'error'
+      && f.file === 'md/instances.xml' && (f.column ?? 0) > 3)
+      && missingInstances[0]?.line === 3 && missingInstances[1]?.line === 4
+      && instanceResult.summary.unresolvedCueRefs === 2
+      && instanceResult.summary.cueReferences === instanceResult.cueIndex.references.length + 6, missingInstances);
+  const ambiguousInstances = instanceFindings(addFile(instanceProject, {
+    path: 'md/other_contract.xml', kind: 'md', content: '<mdscript name="contract"><cues/></mdscript>',
+  }));
+  ok('cue_instances_do_not_claim_a_missing_name_in_ambiguous_scripts',
+    ambiguousInstances.length === 1 && ambiguousInstances[0]?.line === 4, ambiguousInstances);
 
   const duplicateDeps = addFile(fixtureProject(), {
     path: 'content.xml',

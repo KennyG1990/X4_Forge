@@ -12,6 +12,7 @@ export interface EvidenceDiagnostic {
   filePath?: string;
   sourceRef?: string;
   line?: number;
+  column?: number;
   message: string;
 }
 export interface ValidationCoverageGap {

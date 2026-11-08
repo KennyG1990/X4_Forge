@@ -15,6 +15,7 @@ export interface ValidationWarningInput {
   filePath?: string;
   sourceRef?: unknown;
   line?: number;
+  column?: number;
   message?: string;
 }
 

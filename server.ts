@@ -13710,7 +13710,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
     const pfWarnings = preflight.summary.activeWarnings + diskValidationSkipped.length;
     const evidence = buildValidationEvidence({ id: modId, name: modId, files: deployValidation.validationFiles },
       preflightDiagnostics.map(d => ({ severity: d.severity as 'error' | 'warning' | 'info', code: d.code,
-        filePath: d.filePath, line: d.line, sourceRef: typeof d.sourceRef === 'string' ? d.sourceRef : undefined,
+        filePath: d.filePath, line: d.line, column: d.column, sourceRef: typeof d.sourceRef === 'string' ? d.sourceRef : undefined,
         message: String(d.message || d.code || 'Validation finding') })), [
         ...(preflight.evidence?.coverage.gaps || []),
         ...(receiptHistoryUnavailable ? [{ check: 'deploy.receipt_history',

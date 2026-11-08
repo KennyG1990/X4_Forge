@@ -594,8 +594,8 @@ export function runProjectValidation(
       x4UiTruncated: lua.x4UiSummary.truncatedCount,
       structuralErrors,
       definedCues: cueIndex.defined.length,
-      cueReferences: cueIndex.references.length,
-      unresolvedCueRefs: cueIndex.unresolved.length,
+      cueReferences: crossFile.summary.cueReferences,
+      unresolvedCueRefs: crossFile.summary.unresolvedCueRefs,
       crossFileErrors: crossFile.summary.errors,
       mdLuaMissingRegisters: crossFile.summary.mdLuaMissingRegisters,
       luaMdMissingListeners: crossFile.summary.luaMdMissingListeners,
@@ -684,6 +684,7 @@ export interface FlatProjectDiagnostic {
   filePath?: string;
   sourceRef?: string;
   line?: number;
+  column?: number;
   findingId?: string;
   category?: 'mod-finding' | 'check-unavailable';
 }
@@ -708,7 +709,8 @@ function flattenProjectValidationRaw(result: ProjectValidationResult): FlatProje
     out.push({ severity: "error", code: "project.unresolved_cue_ref", filePath: r.file, sourceRef: r.ref, message: `Cue reference "${r.ref}" resolves to nothing in this project.` });
   }
   for (const f of result.crossFile.findings) {
-    out.push({ severity: f.severity, code: f.code, filePath: f.file, sourceRef: f.event || f.dependencyId, message: f.detail });
+    out.push({ severity: f.severity, code: f.code, filePath: f.file, sourceRef: f.event || f.dependencyId,
+      line: f.line, column: f.column, message: f.detail });
   }
   for (const d of result.schema.findings) {
     out.push({ severity: d.severity, code: d.code, filePath: d.filePath, sourceRef: d.sourceRef, line: d.line, message: d.message });
