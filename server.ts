@@ -5442,6 +5442,14 @@ app.post("/api/agent/history/:id/revert", coordinatedSourceOperation((req, res) 
           deployedPath: restored.targetPath,
           restoredFingerprint: restored.restoredFingerprint,
           priorExisted: found.record.priorExisted,
+          ...(restored.remainingBackup ? { cleanupWarning: {
+            code: 'RECOVERY_BACKUP_CLEANUP_FAILED',
+            backupPath: restored.remainingBackup.path,
+            manifestRetired: restored.remainingBackup.manifestRetired,
+            message: restored.remainingBackup.manifestRetired
+              ? 'Undo restored and verified the original files. Forge removed the manifest, but could not remove the remaining transaction files.'
+              : 'Undo restored and verified the original files. A transaction copy remains in the extensions folder and may be detected as a duplicate by X4.',
+          } } : {}),
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -11504,7 +11512,6 @@ function replaceRegularTreeExact(sourceRoot: string, targetPath: string, hooks: 
     verifyExpectedFiles(targetPath, expected);
     if (regularTreeFingerprint(targetPath) !== expectedFingerprint) throw new Error('Deployment recovery fingerprint did not verify after restore.');
     hooks.beforeFinalize?.();
-    if (movedOld) fs.rmSync(backup, { recursive: true, force: true });
   } catch (error) {
     try { if (fs.existsSync(stage)) fs.rmSync(stage, { recursive: true, force: true }); } catch { /* best effort */ }
     if (movedOld) {
@@ -11517,6 +11524,7 @@ function replaceRegularTreeExact(sourceRoot: string, targetPath: string, hooks: 
     }
     throw error;
   }
+  if (movedOld) disposeDeploymentSibling(backup, hooks);
 }
 
 function restoreFirstDeployTargetFromQuarantine(
@@ -11568,7 +11576,7 @@ function restoreDeploymentRecovery(
   store: DestructiveRecoveryStore = destructiveRecoveryStore,
   consume?: () => void,
   hooks: DeploymentTransactionHooks = {},
-): { targetPath: string; restoredFingerprint: string } {
+): { targetPath: string; restoredFingerprint: string; remainingBackup?: { path: string; manifestRetired: boolean } } {
   assertDeploymentRecoveryTarget(record, currentTargetRoot);
   if (!pathHasEntry(record.targetPath)) throw new Error('Recovery refused because the deployed mod no longer exists.');
   const targetStat = fs.lstatSync(record.targetPath);
@@ -11583,10 +11591,18 @@ function restoreDeploymentRecovery(
     if (!fs.existsSync(payload) || regularTreeFingerprint(payload) !== record.beforeFingerprint || regularTreeBytes(payload) !== record.beforeBytes) {
       throw new Error('Deployment recovery payload is missing or does not match its recorded pre-state.');
     }
-    replaceRegularTreeExact(payload, record.targetPath, { beforeFinalize: consume });
+    let remainingBackup: { path: string; manifestRetired: boolean } | undefined;
+    replaceRegularTreeExact(payload, record.targetPath, {
+      beforeFinalize: consume,
+      onBackupCleanupFailure: (path, manifestRetired) => {
+        if (!remainingBackup || (remainingBackup.manifestRetired && !manifestRetired)) {
+          remainingBackup = { path, manifestRetired };
+        }
+      },
+    });
     const restoredFingerprint = regularTreeFingerprint(record.targetPath);
     if (restoredFingerprint !== record.beforeFingerprint) throw new Error('Restored deployment does not match the recorded pre-state.');
-    return { targetPath: record.targetPath, restoredFingerprint };
+    return { targetPath: record.targetPath, restoredFingerprint, remainingBackup };
   }
 
   if (record.beforeFingerprint !== 'absent' || record.beforeBytes !== 0) throw new Error('First-deploy recovery record is inconsistent.');
@@ -11834,6 +11850,7 @@ function preservedDeploymentEntries(
 }
 
 interface DeploymentTransactionHooks {
+  onBackupCleanupFailure?: (backupPath: string, manifestRetired: boolean) => void;
   onTargetWrite?: (state: 'mutated' | 'restored') => void;
   expectedTargetBeforeWrite?: string;
   onStagedFingerprint?: (fingerprint: string) => void;
@@ -11863,6 +11880,28 @@ function isCrossDeviceRenameError(error: unknown): boolean {
   return code === 'EXDEV';
 }
 
+function disposeDeploymentSibling(backupPath: string, hooks: DeploymentTransactionHooks): void {
+  let manifestRetired = false;
+  try {
+    if (!pathHasEntry(backupPath)) return;
+    const root = fs.lstatSync(backupPath);
+    if (!root.isDirectory() || root.isSymbolicLink()) throw new Error('Deployment transaction copy is not a regular directory.');
+    const manifest = path.join(backupPath, 'content.xml');
+    // Disable extension discovery before recursive removal can leave a partial tree.
+    if (pathHasEntry(manifest)) {
+      const entry = fs.lstatSync(manifest);
+      if (!entry.isFile() && !entry.isSymbolicLink()) throw new Error('Deployment backup manifest is not a regular file or link.');
+      fs.unlinkSync(manifest);
+      if (pathHasEntry(manifest)) throw new Error('Deployment backup manifest is still present.');
+    }
+    manifestRetired = true;
+    fs.rmSync(backupPath, { recursive: true, force: true });
+  } catch (error) {
+    if (!hooks.onBackupCleanupFailure) throw error;
+    hooks.onBackupCleanupFailure(backupPath, manifestRetired);
+  }
+}
+
 function replaceLockedDeploymentInPlace(
   stage: string,
   backup: string,
@@ -11890,8 +11929,6 @@ function replaceLockedDeploymentInPlace(
     verifyExpectedFiles(targetPath, expected);
     verifyRegularTreeMirror(stage, targetPath);
     hooks.beforeFinalize?.();
-    fs.rmSync(stage, { recursive: true, force: true });
-    fs.rmSync(backup, { recursive: true, force: true });
   } catch (error) {
     try {
       if (backupVerified && targetMutated && fs.existsSync(backup)) {
@@ -11921,6 +11958,11 @@ function replaceLockedDeploymentInPlace(
       );
     }
     throw error;
+  }
+  try {
+    disposeDeploymentSibling(stage, hooks);
+  } finally {
+    disposeDeploymentSibling(backup, hooks);
   }
 }
 
@@ -12025,7 +12067,6 @@ function replaceValidatedDeployment(
     }
   } catch { /* sweeping is best-effort and must never block a deploy */ }
   const preservationOverrides: PreservationOverride[] = [];
-  const discardBackup = () => fs.rmSync(backup, { recursive: true, force: true });
   let movedOld = false;
   try {
     copyRegularTree(artifactRoot, stage);
@@ -12070,14 +12111,13 @@ function replaceValidatedDeployment(
     rename(stage, targetPath);
     if (!movedOld) hooks.onTargetWrite?.('mutated');
     verifyExpectedFiles(targetPath, expected);
-    if (movedOld) discardBackup();
   } catch (error) {
     try { if (fs.existsSync(stage)) fs.rmSync(stage, { recursive: true, force: true }); } catch { /* best effort */ }
     if (movedOld) {
       try {
         if (hooks.expectedTargetBeforeWrite !== undefined
           && deploymentTargetFingerprint(backup) !== hooks.expectedTargetBeforeWrite) {
-          try { discardBackup(); } catch { /* The durable recovery path still has its own snapshot. */ }
+          try { disposeDeploymentSibling(backup, {}); } catch { /* The durable recovery path still has its own snapshot. */ }
           throw new Error('Deployment backup changed before local rollback.');
         }
         if (fs.existsSync(targetPath)) fs.rmSync(targetPath, { recursive: true, force: true });
@@ -12091,6 +12131,7 @@ function replaceValidatedDeployment(
     }
     throw error;
   }
+  if (movedOld) disposeDeploymentSibling(backup, hooks);
   return preservationOverrides;
 }
 

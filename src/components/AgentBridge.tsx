@@ -218,6 +218,7 @@ export default function AgentBridge({
   // on demand so opening this tab never pulls hundreds of KB of Lua across the wire.
   const [historyRows, setHistoryRows] = useState<any[]>([]);
   const [historyError, setHistoryError] = useState('');
+  const [historyWarning, setHistoryWarning] = useState<{ message: string; backupPath: string } | null>(null);
   const [historyNote, setHistoryNote] = useState('');
   const [historyKindFilter, setHistoryKindFilter] = useState('');
   const [historyOutcomeFilter, setHistoryOutcomeFilter] = useState('');
@@ -266,11 +267,17 @@ export default function AgentBridge({
   }, [expandedRow]);
 
   const revertToRow = useCallback(async (row: any) => {
+    setHistoryWarning(null);
     setRevertBusy(row.id);
     try {
       const r = await fetch(`/api/agent/history/${row.id}/revert`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
       const d = await r.json();
       if (!r.ok || d?.ok === false) throw new Error(d?.error || `HTTP ${r.status}`);
+      const cleanupWarning = d?.cleanupWarning;
+      if (cleanupWarning?.code === 'RECOVERY_BACKUP_CLEANUP_FAILED'
+        && typeof cleanupWarning.message === 'string' && typeof cleanupWarning.backupPath === 'string') {
+        setHistoryWarning({ message: cleanupWarning.message, backupPath: cleanupWarning.backupPath });
+      }
       if (isModWorkspace(d?.workspace)) setWorkspace(d.workspace);
       if (typeof d?.version === 'number') setLocalVersion(d.version);
       setHistoryError('');
@@ -963,6 +970,12 @@ export default function AgentBridge({
             {historyError && (
               <div className="text-[10px] font-mono text-red-400 border border-red-500/30 bg-red-500/5 rounded p-2" role="alert">
                 {historyError}
+              </div>
+            )}
+
+            {historyWarning && (
+              <div className="text-[10px] font-mono text-amber-300 border border-amber-500/30 bg-amber-500/5 rounded p-2" role="status">
+                {historyWarning.message} <span className="break-all">{historyWarning.backupPath}</span>
               </div>
             )}
 
