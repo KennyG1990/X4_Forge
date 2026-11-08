@@ -501,6 +501,7 @@ async function spawnSidecar(context: vscode.ExtensionContext): Promise<BackendHa
   log(`  port: ${port} (dynamically selected)  state dir: ${stateDir}`);
   if (debugPort) log(`  DEBUG: node inspector on 127.0.0.1:${debugPort} (${debugMode})`);
 
+  const extensionVersion = context.extension?.packageJSON?.version;
   const child = spawn(nodeExe, [supervisorPath, serverPath, ...nodeArgs], {
     cwd: appRoot.root,
     windowsHide: true,
@@ -513,6 +514,7 @@ async function spawnSidecar(context: vscode.ExtensionContext): Promise<BackendHa
       X4_STATE_DIR: stateDir,
       X4_CONFIG_DIR: configDir, // B51: config.json persists across extension updates
       X4_DATA_DIR: dataDir,     // B53: AI/agent keys, spend meter, harvested schemas persist too
+      X4_FORGE_EXTENSION_VERSION: typeof extensionVersion === "string" ? extensionVersion : "",
       X4_FORGE_PARENT_MODE: 'pipe-v1',
       X4_FORGE_PARENT_PID: String(process.pid),
       X4_FORGE_PARENT_NONCE: parentNonce,

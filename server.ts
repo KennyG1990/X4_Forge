@@ -239,7 +239,7 @@ import {
   RUN_JOB_MIN_TIMEOUT_MS,
   SYNC_COMMAND_DEADLINE_MS,
 } from "./src/lib/requestDeadline";
-import { runParentLivenessSelftest, watchParentIpc } from "./src/lib/parentLiveness";
+import { parseParentLivenessContract, runParentLivenessSelftest, watchParentIpc } from "./src/lib/parentLiveness";
 import { runLatestValueWriteQueueSelftest } from "./src/lib/latestValueWriteQueue";
 import { artifactPlanIdentity, buildArtifactPlan, hashArtifactFile, materializeArtifact, verifyMaterializedArtifact, type ArtifactPlan } from "./src/lib/artifactPipeline";
 import { buildProjectFileInventory, runProjectFileInventorySelftest } from "./src/lib/projectFileInventory";
@@ -327,6 +327,22 @@ const PORT = Number(process.env.PORT || 3000);
 const TOKEN_FILE = path.join(process.cwd(), ".studio-api-token");
 /** B93.5: reported by GET /api/agent/status so callers can tell a restart from a stale read. */
 const SERVER_STARTED_AT = new Date().toISOString();
+const SERVER_INSTANCE_MODE = process.env.X4_FORGE_MODE?.trim()
+  || (process.connected && parseParentLivenessContract(process.env) ? 'sidecar' : 'standalone');
+const PUBLIC_INSTANCE_MODES = new Set(['sidecar', 'standalone', 'dev-build', 'release-host']);
+const SERVER_EXTENSION_VERSION = process.env.X4_FORGE_EXTENSION_VERSION?.trim();
+let serverListenerPort = PORT;
+
+function publicForgeIdentity() {
+  return {
+    port: serverListenerPort,
+    pid: process.pid,
+    startedAt: SERVER_STARTED_AT,
+    mode: PUBLIC_INSTANCE_MODES.has(SERVER_INSTANCE_MODE) ? SERVER_INSTANCE_MODE : 'unknown',
+    ...(SERVER_EXTENSION_VERSION && /^\d{1,8}\.\d{1,8}\.\d{1,8}$/.test(SERVER_EXTENSION_VERSION)
+      ? { version: SERVER_EXTENSION_VERSION } : {}),
+  };
+}
 /** W3B1a: stable sidecar identity for authoritative action-receipt client mapping. */
 const ACTION_RECEIPT_RUNTIME_VERSION = "2026-07-30.agent.v4";
 const ACTION_RECEIPT_OPERATION_ID_RE = /^[a-zA-Z][a-zA-Z0-9._:-]{0,127}$/;
@@ -5253,10 +5269,8 @@ app.get("/api/agent/status", (req, res) => {
 
     return res.json({
       ok: true,
-      port: PORT,
-      pid: process.pid,
-      mode: process.env.X4_FORGE_MODE?.trim() || (process.env.X4_DATA_DIR ? 'sidecar' : 'standalone'),
-      startedAt: SERVER_STARTED_AT,
+      ...publicForgeIdentity(),
+      mode: SERVER_INSTANCE_MODE,
       discoveryFile: latestPath(),
       workspace: {
         workspaceId: record.workspaceId,
@@ -9788,7 +9802,8 @@ app.get("/api/agent/selftest-index", (_req, res) => {
 });
 
 registerValidationAgentRoutes(app);
-registerReferenceRoutes(app, req => ((req as any).__workspaceRecord as WorkspaceRecord | undefined)?.workspace as ModWorkspace | undefined);
+registerReferenceRoutes(app, req => ((req as any).__workspaceRecord as WorkspaceRecord | undefined)?.workspace as ModWorkspace | undefined,
+  publicForgeIdentity);
 registerBulkTransformRoutes(app, {
   workspace: req => requestWorkspace(req).workspace as ModWorkspace,
   workspaceId: req => requestWorkspace(req).workspaceId,
@@ -15807,15 +15822,15 @@ app.use(apiUnknownRouteMiddleware);
 initializeReferenceCorpus();
 setupDevOrProd().then(() => {
   const httpServer = app.listen(PORT, "127.0.0.1", () => {
-    console.log(`X4 Forge Dev Server running on http://127.0.0.1:${PORT}`);
+    const address = httpServer.address();
+    if (address && typeof address === 'object') serverListenerPort = address.port;
+    console.log(`X4 Forge Dev Server running on http://127.0.0.1:${serverListenerPort}`);
     // B93.1: publish where we are. The sidecar's port changes every launch and nothing on disk
     // said what it was, so callers were port-scanning to find us. Never fatal.
     const published = publishInstance({
-      port: PORT,
-      pid: process.pid,
-      startedAt: new Date().toISOString(),
+      ...publicForgeIdentity(),
       cwd: process.cwd(),
-      mode: process.env.X4_FORGE_MODE?.trim() || (process.env.X4_DATA_DIR ? 'sidecar' : 'standalone'),
+      mode: SERVER_INSTANCE_MODE,
     });
     if (published) console.log(`[discovery] instance address published to ${published.latestFile}`);
     const releaseDiscovery = () => unpublishInstance(process.pid);

@@ -10,6 +10,7 @@ const extensionRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const appRoot = path.join(extensionRoot, 'app');
 const serverPath = path.join(appRoot, 'dist', 'server.cjs');
 const supervisorPath = path.join(extensionRoot, 'out', 'sidecar-supervisor.js');
+const extensionVersion = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'package.json'), 'utf8')).version;
 const port = Number(process.env.X4_STAGED_PROBE_PORT || 8982);
 const base = `http://127.0.0.1:${port}`;
 const token = `staged-app-probe-${process.pid}`;
@@ -79,6 +80,8 @@ try {
       ...process.env,
       NODE_ENV: 'production',
       PORT: String(port),
+      X4_FORGE_MODE: 'release-host',
+      X4_FORGE_EXTENSION_VERSION: extensionVersion,
       STUDIO_API_TOKEN: token,
       X4_STATE_DIR: path.join(tmp, 'state'),
       X4_SOURCE_COORDINATION_DIR: path.join(tmp, 'source-coordination'),
@@ -139,6 +142,14 @@ try {
 
   const supervisedPid = Number(/X4FORGE_SUPERVISED_PID=(\d+)/.exec(output)?.[1] || 0);
   check('supervisor reports exact owned server pid', supervisedPid > 0 && pidAlive(supervisedPid), String(supervisedPid));
+  const publicStatus = await fetch(`${base}/api/reference/status`);
+  const { instance } = await publicStatus.json();
+  const discovery = JSON.parse(fs.readFileSync(path.join(discoveryDir, 'latest.json'), 'utf8'));
+  check('public identity agrees with the staged host discovery', publicStatus.ok && publicStatus.headers.get('cache-control') === 'no-store'
+    && instance?.mode === 'release-host' && instance.pid === supervisedPid && instance.port === port
+    && instance.startedAt === discovery.startedAt && instance.version === extensionVersion
+    && instance.mode === discovery.mode && instance.pid === discovery.pid && instance.port === discovery.port
+    && instance.version === discovery.version && Object.keys(instance).sort().join(',') === 'mode,pid,port,startedAt,version');
   check('claimed parent pid is alive before orphan drill', pidAlive(process.pid), String(process.pid));
   child.stdin.end();
   const gracefulExit = await waitForExit(child, 3000);

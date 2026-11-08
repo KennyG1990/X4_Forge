@@ -29,6 +29,7 @@ import { projectReferenceSymbols, suggestReferences, type ReferenceSuggestionInt
 import type { CanonicalSymbolKind } from '../lib/referenceCorpus';
 import type { ModWorkspace } from '../types';
 import { completeXPath } from '../lib/xpathCompletion';
+import type { InstanceRecord } from '../lib/instanceDiscovery';
 
 function errorText(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function forceRefresh(req: Request): boolean { return /^(1|true|yes)$/i.test(String(req.query.refresh || '')); }
@@ -83,17 +84,21 @@ export function startCanonicalReferenceManifest(force = false): ReferenceManifes
   return scheduleReferenceManifest(resolved.x4ReferenceRoot, force);
 }
 
-function sendCorpusError(res: Response, error: unknown): Response {
+function sendCorpusError(res: Response, error: unknown, instance?: Omit<InstanceRecord, 'cwd'>): Response {
   const message = errorText(error);
-  if (/invalid request|outside the document|outside line/i.test(message)) return res.status(400).json({ error: message });
-  if (/missing path/i.test(message)) return res.status(400).json({ error: message });
-  if (/traversal/i.test(message)) return res.status(403).json({ error: message });
-  if (/file not found/i.test(message)) return res.status(404).json({ error: message });
-  if (/root.*(unavailable|does not exist|not a directory)/i.test(message)) return res.status(503).json({ error: message });
-  return res.status(500).json({ error: message || 'Reference corpus request failed.' });
+  const body = { error: message || 'Reference corpus request failed.', ...(instance ? { instance } : {}) };
+  if (/invalid request|outside the document|outside line|missing path/i.test(message)) return res.status(400).json(body);
+  if (/traversal/i.test(message)) return res.status(403).json(body);
+  if (/file not found/i.test(message)) return res.status(404).json(body);
+  if (/root.*(unavailable|does not exist|not a directory)/i.test(message)) return res.status(503).json(body);
+  return res.status(500).json(body);
 }
 
-export function registerReferenceRoutes(app: Express, workspaceProvider?: (req: Request) => ModWorkspace | null | undefined): void {
+export function registerReferenceRoutes(
+  app: Express,
+  workspaceProvider?: (req: Request) => ModWorkspace | null | undefined,
+  publicInstance?: () => Omit<InstanceRecord, 'cwd'>,
+): void {
   app.get('/api/reference/effective-file', (req, res) => {
     try {
       const corpus = load(req);
@@ -167,11 +172,14 @@ export function registerReferenceRoutes(app: Express, workspaceProvider?: (req: 
   });
 
   app.get('/api/reference/status', (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    const instance = publicInstance?.();
     try {
       const corpus = load(req);
       const manifest = getReferenceManifestStatus(corpus.root);
       return res.json({
         available: true,
+        instance,
         root: corpus.root,
         generatedAt: corpus.generatedAt,
         manifestGeneration: corpus.manifestGeneration || null,
@@ -179,7 +187,7 @@ export function registerReferenceRoutes(app: Express, workspaceProvider?: (req: 
         counts: { factions: corpus.factions.length, wares: corpus.wares.length, jobs: corpus.jobs.length, aiScripts: corpus.aiScripts.length, sectors: corpus.sectors.length, scriptProperties: corpus.scriptProperties.length },
         manifest,
       });
-    } catch (error) { return sendCorpusError(res, error); }
+    } catch (error) { return sendCorpusError(res, error, instance); }
   });
 
   app.get('/api/reference/manifest', (req, res) => {
