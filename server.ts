@@ -8249,6 +8249,21 @@ app.post("/api/agent/round-trip-check", (req, res) => {
   }
 });
 
+function* readInstalledExtensionManifests(extRoot: string) {
+  for (const folder of fs.readdirSync(extRoot)) {
+    const absDir = path.join(extRoot, folder);
+    let isDir = false;
+    try { isDir = fs.statSync(absDir).isDirectory(); } catch { isDir = false; }
+    const contentPath = path.join(absDir, 'content.xml');
+    if (!isDir || !fs.existsSync(contentPath)) continue;
+
+    let xml: string;
+    try { xml = fs.readFileSync(contentPath, 'utf8'); } catch { continue; }
+    const id = xml.match(/<content\b[^>]*\bid\s*=\s*"([^"]+)"/i)?.[1] || folder;
+    yield { folder, absDir, id, xml };
+  }
+}
+
 /**
  * Extension Doctor (P-A) — cross-mod conflict scan over an extensions/ folder.
  * Read-only and side-effect-free. Checks: (1) missing dependencies, (2) duplicate
@@ -8263,16 +8278,7 @@ function runExtensionDoctor(extRoot: string, opts?: { resolveBaseContent?: (rel:
     }
 
     const exts: ExtInfo[] = [];
-    for (const folder of fs.readdirSync(extRoot)) {
-      const absDir = path.join(extRoot, folder);
-      let isDir = false;
-      try { isDir = fs.statSync(absDir).isDirectory(); } catch { isDir = false; }
-      const contentPath = path.join(absDir, "content.xml");
-      if (!isDir || !fs.existsSync(contentPath)) continue;
-
-      let xml = "";
-      try { xml = fs.readFileSync(contentPath, "utf8"); } catch { continue; }
-      const id = xml.match(/<content\b[^>]*\bid\s*=\s*"([^"]+)"/i)?.[1] || folder;
+    for (const { folder, absDir, id, xml } of readInstalledExtensionManifests(extRoot)) {
       const enabledAttr = xml.match(/<content\b[^>]*\benabled\s*=\s*"([^"]+)"/i)?.[1];
       const enabled = enabledAttr !== "0" && enabledAttr !== "false";
       const name = xml.match(/<content\b[^>]*\bname\s*=\s*"([^"]+)"/i)?.[1];
@@ -11981,6 +11987,10 @@ function previewDeploymentEffect(ws: any, targetRoot: string, format: DeployForm
   }
 }
 
+function isDeploymentScratchSibling(folder: string, targetFolder: string): boolean {
+  return folder.startsWith(`.${targetFolder}.x4forge-`) && /\.x4forge-(next|backup)-/.test(folder);
+}
+
 function replaceValidatedDeployment(
   artifactRoot: string,
   targetPath: string,
@@ -12001,10 +12011,8 @@ function replaceValidatedDeployment(
   // They are full copies of the mod including content.xml, so X4 loads each as a duplicate
   // extension declaring the same id. Self-healing beats requiring the user to know they exist.
   try {
-    const prefix = `.${path.basename(targetPath)}.x4forge-`;
     for (const name of fs.readdirSync(parent)) {
-      if (!name.startsWith(prefix)) continue;
-      if (!/\.x4forge-(next|backup)-/.test(name)) continue;
+      if (!isDeploymentScratchSibling(name, path.basename(targetPath))) continue;
       try { fs.rmSync(path.join(parent, name), { recursive: true, force: true }); } catch { /* a locked orphan is reported by the doctor */ }
     }
   } catch { /* sweeping is best-effort and must never block a deploy */ }
@@ -13670,6 +13678,25 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
         const { code, message } = targetChanged();
         check('preflight', 'Deployment target contents', 'fail', message);
         return res.status(409).json(failWith('preflight', { code, error: message }));
+      }
+    }
+    if (pathHasEntry(extensionsPath)) {
+      const targetFolder = path.basename(targetRoot);
+      const sameFolder = (folder: string) => process.platform === 'win32'
+        ? folder.toLowerCase() === targetFolder.toLowerCase() : folder === targetFolder;
+      const conflictingFolders: string[] = [];
+      const modIdLower = modId.toLowerCase();
+      for (const extension of readInstalledExtensionManifests(extensionsPath)) {
+        if (extension.id.toLowerCase() === modIdLower && !sameFolder(extension.folder)
+          && !isDeploymentScratchSibling(extension.folder, targetFolder)) conflictingFolders.push(extension.folder);
+      }
+      if (conflictingFolders.length) {
+        const visibleFolders = conflictingFolders.sort().slice(0, 12);
+        const remaining = conflictingFolders.length - visibleFolders.length;
+        const detail = `Another installed folder declares "${modId}": ${visibleFolders.join(', ')}${remaining ? ` (and ${remaining} more)` : ''}. Resolve the duplicate and review a fresh preview.`;
+        check('preflight', 'Installed extension identity', 'fail', detail);
+        return res.status(409).json(failWith('preflight', { code: 'DEPLOY_DUPLICATE_EXTENSION_ID', error: detail,
+          conflictingFolders: visibleFolders, conflictingFolderCount: conflictingFolders.length }));
       }
     }
     if (!decision.validationAllowsDeploy) {

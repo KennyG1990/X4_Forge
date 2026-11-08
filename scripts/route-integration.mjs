@@ -354,6 +354,8 @@ async function main() {
   runRequiredBuild();
 
   const tsxCli = path.join(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs');
+  const duplicateHook = path.join(process.cwd(), 'tests', 'fixtures', 'deploy-late-duplicate.cjs');
+  const lateDuplicateTrigger = path.join(tmp, 'late-duplicate.trigger');
   child = spawn(process.execPath, [tsxCli, 'server.ts'], {
     cwd: process.cwd(),
     shell: false,
@@ -362,6 +364,7 @@ async function main() {
       ...process.env,
       PORT: String(PORT),
       NODE_ENV: 'development',
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, '--require', JSON.stringify(duplicateHook)].filter(Boolean).join(' '),
       FORGE_ALLOW_RUN_COMMAND: 'true',
       STUDIO_API_TOKEN: SESSION_TOKEN,
       X4_STATE_DIR: stateDir,
@@ -374,6 +377,10 @@ async function main() {
       FORGE_TIMEOUT_DRILL_MS: '300',
       FORGE_TIMEOUT_DRILL_RESPONSE_MS: '100',
       FORGE_ROUTE_TEST_MODE: '1',
+      FORGE_ROUTE_TEST_ROOT: tmp,
+      FORGE_QA_DUPLICATE_TARGET: path.join(liveExtensions, 'stale_probe_mod'),
+      FORGE_QA_DUPLICATE_TRIGGER: lateDuplicateTrigger,
+      FORGE_QA_DUPLICATE_MOD: 'stale_probe_mod',
       FORGE_ROUTE_TEST_AI_RESPONSES: JSON.stringify(ROUTE_TEST_AI_RESPONSES),
       FORGE_ROUTE_TEST_AI_DELAY_MS: '400',
       FORGE_ROUTE_TEST_AI_MARKER_DIR: aiMarkerDir,
@@ -3702,15 +3709,52 @@ async function main() {
     JSON.stringify({ expected: expectedDeployEffect, actual: deployRow?.fileEffect }));
   ok('verified_deploy_row_is_truthfully_revertible', deployRow?.revertible === true && deployRow?.recoveryId === autoDeploy.json?.recovery?.id, JSON.stringify(deployRow || {}));
 
-  // A post-write doctor failure must roll back immediately and must not advertise later undo.
+  // A known duplicate refuses before writes. A later duplicate still triggers rollback.
+  const duplicateBody = { workspace: staleImport.json?.workspace, autoReimport: true };
+  const beforeDuplicate = await req('POST', '/api/agent/deploy-verify', SESSION_TOKEN, { ...duplicateBody, dryRun: true });
+  const duplicateApply = { ...duplicateBody, ...deployIdentity(beforeDuplicate.json),
+    expectedTargetFingerprint: beforeDuplicate.json?.targetFingerprint };
   const targetBeforeFailedDeploy = regularTreeHash(dryTarget);
+  const stagingBeforeFailedDeploy = regularTreeHash(dryStagingTarget);
+  const receiptsBeforeRefusal = regularTreeHash(path.join(dataDir, 'action-receipts'));
   const duplicateDir = path.join(liveExtensions, 'duplicate_stale_probe');
+  const duplicateManifest = path.join(duplicateDir, 'content.xml');
   fs.mkdirSync(duplicateDir, { recursive: true });
-  fs.writeFileSync(path.join(duplicateDir, 'content.xml'), '<content id="stale_probe_mod" name="Duplicate" version="100"/>');
-  const failedDeploy = await req('POST', '/api/agent/deploy-verify', SESSION_TOKEN, { workspace: staleImport.json?.workspace, autoReimport: true, ...deployIdentity(dry.json) });
-  ok('failed_post_write_deploy_rolls_back_exactly', failedDeploy.status === 200 && failedDeploy.json?.ok === false && failedDeploy.json?.rollback?.applied === true && regularTreeHash(dryTarget) === targetBeforeFailedDeploy, JSON.stringify(failedDeploy.json?.rollback || {}));
+  fs.writeFileSync(duplicateManifest, '<content id="stale_probe_mod" name="Duplicate" version="100"/>');
+  const duplicatePreview = await req('POST', '/api/agent/deploy-verify', SESSION_TOKEN, { ...duplicateBody, dryRun: true });
+  const early = await req('POST', '/api/agent/deploy', SESSION_TOKEN, duplicateApply);
+  ok('installed_duplicate_refuses_before_target_staging_or_receipt_writes',
+    [duplicatePreview, early].every(result => result.status === 409 && result.json?.code === 'DEPLOY_DUPLICATE_EXTENSION_ID'
+      && result.json?.conflictingFolders?.includes('duplicate_stale_probe') && result.json?.deployment?.writeAttempted === false)
+    && regularTreeHash(dryTarget) === targetBeforeFailedDeploy && regularTreeHash(dryStagingTarget) === stagingBeforeFailedDeploy
+    && regularTreeHash(path.join(dataDir, 'action-receipts')) === receiptsBeforeRefusal, JSON.stringify(early.json?.code));
+  fs.unlinkSync(duplicateManifest);
+  fs.rmdirSync(duplicateDir);
+
+  const lateDir = path.join(liveExtensions, 'introduced-after-activation');
+  const lateManifest = path.join(lateDir, 'content.xml');
+  const lateSourceName = 'late-duplicate-proof.txt';
+  fs.writeFileSync(path.join(staleMod, lateSourceName), 'Selected bytes for the late-duplicate rollback proof.');
+  const latePreview = await req('POST', '/api/agent/deploy-verify', SESSION_TOKEN, { ...duplicateBody, dryRun: true });
+  const lateApply = { ...duplicateBody, ...deployIdentity(latePreview.json),
+    expectedTargetFingerprint: latePreview.json?.targetFingerprint };
+  const beforeLateReceipts = new Set(actionReceiptFiles());
+  fs.writeFileSync(lateDuplicateTrigger, 'trigger');
+  const failedDeploy = await req('POST', '/api/agent/deploy-verify', SESSION_TOKEN, lateApply);
+  ok('failed_post_write_deploy_rolls_back_exactly', failedDeploy.status === 200 && failedDeploy.json?.ok === false
+    && failedDeploy.json?.doctor?.blocking?.some(f => f.code === 'ext.duplicate_id')
+    && failedDeploy.json?.rollback?.applied === true && regularTreeHash(dryTarget) === targetBeforeFailedDeploy
+    && !fs.existsSync(path.join(dryTarget, lateSourceName)) && !fs.existsSync(lateDuplicateTrigger)
+    && fs.existsSync(lateManifest), JSON.stringify(failedDeploy.json?.rollback || {}));
   ok('failed_deploy_exposes_no_later_recovery', !failedDeploy.json?.recovery, JSON.stringify(failedDeploy.json?.recovery || null));
-  fs.rmSync(duplicateDir, { recursive: true, force: true });
+  const lateReceipts = actionReceiptFiles().filter(name => !beforeLateReceipts.has(name))
+    .map(name => JSON.parse(fs.readFileSync(path.join(dataDir, 'action-receipts', name), 'utf8')));
+  ok('late_duplicate_records_exactly_one_rolled_back_deploy', lateReceipts.length === 1
+    && lateReceipts[0].status === 'rolled_back' && lateReceipts[0].rollback?.status === 'performed');
+  if (fs.existsSync(lateManifest)) {
+    fs.unlinkSync(lateManifest);
+    fs.rmdirSync(lateDir);
+  }
 
   const undoDeploy = await req('POST', `/api/agent/history/${deployRow?.id}/revert`, SESSION_TOKEN, {});
   ok('deployment_history_undo_restores_exact_pre_state',

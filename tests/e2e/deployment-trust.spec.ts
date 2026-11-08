@@ -225,15 +225,22 @@ test('authenticated deployment binds bytes and persists exact approvals, with fa
     expect(legacy.body.ok, JSON.stringify(legacy.body)).toBe(true);
     expect(fs.readFileSync(path.join(target, 'payload.bin'))[0]).toBe(18);
     expect(reopened.read(legacy.body.deployRecord.id).status).toBe('committed');
-    // Deployment-doctor safety errors are never covered by a Lua finding approval.
+    // Refresh the binding after a committed deploy. A Lua finding approval cannot cover a duplicate ID.
+    const beforeDuplicate = await post(route, { path: 'trust_fixture', dryRun: true }, keys.deploy.token);
+    const duplicateApply = { ...beforeDuplicate.body.acceptanceRequest.body, acceptances: beforeDuplicate.body.validation.evidence.findings
+      .filter((f: any) => f.category === 'mod-finding' && f.severity === 'error')
+      .map((f: any) => ({ findingId: f.findingId, bindingHash: beforeDuplicate.body.bindingHash, reason })) };
+    const beforeDuplicateReceipts = fs.readdirSync(receiptRoot).sort();
     const duplicate = path.join(game, 'extensions', 'duplicate');
     fs.mkdirSync(duplicate);
     fs.writeFileSync(path.join(duplicate, 'content.xml'), '<content id="trust_fixture" name="Duplicate" version="100"/>');
-    const failedDoctor = await post(route, updated, keys.deploy.token);
-    evidence.nonOverridableDoctor = failedDoctor;
-    expect(failedDoctor.body.ok).toBe(false);
-    expect(failedDoctor.body.rollback?.applied).toBe(true);
-    expect(failedDoctor.body.doctor.blocking.some((f: any) => f.code === 'ext.duplicate_id')).toBe(true);
+    const duplicateRefusal = await post(route, duplicateApply, keys.deploy.token);
+    evidence.nonOverridableDuplicate = duplicateRefusal;
+    expect(duplicateRefusal.status).toBe(409);
+    expect(duplicateRefusal.body).toMatchObject({ ok: false, code: 'DEPLOY_DUPLICATE_EXTENSION_ID',
+      conflictingFolders: ['duplicate'], deployment: { writeAttempted: false } });
+    expect(fs.readFileSync(path.join(target, 'payload.bin'))[0]).toBe(18);
+    expect(fs.readdirSync(receiptRoot).sort()).toEqual(beforeDuplicateReceipts);
     fs.rmSync(duplicate, { recursive: true });
     // A different configured target cannot reuse the old approval binding.
     const otherGame = path.join(root, 'other-game');
