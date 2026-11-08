@@ -3668,6 +3668,8 @@ async function main() {
   ok('dry_run_wrote_nothing', afterDry === beforeDry && (!beforeDry || afterDryHash === beforeDryHash) && afterDryStaging === beforeDryStaging && (!beforeDryStaging || afterDryStagingHash === beforeDryStagingHash),
     `target=${beforeDry}/${afterDry} staging=${beforeDryStaging}/${afterDryStaging}`);
   ok('dry_run_does_not_advertise_staging_path', !Object.prototype.hasOwnProperty.call(dry.json || {}, 'stagingPath'), JSON.stringify(dry.json || {}));
+  ok('native_preview_has_no_deployed_byte_scope', dry.json?.deployment?.state === 'not-deployed'
+    && dry.json.deployment.writeAttempted === false && dry.json.deployment.fidelityScope === 'none');
   ok('dry_run_does_not_promote_validation_baseline', dry.json?.baselinePromotion?.recorded === false && dry.json?.validationDelta?.status === 'no_baseline', JSON.stringify(dry.json?.baselinePromotion));
 
   // #4 autoReimport actually unblocks the deploy the guard refused.
@@ -3707,6 +3709,8 @@ async function main() {
   ok('deploy_row_records_exact_file_effect',
     JSON.stringify(deployRow?.fileEffect) === JSON.stringify(expectedDeployEffect),
     JSON.stringify({ expected: expectedDeployEffect, actual: deployRow?.fileEffect }));
+  ok('native_commit_reports_verified_byte_scope', autoDeploy.json?.deployment?.state === 'deployed'
+    && autoDeploy.json.deployment.writeAttempted === true && autoDeploy.json.deployment.fidelityScope === 'current-deployment');
   ok('verified_deploy_row_is_truthfully_revertible', deployRow?.revertible === true && deployRow?.recoveryId === autoDeploy.json?.recovery?.id, JSON.stringify(deployRow || {}));
 
   // A known duplicate refuses before writes. A later duplicate still triggers rollback.
@@ -3746,6 +3750,8 @@ async function main() {
     && failedDeploy.json?.rollback?.applied === true && regularTreeHash(dryTarget) === targetBeforeFailedDeploy
     && !fs.existsSync(path.join(dryTarget, lateSourceName)) && !fs.existsSync(lateDuplicateTrigger)
     && fs.existsSync(lateManifest), JSON.stringify(failedDeploy.json?.rollback || {}));
+  ok('native_rollback_has_no_current_byte_scope', failedDeploy.json?.deployment?.state === 'attempted'
+    && failedDeploy.json.deployment.writeAttempted === true && failedDeploy.json.deployment.fidelityScope === 'none');
   ok('failed_deploy_exposes_no_later_recovery', !failedDeploy.json?.recovery, JSON.stringify(failedDeploy.json?.recovery || null));
   const lateReceipts = actionReceiptFiles().filter(name => !beforeLateReceipts.has(name))
     .map(name => JSON.parse(fs.readFileSync(path.join(dataDir, 'action-receipts', name), 'utf8')));

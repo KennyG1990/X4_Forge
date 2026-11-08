@@ -13337,6 +13337,7 @@ function requestDeployOperation(req: express.Request) {
 function deployVerifyHandler(req: express.Request, res: express.Response) {
   let responseIdentity: Record<string, unknown> = { modId: null, sourceHash: null, artifactHash: null };
   let writeAttempted = false;
+  let targetMatchesPreState = false;
   let snapshot: DeploymentSnapshot | undefined;
   let deployReceipt: ActionReceipt | undefined;
   const recordFailedDeploy = (rolledBack: boolean, targetConflict = false) => {
@@ -13363,6 +13364,16 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
     ['deploy', 'Written to staging + extensions'], ['bytes', 'Deployed bytes confirmed'],
     ['doctor', 'Extension doctor'], ['drift', 'Workspace/deployed sync'], ['baseline', 'Last-green validation baseline'],
   ];
+  const deploymentFidelity = () => {
+    if (deployReceipt?.status === 'committed') {
+      return { state: 'deployed', writeAttempted, fidelityScope: 'current-deployment' };
+    }
+    return {
+      state: writeAttempted ? 'attempted' : 'not-deployed',
+      writeAttempted,
+      fidelityScope: writeAttempted && !targetMatchesPreState ? 'attempted-deployment' : 'none',
+    };
+  };
   const failWith = (stageId: string, payload: Record<string, unknown>) => {
     let hit = false;
     for (const [id, label] of STAGES) {
@@ -13370,7 +13381,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
       if (hit && !checklist.some(c => c.id === id)) checklist.push({ id, label, status: 'skipped', detail: 'Not reached - fix the failure above first.' });
     }
     return { ok: false, success: false, stage: stageId, checklist, ...responseIdentity,
-      deployment: { state: writeAttempted ? 'attempted' : 'not-deployed', writeAttempted, fidelityScope: writeAttempted ? 'attempted-deployment' : 'none' }, ...payload };
+      deployment: deploymentFidelity(), ...payload };
   };
   let pendingDeployRecovery: DeploymentRecoveryRecord | undefined;
   try {
@@ -13757,6 +13768,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
         ok: true,
         dryRun: true,
         stage: 'preview',
+        deployment: deploymentFidelity(),
         ...responseIdentity,
         targetRoot,
         deployFormat: { mode: deployFormat },
@@ -13864,10 +13876,10 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
           deploymentRecovery = destructiveRecoveryStore.finalizeDeployment(pendingDeployRecovery.id, deployedFingerprint);
           // Audit storage is a required gate, not the best-effort history projection.
           deployReceipt = commitDeployRecord(actionReceiptStore, deployReceipt, deployedFingerprint);
-          captureActionReceiptProjection(req, deployReceipt);
         } catch (error) {
           try {
             const restored = restoreDeploymentRecovery(pendingDeployRecovery, extensionsPath, deployedFingerprint);
+            targetMatchesPreState = true;
             destructiveRecoveryStore.abandon(pendingDeployRecovery.id);
             recordFailedDeploy(true);
             const deployCheck = checklist.find(item => item.id === 'deploy');
@@ -13887,10 +13899,14 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
             }));
           }
         }
+        // A verified committed receipt ends the automatic rollback window.
+        pendingDeployRecovery = undefined;
+        captureActionReceiptProjection(req, deployReceipt);
       } else {
         try {
           const finalized = destructiveRecoveryStore.finalizeDeployment(pendingDeployRecovery.id, deployedFingerprint);
           const restored = restoreDeploymentRecovery(finalized, extensionsPath);
+          targetMatchesPreState = true;
           destructiveRecoveryStore.markUsed(finalized.id);
           recordFailedDeploy(true);
           deploymentRollback = {
@@ -13950,6 +13966,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
     );
     return res.json({
       ok, success: ok, stage: 'done', ...responseIdentity, deployedPath, stagingPath, bytesConfirmed, deployedBytes,
+      deployment: deploymentFidelity(),
       ...(ok ? { deployRecord: deployReceipt, acceptanceRecords: approvalRecords } : {}),
       workspace: ws,
       ...(successfulDeploy ? { lastDeploy: successfulDeploy, deployedFingerprint } : {}),
@@ -13980,16 +13997,29 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
       },
     });
   } catch (error: any) {
+    if (deployReceipt?.status === 'committed') {
+      if (res.headersSent || res.writableEnded) throw error;
+      if (res.destroyed) return;
+      console.warn(`[deploy] committed receipt ${deployReceipt.id} response failed: ${errorMessage(error)}`);
+      return res.status(500).json({
+        ok: false, success: false, stage: 'exception', ...responseIdentity,
+        code: 'DEPLOY_RESPONSE_FAILED_AFTER_COMMIT', outcome: 'committed', deployRecord: deployReceipt,
+        deployment: deploymentFidelity(),
+        error: 'Deployment committed. Forge could not finish the normal response. Reconcile using the deployment receipt.',
+      });
+    }
     let rollback: { applied: boolean; detail: string } | undefined;
     if (pendingDeployRecovery) {
       try {
         const conflict = error?.code === 'DEPLOY_TARGET_CHANGED';
         const currentFingerprint = conflict ? undefined : deploymentTargetFingerprint(pendingDeployRecovery.targetPath);
         if (conflict || currentFingerprint === pendingDeployRecovery.beforeFingerprint) {
+          targetMatchesPreState = !conflict;
           destructiveRecoveryStore.abandon(pendingDeployRecovery.id);
           rollback = { applied: false, detail: 'The deploy transaction failed before changing the target; the unused recovery receipt was removed.' };
         } else if (currentFingerprint !== undefined && currentFingerprint !== 'absent') {
           const restored = restoreDeploymentRecovery(pendingDeployRecovery, pendingDeployRecovery.targetRoot, currentFingerprint);
+          targetMatchesPreState = true;
           destructiveRecoveryStore.abandon(pendingDeployRecovery.id);
           rollback = { applied: true, detail: `The exceptional deploy was rolled back to ${restored.restoredFingerprint}.` };
         } else {
@@ -14004,6 +14034,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
     const status = code === 'DEPLOY_APPROVAL_FORBIDDEN' ? 403 : /STALE|CHANGED|MISMATCH/.test(code) ? 409
       : /INPUT_INVALID/.test(code) ? 400 : /RECEIPT_/.test(code) ? 507 : 500;
     return res.status(status).json({ ok: false, success: false, stage: 'exception', ...responseIdentity, code,
+      deployment: deploymentFidelity(),
       error: error?.message || 'deploy-verify failed', ...(rollback ? { rollback } : {}) });
   } finally {
     try { snapshot?.dispose(); } catch (error) { console.warn('Deployment snapshot cleanup failed', error); }

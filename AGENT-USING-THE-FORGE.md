@@ -133,6 +133,13 @@ with the same deploy key and workspace headers. A committed receipt identifies t
 historical write. Missing or prepared evidence leaves the outcome unknown. Reusing a
 recorded operation ID refuses a second apply and returns the existing receipt pointer.
 
+If Forge returns `DEPLOY_RESPONSE_FAILED_AFTER_COMMIT`, its `deployRecord`
+and `outcome: committed` describe the historical write even though the reply
+is incomplete. Check `deployment.fidelityScope` before comparing files.
+`current-deployment` refers to the verified commit, `attempted-deployment`
+refers to an unverified attempt, and `none` covers preview, refusal, or an
+exact restore to prior bytes.
+
 **On `autoReimport: true`:** if you write to the workspace on disk, the Forge's canvas graph is stale *by
 construction* on every patch. Without this flag the deploy 409s at the source-sync stage every single time.
 
