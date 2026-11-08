@@ -148,6 +148,7 @@ import { layoutImportedGraphBatch, runImportedGraphLayoutSelftest } from "./src/
 import { runXmlSourceSpanSelftest } from "./src/lib/xmlSourceSpans";
 import { runNodeSelectionDocumentSelftest } from "./src/lib/nodeSelectionDocument";
 import { buildScriptPropertyIndex, lintScriptPropertyChains, SCRIPT_PROPERTIES_FIXTURE } from "./src/lib/scriptProperties";
+import { findUnmatchedMdElse, MD_UNMATCHED_ELSE } from "./src/lib/expressionAst";
 import { publishInstance, unpublishInstance, latestPath, runInstanceDiscoverySelftest } from "./src/lib/instanceDiscovery";
 import { buildPlayerReadme, bumpVersion, runModDistributionSelftest, setContentVersion, verifyZipArchive } from "./src/lib/modDistribution";
 import {
@@ -5179,6 +5180,12 @@ app.post("/api/agent/check-expression", (req, res) => {
         code: 'MISSING_EXPRESSION',
         error: 'Send {"expression": "$station.manager"} — the single MD/AIScript expression to check. Optionally add {"variableTypes": {"$station": "station"}} so typed variables resolve.',
       });
+    }
+    const unmatchedElse = findUnmatchedMdElse(expression);
+    if (unmatchedElse !== undefined) {
+      return res.json({ ok: false, legal: false, expression, problems: [{
+        ...MD_UNMATCHED_ELSE, severity: 'error', offset: unmatchedElse, segment: 'else', suggestions: [],
+      }] });
     }
     const spIndex = getScriptPropertyIndex();
     if (!spIndex) {

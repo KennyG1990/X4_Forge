@@ -62,17 +62,56 @@ export function expressionChainAt(text: string, offset: number): ExpressionChain
   return parseExpressionChains(text).find(chain => offset >= chain.start && offset <= chain.end) || null;
 }
 
+// A dollar starts a variable, including directly after a keyword (vanilla uses if$variable).
+const MD_EXPRESSION_TOKEN = /'(?:\\[\s\S]|[^'\\])*'|"(?:\\[\s\S]|[^"\\])*"|(?:[$\p{L}_]|\.(?=[$\p{L}_]))(?:\.\$|[\p{L}\p{N}_.])*|[^\s]/gu;
+const MD_GROUP_CLOSERS = new Map([['(', ')'], ['[', ']'], ['{', '}']]);
+
+export const MD_UNMATCHED_ELSE = {
+  code: 'md.unmatched_else',
+  message: "An 'else' requires a matching 'if … then' in the same expression.",
+} as const;
+
+/** Find an else without a matching if/then in its group or argument. */
+export function findUnmatchedMdElse(expression: string): number | undefined {
+  if (!/\belse\b/.test(expression)) return undefined;
+  const scopes: { closer?: string; pending: ('then' | 'else')[] }[] = [{ pending: [] }];
+  let previous = '';
+  for (const match of expression.matchAll(MD_EXPRESSION_TOKEN)) {
+    const token = match[0];
+    const scope = scopes[scopes.length - 1];
+    const closer = MD_GROUP_CLOSERS.get(token);
+    if (token === "'" || token === '"') return undefined;
+    if (closer) {
+      scopes.push({ closer, pending: [] });
+    } else if (token === ')' || token === ']' || token === '}') {
+      if (scope.closer !== token) return undefined;
+      scopes.pop();
+    } else if (token === ',') {
+      scope.pending.length = 0;
+    } else if (previous !== '.') {
+      if (token === 'if') scope.pending.push('then');
+      if (token === 'then') {
+        // A nested conditional used as the predicate can omit its else.
+        while (scope.pending.at(-1) === 'else') scope.pending.pop();
+        if (scope.pending.at(-1) === 'then') scope.pending[scope.pending.length - 1] = 'else';
+      }
+      if (token === 'else' && scope.pending.pop() !== 'else') return match.index;
+    }
+    previous = token;
+  }
+  return undefined;
+}
+
 /** Resolve literal results of MD inline-if expressions without evaluating predicates. */
 export function collectMdStringResults(expression: string): { values: string[]; unresolved: boolean } {
   const unknown = { values: [], unresolved: true };
   if (expression.length > 8192) return unknown;
-  const tokens = expression.match(/'(?:\\[\s\S]|[^'\\])*'|"(?:\\[\s\S]|[^"\\])*"|(?:[$\p{L}_]|\.(?=[$\p{L}_]))[$\p{L}\p{N}_.]*|[^\s]/gu) ?? [];
-  const closers = new Map([['(', ')'], ['[', ']'], ['{', '}']]);
+  const tokens = expression.match(MD_EXPRESSION_TOKEN) ?? [];
   const groups = new Map<number, number>();
   const stack: { index: number; closer: string }[] = [];
   for (const [index, token] of tokens.entries()) {
     if (token === "'" || token === '"') return unknown;
-    const closer = closers.get(token);
+    const closer = MD_GROUP_CLOSERS.get(token);
     if (closer) stack.push({ index, closer });
     else if (token === ')' || token === ']' || token === '}') {
       const group = stack.pop();
@@ -125,6 +164,23 @@ export function collectMdStringResults(expression: string): { values: string[]; 
 export function runExpressionAstSelftest() {
   const checks: Array<{ name: string; pass: boolean }> = [];
   const ok = (name: string, pass: boolean) => checks.push({ name, pass });
+  ok('unmatched_else_locates_the_orphan', [
+    ['md.ai_influence_chat.Cards.$needScanStart else 0', 0],
+    ['if $x else 0', 0],
+    ['if $x then 1 else 2 else 3', 1],
+    ['(if $x then 1) else 0', 0],
+    ['[if $x then 1, $y else 0]', 0],
+  ].every(([expression, index]) => {
+    const source = String(expression);
+    const offsets = [...source.matchAll(/\belse\b/g)];
+    return findUnmatchedMdElse(source) === offsets[Number(index)].index;
+  }));
+  ok('unmatched_else_preserves_nested_conditionals_and_non_keyword_uses', [
+    'if $x then 1', 'if $x then if $y then 1 else 2 else 3',
+    'if if $x then 1 then 2 else 3', 'if $x then (if $y then 1) else 2',
+    'if $x then [1, 2] else 3', 'if$PlayerDestroyedElements? then 150 else 0',
+    "if $value.then then [$else, $x.else, 'an escaped \\'else'] else 0",
+  ].every(expression => findUnmatchedMdElse(expression) === undefined));
   const nested = collectMdStringResults("if ($x.then == 'if then else') then (if $next then 'one') else 'two'");
   ok('inline_if_retains_known_results_and_implicit_null', nested.values.join(',') === 'one,two' && nested.unresolved);
   const exact = collectMdStringResults("if $table.[$else] then 'one' else if $next then 'two' else 'three'");

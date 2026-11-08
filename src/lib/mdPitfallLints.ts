@@ -36,15 +36,20 @@
  * House pattern: pure engine + oracle + public GET. xmldom for cue-tree structure.
  */
 
-import { DOMParser } from '@xmldom/xmldom';
+import { DOMParser, normalizeLineEndings, type Attr } from '@xmldom/xmldom';
+import { findUnmatchedMdElse, MD_UNMATCHED_ELSE } from './expressionAst';
 import { maskNonExpressionSpans, type ScriptPropertyIndex } from './scriptProperties';
+import { assertXmlInputWithinLimits } from './xmlInputLimits';
+import type { SchemaIndex } from './xsdValidate';
 
 export interface MdPitfallFinding {
-  code: 'md_pitfall.products_existence' | 'md_pitfall.cancel_conversation_actor_or_template' | 'md_pitfall.ui_listener_one_shot' | 'md_pitfall.offer_accepted_keyword_cue' | 'md_pitfall.param3_table_barekey';
+  code: 'md_pitfall.products_existence' | 'md_pitfall.cancel_conversation_actor_or_template' | 'md_pitfall.ui_listener_one_shot' | 'md_pitfall.offer_accepted_keyword_cue' | 'md_pitfall.param3_table_barekey' | typeof MD_UNMATCHED_ELSE.code;
   severity: 'error' | 'warning';
   cue?: string;
   filePath?: string;
   line?: number;
+  column?: number;
+  sourceRef?: string;
   detail: string;
 }
 
@@ -52,6 +57,73 @@ import { directElementChildren, type ElementLike } from './xmlLite';
 
 function lineOf(haystack: string, needleIndex: number): number {
   return haystack.slice(0, Math.max(0, needleIndex)).split('\n').length;
+}
+
+const EXPRESSION_TYPE = /^(?:\w+:)?(?:lvalue|boolean)?expression$/i;
+
+/** Translate a decoded attribute offset to a one-based raw XML source position. */
+function expressionLocation(source: string, lines: number[], attr: Attr, offset: number) {
+  const fallback = { line: attr.lineNumber, column: attr.columnNumber };
+  if (!attr.lineNumber || !attr.columnNumber) return fallback;
+  let line = attr.lineNumber;
+  const quoteAt = lines[line - 1] + attr.columnNumber - 1;
+  const quote = source[quoteAt];
+  if (quote !== '"' && quote !== "'") return fallback;
+  const end = source.indexOf(quote, quoteAt + 1);
+  const entity = /&(?:#(x[\da-f]+|\d+)|amp|apos|quot|lt|gt);/iy;
+  let index = quoteAt + 1;
+  for (let decoded = 0; decoded < offset && index < end; decoded++) {
+    entity.lastIndex = index;
+    const match = source[index] === '&' ? entity.exec(source) : null;
+    if (match) {
+      const numeric = match[1];
+      const value = numeric?.startsWith('x') ? parseInt(numeric.slice(1), 16) : Number(numeric);
+      if (value > 0xffff) decoded++;
+      index = entity.lastIndex;
+    } else {
+      index++;
+    }
+  }
+  if (index >= end) return fallback;
+  while (lines[line] !== undefined && lines[line] <= index) line++;
+  return { line, column: index - lines[line - 1] + 1 };
+}
+
+/** Validate expression-valued attributes in script files and their XML diff payloads. */
+export function lintMdUnmatchedElse(xml: string, schema: SchemaIndex | null, filePath?: string): MdPitfallFinding[] {
+  if (!/\belse\b|&#/.test(xml)) return [];
+  const source = normalizeLineEndings(xml.replace(/^\uFEFF/, ''));
+  let invalid = false;
+  let doc;
+  try {
+    assertXmlInputWithinLimits(source);
+    doc = new DOMParser({ onError: () => { invalid = true; } }).parseFromString(source, 'text/xml');
+  } catch { return []; }
+  if (invalid || !['mdscript', 'aiscript', 'diff'].includes(doc.documentElement?.nodeName ?? '')) return [];
+
+  const findings: MdPitfallFinding[] = [];
+  const elements = doc.getElementsByTagName('*');
+  let lines: number[] | undefined;
+  for (let index = 0; index < elements.length; index++) {
+    const element = elements[index];
+    const attributes = schema?.elements.get(element.nodeName)?.attributes;
+    for (let i = 0; i < element.attributes.length; i++) {
+      const attr = element.attributes[i];
+      const spec = attributes?.get(attr.name);
+      if (!(element.nodeName === 'set_value' && attr.name === 'exact')
+        && !EXPRESSION_TYPE.test(spec?.type ?? '') && !EXPRESSION_TYPE.test(spec?.baseType ?? '')) continue;
+      const offset = findUnmatchedMdElse(attr.value);
+      if (offset === undefined) continue;
+      lines ??= [0, ...Array.from(source.matchAll(/\n/g), match => match.index + 1)];
+      findings.push({
+        code: MD_UNMATCHED_ELSE.code, severity: 'error', filePath,
+        sourceRef: `${element.nodeName}/@${attr.name}`,
+        ...expressionLocation(source, lines, attr, offset),
+        detail: MD_UNMATCHED_ELSE.message,
+      });
+    }
+  }
+  return findings;
 }
 
 /** Preserve source offsets while excluding markup-looking content that is not an element. */
@@ -255,6 +327,23 @@ export function runMdPitfallSelftest(): {
   const ok = (name: string, cond: boolean, detail?: unknown) =>
     checks.push({ name, pass: !!cond, detail: detail === undefined ? undefined : (typeof detail === 'string' ? detail : JSON.stringify(detail)) });
   const lint = (xml: string) => lintMdPitfalls(xml, { propertyUnion: UNION_FIXTURE });
+  const orphan = '  <set_value name="$probe" exact="$n &lt; 5 &#101;lse 0"/>';
+  const expressionXml = [
+    '<mdscript name="ElseProbe">',
+    '  <!-- <set_value exact="else"/> -->',
+    '  <![CDATA[<set_value exact="else"/>]]>',
+    '  <set_value name="$else" exact="\'else\'" comment="else"/>',
+    orphan,
+    '</mdscript>',
+  ].join('\r\n');
+  const expressionFindings = lintMdUnmatchedElse(expressionXml, null, 'md/probe.xml');
+  ok('unmatched_else_uses_decoded_attributes_and_raw_coordinates',
+    expressionFindings.length === 1 && expressionFindings[0].line === 5
+    && expressionFindings[0].column === orphan.indexOf('&#101;') + 1
+    && expressionFindings[0].sourceRef === 'set_value/@exact', expressionFindings);
+  ok('unmatched_else_ignores_non_script_root_and_invalid_xml',
+    lintMdUnmatchedElse('<root><set_value exact="else"/></root>', null).length === 0
+    && lintMdUnmatchedElse('<mdscript><set_value exact="else"/></invalid>', null).length === 0);
   const cancelFindingCode = 'md_pitfall.cancel_conversation_actor_or_template';
   const cancelFindings = (xml: string) => lint(xml).filter(f => f.code === cancelFindingCode);
 

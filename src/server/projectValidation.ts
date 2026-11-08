@@ -40,7 +40,7 @@ import { validateProjectCrossFile } from "../lib/projectCrossFileValidation";
 import { lintScriptPropertyChains, type ScriptPropertyFinding } from "../lib/scriptProperties";
 import { checkXmlWellformed } from "../lib/xmlWellformed";
 import { lintAiscriptOrderParams, type AiscriptLintFinding } from "../lib/aiscriptLint";
-import { lintMdPitfalls, type MdPitfallFinding } from "../lib/mdPitfallLints";
+import { lintMdPitfalls, lintMdUnmatchedElse, type MdPitfallFinding } from "../lib/mdPitfallLints";
 import { lintJobsContent, type JobsVocabulary, type JobLintFinding } from "../lib/jobsContentLint";
 import { lintMigration, type MigrationFinding } from "../lib/migrationLint";
 import { lintWaresContent, type WaresVocabulary, type WareLintFinding } from "../lib/waresContentLint";
@@ -501,8 +501,16 @@ export function runProjectValidation(
   // param3 bare-key reads). Union-aware where the scriptproperty index is available.
   const pitfallFindings: MdPitfallFinding[] = [];
   for (const f of project.files) {
-    if ((f.kind === "md" || classifyPath(f.path) === "md") && typeof f.content === "string") {
+    if (typeof f.content !== "string") continue;
+    const pathKind = classifyPath(f.path);
+    if (f.kind === "md" || pathKind === "md") {
       pitfallFindings.push(...fact('pitfalls', f, propertyGeneration, () => lintMdPitfalls(f.content!, { propertyUnion: spIndex?.union, propertyIndex: spIndex || undefined, filePath: f.path })));
+    }
+    const kind = f.kind === "md" || f.kind === "aiscript" ? f.kind : pathKind;
+    if (kind === "md" || kind === "aiscript") {
+      const index = kind === "md" ? mdIndexRef : aiIndexRef;
+      pitfallFindings.push(...fact('unmatched-else', f, resourceGeneration(index),
+        () => lintMdUnmatchedElse(f.content!, index, f.path)));
     }
   }
 
@@ -723,7 +731,7 @@ function flattenProjectValidationRaw(result: ProjectValidationResult): FlatProje
     out.push({ severity: f.severity, code: f.code, filePath: f.filePath, sourceRef: f.chain, line: f.line, message: `Property chain "${f.chain}": segment "${f.segment}" — ${f.suggestions.length ? `did you mean ${f.suggestions.slice(0, 3).join(", ")}?` : "unknown in scriptproperties.xml."}` });
   }
   for (const f of result.pitfalls.findings) {
-    out.push({ severity: f.severity, code: f.code, filePath: f.filePath, sourceRef: f.cue, line: f.line, message: f.detail });
+    out.push({ severity: f.severity, code: f.code, filePath: f.filePath, sourceRef: f.sourceRef ?? f.cue, line: f.line, column: f.column, message: f.detail });
   }
   // B61: jobs content lint — advisory only (WARNING never flips `ok`), one currency with every other layer.
   for (const f of result.jobsLint.findings) {
