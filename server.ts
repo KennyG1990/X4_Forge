@@ -121,7 +121,7 @@ import { assessSourceSync, hashFolderFingerprint, runCompileFidelitySelftest } f
 import { workspaceContentHash, workspaceSnapshotHash, runWorkspaceIdentitySelftest } from "./src/lib/workspaceIdentity";
 import { buildWorkspaceConflictPreview, runWorkspaceConflictSelftest } from "./src/lib/workspaceConflict";
 import { DestructiveRecoveryStore, runDestructiveRecoverySelftest, type DeploymentRecoveryRecord } from "./src/lib/destructiveRecovery";
-import { ActionReceiptStore } from "./src/lib/actionReceiptStore";
+import { ActionReceiptStore, ActionReceiptStoreError } from "./src/lib/actionReceiptStore";
 import { evaluateFindingAcceptances, projectFindingReview, recordFindingAcceptances, verifyFindingAcceptanceReceipts, revokeWarningReview, type AcceptanceSubject, type AcceptancePrincipal } from './src/server/findingAcceptance';
 import { parseModFolderImportRequest } from './src/server/modFolderImportRequest';
 import { RuntimeControl } from './src/server/runtimeControl';
@@ -13584,11 +13584,6 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
       deployValidation.validationFiles,
       preflightDiagnostics,
     );
-    const pfWarnings = preflight.summary.activeWarnings + diskValidationSkipped.length;
-    const evidence = buildValidationEvidence({ id: modId, name: modId, files: deployValidation.validationFiles },
-      preflightDiagnostics.map(d => ({ severity: d.severity as 'error' | 'warning' | 'info', code: d.code,
-        filePath: d.filePath, line: d.line, sourceRef: typeof d.sourceRef === 'string' ? d.sourceRef : undefined,
-        message: String(d.message || d.code || 'Validation finding') })), preflight.evidence?.coverage.gaps || []);
     const extensionsPath = path.join(x4GamePath, 'extensions');
     const targetRoot = path.join(extensionsPath, effectiveModId(activeBuildWorkspace(ws)));
     const targetChanged = () => Object.assign(
@@ -13612,13 +13607,34 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
       catch { throw targetChanged(); }
       if (current !== targetFingerprint) throw targetChanged();
     };
+    const reviewSource = modSourceDir || ws.sourceStamp?.dir;
+    const canonicalReviewSource = reviewSource ? fs.realpathSync.native(reviewSource) : undefined;
+    let receiptHistory: ActionReceipt[] | undefined;
+    let receiptHistoryUnavailable = false;
+    if (canonicalReviewSource) {
+      try {
+        receiptHistory = actionReceiptStore.listVerified();
+      } catch (error) {
+        const incompleteHistory = error instanceof ActionReceiptStoreError
+          && (error.code === 'RECEIPT_CORRUPT' || error.code === 'RECEIPT_SCAN_LIMIT');
+        if (!incompleteHistory || acceptances.length) throw error;
+        receiptHistoryUnavailable = true;
+      }
+    }
+    const pfWarnings = preflight.summary.activeWarnings + diskValidationSkipped.length;
+    const evidence = buildValidationEvidence({ id: modId, name: modId, files: deployValidation.validationFiles },
+      preflightDiagnostics.map(d => ({ severity: d.severity as 'error' | 'warning' | 'info', code: d.code,
+        filePath: d.filePath, line: d.line, sourceRef: typeof d.sourceRef === 'string' ? d.sourceRef : undefined,
+        message: String(d.message || d.code || 'Validation finding') })), [
+        ...(preflight.evidence?.coverage.gaps || []),
+        ...(receiptHistoryUnavailable ? [{ check: 'deploy.receipt_history',
+          reason: 'Receipt history could not be verified. Remembered warning reviews were omitted.' }] : []),
+      ]);
     const subject: AcceptanceSubject = { evidence, artifactHash, validatorHash: deployValidatorHash, corpusHash,
       targetHash: trustHash([process.platform === 'win32' ? path.resolve(targetRoot).toLowerCase() : path.resolve(targetRoot), deployFormat]) };
-    const reviewSource = modSourceDir || ws.sourceStamp?.dir;
-    if (reviewSource) {
-      const canonical = fs.realpathSync.native(reviewSource);
-      subject.warningReviews = { scopeHash: trustHash([process.platform === 'win32' ? canonical.toLowerCase() : canonical, evidence.modId]),
-        history: actionReceiptStore.listVerified(), invocationId: crypto.randomUUID() };
+    if (canonicalReviewSource && receiptHistory) {
+      subject.warningReviews = { scopeHash: trustHash([process.platform === 'win32' ? canonicalReviewSource.toLowerCase() : canonicalReviewSource, evidence.modId]),
+        history: receiptHistory, invocationId: crypto.randomUUID() };
     }
     responseIdentity = { ...responseIdentity, modId: evidence.modId, modVersion: evidence.modVersion, sourceHash: evidence.sourceHash,
       artifactHash, validation: { evidence } };
@@ -13658,7 +13674,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
     }
     if (!decision.validationAllowsDeploy) {
       const blockingFindings = evidence.findings.filter(finding => decision.unacceptedErrorIds.includes(finding.findingId));
-      const acceptanceRequest = { method: 'POST', path: '/api/agent/deploy-verify',
+      const acceptanceRequest = receiptHistoryUnavailable ? undefined : { method: 'POST', path: '/api/agent/deploy-verify',
         body: { ...(body.path ? { path: body.path } : { workspace: body.workspace }), deployFormat,
           ...(body.autoReimport !== undefined ? { autoReimport: body.autoReimport } : {}),
           dryRun: false, expectedModId: evidence.modId, expectedSourceHash: evidence.sourceHash,
@@ -13668,7 +13684,8 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
         instruction: 'Supply a nonempty reason for each exact finding before POSTing this body. Deploy permission is required. Stale evidence and safety gates still refuse.' };
       check('preflight', 'Full validation (schema/cues/lints)', 'fail',
         blockingFindings.map(f => `${f.code || 'mod-finding'} | ${f.filePath || '(project)'}${f.line ? ':' + f.line : ''} | ${f.message} | findingId=${f.findingId}`).join('\n')
-        + '\nAcceptance: POST /api/agent/deploy-verify using acceptanceRequest.body with a reason for each finding.');
+        + (acceptanceRequest ? '\nAcceptance: POST /api/agent/deploy-verify using acceptanceRequest.body with a reason for each finding.'
+          : '\nReceipt history must be verified before Forge can offer finding acceptance.'));
       return res.json(failWith('preflight', { modId, category: 'mod-findings', code: 'UNACCEPTED_MOD_FINDINGS', blockingFindings,
         acceptanceRequest, validationDelta, preflight: { summary: preflight.summary, findings: blockingFindings } }));
     }

@@ -136,6 +136,12 @@ recorded operation ID refuses a second apply and returns the existing receipt po
 **On `autoReimport: true`:** if you write to the workspace on disk, the Forge's canvas graph is stale *by
 construction* on every patch. Without this flag the deploy 409s at the source-sync stage every single time.
 
+A path-based preview with the `deploy.receipt_history` coverage gap omits
+remembered warning reviews. Forge can qualify a deploy with fresh matching
+preview fields when current validation allows it. It does not record a new
+last-green baseline or accept explicit finding approvals until the history
+can be verified. Run a new preview after receipt history is restored.
+
 ---
 
 ## 5. Ground every API shape in the corpus — the highest-value habit
