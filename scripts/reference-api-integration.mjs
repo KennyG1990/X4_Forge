@@ -147,6 +147,16 @@ try {
   check('jobs include base+DLC provenance', jobs.length > 1000 && jobs.some((job) => job.id === 'dummy_job' && job.source === 'base') && jobs.some((job) => /^ego_dlc_/.test(job.source)), String(jobs.length));
   const aiScripts = await request('/api/reference/aiscripts').then((response) => response.json());
   check('AI scripts include canonical names', aiScripts.length > 100 && aiScripts.some((script) => script.id === 'boarding.pod'), String(aiScripts.length));
+  const assignCommander = aiScripts.find(script => script.id === 'order.assign.commander')?.order;
+  check('AI scripts include authored order headers and parameter inputs',
+    assignCommander?.id === 'AssignCommander' && assignCommander.category === 'navigation' && assignCommander.infinite === false
+    && assignCommander.params.some(param => param.name === 'commander' && param.type === 'object' && param.default === 'null' && param.required === false)
+    && aiScripts.find(script => script.id === 'boarding.pod')?.order === null);
+  const aiOrderSearch = await request('/api/reference/search?kind=aiscript&q=order').then(response => response.json());
+  const legacyAiOrderSearch = aiScripts.map(({ id, name, source, path }) => ({ id, name, source, path }))
+    .filter(row => JSON.stringify(row).toLowerCase().includes('order'))
+    .slice(0, 200).map(row => ({ kind: 'aiscript', ...row }));
+  check('AI script search keeps its existing fields and match scope', JSON.stringify(aiOrderSearch) === JSON.stringify(legacyAiOrderSearch));
   const wareSuggestionResponse = await request('/api/reference/suggest?kind=ware&q=energyc&intent=reference&limit=10', { token });
   const wareSuggestions = await wareSuggestionResponse.json();
   check('shared suggestion endpoint ranks ware prefix', wareSuggestionResponse.status === 200 && wareSuggestions.items?.[0]?.label === 'energycells', JSON.stringify(wareSuggestions.items?.slice(0, 3) || wareSuggestions));

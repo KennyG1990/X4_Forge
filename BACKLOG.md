@@ -38,6 +38,10 @@ Dev checks faction literals at direct engine-shaped Lua calls and owner comparis
 
 Dev accepts direct indexed assignments on the table sent to the matching event and rejects a read-only lookup or a writer bound only to another event. Builder, shadow and captured-table cases remain eligible with an explicit warning. The exact direct fixture committed its scratch bytes and stale and read-only bindings refused without writes. [Isolated evidence](docs/plans/2026-11-09-indexed-payload-writer-evidence.md). Installed and public delivery remain open.
 
+### Canonical AI order headers `in_progress` (GitHub #63)
+
+The existing AI script endpoint returns authored order headers and parameters with first-definition provenance in one request. All 178 rows matched the X4 9.00 oracle, the first request took 27 ms after isolated startup, and generic search matched the baseline across 11 controls. [Isolated evidence](docs/plans/2026-11-09-reference-ai-order-headers.md). Installed and public delivery remain open.
+
 ### Unsaved expression MCP `in_progress` (GitHub #79, part of #74)
 
 Dev exposes the shared unsaved checker through an exact read/analyze capability and current MCP discovery. The paired policy, HTTP, stdio and native deploy passed in isolation, including the shared #73 and #78 grammar rules. [Dev evidence](docs/plans/2026-11-08-mcp-check-expression.md). Installed verification and public delivery remain open.

@@ -4115,7 +4115,7 @@ app.get("/api/agent/schema", (req, res) => {
         method: "GET",
         path: "/api/reference/aiscripts",
         auth: false,
-        purpose: "List canonical base+DLC AI-script names and source paths."
+        purpose: "List canonical base+DLC AI-script identities, source paths and authored first-definition order headers with parameters. Non-order scripts return order: null."
       },
       {
         method: "GET",

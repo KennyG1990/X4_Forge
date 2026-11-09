@@ -315,7 +315,7 @@ export function registerReferenceRoutes(
       for (const f of corpus.factions) push('faction', f as unknown as Record<string, unknown>);
       for (const w of corpus.wares) push('ware', w as unknown as Record<string, unknown>);
       for (const job of corpus.jobs) push('job', job as unknown as Record<string, unknown>);
-      for (const script of corpus.aiScripts) push('aiscript', script as unknown as Record<string, unknown>);
+      for (const { id, name, source, path } of corpus.aiScripts) push('aiscript', { id, name, source, path });
       for (const s of corpus.sectors) push('sector', s as unknown as Record<string, unknown>);
       for (const entry of corpus.scriptProperties) {
         for (const property of entry.properties) push('property', { ownerKind: entry.kind, owner: entry.name, ...property });

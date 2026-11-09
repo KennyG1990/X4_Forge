@@ -17,6 +17,7 @@ import { DOMParser } from '@xmldom/xmldom';
 import { parseScriptProperties } from './scriptProperties';
 import { parseLocalizationXml, resolveLocName, type LocalizationMap } from './x4ObjectIndex';
 import { listReferenceManifestFiles } from './referenceManifest';
+import { directElementChildren, type ElementLike } from './xmlLite';
 
 export type ReferenceSource = 'base' | `ego_dlc_${string}`;
 export type FactionCategory = 'political' | 'player' | 'system' | 'hostile';
@@ -56,6 +57,22 @@ export interface AIScriptReference {
   name: string;
   source: ReferenceSource;
   path: string;
+  order: AIScriptOrderReference | null;
+}
+
+export interface AIScriptOrderReference {
+  /** Authored order ID, separate from the owning script name. */
+  id: string | null;
+  category: string | null;
+  /** Header flag. A parameter's infinite value may also make the order infinite. */
+  infinite: boolean;
+  params: Array<{
+    name: string | null;
+    type: string | null;
+    default: string | null;
+    required: boolean;
+    infiniteValue: string | null;
+  }>;
 }
 
 export type CanonicalSymbolKind = 'faction' | 'ware' | 'sector' | 'macro' | 'job' | 'aiscript';
@@ -318,6 +335,29 @@ function parseJobs(files: ReferenceFile[], loc: LocalizationMap): JobReference[]
   return [...found.values()].sort((a, b) => a.id.localeCompare(b.id));
 }
 
+function parseAIScriptOrder(root: ElementLike): AIScriptOrderReference | null {
+  const [order] = directElementChildren(root, 'order');
+  if (!order) return null;
+  const [params] = directElementChildren(order, 'params');
+  const enabled = (value: string | null) => /^(true|1)$/.test(value?.trim() ?? '');
+  return {
+    id: order.getAttribute('id'),
+    category: order.getAttribute('category'),
+    infinite: enabled(order.getAttribute('infinite')),
+    params: (params ? directElementChildren(params, 'param') : []).map(param => {
+      const defaultValue = param.getAttribute('default');
+      const required = param.getAttribute('required');
+      return {
+        name: param.getAttribute('name'),
+        type: param.getAttribute('type'),
+        default: defaultValue,
+        required: required === null ? defaultValue === null : enabled(required),
+        infiniteValue: param.getAttribute('infinitevalue'),
+      };
+    }),
+  };
+}
+
 function parseAIScripts(files: ReferenceFile[]): AIScriptReference[] {
   const found = new Map<string, AIScriptReference>();
   for (const file of files.filter(f => f.kind === 'aiscript')) {
@@ -327,7 +367,7 @@ function parseAIScripts(files: ReferenceFile[]): AIScriptReference[] {
     if (String(root?.tagName || '').toLowerCase() !== 'aiscript') continue;
     const id = attrs(root, 'name').trim().toLowerCase();
     if (!id || found.has(id)) continue;
-    found.set(id, { id, name: labelFromId(id), source: file.source, path: file.relative });
+    found.set(id, { id, name: labelFromId(id), source: file.source, path: file.relative, order: parseAIScriptOrder(root) });
   }
   return [...found.values()].sort((a, b) => a.id.localeCompare(b.id));
 }
@@ -541,7 +581,17 @@ export function runReferenceCorpusSelftest(): {
     write('libraries/factions.xml', '<factions><faction id="argon" name="{1,1}" tags="claimspace economic"/><faction id="ownerless" tags="hidden"/></factions>');
     write('libraries/wares.xml', '<wares><ware id="energycells" name="{1,2}" group="energy" tags="economy container"/></wares>');
     write('libraries/jobs.xml', '<jobs><job id="argon_patrol" name="Argon Patrol"/></jobs>');
-    write('aiscripts/patrol.xml', '<aiscript name="order.patrol"/>');
+    write('aiscripts/patrol.xml', `<aiscript name="order.patrol">
+      <order id="Patrol" category="Navigation" infinite=" 1 ">
+        <params>
+          <param name="target" type="object"/>
+          <param name="duration" type="time" default="0s" required=" true " infinitevalue="0s"/>
+          <param name="label" default=""/>
+          <param name="enabled" type="bool" default="false" required="0"/>
+        </params>
+      </order>
+    </aiscript>`);
+    write('aiscripts/subroutine.xml', '<aiscript name="subroutine"><!-- <order id="Comment"/> --><actions><order id="Nested"/></actions></aiscript>');
     write('libraries/scriptproperties.xml', '<scriptproperties><datatype name="faction" type="dbdata"><property name="id" result="ID" type="string"/><property name="name" result="Name" type="string"/></datatype></scriptproperties>');
     write('index/macros.xml', '\uFEFF<?xml version="1.0" encoding="utf-8"?><index><entry name="ship_test_macro" value="assets/ship_test"/></index>');
     write('maps/test/sectors.xml', '<macros><macro name="Cluster_Test_Sector001_macro" class="sector"><properties><identification name="{1,3}"/></properties></macro></macros>');
@@ -553,17 +603,34 @@ export function runReferenceCorpusSelftest(): {
     ok('localized ware + sector', first.wares[0]?.name === 'Energy Cells' && first.sectors[0]?.name === 'Test Sector');
     ok('job IDs indexed with provenance', first.jobs[0]?.id === 'argon_patrol' && first.jobs[0]?.source === 'base');
     ok('AI script names indexed', first.aiScripts[0]?.id === 'order.patrol' && first.references.aiScripts.has('order.patrol'));
+    const patrol = first.aiScripts[0]?.order;
+    ok('AI order retains authored ID, category and infinite flag', patrol?.id === 'Patrol' && patrol.category === 'Navigation' && patrol.infinite === true);
+    ok('AI order parameters retain ordered input contract', JSON.stringify(patrol?.params) === JSON.stringify([
+      { name: 'target', type: 'object', default: null, required: true, infiniteValue: null },
+      { name: 'duration', type: 'time', default: '0s', required: true, infiniteValue: '0s' },
+      { name: 'label', type: null, default: '', required: false, infiniteValue: null },
+      { name: 'enabled', type: 'bool', default: 'false', required: false, infiniteValue: null },
+    ]));
+    ok('comments and nested nodes are not AI order headers', first.aiScripts.find(script => script.id === 'subroutine')?.order === null);
     ok('normalized symbol index built', first.symbols.some(symbol => symbol.kind === 'ware' && symbol.id === 'energycells' && symbol.selector === "/wares/ware[@id='energycells']"));
     ok('macro catalog indexed', first.references.macros.has('ship_test_macro'));
     ok('faction datatype exposes id', first.scriptProperties.find(p => p.kind === 'datatype' && p.name === 'faction')?.properties.some(p => p.name === 'id' && p.type === 'string') === true);
     write('extensions/ego_dlc_test/libraries/factions.xml', '<diff><add sel="/factions"><faction id="dlcfaction" name="DLC" tags="economic"/></add></diff>');
     write('extensions/ego_dlc_test/libraries/jobs.xml', '<diff><add sel="/jobs"><job id="dlc_patrol" name="DLC Patrol"/></add></diff>');
-    write('extensions/ego_dlc_test/aiscripts/dlc.xml', '<aiscript name="order.dlc"/>');
+    write('extensions/ego_dlc_test/aiscripts/dlc.xml', '<aiscript name="order.dlc"><order id="Dlc"><params><param name="optional" type="number" default="0"/></params></order></aiscript>');
+    write('extensions/ego_dlc_test/aiscripts/patrol-duplicate.xml', '<aiscript name="order.patrol"><order id="Duplicate"/></aiscript>');
+    write('extensions/ego_dlc_test/aiscripts/patrol.xml', '<diff><replace sel="/aiscript/order/@id">Patched</replace></diff>');
     write('extensions/ego_dlc_test/libraries/scriptproperties.xml', '<diff><add sel="/scriptproperties/datatype[@name=\'faction\']"><property name="dlcproperty" result="DLC value" type="string"/></add></diff>');
     write('extensions/ego_dlc_test/index/macros.xml', '<diff><add sel="/index"><entry name="ship_dlc_macro" value="extensions/ego_dlc_test/assets/ship_dlc"/></add></diff>');
     const added = getReferenceCorpus(tmp, true);
     ok('DLC add appears after cache refresh', added !== second && added.factions.some(f => f.id === 'dlcfaction' && f.source === 'ego_dlc_test'));
     ok('DLC jobs and scripts appear after refresh', added.jobs.some(job => job.id === 'dlc_patrol' && job.source === 'ego_dlc_test') && added.aiScripts.some(script => script.id === 'order.dlc' && script.source === 'ego_dlc_test'));
+    const dlcOrder = added.aiScripts.find(script => script.id === 'order.dlc')?.order;
+    ok('DLC order keeps optional defaults after refresh', dlcOrder?.id === 'Dlc'
+      && dlcOrder.category === null && dlcOrder.infinite === false && dlcOrder.params[0]?.required === false);
+    ok('order metadata keeps base first definition over DLC duplicates and diffs',
+      added.aiScripts.filter(script => script.id === 'order.patrol').length === 1
+      && added.aiScripts.find(script => script.id === 'order.patrol')?.order?.id === 'Patrol');
     ok('DLC macro symbol preserves provenance', added.symbols.some(symbol => symbol.kind === 'macro' && symbol.id === 'ship_dlc_macro' && symbol.source === 'ego_dlc_test' && /extensions\/ego_dlc_test\/index\/macros\.xml/i.test(symbol.path)));
     ok('DLC scriptproperty overlays base datatype', added.scriptProperties.find(p => p.kind === 'datatype' && p.name === 'faction')?.properties.some(p => p.name === 'dlcproperty' && p.type === 'string') === true);
     fs.rmSync(path.join(tmp, 'extensions', 'ego_dlc_test'), { recursive: true, force: true });
