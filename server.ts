@@ -203,7 +203,8 @@ import { runReferenceLiteralLintSelftest } from "./src/lib/referenceLint";
 import { parse as luaParse } from "luaparse";
 import { registerNpcIdentityProbeRoutes } from "./src/server/npcIdentityProbe";
 import { registerSelftests } from "./src/server/selftestRegistry";
-import { RuntimeDebuggerAdapter, expectedInputFromLegacy, type RuntimeDebuggerAdapterResult } from "./src/server/runtimeDebuggerAdapter";
+import { RuntimeDebuggerAdapter, expectedInputFromLegacy, runtimeDeployLogBoundary, type RuntimeDebuggerAdapterResult } from "./src/server/runtimeDebuggerAdapter";
+import { readGameLogLoadEvidence, type GameLogDeployBoundary } from "./src/server/gameLogLoadEvidence";
 import { runRuntimeDebuggerAdapterSelftest } from "./src/server/runtimeDebuggerAdapter.selftest";
 import {
   createAgentKeyStore,
@@ -1496,6 +1497,7 @@ type LastDeployInfo = {
 
 let lastDeployInfo: LastDeployInfo | null = null;
 const lastDeployByWorkspaceId = new Map<string, LastDeployInfo>();
+const gameLogDeployBoundaries = new WeakMap<LastDeployInfo, GameLogDeployBoundary>();
 
 function normalizeLastDeployInfo(info: LastDeployInfo): LastDeployInfo {
   const { deployedFingerprint, ...rest } = info;
@@ -1513,7 +1515,7 @@ function recordSuccessfulDeploy(req: express.Request, info: LastDeployInfo): Las
   const record = (req as any).__workspaceRecord as WorkspaceRecord | undefined;
   if (record) {
     lastDeployByWorkspaceId.set(record.workspaceId, normalizedInfo);
-    const baseline = runtimeDebuggerAdapter.recordSuccessfulDeploy(record.workspaceId, {
+    const deployContext = {
       workspaceId: record.workspaceId,
       modId: normalizedInfo.modId,
       workspaceName: normalizedInfo.workspaceName,
@@ -1524,9 +1526,13 @@ function recordSuccessfulDeploy(req: express.Request, info: LastDeployInfo): Las
       ...(normalizedInfo.deployedFingerprint ? { deployedFingerprint: normalizedInfo.deployedFingerprint } : {}),
       validationOutcome: normalizedInfo.validationOutcome,
       deployReceiptId: normalizedInfo.deployReceiptId,
-    });
+    };
+    const baseline = runtimeDebuggerAdapter.recordSuccessfulDeploy(record.workspaceId, deployContext);
     if (baseline.ok === false) {
       console.warn(`[runtime-debugger] successful deploy baseline unavailable: ${baseline.error}`);
+    } else {
+      const boundary = runtimeDeployLogBoundary(baseline.snapshot, deployContext);
+      if (boundary) gameLogDeployBoundaries.set(normalizedInfo, boundary);
     }
   }
   return normalizedInfo;
@@ -2254,7 +2260,15 @@ function countModRuntimeErrors(tail: string, markers: string[]): { count: number
 
 function getGameLogStatus(modIdInput?: string, workspaceName?: string, deployInfo: LastDeployInfo | null = lastDeployInfo) {
   const raw = String(modIdInput || deployInfo?.workspaceName || workspaceName || '');
-  const modId = toSafeModId(raw); // primary id for display
+  const modId = (!modIdInput && deployInfo?.modId) || toSafeModId(raw);
+  const requestedId = raw.trim().toLowerCase();
+  const requestedLoadId = /^[a-z0-9_.-]+$/.test(requestedId) ? requestedId : '';
+  const recordedId = deployInfo?.modId.toLowerCase();
+  const recordedFolder = deployInfo?.deployedPath ? path.basename(deployInfo.deployedPath).toLowerCase() : '';
+  const relevantLastDeploy = deployInfo && (!modIdInput || (requestedLoadId && [recordedId, recordedFolder].includes(requestedLoadId)))
+    ? deployInfo : null;
+  const loadIds = (relevantLastDeploy ? [recordedId, recordedFolder] : [requestedLoadId])
+    .filter((id): id is string => !!id && /^[a-z0-9_.-]+$/.test(id));
   // Candidate identifiers the log line might actually use — covers the display name, its
   // space/underscore forms, and the common display-name→folder-id drift (a trailing "_mod"
   // that the real extension folder doesn't have). Matching any of these avoids false all-clear.
@@ -2279,7 +2293,6 @@ function getGameLogStatus(modIdInput?: string, workspaceName?: string, deployInf
   ].filter(s => s && s.length >= 3)));
   const candidates = findDebugLogCandidates();
   const selectedLogPath = candidates.find(candidate => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
-  const relevantLastDeploy = deployInfo?.modId === modId ? deployInfo : null;
 
   if (!selectedLogPath) {
     return {
@@ -2294,8 +2307,22 @@ function getGameLogStatus(modIdInput?: string, workspaceName?: string, deployInf
     };
   }
 
-  const stat = fs.statSync(selectedLogPath);
-  const tail = readTail(selectedLogPath, 256 * 1024);
+  const escapedModIds = loadIds.map(id => id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const modIdentity = escapedModIds.length
+    ? new RegExp(`(?:^|[^a-z0-9_.-])(?:${escapedModIds.join('|')})(?=$|[^a-z0-9_.-])`, 'i')
+    : undefined;
+  const log = readGameLogLoadEvidence(selectedLogPath, loadIds, line => {
+    const payload = /^\s*\[=?error=?\]\s+(?:[\d.:]+\s+)?(.+)$/i.exec(line)?.[1];
+    if (!payload || /verify the file signature/i.test(payload)) return false;
+    // DebugError uses the same channel. Require a named engine source rather than a bare mod mention.
+    if (/^\[(?!fileio\])[^\]]+\]/i.test(payload)) return false;
+    const script = /^(?:\*\s*)?error in (?:md|ai) script\s+['"]([a-z0-9_.-]+)['"]/i.exec(payload)?.[1];
+    const folder = /(?:^|[^\w.-])extensions[\\/]([a-z0-9_.-]+)[\\/]/i.exec(payload)?.[1];
+    const signature = engineErrorSignature(payload);
+    return !!signature && signature !== 'engine *** marker'
+      && [script, folder].some(id => id && loadIds.includes(id.toLowerCase()));
+  }, relevantLastDeploy ? { at: relevantLastDeploy.deployedAt, boundary: gameLogDeployBoundaries.get(relevantLastDeploy) } : undefined);
+  const { stat, tail, tailStartByte } = log;
   const { issues, tailLines } = analyzeGameLog(tail, modIds);
   // CUE-CORRELATED ERRORS — tie each X4 error line back to the mod CUE that threw it (the error
   // line names the cue, e.g. "Error in MD cue ...worldsync.Tick: Cannot run actions of library
@@ -2367,9 +2394,42 @@ function getGameLogStatus(modIdInput?: string, workspaceName?: string, deployInf
         ? ` (No cue activity for this mod in the tail — a healthy mod that emits no debug markers logs nothing, so this alone is not a fault.)`
         : "";
   const staleNote = luaStaleness.restartRequired ? ` ${luaStaleness.summary}` : "";
-  const summary = baseSummary + cueNote + runtimeNote + staleNote;
-
-  const states = computeGameStates({ tail, modIds, deployed: Boolean(relevantLastDeploy), stale: staleForLastDeploy });
+  const recent = computeGameStates({ tail, modIds, deployed: Boolean(relevantLastDeploy), stale: staleForLastDeploy });
+  const load = staleForLastDeploy ? null : log.load;
+  const completeTail = tail.slice(tailStartByte > 0 ? tail.indexOf('\n') + 1 : 0, Math.max(0, tail.lastIndexOf('\n')));
+  const activity = !staleForLastDeploy && (cueLiveness.firingCount > 0 || cueLiveness.erroringCount > 0
+    || runtime.markerLines > 0 || modIdentity?.test(completeTail));
+  const loadEvidenceStatus = staleForLastDeploy ? 'stale'
+      : load ? load.offset < tailStartByte ? 'earlier-in-log' : 'in-tail'
+      : activity ? 'activity-only'
+      : !log.deployCoverage ? 'deploy-boundary-unavailable'
+      : log.coverageLimited ? 'incomplete-log-coverage'
+      : tailStartByte > 0 ? 'outside-tail-window'
+      : log.from > 0 ? 'no-post-deploy-load' : 'not-observed';
+  const loadEvidence = {
+    status: loadEvidenceStatus,
+    tailStartByte,
+    scannedFromByte: log.from,
+    bytesScanned: log.bytesScanned,
+    coverageLimited: log.coverageLimited,
+    ...(load ? { loadStartByte: load.offset, attributedFault: load.fault } : {}),
+    ...(loadEvidenceStatus === 'activity-only' ? { activityScope: 'recent-log' } : {}),
+  };
+  const absent = loadEvidence.status === 'not-observed';
+  const states = {
+    ...recent,
+    seenByX4: load || activity ? true : absent ? false : null,
+    loadedCleanly: load ? load.fault ? false : log.coverageLimited ? null : true : absent ? false : null,
+  };
+  const loadNote = load?.fault ? ' The latest observed extension load has an attributed engine fault.'
+    : (load && log.coverageLimited) || loadEvidence.status === 'incomplete-log-coverage' ? ' Load evidence has incomplete log coverage.'
+    : loadEvidence.status === 'earlier-in-log' ? ' Extension load evidence is earlier in this log.'
+    : loadEvidence.status === 'activity-only' ? ' Mod activity is visible. A clean extension load is unconfirmed.'
+    : loadEvidence.status === 'outside-tail-window' ? ' No extension load was established in the bounded log scan.'
+    : loadEvidence.status === 'no-post-deploy-load' ? ' No extension load has been observed after this deployment boundary.'
+    : loadEvidence.status === 'deploy-boundary-unavailable' ? ' The deployment log boundary could not be established.'
+    : '';
+  const summary = baseSummary + cueNote + runtimeNote + staleNote + loadNote;
 
   return {
     status,
@@ -2383,6 +2443,7 @@ function getGameLogStatus(modIdInput?: string, workspaceName?: string, deployInf
     luaStaleness,
     // Explicit pipeline states: Compiled -> Deployed -> Seen by X4 -> Loaded cleanly -> Runtime errors.
     states,
+    loadEvidence,
     selectedLogPath,
     checkedPaths: candidates,
     logUpdatedAt,
@@ -4344,7 +4405,7 @@ app.get("/api/agent/schema", (req, res) => {
         method: "GET",
         path: "/api/agent/game-log/status?modId=<optionalModId>",
         auth: true,
-        purpose: "Read recent X4 debuglog.txt/uidata.log output, classify active-mod errors or warnings, and report whether the log is stale relative to the last Studio deploy."
+        purpose: "Read recent X4 issues and bounded extension load evidence. seenByX4 and loadedCleanly are null when the log cannot establish them. A reported load is not exact deployed-artifact proof."
       },
       {
         method: "GET",

@@ -2,10 +2,11 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { RuntimeDebuggerAdapter, expectedInputFromLegacy } from '../src/server/runtimeDebuggerAdapter';
+import { RuntimeDebuggerAdapter, expectedInputFromLegacy, runtimeDeployLogBoundary } from '../src/server/runtimeDebuggerAdapter';
 import { RuntimeDebugSessionStore } from '../src/lib/runtimeDebugSession';
 import { RuntimeControl } from '../src/server/runtimeControl';
 import { ActionReceiptStore } from '../src/lib/actionReceiptStore';
+import { readGameLogLoadEvidence } from '../src/server/gameLogLoadEvidence';
 import type { ModWorkspace } from '../src/types';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-log-freshness-'));
@@ -22,7 +23,35 @@ const control = new RuntimeControl(path.join(root, 'control'), new ActionReceipt
 const principal = { kind: 'agent' as const, id: 'fixture_agent', label: 'Fixture agent', scope: 'deploy' as const, deployAuthorized: true };
 const checks: Record<string, boolean> = {};
 try {
-  adapter.recordSuccessfulDeploy(record.workspaceId, { modId: 'forge_regression_lab', workspaceName: 'Lab', workspaceHash: 'a'.repeat(16), deployedAt: new Date(now).toISOString() });
+  const deploy = {
+    workspaceId: record.workspaceId,
+    modId: 'forge_regression_lab',
+    workspaceName: 'Lab',
+    workspaceHash: 'a'.repeat(16),
+    deployedAt: new Date(now).toISOString(),
+  };
+  const baseline = adapter.recordSuccessfulDeploy(record.workspaceId, deploy);
+  if (!process.argv.includes('--before')) {
+    const boundary = baseline.ok ? runtimeDeployLogBoundary(baseline.snapshot, deploy) : undefined;
+    checks.exactDeployHasEofBoundary = boundary?.logPath === log && boundary.offset === 0 && !!boundary.fileIdentity;
+    checks.otherDeployHasNoEofBoundary = baseline.ok
+      && runtimeDeployLogBoundary(baseline.snapshot, { ...deploy, workspaceHash: 'b'.repeat(16) }) === undefined;
+
+    const historyLog = path.join(root, 'history.log');
+    const readHistory = () => readGameLogLoadEvidence(historyLog, [deploy.modId], line => line === 'owned fault');
+    fs.writeFileSync(historyLog, `[General] Loading extension ${deploy.modId}\nowned fault\n` + 'noise\n'.repeat(50_000));
+    const history = readHistory();
+    checks.loadAndFaultSurviveTail = history.tailStartByte > 0 && history.load?.offset === 0 && history.load.fault;
+    checks.warmPollReusesHistory = readHistory().bytesScanned === 0;
+    fs.writeFileSync(historyLog, `[General] Loading extension x4_${deploy.modId}\n`);
+    checks.rewriteCannotBorrowLoadFromAnAlias = readHistory().load === null;
+    fs.appendFileSync(historyLog, `[General] Loading extension ${deploy.modId}`);
+    const pendingLoad = readHistory();
+    checks.partialLoadLeavesCoverageUnknown = pendingLoad.load === null && pendingLoad.coverageLimited;
+    fs.appendFileSync(historyLog, '\n');
+    const finishedLoad = readHistory();
+    checks.completedLoadRecoversCoverage = finishedLoad.load !== null && !finishedLoad.coverageLimited;
+  }
   fs.appendFileSync(log, marker('save-loaded') + '\nOLD_ONLY\n' + marker('helper-ready', { boot: 'boot1', ts: Math.floor(now / 1000) }) + '\n');
   let p = brief(); const firstSession = p.session.sessionId;
   checks.initialExpectedObserved = p.expectedSteps.some(x => x.observed);

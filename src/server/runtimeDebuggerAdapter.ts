@@ -12,6 +12,7 @@ import crypto from "crypto";
 import { parseRuntimeLifecycle, type RuntimeLifecycleEvent } from '../lib/runtimeLifecycle';
 import fs from "fs";
 import path from "path";
+import type { GameLogDeployBoundary } from "./gameLogLoadEvidence";
 import {
   attributeRuntimeCandidate,
   buildRuntimeOwnershipIndex,
@@ -583,6 +584,16 @@ function deploymentToken(workspaceId: string, info: RuntimeDebuggerDeployInfo): 
     deployedFingerprint: info.deployedFingerprint || "",
     destinationPath: info.deployedPath || info.stagingPath || "",
   }))}`;
+}
+
+/** Reuse the EOF captured for this deploy even if a different segment is current. */
+export function runtimeDeployLogBoundary(snapshot: RuntimeDebugSessionSnapshot, info: RuntimeDebuggerDeployInfo): GameLogDeployBoundary | undefined {
+  const tokenHash = hashToken(deploymentToken(info.workspaceId, info));
+  const token = snapshot.baselineTokens.find(candidate => candidate.tokenHash === tokenHash);
+  if (!token) return;
+  const segment = snapshot.segments.find(candidate => candidate.id === token.segmentId);
+  if (!segment?.fileIdentity) return;
+  return { logPath: segment.selection.logPath, fileIdentity: segment.fileIdentity, offset: token.baselineOffset };
 }
 
 function incidentFingerprint(candidate: RuntimeAnalyzedCandidate): string {

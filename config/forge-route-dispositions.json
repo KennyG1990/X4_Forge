@@ -185,6 +185,7 @@
     "src/server/deploymentTrust.ts",
     "src/server/findingAcceptance.ts",
     "src/server/gameDetectRoutes.ts",
+    "src/server/gameLogLoadEvidence.ts",
     "src/server/githubCredentialStore.ts",
     "src/server/githubDeviceFlow.ts",
     "src/server/githubRoutes.ts",

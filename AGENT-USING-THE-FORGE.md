@@ -195,6 +195,12 @@ preview fields when current validation allows it. It does not record a new
 last-green baseline or accept explicit finding approvals until the history
 can be verified. Run a new preview after receipt history is restored.
 
+When checking X4 after a deploy, `GET /api/agent/game-log/status?modId=<exact-id>` separates
+recent diagnostics from `loadEvidence`. Read `states.loadedCleanly` with that evidence.
+`null` means the available log cannot establish the result. A firing cue or marker can make
+`seenByX4` true with only recent-log activity. A recognized load can predate the issue tail.
+The exact deploy receipt proves the bytes written, and the log describes the game events it records.
+
 ---
 
 ## 5. Ground every API shape in the corpus — the highest-value habit

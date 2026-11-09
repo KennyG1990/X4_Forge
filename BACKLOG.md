@@ -38,6 +38,10 @@ Agent status exposes active and waiting participating claims in its authorized w
 
 Dev returns the raw read hash and byte count, and its guarded workspace write reports the verified location. The two-root replay covers malformed UTF-8, wrong-copy and stale hashes, and a separate native deploy receipt. [Isolated evidence](docs/plans/2026-11-09-workspace-read-write-byte-evidence.md). Installed and public delivery remain open.
 
+### Game log load evidence after the recent tail `in_progress` (GitHub #57)
+
+Dev keeps explicit load evidence in a bounded log scan and distinguishes recent cue activity, incomplete evidence and a native deploy boundary. The scratch replay covered 12 MiB rollover, rotation, truncation, exact target bytes and the named deploy receipt. [Isolated evidence](docs/plans/2026-11-09-game-log-load-evidence.md). Exact X4 marker validation, installed and public delivery remain open.
+
 ### Launcher-pinned scratch Directory Settings `in_progress` (GitHub #75)
 
 An explicit Dev launch flag shows the effective scratch paths and keeps corpus/schema settings editable in regular scratch profiles. Retargets and install harvesting refuse, the Project Check owner seal stays in force, and native deploy passed the exact scratch replay. [Isolated evidence and release review](docs/plans/2026-11-09-dev-scratch-directory-settings.md). Installed rendering and public delivery remain open.
