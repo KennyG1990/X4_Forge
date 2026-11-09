@@ -68,6 +68,7 @@ interface ProjectCheckLaunchFrame {
   guardJson: string;
 }
 export interface ProjectCheckSourceLease {
+  ownsResource(key: string): boolean;
   assertProjectCheckAuthority(sourceKey: string, workspaceId: string, actorId: string): void;
   armProjectCheck(input: ProjectCheckGuard): Readonly<ProjectCheckLaunchFrame>;
   assertProjectCheckDrained(frame: Readonly<ProjectCheckLaunchFrame>): void;
@@ -355,8 +356,9 @@ export class SharedSourceCoordinator {
     let armed: { frame: Readonly<ProjectCheckLaunchFrame>; guard: ProjectCheckGuard; drainConfirmed: boolean } | undefined;
     const admittedGuards: ProjectCheckGuard[] = [];
     const lease: ProjectCheckSourceLease = {
+      ownsResource: key => leaseOpen && resources.includes(key),
       assertProjectCheckAuthority: (sourceKey, workspaceId, actorId) => {
-        if (!leaseOpen || !resources.includes(sourceKey) || identity.workspaceId !== workspaceId || identity.actor !== actorId) {
+        if (!lease.ownsResource(sourceKey) || identity.workspaceId !== workspaceId || identity.actor !== actorId) {
           throw failure('PROJECT_CHECK_SCOPE_MISMATCH', 'The source lease does not own this project check and workspace.', 403);
         }
       },

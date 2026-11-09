@@ -238,7 +238,7 @@ import { runActionReceiptSelftest } from "./src/lib/actionReceipt.selftest";
 import { runBugReportSelftest } from "./src/lib/bugReport";
 import { generatedOutputVerdict, normalizeApiFailureBody, runApiFailureEnvelopeSelftest } from "./src/lib/apiFailureEnvelope";
 import { projectApiEnvelope, projectApiSubject, fileApiSubject, workspaceApiSubject, pastedLogApiSubject, releaseReportApiSubject, validateProjectApiBody, validateProjectApiQuery, validateWorkspaceCreateBody, validateWorkspaceMutationBody, type ApiSubject } from './src/server/projectApiContract';
-import { canonicalSourceKey } from './src/server/resourceCoordinator';
+import { canonicalSourceKey, sourceKeyForResolvedPath } from './src/server/resourceCoordinator';
 import { forgeSourceCoordinator, processLiveness, type ProjectCheckSourceLease } from './src/server/sharedSourceCoordinator';
 import {
   CLIENT_API_DEADLINE_MS,
@@ -1200,13 +1200,14 @@ app.use(projectApiInputMiddleware);
 function sourceOperationKeys(req: express.Request): string[] {
   const resolved = resolveXsdConfig();
   const keys: string[] = [];
+  const nativeDeploy = req.path === '/api/agent/deploy' || req.path === '/api/agent/deploy-verify';
   const workspace = req.body?.workspace ?? ((req as any).__workspaceRecord as WorkspaceRecord | undefined)?.workspace;
   const source = workspace?.sourceStamp?.dir;
   if (typeof source === 'string' && source) keys.push(canonicalSourceKey(source));
   const target = req.body?.fromPath ?? req.body?.path;
   if (typeof target === 'string' && target && !req.path.startsWith('/api/fs/')) {
-    const folder = resolveModFolder(target, req.body?.root);
-    if (!('error' in folder)) keys.push(canonicalSourceKey(folder.abs));
+    const folder = nativeDeploy ? resolveNativeDeployFolder(target, req.body?.root) : resolveModFolder(target, req.body?.root);
+    if (!('error' in folder)) keys.push(folder.physical?.canonicalKey ?? canonicalSourceKey(folder.abs));
   }
   if (req.path.startsWith('/api/fs/') || req.path.includes('/history/') || req.path.includes('/project-rules/') || req.path.endsWith('/steam/adopt')) {
     if (resolved.modWorkspacePath) {
@@ -1219,11 +1220,11 @@ function sourceOperationKeys(req: express.Request): string[] {
     if (resolved.modWorkspacePath) keys.push(canonicalSourceKey(path.join(resolved.modWorkspacePath, '.forge-builds')));
     if (req.path.includes('/deploy') && resolved.x4GamePath) keys.push(canonicalSourceKey(path.join(resolved.x4GamePath, 'extensions')));
   }
-  if (req.path === '/api/agent/deploy' || req.path === '/api/agent/deploy-verify') {
+  if (nativeDeploy) {
     const operation = requestDeployOperation(req);
     if (operation) keys.push(canonicalSourceKey(dataPath('action-receipts', `${actionReceiptIdForOperation(operation)}.json`)));
   }
-  if (req.path === '/api/agent/deploy' || req.path === '/api/agent/deploy-verify' || req.path === '/api/agent/project/validate') {
+  if (nativeDeploy || req.path === '/api/agent/project/validate') {
     const suiteId = req.body?.projectCheckSuiteReceiptId;
     if (typeof suiteId === 'string' && /^ar_[a-f0-9]{64}$/.test(suiteId)) {
       keys.push(projectCheckApprovalCoordinationKey(actionReceiptStore), canonicalSourceKey(actionReceiptStore.pathFor(suiteId)));
@@ -4304,6 +4305,7 @@ app.get("/api/agent/schema", (req, res) => {
         auth: true,
         headers: { "x-forge-operation-id": "optional agent apply identity for recovery via GET /api/agent/status?deployOperationId=<id>" },
         body: { path: "explicit mod folder, mutually exclusive with workspace", workspace: "explicit ModWorkspace, mutually exclusive with path",
+          root: "optional workspace | filesystem for path requests",
           dryRun: "true to preview without writes", inspectDeployOperationId: "optional agent dry-run comparison with an earlier operation in this workspace",
           expectedModId: "required on apply, from preview",
           expectedSourceHash: "required on apply, from preview", expectedArtifactHash: "required on apply, from preview",
@@ -4318,6 +4320,7 @@ app.get("/api/agent/schema", (req, res) => {
         headers: { "x-forge-operation-id": "optional agent apply identity for recovery via GET /api/agent/status?deployOperationId=<id>" },
         body: {
           path: "required when workspace is omitted: mod folder path under a configured root",
+          root: "optional workspace | filesystem for path requests; select the same root for preview and apply",
           workspace: "required when path is omitted: ModWorkspace payload",
           dryRun: "optional boolean; run the full preflight and exact deployment preview without writing",
           inspectDeployOperationId: "optional on dryRun:true for a deploy agent; compares current target with its earlier operation in this workspace",
@@ -7764,7 +7767,7 @@ function canonicalMd(xml: string): string {
 }
 
 /** Import a mod folder into a workspace, preserving every file losslessly. */
-function importModFolder(absDir: string, previous?: ModWorkspace): { workspace: ModWorkspace; report: any } {
+function importModFolder(absDir: string, previous?: ModWorkspace, sourceFolder = absDir): { workspace: ModWorkspace; report: any } {
   const relFiles = walkFilesRelative(absDir);
   let baseWorkspace: ModWorkspace | null = null;
   const meta: any = {};
@@ -7801,7 +7804,7 @@ function importModFolder(absDir: string, previous?: ModWorkspace): { workspace: 
       if (!parsed || !Array.isArray(parsed.nodes) || parsed.nodes.length === 0) continue;
       const parsedWorkspace = sanitizeWorkspace({
         ...parsed,
-        name: meta.name || parsed.name || path.basename(absDir),
+        name: meta.name || parsed.name || path.basename(sourceFolder),
       } as any);
       const parsedScriptName = parsedWorkspace.nodes.find((node: any) => node.type === 'cue')?.properties?.mdScript || parsed.name;
       const regen = generateMDXML(parsedWorkspace, undefined, String(parsedScriptName || parsed.name));
@@ -7913,9 +7916,9 @@ function importModFolder(absDir: string, previous?: ModWorkspace): { workspace: 
 
   const ws: ModWorkspace = sanitizeWorkspace({
     ...(baseWorkspace || {}),
-    sourceFolder: absDir, // so the UI can always show which folder/dir is open
+    sourceFolder, // Preserve the selected artifact folder label even when reading from its real path.
     ...(parsedDeps.length ? { dependencies: parsedDeps } : {}),
-    name: meta.name || baseWorkspace?.name || path.basename(absDir),
+    name: meta.name || baseWorkspace?.name || path.basename(sourceFolder),
     version: meta.version || baseWorkspace?.version,
     author: meta.author || baseWorkspace?.author,
     description: meta.description || baseWorkspace?.description,
@@ -8126,7 +8129,9 @@ function importModFolder(absDir: string, previous?: ModWorkspace): { workspace: 
   return { workspace: ws, report };
 }
 
-function resolveModFolder(reqPath: string, requestedRoot?: unknown): { abs: string } | { error: string; status: number } {
+type ResolvedModFolder = { abs: string; physical?: { directory: string; canonicalKey: string } } | { error: string; status: number };
+
+function resolveModFolder(reqPath: string, requestedRoot?: unknown, requirePhysicalChild = false): ResolvedModFolder {
   const resolved = resolveXsdConfig();
   const selection = parseProjectSourceRoot(requestedRoot);
   if (selection.error) return { error: selection.error, status: 400 };
@@ -8151,9 +8156,32 @@ function resolveModFolder(reqPath: string, requestedRoot?: unknown): { abs: stri
     const rootAbs = path.resolve(root);
     const abs = path.resolve(rootAbs, normalized);
     if (abs !== rootAbs && !abs.startsWith(rootAbs + path.sep)) continue;
-    if (fs.existsSync(abs) && fs.statSync(abs).isDirectory()) return { abs };
+    if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) continue;
+    if (!requirePhysicalChild) return { abs };
+    try {
+      const physicalRoot = fs.realpathSync.native(rootAbs);
+      const physicalFolder = fs.realpathSync.native(abs);
+      const relative = path.relative(physicalRoot, physicalFolder);
+      if (relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
+        return { abs, physical: { directory: physicalFolder, canonicalKey: sourceKeyForResolvedPath(physicalFolder) } };
+      }
+    } catch { /* A source whose physical location cannot be verified is not a valid explicit selection. */ }
+    return { error: 'Deployment source must be a physical child of the selected project root.', status: 400 };
   }
   return { error: `Folder not found in configured roots: ${rel}`, status: 404 };
+}
+
+type ExplicitDeploySource = { root: ProjectSourceRoot; canonicalKey: string; directory: string; folder: string };
+
+function resolveNativeDeployFolder(reqPath: string, requestedRoot?: unknown): ResolvedModFolder & { selection?: ExplicitDeploySource } {
+  if (requestedRoot === undefined) return resolveModFolder(reqPath);
+  const parsed = parseModFolderImportRequest({ path: reqPath, root: requestedRoot });
+  if (parsed.ok === false) return { error: parsed.error.replace(/^Import/, 'Deploy'), status: 400 };
+  const { path: relative, root } = parsed.value;
+  const folder = resolveModFolder(relative, root, true);
+  if ('error' in folder) return folder;
+  if (!root || !folder.physical) return { error: 'Could not resolve the explicit deployment source.', status: 400 };
+  return { ...folder, selection: { root, ...folder.physical, folder: folder.abs } };
 }
 
 app.post("/api/agent/mod-folder/import", coordinatedSourceOperation((req, res) => {
@@ -14041,12 +14069,14 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
   let pendingDeployRecovery: DeploymentRecoveryRecord | undefined;
   try {
     const body = req.body;
-    const allowed = new Set(['path', 'workspace', 'dryRun', 'deployFormat', 'autoReimport', 'allowStaleOverwrite',
+    const allowed = new Set(['path', 'root', 'workspace', 'dryRun', 'deployFormat', 'autoReimport', 'allowStaleOverwrite',
       'expectedModId', 'expectedSourceHash', 'expectedArtifactHash', 'expectedBindingHash', 'expectedTargetFingerprint',
       'projectCheckSuiteReceiptId', 'expectedProjectCheckSuiteReceiptHash', 'acceptances', 'inspectDeployOperationId']);
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(k => !allowed.has(k))
       || (body.workspace !== undefined && (!body.workspace || typeof body.workspace !== 'object' || Array.isArray(body.workspace)))
       || (body.path !== undefined && (typeof body.path !== 'string' || !body.path.trim()))
+      || (body.root !== undefined && (typeof body.path !== 'string' || body.workspace !== undefined
+        || typeof body.root !== 'string' || !parseProjectSourceRoot(body.root).root))
       || (body.inspectDeployOperationId !== undefined && (body.dryRun !== true || typeof body.inspectDeployOperationId !== 'string'
         || !ACTION_RECEIPT_OPERATION_ID_RE.test(body.inspectDeployOperationId)))
       || (body.expectedTargetFingerprint !== undefined && (typeof body.expectedTargetFingerprint !== 'string'
@@ -14116,15 +14146,24 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     // 1. Resolve workspace: fresh import-by-path if given, else the active workspace.
     let ws: any;
     let modSourceDir = '';
+    let selectedSource: ExplicitDeploySource | undefined;
     if (reqPath) {
-      const r = resolveModFolder(reqPath);
+      const r = resolveNativeDeployFolder(reqPath, body.root);
       if ('error' in r) {
         check('import', 'Mod source read', 'fail', r.error);
-        return res.status(r.status).json(failWith('import', { error: r.error }));
+        return res.status(r.status).json(failWith('import', { error: r.error,
+          ...(body.root !== undefined && r.status === 400 ? { code: 'DEPLOY_INPUT_INVALID' } : {}) }));
       }
-      modSourceDir = r.abs;
-      ws = importModFolder(r.abs).workspace;
-      check('import', 'Mod source read', 'pass', `fresh from ${reqPath} (${(ws.nodes || []).length} nodes)`);
+      selectedSource = r.selection;
+      if (selectedSource && !lease?.ownsResource(selectedSource.canonicalKey)) {
+        const detail = 'The selected deployment source changed before import. Review a fresh preview.';
+        check('import', 'Mod source read', 'fail', detail);
+        return res.status(409).json(failWith('import', { code: 'DEPLOY_SOURCE_CHANGED', error: detail }));
+      }
+      modSourceDir = selectedSource?.directory ?? r.abs;
+      ws = importModFolder(modSourceDir, undefined, r.abs).workspace;
+      if (selectedSource) responseIdentity.sourceRoot = selectedSource.root;
+      check('import', 'Mod source read', 'pass', `fresh from ${selectedSource ? `${selectedSource.root}:` : ''}${reqPath} (${(ws.nodes || []).length} nodes)`);
     } else if (hasWorkspace) {
       // UI convergence (audit R4): the editor panels send their CURRENT canvas workspace,
       // same contract the legacy /deploy accepted — without this, converged UI buttons
@@ -14132,6 +14171,13 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       ws = sanitizeWorkspace(req.body.workspace);
       check('import', 'Mod source read', 'pass', `workspace from request "${ws.name}" (${(ws.nodes || []).length} nodes)`);
     }
+    const assertSelectedSource = () => {
+      if (!selectedSource) return;
+      const current = resolveNativeDeployFolder(reqPath, selectedSource.root);
+      if ('error' in current || current.selection?.canonicalKey !== selectedSource.canonicalKey) {
+        throw Object.assign(new Error('The selected deployment source changed. Review a fresh preview.'), { code: 'DEPLOY_SOURCE_CHANGED' });
+      }
+    };
 
     // 1a. STALE-SOURCE GATE (P0 2026-07-09): refuse to overwrite a source folder that
     // changed AFTER this workspace imported it — an out-of-date canvas (restart-reset sync,
@@ -14152,8 +14198,9 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
         // required to know a magic call, and when it does have to act, the error names that call.
         const stampedDir = typeof sourceStamp?.dir === 'string' ? sourceStamp.dir : '';
         if (req.body?.autoReimport === true && stampedDir && fs.existsSync(stampedDir)) {
+          assertSelectedSource();
           try {
-            const reimported = importModFolder(stampedDir, ws);
+            const reimported = importModFolder(stampedDir, ws, selectedSource?.folder);
             ws = reimported.workspace as any;
             (ws as any).sourceStamp = {
               dir: stampedDir,
@@ -14168,15 +14215,18 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
             return res.status(409).json(failWith('source-sync', { error: detail, sourceStamp }));
           }
         } else {
-          const remedy = stampedDir
-            ? ` Fix it either way: re-send this request with {"autoReimport": true}, or re-import first with POST /api/agent/mod-folder/import {"root":"workspace","path":"${path.basename(stampedDir)}"} and deploy the workspace it returns.`
+          const reimport = stampedDir && (selectedSource
+            ? { root: selectedSource.root, path: reqPath }
+            : { root: 'workspace', path: path.basename(stampedDir) });
+          const remedy = reimport
+            ? ` Fix it either way: re-send this request with {"autoReimport": true}, or re-import first with POST /api/agent/mod-folder/import ${JSON.stringify(reimport)} and deploy the workspace it returns.`
             : '';
           check('source-sync', 'Canvas in sync with source folder', 'fail', verdict.detail + remedy);
           return res.status(409).json(failWith('source-sync', {
             error: verdict.detail + remedy,
             sourceStamp,
             code: 'SOURCE_STALE',
-            ...(stampedDir ? { remedy: { autoReimport: true, reimport: { root: 'workspace', path: path.basename(stampedDir) } } } : {}),
+            ...(reimport ? { remedy: { autoReimport: true, reimport } } : {}),
           }));
         }
       }
@@ -14404,7 +14454,8 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     }
     const subject: AcceptanceSubject = { evidence, artifactHash, validatorHash: nativeCheckProof
       ? trustHash([deployValidatorHash, nativeCheckProof.proof.reviewBasisHash]) : deployValidatorHash, corpusHash,
-      targetHash: targetHashFor(deployFormat) };
+      targetHash: targetHashFor(deployFormat),
+      ...(selectedSource ? { sourceSelectionHash: trustHash([selectedSource.root, selectedSource.canonicalKey]) } : {}) };
     if (nativeCheckProof) subject.projectCheckProof = { id: nativeCheckProof.proof.id, hash: nativeCheckProof.proof.hash };
     if (canonicalReviewSource && receiptHistory) {
       subject.warningReviews = { scopeHash: trustHash([process.platform === 'win32' ? canonicalReviewSource.toLowerCase() : canonicalReviewSource, evidence.modId]),
@@ -14454,7 +14505,8 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     if (!decision.validationAllowsDeploy) {
       const blockingFindings = evidence.findings.filter(finding => decision.unacceptedErrorIds.includes(finding.findingId));
       const acceptanceRequest = receiptHistoryUnavailable && canonicalReviewSource ? undefined : { method: 'POST', path: '/api/agent/deploy-verify',
-        body: { ...(body.path ? { path: body.path } : { workspace: body.workspace }), deployFormat,
+        body: { ...(selectedSource ? { path: reqPath, root: selectedSource.root }
+          : body.path ? { path: body.path } : { workspace: body.workspace }), deployFormat,
           ...(body.autoReimport !== undefined ? { autoReimport: body.autoReimport } : {}),
           dryRun: false, expectedModId: evidence.modId, expectedSourceHash: evidence.sourceHash,
           expectedArtifactHash: artifactHash, expectedBindingHash: decision.binding.hash,
@@ -14490,6 +14542,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     }
 
     const assertCurrentSource = () => {
+      assertSelectedSource();
       snapshot!.assertIntegrity();
       const currentTarget = path.join(resolveXsdConfig().x4GamePath, 'extensions', effectiveModId(activeBuildWorkspace(ws)));
       const currentPlan = deploymentPlan(ws);

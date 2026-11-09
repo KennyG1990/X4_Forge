@@ -18,6 +18,8 @@ export interface AcceptanceSubject {
   corpusHash: string;
   /** Hash of the resolved deployment target identity, not a caller-provided folder label. */
   targetHash: string;
+  /** Native path deploy may bind an explicitly selected configured root and source directory. */
+  sourceSelectionHash?: string;
   /** Exact deployment attempt proof; remembered warning evidence uses the stable validator hash. */
   projectCheckProof?: { id: string; hash: string };
   /** Server-owned context; never accept history or scope from a request body. */
@@ -116,6 +118,8 @@ export function acceptanceBinding(subject: AcceptanceSubject) {
   }
   if (subject.warningReviews && (!sha.test(subject.warningReviews.scopeHash) || !subject.warningReviews.invocationId))
     refuse('ACCEPTANCE_SUBJECT_INVALID', 'Invalid server review context.');
+  if (subject.sourceSelectionHash !== undefined && (typeof subject.sourceSelectionHash !== 'string' || !sha.test(subject.sourceSelectionHash)))
+    refuse('ACCEPTANCE_SUBJECT_INVALID', 'Invalid resolved deploy source selection.');
   if (subject.warningReviews?.history.some(r => r.metadata?.reviewScopeHash === subject.warningReviews?.scopeHash
     && r.metadata?.operation === 'revoke-warning-review' && r.status !== 'committed'))
     refuse('ACCEPTANCE_RECEIPT_INCOMPLETE', 'An incomplete revocation requires recovery before review reuse.');
@@ -125,6 +129,7 @@ export function acceptanceBinding(subject: AcceptanceSubject) {
     evidenceVersion: evidence.version,
     findings: evidence.findings.map(f => [f.findingId, f.category, f.severity]).sort(),
     coverage: { complete: evidence.coverage.complete, gaps: evidence.coverage.gaps.map(gap => JSON.stringify(gap)).sort() },
+    ...(subject.sourceSelectionHash ? { sourceSelectionHash: subject.sourceSelectionHash } : {}),
     ...(subject.projectCheckProof ? { projectCheckProof: subject.projectCheckProof } : {}),
     ...(subject.warningReviews ? { reviewScopeHash: subject.warningReviews.scopeHash,
       revocations: revocations(subject).map(r => r.id).sort() } : {}),

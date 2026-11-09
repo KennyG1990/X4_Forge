@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { canonicalSourceKey } from '../src/server/resourceCoordinator';
+import { canonicalSourceKey, sourceKeyForResolvedPath } from '../src/server/resourceCoordinator';
 import { SharedSourceCoordinator, SOURCE_COORDINATION_FILENAME, processLiveness, resolveSourceCoordinationDirectory, forgeSourceCoordinator, type RegistryDatabase } from '../src/server/sharedSourceCoordinator';
 
 const checks: string[] = [];
@@ -128,11 +128,19 @@ try {
   const alias = path.join(root, 'alias'); fs.symlinkSync(source, alias, process.platform === 'win32' ? 'junction' : 'dir');
   const key = canonicalSourceKey(source); const other = canonicalSourceKey(path.join(root, 'other-mod'));
   check('junction aliases have one canonical source identity', () => assert.equal(key, canonicalSourceKey(alias)));
+  check('captured physical path produces the same source key as its alias',
+    () => assert.equal(key, sourceKeyForResolvedPath(fs.realpathSync.native(alias))));
   check('nonexistent descendants resolve through junction parents', () => assert.equal(canonicalSourceKey(path.join(alias, 'new')), canonicalSourceKey(path.join(source, 'new'))));
   if (process.platform === 'win32') check('Windows casing has one canonical source identity', () => assert.equal(key, canonicalSourceKey(source.toUpperCase())));
 
   const a = coordinator('shared'); const b = coordinator('shared'); const c = coordinator('shared');
   check('construction does not create the registry', () => assert.equal(fs.existsSync(path.join(root, 'shared')), false));
+  const closedLease = await a.run([key], { actor: 'exact-owner', operation: 'inspect' }, lease => {
+    check('lease owns only its exact active claimed resource',
+      () => assert.ok(lease.ownsResource(key) && !lease.ownsResource(other)));
+    return lease;
+  });
+  check('released lease cannot assert the former resource', () => assert.equal(closedLease.ownsResource(key), false));
   const first = hold(a, [key], 'A'); await first.entered;
   const events: string[] = [];
   const second = track(b.run([canonicalSourceKey(path.join(alias, 'child'))], { actor: 'B', operation: 'write', workspaceId: 'ws_B' }, () => { events.push('B'); }));

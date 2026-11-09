@@ -18,6 +18,10 @@ Published 0.0.81 previewed a folder that bound apply rejected after writing. Dev
 
 Dev reports the authored version and date and warns about changed logical files under the same version when the current physical target matches the latest verified deployment. Exact redeploys and format-only changes stay clear. The archived 0.0.80 reader accepted the new receipt. [Paired native and backward-reader evidence](docs/plans/2026-11-09-native-deploy-build-version.md). Installed and public delivery remain open.
 
+### Native deploy source selection and approval retry `in_progress` (GitHub #20 A01 / FF-6)
+
+Dev honors the configured source role on both native deploy routes and retains it in the generated approval retry. The reviewed binding distinguishes identical-byte roots. Escaping paths and stale retries refused before writes, and the verbatim approved retry committed the selected bytes. [Isolated evidence](docs/plans/2026-11-09-native-deploy-source-selection.md). Installed and public delivery remain open.
+
 ### Launcher-pinned scratch Directory Settings `in_progress` (GitHub #75)
 
 An explicit Dev launch flag shows the effective scratch paths and keeps corpus/schema settings editable in regular scratch profiles. Retargets and install harvesting refuse, the Project Check owner seal stays in force, and native deploy passed the exact scratch replay. [Isolated evidence and release review](docs/plans/2026-11-09-dev-scratch-directory-settings.md). Installed rendering and public delivery remain open.

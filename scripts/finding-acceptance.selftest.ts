@@ -53,6 +53,14 @@ check('duplicate finding is refused', () => assert.throws(() => decide([...reque
 for (const field of ['artifactHash', 'validatorHash', 'corpusHash', 'targetHash'] as const) check(`${field} change expires acceptance`, () =>
   assert.throws(() => decide(request(), principal, { ...subject, [field]: digest('e') }), /ACCEPTANCE_BINDING_STALE/));
 check('source change expires acceptance', () => assert.throws(() => decide(request(), principal, { ...subject, evidence: { ...evidence, sourceHash: digest('e') } }), /ACCEPTANCE_BINDING_STALE/));
+check('explicit deploy selection binds approval independently of identical artifact bytes', () => {
+  const selected = { ...subject, sourceSelectionHash: digest('e') };
+  const reviewed = [{ ...request()[0], bindingHash: acceptanceBinding(selected).hash }];
+  assert.equal(decide(reviewed, principal, selected).validationAllowsDeploy, true);
+  assert.throws(() => decide(reviewed, principal, { ...subject, sourceSelectionHash: digest('f') }), /ACCEPTANCE_BINDING_STALE/);
+  assert.throws(() => decide(reviewed), /ACCEPTANCE_BINDING_STALE/);
+  assert.throws(() => acceptanceBinding({ ...subject, sourceSelectionHash: '' }), /ACCEPTANCE_SUBJECT_INVALID/);
+});
 check('mod identity change expires acceptance', () => assert.throws(() => decide(request(), principal, { ...subject, evidence: { ...evidence, modId: 'different_mod' } }), /ACCEPTANCE_BINDING_STALE/));
 check('unresolved identity is not overridable', () => assert.throws(() => decide(request(), principal, { ...subject, evidence: { ...evidence, modId: null } }), /ACCEPTANCE_SUBJECT_INVALID/));
 for (const code of ['AUTHORIZATION_DENIED', 'PATH_ESCAPE', 'SOURCE_STALE', 'WRITE_INTEGRITY_FAILED']) check(`${code} is non-overridable`, () =>

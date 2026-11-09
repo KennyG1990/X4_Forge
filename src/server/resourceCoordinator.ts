@@ -7,6 +7,11 @@ interface Entry { id: string; keys: string[]; owner: ResourceOwner; queuedAt: st
 interface Waiting extends Entry { start(): void; reject(error: Error): void; timer?: ReturnType<typeof setTimeout> }
 const failure = (code: string, message: string) => Object.assign(new Error(message), { code, status: 409 });
 
+/** Build the coordination key for a path whose physical location has already been resolved. */
+export function sourceKeyForResolvedPath(resolved: string): string {
+  return `source:${process.platform === 'win32' ? resolved.toLowerCase() : resolved}`;
+}
+
 /** Resolve aliases even for a not-yet-created descendant; never create a directory to lock it. */
 export function canonicalSourceKey(input: string): string {
   let cursor = path.resolve(input);
@@ -17,9 +22,7 @@ export function canonicalSourceKey(input: string): string {
     suffix.unshift(path.basename(cursor));
     cursor = parent;
   }
-  let resolved = path.join(fs.realpathSync.native(cursor), ...suffix);
-  if (process.platform === 'win32') resolved = resolved.toLowerCase();
-  return `source:${resolved}`;
+  return sourceKeyForResolvedPath(path.join(fs.realpathSync.native(cursor), ...suffix));
 }
 
 export function conflicts(a: string, b: string): boolean {
