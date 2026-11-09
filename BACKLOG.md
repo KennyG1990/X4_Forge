@@ -22,6 +22,10 @@ Dev validation blocks the X4-witnessed mixed access and ordinary cue returns in 
 
 Dev blocks the X4-witnessed include of a run-only library when project source resolves the target exactly. [Isolated replay](docs/plans/2026-11-09-ff31-include-library-purpose.md). Effective diff and external authority, installed verification and public delivery remain open. The separate official source match still needs a runtime verdict.
 
+### Monitored cutscene timeout types `in_progress` (GitHub #72, part of #74)
+
+Dev catches a proven unitless value reaching an explicitly monitored cutscene timeout. [Isolated replay and engine evidence](docs/plans/2026-11-09-ff32-cutscene-timeout.md). Other timing attributes, cross-cue value flow, installed verification and public delivery remain open.
+
 ### Literal format diagnostics `in_progress` (GitHub #77, part of #74)
 
 The isolated Dev checker and native deploy now report exact literal-format diagnostics. The short-list case remains advisory. [Dev verification](docs/plans/2026-11-08-forge-literal-format-diagnostics.md). The frozen standalone game witness is queued with Claude, and installed/public delivery remain open.

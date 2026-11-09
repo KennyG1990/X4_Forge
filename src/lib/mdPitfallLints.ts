@@ -38,6 +38,7 @@
 
 import { DOMParser, normalizeLineEndings, type Attr, type Document, type Element } from '@xmldom/xmldom';
 import { lintMdExpressionRules, type MdExpressionFinding } from './expressionAst';
+import { classifyCueRef } from './cueLineage';
 import { maskNonExpressionSpans, type ScriptPropertyIndex } from './scriptProperties';
 import { assertXmlInputWithinLimits } from './xmlInputLimits';
 import type { SchemaIndex } from './xsdValidate';
@@ -45,6 +46,7 @@ import type { SchemaIndex } from './xsdValidate';
 export interface MdPitfallFinding {
   code: 'md_pitfall.products_existence' | 'md_pitfall.cancel_conversation_actor_or_template' | 'md_pitfall.ui_listener_one_shot'
     | 'md_pitfall.offer_accepted_keyword_cue' | 'md_pitfall.param3_table_barekey' | 'md_pitfall.return_context'
+    | 'md_pitfall.numeric_time_value'
     | MdExpressionFinding['code'];
   severity: 'error' | 'warning';
   cue?: string;
@@ -167,6 +169,132 @@ function hasXmlAttribute(element: ElementLike, name: string): boolean {
   return new RegExp(`\\b${name}\\s*=`, 'i').test(openingTag);
 }
 
+const UNITLESS_NUMBER = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)f?$/i;
+const STORAGE = /^(?:([A-Za-z_]\w*|\$[A-Za-z_]\w*)\.)?(\$[A-Za-z_]\w*)$/;
+const CONDITIONAL_ACTIONS = new Set(['do_if', 'do_elseif', 'do_else']);
+
+interface NumericFact {
+  line?: number;
+  inferred?: boolean;
+}
+
+function isStaticRootCue(node: Element | null, root: Element): boolean {
+  return node?.tagName === 'cue' && node.parentElement?.tagName === 'cues'
+    && node.parentElement.parentElement === root && !node.hasAttribute('ref')
+    && (node.getAttribute('instantiate') === null || node.getAttribute('instantiate') === 'false');
+}
+
+function staticCueNames(root: Element): Set<string> {
+  const names = new Map<string, string>();
+  const cues = new Set<string>();
+  for (const node of Array.from(root.getElementsByTagName('*'))) {
+    if (node.tagName !== 'cue' && node.tagName !== 'library') continue;
+    const name = node.getAttribute('name');
+    if (!name) continue;
+    const key = name.toLowerCase();
+    const previous = names.get(key);
+    if (previous) cues.delete(previous);
+    else {
+      names.set(key, name);
+      if (classifyCueRef(key).kind === 'local' && isStaticRootCue(node, root)) cues.add(name);
+    }
+  }
+  return cues;
+}
+
+function comparedEventParameter(value: string): string | undefined {
+  let parameter: string | undefined;
+  for (const term of value.trim().split(/\s+or\s+/)) {
+    const comparison = /^(event\.param\d*)\s*==\s*(\S+)$/.exec(term);
+    if (!comparison || !UNITLESS_NUMBER.test(comparison[2]) || (parameter && parameter !== comparison[1])) return;
+    parameter = comparison[1];
+  }
+  return parameter;
+}
+
+function trackAssignment(action: Element, facts: Map<string, NumericFact>, tables: Set<string>, cues: Set<string>): void {
+  const name = action.getAttribute('name')?.trim() ?? '';
+  const storage = STORAGE.exec(name);
+  if (!storage || (storage[1] && !tables.has(storage[1]) && !cues.has(storage[1]))) {
+    facts.clear();
+    tables.clear();
+    return;
+  }
+  const [, qualifier, field] = storage;
+  const exact = action.getAttribute('exact')?.trim() ?? '';
+  const source = UNITLESS_NUMBER.test(exact) ? { line: action.lineNumber } : facts.get(exact);
+  // Qualified writes can alias another table or the current cue's namespace.
+  // Resolve the RHS first, then forget possibly affected facts.
+  for (const key of facts.keys()) {
+    if (key.startsWith('event.')) continue;
+    if (qualifier || key === field || key.endsWith(`.${field}`) || key.startsWith(`${field}.`)) facts.delete(key);
+  }
+  tables.delete(field);
+  const operation = action.getAttribute('operation');
+  if (action.hasAttribute('chance') || (operation && operation !== 'set')
+    || action.hasAttribute('min') || action.hasAttribute('max')) return;
+  if (!qualifier && /^table\[\s*\]$/.test(exact)) tables.add(field);
+  if (source) facts.set(name, source);
+}
+
+function monitoredTimeout(action: Element): Attr | null {
+  return action.getAttribute('targetmonitor') === 'true' ? action.getAttributeNode('timeout') : null;
+}
+
+/** Follow definite numeric values only within a single MD action region. */
+function lintMdCutsceneTimeouts(root: Element, filePath?: string): MdPitfallFinding[] {
+  const cutscenes = root.getElementsByTagName('play_cutscene');
+  if (!cutscenes.length) return [];
+  const findings: MdPitfallFinding[] = [];
+  const cues = staticCueNames(root);
+  function report(attribute: Attr, fact: NumericFact = {}): void {
+    const expression = attribute.value.trim();
+    const provenance = fact.line ? ` (source line ${fact.line})` : '';
+    findings.push({
+      code: 'md_pitfall.numeric_time_value', severity: fact.inferred ? 'warning' : 'error',
+      filePath, line: attribute.lineNumber, column: attribute.columnNumber, sourceRef: 'play_cutscene/@timeout',
+      detail: fact.inferred
+        ? `<play_cutscene> timeout="${expression}" receives an event value compared with unitless numbers. Verify its type and convert it if it represents seconds.`
+        : `<play_cutscene> timeout="${expression}" receives a unitless number${provenance}. X4 expects a time value. If this value represents seconds, use "(${expression})s".`,
+    });
+  }
+  for (const cutscene of Array.from(cutscenes)) {
+    const timeout = monitoredTimeout(cutscene);
+    if (timeout && UNITLESS_NUMBER.test(timeout.value.trim())) report(timeout);
+  }
+  function walk(block: Element, facts: Map<string, NumericFact>, tables: Set<string>, visibleCues: Set<string>, depth: number): void {
+    if (depth >= 128) return;
+    for (let child = block.firstChild; child; child = child.nextSibling) {
+      if (child.nodeType !== 1) continue;
+      const action = child as Element;
+      const tag = action.tagName;
+      if (tag === 'set_value') {
+        trackAssignment(action, facts, tables, visibleCues);
+        continue;
+      }
+      if (tag === 'play_cutscene') {
+        const timeout = monitoredTimeout(action);
+        const fact = timeout && facts.get(timeout.value.trim());
+        if (timeout && fact) report(timeout, fact);
+      }
+      if (CONDITIONAL_ACTIONS.has(tag)) {
+        const inside = new Map(facts);
+        const parameter = comparedEventParameter(action.getAttribute('value') ?? '');
+        if (parameter) inside.set(parameter, { inferred: true });
+        walk(action, inside, new Set(tables), visibleCues, depth + 1);
+      }
+      facts.clear();
+      tables.clear();
+    }
+  }
+  const noNamedCues = new Set<string>();
+  for (const actions of Array.from(root.getElementsByTagName('actions'))) {
+    const visibleCues = isStaticRootCue(actions.parentElement, root) ? cues : noNamedCues;
+    walk(actions, new Map(), new Set(), visibleCues, 0);
+  }
+  return findings;
+}
+
 function enclosingNamedCue(element: Element): string | undefined {
   const names: string[] = [];
   for (let parent = element.parentElement; parent; parent = parent.parentElement) {
@@ -209,6 +337,7 @@ export function lintMdPitfalls(xml: string, opts: { propertyUnion?: Set<string>;
   // Non-MD and malformed XML produce no semantic finding here; structural/wellformedness validation owns those diagnostics.
   if (!element || element.nodeName !== 'mdscript' || parseError) return out;
   const root = element as unknown as ElementLike;
+  out.push(...lintMdCutsceneTimeouts(element, opts.filePath));
 
   for (const action of Array.from(element.getElementsByTagName('return'))) {
     const owner = ordinaryMdActionOwner(action);
@@ -452,6 +581,46 @@ export function runMdPitfallSelftest(): {
     returnFindings('<diff><add sel="/mdscript/cues/cue/actions"><return/></add></diff>').length === 0
     && returnFindings('<aiscript><actions><return/></actions></aiscript>').length === 0
     && returnFindings('<mdscript><cue><actions><return/></invalid></cue></mdscript>').length === 0);
+  const timeoutCode = 'md_pitfall.numeric_time_value';
+  const timeout = (value: string, monitor = 'true') => `<play_cutscene targetmonitor="${monitor}" timeout="${value}"/>`;
+  const assign = (name: string, value: string) => `<set_value name="${name}" exact="${value}"/>`;
+  const timeFindings = (...actions: string[]) => lint([
+    '<mdscript><cues><cue name="State"/><cue name="Probe"><actions>',
+    ...actions, '</actions></cue></cues></mdscript>',
+  ].join('\n')).filter(finding => finding.code === timeoutCode);
+  const numericCopy = timeFindings(
+    assign('$entry', 'table[]'), assign('State.$wait', '240'),
+    assign('$entry.$wait', 'State.$wait'), timeout('$entry.$wait'),
+  );
+  ok('monitored timeout traces a unitless cue value through a new table',
+    numericCopy.length === 1 && numericCopy[0].severity === 'error' && numericCopy[0].line === 5
+      && numericCopy[0].detail.includes('source line 3') && numericCopy[0].detail.includes('($entry.$wait)s'), numericCopy);
+  ok('timeout only blocks proven numbers under explicit target monitoring',
+    timeFindings(timeout('240f')).some(finding => finding.detail.includes('(240f)s'))
+    && [
+      [timeout('240', 'false')], [timeout('240', '$monitor')], [timeout('240s')],
+      [assign('$wait', '240'), assign('$wait', '240s'), timeout('$wait')],
+      [assign('Unknown.$wait', '240'), timeout('Unknown.$wait')],
+      [assign('$entry.$wait', '240'), timeout('$entry.$wait')],
+      [assign('$wait', '240'), '<run_actions ref="MaybeWrite"/>', timeout('$wait')],
+      [assign('$wait', '240'), `<do_if value="$cond">${assign('$wait', '240s')}</do_if>`, timeout('$wait')],
+      [assign('$wait', '240'), '<set_value name="$wait" exact="240s" chance="10"/>', timeout('$wait')],
+      [assign('$entry', 'table[]'), assign('$entry.$wait', '240'), assign('$entry', '$other'), timeout('$entry.$wait')],
+      [assign('State.$wait', '240'), assign('$wait', '240s'), timeout('State.$wait')],
+    ].every(actions => timeFindings(...actions).length === 0));
+  const eventBranch = `<do_if value="event.param == 120 or event.param == 240">${assign('$wait', 'event.param')}${timeout('$wait')}</do_if>`;
+  const eventTime = timeFindings(eventBranch);
+  ok('a numeric event comparison gives an advisory inside the branch',
+    eventTime.length === 1 && eventTime[0].severity === 'warning'
+    && timeFindings('', eventBranch)[0]?.detail === eventTime[0].detail, eventTime);
+  const namedTimeout = `${assign('State.$wait', '240')}${timeout('State.$wait')}`;
+  ok('named timeout storage needs unambiguous static root cue authority', [
+    `<cue name="State" instantiate="true"/><cue name="Probe"><actions>${namedTimeout}</actions></cue>`,
+    `<cue name="Parent"><cues><cue name="State"/></cues></cue><cue name="Probe"><actions>${namedTimeout}</actions></cue>`,
+    `<cue name="State"/><library name="Probe" purpose="run_actions"><actions>${namedTimeout}</actions></library>`,
+    `<cue name="State"/><cue name="Parent"><cues><cue name="State"/></cues></cue><cue name="Probe"><actions>${namedTimeout}</actions></cue>`,
+    `<cue name="State"/><cue name="state"/><cue name="Probe"><actions>${namedTimeout}</actions></cue>`,
+  ].every(cues => !lint(`<mdscript><cues>${cues}</cues></mdscript>`).some(finding => finding.code === timeoutCode)));
   const cancelFindingCode = 'md_pitfall.cancel_conversation_actor_or_template';
   const cancelFindings = (xml: string) => lint(xml).filter(f => f.code === cancelFindingCode);
 
