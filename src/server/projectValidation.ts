@@ -50,6 +50,7 @@ import { lintGodMacros, type GodLintFinding } from "../lib/godLint";
 import { lintReferenceLiterals, type ReferenceLiteralFinding } from "../lib/referenceLint";
 import { buildProjectSymbols, type ProjectVariableSymbol } from "../lib/projectSymbols";
 import { analyzeLuaFiles, type LuaStaticAnalysisResult } from "../lib/luaStaticAnalysis";
+import { registeredX4MenuLuaPaths } from '../lib/x4UiSourceBundle';
 import {
   applyProjectRuleSuppressions,
   evaluateProjectRuleContracts,
@@ -284,6 +285,7 @@ export function runProjectValidation(
 
   const cueIndex = indexCueReferences(project);
   const crossFile = validateProjectCrossFile(project);
+  const menuLuaPaths = registeredX4MenuLuaPaths(project.files.find(file => file.path.toLowerCase() === 'ui.xml')?.content);
   const lua = analyzeLuaFiles(project.files
     .filter(file => /\.lua$/i.test(file.path) && typeof file.content === "string")
     .map(file => {
@@ -293,7 +295,7 @@ export function runProjectValidation(
         text: file.content as string,
         source: "loose" as const,
         sourcePath: rel,
-        extension: { folder: project.id, id: project.id },
+        extension: { folder: project.id, id: project.id, menuLuaPaths },
       };
     }));
   const luaErrors = lua.findings.filter(finding => finding.severity === "error").length;
@@ -1029,6 +1031,9 @@ export function loadProjectFromDisk(rootDir: string, id?: string): DiskProjectLo
   const loaded: string[] = [];
   const skipped: { path: string; reason: string }[] = [];
   const files: ProjectFile[] = [];
+  const toolsRoots: string[] = [];
+  const registeredTools = new Set<string>();
+  const registeredToolParents = new Set<string>();
 
   const walk = (dir: string) => {
     let entries: fs.Dirent[] = [];
@@ -1063,14 +1068,17 @@ export function loadProjectFromDisk(rootDir: string, id?: string): DiskProjectLo
         loaded.push(e.name);
         continue;
       }
+      const rel = path.relative(root, abs).replace(/\\/g, "/");
+      const relKey = rel.toLowerCase();
       if (e.isDirectory()) {
         if (LOAD_SKIP_DIRS.has(e.name.toLowerCase())) continue;
+        if (relKey === 'tools') { toolsRoots.push(abs); continue; }
+        if (relKey.startsWith('tools/') && !registeredToolParents.has(rel)) continue;
         walk(abs);
         continue;
       }
       if (!e.isFile()) continue;
-      const rel = path.relative(root, abs).replace(/\\/g, "/");
-      if (!LOADABLE_RE.test(rel)) continue;
+      if (!LOADABLE_RE.test(rel) && !registeredTools.has(rel)) continue;
       if (files.length >= MAX_FILES) { skipped.push({ path: rel, reason: `Validation file limit (${MAX_FILES}) reached; file was not checked.` }); continue; }
       let statSize = 0;
       try { statSize = fs.statSync(abs).size; }
@@ -1095,6 +1103,27 @@ export function loadProjectFromDisk(rootDir: string, id?: string): DiskProjectLo
     }
   };
   walk(root);
+  for (const key of registeredX4MenuLuaPaths(files.find(file => file.path.toLowerCase() === 'ui.xml')?.content)) {
+    if (!key.toLowerCase().startsWith('tools/')) continue;
+    registeredTools.add(key);
+    for (let parent = path.posix.dirname(key); parent !== '.'; parent = path.posix.dirname(parent)) {
+      registeredToolParents.add(parent);
+    }
+  }
+  for (const dir of toolsRoots) {
+    const relative = path.relative(root, dir);
+    if (!registeredToolParents.has(relative)) continue;
+    try {
+      // The first walk collected this directory before the manifest was available.
+      const stat = fs.lstatSync(dir);
+      const resolved = path.relative(fs.realpathSync(root), fs.realpathSync(dir));
+      if (!stat.isDirectory() || stat.isSymbolicLink() || resolved !== relative) throw new Error('Invalid tools directory');
+    } catch {
+      skipped.push({ path: relative, reason: 'Registered tools directory changed or could not be verified.' });
+      continue;
+    }
+    walk(dir);
+  }
 
   const projectId = id || path.basename(root);
   return { project: { id: projectId, name: projectId, files }, root, loaded, skipped };

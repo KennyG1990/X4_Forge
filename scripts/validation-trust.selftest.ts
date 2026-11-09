@@ -94,6 +94,18 @@ try {
     const result = loadProjectFromDisk(path.join(scratch, 'absent'));
     assert.equal(result.loaded.length, 0); assert.equal(result.skipped.length, 1);
   });
+  check('disk inventory loads only tools Lua registered by the root menu manifest', () => {
+    const root = path.join(scratch, 'registered-tools');
+    fs.mkdirSync(path.join(root, 'tools', 'nested'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'ui.xml'), '<addon name="Probe"><environment type="menus"><file name="tools/nested/entry.lua"/><file name="../outside.lua"/></environment></addon>');
+    fs.writeFileSync(path.join(root, 'tools', 'nested', 'entry.lua'), 'RegisteredMissing()');
+    fs.writeFileSync(path.join(root, 'tools', 'other.lua'), 'ToolMissing()');
+    fs.writeFileSync(path.join(scratch, 'outside.lua'), 'OutsideMissing()');
+    const { project, loaded } = loadProjectFromDisk(root);
+    assert.deepEqual(loaded.sort(), ['tools/nested/entry.lua', 'ui.xml']);
+    assert.deepEqual(runProjectValidation(project).lua.findings.filter(f => f.code === 'lua.undefined_global').map(f => f.symbol), ['RegisteredMissing']);
+    fs.rmSync(path.join(scratch, 'outside.lua'));
+  });
   check('file limit does not silently drop remaining source', () => {
     for (let index = 0; index < 501; index++) fs.writeFileSync(path.join(scratch, `${index}.lua`), 'local n = 1');
     const result = loadProjectFromDisk(scratch);

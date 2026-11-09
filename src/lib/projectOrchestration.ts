@@ -24,6 +24,7 @@ import { aiInfluenceChatBlocks, buildLuaLogicScript } from './luaLogicBlocks';
 import { generateContractMdScript, generateHttpGlueLua, type IntegrationContract } from './contractGlue';
 import { analyzeLuaFiles } from './luaStaticAnalysis';
 import { validateProjectCrossFile } from './projectCrossFileValidation';
+import { registeredX4MenuLuaPaths } from './x4UiSourceBundle';
 
 export interface ProjectCreateRequest {
   id: string;
@@ -135,11 +136,13 @@ export function packageAgentProject(project: ExtensionProject) {
   }
   const structure = validateProjectStructure(normalized);
   const cueIndex = indexCueReferences(normalized);
+  const menuLuaPaths = registeredX4MenuLuaPaths(Object.entries(files).find(([rel]) => rel.toLowerCase() === 'ui.xml')?.[1]);
   const luaFiles = normalized.files
     .filter(f => f.path.toLowerCase().endsWith('.lua'))
     .map(f => {
       const rel = f.path.replace(/\\/g, '/').replace(/^\/+/, '');
-      return { rel, text: f.content || '', source: 'loose' as const, sourcePath: rel, extension: { folder: normalized.id, id: normalized.id, name: normalized.name } };
+      return { rel, text: f.content || '', source: 'loose' as const, sourcePath: rel,
+        extension: { folder: normalized.id, id: normalized.id, name: normalized.name, menuLuaPaths } };
     });
   const lua = analyzeLuaFiles(luaFiles);
   const crossFile = validateProjectCrossFile(normalized);

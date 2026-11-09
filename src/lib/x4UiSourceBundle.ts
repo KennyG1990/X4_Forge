@@ -16,6 +16,7 @@ import {
   type X4UiVerificationGapCategory
 } from './x4UiCallModel';
 import { indexXmlElementSpans, xmlElementSemanticPath, type XmlElementSourceSpan } from './xmlSourceSpans';
+import { assertXmlInputWithinLimits } from './xmlInputLimits';
 
 export interface X4UiSourceFileInputWithPath {
   readonly path: string;
@@ -375,7 +376,7 @@ export function normalizeX4UiSourcePath(rawPath: string | undefined): PathNormal
   return normalizeContainedPath(rawPath);
 }
 
-function parseUiXml(uiXml: string): ParsedUiXml {
+function parseUiXml(uiXml: string, collectRegistrations = true): ParsedUiXml {
   const issues: X4UiXmlIssue[] = [];
   let document: XmlDocumentLike | undefined;
 
@@ -404,7 +405,7 @@ function parseUiXml(uiXml: string): ParsedUiXml {
   }
 
   const registrations: RegistrationCandidate[] = [];
-  if (root && rootName !== 'parsererror') {
+  if (collectRegistrations && root && rootName !== 'parsererror') {
     const visit = (element: XmlElementLike, insideMenusEnvironment: boolean): void => {
       const name = elementName(element).toLowerCase();
       const insideMenus = insideMenusEnvironment
@@ -436,6 +437,25 @@ function parseUiXml(uiXml: string): ParsedUiXml {
     registrations: freezeArray(registrations.map(candidate => freezeObject({ ...candidate }))),
     root: root || null
   };
+}
+
+/** Contained Lua paths registered directly in a well-formed X4 menu manifest. */
+export function registeredX4MenuLuaPaths(uiXml?: string): ReadonlySet<string> {
+  const paths = new Set<string>();
+  if (!uiXml) return paths;
+  try { assertXmlInputWithinLimits(uiXml); } catch { return paths; }
+  const { root, state } = parseUiXml(uiXml, false);
+  if (!root || !state.parsed || root.namespaceURI || elementName(root) !== 'addon'
+    || !elementAttribute(root, 'name')?.trim()) return paths;
+  for (const environment of childElements(root)) {
+    if (environment.namespaceURI || elementName(environment) !== 'environment' || elementAttribute(environment, 'type') !== 'menus') continue;
+    for (const file of childElements(environment)) {
+      if (file.namespaceURI || elementName(file) !== 'file') continue;
+      const normalized = normalizeContainedPath(elementAttribute(file, 'name'));
+      if (normalized.key && /\.lua$/i.test(normalized.key)) paths.add(normalized.key);
+    }
+  }
+  return paths;
 }
 
 function canonicalSourceInputs(inputs: X4UiSourceFileInputs): CanonicalSourceInput[] {

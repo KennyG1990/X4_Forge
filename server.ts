@@ -11,7 +11,7 @@ import crypto from "crypto";
 import fs from "fs";
 import os from "os";
 import zlib from "zlib";
-import { buildX4UiSourceBundle, addX4UiSourceBundleRegistration } from './src/lib/x4UiSourceBundle';
+import { buildX4UiSourceBundle, addX4UiSourceBundleRegistration, registeredX4MenuLuaPaths } from './src/lib/x4UiSourceBundle';
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createEmptySchemaLibrary, loadSchemaLibrary, readXsdConfig, resolveXsdConfig, runSchemaDiscoverySelftest, writeXsdConfig, type ResolvedXsdConfig } from "./src/lib/xsdParser";
@@ -8515,14 +8515,17 @@ function runExtensionDoctor(extRoot: string, opts?: { resolveBaseContent?: (rel:
     const luaFiles: LuaFileInput[] = [];
     for (const e of enabledExts) {
       if (/^ego_/i.test(e.id)) continue;
-      for (const file of extensionFiles.get(e.folder) || []) {
+      const files = extensionFiles.get(e.folder) || [];
+      const menuLuaPaths = registeredX4MenuLuaPaths(files.find(file => file.rel.toLowerCase() === 'ui.xml')?.text);
+      const extension = { folder: e.folder, id: e.id, name: e.name, menuLuaPaths };
+      for (const file of files) {
         if (!file.rel.toLowerCase().endsWith(".lua")) continue;
         luaFiles.push({
           rel: file.rel,
           text: file.text,
           source: file.source,
           sourcePath: file.sourcePath,
-          extension: { folder: e.folder, id: e.id, name: e.name }
+          extension
         });
       }
     }

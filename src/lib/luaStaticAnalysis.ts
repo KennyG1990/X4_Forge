@@ -17,6 +17,7 @@ import { parse } from 'luaparse';
 import { type X4UiSourceLocation } from './x4UiCallModel';
 import { type X4UiLintFinding, type X4UiLintResult } from './x4UiLint';
 import { analyzeX4UiFile } from './x4UiAnalysisCache';
+import { normalizeX4UiSourcePath, registeredX4MenuLuaPaths } from './x4UiSourceBundle';
 
 /**
  * Strip Lua comments so source-pattern rules match CODE, not prose. Without this the
@@ -37,7 +38,7 @@ export interface LuaFileInput {
   text: string;
   source: 'loose' | 'packed';
   sourcePath: string;
-  extension: { folder: string; id: string; name?: string };
+  extension: { folder: string; id: string; name?: string; menuLuaPaths?: ReadonlySet<string> };
 }
 
 export interface LuaStaticFinding {
@@ -96,8 +97,9 @@ const LUA_STANDARD_GLOBALS = new Set([
 ]);
 
 const X4_ENGINE_GLOBALS = new Set([
-  'AddUITriggeredEvent', 'DebugError', 'DebugText', 'GetCurTime', 'GetNPCBlackboard',
-  'GetPlayerID', 'Helper', 'IsValidWidgetElement', 'OpenMenu', 'OnlineGetUserItemAmount',
+  'AddUITriggeredEvent', 'ConvertStringTo64Bit', 'DebugError', 'DebugText', 'GetComponentData',
+  'GetCurRealTime', 'GetCurTime', 'GetNPCBlackboard', 'GetPlayerID', 'GetWareData',
+  'Helper', 'IsValidWidgetElement', 'OpenMenu', 'OnlineGetUserItemAmount',
   'OnlineGetUserItems', 'RegisterEvent', 'RemoveEvent', 'RemoveScript', 'SetNPCBlackboard',
   'SetScript', 'SignalObject', 'TraceBack', 'ffi', 'json', 'widgetSystem'
 ]);
@@ -373,7 +375,12 @@ export const X4_STANDALONE_MENU_SCHEMA = {
 
 export function analyzeLuaFiles(files: LuaFileInput[]): LuaStaticAnalysisResult {
   const normalizedFiles = files.map(normalizeLuaFile);
-  const allow = new Set([...LUA_STANDARD_GLOBALS, ...X4_ENGINE_GLOBALS, ...collectGlobalDefinitions(normalizedFiles)]);
+  // Standalone host tools have their own globals. A registered tools file shares the game's namespace.
+  const gameGlobalFiles = new Set(normalizedFiles.filter(file => {
+    const key = normalizeX4UiSourcePath(file.rel).key ?? '';
+    return !key.toLowerCase().startsWith('tools/') || file.extension.menuLuaPaths?.has(key);
+  }));
+  const allow = new Set([...LUA_STANDARD_GLOBALS, ...X4_ENGINE_GLOBALS, ...collectGlobalDefinitions([...gameGlobalFiles])]);
   const findings: LuaStaticFinding[] = [];
   const x4UiResults: LuaStaticX4UiFileResult[] = [];
   const x4UiSummary: LuaStaticX4UiSummary = {
@@ -417,7 +424,7 @@ export function analyzeLuaFiles(files: LuaFileInput[]): LuaStaticAnalysisResult 
     }
 
     const seenGlobals = new Set<string>();
-    for (const g of ast.globals || []) {
+    for (const g of gameGlobalFiles.has(file) ? ast.globals || [] : []) {
       const name = g?.name;
       if (!name || allow.has(name) || seenGlobals.has(name)) continue;
       seenGlobals.add(name);
@@ -684,6 +691,33 @@ export function runLuaStaticAnalysisSelftest(): { pass: boolean; checks: { name:
     sourcePath: `${id}:${rel}`,
     extension: { folder: id, id }
   });
+  const menuLuaPaths = registeredX4MenuLuaPaths(`<addon name="RoleProbe"><environment type="menus">
+    <file name="./tools/registered.lua"/><file name="tools/../tool.lua"/>
+    <!-- <file name="tools/standalone.lua"/> -->
+  </environment></addon>`);
+  const roleFiles = [
+    focusedFile('ui/main.lua', 'GetCurRealTime(); GetComponentData(); ConvertStringTo64Bit(); GetWareData(); ToolOnly(); GetWareDat(); RegisteredTool()'),
+    focusedFile('tools/standalone.lua', 'ToolOnly = function() end; ToolOnlyMissing()'),
+    focusedFile('tools/registered.lua', 'RegisteredTool = function() end; RegisteredMissing()'),
+    focusedFile('tools/Registered.lua', 'WrongCaseMissing()'),
+    focusedFile('tools/broken.lua', 'function malformed('),
+  ].map(file => ({ ...file, extension: { ...file.extension, menuLuaPaths } }));
+  const neighbor = focusedFile('tools/registered.lua', 'NeighborMissing()', 'neighbor');
+  const roleFindings = analyzeLuaFiles([...roleFiles, { ...neighbor, extension: { ...neighbor.extension, id: 'focused' } }]).findings;
+  checks.push({ name: 'tools_globals_stay_out_of_the_game_namespace', pass:
+    roleFindings.filter(f => f.code === 'lua.undefined_global').map(f => f.symbol).sort().join(',')
+      === 'GetWareDat,RegisteredMissing,ToolOnly' });
+  checks.push({ name: 'standalone_tools_still_report_syntax_errors', pass:
+    roleFindings.some(f => f.code === 'lua.syntax_error' && f.rel === 'tools/broken.lua') });
+  const rejectedRegistrations = [
+    '<addon name="Malformed"><environment type="menus"><file name="tools/invalid.lua"/></addon>',
+    '<addon><environment type="menus"><file name="tools/unnamed.lua"/></environment></addon>',
+    '<addon xmlns="urn:other" name="Foreign"><environment type="menus"><file name="tools/foreign.lua"/></environment></addon>',
+    `<addon name="Deep"><environment type="menus"><file name="tools/deep.lua"/></environment>${'<n>'.repeat(256)}${'</n>'.repeat(256)}</addon>`,
+  ];
+  checks.push({ name: 'menu_registration_requires_a_safe_direct_manifest_entry', pass:
+    menuLuaPaths.size === 1 && menuLuaPaths.has('tools/registered.lua')
+    && rejectedRegistrations.every(xml => registeredX4MenuLuaPaths(xml).size === 0) });
   const cleanUiText = [
     "local menu = { name = 'M', layer = 1 }",
     'local frame = Helper.createFrameHandle(menu, { layer = 1 })',
