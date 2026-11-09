@@ -23,28 +23,31 @@ jobs:
           COMMIT_MSG: ${{ github.event.head_commit.message }}
           COMMIT_AUTHOR: ${{ github.event.head_commit.author.username || github.actor }}
           SHORT_SHA: ${{ github.sha }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
           RELEASE_TITLE: ${{ github.event.release.name }}
           RELEASE_BODY: ${{ github.event.release.body }}
         run: |
-          python3 -c "
+          python3 - <<'PY'
           import os, re, json, subprocess
 
           token = os.environ.get('DISCORD_TOKEN')
           if not token:
               print('DISCORD_TOKEN secret is missing. Skipping step.')
-              exit(0)
+              raise SystemExit(0)
 
           channel_id = os.environ.get('CHANNEL_ID')
           commit_msg = os.environ.get('COMMIT_MSG', '')
           author = os.environ.get('COMMIT_AUTHOR', 'developer')
           short_sha = os.environ.get('SHORT_SHA', '')[:7]
+          rel_tag = os.environ.get('RELEASE_TAG', '')
           rel_title = os.environ.get('RELEASE_TITLE', '')
           rel_body = os.environ.get('RELEASE_BODY', '')
 
           version = f'Commit {short_sha}'
-          match = re.search(r'v[0-9]+\.[0-9]+\.[0-9]+', rel_title or commit_msg)
+          match = re.search(r'v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?', rel_tag or rel_title or commit_msg)
           if match:
-              version = match.group(0)
+              raw_ver = match.group(0)
+              version = raw_ver if raw_ver.startswith('v') else f'v{raw_ver}'
 
           changelog_file = f'changelog-{short_sha}.txt'
           with open(changelog_file, 'w', encoding='utf-8') as f:
@@ -53,52 +56,63 @@ jobs:
                   f.write(rel_body)
               else:
                   try:
-                      logs = subprocess.check_output(['git', 'log', '-n', '10', '--pretty=format:* %s (%h) by @%an']).decode('utf-8')
+                      logs = subprocess.check_output(['git', 'log', '-n', '10', '--pretty=format:* %s (%h) by @%an']).decode('utf-8', errors='replace')
                       f.write(logs)
-                  except Exception as e:
+                  except Exception:
                       f.write(f'* {commit_msg} ({short_sha}) by @{author}')
 
-          msg_content = f'**X4 FORGE - UPDATE ({version}) by @{author}**\n\nThanks to all testers and the community for feedback and support!\n\n**Support me**:\n<https://www.patreon.com/c/KennyG1990>\n\n**Download & Repository**:\n**Open VSX Marketplace**: <https://open-vsx.org/extension/x4forge/x4-forge-studio>\n**GitHub Repository**: <https://github.com/KennyG1990/X4_Forge>\n\n**To apply this update correctly**, reload your editor window after updating to ensure the latest extension engine loads cleanly.'
+          msg_content = (
+              f'**X4 FORGE - UPDATE ({version}) by @{author}**\n\n'
+              'Thanks to all testers and the community for feedback and support!\n\n'
+              '**Support me**:\n<https://www.patreon.com/c/KennyG1990>\n\n'
+              '**Download & Repository**:\n'
+              '**Open VSX Marketplace**: <https://open-vsx.org/extension/x4forge/x4-forge-studio>\n'
+              '**GitHub Repository**: <https://github.com/KennyG1990/X4_Forge>\n\n'
+              '**To apply this update correctly**, reload your editor window after updating to ensure the latest extension engine loads cleanly.'
+          )
 
           payload = json.dumps({'content': msg_content})
 
           cmd = [
               'curl', '-s', '-H', f'Authorization: Bot {token}',
-              '-F', f'payload_json={payload}',
+              '--form-string', f'payload_json={payload}',
               '-F', f'files[0]=@{changelog_file}',
               f'https://discord.com/api/v10/channels/{channel_id}/messages'
           ]
           res = subprocess.run(cmd, capture_output=True, text=True)
-          print('Discord API Response:', res.stdout)
-          "
+          print('Discord API Response:', res.stdout[:300])
+          PY
 
       - name: Sync ROADMAP.md Diff to #roadmap
         env:
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           CHANNEL_ID: "1531779414579478539"
           COMMIT_MSG: ${{ github.event.head_commit.message }}
+          RELEASE_TITLE: ${{ github.event.release.name }}
           COMMIT_AUTHOR: ${{ github.event.head_commit.author.username || github.actor }}
           SHORT_SHA: ${{ github.sha }}
         run: |
-          python3 -c "
+          python3 - <<'PY'
           import os, json, subprocess
 
           token = os.environ.get('DISCORD_TOKEN')
           if not token:
               print('DISCORD_TOKEN secret is missing. Skipping roadmap step.')
-              exit(0)
+              raise SystemExit(0)
 
           try:
-              changed = subprocess.check_output(['git', 'diff', '--name-only', 'HEAD~1', 'HEAD']).decode('utf-8')
+              changed = subprocess.check_output(['git', 'diff', '--name-only', 'HEAD~1', 'HEAD']).decode('utf-8', errors='replace')
               if 'ROADMAP.md' not in changed:
                   print('ROADMAP.md did not change in this commit. Skipping.')
-                  exit(0)
+                  raise SystemExit(0)
           except Exception as e:
               print('Diff check info:', e)
 
           channel_id = os.environ.get('CHANNEL_ID')
           short_sha = os.environ.get('SHORT_SHA', '')[:7]
-          commit_msg = (os.environ.get('COMMIT_MSG') or '').splitlines()[0]
+          raw_msg = os.environ.get('COMMIT_MSG') or os.environ.get('RELEASE_TITLE') or ''
+          lines = [line.strip() for line in raw_msg.splitlines() if line.strip()]
+          commit_msg = lines[0] if lines else f'Update {short_sha}'
           author = os.environ.get('COMMIT_AUTHOR', 'developer')
 
           diff_text = ''
@@ -108,7 +122,7 @@ jobs:
               for line in raw_diff.splitlines():
                   if (line.startswith('+') and not line.startswith('+++')) or (line.startswith('-') and not line.startswith('---')):
                       diff_lines.append(line)
-              
+
               if diff_lines:
                   diff_text = '\n'.join(diff_lines)
               else:
@@ -120,7 +134,11 @@ jobs:
           if len(diff_text) > 3500:
               diff_text = diff_text[:3500] + '\n... (diff truncated for size)'
 
-          embed_desc = f'**Author**: @{author}\n**Commit**: \`{short_sha}\` — {commit_msg}\n\n**Roadmap Changes (Diff):**\n```diff\n{diff_text}\n```'
+          embed_desc = (
+              f'**Author**: @{author}\n'
+              f'**Commit**: `{short_sha}` — {commit_msg}\n\n'
+              f'**Roadmap Changes (Diff):**\n```diff\n{diff_text}\n```'
+          )
 
           payload = json.dumps({
               'embeds': [{
@@ -139,5 +157,5 @@ jobs:
               f'https://discord.com/api/v10/channels/{channel_id}/messages'
           ]
           res = subprocess.run(cmd, capture_output=True, text=True)
-          print('Roadmap Sync Response:', res.stdout)
-          "
+          print('Roadmap Sync Response:', res.stdout[:300])
+          PY
