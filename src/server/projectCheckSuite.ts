@@ -3,6 +3,7 @@ import { actionReceiptIdFor, actionReceiptIdForOperation, canonicalJson, hashAct
   type ActionReceiptOperationIdentity,
   type ActionReceiptAfter, type ActionReceiptPrepareInput, type ActionReceiptResourceAuthority } from '../lib/actionReceipt';
 import type { ActionReceiptStore } from '../lib/actionReceiptStore';
+import type { ProjectCheckVerification } from '../lib/validationEvidence';
 import { bindProjectCheckCommands } from './projectCheckCommand';
 import { executeProjectCheck, projectCheckCommandReceiptInput } from './projectCheckExecution';
 import type { TrustedProjectCheckWorker } from './projectCheckWorker';
@@ -95,7 +96,7 @@ function outcome(receipt: ActionReceipt, children: ActionReceipt[], state: 'appl
   };
 }
 
-function readPassingChild(plan: SuitePlan, command: SuitePlan['commands'][number], link: CommandLink): ActionReceipt {
+function readPassingChild(plan: SuitePlan, command: SuitePlan['commands'][number], link: CommandLink) {
   const child = plan.store.read(link.id);
   // The current attempt may have been reopened with a new private staging path.
   // Compare stable authority against this snapshot, and original exact authority against the parent link.
@@ -118,7 +119,13 @@ function readPassingChild(plan: SuitePlan, command: SuitePlan['commands'][number
     || typeof evidence.durationMs !== 'number' || !Number.isSafeInteger(evidence.durationMs) || evidence.durationMs < 0
     || typeof evidence.outputTailSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(evidence.outputTailSha256)
     || child.after.resources[0]?.hash !== digest({ requestHash: child.input.requestHash, evidence })) throw mismatch();
-  return child;
+  const { binding } = command.bound;
+  const check: ProjectCheckVerification['checks'][number] = {
+    id: binding.command.checkId, receiptId: child.id, receiptHash: child.hash,
+    durationMs: evidence.durationMs, outputBytes: evidence.outputBytes, outputTailSha256: evidence.outputTailSha256,
+    coveredFiles: binding.coveredFiles,
+  };
+  return { child, check };
 }
 
 function readPassingSuite(plan: SuitePlan, receiptId: string) {
@@ -134,10 +141,15 @@ function readPassingSuite(plan: SuitePlan, receiptId: string) {
   });
   const expected = suiteReceiptInput(plan, links);
   if (receipt.id !== actionReceiptIdFor(expected) || receipt.authorityHash !== hashActionReceiptAuthority(expected)) throw mismatch();
-  const commandReceipts = plan.commands.map((command, index) => readPassingChild(plan, command, links[index]));
+  const verifiedCommands = plan.commands.map((command, index) => readPassingChild(plan, command, links[index]));
+  const commandReceipts = verifiedCommands.map(({ child }) => child);
   if (canonicalJson(receipt.after) !== canonicalJson(outcome(receipt, commandReceipts, 'applied'))) throw mismatch();
   plan.first.assertReady();
-  return { receipt, commandReceipts, reviewBasisHash: plan.reviewBasisHash };
+  const verification: ProjectCheckVerification = {
+    suite: { id: receipt.id, hash: receipt.hash }, artifactHash: plan.first.binding.artifactHash,
+    checks: verifiedCommands.map(({ check }) => check),
+  };
+  return { receipt, commandReceipts, reviewBasisHash: plan.reviewBasisHash, verification };
 }
 
 /** Reopen proof against current authorized setup and exact logical artifact. */
@@ -183,7 +195,7 @@ export async function executeProjectCheckSuite(input: ProjectCheckSuiteInput & {
 
   let reopened: ActionReceipt[];
   try {
-    reopened = plan.commands.map((command, index) => readPassingChild(plan, command, links[index]));
+    reopened = plan.commands.map((command, index) => readPassingChild(plan, command, links[index]).child);
     plan.first.assertReady();
   } catch {
     return stop('PROJECT_CHECK_SUITE_UNCONFIRMED', true);

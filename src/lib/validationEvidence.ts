@@ -26,6 +26,25 @@ export interface ValidationCoverageGap {
   reason: string;
   filePath?: string;
 }
+export interface ProjectCheckVerification {
+  suite: { id: string; hash: string };
+  artifactHash: string;
+  checks: readonly {
+    id: string;
+    receiptId: string;
+    receiptHash: string;
+    durationMs: number;
+    outputBytes: number;
+    outputTailSha256: string;
+    coveredFiles: readonly { path: string; size: number; sha256: string }[];
+  }[];
+}
+interface ProjectCheckCoverage extends ProjectCheckVerification {
+  status: 'project-verified';
+  resolvedGaps: ValidationCoverageGap[];
+  creditedFindingIds: string[];
+  forgeComplete: boolean;
+}
 export interface ValidationEvidenceFinding extends EvidenceDiagnostic {
   findingId: string;
   category: 'mod-finding' | 'check-unavailable';
@@ -41,7 +60,7 @@ export interface ValidationEvidence {
   outcome: 'mod-findings' | 'incomplete' | 'no-known-findings';
   modErrorCount: number;
   checkUnavailableCount: number;
-  coverage: { complete: boolean; gaps: ValidationCoverageGap[] };
+  coverage: { complete: boolean; gaps: ValidationCoverageGap[]; projectVerification?: ProjectCheckCoverage };
   findings: ValidationEvidenceFinding[];
 }
 
@@ -96,6 +115,41 @@ export function buildValidationEvidence(
     outcome: modErrorCount ? 'mod-findings' : uniqueGaps.length ? 'incomplete' : 'no-known-findings',
     modErrorCount, checkUnavailableCount: uniqueGaps.length,
     coverage: { complete: uniqueGaps.length === 0, gaps: uniqueGaps }, findings,
+  };
+}
+
+/** Project a verified suite only onto evidence built from the same frozen artifact. */
+export function applyProjectCheckCoverage(evidence: ValidationEvidence, verification: ProjectCheckVerification): ValidationEvidence {
+  const coveredPaths = new Set(verification.checks.flatMap(check => check.coveredFiles.map(file => file.path)));
+  const executionGap = (gap: ValidationCoverageGap) => gap.check === 'project-checks.execution' && gap.filePath === 'forge.checks.json';
+  const uiGap = 'x4-ui.verification-gap';
+  const gapKey = (filePath: string | undefined, reason: string) => JSON.stringify([filePath, reason]);
+  const rawGaps = [...evidence.coverage.gaps, ...(evidence.coverage.projectVerification?.resolvedGaps || [])];
+  const gaps: ValidationCoverageGap[] = [];
+  const resolvedGaps: ValidationCoverageGap[] = [];
+  const creditedUiGaps = new Set<string>();
+  for (const gap of rawGaps) {
+    if (executionGap(gap)) {
+      resolvedGaps.push(gap);
+    } else if (gap.check === uiGap && gap.filePath && coveredPaths.has(gap.filePath)) {
+      resolvedGaps.push(gap);
+      creditedUiGaps.add(gapKey(gap.filePath, gap.reason));
+    } else {
+      gaps.push(gap);
+    }
+  }
+  const creditedFindingIds = evidence.findings.filter(finding => finding.category === 'check-unavailable' && finding.code === uiGap
+    && creditedUiGaps.has(gapKey(finding.filePath, finding.message))).map(finding => finding.findingId);
+  return {
+    ...evidence,
+    outcome: evidence.modErrorCount ? 'mod-findings' : gaps.length ? 'incomplete' : 'no-known-findings',
+    checkUnavailableCount: gaps.length,
+    coverage: {
+      complete: gaps.length === 0,
+      gaps,
+      projectVerification: { ...verification, status: 'project-verified', resolvedGaps, creditedFindingIds,
+        forgeComplete: rawGaps.every(executionGap) },
+    },
   };
 }
 

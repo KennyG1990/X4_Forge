@@ -123,7 +123,7 @@ import { freezeProjectCheckSetup } from './src/server/projectCheckSetup';
 import { executeProjectCheckSuite } from './src/server/projectCheckSuite';
 import { ProjectCheckRunRefusal, ProjectCheckRunService } from './src/server/projectCheckRunService';
 import { verifyProjectCheckWorkerRuntime } from './src/server/projectCheckWorker';
-import { buildValidationEvidence, parseValidationProject, ValidationInputError, type ValidationSourceLocation } from './src/lib/validationEvidence';
+import { applyProjectCheckCoverage, buildValidationEvidence, parseValidationProject, ValidationInputError, type ValidationSourceLocation } from './src/lib/validationEvidence';
 import { runX4UiIntegrationSelftest } from "./src/server/x4UiIntegration.selftest";
 import { buildRemediationCapsules, runAgentLoopSelftest, runRepairLoop, type LoopDiagnostic } from "./src/lib/agentLoop";
 import { assessSourceSync, hashFolderFingerprint, runCompileFidelitySelftest } from "./src/lib/compileFidelity";
@@ -754,9 +754,10 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
 
   // B42: agent keys — verify hash, expiry, revocation, then enforce scope (deny-by-default).
   if (token.startsWith(AGENT_KEY_PREFIX)) {
-    const checkRunRoute = authority.ok && (authority.decision.routeKey === 'POST /api/agent/project-check-runs'
-      || authority.decision.routeKey === 'GET /api/agent/project-check-runs/:id');
-    const v = (checkRunRoute ? createAgentKeyStore({ file: AGENT_KEYS_FILE }) : agentKeyStore).verify(token);
+    const projectCheckRoute = authority.ok && (authority.decision.routeKey === 'POST /api/agent/project-check-runs'
+      || authority.decision.routeKey === 'GET /api/agent/project-check-runs/:id'
+      || (authority.decision.routeKey === 'POST /api/agent/project/validate' && req.body?.projectCheckSuiteReceiptId !== undefined));
+    const v = (projectCheckRoute ? createAgentKeyStore({ file: AGENT_KEYS_FILE }) : agentKeyStore).verify(token);
     if (!v.ok) {
       return res.status(401).json({ error: `Unauthorized: agent key ${v.reason || "invalid"}.` });
     }
@@ -819,7 +820,7 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
     // handler authorization, validation and execution all run after this middleware.
     // Only a completed non-error response is durable usage evidence.
     // Async check routes reopen durable key authority, so a cached usage write must not race it.
-    if (!checkRunRoute && !isAgentCapabilityDiscoveryRoute(authority.decision)) {
+    if (!projectCheckRoute && !isAgentCapabilityDiscoveryRoute(authority.decision)) {
       res.once('finish', () => {
         if (res.statusCode < 400) agentKeyStore.touch(v.id!);
       });
@@ -1199,6 +1200,8 @@ function sourceOperationKeys(req: express.Request): string[] {
   if (req.path === '/api/agent/deploy' || req.path === '/api/agent/deploy-verify') {
     const operation = requestDeployOperation(req);
     if (operation) keys.push(canonicalSourceKey(dataPath('action-receipts', `${actionReceiptIdForOperation(operation)}.json`)));
+  }
+  if (req.path === '/api/agent/deploy' || req.path === '/api/agent/deploy-verify' || req.path === '/api/agent/project/validate') {
     const suiteId = req.body?.projectCheckSuiteReceiptId;
     if (typeof suiteId === 'string' && /^ar_[a-f0-9]{64}$/.test(suiteId)) {
       keys.push(projectCheckApprovalCoordinationKey(actionReceiptStore), canonicalSourceKey(actionReceiptStore.pathFor(suiteId)));
@@ -4267,7 +4270,9 @@ app.get("/api/agent/schema", (req, res) => {
         method: "POST",
         path: "/api/agent/project/validate",
         auth: true,
-        body: { project: "ExtensionProject (inline)", fromPath: "or exact mod-folder path under a configured root", root: "workspace | filesystem", recordBaseline: "optional true; green validations only" },
+        body: { project: "ExtensionProject (inline)", fromPath: "or exact mod-folder path under a configured root", root: "workspace | filesystem", recordBaseline: "optional true; green validations only",
+          projectCheckSuiteReceiptId: "optional exact passing Dev suite for the addressed workspace folder",
+          expectedProjectCheckSuiteReceiptHash: "required with suite ID", deployFormat: "loose | catalog; required with suite ID" },
         purpose: "Run the shared full-project referee and compare warnings with the persisted last-green baseline. recordBaseline:true deliberately advances that baseline only when validation is green. Exact root forge.rules.json v1 may declare reviewed warning suppressions, known property chains, indexed wire keys, and expected Lua registrations; errors are never suppressible."
       },
       {
@@ -9196,11 +9201,74 @@ app.post("/api/agent/project/validate-crossfile", (req, res) => {
 //     configured roots (mod workspace / live extensions dir) — ROADMAP tool-improvement
 //     #6 (no ~20KB inline ceiling, no sandbox staleness) and the #5 "validate the LIVE
 //     deployed mod" workflow. Path-containment guarded; never reads outside the roots.
-function validateProjectRequest(req: express.Request, res: express.Response) {
+function openProjectValidationProof(req: express.Request, res: express.Response, fromPath: string, lease?: ProjectCheckSourceLease) {
+  const mismatch = () => Object.assign(new Error('The exact approved check suite could not be verified for this addressed source and artifact.'),
+    { code: 'PROJECT_CHECK_PROOF_MISMATCH' });
+  if (!lease || !projectCheckRunsAvailable()) throw mismatch();
+  const caller = projectCheckRunCaller(req, res);
+  if (!caller) return;
+  const { actorId, addressed, keyIsCurrent } = caller;
+  const { workspaceId } = addressed;
+  let snapshot: DeploymentSnapshot | undefined;
+  let proof: ReturnType<typeof openNativeProjectCheckProof> | undefined;
+  const dispose = () => {
+    try { proof?.dispose(); } catch (error) { console.warn('Project check validation proof cleanup failed', error); }
+    try { snapshot?.dispose(); } catch (error) { console.warn('Project check validation snapshot cleanup failed', error); }
+  };
+  const requireCurrentWorkspace = () => {
+    const current = workspaceRegistry.readPersisted(workspaceId);
+    if (!current || current.head !== addressed.head || !keyIsCurrent()) throw mismatch();
+    return activeBuildWorkspace(current.workspace);
+  };
+  try {
+    const workspace = requireCurrentWorkspace();
+    const sourceRoot = workspace.sourceStamp?.dir;
+    const { modWorkspacePath: workspaceRoot, x4GamePath, filesystemPath: filesystemRoot } = resolveXsdConfig();
+    const resolved = resolveModFolder(fromPath, 'workspace');
+    if (!sourceRoot || !workspaceRoot || !x4GamePath || 'error' in resolved
+      || canonicalSourceKey(resolved.abs) !== canonicalSourceKey(sourceRoot)) throw mismatch();
+    const modId = effectiveModId(workspace);
+    const suiteId: string = req.body.projectCheckSuiteReceiptId;
+    lease.assertProjectCheckAuthority(canonicalSourceKey(sourceRoot), workspaceId, actorId);
+    lease.assertProjectCheckAuthority(projectCheckApprovalCoordinationKey(actionReceiptStore), workspaceId, actorId);
+    lease.assertProjectCheckAuthority(canonicalSourceKey(actionReceiptStore.pathFor(suiteId)), workspaceId, actorId);
+    const scope = { store: actionReceiptStore, actorId, workspaceId, modId, sourceRoot, addressedSourceRoot: sourceRoot,
+      workspaceRoot, filesystemRoot, targetRoot: path.join(x4GamePath, 'extensions', modId),
+      stagingRoot: path.join(workspaceRoot, '.forge-builds', 'loose') };
+    // Verify private roots before staging, even when the caller presents a syntactically valid foreign receipt.
+    loadNativeProjectCheckAuthority(scope);
+    const receipt = actionReceiptStore.read(suiteId);
+    if (receipt.hash !== req.body.expectedProjectCheckSuiteReceiptHash || receipt.status !== 'committed'
+      || receipt.actor.kind !== 'service' || receipt.actor.id !== actorId
+      || receipt.authority.scope !== 'workspace' || receipt.authority.workspaceId !== workspaceId
+      || receipt.authority.requestScope !== 'project-check.suite') throw mismatch();
+    const imported = importModFolder(sourceRoot).workspace;
+    const plan = deploymentPlan(imported);
+    if (effectiveModId(activeBuildWorkspace(imported)) !== modId || projectCheckArtifactIssue(plan)) throw mismatch();
+    snapshot = captureDeploymentSnapshot(plan, req.body.deployFormat);
+    proof = openNativeProjectCheckProof({ ...scope, receiptId: suiteId, snapshot });
+    if (proof.proof.hash !== receipt.hash) throw mismatch();
+    const verifiedProof = proof;
+    const verify = () => {
+      const current = requireCurrentWorkspace();
+      if (effectiveModId(current) !== modId || !current.sourceStamp?.dir
+        || canonicalSourceKey(current.sourceStamp.dir) !== canonicalSourceKey(sourceRoot)) throw mismatch();
+      verifiedProof.verify();
+    };
+    return { modId, sourceRoot, snapshot, proof, verify, dispose };
+  } catch {
+    dispose();
+    throw mismatch();
+  }
+}
+
+function validateProjectRequest(req: express.Request, res: express.Response, lease?: ProjectCheckSourceLease) {
   let subjectIdentity: { modId: string | null; sourceHash: string | null } = { modId: null, sourceHash: null };
+  let verified: ReturnType<typeof openProjectValidationProof>;
   try {
     let project = req.body?.project as ExtensionProject | undefined;
-    let source: { mode: "inline" } | { mode: "fromPath"; root: string; loaded: string[]; skipped: { path: string; reason: string }[] } = { mode: "inline" };
+    let source: { mode: "inline" } | { mode: "fromPath"; root: string; loaded: string[]; skipped: { path: string; reason: string }[];
+      artifactHash?: string; artifactScope?: 'logical-artifact-bytes' } = { mode: "inline" };
 
     // B93.3: accept the SAME {root, path} shape as mod-folder/import. Callers previously had to
     // walk the folder and classify every file themselves; one reporter mis-classified
@@ -9216,7 +9284,14 @@ function validateProjectRequest(req: express.Request, res: express.Response) {
       || (req.body?.fromPath !== undefined && req.body?.path !== undefined)) {
       throw new ValidationInputError('Choose exactly one validation subject: project, fromPath, or path (with optional root).');
     }
-    if (fromPath) {
+    if (req.body?.projectCheckSuiteReceiptId !== undefined) {
+      verified = openProjectValidationProof(req, res, fromPath, lease);
+      if (!verified) return;
+      const { modId, snapshot, sourceRoot } = verified;
+      project = { id: modId, name: modId, files: snapshot.files };
+      source = { mode: 'fromPath', root: sourceRoot, loaded: snapshot.files.map(file => file.path), skipped: snapshot.skipped,
+        artifactHash: snapshot.manifest.hash, artifactScope: snapshot.manifest.scope };
+    } else if (fromPath) {
       const resolvedFolder = resolveModFolder(fromPath, req.body?.root);
       if ("error" in resolvedFolder) {
         return res.status(resolvedFolder.status).json({ ok: false, modId: null, sourceHash: null, category: 'subject-unavailable', error: resolvedFolder.error });
@@ -9244,6 +9319,7 @@ function validateProjectRequest(req: express.Request, res: express.Response) {
         ...source.skipped.map(file => ({ check: 'source.inventory', filePath: file.path, reason: file.reason })),
       ]);
     }
+    if (verified && result.evidence) result.evidence = applyProjectCheckCoverage(result.evidence, verified.proof.verification);
     // Drift-as-first-class-state: when the validated mod exists as BOTH a workspace copy
     // and a deployed copy, report their divergence alongside the verdict — validating a
     // stale copy without knowing it is the trap (ROADMAP #5, confirmed 2026-07-09).
@@ -9252,6 +9328,7 @@ function validateProjectRequest(req: express.Request, res: express.Response) {
     // extension's Problems-panel projection. Additive; existing consumers unaffected.
     const flat = flattenProjectValidation(result);
     const { contentHash, delta: validationDelta } = validationDeltaFor(project.id || project.name, project.files, flat);
+    verified?.verify();
     let baselinePromotion: ReturnType<typeof recordValidationBaseline> | undefined;
     if (req.body?.recordBaseline === true) {
       baselinePromotion = result.ok && result.evidence?.coverage.complete
@@ -9291,7 +9368,14 @@ function validateProjectRequest(req: express.Request, res: express.Response) {
     if (error instanceof ValidationInputError) {
       return res.status(400).json({ ok: false, code: error.code, category: 'request-invalid', modId: null, sourceHash: null, error: error.message });
     }
+    const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+    if (code === 'PROJECT_CHECK_PROOF_MISMATCH' || code === 'DEPLOY_APPROVAL_FORBIDDEN') {
+      return res.status(code === 'DEPLOY_APPROVAL_FORBIDDEN' ? 403 : 409).json({ ok: false, code, ...subjectIdentity,
+        error: errorMessage(error) });
+    }
     return res.status(500).json({ ok: false, category: 'forge-failure', ...subjectIdentity, error: errorMessage(error) || "project validate failed" });
+  } finally {
+    verified?.dispose();
   }
 }
 app.post("/api/agent/project/validate/check", (req, res) => {
@@ -14085,14 +14169,15 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       }
     }
     const pfWarnings = preflight.summary.activeWarnings + diskValidationSkipped.length;
-    const evidence = buildValidationEvidence({ id: modId, name: modId, files: deployValidation.validationFiles },
+    const staticEvidence = buildValidationEvidence({ id: modId, name: modId, files: deployValidation.validationFiles },
       preflightDiagnostics.map(d => ({ severity: d.severity as 'error' | 'warning' | 'info', code: d.code,
         filePath: d.filePath, line: d.line, column: d.column, sourceRef: typeof d.sourceRef === 'string' ? d.sourceRef : undefined,
         message: String(d.message || d.code || 'Validation finding') })), [
-        ...(preflight.evidence?.coverage.gaps || []).filter(gap => !nativeCheckProof || gap.check !== 'project-checks.execution'),
+        ...(preflight.evidence?.coverage.gaps || []),
         ...(receiptHistoryUnavailable ? [{ check: 'deploy.receipt_history',
           reason: 'Receipt history could not be verified. Remembered warning reviews were omitted.' }] : []),
       ]);
+    const evidence = nativeCheckProof ? applyProjectCheckCoverage(staticEvidence, nativeCheckProof.verification) : staticEvidence;
     const subject: AcceptanceSubject = { evidence, artifactHash, validatorHash: nativeCheckProof
       ? trustHash([deployValidatorHash, nativeCheckProof.proof.reviewBasisHash]) : deployValidatorHash, corpusHash,
       targetHash: trustHash([process.platform === 'win32' ? path.resolve(targetRoot).toLowerCase() : path.resolve(targetRoot), deployFormat]) };

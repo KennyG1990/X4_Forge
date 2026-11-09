@@ -90,10 +90,13 @@ export function warningReviewStatus(subject: AcceptanceSubject) {
     .sort((a, b) => b.times.preparedAt.localeCompare(a.times.preparedAt) || b.id.localeCompare(a.id));
   const latest = new Map<string, string>();
   for (const r of records) if (!latest.has(String(r.metadata?.reviewContextHash))) latest.set(String(r.metadata?.reviewContextHash), r.id);
+  const coverage = subject.evidence.coverage;
+  // A project check can cover a file's runtime gap without verifying its former Forge warning.
+  const forgeComplete = coverage.complete && !coverage.gaps.length && coverage.projectVerification?.forgeComplete !== false;
   const rows = records.map(r => {
     const finding = current.get(String(r.metadata?.reviewContextHash));
     const state = revoked.has(r.id) ? 'revoked' : latest.get(String(r.metadata?.reviewContextHash)) !== r.id ? 'superseded'
-      : !finding ? subject.evidence.coverage.complete && !subject.evidence.coverage.gaps.length ? 'resolved' : 'unverified'
+      : !finding ? forgeComplete ? 'resolved' : 'unverified'
       : r.metadata?.reviewEvidenceHash !== reviewEvidence(subject) ? 'invalidated' : 'known';
     return { receiptId: r.id, findingId: finding?.findingId, code: String(r.metadata?.findingCode || ''), state,
       reason: String(r.metadata?.reason || ''), actor: { ...r.actor, label: String(r.metadata?.actorLabel || '') },
@@ -184,8 +187,10 @@ export function evaluateFindingAcceptances(
     unacceptedWarnings: unacceptedWarningIds.length,
     unavailableChecks: Math.max(subject.evidence.checkUnavailableCount, subject.evidence.coverage.gaps.length),
   };
-  const incomplete = !subject.evidence.coverage.complete || subject.evidence.coverage.gaps.length > 0
-    || subject.evidence.findings.some(finding => finding.category === 'check-unavailable');
+  const coverage = subject.evidence.coverage;
+  const creditedFindingIds = new Set(coverage.projectVerification?.creditedFindingIds);
+  const incomplete = !coverage.complete || coverage.gaps.length > 0
+    || subject.evidence.findings.some(finding => finding.category === 'check-unavailable' && !creditedFindingIds.has(finding.findingId));
   const validationAllowsDeploy = unacceptedErrorIds.length === 0;
   return { binding, approvals, unacceptedErrorIds, unacceptedWarningIds, counts, validationAllowsDeploy,
     ...(remembered ? { warningReviews: remembered, reviewScopeHash: subject.warningReviews!.scopeHash,

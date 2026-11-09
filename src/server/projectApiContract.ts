@@ -70,7 +70,8 @@ export const PROJECT_API_FIELDS: Record<string, readonly string[]> = {
   '/api/agent/project/file/create': ['project', 'file'],
   '/api/agent/project/package': ['project'],
   '/api/agent/project/validate-crossfile': ['project'],
-  '/api/agent/project/validate': ['project', 'fromPath', 'path', 'root', 'recordBaseline'],
+  '/api/agent/project/validate': ['project', 'fromPath', 'path', 'root', 'recordBaseline',
+    'projectCheckSuiteReceiptId', 'expectedProjectCheckSuiteReceiptHash', 'deployFormat'],
   '/api/agent/project/validate/check': ['project', 'fromPath', 'root', 'recordBaseline'],
   '/api/agent/project/content-xml': ['meta'],
   '/api/agent/compile': ['workspace', 'fileOverrides'],
@@ -239,6 +240,13 @@ export function validateProjectApiBody(route: string, value: unknown): void {
     if (value.root !== undefined && !['workspace', 'filesystem'].includes(value.root)) invalid('root must be workspace or filesystem.');
     if (value.project !== undefined && value.root !== undefined) invalid('root is not an inline-project selector.');
     if (value.recordBaseline !== undefined && typeof value.recordBaseline !== 'boolean') invalid('recordBaseline must be boolean.');
+    if (['projectCheckSuiteReceiptId', 'expectedProjectCheckSuiteReceiptHash', 'deployFormat'].some(key => Object.hasOwn(value, key))) {
+      if (value.project !== undefined || value.root === 'filesystem' || !['loose', 'catalog'].includes(value.deployFormat)) {
+        invalid('Project check proof requires an addressed workspace folder and an exact deployFormat.');
+      }
+      stringField(value, 'projectCheckSuiteReceiptId', { required: true, pattern: /^ar_[a-f0-9]{64}$/ });
+      stringField(value, 'expectedProjectCheckSuiteReceiptHash', { required: true, pattern: /^[a-f0-9]{64}$/ });
+    }
   }
   if (route === '/api/fs/write') {
     if (typeof value.path !== 'string' || !value.path.trim() || typeof value.content !== 'string') invalid('write requires path and content strings.');

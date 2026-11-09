@@ -247,17 +247,18 @@ export function openNativeProjectCheckProof(input: NativeProofInput) {
     if (!runId) throw authorityRefused();
     const frozen = freezeProjectCheckSetup(setupInput, setupHash, scratch);
     try {
-      const verify = () => {
+      const verifySuite = () => {
         try {
           authority.assertCurrent();
           const proof = requirePassedProjectCheckSuite({ setupInput, frozen, artifact: { modId: input.modId, snapshot: input.snapshot },
             approvals, approvalId, runId, systemRoot: runtime.systemRoot, runtime, store: input.store,
             workspaceId: input.workspaceId, actorId: input.actorId }, input.receiptId);
           if (proof.receipt.hash !== receipt.hash) throw authorityRefused();
-          return { id: proof.receipt.id, hash: proof.receipt.hash, reviewBasisHash: proof.reviewBasisHash };
+          return { proof: { id: proof.receipt.id, hash: proof.receipt.hash, reviewBasisHash: proof.reviewBasisHash },
+            verification: proof.verification };
         } catch { throw authorityRefused(); }
       };
-      return { proof: verify(), verify, dispose: frozen.dispose };
+      return { ...verifySuite(), verify: () => verifySuite().proof, dispose: frozen.dispose };
     } catch (error) {
       frozen.dispose();
       throw error;
