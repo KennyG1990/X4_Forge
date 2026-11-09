@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
-import { artifactPlanIdentity, buildArtifactPlan, materializeArtifact } from '../src/lib/artifactPipeline';
+import { artifactPlanIdentity, buildArtifactPlan, hashArtifactFile, materializeArtifact } from '../src/lib/artifactPipeline';
 import { captureDeploymentSnapshot } from '../src/server/deploymentSnapshot';
 import { buildValidationEvidence } from '../src/lib/validationEvidence';
 import { ActionReceiptStore } from '../src/lib/actionReceiptStore';
@@ -16,6 +16,15 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-snapshot-test-'));
 let assertions = 0;
 const check = (name: string, value: unknown) => { assert.ok(value, name); assertions++; };
 try {
+  const observed = path.join(root, 'observed-file');
+  fs.writeFileSync(observed, 'original bytes');
+  const observedStamp = fs.lstatSync(observed, { bigint: true });
+  check('guarded artifact digest equals the canonical digest', hashArtifactFile(observed, 'sha256', observedStamp) === hashArtifactFile(observed));
+  fs.writeFileSync(observed, 'other bytes');
+  assert.throws(() => hashArtifactFile(observed, 'sha256', observedStamp), /changed before reading/); assertions++;
+  fs.writeFileSync(observed, '');
+  check('guarded zero-byte file keeps the canonical digest',
+    hashArtifactFile(observed, 'sha256', fs.lstatSync(observed, { bigint: true })) === hashArtifactFile(observed));
   const source = path.join(root, 'source'); fs.mkdirSync(source);
   fs.mkdirSync(path.join(source, 'support'));
   fs.writeFileSync(path.join(source, 'content.xml'), '<content id="lab" name="Lab" version="100" date="2026-11-08"/>');

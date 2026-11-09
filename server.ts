@@ -15,7 +15,7 @@ import zlib from "zlib";
 import { buildX4UiSourceBundle, addX4UiSourceBundleRegistration, registeredX4MenuLuaPaths } from './src/lib/x4UiSourceBundle';
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
-import { createEmptySchemaLibrary, loadSchemaLibrary, readXsdConfig, resolveXsdConfig, runSchemaDiscoverySelftest, writeXsdConfig, type ResolvedXsdConfig, type XsdConfig } from "./src/lib/xsdParser";
+import { createEmptySchemaLibrary, getDefaultGamePath, loadSchemaLibrary, readXsdConfig, resolveXsdConfig, runSchemaDiscoverySelftest, writeXsdConfig, type ResolvedXsdConfig, type XsdConfig } from "./src/lib/xsdParser";
 
 // Import types & helpers from the frontend shared file
 import {
@@ -137,7 +137,7 @@ import { evaluateFindingAcceptances, projectFindingReview, recordFindingAcceptan
 import { parseModFolderImportRequest } from './src/server/modFolderImportRequest';
 import { RuntimeControl } from './src/server/runtimeControl';
 import { trustHash, deploymentImplementationHash, deploymentCorpusFiles, deploymentBuildIdentity, findUnchangedDeploymentVersion, prepareDeployRecord, commitDeployRecord, deployReceiptIdentity, readDeployOperationReceipt, recordIncompleteDeployOutput, readDeployOperationStatus, compareDeployPreviewTarget } from './src/server/deploymentTrust';
-import { actionReceiptIdForOperation, type ActionReceipt } from './src/lib/actionReceipt';
+import { actionReceiptIdForOperation, type ActionReceipt, type ActionReceiptOperationIdentity } from './src/lib/actionReceipt';
 import { attachActionReceiptToLedgerRow } from "./src/lib/actionReceiptHistory";
 import { combineReceiptResourceBeforeHashes, hashBoundedReceiptFacts } from "./src/lib/actionReceiptRuntime";
 import {
@@ -260,7 +260,7 @@ import {
 } from "./src/lib/requestDeadline";
 import { parseParentLivenessContract, runParentLivenessSelftest, watchParentIpc } from "./src/lib/parentLiveness";
 import { runLatestValueWriteQueueSelftest } from "./src/lib/latestValueWriteQueue";
-import { artifactPlanIdentity, buildArtifactPlan, hashArtifactFile, materializeArtifact, verifyMaterializedArtifact, type ArtifactPlan } from "./src/lib/artifactPipeline";
+import { artifactPlanIdentity, buildArtifactPlan, hashArtifactFile, materializeArtifact, sameArtifactStamp, verifyMaterializedArtifact, type ArtifactPlan } from "./src/lib/artifactPipeline";
 import { buildProjectFileInventory, runProjectFileInventorySelftest } from "./src/lib/projectFileInventory";
 import { materializeCatalogArtifact } from "./src/lib/artifactPackager";
 import { dataPath, runDataDirSelftest } from "./src/lib/dataDir";
@@ -775,10 +775,11 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
 
   // B42: agent keys — verify hash, expiry, revocation, then enforce scope (deny-by-default).
   if (token.startsWith(AGENT_KEY_PREFIX)) {
-    const projectCheckRoute = authority.ok && (authority.decision.routeKey === 'POST /api/agent/project-check-runs'
+    const durableKeyRoute = authority.ok && (authority.decision.routeKey === 'POST /api/agent/project-check-runs'
       || authority.decision.routeKey === 'GET /api/agent/project-check-runs/:id'
+      || (authority.decision.routeKey === 'GET /api/agent/status' && req.query.inspectDeployTarget !== undefined)
       || (authority.decision.routeKey === 'POST /api/agent/project/validate' && req.body?.projectCheckSuiteReceiptId !== undefined));
-    const v = (projectCheckRoute ? createAgentKeyStore({ file: AGENT_KEYS_FILE }) : agentKeyStore).verify(token);
+    const v = (durableKeyRoute ? createAgentKeyStore({ file: AGENT_KEYS_FILE }) : agentKeyStore).verify(token);
     if (!v.ok) {
       return res.status(401).json({ error: `Unauthorized: agent key ${v.reason || "invalid"}.` });
     }
@@ -840,8 +841,8 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
     // A verified credential is not a successful use by itself. Workspace binding,
     // handler authorization, validation and execution all run after this middleware.
     // Only a completed non-error response is durable usage evidence.
-    // Async check routes reopen durable key authority, so a cached usage write must not race it.
-    if (!projectCheckRoute && !isAgentCapabilityDiscoveryRoute(authority.decision)) {
+    // Queued operations reopening durable authority must not race a cached usage write.
+    if (!durableKeyRoute && !isAgentCapabilityDiscoveryRoute(authority.decision)) {
       res.once('finish', () => {
         if (res.statusCode < 400) agentKeyStore.touch(v.id!);
       });
@@ -4433,7 +4434,7 @@ app.get("/api/agent/schema", (req, res) => {
         method: "POST",
         path: "/api/agent/deploy",
         auth: true,
-        headers: { "x-forge-operation-id": "optional agent apply identity for recovery via GET /api/agent/status?deployOperationId=<id>" },
+        headers: { "x-forge-operation-id": "optional agent apply identity for recovery via GET /api/agent/status?deployOperationId=<id>&inspectDeployTarget=1" },
         body: { path: "explicit mod folder, mutually exclusive with workspace", workspace: "explicit ModWorkspace, mutually exclusive with path",
           root: "optional workspace | filesystem for path requests",
           dryRun: "true to preview without writes", inspectDeployOperationId: "optional agent dry-run comparison with an earlier operation in this workspace",
@@ -4447,7 +4448,7 @@ app.get("/api/agent/schema", (req, res) => {
         method: "POST",
         path: "/api/agent/deploy-verify",
         auth: true,
-        headers: { "x-forge-operation-id": "optional agent apply identity for recovery via GET /api/agent/status?deployOperationId=<id>" },
+        headers: { "x-forge-operation-id": "optional agent apply identity for recovery via GET /api/agent/status?deployOperationId=<id>&inspectDeployTarget=1" },
         body: {
           path: "required when workspace is omitted: mod folder path under a configured root",
           root: "optional workspace | filesystem for path requests; select the same root for preview and apply",
@@ -5581,25 +5582,33 @@ app.post("/api/agent/expressions/check", (req, res) => {
   return checkExpressionRequest(req, res);
 });
 
-app.get("/api/agent/status", (req, res) => {
+app.get("/api/agent/status", async (req, res) => {
   try {
     const record = requestWorkspace(req);
     const operationId = req.query.deployOperationId;
-    if (operationId !== undefined) {
+    const inspectTarget = req.query.inspectDeployTarget;
+    if (operationId !== undefined || inspectTarget !== undefined) {
       res.set('Cache-Control', 'no-store');
-      if (typeof operationId !== 'string' || !ACTION_RECEIPT_OPERATION_ID_RE.test(operationId)) {
+      if (typeof operationId !== 'string' || !ACTION_RECEIPT_OPERATION_ID_RE.test(operationId)
+        || (inspectTarget !== undefined && inspectTarget !== '1')) {
         return res.status(400).json({ ok: false, code: 'DEPLOY_OPERATION_INPUT_INVALID' });
       }
       try {
         const principal = deploymentPrincipal(req);
         if (principal.kind !== 'agent') return res.status(403).json({ ok: false, code: 'DEPLOY_APPROVAL_FORBIDDEN' });
         const identity = deployReceiptIdentity(principal, { workspaceId: record.workspaceId, operationId });
-        const status = readDeployOperationStatus(actionReceiptStore, destructiveRecoveryStore, identity);
+        const status = inspectTarget === '1'
+          ? await observeInterruptedDeployTarget(identity, principal, record.workspaceId,
+            () => assertCurrentDeployObservationKey(req, principal, record.workspaceId), () => res.destroyed || res.writableEnded)
+          : readDeployOperationStatus(actionReceiptStore, destructiveRecoveryStore, identity);
+        if (res.destroyed || res.writableEnded) return;
+        if (inspectTarget === '1') assertCurrentDeployObservationKey(req, principal, record.workspaceId);
         if (!status) return res.status(404).json({
           ok: false, code: 'DEPLOY_OPERATION_NOT_FOUND', outcome: 'unknown',
         });
         return res.json({
           ok: true, workspaceId: record.workspaceId, ...status,
+          ...(inspectTarget === '1' && !('targetObservation' in status) ? { targetObservation: { targetState: 'unavailable' } } : {}),
         });
       } catch (error: any) {
         const forbidden = error?.code === 'DEPLOY_APPROVAL_FORBIDDEN';
@@ -11872,18 +11881,37 @@ interface RegularTreeEntry {
   type: 'file' | 'directory';
 }
 
-function inspectRegularTree(rootPath: string): RegularTreeEntry[] {
+function* boundedDirectoryEntries(directory: string) {
+  const opened = fs.opendirSync(directory);
+  try {
+    for (let entry = opened.readSync(); entry; entry = opened.readSync()) yield entry;
+  } finally { opened.closeSync(); }
+}
+
+const DEPLOY_TARGET_OBSERVATION_MAX_ENTRIES = 4_096;
+const DEPLOY_TARGET_OBSERVATION_MAX_DEPTH = 64;
+const DEPLOY_TARGET_OBSERVATION_MAX_BYTES = 128 * 1024 * 1024;
+
+function inspectRegularTree(rootPath: string, observed?: Map<string, fs.BigIntStats>): RegularTreeEntry[] {
   if (!fs.existsSync(rootPath)) return [];
   const entries: RegularTreeEntry[] = [];
-  const walk = (dirPath: string, relativeDir: string) => {
-    for (const entry of fs.readdirSync(dirPath, { withFileTypes: true })) {
+  const walk = (dirPath: string, relativeDir: string, depth: number) => {
+    if (observed && depth > DEPLOY_TARGET_OBSERVATION_MAX_DEPTH) throw new Error('Deployment observation exceeds its depth limit.');
+    const children = observed ? boundedDirectoryEntries(dirPath) : fs.readdirSync(dirPath, { withFileTypes: true });
+    for (const entry of children) {
+      if (observed && entries.length >= DEPLOY_TARGET_OBSERVATION_MAX_ENTRIES) throw new Error('Deployment observation exceeds its entry limit.');
       const relativePath = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
       const absolutePath = path.join(dirPath, entry.name);
-      const stat = fs.lstatSync(absolutePath);
+      const stamp = observed && fs.lstatSync(absolutePath, { bigint: true });
+      const stat = stamp ?? fs.lstatSync(absolutePath);
       if (stat.isSymbolicLink()) throw new Error(`Refusing symbolic link or reparse point in deployment tree: ${relativePath}`);
+      if (observed && stamp) {
+        if (!sameResolvedPath(absolutePath, fs.realpathSync.native(absolutePath))) throw new Error('Deployment observation path changed.');
+        observed.set(absolutePath, stamp);
+      }
       if (stat.isDirectory()) {
         entries.push({ path: relativePath, type: 'directory' });
-        walk(absolutePath, relativePath);
+        walk(absolutePath, relativePath, depth + 1);
       } else if (stat.isFile()) {
         entries.push({ path: relativePath, type: 'file' });
       } else {
@@ -11891,24 +11919,36 @@ function inspectRegularTree(rootPath: string): RegularTreeEntry[] {
       }
     }
   };
-  walk(rootPath, '');
+  walk(rootPath, '', 0);
   return entries.sort((a, b) => a.path.localeCompare(b.path));
 }
 
-function regularTreeFingerprint(rootPath: string): string {
+function regularTreeFingerprint(rootPath: string, observationRoot?: fs.BigIntStats): string {
+  const observed = observationRoot ? new Map([[rootPath, observationRoot]]) : undefined;
   const digest = crypto.createHash('sha256');
-  for (const entry of inspectRegularTree(rootPath)) {
+  let remaining = DEPLOY_TARGET_OBSERVATION_MAX_BYTES;
+  for (const entry of inspectRegularTree(rootPath, observed)) {
     digest.update(entry.type === 'directory' ? 'D\0' : 'F\0');
     digest.update(entry.path.replace(/\\/g, '/'));
     digest.update('\0');
     if (entry.type === 'file') {
       const filePath = path.join(rootPath, ...entry.path.split('/'));
-      const stat = fs.statSync(filePath);
+      const stamp = observed?.get(filePath);
+      const stat = stamp ?? fs.statSync(filePath);
+      if (stamp) {
+        if (!sameResolvedPath(filePath, fs.realpathSync.native(filePath)) || stamp.size > BigInt(remaining)) {
+          throw new Error('Deployment observation file exceeds its limit or changed paths.');
+        }
+        remaining -= Number(stamp.size);
+      }
       digest.update(String(stat.size));
       digest.update('\0');
-      digest.update(hashArtifactFile(filePath));
+      digest.update(hashArtifactFile(filePath, 'sha256', stamp));
       digest.update('\0');
     }
+  }
+  for (const [file, stamp] of observed ?? []) {
+    if (!sameArtifactStamp(stamp, fs.lstatSync(file, { bigint: true }))) throw new Error('Deployment observation changed.');
   }
   return digest.digest('hex');
 }
@@ -11949,6 +11989,88 @@ function deploymentTargetFingerprint(targetPath: string): string {
     throw Object.assign(new Error('Deployment target is not a regular directory.'), { code: 'DEPLOY_TARGET_INVALID' });
   }
   return regularTreeFingerprint(targetPath);
+}
+
+function deploymentTargetBindingHash(target: string, format: DeployFormat): string {
+  const resolved = path.resolve(target);
+  return trustHash([process.platform === 'win32' ? resolved.toLowerCase() : resolved, format]);
+}
+
+function assertCurrentDeployObservationKey(req: express.Request, principal: AcceptancePrincipal, workspaceId: string): void {
+  const token = req.headers.authorization?.slice('Bearer '.length);
+  const credential = token && createAgentKeyStore({ file: AGENT_KEYS_FILE }).verify(token);
+  const authority = resolveAgentRouteAuthority('GET', '/api/agent/status');
+  if (!credential || !credential.ok || credential.id !== principal.id
+    || (credential.workspaceId !== undefined && credential.workspaceId !== workspaceId)
+    || (credential.scope !== 'deploy' && credential.scope !== 'all')
+    || !authority.ok || !agentScopeCovers(authority.decision.agentScopes, credential.scope)
+    || !decideConstrainedAgentRoute(authority.decision, credential.capabilityConstraint).allowed) {
+    throw Object.assign(new Error('Current deploy authority is required to inspect the operation target.'), { code: 'DEPLOY_APPROVAL_FORBIDDEN' });
+  }
+}
+
+/** Inspect only the destination already bound to the caller's retired operation. */
+async function observeInterruptedDeployTarget(
+  identity: ActionReceiptOperationIdentity, principal: AcceptancePrincipal, workspaceId: string,
+  assertAuthorized: () => void, cancelled: () => boolean,
+) {
+  const read = (observe?: Parameters<typeof readDeployOperationStatus>[3]) =>
+    readDeployOperationStatus(actionReceiptStore, destructiveRecoveryStore, identity, observe);
+  // Reject inaccessible operations before looking up any configured target or coordination key.
+  assertAuthorized();
+  const prior = read();
+  if (!prior || !('reconciliation' in prior)) return prior;
+  const getRoot = () => {
+    try {
+      const game = getDefaultGamePath();
+      return game ? path.join(game, 'extensions') : undefined;
+    } catch { return undefined; }
+  };
+  const root = getRoot();
+  if (!root || /^(?:\\\\|\/\/)/.test(root)) return prior;
+  const unavailable = { targetState: 'unavailable' } as const;
+  const physicalRoot = () => {
+    const stamp = fs.lstatSync(root, { bigint: true });
+    if (!stamp.isDirectory() || !sameResolvedPath(root, fs.realpathSync.native(root))) {
+      throw new Error('Deployment observation requires a physical extensions root.');
+    }
+    return stamp;
+  };
+  try {
+    physicalRoot();
+    const key = sourceKeyForResolvedPath(path.resolve(root));
+    return await forgeSourceCoordinator.run([key], { actor: principal.id, operation: 'deploy-target-observation', workspaceId }, () => {
+      if (cancelled()) return prior;
+      assertAuthorized();
+      return read((record, binding) => {
+        if (!sameResolvedPath(record.targetRoot, root)) return { targetState: 'binding-mismatch' };
+        try {
+          assertDeploymentRecoveryTarget(record, root);
+          const target = path.resolve(record.targetPath);
+          if (deploymentTargetBindingHash(target, 'loose') !== binding && deploymentTargetBindingHash(target, 'catalog') !== binding) {
+            return { targetState: 'binding-mismatch' };
+          }
+          const rootStamp = physicalRoot();
+          const stamp = fs.lstatSync(target, { bigint: true, throwIfNoEntry: false });
+          if (stamp && (!stamp.isDirectory() || !sameResolvedPath(target, fs.realpathSync.native(target)))) return unavailable;
+          const fingerprint = stamp ? regularTreeFingerprint(target, stamp) : 'absent';
+          const current = getRoot();
+          if (!current || !sameResolvedPath(root, current) || !sameArtifactStamp(rootStamp, physicalRoot())) return unavailable;
+          return { fingerprint };
+        } catch { return unavailable; }
+      });
+    }, () => {
+      if (cancelled()) return [];
+      assertAuthorized();
+      const current = getRoot();
+      if (!current || !sameResolvedPath(root, current)) return [];
+      physicalRoot();
+      return [key];
+    });
+  } catch {
+    assertAuthorized();
+    return read();
+  }
 }
 
 function assertDeploymentRecoveryTarget(record: DeploymentRecoveryRecord, currentTargetRoot: string): void {
@@ -14694,8 +14816,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       catch { throw targetChanged(); }
       if (current !== targetFingerprint) throw targetChanged();
     };
-    const targetPath = process.platform === 'win32' ? path.resolve(targetRoot).toLowerCase() : path.resolve(targetRoot);
-    const targetHashFor = (format: DeployFormat) => trustHash([targetPath, format]);
+    const targetHashFor = (format: DeployFormat) => deploymentTargetBindingHash(targetRoot, format);
     const build = deploymentBuildIdentity(snapshot, canonicalTarget);
     const buildTarget = { folder: artifactFolder, fingerprint: targetFingerprint, legacyHashes: [targetHashFor('loose'), targetHashFor('catalog')] };
     const reviewSource = modSourceDir || ws.sourceStamp?.dir;

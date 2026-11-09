@@ -239,7 +239,18 @@ export function readDeployOperationReceipt(store: ActionReceiptStore, identity: 
 
 const prewriteStage = (record: DeploymentRecoveryRecord) => `deploy-prewrite-v1:${trustHash(record)}`;
 
-export function deployOperationStatus(receipt: ActionReceipt, recovery: DestructiveRecoveryStore) {
+type ObserveDeployTarget = (record: DeploymentRecoveryRecord, bindingHash: string) =>
+  { targetState: 'unavailable' | 'binding-mismatch' } | { fingerprint: string };
+
+function compareTargetFingerprints(before: string, staged: string, current: string) {
+  const matchesBefore = current === before;
+  const matchesStaged = current === staged;
+  return matchesBefore
+    ? (matchesStaged ? 'matches-both' : 'matches-before')
+    : (matchesStaged ? 'matches-staged' : 'matches-neither');
+}
+
+export function deployOperationStatus(receipt: ActionReceipt, recovery: DestructiveRecoveryStore, observeTarget?: ObserveDeployTarget) {
   if (receipt.status !== 'prepared') return { outcome: receipt.status };
   const unknown = { outcome: 'unknown' as const };
   const recoveryId = receipt.rollback.reference;
@@ -260,20 +271,27 @@ export function deployOperationStatus(receipt: ActionReceipt, recovery: Destruct
   if (writeAdmission.phase === 'pending-v1') return { outcome: 'not-applied' as const };
   const targetBindingHash = receipt.metadata?.targetHash;
   if (stagedEvidence?.preparedReceiptHash !== receipt.hash || typeof targetBindingHash !== 'string') return unknown;
+  const observation = observeTarget?.(retired.record, targetBindingHash);
+  const targetObservation = observation && ('fingerprint' in observation
+    ? { targetState: compareTargetFingerprints(preState.beforeFingerprint, stagedEvidence.fingerprint, observation.fingerprint) }
+    : observation);
   return { ...unknown, reconciliation: { targetBindingHash, beforeTargetFingerprint: preState.beforeFingerprint,
     stagedTargetFingerprint: stagedEvidence.fingerprint },
+    ...(targetObservation ? { targetObservation } : {}),
     ...(passed ? { postchecks: { status: 'passed' as const, checkedAt: passed.checkedAt } } : {}) };
 }
 
-export function readDeployOperationStatus(store: ActionReceiptStore, recovery: DestructiveRecoveryStore, identity: ActionReceiptOperationIdentity) {
+export function readDeployOperationStatus(
+  store: ActionReceiptStore, recovery: DestructiveRecoveryStore, identity: ActionReceiptOperationIdentity, observeTarget?: ObserveDeployTarget,
+) {
   const receipt = readDeployOperationReceipt(store, identity);
   if (!receipt) return null;
-  const status = deployOperationStatus(receipt, recovery);
+  const status = deployOperationStatus(receipt, recovery, observeTarget);
   if (receipt.status !== 'prepared') return { ...status, receipt };
   // Prefer a terminal receipt published before the owner retired.
   const current = readDeployOperationReceipt(store, identity);
   if (!current) return null;
-  return { ...(current.hash === receipt.hash ? status : deployOperationStatus(current, recovery)), receipt: current };
+  return { ...(current.hash === receipt.hash ? status : deployOperationStatus(current, recovery, observeTarget)), receipt: current };
 }
 
 export function compareDeployPreviewTarget(
@@ -289,11 +307,7 @@ export function compareDeployPreviewTarget(
   }
   const evidence = prior.reconciliation;
   if (evidence.targetBindingHash !== targetBindingHash) return { ...historical, targetState: 'binding-mismatch' };
-  const matchesBefore = fingerprint === evidence.beforeTargetFingerprint;
-  const matchesStaged = fingerprint === evidence.stagedTargetFingerprint;
-  const targetState = matchesBefore
-    ? (matchesStaged ? 'matches-both' : 'matches-before')
-    : (matchesStaged ? 'matches-staged' : 'matches-neither');
+  const targetState = compareTargetFingerprints(evidence.beforeTargetFingerprint, evidence.stagedTargetFingerprint, fingerprint);
   return { ...historical, targetState };
 }
 
