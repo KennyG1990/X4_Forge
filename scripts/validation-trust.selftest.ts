@@ -33,8 +33,9 @@ check('commented manifest cannot spoof identity', () => {
   assert.equal(e.modId, 'right');
 });
 check('manifest identity accepts single quotes and decodes the root ID', () => {
-  assert.deepEqual(readContentManifestIdentity(`<!-- <content id="decoy"/> --><content id='Canonical_&#x61;lias' version='100'/>`),
-    { modId: 'Canonical_alias', modVersion: '100' });
+  assert.deepEqual(readContentManifestIdentity(`<!-- <content id="decoy" date="1999-12-31"/> --><content id='Canonical_&#x61;lias' version='100' date='2026-11-08'/>`),
+    { modId: 'Canonical_alias', modVersion: '100', modDate: '2026-11-08' });
+  assert.equal(readContentManifestIdentity('<content id="mod"/>')?.modDate, null);
 });
 check('malformed manifest cannot assert identity', () => assert.equal(buildValidationEvidence({ ...project, files: [{ ...project.files[0], content: '<content id="wrong"><x></content>' }] }, []).modId, null));
 const unavailable = { severity: 'error' as const, code: 'validation.lua_ast_unavailable', filePath: 'ui/main.lua', message: 'Analysis unavailable' };

@@ -134,7 +134,7 @@ import { ActionReceiptStore, ActionReceiptStoreError } from "./src/lib/actionRec
 import { evaluateFindingAcceptances, projectFindingReview, recordFindingAcceptances, verifyFindingAcceptanceReceipts, revokeWarningReview, type AcceptanceSubject, type AcceptancePrincipal } from './src/server/findingAcceptance';
 import { parseModFolderImportRequest } from './src/server/modFolderImportRequest';
 import { RuntimeControl } from './src/server/runtimeControl';
-import { trustHash, deploymentImplementationHash, deploymentCorpusFiles, prepareDeployRecord, commitDeployRecord, deployReceiptIdentity, readDeployOperationReceipt, recordIncompleteDeployOutput, deployOperationStatus, compareDeployPreviewTarget } from './src/server/deploymentTrust';
+import { trustHash, deploymentImplementationHash, deploymentCorpusFiles, deploymentBuildIdentity, findUnchangedDeploymentVersion, prepareDeployRecord, commitDeployRecord, deployReceiptIdentity, readDeployOperationReceipt, recordIncompleteDeployOutput, deployOperationStatus, compareDeployPreviewTarget } from './src/server/deploymentTrust';
 import { actionReceiptIdForOperation, type ActionReceipt } from './src/lib/actionReceipt';
 import { attachActionReceiptToLedgerRow } from "./src/lib/actionReceiptHistory";
 import { combineReceiptResourceBeforeHashes, hashBoundedReceiptFacts } from "./src/lib/actionReceiptRuntime";
@@ -14328,11 +14328,6 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
         message: `Disk-backed validation skipped ${skipped.path}: ${skipped.reason}.`,
       })),
     ];
-    const { contentHash: preflightContentHash, delta: validationDelta } = validationDeltaFor(
-      modId,
-      deployValidation.validationFiles,
-      preflightDiagnostics,
-    );
     const targetChanged = () => Object.assign(
       new Error('Deployment target contents changed. Review a new dry-run preview before retrying.'),
       { code: 'DEPLOY_TARGET_CHANGED' },
@@ -14348,34 +14343,57 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       check('preflight', 'Deployment target contents', 'fail', refusal.message);
       return res.status(stale ? 409 : 400).json(failWith('preflight', { code: refusal.code, error: refusal.message }));
     }
+    const canonicalTarget = canonicalSourceKey(targetRoot);
     const assertCurrentTarget = () => {
       let current: string;
-      try { current = deploymentTargetFingerprint(targetRoot); }
+      try {
+        if (canonicalSourceKey(targetRoot) !== canonicalTarget) throw targetChanged();
+        current = deploymentTargetFingerprint(targetRoot);
+      }
       catch { throw targetChanged(); }
       if (current !== targetFingerprint) throw targetChanged();
     };
+    const targetPath = process.platform === 'win32' ? path.resolve(targetRoot).toLowerCase() : path.resolve(targetRoot);
+    const targetHashFor = (format: DeployFormat) => trustHash([targetPath, format]);
+    const build = deploymentBuildIdentity(snapshot, canonicalTarget);
+    const buildTarget = { folder: artifactFolder, fingerprint: targetFingerprint, legacyHashes: [targetHashFor('loose'), targetHashFor('catalog')] };
     const reviewSource = modSourceDir || ws.sourceStamp?.dir;
     const canonicalReviewSource = reviewSource ? fs.realpathSync.native(reviewSource) : undefined;
     let receiptHistory: ActionReceipt[] | undefined;
     let receiptHistoryUnavailable = false;
-    if (canonicalReviewSource) {
+    if (canonicalReviewSource || (build?.modVersion && targetFingerprint !== 'absent')) {
       try {
         receiptHistory = actionReceiptStore.listVerified();
       } catch (error) {
         const incompleteHistory = error instanceof ActionReceiptStoreError
           && (error.code === 'RECEIPT_CORRUPT' || error.code === 'RECEIPT_SCAN_LIMIT');
-        if (!incompleteHistory || acceptances.length) throw error;
+        if (canonicalReviewSource && (!incompleteHistory || acceptances.length)) throw error;
         receiptHistoryUnavailable = true;
       }
     }
-    const pfWarnings = preflight.summary.activeWarnings + diskValidationSkipped.length;
+    const previousBuild = build && receiptHistory && findUnchangedDeploymentVersion(build, receiptHistory, buildTarget);
+    if (build && previousBuild) {
+      preflightDiagnostics.push({
+        severity: 'warning',
+        code: 'content.version_stale',
+        filePath: 'content.xml',
+        sourceRef: `deploy-receipt:${previousBuild.id}`,
+        message: `Files changed since the last verified deployment to this destination, but content.xml still declares version "${build.modVersion}".`,
+      });
+    }
+    const { contentHash: preflightContentHash, delta: validationDelta } = validationDeltaFor(
+      modId,
+      deployValidation.validationFiles,
+      preflightDiagnostics,
+    );
+    const pfWarnings = preflight.summary.activeWarnings + diskValidationSkipped.length + Number(Boolean(previousBuild));
     const staticEvidence = buildValidationEvidence({ id: modId, name: modId, files: deployValidation.validationFiles },
       preflightDiagnostics.map(d => ({ severity: d.severity as 'error' | 'warning' | 'info', code: d.code,
         filePath: d.filePath, line: d.line, column: d.column, sourceRef: typeof d.sourceRef === 'string' ? d.sourceRef : undefined,
         message: String(d.message || d.code || 'Validation finding') })), [
         ...(preflight.evidence?.coverage.gaps || []),
         ...(receiptHistoryUnavailable ? [{ check: 'deploy.receipt_history',
-          reason: 'Receipt history could not be verified. Remembered warning reviews were omitted.' }] : []),
+          reason: 'Receipt history could not be verified. Prior build comparison and remembered warning reviews were omitted.' }] : []),
       ]);
     const evidence = nativeCheckProof ? applyProjectCheckCoverage(staticEvidence, nativeCheckProof.verification) : staticEvidence;
     const manifestId = evidence.modId;
@@ -14386,13 +14404,13 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     }
     const subject: AcceptanceSubject = { evidence, artifactHash, validatorHash: nativeCheckProof
       ? trustHash([deployValidatorHash, nativeCheckProof.proof.reviewBasisHash]) : deployValidatorHash, corpusHash,
-      targetHash: trustHash([process.platform === 'win32' ? path.resolve(targetRoot).toLowerCase() : path.resolve(targetRoot), deployFormat]) };
+      targetHash: targetHashFor(deployFormat) };
     if (nativeCheckProof) subject.projectCheckProof = { id: nativeCheckProof.proof.id, hash: nativeCheckProof.proof.hash };
     if (canonicalReviewSource && receiptHistory) {
       subject.warningReviews = { scopeHash: trustHash([process.platform === 'win32' ? canonicalReviewSource.toLowerCase() : canonicalReviewSource, evidence.modId]),
         history: receiptHistory, invocationId: crypto.randomUUID() };
     }
-    responseIdentity = { ...responseIdentity, modId: manifestId, contentId: manifestId, modVersion: evidence.modVersion,
+    responseIdentity = { ...responseIdentity, modId: manifestId, contentId: manifestId, modVersion: evidence.modVersion, modDate: build?.modDate ?? null,
       sourceHash: evidence.sourceHash, artifactHash, validation: { evidence } };
     const decision = evaluateFindingAcceptances(subject, acceptances, principal);
     responseIdentity = { ...responseIdentity, modId: manifestId, modVersion: evidence.modVersion, sourceHash: evidence.sourceHash,
@@ -14435,7 +14453,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     }
     if (!decision.validationAllowsDeploy) {
       const blockingFindings = evidence.findings.filter(finding => decision.unacceptedErrorIds.includes(finding.findingId));
-      const acceptanceRequest = receiptHistoryUnavailable ? undefined : { method: 'POST', path: '/api/agent/deploy-verify',
+      const acceptanceRequest = receiptHistoryUnavailable && canonicalReviewSource ? undefined : { method: 'POST', path: '/api/agent/deploy-verify',
         body: { ...(body.path ? { path: body.path } : { workspace: body.workspace }), deployFormat,
           ...(body.autoReimport !== undefined ? { autoReimport: body.autoReimport } : {}),
           dryRun: false, expectedModId: evidence.modId, expectedSourceHash: evidence.sourceHash,
@@ -14533,6 +14551,15 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       assertCurrentSource();
       nativeCheckProof?.verify();
       if (subject.warningReviews) subject.warningReviews.history = actionReceiptStore.listVerified();
+      if (build && previousBuild) {
+        const currentPrevious = subject.warningReviews
+          ? findUnchangedDeploymentVersion(build, subject.warningReviews.history, buildTarget)
+          : actionReceiptStore.read(previousBuild.id);
+        if (currentPrevious?.hash !== previousBuild.hash) {
+          throw Object.assign(new Error('The prior deployment receipt changed. Review a new dry-run preview before retrying.'),
+            { code: 'DEPLOY_IDENTITY_MISMATCH' });
+        }
+      }
       verifyFindingAcceptanceReceipts(actionReceiptStore, approvalRecords.map(r => r.id), subject, acceptances, principal);
       if (deployReceipt && actionReceiptStore.read(deployReceipt.id).hash !== deployReceipt.hash) {
         throw new Error('Deployment receipt changed before target activation.');
@@ -14555,7 +14582,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     if (pendingDeployRecovery.beforeFingerprint !== targetFingerprint) throw targetChanged();
     deployReceipt = prepareDeployRecord(actionReceiptStore, subject, decision, principal, approvalRecords,
       pendingDeployRecovery.id, artifactFolder, pendingDeployRecovery.beforeFingerprint, snapshot.manifest.hash, operation,
-      nativeCheckProof?.proof, operation ? pendingDeployRecovery : undefined);
+      nativeCheckProof?.proof, operation ? pendingDeployRecovery : undefined, build);
     assertWriteAuthority();
     const admittedRecovery = operation ? destructiveRecoveryStore.admitDeploymentWrite(pendingDeployRecovery) : undefined;
     const preparedReceiptHash = deployReceipt.hash;

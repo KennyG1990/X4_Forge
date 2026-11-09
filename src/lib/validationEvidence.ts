@@ -72,10 +72,12 @@ const unavailableCodes = new Set([
 ]);
 const normalizedPath = (value: string) => value.replace(/\\/g, '/').toLowerCase();
 
-export function readContentManifestIdentity(xml: string | undefined): { modId: string; modVersion: string | null } | null {
+export function readContentManifestIdentity(xml: string | undefined): {
+  modId: string; modVersion: string | null; modDate: string | null;
+} | null {
   const root = typeof xml === 'string' && checkXmlWellformed(xml).ok ? parseXmlLenient(xml) : null;
   const modId = root?.nodeName === 'content' ? root.getAttribute('id')?.trim() : undefined;
-  return modId ? { modId, modVersion: root?.getAttribute('version') || null } : null;
+  return modId ? { modId, modVersion: root?.getAttribute('version') || null, modDate: root?.getAttribute('date') || null } : null;
 }
 
 export function buildValidationEvidence(

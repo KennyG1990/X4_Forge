@@ -10,7 +10,7 @@ import { ActionReceiptStore } from '../src/lib/actionReceiptStore';
 import { redactReceiptMetadata } from '../src/lib/actionReceipt';
 import { DestructiveRecoveryStore } from '../src/lib/destructiveRecovery';
 import { evaluateFindingAcceptances } from '../src/server/findingAcceptance';
-import { prepareDeployRecord, commitDeployRecord, deployOperationStatus, deployReceiptIdentity, compareDeployPreviewTarget } from '../src/server/deploymentTrust';
+import { prepareDeployRecord, commitDeployRecord, deployOperationStatus, deployReceiptIdentity, compareDeployPreviewTarget, deploymentBuildIdentity, findUnchangedDeploymentVersion } from '../src/server/deploymentTrust';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-snapshot-test-'));
 let assertions = 0;
@@ -18,13 +18,22 @@ const check = (name: string, value: unknown) => { assert.ok(value, name); assert
 try {
   const source = path.join(root, 'source'); fs.mkdirSync(source);
   fs.mkdirSync(path.join(source, 'support'));
-  fs.writeFileSync(path.join(source, 'content.xml'), '<content id="lab" name="Lab" version="100"/>');
+  fs.writeFileSync(path.join(source, 'content.xml'), '<content id="lab" name="Lab" version="100" date="2026-11-08"/>');
   fs.writeFileSync(path.join(source, 'support/probe.lua'), '--' + 'P'.repeat(300000) + '\nlocal broken = )');
   fs.writeFileSync(path.join(source, 'excluded.lua'), 'local invalid = )');
   fs.writeFileSync(path.join(source, 'binary.bin'), Buffer.from([0, 255, 128]));
   const plan = buildArtifactPlan({ sourceRoot: source, rules: { exclude: ['excluded.lua'] }, generatedFiles: { 'generated.lua': 'return true' } });
   const snapshot = captureDeploymentSnapshot(plan, 'loose');
+  const canonicalTarget = `source:${path.join(root, 'extensions', 'lab_alias')}`;
+  const build = deploymentBuildIdentity(snapshot, canonicalTarget);
+  assert.ok(build);
   try {
+    check('build fields come from the frozen manifest', build.modId === 'lab' && build.modVersion === '100' && build.modDate === '2026-11-08');
+    const catalog = captureDeploymentSnapshot(plan, 'catalog');
+    try {
+      check('logical build identity is independent of output format',
+        deploymentBuildIdentity(catalog, canonicalTarget)?.logicalPayloadHash === build.logicalPayloadHash);
+    } finally { catalog.dispose(); }
     check('exact logical plan identity', snapshot.manifest.hash === artifactPlanIdentity(plan, 'loose'));
     check('excluded source not validated', !snapshot.files.some(f => f.path === 'excluded.lua'));
     check('disk-only Lua outside old path allowlist validated', snapshot.files.some(f => f.path === 'support/probe.lua' && f.content.endsWith('local broken = )')));
@@ -55,14 +64,15 @@ try {
   const principal = { kind: 'agent' as const, id: 'key_snapshot_test', label: 'Snapshot test', scope: 'deploy' as const, deployAuthorized: true };
   const decision = evaluateFindingAcceptances(subject, [], principal);
   const recovery = new DestructiveRecoveryStore({ root: path.join(root, 'recovery') });
-  const prepared = prepareDeployRecord(store, subject, decision, principal, [], 'recovery_snapshot_test', 'lab_alias', 'absent', artifactPlanIdentity(plan, 'loose'));
+  const prepared = prepareDeployRecord(store, subject, decision, principal, [], 'recovery_snapshot_test', 'lab_alias', 'absent',
+    artifactPlanIdentity(plan, 'loose'), undefined, undefined, undefined, build);
   check('legacy prepared receipt has unknown write outcome', deployOperationStatus(prepared, recovery).outcome === 'unknown');
   const targetRoot = path.join(root, 'extensions');
   const before = recovery.prepareDeployment({ priorExisted: false, targetRoot, targetPath: path.join(targetRoot, 'lab'),
     modId: 'lab', beforeFingerprint: 'absent', beforeBytes: 0, summary: 'Test deployment', trackWriteAdmission: true });
   const operation = deployReceiptIdentity(principal, { workspaceId: 'ws_111111111111111111111111', operationId: 'test-write-admission' });
   const tracked = prepareDeployRecord(store, subject, decision, principal, [], before.id, before.modId, before.beforeFingerprint,
-    artifactPlanIdentity(plan, 'loose'), operation, undefined, before);
+    artifactPlanIdentity(plan, 'loose'), operation, undefined, before, build);
   check('live prepared owner has unknown write outcome', deployOperationStatus(tracked, recovery).outcome === 'unknown');
   assert.throws(() => recovery.admitDeploymentWrite({ ...before, beforeBytes: 1 }), /no longer matches/); assertions++;
   const rename = fs.renameSync;
@@ -129,9 +139,37 @@ try {
   check('snapshot audit hash survives durable committed readback', reopened.status === 'committed' && reopened.metadata?.validatedArtifactHash === artifactPlanIdentity(plan, 'loose'));
   check('snapshot scope retained', reopened.metadata?.validatedArtifactScope === 'logical-artifact-bytes');
   check('committed outcome survives without a recovery record', deployOperationStatus(reopened, recovery).outcome === 'committed');
+  const summary = String(reopened.metadata?.summary);
+  const prefix = 'X4 deployment build v1 ';
+  check('existing receipt summary round-trips bounded build facts', summary.startsWith(prefix) && summary.length <= 512
+    && JSON.parse(summary.slice(prefix.length)).date === '2026-11-08');
+  const target = { folder: 'lab_alias', fingerprint: 'e'.repeat(64), legacyHashes: [subject.targetHash] };
+  const editedBuild = { ...build, modVersion: '0100', logicalPayloadHash: 'f'.repeat(64) };
+  check('changed payload and same numeric version uses verified installed ancestry',
+    findUnchangedDeploymentVersion(editedBuild, [reopened], target)?.hash === reopened.hash);
+  check('exact redeploy, version bump and nonnumeric versions do not warn',
+    !findUnchangedDeploymentVersion(build, [reopened], target)
+    && !findUnchangedDeploymentVersion({ ...editedBuild, modVersion: '101' }, [reopened], target)
+    && !findUnchangedDeploymentVersion({ ...editedBuild, modVersion: 'rc1' }, [reopened], target));
+  check('changed, absent, aliased-folder mismatch or moved target gives no ancestry',
+    !findUnchangedDeploymentVersion(editedBuild, [reopened], { ...target, fingerprint: 'f'.repeat(64) })
+    && !findUnchangedDeploymentVersion(editedBuild, [reopened], { ...target, fingerprint: 'absent' })
+    && !findUnchangedDeploymentVersion(editedBuild, [reopened], { ...target, folder: 'another' })
+    && !findUnchangedDeploymentVersion({ ...editedBuild, destinationHash: 'f'.repeat(64) }, [reopened], target));
+  const later = { ...reopened, times: { ...reopened.times, committedAt: '9999-01-01T00:00:00.000Z' } };
+  check('newer legacy or different manifest deployment blocks fallback to old ancestry',
+    !findUnchangedDeploymentVersion(editedBuild, [reopened, { ...later, metadata: { ...later.metadata, summary: null } }], target)
+    && !findUnchangedDeploymentVersion(editedBuild, [reopened, { ...later, metadata: { ...later.metadata, modId: 'other' } }], target));
+  const superseded = { ...later, after: { ...later.after!, resources: later.after!.resources.map(resource =>
+    ({ ...resource, hash: 'f'.repeat(64) })) } };
+  check('a rollback to older matching output does not revive superseded ancestry',
+    !findUnchangedDeploymentVersion(editedBuild, [reopened, superseded], target));
+  check('prepared receipts and ambiguous latest timestamps cannot establish ancestry',
+    !findUnchangedDeploymentVersion(editedBuild, [tracked], target)
+    && !findUnchangedDeploymentVersion(editedBuild, [reopened, { ...reopened, id: `ar_${'f'.repeat(64)}` }], target));
 
   const prepareCommitTest = () => prepareDeployRecord(store, subject, decision, principal, [],
-    'recovery_snapshot_test', 'lab', 'absent', artifactPlanIdentity(plan, 'loose'));
+    'recovery_snapshot_test', 'lab', 'absent', artifactPlanIdentity(plan, 'loose'), undefined, undefined, undefined, build);
   const withCommittedReadFailure = (receiptId: string, failures: number, run: () => void) => {
     const read = fs.readFileSync;
     fs.readFileSync = ((...args: Parameters<typeof fs.readFileSync>) => {

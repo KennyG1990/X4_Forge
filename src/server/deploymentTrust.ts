@@ -6,6 +6,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { actionReceiptIdForOperation, transitionActionReceipt, type ActionReceipt, type ActionReceiptOperationIdentity } from '../lib/actionReceipt';
 import type { ActionReceiptStore } from '../lib/actionReceiptStore';
 import type { DeploymentRecoveryRecord, DestructiveRecoveryStore } from '../lib/destructiveRecovery';
+import { readContentManifestIdentity } from '../lib/validationEvidence';
+import type { DeploymentSnapshot } from './deploymentSnapshot';
 import type { AcceptanceDecision, AcceptancePrincipal, AcceptanceSubject } from './findingAcceptance';
 import { processLiveness } from './sharedSourceCoordinator';
 
@@ -15,6 +17,73 @@ export function trustHash(value: unknown): string {
     if (item instanceof Map) return [...item].sort(([a], [b]) => String(a).localeCompare(String(b)));
     return item;
   })).digest('hex');
+}
+
+export function deploymentBuildIdentity(snapshot: DeploymentSnapshot, canonicalTarget: string) {
+  const manifests = snapshot.files.filter(file => file.path.toLowerCase() === 'content.xml');
+  const manifest = manifests.length === 1 ? readContentManifestIdentity(manifests[0].content) : null;
+  if (!manifest) return undefined;
+  const files = snapshot.manifest.files.map(({ path, size, sha256 }) => [path, size, sha256] as const)
+    .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+  return { ...manifest, destinationHash: trustHash(canonicalTarget), logicalPayloadHash: trustHash(files) };
+}
+
+type DeploymentBuild = NonNullable<ReturnType<typeof deploymentBuildIdentity>>;
+const BUILD_SUMMARY_PREFIX = 'X4 deployment build v1 ';
+const digest = /^[a-f0-9]{64}$/;
+const numericVersion = (input: unknown) =>
+  typeof input === 'string' && /^\d{1,32}$/.test(input.trim()) ? BigInt(input.trim()) : null;
+
+function deploymentBuildSummary(build: DeploymentBuild): string {
+  return BUILD_SUMMARY_PREFIX + JSON.stringify({
+    destinationHash: build.destinationHash,
+    logicalPayloadHash: build.logicalPayloadHash,
+    version: numericVersion(build.modVersion) === null ? null : build.modVersion!.trim(),
+    date: build.modDate && /^\d{4}-\d{2}-\d{2}$/.test(build.modDate) ? build.modDate : null,
+  });
+}
+
+function readDeploymentBuildSummary(summary: unknown) {
+  if (typeof summary !== 'string' || !summary.startsWith(BUILD_SUMMARY_PREFIX)) return undefined;
+  try {
+    const facts: unknown = JSON.parse(summary.slice(BUILD_SUMMARY_PREFIX.length));
+    if (!jsonObject(facts) || typeof facts.destinationHash !== 'string' || !digest.test(facts.destinationHash)
+      || typeof facts.logicalPayloadHash !== 'string' || !digest.test(facts.logicalPayloadHash)) return undefined;
+    return { destinationHash: facts.destinationHash, logicalPayloadHash: facts.logicalPayloadHash, version: numericVersion(facts.version) };
+  } catch { return undefined; }
+}
+
+export function findUnchangedDeploymentVersion(
+  build: DeploymentBuild, receipts: readonly ActionReceipt[],
+  target: { folder: string; fingerprint: string; legacyHashes: readonly string[] },
+): ActionReceipt | undefined {
+  const version = numericVersion(build.modVersion);
+  if (version === null || target.fingerprint === 'absent') return undefined;
+  let previous: { receipt: ActionReceipt; at: string; facts: ReturnType<typeof readDeploymentBuildSummary> } | undefined;
+  let ambiguous = false;
+  for (const receipt of receipts) {
+    const at = receipt.times.committedAt;
+    if (receipt.status !== 'committed' || !at || receipt.metadata?.operation !== 'deploy'
+      || receipt.validation.status !== 'passed' || receipt.validation.code !== 'DEPLOYED_BYTES_VERIFIED'
+      || receipt.after?.outcome !== 'applied') continue;
+    const facts = readDeploymentBuildSummary(receipt.metadata.summary);
+    const legacyHash = receipt.metadata.targetHash;
+    if (facts ? facts.destinationHash !== build.destinationHash
+      : typeof legacyHash !== 'string' || !target.legacyHashes.includes(legacyHash)) continue;
+    if (!previous || at > previous.at) {
+      previous = { receipt, at, facts };
+      ambiguous = false;
+    } else if (at === previous.at) ambiguous = true;
+  }
+  // A newer deployment supersedes older facts even when it lacks a build summary.
+  // Prove that the selected physical folder still contains the committed output.
+  if (!previous || ambiguous || previous.receipt.metadata?.modId !== build.modId
+    || previous.facts?.version !== version || previous.facts.logicalPayloadHash === build.logicalPayloadHash) return undefined;
+  const folder = process.platform === 'win32' ? target.folder.toLowerCase() : target.folder;
+  const output = previous.receipt.after?.resources.find(resource =>
+    resource.role === 'deploy' && resource.root === 'extensions'
+    && (process.platform === 'win32' ? resource.relativePath.toLowerCase() : resource.relativePath) === folder);
+  return output?.hash === target.fingerprint ? previous.receipt : undefined;
 }
 
 const VALIDATION_PACKAGES = ['@xmldom/xmldom', 'fast-xml-parser', 'luaparse', 'xpath'];
@@ -218,6 +287,7 @@ export function prepareDeployRecord(
   identity = deployReceiptIdentity(principal),
   projectCheckSuite?: { id: string; hash: string },
   prewriteRecovery?: DeploymentRecoveryRecord,
+  build?: DeploymentBuild,
 ): ActionReceipt {
   const maxApprovals = projectCheckSuite ? 126 : 127;
   if (approvals.length > maxApprovals) throw new Error(`At most ${maxApprovals} finding approvals fit a deployment record.`);
@@ -255,6 +325,7 @@ export function prepareDeployRecord(
       actorLabel: principal.label, outcome: decision.outcome, recoveryId,
       ...decision.counts,
       ...(prewriteRecovery ? { stage: prewriteStage(prewriteRecovery) } : {}),
+      ...(build ? { summary: deploymentBuildSummary(build) } : {}),
       ...(validatedArtifactHash ? { validatedArtifactHash, validatedArtifactScope: 'logical-artifact-bytes' } : {}) },
   });
   if (!created) throw Object.assign(new Error('This deployment operation already has a receipt.'), {

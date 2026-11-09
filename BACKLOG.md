@@ -14,6 +14,10 @@ Dev adds explicit local Start with exact saved workspace, offline Studio state, 
 
 Published 0.0.81 previewed a folder that bound apply rejected after writing. Dev now deploys the selected alias and retains the canonical manifest ID in the receipt. Competing IDs and stale inputs refuse before normal staging, and a locked legacy duplicate surviving cleanup still blocks target activation. [Released reproduction and Dev proof](docs/plans/2026-11-09-forge-deploy-folder-manifest-identity.md). Installed verification and public delivery remain open.
 
+### Native deploy build version `in_progress` (GitHub #65)
+
+Dev reports the authored version and date and warns about changed logical files under the same version when the current physical target matches the latest verified deployment. Exact redeploys and format-only changes stay clear. The archived 0.0.80 reader accepted the new receipt. [Paired native and backward-reader evidence](docs/plans/2026-11-09-native-deploy-build-version.md). Installed and public delivery remain open.
+
 ### Launcher-pinned scratch Directory Settings `in_progress` (GitHub #75)
 
 An explicit Dev launch flag shows the effective scratch paths and keeps corpus/schema settings editable in regular scratch profiles. Retargets and install harvesting refuse, the Project Check owner seal stays in force, and native deploy passed the exact scratch replay. [Isolated evidence and release review](docs/plans/2026-11-09-dev-scratch-directory-settings.md). Installed rendering and public delivery remain open.
