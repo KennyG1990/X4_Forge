@@ -783,7 +783,8 @@ function flattenProjectValidationRaw(result: ProjectValidationResult): FlatProje
     out.push({ severity: "warning", code: `god.${f.kind}`, filePath: "libraries/god.xml", sourceRef: `${f.station}:${f.macro}`, message: f.message });
   }
   for (const f of result.references.findings) {
-    out.push({ severity: f.severity, code: f.code, filePath: f.filePath, sourceRef: f.id, line: f.line, message: f.message });
+    out.push({ severity: f.severity, code: f.code, filePath: f.filePath, sourceRef: f.id,
+      line: f.line, column: f.column, message: f.message });
   }
   for (const file of result.diffSimulation.files) {
     for (const finding of file.findings) {

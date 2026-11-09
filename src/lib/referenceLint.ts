@@ -1,4 +1,5 @@
 /** Pure advisory lint for explicit reference literals not reliably schema-typed (notably Lua). */
+import { createSourcePositionLocator } from './xmlSourceSpans';
 
 export interface ReferenceLiteralSets {
   factions?: Set<string>;
@@ -14,6 +15,7 @@ export interface ReferenceLiteralFinding {
   id: string;
   filePath?: string;
   line: number;
+  column: number;
   suggestions: string[];
   message: string;
 }
@@ -48,13 +50,11 @@ function suggest(id: string, values: Set<string> | undefined): string[] {
 }
 
 function maskComments(content: string, isLua: boolean): string {
-  const keepLines = (s: string) => s.replace(/[^\n]/g, ' ');
+  const keepLines = (s: string) => s.replace(/[^\r\n]/g, ' ');
   return isLua
     ? content.replace(/--\[(=*)\[[\s\S]*?\]\1\]/g, keepLines).replace(/--[^\r\n]*/g, keepLines)
     : content.replace(/<!--[\s\S]*?-->/g, keepLines);
 }
-
-function lineAt(content: string, index: number): number { return content.slice(0, index).split('\n').length; }
 
 export function lintReferenceLiterals(
   content: string,
@@ -64,43 +64,48 @@ export function lintReferenceLiterals(
   if (!content || (!references.factions?.size && !references.wares?.size && !references.macros?.size && !references.sectors?.size)) return [];
   const isLua = opts.kind === 'lua' || /\.lua$/i.test(opts.filePath || '');
   const masked = maskComments(content, isLua);
+  const locate = createSourcePositionLocator(content);
   const findings: ReferenceLiteralFinding[] = [];
   const seen = new Set<string>();
-  const add = (kind: ReferenceLiteralFinding['kind'], idInput: string, index: number, values: Set<string> | undefined) => {
+  const scan = (kind: ReferenceLiteralFinding['kind'], values: Set<string> | undefined, pattern: RegExp, capture = 1) => {
     if (!values?.size) return;
-    const id = idInput.toLowerCase();
-    const lookup = kind === 'faction' ? [id, `faction.${id}`] : [id];
-    if (lookup.some(v => values.has(v))) return;
-    const key = `${kind}:${id}:${index}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    const suggestions = suggest(id, values);
-    const suffix = suggestions.length ? ` Did you mean ${suggestions.join(', ')}?` : '';
-    findings.push({
-      code: kind === 'faction' ? 'reference.unknown_faction' : kind === 'ware' ? 'reference.unknown_ware' : kind === 'sector' ? 'reference.unknown_sector' : 'reference.unknown_macro',
-      severity: 'warning', kind, id, filePath: opts.filePath, line: lineAt(masked, index), suggestions,
-      message: `${kind} reference "${id}" is not present in the configured canonical X4 corpus.${suffix}`,
-    });
+    for (const match of masked.matchAll(pattern)) {
+      const offset = match.indices?.[capture]?.[0];
+      if (offset === undefined) continue;
+      const id = match[capture].toLowerCase();
+      const lookup = kind === 'faction' ? [id, `faction.${id}`] : [id];
+      if (lookup.some(v => values.has(v))) continue;
+      const key = `${kind}:${id}:${offset}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const suggestions = suggest(id, values);
+      const suffix = suggestions.length ? ` Did you mean ${suggestions.join(', ')}?` : '';
+      findings.push({
+        code: `reference.unknown_${kind}`,
+        severity: 'warning', kind, id, filePath: opts.filePath, ...locate(offset), suggestions,
+        message: `${kind} reference "${id}" is not present in the configured canonical X4 corpus.${suffix}`,
+      });
+    }
   };
 
   // Root keyword expressions, also used in Lua strings sent to MD. A word
   // boundary alone matches the property suffix in $object.ware.name (and even
   // the variable $ware.name); neither is a literal corpus reference.
-  for (const m of masked.matchAll(/(?<![\w$.\]])faction\.([A-Za-z_][\w-]*)\b/g)) add('faction', m[1], m.index || 0, references.factions);
-  for (const m of masked.matchAll(/(?<![\w$.\]])ware\.([A-Za-z_][\w-]*)\b/g)) add('ware', m[1], m.index || 0, references.wares);
-  for (const m of masked.matchAll(/(?<![\w$.\]])macro\.([A-Za-z_][\w-]*)\b/g)) add('macro', m[1], m.index || 0, references.macros);
+  scan('faction', references.factions, /(?<![\w$.\]])faction\.([A-Za-z_][\w-]*)\b/gd);
+  scan('ware', references.wares, /(?<![\w$.\]])ware\.([A-Za-z_][\w-]*)\b/gd);
+  scan('macro', references.macros, /(?<![\w$.\]])macro\.([A-Za-z_][\w-]*)\b/gd);
 
   if (isLua) {
     // Corpus-proven literal APIs. Variable first arguments are intentionally skipped.
-    for (const m of masked.matchAll(/\bGetWareData\s*\(\s*(["'])([^"']+)\1\s*,/g)) add('ware', m[2], m.index || 0, references.wares);
-    for (const m of masked.matchAll(/\bGetFactionData\s*\(\s*(["'])([^"']+)\1\s*,/g)) add('faction', m[2], m.index || 0, references.factions);
-    for (const m of masked.matchAll(/\bGetMacroData\s*\(\s*(["'])([^"']+)\1\s*,/g)) add('macro', m[2], m.index || 0, references.macros);
+    scan('ware', references.wares, /\bGetWareData\s*\(\s*(["'])([^"']+)\1\s*,/gd, 2);
+    scan('faction', references.factions, /\bGetFactionData\s*\(\s*(["'])([^"']+)\1\s*,/gd, 2);
+    scan('macro', references.macros, /\bGetMacroData\s*\(\s*(["'])([^"']+)\1\s*,/gd, 2);
   } else {
     // Schema validation remains primary; these explicit attributes keep checks armed on
     // schema-less installs and for diff payloads whose domain schema is wrapper-only.
-    for (const m of masked.matchAll(/\bware\s*=\s*(["'])([A-Za-z_][\w-]*)\1/g)) add('ware', m[2], m.index || 0, references.wares);
-    for (const m of masked.matchAll(/\bmacro\s*=\s*(["'])([A-Za-z_][\w-]*_macro)\1/g)) add('macro', m[2], m.index || 0, references.macros);
-    for (const m of masked.matchAll(/\bsector\s*=\s*(["'])([A-Za-z_][\w-]*_macro)\1/g)) add('sector', m[2], m.index || 0, references.sectors || references.macros);
+    scan('ware', references.wares, /\bware\s*=\s*(["'])([A-Za-z_][\w-]*)\1/gd, 2);
+    scan('macro', references.macros, /\bmacro\s*=\s*(["'])([A-Za-z_][\w-]*_macro)\1/gd, 2);
+    scan('sector', references.sectors || references.macros, /\bsector\s*=\s*(["'])([A-Za-z_][\w-]*_macro)\1/gd, 2);
 
     // B94 (phantom ids in list literals) was ATTEMPTED here and REVERTED 2026-07-26 — see BACKLOG.
     // The "a list containing a known faction proves a faction position" heuristic FAILED its bar:
@@ -121,6 +126,10 @@ export function runReferenceLiteralLintSelftest() {
   const xml = '<do_if value="faction.argonn.name"/><set_value exact="ware.energcells"/><ware ware="energcells"/><create_ship macro="ship_arg_l_destroyer_01_a_macro"/><find_sector sector="cluster_01_sector002_macro"/>';
   const lua = '-- GetWareData("boguscomment", "name")\nlocal n=GetWareData("waterr", "name")';
   const findings = [...lintReferenceLiterals(xml, refs, { filePath: 'md/test.xml', kind: 'md' }), ...lintReferenceLiterals(lua, refs, { filePath: 'ui/test.lua', kind: 'lua' })];
+  const mixed = '<!-- ware.wrong\r\nware.wrong -->\r<r value="ware.wrong + ware.wrong" ware=\r\n  "wrong" />';
+  const positions = lintReferenceLiterals(mixed, refs).map(finding => `${finding.line}:${finding.column}`);
+  const luaMixed = '--[=[GetWareData("wrong", "name")\r]=]\rlocal n=GetWareData(\r\n  "wrong", "name")';
+  const luaPositions = lintReferenceLiterals(luaMixed, refs, { kind: 'lua' }).map(finding => `${finding.line}:${finding.column}`);
   const checks = [
     { name: 'bad faction warned with suggestion', pass: findings.some(f => f.kind === 'faction' && f.id === 'argonn' && f.suggestions.includes('argon')) },
     { name: 'bad XML ware warned', pass: findings.some(f => f.kind === 'ware' && f.id === 'energcells') },
@@ -129,6 +138,9 @@ export function runReferenceLiteralLintSelftest() {
     { name: 'bad Lua literal ware warned', pass: findings.some(f => f.kind === 'ware' && f.id === 'waterr') },
     { name: 'Lua comment ignored', pass: !findings.some(f => f.id === 'boguscomment') },
     { name: 'known macro clean', pass: !findings.some(f => f.kind === 'macro') },
+    { name: 'same-line and multiline XML IDs use the capture coordinates', pass: positions.join(',') === '3:16,3:29,4:4' },
+    { name: 'Lua multiline API location keeps original lines across block comments', pass: luaPositions.join(',') === '4:4' },
+    { name: 'nested property and variable roots remain outside reference lint', pass: !lintReferenceLiterals('$x.ware.id + $ware.name + $x.{1}.ware.id', refs).length },
   ];
   const passed = checks.filter(c => c.pass).length;
   return { allPassed: passed === checks.length, pass: passed === checks.length, passed, total: checks.length, checks };

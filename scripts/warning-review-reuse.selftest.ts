@@ -15,10 +15,10 @@ const store = new ActionReceiptStore({ root });
 const actor = { kind: 'agent' as const, id: 'key_original', label: 'Original reviewer', scope: 'deploy' as const, deployAuthorized: true };
 const nextActor = { ...actor, id: 'key_next', label: 'Next deployer' };
 const warning: EvidenceDiagnostic = { severity: 'warning', code: 'fixture.warning', filePath: 'md/test.xml', line: 2, message: 'Known warning' };
-const make = (diagnostics: EvidenceDiagnostic[] = [warning], content = '<content id="lab" version="100"/>'): AcceptanceSubject => ({
+const make = (diagnostics: EvidenceDiagnostic[] = [warning], content = '<content id="lab" version="100"/>', receipts = store): AcceptanceSubject => ({
   evidence: buildValidationEvidence({ id: 'lab', name: 'Lab', files: [{ path: 'content.xml', kind: 'content', content }] }, diagnostics),
   artifactHash: 'a'.repeat(64), validatorHash: 'b'.repeat(64), corpusHash: 'c'.repeat(64), targetHash: 'd'.repeat(64),
-  warningReviews: { scopeHash: 'e'.repeat(64), history: store.listVerified(), invocationId: randomUUID() },
+  warningReviews: { scopeHash: 'e'.repeat(64), history: receipts.listVerified(), invocationId: randomUUID() },
 });
 const approve = (s: AcceptanceSubject) => [{ findingId: s.evidence.findings[0].findingId, bindingHash: acceptanceBinding(s).hash, reason: 'Reviewed fixture against reference.' }];
 let checks = 0;
@@ -261,6 +261,39 @@ check('changed rules bytes invalidate even identical warning', () => { const s =
 check('changed coverage invalidates', () => { const s = make(); s.evidence.coverage.gaps.push({ check: 'fixture', reason: 'Unavailable' }); assert.equal(evaluateFindingAcceptances(s, [], actor).counts.acceptedWarnings, 0); });
 check('wrong source scope never reuses', () => { const s = make(); s.warningReviews!.scopeHash = 'f'.repeat(64); assert.equal(evaluateFindingAcceptances(s, [], actor).counts.acceptedWarnings, 0); });
 check('new warning stays new beside known warning', () => { const d = evaluateFindingAcceptances(make([warning, { ...warning, message: 'New warning' }]), [], actor); assert.equal(d.counts.acceptedWarnings, 1); assert.equal(d.counts.unacceptedWarnings, 1); });
+const referenceWarning: EvidenceDiagnostic = {
+  ...warning, code: 'reference.unknown_ware', sourceRef: 'fixture_ware', line: 132, message: 'Unknown fixture ware',
+};
+const referenceOccurrences = [{ ...referenceWarning, column: 41 }, { ...referenceWarning, column: 58 }];
+check('durable reference review reuses only the approved same-line occurrence', () => {
+  const receipts = new ActionReceiptStore({ root: path.join(root, 'reference-occurrences') });
+  const before = make(referenceOccurrences, undefined, receipts);
+  const [first, second] = before.evidence.findings;
+  assert.notEqual(first.findingId, second.findingId);
+  const original = recordFindingAcceptances(receipts, before, approve(before), actor).receipts[0];
+
+  const reopened = new ActionReceiptStore({ root: receipts.root });
+  const replay = make(referenceOccurrences, undefined, reopened);
+  const result = recordFindingAcceptances(reopened, replay, [], nextActor);
+  assert.deepEqual(result.decision.approvals.map(entry => entry.finding.findingId), [first.findingId]);
+  assert.deepEqual(result.decision.unacceptedWarningIds, [second.findingId]);
+  assert.deepEqual(result.decision.warningReviews?.newFindingIds, [second.findingId]);
+  assert.equal(result.receipts.length, 1);
+  assert.equal(result.receipts[0].metadata?.findingId, first.findingId);
+  assert.equal(result.receipts[0].metadata?.originalReceiptId, original.id);
+  verifyFindingAcceptanceReceipts(reopened, result.receipts.map(receipt => receipt.id), replay, [], nextActor);
+});
+check('a legacy reference review cannot transfer to either newly positioned occurrence', () => {
+  const receipts = new ActionReceiptStore({ root: path.join(root, 'legacy-reference-occurrence') });
+  const before = make([referenceWarning], undefined, receipts);
+  recordFindingAcceptances(receipts, before, approve(before), actor);
+  const legacy = evaluateFindingAcceptances(make([referenceWarning], undefined, receipts), [], nextActor);
+  assert.equal(legacy.counts.acceptedWarnings, 1);
+  const positioned = make(referenceOccurrences, undefined, receipts);
+  const decision = evaluateFindingAcceptances(positioned, [], nextActor);
+  assert.equal(decision.counts.acceptedWarnings, 0);
+  assert.deepEqual(decision.unacceptedWarningIds, positioned.evidence.findings.map(finding => finding.findingId));
+});
 check('disappeared warning is resolved, not accepted', () => { const d = evaluateFindingAcceptances(make([]), [], actor); assert.equal(d.warningReviews?.rows[0].state, 'resolved'); assert.equal(d.approvals.length, 0); });
 check('errors never inherit warning reviews', () => { const d = evaluateFindingAcceptances(make([{ ...warning, severity: 'error' }]), [], actor); assert.equal(d.validationAllowsDeploy, false); });
 check('explicit errors do not become reusable', () => { const s = make([{ ...warning, severity: 'error' }]); recordFindingAcceptances(store, s, approve(s), actor); assert.equal(evaluateFindingAcceptances(make([{ ...warning, severity: 'error' }]), [], actor).validationAllowsDeploy, false); });

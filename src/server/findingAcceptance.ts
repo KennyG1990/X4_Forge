@@ -67,7 +67,9 @@ const object = (value: unknown): value is Record<string, unknown> =>
 function refuse(code: string, message: string): never { throw new FindingAcceptanceError(code, message); }
 
 const warningContext = (f: ValidationEvidenceFinding) => hash([f.category, f.severity, f.code || '',
-  (f.filePath || '').replace(/\\/g, '/').toLowerCase(), f.sourceRef || '', f.line ?? null, f.message]);
+  (f.filePath || '').replace(/\\/g, '/').toLowerCase(), f.sourceRef || '', f.line ?? null, f.message,
+  // Positioned reference warnings can repeat on one line. Older contexts had no column.
+  ...(f.code?.startsWith('reference.') && f.line !== undefined && f.column !== undefined ? [f.column] : [])]);
 const reusable = (r: ActionReceipt, scope: string) => r.status === 'committed'
   && r.metadata?.operation === 'accept-finding' && r.metadata.reviewScopeHash === scope
   && r.metadata.findingCategory === 'mod-finding' && r.metadata.findingSeverity === 'warning'

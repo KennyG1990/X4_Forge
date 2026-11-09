@@ -26,6 +26,10 @@ Dev recognizes the four reported X4 globals and isolates standalone root tools f
 
 Dev separates inner and outer chains and distinguishes unresolved subtype receivers from genuine typos. The exact replay stays clean on all reported valid shapes, retains three positioned typo warnings, and deploys the valid bytes with a committed receipt. [Isolated evidence](docs/plans/2026-11-09-ff21-nested-keyed-lookups.md). Installed Studio and public delivery remain open.
 
+### Exact reference literal coordinates `in_progress` (GitHub #66)
+
+Dev maps lowercase reference findings to the actual source tokens and preserves repeated same-line occurrences through Problems and native deploy review. An exact scratch replay proved approval cannot transfer between them. [Isolated evidence](docs/plans/2026-11-09-reference-literal-coordinates.md). Installed and public delivery remain open. The separate uppercase schema producer and historical delta grouping still use their previous anchors.
+
 ### Unsaved expression MCP `in_progress` (GitHub #79, part of #74)
 
 Dev exposes the shared unsaved checker through an exact read/analyze capability and current MCP discovery. The paired policy, HTTP, stdio and native deploy passed in isolation, including the shared #73 and #78 grammar rules. [Dev evidence](docs/plans/2026-11-08-mcp-check-expression.md). Installed verification and public delivery remain open.

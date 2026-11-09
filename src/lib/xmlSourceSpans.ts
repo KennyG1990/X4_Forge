@@ -10,6 +10,25 @@ export interface XmlElementSourceSpan {
   end: number;
 }
 
+/** Map original UTF-16 source offsets to one-based line and column positions. */
+export function createSourcePositionLocator(source: string): (offset: number) => { line: number; column: number } {
+  let starts: number[] | undefined;
+  return offset => {
+    if (!starts) {
+      starts = [0];
+      for (const newline of source.matchAll(/\r\n?|\n/g)) starts.push(newline.index + newline[0].length);
+    }
+    let low = 0;
+    let high = starts.length;
+    while (low + 1 < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (starts[middle] <= offset) low = middle;
+      else high = middle;
+    }
+    return { line: low + 1, column: offset - starts[low] + 1 };
+  };
+}
+
 interface OpenElement extends XmlElementSourceSpan {
   childCounts: Map<string, number>;
 }
@@ -109,11 +128,16 @@ export function xmlElementSemanticPath(element: Element): string {
 export function runXmlSourceSpanSelftest(): { allPassed: boolean; passed: number; total: number; checks: Array<{ name: string; pass: boolean }> } {
   const xml = `<?xml version="1.0"?><mdscript><cues><!-- before --><cue name="A"><actions><set_value name="$a" exact="1" /></actions></cue><cue name="AA"><actions><do_if value="$x"><set_value name="$b" exact="2" /></do_if></actions></cue></cues></mdscript>`;
   const spans = indexXmlElementSpans(xml);
+  const mixed = 'first\r\n🛰️ reference\rlast\n';
+  const locate = createSourcePositionLocator(mixed);
   const checks = [
     { name: 'cue_substring_names_have_distinct_spans', pass: spans.has('mdscript[0]/cues[0]/cue[0]') && spans.has('mdscript[0]/cues[0]/cue[1]') },
     { name: 'self_closing_action_exact', pass: xml.slice(spans.get('mdscript[0]/cues[0]/cue[0]/actions[0]/set_value[0]')!.start, spans.get('mdscript[0]/cues[0]/cue[0]/actions[0]/set_value[0]')!.end) === '<set_value name="$a" exact="1" />' },
     { name: 'nested_action_span_exact', pass: xml.slice(spans.get('mdscript[0]/cues[0]/cue[1]/actions[0]/do_if[0]')!.start, spans.get('mdscript[0]/cues[0]/cue[1]/actions[0]/do_if[0]')!.end).startsWith('<do_if') },
     { name: 'comment_does_not_shift_identity', pass: spans.get('mdscript[0]/cues[0]/cue[0]')!.start === xml.indexOf('<cue name="A">') },
+    { name: 'mixed_endings_and_utf16_positions', pass: JSON.stringify([
+      locate(mixed.indexOf('reference')), locate(mixed.indexOf('last')), locate(mixed.length),
+    ]) === JSON.stringify([{ line: 2, column: 5 }, { line: 3, column: 1 }, { line: 4, column: 1 }]) },
   ];
   return { allPassed: checks.every(check => check.pass), passed: checks.filter(check => check.pass).length, total: checks.length, checks };
 }

@@ -28,6 +28,7 @@
 import { DOMParser } from '@xmldom/xmldom';
 import { parseMdScriptRoot } from './cueLineage';
 import { parseExpressionChains } from './expressionAst';
+import { createSourcePositionLocator } from './xmlSourceSpans';
 
 export interface SPEntry {
   kind: 'keyword' | 'datatype';
@@ -673,18 +674,7 @@ function lintPropertyChains(source: string, masked: string, index: ScriptPropert
 ): ScriptPropertyFinding[] {
   const out: ScriptPropertyFinding[] = [];
   let guardIndex = 0;
-  let lineStarts: number[] | undefined;
-  function locate(offset: number): PropertyPosition {
-    lineStarts ??= [0, ...Array.from(source.matchAll(/\r\n?|\n/g), match => match.index + match[0].length)];
-    let lower = 0;
-    let upper = lineStarts.length;
-    while (lower + 1 < upper) {
-      const middle = Math.floor((lower + upper) / 2);
-      if (lineStarts[middle] <= offset) lower = middle;
-      else upper = middle;
-    }
-    return { line: lower + 1, column: offset - lineStarts[lower] + 1 };
-  }
+  const locate = createSourcePositionLocator(source);
   for (const parsed of parseExpressionChains(masked)) {
     const rootRaw = parsed.root.raw;
     const rootLower = rootRaw.toLowerCase();
