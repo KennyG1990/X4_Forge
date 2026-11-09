@@ -8,7 +8,11 @@
 
 ### Unsaved expression MCP `in_progress` (GitHub #79, part of #74)
 
-Dev exposes the shared unsaved checker through an exact read/analyze capability and current MCP discovery. The paired policy, HTTP, stdio and native deploy passed in isolation. [Dev evidence](docs/plans/2026-11-08-mcp-check-expression.md). TextDB shared rules, installed verification, and public delivery remain open.
+Dev exposes the shared unsaved checker through an exact read/analyze capability and current MCP discovery. The paired policy, HTTP, stdio and native deploy passed in isolation, including the shared #73 and #78 grammar rules. [Dev evidence](docs/plans/2026-11-08-mcp-check-expression.md). Installed verification and public delivery remain open.
+
+### TextDB literal expression syntax `in_progress` (GitHub #78, part of #74)
+
+Dev checks standalone TextDB shorthand in unsaved HTTP, MCP, project validation and both native deploy entry points. [Isolated replay and game handoff](docs/plans/2026-11-09-textdb-expression-literals.md). The standalone engine witness is queued with Claude. Installed verification and public delivery remain open.
 
 ### Mixed null-safe and existence lookup `in_progress` (GitHub #73, part of #74)
 

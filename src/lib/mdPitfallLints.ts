@@ -91,7 +91,7 @@ function expressionLocation(source: string, lines: number[], attr: Attr, offset:
 
 /** Validate expression-valued attributes in script files and their XML diff payloads. */
 export function lintScriptExpressions(xml: string, schema: SchemaIndex | null, filePath?: string): MdPitfallFinding[] {
-  if (!/\belse\b|%|&#/.test(xml) && !(xml.includes('@') && xml.includes('?'))) return [];
+  if (!/\belse\b|[%{]|&#/.test(xml) && !(xml.includes('@') && xml.includes('?'))) return [];
   const source = normalizeLineEndings(xml.replace(/^\uFEFF/, ''));
   let invalid = false;
   let doc;
@@ -388,6 +388,18 @@ export function runMdPitfallSelftest(): {
   ok('mixed access alone triggers script scanning',
     lintScriptExpressions('<aiscript><do_if value="not @$ship.pilot.seed?"/></aiscript>', null).length === 1
     && lintScriptExpressions('<aiscript><do_if value="not @$ship.pilot or $ship.pilot.seed?"/></aiscript>', null).length === 0);
+  const referenceLine = '    <debug_text text="&#123;$page,$id&#125;" comment="{$decoy,$id}"/>';
+  const referenceFindings = lintScriptExpressions([
+    '<mdscript>', '  <!-- <debug_text text="{$decoy,$id}"/> -->', referenceLine, '</mdscript>',
+  ].join('\r\n'), null, 'md/textref.xml');
+  ok('TextDB shorthand reports raw entity coordinates without a schema index',
+    referenceFindings.length === 1 && referenceFindings[0].code === 'expression-text-reference'
+      && referenceFindings[0].severity === 'error' && referenceFindings[0].line === 3
+      && referenceFindings[0].column === referenceLine.indexOf('&#123;') + 1
+      && referenceFindings[0].sourceRef === 'debug_text/@text', referenceFindings);
+  ok('literal TextDB shorthand is checked in AIScript with no other fast filter triggers',
+    lintScriptExpressions('<aiscript><set_value exact="{$page,$id}"/></aiscript>', null).length === 1
+    && lintScriptExpressions('<aiscript><set_value exact="readtext.{$page}.{$id}"/></aiscript>', null).length === 0);
   const cancelFindingCode = 'md_pitfall.cancel_conversation_actor_or_template';
   const cancelFindings = (xml: string) => lint(xml).filter(f => f.code === cancelFindingCode);
 

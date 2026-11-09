@@ -66,6 +66,7 @@ export function expressionChainAt(text: string, offset: number): ExpressionChain
 const MD_EXPRESSION_TOKEN = /'(?:\\[\s\S]|[^'\\])*'|"(?:\\[\s\S]|[^"\\])*"|(?:[$\p{L}_]|\.(?=[$\p{L}_]))(?:\.\$|[\p{L}\p{N}_.])*|[^\s]/gu;
 const MD_GROUP_CLOSERS = new Map([['(', ')'], ['[', ']'], ['{', '}']]);
 const MD_ACCESS_TOKEN = /^\$?[\p{L}_][\p{L}\p{N}_]*(?:\.\$?[\p{L}_][\p{L}\p{N}_]*)*\.?$/u;
+const MD_TEXT_REFERENCE_FIELDS = /^\s*\d+\s*,\s*\d+\s*(?:,\s*#'(?:\\[\s\S]|[^'\\])*'\s*)?$/;
 
 export const MD_UNMATCHED_ELSE = {
   code: 'md.unmatched_else',
@@ -74,7 +75,7 @@ export const MD_UNMATCHED_ELSE = {
 
 export interface MdExpressionFinding {
   code: typeof MD_UNMATCHED_ELSE.code | 'expression-format-specifier' | 'format-arguments-missing'
-    | 'expression-null-safe-exists';
+    | 'expression-null-safe-exists' | 'expression-text-reference';
   severity: 'error' | 'warning';
   offset: number;
   segment: string;
@@ -215,12 +216,48 @@ function lintMixedAccess(expression: string, findings: MdExpressionFinding[]): v
   }
 }
 
+/** A standalone brace operand is a TextDB reference unless it is a computed table key. */
+function lintTextReferences(expression: string, findings: MdExpressionFinding[]): void {
+  if (!expression.includes('{') || !expression.includes('}')) return;
+  const frames: { closer: string; table: boolean; possibleTableKey: boolean; referenceStart?: number }[] = [];
+  const assignment = /\s*=(?!=)/y;
+  let previous = '';
+  for (const match of expression.matchAll(MD_EXPRESSION_TOKEN)) {
+    const token = match[0];
+    const closer = MD_GROUP_CLOSERS.get(token);
+    if (token === "'" || token === '"') return;
+    if (closer) {
+      frames.push({
+        closer,
+        table: token === '[' && previous === 'table',
+        possibleTableKey: token === '{' && (previous === '[' || previous === ',') && frames.at(-1)?.table === true,
+        referenceStart: token === '{' && !previous.endsWith('.') ? match.index : undefined,
+      });
+    } else if (token === ')' || token === ']' || token === '}') {
+      const frame = frames.pop();
+      if (frame?.closer !== token) return;
+      if (frame.referenceStart !== undefined) {
+        assignment.lastIndex = match.index + 1;
+        const tableKey = frame.possibleTableKey && assignment.test(expression);
+        if (!tableKey && !MD_TEXT_REFERENCE_FIELDS.test(expression.slice(frame.referenceStart + 1, match.index))) {
+          findings.push({
+            code: 'expression-text-reference', severity: 'error', offset: frame.referenceStart, segment: '{',
+            message: 'TextDB shorthand takes literal page and entry IDs in {page,id} and an optional literal fallback. Use readtext.{$page}.{$id} for computed IDs.',
+          });
+        }
+      }
+    }
+    previous = token;
+  }
+}
+
 export function lintMdExpressionRules(expression: string): MdExpressionFinding[] {
   const findings: MdExpressionFinding[] = [];
   const offset = findUnmatchedMdElse(expression);
   if (offset !== undefined) findings.push({ ...MD_UNMATCHED_ELSE, severity: 'error', offset, segment: 'else' });
   lintLiteralFormats(expression, findings);
   lintMixedAccess(expression, findings);
+  lintTextReferences(expression, findings);
   return findings.sort((a, b) => a.offset - b.offset);
 }
 
@@ -332,6 +369,19 @@ export function runExpressionAstSelftest() {
     '(@$obj.prop) or ($other?)', '@$obj.prop + $other?', '@$lookup.{($index?)}.name',
     '$lookup.{$index?} or @$other', "'@ignored?'", "@$items.{'@ignored?'}",
     "@$value + '@ignored?", '@($value?)', '(@$value)?', '@$foo..bar?',
+  ].every(expression => lintMdExpressionRules(expression).length === 0));
+  ok('complete TextDB shorthand requires literal IDs and supported fields', [
+    ['{$page,$id}', 0], ['{1000 + 1,2}', 0], ['{1001}', 0], ['{1001,1,2}', 0], ["{1001,1,#'x',3}", 0],
+    ['table[{$key} = {1,$id}]', 15], ['table[{$key} == 1]', 6], ['$ship.{[1, {1,$id}]}', 11],
+  ].every(([expression, offset]) => {
+    const findings = lintMdExpressionRules(String(expression));
+    return findings.length === 1 && findings[0].code === 'expression-text-reference'
+      && findings[0].severity === 'error' && findings[0].offset === offset && findings[0].segment === '{';
+  }));
+  ok('literal fallbacks, selectors, table keys and quoted braces stay clean', [
+    '{1001, 1}', "({1001,1,#'fallback, with {prose} and \\'quoted\\''})", 'readtext.{$page}.{$id}',
+    'readtext.{$page}.{$id}.test.{$fallback}', '$ship.distanceto.{[$sector,$position]}',
+    'table[{ware.energycells} = {1001,2}, {$index} = \'entry\']', "'literal {example,item}'", '{1001,',
   ].every(expression => lintMdExpressionRules(expression).length === 0));
   const nested = collectMdStringResults("if ($x.then == 'if then else') then (if $next then 'one') else 'two'");
   ok('inline_if_retains_known_results_and_implicit_null', nested.values.join(',') === 'one,two' && nested.unresolved);
