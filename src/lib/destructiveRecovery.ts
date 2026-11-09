@@ -59,6 +59,7 @@ export interface DeploymentRecoveryRecord extends RecoveryBase {
   beforeBytes: number;
   writeAdmission?: { phase: 'pending-v1' | 'started-v1'; pid: number; host: string };
   stagedEvidence?: { preparedReceiptHash: string; fingerprint: string; hash: string };
+  postcheckEvidence?: { checkedAt: string; hash: string };
 }
 
 export type DestructiveRecoveryRecord = WorkspaceRecoveryRecord | DeploymentRecoveryRecord;
@@ -154,11 +155,13 @@ function validId(id: string): boolean {
 const DEPLOY_HASH = /^[a-f0-9]{64}$/;
 const stagedEvidenceHash = (preparedReceiptHash: string, fingerprint: string) => crypto.createHash('sha256')
   .update(JSON.stringify(['forge-deploy-staged-v1', preparedReceiptHash, fingerprint])).digest('hex');
+const postcheckEvidenceHash = (id: string, stagedHash: string, checkedAt: string) => crypto.createHash('sha256')
+  .update(JSON.stringify(['forge-deploy-postchecks-v1', id, stagedHash, checkedAt])).digest('hex');
 
 function isRecord(value: unknown): value is DestructiveRecoveryRecord {
   if (!value || typeof value !== 'object') return false;
   const row = value as Partial<DestructiveRecoveryRecord>;
-  if (row.schema !== RECOVERY_SCHEMA || !validId(String(row.id || ''))) return false;
+  if (row.schema !== RECOVERY_SCHEMA || typeof row.id !== 'string' || !validId(row.id)) return false;
   if (!['workspace', 'deploy'].includes(String(row.kind)) || !['preparing', 'ready', 'used'].includes(String(row.status))) return false;
   if (!row.createdAt || !row.expiresAt || !row.expectedCurrentHash || !row.summary) return false;
   if (row.kind === 'workspace') return row.beforeWorkspace !== undefined && typeof row.beforeHash === 'string' &&
@@ -174,7 +177,11 @@ function isRecord(value: unknown): value is DestructiveRecoveryRecord {
     && (row.stagedEvidence === undefined || (row.stagedEvidence !== null && row.writeAdmission?.phase === 'started-v1'
       && typeof row.stagedEvidence.preparedReceiptHash === 'string' && DEPLOY_HASH.test(row.stagedEvidence.preparedReceiptHash)
       && typeof row.stagedEvidence.fingerprint === 'string' && DEPLOY_HASH.test(row.stagedEvidence.fingerprint)
-      && row.stagedEvidence.hash === stagedEvidenceHash(row.stagedEvidence.preparedReceiptHash, row.stagedEvidence.fingerprint)));
+      && row.stagedEvidence.hash === stagedEvidenceHash(row.stagedEvidence.preparedReceiptHash, row.stagedEvidence.fingerprint)))
+    && (row.postcheckEvidence === undefined || (row.postcheckEvidence !== null && row.status !== 'preparing'
+      && !!row.stagedEvidence && row.expectedCurrentHash === row.stagedEvidence.fingerprint
+      && typeof row.postcheckEvidence.checkedAt === 'string' && Number.isFinite(Date.parse(row.postcheckEvidence.checkedAt))
+      && row.postcheckEvidence.hash === postcheckEvidenceHash(row.id, row.stagedEvidence.hash, row.postcheckEvidence.checkedAt)));
 }
 
 function directoryBytes(root: string): number {
@@ -424,13 +431,26 @@ export class DestructiveRecoveryStore {
     });
   }
 
-  recordStagedDeployment(admitted: DeploymentRecoveryRecord, preparedReceiptHash: string, fingerprint: string): void {
+  recordStagedDeployment(admitted: DeploymentRecoveryRecord, preparedReceiptHash: string, fingerprint: string): DeploymentRecoveryRecord {
     if (admitted.writeAdmission?.phase !== 'started-v1' || admitted.stagedEvidence
       || !DEPLOY_HASH.test(preparedReceiptHash) || !DEPLOY_HASH.test(fingerprint)) {
       throw new Error('Invalid staged deployment evidence.');
     }
     const stagedEvidence = { preparedReceiptHash, fingerprint, hash: stagedEvidenceHash(preparedReceiptHash, fingerprint) };
-    this.advanceDeploymentPreparation(admitted, { ...admitted, stagedEvidence });
+    return this.advanceDeploymentPreparation(admitted, { ...admitted, stagedEvidence });
+  }
+
+  finalizeVerifiedDeployment(staged: DeploymentRecoveryRecord, fingerprint: string): DeploymentRecoveryRecord {
+    if (!staged.stagedEvidence || staged.stagedEvidence.fingerprint !== fingerprint || staged.postcheckEvidence) {
+      throw new Error('Verified deployment does not match its staged evidence.');
+    }
+    const checkedAt = new Date(this.now()).toISOString();
+    return this.advanceDeploymentPreparation(staged, {
+      ...staged,
+      status: 'ready',
+      expectedCurrentHash: fingerprint,
+      postcheckEvidence: { checkedAt, hash: postcheckEvidenceHash(staged.id, staged.stagedEvidence.hash, checkedAt) },
+    });
   }
 
   finalizeDeployment(id: string, expectedCurrentHash: string): DeploymentRecoveryRecord {

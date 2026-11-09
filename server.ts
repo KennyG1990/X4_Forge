@@ -136,7 +136,7 @@ import { ActionReceiptStore, ActionReceiptStoreError } from "./src/lib/actionRec
 import { evaluateFindingAcceptances, projectFindingReview, recordFindingAcceptances, verifyFindingAcceptanceReceipts, revokeWarningReview, type AcceptanceSubject, type AcceptancePrincipal } from './src/server/findingAcceptance';
 import { parseModFolderImportRequest } from './src/server/modFolderImportRequest';
 import { RuntimeControl } from './src/server/runtimeControl';
-import { trustHash, deploymentImplementationHash, deploymentCorpusFiles, deploymentBuildIdentity, findUnchangedDeploymentVersion, prepareDeployRecord, commitDeployRecord, deployReceiptIdentity, readDeployOperationReceipt, recordIncompleteDeployOutput, deployOperationStatus, compareDeployPreviewTarget } from './src/server/deploymentTrust';
+import { trustHash, deploymentImplementationHash, deploymentCorpusFiles, deploymentBuildIdentity, findUnchangedDeploymentVersion, prepareDeployRecord, commitDeployRecord, deployReceiptIdentity, readDeployOperationReceipt, recordIncompleteDeployOutput, readDeployOperationStatus, compareDeployPreviewTarget } from './src/server/deploymentTrust';
 import { actionReceiptIdForOperation, type ActionReceipt } from './src/lib/actionReceipt';
 import { attachActionReceiptToLedgerRow } from "./src/lib/actionReceiptHistory";
 import { combineReceiptResourceBeforeHashes, hashBoundedReceiptFacts } from "./src/lib/actionReceiptRuntime";
@@ -5594,12 +5594,12 @@ app.get("/api/agent/status", (req, res) => {
         const principal = deploymentPrincipal(req);
         if (principal.kind !== 'agent') return res.status(403).json({ ok: false, code: 'DEPLOY_APPROVAL_FORBIDDEN' });
         const identity = deployReceiptIdentity(principal, { workspaceId: record.workspaceId, operationId });
-        const receipt = readDeployOperationReceipt(actionReceiptStore, identity);
-        if (!receipt) return res.status(404).json({
+        const status = readDeployOperationStatus(actionReceiptStore, destructiveRecoveryStore, identity);
+        if (!status) return res.status(404).json({
           ok: false, code: 'DEPLOY_OPERATION_NOT_FOUND', outcome: 'unknown',
         });
         return res.json({
-          ok: true, workspaceId: record.workspaceId, ...deployOperationStatus(receipt, destructiveRecoveryStore), receipt,
+          ok: true, workspaceId: record.workspaceId, ...status,
         });
       } catch (error: any) {
         const forbidden = error?.code === 'DEPLOY_APPROVAL_FORBIDDEN';
@@ -14860,10 +14860,9 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       if (body.inspectDeployOperationId !== undefined) {
         const operationId = body.inspectDeployOperationId;
         const identity = deployReceiptIdentity(principal, { workspaceId: requestWorkspace(req).workspaceId, operationId });
-        let prior: ReturnType<typeof deployOperationStatus> | undefined;
+        let prior: NonNullable<ReturnType<typeof readDeployOperationStatus>> | undefined;
         try {
-          const receipt = readDeployOperationReceipt(actionReceiptStore, identity);
-          if (receipt) prior = deployOperationStatus(receipt, destructiveRecoveryStore);
+          prior = readDeployOperationStatus(actionReceiptStore, destructiveRecoveryStore, identity) ?? undefined;
         } catch { /* Comparison is optional and an unverifiable record supplies no evidence. */ }
         previousOperation = { operationId, ...compareDeployPreviewTarget(prior, decision.binding.targetHash, targetFingerprint) };
       }
@@ -14939,6 +14938,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       stagingPath = compileWorkspaceToFolder(ws, stagingRoot, 'store', true, 'loose', { beforeActivate: assertWriteAuthority }, frozenPlan);
     }
     let stagedFingerprint: string | undefined;
+    let stagedRecovery: DeploymentRecoveryRecord | undefined;
     const deployedPath = compileWorkspaceToFolder(ws, extensionsPath, 'store', false, deployFormat, {
       beforeActivate: () => {
         assertWriteAuthority();
@@ -14950,7 +14950,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
         }
       },
       onStagedFingerprint: fingerprint => {
-        if (admittedRecovery) destructiveRecoveryStore.recordStagedDeployment(admittedRecovery, preparedReceiptHash, fingerprint);
+        if (admittedRecovery) stagedRecovery = destructiveRecoveryStore.recordStagedDeployment(admittedRecovery, preparedReceiptHash, fingerprint);
         stagedFingerprint = fingerprint;
       },
       expectedTargetBeforeWrite: targetFingerprint,
@@ -15049,7 +15049,10 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     if (pendingDeployRecovery) {
       if (ok) {
         try {
-          deploymentRecovery = destructiveRecoveryStore.finalizeDeployment(pendingDeployRecovery.id, deployedFingerprint);
+          if (operation && !stagedRecovery) throw new Error('Verified deploy is missing its staged recovery evidence.');
+          deploymentRecovery = stagedRecovery
+            ? destructiveRecoveryStore.finalizeVerifiedDeployment(stagedRecovery, deployedFingerprint)
+            : destructiveRecoveryStore.finalizeDeployment(pendingDeployRecovery.id, deployedFingerprint);
           // Audit storage is a required gate, not the best-effort history projection.
           deployReceipt = commitDeployRecord(actionReceiptStore, deployReceipt, deployedFingerprint);
         } catch (error) {

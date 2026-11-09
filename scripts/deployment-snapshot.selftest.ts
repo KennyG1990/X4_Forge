@@ -10,7 +10,7 @@ import { ActionReceiptStore } from '../src/lib/actionReceiptStore';
 import { redactReceiptMetadata } from '../src/lib/actionReceipt';
 import { DestructiveRecoveryStore } from '../src/lib/destructiveRecovery';
 import { evaluateFindingAcceptances } from '../src/server/findingAcceptance';
-import { prepareDeployRecord, commitDeployRecord, deployOperationStatus, deployReceiptIdentity, compareDeployPreviewTarget, deploymentBuildIdentity, findUnchangedDeploymentVersion } from '../src/server/deploymentTrust';
+import { prepareDeployRecord, commitDeployRecord, deployOperationStatus, deployReceiptIdentity, readDeployOperationStatus, compareDeployPreviewTarget, deploymentBuildIdentity, findUnchangedDeploymentVersion } from '../src/server/deploymentTrust';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-snapshot-test-'));
 let assertions = 0;
@@ -97,7 +97,7 @@ try {
     && readAdmission.record.writeAdmission?.phase === 'started-v1' && !fs.existsSync(targetRoot));
   check('admitted prepared receipt has unknown write outcome', deployOperationStatus(tracked, recovery).outcome === 'unknown');
   assert.throws(() => recovery.recordStagedDeployment(before, tracked.hash, 'e'.repeat(64)), /Invalid staged/); assertions++;
-  recovery.recordStagedDeployment(admitted, tracked.hash, 'e'.repeat(64));
+  const stagedRecord = recovery.recordStagedDeployment(admitted, tracked.hash, 'e'.repeat(64));
   const staged = recovery.read(before.id);
   check('staged fingerprint and receipt hash persist before target activation', staged.ok && staged.record.kind === 'deploy'
     && staged.record.stagedEvidence?.preparedReceiptHash === tracked.hash
@@ -111,9 +111,33 @@ try {
   check('changed staged fingerprint invalidates the record', !recovery.read(before.id).ok
     && !('reconciliation' in deployOperationStatus(tracked, recovery)));
   assert.throws(() => recovery.admitDeploymentWrite(before), /no longer matches/); assertions++;
+  fs.writeFileSync(recoveryFile, JSON.stringify(stagedRecord));
+  assert.throws(() => recovery.finalizeVerifiedDeployment(stagedRecord, 'f'.repeat(64)), /does not match its staged evidence/); assertions++;
+  const verified = recovery.finalizeVerifiedDeployment(stagedRecord, 'e'.repeat(64));
+  const reopenedRecovery = recovery.read(before.id);
+  check('verified finalization reopens the exact ready recovery with bound postchecks',
+    reopenedRecovery.ok && reopenedRecovery.record.kind === 'deploy' && reopenedRecovery.record.status === 'ready'
+    && reopenedRecovery.record.expectedCurrentHash === 'e'.repeat(64) && !!verified.postcheckEvidence
+    && reopenedRecovery.record.postcheckEvidence?.hash === verified.postcheckEvidence.hash);
+  check('live owner does not project historical postchecks', !('postchecks' in deployOperationStatus(tracked, recovery)));
+  assert.throws(() => recovery.finalizeVerifiedDeployment(stagedRecord, 'e'.repeat(64)), /no longer matches/); assertions++;
+  fs.writeFileSync(recoveryFile, JSON.stringify({ ...verified,
+    postcheckEvidence: { ...verified.postcheckEvidence, checkedAt: '2000-01-01T00:00:00.000Z' } }));
+  check('changed postcheck timestamp invalidates the recovery', !recovery.read(before.id).ok);
   recovery.abandon(before.id);
   assert.throws(() => recovery.admitDeploymentWrite(before), /no longer matches/); assertions++;
   check('missing recovery keeps prepared outcome unknown', deployOperationStatus(tracked, recovery).outcome === 'unknown');
+  const trackedCommit = commitDeployRecord(store, tracked, 'e'.repeat(64));
+  const tryRead = store.tryRead.bind(store);
+  let statusReads = 0;
+  store.tryRead = id => ++statusReads === 1 ? { ok: true, receipt: tracked } : tryRead(id);
+  try {
+    const status = readDeployOperationStatus(store, recovery, operation);
+    check('status prefers the exact terminal receipt over its initial prepared read',
+      statusReads === 2 && status?.outcome === 'committed' && status.receipt.hash === trackedCommit.hash);
+  } finally {
+    store.tryRead = tryRead;
+  }
   const previewEvidence = { outcome: 'unknown' as const, reconciliation: {
     targetBindingHash: subject.targetHash, beforeTargetFingerprint: 'absent', stagedTargetFingerprint: 'e'.repeat(64),
   } };
@@ -122,6 +146,11 @@ try {
   check('fresh preview matches the staged target without promoting the history',
     compare('e'.repeat(64)).targetState === 'matches-staged' && compare('e'.repeat(64)).historicalOutcome === 'unknown');
   check('fresh preview sees unrelated target bytes', compare('f'.repeat(64)).targetState === 'matches-neither');
+  const verifiedHistory = { ...previewEvidence, postchecks: { status: 'passed' as const, checkedAt: '2000-01-01T00:00:00.000Z' } };
+  const changedTarget = compareDeployPreviewTarget(verifiedHistory, subject.targetHash, 'f'.repeat(64));
+  check('later bytes leave historical postchecks separate from current target and commit outcome',
+    changedTarget.historicalOutcome === 'unknown' && changedTarget.targetState === 'matches-neither'
+    && changedTarget.historicalPostchecks?.checkedAt === verifiedHistory.postchecks.checkedAt);
   check('binding mismatch precedes fingerprint equality', compare('absent', 'f'.repeat(64)).targetState === 'binding-mismatch');
   const identical = { ...previewEvidence, reconciliation: { ...previewEvidence.reconciliation, beforeTargetFingerprint: 'e'.repeat(64) } };
   check('fresh preview distinguishes identical prior and staged targets',

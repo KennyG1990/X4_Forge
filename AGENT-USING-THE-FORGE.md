@@ -162,12 +162,18 @@ record. A missing receipt or an unproven write phase leaves the outcome `unknown
 Reusing a recorded operation ID refuses a second apply and returns the existing receipt
 pointer. Start a fresh preview before deciding on a new operation.
 
+If the retired backend recorded successful installed-byte, manifest and Doctor checks
+before publishing the commit, status also returns `postchecks.status: "passed"` and
+`postchecks.checkedAt`. This is historical evidence for the prepared operation. A
+canonical committed receipt establishes its commit outcome.
+
 An interrupted operation can include `reconciliation` with the saved
 `targetBindingHash`, `beforeTargetFingerprint`, and `stagedTargetFingerprint`.
 For a single-call comparison, run a fresh native preview of the same mod and
 format with `dryRun: true` and `inspectDeployOperationId` set to the earlier ID.
 On a successful preview, `previousOperation` reports `historicalOutcome` and
-the observed `targetState`.
+the observed `targetState`. It includes `historicalPostchecks` when that historical
+evidence is available.
 The states are `matches-before`, `matches-staged`, `matches-both`, and
 `matches-neither`. A different target or format returns `binding-mismatch`.
 Missing or unverified evidence gives `unavailable`. A match describes the files

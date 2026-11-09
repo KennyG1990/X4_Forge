@@ -246,37 +246,55 @@ export function deployOperationStatus(receipt: ActionReceipt, recovery: Destruct
   if (!recoveryId || !String(receipt.metadata?.stage).startsWith('deploy-prewrite-v1:')) return unknown;
   const initial = recovery.read(recoveryId);
   if (!initial.ok || initial.record.kind !== 'deploy' || initial.record.id !== recoveryId
-    || initial.record.status !== 'preparing' || initial.record.writeAdmission?.host !== os.hostname()
+    || initial.record.writeAdmission?.host !== os.hostname()
     || processLiveness(initial.record.writeAdmission.pid) !== 'dead') return unknown;
-  // Read again after observing owner exit. The owner could have admitted the write
-  // between our first read and its exit.
+  // The owner may have advanced recovery between our first read and its exit.
   const retired = recovery.read(recoveryId);
-  if (!retired.ok || retired.record.kind !== 'deploy' || retired.record.status !== 'preparing') return unknown;
-  const { writeAdmission, stagedEvidence, ...preState } = retired.record;
+  if (!retired.ok || retired.record.kind !== 'deploy' || retired.record.id !== recoveryId) return unknown;
+  const { writeAdmission, stagedEvidence, postcheckEvidence, ...observed } = retired.record;
+  const passed = observed.status === 'ready' ? postcheckEvidence : undefined;
+  if (!passed && observed.status !== 'preparing') return unknown;
+  const preState = passed ? { ...observed, status: 'preparing' as const, expectedCurrentHash: 'pending' } : observed;
   if (!writeAdmission || writeAdmission.pid !== initial.record.writeAdmission.pid || writeAdmission.host !== initial.record.writeAdmission.host
     || prewriteStage({ ...preState, writeAdmission: { ...writeAdmission, phase: 'pending-v1' } }) !== receipt.metadata?.stage) return unknown;
   if (writeAdmission.phase === 'pending-v1') return { outcome: 'not-applied' as const };
   const targetBindingHash = receipt.metadata?.targetHash;
   if (stagedEvidence?.preparedReceiptHash !== receipt.hash || typeof targetBindingHash !== 'string') return unknown;
   return { ...unknown, reconciliation: { targetBindingHash, beforeTargetFingerprint: preState.beforeFingerprint,
-    stagedTargetFingerprint: stagedEvidence.fingerprint } };
+    stagedTargetFingerprint: stagedEvidence.fingerprint },
+    ...(passed ? { postchecks: { status: 'passed' as const, checkedAt: passed.checkedAt } } : {}) };
+}
+
+export function readDeployOperationStatus(store: ActionReceiptStore, recovery: DestructiveRecoveryStore, identity: ActionReceiptOperationIdentity) {
+  const receipt = readDeployOperationReceipt(store, identity);
+  if (!receipt) return null;
+  const status = deployOperationStatus(receipt, recovery);
+  if (receipt.status !== 'prepared') return { ...status, receipt };
+  // Prefer a terminal receipt published before the owner retired.
+  const current = readDeployOperationReceipt(store, identity);
+  if (!current) return null;
+  return { ...(current.hash === receipt.hash ? status : deployOperationStatus(current, recovery)), receipt: current };
 }
 
 export function compareDeployPreviewTarget(
   prior: ReturnType<typeof deployOperationStatus> | undefined, targetBindingHash: string, fingerprint: string,
 ) {
   const historicalOutcome = prior?.outcome ?? 'unknown';
+  const historical = {
+    historicalOutcome,
+    ...(prior && 'postchecks' in prior && prior.postchecks ? { historicalPostchecks: prior.postchecks } : {}),
+  };
   if (!prior || !('reconciliation' in prior) || !prior.reconciliation) {
-    return { historicalOutcome, targetState: 'unavailable' };
+    return { ...historical, targetState: 'unavailable' };
   }
   const evidence = prior.reconciliation;
-  if (evidence.targetBindingHash !== targetBindingHash) return { historicalOutcome, targetState: 'binding-mismatch' };
+  if (evidence.targetBindingHash !== targetBindingHash) return { ...historical, targetState: 'binding-mismatch' };
   const matchesBefore = fingerprint === evidence.beforeTargetFingerprint;
   const matchesStaged = fingerprint === evidence.stagedTargetFingerprint;
   const targetState = matchesBefore
     ? (matchesStaged ? 'matches-both' : 'matches-before')
     : (matchesStaged ? 'matches-staged' : 'matches-neither');
-  return { historicalOutcome, targetState };
+  return { ...historical, targetState };
 }
 
 export function prepareDeployRecord(
