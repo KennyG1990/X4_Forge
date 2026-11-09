@@ -13106,6 +13106,71 @@ function runCompileArtifactSelftest() {
     record('patch-only workspace emits no synthetic MD file', !Object.keys(patchManifest).some(file => file.startsWith('md/')), Object.keys(patchManifest).join(', '));
     record('patch-only workspace still emits its library diff', typeof patchManifest['libraries/wares.xml'] === 'string' && patchManifest['libraries/wares.xml'].includes('<diff>'));
 
+    const textSource = path.join(root, 'text_filename_fidelity');
+    fs.mkdirSync(path.join(textSource, 't'), { recursive: true });
+    fs.writeFileSync(path.join(textSource, 'content.xml'), '<content id="text_filename_fidelity" name="Text Filename Fidelity" version="100"/>');
+    const textOriginals = [
+      { fileName: '0002-L044.xml', pageId: '78394' },
+      { fileName: '0003-l44.xml', pageId: '78395' },
+      { fileName: '0004-L00044.xml', pageId: '78396' },
+      { fileName: 'custom-texts.xml', pageId: '78397' },
+    ].map(file => ({ ...file, path: `t/${file.fileName}`,
+      content: `<?xml version="1.0" encoding="utf-8"?>\r\n<!-- original ${file.fileName}: café 雪 -->\r\n<language id="44"><page id="${file.pageId}" title="Filename Fidelity"><t id="1">Original &amp; café 雪</t></page></language>\r\n`,
+    }));
+    for (const file of textOriginals) fs.writeFileSync(path.join(textSource, file.path), file.content);
+    const textImported = importModFolder(textSource);
+    const expectedTextPaths = textOriginals.map(file => file.path).sort();
+    const textPaths = (files: CompiledFileManifest) => Object.keys(files).filter(file => file.startsWith('t/')).sort();
+    record('translation import retains explicit model and original-file paths',
+      textImported.workspace.tFiles?.length === textOriginals.length && textOriginals.every(file =>
+        textImported.workspace.tFiles?.some(model => model.fileName === file.fileName)
+        && textImported.workspace.originalFiles?.some(original => original.kind === 'tfile' && original.path === file.path && original.content === file.content)));
+    const textNoEdit = buildWorkspaceFileManifest(textImported.workspace);
+    record('translation no-edit manifest retains only the exact authored paths',
+      JSON.stringify(textPaths(textNoEdit.files)) === JSON.stringify(expectedTextPaths), textPaths(textNoEdit.files).join(', '));
+    record('translation no-edit manifest retains comments entities Unicode and CRLF bytes',
+      textOriginals.every(file => textNoEdit.files[file.path] === file.content));
+    const textNoEditPlan = buildArtifactPlan({ sourceRoot: textSource, generatedFiles: textNoEdit.generatedFiles,
+      passthroughFiles: buildArtifactPassthroughFiles(textImported.workspace, textNoEdit.passthroughFiles) });
+    const textNoEditOutput = path.join(root, 'text-no-edit-output');
+    const textNoEditBuild = materializeArtifact(textNoEditPlan, textNoEditOutput);
+    record('translation no-edit artifact materializes the exact authored file set and bytes',
+      textNoEditBuild.ok && JSON.stringify(fs.readdirSync(path.join(textNoEditOutput, 't')).map(file => `t/${file}`).sort()) === JSON.stringify(expectedTextPaths)
+        && textOriginals.every(file => fs.readFileSync(path.join(textNoEditOutput, file.path), 'utf8') === file.content),
+      textNoEditBuild.errors.join('; '));
+    const editedTextPath = textOriginals[0].path;
+    const textEditedWorkspace = sanitizeWorkspace({ ...textImported.workspace,
+      tFiles: (textImported.workspace.tFiles || []).map(file => file.fileName === textOriginals[0].fileName
+        ? { ...file, pages: file.pages.map(page => ({ ...page, items: page.items.map(item => item.id === '1'
+          ? { ...item, value: 'FORGE_TEXT_FILENAME_94_EDITED & café' } : item) })) } : file),
+    });
+    const textEdited = buildWorkspaceFileManifest(textEditedWorkspace);
+    record('translation model edit retains only the exact authored paths',
+      JSON.stringify(textPaths(textEdited.files)) === JSON.stringify(expectedTextPaths), textPaths(textEdited.files).join(', '));
+    record('translation model edit replaces original bytes while untouched files stay exact',
+      typeof textEdited.files[editedTextPath] === 'string' && textEdited.files[editedTextPath].includes('FORGE_TEXT_FILENAME_94_EDITED &amp; café')
+        && !textEdited.files[editedTextPath].includes('Original &amp; café 雪')
+        && textOriginals.slice(1).every(file => textEdited.files[file.path] === file.content));
+    const textEditedPlan = buildArtifactPlan({ sourceRoot: textSource, generatedFiles: textEdited.generatedFiles,
+      passthroughFiles: buildArtifactPassthroughFiles(textEditedWorkspace, textEdited.passthroughFiles) });
+    const textEditedOutput = path.join(root, 'text-edited-output');
+    const textEditedBuild = materializeArtifact(textEditedPlan, textEditedOutput);
+    record('translation edited artifact keeps its authored path and value without stale siblings',
+      textEditedBuild.ok && JSON.stringify(fs.readdirSync(path.join(textEditedOutput, 't')).map(file => `t/${file}`).sort()) === JSON.stringify(expectedTextPaths)
+        && fs.readFileSync(path.join(textEditedOutput, editedTextPath), 'utf8') === textEdited.files[editedTextPath]
+        && textOriginals.slice(1).every(file => fs.readFileSync(path.join(textEditedOutput, file.path), 'utf8') === file.content),
+      textEditedBuild.errors.join('; '));
+    record('translation artifact builds leave imported source bytes unchanged',
+      textOriginals.every(file => fs.readFileSync(path.join(textSource, file.path), 'utf8') === file.content));
+    const textCasePairOwner = textImported.workspace.tFiles?.find(file => file.fileName === textOriginals[0].fileName);
+    const textCasePairWorkspace = sanitizeWorkspace({ ...textImported.workspace, sourceFolder: undefined, originalFiles: [],
+      tFiles: textCasePairOwner ? [textCasePairOwner, { ...textCasePairOwner, fileName: '0002-l044.xml' }] : [],
+    });
+    const textCasePairManifest = buildWorkspaceFileManifest(textCasePairWorkspace);
+    const textCasePairPlan = buildArtifactPlan({ sourceRoot: '', memoryOnly: true, generatedFiles: textCasePairManifest.generatedFiles });
+    record('distinct modeled case-folded translation owners remain rejected',
+      !!textCasePairOwner && !textCasePairPlan.ok && textCasePairPlan.errors.some(error => error.toLowerCase().includes('collide')), textCasePairPlan.errors.join('; '));
+
     const b119Widget = { id: 'b119_window', type: 'window', x: 100, y: 100, w: 420, h: 300, label: 'B119 UI', properties: {} };
     const uiSource = path.join(root, 'ui-source');
     fs.mkdirSync(path.join(uiSource, 'ui'), { recursive: true });

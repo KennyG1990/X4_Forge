@@ -8,7 +8,7 @@
 
 ### Explicit text filename deploy fidelity `in_progress` (GitHub #94, under #20)
 
-A single valid uppercase `t/0001-L044.xml` authored through Forge fails native Preview because the compiler invents a lowercase generated path and the artifact guard detects the collision. The actual source has no duplicate translation file. [Reproduction and acceptance](https://github.com/KennyG1990/X4_Forge/issues/94). Preserve the explicit filename and no-edit bytes, retain entry edits at the authored path, and keep genuine duplicate rejection. The frozen 0.0.82 source contains the same helper by inspection; its exact replay and bounded correction are next after the #93 checkpoint. Live setup stays untouched.
+Dev preserves explicit translation filenames, no-edit XML bytes and intentional model edits at the same path. Both Dev and exact frozen-source baselines reproduced the refusal (58/58 each); corrected native 115/115, artifact oracle 120/120, pure 64/64, actual editor handler 82/82 and normal precommit passed. [Source/native proof and release review](docs/plans/2026-11-09-explicit-text-filename-fidelity.md). The exact uppercase game packet passed 37 native checks and is READY for Claude. Installed/rendered experience and delivery remain open. The next release step is the #94-only port into a fresh exact 0.0.82 selection; held139a374 must not advance. Live setup stays untouched.
 
 ### Native backend recovery and interrupted apply `in_progress` (GitHub #53)
 

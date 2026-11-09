@@ -101,13 +101,8 @@ export const escapeXmlText = (str: string): string => {
 
 export const toTFileName = (file: TFileNameInput): string => {
   const explicitName = String(file?.fileName || '').trim();
-  if (explicitName) {
-    const match = explicitName.match(/^(.+?)-[lL](\d+)\.xml$/);
-    if (match) {
-      return `${match[1]}-l${match[2].padStart(3, '0')}.xml`;
-    }
-    return explicitName;
-  }
+  // Imported names identify existing source files; normalize only newly generated names.
+  if (explicitName) return explicitName;
 
   const languageId = String(file?.languageId || '44').replace(/\D/g, '') || '44';
   return `0001-l${languageId.padStart(3, '0')}.xml`;

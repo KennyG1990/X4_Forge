@@ -18,7 +18,6 @@ import {
   HelpCircle
 } from 'lucide-react';
 import { ModWorkspace, TFile, TranslationPage, TranslationItem } from '../types';
-import { toTFileName } from '../lib/modCompiler';
 import { confirmDialog, promptDialog } from '../lib/uiDialogs';
 
 interface TFileEditorProps {
@@ -84,7 +83,12 @@ export default function TFileEditor({ workspace, setWorkspace }: TFileEditorProp
 
     const matchedLang = LANGUAGES_SUPPORT.find(l => l.id === newLangId);
     const codeSuffix = matchedLang ? matchedLang.suffix : `L0${newLangId}`;
-    const filename = toTFileName({ fileName: `0001-${codeSuffix}.xml`, languageId: newLangId });
+    // Canonicalize only a newly created name; imported source names retain their spelling.
+    const candidateName = `0001-${codeSuffix}.xml`;
+    const filenameMatch = candidateName.match(/^(.+?)-[lL](\d+)\.xml$/);
+    const filename = filenameMatch
+      ? `${filenameMatch[1]}-l${filenameMatch[2].padStart(3, '0')}.xml`
+      : candidateName;
 
     // Check if duplicate filename
     if (tFiles.some(f => f.languageId === newLangId)) {
