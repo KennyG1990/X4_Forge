@@ -26,7 +26,7 @@ import {
   type AgentKeyScope,
   type WorkspaceAuthorityMode,
 } from '../src/lib/agentAuthority';
-import { LEDGER_REVERT_PATTERN, LEDGER_ROUTES, type LedgerKind } from '../src/lib/agentHistory';
+import { LEDGER_QUIET_ROUTES, LEDGER_REVERT_PATTERN, LEDGER_ROUTES, type LedgerKind } from '../src/lib/agentHistory';
 import {
   FORGE_CAPABILITIES,
   buildForgeCapabilityContract,
@@ -40,7 +40,7 @@ const ROOT = process.cwd();
 const MANIFEST_PATH = path.join(ROOT, 'config', 'forge-route-dispositions.json');
 const CANDIDATE_PATH = path.join(ROOT, 'test-results', 'forge-route-dispositions.candidate.json');
 const MCP_MODULE_PATH = path.join(ROOT, 'vscode-extension', 'mcp', 'x4forge-mcp.cjs');
-const MCP_MODULE_AUDIT_VERSION = 13;
+const MCP_MODULE_AUDIT_VERSION = 14;
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'all']);
 
 type RouteDisposition =
@@ -7208,7 +7208,9 @@ function audit(manifestOverride?: RouteDispositionManifest): { errors: string[];
     for (const binding of capability.apiBindings) {
       const key = routeKey(binding.method, binding.path);
       if (!routeFacts.has(key)) errors.push(`${capability.id}: API binding does not exist: ${key}`);
-      if (binding.method === 'POST' && exactLedgerKind(binding.method, binding.path) === null) {
+      const quietAnalysis = LEDGER_QUIET_ROUTES.includes(binding.path)
+        && capability.effects.every(effect => effect === 'read' || effect === 'analyze');
+      if (binding.method === 'POST' && !quietAnalysis && exactLedgerKind(binding.method, binding.path) === null) {
         errors.push(`${capability.id}: POST binding lacks exact ledger disposition: ${key}`);
       }
     }
@@ -7236,7 +7238,8 @@ function audit(manifestOverride?: RouteDispositionManifest): { errors: string[];
 
   const allBindings: ForgeCapabilityApiBinding[] = FORGE_CAPABILITIES.flatMap(capability => [...capability.apiBindings]);
   const exactLedgerProbe = allBindings
-    .find(binding => binding.method === 'POST' && !LEDGER_REVERT_PATTERN.test(sampleRoute(binding.path)));
+    .find(binding => binding.method === 'POST' && !LEDGER_QUIET_ROUTES.includes(binding.path)
+      && !LEDGER_REVERT_PATTERN.test(sampleRoute(binding.path)));
   if (exactLedgerProbe) {
     const withoutProbe = LEDGER_ROUTES.filter(route => !(route.method === exactLedgerProbe.method && route.path === sampleRoute(exactLedgerProbe.path)));
     if (exactLedgerKind(exactLedgerProbe.method, exactLedgerProbe.path, withoutProbe) !== null) {
@@ -7706,7 +7709,7 @@ function audit(manifestOverride?: RouteDispositionManifest): { errors: string[];
     truthyTerminationProbes.some(probe => probe.mappings[0]?.calls.length)) {
     errors.push('MCP TOOLS guard failed top-level/escape/handler/indirect-transport/full-truthiness probes');
   }
-  if (mappings.length !== 11) errors.push(`MCP tool inventory changed: expected 11 mappings, found ${mappings.length}`);
+  if (mappings.length !== 12) errors.push(`MCP tool inventory changed: expected 12 mappings, found ${mappings.length}`);
   const mappingNames = new Set<string>();
   for (const mapping of mappings) {
     if (mappingNames.has(mapping.name)) errors.push(`duplicate MCP tool name: ${mapping.name}`);

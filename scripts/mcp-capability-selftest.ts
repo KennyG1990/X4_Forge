@@ -21,15 +21,16 @@ const EXPECTED_TOOLS = [
   'stage_and_validate',
   'readiness',
   'runtime_debugger',
+  'check_expression',
   'check_conflicts',
   'check_patch_readiness',
   'explain_element',
 ];
-const LEGACY_TOOLS = EXPECTED_TOOLS.filter(tool => tool !== 'runtime_debugger');
-const READ_TOOLS = ['list_schema_domains', 'get_workspace', 'readiness', 'runtime_debugger', 'check_conflicts', 'explain_element'];
+const LEGACY_TOOLS = EXPECTED_TOOLS.filter(tool => !['runtime_debugger', 'check_expression'].includes(tool));
+const READ_TOOLS = ['list_schema_domains', 'get_workspace', 'readiness', 'runtime_debugger', 'check_expression', 'check_conflicts', 'explain_element'];
 const WRITE_TOOLS = [
   'validate_mod', 'list_schema_domains', 'get_workspace', 'compile_workspace', 'author_check',
-  'stage_and_validate', 'readiness', 'runtime_debugger', 'check_conflicts', 'explain_element',
+  'stage_and_validate', 'readiness', 'runtime_debugger', 'check_expression', 'check_conflicts', 'explain_element',
 ];
 const CUSTOM_TOOLS = ['validate_mod', 'list_schema_domains', 'author_check', 'stage_and_validate', 'explain_element'];
 const MCP_KEY = `x4fk_${'a'.repeat(64)}`;
@@ -466,6 +467,21 @@ const server = http.createServer((request, response) => {
     });
     return;
   }
+  if (request.method === 'POST' && request.url === '/api/agent/expressions/check') {
+    let raw = '';
+    request.setEncoding('utf8');
+    request.on('data', chunk => { raw += chunk; });
+    request.on('end', () => {
+      const body = JSON.parse(raw);
+      routeCalls.push({ method: request.method || '', path: request.url || '', body });
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({
+        ok: false, legal: false, expression: body.expression,
+        problems: Array.from({ length: 51 }, () => ({ code: 'expression-format-specifier', severity: 'error' })),
+      }));
+    });
+    return;
+  }
   if (request.method === 'GET' && request.url?.startsWith('/api/agent/lang/element-explain?')) {
     routeCalls.push({ method: request.method, path: request.url, body: null });
     response.writeHead(200, { 'Content-Type': 'application/json' });
@@ -780,12 +796,22 @@ try {
     }
     assert.equal(runtimeWire.includes('WHOLE LOG MUST NOT LEAK'), false,
       'runtime projection must exclude whole-log/raw fixture content');
+    const expressionArguments = { expression: "'%d'.[1]", variableTypes: { $ship: 'ship' } };
+    const expressionReply = await client.request('tools/call', { name: 'check_expression', arguments: expressionArguments });
+    assert.equal(expressionReply.error, undefined);
+    assert.equal((expressionReply.result as any)?.isError, undefined, 'illegal expression is a completed check');
+    const expressionResult = JSON.parse(String(expressionReply.result?.content?.[0]?.text || '{}'));
+    assert.equal(expressionResult.legal, false);
+    assert.equal(expressionResult.problemCount, 51);
+    assert.equal(expressionResult.problems.length, 50);
+    assert.deepEqual(routeCalls.at(-1)?.body, expressionArguments);
     assert.deepEqual(routeCalls.map(call => `${call.method} ${call.path}`), [
       'POST /api/agent/project/validate/check',
       'GET /api/agent/workspace',
       'GET /api/agent/lang/element-explain?file=md%2Fx.xml&tag=cue',
       'GET /api/agent/readiness',
       'GET /api/agent/runtime-debugger?expect=cue_fixture%2Cmarker_fixture',
+      'POST /api/agent/expressions/check',
     ], 'current-contract execution must use current capability routes');
 
     routeCalls.length = 0;
@@ -810,6 +836,10 @@ try {
       { name: 'runtime_debugger', arguments: { expect: 'e'.repeat(RUNTIME_EXPECT_MAX_LENGTH + 1) } },
       { name: 'runtime_debugger', arguments: { expect: 'cue_fixture', logPath: 'C:\\Users\\Fixture\\debuglog.txt' } },
       { name: 'runtime_debugger', arguments: { modId: 'x4_runtime_fixture' } },
+      { name: 'check_expression', arguments: {} },
+      { name: 'check_expression', arguments: { expression: 'x'.repeat(4097) } },
+      { name: 'check_expression', arguments: { expression: '$x', variableTypes: { $x: 42 } } },
+      { name: 'check_expression', arguments: { expression: '$x', recordBaseline: true } },
     ]) {
       const denied = await client.request('tools/call', invalid);
       assert.equal(denied.error?.code, -32602, `${invalid.name} malformed input must fail before HTTP`);
@@ -846,6 +876,8 @@ try {
     assert.deepEqual(legacyTools.map(tool => tool.name), LEGACY_TOOLS, 'legacy fallback changed the curated MCP inventory');
     assert.equal(legacyTools.find(tool => tool.name === 'runtime_debugger'), undefined,
       'runtime debugger must not bypass live capability discovery through legacy fallback');
+    const legacyExpression = await client.request('tools/call', { name: 'check_expression', arguments: { expression: '$x' } });
+    assert.equal(legacyExpression.error?.code, -32602, 'expression check requires live capability discovery');
     assert.ok(legacyTools.every(tool => tool._meta?.['x4forge/contractVersion'] === 'legacy-static-fallback'));
     const legacyWorkspaceTool = legacyTools.find(tool => tool.name === 'get_workspace');
     assert.equal(legacyWorkspaceTool?._meta?.['x4forge/capabilityVersion'], 1,
@@ -978,6 +1010,14 @@ try {
   mode = 'live';
   await withMcp(baseUrl, async client => {
     assert.deepEqual((await toolsFor(client)).map(tool => tool.name), EXPECTED_TOOLS);
+    mode = 'outage';
+    assert.deepEqual((await toolsFor(client)).map(tool => tool.name), EXPECTED_TOOLS.filter(name => name !== 'check_expression'),
+      'unsaved expression checks require current discovery even when other tools retain prior authority');
+    const staleExpression = await client.request('tools/call', { name: 'check_expression', arguments: { expression: '$x' } });
+    assert.equal(staleExpression.error?.code, -32602, 'stale discovery cannot authorize a direct expression check');
+    mode = 'live';
+    assert.deepEqual((await toolsFor(client)).map(tool => tool.name), EXPECTED_TOOLS,
+      'a successful discovery restores the expression tool');
     mode = 'alias-narrowed';
     await client.waitForNotification('notifications/tools/list_changed');
     assert.deepEqual(await toolsFor(client), [],

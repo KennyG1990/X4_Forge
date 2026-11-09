@@ -107,6 +107,7 @@ export interface LedgerRow {
 export const LEDGER_QUIET_ROUTES: string[] = [
   // Pure analysis/read endpoints that happen to use POST because they take a body. They change
   // no state, and recording them would bury the actions that matter.
+  '/api/agent/expressions/check',
   '/api/agent/critic',
   '/api/agent/explain',
   '/api/agent/node-diagnostics',

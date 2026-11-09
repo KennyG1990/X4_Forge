@@ -5,7 +5,7 @@
 
 import crypto from 'crypto';
 import { scopeAllows, type AgentKeyScope } from './agentKeys';
-import { ledgerRouteKind } from './agentHistory';
+import { LEDGER_QUIET_ROUTES, ledgerRouteKind } from './agentHistory';
 import {
   FORGE_CAPABILITIES,
   applyForgeCapabilityFixedBody,
@@ -45,7 +45,7 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
 
   const validationErrors = validateForgeCapabilityRegistry();
   check('registry invariants', validationErrors.length === 0, validationErrors.join(' | ') || undefined);
-  check('bounded initial registry', FORGE_CAPABILITIES.length === 12, `count=${FORGE_CAPABILITIES.length}`);
+  check('bounded initial registry', FORGE_CAPABILITIES.length === 13, `count=${FORGE_CAPABILITIES.length}`);
 
   const canonical = canonicalCapabilityContractPayload();
   const contract = buildForgeCapabilityContract(sha256);
@@ -240,6 +240,8 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
 
   const unclassifiedPosts = FORGE_CAPABILITIES.flatMap(capability => capability.apiBindings
     .filter(binding => binding.method === 'POST')
+    .filter(binding => !(LEDGER_QUIET_ROUTES.includes(binding.path)
+      && capability.effects.every(effect => effect === 'read' || effect === 'analyze')))
     .filter(binding => ledgerRouteKind(binding.method, sampleRoute(binding.path)) === null)
     .map(binding => `${capability.id}: ${binding.method} ${binding.path}`));
   check('post bindings have ledger disposition', unclassifiedPosts.length === 0, unclassifiedPosts.join(' | ') || undefined);

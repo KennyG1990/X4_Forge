@@ -2888,6 +2888,18 @@
       "resourceClass": "stateless-analysis",
       "workspaceMode": "optional"
     },
+    "POST /api/agent/expressions/check": {
+      "disposition": "canonical-capability",
+      "owner": "expression.check",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "stateless-analysis",
+      "workspaceMode": "optional"
+    },
     "POST /api/agent/external-api/register": {
       "disposition": "session-only",
       "owner": "agent-api",
@@ -3683,6 +3695,7 @@
     }
   },
   "capabilitySignatures": {
+    "expression.check@1": "5bedec028862120254402ce60402204db079705db1d6ce27f16834ae77ddea8d",
     "extensions.conflicts.analyze@1": "5e8005a8422ebbe1039a848332caf8f40076ea7cce693b21df8039aec856697e",
     "history.list@1": "f55787b4089116ac1d375e1da9677fc978b0715aa6f841a70bfcd13870ee962e",
     "history.revert@1": "2399e2dd2ec3263e0f6f5364ab3be8edf1fe8d065cea40bc736d72ee8c4bcd98",
@@ -3697,8 +3710,8 @@
     "workspace.read@2": "962774de4a25e8725a0d90d4982298cc72f100312075b1f6f4ff9de1482752d7"
   },
   "mcpModuleSignature": {
-    "version": 13,
-    "hash": "300ef5fe9a064fce16abbcc6c2c89d5200015261eb0f7eeafcb77735d8ffaeea"
+    "version": 14,
+    "hash": "370857177213c45b588cc0bf8337490b58f6efa1b8813c569f0026eb993ecbcf"
   },
   "mcpSignatures": {
     "validate_mod": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",
@@ -3709,6 +3722,7 @@
     "stage_and_validate": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",
     "readiness": "8791e498bef78bc853bfd48e07e3404adc25171cb7ffdd16ffa183ff097c3fa7",
     "runtime_debugger": "4dace68d60d8096f0593ce1e933aa9a535da5621584656b2f0248caf2b28cc3c",
+    "check_expression": "930db8d7b3306396462d8339e452bccdb15fc97e8e55858a4c02749581cd1514",
     "check_conflicts": "0bd9187ac3d013b361c04d91395f72e2859dd923cc8f167efe08696527ab1703",
     "check_patch_readiness": "a38c6f472937bb8f4df3f8aec0e8f43c3a8a9348120b7c577c2ac1c5d6543dec",
     "explain_element": "1ca4792d3d94435a3657f6dd2acad01d71f3ef6b138bab61ad456aaeb5f146d4"
@@ -3722,6 +3736,7 @@
     "stage_and_validate": "project.validate@1",
     "readiness": "readiness.read@1",
     "runtime_debugger": "runtime.debug.read@1",
+    "check_expression": "expression.check@1",
     "check_conflicts": "extensions.conflicts.analyze@1",
     "check_patch_readiness": "patch.readiness.analyze@2",
     "explain_element": "schema.element.explain@1"

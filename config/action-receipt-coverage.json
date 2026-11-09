@@ -255,6 +255,30 @@
       ]
     },
     {
+      "routeKey": "POST /api/agent/expressions/check",
+      "method": "POST",
+      "template": "/api/agent/expressions/check",
+      "owner": "expression.check",
+      "resourceClass": "stateless-analysis",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1expressions~1check",
+      "integrationBatch": "W3B0-internal",
+      "history": "quiet",
+      "capability": {
+        "kind": "canonical",
+        "id": "expression.check",
+        "version": 1
+      },
+      "semanticClass": "read-analysis-only",
+      "policy": "receipt-exempt",
+      "effects": [
+        "read",
+        "analyze"
+      ],
+      "authorityScopes": [
+        "global"
+      ]
+    },
+    {
       "routeKey": "POST /api/agent/external-api/register",
       "method": "POST",
       "template": "/api/agent/external-api/register",

@@ -6,6 +6,10 @@
 
 ## P0 — Active
 
+### Unsaved expression MCP `in_progress` (GitHub #79, part of #74)
+
+Dev exposes the shared unsaved checker through an exact read/analyze capability and current MCP discovery. The paired policy, HTTP, stdio and native deploy passed in isolation. [Dev evidence](docs/plans/2026-11-08-mcp-check-expression.md). Mixed null-safe/exists and TextDB shared rules, installed verification, and public delivery remain open.
+
 ### Literal format diagnostics `in_progress` (GitHub #77, part of #74)
 
 The isolated Dev checker and native deploy now report exact literal-format diagnostics. The short-list case remains advisory. [Dev verification](docs/plans/2026-11-08-forge-literal-format-diagnostics.md). The frozen standalone game witness is queued with Claude, and installed/public delivery remain open.

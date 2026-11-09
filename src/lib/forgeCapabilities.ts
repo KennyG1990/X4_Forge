@@ -13,6 +13,9 @@
 import { stableStringify } from './workspaceIdentity';
 
 export const FORGE_CAPABILITY_SCHEMA_VERSION = 'forge.capability.v1' as const;
+export const EXPRESSION_CHECK_MAX_LENGTH = 4096;
+export const EXPRESSION_CHECK_MAX_HINTS = 32;
+export const EXPRESSION_CHECK_HINT_MAX_LENGTH = 128;
 
 export type ForgeAgentScope = 'read' | 'write' | 'deploy';
 export type ForgeContextRequirement = 'none' | 'optional' | 'required';
@@ -145,6 +148,44 @@ function disconnected(id: string, note: string): ForgeSurfaceProjection {
 }
 
 export const FORGE_CAPABILITIES = [
+  {
+    id: 'expression.check',
+    version: 1,
+    title: 'Check an unsaved X4 expression',
+    description: 'Run Forge expression rules and configured script property checks on one MD or AIScript expression.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        expression: { type: 'string', maxLength: EXPRESSION_CHECK_MAX_LENGTH },
+        variableTypes: { type: 'object', additionalProperties: { type: 'string', maxLength: EXPRESSION_CHECK_HINT_MAX_LENGTH } },
+      },
+      required: ['expression'],
+      additionalProperties: false,
+    },
+    outputSchema: objectOutput({
+      ok: { type: 'boolean' }, legal: { type: 'boolean' }, expression: { type: 'string' },
+      problems: { type: 'array', items: { type: 'object', additionalProperties: true } },
+      note: { type: 'string' },
+    }, ['ok', 'legal', 'expression', 'problems']),
+    context: { workspace: 'optional', profile: 'none' },
+    access: { public: false, studioSession: true, agentScopes: ['read', 'write', 'deploy'] },
+    effects: ['read', 'analyze'],
+    confirmation: 'none',
+    apiBindings: [
+      { method: 'POST', path: '/api/agent/expressions/check', inputLocation: 'body', role: 'primary' },
+    ],
+    surfaces: {
+      ui: [
+        disconnected('web-studio-expression-check', 'Web Studio has no dedicated expression checker for this capability.'),
+        disconnected('vscode-extension-expression-check', 'The extension has no dedicated UI caller for this capability.'),
+      ],
+      cli: [],
+      mcp: [partial('check_expression', 'vscode-extension/mcp/x4forge-mcp.cjs::name: "check_expression"', 'MCP displays up to 50 problems and reports the total count.')],
+      agentApi: true,
+      builtInHarness: [],
+      externalAgents: [connected('agent-api', 'server.ts::app.post("/api/agent/expressions/check"')],
+    },
+  },
   {
     id: 'extensions.conflicts.analyze',
     version: 1,

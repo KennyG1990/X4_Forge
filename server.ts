@@ -272,6 +272,9 @@ import { runContinuousPollingSelftest } from "./src/lib/continuousPolling.selfte
 import {
   applyForgeCapabilityFixedBody,
   buildForgeCapabilityContract,
+  EXPRESSION_CHECK_HINT_MAX_LENGTH,
+  EXPRESSION_CHECK_MAX_HINTS,
+  EXPRESSION_CHECK_MAX_LENGTH,
   FORGE_CAPABILITIES,
   FORGE_CAPABILITY_EFFECTS,
 } from "./src/lib/forgeCapabilities";
@@ -5219,7 +5222,7 @@ app.post("/api/fs/write", coordinatedSourceOperation((req, res) => {
  * Uses the SAME `lintScriptPropertyChains` engine as full project validation, so a green answer
  * here means the same thing a green answer there means.
  */
-app.post("/api/agent/check-expression", (req, res) => {
+function checkExpressionRequest(req: express.Request, res: express.Response) {
   try {
     const expression = typeof req.body?.expression === 'string' ? req.body.expression.trim() : '';
     if (!expression) {
@@ -5279,6 +5282,32 @@ app.post("/api/agent/check-expression", (req, res) => {
   } catch (error: any) {
     return res.status(500).json({ ok: false, error: error?.message || 'check-expression failed' });
   }
+}
+
+app.post("/api/agent/check-expression", checkExpressionRequest);
+app.post("/api/agent/expressions/check", (req, res) => {
+  const body = req.body;
+  res.set('Cache-Control', 'no-store');
+  if (!body || typeof body !== 'object' || Array.isArray(body)
+    || Object.keys(body).some(key => key !== 'expression' && key !== 'variableTypes')
+    || typeof body.expression !== 'string' || !body.expression.trim()
+    || body.expression.length > EXPRESSION_CHECK_MAX_LENGTH) {
+    return res.status(400).json({
+      code: 'CAPABILITY_INPUT_INVALID',
+      error: `Send one non-empty expression of at most ${EXPRESSION_CHECK_MAX_LENGTH} characters and optional variableTypes.`,
+    });
+  }
+  const hints = body.variableTypes;
+  if (hints !== undefined && (!hints || typeof hints !== 'object' || Array.isArray(hints)
+    || Object.keys(hints).length > EXPRESSION_CHECK_MAX_HINTS
+    || Object.entries(hints).some(([key, value]) => !key.trim() || key.length > EXPRESSION_CHECK_HINT_MAX_LENGTH
+      || typeof value !== 'string' || !value.trim() || value.length > EXPRESSION_CHECK_HINT_MAX_LENGTH))) {
+    return res.status(400).json({
+      code: 'CAPABILITY_INPUT_INVALID',
+      error: `variableTypes must map up to ${EXPRESSION_CHECK_MAX_HINTS} names to types, each at most ${EXPRESSION_CHECK_HINT_MAX_LENGTH} characters.`,
+    });
+  }
+  return checkExpressionRequest(req, res);
 });
 
 app.get("/api/agent/status", (req, res) => {

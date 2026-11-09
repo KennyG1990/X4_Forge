@@ -210,6 +210,31 @@ const TOOLS = [
     },
   },
   {
+    name: "check_expression",
+    capabilityId: "expression.check",
+    capabilityVersion: 1,
+    description: "Check one unsaved MD or AIScript expression with Forge's rules and configured script property data. Returns legality and up to 50 problems. It does not evaluate runtime values.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        expression: { type: "string", maxLength: 4096 },
+        variableTypes: { type: "object", additionalProperties: { type: "string", maxLength: 128 } },
+      },
+      required: ["expression"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const d = requireResponse(await forge("POST", "/api/agent/expressions/check", args), "expression check", {
+        ok: "boolean", legal: "boolean", expression: "string", problems: "array",
+      });
+      return {
+        ok: d.ok, legal: d.legal, expression: d.expression,
+        problems: d.problems.slice(0, 50), problemCount: d.problems.length,
+        ...(typeof d.note === "string" ? { note: d.note } : {}),
+      };
+    },
+  },
+  {
     name: "check_conflicts",
     capabilityId: "extensions.conflicts.analyze",
     capabilityVersion: 1,
@@ -291,6 +316,7 @@ const TOOLS = [
 ];
 const STATIC_TOOL_NAMES = new Set(TOOLS.map((tool) => tool.name));
 STATIC_TOOL_NAMES.delete("runtime_debugger");
+STATIC_TOOL_NAMES.delete("check_expression");
 
 function stableStringify(value) {
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
@@ -937,7 +963,7 @@ async function availableTools() {
   if (stickyLiveToolNames !== null) {
     return {
       discovery,
-      toolNames: [...stickyLiveToolNames],
+      toolNames: [...stickyLiveToolNames].filter(name => name !== "check_expression"),
       effectiveContract: lastValidContract,
       effectiveAuthority: lastValidAuthority,
       contractState: `${discovery.state}-sticky-live`,
