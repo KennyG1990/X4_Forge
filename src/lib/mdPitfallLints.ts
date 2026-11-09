@@ -36,7 +36,7 @@
  * House pattern: pure engine + oracle + public GET. xmldom for cue-tree structure.
  */
 
-import { DOMParser, normalizeLineEndings, type Attr } from '@xmldom/xmldom';
+import { DOMParser, normalizeLineEndings, type Attr, type Document, type Element } from '@xmldom/xmldom';
 import { findUnmatchedMdElse, MD_UNMATCHED_ELSE } from './expressionAst';
 import { maskNonExpressionSpans, type ScriptPropertyIndex } from './scriptProperties';
 import { assertXmlInputWithinLimits } from './xmlInputLimits';
@@ -162,6 +162,17 @@ function hasXmlAttribute(element: ElementLike, name: string): boolean {
   return new RegExp(`\\b${name}\\s*=`, 'i').test(openingTag);
 }
 
+function enclosingNamedCue(element: Element): string | undefined {
+  const names: string[] = [];
+  for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+    if (parent.tagName !== 'cue' && parent.tagName !== 'library') continue;
+    const name = parent.getAttribute('name');
+    if (!name) return undefined;
+    names.push(name);
+  }
+  return names.length ? names.reverse().join('.') : undefined;
+}
+
 /**
  * Lint one MD file. `propertyUnion` (from the scriptproperty index) makes the param3
  * lint union-aware; without it the param3 lint stays conservative (identifier must
@@ -173,29 +184,37 @@ export function lintMdPitfalls(xml: string, opts: { propertyUnion?: Set<string>;
   if (!xml || typeof xml !== 'string' || !/<mdscript\b/i.test(xml)) return out;
   const masked = maskNonExpressionSpans(xml);
 
-  // ---- 2. offer_accepted keyword cue (regex over masked text — flat shape) ----
-  {
-    const re = /<event_offer_accepted\b[^>]*\bcue\s*=\s*"(parent|this|static)"[^>]*>/gi;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(masked)) !== null) {
-      out.push({
-        code: 'md_pitfall.offer_accepted_keyword_cue',
-        severity: 'warning',
-        line: lineOf(masked, m.index),
-        detail: `<event_offer_accepted cue="${m[1]}"> validates clean but never fires in-game — the engine does not resolve cue keywords for this event at register time (proven 2026-07-01; also kuertee: "event_offer_accepted doesn't work"). Use the proven accept pattern instead: listen <event_object_signalled object="$Client" param="'accept'"/> after create_mission / set_objective, or store the offer cue in a variable (<set_value name="$OfferCue" exact="this"/> … cue="$OfferCue").${opts.filePath ? ` (${opts.filePath})` : ''}`,
-      });
-    }
-  }
-
   // DOM parse for the cue-tree lints
-  let doc: { documentElement: ElementLike | null } | null = null;
+  let doc: Document;
   let parseError = false;
   try {
-    doc = new DOMParser({ onError: () => { parseError = true; } }).parseFromString(xml, 'text/xml') as unknown as { documentElement: ElementLike | null };
+    doc = new DOMParser({ onError: () => { parseError = true; } }).parseFromString(xml, 'text/xml');
   } catch { return out; }
-  const root = doc?.documentElement;
+  const element = doc.documentElement;
   // Non-MD and malformed XML produce no semantic finding here; structural/wellformedness validation owns those diagnostics.
-  if (!root || root.nodeName !== 'mdscript' || parseError) return out;
+  if (!element || element.nodeName !== 'mdscript' || parseError) return out;
+  const root = element as unknown as ElementLike;
+
+  const offerOccurrences = new Map<string, number>();
+  for (const event of Array.from(element.getElementsByTagName('event_offer_accepted'))) {
+    const attribute = event.getAttributeNode('cue');
+    if (!attribute || !/^(parent|this|static)$/i.test(attribute.value)) continue;
+    const cue = enclosingNamedCue(event);
+    const key = JSON.stringify([cue, attribute.value]);
+    const occurrence = (offerOccurrences.get(key) ?? 0) + 1;
+    offerOccurrences.set(key, occurrence);
+    out.push({
+      code: 'md_pitfall.offer_accepted_keyword_cue',
+      severity: 'warning',
+      filePath: opts.filePath,
+      cue,
+      // Remembered reviews distinguish source references independently of columns.
+      sourceRef: occurrence > 1 ? `#${occurrence} ${cue ?? 'event_offer_accepted'}` : cue,
+      line: attribute.lineNumber ?? event.lineNumber,
+      column: attribute.columnNumber ?? event.columnNumber,
+      detail: `<event_offer_accepted cue="${attribute.value}"> validates clean but never fires in-game — the engine does not resolve cue keywords for this event at register time (proven 2026-07-01; also kuertee: "event_offer_accepted doesn't work"). Use the proven accept pattern instead: listen <event_object_signalled object="$Client" param="'accept'"/> after create_mission / set_objective, or store the offer cue in a variable (<set_value name="$OfferCue" exact="this"/> … cue="$OfferCue").${opts.filePath ? ` (${opts.filePath})` : ''}`,
+    });
+  }
 
   // Prior X4 9.00 station probe (#635): products? was false on producing stations,
   // whereas products.count worked. Gate the advisory on actual corpus metadata;
@@ -427,6 +446,18 @@ export function runMdPitfallSelftest(): {
     lint(offerKw)[0]?.detail.includes('event_object_signalled'), lint(offerKw)[0]?.detail);
   const offerVar = `<mdscript name="T"><cues><cue name="A" instantiate="true"><conditions><event_offer_accepted cue="$OfferCue"/></conditions></cue></cues></mdscript>`;
   ok('variable-form offer listener passes (vanilla idiom)', lint(offerVar).length === 0);
+  const nestedOffers = [
+    '<mdscript name="T"><cues>',
+    '<cue name="Left"><cues><cue name="Listen"><conditions><event_offer_accepted cue="this"/></conditions></cue></cues></cue>',
+    '<cue name="Right"><cues><cue name="Listen"><conditions><event_offer_accepted cue=\'this\'/></conditions></cue></cues></cue>',
+    '<!-- <event_offer_accepted cue="this"/> -->',
+    '</cues></mdscript>',
+  ].join('\n');
+  const offers = lintMdPitfalls(nestedOffers, { filePath: 'md/probe.xml' });
+  ok('offer keywords retain distinct cue ancestry and attribute locations',
+    offers.length === 2 && offers[0].cue === 'Left.Listen' && offers[1].cue === 'Right.Listen'
+    && offers.every((finding, index) => finding.filePath === 'md/probe.xml' && finding.line === index + 2
+      && finding.column === nestedOffers.split('\n')[index + 1].indexOf('cue=') + 5), offers);
 
   // --- 3. param3_table_barekey ---
   const bareKey = `<mdscript name="T"><cues><cue name="A" instantiate="true" namespace="this">
