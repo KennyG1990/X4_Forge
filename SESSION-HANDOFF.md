@@ -1,16 +1,16 @@
-# X4 Forge Dev handoff — A15 exact project check coverage
+# X4 Forge Dev handoff — A15 named project check results
 
-Use the isolated `forge-a15-native-proof` worktree. The prior verified base is `551bf4f1efe21197455b06155b0c8822155c3b9e`.
+Use the isolated `forge-a15-native-proof` worktree. The prior verified base is `d0420789bd0ccba683d8a135ff5dd89a16698aff`.
 
 ## Current unit
 
-Addressed project validation and both native deploy aliases can reuse an exact passing suite for a frozen artifact. Credit applies only to eligible UI gaps in covered files. Raw diagnostics and unrelated gaps stay visible. An uncovered gap blocks last-green, and complete combined evidence can record it. The isolated Windows replay used a disposable owner credential and never reran a check just to consume its receipt.
+Async Dev Forge status reopens the exact suite and command receipts. It names each terminal check, reports worker duration and bounded output evidence, and counts the checks that did not run. Missing expected receipts give incomplete status and no passing proof. The isolated Windows replay proved ordinary failure, timeout, output limit and restart persistence.
 
-The [coverage record](docs/plans/2026-11-08-a15-project-coverage.md) contains the API sequence, validation, and AAR. Keep the worktree separate from the release source, live Antigravity, X4, AiLive, and other agents' checkouts. No computer use. The project harness owns its ephemeral listeners and the standalone mod.
+The [named result record](docs/plans/2026-11-08-a15-named-run-results.md) contains the API sequence, validation, and AAR. Keep the worktree separate from the release source, live Antigravity, X4, AiLive, and other agents' checkouts. No computer use. The project harness owns its ephemeral listeners and the standalone mod.
 
 ## Next work
 
 - [Issue #61](https://github.com/KennyG1990/X4_Forge/issues/61) stays open. Independently provision and prove a real device credential and the rendered owner review. Reconcile installed supervisor recovery and the result presentation before broadening availability.
 - [Issue #85](https://github.com/KennyG1990/X4_Forge/issues/85) still needs the exact general-purpose bypass script and failure receipt. The Dev proof above exercises independently reproduced behavior.
 - The latest checked Claude board showed batch 475 deployed and the lock FREE, with game reload and native testing held during Ken's live conversation. Game installation and play remain Claude's responsibility. This backend checkpoint has no operator eyeball step.
-- Release cadence review found public GitHub and Open VSX at 0.0.81. GitHub main advanced to `f76775f02dbd8c61a100233e9d11d659f7a5d39b`. The separate 0.0.82 source pin `b49f1ab7ca57ec6242c8d242da327331fe6e9af9` needs those upstream changes reconciled before exact source and VSIX gates. Keep the Dev-only owner work separate from that candidate.
+- The 0.0.82 candidate source is reconciled against verified main `f76775f02dbd8c61a100233e9d11d659f7a5d39b`. The private `forge-082-source-f76775f-b49f1ab.zip` contains all 902 verified files from combined tree `f740223469059143404766765e60b7704632a14b`. Follow the adjacent reconciliation record to repin the separate qualification recipe. Full source, VSIX and installed gates remain pending.

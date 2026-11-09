@@ -5,7 +5,7 @@ import {
   type ActionReceipt, type ActionReceiptOperationIdentity, type ActionReceiptPrepareInput,
 } from '../lib/actionReceipt';
 import type { ActionReceiptStore } from '../lib/actionReceiptStore';
-import { projectCheckSuiteReceiptId } from './projectCheckSuite';
+import { projectCheckSuiteReceiptId, readProjectCheckSuiteReport, type ProjectCheckSuiteReport } from './projectCheckSuite';
 import { canonicalSourceKey } from './resourceCoordinator';
 import type { ProjectCheckSourceLease, SharedSourceCoordinator } from './sharedSourceCoordinator';
 
@@ -46,6 +46,7 @@ export interface ProjectCheckRunStatus {
   finishedAt?: string;
   code?: string;
   suiteReceipt?: { id: string; hash: string };
+  suiteReport?: ProjectCheckSuiteReport;
 }
 
 type RunRefusalCode = 'PROJECT_CHECK_RUN_AUTHORITY_CHANGED' | 'PROJECT_CHECK_RUN_ARTIFACT_CHANGED'
@@ -143,6 +144,7 @@ export class ProjectCheckRunService {
   }
 
   private suiteFor(receipt: ActionReceipt, suiteId: string, hash: string, expectedLogicalHash?: string) {
+    if (!HASH.test(hash)) return;
     const found = this.store.tryRead(suiteId);
     if (found.ok !== true) return;
     const suite = found.receipt;
@@ -156,18 +158,30 @@ export class ProjectCheckRunService {
     return suite;
   }
 
+  private suiteReport(suite: ActionReceipt) {
+    try { return readProjectCheckSuiteReport(this.store, suite); }
+    catch { return undefined; }
+  }
+
   status(actorId: string, workspaceId: string, id: string): ProjectCheckRunStatus {
     if (!ACTOR.test(actorId) || !WORKSPACE.test(workspaceId) || !ID.test(id)) throw notFound();
     const receipt = this.read(id);
     if (!receipt) throw notFound();
     const { modId, artifactHash, suiteId } = links(receipt, actorId, workspaceId);
     const base = { id, modId, artifactHash, createdAt: receipt.times.preparedAt };
+    const incomplete = { ...base, state: 'incomplete' as const,
+      finishedAt: receipt.times.incompleteAt ?? receipt.times.committedAt ?? receipt.times.failedAt, code: UNCONFIRMED };
     if (receipt.status === 'prepared') {
       if (this.active?.id === id && this.active.owned) return { ...base, state: this.active.state };
       return { ...base, state: 'pending-recovery', code: UNCONFIRMED };
     }
     if (receipt.status === 'failed') {
-      return { ...base, state: 'failed', finishedAt: receipt.times.failedAt, code: receipt.validation.code };
+      const failed = { ...base, state: 'failed' as const, finishedAt: receipt.times.failedAt, code: receipt.validation.code };
+      const suiteHash = receipt.validation.summary;
+      if (receipt.validation.code !== 'PROJECT_CHECK_RUN_SUITE_FAILED' || suiteHash === undefined) return failed;
+      const suite = this.suiteFor(receipt, suiteId, suiteHash);
+      const suiteReport = suite?.status === 'failed' ? this.suiteReport(suite) : undefined;
+      return suiteReport?.state === 'failed' ? { ...failed, suiteReport } : incomplete;
     }
     if (receipt.status === 'committed' && receipt.validation.code === PASSED && receipt.after?.outcome === 'applied') {
       const hash = receipt.after.resources.find(resource => resource.root === SUITE_ROOT)?.hash;
@@ -175,10 +189,21 @@ export class ProjectCheckRunService {
       if (suite && suite.status === 'committed' && suite.validation.status === 'passed'
         && suite.validation.code === 'PROJECT_CHECK_SUITE_PASSED' && suite.after?.outcome === 'applied'
         && canonicalJson(receipt.after.resources) === canonicalJson(outcomes(receipt, 'passed', suite))) {
-        return { ...base, state: 'passed', finishedAt: receipt.times.committedAt, suiteReceipt: { id: suite.id, hash: suite.hash } };
+        const suiteReport = this.suiteReport(suite);
+        if (suiteReport?.state === 'passed') return { ...base, state: 'passed', finishedAt: receipt.times.committedAt,
+          suiteReceipt: suiteReport.suite, suiteReport };
       }
     }
-    return { ...base, state: 'incomplete', finishedAt: receipt.times.incompleteAt ?? receipt.times.committedAt, code: UNCONFIRMED };
+    if (receipt.status === 'incomplete' && receipt.after?.outcome === 'partial') {
+      const hash = receipt.after.resources.find(resource => resource.root === SUITE_ROOT)?.hash;
+      const suite = hash && this.suiteFor(receipt, suiteId, hash);
+      if (suite && suite.status === 'incomplete'
+        && canonicalJson(receipt.after.resources) === canonicalJson(outcomes(receipt, 'incomplete', suite))) {
+        const suiteReport = this.suiteReport(suite);
+        if (suiteReport?.state === 'incomplete') return { ...incomplete, suiteReport };
+      }
+    }
+    return incomplete;
   }
 
   retry(actorId: string, workspaceId: string, operationId: string, requestHash: string): ProjectCheckRunStatus | undefined {
@@ -279,7 +304,8 @@ export class ProjectCheckRunService {
       });
     } else if ('refused' in completion || suite?.status === 'failed') {
       const code = 'refused' in completion ? completion.refused : 'PROJECT_CHECK_RUN_SUITE_FAILED';
-      this.store.fail(receipt.id, { validation: { ...receipt.validation, status: 'failed', code }, failure: { code } });
+      this.store.fail(receipt.id, { validation: { ...receipt.validation, status: 'failed', code,
+        ...(suite?.status === 'failed' ? { summary: suite.hash } : {}) }, failure: { code } });
     } else {
       this.store.transition(receipt.id, { to: 'incomplete', at: new Date().toISOString(),
         validation: { ...receipt.validation, status: 'failed', code: UNCONFIRMED }, failure: { code: UNCONFIRMED },

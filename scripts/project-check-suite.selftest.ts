@@ -10,7 +10,7 @@ import { buildArtifactPlan } from '../src/lib/artifactPipeline';
 import { captureDeploymentSnapshot } from '../src/server/deploymentSnapshot';
 import { ProjectCheckApprovalLedger } from '../src/server/projectCheckApproval';
 import { captureProjectCheckSetup, freezeProjectCheckSetup } from '../src/server/projectCheckSetup';
-import { executeProjectCheckSuite, requirePassedProjectCheckSuite } from '../src/server/projectCheckSuite';
+import { executeProjectCheckSuite, readProjectCheckSuiteReport, requirePassedProjectCheckSuite } from '../src/server/projectCheckSuite';
 import { canonicalSourceKey } from '../src/server/resourceCoordinator';
 import { SharedSourceCoordinator, type ProjectCheckSourceLease } from '../src/server/sharedSourceCoordinator';
 
@@ -273,13 +273,21 @@ try {
     assert.equal(child.validation.code, 'PROJECT_CHECK_PASSED');
     assert.deepEqual(child, reopened.read(child.id));
   }
+  const passedReport = readProjectCheckSuiteReport(reopened, receipt);
+  assert(passedReport);
+  assert.equal(passedReport.state, 'passed');
+  assert.equal(passedReport.notRunCount, 0);
+  assert.deepEqual(passedReport.checks.map(check => check.id).sort(), ['alpha', 'omega']);
   record('the exact parent and both command receipts reopen against independently frozen identical inputs');
 
   const incompleteChild = verified.commandReceipts[0];
   const childPath = reopened.pathFor(incompleteChild.id);
   const hidden = childPath + '.fixture-hidden';
   fs.renameSync(childPath, hidden);
-  try { await assert.rejects(async () => requirePassedProjectCheckSuite(reopenedInput, receipt.id)); }
+  try {
+    await assert.rejects(async () => requirePassedProjectCheckSuite(reopenedInput, receipt.id));
+    assert.throws(() => readProjectCheckSuiteReport(reopened, receipt));
+  }
   finally { fs.renameSync(hidden, childPath); }
   const childBytes = fs.readFileSync(childPath);
   fs.appendFileSync(childPath, '\n');
@@ -306,6 +314,17 @@ try {
   const children = failure.store.listVerified().filter(isCommand);
   assert.deepEqual(children.map(item => [item.authority.operationId.split(':').at(-1), item.validation.code]).sort(),
     [['alpha', 'PROJECT_CHECK_EXIT_NONZERO'], ['omega', 'PROJECT_CHECK_PASSED']]);
+  const failedReport = readProjectCheckSuiteReport(failure.store, failed);
+  assert(failedReport);
+  assert.equal(failedReport.state, 'failed');
+  assert.equal(failedReport.plannedCount, 3);
+  assert.equal(failedReport.notRunCount, 1);
+  const failedCheck = failedReport.checks.find(check => check.id === 'alpha');
+  assert(failedCheck);
+  assert.equal(failedCheck.state, 'failed');
+  assert.equal(failedCheck.code, 'PROJECT_CHECK_EXIT_NONZERO');
+  assert.equal(failedCheck.worker?.exitCode, 7);
+  assert.equal(failedCheck.worker?.status, 'failed');
   assert(started(failure.commands[0].marker) && started(failure.commands[1].marker));
   assert(!fs.existsSync(failure.commands[2].marker));
   await assert.rejects(async () => requirePassedProjectCheckSuite(failure.exact, failed.id));
@@ -323,6 +342,13 @@ try {
   assert.equal(attempted.length, 1);
   assert.equal(attempted[0].authority.operationId, `project-check:${unknown.exact.runId}:omega`);
   assert.equal(attempted[0].validation.code, 'PROJECT_CHECK_RESULT_UNCONFIRMED');
+  const incompleteReport = readProjectCheckSuiteReport(unknown.store, incomplete);
+  assert(incompleteReport);
+  assert.equal(incompleteReport.state, 'incomplete');
+  assert.equal(incompleteReport.notRunCount, 1);
+  assert.equal(incompleteReport.checks[0].id, 'omega');
+  assert.equal(incompleteReport.checks[0].state, 'incomplete');
+  assert.equal(incompleteReport.checks[0].worker, undefined);
   for (const command of unknown.commands) assert(!fs.existsSync(command.marker));
   await assert.rejects(async () => requirePassedProjectCheckSuite(wrongRuntime, incomplete.id));
   record('an unconfirmed first result leaves an incomplete suite and never creates the second child attempt');
@@ -351,6 +377,12 @@ try {
   assert.equal(changedChildren.length, 1);
   assert.equal(changedChildren[0].authority.operationId, `project-check:${changed.exact.runId}:omega`);
   assert.equal(changedChildren[0].validation.code, 'PROJECT_CHECK_PASSED');
+  const stoppedReport = readProjectCheckSuiteReport(reopenedChanged, revokedBetween);
+  assert(stoppedReport);
+  assert.equal(stoppedReport.state, 'failed');
+  assert.equal(stoppedReport.stoppedBeforeCheckId, 'alpha');
+  assert.equal(stoppedReport.notRunCount, 1);
+  assert.deepEqual(stoppedReport.checks.map(check => [check.id, check.state]), [['omega', 'passed']]);
   assert(started(changed.commands[0].marker));
   assert(!fs.existsSync(changed.commands[1].marker));
   record('owner revocation after the first child commits leaves a durable failed suite without starting the second');
