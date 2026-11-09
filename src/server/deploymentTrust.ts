@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { actionReceiptIdForOperation, type ActionReceipt, type ActionReceiptOperationIdentity } from '../lib/actionReceipt';
+import { actionReceiptIdForOperation, transitionActionReceipt, type ActionReceipt, type ActionReceiptOperationIdentity } from '../lib/actionReceipt';
 import type { ActionReceiptStore } from '../lib/actionReceiptStore';
 import type { DeploymentRecoveryRecord, DestructiveRecoveryStore } from '../lib/destructiveRecovery';
 import type { AcceptanceDecision, AcceptancePrincipal, AcceptanceSubject } from './findingAcceptance';
@@ -257,13 +257,26 @@ export function recordIncompleteDeployOutput(store: ActionReceiptStore, prepared
 }
 
 export function commitDeployRecord(store: ActionReceiptStore, prepared: ActionReceipt, fingerprint: string): ActionReceipt {
-  const result = store.commit(prepared.id, {
-    validation: { ...prepared.validation, status: 'passed', code: 'DEPLOYED_BYTES_VERIFIED',
+  const commit = {
+    at: new Date().toISOString(),
+    validation: { ...prepared.validation, status: 'passed' as const, code: 'DEPLOYED_BYTES_VERIFIED',
       summary: String(prepared.metadata?.outcome) },
-    rollbackStatus: 'available',
-    after: { outcome: 'applied', resources: deploymentAfterResources(prepared, fingerprint) },
-  });
-  const durable = store.read(result.id);
-  if (durable.hash !== result.hash || durable.status !== 'committed') throw new Error('Deployment receipt readback mismatch.');
-  return durable;
+    rollbackStatus: 'available' as const,
+    after: { outcome: 'applied' as const, resources: deploymentAfterResources(prepared, fingerprint) },
+  };
+  const expected = transitionActionReceipt(prepared, { ...commit, to: 'committed' });
+  try {
+    const written = store.commit(prepared.id, commit);
+    if (written.hash !== expected.hash) throw new Error('Deployment receipt readback mismatch.');
+    return written;
+  } catch (error) {
+    // The store can throw while reopening an already promoted commit. Only the exact
+    // original prepared record gives the caller authority to attempt rollback.
+    const durable = store.tryRead(prepared.id);
+    if (durable.ok && durable.receipt.hash === expected.hash) return durable.receipt;
+    if (durable.ok && durable.receipt.hash === prepared.hash) throw error;
+    throw Object.assign(new Error('Forge could not verify the deployment commit outcome.', { cause: error }), {
+      code: 'DEPLOY_COMMIT_OUTCOME_UNKNOWN',
+    });
+  }
 }

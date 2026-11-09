@@ -144,6 +144,10 @@ is incomplete. Check `deployment.fidelityScope` before comparing files.
 refers to an unverified attempt, and `none` covers preview, refusal, or an
 exact restore to prior bytes.
 
+`DEPLOY_COMMIT_OUTCOME_UNKNOWN` means receipt storage could not confirm the
+outcome after the target passed its checks. Forge preserves the deployed files
+and recovery snapshot. Use the operation lookup once receipt storage is available.
+
 If the target changes after activation, `DEPLOY_OUTPUT_CHANGED` means Forge
 did not verify a successful deploy. A readable changed tree has an incomplete
 receipt. An absent or unreadable target leaves the outcome unknown and its

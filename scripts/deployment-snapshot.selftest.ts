@@ -95,6 +95,42 @@ try {
   check('snapshot audit hash survives durable committed readback', reopened.status === 'committed' && reopened.metadata?.validatedArtifactHash === artifactPlanIdentity(plan, 'loose'));
   check('snapshot scope retained', reopened.metadata?.validatedArtifactScope === 'logical-artifact-bytes');
   check('committed outcome survives without a recovery record', deployOperationOutcome(reopened, recovery) === 'committed');
+
+  const prepareCommitTest = () => prepareDeployRecord(store, subject, decision, principal, [],
+    'recovery_snapshot_test', 'absent', artifactPlanIdentity(plan, 'loose'));
+  const withCommittedReadFailure = (receiptId: string, failures: number, run: () => void) => {
+    const read = fs.readFileSync;
+    fs.readFileSync = ((...args: Parameters<typeof fs.readFileSync>) => {
+      const bytes = read(...args);
+      if (args[0] === store.pathFor(receiptId) && failures > 0 && JSON.parse(bytes.toString()).status === 'committed') {
+        failures--;
+        throw new Error('Test committed receipt readback failure');
+      }
+      return bytes;
+    }) as typeof fs.readFileSync;
+    try { run(); }
+    finally { fs.readFileSync = read; }
+  };
+  const transient = prepareCommitTest();
+  withCommittedReadFailure(transient.id, 1, () => {
+    const result = commitDeployRecord(store, transient, 'a'.repeat(64));
+    check('one failed readback recovers the exact committed action', result.hash === store.read(transient.id).hash
+      && result.after?.resources[0].hash === 'a'.repeat(64));
+  });
+  const unreadable = prepareCommitTest();
+  withCommittedReadFailure(unreadable.id, Infinity, () => {
+    assert.throws(() => commitDeployRecord(store, unreadable, 'b'.repeat(64)), { code: 'DEPLOY_COMMIT_OUTCOME_UNKNOWN' }); assertions++;
+  });
+  check('unreadable result can later resolve from the durable committed record', store.read(unreadable.id).status === 'committed');
+  const unpublished = prepareCommitTest();
+  fs.renameSync = (from, to) => {
+    if (to === store.pathFor(unpublished.id)) throw new Error('Test committed receipt publication failure');
+    rename(from, to);
+  };
+  try {
+    assert.throws(() => commitDeployRecord(store, unpublished, 'c'.repeat(64)), { code: 'RECEIPT_STORE_WRITE_FAILED' }); assertions++;
+  } finally { fs.renameSync = rename; }
+  check('failed publication leaves the exact prepared record', store.read(unpublished.id).hash === unpublished.hash);
   assert.throws(() => redactReceiptMetadata({ arbitraryUnreviewedField: 'not allowed' }), /narrow safe metadata policy/); assertions++;
   console.log(JSON.stringify({ pass: true, assertions }));
 } finally { fs.rmSync(root, { recursive: true, force: true }); }

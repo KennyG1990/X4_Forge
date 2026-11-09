@@ -14532,12 +14532,24 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
           // Audit storage is a required gate, not the best-effort history projection.
           deployReceipt = commitDeployRecord(actionReceiptStore, deployReceipt, deployedFingerprint);
         } catch (error) {
+          const deployCheck = checklist.find(item => item.id === 'deploy');
+          if (error instanceof Error && 'code' in error && error.code === 'DEPLOY_COMMIT_OUTCOME_UNKNOWN') {
+            outputUnconfirmed = true;
+            pendingDeployRecovery = undefined;
+            const detail = 'Forge could not confirm the committed receipt. The deployment and its recovery snapshot were preserved.';
+            if (deployCheck) {
+              deployCheck.status = 'fail';
+              deployCheck.detail += ` ${detail}`;
+            }
+            return res.status(507).json(failWith('deploy', {
+              code: error.code, error: detail, outcome: 'unknown', deployRecord: deployReceipt,
+            }));
+          }
           try {
             const restored = restoreDeploymentRecovery(pendingDeployRecovery, extensionsPath, deployedFingerprint);
             targetMatchesPreState = true;
             destructiveRecoveryStore.abandon(pendingDeployRecovery.id);
             recordFailedDeploy(true);
-            const deployCheck = checklist.find(item => item.id === 'deploy');
             if (deployCheck) {
               deployCheck.status = 'fail';
               deployCheck.detail += ' Recovery receipt finalization failed, so the deployment was rolled back exactly.';
