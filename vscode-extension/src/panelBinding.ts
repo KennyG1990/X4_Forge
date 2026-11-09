@@ -79,13 +79,16 @@ export class PanelBackendBinding {
  * webviews: the startup owner may have completed before the serializer tracks its panel.
  */
 export class SharedBackendEnsure<T> {
-  private pending: Promise<T> | null = null;
+  private pending: { promise: Promise<T>; policy?: string } | null = null;
 
-  async run(start: () => Promise<T>, onReady: (value: T) => void): Promise<T> {
-    const active = this.pending ?? start();
+  async run(start: () => Promise<T>, onReady: (value: T) => void, policy?: string): Promise<T> {
+    if (this.pending && policy !== undefined && this.pending.policy !== policy) {
+      throw new Error("A different Forge backend startup is already in progress.");
+    }
+    const active = this.pending ?? { promise: start(), policy };
     if (!this.pending) this.pending = active;
     try {
-      const value = await active;
+      const value = await active.promise;
       onReady(value);
       return value;
     } finally {

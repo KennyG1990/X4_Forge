@@ -67,6 +67,25 @@ async function main(): Promise<void> {
   ok("failed_startup_does_not_false_bind", rejectedReady === 1);
   ok("failed_startup_can_retry", rejectedStarts === 2);
 
+  const policyGate = new SharedBackendEnsure<typeof a>();
+  let releaseOrdinary!: (value: typeof a) => void;
+  const ordinary = policyGate.run(
+    () => new Promise(resolve => { releaseOrdinary = resolve; }),
+    () => {},
+  );
+  let strictStarted = false;
+  let strictBound = false;
+  try {
+    await policyGate.run(
+      async () => { strictStarted = true; return a; },
+      () => { strictBound = true; },
+      "saved-workspace",
+    );
+  } catch { /* The incompatible pending operation must refuse before starting or binding. */ }
+  releaseOrdinary(a);
+  await ordinary;
+  ok("strict_start_refuses_to_join_a_fallback_start", !strictStarted && !strictBound);
+
   const passed = checks.filter((check) => check.pass).length;
   for (const check of checks) console.log(`${check.pass ? "ok" : "not ok"} ${check.name}`);
   console.log(`panel binding selftest: ${passed}/${checks.length}`);

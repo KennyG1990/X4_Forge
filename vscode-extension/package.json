@@ -64,13 +64,17 @@
     "viewsWelcome": [
       {
         "view": "x4forge.launcher",
-        "contents": "Author, validate, package, and deploy X4: Foundations mods in one local workspace.\n\n[Open Studio](command:x4forge.openStudio)\n\nThe Studio connects a visual Mission Director graph with native X4-aware XML editing, deterministic diagnostics, and guarded package and deploy workflows. Configure your X4 installation and reference/schema data in Studio Settings.\n\n[Open Mod Folder](command:x4forge.openModFolder)\n[Create Agent Key](command:x4forge.createAgentKey)\n[Show Backend Logs](command:x4forge.showLogs)\n[Stop Local Backend](command:x4forge.stopSidecar)"
+        "contents": "Author, validate, package, and deploy X4: Foundations mods in one local workspace.\n\n[Open Studio](command:x4forge.openStudio)\n\nThe Studio connects a visual Mission Director graph with native X4-aware XML editing, deterministic diagnostics, and guarded package and deploy workflows. Configure your X4 installation and reference/schema data in Studio Settings.\n\n[Open Mod Folder](command:x4forge.openModFolder)\n[Create Agent Key](command:x4forge.createAgentKey)\n[Show Backend Logs](command:x4forge.showLogs)\n[Start Local Backend](command:x4forge.startSidecar)\n[Stop Local Backend](command:x4forge.stopSidecar)"
       }
     ],
     "commands": [
       {
         "command": "x4forge.openStudio",
         "title": "X4 Forge: Open Studio"
+      },
+      {
+        "command": "x4forge.startSidecar",
+        "title": "X4 Forge: Start Local Backend"
       },
       {
         "command": "x4forge.stopSidecar",

@@ -76,11 +76,20 @@ let panel: vscode.WebviewPanel | null = null;
 const panelBinding = new PanelBackendBinding();
 const backendEnsurer = new SharedBackendEnsure<BackendHandle>();
 const studioPanels = new Map<string, vscode.WebviewPanel>();
+const studioFrames = new Map<string, { id: string; handle: BackendHandle }>();
 let nextStudioPanelKey = 1;
 let output: vscode.OutputChannel;
 let statusItem: vscode.StatusBarItem;
 /** Set while deliberately stopping the sidecar so the exit handler stays quiet. */
 let stoppingDeliberately = false;
+let backendStopGeneration = 0;
+let startingChild: ChildProcess | null = null;
+let retiringChild: ChildProcess | null = null;
+const stoppingChildren = new WeakSet<ChildProcess>();
+
+function assertBackendStartCurrent(generation: number): void {
+  if (generation !== backendStopGeneration) throw new Error("Forge backend startup was stopped.");
+}
 
 function backendApiHeaders(handle: BackendHandle, json = false): Record<string, string> {
   const headers: Record<string, string> = {};
@@ -111,10 +120,12 @@ function freshActionOperationHeaders(existing: HeadersInit): Headers {
   return headers;
 }
 
-async function bindBackendWorkspace(context: vscode.ExtensionContext, handle: BackendHandle): Promise<void> {
+async function bindBackendWorkspace(
+  context: vscode.ExtensionContext, handle: BackendHandle, generation: number, exactWorkspaceId?: string,
+): Promise<void> {
   if (!handle.owned || !handle.token) return;
   handle.clientId ||= `client_extension_${process.pid}_${Date.now().toString(36)}`;
-  const saved = context.globalState.get<string>('x4forge.workspaceId') || '';
+  const saved = exactWorkspaceId ?? context.globalState.get<string>('x4forge.workspaceId') ?? '';
   const attempt = async (workspaceId: string) => {
     // Each attempt is a new fetch invocation. The fallback with a changed
     // workspaceId must not share identity with the rejected request.
@@ -133,9 +144,14 @@ async function bindBackendWorkspace(context: vscode.ExtensionContext, handle: Ba
     };
   };
   let result = await attempt(saved);
+  assertBackendStartCurrent(generation);
   if (!result.response.ok && saved && ['WORKSPACE_NOT_FOUND', 'WORKSPACE_ID_INVALID'].includes(String(result.body.code || ''))) {
+    if (exactWorkspaceId !== undefined) {
+      throw new Error("The saved Forge workspace is unavailable. Open Studio to select a workspace.");
+    }
     result = await attempt('');
   }
+  assertBackendStartCurrent(generation);
   if (!workspaceAuthorityResponseAcceptable(result.response.ok, result.requestedWorkspaceId, result.body.workspaceId)) {
     throw new Error(result.body.error || `workspace bootstrap failed (${result.response.status})`);
   }
@@ -145,13 +161,27 @@ async function bindBackendWorkspace(context: vscode.ExtensionContext, handle: Ba
 }
 
 function requestManagedSidecarStop(child: ChildProcess): void {
-  if (child.exitCode !== null || child.signalCode !== null) return;
+  if (child.exitCode !== null || child.signalCode !== null || stoppingChildren.has(child)) return;
+  stoppingChildren.add(child);
+  retiringChild = child;
   if (child.stdin?.writable) child.stdin.end();
   else child.kill();
   const fallback = setTimeout(() => {
     if (child.exitCode === null && child.signalCode === null) child.kill();
   }, 2500);
   fallback.unref();
+}
+
+async function awaitManagedSidecarRetirement(generation: number): Promise<void> {
+  const child = retiringChild;
+  if (!child) return;
+  const deadline = Date.now() + 3500;
+  while (child.exitCode === null && child.signalCode === null) {
+    assertBackendStartCurrent(generation);
+    if (Date.now() >= deadline) throw new Error("The previous Forge backend is still shutting down.");
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  if (retiringChild === child) retiringChild = null;
 }
 
 class NativeDiffContentProvider implements vscode.TextDocumentContentProvider {
@@ -449,7 +479,9 @@ function resolveStateDir(context: vscode.ExtensionContext): string {
   return path.join(context.globalStorageUri.fsPath, "state");
 }
 
-async function spawnSidecar(context: vscode.ExtensionContext): Promise<BackendHandle> {
+async function spawnSidecar(
+  context: vscode.ExtensionContext, generation: number, exactWorkspaceId?: string,
+): Promise<BackendHandle> {
   const appRoot = resolveAppRoot(context);
   if (!appRoot) {
     throw new Error(
@@ -468,6 +500,7 @@ async function spawnSidecar(context: vscode.ExtensionContext): Promise<BackendHa
   }
 
   const port = await findFreePort();
+  assertBackendStartCurrent(generation);
   const token = crypto.randomBytes(32).toString("hex");
   const parentNonce = crypto.randomBytes(32).toString('hex');
   const stateDir = resolveStateDir(context);
@@ -496,6 +529,7 @@ async function spawnSidecar(context: vscode.ExtensionContext): Promise<BackendHa
     throw new Error(`Managed sidecar supervisor is missing: ${supervisorPath}. Rebuild the extension package.`);
   }
   const serverPath = path.join(appRoot.root, 'dist', 'server.cjs');
+  assertBackendStartCurrent(generation);
   log(`spawning supervised sidecar: ${nodeExe} (${nodeVersion}) ${supervisorPath} ${serverPath} ${nodeArgs.join(" ")}`.replace(/\s+/g, " "));
   log(`  app root: ${appRoot.root} (${appRoot.source})`);
   log(`  port: ${port} (dynamically selected)  state dir: ${stateDir}`);
@@ -522,6 +556,7 @@ async function spawnSidecar(context: vscode.ExtensionContext): Promise<BackendHa
       FORGE_ALLOW_RUN_COMMAND: "",
     },
   });
+  startingChild = child;
   child.stdout?.on("data", (d) => output.append(String(d)));
   child.stderr?.on("data", (d) => output.append(String(d)));
 
@@ -534,9 +569,13 @@ async function spawnSidecar(context: vscode.ExtensionContext): Promise<BackendHa
   }
 
   child.on("exit", (code, signal) => {
+    if (retiringChild === child) retiringChild = null;
     log(`sidecar exited (code=${code}, signal=${signal ?? "none"})`);
     const wasCurrent = backend === handle;
-    if (backend === handle) backend = null;
+    if (wasCurrent) {
+      backend = null;
+      markStudioBackendOffline(handle.owned);
+    }
     updateStatus();
     if (wasCurrent && !stoppingDeliberately) {
       // Watchdog (2026-07-16): anything can kill a long-lived local process (OOM killer, a
@@ -551,33 +590,37 @@ async function spawnSidecar(context: vscode.ExtensionContext): Promise<BackendHa
   });
 
   // Readiness: the server must answer its own public schema endpoint.
-  const deadline = Date.now() + (debugMode === "off" ? 30_000 : 120_000);
-  while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
-      throw new Error(
-        `Forge backend crashed during startup (exit code ${child.exitCode}). See "X4 Forge" output for its logs.`,
-      );
+  try {
+    const deadline = Date.now() + (debugMode === "off" ? 30_000 : 120_000);
+    while (Date.now() < deadline) {
+      assertBackendStartCurrent(generation);
+      if (child.exitCode !== null || child.signalCode !== null) {
+        throw new Error(
+          `Forge backend exited during startup (code ${child.exitCode ?? child.signalCode}). See "X4 Forge" output for its logs.`,
+        );
+      }
+      if (await probeForge(handle.baseUrl, 1500)) {
+        assertBackendStartCurrent(generation);
+        await bindBackendWorkspace(context, handle, generation, exactWorkspaceId);
+        assertBackendStartCurrent(generation);
+        log(`sidecar ready at ${handle.baseUrl}`);
+        return handle;
+      }
+      await new Promise((r) => setTimeout(r, 400));
     }
-    if (await probeForge(handle.baseUrl, 1500)) {
-      await bindBackendWorkspace(context, handle);
-      log(`sidecar ready at ${handle.baseUrl}`);
+    assertBackendStartCurrent(generation);
+    // A debugger may deliberately hold the backend before its first instruction.
+    if (debugMode === "inspect-brk") {
+      log(`sidecar is paused at startup (--inspect-brk) — continue execution in the debugger to start the server.`);
       return handle;
     }
-    await new Promise((r) => setTimeout(r, 400));
-  }
-  // --inspect-brk pauses the server at entry until the developer continues in the debugger,
-  // so a readiness timeout is EXPECTED there — return the handle instead of killing it.
-  if (debugMode === "inspect-brk") {
-    log(`sidecar is paused at startup (--inspect-brk) — continue execution in the debugger to start the server.`);
-    return handle;
-  }
-  stoppingDeliberately = true;
-  try {
+    throw new Error("Forge backend did not become ready within 30s. See \"X4 Forge\" output for its logs.");
+  } catch (error) {
     requestManagedSidecarStop(child);
+    throw error;
   } finally {
-    stoppingDeliberately = false;
+    if (startingChild === child) startingChild = null;
   }
-  throw new Error("Forge backend did not become ready within 30s. See \"X4 Forge\" output for its logs.");
 }
 
 // Sidecar watchdog: auto-restart after an UNEXPECTED exit (deliberate stops set
@@ -589,6 +632,7 @@ const RESTART_MAX = 3;
 let restartTimestamps: number[] = [];
 
 async function autoRestartSidecar(context: vscode.ExtensionContext, exitCode: number | null): Promise<void> {
+  const generation = backendStopGeneration;
   const now = Date.now();
   restartTimestamps = restartTimestamps.filter((t) => now - t < RESTART_WINDOW_MS);
   if (restartTimestamps.length >= RESTART_MAX) {
@@ -603,7 +647,7 @@ async function autoRestartSidecar(context: vscode.ExtensionContext, exitCode: nu
   const attempt = restartTimestamps.length;
   log(`sidecar exited unexpectedly (code ${exitCode ?? "?"}) — auto-restarting (attempt ${attempt}/${RESTART_MAX})`);
   await new Promise((r) => setTimeout(r, 1000 * attempt)); // linear backoff: 1s, 2s, 3s
-  if (backend || stoppingDeliberately) return; // already replaced, or a stop raced the backoff
+  if (backend || generation !== backendStopGeneration) return;
   try {
     const handle = await ensureBackend(context);
     log(`sidecar auto-restarted at ${handle.baseUrl}`);
@@ -611,6 +655,7 @@ async function autoRestartSidecar(context: vscode.ExtensionContext, exitCode: nu
       "X4 Forge: the backend stopped unexpectedly and was restarted automatically.",
     );
   } catch (err) {
+    if (generation !== backendStopGeneration) return;
     showBackendError(
       `The Forge backend exited unexpectedly and auto-restart failed: ` +
         `${err instanceof Error ? err.message : String(err)} — run "X4 Forge: Open Studio" again.`,
@@ -618,19 +663,33 @@ async function autoRestartSidecar(context: vscode.ExtensionContext, exitCode: nu
   }
 }
 
-async function ensureBackend(context: vscode.ExtensionContext): Promise<BackendHandle> {
+async function ensureBackend(context: vscode.ExtensionContext, exactWorkspaceId?: string): Promise<BackendHandle> {
+  const generation = backendStopGeneration;
   return backendEnsurer.run(
-    () => ensureBackendOnce(context),
-    (handle) => { bindStudioPanels(handle); },
+    () => ensureBackendOnce(context, exactWorkspaceId),
+    (handle) => {
+      assertBackendStartCurrent(generation);
+      if (exactWorkspaceId !== undefined) {
+        if (!handle.owned) throw new Error("The configured backend is externally managed.");
+        if ((!handle.debugPort || handle.workspaceId) && (!handle.workspaceId
+          || (exactWorkspaceId && handle.workspaceId !== exactWorkspaceId))) {
+          throw new Error("The saved Forge workspace could not be confirmed. Open Studio to select a workspace.");
+        }
+      }
+      bindStudioPanels(handle);
+    },
+    exactWorkspaceId,
   );
 }
 
-async function ensureBackendOnce(context: vscode.ExtensionContext): Promise<BackendHandle> {
+async function ensureBackendOnce(context: vscode.ExtensionContext, exactWorkspaceId?: string): Promise<BackendHandle> {
+  const generation = backendStopGeneration;
   // Reuse a live handle.
   const existing = backend;
   if (existing) {
     const ownedLiveness = existing.owned ? await probeOwnedForge(existing) : null;
     const live = ownedLiveness?.live ?? await probeForge(existing.baseUrl, 2000);
+    assertBackendStartCurrent(generation);
     if (live && backend === existing) {
       if (ownedLiveness?.reason === "responsive" && ownedLiveness.recoveredAfterRetry) {
         log(`owned backend at ${existing.baseUrl} responsive after lightweight liveness retry ${ownedLiveness.attempts}; retaining handle`);
@@ -654,13 +713,19 @@ async function ensureBackendOnce(context: vscode.ExtensionContext): Promise<Back
         stoppingDeliberately = false;
       }
     }
-    if (backend === existing) backend = null;
+    if (backend === existing) {
+      backend = null;
+      markStudioBackendOffline(existing.owned);
+    }
   }
 
   // Attach-first: an already-running Forge (e.g. the standalone dev stack) wins.
   const { attachUrl } = cfg();
   if (attachUrl) {
-    if (await probeForge(attachUrl)) {
+    const available = await probeForge(attachUrl);
+    assertBackendStartCurrent(generation);
+    if (available) {
+      if (exactWorkspaceId !== undefined) throw new Error("A Forge backend already answers at the configured external address.");
       log(`attached to already-running Forge at ${attachUrl} (externally owned — will not be stopped by the extension)`);
       backend = { baseUrl: attachUrl, owned: false };
       updateStatus();
@@ -669,16 +734,29 @@ async function ensureBackendOnce(context: vscode.ExtensionContext): Promise<Back
     log(`no Forge answering at ${attachUrl}; starting a managed sidecar`);
   }
 
-  backend = await spawnSidecar(context);
+  await awaitManagedSidecarRetirement(generation);
+  assertBackendStartCurrent(generation);
+  backend = await spawnSidecar(context, generation, exactWorkspaceId);
+  const handle = backend;
+  if (generation !== backendStopGeneration) {
+    backend = null;
+    requestManagedSidecarStop(handle.child!);
+  }
+  assertBackendStartCurrent(generation);
   updateStatus();
-  return backend;
+  return handle;
 }
 
 function stopOwnedSidecar(reason: string): boolean {
-  if (!backend?.owned || !backend.child) return false;
+  backendStopGeneration++;
+  const pending = startingChild;
+  startingChild = null;
+  if (pending) requestManagedSidecarStop(pending);
+  if (!backend?.owned || !backend.child) return !!pending;
   log(`stopping owned sidecar (${reason})`);
   const owned = backend;
   backend = null;
+  markStudioBackendOffline(owned.owned);
   stoppingDeliberately = true;
   try {
     requestManagedSidecarStop(owned.child!);
@@ -693,7 +771,7 @@ function stopOwnedSidecar(reason: string): boolean {
 // Webview
 // ---------------------------------------------------------------------------
 
-function webviewHtml(webview: vscode.Webview, forgeUrl: string, mode: string): string {
+function webviewHtml(webview: vscode.Webview, forgeUrl: string, mode: string, frameId: string): string {
   // The Forge page is served BY ITS OWN BACKEND (token pre-injected, all API calls
   // same-origin inside the frame) — the webview shell only needs to host the iframe.
   // Loopback http is a "potentially trustworthy" origin, so framing it is allowed.
@@ -714,23 +792,33 @@ function webviewHtml(webview: vscode.Webview, forgeUrl: string, mode: string): s
     html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #0b0e14; }
     iframe { border: 0; width: 100%; height: 100%; display: block; }
     .badge { position: fixed; right: 6px; bottom: 4px; font: 10px sans-serif; color: #556; pointer-events: none; }
+    #backend-notice { position: fixed; top: 0; left: 0; right: 0; z-index: 1; padding: 8px; color: #fff; background: #452912; font: 13px sans-serif; }
   </style>
 </head>
 <body>
   <iframe id="forge-frame" src="${forgeUrl}/" allow="clipboard-read; clipboard-write"></iframe>
   <div class="badge">X4 Forge Studio — ${mode}</div>
+  <div id="backend-notice" role="status" hidden></div>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const frame = document.getElementById('forge-frame');
+    const notice = document.getElementById('backend-notice');
+    const frameId = ${JSON.stringify(frameId)};
     const forgeOrigin = ${JSON.stringify(forgeOrigin)};
     window.addEventListener('message', (event) => {
-      if (event.source !== frame.contentWindow || event.origin !== forgeOrigin) return;
+      if (!notice.hidden || event.source !== frame.contentWindow || event.origin !== forgeOrigin) return;
       const data = event.data;
       if (!data || data.source !== 'x4forge-studio' || !['open-workspace-file', 'open-text-diff', 'open-node-selection', 'node-selection-result', 'open-external-url', 'release-native-action', 'workspace-authority-changed'].includes(data.type)) return;
-      vscode.postMessage(data);
+      vscode.postMessage({ ...data, frameId });
     });
     window.addEventListener('message', (event) => {
       const data = event.data;
+      if (data?.source === 'x4forge-native-host' && data.type === 'backend-offline') {
+        if (event.source === frame.contentWindow || data.frameId !== frameId) return;
+        notice.textContent = data.message;
+        notice.hidden = false;
+        return;
+      }
       if (!data || data.source !== 'x4forge-native-host' || !['apply-node-selection', 'release-native-result'].includes(data.type)) return;
       frame.contentWindow.postMessage(data, forgeOrigin);
     });
@@ -758,16 +846,25 @@ function trackStudioPanel(context: vscode.ExtensionContext, nextPanel: vscode.We
   const panelKey = `studio-${nextStudioPanelKey++}`;
   studioPanels.set(panelKey, nextPanel);
   panelBinding.track(panelKey, (current) => {
+    if (!backend) return;
+    const frame = { id: crypto.randomBytes(18).toString('hex'), handle: backend };
+    studioFrames.set(panelKey, frame);
     nextPanel.webview.html = webviewHtml(
       nextPanel.webview,
       current.baseUrl,
       current.owned ? `managed sidecar on port ${current.port}` : `attached to ${current.baseUrl}`,
+      frame.id,
     );
     log(`studio panel bound to ${current.baseUrl}`);
   });
   if (nextPanel.active) panelBinding.setActive(panelKey);
   syncCanonicalStudioPanel();
-  context.subscriptions.push(nextPanel.webview.onDidReceiveMessage((message) => void handleStudioMessage(context, message)));
+  context.subscriptions.push(nextPanel.webview.onDidReceiveMessage((message) => {
+    const frame = studioFrames.get(panelKey);
+    if (frame && backend === frame.handle && message?.frameId === frame.id) {
+      void handleStudioMessage(context, message, frame.handle);
+    }
+  }));
   nextPanel.onDidChangeViewState(() => {
     if (nextPanel.active) {
       panelBinding.setActive(panelKey);
@@ -782,6 +879,7 @@ function trackStudioPanel(context: vscode.ExtensionContext, nextPanel: vscode.We
     syncCanonicalStudioPanel();
   });
   nextPanel.onDidDispose(() => {
+    studioFrames.delete(panelKey);
     studioPanels.delete(panelKey);
     panelBinding.untrack(panelKey);
     for (const [candidateKey, candidate] of studioPanels) {
@@ -799,7 +897,7 @@ function syncCanonicalStudioPanel(): void {
   panel = activeKey ? studioPanels.get(activeKey) ?? null : null;
 }
 
-async function handleStudioMessage(context: vscode.ExtensionContext, value: unknown): Promise<void> {
+async function handleStudioMessage(context: vscode.ExtensionContext, value: unknown, handle: BackendHandle): Promise<void> {
   const authority = value as { source?: unknown; type?: unknown; workspaceId?: unknown } | null;
   if (authority?.source === 'x4forge-studio' && authority.type === 'workspace-authority-changed') {
     const workspaceId = String(authority.workspaceId || '');
@@ -808,7 +906,6 @@ async function handleStudioMessage(context: vscode.ExtensionContext, value: unkn
       return;
     }
     try {
-      const handle = await ensureBackend(context);
       if (!handle.owned || !handle.token || !handle.clientId) return;
       const response = await fetch(`${handle.baseUrl}/api/agent/workspaces/bootstrap`, {
         method: 'POST',
@@ -819,6 +916,7 @@ async function handleStudioMessage(context: vscode.ExtensionContext, value: unkn
         body: JSON.stringify({ clientId: handle.clientId, workspaceId }),
       });
       const body = await response.json() as { workspaceId?: string; error?: string };
+      if (backend !== handle) return;
       if (!response.ok || body.workspaceId !== workspaceId) throw new Error(body.error || `HTTP ${response.status}`);
       handle.workspaceId = workspaceId;
       await context.globalState.update('x4forge.workspaceId', workspaceId);
@@ -979,7 +1077,44 @@ async function handleNativeReleaseAction(context: vscode.ExtensionContext, envel
 }
 
 function bindStudioPanels(handle: BackendHandle): boolean {
-  return panelBinding.bind(handle);
+  return backend === handle && panelBinding.bind(handle);
+}
+
+function offlineStudioHtml(): string {
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'">
+<title>X4 Forge Studio</title></head><body><h1>Forge backend is offline</h1>
+<p>Run X4 Forge: Start Local Backend for a managed sidecar. For an attached backend, start it in its owning host and open Studio.</p></body></html>`;
+}
+
+function markStudioBackendOffline(owned: boolean): void {
+  panelBinding.reset();
+  const message = owned
+    ? "Forge backend is offline. Run X4 Forge: Start Local Backend to reconnect."
+    : "Forge backend is offline. Start the configured external backend, then open Studio.";
+  for (const [key, studioPanel] of studioPanels) {
+    const frame = studioFrames.get(key);
+    if (frame) void studioPanel.webview.postMessage({ source: "x4forge-native-host", type: "backend-offline", frameId: frame.id, message });
+  }
+}
+
+async function startLocalBackend(context: vscode.ExtensionContext): Promise<void> {
+  const generation = backendStopGeneration;
+  const saved = context.globalState.get<string>('x4forge.workspaceId') ?? '';
+  try {
+    const handle = await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: "X4 Forge: starting local backend…" },
+      () => ensureBackend(context, saved),
+    );
+    assertBackendStartCurrent(generation);
+    if (handle.debugPort && !handle.workspaceId) {
+      void vscode.window.showInformationMessage("X4 Forge: local backend is waiting for the debugger.");
+      return;
+    }
+    void vscode.window.showInformationMessage("X4 Forge: local backend is running.");
+  } catch (error) {
+    if (generation === backendStopGeneration) showBackendError(error instanceof Error ? error.message : String(error));
+  }
 }
 
 async function openStudio(context: vscode.ExtensionContext): Promise<void> {
@@ -1053,6 +1188,7 @@ export function activate(context: vscode.ExtensionContext): void {
           await ensureBackend(context);
           restoredPanel.reveal(undefined, true);
         } catch (err) {
+          restoredPanel.webview.html = offlineStudioHtml();
           showBackendError(
             `Could not restore the X4 Forge Studio panel: ${err instanceof Error ? err.message : String(err)}`,
           );
@@ -1063,11 +1199,12 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.commands.registerCommand("x4forge.openStudio", () => openStudio(context)),
+    vscode.commands.registerCommand("x4forge.startSidecar", () => startLocalBackend(context)),
     vscode.commands.registerCommand("x4forge.showLogs", () => output.show(true)),
     vscode.commands.registerCommand("x4forge.showCapabilities", showIdeCapabilities),
     vscode.commands.registerCommand("x4forge.stopSidecar", () => {
       if (stopOwnedSidecar("stop command")) {
-        void vscode.window.showInformationMessage("X4 Forge: backend sidecar stopped.");
+        void vscode.window.showInformationMessage("X4 Forge: backend shutdown requested.");
       } else if (backend && !backend.owned) {
         void vscode.window.showInformationMessage(
           "X4 Forge: attached to an externally-run Forge — the extension will not stop it.",
