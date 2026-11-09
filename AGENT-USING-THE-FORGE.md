@@ -205,6 +205,17 @@ When native deploy returns `effect.luaRegistration`, check the added paths and t
 advisory. An unavailable comparison leaves the registration change unknown. Game-side
 execution still needs its own evidence.
 
+For per-file Lua boot evidence, include a root `forge-lua-boot.json` such as
+`{"version":1,"files":["ui/menu.lua"]}`. Each path must also be registered in the
+installed `ui.xml`. Emit `[FORGE-LUA-BOOT] mod=<content-id> run=<run-id> phase=begin`,
+then `[FORGE-LUA-BOOT] mod=<content-id> run=<run-id> file=ui/menu.lua` from the
+tracked file, and a matching `phase=complete` after the load window. Use a new
+run ID for each boot in the same log. Read `luaBootCoverage` in game-log status
+or Runtime Debugger. The compatibility watcher exposes it under
+`runtimeDebugger`. A missing count is available after matching completion.
+It counts absent markers. A manual install without a known deploy boundary
+needs a fresh run after Forge starts observing.
+
 ---
 
 ## 5. Ground every API shape in the corpus — the highest-value habit

@@ -91,6 +91,7 @@ export interface RuntimeDebuggerDeployInfo {
   deployReceiptId?: string;
   workspaceId?: string;
   modId: string;
+  contentId?: string;
   workspaceName: string;
   workspaceHash: string;
   deployedAt: string;
@@ -935,6 +936,8 @@ function reconstructDeploy(raw: RuntimeDebugIncident): PersistedDeployEnvelope |
       ...(typeof attrs.validationOutcome === 'string' ? { validationOutcome: attrs.validationOutcome } : {}),
       ...(typeof attrs.deployReceiptId === 'string' ? { deployReceiptId: attrs.deployReceiptId } : {}),
       modId: boundedText(modId, 256),
+      ...(typeof attrs.contentId === 'string' && /^[a-z0-9_-][a-z0-9_.-]{0,127}$/i.test(attrs.contentId)
+        ? { contentId: attrs.contentId } : {}),
       workspaceName: boundedText(workspaceName, 512),
       workspaceHash: boundedText(workspaceHash, 256),
       deployedAt: boundedText(deployedAt, 128),
@@ -1380,8 +1383,14 @@ export class RuntimeDebuggerAdapter {
   }
 
   readDeployInfo(workspaceId: string): RuntimeDebuggerDeployInfo | null {
+    return this.readDeployContext(workspaceId)?.info ?? null;
+  }
+
+  readDeployContext(workspaceId: string): { info: RuntimeDebuggerDeployInfo; boundary?: GameLogDeployBoundary } | null {
     const result = this.store.readSnapshot(workspaceId);
-    return result.ok ? this.reconstructDeployInfo(result.snapshot) : null;
+    if (!result.ok) return null;
+    const info = this.reconstructDeployInfo(result.snapshot);
+    return info ? { info, boundary: runtimeDeployLogBoundary(result.snapshot, info) } : null;
   }
 
   recordSuccessfulDeploy(workspaceId: string, infoInput: RuntimeDebuggerDeployInfo): RuntimeDebugSessionResult {
@@ -1438,6 +1447,7 @@ export class RuntimeDebuggerAdapter {
           tokenHash,
           workspaceId,
           modId: info.modId,
+          ...(info.contentId ? { contentId: info.contentId } : {}),
           workspaceName: info.workspaceName,
           workspaceHash: info.workspaceHash,
           deployedAt: info.deployedAt,

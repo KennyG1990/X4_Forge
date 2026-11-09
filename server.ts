@@ -206,6 +206,7 @@ import { registerNpcIdentityProbeRoutes } from "./src/server/npcIdentityProbe";
 import { registerSelftests } from "./src/server/selftestRegistry";
 import { RuntimeDebuggerAdapter, expectedInputFromLegacy, runtimeDeployLogBoundary, type RuntimeDebuggerAdapterResult } from "./src/server/runtimeDebuggerAdapter";
 import { readGameLogLoadEvidence, type GameLogDeployBoundary } from "./src/server/gameLogLoadEvidence";
+import { installedLuaBootCoverage } from "./src/server/installedLuaBootCoverage";
 import { runRuntimeDebuggerAdapterSelftest } from "./src/server/runtimeDebuggerAdapter.selftest";
 import {
   createAgentKeyStore,
@@ -1486,6 +1487,7 @@ type LastDeployInfo = {
   validationOutcome?: string;
   deployReceiptId?: string;
   modId: string;
+  contentId?: string;
   workspaceName: string;
   /** Exact sanitized workspace content compiled for this deploy (B36 freshness proof). */
   workspaceHash: string;
@@ -1519,6 +1521,7 @@ function recordSuccessfulDeploy(req: express.Request, info: LastDeployInfo): Las
     const deployContext = {
       workspaceId: record.workspaceId,
       modId: normalizedInfo.modId,
+      ...(normalizedInfo.contentId ? { contentId: normalizedInfo.contentId } : {}),
       workspaceName: normalizedInfo.workspaceName,
       workspaceHash: normalizedInfo.workspaceHash,
       deployedAt: normalizedInfo.deployedAt,
@@ -1542,7 +1545,10 @@ function recordSuccessfulDeploy(req: express.Request, info: LastDeployInfo): Las
 function deployInfoForWorkspace(record: WorkspaceRecord): LastDeployInfo | null {
   const inMemory = lastDeployByWorkspaceId.get(record.workspaceId);
   if (inMemory) return inMemory;
-  return runtimeDebuggerAdapter.readDeployInfo(record.workspaceId);
+  const retained = runtimeDebuggerAdapter.readDeployContext(record.workspaceId);
+  if (!retained) return null;
+  if (retained.boundary) gameLogDeployBoundaries.set(retained.info, retained.boundary);
+  return retained.info;
 }
 type ArtifactBuildReport = {
   mode: 'loose' | 'catalog';
@@ -2259,16 +2265,30 @@ function countModRuntimeErrors(tail: string, markers: string[]): { count: number
   return { count, markerLines: markerIdx.size, samples };
 }
 
+function luaBootStatus(modId: string, folder: string, logPath: string, deploy: LastDeployInfo | null) {
+  const game = resolveXsdConfig().x4GamePath;
+  if (!game || !modId || !folder) return null;
+  const extensionsRoot = path.join(game, 'extensions');
+  return installedLuaBootCoverage({
+    extensionsRoot,
+    target: deploy?.deployedPath || path.join(extensionsRoot, folder),
+    modId,
+    logPath,
+    fence: deploy ? { at: deploy.deployedAt, boundary: gameLogDeployBoundaries.get(deploy) } : undefined,
+  });
+}
+
 function getGameLogStatus(modIdInput?: string, workspaceName?: string, deployInfo: LastDeployInfo | null = lastDeployInfo) {
   const raw = String(modIdInput || deployInfo?.workspaceName || workspaceName || '');
   const modId = (!modIdInput && deployInfo?.modId) || toSafeModId(raw);
   const requestedId = raw.trim().toLowerCase();
   const requestedLoadId = /^[a-z0-9_.-]+$/.test(requestedId) ? requestedId : '';
   const recordedId = deployInfo?.modId.toLowerCase();
+  const recordedContentId = deployInfo?.contentId?.toLowerCase();
   const recordedFolder = deployInfo?.deployedPath ? path.basename(deployInfo.deployedPath).toLowerCase() : '';
-  const relevantLastDeploy = deployInfo && (!modIdInput || (requestedLoadId && [recordedId, recordedFolder].includes(requestedLoadId)))
+  const relevantLastDeploy = deployInfo && (!modIdInput || (requestedLoadId && [recordedId, recordedContentId, recordedFolder].includes(requestedLoadId)))
     ? deployInfo : null;
-  const loadIds = (relevantLastDeploy ? [recordedId, recordedFolder] : [requestedLoadId])
+  const loadIds = (relevantLastDeploy ? [recordedId, recordedContentId, recordedFolder] : [requestedLoadId])
     .filter((id): id is string => !!id && /^[a-z0-9_.-]+$/.test(id));
   // Candidate identifiers the log line might actually use — covers the display name, its
   // space/underscore forms, and the common display-name→folder-id drift (a trailing "_mod"
@@ -2294,6 +2314,8 @@ function getGameLogStatus(modIdInput?: string, workspaceName?: string, deployInf
   ].filter(s => s && s.length >= 3)));
   const candidates = findDebugLogCandidates();
   const selectedLogPath = candidates.find(candidate => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
+  const luaBootCoverage = luaBootStatus(relevantLastDeploy?.contentId || relevantLastDeploy?.modId || requestedLoadId,
+    relevantLastDeploy ? recordedFolder || relevantLastDeploy.modId : requestedLoadId, selectedLogPath || '', relevantLastDeploy);
 
   if (!selectedLogPath) {
     return {
@@ -2303,6 +2325,7 @@ function getGameLogStatus(modIdInput?: string, workspaceName?: string, deployInf
       selectedLogPath: "",
       checkedPaths: candidates,
       lastDeploy: relevantLastDeploy,
+      luaBootCoverage,
       issues: [],
       tailLines: []
     };
@@ -2445,6 +2468,7 @@ function getGameLogStatus(modIdInput?: string, workspaceName?: string, deployInf
     // Explicit pipeline states: Compiled -> Deployed -> Seen by X4 -> Loaded cleanly -> Runtime errors.
     states,
     loadEvidence,
+    luaBootCoverage,
     selectedLogPath,
     checkedPaths: candidates,
     logUpdatedAt,
@@ -2638,37 +2662,51 @@ type AddressedDebugWatcherLegacyBrief = {
   [key: string]: unknown;
 };
 
+type AddressedRuntimeDebuggerPayload = RuntimeDebuggerAdapterResult["payload"] & {
+  luaBootCoverage?: ReturnType<typeof luaBootStatus>;
+};
+
 function buildAddressedDebugWatcherBrief(
   record: WorkspaceRecord,
   expectedInput?: string[],
   compatibilityEnvelope?: true,
+  includeLuaBootCoverage?: boolean,
 ): AddressedDebugWatcherLegacyBrief;
 function buildAddressedDebugWatcherBrief(
   record: WorkspaceRecord,
   expectedInput: string[] | undefined,
   compatibilityEnvelope: false,
-): RuntimeDebuggerAdapterResult["payload"];
+  includeLuaBootCoverage?: boolean,
+): AddressedRuntimeDebuggerPayload;
 function buildAddressedDebugWatcherBrief(
   record: WorkspaceRecord,
   expectedInput: string[] | undefined,
   compatibilityEnvelope: boolean,
-): AddressedDebugWatcherLegacyBrief | RuntimeDebuggerAdapterResult["payload"];
+  includeLuaBootCoverage?: boolean,
+): AddressedDebugWatcherLegacyBrief | AddressedRuntimeDebuggerPayload;
 function buildAddressedDebugWatcherBrief(
   record: WorkspaceRecord,
   expectedInput: string[] = [],
   compatibilityEnvelope = true,
-): AddressedDebugWatcherLegacyBrief | RuntimeDebuggerAdapterResult["payload"] {
+  includeLuaBootCoverage = false,
+): AddressedDebugWatcherLegacyBrief | AddressedRuntimeDebuggerPayload {
   const ws = sanitizeWorkspace(record.workspace);
   const { modId, files } = buildWorkspaceFileManifest(ws);
+  const deployInfo = deployInfoForWorkspace(record);
   const runtime = runtimeDebuggerAdapter.buildBrief({
     record,
     manifest: files,
     // Compatibility input only; the adapter derives exact ownership from the
     // addressed record, manifest, source identity, and deploy metadata.
     modId,
-    deployInfo: deployInfoForWorkspace(record),
+    deployInfo,
     expectedSteps: expectedInputFromLegacy(expectedInput),
   });
+  const runtimePayload: AddressedRuntimeDebuggerPayload = { ...runtime.payload };
+  if (includeLuaBootCoverage) {
+    const owner = deployInfo?.contentId || readContentManifestIdentity(files['content.xml'])?.modId || deployInfo?.modId || modId;
+    runtimePayload.luaBootCoverage = luaBootStatus(owner, modId, runtime.selectedLogPath, deployInfo);
+  }
   const verdict = runtime.payload.verdict;
   const legacyStatus = {
     status: runtime.status,
@@ -2706,7 +2744,7 @@ function buildAddressedDebugWatcherBrief(
   const evidence = runtime.payload.incidents
     .flatMap(incident => incident.evidence.slice(0, 2).map(item => `${incident.classification || "runtime"}: ${item}`))
     .slice(0, 16);
-  if (!compatibilityEnvelope) return runtime.payload;
+  if (!compatibilityEnvelope) return runtimePayload;
   return {
     ok: runtime.status !== "error",
     status: legacyStatus,
@@ -2717,7 +2755,7 @@ function buildAddressedDebugWatcherBrief(
     sinceDeploy,
     evidence,
     artifact: runtime.artifact,
-    runtimeDebugger: runtime.payload,
+    runtimeDebugger: runtimePayload,
   };
 }
 
@@ -4406,7 +4444,7 @@ app.get("/api/agent/schema", (req, res) => {
         method: "GET",
         path: "/api/agent/game-log/status?modId=<optionalModId>",
         auth: true,
-        purpose: "Read recent X4 issues and bounded extension load evidence. seenByX4 and loadedCleanly are null when the log cannot establish them. A reported load is not exact deployed-artifact proof."
+        purpose: "Read recent X4 issues, bounded extension load evidence and optional declared Lua boot markers. Unknown load or boot coverage is null. Log evidence and the exact deployment receipt describe separate facts."
       },
       {
         method: "GET",
@@ -7536,7 +7574,7 @@ function handleAddressedRuntimeDebugger(
       });
     }
     const expected = expectRaw.split(",").map(s => s.trim()).filter(Boolean);
-    return res.json(buildAddressedDebugWatcherBrief(record, expected, compatibilityEnvelope));
+    return res.json(buildAddressedDebugWatcherBrief(record, expected, compatibilityEnvelope, true));
   } catch {
     return res.status(500).json({ ok: false, error: "debug-watcher brief failed" });
   }
@@ -15046,6 +15084,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
         validationOutcome: decision.outcome,
         deployReceiptId: deployReceipt?.id,
         modId,
+        contentId: manifestId,
         workspaceName: ws.name,
         workspaceHash: workspaceContentHash(sanitizeWorkspace(ws)),
         deployedAt,

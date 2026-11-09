@@ -6,7 +6,8 @@ import { RuntimeDebuggerAdapter, expectedInputFromLegacy, runtimeDeployLogBounda
 import { RuntimeDebugSessionStore } from '../src/lib/runtimeDebugSession';
 import { RuntimeControl } from '../src/server/runtimeControl';
 import { ActionReceiptStore } from '../src/lib/actionReceiptStore';
-import { readGameLogLoadEvidence } from '../src/server/gameLogLoadEvidence';
+import { createGameLogEvidenceReader, readGameLogLoadEvidence } from '../src/server/gameLogLoadEvidence';
+import { createLuaBootLogFold, readLuaBootManifest, summarizeLuaBootRun, type LuaBootRunState } from '../src/lib/luaBootCoverage';
 import type { ModWorkspace } from '../src/types';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-log-freshness-'));
@@ -26,6 +27,7 @@ try {
   const deploy = {
     workspaceId: record.workspaceId,
     modId: 'forge_regression_lab',
+    contentId: 'forge_regression_lab',
     workspaceName: 'Lab',
     workspaceHash: 'a'.repeat(16),
     deployedAt: new Date(now).toISOString(),
@@ -36,6 +38,9 @@ try {
     checks.exactDeployHasEofBoundary = boundary?.logPath === log && boundary.offset === 0 && !!boundary.fileIdentity;
     checks.otherDeployHasNoEofBoundary = baseline.ok
       && runtimeDeployLogBoundary(baseline.snapshot, { ...deploy, workspaceHash: 'b'.repeat(16) }) === undefined;
+    const retained = adapter.readDeployContext(record.workspaceId);
+    checks.canonicalDeployIdAndEofAreRetained = retained?.info.contentId === deploy.contentId
+      && retained.boundary?.logPath === log && retained.boundary.offset === 0;
 
     const historyLog = path.join(root, 'history.log');
     const readHistory = () => readGameLogLoadEvidence(historyLog, [deploy.modId], line => line === 'owned fault');
@@ -51,6 +56,34 @@ try {
     fs.appendFileSync(historyLog, '\n');
     const finishedLoad = readHistory();
     checks.completedLoadRecoversCoverage = finishedLoad.load !== null && !finishedLoad.coverageLimited;
+
+    const bootLog = path.join(root, 'lua-boot.log');
+    const bootFiles = ['ui/observed.lua', 'ui/silent.lua'];
+    const bootManifest = readLuaBootManifest(JSON.stringify({ version: 1, files: bootFiles }),
+      '<addon name="BootProbe"><environment type="menus"><file name="ui/observed.lua"/><file name="ui/silent.lua"/></environment></addon>');
+    assert.equal(bootManifest.status, 'valid');
+    const marker = (run: string, payload: string) => `[FORGE-LUA-BOOT] mod=${deploy.contentId} run=${run} ${payload}\n`;
+    const boot = (run: string) => marker(run, 'phase=begin') + marker(run, 'file=ui/observed.lua') + marker(run, 'phase=complete');
+    const reader = createGameLogEvidenceReader<LuaBootRunState>();
+    const readBoot = () => summarizeLuaBootRun(bootManifest,
+      reader.read(bootLog, deploy.contentId, createLuaBootLogFold(deploy.contentId, bootFiles),
+        undefined, { revision: 'exact', observationOnly: true }).evidence);
+    fs.writeFileSync(bootLog, boot('before_observation'));
+    checks.preObservationBootIsUnknown = readBoot().missing === null;
+    fs.appendFileSync(bootLog, boot('after_observation'));
+    checks.completeBootNamesOneMissingMarker = readBoot().missing === 1;
+    const olderBootLog = path.join(root, 'old-lua-boot.log');
+    fs.writeFileSync(olderBootLog, boot('old_replacement'));
+    reader.invalidate(bootLog, deploy.contentId);
+    for (let index = 0; index < 17; index++) reader.invalidate(bootLog, `absent-${index}`);
+    checks.invalidatedRegistrationCannotBorrowRun = readBoot().missing === null;
+    fs.renameSync(bootLog, bootLog + '.saved');
+    fs.renameSync(olderBootLog, bootLog);
+    checks.replacementFromBeforeRevisionCannotBorrowRun = readBoot().missing === null;
+    fs.writeFileSync(bootLog, boot('copied_old_run'));
+    checks.sameFileRewriteCannotBorrowRun = readBoot().missing === null;
+    fs.appendFileSync(bootLog, boot('fresh'));
+    checks.freshBootAfterRewriteRestoresCoverage = readBoot().run === 'fresh' && readBoot().missing === 1;
   }
   fs.appendFileSync(log, marker('save-loaded') + '\nOLD_ONLY\n' + marker('helper-ready', { boot: 'boot1', ts: Math.floor(now / 1000) }) + '\n');
   let p = brief(); const firstSession = p.session.sessionId;

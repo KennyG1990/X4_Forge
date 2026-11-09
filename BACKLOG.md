@@ -44,7 +44,7 @@ Dev keeps explicit load evidence in a bounded log scan and distinguishes recent 
 
 ### Lua registration advisory and boot coverage `in_progress` (GitHub #55)
 
-Dev lists added Lua paths in native deploy and shares the qualified restart advisory with Studio. Exact loose and catalog replays verified the selected bytes and committed receipts, and corrupt or shadowed manifests stayed unavailable. [Isolated evidence](docs/plans/2026-11-09-deploy-lua-registration-advisory.md). Actual reload and restart behavior, per-file boot coverage, installed rendering and public delivery remain open.
+Dev lists added Lua paths in native deploy and shares the qualified restart advisory with Studio. [Advisory evidence](docs/plans/2026-11-09-deploy-lua-registration-advisory.md). Opt-in per-file markers now project through the three runtime views for exact loose and catalog installs, including addressed EOF recovery and bounded cross-tail evidence. [Boot evidence](docs/plans/2026-11-09-lua-boot-coverage.md). Actual warm reload and restart behavior, installed verification and public delivery remain open.
 
 ### Launcher-pinned scratch Directory Settings `in_progress` (GitHub #75)
 
