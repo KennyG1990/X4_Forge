@@ -85,3 +85,14 @@ diagnostic provenance:
 ```powershell
 npm run validate:mod -- "C:\path\to\extensions\my_mod" --json
 ```
+
+CI can use a one-line verdict, compact JSON, SARIF 2.1.0, or GitHub Actions annotations. Run npm silently when consuming stdout as a report.
+
+```powershell
+npm run --silent validate:mod -- "C:\path\to\extensions\my_mod" --format text
+npm run --silent validate:mod -- "C:\path\to\extensions\my_mod" --format json --fail-on warning
+npm run --silent validate:mod -- "C:\path\to\extensions\my_mod" --format sarif
+npm run --silent validate:mod -- "C:\path\to\extensions\my_mod" --format github --fail-on info
+```
+
+The default gate fails on errors. Choose `warning` or `info` to fail on findings at that severity or higher. Reviewed suppressions remain outside the active gate. Exit `0` means the gate passed, `1` means it failed, and `2` means invalid arguments or a mod that could not be loaded. Coverage is reported separately. A passing gate can have unavailable checks, including game-object reference checks that require the Forge backend. The legacy human report and layered `--json` remain available.
