@@ -113,7 +113,7 @@ import { buildDependencyHealth } from './src/server/dependencyHealth';
 import { getAiSchemaIndex, getScriptPropertyIndex, registerValidationAgentRoutes } from "./src/server/validationRoutes";
 import { getCanonicalReferenceCorpus, getCanonicalReferenceSets, initializeReferenceCorpus, registerReferenceRoutes, startCanonicalReferenceManifest } from "./src/server/referenceRoutes";
 import { registerBulkTransformRoutes } from "./src/server/bulkTransformRoutes";
-import { computeModDrift, fingerprintModFolder, flattenProjectValidation, getSchemaIndex, loadProjectFromDisk, runProjectValidation } from "./src/server/projectValidation";
+import { computeModDrift, fingerprintModFolder, flattenProjectValidation, getSchemaIndex, loadProjectFromDisk, runProjectValidation, type FlatProjectDiagnostic } from "./src/server/projectValidation";
 import { captureDeploymentSnapshot, type DeploymentSnapshot } from './src/server/deploymentSnapshot';
 import { previewLuaRegistrationChange } from './src/server/deployLuaRegistration';
 import { PROJECT_CHECKS_MAX_BYTES, PROJECT_CHECKS_PATH } from './src/server/projectCheckProposal';
@@ -14660,9 +14660,9 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
         check('project-checks', 'Required project checks', 'pass', 'The exact approved suite receipt and every required command were verified.');
       } catch { return proofRefusal(); }
     }
-    const preflightDiagnostics: ValidationWarningInput[] = [
+    const preflightDiagnostics: FlatProjectDiagnostic[] = [
       ...flattenProjectValidation(preflight),
-      ...diskValidationSkipped.map(skipped => ({
+      ...diskValidationSkipped.map<FlatProjectDiagnostic>(skipped => ({
         severity: 'warning',
         code: 'validation.disk_file_skipped',
         filePath: skipped.path,
@@ -14729,7 +14729,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     );
     const pfWarnings = preflight.summary.activeWarnings + diskValidationSkipped.length + Number(Boolean(previousBuild));
     const staticEvidence = buildValidationEvidence({ id: modId, name: modId, files: deployValidation.validationFiles },
-      preflightDiagnostics.map(d => ({ severity: d.severity as 'error' | 'warning' | 'info', code: d.code,
+      preflightDiagnostics.map(d => ({ severity: d.severity, code: d.code, target: d.target,
         filePath: d.filePath, line: d.line, column: d.column, sourceRef: typeof d.sourceRef === 'string' ? d.sourceRef : undefined,
         message: String(d.message || d.code || 'Validation finding') })), [
         ...(preflight.evidence?.coverage.gaps || []),

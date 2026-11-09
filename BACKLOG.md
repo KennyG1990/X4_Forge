@@ -104,7 +104,7 @@ Dev shares the checking-mode and instantiation decisions between Studio critic, 
 
 ### Exact cue-library arguments `in_progress` (GitHub #82, part of #74)
 
-Dev checks required and undeclared arguments for exact direct project cue instances. [Cue replay and game evidence](docs/plans/2026-11-09-cue-library-arguments.md). Exact project `run_actions` calls now warn on undeclared names through project validation and native deploy, with independent same-line review. [Action advisory replay](docs/plans/2026-11-09-run-actions-arguments.md). The [standalone action execution witness](https://github.com/KennyG1990/X4_Forge/issues/82#issuecomment-6735409036), missing action arguments, effective signatures, official runtime cases, installed verification and public delivery remain open.
+Dev checks required and undeclared arguments for exact direct project cue instances. [Cue replay and game evidence](docs/plans/2026-11-09-cue-library-arguments.md). Exact project `run_actions` calls now warn on undeclared names through project validation and native deploy, with independent same-line review. [Action advisory replay](docs/plans/2026-11-09-run-actions-arguments.md). Both native routes preserve the structured declaration location in their validation evidence. [Native evidence replay](docs/plans/2026-11-09-native-deploy-diagnostic-targets.md). The [standalone action execution witness](https://github.com/KennyG1990/X4_Forge/issues/82#issuecomment-6735409036), missing action arguments, effective signatures, official runtime cases, installed verification and public delivery remain open.
 
 ### Exact property diagnostic positions and type provenance `in_progress` (GitHub #80, part of #74)
 
