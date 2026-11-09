@@ -25,7 +25,6 @@ import type { ValidationSourceLocation } from './validationEvidence';
 import { normPath, parseXmlLenient, walkElements } from './xmlLite';
 import { parse } from 'luaparse';
 import { DOMParser, type Attr as XmlAttr, type Element as XmlElement } from '@xmldom/xmldom';
-import { stripLuaComments } from './luaStaticAnalysis';
 import { buildX4UiSourceBundle } from './x4UiSourceBundle';
 
 export type ProjectCrossFileFindingCode =
@@ -37,6 +36,7 @@ export type ProjectCrossFileFindingCode =
   | 'md_lua.registration_verification_gap'
   | 'md_lua.payload_collision'
   | 'md_lua.payload_missing_writer'
+  | 'md_lua.payload_writer_unverified'
   | 'md_lua.payload_unused_writer'
   | 'dep.missing_content_xml'
   | 'dep.duplicate'
@@ -205,22 +205,41 @@ interface LuaAstNode {
   body?: LuaAstNode[];
   expression?: LuaAstNode;
   base?: LuaAstNode;
+  index?: LuaAstNode;
+  indexer?: string;
   arguments?: LuaAstNode[];
   [key: string]: unknown;
 }
 
-function walkLuaAst(node: unknown, visit: (node: LuaAstNode) => void): void {
+function walkLuaAst(
+  node: unknown,
+  visit: (node: LuaAstNode, scope: LuaAstNode | undefined, branches: readonly LuaAstNode[]) => void,
+  scope?: LuaAstNode,
+  branches: readonly LuaAstNode[] = [],
+): void {
   if (!node || typeof node !== 'object') return;
-  visit(node as LuaAstNode);
+  const ast = node as LuaAstNode;
+  visit(ast, scope, branches);
+  if (ast.type === 'FunctionDeclaration') {
+    scope = ast;
+    branches = [];
+  } else if (ast.type === 'IfClause' || ast.type === 'ElseifClause' || ast.type === 'ElseClause') {
+    branches = [...branches, ast];
+  }
   for (const [key, value] of Object.entries(node)) {
     if (key === 'loc' || key === 'range' || key === 'comments' || key === 'tokens' || key === 'globals') continue;
-    if (Array.isArray(value)) value.forEach(item => walkLuaAst(item, visit));
-    else if (value && typeof value === 'object') walkLuaAst(value, visit);
+    if (Array.isArray(value)) value.forEach(item => walkLuaAst(item, visit, scope, branches));
+    else if (value && typeof value === 'object') walkLuaAst(value, visit, scope, branches);
   }
 }
 
 function luaIdentifier(node: LuaAstNode): string | null {
   return node?.type === 'Identifier' && typeof node.name === 'string' ? node.name : null;
+}
+
+function isLuaGlobalEnvironment(node: LuaAstNode | undefined): boolean {
+  const name = luaIdentifier(node);
+  return node?.isLocal === false && (name === '_G' || name === '_ENV');
 }
 
 interface LuaStringValue {
@@ -410,11 +429,26 @@ function parseLuaRegisteredEvents(content: string, file: string): LuaRegistratio
     : { events: out, available: true };
 }
 
-interface PayloadReadSite { file: string; destination: string; branch?: string }
-interface PayloadWriteSite { file: string }
+interface PayloadReadSite { file: string; destination: string; branch?: string; event?: [string, string] }
+interface PayloadWriteSite { key: string; file: string; table: string; events: string[]; unverified: boolean }
+
+function payloadReadEvent(element: Element): [string, string] | undefined {
+  for (let owner = element.parentElement; owner; owner = owner.parentElement) {
+    if (owner.tagName !== 'cue' && owner.tagName !== 'library') continue;
+    const conditions = Array.from(owner.childNodes).find(node => node.nodeType === 1 && node.nodeName === 'conditions') as Element | undefined;
+    if (!conditions) return undefined;
+    const triggers = Array.from(conditions.getElementsByTagName('*')).filter(node => node.tagName.startsWith('event_'));
+    const [listener] = triggers;
+    if (triggers.length !== 1 || listener.tagName !== 'event_ui_triggered' || listener.parentNode !== conditions) return undefined;
+    const screen = listener.getAttribute('screen')?.trim().match(/^(['"])([^'"]+)\1$/)?.[2];
+    const control = listener.getAttribute('control')?.trim().match(/^(['"])([^'"]+)\1$/)?.[2];
+    return screen && control ? [screen, control] : undefined;
+  }
+  return undefined;
+}
 
 /** Port of the observed x4_ai_influence wiregate invariant, scoped to its exact protocol shapes. */
-function validateIndexedPayloadContract(mdFiles: ExtensionProject['files'], luaFiles: ExtensionProject['files']): {
+function validateIndexedPayloadContract(mdFiles: ExtensionProject['files'], luaWrites: PayloadWriteSite[]): {
   findings: ProjectCrossFileFinding[];
   reads: Array<{ key: string; scope: 'global' | 'verb'; file: string; destination: string; branch?: string }>;
   writes: Array<{ key: string; file: string }>;
@@ -422,16 +456,10 @@ function validateIndexedPayloadContract(mdFiles: ExtensionProject['files'], luaF
   const reads = new Map<string, { global: PayloadReadSite[]; verb: PayloadReadSite[] }>();
   const writes = new Map<string, PayloadWriteSite[]>();
   const readPattern = /param3\.\{'\$([A-Za-z][A-Za-z0-9_]*)'\s*\+\s*\$si\}/g;
-  const writePattern = /payload\[\s*["']([A-Za-z][A-Za-z0-9_]*)["']\s*\.\.\s*payload\.n\s*\]/g;
-
-  for (const file of luaFiles) {
-    const code = stripLuaComments(file.content || '');
-    let match: RegExpExecArray | null;
-    while ((match = writePattern.exec(code)) !== null) {
-      const sites = writes.get(match[1]) || [];
-      sites.push({ file: file.path });
-      writes.set(match[1], sites);
-    }
+  for (const write of luaWrites) {
+    const sites = writes.get(write.key) || [];
+    sites.push(write);
+    writes.set(write.key, sites);
   }
   for (const file of mdFiles) {
     if (!(file.content || '').includes('param3')) continue;
@@ -441,6 +469,7 @@ function validateIndexedPayloadContract(mdFiles: ExtensionProject['files'], luaF
     const elements = Array.from(doc.getElementsByTagName('*')) as Element[];
     for (const element of elements) {
       const attrs = Array.from(element.attributes || []);
+      let event: PayloadReadSite['event'];
       for (const attr of attrs) {
         let match: RegExpExecArray | null;
         readPattern.lastIndex = 0;
@@ -455,7 +484,9 @@ function validateIndexedPayloadContract(mdFiles: ExtensionProject['files'], luaF
             parent = parent.parentNode as Element | null;
           }
           const bucket = reads.get(match[1]) || { global: [], verb: [] };
-          bucket[branch ? 'verb' : 'global'].push({ file: file.path, destination: element.getAttribute('name') || `<${element.tagName}>`, ...(branch ? { branch } : {}) });
+          event ??= payloadReadEvent(element);
+          bucket[branch ? 'verb' : 'global'].push({ file: file.path, destination: element.getAttribute('name') || `<${element.tagName}>`,
+            ...(branch ? { branch } : {}), event });
           reads.set(match[1], bucket);
         }
       }
@@ -475,15 +506,28 @@ function validateIndexedPayloadContract(mdFiles: ExtensionProject['files'], luaF
         detail: `Indexed payload key "${key}<n>" is read globally (${read.global.map(site => site.destination).join(', ')}) and inside a verb branch (${read.verb.map(site => site.destination).join(', ')}). A global slot belongs to every step and cannot be reused by one verb.`,
       });
     }
-    if ((read.global.length || read.verb.length) && !write.length) {
-      findings.push({
-        code: 'md_lua.payload_missing_writer', severity: 'error', file: [...read.global, ...read.verb][0].file,
-        detail: `MD reads indexed payload key "${key}<n>", but no project Lua file writes payload["${key}" .. payload.n].`,
+    const sites = [...read.global, ...read.verb];
+    const seenEvents = new Set<string>();
+    for (const site of sites) {
+      const identity = JSON.stringify(site.event ?? null);
+      if (seenEvents.has(identity)) continue;
+      seenEvents.add(identity);
+      if (write.some(candidate => site.event ? candidate.events.includes(identity) : candidate.table === 'payload')) continue;
+      const possible = write.some(candidate => candidate.unverified || !site.event);
+      const event = site.event?.join('.');
+      const subject = `MD reads indexed payload key "${key}<n>"${event ? ` for "${event}"` : ''}`;
+      findings.push(possible ? {
+        code: 'md_lua.payload_writer_unverified', severity: 'warning', file: site.file, event,
+        detail: `${subject}. Lua assigns that key, but Forge could not link the assignment to the table this reader receives.`,
+      } : {
+        code: 'md_lua.payload_missing_writer', severity: 'error', file: site.file, event,
+        detail: `${subject}, but no matching Lua payload assignment was found.`,
       });
     }
-    if (write.length && !(read.global.length || read.verb.length)) {
+    const legacyWriter = write.find(candidate => candidate.table === 'payload');
+    if (legacyWriter && sites.length === 0) {
       findings.push({
-        code: 'md_lua.payload_unused_writer', severity: 'error', file: write[0].file,
+        code: 'md_lua.payload_unused_writer', severity: 'error', file: legacyWriter.file,
         detail: `Lua writes indexed payload key "${key}<n>", but no project MD file reads param3.{'$${key}' + $si}.`,
       });
     }
@@ -491,10 +535,10 @@ function validateIndexedPayloadContract(mdFiles: ExtensionProject['files'], luaF
   return {
     findings,
     reads: [...reads.entries()].flatMap(([key, sites]) => [
-      ...sites.global.map(site => ({ key, scope: 'global' as const, ...site })),
-      ...sites.verb.map(site => ({ key, scope: 'verb' as const, ...site })),
+      ...sites.global.map(({ event: _event, ...site }) => ({ key, scope: 'global' as const, ...site })),
+      ...sites.verb.map(({ event: _event, ...site }) => ({ key, scope: 'verb' as const, ...site })),
     ]),
-    writes: [...writes.entries()].flatMap(([key, sites]) => sites.map(site => ({ key, ...site }))),
+    writes: luaWrites.map(({ key, file }) => ({ key, file })),
   };
 }
 
@@ -507,26 +551,56 @@ export interface LuaEmitCoverage {
   reasons: Array<'dynamic-arguments' | 'prefix-only' | 'source-encoding' | 'ambiguous-callee'>;
 }
 
-function parseLuaUiEmits(content: string, file: string): { events: ProjectUiEventRef[]; coverage: LuaEmitCoverage } {
+function indexedPayloadTarget(variable: LuaAstNode, source: LuaAnalysisSource): { table: string; key: string } | undefined {
+  const table = luaIdentifier(variable.base);
+  const index = variable.index;
+  const counter = index?.right;
+  if (!table || variable.type !== 'IndexExpression' || index?.type !== 'BinaryExpression' || index.operator !== '..'
+    || counter?.type !== 'MemberExpression' || counter.indexer !== '.' || luaIdentifier(counter.identifier) !== 'n'
+    || luaIdentifier(counter.base) !== table || counter.base?.isLocal !== variable.base?.isLocal) return undefined;
+  const literal = index.left;
+  if (literal?.type !== 'StringLiteral' || typeof literal.value !== 'string'
+    || luaStringLiteralTainted(literal, source.substituted) || !/^[A-Za-z][A-Za-z0-9_]*$/.test(literal.value)) return undefined;
+  return { table, key: literal.value };
+}
+
+interface LuaPayloadPosition { scope?: LuaAstNode; branches: readonly LuaAstNode[]; at: number }
+interface LuaPayloadAssignment extends LuaPayloadPosition { table: string; key: string; local: boolean }
+interface LuaPayloadEmit extends LuaPayloadPosition { identity?: string }
+
+function parseLuaUiEmits(content: string, file: string): {
+  events: ProjectUiEventRef[]; coverage: LuaEmitCoverage; payloadWrites: PayloadWriteSite[];
+} {
   const out: ProjectUiEventRef[] = [];
   const coverage: LuaEmitCoverage = { file, parsed: false, exact: 0, prefix: 0, unresolved: 0, reasons: [] };
   const gap = (reason: LuaEmitCoverage['reasons'][number]) => {
     if (!coverage.reasons.includes(reason)) coverage.reasons.push(reason);
   };
   const source = buildLuaAnalysisSource(content || '');
+  let emitterRebound = false;
   let ast: LuaAstNode;
   try {
-    ast = parse(source.content, { comments: false, ranges: true, scope: true, luaVersion: '5.2', encodingMode: 'pseudo-latin1' });
+    ast = parse(source.content, {
+      comments: false, ranges: true, scope: true, luaVersion: '5.2', encodingMode: 'pseudo-latin1',
+      onLocalDeclaration(name: string) { if (name === '_ENV') emitterRebound = true; },
+    });
   } catch {
-    return { events: out, coverage }; // Registration analysis reports the parse failure for this file.
+    return { events: out, coverage, payloadWrites: [] }; // Registration analysis reports the parse failure for this file.
   }
   coverage.parsed = true;
   // Only immutable, unambiguous local constants may supply event arguments.
   // Shadowing or another assignment makes the name unknown, not a guessed value.
   const assignments = new Map<string, { count: number; init: LuaAstNode; local: boolean }>();
   const shadowed = new Set<string>();
+  const trackEmitterWrite = (target: LuaAstNode | undefined) => {
+    if (luaIdentifier(target) === '_ENV') emitterRebound = true;
+    if (!isLuaGlobalEnvironment(target?.base)) return;
+    const member = target.type === 'MemberExpression' ? luaIdentifier(target.identifier) : target.index?.value;
+    if (member === 'AddUITriggeredEvent') emitterRebound = true;
+  };
   walkLuaAst(ast, node => {
     if (node.type === 'FunctionDeclaration') {
+      trackEmitterWrite(node.identifier);
       const functionName = luaIdentifier(node.identifier);
       if (functionName) shadowed.add(functionName);
       for (const parameter of node.parameters || []) {
@@ -540,8 +614,11 @@ function parseLuaUiEmits(content: string, file: string): { events: ProjectUiEven
         if (name) shadowed.add(name);
       }
     }
+    if (node.type === 'CallExpression' && luaIdentifier(node.base) === 'rawset' && node.base.isLocal === false
+      && isLuaGlobalEnvironment(node.arguments?.[0]) && node.arguments?.[1]?.value === 'AddUITriggeredEvent') emitterRebound = true;
     if (node.type !== 'LocalStatement' && node.type !== 'AssignmentStatement') return;
     (node.variables || []).forEach((variable, index) => {
+      trackEmitterWrite(variable);
       const name = luaIdentifier(variable);
       if (!name) return;
       assignments.set(name, { count: (assignments.get(name)?.count || 0) + 1, init: (node.init || [])[index], local: node.type === 'LocalStatement' });
@@ -562,9 +639,34 @@ function parseLuaUiEmits(content: string, file: string): { events: ProjectUiEven
     const value = resolve(assignment.init);
     if (value) strings.set(name, value);
   }
-  walkLuaAst(ast, node => {
-    if (node.type !== 'CallExpression' || luaIdentifier(node.base) !== 'AddUITriggeredEvent' || node.base.isLocal) return;
-    if (assignments.has('AddUITriggeredEvent') || shadowed.has('AddUITriggeredEvent')) {
+  const indexedWrites: LuaPayloadAssignment[] = [];
+  const indexedClears: LuaPayloadAssignment[] = [];
+  const payloadEmits = new Map<string, LuaPayloadEmit[]>();
+  walkLuaAst(ast, (node, scope, branches) => {
+    if (node.type === 'AssignmentStatement') {
+      (node.variables || []).forEach((variable, index) => {
+        const target = indexedPayloadTarget(variable, source);
+        if (!target) return;
+        const value = node.init?.[index];
+        const sites = value && value.type !== 'NilLiteral' ? indexedWrites : indexedClears;
+        // Lua evaluates the entire RHS before any of the assignments take effect.
+        sites.push({ ...target, local: variable.base?.isLocal === true, scope, branches, at: node.range![1] });
+      });
+    }
+    if (node.type !== 'CallExpression' || luaIdentifier(node.base) !== 'AddUITriggeredEvent') return;
+    const argument = node.arguments?.[2];
+    const table = luaIdentifier(argument);
+    const binding = table ? assignments.get(table) : undefined;
+    let payloadEmit: LuaPayloadEmit | undefined;
+    if (table && argument?.isLocal && binding?.count === 1 && binding.local
+      && binding.init?.type === 'TableConstructorExpression' && !shadowed.has(table)) {
+      payloadEmit = { scope, branches, at: node.range![0] };
+      const sites = payloadEmits.get(table) || [];
+      sites.push(payloadEmit);
+      payloadEmits.set(table, sites);
+    }
+    if (node.base.isLocal) return;
+    if (emitterRebound || assignments.has('AddUITriggeredEvent') || shadowed.has('AddUITriggeredEvent')) {
       coverage.unresolved++; gap('ambiguous-callee'); return;
     }
     const namespace = resolve(node.arguments?.[0]);
@@ -576,12 +678,33 @@ function parseLuaUiEmits(content: string, file: string): { events: ProjectUiEven
       coverage.unresolved++; gap('dynamic-arguments'); return;
     }
     if (control.prefix) { coverage.prefix++; gap('prefix-only'); }
-    else coverage.exact++;
+    else {
+      coverage.exact++;
+      if (payloadEmit) payloadEmit.identity = JSON.stringify([namespace.value, control.value]);
+    }
     // A literal trailing underscore is still an exact name; only an actual
     // unresolved concatenation justifies prefix matching.
     out.push({ namespace: namespace.value, control: control.value, event: `${namespace.value}.${control.value}`, file, ...(control.prefix ? { prefix: true } : {}) });
   });
-  return { events: out, coverage };
+  const payloadWrites = indexedWrites.map((write): PayloadWriteSite => {
+    const { key, table } = write;
+    const emits = write.local ? payloadEmits.get(table) || [] : [];
+    const events = new Set<string>();
+    let unverified = false;
+    for (const emit of emits) {
+      if (emit.scope !== write.scope) {
+        unverified = true;
+        continue;
+      }
+      const compatible = write.branches.every((branch, index) => branch === emit.branches[index]);
+      const cleared = indexedClears.some(clear => clear.local && clear.scope === write.scope && clear.table === table
+        && clear.key === key && clear.at >= write.at && clear.at < emit.at);
+      if (emit.identity && write.at <= emit.at && compatible && !cleared) events.add(emit.identity);
+      else unverified = true;
+    }
+    return { key, file, table, events: [...events], unverified: unverified || events.size === 0 };
+  });
+  return { events: out, coverage, payloadWrites };
 }
 
 function findContentManifest(project: ExtensionProject): ModManifest | null {
@@ -779,7 +902,7 @@ export function validateProjectCrossFile(project: ExtensionProject): ProjectCros
       detail: `Lua-to-MD event wiring is not fully verified for ${unverified} direct AddUITriggeredEvent call(s): ${coverage.prefix} prefix-only, ${coverage.unresolved} unresolved (${coverage.reasons.join(', ')}). A possible prefix match is not proof of every runtime event.`,
     });
   }
-  const payload = validateIndexedPayloadContract(mdFiles, luaFiles);
+  const payload = validateIndexedPayloadContract(mdFiles, emitAnalyses.flatMap(analysis => analysis.payloadWrites));
   findings.push(...payload.findings);
   for (const unavailable of parseUnavailable) {
     findings.push({
@@ -1208,6 +1331,53 @@ AddUITriggeredEvent("ai_influence", "chat.response", {})`,
   ok('indexed_payload_evidence_accepts_identifier_keys',
     gapResult.mdLua.payload.reads.some(read => read.key === 'g_key') && gapResult.mdLua.payload.writes.some(write => write.key === 'q_key'),
     gapResult.mdLua.payload);
+
+  const indexedEventProject = (lua: string, screen = 'forge_qa', control = 'player_orders') => addFile(addFile(fixtureProject(), {
+    path: 'ui/orders.lua', kind: 'lua', content: lua,
+  }), {
+    path: 'md/orders.xml', kind: 'md',
+    content: `<mdscript name="Orders"><cues><cue name="Resolve" instantiate="true" namespace="this">
+      <conditions><event_ui_triggered screen="'${screen}'" control="'${control}'"/></conditions>
+      <actions><set_value name="$order" exact="event.param3.{'$po' + $si}"/></actions>
+    </cue></cues></mdscript>`,
+  });
+  const localTable = 'local p = { n = 1 }';
+  const indexedWrite = `p["po" .. p.n] = "order"`;
+  const emit = `AddUITriggeredEvent("forge_qa", "player_orders", p)`;
+  const loop = `for _, order in ipairs(orders or {}) do p.n = p.n + 1; p["po" .. p.n] = order end`;
+  const writerCases = [
+    { name: 'direct_renamed_table', lua: `${localTable}; ${indexedWrite}; ${emit}`, expected: [] },
+    { name: 'direct_after_loop', lua: `${localTable}; ${loop}; ${emit}`, expected: [] },
+    { name: 'writer_and_emit_in_same_branch', lua: `${localTable}; if enabled then ${indexedWrite}; ${emit} end`, expected: [] },
+    { name: 'read_only', lua: 'local payload = { n = 1 }; local order = payload["po" .. payload.n]; AddUITriggeredEvent("forge_qa", "player_orders", payload)', expected: ['payload_missing_writer'], noWrite: true },
+    { name: 'string_and_comment', lua: `${localTable}; local code = [[${indexedWrite}]]; ${emit} -- ${indexedWrite}`, expected: ['payload_missing_writer'], noWrite: true },
+    { name: 'explicit_nil_only', lua: `${localTable}; p["po" .. p.n] = nil; ${emit}`, expected: ['payload_missing_writer'], noWrite: true },
+    { name: 'shadowed_table', lua: `${localTable}; do ${localTable}; ${indexedWrite} end; ${emit}`, expected: ['payload_writer_unverified'] },
+    { name: 'builder_return', lua: `local function build() ${localTable}; ${loop}; return p end; AddUITriggeredEvent("forge_qa", "player_orders", build())`, expected: ['payload_writer_unverified'] },
+    { name: 'same_name_but_unbound', lua: 'local payload = { n = 1 }; payload["po" .. payload.n] = "order"; AddUITriggeredEvent("forge_qa", "player_orders", {})', expected: ['payload_writer_unverified'] },
+    { name: 'sibling_branches', lua: `${localTable}; if enabled then ${indexedWrite} else ${emit} end`, expected: ['payload_writer_unverified'] },
+    { name: 'emit_before_assignment', lua: `${localTable}; p["po" .. p.n] = ${emit}`, expected: ['payload_writer_unverified'] },
+    { name: 'writer_cleared', lua: `${localTable}; ${indexedWrite}; p["po" .. p.n] = nil; ${emit}`, expected: ['payload_writer_unverified'] },
+    { name: 'write_after_clear', lua: `${localTable}; p["po" .. p.n] = nil; ${indexedWrite}; ${emit}`, expected: [] },
+    { name: 'different_event', lua: `${localTable}; ${indexedWrite}; AddUITriggeredEvent("forge_qa", "other", p); AddUITriggeredEvent("forge_qa", "player_orders", {})`, expected: ['payload_missing_writer'] },
+    { name: 'different_dotted_event', lua: `${localTable}; ${indexedWrite}; AddUITriggeredEvent("a.b", "c", p)`, screen: 'a', control: 'b.c', expected: ['payload_missing_writer'] },
+    { name: 'possible_dynamic_event', lua: `${localTable}; ${indexedWrite}; AddUITriggeredEvent("forge_qa", "other", p); AddUITriggeredEvent("forge_qa", selectedControl, p)`, expected: ['payload_writer_unverified'] },
+    { name: 'captured_table_event', lua: `${localTable}; ${indexedWrite}; AddUITriggeredEvent("forge_qa", "other", p); local function send() ${emit} end; send()`, expected: ['payload_writer_unverified'] },
+    { name: 'global_emitter_rebound', lua: `function _G.AddUITriggeredEvent() end; ${localTable}; ${indexedWrite}; ${emit}`, expected: ['payload_writer_unverified'] },
+    { name: 'global_emitter_rawset', lua: `rawset(_G, "AddUITriggeredEvent", function() end); ${localTable}; ${indexedWrite}; ${emit}`, expected: ['payload_writer_unverified'] },
+    { name: 'local_environment_shadows_emitter', lua: `local _ENV = {}; ${localTable}; ${indexedWrite}; ${emit}`, expected: ['payload_writer_unverified'] },
+    { name: 'unrelated_local_global_table', lua: `local _G = {}; _G["AddUITriggeredEvent"] = false; ${localTable}; ${indexedWrite}; ${emit}`, expected: [] },
+  ];
+  for (const test of writerCases) {
+    const result = validateProjectCrossFile(indexedEventProject(test.lua, test.screen, test.control));
+    const actual = result.findings.filter(finding => finding.code.startsWith('md_lua.payload_'));
+    ok(`indexed_payload_${test.name}`,
+      actual.length === test.expected.length && actual.every((finding, index) =>
+        finding.code === `md_lua.${test.expected[index]}`
+        && finding.severity === (finding.code === 'md_lua.payload_writer_unverified' ? 'warning' : 'error'))
+        && result.mdLua.payload.writes.some(write => write.key === 'po') === !test.noWrite,
+      { findings: actual, payload: result.mdLua.payload });
+  }
 
   const brokenCue = addFile(fixtureProject(), {
     path: 'md/broken.xml',
