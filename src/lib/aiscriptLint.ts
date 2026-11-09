@@ -89,23 +89,24 @@ function lintOrderParams(root: Element, legalTypes: Set<string>): AiscriptLintFi
         const pname = param.getAttribute('name') || '(unnamed param)';
         const ptype = (param.getAttribute('type') || '').trim();
         const ptext = param.getAttribute('text');
+        const location = { line: param.lineNumber, column: param.columnNumber };
 
         if (!ptype) {
           out.push({
-            code: 'aiscript.order_param_missing_type', severity: 'error', order: orderId, param: pname,
+            code: 'aiscript.order_param_missing_type', severity: 'error', order: orderId, param: pname, ...location,
             detail: `Order "${orderId}" param "${pname}" has no type attribute — aiscripts.xsd marks type use="required" for order params.`,
           });
           continue;
         }
         if (!legalTypes.has(ptype.toLowerCase())) {
           out.push({
-            code: 'aiscript.order_param_illegal_type', severity: 'error', order: orderId, param: pname,
+            code: 'aiscript.order_param_illegal_type', severity: 'error', order: orderId, param: pname, ...location,
             detail: `Order "${orderId}" param "${pname}" has type="${ptype}" which is not a legal order-param type. Legal types: ${[...legalTypes].join(', ')}. (The game rejected exactly this class of error in-game, 2026-07-01.)`,
           });
         }
         if (ptype.toLowerCase() !== 'internal' && (ptext === null || ptext.trim() === '')) {
           out.push({
-            code: 'aiscript.order_param_missing_text', severity: 'error', order: orderId, param: pname,
+            code: 'aiscript.order_param_missing_text', severity: 'error', order: orderId, param: pname, ...location,
             detail: `Order "${orderId}" param "${pname}" (type="${ptype}") has no text attribute. Non-internal order params need a localised text label (e.g. text="{1041, 10064}") or the game rejects the order definition — internal params may omit it.`,
           });
         }
@@ -207,6 +208,16 @@ export function runAiscriptLintSelftest(): {
     !bad.some(f => f.param === 'ok_internal'), bad);
   ok('all findings are errors with order id', bad.every(f => f.severity === 'error' && f.order === 'ProtectPosition'));
   ok('exactly 3 findings (no cry-wolf extras)', bad.length === 3, bad.map(f => f.code).join(','));
+  ok('all order parameter rules point to their opening elements',
+    bad.map(f => [f.line, f.column].join(':')).join(',') === '5:7,6:7,7:7', bad);
+
+  const repeatedParams = lintAiscriptOrderParams(`<aiscript><order id="Test"><params>
+  <param
+    name="repeat" type="number"/><param name="repeat" type="number"/><param name="repeat" type="number"/>
+</params></order></aiscript>`);
+  ok('repeated parameter names retain distinct opening positions across multiline attributes',
+    repeatedParams.length === 3 && repeatedParams.every(f => f.code === 'aiscript.order_param_missing_text')
+      && repeatedParams.map(f => [f.line, f.column].join(':')).join(',') === '2:3,3:34,3:70', repeatedParams);
 
   // schema-provided legal set takes precedence over the curated fallback
   const custom = lintAiscriptOrderParams(BAD_FIXTURE, new Set(['text', 'position', 'internal']));

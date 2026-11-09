@@ -1,12 +1,12 @@
-# X4 Forge Dev handoff — workspace read and write byte evidence
+# X4 Forge Dev handoff — AI order parameter finding locations
 
-Use the isolated `forge-a15-native-proof` worktree. The prior verified base is `07dc01524e1a52441770b615c90f88cb221f3bb9`.
+Use the isolated `forge-a15-native-proof` worktree. The prior verified base is `6bb589c6c7649398c3456340e32977852ee2b466`.
 
 ## Current unit
 
-The [workspace read and write byte checkpoint](docs/plans/2026-11-09-workspace-read-write-byte-evidence.md) proves raw read SHA-256 and byte count, a guarded edit from that hash, refusal of stale or wrong-copy hashes, and the exact native v101 receipt. This is the second verified unit since the [three-unit release review](docs/plans/2026-11-09-workspace-write-failure-evidence.md#three-unit-release-review). Frozen 0.0.82 remains prepared.
+The [AI order parameter location checkpoint](docs/plans/2026-11-09-order-parameter-finding-locations.md) proves six exact blocking findings in full project validation and both native deploy aliases. Adding the labels passed both exact scratch deploys and receipt lookups. This is the third verified Dev unit after #49 and #22. The [release review](docs/plans/2026-11-09-order-parameter-finding-locations.md#three-unit-release-review) kept 0.0.82 on its frozen selection with qualification pending.
 
-Keep the worktree separate from the release source, live Antigravity, X4, AiLive, and other agents' checkouts. Headless fixtures use owned ephemeral listeners and scratch roots. Re-run the read/write byte, coordination, write failure, import, source-selection, native version and order catalogue HTTP oracles against the exact installed Dev build when eligible. The [payload](docs/plans/2026-11-09-indexed-payload-writer-evidence.md), [faction](docs/plans/2026-11-09-lua-faction-reference-consumers.md), [reference position](docs/plans/2026-11-09-reference-literal-coordinates.md) and [settings](docs/plans/2026-11-09-dev-scratch-directory-settings.md#isolated-validation-and-close) checks have separate installed rendering work.
+Keep the worktree separate from the release source, live Antigravity, X4, AiLive, and other agents' checkouts. Headless fixtures use owned ephemeral listeners and scratch roots. Re-run the order parameter, read/write byte, coordination, write failure, import, source-selection, native version and order catalogue HTTP oracles against the exact installed Dev build when eligible. The [payload](docs/plans/2026-11-09-indexed-payload-writer-evidence.md), [faction](docs/plans/2026-11-09-lua-faction-reference-consumers.md), [reference position](docs/plans/2026-11-09-reference-literal-coordinates.md) and [settings](docs/plans/2026-11-09-dev-scratch-directory-settings.md#isolated-validation-and-close) checks have separate installed rendering work.
 
 ## Next work
 

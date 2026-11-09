@@ -2549,7 +2549,9 @@ are visible but does not remove the duplicate ownership. Reconcile the few non-d
 discoverable action owner at every width, preserve keyboard/automation action IDs, and visually prove no capability
 was lost. User evidence: `codex-clipboard-c6ed74fe-82fb-4a8c-818b-88b500d6ad65.png`.
 
-### B112 · Diagnostic explanations and navigation parity `spec'd` (P1, user screenshots 2026-07-31)
+### B112 · Diagnostic explanations and navigation parity `in_progress` (P1, GitHub #33)
+
+Dev locates all three existing AI order-parameter errors. Full project validation and both native deploy aliases identify all six errors from the standalone batch 387 reproduction. [Isolated evidence](docs/plans/2026-11-09-order-parameter-finding-locations.md). Installed navigation and the wider diagnostic explanation work remain open.
 
 **[REPRODUCED]** `XSD_UNKNOWN_ELEMENT` currently explains itself with generic text ("deterministic project check")
 instead of explaining what `<diff>` means, likely schema-routing/root-document causes, evidence, and bounded repairs.

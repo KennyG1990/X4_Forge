@@ -464,7 +464,7 @@ export function runProjectValidation(
       if ((f.kind === "aiscript" || classifyPath(f.path) === "aiscript") && typeof f.content === "string") {
         const findings = fact('aiscript-lint', f, [...legalTypes], () => lintAiscript(f.content!, legalTypes));
         for (const finding of findings) {
-          aiscriptLint.push(finding.sourceRef === undefined ? finding : { ...finding, filePath: f.path });
+          aiscriptLint.push({ ...finding, filePath: f.path });
         }
       }
     }
