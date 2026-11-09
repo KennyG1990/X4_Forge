@@ -244,7 +244,7 @@ import { runActionReceiptSelftest } from "./src/lib/actionReceipt.selftest";
 import { runBugReportSelftest } from "./src/lib/bugReport";
 import { generatedOutputVerdict, normalizeApiFailureBody, runApiFailureEnvelopeSelftest } from "./src/lib/apiFailureEnvelope";
 import { projectApiEnvelope, projectApiSubject, fileApiSubject, workspaceApiSubject, pastedLogApiSubject, releaseReportApiSubject, validateProjectApiBody, validateProjectApiQuery, validateWorkspaceCreateBody, validateWorkspaceMutationBody, type ApiSubject } from './src/server/projectApiContract';
-import { canonicalSourceKey, sourceKeyForResolvedPath } from './src/server/resourceCoordinator';
+import { canonicalSourceKey, canonicalSourcePath, sourceKeyForResolvedPath } from './src/server/resourceCoordinator';
 import { forgeSourceCoordinator, processLiveness, type ProjectCheckSourceLease } from './src/server/sharedSourceCoordinator';
 import {
   CLIENT_API_DEADLINE_MS,
@@ -12018,7 +12018,7 @@ function staleDeploymentRecovery(message = 'Recovery refused because deployed by
 }
 
 function deploymentTargetBindingHash(target: string, format: DeployFormat): string {
-  const resolved = path.resolve(target);
+  const resolved = canonicalSourcePath(target);
   return trustHash([process.platform === 'win32' ? resolved.toLowerCase() : resolved, format]);
 }
 
@@ -12102,7 +12102,7 @@ async function observeInterruptedDeployTarget(
 function assertDeploymentRecoveryTarget(record: DeploymentRecoveryRecord, currentTargetRoot: string): void {
   const targetRoot = path.resolve(record.targetRoot);
   const targetPath = path.resolve(record.targetPath);
-  if (!sameResolvedPath(targetRoot, currentTargetRoot)) {
+  if (!sameResolvedPath(targetRoot, canonicalSourcePath(currentTargetRoot))) {
     throw new Error('Recovery refused because the configured X4 extensions directory changed after deployment.');
   }
   if (!sameResolvedPath(path.dirname(targetPath), targetRoot) || !samePathName(path.basename(targetPath), record.modId)) {
@@ -12131,9 +12131,11 @@ function prepareDeploymentRecoveryReceipt(
   store: DestructiveRecoveryStore = destructiveRecoveryStore,
   trackWriteAdmission = false,
 ): DeploymentRecoveryRecord {
-  const resolvedRoot = path.resolve(targetRoot);
-  const resolvedTarget = path.resolve(targetPath);
-  if (!sameResolvedPath(path.dirname(resolvedTarget), resolvedRoot)) throw new Error('Deployment target escaped the extensions directory.');
+  const declaredRoot = path.resolve(targetRoot);
+  const declaredTarget = path.resolve(targetPath);
+  if (!sameResolvedPath(path.dirname(declaredTarget), declaredRoot)) throw new Error('Deployment target escaped the extensions directory.');
+  const resolvedRoot = canonicalSourcePath(declaredRoot);
+  const resolvedTarget = path.join(resolvedRoot, path.basename(declaredTarget));
   const priorExisted = fs.existsSync(resolvedTarget);
   if (priorExisted) {
     const stat = fs.lstatSync(resolvedTarget);

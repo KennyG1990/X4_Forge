@@ -8067,3 +8067,7 @@ eight actual HTTP/CLI reporting cases, lint0errors599warnings and full precommit
 Evidence: docs/releases/0.0.80-delivery.json. No application source/package changes,
 republish, live installation, active-mod edit or game input. All failed runs retained.
 No capability-map delta. Full Claude program remains PARTIAL; Kimi paused.
+
+## 2026-11-09 — Native physical destination binding
+
+VERIFIED in isolated Dev. Both native Deploy aliases refuse an old approval after its configured alias resolves to a different same-byte target. Recovery retains a physical root and direct child, and Undo refuses a changed physical root without consuming its ready record. Stable aliases, equivalent spellings, historical physical record shapes and missing ancestors passed. Paired baseline 26 checks, corrected candidate 59 checks, artifact 111/111, coordination 96 and required precommit. Apply, disk receipt and authenticated lookup agree. Installed delivery remains PARTIAL. Frozen 0.0.82 source is held for the narrow port and exact qualification. Evidence `docs/plans/2026-11-09-native-deploy-physical-target-binding.md`. Capability map and project AAR updated.

@@ -8,6 +8,8 @@
 
 ### Native backend recovery and interrupted apply `in_progress` (GitHub #53)
 
+Native Preview and Undo now retain the physical destination across requests. Repointing an alias to an identical-byte target refuses safely. Stable aliases, historical physical recovery shapes and first deploy passed. The [59-check native correction](docs/plans/2026-11-09-native-deploy-physical-target-binding.md) requires a narrow 0.0.82 port before qualification.
+
 Deployment Undo now shares the native extensions-root lease, and a later identical-byte deploy from another receipt store is confirmed invisible to a local receipt scan. [Undo coordination and writer continuity evidence](docs/plans/2026-11-09-deploy-undo-target-coordination.md).
 
 Exceptional native deploy and recovery preserve an observed intervening target instead of treating its digest as rollback authority. Seven paired fault cases, exact successful rollback and ordinary Undo passed. [Dev ownership evidence](docs/plans/2026-11-09-deploy-exception-output-ownership.md). The [0.0.82 roll-forward](docs/plans/2026-11-09-forge-082-native-rollback-rollforward.md) passed the exact source replay. Full qualification and installed verification remain pending.

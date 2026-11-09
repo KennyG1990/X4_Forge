@@ -12,8 +12,8 @@ export function sourceKeyForResolvedPath(resolved: string): string {
   return `source:${process.platform === 'win32' ? resolved.toLowerCase() : resolved}`;
 }
 
-/** Resolve aliases even for a not-yet-created descendant; never create a directory to lock it. */
-export function canonicalSourceKey(input: string): string {
+/** Resolve aliases even for a not-yet-created descendant without creating directories. */
+export function canonicalSourcePath(input: string): string {
   let cursor = path.resolve(input);
   const suffix: string[] = [];
   while (!fs.existsSync(cursor)) {
@@ -22,7 +22,11 @@ export function canonicalSourceKey(input: string): string {
     suffix.unshift(path.basename(cursor));
     cursor = parent;
   }
-  return sourceKeyForResolvedPath(path.join(fs.realpathSync.native(cursor), ...suffix));
+  return path.join(fs.realpathSync.native(cursor), ...suffix);
+}
+
+export function canonicalSourceKey(input: string): string {
+  return sourceKeyForResolvedPath(canonicalSourcePath(input));
 }
 
 export function conflicts(a: string, b: string): boolean {
