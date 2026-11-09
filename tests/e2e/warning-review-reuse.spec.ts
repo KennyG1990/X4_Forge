@@ -40,13 +40,27 @@ test('C03 real warning approval reuse, invalidation, records and rendered revoca
   const reader = await key('read', 'C03 reader'), writer = await key('write', 'C03 writer');
   const route = '/api/agent/deploy-verify', target = { path: 'forge_regression_lab', deployFormat: 'loose' };
   const preview = async (authority = firstActor) => { const r = await post(route, { ...target, dryRun: true }, authority); expect(r.data.ok, JSON.stringify(r.data)).toBe(true); return r.data; };
-  const identity = (p: any) => Object.fromEntries(['modId', 'sourceHash', 'artifactHash', 'bindingHash'].map(k => [`expected${k[0].toUpperCase()}${k.slice(1)}`, p[k]]));
+  const identity = (p: any) => ({
+    ...Object.fromEntries(['modId', 'sourceHash', 'artifactHash', 'bindingHash'].map(k => [`expected${k[0].toUpperCase()}${k.slice(1)}`, p[k]])),
+    expectedTargetFingerprint: p.targetFingerprint,
+    ...(p.projectCheckSuite ? { projectCheckSuiteReceiptId: p.projectCheckSuite.id,
+      expectedProjectCheckSuiteReceiptHash: p.projectCheckSuite.hash } : {}),
+  });
   const apply = async (p: any, authority = firstActor, acceptances: unknown[] = []) => post(route, { ...target, ...identity(p), acceptances }, authority);
   const accept = (p: any) => [{ findingId: p.validation.evidence.findings.find((f: any) => f.code === 'scriptproperty.unknown' && f.message.includes('warning_a')).findingId,
     bindingHash: p.bindingHash, reason: 'Reviewed synthetic C03 warning against fixture; not a real mod approval.' }];
   const bytes = () => { const file = path.join(game, 'extensions/forge_regression_lab/md/forge_regression_lab.xml'); return fs.existsSync(file) ? createHash('sha256').update(fs.readFileSync(file)).digest('hex') : null; };
   const initial = await preview(); expect(initial.validation.review.counts.acceptedWarnings).toBe(0); expect(bytes()).toBeNull();
-  const approved = await apply(initial, firstActor, accept(initial)); expect(approved.data.ok, JSON.stringify(approved.data)).toBe(true);
+  const { expectedTargetFingerprint: initialFingerprint, ...incompleteIdentity } = identity(initial);
+  expect(initialFingerprint).toBe('absent');
+  const missingTarget = await post(route, { ...target, ...incompleteIdentity, acceptances: accept(initial) }, firstActor);
+  expect(missingTarget.status, JSON.stringify(missingTarget.data)).toBe(409);
+  expect(missingTarget.data).toMatchObject({ ok: false, code: 'DEPLOY_IDENTITY_MISMATCH', deployment: { writeAttempted: false } });
+  expect(missingTarget.data.identityMismatch).toEqual({ missing: ['expectedTargetFingerprint'], mismatched: [] });
+  expect(fs.existsSync(path.join(game, 'extensions', target.path))).toBe(false); expect(bytes()).toBeNull();
+  const fresh = await preview(); expect(fresh.validation.review.counts.acceptedWarnings).toBe(0);
+  checks.push('missing-target-fingerprint-refused', 'refused-apply-no-target-or-warning-approval');
+  const approved = await apply(fresh, firstActor, accept(fresh)); expect(approved.data.ok, JSON.stringify(approved.data)).toBe(true);
   expect(approved.data.validation.review.warningReviews.knownFindingIds).toHaveLength(1);
   expect(approved.data.validation.review.warningReviews.newFindingIds).toHaveLength(0);
   const original = approved.data.acceptanceRecords.find((r: any) => r.metadata.findingSeverity === 'warning'); expect(original).toBeDefined();
@@ -107,7 +121,16 @@ test('C03 real warning approval reuse, invalidation, records and rendered revoca
   checks.push('rules-byte-change-invalidates', 'exact-evidence-restoration-recovers');
   write('md/forge_regression_lab.xml', warningMd.replace('</actions>', '<set_value name="$second" exact="$x.forge_review_warning_b"/></actions>'));
   const changed = await preview(); expect(changed.validation.review.counts.acceptedWarnings).toBe(0);
-  expect(changed.validation.review.counts.unacceptedWarnings).toBe(2);
+  expect(changed.validation.review.counts.unacceptedWarnings).toBe(3);
+  const changedWarnings = changed.validation.evidence.findings.filter((f: any) => f.severity === 'warning');
+  expect(changedWarnings).toHaveLength(3);
+  expect(changedWarnings.filter((f: any) => f.code === 'scriptproperty.unknown').map((f: any) => f.sourceRef).sort()).toEqual([
+    '$x.forge_review_warning_a', '$x.forge_review_warning_b',
+  ]);
+  expect(changedWarnings.find((f: any) => f.code === 'content.version_stale')).toMatchObject({
+    code: 'content.version_stale', filePath: 'content.xml', sourceRef: `deploy-receipt:${recovered.data.deployRecord.id}`,
+    message: 'Files changed since the last verified deployment to this destination, but content.xml still declares version "100".',
+  });
   expect(changed.validation.review.warningReviews.rows.some((r: any) => r.state === 'invalidated')).toBe(true);
   const beforeStale = bytes(); expect((await apply(revoked)).status).toBe(409); expect(bytes()).toBe(beforeStale);
   checks.push('source-change-invalidation', 'new-warning-not-inherited', 'stale-source-no-write');

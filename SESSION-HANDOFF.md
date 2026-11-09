@@ -1,23 +1,27 @@
-# X4 Forge Dev handoff — 0.0.82 qualification failed; bounded test repair next
+# X4 Forge Dev handoff — test repair verified; repin one candidate next
 
 Project: isolated X4 Forge development, never the live AiLive/Forge/X4 setup.0.0.82 delivery is first; do not add another backlog feature before this milestone. Dev is detached and contains more than the curated release; never push this entire history as the release source.
 
 ## Current state
 
-- Last committed checkpoint0ab3a1a272e2ca1c34fc9a8dae03b160fd508aca recorded storage guard/cleanup; its normal precommit passed. This checkpoint records actual qualification failure and the next SPECIFIED repair in docs/plans/2026-11-09-forge-082-capacity-recovery.md.
+- Parent checkpoint8fbb6f1d9518f40998afde9e9d0e0934252586b4 recorded the failed full suite. This internal test/harness checkpoint implements its bounded repair; normal precommit remains mandatory. Full acceptance/evidence is in docs/plans/2026-11-09-forge-082-capacity-recovery.md.
 - Current product checkpoint f9977c5271798a422df173f3c23a6993c64a8a1f preserves explicit translation filenames. Dev also includes ff9d289 Lua text checks (#93), which remain excluded from0.0.82.
-- No known backend/build/test tool handle is active; the ownership evidence gap remains. Provision16344 passed; full source-gates15524 failed; cleanup73137 and prior commit64215 are terminal. Do not poll or restart them as live jobs.
+- No known backend/build/test tool handle is active. Focused Dev rerun24508 passed and cleaned its disposable state; the old full-run ownership evidence gap remains historical. Provision16344 passed; full source-gates15524 failed; cleanup73137 and prior commit64215 are terminal. Do not poll or restart them as live jobs.
 - Source5ad377cea253d048eda18ed4ea22dede4f1d8cbf remains902 files/37 release-delta paths. It is unqualified, not publishable. No0.0.82 VSIX/package attempt or success source-gate receipt exists.
 
-## Reproduced failures and next unit
+## Verified internal repair and next unit
 
-Full isolated source run passed precommit,509/509 route checks,134/134 runtime oracles. Production server SHA a4e4b02941394671237b56a290dc272e90a4a04b6568e2b16cae851d664fddbf. Full E2E119 passed/1 failed/0 flaky,120 total in19.3minutes.
+Five existing test/harness files changed. C03 now sends the real target fingerprint plus optional preview-supplied project-check proof; a missing-only-fingerprint request must409 without target writes or stored approval. All prior reuse/provenance/revocation assertions remain. Current Dev also precisely checks its existing third content.version_stale warning bound to the recovered receipt; do not port that Dev-only hunk or the existing UI-confirmation hunk into the older selected release.
 
-1. C03 tests/e2e/warning-review-reuse.spec.ts sends an operation header with a minted agent key but its identity helper still sends only four preview fields. Forge correctly refuses missing expectedTargetFingerprint before target writes. Add the real preview fingerprint and a negative test that omission still refuses without persisting approval. Preserve all existing reuse/provenance/invalidation/rendered-revocation assertions and any applicable preview-supplied project-check proof. Do not port the unrelated Dev-only UI-confirmation hunk into the selected release.
-2. Lifecycle ownershipComplete:false is an independent failure. Termination says complete/treeGone true,commandedPids empty,remainingPids empty.14 reused PIDs were observed, but source review proves valid reuse is already supported. The actual sticky sampler/control failure reason was discarded. First add bounded phase/code/counters to the existing monitor/log; keep all fail-closed behavior. Do not simply ignore reused PIDs, clear errors, increase timeouts or loosen the gate. Existing taskkill rechecks are not an atomic retained-handle guarantee.
-3. Python's cp1252 stdout failed to print Unicode failure details. Set PYTHONUTF8=1 in the next launcher process; do not create another wrapper/helper family.
+Ownership diagnostics retain only a whitelisted enum in a private WeakMap and write at most first failure + summary to the existing log. Public keys/singleton errors, sticky failure, PID birth checks, termination, deadlines/intervals and retries are unchanged. Logger exceptions cannot change results/cleanup.143 serial controls pass; independent complete review accepted. The first new fixture run was16/17 due a synchronous throw scheduling an extra cleared timer; the corrected exact fixture and logger-invariance controls pass17/17.
 
-The complete next acceptance contract and read-only findings are in the capacity recovery record. No implementation yet. Investigators: capacity_guard (C03 contract, complete) and release_reconcile (lifecycle missing diagnostics, complete). Use a fresh bounded unit after this degradation checkpoint: root made two avoidable lookup errors; no code write resulted. First command: git -C this Dev root status --short, then read the plan's Full-source result and next bounded repair section.
+Focused C03 passed1/1,0 flaky in58.8seconds; lifecycle complete/ownershipComplete/treeGone true,1 initialization/22 samples/0 failures. All21 case markers pass. QA/r82g-5ad3-95ed4wda/focused-c03-current-verdict.json SHA6684c17c6fdc38c636230ec8f7acb166fe4bd0624cc013081d9f012a4e109b0c; case receipt b66e9bc7... . One real revocation screenshot was inspected.105698429bytes of completed focused profile/case/trace state were removed; compact evidence and one screenshot remain. No source/dependency copy was made.
+
+The selected5ad source is still unchanged/FAILED: its first full run passed509 routes/134 oracles but119/120 E2E; C03 omitted the fingerprint. Separate ownershipComplete:false was NOT caused merely by14 reused PIDs; valid reuse was already supported, and its original sampler/control cause was discarded. Do not claim that old gap is repaired by the newer healthy focused run. Next launcher uses PYTHONUTF8=1 to avoid cp1252 failure-tail printing.
+
+Next unit: apply only the reviewed test/harness delta to the existing C: candidate and repin its CURRENT actual tree/archive/manifest/helper hashes in place. Source-gates inherits verifier identity; five installed witness RELEASE_TREE values feed qualification-v2 hashes. Existing5ad filenames are namespaces, not actual tree proof. No fresh-tree generator/helper/source-copy family. The synthetic old5ad Git tree is not in this checkout's object store: preserve its291279-byte manifest and old changed bytes in one compact repin receipt before replacing the current ZIP. Precompute all replacements/readback with no qualification running. Retain every source/package/byte/runtime-lock/receipt/Steam/rollback/physical/filename gate.
+
+CRITICAL cleanup: test-results/.last-run.json is TRACKED (45bytes,SHA prefix91d1c430); never remove the test-results parent. Keep both physical node_modules roots. Exact generated blocker allowlist is recorded in the plan. Old external scratch C:/fqa-g82-5ad3-95ed4wda is named in failed inputs; retire it only after ownership/evidence checks. First command for the next unit: read the plan's single-candidate preparation findings and inspect git status; no tests are still running.
 
 ## Exact owned paths/evidence
 

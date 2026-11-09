@@ -2,6 +2,7 @@ import { types as nodeUtilTypes } from 'node:util';
 
 import {
   initializeSpawnedProcessOwnership,
+  readSpawnedProcessOwnershipFailureCode,
   sampleSpawnedProcessOwnership,
 } from './e2e-process-ownership-sampler.mjs';
 import { terminateCapturedProcessTree } from './e2e-process-termination-executor.mjs';
@@ -20,6 +21,53 @@ const E2E_LIFECYCLE_TIMER_FAILED = 'e2e-lifecycle-timer-failed';
 const E2E_LIFECYCLE_OWNERSHIP_INCOMPLETE = 'e2e-lifecycle-ownership-incomplete';
 const E2E_LIFECYCLE_CHILD_ERROR = 'e2e-lifecycle-child-error';
 const E2E_LIFECYCLE_TERMINATION_FAILED = 'e2e-lifecycle-termination-failed';
+const OWNERSHIP_FAILURE_CODES = new Set([
+  'spawned-ownership-invalid-input',
+  'spawned-ownership-snapshot-failed',
+  'spawned-ownership-root-unavailable',
+  'spawned-ownership-plan-failed',
+]);
+
+function createOwnershipDiagnostics() {
+  let initializationAttempts = 0;
+  let sampleAttempts = 0;
+  let failures = 0;
+  let firstPhase = 'none';
+  let firstCode = 'none';
+  const increment = (value) => Math.min(value + 1, Number.MAX_SAFE_INTEGER);
+  const write = (message) => {
+    try {
+      console.error(`[e2e-runner-lifecycle] ${message}`);
+    } catch {
+      // Diagnostics must not change the existing lifecycle verdict or cleanup path.
+    }
+  };
+
+  return {
+    attempt(initializing) {
+      if (initializing) initializationAttempts = increment(initializationAttempts);
+      else sampleAttempts = increment(sampleAttempts);
+    },
+    fail(phase, code) {
+      failures = increment(failures);
+      if (failures !== 1) return;
+      firstPhase = phase;
+      firstCode = code;
+      write(`ownership-first-failure phase=${firstPhase} code=${firstCode}`);
+    },
+    summary(ownershipComplete) {
+      write(`ownership-summary initializationAttempts=${initializationAttempts} sampleAttempts=${sampleAttempts} failures=${failures} firstPhase=${firstPhase} firstCode=${firstCode} ownershipComplete=${ownershipComplete}`);
+    },
+  };
+}
+
+function readOwnershipFailureCode(raw) {
+  const snapshotCode = readSpawnedProcessOwnershipFailureCode(raw);
+  if (snapshotCode !== null) return snapshotCode;
+  const envelope = readOwnershipEnvelopeBase(raw);
+  const code = envelope?.complete === false ? envelope.errors[0] : null;
+  return OWNERSHIP_FAILURE_CODES.has(code) ? code : 'ownership-envelope-invalid';
+}
 
 function isProxyObject(value) {
   if (value === null || (typeof value !== 'object' && typeof value !== 'function')) {
@@ -971,7 +1019,7 @@ function createLifecycleTriggerGate() {
   };
 }
 
-function createLifecycleControl(normalized) {
+function createLifecycleControl(normalized, diagnostics) {
   const gate = createLifecycleTriggerGate();
   const child = normalized.child;
   const on = normalized.on;
@@ -1001,12 +1049,14 @@ function createLifecycleControl(normalized) {
   let closeListenerAttempted = false;
   let errorListenerAttempted = false;
 
-  const settleOuterDeadlineAfterTimerFailure = () => {
+  const settleOuterDeadlineAfterTimerFailure = (phase) => {
+    diagnostics.fail(phase, 'timer-exception');
     timerFailed = true;
     gate.settle('outer-deadline', null);
   };
 
-  const settleChildErrorAfterInteractionFailure = () => {
+  const settleChildErrorAfterInteractionFailure = (phase) => {
+    diagnostics.fail(phase, 'child-interaction-exception');
     childInteractionFailed = true;
     gate.settle('child-error', null);
   };
@@ -1022,7 +1072,7 @@ function createLifecycleControl(normalized) {
     try {
       Reflect.apply(clearTimeoutImpl, undefined, [handle]);
     } catch {
-      settleOuterDeadlineAfterTimerFailure();
+      settleOuterDeadlineAfterTimerFailure('control-clear-timer');
     }
   };
 
@@ -1055,14 +1105,14 @@ function createLifecycleControl(normalized) {
   try {
     Reflect.apply(on, child, ['close', closeListener]);
   } catch {
-    settleChildErrorAfterInteractionFailure();
+    settleChildErrorAfterInteractionFailure('control-close-listener');
   }
 
   errorListenerAttempted = true;
   try {
     Reflect.apply(on, child, ['error', errorListener]);
   } catch {
-    settleChildErrorAfterInteractionFailure();
+    settleChildErrorAfterInteractionFailure('control-error-listener');
   }
 
   const outerDeadlineCallback = () => {
@@ -1080,7 +1130,7 @@ function createLifecycleControl(normalized) {
     outerTimer.handle = handle;
     outerTimer.active = true;
   } catch {
-    settleOuterDeadlineAfterTimerFailure();
+    settleOuterDeadlineAfterTimerFailure('control-outer-timer');
   }
 
   const settleSampleDelay = (delay, outcome, clearHandle) => {
@@ -1124,7 +1174,7 @@ function createLifecycleControl(normalized) {
       terminalGraceTimer.handle = handle;
       terminalGraceTimer.active = true;
     } catch {
-      settleOuterDeadlineAfterTimerFailure();
+      settleOuterDeadlineAfterTimerFailure('control-terminal-grace');
     }
   };
 
@@ -1174,7 +1224,7 @@ function createLifecycleControl(normalized) {
         delay.timer.active = true;
       }
     } catch {
-      settleOuterDeadlineAfterTimerFailure();
+      settleOuterDeadlineAfterTimerFailure('control-sample-delay');
       settleSampleDelay(delay, 'triggered', false);
     }
 
@@ -1211,6 +1261,7 @@ function createLifecycleControl(normalized) {
       try {
         Reflect.apply(removeListener, child, ['close', closeListener]);
       } catch {
+        diagnostics.fail('control-remove-close-listener', 'child-interaction-exception');
         childInteractionFailed = true;
       }
     }
@@ -1219,6 +1270,7 @@ function createLifecycleControl(normalized) {
       try {
         Reflect.apply(removeListener, child, ['error', errorListener]);
       } catch {
+        diagnostics.fail('control-remove-error-listener', 'child-interaction-exception');
         childInteractionFailed = true;
       }
     }
@@ -1244,7 +1296,7 @@ function createLifecycleControl(normalized) {
   });
 }
 
-async function monitorLifecycleOwnership(normalized, control) {
+async function monitorLifecycleOwnership(normalized, control, diagnostics) {
   let ownershipComplete = true;
   let rootIdentity = null;
   let captured = [];
@@ -1269,6 +1321,7 @@ async function monitorLifecycleOwnership(normalized, control) {
   };
 
   while (true) {
+    diagnostics.attempt(rootIdentity === null);
     if (rootIdentity === null) {
       try {
         const raw = await Reflect.apply(normalized.initializeOwnershipImpl, undefined, [{
@@ -1277,6 +1330,7 @@ async function monitorLifecycleOwnership(normalized, control) {
         }]);
         const validated = readInitialOwnershipEnvelope(raw, normalized.rootPid);
         if (validated === null) {
+          diagnostics.fail('initialize', readOwnershipFailureCode(raw));
           ownershipComplete = false;
         } else {
           rootIdentity = cloneIdentity(validated.rootIdentity);
@@ -1284,6 +1338,7 @@ async function monitorLifecycleOwnership(normalized, control) {
           unionReusedPids(validated);
         }
       } catch {
+        diagnostics.fail('initialize', 'sampler-exception');
         ownershipComplete = false;
       }
     } else {
@@ -1297,6 +1352,7 @@ async function monitorLifecycleOwnership(normalized, control) {
         }]);
         const validated = readSampleOwnershipEnvelope(raw, rootIdentity, captured);
         if (validated === null) {
+          diagnostics.fail('sample', readOwnershipFailureCode(raw));
           ownershipComplete = false;
         } else {
           rootIdentity = cloneIdentity(validated.rootIdentity);
@@ -1304,6 +1360,7 @@ async function monitorLifecycleOwnership(normalized, control) {
           unionReusedPids(validated);
         }
       } catch {
+        diagnostics.fail('sample', 'sampler-exception');
         ownershipComplete = false;
       }
     }
@@ -1319,30 +1376,36 @@ async function monitorLifecycleOwnership(normalized, control) {
       try {
         Reflect.apply(control.armTerminalGrace, undefined, []);
       } catch {
+        diagnostics.fail('terminal-grace', 'control-exception');
         ownershipComplete = false;
         return cloneFacts();
       }
     }
 
+    let controlPhase = 'read-trigger';
     try {
       if (control.readTrigger() !== null) {
         return cloneFacts();
       }
 
+      controlPhase = 'sample-delay';
       const delayOutcome = await control.waitForSampleDelay();
       if (delayOutcome === 'triggered') {
         return cloneFacts();
       }
 
+      controlPhase = 'read-trigger';
       if (control.readTrigger() !== null) {
         return cloneFacts();
       }
 
       if (delayOutcome !== 'elapsed') {
+        diagnostics.fail('sample-delay', 'control-outcome-invalid');
         ownershipComplete = false;
         return cloneFacts();
       }
     } catch {
+      diagnostics.fail(controlPhase, 'control-exception');
       ownershipComplete = false;
       return cloneFacts();
     }
@@ -1536,6 +1599,7 @@ export async function superviseSpawnedE2eProcess(input = {}) {
     });
   }
 
+  const diagnostics = createOwnershipDiagnostics();
   let compositionFailed = false;
   let control = null;
   let ownershipFacts = {
@@ -1546,8 +1610,9 @@ export async function superviseSpawnedE2eProcess(input = {}) {
   };
 
   try {
-    control = createLifecycleControl(normalized);
+    control = createLifecycleControl(normalized, diagnostics);
   } catch {
+    diagnostics.fail('control-create', 'control-exception');
     compositionFailed = true;
   }
 
@@ -1555,7 +1620,7 @@ export async function superviseSpawnedE2eProcess(input = {}) {
     compositionFailed = true;
   } else {
     try {
-      const rawOwnershipFacts = await monitorLifecycleOwnership(normalized, control);
+      const rawOwnershipFacts = await monitorLifecycleOwnership(normalized, control, diagnostics);
       if (!isPlainRecord(rawOwnershipFacts)
         || !hasExactOrderedDataKeys(rawOwnershipFacts, [
           'ownershipComplete',
@@ -1563,6 +1628,7 @@ export async function superviseSpawnedE2eProcess(input = {}) {
           'captured',
           'reusedPids',
         ])) {
+        diagnostics.fail('monitor-result', 'ownership-facts-invalid');
         compositionFailed = true;
       } else {
         const ownershipCompleteDescriptor = Object.getOwnPropertyDescriptor(
@@ -1587,6 +1653,7 @@ export async function superviseSpawnedE2eProcess(input = {}) {
           || (rawRootIdentity !== null && validatedRootIdentity === null)
           || validatedCaptured === null
           || validatedReusedPids === null) {
+          diagnostics.fail('monitor-result', 'ownership-facts-invalid');
           compositionFailed = true;
         } else {
           ownershipFacts = {
@@ -1598,6 +1665,7 @@ export async function superviseSpawnedE2eProcess(input = {}) {
         }
       }
     } catch {
+      diagnostics.fail('monitor', 'monitor-exception');
       compositionFailed = true;
     }
   }
@@ -1606,12 +1674,14 @@ export async function superviseSpawnedE2eProcess(input = {}) {
     try {
       control.stop();
     } catch {
+      diagnostics.fail('control-stop', 'control-exception');
       compositionFailed = true;
     }
 
     try {
       control.cleanup();
     } catch {
+      diagnostics.fail('control-cleanup', 'control-exception');
       compositionFailed = true;
     }
   }
@@ -1626,6 +1696,7 @@ export async function superviseSpawnedE2eProcess(input = {}) {
       if (rawTriggerRecord !== null
         && (!isPlainRecord(rawTriggerRecord)
           || !hasExactOrderedDataKeys(rawTriggerRecord, ['trigger', 'childExit']))) {
+        diagnostics.fail('control-trigger', 'control-result-invalid');
         compositionFailed = true;
       } else if (rawTriggerRecord !== null) {
         const triggerDescriptor = Object.getOwnPropertyDescriptor(rawTriggerRecord, 'trigger');
@@ -1642,6 +1713,7 @@ export async function superviseSpawnedE2eProcess(input = {}) {
           || !allowedTrigger
           || (triggerValue === 'child-close' && clonedChildExit === null)
           || (triggerValue !== 'child-close' && childExitValue !== null)) {
+          diagnostics.fail('control-trigger', 'control-result-invalid');
           compositionFailed = true;
         } else {
           triggerRecord = {
@@ -1651,6 +1723,7 @@ export async function superviseSpawnedE2eProcess(input = {}) {
         }
       }
     } catch {
+      diagnostics.fail('control-trigger', 'control-exception');
       compositionFailed = true;
     }
 
@@ -1658,6 +1731,7 @@ export async function superviseSpawnedE2eProcess(input = {}) {
       const rawFailures = control.readFailures();
       if (!isPlainRecord(rawFailures)
         || !hasExactOrderedDataKeys(rawFailures, ['childInteractionFailed', 'timerFailed'])) {
+        diagnostics.fail('control-failures', 'control-result-invalid');
         compositionFailed = true;
       } else {
         const childInteractionFailedDescriptor = Object.getOwnPropertyDescriptor(
@@ -1669,6 +1743,7 @@ export async function superviseSpawnedE2eProcess(input = {}) {
           || !isEnumerableDataDescriptor(timerFailedDescriptor)
           || typeof childInteractionFailedDescriptor.value !== 'boolean'
           || typeof timerFailedDescriptor.value !== 'boolean') {
+          diagnostics.fail('control-failures', 'control-result-invalid');
           compositionFailed = true;
         } else {
           childInteractionFailed = childInteractionFailedDescriptor.value;
@@ -1676,6 +1751,7 @@ export async function superviseSpawnedE2eProcess(input = {}) {
         }
       }
     } catch {
+      diagnostics.fail('control-failures', 'control-exception');
       compositionFailed = true;
     }
   } else {
@@ -1747,6 +1823,7 @@ export async function superviseSpawnedE2eProcess(input = {}) {
     error = E2E_LIFECYCLE_TERMINATION_FAILED;
   }
 
+  diagnostics.summary(ownershipComplete);
   return buildLifecycleResult({
     complete,
     errors: complete ? [] : [error],
