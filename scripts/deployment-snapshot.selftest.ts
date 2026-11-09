@@ -55,13 +55,13 @@ try {
   const principal = { kind: 'agent' as const, id: 'key_snapshot_test', label: 'Snapshot test', scope: 'deploy' as const, deployAuthorized: true };
   const decision = evaluateFindingAcceptances(subject, [], principal);
   const recovery = new DestructiveRecoveryStore({ root: path.join(root, 'recovery') });
-  const prepared = prepareDeployRecord(store, subject, decision, principal, [], 'recovery_snapshot_test', 'absent', artifactPlanIdentity(plan, 'loose'));
+  const prepared = prepareDeployRecord(store, subject, decision, principal, [], 'recovery_snapshot_test', 'lab_alias', 'absent', artifactPlanIdentity(plan, 'loose'));
   check('legacy prepared receipt has unknown write outcome', deployOperationStatus(prepared, recovery).outcome === 'unknown');
   const targetRoot = path.join(root, 'extensions');
   const before = recovery.prepareDeployment({ priorExisted: false, targetRoot, targetPath: path.join(targetRoot, 'lab'),
     modId: 'lab', beforeFingerprint: 'absent', beforeBytes: 0, summary: 'Test deployment', trackWriteAdmission: true });
   const operation = deployReceiptIdentity(principal, { workspaceId: 'ws_111111111111111111111111', operationId: 'test-write-admission' });
-  const tracked = prepareDeployRecord(store, subject, decision, principal, [], before.id, before.beforeFingerprint,
+  const tracked = prepareDeployRecord(store, subject, decision, principal, [], before.id, before.modId, before.beforeFingerprint,
     artifactPlanIdentity(plan, 'loose'), operation, undefined, before);
   check('live prepared owner has unknown write outcome', deployOperationStatus(tracked, recovery).outcome === 'unknown');
   assert.throws(() => recovery.admitDeploymentWrite({ ...before, beforeBytes: 1 }), /no longer matches/); assertions++;
@@ -124,12 +124,14 @@ try {
     && compareDeployPreviewTarget({ outcome: 'committed' }, subject.targetHash, 'absent').targetState === 'unavailable');
   const committed = commitDeployRecord(store, prepared, 'e'.repeat(64));
   const reopened = new ActionReceiptStore({ root: store.root }).read(committed.id);
+  check('deploy receipt binds the actual folder and preserves the manifest ID', reopened.metadata?.modId === 'lab'
+    && reopened.authority.resources[0].relativePath === 'lab_alias' && reopened.after?.resources[0].relativePath === 'lab_alias');
   check('snapshot audit hash survives durable committed readback', reopened.status === 'committed' && reopened.metadata?.validatedArtifactHash === artifactPlanIdentity(plan, 'loose'));
   check('snapshot scope retained', reopened.metadata?.validatedArtifactScope === 'logical-artifact-bytes');
   check('committed outcome survives without a recovery record', deployOperationStatus(reopened, recovery).outcome === 'committed');
 
   const prepareCommitTest = () => prepareDeployRecord(store, subject, decision, principal, [],
-    'recovery_snapshot_test', 'absent', artifactPlanIdentity(plan, 'loose'));
+    'recovery_snapshot_test', 'lab', 'absent', artifactPlanIdentity(plan, 'loose'));
   const withCommittedReadFailure = (receiptId: string, failures: number, run: () => void) => {
     const read = fs.readFileSync;
     fs.readFileSync = ((...args: Parameters<typeof fs.readFileSync>) => {

@@ -213,7 +213,7 @@ export function compareDeployPreviewTarget(
 export function prepareDeployRecord(
   store: ActionReceiptStore, subject: AcceptanceSubject, decision: AcceptanceDecision,
   principal: AcceptancePrincipal, approvals: ActionReceipt[], recoveryId: string,
-  beforeFingerprint: string,
+  artifactFolder: string, beforeFingerprint: string,
   validatedArtifactHash?: string,
   identity = deployReceiptIdentity(principal),
   projectCheckSuite?: { id: string; hash: string },
@@ -221,7 +221,7 @@ export function prepareDeployRecord(
 ): ActionReceipt {
   const maxApprovals = projectCheckSuite ? 126 : 127;
   if (approvals.length > maxApprovals) throw new Error(`At most ${maxApprovals} finding approvals fit a deployment record.`);
-  const target = { role: 'deploy' as const, root: 'extensions', relativePath: subject.evidence.modId!,
+  const target = { role: 'deploy' as const, root: 'extensions', relativePath: artifactFolder,
     beforeHash: trustHash(beforeFingerprint) };
   const resources = [target, ...approvals.map(receipt => ({ role: 'data' as const,
     root: 'action-receipts', relativePath: `${receipt.id}.json`, beforeHash: receipt.hash }))];
@@ -237,7 +237,7 @@ export function prepareDeployRecord(
     if (suite.hash !== projectCheckSuite.hash || suite.status !== 'committed'
       || !('id' in suite.capability) || suite.capability.id !== 'project-check.suite' || suite.capability.version !== '1'
       || suite.validation.status !== 'passed' || suite.validation.code !== 'PROJECT_CHECK_SUITE_PASSED'
-      || suite.after?.outcome !== 'applied' || suite.metadata?.modId !== subject.evidence.modId
+      || suite.after?.outcome !== 'applied' || suite.metadata?.modId !== artifactFolder
       || !validatedArtifactHash || suite.metadata?.artifactHash !== validatedArtifactHash) {
       throw mismatch();
     }

@@ -12,7 +12,7 @@ Dev adds explicit local Start with exact saved workspace, offline Studio state, 
 
 ### Native deploy target identity preflight `in_progress` (GitHub #87)
 
-Both Dev aliases previewed a folder that the exact bound apply rejected after writing because its name disagreed with `content.xml`. The durable result rolled back and retained a private staged build. The correctly named control deployed exact bytes. [Independent reproduction and acceptance](https://github.com/KennyG1990/X4_Forge/issues/87). Reproduce the released backend and reconcile intended target identity before changing preflight.
+Published 0.0.81 previewed a folder that bound apply rejected after writing. Dev now deploys the selected alias and retains the canonical manifest ID in the receipt. Competing IDs and stale inputs refuse before normal staging, and a locked legacy duplicate surviving cleanup still blocks target activation. [Released reproduction and Dev proof](docs/plans/2026-11-09-forge-deploy-folder-manifest-identity.md). Installed verification and public delivery remain open.
 
 ### Unsaved expression MCP `in_progress` (GitHub #79, part of #74)
 

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { loadProjectFromDisk, runProjectValidation } from '../src/server/projectValidation';
-import { buildValidationEvidence, parseValidationProject, ValidationInputError } from '../src/lib/validationEvidence';
+import { buildValidationEvidence, parseValidationProject, readContentManifestIdentity, ValidationInputError } from '../src/lib/validationEvidence';
 
 const project = { id: 'folder_alias', name: 'Fixture', files: [
   { path: 'content.xml', kind: 'content' as const, content: '<content id="trust_fixture" name="Fixture" version="100"/>' },
@@ -31,6 +31,10 @@ check('missing manifest is unresolved, not guessed from folder', () => {
 check('commented manifest cannot spoof identity', () => {
   const e = buildValidationEvidence({ ...project, files: [{ ...project.files[0], content: '<!-- <content id="wrong"/> --><content id="right" version="101"/>' }] }, []);
   assert.equal(e.modId, 'right');
+});
+check('manifest identity accepts single quotes and decodes the root ID', () => {
+  assert.deepEqual(readContentManifestIdentity(`<!-- <content id="decoy"/> --><content id='Canonical_&#x61;lias' version='100'/>`),
+    { modId: 'Canonical_alias', modVersion: '100' });
 });
 check('malformed manifest cannot assert identity', () => assert.equal(buildValidationEvidence({ ...project, files: [{ ...project.files[0], content: '<content id="wrong"><x></content>' }] }, []).modId, null));
 const unavailable = { severity: 'error' as const, code: 'validation.lua_ast_unavailable', filePath: 'ui/main.lua', message: 'Analysis unavailable' };

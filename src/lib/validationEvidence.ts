@@ -72,6 +72,12 @@ const unavailableCodes = new Set([
 ]);
 const normalizedPath = (value: string) => value.replace(/\\/g, '/').toLowerCase();
 
+export function readContentManifestIdentity(xml: string | undefined): { modId: string; modVersion: string | null } | null {
+  const root = typeof xml === 'string' && checkXmlWellformed(xml).ok ? parseXmlLenient(xml) : null;
+  const modId = root?.nodeName === 'content' ? root.getAttribute('id')?.trim() : undefined;
+  return modId ? { modId, modVersion: root?.getAttribute('version') || null } : null;
+}
+
 export function buildValidationEvidence(
   project: ExtensionProject,
   diagnostics: readonly EvidenceDiagnostic[],
@@ -84,10 +90,9 @@ export function buildValidationEvidence(
     content: JSON.stringify([file.kind, typeof file.content === 'string', file.content ?? null]),
   })));
   const manifests = project.files.filter(file => normalizedPath(file.path) === 'content.xml');
-  const xml = manifests.length === 1 ? manifests[0].content : undefined;
-  const root = typeof xml === 'string' && checkXmlWellformed(xml).ok ? parseXmlLenient(xml) : null;
-  const modId = root?.nodeName === 'content' ? root.getAttribute('id')?.trim() || null : null;
-  const modVersion = modId ? root?.getAttribute('version') || null : null;
+  const manifest = manifests.length === 1 ? readContentManifestIdentity(manifests[0].content) : null;
+  const modId = manifest?.modId ?? null;
+  const modVersion = manifest?.modVersion ?? null;
   const gaps: ValidationCoverageGap[] = [...coverageGaps];
   if (!modId) gaps.push({ check: 'subject.identity', reason: 'No unique well-formed content.xml with a mod ID was available.' });
   if (!project.files.length) gaps.push({ check: 'source.inventory', reason: 'No files were supplied.' });

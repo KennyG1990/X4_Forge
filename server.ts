@@ -123,7 +123,7 @@ import { freezeProjectCheckSetup } from './src/server/projectCheckSetup';
 import { executeProjectCheckSuite } from './src/server/projectCheckSuite';
 import { ProjectCheckRunRefusal, ProjectCheckRunService } from './src/server/projectCheckRunService';
 import { verifyProjectCheckWorkerRuntime } from './src/server/projectCheckWorker';
-import { applyProjectCheckCoverage, buildValidationEvidence, parseValidationProject, ValidationInputError, type ValidationSourceLocation } from './src/lib/validationEvidence';
+import { applyProjectCheckCoverage, buildValidationEvidence, parseValidationProject, readContentManifestIdentity, ValidationInputError, type ValidationSourceLocation } from './src/lib/validationEvidence';
 import { runX4UiIntegrationSelftest } from "./src/server/x4UiIntegration.selftest";
 import { buildRemediationCapsules, runAgentLoopSelftest, runRepairLoop, type LoopDiagnostic } from "./src/lib/agentLoop";
 import { assessSourceSync, hashFolderFingerprint, runCompileFidelitySelftest } from "./src/lib/compileFidelity";
@@ -8369,7 +8369,7 @@ function* readInstalledExtensionManifests(extRoot: string) {
 
     let xml: string;
     try { xml = fs.readFileSync(contentPath, 'utf8'); } catch { continue; }
-    const id = xml.match(/<content\b[^>]*\bid\s*=\s*"([^"]+)"/i)?.[1] || folder;
+    const id = readContentManifestIdentity(xml)?.modId ?? folder;
     yield { folder, absDir, id, xml };
   }
 }
@@ -12259,6 +12259,28 @@ function deploymentScratchSiblingOwner(folder: string, targetFolder: string): nu
   if (match) return Number(match[1]);
 }
 
+function deploymentManifestConflict(extensionsPath: string, artifactFolder: string, manifestId: string, targetFingerprint: string,
+  allowSweepableLegacy: boolean,
+) {
+  if (!pathHasEntry(extensionsPath)) return;
+  const conflicts: string[] = [];
+  const canonicalId = manifestId.toLowerCase();
+  for (const extension of readInstalledExtensionManifests(extensionsPath)) {
+    if (extension.id.toLowerCase() !== canonicalId || samePathName(extension.folder, artifactFolder)) continue;
+    const owner = deploymentScratchSiblingOwner(extension.folder, artifactFolder);
+    const retainedBackup = targetFingerprint === 'absent' && extension.folder.startsWith(`.${artifactFolder}.x4forge-backup-`);
+    if (!allowSweepableLegacy || owner === undefined || processLiveness(owner) !== 'dead' || retainedBackup
+      || fs.lstatSync(extension.absDir).isSymbolicLink()) conflicts.push(extension.folder);
+  }
+  if (!conflicts.length) return;
+  const conflictingFolders = conflicts.sort().slice(0, 12);
+  const remaining = conflicts.length - conflictingFolders.length;
+  return {
+    code: 'DEPLOY_DUPLICATE_EXTENSION_ID', conflictingFolders, conflictingFolderCount: conflicts.length,
+    error: `Another installed folder uses extension ID "${manifestId}": ${conflictingFolders.join(', ')}${remaining ? ` (and ${remaining} more)` : ''}. Resolve the duplicate and review a fresh preview.`,
+  };
+}
+
 function sweepDeploymentScratchSiblings(targetPath: string, committedFingerprint?: string): void {
   const parent = path.dirname(targetPath);
   const targetFolder = path.basename(targetPath);
@@ -13903,7 +13925,8 @@ app.post('/api/agent/warning-reviews/revoke', (req, res) => {
       const dir = addressed.workspace.sourceStamp?.dir;
       const canonical = dir ? fs.realpathSync.native(dir) : '';
       const scope = canonical ? trustHash([process.platform === 'win32' ? canonical.toLowerCase() : canonical, original.metadata?.modId]) : '';
-      if (effectiveModId(activeBuildWorkspace(addressed.workspace)) !== original.metadata?.modId || scope !== body.reviewScopeHash)
+      const workspace = activeBuildWorkspace(addressed.workspace);
+      if (effectiveContentId(workspace, effectiveModId(workspace)) !== original.metadata?.modId || scope !== body.reviewScopeHash)
         return res.status(409).json({ ok: false, code: 'REVIEW_WORKSPACE_MISMATCH', error: 'Review does not belong to this agent workspace source and mod.' });
     }
     const receipt = revokeWarningReview(actionReceiptStore, body.reviewScopeHash, body.receiptId, body.reason, principal);
@@ -14218,6 +14241,8 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     const projectChecks = preflight.projectChecks;
     const extensionsPath = path.join(x4GamePath, 'extensions');
     const targetRoot = path.join(extensionsPath, effectiveModId(activeBuildWorkspace(ws)));
+    const artifactFolder = path.basename(targetRoot);
+    responseIdentity = { ...responseIdentity, artifactFolder };
     const suiteId = body.projectCheckSuiteReceiptId;
     if (projectChecks && (projectChecks.status === 'invalid' || suiteId === undefined)) {
       const invalid = projectChecks.status === 'invalid';
@@ -14320,6 +14345,12 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
           reason: 'Receipt history could not be verified. Remembered warning reviews were omitted.' }] : []),
       ]);
     const evidence = nativeCheckProof ? applyProjectCheckCoverage(staticEvidence, nativeCheckProof.verification) : staticEvidence;
+    const manifestId = evidence.modId;
+    if (!manifestId) {
+      const detail = 'The selected artifact needs one valid content.xml with a declared extension ID.';
+      check('preflight', 'Deployment manifest identity', 'fail', detail);
+      return res.status(422).json(failWith('preflight', { code: 'DEPLOY_MANIFEST_ID_UNRESOLVED', error: detail }));
+    }
     const subject: AcceptanceSubject = { evidence, artifactHash, validatorHash: nativeCheckProof
       ? trustHash([deployValidatorHash, nativeCheckProof.proof.reviewBasisHash]) : deployValidatorHash, corpusHash,
       targetHash: trustHash([process.platform === 'win32' ? path.resolve(targetRoot).toLowerCase() : path.resolve(targetRoot), deployFormat]) };
@@ -14328,10 +14359,10 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       subject.warningReviews = { scopeHash: trustHash([process.platform === 'win32' ? canonicalReviewSource.toLowerCase() : canonicalReviewSource, evidence.modId]),
         history: receiptHistory, invocationId: crypto.randomUUID() };
     }
-    responseIdentity = { ...responseIdentity, modId: evidence.modId, modVersion: evidence.modVersion, sourceHash: evidence.sourceHash,
-      artifactHash, validation: { evidence } };
+    responseIdentity = { ...responseIdentity, modId: manifestId, contentId: manifestId, modVersion: evidence.modVersion,
+      sourceHash: evidence.sourceHash, artifactHash, validation: { evidence } };
     const decision = evaluateFindingAcceptances(subject, acceptances, principal);
-    responseIdentity = { ...responseIdentity, modId: evidence.modId, modVersion: evidence.modVersion, sourceHash: evidence.sourceHash,
+    responseIdentity = { ...responseIdentity, modId: manifestId, modVersion: evidence.modVersion, sourceHash: evidence.sourceHash,
         artifactHash, bindingHash: decision.binding.hash, targetFingerprint, validation: { outcome: decision.outcome,
         clean: decision.validationClean, evidence, review: projectFindingReview(decision, principal) }, binding: decision.binding };
     if (body.dryRun !== true) {
@@ -14364,27 +14395,10 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
         return res.status(409).json(failWith('preflight', { code, error: message }));
       }
     }
-    if (pathHasEntry(extensionsPath)) {
-      const targetFolder = path.basename(targetRoot);
-      const sameFolder = (folder: string) => process.platform === 'win32'
-        ? folder.toLowerCase() === targetFolder.toLowerCase() : folder === targetFolder;
-      const conflictingFolders: string[] = [];
-      const modIdLower = modId.toLowerCase();
-      for (const extension of readInstalledExtensionManifests(extensionsPath)) {
-        if (extension.id.toLowerCase() !== modIdLower || sameFolder(extension.folder)) continue;
-        const owner = deploymentScratchSiblingOwner(extension.folder, targetFolder);
-        const retainedBackup = targetFingerprint === 'absent' && extension.folder.startsWith(`.${targetFolder}.x4forge-backup-`);
-        if (owner === undefined || processLiveness(owner) !== 'dead' || retainedBackup
-          || fs.lstatSync(extension.absDir).isSymbolicLink()) conflictingFolders.push(extension.folder);
-      }
-      if (conflictingFolders.length) {
-        const visibleFolders = conflictingFolders.sort().slice(0, 12);
-        const remaining = conflictingFolders.length - visibleFolders.length;
-        const detail = `Another installed folder declares "${modId}": ${visibleFolders.join(', ')}${remaining ? ` (and ${remaining} more)` : ''}. Resolve the duplicate and review a fresh preview.`;
-        check('preflight', 'Installed extension identity', 'fail', detail);
-        return res.status(409).json(failWith('preflight', { code: 'DEPLOY_DUPLICATE_EXTENSION_ID', error: detail,
-          conflictingFolders: visibleFolders, conflictingFolderCount: conflictingFolders.length }));
-      }
+    const installedConflict = deploymentManifestConflict(extensionsPath, artifactFolder, manifestId, targetFingerprint, true);
+    if (installedConflict) {
+      check('preflight', 'Installed extension identity', 'fail', installedConflict.error);
+      return res.status(409).json(failWith('preflight', installedConflict));
     }
     if (!decision.validationAllowsDeploy) {
       const blockingFindings = evidence.findings.filter(finding => decision.unacceptedErrorIds.includes(finding.findingId));
@@ -14402,7 +14416,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
         blockingFindings.map(f => `${f.code || 'mod-finding'} | ${f.filePath || '(project)'}${f.line ? ':' + f.line : ''} | ${f.message} | findingId=${f.findingId}`).join('\n')
         + (acceptanceRequest ? '\nAcceptance: POST /api/agent/deploy-verify using acceptanceRequest.body with a reason for each finding.'
           : '\nReceipt history must be verified before Forge can offer finding acceptance.'));
-      return res.json(failWith('preflight', { modId, category: 'mod-findings', code: 'UNACCEPTED_MOD_FINDINGS', blockingFindings,
+      return res.json(failWith('preflight', { category: 'mod-findings', code: 'UNACCEPTED_MOD_FINDINGS', blockingFindings,
         acceptanceRequest, validationDelta, preflight: { summary: preflight.summary, findings: blockingFindings } }));
     }
     const deltaDetail = validationDelta.status === 'compared'
@@ -14494,7 +14508,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     let stagingPath = '';
     const deploymentTarget = targetRoot;
     try {
-      pendingDeployRecovery = prepareDeploymentRecoveryReceipt(extensionsPath, deploymentTarget, modId,
+      pendingDeployRecovery = prepareDeploymentRecoveryReceipt(extensionsPath, deploymentTarget, artifactFolder,
         destructiveRecoveryStore, operation !== undefined);
     } catch (error) {
       check('deploy', 'Written to staging + extensions', 'fail', 'Deploy refused because its pre-state recovery could not be made durable.');
@@ -14505,7 +14519,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     }
     if (pendingDeployRecovery.beforeFingerprint !== targetFingerprint) throw targetChanged();
     deployReceipt = prepareDeployRecord(actionReceiptStore, subject, decision, principal, approvalRecords,
-      pendingDeployRecovery.id, pendingDeployRecovery.beforeFingerprint, snapshot.manifest.hash, operation,
+      pendingDeployRecovery.id, artifactFolder, pendingDeployRecovery.beforeFingerprint, snapshot.manifest.hash, operation,
       nativeCheckProof?.proof, operation ? pendingDeployRecovery : undefined);
     assertWriteAuthority();
     const admittedRecovery = operation ? destructiveRecoveryStore.admitDeploymentWrite(pendingDeployRecovery) : undefined;
@@ -14518,7 +14532,15 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     }
     let stagedFingerprint: string | undefined;
     const deployedPath = compileWorkspaceToFolder(ws, extensionsPath, 'store', false, deployFormat, {
-      beforeActivate: () => { assertWriteAuthority(); assertCurrentTarget(); },
+      beforeActivate: () => {
+        assertWriteAuthority();
+        assertCurrentTarget();
+        if (stagedFingerprint !== undefined) {
+          // The transaction has already attempted its legacy sweep before staging.
+          const conflict = deploymentManifestConflict(extensionsPath, artifactFolder, manifestId, targetFingerprint, false);
+          if (conflict) throw Object.assign(new Error(conflict.error), { code: conflict.code });
+        }
+      },
       onStagedFingerprint: fingerprint => {
         if (admittedRecovery) destructiveRecoveryStore.recordStagedDeployment(admittedRecovery, preparedReceiptHash, fingerprint);
         stagedFingerprint = fingerprint;
@@ -14532,20 +14554,21 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       // 4. Confirm manifest identity. The receipt also requires an exact physical tree match.
       const deployedContent = path.join(deployedPath, 'content.xml');
       const deployedBytes = fs.existsSync(deployedContent) ? fs.statSync(deployedContent).size : 0;
-      const deployedId = deployedBytes ? (fs.readFileSync(deployedContent, 'utf8').match(/<content\b[^>]*\bid\s*=\s*"([^"]+)"/i)?.[1] || '') : '';
-      const bytesConfirmed = deployedBytes > 0 && deployedId.toLowerCase() === modId.toLowerCase();
+      const deployedId = deployedBytes ? readContentManifestIdentity(fs.readFileSync(deployedContent, 'utf8'))?.modId : undefined;
+      const bytesConfirmed = deployedId === manifestId;
 
-      // 5. Extension-doctor — filter to this mod; FAIL on duplicate-id / folder-id-mismatch / any error.
+      // 5. Doctor findings belong to the selected install folder, even for a manifest alias.
       const doctor = runExtensionDoctor(extensionsPath);
-      const modFindings = (doctor.findings || []).filter((f: any) => JSON.stringify(f).toLowerCase().includes(modId.toLowerCase()));
+      const modFindings = doctor.findings.filter(finding => finding.openTargets?.some((target: { path: string }) =>
+        samePathName(target.path.split('/', 1)[0], artifactFolder)));
       const acceptedIds = new Set(decision.approvals.map(a => a.finding.findingId));
       const doctorAccepted = modFindings.filter((f: any) => {
         if (!f.validationDiagnostic || f.filePath !== `extensions/${path.basename(deployedPath)}/${f.validationDiagnostic.filePath}`) return false;
         const finding = buildValidationEvidence({ id: modId, name: modId, files: deployValidation.validationFiles }, [f.validationDiagnostic]).findings[0];
         return acceptedIds.has(finding.findingId);
       });
-      const blocking = modFindings.filter((f: any) => (f.severity === 'error' && !doctorAccepted.includes(f))
-        || f.code === 'ext.duplicate_id' || f.code === 'ext.folder_id_mismatch');
+      const blocking = modFindings.filter((f: any) => f.code === 'ext.duplicate_id'
+        || (f.severity === 'error' && !doctorAccepted.includes(f)));
       return { deployedBytes, deployedId, bytesConfirmed, doctor, modFindings, doctorAccepted, blocking };
     };
     let output: ReturnType<typeof inspectOutput> | undefined;
@@ -14589,7 +14612,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       `${deployedPath}${stagingPath ? ' (+ staging)' : ''} — ${formatReport.summary}` +
       (formatReport.warnings.length ? ` ⚠ ${formatReport.warnings.join(' ')}` : ''));
     check('bytes', 'Deployed bytes confirmed', bytesConfirmed ? 'pass' : 'fail',
-      bytesConfirmed ? `content.xml ${deployedBytes}b, id "${deployedId}"` : `content.xml missing/empty or id mismatch (got "${deployedId}", want "${modId}")`);
+      bytesConfirmed ? `content.xml ${deployedBytes}b, id "${deployedId}"` : `content.xml missing/empty or id mismatch (got "${deployedId ?? ''}", want "${manifestId}")`);
     check('doctor', 'Extension doctor', blocking.length ? 'fail' : doctorAccepted.length ? 'warn' : 'pass',
       blocking.length === 0 ? `${modFindings.length} finding(s) for this mod, ${doctorAccepted.length} exact reviewed acceptance(s), none unaccepted blocking` : blocking.map((f: any) => f.code).join(', '));
 
@@ -14796,7 +14819,8 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     }
     if (!outputUnconfirmed) recordFailedDeploy(rollback?.applied === true || targetWrite.state === 'restored', error?.code === 'DEPLOY_TARGET_CHANGED');
     const code = String(error?.code || 'DEPLOY_FAILED');
-    const status = code === 'DEPLOY_APPROVAL_FORBIDDEN' ? 403 : /STALE|CHANGED|MISMATCH/.test(code) ? 409
+    const conflict = code === 'DEPLOY_DUPLICATE_EXTENSION_ID' || /STALE|CHANGED|MISMATCH/.test(code);
+    const status = code === 'DEPLOY_APPROVAL_FORBIDDEN' ? 403 : conflict ? 409
       : /INPUT_INVALID/.test(code) ? 400 : /RECEIPT_/.test(code) ? 507 : 500;
     return res.status(status).json({ ok: false, success: false, stage: 'exception', ...responseIdentity, code,
       deployment: deploymentFidelity(),
