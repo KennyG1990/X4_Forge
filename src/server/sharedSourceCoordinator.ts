@@ -329,11 +329,18 @@ export class SharedSourceCoordinator {
     return claims;
   }
 
-  status(keys: string[]): SourceCoordinationStatus {
+  status(keys: string[], workspaceId?: string): SourceCoordinationStatus {
     try {
       const normalized = normalizeKeys(keys, true);
       const claims = this.transaction(database => this.claims(database));
-      const relevant = claims.filter(claim => overlap(claim.resources, normalized));
+      const relevant: Claim[] = [];
+      for (const claim of claims) {
+        if (overlap(claim.resources, normalized)) relevant.push(claim);
+        else if (workspaceId && claim.owner.workspaceId === workspaceId) {
+          // Workspace identity can reveal the holder without revealing its resources.
+          relevant.push({ ...claim, resources: [], guardPhase: null });
+        }
+      }
       const copy = ({ sequence: _sequence, state: _state, guard: _guard, guardPhase, handlerFinished: _finished, ...claim }: Claim) =>
         ({ ...claim, ...(guardPhase === null ? {} : { guardPhase }) });
       return { ...statusBase(this.instanceId), active: relevant.filter(claim => claim.state === 'active').map(copy),
@@ -531,8 +538,8 @@ export const forgeSourceCoordinator = {
     try { return coordinator().run(keys, owner, task, currentKeys); }
     catch (error) { return Promise.reject(unavailable(error)); }
   },
-  status(keys: string[]): SourceCoordinationStatus {
-    try { return coordinator().status(keys); }
+  status(keys: string[], workspaceId?: string): SourceCoordinationStatus {
+    try { return coordinator().status(keys, workspaceId); }
     catch (error) { return unavailableStatus(defaultInstanceId, error); }
   },
 };

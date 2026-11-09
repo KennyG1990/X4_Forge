@@ -128,6 +128,15 @@ and gitignore the by-products.
 7. RECORD      write what you learned into the methods library.
 ```
 
+### Check for active workspace work
+
+Use `GET /api/agent/status` with the workspace's normal authorization headers.
+`sourceCoordination.active` and `waiting` show participating Forge operations.
+Even an unstamped workspace can see its own holder, operation, and timestamps.
+Resource paths appear only for claims that overlap the imported source. Workspace-only
+matches report an empty resource list. Manual Studio activity and desktop focus have
+separate coordination.
+
 ### Recover an agent deploy after a lost response
 
 Preview with `dryRun: true`. Review the effect and apply with all four expected preview

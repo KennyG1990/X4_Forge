@@ -30,6 +30,10 @@ Dev rejects a directory or blank file in place of the manifest, preserves valid 
 
 Dev distinguishes real sharing denial from a failed verification after replacement with a correlated phase and bounded workspace byte observation. The exact native deploy control still commits its receipt. [Paired fault evidence](docs/plans/2026-11-09-workspace-write-failure-evidence.md). The historical AiLive failure cause, installed verification and public delivery remain open.
 
+### Same-workspace coordination visibility `in_progress` (GitHub #49)
+
+Agent status exposes active and waiting participating claims in its authorized workspace even without a source stamp. Workspace-only claims hide resource paths. The exact two-process replay confirmed a real held write, separate authorization, release and cleanup. [Isolated evidence](docs/plans/2026-11-09-workspace-coordination-visibility.md). Manual Studio sessions, desktop focus, installed verification and public delivery remain open.
+
 ### Launcher-pinned scratch Directory Settings `in_progress` (GitHub #75)
 
 An explicit Dev launch flag shows the effective scratch paths and keeps corpus/schema settings editable in regular scratch profiles. Retargets and install harvesting refuse, the Project Check owner seal stays in force, and native deploy passed the exact scratch replay. [Isolated evidence and release review](docs/plans/2026-11-09-dev-scratch-directory-settings.md). Installed rendering and public delivery remain open.

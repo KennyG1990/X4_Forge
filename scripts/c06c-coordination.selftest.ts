@@ -160,6 +160,24 @@ try {
     assert.ok(sharedStatus.active[0].instanceId); assert.ok(sharedStatus.active[0].queuedAt); assert.ok(sharedStatus.active[0].startedAt);
     assert.equal(sharedStatus.waiting[0].owner.workspaceId, 'ws_B'); assert.equal(sharedStatus.waiting[0].startedAt, null);
   });
+  check('workspace-only visibility finds exact active and waiting claims without resource paths', () => {
+    const active = b.status([], 'ws_A');
+    const waiting = b.status([other], 'ws_B');
+    assert.deepEqual(active.active, [{ ...sharedStatus.active[0], resources: [] }]);
+    assert.deepEqual(active.waiting, []);
+    assert.deepEqual(waiting.active, []);
+    assert.deepEqual(waiting.waiting, [{ ...sharedStatus.waiting[0], resources: [] }]);
+  });
+  check('workspace identity is exact and absent identity stays source-only', () => {
+    for (const id of ['ws_a', 'ws_missing', '', undefined]) {
+      const status = b.status([], id);
+      assert.equal(status.available, true);
+      assert.deepEqual([...status.active, ...status.waiting], []);
+    }
+    const dualMatch = b.status([key], 'ws_A');
+    assert.deepEqual(dualMatch.active, sharedStatus.active);
+    assert.deepEqual(dualMatch.waiting, sharedStatus.waiting);
+  });
   sharedStatus.active[0].owner.actor = 'tampered';
   check('status snapshots cannot mutate authority', () => assert.equal(a.status([key]).active[0].owner.actor, 'A'));
   first.release(); await Promise.all([first.done, second, third]);

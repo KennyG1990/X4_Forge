@@ -5512,7 +5512,7 @@ app.get("/api/agent/status", (req, res) => {
         sourceFolder: sourceDir || undefined,
       },
       sourceSync,
-      sourceCoordination: forgeSourceCoordinator.status(sourceDir ? [canonicalSourceKey(sourceDir)] : []),
+      sourceCoordination: forgeSourceCoordinator.status(sourceDir ? [canonicalSourceKey(sourceDir)] : [], record.workspaceId),
       environment: { scope: 'server-process', pid: process.pid, mode: process.env.X4_FORGE_MODE || 'standalone' },
       roots: {
         modWorkspacePath: resolved.modWorkspacePath || null,
