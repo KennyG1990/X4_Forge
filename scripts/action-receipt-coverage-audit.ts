@@ -575,6 +575,9 @@ function legacyRoutePolicy(
   if (route.resourceClass === 'command-session') {
     return routePolicy('external-process', 'refused', ['process'], 'W3B3');
   }
+  if (route.routeKey === 'POST /api/agent/project-check-runs') {
+    return routePolicy('external-process', 'receipt-required', ['process', 'filesystem-write'], 'W3B3');
+  }
   if (QUIET_READ_OVERRIDE_ROUTES.has(route.routeKey)) return readOnlyRoutePolicy();
   if (VISIBLE_READ_OVERRIDE_ROUTES.has(route.routeKey)) return auditedReadRoutePolicy();
   if (route.routeKey === 'POST /api/agent/runtime-control/reload') return durableRoutePolicy(['filesystem-write']);

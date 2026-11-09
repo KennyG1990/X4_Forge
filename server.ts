@@ -64,7 +64,7 @@ import { runPositionPickerSelftest } from "./src/lib/positionPicker";
 import { debugScan as catDatDebugScan, extractBaseGameFile as catDatExtractBaseGameFile, extractEntries as catDatExtractEntries, findCatDatArchives, parseCat, readEntryBytes, readEntryText, runCatDatSelftest } from "./src/lib/x4CatDat";
 import { buildSchemaIndex, validateXmlAgainstSchema, runXsdValidateSelftest, type SchemaIndex } from "./src/lib/xsdValidate";
 import { runReferenceLanguageSelftest } from "./src/lib/referenceLanguage";
-import { isSameOrDescendant, runPathRolesSelftest, validateDirectoryRoles, validateProtectedWriteTargets, type DirectoryField } from "./src/lib/pathRoles";
+import { isSameOrDescendant, pathsOverlap, runPathRolesSelftest, validateDirectoryRoles, validateProtectedWriteTargets, type DirectoryField } from "./src/lib/pathRoles";
 import { parseXMLToWorkspace, setSchemaTemplatesForImport } from "./src/lib/xmlParser";
 import { reconcileImportedGraph } from './src/lib/importedIdentity';
 import type { SchemaLibrary } from "./src/lib/schemaTypes";
@@ -116,7 +116,10 @@ import { computeModDrift, fingerprintModFolder, flattenProjectValidation, getSch
 import { captureDeploymentSnapshot, type DeploymentSnapshot } from './src/server/deploymentSnapshot';
 import { PROJECT_CHECKS_MAX_BYTES, PROJECT_CHECKS_PATH } from './src/server/projectCheckProposal';
 import { projectCheckApprovalCoordinationKey } from './src/server/projectCheckApproval';
-import { openNativeProjectCheckProof } from './src/server/projectCheckNativeProof';
+import { loadNativeProjectCheckAuthority, openNativeProjectCheckProof } from './src/server/projectCheckNativeProof';
+import { freezeProjectCheckSetup } from './src/server/projectCheckSetup';
+import { executeProjectCheckSuite } from './src/server/projectCheckSuite';
+import { ProjectCheckRunRefusal, ProjectCheckRunService } from './src/server/projectCheckRunService';
 import { buildValidationEvidence, parseValidationProject, ValidationInputError, type ValidationSourceLocation } from './src/lib/validationEvidence';
 import { runX4UiIntegrationSelftest } from "./src/server/x4UiIntegration.selftest";
 import { buildRemediationCapsules, runAgentLoopSelftest, runRepairLoop, type LoopDiagnostic } from "./src/lib/agentLoop";
@@ -735,7 +738,9 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
 
   // B42: agent keys — verify hash, expiry, revocation, then enforce scope (deny-by-default).
   if (token.startsWith(AGENT_KEY_PREFIX)) {
-    const v = agentKeyStore.verify(token);
+    const checkRunRoute = authority.ok && (authority.decision.routeKey === 'POST /api/agent/project-check-runs'
+      || authority.decision.routeKey === 'GET /api/agent/project-check-runs/:id');
+    const v = (checkRunRoute ? createAgentKeyStore({ file: AGENT_KEYS_FILE }) : agentKeyStore).verify(token);
     if (!v.ok) {
       return res.status(401).json({ error: `Unauthorized: agent key ${v.reason || "invalid"}.` });
     }
@@ -797,7 +802,8 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
     // A verified credential is not a successful use by itself. Workspace binding,
     // handler authorization, validation and execution all run after this middleware.
     // Only a completed non-error response is durable usage evidence.
-    if (!isAgentCapabilityDiscoveryRoute(authority.decision)) {
+    // Async check routes reopen durable key authority, so a cached usage write must not race it.
+    if (!checkRunRoute && !isAgentCapabilityDiscoveryRoute(authority.decision)) {
       res.once('finish', () => {
         if (res.statusCode < 400) agentKeyStore.touch(v.id!);
       });
@@ -846,6 +852,7 @@ const destructiveRecoveryStore = new DestructiveRecoveryStore({ root: dataPath('
 // extension sidecar.  Construction is intentionally filesystem-light; policy/store failures
 // remain mutation-time failures so read-only diagnostics can still start.
 const actionReceiptStore = new ActionReceiptStore({ root: dataPath('action-receipts') });
+const projectCheckRuns = new ProjectCheckRunService(actionReceiptStore, forgeSourceCoordinator);
 const deployValidatorHash = deploymentImplementationHash(process.argv[1]);
 const deployStudioActorId = `studio:${crypto.randomUUID()}`;
 const workspaceReceiptService = new WorkspaceReceiptService();
@@ -13406,6 +13413,159 @@ function deploymentPrincipal(req: express.Request): AcceptancePrincipal {
 // (auto-FAIL on duplicate-id / folder-id-mismatch). Returns a single pass/fail verdict so the
 // agent/UI never skips the doctor. On-demand only (not a hot poll), so full-folder scan is fine.
 app.post("/api/agent/deploy-verify", coordinatedSourceOperation(deployVerifyHandler));
+
+app.post('/api/agent/project-check-runs', startProjectCheckRun);
+app.get('/api/agent/project-check-runs/:id', getProjectCheckRun);
+
+function projectCheckRunsAvailable(): boolean {
+  return process.platform === 'win32' && process.env.X4_FORGE_MODE === 'dev-build'
+    && process.env.X4_FORGE_PROJECT_CHECK_RUNS === '1' && process.env.X4_FORGE_PARENT_PID === undefined;
+}
+
+function projectCheckRunError(res: express.Response, error: unknown) {
+  if (error instanceof ProjectCheckRunRefusal) {
+    return res.status(409).json({ ok: false, code: error.code, error: 'The requested Dev project check could not be admitted.' });
+  }
+  const status = error instanceof Error && 'status' in error ? error.status : undefined;
+  const code = error instanceof Error && 'code' in error ? error.code : undefined;
+  if (typeof status === 'number' && [400, 404, 409, 503].includes(status)
+    && typeof code === 'string' && /^PROJECT_CHECK_RUN_[A-Z_]+$/.test(code)) {
+    return res.status(status).json({ ok: false, code, error: 'The requested Dev project check run is unavailable.' });
+  }
+  if (code === 'DEPLOY_APPROVAL_FORBIDDEN') return res.status(403).json({ ok: false, code });
+  return res.status(503).json({ ok: false, code: 'PROJECT_CHECK_RUN_UNAVAILABLE' });
+}
+
+function projectCheckRunCaller(req: express.Request, res: express.Response) {
+  if (!projectCheckRunsAvailable()) {
+    res.status(409).json({ ok: false, code: 'PROJECT_CHECK_RUNS_UNAVAILABLE' });
+    return;
+  }
+  const principal = deploymentPrincipal(req);
+  if (principal.kind !== 'agent') {
+    res.status(403).json({ ok: false, code: 'DEPLOY_APPROVAL_FORBIDDEN' });
+    return;
+  }
+  const addressed = resolveWorkspaceAuthority(req, res);
+  if (!addressed) return;
+  const actor = (req as any).__actor as RequestActor;
+  const keyIsCurrent = () => {
+    const key = createAgentKeyStore({ file: AGENT_KEYS_FILE }).list().find(row => row.id === principal.id);
+    return !!key && key.workspaceId === addressed.workspaceId && key.revokedAt === null
+      && (key.expiresAt === null || key.expiresAt > Date.now())
+      && agentScopeCovers(actor.authority!.agentScopes, key.scope)
+      && decideConstrainedAgentRoute(actor.authority!, key.capabilityConstraint).allowed;
+  };
+  if (!keyIsCurrent()) {
+    res.status(403).json({ ok: false, code: 'DEPLOY_APPROVAL_FORBIDDEN' });
+    return;
+  }
+  return { actorId: principal.id, addressed, keyIsCurrent };
+}
+
+function projectCheckRunAuthority(record: WorkspaceRecord, actorId: string) {
+  const workspaceId = record.workspaceId;
+  const workspace = activeBuildWorkspace(record.workspace);
+  const modId = effectiveModId(workspace);
+  const sourceRoot = workspace.sourceStamp?.dir;
+  const { modWorkspacePath: workspaceRoot, x4GamePath } = resolveXsdConfig();
+  const refuse = () => new ProjectCheckRunRefusal('PROJECT_CHECK_RUN_AUTHORITY_CHANGED');
+  if (!modId || !sourceRoot || !workspaceRoot || !x4GamePath) throw refuse();
+  const targetRoot = path.join(x4GamePath, 'extensions', modId);
+  const stagingRoot = path.join(workspaceRoot, '.forge-builds', 'loose');
+  const scope = { store: actionReceiptStore, actorId, workspaceId, modId, sourceRoot, addressedSourceRoot: sourceRoot,
+    workspaceRoot, targetRoot, stagingRoot };
+  let authority: ReturnType<typeof loadNativeProjectCheckAuthority>;
+  try {
+    authority = loadNativeProjectCheckAuthority(scope);
+    const bootstrap = path.dirname(authority.runtime.workerPath);
+    const pythonHome = path.dirname(authority.runtime.pythonPath);
+    if (!isSameOrDescendant(bootstrap, process.env.X4_FORGE_DEV_ROOT!)
+      || canonicalSourceKey(bootstrap) === canonicalSourceKey(process.env.X4_FORGE_DEV_ROOT!)
+      || [workspaceRoot, x4GamePath, authority.scratch].some(root => pathsOverlap(bootstrap, root)
+        || pathsOverlap(pythonHome, root))) throw refuse();
+  } catch { throw refuse(); }
+  if (authority.workerBudgetMs > 15 * 60 * 1000) throw new ProjectCheckRunRefusal('PROJECT_CHECK_RUN_BUDGET_EXCEEDED');
+  return { ...authority, modId, sourceRoot, sourceKey: canonicalSourceKey(sourceRoot) };
+}
+
+async function startProjectCheckRun(req: express.Request, res: express.Response) {
+  try {
+    const caller = projectCheckRunCaller(req, res);
+    if (!caller) return;
+    const operationId = req.get('x-forge-operation-id');
+    const body = req.body;
+    if (!operationId || !ACTION_RECEIPT_OPERATION_ID_RE.test(operationId)
+      || !body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length !== 2
+      || typeof body.expectedArtifactHash !== 'string' || !/^[a-f0-9]{64}$/.test(body.expectedArtifactHash)
+      || (body.deployFormat !== 'loose' && body.deployFormat !== 'catalog')) {
+      return res.status(400).json({ ok: false, code: 'PROJECT_CHECK_RUN_INVALID' });
+    }
+    const { actorId, addressed, keyIsCurrent } = caller;
+    const { workspaceId } = addressed;
+    const expectedArtifactHash: string = body.expectedArtifactHash;
+    const format: DeployFormat = body.deployFormat;
+    const requestHash = trustHash({ expectedArtifactHash, format });
+    const respond = (run: ReturnType<ProjectCheckRunService['status']>) => {
+      captureActionReceiptProjection(req, actionReceiptStore.read(run.id));
+      return res.status(202).json({ ok: true, ...run });
+    };
+    const retry = projectCheckRuns.retry(actorId, workspaceId, operationId, requestHash);
+    if (retry) return respond(retry);
+
+    const requireCurrentWorkspace = () => {
+      const record = workspaceRegistry.readPersisted(workspaceId);
+      if (!record || record.head !== addressed.head || !keyIsCurrent()) {
+        throw new ProjectCheckRunRefusal('PROJECT_CHECK_RUN_AUTHORITY_CHANGED');
+      }
+      return record;
+    };
+    const admitted = projectCheckRunAuthority(requireCurrentWorkspace(), actorId);
+    const run = await projectCheckRuns.start({ actorId, workspaceId, operationId, requestHash,
+      modId: admitted.modId, artifactHash: expectedArtifactHash, sourceKey: admitted.sourceKey }, async (lease, runId) => {
+      const current = projectCheckRunAuthority(requireCurrentWorkspace(), actorId);
+      if (current.sourceKey !== admitted.sourceKey || current.modId !== admitted.modId || current.setupHash !== admitted.setupHash
+        || current.configurationHash !== admitted.configurationHash || current.approvalHash !== admitted.approvalHash) {
+        throw new ProjectCheckRunRefusal('PROJECT_CHECK_RUN_AUTHORITY_CHANGED');
+      }
+      let plan: ArtifactPlan;
+      try {
+        const imported = importModFolder(current.sourceRoot).workspace;
+        plan = deploymentPlan(imported);
+        if (effectiveModId(activeBuildWorkspace(imported)) !== current.modId || projectCheckArtifactIssue(plan)
+          || deploymentSourceIdentity(plan, format) !== expectedArtifactHash) throw new Error('Artifact changed.');
+      } catch { throw new ProjectCheckRunRefusal('PROJECT_CHECK_RUN_ARTIFACT_CHANGED'); }
+
+      const snapshot = captureDeploymentSnapshot(plan, format);
+      let frozen: ReturnType<typeof freezeProjectCheckSetup> | undefined;
+      try {
+        current.assertCurrent();
+        frozen = freezeProjectCheckSetup(current.setupInput, current.setupHash, current.scratch);
+        const suite = await executeProjectCheckSuite({ setupInput: current.setupInput, frozen,
+          artifact: { modId: current.modId, snapshot }, approvals: current.approvals, approvalId: current.approvalId,
+          runId, systemRoot: current.runtime.systemRoot, runtime: current.runtime, store: actionReceiptStore,
+          assertLaunchAuthority: () => { requireCurrentWorkspace(); current.assertCurrent(); },
+          workspaceId, actorId, lease });
+        return { suite, logicalArtifactHash: snapshot.manifest.hash };
+      } finally {
+        const coordination = forgeSourceCoordinator.status([current.sourceKey]);
+        if (coordination.available && !coordination.active.some(claim => claim.guardPhase === 'running')) {
+          try { frozen?.dispose(); } finally { snapshot.dispose(); }
+        }
+      }
+    });
+    return respond(run);
+  } catch (error) { return projectCheckRunError(res, error); }
+}
+
+function getProjectCheckRun(req: express.Request, res: express.Response) {
+  try {
+    const caller = projectCheckRunCaller(req, res);
+    if (!caller) return;
+    const run = projectCheckRuns.status(caller.actorId, caller.addressed.workspaceId, String(req.params.id));
+    return res.json({ ok: true, ...run });
+  } catch (error) { return projectCheckRunError(res, error); }
+}
 
 // Reviews are listed with fresh evidence by deploy-verify dryRun; revocation never deploys.
 app.post('/api/agent/warning-reviews/revoke', (req, res) => {

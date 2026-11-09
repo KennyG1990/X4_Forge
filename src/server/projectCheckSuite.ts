@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { actionReceiptIdFor, canonicalJson, hashActionReceiptAuthority, type ActionReceipt,
+import { actionReceiptIdFor, actionReceiptIdForOperation, canonicalJson, hashActionReceiptAuthority, type ActionReceipt,
+  type ActionReceiptOperationIdentity,
   type ActionReceiptAfter, type ActionReceiptPrepareInput, type ActionReceiptResourceAuthority } from '../lib/actionReceipt';
 import type { ActionReceiptStore } from '../lib/actionReceiptStore';
 import { bindProjectCheckCommands } from './projectCheckCommand';
@@ -50,6 +51,19 @@ function buildSuitePlan(input: ProjectCheckSuiteInput) {
   return { runtime, workspaceId, actorId, runId, store, commands, first, reviewBasisHash };
 }
 
+function suiteOperationIdentity(actorId: string, workspaceId: string, runId: string): ActionReceiptOperationIdentity {
+  return {
+    actor: { kind: 'service', id: actorId },
+    client: { channel: 'internal', id: 'forge-project-checks', version: VERSION },
+    capability: { id: CAPABILITY, version: VERSION },
+    authority: { scope: 'workspace', workspaceId, requestScope: CAPABILITY, operationId: `project-check-suite:${runId}` },
+  };
+}
+
+export function projectCheckSuiteReceiptId(actorId: string, workspaceId: string, runId: string): string {
+  return actionReceiptIdForOperation(suiteOperationIdentity(actorId, workspaceId, runId));
+}
+
 function suiteReceiptInput(plan: SuitePlan, links: CommandLink[]): ActionReceiptPrepareInput {
   const { workspaceId, actorId, runId, reviewBasisHash } = plan;
   const { modId, artifactHash, approvalId } = plan.first.binding;
@@ -57,12 +71,10 @@ function suiteReceiptInput(plan: SuitePlan, links: CommandLink[]): ActionReceipt
   const commands: ActionReceiptResourceAuthority[] = links.map(link => ({
     role: 'data', root: CHILD_ROOT, relativePath: `${link.id}.json`, beforeHash: link.authorityHash,
   }));
+  const identity = suiteOperationIdentity(actorId, workspaceId, runId);
   return {
-    actor: { kind: 'service', id: actorId },
-    client: { channel: 'internal', id: 'forge-project-checks', version: VERSION },
-    capability: { id: CAPABILITY, version: VERSION },
-    authority: { scope: 'workspace', workspaceId, requestScope: CAPABILITY, operationId: `project-check-suite:${runId}`,
-      resources: [suite, ...commands] },
+    ...identity,
+    authority: { ...identity.authority, resources: [suite, ...commands] },
     effects: { declared: [{ id: 'suite-attempt', operation: 'execute', resource: suite, reversible: false }] },
     input: { requestHash: digest({ reviewBasisHash, links }), beforeHash: artifactHash },
     validation: { validator: CAPABILITY, ruleHash: reviewBasisHash },

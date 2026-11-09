@@ -78,9 +78,10 @@ function readObject(file: string, label: string) {
 
 function parseOptions() {
   const argv = process.argv.slice(2);
-  const modes = argv.filter(value => value === '--revoke' || value === '--hold-revoke');
-  assert(modes.length <= 1, 'Specify at most one revoke mode.');
-  const args = argv.filter(value => value !== '--revoke' && value !== '--hold-revoke');
+  const optionalModes = new Set(['--revoke', '--hold-revoke', '--authority-only']);
+  const modes = argv.filter(value => optionalModes.has(value));
+  assert(modes.length <= 1, 'Specify at most one seed mode.');
+  const args = argv.filter(value => !optionalModes.has(value));
   assert(args.length === 1 || (args.length === 2 && args[0] === '--root'), 'Supply an explicit private fixture root.');
   const root = physicalDirectory(args.at(-1));
   assert(!samePath(root, path.parse(root).root), 'A drive root cannot be a fixture.');
@@ -235,7 +236,7 @@ async function main() {
   process.env.TMP = temp;
 
   try {
-    if (mode) {
+    if (mode === '--revoke' || mode === '--hold-revoke') {
       const authority = readObject(authorityPath, 'fixture deployment authority');
       assert(authority.version === 1 && authority.ownerId === ownerId && authority.workspaceId === input.workspaceId
         && authority.actorId === input.actorId && authority.modId === input.modId && authority.sourceRoot === input.sourceRoot
@@ -263,6 +264,14 @@ async function main() {
       owner === ownerId && proof === approveProof && decision.action === 'approve'
       && decision.reviewId === reviewId && decision.setupHash === reviewed.setupHash);
     const approval = ledger.approve(setupInput, reviewed.setupHash, reviewId, approveProof);
+    const authority = { version: 1, workspaceId: input.workspaceId, actorId: input.actorId, modId: input.modId,
+      sourceRoot: input.sourceRoot, ownerId, approvalId: approval.id, interpreterPath, interpreterDependencies, runtime };
+    if (mode === '--authority-only') {
+      const artifactHash = artifactPlanIdentity(exactArtifactPlan(input), 'loose');
+      fs.writeFileSync(authorityPath, JSON.stringify(authority) + '\n', { encoding: 'utf8', flag: 'wx' });
+      console.log(JSON.stringify({ approvalId: approval.id, approvalHash: approval.hash, artifactHash }));
+      return;
+    }
     const sourceKey = canonicalSourceKey(input.sourceRoot);
     const frozen = freezeProjectCheckSetup(setupInput, reviewed.setupHash, temp);
     let snapshot: ReturnType<typeof captureDeploymentSnapshot> | undefined;
@@ -282,8 +291,6 @@ async function main() {
       };
       const first = await runSuite();
       const alternate = await runSuite();
-      const authority = { version: 1, workspaceId: input.workspaceId, actorId: input.actorId, modId: input.modId,
-        sourceRoot: input.sourceRoot, ownerId, approvalId: approval.id, interpreterPath, interpreterDependencies, runtime };
       fs.writeFileSync(authorityPath, JSON.stringify(authority) + '\n', { encoding: 'utf8', flag: 'wx' });
       console.log(JSON.stringify({ ...first, alternate, approvalId: approval.id, artifactHash: snapshot.manifest.hash }));
     } finally {

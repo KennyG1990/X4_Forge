@@ -9,7 +9,7 @@ import { ProjectCheckApprovalLedger } from './projectCheckApproval';
 import { isProjectCheckRelativeFile } from './projectCheckProposal';
 import { captureProjectCheckSetup, freezeProjectCheckSetup } from './projectCheckSetup';
 import { requirePassedProjectCheckSuite } from './projectCheckSuite';
-import type { TrustedProjectCheckWorker } from './projectCheckWorker';
+import { PROJECT_CHECK_WORKER_GRACE_MS, type TrustedProjectCheckWorker } from './projectCheckWorker';
 
 const MAX_AUTHORITY_BYTES = 64 * 1024;
 const receiptIdPattern = /^ar_[a-f0-9]{64}$/;
@@ -35,6 +35,7 @@ interface NativeProofInput {
   stagingRoot: string;
   snapshot: DeploymentSnapshot;
 }
+type NativeProofScope = Omit<NativeProofInput, 'receiptId' | 'snapshot'>;
 
 function authorityBytes(file: string): Buffer {
   const before = fs.lstatSync(file, { bigint: true });
@@ -50,7 +51,7 @@ function authorityBytes(file: string): Buffer {
   } finally { fs.closeSync(fd); }
 }
 
-function assertDevScope(input: NativeProofInput, file: string) {
+function assertDevScope(input: NativeProofScope, file: string, payloadRoot?: string) {
   const root = process.env.X4_FORGE_DEV_ROOT;
   const coordination = process.env.X4_SOURCE_COORDINATION_DIR;
   const state = process.env.X4_STATE_DIR;
@@ -61,7 +62,7 @@ function assertDevScope(input: NativeProofInput, file: string) {
   const roles = [input.sourceRoot, game, path.dirname(input.stagingRoot), input.store.root, coordination, state, config, cache, scratch];
   const paths = [...roles, input.workspaceRoot, input.addressedSourceRoot, input.targetRoot, path.dirname(input.targetRoot), input.stagingRoot,
     path.join(input.stagingRoot, path.basename(input.targetRoot)),
-    file, input.snapshot.payloadRoot];
+    file, ...(payloadRoot ? [payloadRoot] : [])];
   if (process.platform !== 'win32' || process.env.X4_FORGE_MODE !== 'dev-build' || !local(root)
     || path.parse(root).root === path.resolve(root) || !fs.lstatSync(root).isDirectory()
     || fs.existsSync(path.join(game, 'X4.exe'))
@@ -78,11 +79,11 @@ function assertDevScope(input: NativeProofInput, file: string) {
   return scratch;
 }
 
-/** Consume an existing suite inside the existing native deployment authority claim. */
-export function openNativeProjectCheckProof(input: NativeProofInput) {
+/** Read the exact server-owned authority shared by suite execution and native apply. */
+export function loadNativeProjectCheckAuthority(input: NativeProofScope, payloadRoot?: string) {
   const file = path.join(path.dirname(input.store.root), 'project-check-deploy-authority.json');
   try {
-    const scratch = assertDevScope(input, file);
+    const scratch = assertDevScope(input, file, payloadRoot);
     const original = authorityBytes(file);
     const decoded = original.toString('utf8');
     if (!Buffer.from(decoded, 'utf8').equals(original)) throw authorityRefused();
@@ -104,22 +105,36 @@ export function openNativeProjectCheckProof(input: NativeProofInput) {
       throw authorityRefused();
     }
     const runtime = worker as unknown as TrustedProjectCheckWorker;
-    const receipt = input.store.read(input.receiptId);
-    const runId = /^project-check-suite:([a-f0-9]{32})$/.exec(receipt.authority.operationId)?.[1];
-    if (!runId) throw authorityRefused();
     const setupInput = { modId: input.modId, sourceRoot: input.sourceRoot,
       interpreterPath: config.interpreterPath, interpreterDependencies: config.interpreterDependencies };
     const approvals = new ProjectCheckApprovalLedger(input.store, config.ownerId, () => false);
     const setup = captureProjectCheckSetup(setupInput);
     const approvalId = config.approvalId;
-    approvals.requireUsable(approvalId, setup);
-    const frozen = freezeProjectCheckSetup(setupInput, setup.setupHash, scratch);
+    const approval = approvals.requireUsable(approvalId, setup);
+    const configurationHash = createHash('sha256').update(original).digest('hex');
+    const assertCurrent = () => {
+      assertDevScope(input, file, payloadRoot);
+      if (createHash('sha256').update(authorityBytes(file)).digest('hex') !== configurationHash) throw authorityRefused();
+    };
+    const workerBudgetMs = setup.checks.reduce((budget, check) => budget + check.timeoutSeconds * 1000 + PROJECT_CHECK_WORKER_GRACE_MS, 0);
+    return { scratch, runtime, setupInput, setupHash: setup.setupHash, approvals, approvalId, approvalHash: approval.hash,
+      configurationHash, workerBudgetMs, assertCurrent };
+  } catch { throw authorityRefused(); }
+}
+
+/** Consume an existing suite inside the existing native deployment authority claim. */
+export function openNativeProjectCheckProof(input: NativeProofInput) {
+  try {
+    const authority = loadNativeProjectCheckAuthority(input, input.snapshot.payloadRoot);
+    const { scratch, runtime, setupInput, setupHash, approvals, approvalId } = authority;
+    const receipt = input.store.read(input.receiptId);
+    const runId = /^project-check-suite:([a-f0-9]{32})$/.exec(receipt.authority.operationId)?.[1];
+    if (!runId) throw authorityRefused();
+    const frozen = freezeProjectCheckSetup(setupInput, setupHash, scratch);
     try {
-      const configurationHash = createHash('sha256').update(original).digest('hex');
       const verify = () => {
         try {
-          assertDevScope(input, file);
-          if (createHash('sha256').update(authorityBytes(file)).digest('hex') !== configurationHash) throw authorityRefused();
+          authority.assertCurrent();
           const proof = requirePassedProjectCheckSuite({ setupInput, frozen, artifact: { modId: input.modId, snapshot: input.snapshot },
             approvals, approvalId, runId, systemRoot: runtime.systemRoot, runtime, store: input.store,
             workspaceId: input.workspaceId, actorId: input.actorId }, input.receiptId);

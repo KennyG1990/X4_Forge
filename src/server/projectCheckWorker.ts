@@ -9,7 +9,7 @@ const MAX_FRAME_BYTES = 256 * 1024;
 const MAX_PROTOCOL_BYTES = 96 * 1024;
 const MAX_BOOTSTRAP_FILE_BYTES = 64 * 1024 * 1024;
 // Allow interpreter startup, registry admission and the launcher's five-second Job drain.
-const WORKER_GRACE_MS = 20_000;
+export const PROJECT_CHECK_WORKER_GRACE_MS = 20_000;
 const WORKER_BOOTSTRAP = `
 import hashlib, sys
 filename, expected = sys.argv[1:]
@@ -151,7 +151,7 @@ export async function runProjectCheckWorker(
   verifyRuntimeFile(worker, runtime.workerSha256);
   verifyRuntimeFile(launcher, runtime.launcherSha256);
 
-  const workerDeadlineMs = command.timeoutSeconds * 1000 + WORKER_GRACE_MS;
+  const workerDeadlineMs = command.timeoutSeconds * 1000 + PROJECT_CHECK_WORKER_GRACE_MS;
   const deadline = performance.now() + workerDeadlineMs;
   const child = spawn(python, ['-I', '-S', '-B', '-c', WORKER_BOOTSTRAP, worker, runtime.workerSha256], {
     cwd, env: { SystemRoot: systemRoot }, shell: false, windowsHide: true, detached: true,

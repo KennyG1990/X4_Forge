@@ -295,6 +295,20 @@ export class WorkspaceRegistry {
       : { ok: false, code: 'WORKSPACE_NOT_FOUND', error: `Workspace ${workspaceId} was not found.` };
   }
 
+  /** Reopen an addressed record without falling back to memory or migrating state. */
+  readPersisted(workspaceId: string): WorkspaceRecord | undefined {
+    if (!validWorkspaceId(workspaceId)) return;
+    try {
+      const index: unknown = JSON.parse(fs.readFileSync(this.indexPath, 'utf8'));
+      if (!validIndex(index) || index.workspaceIds.length > this.maxRecords || !index.workspaceIds.includes(workspaceId)) return;
+      const record: unknown = JSON.parse(fs.readFileSync(this.recordPath(workspaceId), 'utf8'));
+      if (!validRecord(record, workspaceId)) return;
+      const workspace = canonicalWorkspaceForRecord(record.workspace, workspaceId);
+      this.assertWorkspaceSize(workspace);
+      return { ...record, workspace };
+    } catch { return; }
+  }
+
   list(): WorkspaceSummary[] {
     return this.index.workspaceIds.map(workspaceId => this.summary(this.records.get(workspaceId)!));
   }

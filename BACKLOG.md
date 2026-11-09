@@ -6,6 +6,11 @@
 
 ## P0 — Active
 
+### A15 project-registered verification `in_progress` (GitHub #61)
+
+The isolated Windows Dev backend can start and poll an approved project check run and feed the exact passing suite into native scratch deploy. [Dev acceptance and evidence](docs/plans/2026-11-08-a15-dev-async-runs.md).
+Remaining work includes host-owner enrollment, installed Antigravity supervisor recovery, project validation integration, and coverage credit. Keep the Dev fixture separate from Claude's game testing and leave #61 open.
+
 ### Bounded Claude fixes public release 0.0.80 `in_progress` (GitHub #20)
 
 User authorized the bounded public release before finishing the program, then return to Dev.

@@ -15,6 +15,7 @@ interface ProjectCheckBindingInput {
   approvalId: string;
   runId: string;
   systemRoot: string;
+  assertLaunchAuthority?: () => void;
 }
 
 function bindProjectChecks(input: ProjectCheckBindingInput, checkId?: string) {
@@ -54,6 +55,7 @@ function bindProjectChecks(input: ProjectCheckBindingInput, checkId?: string) {
     }
     frozen.assertIntegrity();
     snapshot.assertIntegrity();
+    input.assertLaunchAuthority?.();
   }
   assertReady();
 

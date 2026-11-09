@@ -2,6 +2,7 @@
   "schemaVersion": "forge.route-dispositions.v4",
   "sources": [
     "server.ts",
+    "shared/actionOperationId.ts",
     "shared/agentKeyCreationContract.ts",
     "src/lib/actionCensus.ts",
     "src/lib/actionReceipt.selftest.ts",
@@ -196,6 +197,7 @@
     "src/server/projectCheckExecution.ts",
     "src/server/projectCheckNativeProof.ts",
     "src/server/projectCheckProposal.ts",
+    "src/server/projectCheckRunService.ts",
     "src/server/projectCheckSetup.ts",
     "src/server/projectCheckSuite.ts",
     "src/server/projectCheckWorker.ts",
@@ -1737,6 +1739,16 @@
       "resourceClass": "public",
       "workspaceMode": "optional"
     },
+    "GET /api/agent/project-check-runs/:id": {
+      "disposition": "legacy-agent-api",
+      "owner": "agent-api",
+      "registrations": 1,
+      "agentScopes": [
+        "deploy"
+      ],
+      "resourceClass": "workspace",
+      "workspaceMode": "required"
+    },
     "GET /api/agent/project-crossfile-selftest": {
       "disposition": "public-selftest",
       "owner": "runProjectCrossFileSelftest",
@@ -3055,6 +3067,16 @@
       ],
       "resourceClass": "stateless-analysis",
       "workspaceMode": "optional"
+    },
+    "POST /api/agent/project-check-runs": {
+      "disposition": "legacy-agent-api",
+      "owner": "agent-api",
+      "registrations": 1,
+      "agentScopes": [
+        "deploy"
+      ],
+      "resourceClass": "workspace",
+      "workspaceMode": "required"
     },
     "POST /api/agent/project-rules/prepare-suppression": {
       "disposition": "legacy-agent-api",

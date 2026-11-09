@@ -1,46 +1,16 @@
-# Session handoff — public 0.0.80; final CI follow-up
+# X4 Forge Dev handoff — A15 asynchronous check runs
 
-Worktree C:/Users/Moshi/.codex/worktrees/forge-fixes-release/X4_Forge;
-branch codex/forge-fixes-release. Pre-follow-up HEADc97d5d8515d30029446c97f5c7ec2017c8244ecf.
-Preserve dirty main and blocked untracked scripts/__pycache__/. No reset/clean/broad add.
+Use the isolated `forge-a15-native-proof` worktree. The prior verified base is `1988afe83690678f1b7d7ab28d32224a14c3df23`. The separate public release candidate remains pinned to `b49f1ab7ca57ec6242c8d242da327331fe6e9af9`.
 
-## Release status
+## Current unit
 
-0.0.80 is public on Open VSX and GitHub v0.0.80. Tag targets c97 exactly. Downloaded
-version/latest/GitHub VSIX hashes match97d6aebac9deea3b2d7bfadd31d1822b91384a419d09d7cc9bd564e8675bd3d3.
-One Open VSX upload only; NEVER rerun publisher. No live install/restart or game input.
-120 source E2E/500 routes/134 oracles; exact extracted80/installed62/installed134/native
-proof passed. Source/staged dependency limits remain in docs/releases/0.0.80-proof.json.
+Dev Forge can admit an approved asynchronous project check run, recover its status by operation ID, and pass the exact suite receipt to native deploy. The fixture runs on an explicitly enabled unmanaged Windows backend with a standalone mod and scratch game root. The native proof remains tied to the addressed source, logical artifact, and owner approval. A restart reports unresolved attempts as `pending-recovery` without automatic replay.
 
-Required Quality40409196050 failed2oracles. A real Windows8.3 TEMP alias reproduces
-receipt/session path refusal; physical paths pass. CI-only follow-up resolves TEMP,
-reports bounded failed checks and uses bounded asynchronous private-root cleanup.
-It changes NO application/controller/dependency source or immutable public package.
-Local proof:119 receipt/45 adapter;2x134oracles with cleanup;500routes;8HTTP/CLI controls;
-lint0errors599warnings; full precommit. Failed root-overlap and cleanup runs retained.
-Evidence: docs/releases/0.0.80-delivery.json; test-results/release-0.0.80/ci-repair-*.
-No manual eyeball queue: native check finished during user-authorized Claude pause;
-Claude was told to resume. No more computer use needed for this release checkpoint.
+The [A15 record](docs/plans/2026-11-08-a15-dev-async-runs.md) contains the API sequence, validation, and AAR. Keep the worktree separate from the release source, live Antigravity, X4, AiLive, and other agents' checkouts. No computer use. The project harness owns its ephemeral listeners and the standalone mod.
 
-## Next exact operations
+## Next work
 
-Stage only the9 reviewed CI/doc paths; run scoped one-shot commit-ci-repair.py with
-its message/proof arguments after exact index check. It preserves mandatory hooks,
-private graph output and protected live/Dev snapshots; do not retry a created commit.
-Then non-force push HEAD:main, verify local/tracking/direct remote SHA parity, and
-require green Quality. Keep original failed CI. Tag/artifact remain bound to c97;
-follow-up is CI-only provenance, not a rebuilt extension. Read/update matching release,
-GitHub#20, Notion task3ae4618ed15b8169985ff065ec98a747 and hub3ad4618ed15b81408777e434a7f4a888.
-This is a precommit handoff: actual follow-up commit/CI are recorded externally after
-they occur. Overall delivery is PARTIAL until remote required checks pass.
-
-## Continuing Dev boundaries
-
-Live Forge/X4/active mod stay untouched. Separate Dev remains on its proven D0 bundle;
-private stable0.0.80 release-test host is separate. Kimi remains paused, Claude program
-OPEN. A15 is next and unimplemented: human-only approval for new/changed project-test
-setups, agents may rerun unchanged approved setups. Start with inert registry using
-requireStudioActor, exact input identity and receipts; no runner or approval on user's
-behalf. Critical save diagnostics, added complaints and actual paired game-loop proof
-remain open. Degradation call already given; close this release before a fresh-context
-implementation unit. Do not confuse published, Dev-installed and live-installed.
+- [Issue #61](https://github.com/KennyG1990/X4_Forge/issues/61) stays open. The next bounded unit is explicit host-owner enrollment for a project setup. Reconcile installed supervisor recovery and project validation coverage separately before broadening availability.
+- [Issue #85](https://github.com/KennyG1990/X4_Forge/issues/85) still needs the exact general-purpose bypass script and failure receipt. The Dev proof above exercises independently reproduced behavior.
+- The latest checked Claude board window was HELD during batch 474. Game installation and play remain Claude's responsibility. This backend checkpoint has no operator eyeball step. Keep any installed-build or game verification in its own lane.
+- Keep the local checkpoint separate from publication. The public package and existing release evidence are tracked in `docs/releases/` and their owner issues.
