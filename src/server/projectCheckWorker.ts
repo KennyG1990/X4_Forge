@@ -89,6 +89,21 @@ function verifyRuntimeFile(filename: string, expectedSha256: string): void {
   }
 }
 
+/** Reopen the pinned bootstrap executable and both helper scripts without launching them. */
+export function verifyProjectCheckWorkerRuntime(runtime: TrustedProjectCheckWorker) {
+  const python = trustedLocalPath(runtime.pythonPath);
+  const worker = trustedLocalPath(runtime.workerPath);
+  const cwd = path.dirname(worker);
+  const launcher = trustedLocalPath(path.join(cwd, 'projectCheckWindowsJob.py'));
+  const systemRoot = trustedLocalPath(runtime.systemRoot);
+  if (path.extname(python).toLowerCase() !== '.exe' || path.basename(worker) !== 'projectCheckLeaseWorker.py'
+    || !fs.statSync(systemRoot).isDirectory()) throw new Error('The project check worker runtime configuration is invalid.');
+  verifyRuntimeFile(python, runtime.pythonSha256);
+  verifyRuntimeFile(worker, runtime.workerSha256);
+  verifyRuntimeFile(launcher, runtime.launcherSha256);
+  return { python, worker, cwd, systemRoot };
+}
+
 function parseResult(output: Buffer, bound: BoundProjectCheck, workerDeadlineMs: number): ProjectCheckWorkerResult {
   const invalid = () => new Error('The project check worker returned an invalid terminal result.');
   if (output.some(byte => byte > 0x7f)) throw invalid();
@@ -137,19 +152,11 @@ export async function runProjectCheckWorker(
   runtime: TrustedProjectCheckWorker,
 ): Promise<ProjectCheckWorkerResult> {
   if (process.platform !== 'win32') throw new Error('The guarded project check worker requires Windows.');
-  const python = trustedLocalPath(runtime.pythonPath);
-  const worker = trustedLocalPath(runtime.workerPath);
-  const cwd = path.dirname(worker);
-  const launcher = trustedLocalPath(path.join(cwd, 'projectCheckWindowsJob.py'));
-  const systemRoot = trustedLocalPath(runtime.systemRoot);
+  const { python, worker, cwd, systemRoot } = verifyProjectCheckWorkerRuntime(runtime);
   const { command } = bound.binding;
-  if (path.extname(python).toLowerCase() !== '.exe' || path.basename(worker) !== 'projectCheckLeaseWorker.py'
-    || !fs.statSync(systemRoot).isDirectory() || path.resolve(command.environment.SystemRoot).toLowerCase() !== systemRoot.toLowerCase()) {
+  if (path.resolve(command.environment.SystemRoot).toLowerCase() !== systemRoot.toLowerCase()) {
     throw new Error('The project check worker runtime configuration is invalid.');
   }
-  verifyRuntimeFile(python, runtime.pythonSha256);
-  verifyRuntimeFile(worker, runtime.workerSha256);
-  verifyRuntimeFile(launcher, runtime.launcherSha256);
 
   const workerDeadlineMs = command.timeoutSeconds * 1000 + PROJECT_CHECK_WORKER_GRACE_MS;
   const deadline = performance.now() + workerDeadlineMs;

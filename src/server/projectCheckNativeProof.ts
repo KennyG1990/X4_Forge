@@ -1,15 +1,17 @@
-import { createHash } from 'node:crypto';
+import { createHash, createPublicKey } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { ActionReceiptStore } from '../lib/actionReceiptStore';
 import { canonicalDirectoryPath, isSameOrDescendant, pathsOverlap } from '../lib/pathRoles';
+import { atomicWriteJson } from '../lib/workspaceState';
 import type { DeploymentSnapshot } from './deploymentSnapshot';
 import { ProjectCheckApprovalLedger } from './projectCheckApproval';
+import { assertProjectCheckOwnerCredential } from './projectCheckOwnerProof';
 import { isProjectCheckRelativeFile } from './projectCheckProposal';
 import { captureProjectCheckSetup, freezeProjectCheckSetup } from './projectCheckSetup';
 import { requirePassedProjectCheckSuite } from './projectCheckSuite';
-import { PROJECT_CHECK_WORKER_GRACE_MS, type TrustedProjectCheckWorker } from './projectCheckWorker';
+import { PROJECT_CHECK_WORKER_GRACE_MS, verifyProjectCheckWorkerRuntime, type TrustedProjectCheckWorker } from './projectCheckWorker';
 
 const MAX_AUTHORITY_BYTES = 64 * 1024;
 const receiptIdPattern = /^ar_[a-f0-9]{64}$/;
@@ -30,12 +32,17 @@ interface NativeProofInput {
   modId: string;
   sourceRoot: string;
   workspaceRoot: string;
+  filesystemRoot?: string;
   addressedSourceRoot: string;
   targetRoot: string;
   stagingRoot: string;
   snapshot: DeploymentSnapshot;
 }
-type NativeProofScope = Omit<NativeProofInput, 'receiptId' | 'snapshot'>;
+export type NativeProofScope = Omit<NativeProofInput, 'receiptId' | 'snapshot'>;
+
+export function projectCheckOwnerProfileEnabled(env = process.env): boolean {
+  return env.X4_FORGE_PROJECT_CHECK_OWNER_POLICY !== undefined;
+}
 
 function authorityBytes(file: string): Buffer {
   const before = fs.lstatSync(file, { bigint: true });
@@ -49,6 +56,12 @@ function authorityBytes(file: string): Buffer {
       || after.mtimeNs !== before.mtimeNs || after.ctimeNs !== before.ctimeNs) throw authorityRefused();
     return buffer.subarray(0, size);
   } finally { fs.closeSync(fd); }
+}
+
+function parseAuthority(bytes: Buffer): unknown {
+  const decoded = bytes.toString('utf8');
+  if (!Buffer.from(decoded, 'utf8').equals(bytes)) throw authorityRefused();
+  return JSON.parse(decoded);
 }
 
 function assertDevScope(input: NativeProofScope, file: string, payloadRoot?: string) {
@@ -79,47 +92,149 @@ function assertDevScope(input: NativeProofScope, file: string, payloadRoot?: str
   return scratch;
 }
 
-/** Read the exact server-owned authority shared by suite execution and native apply. */
-export function loadNativeProjectCheckAuthority(input: NativeProofScope, payloadRoot?: string) {
-  const file = path.join(path.dirname(input.store.root), 'project-check-deploy-authority.json');
-  try {
-    const scratch = assertDevScope(input, file, payloadRoot);
+function runtimePin(worker: unknown): TrustedProjectCheckWorker {
+  if (!object(worker) || !exact(worker, ['pythonPath', 'pythonSha256', 'workerPath', 'workerSha256', 'launcherSha256', 'systemRoot'])
+    || ![worker.pythonPath, worker.workerPath, worker.systemRoot].every(local)
+    || ![worker.pythonSha256, worker.workerSha256, worker.launcherSha256].every(hash => typeof hash === 'string' && hashPattern.test(hash))) {
+    throw authorityRefused();
+  }
+  return worker as unknown as TrustedProjectCheckWorker;
+}
+
+function interpreterPin(config: Record<string, unknown>) {
+  const { interpreterPath, interpreterDependencies } = config;
+  const root = process.env.X4_FORGE_DEV_ROOT;
+  if (!local(root) || !local(interpreterPath) || !isSameOrDescendant(interpreterPath, root)
+    || !Array.isArray(interpreterDependencies) || interpreterDependencies.length > 128
+    || !interpreterDependencies.every(isProjectCheckRelativeFile)) throw authorityRefused();
+  return { interpreterPath, interpreterDependencies };
+}
+
+/** The local launcher provisions one public credential and subject outside Forge HTTP. */
+export function readNativeProjectCheckOwnerPolicy() {
+  const raw = process.env.X4_FORGE_PROJECT_CHECK_OWNER_POLICY;
+  if (!raw || Buffer.byteLength(raw) > MAX_AUTHORITY_BYTES) throw authorityRefused();
+  const config: unknown = JSON.parse(raw);
+  if (!object(config) || !exact(config, ['version', 'workspaceId', 'actorId', 'modId', 'sourceRoot',
+    'interpreterPath', 'interpreterDependencies', 'runtime', 'credential']) || config.version !== 1
+    || typeof config.workspaceId !== 'string' || !/^ws_[a-f0-9]{24}$/.test(config.workspaceId)
+    || typeof config.actorId !== 'string' || !/^key_[a-z0-9]+_[a-f0-9]{8}$/.test(config.actorId)
+    || typeof config.modId !== 'string' || !/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/.test(config.modId) || !local(config.sourceRoot)) {
+    throw authorityRefused();
+  }
+  const pin = config.credential;
+  if (!object(pin) || !exact(pin, ['ownerId', 'origin', 'credentialId', 'userHandle', 'publicKeySpki'])
+    || typeof pin.ownerId !== 'string' || typeof pin.origin !== 'string' || typeof pin.credentialId !== 'string'
+    || typeof pin.userHandle !== 'string' || typeof pin.publicKeySpki !== 'string'
+    || !/^[A-Za-z0-9_-]{1,256}$/.test(pin.publicKeySpki)) throw authorityRefused();
+  const origin = new URL(pin.origin);
+  if (origin.hostname !== 'localhost' || origin.protocol !== 'http:' || origin.origin !== pin.origin || !origin.port) throw authorityRefused();
+  const spki = Buffer.from(pin.publicKeySpki, 'base64url');
+  if (spki.toString('base64url') !== pin.publicKeySpki) throw authorityRefused();
+  const publicKey = createPublicKey({ key: spki, type: 'spki', format: 'der' });
+  if (!publicKey.export({ type: 'spki', format: 'der' }).equals(spki)) throw authorityRefused();
+  const credential = { ownerId: pin.ownerId, origin: pin.origin, credentialId: pin.credentialId, userHandle: pin.userHandle, publicKey };
+  assertProjectCheckOwnerCredential(credential);
+  return { workspaceId: config.workspaceId, actorId: config.actorId, modId: config.modId, sourceRoot: config.sourceRoot,
+    ...interpreterPin(config), runtime: runtimePin(config.runtime), ownerId: pin.ownerId, origin: pin.origin, port: Number(origin.port),
+    credential, policyHash: createHash('sha256').update(raw).digest('hex') };
+}
+
+type OwnerPolicy = ReturnType<typeof readNativeProjectCheckOwnerPolicy>;
+
+function ownerActivation(input: NativeProofScope, policy: OwnerPolicy, file: string, scratch: string) {
+  const root = process.env.X4_FORGE_DEV_ROOT!;
+  const gameRoot = path.dirname(path.dirname(input.targetRoot));
+  const dataRoot = path.dirname(input.store.root);
+  const protectedRoots = [dataRoot, process.env.X4_SOURCE_COORDINATION_DIR!, process.env.X4_STATE_DIR!,
+    process.env.X4_CONFIG_DIR!, process.env.X4_STUDIO_CACHE_DIR!, scratch,
+    path.dirname(policy.interpreterPath), path.dirname(policy.runtime.workerPath)];
+  if (input.workspaceId !== policy.workspaceId || input.actorId !== policy.actorId || input.modId !== policy.modId
+    || !sameLocalPath(input.sourceRoot, policy.sourceRoot) || (input.filesystemRoot && !sameLocalPath(input.filesystemRoot, path.join(gameRoot, 'extensions')))
+    || protectedRoots.some((candidate, index) => !local(candidate) || !isSameOrDescendant(candidate, root) || sameLocalPath(candidate, root)
+      || !sameLocalPath(candidate, canonicalDirectoryPath(candidate))
+      || pathsOverlap(candidate, input.workspaceRoot) || pathsOverlap(candidate, gameRoot)
+      || protectedRoots.slice(index + 1).some(other => pathsOverlap(candidate, other)))
+    || [input.workspaceRoot, gameRoot].some(candidate => pathsOverlap(candidate, process.cwd()))
+    || [input.workspaceRoot, gameRoot, ...protectedRoots].some(candidate => pathsOverlap(candidate, path.dirname(policy.runtime.pythonPath)))) {
+    throw authorityRefused();
+  }
+  const read = () => {
+    if (!fs.lstatSync(file, { throwIfNoEntry: false })) return;
     const original = authorityBytes(file);
-    const decoded = original.toString('utf8');
-    if (!Buffer.from(decoded, 'utf8').equals(original)) throw authorityRefused();
-    const config: unknown = JSON.parse(decoded);
-    if (!object(config) || !exact(config, ['version', 'workspaceId', 'actorId', 'modId', 'sourceRoot', 'ownerId',
-      'approvalId', 'interpreterPath', 'interpreterDependencies', 'runtime'])
-      || config.version !== 1 || config.workspaceId !== input.workspaceId || config.actorId !== input.actorId
-      || config.modId !== input.modId || !local(config.sourceRoot)
-      || canonicalDirectoryPath(config.sourceRoot).toLowerCase() !== canonicalDirectoryPath(input.sourceRoot).toLowerCase()
-      || typeof config.ownerId !== 'string' || !/^[a-zA-Z][a-zA-Z0-9._:-]{0,127}$/.test(config.ownerId)
-      || typeof config.approvalId !== 'string' || !receiptIdPattern.test(config.approvalId)
-      || !local(config.interpreterPath) || !isSameOrDescendant(config.interpreterPath, process.env.X4_FORGE_DEV_ROOT!)
-      || !Array.isArray(config.interpreterDependencies) || config.interpreterDependencies.length > 128
-      || !config.interpreterDependencies.every(isProjectCheckRelativeFile)) throw authorityRefused();
-    const worker = config.runtime;
-    if (!object(worker) || !exact(worker, ['pythonPath', 'pythonSha256', 'workerPath', 'workerSha256', 'launcherSha256', 'systemRoot'])
-      || ![worker.pythonPath, worker.workerPath, worker.systemRoot].every(local)
-      || ![worker.pythonSha256, worker.workerSha256, worker.launcherSha256].every(hash => typeof hash === 'string' && hashPattern.test(hash))) {
+    const value = parseAuthority(original);
+    if (!object(value) || !exact(value, ['version', 'ownerPolicyHash', 'approvalId']) || value.version !== 2
+      || value.ownerPolicyHash !== policy.policyHash || typeof value.approvalId !== 'string' || !receiptIdPattern.test(value.approvalId)) {
       throw authorityRefused();
     }
-    const runtime = worker as unknown as TrustedProjectCheckWorker;
-    const setupInput = { modId: input.modId, sourceRoot: input.sourceRoot,
-      interpreterPath: config.interpreterPath, interpreterDependencies: config.interpreterDependencies };
-    const approvals = new ProjectCheckApprovalLedger(input.store, config.ownerId, () => false);
+    return { approvalId: value.approvalId, original };
+  };
+  return { read, activate(approvalId: string) {
+    assertDevScope(input, file);
+    if (!receiptIdPattern.test(approvalId) || readNativeProjectCheckOwnerPolicy().policyHash !== policy.policyHash) throw authorityRefused();
+    read();
+    atomicWriteJson(file, { version: 2, ownerPolicyHash: policy.policyHash, approvalId }, { mode: 0o600 });
+  } };
+}
+
+function sameLocalPath(left: string, right: string): boolean {
+  return local(left) && local(right) && path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
+}
+
+function authorityFile(store: ActionReceiptStore): string {
+  return path.join(path.dirname(store.root), 'project-check-deploy-authority.json');
+}
+
+export function openNativeProjectCheckOwnerAuthority(input: NativeProofScope, policy: OwnerPolicy) {
+  const file = authorityFile(input.store);
+  const scratch = assertDevScope(input, file);
+  const activation = ownerActivation(input, policy, file, scratch);
+  return { read: () => activation.read()?.approvalId, activate: activation.activate };
+}
+
+/** Read the exact server-owned authority shared by suite execution and native apply. */
+export function loadNativeProjectCheckAuthority(input: NativeProofScope, payloadRoot?: string) {
+  const file = authorityFile(input.store);
+  try {
+    const scratch = assertDevScope(input, file, payloadRoot);
+    const policy = projectCheckOwnerProfileEnabled() ? readNativeProjectCheckOwnerPolicy() : undefined;
+    if (!policy && process.env.X4_FORGE_PROJECT_CHECK_LEGACY_FIXTURE !== '1') throw authorityRefused();
+    const active = policy ? ownerActivation(input, policy, file, scratch).read() : undefined;
+    if (policy && !active) throw authorityRefused();
+    const original = active?.original ?? authorityBytes(file);
+    const config = policy && active ? { ...policy, approvalId: active.approvalId } : readFixtureAuthority(input, original);
+    const { runtime, approvalId, ownerId, interpreterPath, interpreterDependencies } = config;
+    if (policy) verifyProjectCheckWorkerRuntime(runtime);
+    const setupInput = { modId: input.modId, sourceRoot: input.sourceRoot, interpreterPath, interpreterDependencies };
+    const approvals = new ProjectCheckApprovalLedger(input.store, ownerId, () => false);
     const setup = captureProjectCheckSetup(setupInput);
-    const approvalId = config.approvalId;
     const approval = approvals.requireUsable(approvalId, setup);
     const configurationHash = createHash('sha256').update(original).digest('hex');
     const assertCurrent = () => {
       assertDevScope(input, file, payloadRoot);
-      if (createHash('sha256').update(authorityBytes(file)).digest('hex') !== configurationHash) throw authorityRefused();
+      if (policy) {
+        ownerActivation(input, policy, file, scratch);
+        verifyProjectCheckWorkerRuntime(runtime);
+      }
+      if (createHash('sha256').update(authorityBytes(file)).digest('hex') !== configurationHash
+        || (policy && readNativeProjectCheckOwnerPolicy().policyHash !== policy.policyHash)) throw authorityRefused();
     };
     const workerBudgetMs = setup.checks.reduce((budget, check) => budget + check.timeoutSeconds * 1000 + PROJECT_CHECK_WORKER_GRACE_MS, 0);
     return { scratch, runtime, setupInput, setupHash: setup.setupHash, approvals, approvalId, approvalHash: approval.hash,
       configurationHash, workerBudgetMs, assertCurrent };
   } catch { throw authorityRefused(); }
+}
+
+function readFixtureAuthority(input: NativeProofScope, original: Buffer) {
+  const config = parseAuthority(original);
+  if (!object(config) || !exact(config, ['version', 'workspaceId', 'actorId', 'modId', 'sourceRoot', 'ownerId',
+    'approvalId', 'interpreterPath', 'interpreterDependencies', 'runtime'])
+    || config.version !== 1 || config.workspaceId !== input.workspaceId || config.actorId !== input.actorId
+    || config.modId !== input.modId || !local(config.sourceRoot)
+    || canonicalDirectoryPath(config.sourceRoot).toLowerCase() !== canonicalDirectoryPath(input.sourceRoot).toLowerCase()
+    || typeof config.ownerId !== 'string' || !/^[a-zA-Z][a-zA-Z0-9._:-]{0,127}$/.test(config.ownerId)
+    || typeof config.approvalId !== 'string' || !receiptIdPattern.test(config.approvalId)) throw authorityRefused();
+  return { ownerId: config.ownerId, approvalId: config.approvalId, ...interpreterPin(config), runtime: runtimePin(config.runtime) };
 }
 
 /** Consume an existing suite inside the existing native deployment authority claim. */

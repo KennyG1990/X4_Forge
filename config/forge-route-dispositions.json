@@ -196,6 +196,8 @@
     "src/server/projectCheckCommand.ts",
     "src/server/projectCheckExecution.ts",
     "src/server/projectCheckNativeProof.ts",
+    "src/server/projectCheckOwnerEnrollment.ts",
+    "src/server/projectCheckOwnerProof.ts",
     "src/server/projectCheckProposal.ts",
     "src/server/projectCheckRunService.ts",
     "src/server/projectCheckSetup.ts",
@@ -3568,6 +3570,22 @@
       "agentScopes": [],
       "resourceClass": "external-repository",
       "workspaceMode": "optional"
+    },
+    "POST /api/project-check-owner/confirm": {
+      "disposition": "session-only",
+      "owner": "forge-server",
+      "registrations": 1,
+      "agentScopes": [],
+      "resourceClass": "global-session",
+      "workspaceMode": "none"
+    },
+    "POST /api/project-check-owner/review": {
+      "disposition": "session-only",
+      "owner": "forge-server",
+      "registrations": 1,
+      "agentScopes": [],
+      "resourceClass": "global-session",
+      "workspaceMode": "none"
     },
     "POST /api/reference/complete": {
       "disposition": "legacy-agent-api",

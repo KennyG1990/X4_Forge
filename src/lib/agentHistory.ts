@@ -123,6 +123,7 @@ export const LEDGER_QUIET_ROUTES: string[] = [
   '/api/agent/project/validate-crossfile',
   '/api/agent/project-rules/prepare-suppression',
   '/api/agent/bulk-transform/preview',
+  '/api/project-check-owner/review',
   '/api/gemini',
   '/api/gemini/analyze',
   '/api/gemini/analyze-log',

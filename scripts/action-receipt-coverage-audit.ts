@@ -488,6 +488,7 @@ const QUIET_READ_OVERRIDE_ROUTES = new Set([
   'POST /api/agent/project/validate-crossfile',
   'POST /api/agent/round-trip-check',
   'POST /api/agent/xpath-synth',
+  'POST /api/project-check-owner/review',
 ]);
 
 const VISIBLE_READ_OVERRIDE_ROUTES = new Set([
@@ -577,6 +578,9 @@ function legacyRoutePolicy(
   }
   if (route.routeKey === 'POST /api/agent/project-check-runs') {
     return routePolicy('external-process', 'receipt-required', ['process', 'filesystem-write'], 'W3B3');
+  }
+  if (route.routeKey === 'POST /api/project-check-owner/confirm') {
+    return durableRoutePolicy(['filesystem-write']);
   }
   if (QUIET_READ_OVERRIDE_ROUTES.has(route.routeKey)) return readOnlyRoutePolicy();
   if (VISIBLE_READ_OVERRIDE_ROUTES.has(route.routeKey)) return auditedReadRoutePolicy();

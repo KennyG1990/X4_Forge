@@ -116,10 +116,13 @@ import { computeModDrift, fingerprintModFolder, flattenProjectValidation, getSch
 import { captureDeploymentSnapshot, type DeploymentSnapshot } from './src/server/deploymentSnapshot';
 import { PROJECT_CHECKS_MAX_BYTES, PROJECT_CHECKS_PATH } from './src/server/projectCheckProposal';
 import { projectCheckApprovalCoordinationKey } from './src/server/projectCheckApproval';
-import { loadNativeProjectCheckAuthority, openNativeProjectCheckProof } from './src/server/projectCheckNativeProof';
+import { loadNativeProjectCheckAuthority, openNativeProjectCheckOwnerAuthority, openNativeProjectCheckProof,
+  projectCheckOwnerProfileEnabled, readNativeProjectCheckOwnerPolicy, type NativeProofScope } from './src/server/projectCheckNativeProof';
+import { ProjectCheckOwnerEnrollment, ProjectCheckOwnerEnrollmentError, type ProjectCheckOwnerResolver } from './src/server/projectCheckOwnerEnrollment';
 import { freezeProjectCheckSetup } from './src/server/projectCheckSetup';
 import { executeProjectCheckSuite } from './src/server/projectCheckSuite';
 import { ProjectCheckRunRefusal, ProjectCheckRunService } from './src/server/projectCheckRunService';
+import { verifyProjectCheckWorkerRuntime } from './src/server/projectCheckWorker';
 import { buildValidationEvidence, parseValidationProject, ValidationInputError, type ValidationSourceLocation } from './src/lib/validationEvidence';
 import { runX4UiIntegrationSelftest } from "./src/server/x4UiIntegration.selftest";
 import { buildRemediationCapsules, runAgentLoopSelftest, runRepairLoop, type LoopDiagnostic } from "./src/lib/agentLoop";
@@ -319,10 +322,13 @@ import {
   type StudioDb, type SourceStamp
 } from "./src/lib/db";
 
+const launchedProjectCheckOwnerPolicy = process.env.X4_FORGE_PROJECT_CHECK_OWNER_POLICY;
 dotenv.config();
 // Also load .env.local (Vite convention) so values like GITHUB_CLIENT_ID and GEMINI_API_KEY
 // placed there are visible to the server. .env.local takes precedence.
 dotenv.config({ path: '.env.local', override: true });
+if (launchedProjectCheckOwnerPolicy === undefined) delete process.env.X4_FORGE_PROJECT_CHECK_OWNER_POLICY;
+else process.env.X4_FORGE_PROJECT_CHECK_OWNER_POLICY = launchedProjectCheckOwnerPolicy;
 
 const app = express();
 // B117: keep Express route identity identical to the reviewed closed-world authority
@@ -331,6 +337,16 @@ const app = express();
 app.set('case sensitive routing', true);
 app.set('strict routing', true);
 const PORT = Number(process.env.PORT || 3000);
+const actionReceiptStore = new ActionReceiptStore({ root: dataPath('action-receipts') });
+if (projectCheckOwnerProfileEnabled()) {
+  try {
+    const policy = readNativeProjectCheckOwnerPolicy();
+    if (!projectCheckRunsAvailable() || policy.port !== PORT || !process.env.STUDIO_API_TOKEN?.trim()) {
+      throw new Error('Invalid owner profile mode, port or token.');
+    }
+    openNativeProjectCheckOwnerAuthority(projectCheckOwnerScope(policy), policy);
+  } catch { throw new Error('The local Dev project check owner profile is invalid.'); }
+}
 const TOKEN_FILE = path.join(process.cwd(), ".studio-api-token");
 /** B93.5: reported by GET /api/agent/status so callers can tell a restart from a stale read. */
 const SERVER_STARTED_AT = new Date().toISOString();
@@ -851,8 +867,8 @@ const destructiveRecoveryStore = new DestructiveRecoveryStore({ root: dataPath('
 // W3B1a: one server-owned receipt writer and one serialization-aware service for the bundled
 // extension sidecar.  Construction is intentionally filesystem-light; policy/store failures
 // remain mutation-time failures so read-only diagnostics can still start.
-const actionReceiptStore = new ActionReceiptStore({ root: dataPath('action-receipts') });
 const projectCheckRuns = new ProjectCheckRunService(actionReceiptStore, forgeSourceCoordinator);
+const projectCheckOwnerEnrollment = new ProjectCheckOwnerEnrollment(actionReceiptStore, forgeSourceCoordinator);
 const deployValidatorHash = deploymentImplementationHash(process.argv[1]);
 const deployStudioActorId = `studio:${crypto.randomUUID()}`;
 const workspaceReceiptService = new WorkspaceReceiptService();
@@ -4610,6 +4626,11 @@ app.post("/api/studio/release-preferences", (req, res) => {
 
 app.post("/api/schema/config", (req, res) => {
   if (!requireStudioActor(req, res)) return;
+  if (projectCheckOwnerProfileEnabled() && ['schemaDir', 'x4GamePath', 'modWorkspacePath', 'filesystemPath', 'x4ReferenceRoot']
+    .some(field => req.body && Object.hasOwn(req.body, field))) {
+    return res.status(409).json({ success: false, code: 'PROJECT_CHECK_OWNER_ROOTS_LOCKED',
+      error: 'Stop the isolated Dev host before changing its owner approval directory roles.' });
+  }
   try {
     // B84: `schemaDir` used to be written UNCONDITIONALLY, so any partial update that omitted
     // it silently blanked the configured schema path. Absence now preserves the existing value
@@ -13416,10 +13437,90 @@ app.post("/api/agent/deploy-verify", coordinatedSourceOperation(deployVerifyHand
 
 app.post('/api/agent/project-check-runs', startProjectCheckRun);
 app.get('/api/agent/project-check-runs/:id', getProjectCheckRun);
+app.post('/api/project-check-owner/review', reviewProjectCheckOwner);
+app.post('/api/project-check-owner/confirm', confirmProjectCheckOwner);
 
 function projectCheckRunsAvailable(): boolean {
   return process.platform === 'win32' && process.env.X4_FORGE_MODE === 'dev-build'
     && process.env.X4_FORGE_PROJECT_CHECK_RUNS === '1' && process.env.X4_FORGE_PARENT_PID === undefined;
+}
+
+function projectCheckOwnerScope(policy: ReturnType<typeof readNativeProjectCheckOwnerPolicy>): NativeProofScope {
+  const { modWorkspacePath: workspaceRoot, x4GamePath, filesystemPath: filesystemRoot } = resolveXsdConfig();
+  if (!workspaceRoot || !x4GamePath) throw new ProjectCheckOwnerEnrollmentError('REVIEW_UNAVAILABLE');
+  const { actorId, workspaceId, modId, sourceRoot } = policy;
+  return { store: actionReceiptStore, actorId, workspaceId, modId, sourceRoot, addressedSourceRoot: sourceRoot,
+    workspaceRoot, filesystemRoot, targetRoot: path.join(x4GamePath, 'extensions', modId),
+    stagingRoot: path.join(workspaceRoot, '.forge-builds', 'loose') };
+}
+
+function requireProjectCheckOwnerRequest(req: express.Request, res: express.Response): ProjectCheckOwnerResolver | undefined {
+  if (!requireStudioActor(req, res)) return;
+  if (!projectCheckRunsAvailable() || !projectCheckOwnerProfileEnabled()) {
+    throw new ProjectCheckOwnerEnrollmentError('REVIEW_UNAVAILABLE');
+  }
+  const origin = req.get('origin');
+  const port = req.socket.localPort;
+  const remote = req.socket.remoteAddress;
+  const readPolicy = () => {
+    const policy = readNativeProjectCheckOwnerPolicy();
+    if (origin !== policy.origin || port !== policy.port || (remote !== '127.0.0.1' && remote !== '::ffff:127.0.0.1')) {
+      throw new ProjectCheckOwnerEnrollmentError('CONFIRMATION_REQUIRED');
+    }
+    return policy;
+  };
+  readPolicy();
+  return action => {
+    const policy = readPolicy();
+    const scope = projectCheckOwnerScope(policy);
+    const activation = openNativeProjectCheckOwnerAuthority(scope, policy);
+    if (action === 'approve') {
+      const key = createAgentKeyStore({ file: AGENT_KEYS_FILE }).list().find(row => row.id === policy.actorId);
+      const route = resolveAgentRouteAuthority('POST', '/api/agent/project-check-runs');
+      const record = workspaceRegistry.readPersisted(policy.workspaceId);
+      if (!key || key.workspaceId !== policy.workspaceId || key.revokedAt !== null || (key.expiresAt !== null && key.expiresAt <= Date.now())
+        || !route.ok || !agentScopeCovers(route.decision.agentScopes, key.scope)
+        || !decideConstrainedAgentRoute(route.decision, key.capabilityConstraint).allowed || !record) throw new Error('Owner subject changed.');
+      const workspace = activeBuildWorkspace(record.workspace);
+      if (effectiveModId(workspace) !== policy.modId || !workspace.sourceStamp?.dir
+        || canonicalSourceKey(workspace.sourceStamp.dir) !== canonicalSourceKey(policy.sourceRoot)) throw new Error('Owner source changed.');
+      verifyProjectCheckWorkerRuntime(policy.runtime);
+    }
+    const setupInput = { modId: policy.modId, sourceRoot: policy.sourceRoot, interpreterPath: policy.interpreterPath,
+      interpreterDependencies: policy.interpreterDependencies };
+    return { ...policy, setupInput, activeApprovalId: activation.read(), activate: activation.activate };
+  };
+}
+
+function projectCheckOwnerError(res: express.Response, error: unknown) {
+  const failure = error instanceof ProjectCheckOwnerEnrollmentError ? error : new ProjectCheckOwnerEnrollmentError('UNAVAILABLE');
+  return res.status(failure.status).json({ ok: false, code: failure.code, error: failure.message });
+}
+
+function reviewProjectCheckOwner(req: express.Request, res: express.Response) {
+  try {
+    const resolve = requireProjectCheckOwnerRequest(req, res);
+    if (!resolve) return;
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length !== 1
+      || (body.action !== 'approve' && body.action !== 'revoke')) throw new ProjectCheckOwnerEnrollmentError('INPUT_INVALID');
+    res.set('Cache-Control', 'no-store');
+    return res.json({ ok: true, ...projectCheckOwnerEnrollment.review(body.action, resolve) });
+  } catch (error) { return projectCheckOwnerError(res, error); }
+}
+
+async function confirmProjectCheckOwner(req: express.Request, res: express.Response) {
+  try {
+    const resolve = requireProjectCheckOwnerRequest(req, res);
+    if (!resolve) return;
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length !== 2
+      || typeof body.reviewId !== 'string' || !Object.hasOwn(body, 'proof')) throw new ProjectCheckOwnerEnrollmentError('INPUT_INVALID');
+    res.set('Cache-Control', 'no-store');
+    const result = await projectCheckOwnerEnrollment.confirm(body.reviewId, body.proof, resolve);
+    captureActionReceiptProjection(req, result.receipt);
+    return res.json({ ok: true, ...result });
+  } catch (error) { return projectCheckOwnerError(res, error); }
 }
 
 function projectCheckRunError(res: express.Response, error: unknown) {
@@ -13468,13 +13569,13 @@ function projectCheckRunAuthority(record: WorkspaceRecord, actorId: string) {
   const workspace = activeBuildWorkspace(record.workspace);
   const modId = effectiveModId(workspace);
   const sourceRoot = workspace.sourceStamp?.dir;
-  const { modWorkspacePath: workspaceRoot, x4GamePath } = resolveXsdConfig();
+  const { modWorkspacePath: workspaceRoot, x4GamePath, filesystemPath: filesystemRoot } = resolveXsdConfig();
   const refuse = () => new ProjectCheckRunRefusal('PROJECT_CHECK_RUN_AUTHORITY_CHANGED');
   if (!modId || !sourceRoot || !workspaceRoot || !x4GamePath) throw refuse();
   const targetRoot = path.join(x4GamePath, 'extensions', modId);
   const stagingRoot = path.join(workspaceRoot, '.forge-builds', 'loose');
   const scope = { store: actionReceiptStore, actorId, workspaceId, modId, sourceRoot, addressedSourceRoot: sourceRoot,
-    workspaceRoot, targetRoot, stagingRoot };
+    workspaceRoot, filesystemRoot, targetRoot, stagingRoot };
   let authority: ReturnType<typeof loadNativeProjectCheckAuthority>;
   try {
     authority = loadNativeProjectCheckAuthority(scope);
@@ -13926,7 +14027,8 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
         lease.assertProjectCheckAuthority(projectCheckApprovalCoordinationKey(actionReceiptStore), addressedWorkspaceId, principal.id);
         nativeCheckProof = openNativeProjectCheckProof({ store: actionReceiptStore, receiptId: suiteId,
           actorId: principal.id, workspaceId: addressedWorkspaceId, modId, sourceRoot: sourcePlan.sourceRoot, addressedSourceRoot,
-          workspaceRoot: modWorkspacePath, targetRoot, stagingRoot: path.join(modWorkspacePath, '.forge-builds', 'loose'), snapshot });
+          workspaceRoot: modWorkspacePath, filesystemRoot: resolveXsdConfig().filesystemPath, targetRoot,
+          stagingRoot: path.join(modWorkspacePath, '.forge-builds', 'loose'), snapshot });
         if ((body.dryRun !== true || body.expectedProjectCheckSuiteReceiptHash !== undefined)
           && body.expectedProjectCheckSuiteReceiptHash !== nativeCheckProof.proof.hash) return proofRefusal();
         responseIdentity = { ...responseIdentity, projectCheckSuite: nativeCheckProof.proof };
@@ -16250,7 +16352,9 @@ function registerRunCommandRoutes(app: express.Express): void {
   });
 }
 
-if (isRunCommandEnabled(process.env)) registerRunCommandRoutes(app);
+if (!projectCheckOwnerProfileEnabled()) {
+  if (isRunCommandEnabled(process.env)) registerRunCommandRoutes(app);
+}
 
 /**
  * B93.2 — tell the caller the truth about the request they made.

@@ -29,6 +29,17 @@ function sha256(value: string | Buffer): Buffer {
   return createHash('sha256').update(value).digest();
 }
 
+export function assertProjectCheckOwnerCredential(credential: PinnedOwnerCredential): void {
+  const origin = new URL(credential.origin);
+  if (origin.hostname !== RP_ID || origin.origin !== credential.origin || !['http:', 'https:'].includes(origin.protocol)
+    || !/^[A-Za-z0-9_-]{1,96}$/.test(credential.ownerId)
+    || !decodeBase64Url(credential.credentialId, 1023) || !decodeBase64Url(credential.userHandle, 64)
+    || credential.publicKey.type !== 'public' || credential.publicKey.asymmetricKeyType !== 'ec'
+    || credential.publicKey.asymmetricKeyDetails?.namedCurve !== 'prime256v1') {
+    throw new Error('Invalid pinned local project-check owner credential.');
+  }
+}
+
 /** Relying-party proof for one independently provisioned, device-bound owner credential. */
 export class ProjectCheckOwnerProof {
   private readonly pending = new Map<string, { decision: string; expiresAt: number }>();
@@ -37,14 +48,7 @@ export class ProjectCheckOwnerProof {
   private lastSignCount = 0;
 
   constructor(credential: PinnedOwnerCredential, private readonly now = () => performance.now()) {
-    const origin = new URL(credential.origin);
-    if (origin.hostname !== RP_ID || origin.origin !== credential.origin || !['http:', 'https:'].includes(origin.protocol)
-      || !/^[A-Za-z0-9_-]{1,96}$/.test(credential.ownerId)
-      || !decodeBase64Url(credential.credentialId, 1023) || !decodeBase64Url(credential.userHandle, 64)
-      || credential.publicKey.type !== 'public' || credential.publicKey.asymmetricKeyType !== 'ec'
-      || credential.publicKey.asymmetricKeyDetails?.namedCurve !== 'prime256v1') {
-      throw new Error('Invalid pinned local project-check owner credential.');
-    }
+    assertProjectCheckOwnerCredential(credential);
     this.credential = Object.freeze({ ...credential });
   }
 
@@ -61,6 +65,11 @@ export class ProjectCheckOwnerProof {
       challenge, rpId: RP_ID, timeout: CHALLENGE_TTL_MS, userVerification: 'required' as const,
       allowCredentials: [{ type: 'public-key' as const, id: this.credential.credentialId }],
     };
+  }
+
+  /** Retire an issued challenge when its host review can no longer be confirmed. */
+  discard(challenge: string): void {
+    this.pending.delete(challenge);
   }
 
   readonly verify = (ownerId: string, decision: Readonly<OwnerDecision>, proof: unknown): boolean => {

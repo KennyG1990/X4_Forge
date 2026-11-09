@@ -8,8 +8,8 @@
 
 ### A15 project-registered verification `in_progress` (GitHub #61)
 
-The isolated Windows Dev backend can start and poll an approved project check run and feed the exact passing suite into native scratch deploy. [Dev acceptance and evidence](docs/plans/2026-11-08-a15-dev-async-runs.md).
-Remaining work includes host-owner enrollment, installed Antigravity supervisor recovery, project validation integration, and coverage credit. Keep the Dev fixture separate from Claude's game testing and leave #61 open.
+The isolated Windows Dev backend accepts signed owner approval and revocation from a host-pinned credential. Its async run returns an exact passing suite for native scratch deploy. [Owner approval evidence](docs/plans/2026-11-08-a15-dev-owner-approval.md) and [run evidence](docs/plans/2026-11-08-a15-dev-async-runs.md).
+Remaining work includes device provisioning and rendered owner controls, installed Antigravity supervisor recovery, project validation integration, and coverage credit. Keep the Dev fixture separate from Claude's game testing and leave #61 open.
 
 ### Bounded Claude fixes public release 0.0.80 `in_progress` (GitHub #20)
 

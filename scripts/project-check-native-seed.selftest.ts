@@ -78,7 +78,7 @@ function readObject(file: string, label: string) {
 
 function parseOptions() {
   const argv = process.argv.slice(2);
-  const optionalModes = new Set(['--revoke', '--hold-revoke', '--authority-only']);
+  const optionalModes = new Set(['--revoke', '--hold-revoke', '--authority-only', '--runtime-only']);
   const modes = argv.filter(value => optionalModes.has(value));
   assert(modes.length <= 1, 'Specify at most one seed mode.');
   const args = argv.filter(value => !optionalModes.has(value));
@@ -221,6 +221,11 @@ async function main() {
   assert.equal(process.platform, 'win32');
   const { root, mode } = parseOptions();
   const input = readSeedInput(root);
+  if (mode === '--runtime-only') {
+    const systemRoot = physicalDirectory(process.env.SystemRoot);
+    console.log(JSON.stringify(createPinnedRuntime(root, input.pythonPath, systemRoot)));
+    return;
+  }
   const data = ownedDirectory(root, 'data');
   const coordination = ownedDirectory(root, 'coordination');
   const receipts = ownedDirectory(root, 'data', 'action-receipts');
