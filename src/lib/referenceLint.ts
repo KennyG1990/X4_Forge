@@ -1,4 +1,5 @@
 /** Pure advisory lint for explicit reference literals not reliably schema-typed (notably Lua). */
+import { parse } from 'luaparse';
 import { createSourcePositionLocator } from './xmlSourceSpans';
 
 export interface ReferenceLiteralSets {
@@ -56,6 +57,85 @@ function maskComments(content: string, isLua: boolean): string {
     : content.replace(/<!--[\s\S]*?-->/g, keepLines);
 }
 
+interface LuaReferenceNode {
+  type: string;
+  name?: string;
+  isLocal?: boolean;
+  value?: unknown;
+  raw?: string;
+  range?: [number, number];
+  operator?: string;
+  base?: LuaReferenceNode;
+  identifier?: LuaReferenceNode;
+  index?: LuaReferenceNode;
+  left?: LuaReferenceNode;
+  right?: LuaReferenceNode;
+  argument?: LuaReferenceNode;
+  arguments?: LuaReferenceNode[];
+  variables?: LuaReferenceNode[];
+}
+
+type LuaFactionConsumer = 'GetFactionData' | 'GetComponentData';
+
+function globalLuaName(node: LuaReferenceNode | undefined): string | undefined {
+  return node?.type === 'Identifier' && node.isLocal === false ? node.name : undefined;
+}
+
+function isGlobalEnvironment(node: LuaReferenceNode | undefined): boolean {
+  const name = globalLuaName(node);
+  return name === '_G' || name === '_ENV';
+}
+
+function globalLuaWrite(node: LuaReferenceNode | undefined): unknown {
+  if (node?.type === 'MemberExpression' && isGlobalEnvironment(node.base)) return node.identifier?.name;
+  if (node?.type === 'IndexExpression' && isGlobalEnvironment(node.base)) return node.index?.value;
+  return globalLuaName(node);
+}
+
+function luaFactionLiterals(content: string): Array<{ id: string; offset: number }> {
+  if (!content.includes('GetFactionData') && !content.includes('GetComponentData')) return [];
+  const hits: Array<{ consumer: LuaFactionConsumer; id: string; offset: number }> = [];
+  const rebound = new Set<LuaFactionConsumer>();
+  let changedEnvironment = false;
+  const markWrite = (name: unknown) => {
+    if (name === '_ENV') changedEnvironment = true;
+    if (name === 'GetFactionData' || name === 'GetComponentData') rebound.add(name);
+  };
+  const record = (consumer: LuaFactionConsumer, node: LuaReferenceNode | undefined) => {
+    if (node?.type !== 'StringLiteral' || typeof node.value !== 'string' || !node.range || !node.raw
+      || !/^[A-Za-z_][\w.-]*$/.test(node.value)) return;
+    const opening = node.raw.match(/^(?:\[=*\[(?:\r\n|\n\r|\r|\n)?|["'])/);
+    if (opening) hits.push({ consumer, id: node.value, offset: node.range[0] + opening[0].length });
+  };
+  const returnsOwner = (node: LuaReferenceNode | undefined) => node?.type === 'CallExpression'
+    && globalLuaName(node.base) === 'GetComponentData' && node.arguments?.[1]?.value === 'owner';
+  try {
+    // Preserve UTF-16 offsets while giving luaparse a byte-string-compatible input.
+    // A substituted character cannot be part of an ASCII faction ID.
+    parse(content.replace(/^\uFEFF/, ' ').replace(/[\u0100-\uffff]/g, '?'), {
+      comments: false, ranges: true, scope: true, luaVersion: '5.2', encodingMode: 'pseudo-latin1',
+      onLocalDeclaration(name: string) {
+        if (name === '_ENV') changedEnvironment = true;
+      },
+      onCreateNode(node: LuaReferenceNode) {
+        if (node.type === 'AssignmentStatement') {
+          for (const variable of node.variables ?? []) markWrite(globalLuaWrite(variable));
+        } else if (node.type === 'FunctionDeclaration') {
+          markWrite(globalLuaWrite(node.identifier));
+        } else if (node.type === 'CallExpression' || node.type === 'StringCallExpression') {
+          const callee = globalLuaName(node.base);
+          if (callee === 'GetFactionData') record(callee, node.arguments?.[0] ?? node.argument);
+          if (callee === 'rawset' && isGlobalEnvironment(node.arguments?.[0])) markWrite(node.arguments?.[1]?.value);
+        } else if (node.type === 'BinaryExpression' && (node.operator === '==' || node.operator === '~=')) {
+          if (returnsOwner(node.left)) record('GetComponentData', node.right);
+          if (returnsOwner(node.right)) record('GetComponentData', node.left);
+        }
+      },
+    });
+  } catch { return []; } // A partial parse cannot establish the consumer.
+  return changedEnvironment ? [] : hits.filter(hit => !rebound.has(hit.consumer));
+}
+
 export function lintReferenceLiterals(
   content: string,
   references: ReferenceLiteralSets,
@@ -67,38 +147,41 @@ export function lintReferenceLiterals(
   const locate = createSourcePositionLocator(content);
   const findings: ReferenceLiteralFinding[] = [];
   const seen = new Set<string>();
+  const add = (kind: ReferenceLiteralFinding['kind'], values: Set<string>, rawId: string, offset: number) => {
+    const id = rawId.toLowerCase();
+    if (values.has(id) || (kind === 'faction' && values.has(`faction.${id}`))) return;
+    const key = `${kind}:${id}:${offset}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    const suggestions = suggest(id, values);
+    const suffix = suggestions.length ? ` Did you mean ${suggestions.join(', ')}?` : '';
+    findings.push({
+      code: `reference.unknown_${kind}`,
+      severity: 'warning', kind, id, filePath: opts.filePath, ...locate(offset), suggestions,
+      message: `${kind} reference "${id}" is not present in the configured canonical X4 corpus.${suffix}`,
+    });
+  };
   const scan = (kind: ReferenceLiteralFinding['kind'], values: Set<string> | undefined, pattern: RegExp, capture = 1) => {
     if (!values?.size) return;
     for (const match of masked.matchAll(pattern)) {
       const offset = match.indices?.[capture]?.[0];
-      if (offset === undefined) continue;
-      const id = match[capture].toLowerCase();
-      const lookup = kind === 'faction' ? [id, `faction.${id}`] : [id];
-      if (lookup.some(v => values.has(v))) continue;
-      const key = `${kind}:${id}:${offset}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const suggestions = suggest(id, values);
-      const suffix = suggestions.length ? ` Did you mean ${suggestions.join(', ')}?` : '';
-      findings.push({
-        code: `reference.unknown_${kind}`,
-        severity: 'warning', kind, id, filePath: opts.filePath, ...locate(offset), suggestions,
-        message: `${kind} reference "${id}" is not present in the configured canonical X4 corpus.${suffix}`,
-      });
+      if (offset !== undefined) add(kind, values, match[capture], offset);
     }
   };
 
   // Root keyword expressions, also used in Lua strings sent to MD. A word
   // boundary alone matches the property suffix in $object.ware.name (and even
   // the variable $ware.name); neither is a literal corpus reference.
-  scan('faction', references.factions, /(?<![\w$.\]])faction\.([A-Za-z_][\w-]*)\b/gd);
+  if (!isLua) scan('faction', references.factions, /(?<![\w$.\]])faction\.([A-Za-z_][\w-]*)\b/gd);
   scan('ware', references.wares, /(?<![\w$.\]])ware\.([A-Za-z_][\w-]*)\b/gd);
   scan('macro', references.macros, /(?<![\w$.\]])macro\.([A-Za-z_][\w-]*)\b/gd);
 
   if (isLua) {
     // Corpus-proven literal APIs. Variable first arguments are intentionally skipped.
     scan('ware', references.wares, /\bGetWareData\s*\(\s*(["'])([^"']+)\1\s*,/gd, 2);
-    scan('faction', references.factions, /\bGetFactionData\s*\(\s*(["'])([^"']+)\1\s*,/gd, 2);
+    if (references.factions?.size) {
+      for (const hit of luaFactionLiterals(content)) add('faction', references.factions, hit.id, hit.offset);
+    }
     scan('macro', references.macros, /\bGetMacroData\s*\(\s*(["'])([^"']+)\1\s*,/gd, 2);
   } else {
     // Schema validation remains primary; these explicit attributes keep checks armed on
@@ -130,6 +213,32 @@ export function runReferenceLiteralLintSelftest() {
   const positions = lintReferenceLiterals(mixed, refs).map(finding => `${finding.line}:${finding.column}`);
   const luaMixed = '--[=[GetWareData("wrong", "name")\r]=]\rlocal n=GetWareData(\r\n  "wrong", "name")';
   const luaPositions = lintReferenceLiterals(luaMixed, refs, { kind: 'lua' }).map(finding => `${finding.line}:${finding.column}`);
+  const factionIds = (source: string) => lintReferenceLiterals(source, refs, { kind: 'lua' })
+    .filter(finding => finding.kind === 'faction').map(finding => finding.id).join(',');
+  const benign = [
+    'local ordinary = "faction.service"', 'local registry = {["faction.rivals"] = true}',
+    'local text = [[GetFactionData("fakecall", "name")]]', '-- GetFactionData("fakecomment", "name")',
+    'local alias = GetFactionData; alias("fakeref")', '_G.GetFactionData("environment_member")',
+    'object.GetFactionData("fakemember")', 'local direct = GetFactionData("argon", "name")',
+    'do local GetFactionData; function GetFactionData() end; GetFactionData("fakelocal") end',
+    'do local _G = {}; _G.GetFactionData = function() end end',
+    'local real = GetFactionData("actual")',
+  ].join('\n');
+  const direct = '\uFEFFlocal label = "🚀"\r\nGetFactionData("\\110otafaction", "name")\r'
+    + 'local long = GetFactionData([=[\r\n  invalid]=], "name")\n'
+    + 'local exact = GetFactionData[=[\r\nlongid]=]\n';
+  const directFindings = lintReferenceLiterals(direct, refs, { kind: 'lua' });
+  const ownerCompare = [
+    'local a = GetComponentData(0, "owner", "name") == "badowner"',
+    'local b = "reversed" ~= GetComponentData(0, "owner")',
+    'local c = GetComponentData(0, "name", "owner") == "displayname"',
+    'local d = GetComponentData(0, "owner") == runtimeValue',
+  ].join('\n');
+  const rebound = [
+    'GetFactionData = function() end', 'function GetFactionData() end',
+    'function _G.GetFactionData() end', '_ENV["GetFactionData"] = function() end',
+    'rawset(_G, "GetFactionData", function() end)',
+  ];
   const checks = [
     { name: 'bad faction warned with suggestion', pass: findings.some(f => f.kind === 'faction' && f.id === 'argonn' && f.suggestions.includes('argon')) },
     { name: 'bad XML ware warned', pass: findings.some(f => f.kind === 'ware' && f.id === 'energcells') },
@@ -141,6 +250,14 @@ export function runReferenceLiteralLintSelftest() {
     { name: 'same-line and multiline XML IDs use the capture coordinates', pass: positions.join(',') === '3:16,3:29,4:4' },
     { name: 'Lua multiline API location keeps original lines across block comments', pass: luaPositions.join(',') === '4:4' },
     { name: 'nested property and variable roots remain outside reference lint', pass: !lintReferenceLiterals('$x.ware.id + $ware.name + $x.{1}.ware.id', refs).length },
+    { name: 'only direct engine-shaped calls bypass the string and shadow exclusions', pass: factionIds(benign) === 'actual' },
+    { name: 'escaped and long Lua literals retain exact raw coordinates', pass: directFindings.map(finding =>
+      `${finding.id}:${finding.line}:${finding.column}`).join(',') === 'notafaction:2:17,longid:6:1' },
+    { name: 'only comparisons to the first owner result are checked on either side', pass: factionIds(ownerCompare) === 'badowner,reversed' },
+    { name: 'global rebinding disables only the affected consumer', pass: rebound.every(write =>
+      factionIds(`${write}\nGetFactionData('fake')\n${ownerCompare}`) === 'badowner,reversed') },
+    { name: 'local environment and malformed Lua do not publish speculative findings', pass:
+      !factionIds(`local _ENV = {}; GetFactionData('fake')\n${ownerCompare}`) && !factionIds("GetFactionData('fake'); local broken = )") },
   ];
   const passed = checks.filter(c => c.pass).length;
   return { allPassed: passed === checks.length, pass: passed === checks.length, passed, total: checks.length, checks };

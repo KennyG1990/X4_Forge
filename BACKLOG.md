@@ -30,6 +30,10 @@ Dev separates inner and outer chains and distinguishes unresolved subtype receiv
 
 Dev maps lowercase reference findings to the actual source tokens and preserves repeated same-line occurrences through Problems and native deploy review. An exact scratch replay proved approval cannot transfer between them. [Isolated evidence](docs/plans/2026-11-09-reference-literal-coordinates.md). Installed and public delivery remain open. The separate uppercase schema producer and historical delta grouping still use their previous anchors.
 
+### Lua faction reference call sites `in_progress` (GitHub #64)
+
+Dev checks faction literals at direct engine-shaped Lua calls and owner comparisons. Ordinary strings, local shadows and explicit rebindings are excluded. The benign fixture committed its exact scratch bytes while all five real references retained their positions. [Isolated evidence and release review](docs/plans/2026-11-09-lua-faction-reference-consumers.md). Installed and public delivery remain open.
+
 ### Unsaved expression MCP `in_progress` (GitHub #79, part of #74)
 
 Dev exposes the shared unsaved checker through an exact read/analyze capability and current MCP discovery. The paired policy, HTTP, stdio and native deploy passed in isolation, including the shared #73 and #78 grammar rules. [Dev evidence](docs/plans/2026-11-08-mcp-check-expression.md). Installed verification and public delivery remain open.
