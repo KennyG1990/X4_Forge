@@ -3981,6 +3981,18 @@ async function main() {
   const luaBody = ['local M = {}', 'return M'].join(NL);
   const luaWrite = await req('POST', '/api/fs/write', SESSION_TOKEN, { path: 'ui/probe.lua', content: luaBody, strict: true });
   ok('non_xml_writes_are_unaffected', luaWrite.status === 200 && (luaWrite.json?.validation?.ran || []).length === 0, JSON.stringify(luaWrite.json?.validation?.ran));
+  const refusedWrite = await req('POST', '/api/fs/write', SESSION_TOKEN, {
+    path: 'ui/probe.lua/child.txt', content: 'private attempted write',
+  });
+  const writeFailure = refusedWrite.json?.writeFailure;
+  ok('workspace_write_io_failure_reports_sanitized_phase_and_observation',
+    refusedWrite.status === 500 && refusedWrite.json?.code === 'WORKSPACE_FILE_WRITE_FAILED'
+      && /^[a-f0-9-]{36}$/.test(writeFailure?.requestId) && writeFailure?.stage === 'replace'
+      && ['unknown', 'target-absent'].includes(writeFailure?.outcome)
+      && writeFailure?.requestedSha256 === crypto.createHash('sha256').update('private attempted write').digest('hex')
+      && !refusedWrite.json?.sourceOperation && !JSON.stringify(refusedWrite.json).includes('probe.lua')
+      && !JSON.stringify(refusedWrite.json).includes('private attempted write')
+      && fs.readFileSync(path.join(safeWorkspace, 'ui/probe.lua'), 'utf8') === luaBody);
 
   // --- B86: agent action ledger ----------------------------------------------------------
   // The load-bearing property is that payloads are never inlined: a ~295 KB write must produce

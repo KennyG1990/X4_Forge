@@ -26,6 +26,10 @@ Dev honors the configured source role on both native deploy routes and retains i
 
 Dev rejects a directory or blank file in place of the manifest, preserves valid metadata-only and malformed-source repair imports, and gives a working nested child request. The same backend passed exact native v101 deployment and receipt checks. [Isolated evidence](docs/plans/2026-11-09-mod-folder-import-manifest.md). Installed and public delivery remain open.
 
+### Workspace write failure evidence `in_progress` (GitHub #68)
+
+Dev distinguishes real sharing denial from a failed verification after replacement with a correlated phase and bounded workspace byte observation. The exact native deploy control still commits its receipt. [Paired fault evidence](docs/plans/2026-11-09-workspace-write-failure-evidence.md). The historical AiLive failure cause, installed verification and public delivery remain open.
+
 ### Launcher-pinned scratch Directory Settings `in_progress` (GitHub #75)
 
 An explicit Dev launch flag shows the effective scratch paths and keeps corpus/schema settings editable in regular scratch profiles. Retargets and install harvesting refuse, the Project Check owner seal stays in force, and native deploy passed the exact scratch replay. [Isolated evidence and release review](docs/plans/2026-11-09-dev-scratch-directory-settings.md). Installed rendering and public delivery remain open.

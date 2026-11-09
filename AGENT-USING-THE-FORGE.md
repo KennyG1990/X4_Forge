@@ -33,24 +33,31 @@ deploy delta. See KB-7 in `ROADMAP.md`.)*
 
 ---
 
-## 2. The write loop — and the asymmetry that will clobber your edits
+## 2. The workspace write and recovery loop
 
-**`/api/fs/write` routes to the WORKSPACE. `/api/fs/read` resolves to the DEPLOYMENT.** Once those two roots
-diverge — which they do the moment you write anything — a read-modify-write chain reads *stale* content, and
-your second patch silently reverts your first.
+**`/api/fs/write` writes to the Mod Workspace Folder.** Read editable files with
+`GET /api/fs/read?root=workspace&path=<relative-path>`. The read defaults to `workspace`. Use
+`root=filesystem` or `root=deployment` when you explicitly need the deployed copy.
 
-**Therefore, the only safe loop:**
+Keep the same workspace source throughout an edit.
 
 | Step | Where |
 |---|---|
-| **Read** current content | the **workspace on disk** |
+| **Read** current content | the **workspace on disk**, or the explicit workspace read endpoint |
 | **Modify** in memory | — |
-| **Write** | **through the Forge API** (the Forge stays the write authority) |
+| **Write** | **through the Forge API** with the reviewed SHA-256 in `expectedSha256` |
 | **Verify readback** | the **workspace on disk**, byte-exact |
 
 **Never hand-edit the deployment folder.** The Forge alone deploys. Hand-edited files are silently
 overwritten on the next deploy, and — worse — they make the deployment stop being evidence of what the source
 says.
+
+If a workspace write returns HTTP 500, capture the response body up to 8 KiB. Record
+`writeFailure.requestId`, `stage`, and `outcome` when present. Read the workspace file before retrying.
+If it matches the requested SHA-256, the intended bytes are already present. If the reviewed old
+bytes remain and the edit is still intended, send their SHA-256 as `expectedSha256`. Use
+`expectedSha256: null` for a planned create after confirming the file is absent. For other bytes
+or unavailable evidence, reconcile the workspace state before sending another write.
 
 ---
 

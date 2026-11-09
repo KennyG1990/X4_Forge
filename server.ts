@@ -4439,8 +4439,9 @@ app.get("/api/agent/schema", (req, res) => {
         method: "POST",
         path: "/api/fs/write",
         auth: true,
-        body: { path: "relative path under configured root", content: "string" },
-        purpose: "Write a file under the configured filesystem/mod workspace root."
+        body: { path: "relative path under the Mod Workspace Folder", content: "string", strict: "optional boolean",
+          expectedSha256: "optional current file SHA-256, or null to require an absent target" },
+        purpose: "Write and verify workspace bytes. Unexpected I/O failures return a correlated writeFailure observation. Inspect workspace bytes before retrying."
       },
       {
         method: "POST",
@@ -5150,10 +5151,89 @@ function validateIncomingBytes(relativePath: string, content: string): {
   return { ran, ok: !findings.some(f => f.severity === 'error'), findings };
 }
 
+type WorkspaceWriteObservation =
+  | { state: 'file'; bytes: number; sha256: string }
+  | { state: 'absent' | 'unavailable' };
+
+interface WorkspaceWriteTarget {
+  path: string;
+  root: string;
+  rootKey: string;
+  key: string;
+}
+
+interface WorkspaceWriteAttempt {
+  stage: 'preflight' | 'prepare' | 'replace' | 'verify';
+  target?: WorkspaceWriteTarget;
+  before?: WorkspaceWriteObservation;
+}
+
+function workspaceWriteTarget(file: string, root: string): WorkspaceWriteTarget | undefined {
+  try {
+    const rootKey = canonicalSourceKey(root);
+    const key = canonicalSourceKey(file);
+    const prefix = rootKey.endsWith(path.sep) ? rootKey : rootKey + path.sep;
+    if (key !== rootKey && key.startsWith(prefix)) return { path: file, root, rootKey, key };
+  } catch { /* Evidence is optional and must never change the guarded write. */ }
+  return undefined;
+}
+
+/** Observe only the same regular file under the workspace root, without unbounded reads. */
+function observeWorkspaceWrite(target?: WorkspaceWriteTarget): WorkspaceWriteObservation {
+  const unavailable = { state: 'unavailable' } as const;
+  if (!target) return unavailable;
+  try {
+    if (canonicalSourceKey(target.root) !== target.rootKey || canonicalSourceKey(target.path) !== target.key) return unavailable;
+    const stat = fs.lstatSync(target.path, { bigint: true, throwIfNoEntry: false });
+    if (!stat) return { state: 'absent' };
+    if (!stat.isFile() || stat.nlink !== 1n || stat.size > BigInt(MAX_DIFFABLE_BYTES)) return unavailable;
+    const physical = fs.realpathSync.native(target.path);
+    if (sourceKeyForResolvedPath(physical) !== target.key) return unavailable;
+    const unchanged = (current?: fs.BigIntStats) => current?.isFile() && current.nlink === 1n
+      && current.dev === stat.dev && current.ino === stat.ino && current.size === stat.size
+      && current.mtimeNs === stat.mtimeNs && current.ctimeNs === stat.ctimeNs;
+    const fd = fs.openSync(physical, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    try {
+      if (!unchanged(fs.fstatSync(fd, { bigint: true }))) return unavailable;
+      const buffer = Buffer.allocUnsafe(Number(stat.size) + 1);
+      let bytes = 0;
+      while (bytes < buffer.length) {
+        const count = fs.readSync(fd, buffer, bytes, buffer.length - bytes, null);
+        if (!count) break;
+        bytes += count;
+      }
+      if (bytes !== Number(stat.size)
+        || !unchanged(fs.lstatSync(target.path, { bigint: true, throwIfNoEntry: false }))
+        || canonicalSourceKey(target.path) !== target.key) return unavailable;
+      return { state: 'file', bytes, sha256: crypto.createHash('sha256').update(buffer.subarray(0, bytes)).digest('hex') };
+    } finally { fs.closeSync(fd); }
+  } catch { return unavailable; }
+}
+
+function workspaceWriteFailure(attempt: WorkspaceWriteAttempt, content: unknown, error: unknown) {
+  const before = attempt.before ?? { state: 'unavailable' as const };
+  const after = observeWorkspaceWrite(attempt.target);
+  const requestedSha256 = typeof content === 'string'
+    ? crypto.createHash('sha256').update(content, 'utf8').digest('hex') : undefined;
+  const outcome = after.state === 'file'
+    ? after.sha256 === requestedSha256 ? 'requested-bytes-observed'
+      : before.state === 'file' && after.sha256 === before.sha256 ? 'before-bytes-observed'
+        : requestedSha256 ? 'different-bytes-observed' : 'unknown'
+    : after.state === 'absent' ? 'target-absent' : 'unknown';
+  const system = error as NodeJS.ErrnoException | undefined;
+  return {
+    requestId: crypto.randomUUID(), stage: attempt.stage, outcome, before, after,
+    ...(requestedSha256 ? { requestedSha256 } : {}),
+    ...(typeof system?.code === 'string' && /^(?:E[A-Z0-9]{2,15}|ERR_[A-Z0-9_]{1,25})$/.test(system.code) ? { systemCode: system.code } : {}),
+    ...(typeof system?.syscall === 'string' && /^[a-z_]{1,24}$/.test(system.syscall) ? { syscall: system.syscall } : {}),
+  };
+}
+
 function writeWorkspaceFileGuarded(
   res: express.Response,
   relativePath: string,
   content: any,
+  attempt?: WorkspaceWriteAttempt,
 ): ReturnType<typeof describeWrittenBytes> | null {
   if (!relativePath) {
     res.status(400).json({ error: "Missing path parameter." });
@@ -5173,17 +5253,25 @@ function writeWorkspaceFileGuarded(
     return null;
   }
 
+  if (attempt) {
+    attempt.stage = 'prepare';
+    attempt.target = workspaceWriteTarget(safePath, rootPath);
+    attempt.before = observeWorkspaceWrite(attempt.target);
+  }
   const dir = path.dirname(safePath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   const bytes = typeof content === 'string' || Buffer.isBuffer(content) ? content : String(content ?? '');
+  if (attempt) attempt.stage = 'replace';
   atomicWriteFile(safePath, bytes);
+  if (attempt) attempt.stage = 'verify';
   return describeWrittenBytes(String(content ?? ''), safePath);
 }
 
 app.post("/api/fs/write", coordinatedSourceOperation((req, res) => {
+  const attempt: WorkspaceWriteAttempt = { stage: 'preflight' };
+  const incoming = req.body?.content ?? '';
   try {
     const targetPath = String(req.body?.path || '').trim();
-    const incoming = req.body?.content ?? '';
     // B100: optional compare-and-swap precondition for native-editor materialization.
     // `null` means "the file must still be absent"; a hash means the existing bytes must
     // still match the inventory the caller reviewed. Omitted preserves legacy behavior.
@@ -5220,11 +5308,20 @@ app.post("/api/fs/write", coordinatedSourceOperation((req, res) => {
         validation,
       });
     }
-    const written = writeWorkspaceFileGuarded(res, targetPath, incoming);
+    const written = writeWorkspaceFileGuarded(res, targetPath, incoming, attempt);
     if (!written) return;
     return res.json({ success: true, written, validation });
   } catch (error) {
-    return res.status(500).json({ error: error.message || "Failed to write file." });
+    const failure = workspaceWriteFailure(attempt, incoming, error);
+    console.error('[workspace-file-write]', JSON.stringify(failure));
+    delete res.locals.sourceOperation;
+    return res.status(500).json({
+      success: false,
+      code: 'WORKSPACE_FILE_WRITE_FAILED',
+      error: `Workspace write failed during ${failure.stage}. Inspect the workspace file before deciding whether to retry.`,
+      failedStages: [failure.stage],
+      writeFailure: failure,
+    });
   }
 }));
 
