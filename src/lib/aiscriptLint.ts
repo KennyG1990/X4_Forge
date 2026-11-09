@@ -22,7 +22,7 @@
  * XML parsing: xmldom (nested <aiscript><order><params><param><input_param…>).
  */
 
-import { DOMParser } from '@xmldom/xmldom';
+import { DOMParser, type Element } from '@xmldom/xmldom';
 
 /** orderparamlookup from aiscripts.xsd (unpacked 9.00) — curated fallback set. */
 export const ORDER_PARAM_TYPES = new Set([
@@ -31,14 +31,32 @@ export const ORDER_PARAM_TYPES = new Set([
 ]);
 
 export interface AiscriptLintFinding {
-  code: 'aiscript.order_param_missing_type' | 'aiscript.order_param_illegal_type' | 'aiscript.order_param_missing_text' | 'aiscript.not_aiscript';
+  code: 'aiscript.order_param_missing_type' | 'aiscript.order_param_illegal_type' | 'aiscript.order_param_missing_text' | 'aiscript.not_aiscript'
+    | 'aiscript.label_duplicate' | 'aiscript.resume_label_unresolved';
   severity: 'error' | 'warning';
   order?: string;
   param?: string;
+  sourceRef?: string;
+  line?: number;
+  column?: number;
   detail: string;
 }
 
-import { directElementChildren as directChildren, type ElementLike } from './xmlLite';
+function parseAiscript(xml: string): { root: Element; recovered: boolean } | undefined {
+  if (!xml || typeof xml !== 'string' || !/<aiscript\b/i.test(xml)) return;
+  let recovered = false;
+  try {
+    const root = new DOMParser({ onError: () => { recovered = true; } })
+      .parseFromString(xml, 'text/xml').documentElement;
+    if (root?.nodeName === 'aiscript') return { root, recovered };
+  } catch {
+    return;
+  }
+}
+
+function childrenNamed(element: Element, name: string): Element[] {
+  return Array.from(element.children).filter(child => child.nodeName === name);
+}
 
 /**
  * Lint the `<order><params><param …>` block of one aiscript XML file.
@@ -47,23 +65,27 @@ import { directElementChildren as directChildren, type ElementLike } from './xml
  * Degrades safely: non-XML / non-aiscript input yields a single info-ish warning or [].
  */
 export function lintAiscriptOrderParams(xml: string, legalTypes: Set<string> = ORDER_PARAM_TYPES): AiscriptLintFinding[] {
-  const out: AiscriptLintFinding[] = [];
-  if (!xml || typeof xml !== 'string' || !/<aiscript\b/i.test(xml)) return out;
-  let doc: { documentElement: ElementLike | null } | null = null;
-  try {
-    doc = new DOMParser({ onError: () => { /* degrade */ } }).parseFromString(xml, 'text/xml') as unknown as { documentElement: ElementLike | null };
-  } catch {
-    return out;
-  }
-  const root = doc?.documentElement;
-  if (!root || root.nodeName !== 'aiscript') return out;
+  const parsed = parseAiscript(xml);
+  return parsed ? lintOrderParams(parsed.root, legalTypes) : [];
+}
 
+export function lintAiscript(xml: string, legalTypes: Set<string> = ORDER_PARAM_TYPES): AiscriptLintFinding[] {
+  const parsed = parseAiscript(xml);
+  if (!parsed) return [];
+  const findings = lintOrderParams(parsed.root, legalTypes);
+  // Structural validation owns malformed XML. Label keys use the no-namespace schema.
+  if (!parsed.recovered && !parsed.root.namespaceURI) lintActionLabels(parsed.root, findings);
+  return findings;
+}
+
+function lintOrderParams(root: Element, legalTypes: Set<string>): AiscriptLintFinding[] {
+  const out: AiscriptLintFinding[] = [];
   const orders = root.getElementsByTagName('order');
   for (let i = 0; i < orders.length; i++) {
     const order = orders[i];
     const orderId = order.getAttribute('id') || '(unnamed order)';
-    for (const params of directChildren(order, 'params')) {
-      for (const param of directChildren(params, 'param')) {
+    for (const params of childrenNamed(order, 'params')) {
+      for (const param of childrenNamed(params, 'param')) {
         const pname = param.getAttribute('name') || '(unnamed param)';
         const ptype = (param.getAttribute('type') || '').trim();
         const ptext = param.getAttribute('text');
@@ -91,6 +113,42 @@ export function lintAiscriptOrderParams(xml: string, legalTypes: Set<string> = O
     }
   }
   return out;
+}
+
+function lintActionLabels(root: Element, out: AiscriptLintFinding[]): void {
+  // aiscripts.xsd puts separate label keys and resume keyrefs on each actions block.
+  for (const container of [root, ...childrenNamed(root, 'attention')]) {
+    if (container.namespaceURI) continue;
+    const scope = container === root ? 'main actions' : `attention ${container.getAttribute('min') || '(unspecified)'} actions`;
+    for (const actions of childrenNamed(container, 'actions')) {
+      if (actions.namespaceURI) continue;
+      const labels = new Map<string, number | undefined>();
+      for (const label of childrenNamed(actions, 'label')) {
+        const attribute = label.getAttributeNode('name');
+        if (label.namespaceURI || !attribute) continue;
+        const name = attribute.value;
+        if (labels.has(name)) {
+          const firstLine = labels.get(name);
+          out.push({
+            code: 'aiscript.label_duplicate', severity: 'error', sourceRef: name,
+            line: attribute.lineNumber, column: attribute.columnNumber,
+            detail: `Label "${name}" is repeated in ${scope}${firstLine ? ` (first declared on line ${firstLine})` : ''}.`,
+          });
+        } else {
+          labels.set(name, attribute.lineNumber);
+        }
+      }
+      for (const resume of Array.from(actions.getElementsByTagName('resume'))) {
+        const attribute = resume.getAttributeNode('label');
+        if (resume.namespaceURI || !attribute || labels.has(attribute.value)) continue;
+        out.push({
+          code: 'aiscript.resume_label_unresolved', severity: 'error', sourceRef: attribute.value,
+          line: attribute.lineNumber, column: attribute.columnNumber,
+          detail: `Resume label "${attribute.value}" has no exact declaration in ${scope}.`,
+        });
+      }
+    }
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -160,6 +218,35 @@ export function runAiscriptLintSelftest(): {
   ok('garbage degrades to []', lintAiscriptOrderParams('not xml at all').length === 0);
   ok('empty degrades to []', lintAiscriptOrderParams('').length === 0);
   ok('aiscript with no orders degrades to []', lintAiscriptOrderParams('<aiscript name="x"><attention min="unknown"/></aiscript>').length === 0);
+
+  const labels = lintAiscript(`<aiscript name="labels">
+    <actions>
+      <label name="loop"/>
+      <label name="loop"/>
+      <do_if value="true"><resume label="loop"/></do_if>
+      <resume label="Loop"/>
+    </actions>
+    <attention min="visible"><actions><resume label="loop"/></actions></attention>
+    <attention min="unknown"><actions><label name="loop"/><resume label="loop"/></actions></attention>
+    <init><run_interrupt_script name="'interrupt'" resume="interrupt_only"/></init>
+    <!-- <resume label="comment"/> -->
+  </aiscript>`);
+  ok('reports the duplicate at the second declaration only',
+    labels.filter(f => f.code === 'aiscript.label_duplicate').map(f => f.line).join(',') === '4', labels);
+  ok('resumes match exact labels in their own block',
+    labels.filter(f => f.code === 'aiscript.resume_label_unresolved').map(f => f.sourceRef).join(',') === 'Loop,loop', labels);
+  ok('only scoped label diagnostics appear, with locations',
+    labels.length === 3 && labels.every(f => f.line && f.column), labels);
+  ok('patch and recovered XML leave label resolution to the owning validator', [
+    '<diff><add><resume label="elsewhere"/></add></diff>',
+    '<aiscript><actions><resume label="elsewhere"/></actions></invalid>',
+  ].every(xml => lintAiscript(xml).length === 0));
+  ok('project entry point preserves order diagnostics',
+    JSON.stringify(lintAiscript(BAD_FIXTURE)) === JSON.stringify(bad));
+  const sameLine = '<aiscript><actions><label name="x"/><label name="x"/><label name="x"/></actions></aiscript>';
+  const duplicateColumns = [...sameLine.matchAll(/"x"/g)].slice(1).map(match => match.index + 1);
+  ok('duplicate attributes on one line have distinct exact columns',
+    lintAiscript(sameLine).map(f => f.column).join(',') === duplicateColumns.join(','));
 
   const passed = checks.filter(c => c.pass).length;
   const allPassed = passed === checks.length;

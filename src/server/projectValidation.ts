@@ -39,7 +39,7 @@ import {
 import { validateProjectCrossFile } from "../lib/projectCrossFileValidation";
 import { lintScriptPropertyChains, type ScriptPropertyFinding } from "../lib/scriptProperties";
 import { checkXmlWellformed } from "../lib/xmlWellformed";
-import { lintAiscriptOrderParams, type AiscriptLintFinding } from "../lib/aiscriptLint";
+import { lintAiscript, type AiscriptLintFinding } from "../lib/aiscriptLint";
 import { lintMdPitfalls, lintMdUnmatchedElse, type MdPitfallFinding } from "../lib/mdPitfallLints";
 import { lintJobsContent, type JobsVocabulary, type JobLintFinding } from "../lib/jobsContentLint";
 import { lintMigration, type MigrationFinding } from "../lib/migrationLint";
@@ -104,6 +104,8 @@ export interface ProjectValidationReferences {
   sectors?: Set<string>;
 }
 
+type ProjectAiscriptFinding = AiscriptLintFinding & { filePath?: string };
+
 export interface ProjectValidationResult {
   ok: boolean;
   /** Additive evidence; legacy ok is not a claim of complete coverage or runtime proof. */
@@ -157,7 +159,7 @@ export interface ProjectValidationResult {
     /** B46P2: which non-md/aiscripts files were routed to which game schema (honest reporting) */
     routed: Array<Pick<RoutedFileResult, "path" | "route" | "domainAvailable" | "severityCapped">>;
   };
-  aiscript: { findings: AiscriptLintFinding[] };
+  aiscript: { findings: ProjectAiscriptFinding[] };
   scriptProperties: { available: boolean; findings: ScriptPropertyFinding[] };
   symbols: { available: boolean; variables: ProjectVariableSymbol[] };
   pitfalls: { findings: MdPitfallFinding[] };
@@ -453,15 +455,18 @@ export function runProjectValidation(
     else seenSchemaFindings.add(key);
   }
 
-  const aiscriptLint: AiscriptLintFinding[] = [];
+  const aiscriptLint: ProjectAiscriptFinding[] = [];
   try {
     const legalTypes = getAiOrderParamTypes(aiIndexRef);
     for (const f of project.files) {
       if ((f.kind === "aiscript" || classifyPath(f.path) === "aiscript") && typeof f.content === "string") {
-        aiscriptLint.push(...fact('ai-order', f, [...legalTypes], () => lintAiscriptOrderParams(f.content!, legalTypes)));
+        const findings = fact('aiscript-lint', f, [...legalTypes], () => lintAiscript(f.content!, legalTypes));
+        for (const finding of findings) {
+          aiscriptLint.push(finding.sourceRef === undefined ? finding : { ...finding, filePath: f.path });
+        }
       }
     }
-  } catch { coverageGaps.push({ check: 'aiscript.order-params', reason: 'Order-parameter analysis failed before completing.' }); }
+  } catch { coverageGaps.push({ check: 'aiscript.lint', reason: 'AI-script analysis failed before completing.' }); }
 
   const scriptPropertyFindings: ScriptPropertyFinding[] = [];
   const spIndex = getScriptPropertyIndex();
@@ -736,7 +741,8 @@ function flattenProjectValidationRaw(result: ProjectValidationResult): FlatProje
     out.push({ severity: d.severity, code: d.code, filePath: d.filePath, sourceRef: d.sourceRef, line: d.line, message: d.message });
   }
   for (const f of result.aiscript.findings) {
-    out.push({ severity: f.severity, code: f.code, sourceRef: f.order ? `${f.order}${f.param ? `@${f.param}` : ""}` : f.param, message: f.detail });
+    out.push({ severity: f.severity, code: f.code, filePath: f.filePath, line: f.line, column: f.column,
+      sourceRef: f.sourceRef ?? (f.order ? `${f.order}${f.param ? `@${f.param}` : ""}` : f.param), message: f.detail });
   }
   for (const f of result.scriptProperties.findings) {
     out.push({ severity: f.severity, code: f.code, filePath: f.filePath, sourceRef: f.chain, line: f.line, message: `Property chain "${f.chain}": segment "${f.segment}" — ${f.suggestions.length ? `did you mean ${f.suggestions.slice(0, 3).join(", ")}?` : "unknown in scriptproperties.xml."}` });

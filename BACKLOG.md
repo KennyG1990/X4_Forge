@@ -6,6 +6,10 @@
 
 ## P0 — Active
 
+### Scoped AI-script action labels `in_progress` (GitHub #84, part of #74)
+
+Dev project validation and native deploy enforce X4 9.00's label keys and resume references within each actions block. [Isolated verification](docs/plans/2026-11-08-aiscript-label-scopes.md). Installed and public delivery remain open.
+
 ### Compact project validation `in_progress` (GitHub #48, part of #74)
 
 The isolated Dev candidate returns a compact verdict on the general validation API, with explicit full detail and a result ID that can bind a follow-up. [Dev acceptance and evidence](docs/plans/2026-11-08-project-validation-compact.md). Public delivery and full release qualification remain open.
