@@ -219,7 +219,7 @@ Static gates prove *legality*. They cannot prove *behaviour*. So:
 |---|---|
 | `GET /api/agent/schema` | self-documenting endpoint list (public) |
 | `GET /api/agent/workspace` | addressed workspace + `workspaceHash` and complete `snapshotHash` |
-| `POST /api/agent/project/validate` | **authoritative** validation — loop to `ok:true` |
+| `POST /api/agent/project/validate` | **Authoritative** compact verdict by default. Use `?detail=full` or body `detail: "full"` for layered findings, remediation capsules, and file lists. To expand a specific verdict, supply the same validation subject and its `resultId` as `expectedResultId` in the body. |
 | `POST /api/agent/deploy-verify` | 10-stage compile + deploy preflight; requires explicit `path` or `workspace` |
 | `GET /api/agent/selftest-index` | the oracle list |
 | `GET /api/reference/status` | cheap authenticated probe — use for port discovery |

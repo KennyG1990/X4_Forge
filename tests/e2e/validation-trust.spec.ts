@@ -10,7 +10,7 @@ const project = { id: 'folder_alias', name: 'Validation trust', files: [
 
 test('validation API binds exact source and distinguishes unavailable coverage from mod errors', async ({ request }, testInfo) => {
   const validate = async (subject: typeof project) => {
-    const response = await request.post(`${E2E_API_ORIGIN}/api/agent/project/validate`, { data: { project: subject } });
+    const response = await request.post(`${E2E_API_ORIGIN}/api/agent/project/validate`, { data: { project: subject, detail: 'full' } });
     expect(response.ok(), await response.text()).toBeTruthy();
     return response.json();
   };

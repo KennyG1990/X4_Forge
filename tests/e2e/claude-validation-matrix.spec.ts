@@ -26,7 +26,7 @@ test('C04 corpus validation cases, coverage truth and scratch deployment', async
     return { status: response.status(), data };
   };
   const validate = async (project: unknown) => {
-    const r = await post('/api/agent/project/validate', { project }); expect(r.status).toBe(200);
+    const r = await post('/api/agent/project/validate', { project, detail: 'full' }); expect(r.status).toBe(200);
     expect(r.data.modId).toBe('forge_regression_lab'); expect(r.data.sourceHash).toMatch(/^[a-f0-9]{64}$/); return r.data;
   };
   const clean = await validate(p('<set_value name="$a" exact="$x.transporttag"/><set_value name="$b" exact="$x.cargo.free.{event.param.transporttag}"/><set_value name="$c" exact="$x.waretransport"/><set_value name="$d" exact="$x.ware.id + $x.ware.name"/>'));

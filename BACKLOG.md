@@ -6,6 +6,10 @@
 
 ## P0 — Active
 
+### Compact project validation `in_progress` (GitHub #48, part of #74)
+
+The isolated Dev candidate returns a compact verdict on the general validation API, with explicit full detail and a result ID that can bind a follow-up. [Dev acceptance and evidence](docs/plans/2026-11-08-project-validation-compact.md). Public delivery and full release qualification remain open.
+
 ### A15 project-registered verification `in_progress` (GitHub #61)
 
 The isolated Windows Dev backend accepts signed owner approval, runs the approved suite, and reuses exact receipts in addressed project validation and native scratch deploy. Exact UI file coverage is credited separately from the static finding. Run status names terminal commands and distinguishes unattempted or incomplete results. [Coverage evidence](docs/plans/2026-11-08-a15-project-coverage.md) and [named result evidence](docs/plans/2026-11-08-a15-named-run-results.md).

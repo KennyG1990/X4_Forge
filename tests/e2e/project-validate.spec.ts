@@ -17,8 +17,8 @@ function bearer(): Record<string, string> {
   return { Authorization: `Bearer ${E2E_TOKEN}`, 'Content-Type': 'application/json' };
 }
 
-async function validate(request: APIRequestContext, body: unknown) {
-  const res = await request.post('/api/agent/project/validate', { headers: bearer(), data: body });
+async function validate(request: APIRequestContext, body: Record<string, unknown>) {
+  const res = await request.post('/api/agent/project/validate', { headers: bearer(), data: { ...body, detail: 'full' } });
   const responseBody = await res.text();
   expect(res.ok(), responseBody).toBeTruthy();
   return JSON.parse(responseBody);

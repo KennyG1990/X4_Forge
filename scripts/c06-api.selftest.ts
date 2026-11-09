@@ -24,9 +24,14 @@ for (const [route, body] of [
   ['/project/file/create', { project, file: { path: '../bad.lua' } }], ['/project/file/create', { project, file: { path: 'x.lua', content: 1 } }],
   ['/project/validate', { project, fromPath: 'other' }], ['/project/validate', { project, root: 'filesystem' }],
   ['/project/validate', { path: '' }], ['/project/validate', { path: 'lab', root: 1 }],
+  ['/project/validate', { project, detail: 'verbose' }],
+  ['/project/validate', { project, expectedResultId: 'a'.repeat(64) }],
+  ['/project/validate', { project, detail: 'full', expectedResultId: 'short' }],
+  ['/project/validate/check', { project, detail: 'full' }],
   ['/project/validate', { project, recordBaseline: 'true' }], ['/package', { workspace: {} }],
   ['/artifact/build', { workspace: [] }], ['/project/content-xml', { meta: { id: 'lab', deps: [false] } }],
 ] as const) check(`reject ${route} ${JSON.stringify(body).slice(0,70)}`, () => assert.throws(() => validateProjectApiBody('/api/agent' + route, body)));
+check('full report can require an exact result ID', () => validateProjectApiBody('/api/agent/project/validate', { project, detail: 'full', expectedResultId: 'a'.repeat(64) }));
 check('valid authored metadata is accepted', () => validateProjectApiBody('/api/agent/project/create', { meta: { id: 'lab', deps: [{ id: 'dep', optional: true }] } }));
 check('malformed writer content cannot coerce', () => assert.throws(() => validateProjectApiBody('/api/fs/write', { path: 'lab/x.lua', content: { text: 'wrong' } })));
 check('writer precondition cannot coerce an array into a hash', () => assert.throws(() => validateProjectApiBody('/api/fs/write', { path: 'lab/x.lua', content: '', expectedSha256: ['a'.repeat(64)] })));

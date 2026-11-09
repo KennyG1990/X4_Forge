@@ -484,7 +484,7 @@ try {
       { path: 'ui/addons/reference_acceptance/reference.lua', kind: 'lua', content: 'GetWareData("projectware", "name")\nGetFactionData("projectfaction", "name")\nGetWareData("notarealware", "name")\nGetFactionData("notarealfaction", "name")' },
     ],
   };
-  const validationResponse = await request('/api/agent/project/validate', { method: 'POST', token, body: { project } });
+  const validationResponse = await request('/api/agent/project/validate', { method: 'POST', token, body: { project, detail: 'full' } });
   const validation = await validationResponse.json();
   const referenceFindings = validation?.references?.findings || [];
   check('project validation returned reference findings', validationResponse.status === 200 && validation?.references?.available === true, `status=${validationResponse.status}`);

@@ -3554,7 +3554,7 @@ async function main() {
       expectedRegisters: [{ id: 'route-register-open', event: 'route.mod.open', file: 'ui/main.lua', reason: 'MD raises this bridge event.' }],
     },
   }, null, 2));
-  const validateByPath = await req('POST', '/api/agent/project/validate', SESSION_TOKEN, { root: 'workspace', path: 'validate_path_mod' });
+  const validateByPath = await req('POST', '/api/agent/project/validate', SESSION_TOKEN, { root: 'workspace', path: 'validate_path_mod', detail: 'full' });
   ok('validate_accepts_root_and_path', validateByPath.status === 200 && validateByPath.json?.source?.mode === 'fromPath', `status=${validateByPath.status} mode=${validateByPath.json?.source?.mode}`);
   ok('validate_loads_root_project_rules', validateByPath.json?.source?.loaded?.includes('forge.rules.json') && validateByPath.json?.rules?.present === true && validateByPath.json?.rules?.valid === true, JSON.stringify(validateByPath.json?.rules || {}));
   ok('project_rule_contracts_keep_evidence', validateByPath.json?.rules?.matches?.length === 2, JSON.stringify(validateByPath.json?.rules?.matches || []));
@@ -3564,14 +3564,14 @@ async function main() {
   fs.mkdirSync(invalidRulesFixture, { recursive: true });
   fs.writeFileSync(path.join(invalidRulesFixture, 'content.xml'), '<content id="invalid_rules_mod" name="Invalid Rules" version="100"/>');
   fs.writeFileSync(path.join(invalidRulesFixture, 'forge.rules.json'), '{"version":2,"suppressions":[]}');
-  const invalidRules = await req('POST', '/api/agent/project/validate', SESSION_TOKEN, { root: 'workspace', path: 'invalid_rules_mod' });
+  const invalidRules = await req('POST', '/api/agent/project/validate', SESSION_TOKEN, { root: 'workspace', path: 'invalid_rules_mod', detail: 'full' });
   ok('invalid_project_rules_fail_shared_validation', invalidRules.status === 200 && invalidRules.json?.ok === false && invalidRules.json?.rules?.valid === false && invalidRules.json?.flat?.some(item => item.code === 'rules.unsupported_version'), JSON.stringify(invalidRules.json?.flat || []));
 
   const oversizedRulesFixture = path.join(safeWorkspace, 'oversized_rules_mod');
   fs.mkdirSync(oversizedRulesFixture, { recursive: true });
   fs.writeFileSync(path.join(oversizedRulesFixture, 'content.xml'), '<content id="oversized_rules_mod" name="Oversized Rules" version="100"/>');
   fs.writeFileSync(path.join(oversizedRulesFixture, 'forge.rules.json'), ' '.repeat(256 * 1024 + 1));
-  const oversizedRules = await req('POST', '/api/agent/project/validate', SESSION_TOKEN, { root: 'workspace', path: 'oversized_rules_mod' });
+  const oversizedRules = await req('POST', '/api/agent/project/validate', SESSION_TOKEN, { root: 'workspace', path: 'oversized_rules_mod', detail: 'full' });
   ok('oversized_disk_rules_cannot_degrade_to_absent', oversizedRules.status === 200 && oversizedRules.json?.ok === false && oversizedRules.json?.source?.loaded?.includes('forge.rules.json') && oversizedRules.json?.source?.skipped?.some(item => item.path === 'forge.rules.json') && oversizedRules.json?.flat?.some(item => item.code === 'rules.file_too_large'), JSON.stringify(oversizedRules.json?.flat || []));
   const validateWrongRoot = await req('POST', '/api/agent/project/validate', SESSION_TOKEN, { root: 'nonsense', path: 'root_collision_mod' });
   ok('validate_rejects_an_invalid_root', validateWrongRoot.status === 400, `status=${validateWrongRoot.status}`);
@@ -3781,6 +3781,7 @@ async function main() {
   ].join(NL);
   const malformedCheck = await req('POST', '/api/agent/project/validate', SESSION_TOKEN, {
     project: { id: 'malformed_probe', name: 'malformed_probe', files: [{ path: 'md/malformed.xml', kind: 'md', content: malformed }] },
+    detail: 'full',
   });
   const malformedFlat = malformedCheck.json?.flat || [];
   const wfErrors = malformedFlat.filter(d => d.severity === 'error' && /wellformed/i.test(String(d.code || '')));
@@ -3800,9 +3801,10 @@ async function main() {
   ].join(NL);
   const cleanCheck = await req('POST', '/api/agent/project/validate', SESSION_TOKEN, {
     project: { id: 'clean_probe', name: 'clean_probe', files: [{ path: 'md/clean.xml', kind: 'md', content: cleanXml }] },
+    detail: 'full',
   });
   ok('wellformed_xml_produces_no_wellformedness_error',
-    (cleanCheck.json?.flat || []).filter(d => /wellformed/i.test(String(d.code || ''))).length === 0);
+    Array.isArray(cleanCheck.json?.flat) && !cleanCheck.json.flat.some(d => /wellformed/i.test(String(d.code || ''))));
 
   // Kimi R2 — a deliberate last-green baseline, never the editor's most recent poll.
   const deltaBaseProject = {
@@ -3835,7 +3837,7 @@ async function main() {
       content: 'AddUITriggeredEvent("validation_delta_probe", "event_" .. category)',
     }],
   };
-  const deltaDynamicCheck = await req('POST', '/api/agent/project/validate', SESSION_TOKEN, { project: deltaDynamicProject });
+  const deltaDynamicCheck = await req('POST', '/api/agent/project/validate', SESSION_TOKEN, { project: deltaDynamicProject, detail: 'full' });
   ok('dynamic_event_validation_reports_incomplete_coverage',
     deltaDynamicCheck.status === 200 && deltaDynamicCheck.json?.ok === true
       && deltaDynamicCheck.json?.evidence?.coverage?.complete === false
@@ -3850,6 +3852,14 @@ async function main() {
       && deltaDynamicRecord.json?.evidence?.coverage?.complete === false
       && fs.readFileSync(baselineFile, 'utf8') === recordedBaselineBytes,
     JSON.stringify({ status: deltaDynamicRecord.status, code: deltaDynamicRecord.json?.code, promotion: deltaDynamicRecord.json?.baselinePromotion }));
+  ok('default_validation_keeps_identity_and_counts_without_full_report',
+    deltaDynamicRecord.json?.detail === 'summary'
+      && /^[a-f0-9]{64}$/.test(deltaDynamicRecord.json?.resultId || '')
+      && deltaDynamicRecord.json?.resultId === deltaDynamicCheck.json?.resultId
+      && deltaDynamicRecord.json?.sourceHashScope === 'project-validation-inputs-v1'
+      && deltaDynamicRecord.json?.counts?.checkUnavailable > 0
+      && deltaDynamicRecord.json?.flat === undefined && deltaDynamicRecord.json?.evidence?.coverage?.gaps === undefined,
+    JSON.stringify({ detail: deltaDynamicRecord.json?.detail, counts: deltaDynamicRecord.json?.counts }));
   // This warning has complete static coverage. A dynamic event cannot stand in
   // for a fully checked warning when testing deliberate last-green promotion.
   const deltaWarningProject = {
@@ -3859,7 +3869,7 @@ async function main() {
       content: 'package.path = package.path .. ";extensions/?.lua"\n',
     }],
   };
-  const deltaAdded = await req('POST', '/api/agent/project/validate', SESSION_TOKEN, { project: deltaWarningProject });
+  const deltaAdded = await req('POST', '/api/agent/project/validate', SESSION_TOKEN, { project: deltaWarningProject, detail: 'full' });
   ok('validation_delta_reports_new_warning',
     deltaAdded.status === 200 && deltaAdded.json?.ok === true
       && deltaAdded.json?.evidence?.coverage?.complete === true
@@ -3873,7 +3883,7 @@ async function main() {
       && deltaWarningRecord.json?.evidence?.coverage?.complete === true
       && deltaWarningRecord.json?.baselinePromotion?.recorded === true,
     JSON.stringify(deltaWarningRecord.json?.baselinePromotion));
-  const deltaResolved = await req('POST', '/api/agent/project/validate', SESSION_TOKEN, { project: deltaBaseProject });
+  const deltaResolved = await req('POST', '/api/agent/project/validate', SESSION_TOKEN, { project: deltaBaseProject, detail: 'full' });
   ok('validation_delta_reports_resolved_warning',
     deltaResolved.status === 200 && deltaResolved.json?.validationDelta?.counts?.resolved > 0
       && deltaResolved.json?.validationDelta?.resolvedWarnings?.some(finding => finding.code === 'lua.broad_package_path' && finding.filePath === 'scripts/path_warning.lua'),

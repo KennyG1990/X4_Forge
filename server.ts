@@ -1032,7 +1032,7 @@ function ledgerMiddleware(req: express.Request, res: express.Response, next: exp
       // panel exists to prevent, so the findings are captured and the erroring files become the
       // row's files (which also makes the file filter work for validation rows).
       if (kind === 'validate' || kind === 'compile') {
-        const diagnostics = compactDiagnostics(captured);
+        const diagnostics = compactDiagnostics(res.locals.validationHistory ?? captured);
         if (diagnostics.length) {
           diagnosticsBlob = agentHistoryStore.putBlob(JSON.stringify(diagnostics, null, 2));
           diagnosticsCount = diagnostics.length;
@@ -1163,7 +1163,14 @@ app.use("/api", ledgerMiddleware);
 
 function projectApiInputMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
   try {
-    if (req.method === 'POST') validateProjectApiBody(req.path, req.body);
+    if (req.method === 'POST') {
+      if (req.path === '/api/agent/project/validate' && req.query.detail !== undefined
+        && req.body && typeof req.body === 'object' && !Array.isArray(req.body)) {
+        if (Object.hasOwn(req.body, 'detail')) throw new ValidationInputError('Set detail in the body or query, not both.');
+        req.body = { ...req.body, detail: req.query.detail };
+      }
+      validateProjectApiBody(req.path, req.body);
+    }
     // Canonical runtime owners retain their established input error codes.
     if (req.method === 'GET' && !req.path.startsWith('/api/agent/runtime-control') && req.path !== '/api/agent/runtime-debugger') {
       validateProjectApiQuery(req.path, req.query);
@@ -4271,9 +4278,10 @@ app.get("/api/agent/schema", (req, res) => {
         path: "/api/agent/project/validate",
         auth: true,
         body: { project: "ExtensionProject (inline)", fromPath: "or exact mod-folder path under a configured root", root: "workspace | filesystem", recordBaseline: "optional true; green validations only",
+          detail: "summary (default) | full", expectedResultId: "optional exact result ID; requires full detail",
           projectCheckSuiteReceiptId: "optional exact passing Dev suite for the addressed workspace folder",
           expectedProjectCheckSuiteReceiptHash: "required with suite ID", deployFormat: "loose | catalog; required with suite ID" },
-        purpose: "Run the shared full-project referee and compare warnings with the persisted last-green baseline. recordBaseline:true deliberately advances that baseline only when validation is green. Exact root forge.rules.json v1 may declare reviewed warning suppressions, known property chains, indexed wire keys, and expected Lua registrations; errors are never suppressible."
+        purpose: "Run the shared full-project referee, return a compact verdict by default, and compare warnings with the persisted last-green baseline. Request detail:full for layered diagnostics. recordBaseline:true deliberately advances the baseline only when validation is green. Exact root forge.rules.json v1 may declare reviewed warning suppressions, known property chains, indexed wire keys, and expected Lua registrations; errors are never suppressible."
       },
       {
         method: "POST",
@@ -9262,7 +9270,7 @@ function openProjectValidationProof(req: express.Request, res: express.Response,
   }
 }
 
-function validateProjectRequest(req: express.Request, res: express.Response, lease?: ProjectCheckSourceLease) {
+function validateProjectRequest(req: express.Request, res: express.Response, lease?: ProjectCheckSourceLease, canonical = false) {
   let subjectIdentity: { modId: string | null; sourceHash: string | null } = { modId: null, sourceHash: null };
   let verified: ReturnType<typeof openProjectValidationProof>;
   try {
@@ -9329,40 +9337,62 @@ function validateProjectRequest(req: express.Request, res: express.Response, lea
     const flat = flattenProjectValidation(result);
     const { contentHash, delta: validationDelta } = validationDeltaFor(project.id || project.name, project.files, flat);
     verified?.verify();
+    const evidence = result.evidence || subjectEvidence;
+    const identity = { modId: evidence.modId, sourceHash: evidence.sourceHash };
+    const { findings, coverage, ...evidenceScalars } = evidence;
+    const proof = coverage.projectVerification;
+    // The result ID identifies evidence, independent of response detail and last-green history.
+    const resultId = canonical ? undefined : crypto.createHash('sha256').update(JSON.stringify([
+      'project-validation-result-v1', evidenceScalars, result.ok, result.summary,
+      findings.map(finding => finding.findingId).sort(), coverage.gaps.map(gap => JSON.stringify(gap)).sort(),
+      proof && [proof.artifactHash, proof.suite.id, proof.suite.hash, proof.checks.map(check => check.receiptHash).sort()],
+    ])).digest('hex');
+    const compact = () => {
+      // The existing ledger bounds and redacts its sample independently of the wire projection.
+      res.locals.validationHistory = { flat };
+      const counts = { error: 0, warning: 0, info: 0, checkUnavailable: evidence.checkUnavailableCount };
+      for (const finding of findings) {
+        if (finding.category === 'mod-finding') counts[finding.severity]++;
+      }
+      const compactDrift = drift && { labelA: drift.labelA, labelB: drift.labelB, filesA: drift.filesA, filesB: drift.filesB,
+        identical: drift.identical, differing: drift.differing, onlyA: drift.onlyA, onlyB: drift.onlyB,
+        verdict: drift.verdict, newerSide: drift.newerSide, summary: drift.summary };
+      return {
+        ok: result.ok, ...identity, resultId, detail: 'summary', summary: result.summary, counts,
+        evidence: { ...evidenceScalars, coverage: { complete: coverage.complete,
+          ...(proof ? { projectVerification: { status: proof.status, suite: proof.suite, artifactHash: proof.artifactHash,
+            forgeComplete: proof.forgeComplete, checkCount: proof.checks.length, resolvedGapCount: proof.resolvedGaps.length } } : {}),
+        } },
+        source: source.mode === 'inline' ? source : { mode: source.mode, root: source.root,
+          loadedCount: source.loaded.length, skippedCount: source.skipped.length,
+          artifactHash: source.artifactHash, artifactScope: source.artifactScope },
+        validationDelta: { status: validationDelta.status, modId: validationDelta.modId,
+          currentContentHash: validationDelta.currentContentHash, counts: validationDelta.counts,
+          baseline: { ...validationDelta.baseline, reason: validationDelta.baseline.reason?.slice(0, 512) } },
+        ...(compactDrift ? { drift: compactDrift } : {}),
+      };
+    };
+    if (!canonical && req.body?.expectedResultId !== undefined && req.body.expectedResultId !== resultId) {
+      return res.status(409).json({ ...compact(), ok: false, code: 'VALIDATION_RESULT_CHANGED',
+        error: 'Validation evidence changed. Review the current result before requesting its full report.' });
+    }
     let baselinePromotion: ReturnType<typeof recordValidationBaseline> | undefined;
     if (req.body?.recordBaseline === true) {
       baselinePromotion = result.ok && result.evidence?.coverage.complete
         ? recordValidationBaseline(project.id || project.name, contentHash, flat)
         : { recorded: false, reason: 'Validation has active errors or incomplete coverage; the last-green baseline was not changed.' };
-      if ('reason' in baselinePromotion && result.ok) {
-        return res.status(409).json({
-          ...result,
-          ok: false,
-          modId: result.evidence?.modId ?? null,
-          sourceHash: result.evidence?.sourceHash ?? null,
-          flat,
-          capsules: buildRemediationCapsules(flat),
-          source,
-          validationDelta,
-          baselinePromotion,
-          code: 'VALIDATION_BASELINE_RECORD_FAILED',
-          error: baselinePromotion.reason,
-          ...(drift ? { drift } : {}),
-        });
-      }
     }
-    // B57s2: `capsules` = the SAME remediation packet the in-app repair loop feeds its
-    // model — one currency for our loop, the IDE, and external agents. Additive.
-    return res.json({
-      ...result,
-      modId: result.evidence?.modId ?? null,
-      sourceHash: result.evidence?.sourceHash ?? null,
-      flat,
-      capsules: buildRemediationCapsules(flat),
-      source,
-      validationDelta,
+    const full = canonical || req.body?.detail === 'full';
+    const baselineError = result.ok && baselinePromotion && 'reason' in baselinePromotion ? baselinePromotion.reason : undefined;
+    if (!full && baselinePromotion && 'reason' in baselinePromotion) {
+      baselinePromotion = { ...baselinePromotion, reason: baselinePromotion.reason.slice(0, 512) };
+    }
+    return res.status(baselineError !== undefined ? 409 : 200).json({
+      ...(full ? { ...result, ...identity, flat, capsules: buildRemediationCapsules(flat), source, validationDelta,
+        ...(drift ? { drift } : {}), ...(canonical ? {} : { detail: 'full', resultId }) } : compact()),
       ...(baselinePromotion ? { baselinePromotion } : {}),
-      ...(drift ? { drift } : {}),
+      ...(baselineError !== undefined ? { ok: false, code: 'VALIDATION_BASELINE_RECORD_FAILED',
+        error: full ? baselineError : baselineError.slice(0, 512) } : {}),
     });
   } catch (error) {
     if (error instanceof ValidationInputError) {
@@ -9387,7 +9417,7 @@ app.post("/api/agent/project/validate/check", (req, res) => {
     return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: `project.validate does not accept: ${unknown.join(', ')}` });
   }
   req.body = applyForgeCapabilityFixedBody('project.validate', req.body);
-  return validateProjectRequest(req, res);
+  return validateProjectRequest(req, res, undefined, true);
 });
 app.post("/api/agent/project/validate", coordinatedSourceOperation(validateProjectRequest));
 

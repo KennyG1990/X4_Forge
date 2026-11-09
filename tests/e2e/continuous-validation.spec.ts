@@ -21,7 +21,7 @@ test('native authoring uses the same project validator that feeds Antigravity di
   const validate = async (content: string) => {
     const response = await request.post(`${E2E_API_ORIGIN}/api/agent/project/validate`, {
       headers: { Authorization: `Bearer ${E2E_TOKEN}` },
-      data: { project: { id: 'native-validation', name: 'native-validation', files: [{ path: 'md/continuous.xml', kind: 'md', content }] } },
+      data: { project: { id: 'native-validation', name: 'native-validation', files: [{ path: 'md/continuous.xml', kind: 'md', content }] }, detail: 'full' },
     });
     expect(response.ok()).toBeTruthy();
     return response.json() as Promise<{ flat?: Array<{ severity: string; code: string; message: string }> }>;
