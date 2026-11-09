@@ -14,7 +14,7 @@ Dev adds explicit local Start with exact saved workspace, offline Studio state, 
 
 ### Steam adoption source ownership `in_progress` (GitHub #92)
 
-Dev limits source adoption to the physical authoring workspace, leaves installed-source staging and verification available, and checks the exact staged manifest from Verify. [Paired evidence](docs/plans/2026-11-09-steam-adoption-workspace-boundary.md). Public delivery and installed Release Center verification remain open. Port this correction into the 0.0.82 source selection before qualification.
+Dev limits source adoption to the physical authoring workspace, leaves installed-source staging and verification available, and checks the exact staged manifest from Verify. [Paired Dev evidence](docs/plans/2026-11-09-steam-adoption-workspace-boundary.md). The [0.0.82 source selection](docs/plans/2026-11-09-forge-082-steam-adoption-repin.md) also passed the 43-check scratch replay. Public delivery and installed Release Center verification remain open.
 
 ### Native deploy target identity preflight `in_progress` (GitHub #87)
 
