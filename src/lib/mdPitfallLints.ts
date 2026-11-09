@@ -43,7 +43,9 @@ import { assertXmlInputWithinLimits } from './xmlInputLimits';
 import type { SchemaIndex } from './xsdValidate';
 
 export interface MdPitfallFinding {
-  code: 'md_pitfall.products_existence' | 'md_pitfall.cancel_conversation_actor_or_template' | 'md_pitfall.ui_listener_one_shot' | 'md_pitfall.offer_accepted_keyword_cue' | 'md_pitfall.param3_table_barekey' | MdExpressionFinding['code'];
+  code: 'md_pitfall.products_existence' | 'md_pitfall.cancel_conversation_actor_or_template' | 'md_pitfall.ui_listener_one_shot'
+    | 'md_pitfall.offer_accepted_keyword_cue' | 'md_pitfall.param3_table_barekey' | 'md_pitfall.return_context'
+    | MdExpressionFinding['code'];
   severity: 'error' | 'warning';
   cue?: string;
   filePath?: string;
@@ -176,6 +178,16 @@ function enclosingNamedCue(element: Element): string | undefined {
   return names.length ? names.reverse().join('.') : undefined;
 }
 
+/** Only the nearest cue or library can own an ordinary actions branch. */
+function ordinaryMdActionOwner(action: Element): Element | undefined {
+  for (let branch = action, parent = branch.parentElement; parent; branch = parent, parent = parent.parentElement) {
+    if (parent.tagName === 'patch' || parent.tagName === 'on_abort' || parent.tagName === 'editable') return undefined;
+    if (parent.tagName === 'cue' || parent.tagName === 'library') {
+      return branch.tagName === 'actions' ? parent : undefined;
+    }
+  }
+}
+
 /**
  * Lint one MD file. `propertyUnion` (from the scriptproperty index) makes the param3
  * lint union-aware; without it the param3 lint stays conservative (identifier must
@@ -197,6 +209,20 @@ export function lintMdPitfalls(xml: string, opts: { propertyUnion?: Set<string>;
   // Non-MD and malformed XML produce no semantic finding here; structural/wellformedness validation owns those diagnostics.
   if (!element || element.nodeName !== 'mdscript' || parseError) return out;
   const root = element as unknown as ElementLike;
+
+  for (const action of Array.from(element.getElementsByTagName('return'))) {
+    const owner = ordinaryMdActionOwner(action);
+    if (!owner || (owner.tagName === 'library' && owner.getAttribute('purpose') === 'run_actions')) continue;
+    out.push({
+      code: 'md_pitfall.return_context',
+      severity: 'error',
+      filePath: opts.filePath,
+      cue: enclosingNamedCue(action),
+      line: action.lineNumber,
+      column: action.columnNumber,
+      detail: 'X4 rejects <return> in these MD actions. Returning to a caller requires a library declared with purpose="run_actions".',
+    });
+  }
 
   const offerOccurrences = new Map<string, number>();
   for (const event of Array.from(element.getElementsByTagName('event_offer_accepted'))) {
@@ -400,6 +426,32 @@ export function runMdPitfallSelftest(): {
   ok('literal TextDB shorthand is checked in AIScript with no other fast filter triggers',
     lintScriptExpressions('<aiscript><set_value exact="{$page,$id}"/></aiscript>', null).length === 1
     && lintScriptExpressions('<aiscript><set_value exact="readtext.{$page}.{$id}"/></aiscript>', null).length === 0);
+  const returnCode = 'md_pitfall.return_context';
+  const returnFindings = (xml: string) => lint(xml).filter(finding => finding.code === returnCode);
+  const ordinaryReturns = '    <cue name="Direct"><actions><do_if value="true"><return/><return/></do_if></actions></cue>';
+  const returns = returnFindings([
+    '<mdscript><cues>',
+    '    <!-- <cue name="Decoy"><actions><return/></actions></cue> -->',
+    ordinaryReturns,
+    '    <library name="Run" purpose="run_actions"><actions><return value="true"/></actions>',
+    '      <cues><cue name="Child"><actions><return/></actions></cue></cues></library>',
+    '    <library name="Include" purpose="include_actions"><actions><return/></actions></library>',
+    '    <library name="Default"><actions><return/></actions></library>',
+    '    <library name="Reference" purpose="cue_ref"><actions><return/></actions></library>',
+    '    <cue name="Caller"><actions><run_actions ref="Run" result="$Result"/><include_actions ref="Run"/></actions></cue>',
+    '    <cue name="Patch"><patch><return/></patch><force><return/></force></cue>',
+    '</cues></mdscript>',
+  ].join('\r\n'));
+  ok('ordinary returns use the nearest action owner and retain both same-line positions',
+    returns.map(finding => finding.cue).join(',') === 'Direct,Direct,Run.Child,Include,Default,Reference'
+      && returns.every(finding => finding.severity === 'error')
+      && returns[0].line === 3 && returns[1].line === 3
+      && returns[0].column === ordinaryReturns.indexOf('<return') + 1
+      && returns[1].column === ordinaryReturns.lastIndexOf('<return') + 1, returns);
+  ok('return context ignores partial diffs, AI scripts and malformed XML',
+    returnFindings('<diff><add sel="/mdscript/cues/cue/actions"><return/></add></diff>').length === 0
+    && returnFindings('<aiscript><actions><return/></actions></aiscript>').length === 0
+    && returnFindings('<mdscript><cue><actions><return/></invalid></cue></mdscript>').length === 0);
   const cancelFindingCode = 'md_pitfall.cancel_conversation_actor_or_template';
   const cancelFindings = (xml: string) => lint(xml).filter(f => f.code === cancelFindingCode);
 

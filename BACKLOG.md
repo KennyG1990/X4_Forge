@@ -14,9 +14,9 @@ Dev exposes the shared unsaved checker through an exact read/analyze capability 
 
 Dev checks standalone TextDB shorthand in unsaved HTTP, MCP, project validation and both native deploy entry points. [Isolated replay and game handoff](docs/plans/2026-11-09-textdb-expression-literals.md). The standalone engine witness is queued with Claude. Installed verification and public delivery remain open.
 
-### Mixed null-safe and existence lookup `in_progress` (GitHub #73, part of #74)
+### MD load diagnostics `in_progress` (GitHub #73, part of #74)
 
-Dev validation blocks the X4-witnessed mixed access in HTTP, MCP, full project validation and both native deploy entry points. [Isolated replay](docs/plans/2026-11-09-ff33-mixed-access.md). The rest of #73, installed verification, and public delivery remain open.
+Dev validation blocks the X4-witnessed mixed access and ordinary cue returns in both native deploy entry points. [Mixed access replay](docs/plans/2026-11-09-ff33-mixed-access.md) and [return context replay](docs/plans/2026-11-09-ff33-md-return-context.md). Library game controls, effective diff context, installed verification and public delivery remain open.
 
 ### Literal format diagnostics `in_progress` (GitHub #77, part of #74)
 
