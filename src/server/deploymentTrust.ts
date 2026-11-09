@@ -378,7 +378,7 @@ export function recordIncompleteDeployOutput(store: ActionReceiptStore, prepared
   return store.transition(prepared.id, {
     to: 'incomplete', at: new Date().toISOString(),
     validation: { ...prepared.validation, status: 'failed', code },
-    failure: { code }, rollbackStatus: 'available',
+    failure: { code, message: 'Forge withheld rollback because the target did not match its staged output.' }, rollbackStatus: 'failed',
     after: { outcome: 'partial', resources: deploymentAfterResources(prepared, fingerprint) },
   });
 }

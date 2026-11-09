@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "sourceFingerprint": "233937319d9799fdb27c3208f40a05ce64e06c01049c54000ec94f26aacfe9d8",
+  "sourceFingerprint": "848d4948c2f711093c4650be7d07012cdeda145aa970d9e0858ca18ee2f24298",
   "policy": "Every raw production filesystem mutation source is count-pinned here. Authoritative files use atomic sibling promotion; stronger tree, archive, append-log, SQLite, retention, ephemeral, and fixture contracts remain explicit exceptions.",
   "writers": [
     {
       "file": "server.ts",
-      "calls": { "writeFileSync": 48, "appendFileSync": 1, "renameSync": 17, "copyFileSync": 4, "mkdirSync": 40, "rmSync": 43, "rmdirSync": 1, "unlinkSync": 5, "chmodSync": 2, "mkdtempSync": 9 },
+      "calls": { "writeFileSync": 48, "appendFileSync": 1, "renameSync": 18, "copyFileSync": 4, "mkdirSync": 40, "rmSync": 43, "rmdirSync": 1, "unlinkSync": 5, "chmodSync": 2, "mkdtempSync": 9 },
       "categories": ["mixed", "authoritative-atomic", "verified-tree-transaction", "isolated-artifact-stage", "retention-cleanup", "fixture-only"],
       "owners": ["writeWorkspaceFileGuarded and fs/create", "snapshot create/prune/delete/restore", "copyRegularTree and synchronizeRegularTree", "replaceValidatedDeployment and recovery", "compileWorkspaceToFolder scratch cleanup", "replaceReleaseDirectory", "Nexus and Steam release handlers", "embedded route/artifact/workspace API selftests", "route-integration caller-key provider-dispatch marker"],
       "rationale": "The composition root contains guarded atomic source/snapshot writes, verified deployment/release directory transactions including bounded EXDEV quarantine-copy recovery with exact restore, isolated compilation/release materializers, bounded snapshot/artifact retention, and embedded scratch-only route and artifact tamper/restore fixtures including causal provider-dispatch evidence.",

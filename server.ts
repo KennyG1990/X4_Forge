@@ -12008,6 +12008,15 @@ function deploymentTargetFingerprint(targetPath: string): string {
   return regularTreeFingerprint(targetPath);
 }
 
+function observeDeploymentFingerprint(targetPath: string): string | undefined {
+  try { return deploymentTargetFingerprint(targetPath); }
+  catch { return undefined; }
+}
+
+function staleDeploymentRecovery(message = 'Recovery refused because deployed bytes changed after the recorded action.') {
+  return Object.assign(new Error(message), { code: 'RECOVERY_STALE' });
+}
+
 function deploymentTargetBindingHash(target: string, format: DeployFormat): string {
   const resolved = path.resolve(target);
   return trustHash([process.platform === 'win32' ? resolved.toLowerCase() : resolved, format]);
@@ -12174,7 +12183,7 @@ function removeEmptyDeploymentTransaction(root: string): void {
 }
 
 /** Exact regular-tree replacement used by a later deployment undo. */
-function replaceRegularTreeExact(sourceRoot: string, targetPath: string, hooks: DeploymentTransactionHooks = {}): void {
+function replaceRegularTreeExact(sourceRoot: string, targetPath: string, hooks: DeploymentTransactionHooks & { expectedTargetBeforeWrite: string }): void {
   const parent = path.dirname(targetPath);
   fs.mkdirSync(parent, { recursive: true });
   const rename = hooks.rename || ((oldPath: string, newPath: string) => fs.renameSync(oldPath, newPath));
@@ -12182,22 +12191,25 @@ function replaceRegularTreeExact(sourceRoot: string, targetPath: string, hooks: 
   const expectedFingerprint = regularTreeFingerprint(sourceRoot);
   const { root, stage, backup } = createDeploymentTransaction(targetPath, 'recovery-next');
   let movedOld = false;
+  let activated = false;
   try {
     copyRegularTree(sourceRoot, stage);
     verifyRegularTreeMirror(sourceRoot, stage);
+    hooks.beforeActivate?.();
     if (fs.existsSync(targetPath)) {
       try {
         rename(targetPath, backup);
         movedOld = true;
       } catch (error) {
         if (!isLockedRootRenameError(error)) throw error;
-        replaceLockedDeploymentInPlace(stage, backup, targetPath, expected, hooks);
+        replaceLockedDeploymentInPlace(stage, backup, targetPath, expected, hooks, expectedFingerprint);
         if (regularTreeFingerprint(targetPath) !== expectedFingerprint) throw new Error('Deployment recovery fingerprint did not verify after locked-root restore.');
         removeEmptyDeploymentTransaction(root);
         return;
       }
     }
     rename(stage, targetPath);
+    activated = true;
     verifyExpectedFiles(targetPath, expected);
     if (regularTreeFingerprint(targetPath) !== expectedFingerprint) throw new Error('Deployment recovery fingerprint did not verify after restore.');
     hooks.beforeFinalize?.();
@@ -12205,9 +12217,14 @@ function replaceRegularTreeExact(sourceRoot: string, targetPath: string, hooks: 
     try { if (fs.existsSync(stage)) fs.rmSync(stage, { recursive: true, force: true }); } catch { /* best effort */ }
     if (movedOld) {
       try {
-        if (fs.existsSync(targetPath)) fs.rmSync(targetPath, { recursive: true, force: true });
+        if (observeDeploymentFingerprint(backup) !== hooks.expectedTargetBeforeWrite
+          || (activated ? observeDeploymentFingerprint(targetPath) !== expectedFingerprint : pathHasEntry(targetPath))) {
+          throw staleDeploymentRecovery();
+        }
+        if (activated) fs.rmSync(targetPath, { recursive: true, force: true });
         if (fs.existsSync(backup)) rename(backup, targetPath);
       } catch (rollbackError) {
+        if ((rollbackError as NodeJS.ErrnoException)?.code === 'RECOVERY_STALE') throw rollbackError;
         throw new Error(`${error instanceof Error ? error.message : String(error)}; recovery rollback also failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
       }
     }
@@ -12269,12 +12286,12 @@ function restoreDeploymentRecovery(
   hooks: DeploymentTransactionHooks = {},
 ): { targetPath: string; restoredFingerprint: string; remainingBackup?: { path: string; manifestRetired: boolean } } {
   assertDeploymentRecoveryTarget(record, currentTargetRoot);
-  if (!pathHasEntry(record.targetPath)) throw new Error('Recovery refused because the deployed mod no longer exists.');
+  if (!pathHasEntry(record.targetPath)) throw staleDeploymentRecovery('Recovery refused because the deployed mod no longer exists.');
   const targetStat = fs.lstatSync(record.targetPath);
-  if (targetStat.isSymbolicLink() || !targetStat.isDirectory()) throw new Error('Recovery refused because the deployed mod target is not a regular directory.');
+  if (targetStat.isSymbolicLink() || !targetStat.isDirectory()) throw staleDeploymentRecovery('Recovery refused because the deployed mod target changed after the recorded action and is no longer a regular directory.');
   const currentFingerprint = regularTreeFingerprint(record.targetPath);
   if (currentFingerprint !== expectedCurrentHash) {
-    throw new Error(`Recovery refused because deployed bytes changed after the recorded action (expected ${expectedCurrentHash}, got ${currentFingerprint}).`);
+    throw staleDeploymentRecovery(`Recovery refused because deployed bytes changed after the recorded action (expected ${expectedCurrentHash}, got ${currentFingerprint}).`);
   }
 
   if (record.priorExisted) {
@@ -12284,6 +12301,10 @@ function restoreDeploymentRecovery(
     }
     let remainingBackup: { path: string; manifestRetired: boolean } | undefined;
     replaceRegularTreeExact(payload, record.targetPath, {
+      expectedTargetBeforeWrite: expectedCurrentHash,
+      beforeActivate: () => {
+        if (observeDeploymentFingerprint(record.targetPath) !== expectedCurrentHash) throw staleDeploymentRecovery();
+      },
       beforeFinalize: consume,
       onBackupCleanupFailure: (path, manifestRetired) => {
         if (!remainingBackup || (remainingBackup.manifestRetired && !manifestRetired)) {
@@ -12363,8 +12384,13 @@ function restoreDeploymentRecovery(
     return { targetPath: record.targetPath, restoredFingerprint: 'absent' };
   }
   if (pathHasEntry(record.targetPath)) {
-    try { fs.renameSync(quarantine, record.targetPath); } catch { /* reported by the invariant below */ }
-    throw new Error('First-deploy recovery could not remove the deployed target atomically.');
+    throw staleDeploymentRecovery();
+  }
+  if (observeDeploymentFingerprint(quarantine) !== currentFingerprint) {
+    try {
+      if (!pathHasEntry(record.targetPath)) fs.renameSync(quarantine, record.targetPath);
+    } catch { /* Keep the changed tree in quarantine if it cannot be put back safely. */ }
+    throw staleDeploymentRecovery();
   }
   try {
     consume?.();
@@ -12542,7 +12568,7 @@ function preservedDeploymentEntries(
 
 interface DeploymentTransactionHooks {
   onBackupCleanupFailure?: (backupPath: string, manifestRetired: boolean) => void;
-  onTargetWrite?: (state: 'mutated' | 'restored') => void;
+  onTargetWrite?: (state: 'mutated' | 'activated' | 'restored' | 'unconfirmed') => void;
   expectedTargetBeforeWrite?: string;
   onStagedFingerprint?: (fingerprint: string) => void;
   /** Recheck immutable source/approval authority immediately before target activation. */
@@ -12599,10 +12625,12 @@ function replaceLockedDeploymentInPlace(
   targetPath: string,
   expected: Array<{ path: string; size: number; sha256: string }>,
   hooks: DeploymentTransactionHooks,
+  stagedFingerprint?: string,
 ): void {
   const originalFingerprint = regularTreeFingerprint(targetPath);
   let backupVerified = false;
   let targetMutated = false;
+  let copyCompleted = false;
   try {
     copyRegularTree(targetPath, backup);
     hooks.afterFallbackBackupCopy?.(backup);
@@ -12616,6 +12644,8 @@ function replaceLockedDeploymentInPlace(
     targetMutated = true;
     hooks.onTargetWrite?.('mutated');
     synchronizeRegularTree(stage, targetPath);
+    copyCompleted = true;
+    hooks.onTargetWrite?.('activated');
     hooks.afterFallbackApply?.(targetPath);
     verifyExpectedFiles(targetPath, expected);
     verifyRegularTreeMirror(stage, targetPath);
@@ -12625,6 +12655,10 @@ function replaceLockedDeploymentInPlace(
       if (backupVerified && targetMutated && fs.existsSync(backup)) {
         if (regularTreeFingerprint(backup) !== originalFingerprint) {
           throw new Error('Locked-root backup changed before local rollback.');
+        }
+        if (copyCompleted && stagedFingerprint !== undefined && observeDeploymentFingerprint(targetPath) !== stagedFingerprint) {
+          hooks.onTargetWrite?.('unconfirmed');
+          throw staleDeploymentRecovery('Locked-root target changed after synchronization.');
         }
         synchronizeRegularTree(backup, targetPath);
         const restoredFingerprint = regularTreeFingerprint(targetPath);
@@ -12639,6 +12673,7 @@ function replaceLockedDeploymentInPlace(
       // Keep the prior copy when rollback cannot be verified. Its container
       // has no root manifest, so Forge's extension scan can ignore it.
       try { if (fs.existsSync(stage)) fs.rmSync(stage, { recursive: true, force: true }); } catch { /* reported below */ }
+      if ((rollbackError as NodeJS.ErrnoException)?.code === 'RECOVERY_STALE') throw rollbackError;
       throw new Error(
         `${error instanceof Error ? error.message : String(error)}; locked-root rollback also failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}` +
         (fs.existsSync(backup) ? `; the transaction backup remains at ${backup}` : ''),
@@ -12816,6 +12851,8 @@ function replaceValidatedDeployment(
   const { root, stage, backup } = createDeploymentTransaction(targetPath, 'next');
   const preservationOverrides: PreservationOverride[] = [];
   let movedOld = false;
+  let activated = false;
+  let stagedFingerprint: string | undefined;
   try {
     copyRegularTree(artifactRoot, stage);
     const targetExisted = fs.existsSync(targetPath);
@@ -12843,7 +12880,10 @@ function replaceValidatedDeployment(
         }
       }
     }
-    hooks.onStagedFingerprint?.(regularTreeFingerprint(stage));
+    if (hooks.onStagedFingerprint) {
+      stagedFingerprint = regularTreeFingerprint(stage);
+      hooks.onStagedFingerprint(stagedFingerprint);
+    }
     hooks.beforeActivate?.();
     if (targetExisted) {
       try {
@@ -12852,24 +12892,35 @@ function replaceValidatedDeployment(
         hooks.onTargetWrite?.('mutated');
       } catch (error) {
         if (!isLockedRootRenameError(error)) throw error;
-        replaceLockedDeploymentInPlace(stage, backup, targetPath, expected, hooks);
+        replaceLockedDeploymentInPlace(stage, backup, targetPath, expected, hooks, stagedFingerprint);
         removeEmptyDeploymentTransaction(root);
         return preservationOverrides;
       }
     }
     rename(stage, targetPath);
-    if (!movedOld) hooks.onTargetWrite?.('mutated');
+    activated = true;
+    hooks.onTargetWrite?.('activated');
     verifyExpectedFiles(targetPath, expected);
   } catch (error) {
+    if (stagedFingerprint !== undefined && activated && !movedOld
+      && observeDeploymentFingerprint(targetPath) !== stagedFingerprint) {
+      hooks.onTargetWrite?.('unconfirmed');
+      throw error;
+    }
     try { if (fs.existsSync(stage)) fs.rmSync(stage, { recursive: true, force: true }); } catch { /* best effort */ }
     if (movedOld) {
       try {
         if (hooks.expectedTargetBeforeWrite !== undefined
           && deploymentTargetFingerprint(backup) !== hooks.expectedTargetBeforeWrite) {
-          try { disposeDeploymentSibling(backup, {}); } catch { /* The durable recovery path still has its own snapshot. */ }
           throw new Error('Deployment backup changed before local rollback.');
         }
-        if (fs.existsSync(targetPath)) fs.rmSync(targetPath, { recursive: true, force: true });
+        const removeTarget = stagedFingerprint === undefined ? fs.existsSync(targetPath) : activated;
+        if (stagedFingerprint !== undefined && (activated
+          ? observeDeploymentFingerprint(targetPath) !== stagedFingerprint : pathHasEntry(targetPath))) {
+          hooks.onTargetWrite?.('unconfirmed');
+          throw new Error('Deployment target changed before local rollback.');
+        }
+        if (removeTarget) fs.rmSync(targetPath, { recursive: true, force: true });
         if (fs.existsSync(backup)) {
           rename(backup, targetPath);
           hooks.onTargetWrite?.('restored');
@@ -13830,6 +13881,22 @@ function runCompileArtifactSelftest() {
       firstFailureRolledBack = /receipt write failure/.test(String(error));
     }
     record('first-deploy receipt failure restores the deployed target', firstFailureRolledBack && regularTreeFingerprint(firstFailureTarget) === firstFailureFingerprint);
+    const changedFirstFile = path.join(firstFailureTarget, 'outside-owner.txt');
+    let changedFirstRefused = false;
+    let changedFirstConsumed = false;
+    try {
+      restoreDeploymentRecovery(firstFailureReady, deployRoot, firstFailureReady.expectedCurrentHash, recoveryStore,
+        () => { changedFirstConsumed = true; }, {
+          rename: (from, to) => {
+            atomicWriteFile(changedFirstFile, 'Intervening scratch writer');
+            fs.renameSync(from, to);
+          },
+        });
+    } catch (error) {
+      changedFirstRefused = (error as NodeJS.ErrnoException)?.code === 'RECOVERY_STALE';
+    }
+    record('first-deploy quarantine refuses a tree changed at rename without consuming recovery', changedFirstRefused
+      && !changedFirstConsumed && fs.existsSync(changedFirstFile) && fs.readFileSync(changedFirstFile, 'utf8') === 'Intervening scratch writer');
     recoveryStore.abandon(firstFailureReceipt.id);
     fs.rmSync(firstFailureTarget, { recursive: true, force: true });
 
@@ -13906,6 +13973,7 @@ function runCompileArtifactSelftest() {
       const attempts = { value: 0 };
       compileWorkspaceToFolder(imported.workspace, deployRoot, 'store', false, 'catalog', {
         rename: lockedRename('EBUSY', attempts),
+        onStagedFingerprint: () => undefined,
         afterFallbackApply: () => { throw new Error('simulated post-apply verification failure'); },
       });
     } catch (error) {
@@ -14028,6 +14096,31 @@ function runCompileArtifactSelftest() {
     } finally {
       try { fs.rmSync(stagingRoot, { recursive: true, force: true }); } catch { /* scratch cleanup */ }
     }
+
+    const beforeForeignWrite = regularTreeFingerprint(target);
+    let lockedBackup: string | undefined;
+    let changedOutputFingerprint: string | undefined;
+    const finalWrite = { state: '' };
+    let guardedFailure = false;
+    try {
+      compileWorkspaceToFolder(imported.workspace, deployRoot, 'store', false, 'catalog', {
+        rename: lockedRename('EBUSY', { value: 0 }),
+        onStagedFingerprint: () => undefined,
+        onTargetWrite: state => { finalWrite.state = state; },
+        afterFallbackBackupCopy: backupPath => { lockedBackup = backupPath; },
+        afterFallbackApply: changedTarget => {
+          atomicWriteFile(path.join(changedTarget, 'outside-owner.txt'), 'Intervening scratch writer');
+          changedOutputFingerprint = regularTreeFingerprint(changedTarget);
+          throw new Error('simulated outside write after locked-root synchronization');
+        },
+      });
+    } catch (error) {
+      guardedFailure = (error as NodeJS.ErrnoException)?.code === 'RECOVERY_STALE';
+    }
+    record('locked-root rollback refuses after a completed copy is changed', guardedFailure && finalWrite.state === 'unconfirmed');
+    record('locked-root refusal preserves both changed target and prior backup',
+      Boolean(changedOutputFingerprint && lockedBackup && regularTreeFingerprint(target) === changedOutputFingerprint
+        && observeDeploymentFingerprint(lockedBackup) === beforeForeignWrite));
   } catch (error) {
     record('artifact integration selftest completed', false, error instanceof Error ? error.stack || error.message : String(error));
   } finally {
@@ -14446,7 +14539,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
   let responseIdentity: Record<string, unknown> = { modId: null, sourceHash: null, artifactHash: null };
   let writeAttempted = false;
   let targetMatchesPreState = false;
-  const targetWrite: { state: 'untouched' | 'mutated' | 'restored' } = { state: 'untouched' };
+  const targetWrite: { state: 'untouched' | 'mutated' | 'activated' | 'restored' } = { state: 'untouched' };
   let outputUnconfirmed = false;
   let snapshot: DeploymentSnapshot | undefined;
   let nativeCheckProof: ReturnType<typeof openNativeProjectCheckProof> | undefined;
@@ -14484,7 +14577,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     return {
       state: writeAttempted ? 'attempted' : 'not-deployed',
       writeAttempted,
-      fidelityScope: writeAttempted && targetWrite.state === 'mutated' && !targetMatchesPreState ? 'attempted-deployment' : 'none',
+      fidelityScope: writeAttempted && ['mutated', 'activated'].includes(targetWrite.state) && !targetMatchesPreState ? 'attempted-deployment' : 'none',
     };
   };
   const failWith = (stageId: string, payload: Record<string, unknown>) => {
@@ -14497,6 +14590,27 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       deployment: deploymentFidelity(), ...payload };
   };
   let pendingDeployRecovery: DeploymentRecoveryRecord | undefined;
+  let stagedFingerprint: string | undefined;
+  const refuseUnconfirmedOutput = (fingerprint: string | undefined) => {
+    outputUnconfirmed = true;
+    // The retained recovery is evidence. Observing a tree cannot authorize replacing it.
+    pendingDeployRecovery = undefined;
+    const message = 'Deployment target changed or could not be verified after writes began. Forge left the destination as observed.';
+    check('bytes', 'Deployed bytes confirmed', 'fail', message);
+    if (deployReceipt && fingerprint && fingerprint !== 'absent') {
+      try {
+        deployReceipt = recordIncompleteDeployOutput(actionReceiptStore, deployReceipt, fingerprint);
+        captureActionReceiptProjection(req, deployReceipt);
+      } catch {
+        return res.status(507).json(failWith('bytes', {
+          code: 'DEPLOY_RECEIPT_UNAVAILABLE', error: message + ' The incomplete receipt could not be finalized.', bytesConfirmed: false,
+        }));
+      }
+    }
+    return res.status(409).json(failWith('bytes', {
+      code: 'DEPLOY_OUTPUT_CHANGED', error: message, bytesConfirmed: false, deployRecord: deployReceipt,
+    }));
+  };
   try {
     const body = req.body;
     const allowed = new Set(['path', 'root', 'workspace', 'dryRun', 'deployFormat', 'autoReimport', 'allowStaleOverwrite',
@@ -15075,7 +15189,6 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       const stagingRoot = path.join(modWorkspacePath, '.forge-builds', 'loose');
       stagingPath = compileWorkspaceToFolder(ws, stagingRoot, 'store', true, 'loose', { beforeActivate: assertWriteAuthority }, frozenPlan);
     }
-    let stagedFingerprint: string | undefined;
     let stagedRecovery: DeploymentRecoveryRecord | undefined;
     const deployedPath = compileWorkspaceToFolder(ws, extensionsPath, 'store', false, deployFormat, {
       beforeActivate: () => {
@@ -15092,7 +15205,10 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
         stagedFingerprint = fingerprint;
       },
       expectedTargetBeforeWrite: targetFingerprint,
-      onTargetWrite: state => { targetWrite.state = state; },
+      onTargetWrite: state => {
+        if (state === 'unconfirmed') outputUnconfirmed = true;
+        else targetWrite.state = state;
+      },
     }, frozenPlan);
     const formatReport = describeDeployFormat(deployFormat, lastArtifactReport);
 
@@ -15122,30 +15238,9 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     try { output = inspectOutput(); }
     catch (error) { inspectionFailure = error; }
 
-    let deployedFingerprint: string | undefined;
-    try { deployedFingerprint = deploymentTargetFingerprint(deployedPath); }
-    catch { /* An unobservable target cannot support a terminal output receipt. */ }
+    const deployedFingerprint = observeDeploymentFingerprint(deployedPath);
     if (!deployedFingerprint || deployedFingerprint === 'absent' || deployedFingerprint !== stagedFingerprint) {
-      const recovery = pendingDeployRecovery;
-      outputUnconfirmed = true;
-      // Do not restore over an intervening writer, including if reporting this refusal throws.
-      pendingDeployRecovery = undefined;
-      const message = 'Deployment output changed or could not be verified after activation. Forge left the destination as observed.';
-      check('bytes', 'Deployed bytes confirmed', 'fail', message);
-      if (deployedFingerprint && deployedFingerprint !== 'absent') {
-        try {
-          destructiveRecoveryStore.finalizeDeployment(recovery.id, deployedFingerprint);
-          deployReceipt = recordIncompleteDeployOutput(actionReceiptStore, deployReceipt, deployedFingerprint);
-          captureActionReceiptProjection(req, deployReceipt);
-        } catch {
-          return res.status(507).json(failWith('bytes', {
-            code: 'DEPLOY_RECEIPT_UNAVAILABLE', error: message + ' The incomplete receipt could not be finalized.', bytesConfirmed: false,
-          }));
-        }
-      }
-      return res.status(409).json(failWith('bytes', {
-        code: 'DEPLOY_OUTPUT_CHANGED', error: message, bytesConfirmed: false, deployRecord: deployReceipt,
-      }));
+      return refuseUnconfirmedOutput(deployedFingerprint);
     }
 
     if (!output) throw inspectionFailure;
@@ -15349,21 +15444,26 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
           destructiveRecoveryStore.abandon(pendingDeployRecovery.id);
           rollback = { applied: true, detail: 'The deployment transaction already restored the target.' };
         } else {
-          const currentFingerprint = deploymentTargetFingerprint(pendingDeployRecovery.targetPath);
+          const currentFingerprint = observeDeploymentFingerprint(pendingDeployRecovery.targetPath);
+          if (outputUnconfirmed || (currentFingerprint !== pendingDeployRecovery.beforeFingerprint
+            && (targetWrite.state !== 'activated' || !stagedFingerprint || currentFingerprint !== stagedFingerprint))) {
+            return refuseUnconfirmedOutput(currentFingerprint);
+          }
           if (currentFingerprint === pendingDeployRecovery.beforeFingerprint) {
             targetMatchesPreState = true;
             destructiveRecoveryStore.abandon(pendingDeployRecovery.id);
             rollback = { applied: false, detail: 'The target already matches the pre-deploy snapshot.' };
-          } else if (currentFingerprint !== 'absent') {
-            const restored = restoreDeploymentRecovery(pendingDeployRecovery, pendingDeployRecovery.targetRoot, currentFingerprint);
+          } else if (stagedFingerprint) {
+            const restored = restoreDeploymentRecovery(pendingDeployRecovery, pendingDeployRecovery.targetRoot, stagedFingerprint);
             targetMatchesPreState = true;
             destructiveRecoveryStore.abandon(pendingDeployRecovery.id);
             rollback = { applied: true, detail: `The exceptional deploy was rolled back to ${restored.restoredFingerprint}.` };
-          } else {
-            rollback = { applied: false, detail: 'The deploy failed with its target missing; automatic recovery refused because no post-state hash could be proven.' };
           }
         }
       } catch (rollbackError) {
+        if (pendingDeployRecovery && (rollbackError as NodeJS.ErrnoException)?.code === 'RECOVERY_STALE') {
+          return refuseUnconfirmedOutput(observeDeploymentFingerprint(pendingDeployRecovery.targetPath));
+        }
         rollback = { applied: false, detail: `Automatic recovery also failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}` };
       }
     }
