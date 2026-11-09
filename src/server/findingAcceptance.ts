@@ -18,6 +18,8 @@ export interface AcceptanceSubject {
   corpusHash: string;
   /** Hash of the resolved deployment target identity, not a caller-provided folder label. */
   targetHash: string;
+  /** Exact deployment attempt proof; remembered warning evidence uses the stable validator hash. */
+  projectCheckProof?: { id: string; hash: string };
   /** Server-owned context; never accept history or scope from a request body. */
   warningReviews?: { scopeHash: string; history: readonly ActionReceipt[]; invocationId: string };
 }
@@ -118,6 +120,7 @@ export function acceptanceBinding(subject: AcceptanceSubject) {
     evidenceVersion: evidence.version,
     findings: evidence.findings.map(f => [f.findingId, f.category, f.severity]).sort(),
     coverage: { complete: evidence.coverage.complete, gaps: evidence.coverage.gaps.map(gap => JSON.stringify(gap)).sort() },
+    ...(subject.projectCheckProof ? { projectCheckProof: subject.projectCheckProof } : {}),
     ...(subject.warningReviews ? { reviewScopeHash: subject.warningReviews.scopeHash,
       revocations: revocations(subject).map(r => r.id).sort() } : {}),
   };

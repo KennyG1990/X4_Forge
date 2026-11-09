@@ -171,17 +171,38 @@ export function prepareDeployRecord(
   beforeFingerprint: string,
   validatedArtifactHash?: string,
   identity = deployReceiptIdentity(principal),
+  projectCheckSuite?: { id: string; hash: string },
 ): ActionReceipt {
-  if (approvals.length > 127) throw new Error('At most 127 finding approvals fit a deployment record.');
+  const maxApprovals = projectCheckSuite ? 126 : 127;
+  if (approvals.length > maxApprovals) throw new Error(`At most ${maxApprovals} finding approvals fit a deployment record.`);
   const target = { role: 'deploy' as const, root: 'extensions', relativePath: subject.evidence.modId!,
     beforeHash: trustHash(beforeFingerprint) };
   const resources = [target, ...approvals.map(receipt => ({ role: 'data' as const,
     root: 'action-receipts', relativePath: `${receipt.id}.json`, beforeHash: receipt.hash }))];
+  const requestFacts: unknown[] = [decision.binding.hash, approvals.map(receipt => receipt.hash)];
+  if (projectCheckSuite) {
+    const mismatch = () => Object.assign(new Error('The passing project check suite receipt does not match this deployment.'), {
+      code: 'PROJECT_CHECK_SUITE_MISMATCH',
+    });
+    if (!/^ar_[a-f0-9]{64}$/.test(projectCheckSuite.id) || !/^[a-f0-9]{64}$/.test(projectCheckSuite.hash)) {
+      throw mismatch();
+    }
+    const suite = store.read(projectCheckSuite.id);
+    if (suite.hash !== projectCheckSuite.hash || suite.status !== 'committed'
+      || !('id' in suite.capability) || suite.capability.id !== 'project-check.suite' || suite.capability.version !== '1'
+      || suite.validation.status !== 'passed' || suite.validation.code !== 'PROJECT_CHECK_SUITE_PASSED'
+      || suite.after?.outcome !== 'applied' || suite.metadata?.modId !== subject.evidence.modId
+      || !validatedArtifactHash || suite.metadata?.artifactHash !== validatedArtifactHash) {
+      throw mismatch();
+    }
+    resources.push({ role: 'data', root: 'project-check-suite-receipts', relativePath: `${suite.id}.json`, beforeHash: suite.hash });
+    requestFacts.push({ id: suite.id, hash: suite.hash });
+  }
   const { receipt, created } = store.prepareWithDisposition({
     ...identity,
     authority: { ...identity.authority, resources },
     effects: { declared: [{ id: 'deploy', operation: 'replace', resource: target, reversible: true }] },
-    input: { requestHash: trustHash([decision.binding.hash, approvals.map(r => r.hash)]), beforeHash: target.beforeHash },
+    input: { requestHash: trustHash(requestFacts), beforeHash: target.beforeHash },
     validation: { validator: 'deployment-trust-v1', ruleHash: subject.validatorHash },
     rollback: { required: true, mode: 'recovery', reference: recoveryId },
     metadata: { operation: 'deploy', ...Object.fromEntries(Object.entries(decision.binding).filter(([k]) => k !== 'hash')),

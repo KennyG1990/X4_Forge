@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceFingerprint": "9de9644562bb4c79bf10e1162ae83ea3d2b027a75f9b627c9f11182abd0ea267",
+  "sourceFingerprint": "19d660c05a9a674672310b531a3c03764aab5fa556632353d4d93df36dda3b6d",
   "policy": "Every raw production filesystem mutation source is count-pinned here. Authoritative files use atomic sibling promotion; stronger tree, archive, append-log, SQLite, retention, ephemeral, and fixture contracts remain explicit exceptions.",
   "writers": [
     {
@@ -361,7 +361,15 @@
         "captureDeploymentSnapshot"
       ],
       "rationale": "Prior private exact-byte deployment snapshot materializes and verifies an owned temporary payload before validation and activation.",
-      "failureContract": "Only its uniquely created temporary root is disposed; source/game paths are not cleanup targets. Snapshot mismatch refuses deployment."
+      "failureContract": "Check the original physical directory identity before verification and disposal. Refuse a replaced payload or cleanup root. Source and game paths are never cleanup targets."
+    },
+    {
+      "file": "src/server/projectCheckSetup.ts",
+      "calls": { "mkdirSync": 1, "rmSync": 1, "writeSync": 1, "mkdtempSync": 1 },
+      "categories": ["isolated-artifact-stage"],
+      "owners": ["freezeProjectCheckSetup", "openStagedFile"],
+      "rationale": "Stage the exact approved harness and explicitly listed runtime inputs from the same bounded reads that establish their hashes. Use a unique runner-owned directory outside both source roots.",
+      "failureContract": "Fail on drift, invalid or linked inputs, missing approved identity, and inventory or byte changes. Dispose only the original scratch root; refuse to remove a replacement directory."
     },
     {
       "file": "src/server/runtimeControl.ts",
@@ -519,12 +527,23 @@
       "file": "src/server/sharedSourceCoordinator.ts",
       "category": "sqlite-transaction",
       "owners": ["SharedSourceCoordinator.open", "SharedSourceCoordinator.transaction", "SharedSourceCoordinator.claims", "SharedSourceCoordinator.run"],
-      "failureContract": "A dedicated local registry uses immediate SQLite transactions for schema initialization and atomic all-resource queue/claim/release changes. Unknown schema, corrupt data, unavailable native binding and storage failure refuse protected work; no cache fallback or schema reset is allowed. Only confirmed-dead processes are reclaimed; active owners never expire by age. Exact request/instance release failure retains conservative ownership and preserves both operation and cleanup errors.",
-      "mutationStatements": 5,
-      "transactionCalls": 6,
-      "statementRuns": 5,
-      "execCalls": 1,
+      "failureContract": "A dedicated local registry uses immediate SQLite transactions for schema initialization and atomic all-resource queue, claim, guard and release changes. Migration retains legacy rows and defers while a live or unknown old owner remains. Unknown schema, corrupt data, unavailable native binding and storage failure refuse protected work. An admitted check stays claimed across backend death until its helper proves drain and exits. Active owners never expire by age. Exact request or instance release failure retains ownership conservatively and preserves both operation and cleanup errors.",
+      "mutationStatements": 10,
+      "transactionCalls": 8,
+      "statementRuns": 7,
+      "execCalls": 2,
       "pragmaCalls": 7
+    },
+    {
+      "file": "src/server/projectCheckLeaseWorker.py",
+      "category": "sqlite-transaction",
+      "owners": ["projectCheckLeaseWorker._transition"],
+      "failureContract": "A trusted one-command worker opens the existing coordination registry and admits or drains only its exact active claim in a FULL synchronous immediate transaction. Storage or scope mismatch prevents launch. Completed cleanup waits for brief writer contention within the busy timeout. Unconfirmed cleanup preserves the running claim even when backend output is lost.",
+      "mutationStatements": 1,
+      "transactionCalls": 1,
+      "statementRuns": 0,
+      "execCalls": 9,
+      "pragmaCalls": 4
     }
   ]
 }

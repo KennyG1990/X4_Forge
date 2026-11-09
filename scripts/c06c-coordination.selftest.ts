@@ -349,6 +349,41 @@ try {
     } finally { registry.close(); }
   }
 
+  const migrationOwner = process.pid + 10_000;
+  let legacyOwnerLiveness: 'alive' | 'dead' | 'unknown' = 'unknown';
+  const upgrade = coordinator('legacy-migration', { liveness: pid => pid === migrationOwner ? legacyOwnerLiveness : 'unknown' });
+  fs.mkdirSync(path.dirname(upgrade.filename));
+  const legacy = new Database(upgrade.filename);
+  try {
+    legacy.exec(`CREATE TABLE claims (
+      sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+      id TEXT NOT NULL UNIQUE, instance_id TEXT NOT NULL, pid INTEGER NOT NULL,
+      keys_json TEXT NOT NULL, owner_json TEXT NOT NULL,
+      queued_at TEXT NOT NULL, started_at TEXT,
+      state TEXT NOT NULL CHECK (state IN ('waiting', 'active'))
+    ); PRAGMA application_id = 0x58345343; PRAGMA user_version = 1;`);
+    const timestamp = new Date().toISOString();
+    legacy.prepare("INSERT INTO claims (id,instance_id,pid,keys_json,owner_json,queued_at,started_at,state) VALUES (?,?,?,?,?,?,?,'active')")
+      .run(randomUUID(), randomUUID(), migrationOwner, JSON.stringify([key]),
+        JSON.stringify({ actor: 'legacy-owner', operation: 'write' }), timestamp, timestamp);
+    const before = legacy.prepare('SELECT * FROM claims').all();
+    for (const liveness of ['unknown', 'alive'] as const) {
+      legacyOwnerLiveness = liveness;
+      check(`v1 migration defers for a ${liveness} owner and preserves claims`, () => {
+        assert.match(upgrade.status([key]).reason!, /live or unconfirmed owner/);
+        assert.equal(legacy.pragma('user_version', { simple: true }), 1);
+        assert.deepEqual(legacy.prepare('SELECT * FROM claims').all(), before);
+      });
+    }
+    legacyOwnerLiveness = 'dead';
+    await upgrade.run([key], { actor: 'upgraded', operation: 'write' }, () => {
+      assert.equal(legacy.pragma('user_version', { simple: true }), 2);
+      assert.deepEqual(upgrade.status([key]).active.map(claim => claim.owner.actor), ['upgraded']);
+      checks.push('v1 confirmed-dead claim permits guarded schema migration and ordinary work');
+    });
+    assert.deepEqual(legacy.prepare('SELECT * FROM claims').all(), []);
+  } finally { legacy.close(); }
+
   const future = coordinator('future'); assert.equal(future.status([key]).available, true); future.close();
   const database = new Database(path.join(root, 'future', SOURCE_COORDINATION_FILENAME)); database.pragma('user_version = 999'); database.close();
   const unsupported = coordinator('future');

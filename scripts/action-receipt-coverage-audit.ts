@@ -698,7 +698,8 @@ function defaultSurfacePolicy(
     );
   }
   if (surface.id === 'filesystem-writer:src/server/sharedSourceCoordinator.ts'
-    || surface.id === 'sqlite:src/server/sharedSourceCoordinator.ts') {
+    || surface.id === 'sqlite:src/server/sharedSourceCoordinator.ts'
+    || surface.id === 'sqlite:src/server/projectCheckLeaseWorker.py') {
     // This is an authoritative coordination registry, not the disposable SQL
     // cache. This required policy is not a claim that its adapter is wired.
     return surfacePolicy('durable-local-mutation', 'receipt-required', ['filesystem-write'], 'W3B1');

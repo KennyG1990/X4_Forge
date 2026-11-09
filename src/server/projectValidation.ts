@@ -57,6 +57,10 @@ import {
   PROJECT_RULES_MAX_BYTES,
   type ProjectRulesEvaluation,
 } from "../lib/projectRules";
+import {
+  decodeProjectCheckManifest, inspectProjectCheckProposal, PROJECT_CHECKS_MAX_BYTES, PROJECT_CHECKS_PATH,
+  type ProjectCheckInspection,
+} from "./projectCheckProposal";
 import { getAiOrderParamTypes, getAiSchemaIndex, getScriptPropertyIndex } from "./validationRoutes";
 import { buildValidationEvidence, type ValidationCoverageGap, type ValidationEvidence, type ValidationSourceLocation } from '../lib/validationEvidence';
 import { createBoundedAnalysisCache } from '../lib/x4UiAnalysisCache';
@@ -176,6 +180,7 @@ export interface ProjectValidationResult {
   references: { available: boolean; findings: ReferenceLiteralFinding[] };
   /** Mod-declared validation truth from exact root forge.rules.json. */
   rules: ProjectRulesEvaluation;
+  projectChecks?: ProjectCheckInspection;
   /** Read-only application of each project <diff> against base + dependency-ordered official DLCs. */
   diffSimulation: {
     files: Array<{
@@ -242,6 +247,11 @@ export function runProjectValidation(
   };
   const coverageGaps: ValidationCoverageGap[] = [];
   const parsedRules = parseProjectRules(project);
+  const projectChecks = inspectProjectCheckProposal(project.files);
+  if (projectChecks?.status === 'proposed') {
+    coverageGaps.push({ check: 'project-checks.execution', filePath: PROJECT_CHECKS_PATH,
+      reason: 'Project checks were declared. No approved execution verdict is available.' });
+  }
   const structure = validateProjectStructure(project);
 
   // B82 / B93.10 — XML WELL-FORMEDNESS RUNS FIRST, ALWAYS.
@@ -589,7 +599,7 @@ export function runProjectValidation(
   const result: ProjectValidationResult = {
     ok: structuralErrors === 0 && cueIndex.unresolved.length === 0 && crossFile.ok
       && schemaErrors === 0 && aiscriptErrors === 0 && mdPitfallErrors === 0 && diffErrors === 0 && rules.valid
-      && luaErrors === 0,
+      && luaErrors === 0 && projectChecks?.status !== 'invalid',
     summary: {
       files: project.files.length,
       luaFiles: lua.filesScanned,
@@ -651,6 +661,7 @@ export function runProjectValidation(
     godMacros: { findings: godFindings },
     references: { available: !!references, findings: referenceFindings },
     rules,
+    ...(projectChecks ? { projectChecks } : {}),
     diffSimulation: { files: diffSimulation },
   };
   const appliedRules = applyProjectRuleSuppressions(rules, flattenProjectValidationRaw(result));
@@ -774,6 +785,9 @@ function flattenProjectValidationRaw(result: ProjectValidationResult): FlatProje
   }
   for (const finding of result.rules.findings) {
     out.push({ severity: finding.severity, code: finding.code, filePath: finding.filePath, sourceRef: finding.sourceRef, message: finding.message });
+  }
+  if (result.projectChecks?.status === 'invalid') {
+    out.push({ severity: 'error', code: 'project-checks.invalid', filePath: PROJECT_CHECKS_PATH, message: result.projectChecks.error });
   }
   // De-dupe identical findings that reach the flat view via two layers (the cross-file
   // validator re-reports structure issues under its own code — same message, same file).
@@ -1014,6 +1028,33 @@ export function loadProjectFromDisk(rootDir: string, id?: string): DiskProjectLo
     catch { skipped.push({ path: path.relative(root, dir).replace(/\\/g, '/') || '.', reason: 'Directory could not be enumerated; validation inventory is incomplete.' }); return; }
     for (const e of entries) {
       const abs = path.join(dir, e.name);
+      if (dir === root && e.name.toLowerCase() === PROJECT_CHECKS_PATH) {
+        let content: string | undefined;
+        if (e.isFile()) {
+          try {
+            const fd = fs.openSync(abs, 'r');
+            try {
+              const before = fs.fstatSync(fd);
+              if (before.isFile() && before.size <= PROJECT_CHECKS_MAX_BYTES) {
+                const bytes = Buffer.alloc(before.size + 1);
+                let length = 0;
+                while (length < bytes.length) {
+                  const count = fs.readSync(fd, bytes, length, bytes.length - length, null);
+                  if (!count) break;
+                  length += count;
+                }
+                const after = fs.fstatSync(fd);
+                if (length === before.size && after.size === before.size && after.mtimeMs === before.mtimeMs) {
+                  content = decodeProjectCheckManifest(bytes.subarray(0, length));
+                }
+              }
+            } finally { fs.closeSync(fd); }
+          } catch { /* Preserve the declaration as present but invalid. */ }
+        }
+        files.push({ path: e.name, kind: 'other', content });
+        loaded.push(e.name);
+        continue;
+      }
       if (e.isDirectory()) {
         if (LOAD_SKIP_DIRS.has(e.name.toLowerCase())) continue;
         walk(abs);

@@ -9,7 +9,10 @@ const sourceRoots = [path.join(root, "src"), path.join(root, "vscode-extension",
 const topLevelSources = [path.join(root, "server.ts")];
 // Source discovery is independent of the manifest: deleting a registration must
 // fail the audit, not silently opt this authoritative SQL owner out of scanning.
-const additionalDatabaseSources = ["src/server/sharedSourceCoordinator.ts"];
+const additionalDatabaseSources = [
+  "src/server/sharedSourceCoordinator.ts",
+  "src/server/projectCheckLeaseWorker.py",
+];
 const DATABASE_COUNT_KEYS = ["mutationStatements", "transactionCalls", "statementRuns", "execCalls", "pragmaCalls"];
 
 const CALL_PATTERNS = {
@@ -130,13 +133,14 @@ function scanSourceText(file, rawText) {
 
 function scanDatabaseSource(file) {
   const text = canonicalizeEol(fs.readFileSync(file, "utf8"));
+  const python = file.endsWith(".py");
   return {
     file: relative(file),
-    mutationStatements: countMatches(text, /\b(?:INSERT(?:\s+OR\s+IGNORE)?\s+INTO|UPDATE|DELETE\s+FROM|DROP\s+TABLE|CREATE\s+TABLE|VACUUM)\b/gi),
-    transactionCalls: countMatches(text, /\.transaction\s*\(/g),
+    mutationStatements: countMatches(text, /\b(?:INSERT(?:\s+OR\s+IGNORE)?\s+INTO|UPDATE|DELETE\s+FROM|(?:DROP|CREATE|ALTER)\s+TABLE|VACUUM)\b/gi),
+    transactionCalls: countMatches(text, python ? /\.execute\(\s*"BEGIN IMMEDIATE"/g : /\.transaction\s*\(/g),
     statementRuns: countMatches(text, /\.run\s*\(/g),
-    execCalls: countMatches(text, /\.exec\s*\(/g),
-    pragmaCalls: countMatches(text, /\.pragma\s*\(/g),
+    execCalls: countMatches(text, python ? /\.execute\s*\(/g : /\.exec\s*\(/g),
+    pragmaCalls: countMatches(text, python ? /\.execute\(\s*"PRAGMA\b/g : /\.pragma\s*\(/g),
   };
 }
 

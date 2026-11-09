@@ -2807,10 +2807,28 @@
       ]
     },
     {
+      "id": "filesystem-writer:src/server/projectCheckSetup.ts",
+      "kind": "filesystem-writer",
+      "owner": "freezeProjectCheckSetup | openStagedFile",
+      "sourceRef": "config/durable-writers.json#/writers/43",
+      "integrationBatch": "W3B2",
+      "semanticClass": "durable-local-mutation",
+      "policy": "receipt-required",
+      "effects": [
+        "filesystem-write",
+        "package"
+      ],
+      "authorityScopes": [
+        "global",
+        "profile",
+        "workspace"
+      ]
+    },
+    {
       "id": "filesystem-writer:src/server/runtimeControl.ts",
       "kind": "filesystem-writer",
       "owner": "RuntimeControl.safeDirectory | RuntimeControl.request",
-      "sourceRef": "config/durable-writers.json#/writers/43",
+      "sourceRef": "config/durable-writers.json#/writers/44",
       "integrationBatch": "W3B1",
       "semanticClass": "durable-local-mutation",
       "policy": "receipt-required",
@@ -2844,7 +2862,7 @@
       "id": "filesystem-writer:src/server/sharedSourceCoordinator.ts",
       "kind": "filesystem-writer",
       "owner": "SharedSourceCoordinator",
-      "sourceRef": "config/durable-writers.json#/writers/44",
+      "sourceRef": "config/durable-writers.json#/writers/45",
       "integrationBatch": "W3B1",
       "semanticClass": "durable-local-mutation",
       "policy": "receipt-required",
@@ -3201,6 +3219,23 @@
       "integrationBatch": "W3B0-internal",
       "semanticClass": "fixture-cache",
       "policy": "separately-governed",
+      "effects": [
+        "filesystem-write"
+      ],
+      "authorityScopes": [
+        "global",
+        "profile",
+        "workspace"
+      ]
+    },
+    {
+      "id": "sqlite:src/server/projectCheckLeaseWorker.py",
+      "kind": "sqlite",
+      "owner": "projectCheckLeaseWorker._transition",
+      "sourceRef": "config/durable-writers.json#/additionalDatabases/1",
+      "integrationBatch": "W3B1",
+      "semanticClass": "durable-local-mutation",
+      "policy": "receipt-required",
       "effects": [
         "filesystem-write"
       ],

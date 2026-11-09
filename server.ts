@@ -114,6 +114,9 @@ import { getCanonicalReferenceCorpus, getCanonicalReferenceSets, initializeRefer
 import { registerBulkTransformRoutes } from "./src/server/bulkTransformRoutes";
 import { computeModDrift, fingerprintModFolder, flattenProjectValidation, getSchemaIndex, loadProjectFromDisk, runProjectValidation } from "./src/server/projectValidation";
 import { captureDeploymentSnapshot, type DeploymentSnapshot } from './src/server/deploymentSnapshot';
+import { PROJECT_CHECKS_MAX_BYTES, PROJECT_CHECKS_PATH } from './src/server/projectCheckProposal';
+import { projectCheckApprovalCoordinationKey } from './src/server/projectCheckApproval';
+import { openNativeProjectCheckProof } from './src/server/projectCheckNativeProof';
 import { buildValidationEvidence, parseValidationProject, ValidationInputError, type ValidationSourceLocation } from './src/lib/validationEvidence';
 import { runX4UiIntegrationSelftest } from "./src/server/x4UiIntegration.selftest";
 import { buildRemediationCapsules, runAgentLoopSelftest, runRepairLoop, type LoopDiagnostic } from "./src/lib/agentLoop";
@@ -227,7 +230,7 @@ import { runBugReportSelftest } from "./src/lib/bugReport";
 import { generatedOutputVerdict, normalizeApiFailureBody, runApiFailureEnvelopeSelftest } from "./src/lib/apiFailureEnvelope";
 import { projectApiEnvelope, projectApiSubject, fileApiSubject, workspaceApiSubject, pastedLogApiSubject, releaseReportApiSubject, validateProjectApiBody, validateProjectApiQuery, validateWorkspaceCreateBody, validateWorkspaceMutationBody, type ApiSubject } from './src/server/projectApiContract';
 import { canonicalSourceKey } from './src/server/resourceCoordinator';
-import { forgeSourceCoordinator } from './src/server/sharedSourceCoordinator';
+import { forgeSourceCoordinator, type ProjectCheckSourceLease } from './src/server/sharedSourceCoordinator';
 import {
   CLIENT_API_DEADLINE_MS,
   CLIENT_LONG_API_DEADLINE_MS,
@@ -1173,21 +1176,25 @@ function sourceOperationKeys(req: express.Request): string[] {
   if (req.path === '/api/agent/deploy' || req.path === '/api/agent/deploy-verify') {
     const operation = requestDeployOperation(req);
     if (operation) keys.push(canonicalSourceKey(dataPath('action-receipts', `${actionReceiptIdForOperation(operation)}.json`)));
+    const suiteId = req.body?.projectCheckSuiteReceiptId;
+    if (typeof suiteId === 'string' && /^ar_[a-f0-9]{64}$/.test(suiteId)) {
+      keys.push(projectCheckApprovalCoordinationKey(actionReceiptStore), canonicalSourceKey(actionReceiptStore.pathFor(suiteId)));
+    }
   }
   return [...new Set(keys)];
 }
 
-function coordinatedSourceOperation(handler: (req: express.Request, res: express.Response) => unknown): express.RequestHandler {
+function coordinatedSourceOperation(handler: (req: express.Request, res: express.Response, lease?: ProjectCheckSourceLease) => unknown): express.RequestHandler {
   return async (req, res, next) => {
     try {
       const keys = sourceOperationKeys(req);
       const actor = (req as any).__actor as RequestActor | undefined;
-      const run = () => {
+      const run = (lease?: ProjectCheckSourceLease) => {
         if (res.writableEnded || res.destroyed) return; // timed out/disconnected while queued: never mutate later
         if (keys.length && (req.path.startsWith('/api/fs/') || req.path.includes('/deploy') || req.path.includes('/artifact/build'))) {
           res.locals.sourceOperation = forgeSourceCoordinator.status(keys);
         }
-        return handler(req, res);
+        return handler(req, res, lease);
       };
       if (!keys.length) { await run(); return; }
       await forgeSourceCoordinator.run(keys, { actor: actor?.keyId || actor?.label || 'studio',
@@ -13275,7 +13282,7 @@ function runCompileArtifactSelftest() {
  * Compiles and deploys the workspace directly into the configured X4 Extensions directory.
  */
 // Legacy callers use the identical authenticated identity/approval/transaction contract.
-app.post("/api/agent/deploy", coordinatedSourceOperation((req, res) => deployVerifyHandler(req, res)));
+app.post("/api/agent/deploy", coordinatedSourceOperation(deployVerifyHandler));
 
 
 function buildDeployProjectValidation(modId: string, snapshot: DeploymentSnapshot) {
@@ -13299,6 +13306,38 @@ function deploymentPlan(ws: any): ArtifactPlan {
     passthroughFiles: buildArtifactPassthroughFiles(build, generated.passthroughFiles) });
   if (!plan.ok) throw new Error(`Artifact planning failed: ${plan.errors.join('; ')}`);
   return plan;
+}
+
+function sourceDeclaresProjectChecks(root: string): boolean {
+  try {
+    return fs.readdirSync(root).some(name => name.toLowerCase() === PROJECT_CHECKS_PATH);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw Object.assign(new Error('The project check declaration could not be verified.'), { code: 'DEPLOY_SOURCE_CHANGED' });
+  }
+}
+
+function projectCheckArtifactIssue(plan: ArtifactPlan): string | undefined {
+  const manifest = plan.entries.find(entry => entry.path.toLowerCase() === PROJECT_CHECKS_PATH);
+  if (manifest && manifest.size > PROJECT_CHECKS_MAX_BYTES) {
+    return 'forge.checks.json exceeds the 256 KiB project-check manifest limit.';
+  }
+  const excluded = [...plan.excluded, ...plan.runtimeOwned].some(entry =>
+    [PROJECT_CHECKS_PATH, `${PROJECT_CHECKS_PATH}/**`].includes(entry.path.toLowerCase()));
+  if (excluded || (!manifest && plan.sourceRoot && sourceDeclaresProjectChecks(plan.sourceRoot)) || plan.entries.some(entry =>
+    entry.path.toLowerCase().startsWith(`${PROJECT_CHECKS_PATH}/`))) {
+    return 'forge.checks.json must be a readable root file available to frozen deployment preflight.';
+  }
+}
+
+function omittedAddressedProjectChecks(plan: ArtifactPlan, workspace?: ModWorkspace): boolean {
+  if (!workspace || plan.entries.some(entry => entry.path.toLowerCase() === PROJECT_CHECKS_PATH)) return false;
+  const root = workspace.sourceStamp?.dir;
+  if (root) {
+    if (path.resolve(root) === plan.sourceRoot) return false; // Checked against this root by projectCheckArtifactIssue.
+    return sourceDeclaresProjectChecks(root);
+  }
+  return workspaceSourceFiles(workspace).some(file => file.path.toLowerCase() === PROJECT_CHECKS_PATH);
 }
 
 function deploymentSourceIdentity(plan: ArtifactPlan, format: DeployFormat): string {
@@ -13366,7 +13405,7 @@ function deploymentPrincipal(req: express.Request): AcceptancePrincipal {
 // extensions) → bytes confirm (deployed content.xml exists + id matches) → extension-doctor
 // (auto-FAIL on duplicate-id / folder-id-mismatch). Returns a single pass/fail verdict so the
 // agent/UI never skips the doctor. On-demand only (not a hot poll), so full-folder scan is fine.
-app.post("/api/agent/deploy-verify", coordinatedSourceOperation((req, res) => deployVerifyHandler(req, res)));
+app.post("/api/agent/deploy-verify", coordinatedSourceOperation(deployVerifyHandler));
 
 // Reviews are listed with fresh evidence by deploy-verify dryRun; revocation never deploys.
 app.post('/api/agent/warning-reviews/revoke', (req, res) => {
@@ -13410,13 +13449,14 @@ function requestDeployOperation(req: express.Request) {
   return deployReceiptIdentity({ kind: 'agent', id: actor.keyId }, { workspaceId: requestWorkspace(req).workspaceId, operationId });
 }
 
-function deployVerifyHandler(req: express.Request, res: express.Response) {
+function deployVerifyHandler(req: express.Request, res: express.Response, lease?: ProjectCheckSourceLease) {
   let responseIdentity: Record<string, unknown> = { modId: null, sourceHash: null, artifactHash: null };
   let writeAttempted = false;
   let targetMatchesPreState = false;
   const targetWrite: { state: 'untouched' | 'mutated' | 'restored' } = { state: 'untouched' };
   let outputUnconfirmed = false;
   let snapshot: DeploymentSnapshot | undefined;
+  let nativeCheckProof: ReturnType<typeof openNativeProjectCheckProof> | undefined;
   let deployReceipt: ActionReceipt | undefined;
   const recordFailedDeploy = (rolledBack: boolean, targetConflict = false) => {
     if (!deployReceipt) return;
@@ -13467,12 +13507,17 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
   try {
     const body = req.body;
     const allowed = new Set(['path', 'workspace', 'dryRun', 'deployFormat', 'autoReimport', 'allowStaleOverwrite',
-      'expectedModId', 'expectedSourceHash', 'expectedArtifactHash', 'expectedBindingHash', 'expectedTargetFingerprint', 'acceptances']);
+      'expectedModId', 'expectedSourceHash', 'expectedArtifactHash', 'expectedBindingHash', 'expectedTargetFingerprint',
+      'projectCheckSuiteReceiptId', 'expectedProjectCheckSuiteReceiptHash', 'acceptances']);
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(k => !allowed.has(k))
       || (body.workspace !== undefined && (!body.workspace || typeof body.workspace !== 'object' || Array.isArray(body.workspace)))
       || (body.path !== undefined && (typeof body.path !== 'string' || !body.path.trim()))
       || (body.expectedTargetFingerprint !== undefined && (typeof body.expectedTargetFingerprint !== 'string'
         || !/^(?:absent|[a-f0-9]{64})$/.test(body.expectedTargetFingerprint)))
+      || (body.projectCheckSuiteReceiptId !== undefined && (typeof body.projectCheckSuiteReceiptId !== 'string'
+        || !/^ar_[a-f0-9]{64}$/.test(body.projectCheckSuiteReceiptId)))
+      || (body.expectedProjectCheckSuiteReceiptHash !== undefined && (typeof body.expectedProjectCheckSuiteReceiptHash !== 'string'
+        || !/^[a-f0-9]{64}$/.test(body.expectedProjectCheckSuiteReceiptHash) || body.projectCheckSuiteReceiptId === undefined))
       || ['dryRun', 'autoReimport', 'allowStaleOverwrite'].some(k => body[k] !== undefined && typeof body[k] !== 'boolean')) {
       return res.status(400).json(failWith('config', { code: 'DEPLOY_INPUT_INVALID', error: 'Unknown or malformed deployment fields.' }));
     }
@@ -13605,10 +13650,14 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
     // is allowed to claim that deployment. Keep explicit Studio artifact workflows,
     // but bind agent previews and writes to the addressed workspace's current mod.
     // This runs after optional source re-import, before snapshots/approvals/receipts.
+    let addressedBuild: ModWorkspace | undefined;
+    let addressedWorkspaceId: string | undefined;
     if (principal.kind === 'agent') {
       const addressed = resolveWorkspaceAuthority(req, res);
       if (!addressed) return;
-      const workspaceModId = effectiveModId(activeBuildWorkspace(addressed.workspace));
+      addressedBuild = activeBuildWorkspace(addressed.workspace);
+      addressedWorkspaceId = addressed.workspaceId;
+      const workspaceModId = effectiveModId(addressedBuild);
       responseIdentity = { ...responseIdentity, workspaceId: addressed.workspaceId,
         workspaceModId, workspaceHash: addressed.head };
       if (modId !== workspaceModId) {
@@ -13620,6 +13669,16 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
       }
     }
     const sourcePlan = deploymentPlan(ws);
+    const checkManifestIssue = projectCheckArtifactIssue(sourcePlan);
+    if (checkManifestIssue) {
+      check('preflight', 'Required project checks', 'fail', checkManifestIssue);
+      return res.status(422).json(failWith('preflight', { code: 'PROJECT_CHECK_MANIFEST_INVALID', error: checkManifestIssue }));
+    }
+    if (omittedAddressedProjectChecks(sourcePlan, addressedBuild)) {
+      const detail = 'The addressed project declares required checks. Deploy its source with the check manifest.';
+      check('preflight', 'Required project checks', 'fail', detail);
+      return res.status(409).json(failWith('preflight', { code: 'PROJECT_CHECK_SOURCE_MISMATCH', error: detail }));
+    }
     const artifactHash = deploymentSourceIdentity(sourcePlan, deployFormat);
     snapshot = captureDeploymentSnapshot(sourcePlan, deployFormat);
     const frozenPlan = snapshot.plan;
@@ -13669,6 +13728,51 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
     // lint, scriptproperty chains, pitfall lints). Errors block; warnings surface.
     const deployValidation = buildDeployProjectValidation(modId, snapshot);
     const { preflight, diskValidationSkipped } = deployValidation;
+    const projectChecks = preflight.projectChecks;
+    const extensionsPath = path.join(x4GamePath, 'extensions');
+    const targetRoot = path.join(extensionsPath, effectiveModId(activeBuildWorkspace(ws)));
+    const suiteId = body.projectCheckSuiteReceiptId;
+    if (projectChecks && (projectChecks.status === 'invalid' || suiteId === undefined)) {
+      const invalid = projectChecks.status === 'invalid';
+      const detail = invalid ? projectChecks.error : 'Required project checks need an approved asynchronous verification result for this artifact.';
+      check('preflight', 'Required project checks', 'fail', detail);
+      return res.status(invalid ? 422 : 409).json(failWith('preflight', {
+        code: invalid ? 'PROJECT_CHECK_MANIFEST_INVALID' : 'ASYNC_VERIFICATION_REQUIRED',
+        error: detail,
+        projectChecks: invalid
+          ? { status: projectChecks.status, execution: projectChecks.execution }
+          : { status: projectChecks.status, execution: projectChecks.execution, manifestHash: projectChecks.manifestHash,
+            checkIds: projectChecks.checks.map(projectCheck => projectCheck.id) },
+        validation: { outcome: invalid ? 'blocked-mod-findings' : 'incomplete-checks', clean: false, evidence: preflight.evidence },
+      }));
+    }
+    if (suiteId !== undefined) {
+      const proofRefusal = () => {
+        const detail = 'The exact approved check suite could not be verified for this addressed source and artifact.';
+        check('preflight', 'Required project checks', 'fail', detail);
+        return res.status(409).json(failWith('preflight', { code: 'PROJECT_CHECK_PROOF_MISMATCH', error: detail }));
+      };
+      const addressedSourceRoot = addressedBuild?.sourceStamp?.dir;
+      if (body.dryRun !== true && !operation) {
+        return res.status(400).json(failWith('preflight', { code: 'DEPLOY_OPERATION_INPUT_INVALID',
+          error: 'A project-check apply requires an addressed x-forge-operation-id.' }));
+      }
+      if (!projectChecks || principal.kind !== 'agent' || !addressedWorkspaceId || !addressedSourceRoot
+        || !lease || !modSourceDir || !sourcePlan.sourceRoot || !modWorkspacePath
+        || body.autoReimport === true || body.allowStaleOverwrite === true
+        || canonicalSourceKey(modSourceDir) !== canonicalSourceKey(sourcePlan.sourceRoot)) return proofRefusal();
+      try {
+        lease.assertProjectCheckAuthority(canonicalSourceKey(sourcePlan.sourceRoot), addressedWorkspaceId, principal.id);
+        lease.assertProjectCheckAuthority(projectCheckApprovalCoordinationKey(actionReceiptStore), addressedWorkspaceId, principal.id);
+        nativeCheckProof = openNativeProjectCheckProof({ store: actionReceiptStore, receiptId: suiteId,
+          actorId: principal.id, workspaceId: addressedWorkspaceId, modId, sourceRoot: sourcePlan.sourceRoot, addressedSourceRoot,
+          workspaceRoot: modWorkspacePath, targetRoot, stagingRoot: path.join(modWorkspacePath, '.forge-builds', 'loose'), snapshot });
+        if ((body.dryRun !== true || body.expectedProjectCheckSuiteReceiptHash !== undefined)
+          && body.expectedProjectCheckSuiteReceiptHash !== nativeCheckProof.proof.hash) return proofRefusal();
+        responseIdentity = { ...responseIdentity, projectCheckSuite: nativeCheckProof.proof };
+        check('project-checks', 'Required project checks', 'pass', 'The exact approved suite receipt and every required command were verified.');
+      } catch { return proofRefusal(); }
+    }
     const preflightDiagnostics: ValidationWarningInput[] = [
       ...flattenProjectValidation(preflight),
       ...diskValidationSkipped.map(skipped => ({
@@ -13683,8 +13787,6 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
       deployValidation.validationFiles,
       preflightDiagnostics,
     );
-    const extensionsPath = path.join(x4GamePath, 'extensions');
-    const targetRoot = path.join(extensionsPath, effectiveModId(activeBuildWorkspace(ws)));
     const targetChanged = () => Object.assign(
       new Error('Deployment target contents changed. Review a new dry-run preview before retrying.'),
       { code: 'DEPLOY_TARGET_CHANGED' },
@@ -13725,12 +13827,14 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
       preflightDiagnostics.map(d => ({ severity: d.severity as 'error' | 'warning' | 'info', code: d.code,
         filePath: d.filePath, line: d.line, column: d.column, sourceRef: typeof d.sourceRef === 'string' ? d.sourceRef : undefined,
         message: String(d.message || d.code || 'Validation finding') })), [
-        ...(preflight.evidence?.coverage.gaps || []),
+        ...(preflight.evidence?.coverage.gaps || []).filter(gap => !nativeCheckProof || gap.check !== 'project-checks.execution'),
         ...(receiptHistoryUnavailable ? [{ check: 'deploy.receipt_history',
           reason: 'Receipt history could not be verified. Remembered warning reviews were omitted.' }] : []),
       ]);
-    const subject: AcceptanceSubject = { evidence, artifactHash, validatorHash: deployValidatorHash, corpusHash,
+    const subject: AcceptanceSubject = { evidence, artifactHash, validatorHash: nativeCheckProof
+      ? trustHash([deployValidatorHash, nativeCheckProof.proof.reviewBasisHash]) : deployValidatorHash, corpusHash,
       targetHash: trustHash([process.platform === 'win32' ? path.resolve(targetRoot).toLowerCase() : path.resolve(targetRoot), deployFormat]) };
+    if (nativeCheckProof) subject.projectCheckProof = { id: nativeCheckProof.proof.id, hash: nativeCheckProof.proof.hash };
     if (canonicalReviewSource && receiptHistory) {
       subject.warningReviews = { scopeHash: trustHash([process.platform === 'win32' ? canonicalReviewSource.toLowerCase() : canonicalReviewSource, evidence.modId]),
         history: receiptHistory, invocationId: crypto.randomUUID() };
@@ -13754,7 +13858,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
         if (body[field] === undefined) missing.push(field);
         else if (body[field] !== current) mismatched.push(field);
       }
-      if (operation && body.expectedTargetFingerprint === undefined) missing.push('expectedTargetFingerprint');
+      if ((operation || nativeCheckProof) && body.expectedTargetFingerprint === undefined) missing.push('expectedTargetFingerprint');
       if (missing.length || mismatched.length) {
         const details = [
           missing.length ? `Missing preview fields: ${missing.join(', ')}.` : '',
@@ -13798,6 +13902,8 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
           dryRun: false, expectedModId: evidence.modId, expectedSourceHash: evidence.sourceHash,
           expectedArtifactHash: artifactHash, expectedBindingHash: decision.binding.hash,
           expectedTargetFingerprint: targetFingerprint,
+          ...(nativeCheckProof ? { projectCheckSuiteReceiptId: nativeCheckProof.proof.id,
+            expectedProjectCheckSuiteReceiptHash: nativeCheckProof.proof.hash } : {}),
           acceptances: [...acceptances, ...blockingFindings.map(finding => ({ findingId: finding.findingId, bindingHash: decision.binding.hash, reason: '' }))] },
         instruction: 'Supply a nonempty reason for each exact finding before POSTing this body. Deploy permission is required. Stale evidence and safety gates still refuse.' };
       check('preflight', 'Full validation (schema/cues/lints)', 'fail',
@@ -13829,13 +13935,16 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
     const assertCurrentSource = () => {
       snapshot!.assertIntegrity();
       const currentTarget = path.join(resolveXsdConfig().x4GamePath, 'extensions', effectiveModId(activeBuildWorkspace(ws)));
-      if (deploymentSourceIdentity(deploymentPlan(ws), deployFormat) !== artifactHash
+      const currentPlan = deploymentPlan(ws);
+      if (projectCheckArtifactIssue(currentPlan) || omittedAddressedProjectChecks(currentPlan, addressedBuild)
+        || deploymentSourceIdentity(currentPlan, deployFormat) !== artifactHash
         || deploymentCorpusIdentity(corpusPaths) !== corpusHash || path.resolve(currentTarget) !== path.resolve(targetRoot)) {
         throw Object.assign(new Error('Source, corpus or target changed during deployment. Review a fresh preview.'), { code: 'DEPLOY_SOURCE_CHANGED' });
       }
     };
     assertCurrentSource();
     assertCurrentTarget();
+    nativeCheckProof?.verify();
 
     // B93.6 — DRY RUN. Deletion is the direction that cannot be undone, and the author previously
     // only learned what a deploy removed by diffing afterwards. This reports the exact effect and
@@ -13860,11 +13969,16 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
       });
     }
 
+    if (nativeCheckProof && decision.approvals.length > 126) {
+      return res.status(400).json(failWith('preflight', { code: 'ACCEPTANCE_INPUT_INVALID',
+        error: 'At most 126 finding approvals fit a deployment with project check proof.' }));
+    }
     const { receipts: approvalRecords, decision: recordedDecision } = recordFindingAcceptances(actionReceiptStore, subject, acceptances, principal);
     responseIdentity.validation = { outcome: decision.outcome, clean: decision.validationClean, evidence,
       review: projectFindingReview(recordedDecision, principal, approvalRecords) };
     const assertWriteAuthority = () => {
       assertCurrentSource();
+      nativeCheckProof?.verify();
       if (subject.warningReviews) subject.warningReviews.history = actionReceiptStore.listVerified();
       verifyFindingAcceptanceReceipts(actionReceiptStore, approvalRecords.map(r => r.id), subject, acceptances, principal);
       if (deployReceipt && actionReceiptStore.read(deployReceipt.id).hash !== deployReceipt.hash) {
@@ -13886,7 +14000,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
     }
     if (pendingDeployRecovery.beforeFingerprint !== targetFingerprint) throw targetChanged();
     deployReceipt = prepareDeployRecord(actionReceiptStore, subject, decision, principal, approvalRecords,
-      pendingDeployRecovery.id, pendingDeployRecovery.beforeFingerprint, snapshot.manifest.hash, operation);
+      pendingDeployRecovery.id, pendingDeployRecovery.beforeFingerprint, snapshot.manifest.hash, operation, nativeCheckProof?.proof);
     assertWriteAuthority();
     if (!fs.existsSync(extensionsPath)) fs.mkdirSync(extensionsPath, { recursive: true });
     writeAttempted = true;
@@ -14164,6 +14278,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
       deployment: deploymentFidelity(),
       error: error?.message || 'deploy-verify failed', ...(rollback ? { rollback } : {}) });
   } finally {
+    try { nativeCheckProof?.dispose(); } catch (error) { console.warn('Project check proof cleanup failed', error); }
     try { snapshot?.dispose(); } catch (error) { console.warn('Deployment snapshot cleanup failed', error); }
   }
 }

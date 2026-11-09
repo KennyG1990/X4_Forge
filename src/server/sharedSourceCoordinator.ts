@@ -6,10 +6,11 @@ import { createRequire } from 'node:module';
 import { canonicalSourceKey, conflicts, type ResourceOwner } from './resourceCoordinator';
 
 export const SOURCE_COORDINATION_FILENAME = 'source-coordination.sqlite';
-export const SOURCE_COORDINATION_SCHEMA_VERSION = 1;
+export const SOURCE_COORDINATION_SCHEMA_VERSION = 2;
 const APPLICATION_ID = 0x58345343; // X4SC; never share the disposable index cache.
 const MAX_ENTRIES = 4096;
 const MAX_KEYS = 64;
+const MAX_PROJECT_CHECK_GUARDS = 32;
 
 export type ProcessLiveness = 'alive' | 'dead' | 'unknown';
 interface Statement {
@@ -43,7 +44,37 @@ interface Claim {
   queuedAt: string;
   startedAt: string | null;
   state: 'waiting' | 'active';
+  guard: PersistedProjectCheckGuard | null;
+  guardPhase: 'armed' | 'running' | 'drained' | null;
+  handlerFinished: boolean;
 }
+interface ProjectCheckGuard {
+  bindingHash: string;
+  commandHash: string;
+  helperPid: number;
+  jobName: string;
+  launcherHash: string;
+  runId: string;
+}
+interface PersistedProjectCheckGuard extends ProjectCheckGuard {
+  registryDevice: string;
+  registryFile: string;
+}
+interface ProjectCheckLaunchFrame {
+  registry: string;
+  claimId: string;
+  instanceId: string;
+  backendPid: number;
+  guardJson: string;
+}
+export interface ProjectCheckSourceLease {
+  assertProjectCheckAuthority(sourceKey: string, workspaceId: string, actorId: string): void;
+  armProjectCheck(input: ProjectCheckGuard): Readonly<ProjectCheckLaunchFrame>;
+  assertProjectCheckDrained(frame: Readonly<ProjectCheckLaunchFrame>): void;
+}
+type VisibleClaim = Omit<Claim, 'state' | 'sequence' | 'guard' | 'guardPhase' | 'handlerFinished'> & {
+  guardPhase?: NonNullable<Claim['guardPhase']>;
+};
 export interface SourceCoordinationStatus {
   scope: 'shared-participating-processes';
   available: boolean;
@@ -52,8 +83,8 @@ export interface SourceCoordinationStatus {
   coordinatesParticipatingProcesses: true;
   pid: number;
   instanceId: string;
-  active: Omit<Claim, 'state' | 'sequence'>[];
-  waiting: Omit<Claim, 'state' | 'sequence'>[];
+  active: VisibleClaim[];
+  waiting: VisibleClaim[];
   code?: string;
   reason?: string;
 }
@@ -94,6 +125,27 @@ function validateOwner(owner: ResourceOwner): ResourceOwner {
   }
   return { actor: owner.actor, operation: owner.operation, ...(owner.workspaceId === undefined ? {} : { workspaceId: owner.workspaceId }) };
 }
+function validateProjectCheckGuard(guard: ProjectCheckGuard): ProjectCheckGuard {
+  if (!guard || typeof guard.bindingHash !== 'string' || !/^[a-f0-9]{64}$/.test(guard.bindingHash)
+    || typeof guard.commandHash !== 'string' || !/^[a-f0-9]{64}$/.test(guard.commandHash)
+    || typeof guard.launcherHash !== 'string' || !/^[a-f0-9]{64}$/.test(guard.launcherHash)
+    || !Number.isSafeInteger(guard.helperPid) || guard.helperPid <= 0 || guard.helperPid > 0xffff_ffff
+    || typeof guard.jobName !== 'string' || !/^Local\\X4ForgeProjectCheck-[a-f0-9]{32}$/.test(guard.jobName)
+    || typeof guard.runId !== 'string' || !/^[a-f0-9]{32}$/.test(guard.runId)) {
+    throw failure('PROJECT_CHECK_GUARD_INVALID', 'Project check guard does not identify an exact helper and command.');
+  }
+  return { bindingHash: guard.bindingHash, commandHash: guard.commandHash, helperPid: guard.helperPid,
+    jobName: guard.jobName, launcherHash: guard.launcherHash, runId: guard.runId };
+}
+function persistedProjectCheckGuard(input: PersistedProjectCheckGuard): PersistedProjectCheckGuard {
+  const { bindingHash, commandHash, helperPid, jobName, launcherHash, runId } = validateProjectCheckGuard(input);
+  const { registryDevice, registryFile } = input;
+  if (typeof registryDevice !== 'string' || !/^[1-9]\d{0,9}$/.test(registryDevice)
+    || typeof registryFile !== 'string' || !/^[1-9]\d{0,19}$/.test(registryFile)) {
+    throw new Error('Invalid project check registry identity.');
+  }
+  return { bindingHash, commandHash, helperPid, jobName, launcherHash, registryDevice, registryFile, runId };
+}
 const overlap = (a: string[], b: string[]) => a.some(left => b.some(right => conflicts(left, right)));
 function statusBase(instanceId: string): SourceCoordinationStatus {
   return { scope: 'shared-participating-processes', available: true, controlsExternalEditors: false,
@@ -106,15 +158,15 @@ function unavailableStatus(instanceId: string, error: unknown): SourceCoordinati
 
 /**
  * Cooperative same-user coordination. SQLite protects the decision transaction; the
- * persisted claim protects the asynchronous handler. Only confirmed dead PIDs are
- * reclaimed. Alive, suspended, reused, and unknown PIDs retain ownership indefinitely.
+ * persisted claim protects the asynchronous handler. A running check guard also
+ * requires durable process-tree drain before the claim can be reclaimed.
  * This is not access control against editors, older Forge versions, or registry tampering.
  */
 export class SharedSourceCoordinator {
   readonly instanceId = randomUUID();
   readonly filename: string;
   private database?: RegistryDatabase;
-  private fileIdentity?: { dev: number; ino: number };
+  private fileIdentity?: { dev: bigint; ino: bigint };
   private inFlight = 0;
   private readonly maxPending: number;
   private readonly waitMs: number;
@@ -155,16 +207,28 @@ export class SharedSourceCoordinator {
             id TEXT NOT NULL UNIQUE, instance_id TEXT NOT NULL, pid INTEGER NOT NULL,
             keys_json TEXT NOT NULL, owner_json TEXT NOT NULL,
             queued_at TEXT NOT NULL, started_at TEXT,
-            state TEXT NOT NULL CHECK (state IN ('waiting', 'active'))
+            state TEXT NOT NULL CHECK (state IN ('waiting', 'active')),
+            guard_json TEXT, guard_phase TEXT CHECK (guard_phase IN ('armed', 'running', 'drained')),
+            handler_finished INTEGER NOT NULL DEFAULT 0 CHECK (handler_finished IN (0, 1))
           ); PRAGMA application_id = ${APPLICATION_ID}; PRAGMA user_version = ${SOURCE_COORDINATION_SCHEMA_VERSION};`);
+        } else if (version === 1 && application === APPLICATION_ID) {
+          const previous = database!.prepare('SELECT sequence,id,instance_id,pid,keys_json,owner_json,queued_at,started_at,state FROM claims LIMIT ?')
+            .all(MAX_ENTRIES + 1) as { pid: number }[];
+          if (previous.length > MAX_ENTRIES || previous.some(row => this.liveness(row.pid) !== 'dead')) {
+            throw new Error('Previous coordination schema still has a live or unconfirmed owner. Retry after that operation ends.');
+          }
+          database!.exec(`ALTER TABLE claims ADD COLUMN guard_json TEXT;
+            ALTER TABLE claims ADD COLUMN guard_phase TEXT CHECK (guard_phase IN ('armed', 'running', 'drained'));
+            ALTER TABLE claims ADD COLUMN handler_finished INTEGER NOT NULL DEFAULT 0 CHECK (handler_finished IN (0, 1));
+            PRAGMA user_version = ${SOURCE_COORDINATION_SCHEMA_VERSION};`);
         } else if (version !== SOURCE_COORDINATION_SCHEMA_VERSION || application !== APPLICATION_ID) {
           throw new Error(`Unsupported coordination schema/application (${String(version)}/${String(application)}); no migration or reset was performed.`);
         }
         // Prepare the complete column contract so a misleading version stamp fails closed.
-        database!.prepare('SELECT sequence,id,instance_id,pid,keys_json,owner_json,queued_at,started_at,state FROM claims LIMIT 0').all();
+        database!.prepare('SELECT sequence,id,instance_id,pid,keys_json,owner_json,queued_at,started_at,state,guard_json,guard_phase,handler_finished FROM claims LIMIT 0').all();
       }).immediate();
       if (database.pragma('quick_check(1)', { simple: true }) !== 'ok') throw new Error('Coordination database integrity check failed.');
-      const stat = fs.statSync(this.filename);
+      const stat = fs.statSync(this.filename, { bigint: true });
       this.fileIdentity = { dev: stat.dev, ino: stat.ino };
       this.database = database;
       return database;
@@ -176,7 +240,7 @@ export class SharedSourceCoordinator {
 
   private checkFileIdentity(): void {
     try {
-      const stat = fs.statSync(this.filename);
+      const stat = fs.statSync(this.filename, { bigint: true });
       if (!this.fileIdentity || stat.dev !== this.fileIdentity.dev || stat.ino !== this.fileIdentity.ino) {
         throw new Error('Coordination registry was replaced while this process was using it.');
       }
@@ -197,10 +261,21 @@ export class SharedSourceCoordinator {
     }
   }
 
-  private claims(database: RegistryDatabase, reclaimDead = true): Claim[] {
+  private liveness(pid: number): ProcessLiveness {
+    if (!Number.isSafeInteger(pid) || pid <= 0) return 'unknown';
+    if (pid === process.pid) return 'alive';
+    try { return (this.options.liveness ?? processLiveness)(pid); }
+    catch { return 'unknown'; }
+  }
+
+  private claims(database: RegistryDatabase): Claim[] {
     const records = database.prepare('SELECT * FROM claims ORDER BY sequence LIMIT ?').all(MAX_ENTRIES + 1);
     if (records.length > MAX_ENTRIES) throw new Error('Coordination registry exceeds its safety bound.');
     const liveness = new Map<number, ProcessLiveness>();
+    const observe = (pid: number) => {
+      if (!liveness.has(pid)) liveness.set(pid, this.liveness(pid));
+      return liveness.get(pid);
+    };
     const claims: Claim[] = [];
     for (const record of records) {
       const row = record as Record<string, unknown>;
@@ -215,25 +290,40 @@ export class SharedSourceCoordinator {
         || (row.state === 'waiting' ? row.started_at !== null : typeof row.started_at !== 'string' || !Number.isFinite(Date.parse(row.started_at)))) {
         throw new Error('Invalid coordination claim; refusing to discard possible ownership.');
       }
+      const rawPhase = row.guard_phase;
+      const phase = rawPhase === 'armed' || rawPhase === 'running' || rawPhase === 'drained' ? rawPhase : null;
+      const finished = row.handler_finished === 1;
+      if ((row.handler_finished !== 0 && !finished)
+        || (phase === null && rawPhase !== null)
+        || (phase === null && (row.guard_json !== null || finished))
+        || (phase !== null && (row.state !== 'active' || typeof row.guard_json !== 'string' || row.guard_json.length > 512))
+        || (phase === 'armed' && finished)) {
+        throw new Error('Invalid project check guard state; refusing to discard possible ownership.');
+      }
+      let guard: PersistedProjectCheckGuard | null = null;
       let resources: string[];
       let owner: ResourceOwner;
       try {
         resources = normalizeKeys(JSON.parse(row.keys_json));
         owner = validateOwner(JSON.parse(row.owner_json));
+        if (typeof row.guard_json === 'string') {
+          guard = persistedProjectCheckGuard(JSON.parse(row.guard_json));
+          if (JSON.stringify(guard) !== row.guard_json || guard.helperPid === row.pid) throw new Error('Noncanonical guard.');
+        }
       } catch { throw new Error('Invalid coordination claim data; refusing to discard possible ownership.'); }
       if (JSON.stringify(resources) !== row.keys_json) throw new Error('Coordination claim keys are not canonical.');
       const pid = row.pid as number;
-      if (!liveness.has(pid)) {
-        let result: ProcessLiveness = 'unknown';
-        try { result = pid === process.pid ? 'alive' : (this.options.liveness ?? processLiveness)(pid); } catch { /* Unknown is never dead. */ }
-        liveness.set(pid, result);
-      }
-      if (reclaimDead && liveness.get(pid) === 'dead') {
+      const backendDead = observe(pid) === 'dead';
+      // The helper transitions armed → running in this same registry before launch.
+      // Deleting an armed claim makes every delayed start frame lose that transition.
+      if ((backendDead && (phase === null || phase === 'armed'))
+        || ((backendDead || finished) && phase === 'drained' && guard && observe(guard.helperPid) === 'dead')) {
         database.prepare('DELETE FROM claims WHERE id = ? AND instance_id = ? AND pid = ?').run(row.id, row.instance_id, pid);
         continue;
       }
       claims.push({ sequence: row.sequence as number, id: row.id, instanceId: row.instance_id, pid, resources, owner,
-        queuedAt: row.queued_at, startedAt: row.started_at as string | null, state: row.state });
+        queuedAt: row.queued_at, startedAt: row.started_at as string | null, state: row.state,
+        guard, guardPhase: phase, handlerFinished: finished });
     }
     return claims;
   }
@@ -243,13 +333,14 @@ export class SharedSourceCoordinator {
       const normalized = normalizeKeys(keys, true);
       const claims = this.transaction(database => this.claims(database));
       const relevant = claims.filter(claim => overlap(claim.resources, normalized));
-      const copy = ({ sequence: _sequence, state: _state, ...claim }: Claim) => claim;
+      const copy = ({ sequence: _sequence, state: _state, guard: _guard, guardPhase, handlerFinished: _finished, ...claim }: Claim) =>
+        ({ ...claim, ...(guardPhase === null ? {} : { guardPhase }) });
       return { ...statusBase(this.instanceId), active: relevant.filter(claim => claim.state === 'active').map(copy),
         waiting: relevant.filter(claim => claim.state === 'waiting').map(copy) };
     } catch (error) { return unavailableStatus(this.instanceId, error); }
   }
 
-  async run<T>(keys: string[], owner: ResourceOwner, task: () => T | Promise<T>, currentKeys?: () => string[]): Promise<T> {
+  async run<T>(keys: string[], owner: ResourceOwner, task: (lease: ProjectCheckSourceLease) => T | Promise<T>, currentKeys?: () => string[]): Promise<T> {
     const resources = normalizeKeys(keys);
     const identity = validateOwner(owner);
     const id = randomUUID();
@@ -259,6 +350,74 @@ export class SharedSourceCoordinator {
     let operationFailed = false;
     let operationError: unknown;
     let result: T;
+    let leaseOpen = false;
+    let guardMayExist = false;
+    let armed: { frame: Readonly<ProjectCheckLaunchFrame>; guard: ProjectCheckGuard; drainConfirmed: boolean } | undefined;
+    const admittedGuards: ProjectCheckGuard[] = [];
+    const lease: ProjectCheckSourceLease = {
+      assertProjectCheckAuthority: (sourceKey, workspaceId, actorId) => {
+        if (!leaseOpen || !resources.includes(sourceKey) || identity.workspaceId !== workspaceId || identity.actor !== actorId) {
+          throw failure('PROJECT_CHECK_SCOPE_MISMATCH', 'The source lease does not own this project check and workspace.', 403);
+        }
+      },
+      armProjectCheck: input => {
+        if (!leaseOpen) throw failure('SOURCE_COORDINATION_LOST', 'Project check requires active source ownership.', 503);
+        const guard = validateProjectCheckGuard(input);
+        const previous = armed;
+        if (previous && guard.runId !== previous.guard.runId) {
+          throw failure('PROJECT_CHECK_GUARD_INVALID', 'Project checks on one source lease must belong to the same run.');
+        }
+        if (admittedGuards.some(prior => prior.jobName === guard.jobName || prior.commandHash === guard.commandHash
+          || prior.bindingHash === guard.bindingHash)) {
+          throw failure('PROJECT_CHECK_GUARD_REPLAY', 'This Job or command was already admitted on the source lease.');
+        }
+        if (admittedGuards.length >= MAX_PROJECT_CHECK_GUARDS) {
+          throw failure('PROJECT_CHECK_GUARD_LIMIT', 'The source lease reached its project check limit.');
+        }
+        const rearmUnconfirmed = () => failure('PROJECT_CHECK_REARM_UNCONFIRMED',
+          'Project check rearm requires the exact prior drain and confirmed helper exit.', 503);
+        if (previous && !previous.drainConfirmed) throw rearmUnconfirmed();
+        if (process.platform !== 'win32' || guard.helperPid === process.pid || this.liveness(guard.helperPid) !== 'alive') {
+          throw failure('PROJECT_CHECK_GUARD_INVALID', 'Project check must use a live separate helper.');
+        }
+        guardMayExist = true;
+        const frame = this.transaction(database => {
+          const registry = fs.realpathSync.native(this.filename);
+          const stat = fs.statSync(registry, { bigint: true });
+          if (!stat.isFile() || stat.nlink !== 1n || stat.dev !== this.fileIdentity?.dev || stat.ino !== this.fileIdentity?.ino) {
+            throw new Error('Project check coordination file changed or is linked.');
+          }
+          const guardJson = JSON.stringify(persistedProjectCheckGuard({
+            ...guard, registryDevice: (stat.dev & 0xffff_ffffn).toString(), registryFile: stat.ino.toString(),
+          }));
+          if (previous && this.liveness(previous.guard.helperPid) !== 'dead') throw rearmUnconfirmed();
+          const changed = database.prepare("UPDATE claims SET guard_json = ?, guard_phase = 'armed' WHERE id = ? AND instance_id = ? AND pid = ? AND state = 'active' AND handler_finished = 0 AND guard_phase IS ? AND guard_json IS ? COLLATE BINARY")
+            .run(guardJson, id, this.instanceId, process.pid, previous ? 'drained' : null, previous?.frame.guardJson ?? null);
+          if (changed.changes !== 1) {
+            if (previous) throw rearmUnconfirmed();
+            throw failure('SOURCE_COORDINATION_LOST', 'Could not arm the exact active source claim.', 503);
+          }
+          return Object.freeze({ registry, claimId: id, instanceId: this.instanceId, backendPid: process.pid, guardJson });
+        });
+        armed = { frame, guard, drainConfirmed: false };
+        admittedGuards.push(guard);
+        return frame;
+      },
+      assertProjectCheckDrained: frame => {
+        const current = armed;
+        if (!leaseOpen || !current || frame !== current.frame) {
+          throw failure('SOURCE_COORDINATION_LOST', 'Project check drain is not bound to this active claim.', 503);
+        }
+        this.transaction(database => {
+          const own = this.claims(database).find(claim => claim.id === id && claim.instanceId === this.instanceId && claim.pid === process.pid);
+          if (own?.state !== 'active' || own.handlerFinished || own.guardPhase !== 'drained' || !own.guard
+            || JSON.stringify(own.guard) !== frame.guardJson || this.liveness(own.guard.helperPid) !== 'dead') {
+            throw failure('PROJECT_CHECK_CLEANUP_UNCONFIRMED', 'Project check has no verified drain and helper exit for this claim.', 503);
+          }
+        });
+        current.drainConfirmed = true;
+      },
+    };
     this.inFlight++;
     try {
       this.transaction(database => {
@@ -290,21 +449,35 @@ export class SharedSourceCoordinator {
       if (currentKeys && JSON.stringify(normalizeKeys(currentKeys())) !== JSON.stringify(resources)) {
         throw failure('SOURCE_COORDINATION_CHANGED', 'Source/configuration aliases changed while waiting; obtain fresh state before retrying.');
       }
-      result = await task();
+      leaseOpen = true;
+      result = await task(lease);
     } catch (error) {
       operationFailed = true;
       operationError = error;
     }
+    leaseOpen = false;
     try {
-      if (enqueued) this.transaction(database => {
+      const retained = enqueued && this.transaction(database => {
+        const own = guardMayExist
+          ? this.claims(database).find(claim => claim.id === id && claim.instanceId === this.instanceId && claim.pid === process.pid)
+          : undefined;
+        if (own?.guard && (own.guardPhase === 'running'
+          || (own.guardPhase === 'drained' && this.liveness(own.guard.helperPid) !== 'dead'))) {
+          database.prepare('UPDATE claims SET handler_finished = 1 WHERE id = ? AND instance_id = ? AND pid = ?')
+            .run(id, this.instanceId, process.pid);
+          return true;
+        }
         database.prepare('DELETE FROM claims WHERE id = ? AND instance_id = ? AND pid = ?').run(id, this.instanceId, process.pid);
+        return false;
       });
+      if (retained) throw failure('PROJECT_CHECK_CLEANUP_UNCONFIRMED', 'Project check ownership retained until its helper exits with durable cleanup evidence.', 503);
     } catch (cleanupError) {
       // If storage fails, retaining ownership is safer than guessing it was released.
       // Never imply handler rollback, and preserve both failures for diagnostics.
       if (operationFailed) throw Object.assign(new AggregateError([operationError, cleanupError],
         `Source operation failed (${operationError instanceof Error ? operationError.message : String(operationError)}); coordination cleanup also failed. Ownership may remain until process exit.`),
       { code: 'SOURCE_COORDINATION_UNAVAILABLE', status: 503, category: 'forge-infrastructure' });
+      if (cleanupError instanceof Error && 'code' in cleanupError && cleanupError.code === 'PROJECT_CHECK_CLEANUP_UNCONFIRMED') throw cleanupError;
       throw failure('SOURCE_COORDINATION_UNAVAILABLE',
         `Source operation completed but coordination cleanup failed. Writes may already have occurred; ownership may remain until process exit. ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`, 503);
     } finally { this.inFlight--; }
@@ -352,7 +525,7 @@ let defaultCoordinator: SharedSourceCoordinator | undefined;
 const defaultInstanceId = randomUUID();
 const coordinator = () => defaultCoordinator ??= new SharedSourceCoordinator({ directory: resolveSourceCoordinationDirectory() });
 export const forgeSourceCoordinator = {
-  run<T>(keys: string[], owner: ResourceOwner, task: () => T | Promise<T>, currentKeys?: () => string[]): Promise<T> {
+  run<T>(keys: string[], owner: ResourceOwner, task: (lease: ProjectCheckSourceLease) => T | Promise<T>, currentKeys?: () => string[]): Promise<T> {
     try { return coordinator().run(keys, owner, task, currentKeys); }
     catch (error) { return Promise.reject(unavailable(error)); }
   },
