@@ -36,7 +36,7 @@ Dev checks required and undeclared arguments for exact direct project cue instan
 
 ### Exact property diagnostic positions and type provenance `in_progress` (GitHub #80, part of #74)
 
-Dev preserves property columns and distinguishes declared receiver types from variable hints through project, unsaved expression and native validation. [Isolated replay](docs/plans/2026-11-09-property-diagnostic-provenance.md). Wider flow narrowing, vanilla acceptance, installed verification and public delivery remain open.
+Dev preserves property columns and distinguishes declared receiver types from variable hints through project, unsaved expression and native validation. [Isolated replay](docs/plans/2026-11-09-property-diagnostic-provenance.md). An exact positive NPC target guard now removes two false warnings and gives the real typo an NPC suggestion in both native previews. [Guard evidence](docs/plans/2026-11-09-npc-guard-property-context.md). Wider flow narrowing, parent vanilla and game acceptance, installed verification and public delivery remain open.
 
 ### Literal format diagnostics `in_progress` (GitHub #77, part of #74)
 

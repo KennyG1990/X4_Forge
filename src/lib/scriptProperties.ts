@@ -26,6 +26,7 @@
  */
 
 import { DOMParser } from '@xmldom/xmldom';
+import { parseMdScriptRoot } from './cueLineage';
 import { parseExpressionChains } from './expressionAst';
 
 export interface SPEntry {
@@ -106,7 +107,7 @@ export interface ScriptPropertyFinding {
   filePath?: string;
   line: number;
   column: number;
-  typeContext?: { datatype: string; confidence: 'declared' | 'hint' };
+  typeContext?: { datatype: string; confidence: 'declared' | 'guarded' | 'hint' };
   suggestions: string[];
   detail: string;
 }
@@ -573,6 +574,47 @@ function variablePathContexts(
 
 type ScriptPropertyOptions = { filePath?: string; variableTypes?: Record<string, string> };
 type PropertyPosition = Pick<ScriptPropertyFinding, 'line' | 'column'>;
+type PropertyReadSpan = { start: number; end: number };
+
+const NPC_TARGET_GUARD = 'player.target.isclass.npc';
+const POSITIVE_GUARD_ATTRIBUTES = new Set(['value', 'chance', 'weight', 'comment']);
+
+function npcGuardReadSpans(xml: string): PropertyReadSpan[] {
+  if (!xml.includes(NPC_TARGET_GUARD)) return [];
+  const root = parseMdScriptRoot(xml);
+  if (!root || root.namespaceURI) return [];
+
+  const spans: PropertyReadSpan[] = [];
+  let lineStarts: number[] | undefined;
+  for (const branch of Array.from(root.getElementsByTagName('do_if'))) {
+    const actions = branch.parentElement;
+    const owner = actions?.parentElement;
+    if (branch.namespaceURI || actions?.tagName !== 'actions' || actions.namespaceURI
+      || (owner?.tagName !== 'cue' && owner?.tagName !== 'library') || owner.namespaceURI
+      || branch.getAttribute('value')?.trim() !== NPC_TARGET_GUARD
+      || Array.from(branch.attributes).some(attribute => !POSITIVE_GUARD_ATTRIBUTES.has(attribute.name))) continue;
+
+    for (const child of Array.from(branch.children)) {
+      if (child.namespaceURI || child.children.length) break;
+      const read = child.tagName === 'debug_text' ? child.getAttributeNode('text')
+        : child.tagName === 'set_value' && /^\$[A-Za-z_]\w*$/.test(child.getAttribute('name') ?? '')
+          && !child.hasAttribute('operation') ? child.getAttributeNode('exact') : null;
+      // The next action could change the selected target. Do not carry the guard across it.
+      if (!read) break;
+      if (read.lineNumber === undefined || read.columnNumber === undefined) continue;
+      // Match xmldom's line normalization while keeping offsets into the original XML.
+      lineStarts ??= [0, ...Array.from(xml.matchAll(/\r[\n\u0085]|[\r\n\u0085\u2028\u2029]/g),
+        match => match.index + match[0].length)];
+      // xmldom locates the opening quote. parseMdScriptRoot strips a possible leading BOM.
+      const quote = lineStarts[read.lineNumber - 1] + read.columnNumber - 1
+        + Number(read.lineNumber === 1 && xml.startsWith('\uFEFF'));
+      if (xml[quote] !== '"') continue;
+      const end = xml.indexOf('"', quote + 1);
+      if (end > quote) spans.push({ start: quote + 1, end });
+    }
+  }
+  return spans;
+}
 
 /**
  * Lint every `$var.prop…` / `keyword.prop…` chain in MD/AIScript XML text.
@@ -584,7 +626,8 @@ type PropertyPosition = Pick<ScriptPropertyFinding, 'line' | 'column'>;
  */
 export function lintScriptPropertyChains(xml: string, index: ScriptPropertyIndex, opts?: ScriptPropertyOptions): ScriptPropertyFinding[] {
   if (!index.loaded) return [];
-  return lintPropertyChains(xml, maskNonExpressionSpans(xml), index, opts);
+  const guardedReads = index.model.datatypes.has('npc') ? npcGuardReadSpans(xml) : [];
+  return lintPropertyChains(xml, maskNonExpressionSpans(xml), index, opts, guardedReads);
 }
 
 export function lintScriptPropertyExpression(expression: string, index: ScriptPropertyIndex, opts?: ScriptPropertyOptions): ScriptPropertyFinding[] {
@@ -594,8 +637,11 @@ export function lintScriptPropertyExpression(expression: string, index: ScriptPr
   return lintPropertyChains(expression, masked, index, opts);
 }
 
-function lintPropertyChains(source: string, masked: string, index: ScriptPropertyIndex, opts?: ScriptPropertyOptions): ScriptPropertyFinding[] {
+function lintPropertyChains(source: string, masked: string, index: ScriptPropertyIndex, opts?: ScriptPropertyOptions,
+  guardedReads: PropertyReadSpan[] = [],
+): ScriptPropertyFinding[] {
   const out: ScriptPropertyFinding[] = [];
+  let guardIndex = 0;
   let lineStarts: number[] | undefined;
   function locate(offset: number): PropertyPosition {
     lineStarts ??= [0, ...Array.from(source.matchAll(/\r\n?|\n/g), match => match.index + match[0].length)];
@@ -611,6 +657,10 @@ function lintPropertyChains(source: string, masked: string, index: ScriptPropert
   for (const parsed of parseExpressionChains(masked)) {
     const rootRaw = parsed.root.raw;
     const rootLower = rootRaw.toLowerCase();
+    while (guardIndex < guardedReads.length && guardedReads[guardIndex].end <= parsed.start) guardIndex++;
+    const guardRead = guardedReads[guardIndex];
+    const guardedTarget = guardRead && parsed.start >= guardRead.start && parsed.end <= guardRead.end
+      && rootRaw === 'player' && parsed.segments[0].raw === 'target';
     const isVar = rootRaw.startsWith('$');
     const keywordEntry = !isVar ? index.model.keywords.get(rootLower) : undefined;
     let states: PathState[];
@@ -638,6 +688,7 @@ function lintPropertyChains(source: string, masked: string, index: ScriptPropert
 
     let chain = rootRaw + parsed.segments.slice(0, firstSegment).map(segment => `.${segment.raw}`).join('');
     let stopQuietly = false;
+    let narrowedTarget = false;
     for (let segmentIndex = firstSegment; segmentIndex < parsed.segments.length; segmentIndex++) {
       const segment = parsed.segments[segmentIndex];
       chain += `.${segment.raw}`;
@@ -671,14 +722,22 @@ function lintPropertyChains(source: string, masked: string, index: ScriptPropert
           const declared = findingRoot && onlyState?.kind === 'context' && onlyState.context.kind === 'datatype'
             ? onlyState.context.name : undefined;
           const hint = isVar && segmentIndex === 0 ? knownVariableDatatype(rootRaw, index, opts) : undefined;
-          const typeContext = declared ? { datatype: declared, confidence: 'declared' as const }
+          const typeContext: ScriptPropertyFinding['typeContext'] = declared
+            ? { datatype: declared, confidence: narrowedTarget && segmentIndex === 1 ? 'guarded' : 'declared' }
             : hint ? { datatype: hint, confidence: 'hint' as const } : undefined;
           pushFinding(out, buildFinding(locate(segment.start), chain, segment.raw, findingRoot, candidateHeads(index, states), opts, typeContext));
         }
         stopQuietly = true;
         break;
       }
-      states = nextStates;
+      const next = nextStates.length === 1 ? nextStates[0] : undefined;
+      if (guardedTarget && segmentIndex === 0 && next?.kind === 'context'
+        && next.context.kind === 'datatype' && next.context.name === 'object') {
+        narrowedTarget = true;
+        states = [{ kind: 'context', context: { kind: 'datatype', name: 'npc' } }];
+      } else {
+        states = nextStates;
+      }
     }
 
     if (stopQuietly) continue;
@@ -743,8 +802,9 @@ function buildFinding(position: PropertyPosition, chain: string, segment: string
 }
 
 function propertyTypeLabel(context: NonNullable<ScriptPropertyFinding['typeContext']>): string {
-  return context.confidence === 'declared' ? ` on declared datatype "${context.datatype}"`
-    : ` (variable datatype hint "${context.datatype}")`;
+  if (context.confidence === 'guarded') return ` on datatype "${context.datatype}" established by the enclosing guard`;
+  if (context.confidence === 'declared') return ` on declared datatype "${context.datatype}"`;
+  return ` (variable datatype hint "${context.datatype}")`;
 }
 
 export function formatScriptPropertyFinding(finding: ScriptPropertyFinding): string {
@@ -769,6 +829,7 @@ export const SCRIPT_PROPERTIES_FIXTURE = `<?xml version="1.0" encoding="utf-8"?>
   <keyword name="player" description="Access to player-specific data">
     <property name="name" result="Player name" type="string" />
     <property name="entity" result="Player entity" />
+    <property name="target" result="Current player target" type="object" />
   </keyword>
   <keyword name="faction" description="Faction lookup">
     <import source="common.xsd" select="/xs:schema/xs:simpleType[@name='factionlookup']//xs:enumeration">
@@ -796,6 +857,9 @@ export const SCRIPT_PROPERTIES_FIXTURE = `<?xml version="1.0" encoding="utf-8"?>
   </datatype>
   <datatype name="object" type="destructible">
     <property name="isplayerowned" result="true iff owned by the player" type="boolean" />
+  </datatype>
+  <datatype name="npc" type="component">
+    <property name="npctemplate" result="Template for this NPC" type="string" />
   </datatype>
   <datatype name="ship" type="controllable">
     <property name="cargo" result="cargo access" type="containercargolist" />
@@ -848,7 +912,7 @@ export function runScriptPropertiesSelftest(): {
   // --- parsing the real shape ---
   const idx = buildScriptPropertyIndex(SCRIPT_PROPERTIES_FIXTURE);
   ok('index loads', idx.loaded);
-  ok('parses keywords + datatypes', idx.model.keywords.size === 3 && idx.model.datatypes.size === 14,
+  ok('parses keywords + datatypes', idx.model.keywords.size === 3 && idx.model.datatypes.size === 15,
     `kw=${idx.model.keywords.size} dt=${idx.model.datatypes.size}`);
   ok('placeholder property indexed by literal head (isclass.{$class} → isclass)',
     idx.model.datatypes.get('component')!.heads.has('isclass'));
@@ -1029,6 +1093,41 @@ export function runScriptPropertiesSelftest(): {
   // --- degradation ---
   ok('garbage input degrades to empty model', !buildScriptPropertyIndex('<not-scriptproperties/>').loaded);
   ok('empty input degrades', !buildScriptPropertyIndex('').loaded && lintScriptPropertyChains('x', buildScriptPropertyIndex('')).length === 0);
+
+  const npcTypo = '<debug_text text="player.target.npctemplat"/>';
+  const npcValid = '<debug_text text="player.target.npctemplate"/>';
+  const npcGuard = (actions: string, attrs = '') => `<do_if value="player.target.isclass.npc"${attrs}>${actions}</do_if>`;
+  const mdActions = (actions: string, namespace = '') => `<mdscript${namespace}><cues><cue><actions>${actions}</actions></cue></cues></mdscript>`;
+  const scopedLine = '<set_value name="$snapshot" exact="player.target.npctemplate"/>' + npcTypo;
+  const scoped = lintScriptPropertyChains('\uFEFF' + mdActions(npcGuard(`\r\n${npcValid}\r` + scopedLine
+    + '<set_value name="player.target.$mark" exact="true"/>' + npcTypo) + npcTypo), idx);
+  ok('positive NPC guard narrows only contiguous reads with raw positions', scoped.length === 3
+    && scoped[0].line === 3 && scoped[0].column === scopedLine.indexOf('npctemplat"') + 1
+    && scoped[0].suggestions[0] === 'npctemplate'
+    && scoped[0].typeContext?.datatype === 'npc' && scoped[0].typeContext?.confidence === 'guarded'
+    && scoped.slice(1).every(finding => finding.typeContext?.datatype === 'object'), scoped);
+  const unguarded = [
+    ...[' exact="false"', ' negate="true"', ' min="0"', ' max="0"', ' list="[false]"']
+      .map(attrs => mdActions(npcGuard(npcValid, attrs))),
+    mdActions(npcGuard('<run_actions ref="Work"/>' + npcValid)),
+    mdActions(npcGuard('<wait exact="1s"/>' + npcValid)),
+    mdActions(npcGuard(`<do_all>${npcValid}</do_all>${npcValid}`)),
+    mdActions(npcGuard(npcValid), ' xmlns="urn:other"'),
+    mdActions(npcGuard(npcValid.replace('<debug_text', '<debug_text xmlns="urn:other"'))),
+    mdActions(npcGuard(npcValid)).replace('mdscript', 'diff').replace('</mdscript>', '</diff>'),
+    mdActions(npcGuard(npcValid)).replace('</actions>', ''),
+    mdActions(npcGuard('').concat(`<do_else>${npcValid}</do_else>`)),
+  ];
+  ok('NPC guard rejects comparison, mutation, scope and malformed counterexamples', unguarded.every(xml => {
+    const findings = lintScriptPropertyChains(xml, idx).filter(finding => finding.segment === 'npctemplate');
+    return findings.length > 0 && findings.every(finding => finding.typeContext?.datatype === 'object');
+  }));
+  ok('standalone expressions retain the declared player target type',
+    lintScriptPropertyExpression('player.target.npctemplate', idx)[0]?.typeContext?.datatype === 'object');
+  const normalizedLines = lintScriptPropertyChains(mdActions(`<!-- earlier\u2028comment -->${npcGuard(`\n${npcTypo}`)}\n${npcTypo}`), idx);
+  ok('XML-only line separators cannot move narrowing onto an aligned unguarded read', normalizedLines.length === 2
+    && normalizedLines[0].typeContext?.confidence === 'guarded'
+    && normalizedLines[1].typeContext?.datatype === 'object', normalizedLines);
 
   const passed = checks.filter(c => c.pass).length;
   const allPassed = passed === checks.length;
