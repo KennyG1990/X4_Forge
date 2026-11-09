@@ -4433,15 +4433,15 @@ app.get("/api/agent/schema", (req, res) => {
         method: "GET",
         path: "/api/fs/read?path=<relativePath>",
         auth: true,
-        purpose: "Read a file under the configured filesystem/mod workspace root."
+        purpose: "Read UTF-8 content and the raw byte count and SHA-256. Defaults to root=workspace. Select root=filesystem (alias: deployment) for the deployed copy."
       },
       {
         method: "POST",
         path: "/api/fs/write",
         auth: true,
         body: { path: "relative path under the Mod Workspace Folder", content: "string", strict: "optional boolean",
-          expectedSha256: "optional current file SHA-256, or null to require an absent target" },
-        purpose: "Write and verify workspace bytes. Unexpected I/O failures return a correlated writeFailure observation. Inspect workspace bytes before retrying."
+          expectedSha256: "optional SHA-256 from the workspace read, or null to require an absent target" },
+        purpose: "Write and verify workspace bytes. Success includes the workspace root role and absolute path in written. Unexpected I/O failures return a correlated writeFailure observation. Inspect workspace bytes before retrying."
       },
       {
         method: "POST",
@@ -4985,9 +4985,14 @@ app.get("/api/fs/read", (req, res) => {
       });
     }
 
-    const content = fs.readFileSync(safePath, 'utf8');
-    // Always report which copy was served, so a caller never has to guess.
-    return res.json({ content, root: chosen, absolutePath: safePath, bytes: Buffer.byteLength(content, 'utf8') });
+    const bytes = fs.readFileSync(safePath);
+    return res.json({
+      content: bytes.toString('utf8'),
+      root: chosen,
+      absolutePath: safePath,
+      bytes: bytes.length,
+      sha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+    });
   } catch (error) {
     return res.status(500).json({ error: error.message || "Failed to read file." });
   }
@@ -5064,7 +5069,7 @@ app.get("/api/patch/base-content", (req, res) => {
  * B86: THE single guarded workspace-write path. Extracted so that `/api/fs/write` and the
  * history "Revert to here" action share one implementation — a revert must replay through the
  * same validation and containment as any other write, never poke files behind the guards.
- * Returns false having ALREADY sent an error response; true means the bytes are on disk.
+ * Returns null after sending a refusal, or the verified path and write evidence.
  */
 /**
  * B93.7 — what the write actually put on disk.
@@ -5234,7 +5239,7 @@ function writeWorkspaceFileGuarded(
   relativePath: string,
   content: any,
   attempt?: WorkspaceWriteAttempt,
-): ReturnType<typeof describeWrittenBytes> | null {
+): { absolutePath: string; written: ReturnType<typeof describeWrittenBytes> } | null {
   if (!relativePath) {
     res.status(400).json({ error: "Missing path parameter." });
     return null;
@@ -5264,7 +5269,7 @@ function writeWorkspaceFileGuarded(
   if (attempt) attempt.stage = 'replace';
   atomicWriteFile(safePath, bytes);
   if (attempt) attempt.stage = 'verify';
-  return describeWrittenBytes(String(content ?? ''), safePath);
+  return { absolutePath: safePath, written: describeWrittenBytes(String(content ?? ''), safePath) };
 }
 
 app.post("/api/fs/write", coordinatedSourceOperation((req, res) => {
@@ -5308,9 +5313,13 @@ app.post("/api/fs/write", coordinatedSourceOperation((req, res) => {
         validation,
       });
     }
-    const written = writeWorkspaceFileGuarded(res, targetPath, incoming, attempt);
-    if (!written) return;
-    return res.json({ success: true, written, validation });
+    const result = writeWorkspaceFileGuarded(res, targetPath, incoming, attempt);
+    if (!result) return;
+    return res.json({
+      success: true,
+      written: { ...result.written, root: 'workspace', absolutePath: result.absolutePath },
+      validation,
+    });
   } catch (error) {
     const failure = workspaceWriteFailure(attempt, incoming, error);
     console.error('[workspace-file-write]', JSON.stringify(failure));
@@ -9854,10 +9863,10 @@ app.post('/api/agent/project-rules/suppress', coordinatedSourceOperation((req, r
     if (currentSha256 !== expected) {
       return res.status(409).json({ success: false, code: 'RULES_FILE_CHANGED', error: 'forge.rules.json changed before the write. Nothing was written.', expectedSha256: expected, currentSha256 });
     }
-    const written = writeWorkspaceFileGuarded(res, prepared.target.relativeRulesPath, content);
-    if (!written) return;
+    const result = writeWorkspaceFileGuarded(res, prepared.target.relativeRulesPath, content);
+    if (!result) return;
     const sourceHash = hashFolderFingerprint(fingerprintModFolder(prepared.target.sourceRoot));
-    return res.json({ success: true, status: 'VERIFIED', target: prepared.target.relativeRulesPath, rule, written, sourceHash });
+    return res.json({ success: true, status: 'VERIFIED', target: prepared.target.relativeRulesPath, rule, written: result.written, sourceHash });
   } catch (error) {
     return res.status(500).json({ success: false, code: 'SUPPRESSION_WRITE_FAILED', error: errorMessage(error) || 'Suppression write failed.' });
   }

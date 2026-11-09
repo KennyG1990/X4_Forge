@@ -34,6 +34,10 @@ Dev distinguishes real sharing denial from a failed verification after replaceme
 
 Agent status exposes active and waiting participating claims in its authorized workspace even without a source stamp. Workspace-only claims hide resource paths. The exact two-process replay confirmed a real held write, separate authorization, release and cleanup. [Isolated evidence](docs/plans/2026-11-09-workspace-coordination-visibility.md). Manual Studio sessions, desktop focus, installed verification and public delivery remain open.
 
+### Workspace read and guarded write byte evidence `in_progress` (GitHub #22)
+
+Dev returns the raw read hash and byte count, and its guarded workspace write reports the verified location. The two-root replay covers malformed UTF-8, wrong-copy and stale hashes, and a separate native deploy receipt. [Isolated evidence](docs/plans/2026-11-09-workspace-read-write-byte-evidence.md). Installed and public delivery remain open.
+
 ### Launcher-pinned scratch Directory Settings `in_progress` (GitHub #75)
 
 An explicit Dev launch flag shows the effective scratch paths and keeps corpus/schema settings editable in regular scratch profiles. Retargets and install harvesting refuse, the Project Check owner seal stays in force, and native deploy passed the exact scratch replay. [Isolated evidence and release review](docs/plans/2026-11-09-dev-scratch-directory-settings.md). Installed rendering and public delivery remain open.

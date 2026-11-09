@@ -3949,10 +3949,26 @@ async function main() {
   ok('fs_read_reports_which_root_served_it', typeof readDefault.json?.absolutePath === 'string' && readDefault.json.absolutePath.includes('X4ForgeMods'));
 
   // The read/write pair must now agree, which is the whole point of the fix.
-  await req('POST', '/api/fs/write', SESSION_TOKEN, { path: bothName, content: '<patched-once/>' });
+  const refusedDeployedHash = await req('POST', '/api/fs/write', SESSION_TOKEN, {
+    path: bothName, content: '<wrong-root/>', expectedSha256: readDeployed.json?.sha256,
+  });
+  ok('fs_write_refuses_a_different_deployed_hash', refusedDeployedHash.status === 409 && refusedDeployedHash.json?.code === 'FILE_CHANGED'
+    && fs.readFileSync(path.join(safeWorkspace, bothName), 'utf8') === '<workspace-copy/>');
+  const guardedWrite = await req('POST', '/api/fs/write', SESSION_TOKEN, {
+    path: bothName, content: '<patched-once/>', expectedSha256: readDefault.json?.sha256,
+  });
   const readBack = await req('GET', `/api/fs/read?path=${bothName}`, SESSION_TOKEN);
   ok('read_modify_write_operates_on_one_root', readBack.json?.content === '<patched-once/>', String(readBack.json?.content));
+  ok('fs_write_evidence_matches_workspace_reread', guardedWrite.status === 200 && guardedWrite.json?.written?.byteExact === true
+    && guardedWrite.json.written.root === 'workspace' && guardedWrite.json.written.absolutePath === readBack.json?.absolutePath
+    && guardedWrite.json.written.sha256 === readBack.json?.sha256);
   ok('deployed_copy_was_not_touched_by_the_write', fs.readFileSync(path.join(liveExtensions, bothName), 'utf8') === '<deployed-copy/>');
+
+  const malformedBytes = Buffer.from([0xff, 0xfe, 0xc3, 0xa9]);
+  fs.writeFileSync(path.join(safeWorkspace, 'raw_bytes_probe.txt'), malformedBytes);
+  const readRaw = await req('GET', '/api/fs/read?root=workspace&path=raw_bytes_probe.txt', SESSION_TOKEN);
+  ok('fs_read_hashes_and_counts_original_bytes', readRaw.status === 200 && readRaw.json?.content === malformedBytes.toString('utf8')
+    && readRaw.json.bytes === malformedBytes.length && readRaw.json.sha256 === crypto.createHash('sha256').update(malformedBytes).digest('hex'));
 
   // No silent fallthrough: a workspace-only file must NOT be served from the deployment root.
   fs.writeFileSync(path.join(safeWorkspace, 'workspace_only_probe.xml'), '<only-in-workspace/>');

@@ -43,10 +43,14 @@ Keep the same workspace source throughout an edit.
 
 | Step | Where |
 |---|---|
-| **Read** current content | the **workspace on disk**, or the explicit workspace read endpoint |
+| **Read** current content | the explicit workspace read endpoint |
 | **Modify** in memory | — |
-| **Write** | **through the Forge API** with the reviewed SHA-256 in `expectedSha256` |
-| **Verify readback** | the **workspace on disk**, byte-exact |
+| **Write** | **through the Forge API** with the workspace read's `sha256` in `expectedSha256` |
+| **Verify readback** | check `written.root`, `written.absolutePath`, `written.sha256` and `written.byteExact` |
+
+The read decodes `content` as UTF-8. Its `bytes` and `sha256` describe the original file, even if
+decoding replaced invalid bytes. Use the workspace read hash as the write precondition. If an older
+Forge build omits it, hash the original workspace file on disk.
 
 **Never hand-edit the deployment folder.** The Forge alone deploys. Hand-edited files are silently
 overwritten on the next deploy, and — worse — they make the deployment stop being evidence of what the source
@@ -54,7 +58,7 @@ says.
 
 If a workspace write returns HTTP 500, capture the response body up to 8 KiB. Record
 `writeFailure.requestId`, `stage`, and `outcome` when present. Read the workspace file before retrying.
-If it matches the requested SHA-256, the intended bytes are already present. If the reviewed old
+If its SHA-256 matches the requested bytes, those bytes are already present. If the reviewed old
 bytes remain and the edit is still intended, send their SHA-256 as `expectedSha256`. Use
 `expectedSha256: null` for a planned create after confirming the file is absent. For other bytes
 or unavailable evidence, reconcile the workspace state before sending another write.
