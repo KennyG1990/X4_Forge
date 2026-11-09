@@ -91,7 +91,7 @@ function expressionLocation(source: string, lines: number[], attr: Attr, offset:
 
 /** Validate expression-valued attributes in script files and their XML diff payloads. */
 export function lintScriptExpressions(xml: string, schema: SchemaIndex | null, filePath?: string): MdPitfallFinding[] {
-  if (!/\belse\b|%|&#/.test(xml)) return [];
+  if (!/\belse\b|%|&#/.test(xml) && !(xml.includes('@') && xml.includes('?'))) return [];
   const source = normalizeLineEndings(xml.replace(/^\uFEFF/, ''));
   let invalid = false;
   let doc;
@@ -111,7 +111,8 @@ export function lintScriptExpressions(xml: string, schema: SchemaIndex | null, f
       const attr = element.attributes[i];
       const spec = attributes?.get(attr.name);
       const knownExpression = (element.nodeName === 'set_value' && attr.name === 'exact')
-        || (element.nodeName === 'debug_text' && attr.name === 'text');
+        || (element.nodeName === 'debug_text' && attr.name === 'text')
+        || (element.nodeName === 'do_if' && attr.name === 'value');
       if (!knownExpression
         && !EXPRESSION_TYPE.test(spec?.type ?? '') && !EXPRESSION_TYPE.test(spec?.baseType ?? '')) continue;
       for (const finding of lintMdExpressionRules(attr.value)) {
@@ -375,6 +376,18 @@ export function runMdPitfallSelftest(): {
       && formatFindings[0].column === formatLine.indexOf('&#37;') + 1
       && formatFindings[0].sourceRef === 'debug_text/@text'
       && formatFindings[1].code === 'format-arguments-missing' && formatFindings[1].severity === 'warning', formatFindings);
+  const mixedLine = '    <do_if value="not &#64;$ship.pilot.seed&#63;" comment="@$decoy?"/>';
+  const mixedFindings = lintScriptExpressions([
+    '<mdscript>', '  <!-- <do_if value="@$decoy?"/> -->', mixedLine, '</mdscript>',
+  ].join('\r\n'), null, 'md/mixed.xml');
+  ok('mixed access reports raw XML coordinates without a schema index',
+    mixedFindings.length === 1 && mixedFindings[0].code === 'expression-null-safe-exists'
+      && mixedFindings[0].severity === 'error' && mixedFindings[0].line === 3
+      && mixedFindings[0].column === mixedLine.indexOf('&#64;') + 1
+      && mixedFindings[0].sourceRef === 'do_if/@value', mixedFindings);
+  ok('mixed access alone triggers script scanning',
+    lintScriptExpressions('<aiscript><do_if value="not @$ship.pilot.seed?"/></aiscript>', null).length === 1
+    && lintScriptExpressions('<aiscript><do_if value="not @$ship.pilot or $ship.pilot.seed?"/></aiscript>', null).length === 0);
   const cancelFindingCode = 'md_pitfall.cancel_conversation_actor_or_template';
   const cancelFindings = (xml: string) => lint(xml).filter(f => f.code === cancelFindingCode);
 

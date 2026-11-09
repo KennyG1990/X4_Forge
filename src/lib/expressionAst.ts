@@ -65,6 +65,7 @@ export function expressionChainAt(text: string, offset: number): ExpressionChain
 // A dollar starts a variable, including directly after a keyword (vanilla uses if$variable).
 const MD_EXPRESSION_TOKEN = /'(?:\\[\s\S]|[^'\\])*'|"(?:\\[\s\S]|[^"\\])*"|(?:[$\p{L}_]|\.(?=[$\p{L}_]))(?:\.\$|[\p{L}\p{N}_.])*|[^\s]/gu;
 const MD_GROUP_CLOSERS = new Map([['(', ')'], ['[', ']'], ['{', '}']]);
+const MD_ACCESS_TOKEN = /^\$?[\p{L}_][\p{L}\p{N}_]*(?:\.\$?[\p{L}_][\p{L}\p{N}_]*)*\.?$/u;
 
 export const MD_UNMATCHED_ELSE = {
   code: 'md.unmatched_else',
@@ -72,7 +73,8 @@ export const MD_UNMATCHED_ELSE = {
 } as const;
 
 export interface MdExpressionFinding {
-  code: typeof MD_UNMATCHED_ELSE.code | 'expression-format-specifier' | 'format-arguments-missing';
+  code: typeof MD_UNMATCHED_ELSE.code | 'expression-format-specifier' | 'format-arguments-missing'
+    | 'expression-null-safe-exists';
   severity: 'error' | 'warning';
   offset: number;
   segment: string;
@@ -175,11 +177,50 @@ function lintLiteralFormats(expression: string, findings: MdExpressionFinding[])
   }
 }
 
+/** Track a direct access operand independently from expressions inside its selectors. */
+function lintMixedAccess(expression: string, findings: MdExpressionFinding[]): void {
+  if (!expression.includes('@') || !expression.includes('?')) return;
+  type Access = { offset: number; next: 'root' | 'selector' | 'suffix' };
+  const frames: { closer?: string; access?: Access }[] = [{}];
+  for (const match of expression.matchAll(MD_EXPRESSION_TOKEN)) {
+    const token = match[0];
+    const frame = frames[frames.length - 1];
+    const access = frame.access;
+    const closer = MD_GROUP_CLOSERS.get(token);
+    if (token === "'" || token === '"') return;
+    if (closer) {
+      if (access?.next === 'selector' && (token === '[' || token === '{')) access.next = 'suffix';
+      else frame.access = undefined;
+      frames.push({ closer });
+    } else if (token === ')' || token === ']' || token === '}') {
+      if (frame.closer !== token) return;
+      frames.pop();
+    } else if (token === '@') {
+      frame.access = { offset: match.index, next: 'root' };
+    } else if (access) {
+      if (access.next === 'suffix' && token === '?') {
+        findings.push({
+          code: 'expression-null-safe-exists', severity: 'error', offset: access.offset, segment: '@',
+          message: "X4 rejects '@' and '?' on the same access operand.",
+        });
+        frame.access = undefined;
+      } else if (access.next === 'suffix' && token === '.') {
+        access.next = 'selector';
+      } else {
+        const part = access.next === 'suffix' ? (token.startsWith('.') ? token.slice(1) : '') : token;
+        if (MD_ACCESS_TOKEN.test(part)) access.next = part.endsWith('.') ? 'selector' : 'suffix';
+        else frame.access = undefined;
+      }
+    }
+  }
+}
+
 export function lintMdExpressionRules(expression: string): MdExpressionFinding[] {
   const findings: MdExpressionFinding[] = [];
   const offset = findUnmatchedMdElse(expression);
   if (offset !== undefined) findings.push({ ...MD_UNMATCHED_ELSE, severity: 'error', offset, segment: 'else' });
   lintLiteralFormats(expression, findings);
+  lintMixedAccess(expression, findings);
   return findings.sort((a, b) => a.offset - b.offset);
 }
 
@@ -273,6 +314,24 @@ export function runExpressionAstSelftest() {
     "'%2 %1 %2 %%d'.[1,2]", "'%.3s %s'.[table[$a = 1, $b = 2], 'two, three']",
     "'%s %s'.[$object.[$a,$b], '%s'.[1]]", "'%d in prose'", "player.systemtime.{'%Y-%m-%d %H:%M:%S'}",
     "'%s %s'.[1,]", "'%s %1'.[1]", "'%s %s'.[,1]", "'%d'.[1", "$computed.[1]",
+  ].every(expression => lintMdExpressionRules(expression).length === 0));
+  ok('mixed access blocks direct operands and preserves each operator offset', [
+    ['not @$ship.pilot.seed?', 1], ['(@$value?)', 1],
+    ['@$lookup.{table[$key=1].{$key}}.name?', 1], ['@$lookup.[$a].$name?', 1],
+    ['@$items.{@$index?}? or @player.ship?', 3],
+  ].every(([expression, count]) => {
+    const source = String(expression);
+    const findings = lintMdExpressionRules(source);
+    const offsets = [...source.matchAll(/@/g)].map(match => match.index);
+    return findings.length === count && findings.every((finding, index) =>
+      finding.code === 'expression-null-safe-exists' && finding.severity === 'error'
+      && finding.offset === offsets[index] && finding.segment === '@');
+  }));
+  ok('separate access operands and quoted operators stay clean', [
+    'not @event.object.role.hirable and event.object.$HiringFee?',
+    '(@$obj.prop) or ($other?)', '@$obj.prop + $other?', '@$lookup.{($index?)}.name',
+    '$lookup.{$index?} or @$other', "'@ignored?'", "@$items.{'@ignored?'}",
+    "@$value + '@ignored?", '@($value?)', '(@$value)?', '@$foo..bar?',
   ].every(expression => lintMdExpressionRules(expression).length === 0));
   const nested = collectMdStringResults("if ($x.then == 'if then else') then (if $next then 'one') else 'two'");
   ok('inline_if_retains_known_results_and_implicit_null', nested.values.join(',') === 'one,two' && nested.unresolved);
