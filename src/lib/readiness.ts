@@ -103,7 +103,8 @@ function diagnosticStage(
   const errors = countSeverity(diagnostics, 'error');
   const warnings = countSeverity(diagnostics, 'warning');
   if (errors > 0) return {
-    id, label, shortLabel: id === 'graph' ? 'Graph' : 'Validation', status: 'fail', owner,
+    id, label: id === 'graph' ? 'Graph invalid' : 'Project validation failed',
+    shortLabel: id === 'graph' ? 'Graph' : 'Validation', status: 'fail', owner,
     summary: `${errors} error${errors === 1 ? '' : 's'}`,
     evidence: `${errors} blocking error(s), ${warnings} warning(s) in current workspace evidence.`,
   };
@@ -210,7 +211,8 @@ export function runReadinessSelftest() {
   ok('graph_warning_not_green', stage({ graphDiagnostics: [diag('warning')] }, 'graph').status === 'warning');
   ok('package_checking_pending', stage({ diagnosticSource: 'checking' }, 'package').status === 'pending');
   ok('package_offline_unavailable', stage({ diagnosticSource: 'local' }, 'package').status === 'unavailable');
-  ok('package_error_fails', stage({ packageDiagnostics: [diag('error')] }, 'package').status === 'fail');
+  const invalidProject = stage({ packageDiagnostics: [diag('error')] }, 'package');
+  ok('package_error_fails', invalidProject.status === 'fail' && invalidProject.label === 'Project validation failed');
   ok('no_deploy_pending', stage({ watcher: { phase: 'ready', lastDeploy: null, sinceDeploy: { hasDeploy: false, changedSinceDeploy: false, summary: 'none' }, verdict: { state: 'not_seen', detail: 'none', errorCount: 0 } } }, 'deployed').status === 'pending');
   ok('no_deploy_blocks_seen_even_if_log_has_markers', stage({ watcher: { phase: 'ready', lastDeploy: null, sinceDeploy: { hasDeploy: false, changedSinceDeploy: false, summary: 'none' }, verdict: { state: 'loaded_clean', detail: 'old marker', errorCount: 0 } } }, 'seen').status === 'pending');
   ok('staging_is_not_deployed', stage({ watcher: { ...readyWatcher, lastDeploy: { ...deploy, deployedPath: undefined, stagingPath: 'F:/stage' } } }, 'deployed').status === 'pending');

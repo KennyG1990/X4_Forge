@@ -28,6 +28,7 @@
 import type { MDNode, MDLink } from '../types';
 import { areEquivalentRefs, semanticsForNode } from './mdSemantics';
 import { triggerNodesOf, actionChainOf } from './mdExplain';
+import { analyzeMdCueTrigger, graphConditionKind } from './cueLineage';
 
 export type CriticSeverity = 'info' | 'warning' | 'error';
 export type CriticCode = 'ref_mismatch' | 'oneway_no_restore' | 'unguarded_high_risk' | 'instantiate_reload' | 'game_loaded_no_refresh' | 'illegal_instantiate' | 'no_event_condition';
@@ -135,50 +136,20 @@ export function critiqueWorkspace(nodes: MDNode[], links: MDLink[]): CriticResul
       }
     }
 
-    // Instantiate-eligibility: X4 only permits instantiate="true" on a cue that has an EVENT
-    // condition or a checkinterval. (An "instance" is spun up each time the trigger fires; with
-    // neither there is no trigger to instance on.) These flags drive rules (d), (f) and (g).
-    const hasEventCondition = triggers.some((t) => t.type === 'event' || String(t.xmlTag || '').startsWith('event_'));
-    const checkIntervalRaw = cue.properties?.checkinterval;
-    const hasCheckInterval = checkIntervalRaw != null && String(checkIntervalRaw).trim() !== '';
-    const hasAnyCondition = triggers.length > 0;
-    const instantiateEligible = hasEventCondition || hasCheckInterval;
     const hasSubCues = links.some((l) => l.sourceNodeId === cue.id && l.sourcePortId === 'out_sub');
-    const instantiated = String(cue.properties?.instantiate) === 'true';
+    const { instantiated, instantiateEligible, finding } = analyzeMdCueTrigger(
+      triggers.map(graphConditionKind), cueName, cue.properties ?? {},
+    );
 
-    // --- (d) instantiate_reload — ONLY for instantiate-eligible cues. A cue that DOES have an
-    // event condition / checkinterval and holds a sub-cue tree but is instantiate="false" can
-    // fail to re-establish its instanced state on reload; recommending instantiate="true" is
-    // legal there. For a conditionless cue this advice would be ILLEGAL (see rule f), so we no
-    // longer emit it — fixing the bad guidance that produced the unloadable Chat_boot.
-    if (hasSubCues && !instantiated && instantiateEligible) {
+    // --- (d) instantiate_reload — reload behavior depends on the intended cue lifecycle.
+    if (cue.xmlTag !== 'custom_xml_cue' && hasSubCues && !instantiated && instantiateEligible) {
       findings.push({
-        severity: 'warning', code: 'instantiate_reload', cueId: cue.id, cueName, nodeId: cue.id,
-        message: `Cue "${cueName}" has sub-cues and an event condition/checkinterval but instantiate="false". X4 can fail to re-instantiate this cue's active state on a save/game reload. Set instantiate="true" so the cue + its sub-cue tree re-establish on load.`,
+        severity: 'info', code: 'instantiate_reload', cueId: cue.id, cueName, nodeId: cue.id,
+        message: `Cue "${cueName}" has sub-cues and runs without instantiation. Review whether its event or polling interval should create a fresh instance.`,
       });
     }
-
-    // --- (f) illegal_instantiate (ERROR) — X4 hard-rejects instantiate="true" on a cue with
-    // neither an event condition nor a checkinterval: "would instantiate without either an event
-    // condition or a check interval". The cue then fails to load. This is the exact defect our
-    // own (now-fixed) instantiate_reload advice introduced into Chat_boot.
-    if (instantiated && !instantiateEligible) {
-      findings.push({
-        severity: 'error', code: 'illegal_instantiate', cueId: cue.id, cueName, nodeId: cue.id,
-        message: `Cue "${cueName}" sets instantiate="true" but has no event condition and no checkinterval. X4 rejects this ("would instantiate without either an event condition or a check interval") and the cue fails to load. Remove instantiate (a conditionless cue runs on load AND on refreshmd), or add an event condition / checkinterval.`,
-      });
-    }
-
-    // --- (g) no_event_condition (ERROR) — a cue WITH a <conditions> block whose only entries are
-    // non-event checks (e.g. a bare <check_value>) and that has no checkinterval is illegal: X4
-    // needs an event to trigger on, or a checkinterval to poll the check. A conditionless cue
-    // (zero conditions = "instantly true") is fine and is NOT flagged. This is the Save_identity
-    // defect: <check_value> as a root cue's sole condition.
-    if (hasAnyCondition && !hasEventCondition && !hasCheckInterval) {
-      findings.push({
-        severity: 'error', code: 'no_event_condition', cueId: cue.id, cueName, nodeId: cue.id,
-        message: `Cue "${cueName}" has only non-event conditions and no checkinterval. X4 requires an event condition OR a checkinterval — a bare <check_value> as a cue's sole condition is illegal ("event condition required"). Add an event condition, add a checkinterval to poll the check, or move the check into a <do_if> guard inside the actions of a conditionless cue.`,
-      });
+    if (finding && cue.xmlTag !== 'custom_xml_cue') {
+      findings.push({ severity: 'error', code: finding.code, cueId: cue.id, cueName, nodeId: cue.id, message: finding.detail });
     }
 
     // --- (e) game_loaded_no_refresh — engine semantic the XSD/Lua can't see. event_game_loaded
@@ -287,7 +258,8 @@ export function runCriticSelftest() {
      N('sub', 'cue', 'cue', { name: 'Poll' })],
     [L('s0', 'cb', 'out_cond', 'cbe', 'in_cond'), L('s1', 'cb', 'out_sub', 'sub', 'in_flow')]
   );
-  ok('instantiate_reload_fires_when_eligible', has(reloadUnsafe, 'instantiate_reload', 'cb'), reloadUnsafe.findings);
+  ok('instantiate_reload_is_informational_when_eligible', reloadUnsafe.findings.some(finding =>
+    finding.code === 'instantiate_reload' && finding.nodeId === 'cb' && finding.severity === 'info'), reloadUnsafe.findings);
   // Eligible + instantiate=true → instantiate_reload suppressed (and NOT illegal_instantiate).
   const reloadSafe = critiqueWorkspace(
     [N('cb2', 'cue', 'cue', { name: 'Boot', instantiate: 'true' }),
@@ -341,6 +313,20 @@ export function runCriticSelftest() {
     [L('g3', 'pc', 'out_cond', 'pcv', 'in_cond')]
   );
   ok('no_event_condition_suppressed_by_checkinterval', !has(polledCheck, 'no_event_condition'), polledCheck.findings);
+  const triggerCase = (properties: Record<string, string>, tag = 'check_value', raw?: Record<string, string>) =>
+    critiqueWorkspace([N('cue', 'cue', 'cue', { name: 'Trigger', ...properties }), N('cond', 'condition', tag, raw)],
+      [L('trigger', 'cue', 'out_cond', 'cond', 'in_cond')]);
+  ok('valid one-shot modes are accepted without creating an instance', ['cancel', 'complete'].every(onfail =>
+    !triggerCase({ onfail }).findings.some(finding => finding.severity === 'error')));
+  ok('a one-shot mode still cannot instantiate and checktime alone is no mode',
+    has(triggerCase({ onfail: 'cancel', instantiate: 'true' }), 'illegal_instantiate')
+      && has(triggerCase({ checktime: '1s' }), 'no_event_condition'));
+  ok('grouped event children are recognized in graph forms and decoys do not count',
+    !has(triggerCase({ instantiate: 'true' }, 'check_all', {
+      __rawChildrenXml: '<event_game_loaded/><check_value value="true"/>',
+    }), 'illegal_instantiate')
+    && has(triggerCase({}, 'custom_condition', { rawXml: '<check_any><!-- <event_game_loaded/> --><check_value value="true"/></check_any>' }), 'no_event_condition')
+    && !has(triggerCase({}, 'custom_condition', { rawXml: '<check_any><event_game_loaded/>' }), 'no_event_condition'));
   // Suppressed for a conditionless cue (zero conditions = instantly true, legal).
   const conditionlessClean = critiqueWorkspace(
     [N('cc', 'cue', 'cue', { name: 'Chat_boot' }), N('ccs', 'cue', 'cue', { name: 'Poll' })],

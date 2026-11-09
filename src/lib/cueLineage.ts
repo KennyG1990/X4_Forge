@@ -25,6 +25,7 @@
 import type { MDNode, MDLink } from '../types';
 import { DOMParser, type Element } from '@xmldom/xmldom';
 import type { ValidationSourceLocation } from './validationEvidence';
+import { assertXmlInputWithinLimits, MAX_PROJECT_XML_DEPTH } from './xmlInputLimits';
 import { parseXmlLenient, walkElements } from './xmlLite';
 
 export function parseMdScriptRoot(content: string): Element | null {
@@ -36,6 +37,72 @@ export function parseMdScriptRoot(content: string): Element | null {
   } catch {
     return null;
   }
+}
+
+type ConditionKind = 'event' | 'check' | 'unknown';
+type CueTriggerCode = 'illegal_instantiate' | 'no_event_condition';
+
+/** Grouped events start with an event in check_all and occupy every branch of check_any. */
+export function mdConditionKind(element: Element): ConditionKind {
+  function classify(node: Element, depth: number): ConditionKind {
+    if (node.namespaceURI || depth >= MAX_PROJECT_XML_DEPTH) return 'unknown';
+    const tag = node.tagName;
+    if (tag.startsWith('event_')) return 'event';
+    if (tag !== 'check_all' && tag !== 'check_any') return 'check';
+    const children = Array.from(node.children, child => classify(child, depth + 1));
+    if (children.every(kind => kind === 'check')) return 'check';
+    const groupedEvent = tag === 'check_any' ? children.every(kind => kind === 'event')
+      : children[0] === 'event' && children.slice(1).every(kind => kind === 'check');
+    return groupedEvent ? 'event' : 'unknown';
+  }
+  return classify(element, 0);
+}
+
+export function graphConditionKind(node: MDNode): ConditionKind {
+  const tag = node.xmlTag;
+  const custom = tag === 'custom_event' || tag === 'custom_condition';
+  const grouped = tag === 'check_all' || tag === 'check_any';
+  if (tag?.startsWith('event_')) return 'event';
+  if (!custom && !grouped) return node.type === 'condition' ? 'check' : 'unknown';
+  const content = String(custom ? node.properties?.rawXml ?? '' : node.properties?.__rawChildrenXml ?? '').trim();
+  if (!content) return 'unknown';
+  const xml = custom ? content : `<${tag}>${content}</${tag}>`;
+  try {
+    assertXmlInputWithinLimits(xml);
+    let malformed = false;
+    const root = new DOMParser({ onError: () => { malformed = true; } }).parseFromString(xml, 'text/xml').documentElement;
+    return !malformed && root ? mdConditionKind(root) : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+export function mdCueInstantiates(value: unknown): boolean {
+  const lexical = String(value ?? '').trim();
+  return lexical === 'true' || lexical === '1';
+}
+
+export function analyzeMdCueTrigger(
+  conditions: ConditionKind[], name: string,
+  attributes: { checkinterval?: unknown; onfail?: unknown; instantiate?: unknown; ref?: unknown; libPurpose?: unknown },
+) {
+  const hasEvent = conditions.includes('event');
+  const hasInterval = !!String(attributes.checkinterval ?? '').trim();
+  const onfail = String(attributes.onfail ?? '').trim();
+  const instantiated = mdCueInstantiates(attributes.instantiate);
+  const ownsTrigger = !String(attributes.ref ?? '').trim()
+    && attributes.libPurpose !== 'run_actions' && attributes.libPurpose !== 'include_actions';
+  const instantiateEligible = ownsTrigger && (hasEvent || hasInterval);
+  const known = ownsTrigger && !conditions.includes('unknown');
+  let finding: { code: CueTriggerCode; detail: string } | undefined;
+  if (known && instantiated && !instantiateEligible) {
+    finding = { code: 'illegal_instantiate',
+      detail: `Cue "${name}" instantiates without an event condition or a check interval. Remove instantiate or give the cue an event or checkinterval.` };
+  } else if (known && conditions.length && !instantiateEligible && onfail !== 'cancel' && onfail !== 'complete') {
+    finding = { code: 'no_event_condition',
+      detail: `Cue "${name}" has check-only conditions without a checking mode. Add onfail="cancel" or onfail="complete" for a one-shot check, or checkinterval to poll.` };
+  }
+  return { instantiated, instantiateEligible, finding };
 }
 
 export function duplicateMdCueMessage(name: string, script: string, first?: ValidationSourceLocation): string {

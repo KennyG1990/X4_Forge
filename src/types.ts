@@ -6,7 +6,7 @@
 import { schemaElementToTemplate, type SchemaElement } from './lib/schemaTypes';
 import { isContainerTag } from './lib/portSemantics';
 import type { IntegrationContract } from './lib/contractGlue';
-import { duplicateMdCueMessage } from './lib/cueLineage';
+import { analyzeMdCueTrigger, duplicateMdCueMessage, graphConditionKind, mdCueInstantiates } from './lib/cueLineage';
 
 // Node port representation
 export interface Port {
@@ -876,7 +876,7 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
 
     const cueName = cue.properties.name || cue.id;
     const isLib = cue.properties.isLibrary === 'true' || cue.properties.isLibrary === true;
-    const inst = cue.properties.instantiate === 'true' ? ' instantiate="true"' : '';
+    const inst = mdCueInstantiates(cue.properties.instantiate) ? ' instantiate="true"' : '';
     const ns = cue.properties.namespace ? ` namespace="${escapeXMLAttribute(String(cue.properties.namespace))}"` : '';
     const state = cue.properties.state && cue.properties.state !== 'active' ? ` state="${escapeXMLAttribute(String(cue.properties.state))}"` : '';
     const cueInternal = new Set([
@@ -1577,51 +1577,17 @@ export function validateModWorkspace(workspace: ModWorkspace, code: string): XML
     }
     cueNamesSeen.add(scopedCueName);
 
-    // Classify condition nodes as events vs checks
-    const eventNodes = conditionNodes.filter(n => n.xmlTag && n.xmlTag.startsWith('event_'));
-    const checkNodes = conditionNodes.filter(n => n.xmlTag && !n.xmlTag.startsWith('event_') && n.type !== 'cue');
-    // Custom events/conditions: classify by type
-    const customEventNodes = conditionNodes.filter(n => n.xmlTag === 'custom_event');
-    const customConditionNodes = conditionNodes.filter(n => n.xmlTag === 'custom_condition');
-    const allEventLike = [...eventNodes, ...customEventNodes];
-    const allCheckLike = [...checkNodes, ...customConditionNodes];
-    const hasEvents = allEventLike.length > 0;
-    const hasChecks = allCheckLike.length > 0;
-    const hasConditions = conditionNodes.length > 0;
+    const conditionKinds = conditionNodes.map(graphConditionKind);
+    const hasEvents = conditionKinds.includes('event');
 
     // ── LAW 3: Event conditions must come first in conditions block ──
-    if (hasEvents && hasChecks && conditionNodes.length > 0) {
-      const firstNode = conditionNodes[0];
-      const isFirstAnEvent = firstNode.xmlTag?.startsWith('event_') || firstNode.xmlTag === 'custom_event';
-      if (!isFirstAnEvent) {
-        diagnostics.push({
-          severity: 'error',
-          message: `Cue "${cueName}": Event conditions must be the FIRST condition wired to the cue, but a check/condition node is wired first. Re-order the out_cond links so the event node comes first.`,
-          nodeId: cue.id,
-          category: 'egosoft'
-        });
-      }
-    }
-
-    // ── LAW 5: Non-event cues with only checks MUST have onfail or checkinterval ──
-    // A custom_condition imported from XML can embed events inside a check_any/check_all
-    // wrapper (e.g. <check_any><event_game_loaded/></check_any>) — it collapses to ONE
-    // node whose rawXml carries the event. Such a cue IS event-driven, so it must not be
-    // flagged as check-only. Detect embedded events in any condition node's rawXml.
-    const conditionEmbedsEvent = conditionNodes.some(n =>
-      /<(?:event_|custom_event\b)/.test(String(n.properties?.rawXml ?? '')),
-    );
-    if (hasConditions && !hasEvents && hasChecks && !conditionEmbedsEvent) {
-      const hasOnfail = cue.properties.onfail && cue.properties.onfail.trim().length > 0;
-      const hasCheckinterval = cue.properties.checkinterval && cue.properties.checkinterval.trim().length > 0;
-      if (!hasOnfail && !hasCheckinterval) {
-        diagnostics.push({
-          severity: 'error',
-          message: `Cue "${cueName}" has check-only conditions (no events) but is missing "onfail" or "checkinterval" attribute. The X4 engine requires one of these to know how often to re-evaluate.`,
-          nodeId: cue.id,
-          category: 'egosoft'
-        });
-      }
+    if (hasEvents && conditionKinds[0] === 'check') {
+      diagnostics.push({
+        severity: 'error',
+        message: `Cue "${cueName}": Event conditions must be the FIRST condition wired to the cue, but a check/condition node is wired first. Re-order the out_cond links so the event node comes first.`,
+        nodeId: cue.id,
+        category: 'egosoft'
+      });
     }
 
     // ── LAW 6: Event-based cues must NOT use onfail, checkinterval, or checktime ──
@@ -1640,19 +1606,14 @@ export function validateModWorkspace(workspace: ModWorkspace, code: string): XML
       }
     }
 
-    // ── LAW 7: Safe instantiation — only on event-based cues ──
-    // (events embedded in an imported check_any custom_condition count — see LAW 5)
-    if (cue.properties.instantiate === 'true' && !hasEvents && !conditionEmbedsEvent) {
-      diagnostics.push({
-        severity: 'warning',
-        message: `Cue "${cueName}" uses instantiate="true" but has no event conditions. Instantiation on check-only or unconditional cues can cause memory leaks. Use events or remove instantiate.`,
-        nodeId: cue.id,
-        category: 'egosoft'
-      });
+    // ── LAWS 5 and 7: Checking mode and instantiation ──
+    const { finding, instantiated } = analyzeMdCueTrigger(conditionKinds, String(cueName), cue.properties);
+    if (finding && cue.xmlTag !== 'custom_xml_cue') {
+      diagnostics.push({ severity: 'error', message: finding.detail, nodeId: cue.id, category: 'egosoft' });
     }
 
     // ── LAW 8: No reset_cue on instantiated cues ──
-    if (cue.properties.instantiate === 'true') {
+    if (instantiated) {
       const hasResetSelf = actionNodes.some(n => {
         if (n.xmlTag === 'custom_xml' && n.properties.rawXml) {
           return /reset_cue\s+cue="this"/i.test(n.properties.rawXml);

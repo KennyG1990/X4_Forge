@@ -10,6 +10,10 @@
 
 Dev adds explicit local Start with exact saved workspace, offline Studio state, and owned retirement before replacement. [Recovery record](docs/plans/2026-11-09-forge-local-backend-recovery.md). Dev operation lookup distinguishes a proven interruption before the write barrier from an unknown result after activation. [Admitted interruption proof](docs/plans/2026-11-09-forge-admitted-deploy-interruption.md). Deploy reconciles commit readback errors against the exact durable receipt before restoring old files. [Commit readback proof](docs/plans/2026-11-09-forge-deploy-commit-readback.md). A fresh preview can classify the current target against a retained interrupted apply before proceeding under a new ID. [Forward recovery and preview proof](docs/plans/2026-11-09-forge-interrupted-deploy-preview.md). Forge's scanner sees one extension after an interrupted nested transaction. [Transaction and X4 handoff](docs/plans/2026-11-09-forge-deploy-transaction-manifests.md). The live batch 480 receipt predates this evidence and remains prepared. The X4 witness, automatic cold resume, historical reconciliation, installed verification and release remain open.
 
+### Native deploy target identity preflight `in_progress` (GitHub #87)
+
+Both Dev aliases previewed a folder that the exact bound apply rejected after writing because its name disagreed with `content.xml`. The durable result rolled back and retained a private staged build. The correctly named control deployed exact bytes. [Independent reproduction and acceptance](https://github.com/KennyG1990/X4_Forge/issues/87). Reproduce the released backend and reconcile intended target identity before changing preflight.
+
 ### Unsaved expression MCP `in_progress` (GitHub #79, part of #74)
 
 Dev exposes the shared unsaved checker through an exact read/analyze capability and current MCP discovery. The paired policy, HTTP, stdio and native deploy passed in isolation, including the shared #73 and #78 grammar rules. [Dev evidence](docs/plans/2026-11-08-mcp-check-expression.md). Installed verification and public delivery remain open.
@@ -30,9 +34,13 @@ Dev blocks the X4-witnessed include of a run-only library when project source re
 
 Dev catches a proven unitless value reaching an explicitly monitored cutscene timeout. [Isolated replay and engine evidence](docs/plans/2026-11-09-ff32-cutscene-timeout.md). Other timing attributes, cross-cue value flow, installed verification and public delivery remain open.
 
+### MD cue checking-mode parity `in_progress` (GitHub #54, related to #74)
+
+Dev shares the checking-mode and instantiation decisions between Studio critic, graph compilation and project validation. [Dev replay and X4 witness](docs/plans/2026-11-09-md-cue-trigger-parity.md). Installed Studio readiness rendering and public delivery remain open.
+
 ### Exact cue-library arguments `in_progress` (GitHub #82, part of #74)
 
-Dev checks required and undeclared arguments for exact direct project cue instances. [Isolated replay and game evidence](docs/plans/2026-11-09-cue-library-arguments.md). Action invocations, effective patch signatures, the two official runtime pairs, installed verification and public delivery remain open.
+Dev checks required and undeclared arguments for exact direct project cue instances. [Isolated replay and game evidence](docs/plans/2026-11-09-cue-library-arguments.md). The [standalone run-actions witness](https://github.com/KennyG1990/X4_Forge/issues/82#issuecomment-6735409036) is queued. Action invocations, effective patch signatures, official runtime cases, installed verification and public delivery remain open.
 
 ### Exact property diagnostic positions and type provenance `in_progress` (GitHub #80, part of #74)
 

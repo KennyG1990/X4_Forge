@@ -38,7 +38,7 @@
 
 import { DOMParser, normalizeLineEndings, type Attr, type Document, type Element } from '@xmldom/xmldom';
 import { lintMdExpressionRules, type MdExpressionFinding } from './expressionAst';
-import { classifyCueRef } from './cueLineage';
+import { analyzeMdCueTrigger, classifyCueRef, mdConditionKind } from './cueLineage';
 import { maskNonExpressionSpans, type ScriptPropertyIndex } from './scriptProperties';
 import { assertXmlInputWithinLimits } from './xmlInputLimits';
 import type { SchemaIndex } from './xsdValidate';
@@ -46,7 +46,7 @@ import type { SchemaIndex } from './xsdValidate';
 export interface MdPitfallFinding {
   code: 'md_pitfall.products_existence' | 'md_pitfall.cancel_conversation_actor_or_template' | 'md_pitfall.ui_listener_one_shot'
     | 'md_pitfall.offer_accepted_keyword_cue' | 'md_pitfall.param3_table_barekey' | 'md_pitfall.return_context'
-    | 'md_pitfall.numeric_time_value'
+    | 'md_pitfall.numeric_time_value' | 'md_pitfall.no_event_condition' | 'md_pitfall.illegal_instantiate'
     | MdExpressionFinding['code'];
   severity: 'error' | 'warning';
   cue?: string;
@@ -339,6 +339,20 @@ export function lintMdPitfalls(xml: string, opts: { propertyUnion?: Set<string>;
   const root = element as unknown as ElementLike;
   out.push(...lintMdCutsceneTimeouts(element, opts.filePath));
 
+  for (const cue of Array.from(element.getElementsByTagName('*'))) {
+    if (cue.namespaceURI || (cue.tagName !== 'cue' && cue.tagName !== 'library')
+      || cue.parentElement?.tagName !== 'cues') continue;
+    const conditions = Array.from(cue.children).find(child => child.tagName === 'conditions');
+    const name = cue.getAttribute('name') || '(unnamed)';
+    const { finding } = analyzeMdCueTrigger(conditions ? Array.from(conditions.children, mdConditionKind) : [], name, {
+      checkinterval: cue.getAttribute('checkinterval'), onfail: cue.getAttribute('onfail'),
+      instantiate: cue.getAttribute('instantiate'), ref: cue.getAttribute('ref'), libPurpose: cue.getAttribute('purpose'),
+    });
+    if (!finding) continue;
+    out.push({ code: `md_pitfall.${finding.code}`, severity: 'error', filePath: opts.filePath, cue: name,
+      line: cue.lineNumber, column: cue.columnNumber, detail: finding.detail });
+  }
+
   for (const action of Array.from(element.getElementsByTagName('return'))) {
     const owner = ordinaryMdActionOwner(action);
     if (!owner || (owner.tagName === 'library' && owner.getAttribute('purpose') === 'run_actions')) continue;
@@ -504,6 +518,22 @@ export function runMdPitfallSelftest(): {
   const ok = (name: string, cond: boolean, detail?: unknown) =>
     checks.push({ name, pass: !!cond, detail: detail === undefined ? undefined : (typeof detail === 'string' ? detail : JSON.stringify(detail)) });
   const lint = (xml: string) => lintMdPitfalls(xml, { propertyUnion: UNION_FIXTURE });
+  const triggerRules = (cues: string) => lintMdPitfalls(`<mdscript name="Trigger"><cues>\n${cues}\n</cues></mdscript>`,
+    { filePath: 'md/trigger.xml' }).filter(f => f.code === 'md_pitfall.no_event_condition' || f.code === 'md_pitfall.illegal_instantiate');
+  const triggerCue = (attributes = '', body = '<check_value value="true"/>') =>
+    `  <cue name="Trigger"${attributes}><conditions>${body}</conditions></cue>`;
+  const noMode = triggerRules(triggerCue(' checktime="1s"'));
+  ok('checktime alone leaves a check-only cue without a checking mode', noMode.length === 1
+    && noMode[0].code === 'md_pitfall.no_event_condition' && noMode[0].filePath === 'md/trigger.xml'
+    && noMode[0].line === 2 && noMode[0].column === 3, noMode);
+  ok('one-shot checks pass but one-shot instantiation fails',
+    triggerRules(triggerCue(' onfail="cancel"')).length === 0
+    && triggerRules(triggerCue(' onfail="complete"')).length === 0
+    && triggerRules(triggerCue(' onfail="cancel" instantiate="1"'))[0]?.code === 'md_pitfall.illegal_instantiate');
+  ok('only owned checking modes are analyzed and legal grouped events pass',
+    triggerRules(triggerCue(' instantiate="true"', '<check_any><event_game_loaded/><event_game_started/></check_any>')).length === 0
+    && triggerRules('  <cue name="Instance" ref="External" instantiate="true"/>').length === 0
+    && triggerRules('  <library name="Run" purpose="run_actions" instantiate="true"/>').length === 0);
   const orphan = '  <set_value name="$probe" exact="$n &lt; 5 &#101;lse 0"/>';
   const expressionXml = [
     '<mdscript name="ElseProbe">',
