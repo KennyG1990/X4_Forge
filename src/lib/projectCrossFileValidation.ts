@@ -24,7 +24,7 @@ import { collectMdStringResults } from './expressionAst';
 import type { ValidationSourceLocation } from './validationEvidence';
 import { normPath, parseXmlLenient, walkElements } from './xmlLite';
 import { parse } from 'luaparse';
-import { DOMParser, type Element as XmlElement } from '@xmldom/xmldom';
+import { DOMParser, type Attr as XmlAttr, type Element as XmlElement } from '@xmldom/xmldom';
 import { stripLuaComments } from './luaStaticAnalysis';
 import { buildX4UiSourceBundle } from './x4UiSourceBundle';
 
@@ -45,6 +45,8 @@ export type ProjectCrossFileFindingCode =
   | 'md.run_actions_nonlibrary'
   | 'md.include_actions_run_library'
   | 'md.cue_library_ref_unresolved'
+  | 'md.cue_library_param_undeclared'
+  | 'md.cue_library_param_required'
   | 'md.cue_duplicate_name'
   | 'validation.lua_ast_unavailable'
   | 'ui.invalid_registration';
@@ -587,6 +589,50 @@ function findContentManifest(project: ExtensionProject): ModManifest | null {
   return content ? parseModManifest(project.id || 'project', content.content || '') : null;
 }
 
+function cueLibraryArgumentFindings(
+  cue: XmlElement, reference: XmlAttr, library: XmlElement, file: string, targetFile: string,
+): ProjectCrossFileFinding[] {
+  const childrenNamed = (element: XmlElement, tag: string) => Array.from(element.childNodes)
+    .filter((child): child is XmlElement => child.nodeType === 1 && child.nodeName === tag);
+  const containers = childrenNamed(library, 'params');
+  if (containers.length > 1) return [];
+  const parameters = containers[0] ? childrenNamed(containers[0], 'param') : [];
+  const declared = new Map(parameters.map(param => [param.getAttribute('name') ?? '', param]));
+  if (declared.has('') || declared.size !== parameters.length) return [];
+
+  const name = cue.getAttribute('name');
+  const ref = reference.value.trim();
+  const findings: ProjectCrossFileFinding[] = [];
+  const report = (
+    code: 'md.cue_library_param_undeclared' | 'md.cue_library_param_required',
+    attribute: XmlAttr, node: XmlElement, declaration: XmlElement, detail: string,
+  ) => {
+    const target = { file: targetFile, line: declaration.lineNumber, column: declaration.columnNumber };
+    const coordinate = [target.file, target.line, target.column].filter(part => part !== undefined).join(':');
+    findings.push({ code, severity: 'error', file,
+      line: attribute.lineNumber ?? node.lineNumber, column: attribute.columnNumber ?? node.columnNumber, target,
+      detail: `${detail} See ${coordinate}.` });
+  };
+
+  const supplied = new Set<string>();
+  for (const param of childrenNamed(cue, 'param')) {
+    const argument = param.getAttributeNode('name');
+    if (!argument?.value) continue;
+    supplied.add(argument.value);
+    if (!declared.has(argument.value)) {
+      report('md.cue_library_param_undeclared', argument, param, library,
+        `Cue "${name}" passes parameter "${argument.value}", which library "${ref}" does not declare.`);
+    }
+  }
+  for (const [parameter, declaration] of declared) {
+    if (!declaration.hasAttribute('default') && !supplied.has(parameter)) {
+      report('md.cue_library_param_required', reference, cue, declaration,
+        `Cue "${name}" calls library "${ref}" without required parameter "${parameter}".`);
+    }
+  }
+  return findings;
+}
+
 function validateCueLibraryReferences(mdFiles: ExtensionProject['files']) {
   const scripts = new Map<string, {
     name: string;
@@ -638,18 +684,24 @@ function validateCueLibraryReferences(mdFiles: ExtensionProject['files']) {
       const target = scripts.get(scriptName.toLowerCase());
       if (target?.name !== scriptName) continue;
       const targetKey = targetName.toLowerCase();
+      const declaration = target.declarations.get(targetKey);
+      const library = declaration?.nodeName === 'library' && declaration.getAttribute('name') === targetName ? declaration : null;
       if (node.nodeName === 'cue') {
         checked++;
-        if (target.declarations.has(targetKey)) continue;
-        findings.push({ code: 'md.cue_library_ref_unresolved', severity: 'error', file: script.file,
-          line: attribute.lineNumber ?? node.lineNumber, column: attribute.columnNumber ?? node.columnNumber,
-          detail: `Cue "${name}" references library "${ref}", which has no declaration in MD script "${scriptName}".` });
+        if (!target.declarations.has(targetKey)) {
+          findings.push({ code: 'md.cue_library_ref_unresolved', severity: 'error', file: script.file,
+            line: attribute.lineNumber ?? node.lineNumber, column: attribute.columnNumber ?? node.columnNumber,
+            detail: `Cue "${name}" references library "${ref}", which has no declaration in MD script "${scriptName}".` });
+        } else if (library) {
+          const purpose = library.getAttribute('purpose');
+          if (purpose === null || purpose === 'cue_ref') {
+            for (const finding of cueLibraryArgumentFindings(node, attribute, library, script.file, target.file)) findings.push(finding);
+          }
+        }
         continue;
       }
-      const declaration = target.declarations.get(targetKey);
-      if (declaration?.nodeName !== 'library' || declaration.getAttribute('name') !== targetName
-        || declaration.getAttribute('purpose') !== 'run_actions') continue;
-      const location = { file: target.file, line: declaration.lineNumber, column: declaration.columnNumber };
+      if (library?.getAttribute('purpose') !== 'run_actions') continue;
+      const location = { file: target.file, line: library.lineNumber, column: library.columnNumber };
       const coordinate = [location.file, location.line, location.column].filter(part => part !== undefined).join(':');
       findings.push({
         code: 'md.include_actions_run_library', severity: 'error', file: script.file,
@@ -868,7 +920,7 @@ export function validateProjectCrossFile(project: ExtensionProject): ProjectCros
       structuralErrors: structure.filter(i => i.severity === 'error').length,
       cueReferences: cueIndex.references.length + libraryReferences.checked,
       unresolvedCueRefs: cueIndex.unresolved.length + libraryReferences.findings
-        .filter(finding => finding.code !== 'md.include_actions_run_library').length,
+        .filter(finding => finding.code === 'md.cue_duplicate_name' || finding.code === 'md.cue_library_ref_unresolved').length,
       mdLuaMissingRegisters: missingRegisters.length,
       luaMdMissingListeners: missingListeners.length,
       luaRegistrationUnavailable: parseUnavailable.length,
@@ -1246,6 +1298,59 @@ AddUITriggeredEvent("ai_influence", "chat.response", {})`,
   })).findings.filter(f => f.code === includeCode);
   ok('case_fold_collision_on_script_keeps_qualified_include_unresolved',
     ambiguousIncludes.length === 1 && ambiguousIncludes[0].target?.file === includeFile, ambiguousIncludes);
+
+  const parameterFile = 'md/library_arguments.xml';
+  const parameterProject = addFile(fixtureProject(), {
+    path: parameterFile, kind: 'md',
+    content: [
+      '<mdscript name="Arguments"><cues>',
+      '  <library name="Provider" purpose="cue_ref">',
+      '    <params><param name="required"/><param name="optional" default="null"/></params>',
+      '    <cues><library name="Nested"><params><param name="nested"/></params></library></cues>',
+      '  </library>',
+      '  <cue name="Good" ref="Provider"><param name="required" value="7"/></cue>',
+      '  <cue name="Missing" ref="Provider"/>',
+      '  <cue name="Case" ref="md.Arguments.Provider"><param name="Required" value="7"/><param name="Optional" value="11"/></cue>',
+      '  <cue name="ChildIsSeparate" ref="Provider"><cues><cue name="Child"><param name="required" value="7"/></cue></cues></cue>',
+      '  <cue name="Empty" ref="md.Contract.Call_chat"><param name="extra" value="7"/></cue>',
+      '</cues></mdscript>',
+    ].join('\n'),
+  });
+  const isParamFinding = (finding: ProjectCrossFileFinding) =>
+    finding.code === 'md.cue_library_param_required' || finding.code === 'md.cue_library_param_undeclared';
+  const argumentsResult = validateProjectCrossFile(parameterProject);
+  const parameterFindings = argumentsResult.findings.filter(isParamFinding);
+  ok('cue arguments use exact case and defaults and preserve target coordinates', !argumentsResult.ok
+    && parameterFindings.map(f => `${f.line}:${f.code}`).join(',') === [
+      '7:md.cue_library_param_required', '8:md.cue_library_param_undeclared', '8:md.cue_library_param_undeclared',
+      '8:md.cue_library_param_required', '9:md.cue_library_param_required',
+    ].join(',')
+    && parameterFindings.every(f => f.file === parameterFile && f.target?.file === parameterFile
+      && f.target.line === (f.code === 'md.cue_library_param_required' ? 3 : 2) && f.detail.includes(parameterFile))
+    && (parameterFindings[1].column ?? 0) < (parameterFindings[2].column ?? 0)
+    && argumentsResult.summary.unresolvedCueRefs === 0, parameterFindings);
+  const unsupportedArguments = addFile(fixtureProject(), {
+    path: parameterFile, kind: 'md',
+    content: [
+      '<mdscript name="Arguments"><cues>',
+      '<library name="Empty"/>',
+      '<library name="Duplicate"><params><param name="required"/><param name="required"/></params></library>',
+      '<library name="Missing"><params><param/></params></library>',
+      '<library name="Multiple"><params><param name="required"/></params><params/></library>',
+      '<library name="Ambiguous"><params><param name="required"/></params></library><cue name="ambiguous"/>',
+      '<cue name="EmptyGood" ref="Empty"/><cue name="EmptyExtra" ref="Empty"><param name="extra" value="7"/></cue>',
+      '<cue name="DuplicateRef" ref="Duplicate"/><cue name="MissingRef" ref="Missing"/><cue name="MultipleRef" ref="Multiple"/>',
+      '<cue name="AmbiguousRef" ref="Ambiguous"/><cue name="Contextual" ref="this.Empty"><param name="extra" value="7"/></cue>',
+      '<cue name="External" ref="md.External.Library"><param name="extra" value="7"/></cue>',
+      '<cue name="Dynamic" ref="$provider"><param name="extra" value="7"/></cue>',
+      '<cue name="NonExact" ref="empty"><param name="extra" value="7"/></cue>',
+      '</cues></mdscript>',
+    ].join('\n'),
+  });
+  const unsupportedFindings = validateProjectCrossFile(unsupportedArguments).findings.filter(isParamFinding);
+  ok('empty signatures reject extras while unknown signatures stay quiet',
+    unsupportedFindings.length === 1 && unsupportedFindings[0].code === 'md.cue_library_param_undeclared'
+      && unsupportedFindings[0].line === 7 && unsupportedFindings[0].target?.line === 2, unsupportedFindings);
 
   let instanceProject = addFile(fixtureProject(), {
     path: 'md/instances.xml',

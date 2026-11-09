@@ -26,6 +26,10 @@ Dev blocks the X4-witnessed include of a run-only library when project source re
 
 Dev catches a proven unitless value reaching an explicitly monitored cutscene timeout. [Isolated replay and engine evidence](docs/plans/2026-11-09-ff32-cutscene-timeout.md). Other timing attributes, cross-cue value flow, installed verification and public delivery remain open.
 
+### Exact cue-library arguments `in_progress` (GitHub #82, part of #74)
+
+Dev checks required and undeclared arguments for exact direct project cue instances. [Isolated replay and game evidence](docs/plans/2026-11-09-cue-library-arguments.md). Action invocations, effective patch signatures, the two official runtime pairs, installed verification and public delivery remain open.
+
 ### Literal format diagnostics `in_progress` (GitHub #77, part of #74)
 
 The isolated Dev checker and native deploy now report exact literal-format diagnostics. The short-list case remains advisory. [Dev verification](docs/plans/2026-11-08-forge-literal-format-diagnostics.md). The frozen standalone game witness is queued with Claude, and installed/public delivery remain open.
