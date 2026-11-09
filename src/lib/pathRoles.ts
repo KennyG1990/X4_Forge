@@ -67,6 +67,71 @@ export function pathsOverlap(leftPath: string, rightPath: string): boolean {
   return isSameOrDescendant(leftPath, rightPath) || isSameOrDescendant(rightPath, leftPath);
 }
 
+function requirePhysicalDirectory(raw: string | undefined, label: string): string {
+  const configured = raw?.trim();
+  if (!configured || !path.isAbsolute(configured) || /^(?:\\\\|\/\/)/.test(configured)) {
+    throw new Error(`${label} must be an absolute local directory.`);
+  }
+  const directory = path.resolve(configured);
+  if (!fs.lstatSync(directory, { throwIfNoEntry: false })?.isDirectory()
+    || path.relative(directory, fs.realpathSync.native(directory))) {
+    throw new Error(`${label} must be a physical directory.`);
+  }
+  return directory;
+}
+
+/** Only the launching process can opt in. Saved settings cannot select these roles. */
+export function resolveDevScratchRoles(env: NodeJS.ProcessEnv = process.env) {
+  if (env.X4_FORGE_DEV_SCRATCH_SETTINGS === undefined) return undefined;
+  if (env.X4_FORGE_DEV_SCRATCH_SETTINGS !== '1' || env.X4_FORGE_MODE !== 'dev-build') {
+    throw new Error('Forge Dev scratch settings require the explicit dev-build launch mode.');
+  }
+  const root = requirePhysicalDirectory(env.X4_FORGE_DEV_ROOT, 'Forge Dev lab root');
+  if (root === path.parse(root).root) throw new Error('Forge Dev requires a dedicated lab directory.');
+  const x4GamePath = requirePhysicalDirectory(path.join(root, 'scratch-game'), 'Forge Dev scratch game root');
+  const filesystemPath = requirePhysicalDirectory(path.join(x4GamePath, 'extensions'), 'Forge Dev scratch extensions root');
+  const modWorkspacePath = requirePhysicalDirectory(path.join(root, 'mods'), 'Forge Dev mod workspace');
+  const builds = path.join(modWorkspacePath, '.forge-builds');
+  for (const directory of [builds, path.join(builds, 'loose')]) {
+    if (fs.lstatSync(directory, { throwIfNoEntry: false })) requirePhysicalDirectory(directory, 'Forge Dev deployment staging');
+  }
+  if (env.X4_GAME_PATH !== undefined
+    && (!path.isAbsolute(env.X4_GAME_PATH) || path.relative(x4GamePath, env.X4_GAME_PATH))) {
+    throw new Error('Forge Dev game override conflicts with the scratch root.');
+  }
+  for (let directory = x4GamePath; ; directory = path.dirname(directory)) {
+    if (fs.lstatSync(path.join(directory, 'X4.exe'), { throwIfNoEntry: false })) {
+      throw new Error('Forge Dev scratch target is inside an X4 installation.');
+    }
+    if (directory === path.dirname(directory)) break;
+  }
+  const x4LogPath = path.join(x4GamePath, 'debuglog.txt');
+  const log = fs.lstatSync(x4LogPath, { throwIfNoEntry: false });
+  if (log && (!log.isFile() || log.nlink !== 1)) throw new Error('Forge Dev log path must be a physical file.');
+  return { x4GamePath, filesystemPath, modWorkspacePath, x4LogPath };
+}
+
+/** Validate the sidecar's writable roots before opening any durable state. */
+export function validateDevScratchStorage(): void {
+  const scratch = resolveDevScratchRoles();
+  if (!scratch) return;
+  const root = path.dirname(scratch.x4GamePath);
+  const fields = ['X4_CONFIG_DIR', 'X4_STATE_DIR', 'X4_DATA_DIR', 'X4_SOURCE_COORDINATION_DIR', 'X4FORGE_DISCOVERY_DIR'] as const;
+  for (const field of fields) {
+    const configured = process.env[field];
+    if (configured === undefined && (field === 'X4_SOURCE_COORDINATION_DIR' || field === 'X4FORGE_DISCOVERY_DIR')) continue;
+    const directory = requirePhysicalDirectory(configured, field);
+    if (!path.relative(root, directory) || !isSameOrDescendant(directory, root)
+      || pathsOverlap(directory, scratch.x4GamePath) || pathsOverlap(directory, scratch.modWorkspacePath)) {
+      throw new Error(`${field} must be isolated from the workspace and deploy target inside the Forge Dev lab.`);
+    }
+    if (field === 'X4_CONFIG_DIR') {
+      const config = fs.lstatSync(path.join(directory, 'config.json'), { throwIfNoEntry: false });
+      if (config && (!config.isFile() || config.nlink !== 1)) throw new Error('Forge Dev config must be a physical file.');
+    }
+  }
+}
+
 function protectedDirectoryRoots(input: DirectoryRoleInput): Array<{ label: string; path: string }> {
   const gamePath = String(input.x4GamePath || '').trim();
   const referenceRoot = String(input.x4ReferenceRoot || '').trim();
@@ -118,10 +183,10 @@ export function inspectGameInstall(gamePath: string): { valid: boolean; canonica
  * development root; filesystemPath intentionally represents the deployed tree.
  * Empty optional paths are allowed; a non-empty game path must be a real X4 root.
  */
-export function validateDirectoryRoles(input: DirectoryRoleInput): DirectoryPathIssue[] {
+export function validateDirectoryRoles(input: DirectoryRoleInput, scratchGamePath?: string): DirectoryPathIssue[] {
   const issues: DirectoryPathIssue[] = [];
   const gamePath = String(input.x4GamePath || '').trim();
-  if (gamePath) {
+  if (gamePath && (!scratchGamePath || path.relative(scratchGamePath, gamePath))) {
     const game = inspectGameInstall(gamePath);
     if (!game.valid && game.issue) issues.push(game.issue);
   }
@@ -212,6 +277,34 @@ export function runPathRolesSelftest() {
     ok('junction_to_game_rejected', validateDirectoryRoles({ x4GamePath: game, modWorkspacePath: linkedGame }).some(i => i.field === 'modWorkspacePath'));
     ok('junction_to_game_filesystem_write_rejected', validateProtectedWriteTargets({ x4GamePath: game, filesystemPath: linkedGame }, ['filesystemPath']).some(i => i.field === 'filesystemPath'));
     ok('empty_optional_paths_accepted', validateDirectoryRoles({}).length === 0);
+
+    const dev = path.join(tmp, 'dev');
+    const scratch = path.join(dev, 'scratch-game');
+    const scratchExtensions = path.join(scratch, 'extensions');
+    const mods = path.join(dev, 'mods');
+    fs.mkdirSync(scratchExtensions, { recursive: true });
+    fs.mkdirSync(mods);
+    const env = { X4_FORGE_DEV_SCRATCH_SETTINGS: '1', X4_FORGE_MODE: 'dev-build', X4_FORGE_DEV_ROOT: dev, X4_GAME_PATH: scratch };
+    const refuses = (overrides: NodeJS.ProcessEnv) => {
+      try { resolveDevScratchRoles({ ...env, ...overrides }); return false; } catch { return true; }
+    };
+    const pins = resolveDevScratchRoles(env);
+    ok('explicit_scratch_launch_pins_all_roles', pins?.x4GamePath === scratch && pins.filesystemPath === scratchExtensions
+      && pins.modWorkspacePath === mods && pins.x4LogPath === path.join(scratch, 'debuglog.txt'));
+    ok('legacy_dev_root_does_not_opt_in', !resolveDevScratchRoles({ ...env, X4_FORGE_DEV_SCRATCH_SETTINGS: undefined }));
+    ok('other_mode_cannot_opt_in', refuses({ X4_FORGE_MODE: 'standalone' }));
+    ok('conflicting_game_override_refused', refuses({ X4_GAME_PATH: game }));
+    ok('scratch_does_not_require_install_marker', validateDirectoryRoles(pins!, pins?.x4GamePath).length === 0);
+    ok('scratch_still_protects_extensions_from_generic_writes', validateProtectedWriteTargets(pins!, ['filesystemPath']).length === 1);
+    ok('scratch_workspace_still_cannot_overlap_corpus', validateDirectoryRoles({ ...pins, x4ReferenceRoot: mods }, pins?.x4GamePath).length === 1);
+    fs.writeFileSync(path.join(dev, 'X4.exe'), '');
+    ok('scratch_nested_under_install_marker_refused', refuses({}));
+    fs.unlinkSync(path.join(dev, 'X4.exe'));
+    const linkedDev = path.join(tmp, 'linked-dev');
+    fs.symlinkSync(dev, linkedDev, 'junction');
+    ok('aliased_scratch_root_refused', refuses({ X4_FORGE_DEV_ROOT: linkedDev }));
+    fs.symlinkSync(game, path.join(mods, '.forge-builds'), 'junction');
+    ok('aliased_deploy_staging_refused', refuses({}));
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

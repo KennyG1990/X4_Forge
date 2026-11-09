@@ -14,7 +14,7 @@ import zlib from "zlib";
 import { buildX4UiSourceBundle, addX4UiSourceBundleRegistration, registeredX4MenuLuaPaths } from './src/lib/x4UiSourceBundle';
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
-import { createEmptySchemaLibrary, loadSchemaLibrary, readXsdConfig, resolveXsdConfig, runSchemaDiscoverySelftest, writeXsdConfig, type ResolvedXsdConfig } from "./src/lib/xsdParser";
+import { createEmptySchemaLibrary, loadSchemaLibrary, readXsdConfig, resolveXsdConfig, runSchemaDiscoverySelftest, writeXsdConfig, type ResolvedXsdConfig, type XsdConfig } from "./src/lib/xsdParser";
 
 // Import types & helpers from the frontend shared file
 import {
@@ -64,7 +64,7 @@ import { runPositionPickerSelftest } from "./src/lib/positionPicker";
 import { debugScan as catDatDebugScan, extractBaseGameFile as catDatExtractBaseGameFile, extractEntries as catDatExtractEntries, findCatDatArchives, parseCat, readEntryBytes, readEntryText, runCatDatSelftest } from "./src/lib/x4CatDat";
 import { buildSchemaIndex, validateXmlAgainstSchema, runXsdValidateSelftest, type SchemaIndex } from "./src/lib/xsdValidate";
 import { runReferenceLanguageSelftest } from "./src/lib/referenceLanguage";
-import { isSameOrDescendant, pathsOverlap, runPathRolesSelftest, validateDirectoryRoles, validateProtectedWriteTargets, type DirectoryField } from "./src/lib/pathRoles";
+import { isSameOrDescendant, pathsOverlap, runPathRolesSelftest, validateDevScratchStorage, validateDirectoryRoles, validateProtectedWriteTargets, type DirectoryField } from "./src/lib/pathRoles";
 import { parseXMLToWorkspace, setSchemaTemplatesForImport } from "./src/lib/xmlParser";
 import { reconcileImportedGraph } from './src/lib/importedIdentity';
 import type { SchemaLibrary } from "./src/lib/schemaTypes";
@@ -328,13 +328,22 @@ import {
   type StudioDb, type SourceStamp
 } from "./src/lib/db";
 
-const launchedProjectCheckOwnerPolicy = process.env.X4_FORGE_PROJECT_CHECK_OWNER_POLICY;
+const launchOnlySettings = ['X4_FORGE_PROJECT_CHECK_OWNER_POLICY', 'X4_FORGE_DEV_SCRATCH_SETTINGS'];
+if (process.env.X4_FORGE_DEV_SCRATCH_SETTINGS !== undefined) {
+  launchOnlySettings.push('X4_FORGE_MODE', 'X4_FORGE_DEV_ROOT', 'X4_GAME_PATH', 'X4_CONFIG_DIR', 'X4_STATE_DIR',
+    'X4_DATA_DIR', 'X4_SOURCE_COORDINATION_DIR', 'X4FORGE_DISCOVERY_DIR', 'STUDIO_API_TOKEN',
+    'USERPROFILE', 'HOME', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP');
+}
+const launchedSettings = launchOnlySettings.map(key => [key, process.env[key]] as const);
 dotenv.config();
 // Also load .env.local (Vite convention) so values like GITHUB_CLIENT_ID and GEMINI_API_KEY
 // placed there are visible to the server. .env.local takes precedence.
 dotenv.config({ path: '.env.local', override: true });
-if (launchedProjectCheckOwnerPolicy === undefined) delete process.env.X4_FORGE_PROJECT_CHECK_OWNER_POLICY;
-else process.env.X4_FORGE_PROJECT_CHECK_OWNER_POLICY = launchedProjectCheckOwnerPolicy;
+for (const [key, value] of launchedSettings) {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}
+validateDevScratchStorage();
 
 const app = express();
 // B117: keep Express route identity identical to the reviewed closed-world authority
@@ -4537,7 +4546,13 @@ function directoryRoleIssues(resolved: ResolvedXsdConfig) {
     x4ReferenceRoot: resolved.x4ReferenceRoot,
     modWorkspacePath: resolved.modWorkspacePath,
     filesystemPath: resolved.filesystemPath,
-  });
+  }, resolved.isolatedScratch ? resolved.x4GamePath : undefined);
+}
+
+function directorySettingsConfig(config: XsdConfig, resolved: ResolvedXsdConfig): XsdConfig {
+  if (!resolved.isolatedScratch) return config;
+  const { x4GamePath, modWorkspacePath, filesystemPath, x4LogPath } = resolved;
+  return { ...config, x4GamePath, modWorkspacePath, filesystemPath, x4LogPath };
 }
 
 /** Block writes through an old unsafe config even if it predates save-time validation. */
@@ -4583,14 +4598,16 @@ function rejectUnsafeDevelopmentWrite(
 app.get("/api/schema/config", (req, res) => {
   if (!requireStudioActor(req, res)) return;
   try {
-    const resolved = resolveXsdConfig();
+    const config = readXsdConfig();
+    const resolved = resolveXsdConfig(config);
     const issues = directoryRoleIssues(resolved);
     // B84: the EFFECTIVE deploy format (persisted or defaulted) so the toggle renders the
     // truth rather than guessing from a possibly-absent config key.
     const effectiveFormat = resolveDeployFormat(undefined);
     return res.json({
-      config: readXsdConfig(),
+      config: directorySettingsConfig(config, resolved),
       resolved,
+      ...(projectCheckOwnerProfileEnabled() ? { directorySettingsLocked: true } : {}),
       deployFormat: { format: effectiveFormat.format, source: effectiveFormat.source, options: [...DEPLOY_FORMATS] },
       directorySafety: {
         safe: issues.length === 0,
@@ -4683,11 +4700,20 @@ app.post("/api/schema/config", (req, res) => {
     // save, blocking the other paths — the exact foot-gun this removes.)
     const previousConfig = readXsdConfig();
     const previousResolved = resolveXsdConfig(previousConfig);
+    const scratch = previousResolved.isolatedScratch;
+    if (scratch) {
+      const pin = (['x4GamePath', 'modWorkspacePath', 'filesystemPath', 'x4LogPath'] as const)
+        .find(field => Object.hasOwn(req.body ?? {}, field)
+          && (typeof req.body[field] !== 'string' || !path.isAbsolute(req.body[field].trim())
+            || path.relative(previousResolved[field]!, req.body[field].trim())));
+      if (pin) return res.status(409).json({ success: false, code: 'DEV_SCRATCH_PATH_LOCKED',
+        error: `The Forge Dev launcher owns ${pin}.`, field: pin });
+    }
     const nextConfig = {
       ...previousConfig,
-      ...(gamePath !== undefined ? { x4GamePath: gamePath } : {}),
-      ...(modWorkspacePath !== undefined ? { modWorkspacePath } : {}),
-      ...(filesystemPath !== undefined ? { filesystemPath } : {}),
+      ...(!scratch && gamePath !== undefined ? { x4GamePath: gamePath } : {}),
+      ...(!scratch && modWorkspacePath !== undefined ? { modWorkspacePath } : {}),
+      ...(!scratch && filesystemPath !== undefined ? { filesystemPath } : {}),
       ...(referenceRoot !== undefined ? { x4ReferenceRoot: referenceRoot } : {}),
       ...(deployFormat !== undefined ? { deployFormat } : {}),
       ...(schemaDir !== undefined ? { xsdSchemaPath: schemaDir } : {}),
@@ -4704,6 +4730,7 @@ app.post("/api/schema/config", (req, res) => {
         resolved,
       });
     }
+    if (scratch) validateDevScratchStorage();
     writeXsdConfig(nextConfig);
     const library = reloadSchemaLibrary();
     // Directory-setting saves are common (workspace/filesystem/game path edits) and must not
@@ -4724,7 +4751,7 @@ app.post("/api/schema/config", (req, res) => {
       directorySafety: { safe: true, issues: [] },
       schemaComplete,
       schemaWarning,
-      config: nextConfig,
+      config: directorySettingsConfig(nextConfig, resolved),
       resolved,
       schema_counts: {
         events: library.events.length,
@@ -14497,10 +14524,12 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       return res.status(400).json(failWith('preflight', { code: 'ACCEPTANCE_INPUT_INVALID',
         error: 'At most 126 finding approvals fit a deployment with project check proof.' }));
     }
+    if (resolved.isolatedScratch) validateDevScratchStorage();
     const { receipts: approvalRecords, decision: recordedDecision } = recordFindingAcceptances(actionReceiptStore, subject, acceptances, principal);
     responseIdentity.validation = { outcome: decision.outcome, clean: decision.validationClean, evidence,
       review: projectFindingReview(recordedDecision, principal, approvalRecords) };
     const assertWriteAuthority = () => {
+      if (resolved.isolatedScratch) validateDevScratchStorage();
       assertCurrentSource();
       nativeCheckProof?.verify();
       if (subject.warningReviews) subject.warningReviews.history = actionReceiptStore.listVerified();

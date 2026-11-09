@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceFingerprint": "72d8cc4bb6b5b4e9a50f70c332c3faf3b2e1b809b87ffb724ab3bd105368d7dc",
+  "sourceFingerprint": "a0a6d2861fbeeaffdbf694d9b7892546e32fc49c1cb14c024edd4a1ddbfb9a80",
   "policy": "Every raw production filesystem mutation source is count-pinned here. Authoritative files use atomic sibling promotion; stronger tree, archive, append-log, SQLite, retention, ephemeral, and fixture contracts remain explicit exceptions.",
   "writers": [
     {
@@ -93,10 +93,10 @@
     },
     {
       "file": "src/lib/pathRoles.ts",
-      "calls": { "writeFileSync": 1, "mkdirSync": 3, "rmSync": 1, "mkdtempSync": 1, "symlinkSync": 1 },
+      "calls": { "writeFileSync": 2, "mkdirSync": 5, "rmSync": 1, "unlinkSync": 1, "mkdtempSync": 1, "symlinkSync": 3 },
       "categories": ["fixture-only"],
       "owners": ["runPathRolesSelftest"],
-      "rationale": "Builds only temporary fake game/live/corpus path-role fixtures.",
+      "rationale": "Builds temporary fake game, corpus, and Dev scratch path-role fixtures, including junction and marker refusals.",
       "failureContract": "No configured path is read or written and the unique temporary root is removed."
     },
     {

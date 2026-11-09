@@ -189,6 +189,9 @@ export default function DirectorySettingsModal({
   const [workspaceInput, setWorkspaceInput] = useState('');
   const [filesystemInput, setFilesystemInput] = useState('');
   const [resolved, setResolved] = useState<any>(null);
+  const [directorySettingsLocked, setDirectorySettingsLocked] = useState(false);
+  const isolatedScratch = resolved?.isolatedScratch === true;
+  const installationControlsLocked = isolatedScratch || directorySettingsLocked;
   const [status, setStatus] = useState<{ type: 'idle' | 'saving' | 'success' | 'warn' | 'error'; msg: string }>({ type: 'idle', msg: '' });
   // B65-1: in-place schema recovery — harvest from the user's own install, and a teach panel.
   const [harvesting, setHarvesting] = useState(false);
@@ -233,15 +236,18 @@ export default function DirectorySettingsModal({
         const response = await fetch('/api/schema/config');
         const res = await response.json();
         if (!response.ok) throw new Error(res.error || `Directory config request failed (${response.status}).`);
-        const configuredGamePath = res.config?.x4GamePath || res.resolved?.x4GamePath || '';
+        const settingsLocked = res.directorySettingsLocked === true;
+        const paths = res.resolved?.isolatedScratch || settingsLocked ? res.resolved : res.config;
+        const configuredGamePath = paths?.x4GamePath || res.resolved?.x4GamePath || '';
         setGamePath(configuredGamePath);
-        setSchemaPath(res.config?.xsdSchemaPath || '');
-        setReferenceRoot(res.config?.x4ReferenceRoot || res.resolved?.x4ReferenceRoot || '');
-        setWorkspaceInput(res.config?.modWorkspacePath || res.resolved?.modWorkspacePath || '');
-        setFilesystemInput(res.config?.filesystemPath || res.resolved?.filesystemPath || '');
+        setSchemaPath((settingsLocked ? res.resolved?.schemaDir : res.config?.xsdSchemaPath) || '');
+        setReferenceRoot((settingsLocked ? res.resolved?.x4ReferenceRoot : res.config?.x4ReferenceRoot) || res.resolved?.x4ReferenceRoot || '');
+        setWorkspaceInput(paths?.modWorkspacePath || res.resolved?.modWorkspacePath || '');
+        setFilesystemInput(paths?.filesystemPath || res.resolved?.filesystemPath || '');
         setResolved(res.resolved || null);
         setDirectoryIssues(res.directorySafety?.issues || []);
-        if (!configuredGamePath) void detectGameInstall(false);
+        setDirectorySettingsLocked(settingsLocked);
+        if (!configuredGamePath && !res.resolved?.isolatedScratch && !settingsLocked) void detectGameInstall(false);
       } catch (error: any) {
         setStatus({ type: 'error', msg: `Could not load directory config from the server: ${error?.message || 'request failed'}` });
       }
@@ -278,6 +284,7 @@ export default function DirectorySettingsModal({
   }, [isOpen, coverageRefresh]);
 
   const saveServerPaths = async (schemaDirOverride?: string) => {
+    if (directorySettingsLocked) return;
     // schemaDirOverride: harvest sets schemaPath via setState (async), so it passes the new
     // dir directly rather than waiting a render for state to settle.
     const schemaDir = (schemaDirOverride ?? schemaPath).trim();
@@ -288,10 +295,12 @@ export default function DirectorySettingsModal({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           schemaDir,
-          x4GamePath: gamePath.trim(),
           x4ReferenceRoot: referenceRoot.trim(),
-          modWorkspacePath: workspaceInput.trim(),
-          filesystemPath: filesystemInput.trim()
+          ...(isolatedScratch ? {} : {
+            x4GamePath: gamePath.trim(),
+            modWorkspacePath: workspaceInput.trim(),
+            filesystemPath: filesystemInput.trim(),
+          }),
         })
       });
       const res = await response.json();
@@ -492,11 +501,12 @@ export default function DirectorySettingsModal({
             <input
               type="text"
               value={workspaceInput}
+              readOnly={installationControlsLocked}
               onChange={e => { setWorkspaceInput(e.target.value); setDirectoryIssues(current => current.filter(issue => issue.field !== 'modWorkspacePath')); }}
               placeholder="e.g. C:\Users\you\Documents\X4ForgeMods"
               className="w-full px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500"
             />
-            <p className="text-[9.5px] leading-relaxed text-slate-500">Forge develops and snapshots mod copies here. The live game is updated only through an explicit Deploy operation.</p>
+            <p className="text-[9.5px] leading-relaxed text-slate-500">{isolatedScratch ? 'The Forge Dev launcher controls this workspace.' : 'Forge develops and snapshots mod copies here. The live game is updated only through an explicit Deploy operation.'}</p>
             {issuesFor('modWorkspacePath').map(issue => <div key={issue.code} className="text-[10px] font-mono text-red-300 flex items-start gap-1"><AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />{issue.message}</div>)}
           </DirectoryRow>
 
@@ -510,29 +520,32 @@ export default function DirectorySettingsModal({
             <input
               type="text"
               value={filesystemInput}
+              readOnly={installationControlsLocked}
               onChange={e => { setFilesystemInput(e.target.value); setDirectoryIssues(current => current.filter(issue => issue.field !== 'filesystemPath')); }}
               placeholder="e.g. G:\SteamLibrary\steamapps\common\X4 Foundations\extensions"
               className="w-full px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500"
             />
-            <p className="text-[9.5px] leading-relaxed text-slate-500">Browse/import installed mods here. Develop in Mod Workspace; update the live game only through validated Deploy.</p>
+            <p className="text-[9.5px] leading-relaxed text-slate-500">{isolatedScratch ? 'Browse scratch extensions here. The Forge Dev launcher controls this path.' : 'Browse/import installed mods here. Develop in Mod Workspace; update the live game only through validated Deploy.'}</p>
             {issuesFor('filesystemPath').map(issue => <div key={issue.code} className="text-[10px] font-mono text-red-300 flex items-start gap-1"><AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />{issue.message}</div>)}
           </DirectoryRow>
 
           {/* 2. X4 Game installation (server path) */}
           <DirectoryRow
             icon={<Gamepad2 className="w-4 h-4" />}
-            title="X4 Game Installation"
-            tooltip="The installed X4 Foundations root containing X4.exe. Forge reads this for runtime discovery and writes to its extensions folder only during an explicit Deploy. Steam and GOG installs can be detected automatically."
+            title={isolatedScratch ? 'Dev Scratch Deploy Target' : 'X4 Game Installation'}
+            tooltip={isolatedScratch ? 'The Forge Dev launcher pins this target. Deploy writes into its scratch extensions folder.' : 'The installed X4 Foundations root containing X4.exe. Forge reads this for runtime discovery and writes to its extensions folder only during an explicit Deploy. Steam and GOG installs can be detected automatically.'}
             testId="game-install-settings"
           >
             <input
               type="text"
               value={gamePath}
+              readOnly={installationControlsLocked}
               onChange={e => { setGamePath(e.target.value); setDirectoryIssues(current => current.filter(issue => issue.field !== 'x4GamePath')); setDetection({ state: 'idle' }); }}
               placeholder="e.g. C:\Program Files (x86)\Steam\steamapps\common\X4 Foundations"
               className="w-full px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500"
             />
-            <div className="flex items-center gap-2">
+            {isolatedScratch && <p className="text-[9.5px] leading-relaxed text-slate-500">This scratch target uses the unpacked corpus for game data and schemas.</p>}
+            {resolved && !installationControlsLocked && <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={() => void detectGameInstall(true)}
@@ -543,7 +556,7 @@ export default function DirectorySettingsModal({
                 {detection.state === 'scanning' ? 'Detecting…' : 'Detect X4 installation'}
               </button>
               {detection.message && <span className={`text-[9.5px] ${detection.state === 'found' ? 'text-emerald-300' : 'text-amber-300'}`}>{detection.message}</span>}
-            </div>
+            </div>}
             {issuesFor('x4GamePath').map(issue => <div key={issue.code} className="text-[10px] font-mono text-red-300 flex items-start gap-1"><AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />{issue.message}</div>)}
           </DirectoryRow>
 
@@ -557,6 +570,7 @@ export default function DirectorySettingsModal({
             <input
               type="text"
               value={referenceRoot}
+              readOnly={directorySettingsLocked}
               onChange={e => setReferenceRoot(e.target.value)}
               placeholder="e.g. D:\X4 unpacked 9.00"
               className="w-full px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500"
@@ -639,6 +653,7 @@ export default function DirectorySettingsModal({
             <input
               type="text"
               value={schemaPath}
+              readOnly={directorySettingsLocked}
               onChange={e => setSchemaPath(e.target.value)}
               placeholder="Optional: folder containing md.xsd + common.xsd"
               className="w-full px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500"
@@ -650,7 +665,7 @@ export default function DirectorySettingsModal({
                 ) : (
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-amber-400 flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> md.xsd / common.xsd not found — validation is limited</span>
-                    <button
+                    {!installationControlsLocked && <button
                       type="button"
                       onClick={harvestFromInstall}
                       disabled={harvesting || !gamePath.trim()}
@@ -658,7 +673,7 @@ export default function DirectorySettingsModal({
                       className="px-2 py-0.5 rounded bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-[10px] font-semibold cursor-pointer inline-flex items-center gap-1"
                     >
                       <Database className="w-3 h-3" /> {harvesting ? 'Extracting…' : 'Extract schemas from my game install'}
-                    </button>
+                    </button>}
                   </div>
                 )}
                 <button type="button" onClick={() => setGuideOpen(o => !o)} className="text-slate-500 hover:text-cyan-300 text-[10px] inline-flex items-center gap-1 cursor-pointer">
@@ -669,7 +684,7 @@ export default function DirectorySettingsModal({
                     <p><span className="text-slate-200 font-semibold">How it works:</span> the Forge validates your mod against X4’s own schema files — md.xsd, common.xsd, and ~40 more the game ships. The more it has, the more of your mod it checks (factions, game starts, patches, and so on).</p>
                     <p><span className="text-slate-200 font-semibold">What it needs:</span> those schema files, from <span className="text-slate-200">your</span> install — the Forge can’t legally ship X4’s files with it.</p>
                     <p><span className="text-emerald-300 font-semibold">Preferred:</span> set <span className="text-slate-200">X4 Unpacked Game Corpus</span>. Forge derives schemas and canonical base/DLC data from that one read-only root.</p>
-                    <p><span className="text-cyan-300 font-semibold">Schema-only fallback:</span> set your <span className="text-slate-200">X4 Game Installation</span> and click <span className="text-slate-200">Extract schemas</span>. This enables XSD structure checks, but it does not provide the canonical IDs, examples, localization, or asset inventory of a complete unpacked corpus.</p>
+                    {!installationControlsLocked && <p><span className="text-cyan-300 font-semibold">Schema-only fallback:</span> set your <span className="text-slate-200">X4 Game Installation</span> and click <span className="text-slate-200">Extract schemas</span>. This enables XSD structure checks, but it does not provide the canonical IDs, examples, localization, or asset inventory of a complete unpacked corpus.</p>}
                   </div>
                 )}
               </div>
@@ -763,11 +778,13 @@ export default function DirectorySettingsModal({
 
           <div className="flex items-center justify-between pt-1">
             <span className="text-[9px] text-slate-500 font-sans">
-              All directory paths are saved securely on the server config.
+              {directorySettingsLocked ? 'Project Check approval locks directory paths for this session.' : isolatedScratch
+                ? 'Reference and schema paths are saved in Forge Dev settings.'
+                : 'All directory paths are saved securely on the server config.'}
             </span>
             <button
               onClick={() => saveServerPaths()}
-              disabled={status.type === 'saving'}
+              disabled={!resolved || directorySettingsLocked || status.type === 'saving'}
               className="px-4 py-1.5 bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-black rounded text-[11px] font-mono font-bold uppercase flex items-center gap-1.5 cursor-pointer shrink-0"
             >
               <Save className="w-3.5 h-3.5" />

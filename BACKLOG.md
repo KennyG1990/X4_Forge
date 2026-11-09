@@ -14,6 +14,10 @@ Dev adds explicit local Start with exact saved workspace, offline Studio state, 
 
 Published 0.0.81 previewed a folder that bound apply rejected after writing. Dev now deploys the selected alias and retains the canonical manifest ID in the receipt. Competing IDs and stale inputs refuse before normal staging, and a locked legacy duplicate surviving cleanup still blocks target activation. [Released reproduction and Dev proof](docs/plans/2026-11-09-forge-deploy-folder-manifest-identity.md). Installed verification and public delivery remain open.
 
+### Launcher-pinned scratch Directory Settings `in_progress` (GitHub #75)
+
+An explicit Dev launch flag shows the effective scratch paths and keeps corpus/schema settings editable in regular scratch profiles. Retargets and install harvesting refuse, the Project Check owner seal stays in force, and native deploy passed the exact scratch replay. [Isolated evidence and release review](docs/plans/2026-11-09-dev-scratch-directory-settings.md). Installed rendering and public delivery remain open.
+
 ### Lua engine globals and tooling diagnostics `in_progress` (GitHub #86)
 
 Dev recognizes the four reported X4 globals and isolates standalone root tools from the runtime global namespace. Exact registered tools, syntax and X4 diagnostics remain checked. The Problems API, Doctor and both native previews passed the standalone replay. [Isolated evidence](docs/plans/2026-11-09-forge-lua-global-tooling-scope.md). Broader engine names, dynamic tool imports, installed rendering and delivery remain open.

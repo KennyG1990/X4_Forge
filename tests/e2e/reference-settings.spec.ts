@@ -205,3 +205,113 @@ test('Directory Settings exposes and repairs a legacy live-extensions workspace'
   expect(savedBody.modWorkspacePath).toBe(safe);
   expect(savedBody.filesystemPath).toBe(live);
 });
+
+test('Directory Settings displays Dev scratch pins and saves only reference paths', async ({ page }) => {
+  const game = 'G:\\SteamLibrary\\steamapps\\common\\X4 Foundations';
+  const scratch = 'C:\\ForgeDev\\scratch-game';
+  const resolved = {
+    isolatedScratch: true,
+    x4GamePath: scratch,
+    modWorkspacePath: 'C:\\ForgeDev\\mods',
+    filesystemPath: `${scratch}\\extensions`,
+    x4ReferenceRoot: unpackedRoot,
+    x4ReferenceExists: true,
+    mdExists: false,
+    commonExists: false,
+  };
+  const nextReferenceRoot = 'C:\\ForgeDev\\unpacked';
+  let detectionRequests = 0;
+  let savedBody: unknown;
+  await page.route('**/api/agent/detect-game', route => {
+    detectionRequests += 1;
+    return route.fulfill({ json: { found: true } });
+  });
+  await page.route('**/api/schema/config', route => {
+    if (route.request().method() === 'POST') {
+      savedBody = route.request().postDataJSON();
+      return route.fulfill({ json: {
+        saved: true,
+        schemaComplete: true,
+        resolved: { ...resolved, x4ReferenceRoot: nextReferenceRoot, mdExists: true, commonExists: true },
+        directorySafety: { safe: true, issues: [] },
+        schema_counts: { events: 1, conditions: 1, actions: 1 },
+      } });
+    }
+    return route.fulfill({ json: {
+      loaded: true,
+      config: {
+        x4GamePath: game,
+        modWorkspacePath: 'C:\\Users\\example\\Documents\\X4ForgeMods',
+        filesystemPath: `${game}\\extensions`,
+        x4ReferenceRoot: unpackedRoot,
+      },
+      resolved,
+      directorySafety: { safe: true, issues: [] },
+    } });
+  });
+  await page.route('**/api/reference/coverage', route =>
+    route.fulfill({ status: 202, json: { status: { state: 'scanning' } } }));
+
+  await page.goto('/');
+  await page.getByTitle('Manage all folders the studio uses (Mod Workspace, X4 game path, schema)').click();
+
+  const target = page.getByTestId('game-install-settings');
+  await expect(target.getByText('Dev Scratch Deploy Target', { exact: true })).toBeVisible();
+  for (const [testId, value] of [
+    ['game-install-settings', resolved.x4GamePath],
+    ['mod-workspace-settings', resolved.modWorkspacePath],
+    ['filesystem-settings', resolved.filesystemPath],
+  ]) {
+    const input = page.getByTestId(testId).locator('input');
+    await expect(input).toHaveValue(value);
+    await expect(input).not.toBeEditable();
+  }
+  await expect(page.getByRole('button', { name: 'Detect X4 installation' })).toHaveCount(0);
+  await page.getByRole('button', { name: /Advanced fallback: manual XSD schema folder/ }).click();
+  await expect(page.getByRole('button', { name: 'Extract schemas from my game install' })).toHaveCount(0);
+  const schemaDir = 'C:\\ForgeDev\\schemas';
+  await page.getByTestId('manual-xsd-settings').locator('input').fill(schemaDir);
+  await page.getByTestId('x4-corpus-settings').locator('input').fill(nextReferenceRoot);
+  await page.getByRole('button', { name: 'Save Paths' }).click();
+  await expect(page.getByText(/Saved\. Schema library reloaded/)).toBeVisible();
+  expect(savedBody).toEqual({ schemaDir, x4ReferenceRoot: nextReferenceRoot });
+  expect(detectionRequests).toBe(0);
+});
+
+test('Directory Settings shows owner profile paths without offering a path save', async ({ page }) => {
+  const scratch = 'C:\\ForgeDev\\scratch-game';
+  const schemaDir = 'C:\\ForgeDev\\schemas';
+  const resolved = {
+    isolatedScratch: true,
+    x4GamePath: scratch,
+    modWorkspacePath: 'C:\\ForgeDev\\mods',
+    filesystemPath: scratch + '\\extensions',
+    x4ReferenceRoot: unpackedRoot,
+    x4ReferenceExists: true,
+    schemaDir,
+    mdExists: false,
+    commonExists: false,
+  };
+  await page.route('**/api/schema/config', route => route.fulfill({ json: {
+    loaded: true,
+    config: {},
+    resolved,
+    directorySettingsLocked: true,
+    directorySafety: { safe: true, issues: [] },
+  } }));
+  await page.route('**/api/reference/coverage', route =>
+    route.fulfill({ status: 202, json: { status: { state: 'scanning' } } }));
+
+  await page.goto('/');
+  await page.getByTitle('Manage all folders the studio uses (Mod Workspace, X4 game path, schema)').click();
+
+  const reference = page.getByTestId('x4-corpus-settings').locator('input');
+  await expect(reference).toHaveValue(unpackedRoot);
+  await expect(reference).not.toBeEditable();
+  await page.getByRole('button', { name: /Advanced fallback: manual XSD schema folder/ }).click();
+  const schema = page.getByTestId('manual-xsd-settings').locator('input');
+  await expect(schema).toHaveValue(schemaDir);
+  await expect(schema).not.toBeEditable();
+  await expect(page.getByText('Project Check approval locks directory paths for this session.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Save Paths' })).toBeDisabled();
+});

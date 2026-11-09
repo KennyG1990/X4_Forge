@@ -26,7 +26,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { execFileSync } from "node:child_process";
 import { parseLibraryFolders, proposeSetup, X4_STEAM_APPID, X4_STEAM_REL_DIR } from "../lib/gameDetect";
-import { inspectGameInstall } from "../lib/pathRoles";
+import { inspectGameInstall, resolveDevScratchRoles } from "../lib/pathRoles";
 import { dataPath } from "../lib/dataDir";
 import { findCatDatArchives, parseCat, readEntryText } from "../lib/x4CatDat";
 import { atomicWriteFile } from "../lib/workspaceState";
@@ -131,11 +131,14 @@ function enumeratePackedXsds(gamePath: string): Array<{ rel: string; datPath: st
 
 /** The two files POST /api/schema/config validates for — missing either is a hard fail. */
 const CORE_BASENAMES = ["md.xsd", "common.xsd"];
+const DEV_SCRATCH_INSTALL_DISABLED = 'DEV_SCRATCH_INSTALL_DISABLED';
 
 export function registerGameDetectRoutes(app: Express, deps: GameDetectDeps): void {
 
   app.get("/api/agent/detect-game", (_req, res) => {
     try {
+      if (resolveDevScratchRoles()) return res.json({ found: false, proposal: null, code: DEV_SCRATCH_INSTALL_DISABLED,
+        hint: 'Installation detection is disabled in the Forge Dev scratch lab.' });
       const hit = findSteamX4() || findGogX4();
       if (!hit) {
         return res.json({
@@ -165,6 +168,8 @@ export function registerGameDetectRoutes(app: Express, deps: GameDetectDeps): vo
   app.post("/api/agent/setup/harvest-schemas", (req, res) => {
     if (deps.requireStudioActor && !deps.requireStudioActor(req, res)) return;
     try {
+      if (resolveDevScratchRoles()) return res.status(400).json({ code: DEV_SCRATCH_INSTALL_DISABLED,
+        error: 'Installation schema harvesting is disabled in the Forge Dev scratch lab.' });
       const gamePath = String(req.body?.x4GamePath || "").trim();
       if (!gamePath || !fs.existsSync(gamePath)) {
         return res.status(400).json({ error: "x4GamePath missing or does not exist." });

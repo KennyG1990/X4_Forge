@@ -7,6 +7,7 @@ import { atomicWriteFile } from './workspaceState';
 import { expandIncludeChain } from './schemaRegistry';
 import { schemaLibraryToTemplates, SchemaAttribute, SchemaCategory, SchemaElement, SchemaLibrary } from './schemaTypes';
 import { MAX_PROJECT_XML_DEPTH, SAFE_XML_ENTITY_OPTIONS } from './xmlInputLimits';
+import { resolveDevScratchRoles } from './pathRoles';
 
 type AnyNode = Record<string, any>;
 
@@ -38,6 +39,7 @@ export interface XsdConfig {
 }
 
 export interface ResolvedXsdConfig extends XsdConfig {
+  isolatedScratch?: true;
   schemaDir: string;
   mdXsdPath: string;
   commonXsdPath: string;
@@ -224,6 +226,8 @@ function collectGroupElements(
 }
 
 export function getDefaultGamePath(): string {
+  const scratch = resolveDevScratchRoles();
+  if (scratch) return scratch.x4GamePath;
   if (process.env.X4_GAME_PATH) return process.env.X4_GAME_PATH;
   if (fs.existsSync(configPath())) {
     try {
@@ -331,19 +335,19 @@ export function writeXsdConfig(config: XsdConfig): void {
 }
 
 export function resolveXsdConfig(config = readXsdConfig()): ResolvedXsdConfig {
-  const gamePath = process.env.X4_GAME_PATH || config.x4GamePath || '';
+  const scratch = resolveDevScratchRoles();
+  const gamePath = scratch?.x4GamePath || process.env.X4_GAME_PATH || config.x4GamePath || '';
   const x4ReferenceRoot = path.resolve(
-    process.env.X4_REFERENCE_ROOT?.trim()
+    (scratch && config.x4ReferenceRoot?.trim())
+      || process.env.X4_REFERENCE_ROOT?.trim()
       || config.x4ReferenceRoot?.trim()
       || DEFAULT_X4_REFERENCE_ROOT,
   );
   const referenceLibraries = path.join(x4ReferenceRoot, 'libraries');
-  const schemaDir = process.env.X4_XSD_PATH
-    || (config.xsdSchemaPath
-      ? (path.isAbsolute(config.xsdSchemaPath) ? config.xsdSchemaPath : path.join(gamePath, config.xsdSchemaPath))
-      : (fs.existsSync(path.join(referenceLibraries, 'md.xsd'))
-          ? referenceLibraries
-          : dataPath('harvested-schemas')));
+  const configuredSchema = config.xsdSchemaPath && (path.isAbsolute(config.xsdSchemaPath)
+    ? config.xsdSchemaPath : path.join(gamePath, config.xsdSchemaPath));
+  const schemaDir = (scratch && configuredSchema) || process.env.X4_XSD_PATH || configuredSchema
+    || (fs.existsSync(path.join(referenceLibraries, 'md.xsd')) ? referenceLibraries : dataPath('harvested-schemas'));
 
   const files = config.schemaFiles?.length ? config.schemaFiles : ['md.xsd', 'common.xsd'];
   // An explicit ABSOLUTE path in schemaFiles always wins (a user who set an exact file). Else
@@ -361,6 +365,8 @@ export function resolveXsdConfig(config = readXsdConfig()): ResolvedXsdConfig {
 
   return {
     ...config,
+    ...scratch,
+    isolatedScratch: scratch ? true : undefined,
     x4GamePath: gamePath,
     xsdSchemaPath: config.xsdSchemaPath || schemaDir,
     schemaFiles: files,
