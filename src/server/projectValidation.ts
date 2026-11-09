@@ -577,7 +577,9 @@ export function runProjectValidation(
   // page THIS MOD defines but whose entry id is missing (a typo in the modder's own text). Uses the
   // mod's OWN t-files (no vanilla index) → cry-wolf-safe; always runs. Advisory WARNING.
   const strFiles = project.files.filter(f => typeof f.content === "string").map(f => ({ path: f.path, content: f.content as string }));
-  const tFileFindings: TextRefFinding[] = lintTextReferences({ files: strFiles, index: buildModTextIndex(strFiles) }).findings;
+  const tFileFindings: TextRefFinding[] = lintTextReferences({
+    files: strFiles, index: buildModTextIndex(strFiles), registeredLuaPaths: menuLuaPaths,
+  }).findings;
   // B62b phase 2: translation coverage across the mod's own language files (corpus-verified 0-gap-safe).
   const tCoverageFindings: TranslationCoverageFinding[] = lintTranslationCoverage({ tFiles: strFiles }).findings;
 
@@ -768,7 +770,8 @@ function flattenProjectValidationRaw(result: ProjectValidationResult): FlatProje
   }
   // B62b: t-file reference integrity — advisory WARNING (never flips `ok`).
   for (const f of result.tFileRefs.findings) {
-    out.push({ severity: "warning", code: `tfile.${f.kind}`, filePath: f.filePath, sourceRef: `{${f.page},${f.id}}`, message: f.message });
+    out.push({ severity: "warning", code: `tfile.${f.kind}`, filePath: f.filePath, sourceRef: `{${f.page},${f.id}}`,
+      line: f.line, column: f.column, message: f.message });
   }
   // B62b phase 2: translation coverage — advisory WARNING.
   for (const f of result.tFileCoverage.findings) {

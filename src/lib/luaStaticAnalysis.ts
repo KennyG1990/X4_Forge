@@ -99,7 +99,7 @@ const LUA_STANDARD_GLOBALS = new Set([
 const X4_ENGINE_GLOBALS = new Set([
   'AddUITriggeredEvent', 'ConvertStringTo64Bit', 'DebugError', 'DebugText', 'GetComponentData',
   'GetCurRealTime', 'GetCurTime', 'GetNPCBlackboard', 'GetPlayerID', 'GetWareData',
-  'Helper', 'IsValidWidgetElement', 'OpenMenu', 'OnlineGetUserItemAmount',
+  'Helper', 'IsValidWidgetElement', 'OpenMenu', 'ReadText', 'OnlineGetUserItemAmount',
   'OnlineGetUserItems', 'RegisterEvent', 'RemoveEvent', 'RemoveScript', 'SetNPCBlackboard',
   'SetScript', 'SignalObject', 'TraceBack', 'ffi', 'json', 'widgetSystem'
 ]);
@@ -696,7 +696,7 @@ export function runLuaStaticAnalysisSelftest(): { pass: boolean; checks: { name:
     <!-- <file name="tools/standalone.lua"/> -->
   </environment></addon>`);
   const roleFiles = [
-    focusedFile('ui/main.lua', 'GetCurRealTime(); GetComponentData(); ConvertStringTo64Bit(); GetWareData(); ToolOnly(); GetWareDat(); RegisteredTool()'),
+    focusedFile('ui/main.lua', 'GetCurRealTime(); GetComponentData(); ConvertStringTo64Bit(); GetWareData(); ReadText(1001,1); ToolOnly(); GetWareDat(); RegisteredTool()'),
     focusedFile('tools/standalone.lua', 'ToolOnly = function() end; ToolOnlyMissing()'),
     focusedFile('tools/registered.lua', 'RegisteredTool = function() end; RegisteredMissing()'),
     focusedFile('tools/Registered.lua', 'WrongCaseMissing()'),

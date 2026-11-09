@@ -2,7 +2,7 @@
  * tFileLint.ts — B62b (2026-07-17): t-file (localization) reference integrity.
  *
  * X4 text lives in t/*.xml under `<page id><t id>…</t></page>` and is referenced elsewhere (MD, wares,
- * jobs, content.xml, factions…) as `{pageId,textId}`. Nothing at author-time checks a reference resolves
+ * jobs, content.xml, factions…) as `{pageId,textId}`, and in Lua as ReadText(pageId,textId). Nothing at author-time checks a reference resolves
  * to a real entry — a typo silently shows blank/garbage in-game (research round 3, F2). The existing
  * `lintTFileStructure` only checks a t-file's own shape (root, page/t ids); it does NOT resolve refs.
  *
@@ -10,12 +10,15 @@
  * OWNS the page (defines it in one of its own t-files) but the entry id is missing. References to pages
  * the mod does NOT define resolve to vanilla or another mod — none of our business, never flagged. This
  * catches the modder's OWN typos (the common, high-value case) with zero false positives on legit
- * vanilla-text reuse. DOM-parsed for the t-file index; comment-stripped scan for refs (comment-safe).
+ * vanilla-text reuse. DOM-parsed t-files, comment-stripped XML and scope-parsed literal Lua calls.
  *
  * Pure — the caller supplies the mod's files. Advisory WARNING.
  */
 
 import { DOMParser } from "@xmldom/xmldom";
+import { parse as parseLua } from "luaparse";
+import { createSourcePositionLocator } from "./xmlSourceSpans";
+import { normalizeX4UiSourcePath } from "./x4UiSourceBundle";
 
 export interface ModTextIndex {
   /** page ids this mod defines across all its t-files */
@@ -30,6 +33,8 @@ export interface TextRefFinding {
   id: string;
   kind: "dangling_text_ref";
   message: string;
+  line?: number;
+  column?: number;
 }
 
 export interface TFileLintResult {
@@ -49,7 +54,7 @@ function isTFile(path: string): boolean {
   return /(^|\/)t\/[^/]+\.xml$/i.test(path.replace(/\\/g, "/"));
 }
 
-/** Files that can CONTAIN {page,id} references (everything content-ish except the t-files themselves). */
+/** XML files that can contain {page,id} references, excluding the text definitions. */
 function referencesText(path: string): boolean {
   const p = path.replace(/\\/g, "/").toLowerCase();
   if (isTFile(path)) return false;
@@ -100,6 +105,71 @@ function stripComments(xml: string): string {
 export interface LintTextRefsInput {
   files: Array<{ path: string; content: string }>;
   index: ModTextIndex;
+  registeredLuaPaths?: ReadonlySet<string>;
+}
+
+interface LuaTextNode {
+  type: string;
+  name?: string;
+  isLocal?: boolean;
+  value?: unknown;
+  range?: [number, number];
+  base?: LuaTextNode;
+  identifier?: LuaTextNode;
+  index?: LuaTextNode;
+  arguments?: LuaTextNode[];
+  variables?: LuaTextNode[];
+  init?: LuaTextNode[];
+}
+
+function luaTextReferences(content: string, limit: number): Array<{ page: string; id: string; offset: number }> {
+  if (!content.includes("ReadText") || limit <= 0) return [];
+  const references: Array<{ page: string; id: string; offset: number }> = [];
+  let rebound = false;
+  const globalName = (node?: LuaTextNode) => node?.type === "Identifier" && node.isLocal === false ? node.name : undefined;
+  const environment = (node?: LuaTextNode) => ["_G", "_ENV"].includes(globalName(node) ?? "");
+  const writeKey = (node?: LuaTextNode): unknown => {
+    if (node?.type === "StringLiteral" || node?.type === "NumericLiteral") return node.value;
+    return "_ENV"; // A computed environment key may replace the engine binding.
+  };
+  const writeName = (node?: LuaTextNode): unknown => {
+    if (node?.type === "MemberExpression" && environment(node.base)) return node.identifier?.name;
+    if (node?.type === "IndexExpression" && environment(node.base)) return writeKey(node.index);
+    return globalName(node);
+  };
+  const markWrite = (name: unknown) => {
+    if (name === "ReadText" || name === "_ENV" || name === "_G") rebound = true;
+  };
+  try {
+    // Keep original UTF-16 offsets while accepting non-ASCII prose in Lua strings.
+    parseLua(content.replace(/^\uFEFF/, " ").replace(/[\u0100-\uffff]/g, "?"), {
+      comments: false, ranges: true, scope: true, luaVersion: "5.2", encodingMode: "pseudo-latin1",
+      onLocalDeclaration(name: string) {
+        if (name === "_ENV") rebound = true;
+      },
+      onCreateNode(node: LuaTextNode) {
+        if (node.type === "AssignmentStatement" || node.type === "LocalStatement") {
+          if (node.init?.some(environment)) rebound = true;
+          if (node.type === "AssignmentStatement") {
+            for (const variable of node.variables ?? []) markWrite(writeName(variable));
+          }
+        } else if (node.type === "FunctionDeclaration") {
+          markWrite(writeName(node.identifier));
+        } else if (node.type === "CallExpression") {
+          const callee = globalName(node.base);
+          if (callee === "rawset" && environment(node.arguments?.[0])) markWrite(writeKey(node.arguments?.[1]));
+          if (callee !== "ReadText" || references.length >= limit) return;
+          const [page, id] = node.arguments ?? [];
+          if (page?.type !== "NumericLiteral" || id?.type !== "NumericLiteral" || !id.range
+            || typeof page.value !== "number" || typeof id.value !== "number"
+            || !Number.isSafeInteger(page.value) || !Number.isSafeInteger(id.value)
+            || page.value < 0 || id.value < 0) return;
+          references.push({ page: String(page.value), id: String(id.value), offset: id.range[0] });
+        }
+      },
+    });
+  } catch { return []; }
+  return rebound ? [] : references;
 }
 
 export function lintTextReferences(input: LintTextRefsInput): TFileLintResult {
@@ -108,24 +178,35 @@ export function lintTextReferences(input: LintTextRefsInput): TFileLintResult {
   let refsChecked = 0;
   // De-dupe identical (file,page,id) so a repeated bad ref reports once per file.
   const seen = new Set<string>();
+  const addReference = (filePath: string, page: string, id: string, position?: { line: number; column: number }) => {
+    refsChecked++;
+    if (!index.ownedPages.has(page) || index.entries.get(page)?.has(id)) return;
+    const key = `${filePath}|${page}|${id}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    findings.push({
+      filePath, page, id, kind: "dangling_text_ref", ...position,
+      message: `Text reference {${page},${id}} targets page ${page}, which this mod defines, but entry ${id} is not defined there — likely a typo or a missing <t id="${id}"> entry.`,
+    });
+  };
   for (const f of files) {
-    if (typeof f.content !== "string" || !referencesText(f.path)) continue;
+    if (typeof f.content !== "string") continue;
+    if (/\.lua$/i.test(f.path)) {
+      const key = normalizeX4UiSourcePath(f.path).key;
+      if (!key || (key.toLowerCase().startsWith("tools/") && !input.registeredLuaPaths?.has(key))) continue;
+      if (!index.ownedPages.size) continue;
+      const locate = createSourcePositionLocator(f.content);
+      for (const reference of luaTextReferences(f.content, MAX_REFS - refsChecked)) {
+        addReference(f.path, reference.page, reference.id, locate(reference.offset));
+      }
+      continue;
+    }
+    if (!referencesText(f.path)) continue;
     const text = stripComments(f.content);
     let m: RegExpExecArray | null;
     TEXT_REF_RE.lastIndex = 0;
     while ((m = TEXT_REF_RE.exec(text)) !== null && refsChecked < MAX_REFS) {
-      refsChecked++;
-      const page = m[1], id = m[2];
-      // Only the mod's OWN pages are our business — refs to vanilla/other pages are legit and ignored.
-      if (!index.ownedPages.has(page)) continue;
-      if (index.entries.get(page)?.has(id)) continue; // resolves — fine
-      const key = `${f.path}|${page}|${id}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      findings.push({
-        filePath: f.path, page, id, kind: "dangling_text_ref",
-        message: `Text reference {${page},${id}} targets page ${page}, which this mod defines, but entry ${id} is not defined there — likely a typo or a missing <t id="${id}"> entry.`,
-      });
+      addReference(f.path, m[1], m[2]);
     }
   }
   return { findings, summary: { refsChecked, ownedPages: index.ownedPages.size, findings: findings.length } };
@@ -265,6 +346,41 @@ export function runTFileLintSelftest() {
   ok("empty_safe", lintTextReferences({ files: [], index: idx }).findings.length === 0);
   ok("no_tfiles_no_owned_pages", buildModTextIndex([]).ownedPages.size === 0);
   ok("malformed_tfile_safe", buildModTextIndex([{ path: "t/x.xml", content: "<language><page id=" }]).ownedPages.size === 0);
+
+  const luaRefs = (content: string, path = "lua/text.lua", registeredLuaPaths?: ReadonlySet<string>) =>
+    lintTextReferences({ files: [{ path, content }], index: idx, registeredLuaPaths });
+  const missingLua = luaRefs("return ReadText(20201, 99)");
+  ok("lua_owned_missing_entry", missingLua.findings.length === 1 && missingLua.findings[0].id === "99");
+  ok("lua_missing_id_position", missingLua.findings[0]?.line === 1 && missingLua.findings[0]?.column === 24);
+  ok("lua_known_entry_clean", luaRefs("return ReadText(20201, 1)").findings.length === 0);
+  ok("lua_unowned_page_clean", luaRefs("return ReadText(1001, 999)").findings.length === 0);
+  ok("lua_computed_ids_unresolved", luaRefs("return ReadText(page, 99), ReadText(20201, id)").findings.length === 0);
+  ok("lua_comments_and_strings_ignored", luaRefs('-- ReadText(20201,99)\nlocal s = "ReadText(20201,99)"\n--[=[ ReadText(20201,99) ]=]').findings.length === 0);
+  ok("lua_local_function_shadow_clean", luaRefs("local function ReadText(p, i) return i end; return ReadText(20201,99)").findings.length === 0);
+  ok("lua_parameter_shadow_clean", luaRefs("local function f(ReadText) return ReadText(20201,99) end").findings.length === 0);
+  ok("lua_global_outside_local_scope_checked", luaRefs("do local ReadText = function() end end; return ReadText(20201,99)").findings.length === 1);
+  ok("lua_object_method_ignored", luaRefs("return api.ReadText(20201,99), api:ReadText(20201,99)").findings.length === 0);
+  for (const content of [
+    "ReadText = function() end; return ReadText(20201,99)",
+    "function ReadText() end; return ReadText(20201,99)",
+    "_G.ReadText = custom; return ReadText(20201,99)",
+    '_ENV["ReadText"] = custom; return ReadText(20201,99)',
+    'rawset(_G, "ReadText", custom); return ReadText(20201,99)',
+    'local key = "ReadText"; _ENV[key] = custom; return ReadText(20201,99)',
+    'local key = "ReadText"; rawset(_G, key, custom); return ReadText(20201,99)',
+    'local env = _G; env.ReadText = custom; return ReadText(20201,99)',
+    "local _ENV = {}; return ReadText(20201,99)",
+    "_ENV = custom; return ReadText(20201,99)",
+  ]) ok("lua_rebound_engine_call_ignored " + content, luaRefs(content).findings.length === 0);
+  ok("lua_unrelated_literal_environment_write_preserves_binding", luaRefs('_G.other = 1; rawset(_ENV,"other",2); return ReadText(20201,99)').findings.length === 1);
+  ok("lua_partial_parse_ignored", luaRefs("ReadText(20201,99); function(").findings.length === 0);
+  ok("lua_noninteger_ids_unresolved", luaRefs("return ReadText(20201,99.5), ReadText(20201,-99)").findings.length === 0);
+  const positionedLua = luaRefs('\uFEFFlocal s = "é😀"\r\nreturn ReadText(20201,99)');
+  ok("lua_original_bom_unicode_crlf_positions", positionedLua.findings[0]?.line === 2 && positionedLua.findings[0]?.column === 23);
+  ok("lua_duplicate_refs_retain_existing_dedupe", luaRefs("ReadText(20201,99); ReadText(20201,99)").findings.length === 1);
+  ok("lua_standalone_host_tools_excluded", luaRefs("return ReadText(20201,99)", "tools/check.lua").summary.refsChecked === 0);
+  ok("lua_registered_tool_checked", luaRefs("return ReadText(20201,99)", "tools/check.lua", new Set(["tools/check.lua"])).findings.length === 1);
+  ok("lua_reference_budget_bounded", luaRefs("ReadText(20201,99)\n".repeat(MAX_REFS + 1)).summary.refsChecked === MAX_REFS);
 
   // --- B62b phase 2: translation coverage ---
   const covEn = { path: "t/0001-L044.xml", content: `<language id="44"><page id="20201"><t id="1">a</t><t id="2">b</t><t id="3">c</t></page></language>` };

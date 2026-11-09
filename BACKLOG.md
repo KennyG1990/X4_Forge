@@ -6,6 +6,10 @@
 
 ## P0 — Active
 
+### Explicit text filename deploy fidelity `in_progress` (GitHub #94, under #20)
+
+A single valid uppercase `t/0001-L044.xml` authored through Forge fails native Preview because the compiler invents a lowercase generated path and the artifact guard detects the collision. The actual source has no duplicate translation file. [Reproduction and acceptance](https://github.com/KennyG1990/X4_Forge/issues/94). Preserve the explicit filename and no-edit bytes, retain entry edits at the authored path, and keep genuine duplicate rejection. The frozen 0.0.82 source contains the same helper by inspection; its exact replay and bounded correction are next after the #93 checkpoint. Live setup stays untouched.
+
 ### Native backend recovery and interrupted apply `in_progress` (GitHub #53)
 
 Native Preview and Undo now retain the physical destination across requests. Repointing an alias to an identical-byte target refuses safely. Stable aliases, historical physical recovery shapes and first deploy passed. The [59-check Dev correction](docs/plans/2026-11-09-native-deploy-physical-target-binding.md) is ported into the [new 0.0.82 source](docs/plans/2026-11-09-forge-082-physical-target-rollforward.md), whose 65-check replay also covers a target change during recovery capture. Full qualification remains pending.
@@ -67,6 +71,10 @@ An explicit Dev launch flag shows the effective scratch paths and keeps corpus/s
 ### Lua engine globals and tooling diagnostics `in_progress` (GitHub #86)
 
 Dev recognizes the four reported X4 globals and isolates standalone root tools from the runtime global namespace. Exact registered tools, syntax and X4 diagnostics remain checked. The Problems API, Doctor and both native previews passed the standalone replay. [Isolated evidence](docs/plans/2026-11-09-forge-lua-global-tooling-scope.md). Broader engine names, dynamic tool imports, installed rendering and delivery remain open.
+
+### Literal Lua owned-text references `in_progress` (GitHub #93, part of #74)
+
+Dev warns on missing literal `ReadText` IDs on mod-owned pages and carries the exact ID position through project validation, Problems and both native previews. Valid engine calls no longer produce an undefined-global hint. [Paired source/native proof and standalone game packet](docs/plans/2026-11-09-lua-owned-text-references.md). Source/native checkpoint is verified; installed presentation, Claude's exact game lookup observations and delivery remain open. Broader value resolution and language/merged text lookup remain #74 work. Existing cross-file registration parsing still reports an availability gap for a BOM-bearing Lua source.
 
 ### Nested keyed property scopes `in_progress` (GitHub #60, related to #74)
 
