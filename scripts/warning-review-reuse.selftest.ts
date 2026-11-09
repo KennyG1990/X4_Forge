@@ -265,24 +265,27 @@ const referenceWarning: EvidenceDiagnostic = {
   ...warning, code: 'reference.unknown_ware', sourceRef: 'fixture_ware', line: 132, message: 'Unknown fixture ware',
 };
 const referenceOccurrences = [{ ...referenceWarning, column: 41 }, { ...referenceWarning, column: 58 }];
-check('durable reference review reuses only the approved same-line occurrence', () => {
-  const receipts = new ActionReceiptStore({ root: path.join(root, 'reference-occurrences') });
-  const before = make(referenceOccurrences, undefined, receipts);
-  const [first, second] = before.evidence.findings;
-  assert.notEqual(first.findingId, second.findingId);
-  const original = recordFindingAcceptances(receipts, before, approve(before), actor).receipts[0];
+for (const code of ['reference.unknown_ware', 'md.run_actions_param_undeclared']) {
+  check(`durable ${code} review reuses only the approved same-line occurrence`, () => {
+    const receipts = new ActionReceiptStore({ root: path.join(root, code) });
+    const occurrences = referenceOccurrences.map(finding => ({ ...finding, code }));
+    const before = make(occurrences, undefined, receipts);
+    const [first, second] = before.evidence.findings;
+    assert.notEqual(first.findingId, second.findingId);
+    const original = recordFindingAcceptances(receipts, before, approve(before), actor).receipts[0];
 
-  const reopened = new ActionReceiptStore({ root: receipts.root });
-  const replay = make(referenceOccurrences, undefined, reopened);
-  const result = recordFindingAcceptances(reopened, replay, [], nextActor);
-  assert.deepEqual(result.decision.approvals.map(entry => entry.finding.findingId), [first.findingId]);
-  assert.deepEqual(result.decision.unacceptedWarningIds, [second.findingId]);
-  assert.deepEqual(result.decision.warningReviews?.newFindingIds, [second.findingId]);
-  assert.equal(result.receipts.length, 1);
-  assert.equal(result.receipts[0].metadata?.findingId, first.findingId);
-  assert.equal(result.receipts[0].metadata?.originalReceiptId, original.id);
-  verifyFindingAcceptanceReceipts(reopened, result.receipts.map(receipt => receipt.id), replay, [], nextActor);
-});
+    const reopened = new ActionReceiptStore({ root: receipts.root });
+    const replay = make(occurrences, undefined, reopened);
+    const result = recordFindingAcceptances(reopened, replay, [], nextActor);
+    assert.deepEqual(result.decision.approvals.map(entry => entry.finding.findingId), [first.findingId]);
+    assert.deepEqual(result.decision.unacceptedWarningIds, [second.findingId]);
+    assert.deepEqual(result.decision.warningReviews?.newFindingIds, [second.findingId]);
+    assert.equal(result.receipts.length, 1);
+    assert.equal(result.receipts[0].metadata?.findingId, first.findingId);
+    assert.equal(result.receipts[0].metadata?.originalReceiptId, original.id);
+    verifyFindingAcceptanceReceipts(reopened, result.receipts.map(receipt => receipt.id), replay, [], nextActor);
+  });
+}
 check('a legacy reference review cannot transfer to either newly positioned occurrence', () => {
   const receipts = new ActionReceiptStore({ root: path.join(root, 'legacy-reference-occurrence') });
   const before = make([referenceWarning], undefined, receipts);
