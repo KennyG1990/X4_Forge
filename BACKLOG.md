@@ -8,7 +8,7 @@
 
 ### Native backend recovery and interrupted apply `in_progress` (GitHub #53)
 
-Dev adds explicit local Start with exact saved workspace, offline Studio state, and owned retirement before replacement. [Recovery record](docs/plans/2026-11-09-forge-local-backend-recovery.md). The live batch 480 receipt was admitted and remains prepared after the successor deploy committed. Automatic cold resume, interrupted receipt reconciliation, installed verification and release remain open.
+Dev adds explicit local Start with exact saved workspace, offline Studio state, and owned retirement before replacement. [Recovery record](docs/plans/2026-11-09-forge-local-backend-recovery.md). The Dev operation lookup now distinguishes a proven local interruption before the write barrier from an unknown result after activation. [Admitted interruption proof](docs/plans/2026-11-09-forge-admitted-deploy-interruption.md). The live batch 480 receipt predates the barrier and remains prepared. Automatic cold resume, post-activation receipt reconciliation, installed verification and release remain open.
 
 ### Unsaved expression MCP `in_progress` (GitHub #79, part of #74)
 

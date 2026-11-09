@@ -1,10 +1,13 @@
 /** Deployment identity and durable audit records; authentication remains in the route middleware. */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { actionReceiptIdForOperation, type ActionReceipt, type ActionReceiptOperationIdentity } from '../lib/actionReceipt';
 import type { ActionReceiptStore } from '../lib/actionReceiptStore';
+import type { DeploymentRecoveryRecord, DestructiveRecoveryStore } from '../lib/destructiveRecovery';
 import type { AcceptanceDecision, AcceptancePrincipal, AcceptanceSubject } from './findingAcceptance';
+import { processLiveness } from './sharedSourceCoordinator';
 
 export function trustHash(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value, (_key, item) => {
@@ -165,6 +168,24 @@ export function readDeployOperationReceipt(store: ActionReceiptStore, identity: 
   throw Object.assign(new Error('Deployment receipt could not be verified.'), { code: result.code });
 }
 
+const prewriteStage = (record: DeploymentRecoveryRecord) => `deploy-prewrite-v1:${trustHash(record)}`;
+
+export function deployOperationOutcome(receipt: ActionReceipt, recovery: DestructiveRecoveryStore) {
+  if (receipt.status !== 'prepared') return receipt.status;
+  const recoveryId = receipt.rollback.reference;
+  if (!recoveryId || !String(receipt.metadata?.stage).startsWith('deploy-prewrite-v1:')) return 'unknown';
+  const initial = recovery.read(recoveryId);
+  if (!initial.ok || initial.record.kind !== 'deploy' || initial.record.id !== recoveryId
+    || initial.record.status !== 'preparing' || initial.record.writeAdmission?.phase !== 'pending-v1'
+    || initial.record.writeAdmission.host !== os.hostname() || receipt.metadata?.stage !== prewriteStage(initial.record)
+    || processLiveness(initial.record.writeAdmission.pid) !== 'dead') return 'unknown';
+  // Read again after observing owner exit. The owner could have admitted the write
+  // between our first read and its exit.
+  const retired = recovery.read(recoveryId);
+  return retired.ok && retired.record.kind === 'deploy' && prewriteStage(retired.record) === receipt.metadata.stage
+    ? 'not-applied' : 'unknown';
+}
+
 export function prepareDeployRecord(
   store: ActionReceiptStore, subject: AcceptanceSubject, decision: AcceptanceDecision,
   principal: AcceptancePrincipal, approvals: ActionReceipt[], recoveryId: string,
@@ -172,6 +193,7 @@ export function prepareDeployRecord(
   validatedArtifactHash?: string,
   identity = deployReceiptIdentity(principal),
   projectCheckSuite?: { id: string; hash: string },
+  prewriteRecovery?: DeploymentRecoveryRecord,
 ): ActionReceipt {
   const maxApprovals = projectCheckSuite ? 126 : 127;
   if (approvals.length > maxApprovals) throw new Error(`At most ${maxApprovals} finding approvals fit a deployment record.`);
@@ -208,6 +230,7 @@ export function prepareDeployRecord(
     metadata: { operation: 'deploy', ...Object.fromEntries(Object.entries(decision.binding).filter(([k]) => k !== 'hash')),
       actorLabel: principal.label, outcome: decision.outcome, recoveryId,
       ...decision.counts,
+      ...(prewriteRecovery ? { stage: prewriteStage(prewriteRecovery) } : {}),
       ...(validatedArtifactHash ? { validatedArtifactHash, validatedArtifactScope: 'logical-artifact-bytes' } : {}) },
   });
   if (!created) throw Object.assign(new Error('This deployment operation already has a receipt.'), {

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { artifactPlanIdentity, buildArtifactPlan, materializeArtifact } from '../src/lib/artifactPipeline';
@@ -7,8 +8,9 @@ import { captureDeploymentSnapshot } from '../src/server/deploymentSnapshot';
 import { buildValidationEvidence } from '../src/lib/validationEvidence';
 import { ActionReceiptStore } from '../src/lib/actionReceiptStore';
 import { redactReceiptMetadata } from '../src/lib/actionReceipt';
+import { DestructiveRecoveryStore } from '../src/lib/destructiveRecovery';
 import { evaluateFindingAcceptances } from '../src/server/findingAcceptance';
-import { prepareDeployRecord, commitDeployRecord } from '../src/server/deploymentTrust';
+import { prepareDeployRecord, commitDeployRecord, deployOperationOutcome, deployReceiptIdentity } from '../src/server/deploymentTrust';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-snapshot-test-'));
 let assertions = 0;
@@ -52,11 +54,47 @@ try {
   const subject = { evidence, artifactHash: 'a'.repeat(64), validatorHash: 'b'.repeat(64), corpusHash: 'c'.repeat(64), targetHash: 'd'.repeat(64) };
   const principal = { kind: 'agent' as const, id: 'key_snapshot_test', label: 'Snapshot test', scope: 'deploy' as const, deployAuthorized: true };
   const decision = evaluateFindingAcceptances(subject, [], principal);
+  const recovery = new DestructiveRecoveryStore({ root: path.join(root, 'recovery') });
   const prepared = prepareDeployRecord(store, subject, decision, principal, [], 'recovery_snapshot_test', 'absent', artifactPlanIdentity(plan, 'loose'));
+  check('legacy prepared receipt has unknown write outcome', deployOperationOutcome(prepared, recovery) === 'unknown');
+  const targetRoot = path.join(root, 'extensions');
+  const before = recovery.prepareDeployment({ priorExisted: false, targetRoot, targetPath: path.join(targetRoot, 'lab'),
+    modId: 'lab', beforeFingerprint: 'absent', beforeBytes: 0, summary: 'Test deployment', trackWriteAdmission: true });
+  const operation = deployReceiptIdentity(principal, { workspaceId: 'ws_111111111111111111111111', operationId: 'test-write-admission' });
+  const tracked = prepareDeployRecord(store, subject, decision, principal, [], before.id, before.beforeFingerprint,
+    artifactPlanIdentity(plan, 'loose'), operation, undefined, before);
+  check('live prepared owner has unknown write outcome', deployOperationOutcome(tracked, recovery) === 'unknown');
+  assert.throws(() => recovery.admitDeploymentWrite({ ...before, beforeBytes: 1 }), /no longer matches/); assertions++;
+  const rename = fs.renameSync;
+  const recoveryFile = path.join(recovery.root, before.id, 'record.json');
+  fs.renameSync = (from, to) => {
+    if (to === recoveryFile) throw new Error('Test write admission rename failure');
+    rename(from, to);
+  };
+  syncBuiltinESMExports();
+  try {
+    assert.throws(() => recovery.admitDeploymentWrite(before), /Test write admission rename failure/); assertions++;
+    const pending = recovery.read(before.id);
+    check('failed write admission leaves the pending record and target untouched', pending.ok && pending.record.kind === 'deploy'
+      && pending.record.writeAdmission?.phase === 'pending-v1' && !fs.existsSync(targetRoot));
+  } finally {
+    fs.renameSync = rename;
+    syncBuiltinESMExports();
+  }
+  recovery.admitDeploymentWrite(before);
+  const admitted = recovery.read(before.id);
+  check('write admission persisted before any target write', admitted.ok && admitted.record.kind === 'deploy'
+    && admitted.record.writeAdmission?.phase === 'started-v1' && !fs.existsSync(targetRoot));
+  check('admitted prepared receipt has unknown write outcome', deployOperationOutcome(tracked, recovery) === 'unknown');
+  assert.throws(() => recovery.admitDeploymentWrite(before), /no longer matches/); assertions++;
+  recovery.abandon(before.id);
+  assert.throws(() => recovery.admitDeploymentWrite(before), /no longer matches/); assertions++;
+  check('missing recovery keeps prepared outcome unknown', deployOperationOutcome(tracked, recovery) === 'unknown');
   const committed = commitDeployRecord(store, prepared, 'e'.repeat(64));
   const reopened = new ActionReceiptStore({ root: store.root }).read(committed.id);
   check('snapshot audit hash survives durable committed readback', reopened.status === 'committed' && reopened.metadata?.validatedArtifactHash === artifactPlanIdentity(plan, 'loose'));
   check('snapshot scope retained', reopened.metadata?.validatedArtifactScope === 'logical-artifact-bytes');
+  check('committed outcome survives without a recovery record', deployOperationOutcome(reopened, recovery) === 'committed');
   assert.throws(() => redactReceiptMetadata({ arbitraryUnreviewedField: 'not allowed' }), /narrow safe metadata policy/); assertions++;
   console.log(JSON.stringify({ pass: true, assertions }));
 } finally { fs.rmSync(root, { recursive: true, force: true }); }

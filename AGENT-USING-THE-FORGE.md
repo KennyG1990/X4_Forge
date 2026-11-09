@@ -130,8 +130,12 @@ and deploy key until you know the outcome.
 
 If the reply disappears, query `GET /api/agent/status?deployOperationId=<encoded-id>`
 with the same deploy key and workspace headers. A committed receipt identifies the
-historical write. Missing or prepared evidence leaves the outcome unknown. Reusing a
-recorded operation ID refuses a second apply and returns the existing receipt pointer.
+historical write. `not-applied` means Forge verified that the retired local backend
+never reached the managed write phase for this operation. The receipt can remain
+`prepared`. The lookup can prove this only while Forge retains the exact recovery
+record. A missing receipt or an unproven write phase leaves the outcome `unknown`.
+Reusing a recorded operation ID refuses a second apply and returns the existing receipt
+pointer. Start a fresh preview before deciding on a new operation.
 
 If Forge returns `DEPLOY_RESPONSE_FAILED_AFTER_COMMIT`, its `deployRecord`
 and `outcome: committed` describe the historical write even though the reply

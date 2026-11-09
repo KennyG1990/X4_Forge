@@ -134,7 +134,7 @@ import { ActionReceiptStore, ActionReceiptStoreError } from "./src/lib/actionRec
 import { evaluateFindingAcceptances, projectFindingReview, recordFindingAcceptances, verifyFindingAcceptanceReceipts, revokeWarningReview, type AcceptanceSubject, type AcceptancePrincipal } from './src/server/findingAcceptance';
 import { parseModFolderImportRequest } from './src/server/modFolderImportRequest';
 import { RuntimeControl } from './src/server/runtimeControl';
-import { trustHash, deploymentImplementationHash, deploymentCorpusFiles, prepareDeployRecord, commitDeployRecord, deployReceiptIdentity, readDeployOperationReceipt, recordIncompleteDeployOutput } from './src/server/deploymentTrust';
+import { trustHash, deploymentImplementationHash, deploymentCorpusFiles, prepareDeployRecord, commitDeployRecord, deployReceiptIdentity, readDeployOperationReceipt, recordIncompleteDeployOutput, deployOperationOutcome } from './src/server/deploymentTrust';
 import { actionReceiptIdForOperation, type ActionReceipt } from './src/lib/actionReceipt';
 import { attachActionReceiptToLedgerRow } from "./src/lib/actionReceiptHistory";
 import { combineReceiptResourceBeforeHashes, hashBoundedReceiptFacts } from "./src/lib/actionReceiptRuntime";
@@ -5328,7 +5328,7 @@ app.get("/api/agent/status", (req, res) => {
           ok: false, code: 'DEPLOY_OPERATION_NOT_FOUND', outcome: 'unknown',
         });
         return res.json({
-          ok: true, workspaceId: record.workspaceId, outcome: receipt.status === 'prepared' ? 'unknown' : receipt.status, receipt,
+          ok: true, workspaceId: record.workspaceId, outcome: deployOperationOutcome(receipt, destructiveRecoveryStore), receipt,
         });
       } catch (error: any) {
         const forbidden = error?.code === 'DEPLOY_APPROVAL_FORBIDDEN';
@@ -11646,6 +11646,7 @@ function prepareDeploymentRecoveryReceipt(
   targetPath: string,
   modId: string,
   store: DestructiveRecoveryStore = destructiveRecoveryStore,
+  trackWriteAdmission = false,
 ): DeploymentRecoveryRecord {
   const resolvedRoot = path.resolve(targetRoot);
   const resolvedTarget = path.resolve(targetPath);
@@ -11664,6 +11665,7 @@ function prepareDeploymentRecoveryReceipt(
     modId,
     beforeFingerprint,
     beforeBytes,
+    trackWriteAdmission,
     summary: priorExisted ? `Restore the deployment of ${modId} that existed before this deploy` : `Remove the first deployment of ${modId}`,
   });
   try {
@@ -14406,7 +14408,8 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     let stagingPath = '';
     const deploymentTarget = targetRoot;
     try {
-      pendingDeployRecovery = prepareDeploymentRecoveryReceipt(extensionsPath, deploymentTarget, modId);
+      pendingDeployRecovery = prepareDeploymentRecoveryReceipt(extensionsPath, deploymentTarget, modId,
+        destructiveRecoveryStore, operation !== undefined);
     } catch (error) {
       check('deploy', 'Written to staging + extensions', 'fail', 'Deploy refused because its pre-state recovery could not be made durable.');
       return res.status(507).json(failWith('deploy', {
@@ -14416,8 +14419,10 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     }
     if (pendingDeployRecovery.beforeFingerprint !== targetFingerprint) throw targetChanged();
     deployReceipt = prepareDeployRecord(actionReceiptStore, subject, decision, principal, approvalRecords,
-      pendingDeployRecovery.id, pendingDeployRecovery.beforeFingerprint, snapshot.manifest.hash, operation, nativeCheckProof?.proof);
+      pendingDeployRecovery.id, pendingDeployRecovery.beforeFingerprint, snapshot.manifest.hash, operation,
+      nativeCheckProof?.proof, operation ? pendingDeployRecovery : undefined);
     assertWriteAuthority();
+    if (operation) destructiveRecoveryStore.admitDeploymentWrite(pendingDeployRecovery);
     if (!fs.existsSync(extensionsPath)) fs.mkdirSync(extensionsPath, { recursive: true });
     writeAttempted = true;
     if (modWorkspacePath) {
