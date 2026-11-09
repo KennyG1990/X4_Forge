@@ -105,6 +105,8 @@ export interface ScriptPropertyFinding {
   /** Project-relative source file so editor diagnostics land in the correct buffer. */
   filePath?: string;
   line: number;
+  column: number;
+  typeContext?: { datatype: string; confidence: 'declared' | 'hint' };
   suggestions: string[];
   detail: string;
 }
@@ -535,6 +537,7 @@ function candidateHeads(index: ScriptPropertyIndex, states: PathState[]): Set<st
 function pushFinding(out: ScriptPropertyFinding[], finding: ScriptPropertyFinding): void {
   if (out.some(existing => existing.code === finding.code
     && existing.line === finding.line
+    && existing.column === finding.column
     && existing.chain === finding.chain
     && existing.segment === finding.segment)) return;
   out.push(finding);
@@ -568,6 +571,9 @@ function variablePathContexts(
   ];
 }
 
+type ScriptPropertyOptions = { filePath?: string; variableTypes?: Record<string, string> };
+type PropertyPosition = Pick<ScriptPropertyFinding, 'line' | 'column'>;
+
 /**
  * Lint every `$var.prop…` / `keyword.prop…` chain in MD/AIScript XML text.
  * - untyped variable roots retain all datatype/path candidates and traverse them in order;
@@ -576,10 +582,32 @@ function variablePathContexts(
  * - actual dynamic/list/variable selectors remain conservative and can satisfy a pending path.
  * All findings are warnings (import-generated properties are invisible to the static set).
  */
-export function lintScriptPropertyChains(xml: string, index: ScriptPropertyIndex, opts?: { filePath?: string; variableTypes?: Record<string, string> }): ScriptPropertyFinding[] {
+export function lintScriptPropertyChains(xml: string, index: ScriptPropertyIndex, opts?: ScriptPropertyOptions): ScriptPropertyFinding[] {
+  if (!index.loaded) return [];
+  return lintPropertyChains(xml, maskNonExpressionSpans(xml), index, opts);
+}
+
+export function lintScriptPropertyExpression(expression: string, index: ScriptPropertyIndex, opts?: ScriptPropertyOptions): ScriptPropertyFinding[] {
+  if (!index.loaded) return [];
+  const masked = expression.replace(/'(?:\\[\s\S]|[^'\\])*'|"(?:\\[\s\S]|[^"\\])*"/g,
+    literal => literal.replace(/[^\r\n]/g, ' '));
+  return lintPropertyChains(expression, masked, index, opts);
+}
+
+function lintPropertyChains(source: string, masked: string, index: ScriptPropertyIndex, opts?: ScriptPropertyOptions): ScriptPropertyFinding[] {
   const out: ScriptPropertyFinding[] = [];
-  if (!index.loaded) return out;
-  const masked = maskNonExpressionSpans(xml);
+  let lineStarts: number[] | undefined;
+  function locate(offset: number): PropertyPosition {
+    lineStarts ??= [0, ...Array.from(source.matchAll(/\r\n?|\n/g), match => match.index + match[0].length)];
+    let lower = 0;
+    let upper = lineStarts.length;
+    while (lower + 1 < upper) {
+      const middle = Math.floor((lower + upper) / 2);
+      if (lineStarts[middle] <= offset) lower = middle;
+      else upper = middle;
+    }
+    return { line: lower + 1, column: offset - lineStarts[lower] + 1 };
+  }
   for (const parsed of parseExpressionChains(masked)) {
     const rootRaw = parsed.root.raw;
     const rootLower = rootRaw.toLowerCase();
@@ -635,11 +663,17 @@ export function lintScriptPropertyChains(xml: string, index: ScriptPropertyIndex
         const hasUsableDatatypeContext = states.some(state => state.kind === 'context'
           && pathPropertiesForContext(index, state.context).length > 0);
         if (pending?.placeholderLiteral) {
-          pushFinding(out, buildFinding(masked, segment.start, chain, segment.raw, findingRoot, candidateHeads(index, states), opts));
+          pushFinding(out, buildFinding(locate(segment.start), chain, segment.raw, findingRoot, candidateHeads(index, states), opts));
         } else if (pending?.requiresSubselector && !hasUsableDatatypeContext) {
-          pushFinding(out, buildSubselectorFinding(masked, pending.anchor.at, pending.anchor.chainAt, pending.anchor.head, index, opts));
+          pushFinding(out, buildSubselectorFinding(locate(pending.anchor.at), pending.anchor.chainAt, pending.anchor.head, index, opts));
         } else {
-          pushFinding(out, buildFinding(masked, segment.start, chain, segment.raw, findingRoot, candidateHeads(index, states), opts));
+          const onlyState = states.length === 1 ? states[0] : undefined;
+          const declared = findingRoot && onlyState?.kind === 'context' && onlyState.context.kind === 'datatype'
+            ? onlyState.context.name : undefined;
+          const hint = isVar && segmentIndex === 0 ? knownVariableDatatype(rootRaw, index, opts) : undefined;
+          const typeContext = declared ? { datatype: declared, confidence: 'declared' as const }
+            : hint ? { datatype: hint, confidence: 'hint' as const } : undefined;
+          pushFinding(out, buildFinding(locate(segment.start), chain, segment.raw, findingRoot, candidateHeads(index, states), opts, typeContext));
         }
         stopQuietly = true;
         break;
@@ -653,8 +687,7 @@ export function lintScriptPropertyChains(xml: string, index: ScriptPropertyIndex
     if (pending) {
       if (pending.placeholderLiteral) {
         pushFinding(out, buildFinding(
-          masked,
-          pending.placeholderLiteral.at,
+          locate(pending.placeholderLiteral.at),
           pending.placeholderLiteral.chainAt,
           pending.placeholderLiteral.segment,
           findingRoot,
@@ -662,15 +695,14 @@ export function lintScriptPropertyChains(xml: string, index: ScriptPropertyIndex
           opts,
         ));
       } else {
-        pushFinding(out, buildSubselectorFinding(masked, pending.anchor.at, pending.anchor.chainAt, pending.anchor.head, index, opts));
+        pushFinding(out, buildSubselectorFinding(locate(pending.anchor.at), pending.anchor.chainAt, pending.anchor.head, index, opts));
       }
     }
   }
   return out;
 }
 
-function buildSubselectorFinding(masked: string, at: number, chain: string, head: string, index: ScriptPropertyIndex, opts?: { filePath?: string; variableTypes?: Record<string, string> }): ScriptPropertyFinding {
-  const line = masked.slice(0, at).split('\n').length;
+function buildSubselectorFinding(position: PropertyPosition, chain: string, head: string, index: ScriptPropertyIndex, opts?: ScriptPropertyOptions): ScriptPropertyFinding {
   const conts = [...(index.continuations.get(head) || [])]
     .sort((a, b) => (a === '*' ? 1 : b === '*' ? -1 : a.localeCompare(b)))
     .map(c => c === '*' ? `{$...}` : c);
@@ -685,16 +717,17 @@ function buildSubselectorFinding(masked: string, at: number, chain: string, head
     chain,
     segment: head,
     filePath: opts?.filePath,
-    line,
+    ...position,
     suggestions,
     detail,
   };
 }
 
-function buildFinding(masked: string, at: number, chain: string, segment: string, root: string | undefined, candidates: Iterable<string>, opts?: { filePath?: string; variableTypes?: Record<string, string> }): ScriptPropertyFinding {
-  const line = masked.slice(0, at).split('\n').length;
+function buildFinding(position: PropertyPosition, chain: string, segment: string, root: string | undefined,
+  candidates: Iterable<string>, opts?: ScriptPropertyOptions, typeContext?: ScriptPropertyFinding['typeContext']): ScriptPropertyFinding {
   const clean = segment.replace(/\?$/, '');
   const suggestions = suggestProperties(clean, candidates);
+  const context = typeContext ? propertyTypeLabel(typeContext) : root ? ` of keyword "${root}"` : '';
   return {
     code: 'scriptproperty.unknown',
     severity: 'warning',
@@ -702,10 +735,22 @@ function buildFinding(masked: string, at: number, chain: string, segment: string
     segment: clean,
     root,
     filePath: opts?.filePath,
-    line,
+    ...position,
+    ...(typeContext ? { typeContext } : {}),
     suggestions,
-    detail: `"${clean}" (in ${chain}${opts?.filePath ? `, ${opts.filePath}` : ''}) is not a known script property${root ? ` of keyword "${root}"` : ''} in the game's scriptproperties.xml — X4 raises no error for unknown properties, the expression just evaluates false/null and the branch silently skips.${suggestions.length ? ` Did you mean: ${suggestions.join(', ')}?` : ''}`,
+    detail: `"${clean}" (in ${chain}${opts?.filePath ? `, ${opts.filePath}` : ''}) is not a known script property${context} in the game's scriptproperties.xml — X4 raises no error for unknown properties, the expression just evaluates false/null and the branch silently skips.${suggestions.length ? ` Did you mean: ${suggestions.join(', ')}?` : ''}`,
   };
+}
+
+function propertyTypeLabel(context: NonNullable<ScriptPropertyFinding['typeContext']>): string {
+  return context.confidence === 'declared' ? ` on declared datatype "${context.datatype}"`
+    : ` (variable datatype hint "${context.datatype}")`;
+}
+
+export function formatScriptPropertyFinding(finding: ScriptPropertyFinding): string {
+  const context = finding.typeContext ? propertyTypeLabel(finding.typeContext) : '';
+  return `Property chain "${finding.chain}": segment "${finding.segment}"${context} — ${finding.suggestions.length
+    ? `did you mean ${finding.suggestions.slice(0, 3).join(', ')}?` : 'unknown in scriptproperties.xml.'}`;
 }
 
 /* ------------------------------------------------------------------ *
@@ -950,6 +995,20 @@ export function runScriptPropertiesSelftest(): {
   const factionBad = lintScriptPropertyChains('<do_if value="faction.argon.knownnmae"/>', idx);
   ok('dynamic keyword result datatype catches unknown property', factionBad.some(f => f.segment === 'knownnmae' && f.root === 'faction'), JSON.stringify(factionBad));
   ok('dynamic keyword typo has did-you-mean', factionBad.some(f => f.suggestions.includes('knownname')), JSON.stringify(factionBad));
+  const typo = 'faction.argon.knownnmae';
+  const repeated = `  <do_if value="&quot;&quot; + ${typo} and ${typo}"/>`;
+  const positioned = lintScriptPropertyChains(`<mdscript>\r\n${repeated}\r</mdscript>`, idx);
+  const columns = [...repeated.matchAll(/knownnmae/g)].map(match => match.index + 1);
+  ok('identical property warnings retain their original XML columns',
+    positioned.length === 2 && positioned.every((finding, i) => finding.line === 2 && finding.column === columns[i]
+      && finding.typeContext?.datatype === 'faction' && finding.typeContext.confidence === 'declared'), JSON.stringify(positioned));
+  const bareExpression = `'${typo}' +\r\n${typo}\r$receiver.carggo`;
+  const bareFindings = lintScriptPropertyExpression(bareExpression, idx, { variableTypes: { '$receiver': 'ship' } });
+  ok('unsaved property positions exclude quoted text and preserve mixed newlines',
+    bareFindings.length === 2 && bareFindings[0].line === 2 && bareFindings[0].column === typo.indexOf('knownnmae') + 1
+    && bareFindings[1].line === 3 && bareFindings[1].column === '$receiver.'.length + 1
+    && bareFindings[1].typeContext?.datatype === 'ship' && bareFindings[1].typeContext.confidence === 'hint',
+    JSON.stringify(bareFindings));
   ok('single-quoted string literals masked',
     lintScriptPropertyChains(`<raise_lua_event name="'ai_influence.chat.fetchmode'"/>`, idx).length === 0);
   ok('comment attributes masked',

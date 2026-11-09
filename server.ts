@@ -156,7 +156,10 @@ import { mdStemFingerprint, runMdFileIdentitySelftest } from "./src/lib/mdFileId
 import { layoutImportedGraphBatch, runImportedGraphLayoutSelftest } from "./src/lib/importedGraphLayout";
 import { runXmlSourceSpanSelftest } from "./src/lib/xmlSourceSpans";
 import { runNodeSelectionDocumentSelftest } from "./src/lib/nodeSelectionDocument";
-import { buildScriptPropertyIndex, lintScriptPropertyChains, SCRIPT_PROPERTIES_FIXTURE } from "./src/lib/scriptProperties";
+import {
+  buildScriptPropertyIndex, formatScriptPropertyFinding, lintScriptPropertyChains, lintScriptPropertyExpression,
+  SCRIPT_PROPERTIES_FIXTURE,
+} from "./src/lib/scriptProperties";
 import { lintMdExpressionRules } from "./src/lib/expressionAst";
 import { publishInstance, unpublishInstance, latestPath, runInstanceDiscoverySelftest } from "./src/lib/instanceDiscovery";
 import { buildPlayerReadme, bumpVersion, runModDistributionSelftest, setContentVersion, verifyZipArchive } from "./src/lib/modDistribution";
@@ -5080,7 +5083,7 @@ function validateIncomingBytes(relativePath: string, content: string): {
   findings: Array<{ severity: string; code: string; line?: number; message: string }>;
 } {
   const ran: string[] = [];
-  const findings: Array<{ severity: string; code: string; line?: number; message: string }> = [];
+  const findings: Array<{ severity: string; code: string; line?: number; column?: number; message: string }> = [];
   const kind = classifyPath(relativePath);
 
   if (/\.xml$/i.test(relativePath)) {
@@ -5101,14 +5104,12 @@ function validateIncomingBytes(relativePath: string, content: string): {
     if (spIndex) {
       ran.push('scriptproperty-chains');
       for (const f of lintScriptPropertyChains(content, spIndex, { filePath: relativePath })) {
-        const chain = (f as any).chain;
-        const segment = (f as any).segment;
-        const suggestions = ((f as any).suggestions || []).slice(0, 3);
         findings.push({
           severity: f.severity,
           code: 'scriptproperty.unknown',
-          line: (f as any).line,
-          message: `"${chain}": segment "${segment}" is unknown in scriptproperties.xml${suggestions.length ? ` — did you mean ${suggestions.join(', ')}?` : ''}. An unknown property evaluates to null with no error, so a guard using it never fires.`,
+          line: f.line,
+          column: f.column,
+          message: formatScriptPropertyFinding(f),
         });
       }
     }
@@ -5219,7 +5220,7 @@ app.post("/api/fs/write", coordinatedSourceOperation((req, res) => {
  * property names ($st.manager, ware.{$id}.avgprice) that this data could always have caught: an
  * unknown MD property evaluates to null with no error, forever.
  *
- * Uses the SAME `lintScriptPropertyChains` engine as full project validation, so a green answer
+ * Uses the same property traversal as full project validation, so a green answer
  * here means the same thing a green answer there means.
  */
 function checkExpressionRequest(req: express.Request, res: express.Response) {
@@ -5255,18 +5256,17 @@ function checkExpressionRequest(req: express.Request, res: express.Response) {
       });
     }
     const variableTypes = (req.body?.variableTypes && typeof req.body.variableTypes === 'object') ? req.body.variableTypes : undefined;
-    // Wrap the bare expression in the smallest legal carrier so the chain linter sees it in the
-    // same shape it sees inside a real MD file.
-    const carrier = `<mdscript name="ExpressionProbe"><cues><cue name="Probe"><actions><set_value name="$probe" exact="${expression.replace(/"/g, '&quot;')}"/></actions></cue></cues></mdscript>`;
-    const findings = lintScriptPropertyChains(carrier, spIndex, { filePath: 'expression-probe', variableTypes });
+    const findings = lintScriptPropertyExpression(expression, spIndex, { variableTypes });
     const propertyProblems = findings.map(f => ({
       severity: f.severity,
-      chain: (f as any).chain,
-      segment: (f as any).segment,
-      suggestions: ((f as any).suggestions || []).slice(0, 5),
-      message: (f as any).suggestions?.length
-        ? `"${(f as any).chain}": segment "${(f as any).segment}" is not a known property — did you mean ${(f as any).suggestions.slice(0, 3).join(', ')}?`
-        : `"${(f as any).chain}": segment "${(f as any).segment}" is unknown in scriptproperties.xml.`,
+      code: f.code,
+      chain: f.chain,
+      segment: f.segment,
+      line: f.line,
+      column: f.column,
+      ...(f.typeContext ? { typeContext: f.typeContext } : {}),
+      suggestions: f.suggestions.slice(0, 5),
+      message: formatScriptPropertyFinding(f),
     }));
     return res.json({
       ok: propertyProblems.length === 0,

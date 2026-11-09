@@ -75,6 +75,7 @@ export function buildProjectSymbols(
   for (const file of files) {
     if (typeof file.content !== 'string') continue;
     const symbols = new Map<string, string>();
+    const confidenceByName = new Map<string, ProjectVariableSymbol['confidence']>();
     byFile.set(file.path, symbols);
     const pending: Array<{ name: string; expression: string; line: number; tag: string }> = [];
     TAG_RE.lastIndex = 0;
@@ -99,7 +100,8 @@ export function buildProjectSymbols(
         const type = tagDatatype(tag, available);
         if (type) {
           symbols.set(name, type);
-          variables.push({ name, type, filePath: file.path, line: tagLine, sourceTag: tag, confidence: 'schema' });
+          confidenceByName.set(name.toLowerCase(), 'name');
+          variables.push({ name, type, filePath: file.path, line: tagLine, sourceTag: tag, confidence: 'name' });
         }
       }
     }
@@ -110,10 +112,15 @@ export function buildProjectSymbols(
       const variableTypes = Object.fromEntries([...symbols].flatMap(([name, type]) => [[name, type], [name.slice(1).toLowerCase(), type]]));
       for (const assignment of pending) {
         const type = inferredExpressionType(assignment.expression, index, variableTypes);
-        if (!type || symbols.get(assignment.name) === type) continue;
+        if (!type) continue;
+        const root = /^\$[A-Za-z_]\w*/.exec(assignment.expression.trim())?.[0].toLowerCase();
+        const confidence = root && confidenceByName.get(root) !== 'expression' ? 'name' : 'expression';
+        const nameKey = assignment.name.toLowerCase();
+        if (symbols.get(assignment.name) === type && confidenceByName.get(nameKey) === confidence) continue;
         symbols.set(assignment.name, type); changed = true;
+        confidenceByName.set(nameKey, confidence);
         const existing = variables.find(symbol => symbol.filePath === file.path && symbol.name === assignment.name);
-        const next = { name: assignment.name, type, filePath: file.path, line: assignment.line, sourceTag: assignment.tag, confidence: 'expression' as const };
+        const next = { name: assignment.name, type, filePath: file.path, line: assignment.line, sourceTag: assignment.tag, confidence } as const;
         if (existing) Object.assign(existing, next); else variables.push(next);
       }
       if (!changed) break;
@@ -138,9 +145,11 @@ export function runProjectSymbolsSelftest(index: ScriptPropertyIndex) {
   const result = buildProjectSymbols(files, index);
   const types = result.variableTypesFor('md/test.xml');
   const checks = [
-    { name: 'find_ship_declares_ship', pass: types.$target === 'ship' },
+    { name: 'find_ship_suggests_ship', pass: types.$target === 'ship' },
     { name: 'typed_return_infers_assignment', pass: types.$targetname === 'string' },
     { name: 'dynamic_keyword_infers_faction', pass: types.$fac === 'faction' },
+    { name: 'producer_guess_stays_a_guess_through_assignment', pass: ['$target', '$targetname'].every(name =>
+      result.variables.find(symbol => symbol.name === name)?.confidence === 'name') },
     { name: 'symbols_have_source_spans', pass: result.variables.every(symbol => symbol.line > 0 && !!symbol.sourceTag) },
   ];
   const passed = checks.filter(check => check.pass).length;

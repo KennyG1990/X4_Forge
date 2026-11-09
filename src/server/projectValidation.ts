@@ -37,7 +37,7 @@ import {
   type ProjectFile,
 } from "../lib/extensionProject";
 import { validateProjectCrossFile } from "../lib/projectCrossFileValidation";
-import { lintScriptPropertyChains, type ScriptPropertyFinding } from "../lib/scriptProperties";
+import { formatScriptPropertyFinding, lintScriptPropertyChains, type ScriptPropertyFinding } from "../lib/scriptProperties";
 import { checkXmlWellformed } from "../lib/xmlWellformed";
 import { lintAiscript, type AiscriptLintFinding } from "../lib/aiscriptLint";
 import { lintMdPitfalls, lintScriptExpressions, type MdPitfallFinding } from "../lib/mdPitfallLints";
@@ -746,7 +746,8 @@ function flattenProjectValidationRaw(result: ProjectValidationResult): FlatProje
       sourceRef: f.sourceRef ?? (f.order ? `${f.order}${f.param ? `@${f.param}` : ""}` : f.param), message: f.detail });
   }
   for (const f of result.scriptProperties.findings) {
-    out.push({ severity: f.severity, code: f.code, filePath: f.filePath, sourceRef: f.chain, line: f.line, message: `Property chain "${f.chain}": segment "${f.segment}" — ${f.suggestions.length ? `did you mean ${f.suggestions.slice(0, 3).join(", ")}?` : "unknown in scriptproperties.xml."}` });
+    out.push({ severity: f.severity, code: f.code, filePath: f.filePath, sourceRef: f.chain, line: f.line,
+      column: f.column, message: formatScriptPropertyFinding(f) });
   }
   for (const f of result.pitfalls.findings) {
     out.push({ severity: f.severity, code: f.code, filePath: f.filePath, sourceRef: f.sourceRef ?? f.cue, line: f.line, column: f.column, message: f.detail });

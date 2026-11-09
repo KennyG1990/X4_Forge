@@ -30,6 +30,10 @@ Dev catches a proven unitless value reaching an explicitly monitored cutscene ti
 
 Dev checks required and undeclared arguments for exact direct project cue instances. [Isolated replay and game evidence](docs/plans/2026-11-09-cue-library-arguments.md). Action invocations, effective patch signatures, the two official runtime pairs, installed verification and public delivery remain open.
 
+### Exact property diagnostic positions and type provenance `in_progress` (GitHub #80, part of #74)
+
+Dev preserves property columns and distinguishes declared receiver types from variable hints through project, unsaved expression and native validation. [Isolated replay](docs/plans/2026-11-09-property-diagnostic-provenance.md). Wider flow narrowing, vanilla acceptance, installed verification and public delivery remain open.
+
 ### Literal format diagnostics `in_progress` (GitHub #77, part of #74)
 
 The isolated Dev checker and native deploy now report exact literal-format diagnostics. The short-list case remains advisory. [Dev verification](docs/plans/2026-11-08-forge-literal-format-diagnostics.md). The frozen standalone game witness is queued with Claude, and installed/public delivery remain open.
