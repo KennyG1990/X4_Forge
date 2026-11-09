@@ -95,8 +95,8 @@ export interface ScriptPropertyIndex {
 }
 
 export interface ScriptPropertyFinding {
-  code: 'scriptproperty.unknown' | 'scriptproperty.requires_subselector';
-  severity: 'warning';
+  code: 'scriptproperty.unknown' | 'scriptproperty.requires_subselector' | 'scriptproperty.unresolved_type';
+  severity: 'warning' | 'info';
   /** the full chain as written, e.g. "$station.controlentity" */
   chain: string;
   /** the offending segment */
@@ -333,7 +333,7 @@ export function maskNonExpressionSpans(xml: string): string {
     // prose attributes (never expressions)
     .replace(/\b(?:comment|result|description)\s*=\s*"[^"]*"/gi, s => s.replace(/[^\n]/g, ' '))
     // MD string literals inside attribute values: '...'
-    .replace(/'[^'\n]*'/g, s => s.replace(/[^\n]/g, ' '));
+    .replace(/'(?:\\[^"\r\n]|[^'"\\\r\n])*'?/g, s => ' '.repeat(s.length));
 }
 
 /** Roots that behave like untyped object references in MD/AIScript context. */
@@ -419,6 +419,37 @@ function pathPropertiesForContext(index: ScriptPropertyIndex, context: PathConte
 
 function allPathContexts(index: ScriptPropertyIndex): PathContext[] {
   return [...index.model.datatypes.keys()].sort().map(name => ({ kind: 'datatype' as const, name }));
+}
+
+function keyedSubtypeReceivers(index: ScriptPropertyIndex, states: PathState[], head: string): string[] {
+  if (!index.continuations.get(head)?.has('*') && !index.bareOk.has(head)) return [];
+  const receivers = new Set(states.flatMap(state =>
+    state.kind === 'context' && state.context.kind === 'datatype' ? [state.context.name] : []));
+  if (!receivers.size) return [];
+
+  const unresolved = new Set<string>();
+  for (const entry of index.model.datatypes.values()) {
+    if (!entry.heads.has(head) || !entry.properties.some(property => {
+      const [name, key] = normalizedPropertyPath(property.name);
+      if (name !== head) return false;
+      if (key) return isAuthoredPlaceholder(key);
+      // The selector may index the declared result, as in attackers.{1}.
+      const result: PathContext = { kind: 'datatype', name: property.type.trim().toLowerCase() };
+      return pathPropertiesForContext(index, result).some(candidate => {
+        const path = pathForProperty(candidate);
+        return path.length === 1 && isAuthoredPlaceholder(path[0]);
+      });
+    })) continue;
+
+    const visited = new Set([entry.name]);
+    let parent = entry.parent;
+    while (parent && !visited.has(parent)) {
+      visited.add(parent);
+      if (receivers.has(parent)) unresolved.add(parent);
+      parent = index.model.datatypes.get(parent)?.parent;
+    }
+  }
+  return [...unresolved].sort();
 }
 
 function pathStateKey(state: PathState): string {
@@ -622,7 +653,7 @@ function npcGuardReadSpans(xml: string): PropertyReadSpan[] {
  * - non-dynamic keyword roots use that keyword's own authored paths;
  * - dynamic keyword roots skip the lookup selector and use its declared result datatype;
  * - actual dynamic/list/variable selectors remain conservative and can satisfy a pending path.
- * All findings are warnings (import-generated properties are invisible to the static set).
+ * Unresolved receiver types are advisory. Unknown properties remain warnings.
  */
 export function lintScriptPropertyChains(xml: string, index: ScriptPropertyIndex, opts?: ScriptPropertyOptions): ScriptPropertyFinding[] {
   if (!index.loaded) return [];
@@ -696,16 +727,13 @@ function lintPropertyChains(source: string, masked: string, index: ScriptPropert
       const nextStates = advancePathStates(index, states, segment, chain, segment.start);
 
       if (isDynamic) {
-        // Without an authored placeholder/pending continuation, an actual
-        // selector makes the remaining result unavailable rather than invalid.
-        // If it consumed only part of a multi-token authored path, the selector
-        // still leaves the return type unavailable; a completed path with a
-        // known datatype remains a context and is checked normally.
-        states = nextStates.length
-          ? dedupePathStates(nextStates.map(state => state.kind === 'pending'
-            ? { kind: 'opaque' as const, property: state.property }
-            : state))
-          : [{ kind: 'opaque' }];
+        // A partial path can stay opaque when no candidate has a result.
+        // When a complete candidate establishes a result, keep alternate paths
+        // pending so they cannot hide a typo on that result.
+        if (!nextStates.length) states = [{ kind: 'opaque' }];
+        else if (nextStates.every(state => state.kind === 'pending')) {
+          states = dedupePathStates(nextStates.map(state => ({ kind: 'opaque', property: state.property })));
+        } else states = nextStates;
         continue;
       }
 
@@ -713,7 +741,20 @@ function lintPropertyChains(source: string, masked: string, index: ScriptPropert
         const pending = pendingPathState(states);
         const hasUsableDatatypeContext = states.some(state => state.kind === 'context'
           && pathPropertiesForContext(index, state.context).length > 0);
-        if (pending?.placeholderLiteral) {
+        const key = parsed.segments[segmentIndex + 1];
+        const unresolved = !pending && key?.kind === 'dynamic-selector' ? keyedSubtypeReceivers(index, states, segment.name) : [];
+        if (key && unresolved.length) {
+          pushFinding(out, {
+            code: 'scriptproperty.unresolved_type',
+            severity: 'info',
+            chain: `${chain}.${key.raw}`,
+            segment: segment.raw,
+            filePath: opts?.filePath,
+            ...locate(segment.start),
+            suggestions: [],
+            detail: `Unresolved receiver type for "${segment.raw}". The corpus declares this property on a subtype of ${unresolved.join(', ')}. The expression does not establish that subtype.`,
+          });
+        } else if (pending?.placeholderLiteral) {
           pushFinding(out, buildFinding(locate(segment.start), chain, segment.raw, findingRoot, candidateHeads(index, states), opts));
         } else if (pending?.requiresSubselector && !hasUsableDatatypeContext) {
           pushFinding(out, buildSubselectorFinding(locate(pending.anchor.at), pending.anchor.chainAt, pending.anchor.head, index, opts));
@@ -808,6 +849,7 @@ function propertyTypeLabel(context: NonNullable<ScriptPropertyFinding['typeConte
 }
 
 export function formatScriptPropertyFinding(finding: ScriptPropertyFinding): string {
+  if (finding.code === 'scriptproperty.unresolved_type') return finding.detail;
   const context = finding.typeContext ? propertyTypeLabel(finding.typeContext) : '';
   return `Property chain "${finding.chain}": segment "${finding.segment}"${context} — ${finding.suggestions.length
     ? `did you mean ${finding.suggestions.slice(0, 3).join(', ')}?` : 'unknown in scriptproperties.xml.'}`;
@@ -857,12 +899,25 @@ export const SCRIPT_PROPERTIES_FIXTURE = `<?xml version="1.0" encoding="utf-8"?>
   </datatype>
   <datatype name="object" type="destructible">
     <property name="isplayerowned" result="true iff owned by the player" type="boolean" />
+    <property name="boardingoperation" result="Current boarding operation" type="operation" />
+  </datatype>
+  <datatype name="operation">
+    <property name="exists" result="Whether the operation exists" type="boolean" />
+  </datatype>
+  <datatype name="boardingoperation" type="operation">
+    <property name="attackers" result="Attackers of a boarding operation" type="list" />
   </datatype>
   <datatype name="npc" type="component">
     <property name="npctemplate" result="Template for this NPC" type="string" />
   </datatype>
   <datatype name="ship" type="controllable">
     <property name="cargo" result="cargo access" type="containercargolist" />
+    <property name="people.{$npctemplate}" result="NPC entry" type="npctemplateentry" />
+    <property name="people.{$entityrole}.list" result="NPC roles" type="list" />
+    <property name="people.{$entityrole}.{$level}.list" result="NPC roles by level" type="list" />
+  </datatype>
+  <datatype name="npctemplateentry">
+    <property name="seed" result="NPC seed" type="integer" />
   </datatype>
   <datatype name="container" type="component">
     <property name="cargo" result="cargo access" type="containercargolist" />
@@ -912,7 +967,7 @@ export function runScriptPropertiesSelftest(): {
   // --- parsing the real shape ---
   const idx = buildScriptPropertyIndex(SCRIPT_PROPERTIES_FIXTURE);
   ok('index loads', idx.loaded);
-  ok('parses keywords + datatypes', idx.model.keywords.size === 3 && idx.model.datatypes.size === 15,
+  ok('parses keywords + datatypes', idx.model.keywords.size === 3 && idx.model.datatypes.size === 18,
     `kw=${idx.model.keywords.size} dt=${idx.model.datatypes.size}`);
   ok('placeholder property indexed by literal head (isclass.{$class} → isclass)',
     idx.model.datatypes.get('component')!.heads.has('isclass'));
@@ -1031,6 +1086,30 @@ export function runScriptPropertiesSelftest(): {
   ok('a selector that only partly consumes an authored path becomes opaque',
     cargo('$ship.deferredselector.{nested.value}').length === 0,
     JSON.stringify(cargo('$ship.deferredselector.{nested.value}')));
+  const nestedTypo = cargo('$ship.cargo.free.{faction.{$id}.knownnmae}');
+  ok('nested dynamic keyword typos keep their own chain and position',
+    nestedTypo.length === 1 && nestedTypo[0].chain === 'faction.{$id}.knownnmae'
+      && nestedTypo[0].column === '<do_if value="$ship.cargo.free.{faction.{$id}.'.length + 1
+      && nestedTypo[0].suggestions.includes('knownname'), nestedTypo);
+  const entryTypo = cargo('$ship.cargo.free.{1 + $ship.people.{$template}.seeed}');
+  ok('a keyed result typo survives incomplete alternate lookup paths',
+    cargo('$ship.cargo.free.{1 + $ship.people.{$template}.seed}').length === 0
+      && entryTypo.length === 1 && entryTypo[0].code === 'scriptproperty.unknown'
+      && entryTypo[0].chain === '$ship.people.{$template}.seeed'
+      && entryTypo[0].column === '<do_if value="$ship.cargo.free.{1 + $ship.people.{$template}.'.length + 1, entryTypo);
+  const unresolved = cargo('player.target.controlentity.{$post}');
+  ok('a known keyed subtype property gives a positioned informational advisory',
+    unresolved.length === 1 && unresolved[0].code === 'scriptproperty.unresolved_type'
+      && unresolved[0].severity === 'info' && unresolved[0].segment === 'controlentity'
+      && unresolved[0].column === '<do_if value="player.target.'.length + 1
+      && formatScriptPropertyFinding(unresolved[0]).includes('Unresolved receiver type'), unresolved);
+  ok('a typo on the same receiver still warns',
+    cargo('player.target.controlentiity.{$post}')[0]?.code === 'scriptproperty.unknown');
+  const indexedSubtype = cargo('player.target.boardingoperation.attackers.{1}.owner');
+  ok('an index on a subtype property result reports unresolved receiver',
+    indexedSubtype.length === 1 && indexedSubtype[0].code === 'scriptproperty.unresolved_type'
+      && indexedSubtype[0].segment === 'attackers'
+      && cargo('player.target.boardingoperation.attaackers.{1}.owner')[0]?.code === 'scriptproperty.unknown', indexedSubtype);
   ok('a wrong variable type hint does not hide a valid list.count path',
     lintScriptPropertyChains('<do_if value="$Foes.count"/>', idx, { variableTypes: { '$Foes': 'ship' } }).length === 0,
     JSON.stringify(lintScriptPropertyChains('<do_if value="$Foes.count"/>', idx, { variableTypes: { '$Foes': 'ship' } })));

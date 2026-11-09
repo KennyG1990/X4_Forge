@@ -86,6 +86,16 @@ const GUIDANCE: Array<{ matches: (code: string) => boolean; value: Guidance }> =
     },
   },
   {
+    matches: code => code === 'scriptproperty.unresolved_type',
+    value: {
+      title: 'Keyed lookup receiver type is unresolved',
+      why: 'The game declares this keyed lookup on a subtype of the receiver visible to Forge.',
+      impact: 'Forge cannot verify whether the receiver has that subtype at runtime.',
+      next: 'Check the receiver type at the lookup in the game.',
+      basis: 'X4 scriptproperties.xml datatype hierarchy',
+    },
+  },
+  {
     matches: code => code.startsWith('scriptproperty.'),
     value: {
       title: 'Script-property chain is not proven',

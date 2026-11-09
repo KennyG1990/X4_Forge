@@ -628,7 +628,7 @@ export function runProjectValidation(
       schemaErrors,
       schemaWarnings: schemaFindings.filter(d => d.severity === "warning").length,
       aiscriptErrors,
-      scriptPropertyWarnings: scriptPropertyFindings.length,
+      scriptPropertyWarnings: scriptPropertyFindings.filter(finding => finding.severity === 'warning').length,
       mdPitfallErrors,
       mdPitfallWarnings: pitfallFindings.filter(finding => finding.severity === "warning").length,
       jobsContentWarnings: jobsLintFindings.length,

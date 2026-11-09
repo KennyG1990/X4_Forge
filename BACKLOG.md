@@ -18,6 +18,10 @@ Published 0.0.81 previewed a folder that bound apply rejected after writing. Dev
 
 Dev recognizes the four reported X4 globals and isolates standalone root tools from the runtime global namespace. Exact registered tools, syntax and X4 diagnostics remain checked. The Problems API, Doctor and both native previews passed the standalone replay. [Isolated evidence](docs/plans/2026-11-09-forge-lua-global-tooling-scope.md). Broader engine names, dynamic tool imports, installed rendering and delivery remain open.
 
+### Nested keyed property scopes `in_progress` (GitHub #60, related to #74)
+
+Dev separates inner and outer chains and distinguishes unresolved subtype receivers from genuine typos. The exact replay stays clean on all reported valid shapes, retains three positioned typo warnings, and deploys the valid bytes with a committed receipt. [Isolated evidence](docs/plans/2026-11-09-ff21-nested-keyed-lookups.md). Installed Studio and public delivery remain open.
+
 ### Unsaved expression MCP `in_progress` (GitHub #79, part of #74)
 
 Dev exposes the shared unsaved checker through an exact read/analyze capability and current MCP discovery. The paired policy, HTTP, stdio and native deploy passed in isolation, including the shared #73 and #78 grammar rules. [Dev evidence](docs/plans/2026-11-08-mcp-check-expression.md). Installed verification and public delivery remain open.

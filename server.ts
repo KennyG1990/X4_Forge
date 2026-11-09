@@ -5108,7 +5108,7 @@ function validateIncomingBytes(relativePath: string, content: string): {
       for (const f of lintScriptPropertyChains(content, spIndex, { filePath: relativePath })) {
         findings.push({
           severity: f.severity,
-          code: 'scriptproperty.unknown',
+          code: f.severity === 'info' ? f.code : 'scriptproperty.unknown',
           line: f.line,
           column: f.column,
           message: formatScriptPropertyFinding(f),
@@ -5259,6 +5259,7 @@ function checkExpressionRequest(req: express.Request, res: express.Response) {
     }
     const variableTypes = (req.body?.variableTypes && typeof req.body.variableTypes === 'object') ? req.body.variableTypes : undefined;
     const findings = lintScriptPropertyExpression(expression, spIndex, { variableTypes });
+    const hasPropertyWarning = findings.some(finding => finding.severity === 'warning');
     const propertyProblems = findings.map(f => ({
       severity: f.severity,
       code: f.code,
@@ -5271,15 +5272,17 @@ function checkExpressionRequest(req: express.Request, res: express.Response) {
       message: formatScriptPropertyFinding(f),
     }));
     return res.json({
-      ok: propertyProblems.length === 0,
+      ok: !hasPropertyWarning,
       expression,
-      legal: propertyProblems.length === 0,
+      legal: !hasPropertyWarning,
       problems: [...expressionProblems, ...propertyProblems],
-      note: propertyProblems.length
+      note: hasPropertyWarning
         ? 'An unknown property evaluates to null in X4 with no error, so a guard using this expression would silently never fire.'
-        : expressionProblems.length
-          ? 'The literal format references more arguments than the list supplies.'
-          : 'Every property segment resolves against scriptproperties.xml. This does not assert the value is non-null at runtime, only that the properties exist.',
+        : propertyProblems.length
+          ? 'No unknown property was detected. The expression does not establish the receiver type for every keyed lookup.'
+          : expressionProblems.length
+            ? 'The literal format references more arguments than the list supplies.'
+            : 'Every property segment resolves against scriptproperties.xml. This does not assert the value is non-null at runtime, only that the properties exist.',
     });
   } catch (error: any) {
     return res.status(500).json({ ok: false, error: error?.message || 'check-expression failed' });

@@ -20,8 +20,9 @@ export interface ExpressionChainAst {
   segments: ExpressionSegmentAst[];
 }
 
-const CHAIN_RE = /(@?)(\$[A-Za-z_]\w*|[A-Za-z_]\w*)((?:\.(?:\$[A-Za-z_]\w*|\{[^}\n]*\}|\[[^\]\n]*\]|[A-Za-z_]\w*\??))+)/g;
-const SEGMENT_RE = /\.(\$[A-Za-z_]\w*|\{[^}\n]*\}|\[[^\]\n]*\]|[A-Za-z_]\w*\??)/g;
+const MAX_SELECTOR_ANALYSIS_DEPTH = 64;
+const CHAIN_STRING = /'(?:\\[^\r\n]|[^'\\\r\n])*'?/;
+const XML_CHAIN_STRING = /'(?:\\[^"\r\n]|[^'"\\\r\n])*'?/;
 
 function segmentKind(raw: string): ExpressionSegmentKind {
   if (raw.startsWith('$')) return 'variable-selector';
@@ -30,36 +31,83 @@ function segmentKind(raw: string): ExpressionSegmentKind {
   return 'property';
 }
 
+/** Pair selectors without letting an unfinished key consume the next XML attribute. */
+function selectorEnds(text: string, stringToken: RegExp): Map<number, number> {
+  const ends = new Map<number, number>();
+  const stack: { start: number; closer: string }[] = [];
+  const boundary = /["\r\n[\]{}()]/;
+  for (const match of text.matchAll(new RegExp(`${stringToken.source}|${boundary.source}`, 'g'))) {
+    const token = match[0];
+    if (token.startsWith("'")) continue;
+    const closer = MD_GROUP_CLOSERS.get(token);
+    if (closer) {
+      stack.push({ start: match.index, closer });
+      continue;
+    }
+    const frame = stack.pop();
+    if (frame?.closer !== token) stack.length = 0;
+    else if (text[frame.start - 1] === '.') ends.set(frame.start, match.index + 1);
+  }
+  return ends;
+}
+
 export function parseExpressionChains(textInput: string): ExpressionChainAst[] {
   const text = String(textInput || '');
   const chains: ExpressionChainAst[] = [];
-  CHAIN_RE.lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = CHAIN_RE.exec(text)) !== null) {
-    const rootStart = match.index + match[1].length;
-    const rootRaw = match[2];
-    const segments: ExpressionSegmentAst[] = [];
-    SEGMENT_RE.lastIndex = 0;
-    let segment: RegExpExecArray | null;
-    while ((segment = SEGMENT_RE.exec(match[3])) !== null) {
-      const raw = segment[1];
-      const start = rootStart + rootRaw.length + segment.index + 1;
-      segments.push({
-        kind: segmentKind(raw), raw, name: raw.replace(/\?$/, '').toLowerCase(),
-        start, end: start + raw.length, optional: raw.endsWith('?'),
+  const stringToken = /^\s*</.test(text) ? XML_CHAIN_STRING : CHAIN_STRING;
+  const ends = selectorEnds(text, stringToken);
+  // Consume an unfinished string once instead of restarting at every escaped quote.
+  const rootToken = /(@?)(\$[A-Za-z_]\w*|(?<![\w$])[A-Za-z_]\w*)(?=\.)/;
+  const rootPattern = new RegExp(`${stringToken.source}|${rootToken.source}`, 'g');
+  const simpleSegment = /\$[A-Za-z_]\w*|[A-Za-z_]\w*\??/y;
+  const ranges = [{ start: 0, end: text.length, depth: 0 }];
+  for (let range = ranges.pop(); range; range = ranges.pop()) {
+    const scope = text.slice(range.start, range.end);
+    rootPattern.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = rootPattern.exec(scope))) {
+      const rootRaw = match[2];
+      if (!rootRaw) continue;
+      const chainStart = range.start + match.index;
+      const rootStart = chainStart + match[1].length;
+      const rootEnd = rootStart + rootRaw.length;
+      let end = rootEnd;
+      let incomplete = false;
+      const segments: ExpressionSegmentAst[] = [];
+      while (text[end] === '.' && end + 1 < range.end) {
+        const start = end + 1;
+        const isSelector = text[start] === '{' || text[start] === '[';
+        simpleSegment.lastIndex = start;
+        const segmentEnd = isSelector ? ends.get(start) : simpleSegment.test(text) ? simpleSegment.lastIndex : undefined;
+        if (segmentEnd === undefined || segmentEnd > range.end) {
+          incomplete = isSelector;
+          break;
+        }
+        // Keep the whole outer key even when nested lint detail reaches the work bound.
+        if (isSelector && range.depth < MAX_SELECTOR_ANALYSIS_DEPTH && start + 1 < segmentEnd - 1) {
+          ranges.push({ start: start + 1, end: segmentEnd - 1, depth: range.depth + 1 });
+        }
+        const raw = text.slice(start, segmentEnd);
+        segments.push({
+          kind: segmentKind(raw), raw, name: isSelector ? raw : raw.replace(/\?$/, '').toLowerCase(),
+          start, end: segmentEnd, optional: raw.endsWith('?'),
+        });
+        end = segmentEnd;
+      }
+      rootPattern.lastIndex = end - range.start;
+      if (incomplete || !segments.length) continue;
+      chains.push({
+        kind: 'chain', raw: text.slice(chainStart, end), start: chainStart, end,
+        root: { kind: 'root', raw: rootRaw, name: rootRaw.replace(/^\$/, '').toLowerCase(), start: rootStart, end: rootEnd, optional: false },
+        segments,
       });
     }
-    chains.push({
-      kind: 'chain', raw: match[0], start: match.index, end: CHAIN_RE.lastIndex,
-      root: { kind: 'root', raw: rootRaw, name: rootRaw.replace(/^\$/, '').toLowerCase(), start: rootStart, end: rootStart + rootRaw.length, optional: false },
-      segments,
-    });
   }
-  return chains;
+  return chains.sort((a, b) => a.start - b.start);
 }
 
 export function expressionChainAt(text: string, offset: number): ExpressionChainAst | null {
-  return parseExpressionChains(text).find(chain => offset >= chain.start && offset <= chain.end) || null;
+  return parseExpressionChains(text).reverse().find(chain => offset >= chain.start && offset <= chain.end) || null;
 }
 
 // A dollar starts a variable, including directly after a keyword (vanilla uses if$variable).
@@ -398,12 +446,34 @@ export function runExpressionAstSelftest() {
   }));
   const text = `<do_if value="$ship.owner.relationto.{faction.argon} and $list.[$index].exists?"/>`;
   const chains = parseExpressionChains(text);
-  ok('two_chains_parsed', chains.length === 2);
+  ok('outer_and_key_chains_parsed', chains.length === 3 && chains[1]?.raw === 'faction.argon');
   ok('root_span_exact', text.slice(chains[0].root.start, chains[0].root.end) === '$ship');
   ok('properties_preserve_order', chains[0].segments.slice(0, 2).map(segment => segment.name).join(',') === 'owner,relationto');
   ok('dynamic_selector_classified', chains[0].segments[2]?.kind === 'dynamic-selector');
-  ok('list_selector_classified', chains[1].segments[0]?.kind === 'list-selector');
-  ok('optional_property_retained', chains[1].segments[1]?.optional === true && chains[1].segments[1]?.name === 'exists');
+  ok('list_selector_classified', chains[2].segments[0]?.kind === 'list-selector');
+  ok('optional_property_retained', chains[2].segments[1]?.optional === true && chains[2].segments[1]?.name === 'exists');
+  const nestedKeys = "$ship.cargo.free.{[$list.[$id], ware.{$id}.transporttag, '}.ignored']} and event.object";
+  const nestedChains = parseExpressionChains(nestedKeys);
+  ok('balanced_selectors_preserve_independent_spans', nestedChains.map(chain => chain.raw).join('|') ===
+    "$ship.cargo.free.{[$list.[$id], ware.{$id}.transporttag, '}.ignored']}|$list.[$id]|ware.{$id}.transporttag|event.object"
+    && nestedChains.every(chain => nestedKeys.slice(chain.start, chain.end) === chain.raw)
+    && expressionChainAt(nestedKeys, nestedKeys.indexOf('transporttag'))?.raw === 'ware.{$id}.transporttag');
+  ok('unfinished_key_stops_at_attribute_boundary',
+    parseExpressionChains('<do_if value="$ship.cargo.free.{1" other="event.object}"/>')
+      .map(chain => chain.raw).join('|') === 'event.object');
+  ok('unfinished_quoted_key_cannot_hide_attribute_boundaries',
+    parseExpressionChains(`<do_if value="$a.indexof.{'broken" chance="'}" sibling="event.object"/>`)
+      .map(chain => chain.raw).join('|') === 'event.object');
+  ok('compact_dollar_root_is_preserved',
+    parseExpressionChains('if$ship.owner then $other.owner').map(chain => chain.raw).join('|') === '$ship.owner|$other.owner');
+  ok('unterminated_escaped_string_is_skipped_once',
+    parseExpressionChains("'" + "\\'".repeat(4096) + '$hidden.prop\nevent.object')
+      .map(chain => chain.raw).join('|') === 'event.object');
+  const deep = '$a.indexof.{'.repeat(100) + '$b.value' + '}'.repeat(100) + ' and event.object';
+  const bounded = parseExpressionChains(deep);
+  ok('deep_keys_bound_inner_work_without_losing_the_outer_or_sibling',
+    bounded.length === MAX_SELECTOR_ANALYSIS_DEPTH + 2 && bounded[0].end === deep.indexOf(' and ')
+      && bounded.at(-1)?.raw === 'event.object');
   const passed = checks.filter(check => check.pass).length;
   return { pass: passed === checks.length, allPassed: passed === checks.length, passed, total: checks.length, checks };
 }
