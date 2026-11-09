@@ -157,7 +157,7 @@ import { layoutImportedGraphBatch, runImportedGraphLayoutSelftest } from "./src/
 import { runXmlSourceSpanSelftest } from "./src/lib/xmlSourceSpans";
 import { runNodeSelectionDocumentSelftest } from "./src/lib/nodeSelectionDocument";
 import { buildScriptPropertyIndex, lintScriptPropertyChains, SCRIPT_PROPERTIES_FIXTURE } from "./src/lib/scriptProperties";
-import { findUnmatchedMdElse, MD_UNMATCHED_ELSE } from "./src/lib/expressionAst";
+import { lintMdExpressionRules } from "./src/lib/expressionAst";
 import { publishInstance, unpublishInstance, latestPath, runInstanceDiscoverySelftest } from "./src/lib/instanceDiscovery";
 import { buildPlayerReadme, bumpVersion, runModDistributionSelftest, setContentVersion, verifyZipArchive } from "./src/lib/modDistribution";
 import {
@@ -5229,11 +5229,19 @@ app.post("/api/agent/check-expression", (req, res) => {
         error: 'Send {"expression": "$station.manager"} — the single MD/AIScript expression to check. Optionally add {"variableTypes": {"$station": "station"}} so typed variables resolve.',
       });
     }
-    const unmatchedElse = findUnmatchedMdElse(expression);
-    if (unmatchedElse !== undefined) {
-      return res.json({ ok: false, legal: false, expression, problems: [{
-        ...MD_UNMATCHED_ELSE, severity: 'error', offset: unmatchedElse, segment: 'else', suggestions: [],
-      }] });
+    let line = 1;
+    let column = 1;
+    let cursor = 0;
+    const expressionProblems = lintMdExpressionRules(expression).map(finding => {
+      while (cursor < finding.offset) {
+        const char = expression[cursor++];
+        if (char === '\n' || (char === '\r' && expression[cursor] !== '\n')) { line++; column = 1; }
+        else column++;
+      }
+      return { ...finding, line, column, suggestions: [] };
+    });
+    if (expressionProblems.some(finding => finding.severity === 'error')) {
+      return res.json({ ok: false, legal: false, expression, problems: expressionProblems });
     }
     const spIndex = getScriptPropertyIndex();
     if (!spIndex) {
@@ -5248,7 +5256,7 @@ app.post("/api/agent/check-expression", (req, res) => {
     // same shape it sees inside a real MD file.
     const carrier = `<mdscript name="ExpressionProbe"><cues><cue name="Probe"><actions><set_value name="$probe" exact="${expression.replace(/"/g, '&quot;')}"/></actions></cue></cues></mdscript>`;
     const findings = lintScriptPropertyChains(carrier, spIndex, { filePath: 'expression-probe', variableTypes });
-    const problems = findings.map(f => ({
+    const propertyProblems = findings.map(f => ({
       severity: f.severity,
       chain: (f as any).chain,
       segment: (f as any).segment,
@@ -5258,13 +5266,15 @@ app.post("/api/agent/check-expression", (req, res) => {
         : `"${(f as any).chain}": segment "${(f as any).segment}" is unknown in scriptproperties.xml.`,
     }));
     return res.json({
-      ok: problems.length === 0,
+      ok: propertyProblems.length === 0,
       expression,
-      legal: problems.length === 0,
-      problems,
-      note: problems.length === 0
-        ? 'Every property segment resolves against scriptproperties.xml. This does not assert the value is non-null at runtime, only that the properties exist.'
-        : 'An unknown property evaluates to null in X4 with no error, so a guard using this expression would silently never fire.',
+      legal: propertyProblems.length === 0,
+      problems: [...expressionProblems, ...propertyProblems],
+      note: propertyProblems.length
+        ? 'An unknown property evaluates to null in X4 with no error, so a guard using this expression would silently never fire.'
+        : expressionProblems.length
+          ? 'The literal format references more arguments than the list supplies.'
+          : 'Every property segment resolves against scriptproperties.xml. This does not assert the value is non-null at runtime, only that the properties exist.',
     });
   } catch (error: any) {
     return res.status(500).json({ ok: false, error: error?.message || 'check-expression failed' });

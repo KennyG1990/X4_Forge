@@ -40,7 +40,7 @@ import { validateProjectCrossFile } from "../lib/projectCrossFileValidation";
 import { lintScriptPropertyChains, type ScriptPropertyFinding } from "../lib/scriptProperties";
 import { checkXmlWellformed } from "../lib/xmlWellformed";
 import { lintAiscript, type AiscriptLintFinding } from "../lib/aiscriptLint";
-import { lintMdPitfalls, lintMdUnmatchedElse, type MdPitfallFinding } from "../lib/mdPitfallLints";
+import { lintMdPitfalls, lintScriptExpressions, type MdPitfallFinding } from "../lib/mdPitfallLints";
 import { lintJobsContent, type JobsVocabulary, type JobLintFinding } from "../lib/jobsContentLint";
 import { lintMigration, type MigrationFinding } from "../lib/migrationLint";
 import { lintWaresContent, type WaresVocabulary, type WareLintFinding } from "../lib/waresContentLint";
@@ -524,8 +524,9 @@ export function runProjectValidation(
     const kind = f.kind === "md" || f.kind === "aiscript" ? f.kind : pathKind;
     if (kind === "md" || kind === "aiscript") {
       const index = kind === "md" ? mdIndexRef : aiIndexRef;
-      pitfallFindings.push(...fact('unmatched-else', f, resourceGeneration(index),
-        () => lintMdUnmatchedElse(f.content!, index, f.path)));
+      const expressions = fact('script-expressions', f, resourceGeneration(index),
+        () => lintScriptExpressions(f.content!, index, f.path));
+      for (const finding of expressions) pitfallFindings.push(finding);
     }
   }
 

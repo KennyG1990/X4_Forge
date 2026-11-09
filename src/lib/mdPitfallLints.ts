@@ -37,13 +37,13 @@
  */
 
 import { DOMParser, normalizeLineEndings, type Attr, type Document, type Element } from '@xmldom/xmldom';
-import { findUnmatchedMdElse, MD_UNMATCHED_ELSE } from './expressionAst';
+import { lintMdExpressionRules, type MdExpressionFinding } from './expressionAst';
 import { maskNonExpressionSpans, type ScriptPropertyIndex } from './scriptProperties';
 import { assertXmlInputWithinLimits } from './xmlInputLimits';
 import type { SchemaIndex } from './xsdValidate';
 
 export interface MdPitfallFinding {
-  code: 'md_pitfall.products_existence' | 'md_pitfall.cancel_conversation_actor_or_template' | 'md_pitfall.ui_listener_one_shot' | 'md_pitfall.offer_accepted_keyword_cue' | 'md_pitfall.param3_table_barekey' | typeof MD_UNMATCHED_ELSE.code;
+  code: 'md_pitfall.products_existence' | 'md_pitfall.cancel_conversation_actor_or_template' | 'md_pitfall.ui_listener_one_shot' | 'md_pitfall.offer_accepted_keyword_cue' | 'md_pitfall.param3_table_barekey' | MdExpressionFinding['code'];
   severity: 'error' | 'warning';
   cue?: string;
   filePath?: string;
@@ -90,8 +90,8 @@ function expressionLocation(source: string, lines: number[], attr: Attr, offset:
 }
 
 /** Validate expression-valued attributes in script files and their XML diff payloads. */
-export function lintMdUnmatchedElse(xml: string, schema: SchemaIndex | null, filePath?: string): MdPitfallFinding[] {
-  if (!/\belse\b|&#/.test(xml)) return [];
+export function lintScriptExpressions(xml: string, schema: SchemaIndex | null, filePath?: string): MdPitfallFinding[] {
+  if (!/\belse\b|%|&#/.test(xml)) return [];
   const source = normalizeLineEndings(xml.replace(/^\uFEFF/, ''));
   let invalid = false;
   let doc;
@@ -110,17 +110,19 @@ export function lintMdUnmatchedElse(xml: string, schema: SchemaIndex | null, fil
     for (let i = 0; i < element.attributes.length; i++) {
       const attr = element.attributes[i];
       const spec = attributes?.get(attr.name);
-      if (!(element.nodeName === 'set_value' && attr.name === 'exact')
+      const knownExpression = (element.nodeName === 'set_value' && attr.name === 'exact')
+        || (element.nodeName === 'debug_text' && attr.name === 'text');
+      if (!knownExpression
         && !EXPRESSION_TYPE.test(spec?.type ?? '') && !EXPRESSION_TYPE.test(spec?.baseType ?? '')) continue;
-      const offset = findUnmatchedMdElse(attr.value);
-      if (offset === undefined) continue;
-      lines ??= [0, ...Array.from(source.matchAll(/\n/g), match => match.index + 1)];
-      findings.push({
-        code: MD_UNMATCHED_ELSE.code, severity: 'error', filePath,
-        sourceRef: `${element.nodeName}/@${attr.name}`,
-        ...expressionLocation(source, lines, attr, offset),
-        detail: MD_UNMATCHED_ELSE.message,
-      });
+      for (const finding of lintMdExpressionRules(attr.value)) {
+        lines ??= [0, ...Array.from(source.matchAll(/\n/g), match => match.index + 1)];
+        findings.push({
+          code: finding.code, severity: finding.severity, filePath,
+          sourceRef: `${element.nodeName}/@${attr.name}`,
+          ...expressionLocation(source, lines, attr, finding.offset),
+          detail: finding.message,
+        });
+      }
     }
   }
   return findings;
@@ -355,14 +357,24 @@ export function runMdPitfallSelftest(): {
     orphan,
     '</mdscript>',
   ].join('\r\n');
-  const expressionFindings = lintMdUnmatchedElse(expressionXml, null, 'md/probe.xml');
+  const expressionFindings = lintScriptExpressions(expressionXml, null, 'md/probe.xml');
   ok('unmatched_else_uses_decoded_attributes_and_raw_coordinates',
     expressionFindings.length === 1 && expressionFindings[0].line === 5
     && expressionFindings[0].column === orphan.indexOf('&#101;') + 1
     && expressionFindings[0].sourceRef === 'set_value/@exact', expressionFindings);
   ok('unmatched_else_ignores_non_script_root_and_invalid_xml',
-    lintMdUnmatchedElse('<root><set_value exact="else"/></root>', null).length === 0
-    && lintMdUnmatchedElse('<mdscript><set_value exact="else"/></invalid>', null).length === 0);
+    lintScriptExpressions('<root><set_value exact="else"/></root>', null).length === 0
+    && lintScriptExpressions('<mdscript><set_value exact="else"/></invalid>', null).length === 0);
+  const formatLine = '    <debug_text text="&apos;&#37;d&apos;.[7]"/>';
+  const formatFindings = lintScriptExpressions([
+    '<aiscript><actions>', formatLine, '    <set_value name="$out" exact="\'%s %s\'.[1]"/>', '</actions></aiscript>',
+  ].join('\r\n'), null, 'aiscripts/format.xml');
+  ok('literal format findings retain decoded severity and raw coordinates',
+    formatFindings.length === 2 && formatFindings[0].code === 'expression-format-specifier'
+      && formatFindings[0].severity === 'error' && formatFindings[0].line === 2
+      && formatFindings[0].column === formatLine.indexOf('&#37;') + 1
+      && formatFindings[0].sourceRef === 'debug_text/@text'
+      && formatFindings[1].code === 'format-arguments-missing' && formatFindings[1].severity === 'warning', formatFindings);
   const cancelFindingCode = 'md_pitfall.cancel_conversation_actor_or_template';
   const cancelFindings = (xml: string) => lint(xml).filter(f => f.code === cancelFindingCode);
 

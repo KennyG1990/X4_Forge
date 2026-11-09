@@ -6,6 +6,10 @@
 
 ## P0 — Active
 
+### Literal format diagnostics `in_progress` (GitHub #77, part of #74)
+
+The isolated Dev checker and native deploy now report exact literal-format diagnostics. The short-list case remains advisory. [Dev verification](docs/plans/2026-11-08-forge-literal-format-diagnostics.md). The frozen standalone game witness is queued with Claude, and installed/public delivery remain open.
+
 ### Scoped AI-script action labels `in_progress` (GitHub #84, part of #74)
 
 Dev project validation and native deploy enforce X4 9.00's label keys and resume references within each actions block. [Isolated verification](docs/plans/2026-11-08-aiscript-label-scopes.md). Installed and public delivery remain open.

@@ -71,6 +71,14 @@ export const MD_UNMATCHED_ELSE = {
   message: "An 'else' requires a matching 'if … then' in the same expression.",
 } as const;
 
+export interface MdExpressionFinding {
+  code: typeof MD_UNMATCHED_ELSE.code | 'expression-format-specifier' | 'format-arguments-missing';
+  severity: 'error' | 'warning';
+  offset: number;
+  segment: string;
+  message: string;
+}
+
 /** Find an else without a matching if/then in its group or argument. */
 export function findUnmatchedMdElse(expression: string): number | undefined {
   if (!/\belse\b/.test(expression)) return undefined;
@@ -100,6 +108,79 @@ export function findUnmatchedMdElse(expression: string): number | undefined {
     previous = token;
   }
   return undefined;
+}
+
+interface LiteralFormatCall {
+  literal: string;
+  offset: number;
+  argumentStart: number;
+  commas: number;
+  emptyArgument: boolean;
+}
+
+function checkLiteralFormat(call: LiteralFormatCall, hasLast: boolean, findings: MdExpressionFinding[]): void {
+  let sequential = 0;
+  let indexed = 0;
+  for (const specifier of call.literal.matchAll(/%(?:%|,?(?:\.\d)?([sd]|[1-9]\d*))/g)) {
+    const parameter = specifier[1];
+    if (parameter === 'd') {
+      findings.push({ code: 'expression-format-specifier', severity: 'error', offset: call.offset + specifier.index,
+        segment: specifier[0], message: "X4 string formatting uses '%s' or a numbered placeholder for numbers. Replace '%d'." });
+    } else if (parameter === 's') sequential++;
+    else if (parameter) indexed = Math.max(indexed, Number(parameter));
+  }
+  const needed = sequential || indexed;
+  const given = call.commas + Number(hasLast);
+  if (!call.emptyArgument && (hasLast || call.commas === 0) && !(sequential && indexed)
+    && Number.isSafeInteger(needed) && needed > given) {
+    findings.push({ code: 'format-arguments-missing', severity: 'warning', offset: call.offset, segment: 'format',
+      message: `X4 format needs ${needed} arguments but the list supplies ${given}.` });
+  }
+}
+
+/** Inspect only literal strings directly applied to an explicit argument list. */
+function lintLiteralFormats(expression: string, findings: MdExpressionFinding[]): void {
+  if (!expression.includes('%') || !expression.includes('[')) return;
+  const suffix = /\s*\.\s*\[/y;
+  const stack: { closer: string; format?: LiteralFormatCall }[] = [];
+  let pending: LiteralFormatCall | undefined;
+  for (const match of expression.matchAll(MD_EXPRESSION_TOKEN)) {
+    const token = match[0];
+    if (token === "'" || token === '"') return;
+    if (token.startsWith("'")) {
+      suffix.lastIndex = match.index + token.length;
+      if (token.includes('%') && suffix.test(expression)) {
+        pending = { literal: token.slice(1, -1), offset: match.index + 1,
+          argumentStart: suffix.lastIndex, commas: 0, emptyArgument: false };
+      }
+      continue;
+    }
+    const closer = MD_GROUP_CLOSERS.get(token);
+    if (closer) {
+      stack.push({ closer, format: token === '[' && pending?.argumentStart === match.index + 1 ? pending : undefined });
+      pending = undefined;
+    } else if (token === ',') {
+      const format = stack.at(-1)?.format;
+      if (format) {
+        if (!expression.slice(format.argumentStart, match.index).trim()) format.emptyArgument = true;
+        format.commas++;
+        format.argumentStart = match.index + 1;
+      }
+    } else if (token === ')' || token === ']' || token === '}') {
+      const frame = stack.pop();
+      if (frame?.closer !== token) stack.length = 0;
+      else if (frame.format) checkLiteralFormat(frame.format,
+        !!expression.slice(frame.format.argumentStart, match.index).trim(), findings);
+    }
+  }
+}
+
+export function lintMdExpressionRules(expression: string): MdExpressionFinding[] {
+  const findings: MdExpressionFinding[] = [];
+  const offset = findUnmatchedMdElse(expression);
+  if (offset !== undefined) findings.push({ ...MD_UNMATCHED_ELSE, severity: 'error', offset, segment: 'else' });
+  lintLiteralFormats(expression, findings);
+  return findings.sort((a, b) => a.offset - b.offset);
 }
 
 /** Resolve literal results of MD inline-if expressions without evaluating predicates. */
@@ -181,6 +262,18 @@ export function runExpressionAstSelftest() {
     'if $x then [1, 2] else 3', 'if$PlayerDestroyedElements? then 150 else 0',
     "if $value.then then [$else, $x.else, 'an escaped \\'else'] else 0",
   ].every(expression => findUnmatchedMdElse(expression) === undefined));
+  const specifier = lintMdExpressionRules("'%d'.[1]");
+  ok('literal format reports the unsupported specifier at its percent sign', specifier.length === 1
+    && specifier[0].offset === 1 && specifier[0].code === 'expression-format-specifier' && specifier[0].severity === 'error');
+  ok('missing explicit format arguments are advisory', ["'%s %s'.['one']", "'%3 %1'.[1,2]", "'%1'.[]"].every(expression => {
+    const findings = lintMdExpressionRules(expression);
+    return findings.length === 1 && findings[0].code === 'format-arguments-missing' && findings[0].severity === 'warning';
+  }));
+  ok('documented formats and separate date selectors stay clean', [
+    "'%2 %1 %2 %%d'.[1,2]", "'%.3s %s'.[table[$a = 1, $b = 2], 'two, three']",
+    "'%s %s'.[$object.[$a,$b], '%s'.[1]]", "'%d in prose'", "player.systemtime.{'%Y-%m-%d %H:%M:%S'}",
+    "'%s %s'.[1,]", "'%s %1'.[1]", "'%s %s'.[,1]", "'%d'.[1", "$computed.[1]",
+  ].every(expression => lintMdExpressionRules(expression).length === 0));
   const nested = collectMdStringResults("if ($x.then == 'if then else') then (if $next then 'one') else 'two'");
   ok('inline_if_retains_known_results_and_implicit_null', nested.values.join(',') === 'one,two' && nested.unresolved);
   const exact = collectMdStringResults("if $table.[$else] then 'one' else if $next then 'two' else 'three'");
