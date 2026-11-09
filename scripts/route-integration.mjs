@@ -4431,13 +4431,37 @@ async function main() {
   ok('steam_source_manifest_adoption_remains_explicit', verifiedWorkshopResult.json?.sourceManifestAdoptionRequired === true);
   const sourceManifestPath = path.join(releaseSource, 'content.xml');
   const sourceBeforeAdoption = fs.readFileSync(sourceManifestPath);
+  const reportBeforeAdoption = fs.readFileSync(steamReady.json.reportPath);
   const adoptionPreview = await req('POST', '/api/agent/release/steam/adopt', SESSION_TOKEN, { modId: releaseName, apply: false });
-  ok('steam_adoption_preview_is_non_mutating', adoptionPreview.status === 200 && adoptionPreview.json?.status === 'READY_TO_ADOPT' && adoptionPreview.json?.workshopId === 'ws_123456789' && fs.readFileSync(sourceManifestPath).equals(sourceBeforeAdoption), `status=${adoptionPreview.status} state=${adoptionPreview.json?.status}`);
+  ok('steam_adoption_preview_is_non_mutating', adoptionPreview.status === 200 && adoptionPreview.json?.status === 'READY_TO_ADOPT' && adoptionPreview.json?.workshopId === 'ws_123456789' && /^[a-f0-9]{64}$/.test(adoptionPreview.json?.bindingHash) && fs.readFileSync(sourceManifestPath).equals(sourceBeforeAdoption), `status=${adoptionPreview.status} state=${adoptionPreview.json?.status}`);
+  const adoptionConfirmation = { modId: releaseName, apply: true, expectedSourceSha256: adoptionPreview.json?.beforeSha256, expectedWorkshopId: adoptionPreview.json?.workshopId };
+  const unboundAdoption = await req('POST', '/api/agent/release/steam/adopt', SESSION_TOKEN, adoptionConfirmation);
+  ok('steam_adoption_refuses_missing_preview_binding', unboundAdoption.status === 409 && unboundAdoption.json?.code === 'STEAM_ADOPTION_PREVIEW_CHANGED'
+    && fs.readFileSync(sourceManifestPath).equals(sourceBeforeAdoption) && fs.readFileSync(steamReady.json.reportPath).equals(reportBeforeAdoption),
+  `status=${unboundAdoption.status} code=${unboundAdoption.json?.code}`);
+  const boundAdoption = { ...adoptionConfirmation, expectedBindingHash: adoptionPreview.json?.bindingHash };
   fs.appendFileSync(sourceManifestPath, '\n<!-- concurrent source change -->');
-  const staleAdoption = await req('POST', '/api/agent/release/steam/adopt', SESSION_TOKEN, { modId: releaseName, apply: true, expectedSourceSha256: adoptionPreview.json?.beforeSha256, expectedWorkshopId: adoptionPreview.json?.workshopId });
+  const staleAdoption = await req('POST', '/api/agent/release/steam/adopt', SESSION_TOKEN, boundAdoption);
   ok('steam_adoption_refuses_source_changed_after_preview', staleAdoption.status === 409 && staleAdoption.json?.code === 'STEAM_ADOPTION_SOURCE_CHANGED' && staleAdoption.json?.failedStages?.includes('adoption'), `status=${staleAdoption.status} code=${staleAdoption.json?.code}`);
   fs.writeFileSync(sourceManifestPath, sourceBeforeAdoption);
-  const adoptedWorkshop = await req('POST', '/api/agent/release/steam/adopt', SESSION_TOKEN, { modId: releaseName, apply: true, expectedSourceSha256: adoptionPreview.json?.beforeSha256, expectedWorkshopId: adoptionPreview.json?.workshopId });
+  const staleBinding = await req('POST', '/api/agent/release/steam/adopt', SESSION_TOKEN, boundAdoption);
+  ok('steam_adoption_refuses_old_binding_after_source_bytes_restored', staleBinding.status === 409 && staleBinding.json?.code === 'STEAM_ADOPTION_PREVIEW_CHANGED'
+    && fs.readFileSync(sourceManifestPath).equals(sourceBeforeAdoption) && fs.readFileSync(steamReady.json.reportPath).equals(reportBeforeAdoption),
+  `status=${staleBinding.status} code=${staleBinding.json?.code}`);
+  const renewedAdoption = await req('POST', '/api/agent/release/steam/adopt', SESSION_TOKEN, { modId: releaseName, apply: false });
+  ok('steam_adoption_renewed_preview_binds_restored_source', renewedAdoption.status === 200 && /^[a-f0-9]{64}$/.test(renewedAdoption.json?.bindingHash)
+    && renewedAdoption.json?.bindingHash !== adoptionPreview.json?.bindingHash, `status=${renewedAdoption.status}`);
+  const reverifiedWorkshopResult = await req('POST', '/api/agent/release/steam/verify', SESSION_TOKEN, { modId: releaseName });
+  const reverifiedReport = fs.readFileSync(steamReady.json.reportPath);
+  const staleReport = await req('POST', '/api/agent/release/steam/adopt', SESSION_TOKEN, { ...adoptionConfirmation, expectedBindingHash: renewedAdoption.json?.bindingHash });
+  ok('steam_adoption_refuses_old_binding_after_same_bytes_reverification', reverifiedWorkshopResult.status === 200
+    && staleReport.status === 409 && staleReport.json?.code === 'STEAM_ADOPTION_PREVIEW_CHANGED'
+    && fs.readFileSync(sourceManifestPath).equals(sourceBeforeAdoption) && fs.readFileSync(steamReady.json.reportPath).equals(reverifiedReport),
+  `verify=${reverifiedWorkshopResult.status} apply=${staleReport.status} code=${staleReport.json?.code}`);
+  const currentAdoption = await req('POST', '/api/agent/release/steam/adopt', SESSION_TOKEN, { modId: releaseName, apply: false });
+  const adoptedWorkshop = await req('POST', '/api/agent/release/steam/adopt', SESSION_TOKEN, {
+    ...adoptionConfirmation, expectedBindingHash: currentAdoption.json?.bindingHash,
+  });
   ok('steam_adoption_writes_only_after_guarded_confirmation', adoptedWorkshop.status === 200 && adoptedWorkshop.json?.status === 'VERIFIED_AND_ADOPTED' && adoptedWorkshop.json?.sourceReimportRequired === true && /id="ws_123456789"/.test(fs.readFileSync(sourceManifestPath, 'utf8')), `status=${adoptedWorkshop.status} state=${adoptedWorkshop.json?.status}`);
 
   const updateName = 'platform_release_update';

@@ -74,9 +74,10 @@ for (const [name, changes] of Object.entries({ sizeString: { sizeBytes: '42' }, 
 }
 accepts('Steam verify ID', '/api/agent/release/steam/verify', { modId: 'c06_test' });
 accepts('Steam adoption preview', '/api/agent/release/steam/adopt', { modId: 'c06_test', apply: false });
-accepts('Steam adoption CAS', '/api/agent/release/steam/adopt', { modId: 'c06_test', apply: true, expectedSourceSha256: sha256, expectedWorkshopId: 'ws_123' });
+accepts('Steam adoption CAS', '/api/agent/release/steam/adopt', { modId: 'c06_test', apply: true, expectedSourceSha256: sha256, expectedWorkshopId: 'ws_123', expectedBindingHash: sha256 });
 refuses('Steam apply string refused', '/api/agent/release/steam/adopt', { modId: 'c06_test', apply: 'false' });
 refuses('Steam adoption malformed hash refused', '/api/agent/release/steam/adopt', { modId: 'c06_test', expectedSourceSha256: 'wrong' });
+refuses('Steam adoption malformed binding refused', '/api/agent/release/steam/adopt', { modId: 'c06_test', apply: true, expectedSourceSha256: sha256, expectedWorkshopId: 'ws_123', expectedBindingHash: 'wrong' });
 refuses('Steam verify unknown fields refused', '/api/agent/release/steam/verify', { modId: 'c06_test', apply: true });
 accepts('pasted log empty trace is valid', '/api/agent/log-diagnose', { modId: 'c06_test', tail: '' });
 refuses('pasted log nonstring trace refused', '/api/agent/log-diagnose', { modId: 'c06_test', tail: {} });

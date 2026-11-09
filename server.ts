@@ -16087,7 +16087,7 @@ interface SteamReleaseReport extends Record<string, unknown> {
 }
 
 type SteamReportResolution =
-  | { ok: true; steamRoot: string; reportPath: string; targetPath: string; report: SteamReleaseReport }
+  | { ok: true; steamRoot: string; reportPath: string; reportSha256: string; targetPath: string; report: SteamReleaseReport }
   | { ok: false; status: number; code: string; error: string };
 
 function resolveSteamReleaseReport(modWorkspacePath: string, modId: string): SteamReportResolution {
@@ -16097,7 +16097,8 @@ function resolveSteamReleaseReport(modWorkspacePath: string, modId: string): Ste
     if (!fs.existsSync(reportPath)) return { ok: false, status: 404, code: 'STEAM_PREPARE_REPORT_MISSING', error: 'Run Steam preparation before continuing.' };
     const reportStat = fs.lstatSync(reportPath);
     if (!reportStat.isFile() || reportStat.isSymbolicLink()) return { ok: false, status: 409, code: 'STEAM_PREPARE_REPORT_INVALID', error: 'The Steam preparation report is not a regular file.' };
-    const report = JSON.parse(fs.readFileSync(reportPath, 'utf8')) as SteamReleaseReport;
+    const reportBytes = fs.readFileSync(reportPath);
+    const report = JSON.parse(reportBytes.toString('utf8')) as SteamReleaseReport;
     const folderName = String(report.folderName || '');
     const targetPath = path.resolve(String(report.targetPath || ''));
     const expectedTargetPath = path.resolve(steamRoot, folderName);
@@ -16107,7 +16108,8 @@ function resolveSteamReleaseReport(modWorkspacePath: string, modId: string): Ste
       || !targetStat?.isDirectory() || targetStat.isSymbolicLink()) {
       return { ok: false, status: 409, code: 'STEAM_PREPARE_REPORT_INVALID', error: 'The Steam preparation report no longer identifies a safe verified staging folder. Rebuild it.' };
     }
-    return { ok: true, steamRoot, reportPath, targetPath, report };
+    const reportSha256 = crypto.createHash('sha256').update(reportBytes).digest('hex');
+    return { ok: true, steamRoot, reportPath, reportSha256, targetPath, report };
   } catch (error) {
     return { ok: false, status: 409, code: 'RELEASE_OUTPUT_ROOT_UNSAFE', error: errorMessage(error) || 'Release output root is unsafe.' };
   }
@@ -16206,6 +16208,12 @@ app.post('/api/agent/release/steam/adopt', coordinatedSourceOperation((req, res)
   if (report.verifiedManifestSha256 !== afterSha256) {
     return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_ADOPTION_STAGED_MANIFEST_CHANGED', 'The staged manifest differs from the exact verified result. Run Verify again before previewing adoption.', [...priorStages, releaseStage('adoption', 'Adopt Workshop metadata into source', 'fail', 'The report lacks a matching verified manifest hash.')]);
   }
+  const { dev, ino, mode, nlink, size, mtimeNs, ctimeNs } = source.stamp;
+  const bindingHash = trustHash([
+    'steam-adoption-v1', modId, loaded.reportSha256, sourceKeyForResolvedPath(source.physical),
+    [dev, ino, mode, nlink, size, mtimeNs, ctimeNs].map(value => value.toString()),
+    beforeSha256, afterSha256, stagedManifest.meta.workshopId,
+  ]);
   const preview = {
     sourceManifestPath,
     workshopId: stagedManifest.meta.workshopId,
@@ -16216,7 +16224,7 @@ app.post('/api/agent/release/steam/adopt', coordinatedSourceOperation((req, res)
     afterContent,
   };
   if (req.body?.apply !== true) {
-    return res.json({ success: true, status: beforeSha256 === afterSha256 ? 'ALREADY_ADOPTED' : 'READY_TO_ADOPT', platform: 'steam', modId, ...preview, sourceWritePerformed: false, stages: [...priorStages, releaseStage('adoption-preview', 'Preview source Workshop metadata adoption', 'pass', beforeSha256 === afterSha256 ? 'Source content.xml already matches the verified staged manifest.' : 'No source write performed; review the before/after content and confirm explicitly.')], failedStages: [] });
+    return res.json({ success: true, status: beforeSha256 === afterSha256 ? 'ALREADY_ADOPTED' : 'READY_TO_ADOPT', platform: 'steam', modId, ...preview, bindingHash, sourceWritePerformed: false, stages: [...priorStages, releaseStage('adoption-preview', 'Preview source Workshop metadata adoption', 'pass', beforeSha256 === afterSha256 ? 'Source content.xml already matches the verified staged manifest.' : 'No source write performed; review the before/after content and confirm explicitly.')], failedStages: [] });
   }
   const expectedSourceSha256 = String(req.body?.expectedSourceSha256 || '').toLowerCase();
   const expectedWorkshopId = String(req.body?.expectedWorkshopId || '');
@@ -16225,6 +16233,9 @@ app.post('/api/agent/release/steam/adopt', coordinatedSourceOperation((req, res)
   }
   if (expectedWorkshopId !== stagedManifest.meta.workshopId) {
     return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_ADOPTION_CONFIRMATION_MISMATCH', 'The confirmed Workshop ID does not match the verified staged manifest.', [...priorStages, releaseStage('adoption', 'Adopt Workshop metadata into source', 'fail', 'Preview the adoption again before confirming.')]);
+  }
+  if (String(req.body?.expectedBindingHash || '').toLowerCase() !== bindingHash) {
+    return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_ADOPTION_PREVIEW_CHANGED', 'The confirmation no longer matches the reviewed source and verified Steam report. Preview the adoption again before confirming.', [...priorStages, releaseStage('adoption', 'Adopt Workshop metadata into source', 'fail', 'A matching adoption preview binding is required.')]);
   }
   const currentSource = steamAdoptionSource(sourceManifestPath, resolveXsdConfig());
   if (!currentSource || !sameResolvedPath(currentSource.physical, source.physical) || !sameArtifactStamp(source.stamp, currentSource.stamp)) {

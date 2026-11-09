@@ -89,7 +89,7 @@ export const PROJECT_API_FIELDS: Record<string, readonly string[]> = {
   '/api/agent/release/artifact/download': ['platform', 'modId', 'artifactPath'],
   '/api/agent/release/export/receipt': ['platform', 'modId', 'method', 'destination', 'artifactPath', 'sha256', 'sizeBytes'],
   '/api/agent/release/steam/verify': ['modId'],
-  '/api/agent/release/steam/adopt': ['modId', 'apply', 'expectedSourceSha256', 'expectedWorkshopId'],
+  '/api/agent/release/steam/adopt': ['modId', 'apply', 'expectedSourceSha256', 'expectedWorkshopId', 'expectedBindingHash'],
 };
 const metaFields = ['id', 'name', 'version', 'author', 'description', 'deps'];
 function invalid(message: string): never { throw new ValidationInputError(message); }
@@ -226,6 +226,7 @@ export function validateProjectApiBody(route: string, value: unknown): void {
         booleanField(value, 'apply');
         stringField(value, 'expectedSourceSha256', { pattern: /^[a-f0-9]{64}$/i });
         stringField(value, 'expectedWorkshopId', { pattern: /^ws_[0-9]+$/ });
+        stringField(value, 'expectedBindingHash', { pattern: /^[a-f0-9]{64}$/i });
       }
     }
   }

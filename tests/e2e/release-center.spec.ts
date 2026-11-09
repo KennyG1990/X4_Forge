@@ -117,6 +117,9 @@ test('Express mode collapses successful explanations but keeps failures and requ
 
 test('verified first publish requires previewed and confirmed source metadata adoption', async ({ page }) => {
   const adoptionBodies: Array<Record<string, unknown>> = [];
+  const initialBindingHash = 'c'.repeat(64);
+  const renewedBindingHash = 'd'.repeat(64);
+  let bindingHash = initialBindingHash;
   await page.route('**/api/agent/release/steam/prepare', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
     success: true, status: 'READY_FOR_INTERACTIVE_UPLOAD', platform: 'steam', readyForUpload: true, modId: 'welcome_message', version: '101',
     targetPath: 'C:/fixture/releases/steam/welcome_message', backupPath: 'C:/fixture/releases/steam/welcome_message_backup.zip', backupHash: 'b'.repeat(64), backupSizeBytes: 8192,
@@ -135,13 +138,21 @@ test('verified first publish requires previewed and confirmed source metadata ad
   await page.route('**/api/agent/release/steam/adopt', async route => {
     const body = route.request().postDataJSON() as Record<string, unknown>;
     adoptionBodies.push(body);
+    if (body.apply === true && (bindingHash === initialBindingHash || body.expectedBindingHash !== bindingHash)) {
+      bindingHash = renewedBindingHash;
+      await route.fulfill({ status: 409, json: {
+        success: false, status: 'FAILED', code: 'STEAM_ADOPTION_PREVIEW_CHANGED', error: 'Preview the adoption again.',
+      } });
+      return;
+    }
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body.apply === true ? {
       success: true, status: 'VERIFIED_AND_ADOPTED', platform: 'steam', modId: 'welcome_message', sourceManifestPath: 'C:/mods/welcome_message/content.xml',
-      workshopId: 'ws_123456789', version: '101', beforeSha256: 'a'.repeat(64), afterSha256: 'b'.repeat(64), sourceWritePerformed: true, sourceReimportRequired: true,
+      workshopId: 'ws_123456789', version: '101', beforeSha256: 'a'.repeat(64), afterSha256: 'b'.repeat(64),
+      sourceWritePerformed: true, sourceReimportRequired: true,
       stages: [{ id: 'adoption', label: 'Adopt Workshop metadata into source', status: 'pass', detail: 'Source updated.' }], failedStages: [],
     } : {
       success: true, status: 'READY_TO_ADOPT', platform: 'steam', modId: 'welcome_message', sourceManifestPath: 'C:/mods/welcome_message/content.xml',
-      workshopId: 'ws_123456789', version: '101', beforeSha256: 'a'.repeat(64), afterSha256: 'b'.repeat(64),
+      workshopId: 'ws_123456789', version: '101', beforeSha256: 'a'.repeat(64), afterSha256: 'b'.repeat(64), bindingHash,
       beforeContent: '<content id="welcome_message" version="100"/>', afterContent: '<content id="ws_123456789" version="101"/>', sourceWritePerformed: false,
       stages: [{ id: 'adoption-preview', label: 'Preview source Workshop metadata adoption', status: 'pass', detail: 'No source write performed.' }], failedStages: [],
     }) });
@@ -157,9 +168,20 @@ test('verified first publish requires previewed and confirmed source metadata ad
   await expect(page.getByTestId('steam-adoption-result')).toContainText('welcome_message');
   page.once('dialog', dialog => dialog.accept());
   await page.getByTestId('confirm-steam-adoption').click();
+  await expect(page.getByTestId('steam-adoption-result')).toContainText('Preview the adoption again.');
+  await expect(page.getByTestId('confirm-steam-adoption')).toHaveCount(0);
+  await page.getByTestId('preview-steam-adoption').click();
+  await expect(page.getByTestId('steam-adoption-result')).toContainText('READY_TO_ADOPT');
+  page.once('dialog', dialog => dialog.accept());
+  await page.getByTestId('confirm-steam-adoption').click();
   await expect(page.getByTestId('steam-adoption-result')).toContainText('VERIFIED_AND_ADOPTED');
   await expect(page.getByTestId('steam-adoption-result')).toContainText('Re-import the source mod');
-  expect(adoptionBodies).toHaveLength(2);
-  expect(adoptionBodies[0]?.apply).toBe(false);
-  expect(adoptionBodies[1]).toMatchObject({ apply: true, expectedSourceSha256: 'a'.repeat(64), expectedWorkshopId: 'ws_123456789' });
+  const previewBody = { modId: 'welcome_message', apply: false };
+  const applyBody = { modId: 'welcome_message', apply: true, expectedSourceSha256: 'a'.repeat(64), expectedWorkshopId: 'ws_123456789' };
+  expect(adoptionBodies).toEqual([
+    previewBody,
+    { ...applyBody, expectedBindingHash: initialBindingHash },
+    previewBody,
+    { ...applyBody, expectedBindingHash: renewedBindingHash },
+  ]);
 });
