@@ -54,21 +54,34 @@ export function parseCat(catPath: string, limits: CatParseLimits = {}): CatEntry
   if (manifestBytes > maxManifestBytes) {
     throw new Error(`CAT manifest is ${manifestBytes} bytes; the limit is ${maxManifestBytes} bytes: ${catPath}`);
   }
-  const text = fs.readFileSync(catPath, 'utf8');
+  return parseCatManifest(fs.readFileSync(catPath, 'utf8'), { maxEntries, sourcePath: catPath });
+}
+
+/** Parse already bounded CAT text, optionally rejecting any unparseable entry. */
+export function parseCatManifest(text: string, { maxEntries = MAX_CAT_ENTRIES, strict = false, sourcePath = '' } = {}): CatEntry[] {
   const lines = text.split(/\r?\n/);
   const entries: CatEntry[] = [];
+  const location = sourcePath ? `: ${sourcePath}` : '';
   let offset = 0;
   for (const raw of lines) {
     const line = raw.trim();
     if (!line) continue;
+    if (strict && !/^.+ \d+ \d+ [a-f0-9]{32}$/i.test(line)) throw new Error('CAT manifest has a malformed entry.');
     const parts = line.split(' ');
     if (parts.length < 4) continue;
     const size = parseInt(parts[parts.length - 3], 10);
-    if (!Number.isFinite(size) || size < 0) continue;
-    if (entries.length >= maxEntries) throw new Error(`CAT manifest exceeds the ${maxEntries}-entry limit: ${catPath}`);
-    if (!Number.isSafeInteger(offset + size)) throw new Error(`CAT entry offsets exceed JavaScript's safe integer range: ${catPath}`);
+    if (!Number.isFinite(size) || size < 0) {
+      if (strict) throw new Error('CAT manifest has an invalid entry size.');
+      continue;
+    }
+    if (entries.length >= maxEntries) throw new Error(`CAT manifest exceeds the ${maxEntries}-entry limit${location}`);
+    if (!Number.isSafeInteger(offset + size)) throw new Error(`CAT entry offsets exceed JavaScript's safe integer range${location}`);
     const name = parts.slice(0, parts.length - 3).join(' ').replace(/\\/g, '/');
+    if (strict && (safeCatalogName(name) !== name || /^[a-z]:/i.test(name))) {
+      throw new Error('CAT manifest has an unsafe entry path.');
+    }
     const timestamp = parseInt(parts[parts.length - 2], 10);
+    if (strict && !Number.isSafeInteger(timestamp)) throw new Error('CAT manifest has an invalid entry timestamp.');
     const md5 = parts[parts.length - 1].toLowerCase();
     entries.push({
       name,

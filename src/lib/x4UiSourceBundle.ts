@@ -441,18 +441,31 @@ function parseUiXml(uiXml: string, collectRegistrations = true): ParsedUiXml {
 
 /** Contained Lua paths registered directly in a well-formed X4 menu manifest. */
 export function registeredX4MenuLuaPaths(uiXml?: string): ReadonlySet<string> {
-  const paths = new Set<string>();
-  if (!uiXml) return paths;
-  try { assertXmlInputWithinLimits(uiXml); } catch { return paths; }
+  return readX4MenuLuaPaths(uiXml, false) ?? new Set();
+}
+
+/** Compare exact manifests without treating malformed registrations as an empty set. */
+export function readX4MenuLuaPaths(uiXml: string | undefined, strict: boolean): ReadonlySet<string> | null {
+  if (!uiXml) return null;
+  try { assertXmlInputWithinLimits(uiXml); } catch { return null; }
   const { root, state } = parseUiXml(uiXml, false);
   if (!root || !state.parsed || root.namespaceURI || elementName(root) !== 'addon'
-    || !elementAttribute(root, 'name')?.trim()) return paths;
+    || !elementAttribute(root, 'name')?.trim()) return null;
+  const paths = new Set<string>();
   for (const environment of childElements(root)) {
-    if (environment.namespaceURI || elementName(environment) !== 'environment' || elementAttribute(environment, 'type') !== 'menus') continue;
+    if (environment.namespaceURI || elementName(environment) !== 'environment' || elementAttribute(environment, 'type') !== 'menus') {
+      if (strict) return null;
+      continue;
+    }
     for (const file of childElements(environment)) {
-      if (file.namespaceURI || elementName(file) !== 'file') continue;
+      if (strict && childElements(file).length) return null;
+      if (file.namespaceURI || elementName(file) !== 'file') {
+        if (strict && (file.namespaceURI || !['dependency', 'savedvariable'].includes(elementName(file)))) return null;
+        continue;
+      }
       const normalized = normalizeContainedPath(elementAttribute(file, 'name'));
-      if (normalized.key && /\.lua$/i.test(normalized.key)) paths.add(normalized.key);
+      if (normalized.key && /\.lua$/i.test(normalized.key) && (!strict || normalized.key.includes('/'))) paths.add(normalized.key);
+      else if (strict) return null;
     }
   }
   return paths;

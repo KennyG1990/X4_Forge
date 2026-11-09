@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import DeployValidationSummary from '../src/components/DeployValidationSummary';
 import { deployReviewView, deployValidationLabel, type DeployReviewData } from '../src/lib/deployClient';
+import { parseCatManifest } from '../src/lib/x4CatDat';
+import { readX4MenuLuaPaths } from '../src/lib/x4UiSourceBundle';
 
 const fixtures=JSON.parse(fs.readFileSync('tests/fixtures/forge-regression/deploy-responses.json','utf8'));
 const checks:string[]=[];
@@ -20,4 +25,39 @@ for(const invalid of [-1,0.5,NaN,Infinity,'0',null])check('invalid-count-'+Strin
 check('proposed-approval-not-recorded',()=>{const p=structuredClone(fixtures.accepted);p.validation.review.status='proposed';assert.match(deployReviewView(p).title,/approvals unconfirmed/);assert.match(deployReviewView(p).countText,/Proposed/);});
 check('unknown-approval-status-not-recorded',()=>{const p=structuredClone(fixtures.accepted);delete p.validation.review.status;assert.match(deployReviewView(p).title,/approvals unconfirmed/);assert.match(deployReviewView(p).countText,/Acceptance reported/);});
 check('readable-shared-labels',()=>{for(const p of Object.values(fixtures) as DeployReviewData[]){const s=deployValidationLabel(p);assert.ok(!s.includes('accepted-findings'));assert.ok(!s.includes('incomplete-checks'));}});
+check('lua-registration-notice-shows-paths-and-qualified-restart', () => {
+  const html = renderToStaticMarkup(createElement(DeployValidationSummary, { result: {
+    ...fixtures.clean, effect: { luaRegistration: {
+      status: 'added', addedCount: 2, addedPaths: ['ui/late.lua'], restartMayBeRequired: true,
+    } },
+  } }));
+  assert.match(html, /may require a full X4 restart/);
+  assert.match(html, /ui\/late\.lua/);
+  assert.match(html, /Plus 1 more\./);
+});
+check('unavailable-registration-comparison-stays-neutral', () => {
+  const html = renderToStaticMarkup(createElement(DeployValidationSummary, { result: {
+    ...fixtures.proposed, effect: { luaRegistration: { status: 'unavailable', detail: 'Comparison unavailable.' } },
+  } }));
+  assert.match(html, /Comparison unavailable\./);
+  assert.doesNotMatch(html, /may require a full X4 restart/);
+  assert.doesNotMatch(renderToStaticMarkup(createElement(DeployValidationSummary, { result: fixtures.clean })), /deploy-lua-registration-notice/);
+});
+check('registration-comparison-distinguishes-empty-and-invalid', () => {
+  const menu = (children: string, environment = 'menus') =>
+    `<addon name="qa"><environment type="${environment}">${children}</environment></addon>`;
+  assert.deepEqual([...readX4MenuLuaPaths(menu('<dependency name="helper"/><savedvariable name="state" storage="savegame"/>'), true)!], []);
+  assert.deepEqual([...readX4MenuLuaPaths(menu('<file name="ui/late.lua"/>'), true)!], ['ui/late.lua']);
+  assert.equal(readX4MenuLuaPaths(menu('<file name="../bad.lua"/>'), true), null);
+  assert.equal(readX4MenuLuaPaths(menu('<file name="ui/late.lua"/>', 'savegame'), true), null);
+  assert.equal(readX4MenuLuaPaths(menu('<dependency name="helper"><file name="ui/nested.lua"/></dependency>'), true), null);
+});
+check('strict-catalog-comparison-refuses-unparseable-index-rows', () => {
+  const index = `ui.xml 12 0 ${'a'.repeat(32)}\ncorrupt row\n`;
+  assert.equal(parseCatManifest(index).length, 1);
+  assert.throws(() => parseCatManifest(index, { strict: true }), /malformed entry/);
+  for (const name of ['../ui.xml', './ui.xml', '/ui.xml', 'C:ui.xml']) {
+    assert.throws(() => parseCatManifest(`${name} 12 0 ${'a'.repeat(32)}`, { strict: true }), /unsafe entry path/);
+  }
+});
 console.log(JSON.stringify({pass:true,total:checks.length,checks}));

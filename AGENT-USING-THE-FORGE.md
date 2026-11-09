@@ -201,6 +201,10 @@ recent diagnostics from `loadEvidence`. Read `states.loadedCleanly` with that ev
 `seenByX4` true with only recent-log activity. A recognized load can predate the issue tail.
 The exact deploy receipt proves the bytes written, and the log describes the game events it records.
 
+When native deploy returns `effect.luaRegistration`, check the added paths and the restart
+advisory. An unavailable comparison leaves the registration change unknown. Game-side
+execution still needs its own evidence.
+
 ---
 
 ## 5. Ground every API shape in the corpus — the highest-value habit

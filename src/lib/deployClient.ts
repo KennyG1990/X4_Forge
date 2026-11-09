@@ -22,6 +22,10 @@ export interface DeployReviewData {
   bytesConfirmed?: boolean;
   modId?: string;
   sourceHash?: string;
+  effect?: {
+    luaRegistration?: { status: 'added'; addedCount: number; addedPaths: string[]; restartMayBeRequired: true }
+      | { status: 'unavailable'; detail: string };
+  };
   validation?: {
     outcome?: string;
     clean?: boolean;

@@ -7,6 +7,7 @@ export default function DeployValidationSummary({ result }: { result: DeployRevi
   const review = result.validation?.review;
   const recorded = review?.status === 'recorded';
   const remembered = review?.warningReviews;
+  const registration = result.effect?.luaRegistration;
   const [reason, setReason] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
@@ -32,6 +33,12 @@ export default function DeployValidationSummary({ result }: { result: DeployRevi
     <p className="text-slate-200">{view.validationText}</p>
     <p data-testid="deploy-review-counts" className="text-slate-300">{view.countText}</p>
     <p className="text-slate-400">{view.confirmed ? 'Deployed file bytes confirmed. ' : ''}This result does not verify behavior in X4.</p>
+    {registration?.status === 'added' && <div data-testid="deploy-lua-registration-notice" className="text-amber-200">
+      <p>{registration.addedCount} new Lua {registration.addedCount === 1 ? 'registration' : 'registrations'} may require a full X4 restart.</p>
+      <ul className="list-disc pl-5">{registration.addedPaths.map(file => <li key={file}><code>{file}</code></li>)}</ul>
+      {registration.addedCount > registration.addedPaths.length && <p>Plus {registration.addedCount - registration.addedPaths.length} more.</p>}
+    </div>}
+    {registration?.status === 'unavailable' && <p data-testid="deploy-lua-registration-notice" className="text-slate-400">{registration.detail}</p>}
     {result.modId && <div className="text-slate-300">Mod: <code>{result.modId}</code></div>}
     {result.sourceHash && <details className="text-slate-400"><summary className="cursor-pointer">Validated source identity</summary><code className="break-all">{result.sourceHash}</code></details>}
     {!!review?.approvals?.length && <details data-testid="deploy-review-approvals" className="text-slate-300">

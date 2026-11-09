@@ -181,6 +181,7 @@
     "src/server/bulkTransformApplyReceiptFacts.ts",
     "src/server/bulkTransformRoutes.ts",
     "src/server/dependencyHealth.ts",
+    "src/server/deployLuaRegistration.ts",
     "src/server/deploymentSnapshot.ts",
     "src/server/deploymentTrust.ts",
     "src/server/findingAcceptance.ts",

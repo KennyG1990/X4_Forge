@@ -42,6 +42,10 @@ Dev returns the raw read hash and byte count, and its guarded workspace write re
 
 Dev keeps explicit load evidence in a bounded log scan and distinguishes recent cue activity, incomplete evidence and a native deploy boundary. The scratch replay covered 12 MiB rollover, rotation, truncation, exact target bytes and the named deploy receipt. [Isolated evidence](docs/plans/2026-11-09-game-log-load-evidence.md). Exact X4 marker validation, installed and public delivery remain open.
 
+### Lua registration advisory and boot coverage `in_progress` (GitHub #55)
+
+Dev lists added Lua paths in native deploy and shares the qualified restart advisory with Studio. Exact loose and catalog replays verified the selected bytes and committed receipts, and corrupt or shadowed manifests stayed unavailable. [Isolated evidence](docs/plans/2026-11-09-deploy-lua-registration-advisory.md). Actual reload and restart behavior, per-file boot coverage, installed rendering and public delivery remain open.
+
 ### Launcher-pinned scratch Directory Settings `in_progress` (GitHub #75)
 
 An explicit Dev launch flag shows the effective scratch paths and keeps corpus/schema settings editable in regular scratch profiles. Retargets and install harvesting refuse, the Project Check owner seal stays in force, and native deploy passed the exact scratch replay. [Isolated evidence and release review](docs/plans/2026-11-09-dev-scratch-directory-settings.md). Installed rendering and public delivery remain open.

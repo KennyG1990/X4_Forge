@@ -114,6 +114,7 @@ import { getCanonicalReferenceCorpus, getCanonicalReferenceSets, initializeRefer
 import { registerBulkTransformRoutes } from "./src/server/bulkTransformRoutes";
 import { computeModDrift, fingerprintModFolder, flattenProjectValidation, getSchemaIndex, loadProjectFromDisk, runProjectValidation } from "./src/server/projectValidation";
 import { captureDeploymentSnapshot, type DeploymentSnapshot } from './src/server/deploymentSnapshot';
+import { previewLuaRegistrationChange } from './src/server/deployLuaRegistration';
 import { PROJECT_CHECKS_MAX_BYTES, PROJECT_CHECKS_PATH } from './src/server/projectCheckProposal';
 import { projectCheckApprovalCoordinationKey } from './src/server/projectCheckApproval';
 import { loadNativeProjectCheckAuthority, openNativeProjectCheckOwnerAuthority, openNativeProjectCheckProof,
@@ -14742,6 +14743,8 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
         ...(req.body?.dryRun === true ? { dryRun: true } : {}),
       }));
     }
+    const luaRegistration = previewLuaRegistrationChange(snapshot, targetRoot, deploymentEffect.preserved);
+    const effect = luaRegistration ? { ...deploymentEffect, luaRegistration } : deploymentEffect;
 
     const assertCurrentSource = () => {
       assertSelectedSource();
@@ -14785,7 +14788,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
         ...(previousOperation ? { previousOperation } : {}),
         targetRoot,
         deployFormat: { mode: deployFormat },
-        effect: deploymentEffect,
+        effect,
         checklist,
         validationDelta,
         baselinePromotion: { recorded: false, reason: 'Dry-run deploys never change the last-green baseline.' },
@@ -15068,7 +15071,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       ...(ok ? { deployRecord: deployReceipt, acceptanceRecords: approvalRecords } : {}),
       workspace: ws,
       ...(successfulDeploy ? { lastDeploy: successfulDeploy, deployedFingerprint } : {}),
-      ...(ok ? { effect: deploymentEffect } : {}),
+      ...(ok ? { effect } : {}),
       ...(deploymentRecovery ? { recovery: {
         id: deploymentRecovery.id,
         kind: deploymentRecovery.kind,
