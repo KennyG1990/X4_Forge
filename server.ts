@@ -8184,33 +8184,68 @@ function resolveNativeDeployFolder(reqPath: string, requestedRoot?: unknown): Re
   return { ...folder, selection: { root, ...folder.physical, folder: folder.abs } };
 }
 
+function hasImportManifest(folder: string, probeText = false): boolean {
+  const manifest = path.join(folder, 'content.xml');
+  try {
+    if (!fs.lstatSync(manifest, { throwIfNoEntry: false })?.isFile()) return false;
+    if (!probeText) return true;
+    const fd = fs.openSync(manifest, 'r');
+    try {
+      if (!fs.fstatSync(fd).isFile()) return false;
+      const sample = Buffer.alloc(4096);
+      const count = fs.readSync(fd, sample, 0, sample.length, 0);
+      return new TextDecoder().decode(sample.subarray(0, count), { stream: true }).trim().length > 0;
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+}
+
 app.post("/api/agent/mod-folder/import", coordinatedSourceOperation((req, res) => {
   try {
     const parsed = parseModFolderImportRequest(req.body);
     if (parsed.ok === false) return res.status(400).json({ success: false, code: parsed.code, error: parsed.error });
-    const r = resolveModFolder(parsed.value.path, parsed.value.root);
+    const { path: relativePath, root } = parsed.value;
+    const r = resolveModFolder(relativePath, root);
     if ('error' in r) return res.status(r.status).json({ error: r.error });
     // B93.2: never 200 on a degenerate result. Pointing this at a root that is not a mod (or at a
     // whole library of mods) previously returned success with a multi-thousand-file garbage
     // workspace, which is worse than an error because it LOOKS like it worked.
-    const contentXml = path.join(r.abs, 'content.xml');
-    if (!fs.existsSync(contentXml)) {
+    if (!hasImportManifest(r.abs)) {
       const entries = (() => { try { return fs.readdirSync(r.abs, { withFileTypes: true }); } catch { return []; } })();
-      const modLikeChildren = entries
-        .filter(e => e.isDirectory() && fs.existsSync(path.join(r.abs, e.name, 'content.xml')))
-        .map(e => e.name);
+      const modLikeChildren: string[] = [];
+      let inspected = 0;
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        if (++inspected > 128) break;
+        if (!hasImportManifest(path.join(r.abs, entry.name), true)) continue;
+        modLikeChildren.push(entry.name);
+        if (modLikeChildren.length === 20) break;
+      }
+      const example = modLikeChildren.length ? JSON.stringify({
+        root, path: path.posix.join(relativePath.replace(/\\/g, '/'), modLikeChildren[0]),
+      }) : null;
       return res.status(400).json({
-        error: modLikeChildren.length
-          ? `"${req.body?.path}" is a folder CONTAINING mods, not a mod. It has no content.xml of its own. Import one of its mods instead, e.g. {"root":"${req.body?.root || 'workspace'}","path":"${modLikeChildren[0]}"}.`
-          : `"${req.body?.path}" has no content.xml, so it is not an X4 extension. Point this at the mod's own folder — the one containing content.xml.`,
+        success: false,
+        error: example
+          ? `"${relativePath}" contains mods but has no regular content.xml file. Import a child using ${example}.`
+          : `"${relativePath}" has no regular content.xml file. Point this at the X4 extension's own folder containing its manifest.`,
         code: 'NOT_A_MOD_FOLDER',
         folder: r.abs,
-        ...(modLikeChildren.length ? { modsFoundInside: modLikeChildren.slice(0, 20) } : {}),
+        ...(modLikeChildren.length ? { modsFoundInside: modLikeChildren } : {}),
       });
     }
     const prior = resolveWorkspaceAuthority(req, res, false);
     if (res.headersSent) return;
     const { workspace, report } = importModFolder(r.abs, prior?.workspace);
+    if (report.totalFiles === 0 || !workspace.contentOriginal?.trim()) {
+      return res.status(400).json({
+        success: false, code: 'NOT_A_MOD_FOLDER', folder: r.abs,
+        error: `"${relativePath}" has an empty or unreadable content.xml. Restore the extension manifest and retry the import.`,
+      });
+    }
     res.locals.apiSubject = projectApiSubject(loadProjectFromDisk(r.abs).project);
     return res.json({ success: true, workspace, report });
   } catch (error) {

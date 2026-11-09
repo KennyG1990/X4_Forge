@@ -3516,12 +3516,26 @@ async function main() {
 
   // #2 never 200 on a degenerate result.
   fs.mkdirSync(path.join(safeWorkspace, 'not_a_mod', 'inner_mod'), { recursive: true });
+  fs.mkdirSync(path.join(safeWorkspace, 'not_a_mod', 'a_directory', 'content.xml'), { recursive: true });
+  fs.mkdirSync(path.join(safeWorkspace, 'not_a_mod', 'b_blank'), { recursive: true });
+  fs.mkdirSync(path.join(safeWorkspace, 'not_a_mod', 'c_unicode_blank'), { recursive: true });
+  fs.writeFileSync(path.join(safeWorkspace, 'not_a_mod', 'b_blank', 'content.xml'), ' \r\n\t');
+  fs.writeFileSync(path.join(safeWorkspace, 'not_a_mod', 'c_unicode_blank', 'content.xml'), '\u3000'.repeat(1366));
   fs.writeFileSync(path.join(safeWorkspace, 'not_a_mod', 'inner_mod', 'content.xml'), '<content id="inner_mod" name="Inner"/>');
   const degenerate = await req('POST', '/api/agent/mod-folder/import', SESSION_TOKEN, { root: 'workspace', path: 'not_a_mod' });
   ok('non_mod_folder_import_rejected', degenerate.status === 400 && degenerate.json?.code === 'NOT_A_MOD_FOLDER', `status=${degenerate.status}`);
   ok('non_mod_folder_error_names_an_importable_mod',
-    Array.isArray(degenerate.json?.modsFoundInside) && degenerate.json.modsFoundInside.includes('inner_mod'),
+    JSON.stringify(degenerate.json?.modsFoundInside) === '["inner_mod"]'
+      && degenerate.json?.error?.includes('{"root":"workspace","path":"not_a_mod/inner_mod"}'),
     JSON.stringify(degenerate.json?.modsFoundInside));
+  for (const child of ['a_directory', 'b_blank', 'c_unicode_blank']) {
+    const invalidManifest = await req('POST', '/api/agent/mod-folder/import', SESSION_TOKEN, { root: 'workspace', path: `not_a_mod/${child}` });
+    ok(`import_rejects_${child}_manifest`, invalidManifest.status === 400 && invalidManifest.json?.code === 'NOT_A_MOD_FOLDER'
+      && invalidManifest.json?.success === false);
+  }
+  const metadataOnly = await req('POST', '/api/agent/mod-folder/import', SESSION_TOKEN, { root: 'workspace', path: 'not_a_mod/inner_mod' });
+  ok('manifest_only_extension_imports_without_graph_nodes', metadataOnly.status === 200 && metadataOnly.json?.success === true
+    && metadataOnly.json?.report?.totalFiles === 1 && metadataOnly.json?.workspace?.nodes?.length === 0);
 
   // #3 validate accepts the SAME {root, path} shape as mod-folder/import.
   // Own fixture: borrowing another section's mod made this assertion depend on unrelated ordering.

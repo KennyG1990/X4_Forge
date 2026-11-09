@@ -22,6 +22,10 @@ Dev reports the authored version and date and warns about changed logical files 
 
 Dev honors the configured source role on both native deploy routes and retains it in the generated approval retry. The reviewed binding distinguishes identical-byte roots. Escaping paths and stale retries refused before writes, and the verbatim approved retry committed the selected bytes. [Isolated evidence](docs/plans/2026-11-09-native-deploy-source-selection.md). Installed and public delivery remain open.
 
+### Mod folder import manifest guard `in_progress` (GitHub #50)
+
+Dev rejects a directory or blank file in place of the manifest, preserves valid metadata-only and malformed-source repair imports, and gives a working nested child request. The same backend passed exact native v101 deployment and receipt checks. [Isolated evidence](docs/plans/2026-11-09-mod-folder-import-manifest.md). Installed and public delivery remain open.
+
 ### Launcher-pinned scratch Directory Settings `in_progress` (GitHub #75)
 
 An explicit Dev launch flag shows the effective scratch paths and keeps corpus/schema settings editable in regular scratch profiles. Retargets and install harvesting refuse, the Project Check owner seal stays in force, and native deploy passed the exact scratch replay. [Isolated evidence and release review](docs/plans/2026-11-09-dev-scratch-directory-settings.md). Installed rendering and public delivery remain open.
