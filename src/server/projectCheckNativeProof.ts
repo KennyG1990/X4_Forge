@@ -164,15 +164,17 @@ function ownerActivation(input: NativeProofScope, policy: OwnerPolicy, file: str
     const original = authorityBytes(file);
     const value = parseAuthority(original);
     if (!object(value) || !exact(value, ['version', 'ownerPolicyHash', 'approvalId']) || value.version !== 2
-      || value.ownerPolicyHash !== policy.policyHash || typeof value.approvalId !== 'string' || !receiptIdPattern.test(value.approvalId)) {
+      || typeof value.ownerPolicyHash !== 'string' || !hashPattern.test(value.ownerPolicyHash)
+      || typeof value.approvalId !== 'string' || !receiptIdPattern.test(value.approvalId)) {
       throw authorityRefused();
     }
-    return { approvalId: value.approvalId, original };
+    return { approvalId: value.approvalId, policyHash: value.ownerPolicyHash, original };
   };
-  return { read, activate(approvalId: string) {
+  return { read, activate(approvalId: string, expected?: Buffer) {
     assertDevScope(input, file);
     if (!receiptIdPattern.test(approvalId) || readNativeProjectCheckOwnerPolicy().policyHash !== policy.policyHash) throw authorityRefused();
-    read();
+    const current = read()?.original;
+    if (current ? !expected?.equals(current) : expected !== undefined) throw authorityRefused();
     atomicWriteJson(file, { version: 2, ownerPolicyHash: policy.policyHash, approvalId }, { mode: 0o600 });
   } };
 }
@@ -189,7 +191,14 @@ export function openNativeProjectCheckOwnerAuthority(input: NativeProofScope, po
   const file = authorityFile(input.store);
   const scratch = assertDevScope(input, file);
   const activation = ownerActivation(input, policy, file, scratch);
-  return { read: () => activation.read()?.approvalId, activate: activation.activate };
+  return { reviewState() {
+    const prior = activation.read();
+    return {
+      activeApprovalId: prior?.policyHash === policy.policyHash ? prior.approvalId : undefined,
+      activationHash: prior && createHash('sha256').update(prior.original).digest('hex'),
+      activate: (approvalId: string) => activation.activate(approvalId, prior?.original),
+    };
+  } };
 }
 
 /** Read the exact server-owned authority shared by suite execution and native apply. */
@@ -200,7 +209,7 @@ export function loadNativeProjectCheckAuthority(input: NativeProofScope, payload
     const policy = projectCheckOwnerProfileEnabled() ? readNativeProjectCheckOwnerPolicy() : undefined;
     if (!policy && process.env.X4_FORGE_PROJECT_CHECK_LEGACY_FIXTURE !== '1') throw authorityRefused();
     const active = policy ? ownerActivation(input, policy, file, scratch).read() : undefined;
-    if (policy && !active) throw authorityRefused();
+    if (policy && active?.policyHash !== policy.policyHash) throw authorityRefused();
     const original = active?.original ?? authorityBytes(file);
     const config = policy && active ? { ...policy, approvalId: active.approvalId } : readFixtureAuthority(input, original);
     const { runtime, approvalId, ownerId, interpreterPath, interpreterDependencies } = config;

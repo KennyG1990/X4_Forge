@@ -13602,7 +13602,7 @@ function requireProjectCheckOwnerRequest(req: express.Request, res: express.Resp
     }
     const setupInput = { modId: policy.modId, sourceRoot: policy.sourceRoot, interpreterPath: policy.interpreterPath,
       interpreterDependencies: policy.interpreterDependencies };
-    return { ...policy, setupInput, activeApprovalId: activation.read(), activate: activation.activate };
+    return { ...policy, setupInput, ...activation.reviewState() };
   };
 }
 

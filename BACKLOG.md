@@ -12,7 +12,7 @@ The isolated Dev candidate returns a compact verdict on the general validation A
 
 ### A15 project-registered verification `in_progress` (GitHub #61)
 
-The isolated Windows Dev backend accepts signed owner approval, runs the approved suite, and reuses exact receipts in addressed project validation and native scratch deploy. Exact UI file coverage is credited separately from the static finding. Run status names terminal commands and distinguishes unattempted or incomplete results. [Coverage evidence](docs/plans/2026-11-08-a15-project-coverage.md) and [named result evidence](docs/plans/2026-11-08-a15-named-run-results.md).
+The isolated Windows Dev backend accepts signed owner approval, runs the approved suite, and reuses exact receipts in addressed project validation and native scratch deploy. Exact UI file coverage is credited separately from the static finding. Run status names terminal commands and distinguishes unattempted or incomplete results. [Coverage evidence](docs/plans/2026-11-08-a15-project-coverage.md) and [named result evidence](docs/plans/2026-11-08-a15-named-run-results.md). A fresh signed review is the Dev recovery path after [owner credential rotation](docs/plans/2026-11-08-a15-owner-policy-rotation.md).
 Remaining work includes device provisioning and rendered owner controls, installed Antigravity supervisor recovery, broader coverage and raw output presentation, and the larger-suite concurrency request. Keep the Dev fixture separate from Claude's game testing and leave #61 open.
 
 ### Bounded Claude fixes public release 0.0.80 `in_progress` (GitHub #20)

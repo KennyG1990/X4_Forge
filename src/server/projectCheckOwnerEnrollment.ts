@@ -22,6 +22,7 @@ export interface ProjectCheckOwnerContext {
   setupInput: ProjectCheckSetupInput;
   runtime: TrustedProjectCheckWorker;
   activeApprovalId?: string;
+  activationHash?: string;
   activate(approvalId: string): void;
 }
 
@@ -75,7 +76,7 @@ function ownerBindings(context: ProjectCheckOwnerContext) {
     publicKey: credential.publicKey.export({ type: 'spki', format: 'der' }).toString('base64url'),
     interpreterPath: setupInput.interpreterPath, interpreterDependencies: setupInput.interpreterDependencies ?? [], runtime,
   })).digest('hex');
-  const review = createHash('sha256').update(canonicalJson([policy, context.activeApprovalId ?? null])).digest('hex');
+  const review = createHash('sha256').update(canonicalJson([policy, context.activeApprovalId ?? null, context.activationHash ?? null])).digest('hex');
   return { policy, review };
 }
 
