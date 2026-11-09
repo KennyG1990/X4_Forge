@@ -778,6 +778,7 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
     const durableKeyRoute = authority.ok && (authority.decision.routeKey === 'POST /api/agent/project-check-runs'
       || authority.decision.routeKey === 'GET /api/agent/project-check-runs/:id'
       || (authority.decision.routeKey === 'GET /api/agent/status' && req.query.inspectDeployTarget !== undefined)
+      || authority.decision.routeKey === 'POST /api/agent/history/:id/revert'
       || (authority.decision.routeKey === 'POST /api/agent/project/validate' && req.body?.projectCheckSuiteReceiptId !== undefined));
     const v = (durableKeyRoute ? createAgentKeyStore({ file: AGENT_KEYS_FILE }) : agentKeyStore).verify(token);
     if (!v.ok) {
@@ -1208,7 +1209,8 @@ function sourceOperationKeys(req: express.Request): string[] {
   const resolved = resolveXsdConfig();
   const keys: string[] = [];
   const nativeDeploy = req.path === '/api/agent/deploy' || req.path === '/api/agent/deploy-verify';
-  const workspace = req.body?.workspace ?? ((req as any).__workspaceRecord as WorkspaceRecord | undefined)?.workspace;
+  const addressed = (req as any).__workspaceRecord as WorkspaceRecord | undefined;
+  const workspace = req.body?.workspace ?? addressed?.workspace;
   const source = workspace?.sourceStamp?.dir;
   if (typeof source === 'string' && source) keys.push(canonicalSourceKey(source));
   const target = req.body?.fromPath ?? req.body?.path;
@@ -1226,6 +1228,15 @@ function sourceOperationKeys(req: express.Request): string[] {
     // Include output roots; an artifact/deployment transaction must never interleave its staging.
     if (resolved.modWorkspacePath) keys.push(canonicalSourceKey(path.join(resolved.modWorkspacePath, '.forge-builds')));
     if (req.path.includes('/deploy') && resolved.x4GamePath) keys.push(canonicalSourceKey(path.join(resolved.x4GamePath, 'extensions')));
+  }
+  if (addressed && resolved.x4GamePath && req.route?.path === '/api/agent/history/:id/revert') {
+    const row = agentHistoryStore.find(String(req.params.id));
+    if (row?.workspaceId === addressed.workspaceId && row.recoveryId) {
+      const recovery = destructiveRecoveryStore.read(row.recoveryId);
+      if (recovery.ok && recovery.record.kind === 'deploy') {
+        keys.push(canonicalSourceKey(path.join(resolved.x4GamePath, 'extensions')));
+      }
+    }
   }
   if (nativeDeploy) {
     const operation = requestDeployOperation(req);
@@ -5599,10 +5610,10 @@ app.get("/api/agent/status", async (req, res) => {
         const identity = deployReceiptIdentity(principal, { workspaceId: record.workspaceId, operationId });
         const status = inspectTarget === '1'
           ? await observeInterruptedDeployTarget(identity, principal, record.workspaceId,
-            () => assertCurrentDeployObservationKey(req, principal, record.workspaceId), () => res.destroyed || res.writableEnded)
+            () => assertCurrentDeployKey(req, principal, record.workspaceId), () => res.destroyed || res.writableEnded)
           : readDeployOperationStatus(actionReceiptStore, destructiveRecoveryStore, identity);
         if (res.destroyed || res.writableEnded) return;
-        if (inspectTarget === '1') assertCurrentDeployObservationKey(req, principal, record.workspaceId);
+        if (inspectTarget === '1') assertCurrentDeployKey(req, principal, record.workspaceId);
         if (!status) return res.status(404).json({
           ok: false, code: 'DEPLOY_OPERATION_NOT_FOUND', outcome: 'unknown',
         });
@@ -5728,9 +5739,11 @@ app.get("/api/agent/history/:id/raw", (req, res) => {
   }
 });
 
-app.post("/api/agent/history/:id/revert", coordinatedSourceOperation((req, res) => {
+app.post("/api/agent/history/:id/revert", coordinatedSourceOperation((req, res, lease) => {
   try {
     let record = requestWorkspace(req);
+    const principal = deploymentPrincipal(req);
+    if (principal.kind === 'agent') assertCurrentDeployKey(req, principal, record.workspaceId);
     const row = agentHistoryStore.find(String(req.params.id));
     if (!row || row.workspaceId !== record.workspaceId) return res.status(404).json({ ok: false, error: 'No such history entry in this workspace.' });
     const rule = revertibility(row.kind, row.outcome, !!row.beforeBlob, !!row.recoveryId);
@@ -5800,6 +5813,9 @@ app.post("/api/agent/history/:id/revert", coordinatedSourceOperation((req, res) 
       const resolved = resolveXsdConfig();
       if (!resolved.x4GamePath) return res.status(409).json({ ok: false, code: 'RECOVERY_TARGET_UNAVAILABLE', error: 'X4 Game Installation path is no longer configured.' });
       const extensionsPath = path.join(resolved.x4GamePath, 'extensions');
+      if (!lease?.ownsResource(canonicalSourceKey(extensionsPath))) {
+        return res.status(409).json({ ok: false, code: 'RECOVERY_TARGET_UNOWNED', error: 'Deployment undo requires the configured extensions root lease. Retry after the target is available.' });
+      }
       try {
         (req as any).__revertOf = row.id;
         (req as any).__revertOfTitle = row.title;
@@ -5850,6 +5866,7 @@ app.post("/api/agent/history/:id/revert", coordinatedSourceOperation((req, res) 
     if (!writeWorkspaceFileGuarded(res, target, previous.toString('utf8'))) return;
     return res.json({ ok: true, revertedTo: row.id, file: target, bytes: previous.length });
   } catch (error: any) {
+    if (error?.code === 'DEPLOY_APPROVAL_FORBIDDEN') return res.status(403).json({ ok: false, code: error.code });
     return res.status(500).json({ ok: false, error: error?.message || 'Revert failed.' });
   }
 }));
@@ -11996,16 +12013,16 @@ function deploymentTargetBindingHash(target: string, format: DeployFormat): stri
   return trustHash([process.platform === 'win32' ? resolved.toLowerCase() : resolved, format]);
 }
 
-function assertCurrentDeployObservationKey(req: express.Request, principal: AcceptancePrincipal, workspaceId: string): void {
+function assertCurrentDeployKey(req: express.Request, principal: AcceptancePrincipal, workspaceId: string): void {
   const token = req.headers.authorization?.slice('Bearer '.length);
   const credential = token && createAgentKeyStore({ file: AGENT_KEYS_FILE }).verify(token);
-  const authority = resolveAgentRouteAuthority('GET', '/api/agent/status');
+  const authority = resolveAgentRouteAuthority(req.method, req.path);
   if (!credential || !credential.ok || credential.id !== principal.id
     || (credential.workspaceId !== undefined && credential.workspaceId !== workspaceId)
     || (credential.scope !== 'deploy' && credential.scope !== 'all')
     || !authority.ok || !agentScopeCovers(authority.decision.agentScopes, credential.scope)
     || !decideConstrainedAgentRoute(authority.decision, credential.capabilityConstraint).allowed) {
-    throw Object.assign(new Error('Current deploy authority is required to inspect the operation target.'), { code: 'DEPLOY_APPROVAL_FORBIDDEN' });
+    throw Object.assign(new Error('Current deploy authority is required for this operation.'), { code: 'DEPLOY_APPROVAL_FORBIDDEN' });
   }
 }
 
