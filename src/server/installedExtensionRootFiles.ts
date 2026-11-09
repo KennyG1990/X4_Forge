@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { parseCatManifest } from '../lib/x4CatDat';
+import { readContentManifestIdentity } from '../lib/validationEvidence';
 
 export const MAX_INSTALLED_ROOT_FILE_BYTES = 64 * 1024;
 const MAX_INDEX_BYTES = 1024 * 1024;
@@ -10,6 +11,22 @@ const VERSIONED_CATALOG_PART = /^ext_(?:\d{2}_diff_)?v\d{3,}\.(cat|dat)$/i;
 
 function pathKey(value: string): string {
   return process.platform === 'win32' ? value.toLowerCase() : value;
+}
+
+export function installedRuntimeContentId(extensionsRoot: string, target: string): string | undefined {
+  const folder = path.basename(target);
+  if (!/^[a-z0-9_-][a-z0-9_.-]{0,127}$/i.test(folder)) return;
+  try {
+    const root = fs.realpathSync.native(extensionsRoot);
+    const parent = pathKey(path.dirname(path.resolve(target)));
+    if (parent !== pathKey(path.resolve(extensionsRoot)) && parent !== pathKey(root)) return;
+    const installed = path.join(root, folder);
+    if (!fs.lstatSync(installed).isDirectory() || pathKey(fs.realpathSync.native(installed)) !== pathKey(installed)) return;
+    const content = readInstalledExtensionRootFiles(installed, ['content.xml']).get('content.xml');
+    return readContentManifestIdentity(content)?.modId.toLowerCase();
+  } catch {
+    return undefined;
+  }
 }
 
 function sameStamp(before: fs.BigIntStats, after: fs.BigIntStats): boolean {

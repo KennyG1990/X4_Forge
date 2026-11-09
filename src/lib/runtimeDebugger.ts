@@ -26,6 +26,7 @@ export type RuntimeCandidateKind =
   | 'ai_fault'
   | 'lua_fault'
   | 'engine_fault'
+  | 'ui_reload_fault'
   | 'file_io'
   | 'authored_diagnostic'
   | 'unknown';
@@ -72,6 +73,8 @@ export interface RuntimeExtensionInput {
   /** Alias accepted by adapters that call the deployed folder an id. */
   deployedId?: string;
   deployedFolders?: string[];
+  /** Physical installed folders, excluding names inferred from a canonical content ID. */
+  exactDeployedFolders?: string[];
   sourceFolder?: string;
   sourceFolders?: string[];
   aliases?: string[];
@@ -115,6 +118,7 @@ export interface RuntimeOwnerRecord {
   displayName: string;
   contentIds: string[];
   deployedFolders: string[];
+  exactDeployedFolders: string[];
   sourceFolders: string[];
   aliases: string[];
   manifest: RuntimeOwnedFile[];
@@ -153,6 +157,7 @@ export interface RuntimeCandidateSource {
   library?: string;
   aiScript?: string;
   luaModule?: string;
+  uiOwnershipConflict?: boolean;
   stackFrames: RuntimeStackFrame[];
 }
 
@@ -592,6 +597,7 @@ function buildOwnerRecord(input: RuntimeExtensionInput, active: boolean, ordinal
     displayName,
     contentIds: uniqueSorted([contentId, ...(input.contentIds || [])]),
     deployedFolders: uniqueSorted([deployedFolder, ...(input.deployedFolders || [])]),
+    exactDeployedFolders: uniqueSorted((input.exactDeployedFolders ?? [input.deployedFolder || '']).map(normalizeIdentity)),
     sourceFolders: uniqueSorted([sourceFolder, sourceFolder ? basename(sourceFolder) : '', ...(input.sourceFolders || [])]),
     aliases: uniqueSorted(input.aliases || []),
     manifest,
@@ -724,6 +730,7 @@ function boundRuntimeSource(source: RuntimeCandidateSource): RuntimeCandidateSou
     ...(bound(source.library) ? { library: bound(source.library) } : {}),
     ...(bound(source.aiScript) ? { aiScript: bound(source.aiScript) } : {}),
     ...(bound(source.luaModule) ? { luaModule: bound(source.luaModule) } : {}),
+    ...(source.uiOwnershipConflict ? { uiOwnershipConflict: true } : {}),
     stackFrames: source.stackFrames.slice(0, RUNTIME_DEBUGGER_LIMITS.maxStackFrames).map(frame => ({
       ...(bound(frame.file) ? { file: bound(frame.file) } : {}),
       ...(frame.line === undefined ? {} : { line: frame.line }),
@@ -760,6 +767,48 @@ const FILE_IO_RE = /\b(?:file\s*i\/?o|fileio|signature|failed to verify|loading 
 const BRACKETED_DIAGNOSTIC_TAG_RE = /\[[A-Za-z][A-Za-z0-9_-]{2,}\]/i;
 const TWO_BRACKETED_DIAGNOSTIC_TAGS_RE = /(?:\[[A-Za-z][A-Za-z0-9_-]{2,}\]){2,}/i;
 
+/** A tagged status can quote a fault while reporting ordinary mod activity. */
+export function isAuthoredRuntimeDiagnostic(line: string): boolean {
+  if (!/^\s*\[=ERROR=\]/i.test(line) || /verify the file signature/i.test(line)) return false;
+  const tagged = /^(?:\[[A-Za-z][A-Za-z0-9_-]{2,}\]\s*)+(.+)$/i.exec(compactMessage(line));
+  if (!tagged) return false;
+  return !/^(?:extensions[\\/]|\S+\.(?:lua|xml|xpl)[:(]\d+|script error\b|error in (?:md|ai)\b|attempt to\b|stack traceback\b|invalid (?:argument|parameter)\b)/i.test(tagged[1]);
+}
+
+function isUiWidgetFault(line: string): boolean {
+  return /^CWidgetController::UpdateFrame\(\)\s*-\s*Validation error\b/i.test(compactMessage(line));
+}
+
+function isUiReload(line: string): boolean {
+  return /^(?:Errormessage:\s*[^\r\n]*?:\d+:\s*)?Failed to create view for menu\s+[^\r\n]+?\.\s+Reloading UI\b/i.test(compactMessage(line));
+}
+
+function luaExtensionFrame(line: string): { folder: string; frame: RuntimeStackFrame } | undefined {
+  const match = /^\s*\[string (["'])extensions[\\/]([a-z0-9_-][a-z0-9_.-]{0,127})[\\/]([^"'\r\n]+)\1\]:(\d+)(?=$|:|\s)/i.exec(line);
+  if (!match) return;
+  const relative = match[3].replace(/\\/g, '/');
+  if (/[:\u0000-\u001f]/.test(relative) || relative.split('/').some(part => !part || part === '.' || part === '..')) return;
+  const folder = normalizeIdentity(match[2]);
+  if (relative.endsWith('...')) return { folder, frame: { raw: line } };
+  const number = Number(match[4]);
+  if (!/\.(?:lua|xpl)$/i.test(relative) || !Number.isSafeInteger(number) || number < 1
+    || relative.length > RUNTIME_DEBUGGER_LIMITS.maxSourceTokenChars) return;
+  return { folder, frame: { file: normalizeRuntimePath(relative), line: number, raw: line } };
+}
+
+function uiFaultSource(lines: string[], widget: boolean): RuntimeCandidateSource {
+  const traceStart = widget ? lines.findIndex(line => /^\s*stack traceback:/i.test(line)) : -1;
+  const frames = traceStart < 0 ? [] : lines.slice(traceStart + 1).flatMap(line => luaExtensionFrame(line) ?? []);
+  const folders = new Set(frames.map(({ folder }) => folder));
+  const primary = frames[0];
+  return {
+    ...(folders.size > 1 ? { uiOwnershipConflict: true } : {}),
+    ...(folders.size === 1 ? { extensionFolder: primary.folder,
+      ...(primary.frame.file ? { file: primary.frame.file, line: primary.frame.line } : {}) } : {}),
+    stackFrames: frames.map(({ frame }) => frame),
+  };
+}
+
 function isAuthoredDiagnostic(text: string): boolean {
   const value = String(text ?? '');
   const marker = value.search(/\[=ERROR=\]/i);
@@ -781,7 +830,7 @@ function hasSourceLikeContext(text: string): boolean {
 
 function isCandidateStart(line: RuntimeLogLine): boolean {
   const text = line.text;
-  return FAILURE_RE.test(text) || hasSourceLikeContext(text);
+  return FAILURE_RE.test(text) || hasSourceLikeContext(text) || isUiWidgetFault(text) || isUiReload(text);
 }
 
 function isContinuation(line: RuntimeLogLine): boolean {
@@ -829,11 +878,15 @@ function parseCandidate(lines: RuntimeLogLine[]): RuntimeCandidateIncident {
   const fullRaw = fullLines.join('\n');
   const rawLines = fullLines.map(line => clipText(line, RUNTIME_DEBUGGER_LIMITS.maxLineChars));
   const raw = clipText(rawLines.join('\n'), RUNTIME_DEBUGGER_LIMITS.maxGroupChars);
-  const source = boundRuntimeSource(extractSource(fullRaw, fullLines));
-  const signature = engineSignature(fullRaw);
+  const widget = isUiWidgetFault(fullLines[0]);
+  const uiFault = widget || isUiReload(fullLines[0]);
+  const source = boundRuntimeSource(uiFault ? uiFaultSource(fullLines, widget) : extractSource(fullRaw, fullLines));
+  const signature = uiFault ? 'X4 UI validation and reload'
+    : isAuthoredRuntimeDiagnostic(fullLines[0]) ? undefined : engineSignature(fullRaw);
   const authored = isAuthoredDiagnostic(fullRaw);
   const fileIo = FILE_IO_RE.test(fullRaw);
-  const classification = candidateKind(source, fullRaw, signature, authored, fileIo);
+  const classification = uiFault ? { kind: 'ui_reload_fault' as const, isEngineFailure: true }
+    : candidateKind(source, fullRaw, signature, authored, fileIo);
   const recognized = classification.kind !== 'unknown';
   const timestamps = lines.map(line => line.timestamp).filter(Boolean) as string[];
   const evidence: RuntimeCandidateEvidence[] = [];
@@ -842,7 +895,10 @@ function parseCandidate(lines: RuntimeLogLine[]): RuntimeCandidateIncident {
     if (!boundedValue || evidence.some(item => item.label === label && item.value === boundedValue)) return;
     if (evidence.length < MAX_EVIDENCE) evidence.push({ label, value: boundedValue, ...(strength ? { strength } : {}) });
   };
+  if (widget) addEvidence('UI widget validation', compactMessage(fullLines[0]));
+  if (uiFault && isUiReload(fullLines.at(-1)!)) addEvidence('UI reload', compactMessage(fullLines.at(-1)!));
   if (source.extensionFolder && source.file) addEvidence('exact extension path', `extensions/${source.extensionFolder}/${source.file}`, 'exact');
+  else if (uiFault && source.extensionFolder) addEvidence('exact extension folder', source.extensionFolder, 'exact');
   else if (source.file) addEvidence('source file', source.file, 'exact');
   if (source.mdScript) addEvidence('MD script', source.mdScript, 'exact');
   if (source.cue) addEvidence('MD cue', source.cue, 'exact');
@@ -892,10 +948,17 @@ export function parseRuntimeCandidates(logText: string, options?: RuntimeParseOp
   for (let index = 0; index < lines.length; index++) {
     if (!isCandidateStart(lines[index]) || !lines[index].text.trim()) continue;
     const group = [lines[index]];
+    const widget = isUiWidgetFault(lines[index].text);
+    const orphanReload = isUiReload(lines[index].text);
     let cursor = index + 1;
-    while (cursor < lines.length && group.length < 80 && isContinuation(lines[cursor])) {
-      group.push(lines[cursor]);
+    while (!orphanReload && cursor < lines.length && group.length < 80) {
+      const next = lines[cursor];
+      if (isUiWidgetFault(next.text)) break;
+      const reload = isUiReload(next.text);
+      if (reload ? !widget : !isContinuation(next) && !(widget && luaExtensionFrame(next.text))) break;
+      group.push(next);
       cursor++;
+      if (reload) break;
     }
     candidates.push(parseCandidate(group));
     index = cursor - 1;
@@ -982,10 +1045,22 @@ function ownerDisplayEvidence(owner: RuntimeOwnerRecord, candidate: RuntimeCandi
 
 /** Attribute one candidate; weak names can never produce confirmed_active. */
 export function attributeRuntimeCandidate(index: RuntimeOwnershipIndex, candidate: RuntimeCandidateIncident): RuntimeAttribution {
+  const uiFault = candidate.kind === 'ui_reload_fault';
+  const folder = candidate.source.extensionFolder;
+  if (uiFault && !folder) {
+    return { disposition: 'unknown', confidence: 0,
+      reason: candidate.source.uiOwnershipConflict ? 'Lua frames name multiple extensions.' : 'No owning extension Lua frame was found.',
+      evidence: [] };
+  }
   const authoredEmitters = findAuthoredEmitterLocations(index, candidate);
   if (authoredEmitters.length) return attributeAuthoredEmitter(index, authoredEmitters);
 
-  const exact = index.owners.map(owner => ({ owner, evidence: exactOwnerEvidence(owner, candidate) })).filter(item => item.evidence.length);
+  const exact = index.owners.map(owner => {
+    if (!uiFault) return { owner, evidence: exactOwnerEvidence(owner, candidate) };
+    const evidence: RuntimeAttributionEvidence[] = [];
+    if (folder && owner.exactDeployedFolders.includes(folder)) addOwnerMatch(evidence, owner, 'exact deployed extension folder', folder, 120);
+    return { owner, evidence };
+  }).filter(item => item.evidence.length);
   if (exact.length) {
     const ranked = exact.map(item => ({ ...item, rank: Math.max(...item.evidence.map(evidence => evidence.rank)) }));
     const highest = Math.max(...ranked.map(item => item.rank));
@@ -1023,6 +1098,9 @@ export function attributeRuntimeCandidate(index: RuntimeOwnershipIndex, candidat
       evidence,
     };
   }
+
+  if (uiFault) return { disposition: 'unknown', confidence: 0,
+    reason: 'The extension named by the Lua frame is outside the physical folder inventory.', evidence: [] };
 
   const aliases = index.owners.flatMap(owner => ownerAliasEvidence(owner, candidate));
   if (aliases.length) {
@@ -1273,6 +1351,11 @@ function inferFileFromIdentity(index: RuntimeOwnershipIndex, candidate: RuntimeC
 }
 
 export function mapRuntimeCandidateToSource(index: RuntimeOwnershipIndex, candidate: RuntimeCandidateIncident & { attribution?: RuntimeAttribution }): RuntimeSourceMapping {
+  if (candidate.kind === 'ui_reload_fault' && (!candidate.source.file || !candidate.source.line
+    || !candidate.attribution?.matchedOwnerId
+    || !['confirmed_active', 'excluded_other_mod'].includes(candidate.attribution.disposition))) {
+    return { kind: 'unmapped', reason: 'No exact owned Lua frame location was established for this UI fault.' };
+  }
   const authoredEmitter = candidate.attribution?.authoredEmitter;
   if (candidate.kind === 'authored_diagnostic' && authoredEmitter) {
     return mapRuntimeFileLineToNode(index, {

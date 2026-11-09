@@ -5,6 +5,7 @@ import {
   buildRuntimeOwnershipIndex,
   deduplicateRuntimeIncidents,
   evaluateExpectedRuntimeSteps,
+  isAuthoredRuntimeDiagnostic,
   mapRuntimeCandidateToSource,
   mapRuntimeFileLineToNode,
   parseRuntimeCandidates,
@@ -276,6 +277,52 @@ export function runRuntimeDebuggerSelftest(): RuntimeDebuggerSelftestResult {
     ].join('\n'))[0];
     check('multiline_lua_group_contains_stack_frames', genuineLua.endLine === 4 && genuineLua.source.stackFrames.some(frame => frame.file === 'ui/ai_influence_chat.lua' && frame.line === 42));
     check('genuine_lua_fault_is_engine_failure', genuineLua.kind === 'lua_fault' && genuineLua.isEngineFailure);
+
+    const widget = '[=ERROR=] 25.1 CWidgetController::UpdateFrame() - Validation error: Invalid cell content';
+    const reload = '[=ERROR=] 25.2 Errormessage: P:/SVN/temp/helper.lua:4267: Failed to create view for menu AIC_Hub. Reloading UI';
+    const frame = '[string "extensions/x4_ai_influence/ui/ai_influence_chat.lua"]:42: in function onShowMenu';
+    const uiCrash = (...frames: string[]) => parseRuntimeCandidates([widget, 'stack traceback:', ...frames, reload].join('\n'))[0];
+    const paired = uiCrash(frame);
+    const pairedOwner = attributeRuntimeCandidate(ownership, paired);
+    const pairedMapping = mapRuntimeCandidateToSource(ownership, { ...paired, attribution: pairedOwner });
+    check('ui_widget_trace_and_reload_are_one_source_owned_failure', paired.kind === 'ui_reload_fault' && paired.isEngineFailure
+      && paired.lines.length === 4 && paired.lines.at(-1) === reload
+      && paired.evidence.some(item => item.label === 'UI widget validation') && paired.evidence.some(item => item.label === 'UI reload')
+      && paired.source.file === 'ui/ai_influence_chat.lua' && paired.source.line === 42
+      && pairedOwner.disposition === 'confirmed_active' && pairedMapping.kind === 'file_line' && pairedMapping.line === 42, paired);
+    const truncated = uiCrash(frame.replace('ai_influence_chat.lua', 'ai_influ...'), frame);
+    const truncatedOwner = attributeRuntimeCandidate(ownership, truncated);
+    check('truncated_first_ui_frame_can_confirm_folder_but_cannot_choose_another_file',
+      truncated.source.extensionFolder === 'x4_ai_influence' && !truncated.source.file && !truncated.source.line
+      && truncatedOwner.disposition === 'confirmed_active'
+      && mapRuntimeCandidateToSource(ownership, { ...truncated, attribution: truncatedOwner }).kind === 'unmapped', truncated);
+    const orphan = parseRuntimeCandidates([reload, 'stack traceback:', frame].join('\n'))[0];
+    check('orphan_reload_cannot_borrow_a_following_frame', orphan.kind === 'ui_reload_fault' && orphan.lines.length === 1
+      && attributeRuntimeCandidate(ownership, orphan).disposition === 'unknown', orphan);
+    const mixed = uiCrash(frame, frame.replace('x4_ai_influence', 'other_mod'));
+    check('competing_ui_frames_withhold_ownership', mixed.source.uiOwnershipConflict
+      && attributeRuntimeCandidate(ownership, mixed).disposition === 'unknown', mixed);
+    const lookalike = uiCrash(frame.replace('x4_ai_influence', 'x4_ai_influence_helper'));
+    check('lookalike_ui_folder_cannot_borrow_an_owned_relative_path',
+      attributeRuntimeCandidate(ownership, lookalike).disposition === 'unknown', lookalike);
+    const escaping = uiCrash(frame.replace('ui/ai_influence_chat.lua', '../other_mod/ui/other.lua'));
+    check('an_escaping_ui_frame_is_not_ownership_evidence', !escaping.source.extensionFolder
+      && attributeRuntimeCandidate(ownership, escaping).disposition === 'unknown', escaping);
+    const aliasedOwnership = buildRuntimeOwnershipIndex({ active: {
+      ...active, deployedFolder: 'physical_alias', deployedFolders: ['x4_ai_influence', 'physical_alias'], exactDeployedFolders: ['physical_alias'],
+    } });
+    const aliasCrash = uiCrash(frame.replace('x4_ai_influence', 'physical_alias'));
+    check('ui_frame_uses_physical_alias_and_rejects_canonical_folder_guess',
+      attributeRuntimeCandidate(aliasedOwnership, paired).disposition === 'unknown'
+      && attributeRuntimeCandidate(aliasedOwnership, aliasCrash).disposition === 'confirmed_active');
+    const adjacentWidgets = parseRuntimeCandidates([widget, `  ${widget}`, 'stack traceback:', frame, reload].join('\n'));
+    check('an_indented_second_widget_starts_a_separate_candidate', adjacentWidgets.length === 2
+      && adjacentWidgets[0].lines.length === 1 && adjacentWidgets[1].source.extensionFolder === 'x4_ai_influence', adjacentWidgets);
+    const quotedTimer = "[=ERROR=] 25.4 [AICHAT][UIX] Timer unavailable: quoted attempt to call field 'load' (a nil value)";
+    const realTagged = '[=ERROR=] 25.5 [AICHAT][UIX] extensions/x4_ai_influence/ui/ai_influence_chat.lua:42: attempt to index a nil value';
+    check('quoted_timer_is_authored_but_a_real_tagged_lua_source_fault_remains_an_error',
+      isAuthoredRuntimeDiagnostic(quotedTimer) && parseRuntimeCandidates(quotedTimer)[0].kind === 'authored_diagnostic'
+      && !isAuthoredRuntimeDiagnostic(realTagged) && parseRuntimeCandidates(realTagged)[0].isEngineFailure);
 
     const genuineMd = parseRuntimeCandidates([
       "[=ERROR=] 26.0 Error in MD script 'ai_influence_conversation' cue 'cancel_conversation' line 98: missing actor/template",

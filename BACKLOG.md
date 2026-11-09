@@ -42,6 +42,10 @@ Dev returns the raw read hash and byte count, and its guarded workspace write re
 
 Dev keeps explicit load evidence in a bounded log scan and distinguishes recent cue activity, incomplete evidence and a native deploy boundary. The scratch replay covered 12 MiB rollover, rotation, truncation, exact target bytes and the named deploy receipt. [Isolated evidence](docs/plans/2026-11-09-game-log-load-evidence.md). Exact X4 marker validation, installed and public delivery remain open.
 
+### X4 UI crash ownership `in_progress` (GitHub #52)
+
+Dev groups the widget error, Lua traceback and reload into one issue. A current physical extension match is required, and a truncated stack frame cannot claim a source line. [Paired scratch replay](docs/plans/2026-11-09-runtime-ui-crash-attribution.md). Cross-ingest grouping, menu-only ownership, exact engine evidence and installed delivery remain open.
+
 ### Lua registration advisory and boot coverage `in_progress` (GitHub #55)
 
 Dev lists added Lua paths in native deploy and shares the qualified restart advisory with Studio. [Advisory evidence](docs/plans/2026-11-09-deploy-lua-registration-advisory.md). Opt-in per-file markers now project through the three runtime views for exact loose and catalog installs, including addressed EOF recovery and bounded cross-tail evidence. [Boot evidence](docs/plans/2026-11-09-lua-boot-coverage.md). Actual warm reload and restart behavior, installed verification and public delivery remain open.

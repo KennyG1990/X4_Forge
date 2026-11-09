@@ -13,6 +13,7 @@ import { parseRuntimeLifecycle, type RuntimeLifecycleEvent } from '../lib/runtim
 import fs from "fs";
 import path from "path";
 import type { GameLogDeployBoundary } from "./gameLogLoadEvidence";
+import { installedRuntimeContentId } from "./installedExtensionRootFiles";
 import {
   attributeRuntimeCandidate,
   buildRuntimeOwnershipIndex,
@@ -61,7 +62,7 @@ import type { WorkspaceRecord } from "../lib/workspaceRegistry";
 
 export const RUNTIME_DEBUGGER_ADAPTER_SCHEMA_VERSION = 1 as const;
 export const RUNTIME_DEBUGGER_COVERAGE_TARGET = 0.99 as const;
-export const RUNTIME_DEBUGGER_ANALYZER_POLICY_VERSION = 3 as const;
+export const RUNTIME_DEBUGGER_ANALYZER_POLICY_VERSION = 4 as const;
 
 const INTERNAL_DEPLOY_KEY = "__forge_runtime_deploy_metadata__";
 const INTERNAL_EXPECTED_PREFIX = "__forge_runtime_expected__:";
@@ -402,6 +403,7 @@ function activeInput(
   const fallbackContentId = String(workspace.contentId || sourceBase || "runtime").trim();
   const contentId = contentIdFromManifest(manifest, fallbackContentId);
   const deployedFolder = deployedFolderFromInfo(deployInfo) || contentId;
+  const exactDeployFolder = basenameIdentity(deployInfo?.deployedPath);
   const sourceFolder = workspace.sourceFolder || "";
   const ids = unique([contentId, workspace.contentId || ""]);
   const deployedFolders = unique([deployedFolder, contentId]);
@@ -420,6 +422,7 @@ function activeInput(
     contentIds: ids,
     deployedFolder,
     deployedFolders,
+    exactDeployedFolders: exactDeployFolder ? [exactDeployFolder] : [],
     sourceFolder,
     sourceFolders: unique([sourceFolder, sourceBase || ""]),
     aliases,
@@ -555,11 +558,18 @@ function mergeInstalledExtension(
   const installedFolders = extensionDeployedFolders(installed);
   const explicitDeployFolder = deployedFolderFromInfo(deployInfo);
   const deployedFolder = explicitDeployFolder || installedFolders[0] || active.deployedFolder;
+  const physicalFolder = basenameIdentity(installed.deployedFolder || installed.deployedId);
+  const canonicalIds = deployInfo?.contentId ? [deployInfo.contentId] : active.contentIds || [];
+  const installedIds = extensionContentIds(installed);
+  const canonicalMatch = canonicalIds.some(id => installedIds.some(installedId => normalized(id) === normalized(installedId)));
   return {
     ...active,
     ...(deployedFolder ? { deployedFolder } : {}),
     contentIds: unique([...(active.contentIds || []), ...extensionContentIds(installed)]),
     deployedFolders: unique([deployedFolder || "", ...(active.deployedFolders || []), ...installedFolders]),
+    exactDeployedFolders: physicalFolder
+      ? canonicalMatch && (!explicitDeployFolder || normalized(physicalFolder) === normalized(explicitDeployFolder)) ? [physicalFolder] : []
+      : active.exactDeployedFolders,
     sourceFolders: unique([...(active.sourceFolders || []), ...extensionSourceFolders(installed)]),
     manifest,
     ...(installed.mdScripts?.length ? { mdScripts: [...(active.mdScripts || []), ...installed.mdScripts] } : {}),
@@ -848,6 +858,7 @@ function redactedExpectedSteps(results: readonly RuntimeExpectedStepResult[]): R
 }
 
 function runtimeIncidentPriority(incident: Pick<ReconstructedIncident, "attribution" | "isEngineFailure" | "classification" | "severity">): number {
+  if (incident.classification === "ui_reload_fault" && incident.attribution.disposition === "confirmed_active") return 450;
   if (incident.isEngineFailure && incident.attribution.disposition === "confirmed_active") return 400;
   if (incident.isEngineFailure && incident.attribution.disposition === "ambiguous") return 350;
   if (incident.isEngineFailure && incident.attribution.disposition === "unknown") return 300;
@@ -1280,6 +1291,13 @@ export class RuntimeDebuggerAdapter {
     const selectedIndex = selectCorrelatedInstalledExtension(active, inventory, deployInfo);
     if (selectedIndex !== undefined) {
       active = mergeInstalledExtension(active, inventory.extensions[selectedIndex], deployInfo);
+    }
+    // A cached inventory or an older receipt cannot confirm the identity of a replaced folder.
+    if (deployInfo?.deployedPath && !input.otherExtensions && this.installedInventory === defaultInventory) {
+      const game = resolveXsdConfig().x4GamePath;
+      const installedId = game && installedRuntimeContentId(path.join(game, "extensions"), deployInfo.deployedPath);
+      const expectedId = normalized(deployInfo.contentId || active.contentId);
+      active.exactDeployedFolders = installedId && installedId === expectedId ? active.exactDeployedFolders : [];
     }
     const otherExtensions = inventory.extensions.filter((_extension, index) => index !== selectedIndex);
     return {

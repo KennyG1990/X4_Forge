@@ -207,6 +207,8 @@ import { registerSelftests } from "./src/server/selftestRegistry";
 import { RuntimeDebuggerAdapter, expectedInputFromLegacy, runtimeDeployLogBoundary, type RuntimeDebuggerAdapterResult } from "./src/server/runtimeDebuggerAdapter";
 import { readGameLogLoadEvidence, type GameLogDeployBoundary } from "./src/server/gameLogLoadEvidence";
 import { installedLuaBootCoverage } from "./src/server/installedLuaBootCoverage";
+import { installedRuntimeContentId } from "./src/server/installedExtensionRootFiles";
+import { isAuthoredRuntimeDiagnostic, parseRuntimeCandidates, type RuntimeCandidateIncident } from "./src/lib/runtimeDebugger";
 import { runRuntimeDebuggerAdapterSelftest } from "./src/server/runtimeDebuggerAdapter.selftest";
 import {
   createAgentKeyStore,
@@ -1890,6 +1892,8 @@ type GameLogIssue = {
   lineNumber: number;
   text: string;
   matchesActiveMod: boolean;
+  engineSignature?: string | null;
+  classification?: "ui_reload_fault";
   sourceRef?: { kind: string; file?: string; line?: number; label?: string };
 };
 
@@ -2002,32 +2006,53 @@ function engineErrorSignature(text: string): string | null {
   return null;
 }
 
-function analyzeGameLog(tail: string, modIds: string[]): { issues: GameLogIssue[]; tailLines: string[] } {
+function analyzeGameLog(tail: string, modIds: string[], grouped?: {
+  candidates: RuntimeCandidateIncident[];
+  ownedFolder: string;
+}): { issues: GameLogIssue[]; tailLines: string[] } {
   // Match against a SET of candidate identifiers, not one. A hand-authored mod's real
   // extension folder/content id (e.g. "ai_influence_test") can differ from the id the
   // Studio derives from the display name (toSafeModId("AI Influence Test Mod") =
   // "ai_influence_test_mod"). Matching only the derived id silently misses the mod's real
   // log lines → a dangerous false "all clear". So we test every candidate.
   const mods = Array.from(new Set((modIds || []).map(m => (m || '').toLowerCase()).filter(m => m.length >= 3)));
-  const lines = tail.split(/\r?\n/).filter(line => line.trim().length > 0);
+  const lines = tail.split(/\r?\n/).map((text, index) => ({ text, line: index + 1 })).filter(row => row.text.trim());
   const baseLine = Math.max(1, lines.length - 1);
   const issuePattern = /\b(error|warning|failed|exception|invalid|not allowed|rejected|could not|unable to)\b/i;
-  const issues = lines
-    .map((text, index) => ({ text, index }))
-    .filter(({ text }) => issuePattern.test(text))
-    .map(({ text, index }) => ({
-      severity: /\b(warning|warn)\b/i.test(text) && !/\berror\b/i.test(text) ? "warning" as const : "error" as const,
+  const crashes = new Map(grouped?.candidates.filter(candidate => candidate.kind === 'ui_reload_fault')
+    .map(candidate => [candidate.startLine, candidate]));
+  const issues: GameLogIssue[] = [];
+  let crashEnd = 0;
+  for (const [index, { text, line }] of lines.entries()) {
+    if (line <= crashEnd) continue;
+    const crash = crashes.get(line);
+    if (crash) {
+      crashEnd = crash.endLine;
+      const matchesActiveMod = !!grouped?.ownedFolder && crash.source.extensionFolder === grouped.ownedFolder;
+      issues.push({
+        severity: 'error', lineNumber: baseLine + index, text: runtimeFaultSample(crash), matchesActiveMod,
+        engineSignature: crash.engineSignature, classification: 'ui_reload_fault',
+        ...(matchesActiveMod && crash.source.file ? { sourceRef: { kind: 'lua_file', file: crash.source.file, line: crash.source.line } } : {}),
+      });
+      continue;
+    }
+    if (!issuePattern.test(text)) continue;
+    const physicalFolder = /(?:^|[^\w.-])extensions[\\/]([a-z0-9_.-]+)[\\/]/i.exec(text)?.[1].toLowerCase();
+    issues.push({
+      severity: /\b(warning|warn)\b/i.test(text) && !/\berror\b/i.test(text) ? "warning" : "error",
       lineNumber: baseLine + index,
       text,
-      matchesActiveMod: mods.length > 0 && mods.some(m => text.toLowerCase().includes(m)),
+      matchesActiveMod: grouped && physicalFolder ? physicalFolder === grouped.ownedFolder
+        : mods.some(m => text.toLowerCase().includes(m)),
       sourceRef: mapLogLineToSourceRef(text),
       // B95: WHY this line counts (or does not) as a real runtime error. Reported, never silent.
       engineSignature: engineErrorSignature(text),
-    }));
+    });
+  }
 
   return {
     issues,
-    tailLines: lines.slice(-120)
+    tailLines: lines.slice(-120).map(row => row.text)
   };
 }
 
@@ -2109,16 +2134,16 @@ function deriveLogDiagnosis(tail: string, modIds: string[], activeIssues: { seve
  * Deterministic state model for the live feedback loop. Pure function so it can
  * be unit-tested with synthetic log content.
  */
-function computeGameStates(args: { tail: string; modIds: string[]; deployed: boolean; stale: boolean }) {
+function computeGameStates(args: { tail: string; modIds: string[]; deployed: boolean; stale: boolean; issues?: GameLogIssue[] }) {
   const { tail, modIds, deployed, stale } = args;
-  const { issues } = analyzeGameLog(tail, modIds);
+  const issues = args.issues ?? analyzeGameLog(tail, modIds).issues;
   const active = issues.filter(i => i.matchesActiveMod);
   const mods = (modIds || []).map(m => (m || '').toLowerCase()).filter(m => m.length >= 3);
   const seenByX4 = mods.some(m => tail.toLowerCase().includes(m));
   // B95: only ENGINE-shaped errors drive the verdict. A mod's own `[=ERROR=]` debug text still
   // appears in activeIssueCount — nothing is hidden — but it no longer says the mod is broken.
-  const engineErrors = active.filter(i => i.severity === 'error' && (i as any).engineSignature);
-  const authoredErrorLines = active.filter(i => i.severity === 'error' && !(i as any).engineSignature);
+  const engineErrors = active.filter(i => i.severity === 'error' && i.engineSignature && !isAuthoredRuntimeDiagnostic(i.text));
+  const authoredErrorLines = active.filter(i => i.severity === 'error' && (!i.engineSignature || isAuthoredRuntimeDiagnostic(i.text)));
   const runtimeErrors = engineErrors.length > 0;
   return {
     deployed,                                   // a Studio deploy happened
@@ -2127,7 +2152,7 @@ function computeGameStates(args: { tail: string; modIds: string[]; deployed: boo
     runtimeErrors,
     activeIssueCount: active.length,
     // Say WHY the verdict is what it is, so a false positive is diagnosable rather than discovered.
-    errorEvidence: engineErrors.slice(0, 5).map(i => ({ line: i.lineNumber, signature: (i as any).engineSignature, text: String(i.text).slice(0, 200) })),
+    errorEvidence: engineErrors.slice(0, 5).map(i => ({ line: i.lineNumber, signature: i.engineSignature, text: i.text.slice(0, 200) })),
     modAuthoredErrorLines: authoredErrorLines.length,
     ...(authoredErrorLines.length && !runtimeErrors
       ? { note: `${authoredErrorLines.length} line(s) contain "error" but carry no engine fault signature — they look like this mod's own debug output (X4's [=ERROR=] channel is writable by debug_text), so they do NOT mark the mod as failing.` }
@@ -2242,27 +2267,26 @@ function collectModLuaFiles(modId: string): { path: string; source: string; absP
 // genuine fault carries one of these distinctive engine strings instead.
 const ENGINE_FAULT_SIG = /invalid argument|got cdata|cannot run actions|error in (md|ai) (cue|script)|attempt to (call|index)|stack traceback|a nil value|no corresponding library|couldn't find end|not well-formed|premature end|unknown (parameter|keyword)|failed to (load|run|parse|compile)/i;
 
-// Attribute genuine engine faults to the mod by PROXIMITY to its own log markers: a
-// "GetComponentData(): Invalid argument … got cdata" thrown inside the mod's UIX reader is logged with no
-// cue/mod name, but right next to a "[AICHAT][UIX] …" line. Count only fault-signature lines adjacent to a
-// marker (the marker line itself is the mod's benign info, excluded) → precise RED, no heartbeat noise.
-function countModRuntimeErrors(tail: string, markers: string[]): { count: number; markerLines: number; samples: string[] } {
-  if (!markers.length) return { count: 0, markerLines: 0, samples: [] };
-  const lines = String(tail || "").split(/\r?\n/).slice(-2000);
-  const lc = lines.map(l => l.toLowerCase());
-  const markerIdx = new Set<number>();
-  for (let i = 0; i < lines.length; i++) if (markers.some(m => lc[i].includes(m))) markerIdx.add(i);
-  if (!markerIdx.size) return { count: 0, markerLines: 0, samples: [] };
-  const samples: string[] = [];
-  let count = 0;
-  for (let i = 0; i < lines.length; i++) {
-    if (markerIdx.has(i)) continue;            // the mod's own marker line = benign info, never the fault
-    if (!ENGINE_FAULT_SIG.test(lines[i])) continue;
-    let near = false;
-    for (let d = -3; d <= 3; d++) if (markerIdx.has(i + d)) { near = true; break; }
-    if (near) { count++; if (samples.length < 6) samples.push(lines[i].trim().slice(0, 200)); }
-  }
-  return { count, markerLines: markerIdx.size, samples };
+function runtimeFaultSample(candidate: RuntimeCandidateIncident): string {
+  const reload = candidate.evidence.find(item => item.label === 'UI reload')?.value;
+  return reload ? `${candidate.lines[0].trim().slice(0, 220)} … ${reload.slice(0, 220)}` : candidate.message.slice(0, 220);
+}
+
+function installedLogFolder(folder: string, deploy: LastDeployInfo | null): string {
+  const game = resolveXsdConfig().x4GamePath;
+  if (!game || !folder) return '';
+  const extensionsRoot = path.join(game, 'extensions');
+  const id = installedRuntimeContentId(extensionsRoot, deploy?.deployedPath || path.join(extensionsRoot, folder));
+  return id && (!deploy?.contentId || id === deploy.contentId.toLowerCase()) ? folder.toLowerCase() : '';
+}
+
+function summarizeModRuntime(tail: string, markers: string[], candidates: RuntimeCandidateIncident[], ownedFolder: string) {
+  const markerLines = markers.length ? tail.toLowerCase().split(/\r?\n/).slice(-2000)
+    .filter(line => markers.some(marker => line.includes(`[${marker}]`))).length : 0;
+  const faults = ownedFolder ? candidates.filter(candidate => candidate.isEngineFailure
+    && candidate.source.extensionFolder === ownedFolder
+    && (candidate.kind === 'ui_reload_fault' || /\.(?:lua|xpl)$/i.test(candidate.source.file || ''))) : [];
+  return { count: faults.length, markerLines, samples: faults.slice(-6).map(runtimeFaultSample) };
 }
 
 function luaBootStatus(modId: string, folder: string, logPath: string, deploy: LastDeployInfo | null) {
@@ -2296,7 +2320,7 @@ function getGameLogStatus(modIdInput?: string, workspaceName?: string, deployInf
   const bareId = modId.replace(/_mod$/, '');
   // The mod's OWN log marker(s), scanned from its Lua (e.g. "aichat" from `DebugError("[AICHAT][UIX] …")`).
   // This is what X4 actually prints — mods log under a prefix, not their extension id — so matching it is
-  // how the watcher recognises the mod's lines + the errors next to them. (Ken: "it's looking for ai_influence".)
+  // how the watcher recognises the mod's own activity lines.
   const modMarkers = collectModLogMarkers(modId);
   const modIds = Array.from(new Set([
     modId,
@@ -2310,7 +2334,7 @@ function getGameLogStatus(modIdInput?: string, workspaceName?: string, deployInf
     // NOTE: deliberately NOT including the mod's DebugError marker (e.g. "aichat") here. X4 emits EVERY
     // mod DebugError line as "[=ERROR=] … [AICHAT][UIX] …" — the only log channel a mod has — so matching
     // the marker in this generic error grep flags the mod's normal heartbeat as 34 false "errors". The
-    // marker is used for liveness (markersSeen) and precise runtime-fault attribution below, not here.
+    // marker is used for liveness (markersSeen).
   ].filter(s => s && s.length >= 3)));
   const candidates = findDebugLogCandidates();
   const selectedLogPath = candidates.find(candidate => fs.existsSync(candidate) && fs.statSync(candidate).isFile());
@@ -2347,7 +2371,11 @@ function getGameLogStatus(modIdInput?: string, workspaceName?: string, deployInf
       && [script, folder].some(id => id && loadIds.includes(id.toLowerCase()));
   }, relevantLastDeploy ? { at: relevantLastDeploy.deployedAt, boundary: gameLogDeployBoundaries.get(relevantLastDeploy) } : undefined);
   const { stat, tail, tailStartByte } = log;
-  const { issues, tailLines } = analyzeGameLog(tail, modIds);
+  const runtimeCandidates = /extensions[\\/]|CWidgetController::UpdateFrame|Reloading UI/i.test(tail) ? parseRuntimeCandidates(tail) : [];
+  const ownedFolder = runtimeCandidates.length
+    ? installedLogFolder(relevantLastDeploy ? recordedFolder || requestedLoadId : requestedLoadId, relevantLastDeploy)
+    : '';
+  const { issues, tailLines } = analyzeGameLog(tail, [...modIds, ...loadIds], { candidates: runtimeCandidates, ownedFolder });
   // CUE-CORRELATED ERRORS — tie each X4 error line back to the mod CUE that threw it (the error
   // line names the cue, e.g. "Error in MD cue ...worldsync.Tick: Cannot run actions of library
   // ...Do_sync"). This is the RED signal: which of the mod's own cues are failing, by name.
@@ -2366,11 +2394,8 @@ function getGameLogStatus(modIdInput?: string, workspaceName?: string, deployInf
     // GREEN — cues observed firing cleanly.
     firing: firingCues.slice(0, 16).map(c => ({ name: c.name, hits: c.hits })),
   };
-  // RUNTIME (Lua) ERRORS — the mod's own DebugError/print marker (e.g. "[AICHAT][UIX]") tags its lines,
-  // but a Lua engine error it triggers (e.g. "GetComponentData(): Invalid argument … got cdata") is logged
-  // as a bare [=ERROR=] line that names NO cue and NO mod. Attribute [=ERROR=] lines that sit right next to
-  // the mod's marker lines to the mod → this is the RED Ken wanted (errors the cue-grep alone can't see).
-  const runtime = countModRuntimeErrors(tail, modMarkers);
+  // Engine faults require source ownership. Authored markers still show activity.
+  const runtime = summarizeModRuntime(tail, modMarkers, runtimeCandidates, ownedFolder);
   // LUA STALENESS (#7, RC-killer class) — compare the RESIDENT Lua version the game
   // logged at boot (FORGE-LUAV marker) against the current on-disk file. X4 quickload
   // does NOT reload ui/*.lua, so a mismatch means the MD and Lua halves are running
@@ -2383,7 +2408,8 @@ function getGameLogStatus(modIdInput?: string, workspaceName?: string, deployInf
   const BENIGN_LOG_NOISE = /verify the file signature/i;
   const activeIssues = issues.filter(issue => issue.matchesActiveMod);
   const signatureNotices = activeIssues.filter(issue => BENIGN_LOG_NOISE.test(issue.text));
-  const activeErrors = activeIssues.filter(issue => issue.severity === "error" && !BENIGN_LOG_NOISE.test(issue.text));
+  const activeErrors = activeIssues.filter(issue => issue.severity === "error"
+    && !BENIGN_LOG_NOISE.test(issue.text) && !isAuthoredRuntimeDiagnostic(issue.text));
   const activeWarnings = activeIssues.filter(issue => issue.severity === "warning" && !BENIGN_LOG_NOISE.test(issue.text));
   const logUpdatedAt = stat.mtime.toISOString();
   const staleForLastDeploy = Boolean(relevantLastDeploy?.deployedAt && new Date(logUpdatedAt).getTime() < new Date(relevantLastDeploy.deployedAt).getTime());
@@ -2403,12 +2429,12 @@ function getGameLogStatus(modIdInput?: string, workspaceName?: string, deployInf
   // Per-cue ERRORS are the real RED signal — a cue throwing in the log is a fault regardless of the
   // mod-name grep. Escalate to errors and name the failing cues. Cue SILENCE is NOT a fault.
   if (cueLiveness.erroringCount > 0 && status !== "stale") status = "errors";
-  // Runtime Lua errors adjacent to the mod's marker are RED too, even when no cue is named.
+  // Source-owned runtime errors can be found even when no cue is named.
   if (runtime.count > 0 && status !== "stale") status = "errors";
   // Resident-Lua staleness is at least a WARNING — the mod halves are running mismatched versions.
   if (luaStaleness.restartRequired && status === "clean") status = "warnings";
   const runtimeNote = runtime.count > 0
-    ? ` ✗ ${runtime.count} runtime error(s) logged next to the mod's "${modMarkers.join('/')}" marker (likely the mod's Lua): ${runtime.samples.slice(0, 2).join(' | ')}`
+    ? ` ✗ ${runtime.count} runtime error(s) attributed to the mod's Lua source: ${runtime.samples.slice(0, 2).join(' | ')}`
     : "";
   const cueNote = cueLiveness.erroringCount > 0
     ? ` ✗ ${cueLiveness.erroringCount} of the mod's cues are THROWING ERRORS: ${cueLiveness.erroring.map(c => `${c.name}(${c.errors})`).join(', ')}.`
@@ -2418,7 +2444,7 @@ function getGameLogStatus(modIdInput?: string, workspaceName?: string, deployInf
         ? ` (No cue activity for this mod in the tail — a healthy mod that emits no debug markers logs nothing, so this alone is not a fault.)`
         : "";
   const staleNote = luaStaleness.restartRequired ? ` ${luaStaleness.summary}` : "";
-  const recent = computeGameStates({ tail, modIds, deployed: Boolean(relevantLastDeploy), stale: staleForLastDeploy });
+  const recent = computeGameStates({ tail, modIds, deployed: Boolean(relevantLastDeploy), stale: staleForLastDeploy, issues });
   const load = staleForLastDeploy ? null : log.load;
   const completeTail = tail.slice(tailStartByte > 0 ? tail.indexOf('\n') + 1 : 0, Math.max(0, tail.lastIndexOf('\n')));
   const activity = !staleForLastDeploy && (cueLiveness.firingCount > 0 || cueLiveness.erroringCount > 0
@@ -2442,6 +2468,7 @@ function getGameLogStatus(modIdInput?: string, workspaceName?: string, deployInf
   const absent = loadEvidence.status === 'not-observed';
   const states = {
     ...recent,
+    runtimeErrors: recent.runtimeErrors || runtime.count > 0,
     seenByX4: load || activity ? true : absent ? false : null,
     loadedCleanly: load ? load.fault ? false : log.coverageLimited ? null : true : absent ? false : null,
   };
@@ -2454,13 +2481,15 @@ function getGameLogStatus(modIdInput?: string, workspaceName?: string, deployInf
     : loadEvidence.status === 'deploy-boundary-unavailable' ? ' The deployment log boundary could not be established.'
     : '';
   const summary = baseSummary + cueNote + runtimeNote + staleNote + loadNote;
+  const displayIssue = (issue: GameLogIssue) => BENIGN_LOG_NOISE.test(issue.text) || isAuthoredRuntimeDiagnostic(issue.text)
+    ? { ...issue, severity: 'info' as const } : issue;
 
   return {
     status,
     modId,
     summary,
     cueLiveness,
-    // Mod runtime (Lua) errors detected by marker-proximity — RED even when no cue is named.
+    // Mod runtime (Lua) errors require an owning extension frame or source.
     modMarkers,
     modRuntime: { markersSeen: runtime.markerLines > 0, markerLines: runtime.markerLines, errorCount: runtime.count, samples: runtime.samples },
     // Resident-vs-disk Lua version check (#7). unknown_* verdicts are honest, not faults.
@@ -2482,12 +2511,12 @@ function getGameLogStatus(modIdInput?: string, workspaceName?: string, deployInf
       activeErrors: activeErrors.length,
       activeWarnings: activeWarnings.length
     },
-    issues: activeIssues.slice(-50),
-    recentGlobalIssues: issues.slice(-20),
+    issues: activeIssues.slice(-50).map(displayIssue),
+    recentGlobalIssues: issues.slice(-20).map(displayIssue),
     // Deterministic root-cause layer: named hypotheses + markersSeen (did the mod's own code run?).
     // Pass the mod's DebugError marker alongside the ids so "markers seen" reflects the mod actually
     // logging (its "[AICHAT][UIX] …" lines), even though the marker is kept out of the error grep above.
-    diagnosis: deriveLogDiagnosis(tail, [...modIds, ...modMarkers], activeIssues),
+    diagnosis: deriveLogDiagnosis(tail, [...modIds, ...modMarkers], activeErrors),
     tailLines
   };
 }
@@ -2502,7 +2531,7 @@ function classifyTimelineLine(line: string, lineNumber: number, modIds: string[]
   const isFileLoad = lc.includes("[fileio") || lc.includes("signature") || lc.includes("loading extension") || lc.includes(".xml'") || lc.includes(".lua'");
   const isIssue = /\b(error|warning|failed|exception|invalid|not allowed|rejected|could not|unable to)\b/i.test(raw);
 
-  if (ENGINE_FAULT_SIG.test(raw) && (markerHit || cueHit || modHit)) {
+  if (ENGINE_FAULT_SIG.test(raw) && !isAuthoredRuntimeDiagnostic(raw) && (cueHit || modHit)) {
     return { kind: "runtime_fault", severity: "error", label: "Runtime fault", lineNumber, evidence: raw.slice(0, 240) };
   }
   if (cueHit && isIssue) {
