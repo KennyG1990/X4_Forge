@@ -8,6 +8,7 @@ import {
   isAuthoredRuntimeDiagnostic,
   mapRuntimeCandidateToSource,
   mapRuntimeFileLineToNode,
+  parseRuntimeCandidateBatch,
   parseRuntimeCandidates,
   RUNTIME_DEBUGGER_LIMITS,
   type RuntimeCandidateIncident,
@@ -282,6 +283,21 @@ export function runRuntimeDebuggerSelftest(): RuntimeDebuggerSelftestResult {
     const reload = '[=ERROR=] 25.2 Errormessage: P:/SVN/temp/helper.lua:4267: Failed to create view for menu AIC_Hub. Reloading UI';
     const frame = '[string "extensions/x4_ai_influence/ui/ai_influence_chat.lua"]:42: in function onShowMenu';
     const uiCrash = (...frames: string[]) => parseRuntimeCandidates([widget, 'stack traceback:', ...frames, reload].join('\n'))[0];
+    const openBatch = parseRuntimeCandidateBatch([widget, 'stack traceback:', frame].join('\n'), { startLine: 10 });
+    check('trailing_widget_batch_reports_exact_open_start', openBatch.openUiFaultStartLine === 10
+      && openBatch.candidates[0]?.endLine === 12);
+    const closedBatch = parseRuntimeCandidateBatch([widget, 'stack traceback:', frame, reload].join('\n'));
+    check('exact_reload_closes_the_widget_batch', closedBatch.openUiFaultStartLine === undefined
+      && closedBatch.candidates.length === 1);
+    const separatedBatch = parseRuntimeCandidateBatch([widget, 'stack traceback:', '', frame, reload].join('\n'));
+    check('physical_separator_closes_widget_before_later_lines', separatedBatch.openUiFaultStartLine === undefined
+      && separatedBatch.candidates[0]?.endLine === 2 && !separatedBatch.candidates[0]?.source.extensionFolder);
+    const isolatedBatch = parseRuntimeCandidateBatch([widget, 'stack traceback:', frame, reload].join('\n'), undefined, new Set([3]));
+    check('truncated_physical_line_cannot_extend_a_widget_group', isolatedBatch.openUiFaultStartLine === undefined
+      && isolatedBatch.candidates[0]?.endLine === 2 && !isolatedBatch.candidates[0]?.source.extensionFolder);
+    const cappedBatch = parseRuntimeCandidateBatch([widget, ...Array(79).fill('  continuation')].join('\n'));
+    check('widget_group_line_limit_closes_the_batch', cappedBatch.openUiFaultStartLine === undefined
+      && cappedBatch.candidates[0]?.endLine === 80);
     const paired = uiCrash(frame);
     const pairedOwner = attributeRuntimeCandidate(ownership, paired);
     const pairedMapping = mapRuntimeCandidateToSource(ownership, { ...paired, attribution: pairedOwner });

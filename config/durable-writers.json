@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceFingerprint": "f9ff0d292673efcf2a3ae56a80202b7d03cb04866b2a3d62422c76ea6f1c48d9",
+  "sourceFingerprint": "7d525325fb5211818ae4f37cd37a4597f3eb73b8af4a1b4fc8aba2395c3d0683",
   "policy": "Every raw production filesystem mutation source is count-pinned here. Authoritative files use atomic sibling promotion; stronger tree, archive, append-log, SQLite, retention, ephemeral, and fixture contracts remain explicit exceptions.",
   "writers": [
     {
@@ -150,7 +150,7 @@
     },
     {
       "file": "src/lib/runtimeDebugSession.selftest.ts",
-      "calls": { "writeFileSync": 5, "rmSync": 1, "mkdtempSync": 1 },
+      "calls": { "writeFileSync": 6, "rmSync": 1, "mkdtempSync": 1 },
       "categories": ["fixture-only"],
       "owners": ["runRuntimeDebugSessionSelftest"],
       "rationale": "Creates bounded cursor/session, corruption, and failed-promotion fixtures only beneath one unique temporary root.",
@@ -278,7 +278,7 @@
     },
     {
       "file": "src/server/runtimeDebuggerAdapter.selftest.ts",
-      "calls": { "writeFileSync": 16, "appendFileSync": 3, "mkdirSync": 1, "rmSync": 1, "mkdtempSync": 1 },
+      "calls": { "writeFileSync": 17, "appendFileSync": 6, "mkdirSync": 1, "rmSync": 1, "mkdtempSync": 1 },
       "categories": ["fixture-only"],
       "owners": ["runRuntimeDebuggerAdapterSelftest", "appendLine"],
       "rationale": "Creates disposable debug-log and corrupt persisted-session fixtures beneath one unique temporary adapter root and appends bounded log evidence for selection and rotation cases.",

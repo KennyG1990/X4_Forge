@@ -227,6 +227,12 @@ or Runtime Debugger. The compatibility watcher exposes it under
 It counts absent markers. A manual install without a known deploy boundary
 needs a fresh run after Forge starts observing.
 
+In the addressed Runtime Debugger, `coverage.pendingUiCrash` identifies the
+first and last complete lines of a widget crash still arriving in the log.
+Coverage stays unconfirmed while that span is open. After the matching
+traceback and reload arrive, the debugger reports one incident with any
+verified extension ownership and source coordinates.
+
 ---
 
 ## 5. Ground every API shape in the corpus — the highest-value habit

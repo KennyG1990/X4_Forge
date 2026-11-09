@@ -117,6 +117,10 @@ export function runRuntimeDebuggerViewSelftest(): RuntimeDebuggerViewSelftestRes
   try {
     const zero = buildRuntimeDebuggerViewModel(payload({ incidents: [], coverage: coverage(0, 0, true) }));
     check('zero_candidates_is_not_clean', zero.coverage.status === 'no_candidates' && zero.coverage.met === false && zero.noCandidateMessage?.includes('No runtime candidates were observed') === true, zero);
+    const pending = buildRuntimeDebuggerViewModel(payload({ incidents: [],
+      coverage: { ...coverage(0, 0, true), pendingUiCrash: { firstLine: 4, lastLine: 7 } } }));
+    check('pending_ui_crash_has_its_own_coverage_notice', !pending.coverage.met && !pending.noCandidateMessage
+      && pending.coverage.statusLabel === 'Waiting for the rest of the UI crash log', pending);
 
     const historical = buildRuntimeDebuggerViewModel(payload({
       session: { state: 'historical', detail: 'retained previous session' },

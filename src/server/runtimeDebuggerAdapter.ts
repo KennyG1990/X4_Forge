@@ -21,7 +21,7 @@ import {
   evaluateExpectedRuntimeSteps,
   explainRuntimeCandidate,
   mapRuntimeCandidateToSource,
-  parseRuntimeCandidates,
+  parseRuntimeCandidateBatch,
   type RuntimeAnalyzedCandidate,
   type RuntimeAttribution,
   type RuntimeCandidateIncident,
@@ -37,6 +37,8 @@ import {
 import {
   RuntimeDebugSessionStore,
   RUNTIME_DEBUG_SESSION_DIR,
+  RUNTIME_DEBUG_MAX_PENDING_NORMALIZATION_BYTES,
+  RUNTIME_DEBUG_MAX_PENDING_NORMALIZATION_LINES,
   type RuntimeDebugFileStat,
   type RuntimeDebugIncidentInput,
   type RuntimeDebugIncident,
@@ -62,7 +64,7 @@ import type { WorkspaceRecord } from "../lib/workspaceRegistry";
 
 export const RUNTIME_DEBUGGER_ADAPTER_SCHEMA_VERSION = 1 as const;
 export const RUNTIME_DEBUGGER_COVERAGE_TARGET = 0.99 as const;
-export const RUNTIME_DEBUGGER_ANALYZER_POLICY_VERSION = 4 as const;
+export const RUNTIME_DEBUGGER_ANALYZER_POLICY_VERSION = 5 as const;
 
 const INTERNAL_DEPLOY_KEY = "__forge_runtime_deploy_metadata__";
 const INTERNAL_EXPECTED_PREFIX = "__forge_runtime_expected__:";
@@ -709,14 +711,11 @@ function incidentInputs(
   });
 }
 
-function analyzeLines(
-  lines: readonly RuntimeDebugLine[],
+function analyzeCandidates(
+  parsed: readonly RuntimeCandidateIncident[],
   ownership: RuntimeOwnershipIndex,
   inventoryComplete: boolean,
 ): RuntimeAnalyzedCandidate[] {
-  if (!lines.length) return [];
-  const text = lines.map(line => line.text).join("\n");
-  const parsed = parseRuntimeCandidates(text, { startLine: lines[0].lineNumber });
   return parsed.map(candidate => {
     const normalizedCandidate: RuntimeCandidateIncident = isGovernedAuthoredMarker(candidate)
       ? { ...candidate, kind: "authored_diagnostic", recognized: true, explicitUnknown: false, isEngineFailure: false }
@@ -1559,15 +1558,27 @@ export class RuntimeDebuggerAdapter {
         const event = parseRuntimeLifecycle(line.text, ownership.active.contentIds);
         return event?.event === 'save-loaded' || event?.event === 'game-started' ? event.event : undefined;
       },
-      normalizeLines: (lines, segment) => {
+      normalizeLines: (lines, segment, { canDefer }) => {
         const lifecycle = lines.map(line => ({ line, event: line.truncated ? null : parseRuntimeLifecycle(line.text, ownership.active.contentIds) }));
-        ingestedLines = lifecycle.filter(item => !item.event).map(item => item.line);
-        analyzedBatch = analyzeLines(ingestedLines, ownership.index, ownership.inventory.complete);
-        return [...incidentInputs(analyzedBatch, ingestedLines, segment.id, ownership.active, keyCache), ...lifecycle.filter(item => item.event).map(({ line, event }) => ({
+        // Keep physical line positions. Lifecycle rows separate candidates even when their own
+        // evidence is projected elsewhere, and truncated rows cannot extend an exact traceback.
+        const isolatedLines = new Set(lines.filter(line => line.truncated).map(line => line.lineNumber));
+        const parsed = parseRuntimeCandidateBatch(lifecycle.map(({ line, event }) => event ? '' : line.text).join("\n"),
+          { startLine: lines[0].lineNumber }, isolatedLines);
+        const open = canDefer && lines.find(line => line.lineNumber === parsed.openUiFaultStartLine);
+        const last = lines[lines.length - 1];
+        const deferFromLine = open && last.lineNumber - open.lineNumber < RUNTIME_DEBUG_MAX_PENDING_NORMALIZATION_LINES
+          && last.endByte - open.startByte <= RUNTIME_DEBUG_MAX_PENDING_NORMALIZATION_BYTES ? open.lineNumber : undefined;
+        ingestedLines = lifecycle.filter(({ line, event }) => !event && (deferFromLine === undefined || line.lineNumber < deferFromLine))
+          .map(item => item.line);
+        analyzedBatch = analyzeCandidates(parsed.candidates.filter(candidate => candidate.startLine !== deferFromLine),
+          ownership.index, ownership.inventory.complete);
+        const incidents = [...incidentInputs(analyzedBatch, ingestedLines, segment.id, ownership.active, keyCache), ...lifecycle.filter(item => item.event).map(({ line, event }) => ({
           key: INTERNAL_LIFECYCLE_PREFIX + (event?.event.startsWith('helper-') ? 'helper-status' : line.startByte), replaceAttributes: true, summary: 'Attributed mod lifecycle report',
           classification: 'runtime_lifecycle', severity: 'info', attributes: { runtimeInternal: 'lifecycle', event: JSON.stringify(event) },
           segmentId: segment.id, position: line,
         }))];
+        return { incidents, deferFromLine };
       },
     });
     if (ingest.ok === false) ingestFailure = ingest;
@@ -1621,7 +1632,9 @@ export class RuntimeDebuggerAdapter {
     const effectiveDropped = snapshot ? postPolicyDropped(snapshot, policyBoundary) : undefined;
     const dropped = effectiveDropped ? effectiveDropped.incidents + effectiveDropped.segments : 1;
     const coverage = coverageFor(state === "current" ? currentIncidents : relevantIncidents.filter(incident => !isInternalKey(incident.key)), dropped);
-    if (logRead.state !== 'caught-up') coverage.met = false;
+    const pending = snapshot?.pendingNormalization;
+    if (logRead.state !== 'caught-up' || pending) coverage.met = false;
+    if (pending) coverage.pendingUiCrash = { firstLine: pending.startLine, lastLine: pending.endLine };
     const expected = snapshot
       ? this.currentExpected(expectedSteps, state, snapshot, ingestedLines, analyzedBatch)
       : evaluateExpectedRuntimeSteps(expectedSteps, { available: false, lines: [] });
@@ -1664,7 +1677,9 @@ export class RuntimeDebuggerAdapter {
           ? "Current successful-deploy session; log ingestion is incremental and bounded."
           : "Historical pre-baseline evidence is retained; it cannot satisfy current-session verdicts.";
     const publicExpected = redactedExpectedSteps(expected.slice(0, MAX_RESPONSE_EXPECTED));
-    const publicVerdict: RuntimeDebuggerVerdict = { ...verdict, detail: redactedText(logRead.state === 'caught-up' ? verdict.detail : sessionDetail, 2048) };
+    const detail = logRead.state !== 'caught-up' ? sessionDetail
+      : pending && verdict.state === 'not_seen' ? 'Waiting for the rest of the UI crash log before resolving the incident.' : verdict.detail;
+    const publicVerdict: RuntimeDebuggerVerdict = { ...verdict, detail: redactedText(detail, 2048) };
     const authority: RuntimeDebuggerAuthority = {
       workspaceId,
       displayName: redactedText(ownership.active.displayName, 512, "runtime workspace"),

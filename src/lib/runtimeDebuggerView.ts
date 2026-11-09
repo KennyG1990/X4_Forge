@@ -30,6 +30,7 @@ export interface RuntimeDebuggerSession {
 export type RuntimeDebuggerCoverage = RuntimeCoverage & {
   target: number;
   met: boolean;
+  pendingUiCrash?: { firstLine: number; lastLine: number };
 };
 
 /** Additive fields supplied by the UI adapter without changing canonical analysis shapes. */
@@ -464,10 +465,11 @@ export function buildRuntimeDebuggerViewModel(payload: RuntimeDebuggerPayload): 
   const ratio = candidates > 0 ? recognizedOrExplicitUnknown / candidates : null;
   const target = normalizeTarget(rawCoverage?.target);
   const targetPercent = Math.round(target * 100);
+  const pendingUiCrash = rawCoverage?.pendingUiCrash;
   const arithmeticMet = candidates > 0 && ratio !== null && ratio >= target && silentlyDropped === 0;
   // The adapter's met flag is authoritative, but a zero-candidate or silently
   // dropped result is never allowed to become a clean-looking presentation.
-  const met = arithmeticMet && rawCoverage?.met === true;
+  const met = arithmeticMet && rawCoverage?.met === true && !pendingUiCrash;
   const state = normalizeSessionState(payload?.session?.state);
   const status: RuntimeDebuggerViewModel['coverage']['status'] = state === 'unavailable'
     ? 'unavailable'
@@ -479,7 +481,8 @@ export function buildRuntimeDebuggerViewModel(payload: RuntimeDebuggerPayload): 
           ? 'met'
           : 'below_target';
   const ratioLabel = ratio === null ? 'no candidates' : `${Math.round(ratio * 100)}%`;
-  const statusLabel = status === 'met'
+  const statusLabel = pendingUiCrash ? 'Waiting for the rest of the UI crash log'
+    : status === 'met'
     ? `${targetPercent}% recognition target met`
     : status === 'below_target'
       ? `${ratioLabel} recognized-or-explicit-unknown · below ${targetPercent}% target`
@@ -497,7 +500,7 @@ export function buildRuntimeDebuggerViewModel(payload: RuntimeDebuggerPayload): 
     : state === 'historical'
       ? 'HISTORICAL SESSION'
       : 'SESSION UNAVAILABLE';
-  const noCandidateMessage = state === 'current' && candidates === 0
+  const noCandidateMessage = state === 'current' && candidates === 0 && !pendingUiCrash
     ? 'No runtime candidates were observed in the current session. This is not a clean proof.'
     : state === 'historical'
       ? 'Historical runtime evidence is shown; it cannot prove the current session is clean.'

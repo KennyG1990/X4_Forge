@@ -941,29 +941,43 @@ export interface RuntimeParseOptions {
 
 /** Parse failure-like log lines into bounded multiline candidates. */
 export function parseRuntimeCandidates(logText: string, options?: RuntimeParseOptions): RuntimeCandidateIncident[] {
+  return parseRuntimeCandidateBatch(logText, options).candidates;
+}
+
+/** Expose the one trailing widget group that could still accept a later line. */
+export function parseRuntimeCandidateBatch(logText: string, options?: RuntimeParseOptions, isolatedLines?: ReadonlySet<number>) {
   const requestedBaseLine = options?.startLine ?? options?.baseLine ?? 1;
   const baseLine = Number.isFinite(requestedBaseLine) ? Math.max(1, Math.floor(requestedBaseLine)) : 1;
   const lines = String(logText ?? '').split(/\r?\n/).map((line, index) => parseLogLine(line, index + baseLine));
   const candidates: RuntimeCandidateIncident[] = [];
+  let openUiFaultStartLine: number | undefined;
   for (let index = 0; index < lines.length; index++) {
     if (!isCandidateStart(lines[index]) || !lines[index].text.trim()) continue;
     const group = [lines[index]];
     const widget = isUiWidgetFault(lines[index].text);
     const orphanReload = isUiReload(lines[index].text);
+    const isolated = isolatedLines?.has(lines[index].lineNumber);
     let cursor = index + 1;
-    while (!orphanReload && cursor < lines.length && group.length < 80) {
+    let closedByReload = false;
+    while (!isolated && !orphanReload && cursor < lines.length && group.length < 80) {
       const next = lines[cursor];
-      if (isUiWidgetFault(next.text)) break;
+      if (isolatedLines?.has(next.lineNumber) || isUiWidgetFault(next.text)) break;
       const reload = isUiReload(next.text);
       if (reload ? !widget : !isContinuation(next) && !(widget && luaExtensionFrame(next.text))) break;
       group.push(next);
       cursor++;
-      if (reload) break;
+      if (reload) {
+        closedByReload = true;
+        break;
+      }
+    }
+    if (widget && !isolated && !closedByReload && cursor === lines.length && group.length < 80) {
+      openUiFaultStartLine = lines[index].lineNumber;
     }
     candidates.push(parseCandidate(group));
     index = cursor - 1;
   }
-  return candidates;
+  return { candidates, openUiFaultStartLine };
 }
 
 /** Compatibility alias for adapters that call the parser a log parser. */

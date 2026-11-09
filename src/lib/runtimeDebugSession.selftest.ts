@@ -3,10 +3,13 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { createHash } from "crypto";
 import {
+  RUNTIME_DEBUG_MAX_PENDING_NORMALIZATION_LINES,
   RuntimeDebugSessionStore,
   type RuntimeDebugFileStat,
   type RuntimeDebugIncidentInput,
+  type RuntimeDebugIngestInput,
   type RuntimeDebugLine,
 } from "./runtimeDebugSession";
 
@@ -116,6 +119,181 @@ export function runRuntimeDebugSessionSelftest(): {
     bytes = Buffer.concat([bytes, Buffer.from("AFTER_RESTART\n", "utf8")]);
     const afterRestart = restartStore.ingest({ workspaceId: workspace, logPath: firstPath, profileId: "profile-a" });
     check("restart_reads_only_new_bytes_once", afterRestart.ok && afterRestart.bytesRead === Buffer.byteLength("AFTER_RESTART\n", "utf8") && afterRestart.lines.map(line => line.text).join("\n") === "AFTER_RESTART", JSON.stringify(afterRestart));
+
+    // A normalized suffix is a bounded raw-byte reference, independent of the partial line.
+    const pendingPrefix = Buffer.concat([Buffer.from("OPEN_WIDGET "), Buffer.from([0xff]), Buffer.from("\r\nTRACEBACK\n")]);
+    const pendingInput: RuntimeDebugIngestInput = {
+      workspaceId: "ws_runtime_session_pending",
+      logPath: firstPath,
+      profileId: "profile-a",
+      normalizeLines: (lines, _segment, { canDefer }) => {
+        const first = lines.find(line => line.text.startsWith("OPEN_WIDGET"));
+        const reload = lines.find(line => line.text === "RELOAD");
+        if (!first) return [];
+        if (canDefer && !reload) return { incidents: [], deferFromLine: first.lineNumber };
+        return [{ key: "widget", summary: reload ? "grouped reload" : "widget only", position: { ...first, endByte: reload?.endByte ?? first.endByte } }];
+      },
+    };
+    setFixture(firstPath, Buffer.concat([pendingPrefix, Buffer.from("REL")]), "pending-file");
+    const pendingFirst = makeStore().ingest(pendingInput);
+    const pendingPath = makeStore().storagePathFor(pendingInput.workspaceId);
+    const pendingStateText = fs.readFileSync(pendingPath, "utf8");
+    const expectedSpan = pendingFirst.ok ? pendingFirst.snapshot.pendingNormalization : undefined;
+    check("pending_span_persists_raw_digest_without_copying_log_or_counting_incident",
+      pendingFirst.ok && expectedSpan?.sha256 === createHash("sha256").update(pendingPrefix).digest("hex")
+      && expectedSpan.startByte === 0 && expectedSpan.endByte === pendingPrefix.length && expectedSpan.startLine === 1 && expectedSpan.endLine === 2
+      && pendingFirst.snapshot.cursor.byteOffset === pendingPrefix.length + 3
+      && pendingFirst.snapshot.cursor.partialLineStartByte === pendingPrefix.length
+      && pendingFirst.snapshot.counts.incidentOccurrences === 0 && !pendingStateText.includes("OPEN_WIDGET"), JSON.stringify(pendingFirst));
+    const pendingRestart = makeStore();
+    readRequests.length = 0;
+    const idle = pendingRestart.ingest(pendingInput);
+    check("restart_reopens_only_bounded_span_and_idle_does_not_count_it",
+      idle.ok && idle.bytesRead === 0 && idle.lines.length === 0 && idle.snapshot.counts.linesRead === 2
+      && idle.snapshot.counts.incidentOccurrences === 0 && idle.snapshot.pendingNormalization?.sha256 === expectedSpan?.sha256
+      && readRequests.length > 0 && readRequests.every(request => request.position + request.length <= pendingPrefix.length && request.length <= 17),
+      JSON.stringify({ idle, readRequests }));
+    bytes = Buffer.concat([bytes, Buffer.from("OAD\n")]);
+    const pendingCloseFailure = makeStore({ beforeRename: () => { throw new Error("injected pending promotion failure"); } }).ingest(pendingInput);
+    const stillPending = pendingRestart.readSnapshot(pendingInput.workspaceId);
+    check("failed_promotion_preserves_old_cursor_and_pending_span",
+      !pendingCloseFailure.ok && stillPending.ok && stillPending.snapshot.cursor.byteOffset === pendingPrefix.length + 3
+      && stillPending.snapshot.pendingNormalization?.sha256 === expectedSpan?.sha256 && stillPending.snapshot.counts.incidentOccurrences === 0);
+    const completedPending = pendingRestart.ingest(pendingInput);
+    const afterCompleted = makeStore().ingest(pendingInput);
+    check("completed_partial_line_finishes_one_incident_once_across_restart",
+      completedPending.ok && completedPending.lines.length === 1 && completedPending.lines[0].text === "RELOAD" && completedPending.bytesRead === 4
+      && completedPending.snapshot.counts.linesRead === 3 && completedPending.snapshot.counts.bytesRead === bytes.length
+      && completedPending.snapshot.incidents.length === 1 && completedPending.snapshot.incidents[0].summary === "grouped reload"
+      && completedPending.snapshot.incidents[0].first.lineNumber === 1 && completedPending.snapshot.incidents[0].first.endByte === bytes.length
+      && !completedPending.snapshot.pendingNormalization
+      && afterCompleted.ok && afterCompleted.snapshot.counts.incidentOccurrences === 1, JSON.stringify(completedPending));
+
+    const growingInput = { ...pendingInput, workspaceId: "ws_runtime_session_pending_growing" };
+    setFixture(firstPath, "OPEN_WIDGET\n", "growing-file");
+    const growingStore = makeStore();
+    const growingStart = growingStore.ingest(growingInput);
+    bytes = Buffer.concat([bytes, Buffer.from("TRACEBACK\r\n")]);
+    const growing = growingStore.ingest(growingInput);
+    check("growing_span_rebinds_the_exact_prefix_and_new_complete_line",
+      growingStart.ok && growingStart.snapshot.pendingNormalization?.endLine === 1
+      && growing.ok && growing.snapshot.pendingNormalization?.endLine === 2 && growing.snapshot.pendingNormalization.endByte === bytes.length
+      && growing.snapshot.pendingNormalization.sha256 === createHash("sha256").update(bytes).digest("hex")
+      && growing.snapshot.counts.incidentOccurrences === 0 && growing.snapshot.counts.linesRead === 2,
+      JSON.stringify(growing));
+
+    const unreadableInput = { ...pendingInput, workspaceId: "ws_runtime_session_pending_unreadable" };
+    setFixture(firstPath, pendingPrefix, "unreadable-file");
+    const unreadableStart = makeStore().ingest(unreadableInput);
+    bytes = Buffer.concat([pendingPrefix, Buffer.from("RELOAD\n")]);
+    const unreadable = makeStore({
+      read: (filePath, position, length) => {
+        if (position < pendingPrefix.length) throw new Error("injected lookback read refusal");
+        return read(filePath, position, length);
+      },
+    }).ingest(unreadableInput);
+    check("unreadable_pending_span_degrades_without_losing_fresh_cursor_progress",
+      unreadableStart.ok && unreadable.ok && unreadable.status === "degraded" && unreadable.bytesRead === 7
+      && unreadable.lines.length === 1 && unreadable.lines[0].text === "RELOAD" && unreadable.snapshot.cursor.byteOffset === bytes.length
+      && unreadable.snapshot.incidents.length === 0 && !unreadable.snapshot.pendingNormalization && unreadable.snapshot.dropped.incidents === 1,
+      JSON.stringify(unreadable));
+
+    const changedInput = { ...pendingInput, workspaceId: "ws_runtime_session_pending_changed" };
+    setFixture(firstPath, pendingPrefix, "same-inode");
+    const changedStore = makeStore();
+    const changedStart = changedStore.ingest(changedInput);
+    // Replace an invalid UTF-8 byte with another that decodes to the same character.
+    bytes = Buffer.concat([pendingPrefix, Buffer.from("RELOAD\n")]);
+    bytes[Buffer.byteLength("OPEN_WIDGET ")] = 0xfe;
+    const changed = changedStore.ingest(changedInput);
+    check("raw_same_identity_rewrite_drops_pending_evidence_without_cross_splice",
+      changedStart.ok && changed.ok && changed.status === "degraded" && !changed.snapshot.pendingNormalization
+      && changed.snapshot.incidents.length === 0 && changed.snapshot.dropped.incidents === 1
+      && changed.snapshot.dropped.evidenceBytes === pendingPrefix.length, JSON.stringify(changed));
+
+    const partialRewriteInput = { ...pendingInput, workspaceId: "ws_runtime_session_pending_partial_changed" };
+    setFixture(firstPath, Buffer.concat([pendingPrefix, Buffer.from("REL")]), "same-inode");
+    const partialRewriteStart = makeStore().ingest(partialRewriteInput);
+    bytes = Buffer.concat([pendingPrefix, Buffer.from("xxxOAD\n")]);
+    const partialRewrite = makeStore().ingest(partialRewriteInput);
+    check("same_identity_partial_rewrite_cannot_synthesize_reload_or_join_pending_widget",
+      partialRewriteStart.ok && partialRewrite.ok && partialRewrite.status === "degraded"
+      && partialRewrite.lines.length === 1 && partialRewrite.lines[0].text === "xxxOAD" && partialRewrite.lines[0].lineNumber === 3
+      && partialRewrite.snapshot.incidents.length === 0 && !partialRewrite.snapshot.pendingNormalization
+      && partialRewrite.snapshot.dropped.incidents === 1 && partialRewrite.snapshot.dropped.evidenceBytes === pendingPrefix.length, JSON.stringify(partialRewrite));
+
+    const crossingRewriteInput = { ...pendingInput, workspaceId: "ws_runtime_session_pending_crossing_rewrite" };
+    setFixture(firstPath, pendingPrefix, "same-inode");
+    const crossingRewriteStart = makeStore().ingest(crossingRewriteInput);
+    bytes = Buffer.concat([pendingPrefix, Buffer.from("RELOAD\nOTHER\n")]);
+    let swapped = false;
+    const crossingRewrite = makeStore({
+      read: (filePath, position, length) => {
+        const chunk = read(filePath, position, length);
+        if (!swapped && position === pendingPrefix.length) {
+          // The cursor read observes an old complete reload. Both subsequent reads see the
+          // same inode and size, with the original pending prefix and a different fresh row.
+          bytes = Buffer.concat([pendingPrefix, Buffer.from("R0LOAD\nOTHER\n")]);
+          swapped = true;
+        }
+        return chunk;
+      },
+    }).ingest(crossingRewriteInput);
+    check("fresh_read_generation_swap_cannot_finalize_crossing_incident",
+      crossingRewriteStart.ok && swapped && crossingRewrite.ok && crossingRewrite.status === "degraded"
+      && crossingRewrite.lines.map(line => line.text).join("\n") === "R0LOAD\nOTHER"
+      && crossingRewrite.snapshot.incidents.length === 0 && !crossingRewrite.snapshot.pendingNormalization
+      && crossingRewrite.snapshot.dropped.incidents === 1 && crossingRewrite.snapshot.cursor.byteOffset === bytes.length,
+      JSON.stringify(crossingRewrite));
+
+    const idleLossInput = { ...pendingInput, workspaceId: "ws_runtime_session_pending_idle_partial_loss" };
+    setFixture(firstPath, Buffer.concat([pendingPrefix, Buffer.from("REL")]), "same-inode");
+    const idleLossStart = makeStore().ingest(idleLossInput);
+    bytes = Buffer.concat([pendingPrefix, Buffer.from("XXX")]);
+    bytes[Buffer.byteLength("OPEN_WIDGET ")] = 0xfe;
+    const idleLoss = makeStore().ingest(idleLossInput);
+    check("idle_lost_span_drops_adjacent_cached_partial_bytes_at_original_position",
+      idleLossStart.ok && idleLoss.ok && idleLoss.bytesRead === 0 && idleLoss.status === "degraded" && !idleLoss.snapshot.pendingNormalization
+      && idleLoss.snapshot.cursor.byteOffset === bytes.length && idleLoss.snapshot.cursor.partialLineStartByte === pendingPrefix.length
+      && idleLoss.snapshot.cursor.partialLineBytes === 0 && idleLoss.snapshot.cursor.partialLineDroppedBytes === 3
+      && idleLoss.snapshot.dropped.partialLineBytes === 3, JSON.stringify(idleLoss));
+    bytes = Buffer.concat([bytes, Buffer.from("OAD\nOTHER\n")]);
+    const idleLossCompleted = makeStore().ingest(idleLossInput);
+    check("lost_partial_remainder_stays_unparseable_through_later_lf_and_restart",
+      idleLossCompleted.ok && idleLossCompleted.lines.length === 2
+      && idleLossCompleted.lines[0].text === "" && idleLossCompleted.lines[0].truncated
+      && idleLossCompleted.lines[0].startByte === pendingPrefix.length && idleLossCompleted.lines[0].lineNumber === 3
+      && idleLossCompleted.lines[1].text === "OTHER" && idleLossCompleted.lines[1].lineNumber === 4
+      && idleLossCompleted.snapshot.cursor.byteOffset === bytes.length && idleLossCompleted.snapshot.dropped.partialLineBytes === 6
+      && idleLossCompleted.snapshot.incidents.length === 0, JSON.stringify(idleLossCompleted));
+
+    const lifecycleInput: RuntimeDebugIngestInput = {
+      ...pendingInput,
+      workspaceId: "ws_runtime_session_pending_boundary",
+      boundaryForLine: line => line.text === "NEW_GAME" ? "game-started" : undefined,
+    };
+    setFixture(firstPath, pendingPrefix, "lifecycle-file");
+    const lifecycleStore = makeStore();
+    const lifecycleStart = lifecycleStore.ingest(lifecycleInput);
+    bytes = Buffer.concat([bytes, Buffer.from("NEW_GAME\nRELOAD\n")]);
+    const lifecycle = lifecycleStore.ingest(lifecycleInput);
+    check("lifecycle_flush_cannot_defer_and_keeps_old_widget_in_old_segment",
+      lifecycleStart.ok && lifecycle.ok && !lifecycle.snapshot.pendingNormalization && lifecycle.snapshot.incidents.length === 1
+      && lifecycle.snapshot.incidents[0].summary === "widget only" && lifecycle.snapshot.incidents[0].segmentId === lifecycleStart.snapshot.currentSegmentId
+      && lifecycle.snapshot.currentSegmentId !== lifecycleStart.snapshot.currentSegmentId, JSON.stringify(lifecycle));
+
+    const capInput = { ...pendingInput, workspaceId: "ws_runtime_session_pending_cap" };
+    setFixture(firstPath, "OPEN_WIDGET\n" + "TRACE\n".repeat(RUNTIME_DEBUG_MAX_PENDING_NORMALIZATION_LINES), "pending-cap-file");
+    const overLimit = makeStore().ingest(capInput);
+    check("over_limit_deferral_is_rejected_before_checkpoint",
+      overLimit.ok === false && overLimit.code === "SESSION_NORMALIZER_FAILED" && !fs.existsSync(makeStore().storagePathFor(capInput.workspaceId)));
+
+    const malformed = JSON.parse(pendingStateText);
+    malformed.pendingNormalization.endByte += 1;
+    fs.writeFileSync(pendingPath, JSON.stringify(malformed));
+    const corruptPending = makeStore().readSnapshot(pendingInput.workspaceId);
+    check("invalid_persisted_span_is_reported_corrupt",
+      corruptPending.ok === false && corruptPending.code === "SESSION_STORE_CORRUPT", JSON.stringify(corruptPending));
 
     // A per-ingest source-byte budget bounds total work and output; a multi-megabyte
     // fixture is consumed over repeated calls while its first incident remains retained.

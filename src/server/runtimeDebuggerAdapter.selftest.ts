@@ -508,6 +508,41 @@ export function runRuntimeDebuggerAdapterSelftest(): {
       taggedOwnedIncident,
     );
 
+    const splitLog = path.join(root, "split-ui-crash.log");
+    const splitRoot = path.join(root, "split-ui-crash-store");
+    const splitAdapter = () => createAdapter(splitRoot, () => splitLog, () => profile, inventory, () => now);
+    const splitInput = { record, manifest, expectedSteps: [] };
+    fs.writeFileSync(splitLog, "", "utf8");
+    const splitWriter = splitAdapter();
+    const splitBaseline = splitWriter.recordSuccessfulDeploy(WORKSPACE_ID, DEPLOY_INFO);
+    fs.appendFileSync(splitLog, "[=ERROR=] 26.1 CWidgetController::UpdateFrame() - Validation error: Invalid cell content\r\nstack traceback:\r\n");
+    const firstUiPoll = splitWriter.buildBrief(splitInput);
+    check("split_ui_widget_is_pending_without_a_counted_occurrence", splitBaseline.ok
+      && firstUiPoll.payload.coverage.pendingUiCrash?.firstLine === 1
+      && firstUiPoll.payload.coverage.pendingUiCrash.lastLine === 2
+      && !firstUiPoll.payload.coverage.met && firstUiPoll.payload.incidents.length === 0, firstUiPoll.payload.coverage);
+    fs.appendFileSync(splitLog, '[string "extensions/x4_ai_influence/ui/ai_influence_chat.lua"]:42: in function onShowMenu\r\n'
+      + '[=ERROR=] 26.2 Errormessage: P:/SVN/temp/helper.lua:4267: Failed to create view for menu AIC_Hub. Reloading UI');
+    const partialUiPoll = splitWriter.buildBrief(splitInput);
+    const splitReader = splitAdapter();
+    const coldUiPoll = splitReader.buildBrief(splitInput);
+    check("cold_poll_keeps_span_separate_from_partial_reload_line", partialUiPoll.payload.logRead.state === "partial-line"
+      && coldUiPoll.newlyReadBytes === 0 && coldUiPoll.payload.coverage.pendingUiCrash?.lastLine === 3
+      && coldUiPoll.payload.incidents.length === 0, coldUiPoll.payload.coverage);
+    fs.appendFileSync(splitLog, "\r\n");
+    const joinedUiPoll = splitReader.buildBrief(splitInput);
+    const repeatedUiPoll = splitReader.buildBrief(splitInput);
+    const joinedUi = joinedUiPoll.payload.incidents[0];
+    const joinedSnapshot = splitReader.store.readSnapshot(WORKSPACE_ID);
+    check("completed_reload_after_restart_emits_one_exact_owned_incident", joinedUiPoll.newlyReadBytes === 2
+      && joinedUiPoll.payload.incidents.length === 1 && joinedUi?.classification === "ui_reload_fault" && joinedUi.count === 1
+      && joinedUi.firstLine === 1 && joinedUi.mapping?.line === 42
+      && joinedUi.evidence.some(line => line.startsWith("UI reload:"))
+      && joinedSnapshot.ok && joinedSnapshot.snapshot.incidents.some(incident => incident.classification === "ui_reload_fault"
+        && incident.startByte === 0 && incident.endByte === fs.statSync(splitLog).size)
+      && joinedUi.attribution.disposition === "confirmed_active" && joinedUiPoll.payload.coverage.pendingUiCrash === undefined
+      && repeatedUiPoll.payload.incidents[0]?.count === 1 && repeatedUiPoll.newlyReadBytes === 0, joinedUi);
+
     // Simulate a valid 0.0.67-style derived document: a stale runtime envelope,
     // an unrelated non-runtime record, and cumulative pre-policy drops.  The
     // next adapter instance must replay the source log under policy 2, retain

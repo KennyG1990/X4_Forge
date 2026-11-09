@@ -44,7 +44,7 @@ Dev keeps explicit load evidence in a bounded log scan and distinguishes recent 
 
 ### X4 UI crash ownership `in_progress` (GitHub #52)
 
-Dev groups the widget error, Lua traceback and reload into one issue. A current physical extension match is required, and a truncated stack frame cannot claim a source line. [Paired scratch replay](docs/plans/2026-11-09-runtime-ui-crash-attribution.md). Cross-ingest grouping, menu-only ownership, exact engine evidence and installed delivery remain open.
+Dev groups the widget error, Lua traceback and reload into one issue. A current physical extension match is required, and a truncated stack frame cannot claim a source line. [Contiguous scratch replay](docs/plans/2026-11-09-runtime-ui-crash-attribution.md). The addressed debugger carries one bounded pending crash span across polls and backend restart. [Split-poll proof](docs/plans/2026-11-09-runtime-ui-crash-across-polls.md). Menu-only ownership, exact engine evidence and installed delivery remain open.
 
 ### Lua registration advisory and boot coverage `in_progress` (GitHub #55)
 

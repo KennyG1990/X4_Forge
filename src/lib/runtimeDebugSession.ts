@@ -1,11 +1,11 @@
 /**
  * Durable, bounded cursor state for the X4 debug log.
  *
- * This module deliberately does not parse incidents.  It reads bytes once from a
- * persisted cursor, returns complete lines with positions, and accepts already
+ * This module deliberately does not parse incidents. It advances a persisted
+ * cursor over fresh bytes, returns complete lines with positions, and accepts
  * normalized incident envelopes from a later parser.  The persisted document never
  * contains the log itself: only bounded incident evidence and the minimum partial
- * line remainder are retained.
+ * line remainder are retained. Deferred normalization retains a byte span and digest.
  */
 
 import crypto from "crypto";
@@ -26,6 +26,8 @@ export const RUNTIME_DEBUG_MAX_INCIDENT_ENVELOPE_BYTES = 16 * 1024;
 export const RUNTIME_DEBUG_MAX_EVIDENCE_SAMPLES = 4;
 export const RUNTIME_DEBUG_MAX_EVIDENCE_BYTES = 4 * 1024;
 export const RUNTIME_DEBUG_MAX_PARTIAL_LINE_BYTES = 64 * 1024;
+export const RUNTIME_DEBUG_MAX_PENDING_NORMALIZATION_BYTES = 64 * 1024;
+export const RUNTIME_DEBUG_MAX_PENDING_NORMALIZATION_LINES = 80;
 export const RUNTIME_DEBUG_MAX_READ_CHUNK_BYTES = 64 * 1024;
 export const RUNTIME_DEBUG_MAX_BYTES_PER_INGEST = 1024 * 1024;
 export const RUNTIME_DEBUG_MAX_BASELINE_TOKENS = 64;
@@ -176,6 +178,15 @@ export interface RuntimeDebugSessionKey {
   fileIdentity: string | null;
 }
 
+export interface RuntimeDebugPendingNormalization {
+  segmentId: string;
+  startByte: number;
+  endByte: number;
+  startLine: number;
+  endLine: number;
+  sha256: string;
+}
+
 export interface RuntimeDebugSessionSnapshot {
   schema: typeof RUNTIME_DEBUG_SESSION_SCHEMA;
   version: typeof RUNTIME_DEBUG_SESSION_VERSION;
@@ -183,6 +194,7 @@ export interface RuntimeDebugSessionSnapshot {
   key: RuntimeDebugSessionKey;
   currentSegmentId: string;
   cursor: RuntimeDebugCursor;
+  pendingNormalization?: RuntimeDebugPendingNormalization;
   segments: RuntimeDebugSegment[];
   incidents: RuntimeDebugIncident[];
   counts: RuntimeDebugCounts;
@@ -250,7 +262,12 @@ export interface RuntimeDebugIngestInput extends RuntimeDebugSessionOpenInput {
   normalizeLines?: (
     lines: readonly RuntimeDebugLine[],
     segment: RuntimeDebugSegment,
-  ) => readonly RuntimeDebugIncidentInput[];
+    context: { canDefer: boolean },
+  ) => readonly RuntimeDebugIncidentInput[] | {
+    incidents: readonly RuntimeDebugIncidentInput[];
+    /** Physical start line of an open suffix, only allowed when canDefer is true. */
+    deferFromLine?: number;
+  };
 }
 
 export interface RuntimeDebugRecordIncidentsInput {
@@ -325,6 +342,7 @@ interface PersistedState {
   key: PersistedKey;
   currentSegmentId: string;
   cursor: PersistedCursor;
+  pendingNormalization?: RuntimeDebugPendingNormalization;
   segments: RuntimeDebugSegment[];
   incidents: PersistedIncident[];
   counts: RuntimeDebugCounts;
@@ -383,6 +401,7 @@ const TOP_LEVEL_KEYS = new Set([
   "key",
   "currentSegmentId",
   "cursor",
+  "pendingNormalization",
   "segments",
   "incidents",
   "counts",
@@ -396,6 +415,65 @@ const TOP_LEVEL_KEYS = new Set([
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function normalizationRangeFits(startByte: number, endByte: number, startLine: number, endLine: number): boolean {
+  return startByte < endByte && endByte - startByte <= RUNTIME_DEBUG_MAX_PENDING_NORMALIZATION_BYTES
+    && startLine <= endLine && endLine - startLine < RUNTIME_DEBUG_MAX_PENDING_NORMALIZATION_LINES;
+}
+
+function normalizationDigest(bytes: Buffer): string {
+  return crypto.createHash("sha256").update(bytes).digest("hex");
+}
+
+function matchesNormalizationPrefix(bytes: Buffer, span: Omit<RuntimeDebugPendingNormalization, "sha256">, previous: RuntimeDebugPendingNormalization): boolean {
+  return span.segmentId === previous.segmentId && span.startByte === previous.startByte && span.endByte >= previous.endByte
+    && normalizationDigest(bytes.subarray(0, previous.endByte - span.startByte)) === previous.sha256;
+}
+
+function matchesNormalizationPosition(left: RuntimeDebugLine, right: RuntimeDebugLine): boolean {
+  return left.lineNumber === right.lineNumber && left.startByte === right.startByte && left.endByte === right.endByte;
+}
+
+function matchesNormalizationRows(
+  bytes: Buffer,
+  span: Omit<RuntimeDebugPendingNormalization, "sha256">,
+  actual: readonly RuntimeDebugLine[],
+  observed: readonly RuntimeDebugLine[],
+  previous?: RuntimeDebugPendingNormalization,
+  freshDigests?: ReadonlyMap<number, string>,
+): boolean {
+  return actual.length === observed.length && actual.every((line, index) => {
+    const expected = observed[index];
+    return !expected.truncated && matchesNormalizationPosition(line, expected)
+      && line.lineEnding === expected.lineEnding && line.text === expected.text
+      && (!previous || line.startByte < previous.endByte
+        || freshDigests?.get(line.lineNumber) === normalizationDigest(bytes.subarray(line.startByte - span.startByte, line.endByte - span.startByte)));
+  });
+}
+
+function decodeNormalizationBytes(
+  bytes: Buffer,
+  span: Omit<RuntimeDebugPendingNormalization, "sha256">,
+): RuntimeDebugLine[] | undefined {
+  const lines: RuntimeDebugLine[] = [];
+  let offset = 0;
+  for (let lineNumber = span.startLine; lineNumber <= span.endLine; lineNumber++) {
+    const newline = bytes.indexOf(0x0a, offset);
+    if (newline < 0) return;
+    const hasCr = newline > offset && bytes[newline - 1] === 0x0d;
+    lines.push({
+      segmentId: span.segmentId,
+      lineNumber,
+      startByte: span.startByte + offset,
+      endByte: span.startByte + newline + 1,
+      text: bytes.toString("utf8", offset, hasCr ? newline - 1 : newline),
+      lineEnding: hasCr ? "\r\n" : "\n",
+      truncated: false,
+    });
+    offset = newline + 1;
+  }
+  return offset === bytes.length ? lines : undefined;
 }
 
 function samePath(left: string, right: string): boolean {
@@ -689,6 +767,7 @@ function toSnapshot(state: PersistedState): RuntimeDebugSessionSnapshot {
       partialLineBytes: Buffer.from(state.cursor.partialLineBase64, "base64").length,
       partialLineDroppedBytes: state.cursor.partialLineDroppedBytes,
     },
+    ...(state.pendingNormalization ? { pendingNormalization: clone(state.pendingNormalization) } : {}),
     segments: clone(state.segments),
     incidents: state.incidents
       .slice()
@@ -956,6 +1035,30 @@ export class RuntimeDebugSessionStore {
       throw new RuntimeDebugSessionStoreError("SESSION_STORE_CORRUPT", "Persisted current segment pointer is invalid.");
     }
 
+    let pendingNormalization: RuntimeDebugPendingNormalization | undefined;
+    if (value.pendingNormalization !== undefined) {
+      const span = value.pendingNormalization;
+      const segment = value.segments[value.segments.length - 1] as unknown as RuntimeDebugSegment;
+      if (!isRecord(span) || Object.keys(span).length !== 6 || span.segmentId !== value.currentSegmentId
+        || typeof span.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(span.sha256)
+        || !safeNumber(span.startByte) || !safeNumber(span.endByte) || !safeNumber(span.startLine) || !safeNumber(span.endLine)
+        || !normalizationRangeFits(span.startByte, span.endByte, span.startLine, span.endLine)
+        || span.startByte < segment.baselineOffset || span.startLine <= segment.baselineLineNumber
+        || span.endByte !== cursorPartialLineStartByte || span.endLine !== cursorLineNumber
+        || !keyFileIdentity || keyFileIdentity !== segment.fileIdentity
+        || segment.selection.logPath !== key.logPath || segment.selection.profileId !== key.profileId) {
+        throw new RuntimeDebugSessionStoreError("SESSION_STORE_CORRUPT", "Persisted pending normalization span is invalid.");
+      }
+      pendingNormalization = {
+        segmentId: value.currentSegmentId,
+        startByte: span.startByte,
+        endByte: span.endByte,
+        startLine: span.startLine,
+        endLine: span.endLine,
+        sha256: span.sha256,
+      };
+    }
+
     const counts = this.validateCounts(value.counts, "counts");
     const dropped = this.validateDropped(value.dropped);
     const incidents: PersistedIncident[] = [];
@@ -1066,6 +1169,7 @@ export class RuntimeDebugSessionStore {
         partialLineBase64: cursorPartialLineBase64,
         partialLineDroppedBytes: cursorPartialLineDroppedBytes,
       },
+      ...(pendingNormalization ? { pendingNormalization } : {}),
       segments: clone(value.segments) as unknown as RuntimeDebugSegment[],
       incidents,
       counts,
@@ -1145,6 +1249,10 @@ export class RuntimeDebugSessionStore {
     tokenHash?: string,
   ): RuntimeDebugSegment {
     const previous = this.currentSegment(state);
+    if (state.pendingNormalization && (reason === "truncation" || reason === "file-replaced-or-rotated")) {
+      this.dropNormalization(state, state.pendingNormalization);
+    }
+    delete state.pendingNormalization;
     previous.endedAt = new Date(this.now()).toISOString();
     previous.endReason = reason;
     previous.endOffset = state.cursor.byteOffset;
@@ -1518,6 +1626,168 @@ export class RuntimeDebugSessionStore {
     };
   }
 
+  private dropNormalization(state: PersistedState, span: Omit<RuntimeDebugPendingNormalization, "sha256">): void {
+    state.dropped.incidents += 1;
+    state.dropped.evidenceBytes += span.endByte - span.startByte;
+    // Keep the physical start and suppress the rest of an adjacent tainted line until LF.
+    if (state.cursor.partialLineStartByte === span.endByte && state.cursor.partialLineBase64) {
+      const discarded = Buffer.byteLength(state.cursor.partialLineBase64, "base64");
+      state.cursor.partialLineBase64 = "";
+      state.cursor.partialLineDroppedBytes += discarded;
+      state.dropped.partialLineBytes += discarded;
+    }
+  }
+
+  private readNormalizationBytes(
+    state: PersistedState,
+    selection: NormalizedSelection,
+    fileIdentity: string,
+    span: Omit<RuntimeDebugPendingNormalization, "sha256">,
+  ): Buffer | undefined {
+    try {
+      const bytes = Buffer.allocUnsafe(span.endByte - span.startByte);
+      const chunkCap = Math.min(this.caps.maxReadChunkBytes, state.limits.maxReadChunkBytes);
+      let offset = 0;
+      while (offset < bytes.length) {
+        const requested = Math.min(chunkCap, bytes.length - offset);
+        const chunk = this.read(selection.logPath, span.startByte + offset, requested);
+        if (!Buffer.isBuffer(chunk) || chunk.length === 0 || chunk.length > requested) return;
+        chunk.copy(bytes, offset);
+        offset += chunk.length;
+      }
+      const after = this.stat(selection.logPath);
+      if (!safeNumber(after.size) || after.size < state.cursor.byteOffset || identityFromStat(after) !== fileIdentity) return;
+      return bytes;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private deferNormalization(
+    state: PersistedState,
+    selection: NormalizedSelection,
+    fileIdentity: string,
+    group: readonly RuntimeDebugLine[],
+    deferFromLine: number,
+    verifiedPending: RuntimeDebugPendingNormalization | undefined,
+    freshDigests: ReadonlyMap<number, string> | undefined,
+  ): void {
+    const firstIndex = group.findIndex(line => line.lineNumber === deferFromLine);
+    const first = group[firstIndex];
+    const last = group[group.length - 1];
+    if (!first || first.segmentId !== state.currentSegmentId
+      || last.endByte !== state.cursor.partialLineStartByte || last.lineNumber !== state.cursor.lineNumber
+      || !normalizationRangeFits(first.startByte, last.endByte, first.lineNumber, last.lineNumber)) {
+      throw new RuntimeDebugSessionStoreError("SESSION_NORMALIZER_FAILED", "The normalizer returned an invalid deferred suffix.");
+    }
+    const span = {
+      segmentId: first.segmentId,
+      startByte: first.startByte,
+      endByte: last.endByte,
+      startLine: first.lineNumber,
+      endLine: last.lineNumber,
+    };
+    const suffix = group.slice(firstIndex);
+    if (suffix.some((line, index) => line.truncated || line.segmentId !== span.segmentId
+      || line.lineNumber !== span.startLine + index || (index > 0 && suffix[index - 1].endByte !== line.startByte))) {
+      throw new RuntimeDebugSessionStoreError("SESSION_NORMALIZER_FAILED", "The normalizer returned a noncontiguous deferred suffix.");
+    }
+    if (verifiedPending && span.segmentId === verifiedPending.segmentId
+      && span.startByte === verifiedPending.startByte && span.endByte === verifiedPending.endByte) {
+      state.pendingNormalization = verifiedPending;
+      return;
+    }
+    const bytes = this.readNormalizationBytes(state, selection, fileIdentity, span);
+    const decoded = bytes && decodeNormalizationBytes(bytes, span);
+    // A growing suffix must preserve the exact bytes of any previously verified prefix.
+    const previous = verifiedPending && span.segmentId === verifiedPending.segmentId && span.startByte < verifiedPending.endByte
+      ? verifiedPending
+      : undefined;
+    if (bytes && decoded && (!previous || matchesNormalizationPrefix(bytes, span, previous))
+      && matchesNormalizationRows(bytes, span, decoded, suffix, previous, freshDigests)) {
+      state.pendingNormalization = { ...span, sha256: normalizationDigest(bytes) };
+    } else {
+      this.dropNormalization(state, span);
+    }
+  }
+
+  private verifyNormalizationContinuation(
+    state: PersistedState,
+    selection: NormalizedSelection,
+    fileIdentity: string | null,
+    previousCursor: PersistedCursor,
+    lines: RuntimeDebugLine[],
+  ): boolean {
+    const first = lines[0];
+    if (!first || first.startByte >= previousCursor.byteOffset) return true;
+    const span = {
+      segmentId: first.segmentId,
+      startByte: first.startByte,
+      endByte: first.endByte,
+      startLine: first.lineNumber,
+      endLine: first.lineNumber,
+    };
+    const bytes = fileIdentity && normalizationRangeFits(span.startByte, span.endByte, span.startLine, span.endLine)
+      ? this.readNormalizationBytes(state, selection, fileIdentity, span)
+      : undefined;
+    const actual = bytes && decodeNormalizationBytes(bytes, span)?.[0];
+    const prefix = Buffer.from(previousCursor.partialLineBase64, "base64");
+    const prefixLength = previousCursor.byteOffset - first.startByte;
+    if (!first.truncated && bytes && actual && prefix.length === prefixLength
+      && bytes.subarray(0, prefixLength).equals(prefix) && actual.text === first.text && actual.lineEnding === first.lineEnding) {
+      return true;
+    }
+    if (actual && !first.truncated) {
+      lines[0] = actual;
+    } else {
+      if (!first.truncated) state.dropped.truncatedLines += 1;
+      lines[0] = { ...first, text: "", truncated: true };
+    }
+    return false;
+  }
+
+  private verifyCrossingNormalization(
+    state: PersistedState,
+    selection: NormalizedSelection,
+    fileIdentity: string,
+    pending: RuntimeDebugPendingNormalization,
+    group: readonly RuntimeDebugLine[],
+    incidents: readonly RuntimeDebugIncidentInput[],
+    freshDigests: ReadonlyMap<number, string> | undefined,
+  ): boolean {
+    let requiredEnd = pending.endByte;
+    for (const incident of incidents) {
+      const position = incident.position;
+      if (position && (!position.segmentId || position.segmentId === pending.segmentId) && position.startByte < pending.endByte) {
+        requiredEnd = Math.max(requiredEnd, position.endByte);
+      }
+    }
+    if (requiredEnd === pending.endByte) return true;
+    const lastIndex = group.findIndex(line => line.endByte === requiredEnd);
+    const last = group[lastIndex];
+    if (!last || !normalizationRangeFits(pending.startByte, requiredEnd, pending.startLine, last.lineNumber)) return false;
+    const span = { ...pending, endByte: requiredEnd, endLine: last.lineNumber };
+    const observed = group.slice(0, lastIndex + 1);
+    const bytes = this.readNormalizationBytes(state, selection, fileIdentity, span);
+    const actual = bytes && decodeNormalizationBytes(bytes, span);
+    if (bytes && actual && matchesNormalizationPrefix(bytes, span, pending)
+      && matchesNormalizationRows(bytes, span, actual, observed, pending, freshDigests)) return true;
+
+    // The fallback can use independently re-read rows, never an obsolete fresh sample.
+    for (const [index, line] of observed.entries()) {
+      if (line.startByte < pending.endByte) continue;
+      const physical = actual?.[index];
+      if (!line.truncated && physical && matchesNormalizationPosition(physical, line)) {
+        Object.assign(line, physical);
+      } else {
+        if (!line.truncated) state.dropped.truncatedLines += 1;
+        line.text = "";
+        line.truncated = true;
+      }
+    }
+    return false;
+  }
+
   ingest(input: RuntimeDebugIngestInput): RuntimeDebugIngestResult {
     const prepared = this.prepareState(input);
     if (prepared.ok === false) return prepared;
@@ -1527,7 +1797,12 @@ export class RuntimeDebugSessionStore {
       stat = this.stat(prepared.selection.logPath);
       if (!stat || !safeNumber(stat.size)) throw new RuntimeDebugSessionStoreError("SESSION_FILE_STAT_INVALID", "File stat returned an invalid size.");
     } catch (error) {
-      const writeFailure = prepared.changed ? this.persist(state) : null;
+      const pending = state.pendingNormalization;
+      if (pending) {
+        this.dropNormalization(state, pending);
+        delete state.pendingNormalization;
+      }
+      const writeFailure = prepared.changed || pending ? this.persist(state) : null;
       if (writeFailure) return writeFailure;
       return failure("unavailable", "SESSION_FILE_UNAVAILABLE", errorText(error), false, toSnapshot(state));
     }
@@ -1546,11 +1821,13 @@ export class RuntimeDebugSessionStore {
     if (state.cursor.byteOffset > stat.size) {
       return failure("unavailable", "SESSION_BASELINE_BEYOND_EOF", "The explicit segment baseline is beyond the selected file size.", false, toSnapshot(state));
     }
-    const startOffset = state.cursor.byteOffset;
+    const previousCursor = { ...state.cursor };
+    const startOffset = previousCursor.byteOffset;
+    const freshDigests = state.pendingNormalization ? new Map<number, string>() : undefined;
     let lines: RuntimeDebugLine[];
     let bytesRead = 0;
     try {
-      lines = this.readLines(state, prepared.selection, stat.size);
+      lines = this.readLines(state, prepared.selection, stat.size, freshDigests);
       bytesRead = state.cursor.byteOffset - startOffset;
     } catch (error) {
       const writeFailure = prepared.changed ? this.persist(state) : null;
@@ -1560,18 +1837,56 @@ export class RuntimeDebugSessionStore {
     state.counts.bytesRead += bytesRead;
     state.counts.linesRead += lines.length;
     try {
-      // readLines has advanced the byte cursor, including any partial final line. Preserve
-      // it while splitting complete lines; never discard or reread the partial remainder.
-      const finalCursor = { ...state.cursor };
+      // readLines has advanced the cursor over fresh bytes and possibly a partial line.
+      const pending = state.pendingNormalization;
+      delete state.pendingNormalization;
       let group: RuntimeDebugLine[] = [];
-      const flush = () => {
-        if (group.length && input.normalizeLines) this.applyIncidents(state, input.normalizeLines(group, clone(this.currentSegment(state))));
+      let verifiedPending: RuntimeDebugPendingNormalization | undefined;
+      if (pending) {
+        const continuationVerified = this.verifyNormalizationContinuation(state, prepared.selection, fileIdentity, previousCursor, lines);
+        if (continuationVerified && input.normalizeLines && fileIdentity && this.currentSegment(state).fileIdentity === fileIdentity) {
+          const previous = this.readNormalizationBytes(state, prepared.selection, fileIdentity, pending);
+          const decoded = previous && normalizationDigest(previous) === pending.sha256
+            ? decodeNormalizationBytes(previous, pending)
+            : undefined;
+          if (decoded && (!lines.length || (lines[0].startByte === pending.endByte && lines[0].lineNumber === pending.endLine + 1))) {
+            group = decoded;
+            verifiedPending = pending;
+          }
+        }
+        if (!verifiedPending) this.dropNormalization(state, pending);
+      }
+      const finalCursor = { ...state.cursor };
+      const flush = (finalGroup: boolean) => {
+        if (group.length && input.normalizeLines) {
+          const canDefer = finalGroup && fileIdentity !== null;
+          const segment = this.currentSegment(state);
+          let result = input.normalizeLines(group, clone(segment), { canDefer });
+          if (verifiedPending?.segmentId === segment.id && fileIdentity
+            && !this.verifyCrossingNormalization(state, prepared.selection, fileIdentity, verifiedPending, group,
+              "incidents" in result ? result.incidents : result, freshDigests)) {
+            this.dropNormalization(state, verifiedPending);
+            const pendingEndByte = verifiedPending.endByte;
+            group = group.filter(line => line.startByte >= pendingEndByte);
+            verifiedPending = undefined;
+            result = group.length ? input.normalizeLines(group, clone(segment), { canDefer }) : [];
+          }
+          if ("incidents" in result) {
+            if (result.deferFromLine !== undefined) {
+              if (!canDefer || !fileIdentity) throw new RuntimeDebugSessionStoreError("SESSION_NORMALIZER_FAILED", "This normalization group cannot be deferred.");
+              this.deferNormalization(state, prepared.selection, fileIdentity, group, result.deferFromLine, verifiedPending, freshDigests);
+            }
+            this.applyIncidents(state, result.incidents);
+          } else {
+            this.applyIncidents(state, result);
+          }
+        }
         group = [];
       };
       for (const line of lines) {
         const reason = !line.truncated ? input.boundaryForLine?.(line) : undefined;
         if (reason) {
-          flush();
+          flush(false);
           state.cursor.byteOffset = line.startByte;
           state.cursor.lineNumber = line.lineNumber - 1;
           this.updateSegmentAfterRead(state, fileIdentity);
@@ -1583,7 +1898,7 @@ export class RuntimeDebugSessionStore {
       }
       state.cursor = finalCursor;
       this.updateSegmentAfterRead(state, fileIdentity);
-      flush();
+      flush(true);
     } catch (error) {
       return failure("error", error instanceof RuntimeDebugSessionStoreError ? error.code : "SESSION_NORMALIZER_FAILED", errorText(error), false, toSnapshot(state));
     }
@@ -1638,7 +1953,7 @@ export class RuntimeDebugSessionStore {
     return { ok: true, status: snapshot.health === "degraded" ? "degraded" : "ready", snapshot };
   }
 
-  private readLines(state: PersistedState, selection: NormalizedSelection, fileSize: number): RuntimeDebugLine[] {
+  private readLines(state: PersistedState, selection: NormalizedSelection, fileSize: number, freshDigests?: Map<number, string>): RuntimeDebugLine[] {
     const lines: RuntimeDebugLine[] = [];
     const segment = this.currentSegment(state);
     const parts: Buffer[] = [];
@@ -1651,9 +1966,12 @@ export class RuntimeDebugSessionStore {
       ? state.cursor.partialLineStartByte
       : state.cursor.byteOffset;
     let pendingDropped = state.cursor.partialLineDroppedBytes;
+    let discardPendingRemainder = pendingDropped > 0 && pendingLength === 0;
+    const firstLineStartByte = pendingStart;
+    const firstLineNumber = state.cursor.lineNumber + 1;
     const appendPending = (bytes: Buffer): void => {
       if (!bytes.length) return;
-      const room = Math.max(0, this.caps.maxPartialLineBytes - pendingLength);
+      const room = discardPendingRemainder ? 0 : Math.max(0, this.caps.maxPartialLineBytes - pendingLength);
       if (room > 0) {
         const kept = bytes.subarray(0, room);
         parts.push(kept);
@@ -1677,6 +1995,10 @@ export class RuntimeDebugSessionStore {
         endByte,
       };
       state.cursor.lineNumber += 1;
+      if (freshDigests && pendingDropped === 0 && position.lineNumber - firstLineNumber < RUNTIME_DEBUG_MAX_PENDING_NORMALIZATION_LINES
+        && endByte - firstLineStartByte <= RUNTIME_DEBUG_MAX_PENDING_NORMALIZATION_BYTES) {
+        freshDigests.set(position.lineNumber, crypto.createHash("sha256").update(bytes).update("\n").digest("hex"));
+      }
       lines.push({
         ...position,
         text,
@@ -1687,6 +2009,7 @@ export class RuntimeDebugSessionStore {
       parts.length = 0;
       pendingLength = 0;
       pendingDropped = 0;
+      discardPendingRemainder = false;
       pendingStart = endByte;
     };
 
