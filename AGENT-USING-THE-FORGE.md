@@ -148,6 +148,11 @@ identities and `expectedTargetFingerprint` from the preview. Send a fresh
 `x-forge-operation-id` for each intended apply. Keep that identifier with the workspace
 and deploy key until you know the outcome.
 
+Both native routes refuse to replace an occupied folder that declares a different
+extension ID (`DEPLOY_TARGET_EXTENSION_ID_MISMATCH`). A nonempty folder without a
+verifiable manifest ID returns `DEPLOY_TARGET_EXTENSION_ID_UNRESOLVED`. The refusal
+identifies the selected folder before staging or receipt creation.
+
 If the reply disappears, query `GET /api/agent/status?deployOperationId=<encoded-id>`
 with the same deploy key and workspace headers. A committed receipt identifies the
 historical write. `not-applied` means Forge verified that the retired local backend

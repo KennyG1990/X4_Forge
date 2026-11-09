@@ -12,7 +12,7 @@ Dev adds explicit local Start with exact saved workspace, offline Studio state, 
 
 ### Native deploy target identity preflight `in_progress` (GitHub #87)
 
-Published 0.0.81 previewed a folder that bound apply rejected after writing. Dev now deploys the selected alias and retains the canonical manifest ID in the receipt. Competing IDs and stale inputs refuse before normal staging, and a locked legacy duplicate surviving cleanup still blocks target activation. [Released reproduction and Dev proof](docs/plans/2026-11-09-forge-deploy-folder-manifest-identity.md). Installed verification and public delivery remain open.
+Published 0.0.81 previewed a folder that bound apply rejected after writing. Dev now deploys the selected alias and retains the canonical manifest ID in the receipt. Competing IDs and stale inputs refuse before normal staging, and a locked legacy duplicate surviving cleanup still blocks target activation. Dev also checks the selected folder's existing manifest before replacing it. [Released reproduction and Dev proof](docs/plans/2026-11-09-forge-deploy-folder-manifest-identity.md) · [Selected-folder replay](docs/plans/2026-11-09-native-deploy-incumbent-identity.md). Installed verification and public delivery remain open.
 
 ### Native deploy build version `in_progress` (GitHub #65)
 

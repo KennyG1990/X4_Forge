@@ -9,6 +9,7 @@ import path from "path";
 import dotenv from "dotenv";
 import crypto from "crypto";
 import fs from "fs";
+import { isUtf8 } from "node:buffer";
 import os from "os";
 import zlib from "zlib";
 import { buildX4UiSourceBundle, addX4UiSourceBundleRegistration, registeredX4MenuLuaPaths } from './src/lib/x4UiSourceBundle';
@@ -8695,10 +8696,11 @@ function* readInstalledExtensionManifests(extRoot: string) {
     const contentPath = path.join(absDir, 'content.xml');
     if (!isDir || !fs.existsSync(contentPath)) continue;
 
-    let xml: string;
-    try { xml = fs.readFileSync(contentPath, 'utf8'); } catch { continue; }
-    const id = readContentManifestIdentity(xml)?.modId ?? folder;
-    yield { folder, absDir, id, xml };
+    let bytes: Buffer;
+    try { bytes = fs.readFileSync(contentPath); } catch { continue; }
+    const xml = bytes.toString('utf8');
+    const parsedId = readContentManifestIdentity(xml)?.modId;
+    yield { folder, absDir, id: parsedId ?? folder, declaredId: isUtf8(bytes) ? parsedId : undefined, xml };
   }
 }
 
@@ -12596,20 +12598,39 @@ function deploymentManifestConflict(extensionsPath: string, artifactFolder: stri
   if (!pathHasEntry(extensionsPath)) return;
   const conflicts: string[] = [];
   const canonicalId = manifestId.toLowerCase();
+  let installedContentId: string | undefined;
   for (const extension of readInstalledExtensionManifests(extensionsPath)) {
-    if (extension.id.toLowerCase() !== canonicalId || samePathName(extension.folder, artifactFolder)) continue;
+    if (samePathName(extension.folder, artifactFolder)) {
+      installedContentId = extension.declaredId;
+      continue;
+    }
+    if (extension.id.toLowerCase() !== canonicalId) continue;
     const owner = deploymentScratchSiblingOwner(extension.folder, artifactFolder);
     const retainedBackup = targetFingerprint === 'absent' && extension.folder.startsWith(`.${artifactFolder}.x4forge-backup-`);
     if (!allowSweepableLegacy || owner === undefined || processLiveness(owner) !== 'dead' || retainedBackup
       || fs.lstatSync(extension.absDir).isSymbolicLink()) conflicts.push(extension.folder);
   }
-  if (!conflicts.length) return;
-  const conflictingFolders = conflicts.sort().slice(0, 12);
-  const remaining = conflicts.length - conflictingFolders.length;
-  return {
-    code: 'DEPLOY_DUPLICATE_EXTENSION_ID', conflictingFolders, conflictingFolderCount: conflicts.length,
-    error: `Another installed folder uses extension ID "${manifestId}": ${conflictingFolders.join(', ')}${remaining ? ` (and ${remaining} more)` : ''}. Resolve the duplicate and review a fresh preview.`,
-  };
+  if (conflicts.length) {
+    const conflictingFolders = conflicts.sort().slice(0, 12);
+    const remaining = conflicts.length - conflictingFolders.length;
+    return {
+      code: 'DEPLOY_DUPLICATE_EXTENSION_ID', conflictingFolders, conflictingFolderCount: conflicts.length,
+      error: `Another installed folder uses extension ID "${manifestId}": ${conflictingFolders.join(', ')}${remaining ? ` (and ${remaining} more)` : ''}. Resolve the duplicate and review a fresh preview.`,
+    };
+  }
+  if (targetFingerprint === 'absent') return;
+  if (installedContentId && installedContentId.toLowerCase() !== canonicalId) {
+    return {
+      code: 'DEPLOY_TARGET_EXTENSION_ID_MISMATCH', artifactFolder, installedContentId,
+      error: `The selected folder "${artifactFolder}" already belongs to extension "${installedContentId}". This deploy carries "${manifestId}". Choose a different install folder and review a fresh preview.`,
+    };
+  }
+  if (!installedContentId && fs.readdirSync(path.join(extensionsPath, artifactFolder)).length) {
+    return {
+      code: 'DEPLOY_TARGET_EXTENSION_ID_UNRESOLVED', artifactFolder,
+      error: `The selected folder "${artifactFolder}" contains files but has no verifiable extension ID in content.xml. Inspect the folder before reviewing a fresh preview.`,
+    };
+  }
 }
 
 function sweepDeploymentScratchSiblings(targetPath: string, committedFingerprint?: string): void {

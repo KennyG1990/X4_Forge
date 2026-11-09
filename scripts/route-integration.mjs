@@ -3735,6 +3735,25 @@ async function main() {
   const targetBeforeFailedDeploy = regularTreeHash(dryTarget);
   const stagingBeforeFailedDeploy = regularTreeHash(dryStagingTarget);
   const receiptsBeforeRefusal = regularTreeHash(path.join(dataDir, 'action-receipts'));
+  const selectedManifest = path.join(dryTarget, 'content.xml');
+  const selectedManifestBytes = fs.readFileSync(selectedManifest);
+  const foreignId = 'forge_foreign_target_incumbent';
+  fs.writeFileSync(selectedManifest, `<content id="${foreignId}" name="Foreign incumbent" version="100"/>`);
+  try {
+    const foreignTargetHash = regularTreeHash(dryTarget);
+    const occupied = await req('POST', '/api/agent/deploy-verify', SESSION_TOKEN, { ...duplicateBody, dryRun: true });
+    const occupiedApply = await req('POST', '/api/agent/deploy', SESSION_TOKEN, {
+      ...duplicateBody, ...deployIdentity(occupied.json), expectedTargetFingerprint: occupied.json?.targetFingerprint,
+    });
+    ok('selected_foreign_manifest_refuses_preview_and_apply_before_writes',
+      [occupied, occupiedApply].every(result => result.status === 409 && result.json?.code === 'DEPLOY_TARGET_EXTENSION_ID_MISMATCH'
+        && result.json?.artifactFolder === path.basename(dryTarget) && result.json?.installedContentId === foreignId
+        && result.json?.deployment?.writeAttempted === false)
+      && regularTreeHash(dryTarget) === foreignTargetHash && regularTreeHash(dryStagingTarget) === stagingBeforeFailedDeploy
+      && regularTreeHash(path.join(dataDir, 'action-receipts')) === receiptsBeforeRefusal, JSON.stringify(occupiedApply.json?.code));
+  } finally {
+    fs.writeFileSync(selectedManifest, selectedManifestBytes);
+  }
   const duplicateDir = path.join(liveExtensions, 'duplicate_stale_probe');
   const duplicateManifest = path.join(duplicateDir, 'content.xml');
   fs.mkdirSync(duplicateDir, { recursive: true });
@@ -4203,6 +4222,7 @@ async function main() {
   ]);
   const hostileLive = path.join(liveExtensions, hostileName);
   fs.mkdirSync(path.join(hostileLive, 'runtime'), { recursive: true });
+  fs.copyFileSync(path.join(hostileSource, 'content.xml'), path.join(hostileLive, 'content.xml'));
   fs.writeFileSync(path.join(hostileLive, 'runtime', 'state.db'), 'live mutable state');
   fs.writeFileSync(path.join(hostileLive, 'stale-loose.txt'), 'must disappear');
   const hostileImport = await req('POST', '/api/agent/mod-folder/import', SESSION_TOKEN, { root: 'workspace', path: hostileName });
