@@ -303,6 +303,10 @@ test('authenticated deployment binds bytes and persists exact approvals, with fa
     await page.getByTestId('deploy-verify-btn').click();
     const rendered = page.getByTestId('verify-result');
     const summary = rendered.getByTestId('deploy-review-summary');
+    await expect(page.getByTestId('playtest-deploy-destination')).toContainText(target, { timeout: 45_000 });
+    await expect(summary.getByTestId('deploy-review-title')).toHaveText('Preview — not deployed');
+    expect(browserDeploys).toMatchObject([{ path: 'trust_fixture', root: 'workspace', dryRun: true }]);
+    await page.getByTestId('deploy-apply-btn').click();
     await expect(summary.getByTestId('deploy-review-title')).toHaveText('Deployed — incomplete checks', { timeout: 45_000 });
     await expect(summary).toHaveAttribute('data-tone', 'qualified');
     const unavailableChecks = incomplete.body.validation.review.counts.unavailableChecks;
@@ -313,6 +317,7 @@ test('authenticated deployment binds bytes and persists exact approvals, with fa
     await expect(summary).toContainText('This result does not verify behavior in X4.');
     expect(browserDeploys).toHaveLength(2);
     expect(browserDeploys[0].dryRun).toBe(true);
+    expect(browserDeploys[1]).toMatchObject({ path: 'trust_fixture', root: 'workspace', dryRun: false });
     expect(browserDeploys[1].expectedModId).toBe('trust_fixture');
     expect(browserDeploys[1].expectedArtifactHash).toMatch(/^[a-f0-9]{64}$/);
     expect(browserDeploys[1].acceptances).toBeUndefined();

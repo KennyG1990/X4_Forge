@@ -23,12 +23,14 @@ test('wizard and Playtest distinguish actual test-mod deployment outcomes',async
   });
   await page.route('**/api/schema/config',route=>route.fulfill({json:{loaded:true,config:{modWorkspacePath:path.join(evidence,'ui-only-staging')},resolved:{mdExists:true},deployFormat:{format:'loose'}}}));
   await page.route('**/api/agent/compile',route=>route.fulfill({json:{success:true,diagnostics:[],validation:{scope:'full-project',ok:true}}}));
-  let fixture=fixtures.accepted, delay=0, calls=0, omitTargetFingerprint=false;
+  let fixture=fixtures.accepted, delay=0, omitTargetFingerprint=false, omitTargetRoot=false;
+  const requests: Array<Record<string, unknown>> = [];
   const applyIdentities: unknown[] = [];
   const modeledTargetFingerprint = 'absent';
+  const modeledTargetRoot = path.join(evidence, 'modeled-game', 'extensions', 'forge_regression_lab');
   await page.route('**/api/agent/deploy-verify',async route=>{
-    calls++;
     const body=route.request().postDataJSON();
+    requests.push(body);
     if(delay)await new Promise(resolve=>setTimeout(resolve,delay));
     const result=structuredClone(fixture);
     // Workspace adoption is a separate API contract; never write a historical fixture's workspace.
@@ -36,7 +38,10 @@ test('wizard and Playtest distinguish actual test-mod deployment outcomes',async
     if(body.dryRun && result.ok){
       result.stage='preview';result.dryRun=true;delete result.bytesConfirmed;delete result.deployedPath;
       // These historical apply responses do not contain a preview destination identity.
-      if(!omitTargetFingerprint) result.targetFingerprint=modeledTargetFingerprint;
+      if(omitTargetFingerprint) delete result.targetFingerprint;
+      else result.targetFingerprint=modeledTargetFingerprint;
+      if(omitTargetRoot) delete result.targetRoot;
+      else result.targetRoot=modeledTargetRoot;
     }
     if(body.dryRun === false){
       applyIdentities.push({
@@ -80,33 +85,85 @@ test('wizard and Playtest distinguish actual test-mod deployment outcomes',async
   await page.evaluate(()=>localStorage.setItem('x4_forge_experience_mode','expert'));
   await page.reload();
   await page.locator('[data-sidebar-tab="playtest"]').click();
+  await page.getByTestId('verify-path-input').fill('forge_regression_lab');
+  const previewButton = page.getByTestId('deploy-verify-btn');
+  const applyButton = page.getByTestId('deploy-apply-btn');
+  const destination = page.getByTestId('playtest-deploy-destination');
+  const playtestResult = page.getByTestId('verify-result');
+  const playtestTitle = playtestResult.getByTestId('deploy-review-title');
+  async function confirmPlaytest() {
+    const previousCalls = requests.length;
+    const source = { path: 'forge_regression_lab', root: 'workspace' };
+    await previewButton.click();
+    await expect(destination).toContainText(modeledTargetRoot);
+    await expect(playtestTitle).toHaveText('Preview — not deployed');
+    expect(requests.slice(previousCalls)).toEqual([{ ...source, dryRun: true }]);
+    await applyButton.click();
+    await expect.poll(() => requests.length).toBe(previousCalls + 2);
+    expect(requests[previousCalls + 1]).toEqual({
+      ...source,
+      dryRun: false,
+      expectedModId: fixture.modId,
+      expectedSourceHash: fixture.sourceHash,
+      expectedArtifactHash: fixture.artifactHash,
+      expectedBindingHash: fixture.bindingHash,
+      expectedTargetFingerprint: modeledTargetFingerprint,
+    });
+  }
   for(const [name,title,tone] of [
     ['clean','Deployed — validation checks passed','clean'],
     ['warnings','Deployed — outstanding findings','qualified'],
     ['accepted','Deployed — accepted findings','qualified'],
     ['incomplete','Deployed — incomplete checks','qualified'],
   ]){
-    fixture=fixtures[name];await page.getByTestId('deploy-verify-btn').click();
-    await expect(page.getByTestId('verify-result').getByTestId('deploy-review-title')).toHaveText(title);
-    await expect(page.getByTestId('verify-result').getByTestId('deploy-review-summary')).toHaveAttribute('data-tone',tone);
-    await expect(page.getByTestId('verify-result')).toContainText('does not verify behavior in X4');
+    fixture=fixtures[name];await confirmPlaytest();
+    await expect(playtestTitle).toHaveText(title);
+    await expect(playtestResult.getByTestId('deploy-review-summary')).toHaveAttribute('data-tone',tone);
+    await expect(playtestResult).toContainText('does not verify behavior in X4');
   }
   await page.screenshot({path:path.join(evidence,'playtest-incomplete.png'),fullPage:true});
-  fixture={...fixtures.clean,bytesConfirmed:undefined};await page.getByTestId('deploy-verify-btn').click();
-  await expect(page.getByTestId('verify-result').getByTestId('deploy-review-title')).toContainText('bytes unconfirmed');
-  fixture={ok:false,stage:'preflight',error:'Fixture refusal'};await page.getByTestId('deploy-verify-btn').click();
-  await expect(page.getByTestId('verify-result').getByTestId('deploy-review-title')).toHaveText('Deployment failed');
-  await expect(page.getByTestId('verify-result')).toContainText('Fixture refusal');
+  fixture={...fixtures.clean,bytesConfirmed:undefined};await confirmPlaytest();
+  await expect(playtestTitle).toContainText('bytes unconfirmed');
+  const beforeRefusal = requests.length;
+  fixture={ok:false,stage:'preflight',error:'Fixture refusal'};await previewButton.click();
+  await expect(playtestTitle).toHaveText('Deployment failed');
+  await expect(playtestResult).toContainText('Fixture refusal');
+  await expect(applyButton).toHaveCount(0);
+  expect(requests).toHaveLength(beforeRefusal + 1);
   expect(applyIdentities).toEqual(
     [fixtures.accepted, fixtures.mixed, fixtures.clean, fixtures.warnings, fixtures.accepted, fixtures.incomplete, fixtures.clean]
       .map(({modId, sourceHash, artifactHash, bindingHash}) => ({
         modId, sourceHash, artifactHash, bindingHash, targetFingerprint: modeledTargetFingerprint,
       })),
   );
-  const previousCalls = calls;
+  const beforeMissingIdentity = requests.length;
   fixture=fixtures.clean;omitTargetFingerprint=true;
-  await page.getByTestId('deploy-verify-btn').click();
-  await expect(page.getByTestId('verify-result')).toContainText('Forge did not provide a deploy identity. No deployment was attempted.');
-  expect(calls).toBe(previousCalls + 1);
+  await previewButton.click();
+  await expect(playtestResult).toContainText('Forge did not provide a deploy identity. No deployment was attempted.');
+  await expect(applyButton).toHaveCount(0);
+  expect(requests).toHaveLength(beforeMissingIdentity + 1);
+  const beforeMissingDestination = requests.length;
+  omitTargetFingerprint=false;omitTargetRoot=true;
+  await previewButton.click();
+  await expect(playtestResult).toContainText('exact X4 install destination');
+  await expect(playtestTitle).toHaveText('Deployment failed');
+  await expect(destination).toHaveCount(0);
+  await expect(applyButton).toHaveCount(0);
+  expect(requests).toHaveLength(beforeMissingDestination + 1);
+
+  omitTargetRoot=false;
+  const beforeSelectionChange = requests.length;
+  await previewButton.click();
+  await expect(destination).toContainText(modeledTargetRoot);
+  await page.evaluate(() => {
+    const context = window.__X4_WORKSPACE_CONTEXT__!;
+    const original = context.getWorkspaceId();
+    const alternate = original === 'ws_000000000000000000000000' ? 'ws_111111111111111111111111' : 'ws_000000000000000000000000';
+    context.selectWorkspace(alternate);
+    context.selectWorkspace(original);
+  });
+  await applyButton.click();
+  await expect(applyButton).toHaveCount(0);
+  expect(requests).toHaveLength(beforeSelectionChange + 1);
   expect(applyIdentities).toHaveLength(7);
 });

@@ -2574,13 +2574,15 @@ it cannot be located). Do not fabricate a node match. User evidence: `codex-clip
 `codex-clipboard-4cdff066-788b-4dc8-a237-274d9ad4da73.png`, and
 `codex-clipboard-30a8d251-044f-4fe7-a890-6e7e8ea71142.png`.
 
-### B113 · Reconcile Playtest "Ingame File Syncer" with Deploy + Verify `spec'd` (P1, user screenshot 2026-07-31)
+### B113 · Reconcile Playtest "Ingame File Syncer" with Deploy + Verify `in_progress` (P1, GitHub #34)
 
-**[REPRODUCED copy contradiction; behavior not yet runtime-proven]** the card says it writes directly to the live X4
+The original Playtest card said it wrote directly to the live X4
 extensions folder, labels `modWorkspacePath` as a staging workspace, and exposes both `Save XML` (`saveToDirectory`)
 and `Deploy + Verify`. Trace the actual target and safety/validation guarantees of both paths. Remove or relabel any
 redundant/unsafe action; one user intent must have one clear path, and direct live writes must never bypass the
 deploy/verify contract. User evidence: `codex-clipboard-c40c246d-0b6f-4ecf-a054-a774d33b99a0.png`.
+
+Current Dev reproduces both one-click native writes and replaces the duplicate with a preview and separate confirmation. The preview shows the source, exact X4 destination and file effect. [Rendered scratch replay and review](docs/plans/2026-11-09-playtest-deploy-confirmation.md). Installed Antigravity proof and release delivery remain open.
 
 ### B114 · Re-certify LIVE game telemetry after architecture changes `spec'd` (P0 experience gate)
 

@@ -92,9 +92,16 @@ test('C06 API identity, strict requests, source coordination and deploy refusal 
   await page.addInitScript(() => { localStorage.setItem('x4_forge_experience_mode', 'expert'); localStorage.removeItem('x4_mod_studio_workspace'); localStorage.removeItem('x4_mod_studio_version'); });
   // A new missing event has no accepted review, so the actual Playtest UI must show refusal.
   fs.writeFileSync(mdPath, goodMd.replace('<debug_text text="0"/>', '<raise_lua_event name="&apos;C06.another_missing_listener&apos;"/>'));
+  const browserDeploys: unknown[] = [];
+  page.on('request', req => {
+    if (req.method() === 'POST' && req.url().endsWith('/api/agent/deploy-verify')) browserDeploys.push(req.postDataJSON());
+  });
   await page.goto('/'); await page.locator('[data-sidebar-tab="playtest"]').click();
   await page.getByTestId('verify-path-input').fill(project.id); await page.getByTestId('deploy-verify-btn').click();
   const result = page.getByTestId('verify-result'); await expect(result).toContainText('md_lua.missing_register', { timeout: 90_000 });
+  await expect(page.getByTestId('deploy-apply-btn')).toHaveCount(0);
+  expect(browserDeploys).toMatchObject([{ path: project.id, root: 'workspace', dryRun: true }]);
+  expect(hash(path.join(game, 'extensions', project.id, md.path))).toBe(installedHash);
   await page.getByText('md_lua.missing_register', { exact: false }).last().scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(out, 'blocked-findings.png'), fullPage: true });
   checks.push('rendered-blocking-finding-in-deploy-result');

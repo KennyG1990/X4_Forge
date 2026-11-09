@@ -1,4 +1,3 @@
-import { fetchVerifiedDeploy } from '../lib/deployClient';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -27,7 +26,7 @@ interface DiagnosticsHubProps {
 
 /**
  * Self-contained MD Scanner + Playtest Workspace hub.
- * Owns its own analyze / log-analysis / sync / auto-fix state so it can live in the
+ * Owns its own analyze / log-analysis / auto-fix state so it can live in the
  * left sidebar independently of the right-hand code viewer.
  */
 export default function DiagnosticsHub({
@@ -50,10 +49,6 @@ export default function DiagnosticsHub({
   const [lastAnalyzedWorkspace, setLastAnalyzedWorkspace] = useState<string>('');
   const analysisAbortRef = React.useRef<AbortController | null>(null);
 
-  // Playtest / sync state
-  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'success' | 'error'>('idle');
-  const [syncErrorMsg, setSyncErrorMsg] = useState<string>('');
-  
   // Log analysis state
   const [logInput, setLogInput] = useState<string>('');
   const [diagnosingLogs, setDiagnosingLogs] = useState<boolean>(false);
@@ -94,36 +89,6 @@ export default function DiagnosticsHub({
 
   const cancelAnalysis = () => {
     analysisAbortRef.current?.abort();
-  };
-
-  const saveToDirectory = async (showFeedback: boolean) => {
-    if (!modWorkspacePath) return;
-    if (showFeedback) setSyncStatus('syncing');
-    try {
-      // Audit R4: deploy-verify (full 9-stage preflight) replaces the deprecated /deploy.
-      const deployRes = await fetchVerifiedDeploy( {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspace })
-      });
-      const deployData = await deployRes.json();
-      if (deployRes.ok && deployData.ok) {
-        if (showFeedback) {
-          setSyncStatus('success');
-          setTimeout(() => setSyncStatus('idle'), 2000);
-        }
-      } else {
-        const failed = (deployData.checklist || []).find((c: { status: string }) => c.status === 'fail');
-        throw new Error(deployData.error || (failed ? `${failed.label}: ${failed.detail}` : 'Failed to deploy on server.'));
-      }
-    } catch (err) {
-      console.error('Playtest Directory Sync Error:', err);
-      if (showFeedback) {
-        setSyncStatus('error');
-        setSyncErrorMsg(err.message || 'Disk write access refused.');
-        setTimeout(() => setSyncStatus('idle'), 5000);
-      }
-    }
   };
 
   const handleTriggerLogAnalysis = async () => {
@@ -274,9 +239,6 @@ export default function DiagnosticsHub({
             activeModId={toSafeModId(workspace.name)}
             modWorkspacePath={modWorkspacePath}
             releasePreferences={releasePreferences}
-            syncStatus={syncStatus}
-            syncErrorMsg={syncErrorMsg}
-            saveToDirectory={saveToDirectory}
             logInput={logInput}
             setLogInput={setLogInput}
             diagnosingLogs={diagnosingLogs}

@@ -1,4 +1,4 @@
-import { fetchVerifiedDeploy } from '../lib/deployClient';
+import { bindDeployPreview, type DeployReviewData } from '../lib/deployClient';
 import DeployValidationSummary from './DeployValidationSummary';
 import React, { useState } from 'react';
 import type { ModWorkspace } from '../types';
@@ -17,8 +17,6 @@ import {
   Upload, 
   Sparkles, 
   CheckCircle, 
-  AlertTriangle, 
-  Save, 
   RefreshCw, 
   Wrench, 
   Cpu
@@ -435,9 +433,6 @@ interface PlaytestWorkspaceProps {
   workspace: ModWorkspace;
   activeModId: string;
   modWorkspacePath: string;
-  syncStatus: 'idle' | 'syncing' | 'success' | 'error';
-  syncErrorMsg: string;
-  saveToDirectory: (showFeedback: boolean) => Promise<void>;
   logInput: string;
   setLogInput: (text: string) => void;
   diagnosingLogs: boolean;
@@ -451,13 +446,21 @@ interface PlaytestWorkspaceProps {
   releasePreferences?: ReleasePreferences;
 }
 
+type PlaytestDeployResult = DeployReviewData & {
+  checklist?: Array<{ id: string; label: string; status: string; detail: string }>;
+  error?: string;
+  compileErrors?: Array<{ message: string }>;
+  deployedPath?: string;
+  deployedBytes?: number;
+  doctor?: { blocking?: unknown[] };
+  deployRecord?: { id?: string };
+  effect?: DeployReviewData['effect'] & { added?: unknown[]; overwritten?: unknown[]; deleted?: unknown[]; preserved?: unknown[] };
+};
+
 export default function PlaytestWorkspace({
   workspace,
   activeModId,
   modWorkspacePath,
-  syncStatus,
-  syncErrorMsg,
-  saveToDirectory,
   logInput,
   setLogInput,
   diagnosingLogs,
@@ -491,8 +494,26 @@ export default function PlaytestWorkspace({
   // The agent API endpoints (/api/agent/npc-identity-probe/*) remain for agent use.
 
   const [verifyPath, setVerifyPath] = useState<string>('');
-  const [verifying, setVerifying] = useState<boolean>(false);
-  const [verifyResult, setVerifyResult] = useState<any>(null);
+  const [deployPhase, setDeployPhase] = useState<'preview' | 'apply' | null>(null);
+  const [deployAttempt, setDeployAttempt] = useState<{
+    result: PlaytestDeployResult;
+    review?: { destination: string; applyBody: string; epoch: number };
+  } | null>(null);
+  const workspaceContext = window.__X4_WORKSPACE_CONTEXT__;
+  const workspaceId = workspaceContext?.getWorkspaceId() || '';
+  const selectionRevision = workspaceContext?.getSelectionRevision() ?? 0;
+  const sourcePath = verifyPath.trim();
+  const canvasSource = sourcePath ? null : workspace;
+  const deploySource = React.useMemo(() => sourcePath ? { path: sourcePath, root: 'workspace' } : { workspace: canvasSource },
+    [sourcePath, canvasSource]);
+  const deployScopeEpoch = React.useRef(0);
+  const deployPending = React.useRef(false);
+  React.useLayoutEffect(() => {
+    setDeployAttempt(null);
+    return () => { deployScopeEpoch.current += 1; };
+  }, [workspaceId, selectionRevision, modWorkspacePath, deploySource]);
+  const verifyResult = deployAttempt?.result;
+  const reviewedDeploy = deployAttempt?.review;
 
   const [harvesting, setHarvesting] = useState<boolean>(false);
   const [harvestResult, setHarvestResult] = useState<any>(null);
@@ -510,20 +531,47 @@ export default function PlaytestWorkspace({
     }
   };
 
-  const deployAndVerify = async () => {
-    setVerifying(true);
-    setVerifyResult(null);
+  const requestDeploy = async (phase: 'preview' | 'apply') => {
+    if (deployPending.current) return;
+    const selectionMatches = () => workspaceId && workspaceContext?.getWorkspaceId() === workspaceId
+      && workspaceContext.getSelectionRevision() === selectionRevision;
+    if (!selectionMatches() || (phase === 'apply' && reviewedDeploy?.epoch !== deployScopeEpoch.current)) {
+      setDeployAttempt(null);
+      return;
+    }
+    const body = phase === 'preview' ? JSON.stringify({ ...deploySource, dryRun: true }) : reviewedDeploy?.applyBody;
+    if (!body) return;
+    const epoch = ++deployScopeEpoch.current;
+    const stillSelected = () => epoch === deployScopeEpoch.current && selectionMatches();
+    deployPending.current = true;
+    setDeployPhase(phase);
+    setDeployAttempt(null);
     try {
-      const r = await fetchVerifiedDeploy( {
+      const r = await fetch('/api/agent/deploy-verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(verifyPath.trim() ? { path: verifyPath.trim() } : { workspace }),
+        body,
       });
-      setVerifyResult(await r.json());
-    } catch (e: any) {
-      setVerifyResult({ ok: false, stage: 'network', error: e?.message || 'request failed' });
+      const result = await r.json();
+      if (!stillSelected()) return;
+      if (!r.ok || result.ok !== true) {
+        setDeployAttempt({ result: { ...result, ok: false } });
+        return;
+      }
+      if (phase === 'apply') {
+        setDeployAttempt({ result });
+        return;
+      }
+      if (result.dryRun !== true || typeof result.targetRoot !== 'string' || !result.targetRoot.trim()) {
+        throw new Error('Forge did not return a preview with an exact X4 install destination.');
+      }
+      const applyBody = JSON.stringify(bindDeployPreview(JSON.parse(body), result));
+      setDeployAttempt({ result, review: { destination: result.targetRoot, applyBody, epoch } });
+    } catch (error) {
+      if (stillSelected()) setDeployAttempt({ result: { ok: false, error: error instanceof Error ? error.message : 'Deploy request failed.' } });
     } finally {
-      setVerifying(false);
+      deployPending.current = false;
+      setDeployPhase(null);
     }
   };
 
@@ -615,77 +663,85 @@ export default function PlaytestWorkspace({
   return (
     <div className="p-4 space-y-5 font-sans select-text">
       
-      {/* LINK COMPONENT & LOG STATUS */}
+      {/* Deployment and release preparation */}
       <div className="bg-black/55 border border-white/10 p-4 rounded-xl space-y-4">
         <div className="flex items-start justify-between">
           <div className="space-y-1">
             <h3 className="text-xs font-bold uppercase tracking-wider text-white font-mono flex items-center gap-2">
               <Folder className="w-4 h-4 text-emerald-400" />
-              Ingame File Syncer
+              X4 Deployment
             </h3>
             <p className="text-[11px] text-slate-400 leading-normal">
-              Writes XML files directly to your live X4 extensions folder on updates.
+              Preview the selected source and confirm the exact X4 install destination before deploying.
             </p>
           </div>
           
           {modWorkspacePath ? (
             <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-mono text-[9px] font-bold flex items-center gap-1 shrink-0">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-              LINKED
+              WORKSPACE SET
             </span>
           ) : (
             <span className="px-2 py-0.5 rounded bg-red-500/10 text-slate-400 border border-white/10 font-mono text-[9px] font-bold flex items-center gap-1 shrink-0">
-              OFFLINE
+              WORKSPACE UNSET
             </span>
           )}
         </div>
 
-        {/* ACTION BUTTON SYSTEM */}
         {modWorkspacePath ? (
           <div className="space-y-3">
-            <div className="p-2.5 bg-[#0a0c10] border border-white/5 rounded-md font-mono text-[10px] flex justify-between items-center text-slate-400 gap-2">
-              <span className="truncate" title="Direct location handle connection">📍 Staging Workspace: {modWorkspacePath}</span>
+            <div className="p-2.5 bg-[#0a0c10] border border-white/5 rounded-md font-mono text-[10px] text-slate-300 break-all">
+              Mod Workspace · {modWorkspacePath}
             </div>
-            
-            <div className="flex items-center justify-end gap-4">
-              <button
-                onClick={() => saveToDirectory(true)}
-                disabled={syncStatus === 'syncing'}
-                className="px-3 py-1 bg-emerald-500 hover:bg-emerald-600 font-sans text-black font-bold text-[10px] rounded transition-all flex items-center gap-1 cursor-pointer hover:scale-105 active:scale-95"
-              >
-                <Save className="w-3 h-3" />
-                Save XML
-              </button>
-            </div>
+            <p className="text-[10px] text-slate-400">Deploy keeps a build copy under .forge-builds/loose in the Mod Workspace.</p>
 
-            {/* A1 — deploy + verify in one shot: import → compile gate → deploy → doctor → bytes confirm. */}
             <div className="pt-2 border-t border-white/5 space-y-1.5">
               <div className="flex items-center gap-2">
                 <input
                   type="text"
                   value={verifyPath}
                   onChange={(e) => setVerifyPath(e.target.value)}
-                  placeholder="mod folder (relative, blank = active)"
+                  disabled={deployPhase !== null}
+                  aria-label="Mod folder relative to Mod Workspace, or blank for current canvas"
+                  placeholder="Workspace folder or blank for canvas"
                   data-testid="verify-path-input"
-                  className="flex-1 px-2 py-1 bg-[#08090d] border border-white/10 text-slate-200 rounded font-mono text-[10px] focus:outline-none focus:border-cyan-500"
+                  className="min-w-0 flex-1 px-2 py-1 bg-[#08090d] border border-white/10 text-slate-200 rounded font-mono text-[10px] focus:outline-none focus:border-cyan-500"
                 />
                 <button
-                  onClick={deployAndVerify}
-                  disabled={verifying}
+                  type="button"
+                  onClick={() => void requestDeploy('preview')}
+                  disabled={deployPhase !== null || !workspaceId}
                   data-testid="deploy-verify-btn"
                   className="px-3 py-1 bg-cyan-500 hover:bg-cyan-600 disabled:opacity-40 font-sans text-black font-bold text-[10px] rounded transition-all whitespace-nowrap"
                 >
-                  {verifying ? 'Verifying…' : 'Deploy + Verify'}
+                  {deployPhase === 'preview' ? 'Previewing…' : 'Preview deployment'}
                 </button>
               </div>
+              <p className="break-all text-[10px] text-slate-300">Source · {sourcePath ? `Mod Workspace / ${sourcePath}` : `Current canvas / ${workspace.name}`}</p>
+              {deployPhase === 'apply' && <p role="status" className="text-[10px] text-slate-300">Deploying and verifying…</p>}
               {verifyResult && (
                 <div data-testid="verify-result" className="rounded border border-slate-600 bg-slate-900/50 p-2 text-[10px] font-mono leading-relaxed">
                   <DeployValidationSummary result={verifyResult} />
-                  {/* PREFLIGHT CHECKLIST (bundle C): the full walkaround, one row per check. */}
+                  {reviewedDeploy && (
+                    <div className="mt-2 space-y-1.5 rounded border border-cyan-500/25 p-2">
+                      <p className="break-all text-slate-200" data-testid="playtest-deploy-destination">X4 install destination · {reviewedDeploy.destination}</p>
+                      {verifyResult.effect && <p className="text-slate-300">
+                        Files · {verifyResult.effect.added?.length ?? 0} added · {verifyResult.effect.overwritten?.length ?? 0} replaced · {verifyResult.effect.deleted?.length ?? 0} removed · {verifyResult.effect.preserved?.length ?? 0} preserved
+                      </p>}
+                      <button
+                        type="button"
+                        onClick={() => void requestDeploy('apply')}
+                        data-testid="deploy-apply-btn"
+                        className="px-3 py-1 bg-cyan-500 hover:bg-cyan-600 font-sans text-black font-bold text-[10px] rounded"
+                      >
+                        Deploy + Verify
+                      </button>
+                    </div>
+                  )}
                   {Array.isArray(verifyResult.checklist) && verifyResult.checklist.length > 0 && (
-                    <div className="mt-1.5 space-y-0.5" data-testid="preflight-checklist">
-                      {verifyResult.checklist.map((c: { id: string; label: string; status: string; detail: string }) => (
-                        <div key={c.id} className="grid grid-cols-[14px_130px_1fr] gap-1 items-start">
+                    <div className="@container mt-1.5 space-y-1.5" data-testid="preflight-checklist">
+                      {verifyResult.checklist.map(c => (
+                        <div key={`${c.id}-${c.label}`} className="grid grid-cols-[14px_minmax(0,1fr)] items-start gap-x-1 @min-[24rem]:grid-cols-[14px_130px_minmax(0,1fr)]">
                           <span className={
                             c.status === 'pass' ? 'text-emerald-400' :
                             c.status === 'warn' ? 'text-amber-400' :
@@ -694,16 +750,16 @@ export default function PlaytestWorkspace({
                             {c.status === 'pass' ? '●' : c.status === 'warn' ? '▲' : c.status === 'fail' ? '✗' : '○'}
                           </span>
                           <span className="text-slate-300">{c.label}</span>
-                          <span className="text-slate-500 leading-tight" title={c.detail}>{String(c.detail).slice(0, 90)}</span>
+                          <span className="col-start-2 break-words text-slate-400 leading-tight @min-[24rem]:col-start-auto">{c.detail}</span>
                         </div>
                       ))}
                     </div>
                   )}
-                  {verifyResult.modId && <div className="text-slate-300">mod: {verifyResult.modId}</div>}
-                  {verifyResult.deployedPath && <div className="text-slate-400 truncate" title={verifyResult.deployedPath}>→ {verifyResult.deployedPath}</div>}
+                  {verifyResult.deployedPath && <div className="break-all text-slate-400">X4 install destination · {verifyResult.deployedPath}</div>}
                   {typeof verifyResult.bytesConfirmed === 'boolean' && <div className="text-slate-400">bytes confirmed: {String(verifyResult.bytesConfirmed)} ({verifyResult.deployedBytes}b) · doctor blocking: {verifyResult.doctor?.blocking?.length ?? '—'}</div>}
+                  {verifyResult.deployRecord?.id && <div className="break-all text-slate-400">Deploy receipt · {verifyResult.deployRecord.id}</div>}
                   {verifyResult.error && <div className="text-red-300">{verifyResult.error}</div>}
-                  {verifyResult.compileErrors?.length > 0 && <div className="text-red-300">{verifyResult.compileErrors[0].message}</div>}
+                  {verifyResult.compileErrors?.[0] && <div className="text-red-300">{verifyResult.compileErrors[0].message}</div>}
                 </div>
               )}
             </div>
@@ -736,7 +792,7 @@ export default function PlaytestWorkspace({
         ) : (
           <div className="space-y-3">
             <p className="text-[10px] text-slate-500 leading-relaxed italic">
-              No workspace staging folder configured. Please open Settings to set your Mod Workspace Folder.
+              Set the Mod Workspace Folder in Settings to preview deployments.
             </p>
           </div>
         )}
@@ -745,27 +801,6 @@ export default function PlaytestWorkspace({
             unconfigured. Its own staged response explains the exact source/output failure. */}
         <ReleaseCenter workspace={workspace} preferences={releasePreferences} />
 
-        {syncStatus === 'syncing' && (
-          <div className="p-2 bg-slate-900 border border-white/10 rounded font-mono text-[10px] text-slate-400 flex items-center justify-center gap-2 animate-pulse">
-            <RefreshCw className="w-3.5 h-3.5 animate-spin text-cyan-400" />
-            Writing XML packages to disk...
-          </div>
-        )}
-        {syncStatus === 'success' && (
-          <div className="p-2 bg-emerald-500/10 border border-emerald-500/20 rounded font-mono text-[10px] text-emerald-400 flex items-center justify-center gap-1.5 animate-fade-in">
-            <CheckCircle className="w-3.5 h-3.5" />
-            Files synced successfully! Mod is updated.
-          </div>
-        )}
-        {syncStatus === 'error' && (
-          <div className="p-3 bg-red-500/5 border border-red-500/20 rounded font-sans text-[11px] text-red-300 leading-normal space-y-1">
-            <div className="font-mono font-bold text-[10px] text-red-400 flex items-center gap-1">
-              <AlertTriangle className="w-3.5 h-3.5" />
-              DISK WRITE REFUSED
-            </div>
-            <p>{syncErrorMsg}</p>
-          </div>
-        )}
       </div>
 
       {/* ERROR LOADER & DEBUG FILE INPUT TRIGGER */}

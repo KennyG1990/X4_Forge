@@ -67,7 +67,12 @@ test('C04 corpus validation cases, coverage truth and scratch deployment', async
   expect((await post('/api/schema/config',{modWorkspacePath:mods,filesystemPath:path.join(game,'extensions'),x4GamePath:game})).status).toBe(200);
   const imported=await post('/api/agent/mod-folder/import',{root:'workspace',path:'forge_regression_lab'}); expect(imported.data.success).toBe(true); await seedServerWorkspace(imported.data.workspace);
   await page.addInitScript(()=>{localStorage.setItem('x4_forge_experience_mode','expert');localStorage.removeItem('x4_mod_studio_workspace');localStorage.removeItem('x4_mod_studio_version');});
-  await page.goto('/'); await page.locator('[data-sidebar-tab="playtest"]').click(); await page.getByTestId('verify-path-input').fill('forge_regression_lab'); await page.getByTestId('deploy-verify-btn').click();
+  await page.goto('/'); await page.locator('[data-sidebar-tab="playtest"]').click();
+  await page.getByTestId('verify-path-input').fill('forge_regression_lab'); await page.getByTestId('deploy-verify-btn').click();
+  const destination = path.join(game, 'extensions', 'forge_regression_lab');
+  await expect(page.getByTestId('playtest-deploy-destination')).toContainText(destination, { timeout: 90_000 });
+  expect(fs.existsSync(destination)).toBe(false);
+  await page.getByTestId('deploy-apply-btn').click();
   const result=page.getByTestId('verify-result'); await expect(result.getByTestId('deploy-review-title')).toContainText('Deployed', {timeout:90_000});
   await expect(result.getByTestId('deploy-review-title')).not.toHaveText('Deployed — validated'); await result.scrollIntoViewIfNeeded(); await page.screenshot({path:path.join(out,'products-warning.png'),fullPage:true}); checks.push('rendered-qualified-warning-deployment');
   writeProject(dynamicProject);

@@ -59,7 +59,12 @@ test('C05 warm HTTP validation sees edits and scratch deploy refuses stale bytes
   const next=(await post('/api/agent/deploy-verify',{...target,dryRun:true})).data;expect(next.sourceHash).not.toBe(preview.sourceHash);
   // Existing visible verdict must keep its qualification after reuse; no new UI surface.
   await page.addInitScript(()=>{localStorage.setItem('x4_forge_experience_mode','expert');localStorage.removeItem('x4_mod_studio_workspace');localStorage.removeItem('x4_mod_studio_version');});
-  await page.goto('/');await page.locator('[data-sidebar-tab="playtest"]').click();await page.getByTestId('verify-path-input').fill(project.id);await page.getByTestId('deploy-verify-btn').click();
+  await page.goto('/');await page.locator('[data-sidebar-tab="playtest"]').click();
+  await page.getByTestId('verify-path-input').fill(project.id);await page.getByTestId('deploy-verify-btn').click();
+  const destination=path.join(game,'extensions',project.id);
+  await expect(page.getByTestId('playtest-deploy-destination')).toContainText(destination,{timeout:90_000});
+  for(const f of installed)expect(digest(path.join(destination,f.path))).toBe(f.sha256);
+  await page.getByTestId('deploy-apply-btn').click();
   const result=page.getByTestId('verify-result');await expect(result.getByTestId('deploy-review-title')).toContainText('Deployed',{timeout:90_000});
   await expect(result.getByTestId('deploy-review-title')).not.toHaveText('Deployed — validated');await result.scrollIntoViewIfNeeded();await page.screenshot({path:path.join(out,'warm-deploy.png'),fullPage:true});
   fs.writeFileSync(path.join(out,'receipt.json'),JSON.stringify({pass:true,checks:['identical-warm-response','schema-error-and-repair','sibling-listener-change','exact-deployed-bytes','stale-refusal-no-write','fresh-preview-new-identity','rendered-qualified-result'],timings,modId:deployed.modId,sourceHash:deployed.sourceHash,deployReceiptId:deployed.deployRecord.id,installed},null,2));

@@ -72,7 +72,13 @@ test('C03 real warning approval reuse, invalidation, records and rendered revoca
   await page.addInitScript(() => { localStorage.setItem('x4_forge_experience_mode', 'expert'); localStorage.removeItem('x4_mod_studio_workspace'); localStorage.removeItem('x4_mod_studio_version'); });
   await page.goto('/'); await page.locator('[data-sidebar-tab="playtest"]').click();
   await page.getByTestId('verify-path-input').fill('forge_regression_lab');
+  const beforePreview = bytes();
   await page.getByTestId('deploy-verify-btn').click();
+  await expect(page.getByTestId('playtest-deploy-destination')).toContainText(
+    path.join(game, 'extensions', 'forge_regression_lab'), { timeout: 90_000 },
+  );
+  expect(bytes()).toBe(beforePreview);
+  await page.getByTestId('deploy-apply-btn').click();
   const result = page.getByTestId('verify-result');
   await expect(result.getByTestId('deploy-review-title')).toHaveText('Deployed — accepted findings', { timeout: 90_000 });
   await result.getByTestId('deploy-review-title').scrollIntoViewIfNeeded();

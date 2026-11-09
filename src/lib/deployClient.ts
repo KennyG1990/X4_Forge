@@ -1,3 +1,14 @@
+export function bindDeployPreview(body: Record<string, unknown>, preview: Record<string, unknown>) {
+  const { modId, sourceHash, artifactHash, bindingHash, targetFingerprint } = preview;
+  const isHash = (value: unknown) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+  if (typeof modId !== 'string' || !modId || !isHash(sourceHash) || !isHash(artifactHash)
+    || !isHash(bindingHash) || (targetFingerprint !== 'absent' && !isHash(targetFingerprint))) {
+    throw new Error('Forge did not provide a deploy identity. No deployment was attempted.');
+  }
+  return { ...body, dryRun: false, expectedModId: modId, expectedSourceHash: sourceHash,
+    expectedArtifactHash: artifactHash, expectedBindingHash: bindingHash, expectedTargetFingerprint: targetFingerprint };
+}
+
 /** Every browser deploy is preview-bound. This helper never approves a finding for the user. */
 export async function fetchVerifiedDeploy(init: RequestInit, fetcher: typeof fetch = fetch): Promise<Response> {
   if (typeof init.body !== 'string') throw new Error('Deploy body must be serialized JSON.');
@@ -5,14 +16,7 @@ export async function fetchVerifiedDeploy(init: RequestInit, fetcher: typeof fet
   const preview = await fetcher('/api/agent/deploy-verify', { ...init, body: JSON.stringify({ ...body, dryRun: true }) });
   const data = await preview.clone().json();
   if (!preview.ok || !data.ok || body.dryRun === true) return preview;
-  if (!data.modId || !['sourceHash', 'artifactHash', 'bindingHash'].every(k => /^[a-f0-9]{64}$/.test(data[k] || ''))
-    || (data.targetFingerprint !== 'absent' && !/^[a-f0-9]{64}$/.test(data.targetFingerprint || ''))) {
-    throw new Error('Forge did not provide a deploy identity. No deployment was attempted.');
-  }
-  return fetcher('/api/agent/deploy-verify', { ...init, body: JSON.stringify({ ...body, dryRun: false,
-    expectedModId: data.modId, expectedSourceHash: data.sourceHash,
-    expectedArtifactHash: data.artifactHash, expectedBindingHash: data.bindingHash,
-    expectedTargetFingerprint: data.targetFingerprint }) });
+  return fetcher('/api/agent/deploy-verify', { ...init, body: JSON.stringify(bindDeployPreview(body, data)) });
 }
 
 export interface DeployReviewData {

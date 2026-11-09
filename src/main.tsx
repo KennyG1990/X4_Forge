@@ -21,6 +21,7 @@ declare global {
     __X4_WORKSPACE_CONTEXT__?: {
       clientId: string;
       getWorkspaceId(): string;
+      getSelectionRevision(): number;
       selectWorkspace(workspaceId: string): void;
     };
   }
@@ -46,12 +47,16 @@ function generateClientId(): string {
 const generatedClientId = generateClientId();
 const clientId = sessionStorage.getItem(CLIENT_ID_KEY) || generatedClientId;
 sessionStorage.setItem(CLIENT_ID_KEY, clientId);
+let workspaceSelectionRevision = 0;
 window.__X4_WORKSPACE_CONTEXT__ = {
   clientId,
   getWorkspaceId: () => sessionStorage.getItem(WORKSPACE_ID_KEY) || '',
+  getSelectionRevision: () => workspaceSelectionRevision,
   selectWorkspace: (workspaceId: string) => {
     if (!/^ws_[a-f0-9]{24}$/i.test(workspaceId)) throw new Error('Refused malformed workspaceId.');
+    if (workspaceId === sessionStorage.getItem(WORKSPACE_ID_KEY)) return;
     sessionStorage.setItem(WORKSPACE_ID_KEY, workspaceId);
+    workspaceSelectionRevision += 1;
   },
 };
 
