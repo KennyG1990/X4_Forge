@@ -134,7 +134,7 @@ import { ActionReceiptStore, ActionReceiptStoreError } from "./src/lib/actionRec
 import { evaluateFindingAcceptances, projectFindingReview, recordFindingAcceptances, verifyFindingAcceptanceReceipts, revokeWarningReview, type AcceptanceSubject, type AcceptancePrincipal } from './src/server/findingAcceptance';
 import { parseModFolderImportRequest } from './src/server/modFolderImportRequest';
 import { RuntimeControl } from './src/server/runtimeControl';
-import { trustHash, deploymentImplementationHash, deploymentCorpusFiles, prepareDeployRecord, commitDeployRecord, deployReceiptIdentity, readDeployOperationReceipt, recordIncompleteDeployOutput, deployOperationOutcome } from './src/server/deploymentTrust';
+import { trustHash, deploymentImplementationHash, deploymentCorpusFiles, prepareDeployRecord, commitDeployRecord, deployReceiptIdentity, readDeployOperationReceipt, recordIncompleteDeployOutput, deployOperationStatus } from './src/server/deploymentTrust';
 import { actionReceiptIdForOperation, type ActionReceipt } from './src/lib/actionReceipt';
 import { attachActionReceiptToLedgerRow } from "./src/lib/actionReceiptHistory";
 import { combineReceiptResourceBeforeHashes, hashBoundedReceiptFacts } from "./src/lib/actionReceiptRuntime";
@@ -5328,7 +5328,7 @@ app.get("/api/agent/status", (req, res) => {
           ok: false, code: 'DEPLOY_OPERATION_NOT_FOUND', outcome: 'unknown',
         });
         return res.json({
-          ok: true, workspaceId: record.workspaceId, outcome: deployOperationOutcome(receipt, destructiveRecoveryStore), receipt,
+          ok: true, workspaceId: record.workspaceId, ...deployOperationStatus(receipt, destructiveRecoveryStore), receipt,
         });
       } catch (error: any) {
         const forbidden = error?.code === 'DEPLOY_APPROVAL_FORBIDDEN';
@@ -14422,7 +14422,8 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       pendingDeployRecovery.id, pendingDeployRecovery.beforeFingerprint, snapshot.manifest.hash, operation,
       nativeCheckProof?.proof, operation ? pendingDeployRecovery : undefined);
     assertWriteAuthority();
-    if (operation) destructiveRecoveryStore.admitDeploymentWrite(pendingDeployRecovery);
+    const admittedRecovery = operation ? destructiveRecoveryStore.admitDeploymentWrite(pendingDeployRecovery) : undefined;
+    const preparedReceiptHash = deployReceipt.hash;
     if (!fs.existsSync(extensionsPath)) fs.mkdirSync(extensionsPath, { recursive: true });
     writeAttempted = true;
     if (modWorkspacePath) {
@@ -14432,7 +14433,10 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     let stagedFingerprint: string | undefined;
     const deployedPath = compileWorkspaceToFolder(ws, extensionsPath, 'store', false, deployFormat, {
       beforeActivate: () => { assertWriteAuthority(); assertCurrentTarget(); },
-      onStagedFingerprint: fingerprint => { stagedFingerprint = fingerprint; },
+      onStagedFingerprint: fingerprint => {
+        if (admittedRecovery) destructiveRecoveryStore.recordStagedDeployment(admittedRecovery, preparedReceiptHash, fingerprint);
+        stagedFingerprint = fingerprint;
+      },
       expectedTargetBeforeWrite: targetFingerprint,
       onTargetWrite: state => { targetWrite.state = state; },
     }, frozenPlan);

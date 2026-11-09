@@ -10,7 +10,7 @@ import { ActionReceiptStore } from '../src/lib/actionReceiptStore';
 import { redactReceiptMetadata } from '../src/lib/actionReceipt';
 import { DestructiveRecoveryStore } from '../src/lib/destructiveRecovery';
 import { evaluateFindingAcceptances } from '../src/server/findingAcceptance';
-import { prepareDeployRecord, commitDeployRecord, deployOperationOutcome, deployReceiptIdentity } from '../src/server/deploymentTrust';
+import { prepareDeployRecord, commitDeployRecord, deployOperationStatus, deployReceiptIdentity } from '../src/server/deploymentTrust';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-snapshot-test-'));
 let assertions = 0;
@@ -56,14 +56,14 @@ try {
   const decision = evaluateFindingAcceptances(subject, [], principal);
   const recovery = new DestructiveRecoveryStore({ root: path.join(root, 'recovery') });
   const prepared = prepareDeployRecord(store, subject, decision, principal, [], 'recovery_snapshot_test', 'absent', artifactPlanIdentity(plan, 'loose'));
-  check('legacy prepared receipt has unknown write outcome', deployOperationOutcome(prepared, recovery) === 'unknown');
+  check('legacy prepared receipt has unknown write outcome', deployOperationStatus(prepared, recovery).outcome === 'unknown');
   const targetRoot = path.join(root, 'extensions');
   const before = recovery.prepareDeployment({ priorExisted: false, targetRoot, targetPath: path.join(targetRoot, 'lab'),
     modId: 'lab', beforeFingerprint: 'absent', beforeBytes: 0, summary: 'Test deployment', trackWriteAdmission: true });
   const operation = deployReceiptIdentity(principal, { workspaceId: 'ws_111111111111111111111111', operationId: 'test-write-admission' });
   const tracked = prepareDeployRecord(store, subject, decision, principal, [], before.id, before.beforeFingerprint,
     artifactPlanIdentity(plan, 'loose'), operation, undefined, before);
-  check('live prepared owner has unknown write outcome', deployOperationOutcome(tracked, recovery) === 'unknown');
+  check('live prepared owner has unknown write outcome', deployOperationStatus(tracked, recovery).outcome === 'unknown');
   assert.throws(() => recovery.admitDeploymentWrite({ ...before, beforeBytes: 1 }), /no longer matches/); assertions++;
   const rename = fs.renameSync;
   const recoveryFile = path.join(recovery.root, before.id, 'record.json');
@@ -81,20 +81,34 @@ try {
     fs.renameSync = rename;
     syncBuiltinESMExports();
   }
-  recovery.admitDeploymentWrite(before);
-  const admitted = recovery.read(before.id);
-  check('write admission persisted before any target write', admitted.ok && admitted.record.kind === 'deploy'
-    && admitted.record.writeAdmission?.phase === 'started-v1' && !fs.existsSync(targetRoot));
-  check('admitted prepared receipt has unknown write outcome', deployOperationOutcome(tracked, recovery) === 'unknown');
+  const admitted = recovery.admitDeploymentWrite(before);
+  const readAdmission = recovery.read(before.id);
+  check('write admission persisted before any target write', readAdmission.ok && readAdmission.record.kind === 'deploy'
+    && readAdmission.record.writeAdmission?.phase === 'started-v1' && !fs.existsSync(targetRoot));
+  check('admitted prepared receipt has unknown write outcome', deployOperationStatus(tracked, recovery).outcome === 'unknown');
+  assert.throws(() => recovery.recordStagedDeployment(before, tracked.hash, 'e'.repeat(64)), /Invalid staged/); assertions++;
+  recovery.recordStagedDeployment(admitted, tracked.hash, 'e'.repeat(64));
+  const staged = recovery.read(before.id);
+  check('staged fingerprint and receipt hash persist before target activation', staged.ok && staged.record.kind === 'deploy'
+    && staged.record.stagedEvidence?.preparedReceiptHash === tracked.hash
+    && staged.record.stagedEvidence.fingerprint === 'e'.repeat(64) && !fs.existsSync(targetRoot));
+  check('live owner cannot project staged evidence', !('reconciliation' in deployOperationStatus(tracked, recovery)));
+  assert.throws(() => recovery.recordStagedDeployment(admitted, tracked.hash, 'f'.repeat(64)), /no longer matches/); assertions++;
+  if (staged.ok && staged.record.kind === 'deploy' && staged.record.stagedEvidence) {
+    fs.writeFileSync(recoveryFile, JSON.stringify({ ...staged.record,
+      stagedEvidence: { ...staged.record.stagedEvidence, fingerprint: 'f'.repeat(64) } }));
+  }
+  check('changed staged fingerprint invalidates the record', !recovery.read(before.id).ok
+    && !('reconciliation' in deployOperationStatus(tracked, recovery)));
   assert.throws(() => recovery.admitDeploymentWrite(before), /no longer matches/); assertions++;
   recovery.abandon(before.id);
   assert.throws(() => recovery.admitDeploymentWrite(before), /no longer matches/); assertions++;
-  check('missing recovery keeps prepared outcome unknown', deployOperationOutcome(tracked, recovery) === 'unknown');
+  check('missing recovery keeps prepared outcome unknown', deployOperationStatus(tracked, recovery).outcome === 'unknown');
   const committed = commitDeployRecord(store, prepared, 'e'.repeat(64));
   const reopened = new ActionReceiptStore({ root: store.root }).read(committed.id);
   check('snapshot audit hash survives durable committed readback', reopened.status === 'committed' && reopened.metadata?.validatedArtifactHash === artifactPlanIdentity(plan, 'loose'));
   check('snapshot scope retained', reopened.metadata?.validatedArtifactScope === 'logical-artifact-bytes');
-  check('committed outcome survives without a recovery record', deployOperationOutcome(reopened, recovery) === 'committed');
+  check('committed outcome survives without a recovery record', deployOperationStatus(reopened, recovery).outcome === 'committed');
 
   const prepareCommitTest = () => prepareDeployRecord(store, subject, decision, principal, [],
     'recovery_snapshot_test', 'absent', artifactPlanIdentity(plan, 'loose'));

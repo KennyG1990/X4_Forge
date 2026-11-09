@@ -137,6 +137,15 @@ record. A missing receipt or an unproven write phase leaves the outcome `unknown
 Reusing a recorded operation ID refuses a second apply and returns the existing receipt
 pointer. Start a fresh preview before deciding on a new operation.
 
+An interrupted operation can include `reconciliation` with the saved
+`targetBindingHash`, `beforeTargetFingerprint`, and `stagedTargetFingerprint`.
+Run a fresh native preview with `dryRun: true` for the same mod and deploy format.
+Compare its `binding.targetHash` first, then compare `targetFingerprint` with the
+two saved fingerprints. A match describes the files the preview sees now. Both
+values can match on an identical redeploy. A different binding or fingerprint calls for
+reviewing the preview before applying. To proceed, use the fresh preview's
+identities and a new operation ID. The original outcome is still `unknown`.
+
 If Forge returns `DEPLOY_RESPONSE_FAILED_AFTER_COMMIT`, its `deployRecord`
 and `outcome: committed` describe the historical write even though the reply
 is incomplete. Check `deployment.fidelityScope` before comparing files.

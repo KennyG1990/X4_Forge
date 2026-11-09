@@ -170,20 +170,27 @@ export function readDeployOperationReceipt(store: ActionReceiptStore, identity: 
 
 const prewriteStage = (record: DeploymentRecoveryRecord) => `deploy-prewrite-v1:${trustHash(record)}`;
 
-export function deployOperationOutcome(receipt: ActionReceipt, recovery: DestructiveRecoveryStore) {
-  if (receipt.status !== 'prepared') return receipt.status;
+export function deployOperationStatus(receipt: ActionReceipt, recovery: DestructiveRecoveryStore) {
+  if (receipt.status !== 'prepared') return { outcome: receipt.status };
+  const unknown = { outcome: 'unknown' as const };
   const recoveryId = receipt.rollback.reference;
-  if (!recoveryId || !String(receipt.metadata?.stage).startsWith('deploy-prewrite-v1:')) return 'unknown';
+  if (!recoveryId || !String(receipt.metadata?.stage).startsWith('deploy-prewrite-v1:')) return unknown;
   const initial = recovery.read(recoveryId);
   if (!initial.ok || initial.record.kind !== 'deploy' || initial.record.id !== recoveryId
-    || initial.record.status !== 'preparing' || initial.record.writeAdmission?.phase !== 'pending-v1'
-    || initial.record.writeAdmission.host !== os.hostname() || receipt.metadata?.stage !== prewriteStage(initial.record)
-    || processLiveness(initial.record.writeAdmission.pid) !== 'dead') return 'unknown';
+    || initial.record.status !== 'preparing' || initial.record.writeAdmission?.host !== os.hostname()
+    || processLiveness(initial.record.writeAdmission.pid) !== 'dead') return unknown;
   // Read again after observing owner exit. The owner could have admitted the write
   // between our first read and its exit.
   const retired = recovery.read(recoveryId);
-  return retired.ok && retired.record.kind === 'deploy' && prewriteStage(retired.record) === receipt.metadata.stage
-    ? 'not-applied' : 'unknown';
+  if (!retired.ok || retired.record.kind !== 'deploy' || retired.record.status !== 'preparing') return unknown;
+  const { writeAdmission, stagedEvidence, ...preState } = retired.record;
+  if (!writeAdmission || writeAdmission.pid !== initial.record.writeAdmission.pid || writeAdmission.host !== initial.record.writeAdmission.host
+    || prewriteStage({ ...preState, writeAdmission: { ...writeAdmission, phase: 'pending-v1' } }) !== receipt.metadata?.stage) return unknown;
+  if (writeAdmission.phase === 'pending-v1') return { outcome: 'not-applied' as const };
+  const targetBindingHash = receipt.metadata?.targetHash;
+  if (stagedEvidence?.preparedReceiptHash !== receipt.hash || typeof targetBindingHash !== 'string') return unknown;
+  return { ...unknown, reconciliation: { targetBindingHash, beforeTargetFingerprint: preState.beforeFingerprint,
+    stagedTargetFingerprint: stagedEvidence.fingerprint } };
 }
 
 export function prepareDeployRecord(

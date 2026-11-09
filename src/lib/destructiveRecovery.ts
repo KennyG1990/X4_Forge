@@ -58,6 +58,7 @@ export interface DeploymentRecoveryRecord extends RecoveryBase {
   beforeFingerprint: string;
   beforeBytes: number;
   writeAdmission?: { phase: 'pending-v1' | 'started-v1'; pid: number; host: string };
+  stagedEvidence?: { preparedReceiptHash: string; fingerprint: string; hash: string };
 }
 
 export type DestructiveRecoveryRecord = WorkspaceRecoveryRecord | DeploymentRecoveryRecord;
@@ -150,6 +151,10 @@ function validId(id: string): boolean {
   return /^[a-z0-9][a-z0-9_-]{11,80}$/i.test(String(id || ''));
 }
 
+const DEPLOY_HASH = /^[a-f0-9]{64}$/;
+const stagedEvidenceHash = (preparedReceiptHash: string, fingerprint: string) => crypto.createHash('sha256')
+  .update(JSON.stringify(['forge-deploy-staged-v1', preparedReceiptHash, fingerprint])).digest('hex');
+
 function isRecord(value: unknown): value is DestructiveRecoveryRecord {
   if (!value || typeof value !== 'object') return false;
   const row = value as Partial<DestructiveRecoveryRecord>;
@@ -165,7 +170,11 @@ function isRecord(value: unknown): value is DestructiveRecoveryRecord {
     && (row.writeAdmission === undefined || (row.writeAdmission !== null
       && ['pending-v1', 'started-v1'].includes(row.writeAdmission.phase)
       && Number.isSafeInteger(row.writeAdmission.pid) && row.writeAdmission.pid > 0
-      && typeof row.writeAdmission.host === 'string' && !!row.writeAdmission.host));
+      && typeof row.writeAdmission.host === 'string' && !!row.writeAdmission.host))
+    && (row.stagedEvidence === undefined || (row.stagedEvidence !== null && row.writeAdmission?.phase === 'started-v1'
+      && typeof row.stagedEvidence.preparedReceiptHash === 'string' && DEPLOY_HASH.test(row.stagedEvidence.preparedReceiptHash)
+      && typeof row.stagedEvidence.fingerprint === 'string' && DEPLOY_HASH.test(row.stagedEvidence.fingerprint)
+      && row.stagedEvidence.hash === stagedEvidenceHash(row.stagedEvidence.preparedReceiptHash, row.stagedEvidence.fingerprint)));
 }
 
 function directoryBytes(root: string): number {
@@ -393,21 +402,35 @@ export class DestructiveRecoveryStore {
     return record;
   }
 
-  admitDeploymentWrite(prepared: DeploymentRecoveryRecord): void {
+  private advanceDeploymentPreparation(prepared: DeploymentRecoveryRecord, next: DeploymentRecoveryRecord): DeploymentRecoveryRecord {
     const found = this.read(prepared.id);
-    if (!found.ok || prepared.status !== 'preparing' || prepared.writeAdmission?.phase !== 'pending-v1'
-      || prepared.writeAdmission.pid !== process.pid || prepared.writeAdmission.host !== os.hostname()
+    if (!found.ok || prepared.status !== 'preparing'
+      || prepared.writeAdmission?.pid !== process.pid || prepared.writeAdmission.host !== os.hostname()
       || canonicalJson(found.record) !== canonicalJson(prepared)) {
       throw new Error('Deployment write admission no longer matches its prepared recovery record.');
     }
-    const admitted: DeploymentRecoveryRecord = {
-      ...prepared, writeAdmission: { ...prepared.writeAdmission, phase: 'started-v1' },
-    };
-    this.write(admitted);
-    const verified = this.read(admitted.id);
-    if (!verified.ok || canonicalJson(verified.record) !== canonicalJson(admitted)) {
+    this.write(next);
+    const verified = this.read(next.id);
+    if (!verified.ok || canonicalJson(verified.record) !== canonicalJson(next)) {
       throw new Error('Deployment write admission could not be verified.');
     }
+    return next;
+  }
+
+  admitDeploymentWrite(prepared: DeploymentRecoveryRecord): DeploymentRecoveryRecord {
+    if (prepared.writeAdmission?.phase !== 'pending-v1') throw new Error('Deployment write admission no longer matches its prepared recovery record.');
+    return this.advanceDeploymentPreparation(prepared, {
+      ...prepared, writeAdmission: { ...prepared.writeAdmission, phase: 'started-v1' },
+    });
+  }
+
+  recordStagedDeployment(admitted: DeploymentRecoveryRecord, preparedReceiptHash: string, fingerprint: string): void {
+    if (admitted.writeAdmission?.phase !== 'started-v1' || admitted.stagedEvidence
+      || !DEPLOY_HASH.test(preparedReceiptHash) || !DEPLOY_HASH.test(fingerprint)) {
+      throw new Error('Invalid staged deployment evidence.');
+    }
+    const stagedEvidence = { preparedReceiptHash, fingerprint, hash: stagedEvidenceHash(preparedReceiptHash, fingerprint) };
+    this.advanceDeploymentPreparation(admitted, { ...admitted, stagedEvidence });
   }
 
   finalizeDeployment(id: string, expectedCurrentHash: string): DeploymentRecoveryRecord {
