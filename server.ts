@@ -134,7 +134,7 @@ import { ActionReceiptStore, ActionReceiptStoreError } from "./src/lib/actionRec
 import { evaluateFindingAcceptances, projectFindingReview, recordFindingAcceptances, verifyFindingAcceptanceReceipts, revokeWarningReview, type AcceptanceSubject, type AcceptancePrincipal } from './src/server/findingAcceptance';
 import { parseModFolderImportRequest } from './src/server/modFolderImportRequest';
 import { RuntimeControl } from './src/server/runtimeControl';
-import { trustHash, deploymentImplementationHash, deploymentCorpusFiles, prepareDeployRecord, commitDeployRecord, deployReceiptIdentity, readDeployOperationReceipt, recordIncompleteDeployOutput, deployOperationStatus } from './src/server/deploymentTrust';
+import { trustHash, deploymentImplementationHash, deploymentCorpusFiles, prepareDeployRecord, commitDeployRecord, deployReceiptIdentity, readDeployOperationReceipt, recordIncompleteDeployOutput, deployOperationStatus, compareDeployPreviewTarget } from './src/server/deploymentTrust';
 import { actionReceiptIdForOperation, type ActionReceipt } from './src/lib/actionReceipt';
 import { attachActionReceiptToLedgerRow } from "./src/lib/actionReceiptHistory";
 import { combineReceiptResourceBeforeHashes, hashBoundedReceiptFacts } from "./src/lib/actionReceiptRuntime";
@@ -4295,7 +4295,8 @@ app.get("/api/agent/schema", (req, res) => {
         auth: true,
         headers: { "x-forge-operation-id": "optional agent apply identity for recovery via GET /api/agent/status?deployOperationId=<id>" },
         body: { path: "explicit mod folder, mutually exclusive with workspace", workspace: "explicit ModWorkspace, mutually exclusive with path",
-          dryRun: "true to preview without writes", expectedModId: "required on apply, from preview",
+          dryRun: "true to preview without writes", inspectDeployOperationId: "optional agent dry-run comparison with an earlier operation in this workspace",
+          expectedModId: "required on apply, from preview",
           expectedSourceHash: "required on apply, from preview", expectedArtifactHash: "required on apply, from preview",
           expectedBindingHash: "required on apply, from preview", expectedTargetFingerprint: "targetFingerprint from preview; required for agent apply with x-forge-operation-id, optional otherwise",
           acceptances: "optional exact {findingId,bindingHash,reason}[]; deploy permission required" },
@@ -4310,6 +4311,7 @@ app.get("/api/agent/schema", (req, res) => {
           path: "required when workspace is omitted: mod folder path under a configured root",
           workspace: "required when path is omitted: ModWorkspace payload",
           dryRun: "optional boolean; run the full preflight and exact deployment preview without writing",
+          inspectDeployOperationId: "optional on dryRun:true for a deploy agent; compares current target with its earlier operation in this workspace",
           autoReimport: "optional boolean; when the stamped source is stale, re-import it from disk before continuing",
           deployFormat: "optional loose | catalog; request value wins, then persisted config, then loose default",
           expectedModId: "required on apply: modId from the current dry-run preview",
@@ -13924,10 +13926,12 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     const body = req.body;
     const allowed = new Set(['path', 'workspace', 'dryRun', 'deployFormat', 'autoReimport', 'allowStaleOverwrite',
       'expectedModId', 'expectedSourceHash', 'expectedArtifactHash', 'expectedBindingHash', 'expectedTargetFingerprint',
-      'projectCheckSuiteReceiptId', 'expectedProjectCheckSuiteReceiptHash', 'acceptances']);
+      'projectCheckSuiteReceiptId', 'expectedProjectCheckSuiteReceiptHash', 'acceptances', 'inspectDeployOperationId']);
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(k => !allowed.has(k))
       || (body.workspace !== undefined && (!body.workspace || typeof body.workspace !== 'object' || Array.isArray(body.workspace)))
       || (body.path !== undefined && (typeof body.path !== 'string' || !body.path.trim()))
+      || (body.inspectDeployOperationId !== undefined && (body.dryRun !== true || typeof body.inspectDeployOperationId !== 'string'
+        || !ACTION_RECEIPT_OPERATION_ID_RE.test(body.inspectDeployOperationId)))
       || (body.expectedTargetFingerprint !== undefined && (typeof body.expectedTargetFingerprint !== 'string'
         || !/^(?:absent|[a-f0-9]{64})$/.test(body.expectedTargetFingerprint)))
       || (body.projectCheckSuiteReceiptId !== undefined && (typeof body.projectCheckSuiteReceiptId !== 'string'
@@ -13938,6 +13942,12 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       return res.status(400).json(failWith('config', { code: 'DEPLOY_INPUT_INVALID', error: 'Unknown or malformed deployment fields.' }));
     }
     const principal = deploymentPrincipal(req);
+    if (body.inspectDeployOperationId !== undefined) {
+      res.set('Cache-Control', 'no-store');
+      if (principal.kind !== 'agent') return res.status(403).json(failWith('config', {
+        code: 'DEPLOY_APPROVAL_FORBIDDEN', error: 'Deploy preview comparison requires a deploy agent key.',
+      }));
+    }
     const acceptances = body.acceptances ?? [];
     if (!Array.isArray(acceptances) || acceptances.length > 127) {
       return res.status(400).json(failWith('config', { code: 'ACCEPTANCE_INPUT_INVALID', error: 'acceptances must contain at most 127 exact findings.' }));
@@ -14371,12 +14381,24 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     if (req.body?.dryRun === true) {
       check('deploy', 'Deploy preview (dry run — nothing written)', deploymentEffect.deleted.length ? 'warn' : 'pass',
         `would add ${deploymentEffect.added.length}, overwrite ${deploymentEffect.overwritten.length}, delete ${deploymentEffect.deleted.length}, preserve ${deploymentEffect.preserved.length}`);
+      let previousOperation;
+      if (body.inspectDeployOperationId !== undefined) {
+        const operationId = body.inspectDeployOperationId;
+        const identity = deployReceiptIdentity(principal, { workspaceId: requestWorkspace(req).workspaceId, operationId });
+        let prior: ReturnType<typeof deployOperationStatus> | undefined;
+        try {
+          const receipt = readDeployOperationReceipt(actionReceiptStore, identity);
+          if (receipt) prior = deployOperationStatus(receipt, destructiveRecoveryStore);
+        } catch { /* Comparison is optional and an unverifiable record supplies no evidence. */ }
+        previousOperation = { operationId, ...compareDeployPreviewTarget(prior, decision.binding.targetHash, targetFingerprint) };
+      }
       return res.json({
         ok: true,
         dryRun: true,
         stage: 'preview',
         deployment: deploymentFidelity(),
         ...responseIdentity,
+        ...(previousOperation ? { previousOperation } : {}),
         targetRoot,
         deployFormat: { mode: deployFormat },
         effect: deploymentEffect,

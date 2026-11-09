@@ -1,10 +1,10 @@
-# X4 Forge Dev handoff — interrupted deploy target evidence
+# X4 Forge Dev handoff — interrupted deploy comparison in preview
 
-Use the isolated `forge-a15-native-proof` worktree. The prior verified base is `787e0fffbc1ce593ddd749a3e86d88899e287c53`.
+Use the isolated `forge-a15-native-proof` worktree. The prior verified base is `5528cbaded89a31e5f1f1cfea495d6f3cbde5a3c`.
 
 ## Current unit
 
-Dev now preserves the staged target fingerprint before activation and projects it for the exact interrupted receipt after owner exit. A fresh preview can compare the current target. The new apply committed under a separate ID and cleared the old transaction sibling in private loopback. See the [forward recovery proof](docs/plans/2026-11-09-forge-interrupted-deploy-target-evidence.md), [commit readback proof](docs/plans/2026-11-09-forge-deploy-commit-readback.md) and [explicit backend recovery record](docs/plans/2026-11-09-forge-local-backend-recovery.md).
+Both native dry-run aliases accept `inspectDeployOperationId` from the scoped deploy agent. They classify the already fingerprinted target against the retained receipt and report its historical outcome separately. Private loopback confirmed wrong-key, wrong-format and apply refusals, then committed the fresh operation. See the [preview proof](docs/plans/2026-11-09-forge-interrupted-deploy-preview.md), [forward recovery proof](docs/plans/2026-11-09-forge-interrupted-deploy-target-evidence.md), and [explicit backend recovery record](docs/plans/2026-11-09-forge-local-backend-recovery.md).
 
 Keep the worktree separate from the release source, live Antigravity, X4, AiLive, and other agents' checkouts. Headless fixtures use owned ephemeral listeners and scratch roots. This API checkpoint has no operator eyeball step.
 

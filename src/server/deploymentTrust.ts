@@ -193,6 +193,23 @@ export function deployOperationStatus(receipt: ActionReceipt, recovery: Destruct
     stagedTargetFingerprint: stagedEvidence.fingerprint } };
 }
 
+export function compareDeployPreviewTarget(
+  prior: ReturnType<typeof deployOperationStatus> | undefined, targetBindingHash: string, fingerprint: string,
+) {
+  const historicalOutcome = prior?.outcome ?? 'unknown';
+  if (!prior || !('reconciliation' in prior) || !prior.reconciliation) {
+    return { historicalOutcome, targetState: 'unavailable' };
+  }
+  const evidence = prior.reconciliation;
+  if (evidence.targetBindingHash !== targetBindingHash) return { historicalOutcome, targetState: 'binding-mismatch' };
+  const matchesBefore = fingerprint === evidence.beforeTargetFingerprint;
+  const matchesStaged = fingerprint === evidence.stagedTargetFingerprint;
+  const targetState = matchesBefore
+    ? (matchesStaged ? 'matches-both' : 'matches-before')
+    : (matchesStaged ? 'matches-staged' : 'matches-neither');
+  return { historicalOutcome, targetState };
+}
+
 export function prepareDeployRecord(
   store: ActionReceiptStore, subject: AcceptanceSubject, decision: AcceptanceDecision,
   principal: AcceptancePrincipal, approvals: ActionReceipt[], recoveryId: string,

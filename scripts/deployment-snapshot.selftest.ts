@@ -10,7 +10,7 @@ import { ActionReceiptStore } from '../src/lib/actionReceiptStore';
 import { redactReceiptMetadata } from '../src/lib/actionReceipt';
 import { DestructiveRecoveryStore } from '../src/lib/destructiveRecovery';
 import { evaluateFindingAcceptances } from '../src/server/findingAcceptance';
-import { prepareDeployRecord, commitDeployRecord, deployOperationStatus, deployReceiptIdentity } from '../src/server/deploymentTrust';
+import { prepareDeployRecord, commitDeployRecord, deployOperationStatus, deployReceiptIdentity, compareDeployPreviewTarget } from '../src/server/deploymentTrust';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-snapshot-test-'));
 let assertions = 0;
@@ -104,6 +104,24 @@ try {
   recovery.abandon(before.id);
   assert.throws(() => recovery.admitDeploymentWrite(before), /no longer matches/); assertions++;
   check('missing recovery keeps prepared outcome unknown', deployOperationStatus(tracked, recovery).outcome === 'unknown');
+  const previewEvidence = { outcome: 'unknown' as const, reconciliation: {
+    targetBindingHash: subject.targetHash, beforeTargetFingerprint: 'absent', stagedTargetFingerprint: 'e'.repeat(64),
+  } };
+  const compare = (fingerprint: string, binding = subject.targetHash) => compareDeployPreviewTarget(previewEvidence, binding, fingerprint);
+  check('fresh preview matches an absent original target', compare('absent').targetState === 'matches-before');
+  check('fresh preview matches the staged target without promoting the history',
+    compare('e'.repeat(64)).targetState === 'matches-staged' && compare('e'.repeat(64)).historicalOutcome === 'unknown');
+  check('fresh preview sees unrelated target bytes', compare('f'.repeat(64)).targetState === 'matches-neither');
+  check('binding mismatch precedes fingerprint equality', compare('absent', 'f'.repeat(64)).targetState === 'binding-mismatch');
+  const identical = { ...previewEvidence, reconciliation: { ...previewEvidence.reconciliation, beforeTargetFingerprint: 'e'.repeat(64) } };
+  check('fresh preview distinguishes identical prior and staged targets',
+    compareDeployPreviewTarget(identical, subject.targetHash, 'e'.repeat(64)).targetState === 'matches-both');
+  check('missing operation has unknown history and unavailable comparison',
+    compareDeployPreviewTarget(undefined, subject.targetHash, 'absent').historicalOutcome === 'unknown'
+    && compareDeployPreviewTarget(undefined, subject.targetHash, 'absent').targetState === 'unavailable');
+  check('known terminal outcome does not imply current target evidence',
+    compareDeployPreviewTarget({ outcome: 'committed' }, subject.targetHash, 'absent').historicalOutcome === 'committed'
+    && compareDeployPreviewTarget({ outcome: 'committed' }, subject.targetHash, 'absent').targetState === 'unavailable');
   const committed = commitDeployRecord(store, prepared, 'e'.repeat(64));
   const reopened = new ActionReceiptStore({ root: store.root }).read(committed.id);
   check('snapshot audit hash survives durable committed readback', reopened.status === 'committed' && reopened.metadata?.validatedArtifactHash === artifactPlanIdentity(plan, 'loose'));

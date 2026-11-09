@@ -139,12 +139,16 @@ pointer. Start a fresh preview before deciding on a new operation.
 
 An interrupted operation can include `reconciliation` with the saved
 `targetBindingHash`, `beforeTargetFingerprint`, and `stagedTargetFingerprint`.
-Run a fresh native preview with `dryRun: true` for the same mod and deploy format.
-Compare its `binding.targetHash` first, then compare `targetFingerprint` with the
-two saved fingerprints. A match describes the files the preview sees now. Both
-values can match on an identical redeploy. A different binding or fingerprint calls for
-reviewing the preview before applying. To proceed, use the fresh preview's
-identities and a new operation ID. The original outcome is still `unknown`.
+For a single-call comparison, run a fresh native preview of the same mod and
+format with `dryRun: true` and `inspectDeployOperationId` set to the earlier ID.
+On a successful preview, `previousOperation` reports `historicalOutcome` and
+the observed `targetState`.
+The states are `matches-before`, `matches-staged`, `matches-both`, and
+`matches-neither`. A different target or format returns `binding-mismatch`.
+Missing or unverified evidence gives `unavailable`. A match describes the files
+the preview sees now. If preflight blocks the preview, use the status lookup for
+the earlier outcome. To proceed, send a separate apply with the fresh preview
+identities and a new operation ID.
 
 If Forge returns `DEPLOY_RESPONSE_FAILED_AFTER_COMMIT`, its `deployRecord`
 and `outcome: committed` describe the historical write even though the reply
