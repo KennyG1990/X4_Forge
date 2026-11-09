@@ -43,6 +43,7 @@ export type ProjectCrossFileFindingCode =
   | 'dep.self'
   | 'md.signal_library'
   | 'md.run_actions_nonlibrary'
+  | 'md.include_actions_run_library'
   | 'md.cue_library_ref_unresolved'
   | 'md.cue_duplicate_name'
   | 'validation.lua_ast_unavailable'
@@ -587,7 +588,12 @@ function findContentManifest(project: ExtensionProject): ModManifest | null {
 }
 
 function validateCueLibraryReferences(mdFiles: ExtensionProject['files']) {
-  const scripts = new Map<string, { name: string; file: string; root: XmlElement; declarations: Set<string> } | null>();
+  const scripts = new Map<string, {
+    name: string;
+    file: string;
+    references: XmlElement[];
+    declarations: Map<string, XmlElement | null>;
+  } | null>();
   const findings: ProjectCrossFileFinding[] = [];
   let checked = 0;
   for (const file of mdFiles) {
@@ -608,32 +614,48 @@ function validateCueLibraryReferences(mdFiles: ExtensionProject['files']) {
       scripts.set(key, null);
       continue;
     }
-    const declarations = new Set<string>();
+    const references: XmlElement[] = [];
+    const declarations = new Map<string, XmlElement | null>();
     for (const node of Array.from(elements)) {
+      if (node.nodeName === 'cue' || node.nodeName === 'include_actions') references.push(node);
       if (node.nodeName !== 'cue' && node.nodeName !== 'library') continue;
-      const declaration = node.getAttribute('name');
-      if (declaration) declarations.add(declaration.toLowerCase());
+      const declaration = node.getAttribute('name')?.toLowerCase();
+      if (declaration) declarations.set(declaration, declarations.has(declaration) ? null : node);
     }
-    scripts.set(key, { name, file: file.path, root, declarations });
+    scripts.set(key, { name, file: file.path, references, declarations });
   }
 
   for (const script of scripts.values()) {
     if (!script) continue;
-    for (const cue of Array.from(script.root.getElementsByTagName('cue'))) {
-      const name = cue.getAttribute('name');
-      const attribute = cue.getAttributeNode('ref');
-      if (!name || !attribute) continue;
+    for (const node of script.references) {
+      const name = node.getAttribute('name');
+      const attribute = node.getAttributeNode('ref');
+      if (!attribute || (node.nodeName === 'cue' && !name)) continue;
       const ref = attribute.value.trim();
       const literal = /^(?:md\.([A-Za-z_][\w]*)\.)?([A-Za-z_][\w]*)$/.exec(ref);
       if (!literal || classifyCueRef(ref).kind === 'keyword') continue;
-      const targetName = literal[1] || script.name;
-      const target = scripts.get(targetName.toLowerCase());
-      if (target?.name !== targetName) continue;
-      checked++;
-      if (target.declarations.has(literal[2].toLowerCase())) continue;
-      findings.push({ code: 'md.cue_library_ref_unresolved', severity: 'error', file: script.file,
-        line: attribute.lineNumber ?? cue.lineNumber, column: attribute.columnNumber ?? cue.columnNumber,
-        detail: `Cue "${name}" references library "${ref}", which has no declaration in MD script "${targetName}".` });
+      const [, scriptName = script.name, targetName] = literal;
+      const target = scripts.get(scriptName.toLowerCase());
+      if (target?.name !== scriptName) continue;
+      const targetKey = targetName.toLowerCase();
+      if (node.nodeName === 'cue') {
+        checked++;
+        if (target.declarations.has(targetKey)) continue;
+        findings.push({ code: 'md.cue_library_ref_unresolved', severity: 'error', file: script.file,
+          line: attribute.lineNumber ?? node.lineNumber, column: attribute.columnNumber ?? node.columnNumber,
+          detail: `Cue "${name}" references library "${ref}", which has no declaration in MD script "${scriptName}".` });
+        continue;
+      }
+      const declaration = target.declarations.get(targetKey);
+      if (declaration?.nodeName !== 'library' || declaration.getAttribute('name') !== targetName
+        || declaration.getAttribute('purpose') !== 'run_actions') continue;
+      const location = { file: target.file, line: declaration.lineNumber, column: declaration.columnNumber };
+      const coordinate = [location.file, location.line, location.column].filter(part => part !== undefined).join(':');
+      findings.push({
+        code: 'md.include_actions_run_library', severity: 'error', file: script.file,
+        line: node.lineNumber, column: node.columnNumber, target: location,
+        detail: `<include_actions ref="${ref}"> targets a library declared with purpose="run_actions" at ${coordinate}. Use <run_actions> to call this library.`,
+      });
     }
   }
   return { checked, findings };
@@ -845,7 +867,8 @@ export function validateProjectCrossFile(project: ExtensionProject): ProjectCros
       errors,
       structuralErrors: structure.filter(i => i.severity === 'error').length,
       cueReferences: cueIndex.references.length + libraryReferences.checked,
-      unresolvedCueRefs: cueIndex.unresolved.length + libraryReferences.findings.length,
+      unresolvedCueRefs: cueIndex.unresolved.length + libraryReferences.findings
+        .filter(finding => finding.code !== 'md.include_actions_run_library').length,
       mdLuaMissingRegisters: missingRegisters.length,
       luaMdMissingListeners: missingListeners.length,
       luaRegistrationUnavailable: parseUnavailable.length,
@@ -1159,6 +1182,70 @@ AddUITriggeredEvent("ai_influence", "chat.response", {})`,
   });
   const raCue = validateProjectCrossFile(runActionsCue);
   ok('flags_run_actions_targeting_nonlibrary', raCue.findings.some(f => f.code === 'md.run_actions_nonlibrary' && f.severity === 'warning'), raCue.findings);
+
+  const includeCode = 'md.include_actions_run_library';
+  const includeFile = 'md/includes.xml';
+  const includeCalls = `    <include_actions ref='LocalRun'/><include_actions ref='md.Contract.Call_chat'/>`;
+  const includeProject = addFile(fixtureProject(), {
+    path: includeFile, kind: 'md',
+    content: [
+      '\uFEFF<mdscript name="Includes"><cues>',
+      '  <cue name="Container"><cues>',
+      '    <library name="LocalRun" purpose="run_actions"><actions/></library>',
+      '  </cues></cue>',
+      '  <cue name="Caller"><actions>',
+      includeCalls,
+      '  </actions></cue>',
+      '</cues></mdscript>',
+    ].join('\n'),
+  });
+  const includes = validateProjectCrossFile(includeProject);
+  const includeErrors = includes.findings.filter(f => f.code === includeCode);
+  ok('resolved_run_only_includes_report_call_and_declaration_coordinates', !includes.ok
+    && includeErrors.length === 2 && includeErrors.every(f => f.file === includeFile && f.line === 6 && f.severity === 'error')
+    && includeErrors[0].column === includeCalls.indexOf('<include_actions') + 1
+    && includeErrors[0].target?.file === includeFile && includeErrors[0].target.line === 3
+    && includeErrors[0].target.column === 5
+    && includeErrors[1].column === includeCalls.lastIndexOf('<include_actions') + 1
+    && includeErrors[1].target?.file === 'md/contract.xml' && includeErrors[1].target.line === 2
+    && includeErrors[1].target.column === 7
+    && includes.summary.unresolvedCueRefs === good.summary.unresolvedCueRefs
+    && includes.summary.cueReferences === good.summary.cueReferences + 2, includeErrors);
+
+  const uncertainIncludes = addFile(fixtureProject(), {
+    path: includeFile, kind: 'md',
+    content: [
+      '<mdscript name="Includes"><cues>',
+      '<library name="LocalRun" purpose="run_actions"/>',
+      '<library name="LocalInclude" purpose="include_actions"/><library name="Default"/>',
+      '<library name="Collision" purpose="run_actions"/><cue name="collision"/>',
+      '<library name="Duplicate" purpose="run_actions"/><cue name="Duplicate"/>',
+      '<cue name="Caller"><actions>',
+      '<run_actions ref="LocalRun"/><include_actions ref="LocalInclude"/><include_actions ref="Default"/>',
+      '<include_actions ref="Collision"/><include_actions ref="Duplicate"/><include_actions ref="localrun"/>',
+      '<include_actions ref="md.contract.Call_chat"/><include_actions ref="md.Contract.call_chat"/>',
+      '<include_actions ref="md.Contract.Call_chat.member"/><include_actions ref="this.LocalRun"/>',
+      '<include_actions ref="$target"/><include_actions ref="Missing"/><include_actions ref="md.External.Library"/>',
+      '<include_actions ref="md.BadSource.LocalRun"/><include_actions ref="md.DiffSource.LocalRun"/>',
+      '<!-- <include_actions ref="LocalRun"/> -->',
+      '</actions></cue></cues></mdscript>',
+    ].join('\n'),
+  });
+  const includeControls = addFile(addFile(uncertainIncludes, {
+    path: 'md/bad_source.xml', kind: 'md',
+    content: '<mdscript name="BadSource"><library name="LocalRun" purpose="run_actions"/></invalid>',
+  }), {
+    path: 'md/diff_source.xml', kind: 'md',
+    content: '<diff><add sel="/mdscript[@name=\'DiffSource\']/cues"><library name="LocalRun" purpose="run_actions"/></add></diff>',
+  });
+  ok('only_exact_unambiguous_project_library_purpose_blocks_an_include',
+    validateProjectCrossFile(includeControls).findings.every(f => f.code !== includeCode));
+  const ambiguousIncludes = validateProjectCrossFile(addFile(includeProject, {
+    path: 'md/other_contract.xml', kind: 'md',
+    content: '<mdscript name="contract"><cues/></mdscript>',
+  })).findings.filter(f => f.code === includeCode);
+  ok('case_fold_collision_on_script_keeps_qualified_include_unresolved',
+    ambiguousIncludes.length === 1 && ambiguousIncludes[0].target?.file === includeFile, ambiguousIncludes);
 
   let instanceProject = addFile(fixtureProject(), {
     path: 'md/instances.xml',

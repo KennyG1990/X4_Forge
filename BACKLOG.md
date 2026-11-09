@@ -18,6 +18,10 @@ Dev checks standalone TextDB shorthand in unsaved HTTP, MCP, project validation 
 
 Dev validation blocks the X4-witnessed mixed access and ordinary cue returns in both native deploy entry points. [Mixed access replay](docs/plans/2026-11-09-ff33-mixed-access.md) and [return context replay](docs/plans/2026-11-09-ff33-md-return-context.md). Library game controls, effective diff context, installed verification and public delivery remain open.
 
+### MD include target purpose `in_progress` (GitHub #70, part of #74)
+
+Dev blocks the X4-witnessed include of a run-only library when project source resolves the target exactly. [Isolated replay](docs/plans/2026-11-09-ff31-include-library-purpose.md). Effective diff and external authority, installed verification and public delivery remain open. The separate official source match still needs a runtime verdict.
+
 ### Literal format diagnostics `in_progress` (GitHub #77, part of #74)
 
 The isolated Dev checker and native deploy now report exact literal-format diagnostics. The short-list case remains advisory. [Dev verification](docs/plans/2026-11-08-forge-literal-format-diagnostics.md). The frozen standalone game witness is queued with Claude, and installed/public delivery remain open.
