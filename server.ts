@@ -15602,6 +15602,22 @@ function releasePathIsAllowed(candidate: string, resolved: ReturnType<typeof res
   return configuredReleaseReadRoots(resolved).some(root => absolute === root || isPathWithin(absolute, root));
 }
 
+function steamAdoptionSource(candidate: string | null | undefined, resolved: ResolvedXsdConfig) {
+  const root = resolved.modWorkspacePath;
+  if (typeof candidate !== 'string' || typeof root !== 'string' || !root || !path.isAbsolute(candidate)) return;
+  try {
+    const absolute = path.resolve(candidate);
+    const relative = path.relative(path.resolve(root), absolute);
+    if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)
+      || validateProtectedWriteTargets(resolved, ['modWorkspacePath']).length) return;
+    const physicalRoot = fs.realpathSync.native(root);
+    const physical = fs.realpathSync.native(absolute);
+    const stamp = fs.lstatSync(absolute, { bigint: true });
+    if (stamp.isFile() && stamp.nlink === 1n && stamp.size <= 1024n * 1024n
+      && sameResolvedPath(physical, path.resolve(physicalRoot, relative))) return { absolute, physical, stamp };
+  } catch { /* The authoring source can disappear or become unreadable between release stages. */ }
+}
+
 function resolveReleaseOutputRoot(modWorkspacePath: string, platform: 'nexus' | 'steam', create: boolean): string {
   const workspaceRoot = fs.realpathSync(modWorkspacePath);
   let cursor = workspaceRoot;
@@ -15958,11 +15974,10 @@ app.post('/api/agent/release/steam/prepare', coordinatedSourceOperation((req, re
       .map(entry => ({ path: entry.path, size: entry.size, sha256: entry.sha256 }));
     const readyForUpload = command !== null;
     const status = readyForUpload ? 'READY_FOR_INTERACTIVE_UPLOAD' : 'PARTIAL';
-    const sourceManifestPathCandidate = prepared.workspace.sourceStamp?.dir ? path.join(prepared.plan.sourceRoot, 'content.xml') : '';
-    const sourceManifestStat = sourceManifestPathCandidate && fs.existsSync(sourceManifestPathCandidate) ? fs.lstatSync(sourceManifestPathCandidate) : null;
-    const sourceManifestPath = sourceManifestStat?.isFile() && !sourceManifestStat.isSymbolicLink() && sourceManifestStat.size <= 1024 * 1024 && releasePathIsAllowed(sourceManifestPathCandidate, resolved)
-      ? path.resolve(sourceManifestPathCandidate) : null;
-    const sourceManifestSha256 = sourceManifestPath ? hashArtifactFile(sourceManifestPath) : null;
+    const source = prepared.workspace.sourceStamp?.dir
+      ? steamAdoptionSource(path.join(prepared.plan.sourceRoot, 'content.xml'), resolved) : undefined;
+    const sourceManifestPath = source?.absolute ?? null;
+    const sourceManifestSha256 = source ? hashArtifactFile(source.physical, 'sha256', source.stamp) : null;
     atomicWriteJson(reportPath, {
       platform: 'steam', status, createdAt: new Date().toISOString(), modId: prepared.modId, folderName: prepared.folderName, version: prepared.version,
       modIdScope: 'artifact-folder', validatedSource: prepared.validatedSource, preparedSource: prepared.preparedSource,
@@ -16065,6 +16080,7 @@ interface SteamReleaseReport extends Record<string, unknown> {
   sourceManifestSha256?: string | null;
   sourceManifestAdoptionAvailable?: boolean;
   preparedManifestXml?: string;
+  verifiedManifestSha256?: string;
   workshopId?: string;
   stages?: ReleaseStage[];
   integrityFiles?: Array<{ path: string; size: number; sha256: string }>;
@@ -16097,7 +16113,7 @@ function resolveSteamReleaseReport(modWorkspacePath: string, modId: string): Ste
   }
 }
 
-app.post('/api/agent/release/steam/verify', (req, res) => {
+app.post('/api/agent/release/steam/verify', coordinatedSourceOperation((req, res) => {
   const modId = String(req.body?.modId || '').trim();
   if (!/^[A-Za-z][\w.-]*$/.test(modId)) return sendReleaseFailure(res, 400, 'FAILED', 'MOD_ID_REQUIRED', 'A safe modId from the Steam prepare report is required.', [releaseStage('post-tool', 'Resolve prepared Steam release', 'fail', 'The supplied modId is missing or unsafe.')]);
   const resolved = resolveXsdConfig();
@@ -16109,14 +16125,16 @@ app.post('/api/agent/release/steam/verify', (req, res) => {
   try {
     const contentPath = path.join(targetPath, 'content.xml');
     const contentStat = fs.existsSync(contentPath) ? fs.lstatSync(contentPath) : null;
-    if (!contentStat?.isFile() || contentStat.isSymbolicLink()) {
-      return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_CONTENT_MANIFEST_MISSING', 'WorkshopTool did not leave a regular staged content.xml to verify.', [...(report.stages || []), releaseStage('post-tool', 'Verify Workshop result', 'fail', 'The staged content.xml is missing, not a regular file, or was replaced by a symbolic link.')]);
+    if (!contentStat?.isFile() || contentStat.isSymbolicLink() || contentStat.size > 1024 * 1024) {
+      return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_CONTENT_MANIFEST_MISSING', 'WorkshopTool did not leave a bounded regular staged content.xml to verify.', [...(report.stages || []), releaseStage('post-tool', 'Verify Workshop result', 'fail', 'The staged content.xml is unavailable or too large.')]);
     }
-    const manifestValidation = validateReleaseManifest(fs.readFileSync(contentPath, 'utf8'));
+    const manifestBytes = fs.readFileSync(contentPath);
+    const manifestText = manifestBytes.toString('utf8');
+    const manifestValidation = validateReleaseManifest(manifestText);
     if (!manifestValidation.ok || !manifestValidation.meta?.workshopId) {
       return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_WORKSHOP_ID_MISSING', 'WorkshopTool did not write a ws_<numeric> id into staged content.xml.', [...(report.stages || []), releaseStage('post-tool', 'Verify Workshop result', 'fail', 'No ws_<numeric> id found in staged content.xml. The upload may have failed or the legal agreement may still require acceptance.')]);
     }
-    const manifestMutation = validateWorkshopManifestMutation(String(report.preparedManifestXml || ''), fs.readFileSync(contentPath, 'utf8'));
+    const manifestMutation = validateWorkshopManifestMutation(String(report.preparedManifestXml || ''), manifestText);
     if (!manifestMutation.ok) {
       return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_POST_TOOL_MANIFEST_DRIFT', manifestMutation.errors.join(' '), [...(report.stages || []), releaseStage('post-tool', 'Verify Workshop result', 'fail', manifestMutation.errors.join(' '), { manifestMutation })], { manifestMutation });
     }
@@ -16136,14 +16154,19 @@ app.post('/api/agent/release/steam/verify', (req, res) => {
     for (const actualPath of actualFiles.keys()) if (!expectedPaths.has(actualPath)) integrityErrors.push(`Unexpected staged payload after WorkshopTool: ${actualPath}`);
     if (integrityErrors.length > 0) return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_POST_TOOL_INTEGRITY_FAILED', integrityErrors.join('; '), [...(report.stages || []), releaseStage('post-tool', 'Verify Workshop result', 'fail', integrityErrors.join('; '))], { errors: integrityErrors });
     const stages = [...(report.stages || []), releaseStage('post-tool', 'Verify Workshop result', 'pass', `Workshop id ${manifestValidation.meta.workshopId} written; only ${manifestMutation.changedManagedAttributes.join(', ') || 'no'} Workshop-managed manifest attributes changed, and the exact ${expectedFiles.length}-file non-manifest payload remains byte-identical.`)];
-    const updated = { ...report, status: 'VERIFIED_AFTER_WORKSHOP_TOOL', verifiedAt: new Date().toISOString(), workshopId: manifestValidation.meta.workshopId, stages, failedStages: [] };
+    const sourceManifestAdoptionAvailable = report.sourceManifestAdoptionAvailable === true
+      && Boolean(steamAdoptionSource(report.sourceManifestPath, resolved));
+    const updated = { ...report, status: 'VERIFIED_AFTER_WORKSHOP_TOOL', verifiedAt: new Date().toISOString(), workshopId: manifestValidation.meta.workshopId,
+      verifiedManifestSha256: crypto.createHash('sha256').update(manifestBytes).digest('hex'),
+      sourceManifestAdoptionAvailable, stages, failedStages: [] };
     atomicWriteJson(reportPath, updated);
-    return res.json({ success: true, status: 'VERIFIED_AFTER_WORKSHOP_TOOL', platform: 'steam', modId, workshopId: manifestValidation.meta.workshopId, targetPath, reportPath, sourceManifestAdoptionRequired: report.sourceManifestAdoptionAvailable === true, sourceManifestAdoptionAvailable: report.sourceManifestAdoptionAvailable === true, stages, failedStages: [] });
+    return res.json({ success: true, status: 'VERIFIED_AFTER_WORKSHOP_TOOL', platform: 'steam', modId, workshopId: manifestValidation.meta.workshopId, targetPath, reportPath,
+      sourceManifestAdoptionRequired: sourceManifestAdoptionAvailable, sourceManifestAdoptionAvailable, stages, failedStages: [] });
   } catch (error) {
     const detail = errorMessage(error) || 'Steam post-tool verification failed.';
     return sendReleaseFailure(res, 500, 'FAILED', 'STEAM_VERIFY_FAILED', detail, [releaseStage('post-tool', 'Verify Workshop result', 'fail', detail)]);
   }
-});
+}));
 
 app.post('/api/agent/release/steam/adopt', coordinatedSourceOperation((req, res) => {
   const modId = String(req.body?.modId || '').trim();
@@ -16158,20 +16181,19 @@ app.post('/api/agent/release/steam/adopt', coordinatedSourceOperation((req, res)
   if (report.status !== 'VERIFIED_AFTER_WORKSHOP_TOOL' && report.status !== 'VERIFIED_AND_ADOPTED') {
     return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_ADOPTION_NOT_VERIFIED', 'Verify the WorkshopTool result before adopting source metadata.', [...priorStages, releaseStage('adoption', 'Adopt Workshop metadata into source', 'fail', `Report status is ${report.status || 'unknown'}, not VERIFIED_AFTER_WORKSHOP_TOOL.`)]);
   }
-  const sourceManifestPath = path.resolve(String(report.sourceManifestPath || ''));
+  const source = steamAdoptionSource(report.sourceManifestPath, resolved);
   const expectedPreparedSourceHash = String(report.sourceManifestSha256 || '').toLowerCase();
-  const sourceStat = sourceManifestPath && fs.existsSync(sourceManifestPath) ? fs.lstatSync(sourceManifestPath) : null;
-  if (report.sourceManifestAdoptionAvailable !== true || path.basename(sourceManifestPath).toLowerCase() !== 'content.xml'
-    || path.basename(path.dirname(sourceManifestPath)) !== report.folderName || !releasePathIsAllowed(sourceManifestPath, resolved)
-    || !sourceStat?.isFile() || sourceStat.isSymbolicLink() || sourceStat.size > 1024 * 1024 || !/^[a-f0-9]{64}$/.test(expectedPreparedSourceHash)) {
-    return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_ADOPTION_SOURCE_UNAVAILABLE', 'The original disk-backed source manifest is unavailable, too large, or outside configured project roots.', [...priorStages, releaseStage('adoption', 'Adopt Workshop metadata into source', 'fail', 'Re-import the original mod folder and prepare the Steam release again.')]);
+  if (report.sourceManifestAdoptionAvailable !== true || !source || path.basename(source.absolute).toLowerCase() !== 'content.xml'
+    || path.basename(path.dirname(source.absolute)) !== report.folderName || !/^[a-f0-9]{64}$/.test(expectedPreparedSourceHash)) {
+    return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_ADOPTION_SOURCE_UNAVAILABLE', 'Workshop metadata can only be adopted into a regular source manifest in the Mod Workspace.', [...priorStages, releaseStage('adoption', 'Adopt Workshop metadata into source', 'fail', 'Import the mod into the Mod Workspace and prepare the Steam release again.')]);
   }
+  const sourceManifestPath = source.absolute;
   const stagedManifestPath = path.join(targetPath, 'content.xml');
   const stagedStat = fs.existsSync(stagedManifestPath) ? fs.lstatSync(stagedManifestPath) : null;
   if (!stagedStat?.isFile() || stagedStat.isSymbolicLink() || stagedStat.size > 1024 * 1024) {
     return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_ADOPTION_STAGED_MANIFEST_INVALID', 'The verified staged content.xml is unavailable or too large.', [...priorStages, releaseStage('adoption', 'Adopt Workshop metadata into source', 'fail', 'Re-run post-tool verification before adoption.')]);
   }
-  const beforeBytes = fs.readFileSync(sourceManifestPath);
+  const beforeBytes = fs.readFileSync(source.physical);
   const afterBytes = fs.readFileSync(stagedManifestPath);
   const beforeContent = beforeBytes.toString('utf8');
   const afterContent = afterBytes.toString('utf8');
@@ -16180,6 +16202,9 @@ app.post('/api/agent/release/steam/adopt', coordinatedSourceOperation((req, res)
   const stagedManifest = validateReleaseManifest(afterContent);
   if (!stagedManifest.ok || !stagedManifest.meta?.workshopId || stagedManifest.meta.workshopId !== report.workshopId) {
     return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_ADOPTION_WORKSHOP_ID_MISMATCH', 'The staged manifest no longer matches the verified Workshop ID.', [...priorStages, releaseStage('adoption', 'Adopt Workshop metadata into source', 'fail', 'Re-run post-tool verification before adoption.')]);
+  }
+  if (report.verifiedManifestSha256 !== afterSha256) {
+    return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_ADOPTION_STAGED_MANIFEST_CHANGED', 'The staged manifest differs from the exact verified result. Run Verify again before previewing adoption.', [...priorStages, releaseStage('adoption', 'Adopt Workshop metadata into source', 'fail', 'The report lacks a matching verified manifest hash.')]);
   }
   const preview = {
     sourceManifestPath,
@@ -16201,13 +16226,19 @@ app.post('/api/agent/release/steam/adopt', coordinatedSourceOperation((req, res)
   if (expectedWorkshopId !== stagedManifest.meta.workshopId) {
     return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_ADOPTION_CONFIRMATION_MISMATCH', 'The confirmed Workshop ID does not match the verified staged manifest.', [...priorStages, releaseStage('adoption', 'Adopt Workshop metadata into source', 'fail', 'Preview the adoption again before confirming.')]);
   }
+  const currentSource = steamAdoptionSource(sourceManifestPath, resolveXsdConfig());
+  if (!currentSource || !sameResolvedPath(currentSource.physical, source.physical) || !sameArtifactStamp(source.stamp, currentSource.stamp)) {
+    return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_ADOPTION_SOURCE_CHANGED', 'The authoring source changed before adoption. Re-import and prepare again.', [...priorStages, releaseStage('adoption', 'Adopt Workshop metadata into source', 'fail', 'The physical source or file identity no longer matches the guarded preview.')]);
+  }
   let writtenSha256 = '';
   try {
-    atomicWriteFile(sourceManifestPath, afterBytes);
-    writtenSha256 = hashArtifactFile(sourceManifestPath);
+    atomicWriteFile(source.physical, afterBytes);
+    const written = steamAdoptionSource(sourceManifestPath, resolveXsdConfig());
+    if (!written || !sameResolvedPath(written.physical, source.physical)) throw new Error('The authoring source moved before write verification.');
+    writtenSha256 = hashArtifactFile(written.physical, 'sha256', written.stamp);
     if (writtenSha256 !== afterSha256) {
-      atomicWriteFile(sourceManifestPath, beforeBytes);
-      if (hashArtifactFile(sourceManifestPath) !== beforeSha256) throw new Error('Source adoption verification failed and rollback could not restore the original content.xml.');
+      atomicWriteFile(written.physical, beforeBytes);
+      if (hashArtifactFile(written.physical) !== beforeSha256) throw new Error('Source adoption verification failed and rollback could not restore the original content.xml.');
       throw new Error('Source content.xml did not match the verified staged manifest after the write; the original bytes were restored.');
     }
   } catch (error) {
