@@ -1,0 +1,34 @@
+# Forge deployment transaction manifest containment
+
+Status `VERIFIED` for isolated Forge. Actual X4 discovery is pending under [issue #53](https://github.com/KennyG1990/X4_Forge/issues/53).
+
+Clean Dev base `c0e1067e8311b44e2753db59e96e48498b3f41df`. The prior owned activation interruption left a direct backup sibling containing a full manifest and the new target. Forge's installed manifest scanner sees a direct child with `content.xml` as another extension. The native transaction currently keeps both stage and backup in that visible layout. Exact recovery replacement and first-deploy recovery restore have the same exposure.
+
+Allocate a unique manifest-free container under the existing target parent. Keep `next` and `backup` inside it on the same volume. Use the current exact staged hash, Windows locked-root fallback, file verification and rollback flow. Clean empty owned containers after ordinary exits. Preserve legacy and nested backups when the canonical target is absent. Retire a stopped owner's nested apply backup only after a new native receipt commits and the physical target still matches that receipt. The prior recovery payload and receipts remain the independent rollback authority. Existing staging and backup paths stay under the configured target parent. No capability-map delta.
+
+Reproduce a direct-backup interruption on the prior pinned bundle and prove Extension Doctor reports duplicate fixture IDs. Repeat on the candidate after activation, inspect exact retained backup and target bytes, and prove Doctor sees one fixture. A fresh guarded apply must still commit the selected files and clear the recognized prior container when the target exists. Exercise the existing compile artifact oracle for staging, exact rollback, locked-root behavior, and deployment recovery. Update the existing late duplicate fault fixture to identify the new physical stage. Run the writer audit and headless precommit. Preserve the frozen 0.0.82 inputs and source/installed/X4 evidence boundaries.
+
+The official extension layout establishes a root manifest within an installed extension folder. Actual nested-folder handling requires a standalone X4 witness through Claude. Prepare the direct control and manifest-free transaction container with nested controls, exact install/cleanup and log evidence. The Dev code checkpoint proves Forge behavior while the X4 verdict remains separate. Rollback is `c0e1067` in the isolated Dev source. [Egosoft extension layout](https://wiki.egosoft.com/X%20Rebirth%20Wiki/Modding%20support/Steam%20Workshop%20for%20X%20Rebirth%20and%20X4/)
+
+## Implementation and evidence
+
+Native deploy, exact deployment undo and first-deploy recovery restore use unique manifest-free same-parent containers. The existing locked-root fallback receives the same nested child paths and preserves the backup when local rollback cannot be verified. Empty owned containers use empty-only removal. A stopped owner's nested apply backup is eligible for cleanup after a new canonical receipt and a matching current fingerprint. Pre-apply keeps nested backup evidence and preserves direct legacy backups when the target is absent. Legacy direct layouts use exact Forge name shapes and a stopped local owner. Recovery-specific abandoned containers remain available for inspection. No capability-map delta.
+
+The owned `forge-53-nested-transaction.py` replay ran against the actual Extension Doctor route on two pinned servers:
+
+| Case | Result | Private verdict | SHA-256 |
+|---|---|---|---|
+| Direct layout, `c1c5f6be…` | 68/68. Doctor saw the target and direct backup as duplicate IDs after interruption | `c53-2an6tqky/verdict.json` | `f30b71426730acbb0adbf3011b7972ac0f012feae4195034c51f14c94d972ccb` |
+| Nested layout, `5c14bdfa…` | 71/71. Doctor saw one fixture. The nested backup held exact v100 and the fresh native operation committed exact v101 and retired the old container | `c53-7vjxz4q1/verdict.json` | `d1dd68dd74673cb67126175c05662de5f7b1977f9a55375256bc7c2b6e88c2ad` |
+
+Final server SHA-256 `5c14bdfa76adde381adc329e9522c4c881e5b4e16d8099f698560d0e35fa05a5`, built from `c0e1067` plus this server diff. The same owned successor ran the artifact-pipeline oracle 108/108. This covered EBUSY and EPERM containment, exact undo and rollback, missing-target backups in both layouts, a changed-target cleanup refusal and active-owner protection. Both owned listeners and discovery records retired. The late duplicate preload passed its syntax check and retains its exact native stage trigger in the new layout. Typecheck, writer inventory, receipt coverage and required headless precommit passed. Full route integration is an additional release gate.
+
+Claude's [READY handoff](https://app.notion.com/p/40e4618ed15b81b1b5fdc92a60d5d834?d=4114618ed15b81759f20001ce5d10d78) is comment `4134618e-d15b-8163-b744-001dd1a0648b`. The standalone fixture manifest SHA-256 is `eddcccfd858c2be07b304a3c15a8c3799149b58dab1a8a9c1a0385725d24af77`. All four payload hashes and both X4 9.00 MD schema checks passed. The engine witness is for the direct positive control and nested backup layout on the actual tested build. Await Claude's verdict and cleanup.
+
+## Three-unit release readiness review
+
+GitHub main remains `f76775f02dbd8c61a100233e9d11d659f7a5d39b`. [GitHub](https://github.com/KennyG1990/X4_Forge/releases/tag/v0.0.81) and [Open VSX](https://open-vsx.org/api/x4forge/x4-forge-studio/latest) still serve 0.0.81. Keep 0.0.82 pinned to source tree `c4d390da543184dc97281e156bac6d0eb88141eb` and the two previously selected receipt fixes. Its focused source evidence and pinned qualification recipe are ready. Short source, work, and full source-gate receipt paths were absent at this review. Machine-state confirmation remains pending. The three newer Dev checkpoints have separate source evidence, and the transaction layout awaits the game witness before release selection.
+
+## AAR
+
+Sustain reproducing the duplicate through the actual Doctor endpoint and testing rollback ownership separately from an ordinary successful activation. The first nested replay exposed two oracle assertions using the folder name instead of the manifest ID. Its other failure came from placing the artifact oracle's temp under the process working directory. The corrected run used the known manifest ID and a separate private temp. Fresh-eyes review moved nested cleanup behind committed physical verification and preserved both absent-target backup layouts. The writer audit now counts empty-directory removal explicitly, including the existing X4 fixture owner. The first commit command stopped before staging. The rerun uses ASCII quoting in PowerShell. The main remaining risk is assuming Forge's discovery scan predicts the X4 engine. The queued cold-start fixture tests that boundary.

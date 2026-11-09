@@ -22,6 +22,7 @@ const CALL_PATTERNS = {
   copyFileSync: /\b(?:fs\.)?copyFileSync\s*\(/g,
   mkdirSync: /\b(?:fs\.)?mkdirSync\s*\(/g,
   rmSync: /\b(?:fs\.)?rmSync\s*\(/g,
+  rmdirSync: /\b(?:fs\.)?rmdirSync\s*\(/g,
   unlinkSync: /\b(?:fs\.)?unlinkSync\s*\(/g,
   chmodSync: /\b(?:fs\.)?chmodSync\s*\(/g,
   writeSync: /\b(?:fs\.)?writeSync\s*\(/g,

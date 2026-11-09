@@ -16,7 +16,9 @@ if (process.env.FORGE_ROUTE_TEST_MODE !== '1' || !insideRoot(target) || !insideR
 const rename = fs.renameSync;
 fs.renameSync = function (from, to) {
   rename(from, to);
-  if (to !== target || !path.basename(from).startsWith(`.${path.basename(target)}.x4forge-next-`)
+  if (to !== target || path.basename(from) !== 'next'
+    || path.dirname(path.dirname(from)) !== path.dirname(target)
+    || !path.basename(path.dirname(from)).startsWith(`.${path.basename(target)}.x4forge-next-${process.pid}-`)
     || !fs.existsSync(trigger)) return;
   fs.unlinkSync(trigger);
   const duplicate = path.join(path.dirname(target), 'introduced-after-activation');

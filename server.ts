@@ -239,7 +239,7 @@ import { runBugReportSelftest } from "./src/lib/bugReport";
 import { generatedOutputVerdict, normalizeApiFailureBody, runApiFailureEnvelopeSelftest } from "./src/lib/apiFailureEnvelope";
 import { projectApiEnvelope, projectApiSubject, fileApiSubject, workspaceApiSubject, pastedLogApiSubject, releaseReportApiSubject, validateProjectApiBody, validateProjectApiQuery, validateWorkspaceCreateBody, validateWorkspaceMutationBody, type ApiSubject } from './src/server/projectApiContract';
 import { canonicalSourceKey } from './src/server/resourceCoordinator';
-import { forgeSourceCoordinator, type ProjectCheckSourceLease } from './src/server/sharedSourceCoordinator';
+import { forgeSourceCoordinator, processLiveness, type ProjectCheckSourceLease } from './src/server/sharedSourceCoordinator';
 import {
   CLIENT_API_DEADLINE_MS,
   CLIENT_LONG_API_DEADLINE_MS,
@@ -11688,16 +11688,27 @@ function prepareDeploymentRecoveryReceipt(
   }
 }
 
+function createDeploymentTransaction(targetPath: string, kind: 'next' | 'recovery-next' | 'recovery-restore') {
+  const nonce = `${process.pid}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+  const root = path.join(path.dirname(targetPath), `.${path.basename(targetPath)}.x4forge-${kind}-${nonce}`);
+  // Keep complete trees on the target volume without putting a manifest at the
+  // level scanned by installed-extension discovery.
+  fs.mkdirSync(root);
+  return { root, stage: path.join(root, 'next'), backup: path.join(root, 'backup') };
+}
+
+function removeEmptyDeploymentTransaction(root: string): void {
+  try { fs.rmdirSync(root); } catch { /* Preserve any remaining transaction evidence. */ }
+}
+
 /** Exact regular-tree replacement used by a later deployment undo. */
 function replaceRegularTreeExact(sourceRoot: string, targetPath: string, hooks: DeploymentTransactionHooks = {}): void {
   const parent = path.dirname(targetPath);
   fs.mkdirSync(parent, { recursive: true });
-  const nonce = `${process.pid}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
-  const stage = path.join(parent, `.${path.basename(targetPath)}.x4forge-recovery-next-${nonce}`);
-  const backup = path.join(parent, `.${path.basename(targetPath)}.x4forge-recovery-backup-${nonce}`);
   const rename = hooks.rename || ((oldPath: string, newPath: string) => fs.renameSync(oldPath, newPath));
   const expected = expectedRegularFiles(sourceRoot);
   const expectedFingerprint = regularTreeFingerprint(sourceRoot);
+  const { root, stage, backup } = createDeploymentTransaction(targetPath, 'recovery-next');
   let movedOld = false;
   try {
     copyRegularTree(sourceRoot, stage);
@@ -11710,6 +11721,7 @@ function replaceRegularTreeExact(sourceRoot: string, targetPath: string, hooks: 
         if (!isLockedRootRenameError(error)) throw error;
         replaceLockedDeploymentInPlace(stage, backup, targetPath, expected, hooks);
         if (regularTreeFingerprint(targetPath) !== expectedFingerprint) throw new Error('Deployment recovery fingerprint did not verify after locked-root restore.');
+        removeEmptyDeploymentTransaction(root);
         return;
       }
     }
@@ -11727,9 +11739,11 @@ function replaceRegularTreeExact(sourceRoot: string, targetPath: string, hooks: 
         throw new Error(`${error instanceof Error ? error.message : String(error)}; recovery rollback also failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
       }
     }
+    removeEmptyDeploymentTransaction(root);
     throw error;
   }
   if (movedOld) disposeDeploymentSibling(backup, hooks);
+  removeEmptyDeploymentTransaction(root);
 }
 
 function restoreFirstDeployTargetFromQuarantine(
@@ -11740,8 +11754,7 @@ function restoreFirstDeployTargetFromQuarantine(
 ): void {
   const parent = path.dirname(targetPath);
   fs.mkdirSync(parent, { recursive: true });
-  const nonce = `${process.pid}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
-  const stage = path.join(parent, `.${path.basename(targetPath)}.x4forge-recovery-restore-${nonce}`);
+  const { root, stage } = createDeploymentTransaction(targetPath, 'recovery-restore');
   try {
     if (!pathHasEntry(quarantinePath)) throw new Error('First-deploy recovery quarantine is missing.');
     if (regularTreeFingerprint(quarantinePath) !== expectedFingerprint || regularTreeBytes(quarantinePath) !== expectedBytes) {
@@ -11771,6 +11784,7 @@ function restoreFirstDeployTargetFromQuarantine(
     if (pathHasEntry(quarantinePath)) throw new Error('First-deploy recovery rollback could not release its quarantine.');
   } finally {
     try { if (pathHasEntry(stage)) fs.rmSync(stage, { recursive: true, force: true }); } catch { /* best effort */ }
+    removeEmptyDeploymentTransaction(root);
   }
 }
 
@@ -12150,16 +12164,12 @@ function replaceLockedDeploymentInPlace(
       if (fs.existsSync(stage)) fs.rmSync(stage, { recursive: true, force: true });
       if (fs.existsSync(backup)) fs.rmSync(backup, { recursive: true, force: true });
     } catch (rollbackError) {
-      // B98: a FAILED rollback must still not leak transaction siblings. Each is a full copy of
-      // the mod WITH content.xml, so X4 enumerates it as a real extension — leaving them behind
-      // silently gives the game duplicate mods declaring the same id. Observed for real: two
-      // orphaned `.x4forge-backup-*` directories, 49 files and 10 MB each, from failed deploys.
+      // Keep the prior copy when rollback cannot be verified. Its container
+      // has no root manifest, so Forge's extension scan can ignore it.
       try { if (fs.existsSync(stage)) fs.rmSync(stage, { recursive: true, force: true }); } catch { /* reported below */ }
-      const backupSurvives = fs.existsSync(backup);
-      try { if (backupSurvives) fs.rmSync(backup, { recursive: true, force: true }); } catch { /* reported below */ }
       throw new Error(
         `${error instanceof Error ? error.message : String(error)}; locked-root rollback also failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}` +
-        (fs.existsSync(backup) ? `; the backup copy could not be removed and REMAINS at ${backup} — delete it before launching the game, or X4 will load it as a duplicate extension` : ''),
+        (fs.existsSync(backup) ? `; the transaction backup remains at ${backup}` : ''),
       );
     }
     throw error;
@@ -12242,8 +12252,38 @@ function previewDeploymentEffect(ws: any, targetRoot: string, format: DeployForm
   }
 }
 
-function isDeploymentScratchSibling(folder: string, targetFolder: string): boolean {
-  return folder.startsWith(`.${targetFolder}.x4forge-`) && /\.x4forge-(next|backup)-/.test(folder);
+function deploymentScratchSiblingOwner(folder: string, targetFolder: string): number | undefined {
+  const prefix = `.${targetFolder}.x4forge-`;
+  if (!folder.startsWith(prefix)) return;
+  const match = /^(?:next|backup)-([1-9]\d{0,9})-\d+-[a-f0-9]{6}$/.exec(folder.slice(prefix.length));
+  if (match) return Number(match[1]);
+}
+
+function sweepDeploymentScratchSiblings(targetPath: string, committedFingerprint?: string): void {
+  const parent = path.dirname(targetPath);
+  const targetFolder = path.basename(targetPath);
+  try {
+    for (const name of fs.readdirSync(parent)) {
+      const owner = deploymentScratchSiblingOwner(name, targetFolder);
+      if (owner === undefined || processLiveness(owner) !== 'dead') continue;
+      try {
+        const orphan = path.join(parent, name);
+        const stat = fs.lstatSync(orphan);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
+        const children = fs.readdirSync(orphan, { withFileTypes: true });
+        const nestedBackup = children.some(child => child.name === 'backup')
+          && !pathHasEntry(path.join(orphan, 'content.xml'));
+        if (committedFingerprint !== undefined) {
+          if (!nestedBackup || !pathHasEntry(targetPath) || children.some(child =>
+            (child.name !== 'next' && child.name !== 'backup') || !child.isDirectory() || child.isSymbolicLink())) continue;
+          if (deploymentTargetFingerprint(targetPath) !== committedFingerprint) return;
+        } else if (nestedBackup || (!pathHasEntry(targetPath) && name.startsWith(`.${targetFolder}.x4forge-backup-`))) {
+          continue;
+        }
+        fs.rmSync(orphan, { recursive: true, force: true });
+      } catch { /* Retain an orphan that cannot be inspected or removed safely. */ }
+    }
+  } catch { /* Cleanup does not decide deployment success. */ }
 }
 
 function replaceValidatedDeployment(
@@ -12258,19 +12298,9 @@ function replaceValidatedDeployment(
   hooks.beforeActivate?.();
   const parent = path.dirname(targetPath);
   fs.mkdirSync(parent, { recursive: true });
-  const nonce = `${process.pid}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
-  const stage = path.join(parent, `.${path.basename(targetPath)}.x4forge-next-${nonce}`);
-  const backup = path.join(parent, `.${path.basename(targetPath)}.x4forge-backup-${nonce}`);
   const rename = hooks.rename || ((oldPath: string, newPath: string) => fs.renameSync(oldPath, newPath));
-  // B98: sweep transaction siblings orphaned by an EARLIER failed deploy before starting a new one.
-  // They are full copies of the mod including content.xml, so X4 loads each as a duplicate
-  // extension declaring the same id. Self-healing beats requiring the user to know they exist.
-  try {
-    for (const name of fs.readdirSync(parent)) {
-      if (!isDeploymentScratchSibling(name, path.basename(targetPath))) continue;
-      try { fs.rmSync(path.join(parent, name), { recursive: true, force: true }); } catch { /* a locked orphan is reported by the doctor */ }
-    }
-  } catch { /* sweeping is best-effort and must never block a deploy */ }
+  sweepDeploymentScratchSiblings(targetPath);
+  const { root, stage, backup } = createDeploymentTransaction(targetPath, 'next');
   const preservationOverrides: PreservationOverride[] = [];
   let movedOld = false;
   try {
@@ -12310,6 +12340,7 @@ function replaceValidatedDeployment(
       } catch (error) {
         if (!isLockedRootRenameError(error)) throw error;
         replaceLockedDeploymentInPlace(stage, backup, targetPath, expected, hooks);
+        removeEmptyDeploymentTransaction(root);
         return preservationOverrides;
       }
     }
@@ -12334,9 +12365,11 @@ function replaceValidatedDeployment(
         throw new Error(`${error instanceof Error ? error.message : String(error)}; rollback also failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
       }
     }
+    removeEmptyDeploymentTransaction(root);
     throw error;
   }
   if (movedOld) disposeDeploymentSibling(backup, hooks);
+  removeEmptyDeploymentTransaction(root);
   return preservationOverrides;
 }
 
@@ -13297,12 +13330,35 @@ function runCompileArtifactSelftest() {
     }
     record('unicode and unknown paths are cataloged', catalogEntries.some(entry => entry.name === 'unicode/船.txt') && catalogEntries.some(entry => entry.name === 'unknown/deep/path/file.arbitrary'));
 
+    const stoppedPid = [2147483647, 2147483646].find(pid => processLiveness(pid) === 'dead');
+    if (stoppedPid === undefined) throw new Error('No stopped process identity for transaction cleanup fixture.');
+    const sweepRoot = path.join(root, 'sweep-extensions');
+    const sweepTarget = path.join(sweepRoot, 'cleanup_fixture');
+    const nestedOrphan = path.join(sweepRoot, `.cleanup_fixture.x4forge-next-${stoppedPid}-1000000000000-abcdef`);
+    const legacyBackup = path.join(sweepRoot, `.cleanup_fixture.x4forge-backup-${stoppedPid}-1000000000000-abcdef`);
+    copyRegularTree(target, path.join(nestedOrphan, 'backup'));
+    copyRegularTree(target, legacyBackup);
+    sweepDeploymentScratchSiblings(sweepTarget);
+    record('missing target preserves both backup layouts', pathHasEntry(nestedOrphan) && pathHasEntry(legacyBackup));
+    copyRegularTree(target, sweepTarget);
+    sweepDeploymentScratchSiblings(sweepTarget);
+    record('before-apply sweep preserves nested rollback evidence', pathHasEntry(nestedOrphan) && !pathHasEntry(legacyBackup));
+    sweepDeploymentScratchSiblings(sweepTarget, '0'.repeat(64));
+    record('changed target refuses post-commit backup cleanup', pathHasEntry(nestedOrphan));
+    const liveOrphan = path.join(sweepRoot, `.cleanup_fixture.x4forge-next-${process.pid}-1000000000000-abcdef`);
+    copyRegularTree(target, path.join(liveOrphan, 'backup'));
+    sweepDeploymentScratchSiblings(sweepTarget, regularTreeFingerprint(sweepTarget));
+    record('verified target permits retired backup cleanup only', !pathHasEntry(nestedOrphan) && pathHasEntry(liveOrphan));
+
     // B83: simulate the Windows case where the deployed mod root is a process
     // cwd/watched directory. The root cannot move, but its files remain writable.
-    const transactionArtifacts = () => fs.readdirSync(deployRoot)
-      .filter(name => name.startsWith(`.${path.basename(target)}.x4forge-next-`) || name.startsWith(`.${path.basename(target)}.x4forge-backup-`));
+    const transactionArtifacts = () => fs.readdirSync(deployRoot).filter(name =>
+      deploymentScratchSiblingOwner(name, path.basename(target)) !== undefined
+      || name.startsWith(`.${path.basename(target)}.x4forge-recovery-`));
+    const isCurrentBackup = (newPath: string) => path.basename(newPath) === 'backup'
+      && deploymentScratchSiblingOwner(path.basename(path.dirname(newPath)), path.basename(target)) === process.pid;
     const lockedRename = (code: 'EBUSY' | 'EPERM', attempts: { value: number }) => (oldPath: string, newPath: string) => {
-      if (path.resolve(oldPath) === path.resolve(target) && path.basename(newPath).includes('.x4forge-backup-')) {
+      if (path.resolve(oldPath) === path.resolve(target) && isCurrentBackup(newPath)) {
         attempts.value++;
         throw Object.assign(new Error(`simulated locked deployed root (${code})`), { code });
       }
@@ -13314,6 +13370,11 @@ function runCompileArtifactSelftest() {
       try {
         const lockedDeploy = compileWorkspaceToFolder(imported.workspace, deployRoot, 'store', false, 'catalog', {
           rename: lockedRename(code, attempts),
+          afterFallbackBackupCopy: backupPath => record(`locked-root ${code} copies stay outside extension discovery`,
+            fs.existsSync(path.join(backupPath, 'content.xml'))
+            && fs.existsSync(path.join(path.dirname(backupPath), 'next', 'content.xml'))
+            && !fs.existsSync(path.join(path.dirname(backupPath), 'content.xml'))
+            && [...readInstalledExtensionManifests(deployRoot)].filter(row => row.id === 'artifact_integration').length === 1),
         });
         record(`locked-root ${code} fallback deploys without moving target root`, lockedDeploy === target && attempts.value === 1);
         record(`locked-root ${code} fallback removes stale managed payload`, !fs.existsSync(path.join(target, `stale-after-${code.toLowerCase()}.txt`)));
@@ -13365,7 +13426,7 @@ function runCompileArtifactSelftest() {
     try {
       compileWorkspaceToFolder(imported.workspace, deployRoot, 'store', false, 'catalog', {
         rename: (oldPath, newPath) => {
-          if (path.resolve(oldPath) === path.resolve(target) && path.basename(newPath).includes('.x4forge-backup-')) {
+          if (path.resolve(oldPath) === path.resolve(target) && isCurrentBackup(newPath)) {
             throw Object.assign(new Error('simulated access failure'), { code: 'EACCES' });
           }
           fs.renameSync(oldPath, newPath);
@@ -14310,8 +14371,11 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       const conflictingFolders: string[] = [];
       const modIdLower = modId.toLowerCase();
       for (const extension of readInstalledExtensionManifests(extensionsPath)) {
-        if (extension.id.toLowerCase() === modIdLower && !sameFolder(extension.folder)
-          && !isDeploymentScratchSibling(extension.folder, targetFolder)) conflictingFolders.push(extension.folder);
+        if (extension.id.toLowerCase() !== modIdLower || sameFolder(extension.folder)) continue;
+        const owner = deploymentScratchSiblingOwner(extension.folder, targetFolder);
+        const retainedBackup = targetFingerprint === 'absent' && extension.folder.startsWith(`.${targetFolder}.x4forge-backup-`);
+        if (owner === undefined || processLiveness(owner) !== 'dead' || retainedBackup
+          || fs.lstatSync(extension.absDir).isSymbolicLink()) conflictingFolders.push(extension.folder);
       }
       if (conflictingFolders.length) {
         const visibleFolders = conflictingFolders.sort().slice(0, 12);
@@ -14594,6 +14658,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
         }
         // A verified committed receipt ends the automatic rollback window.
         pendingDeployRecovery = undefined;
+        sweepDeploymentScratchSiblings(targetRoot, deployedFingerprint);
         captureActionReceiptProjection(req, deployReceipt);
       } else {
         try {
