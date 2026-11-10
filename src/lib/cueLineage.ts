@@ -23,7 +23,7 @@
  */
 
 import type { MDNode, MDLink } from '../types';
-import { DOMParser, type Element } from '@xmldom/xmldom';
+import { DOMParser, type Element, type Node as XmlNode } from '@xmldom/xmldom';
 import type { ValidationSourceLocation } from './validationEvidence';
 import { assertXmlInputWithinLimits, MAX_PROJECT_XML_DEPTH } from './xmlInputLimits';
 import { parseXmlLenient, walkElements } from './xmlLite';
@@ -264,6 +264,87 @@ export interface MdLibraryDeclaration<T = unknown> {
   source: T;
 }
 
+export type MdLibrarySignature<S = unknown> =
+  | { readonly status: 'known'; readonly parameters: readonly { name: string; hasDefault: boolean; point?: S }[] }
+  | { readonly status: 'unavailable'; readonly reason: string };
+
+export type MdReferenceRole = 'cue' | 'run_actions' | 'include_actions'
+  | 'signal_cue' | 'signal_cue_instantly' | 'reset_cue' | 'cancel_cue';
+
+export interface MdReferenceFact<S = unknown> {
+  readonly id: string;
+  readonly role: MdReferenceRole;
+  readonly ref: string;
+  readonly name?: string;
+  readonly point?: S;
+  readonly refPoint?: S;
+  readonly arguments: readonly { name: string; point?: S }[];
+  readonly argumentsUnavailable?: string;
+  /** A supplied name can disappear independently of the call/ref origin. */
+  readonly missingArgumentPoints?: ReadonlyMap<string, S>;
+  readonly missingArgumentsUnavailable?: string;
+}
+
+/** A later literal ref edit owns the value; a newly imported call owns its element. */
+export function mdReferencePoint<S extends { operation?: number }>(call: MdReferenceFact<S>): S | undefined {
+  return call.refPoint && call.refPoint.operation !== call.point?.operation ? call.refPoint : call.point ?? call.refPoint;
+}
+
+function directMdChildren(element: Element, tag: string): Element[] {
+  return Array.from(element.childNodes).filter((node): node is Element => node.nodeType === 1 && node.nodeName === tag);
+}
+
+function parameterChildren(element: Element, tag: 'params' | 'param', namespaceAware: boolean): Element[] {
+  return namespaceAware ? Array.from(element.childNodes).filter((node): node is Element => node.nodeType === 1
+    && ((node as Element).localName || node.nodeName) === tag) : directMdChildren(element, tag);
+}
+
+function foreignParameter(element: Element, tag: 'params' | 'param'): boolean {
+  return element.nodeName !== tag || !!element.namespaceURI || !!element.getAttribute('xmlns');
+}
+
+/** Consulted effective arguments cannot treat foreign parameter-shaped nodes as absent. */
+export function mdReferenceArgumentNamespaceUnavailable(call: Element): string | undefined {
+  return parameterChildren(call, 'param', true).some(parameter => foreignParameter(parameter, 'param'))
+    ? 'A direct supplied parameter uses an unsupported XML namespace context.' : undefined;
+}
+
+/** The existing exact, direct-child signature contract; unknown never means empty. */
+export function readMdLibrarySignature<S>(library: Element, point: (node: XmlNode) => S | undefined,
+  options: { namespaceAware?: boolean } = {}): MdLibrarySignature<S> {
+  const containers = parameterChildren(library, 'params', !!options.namespaceAware);
+  if (options.namespaceAware && containers.some(container => foreignParameter(container, 'params'))) {
+    return { status: 'unavailable', reason: 'The library params container uses an unsupported XML namespace context.' };
+  }
+  if (containers.length > 1) return { status: 'unavailable', reason: 'The library has multiple direct params containers.' };
+  const parameters = containers[0] ? parameterChildren(containers[0], 'param', !!options.namespaceAware) : [];
+  if (options.namespaceAware && parameters.some(parameter => foreignParameter(parameter, 'param'))) {
+    return { status: 'unavailable', reason: 'The library parameter uses an unsupported XML namespace context.' };
+  }
+  const names = new Set<string>();
+  const facts: Array<{ name: string; hasDefault: boolean; point?: S }> = [];
+  for (const parameter of parameters) {
+    const name = parameter.getAttribute('name') ?? '';
+    if (!name || names.has(name)) return { status: 'unavailable', reason: 'The library signature has unnamed or duplicate parameters.' };
+    names.add(name);
+    facts.push({ name, hasDefault: parameter.hasAttribute('default'), point: point(parameter) });
+  }
+  return Object.freeze({ status: 'known', parameters: Object.freeze(facts.map(fact => Object.freeze(fact))) });
+}
+
+/** Supplied names are case-sensitive; nested cue/action parameters are separate. */
+export function readMdReferenceArguments<S>(call: Element, point: (node: XmlNode) => S | undefined): MdReferenceFact<S>['arguments'] {
+  return Object.freeze(directMdChildren(call, 'param').flatMap(parameter => {
+    const name = parameter.getAttributeNode('name');
+    return name?.value ? [Object.freeze({ name: name.value, point: point(name) ?? point(parameter) })] : [];
+  }));
+}
+
+export function mdReferenceRole(name: string): MdReferenceRole | undefined {
+  return name === 'cue' || name === 'run_actions' || name === 'include_actions'
+    || name === 'signal_cue' || name === 'signal_cue_instantly' || name === 'reset_cue' || name === 'cancel_cue' ? name : undefined;
+}
+
 export interface MdLibraryScript<D = unknown, S = unknown> {
   name: string;
   declarations: readonly MdLibraryDeclaration<D>[];
@@ -316,11 +397,21 @@ export function resolveMdLibraryReference<D, S>(
   index: ReadonlyMap<string, MdLibraryIndexEntry<D, S> | null>,
   callerScriptName: string,
   reference: string,
+  options: { cueReference?: boolean } = {},
 ): MdLibraryResolution<D, S> | null {
   const ref = reference.trim();
-  const literal = /^(?:md\.([A-Za-z_][\w]*)\.)?([A-Za-z_][\w]*)$/.exec(ref);
-  if (!literal || classifyCueRef(ref).kind === 'keyword') return null;
-  const [, scriptName = callerScriptName, targetName] = literal;
+  const classified = classifyCueRef(ref);
+  let scriptName: string;
+  let targetName: string;
+  if (options.cueReference) {
+    if (classified.kind === 'local') { scriptName = callerScriptName; targetName = classified.cue; }
+    else if (classified.kind === 'cross') { scriptName = classified.script; targetName = classified.cue; }
+    else return null;
+  } else {
+    const literal = /^(?:md\.([A-Za-z_][\w]*)\.)?([A-Za-z_][\w]*)$/.exec(ref);
+    if (!literal || classified.kind === 'keyword') return null;
+    [, scriptName = callerScriptName, targetName] = literal;
+  }
   const script = index.get(scriptName.toLowerCase());
   if (!script || script.name !== scriptName) return null;
   const key = targetName.toLowerCase();

@@ -38,9 +38,9 @@ import {
 } from "../lib/extensionProject";
 import { validateProjectCrossFile } from "../lib/projectCrossFileValidation";
 import {
-  canonicalMdLibraryBaseline, diffMdLibraryPurposeFacts, plainMdLibraryPurposeFacts, evaluateEffectiveMdLibraryPurpose,
+  buildEffectiveMdReferenceContext, canonicalMdLibraryBaseline, diffMdLibraryPurposeFacts, plainMdLibraryPurposeFacts, evaluateEffectiveMdLibraryPurpose,
   EFFECTIVE_INCLUDE_PURPOSE_CODE, EFFECTIVE_INCLUDE_PURPOSE_CHECK,
-  type MdEffectiveLibraryInput, type MdLibraryBaseline,
+  type EffectiveMdReferenceContext, type MdEffectiveLibraryInput, type MdLibraryBaseline,
 } from '../lib/mdEffectiveLibraryPurpose';
 import { formatScriptPropertyFinding, lintScriptPropertyChains, type ScriptPropertyFinding } from "../lib/scriptProperties";
 import { checkXmlWellformed } from "../lib/xmlWellformed";
@@ -292,8 +292,6 @@ export function runProjectValidation(
     }
   }
 
-  const cueIndex = indexCueReferences(project);
-  const crossFile = validateProjectCrossFile(project);
   const menuLuaPaths = registeredX4MenuLuaPaths(project.files.find(file => file.path.toLowerCase() === 'ui.xml')?.content);
   const lua = analyzeLuaFiles(project.files
     .filter(file => /\.lua$/i.test(file.path) && typeof file.content === "string")
@@ -524,6 +522,8 @@ export function runProjectValidation(
     }
   }
 
+  let effectiveContext: EffectiveMdReferenceContext | undefined;
+  let effectivePurpose: ReturnType<typeof evaluateEffectiveMdLibraryPurpose> | undefined;
   if (hasMdDiffs) {
     const mdInputs: MdEffectiveLibraryInput[] = [];
     for (const file of project.files) {
@@ -554,19 +554,24 @@ export function runProjectValidation(
       } catch { baseline = { status: 'unavailable', reason: 'Canonical-before MD source could not be resolved.' }; }
       mdInputs.push(plainMdLibraryPurposeFacts(relativePath, file.content, baseline));
     }
-    const effectivePurpose = evaluateEffectiveMdLibraryPurpose(mdInputs);
+    effectiveContext = buildEffectiveMdReferenceContext(mdInputs);
+    coverageGaps.push(...effectiveContext.gaps);
+    effectivePurpose = evaluateEffectiveMdLibraryPurpose(mdInputs, effectiveContext);
     for (const gap of effectivePurpose.gaps) coverageGaps.push({ check: EFFECTIVE_INCLUDE_PURPOSE_CHECK, ...gap });
-    // Only this exact rule changes context. Lua/events, cue resolution and their counters
-    // keep the original authored-project pass rather than running on vanilla documents.
-    // A failed participating MD input could hide a script-name collision. Keep
-    // established authored-only findings and explicitly decline effective proof.
-    if (!effectivePurpose.incompleteInventory) {
-      crossFile.findings = crossFile.findings.filter(finding => finding.code !== EFFECTIVE_INCLUDE_PURPOSE_CODE);
-      crossFile.findings.push(...effectivePurpose.findings);
-      crossFile.summary.findings = crossFile.findings.length;
-      crossFile.summary.errors = crossFile.findings.filter(finding => finding.severity === 'error').length;
-      crossFile.ok = crossFile.summary.errors === 0;
-    }
+  }
+  // Resolve authored calls once against trusted final declarations. The index's
+  // public defined list stays authored for save-impact; canonical names are lookup-only.
+  const cueIndex = indexCueReferences(project, { effectiveContext });
+  const crossFile = validateProjectCrossFile(project, { cueIndex, effectiveContext });
+  coverageGaps.push(...(cueIndex.coverageGaps ?? []), ...(crossFile.coverageGaps ?? []));
+  // The existing effective include pass additionally owns inherited calls affected
+  // by provider changes. Other contracts never import untouched canonical callers.
+  if (effectivePurpose && !effectivePurpose.incompleteInventory) {
+    crossFile.findings = crossFile.findings.filter(finding => finding.code !== EFFECTIVE_INCLUDE_PURPOSE_CODE);
+    crossFile.findings.push(...effectivePurpose.findings);
+    crossFile.summary.findings = crossFile.findings.length;
+    crossFile.summary.errors = crossFile.findings.filter(finding => finding.severity === 'error').length;
+    crossFile.ok = crossFile.summary.errors === 0;
   }
 
   // MD/AI files intentionally pass through the dedicated indexes and the general
@@ -859,7 +864,8 @@ function flattenProjectValidationRaw(result: ProjectValidationResult): FlatProje
     out.push(flatFinding);
   }
   for (const r of result.cueIndex.unresolved) {
-    out.push({ severity: "error", code: "project.unresolved_cue_ref", filePath: r.file, sourceRef: r.ref, message: `Cue reference "${r.ref}" resolves to nothing in this project.` });
+    out.push({ severity: "error", code: "project.unresolved_cue_ref", filePath: r.file, sourceRef: r.sourceRef ?? r.ref,
+      line: r.line, column: r.column, message: `Cue reference "${r.ref}" resolves to nothing in this project.` });
   }
   for (const f of result.crossFile.findings) {
     const sourceRef = f.sourceRef ?? (f.event || f.dependencyId);

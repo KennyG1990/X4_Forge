@@ -83,6 +83,8 @@ export interface DiffElementProvenance {
   elements: ReadonlyMap<XmlElement, DiffSourcePoint>;
   attributes: ReadonlyMap<XmlElement, ReadonlyMap<string, DiffSourcePoint>>;
   removed: ReadonlyMap<XmlElement, DiffSourcePoint>;
+  /** Actual pre-mutation parent identities, including nodes authored by earlier operations. */
+  removedParents: ReadonlyMap<XmlElement, XmlElement | null>;
   gaps: readonly string[];
 }
 
@@ -588,7 +590,7 @@ function applyToNode(document: XmlDocument, target: XmlNode, operation: DiffOper
 }
 
 function unavailableElementProvenance(reason: string): DiffElementProvenance {
-  return { available: false, reason, initial: new Map(), elements: new Map(), attributes: new Map(), removed: new Map(), gaps: [reason] };
+  return { available: false, reason, initial: new Map(), elements: new Map(), attributes: new Map(), removed: new Map(), removedParents: new Map(), gaps: [reason] };
 }
 
 function createElementTrace(
@@ -599,15 +601,16 @@ function createElementTrace(
   const elements = new Map<XmlElement, DiffSourcePoint>();
   const attributes = new Map<XmlElement, Map<string, DiffSourcePoint>>();
   const removed = new Map<XmlElement, DiffSourcePoint>();
+  const removedParents = new Map<XmlElement, XmlElement | null>();
   const gaps: string[] = [];
-  const result: DiffElementProvenance = { available: true, initial, elements, attributes, removed, gaps };
+  const result: DiffElementProvenance = { available: true, initial, elements, attributes, removed, removedParents, gaps };
   const maxElements = typeof options === 'object' ? options.maxElements ?? 50_000 : 50_000;
   const maxSourceChars = typeof options === 'object' ? options.maxSourceChars ?? 8 * 1024 * 1024 : 8 * 1024 * 1024;
   let attributeFacts = 0;
   const gap = (reason: string) => { if (gaps.length < 100 && !gaps.includes(reason)) gaps.push(reason); };
   const disable = (reason: string) => {
     result.available = false; result.reason ||= reason; gap(reason);
-    initial.clear(); elements.clear(); attributes.clear(); removed.clear(); delete result.document;
+    initial.clear(); elements.clear(); attributes.clear(); removed.clear(); removedParents.clear(); delete result.document;
   };
   const safe = (work: () => void) => {
     if (!result.available) return;
@@ -710,12 +713,15 @@ function createElementTrace(
       }
       rememberAttribute(owner, name, origin);
     }); },
-    deleted(node: XmlElement, operation: number) { safe(() => {
+    deleted(node: XmlElement, operation: number, parentBefore: XmlElement | null) { safe(() => {
       // XPath snapshots may include both an ancestor and its descendants. An
       // identity destroyed with that ancestor never becomes attached again.
       if (removed.has(node)) return;
       const origin = point(operation, source!.operations[operation]);
-      visit([node], element => removed.set(element, origin));
+      visit([node], element => {
+        removed.set(element, origin);
+        removedParents.set(element, element === node ? parentBefore : element.parentElement);
+      });
     }); },
     finish(ok: boolean) {
       if (!ok) disable('Patch simulation failed; effective element context is unavailable.');
@@ -807,9 +813,10 @@ function applyParsedDiffOperations(
         const attributeOwner = target.nodeType === 2 ? (target as XmlAttr).ownerElement
           : operation.type === 'add' && operation.attrType && isElement(target) ? target : null;
         const attributeName = target.nodeType === 2 ? target.nodeName : operation.attrType?.slice(1);
+        const parentBefore = elementTrace && isElement(target) ? target.parentElement : null;
         applyToNode(document, target, operation, elementTrace ? nodes => elementTrace.payload(nodes, index) : undefined);
         if (attributeOwner && attributeName) elementTrace?.attribute(attributeOwner, attributeName, index, operation.type === 'remove');
-        if (isElement(target) && (operation.type === 'remove' || operation.type === 'replace')) elementTrace?.deleted(target, index);
+        if (isElement(target) && (operation.type === 'remove' || operation.type === 'replace')) elementTrace?.deleted(target, index, parentBefore);
         if (attributeWrites) {
           if (operation.type === 'replace' && target.nodeType === 2) {
             attributeWrites.set(target as XmlAttr, index);

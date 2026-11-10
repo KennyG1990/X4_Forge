@@ -402,9 +402,9 @@ function ordinaryMdActionOwner(action: Element, classify = createMdReturnOwnerCl
 }
 
 /**
- * Check the witnessed ordinary-cue rule against one successfully composed MD DOM.
- * No DOM or historical trace gap escapes this synchronous analysis. Library return
- * behavior beyond the existing run-actions structural control remains deferred.
+ * Check the shared return-owner rule against one successfully composed MD DOM.
+ * The historic export name is retained for existing callers. Ordinary cues and
+ * non-run libraries forbid returns; no DOM or historical gap escapes this pass.
  */
 export function lintEffectiveMdCueReturns(filePath: string, trace: DiffElementProvenance | undefined): {
   findings: MdPitfallFinding[];
@@ -477,18 +477,19 @@ export function lintEffectiveMdCueReturns(filePath: string, trace: DiffElementPr
     }
     if (context.kind === 'ordinary-cue' && before?.kind === 'ordinary-cue') continue;
     if (context.kind === 'other-library' && before?.kind === 'other-library' && context.owner === before.owner) {
-      if (context.purpose === before.purpose) continue;
-    }
-    if (context.kind === 'other-library') {
-      gap('A newly authored or changed non-run-actions library return context awaits the separate X4 library-return witness.');
+      // Different non-run purpose strings do not introduce an inherited error:
+      // this return was already forbidden in the canonical owner context.
       continue;
     }
-    const origin = trace.elements.get(action);
+    const origin = original && context.kind === 'other-library' && context.owner
+      && before?.kind === 'run-actions-library' && before.owner === context.owner
+      ? trace.attributes.get(context.owner)?.get('purpose')
+      : trace.elements.get(action);
     const actionId = identity(action);
     const ownerId = context.owner && identity(context.owner);
     if (!origin || origin.reason || !Number.isInteger(origin.line) || !Number.isInteger(origin.column)
       || (origin.line ?? 0) < 1 || (origin.column ?? 0) < 1 || !actionId || !ownerId) {
-      gap(origin?.reason || 'The newly affected ordinary-cue return has no reliable original authored element position.');
+      gap(origin?.reason || 'The newly affected MD return has no reliable original authored cause position.');
       continue;
     }
     findings.push({ code: 'md_pitfall.return_context', severity: 'error', filePath,

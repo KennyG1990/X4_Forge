@@ -17,12 +17,16 @@ import {
   indexCueReferences,
   validateProjectStructure,
   type ExtensionProject,
+  type CueReferenceIndex,
 } from './extensionProject';
 import { parseModManifest, type ModDependency, type ModManifest } from './modDependencyGraph';
 import {
   buildMdLibraryIndex, classifyCueRef, duplicateMdCueMessage, findDuplicateMdCueDeclarations,
-  parseMdScriptRoot, resolveMdLibraryReference, type MdLibraryDeclaration, type MdLibraryScript,
+  mdReferencePoint, parseMdScriptRoot, readMdLibrarySignature, readMdReferenceArguments, resolveMdLibraryReference,
+  type MdLibraryDeclaration, type MdLibraryScript, type MdLibrarySignature, type MdReferenceFact,
 } from './cueLineage';
+import { EFFECTIVE_MD_ARGUMENT_CHECK, EFFECTIVE_MD_REFERENCE_CHECK,
+  type EffectiveMdReferenceContext, type MdReferenceCoverageGap, type MdReferenceSourcePoint } from './mdEffectiveLibraryPurpose';
 import { collectMdStringResults } from './expressionAst';
 import type { ValidationSourceLocation } from './validationEvidence';
 import { normPath, parseXmlLenient, walkElements } from './xmlLite';
@@ -109,6 +113,7 @@ export interface ProjectCrossFileValidationResult {
   };
   findings: ProjectCrossFileFinding[];
   cueIndex: ReturnType<typeof indexCueReferences>;
+  coverageGaps?: MdReferenceCoverageGap[];
   mdLua: {
     raised: ProjectEventRef[];
     registered: ProjectEventRef[];
@@ -718,51 +723,57 @@ function findContentManifest(project: ExtensionProject): ModManifest | null {
   return content ? parseModManifest(project.id || 'project', content.content || '') : null;
 }
 
-function libraryArgumentFindings(
-  call: XmlElement, reference: XmlAttr, library: XmlElement, file: string, targetFile: string,
-): ProjectCrossFileFinding[] {
-  const childrenNamed = (element: XmlElement, tag: string) => Array.from(element.childNodes)
-    .filter((child): child is XmlElement => child.nodeType === 1 && child.nodeName === tag);
-  const containers = childrenNamed(library, 'params');
-  if (containers.length > 1) return [];
-  const parameters = containers[0] ? childrenNamed(containers[0], 'param') : [];
-  const declared = new Map(parameters.map(param => [param.getAttribute('name') ?? '', param]));
-  if (declared.has('') || declared.size !== parameters.length) return [];
-
-  const action = call.nodeName === 'run_actions';
-  const caller = action ? '<run_actions>' : `Cue "${call.getAttribute('name')}"`;
-  const ref = reference.value.trim();
-  const findings: ProjectCrossFileFinding[] = [];
-  const report = (
-    code: 'md.cue_library_param_undeclared' | 'md.cue_library_param_required' | 'md.run_actions_param_undeclared',
-    attribute: XmlAttr, node: XmlElement, declaration: XmlElement, detail: string,
-  ) => {
-    const target = { file: targetFile, line: declaration.lineNumber, column: declaration.columnNumber };
-    const coordinate = [target.file, target.line, target.column].filter(part => part !== undefined).join(':');
-    findings.push({ code, severity: action ? 'warning' : 'error', file,
-      line: attribute.lineNumber ?? node.lineNumber, column: attribute.columnNumber ?? node.columnNumber, target,
-      detail: `${detail} See ${coordinate}.` });
-  };
-
+function libraryArgumentFacts<S>(call: MdReferenceFact<S>, signature: MdLibrarySignature<S>, library: S | undefined,
+  parameterIndex?: ReadonlyMap<string, { name: string; hasDefault: boolean; point?: S }>,
+  requiredIndex?: ReadonlyMap<string, { name: string; hasDefault: boolean; point?: S }>) {
+  const findings: Array<{ code: 'md.cue_library_param_undeclared' | 'md.cue_library_param_required' | 'md.run_actions_param_undeclared';
+    severity: 'error' | 'warning'; point?: S; target?: S; detail: string }> = [];
+  if (signature.status !== 'known') return findings;
+  const declared = parameterIndex ?? new Map(signature.parameters.map(parameter => [parameter.name, parameter]));
+  const action = call.role === 'run_actions';
+  const caller = action ? '<run_actions>' : `Cue "${call.name}"`;
+  const ref = call.ref.trim();
   const supplied = new Set<string>();
-  for (const param of childrenNamed(call, 'param')) {
-    const argument = param.getAttributeNode('name');
-    if (!argument?.value) continue;
-    supplied.add(argument.value);
-    if (!declared.has(argument.value)) {
-      report(action ? 'md.run_actions_param_undeclared' : 'md.cue_library_param_undeclared', argument, param, library,
-        `${caller} passes parameter "${argument.value}", which library "${ref}" does not declare.`);
+  for (const argument of call.arguments) {
+    supplied.add(argument.name);
+    if (!declared.has(argument.name)) {
+      findings.push({ code: action ? 'md.run_actions_param_undeclared' : 'md.cue_library_param_undeclared',
+        severity: action ? 'warning' : 'error', point: argument.point, target: library,
+        detail: `${caller} passes parameter "${argument.name}", which library "${ref}" does not declare.` });
     }
   }
   // Omitted action arguments need a separate X4 witness.
   if (action) return findings;
-  for (const [parameter, declaration] of declared) {
-    if (!declaration.hasAttribute('default') && !supplied.has(parameter)) {
-      report('md.cue_library_param_required', reference, call, declaration,
-        `${caller} calls library "${ref}" without required parameter "${parameter}".`);
+  const required = requiredIndex ?? new Map([...declared].filter(([, declaration]) => !declaration.hasDefault));
+  for (const [parameter, declaration] of required) {
+    if (!supplied.has(parameter)) {
+      findings.push({ code: 'md.cue_library_param_required', severity: 'error',
+        point: call.missingArgumentPoints?.get(parameter) ?? (call.missingArgumentsUnavailable ? undefined : call.refPoint ?? call.point), target: declaration.point,
+        detail: `${caller} calls library "${ref}" without required parameter "${parameter}".` });
     }
   }
   return findings;
+}
+
+function libraryArgumentFindings(
+  call: XmlElement, reference: XmlAttr, library: XmlElement, file: string, targetFile: string,
+): ProjectCrossFileFinding[] {
+  type DomPoint = { node: XmlElement; attribute?: XmlAttr };
+  const point = (node: XmlElement | XmlAttr): DomPoint => node.nodeType === 2
+    ? { node: (node as XmlAttr).ownerElement!, attribute: node as XmlAttr } : { node: node as XmlElement };
+  const facts = libraryArgumentFacts<DomPoint>({ id: '', role: call.nodeName === 'run_actions' ? 'run_actions' : 'cue',
+    ref: reference.value, name: call.getAttribute('name') ?? undefined, point: point(call), refPoint: point(reference),
+    arguments: readMdReferenceArguments(call, node => point(node as XmlElement | XmlAttr)) },
+  readMdLibrarySignature(library, node => point(node as XmlElement)), point(library));
+  return facts.map(finding => {
+    const declaration = finding.target?.node ?? library;
+    const target = { file: targetFile, line: declaration.lineNumber, column: declaration.columnNumber };
+    const coordinate = [target.file, target.line, target.column].filter(part => part !== undefined).join(':');
+    const source = finding.point;
+    return { code: finding.code, severity: finding.severity, file,
+      line: source?.attribute?.lineNumber ?? source?.node.lineNumber,
+      column: source?.attribute?.columnNumber ?? source?.node.columnNumber, target, detail: `${finding.detail} See ${coordinate}.` };
+  });
 }
 
 function validateCueLibraryReferences(mdFiles: ExtensionProject['files']) {
@@ -837,10 +848,154 @@ function validateCueLibraryReferences(mdFiles: ExtensionProject['files']) {
   return { checked, findings };
 }
 
-export function validateProjectCrossFile(project: ExtensionProject): ProjectCrossFileValidationResult {
+/** Final declarations are authority; only compact authored calls can produce new diagnostics. */
+function validateEffectiveReferenceContracts(context: EffectiveMdReferenceContext) {
+  const findings: ProjectCrossFileFinding[] = [];
+  const coverageGaps: MdReferenceCoverageGap[] = [];
+  let checked = 0;
+  const signatureIndexes = new Map<MdLibrarySignature<MdReferenceSourcePoint>, {
+    declared: Map<string, { name: string; hasDefault: boolean; point?: MdReferenceSourcePoint }>;
+    required: Map<string, { name: string; hasDefault: boolean; point?: MdReferenceSourcePoint }>;
+  }>();
+  const gapKeys = new Set<string>();
+  const gap = (check: string, file: string, reason: string) => {
+    const bounded = reason.slice(0, 480);
+    const key = JSON.stringify([check, file, bounded]);
+    if (!gapKeys.has(key)) { gapKeys.add(key); coverageGaps.push({ check, filePath: file, reason: bounded }); }
+  };
+  const usable = (point: MdReferenceSourcePoint | undefined): point is MdReferenceSourcePoint & { line: number; column: number } =>
+    !!point && !point.reason && Number.isInteger(point.line) && Number.isInteger(point.column) && (point.line ?? 0) > 0 && (point.column ?? 0) > 0;
+  const related = (file: string, point: MdReferenceSourcePoint | undefined): ValidationSourceLocation =>
+    usable(point) ? { file, line: point.line, column: point.column } : { file };
+  const report = (code: ProjectCrossFileFindingCode, severity: 'error' | 'warning', file: string,
+    call: MdReferenceFact<MdReferenceSourcePoint>, point: MdReferenceSourcePoint | undefined, detail: string,
+    target?: ValidationSourceLocation, suffix = '') => {
+    if (!usable(point)) {
+      gap(EFFECTIVE_MD_REFERENCE_CHECK, file, `Authored ${call.role} reference ${call.id} has no reliable original diagnostic cause position.`);
+      return;
+    }
+    findings.push({ code, severity, file: point.file, line: point.line, column: point.column, target,
+      sourceRef: `md.reference:${JSON.stringify([file, call.id, call.role, code, suffix])}`, detail });
+  };
+  for (const document of context.documents) {
+    const firstByName = new Map<string, typeof document.declarations[number]>();
+    for (const declaration of document.declarations) {
+      const first = firstByName.get(declaration.name);
+      if (!first) { firstByName.set(declaration.name, declaration); continue; }
+      if (declaration.inherited && first.inherited) continue;
+      const authored = declaration.inherited ? first : declaration;
+      const point = authored.namePoint ?? authored.point;
+      if (!usable(point)) {
+        gap(EFFECTIVE_MD_REFERENCE_CHECK, document.file, 'An authored duplicate declaration has no reliable original name position.');
+        continue;
+      }
+      const target = related(document.file, first.namePoint ?? first.point);
+      findings.push({ code: 'md.cue_duplicate_name', severity: 'error', file: point.file, line: point.line, column: point.column, target,
+        sourceRef: `md.declaration:${JSON.stringify([document.file, authored.id, declaration.name])}`,
+        detail: duplicateMdCueMessage(declaration.name, document.name, target) });
+    }
+    for (const call of document.references) {
+      if (findings.length >= 50_000) {
+        gap(EFFECTIVE_MD_REFERENCE_CHECK, document.file, 'Effective MD reference diagnostics exceeded the 50000-finding context budget.');
+        return { checked, findings, coverageGaps };
+      }
+      if (call.argumentsUnavailable) {
+        gap(EFFECTIVE_MD_ARGUMENT_CHECK, document.file, `Authored ${call.role} reference ${call.id} has unavailable supplied arguments. ${call.argumentsUnavailable}`);
+      }
+      if (call.role === 'reset_cue' || call.role === 'cancel_cue') continue; // Name resolution is their existing contract.
+      const primary = mdReferencePoint(call);
+      const signal = call.role === 'signal_cue' || call.role === 'signal_cue_instantly';
+      const classification = classifyCueRef(call.ref.trim());
+      if (signal && classification.kind === 'keyword') continue;
+      const resolved = resolveMdLibraryReference(context.index, document.name, call.ref, { cueReference: signal });
+      if (!resolved || (resolved.declaration && resolved.declaration.name !== resolved.targetName) || (resolved.declared && !resolved.declaration)) {
+        gap(EFFECTIVE_MD_REFERENCE_CHECK, document.file, `Authored ${call.role} reference ${call.id} has an external, unsupported, case-mismatched or ambiguous final target.`);
+        continue;
+      }
+      if (call.role === 'cue') {
+        checked++;
+        if (!resolved.declared) {
+          report('md.cue_library_ref_unresolved', 'error', document.file, call, call.refPoint ?? primary,
+            `Cue "${call.name}" references library "${call.ref.trim()}", which has no declaration in MD script "${resolved.script.name}".`);
+          continue;
+        }
+      }
+      const declaration = resolved.declaration;
+      const library = resolved.library;
+      if (signal) {
+        if (library) report('md.signal_library', 'error', document.file, call, primary,
+          `signal_cue targets the <library> "${call.ref}". Libraries are invoked via <run_actions ref="…"> (with purpose="run_actions"), not signalled — X4 errors with "Signalled cue … has no corresponding library".`,
+          related(resolved.script.source.file, library.source.point));
+        continue;
+      }
+      if (call.role === 'run_actions' && declaration?.kind === 'cue') {
+        report('md.run_actions_nonlibrary', 'warning', document.file, call, primary,
+          `run_actions ref "${call.ref}" resolves to a <cue>, not a <library>. <run_actions> targets a library declared with purpose="run_actions".`,
+          related(resolved.script.source.file, declaration.source.point));
+        continue;
+      }
+      if (!library) {
+        gap(EFFECTIVE_MD_REFERENCE_CHECK, document.file, `Authored ${call.role} reference ${call.id} has no exact final library contract.`);
+        continue;
+      }
+      if (call.role === 'include_actions') {
+        // The existing effective include-purpose pass owns run-library errors and
+        // inherited provider changes, using this same final declaration index.
+        if (library.purpose !== null && library.purpose !== 'include_actions' && library.purpose !== 'run_actions') {
+          gap(EFFECTIVE_MD_REFERENCE_CHECK, document.file, `Authored include_actions reference ${call.id} has an unsupported library-purpose contract.`);
+        }
+        continue;
+      }
+      if ((call.role === 'run_actions' && library.purpose !== 'run_actions')
+        || (call.role === 'cue' && library.purpose !== null && library.purpose !== 'cue_ref')) {
+        gap(EFFECTIVE_MD_REFERENCE_CHECK, document.file, `Authored ${call.role} reference ${call.id} has an unsupported library-purpose contract.`);
+        continue;
+      }
+      const signature = library.source.signature;
+      if (call.argumentsUnavailable) continue;
+      if (!signature || signature.status !== 'known') {
+        gap(EFFECTIVE_MD_ARGUMENT_CHECK, document.file, `Authored ${call.role} reference ${call.id} has an unavailable parameter signature. ${signature?.status === 'unavailable' ? signature.reason : ''}`);
+        continue;
+      }
+      const provider = resolved.script.source.file;
+      let compiled = signatureIndexes.get(signature);
+      if (!compiled) {
+        compiled = { declared: new Map(signature.parameters.map(parameter => [parameter.name, parameter])),
+          required: new Map(signature.parameters.filter(parameter => !parameter.hasDefault).map(parameter => [parameter.name, parameter])) };
+        signatureIndexes.set(signature, compiled);
+      }
+      for (const [index, finding] of libraryArgumentFacts(call, signature, library.source.point, compiled.declared, compiled.required).entries()) {
+        if (findings.length >= 50_000) {
+          gap(EFFECTIVE_MD_REFERENCE_CHECK, document.file, 'Effective MD reference diagnostics exceeded the 50000-finding context budget.');
+          return { checked, findings, coverageGaps };
+        }
+        if (!usable(finding.point)) {
+          gap(EFFECTIVE_MD_ARGUMENT_CHECK, document.file, `Authored argument contract ${call.id}:${index} has no reliable original argument/call position.`);
+          continue;
+        }
+        const target = related(provider, finding.target);
+        const coordinate = [target.file, target.line, target.column].filter(part => part !== undefined).join(':');
+        report(finding.code, finding.severity, document.file, call, finding.point, `${finding.detail} See ${coordinate}.`, target, String(index));
+      }
+      if (call.role === 'run_actions') {
+        const supplied = new Set(call.arguments.map(argument => argument.name));
+        let suppliedRequired = 0;
+        for (const name of supplied) if (compiled.required.has(name)) suppliedRequired++;
+        if (suppliedRequired < compiled.required.size) {
+          gap(EFFECTIVE_MD_ARGUMENT_CHECK, document.file, `Authored run_actions reference ${call.id} omits required library arguments; required action-argument policy remains a separate check.`);
+        }
+      }
+    }
+  }
+  return { checked, findings, coverageGaps };
+}
+
+export function validateProjectCrossFile(project: ExtensionProject, options: {
+  cueIndex?: CueReferenceIndex; effectiveContext?: EffectiveMdReferenceContext;
+} = {}): ProjectCrossFileValidationResult {
   const files = Array.isArray(project?.files) ? project.files : [];
   const structure = validateProjectStructure(project);
-  const cueIndex = indexCueReferences(project);
+  const cueIndex = options.cueIndex ?? indexCueReferences(project, { effectiveContext: options.effectiveContext });
   const findings: ProjectCrossFileFinding[] = [];
 
   for (const issue of structure) {
@@ -856,6 +1011,7 @@ export function validateProjectCrossFile(project: ExtensionProject): ProjectCros
       code: 'cue.unresolved',
       severity: 'error',
       file: ref.file,
+      line: ref.line, column: ref.column, sourceRef: ref.sourceRef,
       detail: `Unresolved cue reference "${ref.ref}".`,
     });
   }
@@ -993,7 +1149,7 @@ export function validateProjectCrossFile(project: ExtensionProject): ProjectCros
   // X4 engine semantic the XSD can't express: you SIGNAL cues, you RUN_ACTIONS libraries.
   // signal_cue / signal_cue_instantly aimed at a <library> errors in-game ("Signalled cue …
   // has no corresponding library"); run_actions aimed at a non-library cue is also wrong.
-  {
+  if (!options.effectiveContext?.complete) {
     const kindByQName = new Map<string, 'library' | 'cue'>();
     for (const f of mdFiles) {
       if (typeof f.content !== 'string') continue; // Missing source is coverage, not an empty inspected document.
@@ -1032,7 +1188,8 @@ export function validateProjectCrossFile(project: ExtensionProject): ProjectCros
     }
   }
 
-  const libraryReferences = validateCueLibraryReferences(mdFiles);
+  const effectiveReferences = options.effectiveContext?.complete ? validateEffectiveReferenceContracts(options.effectiveContext) : undefined;
+  const libraryReferences = effectiveReferences ?? validateCueLibraryReferences(mdFiles);
   findings.push(...libraryReferences.findings);
   const errors = findings.filter(f => f.severity === 'error').length;
   return {
@@ -1054,6 +1211,7 @@ export function validateProjectCrossFile(project: ExtensionProject): ProjectCros
     },
     findings,
     cueIndex,
+    ...(effectiveReferences?.coverageGaps.length ? { coverageGaps: effectiveReferences.coverageGaps } : {}),
     mdLua: { raised, registered, emitted, listened, missingRegisters, missingListeners, parseUnavailable, emitCoverage, payload: { reads: payload.reads, writes: payload.writes } },
     deps: { manifest, dependencies: manifest?.deps || [] },
   };

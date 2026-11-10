@@ -1,8 +1,9 @@
 /** Final MD library-purpose facts. DOM ownership is consumed here, never retained in the project result. */
-import type { Element as XmlElement, Node as XmlNode } from '@xmldom/xmldom';
+import type { Attr as XmlAttr, Element as XmlElement, Node as XmlNode } from '@xmldom/xmldom';
 import {
-  buildMdLibraryIndex, parseMdScriptRoot, resolveMdLibraryReference,
-  type MdLibraryDeclaration, type MdLibraryResolution,
+  buildMdLibraryIndex, mdReferenceArgumentNamespaceUnavailable, mdReferencePoint, mdReferenceRole, parseMdScriptRoot, readMdLibrarySignature,
+  readMdReferenceArguments, resolveMdLibraryReference,
+  type MdLibraryDeclaration, type MdLibraryIndex, type MdLibraryResolution, type MdLibrarySignature, type MdReferenceFact,
 } from './cueLineage';
 import type { DiffElementProvenance, DiffSourcePoint } from './diffSimulator';
 import type { ProjectCrossFileFinding } from './projectCrossFileValidation';
@@ -10,16 +11,19 @@ import { createXmlNodePositionLocator } from './xmlSourceSpans';
 
 export const EFFECTIVE_INCLUDE_PURPOSE_CODE = 'md.include_actions_run_library';
 export const EFFECTIVE_INCLUDE_PURPOSE_CHECK = 'md.include_actions_context';
+export const EFFECTIVE_MD_REFERENCE_CHECK = 'md.reference_context';
+export const EFFECTIVE_MD_ARGUMENT_CHECK = 'md.library_arguments';
 const MAX_ELEMENTS = 50_000;
 const MAX_SOURCE_CHARS = 8 * 1024 * 1024;
 
-interface SourcePoint {
+export interface MdReferenceSourcePoint {
   file: string;
   operation?: number;
   line?: number;
   column?: number;
   reason?: string;
 }
+type SourcePoint = MdReferenceSourcePoint;
 interface DeclarationFact {
   id: string;
   name: string;
@@ -29,6 +33,7 @@ interface DeclarationFact {
   point?: SourcePoint;
   namePoint?: SourcePoint;
   purposePoint?: SourcePoint;
+  signature?: MdLibrarySignature<SourcePoint>;
 }
 interface IncludeFact {
   id: string;
@@ -52,6 +57,8 @@ export interface MdEffectiveLibraryFacts {
   readonly name: string;
   readonly declarations: readonly DeclarationFact[];
   readonly includes: readonly IncludeFact[];
+  readonly references: readonly MdReferenceFact<SourcePoint>[];
+  readonly referenceUnavailable?: string;
   readonly baseline: MdLibraryBaseline;
   readonly namePoint?: SourcePoint;
   readonly inventoryChanges: readonly InventoryChange[];
@@ -59,6 +66,16 @@ export interface MdEffectiveLibraryFacts {
 }
 export type MdEffectiveLibraryInput = MdEffectiveLibraryFacts | { readonly file: string; readonly unavailable: string };
 export type EffectiveIncludePurposeFinding = ProjectCrossFileFinding & { sourceRef: string };
+
+export interface MdReferenceCoverageGap { check: string; filePath?: string; reason: string }
+export interface EffectiveMdReferenceContext {
+  readonly complete: boolean;
+  readonly index: MdLibraryIndex<DeclarationFact, MdEffectiveLibraryFacts>;
+  readonly callerByFile: ReadonlyMap<string, string>;
+  readonly referencesByFile: ReadonlyMap<string, readonly MdReferenceFact<SourcePoint>[]>;
+  readonly documents: readonly MdEffectiveLibraryFacts[];
+  readonly gaps: readonly MdReferenceCoverageGap[];
+}
 
 function sourcePoint(file: string, source: DiffSourcePoint | undefined): SourcePoint | undefined {
   if (!source) return undefined;
@@ -92,9 +109,57 @@ function freezeFacts(facts: MdEffectiveLibraryFacts): MdEffectiveLibraryFacts {
     baseline: Object.freeze(facts.baseline),
     declarations: Object.freeze(facts.declarations.map(value => Object.freeze(value))),
     includes: Object.freeze(facts.includes.map(value => Object.freeze(value))),
+    references: Object.freeze(facts.references.map(value => Object.freeze(value))),
     inventoryChanges: Object.freeze(facts.inventoryChanges.map(value => Object.freeze(value))),
     gaps: Object.freeze([...facts.gaps]),
   });
+}
+
+function referenceNamespaceUnavailable(nodes: readonly XmlElement[]): string | undefined {
+  const foreign = new Set<XmlElement>();
+  for (const node of nodes) {
+    if (node.namespaceURI || node.getAttribute('xmlns') || (node.parentElement && foreign.has(node.parentElement))) foreign.add(node);
+    if (foreign.has(node) && (node.nodeName === 'mdscript' || kind(node.nodeName) || mdReferenceRole(node.nodeName))) {
+      return 'Final MD declarations or references use an unsupported XML namespace context.';
+    }
+  }
+  return undefined;
+}
+
+/** One final declaration authority. References remain authored; inherited declarations are lookup-only. */
+export function buildEffectiveMdReferenceContext(inputs: readonly MdEffectiveLibraryInput[]): EffectiveMdReferenceContext {
+  const documents: MdEffectiveLibraryFacts[] = [];
+  const gaps: MdReferenceCoverageGap[] = [];
+  let complete = true;
+  const callerByFile = new Map<string, string>();
+  const referencesByFile = new Map<string, readonly MdReferenceFact<SourcePoint>[]>();
+  for (const input of inputs) {
+    if ('unavailable' in input || input.referenceUnavailable) {
+      complete = false;
+      gaps.push({ check: EFFECTIVE_MD_REFERENCE_CHECK, filePath: input.file,
+        reason: `Effective MD declaration inventory is unavailable; raw authored checks remain in force. ${'unavailable' in input ? input.unavailable : input.referenceUnavailable}` });
+      continue;
+    }
+    if (callerByFile.has(input.file)) {
+      complete = false;
+      gaps.push({ check: EFFECTIVE_MD_REFERENCE_CHECK, filePath: input.file, reason: 'Duplicate MD project paths make final caller ownership ambiguous.' });
+    }
+    documents.push(input);
+    if (!input.name) {
+      complete = false;
+      gaps.push({ check: EFFECTIVE_MD_REFERENCE_CHECK, filePath: input.file, reason: 'The final MD caller script identity is unavailable.' });
+    }
+    callerByFile.set(input.file, input.name);
+    referencesByFile.set(input.file, input.references);
+    for (const call of input.references) if (!usable(mdReferencePoint(call))) {
+      gaps.push({ check: EFFECTIVE_MD_REFERENCE_CHECK, filePath: input.file,
+        reason: `Authored ${call.role} reference ${call.id} has no reliable original cause position.` });
+    }
+  }
+  const index = buildMdLibraryIndex(documents.map(document => ({ name: document.name,
+    declarations: document.declarations.map(declaration => ({ name: declaration.name, kind: declaration.kind,
+      purpose: declaration.purpose, source: declaration })), source: document })));
+  return { complete, index, callerByFile, referencesByFile, documents, gaps };
 }
 
 /** A canonical-before view for a participating plain path; no unrelated corpus scan. */
@@ -126,15 +191,22 @@ export function plainMdLibraryPurposeFacts(file: string, content: string, baseli
   };
   const declarations: DeclarationFact[] = [];
   const includes: IncludeFact[] = [];
+  const references: MdReferenceFact<SourcePoint>[] = [];
   for (const [index, node] of nodes.entries()) {
     const declarationKind = kind(node.nodeName);
     const name = node.getAttribute('name');
     if (declarationKind && name) declarations.push({ id: `p:${index}`, name, kind: declarationKind,
       purpose: node.getAttribute('purpose'), inherited: false, point: authoredPoint(node),
       namePoint: authoredPoint(node.getAttributeNode('name') ?? undefined),
-      purposePoint: authoredPoint(node.getAttributeNode('purpose') ?? undefined) });
+      purposePoint: authoredPoint(node.getAttributeNode('purpose') ?? undefined),
+      signature: declarationKind === 'library' ? readMdLibrarySignature(node, authoredPoint, { namespaceAware: true }) : undefined });
     if (node.nodeName === 'include_actions') includes.push({ id: `p:${index}`, ref: node.getAttribute('ref') || '',
       inherited: false, point: authoredPoint(node), refPoint: undefined });
+    const role = mdReferenceRole(node.nodeName);
+    const ref = node.getAttributeNode(role === 'signal_cue' || role === 'signal_cue_instantly' || role === 'reset_cue' || role === 'cancel_cue' ? 'cue' : 'ref');
+    if (role && ref && (role !== 'cue' || name)) references.push({ id: `p:${index}`, role, ref: ref.value,
+      name: name || undefined, point: authoredPoint(node), refPoint: authoredPoint(ref),
+      arguments: readMdReferenceArguments(node, authoredPoint), argumentsUnavailable: mdReferenceArgumentNamespaceUnavailable(node) });
   }
   const inventoryChanges: InventoryChange[] = [];
   if (baseline.status === 'known') {
@@ -152,7 +224,8 @@ export function plainMdLibraryPurposeFacts(file: string, content: string, baseli
       if (count > (finalCounts.get(name) || 0)) inventoryChanges.push({ name, point: authoredPoint(root) });
     }
   }
-  return freezeFacts({ file, mode: 'plain', name: root.getAttribute('name') || '', declarations, includes,
+  return freezeFacts({ file, mode: 'plain', name: root.getAttribute('name') || '', declarations, includes, references,
+    referenceUnavailable: referenceNamespaceUnavailable(nodes),
     baseline, namePoint: authoredPoint(root.getAttributeNode('name') ?? root), inventoryChanges, gaps: [] });
 }
 
@@ -177,6 +250,7 @@ export function diffMdLibraryPurposeFacts(file: string, trace: DiffElementProven
   }) });
   const declarations: DeclarationFact[] = [];
   const includes: IncludeFact[] = [];
+  const references: MdReferenceFact<SourcePoint>[] = [];
   const inventoryChanges: InventoryChange[] = [];
   const attached = new Set(nodes);
   const insertedOrdinals = new Map<XmlElement, number>();
@@ -189,6 +263,42 @@ export function diffMdLibraryPurposeFacts(file: string, trace: DiffElementProven
     // authored parents. Baseline matching always uses frozen original identity.
     return `a:${origin?.operation}:${origin?.line}:${origin?.column}:${insertedOrdinals.get(node)}`;
   };
+  const pointForNode = (node: XmlNode): SourcePoint | undefined => node.nodeType === 2
+    ? sourcePoint(file, trace.attributes.get((node as XmlAttr).ownerElement!)?.get(node.nodeName))
+    : sourcePoint(file, trace.elements.get(node as XmlElement));
+  const argumentChanges = new Map<XmlElement, { point?: SourcePoint; missing: Map<string, SourcePoint>; unavailable?: string }>();
+  let unownedRemoval: string | undefined;
+  const changesFor = (owner: XmlElement) => {
+    let changes = argumentChanges.get(owner);
+    if (!changes) { changes = { missing: new Map() }; argumentChanges.set(owner, changes); }
+    return changes;
+  };
+  const rememberMissing = (owner: XmlElement, name: string, cause: SourcePoint | undefined) => {
+    if (!name) return;
+    const changes = changesFor(owner);
+    const point = cause ?? { file, reason: 'The argument name disappeared without a reliable authored cause position.' };
+    const previous = changes.missing.get(name);
+    if (!previous || point.operation === undefined || previous.operation === undefined || point.operation >= previous.operation) {
+      changes.missing.set(name, point);
+    }
+  };
+  for (const [node, origin] of trace.removed) {
+    const original = trace.initial.get(node);
+    if ((node.localName || node.nodeName) !== 'param') continue;
+    const parent = trace.removedParents?.has(node) ? trace.removedParents.get(node) : original?.parent;
+    if (parent === undefined) { unownedRemoval = 'A removed parameter has no reliable pre-mutation parent identity.'; continue; }
+    if (!parent || !mdReferenceRole(parent.nodeName)) continue;
+    const changes = changesFor(parent);
+    changes.point ??= sourcePoint(file, origin);
+    const name = node.getAttribute('name') || '';
+    const nameOrigin = sourcePoint(file, trace.attributes.get(node)?.get('name'));
+    if (node.nodeName === 'param' && !node.namespaceURI && !node.getAttribute('xmlns')) rememberMissing(parent, name, sourcePoint(file, origin));
+    if (original?.attributes.name && original.attributes.name !== name) rememberMissing(parent, original.attributes.name, nameOrigin);
+    const authored = trace.elements.get(node);
+    if (!original && nameOrigin && authored && nameOrigin.operation !== authored.operation) {
+      changes.unavailable = 'A parameter renamed after insertion has no frozen original name; other missing argument causes are unavailable.';
+    }
+  }
   for (const node of nodes) {
     const original = trace.initial.get(node);
     const origins = trace.attributes.get(node);
@@ -198,19 +308,55 @@ export function diffMdLibraryPurposeFacts(file: string, trace: DiffElementProven
     if (declarationKind && name) declarations.push({ id: identity(node), name, kind: declarationKind,
       purpose: node.getAttribute('purpose'), inherited: !!original, point,
       namePoint: sourcePoint(file, origins?.get('name')),
-      purposePoint: sourcePoint(file, origins?.get('purpose')) });
+      purposePoint: sourcePoint(file, origins?.get('purpose')),
+      signature: declarationKind === 'library' ? readMdLibrarySignature(node, pointForNode, { namespaceAware: true }) : undefined });
     if (declarationKind && original?.attributes.name && original.attributes.name !== name) {
       inventoryChanges.push({ name: original.attributes.name.toLowerCase(), point: sourcePoint(file, origins?.get('name')) ?? point });
     }
     if (node.nodeName === 'include_actions') includes.push({ id: identity(node), ref: node.getAttribute('ref') || '',
       inherited: original?.elementName === 'include_actions', originalRef: original?.attributes.ref,
       point, refPoint: sourcePoint(file, origins?.get('ref')) });
+    const role = mdReferenceRole(node.nodeName);
+    if (!role) continue;
+    const attributeName = role === 'signal_cue' || role === 'signal_cue_instantly' || role === 'reset_cue' || role === 'cancel_cue' ? 'cue' : 'ref';
+    const reference = node.getAttribute(attributeName);
+    if (reference === null || (role === 'cue' && !name)) continue;
+    let argumentCause = argumentChanges.get(node)?.point;
+    let changedArguments = argumentChanges.has(node);
+    for (const child of Array.from(node.childNodes)) {
+      if (child.nodeType !== 1 || ((child as XmlElement).localName || child.nodeName) !== 'param') continue;
+      const parameter = child as XmlElement;
+      const before = trace.initial.get(parameter);
+      const parameterOrigins = trace.attributes.get(parameter);
+      const nameOrigin = sourcePoint(file, parameterOrigins?.get('name'));
+      if (before?.attributes.name && parameter.getAttribute('name') !== before.attributes.name) {
+        rememberMissing(node, before.attributes.name, nameOrigin);
+      }
+      const authored = trace.elements.get(parameter);
+      if (!before && nameOrigin && authored && nameOrigin.operation !== authored.operation) {
+        changesFor(node).unavailable = 'A parameter renamed after insertion has no frozen original name; other missing argument causes are unavailable.';
+      }
+      if (!before || parameter.getAttribute('name') !== (before.attributes.name ?? null)
+        || parameter.getAttribute('value') !== (before.attributes.value ?? null)) {
+        changedArguments = true;
+        argumentCause ??= pointForNode(parameter) ?? sourcePoint(file, parameterOrigins?.get('name'))
+          ?? sourcePoint(file, parameterOrigins?.get('value'));
+      }
+    }
+    if (!original || reference.trim() !== (original.attributes[attributeName] || '').trim() || changedArguments) {
+      references.push({ id: identity(node), role, ref: reference, name: name || undefined,
+        point: point ?? argumentCause, refPoint: sourcePoint(file, origins?.get(attributeName)),
+        arguments: readMdReferenceArguments(node, pointForNode), argumentsUnavailable: mdReferenceArgumentNamespaceUnavailable(node),
+        missingArgumentPoints: argumentChanges.get(node)?.missing,
+        missingArgumentsUnavailable: argumentChanges.get(node)?.unavailable ?? unownedRemoval });
+    }
   }
   for (const [node, state] of trace.initial) {
     if (attached.has(node) || !kind(state.elementName) || !state.attributes.name) continue;
     inventoryChanges.push({ name: state.attributes.name.toLowerCase(), point: sourcePoint(file, trace.removed.get(node)) });
   }
-  return freezeFacts({ file, mode: 'diff', name: root.getAttribute('name') || '', declarations, includes, baseline,
+  return freezeFacts({ file, mode: 'diff', name: root.getAttribute('name') || '', declarations, includes, references, baseline,
+    referenceUnavailable: referenceNamespaceUnavailable(nodes),
     namePoint: sourcePoint(file, trace.attributes.get(root)?.get('name')) ?? sourcePoint(file, trace.elements.get(root)),
     // Trace gaps may describe nodes overwritten or removed later. Only a final
     // fact actually used below may make an authored-position check unavailable.
@@ -247,7 +393,7 @@ function compareSourcePoints(left: SourcePoint, right: SourcePoint): number {
  * identity might collide with a known one. In that case no effective inference is
  * returned; the caller preserves the existing authored-only rule and these gaps.
  */
-export function evaluateEffectiveMdLibraryPurpose(inputs: readonly MdEffectiveLibraryInput[]): {
+export function evaluateEffectiveMdLibraryPurpose(inputs: readonly MdEffectiveLibraryInput[], context?: EffectiveMdReferenceContext): {
   findings: EffectiveIncludePurposeFinding[];
   gaps: Array<{ filePath: string; reason: string }>;
   incompleteInventory: boolean;
@@ -272,9 +418,13 @@ export function evaluateEffectiveMdLibraryPurpose(inputs: readonly MdEffectiveLi
     for (const reason of input.gaps) addGap(input.file, reason);
   }
   if (incompleteInventory) return { findings, gaps, incompleteInventory };
+  if (context && !context.complete) {
+    for (const unavailable of context.gaps) addGap(unavailable.filePath || '', unavailable.reason);
+    return { findings, gaps, incompleteInventory: true };
+  }
   const wrap = (declarations: readonly DeclarationFact[]): MdLibraryDeclaration<DeclarationFact>[] => declarations
     .map(declaration => ({ name: declaration.name, kind: declaration.kind, purpose: declaration.purpose, source: declaration }));
-  const finalIndex = buildMdLibraryIndex(documents.map(document => ({ name: document.name,
+  const finalIndex = context?.index ?? buildMdLibraryIndex(documents.map(document => ({ name: document.name,
     declarations: wrap(document.declarations), source: document })));
   const beforeIndex = buildMdLibraryIndex(documents.flatMap(document => document.baseline.status === 'known'
     ? [{ name: document.baseline.script.name, declarations: wrap(document.baseline.script.declarations), source: document }] : []));

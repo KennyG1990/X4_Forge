@@ -17,7 +17,8 @@
  * extraction. Pure: no fs/network. House pattern: engine + oracle + public GET, then UI/API.
  */
 
-import { classifyCueRef, parseSignalCueRefs } from './cueLineage';
+import { classifyCueRef, mdReferencePoint, parseSignalCueRefs, resolveMdLibraryReference } from './cueLineage';
+import type { EffectiveMdReferenceContext, MdReferenceCoverageGap } from './mdEffectiveLibraryPurpose';
 import { normPath, parseXmlLenient, walkElements } from './xmlLite';
 import { parseModManifest, type ModDependency } from './modDependencyGraph';
 
@@ -53,12 +54,16 @@ export interface CueRef {
   /** classification of how it resolves */
   scope: 'local' | 'cross_file' | 'external';
   resolved: boolean;
+  line?: number;
+  column?: number;
+  sourceRef?: string;
 }
 export interface CueReferenceIndex {
   defined: CueDef[];
   references: CueRef[];
   /** the actionable subset: in-project refs (local or cross_file) that resolve to nothing */
   unresolved: CueRef[];
+  coverageGaps?: MdReferenceCoverageGap[];
 }
 
 /* ------------------------------------------------------------------ *
@@ -236,7 +241,7 @@ function definedCueNames(content: string): string[] {
  * (qualified ref to a script not in this project — never flagged). `unresolved` is the
  * actionable subset: in-project refs that resolve to no defined cue.
  */
-export function indexCueReferences(project: ExtensionProject): CueReferenceIndex {
+export function indexCueReferences(project: ExtensionProject, options: { effectiveContext?: EffectiveMdReferenceContext } = {}): CueReferenceIndex {
   const mdFiles = (project?.files || []).filter(f => f.kind === 'md' && typeof f.content === 'string');
 
   const defined: CueDef[] = [];
@@ -257,7 +262,7 @@ export function indexCueReferences(project: ExtensionProject): CueReferenceIndex
   }
 
   const knownScripts = new Set([...cuesByScript.keys()].filter(Boolean));
-  const references: CueRef[] = [];
+  let references: CueRef[] = [];
 
   for (const f of mdFiles) {
     const ownScript = scriptByFile.get(normPath(f.path)) || '';
@@ -290,8 +295,45 @@ export function indexCueReferences(project: ExtensionProject): CueReferenceIndex
     }
   }
 
+  const context = options.effectiveContext;
+  const coverageGaps: MdReferenceCoverageGap[] = [];
+  if (context?.complete) {
+    const fileKey = (file: string) => normPath(file).replace(/^\.\//, '');
+    const rawReferences = references;
+    const rawByReference = new Map(rawReferences.map(reference => [JSON.stringify([fileKey(reference.file), reference.ref]), reference]));
+    references = references.filter(reference => !context.referencesByFile.has(fileKey(reference.file)));
+    for (const [file, calls] of context.referencesByFile) for (const call of calls) {
+      if (call.role === 'cue') continue; // Cue instances have their existing separate contract/counter.
+      const ref = call.ref.trim();
+      const classified = classifyCueRef(ref);
+      let scope: CueRef['scope'] = 'external';
+      let resolved = true;
+      if (classified.kind === 'local' || classified.kind === 'cross') {
+        const script = classified.kind === 'local' ? context.callerByFile.get(file) || '' : classified.script;
+        const entry = context.index.get(script.toLowerCase());
+        scope = classified.kind === 'local' ? 'local' : entry === undefined ? 'external' : 'cross_file';
+        if (entry === null || !script) {
+          const fallback = rawByReference.get(JSON.stringify([file, ref]));
+          resolved = fallback?.resolved ?? false;
+          coverageGaps.push({ check: 'md.reference_context', filePath: file,
+            reason: `Authored reference ${call.id} has an ambiguous or unavailable final script identity.` });
+        } else if (entry !== undefined) {
+          const target = resolveMdLibraryReference(context.index, context.callerByFile.get(file) || '', ref, { cueReference: true });
+          resolved = !!target?.declaration && target.script.name === script && target.declaration.name === classified.cue;
+          if (target?.declared && !target.declaration) coverageGaps.push({ check: 'md.reference_context', filePath: file,
+            reason: `Authored reference ${call.id} has an ambiguous final declaration.` });
+        }
+      }
+      const point = mdReferencePoint(call);
+      const positioned = point && !point.reason && Number.isInteger(point.line) && Number.isInteger(point.column)
+        && (point.line ?? 0) > 0 && (point.column ?? 0) > 0;
+      references.push({ ref, file, scope, resolved,
+        ...(positioned ? { line: point.line, column: point.column } : {}),
+        sourceRef: `md.reference:${JSON.stringify([file, call.id, call.role])}` });
+    }
+  }
   const unresolved = references.filter(r => !r.resolved && r.scope !== 'external');
-  return { defined, references, unresolved };
+  return { defined, references, unresolved, ...(coverageGaps.length ? { coverageGaps } : {}) };
 }
 
 /* ------------------------------------------------------------------ *
