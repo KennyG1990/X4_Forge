@@ -7,6 +7,7 @@ const DEFAULT_MAX_BYTES = 16 * 1024 * 1024;
 /** Bounded process-local pure facts. Never approvals or final project/deployment verdicts. */
 export function createBoundedAnalysisCache<T>(
   limits = { maxEntries: DEFAULT_MAX_ENTRIES, maxBytes: DEFAULT_MAX_BYTES },
+  retain: (result: T) => boolean = () => true,
 ) {
   const { maxEntries, maxBytes } = limits;
   for (const value of [maxEntries, maxBytes]) {
@@ -35,6 +36,7 @@ export function createBoundedAnalysisCache<T>(
       misses++;
       // Exceptions are deliberately not memoized; a later attempt can recover.
       const result = compute();
+      if (!retain(result)) { bypasses++; return result; }
       // UTF-16 key plus serialized-result payload accounting is deterministic;
       // object/Map overhead is also bounded by entry count, not an exact heap claim.
       const bytes = 2 * (key.length + JSON.stringify(result).length);

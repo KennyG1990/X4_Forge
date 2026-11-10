@@ -8172,3 +8172,7 @@ Dev resolves eager reads against the exact physical extension and registered men
 ## 2026-11-10 — VERIFIED deploy stage timings and compiler reuse (#97)
 
 Both native aliases expose the reached handler stages and total time. Initial compilation feeds the artifact planner, and materialization uses its frozen plan without discarding a second compiler output. Dev replay passed 313/313 checks including exact bytes and canonical receipts on both routes, stale and mismatched no-write refusals, and disposable runtime retirement. The 13-file fixture measured 2.53 s preview and 7.71 s apply for deploy-verify. Normal precommit passed. Safe preview validation reuse and consumer-size timing remain open. [Plan and results](docs/plans/2026-11-10-deploy-stage-timings.md).
+
+## 2026-11-10 — VERIFIED exact Lua analysis reuse in native deploy (#97)
+
+The shared project validator reuses Lua findings and scope for identical ordered sources and loader manifests within the existing memory budget. Focused 30/30 checks prove reuse at 243 Lua files and fresh validation on input changes. The 313/313 headless native replay preserved exact bytes, receipts, and no-write refusals on both routes. Typecheck and precommit passed. The 13-file apply took 7.47 s. Broader preflight reuse and representative consumer timing remain open. [Contract and results](docs/plans/2026-11-10-deploy-preview-validation-reuse.md).

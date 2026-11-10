@@ -8,7 +8,7 @@
 
 ### Native deploy latency `in_progress` (GitHub #97)
 
-Both aliases now report handler stage timings and skip compiler output that was previously discarded. Dev native replay passed 313/313 checks including exact bytes, receipts and no-write refusals. The 13-file fixture measured 2.53 s preview and 7.71 s apply for deploy-verify. Safe preview validation reuse, incremental validation and a consumer-size comparison remain open. [Timing contract and evidence](docs/plans/2026-11-10-deploy-stage-timings.md).
+Both aliases report stage timings, skip redundant compiler output and reuse Lua analysis for the same ordered source and loader manifest. Focused 30/30 checks include a 243-file cache hit with fresh-result equality. Dev native replay passed 313/313, including exact bytes, receipts and no-write refusals. The latest 13-file fixture measured 2.43 s preview and 7.47 s apply. Broader preflight reuse, incremental XML validation and the consumer-size comparison remain open. [Timing proof](docs/plans/2026-11-10-deploy-stage-timings.md) and [Lua reuse proof](docs/plans/2026-11-10-deploy-preview-validation-reuse.md).
 
 ### Official reference composition coverage `in_progress` (GitHub #11)
 

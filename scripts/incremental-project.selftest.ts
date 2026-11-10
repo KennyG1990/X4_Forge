@@ -30,6 +30,80 @@ clearProjectValidationCache();
 check('cold exact full-result equality',()=>parity(project()));
 check('unchanged actually reuses facts',()=>{const before=getProjectValidationCacheStats();parity(project());assert.ok(getProjectValidationCacheStats().hits>before.hits);});
 check('full comparison bypasses new facts',()=>{const before=getProjectValidationCacheStats();runProjectValidation(project(),{references:corpus.references,incremental:false});assert.deepEqual(getProjectValidationCacheStats(),before);});
+const consumer = 'ui/scope-consumer.lua';
+const provider = 'ui/scope-provider.lua';
+const manifest = (order: string[]) =>
+  `<addon name="ScopeProbe"><environment type="menus">${order.map(rel => `<file name="${rel}"/>`).join('')}</environment></addon>`;
+function luaProject() {
+  const p = project();
+  p.files = p.files.filter(file => file.path === mdPath || file.path === 'content.xml');
+  p.files.push(
+    { path: consumer, kind: 'lua', content: 'OrderedGlobal()' },
+    { path: provider, kind: 'lua', content: 'function OrderedGlobal() end' },
+    { path: 'ui.xml', kind: 'ui', content: manifest([consumer, provider]) },
+  );
+  return p;
+}
+check('identical Lua scope is reused through a separate project validation', () => {
+  clearProjectValidationCache();
+  const p = luaProject();
+  const first = parity(p);
+  assert.ok(first.lua.findings.some(finding => finding.code === 'lua.global_before_definition'));
+  assert.equal(getProjectValidationCacheStats().lua.misses, 1);
+  first.lua.findings.length = 0;
+  assert.ok(parity(structuredClone(p)).lua.findings.some(finding => finding.code === 'lua.global_before_definition'));
+  p.files.find(file => file.path === mdPath)!.content = md('<debug_text text="1"/>');
+  assert.ok(parity(p).lua.findings.some(finding => finding.code === 'lua.global_before_definition'));
+  assert.equal(getProjectValidationCacheStats().lua.hits, 2);
+  assert.equal(getProjectValidationCacheStats().lua.misses, 1);
+});
+check('changed Lua, manifest, order and identity cannot hit stale scope', () => {
+  const p = luaProject();
+  const checkMiss = () => {
+    const before = getProjectValidationCacheStats().lua;
+    const result = parity(p).lua;
+    assert.equal(getProjectValidationCacheStats().lua.misses, before.misses + 1);
+    assert.equal(getProjectValidationCacheStats().lua.hits, before.hits);
+    return result;
+  };
+  const ui = p.files.find(file => file.path === 'ui.xml')!;
+  ui.content = manifest([provider, consumer]);
+  assert.ok(!checkMiss().findings.some(finding => finding.code === 'lua.global_before_definition'));
+  p.files.reverse();
+  checkMiss();
+  p.id += '_other';
+  checkMiss();
+  p.files.find(file => file.path === provider)!.content = 'function OrderedGlobal(';
+  assert.ok(checkMiss().findings.some(finding => finding.code === 'lua.syntax_error'));
+  p.files.push({ ...ui, path: 'UI.XML' });
+  assert.ok(checkMiss().runtimeScope.stages.some(stage => stage.check === 'lua.registrations' && stage.status === 'unavailable'));
+  assert.ok(getProjectValidationCacheStats().lua.entries <= 4);
+});
+check('truncated Lua scope remains unretained and available for retry', () => {
+  const p = luaProject();
+  p.files.find(file => file.path === consumer)!.content = `local x = Helper${'.a'.repeat(80)}`;
+  const before = getProjectValidationCacheStats().lua;
+  assert.equal(parity(p).lua.runtimeScope.truncated, true);
+  assert.equal(parity(p).lua.runtimeScope.truncated, true);
+  const after = getProjectValidationCacheStats().lua;
+  assert.equal(after.bypasses, before.bypasses + 2);
+  assert.equal(after.entries, before.entries);
+});
+check('a 243-file registered Lua project retains one exact scope result', () => {
+  const p = luaProject();
+  const extra = Array.from({ length: 241 }, (_, index) => `ui/scope-${index}.lua`);
+  p.files.push(...extra.map(filePath => ({
+    path: filePath, kind: 'lua' as const, content: 'local initialized = true',
+  })));
+  p.files.find(file => file.path === 'ui.xml')!.content = manifest([provider, consumer, ...extra]);
+  const cold = parity(p);
+  assert.equal(cold.lua.filesScanned, 243);
+  const before = getProjectValidationCacheStats().lua;
+  assert.deepEqual(parity(structuredClone(p)).lua, cold.lua);
+  const after = getProjectValidationCacheStats().lua;
+  assert.equal(after.hits, before.hits + 1);
+  assert.equal(after.accountedBytes, before.accountedBytes);
+});
 check('changed XML property and recovery',()=>{assert.ok(parity(project('<set_value name="$a" exact="$x.forge_invalid_property"/>')).summary.scriptPropertyWarnings);assert.equal(parity(project()).summary.scriptPropertyWarnings,0);});
 check('same-file datatype inference changes',()=>{parity(project('<find_ship name="$x"/><set_value name="$a" exact="$x.cargo.free"/>'));parity(project('<set_value name="$x" exact="ware.energycells"/><set_value name="$a" exact="$x.cargo.free"/>'));});
 check('malformed XML and repair',()=>{const p=project();p.files.find(f=>f.path===mdPath)!.content='<mdscript><cues></mdscript>';assert.ok(parity(p).summary.structuralErrors);assert.equal(parity(project()).summary.structuralErrors,0);});

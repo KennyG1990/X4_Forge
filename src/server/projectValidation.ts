@@ -84,10 +84,21 @@ function resourceGeneration(resource: object | null | undefined): number {
   if (!generation) { generation = ++nextResourceGeneration; resourceGenerations.set(resource, generation); }
   return generation;
 }
-const validationFacts = createBoundedAnalysisCache<unknown>({ maxEntries: 512, maxBytes: 32 * 1024 * 1024 });
+const LUA_FACT_BUDGET = 4 * 1024 * 1024;
+// Reserve room for project Lua facts even if the remaining file stages churn.
+const validationFacts = createBoundedAnalysisCache<unknown>({ maxEntries: 508, maxBytes: 28 * 1024 * 1024 });
+const projectLuaFacts = createBoundedAnalysisCache<LuaStaticAnalysisResult>(
+  { maxEntries: 4, maxBytes: LUA_FACT_BUDGET },
+  result => !result.runtimeScope.truncated,
+);
 /** Internal deterministic observability; no additional HTTP surface or persistent state. */
-export const clearProjectValidationCache = validationFacts.clear;
-export const getProjectValidationCacheStats = validationFacts.stats;
+export function clearProjectValidationCache() {
+  validationFacts.clear();
+  projectLuaFacts.clear();
+}
+export function getProjectValidationCacheStats() {
+  return { ...validationFacts.stats(), lua: projectLuaFacts.stats() };
+}
 
 /**
  * MD schema index (md.xsd + common.xsd from the configured schema dir).
@@ -247,14 +258,17 @@ export function runProjectValidation(
   opts: { references?: ProjectValidationReferences; jobsVocabulary?: JobsVocabulary; waresVocabulary?: WaresVocabulary; incremental?: boolean } = {},
 ): ProjectValidationResult {
   const fileKeys = new Map<ProjectFile, string>();
-  const fact = <T>(stage: string, file: ProjectFile, dependency: unknown, compute: () => T): T => {
-    if (opts.incremental === false) return compute();
+  const fileIdentity = (file: ProjectFile): string => {
     let fileKey = fileKeys.get(file);
     if (!fileKey) {
       fileKey = crypto.createHash('sha256').update(JSON.stringify([file.path, file.kind, file.content])).digest('hex');
       fileKeys.set(file, fileKey);
     }
-    const key = JSON.stringify([stage, fileKey, dependency]);
+    return fileKey;
+  };
+  const fact = <T>(stage: string, file: ProjectFile, dependency: unknown, compute: () => T): T => {
+    if (opts.incremental === false) return compute();
+    const key = JSON.stringify([stage, fileIdentity(file), dependency]);
     return validationFacts.get(key, compute, 2 * (file.content?.length || 0)) as T;
   };
   const coverageGaps: ValidationCoverageGap[] = [];
@@ -292,9 +306,11 @@ export function runProjectValidation(
     }
   }
 
-  const luaFiles = project.files
-    .filter(file => /\.lua$/i.test(file.path) && typeof file.content === "string")
-    .map(file => {
+  const luaSources = project.files.filter(file => /\.lua$/i.test(file.path) && typeof file.content === "string");
+  const uiManifests = project.files.filter(file => file.path.replace(/\\/g, '/').toLowerCase() === 'ui.xml');
+  const uiManifest = uiManifests[0];
+  const analyzeProjectLua = () => {
+    const luaFiles = luaSources.map(file => {
       const rel = file.path.replace(/\\/g, "/");
       return {
         rel,
@@ -303,18 +319,25 @@ export function runProjectValidation(
         sourcePath: rel,
       };
     });
-  const uiManifests = project.files.filter(file => file.path.replace(/\\/g, '/').toLowerCase() === 'ui.xml');
-  const uiManifest = uiManifests[0];
-  const runtimeInventory = buildX4MenuLuaRuntimeInventory({
-    uiXml: uiManifests.length > 1 ? '' : uiManifest?.content,
-    luaFiles,
-  });
-  const menuLuaPaths = new Set(runtimeInventory.registrations.flatMap(row => row.lookupKey ? [row.lookupKey] : []));
-  const extension = { folder: project.id, id: project.id, menuLuaPaths, runtimeInventory };
-  const manifestOnly = !luaFiles.length && uiManifest ? [{
-    rel: uiManifest.path, source: 'loose' as const, sourcePath: uiManifest.path, extension,
-  }] : [];
-  const lua = analyzeLuaFiles(luaFiles.map(file => ({ ...file, extension })), manifestOnly);
+    const runtimeInventory = buildX4MenuLuaRuntimeInventory({
+      uiXml: uiManifests.length > 1 ? '' : uiManifest?.content,
+      luaFiles,
+    });
+    const menuLuaPaths = new Set(runtimeInventory.registrations.flatMap(row => row.lookupKey ? [row.lookupKey] : []));
+    const extension = { folder: project.id, id: project.id, menuLuaPaths, runtimeInventory };
+    const manifestOnly = !luaFiles.length && uiManifest ? [{
+      rel: uiManifest.path, source: 'loose' as const, sourcePath: uiManifest.path, extension,
+    }] : [];
+    return analyzeLuaFiles(luaFiles.map(file => ({ ...file, extension })), manifestOnly);
+  };
+  const luaInputs = [...luaSources, ...uiManifests];
+  const luaInputBytes = 2 * luaInputs.reduce((total, file) => total + file.path.length + (file.content?.length ?? 0), project.id.length);
+  // Inventory and reporting consume ordered inputs. Keep absent and duplicate manifests
+  // distinct, and bind the raw paths so cache hits preserve diagnostic provenance.
+  const lua = opts.incremental !== false && luaInputs.length > 0 && luaInputBytes <= LUA_FACT_BUDGET
+    ? projectLuaFacts.get(JSON.stringify([project.id, luaSources.map(fileIdentity), uiManifests.map(fileIdentity)]),
+      analyzeProjectLua, luaInputBytes)
+    : analyzeProjectLua();
   const luaErrors = lua.findings.filter(finding => finding.severity === "error").length;
   const luaWarnings = lua.findings.filter(finding => finding.severity === "warning").length;
   const references = referencesForProject(project, opts.references);
