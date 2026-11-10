@@ -45,7 +45,10 @@ import {
 import { formatScriptPropertyFinding, lintScriptPropertyChains, type ScriptPropertyFinding } from "../lib/scriptProperties";
 import { checkXmlWellformed } from "../lib/xmlWellformed";
 import { lintAiscript, type AiscriptLintFinding } from "../lib/aiscriptLint";
-import { isScriptExpressionAttribute, lintMdPitfalls, lintScriptExpressions, lintScriptExpressionValue, type MdPitfallFinding } from "../lib/mdPitfallLints";
+import {
+  EFFECTIVE_MD_RETURN_CHECK, isScriptExpressionAttribute, lintEffectiveMdCueReturns, lintMdPitfalls,
+  lintScriptExpressions, lintScriptExpressionValue, type MdPitfallFinding,
+} from "../lib/mdPitfallLints";
 import { lintJobsContent, type JobsVocabulary, type JobLintFinding } from "../lib/jobsContentLint";
 import { lintMigration, type MigrationFinding } from "../lib/migrationLint";
 import { lintWaresContent, type WaresVocabulary, type WareLintFinding } from "../lib/waresContentLint";
@@ -397,6 +400,8 @@ export function runProjectValidation(
   // broad selectors that unexpectedly hit many nodes, and structurally illegal outcomes.
   const diffSimulation: ProjectValidationResult['diffSimulation']['files'] = [];
   const diffExpressionFindings: MdPitfallFinding[] = [];
+  const diffReturnFindings: MdPitfallFinding[] = [];
+  const returnContextInspected = new Set<string>();
   const hasMdDiffs = project.files.some(file => typeof file.content === 'string'
     && (file.kind === 'md' || classifyPath(file.path) === 'md') && sniffRootElement(file.content) === 'diff');
   const effectiveMdFacts = new Map<string, MdEffectiveLibraryInput>();
@@ -434,7 +439,20 @@ export function runProjectValidation(
             ? { attributeProvenance: true, ...(scriptKind === 'md' ? { elementProvenance: true } : {}) } : undefined);
           entry.findings = simulation.findings;
           if (simulation.ok) {
-            if (scriptKind === 'md') effectiveMdFacts.set(relativePath, diffMdLibraryPurposeFacts(relativePath, simulation.elementProvenance));
+            if (scriptKind === 'md') {
+              effectiveMdFacts.set(relativePath, diffMdLibraryPurposeFacts(relativePath, simulation.elementProvenance));
+              // Consume one composed document while its actual identities are available;
+              // only compact findings/coverage escape this pass.
+              try {
+                const returns = lintEffectiveMdCueReturns(relativePath, simulation.elementProvenance);
+                diffReturnFindings.push(...returns.findings);
+                for (const gap of returns.gaps) coverageGaps.push({ check: EFFECTIVE_MD_RETURN_CHECK, ...gap });
+              } catch {
+                coverageGaps.push({ check: EFFECTIVE_MD_RETURN_CHECK, filePath: relativePath,
+                  reason: 'Effective MD return ownership analysis failed internally; no result is claimed.' });
+              }
+              returnContextInspected.add(relativePath);
+            }
             if (script) {
               const seen = new Set<string>();
               const gaps = new Set<string>();
@@ -516,6 +534,10 @@ export function runProjectValidation(
         continue;
       }
       if (sniffRootElement(file.content) === 'diff') {
+        if (!returnContextInspected.has(relativePath)) {
+          coverageGaps.push({ check: EFFECTIVE_MD_RETURN_CHECK, filePath: relativePath,
+            reason: 'Effective MD composition or element provenance was unavailable; return ownership was not checked.' });
+        }
         mdInputs.push(effectiveMdFacts.get(relativePath) ?? { file: relativePath,
           unavailable: 'Effective MD composition or element provenance was unavailable; include-target purpose was not checked.' });
         continue;
@@ -617,7 +639,7 @@ export function runProjectValidation(
 
   // Corpus-grounded MD pitfall lints (dead UI listeners, offer-accept keyword refs,
   // param3 bare-key reads). Union-aware where the scriptproperty index is available.
-  const pitfallFindings: MdPitfallFinding[] = [...diffExpressionFindings];
+  const pitfallFindings: MdPitfallFinding[] = [...diffExpressionFindings, ...diffReturnFindings];
   for (const f of project.files) {
     if (typeof f.content !== "string") continue;
     const pathKind = classifyPath(f.path);

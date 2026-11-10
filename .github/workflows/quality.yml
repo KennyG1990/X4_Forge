@@ -58,6 +58,9 @@ jobs:
       - name: Prove effective MD include target purpose and authored causality
         run: npm run test:effective-include-purpose
 
+      - name: Prove effective ordinary MD return ownership and authored causality
+        run: npm run test:effective-md-return-context
+
       - name: Preserve failed official overlay coverage
         run: npm run test:project-validation-overlay
 

@@ -127,12 +127,14 @@ Dev checks standalone TextDB shorthand in unsaved HTTP, MCP, project validation 
 
 ### MD load diagnostics `in_progress` (GitHub #73, part of #74)
 
+Effective ordinary-cue return source/native acceptance passes109focused/125actualnative controls, including original payload positions/IDs through project/Problems/both native aliases, eight bad no-write refusals, stale refusal and exact reviewed bytes/reopened receipt. Namespace/provenance uncertainty and newly affected non-run library contexts remain explicit unavailable coverage; direct behavior and inherited exemptions are preserved. [Bounded plan, review and remaining gates](docs/plans/2026-11-10-effective-md-return-context.md); normal gate/local commit and comparator follow-up in QA/forge-1110-effective-return-context.json. Original CodeSense comparison had missing semantic inputs and is retained as incomplete evidence. Installed/rendered/public proof and the separate library engine witness remain open. No live change.
+
 Current library-return game controls: [dedicated Forge board READY row](https://app.notion.com/p/4144618ed15b81698294c7760fd60283), unchanged three-file packet rehashed3/3. Published direct unmatched-else X4 evidence exists in [comment6728594533](https://github.com/KennyG1990/X4_Forge/issues/73#issuecomment-6728594533); library/literal-diff engine witnesses are separate.
 
 
 Dev now checks final literal diff-written MD/AI attributes through shared expression rules with original patch coordinates, explicit unavailable coverage and distinct role identities. Final MD source/native17cases/342controls plus exact-commit AI-only4cases/119controls, focused40, project-core12 and type/lint pass; exact bytes and a committed receipt verified. [Reproduction, implementation and source/native evidence](docs/plans/2026-11-09-diff-expression-values-design.md). Installed/rendered/public qualification and the remaining effective context/game controls stay open.
 
-Dev validation blocks the X4-witnessed mixed access and ordinary cue returns in both native deploy entry points. [Mixed access replay](docs/plans/2026-11-09-ff33-mixed-access.md) and [return context replay](docs/plans/2026-11-09-ff33-md-return-context.md). Library game controls, effective diff context, installed verification and public delivery remain open.
+Dev validation blocks the X4-witnessed mixed access and ordinary cue returns in both native deploy entry points. [Mixed access replay](docs/plans/2026-11-09-ff33-mixed-access.md) and [direct return context replay](docs/plans/2026-11-09-ff33-md-return-context.md). Library game controls, broader effective context, installed verification and public delivery remain open.
 
 ### MD include target purpose `in_progress` (GitHub #70, part of #74)
 

@@ -42,6 +42,7 @@ import { analyzeMdCueTrigger, classifyCueRef, mdConditionKind } from './cueLinea
 import { maskNonExpressionSpans, type ScriptPropertyIndex } from './scriptProperties';
 import { assertXmlInputWithinLimits } from './xmlInputLimits';
 import type { SchemaIndex } from './xsdValidate';
+import type { DiffElementProvenance, DiffElementState } from './diffSimulator';
 
 export interface MdPitfallFinding {
   code: 'md_pitfall.products_existence' | 'md_pitfall.cancel_conversation_actor_or_template' | 'md_pitfall.ui_listener_one_shot'
@@ -328,14 +329,173 @@ function enclosingNamedCue(element: Element): string | undefined {
   return names.length ? names.reverse().join('.') : undefined;
 }
 
-/** Only the nearest cue or library can own an ordinary actions branch. */
-function ordinaryMdActionOwner(action: Element): Element | undefined {
-  for (let branch = action, parent = branch.parentElement; parent; branch = parent, parent = parent.parentElement) {
-    if (parent.tagName === 'patch' || parent.tagName === 'on_abort' || parent.tagName === 'editable') return undefined;
-    if (parent.tagName === 'cue' || parent.tagName === 'library') {
-      return branch.tagName === 'actions' ? parent : undefined;
+export const EFFECTIVE_MD_RETURN_CHECK = 'md.return_context';
+
+export type MdReturnOwnerKind = 'ordinary-cue' | 'run-actions-library' | 'other-library'
+  | 'outside-ordinary' | 'unavailable';
+
+export interface MdReturnOwnerClassification {
+  readonly kind: MdReturnOwnerKind;
+  readonly owner?: Element;
+  readonly purpose?: string | null;
+}
+
+const OUTSIDE_MD_RETURN: MdReturnOwnerClassification = Object.freeze({ kind: 'outside-ordinary' });
+const UNAVAILABLE_MD_RETURN: MdReturnOwnerClassification = Object.freeze({ kind: 'unavailable' });
+const MD_RETURN_CONTEXT_DETAIL = 'X4 rejects <return> in these MD actions. Returning to a caller requires a library declared with purpose="run_actions".';
+
+/**
+ * One local memo per stable document/view. Parent, tag and purpose reads in initial
+ * mode come only from the frozen snapshot, never from the mutated final DOM.
+ * Each newly encountered ancestry link is visited once across ordinary queries.
+ */
+export function createMdReturnOwnerClassifier(
+  initial?: ReadonlyMap<Element, DiffElementState>,
+): (action: Element) => MdReturnOwnerClassification {
+  const memo = new WeakMap<Element, MdReturnOwnerClassification>();
+  const owners = new WeakMap<Element, MdReturnOwnerClassification>();
+  return action => {
+    let branch: Element | null = action;
+    const trail: Element[] = [];
+    const seen = new Set<Element>();
+    let result = OUTSIDE_MD_RETURN;
+    while (branch) {
+      const prior = memo.get(branch);
+      if (prior) { result = prior; break; }
+      if (seen.has(branch)) { result = UNAVAILABLE_MD_RETURN; break; }
+      seen.add(branch);
+      trail.push(branch);
+      const state = initial?.get(branch);
+      if (initial && !state) { result = UNAVAILABLE_MD_RETURN; break; }
+      const parent: Element | null = initial ? state!.parent : branch.parentElement;
+      if (!parent) break;
+      const parentState = initial?.get(parent);
+      if (initial && !parentState) { result = UNAVAILABLE_MD_RETURN; break; }
+      const parentTag = initial ? parentState!.elementName : parent.tagName;
+      // Check a semantic boundary before inheriting any cached ancestor context.
+      if (parentTag === 'patch' || parentTag === 'on_abort' || parentTag === 'editable') break;
+      if (parentTag === 'cue' || parentTag === 'library') {
+        const branchTag = initial ? state!.elementName : branch.tagName;
+        if (branchTag === 'actions') {
+          let cachedOwner = owners.get(parent);
+          if (!cachedOwner) {
+            const purpose = parentTag === 'library'
+              ? (initial ? parentState!.attributes.purpose ?? null : parent.getAttribute('purpose')) : undefined;
+            cachedOwner = Object.freeze({ owner: parent, kind: parentTag === 'cue' ? 'ordinary-cue'
+              : purpose === 'run_actions' ? 'run-actions-library' : 'other-library', purpose });
+            owners.set(parent, cachedOwner);
+          }
+          result = cachedOwner;
+        }
+        break;
+      }
+      branch = parent;
     }
+    for (const element of trail) memo.set(element, result);
+    return result;
+  };
+}
+
+/** Only the nearest cue or library can own an ordinary actions branch. */
+function ordinaryMdActionOwner(action: Element, classify = createMdReturnOwnerClassifier()): Element | undefined {
+  return classify(action).owner;
+}
+
+/**
+ * Check the witnessed ordinary-cue rule against one successfully composed MD DOM.
+ * No DOM or historical trace gap escapes this synchronous analysis. Library return
+ * behavior beyond the existing run-actions structural control remains deferred.
+ */
+export function lintEffectiveMdCueReturns(filePath: string, trace: DiffElementProvenance | undefined): {
+  findings: MdPitfallFinding[];
+  gaps: Array<{ filePath: string; reason: string }>;
+} {
+  const findings: MdPitfallFinding[] = [];
+  const gaps: Array<{ filePath: string; reason: string }> = [];
+  const seenGaps = new Set<string>();
+  const gap = (reason: string) => {
+    const bounded = reason.slice(0, 480);
+    if (!seenGaps.has(bounded)) { seenGaps.add(bounded); gaps.push({ filePath, reason: bounded }); }
+  };
+  if (!trace?.available || !trace.document?.documentElement) {
+    gap(trace?.reason || 'Final MD element provenance is unavailable; return ownership was not checked.');
+    return { findings, gaps };
   }
+  const root = trace.document.documentElement;
+  if (root.nodeName !== 'mdscript') {
+    gap('The final document is not an MD script; ordinary return ownership is unavailable.');
+    return { findings, gaps };
+  }
+  const finalOwner = createMdReturnOwnerClassifier();
+  const initialOwner = createMdReturnOwnerClassifier(trace.initial);
+  const labels = new WeakMap<Element, string | undefined>();
+  const label = (owner: Element) => {
+    if (!labels.has(owner)) labels.set(owner, owner.getAttribute('name')?.slice(0, 160) || undefined);
+    return labels.get(owner);
+  };
+  const ordinals = new Map<Element, number>();
+  for (const element of trace.elements.keys()) ordinals.set(element, ordinals.size);
+  const identity = (element: Element): string | undefined => {
+    const original = trace.initial.get(element);
+    if (original) return `b:${original.id}`;
+    const ordinal = ordinals.get(element);
+    return ordinal === undefined ? undefined : `a:${ordinal}`;
+  };
+  const pending = [{ element: root, foreignNamespace: false }];
+  let count = 0;
+  while (pending.length) {
+    const current = pending.pop()!;
+    const action = current.element;
+    if (++count > 50_000) {
+      gap('Final MD return inventory exceeds the 50000-element context budget.');
+      // A partial traversal cannot establish the complete contextual verdict.
+      return { findings: [], gaps };
+    }
+    // A default namespace written by a patch does not mutate xmldom's existing
+    // namespaceURI, but it can change the serialized document's meaning.
+    const foreignNamespace = current.foreignNamespace || !!action.namespaceURI || !!action.getAttribute('xmlns');
+    for (let index = action.childNodes.length - 1; index >= 0; index--) {
+      const child = action.childNodes[index];
+      if (child.nodeType === 1) pending.push({ element: child as Element, foreignNamespace });
+    }
+    if (action.nodeName !== 'return') continue;
+    if (foreignNamespace) {
+      gap('A return uses an unsupported final XML namespace context.');
+      continue;
+    }
+    const context = finalOwner(action);
+    if (context.kind === 'outside-ordinary' || context.kind === 'run-actions-library') continue;
+    const original = trace.initial.get(action);
+    if (original && original.elementName !== 'return') {
+      gap('The final return identity does not match its frozen original element.');
+      continue;
+    }
+    const before = original ? initialOwner(action) : undefined;
+    if (context.kind === 'unavailable' || before?.kind === 'unavailable') {
+      gap('The final or canonical-before return owner could not be established.');
+      continue;
+    }
+    if (context.kind === 'ordinary-cue' && before?.kind === 'ordinary-cue') continue;
+    if (context.kind === 'other-library' && before?.kind === 'other-library' && context.owner === before.owner) {
+      if (context.purpose === before.purpose) continue;
+    }
+    if (context.kind === 'other-library') {
+      gap('A newly authored or changed non-run-actions library return context awaits the separate X4 library-return witness.');
+      continue;
+    }
+    const origin = trace.elements.get(action);
+    const actionId = identity(action);
+    const ownerId = context.owner && identity(context.owner);
+    if (!origin || origin.reason || !Number.isInteger(origin.line) || !Number.isInteger(origin.column)
+      || (origin.line ?? 0) < 1 || (origin.column ?? 0) < 1 || !actionId || !ownerId) {
+      gap(origin?.reason || 'The newly affected ordinary-cue return has no reliable original authored element position.');
+      continue;
+    }
+    findings.push({ code: 'md_pitfall.return_context', severity: 'error', filePath,
+      line: origin.line, column: origin.column, sourceRef: `md.return_context:${JSON.stringify([filePath, actionId, ownerId])}`,
+      cue: context.owner ? label(context.owner) : undefined, detail: MD_RETURN_CONTEXT_DETAIL });
+  }
+  return { findings, gaps };
 }
 
 /**
@@ -375,9 +535,10 @@ export function lintMdPitfalls(xml: string, opts: { propertyUnion?: Set<string>;
       line: cue.lineNumber, column: cue.columnNumber, detail: finding.detail });
   }
 
+  const classifyReturnOwner = createMdReturnOwnerClassifier();
   for (const action of Array.from(element.getElementsByTagName('return'))) {
-    const owner = ordinaryMdActionOwner(action);
-    if (!owner || (owner.tagName === 'library' && owner.getAttribute('purpose') === 'run_actions')) continue;
+    const owner = ordinaryMdActionOwner(action, classifyReturnOwner);
+    if (!owner || classifyReturnOwner(action).kind === 'run-actions-library') continue;
     out.push({
       code: 'md_pitfall.return_context',
       severity: 'error',
@@ -385,7 +546,7 @@ export function lintMdPitfalls(xml: string, opts: { propertyUnion?: Set<string>;
       cue: enclosingNamedCue(action),
       line: action.lineNumber,
       column: action.columnNumber,
-      detail: 'X4 rejects <return> in these MD actions. Returning to a caller requires a library declared with purpose="run_actions".',
+      detail: MD_RETURN_CONTEXT_DETAIL,
     });
   }
 
