@@ -225,6 +225,13 @@ export function createBulkTransformPlan(options: CreatePlanOptions): BulkTransfo
       files.push({ targetFile, status: 'error', matchCount: 0, sources: effective.sources, sourceSignature: effective.signature, findings: [finding] });
       continue;
     }
+    if (effective.complete !== true) {
+      const finding: BulkTransformFinding = { severity: 'error', code: 'BULK_EFFECTIVE_INCOMPLETE', path: targetFile,
+        message: 'Canonical reference composition is incomplete. Inspect its active source findings before transforming this file.' };
+      findings.push(finding);
+      files.push({ targetFile, status: 'error', matchCount: 0, sources: effective.sources, sourceSignature: effective.signature, findings: [finding] });
+      continue;
+    }
     const operationResults = (rule.operations || []).map(operation => ({ operation, selected: selectedNumericValue(effective.content!, operation.selector) }));
     const totalMatches = operationResults.reduce((sum, result) => sum + result.selected.count, 0);
     if (operationResults.every(result => result.selected.count === 0 && !result.selected.error)) {

@@ -23,7 +23,7 @@ import {
   scheduleReferenceManifest,
   type ReferenceManifestStatus,
 } from '../lib/referenceManifest';
-import { resolveEffectiveReferenceDocument } from '../lib/referenceOverlay';
+import { effectiveReferenceMetadata, resolveEffectiveReferenceDocument } from '../lib/referenceOverlay';
 import { simulateXmlDiff } from '../lib/diffSimulator';
 import { projectReferenceSymbols, suggestReferences, type ReferenceSuggestionIntent } from '../lib/referenceSuggestions';
 import type { CanonicalSymbolKind } from '../lib/referenceCorpus';
@@ -104,6 +104,8 @@ export function registerReferenceRoutes(
       const corpus = load(req);
       const effective = resolveEffectiveReferenceDocument(corpus.root, String(req.query.path || ''), forceRefresh(req));
       if (!effective.available || effective.content === undefined) return res.status(404).json({ error: `Canonical effective file not found: ${String(req.query.path || '')}`, ...effective });
+      if (effective.complete !== true) return res.status(503).json({ ...effective,
+        code: 'REFERENCE_EFFECTIVE_INCOMPLETE', error: 'Canonical reference composition is incomplete; inspect the active source findings.' });
       return res.json(effective);
     } catch (error) { return sendCorpusError(res, error); }
   });
@@ -121,6 +123,8 @@ export function registerReferenceRoutes(
       const corpus = load(req);
       const effective = resolveEffectiveReferenceDocument(corpus.root, relativePath, forceRefresh(req));
       if (!effective.available || effective.content === undefined) return res.status(404).json({ error: `Canonical effective file not found: ${relativePath}`, effective });
+      if (effective.complete !== true) return res.status(503).json({ path: effective.relativePath, ...effectiveReferenceMetadata(effective),
+        code: 'REFERENCE_EFFECTIVE_INCOMPLETE', error: 'Canonical reference composition is incomplete; XPath completion is unavailable.', items: [] });
       const items = completeXPath({
         targetPath: effective.relativePath,
         content: effective.content,
@@ -129,7 +133,7 @@ export function registerReferenceRoutes(
         corpus,
         limit: Number(body.limit || 50),
       });
-      return res.json({ path: effective.relativePath, signature: effective.signature, sources: effective.sources, findings: effective.findings, items });
+      return res.json({ path: effective.relativePath, ...effectiveReferenceMetadata(effective), items });
     } catch (error) { return sendCorpusError(res, error); }
   });
 
@@ -146,10 +150,13 @@ export function registerReferenceRoutes(
       if (!effective.available || effective.content === undefined) {
         return res.status(404).json({ error: `Canonical base file not found: ${relativePath}`, effective });
       }
+      const base = effectiveReferenceMetadata(effective);
+      if (effective.complete !== true) return res.status(503).json({ path: effective.relativePath, base, ok: false,
+        code: 'REFERENCE_EFFECTIVE_INCOMPLETE', error: 'Canonical reference composition is incomplete; diff simulation is unavailable.' });
       const simulation = simulateXmlDiff(effective.content, diff);
       return res.json({
         path: effective.relativePath,
-        base: { signature: effective.signature, sources: effective.sources, findings: effective.findings },
+        base,
         ...simulation,
       });
     } catch (error) { return sendCorpusError(res, error); }

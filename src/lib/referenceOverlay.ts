@@ -32,6 +32,13 @@ export interface EffectiveReferenceDocument {
   signature: string;
 }
 
+/** Canonical consumer wire evidence; content is exposed separately only for inspection. */
+export function effectiveReferenceMetadata(document: EffectiveReferenceDocument) {
+  return { available: document.available, complete: document.complete === true,
+    signature: document.signature, sources: document.sources, findings: document.findings,
+    incompleteFindings: document.incompleteFindings };
+}
+
 interface DlcInfo {
   folder: string;
   id: `ego_dlc_${string}`;

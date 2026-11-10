@@ -107,7 +107,7 @@ import { runUiCompilerSelftest } from "./src/lib/uiCompilerSelftest";
 import { analyzeOverrides, runOverrideMapSelftest, simulateLoadOrder } from "./src/lib/overrideMap";
 import { analyzeModDependencies, runModDependencyGraphSelftest, parseModManifest, type ModManifest } from "./src/lib/modDependencyGraph";
 import { buildMergedGalaxyMap, runGalaxyMapSelftest, type GalaxyMapSource } from "./src/lib/galaxyMap";
-import { resolveEffectiveReferenceDocument } from "./src/lib/referenceOverlay";
+import { effectiveReferenceMetadata, resolveEffectiveReferenceDocument } from "./src/lib/referenceOverlay";
 import { classifyPath, indexCueReferences, runExtensionProjectSelftest, buildContentXml, type ExtensionProject } from "./src/lib/extensionProject";
 import { buildDependencyHealth } from './src/server/dependencyHealth';
 import { getAiSchemaIndex, getScriptPropertyIndex, registerValidationAgentRoutes } from "./src/server/validationRoutes";
@@ -10650,6 +10650,7 @@ app.post("/api/agent/xpath-synth", (req, res) => {
     let vanillaXml = typeof req.body?.vanillaXml === "string" ? req.body.vanillaXml : "";
     const targetFile = String(req.body?.targetFile || "").replace(/\\/g, "/").replace(/^\/+/, "").trim();
     const sourceSignature = typeof req.body?.sourceSignature === "string" ? req.body.sourceSignature : null;
+    let canonicalBase: ReturnType<typeof effectiveReferenceMetadata> | undefined;
     if (sourceSignature && targetFile) {
       const resolved = resolveXsdConfig();
       if (!resolved.x4ReferenceExists) {
@@ -10658,6 +10659,11 @@ app.post("/api/agent/xpath-synth", (req, res) => {
       const effective = resolveEffectiveReferenceDocument(resolved.x4ReferenceRoot, targetFile);
       if (!effective.available || effective.content === undefined) {
         return res.status(404).json({ error: `Could not resolve the effective canonical target ${targetFile}.` });
+      }
+      if (effective.complete !== true) {
+        return res.status(503).json({ success: false, code: 'REFERENCE_EFFECTIVE_INCOMPLETE',
+          error: 'Canonical reference composition is incomplete; signed patch synthesis is unavailable.',
+          targetFile, base: effectiveReferenceMetadata(effective) });
       }
       if (effective.signature !== sourceSignature || (vanillaXml && vanillaXml !== effective.content)) {
         return res.status(409).json({
@@ -10669,6 +10675,7 @@ app.post("/api/agent/xpath-synth", (req, res) => {
         });
       }
       vanillaXml = effective.content;
+      canonicalBase = effectiveReferenceMetadata(effective);
     }
     if (!vanillaXml && targetFile) {
       if (targetFile.includes(":") || targetFile.split("/").includes("..")) {
@@ -10692,7 +10699,8 @@ app.post("/api/agent/xpath-synth", (req, res) => {
       return res.status(400).json({ error: "Provide vanillaXml or a resolvable targetFile." });
     }
     const result = synthesizePatch(vanillaXml, editedXml);
-    return res.json({ success: true, targetFile: targetFile || null, sourceSignature, ...result });
+    return res.json({ success: true, targetFile: targetFile || null, sourceSignature, ...result,
+      ...(canonicalBase ? { base: canonicalBase } : {}) });
   } catch (error) {
     return res.status(400).json({ error: error.message || "xpath-synth failed" });
   }

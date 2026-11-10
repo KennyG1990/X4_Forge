@@ -58,6 +58,9 @@ jobs:
       - name: Preserve failed official overlay coverage
         run: npm run test:project-validation-overlay
 
+      - name: Guard canonical reference consumer completeness
+        run: npm run test:reference-completeness
+
       - name: Lint
         run: npm run lint -- --max-warnings 600
 
