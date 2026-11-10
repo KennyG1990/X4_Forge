@@ -6,9 +6,6 @@
 
 ## P0 — Active
 
-### Stable 0.0.82 delivery `in_progress` (GitHub #53, under #20)
-
-Exact source/package/isolated-install/native qualification passed: 120 E2E / 509 routes / 134 source and installed oracles, 2,200 installed-file comparisons, plus receipt/Steam/rollback/physical/filename and sidecar probes. Open VSX serves the exact tested VSIX. Matching source `dea588f` is pushed after the normal hook; [Quality CI 42740830042](https://github.com/KennyG1990/X4_Forge/actions/runs/42740830042) passed. [Exact artifact and limits](docs/releases/0.0.82-proof.json). The matching GitHub release/assets are a verified draft, pending authorization for the existing Discord announcements triggered by publication. Editor/game acceptance remains open in the owning feature issues; #93 is excluded. No live setup or computer use.
 
 ### Claude complaint completion and release — C01-C07 `in_progress` (GitHub #20; runtime #14/#35)
 

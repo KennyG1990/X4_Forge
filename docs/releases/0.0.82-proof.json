@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "version": "0.0.82",
-  "status": "OPEN_VSX_SOURCE_AND_CI_VERIFIED_GITHUB_DRAFT_AWAITS_ANNOUNCEMENT_AUTH",
-  "recordedAtUtc": "2026-11-10T02:15:15.322162+00:00",
+  "status": "VERIFIED_STABLE_PUBLIC_DELIVERY",
+  "recordedAtUtc": "2026-11-10T03:43:06.226623+00:00",
   "ownerIssue": "https://github.com/KennyG1990/X4_Forge/issues/53",
   "parentIssue": "https://github.com/KennyG1990/X4_Forge/issues/20",
   "lane": "FULL",
@@ -112,7 +112,7 @@
       "ownedProcessExitAndListenerClosed": true
     },
     "curatedPrecommit": "PASS: normal precommit after type-only correction",
-    "publicStoreAndGithub": "Open VSX exact download, matching source push and required Quality CI VERIFIED. Exact GitHub release draft/assets VERIFIED; publication awaits existing Discord-announcement authorization.",
+    "publicStoreAndGithub": "VERIFIED: stable Open VSX version/latest, exact store download, source push, required code/initial-doc CI, GitHub tag/source identity and exact public GitHub download. Authorized existing announcement workflow returned Discord message objects for both configured posts.",
     "ciLintBefore": {
       "errors": 0,
       "warnings": 601,
@@ -195,11 +195,77 @@
       "nativeMirrorsVerified": 12,
       "ownedTargetProcessCount": 0,
       "checkedAtUtc": "2026-11-10T02:18:08.558101+00:00",
-      "held": [
-        "C:/fqa-w82-5ad3/p",
-        "release node_modules until final normal commit/graphify"
-      ]
-    }
+      "held": [],
+      "remainingPlan": {
+        "status": "VERIFIED",
+        "targets": [
+          {
+            "path": "C:\\fqa-w82-5ad3\\p",
+            "files": 1780,
+            "bytes": 173098295
+          },
+          {
+            "path": "C:\\Users\\Moshi\\.codex\\worktrees\\forge-release-082\\X4_Forge\\node_modules",
+            "files": 15865,
+            "bytes": 249881587
+          },
+          {
+            "path": "C:\\Users\\Moshi\\.codex\\worktrees\\forge-release-082\\X4_Forge\\vscode-extension\\node_modules",
+            "files": 14202,
+            "bytes": 116524107
+          },
+          {
+            "path": "C:\\Users\\Moshi\\.codex\\worktrees\\forge-release-082\\X4_Forge\\dist",
+            "files": 6,
+            "bytes": 14472639
+          },
+          {
+            "path": "C:\\Users\\Moshi\\.codex\\worktrees\\forge-release-082\\X4_Forge\\vscode-extension\\out",
+            "files": 4,
+            "bytes": 486684
+          },
+          {
+            "path": "C:\\Users\\Moshi\\.codex\\worktrees\\forge-release-082\\X4_Forge\\graphify-out",
+            "files": 6,
+            "bytes": 2512857
+          }
+        ],
+        "reason": "All local source/package/install/native/normal-commit/graphify consumers are terminal; cloud CI and draft publication use retained artifact/remote source. The Dev checkout retains its own dependencies.",
+        "negativePath": "Refuse tracked outputs, alias/reparse/hardlinks, unexpected WORK entries or any active owned consumer.",
+        "removedAtUtc": "2026-11-10T02:24:41.205486+00:00",
+        "retainedFilesHashVerified": 75,
+        "workRootRemoved": true,
+        "activeOwnedConsumers": 0
+      },
+      "totalRetiredFiles": 38213,
+      "totalRetiredBytes": 838518881,
+      "releaseWorktree": {
+        "status": "ARCHIVED_VERIFIED",
+        "root": "C:/Users/Moshi/.codex/worktrees/forge-release-082/X4_Forge",
+        "rootAbsent": true,
+        "primaryRestored": "C:/Users/Moshi/.codex/worktrees/forge-a15-native-proof/X4_Forge",
+        "attachOperation": "bfbe2eaa-879b-4740-a814-4b66ff540d1d",
+        "method": "Official attach existing Dev, then archive the no-longer-primary temporary release worktree; no manual worktree removal."
+      },
+      "devCloseTransientCleanup": {
+        "status": "VERIFIED",
+        "removed": [
+          {
+            "path": "C:\\Users\\Moshi\\.codex\\visualizations\\2026\\11\\08\\01a1b9d0-e607-7061-bb85-ae5fafcec5a2\\forge-082-5ad377c-package\\.cache",
+            "files": 0,
+            "bytes": 0
+          },
+          {
+            "path": "C:\\Users\\Moshi\\.codex\\visualizations\\2026\\11\\08\\01a1b9d0-e607-7061-bb85-ae5fafcec5a2\\forge-082-5ad377c-package\\npm-cache",
+            "files": 0,
+            "bytes": 0
+          }
+        ],
+        "graphify": "terminal, no topology changes; one compact log retained",
+        "timeUtc": "2026-11-10T02:33:36.741685+00:00"
+      }
+    },
+    "recordClose": "The previously archived source checkout was restored only to correct publication records. Existing owned Dev dependencies are linked temporarily, with no install/copy; links are removed non-recursively and checkout retired after final hook/push."
   },
   "limits": [
     "Windows x64 with the X4 9.00 reference corpus is the validated host.",
@@ -217,7 +283,8 @@
       "Reconciliation found the required CI lint threshold omitted from the private source gate; two type-only annotations introduced net2warnings.",
       "A Git-checkout frontend rebuild exposed Git-derived build-label differences; reproducing the original Git-free archive context restored exact runtime parity.",
       "Commit wrapper omitted the qualified explicit E2E Node path; the unchanged hook refused and required the original sealed runtime override.",
-      "Cleanup preflight correctly stopped before mutation when my mirror check assumed QA-only installed-byte reports also existed in the raw native run. The owning collector mirrors 12 raw outputs; all 12 match, with independent review."
+      "Cleanup preflight correctly stopped before mutation when my mirror check assumed QA-only installed-byte reports also existed in the raw native run. The owning collector mirrors 12 raw outputs; all 12 match, with independent review.",
+      "Announcement verification initially assumed message IDs appeared in the first 300 logged response bytes. Actual successful type-0 message responses were retained; no publication or announcement was retried."
     ],
     "sustain": [
       "Exact source/VSIX/native receipt chain and strict fail-closed ownership",
@@ -225,7 +292,7 @@
     ],
     "improve": "Reconcile all CI gates before source qualification. Keep stable script filenames and source-derived witness names aligned. Record build context separately from source and artifact identities.",
     "highestRiskObserved": "Required CI lint applicability was omitted from the private source gate. Two introduced any annotations exceeded the unchanged warning budget; erased type corrections restored the baseline warning count with exact emitted-runtime parity.",
-    "remainingRisk": "Actual installed-editor experience and queued game witnesses remain open. GitHub release is still a draft because publication triggers existing Discord messages; the user question is pending."
+    "remainingRisk": "No remaining public-delivery blocker. Editor/game experience and broader programme issues remain open with their own acceptance."
   },
   "openVsx": {
     "status": "VERIFIED",
@@ -255,7 +322,7 @@
   },
   "github": {
     "source": {
-      "status": "PUSH_VERIFIED_RELEASE_AND_CI_PENDING",
+      "status": "PUSH_AND_REQUIRED_SOURCE_CI_VERIFIED",
       "commit": "dea588f493c13b820f26558d8a7bdb784c4dc2c6",
       "parent": "f76775f02dbd8c61a100233e9d11d659f7a5d39b",
       "tree": "1b650ef810f72f49d0858f485f97e23481b9bdf5",
@@ -269,13 +336,15 @@
       "nonForcePush": true
     },
     "release": {
-      "status": "DRAFT_VERIFIED_CI_AND_ANNOUNCEMENT_AUTH_PENDING",
+      "status": "PUBLISHED_VERIFIED",
       "id": 439865506,
-      "url": "https://github.com/KennyG1990/X4_Forge/releases/tag/untagged-b001032307e744345115",
+      "url": "https://github.com/KennyG1990/X4_Forge/releases/tag/v0.0.82",
       "tag": "v0.0.82",
       "targetCommit": "dea588f493c13b820f26558d8a7bdb784c4dc2c6",
-      "draft": true,
+      "tagCommit": "dea588f493c13b820f26558d8a7bdb784c4dc2c6",
+      "draft": false,
       "prerelease": false,
+      "publishedAt": "2026-11-10T03:34:16Z",
       "assets": [
         {
           "id": 729764751,
@@ -283,7 +352,7 @@
           "size": 95,
           "digest": "sha256:32d42980335878a09cee0033ac8847d628aed8f826c44f74785f4a7199a74917",
           "state": "uploaded",
-          "url": "https://github.com/KennyG1990/X4_Forge/releases/download/untagged-b001032307e744345115/SHA256SUMS"
+          "url": "https://github.com/KennyG1990/X4_Forge/releases/download/v0.0.82/SHA256SUMS"
         },
         {
           "id": 729764748,
@@ -291,11 +360,39 @@
           "size": 29867215,
           "digest": "sha256:0b8d6477036a664659db36e00dff0992a6390a397f967726bef4b48238ec5daa",
           "state": "uploaded",
-          "url": "https://github.com/KennyG1990/X4_Forge/releases/download/untagged-b001032307e744345115/x4-forge-studio-0.0.82.vsix"
+          "url": "https://github.com/KennyG1990/X4_Forge/releases/download/v0.0.82/x4-forge-studio-0.0.82.vsix"
         }
       ],
-      "checkedAtUtc": "2026-11-10T02:11:22.362492+00:00",
-      "lookupNote": "New draft is identified from the authenticated release collection and release ID; the public tag lookup returns404 until publication."
+      "userAuthorizedExistingDiscordAnnouncements": true,
+      "checkedAtUtc": "2026-11-10T03:34:17.023607+00:00",
+      "publicDownload": {
+        "bytes": 29867215,
+        "sha256": "0b8d6477036a664659db36e00dff0992a6390a397f967726bef4b48238ec5daa",
+        "url": "https://github.com/KennyG1990/X4_Forge/releases/download/v0.0.82/x4-forge-studio-0.0.82.vsix",
+        "method": "Streamed verification, no second local archive"
+      },
+      "announcements": {
+        "status": "WORKFLOW_AND_DISCORD_MESSAGE_OBJECTS_VERIFIED",
+        "runId": 42750299708,
+        "url": "https://github.com/KennyG1990/X4_Forge/actions/runs/42750299708",
+        "conclusion": "success",
+        "responses": [
+          {
+            "channel": "updates",
+            "messageType": 0,
+            "responsePrefix": "{\"type\":0,\"content\":\"**X4 FORGE - UPDATE (v0.0.82) by @KennyG1990**\\n\\nThanks to all testers and the community for feedback and support!\\n\\n**Support me**:\\n<https://www.patreon.com/c/KennyG1990>\\n\\n**Download & Repository**:\\n**Open VSX Marketplace**: <https://open-vsx.org/extension/x4forge/x4-forg",
+            "limit": "Workflow logs truncate API response to 300 characters; message IDs are beyond the retained prefix."
+          },
+          {
+            "channel": "roadmap",
+            "messageType": 0,
+            "responsePrefix": "{\"type\":0,\"content\":\"\",\"mentions\":[],\"mention_roles\":[],\"attachments\":[],\"embeds\":[{\"type\":\"rich\",\"title\":\"\\ud83d\\uddfa\\ufe0f Roadmap Diff Update \\u2014 dea588f\",\"description\":\"**Author**: @KennyG1990\\n**Commit**: `dea588f` \\u2014 X4 Forge Studio 0.0.82\\n\\n**Roadmap Changes (Diff):**\\n```diff\\n+\\n+\\",
+            "limit": "Workflow logs truncate API response to 300 characters; message IDs are beyond the retained prefix."
+          }
+        ],
+        "channelReadback": "No direct channel read-back; the existing workflow and actual Discord type-0 message responses are the delivery evidence. Message IDs were truncated from the workflow log.",
+        "method": "Authorized existing workflow; no manual or duplicate posts."
+      }
     },
     "quality": {
       "status": "VERIFIED",
@@ -416,6 +513,15 @@
           ]
         }
       ]
+    },
+    "documentationQuality": {
+      "status": "VERIFIED",
+      "id": 42742277148,
+      "commit": "96f3b9bf7806f14b23219a4bc690c39c43862867",
+      "conclusion": "success",
+      "updatedAtUtc": "2026-11-10T02:27:07Z",
+      "url": "https://github.com/KennyG1990/X4_Forge/actions/runs/42742277148",
+      "reportedStepsPassed": 26
     }
   },
   "typeOnlyCiRepair": {
@@ -505,12 +611,12 @@
   },
   "close": {
     "headlessReleaseGateStatus": "VERIFIED",
-    "deliveryStatus": "PARTIAL: Open VSX, source push and required Quality CI verified; matching GitHub draft publication pending Discord-announcement authorization",
-    "commitPoint": "docs(release): record 0.0.82 public source, CI and scratch retirement",
+    "deliveryStatus": "VERIFIED: stable exact-byte Open VSX and GitHub release, tag/source and required qualified-code CI.",
+    "commitPoint": "docs(release): close published 0.0.82 delivery",
     "remaining": [
-      "Existing Discord announcement authorization for GitHub draft publication",
-      "Installed-editor experience and queued Claude game witnesses remain separate feature gates"
+      "Installed-editor experience and queued Claude game witnesses remain separate open feature gates."
     ],
-    "operator": "Degradation call made after wrapper assumptions; close this release checkpoint before a fresh feature unit."
+    "announcementAuthorization": "User explicitly answered Publish release and announcements.",
+    "evidenceLimit": "Announcements verified through the successful workflow and actual Discord message-object prefixes; direct channel message IDs were not independently read."
   }
 }
