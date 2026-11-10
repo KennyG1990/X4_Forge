@@ -6,6 +6,10 @@
 
 ## P0 — Active
 
+### Preserved MD diff-only native deploy `in_progress` (GitHub #95)
+
+A real, preserved MD patch passes project validation and canonical diff simulation, but both native aliases reject its corrected form as no authored output. [Reproduction, prerequisite scope and plan](docs/plans/2026-11-09-diff-expression-values-design.md). Fix the existing output/readiness policy without a dummy cue, preserve exact raw bytes and negative hollow/stale guards, then resume #73 diff-operation expression provenance. No implementation yet; isolated baseline8.86seconds, no target writes, owned process/listener stopped.
+
 ### Explicit text filename deploy fidelity `in_progress` (GitHub #94, under #20)
 
 Dev preserves explicit translation filenames, no-edit XML bytes and intentional model edits at the same path. Both Dev and exact frozen-source baselines reproduced the refusal (58/58 each); corrected native 115/115, artifact oracle 120/120, pure 64/64, actual editor handler 82/82 and normal precommit passed. [Source/native proof and release review](docs/plans/2026-11-09-explicit-text-filename-fidelity.md). The exact uppercase packet passed 37 native checks, and Claude verified its known-entry lookup on Windows X4 9.00 with cleanup. Selected-language/fallback and case-sensitive platforms remain untested. The [#94-only 0.0.82 port](docs/plans/2026-11-09-forge-082-filename-fidelity-rollforward.md) is now exact source5ad377c: filename115, physical-target65, rollback132, Steam43/69 and artifact120/120 pass; all902 source files reverified. Independent review confirms only five paths changed, with #93 excluded. The selected3c3e3ae source and exact0.0.82 headless package/install/native qualification passed. Open VSX0.0.82 and matching source/docs are published/pushed with both Quality runs green. GitHubrelease is an exact verified draft pending announcement authorization; rendered/editor experience remains open. Held139a374 must not advance. Live setup stays untouched.
