@@ -1,0 +1,311 @@
+{
+  "schemaVersion": 1,
+  "version": "0.0.82",
+  "status": "OPEN_VSX_VERIFIED_GITHUB_DELIVERY_PENDING",
+  "recordedAtUtc": "2026-11-10T02:05:18.770777+00:00",
+  "ownerIssue": "https://github.com/KennyG1990/X4_Forge/issues/53",
+  "parentIssue": "https://github.com/KennyG1990/X4_Forge/issues/20",
+  "lane": "FULL",
+  "plan": {
+    "boundedUnit": "Publish the exact qualified native deploy, recovery, validation, Steam and filename fixes as stable 0.0.82 from a curated public-parent checkout.",
+    "nonGoals": [
+      "Broader isolated Dev history and #93 ReadText implementation",
+      "Live Forge/Antigravity/X4/AiLive installation, restart, configuration or save changes",
+      "Closing remaining editor-experience or queued game witnesses"
+    ],
+    "rollback": "Before publication discard only owned staging/worktree. Published versions are immutable; a correction requires another qualified version."
+  },
+  "baseline": {
+    "publicParent": "f76775f02dbd8c61a100233e9d11d659f7a5d39b",
+    "publicVersion": "0.0.81",
+    "testedSourceTree": "3c3e3ae66d66b4e3a33f57726c62bf6ad37807fa",
+    "sourceFiles": 902,
+    "sourceArchiveSha256": "9c7d202f4cf64ed9aa41e8c0dd2058dcf9601e912a5c0742e1709c2545c67add",
+    "sourceManifestSha256": "48c227cc1211e07812d5bdb7051fa9f4df41171bfef153473a63095760ebe5f0",
+    "sourceAndQualifiedMetadataTree": "56357304b62ca2d19a92f48972f2caca027f2763",
+    "publicDeltaBeforeRecords": {
+      "paths": 46,
+      "added": 1,
+      "deleted": 0
+    }
+  },
+  "reconcile": {
+    "reuse": "Existing native deploy, ownership, recovery, validation, staging and extension runtime; no parallel deployment engine.",
+    "capabilityMapDelta": "No new capability from packaging/publication.",
+    "sourceBoundary": "902 manifest files plus exactly four qualified release metadata overlays, the declared erased server.ts type-only correction, and five scoped non-runtime release records."
+  },
+  "vsix": {
+    "file": "x4-forge-studio-0.0.82.vsix",
+    "extension": "x4forge.x4-forge-studio",
+    "stable": true,
+    "bytes": 29867215,
+    "entries": 2202,
+    "unpackedBytes": 78467069,
+    "sha256": "0b8d6477036a664659db36e00dff0992a6390a397f967726bef4b48238ec5daa",
+    "serverSha256": "a4e4b02941394671237b56a290dc272e90a4a04b6568e2b16cae851d664fddbf",
+    "runtimeLockSha256": "a5dd40d3820ba2a51fc26d68bc7c11b1bfa332405301af1390de12672196af6b",
+    "qualifiedMetadata": {
+      "vscode-extension/package.json": "f859e50687ed1130e966081ba2f2d16046aed09e020b2b791b2e303077d51728",
+      "vscode-extension/package-lock.json": "17f59ae3e9c0d2731e695fc25a2dd764792e02ed458f2a0ced67daf288f111e2",
+      "vscode-extension/release-notes.json": "caadf8d7c83c1080f8d4a02d20e8106c92df6a563cdbe5577dd64eaba528630a",
+      "vscode-extension/CHANGELOG.md": "063b2156e31c3f33f067707a5201eaed636bac2d644cbc4a205defee71225178"
+    }
+  },
+  "validate": {
+    "source": {
+      "status": "VERIFIED",
+      "precommit": "PASS",
+      "routes": "509/509",
+      "runtimeOracles": "134/134",
+      "e2e": {
+        "passed": 120,
+        "failed": 0,
+        "flaky": 0,
+        "minutes": 20.6
+      },
+      "ownershipComplete": true,
+      "ownershipSamples": 482,
+      "ownershipFailures": 0
+    },
+    "package": {
+      "status": "VERIFIED",
+      "freshBuildMatchesSource": true,
+      "archiveInspection": "PASS",
+      "runtimeLockBytesMatch": true
+    },
+    "isolatedInstall": {
+      "status": "VERIFIED",
+      "headlessAntigravityCli": true,
+      "archiveFilesComparedBeforeAndAfter": 2200,
+      "mismatches": 0,
+      "contractWitnesses": [
+        "library-reference",
+        "conditional-events",
+        "duplicate-cues",
+        "orphan-else",
+        "warning-delta"
+      ],
+      "receiptFailureCases": [
+        "prepared",
+        "activated",
+        "after-once",
+        "before",
+        "after-persistent"
+      ],
+      "steamChecks": [
+        43,
+        69
+      ],
+      "rollbackChecks": 132,
+      "physicalTargetChecks": 65,
+      "filenameChecks": 115,
+      "artifactOracle": "120/120",
+      "stagedSidecarProbe": "19/19",
+      "ownedCleanup": "PASS"
+    },
+    "installedNative": {
+      "status": "VERIFIED",
+      "checks": 18,
+      "runtimeOracles": "134/134",
+      "exactApplyAndRefusalPaths": "PASS",
+      "sourceVsixInstalledBytesStable": true,
+      "ownedProcessExitAndListenerClosed": true
+    },
+    "curatedPrecommit": "PASS: normal precommit after type-only correction",
+    "publicStoreAndGithub": "Open VSX VERIFIED; GitHub commit/push/release/CI PENDING",
+    "ciLintBefore": {
+      "errors": 0,
+      "warnings": 601,
+      "limit": 600,
+      "baselineWarnings": 599,
+      "status": "FAILED"
+    },
+    "dependencyAudit": {
+      "root": {
+        "high": 0,
+        "critical": 0,
+        "moderate": 10,
+        "status": "PASS at declared high threshold"
+      },
+      "extension": {
+        "high": 0,
+        "critical": 0,
+        "moderate": 6,
+        "status": "PASS at declared high threshold"
+      }
+    },
+    "ciLintAfter": {
+      "errors": 0,
+      "warnings": 599,
+      "limit": 600,
+      "status": "PASS"
+    }
+  },
+  "receiptSha256": {
+    "source": "918f52b205852d7ac3501bac41fa5ea676fb6876bd07d65bcc9b3f7180737330",
+    "package": "d75e002a5d58c92554a1804ac6bcff179d2199a6be6127c3901301e4c0e110a8",
+    "install": "ee4b3dd879d23fa67a4f006ddff6858de1ac41e0325920098762e29246d4111e",
+    "native": "cd6327745365fbcb836d0024ff974a44058338a940ce9ed23fcad3a403ad9e85",
+    "nativeVerdict": "32e04aceb087abca5cfb515af7a2237736338860e5ba98fe80fe0b96e08aa609"
+  },
+  "review": {
+    "qualifiedSourceAndMetadata": "Independent audit of all 902 blobs, modes and the tree accepted.",
+    "archive": "Independent actual VSIX, runtime, native companion and 21-note review accepted.",
+    "privateQualifierCorrection": "Exactly six consumer path expressions changed; 66 positive/negative controls, actual saved Steam proof and independent reverse-diff review passed. No artifact or product change.",
+    "freshEyes": "Independent review accepted exact type-only reverse, all eight actual runtime files and 903-path source boundary. No new full-browser or cross-platform claim."
+  },
+  "retention": {
+    "dependencyStrategy": "Both existing physical dependency directories moved on C: after all qualification consumers exited; complete per-file inventories match before and after. No dependency copy or npm installation.",
+    "failedInstall": "Kept 27,906 bytes of compact logs/results, retired 79,340,058 bytes of disposable installation, then retried the same path and VSIX.",
+    "obsoleteFiles": "Retired 879,553,654 bytes / 9,724 files including 22 unused generators; later 3,391,956 bytes / 409 old witness files. Retained evidence hashes unchanged.",
+    "dependencies": {
+      "root": {
+        "files": 15803,
+        "bytes": 256295669,
+        "inventorySha256": "8053b7e5a7e6cb24b2c2ad81c761b47686763c7bc250abe59865b2202bdce65e"
+      },
+      "extension": {
+        "files": 14202,
+        "bytes": 116524107,
+        "inventorySha256": "c51994ed458611416dc9d75d7031788106540fa7cfcb8042c237b4feb180ec3a"
+      }
+    }
+  },
+  "limits": [
+    "Windows x64 with the X4 9.00 reference corpus is the validated host.",
+    "Headless installed contracts are separate from actual installed-editor rendering, restart and client-adoption experience.",
+    "The #53 nested transaction cold-start game witness remains queued with Claude; no discovery-proof claim.",
+    "The #94 Windows uppercase-filename engine witness has language/platform limits; selected-language/fallback and case-sensitive platforms remain unproven.",
+    "#93 and broader Dev/backlog work are excluded.",
+    "No live installation, game input, save or configuration changes.",
+    "The existing generic VSIX platform metadata does not restrict installation by OS/CPU. Bundled native dependencies are Windows x64; compatible guarded operations on other platforms are not claimed or tested, and bootstrap has no automatic native rebuild/download."
+  ],
+  "aar": {
+    "triggers": [
+      "Earlier source119/120run and discarded ownership cause",
+      "Private installed-witness namespace mismatch",
+      "Reconciliation found the required CI lint threshold omitted from the private source gate; two type-only annotations introduced net2warnings.",
+      "A Git-checkout frontend rebuild exposed Git-derived build-label differences; reproducing the original Git-free archive context restored exact runtime parity.",
+      "Commit wrapper omitted the qualified explicit E2E Node path; the unchanged hook refused and required the original sealed runtime override."
+    ],
+    "sustain": [
+      "Exact source/VSIX/native receipt chain and strict fail-closed ownership",
+      "Compact failure evidence and same-path retries instead of installation backups"
+    ],
+    "improve": "Reconcile all CI gates before source qualification. Keep stable script filenames and source-derived witness names aligned. Record build context separately from source and artifact identities.",
+    "highestRiskObserved": "Required CI lint applicability was omitted from the private source gate. Two introduced any annotations exceeded the unchanged warning budget; erased type corrections restored the baseline warning count with exact emitted-runtime parity.",
+    "remainingRisk": "Public delivery and CI are pending; older failed evidence is retained and is not retroactively green."
+  },
+  "openVsx": {
+    "status": "VERIFIED",
+    "checkedAtUtc": "2026-11-10T02:05:18.770777+00:00",
+    "version": "0.0.82",
+    "endpoints": [
+      {
+        "endpoint": "https://open-vsx.org/api/x4forge/x4-forge-studio/0.0.82",
+        "namespace": "x4forge",
+        "name": "x4-forge-studio",
+        "version": "0.0.82",
+        "preRelease": false,
+        "download": "https://open-vsx.org/api/x4forge/x4-forge-studio/0.0.82/file/x4forge.x4-forge-studio-0.0.82.vsix"
+      },
+      {
+        "endpoint": "https://open-vsx.org/api/x4forge/x4-forge-studio/latest",
+        "namespace": "x4forge",
+        "name": "x4-forge-studio",
+        "version": "0.0.82",
+        "preRelease": false,
+        "download": "https://open-vsx.org/api/x4forge/x4-forge-studio/0.0.82/file/x4forge.x4-forge-studio-0.0.82.vsix"
+      }
+    ],
+    "downloadSha256": "0b8d6477036a664659db36e00dff0992a6390a397f967726bef4b48238ec5daa",
+    "downloadBytes": 29867215,
+    "method": "Streamed registry download into SHA-256; no second archive written."
+  },
+  "github": null,
+  "typeOnlyCiRepair": {
+    "status": "VERIFIED_ERASED_TYPES_STATIC_GATES_AND_EIGHT_RUNTIME_FILES",
+    "reason": "Exactly two newly introduced no-explicit-any warnings exceed the unchanged CI limit.",
+    "path": "server.ts",
+    "qualifiedRawSha256": "1150d18d057c5a3d36a41cbeef2145b06028423a59c82007a1843aa17373e1de",
+    "proposedRawSha256": "ebfcd667fc236bfb8467e8bbe42c1c234015c3650c085f004fa60882f486409c",
+    "edits": [
+      "Caught error becomes unknown, with an erased optional code-property type assertion.",
+      "The existing request actor assertion uses express.Request and RequestActor instead of any."
+    ],
+    "policy": "No lint suppression or budget increase. No runtime expressions, locals, API schema, dependency or source-fixture change.",
+    "acceptance": [
+      "Only the two exact type-annotation substitutions; exact reverse restores qualified source.",
+      "ESLint returns zero errors and 599warnings; full typecheck and normal precommit pass.",
+      "Full server transforms to byte-identical CJS and ESM code.",
+      "Fresh production/controller builds match every corresponding shipped VSIX file byte-for-byte.",
+      "Any emitted runtime difference stops publication and requires reconciliation/full applicable requalification."
+    ],
+    "validationApplicabilityDelta": "Full source120E2E/509routes/134oracles ran on qualified3c3source. This type-only overlay will be accepted only with fresh static gates and exact compiler/runtime-byte equality to the already-tested0b8dVSIX; do not claim a new full browser run.",
+    "rollback": "Reverse the two exact substitutions to restore the qualified source SHA. The original C: source/archive/receipts and0b8dVSIX remain unchanged.",
+    "buildContextReconcile": {
+      "status": "VERIFIED_ALL_EIGHT_RUNTIME_FILES_IDENTICAL",
+      "observed": "Fresh backend matches a4e4, while Vite frontend names differ in a Git checkout.",
+      "governingSource": "vite.config.ts computes APP_VERSION/APP_BUILD from git; original qualified archive has no .git and uses documented package-version fallback.",
+      "method": "Reproduce the original Git-free archive context for the build child only via GIT_DIR pointing at the original absent C:source .git. No repository/config/ref/metadata is changed.",
+      "limits": "No claim that the fallback contains a source commit; actual extension version and source/artifact seals remain separate."
+    },
+    "emittedFilesIdentical": [
+      {
+        "archivePath": "extension/out/sidecar-supervisor.js",
+        "bytes": 19600,
+        "sha256": "aa30c7931fe291c7caeaf9a828d3917ba0bb06dce66b01341c7a3a69e5ee13a7"
+      },
+      {
+        "archivePath": "extension/out/extension.js",
+        "bytes": 143090,
+        "sha256": "df4acfc8c271a78be273ab92075b04ef4133ccac5580c1e57be189d11e330086"
+      },
+      {
+        "archivePath": "extension/mcp/x4forge-mcp.cjs",
+        "bytes": 57789,
+        "sha256": "300ef5fe9a064fce16abbcc6c2c89d5200015261eb0f7eeafcb77735d8ffaeea"
+      },
+      {
+        "archivePath": "extension/app/dist/server.cjs",
+        "bytes": 3978337,
+        "sha256": "a4e4b02941394671237b56a290dc272e90a4a04b6568e2b16cae851d664fddbf"
+      },
+      {
+        "archivePath": "extension/app/dist/index.html",
+        "bytes": 505,
+        "sha256": "edf6ebc6c5e8781eb44c15918ccd718b4b83ca61050026677138958f551f74f5"
+      },
+      {
+        "archivePath": "extension/app/dist/favicon.svg",
+        "bytes": 511,
+        "sha256": "46da7def58ed6f9b0ae8f486be58091535b6bd6d807282488f3400cfe6bf2e7e"
+      },
+      {
+        "archivePath": "extension/app/dist/assets/index-GzTgSFQC.css",
+        "bytes": 161792,
+        "sha256": "64d3df9b9812261fb868de0e29d96a3b093672aa7e3a0efce462507fdde0e9c6"
+      },
+      {
+        "archivePath": "extension/app/dist/assets/index-DUlzR3d5.js",
+        "bytes": 2854699,
+        "sha256": "aaca0600c39407c2a4b12fe89f11e9a41340fb3fe0c1419f692946f828a745de"
+      }
+    ],
+    "moduleTransformParity": {
+      "cjs": "cbb013922ba7529c4baaa49a764e057dbd76fd6c69081799fd3075e2368986c9",
+      "esm": "7728a9e61c6147c2b256bb4eb7db5a421758a99f734dc7077fe60c5cf45a9e54"
+    },
+    "setupFriction": "A fresh-profile helper refused existing directories before build; the corrected caller reuses the verified existing private profile rather than making another copy.",
+    "staticGates": {
+      "lint": "PASS: zero errors, 599 warnings, unchanged limit 600",
+      "precommit": "PASS: normal required precommit including typecheck",
+      "logs": [
+        "curated-lint-after-type.log",
+        "curated-precommit-after-type.log",
+        "curated-archive-context-build.log"
+      ]
+    },
+    "commitEnvironmentFailure": "First normal hook refused before commit because the new private-profile wrapper omitted the already-reviewed explicit E2E Node override; its derived path was inaccessible. Retry uses the exact original sealed runtime, without weakening the bootstrap or hook."
+  }
+}

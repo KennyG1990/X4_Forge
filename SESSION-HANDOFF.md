@@ -1,46 +1,15 @@
-# Session handoff — public 0.0.80; final CI follow-up
+# X4 Forge 0.0.82 curated release handoff
 
-Worktree C:/Users/Moshi/.codex/worktrees/forge-fixes-release/X4_Forge;
-branch codex/forge-fixes-release. Pre-follow-up HEADc97d5d8515d30029446c97f5c7ec2017c8244ecf.
-Preserve dirty main and blocked untracked scripts/__pycache__/. No reset/clean/broad add.
+This detached release checkout starts at public main f76775f and contains the exact 902 qualified source files, four qualified version files, two erased server.ts type corrections, and five scoped release records. Broader isolated Dev/#93/A15 history is excluded. No live Forge, Antigravity, X4, AiLive, saves or standing configuration were changed. No computer use. The user explicitly authorized the remaining headless gates and qualified Open VSX/GitHub publication.
 
-## Release status
+Current status: exact VSIX 0b8d6477036a664659db36e00dff0992a6390a397f967726bef4b48238ec5daa is qualified; Open VSX 0.0.82 is published and its exact 29,867,215-byte download matches the qualified VSIX; GitHub delivery is pending. Source 120 E2E / 509 routes / 134 oracles passed on the sealed archive. The private CLI installation, 2,200-file comparisons, contract/receipt/Steam/rollback/physical/filename probes, 19 staged probe checks, 18 installed-native checks and 134 installed runtime oracles passed. All qualification processes and listeners retired.
 
-0.0.80 is public on Open VSX and GitHub v0.0.80. Tag targets c97 exactly. Downloaded
-version/latest/GitHub VSIX hashes match97d6aebac9deea3b2d7bfadd31d1822b91384a419d09d7cc9bd564e8675bd3d3.
-One Open VSX upload only; NEVER rerun publisher. No live install/restart or game input.
-120 source E2E/500 routes/134 oracles; exact extracted80/installed62/installed134/native
-proof passed. Source/staged dependency limits remain in docs/releases/0.0.80-proof.json.
+Both existing physical dependency directories were moved here without a copy or npm installation; complete before/after inventories match. Actual CI lint initially failed at 601 warnings against the unchanged limit of 600. Exactly two type-only server annotations restore zero errors / 599 warnings; the normal precommit passes. CJS and ESM transforms are identical, and fresh production/controller outputs match all eight shipped runtime files byte for byte. The original archive had no Git metadata; the parity build reproduces that context in its child environment only. No full E2E rerun on the corrected raw source is claimed. See docs/releases/0.0.82-proof.json for exact seals, applicability, failures and limits.
 
-Required Quality40409196050 failed2oracles. A real Windows8.3 TEMP alias reproduces
-receipt/session path refusal; physical paths pass. CI-only follow-up resolves TEMP,
-reports bounded failed checks and uses bounded asynchronous private-root cleanup.
-It changes NO application/controller/dependency source or immutable public package.
-Local proof:119 receipt/45 adapter;2x134oracles with cleanup;500routes;8HTTP/CLI controls;
-lint0errors599warnings; full precommit. Failed root-overlap and cleanup runs retained.
-Evidence: docs/releases/0.0.80-delivery.json; test-results/release-0.0.80/ci-repair-*.
-No manual eyeball queue: native check finished during user-authorized Claude pause;
-Claude was told to resume. No more computer use needed for this release checkpoint.
+Next: Open VSX verification and independent review passed. Commit the matching source now with the required normal hook, then push and verify GitHub. Stage only the qualified source/version/type/record delta. Commit with the normal hook and comprehensive message containing [skip discord], push HEAD:main without force, and assert actual remote and origin/main equal HEAD. Do not push broader detached Dev history. Prepare matching GitHub release/assets and observe required Quality CI. Publication remains partial until actual delivery results exist.
 
-## Next exact operations
+GitHub's existing Discord Release Sync posts on published releases, and supports [skip discord] for push events. Do not send a separate announcement without authorization. Update this handoff/proof at the close. Keep one candidate, compact receipts and the exact artifact; after final consumers finish, retire owned temporary source/stage/install/cache/dependency state and archive the managed release worktree. Never delete another agent's files or recreate historical retired roots.
 
-Stage only the9 reviewed CI/doc paths; run scoped one-shot commit-ci-repair.py with
-its message/proof arguments after exact index check. It preserves mandatory hooks,
-private graph output and protected live/Dev snapshots; do not retry a created commit.
-Then non-force push HEAD:main, verify local/tracking/direct remote SHA parity, and
-require green Quality. Keep original failed CI. Tag/artifact remain bound to c97;
-follow-up is CI-only provenance, not a rebuilt extension. Read/update matching release,
-GitHub#20, Notion task3ae4618ed15b8169985ff065ec98a747 and hub3ad4618ed15b81408777e434a7f4a888.
-This is a precommit handoff: actual follow-up commit/CI are recorded externally after
-they occur. Overall delivery is PARTIAL until remote required checks pass.
+Windows x64 is the qualified host. Generic VSIX metadata currently allows other platforms, but bundled native addons are Windows x64 and bootstrap does not repair them automatically. No cross-platform guarded-operation support is claimed.
 
-## Continuing Dev boundaries
-
-Live Forge/X4/active mod stay untouched. Separate Dev remains on its proven D0 bundle;
-private stable0.0.80 release-test host is separate. Kimi remains paused, Claude program
-OPEN. A15 is next and unimplemented: human-only approval for new/changed project-test
-setups, agents may rerun unchanged approved setups. Start with inert registry using
-requireStudioActor, exact input identity and receipts; no runner or approval on user's
-behalf. Critical save diagnostics, added complaints and actual paired game-loop proof
-remain open. Degradation call already given; close this release before a fresh-context
-implementation unit. Do not confuse published, Dev-installed and live-installed.
+Game testing belongs to Claude. The existing #53 nested-transaction cold-start packet remains queued. Installed-editor rendering/restart/client adoption, #81 presentation, #92 adoption and #94 editor behavior retain their experience gates. The #93/#94 Windows X4 9.00 engine witnesses have documented language/platform/campaign-load limits; #93 is excluded from 0.0.82. Do not close full programme or feature issues from the headless release.

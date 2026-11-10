@@ -5,8 +5,13 @@
 
 import { ModWorkspace, XMLDiagnostic, generateMDXML, validateModWorkspace } from '../types';
 import { validatePackageReadiness, toContentVersion, toTFileName } from './modCompiler';
+import { classifyPath } from './extensionProject';
+import { duplicateMdCueMessage, findDuplicateMdCueDeclarations, parseMdScriptRoot } from './cueLineage';
+import type { ValidationSourceLocation } from './validationEvidence';
 
 export interface ModDoctorDiagnostic extends XMLDiagnostic {
+  column?: number;
+  target?: ValidationSourceLocation;
   code?: string;
   domain?: 'manifest' | 'mission_director' | 'ui_layout' | 'ai_scripts' | 'libraries' | 'translations' | 'xml_patches' | 'build';
   filePath?: string;
@@ -83,10 +88,31 @@ export function runModDoctor(
     });
   }
 
+  const positionedCueDuplicates = new Map<string, Set<string>>();
+  for (const [filePath, content] of Object.entries(files)) {
+    if (classifyPath(filePath) !== 'md') continue;
+    const root = parseMdScriptRoot(content);
+    if (!root) continue;
+    const script = root.getAttribute('name') ?? '';
+    const duplicates = findDuplicateMdCueDeclarations(root.getElementsByTagName('*'));
+    if (!duplicates.length) continue;
+    positionedCueDuplicates.set(filePath, new Set(duplicates.map(duplicate => duplicateMdCueMessage(duplicate.name, script))));
+    for (const { name, line, column, first } of duplicates) {
+      const target = { file: filePath, ...first };
+      diagnostics.push({ severity: 'error', category: 'egosoft', domain: 'mission_director',
+        code: 'md.cue_duplicate_name', filePath, line, column, target, message: duplicateMdCueMessage(name, script, target) });
+    }
+  }
+
   if (settings.md) {
     const mdPath = `md/${modId}.xml`;
     const mdDiagnostics = validateModWorkspace(workspace, files[mdPath] || generateMDXML(workspace));
     mdDiagnostics.forEach(diagnostic => {
+      if (positionedCueDuplicates.size && diagnostic.nodeId) {
+        const stem = workspace.nodes?.find(node => node.id === diagnostic.nodeId)?.properties?.mdFileStem;
+        const diagnosticFile = typeof stem === 'string' && stem ? `md/${stem}.xml` : mdPath;
+        if (positionedCueDuplicates.get(diagnosticFile)?.has(diagnostic.message)) return;
+      }
       diagnostics.push({
         ...diagnostic,
         domain: 'mission_director',
@@ -511,6 +537,19 @@ export function runModDoctorReferenceSelftest() {
     customLua: 'return true',
   } as ModWorkspace;
   const disabledDoctor = runModDoctor(disabledWorkspace, files, 'doctor_reference_fixture');
+  const duplicateXml = '<mdscript name="Doctor"><cues><cue name="Listen"/><library name="Listen"/></cues></mdscript>';
+  const duplicate = runModDoctor(workspace, { ...files, 'md/doctor.xml': duplicateXml }, 'doctor_reference_fixture')
+    .find(finding => finding.code === 'md.cue_duplicate_name');
+  const graphWorkspace: ModWorkspace = {
+    ...workspace,
+    compileSettings: { ...workspace.compileSettings, md: true },
+    nodes: ['first', 'duplicate'].map(id => ({
+      id, type: 'cue', xmlTag: 'cue', label: 'Listen', x: 0, y: 0, properties: { name: 'Listen', mdScript: 'Doctor' },
+      propertiesSchema: [], inputs: [], outputs: [],
+    })),
+  };
+  const graphFallback = runModDoctor(graphWorkspace, files, 'doctor_reference_fixture')
+    .find(finding => finding.message === duplicateMdCueMessage('Listen', 'Doctor'));
   const checks = [
     { name: 'canonical AI task does not false-warn', pass: !canonical.some(finding => finding.code === 'job.task_script_missing') },
     { name: 'unknown AI task remains an advisory warning', pass: unknown.some(finding => finding.code === 'job.task_script_missing' && finding.severity === 'warning') },
@@ -526,6 +565,18 @@ export function runModDoctorReferenceSelftest() {
       name: 'disabled UI information includes custom Lua',
       pass: disabledDoctor.some(finding => finding.code === 'build.ui_disabled' && finding.message.includes('custom Lua')),
       detail: disabledDoctor,
+    },
+    {
+      name: 'emitted MD retains duplicate and first positions',
+      pass: duplicate?.filePath === 'md/doctor.xml' && duplicate.target?.file === duplicate.filePath
+        && duplicate.line === 1 && duplicate.target.line === 1
+        && (duplicate.column ?? 0) > (duplicate.target.column ?? 0),
+      detail: duplicate,
+    },
+    {
+      name: 'graph guard remains when no emitted document supplies positions',
+      pass: graphFallback?.severity === 'error' && graphFallback.nodeId === 'duplicate',
+      detail: graphFallback,
     },
   ];
   const passed = checks.filter(check => check.pass).length;

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { transformSync } from 'esbuild';
+import { buildSync } from 'esbuild';
 import { ActionReceiptStore } from '../src/lib/actionReceiptStore';
 import { buildValidationEvidence, type EvidenceDiagnostic } from '../src/lib/validationEvidence';
 import { deploymentImplementationHash } from '../src/server/deploymentTrust';
@@ -231,9 +231,19 @@ check('real installed parser closure fingerprints in source and compiled CommonJ
   const smoke = path.join(root, 'compiled-metadata-smoke.cjs');
   // Compile the current implementation, then exercise actual repo lock/node_modules
   // through both entry layouts. This is metadata proof, not a server startup claim.
-  const implementation = fs.readFileSync(path.join(repository, 'src/server/deploymentTrust.ts'), 'utf8');
-  fs.writeFileSync(smoke, transformSync(implementation, { loader: 'ts', format: 'cjs', platform: 'node' }).code
-    + '\nprocess.stdout.write(deploymentImplementationHash(process.argv[2]));\n');
+  const compiled = buildSync({
+    stdin: {
+      contents: "import { deploymentImplementationHash } from './deploymentTrust';\n"
+        + "process.stdout.write(deploymentImplementationHash(process.argv[2]));\n",
+      resolveDir: path.join(repository, 'src/server'),
+      loader: 'ts',
+    },
+    bundle: true,
+    format: 'cjs',
+    platform: 'node',
+    write: false,
+  });
+  fs.writeFileSync(smoke, compiled.outputFiles[0].text);
   for (const [entry, expected] of [[sourceEntry, expectedSource], [compiledEntry, expectedCompiled]]) {
     const actual = execFileSync(process.execPath, [smoke, entry], { encoding: 'utf8', windowsHide: true, timeout: 30_000,
       env: { SystemRoot: process.env.SystemRoot, TEMP: process.env.TEMP, TMP: process.env.TMP } });

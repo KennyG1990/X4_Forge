@@ -50,6 +50,7 @@ interface SteamAdoptionResult {
   version?: string;
   beforeSha256?: string;
   afterSha256?: string;
+  bindingHash?: string;
   beforeContent?: string;
   afterContent?: string;
   sourceWritePerformed?: boolean;
@@ -254,7 +255,7 @@ export default function ReleaseCenter({ workspace, preferences }: ReleaseCenterP
 
   const requestSteamAdoption = async (apply: boolean) => {
     if (!result?.modId) return;
-    if (apply && (!adoption?.beforeSha256 || !adoption.workshopId)) return;
+    if (apply && (!adoption?.beforeSha256 || !adoption.workshopId || !adoption.bindingHash)) return;
     if (apply && !window.confirm(`Write verified Workshop id ${adoption?.workshopId} and release version ${adoption?.version || ''} to ${adoption?.sourceManifestPath || 'source content.xml'}? Forge will require a re-import afterward.`)) return;
     setBusy(apply ? 'apply-adoption' : 'preview-adoption');
     setExportMessage('');
@@ -263,12 +264,12 @@ export default function ReleaseCenter({ workspace, preferences }: ReleaseCenterP
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
           modId: result.modId,
           apply,
-          ...(apply ? { expectedSourceSha256: adoption?.beforeSha256, expectedWorkshopId: adoption?.workshopId } : {}),
+          ...(apply ? { expectedSourceSha256: adoption?.beforeSha256, expectedWorkshopId: adoption?.workshopId, expectedBindingHash: adoption?.bindingHash } : {}),
         }),
       });
       const next = await response.json().catch(() => ({})) as SteamAdoptionResult;
       if (!response.ok && !next.error) next.error = `Workshop metadata adoption failed (${response.status}).`;
-      setAdoption(previous => ({ ...previous, ...next }));
+      setAdoption(previous => response.ok ? { ...previous, ...next } : next);
       if (next.status === 'VERIFIED_AND_ADOPTED' || next.sourceWritePerformed === true) {
         setResult(previous => previous ? { ...previous, status: next.status || 'PARTIAL', sourceManifestAdoptionRequired: false } : previous);
         setExportMessage(next.status === 'VERIFIED_AND_ADOPTED'
@@ -338,7 +339,7 @@ export default function ReleaseCenter({ workspace, preferences }: ReleaseCenterP
               {adoption.sourceManifestPath && <div className="text-[8px] text-slate-500 break-all">Source: {adoption.sourceManifestPath}</div>}
               {adoption.workshopId && <div className="text-[8px] text-slate-400">Workshop id {adoption.workshopId} · version {adoption.version}</div>}
               {adoption.beforeContent !== undefined && adoption.afterContent !== undefined && <details open className="text-[8px]"><summary className="cursor-pointer text-amber-200">Review content.xml before/after</summary><div className="grid grid-cols-2 gap-1 mt-1"><pre className="max-h-28 overflow-auto whitespace-pre-wrap break-all rounded bg-black/40 p-1 text-slate-500">{adoption.beforeContent}</pre><pre className="max-h-28 overflow-auto whitespace-pre-wrap break-all rounded bg-black/40 p-1 text-emerald-300">{adoption.afterContent}</pre></div></details>}
-              {adoption.status === 'READY_TO_ADOPT' && <button type="button" data-testid="confirm-steam-adoption" disabled={Boolean(busy)} onClick={() => void requestSteamAdoption(true)} className="w-full settings-button justify-center">Confirm write to source content.xml</button>}
+              {adoption.status === 'READY_TO_ADOPT' && adoption.bindingHash && <button type="button" data-testid="confirm-steam-adoption" disabled={Boolean(busy)} onClick={() => void requestSteamAdoption(true)} className="w-full settings-button justify-center">Confirm write to source content.xml</button>}
               {adoption.sourceReimportRequired && <div className="text-[8px] text-amber-200">Re-import the source mod before any further package or deploy operation.</div>}
             </div>}
           </div>}

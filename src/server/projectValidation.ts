@@ -40,7 +40,7 @@ import { validateProjectCrossFile } from "../lib/projectCrossFileValidation";
 import { lintScriptPropertyChains, type ScriptPropertyFinding } from "../lib/scriptProperties";
 import { checkXmlWellformed } from "../lib/xmlWellformed";
 import { lintAiscriptOrderParams, type AiscriptLintFinding } from "../lib/aiscriptLint";
-import { lintMdPitfalls, type MdPitfallFinding } from "../lib/mdPitfallLints";
+import { lintMdPitfalls, lintMdUnmatchedElse, type MdPitfallFinding } from "../lib/mdPitfallLints";
 import { lintJobsContent, type JobsVocabulary, type JobLintFinding } from "../lib/jobsContentLint";
 import { lintMigration, type MigrationFinding } from "../lib/migrationLint";
 import { lintWaresContent, type WaresVocabulary, type WareLintFinding } from "../lib/waresContentLint";
@@ -58,7 +58,7 @@ import {
   type ProjectRulesEvaluation,
 } from "../lib/projectRules";
 import { getAiOrderParamTypes, getAiSchemaIndex, getScriptPropertyIndex } from "./validationRoutes";
-import { buildValidationEvidence, type ValidationCoverageGap, type ValidationEvidence } from '../lib/validationEvidence';
+import { buildValidationEvidence, type ValidationCoverageGap, type ValidationEvidence, type ValidationSourceLocation } from '../lib/validationEvidence';
 import { createBoundedAnalysisCache } from '../lib/x4UiAnalysisCache';
 
 // Resource services replace their owned immutable indexes on a new generation. Weak keys do
@@ -501,8 +501,16 @@ export function runProjectValidation(
   // param3 bare-key reads). Union-aware where the scriptproperty index is available.
   const pitfallFindings: MdPitfallFinding[] = [];
   for (const f of project.files) {
-    if ((f.kind === "md" || classifyPath(f.path) === "md") && typeof f.content === "string") {
+    if (typeof f.content !== "string") continue;
+    const pathKind = classifyPath(f.path);
+    if (f.kind === "md" || pathKind === "md") {
       pitfallFindings.push(...fact('pitfalls', f, propertyGeneration, () => lintMdPitfalls(f.content!, { propertyUnion: spIndex?.union, propertyIndex: spIndex || undefined, filePath: f.path })));
+    }
+    const kind = f.kind === "md" || f.kind === "aiscript" ? f.kind : pathKind;
+    if (kind === "md" || kind === "aiscript") {
+      const index = kind === "md" ? mdIndexRef : aiIndexRef;
+      pitfallFindings.push(...fact('unmatched-else', f, resourceGeneration(index),
+        () => lintMdUnmatchedElse(f.content!, index, f.path)));
     }
   }
 
@@ -594,8 +602,8 @@ export function runProjectValidation(
       x4UiTruncated: lua.x4UiSummary.truncatedCount,
       structuralErrors,
       definedCues: cueIndex.defined.length,
-      cueReferences: cueIndex.references.length,
-      unresolvedCueRefs: cueIndex.unresolved.length,
+      cueReferences: crossFile.summary.cueReferences,
+      unresolvedCueRefs: crossFile.summary.unresolvedCueRefs,
       crossFileErrors: crossFile.summary.errors,
       mdLuaMissingRegisters: crossFile.summary.mdLuaMissingRegisters,
       luaMdMissingListeners: crossFile.summary.luaMdMissingListeners,
@@ -684,6 +692,8 @@ export interface FlatProjectDiagnostic {
   filePath?: string;
   sourceRef?: string;
   line?: number;
+  column?: number;
+  target?: ValidationSourceLocation;
   findingId?: string;
   category?: 'mod-finding' | 'check-unavailable';
 }
@@ -708,7 +718,8 @@ function flattenProjectValidationRaw(result: ProjectValidationResult): FlatProje
     out.push({ severity: "error", code: "project.unresolved_cue_ref", filePath: r.file, sourceRef: r.ref, message: `Cue reference "${r.ref}" resolves to nothing in this project.` });
   }
   for (const f of result.crossFile.findings) {
-    out.push({ severity: f.severity, code: f.code, filePath: f.file, sourceRef: f.event || f.dependencyId, message: f.detail });
+    out.push({ severity: f.severity, code: f.code, filePath: f.file, sourceRef: f.event || f.dependencyId,
+      line: f.line, column: f.column, target: f.target, message: f.detail });
   }
   for (const d of result.schema.findings) {
     out.push({ severity: d.severity, code: d.code, filePath: d.filePath, sourceRef: d.sourceRef, line: d.line, message: d.message });
@@ -720,7 +731,7 @@ function flattenProjectValidationRaw(result: ProjectValidationResult): FlatProje
     out.push({ severity: f.severity, code: f.code, filePath: f.filePath, sourceRef: f.chain, line: f.line, message: `Property chain "${f.chain}": segment "${f.segment}" — ${f.suggestions.length ? `did you mean ${f.suggestions.slice(0, 3).join(", ")}?` : "unknown in scriptproperties.xml."}` });
   }
   for (const f of result.pitfalls.findings) {
-    out.push({ severity: f.severity, code: f.code, filePath: f.filePath, sourceRef: f.cue, line: f.line, message: f.detail });
+    out.push({ severity: f.severity, code: f.code, filePath: f.filePath, sourceRef: f.sourceRef ?? f.cue, line: f.line, column: f.column, message: f.detail });
   }
   // B61: jobs content lint — advisory only (WARNING never flips `ok`), one currency with every other layer.
   for (const f of result.jobsLint.findings) {
@@ -768,7 +779,7 @@ function flattenProjectValidationRaw(result: ProjectValidationResult): FlatProje
   // validator re-reports structure issues under its own code — same message, same file).
   const seen = new Set<string>();
   return out.filter(f => {
-    const key = `${f.severity}|${f.filePath || ""}|${f.message}`;
+    const key = JSON.stringify([f.severity, f.filePath || "", f.message, f.column === undefined ? null : [f.line, f.column]]);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

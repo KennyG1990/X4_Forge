@@ -8,6 +8,8 @@ export const VALIDATION_BASELINE_SCHEMA = 1 as const;
 export const VALIDATION_BASELINE_MAX_MODS = 128;
 export const VALIDATION_BASELINE_MAX_WARNINGS = 2_000;
 export const VALIDATION_DELTA_SAMPLE_LIMIT = 12;
+const WARNING_MESSAGE_EXCERPT_LENGTH = 500;
+const LEGACY_MESSAGE_MATCH_LIMIT = 16_000;
 
 export interface ValidationWarningInput {
   severity?: string;
@@ -15,6 +17,7 @@ export interface ValidationWarningInput {
   filePath?: string;
   sourceRef?: unknown;
   line?: number;
+  column?: number;
   message?: string;
 }
 
@@ -105,8 +108,18 @@ export function validationProjectContentHash(files: ValidationProjectFileInput[]
   return sha256(JSON.stringify(rows));
 }
 
-export function canonicalValidationWarnings(diagnostics: ValidationWarningInput[]): StoredValidationWarning[] {
-  const byIdentity = new Map<string, StoredValidationWarning>();
+type WarningDetails = Omit<StoredValidationWarning, 'identity'>;
+
+function warningIdentity({ code, filePath, sourceRef, line }: WarningDetails, fullMessage: string): string {
+  return sha256(JSON.stringify({ code, filePath, sourceRef, line: line || 0, message: fullMessage }));
+}
+
+function warningComparisonGroup({ code, filePath, sourceRef, message }: WarningDetails): string {
+  return JSON.stringify([code, filePath, sourceRef, message]);
+}
+
+function canonicalWarningRows(diagnostics: ValidationWarningInput[]) {
+  const byIdentity = new Map<string, { warning: StoredValidationWarning; fullMessage: string }>();
   for (const finding of diagnostics) {
     if (String(finding.severity || '').toLowerCase() !== 'warning') continue;
     const code = boundedText(finding.code || 'validation.warning', 160).toLowerCase();
@@ -114,19 +127,15 @@ export function canonicalValidationWarnings(diagnostics: ValidationWarningInput[
     const sourceRef = boundedText(sourceRefText(finding.sourceRef), 300);
     const line = Number.isSafeInteger(finding.line) && Number(finding.line) > 0 ? Number(finding.line) : undefined;
     const fullMessage = boundedText(finding.message, 4_000);
-    const identity = sha256(JSON.stringify({ code, filePath, sourceRef, line: line || 0, message: fullMessage }));
-    if (!byIdentity.has(identity)) {
-      byIdentity.set(identity, {
-        identity,
-        code,
-        filePath,
-        sourceRef,
-        ...(line ? { line } : {}),
-        message: fullMessage.slice(0, 500),
-      });
-    }
+    const details = { code, filePath, sourceRef, ...(line ? { line } : {}), message: fullMessage.slice(0, WARNING_MESSAGE_EXCERPT_LENGTH) };
+    const identity = warningIdentity(details, fullMessage);
+    if (!byIdentity.has(identity)) byIdentity.set(identity, { warning: { identity, ...details }, fullMessage });
   }
-  return [...byIdentity.values()].sort((left, right) => left.identity.localeCompare(right.identity));
+  return [...byIdentity.values()].sort((left, right) => left.warning.identity.localeCompare(right.warning.identity));
+}
+
+export function canonicalValidationWarnings(diagnostics: ValidationWarningInput[]): StoredValidationWarning[] {
+  return canonicalWarningRows(diagnostics).map(row => row.warning);
 }
 
 export function createValidationBaselineSnapshot(
@@ -153,7 +162,7 @@ export function compareValidationWarnings(
   baselineRead: ValidationBaselineRead,
 ): ValidationDeltaResult {
   const modId = normalizeModId(modIdInput);
-  const current = canonicalValidationWarnings(diagnostics);
+  const current = canonicalWarningRows(diagnostics);
   const common = {
     modId,
     currentContentHash: contentHash,
@@ -168,19 +177,46 @@ export function compareValidationWarnings(
       counts: { current: current.length, baseline: 0, new: 0, resolved: 0, unchanged: 0 },
     };
   }
-  if (baselineRead.status === 'unavailable') {
-    return {
-      ...common,
-      status: 'unavailable',
-      baseline: { status: 'unavailable', reason: baselineRead.reason },
-      counts: { current: current.length, baseline: 0, new: 0, resolved: 0, unchanged: 0 },
-    };
-  }
+  const unavailable = (reason: string): ValidationDeltaResult => ({
+    ...common,
+    status: 'unavailable',
+    baseline: { status: 'unavailable', reason },
+    counts: { current: current.length, baseline: 0, new: 0, resolved: 0, unchanged: 0 },
+  });
+  if (baselineRead.status === 'unavailable') return unavailable(baselineRead.reason);
+
   const baseline = baselineRead.snapshot.warnings;
-  const currentById = new Map(current.map(warning => [warning.identity, warning]));
-  const baselineById = new Map(baseline.map(warning => [warning.identity, warning]));
-  const added = current.filter(warning => !baselineById.has(warning.identity));
-  const resolved = baseline.filter(warning => !currentById.has(warning.identity));
+  const remainingBaseline = new Map(baseline.map(warning => [warning.identity, warning]));
+  const unmatched = current.filter(({ warning }) => !remainingBaseline.delete(warning.identity));
+  const baselineLinesByGroup = new Map<string, Map<number | undefined, number>>();
+  for (const warning of remainingBaseline.values()) {
+    const group = warningComparisonGroup(warning);
+    const lines = baselineLinesByGroup.get(group) ?? new Map<number | undefined, number>();
+    lines.set(warning.line, (lines.get(warning.line) ?? 0) + 1);
+    baselineLinesByGroup.set(group, lines);
+  }
+  const added: StoredValidationWarning[] = [];
+  let legacyMatches = 0;
+  for (const { warning, fullMessage } of unmatched) {
+    const lines = baselineLinesByGroup.get(warningComparisonGroup(warning));
+    let matched = false;
+    if (lines) {
+      // A v1 snapshot holds only the display excerpt. Check the old ID at its
+      // saved line to distinguish different full messages with the same excerpt.
+      for (const [line, count] of lines) {
+        if (warning.message.length === WARNING_MESSAGE_EXCERPT_LENGTH && ++legacyMatches > LEGACY_MESSAGE_MATCH_LIMIT) {
+          return unavailable('Too many ambiguous long warning messages to compare against the saved baseline.');
+        }
+        if (!remainingBaseline.delete(warningIdentity({ ...warning, line }, fullMessage))) continue;
+        if (count === 1) lines.delete(line);
+        else lines.set(line, count - 1);
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) added.push(warning);
+  }
+  const resolved = [...remainingBaseline.values()];
   return {
     ...common,
     status: 'compared',
@@ -293,6 +329,38 @@ export function runValidationDeltaSelftest() {
       { name: 'corrupt store is unavailable', pass: corrupt.status === 'unavailable' },
       { name: 'corrupt store refuses overwrite', pass: corruptWriteRejected },
     ];
+    const prior = [warningA, { ...warningA, line: 8 }, { ...warningA, sourceRef: 'OtherCue', line: 12 }];
+    const legacy = createValidationBaselineSnapshot('example_mod', hashA, prior);
+    const moved = compareValidationWarnings('example_mod', hashA, [
+      warningA,
+      { ...warningA, line: 14 },
+      { ...warningA, sourceRef: 'DifferentCue', line: 13 },
+    ], { status: 'available', snapshot: JSON.parse(JSON.stringify(legacy)) });
+    const prefix = 'x'.repeat(520);
+    const longWarning = { ...warningA, message: prefix + 'A' };
+    const longBaseline = createValidationBaselineSnapshot('example_mod', hashA, [longWarning]);
+    const longMoved = compareValidationWarnings('example_mod', hashA, [{ ...longWarning, line: 5 }],
+      { status: 'available', snapshot: longBaseline });
+    const longChanged = compareValidationWarnings('example_mod', hashA, [
+      { ...longWarning, line: 5, message: prefix + 'B' },
+    ], { status: 'available', snapshot: longBaseline });
+    const ambiguity = createValidationBaselineSnapshot('example_mod', hashA,
+      Array.from({ length: 130 }, (_, i) => ({ ...warningA, message: prefix + 'old' + i, line: i + 1 })));
+    const bounded = compareValidationWarnings('example_mod', hashA,
+      Array.from({ length: 130 }, (_, i) => ({ ...warningA, message: prefix + 'new' + i, line: i + 200 })),
+      { status: 'available', snapshot: ambiguity });
+    checks.push(
+      { name: 'exact matches are consumed first and moved copies match one-for-one',
+        pass: moved.counts.unchanged === 2 && moved.counts.new === 1 && moved.counts.resolved === 1
+          && moved.newWarnings[0]?.sourceRef === 'DifferentCue' && moved.newWarnings[0]?.line === 13 },
+      { name: 'legacy warning with a truncated display message matches an exact move',
+        pass: longBaseline.warnings[0]?.message.length === 500 && longMoved.counts.unchanged === 1 },
+      { name: 'different long messages with the same excerpt stay distinct',
+        pass: longChanged.counts.unchanged === 0 && longChanged.counts.new === 1 && longChanged.counts.resolved === 1 },
+      { name: 'excessive legacy excerpt collisions cannot report a partial comparison',
+        pass: bounded.status === 'unavailable' && !!bounded.baseline.reason
+          && !bounded.newWarnings.length && !bounded.resolvedWarnings.length },
+    );
     return { pass: checks.every(check => check.pass), checks };
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });

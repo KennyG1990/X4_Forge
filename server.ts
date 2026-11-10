@@ -114,19 +114,19 @@ import { getCanonicalReferenceCorpus, getCanonicalReferenceSets, initializeRefer
 import { registerBulkTransformRoutes } from "./src/server/bulkTransformRoutes";
 import { computeModDrift, fingerprintModFolder, flattenProjectValidation, getSchemaIndex, loadProjectFromDisk, runProjectValidation } from "./src/server/projectValidation";
 import { captureDeploymentSnapshot, type DeploymentSnapshot } from './src/server/deploymentSnapshot';
-import { buildValidationEvidence, parseValidationProject, ValidationInputError } from './src/lib/validationEvidence';
+import { buildValidationEvidence, parseValidationProject, ValidationInputError, type ValidationSourceLocation } from './src/lib/validationEvidence';
 import { runX4UiIntegrationSelftest } from "./src/server/x4UiIntegration.selftest";
 import { buildRemediationCapsules, runAgentLoopSelftest, runRepairLoop, type LoopDiagnostic } from "./src/lib/agentLoop";
 import { assessSourceSync, hashFolderFingerprint, runCompileFidelitySelftest } from "./src/lib/compileFidelity";
 import { workspaceContentHash, workspaceSnapshotHash, runWorkspaceIdentitySelftest } from "./src/lib/workspaceIdentity";
 import { buildWorkspaceConflictPreview, runWorkspaceConflictSelftest } from "./src/lib/workspaceConflict";
 import { DestructiveRecoveryStore, runDestructiveRecoverySelftest, type DeploymentRecoveryRecord } from "./src/lib/destructiveRecovery";
-import { ActionReceiptStore } from "./src/lib/actionReceiptStore";
+import { ActionReceiptStore, ActionReceiptStoreError } from "./src/lib/actionReceiptStore";
 import { evaluateFindingAcceptances, projectFindingReview, recordFindingAcceptances, verifyFindingAcceptanceReceipts, revokeWarningReview, type AcceptanceSubject, type AcceptancePrincipal } from './src/server/findingAcceptance';
 import { parseModFolderImportRequest } from './src/server/modFolderImportRequest';
 import { RuntimeControl } from './src/server/runtimeControl';
-import { trustHash, deploymentImplementationHash, deploymentCorpusFiles, prepareDeployRecord, commitDeployRecord } from './src/server/deploymentTrust';
-import type { ActionReceipt } from './src/lib/actionReceipt';
+import { trustHash, deploymentImplementationHash, deploymentCorpusFiles, prepareDeployRecord, commitDeployRecord, deployReceiptIdentity, readDeployOperationReceipt, recordIncompleteDeployOutput, deployOperationOutcome } from './src/server/deploymentTrust';
+import { actionReceiptIdForOperation, type ActionReceipt } from './src/lib/actionReceipt';
 import { attachActionReceiptToLedgerRow } from "./src/lib/actionReceiptHistory";
 import { combineReceiptResourceBeforeHashes, hashBoundedReceiptFacts } from "./src/lib/actionReceiptRuntime";
 import {
@@ -148,6 +148,7 @@ import { layoutImportedGraphBatch, runImportedGraphLayoutSelftest } from "./src/
 import { runXmlSourceSpanSelftest } from "./src/lib/xmlSourceSpans";
 import { runNodeSelectionDocumentSelftest } from "./src/lib/nodeSelectionDocument";
 import { buildScriptPropertyIndex, lintScriptPropertyChains, SCRIPT_PROPERTIES_FIXTURE } from "./src/lib/scriptProperties";
+import { findUnmatchedMdElse, MD_UNMATCHED_ELSE } from "./src/lib/expressionAst";
 import { publishInstance, unpublishInstance, latestPath, runInstanceDiscoverySelftest } from "./src/lib/instanceDiscovery";
 import { buildPlayerReadme, bumpVersion, runModDistributionSelftest, setContentVersion, verifyZipArchive } from "./src/lib/modDistribution";
 import {
@@ -225,8 +226,8 @@ import { runActionReceiptSelftest } from "./src/lib/actionReceipt.selftest";
 import { runBugReportSelftest } from "./src/lib/bugReport";
 import { generatedOutputVerdict, normalizeApiFailureBody, runApiFailureEnvelopeSelftest } from "./src/lib/apiFailureEnvelope";
 import { projectApiEnvelope, projectApiSubject, fileApiSubject, workspaceApiSubject, pastedLogApiSubject, releaseReportApiSubject, validateProjectApiBody, validateProjectApiQuery, validateWorkspaceCreateBody, validateWorkspaceMutationBody, type ApiSubject } from './src/server/projectApiContract';
-import { canonicalSourceKey } from './src/server/resourceCoordinator';
-import { forgeSourceCoordinator } from './src/server/sharedSourceCoordinator';
+import { canonicalSourceKey, canonicalSourcePath, sourceKeyForResolvedPath } from './src/server/resourceCoordinator';
+import { forgeSourceCoordinator, processLiveness } from './src/server/sharedSourceCoordinator';
 import {
   CLIENT_API_DEADLINE_MS,
   CLIENT_LONG_API_DEADLINE_MS,
@@ -239,9 +240,9 @@ import {
   RUN_JOB_MIN_TIMEOUT_MS,
   SYNC_COMMAND_DEADLINE_MS,
 } from "./src/lib/requestDeadline";
-import { runParentLivenessSelftest, watchParentIpc } from "./src/lib/parentLiveness";
+import { parseParentLivenessContract, runParentLivenessSelftest, watchParentIpc } from "./src/lib/parentLiveness";
 import { runLatestValueWriteQueueSelftest } from "./src/lib/latestValueWriteQueue";
-import { artifactPlanIdentity, buildArtifactPlan, hashArtifactFile, materializeArtifact, verifyMaterializedArtifact, type ArtifactPlan } from "./src/lib/artifactPipeline";
+import { artifactPlanIdentity, buildArtifactPlan, hashArtifactFile, materializeArtifact, sameArtifactStamp, verifyMaterializedArtifact, type ArtifactPlan } from "./src/lib/artifactPipeline";
 import { buildProjectFileInventory, runProjectFileInventorySelftest } from "./src/lib/projectFileInventory";
 import { materializeCatalogArtifact } from "./src/lib/artifactPackager";
 import { dataPath, runDataDirSelftest } from "./src/lib/dataDir";
@@ -327,6 +328,22 @@ const PORT = Number(process.env.PORT || 3000);
 const TOKEN_FILE = path.join(process.cwd(), ".studio-api-token");
 /** B93.5: reported by GET /api/agent/status so callers can tell a restart from a stale read. */
 const SERVER_STARTED_AT = new Date().toISOString();
+const SERVER_INSTANCE_MODE = process.env.X4_FORGE_MODE?.trim()
+  || (process.connected && parseParentLivenessContract(process.env) ? 'sidecar' : 'standalone');
+const PUBLIC_INSTANCE_MODES = new Set(['sidecar', 'standalone', 'dev-build', 'release-host']);
+const SERVER_EXTENSION_VERSION = process.env.X4_FORGE_EXTENSION_VERSION?.trim();
+let serverListenerPort = PORT;
+
+function publicForgeIdentity() {
+  return {
+    port: serverListenerPort,
+    pid: process.pid,
+    startedAt: SERVER_STARTED_AT,
+    mode: PUBLIC_INSTANCE_MODES.has(SERVER_INSTANCE_MODE) ? SERVER_INSTANCE_MODE : 'unknown',
+    ...(SERVER_EXTENSION_VERSION && /^\d{1,8}\.\d{1,8}\.\d{1,8}$/.test(SERVER_EXTENSION_VERSION)
+      ? { version: SERVER_EXTENSION_VERSION } : {}),
+  };
+}
 /** W3B1a: stable sidecar identity for authoritative action-receipt client mapping. */
 const ACTION_RECEIPT_RUNTIME_VERSION = "2026-07-30.agent.v4";
 const ACTION_RECEIPT_OPERATION_ID_RE = /^[a-zA-Z][a-zA-Z0-9._:-]{0,127}$/;
@@ -1153,6 +1170,10 @@ function sourceOperationKeys(req: express.Request): string[] {
     if (resolved.modWorkspacePath) keys.push(canonicalSourceKey(path.join(resolved.modWorkspacePath, '.forge-builds')));
     if (req.path.includes('/deploy') && resolved.x4GamePath) keys.push(canonicalSourceKey(path.join(resolved.x4GamePath, 'extensions')));
   }
+  if (req.path === '/api/agent/deploy' || req.path === '/api/agent/deploy-verify') {
+    const operation = requestDeployOperation(req);
+    if (operation) keys.push(canonicalSourceKey(dataPath('action-receipts', `${actionReceiptIdForOperation(operation)}.json`)));
+  }
   return [...new Set(keys)];
 }
 
@@ -1390,6 +1411,8 @@ type ServerDiagnostic = {
   domain: string;
   filePath: string;
   line?: number;
+  column?: number;
+  target?: ValidationSourceLocation;
   nodeId?: string;
   message: string;
   sourceRef?: { kind: string; id?: string; label?: string };
@@ -1479,15 +1502,13 @@ type ArtifactBuildReport = {
    */
   nativeBinaries: string[];
   /**
-   * B84: soft `.forgekeep` keep-hints that named a path the build actually manages. The
-   * build won; these are reported so the author learns their hint is a no-op instead of
-   * assuming the deployed copy was left alone.
+   * B84: preservation entries that collided with built output. Keep the path list
+   * for existing clients and report provenance alongside it.
    */
   preservationOverrides: string[];
+  preservationOverrideDetails: PreservationOverride[];
 };
 let lastArtifactReport: ArtifactBuildReport | null = null;
-/** B84: filled by `replaceValidatedDeployment`, read when the artifact report is built. */
-let lastPreservationOverrides: string[] = [];
 
 /**
  * B84 — deployment packaging format. `loose` writes every file to disk as a file (the
@@ -1553,15 +1574,19 @@ function resolveDeployFormat(requested: unknown): DeployFormatResolution {
  */
 function describeDeployFormat(format: DeployFormat, report: ArtifactBuildReport | null) {
   const natives = report?.nativeBinaries || [];
-  const overrides = report?.preservationOverrides || [];
-  const overrideNote = overrides.length
-    ? [
-        `${overrides.length} ".forgekeep" entry(ies) name paths this mod actually builds ` +
-        `(${overrides.slice(0, 5).join(', ')}${overrides.length > 5 ? `, +${overrides.length - 5} more` : ''}), ` +
-        `so the freshly built version was deployed and the keep-hint had no effect. Remove them from ` +
-        `.forgekeep — keep-hints are for files the build does NOT produce, like an external bridge folder.`,
-      ]
-    : [];
+  const overrideNote: string[] = [];
+  const sources = [
+    ['forgekeep', 'explicit .forgekeep hint', 'Remove a redundant hint from .forgekeep.'],
+    ['foreign-dotfile', 'automatically preserved foreign dot-entry', 'If this path should stay outside the artifact, exclude it in .forgeartifact.json.'],
+    ['forge-state', 'Forge staging metadata', 'Review the artifact plan for this path.'],
+  ] as const;
+  for (const [origin, label, guidance] of sources) {
+    const paths = (report?.preservationOverrideDetails || []).filter(entry => entry.origin === origin).map(entry => entry.path);
+    if (!paths.length) continue;
+    const shown = paths.slice(0, 5).join(', ');
+    const remaining = paths.length > 5 ? `, +${paths.length - 5} more` : '';
+    overrideNote.push(`Built output replaced ${label} (${shown}${remaining}). ${guidance}`);
+  }
   if (format === 'catalog') {
     const volumes = report?.catalogVolumes ?? 0;
     const packed = report?.includedFiles ?? 0;
@@ -4219,10 +4244,11 @@ app.get("/api/agent/schema", (req, res) => {
         method: "POST",
         path: "/api/agent/deploy",
         auth: true,
+        headers: { "x-forge-operation-id": "optional agent apply identity for recovery via GET /api/agent/status?deployOperationId=<id>" },
         body: { path: "explicit mod folder, mutually exclusive with workspace", workspace: "explicit ModWorkspace, mutually exclusive with path",
           dryRun: "true to preview without writes", expectedModId: "required on apply, from preview",
           expectedSourceHash: "required on apply, from preview", expectedArtifactHash: "required on apply, from preview",
-          expectedBindingHash: "required on apply, from preview", expectedTargetFingerprint: "optional targetFingerprint from preview",
+          expectedBindingHash: "required on apply, from preview", expectedTargetFingerprint: "targetFingerprint from preview; required for agent apply with x-forge-operation-id, optional otherwise",
           acceptances: "optional exact {findingId,bindingHash,reason}[]; deploy permission required" },
         purpose: "Alias of deploy-verify with identical guards and receipt contract. Never defaults to the active workspace. Preview first, then apply with all four expected identities. Workspace-bound agent keys can only preview or deploy the mod identified by their addressed workspace."
       },
@@ -4230,6 +4256,7 @@ app.get("/api/agent/schema", (req, res) => {
         method: "POST",
         path: "/api/agent/deploy-verify",
         auth: true,
+        headers: { "x-forge-operation-id": "optional agent apply identity for recovery via GET /api/agent/status?deployOperationId=<id>" },
         body: {
           path: "required when workspace is omitted: mod folder path under a configured root",
           workspace: "required when path is omitted: ModWorkspace payload",
@@ -4240,7 +4267,7 @@ app.get("/api/agent/schema", (req, res) => {
           expectedSourceHash: "required on apply: sourceHash from preview (semantic validation inputs)",
           expectedArtifactHash: "required on apply: artifactHash from preview (all output and included disk bytes)",
           expectedBindingHash: "required on apply: bindingHash from preview (source, artifact, validator, corpus and target)",
-          expectedTargetFingerprint: "optional targetFingerprint from preview",
+          expectedTargetFingerprint: "targetFingerprint from preview; required for agent apply with x-forge-operation-id, optional otherwise",
           acceptances: "optional array, max127, of {findingId,bindingHash,reason}; authenticated deploy-permitted identity is recorded, never supplied in the body",
         },
         purpose: "Preview first, then guarded apply with expected identities. Workspace-bound agent keys must address a workspace whose mod matches the requested path or inline workspace, including after auto-reimport; mismatch returns DEPLOY_WORKSPACE_MOD_MISMATCH before writes. Exact accepted mod findings and unavailable checks produce a qualified deployment, not clean validation or game proof. Successful writes return durable deployRecord and acceptanceRecords. Safety/integrity gates cannot be overridden; only complete unaccepted-error-free validation promotes a baseline. warningReviews lists known/new/resolved/invalidated/revoked reviews. Only unchanged warning evidence is reused automatically; all validation-input bytes, corpus, validator and coverage must match. Reuse receipts retain the original approver/reason."
@@ -5154,6 +5181,12 @@ app.post("/api/agent/check-expression", (req, res) => {
         error: 'Send {"expression": "$station.manager"} — the single MD/AIScript expression to check. Optionally add {"variableTypes": {"$station": "station"}} so typed variables resolve.',
       });
     }
+    const unmatchedElse = findUnmatchedMdElse(expression);
+    if (unmatchedElse !== undefined) {
+      return res.json({ ok: false, legal: false, expression, problems: [{
+        ...MD_UNMATCHED_ELSE, severity: 'error', offset: unmatchedElse, segment: 'else', suggestions: [],
+      }] });
+    }
     const spIndex = getScriptPropertyIndex();
     if (!spIndex) {
       return res.status(503).json({
@@ -5192,8 +5225,32 @@ app.post("/api/agent/check-expression", (req, res) => {
 
 app.get("/api/agent/status", (req, res) => {
   try {
-    const resolved = resolveXsdConfig();
     const record = requestWorkspace(req);
+    const operationId = req.query.deployOperationId;
+    if (operationId !== undefined) {
+      res.set('Cache-Control', 'no-store');
+      if (typeof operationId !== 'string' || !ACTION_RECEIPT_OPERATION_ID_RE.test(operationId)) {
+        return res.status(400).json({ ok: false, code: 'DEPLOY_OPERATION_INPUT_INVALID' });
+      }
+      try {
+        const principal = deploymentPrincipal(req);
+        if (principal.kind !== 'agent') return res.status(403).json({ ok: false, code: 'DEPLOY_APPROVAL_FORBIDDEN' });
+        const identity = deployReceiptIdentity(principal, { workspaceId: record.workspaceId, operationId });
+        const receipt = readDeployOperationReceipt(actionReceiptStore, identity);
+        if (!receipt) return res.status(404).json({
+          ok: false, code: 'DEPLOY_OPERATION_NOT_FOUND', outcome: 'unknown',
+        });
+        return res.json({
+          ok: true, workspaceId: record.workspaceId, outcome: deployOperationOutcome(receipt, destructiveRecoveryStore), receipt,
+        });
+      } catch (error: unknown) {
+        const forbidden = (error as { code?: unknown } | null | undefined)?.code === 'DEPLOY_APPROVAL_FORBIDDEN';
+        return res.status(forbidden ? 403 : 503).json({
+          ok: false, code: forbidden ? 'DEPLOY_APPROVAL_FORBIDDEN' : 'DEPLOY_RECEIPT_UNAVAILABLE',
+        });
+      }
+    }
+    const resolved = resolveXsdConfig();
     const ws = record.workspace as ModWorkspace;
     res.locals.apiSubject = { modId: effectiveModId(activeBuildWorkspace(ws)), sourceHash: record.head, sourceHashScope: 'workspace-head' };
     const sourceDir = typeof (ws as any)?.sourceStamp?.dir === 'string' ? (ws as any).sourceStamp.dir : '';
@@ -5223,10 +5280,8 @@ app.get("/api/agent/status", (req, res) => {
 
     return res.json({
       ok: true,
-      port: PORT,
-      pid: process.pid,
-      mode: process.env.X4_FORGE_MODE?.trim() || (process.env.X4_DATA_DIR ? 'sidecar' : 'standalone'),
-      startedAt: SERVER_STARTED_AT,
+      ...publicForgeIdentity(),
+      mode: SERVER_INSTANCE_MODE,
       discoveryFile: latestPath(),
       workspace: {
         workspaceId: record.workspaceId,
@@ -5396,6 +5451,14 @@ app.post("/api/agent/history/:id/revert", coordinatedSourceOperation((req, res) 
           deployedPath: restored.targetPath,
           restoredFingerprint: restored.restoredFingerprint,
           priorExisted: found.record.priorExisted,
+          ...(restored.remainingBackup ? { cleanupWarning: {
+            code: 'RECOVERY_BACKUP_CLEANUP_FAILED',
+            backupPath: restored.remainingBackup.path,
+            manifestRetired: restored.remainingBackup.manifestRetired,
+            message: restored.remainingBackup.manifestRetired
+              ? 'Undo restored and verified the original files. Forge removed the manifest, but could not remove the remaining transaction files.'
+              : 'Undo restored and verified the original files. A transaction copy remains in the extensions folder and may be detected as a duplicate by X4.',
+          } } : {}),
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -6072,6 +6135,8 @@ function runFullWorkspaceValidation(ws: ModWorkspace, built?: { modId: string; f
       domain: finding.domain || "project",
       filePath: finding.filePath || "project",
       line: finding.line,
+      column: finding.column,
+      target: finding.target,
       nodeId: finding.nodeId,
       message: finding.message,
       sourceRef: finding.sourceRef,
@@ -6084,6 +6149,8 @@ function runFullWorkspaceValidation(ws: ModWorkspace, built?: { modId: string; f
       domain: finding.filePath ? classifyPath(finding.filePath) : "project",
       filePath: finding.filePath || "project",
       line: finding.line,
+      column: finding.column,
+      target: finding.target,
       message: finding.message,
       sourceRef: finding.sourceRef ? { kind: "project", label: finding.sourceRef } : undefined,
       ...(finding.severity === 'warning' && finding.code && (finding.filePath || finding.sourceRef) ? {
@@ -6097,7 +6164,7 @@ function runFullWorkspaceValidation(ws: ModWorkspace, built?: { modId: string; f
   ];
   const seen = new Set<string>();
   const diagnostics = combined.filter((d) => {
-    const key = [d.severity, d.code, d.filePath, d.line || 0, d.nodeId || "", d.message].join("|");
+    const key = [d.severity, d.code, d.filePath, d.line || 0, d.column || 0, d.nodeId || "", d.message].join("|");
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -8203,6 +8270,21 @@ app.post("/api/agent/round-trip-check", (req, res) => {
   }
 });
 
+function* readInstalledExtensionManifests(extRoot: string) {
+  for (const folder of fs.readdirSync(extRoot)) {
+    const absDir = path.join(extRoot, folder);
+    let isDir = false;
+    try { isDir = fs.statSync(absDir).isDirectory(); } catch { isDir = false; }
+    const contentPath = path.join(absDir, 'content.xml');
+    if (!isDir || !fs.existsSync(contentPath)) continue;
+
+    let xml: string;
+    try { xml = fs.readFileSync(contentPath, 'utf8'); } catch { continue; }
+    const id = xml.match(/<content\b[^>]*\bid\s*=\s*"([^"]+)"/i)?.[1] || folder;
+    yield { folder, absDir, id, xml };
+  }
+}
+
 /**
  * Extension Doctor (P-A) — cross-mod conflict scan over an extensions/ folder.
  * Read-only and side-effect-free. Checks: (1) missing dependencies, (2) duplicate
@@ -8217,16 +8299,7 @@ function runExtensionDoctor(extRoot: string, opts?: { resolveBaseContent?: (rel:
     }
 
     const exts: ExtInfo[] = [];
-    for (const folder of fs.readdirSync(extRoot)) {
-      const absDir = path.join(extRoot, folder);
-      let isDir = false;
-      try { isDir = fs.statSync(absDir).isDirectory(); } catch { isDir = false; }
-      const contentPath = path.join(absDir, "content.xml");
-      if (!isDir || !fs.existsSync(contentPath)) continue;
-
-      let xml = "";
-      try { xml = fs.readFileSync(contentPath, "utf8"); } catch { continue; }
-      const id = xml.match(/<content\b[^>]*\bid\s*=\s*"([^"]+)"/i)?.[1] || folder;
+    for (const { folder, absDir, id, xml } of readInstalledExtensionManifests(extRoot)) {
       const enabledAttr = xml.match(/<content\b[^>]*\benabled\s*=\s*"([^"]+)"/i)?.[1];
       const enabled = enabledAttr !== "0" && enabledAttr !== "false";
       const name = xml.match(/<content\b[^>]*\bname\s*=\s*"([^"]+)"/i)?.[1];
@@ -9758,7 +9831,8 @@ app.get("/api/agent/selftest-index", (_req, res) => {
 });
 
 registerValidationAgentRoutes(app);
-registerReferenceRoutes(app, req => ((req as any).__workspaceRecord as WorkspaceRecord | undefined)?.workspace as ModWorkspace | undefined);
+registerReferenceRoutes(app, req => ((req as any).__workspaceRecord as WorkspaceRecord | undefined)?.workspace as ModWorkspace | undefined,
+  publicForgeIdentity);
 registerBulkTransformRoutes(app, {
   workspace: req => requestWorkspace(req).workspace as ModWorkspace,
   workspaceId: req => requestWorkspace(req).workspaceId,
@@ -11354,10 +11428,19 @@ function deploymentTargetFingerprint(targetPath: string): string {
   return regularTreeFingerprint(targetPath);
 }
 
+function observeDeploymentFingerprint(targetPath: string): string | undefined {
+  try { return deploymentTargetFingerprint(targetPath); }
+  catch { return undefined; }
+}
+
+function staleDeploymentRecovery(message = 'Recovery refused because deployed bytes changed after the recorded action.') {
+  return Object.assign(new Error(message), { code: 'RECOVERY_STALE' });
+}
+
 function assertDeploymentRecoveryTarget(record: DeploymentRecoveryRecord, currentTargetRoot: string): void {
   const targetRoot = path.resolve(record.targetRoot);
   const targetPath = path.resolve(record.targetPath);
-  if (!sameResolvedPath(targetRoot, currentTargetRoot)) {
+  if (!sameResolvedPath(targetRoot, canonicalSourcePath(currentTargetRoot))) {
     throw new Error('Recovery refused because the configured X4 extensions directory changed after deployment.');
   }
   if (!sameResolvedPath(path.dirname(targetPath), targetRoot) || !samePathName(path.basename(targetPath), record.modId)) {
@@ -11384,10 +11467,13 @@ function prepareDeploymentRecoveryReceipt(
   targetPath: string,
   modId: string,
   store: DestructiveRecoveryStore = destructiveRecoveryStore,
+  trackWriteAdmission = false,
 ): DeploymentRecoveryRecord {
-  const resolvedRoot = path.resolve(targetRoot);
-  const resolvedTarget = path.resolve(targetPath);
-  if (!sameResolvedPath(path.dirname(resolvedTarget), resolvedRoot)) throw new Error('Deployment target escaped the extensions directory.');
+  const declaredRoot = path.resolve(targetRoot);
+  const declaredTarget = path.resolve(targetPath);
+  if (!sameResolvedPath(path.dirname(declaredTarget), declaredRoot)) throw new Error('Deployment target escaped the extensions directory.');
+  const resolvedRoot = canonicalSourcePath(declaredRoot);
+  const resolvedTarget = path.join(resolvedRoot, path.basename(declaredTarget));
   const priorExisted = fs.existsSync(resolvedTarget);
   if (priorExisted) {
     const stat = fs.lstatSync(resolvedTarget);
@@ -11402,6 +11488,7 @@ function prepareDeploymentRecoveryReceipt(
     modId,
     beforeFingerprint,
     beforeBytes,
+    trackWriteAdmission,
     summary: priorExisted ? `Restore the deployment of ${modId} that existed before this deploy` : `Remove the first deployment of ${modId}`,
   });
   try {
@@ -11422,48 +11509,70 @@ function prepareDeploymentRecoveryReceipt(
   }
 }
 
+function createDeploymentTransaction(targetPath: string, kind: 'next' | 'recovery-next' | 'recovery-restore') {
+  const nonce = `${process.pid}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+  const root = path.join(path.dirname(targetPath), `.${path.basename(targetPath)}.x4forge-${kind}-${nonce}`);
+  // Keep complete trees on the target volume without putting a manifest at the
+  // level scanned by installed-extension discovery.
+  fs.mkdirSync(root);
+  return { root, stage: path.join(root, 'next'), backup: path.join(root, 'backup') };
+}
+
+function removeEmptyDeploymentTransaction(root: string): void {
+  try { fs.rmdirSync(root); } catch { /* Preserve any remaining transaction evidence. */ }
+}
+
 /** Exact regular-tree replacement used by a later deployment undo. */
-function replaceRegularTreeExact(sourceRoot: string, targetPath: string, hooks: DeploymentTransactionHooks = {}): void {
+function replaceRegularTreeExact(sourceRoot: string, targetPath: string, hooks: DeploymentTransactionHooks & { expectedTargetBeforeWrite: string }): void {
   const parent = path.dirname(targetPath);
   fs.mkdirSync(parent, { recursive: true });
-  const nonce = `${process.pid}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
-  const stage = path.join(parent, `.${path.basename(targetPath)}.x4forge-recovery-next-${nonce}`);
-  const backup = path.join(parent, `.${path.basename(targetPath)}.x4forge-recovery-backup-${nonce}`);
   const rename = hooks.rename || ((oldPath: string, newPath: string) => fs.renameSync(oldPath, newPath));
   const expected = expectedRegularFiles(sourceRoot);
   const expectedFingerprint = regularTreeFingerprint(sourceRoot);
+  const { root, stage, backup } = createDeploymentTransaction(targetPath, 'recovery-next');
   let movedOld = false;
+  let activated = false;
   try {
     copyRegularTree(sourceRoot, stage);
     verifyRegularTreeMirror(sourceRoot, stage);
+    hooks.beforeActivate?.();
     if (fs.existsSync(targetPath)) {
       try {
         rename(targetPath, backup);
         movedOld = true;
       } catch (error) {
         if (!isLockedRootRenameError(error)) throw error;
-        replaceLockedDeploymentInPlace(stage, backup, targetPath, expected, hooks);
+        replaceLockedDeploymentInPlace(stage, backup, targetPath, expected, hooks, expectedFingerprint);
         if (regularTreeFingerprint(targetPath) !== expectedFingerprint) throw new Error('Deployment recovery fingerprint did not verify after locked-root restore.');
+        removeEmptyDeploymentTransaction(root);
         return;
       }
     }
     rename(stage, targetPath);
+    activated = true;
     verifyExpectedFiles(targetPath, expected);
     if (regularTreeFingerprint(targetPath) !== expectedFingerprint) throw new Error('Deployment recovery fingerprint did not verify after restore.');
     hooks.beforeFinalize?.();
-    if (movedOld) fs.rmSync(backup, { recursive: true, force: true });
   } catch (error) {
     try { if (fs.existsSync(stage)) fs.rmSync(stage, { recursive: true, force: true }); } catch { /* best effort */ }
     if (movedOld) {
       try {
-        if (fs.existsSync(targetPath)) fs.rmSync(targetPath, { recursive: true, force: true });
+        if (observeDeploymentFingerprint(backup) !== hooks.expectedTargetBeforeWrite
+          || (activated ? observeDeploymentFingerprint(targetPath) !== expectedFingerprint : pathHasEntry(targetPath))) {
+          throw staleDeploymentRecovery();
+        }
+        if (activated) fs.rmSync(targetPath, { recursive: true, force: true });
         if (fs.existsSync(backup)) rename(backup, targetPath);
       } catch (rollbackError) {
+        if ((rollbackError as NodeJS.ErrnoException)?.code === 'RECOVERY_STALE') throw rollbackError;
         throw new Error(`${error instanceof Error ? error.message : String(error)}; recovery rollback also failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
       }
     }
+    removeEmptyDeploymentTransaction(root);
     throw error;
   }
+  if (movedOld) disposeDeploymentSibling(backup, hooks);
+  removeEmptyDeploymentTransaction(root);
 }
 
 function restoreFirstDeployTargetFromQuarantine(
@@ -11474,8 +11583,7 @@ function restoreFirstDeployTargetFromQuarantine(
 ): void {
   const parent = path.dirname(targetPath);
   fs.mkdirSync(parent, { recursive: true });
-  const nonce = `${process.pid}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
-  const stage = path.join(parent, `.${path.basename(targetPath)}.x4forge-recovery-restore-${nonce}`);
+  const { root, stage } = createDeploymentTransaction(targetPath, 'recovery-restore');
   try {
     if (!pathHasEntry(quarantinePath)) throw new Error('First-deploy recovery quarantine is missing.');
     if (regularTreeFingerprint(quarantinePath) !== expectedFingerprint || regularTreeBytes(quarantinePath) !== expectedBytes) {
@@ -11505,6 +11613,7 @@ function restoreFirstDeployTargetFromQuarantine(
     if (pathHasEntry(quarantinePath)) throw new Error('First-deploy recovery rollback could not release its quarantine.');
   } finally {
     try { if (pathHasEntry(stage)) fs.rmSync(stage, { recursive: true, force: true }); } catch { /* best effort */ }
+    removeEmptyDeploymentTransaction(root);
   }
 }
 
@@ -11515,14 +11624,14 @@ function restoreDeploymentRecovery(
   store: DestructiveRecoveryStore = destructiveRecoveryStore,
   consume?: () => void,
   hooks: DeploymentTransactionHooks = {},
-): { targetPath: string; restoredFingerprint: string } {
+): { targetPath: string; restoredFingerprint: string; remainingBackup?: { path: string; manifestRetired: boolean } } {
   assertDeploymentRecoveryTarget(record, currentTargetRoot);
-  if (!pathHasEntry(record.targetPath)) throw new Error('Recovery refused because the deployed mod no longer exists.');
+  if (!pathHasEntry(record.targetPath)) throw staleDeploymentRecovery('Recovery refused because the deployed mod no longer exists.');
   const targetStat = fs.lstatSync(record.targetPath);
-  if (targetStat.isSymbolicLink() || !targetStat.isDirectory()) throw new Error('Recovery refused because the deployed mod target is not a regular directory.');
+  if (targetStat.isSymbolicLink() || !targetStat.isDirectory()) throw staleDeploymentRecovery('Recovery refused because the deployed mod target changed after the recorded action and is no longer a regular directory.');
   const currentFingerprint = regularTreeFingerprint(record.targetPath);
   if (currentFingerprint !== expectedCurrentHash) {
-    throw new Error(`Recovery refused because deployed bytes changed after the recorded action (expected ${expectedCurrentHash}, got ${currentFingerprint}).`);
+    throw staleDeploymentRecovery(`Recovery refused because deployed bytes changed after the recorded action (expected ${expectedCurrentHash}, got ${currentFingerprint}).`);
   }
 
   if (record.priorExisted) {
@@ -11530,10 +11639,22 @@ function restoreDeploymentRecovery(
     if (!fs.existsSync(payload) || regularTreeFingerprint(payload) !== record.beforeFingerprint || regularTreeBytes(payload) !== record.beforeBytes) {
       throw new Error('Deployment recovery payload is missing or does not match its recorded pre-state.');
     }
-    replaceRegularTreeExact(payload, record.targetPath, { beforeFinalize: consume });
+    let remainingBackup: { path: string; manifestRetired: boolean } | undefined;
+    replaceRegularTreeExact(payload, record.targetPath, {
+      expectedTargetBeforeWrite: expectedCurrentHash,
+      beforeActivate: () => {
+        if (observeDeploymentFingerprint(record.targetPath) !== expectedCurrentHash) throw staleDeploymentRecovery();
+      },
+      beforeFinalize: consume,
+      onBackupCleanupFailure: (path, manifestRetired) => {
+        if (!remainingBackup || (remainingBackup.manifestRetired && !manifestRetired)) {
+          remainingBackup = { path, manifestRetired };
+        }
+      },
+    });
     const restoredFingerprint = regularTreeFingerprint(record.targetPath);
     if (restoredFingerprint !== record.beforeFingerprint) throw new Error('Restored deployment does not match the recorded pre-state.');
-    return { targetPath: record.targetPath, restoredFingerprint };
+    return { targetPath: record.targetPath, restoredFingerprint, remainingBackup };
   }
 
   if (record.beforeFingerprint !== 'absent' || record.beforeBytes !== 0) throw new Error('First-deploy recovery record is inconsistent.');
@@ -11603,8 +11724,13 @@ function restoreDeploymentRecovery(
     return { targetPath: record.targetPath, restoredFingerprint: 'absent' };
   }
   if (pathHasEntry(record.targetPath)) {
-    try { fs.renameSync(quarantine, record.targetPath); } catch { /* reported by the invariant below */ }
-    throw new Error('First-deploy recovery could not remove the deployed target atomically.');
+    throw staleDeploymentRecovery();
+  }
+  if (observeDeploymentFingerprint(quarantine) !== currentFingerprint) {
+    try {
+      if (!pathHasEntry(record.targetPath)) fs.renameSync(quarantine, record.targetPath);
+    } catch { /* Keep the changed tree in quarantine if it cannot be put back safely. */ }
+    throw staleDeploymentRecovery();
   }
   try {
     consume?.();
@@ -11714,6 +11840,7 @@ function verifyExpectedFiles(targetRoot: string, expected: Array<{ path: string;
  *    source edit — the same stale-content class as the B81 read/write root split.
  */
 type PreservedOrigin = 'runtime' | 'forgekeep' | 'forge-state' | 'foreign-dotfile';
+type PreservationOverride = { path: string; origin: Exclude<PreservedOrigin, 'runtime'> };
 
 function preservedDeploymentEntries(
   targetPath: string,
@@ -11780,6 +11907,10 @@ function preservedDeploymentEntries(
 }
 
 interface DeploymentTransactionHooks {
+  onBackupCleanupFailure?: (backupPath: string, manifestRetired: boolean) => void;
+  onTargetWrite?: (state: 'mutated' | 'activated' | 'restored' | 'unconfirmed') => void;
+  expectedTargetBeforeWrite?: string;
+  onStagedFingerprint?: (fingerprint: string) => void;
   /** Recheck immutable source/approval authority immediately before target activation. */
   beforeActivate?: () => void;
   /** Test seam for deterministic Windows root-lock fixtures. Production uses fs.renameSync. */
@@ -11806,16 +11937,40 @@ function isCrossDeviceRenameError(error: unknown): boolean {
   return code === 'EXDEV';
 }
 
+function disposeDeploymentSibling(backupPath: string, hooks: DeploymentTransactionHooks): void {
+  let manifestRetired = false;
+  try {
+    if (!pathHasEntry(backupPath)) return;
+    const root = fs.lstatSync(backupPath);
+    if (!root.isDirectory() || root.isSymbolicLink()) throw new Error('Deployment transaction copy is not a regular directory.');
+    const manifest = path.join(backupPath, 'content.xml');
+    // Disable extension discovery before recursive removal can leave a partial tree.
+    if (pathHasEntry(manifest)) {
+      const entry = fs.lstatSync(manifest);
+      if (!entry.isFile() && !entry.isSymbolicLink()) throw new Error('Deployment backup manifest is not a regular file or link.');
+      fs.unlinkSync(manifest);
+      if (pathHasEntry(manifest)) throw new Error('Deployment backup manifest is still present.');
+    }
+    manifestRetired = true;
+    fs.rmSync(backupPath, { recursive: true, force: true });
+  } catch (error) {
+    if (!hooks.onBackupCleanupFailure) throw error;
+    hooks.onBackupCleanupFailure(backupPath, manifestRetired);
+  }
+}
+
 function replaceLockedDeploymentInPlace(
   stage: string,
   backup: string,
   targetPath: string,
   expected: Array<{ path: string; size: number; sha256: string }>,
   hooks: DeploymentTransactionHooks,
+  stagedFingerprint?: string,
 ): void {
   const originalFingerprint = regularTreeFingerprint(targetPath);
   let backupVerified = false;
   let targetMutated = false;
+  let copyCompleted = false;
   try {
     copyRegularTree(targetPath, backup);
     hooks.afterFallbackBackupCopy?.(backup);
@@ -11827,38 +11982,49 @@ function replaceLockedDeploymentInPlace(
     hooks.beforeActivate?.();
 
     targetMutated = true;
+    hooks.onTargetWrite?.('mutated');
     synchronizeRegularTree(stage, targetPath);
+    copyCompleted = true;
+    hooks.onTargetWrite?.('activated');
     hooks.afterFallbackApply?.(targetPath);
     verifyExpectedFiles(targetPath, expected);
     verifyRegularTreeMirror(stage, targetPath);
     hooks.beforeFinalize?.();
-    fs.rmSync(stage, { recursive: true, force: true });
-    fs.rmSync(backup, { recursive: true, force: true });
   } catch (error) {
     try {
       if (backupVerified && targetMutated && fs.existsSync(backup)) {
+        if (regularTreeFingerprint(backup) !== originalFingerprint) {
+          throw new Error('Locked-root backup changed before local rollback.');
+        }
+        if (copyCompleted && stagedFingerprint !== undefined && observeDeploymentFingerprint(targetPath) !== stagedFingerprint) {
+          hooks.onTargetWrite?.('unconfirmed');
+          throw staleDeploymentRecovery('Locked-root target changed after synchronization.');
+        }
         synchronizeRegularTree(backup, targetPath);
         const restoredFingerprint = regularTreeFingerprint(targetPath);
         if (restoredFingerprint !== originalFingerprint) {
           throw new Error(`rollback fingerprint mismatch: expected ${originalFingerprint}, got ${restoredFingerprint}`);
         }
+        hooks.onTargetWrite?.('restored');
       }
       if (fs.existsSync(stage)) fs.rmSync(stage, { recursive: true, force: true });
       if (fs.existsSync(backup)) fs.rmSync(backup, { recursive: true, force: true });
     } catch (rollbackError) {
-      // B98: a FAILED rollback must still not leak transaction siblings. Each is a full copy of
-      // the mod WITH content.xml, so X4 enumerates it as a real extension — leaving them behind
-      // silently gives the game duplicate mods declaring the same id. Observed for real: two
-      // orphaned `.x4forge-backup-*` directories, 49 files and 10 MB each, from failed deploys.
+      // Keep the prior copy when rollback cannot be verified. Its container
+      // has no root manifest, so Forge's extension scan can ignore it.
       try { if (fs.existsSync(stage)) fs.rmSync(stage, { recursive: true, force: true }); } catch { /* reported below */ }
-      const backupSurvives = fs.existsSync(backup);
-      try { if (backupSurvives) fs.rmSync(backup, { recursive: true, force: true }); } catch { /* reported below */ }
+      if ((rollbackError as NodeJS.ErrnoException)?.code === 'RECOVERY_STALE') throw rollbackError;
       throw new Error(
         `${error instanceof Error ? error.message : String(error)}; locked-root rollback also failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}` +
-        (fs.existsSync(backup) ? `; the backup copy could not be removed and REMAINS at ${backup} — delete it before launching the game, or X4 will load it as a duplicate extension` : ''),
+        (fs.existsSync(backup) ? `; the transaction backup remains at ${backup}` : ''),
       );
     }
     throw error;
+  }
+  try {
+    disposeDeploymentSibling(stage, hooks);
+  } finally {
+    disposeDeploymentSibling(backup, hooks);
   }
 }
 
@@ -11933,6 +12099,40 @@ function previewDeploymentEffect(ws: any, targetRoot: string, format: DeployForm
   }
 }
 
+function deploymentScratchSiblingOwner(folder: string, targetFolder: string): number | undefined {
+  const prefix = `.${targetFolder}.x4forge-`;
+  if (!folder.startsWith(prefix)) return;
+  const match = /^(?:next|backup)-([1-9]\d{0,9})-\d+-[a-f0-9]{6}$/.exec(folder.slice(prefix.length));
+  if (match) return Number(match[1]);
+}
+
+function sweepDeploymentScratchSiblings(targetPath: string, committedFingerprint?: string): void {
+  const parent = path.dirname(targetPath);
+  const targetFolder = path.basename(targetPath);
+  try {
+    for (const name of fs.readdirSync(parent)) {
+      const owner = deploymentScratchSiblingOwner(name, targetFolder);
+      if (owner === undefined || processLiveness(owner) !== 'dead') continue;
+      try {
+        const orphan = path.join(parent, name);
+        const stat = fs.lstatSync(orphan);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
+        const children = fs.readdirSync(orphan, { withFileTypes: true });
+        const nestedBackup = children.some(child => child.name === 'backup')
+          && !pathHasEntry(path.join(orphan, 'content.xml'));
+        if (committedFingerprint !== undefined) {
+          if (!nestedBackup || !pathHasEntry(targetPath) || children.some(child =>
+            (child.name !== 'next' && child.name !== 'backup') || !child.isDirectory() || child.isSymbolicLink())) continue;
+          if (deploymentTargetFingerprint(targetPath) !== committedFingerprint) return;
+        } else if (nestedBackup || (!pathHasEntry(targetPath) && name.startsWith(`.${targetFolder}.x4forge-backup-`))) {
+          continue;
+        }
+        fs.rmSync(orphan, { recursive: true, force: true });
+      } catch { /* Retain an orphan that cannot be inspected or removed safely. */ }
+    }
+  } catch { /* Cleanup does not decide deployment success. */ }
+}
+
 function replaceValidatedDeployment(
   artifactRoot: string,
   targetPath: string,
@@ -11941,30 +12141,21 @@ function replaceValidatedDeployment(
   hooks: DeploymentTransactionHooks = {},
   /** True only for the workspace-side staging target — see `preservedDeploymentEntries`. */
   ownsForgeState: boolean = false,
-): void {
+): PreservationOverride[] {
   hooks.beforeActivate?.();
   const parent = path.dirname(targetPath);
   fs.mkdirSync(parent, { recursive: true });
-  const nonce = `${process.pid}-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
-  const stage = path.join(parent, `.${path.basename(targetPath)}.x4forge-next-${nonce}`);
-  const backup = path.join(parent, `.${path.basename(targetPath)}.x4forge-backup-${nonce}`);
   const rename = hooks.rename || ((oldPath: string, newPath: string) => fs.renameSync(oldPath, newPath));
-  // B98: sweep transaction siblings orphaned by an EARLIER failed deploy before starting a new one.
-  // They are full copies of the mod including content.xml, so X4 loads each as a duplicate
-  // extension declaring the same id. Self-healing beats requiring the user to know they exist.
-  try {
-    const prefix = `.${path.basename(targetPath)}.x4forge-`;
-    for (const name of fs.readdirSync(parent)) {
-      if (!name.startsWith(prefix)) continue;
-      if (!/\.x4forge-(next|backup)-/.test(name)) continue;
-      try { fs.rmSync(path.join(parent, name), { recursive: true, force: true }); } catch { /* a locked orphan is reported by the doctor */ }
-    }
-  } catch { /* sweeping is best-effort and must never block a deploy */ }
-  lastPreservationOverrides = [];
+  sweepDeploymentScratchSiblings(targetPath);
+  const { root, stage, backup } = createDeploymentTransaction(targetPath, 'next');
+  const preservationOverrides: PreservationOverride[] = [];
   let movedOld = false;
+  let activated = false;
+  let stagedFingerprint: string | undefined;
   try {
     copyRegularTree(artifactRoot, stage);
-    if (fs.existsSync(targetPath)) {
+    const targetExisted = fs.existsSync(targetPath);
+    if (targetExisted) {
       for (const { path: relativePath, origin } of preservedDeploymentEntries(targetPath, plan, ownsForgeState)) {
         const source = path.join(targetPath, ...relativePath.split('/'));
         if (!fs.existsSync(source)) continue;
@@ -11976,7 +12167,7 @@ function replaceValidatedDeployment(
           // A soft keep-hint yields to the build, and the override is REPORTED rather than
           // silently applied. Letting the hint win would freeze the deployed copy against
           // every future source edit.
-          lastPreservationOverrides.push(relativePath);
+          preservationOverrides.push({ path: relativePath, origin });
           continue;
         }
         const stat = fs.lstatSync(source);
@@ -11987,32 +12178,62 @@ function replaceValidatedDeployment(
           fs.copyFileSync(source, destination);
         }
       }
-      hooks.beforeActivate?.();
+    }
+    if (hooks.onStagedFingerprint) {
+      stagedFingerprint = regularTreeFingerprint(stage);
+      hooks.onStagedFingerprint(stagedFingerprint);
+    }
+    hooks.beforeActivate?.();
+    if (targetExisted) {
       try {
         rename(targetPath, backup);
         movedOld = true;
+        hooks.onTargetWrite?.('mutated');
       } catch (error) {
         if (!isLockedRootRenameError(error)) throw error;
-        replaceLockedDeploymentInPlace(stage, backup, targetPath, expected, hooks);
-        return;
+        replaceLockedDeploymentInPlace(stage, backup, targetPath, expected, hooks, stagedFingerprint);
+        removeEmptyDeploymentTransaction(root);
+        return preservationOverrides;
       }
     }
-    if (!movedOld) hooks.beforeActivate?.();
     rename(stage, targetPath);
+    activated = true;
+    hooks.onTargetWrite?.('activated');
     verifyExpectedFiles(targetPath, expected);
-    if (movedOld) fs.rmSync(backup, { recursive: true, force: true });
   } catch (error) {
+    if (stagedFingerprint !== undefined && activated && !movedOld
+      && observeDeploymentFingerprint(targetPath) !== stagedFingerprint) {
+      hooks.onTargetWrite?.('unconfirmed');
+      throw error;
+    }
     try { if (fs.existsSync(stage)) fs.rmSync(stage, { recursive: true, force: true }); } catch { /* best effort */ }
     if (movedOld) {
       try {
-        if (fs.existsSync(targetPath)) fs.rmSync(targetPath, { recursive: true, force: true });
-        if (fs.existsSync(backup)) rename(backup, targetPath);
+        if (hooks.expectedTargetBeforeWrite !== undefined
+          && deploymentTargetFingerprint(backup) !== hooks.expectedTargetBeforeWrite) {
+          throw new Error('Deployment backup changed before local rollback.');
+        }
+        const removeTarget = stagedFingerprint === undefined ? fs.existsSync(targetPath) : activated;
+        if (stagedFingerprint !== undefined && (activated
+          ? observeDeploymentFingerprint(targetPath) !== stagedFingerprint : pathHasEntry(targetPath))) {
+          hooks.onTargetWrite?.('unconfirmed');
+          throw new Error('Deployment target changed before local rollback.');
+        }
+        if (removeTarget) fs.rmSync(targetPath, { recursive: true, force: true });
+        if (fs.existsSync(backup)) {
+          rename(backup, targetPath);
+          hooks.onTargetWrite?.('restored');
+        }
       } catch (rollbackError) {
         throw new Error(`${error instanceof Error ? error.message : String(error)}; rollback also failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
       }
     }
+    removeEmptyDeploymentTransaction(root);
     throw error;
   }
+  if (movedOld) disposeDeploymentSibling(backup, hooks);
+  removeEmptyDeploymentTransaction(root);
+  return preservationOverrides;
 }
 
 function compileWorkspaceToFolder(
@@ -12047,7 +12268,7 @@ function compileWorkspaceToFolder(
     if (artifactMode === 'catalog') {
       const packaged = materializeCatalogArtifact(plan, artifactRoot);
       if (!packaged.ok) throw new Error(`Packed artifact failed: ${packaged.errors.join('; ')}`);
-      replaceValidatedDeployment(artifactRoot, targetPath, packaged.files, plan, transactionHooks, writeSnapshots);
+      const preservationOverrides = replaceValidatedDeployment(artifactRoot, targetPath, packaged.files, plan, transactionHooks, writeSnapshots);
       lastArtifactReport = {
         mode: artifactMode,
         sourceRoot,
@@ -12062,7 +12283,8 @@ function compileWorkspaceToFolder(
         catalogVolumes: packaged.catalogs.volumes.length,
         verified: true,
         nativeBinaries: plan.entries.filter(entry => isNativeBinaryPath(entry.path)).map(entry => entry.path),
-        preservationOverrides: [...lastPreservationOverrides],
+        preservationOverrides: preservationOverrides.map(entry => entry.path),
+        preservationOverrideDetails: preservationOverrides,
       };
     } else {
       const built = materializeArtifact(plan, artifactRoot);
@@ -12074,7 +12296,7 @@ function compileWorkspaceToFolder(
       // so a file deleted from the mod stayed in the game folder forever and kept being
       // loaded by X4 — and loose deploys got none of the sibling-backup, rollback, hash
       // verification, or locked-root (B83) protection that catalog deploys already had.
-      replaceValidatedDeployment(artifactRoot, targetPath, plan.entries, plan, transactionHooks, writeSnapshots);
+      const preservationOverrides = replaceValidatedDeployment(artifactRoot, targetPath, plan.entries, plan, transactionHooks, writeSnapshots);
       lastArtifactReport = {
         mode: artifactMode,
         sourceRoot,
@@ -12089,7 +12311,8 @@ function compileWorkspaceToFolder(
         catalogVolumes: 0,
         verified: true,
         nativeBinaries: plan.entries.filter(entry => isNativeBinaryPath(entry.path)).map(entry => entry.path),
-        preservationOverrides: [...lastPreservationOverrides],
+        preservationOverrides: preservationOverrides.map(entry => entry.path),
+        preservationOverrideDetails: preservationOverrides,
       };
     }
 
@@ -12179,6 +12402,71 @@ function runCompileArtifactSelftest() {
     record('patch-only workspace has no MD readiness error', !validatePackageReadiness(patchOnly).some(finding => finding.message.includes('no cue nodes')));
     record('patch-only workspace emits no synthetic MD file', !Object.keys(patchManifest).some(file => file.startsWith('md/')), Object.keys(patchManifest).join(', '));
     record('patch-only workspace still emits its library diff', typeof patchManifest['libraries/wares.xml'] === 'string' && patchManifest['libraries/wares.xml'].includes('<diff>'));
+
+    const textSource = path.join(root, 'text_filename_fidelity');
+    fs.mkdirSync(path.join(textSource, 't'), { recursive: true });
+    fs.writeFileSync(path.join(textSource, 'content.xml'), '<content id="text_filename_fidelity" name="Text Filename Fidelity" version="100"/>');
+    const textOriginals = [
+      { fileName: '0002-L044.xml', pageId: '78394' },
+      { fileName: '0003-l44.xml', pageId: '78395' },
+      { fileName: '0004-L00044.xml', pageId: '78396' },
+      { fileName: 'custom-texts.xml', pageId: '78397' },
+    ].map(file => ({ ...file, path: `t/${file.fileName}`,
+      content: `<?xml version="1.0" encoding="utf-8"?>\r\n<!-- original ${file.fileName}: café 雪 -->\r\n<language id="44"><page id="${file.pageId}" title="Filename Fidelity"><t id="1">Original &amp; café 雪</t></page></language>\r\n`,
+    }));
+    for (const file of textOriginals) fs.writeFileSync(path.join(textSource, file.path), file.content);
+    const textImported = importModFolder(textSource);
+    const expectedTextPaths = textOriginals.map(file => file.path).sort();
+    const textPaths = (files: CompiledFileManifest) => Object.keys(files).filter(file => file.startsWith('t/')).sort();
+    record('translation import retains explicit model and original-file paths',
+      textImported.workspace.tFiles?.length === textOriginals.length && textOriginals.every(file =>
+        textImported.workspace.tFiles?.some(model => model.fileName === file.fileName)
+        && textImported.workspace.originalFiles?.some(original => original.kind === 'tfile' && original.path === file.path && original.content === file.content)));
+    const textNoEdit = buildWorkspaceFileManifest(textImported.workspace);
+    record('translation no-edit manifest retains only the exact authored paths',
+      JSON.stringify(textPaths(textNoEdit.files)) === JSON.stringify(expectedTextPaths), textPaths(textNoEdit.files).join(', '));
+    record('translation no-edit manifest retains comments entities Unicode and CRLF bytes',
+      textOriginals.every(file => textNoEdit.files[file.path] === file.content));
+    const textNoEditPlan = buildArtifactPlan({ sourceRoot: textSource, generatedFiles: textNoEdit.generatedFiles,
+      passthroughFiles: buildArtifactPassthroughFiles(textImported.workspace, textNoEdit.passthroughFiles) });
+    const textNoEditOutput = path.join(root, 'text-no-edit-output');
+    const textNoEditBuild = materializeArtifact(textNoEditPlan, textNoEditOutput);
+    record('translation no-edit artifact materializes the exact authored file set and bytes',
+      textNoEditBuild.ok && JSON.stringify(fs.readdirSync(path.join(textNoEditOutput, 't')).map(file => `t/${file}`).sort()) === JSON.stringify(expectedTextPaths)
+        && textOriginals.every(file => fs.readFileSync(path.join(textNoEditOutput, file.path), 'utf8') === file.content),
+      textNoEditBuild.errors.join('; '));
+    const editedTextPath = textOriginals[0].path;
+    const textEditedWorkspace = sanitizeWorkspace({ ...textImported.workspace,
+      tFiles: (textImported.workspace.tFiles || []).map(file => file.fileName === textOriginals[0].fileName
+        ? { ...file, pages: file.pages.map(page => ({ ...page, items: page.items.map(item => item.id === '1'
+          ? { ...item, value: 'FORGE_TEXT_FILENAME_94_EDITED & café' } : item) })) } : file),
+    });
+    const textEdited = buildWorkspaceFileManifest(textEditedWorkspace);
+    record('translation model edit retains only the exact authored paths',
+      JSON.stringify(textPaths(textEdited.files)) === JSON.stringify(expectedTextPaths), textPaths(textEdited.files).join(', '));
+    record('translation model edit replaces original bytes while untouched files stay exact',
+      typeof textEdited.files[editedTextPath] === 'string' && textEdited.files[editedTextPath].includes('FORGE_TEXT_FILENAME_94_EDITED &amp; café')
+        && !textEdited.files[editedTextPath].includes('Original &amp; café 雪')
+        && textOriginals.slice(1).every(file => textEdited.files[file.path] === file.content));
+    const textEditedPlan = buildArtifactPlan({ sourceRoot: textSource, generatedFiles: textEdited.generatedFiles,
+      passthroughFiles: buildArtifactPassthroughFiles(textEditedWorkspace, textEdited.passthroughFiles) });
+    const textEditedOutput = path.join(root, 'text-edited-output');
+    const textEditedBuild = materializeArtifact(textEditedPlan, textEditedOutput);
+    record('translation edited artifact keeps its authored path and value without stale siblings',
+      textEditedBuild.ok && JSON.stringify(fs.readdirSync(path.join(textEditedOutput, 't')).map(file => `t/${file}`).sort()) === JSON.stringify(expectedTextPaths)
+        && fs.readFileSync(path.join(textEditedOutput, editedTextPath), 'utf8') === textEdited.files[editedTextPath]
+        && textOriginals.slice(1).every(file => fs.readFileSync(path.join(textEditedOutput, file.path), 'utf8') === file.content),
+      textEditedBuild.errors.join('; '));
+    record('translation artifact builds leave imported source bytes unchanged',
+      textOriginals.every(file => fs.readFileSync(path.join(textSource, file.path), 'utf8') === file.content));
+    const textCasePairOwner = textImported.workspace.tFiles?.find(file => file.fileName === textOriginals[0].fileName);
+    const textCasePairWorkspace = sanitizeWorkspace({ ...textImported.workspace, sourceFolder: undefined, originalFiles: [],
+      tFiles: textCasePairOwner ? [textCasePairOwner, { ...textCasePairOwner, fileName: '0002-l044.xml' }] : [],
+    });
+    const textCasePairManifest = buildWorkspaceFileManifest(textCasePairWorkspace);
+    const textCasePairPlan = buildArtifactPlan({ sourceRoot: '', memoryOnly: true, generatedFiles: textCasePairManifest.generatedFiles });
+    record('distinct modeled case-folded translation owners remain rejected',
+      !!textCasePairOwner && !textCasePairPlan.ok && textCasePairPlan.errors.some(error => error.toLowerCase().includes('collide')), textCasePairPlan.errors.join('; '));
 
     const b119Widget = { id: 'b119_window', type: 'window', x: 100, y: 100, w: 420, h: 300, label: 'B119 UI', properties: {} };
     const uiSource = path.join(root, 'ui-source');
@@ -12589,6 +12877,7 @@ function runCompileArtifactSelftest() {
     fs.writeFileSync(path.join(target, 'preserved', 'state.bin'), 'forgekeep state');
     fs.writeFileSync(path.join(target, '.forgekeep'), 'preserved\n../outside\nC:\\escape\n');
 
+    sourceWrite('.github/workflows/fixture.yml', 'name: fixture');
     const importedBuild = buildWorkspaceFileManifest(imported.workspace);
     const importedPlan = buildArtifactPlan({
       sourceRoot: source,
@@ -12609,6 +12898,8 @@ function runCompileArtifactSelftest() {
     record('catalog pair emitted', fs.existsSync(path.join(target, 'ext_01.cat')) && fs.existsSync(path.join(target, 'ext_01.dat')));
     record('stale loose payload removed by validated swap', !fs.existsSync(path.join(target, 'stale-loose.txt')));
     record('development metadata excluded from deploy', !fs.existsSync(path.join(target, '.git')));
+    record('GitHub workflow excluded from catalog deploy', !importedPlan.entries.some(entry => entry.path.startsWith('.github/'))
+      && !fs.existsSync(path.join(target, '.github')));
     record('runtime-owned state preserved', fs.readFileSync(path.join(target, 'runtime', 'state.db'), 'utf8') === 'deployed mutable state');
     record('valid forgekeep top-level path preserved', fs.readFileSync(path.join(target, 'preserved', 'state.bin'), 'utf8') === 'forgekeep state');
     record('unsafe forgekeep paths ignored', !fs.existsSync(path.join(deployRoot, 'outside')) && !fs.existsSync(path.join(deployRoot, 'C:', 'escape')));
@@ -12954,6 +13245,22 @@ function runCompileArtifactSelftest() {
       firstFailureRolledBack = /receipt write failure/.test(String(error));
     }
     record('first-deploy receipt failure restores the deployed target', firstFailureRolledBack && regularTreeFingerprint(firstFailureTarget) === firstFailureFingerprint);
+    const changedFirstFile = path.join(firstFailureTarget, 'outside-owner.txt');
+    let changedFirstRefused = false;
+    let changedFirstConsumed = false;
+    try {
+      restoreDeploymentRecovery(firstFailureReady, deployRoot, firstFailureReady.expectedCurrentHash, recoveryStore,
+        () => { changedFirstConsumed = true; }, {
+          rename: (from, to) => {
+            atomicWriteFile(changedFirstFile, 'Intervening scratch writer');
+            fs.renameSync(from, to);
+          },
+        });
+    } catch (error) {
+      changedFirstRefused = (error as NodeJS.ErrnoException)?.code === 'RECOVERY_STALE';
+    }
+    record('first-deploy quarantine refuses a tree changed at rename without consuming recovery', changedFirstRefused
+      && !changedFirstConsumed && fs.existsSync(changedFirstFile) && fs.readFileSync(changedFirstFile, 'utf8') === 'Intervening scratch writer');
     recoveryStore.abandon(firstFailureReceipt.id);
     fs.rmSync(firstFailureTarget, { recursive: true, force: true });
 
@@ -12967,12 +13274,35 @@ function runCompileArtifactSelftest() {
     }
     record('unicode and unknown paths are cataloged', catalogEntries.some(entry => entry.name === 'unicode/船.txt') && catalogEntries.some(entry => entry.name === 'unknown/deep/path/file.arbitrary'));
 
+    const stoppedPid = [2147483647, 2147483646].find(pid => processLiveness(pid) === 'dead');
+    if (stoppedPid === undefined) throw new Error('No stopped process identity for transaction cleanup fixture.');
+    const sweepRoot = path.join(root, 'sweep-extensions');
+    const sweepTarget = path.join(sweepRoot, 'cleanup_fixture');
+    const nestedOrphan = path.join(sweepRoot, `.cleanup_fixture.x4forge-next-${stoppedPid}-1000000000000-abcdef`);
+    const legacyBackup = path.join(sweepRoot, `.cleanup_fixture.x4forge-backup-${stoppedPid}-1000000000000-abcdef`);
+    copyRegularTree(target, path.join(nestedOrphan, 'backup'));
+    copyRegularTree(target, legacyBackup);
+    sweepDeploymentScratchSiblings(sweepTarget);
+    record('missing target preserves both backup layouts', pathHasEntry(nestedOrphan) && pathHasEntry(legacyBackup));
+    copyRegularTree(target, sweepTarget);
+    sweepDeploymentScratchSiblings(sweepTarget);
+    record('before-apply sweep preserves nested rollback evidence', pathHasEntry(nestedOrphan) && !pathHasEntry(legacyBackup));
+    sweepDeploymentScratchSiblings(sweepTarget, '0'.repeat(64));
+    record('changed target refuses post-commit backup cleanup', pathHasEntry(nestedOrphan));
+    const liveOrphan = path.join(sweepRoot, `.cleanup_fixture.x4forge-next-${process.pid}-1000000000000-abcdef`);
+    copyRegularTree(target, path.join(liveOrphan, 'backup'));
+    sweepDeploymentScratchSiblings(sweepTarget, regularTreeFingerprint(sweepTarget));
+    record('verified target permits retired backup cleanup only', !pathHasEntry(nestedOrphan) && pathHasEntry(liveOrphan));
+
     // B83: simulate the Windows case where the deployed mod root is a process
     // cwd/watched directory. The root cannot move, but its files remain writable.
-    const transactionArtifacts = () => fs.readdirSync(deployRoot)
-      .filter(name => name.startsWith(`.${path.basename(target)}.x4forge-next-`) || name.startsWith(`.${path.basename(target)}.x4forge-backup-`));
+    const transactionArtifacts = () => fs.readdirSync(deployRoot).filter(name =>
+      deploymentScratchSiblingOwner(name, path.basename(target)) !== undefined
+      || name.startsWith(`.${path.basename(target)}.x4forge-recovery-`));
+    const isCurrentBackup = (newPath: string) => path.basename(newPath) === 'backup'
+      && deploymentScratchSiblingOwner(path.basename(path.dirname(newPath)), path.basename(target)) === process.pid;
     const lockedRename = (code: 'EBUSY' | 'EPERM', attempts: { value: number }) => (oldPath: string, newPath: string) => {
-      if (path.resolve(oldPath) === path.resolve(target) && path.basename(newPath).includes('.x4forge-backup-')) {
+      if (path.resolve(oldPath) === path.resolve(target) && isCurrentBackup(newPath)) {
         attempts.value++;
         throw Object.assign(new Error(`simulated locked deployed root (${code})`), { code });
       }
@@ -12984,6 +13314,11 @@ function runCompileArtifactSelftest() {
       try {
         const lockedDeploy = compileWorkspaceToFolder(imported.workspace, deployRoot, 'store', false, 'catalog', {
           rename: lockedRename(code, attempts),
+          afterFallbackBackupCopy: backupPath => record(`locked-root ${code} copies stay outside extension discovery`,
+            fs.existsSync(path.join(backupPath, 'content.xml'))
+            && fs.existsSync(path.join(path.dirname(backupPath), 'next', 'content.xml'))
+            && !fs.existsSync(path.join(path.dirname(backupPath), 'content.xml'))
+            && [...readInstalledExtensionManifests(deployRoot)].filter(row => row.id === 'artifact_integration').length === 1),
         });
         record(`locked-root ${code} fallback deploys without moving target root`, lockedDeploy === target && attempts.value === 1);
         record(`locked-root ${code} fallback removes stale managed payload`, !fs.existsSync(path.join(target, `stale-after-${code.toLowerCase()}.txt`)));
@@ -13002,6 +13337,7 @@ function runCompileArtifactSelftest() {
       const attempts = { value: 0 };
       compileWorkspaceToFolder(imported.workspace, deployRoot, 'store', false, 'catalog', {
         rename: lockedRename('EBUSY', attempts),
+        onStagedFingerprint: () => undefined,
         afterFallbackApply: () => { throw new Error('simulated post-apply verification failure'); },
       });
     } catch (error) {
@@ -13035,7 +13371,7 @@ function runCompileArtifactSelftest() {
     try {
       compileWorkspaceToFolder(imported.workspace, deployRoot, 'store', false, 'catalog', {
         rename: (oldPath, newPath) => {
-          if (path.resolve(oldPath) === path.resolve(target) && path.basename(newPath).includes('.x4forge-backup-')) {
+          if (path.resolve(oldPath) === path.resolve(target) && isCurrentBackup(newPath)) {
             throw Object.assign(new Error('simulated access failure'), { code: 'EACCES' });
           }
           fs.renameSync(oldPath, newPath);
@@ -13124,6 +13460,31 @@ function runCompileArtifactSelftest() {
     } finally {
       try { fs.rmSync(stagingRoot, { recursive: true, force: true }); } catch { /* scratch cleanup */ }
     }
+
+    const beforeForeignWrite = regularTreeFingerprint(target);
+    let lockedBackup: string | undefined;
+    let changedOutputFingerprint: string | undefined;
+    const finalWrite = { state: '' };
+    let guardedFailure = false;
+    try {
+      compileWorkspaceToFolder(imported.workspace, deployRoot, 'store', false, 'catalog', {
+        rename: lockedRename('EBUSY', { value: 0 }),
+        onStagedFingerprint: () => undefined,
+        onTargetWrite: state => { finalWrite.state = state; },
+        afterFallbackBackupCopy: backupPath => { lockedBackup = backupPath; },
+        afterFallbackApply: changedTarget => {
+          atomicWriteFile(path.join(changedTarget, 'outside-owner.txt'), 'Intervening scratch writer');
+          changedOutputFingerprint = regularTreeFingerprint(changedTarget);
+          throw new Error('simulated outside write after locked-root synchronization');
+        },
+      });
+    } catch (error) {
+      guardedFailure = (error as NodeJS.ErrnoException)?.code === 'RECOVERY_STALE';
+    }
+    record('locked-root rollback refuses after a completed copy is changed', guardedFailure && finalWrite.state === 'unconfirmed');
+    record('locked-root refusal preserves both changed target and prior backup',
+      Boolean(changedOutputFingerprint && lockedBackup && regularTreeFingerprint(target) === changedOutputFingerprint
+        && observeDeploymentFingerprint(lockedBackup) === beforeForeignWrite));
   } catch (error) {
     record('artifact integration selftest completed', false, error instanceof Error ? error.stack || error.message : String(error));
   } finally {
@@ -13260,9 +13621,24 @@ app.post('/api/agent/warning-reviews/revoke', (req, res) => {
       .json({ ok: false, code: error.code || 'REVIEW_STORE_UNAVAILABLE', error: error.message });
   }
 });
+function requestDeployOperation(req: express.Request) {
+  const actor = (req as express.Request & { __actor?: RequestActor }).__actor;
+  const operationId = req.get('x-forge-operation-id');
+  if (req.body?.dryRun === true || actor?.kind !== 'agent' || !actor.keyId || operationId === undefined) return;
+  if (!ACTION_RECEIPT_OPERATION_ID_RE.test(operationId)) {
+    throw Object.assign(new Error('x-forge-operation-id must be a bounded operation identifier.'), {
+      code: 'DEPLOY_OPERATION_INPUT_INVALID', status: 400,
+    });
+  }
+  return deployReceiptIdentity({ kind: 'agent', id: actor.keyId }, { workspaceId: requestWorkspace(req).workspaceId, operationId });
+}
+
 function deployVerifyHandler(req: express.Request, res: express.Response) {
   let responseIdentity: Record<string, unknown> = { modId: null, sourceHash: null, artifactHash: null };
   let writeAttempted = false;
+  let targetMatchesPreState = false;
+  const targetWrite: { state: 'untouched' | 'mutated' | 'activated' | 'restored' } = { state: 'untouched' };
+  let outputUnconfirmed = false;
   let snapshot: DeploymentSnapshot | undefined;
   let deployReceipt: ActionReceipt | undefined;
   const recordFailedDeploy = (rolledBack: boolean, targetConflict = false) => {
@@ -13273,7 +13649,9 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
       const failure = { validation: { ...current.validation, status: 'failed' as const, code }, failure: { code } };
       const terminal = rolledBack
         ? actionReceiptStore.rollBack(current.id, { ...failure, rollbackStatus: 'performed' })
-        : current.status === 'prepared' ? actionReceiptStore.fail(current.id, failure) : current;
+        : current.status === 'prepared' ? actionReceiptStore.fail(current.id, {
+          ...failure, ...(targetWrite.state === 'untouched' ? { rollbackStatus: 'not_required' as const } : {}),
+        }) : current;
       captureActionReceiptProjection(req, terminal);
     } catch { /* Storage failure never becomes a success; retain recovery and report refusal. */ }
   };
@@ -13289,6 +13667,16 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
     ['deploy', 'Written to staging + extensions'], ['bytes', 'Deployed bytes confirmed'],
     ['doctor', 'Extension doctor'], ['drift', 'Workspace/deployed sync'], ['baseline', 'Last-green validation baseline'],
   ];
+  const deploymentFidelity = () => {
+    if (deployReceipt?.status === 'committed') {
+      return { state: 'deployed', writeAttempted, fidelityScope: 'current-deployment' };
+    }
+    return {
+      state: writeAttempted ? 'attempted' : 'not-deployed',
+      writeAttempted,
+      fidelityScope: writeAttempted && ['mutated', 'activated'].includes(targetWrite.state) && !targetMatchesPreState ? 'attempted-deployment' : 'none',
+    };
+  };
   const failWith = (stageId: string, payload: Record<string, unknown>) => {
     let hit = false;
     for (const [id, label] of STAGES) {
@@ -13296,9 +13684,30 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
       if (hit && !checklist.some(c => c.id === id)) checklist.push({ id, label, status: 'skipped', detail: 'Not reached - fix the failure above first.' });
     }
     return { ok: false, success: false, stage: stageId, checklist, ...responseIdentity,
-      deployment: { state: writeAttempted ? 'attempted' : 'not-deployed', writeAttempted, fidelityScope: writeAttempted ? 'attempted-deployment' : 'none' }, ...payload };
+      deployment: deploymentFidelity(), ...payload };
   };
   let pendingDeployRecovery: DeploymentRecoveryRecord | undefined;
+  let stagedFingerprint: string | undefined;
+  const refuseUnconfirmedOutput = (fingerprint: string | undefined) => {
+    outputUnconfirmed = true;
+    // The retained recovery is evidence. Observing a tree cannot authorize replacing it.
+    pendingDeployRecovery = undefined;
+    const message = 'Deployment target changed or could not be verified after writes began. Forge left the destination as observed.';
+    check('bytes', 'Deployed bytes confirmed', 'fail', message);
+    if (deployReceipt && fingerprint && fingerprint !== 'absent') {
+      try {
+        deployReceipt = recordIncompleteDeployOutput(actionReceiptStore, deployReceipt, fingerprint);
+        captureActionReceiptProjection(req, deployReceipt);
+      } catch {
+        return res.status(507).json(failWith('bytes', {
+          code: 'DEPLOY_RECEIPT_UNAVAILABLE', error: message + ' The incomplete receipt could not be finalized.', bytesConfirmed: false,
+        }));
+      }
+    }
+    return res.status(409).json(failWith('bytes', {
+      code: 'DEPLOY_OUTPUT_CHANGED', error: message, bytesConfirmed: false, deployRecord: deployReceipt,
+    }));
+  };
   try {
     const body = req.body;
     const allowed = new Set(['path', 'workspace', 'dryRun', 'deployFormat', 'autoReimport', 'allowStaleOverwrite',
@@ -13315,6 +13724,15 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
     const acceptances = body.acceptances ?? [];
     if (!Array.isArray(acceptances) || acceptances.length > 127) {
       return res.status(400).json(failWith('config', { code: 'ACCEPTANCE_INPUT_INVALID', error: 'acceptances must contain at most 127 exact findings.' }));
+    }
+    const operation = requestDeployOperation(req);
+    const recorded = operation && readDeployOperationReceipt(actionReceiptStore, operation);
+    if (recorded) {
+      return res.status(409).json(failWith('preflight', {
+        code: 'DEPLOY_OPERATION_ALREADY_RECORDED',
+        error: 'This operation already has a receipt. Read its outcome before starting another deployment.',
+        receipt: { id: recorded.id, hash: recorded.hash, status: recorded.status },
+      }));
     }
     const reqPath = typeof req.body?.path === 'string' ? req.body.path.trim() : '';
     const hasWorkspace = !!req.body?.workspace && typeof req.body.workspace === 'object';
@@ -13509,11 +13927,6 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
       deployValidation.validationFiles,
       preflightDiagnostics,
     );
-    const pfWarnings = preflight.summary.activeWarnings + diskValidationSkipped.length;
-    const evidence = buildValidationEvidence({ id: modId, name: modId, files: deployValidation.validationFiles },
-      preflightDiagnostics.map(d => ({ severity: d.severity as 'error' | 'warning' | 'info', code: d.code,
-        filePath: d.filePath, line: d.line, sourceRef: typeof d.sourceRef === 'string' ? d.sourceRef : undefined,
-        message: String(d.message || d.code || 'Validation finding') })), preflight.evidence?.coverage.gaps || []);
     const extensionsPath = path.join(x4GamePath, 'extensions');
     const targetRoot = path.join(extensionsPath, effectiveModId(activeBuildWorkspace(ws)));
     const targetChanged = () => Object.assign(
@@ -13531,19 +13944,45 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
       check('preflight', 'Deployment target contents', 'fail', refusal.message);
       return res.status(stale ? 409 : 400).json(failWith('preflight', { code: refusal.code, error: refusal.message }));
     }
+    const canonicalTarget = canonicalSourceKey(targetRoot);
     const assertCurrentTarget = () => {
       let current: string;
-      try { current = deploymentTargetFingerprint(targetRoot); }
+      try {
+        if (canonicalSourceKey(targetRoot) !== canonicalTarget) throw targetChanged();
+        current = deploymentTargetFingerprint(targetRoot);
+      }
       catch { throw targetChanged(); }
       if (current !== targetFingerprint) throw targetChanged();
     };
-    const subject: AcceptanceSubject = { evidence, artifactHash, validatorHash: deployValidatorHash, corpusHash,
-      targetHash: trustHash([process.platform === 'win32' ? path.resolve(targetRoot).toLowerCase() : path.resolve(targetRoot), deployFormat]) };
     const reviewSource = modSourceDir || ws.sourceStamp?.dir;
-    if (reviewSource) {
-      const canonical = fs.realpathSync.native(reviewSource);
-      subject.warningReviews = { scopeHash: trustHash([process.platform === 'win32' ? canonical.toLowerCase() : canonical, evidence.modId]),
-        history: actionReceiptStore.listVerified(), invocationId: crypto.randomUUID() };
+    const canonicalReviewSource = reviewSource ? fs.realpathSync.native(reviewSource) : undefined;
+    let receiptHistory: ActionReceipt[] | undefined;
+    let receiptHistoryUnavailable = false;
+    if (canonicalReviewSource) {
+      try {
+        receiptHistory = actionReceiptStore.listVerified();
+      } catch (error) {
+        const incompleteHistory = error instanceof ActionReceiptStoreError
+          && (error.code === 'RECEIPT_CORRUPT' || error.code === 'RECEIPT_SCAN_LIMIT');
+        if (!incompleteHistory || acceptances.length) throw error;
+        receiptHistoryUnavailable = true;
+      }
+    }
+    const pfWarnings = preflight.summary.activeWarnings + diskValidationSkipped.length;
+    const evidence = buildValidationEvidence({ id: modId, name: modId, files: deployValidation.validationFiles },
+      preflightDiagnostics.map(d => ({ severity: d.severity as 'error' | 'warning' | 'info', code: d.code,
+        filePath: d.filePath, line: d.line, column: d.column, sourceRef: typeof d.sourceRef === 'string' ? d.sourceRef : undefined,
+        message: String(d.message || d.code || 'Validation finding') })), [
+        ...(preflight.evidence?.coverage.gaps || []),
+        ...(receiptHistoryUnavailable ? [{ check: 'deploy.receipt_history',
+          reason: 'Receipt history could not be verified. Remembered warning reviews were omitted.' }] : []),
+      ]);
+    const physicalTarget = canonicalSourcePath(targetRoot);
+    const subject: AcceptanceSubject = { evidence, artifactHash, validatorHash: deployValidatorHash, corpusHash,
+      targetHash: trustHash([process.platform === 'win32' ? physicalTarget.toLowerCase() : physicalTarget, deployFormat]) };
+    if (canonicalReviewSource && receiptHistory) {
+      subject.warningReviews = { scopeHash: trustHash([process.platform === 'win32' ? canonicalReviewSource.toLowerCase() : canonicalReviewSource, evidence.modId]),
+        history: receiptHistory, invocationId: crypto.randomUUID() };
     }
     responseIdentity = { ...responseIdentity, modId: evidence.modId, modVersion: evidence.modVersion, sourceHash: evidence.sourceHash,
       artifactHash, validation: { evidence } };
@@ -13564,6 +14003,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
         if (body[field] === undefined) missing.push(field);
         else if (body[field] !== current) mismatched.push(field);
       }
+      if (operation && body.expectedTargetFingerprint === undefined) missing.push('expectedTargetFingerprint');
       if (missing.length || mismatched.length) {
         const details = [
           missing.length ? `Missing preview fields: ${missing.join(', ')}.` : '',
@@ -13580,9 +14020,31 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
         return res.status(409).json(failWith('preflight', { code, error: message }));
       }
     }
+    if (pathHasEntry(extensionsPath)) {
+      const targetFolder = path.basename(targetRoot);
+      const sameFolder = (folder: string) => process.platform === 'win32'
+        ? folder.toLowerCase() === targetFolder.toLowerCase() : folder === targetFolder;
+      const conflictingFolders: string[] = [];
+      const modIdLower = modId.toLowerCase();
+      for (const extension of readInstalledExtensionManifests(extensionsPath)) {
+        if (extension.id.toLowerCase() !== modIdLower || sameFolder(extension.folder)) continue;
+        const owner = deploymentScratchSiblingOwner(extension.folder, targetFolder);
+        const retainedBackup = targetFingerprint === 'absent' && extension.folder.startsWith(`.${targetFolder}.x4forge-backup-`);
+        if (owner === undefined || processLiveness(owner) !== 'dead' || retainedBackup
+          || fs.lstatSync(extension.absDir).isSymbolicLink()) conflictingFolders.push(extension.folder);
+      }
+      if (conflictingFolders.length) {
+        const visibleFolders = conflictingFolders.sort().slice(0, 12);
+        const remaining = conflictingFolders.length - visibleFolders.length;
+        const detail = `Another installed folder declares "${modId}": ${visibleFolders.join(', ')}${remaining ? ` (and ${remaining} more)` : ''}. Resolve the duplicate and review a fresh preview.`;
+        check('preflight', 'Installed extension identity', 'fail', detail);
+        return res.status(409).json(failWith('preflight', { code: 'DEPLOY_DUPLICATE_EXTENSION_ID', error: detail,
+          conflictingFolders: visibleFolders, conflictingFolderCount: conflictingFolders.length }));
+      }
+    }
     if (!decision.validationAllowsDeploy) {
       const blockingFindings = evidence.findings.filter(finding => decision.unacceptedErrorIds.includes(finding.findingId));
-      const acceptanceRequest = { method: 'POST', path: '/api/agent/deploy-verify',
+      const acceptanceRequest = receiptHistoryUnavailable ? undefined : { method: 'POST', path: '/api/agent/deploy-verify',
         body: { ...(body.path ? { path: body.path } : { workspace: body.workspace }), deployFormat,
           ...(body.autoReimport !== undefined ? { autoReimport: body.autoReimport } : {}),
           dryRun: false, expectedModId: evidence.modId, expectedSourceHash: evidence.sourceHash,
@@ -13592,7 +14054,8 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
         instruction: 'Supply a nonempty reason for each exact finding before POSTing this body. Deploy permission is required. Stale evidence and safety gates still refuse.' };
       check('preflight', 'Full validation (schema/cues/lints)', 'fail',
         blockingFindings.map(f => `${f.code || 'mod-finding'} | ${f.filePath || '(project)'}${f.line ? ':' + f.line : ''} | ${f.message} | findingId=${f.findingId}`).join('\n')
-        + '\nAcceptance: POST /api/agent/deploy-verify using acceptanceRequest.body with a reason for each finding.');
+        + (acceptanceRequest ? '\nAcceptance: POST /api/agent/deploy-verify using acceptanceRequest.body with a reason for each finding.'
+          : '\nReceipt history must be verified before Forge can offer finding acceptance.'));
       return res.json(failWith('preflight', { modId, category: 'mod-findings', code: 'UNACCEPTED_MOD_FINDINGS', blockingFindings,
         acceptanceRequest, validationDelta, preflight: { summary: preflight.summary, findings: blockingFindings } }));
     }
@@ -13637,6 +14100,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
         ok: true,
         dryRun: true,
         stage: 'preview',
+        deployment: deploymentFidelity(),
         ...responseIdentity,
         targetRoot,
         deployFormat: { mode: deployFormat },
@@ -13664,7 +14128,8 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
     let stagingPath = '';
     const deploymentTarget = targetRoot;
     try {
-      pendingDeployRecovery = prepareDeploymentRecoveryReceipt(extensionsPath, deploymentTarget, modId);
+      pendingDeployRecovery = prepareDeploymentRecoveryReceipt(extensionsPath, deploymentTarget, modId,
+        destructiveRecoveryStore, operation !== undefined);
     } catch (error) {
       check('deploy', 'Written to staging + extensions', 'fail', 'Deploy refused because its pre-state recovery could not be made durable.');
       return res.status(507).json(failWith('deploy', {
@@ -13674,35 +14139,59 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
     }
     if (pendingDeployRecovery.beforeFingerprint !== targetFingerprint) throw targetChanged();
     deployReceipt = prepareDeployRecord(actionReceiptStore, subject, decision, principal, approvalRecords,
-      pendingDeployRecovery.id, pendingDeployRecovery.beforeFingerprint, snapshot.manifest.hash);
+      pendingDeployRecovery.id, pendingDeployRecovery.beforeFingerprint, snapshot.manifest.hash, operation,
+      operation ? pendingDeployRecovery : undefined);
     assertWriteAuthority();
+    if (operation) destructiveRecoveryStore.admitDeploymentWrite(pendingDeployRecovery);
     if (!fs.existsSync(extensionsPath)) fs.mkdirSync(extensionsPath, { recursive: true });
     writeAttempted = true;
     if (modWorkspacePath) {
       const stagingRoot = path.join(modWorkspacePath, '.forge-builds', 'loose');
       stagingPath = compileWorkspaceToFolder(ws, stagingRoot, 'store', true, 'loose', { beforeActivate: assertWriteAuthority }, frozenPlan);
     }
-    const deployedPath = compileWorkspaceToFolder(ws, extensionsPath, 'store', false, deployFormat,
-      { beforeActivate: () => { assertWriteAuthority(); assertCurrentTarget(); } }, frozenPlan);
+    const deployedPath = compileWorkspaceToFolder(ws, extensionsPath, 'store', false, deployFormat, {
+      beforeActivate: () => { assertWriteAuthority(); assertCurrentTarget(); },
+      onStagedFingerprint: fingerprint => { stagedFingerprint = fingerprint; },
+      expectedTargetBeforeWrite: targetFingerprint,
+      onTargetWrite: state => {
+        if (state === 'unconfirmed') outputUnconfirmed = true;
+        else targetWrite.state = state;
+      },
+    }, frozenPlan);
     const formatReport = describeDeployFormat(deployFormat, lastArtifactReport);
 
-    // 4. Bytes confirm — deployed content.xml exists, non-empty, id matches modId.
-    const deployedContent = path.join(deployedPath, 'content.xml');
-    const deployedBytes = fs.existsSync(deployedContent) ? fs.statSync(deployedContent).size : 0;
-    const deployedId = deployedBytes ? (fs.readFileSync(deployedContent, 'utf8').match(/<content\b[^>]*\bid\s*=\s*"([^"]+)"/i)?.[1] || '') : '';
-    const bytesConfirmed = deployedBytes > 0 && deployedId.toLowerCase() === modId.toLowerCase();
+    const inspectOutput = () => {
+      // 4. Confirm manifest identity. The receipt also requires an exact physical tree match.
+      const deployedContent = path.join(deployedPath, 'content.xml');
+      const deployedBytes = fs.existsSync(deployedContent) ? fs.statSync(deployedContent).size : 0;
+      const deployedId = deployedBytes ? (fs.readFileSync(deployedContent, 'utf8').match(/<content\b[^>]*\bid\s*=\s*"([^"]+)"/i)?.[1] || '') : '';
+      const bytesConfirmed = deployedBytes > 0 && deployedId.toLowerCase() === modId.toLowerCase();
 
-    // 5. Extension-doctor — filter to this mod; FAIL on duplicate-id / folder-id-mismatch / any error.
-    const doctor = runExtensionDoctor(extensionsPath);
-    const modFindings = (doctor.findings || []).filter((f: any) => JSON.stringify(f).toLowerCase().includes(modId.toLowerCase()));
-    const acceptedIds = new Set(decision.approvals.map(a => a.finding.findingId));
-    const doctorAccepted = modFindings.filter((f: any) => {
-      if (!f.validationDiagnostic || f.filePath !== `extensions/${path.basename(deployedPath)}/${f.validationDiagnostic.filePath}`) return false;
-      const finding = buildValidationEvidence({ id: modId, name: modId, files: deployValidation.validationFiles }, [f.validationDiagnostic]).findings[0];
-      return acceptedIds.has(finding.findingId);
-    });
-    const blocking = modFindings.filter((f: any) => (f.severity === 'error' && !doctorAccepted.includes(f))
-      || f.code === 'ext.duplicate_id' || f.code === 'ext.folder_id_mismatch');
+      // 5. Extension-doctor — filter to this mod; FAIL on duplicate-id / folder-id-mismatch / any error.
+      const doctor = runExtensionDoctor(extensionsPath);
+      const modFindings = (doctor.findings || []).filter((f: any) => JSON.stringify(f).toLowerCase().includes(modId.toLowerCase()));
+      const acceptedIds = new Set(decision.approvals.map(a => a.finding.findingId));
+      const doctorAccepted = modFindings.filter((f: any) => {
+        if (!f.validationDiagnostic || f.filePath !== `extensions/${path.basename(deployedPath)}/${f.validationDiagnostic.filePath}`) return false;
+        const finding = buildValidationEvidence({ id: modId, name: modId, files: deployValidation.validationFiles }, [f.validationDiagnostic]).findings[0];
+        return acceptedIds.has(finding.findingId);
+      });
+      const blocking = modFindings.filter((f: any) => (f.severity === 'error' && !doctorAccepted.includes(f))
+        || f.code === 'ext.duplicate_id' || f.code === 'ext.folder_id_mismatch');
+      return { deployedBytes, deployedId, bytesConfirmed, doctor, modFindings, doctorAccepted, blocking };
+    };
+    let output: ReturnType<typeof inspectOutput> | undefined;
+    let inspectionFailure: unknown;
+    try { output = inspectOutput(); }
+    catch (error) { inspectionFailure = error; }
+
+    const deployedFingerprint = observeDeploymentFingerprint(deployedPath);
+    if (!deployedFingerprint || deployedFingerprint === 'absent' || deployedFingerprint !== stagedFingerprint) {
+      return refuseUnconfirmedOutput(deployedFingerprint);
+    }
+
+    if (!output) throw inspectionFailure;
+    const { deployedBytes, deployedId, bytesConfirmed, doctor, modFindings, doctorAccepted, blocking } = output;
 
     // B84: the deploy row SAYS which format was written and what that means. A catalog
     // deploy that buried native binaries warns rather than passing quietly — the author
@@ -13735,7 +14224,6 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
 
     const ok = bytesConfirmed && blocking.length === 0;
     const deployedAt = new Date().toISOString();
-    const deployedFingerprint = regularTreeFingerprint(deployedPath);
     let deploymentRecovery: DeploymentRecoveryRecord | undefined;
     let deploymentRollback: { applied: true; restoredFingerprint: string; reason: string } | undefined;
     if (pendingDeployRecovery) {
@@ -13744,13 +14232,25 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
           deploymentRecovery = destructiveRecoveryStore.finalizeDeployment(pendingDeployRecovery.id, deployedFingerprint);
           // Audit storage is a required gate, not the best-effort history projection.
           deployReceipt = commitDeployRecord(actionReceiptStore, deployReceipt, deployedFingerprint);
-          captureActionReceiptProjection(req, deployReceipt);
         } catch (error) {
+          const deployCheck = checklist.find(item => item.id === 'deploy');
+          if (error instanceof Error && 'code' in error && error.code === 'DEPLOY_COMMIT_OUTCOME_UNKNOWN') {
+            outputUnconfirmed = true;
+            pendingDeployRecovery = undefined;
+            const detail = 'Forge could not confirm the committed receipt. The deployment and its recovery snapshot were preserved.';
+            if (deployCheck) {
+              deployCheck.status = 'fail';
+              deployCheck.detail += ` ${detail}`;
+            }
+            return res.status(507).json(failWith('deploy', {
+              code: error.code, error: detail, outcome: 'unknown', deployRecord: deployReceipt,
+            }));
+          }
           try {
             const restored = restoreDeploymentRecovery(pendingDeployRecovery, extensionsPath, deployedFingerprint);
+            targetMatchesPreState = true;
             destructiveRecoveryStore.abandon(pendingDeployRecovery.id);
             recordFailedDeploy(true);
-            const deployCheck = checklist.find(item => item.id === 'deploy');
             if (deployCheck) {
               deployCheck.status = 'fail';
               deployCheck.detail += ' Recovery receipt finalization failed, so the deployment was rolled back exactly.';
@@ -13767,10 +14267,15 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
             }));
           }
         }
+        // A verified committed receipt ends the automatic rollback window.
+        pendingDeployRecovery = undefined;
+        sweepDeploymentScratchSiblings(targetRoot, deployedFingerprint);
+        captureActionReceiptProjection(req, deployReceipt);
       } else {
         try {
           const finalized = destructiveRecoveryStore.finalizeDeployment(pendingDeployRecovery.id, deployedFingerprint);
           const restored = restoreDeploymentRecovery(finalized, extensionsPath);
+          targetMatchesPreState = true;
           destructiveRecoveryStore.markUsed(finalized.id);
           recordFailedDeploy(true);
           deploymentRollback = {
@@ -13830,6 +14335,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
     );
     return res.json({
       ok, success: ok, stage: 'done', ...responseIdentity, deployedPath, stagingPath, bytesConfirmed, deployedBytes,
+      deployment: deploymentFidelity(),
       ...(ok ? { deployRecord: deployReceipt, acceptanceRecords: approvalRecords } : {}),
       workspace: ws,
       ...(successfulDeploy ? { lastDeploy: successfulDeploy, deployedFingerprint } : {}),
@@ -13860,30 +14366,56 @@ function deployVerifyHandler(req: express.Request, res: express.Response) {
       },
     });
   } catch (error: any) {
+    if (deployReceipt?.status === 'committed') {
+      if (res.headersSent || res.writableEnded) throw error;
+      if (res.destroyed) return;
+      console.warn(`[deploy] committed receipt ${deployReceipt.id} response failed: ${errorMessage(error)}`);
+      return res.status(500).json({
+        ok: false, success: false, stage: 'exception', ...responseIdentity,
+        code: 'DEPLOY_RESPONSE_FAILED_AFTER_COMMIT', outcome: 'committed', deployRecord: deployReceipt,
+        deployment: deploymentFidelity(),
+        error: 'Deployment committed. Forge could not finish the normal response. Reconcile using the deployment receipt.',
+      });
+    }
     let rollback: { applied: boolean; detail: string } | undefined;
     if (pendingDeployRecovery) {
       try {
-        const conflict = error?.code === 'DEPLOY_TARGET_CHANGED';
-        const currentFingerprint = conflict ? undefined : deploymentTargetFingerprint(pendingDeployRecovery.targetPath);
-        if (conflict || currentFingerprint === pendingDeployRecovery.beforeFingerprint) {
+        if (targetWrite.state === 'untouched') {
           destructiveRecoveryStore.abandon(pendingDeployRecovery.id);
-          rollback = { applied: false, detail: 'The deploy transaction failed before changing the target; the unused recovery receipt was removed.' };
-        } else if (currentFingerprint !== undefined && currentFingerprint !== 'absent') {
-          const restored = restoreDeploymentRecovery(pendingDeployRecovery, pendingDeployRecovery.targetRoot, currentFingerprint);
+          rollback = { applied: false, detail: 'Forge did not change the deployment target. Its unused recovery snapshot was removed.' };
+        } else if (targetWrite.state === 'restored') {
           destructiveRecoveryStore.abandon(pendingDeployRecovery.id);
-          rollback = { applied: true, detail: `The exceptional deploy was rolled back to ${restored.restoredFingerprint}.` };
+          rollback = { applied: true, detail: 'The deployment transaction already restored the target.' };
         } else {
-          rollback = { applied: false, detail: 'The deploy failed with its target missing; automatic recovery refused because no post-state hash could be proven.' };
+          const currentFingerprint = observeDeploymentFingerprint(pendingDeployRecovery.targetPath);
+          if (outputUnconfirmed || (currentFingerprint !== pendingDeployRecovery.beforeFingerprint
+            && (targetWrite.state !== 'activated' || !stagedFingerprint || currentFingerprint !== stagedFingerprint))) {
+            return refuseUnconfirmedOutput(currentFingerprint);
+          }
+          if (currentFingerprint === pendingDeployRecovery.beforeFingerprint) {
+            targetMatchesPreState = true;
+            destructiveRecoveryStore.abandon(pendingDeployRecovery.id);
+            rollback = { applied: false, detail: 'The target already matches the pre-deploy snapshot.' };
+          } else if (stagedFingerprint) {
+            const restored = restoreDeploymentRecovery(pendingDeployRecovery, pendingDeployRecovery.targetRoot, stagedFingerprint);
+            targetMatchesPreState = true;
+            destructiveRecoveryStore.abandon(pendingDeployRecovery.id);
+            rollback = { applied: true, detail: `The exceptional deploy was rolled back to ${restored.restoredFingerprint}.` };
+          }
         }
       } catch (rollbackError) {
+        if (pendingDeployRecovery && (rollbackError as NodeJS.ErrnoException)?.code === 'RECOVERY_STALE') {
+          return refuseUnconfirmedOutput(observeDeploymentFingerprint(pendingDeployRecovery.targetPath));
+        }
         rollback = { applied: false, detail: `Automatic recovery also failed: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}` };
       }
     }
-    recordFailedDeploy(rollback?.applied === true, error?.code === 'DEPLOY_TARGET_CHANGED');
+    if (!outputUnconfirmed) recordFailedDeploy(rollback?.applied === true || targetWrite.state === 'restored', error?.code === 'DEPLOY_TARGET_CHANGED');
     const code = String(error?.code || 'DEPLOY_FAILED');
     const status = code === 'DEPLOY_APPROVAL_FORBIDDEN' ? 403 : /STALE|CHANGED|MISMATCH/.test(code) ? 409
       : /INPUT_INVALID/.test(code) ? 400 : /RECEIPT_/.test(code) ? 507 : 500;
     return res.status(status).json({ ok: false, success: false, stage: 'exception', ...responseIdentity, code,
+      deployment: deploymentFidelity(),
       error: error?.message || 'deploy-verify failed', ...(rollback ? { rollback } : {}) });
   } finally {
     try { snapshot?.dispose(); } catch (error) { console.warn('Deployment snapshot cleanup failed', error); }
@@ -14109,6 +14641,22 @@ function configuredReleaseReadRoots(resolved: ReturnType<typeof resolveXsdConfig
 function releasePathIsAllowed(candidate: string, resolved: ReturnType<typeof resolveXsdConfig>): boolean {
   const absolute = path.resolve(candidate);
   return configuredReleaseReadRoots(resolved).some(root => absolute === root || isPathWithin(absolute, root));
+}
+
+function steamAdoptionSource(candidate: string | null | undefined, resolved: ResolvedXsdConfig) {
+  const root = resolved.modWorkspacePath;
+  if (typeof candidate !== 'string' || typeof root !== 'string' || !root || !path.isAbsolute(candidate)) return;
+  try {
+    const absolute = path.resolve(candidate);
+    const relative = path.relative(path.resolve(root), absolute);
+    if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)
+      || validateProtectedWriteTargets(resolved, ['modWorkspacePath']).length) return;
+    const physicalRoot = fs.realpathSync.native(root);
+    const physical = fs.realpathSync.native(absolute);
+    const stamp = fs.lstatSync(absolute, { bigint: true });
+    if (stamp.isFile() && stamp.nlink === 1n && stamp.size <= 1024n * 1024n
+      && sameResolvedPath(physical, path.resolve(physicalRoot, relative))) return { absolute, physical, stamp };
+  } catch { /* The authoring source can disappear or become unreadable between release stages. */ }
 }
 
 function resolveReleaseOutputRoot(modWorkspacePath: string, platform: 'nexus' | 'steam', create: boolean): string {
@@ -14467,11 +15015,10 @@ app.post('/api/agent/release/steam/prepare', coordinatedSourceOperation((req, re
       .map(entry => ({ path: entry.path, size: entry.size, sha256: entry.sha256 }));
     const readyForUpload = command !== null;
     const status = readyForUpload ? 'READY_FOR_INTERACTIVE_UPLOAD' : 'PARTIAL';
-    const sourceManifestPathCandidate = prepared.workspace.sourceStamp?.dir ? path.join(prepared.plan.sourceRoot, 'content.xml') : '';
-    const sourceManifestStat = sourceManifestPathCandidate && fs.existsSync(sourceManifestPathCandidate) ? fs.lstatSync(sourceManifestPathCandidate) : null;
-    const sourceManifestPath = sourceManifestStat?.isFile() && !sourceManifestStat.isSymbolicLink() && sourceManifestStat.size <= 1024 * 1024 && releasePathIsAllowed(sourceManifestPathCandidate, resolved)
-      ? path.resolve(sourceManifestPathCandidate) : null;
-    const sourceManifestSha256 = sourceManifestPath ? hashArtifactFile(sourceManifestPath) : null;
+    const source = prepared.workspace.sourceStamp?.dir
+      ? steamAdoptionSource(path.join(prepared.plan.sourceRoot, 'content.xml'), resolved) : undefined;
+    const sourceManifestPath = source?.absolute ?? null;
+    const sourceManifestSha256 = source ? hashArtifactFile(source.physical, 'sha256', source.stamp) : null;
     atomicWriteJson(reportPath, {
       platform: 'steam', status, createdAt: new Date().toISOString(), modId: prepared.modId, folderName: prepared.folderName, version: prepared.version,
       modIdScope: 'artifact-folder', validatedSource: prepared.validatedSource, preparedSource: prepared.preparedSource,
@@ -14574,13 +15121,14 @@ interface SteamReleaseReport extends Record<string, unknown> {
   sourceManifestSha256?: string | null;
   sourceManifestAdoptionAvailable?: boolean;
   preparedManifestXml?: string;
+  verifiedManifestSha256?: string;
   workshopId?: string;
   stages?: ReleaseStage[];
   integrityFiles?: Array<{ path: string; size: number; sha256: string }>;
 }
 
 type SteamReportResolution =
-  | { ok: true; steamRoot: string; reportPath: string; targetPath: string; report: SteamReleaseReport }
+  | { ok: true; steamRoot: string; reportPath: string; reportSha256: string; targetPath: string; report: SteamReleaseReport }
   | { ok: false; status: number; code: string; error: string };
 
 function resolveSteamReleaseReport(modWorkspacePath: string, modId: string): SteamReportResolution {
@@ -14590,7 +15138,8 @@ function resolveSteamReleaseReport(modWorkspacePath: string, modId: string): Ste
     if (!fs.existsSync(reportPath)) return { ok: false, status: 404, code: 'STEAM_PREPARE_REPORT_MISSING', error: 'Run Steam preparation before continuing.' };
     const reportStat = fs.lstatSync(reportPath);
     if (!reportStat.isFile() || reportStat.isSymbolicLink()) return { ok: false, status: 409, code: 'STEAM_PREPARE_REPORT_INVALID', error: 'The Steam preparation report is not a regular file.' };
-    const report = JSON.parse(fs.readFileSync(reportPath, 'utf8')) as SteamReleaseReport;
+    const reportBytes = fs.readFileSync(reportPath);
+    const report = JSON.parse(reportBytes.toString('utf8')) as SteamReleaseReport;
     const folderName = String(report.folderName || '');
     const targetPath = path.resolve(String(report.targetPath || ''));
     const expectedTargetPath = path.resolve(steamRoot, folderName);
@@ -14600,13 +15149,14 @@ function resolveSteamReleaseReport(modWorkspacePath: string, modId: string): Ste
       || !targetStat?.isDirectory() || targetStat.isSymbolicLink()) {
       return { ok: false, status: 409, code: 'STEAM_PREPARE_REPORT_INVALID', error: 'The Steam preparation report no longer identifies a safe verified staging folder. Rebuild it.' };
     }
-    return { ok: true, steamRoot, reportPath, targetPath, report };
+    const reportSha256 = crypto.createHash('sha256').update(reportBytes).digest('hex');
+    return { ok: true, steamRoot, reportPath, reportSha256, targetPath, report };
   } catch (error) {
     return { ok: false, status: 409, code: 'RELEASE_OUTPUT_ROOT_UNSAFE', error: errorMessage(error) || 'Release output root is unsafe.' };
   }
 }
 
-app.post('/api/agent/release/steam/verify', (req, res) => {
+app.post('/api/agent/release/steam/verify', coordinatedSourceOperation((req, res) => {
   const modId = String(req.body?.modId || '').trim();
   if (!/^[A-Za-z][\w.-]*$/.test(modId)) return sendReleaseFailure(res, 400, 'FAILED', 'MOD_ID_REQUIRED', 'A safe modId from the Steam prepare report is required.', [releaseStage('post-tool', 'Resolve prepared Steam release', 'fail', 'The supplied modId is missing or unsafe.')]);
   const resolved = resolveXsdConfig();
@@ -14618,14 +15168,16 @@ app.post('/api/agent/release/steam/verify', (req, res) => {
   try {
     const contentPath = path.join(targetPath, 'content.xml');
     const contentStat = fs.existsSync(contentPath) ? fs.lstatSync(contentPath) : null;
-    if (!contentStat?.isFile() || contentStat.isSymbolicLink()) {
-      return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_CONTENT_MANIFEST_MISSING', 'WorkshopTool did not leave a regular staged content.xml to verify.', [...(report.stages || []), releaseStage('post-tool', 'Verify Workshop result', 'fail', 'The staged content.xml is missing, not a regular file, or was replaced by a symbolic link.')]);
+    if (!contentStat?.isFile() || contentStat.isSymbolicLink() || contentStat.size > 1024 * 1024) {
+      return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_CONTENT_MANIFEST_MISSING', 'WorkshopTool did not leave a bounded regular staged content.xml to verify.', [...(report.stages || []), releaseStage('post-tool', 'Verify Workshop result', 'fail', 'The staged content.xml is unavailable or too large.')]);
     }
-    const manifestValidation = validateReleaseManifest(fs.readFileSync(contentPath, 'utf8'));
+    const manifestBytes = fs.readFileSync(contentPath);
+    const manifestText = manifestBytes.toString('utf8');
+    const manifestValidation = validateReleaseManifest(manifestText);
     if (!manifestValidation.ok || !manifestValidation.meta?.workshopId) {
       return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_WORKSHOP_ID_MISSING', 'WorkshopTool did not write a ws_<numeric> id into staged content.xml.', [...(report.stages || []), releaseStage('post-tool', 'Verify Workshop result', 'fail', 'No ws_<numeric> id found in staged content.xml. The upload may have failed or the legal agreement may still require acceptance.')]);
     }
-    const manifestMutation = validateWorkshopManifestMutation(String(report.preparedManifestXml || ''), fs.readFileSync(contentPath, 'utf8'));
+    const manifestMutation = validateWorkshopManifestMutation(String(report.preparedManifestXml || ''), manifestText);
     if (!manifestMutation.ok) {
       return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_POST_TOOL_MANIFEST_DRIFT', manifestMutation.errors.join(' '), [...(report.stages || []), releaseStage('post-tool', 'Verify Workshop result', 'fail', manifestMutation.errors.join(' '), { manifestMutation })], { manifestMutation });
     }
@@ -14645,14 +15197,19 @@ app.post('/api/agent/release/steam/verify', (req, res) => {
     for (const actualPath of actualFiles.keys()) if (!expectedPaths.has(actualPath)) integrityErrors.push(`Unexpected staged payload after WorkshopTool: ${actualPath}`);
     if (integrityErrors.length > 0) return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_POST_TOOL_INTEGRITY_FAILED', integrityErrors.join('; '), [...(report.stages || []), releaseStage('post-tool', 'Verify Workshop result', 'fail', integrityErrors.join('; '))], { errors: integrityErrors });
     const stages = [...(report.stages || []), releaseStage('post-tool', 'Verify Workshop result', 'pass', `Workshop id ${manifestValidation.meta.workshopId} written; only ${manifestMutation.changedManagedAttributes.join(', ') || 'no'} Workshop-managed manifest attributes changed, and the exact ${expectedFiles.length}-file non-manifest payload remains byte-identical.`)];
-    const updated = { ...report, status: 'VERIFIED_AFTER_WORKSHOP_TOOL', verifiedAt: new Date().toISOString(), workshopId: manifestValidation.meta.workshopId, stages, failedStages: [] };
+    const sourceManifestAdoptionAvailable = report.sourceManifestAdoptionAvailable === true
+      && Boolean(steamAdoptionSource(report.sourceManifestPath, resolved));
+    const updated = { ...report, status: 'VERIFIED_AFTER_WORKSHOP_TOOL', verifiedAt: new Date().toISOString(), workshopId: manifestValidation.meta.workshopId,
+      verifiedManifestSha256: crypto.createHash('sha256').update(manifestBytes).digest('hex'),
+      sourceManifestAdoptionAvailable, stages, failedStages: [] };
     atomicWriteJson(reportPath, updated);
-    return res.json({ success: true, status: 'VERIFIED_AFTER_WORKSHOP_TOOL', platform: 'steam', modId, workshopId: manifestValidation.meta.workshopId, targetPath, reportPath, sourceManifestAdoptionRequired: report.sourceManifestAdoptionAvailable === true, sourceManifestAdoptionAvailable: report.sourceManifestAdoptionAvailable === true, stages, failedStages: [] });
+    return res.json({ success: true, status: 'VERIFIED_AFTER_WORKSHOP_TOOL', platform: 'steam', modId, workshopId: manifestValidation.meta.workshopId, targetPath, reportPath,
+      sourceManifestAdoptionRequired: sourceManifestAdoptionAvailable, sourceManifestAdoptionAvailable, stages, failedStages: [] });
   } catch (error) {
     const detail = errorMessage(error) || 'Steam post-tool verification failed.';
     return sendReleaseFailure(res, 500, 'FAILED', 'STEAM_VERIFY_FAILED', detail, [releaseStage('post-tool', 'Verify Workshop result', 'fail', detail)]);
   }
-});
+}));
 
 app.post('/api/agent/release/steam/adopt', coordinatedSourceOperation((req, res) => {
   const modId = String(req.body?.modId || '').trim();
@@ -14667,20 +15224,19 @@ app.post('/api/agent/release/steam/adopt', coordinatedSourceOperation((req, res)
   if (report.status !== 'VERIFIED_AFTER_WORKSHOP_TOOL' && report.status !== 'VERIFIED_AND_ADOPTED') {
     return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_ADOPTION_NOT_VERIFIED', 'Verify the WorkshopTool result before adopting source metadata.', [...priorStages, releaseStage('adoption', 'Adopt Workshop metadata into source', 'fail', `Report status is ${report.status || 'unknown'}, not VERIFIED_AFTER_WORKSHOP_TOOL.`)]);
   }
-  const sourceManifestPath = path.resolve(String(report.sourceManifestPath || ''));
+  const source = steamAdoptionSource(report.sourceManifestPath, resolved);
   const expectedPreparedSourceHash = String(report.sourceManifestSha256 || '').toLowerCase();
-  const sourceStat = sourceManifestPath && fs.existsSync(sourceManifestPath) ? fs.lstatSync(sourceManifestPath) : null;
-  if (report.sourceManifestAdoptionAvailable !== true || path.basename(sourceManifestPath).toLowerCase() !== 'content.xml'
-    || path.basename(path.dirname(sourceManifestPath)) !== report.folderName || !releasePathIsAllowed(sourceManifestPath, resolved)
-    || !sourceStat?.isFile() || sourceStat.isSymbolicLink() || sourceStat.size > 1024 * 1024 || !/^[a-f0-9]{64}$/.test(expectedPreparedSourceHash)) {
-    return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_ADOPTION_SOURCE_UNAVAILABLE', 'The original disk-backed source manifest is unavailable, too large, or outside configured project roots.', [...priorStages, releaseStage('adoption', 'Adopt Workshop metadata into source', 'fail', 'Re-import the original mod folder and prepare the Steam release again.')]);
+  if (report.sourceManifestAdoptionAvailable !== true || !source || path.basename(source.absolute).toLowerCase() !== 'content.xml'
+    || path.basename(path.dirname(source.absolute)) !== report.folderName || !/^[a-f0-9]{64}$/.test(expectedPreparedSourceHash)) {
+    return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_ADOPTION_SOURCE_UNAVAILABLE', 'Workshop metadata can only be adopted into a regular source manifest in the Mod Workspace.', [...priorStages, releaseStage('adoption', 'Adopt Workshop metadata into source', 'fail', 'Import the mod into the Mod Workspace and prepare the Steam release again.')]);
   }
+  const sourceManifestPath = source.absolute;
   const stagedManifestPath = path.join(targetPath, 'content.xml');
   const stagedStat = fs.existsSync(stagedManifestPath) ? fs.lstatSync(stagedManifestPath) : null;
   if (!stagedStat?.isFile() || stagedStat.isSymbolicLink() || stagedStat.size > 1024 * 1024) {
     return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_ADOPTION_STAGED_MANIFEST_INVALID', 'The verified staged content.xml is unavailable or too large.', [...priorStages, releaseStage('adoption', 'Adopt Workshop metadata into source', 'fail', 'Re-run post-tool verification before adoption.')]);
   }
-  const beforeBytes = fs.readFileSync(sourceManifestPath);
+  const beforeBytes = fs.readFileSync(source.physical);
   const afterBytes = fs.readFileSync(stagedManifestPath);
   const beforeContent = beforeBytes.toString('utf8');
   const afterContent = afterBytes.toString('utf8');
@@ -14690,6 +15246,15 @@ app.post('/api/agent/release/steam/adopt', coordinatedSourceOperation((req, res)
   if (!stagedManifest.ok || !stagedManifest.meta?.workshopId || stagedManifest.meta.workshopId !== report.workshopId) {
     return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_ADOPTION_WORKSHOP_ID_MISMATCH', 'The staged manifest no longer matches the verified Workshop ID.', [...priorStages, releaseStage('adoption', 'Adopt Workshop metadata into source', 'fail', 'Re-run post-tool verification before adoption.')]);
   }
+  if (report.verifiedManifestSha256 !== afterSha256) {
+    return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_ADOPTION_STAGED_MANIFEST_CHANGED', 'The staged manifest differs from the exact verified result. Run Verify again before previewing adoption.', [...priorStages, releaseStage('adoption', 'Adopt Workshop metadata into source', 'fail', 'The report lacks a matching verified manifest hash.')]);
+  }
+  const { dev, ino, mode, nlink, size, mtimeNs, ctimeNs } = source.stamp;
+  const bindingHash = trustHash([
+    'steam-adoption-v1', modId, loaded.reportSha256, sourceKeyForResolvedPath(source.physical),
+    [dev, ino, mode, nlink, size, mtimeNs, ctimeNs].map(value => value.toString()),
+    beforeSha256, afterSha256, stagedManifest.meta.workshopId,
+  ]);
   const preview = {
     sourceManifestPath,
     workshopId: stagedManifest.meta.workshopId,
@@ -14700,7 +15265,7 @@ app.post('/api/agent/release/steam/adopt', coordinatedSourceOperation((req, res)
     afterContent,
   };
   if (req.body?.apply !== true) {
-    return res.json({ success: true, status: beforeSha256 === afterSha256 ? 'ALREADY_ADOPTED' : 'READY_TO_ADOPT', platform: 'steam', modId, ...preview, sourceWritePerformed: false, stages: [...priorStages, releaseStage('adoption-preview', 'Preview source Workshop metadata adoption', 'pass', beforeSha256 === afterSha256 ? 'Source content.xml already matches the verified staged manifest.' : 'No source write performed; review the before/after content and confirm explicitly.')], failedStages: [] });
+    return res.json({ success: true, status: beforeSha256 === afterSha256 ? 'ALREADY_ADOPTED' : 'READY_TO_ADOPT', platform: 'steam', modId, ...preview, bindingHash, sourceWritePerformed: false, stages: [...priorStages, releaseStage('adoption-preview', 'Preview source Workshop metadata adoption', 'pass', beforeSha256 === afterSha256 ? 'Source content.xml already matches the verified staged manifest.' : 'No source write performed; review the before/after content and confirm explicitly.')], failedStages: [] });
   }
   const expectedSourceSha256 = String(req.body?.expectedSourceSha256 || '').toLowerCase();
   const expectedWorkshopId = String(req.body?.expectedWorkshopId || '');
@@ -14710,13 +15275,22 @@ app.post('/api/agent/release/steam/adopt', coordinatedSourceOperation((req, res)
   if (expectedWorkshopId !== stagedManifest.meta.workshopId) {
     return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_ADOPTION_CONFIRMATION_MISMATCH', 'The confirmed Workshop ID does not match the verified staged manifest.', [...priorStages, releaseStage('adoption', 'Adopt Workshop metadata into source', 'fail', 'Preview the adoption again before confirming.')]);
   }
+  if (String(req.body?.expectedBindingHash || '').toLowerCase() !== bindingHash) {
+    return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_ADOPTION_PREVIEW_CHANGED', 'The confirmation no longer matches the reviewed source and verified Steam report. Preview the adoption again before confirming.', [...priorStages, releaseStage('adoption', 'Adopt Workshop metadata into source', 'fail', 'A matching adoption preview binding is required.')]);
+  }
+  const currentSource = steamAdoptionSource(sourceManifestPath, resolveXsdConfig());
+  if (!currentSource || !sameResolvedPath(currentSource.physical, source.physical) || !sameArtifactStamp(source.stamp, currentSource.stamp)) {
+    return sendReleaseFailure(res, 409, 'FAILED', 'STEAM_ADOPTION_SOURCE_CHANGED', 'The authoring source changed before adoption. Re-import and prepare again.', [...priorStages, releaseStage('adoption', 'Adopt Workshop metadata into source', 'fail', 'The physical source or file identity no longer matches the guarded preview.')]);
+  }
   let writtenSha256 = '';
   try {
-    atomicWriteFile(sourceManifestPath, afterBytes);
-    writtenSha256 = hashArtifactFile(sourceManifestPath);
+    atomicWriteFile(source.physical, afterBytes);
+    const written = steamAdoptionSource(sourceManifestPath, resolveXsdConfig());
+    if (!written || !sameResolvedPath(written.physical, source.physical)) throw new Error('The authoring source moved before write verification.');
+    writtenSha256 = hashArtifactFile(written.physical, 'sha256', written.stamp);
     if (writtenSha256 !== afterSha256) {
-      atomicWriteFile(sourceManifestPath, beforeBytes);
-      if (hashArtifactFile(sourceManifestPath) !== beforeSha256) throw new Error('Source adoption verification failed and rollback could not restore the original content.xml.');
+      atomicWriteFile(written.physical, beforeBytes);
+      if (hashArtifactFile(written.physical) !== beforeSha256) throw new Error('Source adoption verification failed and rollback could not restore the original content.xml.');
       throw new Error('Source content.xml did not match the verified staged manifest after the write; the original bytes were restored.');
     }
   } catch (error) {
@@ -15755,15 +16329,15 @@ app.use(apiUnknownRouteMiddleware);
 initializeReferenceCorpus();
 setupDevOrProd().then(() => {
   const httpServer = app.listen(PORT, "127.0.0.1", () => {
-    console.log(`X4 Forge Dev Server running on http://127.0.0.1:${PORT}`);
+    const address = httpServer.address();
+    if (address && typeof address === 'object') serverListenerPort = address.port;
+    console.log(`X4 Forge Dev Server running on http://127.0.0.1:${serverListenerPort}`);
     // B93.1: publish where we are. The sidecar's port changes every launch and nothing on disk
     // said what it was, so callers were port-scanning to find us. Never fatal.
     const published = publishInstance({
-      port: PORT,
-      pid: process.pid,
-      startedAt: new Date().toISOString(),
+      ...publicForgeIdentity(),
       cwd: process.cwd(),
-      mode: process.env.X4_FORGE_MODE?.trim() || (process.env.X4_DATA_DIR ? 'sidecar' : 'standalone'),
+      mode: SERVER_INSTANCE_MODE,
     });
     if (published) console.log(`[discovery] instance address published to ${published.latestFile}`);
     const releaseDiscovery = () => unpublishInstance(process.pid);

@@ -292,6 +292,7 @@ test('C06b addressed workspace, diagnostic and release contracts use truthful id
       ['/api/agent/release/artifact/download', { platform: 'nexus', modId, artifactPath: [] }],
       ['/api/agent/release/steam/verify', { modId, ignored: true }],
       ['/api/agent/release/steam/adopt', { modId, apply: 'false' }],
+      ['/api/agent/release/steam/adopt', { modId, apply: true, expectedBindingHash: 'wrong' }],
     ] as const) expect((await post(route, body)).status).toBe(400);
     expect(inventory(mods)).toEqual(baseline);
 
@@ -424,7 +425,9 @@ test('C06b addressed workspace, diagnostic and release contracts use truthful id
     expect(preview.status, JSON.stringify(preview)).toBe(200);
     expect(preview.data.sourceWritePerformed).toBe(false);
     expect(preview.data.sourceHash).toBe(steam.data.validatedSource.sourceHash);
-    const confirmation = { modId, apply: true, expectedSourceSha256: preview.data.beforeSha256, expectedWorkshopId: preview.data.workshopId };
+    expect(preview.data.bindingHash).toMatch(/^[a-f0-9]{64}$/);
+    const confirmation = { modId, apply: true, expectedSourceSha256: preview.data.beforeSha256,
+      expectedWorkshopId: preview.data.workshopId, expectedBindingHash: preview.data.bindingHash };
     try {
       fs.appendFileSync(sourceManifest, '\n<!-- editor mutation after preview -->');
       const staleBytes = fs.readFileSync(sourceManifest);
@@ -435,8 +438,19 @@ test('C06b addressed workspace, diagnostic and release contracts use truthful id
     } finally { fs.writeFileSync(sourceManifest, originalManifest); }
     const wrongId = await post('/api/agent/release/steam/adopt', { ...confirmation, expectedWorkshopId: 'ws_987654321' });
     expect(wrongId.status).toBe(409);
+    expect(wrongId.data.code).toBe('STEAM_ADOPTION_CONFIRMATION_MISMATCH');
     expect(fileSha(sourceManifest)).toBe(sha(originalManifest));
-    const adopted = await post('/api/agent/release/steam/adopt', confirmation);
+    const staleBinding = await post('/api/agent/release/steam/adopt', confirmation);
+    expect(staleBinding.status).toBe(409);
+    expect(staleBinding.data.code).toBe('STEAM_ADOPTION_PREVIEW_CHANGED');
+    expect(fileSha(sourceManifest)).toBe(sha(originalManifest));
+    const renewedPreview = await post('/api/agent/release/steam/adopt', { modId, apply: false });
+    expect(renewedPreview.status, JSON.stringify(renewedPreview)).toBe(200);
+    expect(renewedPreview.data.bindingHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(renewedPreview.data.bindingHash).not.toBe(preview.data.bindingHash);
+    const adopted = await post('/api/agent/release/steam/adopt', { modId, apply: true,
+      expectedSourceSha256: renewedPreview.data.beforeSha256, expectedWorkshopId: renewedPreview.data.workshopId,
+      expectedBindingHash: renewedPreview.data.bindingHash });
     expect(adopted.status, JSON.stringify(adopted)).toBe(200);
     expect(adopted.data.sourceWritePerformed).toBe(true);
     expect(adopted.data.sourceHash).toBe(steam.data.validatedSource.sourceHash);

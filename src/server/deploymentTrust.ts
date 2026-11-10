@@ -1,10 +1,13 @@
 /** Deployment identity and durable audit records; authentication remains in the route middleware. */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import type { ActionReceipt } from '../lib/actionReceipt';
+import { actionReceiptIdForOperation, transitionActionReceipt, type ActionReceipt, type ActionReceiptOperationIdentity } from '../lib/actionReceipt';
 import type { ActionReceiptStore } from '../lib/actionReceiptStore';
+import type { DeploymentRecoveryRecord, DestructiveRecoveryStore } from '../lib/destructiveRecovery';
 import type { AcceptanceDecision, AcceptancePrincipal, AcceptanceSubject } from './findingAcceptance';
+import { processLiveness } from './sharedSourceCoordinator';
 
 export function trustHash(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value, (_key, item) => {
@@ -137,22 +140,68 @@ export function deploymentCorpusFiles(files: string[]): Array<[string, string]> 
   });
 }
 
+export function deployReceiptIdentity(
+  principal: Pick<AcceptancePrincipal, 'kind' | 'id'>,
+  caller?: { workspaceId: string; operationId: string },
+): ActionReceiptOperationIdentity {
+  const requestScope = 'deployment.verified';
+  return {
+    actor: { kind: principal.kind, id: principal.id },
+    client: { channel: principal.kind === 'agent' ? 'api' : 'studio', id: principal.id, version: 'deployment-trust-v1' },
+    capability: { legacyRoute: '/api/agent/deploy-verify', method: 'POST', reviewed: true, reviewRef: 'validation-trust-repair-batch2' },
+    authority: caller
+      ? { scope: 'workspace', workspaceId: caller.workspaceId, operationId: `deploy:${trustHash(caller.operationId)}`, requestScope }
+      : { scope: 'global', operationId: `deploy:${randomUUID()}`, requestScope },
+  };
+}
+
+export function readDeployOperationReceipt(store: ActionReceiptStore, identity: ActionReceiptOperationIdentity): ActionReceipt | null {
+  const id = actionReceiptIdForOperation(identity);
+  const result = store.tryRead(id);
+  if (result.ok === true) {
+    if (result.receipt.id !== id) {
+      throw Object.assign(new Error('Deployment receipt identity mismatch.'), { code: 'RECEIPT_CORRUPT' });
+    }
+    return result.receipt;
+  }
+  if (result.code === 'RECEIPT_NOT_FOUND') return null;
+  throw Object.assign(new Error('Deployment receipt could not be verified.'), { code: result.code });
+}
+
+const prewriteStage = (record: DeploymentRecoveryRecord) => `deploy-prewrite-v1:${trustHash(record)}`;
+
+export function deployOperationOutcome(receipt: ActionReceipt, recovery: DestructiveRecoveryStore) {
+  if (receipt.status !== 'prepared') return receipt.status;
+  const recoveryId = receipt.rollback.reference;
+  if (!recoveryId || !String(receipt.metadata?.stage).startsWith('deploy-prewrite-v1:')) return 'unknown';
+  const initial = recovery.read(recoveryId);
+  if (!initial.ok || initial.record.kind !== 'deploy' || initial.record.id !== recoveryId
+    || initial.record.status !== 'preparing' || initial.record.writeAdmission?.phase !== 'pending-v1'
+    || initial.record.writeAdmission.host !== os.hostname() || receipt.metadata?.stage !== prewriteStage(initial.record)
+    || processLiveness(initial.record.writeAdmission.pid) !== 'dead') return 'unknown';
+  // Read again after observing owner exit. The owner could have admitted the write
+  // between our first read and its exit.
+  const retired = recovery.read(recoveryId);
+  return retired.ok && retired.record.kind === 'deploy' && prewriteStage(retired.record) === receipt.metadata.stage
+    ? 'not-applied' : 'unknown';
+}
+
 export function prepareDeployRecord(
   store: ActionReceiptStore, subject: AcceptanceSubject, decision: AcceptanceDecision,
   principal: AcceptancePrincipal, approvals: ActionReceipt[], recoveryId: string,
   beforeFingerprint: string,
   validatedArtifactHash?: string,
+  identity = deployReceiptIdentity(principal),
+  prewriteRecovery?: DeploymentRecoveryRecord,
 ): ActionReceipt {
   if (approvals.length > 127) throw new Error('At most 127 finding approvals fit a deployment record.');
   const target = { role: 'deploy' as const, root: 'extensions', relativePath: subject.evidence.modId!,
     beforeHash: trustHash(beforeFingerprint) };
   const resources = [target, ...approvals.map(receipt => ({ role: 'data' as const,
     root: 'action-receipts', relativePath: `${receipt.id}.json`, beforeHash: receipt.hash }))];
-  return store.prepare({
-    actor: { kind: principal.kind, id: principal.id },
-    client: { channel: principal.kind === 'agent' ? 'api' : 'studio', id: principal.id, version: 'deployment-trust-v1' },
-    capability: { legacyRoute: '/api/agent/deploy-verify', method: 'POST', reviewed: true, reviewRef: 'validation-trust-repair-batch2' },
-    authority: { scope: 'global', operationId: `deploy:${randomUUID()}`, requestScope: 'deployment.verified', resources },
+  const { receipt, created } = store.prepareWithDisposition({
+    ...identity,
+    authority: { ...identity.authority, resources },
     effects: { declared: [{ id: 'deploy', operation: 'replace', resource: target, reversible: true }] },
     input: { requestHash: trustHash([decision.binding.hash, approvals.map(r => r.hash)]), beforeHash: target.beforeHash },
     validation: { validator: 'deployment-trust-v1', ruleHash: subject.validatorHash },
@@ -160,21 +209,53 @@ export function prepareDeployRecord(
     metadata: { operation: 'deploy', ...Object.fromEntries(Object.entries(decision.binding).filter(([k]) => k !== 'hash')),
       actorLabel: principal.label, outcome: decision.outcome, recoveryId,
       ...decision.counts,
+      ...(prewriteRecovery ? { stage: prewriteStage(prewriteRecovery) } : {}),
       ...(validatedArtifactHash ? { validatedArtifactHash, validatedArtifactScope: 'logical-artifact-bytes' } : {}) },
+  });
+  if (!created) throw Object.assign(new Error('This deployment operation already has a receipt.'), {
+    code: 'DEPLOY_OPERATION_ALREADY_RECORDED',
+  });
+  return receipt;
+}
+
+function deploymentAfterResources(prepared: ActionReceipt, fingerprint: string) {
+  return prepared.authority.resources.map(resource => ({
+    role: resource.role, root: resource.root, relativePath: resource.relativePath,
+    hash: resource.role === 'deploy' ? fingerprint : resource.beforeHash!,
+  }));
+}
+
+export function recordIncompleteDeployOutput(store: ActionReceiptStore, prepared: ActionReceipt, fingerprint: string): ActionReceipt {
+  const code = 'DEPLOY_OUTPUT_CHANGED';
+  return store.transition(prepared.id, {
+    to: 'incomplete', at: new Date().toISOString(),
+    validation: { ...prepared.validation, status: 'failed', code },
+    failure: { code, message: 'Forge withheld rollback because the target did not match its staged output.' }, rollbackStatus: 'failed',
+    after: { outcome: 'partial', resources: deploymentAfterResources(prepared, fingerprint) },
   });
 }
 
 export function commitDeployRecord(store: ActionReceiptStore, prepared: ActionReceipt, fingerprint: string): ActionReceipt {
-  const result = store.commit(prepared.id, {
-    validation: { ...prepared.validation, status: 'passed', code: 'DEPLOYED_BYTES_VERIFIED',
+  const commit = {
+    at: new Date().toISOString(),
+    validation: { ...prepared.validation, status: 'passed' as const, code: 'DEPLOYED_BYTES_VERIFIED',
       summary: String(prepared.metadata?.outcome) },
-    rollbackStatus: 'available',
-    after: { outcome: 'applied', resources: prepared.authority.resources.map(resource => ({
-      role: resource.role, root: resource.root, relativePath: resource.relativePath,
-      hash: resource.role === 'deploy' ? fingerprint : resource.beforeHash!,
-    })) },
-  });
-  const durable = store.read(result.id);
-  if (durable.hash !== result.hash || durable.status !== 'committed') throw new Error('Deployment receipt readback mismatch.');
-  return durable;
+    rollbackStatus: 'available' as const,
+    after: { outcome: 'applied' as const, resources: deploymentAfterResources(prepared, fingerprint) },
+  };
+  const expected = transitionActionReceipt(prepared, { ...commit, to: 'committed' });
+  try {
+    const written = store.commit(prepared.id, commit);
+    if (written.hash !== expected.hash) throw new Error('Deployment receipt readback mismatch.');
+    return written;
+  } catch (error) {
+    // The store can throw while reopening an already promoted commit. Only the exact
+    // original prepared record gives the caller authority to attempt rollback.
+    const durable = store.tryRead(prepared.id);
+    if (durable.ok && durable.receipt.hash === expected.hash) return durable.receipt;
+    if (durable.ok && durable.receipt.hash === prepared.hash) throw error;
+    throw Object.assign(new Error('Forge could not verify the deployment commit outcome.', { cause: error }), {
+      code: 'DEPLOY_COMMIT_OUTCOME_UNKNOWN',
+    });
+  }
 }

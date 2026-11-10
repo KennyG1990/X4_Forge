@@ -11,6 +11,24 @@ const ERR_SPAWNED_OWNERSHIP_SNAPSHOT_FAILED = 'spawned-ownership-snapshot-failed
 const ERR_SPAWNED_OWNERSHIP_ROOT_UNAVAILABLE = 'spawned-ownership-root-unavailable';
 const ERR_SPAWNED_OWNERSHIP_PLAN_FAILED = 'spawned-ownership-plan-failed';
 const MAX_IDENTITIES = 100000;
+const SNAPSHOT_FAILURE_CODES = new Set([
+  'snapshot-options-invalid',
+  'snapshot-command-failed',
+  'snapshot-command-timeout',
+  'snapshot-output-overflow',
+  'snapshot-output-invalid',
+  'snapshot-platform-unsupported',
+  ...[
+    'input-not-string', 'input-too-large', 'empty-input', 'line-too-long',
+    'row-count-exceeded', 'missing-header', 'header-mismatch', 'wrong-column-count',
+    'blank-node', 'invalid-creation-token', 'invalid-pid', 'invalid-parent-pid',
+    'invalid-weekday', 'invalid-month', 'invalid-day', 'invalid-time', 'invalid-hour',
+    'invalid-minute', 'invalid-second', 'invalid-year', 'missing-fields',
+    'malformed-row', 'duplicate-pid', 'no-usable-rows', 'invalid-result',
+  ].map((code) => `snapshot-parse-${code}`),
+]);
+// Keep diagnostic detail off the strict result envelope and let it expire with that result.
+const failureDiagnostics = new WeakMap();
 
 const cloneIdentity = (identity) => (identity === null ? null : { ...identity });
 
@@ -22,15 +40,24 @@ const buildResult = ({
   captured = [],
   newlyCaptured = [],
   reusedPids = [],
-} = {}) => ({
-  complete,
-  errors: [...errors],
-  rootIdentity: cloneIdentity(rootIdentity),
-  rootPresent,
-  captured: captured.map(cloneIdentity),
-  newlyCaptured: newlyCaptured.map(cloneIdentity),
-  reusedPids: [...reusedPids],
-});
+  diagnosticCode = null,
+} = {}) => {
+  const result = {
+    complete,
+    errors: [...errors],
+    rootIdentity: cloneIdentity(rootIdentity),
+    rootPresent,
+    captured: captured.map(cloneIdentity),
+    newlyCaptured: newlyCaptured.map(cloneIdentity),
+    reusedPids: [...reusedPids],
+  };
+  if (SNAPSHOT_FAILURE_CODES.has(diagnosticCode)) failureDiagnostics.set(result, diagnosticCode);
+  return result;
+};
+
+export function readSpawnedProcessOwnershipFailureCode(result) {
+  return failureDiagnostics.get(result) ?? null;
+}
 
 function isProxyObject(value) {
   try {
@@ -379,6 +406,25 @@ function readSnapshotEnvelope(value) {
   }
 }
 
+function readSnapshotFailureCode(value) {
+  try {
+    if (!isPlainRecord(value)
+      || !hasExactOrderedDataKeys(value, ['complete', 'errors', 'rows'])
+      || Object.getOwnPropertyDescriptor(value, 'complete').value !== false) return null;
+    const errors = Object.getOwnPropertyDescriptor(value, 'errors').value;
+    if (!Array.isArray(errors)
+      || isProxyObject(errors)
+      || Object.getPrototypeOf(errors) !== Array.prototype) return null;
+    const length = Object.getOwnPropertyDescriptor(errors, 'length')?.value;
+    if (!Number.isSafeInteger(length) || length < 1 || length > SNAPSHOT_FAILURE_CODES.size) return null;
+    const first = Object.getOwnPropertyDescriptor(errors, '0');
+    if (!isEnumerableDataDescriptor(first) || !SNAPSHOT_FAILURE_CODES.has(first.value)) return null;
+    return first.value;
+  } catch {
+    return null;
+  }
+}
+
 function readInitialClosureEnvelope(value, expectedRoot) {
   try {
     if (value === null
@@ -533,7 +579,10 @@ export async function initializeSpawnedProcessOwnership(input = {}) {
 
   const snapshotRows = readSnapshotEnvelope(snapshotEnvelope);
   if (snapshotRows === null) {
-    return buildResult({ errors: [ERR_SPAWNED_OWNERSHIP_SNAPSHOT_FAILED] });
+    return buildResult({
+      errors: [ERR_SPAWNED_OWNERSHIP_SNAPSHOT_FAILED],
+      diagnosticCode: readSnapshotFailureCode(snapshotEnvelope),
+    });
   }
 
   const rootRow = snapshotRows.find((row) => row.pid === normalized.rootPid);
@@ -584,7 +633,10 @@ export async function sampleSpawnedProcessOwnership(input = {}) {
 
   const snapshotRows = readSnapshotEnvelope(snapshotEnvelope);
   if (snapshotRows === null) {
-    return buildResult({ errors: [ERR_SPAWNED_OWNERSHIP_SNAPSHOT_FAILED] });
+    return buildResult({
+      errors: [ERR_SPAWNED_OWNERSHIP_SNAPSHOT_FAILED],
+      diagnosticCode: readSnapshotFailureCode(snapshotEnvelope),
+    });
   }
 
   let repeatedClosureEnvelope;

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 
 import { superviseSpawnedE2eProcess } from './e2e-runner-lifecycle.mjs';
+import { sampleSpawnedProcessOwnership } from './e2e-process-ownership-sampler.mjs';
 
 const ROOT_PID = 7401;
 const ROOT_TOKEN = '20260804000000.000000-SELFTEST';
@@ -318,6 +319,74 @@ function makeLifecycleInput({
     calls,
     expectedTermination: terminationFactory(rootIdentity),
   };
+}
+
+async function captureLifecycleDiagnostics(operation) {
+  const lines = [];
+  const originalError = console.error;
+  console.error = (...args) => lines.push(args);
+  try {
+    return { result: await operation(), lines };
+  } finally {
+    console.error = originalError;
+  }
+}
+
+function makeComposedOwnershipFixture(responses) {
+  const fixture = makeLifecycleInput({ terminationFactory: makeCompleteTermination });
+  fixture.rootIdentity = makeRootIdentity(ROOT_PID, '20261109000000.000000+000');
+  fixture.input.overallDeadlineMs = 300;
+  delete fixture.input.initializeOwnershipImpl;
+  delete fixture.input.sampleOwnershipImpl;
+  delete fixture.input.terminateImpl;
+  fixture.input.snapshotOptions.execFileImpl = (command, args, options, callback) => {
+    fixture.calls.snapshotExecFile += 1;
+    assert.equal(command, 'powershell.exe');
+    assert.equal(Array.isArray(args), true);
+    assert.equal(options.windowsHide, true);
+    assert.equal(typeof callback, 'function');
+    const index = fixture.calls.snapshotExecFile - 1;
+    const response = responses[Math.min(index, responses.length - 1)];
+    if (response instanceof Error) callback(response, '', 'SELFTEST_PRIVATE_STDERR');
+    else callback(null, response, '');
+    if (fixture.calls.snapshotExecFile === responses.length) {
+      queueMicrotask(() => fixture.child.emit('close', 0, null));
+    }
+    return { kill() { assert.fail('composed controls must not time out a helper'); } };
+  };
+  return fixture;
+}
+
+function composedCsv(...rows) {
+  return ['Node,CreationDate,ParentProcessId,ProcessId', ...rows].join('\n');
+}
+
+function composedRow(identity, parentPid = 0) {
+  return `SELFTEST,${identity.creationToken},${parentPid},${identity.pid}`;
+}
+
+async function finishComposedOwnership(fixture, sampleCount) {
+  return withWatchdog('composed ownership diagnostics', async () => {
+    const lifecyclePromise = superviseSpawnedE2eProcess(fixture.input);
+    for (let index = 0; index < sampleCount; index += 1) {
+      const delay = await waitForFakeTimerRecord(
+        fixture,
+        'composed ownership sample delay',
+        (record) => record.delay === fixture.input.sampleIntervalMs,
+      );
+      fixture.scheduler.fire(delay.handle);
+    }
+    return lifecyclePromise;
+  });
+}
+
+function assertComposedOwnershipCleanup(fixture, sampleCount) {
+  assertLifecycleCleanup(fixture, [
+    { handle: 1, delay: 300, active: false, cleared: true, fired: false },
+    ...Array.from({ length: sampleCount }, (_, index) => ({
+      handle: index + 2, delay: 100, active: false, cleared: false, fired: true,
+    })),
+  ]);
 }
 
 function assertNoProcessCalls(fixture) {
@@ -1302,6 +1371,182 @@ async function runBidirectionalMutationIsolationCase() {
   assertWatchdogClearedWithoutFiring(watchdogsBefore);
 }
 
+async function runComposedFailedSampleThenCleanTreeCase() {
+  const root = makeRootIdentity(ROOT_PID, '20261109000000.000000+000');
+  const other = makeRootIdentity(ROOT_PID + 90, '20261109000001.000000+000');
+  const timeout = new Error('SELFTEST_PRIVATE_TIMEOUT');
+  timeout.code = 'ETIMEDOUT';
+  const fixture = makeComposedOwnershipFixture([
+    composedCsv(composedRow(root)),
+    timeout,
+    composedCsv(composedRow(root), composedRow(root)),
+    composedCsv(composedRow(other)),
+  ]);
+  const { result, lines } = await captureLifecycleDiagnostics(() => finishComposedOwnership(fixture, 3));
+  assertExactRecordKeys(result, LIFECYCLE_RESULT_KEYS);
+  assert.equal(result.complete, false);
+  assert.equal(result.ownershipComplete, false);
+  assert.deepEqual(result.errors, ['e2e-lifecycle-ownership-incomplete']);
+  assert.equal(result.termination.complete, true);
+  assert.equal(result.termination.treeGone, true);
+  assert.deepEqual(result.termination.commanded, []);
+  assert.equal(fixture.calls.commandExecFile, 0);
+  assert.equal(fixture.calls.snapshotExecFile, 5);
+  assert.deepEqual(lines, [
+    ['[e2e-runner-lifecycle] ownership-first-failure phase=sample code=snapshot-command-timeout'],
+    ['[e2e-runner-lifecycle] ownership-summary initializationAttempts=1 sampleAttempts=3 failures=2 firstPhase=sample firstCode=snapshot-command-timeout ownershipComplete=false'],
+  ]);
+  assertComposedOwnershipCleanup(fixture, 3);
+}
+
+async function runComposedReuseAndLiveIdentityCase() {
+  const root = makeRootIdentity(ROOT_PID, '20261109000000.000000+000');
+  const child = makeRootIdentity(ROOT_PID + 1, '20261109000001.000000+000');
+  const ownedGrandchild = makeRootIdentity(ROOT_PID + 2, '20261109000002.000000+000');
+  const replacementRoot = makeRootIdentity(ROOT_PID, '20261109000003.000000+000');
+  const replacementChild = makeRootIdentity(ROOT_PID + 1, '20261109000004.000000+000');
+  const replacementDescendant = makeRootIdentity(ROOT_PID + 3, '20261109000005.000000+000');
+  const fixture = makeComposedOwnershipFixture([
+    composedCsv(composedRow(root), composedRow(child, root.pid)),
+    composedCsv(composedRow(root), composedRow(child, root.pid), composedRow(ownedGrandchild, child.pid)),
+    composedCsv(composedRow(replacementRoot), composedRow(replacementChild, root.pid), composedRow(replacementDescendant, child.pid)),
+  ]);
+  const samples = [];
+  fixture.input.sampleOwnershipImpl = async (input) => {
+    const sample = await sampleSpawnedProcessOwnership(input);
+    samples.push(sample);
+    return sample;
+  };
+  const { result, lines } = await captureLifecycleDiagnostics(() => finishComposedOwnership(fixture, 2));
+  assertExactRecordKeys(result, LIFECYCLE_RESULT_KEYS);
+  assert.equal(result.complete, true);
+  assert.equal(result.ownershipComplete, true);
+  assert.equal(samples.length, 2);
+  assert.equal(samples[0].rootPresent, true);
+  assert.deepEqual(samples[0].newlyCaptured, [ownedGrandchild]);
+  assert.equal(samples[1].rootPresent, false);
+  assert.deepEqual(samples[1].reusedPids, [root.pid, child.pid]);
+  assert.deepEqual(result.captured, [root, child, ownedGrandchild]);
+  assert.deepEqual(result.reusedPids, [root.pid, child.pid]);
+  assert.equal(result.termination.treeGone, true);
+  assert.deepEqual(result.termination.commanded, []);
+  assert.equal(fixture.calls.commandExecFile, 0);
+  assert.deepEqual(lines, [
+    ['[e2e-runner-lifecycle] ownership-summary initializationAttempts=1 sampleAttempts=2 failures=0 firstPhase=none firstCode=none ownershipComplete=true'],
+  ]);
+  assertComposedOwnershipCleanup(fixture, 2);
+}
+
+async function runComposedMissingAndAmbiguousIdentityCase() {
+  const root = makeRootIdentity(ROOT_PID, '20261109000000.000000+000');
+  const other = makeRootIdentity(ROOT_PID + 90, '20261109000001.000000+000');
+  for (const [badTable, code] of [
+    [composedCsv(`SELFTEST,,0,${root.pid}`), 'snapshot-parse-invalid-creation-token'],
+    [composedCsv(composedRow(root), composedRow(root)), 'snapshot-parse-duplicate-pid'],
+  ]) {
+    const fixture = makeComposedOwnershipFixture([
+      composedCsv(composedRow(root)), badTable, composedCsv(composedRow(other)),
+    ]);
+    const { result, lines } = await captureLifecycleDiagnostics(() => finishComposedOwnership(fixture, 2));
+    assertExactRecordKeys(result, LIFECYCLE_RESULT_KEYS);
+    assert.equal(result.complete, false);
+    assert.equal(result.ownershipComplete, false);
+    assert.deepEqual(result.errors, ['e2e-lifecycle-ownership-incomplete']);
+    assert.equal(result.termination.complete, true);
+    assert.equal(result.termination.treeGone, true);
+    assert.deepEqual(result.termination.commanded, []);
+    assert.equal(fixture.calls.commandExecFile, 0);
+    assert.deepEqual(lines, [
+      [`[e2e-runner-lifecycle] ownership-first-failure phase=sample code=${code}`],
+      [`[e2e-runner-lifecycle] ownership-summary initializationAttempts=1 sampleAttempts=2 failures=1 firstPhase=sample firstCode=${code} ownershipComplete=false`],
+    ]);
+    assertComposedOwnershipCleanup(fixture, 2);
+  }
+}
+
+async function runDiagnosticFallbackAndLoggerFailureCase() {
+  const fixture = makeLifecycleInput({ terminationFactory: makeCompleteTermination });
+  fixture.input.initializeOwnershipImpl = () => {
+    queueMicrotask(() => fixture.child.emit('close', 0, null));
+    const result = makeOwnershipFailureEnvelope();
+    result.errors = ['SELFTEST_PRIVATE_FOREIGN_ERROR'];
+    return result;
+  };
+  const { result, lines } = await captureLifecycleDiagnostics(() => superviseSpawnedE2eProcess(fixture.input));
+  assert.equal(result.complete, false);
+  assert.equal(result.ownershipComplete, false);
+  assert.deepEqual(lines, [
+    ['[e2e-runner-lifecycle] ownership-first-failure phase=initialize code=ownership-envelope-invalid'],
+    ['[e2e-runner-lifecycle] ownership-summary initializationAttempts=1 sampleAttempts=0 failures=1 firstPhase=initialize firstCode=ownership-envelope-invalid ownershipComplete=false'],
+  ]);
+  assertLifecycleCleanup(fixture);
+
+  const throwingFixture = makeLifecycleInput({ terminationFactory: makeCompleteTermination });
+  throwingFixture.input.initializeOwnershipImpl = () => {
+    queueMicrotask(() => throwingFixture.child.emit('close', 0, null));
+    throw new Error('SELFTEST_PRIVATE_SAMPLER_EXCEPTION');
+  };
+  const thrown = await captureLifecycleDiagnostics(() => superviseSpawnedE2eProcess(throwingFixture.input));
+  assert.equal(thrown.result.ownershipComplete, false);
+  assert.match(thrown.lines[0][0], /phase=initialize code=sampler-exception$/);
+  assert.equal(JSON.stringify(thrown.lines).includes('SELFTEST_PRIVATE'), false);
+  // A synchronous throw reaches the delay before the queued close; that close clears both timers.
+  const synchronousThrowTimers = [
+    { handle: 1, delay: 100, active: false, cleared: true, fired: false },
+    { handle: 2, delay: 100, active: false, cleared: true, fired: false },
+  ];
+  assertLifecycleCleanup(throwingFixture, synchronousThrowTimers);
+
+  const makeLoggerComparisonFixture = (mode) => {
+    const comparisonFixture = makeLifecycleInput({ terminationFactory: makeCompleteTermination });
+    if (mode !== 'success') {
+      comparisonFixture.input.initializeOwnershipImpl = () => {
+        queueMicrotask(() => comparisonFixture.child.emit('close', 0, null));
+        if (mode === 'throw') throw new Error('SELFTEST_PRIVATE_SAMPLER_EXCEPTION');
+        return makeOwnershipFailureEnvelope();
+      };
+    }
+    return comparisonFixture;
+  };
+  for (const mode of ['success', 'failure', 'throw']) {
+    const baselineFixture = makeLoggerComparisonFixture(mode);
+    const baseline = await captureLifecycleDiagnostics(() => superviseSpawnedE2eProcess(baselineFixture.input));
+    const loggingFixture = makeLoggerComparisonFixture(mode);
+    const originalError = console.error;
+    let loggerCalls = 0;
+    console.error = () => { loggerCalls += 1; throw new Error('SELFTEST_PRIVATE_LOGGER_EXCEPTION'); };
+    try {
+      const logged = await superviseSpawnedE2eProcess(loggingFixture.input);
+      assert.deepEqual(logged, baseline.result);
+      assert.equal(logged.complete, mode === 'success');
+      assert.equal(logged.ownershipComplete, mode === 'success');
+      assert.equal(loggerCalls, baseline.lines.length);
+      assert.equal(loggerCalls, mode === 'success' ? 1 : 2);
+      const expectedTimers = mode === 'throw' ? synchronousThrowTimers : undefined;
+      assertLifecycleCleanup(baselineFixture, expectedTimers);
+      assertLifecycleCleanup(loggingFixture, expectedTimers);
+      assertNoProcessCalls(baselineFixture);
+      assertNoProcessCalls(loggingFixture);
+    } finally {
+      console.error = originalError;
+    }
+  }
+}
+
+async function runControlFailureDiagnosticsCase() {
+  const fixture = makeLifecycleInput({ terminationFactory: makeCompleteTermination });
+  fixture.input.setTimeoutImpl = () => { throw new Error('SELFTEST_PRIVATE_TIMER_EXCEPTION'); };
+  const { result, lines } = await captureLifecycleDiagnostics(() => superviseSpawnedE2eProcess(fixture.input));
+  assert.equal(result.complete, false);
+  assert.deepEqual(result.errors, ['e2e-lifecycle-timer-failed']);
+  assert.equal(result.ownershipComplete, true);
+  assert.deepEqual(lines, [
+    ['[e2e-runner-lifecycle] ownership-first-failure phase=control-outer-timer code=timer-exception'],
+    ['[e2e-runner-lifecycle] ownership-summary initializationAttempts=1 sampleAttempts=0 failures=1 firstPhase=control-outer-timer firstCode=timer-exception ownershipComplete=true'],
+  ]);
+  assertLifecycleCleanup(fixture, []);
+}
+
 const cases = [
   ['invalid input', runInvalidInputCase],
   ['normal child close/tree gone', runNormalChildCloseCase],
@@ -1315,6 +1560,11 @@ const cases = [
   ['duplicate and late child callbacks', runDuplicateAndLateChildCallbacksCase],
   ['hostile input rejection', runHostileInputRejectionCase],
   ['bidirectional mutation isolation', runBidirectionalMutationIsolationCase],
+  ['composed failed sample then clean tree', runComposedFailedSampleThenCleanTreeCase],
+  ['composed reuse excludes replacements and observes live identities', runComposedReuseAndLiveIdentityCase],
+  ['composed missing and ambiguous identity remains incomplete', runComposedMissingAndAmbiguousIdentityCase],
+  ['diagnostic fallback and logger failure preserve verdicts', runDiagnosticFallbackAndLoggerFailureCase],
+  ['control failure diagnostics preserve timer verdict', runControlFailureDiagnosticsCase],
 ];
 
 let passed = 0;

@@ -3,6 +3,30 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
+## 0.0.82 — 2026-11-10
+
+- Agent clients can look up a deployment by its operation ID if the reply was lost, including after a Forge restart.
+- After a backend interruption, Forge can confirm that an agent deploy never reached managed writes when its retained operation and recovery records prove it.
+- Agent clients can check which Forge instance answered before sending credentials or using a workspace.
+- Forge can deploy reviewed files when an unrelated receipt is corrupt. It flags the missing review history and leaves saved approvals unused.
+- Deploy preview names conflicting installed extension folders before staging or writing files.
+- If a deploy commits and the normal reply fails, Forge preserves the reviewed output and identifies the committed receipt. Its fidelity field distinguishes verified bytes from a rolled-back or unconfirmed attempt.
+- Forge checks the durable outcome before attempting rollback after a commit read fails. If the outcome is still unknown, Forge preserves the deployed files and their recovery snapshot.
+- Forge refuses to confirm a deploy if the files change during activation. The operation receipt reports incomplete or unknown so clients can inspect the destination before retrying.
+- Deploy preserves external changes when staging fails before Forge touches the destination. Receipts distinguish staging failures from actual rollbacks.
+- History undo reports a verified restore even when cleanup leaves a temporary copy. Forge retires its manifest first where possible and shows the leftover path.
+- Forge catches stale references to libraries in your project before deployment and shows the source location.
+- Forge clears the old local backend address after an unexpected or forced exit so the next connection can find a live instance.
+- Forge checks the Lua event names in both branches of a Mission Director inline if and points to genuinely missing registrations.
+- Project validation and native deploy both report the duplicate Mission Director cue or library and where its name was first declared.
+- Forge points to an unmatched else in a script expression and stops native deploy preflight on the offending file and token.
+- Project validation and native deploy keep unchanged warnings stable when their lines move. Deploy approvals still require the exact reviewed input.
+- Deploy leaves source GitHub workflow files out of the mod. Preservation warnings say which rule kept an existing target file.
+- Steam Workshop metadata adoption writes only to the Mod Workspace and requires the source file and exact verified manifest shown in the current preview. If the staged manifest changes or an older report lacks its verified hash, run Verify again.
+- Deploy preserves a changed destination when Forge cannot verify that its own staged files are still there. Temporary deploy and recovery copies stay in containers without a root extension manifest.
+- Deploy approvals and Undo retain the physical destination. Repointing a configured folder alias to another same-byte copy requires a fresh preview and cannot redirect an older Undo.
+- Imported translation filenames keep their exact spelling and original bytes. Editing a translation preserves its authored path; new-language filenames retain their existing creation behavior.
+
 ## 0.0.81 — 2026-11-08
 
 - On Windows, Forge cleans up its backend and child processes when the editor closes or the supervisor exits, even if the backend stops responding.

@@ -6,20 +6,9 @@
 
 ## P0 — Active
 
-### Bounded Claude fixes public release 0.0.80 `in_progress` (GitHub #20)
+### Stable0.0.82 delivery `in_progress` (GitHub#53, under#20)
 
-User authorized the bounded public release before finishing the program, then return to Dev.
-Release commit c97d5d8 is pushed; GitHub v0.0.80 and Open VSX version/latest downloads
-match the tested VSIX. Source120 E2E/500 routes/134 oracles and exact package80/installed62/
-installed134/native proof passed. No live installation or game input. Required Quality
-run40409196050 failed two oracles; this release-completion CI-only repair passes local
-alias recovery, two complete134-oracle runs with cleanup,500 routes and full mandatory
-gates. Remote follow-up CI is pending at this precommit snapshot; require green and
-record exact provenance on the release/owner before closing delivery. Public package
-is immutable and unchanged. See docs/releases/0.0.80-delivery.json and the bounded plan.
-Extension tooling retains4moderate uuid-chain findings; staged runtime audit is clear.
-Remove scoped Identity4.13.0 pin only after supported upstream remediation and reproof.
-The Claude program stays OPEN; A15 is next in isolated Dev and Kimi remains paused.
+Exact source/package/isolated-installed/native qualification passed:120E2E/509routes/134source+installedoracles,2200installed-file equality, receipt/Steam/rollback/physical/filename and sidecar probes. [Exact artifact and limits](docs/releases/0.0.82-proof.json). Curatedprecommit/storeverifiedpublication/GitHubrelease+CI remain pending. Full editor/game acceptance stays open in the owning feature issues;#93is excluded. Live setup untouched.
 
 ### Claude complaint completion and release — C01-C07 `in_progress` (GitHub #20; runtime #14/#35)
 

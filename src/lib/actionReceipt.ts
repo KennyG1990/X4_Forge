@@ -716,7 +716,18 @@ function authorityPayloadFromParts(parts: {
   };
 }
 
-function operationIdentityAuthority(authority: ActionReceiptAuthority): Record<string, unknown> {
+type ActionReceiptOperationAuthority = Omit<ActionReceiptGlobalAuthority, 'resources'>
+  | Omit<ActionReceiptProfileAuthority, 'resources'>
+  | Omit<ActionReceiptWorkspaceAuthority, 'resources'>;
+
+export interface ActionReceiptOperationIdentity {
+  actor: ActionReceiptActor;
+  client: ActionReceiptClient;
+  capability: ActionReceiptCapability;
+  authority: ActionReceiptOperationAuthority;
+}
+
+function operationIdentityAuthority(authority: ActionReceiptOperationAuthority): Record<string, unknown> {
   if (authority.scope === 'global') {
     return {
       scope: authority.scope,
@@ -740,12 +751,7 @@ function operationIdentityAuthority(authority: ActionReceiptAuthority): Record<s
   };
 }
 
-function operationIdentityPayloadFromParts(parts: {
-  actor: ActionReceiptActor;
-  client: ActionReceiptClient;
-  capability: ActionReceiptCapability;
-  authority: ActionReceiptAuthority;
-}): Record<string, unknown> {
+function operationIdentityPayloadFromParts(parts: ActionReceiptOperationIdentity): Record<string, unknown> {
   return {
     schema: ACTION_RECEIPT_SCHEMA,
     actor: parts.actor,
@@ -820,6 +826,11 @@ export function canonicalizeActionReceiptOperationIdentity(value: ActionReceipt 
 
 export function hashActionReceiptOperationIdentity(value: ActionReceipt | ActionReceiptPrepareInput): string {
   return createHash(ACTION_RECEIPT_HASH_ALGORITHM).update(canonicalizeActionReceiptOperationIdentity(value), 'utf8').digest('hex');
+}
+
+/** Locate a receipt using normalized operation identity alone, before its effect facts are known. */
+export function actionReceiptIdForOperation(identity: ActionReceiptOperationIdentity): string {
+  return `ar_${sha256Canonical(operationIdentityPayloadFromParts(identity))}`;
 }
 
 function transitionPayload(record: ActionReceipt): Record<string, unknown> {

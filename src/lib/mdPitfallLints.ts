@@ -36,15 +36,20 @@
  * House pattern: pure engine + oracle + public GET. xmldom for cue-tree structure.
  */
 
-import { DOMParser } from '@xmldom/xmldom';
+import { DOMParser, normalizeLineEndings, type Attr, type Document, type Element } from '@xmldom/xmldom';
+import { findUnmatchedMdElse, MD_UNMATCHED_ELSE } from './expressionAst';
 import { maskNonExpressionSpans, type ScriptPropertyIndex } from './scriptProperties';
+import { assertXmlInputWithinLimits } from './xmlInputLimits';
+import type { SchemaIndex } from './xsdValidate';
 
 export interface MdPitfallFinding {
-  code: 'md_pitfall.products_existence' | 'md_pitfall.cancel_conversation_actor_or_template' | 'md_pitfall.ui_listener_one_shot' | 'md_pitfall.offer_accepted_keyword_cue' | 'md_pitfall.param3_table_barekey';
+  code: 'md_pitfall.products_existence' | 'md_pitfall.cancel_conversation_actor_or_template' | 'md_pitfall.ui_listener_one_shot' | 'md_pitfall.offer_accepted_keyword_cue' | 'md_pitfall.param3_table_barekey' | typeof MD_UNMATCHED_ELSE.code;
   severity: 'error' | 'warning';
   cue?: string;
   filePath?: string;
   line?: number;
+  column?: number;
+  sourceRef?: string;
   detail: string;
 }
 
@@ -52,6 +57,73 @@ import { directElementChildren, type ElementLike } from './xmlLite';
 
 function lineOf(haystack: string, needleIndex: number): number {
   return haystack.slice(0, Math.max(0, needleIndex)).split('\n').length;
+}
+
+const EXPRESSION_TYPE = /^(?:\w+:)?(?:lvalue|boolean)?expression$/i;
+
+/** Translate a decoded attribute offset to a one-based raw XML source position. */
+function expressionLocation(source: string, lines: number[], attr: Attr, offset: number) {
+  const fallback = { line: attr.lineNumber, column: attr.columnNumber };
+  if (!attr.lineNumber || !attr.columnNumber) return fallback;
+  let line = attr.lineNumber;
+  const quoteAt = lines[line - 1] + attr.columnNumber - 1;
+  const quote = source[quoteAt];
+  if (quote !== '"' && quote !== "'") return fallback;
+  const end = source.indexOf(quote, quoteAt + 1);
+  const entity = /&(?:#(x[\da-f]+|\d+)|amp|apos|quot|lt|gt);/iy;
+  let index = quoteAt + 1;
+  for (let decoded = 0; decoded < offset && index < end; decoded++) {
+    entity.lastIndex = index;
+    const match = source[index] === '&' ? entity.exec(source) : null;
+    if (match) {
+      const numeric = match[1];
+      const value = numeric?.startsWith('x') ? parseInt(numeric.slice(1), 16) : Number(numeric);
+      if (value > 0xffff) decoded++;
+      index = entity.lastIndex;
+    } else {
+      index++;
+    }
+  }
+  if (index >= end) return fallback;
+  while (lines[line] !== undefined && lines[line] <= index) line++;
+  return { line, column: index - lines[line - 1] + 1 };
+}
+
+/** Validate expression-valued attributes in script files and their XML diff payloads. */
+export function lintMdUnmatchedElse(xml: string, schema: SchemaIndex | null, filePath?: string): MdPitfallFinding[] {
+  if (!/\belse\b|&#/.test(xml)) return [];
+  const source = normalizeLineEndings(xml.replace(/^\uFEFF/, ''));
+  let invalid = false;
+  let doc;
+  try {
+    assertXmlInputWithinLimits(source);
+    doc = new DOMParser({ onError: () => { invalid = true; } }).parseFromString(source, 'text/xml');
+  } catch { return []; }
+  if (invalid || !['mdscript', 'aiscript', 'diff'].includes(doc.documentElement?.nodeName ?? '')) return [];
+
+  const findings: MdPitfallFinding[] = [];
+  const elements = doc.getElementsByTagName('*');
+  let lines: number[] | undefined;
+  for (let index = 0; index < elements.length; index++) {
+    const element = elements[index];
+    const attributes = schema?.elements.get(element.nodeName)?.attributes;
+    for (let i = 0; i < element.attributes.length; i++) {
+      const attr = element.attributes[i];
+      const spec = attributes?.get(attr.name);
+      if (!(element.nodeName === 'set_value' && attr.name === 'exact')
+        && !EXPRESSION_TYPE.test(spec?.type ?? '') && !EXPRESSION_TYPE.test(spec?.baseType ?? '')) continue;
+      const offset = findUnmatchedMdElse(attr.value);
+      if (offset === undefined) continue;
+      lines ??= [0, ...Array.from(source.matchAll(/\n/g), match => match.index + 1)];
+      findings.push({
+        code: MD_UNMATCHED_ELSE.code, severity: 'error', filePath,
+        sourceRef: `${element.nodeName}/@${attr.name}`,
+        ...expressionLocation(source, lines, attr, offset),
+        detail: MD_UNMATCHED_ELSE.message,
+      });
+    }
+  }
+  return findings;
 }
 
 /** Preserve source offsets while excluding markup-looking content that is not an element. */
@@ -90,6 +162,17 @@ function hasXmlAttribute(element: ElementLike, name: string): boolean {
   return new RegExp(`\\b${name}\\s*=`, 'i').test(openingTag);
 }
 
+function enclosingNamedCue(element: Element): string | undefined {
+  const names: string[] = [];
+  for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+    if (parent.tagName !== 'cue' && parent.tagName !== 'library') continue;
+    const name = parent.getAttribute('name');
+    if (!name) return undefined;
+    names.push(name);
+  }
+  return names.length ? names.reverse().join('.') : undefined;
+}
+
 /**
  * Lint one MD file. `propertyUnion` (from the scriptproperty index) makes the param3
  * lint union-aware; without it the param3 lint stays conservative (identifier must
@@ -101,29 +184,37 @@ export function lintMdPitfalls(xml: string, opts: { propertyUnion?: Set<string>;
   if (!xml || typeof xml !== 'string' || !/<mdscript\b/i.test(xml)) return out;
   const masked = maskNonExpressionSpans(xml);
 
-  // ---- 2. offer_accepted keyword cue (regex over masked text — flat shape) ----
-  {
-    const re = /<event_offer_accepted\b[^>]*\bcue\s*=\s*"(parent|this|static)"[^>]*>/gi;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(masked)) !== null) {
-      out.push({
-        code: 'md_pitfall.offer_accepted_keyword_cue',
-        severity: 'warning',
-        line: lineOf(masked, m.index),
-        detail: `<event_offer_accepted cue="${m[1]}"> validates clean but never fires in-game — the engine does not resolve cue keywords for this event at register time (proven 2026-07-01; also kuertee: "event_offer_accepted doesn't work"). Use the proven accept pattern instead: listen <event_object_signalled object="$Client" param="'accept'"/> after create_mission / set_objective, or store the offer cue in a variable (<set_value name="$OfferCue" exact="this"/> … cue="$OfferCue").${opts.filePath ? ` (${opts.filePath})` : ''}`,
-      });
-    }
-  }
-
   // DOM parse for the cue-tree lints
-  let doc: { documentElement: ElementLike | null } | null = null;
+  let doc: Document;
   let parseError = false;
   try {
-    doc = new DOMParser({ onError: () => { parseError = true; } }).parseFromString(xml, 'text/xml') as unknown as { documentElement: ElementLike | null };
+    doc = new DOMParser({ onError: () => { parseError = true; } }).parseFromString(xml, 'text/xml');
   } catch { return out; }
-  const root = doc?.documentElement;
+  const element = doc.documentElement;
   // Non-MD and malformed XML produce no semantic finding here; structural/wellformedness validation owns those diagnostics.
-  if (!root || root.nodeName !== 'mdscript' || parseError) return out;
+  if (!element || element.nodeName !== 'mdscript' || parseError) return out;
+  const root = element as unknown as ElementLike;
+
+  const offerOccurrences = new Map<string, number>();
+  for (const event of Array.from(element.getElementsByTagName('event_offer_accepted'))) {
+    const attribute = event.getAttributeNode('cue');
+    if (!attribute || !/^(parent|this|static)$/i.test(attribute.value)) continue;
+    const cue = enclosingNamedCue(event);
+    const key = JSON.stringify([cue, attribute.value]);
+    const occurrence = (offerOccurrences.get(key) ?? 0) + 1;
+    offerOccurrences.set(key, occurrence);
+    out.push({
+      code: 'md_pitfall.offer_accepted_keyword_cue',
+      severity: 'warning',
+      filePath: opts.filePath,
+      cue,
+      // Remembered reviews distinguish source references independently of columns.
+      sourceRef: occurrence > 1 ? `#${occurrence} ${cue ?? 'event_offer_accepted'}` : cue,
+      line: attribute.lineNumber ?? event.lineNumber,
+      column: attribute.columnNumber ?? event.columnNumber,
+      detail: `<event_offer_accepted cue="${attribute.value}"> validates clean but never fires in-game — the engine does not resolve cue keywords for this event at register time (proven 2026-07-01; also kuertee: "event_offer_accepted doesn't work"). Use the proven accept pattern instead: listen <event_object_signalled object="$Client" param="'accept'"/> after create_mission / set_objective, or store the offer cue in a variable (<set_value name="$OfferCue" exact="this"/> … cue="$OfferCue").${opts.filePath ? ` (${opts.filePath})` : ''}`,
+    });
+  }
 
   // Prior X4 9.00 station probe (#635): products? was false on producing stations,
   // whereas products.count worked. Gate the advisory on actual corpus metadata;
@@ -255,6 +346,23 @@ export function runMdPitfallSelftest(): {
   const ok = (name: string, cond: boolean, detail?: unknown) =>
     checks.push({ name, pass: !!cond, detail: detail === undefined ? undefined : (typeof detail === 'string' ? detail : JSON.stringify(detail)) });
   const lint = (xml: string) => lintMdPitfalls(xml, { propertyUnion: UNION_FIXTURE });
+  const orphan = '  <set_value name="$probe" exact="$n &lt; 5 &#101;lse 0"/>';
+  const expressionXml = [
+    '<mdscript name="ElseProbe">',
+    '  <!-- <set_value exact="else"/> -->',
+    '  <![CDATA[<set_value exact="else"/>]]>',
+    '  <set_value name="$else" exact="\'else\'" comment="else"/>',
+    orphan,
+    '</mdscript>',
+  ].join('\r\n');
+  const expressionFindings = lintMdUnmatchedElse(expressionXml, null, 'md/probe.xml');
+  ok('unmatched_else_uses_decoded_attributes_and_raw_coordinates',
+    expressionFindings.length === 1 && expressionFindings[0].line === 5
+    && expressionFindings[0].column === orphan.indexOf('&#101;') + 1
+    && expressionFindings[0].sourceRef === 'set_value/@exact', expressionFindings);
+  ok('unmatched_else_ignores_non_script_root_and_invalid_xml',
+    lintMdUnmatchedElse('<root><set_value exact="else"/></root>', null).length === 0
+    && lintMdUnmatchedElse('<mdscript><set_value exact="else"/></invalid>', null).length === 0);
   const cancelFindingCode = 'md_pitfall.cancel_conversation_actor_or_template';
   const cancelFindings = (xml: string) => lint(xml).filter(f => f.code === cancelFindingCode);
 
@@ -338,6 +446,18 @@ export function runMdPitfallSelftest(): {
     lint(offerKw)[0]?.detail.includes('event_object_signalled'), lint(offerKw)[0]?.detail);
   const offerVar = `<mdscript name="T"><cues><cue name="A" instantiate="true"><conditions><event_offer_accepted cue="$OfferCue"/></conditions></cue></cues></mdscript>`;
   ok('variable-form offer listener passes (vanilla idiom)', lint(offerVar).length === 0);
+  const nestedOffers = [
+    '<mdscript name="T"><cues>',
+    '<cue name="Left"><cues><cue name="Listen"><conditions><event_offer_accepted cue="this"/></conditions></cue></cues></cue>',
+    '<cue name="Right"><cues><cue name="Listen"><conditions><event_offer_accepted cue=\'this\'/></conditions></cue></cues></cue>',
+    '<!-- <event_offer_accepted cue="this"/> -->',
+    '</cues></mdscript>',
+  ].join('\n');
+  const offers = lintMdPitfalls(nestedOffers, { filePath: 'md/probe.xml' });
+  ok('offer keywords retain distinct cue ancestry and attribute locations',
+    offers.length === 2 && offers[0].cue === 'Left.Listen' && offers[1].cue === 'Right.Listen'
+    && offers.every((finding, index) => finding.filePath === 'md/probe.xml' && finding.line === index + 2
+      && finding.column === nestedOffers.split('\n')[index + 1].indexOf('cue=') + 5), offers);
 
   // --- 3. param3_table_barekey ---
   const bareKey = `<mdscript name="T"><cues><cue name="A" instantiate="true" namespace="this">

@@ -6,12 +6,19 @@ import { checkXmlWellformed } from './xmlWellformed';
 import { parseXmlLenient } from './xmlLite';
 
 export const VALIDATION_EVIDENCE_VERSION = 1 as const;
+export interface ValidationSourceLocation {
+  file: string;
+  line?: number;
+  column?: number;
+}
 export interface EvidenceDiagnostic {
   severity: 'error' | 'warning' | 'info';
   code?: string;
   filePath?: string;
   sourceRef?: string;
   line?: number;
+  column?: number;
+  target?: ValidationSourceLocation;
   message: string;
 }
 export interface ValidationCoverageGap {
@@ -75,6 +82,7 @@ export function buildValidationEvidence(
       VALIDATION_EVIDENCE_VERSION, modId, project.id, sourceHash, category, finding.code || '',
       normalizedPath(finding.filePath || ''), finding.sourceRef || '', finding.line ?? null,
       finding.severity, finding.message,
+      ...(finding.column === undefined ? [] : [finding.column]),
     ])).digest('hex');
     if (category === 'check-unavailable') gaps.push({ check: finding.code!, filePath: finding.filePath, reason: finding.message });
     return { ...finding, findingId, category };

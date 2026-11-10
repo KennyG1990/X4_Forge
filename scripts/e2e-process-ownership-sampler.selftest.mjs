@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 
 import {
   initializeSpawnedProcessOwnership,
+  readSpawnedProcessOwnershipFailureCode,
   sampleSpawnedProcessOwnership,
 } from './e2e-process-ownership-sampler.mjs';
 
@@ -339,6 +340,8 @@ const runCase6 = async () => {
     makeInitializeInput(callbackErrorExecFile),
   );
   assertFailure(callbackErrorResult, ERR_SNAPSHOT_FAILED);
+  assert.equal(readSpawnedProcessOwnershipFailureCode(callbackErrorResult), 'snapshot-command-failed');
+  assert.equal(readSpawnedProcessOwnershipFailureCode({ ...callbackErrorResult }), null);
   assert.equal(JSON.stringify(callbackErrorResult).includes(secret), false);
   assert.equal(callbackErrorExecFile.calls(), 1);
 
@@ -349,6 +352,7 @@ const runCase6 = async () => {
     makeInitializeInput(malformedCsvExecFile),
   );
   assertFailure(malformedCsvResult, ERR_SNAPSHOT_FAILED);
+  assert.equal(readSpawnedProcessOwnershipFailureCode(malformedCsvResult), 'snapshot-parse-header-mismatch');
   assert.equal(malformedCsvExecFile.calls(), 1);
 
   const otherRoot = { pid: 99, creationToken: '20260802049998.860108-240' };
@@ -359,6 +363,7 @@ const runCase6 = async () => {
     makeInitializeInput(missingRootExecFile),
   );
   assertFailure(missingRootResult, ERR_ROOT_UNAVAILABLE);
+  assert.equal(readSpawnedProcessOwnershipFailureCode(missingRootResult), null);
   assert.equal(missingRootExecFile.calls(), 1);
 
   const sampleMalformedExecFile = makeSnapshotResponseExecFile((callback) => {
@@ -368,6 +373,7 @@ const runCase6 = async () => {
     makeSampleInput(sampleMalformedExecFile),
   );
   assertFailure(sampleMalformedResult, ERR_SNAPSHOT_FAILED);
+  assert.equal(readSpawnedProcessOwnershipFailureCode(sampleMalformedResult), 'snapshot-parse-wrong-column-count');
   assert.equal(sampleMalformedExecFile.calls(), 1);
 };
 
@@ -403,6 +409,7 @@ const runCase7 = async () => {
       }),
     ]);
     assertFailure(result, ERR_SNAPSHOT_FAILED);
+    assert.equal(readSpawnedProcessOwnershipFailureCode(result), 'snapshot-command-timeout');
   } finally {
     clearTimeout(watchdog);
   }
@@ -536,6 +543,30 @@ const runCase8 = async () => {
   assert.deepEqual(sampleInput, samplePostCallInput);
 };
 
+const runCase9 = async () => {
+  for (const [csv, code] of [
+    [wmicCsv(`DESKTOP-SELFTEST,,0,${ROOT_PID}`), 'snapshot-parse-invalid-creation-token'],
+    [wmicCsv(wmicRow(ROOT, 0), wmicRow(ROOT, 0)), 'snapshot-parse-duplicate-pid'],
+  ]) {
+    const fakeExecFile = makeFakeExecFile(csv);
+    const result = await sampleSpawnedProcessOwnership(makeSampleInput(fakeExecFile));
+    assertFailure(result, ERR_SNAPSHOT_FAILED);
+    assert.equal(readSpawnedProcessOwnershipFailureCode(result), code);
+    assert.equal(fakeExecFile.calls(), 1);
+    assert.equal(readSpawnedProcessOwnershipFailureCode(JSON.parse(JSON.stringify(result))), null);
+  }
+
+  const validResult = await initializeSpawnedProcessOwnership(
+    makeInitializeInput(makeFakeExecFile(wmicCsv(wmicRow(ROOT, 0)))),
+  );
+  assert.equal(validResult.complete, true);
+  assert.equal(readSpawnedProcessOwnershipFailureCode(validResult), null);
+  assert.equal(readSpawnedProcessOwnershipFailureCode(null), null);
+  assert.equal(readSpawnedProcessOwnershipFailureCode(new Proxy({}, {
+    get() { throw new Error('diagnostic reader must not inspect foreign results'); },
+  })), null);
+};
+
 const main = async () => {
   try {
     await runCase1();
@@ -546,7 +577,8 @@ const main = async () => {
     await runCase6();
     await runCase7();
     await runCase8();
-    console.log('e2e process ownership sampler selftest: 8/8 PASS');
+    await runCase9();
+    console.log('e2e process ownership sampler selftest: 9/9 PASS');
   } catch {
     process.exitCode = 1;
   }

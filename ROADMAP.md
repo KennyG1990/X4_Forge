@@ -8067,3 +8067,27 @@ eight actual HTTP/CLI reporting cases, lint0errors599warnings and full precommit
 Evidence: docs/releases/0.0.80-delivery.json. No application source/package changes,
 republish, live installation, active-mod edit or game input. All failed runs retained.
 No capability-map delta. Full Claude program remains PARTIAL; Kimi paused.
+
+
+## 2026-11-09 —0.0.82 exact candidate qualification VERIFIED; delivery pending
+
+Source120/509/134, exact stableVSIX0b8d6477…, privateCLI2200-file parity, installed receipt/Steam/rollback/physical/filename/probe19 and final134runtimeoracles passed. Publication is not yet claimed. Evidence:[0.0.82proof](docs/releases/0.0.82-proof.json). No live install/game input; experience/cold-start witnesses stay open.
+
+## 2026-11-09 — historical0.0.80 delivery CI reconciled VERIFIED
+
+The previously pending final Quality run[40415020902](https://github.com/KennyG1990/X4_Forge/actions/runs/40415020902) is completed/success at8e3a0abfc308955e09099feb6f15076183c7aef8. The initial failed run is retained in its delivery record; the broader Claude programme stays open. Moved only the stale delivery unit from open BACKLOG. Original precommit capture follows unchanged:
+
+### Bounded Claude fixes public release 0.0.80 `in_progress` (GitHub #20)
+
+User authorized the bounded public release before finishing the program, then return to Dev.
+Release commit c97d5d8 is pushed; GitHub v0.0.80 and Open VSX version/latest downloads
+match the tested VSIX. Source120 E2E/500 routes/134 oracles and exact package80/installed62/
+installed134/native proof passed. No live installation or game input. Required Quality
+run40409196050 failed two oracles; this release-completion CI-only repair passes local
+alias recovery, two complete134-oracle runs with cleanup,500 routes and full mandatory
+gates. Remote follow-up CI is pending at this precommit snapshot; require green and
+record exact provenance on the release/owner before closing delivery. Public package
+is immutable and unchanged. See docs/releases/0.0.80-delivery.json and the bounded plan.
+Extension tooling retains4moderate uuid-chain findings; staged runtime audit is clear.
+Remove scoped Identity4.13.0 pin only after supported upstream remediation and reproof.
+The Claude program stays OPEN; A15 is next in isolated Dev and Kimi remains paused.

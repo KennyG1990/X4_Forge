@@ -10,6 +10,7 @@ import {
 } from '../src/lib/artifactPipeline';
 import { verifyCatDatCatalogs, writeCatDatCatalogs } from '../src/lib/x4CatDat';
 import { materializeCatalogArtifact } from '../src/lib/artifactPackager';
+import { toTFileName } from '../src/lib/modCompiler';
 
 interface Check {
   name: string;
@@ -61,6 +62,35 @@ const catalogOutputRepeat = path.join(root, 'catalog-output-repeat');
 const packagedOutput = path.join(root, 'packaged-output');
 
 try {
+  const explicitTextNames = [
+    ['0001-L044.xml', '44', '0001-L044.xml'],
+    ['0002-l44.xml', '44', '0002-l44.xml'],
+    ['0003-L00044.xml', '44', '0003-L00044.xml'],
+    ['0004-l044.xml', '44', '0004-l044.xml'],
+    ['0005-l00044.xml', '44', '0005-l00044.xml'],
+    ['Forge.Translations.xml', '44', 'Forge.Translations.xml'],
+    ['author-L9.XML', '9', 'author-L9.XML'],
+    ['custom-L049.xml', '44', 'custom-L049.xml'],
+    ['  kept-L007.xml  ', '07', 'kept-L007.xml'],
+  ];
+  for (const [fileName, languageId, expected] of explicitTextNames) {
+    const actual = toTFileName({ fileName, languageId });
+    check(`explicit translation filename is preserved: ${JSON.stringify(fileName)}`, actual === expected, actual);
+  }
+  for (const [languageId, expected] of [['44', '0001-l044.xml'], ['07', '0001-l007.xml'], ['9', '0001-l009.xml']]) {
+    const actual = toTFileName({ languageId });
+    check(`generated translation filename stays canonical for language ${languageId}`, actual === expected, actual);
+  }
+  check('blank translation filename still uses the generated English default', toTFileName({ fileName: '  ' }) === '0001-l044.xml');
+  const textCasePair = buildArtifactPlan({ sourceRoot: '', memoryOnly: true, generatedFiles: {
+    't/0001-L044.xml': '<language id="44"/>',
+    't/0001-l044.xml': '<language id="44"/>',
+  } });
+  check('distinct case-folded translation owners still collide', !textCasePair.ok && textCasePair.errors.some(error => error.toLowerCase().includes('collide')));
+  const unsafeTextName = buildArtifactPlan({ sourceRoot: '', memoryOnly: true, generatedFiles: {
+    [`t/${toTFileName({ fileName: '../escape.xml', languageId: '44' })}`]: '<language id="44"/>',
+  } });
+  check('explicit translation traversal remains rejected by the artifact guard', !unsafeTextName.ok && unsafeTextName.errors.some(error => error.toLowerCase().includes('unsafe')));
   const memoryPlan = buildArtifactPlan({ sourceRoot: '', memoryOnly: true, generatedFiles: { 'content.xml': '<content id="memory"/>' } });
   check('memory-only plan never enumerates current directory', memoryPlan.ok && memoryPlan.sourceRoot === '' && memoryPlan.entries.length === 1);
   check('memory-only plan refuses a simultaneous disk root', !buildArtifactPlan({ sourceRoot: root, memoryOnly: true }).ok);

@@ -23,7 +23,49 @@
  */
 
 import type { MDNode, MDLink } from '../types';
+import { DOMParser, type Element } from '@xmldom/xmldom';
+import type { ValidationSourceLocation } from './validationEvidence';
 import { parseXmlLenient, walkElements } from './xmlLite';
+
+export function parseMdScriptRoot(content: string): Element | null {
+  let malformed = false;
+  try {
+    const root = new DOMParser({ onError: () => { malformed = true; } })
+      .parseFromString(content.replace(/^\uFEFF/, ''), 'text/xml').documentElement;
+    return !malformed && root?.nodeName === 'mdscript' ? root : null;
+  } catch {
+    return null;
+  }
+}
+
+export function duplicateMdCueMessage(name: string, script: string, first?: ValidationSourceLocation): string {
+  const scope = script ? ` in script "${script}"` : '';
+  const message = `Duplicate cue name "${name}"${scope}. All cue names must be unique within their script file.`;
+  if (!first) return message;
+  const location = [first.file, first.line, first.column].filter(part => part !== undefined).join(':');
+  return `${message} First declared at ${location}.`;
+}
+
+/** The MD schema keys all descendant cue and library names within one script document. */
+export function findDuplicateMdCueDeclarations(elements: ArrayLike<Element>) {
+  const firstByName = new Map<string, { line?: number; column?: number }>();
+  const duplicates: Array<{
+    name: string;
+    line?: number;
+    column?: number;
+    first: { line?: number; column?: number };
+  }> = [];
+  for (const element of Array.from(elements)) {
+    if (element.nodeName !== 'cue' && element.nodeName !== 'library') continue;
+    const name = element.getAttributeNode('name');
+    if (!name?.value) continue;
+    const position = { line: name.lineNumber ?? element.lineNumber, column: name.columnNumber ?? element.columnNumber };
+    const first = firstByName.get(name.value);
+    if (first) duplicates.push({ name: name.value, ...position, first });
+    else firstByName.set(name.value, position);
+  }
+  return duplicates;
+}
 
 export type CueLineageSeverity = 'error' | 'warning';
 export type CueLineageCode =

@@ -57,6 +57,7 @@ export interface DeploymentRecoveryRecord extends RecoveryBase {
   modId: string;
   beforeFingerprint: string;
   beforeBytes: number;
+  writeAdmission?: { phase: 'pending-v1' | 'started-v1'; pid: number; host: string };
 }
 
 export type DestructiveRecoveryRecord = WorkspaceRecoveryRecord | DeploymentRecoveryRecord;
@@ -160,7 +161,11 @@ function isRecord(value: unknown): value is DestructiveRecoveryRecord {
     (row.expectedCurrentSnapshotHash === undefined || typeof row.expectedCurrentSnapshotHash === 'string') &&
     (row.workspaceId === undefined || /^ws_[a-f0-9]{24}$/i.test(row.workspaceId));
   return typeof row.targetRoot === 'string' && typeof row.targetPath === 'string' && typeof row.modId === 'string'
-    && typeof row.beforeFingerprint === 'string' && typeof row.beforeBytes === 'number' && typeof row.priorExisted === 'boolean';
+    && typeof row.beforeFingerprint === 'string' && typeof row.beforeBytes === 'number' && typeof row.priorExisted === 'boolean'
+    && (row.writeAdmission === undefined || (row.writeAdmission !== null
+      && ['pending-v1', 'started-v1'].includes(row.writeAdmission.phase)
+      && Number.isSafeInteger(row.writeAdmission.pid) && row.writeAdmission.pid > 0
+      && typeof row.writeAdmission.host === 'string' && !!row.writeAdmission.host));
 }
 
 function directoryBytes(root: string): number {
@@ -359,6 +364,7 @@ export class DestructiveRecoveryStore {
     beforeFingerprint: string;
     beforeBytes: number;
     expectedCurrentHash?: string;
+    trackWriteAdmission?: boolean;
     summary: string;
   }): DeploymentRecoveryRecord {
     if (input.beforeBytes > this.maxDeployBytes) throw new Error(`Deployment recovery exceeds ${this.maxDeployBytes} bytes.`);
@@ -379,9 +385,29 @@ export class DestructiveRecoveryStore {
       modId: input.modId,
       beforeFingerprint: input.beforeFingerprint,
       beforeBytes: input.beforeBytes,
+      ...(input.trackWriteAdmission ? {
+        writeAdmission: { phase: 'pending-v1', pid: process.pid, host: os.hostname() },
+      } : {}),
     };
     this.write(record);
     return record;
+  }
+
+  admitDeploymentWrite(prepared: DeploymentRecoveryRecord): void {
+    const found = this.read(prepared.id);
+    if (!found.ok || prepared.status !== 'preparing' || prepared.writeAdmission?.phase !== 'pending-v1'
+      || prepared.writeAdmission.pid !== process.pid || prepared.writeAdmission.host !== os.hostname()
+      || canonicalJson(found.record) !== canonicalJson(prepared)) {
+      throw new Error('Deployment write admission no longer matches its prepared recovery record.');
+    }
+    const admitted: DeploymentRecoveryRecord = {
+      ...prepared, writeAdmission: { ...prepared.writeAdmission, phase: 'started-v1' },
+    };
+    this.write(admitted);
+    const verified = this.read(admitted.id);
+    if (!verified.ok || canonicalJson(verified.record) !== canonicalJson(admitted)) {
+      throw new Error('Deployment write admission could not be verified.');
+    }
   }
 
   finalizeDeployment(id: string, expectedCurrentHash: string): DeploymentRecoveryRecord {

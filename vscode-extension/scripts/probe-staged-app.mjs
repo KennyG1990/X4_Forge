@@ -10,6 +10,7 @@ const extensionRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const appRoot = path.join(extensionRoot, 'app');
 const serverPath = path.join(appRoot, 'dist', 'server.cjs');
 const supervisorPath = path.join(extensionRoot, 'out', 'sidecar-supervisor.js');
+const extensionVersion = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'package.json'), 'utf8')).version;
 const port = Number(process.env.X4_STAGED_PROBE_PORT || 8982);
 const base = `http://127.0.0.1:${port}`;
 const token = `staged-app-probe-${process.pid}`;
@@ -79,6 +80,8 @@ try {
       ...process.env,
       NODE_ENV: 'production',
       PORT: String(port),
+      X4_FORGE_MODE: 'release-host',
+      X4_FORGE_EXTENSION_VERSION: extensionVersion,
       STUDIO_API_TOKEN: token,
       X4_STATE_DIR: path.join(tmp, 'state'),
       X4_SOURCE_COORDINATION_DIR: path.join(tmp, 'source-coordination'),
@@ -139,6 +142,14 @@ try {
 
   const supervisedPid = Number(/X4FORGE_SUPERVISED_PID=(\d+)/.exec(output)?.[1] || 0);
   check('supervisor reports exact owned server pid', supervisedPid > 0 && pidAlive(supervisedPid), String(supervisedPid));
+  const publicStatus = await fetch(`${base}/api/reference/status`);
+  const { instance } = await publicStatus.json();
+  const discovery = JSON.parse(fs.readFileSync(path.join(discoveryDir, 'latest.json'), 'utf8'));
+  check('public identity agrees with the staged host discovery', publicStatus.ok && publicStatus.headers.get('cache-control') === 'no-store'
+    && instance?.mode === 'release-host' && instance.pid === supervisedPid && instance.port === port
+    && instance.startedAt === discovery.startedAt && instance.version === extensionVersion
+    && instance.mode === discovery.mode && instance.pid === discovery.pid && instance.port === discovery.port
+    && instance.version === discovery.version && Object.keys(instance).sort().join(',') === 'mode,pid,port,startedAt,version');
   check('claimed parent pid is alive before orphan drill', pidAlive(process.pid), String(process.pid));
   child.stdin.end();
   const gracefulExit = await waitForExit(child, 3000);
@@ -161,10 +172,19 @@ try {
   const stubbornPath = path.join(tmp, 'stubborn-child.cjs');
   fs.writeFileSync(stubbornPath, `
 const { spawn } = require('node:child_process');
+const fs = require('node:fs');
+const path = require('node:path');
 const descendant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
   stdio: 'ignore',
   windowsHide: true,
 });
+const discovery = process.env.X4FORGE_DISCOVERY_DIR;
+const instances = path.join(discovery, 'instances');
+fs.mkdirSync(instances, { recursive: true });
+const record = JSON.stringify({ pid: process.pid, port: Number(process.env.PORT),
+  startedAt: new Date().toISOString(), cwd: process.cwd(), mode: 'staged-probe' });
+fs.writeFileSync(path.join(instances, process.pid + '.json'), record);
+fs.writeFileSync(path.join(discovery, 'latest.json'), record);
 console.log('X4FORGE_PROBE_DESCENDANT_PID=' + descendant.pid);
 setInterval(() => {}, 1000);
 `);
@@ -175,6 +195,8 @@ setInterval(() => {}, 1000);
     stdio: ['pipe', 'pipe', 'pipe'],
     env: {
       ...process.env,
+      PORT: String(port),
+      X4FORGE_DISCOVERY_DIR: discoveryDir,
       X4_FORGE_PARENT_MODE: 'pipe-v1',
       X4_FORGE_PARENT_PID: String(process.pid),
       X4_FORGE_PARENT_NONCE: 'b'.repeat(64),
@@ -191,6 +213,10 @@ setInterval(() => {}, 1000);
   }
   check('stubborn fixture and descendant started', stubbornPid > 0 && descendantPid > 0
     && pidAlive(stubbornPid) && pidAlive(descendantPid), `childPid=${stubbornPid} descendantPid=${descendantPid}`);
+  const stubbornRecord = path.join(discoveryDir, 'instances', `${stubbornPid}.json`);
+  const stubbornLatest = path.join(discoveryDir, 'latest.json');
+  check('stubborn fixture published its discovery', fs.existsSync(stubbornRecord)
+    && JSON.parse(fs.readFileSync(stubbornLatest, 'utf8')).pid === stubbornPid);
   const forceStart = performance.now();
   stubborn.stdin.end();
   const stubbornExit = await waitForExit(stubborn, 3500);
@@ -200,6 +226,7 @@ setInterval(() => {}, 1000);
   check('supervisor force reaps pipe-ignorant owned tree', stubbornExit && performance.now() - forceStart <= 3500 && !pidAlive(stubbornPid) && !pidAlive(descendantPid),
     `elapsedMs=${Math.round(performance.now() - forceStart)} supervisorExit=${stubborn.exitCode} childPid=${stubbornPid} descendantPid=${descendantPid}`);
   check('force reap never kills claimed parent pid', pidAlive(process.pid), String(process.pid));
+  check('force reap removes owned discovery', !fs.existsSync(stubbornRecord) && !fs.existsSync(stubbornLatest));
 } catch (error) {
   check('probe completed without exception', false, error instanceof Error ? error.message : String(error));
 } finally {

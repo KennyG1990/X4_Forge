@@ -108,6 +108,7 @@ export interface BuildArtifactPlanOptions {
  */
 const UNIVERSAL_EXCLUDES = [
   '.git/**',
+  '.github/**',
   '.gitignore',
   '.gitattributes',
   '.gitmodules',
@@ -133,15 +134,30 @@ function sha256Buffer(content: string | Buffer): string {
   return crypto.createHash('sha256').update(content).digest('hex');
 }
 
-export function hashArtifactFile(filePath: string, algorithm: 'sha256' | 'md5' = 'sha256'): string {
+export function sameArtifactStamp(expected: fs.BigIntStats, actual: fs.BigIntStats): boolean {
+  return expected.dev === actual.dev && expected.ino === actual.ino && expected.mode === actual.mode
+    && expected.nlink === actual.nlink && expected.size === actual.size
+    && expected.mtimeNs === actual.mtimeNs && expected.ctimeNs === actual.ctimeNs;
+}
+
+export function hashArtifactFile(filePath: string, algorithm: 'sha256' | 'md5' = 'sha256', expected?: fs.BigIntStats): string {
   const hash = crypto.createHash(algorithm);
-  const fd = fs.openSync(filePath, 'r');
-  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  const guardFlags = expected && process.platform !== 'win32' ? fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK : 0;
+  const fd = fs.openSync(filePath, fs.constants.O_RDONLY | guardFlags);
   try {
-    while (true) {
-      const read = fs.readSync(fd, buffer, 0, buffer.length, null);
+    if (expected && (!expected.isFile() || expected.nlink !== 1n || !sameArtifactStamp(expected, fs.fstatSync(fd, { bigint: true })))) {
+      throw new Error('Deployment observation file changed before reading.');
+    }
+    let remaining = expected ? Number(expected.size) : Infinity;
+    const buffer = Buffer.allocUnsafe(Math.min(Math.max(remaining, 1), 1024 * 1024));
+    while (remaining > 0) {
+      const read = fs.readSync(fd, buffer, 0, Math.min(remaining, buffer.length), null);
       if (read <= 0) break;
+      remaining -= read;
       hash.update(buffer.subarray(0, read));
+    }
+    if (expected && (remaining !== 0 || !sameArtifactStamp(expected, fs.fstatSync(fd, { bigint: true })))) {
+      throw new Error('Deployment observation file changed while reading.');
     }
   } finally {
     fs.closeSync(fd);

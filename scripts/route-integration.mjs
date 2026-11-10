@@ -354,6 +354,8 @@ async function main() {
   runRequiredBuild();
 
   const tsxCli = path.join(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs');
+  const duplicateHook = path.join(process.cwd(), 'tests', 'fixtures', 'deploy-late-duplicate.cjs');
+  const lateDuplicateTrigger = path.join(tmp, 'late-duplicate.trigger');
   child = spawn(process.execPath, [tsxCli, 'server.ts'], {
     cwd: process.cwd(),
     shell: false,
@@ -362,6 +364,7 @@ async function main() {
       ...process.env,
       PORT: String(PORT),
       NODE_ENV: 'development',
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, '--require', JSON.stringify(duplicateHook)].filter(Boolean).join(' '),
       FORGE_ALLOW_RUN_COMMAND: 'true',
       STUDIO_API_TOKEN: SESSION_TOKEN,
       X4_STATE_DIR: stateDir,
@@ -374,6 +377,10 @@ async function main() {
       FORGE_TIMEOUT_DRILL_MS: '300',
       FORGE_TIMEOUT_DRILL_RESPONSE_MS: '100',
       FORGE_ROUTE_TEST_MODE: '1',
+      FORGE_ROUTE_TEST_ROOT: tmp,
+      FORGE_QA_DUPLICATE_TARGET: path.join(liveExtensions, 'stale_probe_mod'),
+      FORGE_QA_DUPLICATE_TRIGGER: lateDuplicateTrigger,
+      FORGE_QA_DUPLICATE_MOD: 'stale_probe_mod',
       FORGE_ROUTE_TEST_AI_RESPONSES: JSON.stringify(ROUTE_TEST_AI_RESPONSES),
       FORGE_ROUTE_TEST_AI_DELAY_MS: '400',
       FORGE_ROUTE_TEST_AI_MARKER_DIR: aiMarkerDir,
@@ -3661,6 +3668,8 @@ async function main() {
   ok('dry_run_wrote_nothing', afterDry === beforeDry && (!beforeDry || afterDryHash === beforeDryHash) && afterDryStaging === beforeDryStaging && (!beforeDryStaging || afterDryStagingHash === beforeDryStagingHash),
     `target=${beforeDry}/${afterDry} staging=${beforeDryStaging}/${afterDryStaging}`);
   ok('dry_run_does_not_advertise_staging_path', !Object.prototype.hasOwnProperty.call(dry.json || {}, 'stagingPath'), JSON.stringify(dry.json || {}));
+  ok('native_preview_has_no_deployed_byte_scope', dry.json?.deployment?.state === 'not-deployed'
+    && dry.json.deployment.writeAttempted === false && dry.json.deployment.fidelityScope === 'none');
   ok('dry_run_does_not_promote_validation_baseline', dry.json?.baselinePromotion?.recorded === false && dry.json?.validationDelta?.status === 'no_baseline', JSON.stringify(dry.json?.baselinePromotion));
 
   // #4 autoReimport actually unblocks the deploy the guard refused.
@@ -3700,17 +3709,58 @@ async function main() {
   ok('deploy_row_records_exact_file_effect',
     JSON.stringify(deployRow?.fileEffect) === JSON.stringify(expectedDeployEffect),
     JSON.stringify({ expected: expectedDeployEffect, actual: deployRow?.fileEffect }));
+  ok('native_commit_reports_verified_byte_scope', autoDeploy.json?.deployment?.state === 'deployed'
+    && autoDeploy.json.deployment.writeAttempted === true && autoDeploy.json.deployment.fidelityScope === 'current-deployment');
   ok('verified_deploy_row_is_truthfully_revertible', deployRow?.revertible === true && deployRow?.recoveryId === autoDeploy.json?.recovery?.id, JSON.stringify(deployRow || {}));
 
-  // A post-write doctor failure must roll back immediately and must not advertise later undo.
+  // A known duplicate refuses before writes. A later duplicate still triggers rollback.
+  const duplicateBody = { workspace: staleImport.json?.workspace, autoReimport: true };
+  const beforeDuplicate = await req('POST', '/api/agent/deploy-verify', SESSION_TOKEN, { ...duplicateBody, dryRun: true });
+  const duplicateApply = { ...duplicateBody, ...deployIdentity(beforeDuplicate.json),
+    expectedTargetFingerprint: beforeDuplicate.json?.targetFingerprint };
   const targetBeforeFailedDeploy = regularTreeHash(dryTarget);
+  const stagingBeforeFailedDeploy = regularTreeHash(dryStagingTarget);
+  const receiptsBeforeRefusal = regularTreeHash(path.join(dataDir, 'action-receipts'));
   const duplicateDir = path.join(liveExtensions, 'duplicate_stale_probe');
+  const duplicateManifest = path.join(duplicateDir, 'content.xml');
   fs.mkdirSync(duplicateDir, { recursive: true });
-  fs.writeFileSync(path.join(duplicateDir, 'content.xml'), '<content id="stale_probe_mod" name="Duplicate" version="100"/>');
-  const failedDeploy = await req('POST', '/api/agent/deploy-verify', SESSION_TOKEN, { workspace: staleImport.json?.workspace, autoReimport: true, ...deployIdentity(dry.json) });
-  ok('failed_post_write_deploy_rolls_back_exactly', failedDeploy.status === 200 && failedDeploy.json?.ok === false && failedDeploy.json?.rollback?.applied === true && regularTreeHash(dryTarget) === targetBeforeFailedDeploy, JSON.stringify(failedDeploy.json?.rollback || {}));
+  fs.writeFileSync(duplicateManifest, '<content id="stale_probe_mod" name="Duplicate" version="100"/>');
+  const duplicatePreview = await req('POST', '/api/agent/deploy-verify', SESSION_TOKEN, { ...duplicateBody, dryRun: true });
+  const early = await req('POST', '/api/agent/deploy', SESSION_TOKEN, duplicateApply);
+  ok('installed_duplicate_refuses_before_target_staging_or_receipt_writes',
+    [duplicatePreview, early].every(result => result.status === 409 && result.json?.code === 'DEPLOY_DUPLICATE_EXTENSION_ID'
+      && result.json?.conflictingFolders?.includes('duplicate_stale_probe') && result.json?.deployment?.writeAttempted === false)
+    && regularTreeHash(dryTarget) === targetBeforeFailedDeploy && regularTreeHash(dryStagingTarget) === stagingBeforeFailedDeploy
+    && regularTreeHash(path.join(dataDir, 'action-receipts')) === receiptsBeforeRefusal, JSON.stringify(early.json?.code));
+  fs.unlinkSync(duplicateManifest);
+  fs.rmdirSync(duplicateDir);
+
+  const lateDir = path.join(liveExtensions, 'introduced-after-activation');
+  const lateManifest = path.join(lateDir, 'content.xml');
+  const lateSourceName = 'late-duplicate-proof.txt';
+  fs.writeFileSync(path.join(staleMod, lateSourceName), 'Selected bytes for the late-duplicate rollback proof.');
+  const latePreview = await req('POST', '/api/agent/deploy-verify', SESSION_TOKEN, { ...duplicateBody, dryRun: true });
+  const lateApply = { ...duplicateBody, ...deployIdentity(latePreview.json),
+    expectedTargetFingerprint: latePreview.json?.targetFingerprint };
+  const beforeLateReceipts = new Set(actionReceiptFiles());
+  fs.writeFileSync(lateDuplicateTrigger, 'trigger');
+  const failedDeploy = await req('POST', '/api/agent/deploy-verify', SESSION_TOKEN, lateApply);
+  ok('failed_post_write_deploy_rolls_back_exactly', failedDeploy.status === 200 && failedDeploy.json?.ok === false
+    && failedDeploy.json?.doctor?.blocking?.some(f => f.code === 'ext.duplicate_id')
+    && failedDeploy.json?.rollback?.applied === true && regularTreeHash(dryTarget) === targetBeforeFailedDeploy
+    && !fs.existsSync(path.join(dryTarget, lateSourceName)) && !fs.existsSync(lateDuplicateTrigger)
+    && fs.existsSync(lateManifest), JSON.stringify(failedDeploy.json?.rollback || {}));
+  ok('native_rollback_has_no_current_byte_scope', failedDeploy.json?.deployment?.state === 'attempted'
+    && failedDeploy.json.deployment.writeAttempted === true && failedDeploy.json.deployment.fidelityScope === 'none');
   ok('failed_deploy_exposes_no_later_recovery', !failedDeploy.json?.recovery, JSON.stringify(failedDeploy.json?.recovery || null));
-  fs.rmSync(duplicateDir, { recursive: true, force: true });
+  const lateReceipts = actionReceiptFiles().filter(name => !beforeLateReceipts.has(name))
+    .map(name => JSON.parse(fs.readFileSync(path.join(dataDir, 'action-receipts', name), 'utf8')));
+  ok('late_duplicate_records_exactly_one_rolled_back_deploy', lateReceipts.length === 1
+    && lateReceipts[0].status === 'rolled_back' && lateReceipts[0].rollback?.status === 'performed');
+  if (fs.existsSync(lateManifest)) {
+    fs.unlinkSync(lateManifest);
+    fs.rmdirSync(lateDir);
+  }
 
   const undoDeploy = await req('POST', `/api/agent/history/${deployRow?.id}/revert`, SESSION_TOKEN, {});
   ok('deployment_history_undo_restores_exact_pre_state',
@@ -4309,13 +4359,37 @@ async function main() {
   ok('steam_source_manifest_adoption_remains_explicit', verifiedWorkshopResult.json?.sourceManifestAdoptionRequired === true);
   const sourceManifestPath = path.join(releaseSource, 'content.xml');
   const sourceBeforeAdoption = fs.readFileSync(sourceManifestPath);
+  const reportBeforeAdoption = fs.readFileSync(steamReady.json.reportPath);
   const adoptionPreview = await req('POST', '/api/agent/release/steam/adopt', SESSION_TOKEN, { modId: releaseName, apply: false });
-  ok('steam_adoption_preview_is_non_mutating', adoptionPreview.status === 200 && adoptionPreview.json?.status === 'READY_TO_ADOPT' && adoptionPreview.json?.workshopId === 'ws_123456789' && fs.readFileSync(sourceManifestPath).equals(sourceBeforeAdoption), `status=${adoptionPreview.status} state=${adoptionPreview.json?.status}`);
+  ok('steam_adoption_preview_is_non_mutating', adoptionPreview.status === 200 && adoptionPreview.json?.status === 'READY_TO_ADOPT' && adoptionPreview.json?.workshopId === 'ws_123456789' && /^[a-f0-9]{64}$/.test(adoptionPreview.json?.bindingHash) && fs.readFileSync(sourceManifestPath).equals(sourceBeforeAdoption), `status=${adoptionPreview.status} state=${adoptionPreview.json?.status}`);
+  const adoptionConfirmation = { modId: releaseName, apply: true, expectedSourceSha256: adoptionPreview.json?.beforeSha256, expectedWorkshopId: adoptionPreview.json?.workshopId };
+  const unboundAdoption = await req('POST', '/api/agent/release/steam/adopt', SESSION_TOKEN, adoptionConfirmation);
+  ok('steam_adoption_refuses_missing_preview_binding', unboundAdoption.status === 409 && unboundAdoption.json?.code === 'STEAM_ADOPTION_PREVIEW_CHANGED'
+    && fs.readFileSync(sourceManifestPath).equals(sourceBeforeAdoption) && fs.readFileSync(steamReady.json.reportPath).equals(reportBeforeAdoption),
+  `status=${unboundAdoption.status} code=${unboundAdoption.json?.code}`);
+  const boundAdoption = { ...adoptionConfirmation, expectedBindingHash: adoptionPreview.json?.bindingHash };
   fs.appendFileSync(sourceManifestPath, '\n<!-- concurrent source change -->');
-  const staleAdoption = await req('POST', '/api/agent/release/steam/adopt', SESSION_TOKEN, { modId: releaseName, apply: true, expectedSourceSha256: adoptionPreview.json?.beforeSha256, expectedWorkshopId: adoptionPreview.json?.workshopId });
+  const staleAdoption = await req('POST', '/api/agent/release/steam/adopt', SESSION_TOKEN, boundAdoption);
   ok('steam_adoption_refuses_source_changed_after_preview', staleAdoption.status === 409 && staleAdoption.json?.code === 'STEAM_ADOPTION_SOURCE_CHANGED' && staleAdoption.json?.failedStages?.includes('adoption'), `status=${staleAdoption.status} code=${staleAdoption.json?.code}`);
   fs.writeFileSync(sourceManifestPath, sourceBeforeAdoption);
-  const adoptedWorkshop = await req('POST', '/api/agent/release/steam/adopt', SESSION_TOKEN, { modId: releaseName, apply: true, expectedSourceSha256: adoptionPreview.json?.beforeSha256, expectedWorkshopId: adoptionPreview.json?.workshopId });
+  const staleBinding = await req('POST', '/api/agent/release/steam/adopt', SESSION_TOKEN, boundAdoption);
+  ok('steam_adoption_refuses_old_binding_after_source_bytes_restored', staleBinding.status === 409 && staleBinding.json?.code === 'STEAM_ADOPTION_PREVIEW_CHANGED'
+    && fs.readFileSync(sourceManifestPath).equals(sourceBeforeAdoption) && fs.readFileSync(steamReady.json.reportPath).equals(reportBeforeAdoption),
+  `status=${staleBinding.status} code=${staleBinding.json?.code}`);
+  const renewedAdoption = await req('POST', '/api/agent/release/steam/adopt', SESSION_TOKEN, { modId: releaseName, apply: false });
+  ok('steam_adoption_renewed_preview_binds_restored_source', renewedAdoption.status === 200 && /^[a-f0-9]{64}$/.test(renewedAdoption.json?.bindingHash)
+    && renewedAdoption.json?.bindingHash !== adoptionPreview.json?.bindingHash, `status=${renewedAdoption.status}`);
+  const reverifiedWorkshopResult = await req('POST', '/api/agent/release/steam/verify', SESSION_TOKEN, { modId: releaseName });
+  const reverifiedReport = fs.readFileSync(steamReady.json.reportPath);
+  const staleReport = await req('POST', '/api/agent/release/steam/adopt', SESSION_TOKEN, { ...adoptionConfirmation, expectedBindingHash: renewedAdoption.json?.bindingHash });
+  ok('steam_adoption_refuses_old_binding_after_same_bytes_reverification', reverifiedWorkshopResult.status === 200
+    && staleReport.status === 409 && staleReport.json?.code === 'STEAM_ADOPTION_PREVIEW_CHANGED'
+    && fs.readFileSync(sourceManifestPath).equals(sourceBeforeAdoption) && fs.readFileSync(steamReady.json.reportPath).equals(reverifiedReport),
+  `verify=${reverifiedWorkshopResult.status} apply=${staleReport.status} code=${staleReport.json?.code}`);
+  const currentAdoption = await req('POST', '/api/agent/release/steam/adopt', SESSION_TOKEN, { modId: releaseName, apply: false });
+  const adoptedWorkshop = await req('POST', '/api/agent/release/steam/adopt', SESSION_TOKEN, {
+    ...adoptionConfirmation, expectedBindingHash: currentAdoption.json?.bindingHash,
+  });
   ok('steam_adoption_writes_only_after_guarded_confirmation', adoptedWorkshop.status === 200 && adoptedWorkshop.json?.status === 'VERIFIED_AND_ADOPTED' && adoptedWorkshop.json?.sourceReimportRequired === true && /id="ws_123456789"/.test(fs.readFileSync(sourceManifestPath, 'utf8')), `status=${adoptedWorkshop.status} state=${adoptedWorkshop.json?.status}`);
 
   const updateName = 'platform_release_update';

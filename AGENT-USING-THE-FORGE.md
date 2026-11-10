@@ -116,13 +116,51 @@ and gitignore the by-products.
 3. IMPLEMENT   patch through the Forge API, byte-exact readback, count-asserted anchors.
 4. VALIDATE    POST /api/agent/project/validate  → loop to ok:true
                + syntax gate, unit tests, wiring gate (see §6)
-5. DEPLOY      POST /api/agent/deploy-verify {path: "<mod folder>", autoReimport: true}
+5. DEPLOY      Preview, review, and apply through /api/agent/deploy-verify (below).
 6. PROVE       IN-GAME. Not optional. See §7.
 7. RECORD      write what you learned into the methods library.
 ```
 
+### Recover an agent deploy after a lost response
+
+Preview with `dryRun: true`. Review the effect and apply with all four expected preview
+identities and `expectedTargetFingerprint` from the preview. Send a fresh
+`x-forge-operation-id` for each intended apply. Keep that identifier with the workspace
+and deploy key until you know the outcome.
+
+If the reply disappears, query `GET /api/agent/status?deployOperationId=<encoded-id>`
+with the same deploy key and workspace headers. A committed receipt identifies the
+historical write. `not-applied` means Forge verified that the retired local backend
+never reached the managed write phase for this operation. The receipt can remain
+`prepared`. The lookup can prove this only while Forge retains the exact recovery
+record. A missing receipt or an unproven write phase leaves the outcome `unknown`.
+Reusing a recorded operation ID refuses a second apply and returns the existing receipt
+pointer. Start a fresh preview before deciding on a new operation.
+
+If Forge returns `DEPLOY_RESPONSE_FAILED_AFTER_COMMIT`, its `deployRecord`
+and `outcome: committed` describe the historical write even though the reply
+is incomplete. Check `deployment.fidelityScope` before comparing files.
+`current-deployment` refers to the verified commit, `attempted-deployment`
+refers to an unverified attempt, and `none` covers preview, refusal, or an
+exact restore to prior bytes.
+
+`DEPLOY_COMMIT_OUTCOME_UNKNOWN` means receipt storage could not confirm the
+outcome after the target passed its checks. Forge preserves the deployed files
+and recovery snapshot. Use the operation lookup once receipt storage is available.
+
+If the target changes after activation, `DEPLOY_OUTPUT_CHANGED` means Forge
+did not verify a successful deploy. A readable changed tree has an incomplete
+receipt. An absent or unreadable target leaves the outcome unknown and its
+receipt prepared. Use the operation lookup before deciding whether to retry.
+
 **On `autoReimport: true`:** if you write to the workspace on disk, the Forge's canvas graph is stale *by
 construction* on every patch. Without this flag the deploy 409s at the source-sync stage every single time.
+
+A path-based preview with the `deploy.receipt_history` coverage gap omits
+remembered warning reviews. Forge can qualify a deploy with fresh matching
+preview fields when current validation allows it. It does not record a new
+last-green baseline or accept explicit finding approvals until the history
+can be verified. Run a new preview after receipt history is restored.
 
 ---
 

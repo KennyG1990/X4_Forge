@@ -1,5 +1,5 @@
 {
-  "status": "PRECOMMIT_LOCAL_VERIFIED_PUBLIC_ARTIFACT_VERIFIED_REMOTE_CI_PENDING",
+  "status": "VERIFIED_PUBLIC_ARTIFACT_AND_FINAL_REMOTE_CI",
   "version": "0.0.80",
   "releaseCommit": "c97d5d8515d30029446c97f5c7ec2017c8244ecf",
   "githubRelease": "https://github.com/KennyG1990/X4_Forge/releases/tag/v0.0.80",
@@ -74,5 +74,14 @@
     "Original CI path cause is inferred from the matching local reproduction, not recovered per-check CI evidence.",
     "Windows cleanup delay cause remains unconfirmed; absence is still mandatory.",
     "A15, corrupt-save checks, additional Claude cases and real game-loop proof remain open."
-  ]
+  ],
+  "priorSnapshotStatus": "PRECOMMIT_LOCAL_VERIFIED_PUBLIC_ARTIFACT_VERIFIED_REMOTE_CI_PENDING",
+  "finalCi": {
+    "run": 40415020902,
+    "conclusion": "success",
+    "status": "completed",
+    "headSha": "8e3a0abfc308955e09099feb6f15076183c7aef8",
+    "url": "https://github.com/KennyG1990/X4_Forge/actions/runs/40415020902",
+    "reconciledAtUtc": "2026-11-10T01:09:23.348061+00:00"
+  }
 }
