@@ -116,6 +116,8 @@ Dev checks standalone TextDB shorthand in unsaved HTTP, MCP, project validation 
 
 ### MD load diagnostics `in_progress` (GitHub #73, part of #74)
 
+Current b4d8c73 source/native replay reproduces literal diff-text expression blindness: four controls/66 harness checks, project/Problems/both native previews falsely clean on the invalid pair. CodeSense supported-selector comparison catches both invalid controls; no fix is implemented yet. [Current reproduction and final-Attr implementation contract](docs/plans/2026-11-09-diff-expression-values-design.md).
+
 Dev validation blocks the X4-witnessed mixed access and ordinary cue returns in both native deploy entry points. [Mixed access replay](docs/plans/2026-11-09-ff33-mixed-access.md) and [return context replay](docs/plans/2026-11-09-ff33-md-return-context.md). Library game controls, effective diff context, installed verification and public delivery remain open.
 
 ### MD include target purpose `in_progress` (GitHub #70, part of #74)
