@@ -12982,12 +12982,15 @@ function compileWorkspaceToFolder(
       throw new Error('Cannot build a complete artifact: omitted passthrough files have no available disk source. Re-import the project from its workspace folder.');
     }
     const sourceRoot = hasDiskSource ? stampedSource : (ephemeralSource = fs.mkdtempSync(path.join(os.tmpdir(), 'x4forge-generated-source-')));
-    const generated = buildWorkspaceFileManifest(ws);
-    const plan = frozenPlan || buildArtifactPlan({
-      sourceRoot,
-      generatedFiles: generated.generatedFiles,
-      passthroughFiles: buildArtifactPassthroughFiles(ws, generated.passthroughFiles),
-    });
+    let plan = frozenPlan;
+    if (!plan) {
+      const generated = buildWorkspaceFileManifest(ws);
+      plan = buildArtifactPlan({
+        sourceRoot,
+        generatedFiles: generated.generatedFiles,
+        passthroughFiles: buildArtifactPassthroughFiles(ws, generated.passthroughFiles),
+      });
+    }
     if (!plan.ok) throw new Error(`Artifact planning failed: ${plan.errors.join('; ')}`);
 
     const artifactRoot = path.join(scratchParent, artifactMode);
@@ -14237,9 +14240,9 @@ function buildDeployProjectValidation(modId: string, snapshot: DeploymentSnapsho
   return { preflight, diskValidationSkipped: snapshot.skipped, validationFiles: snapshot.files };
 }
 
-function deploymentPlan(ws: any): ArtifactPlan {
+function deploymentPlan(ws: any, compiled?: ReturnType<typeof buildWorkspaceFileManifest>): ArtifactPlan {
   const build = activeBuildWorkspace(ws);
-  const generated = buildWorkspaceFileManifest(build);
+  const generated = compiled ?? buildWorkspaceFileManifest(build);
   const sourceRoot = typeof build.sourceStamp?.dir === 'string' ? path.resolve(build.sourceStamp.dir) : '';
   if (!sourceRoot && workspaceSourceFiles(build).some((f: any) => f.omitted)) {
     throw new Error('Incomplete deployment source: omitted files require their disk source.');
@@ -14626,6 +14629,28 @@ function requestDeployOperation(req: express.Request) {
 }
 
 function deployVerifyHandler(req: express.Request, res: express.Response, lease?: ProjectCheckSourceLease) {
+  type TimingStage = 'setup' | 'import' | 'compile' | 'snapshot' | 'validate' | 'sourceRecheck'
+    | 'prepare' | 'write' | 'verify' | 'doctor' | 'finalize' | 'recovery';
+  const startedAt = performance.now();
+  const stagesMs: Partial<Record<TimingStage, number>> = {};
+  let timingStage: TimingStage = 'setup';
+  let stageStartedAt = startedAt;
+  const startStage = (next: TimingStage, now = performance.now()) => {
+    stagesMs[timingStage] = (stagesMs[timingStage] ?? 0) + now - stageStartedAt;
+    timingStage = next;
+    stageStartedAt = now;
+  };
+  const inStage = <T>(stage: TimingStage, work: () => T): T => {
+    const previous = timingStage;
+    startStage(stage);
+    try { return work(); }
+    finally { startStage(previous); }
+  };
+  const timings = () => {
+    const now = performance.now();
+    startStage(timingStage, now);
+    return { scope: 'handler-before-response', totalMs: now - startedAt, stagesMs: { ...stagesMs } };
+  };
   let responseIdentity: Record<string, unknown> = { modId: null, sourceHash: null, artifactHash: null };
   let writeAttempted = false;
   let targetMatchesPreState = false;
@@ -14677,7 +14702,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       if (hit && !checklist.some(c => c.id === id)) checklist.push({ id, label, status: 'skipped', detail: 'Not reached - fix the failure above first.' });
     }
     return { ok: false, success: false, stage: stageId, checklist, ...responseIdentity,
-      deployment: deploymentFidelity(), ...payload };
+      deployment: deploymentFidelity(), ...payload, timings: timings() };
   };
   let pendingDeployRecovery: DeploymentRecoveryRecord | undefined;
   let stagedFingerprint: string | undefined;
@@ -14778,6 +14803,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     check('config', 'Paths configured', 'pass', `game=${x4GamePath}${modWorkspacePath ? ' · staging=' + modWorkspacePath : ''}`);
 
     // 1. Resolve workspace: fresh import-by-path if given, else the active workspace.
+    startStage('import');
     let ws: any;
     let modSourceDir = '';
     let selectedSource: ExplicitDeploySource | undefined;
@@ -14871,7 +14897,9 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     // EMITTED files, not the graph. A byte-fidelity import keeps MD as passthrough text (empty
     // graph), so runModDoctor's "no cue nodes" (package.readiness) false-fires even though the
     // deployed file has cues. Exclude that one code when the emitted MD actually contains cues.
-    const { modId, generatedCustomLuaPath, generatedFiles } = buildWorkspaceFileManifest(ws);
+    startStage('compile');
+    const compiled = buildWorkspaceFileManifest(ws);
+    const { modId, generatedCustomLuaPath, generatedFiles } = compiled;
     responseIdentity = { ...responseIdentity, modId };
     // Expected artifact hashes establish what will ship, not which agent workspace
     // is allowed to claim that deployment. Keep explicit Studio artifact workflows,
@@ -14895,7 +14923,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
         }));
       }
     }
-    const sourcePlan = deploymentPlan(ws);
+    const sourcePlan = deploymentPlan(ws, compiled);
     const checkManifestIssue = projectCheckArtifactIssue(sourcePlan);
     if (checkManifestIssue) {
       check('preflight', 'Required project checks', 'fail', checkManifestIssue);
@@ -14906,6 +14934,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       check('preflight', 'Required project checks', 'fail', detail);
       return res.status(409).json(failWith('preflight', { code: 'PROJECT_CHECK_SOURCE_MISMATCH', error: detail }));
     }
+    startStage('snapshot');
     const artifactHash = deploymentSourceIdentity(sourcePlan, deployFormat);
     snapshot = captureDeploymentSnapshot(sourcePlan, deployFormat);
     const frozenPlan = snapshot.plan;
@@ -14913,6 +14942,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     const corpusPaths = sourcePlan.entries.map(entry => entry.path);
     const corpusHash = deploymentCorpusIdentity(corpusPaths);
     responseIdentity = { ...responseIdentity, artifactHash, validatedArtifact: snapshot.manifest };
+    startStage('validate');
 
     // 1c. Wellformedness over the EMITTED manifest — closes the passthrough hole: a
     // byte-fidelity import carries its ORIGINAL (possibly truncated/corrupted) files
@@ -15202,7 +15232,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     const luaRegistration = previewLuaRegistrationChange(snapshot, targetRoot, deploymentEffect.preserved);
     const effect = luaRegistration ? { ...deploymentEffect, luaRegistration } : deploymentEffect;
 
-    const assertCurrentSource = () => {
+    const assertCurrentSource = () => inStage('sourceRecheck', () => {
       assertSelectedSource();
       snapshot!.assertIntegrity();
       const currentTarget = path.join(resolveXsdConfig().x4GamePath, 'extensions', effectiveModId(activeBuildWorkspace(ws)));
@@ -15212,7 +15242,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
         || deploymentCorpusIdentity(corpusPaths) !== corpusHash || path.resolve(currentTarget) !== path.resolve(targetRoot)) {
         throw Object.assign(new Error('Source, corpus or target changed during deployment. Review a fresh preview.'), { code: 'DEPLOY_SOURCE_CHANGED' });
       }
-    };
+    });
     assertCurrentSource();
     assertCurrentTarget();
     nativeCheckProof?.verify();
@@ -15248,6 +15278,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
         validationDelta,
         baselinePromotion: { recorded: false, reason: 'Dry-run deploys never change the last-green baseline.' },
         note: 'No staging or installed files were written. Validation used a temporary verified artifact snapshot. Apply with the four expected identities and expectedTargetFingerprint from targetFingerprint to guard the reviewed destination contents.',
+        timings: timings(),
       });
     }
 
@@ -15255,6 +15286,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       return res.status(400).json(failWith('preflight', { code: 'ACCEPTANCE_INPUT_INVALID',
         error: 'At most 126 finding approvals fit a deployment with project check proof.' }));
     }
+    startStage('prepare');
     if (resolved.isolatedScratch) validateDevScratchStorage();
     const { receipts: approvalRecords, decision: recordedDecision } = recordFindingAcceptances(actionReceiptStore, subject, acceptances, principal);
     responseIdentity.validation = { outcome: decision.outcome, clean: decision.validationClean, evidence, lua: luaValidation,
@@ -15299,6 +15331,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     assertWriteAuthority();
     const admittedRecovery = operation ? destructiveRecoveryStore.admitDeploymentWrite(pendingDeployRecovery) : undefined;
     const preparedReceiptHash = deployReceipt.hash;
+    startStage('write');
     if (!fs.existsSync(extensionsPath)) fs.mkdirSync(extensionsPath, { recursive: true });
     writeAttempted = true;
     if (modWorkspacePath) {
@@ -15327,6 +15360,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       },
     }, frozenPlan);
     const formatReport = describeDeployFormat(deployFormat, lastArtifactReport);
+    startStage('verify');
 
     const inspectOutput = () => {
       // 4. Confirm manifest identity. The receipt also requires an exact physical tree match.
@@ -15336,7 +15370,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       const bytesConfirmed = deployedId === manifestId;
 
       // 5. Doctor findings belong to the selected install folder, even for a manifest alias.
-      const doctor = runExtensionDoctor(extensionsPath);
+      const doctor = inStage('doctor', () => runExtensionDoctor(extensionsPath));
       const modFindings = doctor.findings.filter(finding => finding.openTargets?.some((target: { path: string }) =>
         samePathName(target.path.split('/', 1)[0], artifactFolder)));
       const acceptedIds = new Set(decision.approvals.map(a => a.finding.findingId));
@@ -15391,6 +15425,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       check('drift', 'Workspace/deployed sync', 'pass', 'single-copy mod (nothing to compare)');
     }
 
+    startStage('finalize');
     const ok = bytesConfirmed && blocking.length === 0;
     const deployedAt = new Date().toISOString();
     let deploymentRecovery: DeploymentRecoveryRecord | undefined;
@@ -15537,8 +15572,10 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
         blocking: blocking.map((f: any) => ({ code: f.code, severity: f.severity })),
         accepted: doctorAccepted.map((f: any) => ({ code: f.code, filePath: f.filePath, line: f.line })),
       },
+      timings: timings(),
     });
   } catch (error: any) {
+    startStage('recovery');
     if (deployReceipt?.status === 'committed') {
       if (res.headersSent || res.writableEnded) throw error;
       if (res.destroyed) return;
@@ -15548,6 +15585,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
         code: 'DEPLOY_RESPONSE_FAILED_AFTER_COMMIT', outcome: 'committed', deployRecord: deployReceipt,
         deployment: deploymentFidelity(),
         error: 'Deployment committed. Forge could not finish the normal response. Reconcile using the deployment receipt.',
+        timings: timings(),
       });
     }
     let rollback: { applied: boolean; detail: string } | undefined;
@@ -15590,7 +15628,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       : /INPUT_INVALID/.test(code) ? 400 : /RECEIPT_/.test(code) ? 507 : 500;
     return res.status(status).json({ ok: false, success: false, stage: 'exception', ...responseIdentity, code,
       deployment: deploymentFidelity(),
-      error: error?.message || 'deploy-verify failed', ...(rollback ? { rollback } : {}) });
+      error: error?.message || 'deploy-verify failed', ...(rollback ? { rollback } : {}), timings: timings() });
   } finally {
     try { nativeCheckProof?.dispose(); } catch (error) { console.warn('Project check proof cleanup failed', error); }
     try { snapshot?.dispose(); } catch (error) { console.warn('Deployment snapshot cleanup failed', error); }

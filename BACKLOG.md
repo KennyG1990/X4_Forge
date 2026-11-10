@@ -6,6 +6,10 @@
 
 ## P0 — Active
 
+### Native deploy latency `in_progress` (GitHub #97)
+
+Both aliases now report handler stage timings and skip compiler output that was previously discarded. Dev native replay passed 313/313 checks including exact bytes, receipts and no-write refusals. The 13-file fixture measured 2.53 s preview and 7.71 s apply for deploy-verify. Safe preview validation reuse, incremental validation and a consumer-size comparison remain open. [Timing contract and evidence](docs/plans/2026-11-10-deploy-stage-timings.md).
+
 ### Official reference composition coverage `in_progress` (GitHub #11)
 
 Latest bounded source/native checkpoint resolves authored MD calls against the final inherited declarations through one shared cue index, including kind/purpose/argument checks. Canonical lookup definitions do not inflate authored/save-impact counts. Focused219/219, native321/321, existing regressions and unchanged normal precommit/typecheck pass; namespace, ambiguous/missing context and unreliable causes stay explicit. [Coupled reference contract](docs/plans/2026-11-10-effective-md-reference-context.md) and [return/native proof](docs/plans/2026-11-10-effective-md-library-return.md); exact commit/cleanup outcome in QA/forge-1110-effective-library-return.json. Context-free Inspector/JSON-orchestration and installed/rendered/public qualification remain open; this does not close#11.
