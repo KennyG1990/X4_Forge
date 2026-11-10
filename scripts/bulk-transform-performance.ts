@@ -24,6 +24,7 @@ function run(size: number) {
   const logicalPaths = Array.from({ length: size }, (_, index) => `assets/units/size_xl/macros/ship_fixture_${String(index).padStart(4, '0')}.xml`);
   const resolve = (logicalPath: string): EffectiveReferenceDocument => ({
     available: true,
+    complete: true, incompleteFindings: [],
     root: 'performance-fixture',
     relativePath: logicalPath,
     content: fixtureXml,

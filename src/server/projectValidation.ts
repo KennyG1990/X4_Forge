@@ -191,6 +191,7 @@ export interface ProjectValidationResult {
       available: boolean;
       sources: OverlaySource[];
       overlayFindings: OverlayFinding[];
+      referenceGaps: ValidationCoverageGap[];
       findings: DiffFinding[];
       postApplyFindings: XsdDiagnostic[];
     }>;
@@ -403,10 +404,18 @@ export function runProjectValidation(
           available: effective.available,
           sources: effective.sources,
           overlayFindings: effective.findings,
+          referenceGaps: [],
           findings: [],
           postApplyFindings: [],
         };
-        if (effective.available && effective.content !== undefined) {
+        if (effective.available && !effective.complete) {
+          for (const finding of effective.incompleteFindings) {
+            entry.referenceGaps.push({ check: 'diff.reference', filePath: relativePath,
+              reason: `Effective reference composition is incomplete: ${finding.source} (${finding.path}) ${finding.code}`
+                + `${finding.operation === undefined ? '' : ` operation ${finding.operation + 1}`}: ${finding.message.slice(0, 320)}` });
+          }
+          coverageGaps.push(...entry.referenceGaps);
+        } else if (effective.available && effective.content !== undefined) {
           const kind = file.kind || classifyPath(relativePath);
           const scriptKind = file.kind === 'md' || file.kind === 'aiscript' ? file.kind : classifyPath(relativePath);
           const script = scriptKind === 'md' || scriptKind === 'aiscript';
@@ -829,6 +838,9 @@ function flattenProjectValidationRaw(result: ProjectValidationResult): FlatProje
       line: f.line, column: f.column, message: f.message });
   }
   for (const file of result.diffSimulation.files) {
+    for (const gap of file.referenceGaps) {
+      out.push({ severity: 'warning', code: gap.check, filePath: gap.filePath, message: gap.reason });
+    }
     for (const finding of file.findings) {
       out.push({ severity: finding.severity, code: finding.code, filePath: file.path, sourceRef: finding.selector, line: finding.line, message: finding.message });
     }

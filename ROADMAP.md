@@ -8114,3 +8114,8 @@ AI coverage audit for the same #73 implementation a52a3ae: actual canonical AI-o
 ### 2026-11-10 — Forge coordination/evidence handoff VERIFIED; game gates pending
 
 Re-routed the unchanged#53/#73game packets to the current dedicated board after exact7/7payload checks; full query6/20, one READY per packet, Claude verdict fields preserved. Existing#57companion retained without another install/session. Corrected the already-supplied#85reply and the existing direct-else report; no global utility-absence or new game proof. [Record/links](docs/plans/2026-11-10-forge-coordination-evidence-reconcile.md). This is metadata/queue repair, not a third feature unit or public release.
+
+
+### 2026-11-10 — VERIFIED source/native: official-overlay validation coverage (#11)
+
+Failed official reference composition now remains a visible check-unavailable result through shared project/Problems/native deploy, with current-lineage health, strict repair rejection, bounded evidence and full-replacement recovery. Focused24/24 and native24/24, existing7/24/12+40/routing, five official-document controls and lint0errors/2existing warnings pass. Normal hook/commit outcome: QA/forge-1110-overlay-coverage.json. [Bounded plan and AAR](docs/plans/2026-11-10-official-overlay-validation-coverage.md). Exact reviewed inventories and reopened receipts passed; no installed/rendered/public/game claim. The full #11 program stays open. Existing #77/#78/#82 game packets were restored unchanged to the current9/20 board; verdicts remain with Claude. Third source/native checkpoint since0.0.82; early release review NOT_READY for selective dependencies and pending engine/package/install gates. Live untouched.

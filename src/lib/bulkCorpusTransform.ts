@@ -322,7 +322,7 @@ export function mergeBulkTransformPatches(existing: PatchBlock[], plan: BulkTran
 export function runBulkCorpusTransformSelftest() {
   const base = '<macros><macro name="fixture_macro" class="ship"><properties><recharge max="200" rate="10" delay="5" disruptionstability="2"/><hull max="100"/></properties></macro></macros>';
   const resolve = (logicalPath: string): EffectiveReferenceDocument => ({
-    available: true, root: 'fixture', relativePath: logicalPath, content: base,
+    available: true, complete: true, incompleteFindings: [], root: 'fixture', relativePath: logicalPath, content: base,
     sources: [{ source: 'base', path: logicalPath, mode: 'base' }], findings: [], signature: `sig:${logicalPath}`,
   });
   const rule: BulkTransformRule = { pathPrefix: 'assets/units/size_xl/macros', selector: '/macros/macro/properties/hull/@max', operation: 'multiply', operand: 1.5, rounding: 'none', maxFiles: 10 };

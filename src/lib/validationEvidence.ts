@@ -65,6 +65,7 @@ export interface ValidationEvidence {
 }
 
 const unavailableCodes = new Set([
+  'diff.reference',
   'validation.lua_ast_unavailable', 'validation.disk_file_skipped', 'UI_SCHEMA_UNAVAILABLE',
   'x4-ui.truncated-evidence', 'x4-ui.verification-gap',
   'lua_md.emit_verification_gap',

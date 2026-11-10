@@ -55,6 +55,9 @@ jobs:
       - name: Prove literal diff expression provenance
         run: npm run test:diff-expression-values
 
+      - name: Preserve failed official overlay coverage
+        run: npm run test:project-validation-overlay
+
       - name: Lint
         run: npm run lint -- --max-warnings 600
 

@@ -75,6 +75,7 @@ const BASE_RULE: BulkTransformRule = {
 const BASE_DOCUMENTS: EffectiveReferenceDocument[] = [
   {
     available: true,
+    complete: true, incompleteFindings: [],
     root: 'selftest-fixture',
     relativePath: `${RAW_TARGET_ROOT}/a.xml`,
     content: `<macros><macro name="${RAW_XML}"><properties><hull raw_bulk_apply_selector_marker_b1="10"/></properties></macro></macros>`,
@@ -84,6 +85,7 @@ const BASE_DOCUMENTS: EffectiveReferenceDocument[] = [
   },
   {
     available: true,
+    complete: true, incompleteFindings: [],
     root: 'selftest-fixture',
     relativePath: `${RAW_TARGET_ROOT}/b.xml`,
     content: `<macros><macro name="${RAW_XML}"><properties><hull raw_bulk_apply_selector_marker_b1="20"/></properties></macro></macros>`,

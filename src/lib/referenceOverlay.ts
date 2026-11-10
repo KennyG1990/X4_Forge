@@ -5,7 +5,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { DOMParser } from '@xmldom/xmldom';
-import { simulateXmlDiff, type DiffFinding } from './diffSimulator';
+import { simulateXmlDiff, validateDiffSourceXml, type DiffFinding } from './diffSimulator';
 
 export interface OverlaySource {
   source: 'base' | `ego_dlc_${string}`;
@@ -20,6 +20,10 @@ export interface OverlayFinding extends DiffFinding {
 
 export interface EffectiveReferenceDocument {
   available: boolean;
+  /** Current content lineage was composed without unavailable/failed sources. */
+  complete: boolean;
+  /** Active failures only; findings below also retain superseded history. */
+  incompleteFindings: OverlayFinding[];
   root: string;
   relativePath: string;
   content?: string;
@@ -55,7 +59,8 @@ function storeCached(key: string, value: EffectiveReferenceDocument): void {
   cacheBytes -= priorSize;
   cache.delete(key);
   cacheSizes.delete(key);
-  const size = (value.content?.length || 0) * 2 + JSON.stringify({ sources: value.sources, findings: value.findings }).length * 2;
+  const size = (value.content?.length || 0) * 2 + JSON.stringify({ sources: value.sources,
+    findings: value.findings, incompleteFindings: value.incompleteFindings }).length * 2;
   // A single oversized document is still returned, but not retained indefinitely.
   if (size > MAX_CACHE_BYTES) return;
   cache.set(key, value);
@@ -170,9 +175,17 @@ export function resolveEffectiveReferenceDocument(referenceRootInput: string, re
   let content: string | undefined;
   const sources: OverlaySource[] = [];
   const findings: OverlayFinding[] = [];
+  let incompleteFindings: OverlayFinding[] = [];
+  const validateFullSource = (xml: string, source: OverlayFinding['source'], sourcePath: string) => {
+    incompleteFindings = [];
+    const invalid = validateDiffSourceXml(xml).map(finding => ({ ...finding, source, path: sourcePath }));
+    findings.push(...invalid);
+    incompleteFindings.push(...invalid);
+  };
   if (fs.existsSync(basePath) && fs.statSync(basePath).isFile()) {
     content = fs.readFileSync(basePath, 'utf8');
     sources.push({ source: 'base', path: relativePath, mode: 'base' });
+    validateFullSource(content, 'base', relativePath);
   }
   for (const dlc of dlcs) {
     const absolute = safeJoin(dlc.root, relativePath);
@@ -181,25 +194,37 @@ export function resolveEffectiveReferenceDocument(referenceRootInput: string, re
     const sourcePath = `extensions/${dlc.folder}/${relativePath}`;
     if (sniffRoot(overlay) === 'diff') {
       if (content === undefined) {
-        findings.push({
+        const finding: OverlayFinding = {
           severity: 'warning', code: 'DIFF_SELECTOR_ZERO', source: dlc.id, path: sourcePath,
           message: `${dlc.id} supplies a diff for ${relativePath}, but no earlier base document exists.`,
-        });
+        };
+        findings.push(finding);
+        incompleteFindings.push(finding);
         continue;
       }
       const result = simulateXmlDiff(content, overlay);
       content = result.content;
       sources.push({ source: dlc.id, path: sourcePath, mode: 'diff' });
-      findings.push(...result.findings.map(finding => ({ ...finding, source: dlc.id, path: sourcePath })));
+      const attributed = result.findings.map(finding => ({ ...finding, source: dlc.id, path: sourcePath }));
+      findings.push(...attributed);
+      incompleteFindings.push(...attributed.filter(finding => finding.severity === 'error'));
+      if (result.ok) {
+        const repaired = validateDiffSourceXml(overlay).map(finding => ({ ...finding, source: dlc.id, path: sourcePath }));
+        findings.push(...repaired);
+        incompleteFindings.push(...repaired);
+      }
     } else {
       const hadContent = content !== undefined;
       content = overlay;
       sources.push({ source: dlc.id, path: sourcePath, mode: hadContent ? 'replace' : 'base' });
+      validateFullSource(overlay, dlc.id, sourcePath);
     }
   }
 
   const result: EffectiveReferenceDocument = {
     available: content !== undefined,
+    complete: content !== undefined && incompleteFindings.length === 0,
+    incompleteFindings,
     root,
     relativePath,
     content,

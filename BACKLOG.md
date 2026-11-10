@@ -6,6 +6,10 @@
 
 ## P0 — Active
 
+### Official reference composition coverage `in_progress` (GitHub #11)
+
+The synthetic baseline reproduced missing/misattributed coverage for failed official overlays and malformed parent XML. Dev now tracks current-lineage composition health and projects a bounded `diff.reference` unavailable warning through shared validation, preserving historical provenance and full-replacement recovery. Focused24/24 and actual API/native24/24 pass, including qualified apply, authored-error refusal, exact reviewed inventories and reopened receipts. Existing modules7/24/12, literal40, routing, five official-document controls and final lint0errors/2existing warnings pass; normal hook/commit outcome is in QA/forge-1110-overlay-coverage.json. [Plan and acceptance](docs/plans/2026-11-10-official-overlay-validation-coverage.md). #11 stays open: other effective-reference consumers, installed/rendered/public qualification and full engine-fidelity profiles are separate remaining work. No live change.
+
 ### Agent directory/default-format control and UI/API/MCP parity `spec'd` (GitHub #19, under #9)
 
 Ken requested future agent access to every intentional Forge user action without computer use. [Reconciled specification](docs/plans/2026-11-10-agent-control-ui-api-mcp-parity.md). Directory/default-format APIs already exist but require Studio; MCP has no configuration/native-deploy tools, and per-request API deploy format already exists. Extend the existing capability/authority/config/deploy owners with scoped instance-level configuration access, preview/CAS/receipts, format control and a complete UI-action parity census. Preserve old-key authority, Dev pins/A15 seals and shared validation. SPECIFIED only; no runtime implementation in this task. First independently executable child is [#96](https://github.com/KennyG1990/X4_Forge/issues/96); #19 holds the complete parity census.
@@ -115,6 +119,8 @@ Dev exposes the shared unsaved checker through an exact read/analyze capability 
 
 ### TextDB literal expression syntax `in_progress` (GitHub #78, part of #74)
 
+Current engine packet: [dedicated board READY row](https://app.notion.com/p/4144618ed15b8196ad25d13352fa0be0), unchanged four-file artifact rehashed4/4, manifest5c05156d.... Old AiLive request is historical; Claude's game verdict remains pending.
+
 Dev checks standalone TextDB shorthand in unsaved HTTP, MCP, project validation and both native deploy entry points. [Isolated replay and game handoff](docs/plans/2026-11-09-textdb-expression-literals.md). The standalone engine witness is queued with Claude. Installed verification and public delivery remain open.
 
 ### MD load diagnostics `in_progress` (GitHub #73, part of #74)
@@ -140,6 +146,8 @@ Dev shares the checking-mode and instantiation decisions between Studio critic, 
 
 ### Exact cue-library arguments `in_progress` (GitHub #82, part of #74)
 
+Current action-call engine packet: [dedicated board READY row](https://app.notion.com/p/4144618ed15b819e8787db4f4ee64ff8), unchanged seven-file artifact rehashed7/7, manifest1485c324.... Separate from already witnessed direct cue-instance cases; Claude's action-call verdict remains pending.
+
 Dev checks required and undeclared arguments for exact direct project cue instances. [Cue replay and game evidence](docs/plans/2026-11-09-cue-library-arguments.md). Exact project `run_actions` calls now warn on undeclared names through project validation and native deploy, with independent same-line review. [Action advisory replay](docs/plans/2026-11-09-run-actions-arguments.md). Both native routes preserve the structured declaration location in their validation evidence. [Native evidence replay](docs/plans/2026-11-09-native-deploy-diagnostic-targets.md). The [standalone action execution witness](https://github.com/KennyG1990/X4_Forge/issues/82#issuecomment-6735409036), missing action arguments, effective signatures, official runtime cases, installed verification and public delivery remain open.
 
 ### Exact property diagnostic positions and type provenance `in_progress` (GitHub #80, part of #74)
@@ -147,6 +155,8 @@ Dev checks required and undeclared arguments for exact direct project cue instan
 Dev preserves property columns and distinguishes declared receiver types from variable hints through project, unsaved expression and native validation. [Isolated replay](docs/plans/2026-11-09-property-diagnostic-provenance.md). An exact positive NPC target guard now removes two false warnings and gives the real typo an NPC suggestion in both native previews. [Guard evidence](docs/plans/2026-11-09-npc-guard-property-context.md). Wider flow narrowing, parent vanilla and game acceptance, installed verification and public delivery remain open.
 
 ### Literal format diagnostics `in_progress` (GitHub #77, part of #74)
+
+Current engine packet: [dedicated board READY row](https://app.notion.com/p/4144618ed15b816e88bdd04e57067984), unchanged four-file artifact rehashed4/4, manifestccc10179.... Claude's game verdict remains pending. #77/#78 are selected-grammar release dependencies, not evidence to discard when curating#73.
 
 The isolated Dev checker and native deploy now report exact literal-format diagnostics. The short-list case remains advisory. [Dev verification](docs/plans/2026-11-08-forge-literal-format-diagnostics.md). The frozen standalone game witness is queued with Claude, and installed/public delivery remain open.
 

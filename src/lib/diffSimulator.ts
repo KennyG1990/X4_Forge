@@ -101,12 +101,12 @@ function isElement(node: XmlNode | null | undefined): node is XmlElement {
   return Boolean(node && node.nodeType === 1);
 }
 
-function parseDocument(xml: string): { document: XmlDocument | null; error?: string } {
+function parseDocument(xml: string, rejectRepairs = false): { document: XmlDocument | null; error?: string } {
   let fatal = '';
   try {
     const document = new DOMParser({
       onError(level: string, message: string) {
-        if (level === 'fatalError' || level === 'error') fatal ||= message;
+        if (level === 'fatalError' || level === 'error' || (rejectRepairs && level === 'warning')) fatal ||= message;
       },
     }).parseFromString(String(xml || '').replace(/^\uFEFF/, ''), 'text/xml');
     if (!document?.documentElement) return { document: null, error: fatal || 'document has no root element' };
@@ -115,6 +115,13 @@ function parseDocument(xml: string): { document: XmlDocument | null; error?: str
   } catch (error) {
     return { document: null, error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/** Canonical source authority cannot rely on a parser's repaired XML. Default simulation stays compatible. */
+export function validateDiffSourceXml(xml: string): DiffFinding[] {
+  const parsed = parseDocument(xml, true);
+  return parsed.document ? [] : [{ severity: 'error', code: 'DIFF_XML_INVALID',
+    message: `Reference XML is invalid: ${parsed.error || 'parse failed'}.` }];
 }
 
 function operationLines(xml: string): number[] {
