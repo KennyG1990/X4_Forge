@@ -40,7 +40,7 @@ import { validateProjectCrossFile } from "../lib/projectCrossFileValidation";
 import { formatScriptPropertyFinding, lintScriptPropertyChains, type ScriptPropertyFinding } from "../lib/scriptProperties";
 import { checkXmlWellformed } from "../lib/xmlWellformed";
 import { lintAiscript, type AiscriptLintFinding } from "../lib/aiscriptLint";
-import { lintMdPitfalls, lintScriptExpressions, type MdPitfallFinding } from "../lib/mdPitfallLints";
+import { isScriptExpressionAttribute, lintMdPitfalls, lintScriptExpressions, lintScriptExpressionValue, type MdPitfallFinding } from "../lib/mdPitfallLints";
 import { lintJobsContent, type JobsVocabulary, type JobLintFinding } from "../lib/jobsContentLint";
 import { lintMigration, type MigrationFinding } from "../lib/migrationLint";
 import { lintWaresContent, type WaresVocabulary, type WareLintFinding } from "../lib/waresContentLint";
@@ -390,61 +390,100 @@ export function runProjectValidation(
   // validate the result. This catches selectors that are syntactically valid but dead,
   // broad selectors that unexpectedly hit many nodes, and structurally illegal outcomes.
   const diffSimulation: ProjectValidationResult['diffSimulation']['files'] = [];
+  const diffExpressionFindings: MdPitfallFinding[] = [];
   try {
     const resolved = resolveXsdConfig();
     for (const file of project.files) {
       if (typeof file.content !== 'string' || sniffRootElement(file.content) !== 'diff') continue;
       const relativePath = file.path.replace(/\\/g, '/').replace(/^\.\//, '');
-      const effective = resolveEffectiveReferenceDocument(resolved.x4ReferenceRoot, relativePath);
-      const entry: ProjectValidationResult['diffSimulation']['files'][number] = {
-        path: relativePath,
-        available: effective.available,
-        sources: effective.sources,
-        overlayFindings: effective.findings,
-        findings: [],
-        postApplyFindings: [],
-      };
-      if (effective.available && effective.content !== undefined) {
-        const simulation = simulateXmlDiff(effective.content, file.content);
-        entry.findings = simulation.findings;
-        if (simulation.ok) {
+      try {
+        const effective = resolveEffectiveReferenceDocument(resolved.x4ReferenceRoot, relativePath);
+        const entry: ProjectValidationResult['diffSimulation']['files'][number] = {
+          path: relativePath,
+          available: effective.available,
+          sources: effective.sources,
+          overlayFindings: effective.findings,
+          findings: [],
+          postApplyFindings: [],
+        };
+        if (effective.available && effective.content !== undefined) {
           const kind = file.kind || classifyPath(relativePath);
-          const validateEffective = (content: string): XsdDiagnostic[] => {
-            if (kind === 'md' && mdIndexRef?.loaded) {
-              return validateXmlAgainstSchema(content, mdIndexRef, {
-                filePath: relativePath, domain: 'mission_director', reportUnknownElements: true,
-                references, strictStructure: true,
-              });
+          const scriptKind = file.kind === 'md' || file.kind === 'aiscript' ? file.kind : classifyPath(relativePath);
+          const script = scriptKind === 'md' || scriptKind === 'aiscript';
+          const index = scriptKind === 'md' ? mdIndexRef : aiIndexRef;
+          const simulation = simulateXmlDiff(effective.content, file.content, script ? { attributeProvenance: true } : undefined);
+          entry.findings = simulation.findings;
+          if (simulation.ok) {
+            if (script) {
+              const seen = new Set<string>();
+              const gaps = new Set<string>();
+              for (const gap of simulation.attributeAttributionGaps ?? []) {
+                if (isScriptExpressionAttribute(gap.elementName, gap.attributeName, index)) {
+                  gaps.add(`Operation ${gap.operation + 1} ${gap.elementName}/@${gap.attributeName}: ${gap.reason}`);
+                }
+              }
+              for (const assignment of simulation.attributeAssignments ?? []) {
+                const findings = lintScriptExpressionValue({ ...assignment, schema: index, filePath: relativePath,
+                  locate: offset => {
+                    const position = assignment.payload.locate(offset);
+                    if (!position) gaps.add(`Operation ${assignment.operation + 1} ${assignment.elementName}/@${assignment.attributeName}: authored token position unavailable.`);
+                    return position;
+                  },
+                });
+                for (const finding of findings) {
+                  const key = JSON.stringify([assignment.operation, finding.code, finding.sourceRef, finding.line, finding.column, finding.detail]);
+                  if (!seen.has(key)) { seen.add(key); diffExpressionFindings.push(finding); }
+                }
+              }
+              for (const reason of gaps) coverageGaps.push({ check: 'diff.expressions', filePath: relativePath, reason });
             }
-            if (kind === 'aiscript' && aiIndexRef?.loaded) {
-              return validateXmlAgainstSchema(content, aiIndexRef, {
-                filePath: relativePath, domain: 'ai_scripts', reportUnknownElements: true,
-                references, strictStructure: true,
-              });
-            }
-            if (schemaRegistryRef) {
-              return validateRoutedFiles([{ path: relativePath, content }], schemaRegistryRef, {
-                references, strictStructure: true,
-              }).flatMap(result => result.findings);
-            }
-            return [];
-          };
-          const diagnosticKey = (finding: XsdDiagnostic) => [
-            finding.severity, finding.domain, finding.code, finding.sourceRef, finding.message,
-          ].join('|');
-          const baseline = new Set(validateEffective(effective.content).map(diagnosticKey));
-          entry.postApplyFindings = validateEffective(simulation.content)
-            .filter(finding => !baseline.has(diagnosticKey(finding)));
+            const validateEffective = (content: string): XsdDiagnostic[] => {
+              if (kind === 'md' && mdIndexRef?.loaded) {
+                return validateXmlAgainstSchema(content, mdIndexRef, {
+                  filePath: relativePath, domain: 'mission_director', reportUnknownElements: true,
+                  references, strictStructure: true,
+                });
+              }
+              if (kind === 'aiscript' && aiIndexRef?.loaded) {
+                return validateXmlAgainstSchema(content, aiIndexRef, {
+                  filePath: relativePath, domain: 'ai_scripts', reportUnknownElements: true,
+                  references, strictStructure: true,
+                });
+              }
+              if (schemaRegistryRef) {
+                return validateRoutedFiles([{ path: relativePath, content }], schemaRegistryRef, {
+                  references, strictStructure: true,
+                }).flatMap(result => result.findings);
+              }
+              return [];
+            };
+            const diagnosticKey = (finding: XsdDiagnostic) => [
+              finding.severity, finding.domain, finding.code, finding.sourceRef, finding.message,
+            ].join('|');
+            const baseline = new Set(validateEffective(effective.content).map(diagnosticKey));
+            entry.postApplyFindings = validateEffective(simulation.content)
+              .filter(finding => !baseline.has(diagnosticKey(finding)));
+          } else if (script) {
+            coverageGaps.push({ check: 'diff.expressions', filePath: relativePath,
+              reason: 'Patch simulation failed; effective expression values were not checked.' });
+          }
+        } else {
+          entry.findings.push({
+            severity: 'warning', code: 'DIFF_SELECTOR_ZERO',
+            message: `No canonical base document exists for ${relativePath}; selector application could not be proven.`,
+          });
         }
-      } else {
-        entry.findings.push({
-          severity: 'warning', code: 'DIFF_SELECTOR_ZERO',
-          message: `No canonical base document exists for ${relativePath}; selector application could not be proven.`,
-        });
+        diffSimulation.push(entry);
+      } catch {
+        coverageGaps.push({ check: 'diff.simulation', filePath: relativePath,
+          reason: 'Patch analysis failed internally before completing; effective validation is unavailable.' });
       }
-      diffSimulation.push(entry);
     }
-  } catch { /* unavailable corpus/root degrades honestly through an empty layer */ }
+  } catch {
+    if (project.files.some(file => typeof file.content === 'string' && sniffRootElement(file.content) === 'diff')) {
+      coverageGaps.push({ check: 'diff.simulation', reason: 'Patch analysis could not initialize the canonical reference configuration.' });
+    }
+  }
 
   // MD/AI files intentionally pass through the dedicated indexes and the general
   // registry router. Collapse identical diagnostics at this shared boundary so a
@@ -516,7 +555,7 @@ export function runProjectValidation(
 
   // Corpus-grounded MD pitfall lints (dead UI listeners, offer-accept keyword refs,
   // param3 bare-key reads). Union-aware where the scriptproperty index is available.
-  const pitfallFindings: MdPitfallFinding[] = [];
+  const pitfallFindings: MdPitfallFinding[] = [...diffExpressionFindings];
   for (const f of project.files) {
     if (typeof f.content !== "string") continue;
     const pathKind = classifyPath(f.path);
@@ -804,10 +843,13 @@ function flattenProjectValidationRaw(result: ProjectValidationResult): FlatProje
     out.push({ severity: 'error', code: 'project-checks.invalid', filePath: PROJECT_CHECKS_PATH, message: result.projectChecks.error });
   }
   // De-dupe identical findings that reach the flat view via two layers (the cross-file
-  // validator re-reports structure issues under its own code — same message, same file).
+  // validator re-reports unpositioned structure issues under its own code).
+  // Positioned semantic findings retain the actual rule and source role: one
+  // authored diff token can legitimately assign multiple different attributes.
   const seen = new Set<string>();
   return out.filter(f => {
-    const key = JSON.stringify([f.severity, f.filePath || "", f.message, f.column === undefined ? null : [f.line, f.column]]);
+    const key = JSON.stringify([f.severity, f.filePath || "", f.message,
+      f.column === undefined ? null : [f.line, f.column, f.code || '', f.sourceRef || '']]);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -919,7 +961,47 @@ export function runProjectValidationSelftest(): { pass: boolean; checks: { name:
   );
   const fatalFinding = fatalFindings[0];
   const percentageWarningFlat = flattenProjectValidation(percentageWarning);
+  const expressionProbe: MdPitfallFinding = {
+    code: 'md.unmatched_else', severity: 'error', filePath: 'md/projection.xml',
+    line: 1, column: 65, detail: 'The same authored expression token.',
+  };
+  const projectExpressionProjection = (findings: MdPitfallFinding[]) => flattenProjectValidation({
+    ...clean, evidence: undefined, pitfalls: { findings },
+  }).filter(finding => finding.filePath === expressionProbe.filePath);
+  const differentExpressionRoles = projectExpressionProjection([
+    { ...expressionProbe, sourceRef: 'set_value/@exact' },
+    { ...expressionProbe, sourceRef: 'debug_text/@text' },
+  ]);
+  const differentExpressionRules = projectExpressionProjection([
+    { ...expressionProbe, sourceRef: 'set_value/@exact' },
+    { ...expressionProbe, sourceRef: 'set_value/@exact', code: 'expression-null-safe-exists' },
+  ]);
   const checks = [
+    {
+      name: 'same_authored_token_preserves_distinct_positioned_expression_roles',
+      pass: differentExpressionRoles.length === 2
+        && differentExpressionRoles[0].sourceRef === 'set_value/@exact'
+        && differentExpressionRoles[1].sourceRef === 'debug_text/@text',
+    },
+    {
+      name: 'same_position_and_message_preserve_distinct_expression_rule_codes',
+      pass: differentExpressionRules.length === 2,
+    },
+    {
+      name: 'identical_positioned_findings_still_coalesce',
+      pass: projectExpressionProjection([expressionProbe, { ...expressionProbe }]).length === 1,
+    },
+    {
+      name: 'missing_and_empty_positioned_source_roles_share_evidence_identity',
+      pass: projectExpressionProjection([expressionProbe, { ...expressionProbe, sourceRef: '' }]).length === 1,
+    },
+    {
+      name: 'legacy_unpositioned_cross_layer_coalescing_remains_compatible',
+      pass: projectExpressionProjection([
+        { ...expressionProbe, column: undefined, sourceRef: 'first' },
+        { ...expressionProbe, column: undefined, sourceRef: 'second', code: 'expression-null-safe-exists' },
+      ]).length === 1,
+    },
     {
       name: "clean_12_columns_remains_ok",
       pass: clean.ok

@@ -52,6 +52,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Prove literal diff expression provenance
+        run: npm run test:diff-expression-values
+
       - name: Lint
         run: npm run lint -- --max-warnings 600
 

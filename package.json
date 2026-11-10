@@ -33,6 +33,7 @@
     "test:reference-api": "node scripts/reference-api-integration.mjs",
     "test:reference-corpus": "tsx scripts/reference-corpus-check.ts",
     "test:schema-intelligence": "tsx scripts/schema-intelligence-check.ts",
+    "test:diff-expression-values": "tsx scripts/diff-expression-values.selftest.ts",
     "test:bulk-performance": "tsx scripts/bulk-transform-performance.ts",
     "test:studio-layout": "tsx scripts/studio-layout-check.ts",
     "test:reference-manifest": "tsx scripts/reference-manifest-check.ts",

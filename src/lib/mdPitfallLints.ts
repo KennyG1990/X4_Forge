@@ -65,6 +65,37 @@ function lineOf(haystack: string, needleIndex: number): number {
 
 const EXPRESSION_TYPE = /^(?:\w+:)?(?:lvalue|boolean)?expression$/i;
 
+/** The same actual attribute role governs direct scripts and effective diff writes. */
+export function isScriptExpressionAttribute(elementName: string, attributeName: string, schema: SchemaIndex | null): boolean {
+  const spec = schema?.elements.get(elementName)?.attributes.get(attributeName);
+  return (elementName === 'set_value' && attributeName === 'exact')
+    || (elementName === 'debug_text' && attributeName === 'text')
+    || (elementName === 'do_if' && attributeName === 'value')
+    || EXPRESSION_TYPE.test(spec?.type ?? '') || EXPRESSION_TYPE.test(spec?.baseType ?? '');
+}
+
+/** Apply shared grammar rules using a caller-owned decoded-value source mapping. */
+export function lintScriptExpressionValue(input: {
+  elementName: string;
+  attributeName: string;
+  value: string;
+  schema: SchemaIndex | null;
+  filePath?: string;
+  locate: (offset: number) => { line?: number; column?: number } | undefined;
+}): MdPitfallFinding[] {
+  if (!isScriptExpressionAttribute(input.elementName, input.attributeName, input.schema)) return [];
+  return lintMdExpressionRules(input.value).flatMap(finding => {
+    const position = input.locate(finding.offset);
+    // An unavailable lexical mapping cannot manufacture an authored position.
+    if (!position) return [];
+    return [{
+      code: finding.code, severity: finding.severity, filePath: input.filePath,
+      sourceRef: `${input.elementName}/@${input.attributeName}`,
+      ...position, detail: finding.message,
+    }];
+  });
+}
+
 /** Translate a decoded attribute offset to a one-based raw XML source position. */
 function expressionLocation(source: string, lines: number[], attr: Attr, offset: number) {
   const fallback = { line: attr.lineNumber, column: attr.columnNumber };
@@ -110,24 +141,15 @@ export function lintScriptExpressions(xml: string, schema: SchemaIndex | null, f
   let lines: number[] | undefined;
   for (let index = 0; index < elements.length; index++) {
     const element = elements[index];
-    const attributes = schema?.elements.get(element.nodeName)?.attributes;
     for (let i = 0; i < element.attributes.length; i++) {
       const attr = element.attributes[i];
-      const spec = attributes?.get(attr.name);
-      const knownExpression = (element.nodeName === 'set_value' && attr.name === 'exact')
-        || (element.nodeName === 'debug_text' && attr.name === 'text')
-        || (element.nodeName === 'do_if' && attr.name === 'value');
-      if (!knownExpression
-        && !EXPRESSION_TYPE.test(spec?.type ?? '') && !EXPRESSION_TYPE.test(spec?.baseType ?? '')) continue;
-      for (const finding of lintMdExpressionRules(attr.value)) {
-        lines ??= [0, ...Array.from(source.matchAll(/\n/g), match => match.index + 1)];
-        findings.push({
-          code: finding.code, severity: finding.severity, filePath,
-          sourceRef: `${element.nodeName}/@${attr.name}`,
-          ...expressionLocation(source, lines, attr, finding.offset),
-          detail: finding.message,
-        });
-      }
+      findings.push(...lintScriptExpressionValue({
+        elementName: element.nodeName, attributeName: attr.name, value: attr.value, schema, filePath,
+        locate: offset => {
+          lines ??= [0, ...Array.from(source.matchAll(/\n/g), match => match.index + 1)];
+          return expressionLocation(source, lines, attr, offset);
+        },
+      }));
     }
   }
   return findings;

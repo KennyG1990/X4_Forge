@@ -9,11 +9,14 @@
 import * as xpath from 'xpath';
 import {
   DOMParser,
+  normalizeLineEndings,
   XMLSerializer,
+  type Attr as XmlAttr,
   type Document as XmlDocument,
   type Element as XmlElement,
   type Node as XmlNode,
 } from '@xmldom/xmldom';
+import { createSourcePositionLocator } from './xmlSourceSpans';
 
 export type DiffPosition = 'child' | 'before' | 'after' | 'prepend';
 
@@ -53,6 +56,43 @@ export interface DiffSimulationResult {
   content: string;
   operations: Array<DiffOperation & { index: number; matches: number; applied: boolean }>;
   findings: DiffFinding[];
+  /** Opt-in provenance of surviving literal operation-text attribute assignments. */
+  attributeAssignments?: DiffAttributeAssignment[];
+  attributeAttributionGaps?: DiffAttributeAttributionGap[];
+}
+
+export interface DiffSimulationOptions { attributeProvenance?: boolean }
+
+export interface DiffAttributePayload {
+  /** Decoded UTF-16 offset -> original, one-based authored patch position. */
+  locate(decodedOffset: number): { line: number; column: number } | undefined;
+}
+
+export interface DiffAttributeAssignment {
+  operation: number;
+  elementName: string;
+  attributeName: string;
+  value: string;
+  /** One mapper is shared by every target of the same authored operation. */
+  payload: DiffAttributePayload;
+}
+
+export interface DiffAttributeAttributionGap {
+  operation: number;
+  elementName: string;
+  attributeName: string;
+  reason: string;
+}
+
+interface LiteralPayload {
+  value: string;
+  payload: DiffAttributePayload;
+}
+
+type LiteralPayloadResult = LiteralPayload | { reason: string };
+
+interface AttributeProvenanceContext {
+  payload(operation: number): LiteralPayloadResult;
 }
 
 const serializer = new XMLSerializer();
@@ -91,7 +131,192 @@ function serializeChildren(element: XmlElement): string {
   return value;
 }
 
-function parseOperations(diffXml: string): { operations: DiffOperation[]; findings: DiffFinding[] } {
+const PAYLOAD_XML_ENTITIES: Readonly<Record<string, string>> = { amp: '&', apos: "'", quot: '"', lt: '<', gt: '>' };
+
+function decodePayloadEntity(entity: string): string | undefined {
+  if (Object.prototype.hasOwnProperty.call(PAYLOAD_XML_ENTITIES, entity)) return PAYLOAD_XML_ENTITIES[entity];
+  if (!/^#(?:x[\da-f]+|\d+)$/i.test(entity)) return undefined;
+  const point = entity[1] === 'x' ? parseInt(entity.slice(2), 16) : Number(entity.slice(1));
+  if (!Number.isInteger(point) || point < 0 || point > 0x10ffff) return undefined;
+  return String.fromCodePoint(point);
+}
+
+/**
+ * Build one source mapper shared by all operations. xmldom strips a leading BOM
+ * and normalizes XML 1.1 line endings before assigning its DOM locators. Columns
+ * within each such line still index the original UTF-16 text exactly.
+ */
+function createPayloadMapper(source: string): (operation: XmlElement) => LiteralPayloadResult {
+  const locateRaw = createSourcePositionLocator(source);
+  let domLines: number[] | undefined;
+  const rawOffset = (node: XmlNode): number | undefined => {
+    if (!node.lineNumber || !node.columnNumber) return undefined;
+    if (!domLines) {
+      const bom = source.startsWith('\uFEFF') ? 1 : 0;
+      domLines = [bom];
+      const endings = /\r[\n\u0085]?|[\n\u0085\u2028\u2029]/g;
+      endings.lastIndex = bom;
+      let match: RegExpExecArray | null;
+      while ((match = endings.exec(source))) domLines.push(match.index + match[0].length);
+    }
+    const start = domLines[node.lineNumber - 1];
+    if (start === undefined) return undefined;
+    const offset = start + node.columnNumber - 1;
+    return offset >= start && offset <= source.length ? offset : undefined;
+  };
+
+  interface SourceRun {
+    decodedStart: number;
+    rawStart: number;
+    length: number;
+    stride: number;
+  }
+
+  interface Piece {
+    start: number;
+    end: number;
+    cdata: boolean;
+    decodedLength: number;
+    decodedStart: number;
+    runs: SourceRun[];
+  }
+
+  /**
+   * Retain affine runs rather than a per-character or per-target source map.
+   * Ordinary literal text compresses to one run; entities and newline contractions
+   * introduce sparse changes. Numeric entities may emit two UTF-16 units.
+   * The second newline normalization mirrors serializeChildren -> wrapper parse.
+   */
+  const mapPiece = (piece: Piece): boolean => {
+    let decoded = 0;
+    let pendingCr: number | undefined;
+    const emit = (raw: number) => {
+      const last = piece.runs.at(-1);
+      if (last?.length === 1) {
+        last.stride = raw - last.rawStart;
+        last.length++;
+      } else if (last && raw === last.rawStart + last.length * last.stride) {
+        last.length++;
+      } else {
+        piece.runs.push({ decodedStart: decoded, rawStart: raw, length: 1, stride: 1 });
+      }
+      decoded++;
+    };
+    for (let cursor = piece.start; cursor < piece.end;) {
+      const tokenStart = cursor;
+      let text = source[cursor++];
+      if (text === '\r') {
+        if (source[cursor] === '\n' || source[cursor] === '\u0085') cursor++;
+        text = '\n';
+      } else if (text === '\u0085' || text === '\u2028' || text === '\u2029') {
+        text = '\n';
+      } else if (!piece.cdata && text === '&') {
+        const end = source.indexOf(';', cursor);
+        if (end < 0 || end >= piece.end) return false;
+        const entity = decodePayloadEntity(source.slice(cursor, end));
+        if (entity === undefined) return false;
+        text = entity;
+        cursor = end + 1;
+      }
+      for (let index = 0; index < text.length; index++) {
+        const unit = text[index];
+        if (pendingCr !== undefined) {
+          emit(pendingCr);
+          pendingCr = undefined;
+          if (unit === '\n' || unit === '\u0085') continue;
+        }
+        if (unit === '\r') pendingCr = tokenStart;
+        else emit(tokenStart);
+      }
+    }
+    if (pendingCr !== undefined) emit(pendingCr);
+    return decoded === piece.decodedLength;
+  };
+
+  return operation => {
+    const pieces: Piece[] = [];
+    const values: string[] = [];
+    const pending: XmlNode[] = [];
+    for (let i = operation.childNodes.length - 1; i >= 0; i--) pending.push(operation.childNodes[i]);
+    let length = 0;
+    while (pending.length) {
+      const node = pending.pop()!;
+      if (node.nodeType === 1) {
+        for (let i = node.childNodes.length - 1; i >= 0; i--) pending.push(node.childNodes[i]);
+        continue;
+      }
+      if (node.nodeType !== 3 && node.nodeType !== 4) continue;
+      const offset = rawOffset(node);
+      if (offset === undefined) return { reason: 'Original operation text has no reliable source locator.' };
+      const cdata = node.nodeType === 4;
+      if (cdata && !source.startsWith('<![CDATA[', offset)) {
+        return { reason: 'Original CDATA locator does not match its authored opener.' };
+      }
+      const start = offset + (cdata ? 9 : 0);
+      let end = source.indexOf(cdata ? ']]>' : '<', start);
+      if (end < 0) end = source.length;
+      let unsupportedEntity = false;
+      let firstValue = normalizeLineEndings(source.slice(start, end));
+      if (!cdata) {
+        firstValue = firstValue.replace(/&([^;]*);/g, (_match, name: string) => {
+          const value = decodePayloadEntity(name);
+          if (value === undefined) unsupportedEntity = true;
+          return value ?? '';
+        });
+      }
+      if (unsupportedEntity) return { reason: 'Original operation text contains an unsupported entity expansion.' };
+      if (firstValue !== (node.nodeValue || '')) {
+        return { reason: 'Original operation text could not be matched to its parsed value.' };
+      }
+      const value = normalizeLineEndings(firstValue);
+      const piece: Piece = { start, end, cdata, decodedLength: value.length, decodedStart: length, runs: [] };
+      if (!mapPiece(piece)) return { reason: 'Original operation text has an inconsistent decoded source map.' };
+      pieces.push(piece);
+      values.push(value);
+      length += value.length;
+    }
+    const value = values.join('');
+    return {
+      value,
+      payload: {
+        locate(offset) {
+          if (!Number.isInteger(offset) || offset < 0 || offset > length) return undefined;
+          if (offset === length) {
+            const last = pieces.at(-1);
+            return last ? locateRaw(last.end) : undefined;
+          }
+          let low = 0;
+          let high = pieces.length;
+          while (low < high) {
+            const middle = Math.floor((low + high) / 2);
+            const candidate = pieces[middle];
+            if (candidate.decodedStart + candidate.decodedLength <= offset) low = middle + 1;
+            else high = middle;
+          }
+          const piece = pieces[low];
+          if (!piece) return undefined;
+          const wanted = offset - piece.decodedStart;
+          low = 0;
+          high = piece.runs.length;
+          while (low + 1 < high) {
+            const middle = Math.floor((low + high) / 2);
+            if (piece.runs[middle].decodedStart <= wanted) low = middle;
+            else high = middle;
+          }
+          const run = piece.runs[low];
+          if (!run || wanted < run.decodedStart || wanted >= run.decodedStart + run.length) return undefined;
+          return locateRaw(run.rawStart + (wanted - run.decodedStart) * run.stride);
+        },
+      },
+    };
+  };
+}
+
+function parseOperations(diffXml: string, attributeProvenance = false): {
+  operations: DiffOperation[];
+  findings: DiffFinding[];
+  provenance?: AttributeProvenanceContext;
+} {
   const parsed = parseDocument(diffXml);
   if (!parsed.document) {
     return { operations: [], findings: [{ severity: 'error', code: 'DIFF_XML_INVALID', message: `Diff XML is invalid: ${parsed.error || 'parse failed'}.` }] };
@@ -103,6 +328,7 @@ function parseOperations(diffXml: string): { operations: DiffOperation[]; findin
   const lines = operationLines(diffXml);
   const operations: DiffOperation[] = [];
   const findings: DiffFinding[] = [];
+  const sourceOperations: XmlElement[] = [];
   for (let i = 0; i < root.childNodes.length; i++) {
     const child = root.childNodes[i];
     if (!isElement(child)) continue;
@@ -140,8 +366,25 @@ function parseOperations(diffXml: string): { operations: DiffOperation[]; findin
       silent: /^(1|true)$/i.test(child.getAttribute('silent') || ''),
       line: lines[operationIndex],
     });
+    if (attributeProvenance) sourceOperations.push(child);
   }
-  return { operations, findings };
+  if (!attributeProvenance) return { operations, findings };
+  const mapPayload = createPayloadMapper(diffXml);
+  const mapped = new Map<number, LiteralPayloadResult>();
+  return {
+    operations, findings,
+    provenance: {
+      payload(operation) {
+        let result = mapped.get(operation);
+        if (!result) {
+          const element = sourceOperations[operation];
+          result = element ? mapPayload(element) : { reason: 'Original operation source is unavailable.' };
+          mapped.set(operation, result);
+        }
+        return result;
+      },
+    },
+  };
 }
 
 function truthyXpath(value: unknown): boolean {
@@ -320,16 +563,26 @@ function applyToNode(document: XmlDocument, target: XmlNode, operation: DiffOper
 
 /** Apply already parsed operations. Used by the patch synthesizer's round-trip oracle too. */
 export function applyDiffOperations(baseXml: string, operations: DiffOperation[]): DiffSimulationResult {
+  return applyParsedDiffOperations(baseXml, operations);
+}
+
+function applyParsedDiffOperations(
+  baseXml: string,
+  operations: DiffOperation[],
+  provenance?: AttributeProvenanceContext,
+): DiffSimulationResult {
   const parsed = parseDocument(baseXml);
   if (!parsed.document) {
     return {
       ok: false, content: baseXml, operations: [],
       findings: [{ severity: 'error', code: 'DIFF_XML_INVALID', message: `Base XML is invalid: ${parsed.error || 'parse failed'}.` }],
+      ...(provenance ? { attributeAssignments: [], attributeAttributionGaps: [] } : {}),
     };
   }
   const document = parsed.document;
   const findings: DiffFinding[] = [];
   const outcomes: DiffSimulationResult['operations'] = [];
+  const attributeWrites = provenance ? new Map<XmlAttr, number>() : undefined;
 
   operations.forEach((operation, index) => {
     if (operation.ifCondition) {
@@ -384,6 +637,14 @@ export function applyDiffOperations(baseXml: string, operations: DiffOperation[]
     for (const target of matches) {
       try {
         applyToNode(document, target, operation);
+        if (attributeWrites) {
+          if (operation.type === 'replace' && target.nodeType === 2) {
+            attributeWrites.set(target as XmlAttr, index);
+          } else if (operation.type === 'add' && operation.attrType && isElement(target)) {
+            const attribute = target.getAttributeNode(operation.attrType.slice(1));
+            if (attribute) attributeWrites.set(attribute, index);
+          }
+        }
         applied++;
       } catch (error) {
         findings.push({
@@ -397,20 +658,52 @@ export function applyDiffOperations(baseXml: string, operations: DiffOperation[]
     outcomes.push({ ...operation, index, matches: matches.length, applied: applied === matches.length });
   });
 
-  return {
-    ok: !findings.some(finding => finding.severity === 'error'),
+  const ok = !findings.some(finding => finding.severity === 'error');
+  const result: DiffSimulationResult = {
+    ok,
     content: serializer.serializeToString(document),
     operations: outcomes,
     findings,
   };
+  if (provenance && attributeWrites) {
+    result.attributeAssignments = [];
+    result.attributeAttributionGaps = [];
+    if (ok) {
+      const seenGaps = new Set<string>();
+      for (const [attribute, operation] of attributeWrites) {
+        const owner = attribute.ownerElement;
+        if (!owner || owner.ownerDocument !== document || owner.getAttributeNode(attribute.name) !== attribute) continue;
+        let ancestor: XmlNode | null = owner;
+        while (ancestor && ancestor !== document) ancestor = ancestor.parentNode;
+        if (ancestor !== document) continue;
+        const role = { operation, elementName: owner.nodeName, attributeName: attribute.name };
+        const mapped = provenance.payload(operation);
+        const reason = 'reason' in mapped ? mapped.reason
+          : mapped.value !== attribute.value ? 'Original operation text does not match its final assigned value.' : undefined;
+        if (reason) {
+          const key = JSON.stringify([operation, role.elementName, role.attributeName, reason]);
+          if (!seenGaps.has(key)) {
+            seenGaps.add(key);
+            result.attributeAttributionGaps.push({ ...role, reason });
+          }
+        } else if (!('reason' in mapped)) {
+          result.attributeAssignments.push({ ...role, value: attribute.value, payload: mapped.payload });
+        }
+      }
+    }
+  }
+  return result;
 }
 
-export function simulateXmlDiff(baseXml: string, diffXml: string): DiffSimulationResult {
-  const parsed = parseOperations(diffXml);
+export function simulateXmlDiff(baseXml: string, diffXml: string, options: DiffSimulationOptions = {}): DiffSimulationResult {
+  const parsed = parseOperations(diffXml, options.attributeProvenance);
   if (parsed.findings.some(finding => finding.severity === 'error')) {
-    return { ok: false, content: baseXml, operations: [], findings: parsed.findings };
+    return {
+      ok: false, content: baseXml, operations: [], findings: parsed.findings,
+      ...(options.attributeProvenance ? { attributeAssignments: [], attributeAttributionGaps: [] } : {}),
+    };
   }
-  const applied = applyDiffOperations(baseXml, parsed.operations);
+  const applied = applyParsedDiffOperations(baseXml, parsed.operations, parsed.provenance);
   return { ...applied, findings: [...parsed.findings, ...applied.findings] };
 }
 
@@ -450,6 +743,79 @@ export function runDiffSimulatorSelftest(): { pass: boolean; allPassed: boolean;
   const compactOr = simulateXmlDiff('<root><item id="a"/></root>',
     `<diff><replace sel="/root/item/@id[.='x' or.='a']">b</replace></diff>`);
   check('X4 compact or-dot XPath token', compactOr.ok && /id="b"/.test(compactOr.content), compactOr.findings.map(f => f.message).join('; '));
+
+  check('default simulation keeps provenance fields absent', !Object.hasOwn(result, 'attributeAssignments')
+    && !Object.hasOwn(result, 'attributeAttributionGaps'));
+  const attributed = (baseText: string, patchText: string) => simulateXmlDiff(baseText, patchText, { attributeProvenance: true });
+  const replacement = attributed('<root exact="old"/>', '<diff><replace sel="/root/@exact">$v else 0</replace></diff>');
+  const assignment = replacement.attributeAssignments?.[0];
+  check('literal replace preserves actual role value and original position', replacement.ok
+    && replacement.attributeAssignments?.length === 1 && replacement.attributeAttributionGaps?.length === 0
+    && assignment?.operation === 0 && assignment.elementName === 'root' && assignment.attributeName === 'exact'
+    && assignment.value === '$v else 0' && assignment.payload.locate(3)?.line === 1
+    && assignment.payload.locate(3)?.column === 38);
+  const addition = attributed('<root/>', '<diff><add sel="/root" type="@exact">else</add></diff>');
+  check('attribute addition receives actual resulting Attr provenance', addition.ok
+    && addition.attributeAssignments?.[0]?.attributeName === 'exact' && addition.attributeAssignments[0].value === 'else');
+  const overwrite = attributed('<root exact="old"/>', '<diff><replace sel="/root/@exact">bad</replace><add sel="/root" type="@exact">good</add></diff>');
+  check('later attribute assignment replaces earlier provenance', overwrite.ok && overwrite.attributeAssignments?.length === 1
+    && overwrite.attributeAssignments[0].operation === 1 && overwrite.attributeAssignments[0].value === 'good');
+  const removedAttribute = attributed('<root exact="old"/>', '<diff><replace sel="/root/@exact">bad</replace><remove sel="/root/@exact"/></diff>');
+  check('removed Attr does not survive provenance', removedAttribute.ok && removedAttribute.attributeAssignments?.length === 0
+    && removedAttribute.attributeAttributionGaps?.length === 0);
+  const detached = attributed('<root><item exact="old"/></root>', '<diff><replace sel="/root/item/@exact">bad</replace><remove sel="/root/item"/></diff>');
+  check('detached owner does not survive provenance', detached.ok && detached.attributeAssignments?.length === 0);
+  const replacedOwner = attributed('<root><item exact="old"/></root>', '<diff><replace sel="/root/item/@exact">bad</replace><replace sel="/root/item"><item exact="new"/></replace></diff>');
+  check('replacement subtree does not inherit detached Attr provenance', replacedOwner.ok && replacedOwner.attributeAssignments?.length === 0);
+  const falseWrite = attributed('<root exact="old"/>', '<diff><replace sel="/root/@exact" if="false()">bad</replace></diff>');
+  check('false condition produces no assignment or mapping gap', falseWrite.ok && falseWrite.attributeAssignments?.length === 0
+    && falseWrite.attributeAttributionGaps?.length === 0);
+  const unmatchedWrite = attributed('<root/>', '<diff><replace sel="/root/@missing">bad</replace></diff>');
+  check('zero selector preserves warning without fabricating assignment', unmatchedWrite.ok && unmatchedWrite.attributeAssignments?.length === 0
+    && unmatchedWrite.findings.some(finding => finding.code === 'DIFF_SELECTOR_ZERO'));
+  const failedAfterWrite = attributed('<root exact="old"/>', '<diff><replace sel="/root/@exact">bad</replace><add sel="/root/@exact" type="@other">fail</add></diff>');
+  check('unsuccessful simulation discards all prior attribution', !failedAfterWrite.ok
+    && failedAfterWrite.attributeAssignments?.length === 0 && failedAfterWrite.attributeAttributionGaps?.length === 0);
+  const invalidAttributed = attributed('<root/>', '<diff><replace sel="//*[">bad</replace></diff>');
+  const invalidPatch = attributed('<root/>', '<diff><replace></diff>');
+  const invalidBase = attributed('<root>', '<diff/>');
+  check('invalid selector patch and base expose empty opt-in attribution', [invalidAttributed, invalidPatch, invalidBase].every(value => !value.ok
+    && value.attributeAssignments?.length === 0 && value.attributeAttributionGaps?.length === 0));
+  const multiAttributes = attributed('<root><item exact="a"/><item exact="b"/></root>', '<diff><replace sel="/root/item/@exact">bad</replace></diff>');
+  check('equivalent multimatch shares one original payload mapper', multiAttributes.ok && multiAttributes.attributeAssignments?.length === 2
+    && multiAttributes.attributeAssignments[0].payload === multiAttributes.attributeAssignments[1].payload
+    && multiAttributes.attributeAssignments.every(value => value.operation === 0 && value.value === 'bad'));
+  const differentRoles = attributed('<root><set_value exact="a"/><do_if value="b"/></root>', '<diff><replace sel="/root/set_value/@exact | /root/do_if/@value">bad</replace></diff>');
+  check('one operation retains distinct actual target roles', differentRoles.ok && differentRoles.attributeAssignments?.length === 2
+    && differentRoles.attributeAssignments.map(value => `${value.elementName}/@${value.attributeName}`).join('|') === 'set_value/@exact|do_if/@value');
+
+  const lexicalPatch = '<diff>\r\n<!-- <replace sel="/fake">decoy</replace> -->\r\n<replace sel="/root/@exact">α &#x1F680; &amp; &#101;lse<![CDATA[ $x else &amp; 0]]><?skip else?><!--else--></replace>\r\n</diff>';
+  const lexical = attributed('<root exact="old"/>', lexicalPatch);
+  const lexicalAssignment = lexical.attributeAssignments?.[0];
+  const entityAt = lexicalPatch.indexOf('&#101;');
+  const cdataAt = lexicalPatch.indexOf('else &amp;');
+  check('entities astral text CDATA comments and PI preserve authored positions', lexical.ok
+    && lexicalAssignment?.value === 'α 🚀 & else $x else &amp; 0'
+    && lexical.attributeAttributionGaps?.length === 0
+    && lexicalAssignment.payload.locate(lexicalAssignment.value.indexOf('else'))?.line === 3
+    && lexicalAssignment.payload.locate(lexicalAssignment.value.indexOf('else'))?.column === entityAt - lexicalPatch.lastIndexOf('\n', entityAt)
+    && lexicalAssignment.payload.locate(lexicalAssignment.value.lastIndexOf('else'))?.column === cdataAt - lexicalPatch.lastIndexOf('\n', cdataAt));
+  const nestedTextPatch = '<diff><replace sel="/root/@exact">before<x>else</x><!--skip--> after</replace></diff>';
+  const nestedText = attributed('<root exact="old"/>', nestedTextPatch).attributeAssignments?.[0];
+  check('nested operation descendant text mirrors actual assigned value', nestedText?.value === 'beforeelse after'
+    && nestedText.payload.locate(6)?.column === nestedTextPatch.indexOf('else') + 1);
+  const normalizedPatch = '\uFEFF<diff>\r\u0085<replace sel="/root/@exact"><![CDATA[🛰️]]>&#13;&#10;&#x85;else\r\n tail</replace>\u2028</diff>';
+  const normalized = attributed('<root exact="old"/>', normalizedPatch);
+  const normalizedAssignment = normalized.attributeAssignments?.[0];
+  const normalizedElse = normalizedPatch.indexOf('else');
+  check('BOM XML line endings and second entity normalization map exactly', normalized.ok
+    && normalized.attributeAttributionGaps?.length === 0 && normalizedAssignment?.value === '🛰️\n\nelse\n tail'
+    && normalizedAssignment.payload.locate(3)?.line === 2
+    && normalizedAssignment.payload.locate(3)?.column === normalizedPatch.indexOf('&#13;') - normalizedPatch.indexOf('\r')
+    && normalizedAssignment.payload.locate(5)?.line === 2
+    && normalizedAssignment.payload.locate(5)?.column === normalizedElse - normalizedPatch.indexOf('\r'));
+  check('payload mapping rejects invalid offsets without guessed coordinates', assignment?.payload.locate(-1) === undefined
+    && assignment?.payload.locate(1000) === undefined && assignment?.payload.locate(0.5) === undefined);
   const passed = checks.filter(entry => entry.pass).length;
   return { pass: passed === checks.length, allPassed: passed === checks.length, passed, total: checks.length, checks };
 }
