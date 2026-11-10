@@ -32,3 +32,9 @@ GitHub main remains `f76775f02dbd8c61a100233e9d11d659f7a5d39b`. [GitHub](https:/
 ## AAR
 
 Sustain reproducing the duplicate through the actual Doctor endpoint and testing rollback ownership separately from an ordinary successful activation. The first nested replay exposed two oracle assertions using the folder name instead of the manifest ID. Its other failure came from placing the artifact oracle's temp under the process working directory. The corrected run used the known manifest ID and a separate private temp. Fresh-eyes review moved nested cleanup behind committed physical verification and preserved both absent-target backup layouts. The writer audit now counts empty-directory removal explicitly, including the existing X4 fixture owner. The first commit command stopped before staging. The rerun uses ASCII quoting in PowerShell. The main remaining risk is assuming Forge's discovery scan predicts the X4 engine. The queued cold-start fixture tests that boundary.
+
+## Current queue routing — 2026-11-10
+
+The same pending packet is now on the [dedicated Forge board READY row](https://app.notion.com/p/4144618ed15b811d9c80dd0f86c011a3), superseding old AiLive comment 4134618e-d15b-8163-b744-001dd1a0648b for routing. Fresh read-only manifest and payload verification matched4/4; artifact/test semantics unchanged, no new static/runtime/game claim. Claude owns the X4-closed/lock-free install, exact logs, verdict and cleanup. No engine verdict was found in the complete currentboard or inspected issue/discussion evidence. See [reconciliation](2026-11-10-forge-coordination-evidence-reconcile.md).
+
+The existing #57 log-dialect companion from comment4134618e-d15b-81d6-afb7-001d10b2b149 is separately identified in the new row: same startup, capture engine-written control load/discovery line or explicitly none. It changes no payload, game action or#53pass condition.

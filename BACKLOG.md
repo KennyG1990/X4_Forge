@@ -20,6 +20,9 @@ Dev preserves explicit translation filenames, no-edit XML bytes and intentional 
 
 ### Native backend recovery and interrupted apply `in_progress` (GitHub #53)
 
+Current cold-discovery game witness: [dedicated Forge board READY row](https://app.notion.com/p/4144618ed15b811d9c80dd0f86c011a3). Same frozen four-file packet, manifest eddcccfd..., rehashed4/4; old AiLive comment is history. Existing #57 log-line companion is linked on this row. No X4 verdict yet.
+
+
 The single current candidate is now source3c3e3ae66d66b4e3a33f57726c62bf6ad37807fa. Its complete source gate passed precommit,509/509 routes,134/134 oracles and120/120 E2E,zero flaky; final ownershipComplete/treeGone true,482samples/0observation failures. The [bounded test/harness repair and source receipt](docs/plans/2026-11-09-forge-082-capacity-recovery.md) retain the earlier5ad119/120failure and unknown discarded sampling cause as history. Only five test/harness files were repinned in place;897source files and product bytes stayed unchanged. Exact0.0.82 VSIX/package/isolated-installed/native qualification now passes, including2200-file parity and134/134installed runtime oracles. Curatedprecommit, exact Open VSX download, source push and required Quality runs passed; GitHub v0.0.82 is published with matching public bytes and final publication-record CI42751669178 green. Authorized Discord workflow responses were observed; direct channel readback was unavailable. No new quiet-window approval, dependency clone or helper family is needed. Retired879553654bytes/9724obsolete files including22unused generators, with compact history/current inputs retained and no backups. Qualified0.0.82 delivery and full experience/engine closure remain open.
 
 Native Preview and Undo now retain the physical destination across requests. Repointing an alias to an identical-byte target refuses safely. Stable aliases, historical physical recovery shapes and first deploy passed. The [59-check Dev correction](docs/plans/2026-11-09-native-deploy-physical-target-binding.md) is ported into the [new 0.0.82 source](docs/plans/2026-11-09-forge-082-physical-target-rollforward.md), whose 65-check replay also covers a target change during recovery capture. Full qualification remains pending.
@@ -115,6 +118,9 @@ Dev exposes the shared unsaved checker through an exact read/analyze capability 
 Dev checks standalone TextDB shorthand in unsaved HTTP, MCP, project validation and both native deploy entry points. [Isolated replay and game handoff](docs/plans/2026-11-09-textdb-expression-literals.md). The standalone engine witness is queued with Claude. Installed verification and public delivery remain open.
 
 ### MD load diagnostics `in_progress` (GitHub #73, part of #74)
+
+Current library-return game controls: [dedicated Forge board READY row](https://app.notion.com/p/4144618ed15b81698294c7760fd60283), unchanged three-file packet rehashed3/3. Published direct unmatched-else X4 evidence exists in [comment6728594533](https://github.com/KennyG1990/X4_Forge/issues/73#issuecomment-6728594533); library/literal-diff engine witnesses are separate.
+
 
 Dev now checks final literal diff-written MD/AI attributes through shared expression rules with original patch coordinates, explicit unavailable coverage and distinct role identities. Final MD source/native17cases/342controls plus exact-commit AI-only4cases/119controls, focused40, project-core12 and type/lint pass; exact bytes and a committed receipt verified. [Reproduction, implementation and source/native evidence](docs/plans/2026-11-09-diff-expression-values-design.md). Installed/rendered/public qualification and the remaining effective context/game controls stay open.
 
@@ -3731,3 +3737,7 @@ Research (pre-culled, 2 agents triangulated): `docs/research/2026-07-18-communit
 
 ### B63 round-4 continued — A2 (god.xml) REJECTED by reconcile; B1 pillar + object-index-maps prereq open
 **A2 REJECTED (corpus-falsified):** god.xml matchextension="false" is omitted by 495/496 vanilla locations (mod convention, not a rule) → cry-wolf; macro-resolution can't work either — only 18/151 god.xml macros are in index/macros.xml, the other 133 are sector/zone/cluster macros in maps/ which the object index (x4ObjectIndex scans index/*.xml only) doesn't include → would flag 133/151 vanilla macros. **PREREQ for a safe god.xml lint: extend x4ObjectIndex to also index maps/ sector/zone/cluster macros** (a bounded infra unit; also improves reference pickers + liveFixes macro-existence broadly). Then god.xml macro-resolution becomes clean (0-bar). **B1 (bulk-transform pillar) remains the strategic next-big-thing (Ken decision).** Round-4 net so far: A1 factions ✅; A2 falsified; a/d/e (round-3) falsified/covered — the EASY lint wins are genuinely mined.
+
+### Native deploy cutover evidence `in_progress` (GitHub #85)
+
+Claude's scoped denial of another known deployer and original0.0.80 native refusal are already received. The immutable identified wrapper calls native preview/apply; do not call the answer missing. Untracked/historical utility and current operator cutover acceptance remain bounded unknowns; optional user name/path clarification is pending. [Current evidence/routing reconciliation](docs/plans/2026-11-10-forge-coordination-evidence-reconcile.md). Forge/Claude coordination uses the dedicated Forge board, not old AiLive discussion.

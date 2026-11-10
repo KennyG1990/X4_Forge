@@ -16,3 +16,7 @@ Reproduce the prior false green and exercise two real returns on one line, disti
 ## AAR
 
 Preserve raw coordinates through the whole native deploy flow. The repeated same-line witness made this directly testable. The source rule checks declaration-local ordinary ownership, so an unrelated or incompatible caller cannot incorrectly mark a valid library body. The engine report already establishes the direct cue failure. The new game packet focuses on the unproven library cases and isolates the negative script from the positive probe. The highest-risk unresolved weakness is assuming that valid declaration purpose alone proves the behavior of a valued return when the caller discards its result.
+
+## Current queue routing — 2026-11-10
+
+The same pending packet is now on the [dedicated Forge board READY row](https://app.notion.com/p/4144618ed15b81698294c7760fd60283), superseding old AiLive comment 4134618e-d15b-81bd-9755-001dc174a713 for routing. Fresh read-only manifest and payload verification matched3/3; artifact/test semantics unchanged, no new static/runtime/game claim. Claude owns the X4-closed/lock-free install, exact logs, verdict and cleanup. No engine verdict was found in the complete currentboard or inspected issue/discussion evidence. See [reconciliation](2026-11-10-forge-coordination-evidence-reconcile.md).

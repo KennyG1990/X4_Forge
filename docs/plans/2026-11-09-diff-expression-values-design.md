@@ -2,6 +2,10 @@
 
 Status: source/native behavior VERIFIED; overall acceptance PARTIAL pending installed/rendered/public qualification. Mandatory commit-hook outcome is QA/forge-073-source-proof.json. Full lane. Owner [#73](https://github.com/KennyG1990/X4_Forge/issues/73), under [#74](https://github.com/KennyG1990/X4_Forge/issues/74). This is one remaining unit of those open issues, not their complete acceptance.
 
+## Current evidence correction — 2026-11-10
+
+Published #73comment6728594533 already records X4 9.00 rejecting a direct unmatched-else expression at ai_influence_diplomacy.xml2717. The later provisional statements below limiting existing evidence to mixed access were too narrow and are superseded by this readback. Direct mixed and else reports do not constitute a new literal-diff or library-return game witness; rawdebuglog was not independently fetched in this reconciliation. [Primary report](https://github.com/KennyG1990/X4_Forge/issues/73#issuecomment-6728594533). Current library controls are on the [dedicated Forge row](https://app.notion.com/p/4144618ed15b81698294c7760fd60283).
+
 ## 2026-11-10 current #73 batch — SPECIFIED before implementation
 
 Baseline HEAD is local `b4d8c7371897d2c1f9747dd360f6504852e75017`, clean. The #95 prerequisite is committed and its bounded source/native checks passed; it is not an installed/public release. The earlier pure-only status above describes the original #73 baseline, not the current prerequisite. This batch implements the saved literal attribute-assignment scope after a fresh project/native bad/good reproduction. Reuse the current `C:/fqa-73d` scratch fixture, qualified Node and existing dependencies. Dev IDE process/profile and its private scratch configuration were read-only reverified; trust changes remain unauthorized and are not part of this batch.
