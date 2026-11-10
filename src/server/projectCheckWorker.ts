@@ -43,6 +43,7 @@ export interface ProjectCheckWorkerResult {
 }
 
 function trustedLocalPath(value: string): string {
+  // eslint-disable-next-line no-control-regex -- Reject colon, C0 and DEL after the drive prefix in worker runtime paths.
   if (!/^[A-Za-z]:[\\/]/.test(value) || /[:\u0000-\u001f\u007f]/.test(value.slice(2))) {
     throw new Error('The project check worker requires absolute local runtime paths.');
   }

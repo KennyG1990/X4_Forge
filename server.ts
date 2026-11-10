@@ -5621,8 +5621,8 @@ app.get("/api/agent/status", async (req, res) => {
           ok: true, workspaceId: record.workspaceId, ...status,
           ...(inspectTarget === '1' && !('targetObservation' in status) ? { targetObservation: { targetState: 'unavailable' } } : {}),
         });
-      } catch (error: any) {
-        const forbidden = error?.code === 'DEPLOY_APPROVAL_FORBIDDEN';
+      } catch (error: unknown) {
+        const forbidden = (error as { code?: unknown } | null | undefined)?.code === 'DEPLOY_APPROVAL_FORBIDDEN';
         return res.status(forbidden ? 403 : 503).json({
           ok: false, code: forbidden ? 'DEPLOY_APPROVAL_FORBIDDEN' : 'DEPLOY_RECEIPT_UNAVAILABLE',
         });
@@ -14591,7 +14591,7 @@ app.post('/api/agent/warning-reviews/revoke', (req, res) => {
   }
 });
 function requestDeployOperation(req: express.Request) {
-  const actor = (req as any).__actor as RequestActor | undefined;
+  const actor = (req as express.Request & { __actor?: RequestActor }).__actor;
   const operationId = req.get('x-forge-operation-id');
   if (req.body?.dryRun === true || actor?.kind !== 'agent' || !actor.keyId || operationId === undefined) return;
   if (!ACTION_RECEIPT_OPERATION_ID_RE.test(operationId)) {

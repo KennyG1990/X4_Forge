@@ -8095,3 +8095,8 @@ VERIFIED bounded metadata audit and archive preparation.815 locked paths and658 
 ## 2026-11-09 — Private Koffi native-layout qualification correction
 
 VERIFIED bounded private preparation: versioned driver/witness/qualifier bind exact locked companion/core layouts, all relevant bytes and static preference without claiming native load. Data55/55, actual source115/artifact120, collector2positive/49negative, immutable source902/original30 checks and independent complete reviews passed. Every prior release gate remains intact. Extra quiet-window scheduling was corrected against the user's existing explicit full headless approval; current live state is known and all live writes/computer use remain forbidden. Full source/build/VSIX/installed qualification is next, not proven by these fixtures. Source5ad377c and original files remain unchanged. No capability-map delta. Evidence `docs/plans/2026-11-09-forge-082-koffi-native-layout-qualification.md`.
+
+
+## 2026-11-10 UTC — Dev released-type parity and intentional control guards VERIFIED
+
+Mirrored the two erased server annotations from public0.0.82 into broaderDev without copying the server or losing#93. Five existing C0/DEL rejection guards retain exact regexes and gain narrowly scoped, reasoned lint annotations. All six module outputs match baseline in CJS and ESM (12/12), full lint337files passes0errors/581warnings under unchanged600limit, and normal precommit/typecheck passed. Independent host review accepted exact reverse/scope/receipts. [Plan/close](docs/plans/2026-11-09-forge-082-capacity-recovery.md). No capability-map delta, runtime behavior, published artifact, dependency or live-state change; no new build/browser/game claim.

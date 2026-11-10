@@ -23,6 +23,7 @@ function bindProjectChecks(input: ProjectCheckBindingInput, checkId?: string) {
   const { modId, snapshot } = input.artifact;
   const setupInput = { ...input.setupInput, interpreterDependencies: [...(input.setupInput.interpreterDependencies ?? [])] };
   const setup = frozen.setup;
+  // eslint-disable-next-line no-control-regex -- Reject C0 controls in SystemRoot before constructing the worker command.
   if (process.platform !== 'win32' || !/^[A-Za-z]:[\\/]/.test(input.systemRoot) || /[\u0000-\u001f]/.test(input.systemRoot)) {
     throw new Error('A local Windows system root is required for this project check runner.');
   }

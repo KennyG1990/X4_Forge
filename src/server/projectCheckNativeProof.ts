@@ -17,6 +17,7 @@ const MAX_AUTHORITY_BYTES = 64 * 1024;
 const receiptIdPattern = /^ar_[a-f0-9]{64}$/;
 const hashPattern = /^[a-f0-9]{64}$/;
 const local = (value: unknown): value is string => typeof value === 'string' && /^[A-Za-z]:[\\/]/.test(value)
+  // eslint-disable-next-line no-control-regex -- Reject colon, C0 and DEL after the drive prefix in local proof paths.
   && !/[:\u0000-\u001f\u007f]/.test(value.slice(2));
 const authorityRefused = () => Object.assign(new Error('The approved project check proof is unavailable for this Dev workspace and target.'),
   { code: 'PROJECT_CHECK_PROOF_MISMATCH' });

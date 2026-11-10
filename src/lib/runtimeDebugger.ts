@@ -787,6 +787,7 @@ function luaExtensionFrame(line: string): { folder: string; frame: RuntimeStackF
   const match = /^\s*\[string (["'])extensions[\\/]([a-z0-9_-][a-z0-9_.-]{0,127})[\\/]([^"'\r\n]+)\1\]:(\d+)(?=$|:|\s)/i.exec(line);
   if (!match) return;
   const relative = match[3].replace(/\\/g, '/');
+  // eslint-disable-next-line no-control-regex -- Reject C0 controls and colons before attributing an extension stack frame.
   if (/[:\u0000-\u001f]/.test(relative) || relative.split('/').some(part => !part || part === '.' || part === '..')) return;
   const folder = normalizeIdentity(match[2]);
   if (relative.endsWith('...')) return { folder, frame: { raw: line } };

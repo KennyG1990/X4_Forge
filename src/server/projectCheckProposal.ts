@@ -32,6 +32,7 @@ function fields(value: unknown, allowed: readonly string[], label: string): Reco
 }
 
 function literal(value: unknown, max: number): value is string {
+  // eslint-disable-next-line no-control-regex -- Reject C0 and DEL in bounded project-check literals.
   return typeof value === 'string' && value.length <= max && !/[\u0000-\u001f\u007f]/.test(value);
 }
 
