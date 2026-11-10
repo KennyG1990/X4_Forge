@@ -136,6 +136,8 @@ Dev validation blocks the X4-witnessed mixed access and ordinary cue returns in 
 
 ### MD include target purpose `in_progress` (GitHub #70, part of #74)
 
+Effective-context source/native acceptance now passes focused56/56 and actual project/Problems/both-native102/102, including patch-created/ref-written calls, provider purpose/name/script/inventory changes, exact original positions, clone IDs, inherited exemptions, bad/stale no-write refusals and exact reviewed bytes with a reopened committed receipt. Existing expression40/simulator24/cross-file65/cue-lineage35/overlay24/consumer20/project12 pass. [Bounded close and remaining gates](docs/plans/2026-11-10-effective-include-purpose.md); enforced normal precommit/local commit outcome is in QA/forge-1110-effective-include-purpose.json. CodeSense direct/diff bad/good all returned zero findings with real schema-enabled analysis; the existing X4 witness remains the rule authority. Full#70 stays PARTIAL for external context, official-match runtime, installed/rendered/public qualification. No live change.
+
 Dev blocks the X4-witnessed include of a run-only library when project source resolves the target exactly. [Isolated replay](docs/plans/2026-11-09-ff31-include-library-purpose.md). Effective diff and external authority, installed verification and public delivery remain open. The separate official source match still needs a runtime verdict.
 
 ### Monitored cutscene timeout types `in_progress` (GitHub #72, part of #74)

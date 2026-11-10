@@ -55,6 +55,9 @@ jobs:
       - name: Prove literal diff expression provenance
         run: npm run test:diff-expression-values
 
+      - name: Prove effective MD include target purpose and authored causality
+        run: npm run test:effective-include-purpose
+
       - name: Preserve failed official overlay coverage
         run: npm run test:project-validation-overlay
 

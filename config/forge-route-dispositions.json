@@ -84,6 +84,7 @@
     "src/lib/mdAutoLayout.ts",
     "src/lib/mdCompileSelftest.ts",
     "src/lib/mdCritic.ts",
+    "src/lib/mdEffectiveLibraryPurpose.ts",
     "src/lib/mdExplain.ts",
     "src/lib/mdFileIdentity.ts",
     "src/lib/mdFriendlyNames.ts",

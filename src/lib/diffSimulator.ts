@@ -16,7 +16,7 @@ import {
   type Element as XmlElement,
   type Node as XmlNode,
 } from '@xmldom/xmldom';
-import { createSourcePositionLocator } from './xmlSourceSpans';
+import { createXmlNodePositionLocator } from './xmlSourceSpans';
 
 export type DiffPosition = 'child' | 'before' | 'after' | 'prepend';
 
@@ -59,9 +59,32 @@ export interface DiffSimulationResult {
   /** Opt-in provenance of surviving literal operation-text attribute assignments. */
   attributeAssignments?: DiffAttributeAssignment[];
   attributeAttributionGaps?: DiffAttributeAttributionGap[];
+  /** Internal, opt-in DOM analysis; never emitted by default HTTP simulations. */
+  elementProvenance?: DiffElementProvenance;
 }
 
-export interface DiffSimulationOptions { attributeProvenance?: boolean }
+export interface DiffSimulationOptions {
+  attributeProvenance?: boolean;
+  elementProvenance?: boolean | { maxElements?: number; maxSourceChars?: number };
+}
+
+export interface DiffSourcePoint { operation: number; line?: number; column?: number; reason?: string }
+export interface DiffElementState {
+  readonly id: number;
+  readonly elementName: string;
+  readonly attributes: Readonly<Record<string, string>>;
+  readonly parent: XmlElement | null;
+}
+export interface DiffElementProvenance {
+  available: boolean;
+  reason?: string;
+  document?: XmlDocument;
+  initial: ReadonlyMap<XmlElement, DiffElementState>;
+  elements: ReadonlyMap<XmlElement, DiffSourcePoint>;
+  attributes: ReadonlyMap<XmlElement, ReadonlyMap<string, DiffSourcePoint>>;
+  removed: ReadonlyMap<XmlElement, DiffSourcePoint>;
+  gaps: readonly string[];
+}
 
 export interface DiffAttributePayload {
   /** Decoded UTF-16 offset -> original, one-based authored patch position. */
@@ -95,23 +118,33 @@ interface AttributeProvenanceContext {
   payload(operation: number): LiteralPayloadResult;
 }
 
+interface ElementSourceContext {
+  source: string;
+  repaired: boolean;
+  operations: XmlElement[];
+  point(node: XmlNode): { line: number; column: number } | undefined;
+  payload(operation: number): LiteralPayloadResult;
+}
+
 const serializer = new XMLSerializer();
 
 function isElement(node: XmlNode | null | undefined): node is XmlElement {
   return Boolean(node && node.nodeType === 1);
 }
 
-function parseDocument(xml: string, rejectRepairs = false): { document: XmlDocument | null; error?: string } {
+function parseDocument(xml: string, rejectRepairs = false): { document: XmlDocument | null; error?: string; repaired?: boolean } {
   let fatal = '';
+  let repaired = false;
   try {
     const document = new DOMParser({
       onError(level: string, message: string) {
+        if (level === 'warning') repaired = true;
         if (level === 'fatalError' || level === 'error' || (rejectRepairs && level === 'warning')) fatal ||= message;
       },
     }).parseFromString(String(xml || '').replace(/^\uFEFF/, ''), 'text/xml');
     if (!document?.documentElement) return { document: null, error: fatal || 'document has no root element' };
     if (fatal) return { document: null, error: fatal };
-    return { document };
+    return { document, repaired };
   } catch (error) {
     return { document: null, error: error instanceof Error ? error.message : String(error) };
   }
@@ -148,29 +181,9 @@ function decodePayloadEntity(entity: string): string | undefined {
   return String.fromCodePoint(point);
 }
 
-/**
- * Build one source mapper shared by all operations. xmldom strips a leading BOM
- * and normalizes XML 1.1 line endings before assigning its DOM locators. Columns
- * within each such line still index the original UTF-16 text exactly.
- */
-function createPayloadMapper(source: string): (operation: XmlElement) => LiteralPayloadResult {
-  const locateRaw = createSourcePositionLocator(source);
-  let domLines: number[] | undefined;
-  const rawOffset = (node: XmlNode): number | undefined => {
-    if (!node.lineNumber || !node.columnNumber) return undefined;
-    if (!domLines) {
-      const bom = source.startsWith('\uFEFF') ? 1 : 0;
-      domLines = [bom];
-      const endings = /\r[\n\u0085]?|[\n\u0085\u2028\u2029]/g;
-      endings.lastIndex = bom;
-      let match: RegExpExecArray | null;
-      while ((match = endings.exec(source))) domLines.push(match.index + match[0].length);
-    }
-    const start = domLines[node.lineNumber - 1];
-    if (start === undefined) return undefined;
-    const offset = start + node.columnNumber - 1;
-    return offset >= start && offset <= source.length ? offset : undefined;
-  };
+function createPayloadMapper(source: string, locator = createXmlNodePositionLocator(source)): (operation: XmlElement) => LiteralPayloadResult {
+  const locateRaw = locator.locateRaw;
+  const rawOffset = locator.offset;
 
   interface SourceRun {
     decodedStart: number;
@@ -319,10 +332,11 @@ function createPayloadMapper(source: string): (operation: XmlElement) => Literal
   };
 }
 
-function parseOperations(diffXml: string, attributeProvenance = false): {
+function parseOperations(diffXml: string, attributeProvenance = false, elementProvenance = false): {
   operations: DiffOperation[];
   findings: DiffFinding[];
   provenance?: AttributeProvenanceContext;
+  elementSource?: ElementSourceContext;
 } {
   const parsed = parseDocument(diffXml);
   if (!parsed.document) {
@@ -373,14 +387,13 @@ function parseOperations(diffXml: string, attributeProvenance = false): {
       silent: /^(1|true)$/i.test(child.getAttribute('silent') || ''),
       line: lines[operationIndex],
     });
-    if (attributeProvenance) sourceOperations.push(child);
+    if (attributeProvenance || elementProvenance) sourceOperations.push(child);
   }
-  if (!attributeProvenance) return { operations, findings };
-  const mapPayload = createPayloadMapper(diffXml);
+  if (!attributeProvenance && !elementProvenance) return { operations, findings };
+  const locator = createXmlNodePositionLocator(diffXml);
+  const mapPayload = createPayloadMapper(diffXml, locator);
   const mapped = new Map<number, LiteralPayloadResult>();
-  return {
-    operations, findings,
-    provenance: {
+  const context: AttributeProvenanceContext = {
       payload(operation) {
         let result = mapped.get(operation);
         if (!result) {
@@ -390,7 +403,11 @@ function parseOperations(diffXml: string, attributeProvenance = false): {
         }
         return result;
       },
-    },
+  };
+  return { operations, findings,
+    ...(attributeProvenance ? { provenance: context } : {}),
+    ...(elementProvenance ? { elementSource: { source: diffXml, repaired: !!parsed.repaired,
+      operations: sourceOperations, point: locator.point, payload: context.payload } } : {}),
   };
 }
 
@@ -519,7 +536,7 @@ function directPayloadText(content: string): string {
   return wrapped.document?.documentElement.textContent || '';
 }
 
-function applyToNode(document: XmlDocument, target: XmlNode, operation: DiffOperation): void {
+function applyToNode(document: XmlDocument, target: XmlNode, operation: DiffOperation, onPayload?: (nodes: XmlNode[]) => void): void {
   const anyTarget = target as any;
   if (operation.type === 'remove') {
     if (target.nodeType === 2) {
@@ -540,6 +557,7 @@ function applyToNode(document: XmlDocument, target: XmlNode, operation: DiffOper
       return;
     }
     const nodes = payloadNodes(document, operation.content || '');
+    onPayload?.(nodes);
     if (nodes.length === 0) throw new Error('replace operation has no payload');
     if (!target.parentNode) throw new Error('cannot replace the document root');
     const parent = target.parentNode;
@@ -555,6 +573,7 @@ function applyToNode(document: XmlDocument, target: XmlNode, operation: DiffOper
     return;
   }
   const nodes = payloadNodes(document, operation.content || '');
+  onPayload?.(nodes);
   if (operation.pos === 'before' || operation.pos === 'after') {
     if (!target.parentNode) throw new Error(`cannot insert ${operation.pos} the document root`);
     const parent = target.parentNode;
@@ -568,6 +587,144 @@ function applyToNode(document: XmlDocument, target: XmlNode, operation: DiffOper
   }
 }
 
+function unavailableElementProvenance(reason: string): DiffElementProvenance {
+  return { available: false, reason, initial: new Map(), elements: new Map(), attributes: new Map(), removed: new Map(), gaps: [reason] };
+}
+
+function createElementTrace(
+  document: XmlDocument, baseXml: string, repaired: boolean, source: ElementSourceContext | undefined,
+  options: Exclude<DiffSimulationOptions['elementProvenance'], undefined | false>,
+) {
+  const initial = new Map<XmlElement, DiffElementState>();
+  const elements = new Map<XmlElement, DiffSourcePoint>();
+  const attributes = new Map<XmlElement, Map<string, DiffSourcePoint>>();
+  const removed = new Map<XmlElement, DiffSourcePoint>();
+  const gaps: string[] = [];
+  const result: DiffElementProvenance = { available: true, initial, elements, attributes, removed, gaps };
+  const maxElements = typeof options === 'object' ? options.maxElements ?? 50_000 : 50_000;
+  const maxSourceChars = typeof options === 'object' ? options.maxSourceChars ?? 8 * 1024 * 1024 : 8 * 1024 * 1024;
+  let attributeFacts = 0;
+  const gap = (reason: string) => { if (gaps.length < 100 && !gaps.includes(reason)) gaps.push(reason); };
+  const disable = (reason: string) => {
+    result.available = false; result.reason ||= reason; gap(reason);
+    initial.clear(); elements.clear(); attributes.clear(); removed.clear(); delete result.document;
+  };
+  const safe = (work: () => void) => {
+    if (!result.available) return;
+    try { work(); } catch { disable('Element context provenance failed internally; no authored ownership is claimed.'); }
+  };
+  const visit = (roots: XmlNode[], work: (element: XmlElement) => void) => {
+    const pending = [...roots].reverse();
+    while (pending.length && result.available) {
+      const node = pending.pop()!;
+      if (!isElement(node)) continue;
+      work(node);
+      for (let index = node.childNodes.length - 1; index >= 0; index--) pending.push(node.childNodes[index]);
+    }
+  };
+  const budget = () => {
+    if (initial.size + elements.size >= maxElements || attributeFacts > maxElements * 8) {
+      disable('Element context provenance tracking budget exceeded.'); return false;
+    }
+    return true;
+  };
+  const point = (operation: number, node?: XmlNode): DiffSourcePoint => {
+    const location = node ? source?.point(node) : undefined;
+    if (location) return { operation, ...location };
+    const reason = `Operation ${operation + 1}: original XML node position unavailable.`;
+    gap(reason); return { operation, reason };
+  };
+  const rememberAttribute = (owner: XmlElement, name: string, origin: DiffSourcePoint) => {
+    let values = attributes.get(owner);
+    if (!values) { values = new Map(); attributes.set(owner, values); }
+    if (!values.has(name)) attributeFacts++;
+    if (attributeFacts > maxElements * 8) { disable('Element context attribute provenance budget exceeded.'); return; }
+    values.set(name, origin);
+  };
+  if (!Number.isSafeInteger(maxElements) || maxElements < 1 || !Number.isSafeInteger(maxSourceChars) || maxSourceChars < 1) {
+    disable('Element context provenance budgets must be positive safe integers.');
+  } else if (!source || repaired || source.repaired) {
+    disable('Element context requires original XML without parser repairs.');
+  } else if (baseXml.length + source.source.length > maxSourceChars) {
+    disable('Element context source budget exceeded.');
+  }
+  safe(() => visit([document.documentElement], element => {
+    if (!budget()) return;
+    const values = Object.create(null) as Record<string, string>;
+    for (const attribute of Array.from(element.attributes)) { values[attribute.name] = attribute.value; attributeFacts++; }
+    if (attributeFacts > maxElements * 8) { disable('Element context attribute provenance budget exceeded.'); return; }
+    initial.set(element, Object.freeze({ id: initial.size, elementName: element.nodeName, attributes: Object.freeze(values),
+      parent: isElement(element.parentNode) ? element.parentNode : null }));
+  }));
+  return {
+    result,
+    payload(nodes: XmlNode[], operation: number) { safe(() => {
+      const originals = Array.from(source!.operations[operation]?.childNodes ?? []).filter(isElement);
+      const actual = nodes.filter(isElement);
+      const pairs: Array<[XmlElement, XmlElement]> = [];
+      const pending = actual.map((node, index) => [node, originals[index]] as const);
+      let matched = actual.length === originals.length;
+      while (pending.length && matched) {
+        const [node, original] = pending.pop()!;
+        if (!original || node.nodeName !== original.nodeName) { matched = false; break; }
+        pairs.push([node, original]);
+        if (initial.size + elements.size + pairs.length > maxElements) { disable('Element context provenance tracking budget exceeded.'); return; }
+        const children = Array.from(node.childNodes).filter(isElement);
+        const originalChildren = Array.from(original.childNodes).filter(isElement);
+        if (children.length !== originalChildren.length) { matched = false; break; }
+        for (let index = children.length - 1; index >= 0; index--) pending.push([children[index], originalChildren[index]]);
+      }
+      if (!matched) {
+        const reason = `Operation ${operation + 1}: imported payload could not be paired with original XML elements.`;
+        gap(reason);
+        visit(nodes, element => { if (budget()) elements.set(element, { operation, reason }); });
+        return;
+      }
+      for (const [node, original] of pairs) {
+        if (!budget()) return;
+        elements.set(node, point(operation, original));
+        for (const attribute of Array.from(node.attributes)) {
+          const authored = original.getAttributeNode(attribute.name);
+          const origin = authored && authored.value === attribute.value ? point(operation, authored)
+            : { operation, reason: `Operation ${operation + 1}: original attribute correspondence unavailable.` };
+          if (origin.reason) gap(origin.reason);
+          rememberAttribute(node, attribute.name, origin);
+          if (!result.available) return;
+        }
+      }
+    }); },
+    attribute(owner: XmlElement, name: string, operation: number, removedAttribute: boolean) { safe(() => {
+      let origin: DiffSourcePoint;
+      if (removedAttribute) origin = point(operation, source!.operations[operation]);
+      else {
+        const payload = source!.payload(operation);
+        // Empty text has no value character to locate. The exact destructive
+        // assignment operation is still a known authored cause.
+        if (!('reason' in payload) && payload.value === '' && owner.getAttribute(name) === '') {
+          rememberAttribute(owner, name, point(operation, source!.operations[operation])); return;
+        }
+        const location = 'reason' in payload || payload.value !== owner.getAttribute(name) ? undefined : payload.payload.locate(0);
+        origin = location ? { operation, ...location } : { operation,
+          reason: `Operation ${operation + 1}: assigned attribute source position unavailable.` };
+        if (origin.reason) gap(origin.reason);
+      }
+      rememberAttribute(owner, name, origin);
+    }); },
+    deleted(node: XmlElement, operation: number) { safe(() => {
+      // XPath snapshots may include both an ancestor and its descendants. An
+      // identity destroyed with that ancestor never becomes attached again.
+      if (removed.has(node)) return;
+      const origin = point(operation, source!.operations[operation]);
+      visit([node], element => removed.set(element, origin));
+    }); },
+    finish(ok: boolean) {
+      if (!ok) disable('Patch simulation failed; effective element context is unavailable.');
+      if (result.available) result.document = document;
+      return result;
+    },
+  };
+}
+
 /** Apply already parsed operations. Used by the patch synthesizer's round-trip oracle too. */
 export function applyDiffOperations(baseXml: string, operations: DiffOperation[]): DiffSimulationResult {
   return applyParsedDiffOperations(baseXml, operations);
@@ -577,6 +734,8 @@ function applyParsedDiffOperations(
   baseXml: string,
   operations: DiffOperation[],
   provenance?: AttributeProvenanceContext,
+  elementSource?: ElementSourceContext,
+  elementOptions?: DiffSimulationOptions['elementProvenance'],
 ): DiffSimulationResult {
   const parsed = parseDocument(baseXml);
   if (!parsed.document) {
@@ -584,8 +743,10 @@ function applyParsedDiffOperations(
       ok: false, content: baseXml, operations: [],
       findings: [{ severity: 'error', code: 'DIFF_XML_INVALID', message: `Base XML is invalid: ${parsed.error || 'parse failed'}.` }],
       ...(provenance ? { attributeAssignments: [], attributeAttributionGaps: [] } : {}),
+      ...(elementOptions ? { elementProvenance: unavailableElementProvenance('Base XML could not be parsed for element context.') } : {}),
     };
   }
+  const elementTrace = elementOptions ? createElementTrace(parsed.document, baseXml, !!parsed.repaired, elementSource, elementOptions) : undefined;
   const document = parsed.document;
   const findings: DiffFinding[] = [];
   const outcomes: DiffSimulationResult['operations'] = [];
@@ -643,7 +804,12 @@ function applyParsedDiffOperations(
     // an XML patch processor applying the operation to the selector's original result set.
     for (const target of matches) {
       try {
-        applyToNode(document, target, operation);
+        const attributeOwner = target.nodeType === 2 ? (target as XmlAttr).ownerElement
+          : operation.type === 'add' && operation.attrType && isElement(target) ? target : null;
+        const attributeName = target.nodeType === 2 ? target.nodeName : operation.attrType?.slice(1);
+        applyToNode(document, target, operation, elementTrace ? nodes => elementTrace.payload(nodes, index) : undefined);
+        if (attributeOwner && attributeName) elementTrace?.attribute(attributeOwner, attributeName, index, operation.type === 'remove');
+        if (isElement(target) && (operation.type === 'remove' || operation.type === 'replace')) elementTrace?.deleted(target, index);
         if (attributeWrites) {
           if (operation.type === 'replace' && target.nodeType === 2) {
             attributeWrites.set(target as XmlAttr, index);
@@ -672,6 +838,7 @@ function applyParsedDiffOperations(
     operations: outcomes,
     findings,
   };
+  if (elementTrace) result.elementProvenance = elementTrace.finish(ok);
   if (provenance && attributeWrites) {
     result.attributeAssignments = [];
     result.attributeAttributionGaps = [];
@@ -703,14 +870,15 @@ function applyParsedDiffOperations(
 }
 
 export function simulateXmlDiff(baseXml: string, diffXml: string, options: DiffSimulationOptions = {}): DiffSimulationResult {
-  const parsed = parseOperations(diffXml, options.attributeProvenance);
+  const parsed = parseOperations(diffXml, options.attributeProvenance, !!options.elementProvenance);
   if (parsed.findings.some(finding => finding.severity === 'error')) {
     return {
       ok: false, content: baseXml, operations: [], findings: parsed.findings,
       ...(options.attributeProvenance ? { attributeAssignments: [], attributeAttributionGaps: [] } : {}),
+      ...(options.elementProvenance ? { elementProvenance: unavailableElementProvenance('Patch XML operations could not be parsed for element context.') } : {}),
     };
   }
-  const applied = applyParsedDiffOperations(baseXml, parsed.operations, parsed.provenance);
+  const applied = applyParsedDiffOperations(baseXml, parsed.operations, parsed.provenance, parsed.elementSource, options.elementProvenance);
   return { ...applied, findings: [...parsed.findings, ...applied.findings] };
 }
 

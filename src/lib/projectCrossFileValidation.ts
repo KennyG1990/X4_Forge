@@ -19,7 +19,10 @@ import {
   type ExtensionProject,
 } from './extensionProject';
 import { parseModManifest, type ModDependency, type ModManifest } from './modDependencyGraph';
-import { classifyCueRef, duplicateMdCueMessage, findDuplicateMdCueDeclarations, parseMdScriptRoot } from './cueLineage';
+import {
+  buildMdLibraryIndex, classifyCueRef, duplicateMdCueMessage, findDuplicateMdCueDeclarations,
+  parseMdScriptRoot, resolveMdLibraryReference, type MdLibraryDeclaration, type MdLibraryScript,
+} from './cueLineage';
 import { collectMdStringResults } from './expressionAst';
 import type { ValidationSourceLocation } from './validationEvidence';
 import { normPath, parseXmlLenient, walkElements } from './xmlLite';
@@ -59,6 +62,8 @@ export interface ProjectCrossFileFinding {
   line?: number;
   column?: number;
   target?: ValidationSourceLocation;
+  /** Stable authored rule identity when several calls share one cause position. */
+  sourceRef?: string;
   event?: string;
   dependencyId?: string;
   detail: string;
@@ -761,12 +766,7 @@ function libraryArgumentFindings(
 }
 
 function validateCueLibraryReferences(mdFiles: ExtensionProject['files']) {
-  const scripts = new Map<string, {
-    name: string;
-    file: string;
-    references: XmlElement[];
-    declarations: Map<string, XmlElement | null>;
-  } | null>();
+  const parsedScripts: MdLibraryScript<XmlElement, { file: string; references: XmlElement[] }>[] = [];
   const findings: ProjectCrossFileFinding[] = [];
   let checked = 0;
   for (const file of mdFiles) {
@@ -782,60 +782,53 @@ function validateCueLibraryReferences(mdFiles: ExtensionProject['files']) {
         detail: duplicateMdCueMessage(duplicate.name, name ?? '', target) });
     }
     if (!name) continue;
-    const key = name.toLowerCase();
-    if (scripts.has(key)) {
-      scripts.set(key, null);
-      continue;
-    }
     const references: XmlElement[] = [];
-    const declarations = new Map<string, XmlElement | null>();
+    const declarations: MdLibraryDeclaration<XmlElement>[] = [];
     for (const node of Array.from(elements)) {
       if (node.nodeName === 'cue' || node.nodeName === 'include_actions' || node.nodeName === 'run_actions') references.push(node);
       if (node.nodeName !== 'cue' && node.nodeName !== 'library') continue;
-      const declaration = node.getAttribute('name')?.toLowerCase();
-      if (declaration) declarations.set(declaration, declarations.has(declaration) ? null : node);
+      const declaration = node.getAttribute('name');
+      if (declaration) declarations.push({ name: declaration, kind: node.nodeName,
+        purpose: node.getAttribute('purpose'), source: node });
     }
-    scripts.set(key, { name, file: file.path, references, declarations });
+    parsedScripts.push({ name, declarations, source: { file: file.path, references } });
   }
 
+  const scripts = buildMdLibraryIndex(parsedScripts);
   for (const script of scripts.values()) {
     if (!script) continue;
-    for (const node of script.references) {
+    for (const node of script.source.references) {
       const name = node.getAttribute('name');
       const attribute = node.getAttributeNode('ref');
       if (!attribute || (node.nodeName === 'cue' && !name)) continue;
       const ref = attribute.value.trim();
-      const literal = /^(?:md\.([A-Za-z_][\w]*)\.)?([A-Za-z_][\w]*)$/.exec(ref);
-      if (!literal || classifyCueRef(ref).kind === 'keyword') continue;
-      const [, scriptName = script.name, targetName] = literal;
-      const target = scripts.get(scriptName.toLowerCase());
-      if (target?.name !== scriptName) continue;
-      const targetKey = targetName.toLowerCase();
-      const declaration = target.declarations.get(targetKey);
-      const library = declaration?.nodeName === 'library' && declaration.getAttribute('name') === targetName ? declaration : null;
+      const resolved = resolveMdLibraryReference(scripts, script.name, ref);
+      if (!resolved) continue;
+      const target = resolved.script;
+      const library = resolved.library?.source;
       if (node.nodeName === 'cue') {
         checked++;
-        if (!target.declarations.has(targetKey)) {
-          findings.push({ code: 'md.cue_library_ref_unresolved', severity: 'error', file: script.file,
+        if (!resolved.declared) {
+          findings.push({ code: 'md.cue_library_ref_unresolved', severity: 'error', file: script.source.file,
             line: attribute.lineNumber ?? node.lineNumber, column: attribute.columnNumber ?? node.columnNumber,
-            detail: `Cue "${name}" references library "${ref}", which has no declaration in MD script "${scriptName}".` });
+            detail: `Cue "${name}" references library "${ref}", which has no declaration in MD script "${target.name}".` });
         } else if (library) {
           const purpose = library.getAttribute('purpose');
           if (purpose === null || purpose === 'cue_ref') {
-            for (const finding of libraryArgumentFindings(node, attribute, library, script.file, target.file)) findings.push(finding);
+            for (const finding of libraryArgumentFindings(node, attribute, library, script.source.file, target.source.file)) findings.push(finding);
           }
         }
         continue;
       }
       if (library?.getAttribute('purpose') !== 'run_actions') continue;
       if (node.nodeName === 'run_actions') {
-        for (const finding of libraryArgumentFindings(node, attribute, library, script.file, target.file)) findings.push(finding);
+        for (const finding of libraryArgumentFindings(node, attribute, library, script.source.file, target.source.file)) findings.push(finding);
         continue;
       }
-      const location = { file: target.file, line: library.lineNumber, column: library.columnNumber };
+      const location = { file: target.source.file, line: library.lineNumber, column: library.columnNumber };
       const coordinate = [location.file, location.line, location.column].filter(part => part !== undefined).join(':');
       findings.push({
-        code: 'md.include_actions_run_library', severity: 'error', file: script.file,
+        code: 'md.include_actions_run_library', severity: 'error', file: script.source.file,
         line: node.lineNumber, column: node.columnNumber, target: location,
         detail: `<include_actions ref="${ref}"> targets a library declared with purpose="run_actions" at ${coordinate}. Use <run_actions> to call this library.`,
       });

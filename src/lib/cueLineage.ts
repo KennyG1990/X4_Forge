@@ -256,6 +256,81 @@ export function classifyCueRef(raw: string): CueRefClass {
   return { kind: 'local', cue: local };
 }
 
+/** Shared, source-agnostic facts for exact MD cue/library declaration resolution. */
+export interface MdLibraryDeclaration<T = unknown> {
+  name: string;
+  kind: 'cue' | 'library';
+  purpose: string | null;
+  source: T;
+}
+
+export interface MdLibraryScript<D = unknown, S = unknown> {
+  name: string;
+  declarations: readonly MdLibraryDeclaration<D>[];
+  source: S;
+}
+
+export interface MdLibraryIndexEntry<D = unknown, S = unknown> {
+  name: string;
+  declarations: Map<string, MdLibraryDeclaration<D> | null>;
+  source: S;
+}
+
+export type MdLibraryIndex<D = unknown, S = unknown> = Map<string, MdLibraryIndexEntry<D, S> | null>;
+
+export interface MdLibraryResolution<D = unknown, S = unknown> {
+  script: MdLibraryIndexEntry<D, S>;
+  declaration: MdLibraryDeclaration<D> | null;
+  library: MdLibraryDeclaration<D> | null;
+  targetName: string;
+  /** Distinguishes a missing name from a present but ambiguous declaration. */
+  declared: boolean;
+}
+
+/** Case-folded collisions are ambiguous; a later declaration can never restore uniqueness. */
+export function buildMdLibraryIndex<D, S>(scripts: readonly MdLibraryScript<D, S>[]): MdLibraryIndex<D, S> {
+  const index: MdLibraryIndex<D, S> = new Map();
+  for (const script of scripts) {
+    if (!script.name) continue;
+    const key = script.name.toLowerCase();
+    if (index.has(key)) {
+      index.set(key, null);
+      continue;
+    }
+    const declarations = new Map<string, MdLibraryDeclaration<D> | null>();
+    for (const declaration of script.declarations) {
+      if (!declaration.name) continue;
+      const declarationKey = declaration.name.toLowerCase();
+      declarations.set(declarationKey, declarations.has(declarationKey) ? null : declaration);
+    }
+    index.set(key, { name: script.name, declarations, source: script.source });
+  }
+  return index;
+}
+
+/**
+ * Resolve only the existing bare/local and exact md.Script.Name literal contract.
+ * Folded keys detect ambiguity, but do not grant case-insensitive library identity.
+ */
+export function resolveMdLibraryReference<D, S>(
+  index: ReadonlyMap<string, MdLibraryIndexEntry<D, S> | null>,
+  callerScriptName: string,
+  reference: string,
+): MdLibraryResolution<D, S> | null {
+  const ref = reference.trim();
+  const literal = /^(?:md\.([A-Za-z_][\w]*)\.)?([A-Za-z_][\w]*)$/.exec(ref);
+  if (!literal || classifyCueRef(ref).kind === 'keyword') return null;
+  const [, scriptName = callerScriptName, targetName] = literal;
+  const script = index.get(scriptName.toLowerCase());
+  if (!script || script.name !== scriptName) return null;
+  const key = targetName.toLowerCase();
+  const declaration = script.declarations.get(key) ?? null;
+  return {
+    script, declaration, targetName, declared: script.declarations.has(key),
+    library: declaration?.kind === 'library' && declaration.name === targetName ? declaration : null,
+  };
+}
+
 /**
  * Resolve a cue reference to a *local* candidate name, or null if it should be treated
  * as external/qualified (and therefore never flagged). Strips a leading `this.`; any

@@ -37,6 +37,11 @@ import {
   type ProjectFile,
 } from "../lib/extensionProject";
 import { validateProjectCrossFile } from "../lib/projectCrossFileValidation";
+import {
+  canonicalMdLibraryBaseline, diffMdLibraryPurposeFacts, plainMdLibraryPurposeFacts, evaluateEffectiveMdLibraryPurpose,
+  EFFECTIVE_INCLUDE_PURPOSE_CODE, EFFECTIVE_INCLUDE_PURPOSE_CHECK,
+  type MdEffectiveLibraryInput, type MdLibraryBaseline,
+} from '../lib/mdEffectiveLibraryPurpose';
 import { formatScriptPropertyFinding, lintScriptPropertyChains, type ScriptPropertyFinding } from "../lib/scriptProperties";
 import { checkXmlWellformed } from "../lib/xmlWellformed";
 import { lintAiscript, type AiscriptLintFinding } from "../lib/aiscriptLint";
@@ -392,8 +397,13 @@ export function runProjectValidation(
   // broad selectors that unexpectedly hit many nodes, and structurally illegal outcomes.
   const diffSimulation: ProjectValidationResult['diffSimulation']['files'] = [];
   const diffExpressionFindings: MdPitfallFinding[] = [];
+  const hasMdDiffs = project.files.some(file => typeof file.content === 'string'
+    && (file.kind === 'md' || classifyPath(file.path) === 'md') && sniffRootElement(file.content) === 'diff');
+  const effectiveMdFacts = new Map<string, MdEffectiveLibraryInput>();
+  let mdReferenceRoot: string | undefined;
   try {
     const resolved = resolveXsdConfig();
+    mdReferenceRoot = resolved.x4ReferenceRoot;
     for (const file of project.files) {
       if (typeof file.content !== 'string' || sniffRootElement(file.content) !== 'diff') continue;
       const relativePath = file.path.replace(/\\/g, '/').replace(/^\.\//, '');
@@ -420,9 +430,11 @@ export function runProjectValidation(
           const scriptKind = file.kind === 'md' || file.kind === 'aiscript' ? file.kind : classifyPath(relativePath);
           const script = scriptKind === 'md' || scriptKind === 'aiscript';
           const index = scriptKind === 'md' ? mdIndexRef : aiIndexRef;
-          const simulation = simulateXmlDiff(effective.content, file.content, script ? { attributeProvenance: true } : undefined);
+          const simulation = simulateXmlDiff(effective.content, file.content, script
+            ? { attributeProvenance: true, ...(scriptKind === 'md' ? { elementProvenance: true } : {}) } : undefined);
           entry.findings = simulation.findings;
           if (simulation.ok) {
+            if (scriptKind === 'md') effectiveMdFacts.set(relativePath, diffMdLibraryPurposeFacts(relativePath, simulation.elementProvenance));
             if (script) {
               const seen = new Set<string>();
               const gaps = new Set<string>();
@@ -491,6 +503,47 @@ export function runProjectValidation(
   } catch {
     if (project.files.some(file => typeof file.content === 'string' && sniffRootElement(file.content) === 'diff')) {
       coverageGaps.push({ check: 'diff.simulation', reason: 'Patch analysis could not initialize the canonical reference configuration.' });
+    }
+  }
+
+  if (hasMdDiffs) {
+    const mdInputs: MdEffectiveLibraryInput[] = [];
+    for (const file of project.files) {
+      if (file.kind !== 'md' && classifyPath(file.path) !== 'md') continue;
+      const relativePath = file.path.replace(/\\/g, '/').replace(/^\.\//, '');
+      if (typeof file.content !== 'string') {
+        mdInputs.push({ file: relativePath, unavailable: 'Project MD source content is unavailable for include-target context.' });
+        continue;
+      }
+      if (sniffRootElement(file.content) === 'diff') {
+        mdInputs.push(effectiveMdFacts.get(relativePath) ?? { file: relativePath,
+          unavailable: 'Effective MD composition or element provenance was unavailable; include-target purpose was not checked.' });
+        continue;
+      }
+      let baseline: MdLibraryBaseline;
+      try {
+        if (!mdReferenceRoot) throw new Error('Reference configuration unavailable');
+        const before = resolveEffectiveReferenceDocument(mdReferenceRoot, relativePath);
+        baseline = before.available && before.complete && before.content !== undefined
+          ? canonicalMdLibraryBaseline(before.content)
+          : !before.available && before.sources.length === 0 && before.incompleteFindings.length === 0
+            ? { status: 'absent' }
+            : { status: 'unavailable', reason: 'Canonical-before MD composition is incomplete.' };
+      } catch { baseline = { status: 'unavailable', reason: 'Canonical-before MD source could not be resolved.' }; }
+      mdInputs.push(plainMdLibraryPurposeFacts(relativePath, file.content, baseline));
+    }
+    const effectivePurpose = evaluateEffectiveMdLibraryPurpose(mdInputs);
+    for (const gap of effectivePurpose.gaps) coverageGaps.push({ check: EFFECTIVE_INCLUDE_PURPOSE_CHECK, ...gap });
+    // Only this exact rule changes context. Lua/events, cue resolution and their counters
+    // keep the original authored-project pass rather than running on vanilla documents.
+    // A failed participating MD input could hide a script-name collision. Keep
+    // established authored-only findings and explicitly decline effective proof.
+    if (!effectivePurpose.incompleteInventory) {
+      crossFile.findings = crossFile.findings.filter(finding => finding.code !== EFFECTIVE_INCLUDE_PURPOSE_CODE);
+      crossFile.findings.push(...effectivePurpose.findings);
+      crossFile.summary.findings = crossFile.findings.length;
+      crossFile.summary.errors = crossFile.findings.filter(finding => finding.severity === 'error').length;
+      crossFile.ok = crossFile.summary.errors === 0;
     }
   }
 
@@ -787,7 +840,8 @@ function flattenProjectValidationRaw(result: ProjectValidationResult): FlatProje
     out.push({ severity: "error", code: "project.unresolved_cue_ref", filePath: r.file, sourceRef: r.ref, message: `Cue reference "${r.ref}" resolves to nothing in this project.` });
   }
   for (const f of result.crossFile.findings) {
-    out.push({ severity: f.severity, code: f.code, filePath: f.file, sourceRef: f.event || f.dependencyId,
+    const sourceRef = f.sourceRef ?? (f.event || f.dependencyId);
+    out.push({ severity: f.severity, code: f.code, filePath: f.file, sourceRef,
       line: f.line, column: f.column, target: f.target, message: f.detail });
   }
   for (const d of result.schema.findings) {
