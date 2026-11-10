@@ -36,6 +36,7 @@
     "test:diff-expression-values": "tsx scripts/diff-expression-values.selftest.ts",
     "test:effective-include-purpose": "tsx scripts/effective-include-purpose.selftest.ts",
     "test:effective-md-return-context": "tsx scripts/effective-md-return-context.selftest.ts",
+    "test:project-check-lua": "tsx scripts/project-check-lua.selftest.ts",
     "test:project-validation-overlay": "tsx scripts/project-validation-overlay.selftest.ts",
     "test:reference-completeness": "tsx scripts/reference-completeness.selftest.ts",
     "test:bulk-performance": "tsx scripts/bulk-transform-performance.ts",

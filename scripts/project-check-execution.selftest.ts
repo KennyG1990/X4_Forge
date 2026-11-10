@@ -24,6 +24,9 @@ assert(path.isAbsolute(pythonInput) && path.isAbsolute(scratchInput));
 const pythonPath = fs.realpathSync.native(pythonInput);
 const scratchParent = fs.realpathSync.native(scratchInput);
 const root = fs.mkdtempSync(path.join(scratchParent, 'x4-check-execution-'));
+const rootStamp = fs.lstatSync(root, { bigint: true });
+const rootOwner = { owner: 'Forge QA', unit: 'project-check-execution-selftest' };
+fs.writeFileSync(path.join(root, 'owner.json'), JSON.stringify(rootOwner));
 const originalTemp = process.env.TEMP;
 const originalTmp = process.env.TMP;
 process.env.TEMP = root;
@@ -39,6 +42,49 @@ const workspaceId = 'ws_0123456789abcdef01234567';
 const require = createRequire(import.meta.url);
 const digest = (content: Buffer | string) => createHash('sha256').update(content).digest('hex');
 const fileDigest = (file: string) => digest(fs.readFileSync(file));
+const samePath = (left: string, right: string) => path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
+const maxBytes = 32 * 1024 * 1024;
+const maxEntries = 1000;
+let peakEntries = 0;
+let peakFiles = 0;
+let peakBytes = 0;
+
+function assertOwnedRoot() {
+  const current = fs.lstatSync(root, { bigint: true });
+  assert(current.isDirectory() && !current.isSymbolicLink() && current.dev === rootStamp.dev && current.ino === rootStamp.ino);
+  assert(samePath(fs.realpathSync.native(root), root) && samePath(path.dirname(root), scratchParent));
+  assert(path.basename(root).startsWith('x4-check-execution-'));
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(root, 'owner.json'), 'utf8')), rootOwner);
+}
+
+function footprint() {
+  assertOwnedRoot();
+  const pending = [root];
+  let entries = 0;
+  let files = 0;
+  let bytes = 0;
+  while (pending.length) {
+    const current = pending.pop()!;
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const file = path.join(current, entry.name);
+      const stat = fs.lstatSync(file);
+      assert(++entries <= maxEntries, 'Execution fixture exceeded its logical entry budget.');
+      assert(!stat.isSymbolicLink() && samePath(fs.realpathSync.native(file), file), 'Execution fixture contains a link/alias.');
+      if (stat.isDirectory()) pending.push(file);
+      else {
+        assert(stat.isFile() && stat.nlink === 1, 'Execution fixture requires regular single-link files.');
+        files++;
+        bytes += stat.size;
+        assert(bytes <= maxBytes, 'Execution fixture exceeded its logical byte budget.');
+      }
+    }
+  }
+  peakEntries = Math.max(peakEntries, entries);
+  peakFiles = Math.max(peakFiles, files);
+  peakBytes = Math.max(peakBytes, bytes);
+  return { entries, files, bytes, peakObservedEntries: peakEntries, peakObservedFiles: peakFiles,
+    peakObservedBytes: peakBytes, maxEntries, maxBytes };
+}
 
 function pin(worker: string) {
   const canonicalWorker = fs.realpathSync.native(worker);
@@ -87,6 +133,7 @@ sys.exit(7 if mode == 'nonzero' else 0)
 `;
 
 function createPortableRuntime() {
+  footprint();
   const runtime = path.join(root, 'runtime');
   fs.mkdirSync(runtime);
   const child = spawnSync(pythonPath, ['-I', '-S', '-B', '-c', stagePortablePython, runtime], {
@@ -96,15 +143,29 @@ function createPortableRuntime() {
   assert.equal(child.status, 0, child.stderr || child.stdout);
   const dependencies = JSON.parse(child.stdout) as string[];
   assert(dependencies.includes('python312.dll') && dependencies.includes('python312.zip'));
+  footprint();
   return { interpreterPath: path.join(runtime, 'python.exe'), interpreterDependencies: dependencies };
 }
 
 const dispose: (() => void)[] = [];
+const retirementGuards: (() => void)[] = [];
+function registerCleanup(cleanup: () => void) {
+  let pending = true;
+  const once = () => {
+    if (!pending) return;
+    cleanup();
+    pending = false;
+  };
+  dispose.push(once);
+  return once;
+}
 const checks: string[] = [];
 const record = (name: string) => { checks.push(name); console.log(`PASS ${name}`); };
+let finalFootprint: ReturnType<typeof footprint> | undefined;
 
 function createFixture(name: string, mode: 'pass' | 'nonzero' | 'wait', interpreter: ReturnType<typeof createPortableRuntime>,
   timeoutSeconds = 10, extraArgs: string[] = []) {
+  footprint();
   const directory = path.join(root, name);
   const sourceRoot = path.join(directory, 'source');
   const scratch = path.join(directory, 'scratch');
@@ -126,7 +187,8 @@ function createFixture(name: string, mode: 'pass' | 'nonzero' | 'wait', interpre
       : proof === 'fixture-revoke'));
   const approval = approvals.approve(setupInput, reviewed.setupHash, 'fixture-execution-review', 'fixture-approve');
   const frozen = freezeProjectCheckSetup(setupInput, reviewed.setupHash, scratch);
-  dispose.push(frozen.dispose);
+  const retireFrozen = registerCleanup(frozen.dispose);
+  footprint();
   const plan = buildArtifactPlan({ sourceRoot: '', memoryOnly: true, generatedFiles: {
     'content.xml': `<content id="${modId}" name="Fixture" version="100"/>`,
     'forge.checks.json': manifest,
@@ -134,13 +196,22 @@ function createFixture(name: string, mode: 'pass' | 'nonzero' | 'wait', interpre
   } });
   assert(plan.ok, plan.errors.join('\n'));
   const snapshot = captureDeploymentSnapshot(plan, 'loose');
-  dispose.push(snapshot.dispose);
+  const retireSnapshot = registerCleanup(snapshot.dispose);
+  footprint();
   const bound = bindProjectCheckCommand({
     setupInput, frozen, artifact: { modId, snapshot }, approvals, approvalId: approval.id,
     checkId: 'smoke', runId: randomBytes(16).toString('hex'), systemRoot: systemRoot!,
   });
   const coordinator = new SharedSourceCoordinator({ directory: path.join(directory, 'registry'), waitMs: 1_000, pollMs: 10 });
-  dispose.push(() => coordinator.close());
+  let closed = false;
+  let retired = false;
+  const assertIdle = () => {
+    if (closed) return;
+    const status = coordinator.status([canonicalSourceKey(sourceRoot)]);
+    assert(status.available && status.active.length === 0, `Execution ownership is unresolved; retain scratch: ${root}`);
+  };
+  retirementGuards.push(assertIdle);
+  const closeCoordinator = registerCleanup(() => { assertIdle(); coordinator.close(); closed = true; });
   const execute = (runtime: ReturnType<typeof pin>, commandStore = store,
     wrapLease: (lease: ProjectCheckSourceLease) => ProjectCheckSourceLease = lease => lease,
     keys = [canonicalSourceKey(sourceRoot)], ownerWorkspace = workspaceId) => coordinator.run(
@@ -148,7 +219,16 @@ function createFixture(name: string, mode: 'pass' | 'nonzero' | 'wait', interpre
     lease => executeProjectCheck({ lease: wrapLease(lease), bound, runtime, store: commandStore, actorId, workspaceId }),
   );
   const ownership = () => coordinator.status([canonicalSourceKey(sourceRoot)]);
-  return { directory, marker, release, sourceRoot, store, approval, approvals, frozen, snapshot, bound, execute, ownership };
+  const retire = () => {
+    if (retired) return;
+    assertIdle();
+    footprint();
+    closeCoordinator(); retireSnapshot(); retireFrozen();
+    retired = true;
+    footprint();
+  };
+  footprint();
+  return { directory, marker, release, sourceRoot, store, approval, approvals, frozen, snapshot, bound, execute, ownership, retire };
 }
 
 function assertDurable(fixture: ReturnType<typeof createFixture>, receipt: ActionReceipt, status: ActionReceipt['status'], code: string) {
@@ -273,12 +353,14 @@ try {
   assert(!fs.existsSync(unrelated.marker));
   assert.equal(unrelated.store.listVerified().length, 1);
   record('an unrelated source or workspace lease cannot prepare a command receipt');
+  unrelated.retire();
 
   const oversized = createFixture('oversized-argv', 'pass', interpreter, 10, Array(60).fill('a'.repeat(1024)));
   assertDurable(oversized, await oversized.execute(trusted), 'incomplete', 'PROJECT_CHECK_RESULT_UNCONFIRMED');
   assert.equal(oversized.ownership().active.length, 0, 'Oversized input must be rejected before running admission.');
   assert(!fs.existsSync(oversized.marker));
   record('an oversized Windows command never starts and leaves no running claim');
+  oversized.retire();
 
   const invalidRuntime = path.join(root, 'invalid-runtime');
   fs.mkdirSync(invalidRuntime);
@@ -289,6 +371,7 @@ try {
   assert.equal(refused.ownership().active.length, 0);
   assert(!fs.existsSync(refused.marker));
   record('a Win32 failure before process creation records failure and releases ownership');
+  refused.retire();
 
   const pass = createFixture('pass', 'pass', interpreter);
   const success = assertDurable(pass, await pass.execute(trusted), 'committed', 'PROJECT_CHECK_PASSED');
@@ -302,6 +385,7 @@ try {
   assert.equal(pass.store.read(success.id).hash, success.hash);
   assert.equal(pass.store.listVerified().length, 2, 'A duplicate must not create another receipt.');
   record('duplicate command receipt identity refuses a second launch');
+  pass.retire();
 
   const cached = createFixture('poisoned-cache', 'pass', interpreter);
   const cacheResult = await cached.execute(runtimeWithPoisonedCache(cached.directory));
@@ -309,6 +393,7 @@ try {
   assert.equal(fs.readFileSync(cached.marker, 'ascii'), 'started\n');
   assertOutput(assertDurable(cached, cacheResult, 'committed', 'PROJECT_CHECK_PASSED'), 'passed', 0);
   record('matching cached bytecode cannot replace pinned launcher source or forge a passing receipt');
+  cached.retire();
 
   const nonzero = createFixture('nonzero', 'nonzero', interpreter);
   const failed = assertDurable(nonzero, await nonzero.execute(trusted), 'failed', 'PROJECT_CHECK_EXIT_NONZERO');
@@ -316,6 +401,7 @@ try {
   assertOutput(failed, 'failed', 7);
   assert.equal(fs.readFileSync(nonzero.marker, 'ascii'), 'started\n');
   record('a drained command with exit seven persists a failed receipt');
+  nonzero.retire();
 
   const timeout = createFixture('timeout', 'wait', interpreter, 2);
   const timedOut = assertDurable(timeout, await timeout.execute(trusted), 'failed', 'PROJECT_CHECK_TIMED_OUT');
@@ -328,6 +414,7 @@ try {
   assert.equal(fs.readFileSync(timeout.marker, 'ascii'), 'started\n');
   assert(!fs.existsSync(timeout.marker + '.completed'));
   record('a real timed-out command drains and persists a distinct failed receipt');
+  timeout.retire();
 
   for (const mode of ['missing', 'forged'] as const) {
     const malformed = createFixture(mode, 'pass', interpreter);
@@ -338,6 +425,7 @@ try {
     assert(!fs.existsSync(malformed.marker), 'The approved check should not run under the fake worker.');
     record(mode === 'missing' ? 'worker exit without a result records incomplete execution'
       : 'a forged passed result with no durable drain cannot commit');
+    malformed.retire();
   }
 
   const replaced = createFixture('registry-substitution', 'pass', interpreter);
@@ -365,6 +453,7 @@ try {
     assert.deepEqual(clone.prepare('SELECT guard_phase FROM claims WHERE id = ?').get(copiedClaim), { guard_phase: 'armed' });
   } finally { clone.close(); }
   record('a substituted registry containing the exact armed row cannot authorize the trusted worker');
+  replaced.retire();
 
   const blocked = createFixture('prepare-fault', 'pass', interpreter);
   const blockedRoot = path.join(blocked.directory, 'blocked-receipts');
@@ -373,6 +462,7 @@ try {
   assert(!fs.existsSync(blocked.marker));
   assert.equal(blocked.store.listVerified().length, 1, 'Only the owner approval should be durable.');
   record('receipt preparation failure occurs before project execution');
+  blocked.retire();
 
   const failedCommit = createFixture('commit-fault', 'wait', interpreter);
   let clock = Date.UTC(2026, 10, 8, 12);
@@ -389,6 +479,7 @@ try {
   await assert.rejects(failedCommit.execute(trusted), { code: 'PROJECT_CHECK_ATTEMPT_EXISTS' });
   assert.equal(fs.readFileSync(failedCommit.marker, 'ascii'), 'started\n');
   record('terminal receipt transition failure retains prepared state and prevents another launch');
+  failedCommit.retire();
 
   const tampered = createFixture('tamper', 'wait', interpreter);
   const afterTamper = await interruptCheck(tampered, trusted, () =>
@@ -396,6 +487,7 @@ try {
   assertDurable(tampered, afterTamper, 'failed', 'PROJECT_CHECK_BINDING_CHANGED');
   assertOutput(afterTamper, 'passed', 0);
   record('changing covered artifact bytes during a real command prevents a passing receipt');
+  tampered.retire();
 
   const revoked = createFixture('revoke', 'wait', interpreter);
   const afterRevocation = await interruptCheck(revoked, trusted, () => {
@@ -405,14 +497,24 @@ try {
   assertDurable(revoked, afterRevocation, 'failed', 'PROJECT_CHECK_BINDING_CHANGED');
   assertOutput(afterRevocation, 'passed', 0);
   record('revoking owner approval during a real command prevents a passing receipt');
+  revoked.retire();
 
-  console.log(JSON.stringify({ status: 'passed', realWindowsProcesses: true, fixtureOwnerApproval: true, checks }));
+  finalFootprint = footprint();
 } finally {
-  for (const cleanup of dispose.reverse()) cleanup();
-  assert.equal(path.dirname(fs.realpathSync.native(root)), scratchParent);
-  fs.rmSync(root, { recursive: true, force: true });
-  if (originalTemp === undefined) delete process.env.TEMP;
-  else process.env.TEMP = originalTemp;
-  if (originalTmp === undefined) delete process.env.TMP;
-  else process.env.TMP = originalTmp;
+  try {
+    // Check every still-open fixture before retiring anything after a failed case.
+    for (const guard of retirementGuards) guard();
+    footprint();
+    for (const cleanup of dispose.reverse()) cleanup();
+    footprint();
+    fs.rmSync(root, { recursive: true, force: true });
+    assert.equal(fs.existsSync(root), false);
+  } finally {
+    if (originalTemp === undefined) delete process.env.TEMP;
+    else process.env.TEMP = originalTemp;
+    if (originalTmp === undefined) delete process.env.TMP;
+    else process.env.TMP = originalTmp;
+  }
 }
+console.log(JSON.stringify({ status: 'passed', realWindowsProcesses: true, fixtureOwnerApproval: true,
+  checks, footprint: finalFootprint, runtimeCleaned: true }));
