@@ -4,6 +4,7 @@ import { createX4UiAnalysisCache, getX4UiAnalysisCacheStats, clearX4UiAnalysisCa
 import { buildX4UiCallModel } from '../src/lib/x4UiCallModel';
 import { lintX4UiCallModel } from '../src/lib/x4UiLint';
 import { analyzeLuaFiles, runLuaStaticAnalysisSelftest, type LuaFileInput } from '../src/lib/luaStaticAnalysis';
+import { buildX4MenuLuaRuntimeInventory } from '../src/lib/x4UiSourceBundle';
 const checks: string[]=[];
 function check(name:string, fn:()=>void) { fn();checks.push(name); }
 const base={rel:'ui/lab.lua',text:"local menu={name='Lab'}\nlocal frame=Helper.createFrameHandle(menu,{width=100,height=100})\nlocal tab=frame:addTable(2,{width=100})\nlocal row=tab:addRow(nil,{height=20})\nrow[1]:createButton():setText('ok')\n"};
@@ -30,6 +31,45 @@ const consumer=file('ui/consumer.lua','SharedThing()');const provider=file('ui/p
 check('sibling-global-removal-still-diagnosed',()=>{clearX4UiAnalysisCache();assert.ok(!analyzeLuaFiles([consumer,provider]).findings.some(f=>f.symbol==='SharedThing'));assert.ok(analyzeLuaFiles([consumer]).findings.some(f=>f.symbol==='SharedThing'));assert.ok(getX4UiAnalysisCacheStats().hits>0);});
 check('sibling-OpenMenu-removal-still-diagnosed',()=>{clearX4UiAnalysisCache();const menu=file(base.rel,base.text);const ctrl=file('ui/controller.lua',"OpenMenu('Lab')");assert.ok(!analyzeLuaFiles([menu,ctrl]).findings.some(f=>f.code==='lua.menu_never_opened'));assert.ok(analyzeLuaFiles([menu]).findings.some(f=>f.code==='lua.menu_never_opened'));});
 check('owner-specific-rules-not-cached',()=>{const lua="require('djfhe.http.client')";analyzeLuaFiles([file('ui/owner.lua',lua,'djfhe_http')]);assert.ok(analyzeLuaFiles([file('ui/owner.lua',lua,'consumer')]).findings.some(f=>f.severity==='error'));});
+const scoped = (files: LuaFileInput[], order: string[]): LuaFileInput[] => {
+  const uiXml = `<addon name="IncrementalScope"><environment type="menus">${order.map(rel => `<file name="${rel}"/>`).join('')}</environment></addon>`;
+  const runtimeInventory = buildX4MenuLuaRuntimeInventory({ uiXml,
+    luaFiles: files.map(f => ({ path: f.rel, text: f.text, sourcePath: f.sourcePath })) });
+  return files.map(f => ({ ...f, extension: { ...f.extension, runtimeInventory } }));
+};
+const beforeDefinition = (result: ReturnType<typeof analyzeLuaFiles>) => result.findings.some(f => f.code === 'lua.global_before_definition' && f.symbol === 'SharedThing');
+const unresolved = (result: ReturnType<typeof analyzeLuaFiles>) => result.findings.some(f => f.code === 'lua.undefined_global' && f.symbol === 'SharedThing');
+check('manifest-order-recomputes-with-identical-cached-ui-texts', () => {
+  clearX4UiAnalysisCache();
+  assert.ok(beforeDefinition(analyzeLuaFiles(scoped([consumer, provider], [consumer.rel, provider.rel]))));
+  const fixed = analyzeLuaFiles(scoped([consumer, provider], [provider.rel, consumer.rel]));
+  assert.ok(!beforeDefinition(fixed) && !unresolved(fixed));
+  assert.ok(getX4UiAnalysisCacheStats().hits > 0);
+  assert.ok(unresolved(analyzeLuaFiles(scoped([consumer, provider], [consumer.rel]))));
+});
+check('runtime-source-index-and-provenance-mismatch-do-not-grant-coverage', () => {
+  const inputs = scoped([consumer, provider], [provider.rel, consumer.rel]);
+  for (const changed of [[...inputs].reverse(), [inputs[0], { ...inputs[1], sourcePath: 'other provenance' }]]) {
+    const result = analyzeLuaFiles(changed);
+    assert.ok(unresolved(result) && !beforeDefinition(result));
+    assert.equal(result.runtimeScope.stages[2].status, 'unavailable');
+    assert.ok(result.runtimeScope.gaps.some(gap => gap.reason.includes('provenance')));
+  }
+});
+check('same-id-neighbor-cannot-provide-registered-runtime-global', () => {
+  const neighbor = { ...provider, extension: { ...provider.extension, folder: 'neighbor-folder' } };
+  assert.ok(unresolved(analyzeLuaFiles([...scoped([consumer], [consumer.rel]), ...scoped([neighbor], [neighbor.rel])])));
+});
+check('duplicate-actual-provider-path-invalidates-stale-registration', () => {
+  const inputs = scoped([consumer, provider], [provider.rel, consumer.rel]);
+  const duplicate = { ...inputs[1], sourcePath: 'duplicate provider provenance' };
+  for (const conflictingSource of [duplicate, provider]) {
+    const result = analyzeLuaFiles([...inputs, conflictingSource]);
+    assert.ok(unresolved(result) && !beforeDefinition(result));
+    assert.equal(result.runtimeScope.stages[2].status, 'unavailable');
+    assert.ok(result.runtimeScope.gaps.some(gap => gap.reason.includes('unique exact path')));
+  }
+});
 const project=JSON.parse(fs.readFileSync('tests/fixtures/forge-regression/project.json','utf8'));
 const files:LuaFileInput[]=project.files.filter((f:any)=>f.path.endsWith('.lua')).map((f:any)=>file(f.path,f.content,project.id));
 check('test-mod-33-files-incremental',()=>{clearX4UiAnalysisCache();const cold=analyzeLuaFiles(files);assert.equal(files.length,33);assert.equal(getX4UiAnalysisCacheStats().misses,33);assert.deepEqual(analyzeLuaFiles(files),cold);assert.equal(getX4UiAnalysisCacheStats().hits,33);const changed=files.map(f=>f.rel==='ui/lab.lua'?{...f,text:bad.text}:f);const result=analyzeLuaFiles(changed);assert.equal(getX4UiAnalysisCacheStats().misses,34);assert.equal(getX4UiAnalysisCacheStats().hits,65);assert.ok(result.findings.some(f=>f.code==='x4-ui.button-text-complex-property'));clearX4UiAnalysisCache();assert.deepEqual(analyzeLuaFiles(changed),result);});

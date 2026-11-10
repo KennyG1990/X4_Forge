@@ -44,6 +44,9 @@ export type X4UiSourceDiagnosticSeverity = 'info' | 'warning' | 'error';
 
 export type X4UiSourceDiagnosticCode =
   | 'malformed-xml'
+  | 'runtime-manifest-absent'
+  | 'runtime-manifest-invalid'
+  | 'runtime-dependency-unverified'
   | 'missing-registration-name'
   | 'invalid-registration-path'
   | 'unsafe-traversal-registration'
@@ -115,6 +118,18 @@ export interface X4UiSourceRegistration {
   readonly sourceIndexes: readonly number[];
   /** Present when exactly one supplied source has this contained lookup key. */
   readonly sourceIndex?: number;
+}
+
+/** Registration facts only: no Lua parsing, UI call model, or dependency availability proof. */
+export interface X4MenuLuaRuntimeInventory {
+  readonly manifestStatus: 'known' | 'absent' | 'invalid';
+  readonly addonName?: string;
+  readonly registrations: readonly (X4UiSourceRegistration & {
+    readonly environmentIndex: number;
+    /** Exact optional provenance from the uniquely matched caller-supplied source. */
+    readonly sourcePath?: string;
+  })[];
+  readonly diagnostics: readonly X4UiSourceDiagnostic[];
 }
 
 export type X4UiLuaParseStatus = 'parsed' | 'locked';
@@ -267,6 +282,7 @@ interface PathNormalization {
 interface RegistrationCandidate {
   readonly rawPath?: string;
   readonly normalized: PathNormalization;
+  readonly environmentIndex?: number;
 }
 
 interface ParsedUiXml {
@@ -279,6 +295,18 @@ interface CanonicalSourceInput {
   readonly path: string;
   readonly text: string;
   readonly sourcePath?: string;
+}
+
+interface SourcePathInventory {
+  readonly index: number;
+  readonly normalized: PathNormalization;
+}
+
+interface MenuLuaManifest {
+  readonly manifestStatus: X4MenuLuaRuntimeInventory['manifestStatus'];
+  readonly addonName?: string;
+  readonly parsedXml: ParsedUiXml;
+  readonly diagnostics: readonly X4UiSourceDiagnostic[];
 }
 
 interface MutableSourceDraft {
@@ -439,6 +467,78 @@ function parseUiXml(uiXml: string, collectRegistrations = true): ParsedUiXml {
   };
 }
 
+/** The strict extension topology shared by runtime inventory and exact manifest reads. */
+function readMenuLuaManifest(uiXml: string | undefined): MenuLuaManifest {
+  const diagnostics: X4UiSourceDiagnostic[] = [];
+  const emptyXml: ParsedUiXml = {
+    state: { status: 'malformed', parsed: false, issues: [] }, registrations: [], root: null
+  };
+  if (uiXml === undefined) {
+    return { manifestStatus: 'absent', parsedXml: emptyXml, diagnostics: [{
+      code: 'runtime-manifest-absent', severity: 'info',
+      message: 'No ui.xml was supplied; menu Lua registration and order are unavailable.'
+    }] };
+  }
+  try {
+    assertXmlInputWithinLimits(uiXml);
+  } catch (error) {
+    return { manifestStatus: 'invalid', parsedXml: emptyXml, diagnostics: [{
+      code: 'runtime-manifest-invalid', severity: 'info', message: errorMessage(error)
+    }] };
+  }
+  const parsed = parseUiXml(uiXml, false);
+  const root = parsed.root;
+  const registrations: RegistrationCandidate[] = [];
+  let valid = parsed.state.parsed;
+  const invalid = (message: string): void => {
+    valid = false;
+    diagnostics.push({ code: 'runtime-manifest-invalid', severity: 'info', message });
+  };
+  if (!root || root.namespaceURI || elementName(root) !== 'addon') {
+    invalid('Menu runtime registration requires a direct, unnamespaced extension addon root.');
+    return { manifestStatus: 'invalid', parsedXml: parsed, diagnostics };
+  }
+  const addonName = elementAttribute(root, 'name');
+  if (!addonName?.trim()) invalid('The extension addon root has no usable name.');
+  if (!parsed.state.parsed) invalid('Malformed ui.xml cannot establish menu runtime registration or order.');
+  let environmentIndex = 0;
+  for (const environment of childElements(root)) {
+    if (environment.namespaceURI || elementName(environment) !== 'environment') {
+      invalid('Only direct extension environment elements have a supported menu registration topology.');
+      continue;
+    }
+    const currentEnvironment = environmentIndex++;
+    if (elementAttribute(environment, 'type') !== 'menus') {
+      invalid(`Environment ${currentEnvironment} is not the supported extension menus environment.`);
+    }
+    for (const child of childElements(environment)) {
+      const name = elementName(child);
+      if (child.namespaceURI || !['file', 'dependency', 'savedvariable'].includes(name) || childElements(child).length) {
+        invalid(`Environment ${currentEnvironment} contains unsupported registration structure.`);
+      }
+      if (child.namespaceURI) continue;
+      if (name === 'dependency') {
+        diagnostics.push({ code: 'runtime-dependency-unverified', severity: 'info',
+          message: `Environment ${currentEnvironment} depends on addon ${JSON.stringify(elementAttribute(child, 'name') ?? '')}; installed dependency availability and exported globals were not verified.` });
+      }
+      if (name !== 'file') continue;
+      const rawPath = elementAttribute(child, 'name');
+      let normalized = normalizeContainedPath(rawPath);
+      if (normalized.kind === 'safe' && (!normalized.key?.includes('/') || !normalized.key.endsWith('.lua'))) {
+        normalized = { kind: 'invalid' };
+      }
+      if (normalized.kind !== 'safe') invalid(`Environment ${currentEnvironment} contains an unsupported or unsafe Lua registration path.`);
+      registrations.push({ rawPath, normalized, environmentIndex: currentEnvironment });
+    }
+  }
+  return {
+    manifestStatus: valid ? 'known' : 'invalid',
+    ...(addonName !== undefined ? { addonName } : {}),
+    parsedXml: { ...parsed, registrations: freezeArray(registrations) },
+    diagnostics: freezeArray(diagnostics)
+  };
+}
+
 /** Contained Lua paths registered directly in a well-formed X4 menu manifest. */
 export function registeredX4MenuLuaPaths(uiXml?: string): ReadonlySet<string> {
   return readX4MenuLuaPaths(uiXml, false) ?? new Set();
@@ -446,6 +546,12 @@ export function registeredX4MenuLuaPaths(uiXml?: string): ReadonlySet<string> {
 
 /** Compare exact manifests without treating malformed registrations as an empty set. */
 export function readX4MenuLuaPaths(uiXml: string | undefined, strict: boolean): ReadonlySet<string> | null {
+  if (strict) {
+    const manifest = readMenuLuaManifest(uiXml);
+    return manifest.manifestStatus === 'known'
+      ? new Set(manifest.parsedXml.registrations.flatMap(candidate => candidate.normalized.key ? [candidate.normalized.key] : []))
+      : null;
+  }
   if (!uiXml) return null;
   try { assertXmlInputWithinLimits(uiXml); } catch { return null; }
   const { root, state } = parseUiXml(uiXml, false);
@@ -454,18 +560,14 @@ export function readX4MenuLuaPaths(uiXml: string | undefined, strict: boolean): 
   const paths = new Set<string>();
   for (const environment of childElements(root)) {
     if (environment.namespaceURI || elementName(environment) !== 'environment' || elementAttribute(environment, 'type') !== 'menus') {
-      if (strict) return null;
       continue;
     }
     for (const file of childElements(environment)) {
-      if (strict && childElements(file).length) return null;
       if (file.namespaceURI || elementName(file) !== 'file') {
-        if (strict && (file.namespaceURI || !['dependency', 'savedvariable'].includes(elementName(file)))) return null;
         continue;
       }
       const normalized = normalizeContainedPath(elementAttribute(file, 'name'));
-      if (normalized.key && /\.lua$/i.test(normalized.key) && (!strict || normalized.key.includes('/'))) paths.add(normalized.key);
-      else if (strict) return null;
+      if (normalized.key && /\.lua$/i.test(normalized.key)) paths.add(normalized.key);
     }
   }
   return paths;
@@ -653,20 +755,13 @@ function buildSourceFile(
   });
 }
 
-/** Build a pure ordered bundle from raw ui.xml and caller-owned Lua strings. */
-export function buildX4UiSourceBundle(input: X4UiSourceBundleInput): X4UiSourceBundle {
-  const parsedXml = parseUiXml(input.uiXml);
-  const canonicalInputs = canonicalSourceInputs(input.luaFiles);
-  const sourceDrafts: MutableSourceDraft[] = canonicalInputs.map((source, index) => ({
-    index,
-    input: source,
-    normalized: normalizeContainedPath(source.path),
-    callModel: buildX4UiSourceCallModel(source),
-    registrationIndexes: []
-  }));
-
+/** One registration/source resolver for the legacy bundle and the lightweight runtime inventory. */
+function resolveUiRegistrationInventory(parsedXml: ParsedUiXml, sources: readonly SourcePathInventory[]): {
+  registrations: X4UiSourceRegistration[];
+  sourceIndexesByKey: Map<string, number[]>;
+} {
   const sourceIndexesByKey = new Map<string, number[]>();
-  for (const draft of sourceDrafts) {
+  for (const draft of sources) {
     const key = draft.normalized.key;
     if (key === undefined) continue;
     const indexes = sourceIndexesByKey.get(key) || [];
@@ -734,13 +829,10 @@ export function buildX4UiSourceBundle(input: X4UiSourceBundleInput): X4UiSourceB
     sourceIndexes: freezeArray(draft.sourceIndexes),
     ...(draft.sourceIndexes.length === 1 ? { sourceIndex: draft.sourceIndexes[0] } : {})
   }));
+  return { registrations, sourceIndexesByKey };
+}
 
-  for (const registration of registrations) {
-    for (const sourceIndex of registration.sourceIndexes) {
-      sourceDrafts[sourceIndex].registrationIndexes.push(registration.index);
-    }
-  }
-
+function registrationInventoryDiagnostics(parsedXml: ParsedUiXml, registrations: readonly X4UiSourceRegistration[]): X4UiSourceDiagnostic[] {
   const diagnostics: X4UiSourceDiagnostic[] = [];
   for (const issue of parsedXml.state.issues) {
     diagnostics.push({
@@ -764,6 +856,69 @@ export function buildX4UiSourceBundle(input: X4UiSourceBundleInput): X4UiSourceB
     );
     if (diagnostic) diagnostics.push(diagnostic);
   }
+  return diagnostics;
+}
+
+/** Lightweight extension menu facts. This does not parse Lua or build UI call models. */
+export function buildX4MenuLuaRuntimeInventory(input: {
+  readonly uiXml?: string;
+  readonly luaFiles: X4UiSourceFileInputs;
+}): X4MenuLuaRuntimeInventory {
+  const manifest = readMenuLuaManifest(input.uiXml);
+  const canonicalInputs = canonicalSourceInputs(input.luaFiles);
+  const sources = canonicalInputs.map((source, index) => ({ index, normalized: normalizeContainedPath(source.path) }));
+  const { registrations, sourceIndexesByKey } = resolveUiRegistrationInventory(manifest.parsedXml, sources);
+  const diagnostics = [...manifest.diagnostics];
+  if (manifest.parsedXml.root || manifest.parsedXml.state.issues.length) {
+    diagnostics.push(...registrationInventoryDiagnostics(manifest.parsedXml, registrations));
+  }
+  const registeredSourceIndexes = new Set(registrations.flatMap(registration => registration.sourceIndexes));
+  for (const source of sources) {
+    const path = canonicalInputs[source.index].path;
+    if (source.normalized.kind !== 'safe') {
+      diagnostics.push(sourceDiagnostic('unsafe-lua-file', 'error',
+        'Supplied Lua source is outside the contained lookup namespace', source.index, path));
+    }
+    if (source.normalized.key && (sourceIndexesByKey.get(source.normalized.key)?.length ?? 0) > 1) {
+      diagnostics.push(sourceDiagnostic('duplicate-supplied-lua-file', 'error',
+        'Multiple supplied Lua sources share one contained lookup key', source.index, path));
+    }
+    if (!registeredSourceIndexes.has(source.index)) {
+      diagnostics.push(sourceDiagnostic('unregistered-lua-file', 'info',
+        'Supplied Lua source is not in the authoritative menus registration order', source.index, path));
+    }
+  }
+  return freezeObject({
+    manifestStatus: manifest.manifestStatus,
+    ...(manifest.addonName !== undefined ? { addonName: manifest.addonName } : {}),
+    registrations: freezeArray(registrations.map(registration => freezeObject({
+      ...registration,
+      environmentIndex: manifest.parsedXml.registrations[registration.index].environmentIndex!,
+      ...(registration.sourceIndex !== undefined && canonicalInputs[registration.sourceIndex].sourcePath !== undefined
+        ? { sourcePath: canonicalInputs[registration.sourceIndex].sourcePath } : {})
+    }))),
+    diagnostics: freezeArray(diagnostics.map(diagnostic => freezeObject({ ...diagnostic })))
+  });
+}
+
+/** Build a pure ordered bundle from raw ui.xml and caller-owned Lua strings. */
+export function buildX4UiSourceBundle(input: X4UiSourceBundleInput): X4UiSourceBundle {
+  const parsedXml = parseUiXml(input.uiXml);
+  const canonicalInputs = canonicalSourceInputs(input.luaFiles);
+  const sourceDrafts: MutableSourceDraft[] = canonicalInputs.map((source, index) => ({
+    index,
+    input: source,
+    normalized: normalizeContainedPath(source.path),
+    callModel: buildX4UiSourceCallModel(source),
+    registrationIndexes: []
+  }));
+  const { registrations, sourceIndexesByKey } = resolveUiRegistrationInventory(parsedXml, sourceDrafts);
+  for (const registration of registrations) {
+    for (const sourceIndex of registration.sourceIndexes) {
+      sourceDrafts[sourceIndex].registrationIndexes.push(registration.index);
+    }
+  }
+  const diagnostics = registrationInventoryDiagnostics(parsedXml, registrations);
 
   const sourceFiles: X4UiSourceFile[] = sourceDrafts.map(draft => {
     const sourceDiagnostics: X4UiSourceDiagnostic[] = [];

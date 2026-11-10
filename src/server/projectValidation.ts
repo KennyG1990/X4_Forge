@@ -58,7 +58,7 @@ import { lintGodMacros, type GodLintFinding } from "../lib/godLint";
 import { lintReferenceLiterals, type ReferenceLiteralFinding } from "../lib/referenceLint";
 import { buildProjectSymbols, type ProjectVariableSymbol } from "../lib/projectSymbols";
 import { analyzeLuaFiles, type LuaStaticAnalysisResult } from "../lib/luaStaticAnalysis";
-import { registeredX4MenuLuaPaths } from '../lib/x4UiSourceBundle';
+import { buildX4MenuLuaRuntimeInventory, registeredX4MenuLuaPaths } from '../lib/x4UiSourceBundle';
 import {
   applyProjectRuleSuppressions,
   evaluateProjectRuleContracts,
@@ -292,8 +292,7 @@ export function runProjectValidation(
     }
   }
 
-  const menuLuaPaths = registeredX4MenuLuaPaths(project.files.find(file => file.path.toLowerCase() === 'ui.xml')?.content);
-  const lua = analyzeLuaFiles(project.files
+  const luaFiles = project.files
     .filter(file => /\.lua$/i.test(file.path) && typeof file.content === "string")
     .map(file => {
       const rel = file.path.replace(/\\/g, "/");
@@ -302,9 +301,20 @@ export function runProjectValidation(
         text: file.content as string,
         source: "loose" as const,
         sourcePath: rel,
-        extension: { folder: project.id, id: project.id, menuLuaPaths },
       };
-    }));
+    });
+  const uiManifests = project.files.filter(file => file.path.replace(/\\/g, '/').toLowerCase() === 'ui.xml');
+  const uiManifest = uiManifests[0];
+  const runtimeInventory = buildX4MenuLuaRuntimeInventory({
+    uiXml: uiManifests.length > 1 ? '' : uiManifest?.content,
+    luaFiles,
+  });
+  const menuLuaPaths = new Set(runtimeInventory.registrations.flatMap(row => row.lookupKey ? [row.lookupKey] : []));
+  const extension = { folder: project.id, id: project.id, menuLuaPaths, runtimeInventory };
+  const manifestOnly = !luaFiles.length && uiManifest ? [{
+    rel: uiManifest.path, source: 'loose' as const, sourcePath: uiManifest.path, extension,
+  }] : [];
+  const lua = analyzeLuaFiles(luaFiles.map(file => ({ ...file, extension })), manifestOnly);
   const luaErrors = lua.findings.filter(finding => finding.severity === "error").length;
   const luaWarnings = lua.findings.filter(finding => finding.severity === "warning").length;
   const references = referencesForProject(project, opts.references);
@@ -706,7 +716,7 @@ export function runProjectValidation(
   // mod's OWN t-files (no vanilla index) → cry-wolf-safe; always runs. Advisory WARNING.
   const strFiles = project.files.filter(f => typeof f.content === "string").map(f => ({ path: f.path, content: f.content as string }));
   const tFileFindings: TextRefFinding[] = lintTextReferences({
-    files: strFiles, index: buildModTextIndex(strFiles), registeredLuaPaths: menuLuaPaths,
+    files: strFiles, index: buildModTextIndex(strFiles), registeredLuaPaths: registeredX4MenuLuaPaths(uiManifest?.content),
   }).findings;
   // B62b phase 2: translation coverage across the mod's own language files (corpus-verified 0-gap-safe).
   const tCoverageFindings: TranslationCoverageFinding[] = lintTranslationCoverage({ tFiles: strFiles }).findings;
@@ -858,6 +868,7 @@ function flattenProjectValidationRaw(result: ProjectValidationResult): FlatProje
       code: finding.code,
       filePath: finding.rel,
       line: finding.line,
+      column: finding.column,
       message: finding.message,
     };
     if (finding.symbol) flatFinding.sourceRef = finding.symbol;

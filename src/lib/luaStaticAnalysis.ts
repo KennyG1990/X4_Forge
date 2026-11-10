@@ -17,7 +17,7 @@ import { parse } from 'luaparse';
 import { type X4UiSourceLocation } from './x4UiCallModel';
 import { type X4UiLintFinding, type X4UiLintResult } from './x4UiLint';
 import { analyzeX4UiFile } from './x4UiAnalysisCache';
-import { normalizeX4UiSourcePath, registeredX4MenuLuaPaths } from './x4UiSourceBundle';
+import { buildX4MenuLuaRuntimeInventory, normalizeX4UiSourcePath, registeredX4MenuLuaPaths, type X4MenuLuaRuntimeInventory } from './x4UiSourceBundle';
 
 /**
  * Strip Lua comments so source-pattern rules match CODE, not prose. Without this the
@@ -38,8 +38,13 @@ export interface LuaFileInput {
   text: string;
   source: 'loose' | 'packed';
   sourcePath: string;
-  extension: { folder: string; id: string; name?: string; menuLuaPaths?: ReadonlySet<string> };
+  extension: { folder: string; id: string; name?: string; menuLuaPaths?: ReadonlySet<string>; runtimeInventory?: X4MenuLuaRuntimeInventory };
 }
+
+type LuaScopeSource = Omit<LuaFileInput, 'text'>;
+export type LuaManifestScopeInput = LuaScopeSource & {
+  extension: LuaFileInput['extension'] & { runtimeInventory: X4MenuLuaRuntimeInventory };
+};
 
 export interface LuaStaticFinding {
   layer: 'baseline' | 'x4';
@@ -85,6 +90,29 @@ export interface LuaStaticAnalysisResult {
   findings: LuaStaticFinding[];
   x4UiResults: LuaStaticX4UiFileResult[];
   x4UiSummary: LuaStaticX4UiSummary;
+  runtimeScope: LuaRuntimeScopeResult;
+}
+
+export type LuaRuntimeScopeCheck = 'lua.syntax' | 'lua.registrations' | 'lua.globals-order';
+export interface LuaRuntimeScopeGap {
+  check: 'lua.registrations' | 'lua.globals-order';
+  rel: string;
+  sourcePath: string;
+  line?: number;
+  column?: number;
+  reason: string;
+}
+export interface LuaRuntimeScopeStage {
+  check: LuaRuntimeScopeCheck;
+  status: 'pass' | 'fail' | 'partial' | 'unavailable' | 'not-applicable';
+  files: readonly { rel: string; sourcePath: string }[];
+  gapCount: number;
+  evidenceBoundary: string;
+}
+export interface LuaRuntimeScopeResult {
+  stages: readonly LuaRuntimeScopeStage[];
+  gaps: readonly LuaRuntimeScopeGap[];
+  truncated: boolean;
 }
 
 const LUA_STANDARD_GLOBALS = new Set([
@@ -99,7 +127,8 @@ const LUA_STANDARD_GLOBALS = new Set([
 const X4_ENGINE_GLOBALS = new Set([
   'AddUITriggeredEvent', 'ConvertStringTo64Bit', 'DebugError', 'DebugText', 'GetComponentData',
   'GetCurRealTime', 'GetCurTime', 'GetNPCBlackboard', 'GetPlayerID', 'GetWareData',
-  'Helper', 'IsValidWidgetElement', 'OpenMenu', 'ReadText', 'OnlineGetUserItemAmount',
+  // X4 9.00 widget_fullscreen.lua:18830 exports GetTopRow via AddGlobalAccess.
+  'GetTopRow', 'Helper', 'IsValidWidgetElement', 'OpenMenu', 'ReadText', 'OnlineGetUserItemAmount',
   'OnlineGetUserItems', 'RegisterEvent', 'RemoveEvent', 'RemoveScript', 'SetNPCBlackboard',
   'SetScript', 'SignalObject', 'TraceBack', 'ffi', 'json', 'widgetSystem'
 ]);
@@ -118,24 +147,16 @@ const X4_UI_MODELED_CALL_NAMES = new Set([
 const X4_UI_VERIFICATION_SUMMARY_CODE = 'x4-ui.verification-gap';
 const X4_UI_TRUNCATION_CODE = 'x4-ui.truncated-evidence';
 
-function walkAst(node: any, visit: (node: any) => void) {
-  if (!node || typeof node !== 'object') return;
-  visit(node);
-  for (const [key, value] of Object.entries(node)) {
-    if (key === 'loc' || key === 'range' || key === 'comments' || key === 'tokens' || key === 'globals') continue;
-    if (Array.isArray(value)) {
-      for (const item of value) walkAst(item, visit);
-    } else if (value && typeof value === 'object') {
-      walkAst(value, visit);
-    }
-  }
+function globalNameFromExpression(expr: any): string | null {
+  let root = expr;
+  while (root?.type === 'MemberExpression') root = root.base;
+  return root?.type === 'Identifier' ? root.name : null;
 }
 
-function globalNameFromExpression(expr: any): string | null {
-  if (!expr) return null;
-  if (expr.type === 'Identifier') return expr.name;
-  if (expr.type === 'MemberExpression') return globalNameFromExpression(expr.base);
-  return null;
+function environmentMutationTarget(expr: any): boolean {
+  let root = expr;
+  while (root?.type === 'MemberExpression' || root?.type === 'IndexExpression') root = root.base;
+  return root?.type === 'Identifier' && root.isLocal === false && ['_G', '_ENV', 'package'].includes(root.name);
 }
 
 function parseLua(text: string) {
@@ -155,25 +176,607 @@ function normalizeLuaFile(file: LuaFileInput): LuaFileInput {
   return { ...file, text: file.text.slice(1) };
 }
 
-function collectGlobalDefinitions(files: LuaFileInput[]): Set<string> {
-  const defs = new Set<string>();
+const SCOPE_UNVERIFIED = 'lua.runtime_scope_unverified';
+const GLOBAL_BEFORE_DEFINITION = 'lua.global_before_definition';
+const MAX_SCOPE_DEPTH = 64;
+const MAX_SCOPE_NODES = 100_000;
+const MAX_SCOPE_FACTS = 8192;
+const MAX_SCOPE_GAPS = 64;
+type LuaPhase = 'load' | 'deferred' | 'unknown';
+interface LuaFactContext {
+  phase: LuaPhase;
+  conditional: boolean;
+  protected: boolean;
+  guards: ReadonlySet<string>;
+  authority?: 'pcall' | 'type';
+}
+interface LuaGlobalEvent {
+  kind: 'read' | 'write' | 'boundary';
+  name: string;
+  node: any;
+  phase: LuaPhase;
+  conditional: boolean;
+  guarded: boolean;
+  protected: boolean;
+  authority?: 'pcall' | 'type';
+  value?: 'non-nil' | 'nil' | 'unknown';
+  boundary?: 'environment' | 'opaque';
+}
+interface ParsedLuaFacts {
+  error?: any;
+  globals: { name: string; loc?: any }[];
+  legacyDefinitions: Set<string>;
+  events: LuaGlobalEvent[];
+  gaps: { node?: any; reason: string }[];
+  truncated: boolean;
+  uiLikely: boolean;
+}
+
+/** One bounded source traversal, not a Lua interpreter or invocation graph. */
+function collectLuaFacts(file: LuaFileInput, ast: any): ParsedLuaFacts {
+  const result: ParsedLuaFacts = {
+    globals: (ast.globals || []).map((node: any) => ({ name: node.name, loc: node.loc })),
+    legacyDefinitions: new Set(), events: [], gaps: [], truncated: false, uiLikely: isUiLikelyLua(file)
+  };
+  let nodes = 0;
+  const gapKeys = new Set<string>();
+  const gap = (reason: string, node?: any): void => {
+    if (gapKeys.has(reason)) return;
+    if (result.gaps.length >= MAX_SCOPE_GAPS) { result.truncated = true; return; }
+    gapKeys.add(reason);
+    // Retain positions only; do not keep an AST subtree alive through gap evidence.
+    result.gaps.push({ reason, node: node?.loc ? { loc: node.loc } : undefined });
+  };
+  const event = (kind: LuaGlobalEvent['kind'], name: string, node: any, context: LuaFactContext,
+    value?: LuaGlobalEvent['value'], guarded = false, boundary?: LuaGlobalEvent['boundary']): void => {
+    if (result.events.length >= MAX_SCOPE_FACTS) { result.truncated = true; return; }
+    result.events.push({ kind, name, node: { loc: node?.loc }, phase: context.phase,
+      conditional: context.conditional, protected: context.protected,
+      guarded: guarded || context.guards.has(name), authority: context.authority, value, boundary });
+  };
+  const environmentAlias = (node: any): boolean => node?.type === 'Identifier' && node.isLocal === false
+    && ['_G', '_ENV', 'package', 'getfenv'].includes(node.name);
+  const environmentBoundary = (node: any, context: LuaFactContext, reason: string): void => {
+    event('boundary', '', node, context, undefined, false, 'environment');
+    gap(reason, node);
+  };
+  const truth = (node: any): boolean | undefined => {
+    if (node?.type === 'NilLiteral') return false;
+    if (node?.type === 'BooleanLiteral') return node.value;
+    if (['NumericLiteral', 'StringLiteral', 'TableConstructorExpression', 'FunctionDeclaration'].includes(node?.type)) return true;
+    return undefined;
+  };
+  const nonNilValue = (node: any, name: string): LuaGlobalEvent['value'] => {
+    if (!node || node.type === 'NilLiteral') return 'nil';
+    const literal = (value: any): boolean => ['NumericLiteral', 'StringLiteral', 'BooleanLiteral', 'TableConstructorExpression', 'FunctionDeclaration'].includes(value?.type);
+    if (literal(node)) return 'non-nil';
+    if (node.type === 'LogicalExpression' && node.operator === 'or' && node.left?.type === 'Identifier'
+      && node.left.name === name && node.left.isLocal === false && literal(node.right)) return 'non-nil';
+    return 'unknown';
+  };
+  const addGuard = (context: LuaFactContext, node: any): LuaFactContext => {
+    if (node?.type !== 'Identifier' || node.isLocal !== false) return context;
+    return { ...context, guards: new Set([...context.guards, node.name]) };
+  };
+  const legacyMetadata = (node: any): void => {
+    if (node.type === 'AssignmentStatement') for (const variable of node.variables || []) {
+      const legacy = globalNameFromExpression(variable);
+      if (legacy) result.legacyDefinitions.add(legacy);
+    }
+    if (node.type === 'FunctionDeclaration' && !node.isLocal && node.identifier) {
+      const legacy = globalNameFromExpression(node.identifier);
+      if (legacy) result.legacyDefinitions.add(legacy);
+    }
+    const callName = callNameFromAst(node);
+    if (callName && X4_UI_MODELED_CALL_NAMES.has(callName)) result.uiLikely = true;
+  };
+  // Unreachable nodes still carry the pre-existing lexical compatibility and
+  // UI eligibility facts, but cannot provide ordered runtime facts.
+  const legacyOnly = (node: any, depth: number): void => {
+    if (!node || typeof node !== 'object') return;
+    if (++nodes > MAX_SCOPE_NODES || depth > MAX_SCOPE_DEPTH) { result.truncated = true; return; }
+    legacyMetadata(node);
+    for (const [key, child] of Object.entries(node)) {
+      if (['loc', 'range', 'comments', 'tokens', 'globals'].includes(key)) continue;
+      if (Array.isArray(child)) for (const item of child) legacyOnly(item, depth + 1);
+      else if (child && typeof child === 'object') legacyOnly(child, depth + 1);
+    }
+  };
+  const statements = (body: any[], context: LuaFactContext, depth: number): boolean => {
+    let mayExit = false;
+    for (const node of body || []) {
+      if (mayExit) gap('A possible chunk exit makes subsequent load-time availability conditional.', node);
+      mayExit = visit(node, mayExit ? { ...context, conditional: true } : context, depth + 1) || mayExit;
+      if (nodes > MAX_SCOPE_NODES || depth > MAX_SCOPE_DEPTH) break;
+    }
+    return mayExit;
+  };
+  const functionBody = (node: any, context: LuaFactContext, depth: number): void => {
+    if ((node.parameters || []).some((parameter: any) => parameter.name === '_ENV')) {
+      environmentBoundary(node, context, 'A function parameter replaces _ENV within its body, so bare global providers there are unverified.');
+    }
+    statements(node.body || [], context, depth + 1);
+  };
+  const visit = (node: any, context: LuaFactContext, depth: number, existenceTest = false): boolean => {
+    if (!node || typeof node !== 'object') return false;
+    if (++nodes > MAX_SCOPE_NODES || depth > MAX_SCOPE_DEPTH) { result.truncated = true; return false; }
+    legacyMetadata(node);
+    const nested = (child: any, next = context, test = false): boolean => visit(child, next, depth + 1, test);
+    const conditional = { ...context, conditional: true };
+    switch (node.type) {
+      case 'Chunk': return statements(node.body, context, depth);
+      case 'Identifier':
+        if (node.isLocal === false) event('read', node.name, node, context, undefined, existenceTest);
+        if (node.name === '_ENV') gap('An explicit Lua environment reference is not resolved.', node);
+        if (environmentAlias(node)) gap('An environment value may be aliased and its global effects are unverified.', node);
+        return false;
+      case 'AssignmentStatement': {
+        for (const init of node.init || []) nested(init);
+        for (const variable of node.variables || []) if (variable.type !== 'Identifier') nested(variable);
+        if ((node.init || []).some(environmentAlias)) {
+          environmentBoundary(node, context, 'An environment alias assignment may allow writes through another name.');
+        }
+        (node.variables || []).forEach((variable: any, index: number) => {
+          if (environmentMutationTarget(variable)) {
+            environmentBoundary(variable, context, 'Global environment or package mutation prevents complete source-only availability proof.');
+          }
+          if (variable.type === 'Identifier' && variable.isLocal === false) {
+            const init = node.init?.[index];
+            const tail = node.init?.[node.init.length - 1];
+            const hasMultiValueTail = tail?.type === 'VarargLiteral' || /CallExpression$/.test(tail?.type || '');
+            const value = !init && hasMultiValueTail ? 'unknown' : nonNilValue(init, variable.name);
+            event('write', variable.name, variable, context, value);
+            if (context.phase !== 'load' || context.conditional || value === 'unknown') gap('Conditional, deferred or unknown-value global writes are not unconditional providers.', variable);
+          }
+        });
+        return false;
+      }
+      case 'LocalStatement':
+        for (const init of node.init || []) nested(init);
+        if ((node.variables || []).some((variable: any) => variable.name === '_ENV')) {
+          environmentBoundary(node, context, 'A lexical _ENV binding changes global lookup and is not resolved.');
+        } else if ((node.init || []).some(environmentAlias)) {
+          environmentBoundary(node, context, 'An environment alias assignment may allow writes through another name.');
+        }
+        return false;
+      case 'FunctionDeclaration': {
+        if (node.identifier?.type === 'Identifier' && node.identifier.isLocal === false && !node.isLocal) {
+          event('write', node.identifier.name, node.identifier, context, 'non-nil');
+          if (context.phase !== 'load' || context.conditional) gap('Conditional or deferred function definitions are not unconditional providers.', node.identifier);
+        } else if (node.identifier && node.identifier.type !== 'Identifier') nested(node.identifier);
+        if (environmentMutationTarget(node.identifier) || (node.isLocal && node.identifier?.name === '_ENV'))
+          environmentBoundary(node, context, 'Global environment or package mutation prevents complete source-only availability proof.');
+        functionBody(node, { ...context, phase: 'deferred', protected: false, authority: undefined, guards: new Set() }, depth);
+        return false;
+      }
+      case 'CallStatement': nested(node.expression); return false;
+      case 'CallExpression':
+      case 'StringCallExpression':
+      case 'TableCallExpression': {
+        const rawArguments = node.arguments ?? node.argument;
+        const args = Array.isArray(rawArguments) ? rawArguments : rawArguments ? [rawArguments] : [];
+        const directName = node.base?.type === 'Identifier' && node.base.isLocal === false ? node.base.name : undefined;
+        if (node.base?.type === 'FunctionDeclaration' && !node.base.identifier) {
+          for (const argument of args) nested(argument);
+          functionBody(node.base, context, depth);
+          return false;
+        }
+        nested(node.base);
+        const protectedCall = directName === 'pcall';
+        const exactProtectedClosure = protectedCall && args[0]?.type === 'FunctionDeclaration' && !args[0].identifier;
+        const callbacks: { body: any; context: LuaFactContext }[] = [];
+        for (let index = 0; index < args.length; index += 1) {
+          const argument = args[index];
+          if (argument.type === 'FunctionDeclaration' && !argument.identifier) {
+            if (protectedCall && index === 0) callbacks.push({ body: argument,
+              context: { ...context, conditional: true, protected: true, authority: 'pcall' } });
+            else {
+              gap('A passed callback may run immediately or later; its invocation time is not expanded.', argument);
+              callbacks.push({ body: argument, context: { ...context, phase: 'unknown', guards: new Set() } });
+            }
+          } else if (index === 0 && argument.type === 'Identifier' && protectedCall) {
+            nested(argument, { ...context, protected: true, authority: 'pcall' });
+          } else if (index === 0 && argument.type === 'Identifier' && directName === 'type' && args.length === 1) {
+            nested(argument, { ...context, authority: 'type' }, true);
+          } else nested(argument);
+        }
+        // Every argument expression is evaluated before the callee can invoke
+        // any closure, including pcall's first argument.
+        for (const callback of callbacks) functionBody(callback.body, callback.context, depth);
+        const literalFfi = directName === 'require' && args.length === 1 && args[0]?.type === 'StringLiteral'
+          && /^(["'])ffi\1$/.test(args[0].raw || '');
+        const plainTableMutation = ['rawset', 'setmetatable'].includes(directName || '') && args[0]?.type === 'TableConstructorExpression';
+        if (directName && ['require', 'dofile', 'load', 'loadfile', 'loadstring', 'getfenv', 'setfenv', 'module', 'rawset', 'setmetatable', 'AddGlobalAccess', 'MakeGlobalAvailable', 'SetEGOGlobals'].includes(directName) && !literalFfi && !plainTableMutation) {
+          environmentBoundary(node, context, 'Dynamic loading, exported globals or environment mutation is not resolved.');
+        } else if (!directName || directName === 'xpcall' || (protectedCall && !exactProtectedClosure)
+          || (!LUA_STANDARD_GLOBALS.has(directName) && !X4_ENGINE_GLOBALS.has(directName))) {
+          event('boundary', '', node, context, undefined, false, 'opaque');
+          gap('A named or indirect callable is not expanded; any globals it changes or reads remain unproven.', node);
+        } else {
+          // A seeded callee only becomes opaque here if its authority is rebound in the supplied scope.
+          event('boundary', directName, node, context, undefined, false, 'opaque');
+        }
+        if (directName === 'rawget') gap('A raw table lookup may read a dynamic environment and is not resolved as a bare global.', node);
+        return false;
+      }
+      case 'MemberExpression':
+      case 'IndexExpression':
+        if (environmentMutationTarget(node)) gap('A global-environment table lookup is not resolved as a bare global.', node);
+        nested(node.base);
+        if (node.type === 'IndexExpression') nested(node.index);
+        return false;
+      case 'LogicalExpression': {
+        const leftTruth = truth(node.left);
+        nested(node.left, context, node.left?.type === 'Identifier');
+        if ((node.operator === 'and' && leftTruth === false) || (node.operator === 'or' && leftTruth === true)) {
+          legacyOnly(node.right, depth + 1);
+          return false;
+        }
+        const next = leftTruth === undefined ? conditional : context;
+        nested(node.right, node.operator === 'and' ? addGuard(next, node.left) : next);
+        return false;
+      }
+      case 'UnaryExpression': nested(node.argument, context, node.operator === 'not' && node.argument?.type === 'Identifier'); return false;
+      case 'BinaryExpression': {
+        const equalityTest = ['==', '~='].includes(node.operator)
+          && (node.left?.type === 'NilLiteral' || node.right?.type === 'NilLiteral');
+        nested(node.left, context, equalityTest && node.left?.type === 'Identifier');
+        nested(node.right, context, equalityTest && node.right?.type === 'Identifier');
+        return false;
+      }
+      case 'IfStatement': {
+        let priorUnknown = false;
+        let priorTrue = false;
+        let mayExit = false;
+        for (const clause of node.clauses || []) {
+          if (priorTrue) { legacyOnly(clause, depth + 1); continue; }
+          if (clause.condition) nested(clause.condition, priorUnknown ? conditional : context, clause.condition.type === 'Identifier');
+          const known = clause.condition ? truth(clause.condition) : true;
+          if (known === false) {
+            for (const statement of clause.body || []) legacyOnly(statement, depth + 1);
+            continue;
+          }
+          const branch = priorUnknown || known === undefined ? conditional : context;
+          mayExit = statements(clause.body, addGuard(branch, clause.condition), depth + 1) || mayExit;
+          if (known === true) priorTrue = true;
+          else priorUnknown = true;
+        }
+        return mayExit;
+      }
+      case 'DoStatement': return statements(node.body, context, depth);
+      case 'WhileStatement': nested(node.condition, context, node.condition?.type === 'Identifier'); break;
+      case 'RepeatStatement': break;
+      case 'ForNumericStatement': nested(node.start); nested(node.end); nested(node.step); break;
+      case 'ForGenericStatement': for (const iterator of node.iterators || []) nested(iterator); break;
+      case 'ReturnStatement': for (const argument of node.arguments || []) nested(argument); return true;
+      case 'GotoStatement': gap('Goto control flow is not expanded.', node); return true;
+      case 'LabelStatement': gap('Label control flow is not expanded.', node); return false;
+      case 'BreakStatement': return false;
+      case 'TableConstructorExpression': for (const field of node.fields || []) nested(field); return false;
+      case 'TableKeyString': nested(node.value); return false;
+      case 'TableKey': nested(node.key); nested(node.value); return false;
+      case 'TableValue': nested(node.value); return false;
+      case 'StringLiteral': case 'NumericLiteral': case 'BooleanLiteral': case 'NilLiteral': case 'VarargLiteral': return false;
+      default:
+        gap('An unsupported AST construct prevents complete global execution-scope proof.', node);
+        for (const [key, child] of Object.entries(node)) {
+          if (['loc', 'range', 'comments', 'tokens', 'globals'].includes(key)) continue;
+          if (Array.isArray(child)) for (const item of child) nested(item, { ...conditional, phase: 'unknown' });
+          else if (child && typeof child === 'object') nested(child, { ...conditional, phase: 'unknown' });
+        }
+        return false;
+    }
+    gap('Loop execution and its global effects are not expanded.', node);
+    const mayExit = statements(node.body, node.type === 'WhileStatement' ? addGuard(conditional, node.condition) : conditional, depth + 1);
+    if (node.type === 'RepeatStatement') nested(node.condition, conditional, node.condition?.type === 'Identifier');
+    return mayExit;
+  };
+  visit(ast, { phase: 'load', conditional: false, protected: false, guards: new Set() }, 0);
+  if (result.truncated) {
+    gap('Lua runtime-scope analysis reached a depth, node, fact or evidence limit; unseen source is unverified.');
+    // An unseen UI call cannot suppress the existing independent X4 UI checks.
+    if (/\.lua$/i.test(file.rel)) result.uiLikely = true;
+  }
+  return result;
+}
+
+function analyzeRuntimeScopes(files: LuaFileInput[], manifestOnly: readonly LuaManifestScopeInput[],
+  parsed: Map<LuaFileInput, ParsedLuaFacts>, gameGlobalFiles: Set<LuaFileInput>, seed: Set<string>, findings: LuaStaticFinding[]): LuaRuntimeScopeResult {
+  const gaps: LuaRuntimeScopeGap[] = [];
+  const gapsByFile = new Map<LuaScopeSource, LuaRuntimeScopeGap[]>();
+  const gapKeys = new Map<LuaScopeSource, Set<string>>();
+  const findingKeys = new Map<LuaFileInput, Set<string>>();
+  const findingCounts = new Map<LuaFileInput, { info: number; warning: number }>();
+  const globalFiles = new Set<LuaScopeSource>();
+  let truncated = false;
+  let knownInventories = 0;
+  let knownGlobalFiles = 0;
+  let unavailableInventories = 0;
+  let registrationFailure = false;
+  let orderFailure = false;
+  const addGap = (file: LuaScopeSource, check: LuaRuntimeScopeGap['check'], reason: string, node?: any): void => {
+    const keys = gapKeys.get(file) || new Set<string>();
+    gapKeys.set(file, keys);
+    const key = `${check}|${reason}`;
+    if (keys.has(key)) return;
+    if (keys.size >= MAX_SCOPE_GAPS - 1) {
+      truncated = true;
+      const limit = 'Lua runtime-scope evidence was truncated; additional source boundaries remain unverified.';
+      if (!keys.has(limit)) {
+        keys.add(limit);
+        const limitGap: LuaRuntimeScopeGap = { check: 'lua.globals-order', rel: file.rel, sourcePath: file.sourcePath, reason: limit };
+        gaps.push(limitGap);
+        const fileGaps = gapsByFile.get(file) || [];
+        gapsByFile.set(file, fileGaps);
+        fileGaps.push(limitGap);
+      }
+      return;
+    }
+    keys.add(key);
+    const sourceGap: LuaRuntimeScopeGap = { check, rel: file.rel, sourcePath: file.sourcePath, reason,
+      ...(node?.loc ? { line: node.loc.start.line, column: node.loc.start.column } : {}) };
+    gaps.push(sourceGap);
+    const fileGaps = gapsByFile.get(file) || [];
+    gapsByFile.set(file, fileGaps);
+    fileGaps.push(sourceGap);
+  };
+  const finding = (file: LuaFileInput, name: string, node: any, provider?: { file: LuaFileInput; event: LuaGlobalEvent }): void => {
+    const keys = findingKeys.get(file) || new Set<string>();
+    findingKeys.set(file, keys);
+    const code = provider ? GLOBAL_BEFORE_DEFINITION : 'lua.undefined_global';
+    const severity = provider ? 'warning' : 'info';
+    const key = `${code}|${name}`;
+    if (keys.has(key)) return;
+    if (provider) orderFailure = true;
+    const counts = findingCounts.get(file) || { info: 0, warning: 0 };
+    findingCounts.set(file, counts);
+    if (counts[severity] >= 8) {
+      addGap(file, 'lua.globals-order', 'Global advisory output was bounded; additional source references remain unverified.', node);
+      truncated = true;
+      return;
+    }
+    counts[severity] += 1;
+    keys.add(key);
+    if (!provider) addGap(file, 'lua.globals-order', 'An unseeded global reference has no supported definition in this source scope.', node);
+    findings.push({ layer: 'baseline', severity, code, rel: file.rel,
+      message: provider
+        ? `${file.rel} reads global "${name}" at load time before its listed provider in ${provider.file.rel}:${provider.event.node.loc?.start?.line || 1}. This is bounded registered-source order, not proof of a runtime crash or external provider absence.`
+        : `${file.rel} references global "${name}" that is not in the deterministic Lua/X4 seed or a supported definition in this source scope. Dynamic loading and unlisted providers are not inferred.`,
+      symbol: name, line: node?.loc?.start?.line, column: node?.loc?.start?.column,
+      source: file.source, sourcePath: file.sourcePath });
+  };
+  const ownFileHygiene = (file: LuaFileInput): void => {
+    if (!gameGlobalFiles.has(file)) return;
+    globalFiles.add(file);
+    const facts = parsed.get(file)!;
+    if (facts.truncated) {
+      truncated = true;
+      addGap(file, 'lua.globals-order', 'Lua runtime-scope analysis reached a limit; additional source is unverified.');
+    }
+    const own = new Set(facts.events.filter(event => event.kind === 'write').map(event => event.name));
+    for (const reference of facts.globals) {
+      if (!seed.has(reference.name) && !own.has(reference.name)) finding(file, reference.name, reference);
+    }
+  };
+  const inventories = new Map<X4MenuLuaRuntimeInventory, LuaFileInput[]>();
+  const actualPathsByFolder = new Map<string, Map<string, number>>();
   for (const file of files) {
-    let ast: any;
-    try { ast = parseLua(file.text); } catch { continue; }
-    walkAst(ast, node => {
-      if (node.type === 'AssignmentStatement') {
-        for (const variable of node.variables || []) {
-          const name = globalNameFromExpression(variable);
-          if (name) defs.add(name);
+    const path = normalizeX4UiSourcePath(file.rel).key;
+    if (path) {
+      const counts = actualPathsByFolder.get(file.extension.folder) || new Map<string, number>();
+      actualPathsByFolder.set(file.extension.folder, counts);
+      counts.set(path, (counts.get(path) || 0) + 1);
+    }
+    const inventory = file.extension.runtimeInventory;
+    if (!inventory) {
+      if (gameGlobalFiles.has(file)) {
+        globalFiles.add(file);
+        unavailableInventories += 1;
+        addGap(file, 'lua.registrations', 'No runtime inventory was supplied; only context-free Lua hygiene was checked.');
+        if (parsed.get(file)!.truncated) {
+          truncated = true;
+          addGap(file, 'lua.globals-order', 'Lua runtime-scope analysis reached a limit; additional source is unverified.');
         }
       }
-      if (node.type === 'FunctionDeclaration' && !node.isLocal) {
-        const name = globalNameFromExpression(node.identifier);
-        if (name) defs.add(name);
-      }
-    });
+      continue;
+    }
+    const group = inventories.get(inventory) || [];
+    inventories.set(inventory, group);
+    group.push(file);
   }
-  return defs;
+  for (const [inventory, group] of inventories) {
+    const anchor = group[0];
+    const filesByPath = new Map<string, LuaFileInput>();
+    for (const file of group) {
+      const key = normalizeX4UiSourcePath(file.rel).key;
+      if (key && !filesByPath.has(key)) filesByPath.set(key, file);
+    }
+    for (const diagnostic of inventory.diagnostics) {
+      const source = diagnostic.path ? filesByPath.get(diagnostic.path) : undefined;
+      addGap(source || anchor, 'lua.registrations', diagnostic.message);
+      if (inventory.manifestStatus === 'known' && diagnostic.severity === 'error') registrationFailure = true;
+    }
+    const rows = inventory.registrations;
+    const matches = (row: typeof rows[number]): boolean => {
+      const file = row.sourceIndex === undefined ? undefined : group[row.sourceIndex];
+      return !!file && file.extension.folder === anchor.extension.folder
+        && !!row.lookupKey && actualPathsByFolder.get(file.extension.folder)?.get(row.lookupKey) === 1
+        && normalizeX4UiSourcePath(file.rel).key === row.lookupKey
+        && (row.sourcePath === undefined || row.sourcePath === file.sourcePath);
+    };
+    const mismatch = group.some(file => file.extension.folder !== anchor.extension.folder)
+      || rows.some(row => row.resolution === 'resolved' && !matches(row));
+    if (inventory.manifestStatus !== 'known' || mismatch) {
+      unavailableInventories += 1;
+      for (const file of group) {
+        globalFiles.add(file);
+        if (gameGlobalFiles.has(file)) addGap(file, 'lua.registrations', mismatch
+          ? 'Registration source index, unique exact path or provenance does not match this physical extension inventory.'
+          : `Runtime manifest is ${inventory.manifestStatus}; cross-file providers and load order are unavailable.`);
+        ownFileHygiene(file);
+      }
+      continue;
+    }
+    knownInventories += 1;
+    const candidates = new Set<string>();
+    const rebound = new Set<string>();
+    const environments = new Map<number, typeof rows[number][]>();
+    for (const row of rows) {
+      const environment = environments.get(row.environmentIndex) || [];
+      environments.set(row.environmentIndex, environment);
+      environment.push(row);
+      if (row.resolution !== 'resolved' || !matches(row)) continue;
+      const file = group[row.sourceIndex!];
+      globalFiles.add(file);
+      if (!parsed.get(file)!.error) knownGlobalFiles += 1;
+      for (const event of parsed.get(file)!.events) if (event.kind === 'write') {
+        if (event.value !== 'nil') candidates.add(event.name);
+        rebound.add(event.name);
+      }
+    }
+    for (const environment of environments.values()) {
+      const ordered: { file: LuaFileInput; event: LuaGlobalEvent }[] = [];
+      let environmentUnknown = environment.some(row => row.resolution !== 'resolved');
+      if (environmentUnknown && !environment.some(row => row.resolution === 'resolved' && matches(row))) {
+        globalFiles.add(anchor);
+        addGap(anchor, 'lua.globals-order', 'No resolved Lua was supplied for a registered menu environment; its global scope and order are unavailable.');
+      }
+      for (const row of environment) {
+        if (row.resolution !== 'resolved' || !matches(row)) continue;
+        const file = group[row.sourceIndex!];
+        const facts = parsed.get(file)!;
+        for (const sourceGap of facts.gaps) addGap(file, 'lua.globals-order', sourceGap.reason, sourceGap.node);
+        if (facts.error) {
+          environmentUnknown = true;
+          addGap(file, 'lua.globals-order', 'Lua source did not parse; its global execution scope is unavailable.');
+        }
+        if (facts.truncated) {
+          truncated = true;
+          environmentUnknown = true;
+          addGap(file, 'lua.globals-order', 'Lua runtime-scope analysis reached a depth, node, fact or evidence limit; unseen source is unverified.');
+        }
+        if (environments.size > 1) addGap(file, 'lua.registrations', 'Repeated menu environments have separate source-order boundaries; cross-environment execution is unproven.');
+        if (environmentUnknown) addGap(file, 'lua.registrations', 'Unresolved registered sources may affect this menu environment; complete provider availability is unproven.');
+        for (const event of facts.events) ordered.push({ file, event });
+      }
+      type Provider = typeof ordered[number];
+      const unconditionalSourceWrite = (event: LuaGlobalEvent): boolean => event.phase === 'load' && !event.conditional
+        && !event.protected && !(event.authority && rebound.has(event.authority)) && event.value === 'non-nil';
+      const future = new Map<string, { providers: Provider[]; index: number }>();
+      let sourceFile: LuaFileInput | undefined;
+      let sourceEnvironmentKnown = true;
+      for (const item of ordered) {
+        const { file, event } = item;
+        if (file !== sourceFile) {
+          sourceFile = file;
+          sourceEnvironmentKnown = true;
+        }
+        if (event.kind === 'boundary' && event.phase === 'load' && event.boundary === 'environment') sourceEnvironmentKnown = false;
+        // These are source locations for ordering, not available runtime values.
+        // Opaque call effects occur only after their callee and argument reads.
+        if (!sourceEnvironmentKnown || event.kind !== 'write' || !unconditionalSourceWrite(event)) continue;
+        const queue = future.get(event.name) || { providers: [], index: 0 };
+        future.set(event.name, queue);
+        queue.providers.push(item);
+      }
+      const available = new Map<string, 'seed' | Provider>();
+      const maybeAvailable = new Set<string>();
+      for (const name of seed) available.set(name, 'seed');
+      for (const item of ordered) {
+        const { file, event } = item;
+        if (event.kind === 'boundary') {
+          if (event.phase === 'load' && (!event.name || rebound.has(event.name))) {
+            available.clear();
+            maybeAvailable.clear();
+            environmentUnknown = true;
+            if (event.name) addGap(file, 'lua.globals-order', 'A rebound seeded callable may have opaque global effects.', event.node);
+          }
+          continue;
+        }
+        if (event.kind === 'write') {
+          const queue = future.get(event.name);
+          if (queue && queue.providers[queue.index] === item) queue.index += 1;
+          if (!environmentUnknown && unconditionalSourceWrite(event)) {
+            available.set(event.name, item);
+            maybeAvailable.delete(event.name);
+          } else if (event.phase === 'load' && !event.conditional && !event.protected && !event.authority) {
+            available.delete(event.name);
+            if (event.value === 'nil') maybeAvailable.delete(event.name);
+            else maybeAvailable.add(event.name);
+          } else if (event.value !== 'nil' || available.has(event.name)) {
+            maybeAvailable.add(event.name);
+            if (event.value !== 'non-nil') available.delete(event.name);
+          }
+          continue;
+        }
+        const present = available.get(event.name);
+        const authorityUnknown = event.authority && rebound.has(event.authority);
+        const phase = authorityUnknown ? 'unknown' : event.phase;
+        if (authorityUnknown) addGap(file, 'lua.globals-order', 'A modeled guard or protected-call authority was rebound; its execution behavior is unproven.', event.node);
+        if (present === 'seed' && !authorityUnknown) continue;
+        if (phase !== 'load' || event.conditional || event.guarded || event.protected) {
+          addGap(file, 'lua.globals-order', 'Guarded, protected, conditional or deferred global availability is not an unconditional load-time proof.', event.node);
+          if (!event.guarded && !event.protected && !present && !candidates.has(event.name) && !seed.has(event.name)) finding(file, event.name, event.node);
+          continue;
+        }
+        if (present) continue;
+        if (seed.has(event.name)) {
+          addGap(file, 'lua.globals-order', environmentUnknown
+            ? 'Dynamic or incomplete environment state prevents a complete load-order conclusion.'
+            : 'A Lua/X4 seed has been rebound; its current availability is not established.', event.node);
+          continue;
+        }
+        const next = future.get(event.name);
+        const provider = next?.providers[next.index];
+        if (!environmentUnknown && !maybeAvailable.has(event.name) && provider) finding(file, event.name, event.node, provider);
+        else if (!candidates.has(event.name)) finding(file, event.name, event.node);
+        else addGap(file, 'lua.globals-order', 'A possible global provider is conditional, deferred, rebound or in a different menu environment.', event.node);
+        if (environmentUnknown) addGap(file, 'lua.globals-order', 'Dynamic or incomplete environment state prevents a complete load-order conclusion.', event.node);
+      }
+    }
+  }
+  // A real manifest can exist without any readable Lua. Attribute its
+  // registration evidence to the manifest itself, never to a fabricated Lua file.
+  for (const manifest of manifestOnly) {
+    const inventory = manifest.extension.runtimeInventory;
+    for (const diagnostic of inventory.diagnostics) {
+      const reason = diagnostic.path ? `${diagnostic.message} Target ${diagnostic.path}.` : diagnostic.message;
+      addGap(manifest, 'lua.registrations', reason);
+      if (inventory.manifestStatus === 'known' && diagnostic.severity === 'error') registrationFailure = true;
+    }
+    if (inventory.manifestStatus === 'known') knownInventories += 1;
+    else {
+      unavailableInventories += 1;
+      addGap(manifest, 'lua.registrations', `Runtime manifest is ${inventory.manifestStatus}; registered-source availability is unproven.`);
+    }
+    if (inventory.manifestStatus !== 'known' || inventory.registrations.length) {
+      globalFiles.add(manifest);
+      addGap(manifest, 'lua.globals-order', 'No readable Lua was supplied for this manifest; registered global scope and order are unavailable.');
+    }
+  }
+  for (const file of [...files, ...manifestOnly]) {
+    const fileGaps = gapsByFile.get(file) || [];
+    if (!fileGaps.length) continue;
+    const first = fileGaps[0];
+    findings.push({ layer: 'baseline', severity: 'info', code: SCOPE_UNVERIFIED, rel: file.rel,
+      message: `${file.rel}: Lua runtime scope is not fully verified (${fileGaps.length} retained boundary reason(s)). ${first.reason} Bounded source analysis does not prove complete runtime loading, callback scheduling or UI behavior.`,
+      line: first.line, column: first.column, source: file.source, sourcePath: file.sourcePath });
+  }
+  const references = (selected: Iterable<LuaScopeSource>) => [...selected].map(file => ({ rel: file.rel, sourcePath: file.sourcePath }));
+  const registrationGaps = gaps.filter(gap => gap.check === 'lua.registrations').length;
+  const globalGaps = gaps.filter(gap => gap.check === 'lua.globals-order').length;
+  const runtimeFiles = [...files.filter(file => file.extension.runtimeInventory || gameGlobalFiles.has(file)), ...manifestOnly];
+  const boundary = 'Bounded registered-source facts only; no complete dependency availability, invocation schedule, arbitrary Lua behavior, UI rendering or game acceptance is claimed.';
+  return { gaps, truncated, stages: [
+    { check: 'lua.syntax', status: !files.length ? 'not-applicable' : files.some(file => parsed.get(file)!.error) ? 'fail' : 'pass', files: references(files), gapCount: 0,
+      evidenceBoundary: 'Syntax parsed with luaparse Lua 5.2; LuaJIT20 grammar parity and execution are separate.' },
+    { check: 'lua.registrations', status: !runtimeFiles.length ? 'not-applicable' : registrationFailure ? 'fail'
+      : !knownInventories && unavailableInventories ? 'unavailable' : registrationGaps ? 'partial' : 'pass',
+      files: references(runtimeFiles), gapCount: registrationGaps, evidenceBoundary: boundary },
+    { check: 'lua.globals-order', status: !globalFiles.size ? 'not-applicable' : orderFailure ? 'fail'
+      : !knownGlobalFiles ? 'unavailable' : globalGaps || registrationGaps ? 'partial' : 'pass',
+      files: references(globalFiles), gapCount: globalGaps, evidenceBoundary: boundary }
+  ] };
 }
 
 function callNameFromAst(node: any): string | undefined {
@@ -186,21 +789,10 @@ function callNameFromAst(node: any): string | undefined {
   return undefined;
 }
 
-function containsModeledX4UiCall(ast: any): boolean {
-  let found = false;
-  walkAst(ast, node => {
-    if (found || node.type !== 'CallExpression') return;
-    const name = callNameFromAst(node);
-    if (name && X4_UI_MODELED_CALL_NAMES.has(name)) found = true;
-  });
-  return found;
-}
-
-function isUiLikelyLua(file: LuaFileInput, ast?: any): boolean {
+function isUiLikelyLua(file: LuaFileInput): boolean {
   const rel = file.rel.replace(/\\/g, '/').toLowerCase();
   if (!rel.endsWith('.lua')) return false;
-  if (rel.startsWith('ui/') || rel.startsWith('subst_lua/')) return true;
-  return ast ? containsModeledX4UiCall(ast) : false;
+  return rel.startsWith('ui/') || rel.startsWith('subst_lua/');
 }
 
 function fallbackUiLocation(file: LuaFileInput): X4UiSourceLocation {
@@ -373,14 +965,36 @@ export const X4_STANDALONE_MENU_SCHEMA = {
   ],
 } as const;
 
-export function analyzeLuaFiles(files: LuaFileInput[]): LuaStaticAnalysisResult {
+export function analyzeLuaFiles(files: LuaFileInput[], manifestOnly: readonly LuaManifestScopeInput[] = []): LuaStaticAnalysisResult {
   const normalizedFiles = files.map(normalizeLuaFile);
+  const parsed = new Map<LuaFileInput, ParsedLuaFacts>();
+  for (const file of normalizedFiles) {
+    let ast: any;
+    try { ast = parseLua(file.text); }
+    catch (error) {
+      parsed.set(file, { error, globals: [], legacyDefinitions: new Set(), events: [], gaps: [], truncated: false, uiLikely: isUiLikelyLua(file) });
+      continue;
+    }
+    try { parsed.set(file, collectLuaFacts(file, ast)); }
+    catch {
+      // An internal analysis failure is unavailable coverage, never a syntax error.
+      parsed.set(file, { globals: (ast.globals || []).map((node: any) => ({ name: node.name, loc: node.loc })),
+        legacyDefinitions: new Set(), events: [], gaps: [{ reason: 'Lua runtime-scope analysis failed internally; source execution scope is unavailable.' }],
+        truncated: true, uiLikely: isUiLikelyLua(file) });
+    }
+  }
   // Standalone host tools have their own globals. A registered tools file shares the game's namespace.
   const gameGlobalFiles = new Set(normalizedFiles.filter(file => {
     const key = normalizeX4UiSourcePath(file.rel).key ?? '';
     return !key.toLowerCase().startsWith('tools/') || file.extension.menuLuaPaths?.has(key);
   }));
-  const allow = new Set([...LUA_STANDARD_GLOBALS, ...X4_ENGINE_GLOBALS, ...collectGlobalDefinitions([...gameGlobalFiles])]);
+  const seed = new Set([...LUA_STANDARD_GLOBALS, ...X4_ENGINE_GLOBALS]);
+  // Preserve the context-free API's historical namespace convention. Explicit
+  // runtime inventories never consume this flat compatibility allowlist.
+  const allow = new Set(seed);
+  for (const file of gameGlobalFiles) if (!file.extension.runtimeInventory) {
+    for (const name of parsed.get(file)!.legacyDefinitions) allow.add(name);
+  }
   const findings: LuaStaticFinding[] = [];
   const x4UiResults: LuaStaticX4UiFileResult[] = [];
   const x4UiSummary: LuaStaticX4UiSummary = {
@@ -397,10 +1011,9 @@ export function analyzeLuaFiles(files: LuaFileInput[]): LuaStaticAnalysisResult 
 
   for (const file of normalizedFiles) {
     const relLower = file.rel.toLowerCase();
-    let ast: any;
-    try {
-      ast = parseLua(file.text);
-    } catch (error) {
+    const facts = parsed.get(file)!;
+    if (facts.error) {
+      const error = facts.error;
       findings.push({
         layer: 'baseline',
         severity: 'error',
@@ -424,7 +1037,7 @@ export function analyzeLuaFiles(files: LuaFileInput[]): LuaStaticAnalysisResult 
     }
 
     const seenGlobals = new Set<string>();
-    for (const g of gameGlobalFiles.has(file) ? ast.globals || [] : []) {
+    for (const g of gameGlobalFiles.has(file) && !file.extension.runtimeInventory ? facts.globals : []) {
       const name = g?.name;
       if (!name || allow.has(name) || seenGlobals.has(name)) continue;
       seenGlobals.add(name);
@@ -501,7 +1114,7 @@ export function analyzeLuaFiles(files: LuaFileInput[]): LuaStaticAnalysisResult 
       }
     }
 
-    if (isUiLikelyLua(file, ast)) {
+    if (facts.uiLikely) {
       const x4UiResult = analyzeX4UiFile({
         rel: file.rel,
         text: file.text,
@@ -510,6 +1123,8 @@ export function analyzeLuaFiles(files: LuaFileInput[]): LuaStaticAnalysisResult 
       addX4UiResult(file, x4UiResult, x4UiResults, x4UiSummary, findings);
     }
   }
+
+  const runtimeScope = analyzeRuntimeScopes(normalizedFiles, manifestOnly, parsed, gameGlobalFiles, seed, findings);
 
   // UI validator (2/2) — validate against the KNOWN-WORKING menu configuration. A standalone X4
   // window renders ONLY when opened by the engine function OpenMenu(name), which then calls
@@ -560,7 +1175,8 @@ export function analyzeLuaFiles(files: LuaFileInput[]): LuaStaticAnalysisResult 
     globalAllowlistSize: allow.size,
     findings,
     x4UiResults,
-    x4UiSummary
+    x4UiSummary,
+    runtimeScope
   };
 }
 
@@ -937,5 +1553,113 @@ export function runLuaStaticAnalysisSelftest(): { pass: boolean; checks: { name:
       ]))
     }
   );
+  const consumerPath = 'ui/scope-consumer.lua';
+  const providerPath = 'ui/scope-provider.lua';
+  const providerText = 'function OrderedGlobal() end';
+  const runtimeCase = (consumerText: string, provider = providerText,
+    order: readonly string[] = [consumerPath, providerPath], xml?: string): LuaStaticAnalysisResult => {
+    const sources = [focusedFile(consumerPath, consumerText, 'scope'), focusedFile(providerPath, provider, 'scope')];
+    const runtimeInventory = buildX4MenuLuaRuntimeInventory({
+      uiXml: xml ?? `<addon name="ScopeProbe"><environment type="menus">${order.map(rel => `<file name="${rel}"/>`).join('')}</environment></addon>`,
+      luaFiles: sources.map(file => ({ path: file.rel, text: file.text, sourcePath: file.sourcePath }))
+    });
+    return analyzeLuaFiles(sources.map(file => ({ ...file, extension: { ...file.extension, runtimeInventory } })));
+  };
+  const scopeFinding = (result: LuaStaticAnalysisResult, code: string, symbol = 'OrderedGlobal') =>
+    result.findings.find(finding => finding.code === code && finding.symbol === symbol && finding.rel === consumerPath);
+  const manifestOnlyCase = (uiXml: string): LuaStaticAnalysisResult => analyzeLuaFiles([], [{
+    rel: 'ui.xml', source: 'loose', sourcePath: 'manifest-only:ui.xml',
+    extension: { folder: 'manifest-only', id: 'manifest-only', runtimeInventory: buildX4MenuLuaRuntimeInventory({ uiXml, luaFiles: [] }) }
+  }]);
+  const emptyManifest = manifestOnlyCase('<addon name="ScopeProbe"><environment type="menus"/></addon>');
+  const missingManifestTarget = manifestOnlyCase('<addon name="ScopeProbe"><environment type="menus"><file name="ui/missing.lua"/></environment></addon>');
+  const invalidManifestOnly = manifestOnlyCase('<addon');
+  const hasUnknownConsumerEnvironment = (result: LuaStaticAnalysisResult): boolean => result.runtimeScope.gaps.some(gap =>
+    gap.rel === consumerPath && gap.reason.includes('Dynamic or incomplete environment state'));
+  const scopeChecks = [
+    { name: 'runtime_unlisted_provider_cannot_mask_registered_use', pass: !!scopeFinding(runtimeCase('OrderedGlobal()', providerText, [consumerPath]), 'lua.undefined_global') },
+    { name: 'runtime_later_registered_provider_is_positioned', pass: scopeFinding(runtimeCase('\nOrderedGlobal()'), GLOBAL_BEFORE_DEFINITION)?.line === 2 },
+    { name: 'runtime_earlier_registered_provider_resolves', pass: !scopeFinding(runtimeCase('OrderedGlobal()', providerText, [providerPath, consumerPath]), GLOBAL_BEFORE_DEFINITION)
+      && !scopeFinding(runtimeCase('OrderedGlobal()', providerText, [providerPath, consumerPath]), 'lua.undefined_global') },
+    { name: 'runtime_same_file_rhs_precedes_writes', pass: scopeFinding(runtimeCase('OtherValue, OrderedGlobal = OrderedGlobal, 1'), GLOBAL_BEFORE_DEFINITION)?.line === 1 },
+    { name: 'runtime_local_or_member_write_is_not_a_provider', pass: !!scopeFinding(runtimeCase('OrderedGlobal()', 'local OrderedGlobal = {}; OrderedGlobal.member = true', [providerPath, consumerPath]), 'lua.undefined_global')
+      && !!scopeFinding(runtimeCase('OrderedGlobal()', 'function OrderedGlobal.member() end', [providerPath, consumerPath]), 'lua.undefined_global') },
+    { name: 'runtime_conditional_provider_is_unproven', pass: !scopeFinding(runtimeCase('OrderedGlobal()', 'if Condition then function OrderedGlobal() end end', [providerPath, consumerPath]), GLOBAL_BEFORE_DEFINITION)
+      && runtimeCase('OrderedGlobal()', 'if Condition then function OrderedGlobal() end end', [providerPath, consumerPath]).runtimeScope.stages[2].status === 'partial' },
+    { name: 'runtime_later_callback_provider_is_not_an_eager_failure', pass: !scopeFinding(runtimeCase('local function handler() OrderedGlobal() end\nRegisterEvent("demo", handler)'), GLOBAL_BEFORE_DEFINITION)
+      && !scopeFinding(runtimeCase('local function handler() OrderedGlobal() end\nRegisterEvent("demo", handler)'), 'lua.undefined_global') },
+    { name: 'runtime_direct_iife_is_eager', pass: !!scopeFinding(runtimeCase('(function() OrderedGlobal() end)()'), GLOBAL_BEFORE_DEFINITION) },
+    { name: 'runtime_pcall_body_is_protected_but_argument_dereference_is_eager', pass: !scopeFinding(runtimeCase('pcall(function() OrderedGlobal() end)'), GLOBAL_BEFORE_DEFINITION)
+      && !scopeFinding(runtimeCase('pcall(OrderedGlobal)'), GLOBAL_BEFORE_DEFINITION)
+      && !!scopeFinding(runtimeCase('pcall(OrderedGlobal.member)'), GLOBAL_BEFORE_DEFINITION)
+      && !!scopeFinding(runtimeCase('pcall(function() OrderedGlobal = {} end, OrderedGlobal.member)'), GLOBAL_BEFORE_DEFINITION) },
+    { name: 'runtime_protected_and_rebound_pcall_writes_are_not_definite', pass: [
+      'pcall(function() OrderedGlobal = function() end end)',
+      'pcall = function(f) f() end; pcall(function() OrderedGlobal = function() end end)'
+    ].every(provider => runtimeCase('local captured = OrderedGlobal', provider, [providerPath, consumerPath]).runtimeScope.gaps
+      .some(gap => gap.rel === consumerPath && gap.reason.includes('possible global provider'))) },
+    { name: 'runtime_opaque_callback_and_named_init_report_unknown', pass: !scopeFinding(runtimeCase('Opaque(function() OrderedGlobal() end)'), GLOBAL_BEFORE_DEFINITION)
+      && runtimeCase('Opaque(function() OrderedGlobal() end)').runtimeScope.gaps.some(gap => gap.reason.includes('passed callback'))
+      && runtimeCase('local function init() OrderedGlobal() end; init()').runtimeScope.gaps.some(gap => gap.reason.includes('callable is not expanded')) },
+    { name: 'runtime_guards_do_not_assert_unconditional_order', pass: !scopeFinding(runtimeCase('if OrderedGlobal then OrderedGlobal() end\nlocal x = OrderedGlobal and OrderedGlobal()'), GLOBAL_BEFORE_DEFINITION)
+      && !scopeFinding(runtimeCase('if type(OrderedGlobal) == "function" then OrderedGlobal() end\nwhile OrderedGlobal do break end'), GLOBAL_BEFORE_DEFINITION)
+      && !scopeFinding(runtimeCase('if false then OrderedGlobal() end'), GLOBAL_BEFORE_DEFINITION)
+      && !!scopeFinding(runtimeCase('if 0 then OrderedGlobal() end'), GLOBAL_BEFORE_DEFINITION) },
+    { name: 'runtime_nil_rebinding_does_not_leave_provider_definite', pass: runtimeCase('OrderedGlobal = nil; OrderedGlobal()', providerText, [providerPath, consumerPath]).runtimeScope.stages[2].status === 'partial' },
+    { name: 'runtime_environment_write_is_unavailable_not_safe', pass: !scopeFinding(runtimeCase('_G["OrderedGlobal"] = nil; OrderedGlobal()'), GLOBAL_BEFORE_DEFINITION)
+      && runtimeCase('_G["OrderedGlobal"] = nil; OrderedGlobal()').runtimeScope.gaps.some(gap => gap.reason.includes('environment or package mutation')) },
+    { name: 'runtime_replaced_lexical_environments_cannot_provide_globals_to_next_chunk', pass: [
+      'local _ENV = {}; OrderedGlobal = function() end',
+      '(function(_ENV) OrderedGlobal = function() end end)({})'
+    ].every(provider => {
+      const result = runtimeCase('local captured = OrderedGlobal', provider, [providerPath, consumerPath]);
+      return hasUnknownConsumerEnvironment(result) && result.runtimeScope.stages[2].status === 'partial';
+    }) },
+    { name: 'runtime_opaque_calls_invalidate_later_provider_certainty_after_arguments', pass: (() => {
+      const changed = runtimeCase('local function Init() _G.OrderedGlobal = 1 end; Init(); local captured = OrderedGlobal; OrderedGlobal = 2');
+      const laterChunk = runtimeCase('local captured = OrderedGlobal', 'local function Init() end; Init(); OrderedGlobal = 1', [providerPath, consumerPath]);
+      const argument = runtimeCase('local function Init(value) end; Init(OrderedGlobal.member)');
+      return !scopeFinding(changed, GLOBAL_BEFORE_DEFINITION) && hasUnknownConsumerEnvironment(changed)
+        && hasUnknownConsumerEnvironment(laterChunk) && !!scopeFinding(argument, GLOBAL_BEFORE_DEFINITION);
+    })() },
+    { name: 'runtime_opaque_protected_callbacks_do_not_preserve_load_state', pass: ['pcall(Run)', 'xpcall(Run, function(err) return err end)'].every(call => {
+      const result = runtimeCase(`local function Run() _G.OrderedGlobal = 1 end; ${call}; local captured = OrderedGlobal; OrderedGlobal = 2`);
+      return !scopeFinding(result, GLOBAL_BEFORE_DEFINITION) && hasUnknownConsumerEnvironment(result);
+    }) },
+    { name: 'runtime_unresolved_environment_aliases_preserve_explicit_gaps', pass: ['_G', 'package', 'getfenv()'].every(alias => {
+      const result = runtimeCase(`local Env = ${alias}; Env.OrderedGlobal = 1; local captured = OrderedGlobal; OrderedGlobal = 2`);
+      return !scopeFinding(result, GLOBAL_BEFORE_DEFINITION) && hasUnknownConsumerEnvironment(result)
+        && result.runtimeScope.gaps.some(gap => gap.reason.includes('environment value may be aliased'));
+    }) },
+    { name: 'runtime_elseif_after_unknown_condition_is_conditional', pass: !scopeFinding(runtimeCase('if Maybe then local first = 1 elseif OrderedGlobal.member then local second = 2 end'), GLOBAL_BEFORE_DEFINITION)
+      && !!scopeFinding(runtimeCase('if false then local first = 1 elseif OrderedGlobal.member then local second = 2 end'), GLOBAL_BEFORE_DEFINITION) },
+    { name: 'runtime_only_nil_comparison_is_an_equality_guard', pass: !scopeFinding(runtimeCase('local absent = OrderedGlobal == nil'), GLOBAL_BEFORE_DEFINITION)
+      && !!scopeFinding(runtimeCase('local seven = OrderedGlobal == 7'), GLOBAL_BEFORE_DEFINITION) },
+    { name: 'runtime_possible_prior_assignments_preclude_later_only_claim', pass: [
+      'OtherValue, OrderedGlobal = ...', 'OrderedGlobal = UnknownValue', 'if Maybe then OrderedGlobal = 1 end'
+    ].every(write => {
+      const result = runtimeCase(`${write}; local captured = OrderedGlobal; OrderedGlobal = 2`);
+      return result.runtimeScope.stages[0].status === 'pass' && !scopeFinding(result, GLOBAL_BEFORE_DEFINITION)
+        && result.runtimeScope.gaps.some(gap => gap.rel === consumerPath && gap.reason.includes('possible global provider'));
+    }) && !!scopeFinding(runtimeCase('OrderedGlobal = nil; local captured = OrderedGlobal; OrderedGlobal = 2'), GLOBAL_BEFORE_DEFINITION) },
+    { name: 'runtime_separate_menu_blocks_do_not_invent_order', pass: (() => {
+      const result = runtimeCase('OrderedGlobal()', providerText, [],
+        `<addon name="ScopeProbe"><environment type="menus"><file name="${consumerPath}"/></environment><environment type="menus"><file name="${providerPath}"/></environment></addon>`);
+      return !scopeFinding(result, GLOBAL_BEFORE_DEFINITION) && result.runtimeScope.gaps.some(gap => gap.reason.includes('Repeated menu environments'));
+    })() },
+    { name: 'runtime_seed_remains_advisory_free_under_unknown_loader', pass: !scopeFinding(runtimeCase('require("dynamic.module"); GetTopRow()'), 'lua.undefined_global', 'GetTopRow') },
+    { name: 'unreachable_calls_preserve_existing_x4_ui_eligibility', pass: analyzeLuaFiles([
+      focusedFile('scripts/lexical-ui.lua', 'if false then Helper.createFrameHandle({}, {}) end', 'lexical-ui')
+    ]).x4UiResults.length === 1 },
+    { name: 'manifest_only_uses_real_provenance_without_fake_lua_parse', pass: [emptyManifest, missingManifestTarget, invalidManifestOnly].every(result =>
+      result.filesScanned === 0 && result.runtimeScope.stages[0].status === 'not-applicable' && result.runtimeScope.stages[0].files.length === 0)
+      && emptyManifest.runtimeScope.stages[1].status === 'pass' && emptyManifest.runtimeScope.stages[2].status === 'not-applicable'
+      && missingManifestTarget.runtimeScope.gaps.some(gap => gap.rel === 'ui.xml' && gap.reason.includes('ui/missing.lua'))
+      && [missingManifestTarget, invalidManifestOnly].every(result => result.runtimeScope.stages[2].status === 'unavailable'
+        && result.findings.some(finding => finding.code === SCOPE_UNVERIFIED && finding.rel === 'ui.xml' && finding.sourcePath === 'manifest-only:ui.xml')) },
+    { name: 'runtime_evidence_limit_is_explicit', pass: runtimeCase(`local x = Helper${'.a'.repeat(80)}`).runtimeScope.truncated
+      && runtimeCase(`local x = Helper${'.a'.repeat(80)}`).runtimeScope.gaps.some(gap => /limit|truncated/.test(gap.reason)) }
+  ];
+  checks.push(...scopeChecks);
   return { pass: checks.every(c => c.pass), checks };
 }

@@ -1,7 +1,9 @@
 import { strict as assert } from 'node:assert';
 import {
+  buildX4MenuLuaRuntimeInventory,
   buildX4UiSourceBundle,
   projectX4UiSourceBundle,
+  readX4MenuLuaPaths,
   spliceX4UiSourceBundle,
   type X4UiSourceBundleInput,
   type X4UiSourceSplice
@@ -27,6 +29,66 @@ function source(bundle: ReturnType<typeof buildX4UiSourceBundle>, path: string) 
 }
 
 function run(): void {
+  const runtimeFiles = [
+    { path: 'ui/first.lua', text: 'function Provider() end', sourcePath: 'first.cat' },
+    { path: 'ui/second.lua', text: 'Provider()' },
+    { path: 'ui/orphan.lua', text: 'function HiddenProvider() end' }
+  ];
+  const runtime = (uiXml?: string, luaFiles = runtimeFiles) => buildX4MenuLuaRuntimeInventory({ uiXml, luaFiles });
+  assert.equal(runtime().manifestStatus, 'absent');
+  assert.equal(runtime('').manifestStatus, 'invalid', 'blank supplied manifests are not missing manifests');
+  assert.equal(runtime('<addon name="lab"/>').manifestStatus, 'known');
+  assert.deepEqual(runtime('<addon name="lab"/>').registrations, []);
+  const runtimeManifest = '\uFEFF<addon name="lab">\r\n<environment type="menus"><file name="ui/second.lua"/><file name="ui/first.lua"/></environment></addon>';
+  const runtimeOrder = runtime(runtimeManifest);
+  assert.equal(runtimeOrder.manifestStatus, 'known');
+  assert.equal(runtimeOrder.addonName, 'lab');
+  assert.deepEqual(runtimeOrder.registrations.map(row => [row.index, row.sourceIndex, row.environmentIndex, row.rawPath, row.resolution]), [
+    [0, 1, 0, 'ui/second.lua', 'resolved'], [1, 0, 0, 'ui/first.lua', 'resolved']
+  ]);
+  assert.equal(runtimeOrder.registrations[1].sourcePath, 'first.cat', 'unique optional source provenance must remain exact');
+  assert.equal(Object.hasOwn(runtimeOrder.registrations[0], 'sourcePath'), false, 'missing legacy provenance must stay absent');
+  assert.deepEqual([...readX4MenuLuaPaths(runtimeManifest, true)!], ['ui/second.lua', 'ui/first.lua']);
+  assert.ok(runtimeOrder.diagnostics.some(row => row.code === 'unregistered-lua-file' && row.path === 'ui/orphan.lua'));
+  assert.deepEqual(runtime(runtimeManifest), runtimeOrder, 'runtime inventories must be deterministic');
+  const runtimeDuplicates = runtime('<addon name="lab"><environment type="menus"><file name="ui/first.lua"/><file name="ui/first.lua"/></environment><environment type="menus"><file name="ui/second.lua"/></environment></addon>');
+  assert.equal(runtimeDuplicates.manifestStatus, 'known', 'repeated menus environments are schema-valid');
+  assert.deepEqual(runtimeDuplicates.registrations.map(row => [row.environmentIndex, row.resolution]), [
+    [0, 'duplicate-registration'], [0, 'duplicate-registration'], [1, 'resolved']
+  ]);
+  const ambiguousRuntime = runtime('<addon name="lab"><environment type="menus"><file name="ui/first.lua"/></environment></addon>', [runtimeFiles[0], { ...runtimeFiles[0], sourcePath: 'second.cat' }]);
+  assert.equal(ambiguousRuntime.registrations[0].resolution, 'ambiguous-source-file');
+  assert.deepEqual(ambiguousRuntime.registrations[0].sourceIndexes, [0, 1]);
+  assert.equal(ambiguousRuntime.registrations[0].sourceIndex, undefined);
+  assert.equal(Object.hasOwn(ambiguousRuntime.registrations[0], 'sourcePath'), false, 'ambiguous source provenance cannot be selected');
+  const runtimePaths = runtime('<addon name="lab"><environment type="menus"><file name="ui/First.lua"/><file name="ui/missing.lua"/><file name="../escape.lua"/><file name="/absolute.lua"/><file name="bare.lua"/><file name="ui/second.LUA"/></environment></addon>');
+  assert.equal(runtimePaths.manifestStatus, 'invalid');
+  assert.deepEqual(runtimePaths.registrations.map(row => row.pathSafety), ['safe', 'safe', 'unsafe-traversal', 'unsafe-absolute', 'invalid', 'invalid']);
+  const mixedRuntime = runtime('<addon name="lab"><environment type="menus"><file name="ui/first.lua"/><file name="../escape.lua"/></environment></addon>');
+  assert.equal(mixedRuntime.manifestStatus, 'invalid');
+  assert.equal(mixedRuntime.registrations[0].resolution, 'resolved', 'safe registration facts survive an unrelated invalid registration');
+  assert.equal(mixedRuntime.registrations[0].sourcePath, 'first.cat');
+  const runtimeMissing = runtime('<addon name="lab"><environment type="menus"><file name="ui/First.lua"/><file name="ui/missing.lua"/></environment></addon>');
+  assert.deepEqual(runtimeMissing.registrations.map(row => row.resolution), ['missing-file', 'missing-file'], 'source lookup must retain exact case');
+  for (const manifest of [
+    '<addon name="lab"><environment type="menus"><file name="ui/first.lua"></environment></addon>',
+    '<ui><environment type="menus"><file name="ui/first.lua"/></environment></ui>',
+    '<addon><environment type="menus"/></addon>',
+    '<addon xmlns="urn:foreign" name="lab"><environment type="menus"/></addon>',
+    '<addon name="lab"><environment type="hud"><file name="ui/first.lua"/></environment></addon>',
+    '<addon name="lab"><environment type="menus"><wrapper><file name="ui/first.lua"/></wrapper></environment></addon>'
+  ]) {
+    assert.equal(runtime(manifest).manifestStatus, 'invalid');
+    assert.equal(readX4MenuLuaPaths(manifest, true), null);
+  }
+  const dependencies = runtime('<addon name="lab"><environment type="menus"><dependency name="another_addon"/><savedvariable name="lab" storage="userdata"/><file name="ui/first.lua"/></environment></addon>');
+  assert.equal(dependencies.manifestStatus, 'known');
+  assert.equal(dependencies.registrations[0].resolution, 'resolved');
+  assert.ok(dependencies.diagnostics.some(row => row.code === 'runtime-dependency-unverified' && row.message.includes('another_addon')));
+  const inventoryOnly = runtime('<addon name="lab"><environment type="menus"><file name="ui/broken.lua"/></environment></addon>', [{ path: 'ui/broken.lua', text: 'function syntax(' }]);
+  assert.equal(inventoryOnly.registrations[0].resolution, 'resolved', 'registration inventory must not parse Lua or construct UI call models');
+  assert.equal(inventoryOnly.diagnostics.some(row => row.code === 'lua-parse-failure'), false);
+
   const ordered = buildX4UiSourceBundle(orderedInput);
   assert.equal(ordered.xml.status, 'parsed');
   assert.deepEqual(

@@ -24,7 +24,7 @@ import { aiInfluenceChatBlocks, buildLuaLogicScript } from './luaLogicBlocks';
 import { generateContractMdScript, generateHttpGlueLua, type IntegrationContract } from './contractGlue';
 import { analyzeLuaFiles } from './luaStaticAnalysis';
 import { validateProjectCrossFile } from './projectCrossFileValidation';
-import { registeredX4MenuLuaPaths } from './x4UiSourceBundle';
+import { buildX4MenuLuaRuntimeInventory } from './x4UiSourceBundle';
 
 export interface ProjectCreateRequest {
   id: string;
@@ -136,15 +136,24 @@ export function packageAgentProject(project: ExtensionProject) {
   }
   const structure = validateProjectStructure(normalized);
   const cueIndex = indexCueReferences(normalized);
-  const menuLuaPaths = registeredX4MenuLuaPaths(Object.entries(files).find(([rel]) => rel.toLowerCase() === 'ui.xml')?.[1]);
   const luaFiles = normalized.files
-    .filter(f => f.path.toLowerCase().endsWith('.lua'))
+    .filter((f): f is ProjectFile & { content: string } => /\.lua$/i.test(f.path) && typeof f.content === 'string')
     .map(f => {
       const rel = f.path.replace(/\\/g, '/').replace(/^\/+/, '');
-      return { rel, text: f.content || '', source: 'loose' as const, sourcePath: rel,
-        extension: { folder: normalized.id, id: normalized.id, name: normalized.name, menuLuaPaths } };
+      return { rel, text: f.content, source: 'loose' as const, sourcePath: rel };
     });
-  const lua = analyzeLuaFiles(luaFiles);
+  const uiManifests = normalized.files.filter(file => file.path.replace(/\\/g, '/').toLowerCase() === 'ui.xml');
+  const uiManifest = uiManifests[0];
+  const runtimeInventory = buildX4MenuLuaRuntimeInventory({
+    uiXml: uiManifests.length > 1 ? '' : uiManifest?.content,
+    luaFiles,
+  });
+  const menuLuaPaths = new Set(runtimeInventory.registrations.flatMap(row => row.lookupKey ? [row.lookupKey] : []));
+  const extension = { folder: normalized.id, id: normalized.id, name: normalized.name, menuLuaPaths, runtimeInventory };
+  const manifestOnly = !luaFiles.length && uiManifest ? [{
+    rel: uiManifest.path, source: 'loose' as const, sourcePath: uiManifest.path, extension,
+  }] : [];
+  const lua = analyzeLuaFiles(luaFiles.map(file => ({ ...file, extension })), manifestOnly);
   const crossFile = validateProjectCrossFile(normalized);
   const errors = structure.filter(i => i.severity === 'error').length + cueIndex.unresolved.length + lua.findings.filter(f => f.severity === 'error').length + crossFile.summary.errors;
   const luaWarnings = lua.findings.filter(f => f.severity === 'warning').length;

@@ -12,7 +12,7 @@ import fs from "fs";
 import { isUtf8 } from "node:buffer";
 import os from "os";
 import zlib from "zlib";
-import { buildX4UiSourceBundle, addX4UiSourceBundleRegistration, registeredX4MenuLuaPaths } from './src/lib/x4UiSourceBundle';
+import { buildX4UiSourceBundle, addX4UiSourceBundleRegistration, buildX4MenuLuaRuntimeInventory } from './src/lib/x4UiSourceBundle';
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createEmptySchemaLibrary, getDefaultGamePath, loadSchemaLibrary, readXsdConfig, resolveXsdConfig, runSchemaDiscoverySelftest, writeXsdConfig, type ResolvedXsdConfig, type XsdConfig } from "./src/lib/xsdParser";
@@ -73,7 +73,7 @@ import { generateHttpGlueLua, generateContractMdScript, validateContract, runCon
 import { runFileBridgeTransportSelftest } from "./src/lib/fileBridgeTransport";
 import { LUA_SNIPPETS, runLuaSnippetSelftest } from "./src/lib/luaSnippets";
 import { runLuaLogicBlocksSelftest } from "./src/lib/luaLogicBlocks";
-import { analyzeLuaFiles, runLuaStaticAnalysisSelftest, type LuaFileInput } from "./src/lib/luaStaticAnalysis";
+import { analyzeLuaFiles, runLuaStaticAnalysisSelftest, type LuaFileInput, type LuaManifestScopeInput } from "./src/lib/luaStaticAnalysis";
 import { runLuaRuntimeLogSelftest } from "./src/lib/luaRuntimeLog";
 import { runCueLineageSelftest } from "./src/lib/cueLineage";
 import { runSemanticsSelftest, listSemantics, semanticsForNode, getElementSemantics } from "./src/lib/mdSemantics";
@@ -1749,6 +1749,7 @@ function buildWorkspaceFileManifest(workspaceInput: unknown): {
   files: CompiledFileManifest;
   generatedFiles: CompiledFileManifest;
   passthroughFiles: CompiledFileManifest;
+  generatedCustomLuaPath?: string;
 } {
   const ws = activeBuildWorkspace(workspaceInput);
   const modId = effectiveModId(ws);
@@ -1789,6 +1790,7 @@ function buildWorkspaceFileManifest(workspaceInput: unknown): {
   const hasActiveUiWidgets = Boolean(ws.uiWidgets?.length);
   const customLua = typeof ws.customLua === "string" ? ws.customLua : "";
   const hasCustomLua = customLua.trim().length > 0;
+  let generatedCustomLuaPath: string | undefined;
 
   if (settings.ui && (hasActiveUiWidgets || hasCustomLua)) {
     // X4-correct UI packaging: an extension-root ui.xml index registering a Lua
@@ -1800,7 +1802,8 @@ function buildWorkspaceFileManifest(workspaceInput: unknown): {
       files[`ui/${modId}.lua`] = generateUILuaScript(ws, modId);
     }
     if (hasCustomLua) {
-      files[`ui/${modId}_custom.lua`] = customLua;
+      generatedCustomLuaPath = `ui/${modId}_custom.lua`;
+      files[generatedCustomLuaPath] = customLua;
     }
   }
 
@@ -1884,7 +1887,7 @@ function buildWorkspaceFileManifest(workspaceInput: unknown): {
     delete generatedFiles[rel];
   }
 
-  return { modId, files, generatedFiles, passthroughFiles };
+  return { modId, files, generatedFiles, passthroughFiles, generatedCustomLuaPath };
 }
 
 function summarizeWorkspaceDomains(ws: ModWorkspace) {
@@ -8869,13 +8872,23 @@ function runExtensionDoctor(extRoot: string, opts?: { resolveBaseContent?: (rel:
     // and undefined-global hygiene with deterministic globals only. X4 layer:
     // engine/runtime hazards such as 9.0 restricted UI online-user-item calls.
     const luaFiles: LuaFileInput[] = [];
+    const manifestOnly: LuaManifestScopeInput[] = [];
     for (const e of enabledExts) {
       if (/^ego_/i.test(e.id)) continue;
       const files = extensionFiles.get(e.folder) || [];
-      const menuLuaPaths = registeredX4MenuLuaPaths(files.find(file => file.rel.toLowerCase() === 'ui.xml')?.text);
-      const extension = { folder: e.folder, id: e.id, name: e.name, menuLuaPaths };
-      for (const file of files) {
-        if (!file.rel.toLowerCase().endsWith(".lua")) continue;
+      const extensionLuaFiles = files.filter(file => file.rel.toLowerCase().endsWith('.lua'));
+      const uiManifests = files.filter(file => file.rel.replace(/\\/g, '/').toLowerCase() === 'ui.xml');
+      const uiManifest = uiManifests[0];
+      const runtimeInventory = buildX4MenuLuaRuntimeInventory({
+        uiXml: uiManifests.length > 1 ? '' : uiManifest?.text,
+        luaFiles: extensionLuaFiles,
+      });
+      const menuLuaPaths = new Set(runtimeInventory.registrations.flatMap(row => row.lookupKey ? [row.lookupKey] : []));
+      const extension = { folder: e.folder, id: e.id, name: e.name, menuLuaPaths, runtimeInventory };
+      if (!extensionLuaFiles.length && uiManifest) {
+        manifestOnly.push({ rel: uiManifest.rel, source: uiManifest.source, sourcePath: uiManifest.sourcePath, extension });
+      }
+      for (const file of extensionLuaFiles) {
         luaFiles.push({
           rel: file.rel,
           text: file.text,
@@ -8885,18 +8898,19 @@ function runExtensionDoctor(extRoot: string, opts?: { resolveBaseContent?: (rel:
         });
       }
     }
-    const luaAnalysis = analyzeLuaFiles(luaFiles);
+    const luaAnalysis = analyzeLuaFiles(luaFiles, manifestOnly);
+    const luaOwners = [...luaFiles, ...manifestOnly];
     let undefinedGlobalInfos = 0;
     for (const lf of luaAnalysis.findings) {
       if (lf.code === "lua.undefined_global" && undefinedGlobalInfos++ >= 25) continue;
-      const e = luaFiles.find(f => f.rel === lf.rel && f.sourcePath === lf.sourcePath)?.extension;
+      const e = luaOwners.find(f => f.rel === lf.rel && f.sourcePath === lf.sourcePath)?.extension;
       const folder = e?.folder || "unknown";
       findings.push({
         severity: lf.severity,
         category: lf.layer === "x4" ? "runtime" : "lua_hygiene",
         code: lf.code,
         validationDiagnostic: { severity: lf.severity, code: lf.code, filePath: lf.rel,
-          line: lf.line, message: lf.message, ...(lf.symbol ? { sourceRef: lf.symbol } : {}) },
+          line: lf.line, column: lf.column, message: lf.message, ...(lf.symbol ? { sourceRef: lf.symbol } : {}) },
         domain: lf.layer === "x4" ? "lua_ui" : "lua",
         filePath: `extensions/${folder}/${lf.rel}`,
         message: `${e?.name || folder}: ${lf.message}${lf.source === "packed" ? ` (${path.basename(lf.sourcePath)})` : ""}`,
@@ -9052,6 +9066,7 @@ function runExtensionDoctor(extRoot: string, opts?: { resolveBaseContent?: (rel:
       enabledCount: exts.filter(e => e.enabled).length,
       counts,
       findings,
+      lua: { filesScanned: luaAnalysis.filesScanned, runtimeScope: luaAnalysis.runtimeScope },
       loadOrder
     };
 }
@@ -14856,7 +14871,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     // EMITTED files, not the graph. A byte-fidelity import keeps MD as passthrough text (empty
     // graph), so runModDoctor's "no cue nodes" (package.readiness) false-fires even though the
     // deployed file has cues. Exclude that one code when the emitted MD actually contains cues.
-    const { modId } = buildWorkspaceFileManifest(ws);
+    const { modId, generatedCustomLuaPath, generatedFiles } = buildWorkspaceFileManifest(ws);
     responseIdentity = { ...responseIdentity, modId };
     // Expected artifact hashes establish what will ship, not which agent workspace
     // is allowed to claim that deployment. Keep explicit Studio artifact workflows,
@@ -14925,25 +14940,38 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     // stage below runs the same XSD layer (and more) via runProjectValidation, so the
     // schema pass ran twice per deploy. Doctor + patch stay here; preflight owns schema.
     const deployReferences = (() => { try { return getReferenceSets(); } catch { return undefined; } })();
+    // Loaded passthrough can also be in-memory. Bind the custom-Lua compile gate to
+    // actual compiler emission and exact planned bytes; other Lua belongs to preflight.
+    const generatedCustomLua = sourcePlan.entries.find(entry => entry.path === generatedCustomLuaPath
+      && entry.reason === 'claimed by compiler output' && entry.content === generatedFiles[entry.path]);
+    const omittedGeneratedCustomLua = generatedCustomLua && typeof generatedCustomLua.content === 'string'
+      && snapshot.skipped.some(file => file.path === generatedCustomLua.path)
+      ? { path: generatedCustomLua.path, text: generatedCustomLua.content } : undefined;
     const diagnostics = [...runModDoctor(ws, files, modId, {
       canonicalAiScripts: deployReferences?.aiScripts,
       artifactReadiness: {
         includedPaths: frozenPlan.entries.map(entry => entry.path), availableText: files,
         reportedUnavailablePaths: snapshot.skipped.map(skipped => skipped.path),
+        omittedGeneratedCustomLua,
       },
     }), ...runPatchDiagnostics(ws)];
-    const compileErrors = diagnostics.filter((d: any) => d.severity === 'error');
+    const compileErrors = diagnostics.filter(diagnostic => {
+      if (diagnostic.severity !== 'error') return false;
+      const luaReadinessError = diagnostic.domain === 'ui_layout' && /^(?:lua\.|x4-ui\.)/.test(diagnostic.code || '');
+      return !luaReadinessError || (generatedCustomLua !== undefined && diagnostic.filePath === generatedCustomLua.path);
+    });
     if (compileErrors.length > 0) {
       check('compile', 'Compile diagnostics', 'fail', compileErrors.slice(0, 3).map((d: any) => d.message).join(' | '));
       return res.json(failWith('compile', { modId, compileErrors: compileErrors.slice(0, 10) }));
     }
-    check('compile', 'Compile diagnostics', 'pass', `0 errors across doctor/patch (${diagnostics.length} findings; schema runs in preflight)`);
+    check('compile', 'Compile diagnostics', 'pass', `0 compile gate errors across doctor/patch (${diagnostics.length} findings; artifact Lua and schema run in preflight)`);
 
     // 2b. PREFLIGHT — the FULL validation stack over the emitted manifest (same engine as
     // project/validate: structure, cue refs, MD↔Lua wiring, XSD md+aiscript, order-param
     // lint, scriptproperty chains, pitfall lints). Errors block; warnings surface.
     const deployValidation = buildDeployProjectValidation(modId, snapshot);
     const { preflight, diskValidationSkipped } = deployValidation;
+    const luaValidation = { filesScanned: preflight.lua.filesScanned, runtimeScope: preflight.lua.runtimeScope };
     const projectChecks = preflight.projectChecks;
     const extensionsPath = path.join(x4GamePath, 'extensions');
     const targetRoot = path.join(extensionsPath, effectiveModId(activeBuildWorkspace(ws)));
@@ -14961,7 +14989,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
           ? { status: projectChecks.status, execution: projectChecks.execution }
           : { status: projectChecks.status, execution: projectChecks.execution, manifestHash: projectChecks.manifestHash,
             checkIds: projectChecks.checks.map(projectCheck => projectCheck.id) },
-        validation: { outcome: invalid ? 'blocked-mod-findings' : 'incomplete-checks', clean: false, evidence: preflight.evidence },
+        validation: { outcome: invalid ? 'blocked-mod-findings' : 'incomplete-checks', clean: false, evidence: preflight.evidence, lua: luaValidation },
       }));
     }
     if (suiteId !== undefined) {
@@ -14992,11 +15020,15 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
         check('project-checks', 'Required project checks', 'pass', 'The exact approved suite receipt and every required command were verified.');
       } catch { return proofRefusal(); }
     }
-    const readinessUnavailable = diagnostics.filter(diagnostic => diagnostic.code === 'package.md_analysis_unavailable');
+    const preflightFindings = flattenProjectValidation(preflight);
+    const readinessUnavailable = diagnostics.filter(diagnostic => diagnostic.code === 'package.md_analysis_unavailable'
+      || (diagnostic.code === 'lua.runtime_scope_unverified' && !preflightFindings.some(finding =>
+        finding.code === diagnostic.code && finding.filePath === diagnostic.filePath
+        && finding.line === diagnostic.line && finding.message === diagnostic.message)));
     const preflightDiagnostics: FlatProjectDiagnostic[] = [
-      ...flattenProjectValidation(preflight),
+      ...preflightFindings,
       ...readinessUnavailable.map<FlatProjectDiagnostic>(diagnostic => ({
-        severity: 'warning', code: diagnostic.code, filePath: diagnostic.filePath, message: diagnostic.message,
+        severity: diagnostic.severity, code: diagnostic.code, filePath: diagnostic.filePath, line: diagnostic.line, message: diagnostic.message,
       })),
       ...diskValidationSkipped.map<FlatProjectDiagnostic>(skipped => ({
         severity: 'warning',
@@ -15062,7 +15094,8 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       deployValidation.validationFiles,
       preflightDiagnostics,
     );
-    const pfWarnings = preflight.summary.activeWarnings + diskValidationSkipped.length + readinessUnavailable.length + Number(Boolean(previousBuild));
+    const pfWarnings = preflight.summary.activeWarnings + diskValidationSkipped.length
+      + readinessUnavailable.filter(diagnostic => diagnostic.severity === 'warning').length + Number(Boolean(previousBuild));
     const staticEvidence = buildValidationEvidence({ id: modId, name: modId, files: deployValidation.validationFiles },
       preflightDiagnostics.map(d => ({ severity: d.severity, code: d.code, target: d.target,
         filePath: d.filePath, line: d.line, column: d.column, sourceRef: typeof d.sourceRef === 'string' ? d.sourceRef : undefined,
@@ -15088,11 +15121,11 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
         history: receiptHistory, invocationId: crypto.randomUUID() };
     }
     responseIdentity = { ...responseIdentity, modId: manifestId, contentId: manifestId, modVersion: evidence.modVersion, modDate: build?.modDate ?? null,
-      sourceHash: evidence.sourceHash, artifactHash, validation: { evidence } };
+      sourceHash: evidence.sourceHash, artifactHash, validation: { evidence, lua: luaValidation } };
     const decision = evaluateFindingAcceptances(subject, acceptances, principal);
     responseIdentity = { ...responseIdentity, modId: manifestId, modVersion: evidence.modVersion, sourceHash: evidence.sourceHash,
         artifactHash, bindingHash: decision.binding.hash, targetFingerprint, validation: { outcome: decision.outcome,
-        clean: decision.validationClean, evidence, review: projectFindingReview(decision, principal) }, binding: decision.binding };
+        clean: decision.validationClean, evidence, lua: luaValidation, review: projectFindingReview(decision, principal) }, binding: decision.binding };
     if (body.dryRun !== true) {
       const expectedIdentity = {
         expectedModId: evidence.modId,
@@ -15224,7 +15257,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     }
     if (resolved.isolatedScratch) validateDevScratchStorage();
     const { receipts: approvalRecords, decision: recordedDecision } = recordFindingAcceptances(actionReceiptStore, subject, acceptances, principal);
-    responseIdentity.validation = { outcome: decision.outcome, clean: decision.validationClean, evidence,
+    responseIdentity.validation = { outcome: decision.outcome, clean: decision.validationClean, evidence, lua: luaValidation,
       review: projectFindingReview(recordedDecision, principal, approvalRecords) };
     const assertWriteAuthority = () => {
       if (resolved.isolatedScratch) validateDevScratchStorage();

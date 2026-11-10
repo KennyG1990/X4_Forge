@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { loadProjectFromDisk, runProjectValidation } from '../src/server/projectValidation';
-import { buildValidationEvidence, parseValidationProject, readContentManifestIdentity, ValidationInputError } from '../src/lib/validationEvidence';
+import { flattenProjectValidation, loadProjectFromDisk, runProjectValidation } from '../src/server/projectValidation';
+import { applyProjectCheckCoverage, buildValidationEvidence, parseValidationProject, readContentManifestIdentity, ValidationInputError } from '../src/lib/validationEvidence';
+import { packageAgentProject } from '../src/lib/projectOrchestration';
+import type { ExtensionProject } from '../src/lib/extensionProject';
 
 const project = { id: 'folder_alias', name: 'Fixture', files: [
   { path: 'content.xml', kind: 'content' as const, content: '<content id="trust_fixture" name="Fixture" version="100"/>' },
@@ -60,6 +62,144 @@ check('finding identity expires with source change', () => {
 });
 check('schema gap cannot be called clean', () => assert.equal(buildValidationEvidence(project, [], [{ check: 'schema.md', reason: 'md.xsd missing' }]).outcome, 'incomplete'));
 check('bounded UI gaps remain incomplete', () => assert.equal(buildValidationEvidence(project, [{ severity: 'info', code: 'x4-ui.verification-gap', message: 'Not statically verified' }]).coverage.complete, false));
+check('Lua runtime scope gaps are unavailable checks rather than mod errors', () => {
+  const e = buildValidationEvidence(project, [{ severity: 'error', code: 'lua.runtime_scope_unverified', filePath: 'ui/main.lua', message: 'Order was unavailable' }]);
+  assert.equal(e.modErrorCount, 0); assert.equal(e.outcome, 'incomplete');
+  assert.equal(e.findings[0].category, 'check-unavailable');
+  assert.ok(e.coverage.gaps.some(gap => gap.check === 'lua.runtime_scope_unverified'));
+});
+check('project check credit preserves unrelated Lua scope gaps and real syntax errors', () => {
+  const evidence = buildValidationEvidence(project, [badLua,
+    { severity: 'info', code: 'lua.runtime_scope_unverified', filePath: 'ui/main.lua', message: 'Scope unknown' },
+    { severity: 'info', code: 'x4-ui.verification-gap', filePath: 'ui/main.lua', message: 'UI not statically verified' },
+  ]);
+  const credited = applyProjectCheckCoverage(evidence, {
+    suite: { id: 'scope_credit_control', hash: 'a'.repeat(64) }, artifactHash: 'b'.repeat(64),
+    checks: [{ id: 'behavior_control', receiptId: 'receipt', receiptHash: 'c'.repeat(64), durationMs: 1,
+      outputBytes: 0, outputTailSha256: 'd'.repeat(64),
+      coveredFiles: [{ path: 'ui/main.lua', size: 18, sha256: 'e'.repeat(64) }] }],
+  });
+  assert.equal(credited.outcome, 'mod-findings'); assert.equal(credited.modErrorCount, 1);
+  assert.equal(credited.coverage.complete, false);
+  assert.ok(credited.coverage.gaps.some(gap => gap.check === 'lua.runtime_scope_unverified'));
+  assert.ok(credited.findings.some(finding => finding.code === 'lua.syntax_error' && finding.category === 'mod-finding'));
+  assert.deepEqual(credited.coverage.projectVerification?.resolvedGaps.map(gap => gap.check), ['x4-ui.verification-gap']);
+});
+
+const menuManifest = (paths: readonly string[]) => '<addon name="ConsumerProbe"><environment type="menus">'
+  + paths.map(path => `<file name="${path}"/>`).join('') + '</environment></addon>';
+const runtimeProject = (paths: readonly string[] | undefined, consumer = '  ConsumerProvider()'): ExtensionProject => ({
+  id: 'consumer_probe', name: 'Consumer Probe', files: [
+    { path: 'content.xml', kind: 'content', content: '<content id="consumer_probe" name="Consumer Probe" version="100"/>' },
+    ...(paths ? [{ path: 'ui.xml', kind: 'ui' as const, content: menuManifest(paths) }] : []),
+    { path: 'ui/consumer.lua', kind: 'lua', content: consumer },
+    { path: 'ui/provider.lua', kind: 'lua', content: 'ConsumerProvider = function() return true end' },
+  ],
+});
+const registeredVariants = [
+  ['earlier provider', runtimeProject(['ui/provider.lua', 'ui/consumer.lua']), undefined],
+  ['later eager provider', runtimeProject(['ui/consumer.lua', 'ui/provider.lua']), 'lua.global_before_definition'],
+  ['unlisted provider', runtimeProject(['ui/consumer.lua']), 'lua.undefined_global'],
+  ['later provider read by a deferred function', runtimeProject(['ui/consumer.lua', 'ui/provider.lua'], 'local function deferredConsumer() ConsumerProvider() end'), undefined],
+] as const;
+for (const [name, input, expectedCode] of registeredVariants) check(`shared validation and packaging agree on ${name}`, () => {
+  const validation = runProjectValidation(input);
+  const packaged = packageAgentProject(input);
+  assert.deepEqual(packaged.validation.lua, validation.lua);
+  const providerFindings = validation.lua.findings.filter(finding => finding.symbol === 'ConsumerProvider'
+    && ['lua.undefined_global', 'lua.global_before_definition'].includes(finding.code));
+  assert.deepEqual(providerFindings.map(finding => finding.code), expectedCode ? [expectedCode] : []);
+  assert.deepEqual(validation.lua.runtimeScope.stages.map(stage => stage.check), ['lua.syntax', 'lua.registrations', 'lua.globals-order']);
+  assert.equal(validation.lua.runtimeScope.stages.find(stage => stage.check === 'lua.syntax')?.status, 'pass');
+  if (expectedCode) {
+    const flat = flattenProjectValidation(validation).find(finding => finding.code === expectedCode && finding.sourceRef === 'ConsumerProvider');
+    assert.equal(flat?.filePath, 'ui/consumer.lua'); assert.equal(flat?.line, 1); assert.equal(flat?.column, 2);
+  }
+});
+check('registered engine global stays known while a genuine typo remains positioned', () => {
+  const input = runtimeProject(['ui/consumer.lua'], 'GetTopRow()\n  ConsumerTypo()');
+  const validation = runProjectValidation(input);
+  const globals = validation.lua.findings.filter(finding => finding.code === 'lua.undefined_global');
+  assert.deepEqual(globals.map(finding => finding.symbol), ['ConsumerTypo']);
+  const flat = flattenProjectValidation(validation).find(finding => finding.sourceRef === 'ConsumerTypo');
+  assert.equal(flat?.line, 2); assert.equal(flat?.column, 2);
+});
+check('missing manifest cannot grant sibling provider credit or complete scope coverage', () => {
+  const validation = runProjectValidation(runtimeProject(undefined));
+  assert.ok(validation.lua.findings.some(finding => finding.code === 'lua.undefined_global' && finding.symbol === 'ConsumerProvider'));
+  assert.ok(validation.evidence?.findings.some(finding => finding.code === 'lua.runtime_scope_unverified' && finding.category === 'check-unavailable'));
+  assert.equal(validation.evidence?.coverage.complete, false);
+  assert.notEqual(validation.lua.runtimeScope.stages.find(stage => stage.check === 'lua.registrations')?.status, 'pass');
+});
+check('validation and orchestration do not count absent Lua text as an inspected empty file', () => {
+  const input = runtimeProject(['ui/provider.lua', 'ui/consumer.lua']);
+  input.files.find(file => file.path === 'ui/provider.lua')!.content = undefined;
+  const validation = runProjectValidation(input);
+  assert.deepEqual(packageAgentProject(input).validation.lua, validation.lua);
+  assert.equal(validation.lua.filesScanned, 1);
+  assert.ok(validation.evidence?.coverage.gaps.some(gap => gap.check === 'source.content' && gap.filePath === 'ui/provider.lua'));
+  assert.ok(validation.evidence?.coverage.gaps.some(gap => gap.check === 'lua.runtime_scope_unverified'));
+});
+check('manifest-only validation retains missing registration evidence without scanning a Lua file', () => {
+  const input = runtimeProject(['ui/missing.lua']);
+  input.files = input.files.filter(file => file.kind !== 'lua');
+  const validation = runProjectValidation(input);
+  assert.deepEqual(packageAgentProject(input).validation.lua, validation.lua);
+  assert.equal(validation.lua.filesScanned, 0);
+  assert.deepEqual(validation.lua.runtimeScope.stages[0].files, []);
+  assert.equal(validation.lua.runtimeScope.stages[0].status, 'not-applicable');
+  assert.equal(validation.lua.runtimeScope.stages[2].status, 'unavailable');
+  assert.ok(validation.lua.runtimeScope.gaps.some(gap => gap.check === 'lua.registrations'
+    && gap.rel === 'ui.xml' && gap.sourcePath === 'ui.xml' && gap.reason.includes('ui/missing.lua')));
+  assert.ok(validation.evidence?.findings.some(finding => finding.code === 'lua.runtime_scope_unverified'
+    && finding.category === 'check-unavailable' && finding.filePath === 'ui.xml'));
+});
+check('empty manifest and data-only projects distinguish checked registrations from no Lua scope', () => {
+  for (const paths of [[], undefined]) {
+    const input = runtimeProject(paths);
+    input.files = input.files.filter(file => file.kind !== 'lua');
+    const validation = runProjectValidation(input);
+    assert.deepEqual(packageAgentProject(input).validation.lua, validation.lua);
+    assert.equal(validation.lua.filesScanned, 0);
+    assert.deepEqual(validation.lua.runtimeScope.stages.map(stage => stage.status),
+      ['not-applicable', paths ? 'pass' : 'not-applicable', 'not-applicable']);
+    assert.ok(!validation.evidence?.findings.some(finding => finding.code === 'lua.runtime_scope_unverified'));
+  }
+});
+check('text reference lint retains its relaxed menus-only registration gate', () => {
+  const input = runtimeProject(undefined);
+  input.files = [input.files[0],
+    { path: 'ui.xml', kind: 'ui', content: '<addon name="TextProbe"><environment type="menus"><file name="tools/menu.LUA"/></environment><environment type="hud"><file name="tools/hud.lua"/></environment></addon>' },
+    { path: 'tools/menu.LUA', kind: 'lua', content: 'return ReadText(20201, 99)' },
+    { path: 'tools/hud.lua', kind: 'lua', content: 'return ReadText(20201, 99)' },
+    { path: 't/0001-L044.xml', kind: 't', content: '<language id="44"><page id="20201"><t id="1">Present</t></page></language>' },
+  ];
+  const validation = runProjectValidation(input);
+  assert.deepEqual(validation.tFileRefs.findings.map(finding => finding.filePath), ['tools/menu.LUA']);
+  assert.equal(validation.lua.runtimeScope.stages.find(stage => stage.check === 'lua.registrations')?.status, 'unavailable');
+});
+check('warning suppression cannot erase unavailable Lua scope coverage', () => {
+  const input = runtimeProject(undefined);
+  input.files.push({ path: 'forge.rules.json', kind: 'other', content: JSON.stringify({ version: 1, suppressions: [{
+    id: 'scope-boundary', code: 'lua.runtime_scope_unverified', file: 'ui/consumer.lua', owner: 'selftest', reason: 'Exercise unavailable scope preservation',
+    reviewBy: new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10),
+  }] }) });
+  const validation = runProjectValidation(input);
+  assert.equal(validation.rules.valid, true);
+  assert.ok(validation.evidence?.coverage.gaps.some(gap => gap.check === 'lua.runtime_scope_unverified'));
+  assert.equal(validation.evidence?.coverage.complete, false);
+});
+check('passing source stages do not retire unresolved rendered UI evidence', () => {
+  const input = runtimeProject(['ui/consumer.lua'], [
+    'local columns = tonumber("2")', 'local frame = Helper.createFrameHandle({}, {})', 'frame:addTable(columns)',
+  ].join('\n'));
+  input.files = input.files.filter(file => file.path !== 'ui/provider.lua');
+  const validation = runProjectValidation(input);
+  assert.equal(validation.lua.runtimeScope.stages.find(stage => stage.check === 'lua.syntax')?.status, 'pass');
+  assert.equal(validation.lua.runtimeScope.stages.find(stage => stage.check === 'lua.registrations')?.status, 'pass');
+  assert.ok(validation.evidence?.coverage.gaps.some(gap => gap.check === 'x4-ui.verification-gap'));
+  assert.equal(validation.evidence?.coverage.complete, false);
+});
 check('valid input classifies files when kind omitted', () => assert.equal(parseValidationProject({ ...project, files: [{ path: 'ui/main.lua', content: '' }] }).files[0].kind, 'lua'));
 for (const [name, value] of [
   ['null project', null], ['array project', []], ['missing id', { name: '', files: [] }],
@@ -106,6 +246,18 @@ try {
     assert.deepEqual(loaded.sort(), ['tools/nested/entry.lua', 'ui.xml']);
     assert.deepEqual(runProjectValidation(project).lua.findings.filter(f => f.code === 'lua.undefined_global').map(f => f.symbol), ['RegisteredMissing']);
     fs.rmSync(path.join(scratch, 'outside.lua'));
+  });
+  check('disk and inline validation retain the same registered source order', () => {
+    const root = path.join(scratch, 'registered-order');
+    const inline = runtimeProject(['ui/consumer.lua', 'ui/provider.lua']);
+    for (const file of inline.files) {
+      const target = path.join(root, file.path);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, file.content!);
+    }
+    const loaded = loadProjectFromDisk(root, inline.id);
+    assert.equal(loaded.skipped.length, 0);
+    assert.deepEqual(runProjectValidation(loaded.project).lua, runProjectValidation(inline).lua);
   });
   check('file limit does not silently drop remaining source', () => {
     for (let index = 0; index < 501; index++) fs.writeFileSync(path.join(scratch, `${index}.lua`), 'local n = 1');

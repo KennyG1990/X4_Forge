@@ -13,7 +13,8 @@ import {
   WareDef
 } from '../types';
 import { validateContract } from './contractGlue';
-import { analyzeLuaFiles } from './luaStaticAnalysis';
+import { analyzeLuaFiles, type LuaStaticFinding } from './luaStaticAnalysis';
+import { buildX4MenuLuaRuntimeInventory } from './x4UiSourceBundle';
 import { DOMParser as XmlDOMParser } from '@xmldom/xmldom';
 import { assertXmlInputWithinLimits } from './xmlInputLimits';
 
@@ -346,6 +347,8 @@ export interface PackageReadinessArtifactContext {
   availableText: Readonly<Record<string, string>>;
   /** Missing text whose unavailable finding is already supplied by the snapshot owner. */
   reportedUnavailablePaths?: readonly string[];
+  /** Exact compiler-emitted custom Lua omitted from the bounded snapshot. Compile gate only. */
+  omittedGeneratedCustomLua?: { readonly path: string; readonly text: string };
 }
 
 type AuthoredOutputState = 'effective' | 'empty' | 'unknown';
@@ -523,39 +526,83 @@ export const validatePackageReadiness = (workspace: ModWorkspace, artifactId?: s
     });
   }
 
-  // P5: custom Lua is written verbatim to ui/<id>_custom.lua when UI output is enabled, so
-  // analyze the exact bytes that the package will contain and carry every analyzer finding
-  // through without changing its severity, location, code, or message.
+  // A supplied artifact is authoritative, including preserved Lua and exclusions.
+  // Context-free previews retain custom-Lua hygiene without claiming runtime scope.
   const customLuaPath = `ui/${modId}_custom.lua`;
-  if (workspace.compileSettings?.ui !== false && workspace.customLua && workspace.customLua.trim()) {
+  const appendLuaFindings = (findings: readonly LuaStaticFinding[]) => {
+    for (const finding of findings) {
+      reports.push({
+        severity: finding.severity,
+        code: finding.code,
+        filePath: finding.sourcePath || finding.rel || customLuaPath,
+        line: finding.line,
+        message: finding.message,
+        domain: 'ui_layout',
+        category: 'egosoft',
+      });
+    }
+  };
+  const luaInputs = artifact
+    ? artifact.includedPaths.filter(file => /\.lua$/i.test(file)).flatMap(file => {
+      const text = artifact.availableText[file];
+      if (typeof text === 'string') return [{ rel: file.replace(/\\/g, '/'), text }];
+      reports.push({ severity: 'info', code: 'lua.runtime_scope_unverified', filePath: file,
+        message: 'Included Lua text was unavailable in the snapshot; artifact Lua analysis omitted this file.',
+        domain: 'ui_layout', category: 'egosoft' });
+      return [];
+    })
+    : workspace.compileSettings?.ui !== false && workspace.customLua?.trim()
+      ? [{ rel: customLuaPath, text: workspace.customLua }] : [];
+  const uiPaths = artifact?.includedPaths.filter(file => file.replace(/\\/g, '/').toLowerCase() === 'ui.xml') || [];
+  const manifestPath = uiPaths[0];
+  const manifestText = manifestPath === undefined ? undefined : artifact?.availableText[manifestPath];
+  if (uiPaths.length === 1 && typeof manifestText !== 'string') {
+    reports.push({ severity: 'info', code: 'lua.runtime_scope_unverified', filePath: manifestPath,
+      message: 'Included ui.xml text was unavailable; Lua registrations and load order were not checked.',
+      domain: 'ui_layout', category: 'egosoft' });
+  }
+  if (luaInputs.length || manifestPath !== undefined) {
     try {
-      const lua = analyzeLuaFiles([{
-        rel: customLuaPath,
-        text: workspace.customLua,
-        source: 'loose',
-        sourcePath: customLuaPath,
-        extension: { folder: modId, id: modId, name: workspace.name },
-      }]);
-      for (const f of lua.findings) {
-        reports.push({
-          severity: f.severity,
-          code: f.code,
-          filePath: f.sourcePath || f.rel || customLuaPath,
-          line: f.line,
-          message: f.message,
-          domain: 'ui_layout',
-          category: 'egosoft'
-        });
-      }
+      const luaFiles = luaInputs.map(file => ({ ...file, source: 'loose' as const, sourcePath: file.rel }));
+      const runtimeInventory = artifact ? buildX4MenuLuaRuntimeInventory({
+        uiXml: uiPaths.length > 1 ? '' : manifestText,
+        luaFiles,
+      }) : undefined;
+      const extension = { folder: modId, id: modId, name: workspace.name,
+        ...(runtimeInventory ? { runtimeInventory,
+          menuLuaPaths: new Set(runtimeInventory.registrations.flatMap(row => row.lookupKey ? [row.lookupKey] : [])) } : {}) };
+      const manifestOnly = !luaFiles.length && manifestPath !== undefined && runtimeInventory ? [{
+        rel: manifestPath, source: 'loose' as const, sourcePath: manifestPath,
+        extension: { ...extension, runtimeInventory },
+      }] : [];
+      const lua = analyzeLuaFiles(luaFiles.map(file => ({ ...file, extension })), manifestOnly);
+      appendLuaFindings(lua.findings);
     } catch {
       reports.push({
         severity: 'info',
         code: 'x4-ui.analysis-unavailable',
-        filePath: customLuaPath,
-        message: 'Custom Lua was not statically verified because the Lua analyzer failed unexpectedly. Package readiness is not clean; inspect the analyzer failure before relying on this output.',
+        filePath: luaInputs[0]?.rel ?? manifestPath ?? customLuaPath,
+        message: 'Included Lua was not statically verified because the Lua analyzer failed unexpectedly. Inspect the analyzer failure before relying on this output.',
         domain: 'ui_layout',
         category: 'egosoft'
       });
+    }
+  }
+
+  // Preserve the context-free compile gate using the exact emitted source. Leave
+  // the omission visible to artifact analysis and keep its provider set unchanged.
+  const omittedCustomLua = artifact?.omittedGeneratedCustomLua;
+  if (artifact && omittedCustomLua?.path === customLuaPath && artifact.includedPaths.includes(customLuaPath)
+    && typeof artifact.availableText[customLuaPath] !== 'string') {
+    try {
+      const lua = analyzeLuaFiles([{
+        rel: customLuaPath, text: omittedCustomLua.text, source: 'loose', sourcePath: customLuaPath,
+        extension: { folder: modId, id: modId, name: workspace.name },
+      }]);
+      appendLuaFindings(lua.findings.filter(finding => finding.severity === 'error'));
+    } catch {
+      reports.push({ severity: 'info', code: 'x4-ui.analysis-unavailable', filePath: customLuaPath,
+        message: 'Generated custom Lua compile analysis failed unexpectedly.', domain: 'ui_layout', category: 'egosoft' });
     }
   }
 
@@ -787,6 +834,85 @@ export function runPackageReadinessParitySelftest() {
       && suppliedArtifactFinding.domain === 'ui_layout',
     suppliedArtifactFinding,
   );
+
+  const luaManifest = (paths: string[]) => '<addon name="ReadinessProbe"><environment type="menus">'
+    + paths.map(path => `<file name="${path}"/>`).join('') + '</environment></addon>';
+  const runtimeText = {
+    'ui.xml': luaManifest(['ui/provider.lua', 'ui/consumer.lua']),
+    'ui/provider.lua': 'ReadinessProvider = function() return true end',
+    'ui/consumer.lua': 'ReadinessProvider()',
+    'ui/excluded.lua': 'local broken = )',
+  };
+  const luaArtifact = (paths: string[], text: Record<string, string> = runtimeText) => validatePackageReadiness({
+    ...base, customLua: 'WorkspaceGhost()',
+  }, undefined, { includedPaths: ['content.xml', ...paths], availableText: text });
+  const priorLua = luaArtifact(['ui.xml', 'ui/provider.lua', 'ui/consumer.lua']);
+  ok('artifact_readiness_uses_included_lua_and_ignores_excluded_or_workspace_text',
+    !priorLua.some(finding => ['lua.undefined_global', 'lua.global_before_definition', 'lua.syntax_error', 'x4-ui.analysis-unavailable']
+      .includes(finding.code || '')),
+    priorLua);
+  const laterLua = luaArtifact(['ui.xml', 'ui/provider.lua', 'ui/consumer.lua'], {
+    ...runtimeText, 'ui.xml': luaManifest(['ui/consumer.lua', 'ui/provider.lua']),
+  });
+  ok('artifact_readiness_retains_registered_eager_order_warning', laterLua.some(finding =>
+    finding.code === 'lua.global_before_definition' && finding.filePath === 'ui/consumer.lua'
+    && finding.line === 1 && finding.severity === 'warning'), laterLua);
+  const unlistedLua = luaArtifact(['ui.xml', 'ui/provider.lua', 'ui/consumer.lua'], {
+    ...runtimeText, 'ui.xml': luaManifest(['ui/consumer.lua']),
+  });
+  ok('artifact_readiness_unlisted_provider_cannot_clear_registered_missing_global', unlistedLua.some(finding =>
+    finding.code === 'lua.undefined_global' && finding.filePath === 'ui/consumer.lua'), unlistedLua);
+  const excludedProvider = luaArtifact(['ui.xml', 'ui/consumer.lua']);
+  ok('artifact_readiness_available_but_excluded_provider_cannot_qualify', excludedProvider.some(finding =>
+    finding.code === 'lua.undefined_global' && finding.filePath === 'ui/consumer.lua')
+    && excludedProvider.some(finding => finding.code === 'lua.runtime_scope_unverified'), excludedProvider);
+  const includedSyntax = luaArtifact(['ui.xml', 'ui/provider.lua', 'ui/consumer.lua', 'ui/excluded.lua']);
+  ok('artifact_readiness_checks_syntax_of_included_unregistered_lua', includedSyntax.some(finding =>
+    finding.code === 'lua.syntax_error' && finding.filePath === 'ui/excluded.lua' && finding.severity === 'error'), includedSyntax);
+  const unreadLua = luaArtifact(['ui.xml', 'ui/provider.lua', 'ui/consumer.lua'], {
+    'ui.xml': runtimeText['ui.xml'], 'ui/consumer.lua': runtimeText['ui/consumer.lua'],
+  });
+  ok('artifact_readiness_missing_included_lua_text_is_explicitly_unavailable', unreadLua.some(finding =>
+    finding.code === 'lua.runtime_scope_unverified' && finding.filePath === 'ui/provider.lua'
+    && finding.severity === 'info' && finding.message.includes('text was unavailable')), unreadLua);
+  const unreadManifest = luaArtifact(['ui.xml', 'ui/consumer.lua'], { 'ui/consumer.lua': 'local valid = true' });
+  ok('artifact_readiness_missing_manifest_text_is_explicitly_unavailable', unreadManifest.some(finding =>
+    finding.code === 'lua.runtime_scope_unverified' && finding.filePath === 'ui.xml'
+    && finding.message.includes('text was unavailable')), unreadManifest);
+  const manifestWithoutLua = luaArtifact(['ui.xml']);
+  ok('artifact_readiness_manifest_without_readable_included_lua_is_not_checked', manifestWithoutLua.some(finding =>
+    finding.code === 'lua.runtime_scope_unverified' && finding.filePath === 'ui.xml'
+    && finding.message.includes('ui/provider.lua')), manifestWithoutLua);
+  const emptyManifestWithoutLua = luaArtifact(['ui.xml'], { 'ui.xml': luaManifest([]) });
+  ok('artifact_readiness_valid_empty_manifest_has_no_lua_scope_gap', !emptyManifestWithoutLua.some(finding =>
+    finding.code?.startsWith('lua.')), emptyManifestWithoutLua);
+  const metadataWithoutLua = luaArtifact([]);
+  ok('artifact_readiness_metadata_only_inventory_has_no_lua_scope_claim', !metadataWithoutLua.some(finding =>
+    finding.code?.startsWith('lua.')), metadataWithoutLua);
+  const contextFree = validatePackageReadiness({ ...base, customLua: 'PreviewTypo()' });
+  ok('context_free_custom_lua_keeps_hygiene_and_explicit_scope_boundary', contextFree.some(finding =>
+    finding.code === 'lua.undefined_global' && finding.filePath === 'ui/package_parity_fixture_custom.lua')
+    && contextFree.some(finding => finding.code === 'lua.runtime_scope_unverified'), contextFree);
+  const omittedCustomPath = 'ui/package_parity_fixture_custom.lua';
+  const omittedCustom = (workspaceText: string, emittedText: string) => validatePackageReadiness({
+    ...base, customLua: workspaceText,
+  }, undefined, {
+    includedPaths: ['content.xml', 'ui.xml', omittedCustomPath],
+    availableText: { 'ui.xml': luaManifest([omittedCustomPath]) },
+    reportedUnavailablePaths: [omittedCustomPath],
+    omittedGeneratedCustomLua: { path: omittedCustomPath, text: emittedText },
+  });
+  const omittedBrokenCustom = omittedCustom('local valid = true', 'local broken = )');
+  ok('omitted_generated_custom_lua_preserves_exact_emitted_syntax_error', omittedBrokenCustom.some(finding =>
+    finding.code === 'lua.syntax_error' && finding.severity === 'error'
+    && finding.filePath === omittedCustomPath && finding.line === 1)
+    && omittedBrokenCustom.some(finding => finding.code === 'lua.runtime_scope_unverified'
+      && finding.filePath === omittedCustomPath), omittedBrokenCustom);
+  const omittedValidCustom = omittedCustom('local broken = )', 'local valid = true');
+  ok('omitted_valid_generated_custom_lua_still_lacks_artifact_scope_credit',
+    !omittedValidCustom.some(finding => finding.severity === 'error' || finding.code === 'x4-ui.analysis-unavailable')
+    && omittedValidCustom.some(finding => finding.code === 'lua.runtime_scope_unverified'
+      && finding.filePath === omittedCustomPath), omittedValidCustom);
 
   const passed = checks.filter(check => check.pass).length;
   return { allPassed: passed === checks.length, pass: passed === checks.length, passed, total: checks.length, checks };
