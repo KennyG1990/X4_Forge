@@ -6,6 +6,10 @@
 
 ## P0 — Active
 
+### Agent directory/default-format control and UI/API/MCP parity `spec'd` (GitHub #19, under #9)
+
+Ken requested future agent access to every intentional Forge user action without computer use. [Reconciled specification](docs/plans/2026-11-10-agent-control-ui-api-mcp-parity.md). Directory/default-format APIs already exist but require Studio; MCP has no configuration/native-deploy tools, and per-request API deploy format already exists. Extend the existing capability/authority/config/deploy owners with scoped instance-level configuration access, preview/CAS/receipts, format control and a complete UI-action parity census. Preserve old-key authority, Dev pins/A15 seals and shared validation. SPECIFIED only; no runtime implementation in this task. First independently executable child is [#96](https://github.com/KennyG1990/X4_Forge/issues/96); #19 holds the complete parity census.
+
 ### Preserved MD diff-only native deploy `in_progress` (GitHub #95)
 
 A real, preserved MD patch passes project validation and canonical diff simulation, but both native aliases reject its corrected form as no authored output. [Reproduction, prerequisite scope and plan](docs/plans/2026-11-09-diff-expression-values-design.md). Fix the existing output/readiness policy without a dummy cue, preserve exact raw bytes and negative hollow/stale guards, then resume #73 diff-operation expression provenance. No implementation yet; isolated baseline8.86seconds, no target writes, owned process/listener stopped.
