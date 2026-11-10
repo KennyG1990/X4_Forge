@@ -8176,3 +8176,7 @@ Both native aliases expose the reached handler stages and total time. Initial co
 ## 2026-11-10 — VERIFIED exact Lua analysis reuse in native deploy (#97)
 
 The shared project validator reuses Lua findings and scope for identical ordered sources and loader manifests within the existing memory budget. Focused 30/30 checks prove reuse at 243 Lua files and fresh validation on input changes. The 313/313 headless native replay preserved exact bytes, receipts, and no-write refusals on both routes. Typecheck and precommit passed. The 13-file apply took 7.47 s. Broader preflight reuse and representative consumer timing remain open. [Contract and results](docs/plans/2026-11-10-deploy-preview-validation-reuse.md).
+
+## 2026-11-10 — VERIFIED effective MD and AI schema reuse (#97)
+
+Both native aliases use the shared exact-text cache for effective script schema diagnostics. Focused 32/32 and overlay 24/24 passed with current corpus and schema invalidation. The 60-patch validator benchmark preserved its output hash and took 0.26 s warm and 0.29 s after one edit. Native 313/313 preserved exact artifacts, receipts and refusals. Unit 12 release review is NOT_READY. [Contract, timings and release review](docs/plans/2026-11-10-effective-script-schema-reuse.md).

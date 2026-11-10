@@ -143,6 +143,70 @@ try {
   });
   check('routed schema removal and recovery',()=>{const filename=path.join(tmp,'ui/core/addon.xsd');const original=fs.readFileSync(filename);parity(project());fs.unlinkSync(filename);assert.ok(parity(project()).schema.findings.some(f=>f.code==='UI_SCHEMA_UNAVAILABLE'));fs.writeFileSync(filename,original);parity(project());});
   check('declared property-corpus refresh invalidates facts',()=>{const p=project('<set_value name="$a" exact="$x.transporttag"/>');const before=parity(p);const filename=path.join(tmp,'libraries/scriptproperties.xml');const original=fs.readFileSync(filename,'utf8');fs.writeFileSync(filename,original.replaceAll('name="transporttag"','name="forge_removed_transporttag"'));refresh();const after=parity(p);assert.notDeepEqual(after.scriptProperties.findings,before.scriptProperties.findings);fs.writeFileSync(filename,original);refresh();assert.deepEqual(parity(p).scriptProperties,before.scriptProperties);});
+  check('effective script schema reuse binds current source, corpus and vocabulary', () => {
+    const p = project();
+    const relative = 'md/reuse_probe.xml';
+    const patch = { path: relative, kind: 'md' as const,
+      content: '<diff><add sel="/mdscript/cues/cue/actions"><debug_text text="1" forge_unknown="1"/></add></diff>' };
+    p.files = [...p.files.filter(file => file.path === 'content.xml'), patch];
+    const absolute = path.join(tmp, relative);
+    fs.mkdirSync(path.dirname(absolute), { recursive: true });
+    fs.writeFileSync(absolute, md('<debug_text text="0"/>'));
+    clearProjectValidationCache();
+    const stats = () => getProjectValidationCacheStats().effectiveSchema;
+    const initial = parity(p);
+    assert.ok(initial.diffSimulation.files[0].postApplyFindings.some(finding => finding.message.includes('forge_unknown')));
+    assert.equal(stats().misses, 2);
+    assert.deepEqual(parity(structuredClone(p)), initial);
+    assert.equal(stats().hits, 2);
+
+    patch.content = patch.content.replace('forge_unknown', 'forge_other');
+    const edited = parity(p);
+    assert.ok(edited.diffSimulation.files[0].postApplyFindings.some(finding => finding.message.includes('forge_other')));
+    assert.equal(stats().hits, 3);
+    assert.equal(stats().misses, 3);
+
+    const dlc = path.join(tmp, 'extensions', 'ego_dlc_effective_probe');
+    fs.mkdirSync(path.join(dlc, 'md'), { recursive: true });
+    fs.writeFileSync(path.join(dlc, 'content.xml'), '<content id="ego_dlc_effective_probe"/>');
+    fs.writeFileSync(path.join(dlc, relative), '<diff><replace sel="/mdscript/cues/cue/actions/debug_text/@text">100</replace></diff>');
+    assert.equal(parity(p).diffSimulation.files[0].sources.at(-1)?.source, 'ego_dlc_effective_probe');
+    assert.equal(stats().misses, 5);
+
+    const changedReferences = structuredClone(corpus.references);
+    changedReferences.wares.add('forge_effective_probe');
+    parity(p, changedReferences);
+    assert.equal(stats().misses, 7);
+    const schema = path.join(tmp, 'libraries', 'common.xsd');
+    const original = fs.readFileSync(schema, 'utf8');
+    fs.writeFileSync(schema, original.replaceAll('name="debug_text"', 'name="forge_effective_debug_text"'));
+    try {
+      parity(p, changedReferences);
+      assert.equal(stats().misses, 9);
+      assert.equal(stats().hits, 3);
+    } finally {
+      fs.writeFileSync(schema, original);
+    }
+  });
+  check('effective AI script diagnostics retain their domain through cache hits', () => {
+    const p = project();
+    const relative = 'aiscripts/reuse_probe.xml';
+    p.files = [...p.files.filter(file => file.path === 'content.xml'), {
+      path: relative, kind: 'aiscript',
+      content: '<diff><add sel="/aiscript/actions"><debug_text text="1" forge_unknown_ai="1"/></add></diff>',
+    }];
+    const absolute = path.join(tmp, relative);
+    fs.mkdirSync(path.dirname(absolute), { recursive: true });
+    fs.writeFileSync(absolute, '<aiscript name="ReuseProbe"><actions><debug_text text="0"/></actions></aiscript>');
+    const before = getProjectValidationCacheStats().effectiveSchema;
+    const cold = parity(p);
+    assert.ok(cold.diffSimulation.files[0].postApplyFindings.some(finding =>
+      finding.domain === 'ai_scripts' && finding.message.includes('forge_unknown_ai')));
+    assert.deepEqual(parity(p), cold);
+    const after = getProjectValidationCacheStats().effectiveSchema;
+    assert.equal(after.hits, before.hits + 2);
+    assert.equal(after.misses, before.misses + 2);
+  });
 } finally {
   process.env.X4_REFERENCE_ROOT=saved;clearReferenceCorpusCache();clearReferenceLanguageCaches();
   assert.equal(path.dirname(path.resolve(tmp)),path.resolve(os.tmpdir()));fs.rmSync(tmp,{recursive:true,force:true});

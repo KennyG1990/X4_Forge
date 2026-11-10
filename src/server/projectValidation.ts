@@ -85,19 +85,24 @@ function resourceGeneration(resource: object | null | undefined): number {
   return generation;
 }
 const LUA_FACT_BUDGET = 4 * 1024 * 1024;
-// Reserve room for project Lua facts even if the remaining file stages churn.
-const validationFacts = createBoundedAnalysisCache<unknown>({ maxEntries: 508, maxBytes: 28 * 1024 * 1024 });
+const EFFECTIVE_SCHEMA_FACT_BUDGET = 4 * 1024 * 1024;
+// Keep expensive facts available when the ordinary per-file stages churn.
+const validationFacts = createBoundedAnalysisCache<unknown>({ maxEntries: 508, maxBytes: 24 * 1024 * 1024 });
 const projectLuaFacts = createBoundedAnalysisCache<LuaStaticAnalysisResult>(
   { maxEntries: 4, maxBytes: LUA_FACT_BUDGET },
   result => !result.runtimeScope.truncated,
+);
+const effectiveSchemaFacts = createBoundedAnalysisCache<XsdDiagnostic[]>(
+  { maxEntries: 512, maxBytes: EFFECTIVE_SCHEMA_FACT_BUDGET },
 );
 /** Internal deterministic observability; no additional HTTP surface or persistent state. */
 export function clearProjectValidationCache() {
   validationFacts.clear();
   projectLuaFacts.clear();
+  effectiveSchemaFacts.clear();
 }
 export function getProjectValidationCacheStats() {
-  return { ...validationFacts.stats(), lua: projectLuaFacts.stats() };
+  return { ...validationFacts.stats(), lua: projectLuaFacts.stats(), effectiveSchema: effectiveSchemaFacts.stats() };
 }
 
 /**
@@ -508,17 +513,20 @@ export function runProjectValidation(
               for (const reason of gaps) coverageGaps.push({ check: 'diff.expressions', filePath: relativePath, reason });
             }
             const validateEffective = (content: string): XsdDiagnostic[] => {
-              if (kind === 'md' && mdIndexRef?.loaded) {
-                return validateXmlAgainstSchema(content, mdIndexRef, {
-                  filePath: relativePath, domain: 'mission_director', reportUnknownElements: true,
+              const index = kind === 'md' ? mdIndexRef : kind === 'aiscript' ? aiIndexRef : null;
+              if (index?.loaded) {
+                const domain = kind === 'md' ? 'mission_director' : 'ai_scripts';
+                const validate = () => validateXmlAgainstSchema(content, index, {
+                  filePath: relativePath, domain, reportUnknownElements: true,
                   references, strictStructure: true,
                 });
-              }
-              if (kind === 'aiscript' && aiIndexRef?.loaded) {
-                return validateXmlAgainstSchema(content, aiIndexRef, {
-                  filePath: relativePath, domain: 'ai_scripts', reportUnknownElements: true,
-                  references, strictStructure: true,
-                });
+                const sourceBytes = 2 * (relativePath.length + content.length);
+                if (opts.incremental === false || sourceBytes > EFFECTIVE_SCHEMA_FACT_BUDGET) return validate();
+                // The caller already resolved the current overlay and schema. Cache
+                // diagnostics for those exact inputs, without holding either XML tree.
+                const contentHash = crypto.createHash('sha256').update(content, 'utf16le').digest('hex');
+                const key = JSON.stringify([relativePath, domain, resourceGeneration(index), referenceGeneration, contentHash]);
+                return effectiveSchemaFacts.get(key, validate, sourceBytes);
               }
               if (schemaRegistryRef) {
                 return validateRoutedFiles([{ path: relativePath, content }], schemaRegistryRef, {
