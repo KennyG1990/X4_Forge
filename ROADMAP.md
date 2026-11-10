@@ -8091,3 +8091,8 @@ is immutable and unchanged. See docs/releases/0.0.80-delivery.json and the bound
 Extension tooling retains4moderate uuid-chain findings; staged runtime audit is clear.
 Remove scoped Identity4.13.0 pin only after supported upstream remediation and reproof.
 The Claude program stays OPEN; A15 is next in isolated Dev and Kimi remains paused.
+
+
+## 2026-11-10 — 0.0.82 store/source/required CI VERIFIED; GitHub draft pending announcement authorization
+
+Open VSX version/latest and streamed download match the exact qualified VSIX SHA-256 `0b8d6477036a664659db36e00dff0992a6390a397f967726bef4b48238ec5daa`. Matching source `dea588f` is pushed after the normal hook, with actual remote and tracking HEAD equal. [Quality 42740830042](https://github.com/KennyG1990/X4_Forge/actions/runs/42740830042) completed successfully. The exact GitHub draft/assets are ready; publication triggers the existing Discord workflow and awaits the user response. [Proof and applicability](docs/releases/0.0.82-proof.json). Source/installed/headless evidence does not close editor/game gates or the broader programme. No capability-map delta from delivery; no live setup or computer use.

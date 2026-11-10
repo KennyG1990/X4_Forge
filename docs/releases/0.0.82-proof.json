@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "version": "0.0.82",
-  "status": "OPEN_VSX_VERIFIED_GITHUB_DELIVERY_PENDING",
-  "recordedAtUtc": "2026-11-10T02:05:18.770777+00:00",
+  "status": "OPEN_VSX_SOURCE_AND_CI_VERIFIED_GITHUB_DRAFT_AWAITS_ANNOUNCEMENT_AUTH",
+  "recordedAtUtc": "2026-11-10T02:15:15.322162+00:00",
   "ownerIssue": "https://github.com/KennyG1990/X4_Forge/issues/53",
   "parentIssue": "https://github.com/KennyG1990/X4_Forge/issues/20",
   "lane": "FULL",
@@ -112,7 +112,7 @@
       "ownedProcessExitAndListenerClosed": true
     },
     "curatedPrecommit": "PASS: normal precommit after type-only correction",
-    "publicStoreAndGithub": "Open VSX VERIFIED; GitHub commit/push/release/CI PENDING",
+    "publicStoreAndGithub": "Open VSX exact download, matching source push and required Quality CI VERIFIED. Exact GitHub release draft/assets VERIFIED; publication awaits existing Discord-announcement authorization.",
     "ciLintBefore": {
       "errors": 0,
       "warnings": 601,
@@ -169,6 +169,36 @@
         "bytes": 116524107,
         "inventorySha256": "c51994ed458611416dc9d75d7031788106540fa7cfcb8042c237b4feb180ec3a"
       }
+    },
+    "finalRetirement": {
+      "status": "VERIFIED",
+      "removed": [
+        {
+          "path": "C:\\fqa-r82-5ad377c",
+          "files": 4095,
+          "bytes": 201733592
+        },
+        {
+          "path": "C:\\fqa-w82-5ad3\\i",
+          "files": 2210,
+          "bytes": 79353227
+        },
+        {
+          "path": "C:\\fqa-w82-5ad3\\n",
+          "files": 45,
+          "bytes": 455893
+        }
+      ],
+      "files": 6350,
+      "bytes": 281542712,
+      "retainedFilesHashVerified": 71,
+      "nativeMirrorsVerified": 12,
+      "ownedTargetProcessCount": 0,
+      "checkedAtUtc": "2026-11-10T02:18:08.558101+00:00",
+      "held": [
+        "C:/fqa-w82-5ad3/p",
+        "release node_modules until final normal commit/graphify"
+      ]
     }
   },
   "limits": [
@@ -186,7 +216,8 @@
       "Private installed-witness namespace mismatch",
       "Reconciliation found the required CI lint threshold omitted from the private source gate; two type-only annotations introduced net2warnings.",
       "A Git-checkout frontend rebuild exposed Git-derived build-label differences; reproducing the original Git-free archive context restored exact runtime parity.",
-      "Commit wrapper omitted the qualified explicit E2E Node path; the unchanged hook refused and required the original sealed runtime override."
+      "Commit wrapper omitted the qualified explicit E2E Node path; the unchanged hook refused and required the original sealed runtime override.",
+      "Cleanup preflight correctly stopped before mutation when my mirror check assumed QA-only installed-byte reports also existed in the raw native run. The owning collector mirrors 12 raw outputs; all 12 match, with independent review."
     ],
     "sustain": [
       "Exact source/VSIX/native receipt chain and strict fail-closed ownership",
@@ -194,7 +225,7 @@
     ],
     "improve": "Reconcile all CI gates before source qualification. Keep stable script filenames and source-derived witness names aligned. Record build context separately from source and artifact identities.",
     "highestRiskObserved": "Required CI lint applicability was omitted from the private source gate. Two introduced any annotations exceeded the unchanged warning budget; erased type corrections restored the baseline warning count with exact emitted-runtime parity.",
-    "remainingRisk": "Public delivery and CI are pending; older failed evidence is retained and is not retroactively green."
+    "remainingRisk": "Actual installed-editor experience and queued game witnesses remain open. GitHub release is still a draft because publication triggers existing Discord messages; the user question is pending."
   },
   "openVsx": {
     "status": "VERIFIED",
@@ -222,7 +253,171 @@
     "downloadBytes": 29867215,
     "method": "Streamed registry download into SHA-256; no second archive written."
   },
-  "github": null,
+  "github": {
+    "source": {
+      "status": "PUSH_VERIFIED_RELEASE_AND_CI_PENDING",
+      "commit": "dea588f493c13b820f26558d8a7bdb784c4dc2c6",
+      "parent": "f76775f02dbd8c61a100233e9d11d659f7a5d39b",
+      "tree": "1b650ef810f72f49d0858f485f97e23481b9bdf5",
+      "timestampUtc": "2026-11-10T02:09:11.630617+00:00",
+      "standardHookExitCode": 0,
+      "storeVerifiedBeforeCommit": true,
+      "version": "0.0.82",
+      "remoteHead": "dea588f493c13b820f26558d8a7bdb784c4dc2c6",
+      "originMain": "dea588f493c13b820f26558d8a7bdb784c4dc2c6",
+      "pushedAtUtc": "2026-11-10T02:09:54.874142+00:00",
+      "nonForcePush": true
+    },
+    "release": {
+      "status": "DRAFT_VERIFIED_CI_AND_ANNOUNCEMENT_AUTH_PENDING",
+      "id": 439865506,
+      "url": "https://github.com/KennyG1990/X4_Forge/releases/tag/untagged-b001032307e744345115",
+      "tag": "v0.0.82",
+      "targetCommit": "dea588f493c13b820f26558d8a7bdb784c4dc2c6",
+      "draft": true,
+      "prerelease": false,
+      "assets": [
+        {
+          "id": 729764751,
+          "name": "SHA256SUMS",
+          "size": 95,
+          "digest": "sha256:32d42980335878a09cee0033ac8847d628aed8f826c44f74785f4a7199a74917",
+          "state": "uploaded",
+          "url": "https://github.com/KennyG1990/X4_Forge/releases/download/untagged-b001032307e744345115/SHA256SUMS"
+        },
+        {
+          "id": 729764748,
+          "name": "x4-forge-studio-0.0.82.vsix",
+          "size": 29867215,
+          "digest": "sha256:0b8d6477036a664659db36e00dff0992a6390a397f967726bef4b48238ec5daa",
+          "state": "uploaded",
+          "url": "https://github.com/KennyG1990/X4_Forge/releases/download/untagged-b001032307e744345115/x4-forge-studio-0.0.82.vsix"
+        }
+      ],
+      "checkedAtUtc": "2026-11-10T02:11:22.362492+00:00",
+      "lookupNote": "New draft is identified from the authenticated release collection and release ID; the public tag lookup returns404 until publication."
+    },
+    "quality": {
+      "status": "VERIFIED",
+      "runId": 42740830042,
+      "url": "https://github.com/KennyG1990/X4_Forge/actions/runs/42740830042",
+      "commit": "dea588f493c13b820f26558d8a7bdb784c4dc2c6",
+      "conclusion": "success",
+      "finishedAtUtc": "2026-11-10T02:13:19Z",
+      "jobs": [
+        {
+          "name": "validate",
+          "conclusion": "success",
+          "steps": [
+            {
+              "name": "Set up job",
+              "conclusion": "success"
+            },
+            {
+              "name": "Check out repository",
+              "conclusion": "success"
+            },
+            {
+              "name": "Use Node.js 24",
+              "conclusion": "success"
+            },
+            {
+              "name": "Resolve physical test temporary directory",
+              "conclusion": "success"
+            },
+            {
+              "name": "Install locked dependencies",
+              "conclusion": "success"
+            },
+            {
+              "name": "Install extension type dependencies",
+              "conclusion": "success"
+            },
+            {
+              "name": "Reject high-severity dependency vulnerabilities",
+              "conclusion": "success"
+            },
+            {
+              "name": "Reject high-severity extension dependency vulnerabilities",
+              "conclusion": "success"
+            },
+            {
+              "name": "Typecheck",
+              "conclusion": "success"
+            },
+            {
+              "name": "Lint",
+              "conclusion": "success"
+            },
+            {
+              "name": "Run deterministic oracle integration",
+              "conclusion": "success"
+            },
+            {
+              "name": "Audit capability and route contracts",
+              "conclusion": "success"
+            },
+            {
+              "name": "Prove MCP capability discovery and fail-closed behavior",
+              "conclusion": "success"
+            },
+            {
+              "name": "Prove fail-closed E2E flake policy",
+              "conclusion": "success"
+            },
+            {
+              "name": "Build production bundle",
+              "conclusion": "success"
+            },
+            {
+              "name": "Run isolated route integration",
+              "conclusion": "success"
+            },
+            {
+              "name": "Build extension controller and supervisor",
+              "conclusion": "success"
+            },
+            {
+              "name": "Stage packaged application",
+              "conclusion": "success"
+            },
+            {
+              "name": "Probe staged packaged sidecar",
+              "conclusion": "success"
+            },
+            {
+              "name": "Prove VSIX inspector rejection policy",
+              "conclusion": "success"
+            },
+            {
+              "name": "Package VSIX without publishing",
+              "conclusion": "success"
+            },
+            {
+              "name": "Inspect final VSIX bytes",
+              "conclusion": "success"
+            },
+            {
+              "name": "Retain inspected VSIX as workflow artifact",
+              "conclusion": "success"
+            },
+            {
+              "name": "Post Use Node.js 24",
+              "conclusion": "success"
+            },
+            {
+              "name": "Post Check out repository",
+              "conclusion": "success"
+            },
+            {
+              "name": "Complete job",
+              "conclusion": "success"
+            }
+          ]
+        }
+      ]
+    }
+  },
   "typeOnlyCiRepair": {
     "status": "VERIFIED_ERASED_TYPES_STATIC_GATES_AND_EIGHT_RUNTIME_FILES",
     "reason": "Exactly two newly introduced no-explicit-any warnings exceed the unchanged CI limit.",
@@ -307,5 +502,15 @@
       ]
     },
     "commitEnvironmentFailure": "First normal hook refused before commit because the new private-profile wrapper omitted the already-reviewed explicit E2E Node override; its derived path was inaccessible. Retry uses the exact original sealed runtime, without weakening the bootstrap or hook."
+  },
+  "close": {
+    "headlessReleaseGateStatus": "VERIFIED",
+    "deliveryStatus": "PARTIAL: Open VSX, source push and required Quality CI verified; matching GitHub draft publication pending Discord-announcement authorization",
+    "commitPoint": "docs(release): record 0.0.82 public source, CI and scratch retirement",
+    "remaining": [
+      "Existing Discord announcement authorization for GitHub draft publication",
+      "Installed-editor experience and queued Claude game witnesses remain separate feature gates"
+    ],
+    "operator": "Degradation call made after wrapper assumptions; close this release checkpoint before a fresh feature unit."
   }
 }
