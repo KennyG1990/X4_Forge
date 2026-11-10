@@ -12,7 +12,7 @@ Ken requested future agent access to every intentional Forge user action without
 
 ### Preserved MD diff-only native deploy `in_progress` (GitHub #95)
 
-A real, preserved MD patch passes project validation and canonical diff simulation, but both native aliases reject its corrected form as no authored output. [Reproduction, prerequisite scope and plan](docs/plans/2026-11-09-diff-expression-values-design.md). Fix the existing output/readiness policy without a dummy cue, preserve exact raw bytes and negative hollow/stale guards, then resume #73 diff-operation expression provenance. No implementation yet; isolated baseline8.86seconds, no target writes, owned process/listener stopped.
+Dev source/native fix is verified: real preserved MD patches preview through both aliases, bound apply commits exact bytes and receipt, stale/hollow/excluded/runtime-owned controls refuse. Unknown/deep MD explicitly remains incomplete;40readiness/9doctor/17policy, final native16+86 and artifact120 pass. [Baseline, exact proof and remaining gates](docs/plans/2026-11-09-diff-expression-values-design.md). Overall #95 stays PARTIAL: full build/E2E/package/installed/rendered/public qualification is open. Complete #73 literal diff-expression provenance before release review; do not ship this prerequisite alone. Synthetic case state/target/driver retired; one compact1.36MB fixture remains. Live setup untouched.
 
 ### Explicit text filename deploy fidelity `in_progress` (GitHub #94, under #20)
 

@@ -15,6 +15,7 @@ import {
 import { validateContract } from './contractGlue';
 import { analyzeLuaFiles } from './luaStaticAnalysis';
 import { DOMParser as XmlDOMParser } from '@xmldom/xmldom';
+import { assertXmlInputWithinLimits } from './xmlInputLimits';
 
 /**
  * P4 guard: is `content` a well-formed XML fragment? Wrap it as a single <root> (same
@@ -339,44 +340,98 @@ export const hasAnyMdDomain = (workspace: ModWorkspace): boolean => {
   return (workspace.passthroughFiles || []).some(file => /(^|[\\/])md[\\/].*\.xml$/i.test(file.path));
 };
 
-/**
- * True when the extension contains deployable authored behavior or data beyond its manifest.
- * An inert legacy MD shell is deliberately not output: data-only mods do not need a placebo cue.
- */
-export const hasEffectiveAuthoredOutput = (workspace: ModWorkspace): boolean => {
+/** Full included artifact inventory; available text is deliberately only a bounded subset. */
+export interface PackageReadinessArtifactContext {
+  includedPaths: readonly string[];
+  availableText: Readonly<Record<string, string>>;
+  /** Missing text whose unavailable finding is already supplied by the snapshot owner. */
+  reportedUnavailablePaths?: readonly string[];
+}
+
+type AuthoredOutputState = 'effective' | 'empty' | 'unknown';
+const isMdArtifactPath = (value: string): boolean => /^md\/.*\.xml$/i.test(value.replace(/\\/g, '/'));
+const isPackageMetadataPath = (value: string): boolean => {
+  const normalized = value.replace(/\\/g, '/').toLowerCase();
+  return normalized === 'content.xml' || /(^|\/)readme(?:\.[^/]*)?$/.test(normalized);
+};
+const combineAuthoredOutput = (states: AuthoredOutputState[]): AuthoredOutputState => (
+  states.includes('effective') ? 'effective' : states.includes('unknown') ? 'unknown' : 'empty'
+);
+
+interface MdAuthoredAnalysis {
+  state: AuthoredOutputState;
+  unavailableReason?: string;
+}
+interface SourceMdInput {
+  path: string;
+  content?: string;
+}
+
+/** Readiness recognizes real authored DOM nodes; schema/selector validity stays with validation. */
+function mdAuthoredOutput(content: string | undefined): MdAuthoredAnalysis {
+  if (content === undefined) return { state: 'unknown', unavailableReason: 'MD source text was not supplied for inspection.' };
+  if (!content.trim()) return { state: 'empty' };
+  try { assertXmlInputWithinLimits(content); } catch (error) {
+    const reason = error instanceof Error ? error.message.slice(0, 240) : 'XML input limit check did not complete.';
+    return { state: 'unknown', unavailableReason: reason };
+  }
+  let malformed = false;
+  try {
+    const root = new XmlDOMParser({ onError: () => { malformed = true; } })
+      .parseFromString(content.replace(/^\uFEFF/, ''), 'text/xml').documentElement;
+    if (malformed || !root || root.namespaceURI) return { state: 'empty' };
+    if (root.nodeName === 'diff') {
+      const effective = Array.from(root.childNodes).some(node => node.nodeType === 1
+        && !node.namespaceURI && ['add', 'replace', 'remove'].includes(node.nodeName)
+        && (node as import('@xmldom/xmldom').Element).getAttribute('sel')?.trim());
+      return { state: effective ? 'effective' : 'empty' };
+    }
+    if (root.nodeName !== 'mdscript') return { state: 'empty' };
+    const effective = ['cue', 'library'].some(tag => Array.from(root.getElementsByTagName(tag))
+      .some(node => !node.namespaceURI));
+    return { state: effective ? 'effective' : 'empty' };
+  } catch { return { state: 'empty' }; }
+}
+
+function sourceMdInputs(workspace: ModWorkspace): SourceMdInput[] {
+  return [
+    ...(workspace.mdOriginal ? [workspace.mdOriginal] : []),
+    ...(workspace.originalFiles || []).filter(file => file.kind === 'md' || isMdArtifactPath(file.path)),
+    ...[...(workspace.uiSourceFiles || []), ...(workspace.passthroughFiles || [])]
+      .filter(file => isMdArtifactPath(file.path)),
+  ];
+}
+
+function authoredOutputState(
+  workspace: ModWorkspace, artifact?: PackageReadinessArtifactContext, knownMdOutput?: AuthoredOutputState,
+): AuthoredOutputState {
+  if (artifact) {
+    if (artifact.includedPaths.some(path => !isPackageMetadataPath(path) && !isMdArtifactPath(path))) return 'effective';
+    return knownMdOutput ?? combineAuthoredOutput(artifact.includedPaths.filter(isMdArtifactPath)
+      .map(path => mdAuthoredOutput(artifact.availableText[path]).state));
+  }
   const enabled = (key: keyof NonNullable<ModWorkspace['compileSettings']>) => workspace.compileSettings?.[key] !== false;
   const included = <T extends { includeInBuild?: boolean }>(items: T[] | undefined) => (items || []).some(item => item.includeInBuild !== false);
-  const sourceMd = [
-    ...(workspace.mdOriginal?.content ? [workspace.mdOriginal.content] : []),
-    ...(workspace.originalFiles || []).filter(file => file.kind === 'md' || /(^|[\\/])md[\\/].*\.xml$/i.test(file.path)).map(file => file.content),
-    ...(workspace.passthroughFiles || []).filter(file => /(^|[\\/])md[\\/].*\.xml$/i.test(file.path)).map(file => file.content || ''),
-  ];
-  const sourceHasMdEntry = sourceMd.some(content => /<(?:cue|library)\b/.test(content));
-  const passthroughHasPayload = [...(workspace.uiSourceFiles || []), ...(workspace.passthroughFiles || [])].some(file => {
-    const normalized = file.path.replace(/\\/g, '/').toLowerCase();
-    if (normalized === 'content.xml' || /(^|\/)readme(?:\.[^/]*)?$/.test(normalized)) return false;
-    if (/^md\/.*\.xml$/.test(normalized)) return /<(?:cue|library)\b/.test(file.content || '');
-    return true;
-  });
-  const modeledOriginalHasPayload = (workspace.originalFiles || []).some(file => {
-    if (file.kind === 'content' || file.kind === 'readme') return false;
-    if (file.kind === 'md') return /<(?:cue|library)\b/.test(file.content || '');
-    return true;
-  });
-
-  return (enabled('md') && (hasGeneratedMdDomain(workspace) || sourceHasMdEntry))
+  const sourceMd = knownMdOutput ?? combineAuthoredOutput(sourceMdInputs(workspace).map(file => mdAuthoredOutput(file.content).state));
+  const passthroughHasPayload = [...(workspace.uiSourceFiles || []), ...(workspace.passthroughFiles || [])]
+    .some(file => !isPackageMetadataPath(file.path) && !isMdArtifactPath(file.path));
+  const modeledOriginalHasPayload = (workspace.originalFiles || [])
+    .some(file => file.kind !== 'content' && file.kind !== 'readme' && file.kind !== 'md' && !isMdArtifactPath(file.path));
+  const modeledOutput = (enabled('md') && hasGeneratedMdDomain(workspace))
     || (enabled('ui') && included(workspace.uiWidgets))
     || (enabled('ai') && included(workspace.aiScripts))
     || (enabled('library') && (included(workspace.wares) || included(workspace.jobs)))
     || (enabled('translations') && included(workspace.tFiles))
     || (enabled('patches') && included(workspace.xmlPatches))
     || (enabled('ui') && !!workspace.customLua?.trim())
-    || !!workspace.integrationContract
-    || modeledOriginalHasPayload
-    || passthroughHasPayload;
-};
+    || !!workspace.integrationContract;
+  return modeledOutput || modeledOriginalHasPayload || passthroughHasPayload ? 'effective' : sourceMd;
+}
 
-export const validatePackageReadiness = (workspace: ModWorkspace, artifactId?: string): PackageDiagnostic[] => {
+/** Proven authored behavior/data beyond metadata; unknown semantic MD is not proven empty. */
+export const hasEffectiveAuthoredOutput = (workspace: ModWorkspace): boolean => authoredOutputState(workspace) === 'effective';
+
+export const validatePackageReadiness = (workspace: ModWorkspace, artifactId?: string, artifact?: PackageReadinessArtifactContext): PackageDiagnostic[] => {
   const reports: PackageDiagnostic[] = [];
   const modId = artifactId?.trim() || resolveWorkspaceArtifactId(workspace);
 
@@ -412,35 +467,54 @@ export const validatePackageReadiness = (workspace: ModWorkspace, artifactId?: s
     });
   }
 
-  // Cues can come from the node graph OR from hand-authored MD preserved verbatim. A libraries-only,
-  // asset-only, UI-only, or diff-only extension has NO MD domain and therefore needs no cue at all.
-  // Only diagnose an entry point when the extension actually contains MD bytes/model nodes.
-  const hasGraphCue = workspace.nodes.some(node => node.type === 'cue');
-  const sourceMd = [
-    ...(workspace.mdOriginal?.content ? [workspace.mdOriginal.content] : []),
-    ...(workspace.originalFiles ?? []).filter(file => file.kind === 'md' || /(^|[\\/])md[\\/].*\.xml$/i.test(file.path)).map(file => file.content),
-    ...(workspace.passthroughFiles ?? []).filter(file => /(^|[\\/])md[\\/].*\.xml$/i.test(file.path)).map(file => file.content ?? ''),
-  ];
-  const hasSourceEntryPoint = sourceMd.some(content => /<(?:cue|library)\b/.test(content));
+  // Preserved patches are real MD output without declaring a new cue. When available,
+  // artifact inventory is authoritative: excluded workspace files cannot qualify a deployment.
+  const modeledMdEnabled = workspace.compileSettings?.md !== false;
+  const hasGraphCue = modeledMdEnabled && workspace.nodes.some(node => node.includeInBuild !== false && node.type === 'cue');
+  const mdInputs = artifact
+    ? artifact.includedPaths.filter(isMdArtifactPath).map(path => ({ path, content: artifact.availableText[path] }))
+    : sourceMdInputs(workspace);
+  const reportedUnavailable = new Set(artifact?.reportedUnavailablePaths || []);
+  const emittedUnavailable = new Set<string>();
+  const mdOutput = combineAuthoredOutput(mdInputs.map(file => {
+    const analysis = mdAuthoredOutput(file.content);
+    const reason = analysis.unavailableReason;
+    if (reason && !(file.content === undefined && reportedUnavailable.has(file.path))) {
+      const identity = JSON.stringify([file.path.replace(/\\/g, '/').toLowerCase(), reason]);
+      if (!emittedUnavailable.has(identity)) {
+        emittedUnavailable.add(identity);
+        reports.push({
+          severity: 'warning',
+          code: 'package.md_analysis_unavailable',
+          domain: 'mission_director',
+          filePath: file.path,
+          message: `Mission Director authored-output analysis unavailable: ${reason}`,
+          category: 'egosoft',
+        });
+      }
+    }
+    return analysis.state;
+  }));
+  const hasMd = artifact ? mdInputs.length > 0 : mdInputs.length > 0 || (modeledMdEnabled && hasGeneratedMdDomain(workspace));
   const hasValidContractMd = !!workspace.integrationContract
     && validateContract(workspace.integrationContract).every(finding => finding.severity !== 'error');
-  if (hasGeneratedMdDomain(workspace) && !hasGraphCue && !hasValidContractMd) {
+  if (modeledMdEnabled && hasGeneratedMdDomain(workspace) && !hasGraphCue && !hasValidContractMd) {
     reports.push({
       severity: 'error',
       code: 'package.md_missing_entrypoint',
       message: 'Modeled Mission Director output has no cue or library entry point. Add real MD logic, or exclude the unused MD nodes from the build.',
       category: 'egosoft'
     });
-  } else if (hasAnyMdDomain(workspace) && !hasGraphCue && !hasSourceEntryPoint && !hasValidContractMd) {
+  } else if (hasMd && !hasGraphCue && mdOutput === 'empty' && !hasValidContractMd) {
     reports.push({
       severity: 'warning',
       code: 'package.md_inert_source',
-      message: 'An imported MD file has no cue or library entry point. Data-only XML patch, wares, jobs, and asset mods do not need a cue—remove or exclude the unused MD file instead of adding a placebo cue.',
+      message: 'Included MD files have no cue, library, or patch operation. Data-only XML patch, wares, jobs, and asset mods do not need a cue—remove or exclude unused MD instead of adding a placebo cue.',
       category: 'egosoft'
     });
   }
 
-  if (!hasEffectiveAuthoredOutput(workspace)) {
+  if (authoredOutputState(workspace, artifact, mdOutput) === 'empty') {
     reports.push({
       severity: 'error',
       code: 'package.empty_extension',
@@ -600,6 +674,106 @@ export function runPackageReadinessParitySelftest() {
       && disabledReports.some(finding => finding.code === 'package.empty_extension' && finding.severity === 'error'),
     disabledReports,
   );
+
+  const sourceMd = (content?: string): ModWorkspace => ({
+    ...base, passthroughFiles: [{ path: 'md/source.xml', content, ...(content === undefined ? { omitted: true } : {}) }],
+  });
+  const realMd = [
+    '<mdscript name="Source"><cues><cue name="Real"/></cues></mdscript>',
+    '<mdscript name="Source"><cues><library name="Real"/></cues></mdscript>',
+    '<diff><replace sel="/mdscript/cues/cue/@name">Changed</replace></diff>',
+    '<diff><replace sel="/mdscript/cues/cue/@name"/></diff>',
+    '<diff><add sel="/mdscript/cues/cue" type="@name"/></diff>',
+    '<diff><remove sel="/mdscript/cues/cue"/></diff>',
+  ];
+  realMd.forEach((content, index) => {
+    const ws = sourceMd(content); const findings = validatePackageReadiness(ws);
+    ok(`preserved_md_output_${index}_independent_of_disabled_modeled_md`, hasEffectiveAuthoredOutput(ws)
+      && !findings.some(finding => finding.severity === 'error' || finding.code === 'package.md_inert_source'), findings);
+  });
+  const inertMd = [
+    '<mdscript name="Empty"><cues/></mdscript>',
+    '<mdscript name="Decoys"><!-- <cue name="Fake"/> --><![CDATA[<library name="Fake"/>]]></mdscript>',
+    '<other><cue name="NotMD"/></other>',
+    '<diff/>',
+    '<diff><!-- <remove sel="/fake"/> --><![CDATA[<add sel="/fake"/>]]></diff>',
+    '<diff><remove sel=" "/></diff>',
+    '<diff><wrapper><remove sel="/fake"/></wrapper></diff>',
+    '<diff xmlns="urn:other"><remove sel="/fake"/></diff>',
+    '<diff><remove sel="/broken"></diff>',
+  ];
+  inertMd.forEach((content, index) => {
+    const ws = sourceMd(content); const findings = validatePackageReadiness(ws);
+    ok(`inert_or_decoy_md_${index}_does_not_establish_output`, !hasEffectiveAuthoredOutput(ws)
+      && findings.some(finding => finding.code === 'package.empty_extension')
+      && findings.some(finding => finding.code === 'package.md_inert_source'), findings);
+  });
+  const originalMd = { ...base, mdOriginal: { path: 'md/original.xml', content: realMd[2] },
+    originalFiles: [{ path: 'md/original.xml', kind: 'md' as const, content: realMd[2] }] };
+  ok('original_md_patch_counts_as_preserved_source', hasEffectiveAuthoredOutput(originalMd)
+    && !validatePackageReadiness(originalMd).some(finding => finding.code === 'package.empty_extension'));
+  const disabledGraph = { ...base, nodes: [{ id: 'unused', type: 'action', includeInBuild: true }] } as ModWorkspace;
+  ok('disabled_modeled_md_does_not_emit_entrypoint_error', validatePackageReadiness(disabledGraph)
+    .every(finding => finding.code !== 'package.md_missing_entrypoint'));
+
+  const artifactFindings = (includedPaths: string[], availableText: Record<string, string>) =>
+    validatePackageReadiness(sourceMd(realMd[2]), undefined, { includedPaths, availableText });
+  const emptyArtifact = artifactFindings(['content.xml', 'README.md'], { 'md/source.xml': realMd[2] });
+  ok('excluded_source_and_extra_semantic_text_cannot_qualify_artifact', emptyArtifact.some(finding => finding.code === 'package.empty_extension')
+    && !emptyArtifact.some(finding => finding.code === 'package.md_inert_source'), emptyArtifact);
+  const inertArtifact = artifactFindings(['content.xml', 'md/inert.xml'], { 'md/inert.xml': inertMd[0] });
+  ok('authoritative_inert_md_overrides_effective_workspace_ghost', inertArtifact.some(finding => finding.code === 'package.empty_extension')
+    && inertArtifact.some(finding => finding.code === 'package.md_inert_source'), inertArtifact);
+  const unknownArtifact = artifactFindings(['content.xml', 'md/unread.xml'], {});
+  ok('included_unread_md_is_unknown_not_proven_empty_or_inert', unknownArtifact.every(finding =>
+    finding.code !== 'package.empty_extension' && finding.code !== 'package.md_inert_source'), unknownArtifact);
+  const mixedUnknown = artifactFindings(['content.xml', 'md/inert.xml', 'md/unread.xml'], { 'md/inert.xml': inertMd[0] });
+  ok('unread_md_prevents_an_all_inert_conclusion', mixedUnknown.every(finding =>
+    finding.code !== 'package.empty_extension' && finding.code !== 'package.md_inert_source'), mixedUnknown);
+  const binaryArtifact = artifactFindings(['content.xml', 'assets/source.bin'], {});
+  ok('binary_asset_inventory_counts_without_semantic_text', !binaryArtifact.some(finding => finding.code === 'package.empty_extension'), binaryArtifact);
+  const patchArtifact = artifactFindings(['content.xml', 'md/source.xml'], { 'md/source.xml': realMd[2] });
+  ok('included_patch_has_no_empty_or_inert_diagnostic', patchArtifact.every(finding =>
+    finding.code !== 'package.empty_extension' && finding.code !== 'package.md_inert_source'), patchArtifact);
+  const emptyText = artifactFindings(['content.xml', 'md/source.xml'], { 'md/source.xml': '' });
+  ok('known_empty_md_differs_from_unavailable_text', emptyText.some(finding => finding.code === 'package.empty_extension')
+    && emptyText.some(finding => finding.code === 'package.md_inert_source'), emptyText);
+
+  const unavailableCode = 'package.md_analysis_unavailable';
+  ok('generic_artifact_unknown_md_has_an_explicit_unavailable_finding', unknownArtifact.filter(finding => finding.code === unavailableCode).length === 1
+    && unknownArtifact.find(finding => finding.code === unavailableCode)?.filePath === 'md/unread.xml', unknownArtifact);
+  const fallbackUnknown = validatePackageReadiness(sourceMd());
+  ok('fallback_missing_md_text_has_an_explicit_unavailable_finding', fallbackUnknown.filter(finding => finding.code === unavailableCode).length === 1
+    && fallbackUnknown.find(finding => finding.code === unavailableCode)?.severity === 'warning', fallbackUnknown);
+  const alreadyReported = validatePackageReadiness(sourceMd(), undefined, {
+    includedPaths: ['content.xml', 'md/unread.xml'], availableText: {}, reportedUnavailablePaths: ['md/unread.xml'],
+  });
+  ok('explicit_snapshot_skip_owner_prevents_duplicate_missing_text_finding', !alreadyReported.some(finding => finding.code === unavailableCode)
+    && !alreadyReported.some(finding => finding.code === 'package.empty_extension'), alreadyReported);
+  const otherReported = validatePackageReadiness(sourceMd(), undefined, {
+    includedPaths: ['content.xml', 'md/unread.xml'], availableText: {}, reportedUnavailablePaths: ['md/other.xml'],
+  });
+  ok('skip_ownership_is_exact_to_the_missing_file', otherReported.filter(finding => finding.code === unavailableCode).length === 1, otherReported);
+  const deepMd = '<diff><replace sel="/mdscript/@name">' + '<payload>'.repeat(260) + '0' + '</payload>'.repeat(260) + '</replace></diff>';
+  const deepFindings = validatePackageReadiness(base, undefined, {
+    includedPaths: ['content.xml', 'md/deep.xml'], availableText: { 'md/deep.xml': deepMd }, reportedUnavailablePaths: ['md/deep.xml'],
+  });
+  const deepUnavailable = deepFindings.find(finding => finding.code === unavailableCode);
+  ok('present_over_budget_md_retains_exact_warning_despite_skip_owner_claim', deepFindings.filter(finding => finding.code === unavailableCode).length === 1
+    && deepUnavailable?.severity === 'warning' && deepUnavailable.filePath === 'md/deep.xml'
+    && deepUnavailable.domain === 'mission_director' && deepUnavailable.message.includes('256-element import limit')
+    && deepUnavailable.message.length < 320
+    && !deepFindings.some(finding => finding.code === 'package.empty_extension' || finding.code === 'package.md_inert_source'), deepFindings);
+  const assetAndDeep = validatePackageReadiness(base, undefined, {
+    includedPaths: ['content.xml', 'assets/payload.bin', 'md/deep.xml'], availableText: { 'md/deep.xml': deepMd },
+  });
+  ok('effective_binary_output_cannot_hide_a_deep_md_availability_warning', assetAndDeep.some(finding => finding.code === unavailableCode)
+    && !assetAndDeep.some(finding => finding.code === 'package.empty_extension'), assetAndDeep);
+  const duplicateDeep = validatePackageReadiness({ ...base, mdOriginal: { path: 'md/deep.xml', content: deepMd },
+    originalFiles: [{ path: 'MD\\Deep.XML', kind: 'md', content: deepMd }],
+    passthroughFiles: [{ path: 'md\\deep.xml', content: deepMd }] });
+  ok('duplicate_source_views_emit_one_warning_per_file_and_reason', duplicateDeep.filter(finding => finding.code === unavailableCode).length === 1
+    && duplicateDeep.find(finding => finding.code === unavailableCode)?.filePath === 'md/deep.xml', duplicateDeep);
 
   const suppliedArtifact = validatePackageReadiness({
     ...base,

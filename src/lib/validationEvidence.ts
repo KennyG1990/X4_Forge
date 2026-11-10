@@ -69,6 +69,7 @@ const unavailableCodes = new Set([
   'x4-ui.truncated-evidence', 'x4-ui.verification-gap',
   'lua_md.emit_verification_gap',
   'md_lua.registration_verification_gap',
+  'package.md_analysis_unavailable',
 ]);
 const normalizedPath = (value: string) => value.replace(/\\/g, '/').toLowerCase();
 

@@ -4,7 +4,7 @@
  */
 
 import { ModWorkspace, XMLDiagnostic, generateMDXML, validateModWorkspace } from '../types';
-import { validatePackageReadiness, toContentVersion, toTFileName } from './modCompiler';
+import { validatePackageReadiness, toContentVersion, toTFileName, type PackageReadinessArtifactContext } from './modCompiler';
 import { classifyPath } from './extensionProject';
 import { duplicateMdCueMessage, findDuplicateMdCueDeclarations, parseMdScriptRoot } from './cueLineage';
 import type { ValidationSourceLocation } from './validationEvidence';
@@ -52,7 +52,7 @@ export function runModDoctor(
   workspace: ModWorkspace,
   files: Record<string, string>,
   modId: string,
-  options: { canonicalAiScripts?: Set<string> } = {},
+  options: { canonicalAiScripts?: Set<string>; artifactReadiness?: PackageReadinessArtifactContext } = {},
 ): ModDoctorDiagnostic[] {
   const diagnostics: ModDoctorDiagnostic[] = [];
   const settings = { ...DEFAULT_COMPILE_SETTINGS, ...(workspace.compileSettings || {}) };
@@ -130,7 +130,7 @@ export function runModDoctor(
     });
   }
 
-  validatePackageReadiness(workspace, modId).forEach(diagnostic => {
+  validatePackageReadiness(workspace, modId, options.artifactReadiness).forEach(diagnostic => {
     diagnostics.push({
       ...diagnostic,
       code: diagnostic.code ?? 'package.readiness',
@@ -550,7 +550,24 @@ export function runModDoctorReferenceSelftest() {
   };
   const graphFallback = runModDoctor(graphWorkspace, files, 'doctor_reference_fixture')
     .find(finding => finding.message === duplicateMdCueMessage('Listen', 'Doctor'));
+  const artifactEmpty = runModDoctor(workspace, files, 'doctor_reference_fixture', {
+    canonicalAiScripts: new Set(['order.patrol']), artifactReadiness: { includedPaths: ['content.xml'], availableText: files },
+  });
+  const artifactBinary = runModDoctor({ ...workspace, jobs: [] }, files, 'doctor_reference_fixture', {
+    artifactReadiness: { includedPaths: ['content.xml', 'assets/payload.bin'], availableText: files },
+  });
+  const deepMd = '<diff><replace sel="/mdscript/@name">' + '<payload>'.repeat(260) + '0' + '</payload>'.repeat(260) + '</replace></diff>';
+  const unavailableMd = runModDoctor({ ...workspace, jobs: [] }, files, 'doctor_reference_fixture', {
+    artifactReadiness: { includedPaths: ['content.xml', 'md/deep.xml'], availableText: { ...files, 'md/deep.xml': deepMd } },
+  }).filter(finding => finding.code === 'package.md_analysis_unavailable');
   const checks = [
+    { name: 'doctor forwards the exact MD unavailable warning path and severity',
+      pass: unavailableMd.length === 1 && unavailableMd[0].filePath === 'md/deep.xml'
+        && unavailableMd[0].severity === 'warning' && unavailableMd[0].domain === 'mission_director' },
+    { name: 'doctor forwards authoritative inventory instead of modeled workspace output',
+      pass: artifactEmpty.some(finding => finding.code === 'package.empty_extension' && finding.filePath === 'content.xml') },
+    { name: 'doctor retains binary-only artifact eligibility without semantic text',
+      pass: !artifactBinary.some(finding => finding.code === 'package.empty_extension') },
     { name: 'canonical AI task does not false-warn', pass: !canonical.some(finding => finding.code === 'job.task_script_missing') },
     { name: 'unknown AI task remains an advisory warning', pass: unknown.some(finding => finding.code === 'job.task_script_missing' && finding.severity === 'warning') },
     {

@@ -65,4 +65,36 @@ const replacement = applyProjectCheckCoverage(verified, {
 });
 check('coverage from different suite files does not inherit a former credit', !replacement.coverage.complete
   && replacement.coverage.gaps[0]?.filePath === uiGap.filePath && replacement.coverage.projectVerification?.creditedFindingIds.length === 0);
+const mdPath = 'md/deep.xml';
+const mdGap = { code: 'package.md_analysis_unavailable', severity: 'warning' as const, filePath: mdPath,
+  message: 'Mission Director authored-output analysis unavailable: XML nesting exceeds the 256-element import limit.' };
+const mdEvidence = buildValidationEvidence({ ...coverageProject, files: [...coverageProject.files,
+  { path: mdPath, kind: 'md' as const, content: '<diff><remove sel="/mdscript/@name"/></diff>' },
+] }, [mdGap]);
+const mdSubject: AcceptanceSubject = { ...subject, evidence: mdEvidence };
+const mdDecision = evaluateFindingAcceptances(mdSubject, [], principal);
+check('MD readiness unavailability is an exact coverage gap, never a mod error or clean result',
+  mdEvidence.findings.length === 1 && mdEvidence.findings[0].code === mdGap.code
+  && mdEvidence.findings[0].filePath === mdPath && mdEvidence.findings[0].category === 'check-unavailable'
+  && mdEvidence.modErrorCount === 0 && mdEvidence.checkUnavailableCount === 1
+  && mdEvidence.outcome === 'incomplete' && !mdEvidence.coverage.complete
+  && mdEvidence.coverage.gaps[0]?.check === mdGap.code && mdEvidence.coverage.gaps[0]?.filePath === mdPath
+  && mdDecision.validationAllowsDeploy && !mdDecision.validationClean && mdDecision.outcome === 'incomplete-checks');
+const acceptedMd = evaluateFindingAcceptances(mdSubject, [approve(mdSubject, 0)], principal);
+check('exact acceptance cannot erase the MD readiness coverage gap', acceptedMd.validationAllowsDeploy
+  && !acceptedMd.validationClean && acceptedMd.outcome === 'accepted-findings-and-incomplete-checks'
+  && acceptedMd.counts.unavailableChecks === 1 && acceptedMd.counts.acceptedWarnings === 0
+  && mdEvidence.checkUnavailableCount === 1 && !mdEvidence.coverage.complete);
+const verifiedMd = applyProjectCheckCoverage(mdEvidence, { ...projectVerification,
+  checks: [{ ...projectVerification.checks[0], coveredFiles: [{ path: mdPath, size: 49, sha256: 'a'.repeat(64) }] }],
+});
+const verifiedMdDecision = evaluateFindingAcceptances({ ...mdSubject, evidence: verifiedMd,
+  projectCheckProof: projectVerification.suite }, [], principal);
+check('project coverage of the same MD file cannot credit this unavailable check', verifiedMd.findings === mdEvidence.findings
+  && !verifiedMd.coverage.complete && verifiedMd.checkUnavailableCount === 1
+  && verifiedMd.coverage.gaps[0]?.check === mdGap.code && verifiedMd.coverage.gaps[0]?.filePath === mdPath
+  && verifiedMd.coverage.projectVerification?.creditedFindingIds.length === 0
+  && verifiedMd.coverage.projectVerification?.resolvedGaps.length === 0
+  && verifiedMdDecision.validationAllowsDeploy && !verifiedMdDecision.validationClean
+  && verifiedMdDecision.outcome === 'incomplete-checks');
 console.log(JSON.stringify({ pass: true, checks }));

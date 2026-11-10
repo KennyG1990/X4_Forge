@@ -14913,14 +14913,18 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       }
     }
 
-    const emittedMd = Object.entries(files).filter(([k]) => /^md\/.*\.xml$/i.test(k)).map(([, v]) => String(v)).join('\n');
-    const hasCuesInEmitted = /<cue\b|<library\b/i.test(emittedMd);
     // Audit A3 (2026-07-09): runSchemaValidation removed from this gate — the PREFLIGHT
     // stage below runs the same XSD layer (and more) via runProjectValidation, so the
     // schema pass ran twice per deploy. Doctor + patch stay here; preflight owns schema.
     const deployReferences = (() => { try { return getReferenceSets(); } catch { return undefined; } })();
-    const diagnostics = [...runModDoctor(ws, files, modId, { canonicalAiScripts: deployReferences?.aiScripts }), ...runPatchDiagnostics(ws)];
-    const compileErrors = diagnostics.filter((d: any) => d.severity === 'error' && !(d.code === 'package.readiness' && hasCuesInEmitted));
+    const diagnostics = [...runModDoctor(ws, files, modId, {
+      canonicalAiScripts: deployReferences?.aiScripts,
+      artifactReadiness: {
+        includedPaths: frozenPlan.entries.map(entry => entry.path), availableText: files,
+        reportedUnavailablePaths: snapshot.skipped.map(skipped => skipped.path),
+      },
+    }), ...runPatchDiagnostics(ws)];
+    const compileErrors = diagnostics.filter((d: any) => d.severity === 'error');
     if (compileErrors.length > 0) {
       check('compile', 'Compile diagnostics', 'fail', compileErrors.slice(0, 3).map((d: any) => d.message).join(' | '));
       return res.json(failWith('compile', { modId, compileErrors: compileErrors.slice(0, 10) }));
@@ -14980,8 +14984,12 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
         check('project-checks', 'Required project checks', 'pass', 'The exact approved suite receipt and every required command were verified.');
       } catch { return proofRefusal(); }
     }
+    const readinessUnavailable = diagnostics.filter(diagnostic => diagnostic.code === 'package.md_analysis_unavailable');
     const preflightDiagnostics: FlatProjectDiagnostic[] = [
       ...flattenProjectValidation(preflight),
+      ...readinessUnavailable.map<FlatProjectDiagnostic>(diagnostic => ({
+        severity: 'warning', code: diagnostic.code, filePath: diagnostic.filePath, message: diagnostic.message,
+      })),
       ...diskValidationSkipped.map<FlatProjectDiagnostic>(skipped => ({
         severity: 'warning',
         code: 'validation.disk_file_skipped',
@@ -15046,7 +15054,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       deployValidation.validationFiles,
       preflightDiagnostics,
     );
-    const pfWarnings = preflight.summary.activeWarnings + diskValidationSkipped.length + Number(Boolean(previousBuild));
+    const pfWarnings = preflight.summary.activeWarnings + diskValidationSkipped.length + readinessUnavailable.length + Number(Boolean(previousBuild));
     const staticEvidence = buildValidationEvidence({ id: modId, name: modId, files: deployValidation.validationFiles },
       preflightDiagnostics.map(d => ({ severity: d.severity, code: d.code, target: d.target,
         filePath: d.filePath, line: d.line, column: d.column, sourceRef: typeof d.sourceRef === 'string' ? d.sourceRef : undefined,
