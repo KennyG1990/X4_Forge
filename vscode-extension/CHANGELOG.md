@@ -3,7 +3,16 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
-## 0.0.82 — 2026-11-10
+## 0.0.83 — 2026-11-11
+
+- Native deploy keeps the selected mod files consistent between preview and apply, and refuses stale source or destination identities before managed writes.
+- Loose-file deployment reuses unchanged validation facts and avoids repeated graph scans while retaining exact output and receipt checks.
+- Lua diagnostics account for local scope and UI registration/load order. Unsupported runtime context stays visible as unverified.
+- Lua analysis consistently recognises LuaJIT syntax and keeps uncertain numeric values out of static conclusions.
+- Approved project-check reports retain named results, short redacted diagnostics and explicitly reviewed file/check coverage. Project verification remains distinct from Forge verification.
+- Interrupted project checks can recover trusted committed results without repeating commands. Owned frozen stages are retired only after their processes have finished.
+
+## 0.0.82 — 2026-11-09
 
 - Agent clients can look up a deployment by its operation ID if the reply was lost, including after a Forge restart.
 - After a backend interruption, Forge can confirm that an agent deploy never reached managed writes when its retained operation and recovery records prove it.
