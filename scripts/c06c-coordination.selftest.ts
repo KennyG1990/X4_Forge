@@ -358,7 +358,7 @@ try {
     try {
       const timestamp = new Date().toISOString();
       registry.prepare('INSERT INTO claims (id,instance_id,pid,keys_json,owner_json,queued_at,started_at,state,protocol) VALUES (?,?,?,?,?,?,?,?,?)')
-        .run(randomUUID(), randomUUID(), process.pid, keysJson, ownerJson, timestamp, timestamp, 'active', 3);
+        .run(randomUUID(), randomUUID(), process.pid, keysJson, ownerJson, timestamp, timestamp, 'active', 4);
       const before = registry.prepare('SELECT * FROM claims').all();
       check(`${name} status reports registry unavailable`, () => {
         const status = malformed.status([key]);
@@ -404,7 +404,7 @@ try {
     // The owned legacy fixture explicitly quiesces; migration never drops a claim.
     legacy.prepare('DELETE FROM claims').run();
     await upgrade.run([key], { actor: 'upgraded', operation: 'write' }, () => {
-      assert.equal(legacy.pragma('user_version', { simple: true }), 3);
+      assert.equal(legacy.pragma('user_version', { simple: true }), 4);
       assert.deepEqual(upgrade.status([key]).active.map(claim => claim.owner.actor), ['upgraded']);
       checks.push('empty quiescent v1 registry permits versioned migration and ordinary work');
     });

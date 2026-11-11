@@ -73,7 +73,8 @@ function seedLegacy(name: string, version = 2, occupied = false) {
   db.exec(`CREATE TABLE claims (sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
     instance_id TEXT NOT NULL, pid INTEGER NOT NULL, keys_json TEXT NOT NULL, owner_json TEXT NOT NULL,
     queued_at TEXT NOT NULL, started_at TEXT, state TEXT NOT NULL
-    ${version === 2 ? ', guard_json TEXT, guard_phase TEXT, handler_finished INTEGER NOT NULL DEFAULT 0' : ''});
+    ${version === 2 ? ', guard_json TEXT, guard_phase TEXT, handler_finished INTEGER NOT NULL DEFAULT 0' : ''}
+    ${version === 3 ? ', protocol INTEGER NOT NULL DEFAULT 3 CHECK(protocol = 3), guards_json TEXT NOT NULL DEFAULT \'[]\', check_budget INTEGER, handler_finished INTEGER NOT NULL DEFAULT 0' : ''});
     PRAGMA application_id = ${0x58345343}; PRAGMA user_version = ${version};`);
   if (occupied) db.prepare("INSERT INTO claims (id,instance_id,pid,keys_json,owner_json,queued_at,state) VALUES (?,?,?,?,?,?,'waiting')")
     .run(randomUUID(), randomUUID(), 0x7ffe0001, JSON.stringify([key]), JSON.stringify(owner), new Date().toISOString());
@@ -160,10 +161,10 @@ async function realJobsWitness() {
 }
 
 try {
-  await check('new_registry_uses_version3', async () => {
+  await check('new_registry_uses_version4', async () => {
     const q = coordinator('fresh'); assert.equal(q.status([key]).available, true);
-    assert.equal(SOURCE_COORDINATION_SCHEMA_VERSION, 3);
-    const db = new Database(q.filename); try { assert.equal(db.pragma('user_version', { simple: true }), 3); } finally { db.close(); }
+    assert.equal(SOURCE_COORDINATION_SCHEMA_VERSION, 4);
+    const db = new Database(q.filename); try { assert.equal(db.pragma('user_version', { simple: true }), 4); } finally { db.close(); }
   });
   await check('default_budget_stays_serial', async () => {
     const q = coordinator('serial'); live.set(guard(1).helperPid, 'alive');
@@ -295,27 +296,31 @@ try {
     assert.equal(q.status([key]).active.length, 1);
     live.set(guard(61).helperPid, 'dead'); assert.equal(q.status([key]).active.length, 0);
   });
-  for (const version of [1, 2]) await check(`empty_schema${version}_migrates_and_old_columns_refuse`, () => {
+  for (const version of [1, 2, 3]) await check(`empty_schema${version}_migrates_and_old_protocol_refuses`, () => {
     seedLegacy(`legacy${version}`, version); const q = coordinator(`legacy${version}`);
     assert.equal(q.status([key]).available, true);
     const db = new Database(q.filename); try {
-      assert.equal(db.pragma('user_version', { simple: true }), 3);
+      assert.equal(db.pragma('user_version', { simple: true }), 4);
       assert.throws(() => db.prepare('SELECT guard_json, guard_phase FROM claims').all());
+      assert.throws(() => db.prepare("INSERT INTO claims (id,instance_id,pid,keys_json,owner_json,queued_at,state,protocol) VALUES (?,?,?,?,?,?,'waiting',3)")
+        .run(randomUUID(), randomUUID(), process.pid, JSON.stringify([key]), JSON.stringify(owner), new Date().toISOString()));
       assert.throws(() => db.prepare("INSERT INTO claims (id,instance_id,pid,keys_json,owner_json,queued_at,started_at,state) VALUES (?,?,?,?,?,?,NULL,'waiting')")
         .run(randomUUID(), randomUUID(), process.pid, JSON.stringify([key]), JSON.stringify(owner), new Date().toISOString()));
     } finally { db.close(); }
   });
-  await check('nonempty_legacy_refuses_without_changing_database', () => {
-    const dir = seedLegacy('nonempty', 2, true); const file = path.join(dir, SOURCE_COORDINATION_FILENAME);
+  for (const version of [2, 3]) await check(`nonempty_schema${version}_refuses_without_changing_database`, () => {
+    const name = `nonempty${version}`;
+    const dir = seedLegacy(name, version, true); const file = path.join(dir, SOURCE_COORDINATION_FILENAME);
     const before = createHash('sha256').update(fs.readFileSync(file)).digest('hex');
-    const q = coordinator('nonempty'); assert.equal(q.status([key]).available, false);
+    const q = coordinator(name); assert.equal(q.status([key]).available, false);
     assert.equal(createHash('sha256').update(fs.readFileSync(file)).digest('hex'), before);
   });
   await check('triggered_or_misstamped_legacy_registry_refuses_without_reset', () => {
-    for (const name of ['triggered', 'misstamped']) {
+    for (const name of ['triggered', 'misstamped', 'unexpected-table']) {
       const dir = seedLegacy(name); const file = path.join(dir, SOURCE_COORDINATION_FILENAME); const db = new Database(file);
       try {
         if (name === 'triggered') db.exec('CREATE TRIGGER legacy_trigger AFTER INSERT ON claims BEGIN SELECT 1; END;');
+        else if (name === 'unexpected-table') db.exec('CREATE TABLE unexpected_stage (path TEXT)');
         else db.pragma('user_version = 3');
       } finally { db.close(); }
       const before = createHash('sha256').update(fs.readFileSync(file)).digest('hex');

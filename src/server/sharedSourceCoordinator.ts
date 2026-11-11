@@ -6,8 +6,9 @@ import { createRequire } from 'node:module';
 import { canonicalSourceKey, conflicts, type ResourceOwner } from './resourceCoordinator';
 
 export const SOURCE_COORDINATION_FILENAME = 'source-coordination.sqlite';
-export const SOURCE_COORDINATION_SCHEMA_VERSION = 3;
+export const SOURCE_COORDINATION_SCHEMA_VERSION = 4;
 export const PROJECT_CHECK_MAX_PARALLEL = 4;
+export const PROJECT_CHECK_STAGE_LIMITS = Object.freeze({ roots: 16, bytes: 1024 * 1024 * 1024, entries: 32768 });
 const APPLICATION_ID = 0x58345343; // X4SC; never share the disposable index cache.
 const MAX_ENTRIES = 4096;
 const MAX_KEYS = 64;
@@ -73,11 +74,40 @@ interface ProjectCheckLaunchFrame {
   backendPid: number;
   guardJson: string;
 }
+export interface ProjectCheckStageScope {
+  sourceKey: string;
+  workspaceId: string;
+  actorId: string;
+  runId: string;
+}
+export interface ProjectCheckStageHandle {
+  id: string;
+  root: string;
+  runId: string;
+  kind: 'setup' | 'snapshot';
+}
+export interface PhysicalStageIdentity { device: string; file: string }
+export interface ProjectCheckStageRecord extends ProjectCheckStageHandle, ProjectCheckStageScope {
+  claimId: string;
+  instanceId: string;
+  pid: number;
+  parent: PhysicalStageIdentity & { path: string };
+  identity: PhysicalStageIdentity | null;
+  bytes: number;
+  entries: number;
+  retirement: { token: string; instanceId: string; pid: number } | null;
+}
+type StageReservation = ProjectCheckStageScope & { parent: string; kind: 'setup' | 'snapshot'; bytes: number; entries: number };
+type StageRetirement = (stage: Readonly<ProjectCheckStageRecord>, assertOwned: () => void) => undefined;
 export interface ProjectCheckSourceLease {
   ownsResource(key: string): boolean;
   assertProjectCheckAuthority(sourceKey: string, workspaceId: string, actorId: string): void;
   armProjectCheck(input: ProjectCheckGuard, maxParallelChecks?: number): Readonly<ProjectCheckLaunchFrame>;
   assertProjectCheckDrained(frame: Readonly<ProjectCheckLaunchFrame>): void;
+  reserveProjectCheckStage(input: StageReservation): Readonly<ProjectCheckStageHandle>;
+  adoptProjectCheckStage(handle: Readonly<ProjectCheckStageHandle>, created: PhysicalStageIdentity): void;
+  assertProjectCheckStage(handle: Readonly<ProjectCheckStageHandle>): void;
+  retireProjectCheckStage(handle: Readonly<ProjectCheckStageHandle>, cleanup: StageRetirement): void;
 }
 type VisibleClaim = Omit<Claim, 'state' | 'sequence' | 'guards' | 'checkBudget' | 'guardPhase' | 'handlerFinished'> & {
   guardPhase?: NonNullable<Claim['guardPhase']>;
@@ -194,7 +224,68 @@ function createClaimsTable(database: RegistryDatabase): void {
     guards_json TEXT NOT NULL DEFAULT '[]',
     check_budget INTEGER CHECK (check_budget BETWEEN 1 AND ${PROJECT_CHECK_MAX_PARALLEL}),
     handler_finished INTEGER NOT NULL DEFAULT 0 CHECK (handler_finished IN (0, 1))
-  ); PRAGMA application_id = ${APPLICATION_ID}; PRAGMA user_version = ${SOURCE_COORDINATION_SCHEMA_VERSION};`);
+  ); CREATE TABLE project_check_stages (id TEXT PRIMARY KEY NOT NULL, record_json TEXT NOT NULL);
+  PRAGMA application_id = ${APPLICATION_ID}; PRAGMA user_version = ${SOURCE_COORDINATION_SCHEMA_VERSION};`);
+}
+const uuid = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
+function stageScope(input: ProjectCheckStageScope): ProjectCheckStageScope {
+  if (!input || typeof input.workspaceId !== 'string' || !input.workspaceId || input.workspaceId.length > 512
+    || typeof input.actorId !== 'string' || !input.actorId || input.actorId.length > 1024
+    || typeof input.runId !== 'string' || !/^[a-f0-9]{32}$/.test(input.runId)) throw new Error('Invalid stage scope.');
+  const [sourceKey] = normalizeKeys([input.sourceKey]);
+  return { sourceKey, workspaceId: input.workspaceId, actorId: input.actorId, runId: input.runId };
+}
+function localStagePath(value: string): string {
+  if (typeof value !== 'string' || value.length > 32767 || [...value].some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)
+    || !path.isAbsolute(value) || /^(?:\\\\|\/\/)/.test(value) || path.resolve(value) !== value
+    || (process.platform === 'win32' && !/^[A-Za-z]:[\\/][^:]*$/.test(value))) throw new Error('Invalid local stage path.');
+  return value;
+}
+function physicalIdentity(input: PhysicalStageIdentity): PhysicalStageIdentity {
+  if (!input || typeof input.device !== 'string' || !/^(?:0|[1-9]\d{0,19})$/.test(input.device)
+    || typeof input.file !== 'string' || !/^[1-9]\d{0,19}$/.test(input.file)) throw new Error('Invalid physical stage identity.');
+  return { device: input.device, file: input.file };
+}
+function directoryIdentity(directory: string): PhysicalStageIdentity {
+  localStagePath(directory);
+  const stat = fs.lstatSync(directory, { bigint: true });
+  if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync.native(directory) !== directory) {
+    throw new Error('Stage directory is aliased or unavailable.');
+  }
+  return physicalIdentity({ device: stat.dev.toString(), file: stat.ino.toString() });
+}
+function readStageRecord(text: unknown): ProjectCheckStageRecord {
+  if (typeof text !== 'string' || text.length > 80 * 1024) throw new Error('Invalid stage journal.');
+  const value = JSON.parse(text);
+  if (!value || !uuid(value.id) || !uuid(value.claimId) || !uuid(value.instanceId)
+    || !Number.isSafeInteger(value.pid) || value.pid < 1 || value.pid > 0xffff_ffff
+    || !['setup', 'snapshot'].includes(value.kind) || !value.parent
+    || !Number.isSafeInteger(value.bytes) || value.bytes < 0 || value.bytes > PROJECT_CHECK_STAGE_LIMITS.bytes
+    || !Number.isSafeInteger(value.entries) || value.entries < 1 || value.entries > PROJECT_CHECK_STAGE_LIMITS.entries) throw new Error('Invalid stage reservation.');
+  const parent = { path: localStagePath(value.parent.path), ...physicalIdentity(value.parent) };
+  const root = path.join(parent.path, `x4forge-check-stage-${value.id}`);
+  const scope = stageScope(value);
+  let retirement: ProjectCheckStageRecord['retirement'] = null;
+  if (value.retirement !== null) {
+    const current = value.retirement;
+    if (!current || !uuid(current.token) || !uuid(current.instanceId)
+      || !Number.isSafeInteger(current.pid) || current.pid < 1 || current.pid > 0xffff_ffff) throw new Error('Invalid stage retirement owner.');
+    retirement = { token: current.token, instanceId: current.instanceId, pid: current.pid };
+  }
+  const record: ProjectCheckStageRecord = { id: value.id, root, runId: scope.runId, kind: value.kind,
+    sourceKey: scope.sourceKey, workspaceId: scope.workspaceId, actorId: scope.actorId,
+    claimId: value.claimId, instanceId: value.instanceId, pid: value.pid, parent,
+    identity: value.identity === null ? null : physicalIdentity(value.identity), bytes: value.bytes, entries: value.entries, retirement };
+  if (JSON.stringify(record) !== text) throw new Error('Noncanonical stage journal.');
+  return record;
+}
+function assertStagePhysical(record: ProjectCheckStageRecord, allowMissing = false): boolean {
+  const { path: parent, ...identity } = record.parent;
+  if (JSON.stringify(directoryIdentity(parent)) !== JSON.stringify(identity)) throw new Error('Stage parent identity changed.');
+  const stat = fs.lstatSync(record.root, { bigint: true, throwIfNoEntry: false });
+  if (!stat && allowMissing) return false;
+  if (!record.identity || JSON.stringify(directoryIdentity(record.root)) !== JSON.stringify(record.identity)) throw new Error('Stage root is not physically owned.');
+  return true;
 }
 const overlap = (a: string[], b: string[]) => a.some(left => b.some(right => conflicts(left, right)));
 function statusBase(instanceId: string): SourceCoordinationStatus {
@@ -221,6 +312,7 @@ export class SharedSourceCoordinator {
   private readonly maxPending: number;
   private readonly waitMs: number;
   private readonly pollMs: number;
+  private readonly stageRetirements = new Set<string>();
 
   constructor(private readonly options: SharedSourceCoordinatorOptions) {
     if (!options || typeof options.directory !== 'string' || !path.isAbsolute(options.directory)
@@ -253,15 +345,18 @@ export class SharedSourceCoordinator {
           const tables = database!.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all();
           if (tables.length) throw new Error('Unrecognized coordination database; existing tables were preserved.');
           createClaimsTable(database!);
-        } else if ((version === 1 || version === 2) && application === APPLICATION_ID) {
+        } else if ((version === 1 || version === 2 || version === 3) && application === APPLICATION_ID) {
           const previous = database!.prepare('SELECT sequence,id,instance_id,pid,keys_json,owner_json,queued_at,started_at,state FROM claims LIMIT 1').all();
-          const triggers = database!.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'claims'").all();
-          if (previous.length || triggers.length) {
+          const triggers = database!.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger'").all();
+          const tables = database!.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'claims'").all();
+          if (previous.length || triggers.length || tables.length) {
             throw new Error('Previous coordination schema is not empty and quiescent. No migration or ownership reset was performed.');
           }
           if (version === 2) database!.prepare('SELECT guard_json,guard_phase,handler_finished FROM claims LIMIT 0').all();
+          if (version === 3) database!.prepare('SELECT protocol,guards_json,check_budget,handler_finished FROM claims LIMIT 0').all();
           // Old cached clients also check user_version on every transaction.
-          // Removing the old columns makes their direct guard SQL refuse too.
+          // Old single-guard columns disappear; protocol4 also rejects old
+          // journal clients' direct inserts and exact protocol3 guard updates.
           database!.exec('DROP TABLE claims');
           createClaimsTable(database!);
         } else if (version !== SOURCE_COORDINATION_SCHEMA_VERSION || application !== APPLICATION_ID) {
@@ -269,8 +364,9 @@ export class SharedSourceCoordinator {
         }
         // Prepare the complete column contract so a misleading version stamp fails closed.
         database!.prepare('SELECT sequence,id,instance_id,pid,keys_json,owner_json,queued_at,started_at,state,protocol,guards_json,check_budget,handler_finished FROM claims LIMIT 0').all();
-        if (database!.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'claims'").all().length) {
-          throw new Error('Unexpected coordination claim trigger.');
+        database!.prepare('SELECT id,record_json FROM project_check_stages LIMIT 0').all();
+        if (database!.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name IN ('claims','project_check_stages')").all().length) {
+          throw new Error('Unexpected coordination ownership trigger.');
         }
       }).immediate();
       if (database.pragma('quick_check(1)', { simple: true }) !== 'ok') throw new Error('Coordination database integrity check failed.');
@@ -366,6 +462,83 @@ export class SharedSourceCoordinator {
     return claims;
   }
 
+  private stages(database: RegistryDatabase): ProjectCheckStageRecord[] {
+    const registry = fs.lstatSync(this.filename, { bigint: true });
+    if (!registry.isFile() || registry.nlink !== 1n || registry.dev !== this.fileIdentity?.dev || registry.ino !== this.fileIdentity?.ino
+      || fs.realpathSync.native(this.filename) !== this.filename) throw new Error('Stage registry is replaced or linked.');
+    directoryIdentity(path.dirname(this.filename));
+    const rows = database.prepare('SELECT id,record_json FROM project_check_stages ORDER BY id LIMIT ?').all(PROJECT_CHECK_STAGE_LIMITS.roots + 1);
+    if (rows.length > PROJECT_CHECK_STAGE_LIMITS.roots) throw new Error('Stage root quota exceeded; ownership preserved.');
+    const stages = rows.map(row => {
+      const value = row as { id: unknown; record_json: unknown }; const record = readStageRecord(value.record_json);
+      if (record.id !== value.id) throw new Error('Stage journal identity mismatch.');
+      return record;
+    });
+    if (stages.reduce((total, record) => total + record.bytes, 0) > PROJECT_CHECK_STAGE_LIMITS.bytes
+      || stages.reduce((total, record) => total + record.entries, 0) > PROJECT_CHECK_STAGE_LIMITS.entries) throw new Error('Stage reservation quota exceeded; ownership preserved.');
+    return stages;
+  }
+
+  /** Internal lifecycle inventory; never projected by the public coordination status. */
+  projectCheckStages(): ProjectCheckStageRecord[] {
+    return this.transaction(database => this.stages(database));
+  }
+
+  private retireStage(id: string, scope: ProjectCheckStageScope, cleanup: StageRetirement, ownClaimId?: string): void {
+    const expectedScope = stageScope(scope);
+    if (!uuid(id) || typeof cleanup !== 'function' || this.stageRetirements.has(id)) throw new Error('Invalid or reentrant stage retirement.');
+    this.stageRetirements.add(id);
+    try {
+      const retiring = this.transaction(database => {
+        const claims = this.claims(database);
+        const record = this.stages(database).find(stage => stage.id === id);
+        if (!record || JSON.stringify(stageScope(record)) !== JSON.stringify(expectedScope)) throw new Error('Stage scope does not match.');
+        const claim = claims.find(candidate => candidate.id === record.claimId);
+        if (claim && (claim.id !== ownClaimId || claim.instanceId !== this.instanceId || claim.pid !== process.pid
+          || claim.state !== 'active' || claim.handlerFinished || claim.guards.some(entry => entry.phase !== 'confirmed'))) {
+          throw failure('PROJECT_CHECK_CLEANUP_UNCONFIRMED', 'Stage remains owned by an active or unconfirmed source claim.', 503);
+        }
+        const prior = record.retirement;
+        if (prior && prior.instanceId !== this.instanceId && this.liveness(prior.pid) !== 'dead') {
+          throw failure('PROJECT_CHECK_CLEANUP_UNCONFIRMED', 'Stage retirement owner is alive or unknown.', 503);
+        }
+        assertStagePhysical(record, true);
+        const next = { ...record, retirement: { token: randomUUID(), instanceId: this.instanceId, pid: process.pid } };
+        const changed = database.prepare('UPDATE project_check_stages SET record_json = ? WHERE id = ? AND record_json = ? COLLATE BINARY')
+          .run(JSON.stringify(next), record.id, JSON.stringify(record));
+        if (changed.changes !== 1) throw new Error('Stage retirement admission was not persisted.');
+        return next;
+      });
+      // No SQLite transaction is held during filesystem work. A failed callback
+      // retains the exact journal reservation, including its retirement owner.
+      const assertOwned = () => {
+        this.transaction(database => {
+          const current = this.stages(database).find(stage => stage.id === id);
+          if (JSON.stringify(current) !== JSON.stringify(retiring)) throw new Error('Stage retirement ownership changed.');
+        });
+        assertStagePhysical(retiring);
+      };
+      if (assertStagePhysical(retiring, true)) {
+        const result: unknown = cleanup(Object.freeze({ ...retiring, parent: Object.freeze({ ...retiring.parent }),
+          identity: retiring.identity && Object.freeze({ ...retiring.identity }), retirement: Object.freeze({ ...retiring.retirement }) }), assertOwned);
+        if (result !== undefined) throw new Error('Stage cleanup must be synchronous and return no value.');
+      }
+      if (assertStagePhysical(retiring, true)) throw new Error('Stage cleanup did not remove the exact owned root.');
+      this.transaction(database => {
+        // Revalidate all ownership rows; corruption must not be erased by cleanup.
+        this.stages(database);
+        const changed = database.prepare('DELETE FROM project_check_stages WHERE id = ? AND record_json = ? COLLATE BINARY')
+          .run(id, JSON.stringify(retiring));
+        if (changed.changes !== 1) throw new Error('Stage retirement acknowledgement was not persisted.');
+      });
+    } finally { this.stageRetirements.delete(id); }
+  }
+
+  /** Only absent safely-reclaimed claims qualify; age and path prefix are irrelevant. */
+  retireAbandonedProjectCheckStage(id: string, scope: ProjectCheckStageScope, cleanup: StageRetirement): void {
+    this.retireStage(id, scope, cleanup);
+  }
+
   status(keys: string[], workspaceId?: string): SourceCoordinationStatus {
     try {
       const normalized = normalizeKeys(keys, true);
@@ -398,12 +571,76 @@ export class SharedSourceCoordinator {
     let leaseOpen = false;
     let guardMayExist = false;
     const frames = new Set<Readonly<ProjectCheckLaunchFrame>>();
+    const stages = new Map<Readonly<ProjectCheckStageHandle>, ProjectCheckStageRecord>();
+    const ownStage = (database: RegistryDatabase, handle: Readonly<ProjectCheckStageHandle>) => {
+      const admitted = stages.get(handle);
+      const claim = this.claims(database).find(candidate => candidate.id === id && candidate.instanceId === this.instanceId && candidate.pid === process.pid);
+      if (!leaseOpen || !admitted || claim?.state !== 'active' || claim.handlerFinished) throw new Error('Stage handle has no active source claim.');
+      const record = this.stages(database).find(stage => stage.id === admitted.id);
+      if (!record || JSON.stringify({ ...record, retirement: null }) !== JSON.stringify({ ...admitted, retirement: null })) throw new Error('Stage handle changed.');
+      return record;
+    };
     const lease: ProjectCheckSourceLease = {
       ownsResource: key => leaseOpen && resources.includes(key),
       assertProjectCheckAuthority: (sourceKey, workspaceId, actorId) => {
         if (!lease.ownsResource(sourceKey) || identity.workspaceId !== workspaceId || identity.actor !== actorId) {
           throw failure('PROJECT_CHECK_SCOPE_MISMATCH', 'The source lease does not own this project check and workspace.', 403);
         }
+      },
+      reserveProjectCheckStage: input => {
+        const scope = stageScope(input);
+        lease.assertProjectCheckAuthority(scope.sourceKey, scope.workspaceId, scope.actorId);
+        if (!['setup', 'snapshot'].includes(input.kind) || !Number.isSafeInteger(input.bytes) || input.bytes < 0
+          || !Number.isSafeInteger(input.entries) || input.entries < 1) throw new Error('Invalid stage budget.');
+        const parent = { path: localStagePath(input.parent), ...directoryIdentity(input.parent) };
+        if (conflicts(canonicalSourceKey(parent.path), scope.sourceKey) || conflicts(canonicalSourceKey(parent.path), canonicalSourceKey(path.dirname(this.filename)))) {
+          throw new Error('Stage parent overlaps source or coordination storage.');
+        }
+        const stageId = randomUUID();
+        const record: ProjectCheckStageRecord = { id: stageId, root: path.join(parent.path, `x4forge-check-stage-${stageId}`), runId: scope.runId, kind: input.kind,
+          sourceKey: scope.sourceKey, workspaceId: scope.workspaceId, actorId: scope.actorId, claimId: id, instanceId: this.instanceId, pid: process.pid,
+          parent, identity: null, bytes: input.bytes, entries: input.entries, retirement: null };
+        readStageRecord(JSON.stringify(record));
+        this.transaction(database => {
+          const own = this.claims(database).find(claim => claim.id === id && claim.instanceId === this.instanceId && claim.pid === process.pid);
+          const prior = this.stages(database);
+          if (!leaseOpen || own?.state !== 'active' || own.handlerFinished || own.guards.some(entry => entry.guard.runId !== scope.runId)
+            || prior.some(stage => stage.claimId === id && (stage.runId !== scope.runId || stage.retirement))) throw new Error('Stage reservation lost exact run ownership.');
+          if (prior.length >= PROJECT_CHECK_STAGE_LIMITS.roots
+            || prior.reduce((total, stage) => total + stage.bytes, input.bytes) > PROJECT_CHECK_STAGE_LIMITS.bytes
+            || prior.reduce((total, stage) => total + stage.entries, input.entries) > PROJECT_CHECK_STAGE_LIMITS.entries) throw failure('PROJECT_CHECK_STAGE_LIMIT', 'Private project-check staging budget is occupied; no payload was created.');
+          if (fs.lstatSync(record.root, { throwIfNoEntry: false })) throw new Error('Reserved stage path is already occupied.');
+          if (JSON.stringify(directoryIdentity(parent.path)) !== JSON.stringify(physicalIdentity(parent))) throw new Error('Stage parent changed before reservation.');
+          database.prepare('INSERT INTO project_check_stages (id,record_json) VALUES (?,?)').run(record.id, JSON.stringify(record));
+        });
+        const handle = Object.freeze({ id: record.id, root: record.root, runId: record.runId, kind: record.kind });
+        stages.set(handle, record); return handle;
+      },
+      adoptProjectCheckStage: (handle, created) => {
+        const adopted = this.transaction(database => {
+          const record = ownStage(database, handle);
+          if (record.identity || record.retirement) throw new Error('Stage is already adopted or retiring.');
+          const identity = directoryIdentity(record.root);
+          if (JSON.stringify(identity) !== JSON.stringify(physicalIdentity(created))) throw new Error('Stage root differs from the created directory.');
+          if (fs.readdirSync(record.root).length || JSON.stringify(directoryIdentity(record.parent.path)) !== JSON.stringify(physicalIdentity(record.parent))) throw new Error('Stage must be empty under its original parent before adoption.');
+          const next = { ...record, identity };
+          const changed = database.prepare('UPDATE project_check_stages SET record_json = ? WHERE id = ? AND record_json = ? COLLATE BINARY')
+            .run(JSON.stringify(next), record.id, JSON.stringify(record));
+          if (changed.changes !== 1) throw new Error('Stage adoption was not persisted.');
+          return next;
+        });
+        stages.set(handle, adopted);
+      },
+      assertProjectCheckStage: handle => {
+        this.transaction(database => {
+          const record = ownStage(database, handle);
+          if (record.retirement) throw new Error('Stage is retiring.');
+          assertStagePhysical(record);
+        });
+      },
+      retireProjectCheckStage: (handle, cleanup) => {
+        const record = this.transaction(database => ownStage(database, handle));
+        this.retireStage(record.id, record, cleanup, id);
       },
       armProjectCheck: (input, maxParallelChecks = 1) => {
         if (!leaseOpen) throw failure('SOURCE_COORDINATION_LOST', 'Project check requires active source ownership.', 503);
@@ -415,6 +652,9 @@ export class SharedSourceCoordinator {
         const frame = this.transaction(database => {
           const own = this.claims(database).find(claim => claim.id === id && claim.instanceId === this.instanceId && claim.pid === process.pid);
           if (!own || own.state !== 'active' || own.handlerFinished) throw failure('SOURCE_COORDINATION_LOST', 'Project check lost its exact active claim.', 503);
+          if (this.stages(database).some(stage => stage.claimId === id && (stage.runId !== guard.runId || stage.retirement))) {
+            throw failure('PROJECT_CHECK_GUARD_INVALID', 'Project check stage run is different or already retiring.');
+          }
           if ((own.checkBudget !== null && own.checkBudget !== maxParallelChecks)
             || own.guards.some(entry => entry.guard.runId !== guard.runId)) {
             throw failure('PROJECT_CHECK_GUARD_INVALID', 'Project checks on one claim must retain the same run and count budget.');
@@ -534,7 +774,7 @@ export class SharedSourceCoordinator {
 
   /** Tests/owned shutdown only: never drop an active claim merely to close a connection. */
   close(): void {
-    if (this.inFlight) throw failure('SOURCE_COORDINATION_BUSY', 'Cannot close coordination while operations are in flight.');
+    if (this.inFlight || this.stageRetirements.size) throw failure('SOURCE_COORDINATION_BUSY', 'Cannot close coordination while operations are in flight.');
     this.database?.close();
     this.database = undefined;
     this.fileIdentity = undefined;
