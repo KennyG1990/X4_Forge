@@ -846,6 +846,25 @@ export function reindentRawXmlBlock(raw: string, baseIndent: string, step: strin
   return out.join('\n');
 }
 
+function indexMdGraph(nodes: MDNode[], links: MDLink[]) {
+  const nodesById = new Map<string, MDNode>();
+  const linksBySource = new Map<string, MDLink[]>();
+  const subCueTargets = new Set<string>();
+  const targetIds = new Set<string>();
+  for (const node of nodes) {
+    // Array.find selects the first occurrence in legacy graphs with duplicate IDs.
+    if (!nodesById.has(node.id)) nodesById.set(node.id, node);
+  }
+  for (const link of links) {
+    const outgoing = linksBySource.get(link.sourceNodeId);
+    if (outgoing) outgoing.push(link);
+    else linksBySource.set(link.sourceNodeId, [link]);
+    if (link.sourcePortId === 'out_sub') subCueTargets.add(link.targetNodeId);
+    targetIds.add(link.targetNodeId);
+  }
+  return { nodesById, linksBySource, subCueTargets, targetIds };
+}
+
 // Helper functions to generate the XML output cleanly
 export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: string[], scriptNameOverride?: string): string {
   // Filter out any nodes where includeInBuild is false
@@ -860,6 +879,7 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
     nodes: activeNodes,
     links: activeLinks
   };
+  const { nodesById, linksBySource, subCueTargets } = indexMdGraph(workspace.nodes, workspace.links);
 
   function renderCue(cue: any, indentDepth: number = 2): string {
     const indent = ' '.repeat(indentDepth);
@@ -907,11 +927,12 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
     }
     
     // Conditions block parsing (find all nodes connected to out_cond)
-    const condLinks = workspace.links.filter(l => l.sourceNodeId === cue.id && l.sourcePortId === 'out_cond');
+    const outgoing = linksBySource.get(cue.id) || [];
+    const condLinks = outgoing.filter(l => l.sourcePortId === 'out_cond');
     if (condLinks.length > 0 || cue.properties.hasConditionsElement === true) {
       xml += `${indentPlus}<conditions>\n`;
       condLinks.forEach(link => {
-        const targetNode = workspace.nodes.find(n => n.id === link.targetNodeId);
+        const targetNode = nodesById.get(link.targetNodeId);
         if (targetNode) {
           if (targetNode.xmlTag === 'custom_event' || targetNode.xmlTag === 'custom_condition') {
             // B68: idempotent re-indent (was per-line `indentDouble + l` with no per-line dedent → runaway).
@@ -987,7 +1008,7 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
     // Actions block — recursive emit so control-flow containers (do_if/do_while/…)
     // nest their out_body chain INSIDE the element; out_next continues the sibling
     // chain exactly as before. Cycle-safe via a single shared `emitSeen` set.
-    const actLinks = workspace.links.filter(l => l.sourceNodeId === cue.id && l.sourcePortId === 'out_act');
+    const actLinks = outgoing.filter(l => l.sourcePortId === 'out_act');
     if (actLinks.length > 0 || cue.properties.hasActionsElement === true) {
       xml += `${indentPlus}<actions>\n`;
       const emitSeen = new Set<string>();
@@ -1000,7 +1021,7 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
             .filter(([k, v]) => v !== undefined && v !== null && String(v) !== '' && k !== 'rawXml')
             .map(([k, v]) => `${k}="${escapeXMLAttribute(String(v))}"`)
             .join(' ');
-          const bodyLink = workspace.links.find(l => l.sourceNodeId === node.id && l.sourcePortId === 'out_body');
+          const bodyLink = linksBySource.get(node.id)?.find(l => l.sourcePortId === 'out_body');
           if (bodyLink) {
             xml += `${ind}<${tag}${attrs ? ' ' + attrs : ''}>\n`;
             emitChain(bodyLink.targetNodeId, ind + '  ');
@@ -1081,12 +1102,12 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
       };
 
       const emitChain = (startId: string, ind: string): void => {
-        let node = workspace.nodes.find(n => n.id === startId);
+        let node = nodesById.get(startId);
         while (node && !emitSeen.has(node.id)) {
           emitSeen.add(node.id);
           emitNode(node, ind);
-          const nextLink = workspace.links.find(l => l.sourceNodeId === node!.id && l.sourcePortId === 'out_next');
-          node = nextLink ? workspace.nodes.find(n => n.id === nextLink.targetNodeId) : undefined;
+          const nextLink = linksBySource.get(node.id)?.find(l => l.sourcePortId === 'out_next');
+          node = nextLink ? nodesById.get(nextLink.targetNodeId) : undefined;
         }
       };
 
@@ -1099,11 +1120,11 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
     }
     
     // Recursive nesting for child cues (out_sub -> in_flow)
-    const subCueLinks = workspace.links.filter(l => l.sourceNodeId === cue.id && l.sourcePortId === 'out_sub');
+    const subCueLinks = outgoing.filter(l => l.sourcePortId === 'out_sub');
     if (subCueLinks.length > 0) {
       xml += `${indentPlus}<cues>\n`;
       subCueLinks.forEach(link => {
-        const subCue = workspace.nodes.find(n => n.id === link.targetNodeId);
+        const subCue = nodesById.get(link.targetNodeId);
         if (subCue && subCue.type === 'cue') {
           xml += renderCue(subCue, indentDepth + 4);
         }
@@ -1130,9 +1151,7 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
   const cueNodes = workspace.nodes.filter(n => n.type === 'cue');
   const targetCues = selectedCueIds && selectedCueIds.length > 0
     ? cueNodes.filter(n => selectedCueIds.includes(n.id))
-    : cueNodes.filter(n => {
-        return !workspace.links.some(l => l.targetNodeId === n.id && l.sourcePortId === 'out_sub');
-      });
+    : cueNodes.filter(n => !subCueTargets.has(n.id));
 
   targetCues.forEach(cue => {
     xml += renderCue(cue, 4);
@@ -1490,27 +1509,28 @@ export function validateModWorkspace(workspace: ModWorkspace, code: string): XML
   // Helpers: resolve linked nodes for each cue in the flowchart
   // ──────────────────────────────────────────────────────────────────
   const cueNodes = workspace.nodes.filter(n => n.type === 'cue');
+  const { nodesById, linksBySource, targetIds } = indexMdGraph(workspace.nodes, workspace.links);
 
   /** Returns all condition/event nodes linked from a cue's out_cond port */
   function getConditionNodes(cue: MDNode): MDNode[] {
-    return workspace.links
-      .filter(l => l.sourceNodeId === cue.id && l.sourcePortId === 'out_cond')
-      .map(l => workspace.nodes.find(n => n.id === l.targetNodeId))
+    return (linksBySource.get(cue.id) || [])
+      .filter(l => l.sourcePortId === 'out_cond')
+      .map(l => nodesById.get(l.targetNodeId))
       .filter((n): n is MDNode => !!n);
   }
 
   /** Returns the full action chain linked from a cue's out_act port */
   function getActionChain(cue: MDNode): MDNode[] {
     const actions: MDNode[] = [];
-    const firstLinks = workspace.links.filter(l => l.sourceNodeId === cue.id && l.sourcePortId === 'out_act');
+    const firstLinks = (linksBySource.get(cue.id) || []).filter(l => l.sourcePortId === 'out_act');
     firstLinks.forEach(link => {
-      let current = workspace.nodes.find(n => n.id === link.targetNodeId);
+      let current = nodesById.get(link.targetNodeId);
       const seen = new Set<string>();
       while (current && !seen.has(current.id)) {
         seen.add(current.id);
         actions.push(current);
-        const next = workspace.links.find(l => l.sourceNodeId === current!.id && l.sourcePortId === 'out_next');
-        current = next ? workspace.nodes.find(n => n.id === next.targetNodeId) : undefined;
+        const next = linksBySource.get(current.id)?.find(l => l.sourcePortId === 'out_next');
+        current = next ? nodesById.get(next.targetNodeId) : undefined;
       }
     });
     return actions;
@@ -1633,7 +1653,7 @@ export function validateModWorkspace(workspace: ModWorkspace, code: string): XML
     // ── Flowchart wiring: warn if cue has no conditions AND no actions ──
     if (conditionNodes.length === 0 && actionNodes.length === 0) {
       // Not an error — an unconditional cue with sub-cues is valid
-      const hasSubCues = workspace.links.some(l => l.sourceNodeId === cue.id && l.sourcePortId === 'out_sub');
+      const hasSubCues = linksBySource.get(cue.id)?.some(l => l.sourcePortId === 'out_sub');
       if (!hasSubCues) {
         diagnostics.push({
           severity: 'info',
@@ -1646,7 +1666,7 @@ export function validateModWorkspace(workspace: ModWorkspace, code: string): XML
 
     // ── Flowchart wiring: warn if conditions exist but no actions ──
     if (conditionNodes.length > 0 && actionNodes.length === 0) {
-      const hasSubCues = workspace.links.some(l => l.sourceNodeId === cue.id && l.sourcePortId === 'out_sub');
+      const hasSubCues = linksBySource.get(cue.id)?.some(l => l.sourcePortId === 'out_sub');
       if (!hasSubCues) {
         diagnostics.push({
           severity: 'warning',
@@ -1673,7 +1693,7 @@ export function validateModWorkspace(workspace: ModWorkspace, code: string): XML
   // ──────────────────────────────────────────────────────────────────
   const nonCueNodes = workspace.nodes.filter(n => n.type !== 'cue');
   nonCueNodes.forEach(node => {
-    const isTargetOfAnyLink = workspace.links.some(l => l.targetNodeId === node.id);
+    const isTargetOfAnyLink = targetIds.has(node.id);
     if (!isTargetOfAnyLink) {
       diagnostics.push({
         severity: 'warning',
