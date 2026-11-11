@@ -8180,3 +8180,7 @@ The shared project validator reuses Lua findings and scope for identical ordered
 ## 2026-11-10 — VERIFIED effective MD and AI schema reuse (#97)
 
 Both native aliases use the shared exact-text cache for effective script schema diagnostics. Focused 32/32 and overlay 24/24 passed with current corpus and schema invalidation. The 60-patch validator benchmark preserved its output hash and took 0.26 s warm and 0.29 s after one edit. Native 313/313 preserved exact artifacts, receipts and refusals. Unit 12 release review is NOT_READY. [Contract, timings and release review](docs/plans/2026-11-10-effective-script-schema-reuse.md).
+
+## 2026-11-10 — VERIFIED 992-file native scratch workload (#97)
+
+The headless native route previewed in 57.78 s and applied in 163.69 s. Independent readback verified all 993 target files and the committed receipt. A separate request on the same selected artifact proved wrong-binding refusal without writes. Source rechecks accounted for 89.60 s on apply. The snapshot covered 500 text files and reported 22 unavailable. [Benchmark and evidence](docs/plans/2026-11-10-native-deploy-consumer-scale.md).

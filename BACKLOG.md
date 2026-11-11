@@ -8,7 +8,7 @@
 
 ### Native deploy latency `in_progress` (GitHub #97)
 
-Both aliases report stage timings, skip redundant compilation, and reuse exact Lua scope and effective MD/AI schema diagnostics. The 60-patch validator fixture fell from 3.28 s to 0.26 s warm and 3.23 s to 0.29 s after one edit, with an identical output hash. The native replay passed 313/313 including exact bytes, receipts and no-write refusals. Broader preflight reuse and the consumer-size deployment remain open. [Timing proof](docs/plans/2026-11-10-deploy-stage-timings.md), [Lua reuse proof](docs/plans/2026-11-10-deploy-preview-validation-reuse.md), [effective script schema proof](docs/plans/2026-11-10-effective-script-schema-reuse.md).
+Both aliases report stage timings, skip redundant compilation, and reuse exact Lua scope and effective MD/AI schema diagnostics. A 992-file synthetic native run took 57.78 s preview and 163.69 s bound apply. Source rechecks accounted for 89.60 s of apply. Exact 993-file output, committed receipt and the wrong-binding refusal passed. Forge reported 500 text inputs, 22 unavailable and 471 byte-only. The next unit will target repeated source work within the existing write barriers. The consumer's under-one-minute target remains open. [Native workload and evidence](docs/plans/2026-11-10-native-deploy-consumer-scale.md), [effective script schema proof](docs/plans/2026-11-10-effective-script-schema-reuse.md).
 
 ### Official reference composition coverage `in_progress` (GitHub #11)
 
