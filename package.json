@@ -28,6 +28,7 @@
     "test:routes": "node scripts/route-integration.mjs",
     "test:capabilities": "tsx scripts/capability-contract-audit.ts",
     "test:configuration-grant": "tsx scripts/configuration-grant.selftest.ts",
+    "test:configuration-operations": "tsx scripts/configuration-operations.selftest.ts",
     "test:mcp-capabilities": "tsx scripts/mcp-capability-selftest.ts",
     "test:oracles": "node scripts/oracle-integration.mjs",
     "test:product-copy": "node scripts/product-copy-check.mjs",

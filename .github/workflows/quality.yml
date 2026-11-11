@@ -54,6 +54,8 @@ jobs:
 
       - name: Prove bounded configuration grant restrictions
         run: npm run test:configuration-grant
+      - name: Prove isolated configuration operations and receipt failures
+        run: npm run test:configuration-operations
 
       - name: Prove literal diff expression provenance
         run: npm run test:diff-expression-values

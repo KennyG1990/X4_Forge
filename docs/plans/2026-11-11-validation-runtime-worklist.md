@@ -1,0 +1,26 @@
+# Validation and debuglog execution worklist
+
+Status: IN_PROGRESS / PARTIAL. Lane: FULL program with bounded issue units. Owner: Forge QA under existing #20/#74/#14 owners. Ken requested execution of the issues listed in the validation/debuglog review. This prioritizes those issues over further #96 transport work; it does not discard #96 or redefine the standing backlog goal.
+
+## Baseline and rules
+
+Starting HEAD cb5cf7d; public0.0.83 and its private installed payload remain pinned. Current uncommitted #96 source service/key-lifecycle draft is being checkpointed separately; its15real-writer scenarios and58restriction checks are not validation/debuglog feature credit. No HTTP/MCP settings permission is exposed. Preserve unrelated work.
+
+Heavy isolated headless testing authorized. No computer use, native IDE/live Forge/profile/AiLive/game/save writes or X4 driving. Claude is paused; do not message him directly or manufacture a game result. Reuse one current fixture/driver per necessary scenario, bound and retire owned runtime after terminal producer evidence. No backup/runtime-copy families.
+
+For every row: reconcile latest issue body/comments, current source and exact installed product; reproduce the named failure or establish its bounded fix; repair its current owner only if required; run focused positives/negatives and required gates; commit verified source units; qualify exact public artifacts before release. Update the existing issue and Notion QA record with proof boundaries, not duplicate issues. A route/oracle/synthetic log does not prove game behavior or visible native IDE behavior.
+
+## Ordered issue units and done-when evidence
+
+1. **Validation noise and consistency — #60, #54, #64.** Establish which original failures remain in0.0.83 rather than reimplementing verified Dev fixes. Reuse actual positive/typo/cue controls across project validation, Problems, native previews and installed compiled server. Genuine errors must remain; stale bound applies write nothing. The later #64 ware-table false-positive report is distinct remaining scope and must be reproduced before repair. Installed/rendered parity and exact fixture receipts must be explicit.
+2. **Debuglog attribution and continuity — #52, #57.** Replay ordinary authored diagnostics/signature notices versus engine-shaped widget/trace/reload faults, contiguous and cross-poll. Prove precise ownership, no proximity blame, correct source positions and restart/rotation/truncation behavior. Preserve observed load/activity beyond the tail; incomplete coverage remains unknown. Exact engine-format proof remains a Claude gate.
+3. **Boot/source inventory — #55, #56.** Verify registration-change advisories, manifest-bound per-file boot evidence, missing/unknown semantics and modeled-versus-actual source counts against the current installed product. Test new source files, invalid/missing roots and changed manifests without mutating the user's workspace. Warm/cold X4 behavior and visible native-host acceptance remain separate.
+4. **Lua and project-check coverage — #59, #61, #86.** Start from delivered0.0.83 scope/order/registration and approved-check machinery. Exercise exact runtime inventory and lexical/deferred-order controls; retain gaps for dynamic/unregistered/truncated/unchecked behavior. Real owner/device enrollment and consumer gate equivalence must pass before recommending retirement of any AiLive gates. Builder adoption/full hand-written UI behavior is broader #59 work, not closed by syntax or a passing harness.
+5. **Freshness and measured cost — #97.** Trace the specific consumer STALE result to source/artifact/validator identities, not timestamp speculation. Retain reviewed preview/apply binding and source/target refusal while measuring named stages. Current62.36s synthetic apply and graph improvements are historical bounded evidence; current consumer consistency/sub-minute acceptance remains open.
+6. **Engine oracle and LIVE experience — #14, #35.** Reuse the delivered deterministic debugger; add controlled static-versus-engine evidence and current-session LIVE cue/error/stop proof. Prepare exact standalone packet, steps/signals/failure/cleanup for Claude when resumed. Silent semantics remain unobservable without evidence; no game-only close while the operator is paused.
+
+## Records / current outcome
+
+Detailed intake: `2026-11-11-validation-debuglog-review.md`; existing GitHub owners retain original acceptance. Each implementation unit adds its own reconciled contract and evidence under the existing finite QA root. Record source, rendered, packaged/installed and game proof separately. No issue is closed by this worklist. No capability-map delta yet. Rollback uses bounded source diffs and isolated fixtures, never historical global config restoration.
+
+AAR: execution pending. Initial review found stale B95/B96 wording and fragmented body/comment status; carry those documentary discrepancies into the owning reconciliation without treating them as current reproduced code failures.

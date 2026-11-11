@@ -71,7 +71,7 @@ export function slugifyWorkspaceName(name: string): string {
 }
 
 export interface AtomicWriteOptions {
-  /** Test-only seam: production callers never provide this. */
+  /** Final pre-promotion guard (CAS), also used for deterministic failure injection. */
   beforeRename?: (tmp: string, target: string) => void;
   /** Create the complete sibling temp with this mode before promotion (for credential files). */
   mode?: number;

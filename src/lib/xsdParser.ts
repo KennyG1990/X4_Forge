@@ -3,7 +3,7 @@ import os from 'os';
 import path from 'path';
 import { XMLParser } from 'fast-xml-parser';
 import { dataPath } from './dataDir';
-import { atomicWriteFile } from './workspaceState';
+import { atomicWriteFile, type AtomicWriteOptions } from './workspaceState';
 import { expandIncludeChain } from './schemaRegistry';
 import { schemaLibraryToTemplates, SchemaAttribute, SchemaCategory, SchemaElement, SchemaLibrary } from './schemaTypes';
 import { MAX_PROJECT_XML_DEPTH, SAFE_XML_ENTITY_OPTIONS } from './xmlInputLimits';
@@ -260,7 +260,7 @@ export function getDefaultSchemaDir(gamePath = getDefaultGamePath()): string {
   return dataPath('harvested-schemas');
 }
 
-function configPath(): string {
+export function configPath(): string {
   // B51: honor an EXPLICIT config dir (X4_CONFIG_DIR) so the packaged extension can persist the
   // user's Directory Settings OUTSIDE its install dir (which every extension update wipes).
   // Only X4_CONFIG_DIR — deliberately NOT X4_STATE_DIR, which the e2e/ephemeral stack sets for
@@ -330,8 +330,8 @@ export function readXsdConfig(): XsdConfig {
   }
 }
 
-export function writeXsdConfig(config: XsdConfig): void {
-  atomicWriteFile(configPath(), `${JSON.stringify(config, null, 2)}\n`);
+export function writeXsdConfig(config: XsdConfig, options?: AtomicWriteOptions): void {
+  atomicWriteFile(configPath(), `${JSON.stringify(config, null, 2)}\n`, options);
 }
 
 export function resolveXsdConfig(config = readXsdConfig()): ResolvedXsdConfig {

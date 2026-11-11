@@ -94,6 +94,9 @@ export interface AgentKeyStore {
   touch(id: string, atMs?: number): void;
   /** Drop expired + revoked records older than the given age (housekeeping). */
   prune(atMs?: number, keepRevokedMs?: number): number;
+  /** Owner-side restriction update only; never changes immutable route/effect authority. */
+  approveConfigurationGrant(id: string, expectedAuthority: string, request: unknown): ConfigurationGrant;
+  configurationAuthorityRevision(id: string): string;
 }
 
 export const AGENT_KEY_PREFIX = 'x4fk_';
@@ -118,7 +121,7 @@ function isAgentKeyRecord(value: unknown): value is AgentKeyRecord {
   const constraint = row.capabilityConstraint;
   const grant = row.configurationGrant;
   const grantValid = grant === undefined || (isConfigurationGrant(grant)
-    && grant.notBefore === row.createdAt
+    && typeof row.createdAt === 'number' && grant.notBefore >= row.createdAt
     && (row.expiresAt === null || (typeof row.expiresAt === 'number' && grant.expiresAt <= row.expiresAt)));
   const constraintKeysValid = constraint === undefined || (!!constraint && typeof constraint === 'object' && !Array.isArray(constraint) &&
     JSON.stringify(Object.keys(constraint).sort()) === JSON.stringify(['allowedEffects', 'capabilityIdentities']));
@@ -161,12 +164,17 @@ export function createAgentKeyStore(opts: StoreOptions): AgentKeyStore {
   const writeJson = opts.writeJson || atomicWriteJson;
   let records: AgentKeyRecord[] = [];
   let loadError: string | null = null;
+  let loadedBytes: string | null = null;
 
   // ---- persistence (atomic write; missing is first boot, malformed/unreadable fails closed) ----
   function load(): void {
     if (!opts.file) return;
+    records = [];
+    loadError = null;
+    loadedBytes = null;
     try {
       const raw = fs.readFileSync(opts.file, 'utf8');
+      loadedBytes = raw;
       const parsed = JSON.parse(raw);
       if (!parsed || typeof parsed !== 'object' || ![1, 2, 3].includes(parsed.version) || !Array.isArray(parsed.keys) || !parsed.keys.every(isAgentKeyRecord)) {
         throw new Error('agent key store has an invalid shape');
@@ -183,12 +191,27 @@ export function createAgentKeyStore(opts: StoreOptions): AgentKeyStore {
   function save(next: AgentKeyRecord[]): void {
     if (!opts.file) return;
     if (loadError) throw new Error(`Agent key store is unreadable; refusing to overwrite it: ${loadError}`);
-    writeJson(opts.file, { version: 3, keys: next }, { mode: 0o600 });
+    writeJson(opts.file, { version: 3, keys: next }, { mode: 0o600, beforeRename: () => {
+      let current: string | null = null;
+      try { current = fs.readFileSync(opts.file, 'utf8'); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+      if (current !== loadedBytes) throw new Error('Agent key store changed; reload and retry.');
+    } });
+    loadedBytes = fs.readFileSync(opts.file, 'utf8');
+  }
+  function authorityRevision(id: string): string {
+    const row = records.find(record => record.id === id);
+    if (!row) throw new Error('Agent key is unavailable.');
+    // Usage counters do not grant or revoke authority and must not stale an approval.
+    const authority: Partial<AgentKeyRecord> = { ...row };
+    delete authority.lastUsedAt; delete authority.useCount;
+    return crypto.createHash('sha256').update(JSON.stringify(authority)).digest('hex');
   }
   load();
 
   return {
     create(label: string, scope: AgentKeyScope, ttlMs: number | null, workspaceId?: string, capabilityConstraint?: AgentCapabilityConstraint, configurationRequest?: unknown) {
+      load();
       if (workspaceId !== undefined && !/^ws_[a-f0-9]{24}$/i.test(workspaceId)) {
         throw new Error('Agent key workspaceId is malformed.');
       }
@@ -249,6 +272,7 @@ export function createAgentKeyStore(opts: StoreOptions): AgentKeyStore {
     },
 
     verify(token: string, atMs?: number): AgentKeyVerify {
+      load();
       if (!token || !token.startsWith(AGENT_KEY_PREFIX)) return { ok: false, reason: 'unknown' };
       const at = atMs ?? now();
       const hash = hashAgentKey(token);
@@ -273,6 +297,7 @@ export function createAgentKeyStore(opts: StoreOptions): AgentKeyStore {
     },
 
     revoke(id: string): boolean {
+      load();
       const rec = records.find((r) => r.id === id);
       if (!rec || rec.revokedAt !== null) return false;
       const next = records.map(row => row.id === id ? { ...row, revokedAt: now() } : row);
@@ -282,6 +307,7 @@ export function createAgentKeyStore(opts: StoreOptions): AgentKeyStore {
     },
 
     list() {
+      load();
       return records.map(({ tokenHash, ...rest }) => ({
         ...rest,
         ...(rest.configurationGrant ? { configurationGrant: cloneConfigurationGrant(rest.configurationGrant) } : {}),
@@ -296,6 +322,7 @@ export function createAgentKeyStore(opts: StoreOptions): AgentKeyStore {
     },
 
     touch(id: string, atMs?: number) {
+      load();
       const rec = records.find((r) => r.id === id);
       if (!rec) return;
       const next = records.map(row => row.id === id ? { ...row, lastUsedAt: atMs ?? now(), useCount: row.useCount + 1 } : row);
@@ -309,6 +336,7 @@ export function createAgentKeyStore(opts: StoreOptions): AgentKeyStore {
     },
 
     prune(atMs?: number, keepRevokedMs = 30 * 86_400_000): number {
+      load();
       const at = atMs ?? now();
       const before = records.length;
       const next = records.filter((r) => {
@@ -321,6 +349,27 @@ export function createAgentKeyStore(opts: StoreOptions): AgentKeyStore {
         records = next;
       }
       return before - next.length;
+    },
+    configurationAuthorityRevision(id) {
+      load();
+      if (loadError) throw new Error('Agent key store is unreadable.');
+      return authorityRevision(id);
+    },
+    approveConfigurationGrant(id, expectedAuthority, request) {
+      load();
+      if (!opts.configurationInstance) throw new Error('Configuration grants require a trusted server instance context.');
+      const row = records.find(record => record.id === id);
+      const at = now();
+      if (!row || row.revokedAt !== null || (row.expiresAt !== null && row.expiresAt <= at)
+        || authorityRevision(id) !== expectedAuthority) throw new Error('Agent key authority changed or expired.');
+      if (!row.configurationGrant && records.filter(record => record.configurationGrant).length >= CONFIGURATION_GRANT_MAX_KEYS) {
+        throw new Error('Configuration grant key limit reached; prune eligible old keys.');
+      }
+      const grant = createConfigurationGrant(request, { instance: opts.configurationInstance(), now: at, keyExpiresAt: row.expiresAt });
+      const next = records.map(record => record.id === id ? { ...record, configurationGrant: grant } : record);
+      save(next);
+      records = next;
+      return cloneConfigurationGrant(grant);
     },
   };
 }

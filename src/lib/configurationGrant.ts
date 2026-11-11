@@ -23,6 +23,8 @@ export interface ConfigurationGrantInstance {
 export interface ConfigurationRootLease { path: string; device: string; inode: string }
 export interface ConfigurationGrant {
   version: 1;
+  /** Only an explicit owner approval may opt into a finite session across restarts. */
+  restartPolicy?: 'same-profile';
   instance: ConfigurationGrantInstance;
   notBefore: number;
   expiresAt: number;
@@ -58,7 +60,7 @@ export function isConfigurationGrantInstance(value: unknown): value is Configura
 
 /** Missing descendants are allowed for an effective destination, never for a lease root.
  * Check every existing ancestor: realpath failures and junctions cannot degrade to lexical permission. */
-function inspectDirectory(value: string, requireExisting: boolean): ConfigurationRootLease | undefined {
+export function inspectConfigurationDirectory(value: string, requireExisting: boolean): ConfigurationRootLease | undefined {
   if (!value || value !== value.trim() || value.length > 4096 || hasControlCharacters(value)
     || !path.isAbsolute(value) || /^(?:\\\\|\/\/)/.test(value)) throw new Error('Invalid local directory.');
   const absolute = path.resolve(value);
@@ -86,7 +88,9 @@ function inspectDirectory(value: string, requireExisting: boolean): Configuratio
 /** Durable shape only. Do not probe filesystem availability while loading unrelated keys. */
 export function isConfigurationGrant(value: unknown): value is ConfigurationGrant {
   if (!record(value) || !bounded(value)
-    || !keys(value, ['version', 'instance', 'notBefore', 'expiresAt', 'fields', 'roots'])
+    || !keys(value, ['version', 'instance', 'notBefore', 'expiresAt', 'fields', 'roots',
+      ...(Object.hasOwn(value, 'restartPolicy') ? ['restartPolicy'] : [])])
+    || (Object.hasOwn(value, 'restartPolicy') && value.restartPolicy !== 'same-profile')
     || value.version !== 1 || !isConfigurationGrantInstance(value.instance)
     || !integer(value.notBefore) || !integer(value.expiresAt)
     || value.expiresAt <= value.notBefore || value.expiresAt - value.notBefore > CONFIGURATION_GRANT_MAX_MS
@@ -125,7 +129,9 @@ export function createConfigurationGrant(
 ): ConfigurationGrant {
   if (!isConfigurationGrantInstance(context.instance) || !integer(context.now)
     || (context.keyExpiresAt !== null && (!integer(context.keyExpiresAt) || context.keyExpiresAt <= context.now))
-    || !record(request) || !bounded(request) || !keys(request, ['instance', 'expiresAt', 'fields', 'roots'])
+    || !record(request) || !bounded(request) || !keys(request, ['instance', 'expiresAt', 'fields', 'roots',
+      ...(Object.hasOwn(request, 'restartPolicy') ? ['restartPolicy'] : [])])
+    || (Object.hasOwn(request, 'restartPolicy') && request.restartPolicy !== 'same-profile')
     || !isConfigurationGrantInstance(request.instance)
     || !sameInstance(request.instance, context.instance)
     || !integer(request.expiresAt) || request.expiresAt <= context.now
@@ -144,13 +150,15 @@ export function createConfigurationGrant(
     const supplied = request.roots[field];
     if (!Array.isArray(supplied) || supplied.length < 1 || supplied.length > 8
       || !supplied.every(root => typeof root === 'string')) throw new Error('Configuration root list is invalid.');
-    const leases = supplied.map(root => inspectDirectory(root, true)!);
+    const leases = supplied.map(root => inspectConfigurationDirectory(root, true)!);
     // Use the same deterministic code-point order as the durable shape validator.
     leases.sort((a, b) => pathKey(a.path) < pathKey(b.path) ? -1 : pathKey(a.path) > pathKey(b.path) ? 1 : 0);
     if (new Set(leases.map(root => pathKey(root.path))).size !== leases.length) throw new Error('Duplicate configuration root.');
     roots[field] = leases;
   }
-  const grant: ConfigurationGrant = { version: 1, instance: { ...context.instance }, notBefore: context.now,
+  const grant: ConfigurationGrant = { version: 1,
+    ...(request.restartPolicy === 'same-profile' ? { restartPolicy: 'same-profile' as const } : {}),
+    instance: { ...context.instance }, notBefore: context.now,
     expiresAt: request.expiresAt, fields, roots };
   if (!isConfigurationGrant(grant)) throw new Error('Configuration grant exceeds its durable contract.');
   return grant;
@@ -174,7 +182,8 @@ export function evaluateConfigurationGrantRestrictions(
   const deny = (code: ConfigurationRestrictionCode, field?: string) => ({ withinRestrictions: false, code, ...(field ? { field } : {}) });
   if (grant === undefined) return deny('CONFIGURATION_GRANT_REQUIRED');
   if (!isConfigurationGrant(grant) || !integer(input.now) || !isConfigurationGrantInstance(input.instance)) return deny('CONFIGURATION_GRANT_INVALID');
-  if (!sameInstance(grant.instance, input.instance)) return deny('CONFIGURATION_INSTANCE_MISMATCH');
+  if (!(grant.restartPolicy === 'same-profile' ? grant.instance.profileId === input.instance.profileId
+    : sameInstance(grant.instance, input.instance))) return deny('CONFIGURATION_INSTANCE_MISMATCH');
   if (input.now < grant.notBefore || input.now >= grant.expiresAt) return deny('CONFIGURATION_GRANT_EXPIRED');
   if (!Array.isArray(input.fields) || !input.fields.length || input.fields.length > 6
     || new Set(input.fields).size !== input.fields.length || !record(input.effectiveValues)) return deny('CONFIGURATION_GRANT_INVALID');
@@ -187,18 +196,18 @@ export function evaluateConfigurationGrantRestrictions(
     }
     if (typeof value !== 'string') return deny('CONFIGURATION_VALUE_INVALID', field);
     if (value === '') continue; // Actually unconfigured after resolution; not a raw request clear.
-    try { inspectDirectory(value, false); }
+    try { inspectConfigurationDirectory(value, false); }
     catch { return deny('CONFIGURATION_VALUE_INVALID', field); }
     let changed = false;
     let matched = false;
     for (const root of grant.roots[field as PathField]!) {
       try {
-        const current = inspectDirectory(root.path, true)!;
+        const current = inspectConfigurationDirectory(root.path, true)!;
         if (current.device !== root.device || current.inode !== root.inode) { changed = true; continue; }
         if (isCanonicalSameOrDescendant(path.resolve(value), current.path)) {
-          const after = inspectDirectory(root.path, true)!;
+          const after = inspectConfigurationDirectory(root.path, true)!;
           if (after.device !== root.device || after.inode !== root.inode) { changed = true; continue; }
-          inspectDirectory(value, false);
+          inspectConfigurationDirectory(value, false);
           matched = true;
         }
       } catch { changed = true; }

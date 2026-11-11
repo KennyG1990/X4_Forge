@@ -280,6 +280,81 @@ try {
     assert.equal(store.verify(key.token).reason, 'revoked');
     assert.equal(createAgentKeyStore(options).verify(key.token).reason, 'revoked');
   });
+  check('only an explicit finite same-profile grant survives process restart', () => {
+    const restarted = { ...instance, pid: instance.pid + 1, startedAt: '2026-11-11T00:00:01.000Z' };
+    assert.equal(evaluate(createConfigurationGrant(request(), context), undefined, undefined, { instance: restarted }).code,
+      'CONFIGURATION_INSTANCE_MISMATCH');
+    const grant = createConfigurationGrant({ ...request(), restartPolicy: 'same-profile' }, context);
+    assert(evaluate(grant, undefined, undefined, { instance: restarted }).withinRestrictions);
+    assert.equal(evaluate(grant, undefined, undefined, { instance: { ...restarted, profileId: 'profile_' + 'b'.repeat(64) } }).code,
+      'CONFIGURATION_INSTANCE_MISMATCH');
+    assert.equal(evaluate(grant, undefined, undefined, { now: grant.expiresAt }).code, 'CONFIGURATION_GRANT_EXPIRED');
+    assert.throws(() => createConfigurationGrant({ ...request(), restartPolicy: 'any-profile' }, context));
+    assert(!isConfigurationGrant({ ...grant, restartPolicy: undefined }));
+  });
+  check('owner approval attaches restrictions without changing base key authority', () => {
+    let clock = now;
+    const ownerOptions = { ...options, file: path.join(root, 'owner-keys.json'), now: () => clock };
+    const first = createAgentKeyStore(ownerOptions);
+    const key = first.create('approve existing', 'write', 3_600_000, 'ws_' + 'a'.repeat(24));
+    const before = first.list()[0];
+    const authority = first.configurationAuthorityRevision(key.record.id);
+    first.touch(key.record.id); // usage metadata is deliberately outside the approval CAS.
+    assert.equal(first.configurationAuthorityRevision(key.record.id), authority);
+    clock += 1000;
+    const grant = first.approveConfigurationGrant(key.record.id, authority, { ...request(), restartPolicy: 'same-profile' });
+    assert.equal(grant.notBefore, clock);
+    const after = first.list()[0];
+    for (const field of ['id', 'scope', 'workspaceId', 'capabilityConstraint', 'expiresAt', 'createdAt', 'hashPrefix'] as const) {
+      assert.deepEqual(after[field], before[field]);
+    }
+    assert.notEqual(first.configurationAuthorityRevision(key.record.id), authority);
+    assert.throws(() => first.approveConfigurationGrant(key.record.id, authority, request()), /changed/);
+    const reopened = createAgentKeyStore(ownerOptions);
+    assert.deepEqual(reopened.verify(key.token).configurationGrant, grant);
+    grant.fields.push('filesystemPath');
+    assert(!first.verify(key.token).configurationGrant!.fields.includes('filesystemPath'));
+  });
+  check('a second store observes revocation and never resurrects a cached key', () => {
+    const file = path.join(root, 'shared-keys.json');
+    const first = createAgentKeyStore({ ...options, file });
+    const key = first.create('shared', 'write', null);
+    const second = createAgentKeyStore({ ...options, file });
+    assert(second.verify(key.token).ok);
+    first.revoke(key.record.id);
+    assert.equal(second.verify(key.token).reason, 'revoked');
+    second.create('new unrelated', 'read', null);
+    assert.equal(first.verify(key.token).reason, 'revoked');
+    assert.equal(first.list().length, 2);
+    assert.throws(() => second.approveConfigurationGrant(key.record.id, second.configurationAuthorityRevision(key.record.id), request()), /changed or expired/);
+  });
+  check('pre-promotion key CAS preserves an intervening revocation', () => {
+    const file = path.join(root, 'key-cas.json');
+    const owner = createAgentKeyStore({ ...options, file });
+    const key = owner.create('intervened', 'write', null);
+    const competing = createAgentKeyStore({ ...options, file, writeJson(target, value, opts) {
+      owner.revoke(key.record.id);
+      atomicWriteJson(target, value, opts);
+    } });
+    const authority = competing.configurationAuthorityRevision(key.record.id);
+    assert.throws(() => competing.approveConfigurationGrant(key.record.id, authority, request()), /changed/);
+    assert.equal(owner.verify(key.token).reason, 'revoked');
+    assert.equal(competing.verify(key.token).reason, 'revoked');
+    assert.equal(competing.list()[0].configurationGrant, undefined);
+    assert(!fs.readdirSync(root).some(name => name.endsWith('.tmp')));
+  });
+  check('an open store fails closed after corruption and reloads a repaired durable file', () => {
+    const file = path.join(root, 'repair-keys.json');
+    const owner = createAgentKeyStore({ ...options, file });
+    const key = owner.create('repair', 'write', null);
+    const bytes = fs.readFileSync(file);
+    fs.writeFileSync(file, '{');
+    assert.equal(owner.verify(key.token).reason, 'unknown');
+    assert.throws(() => owner.create('must not overwrite', 'read', null), /unreadable/);
+    assert.equal(fs.readFileSync(file, 'utf8'), '{');
+    fs.writeFileSync(file, bytes);
+    assert(owner.verify(key.token).ok);
+  });
   check('legacy preset keys gain neither metadata nor configuration route permission', () => {
     for (const scope of ['read', 'write', 'deploy', 'all'] as const) {
       const key = store.create('legacy ' + scope, scope, null);
