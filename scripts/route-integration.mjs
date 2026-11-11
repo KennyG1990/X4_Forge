@@ -712,10 +712,19 @@ async function main() {
   const capabilityIds = Array.isArray(capabilityContract?.capabilities)
     ? capabilityContract.capabilities.map(capability => capability?.id)
     : [];
+  // Independent semantic inventory: unexpected additions/removals must fail.
+  const expectedCapabilityIds = ['expression.check', 'extensions.conflicts.analyze', 'history.list', 'history.revert',
+    'patch.readiness.analyze', 'project.validate', 'readiness.read', 'runtime.debug.read', 'schema.domains.list',
+    'schema.element.explain', 'workspace.compile', 'workspace.generate.preview', 'workspace.read'];
+  const sameCapabilityIds = (actual, expected) => Array.isArray(actual)
+    && JSON.stringify([...actual].sort()) === JSON.stringify([...expected].sort());
+  const expectedCapabilityIdentity = id => `${id}@${['patch.readiness.analyze', 'workspace.compile', 'workspace.read'].includes(id) ? 2 : 1}`;
   ok('capability_contract_is_versioned_and_hashed',
     capabilityContract?.schemaVersion === 'forge.capability.v1' &&
     /^[a-f0-9]{64}$/.test(String(capabilityContract?.contractHash || '')) &&
-    capabilityIds.length === 12 && new Set(capabilityIds).size === capabilityIds.length,
+    sameCapabilityIds(capabilityContract?.capabilities?.map(capability => `${capability.id}@${capability.version}`),
+      expectedCapabilityIds.map(expectedCapabilityIdentity)) &&
+    sameCapabilityIds(capabilityIds, expectedCapabilityIds) && new Set(capabilityIds).size === capabilityIds.length,
     JSON.stringify({ schemaVersion: capabilityContract?.schemaVersion, contractHash: capabilityContract?.contractHash, capabilityIds }));
   const validationCapability = capabilityContract?.capabilities?.find(capability => capability?.id === 'project.validate');
   ok('capability_validation_aliases_share_one_id',
@@ -1271,7 +1280,9 @@ async function main() {
     JSON.stringify(authorityView.json?.authority || {}));
   ok('key_management_exposes_custom_contract_options_without_public_capabilities',
     authorityView.json?.authority?.customAuthority?.includes('contract-only') &&
-    Array.isArray(authorityView.json?.capabilityOptions) && authorityView.json.capabilityOptions.length === 10 &&
+    Array.isArray(authorityView.json?.capabilityOptions)
+      && sameCapabilityIds(authorityView.json.capabilityOptions.map(option => option.identity),
+        expectedCapabilityIds.filter(id => !['schema.domains.list', 'schema.element.explain'].includes(id)).map(expectedCapabilityIdentity)) &&
     authorityView.json.capabilityOptions.every(option => !['schema.domains.list@1', 'schema.element.explain@1'].includes(option.identity)) &&
     Array.isArray(authorityView.json?.effectOptions) && authorityView.json.effectOptions.includes('spend'),
     JSON.stringify({ options: authorityView.json?.capabilityOptions?.length, effects: authorityView.json?.effectOptions }));
@@ -1294,12 +1305,14 @@ async function main() {
   const keyStoreAfterDiscovery = fs.readFileSync(agentKeysFile);
   ok('effective_discovery_is_protected_and_studio_sees_full_contract', publicEffective.status === 401 && bogusEffective.status === 401 &&
     studioEffective.status === 200 && studioEffective.json?.actor?.kind === 'studio' &&
-    effectiveIds(studioEffective)?.length === 12 && effectiveHashIsValid(studioEffective),
+    sameCapabilityIds(effectiveIds(studioEffective), expectedCapabilityIds) && effectiveHashIsValid(studioEffective),
   JSON.stringify({ public: publicEffective.json, bogus: bogusEffective.json, studio: { actor: studioEffective.json?.actor, ids: effectiveIds(studioEffective) } }));
-  for (const [name, response, scope, expectedCount] of [
-    ['read', readEffective, 'read', 7],
-    ['write', writeEffective, 'write', 9],
-    ['deploy', deployEffective, 'deploy', 12],
+  for (const [name, response, scope, expectedIds] of [
+    ['read', readEffective, 'read', ['expression.check', 'extensions.conflicts.analyze', 'history.list', 'readiness.read',
+      'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'workspace.read']],
+    ['write', writeEffective, 'write', ['expression.check', 'extensions.conflicts.analyze', 'history.list', 'project.validate',
+      'readiness.read', 'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'workspace.compile', 'workspace.read']],
+    ['deploy', deployEffective, 'deploy', expectedCapabilityIds],
   ]) {
     ok(`${name}_key_effective_capabilities_are_exact_and_hashed`, response.status === 200 &&
       response.json?.api_version === '2026-08-01.agent-effective.v1' &&
@@ -1307,11 +1320,21 @@ async function main() {
       response.json?.actor?.scope === scope && response.json?.actor?.workspaceId === WORKSPACE_ID &&
       response.json?.route_policy?.version === 'forge.route-dispositions.v4' &&
       response.json?.route_policy?.hash === authorityHash && response.json?.constraint === null &&
-      effectiveIds(response)?.length === expectedCount && effectiveHashIsValid(response),
+      sameCapabilityIds(effectiveIds(response), expectedIds) && effectiveHashIsValid(response),
     JSON.stringify({ status: response.status, actor: response.json?.actor, ids: effectiveIds(response), hash: response.json?.authority_hash }));
     ok(`${name}_effective_discovery_leaks_no_credential_material`,
       !String(response.raw || '').includes('x4fk_') && !String(response.raw || '').includes('tokenHash') && !String(response.raw || '').includes('hashPrefix'));
   }
+  const checkedExpression = await req('POST', '/api/agent/expressions/check', readKey, { expression: '1 + 2' });
+  capabilityResponses.set('expression.check', checkedExpression);
+  ok('expression_capability_read_key_checks_actual_unsaved_expression', checkedExpression.status === 200
+    && checkedExpression.json?.ok === true && checkedExpression.json?.legal === true
+    && checkedExpression.json?.expression === '1 + 2' && checkedExpression.json?.problems?.length === 0,
+    JSON.stringify(checkedExpression.json));
+  const invalidExpressionBody = await req('POST', '/api/agent/expressions/check', readKey,
+    { expression: '1 + 2', unexpected: true });
+  ok('expression_capability_rejects_undeclared_input', invalidExpressionBody.status === 400
+    && invalidExpressionBody.json?.code === 'CAPABILITY_INPUT_INVALID', JSON.stringify(invalidExpressionBody.json));
   ok('effective_discovery_does_not_increment_key_use_or_rewrite_store',
     Buffer.compare(keyStoreBeforeDiscovery, keyStoreAfterDiscovery) === 0,
     `before=${crypto.createHash('sha256').update(keyStoreBeforeDiscovery).digest('hex')} after=${crypto.createHash('sha256').update(keyStoreAfterDiscovery).digest('hex')}`);
@@ -3893,21 +3916,35 @@ async function main() {
       && deltaDynamicRecord.json?.counts?.checkUnavailable > 0
       && deltaDynamicRecord.json?.flat === undefined && deltaDynamicRecord.json?.evidence?.coverage?.gaps === undefined,
     JSON.stringify({ detail: deltaDynamicRecord.json?.detail, counts: deltaDynamicRecord.json?.counts }));
-  // This warning has complete static coverage. A dynamic event cannot stand in
-  // for a fully checked warning when testing deliberate last-green promotion.
+  const deltaLuaWarningProject = {
+    ...deltaBaseProject,
+    files: [...deltaBaseProject.files, { path: 'scripts/path_warning.lua', kind: 'lua',
+      content: 'package.path = package.path .. ";extensions/?.lua"\n' }],
+  };
+  const incompleteWarning = await req('POST', '/api/agent/project/validate', SESSION_TOKEN,
+    { project: deltaLuaWarningProject, detail: 'full', recordBaseline: true });
+  ok('unregistered_lua_warning_reports_gap_without_promoting_baseline', incompleteWarning.status === 409
+    && incompleteWarning.json?.ok === false && incompleteWarning.json?.code === 'VALIDATION_BASELINE_RECORD_FAILED'
+    && incompleteWarning.json?.evidence?.coverage?.complete === false
+    && incompleteWarning.json?.evidence?.coverage?.gaps?.some(gap => gap.check === 'lua.runtime_scope_unverified')
+    && incompleteWarning.json?.validationDelta?.newWarnings?.some(finding => finding.code === 'lua.broad_package_path')
+    && incompleteWarning.json?.baselinePromotion?.recorded === false
+    && fs.readFileSync(baselineFile, 'utf8') === recordedBaselineBytes,
+    JSON.stringify({ coverage: incompleteWarning.json?.evidence?.coverage, promotion: incompleteWarning.json?.baselinePromotion }));
+  // A missing translation is fully static: both actual language inventories are
+  // supplied, with no unregistered Lua runtime implied by the positive fixture.
   const deltaWarningProject = {
     ...deltaBaseProject,
-    files: [...deltaBaseProject.files, {
-      path: 'scripts/path_warning.lua', kind: 'lua',
-      content: 'package.path = package.path .. ";extensions/?.lua"\n',
-    }],
+    files: [...deltaBaseProject.files,
+      { path: 't/0001-L044.xml', kind: 't', content: '<language id="44"><page id="20201"><t id="1">a</t><t id="2">b</t></page></language>' },
+      { path: 't/0001-L049.xml', kind: 't', content: '<language id="49"><page id="20201"><t id="1">a</t></page></language>' }],
   };
   const deltaAdded = await req('POST', '/api/agent/project/validate', SESSION_TOKEN, { project: deltaWarningProject, detail: 'full' });
   ok('validation_delta_reports_new_warning',
     deltaAdded.status === 200 && deltaAdded.json?.ok === true
       && deltaAdded.json?.evidence?.coverage?.complete === true
       && deltaAdded.json?.validationDelta?.counts?.new > 0
-      && deltaAdded.json?.validationDelta?.newWarnings?.some(finding => finding.code === 'lua.broad_package_path' && finding.filePath === 'scripts/path_warning.lua'),
+      && deltaAdded.json?.validationDelta?.newWarnings?.some(finding => finding.code === 'tfile.incomplete_translation' && finding.filePath === 't/ (language 49)' && finding.sourceRef === 'page 20201'),
     JSON.stringify({ coverage: deltaAdded.json?.evidence?.coverage, delta: deltaAdded.json?.validationDelta }));
   ok('comparison_only_validation_preserves_baseline', fs.readFileSync(baselineFile, 'utf8') === recordedBaselineBytes);
   const deltaWarningRecord = await req('POST', '/api/agent/project/validate', SESSION_TOKEN, { project: deltaWarningProject, recordBaseline: true });
@@ -3919,7 +3956,7 @@ async function main() {
   const deltaResolved = await req('POST', '/api/agent/project/validate', SESSION_TOKEN, { project: deltaBaseProject, detail: 'full' });
   ok('validation_delta_reports_resolved_warning',
     deltaResolved.status === 200 && deltaResolved.json?.validationDelta?.counts?.resolved > 0
-      && deltaResolved.json?.validationDelta?.resolvedWarnings?.some(finding => finding.code === 'lua.broad_package_path' && finding.filePath === 'scripts/path_warning.lua'),
+      && deltaResolved.json?.validationDelta?.resolvedWarnings?.some(finding => finding.code === 'tfile.incomplete_translation' && finding.filePath === 't/ (language 49)' && finding.sourceRef === 'page 20201'),
     JSON.stringify(deltaResolved.json?.validationDelta));
   const beforeFailedPromotion = fs.readFileSync(baselineFile, 'utf8');
   const rejectedPromotion = await req('POST', '/api/agent/project/validate', SESSION_TOKEN, {
@@ -4608,7 +4645,7 @@ async function main() {
   const capabilityOutputReport = (capabilityContract?.capabilities || [])
     .map(capability => assertCapabilityOutput(capability.id, capabilityResponses.get(capability.id)));
   ok('all_canonical_capability_outputs_exercised',
-    capabilityOutputReport.length === 12 && capabilityResponses.size === 12 && capabilityOutputReport.every(row => row.status >= 200 && row.status < 300 && row.errors.length === 0),
+    sameCapabilityIds(capabilityOutputReport.map(row => row.id), expectedCapabilityIds) && capabilityResponses.size === expectedCapabilityIds.length && capabilityOutputReport.every(row => row.status >= 200 && row.status < 300 && row.errors.length === 0),
     JSON.stringify(capabilityOutputReport));
 
   // --- PRODUCTION SURFACE ---------------------------------------------------------------------

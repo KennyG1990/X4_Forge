@@ -427,44 +427,62 @@ export function runRuntimeDebuggerAdapterSelftest(): {
     check("prebaseline_evidence_is_historical_not_current", first.payload.session.state === "historical" && first.payload.verdict.state === "stale", first.payload.verdict);
     check("inventory_cache_reused_across_polls", inventoryScans === 1 && first.payload.identity.inventoryComplete === true && Boolean(first.payload.identity.inventoryScannedAt), { inventoryScans, scannedAt: first.payload.identity.inventoryScannedAt });
 
-    const profileRoot = process.env.USERPROFILE || process.env.HOME || os.homedir();
-    const exactSelectedLogPath = path.resolve(selectedPath);
-    const expectedRedactedLogPath = expectedRedactedProfilePath(exactSelectedLogPath, profileRoot);
-    const homeSourceFolder = path.win32.join(profileRoot.toLowerCase(), "Documents", "Egosoft", "X4", "x4_ailive");
-    const homeSourceRecord = { ...record, workspace: { ...record.workspace, sourceFolder: homeSourceFolder } };
-    const redactedResult = adapter.buildBrief({ record: homeSourceRecord, manifest, expectedSteps: [] });
-    const redactedPayloadText = JSON.stringify(redactedResult.payload);
-    check(
-      "ui_payload_and_artifact_redact_case_insensitive_profile_paths_and_keep_internal_selection",
-      redactedResult.payload.session.logPath === expectedRedactedLogPath
-        && redactedResult.payload.authority.sourceFolder === expectedRedactedProfilePath(homeSourceFolder, profileRoot)
-        && redactedResult.payload.identity.sourceFolders.includes(expectedRedactedProfilePath(homeSourceFolder, profileRoot))
-        && redactedResult.selectedLogPath === exactSelectedLogPath
-        && redactedResult.artifact.includes("%USERPROFILE%")
-        && !containsExactProfilePrefix(redactedPayloadText, profileRoot)
-        && !containsExactProfilePrefix(redactedResult.artifact, profileRoot),
-      {
-        sessionRedacted: redactedResult.payload.session.logPath === expectedRedactedLogPath,
-        authorityRedacted: redactedResult.payload.authority.sourceFolder === expectedRedactedProfilePath(homeSourceFolder, profileRoot),
-        selectedPathPreserved: redactedResult.selectedLogPath === exactSelectedLogPath,
-        payloadLeaked: containsExactProfilePrefix(redactedPayloadText, profileRoot),
-        artifactLeaked: containsExactProfilePrefix(redactedResult.artifact, profileRoot),
-      },
-    );
-    const siblingSourceFolder = path.win32.join(`${normalizedWindowsPathForCheck(profileRoot)}2`, "Documents", "Egosoft", "X4", "x4_ailive");
-    const siblingResult = adapter.buildBrief({ record: { ...record, workspace: { ...record.workspace, sourceFolder: siblingSourceFolder } }, manifest, expectedSteps: [] });
-    check(
-      "sibling_profile_prefix_remains_unchanged",
-      siblingResult.payload.authority.sourceFolder === siblingSourceFolder && siblingResult.payload.identity.sourceFolders.includes(siblingSourceFolder),
-      { unchanged: siblingResult.payload.authority.sourceFolder === siblingSourceFolder },
-    );
-    const nonHomeSourceFolder = "F:\\Forge\\runtime-debugger\\x4_ailive";
-    const nonHomeResult = adapter.buildBrief({ record: { ...record, workspace: { ...record.workspace, sourceFolder: nonHomeSourceFolder } }, manifest, expectedSteps: [] });
-    check(
-      "non_home_source_path_remains_unchanged",
-      nonHomeResult.payload.authority.sourceFolder === nonHomeSourceFolder && nonHomeResult.payload.identity.sourceFolders.includes(nonHomeSourceFolder),
-      { unchanged: nonHomeResult.payload.authority.sourceFolder === nonHomeSourceFolder },
-    );
+    // Make the path-redaction fixture independent of whether the launcher puts
+    // TEMP beneath USERPROFILE. Only this process environment changes; all bytes
+    // remain in the already owned temporary fixture and are removed below.
+    const previousUserProfile = process.env.USERPROFILE;
+    const previousHome = process.env.HOME;
+    try {
+      process.env.USERPROFILE = root;
+      process.env.HOME = root;
+      const profileRoot = process.env.USERPROFILE || process.env.HOME || os.homedir();
+      const exactSelectedLogPath = path.resolve(selectedPath);
+      const expectedRedactedLogPath = expectedRedactedProfilePath(exactSelectedLogPath, profileRoot);
+      const homeSourceFolder = path.win32.join(profileRoot.toLowerCase(), "Documents", "Egosoft", "X4", "x4_ailive");
+      const homeSourceRecord = { ...record, workspace: { ...record.workspace, sourceFolder: homeSourceFolder } };
+      const redactedResult = adapter.buildBrief({ record: homeSourceRecord, manifest, expectedSteps: [] });
+      const redactedPayloadText = JSON.stringify(redactedResult.payload);
+      check(
+        "ui_payload_and_artifact_redact_case_insensitive_profile_paths_and_keep_internal_selection",
+        redactedResult.payload.session.logPath === expectedRedactedLogPath
+          && redactedResult.payload.authority.sourceFolder === expectedRedactedProfilePath(homeSourceFolder, profileRoot)
+          && redactedResult.payload.identity.sourceFolders.includes(expectedRedactedProfilePath(homeSourceFolder, profileRoot))
+          && redactedResult.selectedLogPath === exactSelectedLogPath
+          && redactedResult.artifact.includes("%USERPROFILE%")
+          && !containsExactProfilePrefix(redactedPayloadText, profileRoot)
+          && !containsExactProfilePrefix(redactedResult.artifact, profileRoot),
+        {
+          sessionRedacted: redactedResult.payload.session.logPath === expectedRedactedLogPath,
+          authorityRedacted: redactedResult.payload.authority.sourceFolder === expectedRedactedProfilePath(homeSourceFolder, profileRoot),
+          identityRedacted: redactedResult.payload.identity.sourceFolders.includes(expectedRedactedProfilePath(homeSourceFolder, profileRoot)),
+          artifactHasProfilePlaceholder: redactedResult.artifact.includes("%USERPROFILE%"),
+          selectedPathPreserved: redactedResult.selectedLogPath === exactSelectedLogPath,
+          payloadLeaked: containsExactProfilePrefix(redactedPayloadText, profileRoot),
+          artifactLeaked: containsExactProfilePrefix(redactedResult.artifact, profileRoot),
+        },
+      );
+      const siblingSourceFolder = path.win32.join(`${normalizedWindowsPathForCheck(profileRoot)}2`, "Documents", "Egosoft", "X4", "x4_ailive");
+      const siblingResult = adapter.buildBrief({ record: { ...record, workspace: { ...record.workspace, sourceFolder: siblingSourceFolder } }, manifest, expectedSteps: [] });
+      check(
+        "sibling_profile_prefix_remains_unchanged",
+        siblingResult.payload.authority.sourceFolder === siblingSourceFolder && siblingResult.payload.identity.sourceFolders.includes(siblingSourceFolder),
+        { unchanged: siblingResult.payload.authority.sourceFolder === siblingSourceFolder },
+      );
+      const nonHomeSourceFolder = "F:\\Forge\\runtime-debugger\\x4_ailive";
+      const nonHomeResult = adapter.buildBrief({ record: { ...record, workspace: { ...record.workspace, sourceFolder: nonHomeSourceFolder } }, manifest, expectedSteps: [] });
+      check(
+        "non_home_source_path_remains_unchanged",
+        nonHomeResult.payload.authority.sourceFolder === nonHomeSourceFolder && nonHomeResult.payload.identity.sourceFolders.includes(nonHomeSourceFolder),
+        { unchanged: nonHomeResult.payload.authority.sourceFolder === nonHomeSourceFolder },
+      );
+    } finally {
+      if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = previousUserProfile;
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+    }
+    check("redaction_fixture_restores_process_profile_environment",
+      process.env.USERPROFILE === previousUserProfile && process.env.HOME === previousHome);
 
     const focusedCorpusPath = path.join(root, "focused-corpus.log");
     fs.writeFileSync(focusedCorpusPath, [
