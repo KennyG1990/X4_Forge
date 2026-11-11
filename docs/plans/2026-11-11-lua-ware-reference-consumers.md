@@ -1,6 +1,6 @@
 # Lua ware reference consumers (#64 follow-up)
 
-Status: PARTIAL — source, canonical HTTP and native replay proven; compiled/installed/rendered qualification pending. Lane: FULL. Existing owner: [#64](https://github.com/KennyG1990/X4_Forge/issues/64#issuecomment-6748670368), first concrete defect in Ken's validation/debuglog execution worklist.
+Status: PARTIAL — source, canonical HTTP, native, compiled and built-web rendering proven; Windows installed/native-host qualification and cache-lifetime follow-up #99 remain. Lane: FULL. Existing owner: [#64](https://github.com/KennyG1990/X4_Forge/issues/64#issuecomment-6748670368), first concrete defect in Ken's validation/debuglog execution worklist.
 
 ## PLAN
 
@@ -113,3 +113,5 @@ REVIEW: source and compiled/built-web acceptance is evidenced; required current 
 First complete compiled-harness precommit (tool session78956) FAILED2 at TypeScript: the selftest read `ResolvedConfig.envFile`, which Vite's public type does not expose. Installed Vite declarations put it on `InlineConfig` (`index.d.ts:3991/3997`); corrected to `config.inlineConfig.envFile`, preserving the same false-value assertion without casts or policy changes. Runtime harness, product source and both built hashes are unchanged; no repeated browser/native run is required for this test-only typed-property correction. The normal complete source gate and commit hook still require observed success under a distinct log; keep the original failed gate.
 
 Corrected complete precommit tool session50447 exited0, including the public-type assertion's lifecycle selftest and full TypeScript gate. Normal commit hook/remote parity/exact-head CI are recorded when observed in the current QA packet. Commit point: test(e2e): qualify compiled Forge validation headlessly. Full #64 remains PARTIAL.
+
+Functional checkpoint f2914082ffa645a4f6167e07687d44249658d071 passed normal hook75971, remote parity and exact-head CI43115350011, including product/package probes. Subsequent footprint reconciliation found87generated Vite temporary-cache directories/907files/18,358,439B after producers stopped. Safely retired under physical/private/writer guards; source cache lifetime is not fixed. Existing owner#99 and [next contract](2026-11-11-vite-cache-retention.md) take priority before more qualification. This changes the highest current observed tool weakness from the coordinate-only display gap to unbounded cache retention. Windows installed/native-host and public delivery remain open. Documentation-close checks may generate a bounded extra cache batch; record/retire it after the original producer ends, without claiming the permanent fix.
