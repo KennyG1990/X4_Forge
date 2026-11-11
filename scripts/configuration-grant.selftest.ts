@@ -190,6 +190,21 @@ try {
     finally { fs.rmdirSync(base); fs.renameSync(previous, base); }
     assert(evaluate(grant).withinRestrictions);
   });
+  check('a root without a usable inode identity cannot become a lease', () => {
+    const original = fs.lstatSync;
+    const patched = ((input: fs.PathLike, ...args: unknown[]) => {
+      const info = Reflect.apply(original, fs, [input, ...args]);
+      return String(input) === base && info
+        ? Object.assign(Object.create(Object.getPrototypeOf(info)), info, { ino: 0n }) : info;
+    }) as typeof original;
+    assert(Reflect.set(fs, 'lstatSync', patched));
+    try { assert.throws(() => createConfigurationGrant(request(), context), /identity/); }
+    finally { assert(Reflect.set(fs, 'lstatSync', original)); }
+    const grant = createConfigurationGrant(request(), context);
+    assert(isConfigurationGrant(grant));
+    grant.roots.modWorkspacePath![0].inode = '0';
+    assert.equal(isConfigurationGrant(grant), false);
+  });
   check('junction roots, ancestor aliases and escaped target values refuse', () => {
     const alias = path.join(root, 'alias');
     const escape = path.join(base, 'escape');

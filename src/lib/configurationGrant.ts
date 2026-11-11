@@ -70,7 +70,10 @@ function inspectDirectory(value: string, requireExisting: boolean): Configuratio
     if (info) {
       if (!info.isDirectory() || info.isSymbolicLink()
         || path.relative(cursor, fs.realpathSync.native(cursor))) throw new Error('Directory is not physical.');
-      if (cursor === absolute) leaf = { path: absolute, device: info.dev.toString(), inode: info.ino.toString() };
+      if (cursor === absolute) {
+        if (info.ino <= 0n) throw new Error('Directory identity is unavailable.');
+        leaf = { path: absolute, device: info.dev.toString(), inode: info.ino.toString() };
+      }
     }
     const parent = path.dirname(cursor);
     if (parent === cursor) break;
@@ -104,7 +107,7 @@ export function isConfigurationGrant(value: unknown): value is ConfigurationGran
         || hasControlCharacters(root.path) || !path.isAbsolute(root.path)
         || /^(?:\\\\|\/\/)/.test(root.path) || root.path !== path.resolve(root.path)
         || typeof root.device !== 'string' || !/^(?:0|[1-9]\d{0,31})$/.test(root.device)
-        || typeof root.inode !== 'string' || !/^(?:0|[1-9]\d{0,31})$/.test(root.inode)) return false;
+        || typeof root.inode !== 'string' || !/^[1-9]\d{0,31}$/.test(root.inode)) return false;
       paths.push(pathKey(root.path));
     }
     if (new Set(paths).size !== paths.length || JSON.stringify([...paths].sort()) !== JSON.stringify(paths)) return false;
