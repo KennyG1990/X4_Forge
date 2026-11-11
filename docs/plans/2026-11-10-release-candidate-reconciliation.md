@@ -66,7 +66,7 @@ A current machine-state question is pending for build, single-worker E2E and rel
 
 ## Source replay and current close
 
-### Code-graph bootstrap checkpoint — PARTIAL, final hook check pending
+### Code-graph bootstrap checkpoint — VERIFIED
 
 Light lane: rebuild the ignored candidate code graph using the installed `graphify update .` code-only path, one worker and deterministic clustering, then verify that an ordinary documentation commit preserves it. This changes local generated navigation artifacts and this task's records; it changes no product behavior, global hook, dependency, live service or release version. Existing source and the published release ledger remain authoritative. Heavy release qualification stays held by the user's live-work/lightweight-only answer.
 
@@ -88,7 +88,7 @@ Graph-check AAR is triggered: the first verification wrongly required exact node
 
 ## AAR update
 
-Graph checkpoint precommit: the normal `npm run precommit:check` passed, including typecheck and all mandatory audits. The only remaining bootstrap check is preservation by the actual documentation commit's postcommit hook; capture its terminal result in the existing QA release packet before closing this checkpoint.
+Graph checkpoint close: VERIFIED. The normal `npm run precommit:check` and commit hook passed, including typecheck and all mandatory audits. Documentation checkpoint e8a88d7fb395ff1d64f954117c9b7f34993ed38a triggered the unchanged normal postcommit hook, which reported `No code-graph topology changes detected; outputs left untouched.` Independent revalidation confirmed the exact graph SHA-256 c3b1275807dfd8e77b8597035c3b5008baf419422b2961cab52276bf615f8710 and topology digest above, with all source/negative checks still passing. The graph's built_at_commit correctly remains b83b617 because this was a no-op. Only this plan and SESSION-HANDOFF.md changed. The finite QA release packet holds the receipt. No generated graph copy was committed and no product capability-map delta applies. Release reconciliation remains PARTIAL/NOT_READY; this environment repair is not another substantive product unit. Commit point: docs(dev): record verified candidate graph bootstrap.
 
 The initial dependency plan needed correction because a root junction crosses the validator's owner boundary. Copy only its exact parser closure and loader, while linking other tools. The first read-only dependency audit unexpectedly followed Windows junctions despite os.walk(followlinks=False). Its exact process and parent command were identified and the owned scan was stopped. The corrected audit prunes reparse directories from dirs before descent and checked only the 185 physical files. Preserve every execution handle when an exec call yields. Both failures and the correction are tooling evidence, with no source or game mutation from the scan.
 
