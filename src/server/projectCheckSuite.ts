@@ -8,7 +8,7 @@ import type { ProjectCheckVerification } from '../lib/validationEvidence';
 import { bindProjectCheckCommands } from './projectCheckCommand';
 import { executeProjectCheck, projectCheckCommandReceiptInput } from './projectCheckExecution';
 import { PROJECT_CHECK_WORKER_GRACE_MS, type ProjectCheckWorkerResult, type TrustedProjectCheckWorker } from './projectCheckWorker';
-import type { ProjectCheckSourceLease } from './sharedSourceCoordinator';
+import { PROJECT_CHECK_MAX_PARALLEL, type ProjectCheckSourceLease } from './sharedSourceCoordinator';
 
 const CAPABILITY = 'project-check.suite';
 const COMMAND_CAPABILITY = 'project-check.command';
@@ -72,8 +72,8 @@ function digest(value: unknown): string {
   return createHash('sha256').update(canonicalJson(value)).digest('hex');
 }
 
-function attemptSummary(children: readonly ActionReceipt[], stoppedBeforeCheckId?: string) {
-  return { version: 1, count: children.length,
+function attemptSummary(children: readonly ActionReceipt[], stoppedBeforeCheckId?: string, policyVersion = 1) {
+  return { version: policyVersion, count: children.length,
     digest: digest(children.map(child => [child.id, child.hash]).sort()),
     ...(stoppedBeforeCheckId === undefined ? {} : { stoppedBeforeCheckId }) };
 }
@@ -111,6 +111,8 @@ function buildSuitePlan(input: ProjectCheckSuiteInput) {
     return { bound, prepared, id: actionReceiptIdFor(prepared) };
   });
   const first = commands[0].bound;
+  const budget = first.binding.maxParallelChecks;
+  const policy = budget === undefined ? {} : { projectCheckPolicyVersion: 2, maxParallelChecks: budget };
   const { modId, setupHash, approvalId, approvalHash, artifactHash, command } = first.binding;
   const reviewBasisHash = digest({
     version: VERSION, workspaceId, source: first.sourceKey, modId, setupHash, approvalId, approvalHash, artifactHash,
@@ -119,8 +121,10 @@ function buildSuitePlan(input: ProjectCheckSuiteInput) {
     checks: commands.map(({ bound: { binding } }) => ({
       id: binding.command.checkId, coveredFiles: binding.coveredFiles,
     })),
+    ...policy,
   });
-  return { runtime, workspaceId, actorId, runId, store, commands, first, reviewBasisHash };
+  return { runtime, workspaceId, actorId, runId, store, commands, first, reviewBasisHash, policy,
+    maxParallelChecks: budget ?? 1, policyVersion: budget === undefined ? 1 : 2 };
 }
 
 function suiteOperationIdentity(actorId: string, workspaceId: string, runId: string): ActionReceiptOperationIdentity {
@@ -151,7 +155,7 @@ function suiteReceiptInput(plan: SuitePlan, links: CommandLink[]): ActionReceipt
     input: { requestHash: digest({ reviewBasisHash, links }), beforeHash: artifactHash },
     validation: { validator: CAPABILITY, ruleHash: reviewBasisHash },
     rollback: { required: false, mode: 'none' },
-    metadata: { modId, artifactHash, originalReceiptId: approvalId, reviewContextHash: reviewBasisHash },
+    metadata: { modId, artifactHash, originalReceiptId: approvalId, reviewContextHash: reviewBasisHash, ...plan.policy },
   };
 }
 
@@ -240,6 +244,11 @@ function readReportChild(store: ActionReceiptStore, suite: ActionReceipt, runId:
 /** Reopen a terminal suite's historical results without granting deployment proof. */
 export function readProjectCheckSuiteReport(store: ActionReceiptStore, receipt: ActionReceipt): ProjectCheckSuiteReport | undefined {
   const suite = store.read(receipt.id);
+  const version = suite.metadata?.projectCheckPolicyVersion;
+  const budget = suite.metadata?.maxParallelChecks;
+  const legacy = version === undefined && budget === undefined;
+  if (!legacy && (version !== 2 || typeof budget !== 'number' || !Number.isInteger(budget)
+    || budget < 1 || budget > PROJECT_CHECK_MAX_PARALLEL)) throw mismatch();
   const runId = /^project-check-suite:([a-f0-9]{32})$/.exec(suite.authority.operationId)?.[1];
   if (suite.hash !== receipt.hash || !runId || suite.actor.kind !== 'service' || suite.authority.scope !== 'workspace'
     || suite.id !== projectCheckSuiteReceiptId(suite.actor.id, suite.authority.workspaceId, runId)
@@ -289,12 +298,17 @@ export function readProjectCheckSuiteReport(store: ActionReceiptStore, receipt: 
       if (!absent.has(id)) throw mismatch();
       stoppedBeforeCheckId = stopped;
     }
-    if (canonicalJson(summary) !== canonicalJson(attemptSummary(children, stoppedBeforeCheckId))) throw mismatch();
+    if (canonicalJson(summary) !== canonicalJson(attemptSummary(children, stoppedBeforeCheckId, legacy ? 1 : 2))) throw mismatch();
   }
   const failed = checks.filter(check => check.state === 'failed').length;
   const incomplete = checks.filter(check => check.state === 'incomplete').length;
-  if (failed !== (code === FAILED ? 1 : 0) || incomplete > (state === 'incomplete' ? 1 : 0)
-    || (state === 'incomplete' && incomplete === 0 && absent.size !== 0)) throw mismatch();
+  if (legacy) {
+    if (failed !== (code === FAILED ? 1 : 0) || incomplete > (state === 'incomplete' ? 1 : 0)
+      || (state === 'incomplete' && incomplete === 0 && absent.size !== 0)) throw mismatch();
+  } else if (failed + incomplete > (budget as number)
+    || (code === FAILED ? failed === 0 || incomplete !== 0
+      : code === UNCONFIRMED ? incomplete === 0 && (failed !== 0 || absent.size !== 0)
+        : failed !== 0 || incomplete !== 0)) throw mismatch();
 
   return { suite: { id: suite.id, hash: suite.hash }, state, plannedCount: links.length, notRunCount: absent.size,
     ...(stoppedBeforeCheckId === undefined ? {} : { stoppedBeforeCheckId }),
@@ -345,27 +359,41 @@ export async function executeProjectCheckSuite(input: ProjectCheckSuiteInput & {
   const children: ActionReceipt[] = [];
   const stop = (code: string, incomplete: boolean, stoppedBeforeCheckId?: string) => {
     const validation = { ...prepared.validation, status: 'failed', code,
-      summary: canonicalJson(attemptSummary(children, stoppedBeforeCheckId)) } as const;
+      summary: canonicalJson(attemptSummary(children, stoppedBeforeCheckId, plan.policyVersion)) } as const;
     const failure = { code, message: 'A required project check did not produce a passing receipt.' };
     return incomplete
       ? store.transition(receipt.id, { to: 'incomplete', at: new Date().toISOString(),
         validation, failure, after: outcome(receipt, children, 'partial') })
       : store.fail(receipt.id, { validation, failure });
   };
-  for (const command of plan.commands) {
-    let child: ActionReceipt;
-    try { child = await executeProjectCheck({ lease, bound: command.bound, runtime, store, actorId, workspaceId }); }
-    catch (error) {
-      if (error && typeof error === 'object' && 'code' in error && error.code === 'PROJECT_CHECK_BINDING_UNREADY') {
-        return stop(BINDING_CHANGED, false, command.bound.binding.command.checkId);
+  const results = new Map<number, ActionReceipt>();
+  const errors = new Map<number, unknown>();
+  const unready = new Map<number, string>();
+  let next = 0;
+  let halted = false;
+  const dispatch = async () => {
+    while (!halted && next < plan.commands.length) {
+      const index = next++;
+      const command = plan.commands[index];
+      try {
+        const child = await executeProjectCheck({ lease, bound: command.bound, runtime, store, actorId, workspaceId });
+        results.set(index, child);
+        if (child.status !== 'committed') halted = true;
+      } catch (error) {
+        halted = true;
+        if (error && typeof error === 'object' && 'code' in error && error.code === 'PROJECT_CHECK_BINDING_UNREADY') {
+          unready.set(index, command.bound.binding.command.checkId);
+        } else errors.set(index, error);
       }
-      throw error;
     }
-    children.push(child);
-    if (child.status === 'committed') continue;
-    if (child.status === 'incomplete') return stop(UNCONFIRMED, true);
-    return stop(FAILED, false);
-  }
+  };
+  // Every dispatch catches its failure. Never leave an admitted sibling behind on rejection.
+  await Promise.all(Array.from({ length: Math.min(plan.maxParallelChecks, plan.commands.length) }, dispatch));
+  children.push(...[...results].sort(([a], [b]) => a - b).map(([, child]) => child));
+  if (errors.size) throw [...errors].sort(([a], [b]) => a - b)[0][1];
+  if (children.some(child => child.status === 'incomplete')) return stop(UNCONFIRMED, true);
+  if (children.some(child => child.status !== 'committed')) return stop(FAILED, false);
+  if (unready.size) return stop(BINDING_CHANGED, false, [...unready].sort(([a], [b]) => a - b)[0][1]);
 
   let reopened: ActionReceipt[];
   try {

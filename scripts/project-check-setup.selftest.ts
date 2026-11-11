@@ -7,6 +7,8 @@ import { captureProjectCheckSetup } from '../src/server/projectCheckSetup';
 import { ProjectCheckApprovalLedger, type OwnerDecision } from '../src/server/projectCheckApproval';
 import { ProjectCheckOwnerProof } from '../src/server/projectCheckOwnerProof';
 import { ActionReceiptStore } from '../src/lib/actionReceiptStore';
+import { canonicalJson } from '../src/lib/actionReceipt';
+import { inspectProjectCheckProposal } from '../src/server/projectCheckProposal';
 
 const parent = fs.realpathSync.native(os.tmpdir());
 const fixture = fs.mkdtempSync(path.join(parent, 'x4-check-setup-'));
@@ -19,7 +21,8 @@ const script = path.join(sourceRoot, 'checks', 'smoke.py');
 const dependency = path.join(sourceRoot, 'checks', 'helper.py');
 const input = { modId: 'fixture', sourceRoot, interpreterPath, interpreterDependencies: ['python.dll'] };
 const check = { id: 'smoke', script: 'checks/smoke.py', dependencies: ['checks/helper.py'], covers: ['md/smoke.xml'] };
-const configure = (checks: unknown[]) => fs.writeFileSync(manifest, JSON.stringify({ version: 1, checks }));
+const configure = (checks: unknown[], maxParallelChecks?: unknown) => fs.writeFileSync(manifest,
+  JSON.stringify({ version: 1, checks, ...(maxParallelChecks === undefined ? {} : { maxParallelChecks }) }));
 const originalBytes = new Map([
   [interpreterPath, 'interpreter binary fixture'],
   [runtimeDependency, 'runtime dependency fixture'],
@@ -39,6 +42,25 @@ try {
   assert.equal(original.manifest.sha256, createHash('sha256').update(fs.readFileSync(manifest)).digest('hex'));
   assert.deepEqual(original.checks[0].covers, ['md/smoke.xml']);
   assert(!original.harness.some(entry => entry.path === 'md/smoke.xml'));
+  const { setupHash: legacyHash, ...legacySetup } = original;
+  assert(!Object.hasOwn(legacySetup, 'maxParallelChecks'));
+  // Spell out the pre-budget serialization rather than comparing two new captures.
+  const oldShape = { version: legacySetup.version, modId: legacySetup.modId, sourceRoot: legacySetup.sourceRoot,
+    manifest: legacySetup.manifest, interpreter: legacySetup.interpreter, harness: legacySetup.harness, checks: legacySetup.checks };
+  assert.equal(legacyHash, createHash('sha256').update(canonicalJson(oldShape)).digest('hex'));
+  for (const budget of [1, 2, 4]) {
+    configure([check], budget);
+    const bounded = captureProjectCheckSetup(input);
+    assert.equal((bounded as typeof bounded & { maxParallelChecks?: number }).maxParallelChecks, budget);
+    assert.notEqual(bounded.setupHash, legacyHash);
+  }
+  for (const budget of [0, -1, 5, 1.5, '2', null, true, {}, []]) {
+    configure([check], budget);
+    const proposed = inspectProjectCheckProposal([{ path: 'forge.checks.json', kind: 'other', content: fs.readFileSync(manifest, 'utf8') }]);
+    assert.equal(proposed?.status, 'invalid', `Invalid budget ${JSON.stringify(budget)}`);
+  }
+  configure([check]);
+  assert.equal(captureProjectCheckSetup(input).setupHash, legacyHash);
   assert.notEqual(captureProjectCheckSetup({ ...input, modId: 'other' }).setupHash, original.setupHash);
 
   for (const [file, value] of originalBytes) {
@@ -126,6 +148,9 @@ try {
   assert.deepEqual(ledger.approve(input, original.setupHash, firstReview, approveProof(firstReview)), approval);
   const reopened = new ProjectCheckApprovalLedger(new ActionReceiptStore({ root: store.root }), 'fixture-owner', verify);
   assert.deepEqual(reopened.requireUsable(approval.id, captureProjectCheckSetup(input)), approval);
+  configure([check], 2);
+  assert.throws(() => reopened.requireUsable(approval.id, captureProjectCheckSetup(input)), /does not match/);
+  configure([check]);
   const otherOwner = new ProjectCheckApprovalLedger(store, 'other-owner', verify);
   assert.throws(() => otherOwner.requireUsable(approval.id, original), /committed owner setup approval/);
   assert.throws(() => reopened.requireUsable(approval.id, captureProjectCheckSetup({ ...input, modId: 'wrong' })), /does not match/);

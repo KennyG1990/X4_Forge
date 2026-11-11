@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { ProjectFile } from '../lib/extensionProject';
+import { PROJECT_CHECK_MAX_PARALLEL } from './sharedSourceCoordinator';
 
 export const PROJECT_CHECKS_PATH = 'forge.checks.json';
 export const PROJECT_CHECKS_MAX_BYTES = 256 * 1024;
@@ -21,7 +22,7 @@ interface ProposedCheck {
 
 export type ProjectCheckInspection =
   | { status: 'invalid'; execution: 'not-run'; error: string }
-  | { status: 'proposed'; execution: 'not-run'; manifestHash: string; checks: ProposedCheck[] };
+  | { status: 'proposed'; execution: 'not-run'; manifestHash: string; checks: ProposedCheck[]; maxParallelChecks?: number };
 
 function fields(value: unknown, allowed: readonly string[], label: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)
@@ -71,9 +72,14 @@ export function inspectProjectCheckProposal(files: ProjectFile[]): ProjectCheckI
     let parsed: unknown;
     try { parsed = JSON.parse(raw.replace(/^\uFEFF/, '')); }
     catch { throw new Error('forge.checks.json is not valid JSON.'); }
-    const config = fields(parsed, ['version', 'checks'], PROJECT_CHECKS_PATH);
+    const config = fields(parsed, ['version', 'checks', 'maxParallelChecks'], PROJECT_CHECKS_PATH);
     if (config.version !== 1 || !Array.isArray(config.checks) || config.checks.length < 1 || config.checks.length > 32) {
       throw new Error('forge.checks.json requires version 1 and between 1 and 32 checks.');
+    }
+    const budget = config.maxParallelChecks;
+    if (Object.hasOwn(config, 'maxParallelChecks') && (typeof budget !== 'number' || !Number.isInteger(budget)
+      || budget < 1 || budget > PROJECT_CHECK_MAX_PARALLEL)) {
+      throw new Error(`maxParallelChecks must be an integer from 1 to ${PROJECT_CHECK_MAX_PARALLEL}.`);
     }
     const ids = new Set<string>();
     const checks = config.checks.map((value: unknown, index: number): ProposedCheck => {
@@ -97,7 +103,8 @@ export function inspectProjectCheckProposal(files: ProjectFile[]): ProjectCheckI
         covers: fileList(covers, 512, `${label}.covers`),
       };
     });
-    return { status: 'proposed', execution: 'not-run', manifestHash: createHash('sha256').update(raw).digest('hex'), checks };
+    return { status: 'proposed', execution: 'not-run', manifestHash: createHash('sha256').update(raw).digest('hex'), checks,
+      ...(budget === undefined ? {} : { maxParallelChecks: budget as number }) };
   } catch (error) {
     return { status: 'invalid', execution: 'not-run', error: (error as Error).message };
   }

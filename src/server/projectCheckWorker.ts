@@ -203,7 +203,7 @@ export async function runProjectCheckWorker(
     const frame = lease.armProjectCheck({
       bindingHash: bound.bindingHash, commandHash: bound.commandHash, helperPid: child.pid,
       jobName: command.jobName, launcherHash: runtime.launcherSha256, runId: command.runId,
-    });
+    }, bound.binding.maxParallelChecks ?? 1);
     const input = JSON.stringify({ ...frame, command }) + '\n';
     if (Buffer.byteLength(input, 'utf8') > MAX_FRAME_BYTES) throw new Error('The project check launch frame exceeds its limit.');
     if (performance.now() >= deadline) throw new Error('The project check worker launch deadline expired.');

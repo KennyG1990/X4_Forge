@@ -87,6 +87,7 @@ function bindProjectChecks(input: ProjectCheckBindingInput, checkId?: string) {
       artifactHash: snapshot.manifest.hash,
       approvalId: approval.id,
       approvalHash: approval.hash,
+      ...(setup.maxParallelChecks === undefined ? {} : { maxParallelChecks: setup.maxParallelChecks }),
       coveredFiles,
       command,
     });

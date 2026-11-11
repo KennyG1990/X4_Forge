@@ -242,6 +242,8 @@ const SAFE_METADATA_KEYS = new Set([
   'operation', 'route', 'requestId', 'traceId', 'reasonCode', 'message', 'count', 'bytes',
   'mode', 'dryRun', 'provider', 'model', 'profile', 'resourceRole', 'summary', 'errorCode',
   'outcome', 'stage', 'recoveryId',
+  // Owner-approved project-check concurrency; numeric policy facts, never executable input.
+  'projectCheckPolicyVersion', 'maxParallelChecks',
   // Exact-finding approval audit facts; never raw requests, credentials or source bytes.
   'modId', 'sourceHash', 'artifactHash', 'validatorHash', 'corpusHash', 'targetHash',
   'validatedArtifactHash', 'validatedArtifactScope',

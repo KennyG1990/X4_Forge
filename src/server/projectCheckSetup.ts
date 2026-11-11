@@ -185,6 +185,7 @@ function inspectSetup(input: ProjectCheckSetupInput, stage?: SetupStage) {
       path: file, ...capture(relativeInput(sourceRoot, file), `project/${file}`).fingerprint,
     })),
     checks: proposal.checks,
+    ...(proposal.maxParallelChecks === undefined ? {} : { maxParallelChecks: proposal.maxParallelChecks }),
   };
   for (const [file, expected] of reads) {
     canonicalLocalPath(file);

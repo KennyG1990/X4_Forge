@@ -4,7 +4,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { ActionReceipt } from '../src/lib/actionReceipt';
+import { canonicalJson, hashActionReceiptAuthority, type ActionReceipt } from '../src/lib/actionReceipt';
 import { ActionReceiptStore } from '../src/lib/actionReceiptStore';
 import { buildArtifactPlan } from '../src/lib/artifactPipeline';
 import { captureDeploymentSnapshot } from '../src/server/deploymentSnapshot';
@@ -65,12 +65,12 @@ with open(os.path.join(os.environ['FORGE_ARTIFACT_ROOT'], 'md', name + '.xml'), 
     assert covered.read() == '<mdscript name="' + name + '"/>\n'
 with open(marker, 'a', encoding='ascii', newline='\n') as record:
     record.write('started\n')
-if mode == 'wait':
+if mode in ('wait', 'wait-nonzero'):
     while not os.path.exists(release):
         time.sleep(0.02)
 if mode != 'nonzero-empty':
     print(name)
-sys.exit(7 if mode in ('nonzero', 'nonzero-empty') else 0)
+sys.exit(7 if mode in ('nonzero', 'nonzero-empty', 'wait-nonzero') else 0)
 `;
 
 function stageInterpreter() {
@@ -119,8 +119,9 @@ function meterFixture() {
   peakFootprint.entries = Math.max(peakFootprint.entries, entries);
 }
 
-type Mode = 'wait' | 'nonzero' | 'nonzero-empty' | 'pass';
-function fixture(name: string, declarations: ReadonlyArray<readonly [string, Mode]>, interpreter: ReturnType<typeof stageInterpreter>) {
+type Mode = 'wait' | 'wait-nonzero' | 'nonzero' | 'nonzero-empty' | 'pass';
+function fixture(name: string, declarations: ReadonlyArray<readonly [string, Mode, number?]>, interpreter: ReturnType<typeof stageInterpreter>,
+  maxParallelChecks?: number) {
   const directory = path.join(root, name);
   const sourceRoot = path.join(directory, 'source');
   const scratch = path.join(directory, 'scratch');
@@ -128,12 +129,13 @@ function fixture(name: string, declarations: ReadonlyArray<readonly [string, Mod
   fs.mkdirSync(path.dirname(script), { recursive: true });
   fs.mkdirSync(scratch);
   fs.writeFileSync(script, probe, 'utf8');
-  const commands = declarations.map(([id, mode]) => ({
-    id, mode, covered: `md/${id}.xml`, marker: path.join(directory, `${id}-started.txt`),
+  const commands = declarations.map(([id, mode, timeoutSeconds = 12]) => ({
+    id, mode, timeoutSeconds, covered: `md/${id}.xml`, marker: path.join(directory, `${id}-started.txt`),
     release: path.join(directory, `${id}-release.txt`),
   }));
-  const manifest = JSON.stringify({ version: 1, checks: commands.map(command => ({
-    id: command.id, script: 'checks/run.py', covers: [command.covered], timeoutSeconds: 12,
+  const manifest = JSON.stringify({ version: 1, ...(maxParallelChecks === undefined ? {} : { maxParallelChecks }),
+    checks: commands.map(command => ({
+    id: command.id, script: 'checks/run.py', covers: [command.covered], timeoutSeconds: command.timeoutSeconds,
     args: [command.id, command.marker, command.release, command.mode],
   })) });
   fs.writeFileSync(path.join(sourceRoot, 'forge.checks.json'), manifest, 'utf8');
@@ -148,9 +150,11 @@ function fixture(name: string, declarations: ReadonlyArray<readonly [string, Mod
   const approval = approvals.approve(setupInput, reviewed.setupHash, 'fixture-suite-owner-review', 'fixture-approve');
   const runId = randomBytes(16).toString('hex');
 
+  const inputDisposers: (() => void)[] = [];
   const inputs = (changeArtifact = false) => {
     const frozen = freezeProjectCheckSetup(setupInput, reviewed.setupHash, scratch);
     cleanup.push(frozen.dispose);
+    inputDisposers.push(frozen.dispose);
     const plan = buildArtifactPlan({ sourceRoot: '', memoryOnly: true, generatedFiles: {
       'content.xml': `<content id="${modId}" name="Fixture" version="100"/>`,
       'forge.checks.json': manifest,
@@ -160,6 +164,7 @@ function fixture(name: string, declarations: ReadonlyArray<readonly [string, Mod
     assert(plan.ok, plan.errors.join('\n'));
     const snapshot = captureDeploymentSnapshot(plan, 'loose');
     cleanup.push(snapshot.dispose);
+    inputDisposers.push(snapshot.dispose);
     meterFixture();
     return { setupInput, frozen, artifact: { modId, snapshot }, approvals, approvalId: approval.id, runId,
       systemRoot: systemRoot!, runtime, store, workspaceId, actorId };
@@ -178,7 +183,8 @@ function fixture(name: string, declarations: ReadonlyArray<readonly [string, Mod
   const execute = (selected = exact, wrapLease: (lease: ProjectCheckSourceLease) => ProjectCheckSourceLease = lease => lease) =>
     coordinator.run([key], { actor: actorId, operation: 'fixture-suite', workspaceId },
       lease => executeProjectCheckSuite({ ...selected, lease: wrapLease(lease) }));
-  return { commands, approvals, approval, store, script, exact, inputs, execute, coordinator, observer, key, ownership };
+  return { commands, approvals, approval, store, script, exact, inputs, execute, coordinator, observer, key, ownership,
+    retireInputs: () => { for (const dispose of inputDisposers.splice(0).reverse()) dispose(); } };
 }
 
 async function until<T>(read: () => T | undefined, label: string): Promise<T> {
@@ -447,6 +453,238 @@ try {
   assert(started(changed.commands[0].marker));
   assert(!fs.existsSync(changed.commands[1].marker));
   record('owner revocation after the first child commits leaves a durable failed suite without starting the second');
+
+  const parallel = fixture('parallel-refill', [['omega', 'wait'], ['alpha', 'wait'], ['middle', 'wait']], interpreter, 2);
+  const parallelAdmissions: number[] = [];
+  const parallelRun = parallel.execute(parallel.exact, lease => ({ ...lease,
+    armProjectCheck(guard, budget) { parallelAdmissions.push(budget!); return lease.armProjectCheck(guard, budget); },
+  }));
+  void parallelRun.catch(() => {});
+  let parallelReceipt: ActionReceipt;
+  try {
+    await until(() => parallel.commands.slice(0, 2).every(command => started(command.marker)) ? true : undefined, 'two overlapping suite Jobs');
+    assert(!fs.existsSync(parallel.commands[2].marker));
+    assert.deepEqual(parallelAdmissions, [2, 2]);
+    release(parallel.commands[1].release); // Complete index1 before index0.
+    await until(() => started(parallel.commands[2].marker) ? true : undefined, 'one refilled suite slot');
+    assert.equal(parallel.store.listVerified().filter(isCommand).filter(child => child.status === 'prepared').length, 2);
+    assert.deepEqual(parallelAdmissions, [2, 2, 2]);
+    release(parallel.commands[2].release);
+    await until(() => parallel.store.listVerified().some(child => isCommand(child)
+      && child.authority.operationId.endsWith(':middle') && child.status === 'committed') ? true : undefined, 'out-of-order third completion');
+    release(parallel.commands[0].release);
+    parallelReceipt = await parallelRun;
+  } finally {
+    for (const command of parallel.commands) release(command.release);
+    await parallelRun.catch(() => {});
+  }
+  assert.equal(parallelReceipt.status, 'committed');
+  assert.equal(parallelReceipt.metadata?.projectCheckPolicyVersion, 2);
+  assert.equal(parallelReceipt.metadata?.maxParallelChecks, 2);
+  const parallelProof = requirePassedProjectCheckSuite(parallel.inputs(), parallelReceipt.id);
+  assert.deepEqual(parallelProof.commandReceipts.map(child => child.authority.operationId.split(':').at(-1)), ['omega', 'alpha', 'middle']);
+  assert.equal(readProjectCheckSuiteReport(new ActionReceiptStore({ root: parallel.store.root }), parallelReceipt)?.state, 'passed');
+  await assert.rejects(parallel.execute(), { code: 'PROJECT_CHECK_SUITE_EXISTS' });
+  const firstBinding = parallelProof.commandReceipts[0];
+  assert.equal(firstBinding.validation.validator, 'windows-python-job-v1');
+  assert.notEqual(hashActionReceiptAuthority(parallelReceipt), hashActionReceiptAuthority({ ...parallelReceipt,
+    metadata: { ...parallelReceipt.metadata, maxParallelChecks: 1 } }));
+  const altered = new ActionReceiptStore({ root: path.join(root, 'wrong-budget-proof') });
+  const wrongBudget = altered.prepare({ actor: parallelReceipt.actor, client: parallelReceipt.client,
+    capability: parallelReceipt.capability, authority: parallelReceipt.authority, effects: parallelReceipt.effects,
+    input: parallelReceipt.input, validation: parallelReceipt.validation, rollback: parallelReceipt.rollback,
+    metadata: { ...parallelReceipt.metadata, maxParallelChecks: 1 } });
+  for (const child of parallelProof.commandReceipts) fs.copyFileSync(parallel.store.pathFor(child.id), altered.pathFor(child.id));
+  altered.commit(wrongBudget.id, { validation: parallelReceipt.validation, after: parallelReceipt.after });
+  assert.throws(() => requirePassedProjectCheckSuite({ ...parallel.exact, store: altered }, wrongBudget.id),
+    { code: 'PROJECT_CHECK_SUITE_MISMATCH' });
+  parallel.retireInputs();
+  record('approved budget2 overlaps two real Jobs, refills only a drained slot and reopens declaration-ordered exact proof after out-of-order completion');
+
+  const simultaneous = fixture('parallel-fail', [['omega', 'wait-nonzero'], ['alpha', 'wait-nonzero'], ['unused', 'pass']], interpreter, 2);
+  const parallelRuns = new ProjectCheckRunService(simultaneous.store, simultaneous.coordinator);
+  const parallelAdmitted = await parallelRuns.start({ actorId, workspaceId, operationId: 'parallel-two-failures', modId,
+    artifactHash: simultaneous.exact.artifact.snapshot.manifest.hash,
+    requestHash: createHash('sha256').update('parallel-two-failures').digest('hex'), sourceKey: simultaneous.key },
+  async (lease, runId) => {
+    simultaneous.exact.runId = runId;
+    const suite = await executeProjectCheckSuite({ ...simultaneous.exact, lease });
+    return { suite, logicalArtifactHash: suite.input.beforeHash };
+  });
+  const failureRun = until(() => {
+    const state = parallelRuns.status(actorId, workspaceId, parallelAdmitted.id);
+    return state.suiteReport ? simultaneous.store.read(state.suiteReport.suite.id) : undefined;
+  }, 'parallel named run report');
+  void failureRun.catch(() => {});
+  let failureSettled = false;
+  void failureRun.then(() => { failureSettled = true; }, () => { failureSettled = true; });
+  let blockedWriter: Promise<unknown> | undefined;
+  let writerAfterFailures = false;
+  let simultaneousReceipt: ActionReceipt;
+  try {
+    await until(() => simultaneous.commands.slice(0, 2).every(command => started(command.marker)) ? true : undefined, 'two in-flight failures');
+    release(simultaneous.commands[0].release);
+    await until(() => simultaneous.store.listVerified().some(child => isCommand(child) && child.status === 'failed') ? true : undefined, 'first observed suite failure');
+    assert(!failureSettled && !fs.existsSync(simultaneous.commands[2].marker));
+    blockedWriter = simultaneous.observer.run([simultaneous.key], { actor: 'fixture-writer', operation: 'failure-tail' },
+      () => { writerAfterFailures = true; });
+    void blockedWriter.catch(() => {});
+    await until(() => simultaneous.ownership().waiting.length ? true : undefined, 'writer behind failed suite tail');
+    assert(!writerAfterFailures);
+    release(simultaneous.commands[1].release);
+    simultaneousReceipt = await failureRun;
+    await blockedWriter;
+  } finally {
+    for (const command of simultaneous.commands) release(command.release);
+    await failureRun.catch(() => {});
+    await blockedWriter?.catch(() => {});
+  }
+  const multipleReport = readProjectCheckSuiteReport(new ActionReceiptStore({ root: simultaneous.store.root }), simultaneousReceipt);
+  assert.equal(multipleReport?.state, 'failed');
+  assert.equal(multipleReport.notRunCount, 1);
+  assert.deepEqual(multipleReport.checks.map(child => [child.id, child.state]), [['alpha', 'failed'], ['omega', 'failed']]);
+  assert(writerAfterFailures && !fs.existsSync(simultaneous.commands[2].marker));
+  const recreatedRuns = new ProjectCheckRunService(new ActionReceiptStore({ root: simultaneous.store.root }), simultaneous.coordinator);
+  assert.deepEqual(recreatedRuns.status(actorId, workspaceId, parallelAdmitted.id).suiteReport, multipleReport);
+  assert.throws(() => requirePassedProjectCheckSuite(simultaneous.exact, simultaneousReceipt.id));
+  // Reissue only policy authority in tiny private stores; real child bytes remain exact.
+  for (const [name, metadata, summaryVersion] of [
+    ['legacy-multiple', { ...simultaneousReceipt.metadata, projectCheckPolicyVersion: undefined, maxParallelChecks: undefined }, 1],
+    ['missing-budget', { ...simultaneousReceipt.metadata, maxParallelChecks: undefined }, 2],
+    ['unknown-policy', { ...simultaneousReceipt.metadata, projectCheckPolicyVersion: 3 }, 2],
+    ['out-of-range', { ...simultaneousReceipt.metadata, maxParallelChecks: 5 }, 2],
+  ] as const) {
+    const copy = new ActionReceiptStore({ root: path.join(root, name) });
+    const cleanMetadata = Object.fromEntries(Object.entries(metadata).filter(([, value]) => value !== undefined));
+    const prepared = copy.prepare({ actor: simultaneousReceipt.actor, client: simultaneousReceipt.client,
+      capability: simultaneousReceipt.capability, authority: simultaneousReceipt.authority, effects: simultaneousReceipt.effects,
+      input: simultaneousReceipt.input, validation: simultaneousReceipt.validation, rollback: simultaneousReceipt.rollback, metadata: cleanMetadata });
+    for (const child of simultaneous.store.listVerified().filter(isCommand)) fs.copyFileSync(simultaneous.store.pathFor(child.id), copy.pathFor(child.id));
+    const refused = copy.fail(prepared.id, { validation: { ...simultaneousReceipt.validation,
+      summary: canonicalJson({ ...JSON.parse(simultaneousReceipt.validation.summary!), version: summaryVersion }) },
+      failure: simultaneousReceipt.failure });
+    assert.throws(() => readProjectCheckSuiteReport(copy, refused), { code: 'PROJECT_CHECK_SUITE_MISMATCH' });
+  }
+  simultaneous.retireInputs();
+  record('first failure stops admission and retains the source until its failing sibling drains; both named failures reopen and legacy/invalid policy refuses');
+
+  const mixed = fixture('parallel-mixed', [['omega', 'wait-nonzero'], ['alpha', 'wait'], ['unused', 'pass']], interpreter, 2);
+  let drains = 0;
+  const mixedRun = mixed.execute(mixed.exact, lease => ({ ...lease,
+    assertProjectCheckDrained(frame) {
+      lease.assertProjectCheckDrained(frame);
+      if (++drains === 2) throw new Error('Fixture loses acknowledgement after actual drain and helper exit.');
+    },
+  }));
+  void mixedRun.catch(() => {});
+  let mixedReceipt: ActionReceipt;
+  try {
+    await until(() => mixed.commands.slice(0, 2).every(command => started(command.marker)) ? true : undefined, 'mixed-result overlap');
+    release(mixed.commands[0].release);
+    await until(() => mixed.store.listVerified().some(child => isCommand(child) && child.status === 'failed') ? true : undefined, 'mixed confirmed failure');
+    release(mixed.commands[1].release);
+    mixedReceipt = await mixedRun;
+  } finally {
+    for (const command of mixed.commands) release(command.release);
+    await mixedRun.catch(() => {});
+  }
+  const mixedReport = readProjectCheckSuiteReport(new ActionReceiptStore({ root: mixed.store.root }), mixedReceipt);
+  assert.equal(mixedReport?.state, 'incomplete');
+  assert.equal(mixedReport.notRunCount, 1);
+  assert.deepEqual(mixedReport.checks.map(child => [child.id, child.state]), [['alpha', 'incomplete'], ['omega', 'failed']]);
+  assert(!fs.existsSync(mixed.commands[2].marker));
+  assert.throws(() => requirePassedProjectCheckSuite(mixed.exact, mixedReceipt.id));
+  mixed.retireInputs();
+  record('an unconfirmed acknowledgement dominates a concurrent confirmed failure, preserves both named results and never credits coverage');
+
+  const storage = fixture('parallel-storage', [['omega', 'wait'], ['alpha', 'wait'], ['unused', 'pass']], interpreter, 2);
+  class LoseCommandCommit extends ActionReceiptStore {
+    override commit(...args: Parameters<ActionReceiptStore['commit']>) {
+      const current = this.read(args[0]);
+      if (isCommand(current) && current.authority.operationId.endsWith(':omega')) throw new Error('Fixture command receipt write failed.');
+      return super.commit(...args);
+    }
+  }
+  let storageAcknowledged = false;
+  const storageRun = storage.execute({ ...storage.exact, store: new LoseCommandCommit({ root: storage.store.root }) },
+    lease => ({ ...lease, assertProjectCheckDrained(frame) { lease.assertProjectCheckDrained(frame); storageAcknowledged = true; } }));
+  void storageRun.catch(() => {});
+  let storageSettled = false;
+  void storageRun.then(() => { storageSettled = true; }, () => { storageSettled = true; });
+  try {
+    await until(() => storage.commands.slice(0, 2).every(command => started(command.marker)) ? true : undefined, 'storage-fault siblings');
+    release(storage.commands[0].release);
+    // A durable confirmed guard proves the first helper is done, even though its receipt write failed.
+    await until(() => storageAcknowledged ? true : undefined, 'first storage-fault helper acknowledgement');
+    assert(!storageSettled && !fs.existsSync(storage.commands[2].marker));
+    release(storage.commands[1].release);
+    await assert.rejects(storageRun, /Fixture command receipt write failed/);
+  } finally {
+    for (const command of storage.commands) release(command.release);
+    await storageRun.catch(() => {});
+  }
+  assert(!fs.existsSync(storage.commands[2].marker));
+  assert.equal(storage.ownership().active.length, 0);
+  assert(!storage.store.listVerified().some(child => !isCommand(child) && child.status === 'committed'
+    && 'id' in child.capability && child.capability.id === 'project-check.suite'));
+  storage.retireInputs();
+  record('a command receipt storage error drains every started sibling before propagating, stops new admission and never commits the suite');
+
+  const timeout = fixture('parallel-timeout', [['omega', 'wait-nonzero'], ['alpha', 'wait', 2], ['unused', 'pass']], interpreter, 2);
+  const timeoutRun = timeout.execute();
+  void timeoutRun.catch(() => {});
+  let timeoutReceipt: ActionReceipt;
+  try {
+    await until(() => timeout.commands.slice(0, 2).every(command => started(command.marker)) ? true : undefined, 'timeout sibling overlap');
+    release(timeout.commands[0].release);
+    timeoutReceipt = await timeoutRun; // The other owned Job must reach its real timeout, not an observation deadline.
+  } finally {
+    for (const command of timeout.commands) release(command.release);
+    await timeoutRun.catch(() => {});
+  }
+  const timeoutReport = readProjectCheckSuiteReport(timeout.store, timeoutReceipt);
+  assert.equal(timeoutReport?.state, 'failed');
+  assert.equal(timeoutReport.checks.find(child => child.id === 'alpha')?.code, 'PROJECT_CHECK_TIMED_OUT');
+  assert.equal(timeout.ownership().active.length, 0);
+  assert(!fs.existsSync(timeout.commands[2].marker));
+  timeout.retireInputs();
+  record('a real timeout tail drains its Job after a sibling failure without admitting the queued third check');
+
+  const revokedParallel = fixture('parallel-revoke', [['omega', 'wait'], ['alpha', 'wait'], ['unused', 'pass']], interpreter, 2);
+  let revokedAfterCommit = false;
+  class RevokeParallelCommand extends ActionReceiptStore {
+    override commit(...args: Parameters<ActionReceiptStore['commit']>) {
+      const committed = super.commit(...args);
+      if (isCommand(committed) && committed.authority.operationId.endsWith(':omega')) {
+        revokedParallel.approvals.revoke(revokedParallel.approval.id, 'fixture-revoke');
+        revokedAfterCommit = true;
+      }
+      return committed;
+    }
+  }
+  const revokedRun = revokedParallel.execute({ ...revokedParallel.exact,
+    store: new RevokeParallelCommand({ root: revokedParallel.store.root }) });
+  void revokedRun.catch(() => {});
+  let revokedReceipt: ActionReceipt;
+  try {
+    await until(() => revokedParallel.commands.slice(0, 2).every(command => started(command.marker)) ? true : undefined, 'revocation overlap');
+    release(revokedParallel.commands[0].release);
+    await until(() => revokedAfterCommit ? true : undefined, 'parallel owner revocation');
+    assert(!fs.existsSync(revokedParallel.commands[2].marker));
+    release(revokedParallel.commands[1].release);
+    revokedReceipt = await revokedRun;
+  } finally {
+    for (const command of revokedParallel.commands) release(command.release);
+    await revokedRun.catch(() => {});
+  }
+  const revokedReport = readProjectCheckSuiteReport(revokedParallel.store, revokedReceipt);
+  assert.equal(revokedReport?.state, 'failed');
+  assert.equal(revokedReport.notRunCount, 1);
+  assert.equal(revokedReport.checks.find(child => child.id === 'alpha')?.code, 'PROJECT_CHECK_BINDING_CHANGED');
+  assert(!fs.existsSync(revokedParallel.commands[2].marker));
+  assert.throws(() => requirePassedProjectCheckSuite(revokedParallel.exact, revokedReceipt.id));
+  revokedParallel.retireInputs();
+  record('owner revocation refuses the queued admission and credits no proof while the already-running sibling drains');
 
   meterFixture();
   console.log(JSON.stringify({ status: 'passed', realWindowsProcesses: true, fixtureOwnerApproval: true, checks,
