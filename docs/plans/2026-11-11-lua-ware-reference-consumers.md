@@ -1,6 +1,6 @@
 # Lua ware reference consumers (#64 follow-up)
 
-Status: SPECIFIED. Lane: FULL. Existing owner: [#64](https://github.com/KennyG1990/X4_Forge/issues/64#issuecomment-6748670368), first concrete defect in Ken's validation/debuglog execution worklist.
+Status: PARTIAL — source repair and focused proof; full gates pending. Lane: FULL. Existing owner: [#64](https://github.com/KennyG1990/X4_Forge/issues/64#issuecomment-6748670368), first concrete defect in Ken's validation/debuglog execution worklist.
 
 ## PLAN
 
@@ -24,4 +24,34 @@ Graph blast-radius: projectValidation/server, embedded reference oracle, schema 
 
 ## IMPLEMENT / VALIDATE / REVIEW / CLOSE / AAR
 
-Pending. Existing #64 remains open, including its earlier faction and installed acceptance scope. This follow-up cannot close all validation or runtime issues.
+Overall PARTIAL. Existing #64 remains open, including its earlier faction and installed acceptance scope. This follow-up cannot close all validation or runtime issues.
+
+### Source batch after machine crash
+
+Start clean at a4b8c200218a633870022d4803bbade5a4add4e9; referenceLint.ts SHA554281437b8c4c5b7d6bcbba028a8c37189ce5b1e14ad526dade88165e0819d0. Original Dev server/discovery pins still match. The Dev IDE is closed after the reported whole-machine crash; do not relaunch a GUI, package/build/native suite or multi-worker graph job in this window. Small single-process source regression tests are available. Required full HTTP/installed/rendered/precommit/release criteria above remain required and explicitly pending; this is not a lower completion bar. No source VERIFIED close or unit36release review until applicable gates actually pass. Agent-Brain returned only the broad old reference-API discussion, not a prior ware-table fix.
+
+The same0.0.83official corpus menu_map.lua uses GetWareData(variable,"name") at1168 and GetWareData(variable,"volume") at3670; the bounded checker handles literal first arguments, not arbitrary variable resolution. Reuse the existing parsed consumer and its conservative rebinding semantics.
+
+### IMPLEMENT / source validation
+
+The existing lexical faction consumer now handles ware literals in the same parse, preserving local/environment/rebinding exclusions. MD-style ware keyword scanning no longer treats Lua table fields or strings as references. Macro behavior and MD/XML checks remain unchanged. Existing ware-before-faction finding order is deliberately retained. No dependency, new standalone helper, route, capability or writer was added.
+
+Paired source proof executes the complete committed baseline through the same unchanged parser/position modules: exact reported fields2warnings ->0; the genuine direct typo remains1:27. Five complete diagnostic controls, including mixed family ordering, are byte-equivalent JSON. Current25/25embedded reference checks include strings/comments, canonical IDs, shadows/member lookalikes, dynamic inputs, global rebinding, escaped/long literals, BOM/Unicode and CR/LF/CRLF. Permanent validation-noise tests exercise the actual shared project validator and flat diagnostics on registered standalone UI content: noise38assertions, properties72, cross-file72 pass. Lua67, project12, actual pinned LuaJIT/compiler-consumer20 and focused lint0errors/0warnings pass. Actual in-memory project controls retain one unrelated unavailable check and incomplete coverage; no false clean/game proof.
+
+Evidence: QA/forge-1111-ware-reference-checkpoint.json binds source SHAf5d20286791093f65066f6f82dd8118dffd974af7de6b1c120ff2de63ff15467 and the paired/noise/project/regression/grammar/lint artifacts. Private scriptproperties copy SHA1b641b638c8892284bbf5943f9ed283e0adf79f696341a2f00a2361f16485a8f matches the read-only official corpus. A superseded passing24check projection was retired only after every check matched the final25case proof; no failure evidence removed. Private tooling3,852,208B/77entries stays below32MiB/3000review bounds. Source tests use512MiBV8heap/UVpool1/GOMAXPROCS1, not an OS memory quota.
+
+### REVIEW / remaining gates / AAR
+
+Fresh review preserved legacy diagnostic ordering rather than silently reordering independent findings. Scope remains direct provable in-file consumers; aliases, dynamic environments and project-wide runtime behavior are not universally checked. Added parsing cost on ware-only files is not yet measured at native mod scale; retain #97 timing checks. Source/flat evidence is not HTTP, installed IDE or game proof.
+
+The initial post-crash checkpoint held all larger gates. The guarded serial source gate subsequently passed full typecheck and normal precommit; official lint passed0errors/600warnings at the unchanged ceiling. Normal commit hook, actual HTTP/Problems/both native deploy aliases, stale/exact-byte/receipt controls and installed/rendered/package/public qualification still require their own observed results. Current commit/push/CI identities are recorded in the QA packet when observed; this patch is not in0.0.83. No full native/browser/package/IDE gate is admitted by silence about machine state. No qualified-unit36 or release-delivery credit yet.
+
+AAR non-clean: post-crash validation availability changed and review added mixed-order coverage; one Markdown patch attempted to match only a prefix of a full line and was corrected without changing unrelated text. Sustain paired full-source baseline execution, genuine typo controls and explicit unavailable coverage. Improve tools: installed Graphify extraction defaults to CPU count; source confirms per-command GRAPHIFY_MAX_WORKERS=1 is supported and inherited by the normal hook. It is now included in the private command prefix; no global hook/setting was changed and a full graph run was not launched to test it in this window. Highest evidenced product weakness: using MD expression syntax as a Lua reference detector manufactures deploy warnings; the bounded source repair still needs native/installed requalification. Banked on existing project/QOL records; no memory write or procedural-skill claim.
+
+### Source-gate availability reconciliation
+
+At20:56:37Z, host state directly reports the same20:19:33Zboot, no X4/Antigravity process,10,751MiBfree and0percentCPU. The machine-state question was issued; silence is not treated as its answer. These actual observations plus the standing headless authorization support resuming serial source gates under explicit limits: the command shell and inherited children use one CPU-affinity bit, Node old-space1024MiBperprocess, UVpool1/GOMAXPROCS1 and GRAPHIFY_MAX_WORKERS1. These are process-local controls, not OS aggregate memory quotas or standing config changes. Abort before launch if any game/IDE process appears, free memory falls below6GiB, CPU exceeds25percent or affinity cannot be established. Full native/browser/packaging/IDE gates remain held; current source-gate results must be observed, not assumed. This revises availability only; no acceptance criterion is removed and no source-only whole-issue close is allowed.
+
+The first guarded source gate completed all earlier precommit stages then TypeScript hit the imposed1GiBheap ceiling and exited134. This is a failed required gate, not a source pass or evidence of another Windows reboot. Afterward no owned producer remained, the same boot persisted and10,686MiBwere free. Resource-contract revision: source precommit/typechecking may use3072MiBNode old-space with a stricter8GiBfree-memory admission threshold; affinity1/UV1/Go1/Graphify1 and no game/IDE guard remain. Small oracles keep512MiB. The old failure log remains immutable; retry under a distinct final gate log and record its real exit. No test or warning threshold is weakened. Full native/browser/package/IDE gates remain held.
+
+Final manual source gate42379terminated0 (`forge-1111-ware-reference-precommit-final.log`), including required receipt policy89routes/64surfaces and typecheck; official lint29013terminated0 (`forge-1111-ware-reference-official-lint.log`),0errors/600warnings. Thirteen capabilities,306literal routes,12MCP aliases,47raw/11host/3browser/3SQLite writer owners and receipt-policy hash remain unchanged. The normal commit hook must use the same guarded environment and is not waived. This is a partial source checkpoint while the complete #64 acceptance remains open.

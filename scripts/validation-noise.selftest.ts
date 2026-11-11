@@ -4,6 +4,7 @@ import { lintReferenceLiterals, runReferenceLiteralLintSelftest } from '../src/l
 import { buildScriptPropertyIndex, lintScriptPropertyChains, runScriptPropertiesSelftest } from '../src/lib/scriptProperties';
 import { runProjectCrossFileSelftest, validateProjectCrossFile } from '../src/lib/projectCrossFileValidation';
 import type { ExtensionProject } from '../src/lib/extensionProject';
+import { runProjectValidation, flattenProjectValidation } from '../src/server/projectValidation';
 
 let assertions = 0;
 function check(name: string, value: unknown) { assert.ok(value, name); assertions++; }
@@ -59,4 +60,25 @@ check('unknown concatenation stays prefix', cross('AddUITriggeredEvent("forge_la
 check('commented raise ignored', cross('return {}', '<event_game_started/>', '<!-- <raise_lua_event name="\'missing\'"/> -->').summary.mdLuaMissingRegisters === 0);
 check('entity-decoded raise resolves', cross('RegisterEvent("forge_lab.reply",function() end)', '<event_game_started/>', '<raise_lua_event name="&apos;forge_lab.reply&apos;"/>').summary.mdLuaMissingRegisters === 0);
 check('malformed Lua still reported', cross('local broken = )').summary.luaRegistrationUnavailable === 1);
+const wareProjectCases = [
+  'local ware = namedSupplyWare(rows, text)\nif active(c) and (not ware or c.ware == ware.ware) then end\nlocal label = ware.wname',
+  'local name = GetWareData("notaware", "name")',
+  'local name = GetWareData("energycells", "name")',
+].map(content => {
+  const project: ExtensionProject = { id: 'forge_ware64', name: 'Ware reference regression', files: [
+    { path: 'content.xml', kind: 'content', content: '<content id="forge_ware64" name="Ware reference regression" version="100"/>' },
+    { path: 'ui.xml', kind: 'ui', content: '<addon name="forge_ware64"><environment type="menus"><dependency name="ego_detailmonitor"/><file name="ui/ware64.lua"/></environment></addon>' },
+    { path: 'ui/ware64.lua', kind: 'lua', content },
+  ] };
+  const result = runProjectValidation(project, { references: refs });
+  return { findings: result.references.findings.filter(finding => finding.code === 'reference.unknown_ware'),
+    flat: flattenProjectValidation(result).filter(finding => finding.code === 'reference.unknown_ware') };
+});
+check('project validator clears the exact #64 ware table false positives', wareProjectCases[0].findings.length === 0);
+check('project validator preserves the genuine direct ware typo and coordinates', wareProjectCases[1].findings.length === 1
+  && wareProjectCases[1].findings[0].id === 'notaware' && wareProjectCases[1].findings[0].line === 1 && wareProjectCases[1].findings[0].column === 27);
+check('project validator accepts a canonical direct ware id', wareProjectCases[2].findings.length === 0);
+check('project and flat diagnostics preserve ware findings and positions', wareProjectCases.every(result =>
+  JSON.stringify(result.findings.map(finding => [finding.code, finding.line, finding.column]))
+    === JSON.stringify(result.flat.map(finding => [finding.code, finding.line, finding.column]))));
 console.log(JSON.stringify({ assertions, pass: true, corpus }));

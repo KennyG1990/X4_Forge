@@ -75,7 +75,7 @@ interface LuaReferenceNode {
   variables?: LuaReferenceNode[];
 }
 
-type LuaFactionConsumer = 'GetFactionData' | 'GetComponentData';
+type LuaLiteralConsumer = 'GetFactionData' | 'GetComponentData' | 'GetWareData';
 
 function globalLuaName(node: LuaReferenceNode | undefined): string | undefined {
   return node?.type === 'Identifier' && node.isLocal === false ? node.name : undefined;
@@ -92,26 +92,27 @@ function globalLuaWrite(node: LuaReferenceNode | undefined): unknown {
   return globalLuaName(node);
 }
 
-function luaFactionLiterals(content: string): Array<{ id: string; offset: number }> {
-  if (!content.includes('GetFactionData') && !content.includes('GetComponentData')) return [];
-  const hits: Array<{ consumer: LuaFactionConsumer; id: string; offset: number }> = [];
-  const rebound = new Set<LuaFactionConsumer>();
+function luaConsumedReferenceLiterals(content: string): Array<{ kind: 'faction' | 'ware'; id: string; offset: number }> {
+  if (!content.includes('GetFactionData') && !content.includes('GetComponentData') && !content.includes('GetWareData')) return [];
+  const hits: Array<{ consumer: LuaLiteralConsumer; kind: 'faction' | 'ware'; id: string; offset: number }> = [];
+  const rebound = new Set<LuaLiteralConsumer>();
   let changedEnvironment = false;
   const markWrite = (name: unknown) => {
     if (name === '_ENV') changedEnvironment = true;
-    if (name === 'GetFactionData' || name === 'GetComponentData') rebound.add(name);
+    if (name === 'GetFactionData' || name === 'GetComponentData' || name === 'GetWareData') rebound.add(name);
   };
-  const record = (consumer: LuaFactionConsumer, node: LuaReferenceNode | undefined) => {
+  const record = (consumer: LuaLiteralConsumer, node: LuaReferenceNode | undefined) => {
     if (node?.type !== 'StringLiteral' || typeof node.value !== 'string' || !node.range || !node.raw
       || !/^[A-Za-z_][\w.-]*$/.test(node.value)) return;
     const opening = node.raw.match(/^(?:\[=*\[(?:\r\n|\n\r|\r|\n)?|["'])/);
-    if (opening) hits.push({ consumer, id: node.value, offset: node.range[0] + opening[0].length });
+    if (opening) hits.push({ consumer, kind: consumer === 'GetWareData' ? 'ware' : 'faction',
+      id: node.value, offset: node.range[0] + opening[0].length });
   };
   const returnsOwner = (node: LuaReferenceNode | undefined) => node?.type === 'CallExpression'
     && globalLuaName(node.base) === 'GetComponentData' && node.arguments?.[1]?.value === 'owner';
   try {
     // Preserve UTF-16 offsets while giving luaparse a byte-string-compatible input.
-    // A substituted character cannot be part of an ASCII faction ID.
+    // A substituted character cannot be part of an ASCII reference ID.
     parse(content.replace(/^\uFEFF/, ' ').replace(/[\u0100-\uffff]/g, '?'), {
       comments: false, ranges: true, scope: true, encodingMode: 'pseudo-latin1',
       onLocalDeclaration(name: string) {
@@ -124,7 +125,7 @@ function luaFactionLiterals(content: string): Array<{ id: string; offset: number
           markWrite(globalLuaWrite(node.identifier));
         } else if (node.type === 'CallExpression' || node.type === 'StringCallExpression') {
           const callee = globalLuaName(node.base);
-          if (callee === 'GetFactionData') record(callee, node.arguments?.[0] ?? node.argument);
+          if (callee === 'GetFactionData' || callee === 'GetWareData') record(callee, node.arguments?.[0] ?? node.argument);
           if (callee === 'rawset' && isGlobalEnvironment(node.arguments?.[0])) markWrite(node.arguments?.[1]?.value);
         } else if (node.type === 'BinaryExpression' && (node.operator === '==' || node.operator === '~=')) {
           if (returnsOwner(node.left)) record('GetComponentData', node.right);
@@ -169,18 +170,25 @@ export function lintReferenceLiterals(
     }
   };
 
-  // Root keyword expressions, also used in Lua strings sent to MD. A word
-  // boundary alone matches the property suffix in $object.ware.name (and even
+  // MD root keyword expressions. A Lua table field or string is not a typed
+  // MD reference. A word boundary alone matches the suffix in $object.ware.name (and even
   // the variable $ware.name); neither is a literal corpus reference.
-  if (!isLua) scan('faction', references.factions, /(?<![\w$.\]])faction\.([A-Za-z_][\w-]*)\b/gd);
-  scan('ware', references.wares, /(?<![\w$.\]])ware\.([A-Za-z_][\w-]*)\b/gd);
+  if (!isLua) {
+    scan('faction', references.factions, /(?<![\w$.\]])faction\.([A-Za-z_][\w-]*)\b/gd);
+    scan('ware', references.wares, /(?<![\w$.\]])ware\.([A-Za-z_][\w-]*)\b/gd);
+  }
   scan('macro', references.macros, /(?<![\w$.\]])macro\.([A-Za-z_][\w-]*)\b/gd);
 
   if (isLua) {
     // Corpus-proven literal APIs. Variable first arguments are intentionally skipped.
-    scan('ware', references.wares, /\bGetWareData\s*\(\s*(["'])([^"']+)\1\s*,/gd, 2);
-    if (references.factions?.size) {
-      for (const hit of luaFactionLiterals(content)) add('faction', references.factions, hit.id, hit.offset);
+    if (references.factions?.size || references.wares?.size) {
+      const hits = luaConsumedReferenceLiterals(content);
+      // Preserve the existing ware-before-faction diagnostic ordering while
+      // sharing one lexical parse for both consumer families.
+      for (const kind of ['ware', 'faction'] as const) {
+        const catalog = kind === 'ware' ? references.wares : references.factions;
+        if (catalog?.size) for (const hit of hits) if (hit.kind === kind) add(kind, catalog, hit.id, hit.offset);
+      }
     }
     scan('macro', references.macros, /\bGetMacroData\s*\(\s*(["'])([^"']+)\1\s*,/gd, 2);
   } else {
@@ -239,6 +247,28 @@ export function runReferenceLiteralLintSelftest() {
     'function _G.GetFactionData() end', '_ENV["GetFactionData"] = function() end',
     'rawset(_G, "GetFactionData", function() end)',
   ];
+  const wareFindings = (source: string) => lintReferenceLiterals(source, refs, { filePath: 'ui/ware64.lua', kind: 'lua' })
+    .filter(finding => finding.kind === 'ware');
+  const wareIds = (source: string) => wareFindings(source).map(finding => finding.id).join(',');
+  const wareTable = 'local ware = namedSupplyWare(rows, text)\n'
+    + 'if active(c) and (not ware or c.ware == ware.ware) then end\nlocal label = " for " .. ware.wname';
+  const wareText = [
+    'local text = "ware.fake"', 'local long = [=[GetWareData("quoted", "name")]=]',
+    '-- GetWareData("commented", "name")', '--[=[GetWareData("blockcomment", "name")]=]',
+    'local known = GetWareData("water", "name")', 'local other = GetWareData("energycells", "name")',
+  ].join('\n');
+  const wareNonConsumers = [
+    'do local GetWareData = function() end; GetWareData("shadow", "name") end',
+    'object.GetWareData("member", "name")', '_G.GetWareData("environmentmember", "name")',
+    'local alias = GetWareData; alias("alias", "name")', 'GetWareData(wareId, "name")',
+    'GetWareData("computed" .. suffix, "name")',
+  ].join('\n');
+  const wareRebindings = [
+    'GetWareData = function() end', 'function GetWareData() end', 'function _G.GetWareData() end',
+    '_ENV["GetWareData"] = function() end', 'rawset(_G, "GetWareData", function() end)',
+  ];
+  const warePositions = '\uFEFFlocal label = "🚀"\r\nGetWareData("\\110otaware", "name")\r'
+    + 'local exact = GetWareData[=[\r\nlongware]=]\n';
   const checks = [
     { name: 'bad faction warned with suggestion', pass: findings.some(f => f.kind === 'faction' && f.id === 'argonn' && f.suggestions.includes('argon')) },
     { name: 'bad XML ware warned', pass: findings.some(f => f.kind === 'ware' && f.id === 'energcells') },
@@ -258,6 +288,26 @@ export function runReferenceLiteralLintSelftest() {
       factionIds(`${write}\nGetFactionData('fake')\n${ownerCompare}`) === 'badowner,reversed') },
     { name: 'local environment and malformed Lua do not publish speculative findings', pass:
       !factionIds(`local _ENV = {}; GetFactionData('fake')\n${ownerCompare}`) && !factionIds("GetFactionData('fake'); local broken = )") },
+    { name: '#64 reported local ware table fields are not MD ware IDs', pass: wareIds(wareTable) === '' },
+    { name: 'Lua ware text, commented calls and canonical direct IDs are clear', pass: wareIds(wareText) === '' },
+    { name: 'real direct unknown ware retains exact source position', pass: wareFindings('local name = GetWareData("notaware", "name")')
+      .map(finding => `${finding.id}:${finding.line}:${finding.column}`).join(',') === 'notaware:1:27' },
+    { name: 'ware consumers respect lexical shadows, member lookalikes and dynamic arguments', pass: wareIds(wareNonConsumers) === '' },
+    { name: 'ware rebinding disables only ware and preserves independent faction checks', pass: wareRebindings.every(write =>
+      wareIds(`${write}\nGetWareData("fake", "name")`) === '' && factionIds(`${write}\nGetFactionData("actual", "name")`) === 'actual') },
+    { name: 'escaped and long ware literals retain BOM/Unicode original coordinates', pass: wareFindings(warePositions)
+      .map(finding => `${finding.id}:${finding.line}:${finding.column}`).join(',') === 'notaware:2:14,longware:4:1' },
+    { name: 'ware positions preserve CR LF and CRLF line boundaries', pass: ['\r', '\n', '\r\n'].every(newline =>
+      wareFindings(`-- prefix${newline}GetWareData("notaware", "name")`).map(finding => `${finding.line}:${finding.column}`).join(',') === '2:14') },
+    { name: 'ware environment replacement and partial parse publish no speculative warnings', pass:
+      wareIds('local _ENV = {}; GetWareData("fake", "name")') === ''
+      && wareIds('GetWareData("fake", "name"); local broken = )') === '' },
+    { name: 'ware-only catalog does not require faction data and MD expression checks remain armed', pass:
+      lintReferenceLiterals('GetWareData("notaware", "name")', { wares: refs.wares }, { kind: 'lua' }).some(finding => finding.id === 'notaware')
+      && lintReferenceLiterals('ware.notaware', { wares: refs.wares }, { kind: 'md' }).some(finding => finding.id === 'notaware') },
+    { name: 'mixed Lua consumer diagnostics preserve legacy family ordering', pass:
+      lintReferenceLiterals('GetFactionData("badfaction", "name")\nGetWareData("badware", "name")', refs, { kind: 'lua' })
+        .map(finding => `${finding.kind}:${finding.id}`).join(',') === 'ware:badware,faction:badfaction' },
   ];
   const passed = checks.filter(c => c.pass).length;
   return { allPassed: passed === checks.length, pass: passed === checks.length, passed, total: checks.length, checks };
