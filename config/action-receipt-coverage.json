@@ -3343,7 +3343,7 @@
     {
       "id": "sqlite:src/server/sharedSourceCoordinator.ts",
       "kind": "sqlite",
-      "owner": "SharedSourceCoordinator.open | SharedSourceCoordinator.transaction | SharedSourceCoordinator.claims | SharedSourceCoordinator.run",
+      "owner": "createClaimsTable | SharedSourceCoordinator.open | SharedSourceCoordinator.transaction | SharedSourceCoordinator.claims | SharedSourceCoordinator.run",
       "sourceRef": "config/durable-writers.json#/additionalDatabases/0",
       "integrationBatch": "W3B1",
       "semanticClass": "durable-local-mutation",

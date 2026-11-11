@@ -12,7 +12,9 @@ import types
 
 
 APPLICATION_ID = 0x58345343
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+MAX_CHECK_GUARDS = 32
+MAX_PARALLEL_CHECKS = 4
 MAX_FRAME_BYTES = 256 * 1024
 RETAINED_OUTPUT_BYTES = 64 * 1024
 MAX_OUTPUT_BYTES = 1024 * 1024
@@ -61,6 +63,39 @@ def _valid_pid(value):
 
 def _valid_text(value):
     return isinstance(value, str) and all(32 <= ord(char) != 127 and not 0xd800 <= ord(char) <= 0xdfff for char in value)
+
+
+def _validate_guard(guard):
+    _shape(guard, {"bindingHash", "commandHash", "helperPid", "jobName", "launcherHash", "registryDevice", "registryFile", "runId"})
+    if (not _match(guard["bindingHash"], BINDING_HASH) or not _match(guard["commandHash"], BINDING_HASH)
+        or not _match(guard["runId"], RUN_ID) or not _match(guard["launcherHash"], BINDING_HASH)
+        or not _match(guard["registryDevice"], DEVICE_SERIAL) or not _match(guard["registryFile"], FILE_INDEX)
+        or not _valid_pid(guard["helperPid"])
+        or not isinstance(guard["jobName"], str) or re.fullmatch(r"Local\\X4ForgeProjectCheck-[a-f0-9]{32}", guard["jobName"]) is None):
+        raise ValueError("Invalid project check guard.")
+
+
+def _read_journal(text, budget, backend_pid):
+    if not isinstance(text, str) or len(text) > 32 * 1024:
+        raise ValueError("Invalid project check journal.")
+    entries = _parse_json(text)
+    if (not isinstance(entries, list) or len(entries) > MAX_CHECK_GUARDS
+        or (entries and (type(budget) is not int or not 1 <= budget <= MAX_PARALLEL_CHECKS))
+        or (not entries and budget is not None)):
+        raise ValueError("Invalid project check journal budget.")
+    for entry in entries:
+        _shape(entry, {"guard", "phase"})
+        _validate_guard(entry["guard"])
+        if entry["phase"] not in ("armed", "running", "drained", "confirmed") or entry["guard"]["helperPid"] == backend_pid:
+            raise ValueError("Invalid project check journal state.")
+    active = [entry for entry in entries if entry["phase"] != "confirmed"]
+    if (text != _canonical_json(entries) or len(active) > (budget or 0)
+        or len({entry["guard"]["runId"] for entry in entries}) > 1
+        or len({entry["guard"]["helperPid"] for entry in active}) != len(active)
+        or any(len({entry["guard"][key] for entry in entries}) != len(entries)
+               for key in ("jobName", "bindingHash", "commandHash"))):
+        raise ValueError("Noncanonical or over-capacity project check journal.")
+    return entries
 
 
 def _local_path(value):
@@ -118,13 +153,8 @@ def _read_frame():
     if not isinstance(frame["guardJson"], str) or len(frame["guardJson"]) > 1024:
         raise ValueError("Invalid launch guard.")
     guard = _parse_json(frame["guardJson"])
-    _shape(guard, {"bindingHash", "commandHash", "helperPid", "jobName", "launcherHash", "registryDevice", "registryFile", "runId"})
-    if (not _match(guard["bindingHash"], BINDING_HASH) or not _match(guard["commandHash"], BINDING_HASH)
-        or not _match(guard["runId"], RUN_ID)
-        or not _match(guard["launcherHash"], BINDING_HASH)
-        or not _match(guard["registryDevice"], DEVICE_SERIAL)
-        or not _match(guard["registryFile"], FILE_INDEX)
-        or not _valid_pid(guard["helperPid"]) or guard["helperPid"] != os.getpid()
+    _validate_guard(guard)
+    if (guard["helperPid"] != os.getpid()
         or frame["guardJson"] != _canonical_json(guard)):
         raise ValueError("Launch guard does not address this helper.")
     _validate_command(frame["command"], guard)
@@ -141,6 +171,8 @@ def _registry_identity(registry):
 
 
 def _transition(database, registry, identity, frame, previous, next_phase):
+    if (previous, next_phase) not in (("armed", "running"), ("running", "drained")):
+        raise ValueError("Unexpected worker journal transition.")
     if _registry_identity(registry) != identity:
         raise RuntimeError("Coordination registry identity changed.")
     database.execute("BEGIN IMMEDIATE")
@@ -153,11 +185,26 @@ def _transition(database, registry, identity, frame, previous, next_phase):
         trigger = database.execute("SELECT 1 FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = 'claims' LIMIT 1").fetchone()
         if relation != ("table",) or trigger is not None:
             raise RuntimeError("Unexpected coordination claims relation.")
-        updated = database.execute(
-            "UPDATE claims SET guard_phase = ? WHERE id = ? COLLATE BINARY AND instance_id = ? COLLATE BINARY AND pid = ?"
-            " AND state = 'active' COLLATE BINARY AND guard_json = ? COLLATE BINARY AND guard_phase = ? COLLATE BINARY",
-            (next_phase, frame["claimId"], frame["instanceId"], frame["backendPid"], frame["guardJson"], previous),
-        ).rowcount
+        row = database.execute(
+            "SELECT guards_json,check_budget,handler_finished,protocol FROM claims WHERE id = ? COLLATE BINARY"
+            " AND instance_id = ? COLLATE BINARY AND pid = ? AND state = 'active' COLLATE BINARY",
+            (frame["claimId"], frame["instanceId"], frame["backendPid"]),
+        ).fetchone()
+        updated = 0
+        if row is not None:
+            text, budget, finished, protocol = row
+            if protocol != SCHEMA_VERSION or finished not in (0, 1):
+                raise ValueError("Invalid coordination handler state.")
+            entries = _read_journal(text, budget, frame["backendPid"])
+            matches = [entry for entry in entries if _canonical_json(entry["guard"]) == frame["guardJson"] and entry["phase"] == previous]
+            if len(matches) == 1 and (previous != "armed" or finished == 0):
+                matches[0]["phase"] = next_phase
+                updated = database.execute(
+                    "UPDATE claims SET guards_json = ? WHERE id = ? COLLATE BINARY AND instance_id = ? COLLATE BINARY AND pid = ?"
+                    " AND state = 'active' COLLATE BINARY AND guards_json = ? COLLATE BINARY AND check_budget IS ?"
+                    " AND handler_finished = ? AND protocol = ?",
+                    (_canonical_json(entries), frame["claimId"], frame["instanceId"], frame["backendPid"], text, budget, finished, SCHEMA_VERSION),
+                ).rowcount
         if updated not in (0, 1) or _registry_identity(registry) != identity:
             raise RuntimeError("Coordination claim transition is unresolved.")
         database.execute("COMMIT")

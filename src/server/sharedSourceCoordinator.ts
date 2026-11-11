@@ -6,7 +6,8 @@ import { createRequire } from 'node:module';
 import { canonicalSourceKey, conflicts, type ResourceOwner } from './resourceCoordinator';
 
 export const SOURCE_COORDINATION_FILENAME = 'source-coordination.sqlite';
-export const SOURCE_COORDINATION_SCHEMA_VERSION = 2;
+export const SOURCE_COORDINATION_SCHEMA_VERSION = 3;
+export const PROJECT_CHECK_MAX_PARALLEL = 4;
 const APPLICATION_ID = 0x58345343; // X4SC; never share the disposable index cache.
 const MAX_ENTRIES = 4096;
 const MAX_KEYS = 64;
@@ -44,7 +45,8 @@ interface Claim {
   queuedAt: string;
   startedAt: string | null;
   state: 'waiting' | 'active';
-  guard: PersistedProjectCheckGuard | null;
+  guards: ProjectCheckJournalEntry[];
+  checkBudget: number | null;
   guardPhase: 'armed' | 'running' | 'drained' | null;
   handlerFinished: boolean;
 }
@@ -60,6 +62,10 @@ interface PersistedProjectCheckGuard extends ProjectCheckGuard {
   registryDevice: string;
   registryFile: string;
 }
+interface ProjectCheckJournalEntry {
+  guard: PersistedProjectCheckGuard;
+  phase: 'armed' | 'running' | 'drained' | 'confirmed';
+}
 interface ProjectCheckLaunchFrame {
   registry: string;
   claimId: string;
@@ -70,10 +76,10 @@ interface ProjectCheckLaunchFrame {
 export interface ProjectCheckSourceLease {
   ownsResource(key: string): boolean;
   assertProjectCheckAuthority(sourceKey: string, workspaceId: string, actorId: string): void;
-  armProjectCheck(input: ProjectCheckGuard): Readonly<ProjectCheckLaunchFrame>;
+  armProjectCheck(input: ProjectCheckGuard, maxParallelChecks?: number): Readonly<ProjectCheckLaunchFrame>;
   assertProjectCheckDrained(frame: Readonly<ProjectCheckLaunchFrame>): void;
 }
-type VisibleClaim = Omit<Claim, 'state' | 'sequence' | 'guard' | 'guardPhase' | 'handlerFinished'> & {
+type VisibleClaim = Omit<Claim, 'state' | 'sequence' | 'guards' | 'checkBudget' | 'guardPhase' | 'handlerFinished'> & {
   guardPhase?: NonNullable<Claim['guardPhase']>;
 };
 export interface SourceCoordinationStatus {
@@ -147,6 +153,49 @@ function persistedProjectCheckGuard(input: PersistedProjectCheckGuard): Persiste
   }
   return { bindingHash, commandHash, helperPid, jobName, launcherHash, registryDevice, registryFile, runId };
 }
+function readProjectCheckJournal(text: unknown, budget: unknown, backendPid: number): ProjectCheckJournalEntry[] {
+  if (typeof text !== 'string' || text.length > 32 * 1024) throw new Error('Invalid project check journal.');
+  const entries: unknown = JSON.parse(text);
+  if (!Array.isArray(entries) || entries.length > MAX_PROJECT_CHECK_GUARDS
+    || (entries.length === 0 ? budget !== null : !Number.isInteger(budget) || (budget as number) < 1 || (budget as number) > PROJECT_CHECK_MAX_PARALLEL)) {
+    throw new Error('Invalid project check journal budget.');
+  }
+  const journal: ProjectCheckJournalEntry[] = entries.map(entry => {
+    if (!entry || typeof entry !== 'object' || !['armed', 'running', 'drained', 'confirmed'].includes(entry.phase)) {
+      throw new Error('Invalid project check journal entry.');
+    }
+    const guard = persistedProjectCheckGuard(entry.guard);
+    if (guard.helperPid === backendPid) throw new Error('Project check helper cannot own its source claim.');
+    return { guard, phase: entry.phase };
+  });
+  const active = journal.filter(entry => entry.phase !== 'confirmed');
+  for (const key of ['jobName', 'commandHash', 'bindingHash'] as const) {
+    if (new Set(journal.map(entry => entry.guard[key])).size !== journal.length) throw new Error('Replayed project check journal entry.');
+  }
+  if (JSON.stringify(journal) !== text || new Set(journal.map(entry => entry.guard.runId)).size > 1
+    || new Set(active.map(entry => entry.guard.helperPid)).size !== active.length || active.length > ((budget as number | null) ?? 0)) {
+    throw new Error('Noncanonical or over-capacity project check journal.');
+  }
+  return journal;
+}
+function journalPhase(journal: ProjectCheckJournalEntry[]): Claim['guardPhase'] {
+  return journal.some(entry => entry.phase === 'running') ? 'running'
+    : journal.some(entry => entry.phase === 'drained') ? 'drained'
+      : journal.some(entry => entry.phase === 'armed') ? 'armed' : journal.length ? 'drained' : null;
+}
+function createClaimsTable(database: RegistryDatabase): void {
+  database.exec(`CREATE TABLE claims (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE, instance_id TEXT NOT NULL, pid INTEGER NOT NULL,
+    keys_json TEXT NOT NULL, owner_json TEXT NOT NULL,
+    queued_at TEXT NOT NULL, started_at TEXT,
+    state TEXT NOT NULL CHECK (state IN ('waiting', 'active')),
+    protocol INTEGER NOT NULL CHECK (protocol = ${SOURCE_COORDINATION_SCHEMA_VERSION}),
+    guards_json TEXT NOT NULL DEFAULT '[]',
+    check_budget INTEGER CHECK (check_budget BETWEEN 1 AND ${PROJECT_CHECK_MAX_PARALLEL}),
+    handler_finished INTEGER NOT NULL DEFAULT 0 CHECK (handler_finished IN (0, 1))
+  ); PRAGMA application_id = ${APPLICATION_ID}; PRAGMA user_version = ${SOURCE_COORDINATION_SCHEMA_VERSION};`);
+}
 const overlap = (a: string[], b: string[]) => a.some(left => b.some(right => conflicts(left, right)));
 function statusBase(instanceId: string): SourceCoordinationStatus {
   return { scope: 'shared-participating-processes', available: true, controlsExternalEditors: false,
@@ -203,30 +252,26 @@ export class SharedSourceCoordinator {
         if (version === 0 && application === 0) {
           const tables = database!.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all();
           if (tables.length) throw new Error('Unrecognized coordination database; existing tables were preserved.');
-          database!.exec(`CREATE TABLE claims (
-            sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-            id TEXT NOT NULL UNIQUE, instance_id TEXT NOT NULL, pid INTEGER NOT NULL,
-            keys_json TEXT NOT NULL, owner_json TEXT NOT NULL,
-            queued_at TEXT NOT NULL, started_at TEXT,
-            state TEXT NOT NULL CHECK (state IN ('waiting', 'active')),
-            guard_json TEXT, guard_phase TEXT CHECK (guard_phase IN ('armed', 'running', 'drained')),
-            handler_finished INTEGER NOT NULL DEFAULT 0 CHECK (handler_finished IN (0, 1))
-          ); PRAGMA application_id = ${APPLICATION_ID}; PRAGMA user_version = ${SOURCE_COORDINATION_SCHEMA_VERSION};`);
-        } else if (version === 1 && application === APPLICATION_ID) {
-          const previous = database!.prepare('SELECT sequence,id,instance_id,pid,keys_json,owner_json,queued_at,started_at,state FROM claims LIMIT ?')
-            .all(MAX_ENTRIES + 1) as { pid: number }[];
-          if (previous.length > MAX_ENTRIES || previous.some(row => this.liveness(row.pid) !== 'dead')) {
-            throw new Error('Previous coordination schema still has a live or unconfirmed owner. Retry after that operation ends.');
+          createClaimsTable(database!);
+        } else if ((version === 1 || version === 2) && application === APPLICATION_ID) {
+          const previous = database!.prepare('SELECT sequence,id,instance_id,pid,keys_json,owner_json,queued_at,started_at,state FROM claims LIMIT 1').all();
+          const triggers = database!.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'claims'").all();
+          if (previous.length || triggers.length) {
+            throw new Error('Previous coordination schema is not empty and quiescent. No migration or ownership reset was performed.');
           }
-          database!.exec(`ALTER TABLE claims ADD COLUMN guard_json TEXT;
-            ALTER TABLE claims ADD COLUMN guard_phase TEXT CHECK (guard_phase IN ('armed', 'running', 'drained'));
-            ALTER TABLE claims ADD COLUMN handler_finished INTEGER NOT NULL DEFAULT 0 CHECK (handler_finished IN (0, 1));
-            PRAGMA user_version = ${SOURCE_COORDINATION_SCHEMA_VERSION};`);
+          if (version === 2) database!.prepare('SELECT guard_json,guard_phase,handler_finished FROM claims LIMIT 0').all();
+          // Old cached clients also check user_version on every transaction.
+          // Removing the old columns makes their direct guard SQL refuse too.
+          database!.exec('DROP TABLE claims');
+          createClaimsTable(database!);
         } else if (version !== SOURCE_COORDINATION_SCHEMA_VERSION || application !== APPLICATION_ID) {
           throw new Error(`Unsupported coordination schema/application (${String(version)}/${String(application)}); no migration or reset was performed.`);
         }
         // Prepare the complete column contract so a misleading version stamp fails closed.
-        database!.prepare('SELECT sequence,id,instance_id,pid,keys_json,owner_json,queued_at,started_at,state,guard_json,guard_phase,handler_finished FROM claims LIMIT 0').all();
+        database!.prepare('SELECT sequence,id,instance_id,pid,keys_json,owner_json,queued_at,started_at,state,protocol,guards_json,check_budget,handler_finished FROM claims LIMIT 0').all();
+        if (database!.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'claims'").all().length) {
+          throw new Error('Unexpected coordination claim trigger.');
+        }
       }).immediate();
       if (database.pragma('quick_check(1)', { simple: true }) !== 'ok') throw new Error('Coordination database integrity check failed.');
       const stat = fs.statSync(this.filename, { bigint: true });
@@ -286,45 +331,37 @@ export class SharedSourceCoordinator {
         || !Number.isSafeInteger(row.pid) || (row.pid as number) <= 0
         || typeof row.keys_json !== 'string' || row.keys_json.length > 262144
         || typeof row.owner_json !== 'string' || row.owner_json.length > 8192
+        || row.protocol !== SOURCE_COORDINATION_SCHEMA_VERSION
         || typeof row.queued_at !== 'string' || !Number.isFinite(Date.parse(row.queued_at))
         || (row.state !== 'waiting' && row.state !== 'active')
         || (row.state === 'waiting' ? row.started_at !== null : typeof row.started_at !== 'string' || !Number.isFinite(Date.parse(row.started_at)))) {
         throw new Error('Invalid coordination claim; refusing to discard possible ownership.');
       }
-      const rawPhase = row.guard_phase;
-      const phase = rawPhase === 'armed' || rawPhase === 'running' || rawPhase === 'drained' ? rawPhase : null;
       const finished = row.handler_finished === 1;
-      if ((row.handler_finished !== 0 && !finished)
-        || (phase === null && rawPhase !== null)
-        || (phase === null && (row.guard_json !== null || finished))
-        || (phase !== null && (row.state !== 'active' || typeof row.guard_json !== 'string' || row.guard_json.length > 512))
-        || (phase === 'armed' && finished)) {
-        throw new Error('Invalid project check guard state; refusing to discard possible ownership.');
-      }
-      let guard: PersistedProjectCheckGuard | null = null;
+      let guards: ProjectCheckJournalEntry[];
       let resources: string[];
       let owner: ResourceOwner;
       try {
         resources = normalizeKeys(JSON.parse(row.keys_json));
         owner = validateOwner(JSON.parse(row.owner_json));
-        if (typeof row.guard_json === 'string') {
-          guard = persistedProjectCheckGuard(JSON.parse(row.guard_json));
-          if (JSON.stringify(guard) !== row.guard_json || guard.helperPid === row.pid) throw new Error('Noncanonical guard.');
-        }
+        guards = readProjectCheckJournal(row.guards_json, row.check_budget, row.pid as number);
       } catch { throw new Error('Invalid coordination claim data; refusing to discard possible ownership.'); }
+      if ((row.handler_finished !== 0 && !finished) || (finished && guards.length === 0)
+        || (guards.length > 0 && row.state !== 'active')) throw new Error('Invalid project check guard state.');
       if (JSON.stringify(resources) !== row.keys_json) throw new Error('Coordination claim keys are not canonical.');
       const pid = row.pid as number;
       const backendDead = observe(pid) === 'dead';
-      // The helper transitions armed → running in this same registry before launch.
-      // Deleting an armed claim makes every delayed start frame lose that transition.
-      if ((backendDead && (phase === null || phase === 'armed'))
-        || ((backendDead || finished) && phase === 'drained' && guard && observe(guard.helperPid) === 'dead')) {
+      // Every helper transitions its own entry before launch. Closing an armed
+      // claim invalidates delayed frames; running entries require durable drain.
+      const safe = guards.every(entry => entry.phase === 'armed' || entry.phase === 'confirmed'
+        || (entry.phase === 'drained' && observe(entry.guard.helperPid) === 'dead'));
+      if ((backendDead || finished) && safe) {
         database.prepare('DELETE FROM claims WHERE id = ? AND instance_id = ? AND pid = ?').run(row.id, row.instance_id, pid);
         continue;
       }
       claims.push({ sequence: row.sequence as number, id: row.id, instanceId: row.instance_id, pid, resources, owner,
         queuedAt: row.queued_at, startedAt: row.started_at as string | null, state: row.state,
-        guard, guardPhase: phase, handlerFinished: finished });
+        guards, checkBudget: row.check_budget as number | null, guardPhase: journalPhase(guards), handlerFinished: finished });
     }
     return claims;
   }
@@ -341,7 +378,7 @@ export class SharedSourceCoordinator {
           relevant.push({ ...claim, resources: [], guardPhase: null });
         }
       }
-      const copy = ({ sequence: _sequence, state: _state, guard: _guard, guardPhase, handlerFinished: _finished, ...claim }: Claim) =>
+      const copy = ({ sequence: _sequence, state: _state, guards: _guards, checkBudget: _budget, guardPhase, handlerFinished: _finished, ...claim }: Claim) =>
         ({ ...claim, ...(guardPhase === null ? {} : { guardPhase }) });
       return { ...statusBase(this.instanceId), active: relevant.filter(claim => claim.state === 'active').map(copy),
         waiting: relevant.filter(claim => claim.state === 'waiting').map(copy) };
@@ -360,8 +397,7 @@ export class SharedSourceCoordinator {
     let result: T;
     let leaseOpen = false;
     let guardMayExist = false;
-    let armed: { frame: Readonly<ProjectCheckLaunchFrame>; guard: ProjectCheckGuard; drainConfirmed: boolean } | undefined;
-    const admittedGuards: ProjectCheckGuard[] = [];
+    const frames = new Set<Readonly<ProjectCheckLaunchFrame>>();
     const lease: ProjectCheckSourceLease = {
       ownsResource: key => leaseOpen && resources.includes(key),
       assertProjectCheckAuthority: (sourceKey, workspaceId, actorId) => {
@@ -369,28 +405,28 @@ export class SharedSourceCoordinator {
           throw failure('PROJECT_CHECK_SCOPE_MISMATCH', 'The source lease does not own this project check and workspace.', 403);
         }
       },
-      armProjectCheck: input => {
+      armProjectCheck: (input, maxParallelChecks = 1) => {
         if (!leaseOpen) throw failure('SOURCE_COORDINATION_LOST', 'Project check requires active source ownership.', 503);
         const guard = validateProjectCheckGuard(input);
-        const previous = armed;
-        if (previous && guard.runId !== previous.guard.runId) {
-          throw failure('PROJECT_CHECK_GUARD_INVALID', 'Project checks on one source lease must belong to the same run.');
-        }
-        if (admittedGuards.some(prior => prior.jobName === guard.jobName || prior.commandHash === guard.commandHash
-          || prior.bindingHash === guard.bindingHash)) {
-          throw failure('PROJECT_CHECK_GUARD_REPLAY', 'This Job or command was already admitted on the source lease.');
-        }
-        if (admittedGuards.length >= MAX_PROJECT_CHECK_GUARDS) {
-          throw failure('PROJECT_CHECK_GUARD_LIMIT', 'The source lease reached its project check limit.');
-        }
-        const rearmUnconfirmed = () => failure('PROJECT_CHECK_REARM_UNCONFIRMED',
-          'Project check rearm requires the exact prior drain and confirmed helper exit.', 503);
-        if (previous && !previous.drainConfirmed) throw rearmUnconfirmed();
-        if (process.platform !== 'win32' || guard.helperPid === process.pid || this.liveness(guard.helperPid) !== 'alive') {
-          throw failure('PROJECT_CHECK_GUARD_INVALID', 'Project check must use a live separate helper.');
+        if (!Number.isInteger(maxParallelChecks) || maxParallelChecks < 1 || maxParallelChecks > PROJECT_CHECK_MAX_PARALLEL) {
+          throw failure('PROJECT_CHECK_GUARD_INVALID', 'Project check count budget must be an integer from 1 to 4.');
         }
         guardMayExist = true;
         const frame = this.transaction(database => {
+          const own = this.claims(database).find(claim => claim.id === id && claim.instanceId === this.instanceId && claim.pid === process.pid);
+          if (!own || own.state !== 'active' || own.handlerFinished) throw failure('SOURCE_COORDINATION_LOST', 'Project check lost its exact active claim.', 503);
+          if ((own.checkBudget !== null && own.checkBudget !== maxParallelChecks)
+            || own.guards.some(entry => entry.guard.runId !== guard.runId)) {
+            throw failure('PROJECT_CHECK_GUARD_INVALID', 'Project checks on one claim must retain the same run and count budget.');
+          }
+          if (own.guards.some(({ guard: prior }) => prior.jobName === guard.jobName || prior.commandHash === guard.commandHash
+            || prior.bindingHash === guard.bindingHash)) throw failure('PROJECT_CHECK_GUARD_REPLAY', 'This Job or command was already admitted on the source lease.');
+          if (own.guards.length >= MAX_PROJECT_CHECK_GUARDS) throw failure('PROJECT_CHECK_GUARD_LIMIT', 'The source lease reached its project check limit.');
+          const active = own.guards.filter(entry => entry.phase !== 'confirmed');
+          if (active.length >= maxParallelChecks) throw failure(maxParallelChecks === 1 ? 'PROJECT_CHECK_REARM_UNCONFIRMED' : 'PROJECT_CHECK_GUARD_CAPACITY',
+            'Project check count budget is occupied until exact prior drain and helper exit are confirmed.', 503);
+          if (process.platform !== 'win32' || guard.helperPid === process.pid || this.liveness(guard.helperPid) !== 'alive'
+            || active.some(entry => entry.guard.helperPid === guard.helperPid)) throw failure('PROJECT_CHECK_GUARD_INVALID', 'Project check must use a distinct live helper.');
           const registry = fs.realpathSync.native(this.filename);
           const stat = fs.statSync(registry, { bigint: true });
           if (!stat.isFile() || stat.nlink !== 1n || stat.dev !== this.fileIdentity?.dev || stat.ino !== this.fileIdentity?.ino) {
@@ -399,40 +435,42 @@ export class SharedSourceCoordinator {
           const guardJson = JSON.stringify(persistedProjectCheckGuard({
             ...guard, registryDevice: (stat.dev & 0xffff_ffffn).toString(), registryFile: stat.ino.toString(),
           }));
-          if (previous && this.liveness(previous.guard.helperPid) !== 'dead') throw rearmUnconfirmed();
-          const changed = database.prepare("UPDATE claims SET guard_json = ?, guard_phase = 'armed' WHERE id = ? AND instance_id = ? AND pid = ? AND state = 'active' AND handler_finished = 0 AND guard_phase IS ? AND guard_json IS ? COLLATE BINARY")
-            .run(guardJson, id, this.instanceId, process.pid, previous ? 'drained' : null, previous?.frame.guardJson ?? null);
+          const entries: ProjectCheckJournalEntry[] = [...own.guards, { guard: JSON.parse(guardJson) as PersistedProjectCheckGuard, phase: 'armed' }];
+          const changed = database.prepare("UPDATE claims SET guards_json = ?, check_budget = ? WHERE id = ? AND instance_id = ? AND pid = ? AND state = 'active' AND handler_finished = 0 AND guards_json = ? COLLATE BINARY AND check_budget IS ?")
+            .run(JSON.stringify(entries), maxParallelChecks, id, this.instanceId, process.pid, JSON.stringify(own.guards), own.checkBudget);
           if (changed.changes !== 1) {
-            if (previous) throw rearmUnconfirmed();
             throw failure('SOURCE_COORDINATION_LOST', 'Could not arm the exact active source claim.', 503);
           }
           return Object.freeze({ registry, claimId: id, instanceId: this.instanceId, backendPid: process.pid, guardJson });
         });
-        armed = { frame, guard, drainConfirmed: false };
-        admittedGuards.push(guard);
+        frames.add(frame);
         return frame;
       },
       assertProjectCheckDrained: frame => {
-        const current = armed;
-        if (!leaseOpen || !current || frame !== current.frame) {
+        if (!leaseOpen || !frames.has(frame)) {
           throw failure('SOURCE_COORDINATION_LOST', 'Project check drain is not bound to this active claim.', 503);
         }
         this.transaction(database => {
           const own = this.claims(database).find(claim => claim.id === id && claim.instanceId === this.instanceId && claim.pid === process.pid);
-          if (own?.state !== 'active' || own.handlerFinished || own.guardPhase !== 'drained' || !own.guard
-            || JSON.stringify(own.guard) !== frame.guardJson || this.liveness(own.guard.helperPid) !== 'dead') {
+          const entry = own?.guards.find(item => JSON.stringify(item.guard) === frame.guardJson);
+          if (own?.state !== 'active' || own.handlerFinished || !entry || entry.phase !== 'drained' || this.liveness(entry.guard.helperPid) !== 'dead') {
             throw failure('PROJECT_CHECK_CLEANUP_UNCONFIRMED', 'Project check has no verified drain and helper exit for this claim.', 503);
           }
+          const before = JSON.stringify(own.guards);
+          entry.phase = 'confirmed';
+          const updated = database.prepare("UPDATE claims SET guards_json = ? WHERE id = ? AND instance_id = ? AND pid = ? AND handler_finished = 0 AND guards_json = ? COLLATE BINARY")
+            .run(JSON.stringify(own.guards), id, this.instanceId, process.pid, before);
+          if (updated.changes !== 1) throw failure('PROJECT_CHECK_CLEANUP_UNCONFIRMED', 'Project check drain acknowledgement was not persisted.', 503);
         });
-        current.drainConfirmed = true;
+        frames.delete(frame);
       },
     };
     this.inFlight++;
     try {
       this.transaction(database => {
         if (this.claims(database).length >= this.maxPending) throw failure('RESOURCE_QUEUE_FULL', 'Shared source operation queue is full; retry after current work completes.');
-        database.prepare('INSERT INTO claims (id,instance_id,pid,keys_json,owner_json,queued_at,started_at,state) VALUES (?,?,?,?,?,?,NULL,\'waiting\')')
-          .run(id, this.instanceId, process.pid, JSON.stringify(resources), JSON.stringify(identity), queuedAt);
+        database.prepare('INSERT INTO claims (id,instance_id,pid,keys_json,owner_json,queued_at,protocol,started_at,state) VALUES (?,?,?,?,?,?,?,NULL,\'waiting\')')
+          .run(id, this.instanceId, process.pid, JSON.stringify(resources), JSON.stringify(identity), queuedAt, SOURCE_COORDINATION_SCHEMA_VERSION);
         // If COMMIT fails, cleanup may find no row; it must never delete another claim.
         enqueued = true;
       });
@@ -470,8 +508,8 @@ export class SharedSourceCoordinator {
         const own = guardMayExist
           ? this.claims(database).find(claim => claim.id === id && claim.instanceId === this.instanceId && claim.pid === process.pid)
           : undefined;
-        if (own?.guard && (own.guardPhase === 'running'
-          || (own.guardPhase === 'drained' && this.liveness(own.guard.helperPid) !== 'dead'))) {
+        if (own?.guards.some(entry => entry.phase === 'running'
+          || (entry.phase === 'drained' && this.liveness(entry.guard.helperPid) !== 'dead'))) {
           database.prepare('UPDATE claims SET handler_finished = 1 WHERE id = ? AND instance_id = ? AND pid = ?')
             .run(id, this.instanceId, process.pid);
           return true;

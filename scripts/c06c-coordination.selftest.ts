@@ -357,8 +357,8 @@ try {
     const registry = new Database(path.join(root, `malformed-${name}`, SOURCE_COORDINATION_FILENAME));
     try {
       const timestamp = new Date().toISOString();
-      registry.prepare('INSERT INTO claims (id,instance_id,pid,keys_json,owner_json,queued_at,started_at,state) VALUES (?,?,?,?,?,?,?,?)')
-        .run(randomUUID(), randomUUID(), process.pid, keysJson, ownerJson, timestamp, timestamp, 'active');
+      registry.prepare('INSERT INTO claims (id,instance_id,pid,keys_json,owner_json,queued_at,started_at,state,protocol) VALUES (?,?,?,?,?,?,?,?,?)')
+        .run(randomUUID(), randomUUID(), process.pid, keysJson, ownerJson, timestamp, timestamp, 'active', 3);
       const before = registry.prepare('SELECT * FROM claims').all();
       check(`${name} status reports registry unavailable`, () => {
         const status = malformed.status([key]);
@@ -393,19 +393,20 @@ try {
       .run(randomUUID(), randomUUID(), migrationOwner, JSON.stringify([key]),
         JSON.stringify({ actor: 'legacy-owner', operation: 'write' }), timestamp, timestamp);
     const before = legacy.prepare('SELECT * FROM claims').all();
-    for (const liveness of ['unknown', 'alive'] as const) {
+    for (const liveness of ['unknown', 'alive', 'dead'] as const) {
       legacyOwnerLiveness = liveness;
       check(`v1 migration defers for a ${liveness} owner and preserves claims`, () => {
-        assert.match(upgrade.status([key]).reason!, /live or unconfirmed owner/);
+        assert.match(upgrade.status([key]).reason!, /not empty and quiescent/);
         assert.equal(legacy.pragma('user_version', { simple: true }), 1);
         assert.deepEqual(legacy.prepare('SELECT * FROM claims').all(), before);
       });
     }
-    legacyOwnerLiveness = 'dead';
+    // The owned legacy fixture explicitly quiesces; migration never drops a claim.
+    legacy.prepare('DELETE FROM claims').run();
     await upgrade.run([key], { actor: 'upgraded', operation: 'write' }, () => {
-      assert.equal(legacy.pragma('user_version', { simple: true }), 2);
+      assert.equal(legacy.pragma('user_version', { simple: true }), 3);
       assert.deepEqual(upgrade.status([key]).active.map(claim => claim.owner.actor), ['upgraded']);
-      checks.push('v1 confirmed-dead claim permits guarded schema migration and ordinary work');
+      checks.push('empty quiescent v1 registry permits versioned migration and ordinary work');
     });
     assert.deepEqual(legacy.prepare('SELECT * FROM claims').all(), []);
   } finally { legacy.close(); }

@@ -512,7 +512,9 @@ try {
   assert(!fs.existsSync(replaced.marker), 'The substitute registry must not authorize a launch.');
   const clone = new Database(clonePath, { readonly: true, fileMustExist: true });
   try {
-    assert.deepEqual(clone.prepare('SELECT guard_phase FROM claims WHERE id = ?').get(copiedClaim), { guard_phase: 'armed' });
+    const row = clone.prepare('SELECT guards_json FROM claims WHERE id = ?').get(copiedClaim) as { guards_json: string };
+    const guards = JSON.parse(row.guards_json) as { phase: string }[];
+    assert.deepEqual(guards.map(guard => guard.phase), ['armed']);
   } finally { clone.close(); }
   record('a substituted registry containing the exact armed row cannot authorize the trusted worker');
   replaced.retire();

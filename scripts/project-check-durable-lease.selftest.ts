@@ -22,7 +22,7 @@ type BackendMessage =
   | { type: 'armed'; helperPid: number; frame: LaunchFrame }
   | { type: 'returned'; code?: string }
   | { type: 'failure'; message: string };
-type GuardRow = { guard_json: string; guard_phase: 'armed' | 'running' | 'drained'; handler_finished: number };
+type GuardRow = { guard_json: string; guard_phase: 'armed' | 'running' | 'drained' | 'confirmed'; handler_finished: number };
 
 const require = createRequire(import.meta.url);
 const Database = require('better-sqlite3');
@@ -182,8 +182,12 @@ async function ownedBackend(directory: string, scenario: Scenario, parentHelperP
 function readGuard(frame: LaunchFrame): GuardRow | undefined {
   const database = new Database(frame.registry, { readonly: true, fileMustExist: true, timeout: 100 });
   try {
-    return database.prepare('SELECT guard_json, guard_phase, handler_finished FROM claims WHERE id = ? AND instance_id = ? AND pid = ?')
-      .get(frame.claimId, frame.instanceId, frame.backendPid) as GuardRow | undefined;
+    const row = database.prepare('SELECT guards_json, handler_finished FROM claims WHERE id = ? AND instance_id = ? AND pid = ?')
+      .get(frame.claimId, frame.instanceId, frame.backendPid) as { guards_json: string; handler_finished: number } | undefined;
+    if (!row) return;
+    const entries = JSON.parse(row.guards_json) as { guard: unknown; phase: GuardRow['guard_phase'] }[];
+    const entry = entries.find(item => JSON.stringify(item.guard) === frame.guardJson);
+    return entry ? { guard_json: frame.guardJson, guard_phase: entry.phase, handler_finished: row.handler_finished } : undefined;
   } finally {
     database.close();
   }
