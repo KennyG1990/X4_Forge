@@ -333,7 +333,7 @@ function boundedLuaParseDetail(error: unknown): string {
 
 function parseLuaRegisteredEvents(content: string, file: string): LuaRegistrationParseResult {
   const source = buildLuaAnalysisSource(content || '');
-  let ast: LuaAstNode;
+  let ast: unknown;
   try {
     ast = parse(source.content, { comments: false, locations: true, ranges: true, scope: true, encodingMode: 'pseudo-latin1' });
   } catch (error) {
@@ -593,7 +593,7 @@ function parseLuaUiEmits(content: string, file: string): {
   };
   const source = buildLuaAnalysisSource(content || '');
   let emitterRebound = false;
-  let ast: LuaAstNode;
+  let ast: unknown;
   try {
     ast = parse(source.content, {
       comments: false, ranges: true, scope: true, encodingMode: 'pseudo-latin1',

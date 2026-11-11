@@ -131,7 +131,9 @@ check('cdata_value_is_unknown_before_callbacks_and_keeps_raw_locations', () => {
   for (const raw of ['1LL', '18446744073709551615ULL', '2i', '0x7fffULL']) {
     let observed: unknown;
     const ast = parseX4Lua(`return ${raw}`, { locations: true, ranges: true,
-      onCreateNode(node: { type: string; value?: unknown }) { if (node.type === 'NumericLiteral') { assert.equal(node.value, null); observed = node; } } });
+      onCreateNode(node: { type: string; value?: unknown }) { if (node.type === 'NumericLiteral') { assert.equal(node.value, null); observed = node; } } }) as {
+      body: { arguments: { raw: string; value: unknown; range: number[]; loc: { start: { column: number } } }[] }[];
+    };
     const literal = ast.body[0].arguments[0];
     assert.equal(literal.raw, raw); assert.equal(literal.value, null);
     assert.deepEqual(literal.range, [7, 7 + raw.length]); assert.equal(literal.loc.start.column, 7);
