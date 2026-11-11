@@ -155,6 +155,13 @@ function checkE2eViteLifecycle() {
   if (result.status !== 0) throw new Error(`e2e Vite lifecycle selftest failed with exit ${result.status ?? "unknown"}`);
 }
 
+function checkBackendRecovery() {
+  console.log("[precommit] extension backend recovery selftest");
+  const result = spawnSync("npm run test:extension-backend-recovery", { cwd: root, shell: true, stdio: "inherit" });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`backend recovery selftest failed with exit ${result.status ?? "unknown"}`);
+}
+
 function checkProductCopy() {
   console.log("[precommit] shipped product-copy guard");
   const result = spawnSync("npm run test:product-copy", { cwd: root, shell: true, stdio: "inherit" });
@@ -197,6 +204,7 @@ try {
   checkE2eRuntimeBootstrap();
   checkE2eVerdict();
   checkE2eViteLifecycle();
+  checkBackendRecovery();
   checkProductCopy();
   checkDurableWriters();
   checkCapabilityContracts();

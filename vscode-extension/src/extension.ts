@@ -649,7 +649,8 @@ async function autoRestartSidecar(context: vscode.ExtensionContext, exitCode: nu
   await new Promise((r) => setTimeout(r, 1000 * attempt)); // linear backoff: 1s, 2s, 3s
   if (backend || generation !== backendStopGeneration) return;
   try {
-    const handle = await ensureBackend(context);
+    const saved = context.globalState.get<string>('x4forge.workspaceId') ?? '';
+    const handle = await ensureBackend(context, saved);
     log(`sidecar auto-restarted at ${handle.baseUrl}`);
     void vscode.window.showInformationMessage(
       "X4 Forge: the backend stopped unexpectedly and was restarted automatically.",
