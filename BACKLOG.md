@@ -8,6 +8,8 @@
 
 ### Validation and debuglog issue execution `in_progress` (existing #20/#74/#14 owners)
 
+Current#64ware checkpoint: source repair committed/pushed atd9a1e66with exact-head QualityCI43100634354PASS. Actual canonical project/Problems HTTP1/1test (three subjects/six calls) clears the two false fields, preserves genuine1:27warning and incomplete coverage; normal source gates pass. [Current acceptance/evidence](docs/plans/2026-11-11-lua-ware-reference-consumers.md). Whole#64andreview36remainPARTIAL/NOT_READY pending native aliases/stale/exact-receipt and installed/rendered/public qualification. Ken confirmed the machine stable for serial headless checks; keep the resource/isolation guards, no computer use/live Forge/X4. No public update yet.
+
 Ken requested working through the reviewed validation/debuglog issues. [Ordered execution worklist](docs/plans/2026-11-11-validation-runtime-worklist.md): validation noise/consistency60/54/64; runtime attribution/history52/57; boot/inventory55/56; Lua/UI/project coverage59/61/86; freshness/performance97; engine oracle/LIVE14/35. First requalify current0.0.83 instead of rebuilding bounded fixes. Claude remains paused, game gates stay open; isolated headless testing authorized. #96transport integration is deferred behind this requested priority after its separate source checkpoint, without losing its draft or acceptance contract. No new issue/feature credit from this scheduling record.
 
 ### Remaining safety, reproducibility and release follow-ups `in_progress` (GitHub #20)
