@@ -13,7 +13,7 @@
  * allowlist.
  */
 
-import { parse } from 'luaparse';
+import { parseX4Lua as parse } from './x4LuaParser';
 import { type X4UiSourceLocation } from './x4UiCallModel';
 import { type X4UiLintFinding, type X4UiLintResult } from './x4UiLint';
 import { analyzeX4UiFile } from './x4UiAnalysisCache';
@@ -165,7 +165,6 @@ function parseLua(text: string) {
     locations: true,
     ranges: true,
     scope: true,
-    luaVersion: '5.2'
   });
 }
 
@@ -769,7 +768,7 @@ function analyzeRuntimeScopes(files: LuaFileInput[], manifestOnly: readonly LuaM
   const boundary = 'Bounded registered-source facts only; no complete dependency availability, invocation schedule, arbitrary Lua behavior, UI rendering or game acceptance is claimed.';
   return { gaps, truncated, stages: [
     { check: 'lua.syntax', status: !files.length ? 'not-applicable' : files.some(file => parsed.get(file)!.error) ? 'fail' : 'pass', files: references(files), gapCount: 0,
-      evidenceBoundary: 'Syntax parsed with luaparse Lua 5.2; LuaJIT20 grammar parity and execution are separate.' },
+      evidenceBoundary: 'Syntax parsed with the luaparse LuaJIT profile; cdata scalar values, complete compiler parity and engine execution remain unverified.' },
     { check: 'lua.registrations', status: !runtimeFiles.length ? 'not-applicable' : registrationFailure ? 'fail'
       : !knownInventories && unavailableInventories ? 'unavailable' : registrationGaps ? 'partial' : 'pass',
       files: references(runtimeFiles), gapCount: registrationGaps, evidenceBoundary: boundary },

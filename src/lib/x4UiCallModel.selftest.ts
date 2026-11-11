@@ -2198,7 +2198,6 @@ function run(): { allPassed: boolean; pass: boolean; passed: number; total: numb
     { name: 'spaced semicolon', source: `${deletionExpression} \t;`, suffix: ' \t;', terminator: 'semicolon', hasFollowing: false },
     { name: 'no semicolon', source: `${deletionExpression}\n${followingExpression}`, suffix: '', terminator: 'none', hasFollowing: true },
     { name: 'same-line next statement', source: `${deletionExpression}; ${followingExpression}`, suffix: ';', terminator: 'semicolon', hasFollowing: true },
-    { name: 'doubled semicolon', source: `${deletionExpression};;`, suffix: ';', terminator: 'semicolon', hasFollowing: false },
     { name: 'semicolon then trailing comment', source: `${deletionExpression}; -- keep;\n${followingExpression}`, suffix: ';', terminator: 'semicolon', hasFollowing: true },
     { name: 'comment before semicolon', source: `${deletionExpression} -- keep;\n${followingExpression}`, suffix: '', terminator: 'none', hasFollowing: true },
     { name: 'LF', source: `-- prefix\n${deletionExpression};\n${followingExpression}`, suffix: ';', terminator: 'semicolon', hasFollowing: true },
@@ -2260,9 +2259,7 @@ function run(): { allPassed: boolean; pass: boolean; passed: number; total: numb
         && removed.slice(callRecord.source.start.offset, callRecord.source.end.offset) === followingExpression));
     const outsideRangeExact = removed.slice(0, astStart) === testCase.source.slice(0, astStart)
       && removed.slice(astStart) === testCase.source.slice(deletion.end.offset);
-    const specifiedTriviaPreserved = testCase.name === 'doubled semicolon'
-      ? removed.startsWith(';')
-      : testCase.name === 'semicolon then trailing comment' || testCase.name === 'comment before semicolon'
+    const specifiedTriviaPreserved = testCase.name === 'semicolon then trailing comment' || testCase.name === 'comment before semicolon'
         ? removed.includes('-- keep;')
         : testCase.name === 'no semicolon'
           ? removed.startsWith('\n')
@@ -2323,11 +2320,18 @@ function run(): { allPassed: boolean; pass: boolean; passed: number; total: numb
     && Object.isFrozen(statement)
     && frozenSourceLocation(statement.source)
     && frozenSourceLocation(statement.deletionSource)));
-  const repeatedDeletionModel = buildX4UiCallModel(input(deletionCases[8].source, 'selftest/deletion-CRLF.lua'));
+  const crlfDeletion = deletionAnalyses.find(({ testCase }) => testCase.name === 'CRLF')!;
+  const repeatedDeletionModel = buildX4UiCallModel(input(crlfDeletion.testCase.source, 'selftest/deletion-CRLF.lua'));
   check('deletion provenance locations are deeply frozen and deterministic',
     deletionProvenanceFrozen
-      && JSON.stringify(deletionAnalyses[8].model) === JSON.stringify(repeatedDeletionModel),
-    detail({ deletionProvenanceFrozen, first: deletionAnalyses[8].model, repeated: repeatedDeletionModel }));
+      && JSON.stringify(crlfDeletion.model) === JSON.stringify(repeatedDeletionModel),
+    detail({ deletionProvenanceFrozen, first: crlfDeletion.model, repeated: repeatedDeletionModel }));
+
+  // The pinned LuaJIT20 compiler rejects empty statements accepted by Lua5.2.
+  const doubledSemicolon = buildX4UiCallModel(input(`${deletionExpression};;`));
+  check('LuaJIT empty statements expose a parse gap without deletion authority',
+    !doubledSemicolon.parsed && doubledSemicolon.calls.length === 0
+      && doubledSemicolon.verificationGaps.some(gap => gap.category === 'parse'), detail(doubledSemicolon));
 
   const nulSource = `${deletionExpression}\u0000`;
   let nulModel: ReturnType<typeof buildX4UiCallModel> | undefined;

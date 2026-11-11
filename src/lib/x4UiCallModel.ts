@@ -8,7 +8,7 @@
  * keeps dynamic or unsupported relationships visible to later rules.
  */
 
-import { parse } from 'luaparse';
+import { parseX4Lua as parse } from './x4LuaParser';
 
 const MAX_VERIFICATION_GAPS = 128;
 const MAX_PROTECTED_CALLBACKS = 32;
@@ -1090,7 +1090,6 @@ class X4UiCallModelBuilder {
         locations: true,
         ranges: true,
         scope: true,
-        luaVersion: '5.2'
       }) as unknown as LuaNode;
     } catch (error) {
       const parsedError = error as LuaErrorLike;

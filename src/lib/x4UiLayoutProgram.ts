@@ -8,7 +8,7 @@
  * accepted by a running game.
  */
 
-import { parse } from 'luaparse';
+import { parseX4Lua as parse } from './x4LuaParser';
 
 import type {
   X4UiCallModel,
@@ -2272,7 +2272,6 @@ const numericExpressionSourceAstIndex = (model: X4UiCallModel): NumericExpressio
       locations: true,
       ranges: true,
       scope: true,
-      luaVersion: '5.2',
     }) as unknown as NumericExpressionSourceAstNode;
     const mutableNodes = new Map<string, NumericExpressionSourceAstNode[]>();
     const seen = new Set<object>();

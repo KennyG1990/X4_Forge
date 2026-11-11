@@ -1,5 +1,5 @@
 /** Pure advisory lint for explicit reference literals not reliably schema-typed (notably Lua). */
-import { parse } from 'luaparse';
+import { parseX4Lua as parse } from './x4LuaParser';
 import { createSourcePositionLocator } from './xmlSourceSpans';
 
 export interface ReferenceLiteralSets {
@@ -113,7 +113,7 @@ function luaFactionLiterals(content: string): Array<{ id: string; offset: number
     // Preserve UTF-16 offsets while giving luaparse a byte-string-compatible input.
     // A substituted character cannot be part of an ASCII faction ID.
     parse(content.replace(/^\uFEFF/, ' ').replace(/[\u0100-\uffff]/g, '?'), {
-      comments: false, ranges: true, scope: true, luaVersion: '5.2', encodingMode: 'pseudo-latin1',
+      comments: false, ranges: true, scope: true, encodingMode: 'pseudo-latin1',
       onLocalDeclaration(name: string) {
         if (name === '_ENV') changedEnvironment = true;
       },

@@ -157,6 +157,7 @@
     "src/lib/workspaceRegistry.ts",
     "src/lib/workspaceState.ts",
     "src/lib/x4CatDat.ts",
+    "src/lib/x4LuaParser.ts",
     "src/lib/x4ObjectIndex.ts",
     "src/lib/x4RulePackCanonical.ts",
     "src/lib/x4RulePackParser.ts",

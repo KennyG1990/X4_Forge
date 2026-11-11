@@ -30,7 +30,7 @@ import { EFFECTIVE_MD_ARGUMENT_CHECK, EFFECTIVE_MD_REFERENCE_CHECK,
 import { collectMdStringResults } from './expressionAst';
 import type { ValidationSourceLocation } from './validationEvidence';
 import { normPath, parseXmlLenient, walkElements } from './xmlLite';
-import { parse } from 'luaparse';
+import { parseX4Lua as parse } from './x4LuaParser';
 import { DOMParser, type Attr as XmlAttr, type Element as XmlElement } from '@xmldom/xmldom';
 import { buildX4UiSourceBundle } from './x4UiSourceBundle';
 
@@ -335,7 +335,7 @@ function parseLuaRegisteredEvents(content: string, file: string): LuaRegistratio
   const source = buildLuaAnalysisSource(content || '');
   let ast: LuaAstNode;
   try {
-    ast = parse(source.content, { comments: false, locations: true, ranges: true, scope: true, luaVersion: '5.2', encodingMode: 'pseudo-latin1' });
+    ast = parse(source.content, { comments: false, locations: true, ranges: true, scope: true, encodingMode: 'pseudo-latin1' });
   } catch (error) {
     return { events: [], available: false, detail: boundedLuaParseDetail(error) };
   }
@@ -596,7 +596,7 @@ function parseLuaUiEmits(content: string, file: string): {
   let ast: LuaAstNode;
   try {
     ast = parse(source.content, {
-      comments: false, ranges: true, scope: true, luaVersion: '5.2', encodingMode: 'pseudo-latin1',
+      comments: false, ranges: true, scope: true, encodingMode: 'pseudo-latin1',
       onLocalDeclaration(name: string) { if (name === '_ENV') emitterRebound = true; },
     });
   } catch {

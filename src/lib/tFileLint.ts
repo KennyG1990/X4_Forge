@@ -16,7 +16,7 @@
  */
 
 import { DOMParser } from "@xmldom/xmldom";
-import { parse as parseLua } from "luaparse";
+import { parseX4Lua as parseLua } from "./x4LuaParser";
 import { createSourcePositionLocator } from "./xmlSourceSpans";
 import { normalizeX4UiSourcePath } from "./x4UiSourceBundle";
 
@@ -143,7 +143,7 @@ function luaTextReferences(content: string, limit: number): Array<{ page: string
   try {
     // Keep original UTF-16 offsets while accepting non-ASCII prose in Lua strings.
     parseLua(content.replace(/^\uFEFF/, " ").replace(/[\u0100-\uffff]/g, "?"), {
-      comments: false, ranges: true, scope: true, luaVersion: "5.2", encodingMode: "pseudo-latin1",
+      comments: false, ranges: true, scope: true, encodingMode: "pseudo-latin1",
       onLocalDeclaration(name: string) {
         if (name === "_ENV") rebound = true;
       },
