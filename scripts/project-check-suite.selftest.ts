@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { canonicalJson, hashActionReceiptAuthority, type ActionReceipt } from '../src/lib/actionReceipt';
 import { ActionReceiptStore } from '../src/lib/actionReceiptStore';
 import { buildArtifactPlan } from '../src/lib/artifactPipeline';
+import { applyProjectCheckCoverage, buildValidationEvidence } from '../src/lib/validationEvidence';
 import { captureDeploymentSnapshot } from '../src/server/deploymentSnapshot';
 import { ProjectCheckApprovalLedger } from '../src/server/projectCheckApproval';
 import { captureProjectCheckSetup, freezeProjectCheckSetup } from '../src/server/projectCheckSetup';
@@ -58,11 +59,14 @@ print(json.dumps(sorted(file.name for file in runtime.iterdir() if file.name != 
 
 const probe = String.raw`
 import os, sys, time
-name, marker, release, mode = sys.argv[1:]
+name, marker, release, mode = sys.argv[1:5]
 assert sys.path == [os.path.join(os.path.dirname(sys.executable), 'python312.zip')], sys.path
 assert 'PYTHONPATH' not in os.environ and 'PATH' not in os.environ
 with open(os.path.join(os.environ['FORGE_ARTIFACT_ROOT'], 'md', name + '.xml'), encoding='utf8') as covered:
     assert covered.read() == '<mdscript name="' + name + '"/>\n'
+if len(sys.argv) == 6:
+    with open(os.path.join(os.environ['FORGE_ARTIFACT_ROOT'], sys.argv[5]), encoding='utf8') as lua:
+        assert lua.read() == 'return 1\n'
 with open(marker, 'a', encoding='ascii', newline='\n') as record:
     record.write('started\n')
 if mode in ('wait', 'wait-nonzero'):
@@ -121,7 +125,7 @@ function meterFixture() {
 
 type Mode = 'wait' | 'wait-nonzero' | 'nonzero' | 'nonzero-empty' | 'pass';
 function fixture(name: string, declarations: ReadonlyArray<readonly [string, Mode, number?]>, interpreter: ReturnType<typeof stageInterpreter>,
-  maxParallelChecks?: number) {
+  maxParallelChecks?: number, coversChecks?: string[]) {
   const directory = path.join(root, name);
   const sourceRoot = path.join(directory, 'source');
   const scratch = path.join(directory, 'scratch');
@@ -130,13 +134,16 @@ function fixture(name: string, declarations: ReadonlyArray<readonly [string, Mod
   fs.mkdirSync(scratch);
   fs.writeFileSync(script, probe, 'utf8');
   const commands = declarations.map(([id, mode, timeoutSeconds = 12]) => ({
-    id, mode, timeoutSeconds, covered: `md/${id}.xml`, marker: path.join(directory, `${id}-started.txt`),
+    id, mode, timeoutSeconds, covered: `md/${id}.xml`, luaCovered: coversChecks === undefined ? undefined : `ui/${id}.lua`,
+    marker: path.join(directory, `${id}-started.txt`),
     release: path.join(directory, `${id}-release.txt`),
   }));
   const manifest = JSON.stringify({ version: 1, ...(maxParallelChecks === undefined ? {} : { maxParallelChecks }),
     checks: commands.map(command => ({
-    id: command.id, script: 'checks/run.py', covers: [command.covered], timeoutSeconds: command.timeoutSeconds,
-    args: [command.id, command.marker, command.release, command.mode],
+    id: command.id, script: 'checks/run.py', covers: [command.covered, ...(command.luaCovered ? [command.luaCovered] : [])],
+    timeoutSeconds: command.timeoutSeconds,
+    args: [command.id, command.marker, command.release, command.mode, ...(command.luaCovered ? [command.luaCovered] : [])],
+    ...(coversChecks === undefined ? {} : { coversChecks }),
   })) });
   fs.writeFileSync(path.join(sourceRoot, 'forge.checks.json'), manifest, 'utf8');
 
@@ -160,6 +167,7 @@ function fixture(name: string, declarations: ReadonlyArray<readonly [string, Mod
       'forge.checks.json': manifest,
       ...Object.fromEntries(commands.map((command, index) => [command.covered,
         `<mdscript name="${changeArtifact && index === 0 ? 'different' : command.id}"/>\n`])),
+      ...Object.fromEntries(commands.filter(command => command.luaCovered).map(command => [command.luaCovered!, 'return 1\n'])),
     } });
     assert(plan.ok, plan.errors.join('\n'));
     const snapshot = captureDeploymentSnapshot(plan, 'loose');
@@ -305,6 +313,7 @@ try {
   assert.deepEqual(verified.commandReceipts.map(command => command.authority.operationId),
     success.commands.map(command => `project-check:${fresh.runId}:${command.id}`));
   assert.equal(new Set(verified.commandReceipts.map(command => command.id)).size, 2);
+  assert(verified.verification.checks.every(check => !Object.hasOwn(check, 'coveredChecks')));
   for (const child of verified.commandReceipts) {
     assert.equal(child.status, 'committed');
     assert.equal(child.validation.code, 'PROJECT_CHECK_PASSED');
@@ -454,7 +463,10 @@ try {
   assert(!fs.existsSync(changed.commands[1].marker));
   record('owner revocation after the first child commits leaves a durable failed suite without starting the second');
 
-  const parallel = fixture('parallel-refill', [['omega', 'wait'], ['alpha', 'wait'], ['middle', 'wait']], interpreter, 2);
+  const namedClaims = ['x4-ui.truncated-evidence', 'lua_md.emit_verification_gap', 'md_lua.registration_verification_gap', 'lua.runtime_scope_unverified'];
+  const parallel = fixture('parallel-refill', [['omega', 'wait'], ['alpha', 'wait'], ['middle', 'wait']], interpreter, 2, namedClaims);
+  assert(Object.isFrozen(parallel.exact.frozen.setup.checks[0].coversChecks));
+  assert.throws(() => parallel.exact.frozen.setup.checks[0].coversChecks!.push('unknown'));
   const parallelAdmissions: number[] = [];
   const parallelRun = parallel.execute(parallel.exact, lease => ({ ...lease,
     armProjectCheck(guard, budget) { parallelAdmissions.push(budget!); return lease.armProjectCheck(guard, budget); },
@@ -482,6 +494,28 @@ try {
   assert.equal(parallelReceipt.metadata?.projectCheckPolicyVersion, 2);
   assert.equal(parallelReceipt.metadata?.maxParallelChecks, 2);
   const parallelProof = requirePassedProjectCheckSuite(parallel.inputs(), parallelReceipt.id);
+  assert(parallelProof.verification.checks.every(check => canonicalJson(check.coveredChecks) === canonicalJson(namedClaims)));
+  const luaEvidence = buildValidationEvidence({ id: modId, name: 'Fixture', files: parallel.exact.artifact.snapshot.files },
+    namedClaims.map(code => ({ code, severity: 'info', filePath: parallel.commands[0].luaCovered, message: `Fixture gap ${code}` })));
+  const luaCredit = applyProjectCheckCoverage(luaEvidence, parallelProof.verification);
+  assert(luaCredit.coverage.complete && luaCredit.coverage.projectVerification?.status === 'project-verified');
+  assert.equal(luaCredit.coverage.projectVerification.creditedFindingIds.length, namedClaims.length);
+  assert.equal(luaCredit.coverage.projectVerification.forgeComplete, false);
+  assert.equal(luaCredit.findings, luaEvidence.findings);
+  const projected = JSON.parse(JSON.stringify(luaCredit));
+  assert.deepEqual(projected.coverage.projectVerification.checks[0].coveredChecks, namedClaims);
+  assert(Object.isFrozen(parallelProof.verification.checks[0].coveredChecks));
+  const claimedManifestPath = path.join(parallel.exact.setupInput.sourceRoot, 'forge.checks.json');
+  const claimedManifestBytes = fs.readFileSync(claimedManifestPath);
+  const changedClaims = JSON.parse(claimedManifestBytes.toString('utf8'));
+  changedClaims.checks[0].coversChecks = [];
+  fs.writeFileSync(claimedManifestPath, JSON.stringify(changedClaims));
+  try { assert.throws(() => requirePassedProjectCheckSuite(parallel.exact, parallelReceipt.id)); }
+  finally { fs.writeFileSync(claimedManifestPath, claimedManifestBytes); }
+  assert.deepEqual(requirePassedProjectCheckSuite(parallel.exact, parallelReceipt.id).verification, parallelProof.verification);
+  assert.throws(() => requirePassedProjectCheckSuite({ ...parallel.exact, actorId: 'different-agent' }, parallelReceipt.id),
+    { code: 'PROJECT_CHECK_SUITE_MISMATCH' });
+  record('explicit coverage claims survive exact Lua artifact reads and reopened proof; altered approved claims refuse and raw findings remain');
   assert.deepEqual(parallelProof.commandReceipts.map(child => child.authority.operationId.split(':').at(-1)), ['omega', 'alpha', 'middle']);
   assert.equal(readProjectCheckSuiteReport(new ActionReceiptStore({ root: parallel.store.root }), parallelReceipt)?.state, 'passed');
   await assert.rejects(parallel.execute(), { code: 'PROJECT_CHECK_SUITE_EXISTS' });
@@ -501,7 +535,7 @@ try {
   parallel.retireInputs();
   record('approved budget2 overlaps two real Jobs, refills only a drained slot and reopens declaration-ordered exact proof after out-of-order completion');
 
-  const simultaneous = fixture('parallel-fail', [['omega', 'wait-nonzero'], ['alpha', 'wait-nonzero'], ['unused', 'pass']], interpreter, 2);
+  const simultaneous = fixture('parallel-fail', [['omega', 'wait-nonzero'], ['alpha', 'wait-nonzero'], ['unused', 'pass']], interpreter, 2, namedClaims);
   const parallelRuns = new ProjectCheckRunService(simultaneous.store, simultaneous.coordinator);
   const parallelAdmitted = await parallelRuns.start({ actorId, workspaceId, operationId: 'parallel-two-failures', modId,
     artifactHash: simultaneous.exact.artifact.snapshot.manifest.hash,

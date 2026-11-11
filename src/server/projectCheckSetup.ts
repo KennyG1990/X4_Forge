@@ -281,6 +281,7 @@ export function freezeProjectCheckSetup(input: ProjectCheckSetupInput, approvedS
       Object.freeze(check.args);
       Object.freeze(check.dependencies);
       Object.freeze(check.covers);
+      if (check.coversChecks) Object.freeze(check.coversChecks);
       Object.freeze(check);
     }
     Object.freeze(setup.checks);

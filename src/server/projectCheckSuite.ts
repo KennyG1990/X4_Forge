@@ -120,6 +120,7 @@ function buildSuitePlan(input: ProjectCheckSuiteInput) {
     worker: runtime.workerSha256, launcher: runtime.launcherSha256,
     checks: commands.map(({ bound: { binding } }) => ({
       id: binding.command.checkId, coveredFiles: binding.coveredFiles,
+      ...(binding.coveredChecks === undefined ? {} : { coveredChecks: binding.coveredChecks }),
     })),
     ...policy,
   });
@@ -194,6 +195,7 @@ function readPassingChild(plan: SuitePlan, command: SuitePlan['commands'][number
     id: binding.command.checkId, receiptId: child.id, receiptHash: child.hash,
     durationMs: evidence.durationMs, outputBytes: evidence.outputBytes, outputTailSha256: evidence.outputTailSha256,
     coveredFiles: binding.coveredFiles,
+    ...(binding.coveredChecks === undefined ? {} : { coveredChecks: binding.coveredChecks }),
   };
   return { child, check };
 }

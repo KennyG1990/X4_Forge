@@ -37,8 +37,14 @@ export interface ProjectCheckVerification {
     outputBytes: number;
     outputTailSha256: string;
     coveredFiles: readonly { path: string; size: number; sha256: string }[];
+    /** Exact optional check claims reopened from the owner-approved binding. */
+    coveredChecks?: readonly string[];
   }[];
 }
+export const PROJECT_CHECK_COVERAGE_CHECKS = Object.freeze([
+  'x4-ui.verification-gap', 'x4-ui.truncated-evidence', 'lua_md.emit_verification_gap',
+  'md_lua.registration_verification_gap', 'lua.runtime_scope_unverified',
+]);
 interface ProjectCheckCoverage extends ProjectCheckVerification {
   status: 'project-verified';
   resolvedGaps: ValidationCoverageGap[];
@@ -133,23 +139,32 @@ export function applyProjectCheckCoverage(evidence: ValidationEvidence, verifica
   const coveredPaths = new Set(verification.checks.flatMap(check => check.coveredFiles.map(file => file.path)));
   const executionGap = (gap: ValidationCoverageGap) => gap.check === 'project-checks.execution' && gap.filePath === 'forge.checks.json';
   const uiGap = 'x4-ui.verification-gap';
-  const gapKey = (filePath: string | undefined, reason: string) => JSON.stringify([filePath, reason]);
+  const claims = new Map<string, Set<string>>([[uiGap, coveredPaths]]);
+  for (const check of verification.checks) {
+    for (const code of check.coveredChecks ?? []) {
+      if (!PROJECT_CHECK_COVERAGE_CHECKS.includes(code)) continue;
+      const files = claims.get(code) ?? new Set<string>();
+      for (const file of check.coveredFiles) if (/\.lua$/i.test(file.path)) files.add(file.path);
+      claims.set(code, files);
+    }
+  }
+  const gapKey = (check: string | undefined, filePath: string | undefined, reason: string) => JSON.stringify([check, filePath, reason]);
   const rawGaps = [...evidence.coverage.gaps, ...(evidence.coverage.projectVerification?.resolvedGaps || [])];
   const gaps: ValidationCoverageGap[] = [];
   const resolvedGaps: ValidationCoverageGap[] = [];
-  const creditedUiGaps = new Set<string>();
+  const creditedGaps = new Set<string>();
   for (const gap of rawGaps) {
     if (executionGap(gap)) {
       resolvedGaps.push(gap);
-    } else if (gap.check === uiGap && gap.filePath && coveredPaths.has(gap.filePath)) {
+    } else if (gap.filePath && claims.get(gap.check)?.has(gap.filePath)) {
       resolvedGaps.push(gap);
-      creditedUiGaps.add(gapKey(gap.filePath, gap.reason));
+      creditedGaps.add(gapKey(gap.check, gap.filePath, gap.reason));
     } else {
       gaps.push(gap);
     }
   }
-  const creditedFindingIds = evidence.findings.filter(finding => finding.category === 'check-unavailable' && finding.code === uiGap
-    && creditedUiGaps.has(gapKey(finding.filePath, finding.message))).map(finding => finding.findingId);
+  const creditedFindingIds = evidence.findings.filter(finding => finding.category === 'check-unavailable'
+    && creditedGaps.has(gapKey(finding.code, finding.filePath, finding.message))).map(finding => finding.findingId);
   return {
     ...evidence,
     outcome: evidence.modErrorCount ? 'mod-findings' : gaps.length ? 'incomplete' : 'no-known-findings',

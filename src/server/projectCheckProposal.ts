@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { ProjectFile } from '../lib/extensionProject';
 import { PROJECT_CHECK_MAX_PARALLEL } from './sharedSourceCoordinator';
+import { PROJECT_CHECK_COVERAGE_CHECKS } from '../lib/validationEvidence';
 
 export const PROJECT_CHECKS_PATH = 'forge.checks.json';
 export const PROJECT_CHECKS_MAX_BYTES = 256 * 1024;
@@ -18,6 +19,7 @@ interface ProposedCheck {
   dependencies: string[];
   covers: string[];
   timeoutSeconds: number;
+  coversChecks?: string[];
 }
 
 export type ProjectCheckInspection =
@@ -84,8 +86,8 @@ export function inspectProjectCheckProposal(files: ProjectFile[]): ProjectCheckI
     const ids = new Set<string>();
     const checks = config.checks.map((value: unknown, index: number): ProposedCheck => {
       const label = `checks[${index}]`;
-      const { id, script, args, dependencies, covers, timeoutSeconds = 60 } = fields(value,
-        ['id', 'script', 'args', 'dependencies', 'covers', 'timeoutSeconds'], label);
+      const { id, script, args, dependencies, covers, coversChecks, timeoutSeconds = 60 } = fields(value,
+        ['id', 'script', 'args', 'dependencies', 'covers', 'coversChecks', 'timeoutSeconds'], label);
       if (typeof id !== 'string' || !/^[a-z][a-z0-9._-]{0,63}$/.test(id) || ids.has(id)) {
         throw new Error(`${label}.id must be unique and use a lowercase check identifier.`);
       }
@@ -96,11 +98,15 @@ export function inspectProjectCheckProposal(files: ProjectFile[]): ProjectCheckI
         throw new Error(`${label}.timeoutSeconds must be an integer from 1 to 300.`);
       }
       ids.add(id);
+      const namedCoverage = coversChecks === undefined ? undefined : strings(coversChecks, PROJECT_CHECK_COVERAGE_CHECKS.length,
+        (item): item is string => typeof item === 'string' && PROJECT_CHECK_COVERAGE_CHECKS.includes(item), `${label}.coversChecks`);
+      if (namedCoverage && new Set(namedCoverage).size !== namedCoverage.length) throw new Error(`${label}.coversChecks contains duplicates.`);
       return {
         id, script, timeoutSeconds,
         args: strings(args, 64, (item): item is string => literal(item, 1024), `${label}.args`),
         dependencies: fileList(dependencies, 128, `${label}.dependencies`),
         covers: fileList(covers, 512, `${label}.covers`),
+        ...(namedCoverage === undefined ? {} : { coversChecks: namedCoverage }),
       };
     });
     return { status: 'proposed', execution: 'not-run', manifestHash: createHash('sha256').update(raw).digest('hex'), checks,

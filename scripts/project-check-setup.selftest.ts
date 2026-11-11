@@ -44,6 +44,7 @@ try {
   assert(!original.harness.some(entry => entry.path === 'md/smoke.xml'));
   const { setupHash: legacyHash, ...legacySetup } = original;
   assert(!Object.hasOwn(legacySetup, 'maxParallelChecks'));
+  assert(!Object.hasOwn(original.checks[0], 'coversChecks'));
   // Spell out the pre-budget serialization rather than comparing two new captures.
   const oldShape = { version: legacySetup.version, modId: legacySetup.modId, sourceRoot: legacySetup.sourceRoot,
     manifest: legacySetup.manifest, interpreter: legacySetup.interpreter, harness: legacySetup.harness, checks: legacySetup.checks };
@@ -58,6 +59,18 @@ try {
     configure([check], budget);
     const proposed = inspectProjectCheckProposal([{ path: 'forge.checks.json', kind: 'other', content: fs.readFileSync(manifest, 'utf8') }]);
     assert.equal(proposed?.status, 'invalid', `Invalid budget ${JSON.stringify(budget)}`);
+  }
+  configure([check]);
+  assert.equal(captureProjectCheckSetup(input).setupHash, legacyHash);
+  const additionalClaims = ['x4-ui.truncated-evidence', 'lua_md.emit_verification_gap',
+    'md_lua.registration_verification_gap', 'lua.runtime_scope_unverified'];
+  configure([{ ...check, coversChecks: additionalClaims }]);
+  assert.deepEqual(captureProjectCheckSetup(input).checks[0].coversChecks, additionalClaims);
+  assert.notEqual(captureProjectCheckSetup(input).setupHash, legacyHash);
+  for (const invalid of [null, 'x4-ui.truncated-evidence', [42], ['unknown'], ['validation.lua_ast_unavailable'],
+    ['x4-ui.truncated-evidence', 'x4-ui.truncated-evidence'], Array(6).fill('x4-ui.verification-gap')]) {
+    configure([{ ...check, coversChecks: invalid }]);
+    assert.throws(() => captureProjectCheckSetup(input), /coversChecks/);
   }
   configure([check]);
   assert.equal(captureProjectCheckSetup(input).setupHash, legacyHash);
@@ -152,6 +165,9 @@ try {
   assert.throws(() => reopened.requireUsable(approval.id, captureProjectCheckSetup(input)), /does not match/);
   configure([check]);
   const otherOwner = new ProjectCheckApprovalLedger(store, 'other-owner', verify);
+  configure([{ ...check, coversChecks: additionalClaims }]);
+  assert.throws(() => reopened.requireUsable(approval.id, captureProjectCheckSetup(input)), /does not match/);
+  configure([check]);
   assert.throws(() => otherOwner.requireUsable(approval.id, original), /committed owner setup approval/);
   assert.throws(() => reopened.requireUsable(approval.id, captureProjectCheckSetup({ ...input, modId: 'wrong' })), /does not match/);
   fs.appendFileSync(dependency, ' drift');

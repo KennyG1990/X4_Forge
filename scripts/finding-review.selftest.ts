@@ -48,6 +48,50 @@ check('project verification closes only the eligible gap without hiding the stat
   && verified.checkUnavailableCount === 0 && verified.findings === unverified.findings && verifiedReview.validationClean
   && verified.coverage.projectVerification?.forgeComplete === false
   && verified.coverage.projectVerification?.creditedFindingIds[0] === unverified.findings[0].findingId);
+const claimedCode = 'x4-ui.truncated-evidence';
+const explicitEvidence = buildValidationEvidence(coverageProject, [{ ...uiGap, code: claimedCode }]);
+const explicitProof = { ...projectVerification, checks: [{ ...projectVerification.checks[0], coveredChecks: [claimedCode] }] };
+const explicitCredit = applyProjectCheckCoverage(explicitEvidence, explicitProof);
+check('an explicitly reviewed covered Lua check receives separate project credit', explicitCredit.coverage.complete
+  && explicitCredit.coverage.projectVerification?.forgeComplete === false && explicitCredit.findings === explicitEvidence.findings);
+const namedCodes = ['x4-ui.truncated-evidence', 'lua_md.emit_verification_gap',
+  'md_lua.registration_verification_gap', 'lua.runtime_scope_unverified'];
+const namedGaps = namedCodes.map(code => ({ ...uiGap, code, message: 'Same reason for distinct named checks.' }));
+const namedEvidence = buildValidationEvidence(coverageProject, namedGaps);
+const allNamedProof = { ...projectVerification, checks: [{ ...projectVerification.checks[0], coveredChecks: namedCodes }] };
+const allNamed = applyProjectCheckCoverage(namedEvidence, allNamedProof);
+check('every explicitly covered named gap is project-verified with raw findings retained', allNamed.coverage.complete
+  && allNamed.findings === namedEvidence.findings && allNamed.coverage.projectVerification?.resolvedGaps.length === 4
+  && allNamed.coverage.projectVerification?.creditedFindingIds.length === 4
+  && allNamed.coverage.projectVerification?.status === 'project-verified' && !allNamed.coverage.projectVerification.forgeComplete
+  && evaluateFindingAcceptances({ ...subject, evidence: allNamed, projectCheckProof: allNamedProof.suite }, [], principal).validationClean);
+const oneNamed = applyProjectCheckCoverage(namedEvidence, explicitProof);
+check('same-path same-message findings from undeclared checks keep their gaps', !oneNamed.coverage.complete
+  && oneNamed.checkUnavailableCount === 3 && oneNamed.coverage.projectVerification?.creditedFindingIds.length === 1
+  && oneNamed.coverage.projectVerification.creditedFindingIds[0] === namedEvidence.findings[0].findingId);
+check('old file-only approvals gain no additional credit', applyProjectCheckCoverage(namedEvidence, projectVerification).checkUnavailableCount === 4);
+check('replacement proof restores previously credited checks it does not declare', applyProjectCheckCoverage(allNamed, projectVerification).checkUnavailableCount === 4);
+check('reapplying exact named coverage is idempotent', JSON.stringify(applyProjectCheckCoverage(allNamed, allNamedProof)) === JSON.stringify(allNamed));
+const nonLuaAndUnclaimed = buildValidationEvidence(coverageProject, [
+  ...['ui/uncovered.lua', 'ui/Covered.lua', 'ui.xml', 'md/covered.xml'].map(filePath => ({ ...uiGap, code: claimedCode, filePath })),
+  { ...uiGap, code: claimedCode, filePath: undefined },
+  { ...uiGap, code: 'validation.lua_ast_unavailable' },
+  { ...uiGap, code: 'lua.undefined_global', severity: 'error' },
+]);
+const boundedNamed = applyProjectCheckCoverage(nonLuaAndUnclaimed, { ...allNamedProof, checks: [{ ...allNamedProof.checks[0],
+  coveredChecks: [...namedCodes, 'validation.lua_ast_unavailable', 'lua.undefined_global'],
+  coveredFiles: [...allNamedProof.checks[0].coveredFiles, ...['ui.xml', 'md/covered.xml'].map(path => ({ path, size: 1, sha256: 'a'.repeat(64) }))],
+}] });
+check('uncovered/case/non-Lua/global/parser gaps and real static errors survive even untrusted extra names', boundedNamed.checkUnavailableCount === 6
+  && boundedNamed.modErrorCount === 1 && boundedNamed.outcome === 'mod-findings' && boundedNamed.findings === nonLuaAndUnclaimed.findings
+  && boundedNamed.coverage.projectVerification?.creditedFindingIds.length === 0);
+const separateFiles = applyProjectCheckCoverage(buildValidationEvidence(coverageProject,
+  [{ ...uiGap, code: namedCodes[1] }]), { ...projectVerification, checks: [
+    { ...projectVerification.checks[0], coveredChecks: [namedCodes[0]] },
+    { ...projectVerification.checks[0], id: 'different', coveredChecks: [namedCodes[1]],
+      coveredFiles: [{ path: 'ui/different.lua', size: 1, sha256: 'a'.repeat(64) }] },
+  ] });
+check('coverage claims from one check cannot attach to another check files', separateFiles.checkUnavailableCount === 1);
 const mixedCoverage = buildValidationEvidence(coverageProject, [uiGap,
   { ...uiGap, filePath: 'ui/Covered.lua', message: 'Different path spelling was not bound to the checked artifact.' },
   { ...uiGap, code: 'x4-ui.truncated-evidence' },
