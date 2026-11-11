@@ -170,10 +170,10 @@ function parseLua(text: string) {
 }
 
 function normalizeLuaFile(file: LuaFileInput): LuaFileInput {
-  // Official X4 Lua files can begin with one decoded UTF-8 BOM. Remove only that
-  // marker once so every analyzer layer sees the same source without shifting lines.
+  // Keep the leading decoded BOM's width as parser-only whitespace so all
+  // analyzer layers retain original first-line columns and source ranges.
   if (file.text.charCodeAt(0) !== 0xFEFF) return file;
-  return { ...file, text: file.text.slice(1) };
+  return { ...file, text: ` ${file.text.slice(1)}` };
 }
 
 const SCOPE_UNVERIFIED = 'lua.runtime_scope_unverified';
@@ -1418,6 +1418,41 @@ export function runLuaStaticAnalysisSelftest(): { pass: boolean; checks: { name:
 
   checks.push(
     {
+      name: 'leading_bom_global_finding_uses_original_first_line_column',
+      pass: (() => {
+        const file = focusedFile('scripts/bom-position.lua', '\uFEFFUnexpectedGlobal()', 'bom-position');
+        const before = JSON.stringify(file);
+        const finding = analyzeLuaFiles([file]).findings.find(value => value.code === 'lua.undefined_global');
+        return finding?.line === 1 && finding.column === file.text.indexOf('UnexpectedGlobal')
+          && JSON.stringify(file) === before;
+      })()
+    },
+    {
+      name: 'leading_bom_syntax_finding_matches_equal_length_space',
+      pass: (() => {
+        const finding = (text: string) => analyzeLuaFiles([focusedFile('scripts/bom-syntax.lua', text)])
+          .findings.find(value => value.code === 'lua.syntax_error');
+        const bom = finding('\uFEFFlocal =');
+        const space = finding(' local =');
+        return bom?.line === 1 && space?.line === 1 && bom.column === space.column;
+      })()
+    },
+    {
+      name: 'leading_bom_later_line_coordinates_match_raw_source',
+      pass: (() => {
+        const text = '\uFEFFlocal value = 1\r\n  UnexpectedGlobal()';
+        const finding = analyzeLuaFiles([focusedFile('scripts/bom-later.lua', text)])
+          .findings.find(value => value.code === 'lua.undefined_global');
+        return finding?.line === 2 && finding.column === 2;
+      })()
+    },
+    {
+      name: 'repeated_or_noninitial_bom_does_not_erase_syntax_errors',
+      pass: ['\uFEFF\uFEFFUnexpectedGlobal()', ' \uFEFFUnexpectedGlobal()'].every(text =>
+        analyzeLuaFiles([focusedFile('scripts/bom-invalid.lua', text)])
+          .findings.some(value => value.code === 'lua.syntax_error'))
+    },
+    {
       name: 'bom_prefixed_valid_lua_has_no_syntax_error',
       pass: !bomValidAnalysis.findings.some(finding => finding.code === 'lua.syntax_error')
     },
@@ -1567,6 +1602,12 @@ export function runLuaStaticAnalysisSelftest(): { pass: boolean; checks: { name:
   };
   const scopeFinding = (result: LuaStaticAnalysisResult, code: string, symbol = 'OrderedGlobal') =>
     result.findings.find(finding => finding.code === code && finding.symbol === symbol && finding.rel === consumerPath);
+  const bomOrder = runtimeCase('\uFEFFOrderedGlobal()');
+  const spaceOrder = runtimeCase(' OrderedGlobal()');
+  checks.push({ name: 'leading_bom_runtime_order_uses_original_first_line_column',
+    pass: scopeFinding(bomOrder, GLOBAL_BEFORE_DEFINITION)?.column === 1
+      && scopeFinding(bomOrder, GLOBAL_BEFORE_DEFINITION)?.line === 1
+      && JSON.stringify(bomOrder.findings) === JSON.stringify(spaceOrder.findings) });
   const manifestOnlyCase = (uiXml: string): LuaStaticAnalysisResult => analyzeLuaFiles([], [{
     rel: 'ui.xml', source: 'loose', sourcePath: 'manifest-only:ui.xml',
     extension: { folder: 'manifest-only', id: 'manifest-only', runtimeInventory: buildX4MenuLuaRuntimeInventory({ uiXml, luaFiles: [] }) }

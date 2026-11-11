@@ -95,3 +95,7 @@ The initial dependency plan needed correction because a root junction crosses th
 The operator degradation checkpoint applies after the coherent local merge checkpoint. Source reconciliation, the duplicate-code review and corrected dependency audit should be sustained. Repeated broad tool assumptions should improve. The highest-risk observed weakness is following a junction during recursive inventory or cleanup. Before archiving this candidate, verify and remove its owned tool links with nonrecursive literal-path operations, then use the managed archive operation. Keep this single candidate for the pending release gates.
 
 The first cached-diff gate caught a trailing blank line before commit creation. Trimmed the task records and reran the unchanged scoped commit gate.
+
+## Release readiness review21 — 2026-11-11
+
+NOT_READY after source close21. Candidate0.0.82 has no dist/server.cjs or exact new VSIX. Public0.0.82 is its older sealed source; current diagnostics/redaction/watchdog/BOM deltas are unqualified as a release. Re-read PUBLISHING: current native replay/build/compiled warning-review/routes/serial E2E/oracles/exact package/private install/host checks/CI remain required. Latest live/lightweight answer holds heavy gates; no bump/install/publish/push. Focused source checks/precommit are not release proof. Next review24; reuse one candidate/profile. Plan docs/plans/2026-11-11-lua-bom-analysis.md; finite QA forge-1111-lua-bom-analysis.json.

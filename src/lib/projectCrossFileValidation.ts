@@ -275,7 +275,11 @@ function buildLuaAnalysisSource(content: string): LuaAnalysisSource {
   const codeUnits = content.split('');
   const substituted = new Uint8Array(content.length);
   for (let index = 0; index < content.length; index += 1) {
-    if (content.charCodeAt(index) > 0xff) {
+    // One decoded leading BOM is parser-only whitespace, not a tainted token.
+    // Retain its code-unit width so ranges still address the original source.
+    if (index === 0 && content.charCodeAt(index) === 0xfeff) {
+      codeUnits[index] = ' ';
+    } else if (content.charCodeAt(index) > 0xff) {
       codeUnits[index] = '?';
       substituted[index] = 1;
     }
@@ -1257,6 +1261,42 @@ export function runProjectCrossFileSelftest() {
 
   const good = validateProjectCrossFile(fixtureProject());
   ok('valid_project_has_no_errors', good.ok, good.findings);
+  const bomProject: ExtensionProject = {
+    ...fixtureProject(),
+    files: fixtureProject().files.map(file => file.path.endsWith('.lua')
+      ? { ...file, content: `\uFEFF${file.content}` } : file),
+  };
+  const bomSnapshot = JSON.stringify(bomProject);
+  const bomResult = validateProjectCrossFile(bomProject);
+  ok('leading_bom_preserves_complete_cross_file_result',
+    JSON.stringify(bomResult) === JSON.stringify(good), bomResult);
+  ok('leading_bom_analysis_preserves_input', JSON.stringify(bomProject) === bomSnapshot);
+  const bomLuaCase = (content: string) => validateProjectCrossFile({
+    ...fixtureProject(),
+    files: fixtureProject().files.map(file => file.path === 'ui/chat.lua' ? { ...file, content } : file),
+  });
+  const bomProse = bomLuaCase('\uFEFFlocal prose = "unrelated — 😀"\r\n'
+    + 'RegisterEvent("ai_influence.chat", handler)\r\nAddUITriggeredEvent("ai_influence", "chat.response", {})');
+  ok('leading_bom_with_unicode_prose_preserves_both_event_directions',
+    bomProse.ok && bomProse.mdLua.parseUnavailable.length === 0
+      && bomProse.mdLua.registered.some(event => event.event === 'ai_influence.chat')
+      && bomProse.mdLua.emitted.some(event => event.event === 'ai_influence.chat.response'), bomProse);
+  const bomEvent = bomLuaCase('\uFEFFRegisterEvent("ai_influence.chat\uFEFF", handler)');
+  ok('bom_inside_event_literal_remains_tainted',
+    bomEvent.mdLua.parseUnavailable.length === 1
+      && bomEvent.findings.some(finding => finding.code === 'md_lua.registration_verification_gap')
+      && bomEvent.mdLua.registered.length === 0, bomEvent);
+  for (const [name, content] of [
+    ['malformed', '\uFEFFfunction broken('],
+    ['repeated', '\uFEFF\uFEFFRegisterEvent("ai_influence.chat", handler)'],
+    ['noninitial', ' \uFEFFRegisterEvent("ai_influence.chat", handler)'],
+  ]) {
+    const invalid = bomLuaCase(content);
+    ok(`bom_${name}_still_refuses_parse_and_event_credit`,
+      !invalid.ok && invalid.mdLua.parseUnavailable.length === 1
+        && invalid.findings.some(finding => finding.code === 'validation.lua_ast_unavailable')
+        && invalid.mdLua.registered.length === 0 && invalid.mdLua.emitted.length === 0, invalid);
+  }
   const conditionalRaises = validateProjectCrossFile(addFile(fixtureProject(), {
     path: 'md/conditional_events.xml', kind: 'md',
     content: [
