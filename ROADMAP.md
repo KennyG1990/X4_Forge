@@ -8184,3 +8184,7 @@ Both native aliases use the shared exact-text cache for effective script schema 
 ## 2026-11-10 — VERIFIED 992-file native scratch workload (#97)
 
 The headless native route previewed in 57.78 s and applied in 163.69 s. Independent readback verified all 993 target files and the committed receipt. A separate request on the same selected artifact proved wrong-binding refusal without writes. Source rechecks accounted for 89.60 s on apply. The snapshot covered 500 text files and reported 22 unavailable. [Benchmark and evidence](docs/plans/2026-11-10-native-deploy-consumer-scale.md).
+
+## 2026-11-10 — VERIFIED source observation reuse (#97)
+
+Forge pairs selected and original disk identity in one observation. All seven apply checks reread current disk, frozen bytes, and corpus. The same 992-file apply fell from 163.69 s to 88.96 s and source rechecks fell from 89.60 s to 12.01 s. All 993 output hashes and coverage rows matched. A same-length edit after freezing refused before writes. Focused 71, artifact oracle 120, and native 313 checks passed. [Proof and remaining timing work](docs/plans/2026-11-10-deploy-source-observation-reuse.md).

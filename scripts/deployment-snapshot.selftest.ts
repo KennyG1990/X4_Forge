@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
-import { artifactPlanIdentity, buildArtifactPlan, hashArtifactFile, materializeArtifact } from '../src/lib/artifactPipeline';
+import { artifactPlanIdentity, buildArtifactPlan, buildArtifactPlanWithDiskIdentity, hashArtifactFile, materializeArtifact } from '../src/lib/artifactPipeline';
 import { captureDeploymentSnapshot } from '../src/server/deploymentSnapshot';
 import { buildValidationEvidence } from '../src/lib/validationEvidence';
 import { ActionReceiptStore } from '../src/lib/actionReceiptStore';
@@ -16,6 +16,48 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-snapshot-test-'));
 let assertions = 0;
 const check = (name: string, value: unknown) => { assert.ok(value, name); assertions++; };
 try {
+  const jointRoot = path.join(root, 'joint-observation');
+  fs.mkdirSync(jointRoot);
+  const overlaidPath = path.join(jointRoot, 'overlay.xml');
+  fs.writeFileSync(overlaidPath, '<before/>');
+  fs.writeFileSync(path.join(jointRoot, 'passthrough.lua'), 'return 1');
+  fs.writeFileSync(path.join(jointRoot, 'loose.bin'), Buffer.from([0, 1, 255]));
+  fs.writeFileSync(path.join(jointRoot, 'ignored.lua'), 'return 1');
+  fs.writeFileSync(path.join(jointRoot, 'runtime.lua'), 'return 2');
+  fs.writeFileSync(path.join(jointRoot, '.forgeartifact.json'), JSON.stringify({
+    exclude: ['ignored.lua'], runtimeOwned: ['runtime.lua'], catalogLoose: ['loose.bin'],
+  }));
+  const jointInput = { sourceRoot: jointRoot, generatedFiles: { 'overlay.xml': '<emitted/>' },
+    passthroughFiles: { 'passthrough.lua': 'return 3' } };
+  for (const format of ['loose', 'catalog'] as const) {
+    const selected = buildArtifactPlanWithDiskIdentity(jointInput, format);
+    assert.deepEqual(selected.plan, buildArtifactPlan(jointInput)); assertions++;
+    check(`same original disk identity in ${format}`,
+      selected.diskIdentity === artifactPlanIdentity(buildArtifactPlan({ sourceRoot: jointRoot }), format));
+  }
+  const baseline = buildArtifactPlanWithDiskIdentity(jointInput, 'loose');
+  const original = fs.statSync(overlaidPath);
+  fs.writeFileSync(overlaidPath, '<change/>');
+  fs.utimesSync(overlaidPath, original.atime, original.mtime);
+  const overlaidEdit = buildArtifactPlanWithDiskIdentity(jointInput, 'loose');
+  check('same-size edit hidden by the selected output still changes the disk identity',
+    artifactPlanIdentity(overlaidEdit.plan, 'loose') === artifactPlanIdentity(baseline.plan, 'loose')
+    && overlaidEdit.diskIdentity !== baseline.diskIdentity);
+  fs.writeFileSync(path.join(jointRoot, 'added.xml'), '<added/>');
+  const added = buildArtifactPlanWithDiskIdentity(jointInput, 'loose');
+  check('new disk file appears in both identities', added.plan.entries.some(entry => entry.path === 'added.xml')
+    && added.diskIdentity === artifactPlanIdentity(buildArtifactPlan({ sourceRoot: jointRoot }), 'loose')
+    && added.diskIdentity !== overlaidEdit.diskIdentity);
+  fs.unlinkSync(path.join(jointRoot, 'loose.bin'));
+  const removed = buildArtifactPlanWithDiskIdentity(jointInput, 'loose');
+  check('removed disk file is absent from both identities', !removed.plan.entries.some(entry => entry.path === 'loose.bin')
+    && removed.diskIdentity === artifactPlanIdentity(buildArtifactPlan({ sourceRoot: jointRoot }), 'loose')
+    && removed.diskIdentity !== added.diskIdentity);
+  const memoryInput = { sourceRoot: '', memoryOnly: true, generatedFiles: { 'content.xml': '<content id="lab"/>' } };
+  assert.deepEqual(buildArtifactPlanWithDiskIdentity(memoryInput, 'loose'), {
+    plan: buildArtifactPlan(memoryInput), diskIdentity: null,
+  }); assertions++;
+
   const observed = path.join(root, 'observed-file');
   fs.writeFileSync(observed, 'original bytes');
   const observedStamp = fs.lstatSync(observed, { bigint: true });

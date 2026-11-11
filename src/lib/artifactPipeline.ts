@@ -263,6 +263,22 @@ function inside(candidate: string, root: string): boolean {
 
 /** Build a complete ownership plan without reading source files into memory. */
 export function buildArtifactPlan(options: BuildArtifactPlanOptions): ArtifactPlan {
+  return planArtifact(options);
+}
+
+/** Deployment binds the selected output and original disk files from the same walk. */
+export function buildArtifactPlanWithDiskIdentity(
+  options: BuildArtifactPlanOptions & { rules?: never },
+  format: 'loose' | 'catalog',
+): { plan: ArtifactPlan; diskIdentity: string | null } {
+  const diskEntries: ArtifactEntry[] = [];
+  const plan = planArtifact(options, options.memoryOnly ? undefined : diskEntries);
+  const diskIdentity = plan.ok && plan.sourceRoot
+    ? artifactPlanIdentity({ ...plan, entries: diskEntries }, format) : null;
+  return { plan, diskIdentity };
+}
+
+function planArtifact(options: BuildArtifactPlanOptions, diskEntries?: ArtifactEntry[]): ArtifactPlan {
   const sourceRoot = options.memoryOnly === true ? '' : path.resolve(String(options.sourceRoot || ''));
   const errors: string[] = [];
   const entries: ArtifactEntry[] = [];
@@ -399,10 +415,11 @@ export function buildArtifactPlan(options: BuildArtifactPlanOptions): ArtifactPl
         errors.push(`Artifact source paths collide after case normalization: ${prior} and ${safe}`);
         continue;
       }
-      if (generated.has(key)) continue;
+      const overlaid = generated.has(key);
+      if (overlaid && !diskEntries) continue;
       occupied.set(key, safe);
       try {
-        entries.push({
+        const entry: ArtifactEntry = {
           path: safe,
           disposition: 'source-copy',
           reason: 'source file not claimed by a compiler output',
@@ -411,7 +428,9 @@ export function buildArtifactPlan(options: BuildArtifactPlanOptions): ArtifactPl
           mtimeMs: stat.mtimeMs,
           sourcePath: absolutePath,
           catalogLoose: Boolean(matchingRule(safe, rules.catalogLoose)),
-        });
+        };
+        if (!overlaid) entries.push(entry);
+        diskEntries?.push(entry);
       } catch (error) {
         errors.push(`Could not hash source artifact ${safe}: ${error instanceof Error ? error.message : String(error)}`);
       }

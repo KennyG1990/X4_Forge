@@ -260,7 +260,7 @@ import {
 } from "./src/lib/requestDeadline";
 import { parseParentLivenessContract, runParentLivenessSelftest, watchParentIpc } from "./src/lib/parentLiveness";
 import { runLatestValueWriteQueueSelftest } from "./src/lib/latestValueWriteQueue";
-import { artifactPlanIdentity, buildArtifactPlan, hashArtifactFile, materializeArtifact, sameArtifactStamp, verifyMaterializedArtifact, type ArtifactPlan } from "./src/lib/artifactPipeline";
+import { artifactPlanIdentity, buildArtifactPlan, buildArtifactPlanWithDiskIdentity, hashArtifactFile, materializeArtifact, sameArtifactStamp, verifyMaterializedArtifact, type ArtifactPlan } from "./src/lib/artifactPipeline";
 import { buildProjectFileInventory, runProjectFileInventorySelftest } from "./src/lib/projectFileInventory";
 import { materializeCatalogArtifact } from "./src/lib/artifactPackager";
 import { dataPath, runDataDirSelftest } from "./src/lib/dataDir";
@@ -9666,7 +9666,7 @@ function openProjectValidationProof(req: express.Request, res: express.Response,
       || receipt.authority.scope !== 'workspace' || receipt.authority.workspaceId !== workspaceId
       || receipt.authority.requestScope !== 'project-check.suite') throw mismatch();
     const imported = importModFolder(sourceRoot).workspace;
-    const plan = deploymentPlan(imported);
+    const { plan } = deploymentPlan(imported, req.body.deployFormat);
     if (effectiveModId(activeBuildWorkspace(imported)) !== modId || projectCheckArtifactIssue(plan)) throw mismatch();
     snapshot = captureDeploymentSnapshot(plan, req.body.deployFormat);
     proof = openNativeProjectCheckProof({ ...scope, receiptId: suiteId, snapshot });
@@ -13125,7 +13125,7 @@ function runCompileArtifactSelftest() {
     try {
       compileWorkspaceToFolder(patchOnly, beforeGuardTarget, 'store', false, 'loose', {
         beforeActivate: () => { throw new Error('source-or-receipt-changed'); },
-      }, deploymentPlan(patchOnly));
+      }, deploymentPlan(patchOnly, 'loose').plan);
     } catch (error) { guardFailure = String(error); guardRefused = guardFailure.includes('source-or-receipt-changed'); }
     record('deploy write-boundary guard refuses before target mutation', guardRefused && !fs.existsSync(beforeGuardTarget), guardFailure);
     record('patch-only workspace has no MD readiness error', !validatePackageReadiness(patchOnly).some(finding => finding.message.includes('no cue nodes')));
@@ -14240,17 +14240,20 @@ function buildDeployProjectValidation(modId: string, snapshot: DeploymentSnapsho
   return { preflight, diskValidationSkipped: snapshot.skipped, validationFiles: snapshot.files };
 }
 
-function deploymentPlan(ws: any, compiled?: ReturnType<typeof buildWorkspaceFileManifest>): ArtifactPlan {
+function deploymentPlan(ws: any, format: DeployFormat, compiled?: ReturnType<typeof buildWorkspaceFileManifest>) {
   const build = activeBuildWorkspace(ws);
   const generated = compiled ?? buildWorkspaceFileManifest(build);
   const sourceRoot = typeof build.sourceStamp?.dir === 'string' ? path.resolve(build.sourceStamp.dir) : '';
   if (!sourceRoot && workspaceSourceFiles(build).some((f: any) => f.omitted)) {
     throw new Error('Incomplete deployment source: omitted files require their disk source.');
   }
-  const plan = buildArtifactPlan({ sourceRoot, memoryOnly: !sourceRoot, generatedFiles: generated.generatedFiles,
-    passthroughFiles: buildArtifactPassthroughFiles(build, generated.passthroughFiles) });
+  const { plan, diskIdentity } = buildArtifactPlanWithDiskIdentity({
+    sourceRoot, memoryOnly: !sourceRoot, generatedFiles: generated.generatedFiles,
+    passthroughFiles: buildArtifactPassthroughFiles(build, generated.passthroughFiles),
+  }, format);
   if (!plan.ok) throw new Error(`Artifact planning failed: ${plan.errors.join('; ')}`);
-  return plan;
+  // A workspace overlay must not hide edits to the original included files.
+  return { plan, diskIdentity, artifactHash: trustHash([artifactPlanIdentity(plan, format), diskIdentity]) };
 }
 
 function sourceDeclaresProjectChecks(root: string): boolean {
@@ -14283,13 +14286,6 @@ function omittedAddressedProjectChecks(plan: ArtifactPlan, workspace?: ModWorksp
     return sourceDeclaresProjectChecks(root);
   }
   return workspaceSourceFiles(workspace).some(file => file.path.toLowerCase() === PROJECT_CHECKS_PATH);
-}
-
-function deploymentSourceIdentity(plan: ArtifactPlan, format: DeployFormat): string {
-  // Include original disk inputs as well as emitted output: passthrough/graph overlays must
-  // not hide an external edit made after preview, even when they emit the older bytes.
-  const disk = plan.sourceRoot ? artifactPlanIdentity(buildArtifactPlan({ sourceRoot: plan.sourceRoot }), format) : null;
-  return trustHash([artifactPlanIdentity(plan, format), disk]);
 }
 
 function deploymentCorpusIdentity(projectPaths: string[]): string {
@@ -14549,9 +14545,10 @@ async function startProjectCheckRun(req: express.Request, res: express.Response)
       let plan: ArtifactPlan;
       try {
         const imported = importModFolder(current.sourceRoot).workspace;
-        plan = deploymentPlan(imported);
+        const selected = deploymentPlan(imported, format);
+        plan = selected.plan;
         if (effectiveModId(activeBuildWorkspace(imported)) !== current.modId || projectCheckArtifactIssue(plan)
-          || deploymentSourceIdentity(plan, format) !== expectedArtifactHash) throw new Error('Artifact changed.');
+          || selected.artifactHash !== expectedArtifactHash) throw new Error('Artifact changed.');
       } catch { throw new ProjectCheckRunRefusal('PROJECT_CHECK_RUN_ARTIFACT_CHANGED'); }
 
       const snapshot = captureDeploymentSnapshot(plan, format);
@@ -14633,6 +14630,12 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     | 'prepare' | 'write' | 'verify' | 'doctor' | 'finalize' | 'recovery';
   const startedAt = performance.now();
   const stagesMs: Partial<Record<TimingStage, number>> = {};
+  const sourceRechecks = { count: 0, snapshotMs: 0, diskMs: 0, corpusMs: 0 };
+  const measureSourceRecheck = <T>(field: 'snapshotMs' | 'diskMs' | 'corpusMs', work: () => T): T => {
+    const start = performance.now();
+    try { return work(); }
+    finally { sourceRechecks[field] += performance.now() - start; }
+  };
   let timingStage: TimingStage = 'setup';
   let stageStartedAt = startedAt;
   const startStage = (next: TimingStage, now = performance.now()) => {
@@ -14649,7 +14652,8 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
   const timings = () => {
     const now = performance.now();
     startStage(timingStage, now);
-    return { scope: 'handler-before-response', totalMs: now - startedAt, stagesMs: { ...stagesMs } };
+    return { scope: 'handler-before-response', totalMs: now - startedAt, stagesMs: { ...stagesMs },
+      ...(sourceRechecks.count ? { sourceRechecks: { ...sourceRechecks } } : {}) };
   };
   let responseIdentity: Record<string, unknown> = { modId: null, sourceHash: null, artifactHash: null };
   let writeAttempted = false;
@@ -14923,7 +14927,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
         }));
       }
     }
-    const sourcePlan = deploymentPlan(ws, compiled);
+    const { plan: sourcePlan, diskIdentity, artifactHash } = deploymentPlan(ws, deployFormat, compiled);
     const checkManifestIssue = projectCheckArtifactIssue(sourcePlan);
     if (checkManifestIssue) {
       check('preflight', 'Required project checks', 'fail', checkManifestIssue);
@@ -14935,7 +14939,6 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       return res.status(409).json(failWith('preflight', { code: 'PROJECT_CHECK_SOURCE_MISMATCH', error: detail }));
     }
     startStage('snapshot');
-    const artifactHash = deploymentSourceIdentity(sourcePlan, deployFormat);
     snapshot = captureDeploymentSnapshot(sourcePlan, deployFormat);
     const frozenPlan = snapshot.plan;
     const files = Object.fromEntries(snapshot.files.map(file => [file.path, file.content || '']));
@@ -15233,13 +15236,20 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     const effect = luaRegistration ? { ...deploymentEffect, luaRegistration } : deploymentEffect;
 
     const assertCurrentSource = () => inStage('sourceRecheck', () => {
+      sourceRechecks.count++;
       assertSelectedSource();
-      snapshot!.assertIntegrity();
+      measureSourceRecheck('snapshotMs', () => snapshot!.assertIntegrity());
       const currentTarget = path.join(resolveXsdConfig().x4GamePath, 'extensions', effectiveModId(activeBuildWorkspace(ws)));
-      const currentPlan = deploymentPlan(ws);
-      if (projectCheckArtifactIssue(currentPlan) || omittedAddressedProjectChecks(currentPlan, addressedBuild)
-        || deploymentSourceIdentity(currentPlan, deployFormat) !== artifactHash
-        || deploymentCorpusIdentity(corpusPaths) !== corpusHash || path.resolve(currentTarget) !== path.resolve(targetRoot)) {
+      // The emitted input is fixed for this synchronous request. Reobserve the
+      // complete disk inputs, including paths shadowed by that emitted input.
+      const diskMatches = measureSourceRecheck('diskMs', () => {
+        if (!sourcePlan.sourceRoot) return diskIdentity === null;
+        const currentDisk = buildArtifactPlan({ sourceRoot: sourcePlan.sourceRoot });
+        return currentDisk.ok && artifactPlanIdentity(currentDisk, deployFormat) === diskIdentity;
+      });
+      if (!diskMatches || projectCheckArtifactIssue(sourcePlan) || omittedAddressedProjectChecks(sourcePlan, addressedBuild)
+        || measureSourceRecheck('corpusMs', () => deploymentCorpusIdentity(corpusPaths)) !== corpusHash
+        || path.resolve(currentTarget) !== path.resolve(targetRoot)) {
         throw Object.assign(new Error('Source, corpus or target changed during deployment. Review a fresh preview.'), { code: 'DEPLOY_SOURCE_CHANGED' });
       }
     });
