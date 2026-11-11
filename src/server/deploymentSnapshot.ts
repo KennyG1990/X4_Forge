@@ -104,7 +104,11 @@ export function captureDeploymentSnapshot(plan: ArtifactPlan, format: 'loose' | 
     assertIntegrity();
     const manifest = Object.freeze({ version: 1, scope: 'logical-artifact-bytes', hash: artifactPlanIdentity(plan, format),
       format, files: Object.freeze(manifestFiles.map(entry => Object.freeze(entry))) });
-    return Object.freeze({ plan: frozenPlan, payloadRoot: payload, files, skipped, assertIntegrity, dispose, manifest });
+    const assertProjectCheckStageContext = (expected: ProjectCheckStageContext) => {
+      if (!stage || !context || context !== expected) throw new Error('Deployment snapshot does not belong to this owned check context.');
+      stage.assertOwned();
+    };
+    return Object.freeze({ plan: frozenPlan, payloadRoot: payload, files, skipped, assertIntegrity, dispose, manifest, assertProjectCheckStageContext });
   } catch (error) {
     dispose();
     throw error;

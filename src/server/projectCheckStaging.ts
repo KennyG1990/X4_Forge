@@ -4,13 +4,14 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { hashArtifactFile } from '../lib/artifactPipeline';
 import { isProjectCheckRelativeFile } from './projectCheckProposal';
-import { PROJECT_CHECK_STAGE_LIMITS, type ProjectCheckStageLease, type ProjectCheckStageRecord,
+import { PROJECT_CHECK_STAGE_LIMITS, projectCheckStageLease, type ProjectCheckStageLease, type ProjectCheckStageRecord,
   type ProjectCheckStageScope, type SharedSourceCoordinator } from './sharedSourceCoordinator';
 
 export const PROJECT_CHECK_STAGE_MANIFEST = '.forge-stage-manifest.json';
 const MAX_MANIFEST_BYTES = 2 * 1024 * 1024;
 export interface ProjectCheckStageFile { path: string; size: number; sha256: string }
 export interface ProjectCheckStageContext extends ProjectCheckStageScope { lease: ProjectCheckStageLease }
+export type ProjectCheckStageCoordinator = Pick<SharedSourceCoordinator, 'projectCheckStages' | 'retireAbandonedProjectCheckStage'>;
 type Manifest = { version: 1; kind: 'setup' | 'snapshot'; files: ProjectCheckStageFile[] };
 const digest = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
 const identity = (stat: fs.BigIntStats) => ({ device: stat.dev.toString(), file: stat.ino.toString() });
@@ -202,4 +203,15 @@ export function retireAbandonedProjectCheckStages(coordinator: Pick<SharedSource
     coordinator.retireAbandonedProjectCheckStage(record.id, record, retireProjectCheckStageFiles); retired++;
   }
   return retired;
+}
+
+/** Open once, under the exact source claim, before this attempt creates stages. */
+export function openProjectCheckStageContext(scope: ProjectCheckStageScope, lease: ProjectCheckStageLease,
+  coordinator: ProjectCheckStageCoordinator, parents: readonly string[]): Readonly<ProjectCheckStageContext> {
+  if (!scope || !/^[a-f0-9]{32}$/.test(scope.runId)) throw new Error('Stage context requires an exact run or preview group ID.');
+  const current = { sourceKey: scope.sourceKey, actorId: scope.actorId, workspaceId: scope.workspaceId, runId: scope.runId };
+  lease.assertProjectCheckAuthority(current.sourceKey, current.workspaceId, current.actorId);
+  retireAbandonedProjectCheckStages(coordinator, current, parents);
+  lease.assertProjectCheckAuthority(current.sourceKey, current.workspaceId, current.actorId);
+  return Object.freeze({ ...current, lease: projectCheckStageLease(lease) });
 }

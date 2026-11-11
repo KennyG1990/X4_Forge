@@ -113,7 +113,18 @@ export interface ProjectCheckSourceLease {
   retireProjectCheckStage(handle: Readonly<ProjectCheckStageHandle>, cleanup: StageRetirement): void;
 }
 export type ProjectCheckStageLease = Pick<ProjectCheckSourceLease, 'reserveProjectCheckStage' | 'adoptProjectCheckStage'
-  | 'assertProjectCheckStage' | 'retireProjectCheckStage'>;
+  | 'assertProjectCheckStage' | 'retireProjectCheckStage' | 'assertProjectCheckAuthority'>;
+
+/** Stage-only authority: reconciliation must never receive worker-arming methods. */
+export function projectCheckStageLease(lease: ProjectCheckStageLease): Readonly<ProjectCheckStageLease> {
+  return Object.freeze({
+    assertProjectCheckAuthority: (sourceKey: string, workspaceId: string, actorId: string) => lease.assertProjectCheckAuthority(sourceKey, workspaceId, actorId),
+    reserveProjectCheckStage: (input: StageReservation) => lease.reserveProjectCheckStage(input),
+    adoptProjectCheckStage: (handle: Readonly<ProjectCheckStageHandle>, created: PhysicalStageIdentity) => lease.adoptProjectCheckStage(handle, created),
+    assertProjectCheckStage: (handle: Readonly<ProjectCheckStageHandle>) => lease.assertProjectCheckStage(handle),
+    retireProjectCheckStage: (handle: Readonly<ProjectCheckStageHandle>, cleanup: StageRetirement) => lease.retireProjectCheckStage(handle, cleanup),
+  });
+}
 type VisibleClaim = Omit<Claim, 'state' | 'sequence' | 'guards' | 'checkBudget' | 'guardPhase' | 'handlerFinished'> & {
   guardPhase?: NonNullable<Claim['guardPhase']>;
 };
@@ -836,6 +847,10 @@ let defaultCoordinator: SharedSourceCoordinator | undefined;
 const defaultInstanceId = randomUUID();
 const coordinator = () => defaultCoordinator ??= new SharedSourceCoordinator({ directory: resolveSourceCoordinationDirectory() });
 export const forgeSourceCoordinator = {
+  projectCheckStages(): ProjectCheckStageRecord[] { return coordinator().projectCheckStages(); },
+  retireAbandonedProjectCheckStage(id: string, scope: ProjectCheckStageScope, cleanup: StageRetirement): void {
+    coordinator().retireAbandonedProjectCheckStage(id, scope, cleanup);
+  },
   run<T>(keys: string[], owner: ResourceOwner, task: (lease: ProjectCheckSourceLease) => T | Promise<T>, currentKeys?: () => string[]): Promise<T> {
     try { return coordinator().run(keys, owner, task, currentKeys); }
     catch (error) { return Promise.reject(unavailable(error)); }

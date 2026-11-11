@@ -1,4 +1,4 @@
-import { createHash, createPublicKey } from 'node:crypto';
+import { createHash, createPublicKey, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,6 +11,9 @@ import { assertProjectCheckOwnerCredential } from './projectCheckOwnerProof';
 import { isProjectCheckRelativeFile } from './projectCheckProposal';
 import { captureProjectCheckSetup, freezeProjectCheckSetup } from './projectCheckSetup';
 import { requirePassedProjectCheckSuite } from './projectCheckSuite';
+import { openProjectCheckStageContext, type ProjectCheckStageContext, type ProjectCheckStageCoordinator } from './projectCheckStaging';
+import { canonicalSourceKey } from './resourceCoordinator';
+import { forgeSourceCoordinator, type ProjectCheckStageLease } from './sharedSourceCoordinator';
 import { PROJECT_CHECK_WORKER_GRACE_MS, verifyProjectCheckWorkerRuntime, type TrustedProjectCheckWorker } from './projectCheckWorker';
 
 const MAX_AUTHORITY_BYTES = 64 * 1024;
@@ -38,8 +41,9 @@ interface NativeProofInput {
   targetRoot: string;
   stagingRoot: string;
   snapshot: DeploymentSnapshot;
+  stageContext: Readonly<ProjectCheckStageContext>;
 }
-export type NativeProofScope = Omit<NativeProofInput, 'receiptId' | 'snapshot'>;
+export type NativeProofScope = Omit<NativeProofInput, 'receiptId' | 'snapshot' | 'stageContext'>;
 
 export function projectCheckOwnerProfileEnabled(env = process.env): boolean {
   return env.X4_FORGE_PROJECT_CHECK_OWNER_POLICY !== undefined;
@@ -247,15 +251,50 @@ function readFixtureAuthority(input: NativeProofScope, original: Buffer) {
   return { ownerId: config.ownerId, approvalId: config.approvalId, ...interpreterPin(config), runtime: runtimePin(config.runtime) };
 }
 
+function nativeSuiteReceipt(input: NativeProofScope, receiptId: string, expectedHash?: string, artifactHash?: string) {
+  if (!receiptIdPattern.test(receiptId) || (expectedHash !== undefined && !hashPattern.test(expectedHash))) throw authorityRefused();
+  const receipt = input.store.read(receiptId);
+  const runId = /^project-check-suite:([a-f0-9]{32})$/.exec(receipt.authority.operationId)?.[1];
+  if (!runId || receipt.status !== 'committed' || receipt.actor.kind !== 'service' || receipt.actor.id !== input.actorId
+    || receipt.authority.scope !== 'workspace' || receipt.authority.workspaceId !== input.workspaceId
+    || receipt.authority.requestScope !== 'project-check.suite' || !('id' in receipt.capability)
+    || receipt.capability.id !== 'project-check.suite' || receipt.capability.version !== '1' || receipt.metadata?.modId !== input.modId
+    || (expectedHash !== undefined && receipt.hash !== expectedHash)
+    || (artifactHash !== undefined && (!hashPattern.test(artifactHash) || receipt.input.beforeHash !== artifactHash
+      || receipt.metadata?.artifactHash !== artifactHash))) throw authorityRefused();
+  return { receipt, runId };
+}
+
+/** Verify private scope/receipt identity before sweeping or allocating any check bytes. */
+export function openNativeProjectCheckStaging(input: NativeProofScope, lease: ProjectCheckStageLease,
+  selection?: { receiptId: string; expectedHash?: string; artifactHash: string },
+  coordinator: ProjectCheckStageCoordinator = forgeSourceCoordinator) {
+  try {
+    const scratch = fs.realpathSync.native(assertDevScope(input, authorityFile(input.store)));
+    let runId: string;
+    if (selection) {
+      const authority = loadNativeProjectCheckAuthority(input);
+      const selected = nativeSuiteReceipt(input, selection.receiptId, selection.expectedHash, selection.artifactHash);
+      if (selected.receipt.metadata?.originalReceiptId !== authority.approvalId) throw authorityRefused();
+      authority.assertCurrent(); runId = selected.runId;
+    } else { runId = randomBytes(16).toString('hex'); }
+    return openProjectCheckStageContext({ sourceKey: canonicalSourceKey(input.sourceRoot), actorId: input.actorId,
+      workspaceId: input.workspaceId, runId }, lease, coordinator, [scratch]);
+  } catch { throw authorityRefused(); }
+}
+
 /** Consume an existing suite inside the existing native deployment authority claim. */
 export function openNativeProjectCheckProof(input: NativeProofInput) {
   try {
     const authority = loadNativeProjectCheckAuthority(input, input.snapshot.payloadRoot);
     const { scratch, runtime, setupInput, setupHash, approvals, approvalId } = authority;
-    const receipt = input.store.read(input.receiptId);
-    const runId = /^project-check-suite:([a-f0-9]{32})$/.exec(receipt.authority.operationId)?.[1];
-    if (!runId) throw authorityRefused();
-    const frozen = freezeProjectCheckSetup(setupInput, setupHash, scratch);
+    const { receipt, runId } = nativeSuiteReceipt(input, input.receiptId, undefined, input.snapshot.manifest.hash);
+    const context = input.stageContext;
+    if (!context || context.runId !== runId || context.actorId !== input.actorId || context.workspaceId !== input.workspaceId
+      || context.sourceKey !== canonicalSourceKey(input.sourceRoot)) throw authorityRefused();
+    context.lease.assertProjectCheckAuthority(context.sourceKey, input.workspaceId, input.actorId);
+    input.snapshot.assertProjectCheckStageContext(context);
+    const frozen = freezeProjectCheckSetup(setupInput, setupHash, scratch, context);
     try {
       const verifySuite = () => {
         try {

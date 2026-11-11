@@ -9,7 +9,7 @@ import { canonicalSourceKey } from '../src/server/resourceCoordinator';
 import { captureDeploymentSnapshot } from '../src/server/deploymentSnapshot';
 import { captureProjectCheckSetup, freezeProjectCheckSetup } from '../src/server/projectCheckSetup';
 import { SharedSourceCoordinator, type ProjectCheckSourceLease, type RegistryDatabase } from '../src/server/sharedSourceCoordinator';
-import { createOwnedProjectCheckStage, PROJECT_CHECK_STAGE_MANIFEST, retireAbandonedProjectCheckStages,
+import { createOwnedProjectCheckStage, openProjectCheckStageContext, PROJECT_CHECK_STAGE_MANIFEST, retireAbandonedProjectCheckStages,
   retireProjectCheckStageFiles, type ProjectCheckStageContext } from '../src/server/projectCheckStaging';
 
 const input = process.env.FORGE_QA_TMP;
@@ -251,6 +251,39 @@ try {
     }); } finally { if (previousTemp === undefined) delete process.env.TEMP; else process.env.TEMP = previousTemp;
       if (previousTmp === undefined) delete process.env.TMP; else process.env.TMP = previousTmp; }
     assert.equal(fs.realpathSync.native(os.tmpdir()), parent);
+  });
+  await check('context_sweeps_before_allocation_and_exposes_only_frozen_nonworker_authority', async () => {
+    const q = coordinator('context'); let oldRoot = ''; let closedContext!: Readonly<ProjectCheckStageContext>;
+    await q.run([sourceKey], owner, lease => { oldRoot = stage(lease).root; });
+    await q.run([sourceKey], owner, lease => {
+      for (const delta of [{ sourceKey: 'source:foreign' }, { actorId: 'foreign' }, { workspaceId: 'foreign' }, { runId: 'invalid' }]) {
+        assert.throws(() => openProjectCheckStageContext({ ...scope, ...delta }, lease, q, [scratch]));
+        assert(fs.existsSync(oldRoot)); assert.equal(q.projectCheckStages().length, 1);
+      }
+      closedContext = openProjectCheckStageContext({ ...scope, runId: 'b'.repeat(32) }, lease, q, [scratch]);
+      assert(Object.isFrozen(closedContext) && Object.isFrozen(closedContext.lease));
+      assert.deepEqual(Object.keys(closedContext.lease).sort(), ['adoptProjectCheckStage', 'assertProjectCheckAuthority',
+        'assertProjectCheckStage', 'reserveProjectCheckStage', 'retireProjectCheckStage']);
+      for (const method of ['armProjectCheck', 'assertProjectCheckDrained', 'ownsResource', 'run']) assert.equal(Reflect.get(closedContext.lease, method), undefined);
+      assert.equal(fs.existsSync(oldRoot), false); assert.equal(q.projectCheckStages().length, 0);
+      const current = createOwnedProjectCheckStage(closedContext, scratch, 'setup', []);
+      assert.equal(q.projectCheckStages()[0].runId, 'b'.repeat(32));
+      assert.throws(() => openProjectCheckStageContext(scope, lease, q, [scratch]), { code: 'PROJECT_CHECK_CLEANUP_UNCONFIRMED' });
+      current.dispose();
+    });
+    assert.throws(() => closedContext.lease.assertProjectCheckAuthority(sourceKey, scope.workspaceId, scope.actorId));
+    assert.throws(() => createOwnedProjectCheckStage(closedContext, scratch, 'setup', []));
+  });
+  await check('context_storage_fault_preserves_orphan_and_creates_no_replacement', async () => {
+    const q = coordinator('context-fault'); let oldRoot = '';
+    await q.run([sourceKey], owner, lease => { oldRoot = stage(lease).root; });
+    await q.run([sourceKey], owner, lease => {
+      const broken = { projectCheckStages: () => { throw new Error('fixture-stage-storage-unavailable'); },
+        retireAbandonedProjectCheckStage: q.retireAbandonedProjectCheckStage.bind(q) };
+      assert.throws(() => openProjectCheckStageContext(scope, lease, broken, [scratch]), /fixture-stage-storage-unavailable/);
+      assert(fs.existsSync(oldRoot)); assert.equal(q.projectCheckStages().length, 1);
+      openProjectCheckStageContext(scope, lease, q, [scratch]); assert.equal(q.projectCheckStages().length, 0);
+    });
   });
 } finally {
   for (const q of instances) q.close(); meter(); const current = fs.lstatSync(root, { bigint: true });

@@ -4,19 +4,25 @@ import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
+import ts from 'typescript';
 import { canonicalJson, hashActionReceiptAuthority, type ActionReceipt } from '../src/lib/actionReceipt';
 import { ActionReceiptStore } from '../src/lib/actionReceiptStore';
-import { buildArtifactPlan } from '../src/lib/artifactPipeline';
+import { artifactPlanIdentity, buildArtifactPlan } from '../src/lib/artifactPipeline';
+import { isSameOrDescendant, pathsOverlap } from '../src/lib/pathRoles';
 import { applyProjectCheckCoverage, buildValidationEvidence } from '../src/lib/validationEvidence';
 import { captureDeploymentSnapshot } from '../src/server/deploymentSnapshot';
-import { retireAbandonedProjectCheckStages } from '../src/server/projectCheckStaging';
-import { ProjectCheckApprovalLedger } from '../src/server/projectCheckApproval';
+import { createOwnedProjectCheckStage, openProjectCheckStageContext, retireAbandonedProjectCheckStages,
+  type ProjectCheckStageContext } from '../src/server/projectCheckStaging';
+import { ProjectCheckApprovalLedger, projectCheckApprovalCoordinationKey } from '../src/server/projectCheckApproval';
+import { loadNativeProjectCheckAuthority, openNativeProjectCheckProof, openNativeProjectCheckStaging, type NativeProofScope } from '../src/server/projectCheckNativeProof';
+import { PROJECT_CHECKS_MAX_BYTES, PROJECT_CHECKS_PATH } from '../src/server/projectCheckProposal';
 import { captureProjectCheckSetup, freezeProjectCheckSetup } from '../src/server/projectCheckSetup';
 import { executeProjectCheckSuite, projectCheckSuiteReceiptId, readProjectCheckSuiteReport, readTerminalProjectCheckSuite,
   requirePassedProjectCheckSuite } from '../src/server/projectCheckSuite';
-import { ProjectCheckRunService } from '../src/server/projectCheckRunService';
+import { ProjectCheckRunRefusal, ProjectCheckRunService } from '../src/server/projectCheckRunService';
 import { canonicalSourceKey } from '../src/server/resourceCoordinator';
-import { SharedSourceCoordinator, type ProjectCheckSourceLease } from '../src/server/sharedSourceCoordinator';
+import { SharedSourceCoordinator, type ProjectCheckSourceLease, type ProjectCheckStageLease } from '../src/server/sharedSourceCoordinator';
 
 const pythonInput = process.env.FORGE_QA_PYTHON;
 const scratchInput = process.env.FORGE_QA_TMP;
@@ -98,7 +104,8 @@ const cleanup: (() => void)[] = [];
 const retained: (() => boolean)[] = [];
 function record(name: string) { checks.push(name); console.log(`PASS ${name}`); }
 
-const footprintLimit = { bytes: 128 * 1024 * 1024, entries: 2000 };
+const nativeAdaptersOnly = process.env.FORGE_QA_NATIVE_STAGING_ONLY === '1';
+const footprintLimit = nativeAdaptersOnly ? { bytes: 32 * 1024 * 1024, entries: 1000 } : { bytes: 128 * 1024 * 1024, entries: 2000 };
 const peakFootprint = { bytes: 0, entries: 0 };
 function meterFixture() {
   const current = fs.lstatSync(root, { bigint: true });
@@ -303,8 +310,223 @@ process.exit(92);
   assert.equal(rows.filter(row => row.retirement && row.quarantineRoot && fs.existsSync(row.quarantineRoot) && !fs.existsSync(row.root)).length, 1);
 }
 
+async function nativeStagingAdapters(f: ReturnType<typeof fixture>) {
+  const sourceRoot = f.exact.setupInput.sourceRoot;
+  const generated = f.exact.artifact.snapshot.files.map(file => ({ ...file }));
+  f.retireInputs();
+  for (const file of generated) {
+    const destination = path.join(sourceRoot, ...file.path.split('/'));
+    fs.mkdirSync(path.dirname(destination), { recursive: true }); fs.writeFileSync(destination, file.content ?? '');
+  }
+  const plan = buildArtifactPlan({ sourceRoot }); assert(plan.ok, plan.errors.join(';'));
+  const artifactHash = artifactPlanIdentity(plan, 'loose');
+  const bootstrap = path.join(root, 'native-bootstrap'); fs.mkdirSync(bootstrap);
+  const nativeWorkerPath = path.join(bootstrap, path.basename(workerPath));
+  fs.copyFileSync(workerPath, nativeWorkerPath); fs.copyFileSync(launcherPath, path.join(bootstrap, path.basename(launcherPath)));
+  const nativeRuntime = { ...runtime, workerPath: nativeWorkerPath };
+  const gameRoot = path.join(f.directory, 'game'); fs.mkdirSync(gameRoot);
+  const authorityFile = path.join(f.directory, 'project-check-deploy-authority.json');
+  const authority = { version: 1, actorId, workspaceId, modId, sourceRoot, ownerId: 'fixture-owner', approvalId: f.approval.id,
+    interpreterPath: f.exact.setupInput.interpreterPath, interpreterDependencies: f.exact.setupInput.interpreterDependencies, runtime: nativeRuntime };
+  fs.writeFileSync(authorityFile, JSON.stringify(authority));
+  const environment = { X4_FORGE_MODE: 'dev-build', X4_FORGE_DEV_ROOT: root, X4_FORGE_PROJECT_CHECK_LEGACY_FIXTURE: '1',
+    X4_SOURCE_COORDINATION_DIR: f.registry, X4_STATE_DIR: path.join(f.directory, 'state'), X4_CONFIG_DIR: path.join(f.directory, 'config'),
+    X4_STUDIO_CACHE_DIR: path.join(f.directory, 'cache'), TEMP: f.scratch, TMP: f.scratch };
+  for (const directory of [environment.X4_STATE_DIR, environment.X4_CONFIG_DIR, environment.X4_STUDIO_CACHE_DIR]) fs.mkdirSync(directory);
+  const oldEnvironment = new Map([...Object.keys(environment), 'X4_FORGE_PROJECT_CHECK_OWNER_POLICY'].map(key => [key, process.env[key]]));
+  for (const [key, value] of Object.entries(environment)) process.env[key] = value;
+  delete process.env.X4_FORGE_PROJECT_CHECK_OWNER_POLICY;
+  const scope: NativeProofScope = { store: f.store, actorId, workspaceId, modId, sourceRoot, addressedSourceRoot: sourceRoot,
+    workspaceRoot: f.directory, targetRoot: path.join(gameRoot, 'extensions', modId), stagingRoot: path.join(f.directory, '.forge-builds', 'loose') };
+  const owner = { actor: actorId, workspaceId, operation: 'native-adapter-test' };
+  const recordState = { workspaceId, head: 'native-fixture-head', workspace: { modId, sourceStamp: { dir: sourceRoot } } };
+  let keyCurrent = true; let executeCalls = 0; let ownedSnapshots = 0; let ownedFreezes = 0;
+  let recoveryStageLease: Readonly<ProjectCheckStageLease> | undefined;
+  const source = fs.readFileSync(new URL('../server.ts', import.meta.url), 'utf8');
+  const ast = ts.createSourceFile('server.ts', source, ts.ScriptTarget.Latest, true);
+  const names = ['projectCheckArtifactIssue', 'sourceDeclaresProjectChecks', 'projectCheckRunAuthority', 'projectCheckRunError',
+    'startProjectCheckRun', 'openProjectValidationProof', 'openDeploymentProjectCheckStaging'];
+  const declarations = names.map(name => {
+    const found = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name);
+    assert(found, `Missing actual server function ${name}`); return found.getText(ast);
+  });
+  const operationVariable = ast.statements.filter(ts.isVariableStatement).flatMap(node => [...node.declarationList.declarations])
+    .find(node => node.name.getText(ast) === 'ACTION_RECEIPT_OPERATION_ID_RE'); assert(operationVariable?.initializer);
+  const extracted = `const ACTION_RECEIPT_OPERATION_ID_RE = ${operationVariable.initializer.getText(ast)};\n${declarations.join('\n')}\nreturn {${names.join(',')}};`;
+  const compiled = ts.transpileModule(extracted, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  type Request = { body: Record<string, unknown>; get(name: string): string | undefined };
+  const response = () => ({ code: 200, body: undefined as unknown, status(code: number) { this.code = code; return this; },
+    json(body: unknown) { this.body = body; return this; } });
+  type Response = ReturnType<typeof response>;
+  type RunStatus = ReturnType<ProjectCheckRunService['status']>;
+  type Handlers = {
+    startProjectCheckRun(req: Request, res: Response): Promise<unknown>;
+    openProjectValidationProof(req: Request, res: Response, fromPath: string, lease?: ProjectCheckSourceLease):
+      { snapshot: ReturnType<typeof captureDeploymentSnapshot>; verify(): void; dispose(): void } | undefined;
+    openDeploymentProjectCheckStaging(input: Record<string, unknown>, lease?: ProjectCheckSourceLease): Readonly<ProjectCheckStageContext> | undefined;
+  };
+  const request = (operation: string, body: Record<string, unknown> = { expectedArtifactHash: artifactHash, deployFormat: 'loose' }): Request =>
+    ({ body, get: name => name === 'x-forge-operation-id' ? operation : undefined });
+  const createHandlers = (service: ProjectCheckRunService) => {
+    const bindings = { fs, path, process, console, ProjectCheckRunRefusal, PROJECT_CHECKS_PATH, PROJECT_CHECKS_MAX_BYTES,
+      activeBuildWorkspace: (workspace: typeof recordState.workspace) => workspace,
+      effectiveModId: (workspace: typeof recordState.workspace) => workspace.modId,
+      resolveXsdConfig: () => ({ modWorkspacePath: f.directory, x4GamePath: gameRoot }),
+      actionReceiptStore: f.store, loadNativeProjectCheckAuthority, canonicalSourceKey, isSameOrDescendant, pathsOverlap,
+      projectCheckRunCaller: () => ({ actorId, addressed: recordState, keyIsCurrent: () => keyCurrent }),
+      workspaceRegistry: { readPersisted: (id: string) => id === workspaceId ? recordState : undefined },
+      trustHash: (value: unknown) => createHash('sha256').update(canonicalJson(value)).digest('hex'),
+      projectCheckRuns: service, captureActionReceiptProjection: () => {},
+      importModFolder: () => ({ workspace: recordState.workspace }), deploymentPlan: () => ({ plan, artifactHash }),
+      captureDeploymentSnapshot: (...args: Parameters<typeof captureDeploymentSnapshot>) => {
+        assert(args[2], 'Actual native handler must supply an owned context.'); ownedSnapshots++;
+        const snapshot = captureDeploymentSnapshot(...args); meterFixture(); return snapshot;
+      },
+      freezeProjectCheckSetup: (...args: Parameters<typeof freezeProjectCheckSetup>) => {
+        assert(args[3], 'Actual native handler must supply an owned context.'); ownedFreezes++;
+        const frozen = freezeProjectCheckSetup(...args); meterFixture(); return frozen;
+      },
+      openProjectCheckStageContext: (...args: Parameters<typeof openProjectCheckStageContext>) => {
+        if (!Object.hasOwn(args[1], 'armProjectCheck')) {
+          recoveryStageLease = args[1]; assert(Object.isFrozen(recoveryStageLease));
+          assert.deepEqual(Object.keys(recoveryStageLease).sort(), ['adoptProjectCheckStage', 'assertProjectCheckAuthority',
+            'assertProjectCheckStage', 'reserveProjectCheckStage', 'retireProjectCheckStage']);
+        }
+        return openProjectCheckStageContext(...args);
+      }, forgeSourceCoordinator: f.coordinator,
+      executeProjectCheckSuite: (...args: Parameters<typeof executeProjectCheckSuite>) => { executeCalls++; return executeProjectCheckSuite(...args); },
+      readTerminalProjectCheckSuite, projectCheckSuiteReceiptId, artifactPlanIdentity,
+      projectCheckRunsAvailable: () => true, projectCheckApprovalCoordinationKey,
+      resolveModFolder: () => ({ abs: sourceRoot }), openNativeProjectCheckProof,
+      openNativeProjectCheckStaging: (input: NativeProofScope, lease: Parameters<typeof openNativeProjectCheckStaging>[1],
+        selection?: Parameters<typeof openNativeProjectCheckStaging>[2]) => openNativeProjectCheckStaging(input, lease, selection, f.coordinator),
+    };
+    const factory = vm.compileFunction(compiled, Object.keys(bindings), { filename: 'actual-server-native-staging-functions.js' });
+    return factory(...Object.values(bindings)) as Handlers;
+  };
+  const terminal = async (service: ProjectCheckRunService, id: string) => until(() => {
+    const state = service.status(actorId, workspaceId, id); return ['passed', 'failed', 'incomplete', 'refused', 'pending-recovery'].includes(state.state) ? state : undefined;
+  }, 'native handler terminal result');
+  try {
+    // Keep one old exact stage so failed admissions must prove they did not sweep it.
+    let orphanRoot = '';
+    await f.coordinator.run([f.key], owner, lease => {
+      orphanRoot = createOwnedProjectCheckStage({ sourceKey: f.key, actorId, workspaceId, runId: 'a'.repeat(32), lease }, f.scratch, 'setup', []).root;
+    });
+    const service = new ProjectCheckRunService(f.store, f.coordinator); const handlers = createHandlers(service);
+    const invalidBody = response(); await handlers.startProjectCheckRun(request('native-extra-field', { expectedArtifactHash: artifactHash, deployFormat: 'loose', extra: true }), invalidBody);
+    assert.equal(invalidBody.code, 400); assert.equal(ownedSnapshots, 0); assert(fs.existsSync(orphanRoot));
+    keyCurrent = false; const revoked = response(); await handlers.startProjectCheckRun(request('native-revoked'), revoked);
+    assert.equal(revoked.code, 409); assert.equal(ownedSnapshots, 0); assert(fs.existsSync(orphanRoot)); keyCurrent = true;
+    const changedArtifact = response(); await handlers.startProjectCheckRun(request('native-stale', { expectedArtifactHash: '0'.repeat(64), deployFormat: 'loose' }), changedArtifact);
+    assert.equal(changedArtifact.code, 202); const changedView = changedArtifact.body as RunStatus;
+    assert.equal((await terminal(service, changedView.id)).state, 'failed');
+    assert.equal(f.store.read(changedView.id).validation.code, 'PROJECT_CHECK_RUN_ARTIFACT_CHANGED');
+    assert.equal(executeCalls, 0); assert(fs.existsSync(orphanRoot));
+    const admitted = response(); await handlers.startProjectCheckRun(request('native-pass'), admitted); assert.equal(admitted.code, 202);
+    const passed = await terminal(service, (admitted.body as RunStatus).id); assert.equal(passed.state, 'passed'); assert(passed.suiteReceipt);
+    assert.equal(executeCalls, 1); assert.equal(ownedSnapshots, 1); assert.equal(ownedFreezes, 1);
+    assert.equal(fs.existsSync(orphanRoot), false); assert.equal(f.coordinator.projectCheckStages().length, 0);
+    const retry = response(); await handlers.startProjectCheckRun(request('native-pass'), retry);
+    assert.equal((retry.body as RunStatus).id, passed.id); assert.equal(executeCalls, 1); assert.equal(ownedSnapshots, 1);
+    record('actual source-extracted run handler uses owned stages, sweeps old roots only after current admission, disposes to journal0 and preserves idempotency/no-allocation refusals');
+
+    const selected = { receiptId: passed.suiteReceipt.id, expectedHash: passed.suiteReceipt.hash, artifactHash };
+    const keys = [f.key, projectCheckApprovalCoordinationKey(f.store), canonicalSourceKey(f.store.pathFor(selected.receiptId))];
+    await f.coordinator.run(keys, owner, lease => {
+      for (const change of [{ actorId: 'foreign' }, { workspaceId: 'ws_foreign' }, { modId: 'foreign' },
+        { sourceRoot: f.scratch }, { targetRoot: path.join(sourceRoot, 'extensions', modId) }]) {
+        assert.throws(() => openNativeProjectCheckStaging({ ...scope, ...change }, lease, selected, f.coordinator), { code: 'PROJECT_CHECK_PROOF_MISMATCH' });
+        assert.equal(f.coordinator.projectCheckStages().length, 0);
+      }
+      for (const change of [{ receiptId: 'bad' }, { expectedHash: '0'.repeat(64) }, { artifactHash: '0'.repeat(64) }]) {
+        assert.throws(() => openNativeProjectCheckStaging(scope, lease, { ...selected, ...change }, f.coordinator), { code: 'PROJECT_CHECK_PROOF_MISMATCH' });
+        assert.equal(f.coordinator.projectCheckStages().length, 0);
+      }
+      const validation = handlers.openProjectValidationProof(request('validation', { projectCheckSuiteReceiptId: selected.receiptId,
+        expectedProjectCheckSuiteReceiptHash: selected.expectedHash, deployFormat: 'loose' }), response(), 'source', lease);
+      assert(validation); validation.verify(); assert.equal(f.coordinator.projectCheckStages().length, 2); meterFixture();
+      validation.dispose(); assert.equal(f.coordinator.projectCheckStages().length, 0);
+    });
+    const deployInput = { plan, body: { deployFormat: 'loose', projectCheckSuiteReceiptId: selected.receiptId,
+      expectedProjectCheckSuiteReceiptHash: selected.expectedHash }, principal: { kind: 'agent', id: actorId }, workspaceId,
+      addressedSourceRoot: sourceRoot, sourceRoot, modId, workspaceRoot: f.directory, gameRoot };
+    await f.coordinator.run(keys, owner, lease => {
+      const context = handlers.openDeploymentProjectCheckStaging(deployInput, lease); assert(context);
+      const snapshot = captureDeploymentSnapshot(plan, 'loose', context);
+      assert.throws(() => openNativeProjectCheckProof({ ...scope, receiptId: selected.receiptId, snapshot,
+        stageContext: { ...context, runId: '0'.repeat(32) } }), { code: 'PROJECT_CHECK_PROOF_MISMATCH' });
+      assert.throws(() => openNativeProjectCheckProof({ ...scope, receiptId: selected.receiptId, snapshot,
+        stageContext: { ...context } }), { code: 'PROJECT_CHECK_PROOF_MISMATCH' });
+      assert.equal(f.coordinator.projectCheckStages().length, 1);
+      const originalAuthority = fs.readFileSync(authorityFile); fs.writeFileSync(authorityFile, '{changed-authority');
+      try { assert.throws(() => openNativeProjectCheckProof({ ...scope, receiptId: selected.receiptId, snapshot, stageContext: context }), { code: 'PROJECT_CHECK_PROOF_MISMATCH' }); }
+      finally { fs.writeFileSync(authorityFile, originalAuthority); }
+      assert.equal(f.coordinator.projectCheckStages().length, 1);
+      const proof = openNativeProjectCheckProof({ ...scope, receiptId: selected.receiptId, snapshot, stageContext: context });
+      proof.verify(); assert.equal(f.coordinator.projectCheckStages().length, 2); meterFixture(); proof.dispose(); snapshot.dispose();
+      assert.equal(f.coordinator.projectCheckStages().length, 0);
+      const legacy = captureDeploymentSnapshot(plan, 'loose');
+      try { assert.throws(() => openNativeProjectCheckProof({ ...scope, receiptId: selected.receiptId, snapshot: legacy, stageContext: context }), { code: 'PROJECT_CHECK_PROOF_MISMATCH' }); }
+      finally { legacy.dispose(); }
+      assert.equal(f.coordinator.projectCheckStages().length, 0);
+    });
+    await f.coordinator.run([f.key], owner, lease => {
+      const original = fs.readFileSync(authorityFile); fs.unlinkSync(authorityFile);
+      try {
+        const preview = handlers.openDeploymentProjectCheckStaging({ ...deployInput, body: { deployFormat: 'loose' } }, lease); assert(preview);
+        assert.notEqual(preview.runId, /^project-check-suite:(.+)$/.exec(f.store.read(selected.receiptId).authority.operationId)![1]);
+        const snapshot = captureDeploymentSnapshot(plan, 'loose', preview); meterFixture(); snapshot.dispose();
+        assert.equal(f.coordinator.projectCheckStages().length, 0); assert.equal(executeCalls, 1);
+      } finally { fs.writeFileSync(authorityFile, original); }
+      assert.throws(() => handlers.openDeploymentProjectCheckStaging({ ...deployInput, principal: { kind: 'studio' }, body: {} }, lease), { code: 'ASYNC_VERIFICATION_REQUIRED' });
+      assert.throws(() => handlers.openDeploymentProjectCheckStaging({ ...deployInput, body: { ...deployInput.body, autoReimport: true } }, lease), { code: 'PROJECT_CHECK_PROOF_MISMATCH' });
+      const plain = buildArtifactPlan({ sourceRoot: '', memoryOnly: true, generatedFiles: { 'content.xml': '<content id="plain"/>' } });
+      assert.equal(handlers.openDeploymentProjectCheckStaging({ ...deployInput, plan: plain, body: {}, principal: { kind: 'studio' } }), undefined);
+    });
+    record('actual native staging/proof plus extracted validation/deploy adapters reuse one owned context, reject foreign/stale/legacy proof before allocation and keep unapproved preview non-executing');
+
+    let failParent = true;
+    class InterruptedNativeStore extends ActionReceiptStore {
+      override commit(...args: Parameters<ActionReceiptStore['commit']>) {
+        const receipt = this.read(args[0]);
+        if (failParent && 'id' in receipt.capability && receipt.capability.id === 'project-check.run') throw new Error('fixture-native-parent-write-fault');
+        return super.commit(...args);
+      }
+    }
+    const interruptedStore = new InterruptedNativeStore({ root: f.store.root });
+    const firstService = new ProjectCheckRunService(interruptedStore, f.coordinator); const firstHandlers = createHandlers(firstService);
+    const interruptedResponse = response(); await firstHandlers.startProjectCheckRun(request('native-recovery'), interruptedResponse);
+    assert.equal(interruptedResponse.code, 202); const pending = await terminal(firstService, (interruptedResponse.body as RunStatus).id);
+    assert.equal(pending.state, 'pending-recovery'); assert.equal(executeCalls, 2); assert.equal(f.coordinator.projectCheckStages().length, 0);
+    failParent = false;
+    await f.coordinator.run([f.key], owner, lease => {
+      orphanRoot = createOwnedProjectCheckStage({ sourceKey: f.key, actorId, workspaceId, runId: 'b'.repeat(32), lease }, f.scratch, 'setup', []).root;
+    });
+    const recoveredService = new ProjectCheckRunService(f.store, f.coordinator); const recoveredHandlers = createHandlers(recoveredService);
+    const repairedResponse = response(); await recoveredHandlers.startProjectCheckRun(request('native-recovery'), repairedResponse);
+    const repaired = await terminal(recoveredService, (repairedResponse.body as RunStatus).id);
+    assert.equal(repaired.state, 'passed'); assert.equal(repaired.id, pending.id); assert.equal(executeCalls, 2);
+    assert.equal(fs.existsSync(orphanRoot), false); assert.equal(f.coordinator.projectCheckStages().length, 0);
+    assert(recoveryStageLease); assert.throws(() => recoveryStageLease.assertProjectCheckAuthority(f.key, workspaceId, actorId));
+    record('actual source-extracted recovery handler receives stage-only authority, reopens proof and cleans its stages/orphan without executing again');
+    meterFixture();
+    console.log(JSON.stringify({ nativeAdapterSourceSha256: createHash('sha256').update(source).digest('hex'), extractedFunctions: names,
+      actualWindowsChecks: executeCalls, ownedSnapshots, ownedFreezes, journalRemaining: f.coordinator.projectCheckStages().length,
+      controlledCallerAndImportProjection: true, realNativeDevScopeAndLegacyFixtureAuthority: true, fullServerHttp: false }));
+  } finally {
+    for (const [key, value] of oldEnvironment) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
+  }
+}
+
 try {
   const interpreter = stageInterpreter();
+  if (nativeAdaptersOnly) {
+    await nativeStagingAdapters(fixture('native-adapters', [['probe', 'pass']], interpreter));
+    meterFixture();
+    console.log(JSON.stringify({ status: 'passed', nativeAdaptersOnly: true, realWindowsProcesses: true, checks,
+      observedPeakFootprint: peakFootprint, footprintLimit }));
+  } else {
   // Deliberately out of alphabetical order. Declaration order is part of the suite.
   const success = fixture('success', [['omega', 'wait'], ['alpha', 'wait']], interpreter);
   const [first, second] = success.commands;
@@ -1058,10 +1280,11 @@ try {
   incompleteFixture.retireInputs();
   record('terminal incomplete and genuinely absent suites reconcile without passing proof, replay or loss of named incomplete evidence');
 
+  await nativeStagingAdapters(fixture('native-adapters', [['probe', 'pass']], interpreter));
   await until(() => retained.some(unresolved => unresolved()) ? undefined : true, 'every fixture source claim to become quiescent');
   const orphanRoots = [interrupted, abandoned].flatMap(f => f.coordinator.projectCheckStages().map(stage => stage.root));
   const crashStaging = { roots: orphanRoots.length, bytes: 0, entries: 0,
-    cleanupOwner: 'owned snapshot/freezer materializers and durable journal filesystem retire function; API adapters pending',
+      cleanupOwner: 'owned snapshot/freezer materializers and durable journal filesystem retire function; adapter evidence is separately source-extracted',
     retired: 0, remaining: -1, repeatedCrashRoots: 0, retirementBackendExit: 0 };
   const stagePending = [...orphanRoots];
   while (stagePending.length) {
@@ -1100,6 +1323,7 @@ try {
   meterFixture();
   console.log(JSON.stringify({ status: 'passed', realWindowsProcesses: true, fixtureOwnerApproval: true, checks,
     observedPeakFootprint: peakFootprint, footprintLimit, crashStaging }));
+  }
 } finally {
   try {
     const keepScratch = retained.some(unresolved => unresolved());

@@ -7,7 +7,7 @@ import {
 import type { ActionReceiptStore } from '../lib/actionReceiptStore';
 import { projectCheckSuiteReceiptId, readProjectCheckSuiteReport, type ProjectCheckSuiteReport } from './projectCheckSuite';
 import { canonicalSourceKey } from './resourceCoordinator';
-import type { ProjectCheckSourceLease, SharedSourceCoordinator } from './sharedSourceCoordinator';
+import { projectCheckStageLease, type ProjectCheckStageLease, type ProjectCheckSourceLease, type SharedSourceCoordinator } from './sharedSourceCoordinator';
 
 const CAPABILITY = 'project-check.run';
 const VERSION = '1';
@@ -61,7 +61,7 @@ export class ProjectCheckRunRefusal extends Error {
 
 type SuiteCompletion = { suite: ActionReceipt; logicalArtifactHash: string };
 type Execute = (lease: ProjectCheckSourceLease, runId: string) => Promise<SuiteCompletion>;
-type Recover = (runId: string) => Promise<SuiteCompletion | undefined>;
+type Recover = (runId: string, stages: Readonly<ProjectCheckStageLease>) => Promise<SuiteCompletion | undefined>;
 type Completion = SuiteCompletion | { refused: RunRefusalCode } | { unknown: true };
 type ActiveRun = {
   id: string;
@@ -281,7 +281,7 @@ export class ProjectCheckRunService {
         if (!current || current.hash !== receipt.hash || current.status !== 'prepared') return;
         lease.assertProjectCheckAuthority(keys[1], owner.workspaceId, owner.actor);
         slot.state = 'running';
-        const completion = await recover(attempt.runId);
+        const completion = await recover(attempt.runId, projectCheckStageLease(lease));
         lease.assertProjectCheckAuthority(keys[1], owner.workspaceId, owner.actor);
         if (completion) {
           if (completion.suite.id !== attempt.suiteId) return;

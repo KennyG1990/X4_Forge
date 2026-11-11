@@ -118,10 +118,11 @@ import { captureDeploymentSnapshot, type DeploymentSnapshot } from './src/server
 import { previewLuaRegistrationChange } from './src/server/deployLuaRegistration';
 import { PROJECT_CHECKS_MAX_BYTES, PROJECT_CHECKS_PATH } from './src/server/projectCheckProposal';
 import { projectCheckApprovalCoordinationKey } from './src/server/projectCheckApproval';
-import { loadNativeProjectCheckAuthority, openNativeProjectCheckOwnerAuthority, openNativeProjectCheckProof,
+import { loadNativeProjectCheckAuthority, openNativeProjectCheckOwnerAuthority, openNativeProjectCheckProof, openNativeProjectCheckStaging,
   projectCheckOwnerProfileEnabled, readNativeProjectCheckOwnerPolicy, type NativeProofScope } from './src/server/projectCheckNativeProof';
 import { ProjectCheckOwnerEnrollment, ProjectCheckOwnerEnrollmentError, type ProjectCheckOwnerResolver } from './src/server/projectCheckOwnerEnrollment';
 import { freezeProjectCheckSetup } from './src/server/projectCheckSetup';
+import { openProjectCheckStageContext, type ProjectCheckStageContext } from './src/server/projectCheckStaging';
 import { executeProjectCheckSuite, projectCheckSuiteReceiptId, readTerminalProjectCheckSuite } from './src/server/projectCheckSuite';
 import { ProjectCheckRunRefusal, ProjectCheckRunService } from './src/server/projectCheckRunService';
 import { verifyProjectCheckWorkerRuntime } from './src/server/projectCheckWorker';
@@ -245,7 +246,7 @@ import { runBugReportSelftest } from "./src/lib/bugReport";
 import { generatedOutputVerdict, normalizeApiFailureBody, runApiFailureEnvelopeSelftest } from "./src/lib/apiFailureEnvelope";
 import { projectApiEnvelope, projectApiSubject, fileApiSubject, workspaceApiSubject, pastedLogApiSubject, releaseReportApiSubject, validateProjectApiBody, validateProjectApiQuery, validateWorkspaceCreateBody, validateWorkspaceMutationBody, type ApiSubject } from './src/server/projectApiContract';
 import { canonicalSourceKey, canonicalSourcePath, sourceKeyForResolvedPath } from './src/server/resourceCoordinator';
-import { forgeSourceCoordinator, processLiveness, type ProjectCheckSourceLease } from './src/server/sharedSourceCoordinator';
+import { forgeSourceCoordinator, processLiveness, type ProjectCheckSourceLease, type ProjectCheckStageLease } from './src/server/sharedSourceCoordinator';
 import {
   CLIENT_API_DEADLINE_MS,
   CLIENT_LONG_API_DEADLINE_MS,
@@ -9658,8 +9659,6 @@ function openProjectValidationProof(req: express.Request, res: express.Response,
     const scope = { store: actionReceiptStore, actorId, workspaceId, modId, sourceRoot, addressedSourceRoot: sourceRoot,
       workspaceRoot, filesystemRoot, targetRoot: path.join(x4GamePath, 'extensions', modId),
       stagingRoot: path.join(workspaceRoot, '.forge-builds', 'loose') };
-    // Verify private roots before staging, even when the caller presents a syntactically valid foreign receipt.
-    loadNativeProjectCheckAuthority(scope);
     const receipt = actionReceiptStore.read(suiteId);
     if (receipt.hash !== req.body.expectedProjectCheckSuiteReceiptHash || receipt.status !== 'committed'
       || receipt.actor.kind !== 'service' || receipt.actor.id !== actorId
@@ -9668,8 +9667,11 @@ function openProjectValidationProof(req: express.Request, res: express.Response,
     const imported = importModFolder(sourceRoot).workspace;
     const { plan } = deploymentPlan(imported, req.body.deployFormat);
     if (effectiveModId(activeBuildWorkspace(imported)) !== modId || projectCheckArtifactIssue(plan)) throw mismatch();
-    snapshot = captureDeploymentSnapshot(plan, req.body.deployFormat);
-    proof = openNativeProjectCheckProof({ ...scope, receiptId: suiteId, snapshot });
+    requireCurrentWorkspace();
+    const stageContext = openNativeProjectCheckStaging(scope, lease, { receiptId: suiteId,
+      expectedHash: req.body.expectedProjectCheckSuiteReceiptHash, artifactHash: artifactPlanIdentity(plan, req.body.deployFormat) });
+    snapshot = captureDeploymentSnapshot(plan, req.body.deployFormat, stageContext);
+    proof = openNativeProjectCheckProof({ ...scope, receiptId: suiteId, snapshot, stageContext });
     if (proof.proof.hash !== receipt.hash) throw mismatch();
     const verifiedProof = proof;
     const verify = () => {
@@ -14576,7 +14578,7 @@ async function startProjectCheckRun(req: express.Request, res: express.Response)
       return record;
     };
     const admitted = projectCheckRunAuthority(requireCurrentWorkspace(), actorId);
-    const inspectAttempt = async (runId: string, executionLease?: ProjectCheckSourceLease) => {
+    const inspectAttempt = async (runId: string, stages: ProjectCheckStageLease, executionLease?: ProjectCheckSourceLease) => {
       const current = projectCheckRunAuthority(requireCurrentWorkspace(), actorId);
       if (current.sourceKey !== admitted.sourceKey || current.modId !== admitted.modId || current.setupHash !== admitted.setupHash
         || current.configurationHash !== admitted.configurationHash || current.approvalHash !== admitted.approvalHash) {
@@ -14591,11 +14593,14 @@ async function startProjectCheckRun(req: express.Request, res: express.Response)
           || selected.artifactHash !== expectedArtifactHash) throw new Error('Artifact changed.');
       } catch { throw new ProjectCheckRunRefusal('PROJECT_CHECK_RUN_ARTIFACT_CHANGED'); }
 
-      const snapshot = captureDeploymentSnapshot(plan, format);
+      requireCurrentWorkspace(); current.assertCurrent();
+      const stageContext = openProjectCheckStageContext({ sourceKey: current.sourceKey, actorId, workspaceId, runId },
+        stages, forgeSourceCoordinator, [fs.realpathSync.native(current.scratch)]);
+      const snapshot = captureDeploymentSnapshot(plan, format, stageContext);
       let frozen: ReturnType<typeof freezeProjectCheckSetup> | undefined;
       try {
         current.assertCurrent();
-        frozen = freezeProjectCheckSetup(current.setupInput, current.setupHash, current.scratch);
+        frozen = freezeProjectCheckSetup(current.setupInput, current.setupHash, current.scratch, stageContext);
         const suiteInput = { setupInput: current.setupInput, frozen,
           artifact: { modId: current.modId, snapshot }, approvals: current.approvals, approvalId: current.approvalId,
           runId, systemRoot: current.runtime.systemRoot, runtime: current.runtime, store: actionReceiptStore,
@@ -14607,18 +14612,17 @@ async function startProjectCheckRun(req: express.Request, res: express.Response)
         if (!suite) return;
         return { suite, logicalArtifactHash: snapshot.manifest.hash };
       } finally {
-        const coordination = forgeSourceCoordinator.status([current.sourceKey]);
-        if (coordination.available && !coordination.active.some(claim => claim.guardPhase === 'running')) {
-          try { frozen?.dispose(); } finally { snapshot.dispose(); }
-        }
+        // The exact journal gates every unconfirmed guard and helper exit, not
+        // just a coarse running phase. A refusal retains the owned stage.
+        try { frozen?.dispose(); } finally { snapshot.dispose(); }
       }
     };
     const run = await projectCheckRuns.start({ actorId, workspaceId, operationId, requestHash,
       modId: admitted.modId, artifactHash: expectedArtifactHash, sourceKey: admitted.sourceKey }, async (lease, runId) => {
-      const completed = await inspectAttempt(runId, lease);
+      const completed = await inspectAttempt(runId, lease, lease);
       if (!completed) throw new Error('Project check execution produced no suite.');
       return completed;
-    }, runId => inspectAttempt(runId));
+    }, (runId, stages) => inspectAttempt(runId, stages));
     return respond(run);
   } catch (error) { return projectCheckRunError(res, error); }
 }
@@ -14675,6 +14679,33 @@ function requestDeployOperation(req: express.Request) {
   return deployReceiptIdentity({ kind: 'agent', id: actor.keyId }, { workspaceId: requestWorkspace(req).workspaceId, operationId });
 }
 
+function openDeploymentProjectCheckStaging(input: {
+  plan: ArtifactPlan; body: Record<string, unknown>; principal: ReturnType<typeof deploymentPrincipal>;
+  workspaceId?: string; addressedSourceRoot?: string; sourceRoot: string; modId: string;
+  workspaceRoot?: string; gameRoot: string;
+}, lease?: ProjectCheckSourceLease): Readonly<ProjectCheckStageContext> | undefined {
+  const { plan, body, principal, workspaceId, addressedSourceRoot, sourceRoot, modId, workspaceRoot, gameRoot } = input;
+  const suiteId = body.projectCheckSuiteReceiptId;
+  if (suiteId === undefined && !plan.entries.some(entry => entry.path.toLowerCase() === PROJECT_CHECKS_PATH)) return;
+  const refuse = () => Object.assign(new Error(suiteId === undefined
+    ? 'Required project checks need an addressed Dev source and an approved asynchronous verification result.'
+    : 'The exact approved check suite could not be verified for this addressed source and artifact.'),
+  { code: suiteId === undefined ? 'ASYNC_VERIFICATION_REQUIRED' : 'PROJECT_CHECK_PROOF_MISMATCH' });
+  if (!lease || principal.kind !== 'agent' || !workspaceId || !addressedSourceRoot || !workspaceRoot || !sourceRoot || !plan.sourceRoot
+    || body.autoReimport === true || body.allowStaleOverwrite === true || canonicalSourceKey(sourceRoot) !== canonicalSourceKey(plan.sourceRoot)
+    || (suiteId !== undefined && typeof suiteId !== 'string')
+    || (body.expectedProjectCheckSuiteReceiptHash !== undefined && typeof body.expectedProjectCheckSuiteReceiptHash !== 'string')
+    || (suiteId === undefined && body.expectedProjectCheckSuiteReceiptHash !== undefined)) throw refuse();
+  const scope = { store: actionReceiptStore, actorId: principal.id, workspaceId, modId, sourceRoot: plan.sourceRoot,
+    addressedSourceRoot, workspaceRoot, filesystemRoot: resolveXsdConfig().filesystemPath,
+    targetRoot: path.join(gameRoot, 'extensions', modId), stagingRoot: path.join(workspaceRoot, '.forge-builds', 'loose') };
+  try {
+    return openNativeProjectCheckStaging(scope, lease, suiteId === undefined ? undefined : { receiptId: suiteId as string,
+      expectedHash: body.expectedProjectCheckSuiteReceiptHash as string | undefined,
+      artifactHash: artifactPlanIdentity(plan, body.deployFormat === 'catalog' ? 'catalog' : 'loose') });
+  } catch { throw refuse(); }
+}
+
 function deployVerifyHandler(req: express.Request, res: express.Response, lease?: ProjectCheckSourceLease) {
   type TimingStage = 'setup' | 'import' | 'compile' | 'snapshot' | 'validate' | 'sourceRecheck'
     | 'prepare' | 'write' | 'verify' | 'doctor' | 'finalize' | 'recovery';
@@ -14713,6 +14744,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
   const targetWrite: { state: 'untouched' | 'mutated' | 'activated' | 'restored' } = { state: 'untouched' };
   let outputUnconfirmed = false;
   let snapshot: DeploymentSnapshot | undefined;
+  let projectCheckStaging: Readonly<ProjectCheckStageContext> | undefined;
   let nativeCheckProof: ReturnType<typeof openNativeProjectCheckProof> | undefined;
   let deployReceipt: ActionReceipt | undefined;
   const recordFailedDeploy = (rolledBack: boolean, targetConflict = false) => {
@@ -14991,7 +15023,16 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       return res.status(409).json(failWith('preflight', { code: 'PROJECT_CHECK_SOURCE_MISMATCH', error: detail }));
     }
     startStage('snapshot');
-    snapshot = captureDeploymentSnapshot(sourcePlan, deployFormat);
+    try {
+      projectCheckStaging = openDeploymentProjectCheckStaging({ plan: sourcePlan, body: { ...body, deployFormat }, principal,
+        workspaceId: addressedWorkspaceId, addressedSourceRoot: addressedBuild?.sourceStamp?.dir, sourceRoot: modSourceDir,
+        modId, workspaceRoot: modWorkspacePath, gameRoot: x4GamePath }, lease);
+    } catch (error) {
+      const refusal = error as Error & { code?: string };
+      check('preflight', 'Required project checks', 'fail', refusal.message);
+      return res.status(409).json(failWith('preflight', { code: refusal.code || 'PROJECT_CHECK_PROOF_MISMATCH', error: refusal.message }));
+    }
+    snapshot = captureDeploymentSnapshot(sourcePlan, deployFormat, projectCheckStaging);
     const frozenPlan = snapshot.plan;
     const files = Object.fromEntries(snapshot.files.map(file => [file.path, file.content || '']));
     const corpusPaths = sourcePlan.entries.map(entry => entry.path);
@@ -15093,7 +15134,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
           error: 'A project-check apply requires an addressed x-forge-operation-id.' }));
       }
       if (!projectChecks || principal.kind !== 'agent' || !addressedWorkspaceId || !addressedSourceRoot
-        || !lease || !modSourceDir || !sourcePlan.sourceRoot || !modWorkspacePath
+        || !lease || !modSourceDir || !sourcePlan.sourceRoot || !modWorkspacePath || !projectCheckStaging
         || body.autoReimport === true || body.allowStaleOverwrite === true
         || canonicalSourceKey(modSourceDir) !== canonicalSourceKey(sourcePlan.sourceRoot)) return proofRefusal();
       try {
@@ -15102,7 +15143,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
         nativeCheckProof = openNativeProjectCheckProof({ store: actionReceiptStore, receiptId: suiteId,
           actorId: principal.id, workspaceId: addressedWorkspaceId, modId, sourceRoot: sourcePlan.sourceRoot, addressedSourceRoot,
           workspaceRoot: modWorkspacePath, filesystemRoot: resolveXsdConfig().filesystemPath, targetRoot,
-          stagingRoot: path.join(modWorkspacePath, '.forge-builds', 'loose'), snapshot });
+          stagingRoot: path.join(modWorkspacePath, '.forge-builds', 'loose'), snapshot, stageContext: projectCheckStaging });
         if ((body.dryRun !== true || body.expectedProjectCheckSuiteReceiptHash !== undefined)
           && body.expectedProjectCheckSuiteReceiptHash !== nativeCheckProof.proof.hash) return proofRefusal();
         responseIdentity = { ...responseIdentity, projectCheckSuite: nativeCheckProof.proof };
