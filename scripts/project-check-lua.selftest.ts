@@ -10,6 +10,7 @@ import { captureDeploymentSnapshot } from '../src/server/deploymentSnapshot';
 import { ProjectCheckApprovalLedger, type OwnerDecision } from '../src/server/projectCheckApproval';
 import { bindProjectCheckCommand } from '../src/server/projectCheckCommand';
 import { executeProjectCheck } from '../src/server/projectCheckExecution';
+import { readProjectCheckWorkerEvidence } from '../src/server/projectCheckSuite';
 import { isProjectCheckRelativeFile } from '../src/server/projectCheckProposal';
 import { captureProjectCheckSetup, freezeProjectCheckSetup } from '../src/server/projectCheckSetup';
 import { canonicalSourceKey } from '../src/server/resourceCoordinator';
@@ -259,7 +260,11 @@ try {
       commandHash: command.commandHash, artifactHash: command.binding.artifactHash },
       summaryUtf8: receipt.validation.summary ?? null };
     report.lastTerminalReceipt = observation;
-    try { observation.summary = JSON.parse(receipt.validation.summary ?? '{}'); }
+    try {
+      const decoded = readProjectCheckWorkerEvidence(receipt);
+      observation.summary = decoded.evidence;
+      if (decoded.message !== undefined) observation.message = decoded.message;
+    }
     catch (error) { observation.summaryError = String(error); }
     try { observation.canonicalReceipt = new ActionReceiptStore({ root: store.root }).read(receipt.id); }
     catch (error) { observation.canonicalReceiptError = String(error); }
@@ -296,7 +301,7 @@ try {
     assert.equal(receipt.authority.scope, 'workspace');
     if (receipt.authority.scope === 'workspace') assert.equal(receipt.authority.workspaceId, workspaceId);
     assert.deepEqual(new ActionReceiptStore({ root: store.root }).read(receipt.id), receipt);
-    return JSON.parse(receipt.validation.summary ?? '{}') as { status: string; exitCode: number; outputBytes: number; outputTailSha256: string; durationMs: number };
+    return readProjectCheckWorkerEvidence(receipt).evidence;
   };
   const readMetadata = (summary: ReturnType<typeof readTerminal>) => {
     const entry = fs.lstatSync(metadataPath);

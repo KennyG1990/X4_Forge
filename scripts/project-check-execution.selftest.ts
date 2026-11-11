@@ -5,13 +5,13 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ActionReceiptValidationError, type ActionReceipt } from '../src/lib/actionReceipt';
+import { ActionReceiptValidationError, canonicalJson, type ActionReceipt } from '../src/lib/actionReceipt';
 import { ActionReceiptStore } from '../src/lib/actionReceiptStore';
 import { buildArtifactPlan } from '../src/lib/artifactPipeline';
 import { captureDeploymentSnapshot } from '../src/server/deploymentSnapshot';
 import { ProjectCheckApprovalLedger } from '../src/server/projectCheckApproval';
 import { bindProjectCheckCommand } from '../src/server/projectCheckCommand';
-import { executeProjectCheck, projectCheckFailureMessage } from '../src/server/projectCheckExecution';
+import { executeProjectCheck, isProjectCheckSuccessExcerpt, projectCheckFailureMessage, projectCheckSuccessSummary } from '../src/server/projectCheckExecution';
 import { captureProjectCheckSetup, freezeProjectCheckSetup } from '../src/server/projectCheckSetup';
 import { canonicalSourceKey } from '../src/server/resourceCoordinator';
 import { SharedSourceCoordinator, SOURCE_COORDINATION_FILENAME, type ProjectCheckSourceLease } from '../src/server/sharedSourceCoordinator';
@@ -129,7 +129,7 @@ if mode == 'wait':
         record.write('released')
 sys.stdout.reconfigure(newline='\n')
 print('fixture-private-command-output')
-if mode == 'nonzero':
+if mode in ('nonzero', 'pass-secret'):
     print('token=fixture-sensitive-secret')
     print(os.getcwd())
 sys.exit(7 if mode == 'nonzero' else 0)
@@ -166,7 +166,7 @@ const checks: string[] = [];
 const record = (name: string) => { checks.push(name); console.log(`PASS ${name}`); };
 let finalFootprint: ReturnType<typeof footprint> | undefined;
 
-function createFixture(name: string, mode: 'pass' | 'nonzero' | 'wait', interpreter: ReturnType<typeof createPortableRuntime>,
+function createFixture(name: string, mode: 'pass' | 'pass-secret' | 'nonzero' | 'wait', interpreter: ReturnType<typeof createPortableRuntime>,
   timeoutSeconds = 10, extraArgs: string[] = []) {
   footprint();
   const directory = path.join(root, name);
@@ -250,10 +250,13 @@ function assertDurable(fixture: ReturnType<typeof createFixture>, receipt: Actio
   assert.equal(reopened.actor.id, actorId);
   assert.deepEqual(reopened.effects.declared.map(effect => [effect.operation, effect.reversible]), [['execute', false]]);
   const encoded = JSON.stringify(reopened);
-  const withoutExcerpt = JSON.stringify({ ...reopened, failure: reopened.failure && { ...reopened.failure, message: undefined } });
-  assert(!withoutExcerpt.includes(outputText), 'Raw command output escaped the bounded failure excerpt.');
+  const summary = JSON.parse(reopened.validation.summary ?? '{}');
+  const { m: excerpt, ...facts } = summary;
+  const withoutExcerpt = JSON.stringify({ ...reopened, validation: { ...reopened.validation, summary: canonicalJson(facts) },
+    failure: reopened.failure && { ...reopened.failure, message: undefined } });
+  assert(!withoutExcerpt.includes(outputText), 'Raw command output escaped the bounded diagnostic excerpt.');
   assert(!encoded.includes('fixture-sensitive-secret'), 'A policy-covered output secret was persisted.');
-  if (reopened.status === 'committed') assert(!encoded.includes(outputText), 'Successful command output was persisted.');
+  if (excerpt !== undefined) assert(isProjectCheckSuccessExcerpt(excerpt) && reopened.status === 'committed');
   for (const privatePath of [root, fixture.frozen.root, fixture.snapshot.payloadRoot, pythonPath]) {
     assert(!encoded.includes(JSON.stringify(privatePath).slice(1, -1)), 'An absolute fixture path was persisted.');
   }
@@ -261,7 +264,8 @@ function assertDurable(fixture: ReturnType<typeof createFixture>, receipt: Actio
 }
 
 function assertOutput(receipt: ActionReceipt, status: 'passed' | 'failed', exitCode: number, additionalOutput = '') {
-  const summary = JSON.parse(receipt.validation.summary ?? '');
+  const raw = JSON.parse(receipt.validation.summary ?? '');
+  const summary = raw.v === 2 ? { status: raw.s, exitCode: raw.e, outputBytes: raw.b, outputTailSha256: raw.h, durationMs: raw.d } : raw;
   const output = outputText + '\n' + additionalOutput;
   assert.equal(summary.status, status);
   assert.equal(summary.exitCode, exitCode);
@@ -370,6 +374,21 @@ try {
   assert(long && long.length === 512 && long.endsWith('useful final assertion'));
   assert([...long].every(character => character.charCodeAt(0) >= 0x20 && character !== '\u007f'));
   record('failure excerpts are bounded, control-free and redact paths/credentials before clipping');
+  const facts = { status: 'passed' as const, exitCode: 0, durationMs: 300_000, outputBytes: 1024 * 1024, outputTailSha256: 'a'.repeat(64) };
+  for (const output of ['ok', '"'.repeat(900) + ' final-assertion', 'a\\b'.repeat(300) + ' final-assertion',
+    '😀'.repeat(400) + ' final-assertion', 'prefix token=' + 's'.repeat(1000) + ' final-assertion']) {
+    const summary = projectCheckSuccessSummary(facts, excerpt(output));
+    const parsed = JSON.parse(summary);
+    assert(summary.length <= 256 && parsed.v === 2 && isProjectCheckSuccessExcerpt(parsed.m));
+    assert.equal(parsed.h, facts.outputTailSha256); assert.equal(parsed.b, facts.outputBytes);
+    assert(!summary.includes('ssss'));
+    assert(parsed.m.endsWith(output === 'ok' ? 'ok' : 'final-assertion'));
+  }
+  for (const message of [undefined, '', 'Check output (excerpt): token=unsafe-secret', 'Check output (excerpt): unsafe\u202econtrol']) {
+    assert.equal(projectCheckSuccessSummary(facts, message), canonicalJson(facts));
+  }
+  assert.equal(projectCheckSuccessSummary({ ...facts, outputBytes: 0 }, excerpt('ok')), canonicalJson({ ...facts, outputBytes: 0 }));
+  record('success excerpts fit canonical256, preserve128-character Unicode tails and redact before clipping; unsafe or empty text stays hash-only');
   const interpreter = createPortableRuntime();
   const trusted = pin(workerPath);
 
@@ -405,6 +424,7 @@ try {
   const success = assertDurable(pass, await pass.execute(trusted), 'committed', 'PROJECT_CHECK_PASSED');
   assert.equal(success.validation.status, 'passed');
   assertOutput(success, 'passed', 0);
+  assert.match(JSON.parse(success.validation.summary ?? '').m ?? '', /Check output \(excerpt\): fixture-private-command-output/);
   assert.equal(fs.readFileSync(pass.marker, 'ascii'), 'started\n');
   record('approved frozen command reads the exact artifact and commits a reopened passing receipt');
 
@@ -414,6 +434,36 @@ try {
   assert.equal(pass.store.listVerified().length, 2, 'A duplicate must not create another receipt.');
   record('duplicate command receipt identity refuses a second launch');
   pass.retire();
+
+  const secretPass = createFixture('pass-secret', 'pass-secret', interpreter);
+  const secretSuccess = assertDurable(secretPass, await secretPass.execute(trusted), 'committed', 'PROJECT_CHECK_PASSED');
+  const successMessage = JSON.parse(secretSuccess.validation.summary!).m as string;
+  assert(successMessage.includes('[redacted-secret]') && successMessage.includes('[private-path]'));
+  assertOutput(secretSuccess, 'passed', 0, `token=fixture-sensitive-secret\n${secretPass.frozen.projectRoot}\n`);
+  record('passing real Windows output retains a useful redacted tail with exact raw hashes and a reopened ordinary receipt');
+  secretPass.retire();
+
+  const refusedSuccess = createFixture('refused-success-excerpt', 'pass', interpreter);
+  const persistSuccess = refusedSuccess.store.commit.bind(refusedSuccess.store); let rejectedSuccess = 0;
+  refusedSuccess.store.commit = (id, input) => {
+    if (JSON.parse(input.validation!.summary!).v === 2) {
+      rejectedSuccess++; throw new ActionReceiptValidationError('validation.summary diagnostic format was refused.');
+    }
+    return persistSuccess(id, input);
+  };
+  const successFallback = assertDurable(refusedSuccess, await refusedSuccess.execute(trusted), 'committed', 'PROJECT_CHECK_PASSED');
+  assert.equal(rejectedSuccess, 1); assert.equal(JSON.parse(successFallback.validation.summary!).m, undefined);
+  assertOutput(successFallback, 'passed', 0);
+  record('success presentation-shape refusal retains the known passing raw facts without inventing an excerpt');
+  refusedSuccess.retire();
+
+  const successStorage = createFixture('success-storage-fault', 'pass', interpreter); let successWrites = 0;
+  successStorage.store.commit = () => { successWrites++; throw new Error('fixture success storage failure'); };
+  await assert.rejects(successStorage.execute(trusted), /fixture success storage failure/);
+  assert.equal(successWrites, 1);
+  assert.equal(successStorage.store.listVerified().filter(r => r.status === 'prepared').length, 1);
+  record('success storage failure is attempted once, leaves prepared evidence and never reports a durable pass');
+  successStorage.retire();
 
   const cached = createFixture('poisoned-cache', 'pass', interpreter);
   const cacheResult = await cached.execute(runtimeWithPoisonedCache(cached.directory));

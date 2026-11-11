@@ -8,6 +8,12 @@ import type { ProjectCheckSourceLease } from './sharedSourceCoordinator';
 
 const CAPABILITY = 'project-check.command';
 const VERSION = '1';
+const OUTPUT_PREFIX = 'Check output (excerpt): ';
+export const PROJECT_CHECK_SUCCESS_EXCERPT_LIMIT = 128;
+export type ProjectCheckWorkerEvidence = Pick<ProjectCheckWorkerResult, 'status' | 'exitCode' | 'outputBytes'> & {
+  durationMs: number;
+  outputTailSha256: string;
+};
 const failureCodes = {
   failed: 'PROJECT_CHECK_EXIT_NONZERO',
   'timed-out': 'PROJECT_CHECK_TIMED_OUT',
@@ -30,7 +36,7 @@ function digest(value: unknown): string {
 }
 
 /** Diagnostic only: the exact worker-output hash remains in validation.summary. */
-export function projectCheckFailureMessage(result: Pick<ProjectCheckWorkerResult, 'outputTailBase64'>,
+export function projectCheckOutputExcerpt(result: Pick<ProjectCheckWorkerResult, 'outputTailBase64'>,
   privatePaths: readonly string[]): string | undefined {
   try {
     // The trusted worker has already bounded and checked this retained byte tail.
@@ -50,12 +56,47 @@ export function projectCheckFailureMessage(result: Pick<ProjectCheckWorkerResult
       .replace(/(?:[a-z]:[\\/]|\\\\)[^\s"'<>|]*/gi, '[private-path]')
       .replace(/\s+/g, ' ').trim();
     if (!text) return;
-    const prefix = 'Check output (excerpt): ';
-    return prefix + (text.length <= 512 - prefix.length ? text : `…${text.slice(-(511 - prefix.length))}`);
+    const tail = text.slice(-(511 - OUTPUT_PREFIX.length));
+    // Do not split the leading UTF-16 surrogate pair at the retained window.
+    const safeTail = /^[\udc00-\udfff]/u.test(tail) ? tail.slice(1) : tail;
+    return OUTPUT_PREFIX + (text.length <= 512 - OUTPUT_PREFIX.length ? text : `…${safeTail}`);
   } catch {
     // Presentation failure must not discard the confirmed terminal worker result.
     return;
   }
+}
+
+/** Keep the previous internal helper name compatible for failure-only callers. */
+export const projectCheckFailureMessage = projectCheckOutputExcerpt;
+
+function isProjectCheckOutputExcerpt(value: unknown, limit: number): value is string {
+  return typeof value === 'string' && value.startsWith(OUTPUT_PREFIX) && value.length > OUTPUT_PREFIX.length
+    && value.length <= limit && value.trim() === value
+    // eslint-disable-next-line no-control-regex -- Escaped JSON controls must not become report text after decoding.
+    && !/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u.test(value)
+    && value.replace(/\s+/gu, ' ') === value && Buffer.from(value, 'utf8').toString('utf8') === value
+    && redactReceiptText(value) === value;
+}
+
+export function isProjectCheckSuccessExcerpt(value: unknown): value is string {
+  return isProjectCheckOutputExcerpt(value, PROJECT_CHECK_SUCCESS_EXCERPT_LIMIT);
+}
+
+/** Fit a diagnostic into the existing 256-character receipt summary; raw facts stay separate. */
+export function projectCheckSuccessSummary(evidence: ProjectCheckWorkerEvidence, excerpt?: string): string {
+  const legacy = canonicalJson(evidence);
+  if (evidence.status !== 'passed' || evidence.exitCode !== 0 || evidence.outputBytes < 1
+    || !isProjectCheckOutputExcerpt(excerpt, 512)) return legacy;
+  const characters = Array.from(excerpt.slice(OUTPUT_PREFIX.length));
+  let clipped = false;
+  while (characters.length) {
+    const message = OUTPUT_PREFIX + (clipped ? '…' : '') + characters.join('');
+    const summary = canonicalJson({ v: 2, s: evidence.status, e: evidence.exitCode, d: evidence.durationMs,
+      b: evidence.outputBytes, h: evidence.outputTailSha256, m: message });
+    if (isProjectCheckSuccessExcerpt(message) && summary.length <= 256 && redactReceiptText(summary) === summary) return summary;
+    characters.shift(); clipped = true;
+  }
+  return legacy;
 }
 
 export function projectCheckCommandReceiptInput(
@@ -135,13 +176,12 @@ export async function executeProjectCheck(input: ProjectCheckExecutionInput): Pr
       failure: { code, message: 'The reviewed setup, approval or frozen artifact changed during execution.' },
     });
   }
+  const command = bound.binding.command;
+  const message = projectCheckOutputExcerpt(result, [command.cwd, command.executable, path.dirname(command.executable),
+    command.environment.FORGE_ARTIFACT_ROOT, runtime.pythonPath, runtime.workerPath,
+    path.dirname(runtime.pythonPath), path.dirname(runtime.workerPath), bound.sourceKey.slice('source:'.length)]);
   if (result.status !== 'passed') {
     const code = failureCodes[result.status];
-    const command = bound.binding.command;
-    const message = projectCheckFailureMessage(result, [command.cwd, command.executable, path.dirname(command.executable),
-      command.environment.FORGE_ARTIFACT_ROOT, runtime.pythonPath, runtime.workerPath,
-      path.dirname(runtime.pythonPath), path.dirname(runtime.workerPath),
-      bound.sourceKey.slice('source:'.length)]);
     const validation = { ...validator, status: 'failed', code, summary } as const;
     try {
       return store.fail(receipt.id, { validation, failure: { code, ...(message ? { message } : {}) } });
@@ -153,8 +193,16 @@ export async function executeProjectCheck(input: ProjectCheckExecutionInput): Pr
         failure: { code, message: 'Check failed; its diagnostic excerpt was unavailable.' } });
     }
   }
-  return store.commit(receipt.id, {
+  const passedSummary = projectCheckSuccessSummary(evidence, message);
+  const commit = (summary: string) => store.commit(receipt.id, {
     validation: { ...validator, status: 'passed', code: 'PROJECT_CHECK_PASSED', summary },
     after: { outcome: 'applied', resources: [{ ...target, hash: digest({ requestHash, evidence }) }] },
   });
+  try { return commit(passedSummary); }
+  catch (error) {
+    if (passedSummary === summary || !(error instanceof ActionReceiptValidationError) || error.errors.length !== 1
+      || !error.errors[0].startsWith('validation.summary ')) throw error;
+    // Only pre-persistence presentation refusal falls back; storage errors never retry.
+    return commit(summary);
+  }
 }

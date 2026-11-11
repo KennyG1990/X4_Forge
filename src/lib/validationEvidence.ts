@@ -36,6 +36,8 @@ export interface ProjectCheckVerification {
     durationMs: number;
     outputBytes: number;
     outputTailSha256: string;
+    /** Optional redacted diagnostic tail; never execution or coverage authority. */
+    message?: string;
     coveredFiles: readonly { path: string; size: number; sha256: string }[];
     /** Exact optional check claims reopened from the owner-approved binding. */
     coveredChecks?: readonly string[];

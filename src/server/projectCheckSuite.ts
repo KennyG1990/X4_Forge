@@ -6,7 +6,7 @@ import { actionReceiptIdFor, actionReceiptIdForOperation, canonicalJson, hashAct
 import type { ActionReceiptStore } from '../lib/actionReceiptStore';
 import type { ProjectCheckVerification } from '../lib/validationEvidence';
 import { bindProjectCheckCommands } from './projectCheckCommand';
-import { executeProjectCheck, projectCheckCommandReceiptInput } from './projectCheckExecution';
+import { executeProjectCheck, isProjectCheckSuccessExcerpt, projectCheckCommandReceiptInput, type ProjectCheckWorkerEvidence } from './projectCheckExecution';
 import { PROJECT_CHECK_WORKER_GRACE_MS, type ProjectCheckWorkerResult, type TrustedProjectCheckWorker } from './projectCheckWorker';
 import { PROJECT_CHECK_MAX_PARALLEL, type ProjectCheckSourceLease } from './sharedSourceCoordinator';
 
@@ -46,10 +46,7 @@ type ProjectCheckSuiteInput = Parameters<typeof bindProjectCheckCommands>[0] & {
 };
 type CommandLink = { id: string; authorityHash: string };
 type SuitePlan = ReturnType<typeof buildSuitePlan>;
-type WorkerEvidence = Pick<ProjectCheckWorkerResult, 'status' | 'exitCode' | 'outputBytes'> & {
-  durationMs: number;
-  outputTailSha256: string;
-};
+type WorkerEvidence = ProjectCheckWorkerEvidence;
 type CommandReport = {
   id: string;
   state: 'passed' | 'failed' | 'incomplete';
@@ -88,9 +85,16 @@ function parseSummary(value: string | undefined) {
   return summary;
 }
 
-function readWorkerEvidence(child: ActionReceipt, maxOutputBytes = MAX_COMMAND_OUTPUT_BYTES,
-  maxDurationMs = MAX_COMMAND_DURATION_MS): WorkerEvidence {
-  const evidence = parseSummary(child.validation.summary);
+/** Reopen normalized worker facts; the optional diagnostic grants no authority. */
+export function readProjectCheckWorkerEvidence(child: ActionReceipt, maxOutputBytes = MAX_COMMAND_OUTPUT_BYTES,
+  maxDurationMs = MAX_COMMAND_DURATION_MS): { evidence: WorkerEvidence; message?: string } {
+  const summary = parseSummary(child.validation.summary);
+  const compact = Object.hasOwn(summary, 'v');
+  if (compact && (child.status !== 'committed' || summary.v !== 2 || Object.keys(summary).sort().join(',') !== 'b,d,e,h,m,s,v'
+    || summary.s !== 'passed' || typeof summary.b !== 'number' || summary.b < 1
+    || !isProjectCheckSuccessExcerpt(summary.m))) throw mismatch();
+  const evidence = compact ? { status: summary.s, exitCode: summary.e, durationMs: summary.d,
+    outputBytes: summary.b, outputTailSha256: summary.h } : summary;
   const { status, exitCode, durationMs, outputBytes, outputTailSha256 } = evidence;
   if (Object.keys(evidence).length !== 5 || typeof status !== 'string' || !Object.hasOwn(workerCodes, status)
     || typeof outputBytes !== 'number' || !Number.isSafeInteger(outputBytes) || outputBytes < 0
@@ -100,7 +104,8 @@ function readWorkerEvidence(child: ActionReceipt, maxOutputBytes = MAX_COMMAND_O
   if (status === 'passed' ? exitCode !== 0 : status === 'failed'
     ? typeof exitCode !== 'number' || !Number.isSafeInteger(exitCode) || exitCode < 1 || exitCode > 0xffffffff
     : exitCode !== null) throw mismatch();
-  return { status: status as WorkerEvidence['status'], exitCode: exitCode as number | null, durationMs, outputBytes, outputTailSha256 };
+  return { evidence: { status: status as WorkerEvidence['status'], exitCode: exitCode as number | null, durationMs, outputBytes, outputTailSha256 },
+    ...(compact ? { message: summary.m as string } : {}) };
 }
 
 function buildSuitePlan(input: ProjectCheckSuiteInput) {
@@ -191,7 +196,7 @@ function readPassingChild(plan: SuitePlan, command: SuitePlan['commands'][number
     || child.validation.code !== 'PROJECT_CHECK_PASSED' || !child.validation.ruleHash
     || child.after?.outcome !== 'applied') throw mismatch();
   const commandLimits = command.bound.binding.command;
-  const evidence = readWorkerEvidence(child, commandLimits.maxOutputBytes,
+  const { evidence, message } = readProjectCheckWorkerEvidence(child, commandLimits.maxOutputBytes,
     commandLimits.timeoutSeconds * 1000 + PROJECT_CHECK_WORKER_GRACE_MS);
   if (evidence.status !== 'passed'
     || child.after.resources[0]?.hash !== digest({ requestHash: child.input.requestHash, evidence })) throw mismatch();
@@ -200,6 +205,7 @@ function readPassingChild(plan: SuitePlan, command: SuitePlan['commands'][number
     id: binding.command.checkId, receiptId: child.id, receiptHash: child.hash,
     durationMs: evidence.durationMs, outputBytes: evidence.outputBytes, outputTailSha256: evidence.outputTailSha256,
     coveredFiles: binding.coveredFiles,
+    ...(message === undefined ? {} : { message }),
     ...(binding.coveredChecks === undefined ? {} : { coveredChecks: binding.coveredChecks }),
   };
   return { child, check };
@@ -235,11 +241,12 @@ function readReportChild(store: ActionReceiptStore, suite: ActionReceipt, runId:
       || child.after?.resources[0]?.hash !== digest({ requestHash, code })) throw mismatch();
     return { child, report: { ...report, state: 'incomplete', code } satisfies CommandReport };
   }
-  const worker = readWorkerEvidence(child);
+  const { evidence: worker, message } = readProjectCheckWorkerEvidence(child);
   if (child.status === 'committed') {
     if (code !== workerCodes.passed || worker.status !== 'passed' || child.after?.outcome !== 'applied'
       || child.after.resources[0]?.hash !== digest({ requestHash, evidence: worker })) throw mismatch();
-    return { child, report: { ...report, state: 'passed', code, worker } satisfies CommandReport };
+    return { child, report: { ...report, state: 'passed', code, worker,
+      ...(message === undefined ? {} : { message }) } satisfies CommandReport };
   }
   if (child.status !== 'failed' || !code || child.failure?.code !== code
     || (code !== 'PROJECT_CHECK_BINDING_CHANGED' && (worker.status === 'passed' || code !== workerCodes[worker.status]))) throw mismatch();

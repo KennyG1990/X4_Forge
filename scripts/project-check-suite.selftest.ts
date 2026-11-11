@@ -18,7 +18,7 @@ import { ProjectCheckApprovalLedger, projectCheckApprovalCoordinationKey } from 
 import { loadNativeProjectCheckAuthority, openNativeProjectCheckProof, openNativeProjectCheckStaging, type NativeProofScope } from '../src/server/projectCheckNativeProof';
 import { PROJECT_CHECKS_MAX_BYTES, PROJECT_CHECKS_PATH } from '../src/server/projectCheckProposal';
 import { captureProjectCheckSetup, freezeProjectCheckSetup } from '../src/server/projectCheckSetup';
-import { executeProjectCheckSuite, projectCheckSuiteReceiptId, readProjectCheckSuiteReport, readTerminalProjectCheckSuite,
+import { executeProjectCheckSuite, projectCheckSuiteReceiptId, readProjectCheckSuiteReport, readProjectCheckWorkerEvidence, readTerminalProjectCheckSuite,
   requirePassedProjectCheckSuite } from '../src/server/projectCheckSuite';
 import { ProjectCheckRunRefusal, ProjectCheckRunService } from '../src/server/projectCheckRunService';
 import { canonicalSourceKey } from '../src/server/resourceCoordinator';
@@ -80,7 +80,7 @@ with open(marker, 'a', encoding='ascii', newline='\n') as record:
 if mode in ('wait', 'wait-nonzero'):
     while not os.path.exists(release):
         time.sleep(0.02)
-if mode != 'nonzero-empty':
+if mode not in ('nonzero-empty', 'pass-empty'):
     print(name)
 sys.exit(7 if mode in ('nonzero', 'nonzero-empty', 'wait-nonzero') else 0)
 `;
@@ -132,7 +132,7 @@ function meterFixture() {
   peakFootprint.entries = Math.max(peakFootprint.entries, entries);
 }
 
-type Mode = 'wait' | 'wait-nonzero' | 'nonzero' | 'nonzero-empty' | 'pass';
+type Mode = 'wait' | 'wait-nonzero' | 'nonzero' | 'nonzero-empty' | 'pass' | 'pass-empty';
 function fixture(name: string, declarations: ReadonlyArray<readonly [string, Mode, number?]>, interpreter: ReturnType<typeof stageInterpreter>,
   maxParallelChecks?: number, coversChecks?: string[]) {
   const directory = path.join(root, name);
@@ -425,6 +425,7 @@ async function nativeStagingAdapters(f: ReturnType<typeof fixture>) {
     assert.equal(executeCalls, 0); assert(fs.existsSync(orphanRoot));
     const admitted = response(); await handlers.startProjectCheckRun(request('native-pass'), admitted); assert.equal(admitted.code, 202);
     const passed = await terminal(service, (admitted.body as RunStatus).id); assert.equal(passed.state, 'passed'); assert(passed.suiteReceipt);
+    assert.equal(passed.suiteReport?.checks[0].message, 'Check output (excerpt): probe');
     assert.equal(executeCalls, 1); assert.equal(ownedSnapshots, 1); assert.equal(ownedFreezes, 1);
     assert.equal(fs.existsSync(orphanRoot), false); assert.equal(f.coordinator.projectCheckStages().length, 0);
     const retry = response(); await handlers.startProjectCheckRun(request('native-pass'), retry);
@@ -464,6 +465,7 @@ async function nativeStagingAdapters(f: ReturnType<typeof fixture>) {
       finally { fs.writeFileSync(authorityFile, originalAuthority); }
       assert.equal(f.coordinator.projectCheckStages().length, 1);
       const proof = openNativeProjectCheckProof({ ...scope, receiptId: selected.receiptId, snapshot, stageContext: context });
+      assert.equal(proof.verification.checks[0].message, 'Check output (excerpt): probe');
       proof.verify(); assert.equal(f.coordinator.projectCheckStages().length, 2); meterFixture(); proof.dispose(); snapshot.dispose();
       assert.equal(f.coordinator.projectCheckStages().length, 0);
       const legacy = captureDeploymentSnapshot(plan, 'loose');
@@ -640,8 +642,44 @@ try {
   assert.equal(passedReport.state, 'passed');
   assert.equal(passedReport.notRunCount, 0);
   assert.deepEqual(passedReport.checks.map(check => check.id).sort(), ['alpha', 'omega']);
-  assert(passedReport.checks.every(check => check.message === undefined));
+  assert(passedReport.checks.every(check => check.message === `Check output (excerpt): ${check.id}`));
+  assert(verified.verification.checks.every(check => check.message === `Check output (excerpt): ${check.id}`));
+  assert.deepEqual(JSON.parse(JSON.stringify(readProjectCheckSuiteReport(new ActionReceiptStore({ root: reopened.root }), receipt))), passedReport);
   record('the exact parent and both command receipts reopen against independently frozen identical inputs');
+
+  const authenticChild = verified.commandReceipts[0];
+  const compactSummary = JSON.parse(authenticChild.validation.summary!);
+  const missingMessage = { ...compactSummary }; delete missingMessage.m;
+  const normalized = readProjectCheckWorkerEvidence(authenticChild);
+  const changedSummary = (summary: unknown, status = authenticChild.status) => ({ ...authenticChild, status,
+    validation: { ...authenticChild.validation, summary: canonicalJson(summary) } });
+  const invalidSummaries = [
+    { ...compactSummary, v: 3 }, { ...compactSummary, extra: true }, missingMessage,
+    { ...compactSummary, s: 'failed' }, { ...compactSummary, e: 7 }, { ...compactSummary, b: 0 },
+    { ...compactSummary, b: 1024 * 1024 + 1 }, { ...compactSummary, d: -1 }, { ...compactSummary, h: 'bad' },
+    { ...compactSummary, m: 'no output label' }, { ...compactSummary, m: 'Check output (excerpt): ' + 'x'.repeat(128) },
+    { ...compactSummary, m: 'Check output (excerpt): token=unsafe-secret' },
+    { ...compactSummary, m: 'Check output (excerpt): escaped\u0000control' },
+    { ...compactSummary, m: 'Check output (excerpt): hidden\u202econtrol' },
+    { ...compactSummary, m: 'Check output (excerpt): bad\udc00surrogate' },
+  ];
+  for (const summary of invalidSummaries) assert.throws(() => readProjectCheckWorkerEvidence(changedSummary(summary)), { code: 'PROJECT_CHECK_SUITE_MISMATCH' });
+  assert.throws(() => readProjectCheckWorkerEvidence(changedSummary(compactSummary, 'failed')), { code: 'PROJECT_CHECK_SUITE_MISMATCH' });
+  const legacyDecoded = readProjectCheckWorkerEvidence(changedSummary(normalized.evidence));
+  assert.deepEqual(legacyDecoded.evidence, normalized.evidence); assert.equal(legacyDecoded.message, undefined);
+  assert.throws(() => readProjectCheckWorkerEvidence(changedSummary({ ...normalized.evidence, m: compactSummary.m })), { code: 'PROJECT_CHECK_SUITE_MISMATCH' });
+  record('versioned success diagnostics normalize exact raw facts and reject unknown, forged, unsafe or failed-message shapes while legacy five-field evidence stays readable');
+
+  const emptyPass = fixture('empty-success', [['alpha', 'pass-empty']], interpreter);
+  const emptyPassedSuite = await emptyPass.execute();
+  const emptyPassedProof = await requirePassedProjectCheckSuite(emptyPass.exact, emptyPassedSuite.id);
+  const emptyPassedReport = readProjectCheckSuiteReport(new ActionReceiptStore({ root: emptyPass.store.root }), emptyPassedSuite);
+  assert.equal(emptyPassedReport?.state, 'passed'); assert.equal(emptyPassedReport.checks[0].message, undefined);
+  assert.equal(emptyPassedProof.verification.checks[0].message, undefined);
+  const emptyChild = emptyPassedProof.commandReceipts[0];
+  assert.equal(JSON.parse(emptyChild.validation.summary!).status, 'passed'); assert.equal(JSON.parse(emptyChild.validation.summary!).v, undefined);
+  emptyPass.retireInputs();
+  record('a real empty-output success retains the exact legacy summary and reopens report and passing proof without invented diagnostic text');
 
   const incompleteChild = verified.commandReceipts[0];
   const childPath = reopened.pathFor(incompleteChild.id);
@@ -820,6 +858,7 @@ try {
   assert.equal(luaCredit.findings, luaEvidence.findings);
   const projected = JSON.parse(JSON.stringify(luaCredit));
   assert.deepEqual(projected.coverage.projectVerification.checks[0].coveredChecks, namedClaims);
+  assert(projected.coverage.projectVerification.checks.every((check: { id: string; message: string }) => check.message === `Check output (excerpt): ${check.id}`));
   assert(Object.isFrozen(parallelProof.verification.checks[0].coveredChecks));
   const claimedManifestPath = path.join(parallel.exact.setupInput.sourceRoot, 'forge.checks.json');
   const claimedManifestBytes = fs.readFileSync(claimedManifestPath);
