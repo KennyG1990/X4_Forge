@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { canonicalJson } from '../lib/actionReceipt';
 import { isSameOrDescendant } from '../lib/pathRoles';
+import { canonicalSourceKey } from './resourceCoordinator';
+import { createOwnedProjectCheckStage, PROJECT_CHECK_STAGE_MANIFEST, type ProjectCheckStageContext, type ProjectCheckStageFile } from './projectCheckStaging';
 import {
   inspectProjectCheckProposal, isProjectCheckRelativeFile, PROJECT_CHECKS_MAX_BYTES, PROJECT_CHECKS_PATH,
 } from './projectCheckProposal';
@@ -20,7 +22,7 @@ export interface ProjectCheckSetupInput {
 }
 
 type SetupFingerprint = { size: number; sha256: string };
-type SetupStage = { root: string; assertOwned: () => void };
+type SetupStage = { root: string; assertOwned: (target?: string) => void };
 
 function samePath(a: string, b: string): boolean {
   return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
@@ -105,7 +107,7 @@ function copyChunk(fd: number, chunk: Buffer): void {
 }
 
 function openStagedFile(stage: SetupStage, relative: string, mode: number): number {
-  stage.assertOwned();
+  stage.assertOwned(path.join(stage.root, ...relative.split('/')));
   const segments = relative.split('/');
   const name = segments.pop()!;
   let directory = stage.root;
@@ -115,6 +117,7 @@ function openStagedFile(stage: SetupStage, relative: string, mode: number): numb
     canonicalLocalPath(directory);
     if (!fs.lstatSync(directory).isDirectory()) throw new Error('Frozen project check directory changed.');
   }
+  stage.assertOwned(path.join(directory, name));
   return fs.openSync(path.join(directory, name), 'wx', mode);
 }
 
@@ -200,7 +203,7 @@ export function captureProjectCheckSetup(input: ProjectCheckSetupInput) {
 }
 
 /** Stage only an approved setup, under a canonical runner-owned scratch parent. */
-export function freezeProjectCheckSetup(input: ProjectCheckSetupInput, approvedSetupHash: string, scratchParent: string) {
+export function freezeProjectCheckSetup(input: ProjectCheckSetupInput, approvedSetupHash: string, scratchParent: string, context?: ProjectCheckStageContext) {
   if (!/^[a-f0-9]{64}$/.test(approvedSetupHash)) throw new Error('A valid approved setup hash is required.');
   const parent = canonicalLocalPath(scratchParent);
   const source = canonicalLocalPath(input.sourceRoot);
@@ -208,10 +211,24 @@ export function freezeProjectCheckSetup(input: ProjectCheckSetupInput, approvedS
   if (!fs.lstatSync(parent).isDirectory() || isSameOrDescendant(parent, source) || isSameOrDescendant(parent, runtime)) {
     throw new Error('Project check scratch must be a directory outside both input roots.');
   }
-  const root = fs.mkdtempSync(path.join(parent, 'project-check-'));
+  let stage: ReturnType<typeof createOwnedProjectCheckStage> | undefined;
+  if (context) {
+    if (context.sourceKey !== canonicalSourceKey(source)) throw new Error('Owned setup stage does not match the claimed source.');
+    const expected = captureProjectCheckSetup(input);
+    if (expected.setupHash !== approvedSetupHash) throw new Error('Project check setup no longer matches its approval.');
+    const files: ProjectCheckStageFile[] = [
+      { ...expected.manifest, path: `project/${PROJECT_CHECKS_PATH}` },
+      { path: `runtime/${path.basename(expected.interpreter.path)}`, size: expected.interpreter.size, sha256: expected.interpreter.sha256 },
+      ...expected.interpreter.dependencies.map(file => ({ ...file, path: `runtime/${file.path}` })),
+      ...expected.harness.map(file => ({ ...file, path: `project/${file.path}` })),
+    ];
+    stage = createOwnedProjectCheckStage(context, parent, 'setup', [...new Map(files.map(file => [file.path, file])).values()]);
+  }
+  const root = stage?.root ?? fs.mkdtempSync(path.join(parent, 'project-check-'));
   const owned = fs.lstatSync(root, { bigint: true });
   let disposed = false;
-  const assertOwned = () => {
+  const assertOwned = (target?: string) => {
+    stage?.assertOwned(target);
     if (disposed || !samePath(path.dirname(canonicalLocalPath(root)), parent)) {
       throw new Error('Frozen project check scratch is no longer owned.');
     }
@@ -222,6 +239,7 @@ export function freezeProjectCheckSetup(input: ProjectCheckSetupInput, approvedS
   };
   const dispose = () => {
     if (disposed) return;
+    if (stage) { stage.dispose(); disposed = true; return; }
     assertOwned();
     fs.rmSync(root, { recursive: true, force: true });
     disposed = true;
@@ -230,6 +248,7 @@ export function freezeProjectCheckSetup(input: ProjectCheckSetupInput, approvedS
     assertOwned();
     const { setup, staged } = inspectSetup(input, { root, assertOwned });
     if (setup.setupHash !== approvedSetupHash) throw new Error('Project check setup no longer matches its approval.');
+    stage?.assertComplete();
     const contents = new Map<string, Map<string, SetupFingerprint | undefined>>();
     for (const { file, fingerprint } of staged.values()) {
       let child = path.join(root, file);
@@ -251,7 +270,7 @@ export function freezeProjectCheckSetup(input: ProjectCheckSetupInput, approvedS
         const directoryStamp = fs.lstatSync(directory, { bigint: true });
         if (!directoryStamp.isDirectory()) throw new Error('Frozen project check inventory changed.');
         verified.set(directory, directoryStamp);
-        const actual = fs.readdirSync(directory, { withFileTypes: true });
+        const actual = fs.readdirSync(directory, { withFileTypes: true }).filter(entry => !stage || directory !== root || entry.name !== PROJECT_CHECK_STAGE_MANIFEST);
         if (actual.length !== expected.size) throw new Error('Frozen project check inventory changed.');
         for (const entry of actual) {
           const fingerprint = expected.get(entry.name);

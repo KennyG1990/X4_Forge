@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceFingerprint": "ef0f38b713cf0156953b8bcafe0ea743e96a2f23f42cb442d84434326907359d",
+  "sourceFingerprint": "b9ed6bd4cd681634f0a81c967ba21dcf6d2d4f7a51e6bd3476113a1a5aea8e53",
   "policy": "Every raw production filesystem mutation source is count-pinned here. Authoritative files use atomic sibling promotion; stronger tree, archive, append-log, SQLite, retention, ephemeral, and fixture contracts remain explicit exceptions.",
   "writers": [
     {
@@ -370,6 +370,14 @@
       "owners": ["freezeProjectCheckSetup", "openStagedFile"],
       "rationale": "Stage the exact approved harness and explicitly listed runtime inputs from the same bounded reads that establish their hashes. Use a unique runner-owned directory outside both source roots.",
       "failureContract": "Fail on drift, invalid or linked inputs, missing approved identity, and inventory or byte changes. Dispose only the original scratch root; refuse to remove a replacement directory."
+    },
+    {
+      "file": "src/server/projectCheckStaging.ts",
+      "calls": { "writeFileSync": 1, "renameSync": 1, "mkdirSync": 1, "rmdirSync": 2, "unlinkSync": 2 },
+      "categories": ["isolated-artifact-stage", "retention-cleanup"],
+      "owners": ["createOwnedProjectCheckStage", "retireProjectCheckStageFiles"],
+      "rationale": "Existing check snapshot/freezer materializers optionally share one durable-journal lifecycle. Reserve physical parent/created root, conservative bytes/entries and an immutable bounded inventory pin before payloads. Quarantine is named durably before creation and remains tracked through interrupted cleanup.",
+      "failureContract": "At most16 roots/1GiB/32768 entries per private registry, including ambiguous/retiring rows; marker at most2MiB. Verify exact scope, creator/root/parent/registry identity, marker SHA/size, complete present planned-file hashes and regular single-link entries before retirement. Live/unknown Jobs or cleanup owners refuse. Rename only the exact owned root into its pre-recorded quarantine; verify again before bounded per-file unlink/empty-directory removal. Foreign, partial, aliased, replaced or unknown bytes are preserved. A process death after rename leaves the quarantine journalled for known-dead-owner takeover. Forget only after both original and quarantine disappear with exact durable acknowledgement. Legacy unowned roots are never prefix-swept; this is not an OS quota or hostile-race security boundary."
     },
     {
       "file": "src/server/runtimeControl.ts",

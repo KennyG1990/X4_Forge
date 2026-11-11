@@ -766,6 +766,9 @@ function defaultSurfacePolicy(
       'W3B1',
     );
   }
+  if (surface.id === 'filesystem-writer:src/server/projectCheckStaging.ts') {
+    return surfacePolicy('durable-local-mutation', 'receipt-required', ['filesystem-write', 'delete', 'package'], 'W3B2');
+  }
   if (surface.id === 'filesystem-writer:src/lib/workspaceRegistry.ts') {
     return surfacePolicy(
       'durable-local-mutation',
@@ -2157,6 +2160,14 @@ export function runActionReceiptCoverageCandidateInvariantSelftest(
     'durable-local-mutation',
     'receipt-required',
     ['filesystem-write', 'package'],
+    'W3B2',
+  );
+  expectSurfaces(
+    'surface_project_check_staging_accounts_for_bounded_cleanup',
+    ['filesystem-writer:src/server/projectCheckStaging.ts'],
+    'durable-local-mutation',
+    'receipt-required',
+    ['filesystem-write', 'delete', 'package'],
     'W3B2',
   );
   expectSurfaces(

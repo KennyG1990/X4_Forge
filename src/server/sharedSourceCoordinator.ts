@@ -87,6 +87,7 @@ export interface ProjectCheckStageHandle {
   kind: 'setup' | 'snapshot';
 }
 export interface PhysicalStageIdentity { device: string; file: string }
+export interface ProjectCheckStageManifestPin { bytes: number; sha256: string }
 export interface ProjectCheckStageRecord extends ProjectCheckStageHandle, ProjectCheckStageScope {
   claimId: string;
   instanceId: string;
@@ -96,8 +97,10 @@ export interface ProjectCheckStageRecord extends ProjectCheckStageHandle, Projec
   bytes: number;
   entries: number;
   retirement: { token: string; instanceId: string; pid: number } | null;
+  manifest?: ProjectCheckStageManifestPin;
+  quarantineRoot?: string;
 }
-type StageReservation = ProjectCheckStageScope & { parent: string; kind: 'setup' | 'snapshot'; bytes: number; entries: number };
+type StageReservation = ProjectCheckStageScope & { parent: string; kind: 'setup' | 'snapshot'; bytes: number; entries: number; manifest?: ProjectCheckStageManifestPin };
 type StageRetirement = (stage: Readonly<ProjectCheckStageRecord>, assertOwned: () => void) => undefined;
 export interface ProjectCheckSourceLease {
   ownsResource(key: string): boolean;
@@ -109,6 +112,8 @@ export interface ProjectCheckSourceLease {
   assertProjectCheckStage(handle: Readonly<ProjectCheckStageHandle>): void;
   retireProjectCheckStage(handle: Readonly<ProjectCheckStageHandle>, cleanup: StageRetirement): void;
 }
+export type ProjectCheckStageLease = Pick<ProjectCheckSourceLease, 'reserveProjectCheckStage' | 'adoptProjectCheckStage'
+  | 'assertProjectCheckStage' | 'retireProjectCheckStage'>;
 type VisibleClaim = Omit<Claim, 'state' | 'sequence' | 'guards' | 'checkBudget' | 'guardPhase' | 'handlerFinished'> & {
   guardPhase?: NonNullable<Claim['guardPhase']>;
 };
@@ -246,6 +251,11 @@ function physicalIdentity(input: PhysicalStageIdentity): PhysicalStageIdentity {
     || typeof input.file !== 'string' || !/^[1-9]\d{0,19}$/.test(input.file)) throw new Error('Invalid physical stage identity.');
   return { device: input.device, file: input.file };
 }
+function manifestPin(input: ProjectCheckStageManifestPin): ProjectCheckStageManifestPin {
+  if (!input || !Number.isSafeInteger(input.bytes) || input.bytes < 1 || input.bytes > 2 * 1024 * 1024
+    || typeof input.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(input.sha256)) throw new Error('Invalid stage manifest pin.');
+  return { bytes: input.bytes, sha256: input.sha256 };
+}
 function directoryIdentity(directory: string): PhysicalStageIdentity {
   localStagePath(directory);
   const stat = fs.lstatSync(directory, { bigint: true });
@@ -276,15 +286,22 @@ function readStageRecord(text: unknown): ProjectCheckStageRecord {
     sourceKey: scope.sourceKey, workspaceId: scope.workspaceId, actorId: scope.actorId,
     claimId: value.claimId, instanceId: value.instanceId, pid: value.pid, parent,
     identity: value.identity === null ? null : physicalIdentity(value.identity), bytes: value.bytes, entries: value.entries, retirement };
+  if (Object.hasOwn(value, 'manifest')) {
+    record.manifest = manifestPin(value.manifest);
+    record.quarantineRoot = path.join(parent.path, `x4forge-check-retiring-${record.id}`);
+    if (record.bytes < record.manifest.bytes || record.entries < 2) throw new Error('Stage manifest exceeds its reservation.');
+  }
   if (JSON.stringify(record) !== text) throw new Error('Noncanonical stage journal.');
   return record;
 }
 function assertStagePhysical(record: ProjectCheckStageRecord, allowMissing = false): boolean {
   const { path: parent, ...identity } = record.parent;
   if (JSON.stringify(directoryIdentity(parent)) !== JSON.stringify(identity)) throw new Error('Stage parent identity changed.');
-  const stat = fs.lstatSync(record.root, { bigint: true, throwIfNoEntry: false });
-  if (!stat && allowMissing) return false;
-  if (!record.identity || JSON.stringify(directoryIdentity(record.root)) !== JSON.stringify(record.identity)) throw new Error('Stage root is not physically owned.');
+  const roots = [record.root, ...(record.quarantineRoot ? [record.quarantineRoot] : [])];
+  const present = roots.filter(root => fs.lstatSync(root, { throwIfNoEntry: false }));
+  if (!present.length && allowMissing) return false;
+  if (present.length !== 1 || (!record.retirement && present[0] !== record.root) || !record.identity
+    || JSON.stringify(directoryIdentity(present[0])) !== JSON.stringify(record.identity)) throw new Error('Stage root is not physically owned.');
   return true;
 }
 const overlap = (a: string[], b: string[]) => a.some(left => b.some(right => conflicts(left, right)));
@@ -520,7 +537,8 @@ export class SharedSourceCoordinator {
       };
       if (assertStagePhysical(retiring, true)) {
         const result: unknown = cleanup(Object.freeze({ ...retiring, parent: Object.freeze({ ...retiring.parent }),
-          identity: retiring.identity && Object.freeze({ ...retiring.identity }), retirement: Object.freeze({ ...retiring.retirement }) }), assertOwned);
+          identity: retiring.identity && Object.freeze({ ...retiring.identity }), retirement: Object.freeze({ ...retiring.retirement }),
+          ...(retiring.manifest ? { manifest: Object.freeze({ ...retiring.manifest }) } : {}) }), assertOwned);
         if (result !== undefined) throw new Error('Stage cleanup must be synchronous and return no value.');
       }
       if (assertStagePhysical(retiring, true)) throw new Error('Stage cleanup did not remove the exact owned root.');
@@ -600,6 +618,10 @@ export class SharedSourceCoordinator {
         const record: ProjectCheckStageRecord = { id: stageId, root: path.join(parent.path, `x4forge-check-stage-${stageId}`), runId: scope.runId, kind: input.kind,
           sourceKey: scope.sourceKey, workspaceId: scope.workspaceId, actorId: scope.actorId, claimId: id, instanceId: this.instanceId, pid: process.pid,
           parent, identity: null, bytes: input.bytes, entries: input.entries, retirement: null };
+        if (input.manifest !== undefined) {
+          record.manifest = manifestPin(input.manifest);
+          record.quarantineRoot = path.join(parent.path, `x4forge-check-retiring-${stageId}`);
+        }
         readStageRecord(JSON.stringify(record));
         this.transaction(database => {
           const own = this.claims(database).find(claim => claim.id === id && claim.instanceId === this.instanceId && claim.pid === process.pid);
@@ -610,6 +632,7 @@ export class SharedSourceCoordinator {
             || prior.reduce((total, stage) => total + stage.bytes, input.bytes) > PROJECT_CHECK_STAGE_LIMITS.bytes
             || prior.reduce((total, stage) => total + stage.entries, input.entries) > PROJECT_CHECK_STAGE_LIMITS.entries) throw failure('PROJECT_CHECK_STAGE_LIMIT', 'Private project-check staging budget is occupied; no payload was created.');
           if (fs.lstatSync(record.root, { throwIfNoEntry: false })) throw new Error('Reserved stage path is already occupied.');
+          if (record.quarantineRoot && fs.lstatSync(record.quarantineRoot, { throwIfNoEntry: false })) throw new Error('Reserved quarantine path is already occupied.');
           if (JSON.stringify(directoryIdentity(parent.path)) !== JSON.stringify(physicalIdentity(parent))) throw new Error('Stage parent changed before reservation.');
           database.prepare('INSERT INTO project_check_stages (id,record_json) VALUES (?,?)').run(record.id, JSON.stringify(record));
         });
@@ -621,6 +644,7 @@ export class SharedSourceCoordinator {
           const record = ownStage(database, handle);
           if (record.identity || record.retirement) throw new Error('Stage is already adopted or retiring.');
           const identity = directoryIdentity(record.root);
+          if (record.quarantineRoot && fs.lstatSync(record.quarantineRoot, { throwIfNoEntry: false })) throw new Error('Unadopted stage quarantine is occupied.');
           if (JSON.stringify(identity) !== JSON.stringify(physicalIdentity(created))) throw new Error('Stage root differs from the created directory.');
           if (fs.readdirSync(record.root).length || JSON.stringify(directoryIdentity(record.parent.path)) !== JSON.stringify(physicalIdentity(record.parent))) throw new Error('Stage must be empty under its original parent before adoption.');
           const next = { ...record, identity };

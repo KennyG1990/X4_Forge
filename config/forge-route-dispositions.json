@@ -207,6 +207,7 @@
     "src/server/projectCheckProposal.ts",
     "src/server/projectCheckRunService.ts",
     "src/server/projectCheckSetup.ts",
+    "src/server/projectCheckStaging.ts",
     "src/server/projectCheckSuite.ts",
     "src/server/projectCheckWorker.ts",
     "src/server/projectValidation.ts",

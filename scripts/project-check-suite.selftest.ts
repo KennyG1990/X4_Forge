@@ -9,6 +9,7 @@ import { ActionReceiptStore } from '../src/lib/actionReceiptStore';
 import { buildArtifactPlan } from '../src/lib/artifactPipeline';
 import { applyProjectCheckCoverage, buildValidationEvidence } from '../src/lib/validationEvidence';
 import { captureDeploymentSnapshot } from '../src/server/deploymentSnapshot';
+import { retireAbandonedProjectCheckStages } from '../src/server/projectCheckStaging';
 import { ProjectCheckApprovalLedger } from '../src/server/projectCheckApproval';
 import { captureProjectCheckSetup, freezeProjectCheckSetup } from '../src/server/projectCheckSetup';
 import { executeProjectCheckSuite, projectCheckSuiteReceiptId, readProjectCheckSuiteReport, readTerminalProjectCheckSuite,
@@ -210,8 +211,8 @@ const started = (marker: string) => fs.existsSync(marker) && fs.readFileSync(mar
 const release = (marker: string) => fs.writeFileSync(marker, 'release', 'ascii');
 const isCommand = (receipt: ActionReceipt) => 'id' in receipt.capability && receipt.capability.id === 'project-check.command';
 
-function crashBackend(f: ReturnType<typeof fixture>, mode: 'finish' | 'running') {
-  const input = { actorId, workspaceId, operationId: `recovery-${mode}`, modId,
+function crashBackend(f: ReturnType<typeof fixture>, mode: 'finish' | 'running', suffix = '') {
+  const input = { actorId, workspaceId, operationId: `recovery-${mode}${suffix}`, modId,
     artifactHash: f.exact.artifact.snapshot.manifest.hash,
     requestHash: createHash('sha256').update(`recovery-${mode}`).digest('hex'), sourceKey: f.key };
   const imports = [
@@ -238,11 +239,12 @@ if (data.mode === 'running') setInterval(() => { if (fs.existsSync(data.marker))
 const admitted = await service.start(data.input, async (lease, runId) => {
   try {
   const setup = captureProjectCheckSetup(data.setupInput);
-  const frozen = freezeProjectCheckSetup(data.setupInput, setup.setupHash, data.scratch);
+  const stageContext = { lease, sourceKey: data.input.sourceKey, actorId: data.input.actorId, workspaceId: data.input.workspaceId, runId };
+  const frozen = freezeProjectCheckSetup(data.setupInput, setup.setupHash, data.scratch, stageContext);
   const plan = buildArtifactPlan({ sourceRoot: '', memoryOnly: true,
     generatedFiles: Object.fromEntries(data.files.map(file => [file.path, file.content])) });
   if (!plan.ok) throw new Error('Fixture artifact refused.');
-  const snapshot = captureDeploymentSnapshot(plan, 'loose');
+  const snapshot = captureDeploymentSnapshot(plan, 'loose', stageContext);
   if (snapshot.manifest.hash !== data.input.artifactHash) throw new Error('Fixture artifact identity changed.');
   const approvals = new ProjectCheckApprovalLedger(store, 'fixture-owner', () => false);
   const suite = await executeProjectCheckSuite({ setupInput: data.setupInput, frozen,
@@ -265,7 +267,7 @@ setInterval(() => {
     setupInput: f.exact.setupInput, storeRoot: f.store.root, approvalId: f.approval.id, runtime,
     files: f.exact.artifact.snapshot.files, marker: f.commands[0].marker }));
   const child = spawnSync(process.execPath, ['--import', new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url).href, driver, dataFile], {
-    cwd: process.cwd(), env: { ...process.env, TEMP: f.directory, TMP: f.directory, NODE_DISABLE_COMPILE_CACHE: '1' },
+    cwd: process.cwd(), env: { ...process.env, TEMP: f.scratch, TMP: f.scratch, NODE_DISABLE_COMPILE_CACHE: '1' },
     windowsHide: true, encoding: 'utf8', maxBuffer: 64 * 1024, timeout: 15_000,
   });
   assert.equal(child.error, undefined, String(child.error));
@@ -275,6 +277,30 @@ setInterval(() => {
   assert.equal(receipt.status, 'prepared');
   f.exact.runId = receipt.authority.operationId.split(':')[1];
   return { input, id: admitted.id };
+}
+
+function crashRetirementBackend(f: ReturnType<typeof fixture>) {
+  const driver = path.join(root, 'recovery-backend.mts');
+  const dataFile = path.join(root, 'recovery-backend-input.json');
+  const source = `import fs from 'node:fs';
+import { SharedSourceCoordinator } from ${JSON.stringify(new URL('../src/server/sharedSourceCoordinator.ts', import.meta.url).href)};
+import { retireAbandonedProjectCheckStages } from ${JSON.stringify(new URL('../src/server/projectCheckStaging.ts', import.meta.url).href)};
+const data = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const coordinator = new SharedSourceCoordinator({ directory: data.registry });
+const rename = fs.renameSync;
+fs.renameSync = (...args) => { rename(...args); process.exit(75); };
+retireAbandonedProjectCheckStages(coordinator, data.scope, [data.scratch]);
+process.exit(92);
+`;
+  fs.writeFileSync(driver, source);
+  fs.writeFileSync(dataFile, JSON.stringify({ registry: f.registry, scratch: f.scratch, scope: { sourceKey: f.key, actorId, workspaceId } }));
+  const result = spawnSync(process.execPath, ['--import', new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url).href, driver, dataFile], {
+    cwd: process.cwd(), env: { ...process.env, TEMP: f.scratch, TMP: f.scratch, NODE_DISABLE_COMPILE_CACHE: '1' },
+    windowsHide: true, encoding: 'utf8', maxBuffer: 64 * 1024, timeout: 15_000,
+  });
+  assert.equal(result.error, undefined, String(result.error)); assert.equal(result.status, 75, result.stderr || result.stdout);
+  const rows = f.coordinator.projectCheckStages();
+  assert.equal(rows.filter(row => row.retirement && row.quarantineRoot && fs.existsSync(row.quarantineRoot) && !fs.existsSync(row.root)).length, 1);
 }
 
 try {
@@ -840,6 +866,8 @@ try {
   let secondRepair = 0;
   const neverExecute = async () => { replays++; throw new Error('Abandoned command must not replay.'); };
   try {
+    assert.throws(() => retireAbandonedProjectCheckStages(abandoned.coordinator,
+      { sourceKey: abandoned.key, actorId, workspaceId }, [abandoned.scratch]), { code: 'PROJECT_CHECK_CLEANUP_UNCONFIRMED' });
     await recoverOne.start(killed.input, neverExecute, async runId => {
       firstRepair++;
       assert.equal(readTerminalProjectCheckSuite({ ...abandoned.exact, runId }, abandonedSuite.id), undefined);
@@ -1031,14 +1059,10 @@ try {
   record('terminal incomplete and genuinely absent suites reconcile without passing proof, replay or loss of named incomplete evidence');
 
   await until(() => retained.some(unresolved => unresolved()) ? undefined : true, 'every fixture source claim to become quiescent');
-  const orphanRoots = [interrupted, abandoned].flatMap(f => [
-    ...fs.readdirSync(f.scratch, { withFileTypes: true }).filter(entry => entry.isDirectory() && entry.name.startsWith('project-check-'))
-      .map(entry => path.join(f.scratch, entry.name)),
-    ...fs.readdirSync(f.directory, { withFileTypes: true }).filter(entry => entry.isDirectory() && entry.name.startsWith('x4forge-deploy-snapshot-'))
-      .map(entry => path.join(f.directory, entry.name)),
-  ]);
+  const orphanRoots = [interrupted, abandoned].flatMap(f => f.coordinator.projectCheckStages().map(stage => stage.root));
   const crashStaging = { roots: orphanRoots.length, bytes: 0, entries: 0,
-    cleanupOwner: 'outer owned test fixture; production run reconciliation does not yet retire old staging' };
+    cleanupOwner: 'owned snapshot/freezer materializers and durable journal filesystem retire function; API adapters pending',
+    retired: 0, remaining: -1, repeatedCrashRoots: 0, retirementBackendExit: 0 };
   const stagePending = [...orphanRoots];
   while (stagePending.length) {
     const directory = stagePending.pop()!;
@@ -1051,7 +1075,27 @@ try {
       else crashStaging.bytes += fs.lstatSync(file).size;
     }
   }
-  assert(crashStaging.roots <= 4 && crashStaging.bytes < footprintLimit.bytes && crashStaging.entries < footprintLimit.entries);
+  assert.equal(crashStaging.roots, 4);
+  assert(crashStaging.bytes < footprintLimit.bytes && crashStaging.entries < footprintLimit.entries);
+  for (const f of [interrupted, abandoned]) {
+    crashStaging.retired += retireAbandonedProjectCheckStages(f.coordinator, { sourceKey: f.key, actorId, workspaceId }, [f.scratch]);
+    assert.equal(f.coordinator.projectCheckStages().length, 0);
+    assert.equal(retireAbandonedProjectCheckStages(f.coordinator, { sourceKey: f.key, actorId, workspaceId }, [f.scratch]), 0);
+  }
+  assert.equal(crashStaging.retired, 4); assert(orphanRoots.every(root => !fs.existsSync(root)));
+  crashStaging.remaining = 0;
+  // Another real backend death on the same fixture uses a new operation ID,
+  // then the same product sweep retires its two roots without retaining a family.
+  const repeatedCrash = crashBackend(interrupted, 'finish', '-repeat');
+  assert.equal(interrupted.store.read(repeatedCrash.id).status, 'prepared');
+  const repeatedRoots = interrupted.coordinator.projectCheckStages().map(stage => stage.root);
+  assert.equal(repeatedRoots.length, 2); crashStaging.repeatedCrashRoots = repeatedRoots.length;
+  crashRetirementBackend(interrupted); crashStaging.retirementBackendExit = 75;
+  const quarantineRoots = interrupted.coordinator.projectCheckStages().flatMap(stage => stage.quarantineRoot ? [stage.quarantineRoot] : []);
+  assert.equal(retireAbandonedProjectCheckStages(interrupted.coordinator, { sourceKey: interrupted.key, actorId, workspaceId }, [interrupted.scratch]), 2);
+  assert(repeatedRoots.every(root => !fs.existsSync(root))); assert.equal(interrupted.coordinator.projectCheckStages().length, 0);
+  assert(quarantineRoots.every(root => !fs.existsSync(root)));
+  record('owned snapshot/freezer stages refuse live-Job cleanup and retire4->0, then another backend and a retirement backend exit75 recover2->0 including durable quarantine without harness recursion');
 
   meterFixture();
   console.log(JSON.stringify({ status: 'passed', realWindowsProcesses: true, fixtureOwnerApproval: true, checks,

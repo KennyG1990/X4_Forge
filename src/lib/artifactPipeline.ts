@@ -466,6 +466,7 @@ export function materializeArtifact(
   plan: ArtifactPlan,
   targetRootInput: string,
   verification: 'per-file' | 'complete-tree' = 'per-file',
+  assertOwnership?: (target: string) => void,
 ): ArtifactBuildResult {
   const targetRoot = path.resolve(targetRootInput);
   const verifyPerFile = verification === 'per-file';
@@ -475,6 +476,7 @@ export function materializeArtifact(
     errors.push(`Artifact target must not overlap its source root: ${targetRoot}`);
     return { ok: false, targetRoot, written: 0, bytes: 0, errors };
   }
+  assertOwnership?.(targetRoot);
   if (fs.existsSync(targetRoot)) {
     let existing: string[] = [];
     try { existing = fs.readdirSync(targetRoot); } catch { existing = ['<unreadable>']; }
@@ -495,9 +497,11 @@ export function materializeArtifact(
       break;
     }
     try {
+      assertOwnership?.(destination);
       fs.mkdirSync(path.dirname(destination), { recursive: true });
       if (entry.disposition === 'generated') {
         if (entry.content === undefined) throw new Error('generated content is missing');
+        assertOwnership?.(destination);
         fs.writeFileSync(destination, entry.content);
       } else {
         if (!entry.sourcePath || !fs.existsSync(entry.sourcePath)) throw new Error('planned source file is missing');
@@ -507,6 +511,7 @@ export function materializeArtifact(
           const currentHash = hashArtifactFile(entry.sourcePath);
           if (currentHash !== entry.sha256) throw new Error(`source changed after planning (${entry.sha256} -> ${currentHash})`);
         }
+        assertOwnership?.(destination);
         fs.copyFileSync(entry.sourcePath, destination);
       }
       if (verifyPerFile) {

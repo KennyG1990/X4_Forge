@@ -27,7 +27,7 @@ const observations: { name: string; pass: boolean; error?: string }[] = [];
 const live = new Map<number, 'alive' | 'dead' | 'unknown'>();
 const peak = { bytes: 0, entries: 0 };
 function coordinator(name: string) {
-  const value = new SharedSourceCoordinator({ directory: path.join(root, name), waitMs: 100, pollMs: 5,
+  const value = new SharedSourceCoordinator({ directory: path.join(root, name), waitMs: 1000, pollMs: 5,
     liveness: pid => live.get(pid) ?? 'unknown' });
   instances.push(value); return value;
 }
@@ -409,6 +409,30 @@ try {
     assert.equal(previous.status([sourceKey]).available, false);
     let called = false; await assert.rejects(previous.run([sourceKey], owner, () => { called = true; }), { code: 'SOURCE_COORDINATION_UNAVAILABLE' });
     assert.equal(called, false);
+  });
+  await check('old_schema4_journal_client_cannot_discard_a_new_sealed_stage', async () => {
+    const old = spawnSync('git', ['show', '793a446:src/server/sharedSourceCoordinator.ts'], { encoding: 'utf8', windowsHide: true });
+    assert.equal(old.status, 0, old.stderr);
+    const filename = path.resolve('src/server/sharedSourceCoordinator.ts'); const exports: Record<string, unknown> = {};
+    const code = ts.transpileModule(old.stdout, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } })
+      .outputText.replaceAll('import.meta.url', JSON.stringify(pathToFileURL(filename).href));
+    const load = vm.runInThisContext(`(function(exports,require,module,__filename,__dirname){${code}\n})`) as
+      (exports: object, require: NodeJS.Require, module: object, file: string, directory: string) => void;
+    load(exports, createRequire(filename), { exports }, filename, path.dirname(filename));
+    const Old = exports.SharedSourceCoordinator as typeof SharedSourceCoordinator;
+    const previous = new Old({ directory: path.join(root, 'old-journal4') }); instances.push(previous);
+    assert(previous.status([sourceKey]).available);
+    const q = coordinator('old-journal4'); let oldCallback = false;
+    await q.run([sourceKey], owner, async lease => {
+      const stage = lease.reserveProjectCheckStage({ ...reservation, manifest: { bytes: 1, sha256: 'a'.repeat(64) } });
+      const before = JSON.stringify(q.projectCheckStages());
+      assert.throws(() => previous.projectCheckStages());
+      assert.throws(() => previous.retireAbandonedProjectCheckStage(stage.id, scope, () => { oldCallback = true; return undefined; }));
+      const otherKey = canonicalSourceKey(path.join(root, 'old-client-other-source'));
+      await assert.rejects(previous.run([otherKey], owner, oldLease => oldLease.reserveProjectCheckStage({ ...reservation, sourceKey: otherKey })), { code: 'SOURCE_COORDINATION_UNAVAILABLE' });
+      assert.equal(oldCallback, false); assert.equal(JSON.stringify(q.projectCheckStages()), before);
+      lease.retireProjectCheckStage(stage, remove);
+    });
   });
 } finally {
   for (const q of instances) q.close();
