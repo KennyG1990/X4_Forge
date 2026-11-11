@@ -35,6 +35,7 @@
     "src/lib/canvasInteractions.ts",
     "src/lib/compileFidelity.ts",
     "src/lib/compositeBlocks.ts",
+    "src/lib/configurationGrant.ts",
     "src/lib/continuousPolling.selftest.ts",
     "src/lib/continuousPolling.ts",
     "src/lib/contractEvents.ts",

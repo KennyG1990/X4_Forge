@@ -1,26 +1,16 @@
-# X4 Forge - verified 0.0.83 release handoff
+# X4 Forge - configuration restriction checkpoint
 
-## Current state
+Project: X4 Forge. Broad QA goal ACTIVE. Claude paused; work alone. No subagents/direct Claude messages/computer use/live Forge/IDE/AiLive/X4/mod/save/standing-config writes. Heavy isolated headless testing remains authorized; no repeated permission questions for that authorized work.
 
-Project: X4 Forge. Broad Forge QA goal remains ACTIVE. Claude is paused; work alone. No agents, direct Claude messages, computer use, live Forge/Antigravity/X4/mod/save/standing-config writes. The user authorized heavy isolated headless testing for this release sequence; do not repeat the earlier quiet-window permission questions.
+Current source started clean atc2e2509d08a1d12e454c51ed95555877dff9717c. Internal unit34 is verified pending its normal commit/hook/graph/push/current CI: bounded optional configuration restrictions in the existing key store; source counters34, next review36. Exact results/source hashes/commit/gates are in QA/forge-1111-configuration-grant-contract.json. No backend or fixture process is running; all test fixtures retired.
 
-Candidate: C:/Users/Moshi/.codex/worktrees/forge-release-reconcile/X4_Forge, managed detached checkout. Release commit3b4f2829eb90055e85d3ea3d46c8d11b21fd5ee5 was nonforce-pushed to main with actual local/tracking/remote parity. Exact-head Quality CI43069720328 passed. Stable0.0.83 is public on OpenVSX and GitHub; both streamed downloads match the tested archive. A documentation-only close commit is being made now; its resulting hash/hook/push/current-head CI are recorded in the existing finite QA packet. Do not rebuild, retag or republish0.0.83 for documentation changes.
+Feature#96/#19 remainsPARTIAL. This unit enables NO HTTP/MCP permission or key payload. Production store has no trusted configuration context, key creation still rejects unknown configurationGrant fields, and schema/config remains Studio-only. Current helper binds profileId/pid/startedAt supplied by a trusted constructor context; only injected source fixtures prove it. Do not claim real profile derivation, owner authorization, restart persistence/renewal, CAS/proposals, receipts or API/MCP control.
 
-Release: https://github.com/KennyG1990/X4_Forge/releases/tag/v0.0.83
-OpenVSX: https://open-vsx.org/extension/x4forge/x4-forge-studio
-VSIX: vscode-extension/x4-forge-studio-0.0.83.vsix
-SHA256: 3d7be59af22dea57739e9282570449203b2c7c9111664ae4c0f548e7cf439726
-Size:30,012,104 bytes.
+Final tests:52restriction checks, including74existing key/route checks; existing roles26 and actual configuration handler/planner52. Current typecheck/lint0errors/600warnings and precommit63363 pass; normal commit hook required. First format test43/44, lint2errors and late-realpath47/48failures remain recorded. Fresh review extracted pure canonical comparison in existing path-role owner and added strict postchecks; this is per-call observation, not OS handle locking.64retained configuration-bearing key records/64KiBgrant/8roots per path field/4096chars/128ancestors/24hour limits are hard data/work-count bounds, not I/O latency quotas.
 
-## Proof and limits
+Only new production source registration is src/lib/configurationGrant.ts; exact reviewed route manifestSHA905ca7ecb14676790cfa1fa39d3c5948dfe1ade5bddc2edb33103bfc54b326f9. All route/capability/MCP/authority fields unchanged. Existing atomic key writer/expiry/revocation/prune remain owners; no migration or real keys/config written. One npm regression command added to precommit and QualityCI; no dependency/lock changes.
 
-Source: full rendered E2E122/122 (18.2min,0failed/flaky/bad), routes523/523, warning-review58/58, runtime49/49, grammar20, typecheck, lint600 at unchanged600limit, precommit/normal hook. Source parser type correctionf37281b changed no executable output; later fresh client/index delta was exactly generated build labels, not logic.
-
-Installed: staged probe19/19, inspector negatives13/13, actual private CLI install,2199non-manifest payload raw matches plus strictly recognized installer metadata and copied container manifest,18native containment/deploy controls +134runtime-index oracles, full compiled-server315Lua/project-check assertions including29real LuaJIT cases. Actual installed lock audit:0advisories. Source tooling lower advisories remain open (root1low/10moderate; extension6moderate).
-
-Full315 uses explicit synthetic Dev owner policy and separately pinned external Python workers. It does NOT prove real native device enrollment, native IDE rendering or X4 engine/compiler flags. All3worker/2backend/3signer handles and listener terminal; runtime retired;124retained files/91gzip captures reopened. Whole#61/#20/#98 remainPARTIAL. Exact general-purpose deploy bypass script/reproduction remains unconfirmed; do not claim the agents can drop it or project gates.
-
-No harness running. Native worker/runtime retirement and protected Dev checks passed. Current source/public qualification records and AAR: docs/plans/2026-11-11-release-0.0.83.md. No new feature counter/capability-map delta: substantial task count33, release review33 READY/delivered, next36.
+Stable public0.0.83 remains verified at release commit3b4f282, both stores SHA3d7be59af22dea57739e9282570449203b2c7c9111664ae4c0f548e7cf439726/30,012,104B. Release and c2e2509documentation-head CI passed. This new internal source unit is NOT in that public VSIX. Do not bump/rebuild/retag/republish0.0.83. Earlier installed315/134proof belongs to release0.0.83, not this new source.
 
 ## Isolation and footprint
 
@@ -45,13 +35,13 @@ Logs: forge-1111-release83-package.log and forge-1111-release83-private-install.
 GitHub#20 comment6803026935; #61 comment6803027338. Existing Notion QA field log4124618e-d15b-8131-bdd5-ff6aabefbd6d updated with actual results/QOL/proof limits/cleanup. Do not duplicate pages. All future in-game tests go through Claude after resume, with exact standalone artifact/steps/expected marker/cleanup; no in-game READY row was generated here.
 Existing Discord Release Sync handles announcements; no direct Discord tool messages. Documentation close uses [skip discord] to avoid another announcement while retaining normal CI.
 
-## Next unit and hazards
 
-FIRST: inspect packet release83.closeRecordCommit / closeRecordCI, git status/HEAD/origin/main/direct remote parity and final hook/footprint result. Finish any pending documentation-only CI before fresh feature work. Do not rerun already green full E2E/native/oracles for unchanged executable inputs.
+## First next
 
-Then read BACKLOG and the owning existing plan/issue for one bounded eligible unit. Important open work includes#96/#19 scoped directory/deployment API/MCP authority/CAS and#61 real owner/device/IDE/game proof. Planner extractionunit31 already exists with52exact old/new handler parity cases; do not rebuild it or silently grant write permission. The current Studio-only directory writer can persist before follow-up500; CAS/rollback/agent grants remain open.
+Read the unit34QA packet, current git status/HEAD/origin/main/direct remote and hook/graph/CI state. Finish the exact current commit/CI if still pending; do not restart a producer because observation expired.
 
-Observed release follow-up under#20: stage-app resolves runtime dependency ranges beyond source tooling. Deterministic runtime-lock acceptance is now in BACKLOG; actual installed qualification/audit covers this release only. Avoid unrelated lock/dependency rewrites.
-QOL evidence remains: cramped result pane/startup overlay/read-only field affordance; context mismatch is a hypothesis (75%separate canvas/disk contexts,25%stale invalidation), not a reproduced diagnosis.
+Then complete #96 against the existing parent spec, not another unrelated prerequisite. Next integration needs real server-owned profile identity, owner grant request/approval and token-response verification; current-production restrictions alone authorize nothing. Reuse the existing planner/key/capability/writer/receipt/coordination owners for preview/CAS/apply and curated MCP. Preserve old-key authority, A15/launcher locks, effective rather than raw paths, and reject stale or partial follow-up outcomes. The owner UI should choose fields/folders/duration while the extension derives IDs/physical leases. Decide/verify the approval and persistence/renewal path across an owned backend restart; current process-bound restrictions do not already solve it.
 
-Degradation was explicitly called after evidence-adapter mistakes. Do not start a fresh feature in this stretch. Finish this coherent documentation commit/handoff, then use fresh context for the next bounded unit. All failed package/profile/path/export/CLI-auth/draft-observer attempts are retained, not reclassified as product passes. No workflow threshold, assertion, permissions, timeout or original acceptance check was waived.
+The parent specification remains docs/plans/2026-11-10-agent-control-ui-api-mcp-parity.md. The existing write-before-schema/manifest follow-up500 and absent CAS/receipt contract remain required gaps. Do not call a positive withinRestrictions result authorization; exact capability/effect/current key and shared role planning still must pass.
+
+Other priorities and game-gated tasks remain in BACKLOG. Exact shared bypass script is still unconfirmed. Claude alone owns eventual in-game tests. No new in-game READYrow. Keep one source/test mod/runtime family, no backups/helper copies; source test fixtures are already retired.

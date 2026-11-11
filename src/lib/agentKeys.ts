@@ -39,6 +39,10 @@ import {
 import type { ForgeCapabilityEffect } from './forgeCapabilities';
 import { atomicWriteJson, type AtomicWriteOptions } from './workspaceState';
 import { runAgentKeyCreationContractSelftest } from '../../shared/agentKeyCreationContract';
+import {
+  cloneConfigurationGrant, createConfigurationGrant, isConfigurationGrant,
+  CONFIGURATION_GRANT_MAX_KEYS, type ConfigurationGrant, type ConfigurationGrantInstance,
+} from './configurationGrant';
 
 export type { AgentKeyScope, AgentRouteAuthorityDecision } from './agentAuthority';
 
@@ -50,6 +54,8 @@ export interface AgentKeyRecord {
   workspaceId?: string;
   /** B118: absent preserves preset compatibility; present is immutable create-time narrowing. */
   capabilityConstraint?: AgentCapabilityConstraint;
+  /** #96: additional instance/field/root/time restrictions, never route authority. */
+  configurationGrant?: ConfigurationGrant;
   /** sha256 hex of the plaintext key. Never the key itself. */
   tokenHash: string;
   createdAt: number;
@@ -67,6 +73,7 @@ export interface AgentKeyVerify {
   scope?: AgentKeyScope;
   workspaceId?: string;
   capabilityConstraint?: AgentCapabilityConstraint;
+  configurationGrant?: ConfigurationGrant;
   reason?: 'unknown' | 'expired' | 'revoked';
 }
 
@@ -77,6 +84,7 @@ export interface AgentKeyStore {
     ttlMs: number | null,
     workspaceId?: string,
     capabilityConstraint?: AgentCapabilityConstraint,
+    configurationGrant?: unknown,
   ): { token: string; record: AgentKeyRecord };
   verify(token: string, atMs?: number): AgentKeyVerify;
   revoke(id: string): boolean;
@@ -108,6 +116,10 @@ function isAgentKeyRecord(value: unknown): value is AgentKeyRecord {
   const row = value as Partial<AgentKeyRecord>;
   const nullableNumber = (candidate: unknown) => candidate === null || (typeof candidate === 'number' && Number.isFinite(candidate));
   const constraint = row.capabilityConstraint;
+  const grant = row.configurationGrant;
+  const grantValid = grant === undefined || (isConfigurationGrant(grant)
+    && grant.notBefore === row.createdAt
+    && (row.expiresAt === null || (typeof row.expiresAt === 'number' && grant.expiresAt <= row.expiresAt)));
   const constraintKeysValid = constraint === undefined || (!!constraint && typeof constraint === 'object' && !Array.isArray(constraint) &&
     JSON.stringify(Object.keys(constraint).sort()) === JSON.stringify(['allowedEffects', 'capabilityIdentities']));
   // Persistence deliberately validates durable shape, not today's live capability catalog.
@@ -124,7 +136,7 @@ function isAgentKeyRecord(value: unknown): value is AgentKeyRecord {
   return typeof row.id === 'string' && typeof row.label === 'string' &&
     (row.scope === 'read' || row.scope === 'write' || row.scope === 'deploy' || row.scope === 'all') &&
     (row.workspaceId === undefined || /^ws_[a-f0-9]{24}$/i.test(row.workspaceId)) &&
-    constraintValid &&
+    constraintValid && grantValid &&
     typeof row.tokenHash === 'string' && /^[a-f0-9]{64}$/.test(row.tokenHash) &&
     typeof row.createdAt === 'number' && Number.isFinite(row.createdAt) &&
     nullableNumber(row.expiresAt) && nullableNumber(row.lastUsedAt) && nullableNumber(row.revokedAt) &&
@@ -139,6 +151,8 @@ interface StoreOptions {
   randomHex?: (bytes: number) => string;
   /** Test seam for deterministic pre-promotion failure. */
   writeJson?: (file: string, value: unknown, options?: AtomicWriteOptions) => void;
+  /** Trusted server-owned instance/profile identity, never an agent-supplied context. */
+  configurationInstance?: () => ConfigurationGrantInstance;
 }
 
 export function createAgentKeyStore(opts: StoreOptions): AgentKeyStore {
@@ -174,7 +188,7 @@ export function createAgentKeyStore(opts: StoreOptions): AgentKeyStore {
   load();
 
   return {
-    create(label: string, scope: AgentKeyScope, ttlMs: number | null, workspaceId?: string, capabilityConstraint?: AgentCapabilityConstraint) {
+    create(label: string, scope: AgentKeyScope, ttlMs: number | null, workspaceId?: string, capabilityConstraint?: AgentCapabilityConstraint, configurationRequest?: unknown) {
       if (workspaceId !== undefined && !/^ws_[a-f0-9]{24}$/i.test(workspaceId)) {
         throw new Error('Agent key workspaceId is malformed.');
       }
@@ -189,6 +203,18 @@ export function createAgentKeyStore(opts: StoreOptions): AgentKeyStore {
         throw new Error(`Agent key capability constraint is invalid: ${normalizedConstraint.errors.join(' ')}`);
       }
       const at = now();
+      const expiresAt = ttlMs === null ? null : at + Math.max(60_000, ttlMs);
+      let configurationGrant: ConfigurationGrant | undefined;
+      if (configurationRequest !== undefined) {
+        if (!opts.configurationInstance) throw new Error('Configuration grants require a trusted server instance context.');
+        // Bound retained metadata too: revocation/expiry alone cannot create an
+        // unlimited family of inactive root leases. Existing prune owns retirement.
+        const retainedGrants = records.filter(row => row.configurationGrant);
+        if (retainedGrants.length >= CONFIGURATION_GRANT_MAX_KEYS) throw new Error('Configuration grant key limit reached; prune eligible old keys.');
+        configurationGrant = createConfigurationGrant(configurationRequest, {
+          instance: opts.configurationInstance(), now: at, keyExpiresAt: expiresAt,
+        });
+      }
       const token = AGENT_KEY_PREFIX + randomHex(32);
       const record: AgentKeyRecord = {
         id: `key_${at.toString(36)}_${randomHex(4)}`,
@@ -196,9 +222,10 @@ export function createAgentKeyStore(opts: StoreOptions): AgentKeyStore {
         scope,
         ...(workspaceId ? { workspaceId } : {}),
         ...(normalizedConstraint.constraint ? { capabilityConstraint: normalizedConstraint.constraint } : {}),
+        ...(configurationGrant ? { configurationGrant } : {}),
         tokenHash: hashAgentKey(token),
         createdAt: at,
-        expiresAt: ttlMs === null ? null : at + Math.max(60_000, ttlMs),
+        expiresAt,
         lastUsedAt: null,
         useCount: 0,
         revokedAt: null,
@@ -210,6 +237,7 @@ export function createAgentKeyStore(opts: StoreOptions): AgentKeyStore {
         token,
         record: {
           ...record,
+          ...(record.configurationGrant ? { configurationGrant: cloneConfigurationGrant(record.configurationGrant) } : {}),
           ...(record.capabilityConstraint ? {
             capabilityConstraint: {
               capabilityIdentities: [...record.capabilityConstraint.capabilityIdentities],
@@ -234,6 +262,7 @@ export function createAgentKeyStore(opts: StoreOptions): AgentKeyStore {
         label: rec.label,
         scope: rec.scope,
         workspaceId: rec.workspaceId,
+        ...(rec.configurationGrant ? { configurationGrant: cloneConfigurationGrant(rec.configurationGrant) } : {}),
         ...(rec.capabilityConstraint ? {
           capabilityConstraint: {
             capabilityIdentities: [...rec.capabilityConstraint.capabilityIdentities],
@@ -255,6 +284,7 @@ export function createAgentKeyStore(opts: StoreOptions): AgentKeyStore {
     list() {
       return records.map(({ tokenHash, ...rest }) => ({
         ...rest,
+        ...(rest.configurationGrant ? { configurationGrant: cloneConfigurationGrant(rest.configurationGrant) } : {}),
         ...(rest.capabilityConstraint ? {
           capabilityConstraint: {
             capabilityIdentities: [...rest.capabilityConstraint.capabilityIdentities],

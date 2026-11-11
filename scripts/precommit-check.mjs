@@ -177,7 +177,7 @@ function checkDurableWriters() {
 }
 
 function checkCapabilityContracts() {
-  for (const command of ["npm run test:capabilities", "npm run test:mcp-capabilities"]) {
+  for (const command of ["npm run test:capabilities", "npm run test:mcp-capabilities", "npm run test:configuration-grant"]) {
     console.log(`[precommit] ${command}`);
     const result = spawnSync(command, { cwd: root, shell: true, stdio: "inherit" });
     if (result.error) throw result.error;

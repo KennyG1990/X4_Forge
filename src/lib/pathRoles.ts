@@ -51,16 +51,21 @@ export function canonicalDirectoryPath(rawPath: string): string {
   return path.normalize(existingAncestorRealpath(path.resolve(trimmed)));
 }
 
-function comparisonKey(rawPath: string): string {
-  const canonical = canonicalDirectoryPath(rawPath);
+function comparisonKey(canonical: string): string {
   return process.platform === 'win32' ? canonical.toLocaleLowerCase('en-US') : canonical;
 }
 
-export function isSameOrDescendant(candidatePath: string, rootPath: string): boolean {
+/** Pure comparison of paths already normalized/validated by their owner. No
+ * filesystem lookup or lexical fallback can silently become a permission check. */
+export function isCanonicalSameOrDescendant(candidatePath: string, rootPath: string): boolean {
   const candidate = comparisonKey(candidatePath);
   const root = comparisonKey(rootPath);
   if (!candidate || !root) return false;
   return candidate === root || candidate.startsWith(root.endsWith(path.sep) ? root : `${root}${path.sep}`);
+}
+
+export function isSameOrDescendant(candidatePath: string, rootPath: string): boolean {
+  return isCanonicalSameOrDescendant(canonicalDirectoryPath(candidatePath), canonicalDirectoryPath(rootPath));
 }
 
 export function pathsOverlap(leftPath: string, rightPath: string): boolean {

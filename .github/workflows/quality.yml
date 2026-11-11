@@ -52,6 +52,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Prove bounded configuration grant restrictions
+        run: npm run test:configuration-grant
+
       - name: Prove literal diff expression provenance
         run: npm run test:diff-expression-values
 
