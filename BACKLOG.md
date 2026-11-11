@@ -6,6 +6,12 @@
 
 ## P0 — Active
 
+### Release candidate reconciliation and qualification `in_progress` (GitHub #20)
+
+The managed forge-release-reconcile candidate combines tested Dev ddc0112 with public main 01d508d. All six public-only files match main exactly. Product source retains the tested Dev blobs, with the public 0.0.82 manifest version and current Start Local Backend command. Candidate native 313/313, exact 992-file replay 18/18, snapshot 71, graph 20 and writer audit passed. All 993 target hashes and receipt checks matched. The latest user instruction keeps tests lightweight while live work is active. Build, complete warning-review compiled smoke, routes/E2E/oracles, exactVSIX, install and CI remain pending. Status PARTIAL and release NOT_READY. [Source reconciliation and held gates](docs/plans/2026-11-10-release-candidate-reconciliation.md).
+
+The imported public 0.0.80 record proves final CI 40415020902 succeeded at 8e3a0ab; the stale delivery-pending entry has been retired into the existing verified roadmap history. Preserve the historical extension-tooling follow-up during qualification. Its last record retained 4 moderate uuid-chain findings and the scoped Identity 4.13.0 pin pending supported upstream remediation and reproof. The broader Claude/safety program remains open.
+
 ### Native deploy latency `in_progress` (GitHub #97)
 
 Both aliases report stage timings, reuse exact validation facts, pair selected and original disk bytes in one observation, and stage loose files directly from the frozen payload. Per-call graph indexes now preserve first-match and link order while replacing repeated full-array searches. On the same 992-file scratch fixture, final bound apply took 62.36 s versus 69.48 s, with readiness down from 10.59 s to 189 ms. All 993 output hashes, coverage rows, seven source barriers and reopened receipt checks passed. Full native 313 and legacy graph parity 20 passed. An interim implementation applied in 57.99 s, while the final source spent longer in import and snapshot stages. Actual consumer timing and a consistent one-minute target remain open. [Graph index proof](docs/plans/2026-11-10-md-graph-traversal-index.md), [working set proof](docs/plans/2026-11-10-deploy-validation-working-set.md).
@@ -195,20 +201,6 @@ Dev `validate:mod` adds text, compact JSON, SARIF and GitHub Actions output with
 The isolated Windows Dev backend accepts signed owner approval, runs the approved suite, and reuses exact receipts in addressed project validation and native scratch deploy. Exact UI file coverage is credited separately from the static finding. Run status names terminal commands and distinguishes unattempted or incomplete results. [Coverage evidence](docs/plans/2026-11-08-a15-project-coverage.md) and [named result evidence](docs/plans/2026-11-08-a15-named-run-results.md). A fresh signed review is the Dev recovery path after [owner credential rotation](docs/plans/2026-11-08-a15-owner-policy-rotation.md).
 Full source/native real-Lua qualification is VERIFIED: 202/202 checks, three actual pinned LuaJIT20 runs (29-case semantic negative and two positives), nine exact Lua inputs, both deploy aliases, 12 invalid applies, missing/stale/revoked/replayed proof and exact13-file writes/reopened suite-linked receipts. Three truncation gaps remain honestly incomplete; no last-green promotion. All worker handles terminal and owned runtime retired; peak33,738,459B/290files. [Contract, failed oracles and exact evidence](docs/plans/2026-11-10-a15-lua-behavioral-qualification.md); QA/forge-1110-lua61-behavior.json records immutable verdict/retention hashes and commit gates. This closes the real-Lua native qualification unit, not all#61. The [#86 scope/order repair](docs/plans/2026-11-10-lua-runtime-scope-order.md) now passes313/313 source/native controls with shared registered scope, per-environment order and explicit unknowns; the manifest-free real29 fixture retains nine additional uncredited scope gaps alongside three truncation gaps. Real device enrollment, installed/rendered owner controls, supervisor recovery, broader output/coverage and concurrency remain open. Live Forge/X4 unchanged; no deployment-time reduction or wholesale healthgate replacement claim.
 
-### Bounded Claude fixes public release 0.0.80 `in_progress` (GitHub #20)
-
-User authorized the bounded public release before finishing the program, then return to Dev.
-Release commit c97d5d8 is pushed; GitHub v0.0.80 and Open VSX version/latest downloads
-match the tested VSIX. Source120 E2E/500 routes/134 oracles and exact package80/installed62/
-installed134/native proof passed. No live installation or game input. Required Quality
-run40409196050 failed two oracles; this release-completion CI-only repair passes local
-alias recovery, two complete134-oracle runs with cleanup,500 routes and full mandatory
-gates. Remote follow-up CI is pending at this precommit snapshot; require green and
-record exact provenance on the release/owner before closing delivery. Public package
-is immutable and unchanged. See docs/releases/0.0.80-delivery.json and the bounded plan.
-Extension tooling retains4moderate uuid-chain findings; staged runtime audit is clear.
-Remove scoped Identity4.13.0 pin only after supported upstream remediation and reproof.
-The Claude program stays OPEN; A15 is next in isolated Dev and Kimi remains paused.
 
 ### Claude complaint completion and release — C01-C07 `in_progress` (GitHub #20; runtime #14/#35)
 

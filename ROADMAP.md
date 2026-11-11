@@ -8204,3 +8204,42 @@ The standalone 380-script/13,680-action subset took 3.122 s to generate and 5.05
 ## 2026-11-10 — VERIFIED MD graph traversal indexes (#97)
 
 The generator and validator use call-local first-match and ordered-link indexes, including orphan target membership. Twenty regression controls and existing compile/port/semantics/Doctor 101 checks passed. The standalone warm Doctor fell from 5.844 s to 80.84 ms with exact XML and diagnostic hashes. On the same 992-file fixture, final native apply took 62.36 s versus 69.48 s and readiness 189 ms versus 10.59 s. Exact 993-file output, seven source checks and reopened receipts passed, along with artifact oracle 123 and final native replay 313. The interim 57.99 s apply and final run's longer import/snapshot stages keep the consistent one-minute target open. [Proof and review](docs/plans/2026-11-10-md-graph-traversal-index.md).
+
+## 2026-11-09 —0.0.82 exact candidate qualification VERIFIED; delivery pending
+
+Source120/509/134, exact stableVSIX0b8d6477…, privateCLI2200-file parity, installed receipt/Steam/rollback/physical/filename/probe19 and final134runtimeoracles passed. Publication is not yet claimed. Evidence:[0.0.82proof](docs/releases/0.0.82-proof.json). No live install/game input; experience/cold-start witnesses stay open.
+
+## 2026-11-09 — historical0.0.80 delivery CI reconciled VERIFIED
+
+The previously pending final Quality run[40415020902](https://github.com/KennyG1990/X4_Forge/actions/runs/40415020902) is completed/success at8e3a0abfc308955e09099feb6f15076183c7aef8. The initial failed run is retained in its delivery record; the broader Claude programme stays open. Moved only the stale delivery unit from open BACKLOG. Original precommit capture follows unchanged:
+
+### Bounded Claude fixes public release 0.0.80 `in_progress` (GitHub #20)
+
+User authorized the bounded public release before finishing the program, then return to Dev.
+Release commit c97d5d8 is pushed; GitHub v0.0.80 and Open VSX version/latest downloads
+match the tested VSIX. Source120 E2E/500 routes/134 oracles and exact package80/installed62/
+installed134/native proof passed. No live installation or game input. Required Quality
+run40409196050 failed two oracles; this release-completion CI-only repair passes local
+alias recovery, two complete134-oracle runs with cleanup,500 routes and full mandatory
+gates. Remote follow-up CI is pending at this precommit snapshot; require green and
+record exact provenance on the release/owner before closing delivery. Public package
+is immutable and unchanged. See docs/releases/0.0.80-delivery.json and the bounded plan.
+Extension tooling retains4moderate uuid-chain findings; staged runtime audit is clear.
+Remove scoped Identity4.13.0 pin only after supported upstream remediation and reproof.
+The Claude program stays OPEN; A15 is next in isolated Dev and Kimi remains paused.
+
+
+## 2026-11-10 — 0.0.82 store/source/required CI VERIFIED; GitHub draft pending announcement authorization
+
+Open VSX version/latest and streamed download match the exact qualified VSIX SHA-256 `0b8d6477036a664659db36e00dff0992a6390a397f967726bef4b48238ec5daa`. Matching source `dea588f` is pushed after the normal hook, with actual remote and tracking HEAD equal. [Quality 42740830042](https://github.com/KennyG1990/X4_Forge/actions/runs/42740830042) completed successfully. The exact GitHub draft/assets are ready; publication triggers the existing Discord workflow and awaits the user response. [Proof and applicability](docs/releases/0.0.82-proof.json). Source/installed/headless evidence does not close editor/game gates or the broader programme. No capability-map delta from delivery; no live setup or computer use.
+
+
+## 2026-11-10 — Stable 0.0.82 delivery VERIFIED
+
+[GitHub v0.0.82](https://github.com/KennyG1990/X4_Forge/releases/tag/v0.0.82) is stable and points to source dea588f493c13b820f26558d8a7bdb784c4dc2c6. Open VSX version/latest and both streamed public downloads match the exact tested 29,867,215-byte VSIX SHA-256 `0b8d6477036a664659db36e00dff0992a6390a397f967726bef4b48238ec5daa`. Code Quality 42740830042 and documentation Quality 42742277148 passed. User authorized the existing Discord announcements; workflow 42750299708 succeeded and returned type-0 message objects for both posts. The truncated workflow prefixes do not provide direct channel message IDs. [Full proof and limits](docs/releases/0.0.82-proof.json).
+
+The temporary qualification footprint retired 838,518,881 bytes / 38,213 files, with exact artifact/compact evidence retained. Final publication records reuse a restored clean source checkout and temporary links to owned Dev dependencies; no new install or dependency copy. No capability-map delta from delivery, live installation/restart, computer use, game or save action. The broader programme and editor/game witnesses remain open. The prior open delivery row is moved here as its historical snapshot:
+
+### Stable 0.0.82 delivery `in_progress` (GitHub #53, under #20)
+
+Exact source/package/isolated-install/native qualification passed: 120 E2E / 509 routes / 134 source and installed oracles, 2,200 installed-file comparisons, plus receipt/Steam/rollback/physical/filename and sidecar probes. Open VSX serves the exact tested VSIX. Matching source `dea588f` is pushed after the normal hook; [Quality CI 42740830042](https://github.com/KennyG1990/X4_Forge/actions/runs/42740830042) passed. [Exact artifact and limits](docs/releases/0.0.82-proof.json). The matching GitHub release/assets are a verified draft, pending authorization for the existing Discord announcements triggered by publication. Editor/game acceptance remains open in the owning feature issues; #93 is excluded. No live setup or computer use.
