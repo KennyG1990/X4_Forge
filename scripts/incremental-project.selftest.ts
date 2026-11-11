@@ -30,6 +30,30 @@ clearProjectValidationCache();
 check('cold exact full-result equality',()=>parity(project()));
 check('unchanged actually reuses facts',()=>{const before=getProjectValidationCacheStats();parity(project());assert.ok(getProjectValidationCacheStats().hits>before.hits);});
 check('full comparison bypasses new facts',()=>{const before=getProjectValidationCacheStats();runProjectValidation(project(),{references:corpus.references,incremental:false});assert.deepEqual(getProjectValidationCacheStats(),before);});
+check('ordinary facts stay warm across a 500-file validation and one edit', () => {
+  const p = project();
+  p.files = p.files.filter(file => file.path === mdPath || file.path === 'content.xml');
+  p.files.push(...Array.from({ length: 498 }, (_, index) => ({
+    path: `fixtures/file_${index}.xml`, kind: 'other' as const, content: '<root/>',
+  })));
+  assert.equal(p.files.length, 500);
+  clearProjectValidationCache();
+  const cold = parity(p);
+  const before = getProjectValidationCacheStats();
+  assert.ok(before.misses > 508);
+  assert.deepEqual(parity(structuredClone(p)), cold);
+  const warm = getProjectValidationCacheStats();
+  assert.equal(warm.misses, before.misses);
+  assert.equal(warm.hits - before.hits, before.misses);
+  assert.equal(warm.evictions, 0);
+
+  p.files.find(file => file.path === mdPath)!.content = md('<debug_text text="1" forge_invalid="1"/>');
+  const edited = parity(p);
+  const after = getProjectValidationCacheStats();
+  assert.ok(edited.summary.schemaErrors > cold.summary.schemaErrors);
+  assert.ok(after.misses > warm.misses && after.misses <= warm.misses + 9);
+  assert.ok(after.entries <= 4_500 && after.accountedBytes <= 24 * 1024 * 1024);
+});
 const consumer = 'ui/scope-consumer.lua';
 const provider = 'ui/scope-provider.lua';
 const manifest = (order: string[]) =>

@@ -12724,15 +12724,18 @@ function previewDeploymentEffect(ws: any, targetRoot: string, format: DeployForm
   | { added: Array<{ path: string; bytes: number }>; overwritten: Array<{ path: string; bytes: number; wasBytes: number }>; deleted: Array<{ path: string; bytes: number }>; preserved: string[]; totalBytes: number; format: DeployFormat }
   | { error: string } {
   try {
-    const build = activeBuildWorkspace(ws);
-    const stampedSource = typeof build?.sourceStamp?.dir === 'string' ? path.resolve(build.sourceStamp.dir) : '';
-    const hasDiskSource = Boolean(stampedSource && fs.existsSync(stampedSource) && fs.statSync(stampedSource).isDirectory());
-    const generated = buildWorkspaceFileManifest(build);
-    const plan = frozenPlan || buildArtifactPlan({
-      sourceRoot: hasDiskSource ? stampedSource : '',
-      generatedFiles: generated.generatedFiles,
-      passthroughFiles: buildArtifactPassthroughFiles(build, generated.passthroughFiles),
-    });
+    let plan = frozenPlan;
+    if (!plan) {
+      const build = activeBuildWorkspace(ws);
+      const stampedSource = typeof build.sourceStamp?.dir === 'string' ? path.resolve(build.sourceStamp.dir) : '';
+      const hasDiskSource = Boolean(stampedSource && fs.existsSync(stampedSource) && fs.statSync(stampedSource).isDirectory());
+      const generated = buildWorkspaceFileManifest(build);
+      plan = buildArtifactPlan({
+        sourceRoot: hasDiskSource ? stampedSource : '',
+        generatedFiles: generated.generatedFiles,
+        passthroughFiles: buildArtifactPassthroughFiles(build, generated.passthroughFiles),
+      });
+    }
     if (!plan.ok) return { error: `Cannot preview: artifact planning failed — ${plan.errors.join('; ')}` };
 
     // Catalog mode packs the payload, so the on-disk names are the catalog volumes, not the
@@ -13596,6 +13599,10 @@ function runCompileArtifactSelftest() {
     let collisionRefused = false;
     try { buildWorkspaceFileManifest(collisionWorkspace); }
     catch (error) { collisionRefused = String(error).includes('UI_SOURCE_CONFLICT'); }
+    const frozenEffect = previewDeploymentEffect(collisionWorkspace, previewTarget, 'loose',
+      deploymentPlan(precedenceWorkspace, 'loose').plan);
+    record('deployment effect uses the frozen artifact without recompiling the editable model',
+      collisionRefused && !('error' in previewEffect) && JSON.stringify(frozenEffect) === JSON.stringify(previewEffect));
     record(
       'B119 modeled output refuses a same-path imported UI collision',
       collisionRefused,
@@ -14664,6 +14671,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     | 'prepare' | 'write' | 'verify' | 'doctor' | 'finalize' | 'recovery';
   const startedAt = performance.now();
   const stagesMs: Partial<Record<TimingStage, number>> = {};
+  const validationStagesMs: Partial<Record<'readiness' | 'project' | 'effect', number>> = {};
   const sourceRechecks = { count: 0, snapshotMs: 0, diskMs: 0, corpusMs: 0 };
   const measureSourceRecheck = <T>(field: 'snapshotMs' | 'diskMs' | 'corpusMs', work: () => T): T => {
     const start = performance.now();
@@ -14687,6 +14695,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     const now = performance.now();
     startStage(timingStage, now);
     return { scope: 'handler-before-response', totalMs: now - startedAt, stagesMs: { ...stagesMs },
+      ...(validationStagesMs.readiness !== undefined ? { validationStagesMs: { ...validationStagesMs } } : {}),
       ...(sourceRechecks.count ? { sourceRechecks: { ...sourceRechecks } } : {}) };
   };
   let responseIdentity: Record<string, unknown> = { modId: null, sourceHash: null, artifactHash: null };
@@ -14980,6 +14989,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     const corpusHash = deploymentCorpusIdentity(corpusPaths);
     responseIdentity = { ...responseIdentity, artifactHash, validatedArtifact: snapshot.manifest };
     startStage('validate');
+    const readinessStartedAt = performance.now();
 
     // 1c. Wellformedness over the EMITTED manifest — closes the passthrough hole: a
     // byte-fidelity import carries its ORIGINAL (possibly truncated/corrupted) files
@@ -15027,6 +15037,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       const luaReadinessError = diagnostic.domain === 'ui_layout' && /^(?:lua\.|x4-ui\.)/.test(diagnostic.code || '');
       return !luaReadinessError || (generatedCustomLua !== undefined && diagnostic.filePath === generatedCustomLua.path);
     });
+    validationStagesMs.readiness = performance.now() - readinessStartedAt;
     if (compileErrors.length > 0) {
       check('compile', 'Compile diagnostics', 'fail', compileErrors.slice(0, 3).map((d: any) => d.message).join(' | '));
       return res.json(failWith('compile', { modId, compileErrors: compileErrors.slice(0, 10) }));
@@ -15036,7 +15047,9 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     // 2b. PREFLIGHT — the FULL validation stack over the emitted manifest (same engine as
     // project/validate: structure, cue refs, MD↔Lua wiring, XSD md+aiscript, order-param
     // lint, scriptproperty chains, pitfall lints). Errors block; warnings surface.
+    const projectValidationStartedAt = performance.now();
     const deployValidation = buildDeployProjectValidation(modId, snapshot);
+    validationStagesMs.project = performance.now() - projectValidationStartedAt;
     const { preflight, diskValidationSkipped } = deployValidation;
     const luaValidation = { filesScanned: preflight.lua.filesScanned, runtimeScope: preflight.lua.runtimeScope };
     const projectChecks = preflight.projectChecks;
@@ -15258,6 +15271,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     // Keep this request-local effect alongside the deploy request. It is the same planner used
     // by dry-run and is computed before any staging or target mutation, so the successful
     // response/history projection cannot fall back to the process-global artifact report.
+    const effectStartedAt = performance.now();
     const deploymentEffect = previewDeploymentEffect(ws, targetRoot, deployFormat, frozenPlan);
     if ('error' in deploymentEffect) {
       check('deploy', 'Deploy preview', 'fail', deploymentEffect.error);
@@ -15268,6 +15282,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     }
     const luaRegistration = previewLuaRegistrationChange(snapshot, targetRoot, deploymentEffect.preserved);
     const effect = luaRegistration ? { ...deploymentEffect, luaRegistration } : deploymentEffect;
+    validationStagesMs.effect = performance.now() - effectStartedAt;
 
     const assertCurrentSource = () => inStage('sourceRecheck', () => {
       sourceRechecks.count++;

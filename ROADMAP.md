@@ -8192,3 +8192,7 @@ Forge pairs selected and original disk identity in one observation. All seven ap
 ## 2026-11-10 — VERIFIED direct loose staging (#97)
 
 Forge copies selected files from the frozen payload into the transaction stage and verifies the copy before preservation and activation. The 992-file write stage fell from 22.85 s to 13.46 s and bound apply from 88.96 s to 80.26 s. Exact bytes and receipts matched, and staged corruption refused before replacing the previous target. Focused 71, artifact oracle 122 and native 313 checks passed. Unit 15 release review remains NOT_READY. [Proof and release review](docs/plans/2026-11-10-deploy-frozen-loose-staging.md).
+
+## 2026-11-10 — VERIFIED native deploy validation working set (#97)
+
+The bounded project cache retains 3,211 ordinary facts across identical 500-text-file validations. Deployment effect calculation uses the supplied frozen plan. The same 992-file preview and apply took 50.80 s and 69.48 s. Apply validation fell from 21.84 s to 11.75 s. All 993 output hashes, validation coverage, seven apply source barriers and receipt checks passed. Focused 33, overlay 24, artifact oracle 123 and native replay 313 passed. [Contract and results](docs/plans/2026-11-10-deploy-validation-working-set.md).

@@ -8,7 +8,7 @@
 
 ### Native deploy latency `in_progress` (GitHub #97)
 
-Both aliases report stage timings, reuse exact Lua and effective MD/AI schema diagnostics, and pair selected and original disk bytes in one observation. Loose deployment now uses the frozen payload directly in its verified transaction stage. On the same 992-file scratch fixture, the write stage fell from 22.85 s to 13.46 s and apply from 88.96 s to 80.26 s. All 993 output hashes, coverage rows, and receipts matched. Corruption refused before activation. Validation and import are now the largest stages. The consumer's under-one-minute target remains open. [Loose stage proof](docs/plans/2026-11-10-deploy-frozen-loose-staging.md), [source recheck proof](docs/plans/2026-11-10-deploy-source-observation-reuse.md).
+Both aliases report stage timings, reuse exact validation facts, pair selected and original disk bytes in one observation, and stage loose files directly from the frozen payload. The 500-text-file validator now reuses all 3,211 ordinary facts on identical input. The deployment effect uses the frozen plan. On the same 992-file scratch fixture, bound apply fell from 80.26 s to 69.48 s and validation from 21.84 s to 11.75 s. All 993 output hashes, coverage rows and receipts matched. Readiness accounts for 10.59 s inside apply validation. Profile Doctor's MD generation and action-chain traversal next. The actual consumer timing and under-one-minute target remain open. [Working set proof](docs/plans/2026-11-10-deploy-validation-working-set.md), [loose stage proof](docs/plans/2026-11-10-deploy-frozen-loose-staging.md).
 
 ### Official reference composition coverage `in_progress` (GitHub #11)
 

@@ -86,8 +86,9 @@ function resourceGeneration(resource: object | null | undefined): number {
 }
 const LUA_FACT_BUDGET = 4 * 1024 * 1024;
 const EFFECTIVE_SCHEMA_FACT_BUDGET = 4 * 1024 * 1024;
-// Keep expensive facts available when the ordinary per-file stages churn.
-const validationFacts = createBoundedAnalysisCache<unknown>({ maxEntries: 508, maxBytes: 24 * 1024 * 1024 });
+// A 500-file validation can use up to nine ordinary facts per file. Bound both
+// entry overhead and retained payload while keeping that working set warm.
+const validationFacts = createBoundedAnalysisCache<unknown>({ maxEntries: 4_500, maxBytes: 24 * 1024 * 1024 });
 const projectLuaFacts = createBoundedAnalysisCache<LuaStaticAnalysisResult>(
   { maxEntries: 4, maxBytes: LUA_FACT_BUDGET },
   result => !result.runtimeScope.truncated,
