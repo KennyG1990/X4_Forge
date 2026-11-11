@@ -462,8 +462,13 @@ function planArtifact(options: BuildArtifactPlanOptions, diskEntries?: ArtifactE
 }
 
 /** Materialize a plan into a new/empty scratch directory and verify every written hash. */
-export function materializeArtifact(plan: ArtifactPlan, targetRootInput: string): ArtifactBuildResult {
+export function materializeArtifact(
+  plan: ArtifactPlan,
+  targetRootInput: string,
+  verification: 'per-file' | 'complete-tree' = 'per-file',
+): ArtifactBuildResult {
   const targetRoot = path.resolve(targetRootInput);
+  const verifyPerFile = verification === 'per-file';
   const errors = [...plan.errors];
   if (!plan.ok) return { ok: false, targetRoot, written: 0, bytes: 0, errors };
   if (inside(targetRoot, plan.sourceRoot) || inside(plan.sourceRoot, targetRoot)) {
@@ -498,21 +503,28 @@ export function materializeArtifact(plan: ArtifactPlan, targetRootInput: string)
         if (!entry.sourcePath || !fs.existsSync(entry.sourcePath)) throw new Error('planned source file is missing');
         const sourceStat = fs.lstatSync(entry.sourcePath);
         if (sourceStat.isSymbolicLink() || !sourceStat.isFile()) throw new Error('planned source is no longer a regular file');
-        const currentHash = hashArtifactFile(entry.sourcePath);
-        if (currentHash !== entry.sha256) throw new Error(`source changed after planning (${entry.sha256} -> ${currentHash})`);
+        if (verifyPerFile) {
+          const currentHash = hashArtifactFile(entry.sourcePath);
+          if (currentHash !== entry.sha256) throw new Error(`source changed after planning (${entry.sha256} -> ${currentHash})`);
+        }
         fs.copyFileSync(entry.sourcePath, destination);
       }
-      const destinationStat = fs.statSync(destination);
-      const destinationHash = hashArtifactFile(destination);
-      if (destinationStat.size !== entry.size || destinationHash !== entry.sha256) {
-        throw new Error(`destination verification mismatch (size ${destinationStat.size}/${entry.size}, hash ${destinationHash}/${entry.sha256})`);
+      if (verifyPerFile) {
+        const destinationStat = fs.statSync(destination);
+        const destinationHash = hashArtifactFile(destination);
+        if (destinationStat.size !== entry.size || destinationHash !== entry.sha256) {
+          throw new Error(`destination verification mismatch (size ${destinationStat.size}/${entry.size}, hash ${destinationHash}/${entry.sha256})`);
+        }
       }
       written++;
-      bytes += destinationStat.size;
+      bytes += entry.size;
     } catch (error) {
       errors.push(`Failed to materialize ${entry.path}: ${error instanceof Error ? error.message : String(error)}`);
       break;
     }
+  }
+  if (!verifyPerFile && errors.length === 0) {
+    errors.push(...verifyMaterializedArtifact(plan, targetRoot).errors);
   }
   return { ok: errors.length === 0 && written === plan.entries.length, targetRoot, written, bytes, errors };
 }

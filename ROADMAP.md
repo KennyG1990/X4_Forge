@@ -8188,3 +8188,7 @@ The headless native route previewed in 57.78 s and applied in 163.69 s. Independ
 ## 2026-11-10 — VERIFIED source observation reuse (#97)
 
 Forge pairs selected and original disk identity in one observation. All seven apply checks reread current disk, frozen bytes, and corpus. The same 992-file apply fell from 163.69 s to 88.96 s and source rechecks fell from 89.60 s to 12.01 s. All 993 output hashes and coverage rows matched. A same-length edit after freezing refused before writes. Focused 71, artifact oracle 120, and native 313 checks passed. [Proof and remaining timing work](docs/plans/2026-11-10-deploy-source-observation-reuse.md).
+
+## 2026-11-10 — VERIFIED direct loose staging (#97)
+
+Forge copies selected files from the frozen payload into the transaction stage and verifies the copy before preservation and activation. The 992-file write stage fell from 22.85 s to 13.46 s and bound apply from 88.96 s to 80.26 s. Exact bytes and receipts matched, and staged corruption refused before replacing the previous target. Focused 71, artifact oracle 122 and native 313 checks passed. Unit 15 release review remains NOT_READY. [Proof and release review](docs/plans/2026-11-10-deploy-frozen-loose-staging.md).

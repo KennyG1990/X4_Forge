@@ -8,7 +8,7 @@
 
 ### Native deploy latency `in_progress` (GitHub #97)
 
-Both aliases report stage timings, reuse exact Lua and effective MD/AI schema diagnostics, and pair selected and original disk bytes in one observation. On the same 992-file scratch fixture, bound apply fell from 163.69 s to 88.96 s and seven source rechecks fell from 89.60 s to 12.01 s. All 993 output hashes and 500 text, 22 unavailable, and 471 byte-only coverage rows matched. A same-length edit after freezing was refused before writes. The remaining large stages are writing, validation and import. The consumer's under-one-minute target remains open. [Source recheck proof](docs/plans/2026-11-10-deploy-source-observation-reuse.md), [native baseline](docs/plans/2026-11-10-native-deploy-consumer-scale.md).
+Both aliases report stage timings, reuse exact Lua and effective MD/AI schema diagnostics, and pair selected and original disk bytes in one observation. Loose deployment now uses the frozen payload directly in its verified transaction stage. On the same 992-file scratch fixture, the write stage fell from 22.85 s to 13.46 s and apply from 88.96 s to 80.26 s. All 993 output hashes, coverage rows, and receipts matched. Corruption refused before activation. Validation and import are now the largest stages. The consumer's under-one-minute target remains open. [Loose stage proof](docs/plans/2026-11-10-deploy-frozen-loose-staging.md), [source recheck proof](docs/plans/2026-11-10-deploy-source-observation-reuse.md).
 
 ### Official reference composition coverage `in_progress` (GitHub #11)
 

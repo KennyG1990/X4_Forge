@@ -12860,7 +12860,7 @@ function sweepDeploymentScratchSiblings(targetPath: string, committedFingerprint
 }
 
 function replaceValidatedDeployment(
-  artifactRoot: string,
+  artifactRoot: string | undefined,
   targetPath: string,
   expected: Array<{ path: string; size: number; sha256: string }>,
   plan: ArtifactPlan,
@@ -12879,7 +12879,14 @@ function replaceValidatedDeployment(
   let activated = false;
   let stagedFingerprint: string | undefined;
   try {
-    copyRegularTree(artifactRoot, stage);
+    if (artifactRoot) {
+      copyRegularTree(artifactRoot, stage);
+    } else {
+      // A frozen plan already names each selected file. Reopen the copied
+      // bytes in the private stage before adding preserved paths.
+      const staged = materializeArtifact(plan, stage, 'complete-tree');
+      if (!staged.ok) throw new Error(`Loose artifact verification failed: ${staged.errors.join('; ')}`);
+    }
     const targetExisted = fs.existsSync(targetPath);
     if (targetExisted) {
       for (const { path: relativePath, origin } of preservedDeploymentEntries(targetPath, plan, ownsForgeState)) {
@@ -12969,11 +12976,12 @@ function compileWorkspaceToFolder(
   writeSnapshots: boolean = false,
   artifactMode: 'loose' | 'catalog' = 'loose',
   transactionHooks: DeploymentTransactionHooks = {},
-  frozenPlan?: ArtifactPlan,
+  frozenSnapshot?: DeploymentSnapshot,
 ): string {
   ws = activeBuildWorkspace(ws);
   const targetPath = mode === 'store' ? path.join(rootPath, effectiveModId(ws)) : rootPath;
-  const scratchParent = fs.mkdtempSync(path.join(os.tmpdir(), 'x4forge-compile-'));
+  const looseSnapshot = artifactMode === 'loose' ? frozenSnapshot : undefined;
+  const scratchParent = looseSnapshot ? undefined : fs.mkdtempSync(path.join(os.tmpdir(), 'x4forge-compile-'));
   let ephemeralSource = '';
   try {
     const stampedSource = typeof ws?.sourceStamp?.dir === 'string' ? path.resolve(ws.sourceStamp.dir) : '';
@@ -12982,7 +12990,7 @@ function compileWorkspaceToFolder(
       throw new Error('Cannot build a complete artifact: omitted passthrough files have no available disk source. Re-import the project from its workspace folder.');
     }
     const sourceRoot = hasDiskSource ? stampedSource : (ephemeralSource = fs.mkdtempSync(path.join(os.tmpdir(), 'x4forge-generated-source-')));
-    let plan = frozenPlan;
+    let plan = frozenSnapshot?.plan;
     if (!plan) {
       const generated = buildWorkspaceFileManifest(ws);
       plan = buildArtifactPlan({
@@ -12993,9 +13001,9 @@ function compileWorkspaceToFolder(
     }
     if (!plan.ok) throw new Error(`Artifact planning failed: ${plan.errors.join('; ')}`);
 
-    const artifactRoot = path.join(scratchParent, artifactMode);
+    const artifactRoot = scratchParent && path.join(scratchParent, artifactMode);
     if (artifactMode === 'catalog') {
-      const packaged = materializeCatalogArtifact(plan, artifactRoot);
+      const packaged = materializeCatalogArtifact(plan, artifactRoot!);
       if (!packaged.ok) throw new Error(`Packed artifact failed: ${packaged.errors.join('; ')}`);
       const preservationOverrides = replaceValidatedDeployment(artifactRoot, targetPath, packaged.files, plan, transactionHooks, writeSnapshots);
       lastArtifactReport = {
@@ -13016,15 +13024,19 @@ function compileWorkspaceToFolder(
         preservationOverrideDetails: preservationOverrides,
       };
     } else {
-      const built = materializeArtifact(plan, artifactRoot);
-      if (!built.ok) throw new Error(`Loose artifact failed: ${built.errors.join('; ')}`);
-      const verified = verifyMaterializedArtifact(plan, artifactRoot);
-      if (!verified.ok) throw new Error(`Loose artifact verification failed: ${verified.errors.join('; ')}`);
+      if (artifactRoot) {
+        const built = materializeArtifact(plan, artifactRoot);
+        if (!built.ok) throw new Error(`Loose artifact failed: ${built.errors.join('; ')}`);
+        const verified = verifyMaterializedArtifact(plan, artifactRoot);
+        if (!verified.ok) throw new Error(`Loose artifact verification failed: ${verified.errors.join('; ')}`);
+      }
       // B84: loose deployments now go through the SAME rollback-safe replacement as catalog
       // ones. The previous `copyRegularTree` was purely ADDITIVE: it never removed anything,
       // so a file deleted from the mod stayed in the game folder forever and kept being
       // loaded by X4 — and loose deploys got none of the sibling-backup, rollback, hash
       // verification, or locked-root (B83) protection that catalog deploys already had.
+      // Frozen bytes already live in an owned tree. Verify the copy inside the
+      // transaction before preservation or activation instead of copying twice.
       const preservationOverrides = replaceValidatedDeployment(artifactRoot, targetPath, plan.entries, plan, transactionHooks, writeSnapshots);
       lastArtifactReport = {
         mode: artifactMode,
@@ -13092,7 +13104,7 @@ function compileWorkspaceToFolder(
 
   return targetPath;
   } finally {
-    fs.rmSync(scratchParent, { recursive: true, force: true });
+    if (scratchParent) fs.rmSync(scratchParent, { recursive: true, force: true });
     if (ephemeralSource) fs.rmSync(ephemeralSource, { recursive: true, force: true });
   }
 }
@@ -13120,14 +13132,36 @@ function runCompileArtifactSelftest() {
     });
     const patchManifest = buildWorkspaceFileManifest(patchOnly).files;
     const beforeGuardTarget = path.join(root, 'guarded-extensions');
-    let guardRefused = false;
-    let guardFailure = '';
+    const frozen = captureDeploymentSnapshot(deploymentPlan(patchOnly, 'catalog').plan, 'catalog');
     try {
-      compileWorkspaceToFolder(patchOnly, beforeGuardTarget, 'store', false, 'loose', {
-        beforeActivate: () => { throw new Error('source-or-receipt-changed'); },
-      }, deploymentPlan(patchOnly, 'loose').plan);
-    } catch (error) { guardFailure = String(error); guardRefused = guardFailure.includes('source-or-receipt-changed'); }
-    record('deploy write-boundary guard refuses before target mutation', guardRefused && !fs.existsSync(beforeGuardTarget), guardFailure);
+      let guardFailure = '';
+      try {
+        compileWorkspaceToFolder(patchOnly, beforeGuardTarget, 'store', false, 'loose', {
+          beforeActivate: () => { throw new Error('source-or-receipt-changed'); },
+        }, frozen);
+      } catch (error) { guardFailure = String(error); }
+      record('deploy write-boundary guard refuses before target mutation',
+        guardFailure.includes('source-or-receipt-changed') && !fs.existsSync(beforeGuardTarget), guardFailure);
+
+      let guards = 0;
+      const installed = compileWorkspaceToFolder(patchOnly, beforeGuardTarget, 'store', false, 'loose', {
+        beforeActivate: () => { guards++; frozen.assertIntegrity(); },
+      }, frozen);
+      const originalFingerprint = regularTreeFingerprint(installed);
+      record('loose transaction accepts the verified logical payload of a catalog snapshot',
+        guards === 2 && verifyMaterializedArtifact(frozen.plan, installed).ok);
+      let corruptFailure = '';
+      let targetTouched = false;
+      try {
+        compileWorkspaceToFolder(patchOnly, beforeGuardTarget, 'store', false, 'loose', {
+          beforeActivate: () => fs.appendFileSync(path.join(frozen.payloadRoot, 'content.xml'), '<!-- drift -->'),
+          onTargetWrite: () => { targetTouched = true; },
+        }, frozen);
+      } catch (error) { corruptFailure = String(error); }
+      record('copied loose payload fails exact verification before replacing the previous target',
+        corruptFailure.includes('Loose artifact verification failed') && !targetTouched
+          && regularTreeFingerprint(installed) === originalFingerprint, corruptFailure);
+    } finally { frozen.dispose(); }
     record('patch-only workspace has no MD readiness error', !validatePackageReadiness(patchOnly).some(finding => finding.message.includes('no cue nodes')));
     record('patch-only workspace emits no synthetic MD file', !Object.keys(patchManifest).some(file => file.startsWith('md/')), Object.keys(patchManifest).join(', '));
     record('patch-only workspace still emits its library diff', typeof patchManifest['libraries/wares.xml'] === 'string' && patchManifest['libraries/wares.xml'].includes('<diff>'));
@@ -15346,7 +15380,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     writeAttempted = true;
     if (modWorkspacePath) {
       const stagingRoot = path.join(modWorkspacePath, '.forge-builds', 'loose');
-      stagingPath = compileWorkspaceToFolder(ws, stagingRoot, 'store', true, 'loose', { beforeActivate: assertWriteAuthority }, frozenPlan);
+      stagingPath = compileWorkspaceToFolder(ws, stagingRoot, 'store', true, 'loose', { beforeActivate: assertWriteAuthority }, snapshot);
     }
     let stagedRecovery: DeploymentRecoveryRecord | undefined;
     const deployedPath = compileWorkspaceToFolder(ws, extensionsPath, 'store', false, deployFormat, {
@@ -15368,7 +15402,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
         if (state === 'unconfirmed') outputUnconfirmed = true;
         else targetWrite.state = state;
       },
-    }, frozenPlan);
+    }, snapshot);
     const formatReport = describeDeployFormat(deployFormat, lastArtifactReport);
     startStage('verify');
 
