@@ -39,8 +39,7 @@ export function projectCheckFailureMessage(result: Pick<ProjectCheckWorkerResult
       .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
       // eslint-disable-next-line no-control-regex -- These characters must not survive in receipt text.
       .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '');
-    // Redact before clipping, including an opening private-key block whose end was not retained.
-    text = text.replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-]*PRIVATE KEY-----|$)/gi, '[redacted-private-key]');
+    // The canonical policy handles complete/opening-only keys before clipping.
     text = redactReceiptText(text);
     for (const privatePath of [...privatePaths].filter(Boolean).sort((a, b) => b.length - a.length)) {
       const pattern = privatePath.split(/[\\/]/).map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[\\\\/]');

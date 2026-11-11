@@ -330,19 +330,20 @@ function isSensitiveKey(key: string): boolean {
   return SECRET_KEY_RE.test(key);
 }
 
-function redactSensitiveText(text: string): string {
-  return text
+function redactSensitiveText(text: string, maxLength = Number.POSITIVE_INFINITY): string {
+  const redacted = text
+    .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-]*PRIVATE KEY-----|$)/gi, '[redacted-private-key]')
     .replace(/Bearer\s+[a-z0-9._~+\x2f-]+=*/gi, 'Bearer [redacted]')
     .replace(/\b(?:x4fk_|sk-|pk-|rk-|ghp_|github_pat_|AIza)[a-z0-9._~+\x2f-]{6,}\b/gi, '[redacted-secret]')
-    .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/gi, '[redacted-private-key]')
-    .replace(/((?:api[_-]?key|password|token|secret)\s*[:=]\s*)[^\s,;]+/gi, '$1[redacted]');
+    .replace(/((?:api[_-]?key|password|token|secret)\s*[:=]\s*)[^\s,;]+/gi, '$1[redacted]')
+    // Assignment-shaped placeholders must also pass the unchanged strict reader.
+    .replace(new RegExp(SECRET_VALUE_RE.source, 'gi'), '[redacted-secret]');
+  return redacted.length <= maxLength ? redacted : '[redacted-secret]';
 }
 
 /** Reuse the receipt's narrow text policy before clipping bounded diagnostic excerpts. */
 export function redactReceiptText(text: string): string {
-  // Assignment labels such as token=[redacted] still match the strict read policy.
-  // Remove those residual matches too so diagnostics survive receipt reopening.
-  return redactSensitiveText(text).replace(new RegExp(SECRET_VALUE_RE.source, 'gi'), '[redacted-secret]');
+  return redactSensitiveText(text);
 }
 
 function normalizeMetadata(value: unknown, redact: boolean): ActionReceiptMetadata | undefined {
@@ -360,7 +361,7 @@ function normalizeMetadata(value: unknown, redact: boolean): ActionReceiptMetada
       const text = requireString(raw, `metadata.${key}`, 512);
       if (SECRET_VALUE_RE.test(text)) {
         if (!redact) fail(`metadata.${key} contains a policy-covered secret-bearing value.`);
-        output[key] = redactSensitiveText(text);
+        output[key] = redactSensitiveText(text, 512);
       } else {
         output[key] = text;
       }
@@ -384,7 +385,7 @@ function safeFreeText(value: unknown, label: string, max: number, redact: boolea
   const text = requireString(value, label, max);
   if (!SECRET_VALUE_RE.test(text)) return text;
   if (!redact) fail(`${label} contains a policy-covered secret-bearing value.`);
-  return redactSensitiveText(text);
+  return redactSensitiveText(text, max);
 }
 
 function validateRelativePath(value: unknown, label: string): string {

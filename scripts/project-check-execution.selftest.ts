@@ -456,7 +456,12 @@ try {
   failedStorage.store.fail = () => { failedWrites++; throw new Error('fixture storage failure'); };
   await assert.rejects(failedStorage.execute(trusted), /fixture storage failure/);
   assert.equal(failedWrites, 1);
-  assert.equal(failedStorage.store.listVerified()[0].status, 'prepared');
+  const command = failedStorage.bound.binding.command;
+  const unfinished = failedStorage.store.listVerified().filter(item => 'id' in item.capability
+    && item.capability.id === 'project-check.command'
+    && item.authority.operationId === `project-check:${command.runId}:${command.checkId}`);
+  assert.equal(unfinished.length, 1);
+  assert.equal(unfinished[0].status, 'prepared');
   record('a failed terminal write is not retried as a presentation fallback or reported as success');
   failedStorage.retire();
 

@@ -163,6 +163,8 @@ export function runActionReceiptSelftest(): ActionReceiptSelftestResult {
     const input = fixture();
     prepared = createPreparedActionReceipt(input);
     originalBytes = serializeActionReceipt(prepared);
+    ok('non_secret_fixture_serialization_identity', validateActionReceipt(JSON.parse(originalBytes)).ok
+      && serializeActionReceipt(prepared) === originalBytes, hashActionReceipt(prepared));
 
     ok('complete_v1_record_validates', validateActionReceipt(prepared).ok && prepared.schema === ACTION_RECEIPT_SCHEMA);
     ok('global_scope_validates_without_profile_or_workspace_id', validateActionReceipt(createPreparedActionReceipt(fixture('global'))).ok);
@@ -787,6 +789,85 @@ export function runActionReceiptSelftest(): ActionReceiptSelftestResult {
     const redacted = createPreparedActionReceipt(secretFixture);
     const redactedBytes = serializeActionReceipt(redacted);
     ok('secret_metadata_redacted_before_persistence', !redactedBytes.includes('x4fk_fixture_secret_12345') && redactedBytes.includes('[redacted]'));
+    const assignmentSecret = 'fixture_assignment_value_12345';
+    for (const label of ['token', 'PASSWORD', 'api_key', 'secret']) {
+      const text = `reason ${label}=${assignmentSecret}; keep this explanation`;
+      try {
+        const result = store.prepare({ ...input,
+          authority: { ...input.authority, operationId: `redaction-${label.toLowerCase()}` }, metadata: { message: text } });
+        const terminal = store.fail(result.id, {
+          validation: { status: 'failed', validator: 'forge.w3a.selftest' }, failure: { code: 'VALIDATION_FAILED' },
+        });
+        const reopened = new ActionReceiptStore({ root }).read(terminal.id);
+        const encoded = serializeActionReceipt(reopened);
+        const projected = encodeRow(attachActionReceiptToLedgerRow({ ...ledgerBase,
+          id: `redaction-${label.toLowerCase()}-history` }, reopened));
+        ok(`assignment_${label.toLowerCase()}_metadata_roundtrip`, validateActionReceipt(result).ok && validateActionReceipt(reopened).ok
+          && reopened.status === 'failed'
+          && !encoded.includes(assignmentSecret) && encoded.includes('keep this explanation')
+          && !projected.includes(assignmentSecret) && !projected.includes('"metadata"'));
+      } catch (error) { ok(`assignment_${label.toLowerCase()}_metadata_roundtrip`, false, error); }
+    }
+    for (const field of ['summary', 'failure'] as const) {
+      try {
+        const pending = store.prepare({ ...input, authority: { ...input.authority, operationId: `redaction-${field}` } });
+        const failed = store.fail(pending.id, {
+          validation: { status: 'failed', validator: 'forge.w3a.selftest',
+            ...(field === 'summary' ? { summary: `token=${assignmentSecret}` } : {}) },
+          failure: { code: 'VALIDATION_FAILED', ...(field === 'failure' ? { message: `token=${assignmentSecret}` } : {}) },
+        });
+        const reopened = new ActionReceiptStore({ root }).read(failed.id);
+        ok(`assignment_${field}_roundtrip`, reopened.status === 'failed'
+          && validateActionReceipt(reopened).ok && !serializeActionReceipt(reopened).includes(assignmentSecret));
+      } catch (error) { ok(`assignment_${field}_roundtrip`, false, error); }
+    }
+    for (const complete of [false, true]) {
+      const body = 'fixture_private_key_material';
+      const message = `reason -----BEGIN PRIVATE KEY----- ${body}${complete ? ' -----END PRIVATE KEY----- safe suffix' : ''}`;
+      const result = store.prepare({ ...input, authority: { ...input.authority, operationId: `redaction-key-${complete}` },
+        metadata: { message } });
+      const reopened = new ActionReceiptStore({ root }).read(result.id);
+      const encoded = serializeActionReceipt(reopened);
+      ok(`private_key_${complete ? 'complete' : 'opening_only'}_roundtrip`, !encoded.includes(body)
+        && encoded.includes('[redacted-private-key]') && (!complete || encoded.includes('safe suffix')));
+    }
+    for (const field of ['metadata', 'summary', 'failure'] as const) {
+      const max = field === 'summary' ? 256 : 512;
+      const message = 'a'.repeat(max - 7) + 'token=x';
+      const pending = store.prepare({ ...input, authority: { ...input.authority, operationId: `redaction-bound-${field}` },
+        ...(field === 'metadata' ? { metadata: { message } } : {}) });
+      const result = field === 'metadata' ? pending : store.fail(pending.id, {
+        validation: { status: 'failed', validator: 'forge.w3a.selftest', ...(field === 'summary' ? { summary: message } : {}) },
+        failure: { code: 'VALIDATION_FAILED', ...(field === 'failure' ? { message } : {}) },
+      });
+      const reopened = new ActionReceiptStore({ root }).read(result.id);
+      const value = field === 'metadata' ? reopened.metadata?.message
+        : field === 'summary' ? reopened.validation.summary : reopened.failure?.message;
+      ok(`redaction_expansion_${field}_stays_bounded`, value === '[redacted-secret]' && validateActionReceipt(reopened).ok);
+    }
+    ok('raw_overlong_secret_metadata_still_rejected', expectRejected(() => createPreparedActionReceipt({
+      ...input, metadata: { message: 'token=' + 'x'.repeat(512) },
+    })));
+    for (const field of ['summary', 'failure'] as const) {
+      const message = 'token=' + 'x'.repeat(field === 'summary' ? 256 : 512);
+      const pending = store.prepare({ ...input, authority: { ...input.authority, operationId: `overlong-${field}` } });
+      const result = store.tryTransition(pending.id, { to: 'failed', at: '2026-08-02T00:05:00.000Z',
+        validation: { status: 'failed', validator: 'forge.w3a.selftest', ...(field === 'summary' ? { summary: message } : {}) },
+        failure: { code: 'VALIDATION_FAILED', ...(field === 'failure' ? { message } : {}) },
+      });
+      ok(`raw_overlong_${field}_refused_before_transition`, result.ok === false
+        && result.error.includes(field === 'summary' ? 'validation.summary' : 'failure.message')
+        && store.read(pending.id).hash === pending.hash);
+    }
+    ok('raw_control_bearing_secret_metadata_still_rejected', expectRejected(() => createPreparedActionReceipt({
+      ...input, metadata: { message: 'token=fixture\nvalue' },
+    })));
+    ok('rollback_credential_identity_still_rejected', expectRejected(() => createPreparedActionReceipt({
+      ...input, rollback: { required: true, mode: 'recovery', reference: 'sk-fixture_secret_12345' },
+    })));
+    const rawSecretRead = validateActionReceipt({ ...prepared, metadata: { message: `token=${assignmentSecret}` } });
+    ok('raw_assignment_secret_read_still_rejected', !rawSecretRead.ok
+      && rawSecretRead.errors.some(error => error.includes('policy-covered secret')));
     ok('secret_metadata_key_rejected', expectRejected(() => createPreparedActionReceipt({ ...input, metadata: { apiKey: 'fixture-secret' } })));
     ok('raw_body_metadata_key_rejected', expectRejected(() => createPreparedActionReceipt({ ...input, metadata: { requestBody: 'fixture-secret' } })));
     const fileRoot = path.join(historyRoot, 'ledger.jsonl');
