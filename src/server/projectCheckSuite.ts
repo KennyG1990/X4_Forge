@@ -172,8 +172,7 @@ function outcome(receipt: ActionReceipt, children: ActionReceipt[], state: 'appl
   };
 }
 
-function readPassingChild(plan: SuitePlan, command: SuitePlan['commands'][number], link: CommandLink) {
-  const child = plan.store.read(link.id);
+function assertReopenedChildAuthority(command: SuitePlan['commands'][number], link: CommandLink, child: ActionReceipt) {
   // The current attempt may have been reopened with a new private staging path.
   // Compare stable authority against this snapshot, and original exact authority against the parent link.
   const reopenedAuthority = hashActionReceiptAuthority({
@@ -182,7 +181,13 @@ function readPassingChild(plan: SuitePlan, command: SuitePlan['commands'][number
     validation: { ...command.prepared.validation, ruleHash: child.validation.ruleHash },
   });
   if (child.id !== command.id || child.authorityHash !== link.authorityHash || child.authorityHash !== reopenedAuthority
-    || child.status !== 'committed' || child.validation.status !== 'passed'
+    || !child.validation.ruleHash) throw mismatch();
+}
+
+function readPassingChild(plan: SuitePlan, command: SuitePlan['commands'][number], link: CommandLink) {
+  const child = plan.store.read(link.id);
+  assertReopenedChildAuthority(command, link, child);
+  if (child.status !== 'committed' || child.validation.status !== 'passed'
     || child.validation.code !== 'PROJECT_CHECK_PASSED' || !child.validation.ruleHash
     || child.after?.outcome !== 'applied') throw mismatch();
   const commandLimits = command.bound.binding.command;
@@ -317,10 +322,8 @@ export function readProjectCheckSuiteReport(store: ActionReceiptStore, receipt: 
     checks: checks.sort((a, b) => a.id.localeCompare(b.id, 'en')) };
 }
 
-function readPassingSuite(plan: SuitePlan, receiptId: string) {
-  const receipt = plan.store.read(receiptId);
-  if (receipt.status !== 'committed' || receipt.validation.status !== 'passed' || receipt.validation.code !== PASSED
-    || receipt.authority.resources.length !== plan.commands.length + 1) throw mismatch();
+function currentSuiteLinks(plan: SuitePlan, receipt: ActionReceipt) {
+  if (receipt.authority.resources.length !== plan.commands.length + 1) throw mismatch();
   const byPath = new Map(receipt.authority.resources.filter(resource => resource.root === CHILD_ROOT)
     .map(resource => [resource.relativePath, resource.beforeHash]));
   const links = plan.commands.map(({ id }) => {
@@ -330,6 +333,13 @@ function readPassingSuite(plan: SuitePlan, receiptId: string) {
   });
   const expected = suiteReceiptInput(plan, links);
   if (receipt.id !== actionReceiptIdFor(expected) || receipt.authorityHash !== hashActionReceiptAuthority(expected)) throw mismatch();
+  return links;
+}
+
+function readPassingSuite(plan: SuitePlan, receiptId: string) {
+  const receipt = plan.store.read(receiptId);
+  if (receipt.status !== 'committed' || receipt.validation.status !== 'passed' || receipt.validation.code !== PASSED) throw mismatch();
+  const links = currentSuiteLinks(plan, receipt);
   const verifiedCommands = plan.commands.map((command, index) => readPassingChild(plan, command, links[index]));
   const commandReceipts = verifiedCommands.map(({ child }) => child);
   if (canonicalJson(receipt.after) !== canonicalJson(outcome(receipt, commandReceipts, 'applied'))) throw mismatch();
@@ -344,6 +354,46 @@ function readPassingSuite(plan: SuitePlan, receiptId: string) {
 /** Reopen proof against current authorized setup and exact logical artifact. */
 export function requirePassedProjectCheckSuite(input: ProjectCheckSuiteInput, receiptId: string) {
   return readPassingSuite(buildSuitePlan(input), receiptId);
+}
+
+/** Reconcile history against current authority without ever running a project command. */
+export function readTerminalProjectCheckSuite(input: ProjectCheckSuiteInput, receiptId: string): ActionReceipt | undefined {
+  const plan = buildSuitePlan(input);
+  const found = plan.store.tryRead(receiptId);
+  if (found.ok !== true) {
+    if (found.code === 'RECEIPT_NOT_FOUND' && !fs.lstatSync(plan.store.pathFor(receiptId), { throwIfNoEntry: false })) {
+      plan.first.assertReady();
+      return;
+    }
+    throw mismatch();
+  }
+  const receipt = found.receipt;
+  const links = currentSuiteLinks(plan, receipt);
+  if (receipt.status === 'prepared') {
+    for (let index = 0; index < plan.commands.length; index++) {
+      const link = links[index];
+      const child = plan.store.tryRead(link.id);
+      if (child.ok === true) {
+        assertReopenedChildAuthority(plan.commands[index], link, child.receipt);
+        if (child.receipt.status !== 'prepared') readReportChild(plan.store, receipt, plan.runId, link);
+      } else if (child.code !== 'RECEIPT_NOT_FOUND' || fs.lstatSync(plan.store.pathFor(link.id), { throwIfNoEntry: false })) throw mismatch();
+    }
+    plan.first.assertReady();
+    return;
+  }
+  if (receipt.status === 'committed') return readPassingSuite(plan, receiptId).receipt;
+  const report = readProjectCheckSuiteReport(plan.store, receipt);
+  if (!report || (report.state !== 'failed' && report.state !== 'incomplete')) throw mismatch();
+  for (let index = 0; index < plan.commands.length; index++) {
+    const link = links[index];
+    const recorded = report.checks.find(check => check.receiptId === link.id);
+    if (!recorded) continue;
+    const child = plan.store.read(link.id);
+    if (child.hash !== recorded.receiptHash) throw mismatch();
+    assertReopenedChildAuthority(plan.commands[index], link, child);
+  }
+  plan.first.assertReady();
+  return receipt;
 }
 
 /** Execute the entire declaration without releasing the addressed source lease. */

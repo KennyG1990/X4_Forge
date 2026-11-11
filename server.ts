@@ -122,7 +122,7 @@ import { loadNativeProjectCheckAuthority, openNativeProjectCheckOwnerAuthority, 
   projectCheckOwnerProfileEnabled, readNativeProjectCheckOwnerPolicy, type NativeProofScope } from './src/server/projectCheckNativeProof';
 import { ProjectCheckOwnerEnrollment, ProjectCheckOwnerEnrollmentError, type ProjectCheckOwnerResolver } from './src/server/projectCheckOwnerEnrollment';
 import { freezeProjectCheckSetup } from './src/server/projectCheckSetup';
-import { executeProjectCheckSuite } from './src/server/projectCheckSuite';
+import { executeProjectCheckSuite, projectCheckSuiteReceiptId, readTerminalProjectCheckSuite } from './src/server/projectCheckSuite';
 import { ProjectCheckRunRefusal, ProjectCheckRunService } from './src/server/projectCheckRunService';
 import { verifyProjectCheckWorkerRuntime } from './src/server/projectCheckWorker';
 import { applyProjectCheckCoverage, buildValidationEvidence, parseValidationProject, readContentManifestIdentity, ValidationInputError, type ValidationSourceLocation } from './src/lib/validationEvidence';
@@ -14566,7 +14566,7 @@ async function startProjectCheckRun(req: express.Request, res: express.Response)
       return res.status(202).json({ ok: true, ...run });
     };
     const retry = projectCheckRuns.retry(actorId, workspaceId, operationId, requestHash);
-    if (retry) return respond(retry);
+    if (retry && retry.state !== 'pending-recovery') return respond(retry);
 
     const requireCurrentWorkspace = () => {
       const record = workspaceRegistry.readPersisted(workspaceId);
@@ -14576,8 +14576,7 @@ async function startProjectCheckRun(req: express.Request, res: express.Response)
       return record;
     };
     const admitted = projectCheckRunAuthority(requireCurrentWorkspace(), actorId);
-    const run = await projectCheckRuns.start({ actorId, workspaceId, operationId, requestHash,
-      modId: admitted.modId, artifactHash: expectedArtifactHash, sourceKey: admitted.sourceKey }, async (lease, runId) => {
+    const inspectAttempt = async (runId: string, executionLease?: ProjectCheckSourceLease) => {
       const current = projectCheckRunAuthority(requireCurrentWorkspace(), actorId);
       if (current.sourceKey !== admitted.sourceKey || current.modId !== admitted.modId || current.setupHash !== admitted.setupHash
         || current.configurationHash !== admitted.configurationHash || current.approvalHash !== admitted.approvalHash) {
@@ -14597,11 +14596,15 @@ async function startProjectCheckRun(req: express.Request, res: express.Response)
       try {
         current.assertCurrent();
         frozen = freezeProjectCheckSetup(current.setupInput, current.setupHash, current.scratch);
-        const suite = await executeProjectCheckSuite({ setupInput: current.setupInput, frozen,
+        const suiteInput = { setupInput: current.setupInput, frozen,
           artifact: { modId: current.modId, snapshot }, approvals: current.approvals, approvalId: current.approvalId,
           runId, systemRoot: current.runtime.systemRoot, runtime: current.runtime, store: actionReceiptStore,
           assertLaunchAuthority: () => { requireCurrentWorkspace(); current.assertCurrent(); },
-          workspaceId, actorId, lease });
+          workspaceId, actorId };
+        const suite = executionLease
+          ? await executeProjectCheckSuite({ ...suiteInput, lease: executionLease })
+          : readTerminalProjectCheckSuite(suiteInput, projectCheckSuiteReceiptId(actorId, workspaceId, runId));
+        if (!suite) return;
         return { suite, logicalArtifactHash: snapshot.manifest.hash };
       } finally {
         const coordination = forgeSourceCoordinator.status([current.sourceKey]);
@@ -14609,7 +14612,13 @@ async function startProjectCheckRun(req: express.Request, res: express.Response)
           try { frozen?.dispose(); } finally { snapshot.dispose(); }
         }
       }
-    });
+    };
+    const run = await projectCheckRuns.start({ actorId, workspaceId, operationId, requestHash,
+      modId: admitted.modId, artifactHash: expectedArtifactHash, sourceKey: admitted.sourceKey }, async (lease, runId) => {
+      const completed = await inspectAttempt(runId, lease);
+      if (!completed) throw new Error('Project check execution produced no suite.');
+      return completed;
+    }, runId => inspectAttempt(runId));
     return respond(run);
   } catch (error) { return projectCheckRunError(res, error); }
 }

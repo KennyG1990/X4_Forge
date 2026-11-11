@@ -61,6 +61,7 @@ export class ProjectCheckRunRefusal extends Error {
 
 type SuiteCompletion = { suite: ActionReceipt; logicalArtifactHash: string };
 type Execute = (lease: ProjectCheckSourceLease, runId: string) => Promise<SuiteCompletion>;
+type Recover = (runId: string) => Promise<SuiteCompletion | undefined>;
 type Completion = SuiteCompletion | { refused: RunRefusalCode } | { unknown: true };
 type ActiveRun = {
   id: string;
@@ -218,14 +219,22 @@ export class ProjectCheckRunService {
     return this.status(actorId, workspaceId, id);
   }
 
-  async start(input: ProjectCheckRunInput, execute: Execute): Promise<ProjectCheckRunStatus> {
+  async start(input: ProjectCheckRunInput, execute: Execute, recover?: Recover): Promise<ProjectCheckRunStatus> {
     const { actorId, workspaceId, sourceKey } = input;
     const attempt = prepare(input);
     const id = actionReceiptIdFor(attempt.prepared);
     const existing = this.read(id);
     if (existing) {
       if (existing.authorityHash !== attempt.authorityHash) throw conflict();
-      return this.status(actorId, workspaceId, id);
+      const status = this.status(actorId, workspaceId, id);
+      if (!recover || status.state !== 'pending-recovery') return status;
+      if (this.active) throw refusal('PROJECT_CHECK_RUN_BUSY', 'A project check run already occupies this Dev host.', 409);
+      const slot: ActiveRun = { id, authorityHash: attempt.authorityHash, owned: true, state: 'queued',
+        admission: Promise.resolve().then(() => this.status(actorId, workspaceId, id)) };
+      this.active = slot;
+      const keys: [string, string] = [canonicalSourceKey(this.store.pathFor(id)), sourceKey];
+      setImmediate(() => { void this.recover(slot, existing, keys, { actor: actorId, workspaceId, operation: CAPABILITY }, attempt, recover); });
+      return slot.admission;
     }
     if (this.active) {
       if (this.active.id !== id) throw refusal('PROJECT_CHECK_RUN_BUSY', 'A project check run already occupies this Dev host.', 409);
@@ -262,6 +271,32 @@ export class ProjectCheckRunService {
       }) };
     this.active = slot;
     return slot.admission;
+  }
+
+  private async recover(slot: ActiveRun, receipt: ActionReceipt, keys: [string, string],
+    owner: { actor: string; workspaceId: string; operation: string }, attempt: ReturnType<typeof prepare>, recover: Recover) {
+    try {
+      await this.coordinator.run(keys, owner, async lease => {
+        const current = this.read(receipt.id);
+        if (!current || current.hash !== receipt.hash || current.status !== 'prepared') return;
+        lease.assertProjectCheckAuthority(keys[1], owner.workspaceId, owner.actor);
+        slot.state = 'running';
+        const completion = await recover(attempt.runId);
+        lease.assertProjectCheckAuthority(keys[1], owner.workspaceId, owner.actor);
+        if (completion) {
+          if (completion.suite.id !== attempt.suiteId) return;
+          const suite = this.suiteFor(receipt, attempt.suiteId, completion.suite.hash, completion.logicalArtifactHash);
+          const report = suite && this.suiteReport(suite);
+          if (!suite || !report || !['passed', 'failed', 'incomplete'].includes(report.state)) return;
+        }
+        // Only the claimed, currently verified callback may declare a quiescent incomplete attempt.
+        this.finish(receipt, attempt.suiteId, completion ?? { unknown: true });
+      });
+    } catch {
+      // Failures before the terminal write leave the parent prepared; never replay a command.
+    } finally {
+      if (this.active === slot) this.active = undefined;
+    }
   }
 
   private async run(slot: ActiveRun, receipt: ActionReceipt, keys: [string, string],

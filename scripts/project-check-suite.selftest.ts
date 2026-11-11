@@ -11,7 +11,8 @@ import { applyProjectCheckCoverage, buildValidationEvidence } from '../src/lib/v
 import { captureDeploymentSnapshot } from '../src/server/deploymentSnapshot';
 import { ProjectCheckApprovalLedger } from '../src/server/projectCheckApproval';
 import { captureProjectCheckSetup, freezeProjectCheckSetup } from '../src/server/projectCheckSetup';
-import { executeProjectCheckSuite, readProjectCheckSuiteReport, requirePassedProjectCheckSuite } from '../src/server/projectCheckSuite';
+import { executeProjectCheckSuite, projectCheckSuiteReceiptId, readProjectCheckSuiteReport, readTerminalProjectCheckSuite,
+  requirePassedProjectCheckSuite } from '../src/server/projectCheckSuite';
 import { ProjectCheckRunService } from '../src/server/projectCheckRunService';
 import { canonicalSourceKey } from '../src/server/resourceCoordinator';
 import { SharedSourceCoordinator, type ProjectCheckSourceLease } from '../src/server/sharedSourceCoordinator';
@@ -186,12 +187,12 @@ function fixture(name: string, declarations: ReadonlyArray<readonly [string, Mod
   const ownership = () => observer.status([key]);
   retained.push(() => {
     const status = ownership();
-    return !status.available || status.active.some(claim => claim.guardPhase === 'running');
+    return !status.available || status.active.length > 0 || status.waiting.length > 0;
   });
   const execute = (selected = exact, wrapLease: (lease: ProjectCheckSourceLease) => ProjectCheckSourceLease = lease => lease) =>
     coordinator.run([key], { actor: actorId, operation: 'fixture-suite', workspaceId },
       lease => executeProjectCheckSuite({ ...selected, lease: wrapLease(lease) }));
-  return { commands, approvals, approval, store, script, exact, inputs, execute, coordinator, observer, key, ownership,
+  return { commands, approvals, approval, store, script, exact, inputs, execute, coordinator, observer, key, ownership, directory, registry, scratch,
     retireInputs: () => { for (const dispose of inputDisposers.splice(0).reverse()) dispose(); } };
 }
 
@@ -208,6 +209,73 @@ async function until<T>(read: () => T | undefined, label: string): Promise<T> {
 const started = (marker: string) => fs.existsSync(marker) && fs.readFileSync(marker, 'ascii') === 'started\n';
 const release = (marker: string) => fs.writeFileSync(marker, 'release', 'ascii');
 const isCommand = (receipt: ActionReceipt) => 'id' in receipt.capability && receipt.capability.id === 'project-check.command';
+
+function crashBackend(f: ReturnType<typeof fixture>, mode: 'finish' | 'running') {
+  const input = { actorId, workspaceId, operationId: `recovery-${mode}`, modId,
+    artifactHash: f.exact.artifact.snapshot.manifest.hash,
+    requestHash: createHash('sha256').update(`recovery-${mode}`).digest('hex'), sourceKey: f.key };
+  const imports = [
+    ['ActionReceiptStore', '../src/lib/actionReceiptStore.ts'], ['buildArtifactPlan', '../src/lib/artifactPipeline.ts'],
+    ['captureDeploymentSnapshot', '../src/server/deploymentSnapshot.ts'], ['ProjectCheckApprovalLedger', '../src/server/projectCheckApproval.ts'],
+    ['captureProjectCheckSetup, freezeProjectCheckSetup', '../src/server/projectCheckSetup.ts'],
+    ['executeProjectCheckSuite', '../src/server/projectCheckSuite.ts'], ['ProjectCheckRunService', '../src/server/projectCheckRunService.ts'],
+    ['SharedSourceCoordinator', '../src/server/sharedSourceCoordinator.ts'],
+  ].map(([names, file]) => `import { ${names} } from ${JSON.stringify(new URL(file, import.meta.url).href)};`).join('\n');
+  const source = `${imports}
+import fs from 'node:fs';
+const data = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+class InterruptedStore extends ActionReceiptStore {
+  commit(...args) {
+    if (data.mode === 'finish' && this.read(args[0]).capability.id === 'project-check.run') process.exit(73);
+    return super.commit(...args);
+  }
+}
+const store = new InterruptedStore({ root: data.storeRoot });
+const coordinator = new SharedSourceCoordinator({ directory: data.registry, waitMs: 8000, pollMs: 10 });
+const service = new ProjectCheckRunService(store, coordinator);
+setTimeout(() => process.exit(90), 12000);
+if (data.mode === 'running') setInterval(() => { if (fs.existsSync(data.marker)) process.exit(74); }, 10);
+const admitted = await service.start(data.input, async (lease, runId) => {
+  try {
+  const setup = captureProjectCheckSetup(data.setupInput);
+  const frozen = freezeProjectCheckSetup(data.setupInput, setup.setupHash, data.scratch);
+  const plan = buildArtifactPlan({ sourceRoot: '', memoryOnly: true,
+    generatedFiles: Object.fromEntries(data.files.map(file => [file.path, file.content])) });
+  if (!plan.ok) throw new Error('Fixture artifact refused.');
+  const snapshot = captureDeploymentSnapshot(plan, 'loose');
+  if (snapshot.manifest.hash !== data.input.artifactHash) throw new Error('Fixture artifact identity changed.');
+  const approvals = new ProjectCheckApprovalLedger(store, 'fixture-owner', () => false);
+  const suite = await executeProjectCheckSuite({ setupInput: data.setupInput, frozen,
+    artifact: { modId: data.input.modId, snapshot }, approvals, approvalId: data.approvalId,
+    runId, systemRoot: data.runtime.systemRoot, runtime: data.runtime, store,
+    workspaceId: data.input.workspaceId, actorId: data.input.actorId, lease });
+  return { suite, logicalArtifactHash: snapshot.manifest.hash };
+  } catch (error) { console.error('BACKEND_EXECUTION_REFUSED', error?.code, error?.message); throw error; }
+});
+console.log(JSON.stringify(admitted));
+setInterval(() => {
+  const status = service.status(data.input.actorId, data.input.workspaceId, admitted.id);
+  if (!['queued','running'].includes(status.state)) { console.error(JSON.stringify(status)); process.exit(91); }
+}, 20);
+`;
+  const driver = path.join(root, 'recovery-backend.mts');
+  const dataFile = path.join(root, 'recovery-backend-input.json');
+  fs.writeFileSync(driver, source);
+  fs.writeFileSync(dataFile, JSON.stringify({ mode, input, registry: f.registry, scratch: f.scratch,
+    setupInput: f.exact.setupInput, storeRoot: f.store.root, approvalId: f.approval.id, runtime,
+    files: f.exact.artifact.snapshot.files, marker: f.commands[0].marker }));
+  const child = spawnSync(process.execPath, ['--import', new URL('../node_modules/tsx/dist/loader.mjs', import.meta.url).href, driver, dataFile], {
+    cwd: process.cwd(), env: { ...process.env, TEMP: f.directory, TMP: f.directory, NODE_DISABLE_COMPILE_CACHE: '1' },
+    windowsHide: true, encoding: 'utf8', maxBuffer: 64 * 1024, timeout: 15_000,
+  });
+  assert.equal(child.error, undefined, String(child.error));
+  assert.equal(child.status, mode === 'finish' ? 73 : 74, child.stderr || child.stdout);
+  const admitted = JSON.parse(child.stdout.trim()) as { id: string };
+  const receipt = f.store.read(admitted.id);
+  assert.equal(receipt.status, 'prepared');
+  f.exact.runId = receipt.authority.operationId.split(':')[1];
+  return { input, id: admitted.id };
+}
 
 try {
   const interpreter = stageInterpreter();
@@ -720,9 +788,274 @@ try {
   revokedParallel.retireInputs();
   record('owner revocation refuses the queued admission and credits no proof while the already-running sibling drains');
 
+  const interrupted = fixture('recover-finished', [['omega', 'pass']], interpreter);
+  const crashed = crashBackend(interrupted, 'finish');
+  const orphan = interrupted.store.read(crashed.id);
+  const orphanBytes = fs.readFileSync(interrupted.store.pathFor(crashed.id));
+  const terminal = interrupted.store.listVerified().find(child => 'id' in child.capability && child.capability.id === 'project-check.suite');
+  assert(terminal && terminal.status === 'committed');
+  const terminalBytes = fs.readFileSync(interrupted.store.pathFor(terminal.id));
+  const resumedService = new ProjectCheckRunService(new ActionReceiptStore({ root: interrupted.store.root }), interrupted.coordinator);
+  assert.equal(resumedService.status(actorId, workspaceId, crashed.id).state, 'pending-recovery');
+  assert.equal(resumedService.retry(actorId, workspaceId, crashed.input.operationId, crashed.input.requestHash)?.state, 'pending-recovery');
+  assert.deepEqual(fs.readFileSync(interrupted.store.pathFor(crashed.id)), orphanBytes);
+  let replays = 0;
+  let repairCalls = 0;
+  const resumed = await resumedService.start(crashed.input, async () => { replays++; throw new Error('Recovery must not execute again.'); },
+    async runId => {
+      repairCalls++;
+      const suite = readTerminalProjectCheckSuite({ ...interrupted.exact, runId }, terminal.id);
+      assert(suite);
+      return { suite, logicalArtifactHash: interrupted.exact.artifact.snapshot.manifest.hash };
+    });
+  const repeated = await resumedService.start(crashed.input, async () => { replays++; throw new Error('Duplicate execution.'); },
+    async () => { throw new Error('Duplicate repair callback.'); });
+  assert(['queued', 'running', 'passed'].includes(repeated.state));
+  console.log(JSON.stringify({ realBackendExit: 73, parentPrepared: orphan.status === 'prepared', terminalSuite: terminal.status,
+    statusAndRetryReadOnly: true, resumedState: resumed.state, executionReplays: replays }));
+  assert.notEqual(resumed.state, 'pending-recovery', 'An exact orphan retry must admit reconciliation rather than remain stuck.');
+  const repaired = await until(() => {
+    const current = resumedService.status(actorId, workspaceId, crashed.id);
+    return current.state === 'queued' || current.state === 'running' ? undefined : current;
+  }, 'finished backend restart repair');
+  assert.equal(repaired.state, 'passed');
+  assert.equal(repaired.suiteReceipt?.id, terminal.id);
+  assert.equal(replays, 0);
+  assert.equal(repairCalls, 1);
+  assert.deepEqual(fs.readFileSync(interrupted.store.pathFor(terminal.id)), terminalBytes);
+  assert(started(interrupted.commands[0].marker));
+  interrupted.retireInputs();
+  record('a separate Node backend exits before the parent write; exact retry reconciles the durable suite without executing a check twice');
+
+  const abandoned = fixture('recover-running', [['omega', 'wait']], interpreter);
+  const killed = crashBackend(abandoned, 'running');
+  assert(started(abandoned.commands[0].marker));
+  const abandonedParent = fs.readFileSync(abandoned.store.pathFor(killed.id));
+  const abandonedSuite = abandoned.store.listVerified().find(child => 'id' in child.capability && child.capability.id === 'project-check.suite');
+  assert(abandonedSuite && abandonedSuite.status === 'prepared');
+  const abandonedSuiteBytes = fs.readFileSync(abandoned.store.pathFor(abandonedSuite.id));
+  const recoverOne = new ProjectCheckRunService(new ActionReceiptStore({ root: abandoned.store.root }), abandoned.coordinator);
+  const recoverTwo = new ProjectCheckRunService(new ActionReceiptStore({ root: abandoned.store.root }), abandoned.observer);
+  let firstRepair = 0;
+  let secondRepair = 0;
+  const neverExecute = async () => { replays++; throw new Error('Abandoned command must not replay.'); };
+  try {
+    await recoverOne.start(killed.input, neverExecute, async runId => {
+      firstRepair++;
+      assert.equal(readTerminalProjectCheckSuite({ ...abandoned.exact, runId }, abandonedSuite.id), undefined);
+      return undefined;
+    });
+    await recoverTwo.start(killed.input, neverExecute, async () => { secondRepair++; throw new Error('The second participant must observe the completed repair.'); });
+    await until(() => abandoned.ownership().waiting.length === 2 ? true : undefined, 'both repair participants behind the real surviving Job');
+    assert.equal(firstRepair, 0);
+    assert.equal(secondRepair, 0);
+    assert.deepEqual(fs.readFileSync(abandoned.store.pathFor(killed.id)), abandonedParent);
+    assert.equal(recoverOne.status(actorId, workspaceId, killed.id).state, 'queued');
+    release(abandoned.commands[0].release);
+    await until(() => {
+      const owned = abandoned.ownership();
+      return owned.available && owned.active.length === 0 && owned.waiting.length === 0 ? true : undefined;
+    }, 'all old and recovery source claims to drain');
+    assert.equal(recoverOne.status(actorId, workspaceId, killed.id).state, 'incomplete');
+    assert.equal(recoverTwo.status(actorId, workspaceId, killed.id).state, 'incomplete');
+    assert.equal(recoverOne.status(actorId, workspaceId, killed.id).suiteReceipt, undefined);
+    assert.equal(firstRepair, 1);
+    assert.equal(secondRepair, 0);
+    assert.equal(replays, 0);
+    assert(started(abandoned.commands[0].marker));
+    assert.deepEqual(fs.readFileSync(abandoned.store.pathFor(abandonedSuite.id)), abandonedSuiteBytes);
+    const abandonedChild = abandoned.store.listVerified().find(isCommand)!;
+    const abandonedChildPath = abandoned.store.pathFor(abandonedChild.id);
+    const abandonedChildBytes = fs.readFileSync(abandonedChildPath);
+    fs.appendFileSync(abandonedChildPath, '\n');
+    try { assert.throws(() => readTerminalProjectCheckSuite(abandoned.exact, abandonedSuite.id), { code: 'PROJECT_CHECK_SUITE_MISMATCH' }); }
+    finally { fs.writeFileSync(abandonedChildPath, abandonedChildBytes); }
+  } finally {
+    release(abandoned.commands[0].release);
+    await until(() => {
+      const owned = abandoned.ownership();
+      return owned.available && !owned.active.length && !owned.waiting.length ? true : undefined;
+    }, 'abandoned fixture cleanup');
+  }
+  abandoned.retireInputs();
+  record('backend exit with a live Windows Job blocks two repair participants until drain; the parent becomes incomplete without replay or suite rewrite');
+
+  // One tiny receipt-only model reuses a real failed suite; no second interpreter/runtime family.
+  const modelStore = new ActionReceiptStore({ root: path.join(root, 'recovery-negatives') });
+  const originalRun = failure.store.read(admitted.id);
+  const modelParent = modelStore.prepare({ actor: originalRun.actor, client: originalRun.client, capability: originalRun.capability,
+    authority: originalRun.authority, effects: originalRun.effects, input: originalRun.input,
+    validation: { validator: originalRun.validation.validator, ruleHash: originalRun.validation.ruleHash },
+    rollback: originalRun.rollback, metadata: originalRun.metadata });
+  assert.equal(modelParent.id, originalRun.id);
+  assert.equal(modelParent.authorityHash, originalRun.authorityHash);
+  for (const item of failure.store.listVerified()) if (item.id !== modelParent.id) {
+    fs.copyFileSync(failure.store.pathFor(item.id), modelStore.pathFor(item.id));
+  }
+  const modelInput = { actorId, workspaceId, modId, operationId: 'failure-excerpt-report',
+    artifactHash: failure.exact.artifact.snapshot.manifest.hash, requestHash: originalRun.input.requestHash, sourceKey: failure.key };
+  const modelExact = { ...failure.exact, store: modelStore,
+    approvals: new ProjectCheckApprovalLedger(modelStore, 'fixture-owner', () => false) };
+  const modelBefore = fs.readFileSync(modelStore.pathFor(modelParent.id));
+  const modelService = new ProjectCheckRunService(modelStore, failure.coordinator);
+  const attempt = async (inspect: Parameters<ProjectCheckRunService['start']>[2], service = modelService) => {
+    await service.start(modelInput, neverExecute, inspect);
+    await until(() => service.status(actorId, workspaceId, modelParent.id).state === 'pending-recovery' ? true : undefined, 'refused model repair');
+    assert.deepEqual(fs.readFileSync(modelStore.pathFor(modelParent.id)), modelBefore);
+  };
+  const rejectProof = async (proofInput: Parameters<typeof readTerminalProjectCheckSuite>[0]) => {
+    let refused = false;
+    await attempt(async runId => {
+      let suite: ActionReceipt | undefined;
+      try { suite = readTerminalProjectCheckSuite({ ...proofInput, runId }, failed.id); }
+      catch (error) { refused = true; throw error; }
+      return suite ? { suite, logicalArtifactHash: proofInput.artifact.snapshot.manifest.hash } : undefined;
+    });
+    assert(refused, 'The proof reader itself must reject, not merely fail later persistence.');
+  };
+  await assert.rejects(modelService.start({ ...modelInput, requestHash: '9'.repeat(64) }, neverExecute, async () => undefined),
+    { code: 'PROJECT_CHECK_RUN_CONFLICT' });
+  await assert.rejects(modelService.start({ ...modelInput, sourceKey: modelInput.sourceKey + '-different' }, neverExecute, async () => undefined),
+    { code: 'PROJECT_CHECK_RUN_CONFLICT' });
+  assert.throws(() => modelService.status('different-agent', workspaceId, modelParent.id), { code: 'PROJECT_CHECK_RUN_NOT_FOUND' });
+  await rejectProof({ ...modelExact, actorId: 'different-agent' });
+  const modelChild = modelStore.listVerified().find(isCommand)!;
+  const modelChildPath = modelStore.pathFor(modelChild.id);
+  const modelChildBytes = fs.readFileSync(modelChildPath);
+  const modelHidden = modelChildPath + '.fixture-hidden';
+  fs.renameSync(modelChildPath, modelHidden);
+  try { await rejectProof(modelExact); }
+  finally { fs.renameSync(modelHidden, modelChildPath); }
+  fs.appendFileSync(modelChildPath, '\n');
+  try { await rejectProof(modelExact); }
+  finally { fs.writeFileSync(modelChildPath, modelChildBytes); }
+  const driftedArtifact = failure.inputs(true);
+  try { await rejectProof({ ...modelExact, artifact: driftedArtifact.artifact }); }
+  finally { driftedArtifact.frozen.dispose(); driftedArtifact.artifact.snapshot.dispose(); }
+  let authorityReads = 0;
+  await rejectProof({ ...modelExact,
+    assertLaunchAuthority: () => { if (++authorityReads > 1) throw new Error('Fixture authority changed before returning proof.'); } });
+  assert.equal(authorityReads, 2);
+  assert.throws(() => readTerminalProjectCheckSuite({ ...fresh, store: reopened }, receipt.id), /revoked/);
+  await attempt(async () => { throw new Error('Fixture authority/storage unavailable.'); });
+  let interruptedWrites = 0;
+  class InterruptRecoveryWrite extends ActionReceiptStore {
+    override fail(...args: Parameters<ActionReceiptStore['fail']>) {
+      if (args[0] === modelParent.id) { interruptedWrites++; throw new Error('Fixture final recovery write failed.'); }
+      return super.fail(...args);
+    }
+  }
+  await attempt(async runId => ({ suite: readTerminalProjectCheckSuite({ ...modelExact, runId }, failed.id)!,
+    logicalArtifactHash: failure.exact.artifact.snapshot.manifest.hash }),
+  new ProjectCheckRunService(new InterruptRecoveryWrite({ root: modelStore.root }), failure.coordinator));
+  assert.equal(interruptedWrites, 1);
+  record('exact intent, actor, missing/corrupt child, artifact/late authority drift, revoked proof and recovery-write failures preserve prepared parent bytes');
+
+  const timeoutCoordinator = new SharedSourceCoordinator({ directory: failure.registry, waitMs: 50, pollMs: 5 });
+  cleanup.push(() => timeoutCoordinator.close());
+  const timeoutRecovery = new ProjectCheckRunService(modelStore, timeoutCoordinator);
+  let releaseBlock!: () => void;
+  const blocked = new Promise<void>(resolve => { releaseBlock = resolve; });
+  let blockerEntered = false;
+  const blocking = failure.observer.run([failure.key], { actor: 'fixture-blocker', operation: 'recovery-timeout' }, async () => {
+    blockerEntered = true;
+    await blocked;
+  });
+  void blocking.catch(() => {});
+  try {
+    await until(() => blockerEntered ? true : undefined, 'recovery queue blocker');
+    let enteredRecovery = false;
+    const queued = await timeoutRecovery.start(modelInput, neverExecute, async () => { enteredRecovery = true; return undefined; });
+    assert.equal(queued.state, 'queued');
+    await assert.rejects(timeoutRecovery.start({ ...modelInput, operationId: 'different-while-repairing' }, neverExecute),
+      { code: 'PROJECT_CHECK_RUN_BUSY' });
+    await until(() => timeoutRecovery.status(actorId, workspaceId, modelParent.id).state === 'pending-recovery' ? true : undefined, 'bounded recovery queue timeout');
+    assert.equal(enteredRecovery, false);
+    assert.deepEqual(fs.readFileSync(modelStore.pathFor(modelParent.id)), modelBefore);
+  } finally { releaseBlock(); await blocking; }
+  await modelService.start(modelInput, neverExecute, async runId => ({
+    suite: readTerminalProjectCheckSuite({ ...modelExact, runId }, failed.id)!, logicalArtifactHash: failure.exact.artifact.snapshot.manifest.hash,
+  }));
+  await until(() => modelService.status(actorId, workspaceId, modelParent.id).state === 'failed' ? true : undefined, 'failed terminal suite recovery');
+  assert.equal(modelService.status(actorId, workspaceId, modelParent.id).suiteReport?.state, 'failed');
+  assert.equal(replays, 0);
+  record('a real SQLite queue timeout enters no recovery callback; occupied-slot refusal and subsequent failed-suite reconciliation never execute again');
+
+  const incompleteFixture = fixture('recover-incomplete', [['omega', 'pass']], interpreter);
+  class InterruptIncompleteParent extends ActionReceiptStore {
+    override transition(...args: Parameters<ActionReceiptStore['transition']>) {
+      const capability = this.read(args[0]).capability;
+      if ('id' in capability && capability.id === 'project-check.run') {
+        throw new Error('Fixture stops before incomplete parent write.');
+      }
+      return super.transition(...args);
+    }
+  }
+  const incompleteStore = new InterruptIncompleteParent({ root: incompleteFixture.store.root });
+  const interruptedIncomplete = new ProjectCheckRunService(incompleteStore, incompleteFixture.coordinator);
+  const incompleteInput = { actorId, workspaceId, modId, operationId: 'recover-incomplete', sourceKey: incompleteFixture.key,
+    artifactHash: incompleteFixture.exact.artifact.snapshot.manifest.hash, requestHash: createHash('sha256').update('recover-incomplete').digest('hex') };
+  const incompleteRun = await interruptedIncomplete.start(incompleteInput, async (lease, runId) => {
+    incompleteFixture.exact.runId = runId;
+    const suite = await executeProjectCheckSuite({ ...incompleteFixture.exact, store: incompleteStore,
+      lease: { ...lease, assertProjectCheckDrained(frame) { lease.assertProjectCheckDrained(frame); throw new Error('Fixture loses confirmed acknowledgement.'); } } });
+    return { suite, logicalArtifactHash: incompleteFixture.exact.artifact.snapshot.manifest.hash };
+  });
+  await until(() => interruptedIncomplete.status(actorId, workspaceId, incompleteRun.id).state === 'pending-recovery' ? true : undefined, 'interrupted incomplete parent');
+  const incompleteResume = new ProjectCheckRunService(incompleteFixture.store, incompleteFixture.coordinator);
+  await incompleteResume.start(incompleteInput, neverExecute, async runId => ({
+    suite: readTerminalProjectCheckSuite({ ...incompleteFixture.exact, runId }, projectCheckSuiteReceiptId(actorId, workspaceId, runId))!,
+    logicalArtifactHash: incompleteFixture.exact.artifact.snapshot.manifest.hash,
+  }));
+  await until(() => incompleteResume.status(actorId, workspaceId, incompleteRun.id).suiteReport?.state === 'incomplete' ? true : undefined, 'incomplete terminal suite repair');
+  assert.equal(incompleteResume.status(actorId, workspaceId, incompleteRun.id).suiteReceipt, undefined);
+  assert.equal(replays, 0);
+  const missingInput = { ...incompleteInput, operationId: 'recover-no-suite',
+    requestHash: createHash('sha256').update('recover-no-suite').digest('hex') };
+  let originalAttempts = 0;
+  const missingRun = await interruptedIncomplete.start(missingInput, async () => {
+    originalAttempts++;
+    throw new Error('Fixture backend stops before suite preparation.');
+  });
+  await until(() => interruptedIncomplete.status(actorId, workspaceId, missingRun.id).state === 'pending-recovery' ? true : undefined, 'orphan with no suite');
+  await incompleteResume.start(missingInput, neverExecute, async runId => {
+    const suiteId = projectCheckSuiteReceiptId(actorId, workspaceId, runId);
+    assert.equal(readTerminalProjectCheckSuite({ ...incompleteFixture.exact, runId }, suiteId), undefined);
+    return undefined;
+  });
+  await until(() => incompleteResume.status(actorId, workspaceId, missingRun.id).state === 'incomplete' ? true : undefined, 'missing suite incomplete repair');
+  assert.equal(incompleteResume.status(actorId, workspaceId, missingRun.id).suiteReceipt, undefined);
+  assert.equal(originalAttempts, 1);
+  assert.equal(replays, 0);
+  incompleteFixture.retireInputs();
+  record('terminal incomplete and genuinely absent suites reconcile without passing proof, replay or loss of named incomplete evidence');
+
+  await until(() => retained.some(unresolved => unresolved()) ? undefined : true, 'every fixture source claim to become quiescent');
+  const orphanRoots = [interrupted, abandoned].flatMap(f => [
+    ...fs.readdirSync(f.scratch, { withFileTypes: true }).filter(entry => entry.isDirectory() && entry.name.startsWith('project-check-'))
+      .map(entry => path.join(f.scratch, entry.name)),
+    ...fs.readdirSync(f.directory, { withFileTypes: true }).filter(entry => entry.isDirectory() && entry.name.startsWith('x4forge-deploy-snapshot-'))
+      .map(entry => path.join(f.directory, entry.name)),
+  ]);
+  const crashStaging = { roots: orphanRoots.length, bytes: 0, entries: 0,
+    cleanupOwner: 'outer owned test fixture; production run reconciliation does not yet retire old staging' };
+  const stagePending = [...orphanRoots];
+  while (stagePending.length) {
+    const directory = stagePending.pop()!;
+    assert.equal(fs.realpathSync.native(directory).toLowerCase(), path.resolve(directory).toLowerCase());
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      assert(!entry.isSymbolicLink());
+      crashStaging.entries++;
+      const file = path.join(directory, entry.name);
+      if (entry.isDirectory()) stagePending.push(file);
+      else crashStaging.bytes += fs.lstatSync(file).size;
+    }
+  }
+  assert(crashStaging.roots <= 4 && crashStaging.bytes < footprintLimit.bytes && crashStaging.entries < footprintLimit.entries);
+
   meterFixture();
   console.log(JSON.stringify({ status: 'passed', realWindowsProcesses: true, fixtureOwnerApproval: true, checks,
-    observedPeakFootprint: peakFootprint, footprintLimit }));
+    observedPeakFootprint: peakFootprint, footprintLimit, crashStaging }));
 } finally {
   try {
     const keepScratch = retained.some(unresolved => unresolved());
