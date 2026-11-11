@@ -16,6 +16,8 @@ import { buildX4UiSourceBundle, addX4UiSourceBundleRegistration, buildX4MenuLuaR
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import { createEmptySchemaLibrary, getDefaultGamePath, loadSchemaLibrary, readXsdConfig, resolveXsdConfig, runSchemaDiscoverySelftest, writeXsdConfig, type ResolvedXsdConfig, type XsdConfig } from "./src/lib/xsdParser";
+import { DEPLOY_FORMATS, DEFAULT_DEPLOY_FORMAT, normalizeDeployFormat, type DeployFormat } from './src/lib/deployFormat';
+import { planDirectoryConfigurationChange } from './src/server/directoryConfiguration';
 
 // Import types & helpers from the frontend shared file
 import {
@@ -1600,17 +1602,6 @@ let lastArtifactReport: ArtifactBuildReport | null = null;
  * long-standing behavior, what X4 mod folders look like in the wild, and the only mode in
  * which native binaries load). `catalog` packs the payload into ext_NN.cat/.dat.
  */
-type DeployFormat = 'loose' | 'catalog';
-const DEPLOY_FORMATS: readonly DeployFormat[] = ['loose', 'catalog'] as const;
-const DEFAULT_DEPLOY_FORMAT: DeployFormat = 'loose';
-
-function normalizeDeployFormat(value: unknown): DeployFormat | null {
-  if (value === undefined || value === null) return null;
-  const text = String(value).trim().toLowerCase();
-  if (!text) return null;
-  return (DEPLOY_FORMATS as readonly string[]).includes(text) ? (text as DeployFormat) : null;
-}
-
 function isNativeBinaryPath(relativePath: string): boolean {
   return /\.(dll|so|dylib)$/i.test(relativePath);
 }
@@ -4814,87 +4805,15 @@ app.post("/api/studio/release-preferences", (req, res) => {
 
 app.post("/api/schema/config", (req, res) => {
   if (!requireStudioActor(req, res)) return;
-  if (projectCheckOwnerProfileEnabled() && ['schemaDir', 'x4GamePath', 'modWorkspacePath', 'filesystemPath', 'x4ReferenceRoot']
-    .some(field => req.body && Object.hasOwn(req.body, field))) {
-    return res.status(409).json({ success: false, code: 'PROJECT_CHECK_OWNER_ROOTS_LOCKED',
-      error: 'Stop the isolated Dev host before changing its owner approval directory roles.' });
-  }
   try {
-    // B84: `schemaDir` used to be written UNCONDITIONALLY, so any partial update that omitted
-    // it silently blanked the configured schema path. Absence now preserves the existing value
-    // (matching every other field here); an explicit empty string still clears it.
-    const schemaDir = req.body?.schemaDir !== undefined ? String(req.body.schemaDir || '').trim() : undefined;
-    const gamePath = req.body?.x4GamePath !== undefined ? String(req.body.x4GamePath || '').trim() : undefined;
-    const modWorkspacePath = req.body?.modWorkspacePath !== undefined ? String(req.body.modWorkspacePath || '').trim() : undefined;
-    const filesystemPath = req.body?.filesystemPath !== undefined ? String(req.body.filesystemPath || '').trim() : undefined;
-    const referenceRoot = req.body?.x4ReferenceRoot !== undefined ? String(req.body.x4ReferenceRoot || '').trim() : undefined;
-    // B84: the deploy-format toggle persists here beside the directory roles. An explicit
-    // unknown value is rejected — the caller must not silently get a format it did not ask for.
-    let deployFormat: DeployFormat | undefined;
-    if (req.body?.deployFormat !== undefined) {
-      const normalized = normalizeDeployFormat(req.body.deployFormat);
-      if (!normalized) {
-        return res.status(400).json({
-          success: false,
-          code: 'UNKNOWN_DEPLOY_FORMAT',
-          error: `Unknown deploy format "${String(req.body.deployFormat)}". Use "loose" or "catalog".`,
-        });
-      }
-      deployFormat = normalized;
-    }
-
-    // Paths save INDEPENDENTLY of schema validity. The schema directory is validated and
-    // REPORTED, never a hard gate — you can save just the workspace/filesystem/game paths
-    // with no schema (or an incomplete one). Schema-aware validation simply stays degraded
-    // until md.xsd + common.xsd resolve. (Previously an unsatisfied schema 400'd the whole
-    // save, blocking the other paths — the exact foot-gun this removes.)
-    const previousConfig = readXsdConfig();
-    const previousResolved = resolveXsdConfig(previousConfig);
-    const scratch = previousResolved.isolatedScratch;
-    if (scratch) {
-      const pin = (['x4GamePath', 'modWorkspacePath', 'filesystemPath', 'x4LogPath'] as const)
-        .find(field => Object.hasOwn(req.body ?? {}, field)
-          && (typeof req.body[field] !== 'string' || !path.isAbsolute(req.body[field].trim())
-            || path.relative(previousResolved[field]!, req.body[field].trim())));
-      if (pin) return res.status(409).json({ success: false, code: 'DEV_SCRATCH_PATH_LOCKED',
-        error: `The Forge Dev launcher owns ${pin}.`, field: pin });
-    }
-    const nextConfig = {
-      ...previousConfig,
-      ...(!scratch && gamePath !== undefined ? { x4GamePath: gamePath } : {}),
-      ...(!scratch && modWorkspacePath !== undefined ? { modWorkspacePath } : {}),
-      ...(!scratch && filesystemPath !== undefined ? { filesystemPath } : {}),
-      ...(referenceRoot !== undefined ? { x4ReferenceRoot: referenceRoot } : {}),
-      ...(deployFormat !== undefined ? { deployFormat } : {}),
-      ...(schemaDir !== undefined ? { xsdSchemaPath: schemaDir } : {}),
-      schemaFiles: ['md.xsd', 'common.xsd']
-    };
-    const resolved = resolveXsdConfig(nextConfig);
-    const directoryIssues = directoryRoleIssues(resolved);
-    if (directoryIssues.length > 0) {
-      return res.status(400).json({
-        success: false,
-        error: directoryIssues[0].message,
-        code: directoryIssues[0].code,
-        issues: directoryIssues,
-        resolved,
-      });
-    }
+    const plan = planDirectoryConfigurationChange(req.body, projectCheckOwnerProfileEnabled());
+    if (plan.ok === false) return res.status(plan.status).json(plan.body);
+    const { nextConfig, resolved, scratch, schemaComplete, schemaWarning, referenceRootChanged } = plan;
     if (scratch) validateDevScratchStorage();
     writeXsdConfig(nextConfig);
     const library = reloadSchemaLibrary();
-    // Directory-setting saves are common (workspace/filesystem/game path edits) and must not
-    // force a million-file canonical-corpus rescan. The manifest already invalidates itself
-    // when its files change; an explicit effective root change is the only config mutation
-    // that needs a forced generation here.
-    const referenceRootChanged = path.resolve(previousResolved.x4ReferenceRoot) !== path.resolve(resolved.x4ReferenceRoot);
+    // Only an effective corpus-root change forces a manifest generation.
     const manifest = startCanonicalReferenceManifest(referenceRootChanged);
-    const schemaComplete = !!(resolved.mdExists && resolved.commonExists);
-    const schemaWarning = schemaComplete
-      ? null
-      : schemaDir
-        ? `Paths saved. Schema directory "${schemaDir}" is missing md.xsd and/or common.xsd, so schema-aware validation stays disabled until that resolves.`
-        : `Paths saved. No schema directory is set, so schema-aware validation stays disabled until you point one at a folder containing md.xsd + common.xsd.`;
     return res.json({
       success: true,
       saved: true,
