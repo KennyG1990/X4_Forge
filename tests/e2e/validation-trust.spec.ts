@@ -2,8 +2,9 @@ import { expect, test } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { E2E_API_ORIGIN, E2E_TOKEN, E2E_STATE_DIR } from '../../playwright.config';
+import { E2E_API_ORIGIN, E2E_TOKEN, E2E_STATE_DIR, E2E_RUNTIME, E2E_WEB_ORIGIN } from '../../playwright.config';
 import { ActionReceiptStore } from '../../src/lib/actionReceiptStore';
+import { buildTemplateWorkspace } from '../../src/lib/modTemplates';
 import { ephemeralWorkspaceHeaders, seedServerWorkspace } from './ephemeral';
 
 test.use({ extraHTTPHeaders: { Authorization: `Bearer ${E2E_TOKEN}` } });
@@ -53,7 +54,7 @@ test('ware reference native aliases preserve findings, guarded writes and commit
   test.setTimeout(180_000);
   const headers = await ephemeralWorkspaceHeaders(true);
   let deployHeaders = headers;
-  const evidence: unknown[] = [];
+  const evidence: unknown[] = [{ runtime: E2E_RUNTIME }];
   const post = async (route: string, body: unknown, operationId?: string) => {
     const response = await request.post(E2E_API_ORIGIN + route, { headers: {
       ...(route === '/api/agent/deploy' || route === '/api/agent/deploy-verify' ? deployHeaders : headers),
@@ -217,6 +218,76 @@ test('incomplete source cannot become a last-green baseline', async ({ request }
   expect(body.evidence.coverage.complete).toBe(false);
   expect(body.baselinePromotion.recorded).toBe(false);
   expect(body.code).toBe('VALIDATION_BASELINE_RECORD_FAILED');
+});
+
+test('ware diagnostics render actual validation results in the selected product mode', async ({ browser }, testInfo) => {
+  test.setTimeout(120_000);
+  const evidence: unknown[] = [{ runtime: E2E_RUNTIME }];
+  fs.mkdirSync(testInfo.outputDir, { recursive: true });
+  try {
+    for (const variant of [
+      { name: 'table-fields', lua: 'local ware = {}\nlocal a, b = ware.ware, ware.wname', count: 0 },
+      { name: 'genuine-id', lua: 'local name = GetWareData("notaware", "name")', count: 1 },
+    ]) {
+      const workspace = buildTemplateWorkspace('welcome');
+      workspace.passthroughFiles = [
+        { path: 'ui.xml', content: '<addon name="ware_rendered"><environment type="menus"><file name="ui/ware64.lua"/></environment></addon>' },
+        { path: 'ui/ware64.lua', content: variant.lua },
+      ];
+      await seedServerWorkspace(workspace);
+      // Close each previous client before the next server-side seed: an open
+      // client is allowed to retain its own draft rather than adopt that seed.
+      const context = await browser.newContext({ baseURL: E2E_WEB_ORIGIN, viewport: { width: 1440, height: 1000 },
+        extraHTTPHeaders: { Authorization: `Bearer ${E2E_TOKEN}` } });
+      try {
+      const page = await context.newPage();
+      await page.addInitScript(() => localStorage.setItem('x4_forge_experience_mode', 'expert'));
+      const compiled = page.waitForResponse(response => {
+        if (!response.url().endsWith('/api/agent/compile') || response.request().method() !== 'POST') return false;
+        const body = response.request().postDataJSON();
+        return body?.workspace?.passthroughFiles?.some((file: { path: string; content: string }) =>
+          file.path === 'ui/ware64.lua' && file.content === variant.lua) === true;
+      });
+      await page.goto('/');
+      await expect(page.getByTestId('readiness-ladder')).toBeVisible();
+      const response = await compiled;
+      expect(response.status()).toBe(200);
+      const validation = await response.json();
+      evidence.push({ name: variant.name, validation });
+      expect(validation.files['ui/ware64.lua']).toBe(variant.lua);
+      expect(validation.validation.scope).toBe('full-project');
+      expect(validation.validation.availability.references).toBe(true);
+      const findings = validation.diagnostics.filter((finding: { code: string }) => finding.code === 'reference.unknown_ware');
+      expect(findings).toHaveLength(variant.count);
+      await page.locator('[data-sidebar-tab="diagnostics"]').click();
+      await page.getByTestId('diagnostics-scope-package').click();
+      await expect(page.getByText('FULL PROJECT · LIVE', { exact: true })).toBeVisible();
+      const why = page.getByTestId('diagnostic-why-reference.unknown_ware');
+      await expect(why).toHaveCount(variant.count);
+      if (variant.count) {
+        expect(findings[0]).toMatchObject({ filePath: 'ui/ware64.lua', line: 1, column: 27, severity: 'warning' });
+        const message = page.getByText(findings[0].message, { exact: true });
+        await message.scrollIntoViewIfNeeded();
+        await expect(message).toBeVisible();
+        await expect(message.locator('xpath=..').getByText('ui/ware64.lua', { exact: true })).toBeVisible();
+      }
+      if (E2E_RUNTIME.mode === 'compiled') {
+        const src = await page.locator('script[type="module"][src]').first().getAttribute('src');
+        expect(src).toMatch(/^\/assets\/[a-zA-Z0-9_-]+\.js$/);
+        const asset = await page.request.get(src!);
+        expect(asset.status()).toBe(200);
+        expect(await asset.body()).toEqual(fs.readFileSync(path.join(process.cwd(), 'dist', src!.slice(1))));
+        expect(await page.content()).not.toContain('/@vite/client');
+        evidence.push({ name: variant.name, compiledAsset: src });
+      }
+      await page.screenshot({ path: testInfo.outputPath(`ware-diagnostics-${variant.name}.png`), fullPage: true });
+      } finally { await context.close(); }
+    }
+  } finally {
+    const artifact = testInfo.outputPath('ware-reference-rendered-evidence.json');
+    fs.writeFileSync(artifact, JSON.stringify(evidence, null, 2) + '\n');
+    await testInfo.attach('ware-reference-rendered-evidence', { path: artifact, contentType: 'application/json' });
+  }
 });
 
 test('ware reference API and Problems distinguish table fields from actual ids', async ({ request }, testInfo) => {

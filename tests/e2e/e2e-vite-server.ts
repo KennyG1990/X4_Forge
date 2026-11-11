@@ -16,6 +16,7 @@ export interface E2EViteServerOptions {
   port?: number;
   apiPort?: number;
   token?: string;
+  compiled?: boolean;
 }
 
 export interface E2EViteServerHandle {
@@ -77,9 +78,9 @@ function startupError(error: unknown, cleanupError: unknown): Error {
 /**
  * Start the E2E UI server in the calling Playwright runner process.
  *
- * The repository Vite config is loaded after the temporary environment is applied so its
- * token plugin and /api proxy observe the isolated E2E values. The environment remains
- * applied until close because transformIndexHtml reads the token at request time.
+ * Source mode loads repository Vite config after applying the temporary environment.
+ * Compiled mode loads no project config and forwards all bytes to the production
+ * backend. Both retain one lifecycle and restore the caller environment on close.
  */
 export async function startE2EViteServer(options: E2EViteServerOptions = {}): Promise<E2EViteServerHandle> {
   const rootDir = path.resolve(options.rootDir ?? process.cwd());
@@ -87,10 +88,12 @@ export async function startE2EViteServer(options: E2EViteServerOptions = {}): Pr
   const port = options.port ?? E2E_WEB_PORT;
   const apiPort = options.apiPort ?? E2E_API_PORT;
   const token = options.token ?? E2E_TOKEN;
+  const compiled = options.compiled === true;
   assertPort('Vite port', port);
   assertPort('API proxy port', apiPort);
   if (token.trim().length === 0) throw new Error('E2E Vite token must not be empty');
-  if (!fs.existsSync(configFile)) throw new Error(`Vite config not found: ${configFile}`);
+  if (compiled && apiPort === 0) throw new Error('Compiled E2E proxy requires a nonzero backend port');
+  if (!compiled && !fs.existsSync(configFile)) throw new Error(`Vite config not found: ${configFile}`);
 
   const environment = snapshotEnvironment();
   let server: ViteDevServer | undefined;
@@ -98,7 +101,8 @@ export async function startE2EViteServer(options: E2EViteServerOptions = {}): Pr
     applyEnvironment(apiPort, token);
     server = await createServer({
       root: rootDir,
-      configFile,
+      configFile: compiled ? false : configFile,
+      ...(compiled ? { envFile: false, appType: 'custom' as const } : {}),
       clearScreen: false,
       logLevel: 'error',
       server: {
@@ -107,6 +111,9 @@ export async function startE2EViteServer(options: E2EViteServerOptions = {}): Pr
         strictPort: true,
         hmr: false,
         watch: null,
+        // Proxy every request to the compiled server. Its production owner serves
+        // and authenticates the built HTML/assets; Vite applies no source transforms.
+        ...(compiled ? { proxy: { '/': { target: `http://127.0.0.1:${apiPort}`, changeOrigin: false, ws: false } } } : {}),
       },
     });
     await server.listen();

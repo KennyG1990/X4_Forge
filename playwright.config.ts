@@ -2,6 +2,25 @@ import { defineConfig, devices } from '@playwright/test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { createHash } from 'node:crypto';
+
+export function resolveE2eRuntime(env: Readonly<Record<string, unknown>> = process.env, root = process.cwd()) {
+  const setting = Object.getOwnPropertyDescriptor(env, 'X4_FORGE_E2E_MODE');
+  const mode = setting === undefined ? 'source' : setting.value;
+  if (mode !== 'source' && mode !== 'compiled') {
+    throw new Error('Invalid X4_FORGE_E2E_MODE: expected source or compiled.');
+  }
+  if (mode === 'source') return { mode, command: 'node node_modules/tsx/dist/cli.mjs server.ts' } as const;
+  for (const file of ['dist/server.cjs', 'dist/index.html']) {
+    let physicalFile = false;
+    try { physicalFile = fs.lstatSync(path.join(root, file)).isFile(); } catch { /* fail closed below */ }
+    if (!physicalFile) throw new Error(`Compiled E2E requires a physical ${file}; run npm run build. Source fallback is disabled.`);
+  }
+  return { mode, command: 'node dist/server.cjs',
+    serverSha256: createHash('sha256').update(fs.readFileSync(path.join(root, 'dist/server.cjs'))).digest('hex') } as const;
+}
+
+export const E2E_RUNTIME = resolveE2eRuntime();
 
 /**
  * B31s2 (2026-07-12): e2e runs against an EPHEMERAL Forge stack — its own Vite (3100),
@@ -123,9 +142,10 @@ const E2E_REFERENCE_ROOT = resolveE2eReferenceRoot();
 const ephemeralEnv = {
   STUDIO_API_TOKEN: E2E_TOKEN,
   API_PORT: String(E2E_API_PORT),
-  // The Playwright global setup starts Vite through its JS API. Keep server.ts API-only
-  // so it never starts a second embedded Vite/HMR server (port 24678).
-  API_ONLY: 'true',
+  // Source mode uses Vite transforms plus an API-only backend. Compiled mode
+  // serves production HTML/assets through the same owned web listener's proxy.
+  API_ONLY: E2E_RUNTIME.mode === 'compiled' ? 'false' : 'true',
+  ...(E2E_RUNTIME.mode === 'compiled' ? { NODE_ENV: 'production' } : {}),
   X4_STATE_DIR: E2E_STATE_DIR,
   X4_SOURCE_COORDINATION_DIR: path.join(E2E_STATE_DIR, 'source-coordination'),
   // Config is mutable API state too. Keep schema/directory writes inside the same
@@ -143,6 +163,7 @@ const ephemeralEnv = {
 };
 
 export default defineConfig({
+  metadata: { runtime: E2E_RUNTIME },
   testDir: './tests/e2e',
   outputDir: path.resolve(process.cwd(), 'test-results', 'e2e'),
   globalSetup: './tests/e2e/global-setup.ts',
@@ -167,7 +188,7 @@ export default defineConfig({
       // Keep the API server isolated under Playwright's existing webServer process owner.
       // The UI server is intentionally started by global setup through the Vite JS API;
       // Playwright's webServer command path uses shell:true and is not a direct Vite owner.
-      command: 'node node_modules/tsx/dist/cli.mjs server.ts',
+      command: E2E_RUNTIME.command,
       url: `${E2E_API_ORIGIN}/api/agent/schema`,
       reuseExistingServer: false,
       timeout: 120_000,

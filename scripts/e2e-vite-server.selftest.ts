@@ -3,7 +3,10 @@ import http from 'node:http';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
+import os from 'node:os';
 import { startE2EViteServer } from '../tests/e2e/e2e-vite-server';
+import { resolveE2eRuntime } from '../playwright.config';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ENV_KEYS = ['API_PORT', 'STUDIO_API_TOKEN', 'DISABLE_HMR'] as const;
@@ -82,6 +85,26 @@ async function getText(port: number): Promise<string> {
 }
 
 async function main(): Promise<void> {
+  assert.equal(resolveE2eRuntime({}).mode, 'source');
+  assert.equal(resolveE2eRuntime({ X4_FORGE_E2E_MODE: 'source' }).command, 'node node_modules/tsx/dist/cli.mjs server.ts');
+  for (const mode of ['', 'COMPILED', ' compiled ', null, 1, true]) {
+    assert.throws(() => resolveE2eRuntime({ X4_FORGE_E2E_MODE: mode }), /Invalid X4_FORGE_E2E_MODE/u);
+  }
+  const fakeBuild = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-e2e-compiled-contract-'));
+  assert.equal(path.dirname(path.resolve(fakeBuild)), path.resolve(os.tmpdir()), 'recursive cleanup remains in the named temporary fixture base');
+  try {
+    assert.throws(() => resolveE2eRuntime({ X4_FORGE_E2E_MODE: 'compiled' }, fakeBuild), /physical dist\/server.cjs/u);
+    fs.mkdirSync(path.join(fakeBuild, 'dist'));
+    fs.writeFileSync(path.join(fakeBuild, 'dist/server.cjs'), 'never executed; mode resolution fixture');
+    assert.throws(() => resolveE2eRuntime({ X4_FORGE_E2E_MODE: 'compiled' }, fakeBuild), /physical dist\/index.html/u);
+    fs.mkdirSync(path.join(fakeBuild, 'dist/index.html'));
+    assert.throws(() => resolveE2eRuntime({ X4_FORGE_E2E_MODE: 'compiled' }, fakeBuild), /physical dist\/index.html/u);
+    fs.rmdirSync(path.join(fakeBuild, 'dist/index.html'));
+    fs.writeFileSync(path.join(fakeBuild, 'dist/index.html'), '<html>never served</html>');
+    const compiled = resolveE2eRuntime({ X4_FORGE_E2E_MODE: 'compiled' }, fakeBuild);
+    assert.equal(compiled.command, 'node dist/server.cjs');
+    assert.match(compiled.serverSha256!, /^[a-f0-9]{64}$/u);
+  } finally { fs.rmSync(fakeBuild, { recursive: true, force: true }); }
   const originalEnvironment = snapshotEnvironment();
   setEnvironment(SENTINEL_ENV);
   let successfulPort: number | undefined;
@@ -133,6 +156,35 @@ async function main(): Promise<void> {
     }
     await assertPortFree(occupied.port);
     assert.deepEqual(snapshotEnvironment(), SENTINEL_ENV, 'failed startup restored the caller environment');
+
+    const builtHtml = '<html><script>window.__STUDIO_API_TOKEN__="compiled-selftest"</script><body>Exact compiled HTML</body></html>';
+    const backend = http.createServer((req, res) => {
+      if (req.url === '/') res.writeHead(200, { 'Content-Type': 'text/html' }).end(builtHtml);
+      else if (req.url === '/assets/compiled.js') res.writeHead(200, { 'Content-Type': 'application/javascript' }).end('/* exact compiled asset */');
+      else res.writeHead(404, { 'Content-Type': 'text/plain' }).end('compiled backend missing');
+    });
+    await new Promise<void>(resolve => backend.listen(0, '127.0.0.1', resolve));
+    const address = backend.address();
+    assert(address !== null && typeof address !== 'string');
+    let proxy: Awaited<ReturnType<typeof startE2EViteServer>> | undefined;
+    try {
+      proxy = await startE2EViteServer({ rootDir: ROOT, port: 0, apiPort: address.port, compiled: true, token: 'not-a-source-transform' });
+      assert.equal(await getText(proxy.port), builtHtml, 'built HTML is forwarded byte-for-byte, without source token injection');
+      assert.equal(proxy.server.config.configFile, undefined, 'compiled mode loads no project Vite config');
+      assert.equal(proxy.server.config.inlineConfig.envFile, false);
+      assert.equal(proxy.server.config.appType, 'custom');
+      const response = await fetch(`http://127.0.0.1:${proxy.port}/assets/compiled.js`);
+      assert.equal(await response.text(), '/* exact compiled asset */');
+      const missing = await fetch(`http://127.0.0.1:${proxy.port}/missing`);
+      assert.equal(missing.status, 404, 'compiled backend refusal is preserved');
+      assert.equal(await missing.text(), 'compiled backend missing');
+    } finally {
+      const proxyPort = proxy?.port;
+      await proxy?.close();
+      await new Promise<void>((resolve, reject) => backend.close(error => error ? reject(error) : resolve()));
+      if (proxyPort !== undefined) await assertPortFree(proxyPort);
+    }
+    assert.deepEqual(snapshotEnvironment(), SENTINEL_ENV, 'compiled close restored the caller environment');
   } finally {
     restoreEnvironment(originalEnvironment);
   }
