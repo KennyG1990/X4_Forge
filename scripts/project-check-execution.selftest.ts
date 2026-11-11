@@ -5,13 +5,13 @@ import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { ActionReceipt } from '../src/lib/actionReceipt';
+import { ActionReceiptValidationError, type ActionReceipt } from '../src/lib/actionReceipt';
 import { ActionReceiptStore } from '../src/lib/actionReceiptStore';
 import { buildArtifactPlan } from '../src/lib/artifactPipeline';
 import { captureDeploymentSnapshot } from '../src/server/deploymentSnapshot';
 import { ProjectCheckApprovalLedger } from '../src/server/projectCheckApproval';
 import { bindProjectCheckCommand } from '../src/server/projectCheckCommand';
-import { executeProjectCheck } from '../src/server/projectCheckExecution';
+import { executeProjectCheck, projectCheckFailureMessage } from '../src/server/projectCheckExecution';
 import { captureProjectCheckSetup, freezeProjectCheckSetup } from '../src/server/projectCheckSetup';
 import { canonicalSourceKey } from '../src/server/resourceCoordinator';
 import { SharedSourceCoordinator, SOURCE_COORDINATION_FILENAME, type ProjectCheckSourceLease } from '../src/server/sharedSourceCoordinator';
@@ -129,6 +129,9 @@ if mode == 'wait':
         record.write('released')
 sys.stdout.reconfigure(newline='\n')
 print('fixture-private-command-output')
+if mode == 'nonzero':
+    print('token=fixture-sensitive-secret')
+    print(os.getcwd())
 sys.exit(7 if mode == 'nonzero' else 0)
 `;
 
@@ -247,16 +250,19 @@ function assertDurable(fixture: ReturnType<typeof createFixture>, receipt: Actio
   assert.equal(reopened.actor.id, actorId);
   assert.deepEqual(reopened.effects.declared.map(effect => [effect.operation, effect.reversible]), [['execute', false]]);
   const encoded = JSON.stringify(reopened);
-  assert(!encoded.includes(outputText), 'Raw command output was persisted.');
+  const withoutExcerpt = JSON.stringify({ ...reopened, failure: reopened.failure && { ...reopened.failure, message: undefined } });
+  assert(!withoutExcerpt.includes(outputText), 'Raw command output escaped the bounded failure excerpt.');
+  assert(!encoded.includes('fixture-sensitive-secret'), 'A policy-covered output secret was persisted.');
+  if (reopened.status === 'committed') assert(!encoded.includes(outputText), 'Successful command output was persisted.');
   for (const privatePath of [root, fixture.frozen.root, fixture.snapshot.payloadRoot, pythonPath]) {
     assert(!encoded.includes(JSON.stringify(privatePath).slice(1, -1)), 'An absolute fixture path was persisted.');
   }
   return reopened;
 }
 
-function assertOutput(receipt: ActionReceipt, status: 'passed' | 'failed', exitCode: number) {
+function assertOutput(receipt: ActionReceipt, status: 'passed' | 'failed', exitCode: number, additionalOutput = '') {
   const summary = JSON.parse(receipt.validation.summary ?? '');
-  const output = outputText + '\n';
+  const output = outputText + '\n' + additionalOutput;
   assert.equal(summary.status, status);
   assert.equal(summary.exitCode, exitCode);
   assert.equal(summary.outputBytes, Buffer.byteLength(output));
@@ -342,6 +348,28 @@ async function interruptCheck(
 }
 
 try {
+  const excerpt = (text: string, paths: string[] = []) => projectCheckFailureMessage({ outputTailBase64: Buffer.from(text).toString('base64') }, paths);
+  assert.equal(excerpt(''), undefined);
+  assert.equal(excerpt('\x00\n\r\t'), undefined);
+  assert.equal(excerpt('\x1b[31mASSERT failed\x1b[0m\nnext\x00\u202e'), 'Check output (excerpt): ASSERT failed next');
+  const privateRoot = 'C:\\Private Project\\scratch[abc]';
+  const hiddenPaths = excerpt(`failed at c:/private project/scratch[abc]/checks/test.py and "D:\\Other Project\\check.py"`, [privateRoot]);
+  assert(hiddenPaths && !/private project|other project|[a-z]:[\\/]/i.test(hiddenPaths));
+  const secret = 'sensitive-test-value';
+  const hidden = excerpt(`password=${secret} token=${secret} Bearer ${secret} sk-abcdefghijk`);
+  assert(hidden && !hidden.includes(secret) && !hidden.includes('sk-abcdefghijk'));
+  assert.equal(excerpt(`tok\x1b[31men=${secret} pass\x00word=${secret}`),
+    'Check output (excerpt): [redacted-secret] [redacted-secret]');
+  const key = excerpt('-----BEGIN PRIVATE KEY-----\nprivate-key-bytes\n-----END PRIVATE KEY-----');
+  const partialKey = excerpt('-----BEGIN PRIVATE KEY-----\nprivate-key-bytes');
+  assert(key?.includes('[redacted-private-key]') && !key.includes('private-key-bytes'));
+  assert(partialKey?.includes('[redacted-private-key]') && !partialKey.includes('private-key-bytes'));
+  const clippedSecret = excerpt(`diagnostic token=${'s'.repeat(10_000)} trailing assertion`);
+  assert(clippedSecret?.includes('[redacted-secret]') && !clippedSecret.includes('ssss'));
+  const long = excerpt('prefix '.repeat(1000) + 'useful final assertion');
+  assert(long && long.length === 512 && long.endsWith('useful final assertion'));
+  assert([...long].every(character => character.charCodeAt(0) >= 0x20 && character !== '\u007f'));
+  record('failure excerpts are bounded, control-free and redact paths/credentials before clipping');
   const interpreter = createPortableRuntime();
   const trusted = pin(workerPath);
 
@@ -398,10 +426,39 @@ try {
   const nonzero = createFixture('nonzero', 'nonzero', interpreter);
   const failed = assertDurable(nonzero, await nonzero.execute(trusted), 'failed', 'PROJECT_CHECK_EXIT_NONZERO');
   assert.equal(failed.validation.status, 'failed');
-  assertOutput(failed, 'failed', 7);
+  assert.match(failed.failure?.message ?? '', /Check output \(excerpt\): fixture-private-command-output/);
+  assertOutput(failed, 'failed', 7, `token=fixture-sensitive-secret\n${nonzero.frozen.projectRoot}\n`);
+  assert(failed.failure?.message?.includes('[redacted-secret]'));
+  assert(failed.failure?.message?.includes('[private-path]'));
   assert.equal(fs.readFileSync(nonzero.marker, 'ascii'), 'started\n');
   record('a drained command with exit seven persists a failed receipt');
   nonzero.retire();
+
+  const refusedExcerpt = createFixture('refused-excerpt', 'nonzero', interpreter);
+  const persistFailure = refusedExcerpt.store.fail.bind(refusedExcerpt.store);
+  let excerptRejections = 0;
+  refusedExcerpt.store.fail = (id, input) => {
+    if (input.failure.message?.startsWith('Check output (excerpt):')) {
+      excerptRejections++;
+      throw new ActionReceiptValidationError('failure.message contains a policy-covered secret-bearing value.');
+    }
+    return persistFailure(id, input);
+  };
+  const fallback = assertDurable(refusedExcerpt, await refusedExcerpt.execute(trusted), 'failed', 'PROJECT_CHECK_EXIT_NONZERO');
+  assert.equal(excerptRejections, 1);
+  assert.equal(fallback.failure?.message, 'Check failed; its diagnostic excerpt was unavailable.');
+  assertOutput(fallback, 'failed', 7, `token=fixture-sensitive-secret\n${refusedExcerpt.frozen.projectRoot}\n`);
+  record('a rejected diagnostic excerpt cannot discard the confirmed failed command result');
+  refusedExcerpt.retire();
+
+  const failedStorage = createFixture('failed-storage', 'nonzero', interpreter);
+  let failedWrites = 0;
+  failedStorage.store.fail = () => { failedWrites++; throw new Error('fixture storage failure'); };
+  await assert.rejects(failedStorage.execute(trusted), /fixture storage failure/);
+  assert.equal(failedWrites, 1);
+  assert.equal(failedStorage.store.listVerified()[0].status, 'prepared');
+  record('a failed terminal write is not retried as a presentation fallback or reported as success');
+  failedStorage.retire();
 
   const timeout = createFixture('timeout', 'wait', interpreter, 2);
   const timedOut = assertDurable(timeout, await timeout.execute(trusted), 'failed', 'PROJECT_CHECK_TIMED_OUT');

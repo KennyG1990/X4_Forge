@@ -11,6 +11,7 @@ import { captureDeploymentSnapshot } from '../src/server/deploymentSnapshot';
 import { ProjectCheckApprovalLedger } from '../src/server/projectCheckApproval';
 import { captureProjectCheckSetup, freezeProjectCheckSetup } from '../src/server/projectCheckSetup';
 import { executeProjectCheckSuite, readProjectCheckSuiteReport, requirePassedProjectCheckSuite } from '../src/server/projectCheckSuite';
+import { ProjectCheckRunService } from '../src/server/projectCheckRunService';
 import { canonicalSourceKey } from '../src/server/resourceCoordinator';
 import { SharedSourceCoordinator, type ProjectCheckSourceLease } from '../src/server/sharedSourceCoordinator';
 
@@ -22,6 +23,7 @@ assert(path.isAbsolute(pythonInput) && path.isAbsolute(scratchInput));
 const pythonPath = fs.realpathSync.native(pythonInput);
 const scratchParent = fs.realpathSync.native(scratchInput);
 const root = fs.mkdtempSync(path.join(scratchParent, 'x4-check-suite-'));
+const rootStamp = fs.lstatSync(root, { bigint: true });
 const originalTemp = process.env.TEMP;
 const originalTmp = process.env.TMP;
 process.env.TEMP = root;
@@ -66,8 +68,9 @@ with open(marker, 'a', encoding='ascii', newline='\n') as record:
 if mode == 'wait':
     while not os.path.exists(release):
         time.sleep(0.02)
-print(name)
-sys.exit(7 if mode == 'nonzero' else 0)
+if mode != 'nonzero-empty':
+    print(name)
+sys.exit(7 if mode in ('nonzero', 'nonzero-empty') else 0)
 `;
 
 function stageInterpreter() {
@@ -89,7 +92,34 @@ const cleanup: (() => void)[] = [];
 const retained: (() => boolean)[] = [];
 function record(name: string) { checks.push(name); console.log(`PASS ${name}`); }
 
-type Mode = 'wait' | 'nonzero' | 'pass';
+const footprintLimit = { bytes: 128 * 1024 * 1024, entries: 2000 };
+const peakFootprint = { bytes: 0, entries: 0 };
+function meterFixture() {
+  const current = fs.lstatSync(root, { bigint: true });
+  assert(current.isDirectory() && current.dev === rootStamp.dev && current.ino === rootStamp.ino);
+  assert.equal(path.dirname(fs.realpathSync.native(root)), scratchParent);
+  const pending = [root];
+  let bytes = 0;
+  let entries = 0;
+  while (pending.length) {
+    const directory = pending.pop()!;
+    assert.equal(fs.realpathSync.native(directory).toLowerCase(), path.resolve(directory).toLowerCase());
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      assert(!entry.isSymbolicLink(), 'Fixture inventory must not follow a reparse directory.');
+      assert(++entries <= footprintLimit.entries, 'Suite fixture entry budget exceeded.');
+      const file = path.join(directory, entry.name);
+      if (entry.isDirectory()) pending.push(file);
+      else {
+        bytes += fs.lstatSync(file).size;
+        assert(bytes <= footprintLimit.bytes, 'Suite fixture byte budget exceeded.');
+      }
+    }
+  }
+  peakFootprint.bytes = Math.max(peakFootprint.bytes, bytes);
+  peakFootprint.entries = Math.max(peakFootprint.entries, entries);
+}
+
+type Mode = 'wait' | 'nonzero' | 'nonzero-empty' | 'pass';
 function fixture(name: string, declarations: ReadonlyArray<readonly [string, Mode]>, interpreter: ReturnType<typeof stageInterpreter>) {
   const directory = path.join(root, name);
   const sourceRoot = path.join(directory, 'source');
@@ -130,6 +160,7 @@ function fixture(name: string, declarations: ReadonlyArray<readonly [string, Mod
     assert(plan.ok, plan.errors.join('\n'));
     const snapshot = captureDeploymentSnapshot(plan, 'loose');
     cleanup.push(snapshot.dispose);
+    meterFixture();
     return { setupInput, frozen, artifact: { modId, snapshot }, approvals, approvalId: approval.id, runId,
       systemRoot: systemRoot!, runtime, store, workspaceId, actorId };
   };
@@ -147,7 +178,7 @@ function fixture(name: string, declarations: ReadonlyArray<readonly [string, Mod
   const execute = (selected = exact, wrapLease: (lease: ProjectCheckSourceLease) => ProjectCheckSourceLease = lease => lease) =>
     coordinator.run([key], { actor: actorId, operation: 'fixture-suite', workspaceId },
       lease => executeProjectCheckSuite({ ...selected, lease: wrapLease(lease) }));
-  return { commands, approvals, approval, store, script, exact, inputs, execute, observer, key, ownership };
+  return { commands, approvals, approval, store, script, exact, inputs, execute, coordinator, observer, key, ownership };
 }
 
 async function until<T>(read: () => T | undefined, label: string): Promise<T> {
@@ -278,6 +309,7 @@ try {
   assert.equal(passedReport.state, 'passed');
   assert.equal(passedReport.notRunCount, 0);
   assert.deepEqual(passedReport.checks.map(check => check.id).sort(), ['alpha', 'omega']);
+  assert(passedReport.checks.every(check => check.message === undefined));
   record('the exact parent and both command receipts reopen against independently frozen identical inputs');
 
   const incompleteChild = verified.commandReceipts[0];
@@ -307,7 +339,22 @@ try {
   record('current artifact drift, approved setup drift and revoked approval each prevent reuse of a historical pass');
 
   const failure = fixture('second-fails', [['omega', 'pass'], ['alpha', 'nonzero'], ['unused', 'pass']], interpreter);
-  const failed = await failure.execute();
+  const runs = new ProjectCheckRunService(failure.store, failure.coordinator);
+  const admitted = await runs.start({ actorId, workspaceId, operationId: 'failure-excerpt-report', modId,
+    artifactHash: failure.exact.artifact.snapshot.manifest.hash,
+    requestHash: createHash('sha256').update('failure-excerpt-report').digest('hex'), sourceKey: failure.key },
+  async (lease, runId) => {
+    failure.exact.runId = runId;
+    const suite = await executeProjectCheckSuite({ ...failure.exact, lease });
+    return { suite, logicalArtifactHash: suite.input.beforeHash };
+  });
+  const runStatus = await until(() => {
+    const status = runs.status(actorId, workspaceId, admitted.id);
+    return status.state === 'queued' || status.state === 'running' ? undefined : status;
+  }, 'failed run report');
+  assert.equal(runStatus.state, 'failed');
+  assert(runStatus.suiteReport);
+  const failed = failure.store.read(runStatus.suiteReport.suite.id);
   assert.equal(failed.status, 'failed');
   assert.equal(failed.validation.code, 'PROJECT_CHECK_SUITE_FAILED');
   assert.deepEqual(new ActionReceiptStore({ root: failure.store.root }).read(failed.id), failed);
@@ -325,12 +372,26 @@ try {
   assert.equal(failedCheck.code, 'PROJECT_CHECK_EXIT_NONZERO');
   assert.equal(failedCheck.worker?.exitCode, 7);
   assert.equal(failedCheck.worker?.status, 'failed');
+  assert.equal(failedCheck.message, 'Check output (excerpt): alpha');
+  const reopenedFailure = readProjectCheckSuiteReport(new ActionReceiptStore({ root: failure.store.root }), failed);
+  assert.deepEqual(JSON.parse(JSON.stringify(reopenedFailure)), failedReport);
+  const reopenedRun = new ProjectCheckRunService(new ActionReceiptStore({ root: failure.store.root }), failure.coordinator);
+  assert.deepEqual(JSON.parse(JSON.stringify(reopenedRun.status(actorId, workspaceId, admitted.id))), runStatus);
+  assert.throws(() => reopenedRun.status('different-agent', workspaceId, admitted.id), { code: 'PROJECT_CHECK_RUN_NOT_FOUND' });
+  assert.deepEqual(runStatus.suiteReport, failedReport);
   assert(started(failure.commands[0].marker) && started(failure.commands[1].marker));
   assert(!fs.existsSync(failure.commands[2].marker));
   await assert.rejects(async () => requirePassedProjectCheckSuite(failure.exact, failed.id));
   await assert.rejects(failure.execute(), { code: 'PROJECT_CHECK_SUITE_EXISTS' });
   assert(started(failure.commands[0].marker) && started(failure.commands[1].marker));
   record('a real second-command failure stops the suite before a third command and provides no passing proof');
+  const outputless = fixture('no-output', [['alpha', 'nonzero-empty']], interpreter);
+  const outputlessSuite = await outputless.execute();
+  const outputlessReport = readProjectCheckSuiteReport(new ActionReceiptStore({ root: outputless.store.root }), outputlessSuite);
+  assert.equal(outputlessReport?.state, 'failed');
+  assert.equal(outputlessReport.checks[0].message, undefined);
+  await assert.rejects(async () => requirePassedProjectCheckSuite(outputless.exact, outputlessSuite.id));
+  record('the historical hash-only failure shape remains readable without inventing output or passing proof');
 
   const unknown = fixture('unconfirmed-first', [['omega', 'pass'], ['alpha', 'pass']], interpreter);
   const wrongRuntime = { ...unknown.exact, runtime: { ...runtime, workerSha256: '0'.repeat(64) } };
@@ -387,7 +448,9 @@ try {
   assert(!fs.existsSync(changed.commands[1].marker));
   record('owner revocation after the first child commits leaves a durable failed suite without starting the second');
 
-  console.log(JSON.stringify({ status: 'passed', realWindowsProcesses: true, fixtureOwnerApproval: true, checks }));
+  meterFixture();
+  console.log(JSON.stringify({ status: 'passed', realWindowsProcesses: true, fixtureOwnerApproval: true, checks,
+    observedPeakFootprint: peakFootprint, footprintLimit }));
 } finally {
   try {
     const keepScratch = retained.some(unresolved => unresolved());
@@ -396,6 +459,8 @@ try {
     } else {
       for (const dispose of cleanup.reverse()) dispose();
       assert.equal(path.dirname(fs.realpathSync.native(root)), scratchParent);
+      const current = fs.lstatSync(root, { bigint: true });
+      assert(current.dev === rootStamp.dev && current.ino === rootStamp.ino);
       fs.rmSync(root, { recursive: true, force: true });
     }
   } finally {

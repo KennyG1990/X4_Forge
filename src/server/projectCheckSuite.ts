@@ -56,6 +56,7 @@ type CommandReport = {
   code: string;
   receiptId: string;
   receiptHash: string;
+  message?: string;
   worker?: WorkerEvidence & { outputLimitExceeded?: true };
 };
 export interface ProjectCheckSuiteReport {
@@ -215,7 +216,8 @@ function readReportChild(store: ActionReceiptStore, suite: ActionReceipt, runId:
     || resource.root !== 'project-check-results' || resource.relativePath !== `${runId}/${checkId}`
     || resource.beforeHash !== suite.input.beforeHash) throw mismatch();
   const code = child.validation.code;
-  const report = { id: checkId, receiptId: child.id, receiptHash: child.hash };
+  const report = { id: checkId, receiptId: child.id, receiptHash: child.hash,
+    ...(child.status !== 'committed' && child.failure?.message ? { message: child.failure.message } : {}) };
   const requestHash = child.input.requestHash;
   if (child.status === 'incomplete') {
     if (code !== 'PROJECT_CHECK_RESULT_UNCONFIRMED' || child.failure?.code !== code || child.validation.summary !== undefined

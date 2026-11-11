@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
-import { canonicalJson, type ActionReceipt, type ActionReceiptPrepareInput } from '../lib/actionReceipt';
+import path from 'node:path';
+import { ActionReceiptValidationError, canonicalJson, redactReceiptText, type ActionReceipt, type ActionReceiptPrepareInput } from '../lib/actionReceipt';
 import type { ActionReceiptStore } from '../lib/actionReceiptStore';
 import type { bindProjectCheckCommand } from './projectCheckCommand';
 import { runProjectCheckWorker, type ProjectCheckWorkerResult, type TrustedProjectCheckWorker } from './projectCheckWorker';
@@ -26,6 +27,36 @@ interface ProjectCheckExecutionInput {
 
 function digest(value: unknown): string {
   return createHash('sha256').update(canonicalJson(value)).digest('hex');
+}
+
+/** Diagnostic only: the exact worker-output hash remains in validation.summary. */
+export function projectCheckFailureMessage(result: Pick<ProjectCheckWorkerResult, 'outputTailBase64'>,
+  privatePaths: readonly string[]): string | undefined {
+  try {
+    // The trusted worker has already bounded and checked this retained byte tail.
+    let text = Buffer.from(result.outputTailBase64, 'base64').toString('utf8')
+      // eslint-disable-next-line no-control-regex -- Strip terminal controls before credential matching.
+      .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+      // eslint-disable-next-line no-control-regex -- These characters must not survive in receipt text.
+      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/g, '');
+    // Redact before clipping, including an opening private-key block whose end was not retained.
+    text = text.replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-]*PRIVATE KEY-----|$)/gi, '[redacted-private-key]');
+    text = redactReceiptText(text);
+    for (const privatePath of [...privatePaths].filter(Boolean).sort((a, b) => b.length - a.length)) {
+      const pattern = privatePath.split(/[\\/]/).map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[\\\\/]');
+      text = text.replace(new RegExp(pattern, 'gi'), '[private-path]');
+    }
+    text = text
+      .replace(/(["'])(?:[a-z]:[\\/]|\\\\)[^\r\n]*?\1/gi, '[private-path]')
+      .replace(/(?:[a-z]:[\\/]|\\\\)[^\s"'<>|]*/gi, '[private-path]')
+      .replace(/\s+/g, ' ').trim();
+    if (!text) return;
+    const prefix = 'Check output (excerpt): ';
+    return prefix + (text.length <= 512 - prefix.length ? text : `…${text.slice(-(511 - prefix.length))}`);
+  } catch {
+    // Presentation failure must not discard the confirmed terminal worker result.
+    return;
+  }
 }
 
 export function projectCheckCommandReceiptInput(
@@ -107,9 +138,21 @@ export async function executeProjectCheck(input: ProjectCheckExecutionInput): Pr
   }
   if (result.status !== 'passed') {
     const code = failureCodes[result.status];
-    return store.fail(receipt.id, {
-      validation: { ...validator, status: 'failed', code, summary }, failure: { code },
-    });
+    const command = bound.binding.command;
+    const message = projectCheckFailureMessage(result, [command.cwd, command.executable, path.dirname(command.executable),
+      command.environment.FORGE_ARTIFACT_ROOT, runtime.pythonPath, runtime.workerPath,
+      path.dirname(runtime.pythonPath), path.dirname(runtime.workerPath),
+      bound.sourceKey.slice('source:'.length)]);
+    const validation = { ...validator, status: 'failed', code, summary } as const;
+    try {
+      return store.fail(receipt.id, { validation, failure: { code, ...(message ? { message } : {}) } });
+    } catch (error) {
+      // This narrow shape rejection happens before persistence. Never retry a storage error.
+      if (!message || !(error instanceof ActionReceiptValidationError) || error.errors.length !== 1
+        || !error.errors[0].startsWith('failure.message ')) throw error;
+      return store.fail(receipt.id, { validation,
+        failure: { code, message: 'Check failed; its diagnostic excerpt was unavailable.' } });
+    }
   }
   return store.commit(receipt.id, {
     validation: { ...validator, status: 'passed', code: 'PROJECT_CHECK_PASSED', summary },

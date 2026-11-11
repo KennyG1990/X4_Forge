@@ -338,6 +338,13 @@ function redactSensitiveText(text: string): string {
     .replace(/((?:api[_-]?key|password|token|secret)\s*[:=]\s*)[^\s,;]+/gi, '$1[redacted]');
 }
 
+/** Reuse the receipt's narrow text policy before clipping bounded diagnostic excerpts. */
+export function redactReceiptText(text: string): string {
+  // Assignment labels such as token=[redacted] still match the strict read policy.
+  // Remove those residual matches too so diagnostics survive receipt reopening.
+  return redactSensitiveText(text).replace(new RegExp(SECRET_VALUE_RE.source, 'gi'), '[redacted-secret]');
+}
+
 function normalizeMetadata(value: unknown, redact: boolean): ActionReceiptMetadata | undefined {
   if (value === undefined) return undefined;
   const object = requireObject(value, 'metadata');
