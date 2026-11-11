@@ -266,8 +266,23 @@ test('authenticated deployment binds bytes and persists exact approvals, with fa
     expect(changedCorpus.status, JSON.stringify(changedCorpus.body)).toBe(409);
     expect((await post('/api/schema/config', { schemaDir: restore.schemaDir })).status).toBe(200);
 
-    // A genuinely complete clean check may promote the baseline.
+    // Valid syntax alone does not prove an unregistered Lua runtime scope.
     fs.writeFileSync(path.join(source, 'ui', 'bad.lua'), 'local valid = true');
+    const unregisteredLuaPreview = await post(route, { path: 'trust_fixture', dryRun: true }, keys.deploy.token);
+    expect(unregisteredLuaPreview.body.ok, JSON.stringify(unregisteredLuaPreview.body)).toBe(true);
+    expect(unregisteredLuaPreview.body.validation.outcome).toBe('incomplete-checks');
+    expect(unregisteredLuaPreview.body.baselinePromotion.recorded).toBe(false);
+    evidence.unregisteredLuaPreview = unregisteredLuaPreview;
+    // Remove that unverified scope only for the complete clean positive. Earlier
+    // malformed-Lua approval, exact-byte, refusal and stale tests remain above.
+    fs.unlinkSync(path.join(source, 'ui', 'bad.lua'));
+    const staleVersionPreview = await post(route, { path: 'trust_fixture', dryRun: true }, keys.deploy.token);
+    expect(staleVersionPreview.body.validation.outcome).toBe('warnings-present');
+    expect(staleVersionPreview.body.validation.evidence.findings.some((finding: any) => finding.code === 'content.version_stale')).toBe(true);
+    expect(staleVersionPreview.body.baselinePromotion.recorded).toBe(false);
+    evidence.staleVersionPreview = staleVersionPreview;
+    const contentPath = path.join(source, 'content.xml');
+    fs.writeFileSync(contentPath, fs.readFileSync(contentPath, 'utf8').replace('version="100"', 'version="200"'));
     const cleanPreview = await post(route, { path: 'trust_fixture', dryRun: true }, keys.deploy.token);
     const clean = await post(route, { path: 'trust_fixture', ...identities(cleanPreview.body) }, keys.deploy.token);
     evidence.clean = clean;
@@ -277,6 +292,7 @@ test('authenticated deployment binds bytes and persists exact approvals, with fa
     // Unavailable checks alone do not require approval or become a clean result.
     // This valid Lua comment exceeds the actual 4 MiB semantic-loader limit.
     fs.writeFileSync(path.join(source, 'ui', 'bad.lua'), '--' + 'x'.repeat(4 * 1024 * 1024 + 1));
+    fs.writeFileSync(contentPath, fs.readFileSync(contentPath, 'utf8').replace('version="200"', 'version="300"'));
     const incompletePreview = await post(route, { path: 'trust_fixture', dryRun: true }, keys.deploy.token);
     expect(incompletePreview.body.ok, JSON.stringify(incompletePreview.body)).toBe(true);
     const incomplete = await post(route, { path: 'trust_fixture', ...identities(incompletePreview.body) }, keys.deploy.token);

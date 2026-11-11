@@ -94,7 +94,9 @@ test('C03 real warning approval reuse, invalidation, records and rendered revoca
   expect(bytes()).toBe(beforePreview);
   await page.getByTestId('deploy-apply-btn').click();
   const result = page.getByTestId('verify-result');
-  await expect(result.getByTestId('deploy-review-title')).toHaveText('Deployed — accepted findings', { timeout: 90_000 });
+  // Accepted warning history must not conceal the unregistered Lua scope.
+  await expect(result.getByTestId('deploy-review-title')).toHaveText('Deployed — incomplete checks', { timeout: 90_000 });
+  await expect(result).toContainText('Some findings were accepted; some checks remain incomplete.');
   await result.getByTestId('deploy-review-title').scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(out, 'qualified-deployment.png'), fullPage: true });
   const history = result.getByTestId('warning-review-history'); await history.locator('summary').click();
@@ -135,7 +137,22 @@ test('C03 real warning approval reuse, invalidation, records and rendered revoca
   const beforeStale = bytes(); expect((await apply(revoked)).status).toBe(409); expect(bytes()).toBe(beforeStale);
   checks.push('source-change-invalidation', 'new-warning-not-inherited', 'stale-source-no-write');
   write('md/forge_regression_lab.xml', cleanMd);
-  const resolved = await preview(); expect(resolved.validation.review.counts.acceptedWarnings).toBe(0);
+  const unverifiedResolution = await preview();
+  expect(unverifiedResolution.validation.evidence.coverage.complete).toBe(false);
+  expect(unverifiedResolution.validation.review.counts.acceptedWarnings).toBe(0);
+  expect(unverifiedResolution.validation.review.warningReviews.rows.some((row: any) => row.state === 'unverified')).toBe(true);
+  checks.push('incomplete-coverage-cannot-resolve-review');
+  // Only the complete-resolution positive omits the unregistered Lua inputs.
+  for (const file of base.files.filter((file: any) => file.path.endsWith('.lua'))) fs.unlinkSync(path.join(source, file.path));
+  const beforeDanglingUi = bytes();
+  const danglingUi = await post(route, { ...target, dryRun: true }, firstActor);
+  expect(danglingUi.data.ok).toBe(false);
+  expect(danglingUi.data.validation.evidence.findings.filter((finding: any) => finding.code === 'ui.invalid_registration')).toHaveLength(2);
+  expect(bytes()).toBe(beforeDanglingUi);
+  checks.push('dangling-ui-registration-remains-blocked');
+  fs.unlinkSync(path.join(source, 'ui.xml'));
+  const resolved = await preview(); expect(resolved.validation.evidence.coverage.complete).toBe(true);
+  expect(resolved.validation.review.counts.acceptedWarnings).toBe(0);
   expect(resolved.validation.review.warningReviews.rows.some((r: any) => r.state === 'resolved')).toBe(true);
   checks.push('resolved-review-visible');
   fs.writeFileSync(path.join(out, 'receipt.json'), JSON.stringify({ pass: true, checks, originalReceiptId: original.id, reuseReceiptId: reuseReceipt.id,

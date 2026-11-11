@@ -294,7 +294,10 @@ test('Directory Settings shows owner profile paths without offering a path save'
   };
   await page.route('**/api/schema/config', route => route.fulfill({ json: {
     loaded: true,
-    config: {},
+    // Real scratch GET projects the launcher-owned pins into config as well as
+    // resolved. An empty raw mock incorrectly starts first-run onboarding.
+    config: { x4GamePath: scratch, modWorkspacePath: resolved.modWorkspacePath,
+      filesystemPath: resolved.filesystemPath, x4ReferenceRoot: unpackedRoot, xsdSchemaPath: schemaDir },
     resolved,
     directorySettingsLocked: true,
     directorySafety: { safe: true, issues: [] },
@@ -314,4 +317,5 @@ test('Directory Settings shows owner profile paths without offering a path save'
   await expect(schema).not.toBeEditable();
   await expect(page.getByText('Project Check approval locks directory paths for this session.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Save Paths' })).toBeDisabled();
+  await page.screenshot({ path: 'test-results/directory-settings-owner-profile.png', fullPage: true });
 });
