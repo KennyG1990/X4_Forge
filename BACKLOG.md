@@ -6,9 +6,13 @@
 
 ## P0 — Active
 
+### Community XML file reference map `in_progress` (#100, under #21)
+
+Ken requested delivering the community's ship/weapon XML reference visualization. [Design/acceptance](docs/plans/2026-11-11-xml-reference-map.md): navigable file graph, incoming/outgoing refs, actual mod/base/DLC XML definitions, precise source inspection and the same read-only API/MCP result. Existing mod dependencies and MD canvas are different capabilities. Typed catalog resolution and authored/effective provenance must be truthful; no CodeSense code copying. Implementation follows the normal specification checkpoint; public delivery requires the complete release gates. Validation/debuglog work remains active behind this explicit new priority.
+
 ### Current isolated Dev payload qualification `in_progress` (#20, linked #64)
 
-FORGE DEVELOPMENT/CodeSense are running, but its bundled runtime53c960/manifest79 is older than current source. [Reconciled upgrade prerequisite](docs/plans/2026-11-11-dev-host-restoration.md): optional guarded runtime-source staging is implemented; selftests/lint/type/precommit, real refusal/preservation/repeat identity and current build/stage/probe19/19pass. Normal source hook/CI remain pending; current Dev variant/installed replay/swap still unapplied. Reuses qualified83closure without range re-resolution/new cache downloads. Preserve private profiles/mod/CodeSense, controller isolation and rollback. No public bump/release yet; whole64/game/native visual gates stay open.
+Current full Dev payload is installed; native backend, CodeSense initialization and bounded config/workspace/status reads are verified, with all9cold essential hashes preserved. [Plan and evidence boundaries](docs/plans/2026-11-11-dev-host-restoration.md). Internal staging source33b30a5 passed normal precommit, exact remote parity and Quality43141948064. Exact candidate315native/134runtime-oracle/18deploy-control/6ware tests pass,0flakes and complete ownership. Existing staged app was moved, not copied into another runtime family. One displaced payload remains for rollback. Full post-start tree/schema-body inspection, native pixels/game and qualified public release stay open; this does not close20/64/61. Private operational identities remain in finite local QA, not public issue updates.
 
 ### Validation and debuglog issue execution `in_progress` (existing #20/#74/#14 owners)
 

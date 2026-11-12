@@ -21,6 +21,8 @@ For every row: reconcile latest issue body/comments, current source and exact in
 
 ## Records / current outcome
 
+2026-11-11 priority steering: Ken explicitly requested shipping the community XML-file reference graph; existing #100/#21 and its reconciled plan now lead the next implementation. This does not cancel these validation/debuglog units. Fresh read-only52/57 reconciliation found a concrete pending hypothesis: retained load evidence uses a per-line signature-plus-owner predicate while the grouped UI crash parser attributes ownership from a later unprefixed frame. Candidate fixture: exact extension load, widget error header, traceback frame owning the extension, reload footer, then tail-rollover noise. Expected retained attributed fault/loadedCleanly=false until a newer exact load. Reproduce first in runtime-log-freshness/selftest + actual HTTP; do not repeat already-verified cross-poll grouping as new work or claim this source hypothesis reproduced. No code changed for that candidate.
+
 Detailed intake: `2026-11-11-validation-debuglog-review.md`; existing GitHub owners retain original acceptance. Each implementation unit adds its own reconciled contract and evidence under the existing finite QA root. Record source, rendered, packaged/installed and game proof separately. No issue is closed by this worklist. No capability-map delta yet. Rollback uses bounded source diffs and isolated fixtures, never historical global config restoration.
 
 AAR: execution pending. Initial review found stale B95/B96 wording and fragmented body/comment status; carry those documentary discrepancies into the owning reconciliation without treating them as current reproduced code failures.
