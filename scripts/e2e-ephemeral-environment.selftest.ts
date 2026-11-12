@@ -1,14 +1,21 @@
 import { strict as assert } from 'node:assert';
 import * as path from 'node:path';
 
-import playwrightConfig, {
+import { createE2eRunStateOwner, E2E_RUN_STATE_ENV, readE2eRunState } from './e2e-runtime-bootstrap.mjs';
+
+const stateOwner = createE2eRunStateOwner();
+process.env[E2E_RUN_STATE_ENV] = stateOwner.environment[E2E_RUN_STATE_ENV];
+try {
+const {
+  default: playwrightConfig,
   E2E_API_ORIGIN,
   E2E_API_PORT,
   E2E_VITE_ENV,
   E2E_WEB_ORIGIN,
   E2E_WEB_PORT,
   resolveE2ePorts,
-} from '../playwright.config';
+  E2E_STATE_DIR,
+} = await import('../playwright.config');
 
 type ConfigSurface = {
   webServer?: unknown;
@@ -141,6 +148,9 @@ assert.equal(env.PORT, String(E2E_API_PORT), 'API webServer PORT must use the re
 const mutableNames = ['X4_STATE_DIR', 'X4_CONFIG_DIR', 'X4_DATA_DIR', 'X4FORGE_DISCOVERY_DIR', 'X4_SOURCE_COORDINATION_DIR'];
 const mutablePaths = Object.fromEntries(mutableNames.map(name => [name, requireEnv(env, name)]));
 const stateRoot = path.resolve(mutablePaths.X4_STATE_DIR);
+assert.equal(stateRoot, stateOwner.stateDir, 'API and config use the bootstrap-owned root');
+assert.equal(E2E_STATE_DIR, stateOwner.stateDir, 'config import does not allocate another root');
+assert.equal(readE2eRunState({ ...stateOwner.environment }).stateDir, stateRoot, 'a worker-like environment consumes the same run');
 const liveDataPath = path.resolve(process.cwd(), 'data');
 
 for (const name of mutableNames) {
@@ -166,4 +176,7 @@ assert.equal(use.baseURL, process.env.PLAYWRIGHT_BASE_URL || E2E_WEB_ORIGIN, 'Pl
 const storageState = use.storageState as { origins?: Array<{ origin?: unknown }> } | undefined;
 assert.equal(storageState?.origins?.[0]?.origin, new URL(String(use.baseURL)).origin, 'storage state must target the same browser origin');
 
+} finally {
+  try { stateOwner.retire(); } finally { delete process.env[E2E_RUN_STATE_ENV]; }
+}
 console.log('e2e ephemeral environment containment selftest passed');

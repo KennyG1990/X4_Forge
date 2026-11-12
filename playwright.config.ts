@@ -1,8 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { createHash } from 'node:crypto';
+import { readE2eRunState } from './scripts/e2e-runtime-bootstrap.mjs';
 
 export function resolveE2eRuntime(env: Readonly<Record<string, unknown>> = process.env, root = process.cwd()) {
   const setting = Object.getOwnPropertyDescriptor(env, 'X4_FORGE_E2E_MODE');
@@ -83,10 +83,9 @@ export const E2E_VITE_ENV = {
   STUDIO_API_TOKEN: E2E_TOKEN,
   DISABLE_HMR: 'true',
 } as const;
-// Per-run state dir: unique-ish per process start; OS temp cleanup owns the leftovers.
-process.env.X4_FORGE_E2E_STATE_PID ||= String(process.pid);
-if (!/^\d+$/.test(process.env.X4_FORGE_E2E_STATE_PID)) throw new Error('Invalid E2E state PID.');
-export const E2E_STATE_DIR = path.join(os.tmpdir(), `x4forge-e2e-state-${process.env.X4_FORGE_E2E_STATE_PID}`);
+// The normal bootstrap creates ONE fresh namespace before any config/worker/server
+// import. Consumers share that identity; a reusable PID or missing owner never adopts state.
+export const E2E_STATE_DIR = readE2eRunState(process.env).stateDir;
 // B41: 127.0.0.1 EVERYWHERE, never "localhost" — vite binds whichever family
 // "localhost" resolves to at boot (varies per run on Windows), while Playwright's
 // request context resolves localhost to ::1 and does NOT fall back. A mismatched

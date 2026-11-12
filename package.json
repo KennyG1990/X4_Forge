@@ -34,6 +34,8 @@
     "test:product-copy": "node scripts/product-copy-check.mjs",
     "test:reference-api": "node scripts/reference-api-integration.mjs",
     "test:reference-corpus": "tsx scripts/reference-corpus-check.ts",
+    "test:performance": "node --max-old-space-size=512 --import tsx src/lib/forgePerformance.selftest.ts && node --max-old-space-size=512 --import tsx src/server/forgePerformance.selftest.ts && node --max-old-space-size=512 --import tsx src/lib/webviewPerformance.selftest.ts && node --max-old-space-size=512 --import tsx src/components/PerformancePanel.selftest.tsx",
+    "test:xml-references": "node --max-old-space-size=512 --import tsx src/server/xmlReferenceMap.selftest.ts",
     "test:schema-intelligence": "tsx scripts/schema-intelligence-check.ts",
     "test:diff-expression-values": "tsx scripts/diff-expression-values.selftest.ts",
     "test:effective-include-purpose": "tsx scripts/effective-include-purpose.selftest.ts",

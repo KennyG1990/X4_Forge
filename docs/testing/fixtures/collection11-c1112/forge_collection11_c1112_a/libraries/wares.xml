@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<wares>
+  <ware id="forge_collection11_c1112_a_keep" name="{20201,701}" description="{20201,702}" transport="container" volume="11">
+    <price min="1" average="2" max="3" />
+  </ware>
+  <ware id="forge_collection11_c1112_a_remove" name="{20201,701}" description="{20201,702}" transport="container" volume="12">
+    <price min="1" average="2" max="3" />
+  </ware>
+  <ware id="forge_collection11_c1112_a_rename" name="{20201,701}" description="{20201,702}" transport="container" volume="13">
+    <price min="1" average="2" max="3" />
+  </ware>
+  <ware id="forge_collection11_c1112_duplicate" name="{20201,701}" description="{20201,702}" transport="container" volume="14">
+    <price min="1" average="2" max="3" />
+  </ware>
+</wares>

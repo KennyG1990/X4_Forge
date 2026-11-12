@@ -114,8 +114,11 @@ import { classifyPath, indexCueReferences, runExtensionProjectSelftest, buildCon
 import { buildDependencyHealth } from './src/server/dependencyHealth';
 import { getAiSchemaIndex, getScriptPropertyIndex, registerValidationAgentRoutes } from "./src/server/validationRoutes";
 import { getCanonicalReferenceCorpus, getCanonicalReferenceSets, initializeReferenceCorpus, registerReferenceRoutes, startCanonicalReferenceManifest } from "./src/server/referenceRoutes";
+import { getReferenceLanguageResources } from './src/lib/referenceLanguage';
+import { analyzeXmlReferenceMap, XmlReferenceMapInputError } from './src/server/xmlReferenceMap';
 import { registerBulkTransformRoutes } from "./src/server/bulkTransformRoutes";
-import { computeModDrift, fingerprintModFolder, flattenProjectValidation, getSchemaIndex, loadProjectFromDisk, runProjectValidation, type FlatProjectDiagnostic } from "./src/server/projectValidation";
+import { computeModDrift, fingerprintModFolder, flattenProjectValidation, getProjectValidationCacheStats, getSchemaIndex, loadProjectFromDisk, runProjectValidation, type FlatProjectDiagnostic } from "./src/server/projectValidation";
+import { createForgeBackendPerformance, forgePerformanceApiOperationName, forgePerformanceHasNegativeDataResult } from './src/server/forgePerformance';
 import { captureDeploymentSnapshot, type DeploymentSnapshot } from './src/server/deploymentSnapshot';
 import { previewLuaRegistrationChange } from './src/server/deployLuaRegistration';
 import { PROJECT_CHECKS_MAX_BYTES, PROJECT_CHECKS_PATH } from './src/server/projectCheckProposal';
@@ -355,6 +358,33 @@ for (const [key, value] of launchedSettings) {
 validateDevScratchStorage();
 
 const app = express();
+// Availability permits explicit bounded captures; constructing this producer starts
+// no sampler, histogram or Inspector session. Ordinary collection starts disabled.
+const forgePerformance = createForgeBackendPerformance({ instanceId: crypto.randomUUID(), profilingEnabled: true });
+process.once('beforeExit', () => { void forgePerformance.dispose().catch(() => {}); });
+function forgePerformanceRequestMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
+  if (!req.path.startsWith('/api/') || req.path.startsWith('/api/agent/performance') || !forgePerformance.collector.isEnabled()) return next();
+  try {
+    const correlationId = crypto.randomUUID().replace(/-/g, '');
+    res.setHeader('x-forge-trace-id', correlationId);
+    const finish = forgePerformance.collector.startOperation(() => {
+      return forgePerformanceApiOperationName(req.method, req.route?.path);
+    }, correlationId);
+    let settled = false;
+    const complete = (aborted = false) => {
+      if (settled) return;
+      settled = true;
+      res.removeListener('finish', onFinish); res.removeListener('close', onClose);
+      finish(aborted ? 'aborted' : res.statusCode >= 400 || res.locals.performanceNegativeResult ? 'error' : 'ok');
+    };
+    const onFinish = () => complete();
+    const onClose = () => complete(!res.writableFinished);
+    res.once('finish', onFinish); res.once('close', onClose);
+    res.locals.forgePerformanceTracked = true;
+  } catch { /* Telemetry cannot refuse or alter an API operation. */ }
+  return next();
+}
+app.use(forgePerformanceRequestMiddleware);
 // B117: keep Express route identity identical to the reviewed closed-world authority
 // matcher. A case- or slash-variant must never resolve to a handler under broader
 // Express defaults after the authority layer rejected that exact method/path.
@@ -482,6 +512,12 @@ function apiFailureEnvelopeMiddleware(req: express.Request, res: express.Respons
   if (!req.path.startsWith('/api')) return next();
   const originalJson = res.json.bind(res);
   res.json = ((body: unknown) => {
+    // Boolean result metadata only; never retain response/error text or payloads.
+    try {
+      if (res.locals.forgePerformanceTracked === true && forgePerformance.collector.isEnabled()) {
+        res.locals.performanceNegativeResult = forgePerformanceHasNegativeDataResult(body);
+      }
+    } catch { res.locals.performanceNegativeResult = false; }
     let envelope = projectApiEnvelope(req.originalUrl.split('?')[0], body, res.locals.apiSubject);
     // Preview content is a different subject from the registry head. Resolve its emitted
     // content identity, including edited metadata, rather than an old imported manifest.
@@ -9458,6 +9494,119 @@ app.post("/api/agent/project/file/create", (req, res) => {
   }
 });
 
+/** Bounded local performance facts. Reading does not start collection or scans. */
+app.get("/api/agent/performance", (_req, res) => {
+  return res.json({ ok: true, schemaVersion: 'forge.performance.report.v1',
+    backend: forgePerformance.snapshot(), control: forgePerformance.status(),
+    caches: { projectValidation: getProjectValidationCacheStats() },
+    coverage: { native: 'unavailable-not-wired', webview: 'local-current-panel-only',
+      profiling: 'backend-only-explicit-control', cacheBytes: 'accounted-not-exact-heap',
+      operations: 'instrumented-boundaries-only' } });
+});
+
+app.post("/api/agent/performance/collection", (req, res) => {
+  if (req.aborted || res.destroyed) return;
+  try {
+    validateProjectApiQuery(req.path, req.query);
+    const state = forgePerformance.status();
+    if (state.disposed) return res.status(503).json({ ok: false, code: 'PERFORMANCE_DISPOSED', error: 'The performance producer is disposed.' });
+    if (state.collectionActive) return res.status(409).json({ ok: false, code: 'PERFORMANCE_COLLECTION_BUSY', error: 'A bounded performance collection is already active.' });
+    const result = forgePerformance.startCollection(req.body);
+    if (!result.ok) return res.status(409).json({ ok: false, code: 'PERFORMANCE_COLLECTION_REFUSED', error: result.error });
+    return res.json({ ok: true, control: forgePerformance.status(), backend: forgePerformance.snapshot() });
+  } catch (error) {
+    return res.status(error instanceof ValidationInputError ? 400 : 500).json({ ok: false,
+      code: error instanceof ValidationInputError ? 'PROJECT_INPUT_INVALID' : 'PERFORMANCE_COLLECTION_FAILED',
+      error: error instanceof ValidationInputError ? error.message : 'Performance collection could not start.' });
+  }
+});
+
+app.post("/api/agent/performance/profile", async (req, res) => {
+  if (req.aborted || res.destroyed) return;
+  const controller = new AbortController();
+  const onClose = () => { if (!res.writableFinished) controller.abort(); };
+  res.once('close', onClose);
+  try {
+    validateProjectApiQuery(req.path, req.query);
+    const result = await forgePerformance.captureCpuProfile({ ...req.body, signal: controller.signal });
+    if (res.destroyed) return;
+    const code = result.ok === true ? 200 : result.code === 'PROFILE_RATE_LIMITED' ? 429
+      : ['PROFILE_BUSY', 'PROFILE_CLEANUP_UNCONFIRMED'].includes(result.code) ? 409
+        : result.code === 'PROFILE_INPUT_INVALID' ? 400 : result.code === 'PROFILE_ABORTED' ? 408
+          : ['PROFILE_DISABLED', 'PROFILE_DISPOSED'].includes(result.code) ? 503 : 500;
+    return res.status(code).json(result);
+  } catch (error) {
+    if (!res.destroyed) return res.status(error instanceof ValidationInputError ? 400 : 500).json({ ok: false,
+      code: error instanceof ValidationInputError ? 'PROJECT_INPUT_INVALID' : 'PROFILE_FAILED',
+      error: error instanceof ValidationInputError ? error.message : 'The backend function capture failed.' });
+  } finally { res.removeListener('close', onClose); }
+});
+
+/** Read-only file graph over explicit XML and the configured canonical reference pipeline. */
+app.post("/api/agent/project/xml-references", (req, res) => {
+  try {
+    const body = req.body;
+    const inlineProject = Object.hasOwn(body, 'project');
+    const inlineWorkspace = Object.hasOwn(body, 'workspace');
+    const record = inlineProject || inlineWorkspace ? null : resolveWorkspaceAuthority(req, res, true);
+    if (!inlineProject && !inlineWorkspace && !record) return;
+    let projectFiles: Array<{ path: string; content?: string }>;
+    let fingerprint: string;
+    if (inlineProject) {
+      const project = parseValidationProject(body.project);
+      const subject = projectApiSubject(project);
+      res.locals.apiSubject = subject;
+      projectFiles = project.files;
+      fingerprint = subject.sourceHash!;
+    } else {
+      // Compiler inputs only: caller sourceFolder/sourceStamp never authorize disk reads.
+      const workspace = activeBuildWorkspace(inlineWorkspace ? body.workspace : record!.workspace);
+      const built = buildWorkspaceFileManifest(workspace);
+      const subject = fileApiSubject(built.modId, built.files);
+      res.locals.apiSubject = subject;
+      projectFiles = Object.entries(built.files).map(([filePath, content]) => ({ path: filePath, content }));
+      const includedPaths = new Set(projectFiles.map(file => file.path.replace(/\\/g, '/').toLowerCase()));
+      for (const source of workspaceSourceFiles(workspace)) {
+        if (!/\.xml$/i.test(source.path) || (!source.omitted && source.content !== undefined)) continue;
+        const sourcePath = source.path.replace(/\\/g, '/');
+        if (includedPaths.has(sourcePath.toLowerCase())) continue;
+        // Known unscanned source is coverage evidence, never authority to read disk.
+        includedPaths.add(sourcePath.toLowerCase());
+        projectFiles.push({ path: sourcePath });
+      }
+      fingerprint = crypto.createHash('sha256').update(JSON.stringify(projectFiles)).digest('hex');
+    }
+    const corpus = getCanonicalReferenceCorpus();
+    const result = analyzeXmlReferenceMap({
+      projectFiles, referenceRoot: resolveXsdConfig().x4ReferenceRoot,
+      focus: body.focus, maxDepth: body.maxDepth, maxNodes: body.maxNodes,
+      maxEdges: body.maxEdges, includeSource: body.includeSource,
+      context: {
+        inputMode: inlineProject ? 'inline-project' : inlineWorkspace ? 'inline-workspace' : 'addressed-workspace',
+        inputFingerprint: fingerprint,
+        ...(record ? { workspaceId: record.workspaceId } : {}),
+        ...(corpus ? { corpusSignature: crypto.createHash('sha256').update(corpus.signature).digest('hex'),
+          ...(corpus.manifestGeneration ? { corpusGeneration: corpus.manifestGeneration } : {}) } : {}),
+      },
+      ...(corpus ? { schemaForDocument: (filePath: string, content: string) => {
+        const resources = getReferenceLanguageResources(corpus, { path: filePath, content });
+        return { schema: resources.schema, domain: resources.domain };
+      } } : {}),
+    });
+    const output = { ...result, ...(record ? { workspaceId: record.workspaceId } : {}) };
+    // Include the common API envelope in the final transport budget as well.
+    if (Buffer.byteLength(JSON.stringify(projectApiEnvelope(req.path, output, res.locals.apiSubject)), 'utf8') > result.coverage.limits.maxResponseBytes) {
+      return res.status(413).json({ ok: false, code: 'XML_REFERENCE_RESPONSE_LIMIT', error: 'The XML reference response exceeds its byte budget. Request a smaller neighborhood.' });
+    }
+    return res.json(output);
+  } catch (error) {
+    if (error instanceof ValidationInputError || error instanceof XmlReferenceMapInputError) {
+      return res.status(400).json({ ok: false, code: 'PROJECT_INPUT_INVALID', error: error.message });
+    }
+    return res.status(500).json({ ok: false, error: errorMessage(error) || 'XML reference analysis failed.' });
+  }
+});
+
 /** B100: navigation/ownership metadata from the same artifact plan used by compile and deploy. */
 app.post("/api/agent/project/files", (req, res) => {
   try {
@@ -12531,6 +12680,10 @@ interface DeploymentTransactionHooks {
   afterFirstDeployQuarantineCopy?: (quarantinePath: string) => void;
   /** Test seam for proving first-deploy removal failures roll back exactly. */
   removeFirstDeployTarget?: (targetPath: string) => void;
+  /** Private opt-in used only by artifact/build, never native deployment/recovery. */
+  artifactBuildPromotionRetry?: true;
+  /** Test seam for an interrupted cleanup of the opted-in artifact stage. */
+  removeArtifactStage?: (stagePath: string) => void;
 }
 
 function isLockedRootRenameError(error: unknown): boolean {
@@ -12796,13 +12949,52 @@ function replaceValidatedDeployment(
   const parent = path.dirname(targetPath);
   fs.mkdirSync(parent, { recursive: true });
   const rename = hooks.rename || ((oldPath: string, newPath: string) => fs.renameSync(oldPath, newPath));
+  const artifactRetry = hooks.artifactBuildPromotionRetry === true;
+  type ArtifactDirectory = { stamp: fs.BigIntStats; physicalPath: string };
+  type ArtifactTree = ArtifactDirectory & { fingerprint: string };
+  const artifactChanged = (detail: string) => Object.assign(new Error(`Artifact publication refused: ${detail}.`), { code: 'ARTIFACT_PUBLICATION_CHANGED' });
+  const observeArtifactDirectory = (directory: string): ArtifactDirectory => {
+    const stamp = fs.lstatSync(directory, { bigint: true });
+    if (!stamp.isDirectory() || stamp.isSymbolicLink() || stamp.ino === 0n) throw artifactChanged('directory identity is unavailable');
+    return { stamp, physicalPath: fs.realpathSync.native(directory) };
+  };
+  const requireArtifactDirectory = (directory: string, expected: ArtifactDirectory, physicalPath = expected.physicalPath): void => {
+    const actual = observeArtifactDirectory(directory);
+    if (actual.stamp.dev !== expected.stamp.dev || actual.stamp.ino !== expected.stamp.ino
+      || actual.stamp.birthtimeNs !== expected.stamp.birthtimeNs || actual.stamp.mode !== expected.stamp.mode
+      || !sameResolvedPath(actual.physicalPath, physicalPath)) {
+      throw artifactChanged('physical directory changed');
+    }
+  };
+  const requireArtifactTree = (directory: string, expected: ArtifactTree, physicalPath = expected.physicalPath): void => {
+    requireArtifactDirectory(directory, expected, physicalPath);
+    if (regularTreeFingerprint(directory) !== expected.fingerprint) throw artifactChanged('tree bytes changed');
+    requireArtifactDirectory(directory, expected, physicalPath);
+  };
+  const artifactParent = artifactRetry ? observeArtifactDirectory(parent) : undefined;
   sweepDeploymentScratchSiblings(targetPath);
   const { root, stage, backup } = createDeploymentTransaction(targetPath, 'next');
+  const artifactContainer = artifactRetry ? observeArtifactDirectory(root) : undefined;
+  const requireArtifactParents = (): void => {
+    if (!artifactParent || !artifactContainer) throw artifactChanged('transaction identity was not captured');
+    requireArtifactDirectory(parent, artifactParent);
+    requireArtifactDirectory(root, artifactContainer);
+  };
   const preservationOverrides: PreservationOverride[] = [];
   let movedOld = false;
   let activated = false;
   let stagedFingerprint: string | undefined;
+  let artifactStage: ArtifactTree | undefined;
+  let artifactIncumbent: ArtifactTree | undefined;
+  const requireArtifactGap = (): void => {
+    requireArtifactParents();
+    if (!artifactStage) throw artifactChanged('stage identity was not captured');
+    requireArtifactTree(stage, artifactStage);
+    requireArtifactParents();
+    if (pathHasEntry(targetPath)) throw artifactChanged('destination became occupied');
+  };
   try {
+    if (artifactRetry) requireArtifactParents();
     if (artifactRoot) {
       copyRegularTree(artifactRoot, stage);
     } else {
@@ -12811,7 +13003,12 @@ function replaceValidatedDeployment(
       const staged = materializeArtifact(plan, stage, 'complete-tree');
       if (!staged.ok) throw new Error(`Loose artifact verification failed: ${staged.errors.join('; ')}`);
     }
-    const targetExisted = fs.existsSync(targetPath);
+    const targetExisted = artifactRetry ? pathHasEntry(targetPath) : fs.existsSync(targetPath);
+    if (artifactRetry && targetExisted) {
+      const observed = observeArtifactDirectory(targetPath);
+      artifactIncumbent = { ...observed, fingerprint: regularTreeFingerprint(targetPath) };
+      requireArtifactDirectory(targetPath, observed);
+    }
     if (targetExisted) {
       for (const { path: relativePath, origin } of preservedDeploymentEntries(targetPath, plan, ownsForgeState)) {
         const source = path.join(targetPath, ...relativePath.split('/'));
@@ -12836,11 +13033,23 @@ function replaceValidatedDeployment(
         }
       }
     }
+    if (artifactRetry) {
+      const observed = observeArtifactDirectory(stage);
+      artifactStage = { ...observed, fingerprint: regularTreeFingerprint(stage) };
+      requireArtifactDirectory(stage, observed);
+    }
     if (hooks.onStagedFingerprint) {
       stagedFingerprint = regularTreeFingerprint(stage);
       hooks.onStagedFingerprint(stagedFingerprint);
     }
     hooks.beforeActivate?.();
+    if (artifactRetry) {
+      requireArtifactParents();
+      requireArtifactTree(stage, artifactStage!);
+      if (artifactIncumbent) requireArtifactTree(targetPath, artifactIncumbent);
+      else if (pathHasEntry(targetPath)) throw artifactChanged('destination appeared before activation');
+      requireArtifactParents();
+    }
     if (targetExisted) {
       try {
         rename(targetPath, backup);
@@ -12853,11 +13062,73 @@ function replaceValidatedDeployment(
         return preservationOverrides;
       }
     }
-    rename(stage, targetPath);
-    activated = true;
-    hooks.onTargetWrite?.('activated');
+    if (artifactRetry) {
+      if (movedOld) requireArtifactTree(backup, artifactIncumbent!, path.join(artifactContainer!.physicalPath, 'backup'));
+      const waits = [25, 50, 100] as const;
+      for (let attempt = 0; ; attempt++) {
+        requireArtifactGap();
+        try {
+          rename(stage, targetPath);
+          activated = true;
+          hooks.onTargetWrite?.('activated');
+          break;
+        } catch (error) {
+          if (!isLockedRootRenameError(error) || attempt >= waits.length) throw error;
+          requireArtifactGap();
+          // The existing compiler is synchronous. This finite wait avoids CPU
+          // spinning; actual attempt gaps and elapsed time are measured by #105.
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waits[attempt]);
+        }
+      }
+      requireArtifactParents();
+      requireArtifactTree(targetPath, artifactStage!, path.join(artifactParent!.physicalPath, path.basename(targetPath)));
+    } else {
+      rename(stage, targetPath);
+      activated = true;
+      hooks.onTargetWrite?.('activated');
+    }
     verifyExpectedFiles(targetPath, expected);
   } catch (error) {
+    if (artifactRetry) {
+      const failures = [error instanceof Error ? error.message : String(error)];
+      try {
+        requireArtifactParents();
+        if (pathHasEntry(stage)) {
+          if (!artifactStage) throw artifactChanged('incomplete stage has no verified cleanup authority');
+          requireArtifactTree(stage, artifactStage);
+          requireArtifactParents();
+          if (hooks.removeArtifactStage) hooks.removeArtifactStage(stage);
+          else fs.rmSync(stage, { recursive: true, force: true });
+          if (pathHasEntry(stage)) throw new Error('Artifact stage cleanup did not finish.');
+        }
+      } catch (cleanupError) {
+        failures.push(`artifact stage cleanup retained evidence: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+      }
+      if (movedOld) {
+        try {
+          requireArtifactParents();
+          if (!artifactIncumbent) throw artifactChanged('previous target identity was not captured');
+          requireArtifactTree(backup, artifactIncumbent, path.join(artifactContainer!.physicalPath, 'backup'));
+          if (activated) {
+            if (!artifactStage) throw artifactChanged('activated stage identity was not captured');
+            requireArtifactTree(targetPath, artifactStage, path.join(artifactParent!.physicalPath, path.basename(targetPath)));
+            requireArtifactParents();
+            fs.rmSync(targetPath, { recursive: true, force: true });
+          } else if (pathHasEntry(targetPath)) throw artifactChanged('destination changed before rollback');
+          requireArtifactTree(backup, artifactIncumbent, path.join(artifactContainer!.physicalPath, 'backup'));
+          requireArtifactParents();
+          if (pathHasEntry(targetPath)) throw artifactChanged('destination became occupied before restore');
+          rename(backup, targetPath);
+          hooks.onTargetWrite?.('restored');
+          requireArtifactTree(targetPath, artifactIncumbent);
+        } catch (rollbackError) {
+          hooks.onTargetWrite?.('unconfirmed');
+          failures.push(`artifact rollback retained evidence: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
+        }
+      }
+      try { requireArtifactParents(); removeEmptyDeploymentTransaction(root); } catch { /* Preserve displaced or uncertain transaction evidence. */ }
+      throw new Error(failures.join('; '));
+    }
     if (stagedFingerprint !== undefined && activated && !movedOld
       && observeDeploymentFingerprint(targetPath) !== stagedFingerprint) {
       hooks.onTargetWrite?.('unconfirmed');
@@ -12888,7 +13159,16 @@ function replaceValidatedDeployment(
     removeEmptyDeploymentTransaction(root);
     throw error;
   }
+  if (artifactRetry) {
+    requireArtifactParents();
+    requireArtifactTree(targetPath, artifactStage!, path.join(artifactParent!.physicalPath, path.basename(targetPath)));
+    if (movedOld) requireArtifactTree(backup, artifactIncumbent!, path.join(artifactContainer!.physicalPath, 'backup'));
+  }
   if (movedOld) disposeDeploymentSibling(backup, hooks);
+  if (artifactRetry) {
+    requireArtifactParents();
+    requireArtifactTree(targetPath, artifactStage!, path.join(artifactParent!.physicalPath, path.basename(targetPath)));
+  }
   removeEmptyDeploymentTransaction(root);
   return preservationOverrides;
 }
@@ -13089,6 +13369,194 @@ function runCompileArtifactSelftest() {
     record('patch-only workspace has no MD readiness error', !validatePackageReadiness(patchOnly).some(finding => finding.message.includes('no cue nodes')));
     record('patch-only workspace emits no synthetic MD file', !Object.keys(patchManifest).some(file => file.startsWith('md/')), Object.keys(patchManifest).join(', '));
     record('patch-only workspace still emits its library diff', typeof patchManifest['libraries/wares.xml'] === 'string' && patchManifest['libraries/wares.xml'].includes('<diff>'));
+
+    // #105: fault the actual nested stage promotion, not target-to-backup or the
+    // compiler. These private options were inert on the captured old-publisher
+    // RED baseline; the same faults now exercise the opted-in owner under #105.
+    type ArtifactPublicationFixtureHooks = DeploymentTransactionHooks & {
+      artifactBuildPromotionRetry?: true;
+      removeArtifactStage?: (stagePath: string) => void;
+    };
+    type PublicationFault = 'EPERM' | 'EBUSY' | 'persistent' | 'non-lock' | 'occupied'
+      | 'identical-occupied' | 'stage-bytes' | 'stage-identity' | 'container-identity'
+      | 'parent-identity' | 'incumbent-drift' | 'rollback-failure' | 'partial-cleanup'
+      | 'post-verification' | 'opt-out';
+    const publicationFixture = (fault: PublicationFault, incumbent = false) => {
+      const fixtureRoot = path.join(root, `publication-${fault}`);
+      const parent = path.join(fixtureRoot, 'catalog');
+      const fixtureTarget = path.join(parent, effectiveModId(patchOnly));
+      const sentinel = path.join(fixtureRoot, 'outside-owner.txt');
+      fs.mkdirSync(parent, { recursive: true });
+      fs.writeFileSync(sentinel, 'Unrelated fixture bytes must survive.');
+      if (incumbent) {
+        fs.mkdirSync(fixtureTarget);
+        fs.writeFileSync(path.join(fixtureTarget, 'content.xml'), '<content id="publication_prior" version="100"/>');
+        fs.writeFileSync(path.join(fixtureTarget, 'prior-only.bin'), 'Exact previous-good bytes.');
+      }
+      const prior = observeDeploymentFingerprint(fixtureTarget);
+      const reportBefore = lastArtifactReport;
+      const result = {
+        ok: false, error: '', attempts: [] as number[], stage: '', transaction: '', backup: '',
+        initialStageFingerprint: '', foreignTargetFingerprint: '', changedStageFingerprint: '',
+        held: '', heldFingerprint: '', cleanupCalls: 0,
+      };
+      const fixtureHooks: ArtifactPublicationFixtureHooks = {
+        ...(fault === 'opt-out' ? {} : { artifactBuildPromotionRetry: true as const }),
+        rename: (oldPath, newPath) => {
+          const promotion = path.basename(oldPath) === 'next'
+            && path.resolve(newPath) === path.resolve(fixtureTarget)
+            && deploymentScratchSiblingOwner(path.basename(path.dirname(oldPath)), path.basename(fixtureTarget)) === process.pid;
+          if (!promotion) {
+            if (fault === 'rollback-failure' && result.backup
+              && path.resolve(oldPath) === path.resolve(result.backup)
+              && path.resolve(newPath) === path.resolve(fixtureTarget)) {
+              throw Object.assign(new Error('fixture artifact rollback failure'), { code: 'EIO' });
+            }
+            fs.renameSync(oldPath, newPath);
+            return;
+          }
+          result.attempts.push(performance.now());
+          if (!result.stage) {
+            result.stage = oldPath;
+            result.transaction = path.dirname(oldPath);
+            result.backup = path.join(result.transaction, 'backup');
+            result.initialStageFingerprint = regularTreeFingerprint(oldPath);
+          }
+          if (fault === 'non-lock') throw Object.assign(new Error('fixture non-lock promotion refusal'), { code: 'EACCES' });
+          if (fault === 'persistent' || fault === 'rollback-failure' || fault === 'partial-cleanup' || fault === 'opt-out') {
+            throw Object.assign(new Error('fixture persistent promotion refusal'), { code: 'EPERM' });
+          }
+          if (result.attempts.length === 1) {
+            if (fault === 'occupied' || fault === 'identical-occupied') {
+              if (fault === 'identical-occupied') copyRegularTree(oldPath, fixtureTarget);
+              else {
+                fs.mkdirSync(fixtureTarget);
+                fs.writeFileSync(path.join(fixtureTarget, 'outside-owner.bin'), 'Foreign target in the promotion gap.');
+              }
+              result.foreignTargetFingerprint = regularTreeFingerprint(fixtureTarget);
+            } else if (fault === 'stage-bytes') {
+              fs.writeFileSync(path.join(oldPath, 'outside-owner.bin'), 'Foreign stage bytes.');
+              result.changedStageFingerprint = regularTreeFingerprint(oldPath);
+            } else if (fault === 'stage-identity' || fault === 'container-identity' || fault === 'parent-identity') {
+              const displaced = fault === 'stage-identity' ? oldPath
+                : fault === 'container-identity' ? result.transaction : parent;
+              result.held = path.join(fixtureRoot, `held-${fault}`);
+              fs.renameSync(displaced, result.held);
+              result.heldFingerprint = regularTreeFingerprint(result.held);
+              const heldStage = fault === 'stage-identity' ? result.held
+                : fault === 'container-identity' ? path.join(result.held, 'next')
+                  : path.join(result.held, path.basename(result.transaction), 'next');
+              copyRegularTree(heldStage, oldPath);
+            }
+            if (fault === 'EPERM' || fault === 'EBUSY' || fault === 'occupied' || fault === 'identical-occupied'
+              || fault === 'stage-bytes' || fault === 'stage-identity' || fault === 'container-identity' || fault === 'parent-identity') {
+              throw Object.assign(new Error(`fixture ${fault} promotion refusal`), { code: fault === 'EBUSY' ? 'EBUSY' : 'EPERM' });
+            }
+          }
+          fs.renameSync(oldPath, newPath);
+          if (fault === 'post-verification') {
+            fs.appendFileSync(path.join(fixtureTarget, 'content.xml'), '<!-- foreign post-promotion bytes -->');
+            result.foreignTargetFingerprint = regularTreeFingerprint(fixtureTarget);
+          }
+        },
+      };
+      if (fault === 'incumbent-drift') {
+        fixtureHooks.onStagedFingerprint = () => {
+          fs.appendFileSync(path.join(fixtureTarget, 'prior-only.bin'), ' Foreign incumbent edit.');
+          result.foreignTargetFingerprint = regularTreeFingerprint(fixtureTarget);
+        };
+      }
+      if (fault === 'partial-cleanup') {
+        fixtureHooks.removeArtifactStage = stagePath => {
+          result.cleanupCalls++;
+          fs.unlinkSync(path.join(stagePath, 'content.xml'));
+          throw new Error('fixture partial artifact stage cleanup');
+        };
+      }
+      const started = performance.now();
+      try {
+        compileWorkspaceToFolder(patchOnly, parent, 'store', false, 'catalog', fixtureHooks);
+        result.ok = true;
+      } catch (error) { result.error = error instanceof Error ? error.message : String(error); }
+      return {
+        ...result, elapsedMs: performance.now() - started, prior,
+        targetAfter: observeDeploymentFingerprint(fixtureTarget),
+        stageAfter: result.stage ? observeDeploymentFingerprint(result.stage) : undefined,
+        backupAfter: result.backup ? observeDeploymentFingerprint(result.backup) : undefined,
+        heldAfter: result.held ? observeDeploymentFingerprint(result.held) : undefined,
+        reportPreserved: lastArtifactReport === reportBefore,
+        sentinelPreserved: fs.readFileSync(sentinel, 'utf8') === 'Unrelated fixture bytes must survive.',
+        transactionEntries: fs.readdirSync(parent).filter(name => deploymentScratchSiblingOwner(name, path.basename(fixtureTarget)) !== undefined),
+      };
+    };
+    for (const code of ['EPERM', 'EBUSY'] as const) {
+      const recovered = publicationFixture(code);
+      record(`artifact promotion transient ${code} retries once and publishes exact bytes`,
+        recovered.ok && recovered.attempts.length === 2 && recovered.targetAfter === recovered.initialStageFingerprint
+          && recovered.stageAfter === 'absent' && recovered.transactionEntries.length === 0 && recovered.sentinelPreserved,
+        JSON.stringify({ attempts: recovered.attempts.length, elapsedMs: recovered.elapsedMs, error: recovered.error }));
+    }
+    const persistentPromotion = publicationFixture('persistent', true);
+    const retryGaps = persistentPromotion.attempts.slice(1).map((at, index) => at - persistentPromotion.attempts[index]);
+    record('artifact promotion persistent lock exhausts four attempts without success',
+      !persistentPromotion.ok && persistentPromotion.attempts.length === 4 && persistentPromotion.reportPreserved,
+      JSON.stringify({ attempts: persistentPromotion.attempts.length, elapsedMs: persistentPromotion.elapsedMs, error: persistentPromotion.error }));
+    record('artifact promotion real waits retain the finite retry budget',
+      persistentPromotion.attempts.length === 4 && retryGaps.every((gap, index) => gap >= [25, 50, 100][index] - 1)
+        && persistentPromotion.elapsedMs >= 175,
+      JSON.stringify({ requestedWaitMs: [25, 50, 100], observedGapsMs: retryGaps, elapsedMs: persistentPromotion.elapsedMs }));
+    record('artifact promotion persistent lock restores exact previous-good bytes',
+      !persistentPromotion.ok && persistentPromotion.targetAfter === persistentPromotion.prior
+        && persistentPromotion.stageAfter === 'absent' && persistentPromotion.transactionEntries.length === 0
+        && persistentPromotion.sentinelPreserved, persistentPromotion.error);
+    const nonLockPromotion = publicationFixture('non-lock', true);
+    record('artifact promotion non-lock refusal is immediate and preserves the incumbent',
+      !nonLockPromotion.ok && nonLockPromotion.attempts.length === 1 && nonLockPromotion.targetAfter === nonLockPromotion.prior
+        && nonLockPromotion.reportPreserved && nonLockPromotion.transactionEntries.length === 0 && nonLockPromotion.sentinelPreserved,
+      nonLockPromotion.error);
+    for (const fault of ['occupied', 'identical-occupied'] as const) {
+      const collision = publicationFixture(fault, true);
+      record(`artifact promotion ${fault} destination preserves foreign bytes and backup`,
+        !collision.ok && collision.attempts.length === 1 && collision.targetAfter === collision.foreignTargetFingerprint
+          && collision.backupAfter === collision.prior && collision.reportPreserved && collision.sentinelPreserved,
+        collision.error);
+    }
+    const changedStage = publicationFixture('stage-bytes', true);
+    record('artifact promotion changed stage bytes are retained on refusal',
+      !changedStage.ok && changedStage.attempts.length === 1 && changedStage.stageAfter === changedStage.changedStageFingerprint
+        && changedStage.targetAfter === changedStage.prior && changedStage.reportPreserved && changedStage.sentinelPreserved,
+      changedStage.error);
+    for (const fault of ['stage-identity', 'container-identity', 'parent-identity'] as const) {
+      const replaced = publicationFixture(fault);
+      record(`artifact promotion ${fault} substitution preserves both physical trees`,
+        !replaced.ok && replaced.attempts.length === 1 && replaced.stageAfter === replaced.initialStageFingerprint
+          && replaced.heldAfter === replaced.heldFingerprint && replaced.targetAfter === 'absent'
+          && replaced.reportPreserved && replaced.sentinelPreserved, replaced.error);
+    }
+    const incumbentDrift = publicationFixture('incumbent-drift', true);
+    record('artifact promotion incumbent drift refuses before backup',
+      !incumbentDrift.ok && incumbentDrift.attempts.length === 0 && incumbentDrift.targetAfter === incumbentDrift.foreignTargetFingerprint
+        && incumbentDrift.reportPreserved && incumbentDrift.sentinelPreserved, incumbentDrift.error);
+    const failedRollback = publicationFixture('rollback-failure', true);
+    record('artifact promotion rollback failure retains exact previous-good backup',
+      !failedRollback.ok && failedRollback.attempts.length === 4 && failedRollback.backupAfter === failedRollback.prior
+        && failedRollback.targetAfter === 'absent' && failedRollback.reportPreserved && failedRollback.sentinelPreserved,
+      failedRollback.error);
+    const partialCleanup = publicationFixture('partial-cleanup', true);
+    record('artifact promotion partial cleanup remains an error and retains owned evidence',
+      !partialCleanup.ok && partialCleanup.cleanupCalls === 1 && partialCleanup.error.includes('partial artifact stage cleanup')
+        && partialCleanup.stageAfter !== 'absent' && partialCleanup.stageAfter !== undefined
+        && partialCleanup.targetAfter === partialCleanup.prior && partialCleanup.reportPreserved && partialCleanup.sentinelPreserved,
+      partialCleanup.error);
+    const postVerification = publicationFixture('post-verification', true);
+    record('artifact promotion changed output never reports success or erases foreign bytes',
+      !postVerification.ok && postVerification.targetAfter === postVerification.foreignTargetFingerprint
+        && postVerification.backupAfter === postVerification.prior && postVerification.reportPreserved && postVerification.sentinelPreserved,
+      postVerification.error);
+    const optedOut = publicationFixture('opt-out', true);
+    record('artifact promotion retry stays disabled without private artifact opt-in',
+      !optedOut.ok && optedOut.attempts.length === 1 && optedOut.targetAfter === optedOut.prior
+        && optedOut.reportPreserved && optedOut.sentinelPreserved, optedOut.error);
 
     const textSource = path.join(root, 'text_filename_fidelity');
     fs.mkdirSync(path.join(textSource, 't'), { recursive: true });
@@ -14634,7 +15102,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
   const sourceRechecks = { count: 0, snapshotMs: 0, diskMs: 0, corpusMs: 0 };
   const measureSourceRecheck = <T>(field: 'snapshotMs' | 'diskMs' | 'corpusMs', work: () => T): T => {
     const start = performance.now();
-    try { return work(); }
+    try { return forgePerformance.collector.measureSync(`deploy.source.${field}`, work); }
     finally { sourceRechecks[field] += performance.now() - start; }
   };
   let timingStage: TimingStage = 'setup';
@@ -14647,7 +15115,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
   const inStage = <T>(stage: TimingStage, work: () => T): T => {
     const previous = timingStage;
     startStage(stage);
-    try { return work(); }
+    try { return forgePerformance.collector.measureSync(`deploy.syncStage.${stage}`, work); }
     finally { startStage(previous); }
   };
   const timings = () => {
@@ -15814,7 +16282,7 @@ app.post("/api/agent/artifact/build", coordinatedSourceOperation((req, res) => {
     if (!resolved.modWorkspacePath) return res.status(400).json({ success: false, error: 'No Mod Workspace Folder configured.' });
     if (rejectUnsafeDevelopmentWrite(res, resolved, ['modWorkspacePath'])) return;
     const buildRoot = path.join(resolved.modWorkspacePath, '.forge-builds', format);
-    const artifactPath = compileWorkspaceToFolder(ws, buildRoot, 'store', false, format);
+    const artifactPath = compileWorkspaceToFolder(ws, buildRoot, 'store', false, format, { artifactBuildPromotionRetry: true });
     const built = buildWorkspaceFileManifest(ws);
     res.locals.apiSubject = fileApiSubject(built.modId, built.files);
     const full = runFullWorkspaceValidation(ws, built);

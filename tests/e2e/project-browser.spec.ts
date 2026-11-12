@@ -180,7 +180,8 @@ test('Load Mod Project preserves manual paths, refreshes previews and rejects st
   fs.mkdirSync(deployment, { recursive: true });
   fs.writeFileSync(path.join(mod, 'content.xml'), '<content id="manual_mod" name="Manual import" version="1"/>');
   fs.writeFileSync(path.join(mod, 'md', 'manual.xml'), '<mdscript name="Manual"><cues><cue name="Init"><actions><set_value name="$value" exact="1"/></actions></cue></cues></mdscript>');
-  const headers = await ephemeralWorkspaceHeaders(true);
+  // Delayed UI work can outlast keep-alive; preserve authority and close direct connections.
+  const headers = { ...await ephemeralWorkspaceHeaders(true), Connection: 'close' };
   const originalResponse = await request.get(`${API}/api/schema/config`, { headers });
   expect(originalResponse.ok(), await originalResponse.text()).toBeTruthy();
   const original = await originalResponse.json();
@@ -310,6 +311,8 @@ test('Load Mod Project preserves manual paths, refreshes previews and rejects st
 });
 
 test('Load Mod Project visibly decomposes a complex multi-script project without collapsing or overlapping cues', async ({ page, request }) => {
+  // UI work can outlast the API keep-alive window; close each direct connection.
+  const headers = { ...auth, Connection: 'close' };
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'x4forge-complex-project-load-'));
   const staging = path.join(temp, 'staging');
   const deployment = path.join(temp, 'deployment');
@@ -324,7 +327,7 @@ test('Load Mod Project visibly decomposes a complex multi-script project without
   fs.writeFileSync(path.join(mod, 'md', 'alpha.xml'), lossyMd('Alpha', 'AlphaChild'), 'utf8');
   fs.writeFileSync(path.join(mod, 'md', 'beta.xml'), lossyMd('Beta', 'BetaChild'), 'utf8');
 
-  const originalResponse = await request.get(`${API}/api/schema/config`, { headers: auth });
+  const originalResponse = await request.get(`${API}/api/schema/config`, { headers });
   expect(originalResponse.ok(), await originalResponse.text()).toBeTruthy();
   const original = await originalResponse.json() as { config?: Record<string, unknown> };
   const restore = {
@@ -334,7 +337,7 @@ test('Load Mod Project visibly decomposes a complex multi-script project without
 
   try {
     const configured = await request.post(`${API}/api/schema/config`, {
-      headers: auth,
+      headers,
       data: { modWorkspacePath: staging, filesystemPath: deployment },
     });
     expect(configured.ok(), await configured.text()).toBeTruthy();
@@ -418,13 +421,13 @@ test('Load Mod Project visibly decomposes a complex multi-script project without
     expect(Math.abs(alphaBox!.x - betaBox!.x) + Math.abs(alphaBox!.y - betaBox!.y)).toBeGreaterThan(40);
 
     const roundTrip = await request.post(`${API}/api/agent/round-trip-check`, {
-      headers: auth,
+      headers,
       data: { root: 'workspace', path: 'complex_mod' },
     });
     expect(roundTrip.ok(), await roundTrip.text()).toBeTruthy();
     expect(await roundTrip.json()).toMatchObject({ lossless: true, strictLossless: true, droppedFiles: [] });
   } finally {
-    const restored = await request.post(`${API}/api/schema/config`, { headers: auth, data: restore });
+    const restored = await request.post(`${API}/api/schema/config`, { headers, data: restore });
     expect(restored.ok(), await restored.text()).toBeTruthy();
     fs.rmSync(temp, { recursive: true, force: true });
   }

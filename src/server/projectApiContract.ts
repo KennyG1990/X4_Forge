@@ -1,6 +1,7 @@
 import { buildValidationEvidence, parseValidationProject, ValidationInputError } from '../lib/validationEvidence';
 import { classifyPath, type ExtensionProject } from '../lib/extensionProject';
 import { canonicalWorkspaceContentString } from '../lib/workspaceIdentity';
+import { normalizeXmlReferencePath } from '../lib/xmlReferenceGraph';
 import { createHash } from 'node:crypto';
 import type { ModWorkspace } from '../types';
 
@@ -78,6 +79,9 @@ export const PROJECT_API_FIELDS: Record<string, readonly string[]> = {
   '/api/agent/package': ['workspace'],
   '/api/agent/artifact/build': ['workspace', 'format'],
   '/api/agent/project/files': ['workspace'],
+  '/api/agent/project/xml-references': ['workspace', 'project', 'focus', 'maxDepth', 'maxNodes', 'maxEdges', 'includeSource'],
+  '/api/agent/performance/collection': ['durationMs', 'intervalMs', 'eventLoopDelay'],
+  '/api/agent/performance/profile': ['durationMs', 'samplingIntervalMicros', 'maxFunctions'],
   '/api/fs/write': ['path', 'content', 'expectedSha256', 'strict'],
   '/api/fs/create': ['name', 'type'],
   '/api/agent/workspaces/bootstrap': ['clientId', 'workspaceId'],
@@ -154,6 +158,7 @@ export function validateProjectApiQuery(route: string, query: unknown): void {
     '/api/agent/game-log/status': ['modId'],
     '/api/agent/runtime-control': [], '/api/agent/runtime-control/preview': [], '/api/agent/runtime-control/reload': [],
     '/api/agent/diagnostics': ['workspaceId', 'clientId'], '/api/agent/readiness': ['workspaceId', 'clientId'], '/api/agent/workspaces': [],
+    '/api/agent/performance': [], '/api/agent/performance/collection': [], '/api/agent/performance/profile': [],
     '/api/agent/workspace': ['workspaceId', 'clientId'], '/api/agent/workspace/parked': ['workspaceId', 'clientId'],
   };
   const allowed = options[route];
@@ -190,10 +195,38 @@ export function validateProjectApiBody(route: string, value: unknown): void {
   const allowed = PROJECT_API_FIELDS[route];
   if (!allowed) return;
   fields(value, allowed, 'Body');
+  if (route === '/api/agent/performance/collection' || route === '/api/agent/performance/profile') {
+    const limits = route.endsWith('/collection')
+      ? [['durationMs', 1000, 900000], ['intervalMs', 1000, 60000]] as const
+      : [['durationMs', 100, 5000], ['samplingIntervalMicros', 1000, 100000], ['maxFunctions', 1, 64]] as const;
+    for (const [name, min, max] of limits) {
+      if (value[name] !== undefined && (!Number.isSafeInteger(value[name]) || value[name] < min || value[name] > max)) invalid(`${name} must be an integer from ${min} to ${max}.`);
+    }
+    if (route.endsWith('/collection')) booleanField(value, 'eventLoopDelay');
+    return;
+  }
   if (route.endsWith('/content-xml')) meta(value.meta);
   if (Object.hasOwn(value, 'project')) parseValidationProject(value.project);
   if (['/api/agent/project/file/create', '/api/agent/project/package', '/api/agent/project/validate-crossfile'].includes(route) && !Object.hasOwn(value, 'project')) invalid('project is required.');
   if (Object.hasOwn(value, 'workspace')) workspaceShape(value.workspace);
+  if (route === '/api/agent/project/xml-references') {
+    if (Object.hasOwn(value, 'workspace') && Object.hasOwn(value, 'project')) invalid('Choose workspace or project, not both.');
+    if (Object.hasOwn(value, 'focus')) {
+      fields(value.focus, ['origin', 'path', 'line', 'column'], 'focus');
+      if (!['project', 'reference'].includes(value.focus.origin)) invalid('focus.origin must be project or reference.');
+      stringField(value.focus, 'path', { required: true, max: 1024, singleLine: true });
+      if (!normalizeXmlReferencePath(value.focus.path) || !/\.xml$/i.test(value.focus.path)) invalid('focus.path must be a safe relative XML path.');
+      for (const coordinate of ['line', 'column']) {
+        if (value.focus[coordinate] !== undefined && (!Number.isSafeInteger(value.focus[coordinate]) || value.focus[coordinate] < 1 || value.focus[coordinate] > 1_000_000_000)) {
+          invalid(`focus.${coordinate} must be a positive bounded one-based integer.`);
+        }
+      }
+    }
+    for (const [name, min, max] of [['maxDepth', 0, 6], ['maxNodes', 1, 200], ['maxEdges', 1, 1000]] as const) {
+      if (value[name] !== undefined && (!Number.isSafeInteger(value[name]) || value[name] < min || value[name] > max)) invalid(`${name} must be an integer from ${min} to ${max}.`);
+    }
+    booleanField(value, 'includeSource');
+  }
   if (route === '/api/agent/workspaces/bootstrap') {
     stringField(value, 'clientId', { max: 256 });
     stringField(value, 'workspaceId', { pattern: /^ws_[a-f0-9]{24}$/i });

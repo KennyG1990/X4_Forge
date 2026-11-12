@@ -23,7 +23,7 @@ import {
 } from './e2e-flake-policy.mjs';
 import { inspectTerminalPlaywrightReport } from './e2e-terminal-contract.mjs';
 import { superviseSpawnedE2eProcess } from './e2e-runner-lifecycle.mjs';
-import { bootstrapE2eRuntime } from './e2e-runtime-bootstrap.mjs';
+import { bootstrapE2eRuntime, createE2eRunStateOwner } from './e2e-runtime-bootstrap.mjs';
 
 const ROOT = process.cwd();
 const DEFAULT_MANIFEST_PATH = path.join(ROOT, 'scripts', 'e2e-quarantine.json');
@@ -1041,6 +1041,27 @@ async function verifyReceiptReadback(receiptPath, expectedReceipt, readImpl) {
   }
 }
 
+function runnerSnapshotOptions(platform = process.platform) {
+  // Windows CIM tails reached 7.95s; keep this budget local to the runner.
+  return platform === 'win32' ? { timeoutMs: 10000 } : {};
+}
+
+function finalizeE2eRunState(finalizer) {
+  if (finalizer === undefined) return true;
+  try {
+    if (typeof finalizer !== 'function') throw new Error('Invalid state finalizer.');
+    finalizer();
+    return true;
+  } catch {
+    console.error('[run-e2e] STATE FAIL: run-state-retirement-failed');
+    return false;
+  }
+}
+
+function normalE2eRunState(args, env, createOwner = createE2eRunStateOwner) {
+  return args.includes('--selftest') ? null : createOwner({ env });
+}
+
 export async function runE2e({
   args = [],
   manifest,
@@ -1051,6 +1072,7 @@ export async function runE2e({
   superviseImpl = superviseSpawnedE2eProcess,
   writeJsonAtomicImpl = writeJsonAtomic,
   readReceiptImpl = readReceiptText,
+  finalizeRunState,
 } = {}) {
   const argErrors = validateRunnerArgs(args);
   let manifestValue = manifest;
@@ -1090,6 +1112,11 @@ export async function runE2e({
     || typeof writeJsonAtomicImpl !== 'function'
     || typeof readReceiptImpl !== 'function') {
     console.error('[run-e2e] RUNNER FAIL: injected runner dependency is invalid.');
+    return 1;
+  }
+
+  if (finalizeRunState !== undefined && typeof finalizeRunState !== 'function') {
+    console.error('[run-e2e] RUNNER FAIL: state finalizer is invalid.');
     return 1;
   }
 
@@ -1149,7 +1176,7 @@ export async function runE2e({
       lifecycleResult = await superviseImpl({
         child,
         rootPid: child.pid,
-        snapshotOptions: {},
+        snapshotOptions: runnerSnapshotOptions(),
         commandOptions: {},
         probeTerminalReport: () => {
           try {
@@ -1174,6 +1201,10 @@ export async function runE2e({
       console.error('[run-e2e] Playwright child error observer cleanup failed.');
     }
   }
+
+  // Retire run-state acceptance before the typed receipt or overall PASS. A failed
+  // retirement is latched as runner interaction failure, regardless of test results.
+  if (!finalizeE2eRunState(finalizeRunState)) interactionFailed = true;
 
   let verdict;
   let source;
@@ -1241,6 +1272,14 @@ export async function runE2e({
 function runPureSelftest() {
   const checks = [];
   const ok = (name, condition) => checks.push({ name, pass: !!condition });
+  let stateAllocations = 0;
+  const allocateState = () => { stateAllocations += 1; return { controlled: true }; };
+  ok('pure_selftest_never_allocates_normal_run_state', normalE2eRunState(['--selftest'], {}, allocateState) === null && stateAllocations === 0);
+  ok('normal_entry_allocates_exactly_one_state_owner', normalE2eRunState([], {}, allocateState)?.controlled === true && stateAllocations === 1);
+  let finalizations = 0;
+  ok('run_state_finalization_invokes_owner_once', finalizeE2eRunState(() => { finalizations += 1; }) && finalizations === 1);
+  ok('run_state_finalization_failure_is_red', !finalizeE2eRunState(() => { throw new Error('controlled state retirement failure'); }));
+  ok('direct_diagnostic_without_state_owner_retains_compatibility', finalizeE2eRunState(undefined));
   const spec = (status, id = 'stable_test_1234', resultStatuses) => {
     const statuses = resultStatuses ?? [status === 'expected' ? 'passed' : status === 'flaky' ? 'passed' : status];
     return {
@@ -1261,6 +1300,12 @@ function runPureSelftest() {
     createdOn: '2026-07-30', expiresOn: '2026-08-06',
   };
   const valid = { version: 1, entries: [validEntry] };
+
+  ok('windows_snapshot_budget_10000',
+    JSON.stringify(runnerSnapshotOptions('win32')) === '{"timeoutMs":10000}');
+  ok('posix_snapshot_options_unchanged',
+    ['aix', 'android', 'darwin', 'freebsd', 'linux', 'openbsd', 'sunos']
+      .every(platform => Reflect.ownKeys(runnerSnapshotOptions(platform)).length === 0));
 
   ok('all_passed_green', verdictFromReport(report({ expected: 2, unexpected: 0, flaky: 0 }, [spec('expected'), spec('expected', 'stable_test_5678')])).green);
   ok('one_failed_red', !verdictFromReport(report({ expected: 1, unexpected: 1, flaky: 0 }, [spec('expected'), spec('unexpected', 'stable_test_5678')])).green);
@@ -1465,6 +1510,15 @@ function runPureSelftest() {
     runnerInteractionFailed: false,
   });
   ok('receipt_schema_v2_valid', validateE2eVerdictReceipt(validReceipt));
+  const stateFinalizationFailed = !finalizeE2eRunState(() => { throw new Error('controlled retirement refusal'); });
+  const failedStateReceipt = policyReceipt({ entries: [], errors: [] }, {
+    source: 'json-report', reportCode: 'structured-report-inspected', childExit: 0,
+    verdict: strictClean.verdict, reportInspection: boundedReportInspection(strictClean),
+    lifecycle: completeLifecycle, runnerInteractionFailed: stateFinalizationFailed,
+  });
+  ok('failed_state_finalization_preserves_typed_receipt_and_prevents_overall_pass',
+    validateE2eVerdictReceipt(failedStateReceipt) && failedStateReceipt.runnerInteractionFailed === true
+      && !runnerCompletionDecision({ ...completionArgs, interactionFailed: stateFinalizationFailed }));
   const preflightReceipt = policyReceipt({ entries: [{ testId: '', owner: '', reason: '', issue: '', createdOn: '', expiresOn: '' }], errors: ['invalid policy'] }, {
     source: 'preflight',
     reportCode: 'policy-invalid',
@@ -1531,5 +1585,17 @@ if (isMain) {
   });
   if (runtime.action !== 'run') process.exit(runtime.exitCode ?? 1);
   if (selftestMode) process.exit(runPureSelftest() ? 0 : 1);
-  process.exit(await runE2e({ args, env: runtime.environment }));
+  let stateOwner;
+  let exitCode = 1;
+  try {
+    stateOwner = normalE2eRunState(args, runtime.environment ?? process.env);
+    console.log(`[run-e2e] STATE: ${stateOwner.stateDir} run=${stateOwner.runId}`);
+    exitCode = await runE2e({ args, env: stateOwner.environment, finalizeRunState: () => stateOwner.retire() });
+  } catch (error) {
+    const code = typeof error?.code === 'string' && /^[a-z0-9-]{1,80}$/u.test(error.code) ? error.code : 'run-state-bootstrap-failed';
+    console.error(`[run-e2e] STATE FAIL: ${code}`);
+  } finally {
+    if (stateOwner && !finalizeE2eRunState(() => stateOwner.retire())) exitCode = 1;
+  }
+  process.exit(exitCode);
 }

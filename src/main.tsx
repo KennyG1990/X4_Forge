@@ -7,6 +7,7 @@ import { clientRequestDeadlineMs, createAbortDeadline, timeoutError } from './li
 import { primeWorkspacePollingSnapshot, type WorkspacePollingResponse } from './lib/workspacePolling';
 import { sanitizeWorkspace } from './types';
 import { ACTION_OPERATION_ID_HEADER, resolveActionOperationId } from '../shared/actionOperationId';
+import { beginWebviewPerformanceRequest } from './lib/webviewPerformance';
 
 // Calibration L4: route any native alert() — legacy or stray — to a non-blocking in-app
 // toast. Native alert/confirm/prompt freeze the renderer; confirm/prompt are converted to
@@ -93,6 +94,7 @@ function studioStrongRandomBytes(byteLength: number): Uint8Array {
 }
 
 const customFetch = async function(this: any, input: RequestInfo | URL, init?: RequestInit) {
+  const observation = beginWebviewPerformanceRequest(input, init);
   const url = typeof input === 'string' ? input : (input instanceof URL ? input.href : input.url);
   const method = methodOf(input, init);
   // Security: only attach the session token to SAME-ORIGIN /api/ requests. A bare
@@ -101,10 +103,13 @@ const customFetch = async function(this: any, input: RequestInfo | URL, init?: R
   // app origin and require both same-origin AND an /api/ path prefix.
   let isApi = false;
   let isWorkspaceBootstrap = false;
+  let isPerformanceControl = false;
   try {
     const u = new URL(url, location.origin);
     isApi = u.origin === location.origin && u.pathname.startsWith('/api/');
     isWorkspaceBootstrap = u.origin === location.origin && u.pathname === '/api/agent/workspaces/bootstrap';
+    isPerformanceControl = u.origin === location.origin && method === 'POST'
+      && (u.pathname === '/api/agent/performance/collection' || u.pathname === '/api/agent/performance/profile');
   } catch { isApi = false; } // unparseable URL → never treat as our API
   const deadlineMs = clientRequestDeadlineMs(input, location.origin);
   const upstreamSignal = init?.signal || (input instanceof Request ? input.signal : undefined);
@@ -134,9 +139,17 @@ const customFetch = async function(this: any, input: RequestInfo | URL, init?: R
       init = { ...init, headers };
     }
 
-    // Fast path: anything that isn't an idempotent /api GET goes straight through.
+    // These explicit controls must retain caller cancellation until headers settle.
+    // Await here so the existing catch/finally owns errors and deadline cleanup.
+    if (isPerformanceControl) {
+      const res = await originalFetch.call(this, input, init);
+      observation.headers(res);
+      return res;
+    }
+
+    // Existing fast path: anything that isn't an idempotent /api GET goes straight through.
     if (!isApi || (method !== 'GET' && !isWorkspaceBootstrap)) {
-      return originalFetch.call(this, input, init);
+      return observation.observeOwnedPromise(originalFetch.call(this, input, init));
     }
 
     // Bounded retry for the API boot/restart window only.
@@ -147,6 +160,7 @@ const customFetch = async function(this: any, input: RequestInfo | URL, init?: R
           await delay(API_BOOT_BACKOFFS_MS[attempt], init?.signal);
           continue;
         }
+        observation.headers(res);
         return res;
       } catch (err) {
         // Transient connection error (API socket not up yet) — retry within budget.
@@ -158,7 +172,12 @@ const customFetch = async function(this: any, input: RequestInfo | URL, init?: R
       }
     }
   } catch (error) {
-    if (deadline?.didTimeout()) throw timeoutError(deadlineMs!);
+    if (deadline?.didTimeout()) {
+      const mappedError = timeoutError(deadlineMs!);
+      observation.failure(mappedError);
+      throw mappedError;
+    }
+    observation.failure(error);
     throw error;
   } finally {
     deadline?.release();

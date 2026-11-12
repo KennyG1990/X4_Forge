@@ -208,6 +208,25 @@ function checkActionReceiptCoverage() {
   }
 }
 
+function checkFocusedPerformanceAndXml() {
+  for (const file of [
+    "src/lib/forgePerformance.selftest.ts",
+    "src/server/forgePerformance.selftest.ts",
+    "src/lib/webviewPerformance.selftest.ts",
+    "src/components/PerformancePanel.selftest.tsx",
+    "src/server/xmlReferenceMap.selftest.ts",
+  ]) {
+    console.log(`[precommit] focused selftest ${file}`);
+    const result = spawnSync(process.execPath, ["--max-old-space-size=512", "--import", "tsx", file], {
+      cwd: root,
+      stdio: "inherit",
+      windowsHide: true,
+    });
+    if (result.error) throw result.error;
+    if (result.status !== 0) throw new Error(`${file} failed with exit ${result.status ?? "unknown"}${result.signal ? ` (${result.signal})` : ""}`);
+  }
+}
+
 try {
   checkTripwires();
   checkMirrorDrift();
@@ -219,6 +238,7 @@ try {
   checkProductCopy();
   checkDurableWriters();
   checkCapabilityContracts();
+  checkFocusedPerformanceAndXml();
   checkActionReceiptCoverage();
   runTypecheck();
   checkLargeFiles();

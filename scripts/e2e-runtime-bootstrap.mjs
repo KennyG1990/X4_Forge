@@ -2,10 +2,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 
 export const RUNTIME_NODE_OVERRIDE = 'X4_FORGE_E2E_NODE_PATH';
 export const RUNTIME_BOOTSTRAP_MARKER = 'X4_FORGE_E2E_RUNTIME_BOOTSTRAP_MARKER';
 export const RUNTIME_EXPECTED_EXEC_PATH = 'X4_FORGE_E2E_RUNTIME_EXPECTED_EXEC_PATH';
+export const E2E_RUN_STATE_ENV = 'X4_FORGE_E2E_RUN_STATE';
+const LEGACY_STATE_PID = 'X4_FORGE_E2E_STATE_PID';
+const RUN_STATE_PREFIX = 'x4forge-e2e-state-';
+const RUN_STATE_MARKER = '.e2e-run-owner.json';
+const RUN_STATE_RECORD_LIMIT = 4096;
 
 const WINDOWS_PLATFORM = 'win32';
 const SAFE_NODE_MAJOR = 24;
@@ -117,6 +123,8 @@ function inspectEnvironment(environment) {
     RUNTIME_NODE_OVERRIDE,
     RUNTIME_BOOTSTRAP_MARKER,
     RUNTIME_EXPECTED_EXEC_PATH,
+    E2E_RUN_STATE_ENV,
+    LEGACY_STATE_PID,
   ];
   if (hasPrototypeProperty(environment, reservedNames)) {
     return { ok: false, code: 'environment-prototype-value' };
@@ -595,4 +603,166 @@ export function bootstrapE2eRuntime(options = {}) {
   } catch {
     return refuse('runtime-bootstrap-unexpected-failure');
   }
+}
+
+function stateFailure(code) {
+  const error = new Error(`E2E run state refused: ${code}. Use the normal run-e2e bootstrap.`);
+  error.code = code;
+  return error;
+}
+
+function stateIdentity(stat) {
+  return { dev: String(stat.dev), ino: String(stat.ino), birthtimeNs: String(stat.birthtimeNs) };
+}
+
+function sameStateIdentity(actual, expected) {
+  return String(actual.dev) === expected.dev && String(actual.ino) === expected.ino && String(actual.birthtimeNs) === expected.birthtimeNs;
+}
+
+function validStateIdentity(value) {
+  return isPlainRecord(value) && Object.keys(value).sort().join(',') === 'birthtimeNs,dev,ino'
+    && [value.dev, value.ino, value.birthtimeNs].every(part => typeof part === 'string' && /^\d{1,32}$/u.test(part));
+}
+
+function sameStatePath(left, right) {
+  const a = path.resolve(left);
+  const b = path.resolve(right);
+  return process.platform === WINDOWS_PLATFORM ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+function stateEnvironment(environment, creating) {
+  const inspected = inspectEnvironment(environment);
+  if (!inspected.ok) throw stateFailure(inspected.code);
+  if (caseInsensitiveEntries(inspected.entries, LEGACY_STATE_PID).length) throw stateFailure('run-state-legacy-pid');
+  const entries = caseInsensitiveEntries(inspected.entries, E2E_RUN_STATE_ENV);
+  if (creating && entries.length) throw stateFailure('run-state-inherited-descriptor');
+  if (!creating && (entries.length !== 1 || entries[0].name !== E2E_RUN_STATE_ENV)) throw stateFailure('run-state-descriptor-missing-or-duplicate');
+  return { inspected, text: entries[0]?.value };
+}
+
+function parseStateDescriptor(text) {
+  if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > 8192) throw stateFailure('run-state-descriptor-invalid');
+  let descriptor;
+  try { descriptor = JSON.parse(text); } catch { throw stateFailure('run-state-descriptor-invalid'); }
+  if (!isPlainRecord(descriptor) || Object.keys(descriptor).sort().join(',') !== 'markerIdentity,rootIdentity,runId,stateDir,tempDir,version'
+    || descriptor.version !== 1 || typeof descriptor.runId !== 'string'
+    || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(descriptor.runId)
+    || !validStateIdentity(descriptor.rootIdentity) || !validStateIdentity(descriptor.markerIdentity)
+    || ![descriptor.stateDir, descriptor.tempDir].every(value => typeof value === 'string' && value.length <= MAX_PATH_LENGTH
+      && path.isAbsolute(value) && !/[\u0000-\u001F\u007F-\u009F]/u.test(value))
+    || !sameStatePath(path.dirname(descriptor.stateDir), descriptor.tempDir)
+    || !/^x4forge-e2e-state-[A-Za-z0-9_-]{6,128}$/u.test(path.basename(descriptor.stateDir))) {
+    throw stateFailure('run-state-descriptor-invalid');
+  }
+  return descriptor;
+}
+
+function assertStateRoot(descriptor, fsImpl) {
+  const parent = fsImpl.lstatSync(descriptor.tempDir, { bigint: true });
+  const root = fsImpl.lstatSync(descriptor.stateDir, { bigint: true });
+  if (!parent.isDirectory() || parent.isSymbolicLink() || !root.isDirectory() || root.isSymbolicLink()
+    || !sameStateIdentity(root, descriptor.rootIdentity)
+    || !sameStatePath(fsImpl.realpathSync.native(descriptor.tempDir), descriptor.tempDir)
+    || !sameStatePath(fsImpl.realpathSync.native(descriptor.stateDir), descriptor.stateDir)) {
+    throw stateFailure('run-state-root-identity');
+  }
+}
+
+function assertStateMarker(stat, descriptor) {
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1n || !sameStateIdentity(stat, descriptor.markerIdentity)
+    || typeof stat.size !== 'bigint' || stat.size < 1n || stat.size > BigInt(RUN_STATE_RECORD_LIMIT)) {
+    throw stateFailure('run-state-marker-identity');
+  }
+}
+
+function readStateRecord(descriptor, fsImpl, expectedStatus = 'active', suppliedFd) {
+  assertStateRoot(descriptor, fsImpl);
+  const marker = path.join(descriptor.stateDir, RUN_STATE_MARKER);
+  const stat = fsImpl.lstatSync(marker, { bigint: true });
+  assertStateMarker(stat, descriptor);
+  const fd = suppliedFd ?? fsImpl.openSync(marker, 'r');
+  let record;
+  try {
+    assertStateMarker(fsImpl.fstatSync(fd, { bigint: true }), descriptor);
+    const buffer = Buffer.alloc(Number(stat.size));
+    if (fsImpl.readSync(fd, buffer, 0, buffer.length, 0) !== buffer.length) throw stateFailure('run-state-marker-read');
+    const after = fsImpl.fstatSync(fd, { bigint: true });
+    assertStateMarker(after, descriptor);
+    if (after.size !== stat.size) throw stateFailure('run-state-marker-changed');
+    try { record = JSON.parse(buffer.toString('utf8')); } catch { throw stateFailure('run-state-marker-invalid'); }
+  } finally { if (suppliedFd === undefined) fsImpl.closeSync(fd); }
+  assertStateRoot(descriptor, fsImpl);
+  assertStateMarker(fsImpl.lstatSync(marker, { bigint: true }), descriptor);
+  if (!isPlainRecord(record) || Object.keys(record).sort().join(',') !== 'ownerPid,runId,schemaVersion,stateDir,status'
+    || record.schemaVersion !== 'forge.e2e-run-state.v1' || record.runId !== descriptor.runId
+    || record.stateDir !== descriptor.stateDir || !Number.isSafeInteger(record.ownerPid) || record.ownerPid < 1
+    || record.status !== expectedStatus) throw stateFailure('run-state-marker-not-active');
+  return record;
+}
+
+/** Consumers validate the one bootstrap-created root; imports never allocate or adopt. */
+export function readE2eRunState(environment = process.env, { fsImpl = fs } = {}) {
+  const { text } = stateEnvironment(environment, false);
+  const descriptor = parseStateDescriptor(text);
+  readStateRecord(descriptor, fsImpl);
+  return { stateDir: descriptor.stateDir, runId: descriptor.runId };
+}
+
+/** The normal CLI (or an explicit existing selftest entry) owns exactly one fresh namespace.
+ * Retained trees are evidence: this owner never deletes a root or adopts an inherited one. */
+export function createE2eRunStateOwner({
+  env = process.env, fsImpl = fs, tempDir = os.tmpdir(), randomUUIDImpl = randomUUID, ownerPid = process.pid,
+} = {}) {
+  const { inspected } = stateEnvironment(env, true);
+  if (!Number.isSafeInteger(ownerPid) || ownerPid < 1) throw stateFailure('run-state-owner-invalid');
+  const runId = randomUUIDImpl();
+  if (typeof runId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(runId)) throw stateFailure('run-state-owner-invalid');
+  const physicalTemp = fsImpl.realpathSync.native(path.resolve(tempDir));
+  const parent = fsImpl.lstatSync(physicalTemp, { bigint: true });
+  if (!parent.isDirectory() || parent.isSymbolicLink()) throw stateFailure('run-state-parent-invalid');
+  const stateDir = fsImpl.mkdtempSync(path.join(physicalTemp, RUN_STATE_PREFIX));
+  const root = fsImpl.lstatSync(stateDir, { bigint: true });
+  const markerPath = path.join(stateDir, RUN_STATE_MARKER);
+  const record = { schemaVersion: 'forge.e2e-run-state.v1', runId, stateDir, ownerPid, status: 'active' };
+  const text = JSON.stringify(record);
+  if (Math.max(Buffer.byteLength(text, 'utf8'), Buffer.byteLength(JSON.stringify({ ...record, status: 'retired' }), 'utf8')) > RUN_STATE_RECORD_LIMIT) {
+    throw stateFailure('run-state-owner-record-too-large');
+  }
+  if (!root.isDirectory() || root.isSymbolicLink() || !sameStatePath(path.dirname(stateDir), physicalTemp)) throw stateFailure('run-state-root-identity');
+  assertStateRoot({ stateDir, tempDir: physicalTemp, rootIdentity: stateIdentity(root) }, fsImpl);
+  fsImpl.writeFileSync(markerPath, text, { encoding: 'utf8', flag: 'wx' });
+  const descriptor = { version: 1, runId, stateDir, tempDir: physicalTemp, rootIdentity: stateIdentity(root), markerIdentity: stateIdentity(fsImpl.lstatSync(markerPath, { bigint: true })) };
+  const environment = Object.create(null);
+  for (const entry of inspected.entries) environment[entry.name] = entry.value;
+  environment[E2E_RUN_STATE_ENV] = JSON.stringify(descriptor);
+  readE2eRunState(environment, { fsImpl });
+  let retired = false;
+  let retirementFailure;
+  return {
+    stateDir, runId, environment: Object.freeze(environment),
+    retire() {
+      if (retirementFailure) throw retirementFailure;
+      if (retired) return;
+      try {
+        readStateRecord(descriptor, fsImpl);
+        const fd = fsImpl.openSync(markerPath, 'r+');
+        try {
+          readStateRecord(descriptor, fsImpl, 'active', fd);
+          const bytes = Buffer.from(JSON.stringify({ ...record, status: 'retired' }), 'utf8');
+          if (bytes.length > RUN_STATE_RECORD_LIMIT || fsImpl.writeSync(fd, bytes, 0, bytes.length, 0) !== bytes.length) throw stateFailure('run-state-retirement-write');
+          fsImpl.ftruncateSync(fd, bytes.length);
+          fsImpl.fsyncSync(fd);
+          assertStateMarker(fsImpl.fstatSync(fd, { bigint: true }), descriptor);
+        } finally { fsImpl.closeSync(fd); }
+        assertStateRoot(descriptor, fsImpl);
+        const marker = fsImpl.lstatSync(markerPath, { bigint: true });
+        assertStateMarker(marker, descriptor);
+        readStateRecord(descriptor, fsImpl, 'retired');
+        retired = true;
+      } catch {
+        retirementFailure = stateFailure('run-state-retirement-failed');
+        throw retirementFailure;
+      }
+    },
+  };
 }

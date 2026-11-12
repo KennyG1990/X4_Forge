@@ -21,6 +21,37 @@ const head = 'a'.repeat(16);
 const sha256 = 'b'.repeat(64);
 const workspaceId = `ws_${'c'.repeat(24)}`;
 
+const referenceRoute = '/api/agent/project/xml-references';
+const performanceCollection = '/api/agent/performance/collection';
+const performanceProfile = '/api/agent/performance/profile';
+accepts('performance collection keeps bounded defaults', performanceCollection, {});
+accepts('performance collection accepts an explicit bounded lease', performanceCollection, { durationMs: 900000, intervalMs: 1000, eventLoopDelay: false });
+accepts('backend profile accepts bounded current-process options', performanceProfile, { durationMs: 100, samplingIntervalMicros: 100000, maxFunctions: 64 });
+for (const body of [[], null, { enabled: true }, { pid: 123 }, { sourceRoot: 'caller-root' }, { durationMs: 0 }, { durationMs: 900001 }, { durationMs: '1000' }, { intervalMs: 999 }, { eventLoopDelay: 1 }]) {
+  refuses(`performance collection refuses unsafe input ${JSON.stringify(body)}`, performanceCollection, body);
+}
+for (const body of [[], null, { pid: 123 }, { profilingEnabled: true }, { path: 'caller-profile' }, { durationMs: 99 }, { durationMs: 5001 }, { samplingIntervalMicros: 999 }, { maxFunctions: 65 }, { maxFunctions: '32' }]) {
+  refuses(`backend profile refuses unsafe input ${JSON.stringify(body)}`, performanceProfile, body);
+}
+for (const route of ['/api/agent/performance', performanceCollection, performanceProfile]) {
+  check(`performance rejects query overrides ${route}`, () => assert.throws(() => api.validateProjectApiQuery(route, { durationMs: '5000' }), ValidationInputError));
+}
+accepts('XML map can use explicitly addressed workspace', referenceRoute, {});
+accepts('XML map can use current inline compiler inputs', referenceRoute, { workspace, maxDepth: 0, maxNodes: 1, maxEdges: 1, includeSource: false });
+accepts('XML map can inspect a reference source anchor', referenceRoute, { focus: { origin: 'reference', path: 'index/macros.xml', line: 2, column: 3 } });
+for (const value of [
+  [], { workspace: null }, { workspace, project: { id: 'map', name: 'map', files: [] } },
+  { referenceRoot: 'caller-root' }, { fromPath: 'caller-folder' },
+  { focus: null }, { focus: { origin: 'filesystem', path: 'index/macros.xml' } },
+  { focus: { origin: 'project', path: 'x.xml', line: 0 } },
+  { focus: { origin: 'project', path: 'x.xml', sourceFolder: 'caller-root' } },
+  { focus: { origin: 'project', path: '../outside.xml' } },
+  { focus: { origin: 'reference', path: 'C:/outside.xml' } },
+  { focus: { origin: 'reference', path: 'x'.repeat(1021) + '.xml' } },
+  { focus: { origin: 'project', path: 'asset.lua' } },
+  { maxDepth: 7 }, { maxDepth: '2' }, { maxNodes: 201 }, { maxEdges: 1001 }, { includeSource: 'true' },
+]) refuses(`XML map rejects ambiguous or unbounded input ${JSON.stringify(value)}`, referenceRoute, value);
+
 accepts('bootstrap header/default selectors remain valid', '/api/agent/workspaces/bootstrap', {});
 accepts('bootstrap explicit selectors', '/api/agent/workspaces/bootstrap', { clientId: 'tab-1', workspaceId });
 refuses('bootstrap array refused', '/api/agent/workspaces/bootstrap', []);

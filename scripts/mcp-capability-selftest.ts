@@ -11,6 +11,11 @@ import {
   buildForgeCapabilityContract,
   type ForgeCapabilityDescriptorV1,
 } from '../src/lib/forgeCapabilities';
+import type { XmlReferenceMapResult, XmlReferenceStatus } from '../src/lib/xmlReferenceGraph';
+import type { ForgeCpuProfileReport, ForgePerformanceResourceSample, ForgePerformanceSnapshot } from '../src/lib/forgePerformance';
+import type { ForgeBackendPerformanceStatus } from '../src/server/forgePerformance';
+
+const PERFORMANCE_TOOLS = ['get_forge_performance', 'start_forge_performance_capture', 'profile_forge_backend'];
 
 const EXPECTED_TOOLS = [
   'validate_mod',
@@ -22,15 +27,17 @@ const EXPECTED_TOOLS = [
   'readiness',
   'runtime_debugger',
   'check_expression',
+  'get_xml_references',
+  ...PERFORMANCE_TOOLS,
   'check_conflicts',
   'check_patch_readiness',
   'explain_element',
 ];
-const LEGACY_TOOLS = EXPECTED_TOOLS.filter(tool => !['runtime_debugger', 'check_expression'].includes(tool));
-const READ_TOOLS = ['list_schema_domains', 'get_workspace', 'readiness', 'runtime_debugger', 'check_expression', 'check_conflicts', 'explain_element'];
+const LEGACY_TOOLS = EXPECTED_TOOLS.filter(tool => !['runtime_debugger', 'check_expression', 'get_xml_references', ...PERFORMANCE_TOOLS].includes(tool));
+const READ_TOOLS = ['list_schema_domains', 'get_workspace', 'readiness', 'runtime_debugger', 'check_expression', 'get_xml_references', ...PERFORMANCE_TOOLS, 'check_conflicts', 'explain_element'];
 const WRITE_TOOLS = [
   'validate_mod', 'list_schema_domains', 'get_workspace', 'compile_workspace', 'author_check',
-  'stage_and_validate', 'readiness', 'runtime_debugger', 'check_expression', 'check_conflicts', 'explain_element',
+  'stage_and_validate', 'readiness', 'runtime_debugger', 'check_expression', 'get_xml_references', ...PERFORMANCE_TOOLS, 'check_conflicts', 'explain_element',
 ];
 const CUSTOM_TOOLS = ['validate_mod', 'list_schema_domains', 'author_check', 'stage_and_validate', 'explain_element'];
 const MCP_KEY = `x4fk_${'a'.repeat(64)}`;
@@ -200,6 +207,25 @@ async function toolsFor(client: McpClient): Promise<any[]> {
     assert.equal(authorCheck.inputSchema?.properties?.files?.items?.type, 'object',
       'author_check draft-file items must advertise object validation');
   }
+  const xmlReferences = tools.find(tool => tool.name === 'get_xml_references');
+  if (xmlReferences) {
+    assert.deepEqual(xmlReferences.inputSchema.required, ['focus']);
+    assert.equal(xmlReferences.inputSchema.properties.focus.additionalProperties, false,
+      'XML reference focus must reject undeclared fields');
+    for (const excluded of ['workspace', 'project', 'includeSource', 'fromPath', 'sourceFolder', 'apply']) {
+      assert.equal(xmlReferences.inputSchema.properties[excluded], undefined,
+        `curated XML reference input must not accept ${excluded}`);
+    }
+  }
+  for (const name of PERFORMANCE_TOOLS) {
+    const tool = tools.find(candidate => candidate.name === name);
+    if (!tool) continue;
+    assert.match(tool.description, /backend/i, `${name} must identify its actual producer`);
+    assert.match(tool.description, /Projection limit:/, `${name} must disclose its partial surface`);
+    for (const excluded of ['workspace', 'fromPath', 'sourceFolder', 'command', 'rawProfile', 'persist']) {
+      assert.equal(tool.inputSchema.properties[excluded], undefined, `${name} must not accept ${excluded}`);
+    }
+  }
   return tools;
 }
 
@@ -218,7 +244,12 @@ type Mode = 'live' | 'read' | 'write' | 'legacy' | 'malformed' | 'current-missin
   'narrowed' | 'alias-narrowed' | 'v2' | 'wrong-workspace' | 'authority-wrong-hash' | 'effective-malformed' |
   'effective-missing' | 'effective-expanded';
 let mode: Mode = 'live';
-let endpointMode: 'normal' | 'invalid-json' | 'empty-json' | 'missing-fields' | 'missing-workspace-snapshot' | 'compile-invalid' | 'compile-contradictory' | 'compile-missing-ok' = 'normal';
+let endpointMode: 'normal' | 'invalid-json' | 'empty-json' | 'missing-fields' | 'missing-workspace-snapshot' | 'compile-invalid' | 'compile-contradictory' | 'compile-missing-ok' |
+  'xml-wrong-schema' | 'xml-wrong-workspace' | 'xml-invalid-status' | 'xml-invalid-location' | 'xml-output-budget' |
+  'performance-missing-metric' | 'performance-foreign-producer' | 'performance-invalid-coverage' | 'performance-private-module' |
+  'performance-profile-disabled' | 'performance-profile-busy' | 'performance-profile-cooldown' | 'performance-http-conflict' | 'performance-http-cooldown' |
+  'performance-missing-overhead-cost' | 'performance-invalid-overhead-scope' | 'performance-missing-cleanup-status' |
+  'performance-http-cleanup' | 'performance-http-status-mismatch' | 'performance-http-invalid-failure' = 'normal';
 const contract = buildForgeCapabilityContract(sha256);
 const wrongHashContract = {
   ...contract,
@@ -337,6 +368,101 @@ function effectiveAuthority(
 const routeCalls: Array<{ method: string; path: string; body: unknown }> = [];
 const discoveryCalls: Array<{ path: string; authorization?: string; workspaceId?: string }> = [];
 const runtimeHostileHome = `${process.env.USERPROFILE || 'C:\\Users\\Fixture'}\\private\\debuglog.txt`;
+function xmlReferenceFixture(): XmlReferenceMapResult {
+  const files = Array.from({ length: 260 }, (_, index) => ({
+    id: `project:assets/fixture_${index}.xml`, origin: 'project' as const, path: `assets/fixture_${index}.xml`,
+    sha256: 'c'.repeat(64), locationKind: 'authored' as const, complete: true, available: true,
+    sourcePaths: [runtimeHostileHome],
+    ...(endpointMode === 'xml-output-budget' ? { reason: 'R'.repeat(2048) } : {}),
+  }));
+  const statuses: XmlReferenceStatus[] = ['ambiguous', 'missing', 'dynamic', 'unsupported', 'incomplete', 'resolved'];
+  return {
+    ok: false, schemaVersion: 'forge.xml-reference-map.v1', signature: 'd'.repeat(64),
+    files, nodes: files.slice(0, 61).map(file => ({ ...file, depth: 1 })),
+    edges: Array.from({ length: 123 }, (_, index) => ({
+      id: `edge-${index}`, sourceId: files[0].id, kind: 'macro' as const, symbol: `macro_${index}`,
+      targetIds: index === 0 ? files.slice(1, 21).map(file => file.id) : [],
+      status: statuses[index % statuses.length], reason: 'Keep the authoritative resolution reason.',
+      candidates: index === 0 ? files.slice(1, 21).map(file => ({ fileId: file.id, origin: file.origin, path: file.path })) : undefined,
+      location: { origin: 'project' as const, path: files[0].path, kind: 'authored' as const, line: 4, column: 9 },
+    })),
+    coverage: {
+      scope: 'Fixture scanned project and lazily reached corpus.', incomingScope: 'Only scanned files, never global completeness.',
+      scannedFiles: 260, scannedProjectFiles: 260, scannedReferenceFiles: 0, knownProjectFiles: 260,
+      truncated: false, reasons: ['Fixture coverage must survive projection unchanged.'], unsupported: 20, incomplete: 20,
+      limits: { maxDepth: 2, maxNodes: 60, maxEdges: 120, maxDocuments: 256, maxDocumentBytes: 2_097_152, maxTotalBytes: 16_777_216, maxPreviewChars: 32_000, maxResponseBytes: 2_097_152 },
+    },
+    context: { workspaceId: MCP_WORKSPACE_ID, inputMode: 'addressed-workspace', inputFingerprint: 'e'.repeat(64), corpusSignature: 'f'.repeat(64), corpusGeneration: 'fixture-generation', usedSourceSignature: 'a'.repeat(64), nativeSourceFolder: runtimeHostileHome },
+    preview: { fileId: files[0].id, origin: 'project', path: files[0].path, sha256: files[0].sha256, content: 'SOURCE PREVIEW MUST NOT LEAK', startLine: 1, truncated: false, locationKind: 'authored' },
+  };
+}
+function performanceSnapshotFixture(): ForgePerformanceSnapshot {
+  const resource = (index: number): ForgePerformanceResourceSample => ({
+    atUnixMs: 1000 + index, elapsedMs: 2000, cpuUserMicros: null, cpuSystemMicros: null,
+    cpuOneCorePercent: null, cpuHostPercent: null, logicalCpuCount: 8, rssBytes: null,
+    heapUsedBytes: 100 + index, heapTotalBytes: 200, externalBytes: 0, arrayBuffersBytes: 0,
+    uptimeSeconds: 10, eventLoopUtilization: null, eventLoopDelayP50Ms: null,
+    eventLoopDelayP95Ms: null, eventLoopDelayMaxMs: null, fps: null, frameIntervalMs: null,
+    longTaskDurationMs: null, jsHeapUsedBytes: null,
+  });
+  return {
+    schemaVersion: 'forge.performance.v1', producer: { component: 'backend', scope: 'owned-process', pid: 42, instanceId: 'performance_fixture' },
+    enabled: true, disposed: false, startedAtUnixMs: null, capturedAtUnixMs: 2000,
+    operations: Array.from({ length: 40 }, (_, index) => ({
+      name: `fixture.operation_${index}`, count: 1, outcomes: { ok: 1, error: 0, cancelled: 0, aborted: 0, superseded: 0 },
+      totalMs: index + 1, minMs: index + 1, maxMs: index + 1, meanMs: index + 1,
+      p50Ms: null, p95Ms: index + 1, p99Ms: index + 1, quantileMethod: 'fixed-histogram-upper-bound',
+      histogram: { upperBoundsMs: [100], counts: [1] },
+    })),
+    recentSlowOperations: Array.from({ length: 20 }, (_, index) => ({
+      name: `fixture.operation_${index}`, durationMs: 100 + index, outcome: 'superseded', correlationId: `fixture_${index}`, atUnixMs: null,
+    })),
+    resources: Array.from({ length: 25 }, (_, index) => resource(index)),
+    drops: { disabled: 1, disposed: 0, invalidOperations: 2, invalidResources: 3, operationCapacity: 4, slowOverwrites: 5,
+      resourceOverwrites: 6, duplicateFinishes: 7, recorderErrors: 8, snapshotOmissions: 9, staleFinishes: 10 },
+    limits: { maxOperations: 128, maxSlowOperations: 64, maxResources: 120, maxSnapshotBytes: 1048576, maxNameChars: 160, maxCorrelationChars: 80, slowOperationMs: 100 },
+    selfOverhead: { recordCalls: 40, recordMs: null, snapshotCalls: 1, snapshotMs: null, clockFailures: 2,
+      snapshotScope: 'completed-prior-snapshots-including-serialization-and-freeze' },
+    coverage: { operations: 'instrumented-boundaries-only', cpuAttribution: 'process-interval-not-exclusive-operation',
+      memoryAttribution: 'process-or-host-estimates-not-function-allocations', quantiles: 'histogram-estimates',
+      resourceFields: 'null-means-unavailable-or-unsampled', functionProfiles: 'separate-bounded-producer', limitsAre: 'retained-state-not-os-quota' },
+  };
+}
+function performanceControlFixture(): ForgeBackendPerformanceStatus {
+  return {
+    disposed: false, collectionActive: true, profilingEnabled: true, profileActive: false,
+    collectionStartedAtUnixMs: 1000, collectionExpiresAtUnixMs: 61000, intervalMs: 2000,
+    resourceSamples: 25, resourceErrors: 2, throttledSamples: 3, counterResets: 4, sampleOverheadMs: 0.5,
+    lastResourceError: 'unavailable', eventLoopDelayMonitoring: false, profileCleanupUnconfirmed: false,
+    collectionStopDelayMs: null, profileCapturesStarted: 4, profileCapturesSucceeded: 2, profileCapturesFailed: 2,
+    collectionCleanupUnconfirmed: true, abortListenerCleanupUnconfirmed: true, ownedTimerCount: 3, failedTimerCount: 1,
+    profileRateLimited: 3, profileCooldownRemainingMs: 25000,
+    coverage: { backendPid: 42, extensionHost: 'not-this-producer', webview: 'not-this-producer', childProcesses: 'excluded', memory: 'process-not-function', cpu: 'process-interval' },
+  };
+}
+function performanceReportFixture() {
+  const cache = { hits: 1, misses: 2, bypasses: 3, evictions: 4, entries: 5, accountedBytes: 600 };
+  return {
+    ok: true as const, schemaVersion: 'forge.performance.report.v1' as const,
+    backend: performanceSnapshotFixture(), control: performanceControlFixture(),
+    caches: { projectValidation: { ...cache, lua: { ...cache }, effectiveSchema: { ...cache }, privatePath: runtimeHostileHome } },
+    coverage: { native: 'unavailable-not-wired', webview: 'local-current-panel-only', profiling: 'backend-only-explicit-control',
+      cacheBytes: 'accounted-not-exact-heap', operations: 'instrumented-boundaries-only' },
+    privatePath: runtimeHostileHome,
+  };
+}
+function performanceProfileFixture(): ForgeCpuProfileReport {
+  return {
+    ok: true, schemaVersion: 'forge.cpu-profile.v1', producer: performanceSnapshotFixture().producer,
+    requestedDurationMs: 250, observedDurationMs: 350, delayedStopMs: 100, samplingIntervalMicros: 1000,
+    profileDurationMicros: 250000, sampleCount: null, scannedSampleCount: 100,
+    functions: Array.from({ length: 40 }, (_, index) => ({ name: `function_${index}`, module: 'src/server/forgePerformance.ts',
+      line: index + 1, column: 1, selfSamples: index + 1, selfSampleMicros: null })),
+    omitted: { nodes: 1, samples: 2, functions: 3, unknownNodeSamples: 4, invalidNodes: 5, invalidDeltas: 6, redactedLabels: 7 },
+    coverage: { process: 'current-backend-only', attribution: 'sampled-self-time-not-exact-operation-cpu', rawProfile: 'not-returned-or-persisted',
+      timer: 'event-loop-blockage-can-delay-stop', resourceLimit: 'no-os-heap-quota', samples: 'unavailable' },
+  };
+}
 const server = http.createServer((request, response) => {
   if (request.url === '/api/agent/schema') {
     discoveryCalls.push({
@@ -479,6 +605,71 @@ const server = http.createServer((request, response) => {
         ok: false, legal: false, expression: body.expression,
         problems: Array.from({ length: 51 }, () => ({ code: 'expression-format-specifier', severity: 'error' })),
       }));
+    });
+    return;
+  }
+  if (request.method === 'POST' && request.url === '/api/agent/project/xml-references') {
+    let raw = '';
+    request.setEncoding('utf8');
+    request.on('data', chunk => { raw += chunk; });
+    request.on('end', () => {
+      const body = JSON.parse(raw);
+      routeCalls.push({ method: request.method || '', path: request.url || '', body });
+      const result: any = xmlReferenceFixture();
+      if (endpointMode === 'missing-fields') delete result.coverage;
+      if (endpointMode === 'xml-wrong-schema') result.schemaVersion = 'forge.xml-reference-map.v2';
+      if (endpointMode === 'xml-wrong-workspace') result.context.workspaceId = 'ws_222222222222222222222222';
+      if (endpointMode === 'xml-invalid-status') result.edges[0].status = 'probably-resolved';
+      if (endpointMode === 'xml-invalid-location') result.edges[0].location.path = '../outside.xml';
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify(result));
+    });
+    return;
+  }
+  if (request.method === 'GET' && request.url === '/api/agent/performance') {
+    routeCalls.push({ method: request.method, path: request.url, body: null });
+    const result: any = performanceReportFixture();
+    if (endpointMode === 'performance-missing-metric') delete result.backend.resources.at(-1).rssBytes;
+    if (endpointMode === 'performance-foreign-producer') result.backend.producer.component = 'extension-host';
+    if (endpointMode === 'performance-invalid-coverage') result.coverage.native = 'complete';
+    if (endpointMode === 'performance-missing-overhead-cost') delete result.backend.selfOverhead.recordMs;
+    if (endpointMode === 'performance-invalid-overhead-scope') result.backend.selfOverhead.snapshotScope = 'all-tracker-work';
+    if (endpointMode === 'performance-missing-cleanup-status') delete result.control.collectionCleanupUnconfirmed;
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify(result));
+    return;
+  }
+  if (request.method === 'POST' && ['/api/agent/performance/collection', '/api/agent/performance/profile'].includes(request.url || '')) {
+    let raw = '';
+    request.setEncoding('utf8');
+    request.on('data', chunk => { raw += chunk; });
+    request.on('end', () => {
+      const body = JSON.parse(raw);
+      routeCalls.push({ method: request.method || '', path: request.url || '', body });
+      const conflict = endpointMode === 'performance-http-conflict';
+      const cooldown = endpointMode === 'performance-http-cooldown';
+      const cleanup = endpointMode === 'performance-http-cleanup';
+      const mismatch = endpointMode === 'performance-http-status-mismatch';
+      const malformed = endpointMode === 'performance-http-invalid-failure';
+      response.writeHead(conflict || cleanup || mismatch || malformed ? 409 : cooldown ? 429 : 200, { 'Content-Type': 'application/json' });
+      if (conflict || cooldown || cleanup || mismatch || malformed) {
+        const collection = request.url === '/api/agent/performance/collection';
+        response.end(JSON.stringify({ ok: false, ...(!malformed ? { error: 'Bounded capture refused.' } : {}),
+          code: cleanup ? 'PROFILE_CLEANUP_UNCONFIRMED' : cooldown || mismatch ? 'PROFILE_RATE_LIMITED' : collection ? 'PERFORMANCE_COLLECTION_BUSY' : 'PROFILE_BUSY' }));
+        return;
+      }
+      if (request.url === '/api/agent/performance/collection') {
+        response.end(JSON.stringify({ ok: true, control: performanceControlFixture(), backend: performanceSnapshotFixture() }));
+        return;
+      }
+      if (['performance-profile-disabled', 'performance-profile-busy', 'performance-profile-cooldown'].includes(endpointMode)) {
+        response.end(JSON.stringify({ ok: false, code: endpointMode === 'performance-profile-disabled' ? 'PROFILE_DISABLED' : endpointMode === 'performance-profile-busy' ? 'PROFILE_BUSY' : 'PROFILE_RATE_LIMITED', error: 'Bounded profile unavailable.' }));
+        return;
+      }
+      const result: any = performanceProfileFixture();
+      result.rawProfile = { privatePath: runtimeHostileHome };
+      if (endpointMode === 'performance-private-module') result.functions[0].module = runtimeHostileHome;
+      response.end(JSON.stringify(result));
     });
     return;
   }
@@ -640,13 +831,13 @@ try {
   mode = 'read';
   await withMcp(baseUrl, async client => {
     assert.deepEqual((await toolsFor(client)).map(tool => tool.name), READ_TOOLS,
-      'read key effective discovery must expose exactly five curated tools');
+      'read key effective discovery must expose exactly the declared read tools');
   });
 
   mode = 'write';
   await withMcp(baseUrl, async client => {
     assert.deepEqual((await toolsFor(client)).map(tool => tool.name), WRITE_TOOLS,
-      'write key effective discovery must expose exactly nine curated tools');
+      'write key effective discovery must expose exactly the declared write tools');
   });
 
   mode = 'live';
@@ -870,6 +1061,246 @@ try {
     endpointMode = 'normal';
   });
 
+  mode = 'live';
+  await withMcp(baseUrl, async client => {
+    const xmlTool = (await toolsFor(client)).find(tool => tool.name === 'get_xml_references');
+    assert.ok(xmlTool, 'current discovery must register the XML reference tool');
+    assert.equal(xmlTool._meta?.['x4forge/capabilityId'], 'project.xml.references');
+    assert.equal(xmlTool._meta?.['x4forge/capabilityVersion'], 1);
+    assert.match(xmlTool.description, /Projection limit:/, 'curated projection limits must be visible in discovery');
+    routeCalls.length = 0;
+    const focus = { origin: 'project', path: 'assets/fixture_0.xml', line: 4, column: 9 };
+    const reply = await client.request('tools/call', { name: 'get_xml_references', arguments: { focus } });
+    assert.equal(reply.error, undefined);
+    assert.equal(reply.result?.isError, undefined, 'an incomplete analysis is an authoritative result, not a transport error');
+    const result = JSON.parse(String(reply.result?.content?.[0]?.text || '{}'));
+    const fixture = xmlReferenceFixture();
+    assert.deepEqual(routeCalls, [{
+      method: 'POST', path: '/api/agent/project/xml-references',
+      body: { focus, maxDepth: 2, maxNodes: 60, maxEdges: 120, includeSource: false },
+    }], 'XML tool must use the canonical addressed read route with bounded defaults and no inline workspace');
+    assert.equal(result.ok, fixture.ok);
+    assert.equal(result.schemaVersion, fixture.schemaVersion);
+    assert.equal(result.signature, fixture.signature);
+    assert.deepEqual(result.coverage, fixture.coverage, 'projection must preserve service coverage, including partial-scope truth');
+    assert.equal(result.context.workspaceId, MCP_WORKSPACE_ID);
+    assert.equal(result.context.inputFingerprint, fixture.context!.inputFingerprint);
+    assert.equal(result.context.corpusSignature, fixture.context!.corpusSignature);
+    assert.equal(result.context.corpusGeneration, fixture.context!.corpusGeneration);
+    assert.equal(result.context.usedSourceSignature, fixture.context!.usedSourceSignature);
+    assert.deepEqual(result.files.map((file: any) => file.id), fixture.files.slice(0, 256).map(file => file.id));
+    assert.deepEqual(result.nodes.map((file: any) => file.id), fixture.nodes.slice(0, 60).map(file => file.id),
+      'projection must never fabricate nodes for unresolved or omitted files');
+    assert.deepEqual(result.edges.map((edge: any) => edge.status), fixture.edges.slice(0, 120).map(edge => edge.status));
+    assert.deepEqual(result.edges[0].location, fixture.edges[0].location, 'authored one-based source evidence must survive');
+    assert.deepEqual(result.edges[0].targetIds, fixture.edges[0].targetIds.slice(0, 16));
+    assert.equal(result.edges[0].targetIdCount, 20);
+    assert.equal(result.edges[0].targetIdsTruncated, true);
+    assert.deepEqual(result.edges[0].candidates, fixture.edges[0].candidates!.slice(0, 16));
+    assert.equal(result.edges[0].candidateCount, 20);
+    assert.equal(result.edges[0].candidatesTruncated, true);
+    assert.deepEqual(result.edges[1].targetIds, [], 'missing targets must stay unresolved without fabricated fallback');
+    assert.equal(result.edges[1].targetId, undefined);
+    assert.deepEqual(result.projection, {
+      fileCount: 260, returnedFileCount: 256, nodeCount: 61, returnedNodeCount: 60, edgeCount: 123, returnedEdgeCount: 120,
+      candidateCountInReturnedEdges: 20, returnedCandidateCount: 16, targetIdCountInReturnedEdges: 20, returnedTargetIdCount: 16,
+      truncated: true, sourceIncluded: false,
+      omittedFields: ['preview', 'files.sourcePaths', 'nodes.sourcePaths', 'context.nativeSourceFolder'],
+    });
+    assert.equal(JSON.stringify(result).includes('SOURCE PREVIEW MUST NOT LEAK'), false);
+    assert.equal(JSON.stringify(result).includes(runtimeHostileHome), false);
+    const smaller = await client.request('tools/call', {
+      name: 'get_xml_references', arguments: { focus, maxDepth: 0, maxNodes: 3, maxEdges: 5 },
+    });
+    const smallerResult = JSON.parse(String(smaller.result?.content?.[0]?.text || '{}'));
+    assert.deepEqual(routeCalls.at(-1)?.body, { focus, maxDepth: 0, maxNodes: 3, maxEdges: 5, includeSource: false });
+    assert.equal(smallerResult.nodes.length, 3);
+    assert.equal(smallerResult.edges.length, 5);
+    routeCalls.length = 0;
+    for (const args of [
+      {}, { focus: { path: focus.path } }, { focus: { ...focus, origin: 'disk' } },
+      { focus: { ...focus, path: 42 } }, { focus: { ...focus, apply: true } },
+      { focus, workspace: { files: [] } }, { focus, project: { files: [] } }, { focus, includeSource: true },
+      { focus, fromPath: 'fixture' }, { focus, sourceFolder: runtimeHostileHome },
+      { focus, maxDepth: 3 }, { focus, maxNodes: 1.5 },
+    ]) {
+      const denied = await client.request('tools/call', { name: 'get_xml_references', arguments: args });
+      assert.equal(denied.error?.code, -32602, 'malformed XML reference arguments must fail schema checks before HTTP');
+    }
+    for (const args of [
+      { focus: { ...focus, path: '../outside.xml' } }, { focus: { ...focus, path: runtimeHostileHome } },
+      { focus: { ...focus, line: 0 } }, { focus: { ...focus, column: 1_000_000_001 } },
+      { focus, maxNodes: 0 }, { focus, maxNodes: 61 }, { focus, maxEdges: 121 },
+    ]) {
+      const denied = await client.request('tools/call', { name: 'get_xml_references', arguments: args });
+      assert.equal(denied.result?.isError, true, 'out-of-bounds XML reference arguments must fail before HTTP');
+    }
+    assert.deepEqual(routeCalls, [], 'rejected XML reference arguments reached the Forge API');
+    for (const fixtureMode of [
+      'missing-fields', 'xml-wrong-schema', 'xml-wrong-workspace', 'xml-invalid-status', 'xml-invalid-location', 'xml-output-budget',
+    ] as const) {
+      endpointMode = fixtureMode;
+      const denied = await client.request('tools/call', { name: 'get_xml_references', arguments: { focus } });
+      assert.equal(denied.result?.isError, true, `${fixtureMode}: invalid service results must not become a success or fabricated graph`);
+      assert.equal(String(denied.result?.content?.[0]?.text || '').includes('"nodes"'), false,
+        `${fixtureMode}: rejection must not contain fallback nodes`);
+    }
+    endpointMode = 'normal';
+  });
+
+  mode = 'live';
+  await withMcp(baseUrl, async client => {
+    const tools = await toolsFor(client);
+    for (const [index, name] of PERFORMANCE_TOOLS.entries()) {
+      const tool = tools.find(candidate => candidate.name === name);
+      assert.ok(tool, `live discovery omitted ${name}`);
+      assert.equal(tool._meta?.['x4forge/capabilityId'], ['performance.read', 'performance.collect', 'performance.profile'][index]);
+      assert.equal(tool._meta?.['x4forge/capabilityVersion'], 1);
+    }
+    routeCalls.length = 0;
+    const read = await client.request('tools/call', { name: 'get_forge_performance', arguments: {} });
+    assert.equal(read.error, undefined);
+    assert.equal(read.result?.isError, undefined);
+    const report = JSON.parse(String(read.result?.content?.[0]?.text || '{}'));
+    const fixture = performanceReportFixture();
+    assert.deepEqual(routeCalls, [{ method: 'GET', path: '/api/agent/performance', body: null }], 'snapshot reads must not start captures');
+    assert.equal(report.schemaVersion, fixture.schemaVersion);
+    assert.deepEqual(report.coverage, fixture.coverage);
+    assert.deepEqual(report.control, fixture.control, 'cooldown, loss and unsupported-producer evidence must survive');
+    assert.deepEqual(report.backend.drops, fixture.backend.drops);
+    assert.deepEqual(report.backend.selfOverhead, fixture.backend.selfOverhead);
+    assert.equal(report.backend.selfOverhead.recordMs, null, 'clock failure must not become zero recording cost');
+    assert.equal(report.backend.selfOverhead.snapshotMs, null);
+    assert.equal(report.backend.selfOverhead.snapshotScope, 'completed-prior-snapshots-including-serialization-and-freeze');
+    assert.equal(report.backend.drops.staleFinishes, 10, 'cross-generation finishes must remain visible');
+    assert.equal(report.control.collectionCleanupUnconfirmed, true);
+    assert.equal(report.control.abortListenerCleanupUnconfirmed, true);
+    assert.equal(report.control.failedTimerCount, 1);
+    assert.deepEqual(report.backend.coverage, fixture.backend.coverage);
+    assert.equal(report.backend.operations.length, 32);
+    assert.equal(report.backend.operations[0].name, 'fixture.operation_39');
+    assert.equal(report.backend.operations[0].p50Ms, null);
+    assert.equal(report.backend.operations[0].histogram, undefined);
+    assert.deepEqual(report.backend.recentSlowOperations, fixture.backend.recentSlowOperations.slice(-16));
+    assert.deepEqual(report.backend.resources, fixture.backend.resources.slice(-20));
+    assert.equal(report.backend.resources[0].rssBytes, null, 'unavailable memory must not become a zero estimate');
+    assert.deepEqual(report.backend.projection, { operationCount: 40, scannedOperationCount: 40, returnedOperationCount: 32,
+      slowOperationCount: 20, returnedSlowOperationCount: 16, resourceSampleCount: 25, returnedResourceSampleCount: 20,
+      truncated: true, omittedFields: ['operations.histogram'] });
+    assert.equal(report.caches.projectValidation.accountedBytes, 600);
+    assert.equal(report.caches.projectValidation.lua.hits, 1);
+    assert.equal(report.caches.projectValidation.effectiveSchema.entries, 5);
+    assert.equal(JSON.stringify(report).includes(runtimeHostileHome), false, 'unreviewed cache/report fields must not leak private paths');
+
+    const capture = await client.request('tools/call', { name: 'start_forge_performance_capture', arguments: {} });
+    assert.equal(capture.result?.isError, undefined);
+    assert.deepEqual(routeCalls.at(-1), { method: 'POST', path: '/api/agent/performance/collection',
+      body: { durationMs: 60000, intervalMs: 2000, eventLoopDelay: false } });
+    const captured = JSON.parse(String(capture.result?.content?.[0]?.text || '{}'));
+    assert.deepEqual(captured.control, fixture.control);
+    assert.equal(captured.backend.resources.length, 20);
+    await client.request('tools/call', { name: 'start_forge_performance_capture', arguments: { durationMs: 900000, intervalMs: 60000, eventLoopDelay: true } });
+    assert.deepEqual(routeCalls.at(-1)?.body, { durationMs: 900000, intervalMs: 60000, eventLoopDelay: true });
+
+    const profile = await client.request('tools/call', { name: 'profile_forge_backend', arguments: {} });
+    assert.equal(profile.result?.isError, undefined);
+    assert.deepEqual(routeCalls.at(-1), { method: 'POST', path: '/api/agent/performance/profile',
+      body: { durationMs: 250, samplingIntervalMicros: 1000, maxFunctions: 16 } });
+    const profiled = JSON.parse(String(profile.result?.content?.[0]?.text || '{}'));
+    const profileFixture = performanceProfileFixture();
+    assert.deepEqual(profiled.functions, profileFixture.functions.slice(0, 16));
+    assert.deepEqual(profiled.omitted, profileFixture.omitted);
+    assert.deepEqual(profiled.coverage, profileFixture.coverage);
+    assert.equal(profiled.requestedDurationMs, 250);
+    assert.equal(profiled.observedDurationMs, 350);
+    assert.equal(profiled.delayedStopMs, 100);
+    assert.equal(profiled.sampleCount, null);
+    assert.equal(profiled.functions[0].selfSampleMicros, null);
+    assert.deepEqual(profiled.projection, { functionCount: 40, returnedFunctionCount: 16, truncated: true });
+    assert.equal(profiled.rawProfile, undefined);
+    assert.equal(JSON.stringify(profiled).includes(runtimeHostileHome), false);
+    const larger = await client.request('tools/call', { name: 'profile_forge_backend', arguments: { durationMs: 2000, samplingIntervalMicros: 100000, maxFunctions: 32 } });
+    assert.equal(JSON.parse(String(larger.result?.content?.[0]?.text || '{}')).functions.length, 32);
+    assert.deepEqual(routeCalls.at(-1)?.body, { durationMs: 2000, samplingIntervalMicros: 100000, maxFunctions: 32 });
+
+    routeCalls.length = 0;
+    for (const name of PERFORMANCE_TOOLS) {
+      for (const args of [{ workspace: {} }, { command: 'anything' }, { sourceFolder: runtimeHostileHome }, { rawProfile: true }]) {
+        const denied = await client.request('tools/call', { name, arguments: args });
+        assert.equal(denied.error?.code, -32602, `${name} accepted undeclared arguments`);
+      }
+    }
+    for (const [name, args] of [
+      ['start_forge_performance_capture', { durationMs: 999 }], ['start_forge_performance_capture', { durationMs: 900001 }],
+      ['start_forge_performance_capture', { intervalMs: 999 }], ['start_forge_performance_capture', { intervalMs: 60001 }],
+      ['profile_forge_backend', { durationMs: 99 }], ['profile_forge_backend', { durationMs: 2001 }],
+      ['profile_forge_backend', { samplingIntervalMicros: 999 }], ['profile_forge_backend', { samplingIntervalMicros: 100001 }],
+      ['profile_forge_backend', { maxFunctions: 0 }], ['profile_forge_backend', { maxFunctions: 33 }],
+    ] as const) {
+      const denied = await client.request('tools/call', { name, arguments: args });
+      assert.equal(denied.result?.isError, true, `${name} must reject out-of-bounds collection/profiling`);
+    }
+    for (const [name, args] of [
+      ['start_forge_performance_capture', { durationMs: 1000.5 }], ['start_forge_performance_capture', { eventLoopDelay: 'yes' }],
+      ['profile_forge_backend', { maxFunctions: 1.5 }], ['get_forge_performance', { durationMs: 1000 }],
+    ] as const) {
+      assert.equal((await client.request('tools/call', { name, arguments: args })).error?.code, -32602);
+    }
+    assert.deepEqual(routeCalls, [], 'invalid performance arguments reached HTTP');
+    for (const fixtureMode of ['performance-missing-metric', 'performance-foreign-producer', 'performance-invalid-coverage',
+      'performance-missing-overhead-cost', 'performance-invalid-overhead-scope', 'performance-missing-cleanup-status'] as const) {
+      endpointMode = fixtureMode;
+      const denied = await client.request('tools/call', { name: 'get_forge_performance', arguments: {} });
+      assert.equal(denied.result?.isError, true, `${fixtureMode} must fail closed`);
+      assert.equal(String(denied.result?.content?.[0]?.text || '').includes('"operations"'), false, 'invalid results must not create fallback evidence');
+    }
+    endpointMode = 'performance-private-module';
+    assert.equal((await client.request('tools/call', { name: 'profile_forge_backend', arguments: {} })).result?.isError, true);
+    for (const [fixtureMode, code] of [
+      ['performance-profile-disabled', 'PROFILE_DISABLED'], ['performance-profile-busy', 'PROFILE_BUSY'], ['performance-profile-cooldown', 'PROFILE_RATE_LIMITED'],
+    ] as const) {
+      endpointMode = fixtureMode;
+      const denied = await client.request('tools/call', { name: 'profile_forge_backend', arguments: {} });
+      assert.equal(denied.result?.isError, true);
+      assert.deepEqual(JSON.parse(String(denied.result?.content?.[0]?.text || '{}')), { ok: false, code, error: 'Bounded profile unavailable.' });
+    }
+    for (const fixtureMode of ['performance-http-conflict', 'performance-http-cooldown'] as const) {
+      endpointMode = fixtureMode;
+      for (const [name, route] of [
+        ['profile_forge_backend', '/api/agent/performance/profile'],
+        ['start_forge_performance_capture', '/api/agent/performance/collection'],
+      ] as const) {
+        routeCalls.length = 0;
+        const denied = await client.request('tools/call', { name, arguments: {} });
+        assert.equal(denied.result?.isError, true);
+        assert.equal(routeCalls.length, 1, 'HTTP overlap/cooldown rejection must not retry or start another capture');
+        assert.equal(routeCalls[0].path, route);
+        if (name === 'profile_forge_backend' || fixtureMode === 'performance-http-conflict') {
+          const failure = JSON.parse(String(denied.result?.content?.[0]?.text || '{}'));
+          assert.equal(failure.ok, false);
+          assert.equal(failure.code, name === 'start_forge_performance_capture' ? 'PERFORMANCE_COLLECTION_BUSY'
+            : fixtureMode === 'performance-http-conflict' ? 'PROFILE_BUSY' : 'PROFILE_RATE_LIMITED');
+          assert.equal(failure.error, 'Bounded capture refused.');
+          assert.equal(failure.functions, undefined);
+          assert.equal(failure.backend, undefined);
+        }
+      }
+    }
+    endpointMode = 'performance-http-cleanup';
+    const uncertain = await client.request('tools/call', { name: 'profile_forge_backend', arguments: {} });
+    assert.equal(uncertain.result?.isError, true);
+    assert.deepEqual(JSON.parse(String(uncertain.result?.content?.[0]?.text || '{}')),
+      { ok: false, code: 'PROFILE_CLEANUP_UNCONFIRMED', error: 'Bounded capture refused.' }, 'HTTP cleanup uncertainty must keep its typed refusal');
+    for (const fixtureMode of ['performance-http-status-mismatch', 'performance-http-invalid-failure'] as const) {
+      endpointMode = fixtureMode;
+      const denied = await client.request('tools/call', { name: 'profile_forge_backend', arguments: {} });
+      assert.equal(denied.result?.isError, true);
+      assert.equal(String(denied.result?.content?.[0]?.text || '').includes('"ok"'), false,
+        'malformed or contradictory HTTP failures must not be fabricated into typed profile results');
+    }
+    endpointMode = 'normal';
+  });
+
   mode = 'legacy';
   await withMcp(baseUrl, async client => {
     const legacyTools = await toolsFor(client);
@@ -878,6 +1309,14 @@ try {
       'runtime debugger must not bypass live capability discovery through legacy fallback');
     const legacyExpression = await client.request('tools/call', { name: 'check_expression', arguments: { expression: '$x' } });
     assert.equal(legacyExpression.error?.code, -32602, 'expression check requires live capability discovery');
+    const legacyXmlReferences = await client.request('tools/call', {
+      name: 'get_xml_references', arguments: { focus: { origin: 'project', path: 'assets/fixture_0.xml' } },
+    });
+    assert.equal(legacyXmlReferences.error?.code, -32602, 'XML references must not gain authority from legacy fallback');
+    for (const name of PERFORMANCE_TOOLS) {
+      assert.equal((await client.request('tools/call', { name, arguments: {} })).error?.code, -32602,
+        `${name} must not acquire authority from legacy discovery`);
+    }
     assert.ok(legacyTools.every(tool => tool._meta?.['x4forge/contractVersion'] === 'legacy-static-fallback'));
     const legacyWorkspaceTool = legacyTools.find(tool => tool.name === 'get_workspace');
     assert.equal(legacyWorkspaceTool?._meta?.['x4forge/capabilityVersion'], 1,
@@ -974,6 +1413,12 @@ try {
     const narrowedTools = await toolsFor(client);
     assert.deepEqual(narrowedTools.map(tool => tool.name), CUSTOM_TOOLS,
       'custom exact identity must retain public capabilities while narrowing protected tools');
+    routeCalls.length = 0;
+    for (const name of PERFORMANCE_TOOLS) {
+      assert.equal((await client.request('tools/call', { name, arguments: {} })).error?.code, -32602,
+        `${name} must require its own exact grant`);
+    }
+    assert.deepEqual(routeCalls, [], 'ungranted performance tools reached HTTP');
     const narrowedAuthorityHash = narrowedTools[0]?._meta?.['x4forge/authorityHash'];
     assert.match(String(narrowedAuthorityHash || ''), /^[a-f0-9]{64}$/,
       'narrowed live tools must carry the effective authority hash');
@@ -1011,10 +1456,20 @@ try {
   await withMcp(baseUrl, async client => {
     assert.deepEqual((await toolsFor(client)).map(tool => tool.name), EXPECTED_TOOLS);
     mode = 'outage';
-    assert.deepEqual((await toolsFor(client)).map(tool => tool.name), EXPECTED_TOOLS.filter(name => name !== 'check_expression'),
-      'unsaved expression checks require current discovery even when other tools retain prior authority');
+    assert.deepEqual((await toolsFor(client)).map(tool => tool.name), EXPECTED_TOOLS.filter(name => !['check_expression', 'get_xml_references', ...PERFORMANCE_TOOLS].includes(name)),
+      'expression, XML reference and performance tools require current discovery even when other tools retain prior authority');
     const staleExpression = await client.request('tools/call', { name: 'check_expression', arguments: { expression: '$x' } });
     assert.equal(staleExpression.error?.code, -32602, 'stale discovery cannot authorize a direct expression check');
+    const staleXmlReferences = await client.request('tools/call', {
+      name: 'get_xml_references', arguments: { focus: { origin: 'project', path: 'assets/fixture_0.xml' } },
+    });
+    assert.equal(staleXmlReferences.error?.code, -32602, 'stale discovery cannot authorize a direct XML reference map');
+    routeCalls.length = 0;
+    for (const name of PERFORMANCE_TOOLS) {
+      assert.equal((await client.request('tools/call', { name, arguments: {} })).error?.code, -32602,
+        `${name} must not acquire authority from stale discovery`);
+    }
+    assert.deepEqual(routeCalls, [], 'stale performance tools reached HTTP');
     mode = 'live';
     assert.deepEqual((await toolsFor(client)).map(tool => tool.name), EXPECTED_TOOLS,
       'a successful discovery restores the expression tool');

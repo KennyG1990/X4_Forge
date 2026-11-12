@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mdscript name="ForgeCollection11C1112" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+  <cues>
+    <cue name="Collection11C1112_Phase1_OnLoad" namespace="this">
+      <conditions>
+        <event_game_loaded />
+      </conditions>
+      <actions>
+        <debug_text text="'FORGE_COLLECTION11_C1112_PHASE1_BEGIN'" filter="general" />
+        <set_value name="$EnergyCount" exact="0" />
+        <set_value name="$AKeepCount" exact="0" />
+        <set_value name="$ARemoveCount" exact="0" />
+        <set_value name="$ARenameCount" exact="0" />
+        <set_value name="$BKeepCount" exact="0" />
+        <set_value name="$BRemoveCount" exact="0" />
+        <set_value name="$BRenameCount" exact="0" />
+        <set_value name="$DuplicateCount" exact="0" />
+        <do_for_each name="$Ware" in="lookup.ware.list">
+          <do_if value="$Ware.id == 'energycells' or $Ware.id == 'forge_collection11_c1112_a_keep' or $Ware.id == 'forge_collection11_c1112_a_remove' or $Ware.id == 'forge_collection11_c1112_a_rename' or $Ware.id == 'forge_collection11_c1112_b_keep' or $Ware.id == 'forge_collection11_c1112_b_remove' or $Ware.id == 'forge_collection11_c1112_b_rename' or $Ware.id == 'forge_collection11_c1112_duplicate'">
+            <do_if value="$Ware.id == 'energycells'">
+              <set_value name="$EnergyCount" exact="$EnergyCount + 1" />
+            </do_if>
+            <do_if value="$Ware.id == 'forge_collection11_c1112_a_keep'">
+              <set_value name="$AKeepCount" exact="$AKeepCount + 1" />
+            </do_if>
+            <do_if value="$Ware.id == 'forge_collection11_c1112_a_remove'">
+              <set_value name="$ARemoveCount" exact="$ARemoveCount + 1" />
+            </do_if>
+            <do_if value="$Ware.id == 'forge_collection11_c1112_a_rename'">
+              <set_value name="$ARenameCount" exact="$ARenameCount + 1" />
+            </do_if>
+            <do_if value="$Ware.id == 'forge_collection11_c1112_b_keep'">
+              <set_value name="$BKeepCount" exact="$BKeepCount + 1" />
+            </do_if>
+            <do_if value="$Ware.id == 'forge_collection11_c1112_b_remove'">
+              <set_value name="$BRemoveCount" exact="$BRemoveCount + 1" />
+            </do_if>
+            <do_if value="$Ware.id == 'forge_collection11_c1112_b_rename'">
+              <set_value name="$BRenameCount" exact="$BRenameCount + 1" />
+            </do_if>
+            <do_if value="$Ware.id == 'forge_collection11_c1112_duplicate'">
+              <set_value name="$DuplicateCount" exact="$DuplicateCount + 1" />
+            </do_if>
+            <debug_text text="'FORGE_COLLECTION11_C1112_PHASE1_OBS id=%s volume=%s'.[$Ware.id, $Ware.volume]" filter="general" />
+          </do_if>
+        </do_for_each>
+        <debug_text text="'FORGE_COLLECTION11_C1112_PHASE1_COUNTS energycells=%s a_keep=%s a_remove=%s a_rename=%s b_keep=%s b_remove=%s b_rename=%s duplicate=%s'.[$EnergyCount, $AKeepCount, $ARemoveCount, $ARenameCount, $BKeepCount, $BRemoveCount, $BRenameCount, $DuplicateCount]" filter="general" />
+        <debug_text text="'FORGE_COLLECTION11_C1112_PHASE1_END'" filter="general" />
+      </actions>
+    </cue>
+  </cues>
+</mdscript>

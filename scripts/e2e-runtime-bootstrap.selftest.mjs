@@ -479,6 +479,178 @@ for (const [name, env] of [
   check('normalized_environment_has_one_path_key', normalized.ok && pathKeys(normalized.environment).length === 1);
 }
 
+// Controlled filesystem: exercise exclusive creation, identity and lifetime without
+// touching retained evidence or requiring a browser/another process.
+function stateFilesystem() {
+  const tempDir = path.resolve('controlled-e2e-temp');
+  const nodes = new Map();
+  const handles = new Map();
+  const events = [];
+  let identity = 1;
+  let suffix = 0;
+  let fd = 0;
+  const controls = { failRetirement: false, largeIdentities: false };
+  const directory = () => ({ type: 'directory', dev: 1, ino: identity++, birthtimeMs: identity, nlink: 1 });
+  nodes.set(tempDir, directory());
+  const node = file => {
+    const found = nodes.get(file);
+    if (!found) throw new Error('controlled missing path');
+    return found;
+  };
+  const stat = value => ({
+    dev: BigInt(value.dev), ino: BigInt(value.ino) + (controls.largeIdentities ? 9_007_199_254_740_992n : 0n), birthtimeNs: BigInt(value.birthtimeMs) * 1_000_000n, nlink: BigInt(value.nlink),
+    size: BigInt(value.bytes?.length ?? 0),
+    isDirectory: () => value.type === 'directory', isFile: () => value.type === 'file',
+    isSymbolicLink: () => value.symbolic === true,
+  });
+  const fsImpl = {
+    realpathSync: { native(file) { const value = node(file); return value.target ?? file; } },
+    lstatSync(file) { return stat(node(file)); },
+    mkdtempSync(prefix) {
+      const file = `${prefix}${String(++suffix).padStart(6, '0')}`;
+      if (nodes.has(file)) throw new Error('controlled exclusive collision');
+      events.push({ kind: 'mkdir', file }); nodes.set(file, directory()); return file;
+    },
+    writeFileSync(file, value, options) {
+      if (options.flag !== 'wx' || nodes.has(file)) throw new Error('controlled nonexclusive write');
+      events.push({ kind: 'create-marker', file });
+      nodes.set(file, { type: 'file', dev: 1, ino: identity++, birthtimeMs: identity, nlink: 1, bytes: Buffer.from(value) });
+    },
+    openSync(file, mode) { const handle = ++fd; handles.set(handle, { file, mode, value: node(file) }); return handle; },
+    fstatSync(handle) { return stat(handles.get(handle).value); },
+    readSync(handle, buffer, offset, length, position) {
+      events.push({ kind: 'read-marker', file: handles.get(handle).file });
+      return handles.get(handle).value.bytes.copy(buffer, offset, position, position + length);
+    },
+    writeSync(handle, buffer, offset, length, position) {
+      events.push({ kind: 'retire-marker', file: handles.get(handle).file });
+      if (controls.failRetirement) throw new Error('controlled retirement failure');
+      if (handles.get(handle).mode !== 'r+' || position !== 0) throw new Error('controlled write contract');
+      handles.get(handle).value.bytes = Buffer.from(buffer.subarray(offset, offset + length)); return length;
+    },
+    ftruncateSync(handle, length) { handles.get(handle).value.bytes = handles.get(handle).value.bytes.subarray(0, length); },
+    fsyncSync() {}, closeSync(handle) { handles.delete(handle); },
+  };
+  return { tempDir, fsImpl, nodes, events, controls, directory };
+}
+
+function stateOptions(fixture, overrides = {}) {
+  return { env: {}, fsImpl: fixture.fsImpl, tempDir: fixture.tempDir, ownerPid: 57560,
+    randomUUIDImpl: () => '11111111-1111-4111-8111-111111111111', ...overrides };
+}
+
+function rejectsState(work) {
+  try { work(); return false; } catch { return true; }
+}
+
+{
+  const fixture = stateFilesystem();
+  const first = api.createE2eRunStateOwner(stateOptions(fixture));
+  const second = api.createE2eRunStateOwner(stateOptions(fixture, { randomUUIDImpl: () => '22222222-2222-4222-8222-222222222222' }));
+  check('same_reused_pid_gets_two_exclusively_fresh_namespaces', first.stateDir !== second.stateDir
+    && first.runId !== second.runId && fixture.events.filter(event => event.kind === 'mkdir').length === 2);
+  check('run_consumers_and_worker_like_env_share_one_root', api.readE2eRunState(first.environment, fixture).stateDir === first.stateDir
+    && api.readE2eRunState({ ...first.environment }, fixture).stateDir === first.stateDir
+    && api.readE2eRunState(second.environment, fixture).stateDir === second.stateDir);
+  check('source_and_compiled_consumers_use_same_run_identity',
+    api.readE2eRunState({ ...first.environment, X4_FORGE_E2E_MODE: 'source' }, fixture).runId === first.runId
+    && api.readE2eRunState({ ...first.environment, X4_FORGE_E2E_MODE: 'compiled' }, fixture).runId === first.runId);
+  const marker = path.join(first.stateDir, '.e2e-run-owner.json');
+  check('run_record_is_small_and_diagnostic_pid_is_not_namespace', fixture.nodes.get(marker).bytes.length <= 4096
+    && JSON.parse(fixture.nodes.get(marker).bytes).ownerPid === 57560);
+  first.retire();
+  const retiredBytes = Buffer.from(fixture.nodes.get(marker).bytes);
+  first.retire();
+  check('retirement_is_idempotent_and_retains_evidence', retiredBytes.equals(fixture.nodes.get(marker).bytes)
+    && fixture.nodes.has(first.stateDir) && JSON.parse(retiredBytes).status === 'retired');
+  check('retired_tuple_refuses_consumer_and_new_bootstrap_adoption', rejectsState(() => api.readE2eRunState(first.environment, fixture))
+    && rejectsState(() => api.createE2eRunStateOwner(stateOptions(fixture, { env: first.environment }))));
+  second.retire();
+}
+
+{
+  const fixture = stateFilesystem();
+  const oldRoot = path.join(fixture.tempDir, 'x4forge-e2e-state-000001');
+  const oldBytes = Buffer.from('retained old sentinel');
+  fixture.nodes.set(oldRoot, fixture.directory());
+  fixture.nodes.set(path.join(oldRoot, 'sentinel'), { type: 'file', bytes: oldBytes });
+  check('exclusive_collision_never_adopts_writes_or_deletes_old_tree', rejectsState(() => api.createE2eRunStateOwner(stateOptions(fixture)))
+    && fixture.events.length === 0 && fixture.nodes.get(path.join(oldRoot, 'sentinel')).bytes.equals(oldBytes));
+}
+
+{
+  const fixture = stateFilesystem();
+  fixture.controls.largeIdentities = true;
+  const owner = api.createE2eRunStateOwner(stateOptions(fixture));
+  const descriptor = JSON.parse(owner.environment[api.E2E_RUN_STATE_ENV]);
+  check('physical_file_identity_above_number_precision_round_trips_exactly',
+    BigInt(descriptor.rootIdentity.ino) > BigInt(Number.MAX_SAFE_INTEGER)
+      && api.readE2eRunState(owner.environment, fixture).stateDir === owner.stateDir);
+  owner.retire();
+}
+
+for (const [name, environment] of [
+  ['legacy_pid', { X4_FORGE_E2E_STATE_PID: '57560' }],
+  ['legacy_pid_case', { x4_forge_e2e_state_pid: '57560' }],
+  ['inherited_descriptor', { X4_FORGE_E2E_RUN_STATE: '{}' }],
+  ['case_descriptor', { x4_forge_e2e_run_state: '{}' }],
+  ['prototype_descriptor', Object.create({ X4_FORGE_E2E_RUN_STATE: '{}' })],
+  ['prototype_pid', Object.create({ X4_FORGE_E2E_STATE_PID: '57560' })],
+]) {
+  const fixture = stateFilesystem();
+  check(`run_bootstrap_refuses_${name}_before_allocation`, rejectsState(() => api.createE2eRunStateOwner(stateOptions(fixture, { env: environment })))
+    && fixture.events.length === 0);
+}
+
+{
+  const fixture = stateFilesystem();
+  let accessed = false;
+  const environment = {};
+  Object.defineProperty(environment, api.E2E_RUN_STATE_ENV, { enumerable: true, get() { accessed = true; throw new Error('must not read accessor'); } });
+  check('state_accessor_is_refused_without_invoking_it', rejectsState(() => api.createE2eRunStateOwner(stateOptions(fixture, { env: environment })))
+    && !accessed && fixture.events.length === 0);
+  check('direct_config_consumer_without_bootstrap_refuses', rejectsState(() => api.readE2eRunState({}, fixture)));
+}
+
+for (const change of ['linked-root', 'replaced-root', 'linked-marker', 'hardlinked-marker', 'replaced-marker', 'oversized-marker', 'wrong-run-id']) {
+  const fixture = stateFilesystem();
+  const owner = api.createE2eRunStateOwner(stateOptions(fixture));
+  const marker = path.join(owner.stateDir, '.e2e-run-owner.json');
+  const root = fixture.nodes.get(owner.stateDir);
+  const file = fixture.nodes.get(marker);
+  if (change === 'linked-root') root.symbolic = true;
+  if (change === 'replaced-root') root.ino += 100;
+  if (change === 'linked-marker') file.symbolic = true;
+  if (change === 'hardlinked-marker') file.nlink = 2;
+  if (change === 'replaced-marker') file.ino += 100;
+  if (change === 'oversized-marker') file.bytes = Buffer.alloc(4097, 32);
+  if (change === 'wrong-run-id') file.bytes = Buffer.from(JSON.stringify({ ...JSON.parse(file.bytes), runId: 'foreign' }));
+  const before = fixture.events.filter(event => event.kind === 'read-marker').length;
+  check(`consumer_refuses_${change}`, rejectsState(() => api.readE2eRunState(owner.environment, fixture)));
+  if (change === 'oversized-marker') check('oversized_owner_record_is_refused_before_read',
+    fixture.events.filter(event => event.kind === 'read-marker').length === before);
+  check(`retirement_refuses_${change}_without_foreign_write`, rejectsState(() => owner.retire())
+    && !fixture.events.some(event => event.kind === 'retire-marker'));
+}
+
+{
+  const fixture = stateFilesystem();
+  const owner = api.createE2eRunStateOwner(stateOptions(fixture));
+  const raw = owner.environment[api.E2E_RUN_STATE_ENV];
+  for (const [name, environment] of [
+    ['duplicate_case', { [api.E2E_RUN_STATE_ENV]: raw, x4_forge_e2e_run_state: raw }],
+    ['lowercase_only', { x4_forge_e2e_run_state: raw }],
+    ['malformed', { [api.E2E_RUN_STATE_ENV]: '{' }],
+    ['foreign_root', { [api.E2E_RUN_STATE_ENV]: JSON.stringify({ ...JSON.parse(raw), stateDir: path.resolve('foreign') }) }],
+  ]) check(`state_consumer_refuses_${name}`, rejectsState(() => api.readE2eRunState(environment, fixture)));
+  fixture.controls.failRetirement = true;
+  check('retirement_write_failure_is_red', rejectsState(() => owner.retire()));
+  const attempts = fixture.events.filter(event => event.kind === 'retire-marker').length;
+  fixture.controls.failRetirement = false;
+  check('retirement_failure_stays_latched_without_retry', rejectsState(() => owner.retire())
+    && fixture.events.filter(event => event.kind === 'retire-marker').length === attempts);
+}
+
 const passed = checks.filter(item => item.pass).length;
 for (const item of checks) console.log(`${item.pass ? '  ok  ' : ' FAIL '}${item.name}`);
 console.log(`[e2e-runtime-bootstrap selftest] ${passed}/${checks.length}`);

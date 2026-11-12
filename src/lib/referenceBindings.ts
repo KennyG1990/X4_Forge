@@ -61,6 +61,33 @@ export function selectorIdentityKind(root: string, element: string, attribute: s
   return null;
 }
 
+/** Asset-file namespaces are contextual; the older completion union above is unchanged. */
+export interface XmlAssetReferenceBinding {
+  kind: 'macro' | 'component' | 'ware' | 'bullet' | 'local-connection';
+  targetKind?: 'macro' | 'component' | 'ware';
+  scope: 'global' | 'local';
+}
+
+export function resolveXmlAssetReferenceBinding(context: {
+  root: string; ancestors: readonly string[]; element: string; attribute: string;
+}): XmlAssetReferenceBinding | null {
+  const root = context.root.toLowerCase();
+  const element = context.element.toLowerCase();
+  const attribute = context.attribute.toLowerCase();
+  const ancestors = context.ancestors.map(name => name.toLowerCase());
+  if (element === 'component' && attribute === 'ref') {
+    if (root === 'wares' && ancestors.includes('ware')) return { kind: 'macro', targetKind: 'macro', scope: 'global' };
+    if (root === 'macros' && ancestors.includes('macro')) return { kind: 'component', targetKind: 'component', scope: 'global' };
+  }
+  if (root === 'macros' && ancestors.includes('macro')) {
+    if (element === 'macro' && attribute === 'ref') return { kind: 'macro', targetKind: 'macro', scope: 'global' };
+    if (element === 'bullet' && attribute === 'class') return { kind: 'bullet', targetKind: 'macro', scope: 'global' };
+    if (element === 'connection' && attribute === 'ref') return { kind: 'local-connection', scope: 'local' };
+  }
+  if (root === 'wares' && element === 'ware' && attribute === 'ware') return { kind: 'ware', targetKind: 'ware', scope: 'global' };
+  return null;
+}
+
 export function runReferenceBindingsSelftest() {
   const checks = [
     { name: 'typed faction wins', pass: resolveReferenceBinding({ domain: 'md', element: 'event_owner', attribute: 'owner', type: 'factionlookup' }) === 'faction' },
@@ -70,6 +97,12 @@ export function runReferenceBindingsSelftest() {
     { name: 'generic unknown remains unbound', pass: resolveReferenceBinding({ domain: 'md', element: 'set_value', attribute: 'name', type: 'xs:string' }) === null },
     { name: 'wares fallback uses shared libraries schema', pass: fallbackLibrarySchemaDomain('extensions/mod/libraries/wares.xml') === 'libraries' },
     { name: 'ware selector identity binds', pass: selectorIdentityKind('wares', 'ware', 'id') === 'ware' },
+    { name: 'ware component ref uses macro namespace', pass: resolveXmlAssetReferenceBinding({ root: 'wares', ancestors: ['wares', 'ware'], element: 'component', attribute: 'ref' })?.targetKind === 'macro' },
+    { name: 'macro component ref uses component namespace', pass: resolveXmlAssetReferenceBinding({ root: 'macros', ancestors: ['macros', 'macro'], element: 'component', attribute: 'ref' })?.targetKind === 'component' },
+    { name: 'macro child ref uses macro namespace', pass: resolveXmlAssetReferenceBinding({ root: 'macros', ancestors: ['macros', 'macro', 'connections', 'connection'], element: 'macro', attribute: 'ref' })?.targetKind === 'macro' },
+    { name: 'weapon bullet class uses macro namespace', pass: resolveXmlAssetReferenceBinding({ root: 'macros', ancestors: ['macros', 'macro', 'properties'], element: 'bullet', attribute: 'class' })?.targetKind === 'macro' },
+    { name: 'connection names remain scoped', pass: resolveXmlAssetReferenceBinding({ root: 'macros', ancestors: ['macros', 'macro', 'connections'], element: 'connection', attribute: 'ref' })?.scope === 'local' },
+    { name: 'unrelated component remains unbound', pass: resolveXmlAssetReferenceBinding({ root: 'unknown', ancestors: ['unknown'], element: 'component', attribute: 'ref' }) === null },
   ];
   const passed = checks.filter(check => check.pass).length;
   return { pass: passed === checks.length, allPassed: passed === checks.length, passed, total: checks.length, checks };

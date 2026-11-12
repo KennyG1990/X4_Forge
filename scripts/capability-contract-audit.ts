@@ -20,7 +20,9 @@ import {
 } from '../src/lib/agentCapabilityAuthority';
 import {
   AGENT_ROUTE_SCOPES,
+  PROCESS_TELEMETRY_ROUTE_OWNERS,
   createAgentRouteAuthority,
+  processTelemetryRouteAuthorityErrors,
   type AgentRouteAuthority,
   type AgentAuthorityResourceClass,
   type AgentKeyScope,
@@ -40,7 +42,7 @@ const ROOT = process.cwd();
 const MANIFEST_PATH = path.join(ROOT, 'config', 'forge-route-dispositions.json');
 const CANDIDATE_PATH = path.join(ROOT, 'test-results', 'forge-route-dispositions.candidate.json');
 const MCP_MODULE_PATH = path.join(ROOT, 'vscode-extension', 'mcp', 'x4forge-mcp.cjs');
-const MCP_MODULE_AUDIT_VERSION = 14;
+const MCP_MODULE_AUDIT_VERSION = 16;
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'all']);
 
 type RouteDisposition =
@@ -954,6 +956,7 @@ function expressReceiverIdentifier(
 const REVIEWED_MIDDLEWARE_IDENTIFIERS = new Set([
   'apiFailureEnvelopeMiddleware',
   'apiResponseDeadlineMiddleware',
+  'forgePerformanceRequestMiddleware',
   'localCorsMiddleware',
   'authMiddleware',
   'workspaceAuthorityMiddleware',
@@ -2137,6 +2140,32 @@ function reachableScopes(fact: RouteFact, authority?: AgentRouteAuthority): Arra
     : scopeAllows(scope, fact.method, reqPath));
 }
 
+function processTelemetryCapabilityErrors(
+  key: string, entry: RouteDispositionEntry, capability: ForgeCapabilityDescriptorV1 | undefined, observedPublic: boolean,
+): string[] {
+  const reserved = Object.hasOwn(PROCESS_TELEMETRY_ROUTE_OWNERS, key);
+  if (entry.resourceClass !== 'process-telemetry') {
+    // Keep generation's closed defaults reviewable; they still fail the normal
+    // capability-scope check until their exact authority tuples are reviewed.
+    return reserved && entry.agentScopes.length ? [`${key}: agent-readable performance controls require process-telemetry authority`] : [];
+  }
+  const errors = processTelemetryRouteAuthorityErrors(key, entry).map(error => `${key}: ${error}`);
+  const owner = reserved ? PROCESS_TELEMETRY_ROUTE_OWNERS[key] : undefined;
+  if (!capability || capability.id !== owner || capability.version !== 1 || capability.apiBindings.length !== 1 ||
+    routeKey(capability.apiBindings[0].method, capability.apiBindings[0].path) !== key || capability.apiBindings[0].role !== 'primary') {
+    errors.push(`${key}: process-telemetry requires its exact version-1 canonical capability binding`);
+  }
+  if (observedPublic || !capability || capability.access.public || !capability.access.studioSession ||
+    !sameStrings(capability.access.agentScopes, [...AGENT_ROUTE_SCOPES])) {
+    errors.push(`${key}: process-telemetry must be authenticated, nonpublic and use the read/write/deploy preset`);
+  }
+  if (!capability || capability.context.workspace !== 'none' || capability.context.profile !== 'none' || capability.confirmation !== 'none' ||
+    capability.effects.length !== 2 || !capability.effects.includes('read') || !capability.effects.includes('analyze')) {
+    errors.push(`${key}: process-telemetry permits only read/analyze effects without workspace, profile or confirmation authority`);
+  }
+  return errors;
+}
+
 function exactLedgerKind(method: string, routePath: string, routes = LEDGER_ROUTES): LedgerKind | null {
   const upper = method.toUpperCase();
   const sampled = sampleRoute(routePath);
@@ -2345,6 +2374,7 @@ const AGENT_RESOURCE_CLASSES = new Set<AgentAuthorityResourceClass>([
   'inline-or-addressed',
   'configured-root',
   'global-session',
+  'process-telemetry',
   'cross-workspace-session',
   'provider-network',
   'host-file-read',
@@ -2411,6 +2441,10 @@ function routeDispositionManifestShapeErrors(value: unknown, allowLegacyV3 = fal
         errors.push(`manifest ${label}.${key} has invalid disposition ${String(raw.disposition)}`);
       }
       if (typeof raw.owner !== 'string' || !raw.owner.trim()) errors.push(`manifest ${label}.${key} has an invalid owner`);
+      errors.push(...processTelemetryRouteAuthorityErrors(key, raw).map(error => `manifest ${label}.${key}: ${error}`));
+      if (label === 'dynamicRoutes' && raw.resourceClass === 'process-telemetry') {
+        errors.push(`manifest ${label}.${key}: process-telemetry is limited to exact literal route entries`);
+      }
       if (!Number.isInteger(raw.registrations) || Number(raw.registrations) < 1) {
         errors.push(`manifest ${label}.${key} has invalid registrations ${String(raw.registrations)}`);
       }
@@ -4420,8 +4454,8 @@ interface ReviewedRequestCall {
 
 const reviewedRequestForwarderCache = new Map<string, boolean>();
 
-function reviewedRequestForwarder(file: ts.SourceFile, functionName: string, urlIndex: number, optionsIndex: number): boolean {
-  const cacheKey = `${normalizedRelative(file.fileName)}::${functionName}`;
+function reviewedRequestForwarder(file: ts.SourceFile, functionName: string, urlIndex: number, optionsIndex: number, requireExactNamedExport = false): boolean {
+  const cacheKey = `${normalizedRelative(file.fileName)}::${functionName}::${urlIndex}:${optionsIndex}:${requireExactNamedExport}`;
   const cached = reviewedRequestForwarderCache.get(cacheKey);
   if (cached !== undefined) return cached;
   const declarations = file.statements.filter((statement): statement is ts.FunctionDeclaration =>
@@ -4429,8 +4463,13 @@ function reviewedRequestForwarder(file: ts.SourceFile, functionName: string, url
   const declaration = declarations.length === 1 ? declarations[0] : null;
   const urlParameter = declaration?.parameters[urlIndex];
   const optionsParameter = declaration?.parameters[optionsIndex];
+  // The apiHelper named export must retain its own binding and forward init unchanged.
+  const sourceBindingMatches = !requireExactNamedExport || !!declaration &&
+    !!ts.getModifiers(declaration)?.some(modifier => modifier.kind === ts.SyntaxKind.ExportKeyword) &&
+    !ts.getModifiers(declaration)?.some(modifier => modifier.kind === ts.SyntaxKind.DefaultKeyword) &&
+    !lexicalBindingIsWritten(file, functionName, declaration);
   if (!declaration || !urlParameter || !optionsParameter || !ts.isIdentifier(urlParameter.name) ||
-    !ts.isIdentifier(optionsParameter.name) || lexicalBindingIsWritten(file, urlParameter.name.text, urlParameter) ||
+    !ts.isIdentifier(optionsParameter.name) || !sourceBindingMatches || lexicalBindingIsWritten(file, urlParameter.name.text, urlParameter) ||
     lexicalBindingIsWritten(file, optionsParameter.name.text, optionsParameter) ||
     lexicalBindingPropertyIsWritten(file, optionsParameter.name.text, optionsParameter, 'method')) {
     reviewedRequestForwarderCache.set(cacheKey, false);
@@ -4456,7 +4495,7 @@ function reviewedRequestForwarder(file: ts.SourceFile, functionName: string, url
     const resolved = resolver(optionsUse);
     exactOptions = !resolved.ambiguous && resolved.declaration === optionsParameter;
     if (exactOptions) reviewedOptionsUse = optionsUse;
-  } else if (optionsUse && ts.isObjectLiteralExpression(optionsUse)) {
+  } else if (!requireExactNamedExport && optionsUse && ts.isObjectLiteralExpression(optionsUse)) {
     const spreads = optionsUse.properties.filter((property): property is ts.SpreadAssignment => ts.isSpreadAssignment(property));
     const optionSpread = spreads.filter(spread => ts.isIdentifier(spread.expression) &&
       !resolver(spread.expression).ambiguous && resolver(spread.expression).declaration === optionsParameter);
@@ -4491,6 +4530,10 @@ function reviewedRequestCall(node: ts.Node, file: ts.SourceFile): ReviewedReques
       !globalFetchPropertyIsWritten(file)) return { call: node, optionsIndex: 1 };
     if (importBindingMatches(file, expression.text, 'src/lib/continuousPolling.ts', 'fetchPollingJson', expression) &&
       reviewedRequestForwarder(readSource('src/lib/continuousPolling.ts').file, 'fetchPollingJson', 0, 1)) {
+      return { call: node, optionsIndex: 1 };
+    }
+    if (importBindingMatches(file, expression.text, 'src/lib/apiHelper.ts', 'fetchJson', expression) &&
+      reviewedRequestForwarder(readSource('src/lib/apiHelper.ts').file, 'fetchJson', 0, 1, true)) {
       return { call: node, optionsIndex: 1 };
     }
     if (expression.text === 'fetchWithTimeout' && normalizedRelative(file.fileName) === 'vscode-extension/src/extension.ts') {
@@ -5667,6 +5710,48 @@ function audit(manifestOverride?: RouteDispositionManifest): { errors: string[];
     function leak() { return app; }
     const exposed = { app };
   `);
+  const telemetryServerSource = readSource('server.ts').file;
+  const telemetryDeclaration = telemetryServerSource.statements.find(statement =>
+    ts.isFunctionDeclaration(statement) && statement.name?.text === 'forgePerformanceRequestMiddleware');
+  const telemetryMiddlewarePositive = parseRouteInventoryFromSourceForSelftest(`
+    const app = express();
+    ${telemetryDeclaration?.getText(telemetryServerSource) || ''}
+    app.use(forgePerformanceRequestMiddleware);
+  `, '<performance-middleware-positive>');
+  if (!telemetryDeclaration || telemetryMiddlewarePositive.unrecognizedForms.length) {
+    errors.push(`performance middleware guard rejected the actual named local declaration: ${telemetryMiddlewarePositive.unrecognizedForms.join(' | ')}`);
+  }
+  const telemetryMiddlewareNegatives = [
+    ['anonymous', `app.use((req, res, next) => { res.setHeader('x-forge-trace-id', 'fixture'); return next(); });`],
+    ['shadowed', `
+      function forgePerformanceRequestMiddleware(req, res, next) { return next(); }
+      { const forgePerformanceRequestMiddleware = makeRouter(); app.use(forgePerformanceRequestMiddleware); }
+    `],
+    ['reassigned-before', `
+      function forgePerformanceRequestMiddleware(req, res, next) { return next(); }
+      forgePerformanceRequestMiddleware = makeRouter();
+      app.use(forgePerformanceRequestMiddleware);
+    `],
+    ['reassigned-after', `
+      function forgePerformanceRequestMiddleware(req, res, next) { return next(); }
+      app.use(forgePerformanceRequestMiddleware);
+      forgePerformanceRequestMiddleware = makeRouter();
+    `],
+    ['hidden-router-delegation', `
+      function forgePerformanceRequestMiddleware(req, res, next) { return makeRouter()(req, res, next); }
+      app.use(forgePerformanceRequestMiddleware);
+    `],
+    ['hidden-router-registration', `
+      function forgePerformanceRequestMiddleware(req, res, next) {
+        router.get('/api/agent/__hidden_performance_probe', handler); return next();
+      }
+      app.use(forgePerformanceRequestMiddleware);
+    `],
+  ] as const;
+  for (const [name, body] of telemetryMiddlewareNegatives) {
+    const probe = parseRouteInventoryFromSourceForSelftest(`const app = express(); ${body}`, `<performance-middleware-${name}>`);
+    if (!probe.unrecognizedForms.length) errors.push(`performance middleware guard accepted ${name}`);
+  }
   const namedMiddlewareSpoofProbe = parseRouteInventoryFromSourceForSelftest(`
     const app = express();
     function authMiddleware(req, res, next) { return makeRouter()(req, res, next); }
@@ -6461,6 +6546,51 @@ function audit(manifestOverride?: RouteDispositionManifest): { errors: string[];
     requestCalls(reassignedPollingHelper).some(call => !!reviewedRequestCall(call, reassignedPollingHelper))) {
     errors.push('typed request-helper guard failed lexical shadow or aliased-import probes');
   }
+  const liveApiJsonHelper = sourceFile('src/components/LiveApiJsonProbe.tsx', `
+    import { fetchJson as readJson } from '../lib/apiHelper';
+    readJson('/api/agent/workspace', { method: 'POST' });
+  `);
+  const liveApiJsonCalls = requestCalls(liveApiJsonHelper);
+  const liveApiJsonRequest = liveApiJsonCalls.length === 1 ? reviewedRequestCall(liveApiJsonCalls[0], liveApiJsonHelper) : null;
+  if (!liveApiJsonRequest || requestMethod(liveApiJsonRequest, liveApiJsonHelper) !== 'POST') {
+    errors.push('typed apiHelper.fetchJson guard rejected the exact aliased import and POST option slot');
+  }
+  const actualXmlReferenceUi = cachedProjectionFile('src/components/XmlReferenceView.tsx');
+  if (!hasRequestEvidence(actualXmlReferenceUi, 'POST', '/api/agent/project/xml-references')) {
+    errors.push(`typed apiHelper.fetchJson guard rejected the actual reachable XML reference caller: ${requestEvidenceDiagnostics(actualXmlReferenceUi, 'POST', '/api/agent/project/xml-references')}`);
+  }
+  const rejectedApiJsonImports = [
+    ['wrong module', `import { fetchJson } from '../lib/continuousPolling'; fetchJson('/api/agent/workspace');`],
+    ['wrong export', `import { handleApiResponse as fetchJson } from '../lib/apiHelper'; fetchJson('/api/agent/workspace');`],
+    ['local shadow', `import { fetchJson } from '../lib/apiHelper'; function run(fetchJson) { return fetchJson('/api/agent/workspace'); }`],
+    ['arbitrary same-name helper', `function fetchJson(url, init) { return fetch(url, init); } fetchJson('/api/agent/workspace');`],
+    ['reassigned import', `import { fetchJson } from '../lib/apiHelper'; fetchJson = fake; fetchJson('/api/agent/workspace');`],
+    ['type-only import', `import type { fetchJson } from '../lib/apiHelper'; fetchJson('/api/agent/workspace');`],
+  ] as const;
+  for (const [name, text] of rejectedApiJsonImports) {
+    const probe = sourceFile(`src/components/RejectedApiJson${name.replace(/[^a-z]/gi, '')}Probe.tsx`, text);
+    const calls = requestCalls(probe);
+    if (calls.length !== 1 || calls.some(call => !!reviewedRequestCall(call, probe))) {
+      errors.push(`typed apiHelper.fetchJson guard failed ${name} negative control`);
+    }
+  }
+  const rejectedApiJsonForwarders = [
+    ['rewritten URL', `export async function fetchJson(url, init) { return fetch('/api/other', init); }`],
+    ['rewritten init', `export async function fetchJson(url, init) { return fetch(url, { method: 'GET' }); }`],
+    ['spread-rewritten init', `export async function fetchJson(url, init) { return fetch(url, { ...init, headers: {} }); }`],
+    ['mutated URL parameter', `export async function fetchJson(url, init) { url = '/api/other'; return fetch(url, init); }`],
+    ['mutated init method', `export async function fetchJson(url, init) { init.method = 'GET'; return fetch(url, init); }`],
+    ['reassigned source binding', `export async function fetchJson(url, init) { return fetch(url, init); } fetchJson = fake;`],
+    ['unexported source binding', `async function fetchJson(url, init) { return fetch(url, init); }`],
+    ['default-only source export', `export default async function fetchJson(url, init) { return fetch(url, init); }`],
+    ['shadowed fetch', `export async function fetchJson(url, init, fetch) { return fetch(url, init); }`],
+  ] as const;
+  for (const [name, text] of rejectedApiJsonForwarders) {
+    const probe = sourceFile(`<api-json-${name.replace(/[^a-z]/gi, '')}-forwarder-probe>`, text);
+    if (reviewedRequestForwarder(probe, 'fetchJson', 0, 1, true)) {
+      errors.push(`typed apiHelper.fetchJson guard failed ${name} negative control`);
+    }
+  }
   const timeoutMethodProbe = ts.createSourceFile('<timeout-method-probe>', `fetchWithTimeout('/api/agent/workspace', 3000, { method: 'POST' });`, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   let timeoutCall: ts.CallExpression | null = null;
   visitUntil(timeoutMethodProbe, node => {
@@ -6908,6 +7038,57 @@ function audit(manifestOverride?: RouteDispositionManifest): { errors: string[];
     dynamicRegistrations.set(key, (dynamicRegistrations.get(key) || 0) + effectiveRegistrationCount(fact, callLines));
   }
 
+  const telemetryProbeKey = 'GET /api/agent/performance';
+  const telemetryProbeCapability = FORGE_CAPABILITIES.find(capability => capability.id === 'performance.read');
+  const telemetryProbeEntry: RouteDispositionEntry = {
+    disposition: 'canonical-capability', owner: 'performance.read', registrations: 1,
+    agentScopes: [...AGENT_ROUTE_SCOPES], resourceClass: 'process-telemetry', workspaceMode: 'none',
+  };
+  for (const [key, owner] of Object.entries(PROCESS_TELEMETRY_ROUTE_OWNERS)) {
+    const capability = FORGE_CAPABILITIES.find(candidate => candidate.id === owner);
+    const probeErrors = processTelemetryCapabilityErrors(key, { ...telemetryProbeEntry, owner }, capability, false);
+    if (probeErrors.length) errors.push(`process-telemetry positive invariant failed: ${probeErrors.join(' | ')}`);
+  }
+  if (!telemetryProbeCapability) errors.push('process-telemetry negative controls lack their real canonical capability');
+  else {
+    const telemetryNegatives: Array<{ name: string; key?: string; entry?: RouteDispositionEntry; capability?: ForgeCapabilityDescriptorV1; publiclyAllowlisted?: boolean }> = [
+      { name: 'foreign-route', key: 'GET /api/agent/workspace' },
+      { name: 'wrong-method', key: 'POST /api/agent/performance' },
+      { name: 'prefix-child', key: 'GET /api/agent/performance/extra' },
+      { name: 'wrong-owner', entry: { ...telemetryProbeEntry, owner: 'performance.profile' } },
+      { name: 'noncanonical', entry: { ...telemetryProbeEntry, disposition: 'legacy-agent-api' } },
+      { name: 'duplicate-registration', entry: { ...telemetryProbeEntry, registrations: 2 } },
+      { name: 'workspace-authority', entry: { ...telemetryProbeEntry, workspaceMode: 'required' } },
+      { name: 'missing-read-preset', entry: { ...telemetryProbeEntry, agentScopes: ['write', 'deploy'] } },
+      { name: 'studio-only-preset', entry: { ...telemetryProbeEntry, agentScopes: [] } },
+      { name: 'global-session-grant', entry: { ...telemetryProbeEntry, resourceClass: 'global-session' } },
+      { name: 'public-allowlist', publiclyAllowlisted: true },
+      { name: 'public-descriptor', capability: { ...telemetryProbeCapability, access: { ...telemetryProbeCapability.access, public: true } } },
+      // Deliberately malformed deserialized input; valid descriptors require literal true.
+      { name: 'missing-studio-session', capability: { ...telemetryProbeCapability, access: { ...telemetryProbeCapability.access, studioSession: false } } as unknown as ForgeCapabilityDescriptorV1 },
+      { name: 'capability-scope-change', capability: { ...telemetryProbeCapability, access: { ...telemetryProbeCapability.access, agentScopes: ['write', 'deploy'] } } },
+      { name: 'workspace-context', capability: { ...telemetryProbeCapability, context: { workspace: 'required', profile: 'none' } } },
+      { name: 'profile-context', capability: { ...telemetryProbeCapability, context: { workspace: 'none', profile: 'required' } } },
+      { name: 'write-effect', capability: { ...telemetryProbeCapability, effects: ['read', 'analyze', 'workspace-write'] } },
+      { name: 'audit-write-effect', capability: { ...telemetryProbeCapability, effects: ['read', 'analyze', 'audit-write'] } },
+      { name: 'missing-analysis-effect', capability: { ...telemetryProbeCapability, effects: ['read'] } },
+      { name: 'confirmation-control', capability: { ...telemetryProbeCapability, confirmation: 'preview-required' } },
+      { name: 'renamed-capability', capability: { ...telemetryProbeCapability, id: 'performance.other' } },
+      { name: 'different-version', capability: { ...telemetryProbeCapability, version: 2 } },
+      { name: 'extra-binding', capability: { ...telemetryProbeCapability, apiBindings: [...telemetryProbeCapability.apiBindings, { method: 'POST', path: '/api/agent/performance/reset', inputLocation: 'body', role: 'supporting' }] } },
+    ];
+    for (const probe of telemetryNegatives) {
+      if (!processTelemetryCapabilityErrors(probe.key || telemetryProbeKey, probe.entry || telemetryProbeEntry,
+        probe.capability || telemetryProbeCapability, probe.publiclyAllowlisted === true).length) {
+        errors.push(`process-telemetry invariant failed to reject ${probe.name}`);
+      }
+    }
+    const closedDefault = { ...telemetryProbeEntry, agentScopes: [], resourceClass: 'global-session' as const, workspaceMode: 'optional' as const };
+    if (processTelemetryCapabilityErrors(telemetryProbeKey, closedDefault, telemetryProbeCapability, false).length) {
+      errors.push('process-telemetry invariant prevents closed-default candidate generation');
+    }
+  }
+
   const manifest = manifestOverride || (fs.existsSync(MANIFEST_PATH) ? loadManifest() : null);
   let manifestAuthority: AgentRouteAuthority | undefined;
   if (!manifest) {
@@ -7133,6 +7314,7 @@ function audit(manifestOverride?: RouteDispositionManifest): { errors: string[];
       }
       const allAgentScopes = sameStrings(disposition.agentScopes, [...AGENT_ROUTE_SCOPES]);
       const noAgentScopes = disposition.agentScopes.length === 0;
+      errors.push(...processTelemetryCapabilityErrors(key, disposition, capabilitiesById.get(disposition.owner), observedPublic));
       if (['public', 'stateless-analysis'].includes(disposition.resourceClass) && !allAgentScopes) {
         errors.push(`${key}: ${disposition.resourceClass} routes must use the read/write/deploy preset`);
       }
@@ -7709,7 +7891,7 @@ function audit(manifestOverride?: RouteDispositionManifest): { errors: string[];
     truthyTerminationProbes.some(probe => probe.mappings[0]?.calls.length)) {
     errors.push('MCP TOOLS guard failed top-level/escape/handler/indirect-transport/full-truthiness probes');
   }
-  if (mappings.length !== 12) errors.push(`MCP tool inventory changed: expected 12 mappings, found ${mappings.length}`);
+  if (mappings.length !== 16) errors.push(`MCP tool inventory changed: expected 16 mappings, found ${mappings.length}`);
   const mappingNames = new Set<string>();
   for (const mapping of mappings) {
     if (mappingNames.has(mapping.name)) errors.push(`duplicate MCP tool name: ${mapping.name}`);

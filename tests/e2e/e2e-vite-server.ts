@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createServer, type ViteDevServer } from 'vite';
+import { configureProfileProxyCancellation } from '../../src/lib/profileProxyCancellation';
+import { readE2eRunState } from '../../scripts/e2e-runtime-bootstrap.mjs';
 import {
   E2E_API_PORT,
   E2E_TOKEN,
@@ -50,12 +52,8 @@ function assertPhysical(entry: OwnedPath): fs.Stats {
 /** One cache owner inside the existing per-run state; never the shared dependency root. */
 function createCacheOwner(): { dir: string; retire(): void } {
   const state = path.resolve(E2E_STATE_DIR);
-  let createdState = false;
-  try {
-    fs.mkdirSync(state);
-    createdState = true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  if (path.resolve(readE2eRunState(process.env).stateDir) !== state) {
+    throw new Error('E2E Vite cache requires the current bootstrap-owned state.');
   }
   const parent: OwnedPath = { file: state, identity: fs.lstatSync(state) };
   if (!parent.identity.isDirectory() || parent.identity.isSymbolicLink()) {
@@ -109,12 +107,6 @@ function createCacheOwner(): { dir: string; retire(): void } {
         else fs.unlinkSync(entry.file);
       }
       fs.rmdirSync(dir);
-      if (createdState) {
-        assertPhysical(parent);
-        try { fs.rmdirSync(state); } catch (error) {
-          if (!['ENOTEMPTY', 'EEXIST'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
-        }
-      }
       console.log(`[e2e-vite-cache] retired entries=${entries.length} bytes=${bytes} path=${dir}`);
     },
   };
@@ -225,7 +217,7 @@ export async function startE2EViteServer(options: E2EViteServerOptions = {}): Pr
         watch: null,
         // Proxy every request to the compiled server. Its production owner serves
         // and authenticates the built HTML/assets; Vite applies no source transforms.
-        ...(compiled ? { proxy: { '/': { target: `http://127.0.0.1:${apiPort}`, changeOrigin: false, ws: false } } } : {}),
+        ...(compiled ? { proxy: { '/': { target: `http://127.0.0.1:${apiPort}`, changeOrigin: false, ws: false, configure: configureProfileProxyCancellation } } } : {}),
       },
     });
     await server.listen();

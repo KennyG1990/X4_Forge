@@ -147,6 +147,117 @@ function disconnected(id: string, note: string): ForgeSurfaceProjection {
   return { id, status: 'disconnected', note };
 }
 
+const XML_REFERENCE_FOCUS_SCHEMA: ForgeJsonSchema = {
+  type: 'object',
+  properties: {
+    origin: { type: 'string', enum: ['project', 'reference'] },
+    path: { type: 'string', maxLength: 1024, description: 'Safe relative XML path in the selected origin.' },
+    line: { type: 'integer', description: 'Optional positive one-based source line.' },
+    column: { type: 'integer', description: 'Optional positive one-based source column.' },
+  },
+  required: ['origin', 'path'],
+  additionalProperties: false,
+};
+const XML_REFERENCE_OPTIONS: Readonly<Record<string, ForgeJsonSchema>> = {
+  focus: XML_REFERENCE_FOCUS_SCHEMA,
+  maxDepth: { type: 'integer', description: 'Traversal depth from 0 to 6; default 2.' },
+  maxNodes: { type: 'integer', description: 'Neighborhood node limit from 1 to 200; default 80.' },
+  maxEdges: { type: 'integer', description: 'Neighborhood edge limit from 1 to 1000; default 300.' },
+  includeSource: { type: 'boolean', description: 'Include the bounded authored source preview for the focus file.' },
+};
+const XML_REFERENCE_FILE_SCHEMA = objectOutput({
+  id: { type: 'string' }, origin: { type: 'string', enum: ['project', 'reference'] }, path: { type: 'string' },
+  sha256: { type: 'string' }, locationKind: { type: 'string', enum: ['authored', 'effective'] },
+  complete: { type: 'boolean' }, available: { type: 'boolean' }, depth: { type: 'integer' },
+  sourcePaths: { type: 'array', items: { type: 'string' } }, reason: { type: 'string' },
+}, ['id', 'origin', 'path', 'sha256', 'locationKind', 'complete', 'available']);
+const XML_REFERENCE_LOCATION_SCHEMA = objectOutput({
+  ...XML_REFERENCE_FOCUS_SCHEMA.properties,
+  kind: { type: 'string', enum: ['authored', 'effective'] },
+}, ['origin', 'path', 'kind']);
+
+const PERFORMANCE_NULLABLE_NUMBER: ForgeJsonSchema = { type: ['number', 'null'] };
+const performanceNumbers = (fields: readonly string[], nullable = false): Record<string, ForgeJsonSchema> =>
+  Object.fromEntries(fields.map(field => [field, nullable ? PERFORMANCE_NULLABLE_NUMBER : { type: 'number' }]));
+const PERFORMANCE_PRODUCER_SCHEMA = objectOutput({
+  component: { type: 'string', enum: ['backend', 'extension-host', 'webview'] },
+  scope: { type: 'string', enum: ['owned-process', 'shared-process', 'webview'] },
+  pid: PERFORMANCE_NULLABLE_NUMBER, instanceId: { type: ['string', 'null'] },
+}, ['component', 'scope', 'pid', 'instanceId']);
+const PERFORMANCE_RESOURCE_FIELDS = ['atUnixMs', 'elapsedMs', 'cpuUserMicros', 'cpuSystemMicros', 'cpuOneCorePercent', 'cpuHostPercent', 'logicalCpuCount', 'rssBytes', 'heapUsedBytes', 'heapTotalBytes', 'externalBytes', 'arrayBuffersBytes', 'uptimeSeconds', 'eventLoopUtilization', 'eventLoopDelayP50Ms', 'eventLoopDelayP95Ms', 'eventLoopDelayMaxMs', 'fps', 'frameIntervalMs', 'longTaskDurationMs', 'jsHeapUsedBytes'] as const;
+const PERFORMANCE_DROP_FIELDS = ['disabled', 'disposed', 'invalidOperations', 'invalidResources', 'operationCapacity', 'slowOverwrites', 'resourceOverwrites', 'duplicateFinishes', 'recorderErrors', 'snapshotOmissions', 'staleFinishes'] as const;
+const PERFORMANCE_LIMIT_FIELDS = ['maxOperations', 'maxSlowOperations', 'maxResources', 'maxSnapshotBytes', 'maxNameChars', 'maxCorrelationChars', 'slowOperationMs'] as const;
+const PERFORMANCE_OVERHEAD_FIELDS = ['recordCalls', 'snapshotCalls', 'clockFailures'] as const;
+const PERFORMANCE_CACHE_FIELDS = ['hits', 'misses', 'bypasses', 'evictions', 'entries', 'accountedBytes'] as const;
+const PERFORMANCE_CACHE_SCHEMA = objectOutput(performanceNumbers(PERFORMANCE_CACHE_FIELDS), PERFORMANCE_CACHE_FIELDS);
+const PERFORMANCE_OPERATION_SCHEMA = objectOutput({
+  name: { type: 'string', maxLength: 160 },
+  ...performanceNumbers(['count', 'totalMs', 'minMs', 'maxMs', 'meanMs']),
+  ...performanceNumbers(['p50Ms', 'p95Ms', 'p99Ms'], true),
+  outcomes: objectOutput(performanceNumbers(['ok', 'error', 'cancelled', 'aborted', 'superseded']), ['ok', 'error', 'cancelled', 'aborted', 'superseded']),
+  quantileMethod: { type: 'string', enum: ['fixed-histogram-upper-bound'] },
+  histogram: objectOutput({ upperBoundsMs: { type: 'array', items: { type: 'number' } }, counts: { type: 'array', items: { type: 'number' } } }, ['upperBoundsMs', 'counts']),
+}, ['name', 'count', 'outcomes', 'totalMs', 'minMs', 'maxMs', 'meanMs', 'p50Ms', 'p95Ms', 'p99Ms', 'quantileMethod', 'histogram']);
+const PERFORMANCE_SNAPSHOT_SCHEMA = objectOutput({
+  schemaVersion: { type: 'string', enum: ['forge.performance.v1'] }, producer: PERFORMANCE_PRODUCER_SCHEMA,
+  enabled: { type: 'boolean' }, disposed: { type: 'boolean' },
+  startedAtUnixMs: PERFORMANCE_NULLABLE_NUMBER, capturedAtUnixMs: PERFORMANCE_NULLABLE_NUMBER,
+  operations: { type: 'array', items: PERFORMANCE_OPERATION_SCHEMA },
+  recentSlowOperations: { type: 'array', items: objectOutput({
+    name: { type: 'string', maxLength: 160 }, durationMs: { type: 'number' },
+    outcome: { type: 'string', enum: ['ok', 'error', 'cancelled', 'aborted', 'superseded'] },
+    correlationId: { type: 'string', maxLength: 80 }, atUnixMs: PERFORMANCE_NULLABLE_NUMBER,
+  }, ['name', 'durationMs', 'outcome', 'atUnixMs']) },
+  resources: { type: 'array', items: objectOutput(performanceNumbers(PERFORMANCE_RESOURCE_FIELDS, true), PERFORMANCE_RESOURCE_FIELDS) },
+  drops: objectOutput(performanceNumbers(PERFORMANCE_DROP_FIELDS), PERFORMANCE_DROP_FIELDS),
+  limits: objectOutput(performanceNumbers(PERFORMANCE_LIMIT_FIELDS), PERFORMANCE_LIMIT_FIELDS),
+  selfOverhead: objectOutput({ ...performanceNumbers(PERFORMANCE_OVERHEAD_FIELDS), ...performanceNumbers(['recordMs', 'snapshotMs'], true),
+    snapshotScope: { type: 'string', enum: ['completed-prior-snapshots-including-serialization-and-freeze'] },
+  }, [...PERFORMANCE_OVERHEAD_FIELDS, 'recordMs', 'snapshotMs', 'snapshotScope']),
+  coverage: objectOutput({
+    operations: { type: 'string', enum: ['instrumented-boundaries-only'] },
+    cpuAttribution: { type: 'string', enum: ['process-interval-not-exclusive-operation'] },
+    memoryAttribution: { type: 'string', enum: ['process-or-host-estimates-not-function-allocations'] },
+    quantiles: { type: 'string', enum: ['histogram-estimates'] },
+    resourceFields: { type: 'string', enum: ['null-means-unavailable-or-unsampled'] },
+    functionProfiles: { type: 'string', enum: ['separate-bounded-producer'] },
+    limitsAre: { type: 'string', enum: ['retained-state-not-os-quota'] },
+  }, ['operations', 'cpuAttribution', 'memoryAttribution', 'quantiles', 'resourceFields', 'functionProfiles', 'limitsAre']),
+}, ['schemaVersion', 'producer', 'enabled', 'disposed', 'startedAtUnixMs', 'capturedAtUnixMs', 'operations', 'recentSlowOperations', 'resources', 'drops', 'limits', 'selfOverhead', 'coverage']);
+const PERFORMANCE_CONTROL_SCHEMA = objectOutput({
+  ...Object.fromEntries(['disposed', 'collectionActive', 'profilingEnabled', 'profileActive', 'eventLoopDelayMonitoring', 'profileCleanupUnconfirmed', 'collectionCleanupUnconfirmed', 'abortListenerCleanupUnconfirmed'].map(field => [field, { type: 'boolean' } as ForgeJsonSchema])),
+  ...performanceNumbers(['collectionStartedAtUnixMs', 'collectionExpiresAtUnixMs', 'collectionStopDelayMs', 'profileCooldownRemainingMs'], true),
+  ...performanceNumbers(['intervalMs', 'resourceSamples', 'resourceErrors', 'throttledSamples', 'counterResets', 'sampleOverheadMs', 'profileCapturesStarted', 'profileCapturesSucceeded', 'profileCapturesFailed', 'profileRateLimited', 'ownedTimerCount', 'failedTimerCount']),
+  lastResourceError: { type: ['string', 'null'], enum: ['unavailable', 'producer-identity-changed', 'clock-unavailable', null] },
+  coverage: objectOutput({
+    backendPid: { type: 'number' }, extensionHost: { type: 'string', enum: ['not-this-producer'] },
+    webview: { type: 'string', enum: ['not-this-producer'] }, childProcesses: { type: 'string', enum: ['excluded'] },
+    memory: { type: 'string', enum: ['process-not-function'] }, cpu: { type: 'string', enum: ['process-interval'] },
+  }, ['backendPid', 'extensionHost', 'webview', 'childProcesses', 'memory', 'cpu']),
+}, ['disposed', 'collectionActive', 'profilingEnabled', 'profileActive', 'collectionStartedAtUnixMs', 'collectionExpiresAtUnixMs', 'intervalMs', 'resourceSamples', 'resourceErrors', 'throttledSamples', 'counterResets', 'sampleOverheadMs', 'lastResourceError', 'eventLoopDelayMonitoring', 'profileCleanupUnconfirmed', 'collectionCleanupUnconfirmed', 'abortListenerCleanupUnconfirmed', 'ownedTimerCount', 'failedTimerCount', 'collectionStopDelayMs', 'profileCapturesStarted', 'profileCapturesSucceeded', 'profileCapturesFailed', 'profileRateLimited', 'profileCooldownRemainingMs', 'coverage']);
+const PERFORMANCE_PROFILE_FAILURE_SCHEMA = objectOutput({
+  ok: { type: 'boolean', enum: [false] },
+  code: { type: 'string', enum: ['PROFILE_DISABLED', 'PROFILE_BUSY', 'PROFILE_DISPOSED', 'PROFILE_INPUT_INVALID', 'PROFILE_ABORTED', 'PROFILE_FAILED', 'PROFILE_CLEANUP_UNCONFIRMED', 'PROFILE_RATE_LIMITED'] },
+  error: { type: 'string' },
+}, ['ok', 'code', 'error']);
+const PERFORMANCE_PROFILE_SCHEMA = objectOutput({
+  ok: { type: 'boolean', enum: [true] }, schemaVersion: { type: 'string', enum: ['forge.cpu-profile.v1'] }, producer: PERFORMANCE_PRODUCER_SCHEMA,
+  requestedDurationMs: { type: 'number' }, samplingIntervalMicros: { type: 'number' }, scannedSampleCount: { type: 'number' },
+  ...performanceNumbers(['observedDurationMs', 'delayedStopMs', 'profileDurationMicros', 'sampleCount'], true),
+  functions: { type: 'array', items: objectOutput({
+    name: { type: 'string' }, module: { type: 'string', description: 'Bounded relative module or runtime label, never an absolute source path.' },
+    line: PERFORMANCE_NULLABLE_NUMBER, column: PERFORMANCE_NULLABLE_NUMBER, selfSamples: { type: 'number' }, selfSampleMicros: PERFORMANCE_NULLABLE_NUMBER,
+  }, ['name', 'module', 'line', 'column', 'selfSamples', 'selfSampleMicros']) },
+  omitted: objectOutput(performanceNumbers(['nodes', 'samples', 'functions', 'unknownNodeSamples', 'invalidNodes', 'invalidDeltas', 'redactedLabels']), ['nodes', 'samples', 'functions', 'unknownNodeSamples', 'invalidNodes', 'invalidDeltas', 'redactedLabels']),
+  coverage: objectOutput({
+    process: { type: 'string', enum: ['current-backend-only'] }, attribution: { type: 'string', enum: ['sampled-self-time-not-exact-operation-cpu'] },
+    rawProfile: { type: 'string', enum: ['not-returned-or-persisted'] }, timer: { type: 'string', enum: ['event-loop-blockage-can-delay-stop'] },
+    resourceLimit: { type: 'string', enum: ['no-os-heap-quota'] }, samples: { type: 'string', enum: ['available', 'unavailable'] },
+  }, ['process', 'attribution', 'rawProfile', 'timer', 'resourceLimit', 'samples']),
+}, ['ok', 'schemaVersion', 'producer', 'requestedDurationMs', 'observedDurationMs', 'delayedStopMs', 'samplingIntervalMicros', 'profileDurationMicros', 'sampleCount', 'scannedSampleCount', 'functions', 'omitted', 'coverage']);
+const PERFORMANCE_COLLECTION_SUCCESS_SCHEMA = objectOutput({ ok: { type: 'boolean', enum: [true] }, control: PERFORMANCE_CONTROL_SCHEMA, backend: PERFORMANCE_SNAPSHOT_SCHEMA }, ['ok', 'control', 'backend']);
+const PERFORMANCE_COLLECTION_FAILURE_SCHEMA = objectOutput({ ok: { type: 'boolean', enum: [false] }, code: { type: 'string', enum: ['PERFORMANCE_DISPOSED', 'PERFORMANCE_COLLECTION_BUSY', 'PERFORMANCE_COLLECTION_REFUSED', 'PROJECT_INPUT_INVALID', 'PERFORMANCE_COLLECTION_FAILED'] }, error: { type: 'string' } }, ['ok', 'code', 'error']);
+
 export const FORGE_CAPABILITIES = [
   {
     id: 'expression.check',
@@ -336,6 +447,65 @@ export const FORGE_CAPABILITIES = [
     },
   },
   {
+    id: 'performance.collect',
+    version: 1,
+    title: 'Start bounded backend performance collection',
+    description: 'Start an expiring in-memory collection for the owned Forge backend. This controls telemetry only; it does not run validation, execute commands or change workspace/configuration state.',
+    inputSchema: { type: 'object', properties: {
+      durationMs: { type: 'integer', description: 'Collection duration from 1000 to 900000 milliseconds; retained resource history stays bounded.' },
+      intervalMs: { type: 'integer', description: 'Resource interval from 1000 to 60000 milliseconds.' },
+      eventLoopDelay: { type: 'boolean', description: 'Opt in to event-loop delay monitoring for this bounded collection.' },
+    }, additionalProperties: false },
+    outputSchema: { ...objectOutput({ ...PERFORMANCE_COLLECTION_SUCCESS_SCHEMA.properties, ...PERFORMANCE_COLLECTION_FAILURE_SCHEMA.properties, ok: { type: 'boolean' } }, ['ok']), anyOf: [PERFORMANCE_COLLECTION_SUCCESS_SCHEMA, PERFORMANCE_COLLECTION_FAILURE_SCHEMA] },
+    context: { workspace: 'none', profile: 'none' },
+    access: { public: false, studioSession: true, agentScopes: ['read', 'write', 'deploy'] },
+    effects: ['read', 'analyze'], confirmation: 'none',
+    apiBindings: [{ method: 'POST', path: '/api/agent/performance/collection', inputLocation: 'body', role: 'primary' }],
+    surfaces: { ui: [
+      connected('performance-panel', 'src/components/PerformancePanel.tsx::/api/agent/performance/collection'),
+      disconnected('vscode-extension-performance-collection', 'No dedicated native extension control or host producer is connected; use the app Performance panel. Installed native-host qualification remains pending.'),
+    ], cli: [], mcp: [partial('start_forge_performance_capture', 'vscode-extension/mcp/x4forge-mcp.cjs::name: "start_forge_performance_capture"', 'Starts backend-only collection for at most 15 minutes with bounded retention. Returns bounded summaries; resource/operation attribution and unsupported producer coverage remain explicit.')], agentApi: true, builtInHarness: [], externalAgents: [connected('agent-api', 'server.ts::app.post("/api/agent/performance/collection"')] },
+  },
+  {
+    id: 'performance.profile',
+    version: 1,
+    title: 'Capture bounded backend function samples',
+    description: 'Sample functions in the current Forge backend through its in-process inspector. No debugger port, raw profile, source content or persistent profile file is exposed. Native host and webview function profiling are outside this producer.',
+    inputSchema: { type: 'object', properties: {
+      durationMs: { type: 'integer', description: 'Requested duration from 100 to 5000 milliseconds; event-loop blockage can delay stopping.' },
+      samplingIntervalMicros: { type: 'integer', description: 'Sampling interval from 1000 to 100000 microseconds.' },
+      maxFunctions: { type: 'integer', description: 'Maximum returned function summaries from 1 to 64.' },
+    }, additionalProperties: false },
+    outputSchema: { ...objectOutput({ ...PERFORMANCE_PROFILE_SCHEMA.properties, ...PERFORMANCE_PROFILE_FAILURE_SCHEMA.properties, ok: { type: 'boolean' } }, ['ok']), anyOf: [PERFORMANCE_PROFILE_SCHEMA, PERFORMANCE_PROFILE_FAILURE_SCHEMA] },
+    context: { workspace: 'none', profile: 'none' },
+    access: { public: false, studioSession: true, agentScopes: ['read', 'write', 'deploy'] },
+    effects: ['read', 'analyze'], confirmation: 'none',
+    apiBindings: [{ method: 'POST', path: '/api/agent/performance/profile', inputLocation: 'body', role: 'primary' }],
+    surfaces: { ui: [
+      connected('performance-panel', 'src/components/PerformancePanel.tsx::/api/agent/performance/profile'),
+      disconnected('vscode-extension-performance-profile', 'No dedicated native extension control or host producer is connected; use the app Performance panel. Installed native-host qualification remains pending.'),
+    ], cli: [], mcp: [partial('profile_forge_backend', 'vscode-extension/mcp/x4forge-mcp.cjs::name: "profile_forge_backend"', 'Samples the current backend only, for at most 2000 milliseconds and 32 function summaries. Keeps omission/delay/coverage evidence; no raw profile or private source paths.')], agentApi: true, builtInHarness: [], externalAgents: [connected('agent-api', 'server.ts::app.post("/api/agent/performance/profile"')] },
+  },
+  {
+    id: 'performance.read',
+    version: 1,
+    title: 'Read Forge performance evidence',
+    description: 'Read bounded performance snapshots and existing cache/status counters without starting collection, profiling, validation, scans or commands. Unknown and unsupported measurements remain explicit.',
+    inputSchema: EMPTY_INPUT,
+    outputSchema: objectOutput({ ok: { type: 'boolean', enum: [true] }, schemaVersion: { type: 'string', enum: ['forge.performance.report.v1'] }, backend: PERFORMANCE_SNAPSHOT_SCHEMA, control: PERFORMANCE_CONTROL_SCHEMA,
+      caches: objectOutput({ projectValidation: objectOutput({ ...PERFORMANCE_CACHE_SCHEMA.properties, lua: PERFORMANCE_CACHE_SCHEMA, effectiveSchema: PERFORMANCE_CACHE_SCHEMA }, [...PERFORMANCE_CACHE_FIELDS, 'lua', 'effectiveSchema']) }, ['projectValidation']),
+      coverage: objectOutput({ native: { type: 'string', enum: ['unavailable-not-wired'] }, webview: { type: 'string', enum: ['local-current-panel-only'] }, profiling: { type: 'string', enum: ['backend-only-explicit-control'] }, cacheBytes: { type: 'string', enum: ['accounted-not-exact-heap'] }, operations: { type: 'string', enum: ['instrumented-boundaries-only'] } }, ['native', 'webview', 'profiling', 'cacheBytes', 'operations']),
+    }, ['ok', 'schemaVersion', 'backend', 'control', 'caches', 'coverage']),
+    context: { workspace: 'none', profile: 'none' },
+    access: { public: false, studioSession: true, agentScopes: ['read', 'write', 'deploy'] },
+    effects: ['read', 'analyze'], confirmation: 'none',
+    apiBindings: [{ method: 'GET', path: '/api/agent/performance', inputLocation: 'none', role: 'primary' }],
+    surfaces: { ui: [
+      connected('performance-panel', 'src/components/PerformancePanel.tsx::/api/agent/performance'),
+      disconnected('vscode-extension-performance-read', 'No dedicated native extension control or host producer is connected; use the app Performance panel. Installed native-host qualification remains pending.'),
+    ], cli: [], mcp: [partial('get_forge_performance', 'vscode-extension/mcp/x4forge-mcp.cjs::name: "get_forge_performance"', 'Returns backend summaries capped at 32 operations, 16 recent slow records and 20 latest resource samples, with totals and omission flags. Preserves unknown/unsupported producer and cache coverage; does not start a capture.')], agentApi: true, builtInHarness: [], externalAgents: [connected('agent-api', 'server.ts::app.get("/api/agent/performance"')] },
+  },
+  {
     id: 'project.validate',
     version: 1,
     title: 'Validate an X4 extension project',
@@ -388,6 +558,78 @@ export const FORGE_CAPABILITIES = [
       agentApi: true,
       builtInHarness: [disconnected('project-validation-referee', 'The architect has local vetting but no canonical capability dispatcher binding.')],
       externalAgents: [connected('agent-api', 'server.ts::app.post("/api/agent/project/validate/check"')],
+    },
+  },
+  {
+    id: 'project.xml.references',
+    version: 1,
+    title: 'Analyze XML file references',
+    description: 'Read a bounded XML file-reference map from inline workspace/project documents or the explicitly addressed saved workspace, using the configured game corpus and shared schema knowledge. Inline workspace and project are mutually exclusive; neither selects the addressed saved workspace. This is source navigation, not runtime loading or validation proof.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...XML_REFERENCE_OPTIONS,
+        workspace: { type: 'object', additionalProperties: true },
+        project: { type: 'object', additionalProperties: true },
+      },
+      anyOf: [
+        { type: 'object', properties: { ...XML_REFERENCE_OPTIONS, workspace: { type: 'object', additionalProperties: true } }, required: ['workspace'], additionalProperties: false },
+        { type: 'object', properties: { ...XML_REFERENCE_OPTIONS, project: { type: 'object', additionalProperties: true } }, required: ['project'], additionalProperties: false },
+        { type: 'object', properties: XML_REFERENCE_OPTIONS, additionalProperties: false },
+      ],
+      additionalProperties: false,
+    },
+    outputSchema: objectOutput({
+      ok: { type: 'boolean' }, schemaVersion: { type: 'string', enum: ['forge.xml-reference-map.v1'] }, signature: { type: 'string' },
+      files: { type: 'array', items: XML_REFERENCE_FILE_SCHEMA },
+      nodes: { type: 'array', items: XML_REFERENCE_FILE_SCHEMA },
+      edges: { type: 'array', items: objectOutput({
+        id: { type: 'string' }, sourceId: { type: 'string' }, targetId: { type: 'string' },
+        targetIds: { type: 'array', items: { type: 'string' } },
+        kind: { type: 'string', enum: ['macro', 'component', 'ware', 'bullet', 'index-file', 'local-connection', 'unknown'] },
+        symbol: { type: 'string' }, status: { type: 'string', enum: ['resolved', 'missing', 'ambiguous', 'dynamic', 'unsupported', 'incomplete'] },
+        reason: { type: 'string' }, location: XML_REFERENCE_LOCATION_SCHEMA,
+        candidates: { type: 'array', items: objectOutput({
+          fileId: { type: 'string' }, origin: { type: 'string', enum: ['project', 'reference'] }, path: { type: 'string' },
+        }, ['fileId', 'origin', 'path']) },
+      }, ['id', 'sourceId', 'targetIds', 'kind', 'symbol', 'status', 'location']) },
+      coverage: objectOutput({
+        scope: { type: 'string' }, incomingScope: { type: 'string' }, scannedFiles: { type: 'integer' },
+        scannedProjectFiles: { type: 'integer' }, scannedReferenceFiles: { type: 'integer' }, knownProjectFiles: { type: 'integer' },
+        truncated: { type: 'boolean' }, reasons: { type: 'array', items: { type: 'string' } },
+        unsupported: { type: 'integer' }, incomplete: { type: 'integer' },
+        limits: objectOutput({
+          maxDepth: { type: 'integer' }, maxNodes: { type: 'integer' }, maxEdges: { type: 'integer' }, maxDocuments: { type: 'integer' },
+          maxDocumentBytes: { type: 'integer' }, maxTotalBytes: { type: 'integer' }, maxPreviewChars: { type: 'integer' }, maxResponseBytes: { type: 'integer' },
+        }, ['maxDepth', 'maxNodes', 'maxEdges', 'maxDocuments', 'maxDocumentBytes', 'maxTotalBytes', 'maxPreviewChars', 'maxResponseBytes']),
+      }, ['scope', 'incomingScope', 'scannedFiles', 'scannedProjectFiles', 'scannedReferenceFiles', 'knownProjectFiles', 'truncated', 'reasons', 'unsupported', 'incomplete', 'limits']),
+      preview: objectOutput({
+        fileId: { type: 'string' }, origin: { type: 'string', enum: ['project', 'reference'] }, path: { type: 'string' },
+        sha256: { type: 'string' }, content: { type: 'string' }, startLine: { type: 'integer' }, truncated: { type: 'boolean' },
+        locationKind: { type: 'string', enum: ['authored'] }, line: { type: 'integer' }, column: { type: 'integer' },
+      }, ['fileId', 'origin', 'path', 'sha256', 'content', 'startLine', 'truncated', 'locationKind']),
+      context: objectOutput({
+        inputMode: { type: 'string' }, inputFingerprint: { type: 'string' }, workspaceId: { type: 'string' },
+        corpusSignature: { type: 'string' }, corpusGeneration: { type: 'string' }, usedSourceSignature: { type: 'string' }, nativeSourceFolder: { type: 'string' },
+      }, []),
+    }, ['ok', 'schemaVersion', 'signature', 'files', 'nodes', 'edges', 'coverage']),
+    context: { workspace: 'optional', profile: 'none' },
+    access: { public: false, studioSession: true, agentScopes: ['read', 'write', 'deploy'] },
+    effects: ['read', 'analyze'],
+    confirmation: 'none',
+    apiBindings: [
+      { method: 'POST', path: '/api/agent/project/xml-references', inputLocation: 'body', role: 'primary' },
+    ],
+    surfaces: {
+      ui: [
+        connected('xml-reference-view', 'src/components/XmlReferenceView.tsx::/api/agent/project/xml-references'),
+        disconnected('vscode-extension-xml-reference-view', 'The extension has no dedicated XML-reference command. Installed native-host qualification remains pending.'),
+      ],
+      cli: [],
+      mcp: [partial('get_xml_references', 'vscode-extension/mcp/x4forge-mcp.cjs::name: "get_xml_references"', 'Requires current capability discovery and an explicitly bound saved workspace plus focus. Omits source preview and source/native paths; caps depth at 2, nodes at 60, edges at 120, file metadata at 256 and target/candidate IDs per edge at 16. Reports original totals and projection truncation; rejects projections above 512 KiB UTF-8.')],
+      agentApi: true,
+      builtInHarness: [],
+      externalAgents: [connected('agent-api', 'server.ts::app.post("/api/agent/project/xml-references"')],
     },
   },
   {

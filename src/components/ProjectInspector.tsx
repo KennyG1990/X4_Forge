@@ -31,6 +31,7 @@ import {
   type ExternalApiEntry,
 } from '../lib/externalApiRegistry';
 import ModDependencyView from './ModDependencyView';
+import XmlReferenceView from './XmlReferenceView';
 
 interface ApiRegistrySources {
   builtin: number; dataDir: number; folder: number; endpoint: number;
@@ -77,9 +78,11 @@ const KIND_META: Record<ProjectFileKind, { label: string; icon: React.ComponentT
 
 interface ProjectInspectorProps {
   workspace: ModWorkspace;
+  schemaConfigVersion?: number;
 }
 
-export default function ProjectInspector({ workspace }: ProjectInspectorProps) {
+export default function ProjectInspector({ workspace, schemaConfigVersion = 0 }: ProjectInspectorProps) {
+  const [view, setView] = useState<'overview' | 'xml-references'>('overview');
   const project = useMemo(() => projectFromWorkspace(workspace), [workspace]);
   const structure = useMemo(() => validateProjectStructure(project), [project]);
   const cueIndex = useMemo(() => indexCueReferences(project), [project]);
@@ -123,6 +126,26 @@ export default function ProjectInspector({ workspace }: ProjectInspectorProps) {
         <span className="text-[11px] text-slate-500 font-mono">{project.name} · {project.files.length} files</span>
       </div>
 
+      <div role="tablist" aria-label="Project views" className="flex gap-2 border-b border-white/10 pb-2">
+        {(['overview', 'xml-references'] as const).map(tab => <button key={tab} type="button" role="tab"
+          id={`project-tab-${tab}`} aria-controls={`project-panel-${tab}`} aria-selected={view === tab}
+          tabIndex={view === tab ? 0 : -1}
+          onKeyDown={event => {
+            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+            event.preventDefault();
+            const next = event.key === 'Home' ? 'overview' : event.key === 'End' ? 'xml-references'
+              : tab === 'overview' ? 'xml-references' : 'overview';
+            setView(next);
+            event.currentTarget.parentElement?.querySelector<HTMLButtonElement>(`#project-tab-${next}`)?.focus();
+          }}
+          onClick={() => setView(tab)} className={`rounded border px-3 py-1.5 text-xs ${view === tab
+            ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200' : 'border-white/10 text-slate-400 hover:text-white'}`}>
+          {tab === 'overview' ? 'Overview' : 'XML References'}
+        </button>)}
+      </div>
+      {view === 'xml-references' ? <div role="tabpanel" id="project-panel-xml-references" aria-labelledby="project-tab-xml-references">
+        <XmlReferenceView workspace={workspace} schemaConfigVersion={schemaConfigVersion} />
+      </div> : <div role="tabpanel" id="project-panel-overview" aria-labelledby="project-tab-overview" className="space-y-4">
       {/* status banner */}
       <div
         data-testid="project-status"
@@ -274,6 +297,7 @@ export default function ProjectInspector({ workspace }: ProjectInspectorProps) {
       <div className="rounded border border-white/10 bg-black/20">
         <ModDependencyView />
       </div>
+      </div>}
     </div>
   );
 }

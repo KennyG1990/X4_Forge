@@ -2910,7 +2910,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
               setWorkspace={setWorkspace}
             />
           ) : workspaceView === 'project' ? (
-            <ProjectInspector workspace={workspace} />
+            <ProjectInspector workspace={workspace} schemaConfigVersion={schemaConfigVersion} />
           ) : workspaceView === 'galaxy' ? (
             <GalaxyMapView />
           ) : (

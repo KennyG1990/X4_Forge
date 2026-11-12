@@ -213,7 +213,7 @@ export class DestructiveRecoveryStore {
   }
 
   private newId(kind: RecoveryKind): string {
-    return `${kind}-${this.now().toString(36)}-${crypto.randomBytes(8).toString('hex')}`;
+    return `${kind}-${this.now().toString(16)}-${crypto.randomBytes(8).toString('hex')}`;
   }
 
   private entryDir(id: string): string {

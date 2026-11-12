@@ -22,7 +22,7 @@ test('Agent API Bridge renders the live canonical capability contract', async ({
   const banner = page.getByTestId('agent-capability-contract');
   await expect(banner).toHaveAttribute('data-contract-source', 'live');
   await expect(banner).toHaveAttribute('data-contract-version', 'forge.capability.v1');
-  await expect(banner).toHaveAttribute('data-capability-count', '13');
+  await expect(banner).toHaveAttribute('data-capability-count', '17');
 
   const contract = await page.evaluate(async () => {
     const response = await fetch('/api/agent/schema');
@@ -30,7 +30,7 @@ test('Agent API Bridge renders the live canonical capability contract', async ({
     return schema.capability_contract;
   });
   expect(contract.contractHash).toMatch(/^[a-f0-9]{64}$/);
-  expect(new Set(contract.capabilities.map((capability: { id: string }) => capability.id)).size).toBe(13);
+  expect(new Set(contract.capabilities.map((capability: { id: string }) => capability.id)).size).toBe(17);
   await expect(banner).toContainText(contract.contractHash.slice(0, 12));
   await expect(banner).toContainText('LIVE CONTRACT');
   await page.screenshot({ path: 'test-results/capability-contract-live.png', fullPage: true });
@@ -49,7 +49,7 @@ test('Agent API Bridge labels old-server discovery as a local catalog with unkno
   await expect(banner).toHaveAttribute('data-contract-source', 'legacy');
   await expect(banner).toHaveAttribute('data-catalog-scope', 'local');
   await expect(banner).toHaveAttribute('data-contract-version', 'forge.capability.v1');
-  await expect(banner).toHaveAttribute('data-capability-count', '13');
+  await expect(banner).toHaveAttribute('data-capability-count', '17');
   await expect(banner).toContainText('Server capabilities unknown');
   await expect(banner).toContainText('LEGACY SERVER');
 });
@@ -99,6 +99,10 @@ test('Agent Keys guides an exact contract-only key and proves its effective subs
     'workspace.compile@2',
     'workspace.read@2',
     'runtime.debug.read@1',
+    'performance.collect@1',
+    'performance.profile@1',
+    'performance.read@1',
+    'project.xml.references@1',
   ]) {
     await page.getByTestId(`agent-key-capability-${identity}`).uncheck();
   }
@@ -137,6 +141,29 @@ test('Agent Keys guides an exact contract-only key and proves its effective subs
     allowedEffects: ['read', 'analyze', 'audit-write', 'audit-retention-delete'],
   });
   expect(row.capabilityConstraint).toEqual(effectiveBody.constraint);
+  for (const [method, path, capabilityIdentity, data] of [
+    ['GET', '/api/agent/performance', 'performance.read@1', undefined],
+    ['POST', '/api/agent/performance/collection', 'performance.collect@1', { durationMs: 1000 }],
+    ['POST', '/api/agent/performance/profile', 'performance.profile@1', { durationMs: 100, maxFunctions: 1 }],
+    ['POST', '/api/agent/project/xml-references', 'project.xml.references@1',
+      { maxDepth: 0, maxNodes: 1, maxEdges: 1, includeSource: false }],
+  ] as const) {
+    const denied = await page.request.fetch(path, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'x-workspace-id': row.workspaceId,
+      },
+      data,
+    });
+    expect(denied.status()).toBe(403);
+    expect(await denied.json()).toMatchObject({
+      code: 'insufficient_scope',
+      authorityCode: 'CAPABILITY_NOT_GRANTED',
+      capabilityIdentity,
+      route: `${method} ${path}`,
+    });
+  }
   await expect(page.getByTestId(`agent-key-contract-${label}`)).toContainText('contract-only · 1 cap · 4 effects');
   const healthCard = page.getByTestId('health-card');
   if (await healthCard.isVisible()) await page.getByTestId('health-card-dismiss').click();

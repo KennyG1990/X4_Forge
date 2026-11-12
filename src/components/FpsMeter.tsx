@@ -18,6 +18,7 @@
  * Pointer-events-none so it never intercepts clicks; high z-index so it stays visible.
  */
 import React, { useEffect, useRef, useState } from 'react';
+import { isWebviewPerformanceCollecting, recordWebviewFrame, recordWebviewLongTask, setWebviewPerformanceSupport } from '../lib/webviewPerformance';
 
 const LONGTASK_WINDOW_MS = 2000; // how long a longtask stays flagged
 
@@ -31,11 +32,35 @@ export default function FpsMeter() {
   const worstLongtask = useRef<number>(0);
 
   useEffect(() => {
+    let disposed = false;
+    const visibility = (): 'visible' | 'hidden' | 'unknown' => document.visibilityState === 'visible' ? 'visible' : document.visibilityState === 'hidden' ? 'hidden' : 'unknown';
+    let frameWindowVisible = visibility() === 'visible';
+    let visibleSince = frameWindowVisible ? performance.now() : Infinity;
+    const visibilityChanged = () => {
+      frameWindowVisible = false;
+      const current = visibility();
+      visibleSince = current === 'visible' ? performance.now() : Infinity;
+      setWebviewPerformanceSupport({ visibility: current, frames: current === 'visible' ? 'observing' : 'paused' });
+    };
+    setWebviewPerformanceSupport({ frames: frameWindowVisible ? 'observing' : 'paused', visibility: visibility(), longTasks: 'unsupported' });
+    document.addEventListener('visibilitychange', visibilityChanged);
     const tick = (now: number) => {
+      if (disposed) return;
       frames.current++;
       const elapsed = now - last.current;
       if (elapsed >= 500) {
         setFps(Math.round((frames.current * 1000) / elapsed));
+        if (isWebviewPerformanceCollecting()) {
+          let jsHeapUsedBytes: number | null = null;
+          try {
+            const heap = (performance as Performance & { memory?: { usedJSHeapSize?: unknown } }).memory?.usedJSHeapSize;
+            if (typeof heap === 'number' && Number.isFinite(heap) && heap >= 0) jsHeapUsedBytes = heap;
+          } catch { /* optional Chromium estimate, never process RSS */ }
+          const visible = frameWindowVisible && visibility() === 'visible';
+          recordWebviewFrame({ fps: visible ? frames.current * 1000 / elapsed : null,
+            frameIntervalMs: visible ? elapsed / frames.current : null, jsHeapUsedBytes, visibility: visibility() });
+        }
+        frameWindowVisible = visibility() === 'visible';
         frames.current = 0;
         last.current = now;
         // Expire the longtask flag once its window has passed.
@@ -55,8 +80,12 @@ export default function FpsMeter() {
       if (typeof PerformanceObserver !== 'undefined'
           && (PerformanceObserver as any).supportedEntryTypes?.includes('longtask')) {
         observer = new PerformanceObserver(list => {
+          if (disposed) return;
           let worst = 0;
-          for (const entry of list.getEntries()) worst = Math.max(worst, entry.duration);
+          for (const entry of list.getEntries()) {
+            worst = Math.max(worst, entry.duration);
+            recordWebviewLongTask(entry.duration, visibility() === 'visible' && entry.startTime >= visibleSince);
+          }
           if (worst > 0) {
             lastLongtaskAt.current = performance.now();
             worstLongtask.current = Math.max(worstLongtask.current, Math.round(worst));
@@ -64,14 +93,18 @@ export default function FpsMeter() {
           }
         });
         observer.observe({ entryTypes: ['longtask'] });
+        setWebviewPerformanceSupport({ longTasks: 'supported' });
       }
     } catch {
       /* longtask observation unsupported — FPS-only overlay */
     }
 
     return () => {
+      disposed = true;
       cancelAnimationFrame(raf.current);
       observer?.disconnect();
+      document.removeEventListener('visibilitychange', visibilityChanged);
+      setWebviewPerformanceSupport({ frames: 'not-attached', visibility: 'unknown', longTasks: 'not-attached', heap: 'not-sampled' });
     };
   }, []);
 

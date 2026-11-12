@@ -723,6 +723,54 @@
       ]
     },
     {
+      "routeKey": "POST /api/agent/performance/collection",
+      "method": "POST",
+      "template": "/api/agent/performance/collection",
+      "owner": "performance.collect",
+      "resourceClass": "process-telemetry",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1performance~1collection",
+      "integrationBatch": "W3B0-internal",
+      "history": "quiet",
+      "capability": {
+        "kind": "canonical",
+        "id": "performance.collect",
+        "version": 1
+      },
+      "semanticClass": "read-analysis-only",
+      "policy": "receipt-exempt",
+      "effects": [
+        "read",
+        "analyze"
+      ],
+      "authorityScopes": [
+        "global"
+      ]
+    },
+    {
+      "routeKey": "POST /api/agent/performance/profile",
+      "method": "POST",
+      "template": "/api/agent/performance/profile",
+      "owner": "performance.profile",
+      "resourceClass": "process-telemetry",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1performance~1profile",
+      "integrationBatch": "W3B0-internal",
+      "history": "quiet",
+      "capability": {
+        "kind": "canonical",
+        "id": "performance.profile",
+        "version": 1
+      },
+      "semanticClass": "read-analysis-only",
+      "policy": "receipt-exempt",
+      "effects": [
+        "read",
+        "analyze"
+      ],
+      "authorityScopes": [
+        "global"
+      ]
+    },
+    {
       "routeKey": "POST /api/agent/probe/preview",
       "method": "POST",
       "template": "/api/agent/probe/preview",
@@ -1062,6 +1110,32 @@
         "analyze",
         "audit-write",
         "audit-retention-delete"
+      ],
+      "authorityScopes": [
+        "global",
+        "profile",
+        "workspace"
+      ]
+    },
+    {
+      "routeKey": "POST /api/agent/project/xml-references",
+      "method": "POST",
+      "template": "/api/agent/project/xml-references",
+      "owner": "project.xml.references",
+      "resourceClass": "inline-or-addressed",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1project~1xml-references",
+      "integrationBatch": "W3B0-internal",
+      "history": "quiet",
+      "capability": {
+        "kind": "canonical",
+        "id": "project.xml.references",
+        "version": 1
+      },
+      "semanticClass": "read-analysis-only",
+      "policy": "receipt-exempt",
+      "effects": [
+        "read",
+        "analyze"
       ],
       "authorityScopes": [
         "global",
@@ -3031,6 +3105,23 @@
       "integrationBatch": "W3B1",
       "semanticClass": "durable-local-mutation",
       "policy": "receipt-required",
+      "effects": [
+        "filesystem-write"
+      ],
+      "authorityScopes": [
+        "global",
+        "profile",
+        "workspace"
+      ]
+    },
+    {
+      "id": "filesystem-writer:src/server/xmlReferenceMap.selftest.ts",
+      "kind": "filesystem-writer",
+      "owner": "runXmlReferenceMapSelftest",
+      "sourceRef": "config/durable-writers.json#/writers/47",
+      "integrationBatch": "W3B0-internal",
+      "semanticClass": "fixture-cache",
+      "policy": "receipt-exempt",
       "effects": [
         "filesystem-write"
       ],

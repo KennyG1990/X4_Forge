@@ -4,6 +4,8 @@ Task: restore the isolated native Dev environment, then qualify and install its 
 Lane: FULL. Owner: existing #20, linked #64.
 Status: PARTIAL overall. Internal staging and candidate qualification are VERIFIED; current native backend/CodeSense and bounded saved-state reads pass. Native pixels/game, full schema-body inspection and a complete post-start tree recheck remain deferred.
 
+Resource-policy reconciliation, 2026-11-12: numeric RAM/CPU admission envelopes below are HISTORICAL and superseded. Current policy has no fixed free-memory minimum or total-CPU percentage gate; observed numbers and failures remain evidence.
+
 ## PLAN — specified before implementation
 
 Reuse the existing private launcher, profile, standalone Workbench, CodeSense and corpus. Preserve live Forge, default editor profiles, AiLive, other checkouts, game/saves and credentials. Restore the Dev workspace source pointer without replacing saved graphs. Qualify a complete app/controller/supervisor/MCP payload before native cutover; a dist-only replacement is insufficient when runtime dependencies differ.
@@ -53,7 +55,7 @@ The existing staged app was moved into the sole candidate rather than copied aga
 - The first candidate E2E adapter used node-e/require without a real CLI script argument. The product correctly refused its validator fingerprint before tests. Node--import preflight plus the actual server CLI entry corrected the adapter; no product/test assertion changed.
 - A fresh cutover preflight found the historical private owner absent and another distinct editor active. Cause is unknown. A reused PID was not acted on. Warm restart became guarded cold restore; the other editor stayed untouched.
 - Formatted CPU telemetry disagreed with aligned direct kernel/PDH readings. Raw ticks/timestamps are retained privately; the25percent threshold stayed unchanged. The reliable primary meter was reconciled before bounded reads, rather than selecting a favorable counter.
--8GiB remains swap/start/heavy admission. After the admitted application starts, bounded lifecycle GETs alone use6GiB, one client,5s timeout and1MiB/body; no scan/validation/check/deploy execution. Heavy work stays held. The schema catalog declared3,419,058B, so only its200headers were accepted; compact status proved actual owner/private roots.
+- HISTORICAL admission, superseded 2026-11-12: 8GiB was swap/start/heavy admission. After the admitted application starts, bounded lifecycle GETs alone use no fixed free-memory minimum, one client,5s timeout and1MiB/body; no scan/validation/check/deploy execution. Heavy work stays held. The schema catalog declared3,419,058B, so only its200headers were accepted; compact status proved actual owner/private roots.
 - Restricted process visibility produced an incorrect disappearance annotation; elevated exact-handle checks corrected it without another restart.
 - Implicit Windows Python decoding corrupted32human-text fields in a copied proof archive. Pristine originals and attachments remained byte-identical. Explicit UTF8 recapture repaired the archive; both frozen drivers were ASCII/token/AST-identical under either decoding, so actual test semantics stayed valid. Failed cleanup refused before removing that output.
 - Automatic review rejected an issue update containing private operational identifiers. A sanitized public code/test summary succeeded; no indirect bypass was used.

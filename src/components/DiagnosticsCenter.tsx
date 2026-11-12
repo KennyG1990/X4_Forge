@@ -4,12 +4,13 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { Brain, PackageCheck, Boxes } from 'lucide-react';
+import { Brain, PackageCheck, Boxes, Activity } from 'lucide-react';
 import { ModWorkspace, PackageDiagnostic } from '../types';
 import { analyzeCueLineage } from '../lib/cueLineage';
 import DiagnosticsHub from './DiagnosticsHub';
 import PackageModDoctor from './PackageModDoctor';
 import type { ValidationDeltaResult } from '../lib/validationDelta';
+import PerformancePanel from './PerformancePanel';
 
 /**
  * H7 — unified Diagnostics hub. One coherent home for the previously scattered
@@ -38,12 +39,13 @@ interface DiagnosticsCenterProps {
   onSuppressionCommitted?: (sourceHash: string) => void;
 }
 
-export type DiagnosticsScope = 'scripts' | 'package' | 'install';
+export type DiagnosticsScope = 'scripts' | 'package' | 'install' | 'performance';
 
 const SCOPES: { id: DiagnosticsScope; label: string; icon: typeof Brain; activeClass: string }[] = [
   { id: 'scripts', label: 'Scripts', icon: Brain, activeClass: 'bg-amber-500/10 text-amber-400 border-amber-500/40' },
   { id: 'package', label: 'Validation', icon: PackageCheck, activeClass: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/40' },
   { id: 'install', label: 'Install', icon: Boxes, activeClass: 'bg-fuchsia-500/10 text-fuchsia-400 border-fuchsia-500/40' },
+  { id: 'performance', label: 'Performance', icon: Activity, activeClass: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/40' },
 ];
 
 export default function DiagnosticsCenter({
@@ -69,7 +71,7 @@ export default function DiagnosticsCenter({
   return (
     <div className="flex flex-col h-full min-h-0 bg-[#080a0e]">
       {/* Scope selector */}
-      <div className="flex border-b border-white/5 bg-black/45 items-center gap-1.5 px-2 py-1.5 shrink-0 font-mono">
+      <div className="flex min-w-0 overflow-x-auto border-b border-white/5 bg-black/45 items-center gap-1.5 px-2 py-1.5 shrink-0 font-mono">
         {SCOPES.map(s => {
           const Icon = s.icon;
           const active = scope === s.id;
@@ -80,7 +82,7 @@ export default function DiagnosticsCenter({
               aria-pressed={active}
               onClick={() => setScope(s.id)}
               title={`${s.label} Diagnostics`}
-              className={`px-2.5 py-1 rounded text-[9.5px] font-bold uppercase transition-all flex items-center gap-1.5 cursor-pointer border ${
+              className={`shrink-0 px-2.5 py-1 rounded text-[9.5px] font-bold uppercase transition-all flex items-center gap-1.5 cursor-pointer border ${
                 active ? s.activeClass : 'text-slate-400 hover:text-slate-200 border-transparent'
               }`}
             >
@@ -94,6 +96,7 @@ export default function DiagnosticsCenter({
 
       {/* Scope viewport */}
       <div className="flex-1 overflow-hidden min-h-0">
+        {scope === 'performance' && <PerformancePanel />}
         {scope === 'scripts' && (
           <DiagnosticsHub
             workspace={workspace}

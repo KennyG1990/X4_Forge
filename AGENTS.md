@@ -482,6 +482,13 @@ player reads/sees/feels) flip only on Ken's screen — and every Ken-gated item 
 click-by-click script (lesson 2026-07-12). Pure backend/infra with no player surface is exempt: its
 applicable layers ARE its bar.
 
+**Memory admission (Ken, 2026-11-12):** the fixed 6 GB / 6 GiB free-memory admission rule is retired.
+Do not block Forge QA checks on that minimum or reinstate it through an older plan. Do not substitute
+another fixed free-RAM floor. Existing serial execution, Node heap, isolation and machine-state
+requirements still apply. Historical admission/probe records retain the old condition as evidence only.
+Ken also removed the 25% CPU launch gate on 2026-11-12. Do not block headless checks on total CPU
+percentage or substitute another utilization threshold. Keep tests serial and isolated; never touch live Forge/X4.
+
 **e2e/machine safety:** the current harness owns an EPHEMERAL stack on ports 3100/3101 plus a per-run
 state directory; it must never reuse or mutate the live 3000/3001 workspace. MACHINE-STATE ASK
 (operator rule 2) before any run; never parallelize (workers=1 is deliberate); after every run verify

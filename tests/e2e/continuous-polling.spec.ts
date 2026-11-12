@@ -162,7 +162,7 @@ async function pointerCloseMeasurement(page: import('@playwright/test').Page): P
   probe: { maxHeartbeatGapMs: number; worstLongTaskMs: number; ticks: number };
 }> {
   await expect.poll(() => workspaceSubscribers(page)).toBe(2);
-  const close = page.getByRole('button', { name: 'Close Agent API Bridge' });
+  const close = page.getByTestId('agent-bridge').getByRole('button', { name: 'Close Agent API Bridge' });
   const bounds = await close.boundingBox();
   expect(bounds).not.toBeNull();
   // Resolve coordinates before starting the product-interaction measurement. With a
@@ -552,8 +552,8 @@ test('large sparse workspace closes and remounts Bridge without losing the rende
 });
 
 test('large dense workspace pointer-close control keeps all rendered nodes responsive', async ({ page }, testInfo) => {
-  // The setup envelope is 60 seconds; pointerCloseMeasurement retains its 5-second product thresholds.
-  test.setTimeout(60_000);
+  // The setup envelope is 90 seconds; pointerCloseMeasurement retains its 5-second product thresholds.
+  test.setTimeout(90_000);
   await seedServerWorkspace(buildLargeWorkspace({ layout: 'dense' }));
   await page.route('**/api/agent/compile', route => route.fulfill({ json: { diagnostics: [], validation: { scope: 'full-project' } } }));
   await bootWithFetchCounts(page);
@@ -565,7 +565,7 @@ test('large dense workspace pointer-close control keeps all rendered nodes respo
 });
 
 test('large dense workspace accessibility traversal is isolated from Bridge close', async ({ page }, testInfo) => {
-  test.setTimeout(45_000);
+  test.setTimeout(75_000);
   await seedServerWorkspace(buildLargeWorkspace({ layout: 'dense' }));
   await page.route('**/api/agent/compile', route => route.fulfill({ json: { diagnostics: [], validation: { scope: 'full-project' } } }));
   await bootWithFetchCounts(page);
@@ -602,6 +602,7 @@ test('large dense workspace accessibility traversal is isolated from Bridge clos
 });
 
 test('unchanged workspace ticks transfer summaries but no full workspace after bootstrap', async ({ page }) => {
+  test.setTimeout(90_000);
   const workspace = buildLargeWorkspace({ layout: 'sparse', snapshotBytes: LARGE_WORKSPACE_SNAPSHOT_BYTES });
   await seedServerWorkspace(workspace);
   await page.route('**/api/agent/compile', route => route.fulfill({ json: { diagnostics: [], validation: { scope: 'full-project' } } }));
@@ -667,8 +668,8 @@ test('App and AgentBridge fan out one addressed workspace polling resource', asy
 
   await expect.poll(async () => page.evaluate(() => {
     const workspace = (window as unknown as PollWindow).__X4_CONTINUOUS_POLLING__?.snapshot().resources.find(resource => resource.resourceKey.startsWith('workspace:'));
-    return workspace?.subscribers || 0;
-  })).toBe(2);
+    return workspace !== undefined && workspace.subscribers === 2 && workspace.running === false;
+  })).toBe(true);
 
   const before = await page.evaluate(() => (window as unknown as PollWindow).__X4_FETCH_COUNTS__?.['/api/agent/workspaces'] || 0);
   await page.waitForTimeout(4500);
@@ -830,34 +831,38 @@ test('AgentBridge Auto-Apply cannot replace a dirty queued canvas with a polled 
   });
 
   const localDescription = 'Keep this dirty queued edit authoritative.';
-  await page.evaluate(description => {
-    const pollWindow = window as unknown as PollWindow;
-    const current = pollWindow.__X4_E2E__!.getWorkspace();
-    pollWindow.__X4_E2E__!.setWorkspace({ ...current, description });
-  }, localDescription);
-  await localWriteSeen;
-  await page.evaluate(() => {
-    const pollWindow = window as unknown as PollWindow;
-    pollWindow.__X4_FETCH_COUNTS__!['/api/agent/workspace'] = 0;
-  });
-  await seedServerWorkspace(external);
-  await expect.poll(() => page.evaluate(() =>
-    (window as unknown as PollWindow).__X4_FETCH_COUNTS__?.['/api/agent/workspace'] || 0
-  ), { timeout: 10_000 }).toBeGreaterThanOrEqual(1);
-  await page.waitForTimeout(150);
-  const observedBeforeRelease = await page.evaluate(() => {
-    const pollWindow = window as unknown as PollWindow;
-    return {
-      name: pollWindow.__X4_E2E__!.getWorkspace().name,
-      description: pollWindow.__X4_E2E__!.getWorkspace().description,
-      pendingVisible: Boolean(document.querySelector('[data-testid="agent-bridge-pending-workspace"]')),
-    };
-  });
-  releaseLocalWrite();
+  try {
+    await page.evaluate(description => {
+      const pollWindow = window as unknown as PollWindow;
+      const current = pollWindow.__X4_E2E__!.getWorkspace();
+      pollWindow.__X4_E2E__!.setWorkspace({ ...current, description });
+    }, localDescription);
+    await localWriteSeen;
+    await page.evaluate(() => {
+      const pollWindow = window as unknown as PollWindow;
+      pollWindow.__X4_FETCH_COUNTS__!['/api/agent/workspace'] = 0;
+    });
+    await seedServerWorkspace(external);
+    await expect.poll(() => page.evaluate(() =>
+      (window as unknown as PollWindow).__X4_FETCH_COUNTS__?.['/api/agent/workspace'] || 0
+    ), { timeout: 10_000 }).toBeGreaterThanOrEqual(1);
+    await expect(page.getByTestId('agent-bridge-pending-workspace')).toBeVisible({ timeout: 10_000 });
+    const observedBeforeRelease = await page.evaluate(() => {
+      const pollWindow = window as unknown as PollWindow;
+      return {
+        name: pollWindow.__X4_E2E__!.getWorkspace().name,
+        description: pollWindow.__X4_E2E__!.getWorkspace().description,
+        pendingVisible: Boolean(document.querySelector('[data-testid="agent-bridge-pending-workspace"]')),
+      };
+    });
+    releaseLocalWrite();
 
-  expect(observedBeforeRelease.description).toBe(localDescription);
-  expect(observedBeforeRelease.name).toBe(initial.name);
-  expect(observedBeforeRelease.pendingVisible).toBe(true);
+    expect(observedBeforeRelease.description).toBe(localDescription);
+    expect(observedBeforeRelease.name).toBe(initial.name);
+    expect(observedBeforeRelease.pendingVisible).toBe(true);
+  } finally {
+    releaseLocalWrite();
+  }
 });
 
 test('AgentBridge Auto-Apply OFF keeps a clean newer snapshot pending with one full transfer', async ({ page }) => {

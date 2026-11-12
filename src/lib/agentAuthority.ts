@@ -34,6 +34,7 @@ export type AgentAuthorityResourceClass =
   | 'inline-or-addressed'
   | 'configured-root'
   | 'global-session'
+  | 'process-telemetry'
   | 'cross-workspace-session'
   | 'provider-network'
   | 'host-file-read'
@@ -50,6 +51,27 @@ export interface AgentRouteAuthorityEntry {
   agentScopes: AgentKeyScope[];
   resourceClass: AgentAuthorityResourceClass;
   workspaceMode: WorkspaceAuthorityMode;
+}
+
+/** This class covers only the owned backend's bounded telemetry controls.
+ * It does not grant a route prefix or change Studio-only global-session authority. */
+export const PROCESS_TELEMETRY_ROUTE_OWNERS: Readonly<Record<string, string>> = Object.freeze({
+  'GET /api/agent/performance': 'performance.read',
+  'POST /api/agent/performance/collection': 'performance.collect',
+  'POST /api/agent/performance/profile': 'performance.profile',
+});
+
+export function processTelemetryRouteAuthorityErrors(routeKey: string, entry: unknown): string[] {
+  if (!isRecord(entry) || entry.resourceClass !== 'process-telemetry') return [];
+  const errors: string[] = [];
+  const owner = Object.hasOwn(PROCESS_TELEMETRY_ROUTE_OWNERS, routeKey) ? PROCESS_TELEMETRY_ROUTE_OWNERS[routeKey] : undefined;
+  if (!owner || entry.owner !== owner) errors.push('process-telemetry requires an exact reviewed performance method, route and owner');
+  if (entry.disposition !== 'canonical-capability' || entry.registrations !== 1) errors.push('process-telemetry requires one canonical registration');
+  if (entry.workspaceMode !== 'none') errors.push('process-telemetry requires workspaceMode none');
+  if (!Array.isArray(entry.agentScopes) || entry.agentScopes.join(',') !== AGENT_ROUTE_SCOPES.join(',')) {
+    errors.push('process-telemetry requires the read/write/deploy preset');
+  }
+  return errors;
 }
 
 export interface AgentRouteAuthorityManifest {
@@ -103,6 +125,7 @@ const RESOURCE_CLASSES = new Set<AgentAuthorityResourceClass>([
   'inline-or-addressed',
   'configured-root',
   'global-session',
+  'process-telemetry',
   'cross-workspace-session',
   'provider-network',
   'host-file-read',
@@ -185,13 +208,19 @@ export function agentRouteAuthorityManifestErrors(value: unknown): string[] {
   if (isRecord(value.routes)) {
     for (const [key, entry] of Object.entries(value.routes)) {
       errors.push(...entryErrors(entry, `routes.${key}`));
+      errors.push(...processTelemetryRouteAuthorityErrors(key, entry).map(error => `routes.${key}: ${error}`));
       const match = key.match(/^([A-Z]+) (\/\S*|\*)$/);
       if (!match || !METHOD_RE.test(match[1])) errors.push(`routes.${key} has a malformed route key`);
       else if (match[2].startsWith('/api/') && !templateParts(match[2])) errors.push(`routes.${key} has an unsupported API template`);
     }
   }
   if (isRecord(value.dynamicRoutes)) {
-    for (const [key, entry] of Object.entries(value.dynamicRoutes)) errors.push(...entryErrors(entry, `dynamicRoutes.${key}`));
+    for (const [key, entry] of Object.entries(value.dynamicRoutes)) {
+      errors.push(...entryErrors(entry, `dynamicRoutes.${key}`));
+      if (isRecord(entry) && entry.resourceClass === 'process-telemetry') {
+        errors.push(`dynamicRoutes.${key}: process-telemetry is limited to exact literal route entries`);
+      }
+    }
   }
   return errors;
 }
@@ -350,6 +379,45 @@ export function runAgentRouteAuthoritySelftest(): {
     'GET *': { ...fixtureEntry([]), resourceClass: 'global-session', workspaceMode: 'none' },
   });
   ok('policy_hash_is_key_order_independent', authority.policyHash === createAgentRouteAuthority(reordered).policyHash);
+
+  const telemetryEntry = (owner: string): AgentRouteAuthorityEntry => ({
+    disposition: 'canonical-capability', owner, registrations: 1, agentScopes: [...AGENT_ROUTE_SCOPES],
+    resourceClass: 'process-telemetry', workspaceMode: 'none',
+  });
+  const telemetryRoutes = Object.fromEntries(Object.entries(PROCESS_TELEMETRY_ROUTE_OWNERS).map(([key, owner]) => [key, telemetryEntry(owner)]));
+  const telemetry = createAgentRouteAuthority(fixtureManifest(telemetryRoutes));
+  for (const key of Object.keys(telemetryRoutes)) {
+    const [method, route] = key.split(' ');
+    ok(`process_telemetry_exact_presets_${key}`, ['read', 'write', 'deploy', 'all'].every(scope => telemetry.allows(scope as AgentKeyScope, method, route)));
+  }
+  ok('process_telemetry_does_not_grant_prefix_or_other_method',
+    !telemetry.allows('read', 'POST', '/api/agent/performance') &&
+      !telemetry.allows('read', 'POST', '/api/agent/performance/profile/extra') &&
+      !telemetry.allows('read', 'POST', '/api/agent/performance/reset') &&
+      !telemetry.allows('read', 'GET', '/api/agent/workspace'));
+  const readTelemetry = telemetryEntry('performance.read');
+  const telemetryNegatives: Array<[string, string, AgentRouteAuthorityEntry]> = [
+    ['foreign_route', 'GET /api/agent/workspace', readTelemetry],
+    ['wrong_verb', 'POST /api/agent/performance', readTelemetry],
+    ['prefix_child', 'GET /api/agent/performance/extra', readTelemetry],
+    ['wrong_owner', 'GET /api/agent/performance', { ...readTelemetry, owner: 'performance.profile' }],
+    ['noncanonical', 'GET /api/agent/performance', { ...readTelemetry, disposition: 'legacy-agent-api' }],
+    ['public', 'GET /api/agent/performance', { ...readTelemetry, disposition: 'legacy-public' }],
+    ['duplicate_registration', 'GET /api/agent/performance', { ...readTelemetry, registrations: 2 }],
+    ['workspace', 'GET /api/agent/performance', { ...readTelemetry, workspaceMode: 'optional' }],
+    ['missing_scope', 'GET /api/agent/performance', { ...readTelemetry, agentScopes: ['write', 'deploy'] }],
+    ['master_scope', 'GET /api/agent/performance', { ...readTelemetry, agentScopes: ['all'] }],
+  ];
+  for (const [name, key, entry] of telemetryNegatives) {
+    let rejected = false;
+    try { createAgentRouteAuthority(fixtureManifest({ [key]: entry })); } catch { rejected = true; }
+    ok(`process_telemetry_rejects_${name}`, rejected);
+  }
+  const dynamicTelemetry = fixtureManifest({ 'GET /api/agent/workspace': fixtureEntry(['read', 'write', 'deploy']) });
+  dynamicTelemetry.dynamicRoutes['GET route @ fixture.ts'] = readTelemetry;
+  ok('process_telemetry_rejects_dynamic_registrar', agentRouteAuthorityManifestErrors(dynamicTelemetry).some(error => error.includes('exact literal route entries')));
+  dynamicTelemetry.dynamicRoutes = { 'GET /api/agent/performance': readTelemetry };
+  ok('process_telemetry_rejects_literal_key_inside_dynamic_routes', agentRouteAuthorityManifestErrors(dynamicTelemetry).some(error => error.includes('exact literal route entries')));
 
   return { pass: checks.every(check => check.pass), checks };
 }

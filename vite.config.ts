@@ -4,6 +4,7 @@ import {execSync} from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import {defineConfig, type Plugin} from 'vite';
+import {configureProfileProxyCancellation} from './src/lib/profileProxyCancellation';
 
 // API server port in split-dev mode (Vite serves the UI on 3000 and proxies /api here).
 const API_PORT = process.env.API_PORT || '3001';
@@ -106,6 +107,7 @@ export default defineConfig(() => {
           // where 3001 isn't listening yet. Handle ECONNREFUSED gracefully: return a
           // soft 503 the client can retry, instead of dumping proxy-error stack traces.
           configure: (proxy) => {
+            configureProfileProxyCancellation(proxy);
             proxy.on('error', (_err, _req, res) => {
               const r = res as any;
               if (r && typeof r.writeHead === 'function' && !r.headersSent) {

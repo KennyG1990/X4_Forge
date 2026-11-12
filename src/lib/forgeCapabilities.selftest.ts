@@ -4,7 +4,8 @@
  */
 
 import crypto from 'crypto';
-import { scopeAllows, type AgentKeyScope } from './agentKeys';
+import { resolveAgentRouteTemplateAuthority, scopeAllows, type AgentKeyScope } from './agentKeys';
+import { decideEffectiveCapability } from './agentCapabilityAuthority';
 import { LEDGER_QUIET_ROUTES, ledgerRouteKind } from './agentHistory';
 import {
   FORGE_CAPABILITIES,
@@ -45,7 +46,7 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
 
   const validationErrors = validateForgeCapabilityRegistry();
   check('registry invariants', validationErrors.length === 0, validationErrors.join(' | ') || undefined);
-  check('bounded initial registry', FORGE_CAPABILITIES.length === 13, `count=${FORGE_CAPABILITIES.length}`);
+  check('bounded initial registry', FORGE_CAPABILITIES.length === 17, `count=${FORGE_CAPABILITIES.length}`);
 
   const canonical = canonicalCapabilityContractPayload();
   const contract = buildForgeCapabilityContract(sha256);
@@ -200,6 +201,173 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
       !runtimeDebugger.effects.some(effect => ['workspace-write', 'filesystem-write', 'package', 'deploy', 'delete'].includes(effect)),
     JSON.stringify(runtimeDebugger),
   );
+  const xmlReferences = findForgeCapability('project.xml.references')!;
+  check(
+    'XML reference analysis has one versioned canonical read API and an honest curated projection',
+    FORGE_CAPABILITIES.filter(capability => capability.id === 'project.xml.references').length === 1 &&
+      xmlReferences?.version === 1 && xmlReferences.context.workspace === 'optional' && xmlReferences.context.profile === 'none' &&
+      xmlReferences.confirmation === 'none' && !xmlReferences.access.public &&
+      JSON.stringify(xmlReferences.effects) === JSON.stringify(['read', 'analyze']) &&
+      JSON.stringify(xmlReferences.access.agentScopes) === JSON.stringify(['read', 'write', 'deploy']) &&
+      JSON.stringify(xmlReferences.apiBindings) === JSON.stringify([{
+        method: 'POST', path: '/api/agent/project/xml-references', inputLocation: 'body', role: 'primary',
+      }]) &&
+      xmlReferences.surfaces.ui.some(projection => projection.id === 'xml-reference-view' && projection.status === 'connected' &&
+        projection.anchor === 'src/components/XmlReferenceView.tsx::/api/agent/project/xml-references') &&
+      xmlReferences.surfaces.mcp.length === 1 && xmlReferences.surfaces.mcp[0].id === 'get_xml_references' &&
+      xmlReferences.surfaces.mcp[0].status === 'partial' && Boolean(xmlReferences.surfaces.mcp[0].note) &&
+      xmlReferences.outputSchema.properties?.schemaVersion?.enum?.[0] === 'forge.xml-reference-map.v1' &&
+      ['ok', 'schemaVersion', 'signature', 'files', 'nodes', 'edges', 'coverage'].every(field => xmlReferences.outputSchema.required?.includes(field)),
+    JSON.stringify(xmlReferences),
+  );
+  if (xmlReferences) {
+    const schemaFixtureAccepts = (input: unknown): boolean => {
+      // Exercise the registry's existing schema matcher through its fixed-body contract check.
+      const fixture: ForgeCapabilityDescriptorV1 = {
+        ...xmlReferences,
+        inputSchema: { type: 'object', properties: { input: xmlReferences.inputSchema }, additionalProperties: false },
+        apiBindings: [{ ...xmlReferences.apiBindings[0], fixedBody: { input } }],
+      };
+      return validateForgeCapabilityRegistry([fixture]).length === 0;
+    };
+    check(
+      'XML reference input describes inline workspace/project exclusivity and addressed reads without mutation controls',
+      schemaFixtureAccepts({}) && schemaFixtureAccepts({ workspace: {} }) && schemaFixtureAccepts({ project: {} }) &&
+        schemaFixtureAccepts({ focus: { origin: 'reference', path: 'assets/example.xml', line: 1, column: 2 }, maxDepth: 0, includeSource: false }) &&
+        !schemaFixtureAccepts({ workspace: {}, project: {} }) && !schemaFixtureAccepts({ apply: true }) &&
+        !schemaFixtureAccepts({ focus: { origin: 'disk', path: 'assets/example.xml' } }) &&
+        !schemaFixtureAccepts({ focus: { origin: 'project', path: 'assets/example.xml', sourceFolder: 'outside' } }),
+    );
+    const readActor = { kind: 'agent' as const, scope: 'read' as const, workspaceId: 'ws_xml_reference_fixture' };
+    check(
+      'XML reference analysis preserves old read keys and exact custom capability/effect narrowing',
+      decideEffectiveCapability(xmlReferences, readActor, resolveAgentRouteTemplateAuthority).allowed &&
+        decideEffectiveCapability(xmlReferences, {
+          ...readActor, constraint: { capabilityIdentities: ['project.xml.references@1'], allowedEffects: ['read', 'analyze'] },
+        }, resolveAgentRouteTemplateAuthority).allowed &&
+        decideEffectiveCapability(xmlReferences, {
+          ...readActor, constraint: { capabilityIdentities: ['project.validate@1'], allowedEffects: ['read', 'analyze'] },
+        }, resolveAgentRouteTemplateAuthority).code === 'CAPABILITY_NOT_GRANTED' &&
+        decideEffectiveCapability(xmlReferences, {
+          ...readActor, constraint: { capabilityIdentities: ['project.xml.references@1'], allowedEffects: ['read'] },
+        }, resolveAgentRouteTemplateAuthority).code === 'CAPABILITY_EFFECT_DENIED' &&
+        scopeAllows('read', 'POST', '/agent/project/xml-references') &&
+        !scopeAllows('read', 'POST', '/agent/project/xml-references/extra') &&
+        !scopeAllows('read', 'POST', '/agent/workspace'),
+    );
+    check(
+      'XML reference analysis is ledger quiet and cannot persist a generic POST action',
+      LEDGER_QUIET_ROUTES.includes('/api/agent/project/xml-references') &&
+        ledgerRouteKind('POST', '/api/agent/project/xml-references') === null,
+    );
+  }
+  const performanceBindings = [
+    { id: 'performance.read', method: 'GET', path: '/api/agent/performance', alias: 'get_forge_performance' },
+    { id: 'performance.collect', method: 'POST', path: '/api/agent/performance/collection', alias: 'start_forge_performance_capture' },
+    { id: 'performance.profile', method: 'POST', path: '/api/agent/performance/profile', alias: 'profile_forge_backend' },
+  ] as const;
+  for (const expected of performanceBindings) {
+    const capability = findForgeCapability(expected.id)!;
+    check(`${expected.id} describes a single bounded process-level analysis API`,
+      FORGE_CAPABILITIES.filter(candidate => candidate.id === expected.id).length === 1 && capability?.version === 1 &&
+        capability.context.workspace === 'none' && capability.context.profile === 'none' && capability.confirmation === 'none' &&
+        !capability.access.public && capability.access.studioSession &&
+        JSON.stringify(capability.access.agentScopes) === JSON.stringify(['read', 'write', 'deploy']) &&
+        JSON.stringify(capability.effects) === JSON.stringify(['read', 'analyze']) &&
+        JSON.stringify(capability.apiBindings) === JSON.stringify([{
+          method: expected.method, path: expected.path, inputLocation: expected.method === 'GET' ? 'none' : 'body', role: 'primary',
+        }]) && capability.inputSchema.additionalProperties === false &&
+        capability.surfaces.ui.length === 2 && capability.surfaces.ui[0].status === 'connected' &&
+        capability.surfaces.ui[0].anchor === `src/components/PerformancePanel.tsx::${expected.path}` &&
+        capability.surfaces.mcp.length === 1 && capability.surfaces.mcp[0].id === expected.alias &&
+        capability.surfaces.mcp[0].status === 'partial' && Boolean(capability.surfaces.mcp[0].note),
+      JSON.stringify(capability));
+    if (!capability) continue;
+    const actor = { kind: 'agent' as const, scope: 'read' as const };
+    check(`${expected.id} keeps existing read keys and exact custom grant/effect authority`,
+      decideEffectiveCapability(capability, actor, resolveAgentRouteTemplateAuthority).allowed &&
+        decideEffectiveCapability(capability, { ...actor, constraint: {
+          capabilityIdentities: [`${expected.id}@1`], allowedEffects: ['read', 'analyze'],
+        } }, resolveAgentRouteTemplateAuthority).allowed &&
+        decideEffectiveCapability(capability, { ...actor, constraint: {
+          capabilityIdentities: ['project.xml.references@1'], allowedEffects: ['read', 'analyze'],
+        } }, resolveAgentRouteTemplateAuthority).code === 'CAPABILITY_NOT_GRANTED' &&
+        decideEffectiveCapability(capability, { ...actor, constraint: {
+          capabilityIdentities: [`${expected.id}@1`], allowedEffects: ['read'],
+        } }, resolveAgentRouteTemplateAuthority).code === 'CAPABILITY_EFFECT_DENIED' &&
+        scopeAllows('read', expected.method, expected.path.replace(/^\/api/, '')));
+    if (expected.method === 'POST') {
+      check(`${expected.id} is ledger quiet without granting a route prefix`,
+        LEDGER_QUIET_ROUTES.includes(expected.path) && ledgerRouteKind('POST', expected.path) === null &&
+          !scopeAllows('read', 'POST', `${expected.path.replace(/^\/api/, '')}/extra`) &&
+          !scopeAllows('read', 'POST', '/agent/performance/reset'));
+    }
+  }
+  check('new analysis capabilities disclose disconnected native host controls without fabricating a producer',
+    ['project.xml.references', 'performance.read', 'performance.collect', 'performance.profile'].every(id => {
+      const capability = findForgeCapability(id);
+      const native = capability?.surfaces.ui.filter(projection => projection.id.startsWith('vscode-extension-'));
+      return native?.length === 1 && native[0].status === 'disconnected' && !native[0].anchor && Boolean(native[0].note) &&
+        capability?.surfaces.ui.filter(projection => projection.status === 'connected').length === 1;
+    }));
+  const collection = findForgeCapability('performance.collect')!;
+  const profiling = findForgeCapability('performance.profile')!;
+  const performanceRead = findForgeCapability('performance.read')!;
+  const performanceSchemaAccepts = (schema: ForgeCapabilityDescriptorV1['inputSchema'], input: unknown): boolean => {
+    const fixture: ForgeCapabilityDescriptorV1 = {
+      ...collection,
+      inputSchema: { type: 'object', properties: { input: schema }, additionalProperties: false },
+      apiBindings: [{ ...collection.apiBindings[0], fixedBody: { input } }],
+    };
+    return validateForgeCapabilityRegistry([fixture]).length === 0;
+  };
+  check('performance request schemas stay closed and describe API integer bounds',
+    performanceSchemaAccepts(collection.inputSchema, {}) &&
+      performanceSchemaAccepts(collection.inputSchema, { durationMs: 900000, intervalMs: 60000, eventLoopDelay: true }) &&
+      !performanceSchemaAccepts(collection.inputSchema, { durationMs: 1000.5 }) &&
+      !performanceSchemaAccepts(collection.inputSchema, { eventLoopDelay: 'true' }) &&
+      !performanceSchemaAccepts(collection.inputSchema, { workspace: {} }) &&
+      performanceSchemaAccepts(profiling.inputSchema, { durationMs: 5000, samplingIntervalMicros: 100000, maxFunctions: 64 }) &&
+      !performanceSchemaAccepts(profiling.inputSchema, { maxFunctions: 1.5 }) &&
+      !performanceSchemaAccepts(profiling.inputSchema, { rawProfile: true }) &&
+      performanceSchemaAccepts(performanceRead.inputSchema, {}) && !performanceSchemaAccepts(performanceRead.inputSchema, { durationMs: 1000 }) &&
+      collection.inputSchema.properties?.durationMs?.description?.includes('900000') === true &&
+      profiling.inputSchema.properties?.durationMs?.description?.includes('5000') === true);
+  check('CPU profile schema preserves explicit failure codes instead of a successful empty fallback',
+    performanceSchemaAccepts(profiling.outputSchema, { ok: false, code: 'PROFILE_RATE_LIMITED', error: 'Cooldown active.' }) &&
+      performanceSchemaAccepts(profiling.outputSchema, { ok: false, code: 'PROFILE_CLEANUP_UNCONFIRMED', error: 'Cleanup uncertain.' }) &&
+      !performanceSchemaAccepts(profiling.outputSchema, { ok: false, code: 'PROFILE_RATE_LIMITED' }) &&
+      !performanceSchemaAccepts(profiling.outputSchema, { ok: false, code: 'UNKNOWN', error: 'Unsupported.' }) &&
+      !performanceSchemaAccepts(profiling.outputSchema, { ok: true, functions: [] }));
+  check('collection schema distinguishes HTTP refusal from a successful snapshot',
+    performanceSchemaAccepts(collection.outputSchema, { ok: false, code: 'PERFORMANCE_COLLECTION_BUSY', error: 'Already active.' }) &&
+      performanceSchemaAccepts(collection.outputSchema, { ok: false, code: 'PERFORMANCE_COLLECTION_REFUSED', error: 'Cleanup uncertain.' }) &&
+      !performanceSchemaAccepts(collection.outputSchema, { ok: false, code: 'PERFORMANCE_COLLECTION_BUSY' }) &&
+      !performanceSchemaAccepts(collection.outputSchema, { ok: true }));
+  const backendSchema = performanceRead.outputSchema.properties?.backend;
+  const resourceSchema = backendSchema?.properties?.resources?.items;
+  const controlSchema = performanceRead.outputSchema.properties?.control;
+  const overheadSchema = backendSchema?.properties?.selfOverhead;
+  check('overhead schema preserves unknown cost and scopes completed snapshot work',
+    !!overheadSchema && performanceSchemaAccepts(overheadSchema, {
+      recordCalls: 1, recordMs: null, snapshotCalls: 2, snapshotMs: null, clockFailures: 3,
+      snapshotScope: 'completed-prior-snapshots-including-serialization-and-freeze',
+    }) && !performanceSchemaAccepts(overheadSchema, {
+      recordCalls: 1, recordMs: 0, snapshotCalls: 2, snapshotMs: 0, clockFailures: 0, snapshotScope: 'all-tracker-work',
+    }) && !performanceSchemaAccepts(overheadSchema, {
+      recordCalls: 1, snapshotCalls: 2, snapshotMs: 0, clockFailures: 0,
+      snapshotScope: 'completed-prior-snapshots-including-serialization-and-freeze',
+    }));
+  check('performance output schemas preserve nullable measurements, cooldown and producer coverage',
+    performanceRead.outputSchema.properties?.schemaVersion?.enum?.[0] === 'forge.performance.report.v1' &&
+      backendSchema?.properties?.schemaVersion?.enum?.[0] === 'forge.performance.v1' &&
+      resourceSchema?.required?.includes('rssBytes') === true &&
+      JSON.stringify(resourceSchema?.properties?.rssBytes?.type) === JSON.stringify(['number', 'null']) &&
+      controlSchema?.required?.includes('profileRateLimited') === true &&
+      controlSchema?.required?.includes('profileCooldownRemainingMs') === true &&
+      backendSchema?.properties?.drops?.required?.includes('staleFinishes') === true &&
+      ['collectionCleanupUnconfirmed', 'abortListenerCleanupUnconfirmed', 'ownedTimerCount', 'failedTimerCount'].every(field => controlSchema?.required?.includes(field)) &&
+      performanceRead.outputSchema.properties?.coverage?.properties?.native?.enum?.[0] === 'unavailable-not-wired');
   check(
     'validation aliases converge',
     JSON.stringify(known?.surfaces.mcp.map(projection => projection.id)) === JSON.stringify(['validate_mod', 'author_check', 'stage_and_validate']) &&

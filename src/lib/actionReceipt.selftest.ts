@@ -23,6 +23,7 @@ import {
 import { encodeRow, decodeRows, type LedgerRow } from './agentHistory';
 import { AgentHistoryStore } from './agentHistoryStore';
 import { ActionReceiptStore } from './actionReceiptStore';
+import { DestructiveRecoveryStore } from './destructiveRecovery';
 
 const HASH_A = 'a'.repeat(64);
 const HASH_B = 'b'.repeat(64);
@@ -161,6 +162,117 @@ export function runActionReceiptSelftest(): ActionReceiptSelftestResult {
 
   try {
     const input = fixture();
+    // #106: actual generated recovery IDs must cross the strict receipt writer
+    // and canonical reader. Do not print provider-shaped IDs on the RED baseline.
+    const referenceRoot = path.join(outside, 'recovery-reference-contract');
+    try {
+      fs.mkdirSync(referenceRoot);
+      const sentinel = path.join(referenceRoot, 'target-sentinel.bin');
+      fs.writeFileSync(sentinel, 'The recovery identity check must not write the target.');
+      const alignedClock = Math.floor(Date.parse('2026-11-12T00:00:00.000Z') / 1296) * 1296;
+      for (const suffix of ['sk', 'pk', 'rk']) {
+        const fixedClock = alignedClock + Number.parseInt(suffix, 36);
+        const phaseRoot = path.join(referenceRoot, `phase-${suffix}`);
+        const recoveryRoot = path.join(phaseRoot, 'recoveries');
+        const receiptRoot = path.join(phaseRoot, 'receipts');
+        const recovery = new DestructiveRecoveryStore({ root: recoveryRoot, now: () => fixedClock, maxAgeMs: 10_000 });
+        const receipts = new ActionReceiptStore({ root: receiptRoot, now: () => fixedClock });
+        const generated = [
+          recovery.prepareDeployment({ priorExisted: false, targetRoot: referenceRoot,
+            targetPath: path.join(referenceRoot, 'target'), modId: 'reference_fixture',
+            beforeFingerprint: 'absent', beforeBytes: 0, summary: 'Recovery reference clock-phase fixture' }),
+          recovery.createWorkspace({ workspaceId: 'ws_111111111111111111111111', beforeWorkspace: { nodes: [], links: [] },
+            beforeHash: HASH_A, beforeSnapshotHash: HASH_B, expectedCurrentHash: HASH_C,
+            expectedCurrentSnapshotHash: HASH_D, summary: 'Workspace reference clock-phase fixture' }),
+        ];
+        let reopenedCount = 0;
+        let rejectedCount = 0;
+        let policyRejections = 0;
+        let noWriteOnRefusal = true;
+        let recoveriesRemoved = true;
+        const inventory = () => fs.existsSync(receiptRoot)
+          ? fs.readdirSync(receiptRoot).sort().map(name => [name, fs.readFileSync(path.join(receiptRoot, name), 'utf8')]) : null;
+        for (const record of generated) {
+          const before = JSON.stringify(inventory());
+          // A phase label at the END avoids introducing sk-/pk-/rk- into the
+          // authority identity itself: only rollback.reference is under test.
+          const attempted = receipts.tryPrepare({
+            ...input, authority: { ...input.authority, operationId: `reference-${record.kind}-${suffix}` },
+            rollback: { required: true, mode: 'recovery', reference: record.id },
+            preparedAt: new Date(fixedClock).toISOString(),
+          });
+          if (attempted.ok === true) {
+            const bytes = serializeActionReceipt(attempted.receipt);
+            const reopened = new ActionReceiptStore({ root: receiptRoot, now: () => fixedClock }).read(attempted.receipt.id);
+            const recoveryRead = new DestructiveRecoveryStore({ root: recoveryRoot, now: () => fixedClock }).read(record.id);
+            if (reopened.rollback.reference === record.id && serializeActionReceipt(reopened) === bytes
+              && fs.readFileSync(receipts.pathFor(reopened.id), 'utf8') === bytes && validateActionReceipt(reopened).ok
+              && recoveryRead.ok === true && JSON.stringify(recoveryRead.record) === JSON.stringify(record)) reopenedCount++;
+          } else {
+            rejectedCount++;
+            if (attempted.code === 'ACTION_RECEIPT_INVALID'
+              && attempted.error === 'rollback.reference contains a policy-covered credential-like value.') policyRejections++;
+            noWriteOnRefusal = noWriteOnRefusal && JSON.stringify(inventory()) === before;
+          }
+          recovery.abandon(record.id);
+          recoveriesRemoved = recoveriesRemoved && !fs.existsSync(path.join(recoveryRoot, record.id)) && !recovery.read(record.id).ok;
+        }
+        ok(`generated_recovery_reference_${suffix}_prepares_and_reopens`, reopenedCount === generated.length,
+          JSON.stringify({ phase: suffix, generatedCount: generated.length, reopenedCount, rejectedCount, policyRejections,
+            legacyClockMatches: generated.every(record => record.id.split('-')[1] === fixedClock.toString(36)),
+            hexClockMatches: generated.every(record => record.id.split('-')[1] === fixedClock.toString(16)) }));
+        ok(`generated_recovery_reference_${suffix}_preserves_failure_boundary_and_cleanup`,
+          policyRejections === rejectedCount && noWriteOnRefusal && recoveriesRemoved
+            && fs.readFileSync(sentinel, 'utf8') === 'The recovery identity check must not write the target.',
+          JSON.stringify({ phase: suffix, policyRejections, rejectedCount, noWriteOnRefusal, recoveriesRemoved }));
+      }
+
+      // Persist one safe legacy-format fixture independently of the current
+      // generator. The reader and retention policy must not parse the clock ID.
+      let legacyClock = alignedClock;
+      const legacyRoot = path.join(referenceRoot, 'legacy-recoveries');
+      const legacyReceiptsRoot = path.join(referenceRoot, 'legacy-receipts');
+      const legacyStore = new DestructiveRecoveryStore({ root: legacyRoot, now: () => legacyClock, maxAgeMs: 10_000 });
+      const legacyTemplate = legacyStore.prepareDeployment({ priorExisted: false, targetRoot: referenceRoot,
+        targetPath: path.join(referenceRoot, 'legacy-target'), modId: 'legacy_reference_fixture',
+        beforeFingerprint: 'absent', beforeBytes: 0, summary: 'Safe legacy recovery reference fixture' });
+      const legacyId = `deploy-${legacyClock.toString(36)}-${'a'.repeat(16)}`;
+      const legacyDirectory = path.join(legacyRoot, legacyId);
+      fs.renameSync(path.join(legacyRoot, legacyTemplate.id), legacyDirectory);
+      const legacyPath = path.join(legacyDirectory, 'record.json');
+      fs.writeFileSync(legacyPath, JSON.stringify({ ...legacyTemplate, id: legacyId }));
+      const legacyBytes = fs.readFileSync(legacyPath);
+      const restartedRecovery = new DestructiveRecoveryStore({ root: legacyRoot, now: () => legacyClock, maxAgeMs: 10_000 });
+      const legacyRead = restartedRecovery.read(legacyId);
+      const legacyReceipts = new ActionReceiptStore({ root: legacyReceiptsRoot, now: () => legacyClock });
+      const legacyPrepared = legacyReceipts.tryPrepare({ ...input,
+        authority: { ...input.authority, operationId: 'reference-legacy-safe' },
+        rollback: { required: true, mode: 'recovery', reference: legacyId },
+        preparedAt: new Date(legacyClock).toISOString() });
+      let legacyReopened = false;
+      if (legacyPrepared.ok === true) {
+        const reread = new ActionReceiptStore({ root: legacyReceiptsRoot, now: () => legacyClock }).read(legacyPrepared.receipt.id);
+        legacyReopened = reread.rollback.reference === legacyId
+          && serializeActionReceipt(reread) === serializeActionReceipt(legacyPrepared.receipt);
+      }
+      restartedRecovery.prune();
+      ok('safe_legacy_recovery_reference_reopens_without_rewrite', legacyRead.ok === true && legacyRead.record.id === legacyId
+        && legacyReopened && Buffer.compare(legacyBytes, fs.readFileSync(legacyPath)) === 0);
+      legacyClock += 10_001;
+      const expiredLegacy = restartedRecovery.read(legacyId);
+      restartedRecovery.prune();
+      ok('safe_legacy_recovery_reference_retention_uses_record_dates', expiredLegacy.ok === false
+        && expiredLegacy.code === 'RECOVERY_EXPIRED' && !fs.existsSync(legacyDirectory)
+        && fs.readFileSync(sentinel, 'utf8') === 'The recovery identity check must not write the target.');
+      ok('generated_recovery_reference_contract_fixture_completed', true);
+    } catch (error) {
+      ok('generated_recovery_reference_contract_fixture_completed', false,
+        JSON.stringify({ failureClass: error instanceof Error ? error.name : 'unknown' }));
+    } finally {
+      let removed = false;
+      try { fs.rmSync(referenceRoot, { recursive: true, force: true }); removed = !fs.existsSync(referenceRoot); } catch { /* Report below; the outer fixture owner also cleans. */ }
+      ok('generated_recovery_reference_contract_fixture_cleaned', removed);
+    }
     prepared = createPreparedActionReceipt(input);
     originalBytes = serializeActionReceipt(prepared);
     ok('non_secret_fixture_serialization_identity', validateActionReceipt(JSON.parse(originalBytes)).ok

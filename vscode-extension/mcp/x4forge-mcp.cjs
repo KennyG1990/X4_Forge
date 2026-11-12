@@ -7,7 +7,7 @@
  * Security posture (workflow rule 3.6, reviewed at ship time):
  *  - This process LISTENS on nothing — stdio only; it is a CLIENT of the Forge sidecar.
  *  - Auth = a scoped, revocable agent key (mint via "X4 Forge: Create Agent Key");
- *    scope enforcement is SERVER-side (read = GETs only; write adds validate/compile;
+ *    scope enforcement is SERVER-side (read includes reviewed read/analyze POSTs; write adds validate/compile;
  *    deploy tools are deliberately NOT exposed here at all).
  *  - No AI-spend path exists through these tools (generate is not exposed; the Forge
  *    additionally requires external agents to bring their own AI keys).
@@ -39,6 +39,17 @@ const RUNTIME_MAX_EVIDENCE_ITEMS = 5;
 const RUNTIME_MAX_STRING_ARRAY_ITEMS = 16;
 const RUNTIME_MAX_COUNT = 1_000_000;
 const RUNTIME_MAX_LINE = 1_000_000_000;
+const XML_REFERENCE_MAX_DEPTH = 2;
+const XML_REFERENCE_MAX_NODES = 60;
+const XML_REFERENCE_MAX_EDGES = 120;
+const XML_REFERENCE_MAX_FILES = 256;
+const XML_REFERENCE_MAX_CANDIDATES = 16;
+const XML_REFERENCE_MAX_OUTPUT_BYTES = 512 * 1024;
+const PERFORMANCE_LIVE_TOOLS = new Set(["get_forge_performance", "start_forge_performance_capture", "profile_forge_backend"]);
+const PERFORMANCE_PROFILE_HTTP_FAILURES = { PROFILE_DISABLED: 503, PROFILE_BUSY: 409, PROFILE_RATE_LIMITED: 429, PROFILE_DISPOSED: 503, PROFILE_INPUT_INVALID: 400, PROFILE_ABORTED: 408, PROFILE_FAILED: 500, PROFILE_CLEANUP_UNCONFIRMED: 409 };
+const PERFORMANCE_COLLECTION_HTTP_FAILURES = { PERFORMANCE_DISPOSED: 503, PERFORMANCE_COLLECTION_BUSY: 409, PERFORMANCE_COLLECTION_REFUSED: 409, PROJECT_INPUT_INVALID: 400, PERFORMANCE_COLLECTION_FAILED: 500 };
+const PERFORMANCE_MAX_OUTPUT_BYTES = 256 * 1024;
+const PERFORMANCE_RESOURCE_FIELDS = ["atUnixMs", "elapsedMs", "cpuUserMicros", "cpuSystemMicros", "cpuOneCorePercent", "cpuHostPercent", "logicalCpuCount", "rssBytes", "heapUsedBytes", "heapTotalBytes", "externalBytes", "arrayBuffersBytes", "uptimeSeconds", "eventLoopUtilization", "eventLoopDelayP50Ms", "eventLoopDelayP95Ms", "eventLoopDelayMaxMs", "fps", "frameIntervalMs", "longTaskDurationMs", "jsHeapUsedBytes"];
 
 /** Curated tool surface — additions require the B56s4 security review, not just code. */
 const TOOLS = [
@@ -235,6 +246,103 @@ const TOOLS = [
     },
   },
   {
+    name: "get_xml_references",
+    capabilityId: "project.xml.references",
+    capabilityVersion: 1,
+    description: "Read a bounded XML file-reference map for one focus file in the explicitly bound saved workspace. Preserves source-resolution statuses, coverage and signature; reports projection totals and truncation. Uses configured game/schema knowledge. It does not return source text, run validation, write files or prove runtime loading.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        focus: {
+          type: "object",
+          properties: {
+            origin: { type: "string", enum: ["project", "reference"] },
+            path: { type: "string", maxLength: 1024, description: "Safe relative XML path in the selected origin." },
+            line: { type: "integer", description: "Optional positive one-based source line." },
+            column: { type: "integer", description: "Optional positive one-based source column." },
+          },
+          required: ["origin", "path"],
+          additionalProperties: false,
+        },
+        maxDepth: { type: "integer", enum: [0, 1, 2], description: "Traversal depth; default 2." },
+        maxNodes: { type: "integer", description: "Node limit from 1 to 60; default 60." },
+        maxEdges: { type: "integer", description: "Edge limit from 1 to 120; default 120." },
+      },
+      required: ["focus"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const focus = args.focus;
+      if (!isXmlReferencePath(focus.path) || !/\.xml$/i.test(focus.path)) {
+        throw new Error("XML reference focus must be a safe relative XML path");
+      }
+      for (const coordinate of ["line", "column"]) {
+        if (focus[coordinate] !== undefined) xmlReferenceLimit(focus[coordinate], undefined, 1, 1_000_000_000, `focus.${coordinate}`);
+      }
+      const body = {
+        focus,
+        maxDepth: xmlReferenceLimit(args.maxDepth, XML_REFERENCE_MAX_DEPTH, 0, XML_REFERENCE_MAX_DEPTH, "maxDepth"),
+        maxNodes: xmlReferenceLimit(args.maxNodes, XML_REFERENCE_MAX_NODES, 1, XML_REFERENCE_MAX_NODES, "maxNodes"),
+        maxEdges: xmlReferenceLimit(args.maxEdges, XML_REFERENCE_MAX_EDGES, 1, XML_REFERENCE_MAX_EDGES, "maxEdges"),
+        includeSource: false,
+      };
+      return projectXmlReferenceMap(await forge("POST", "/api/agent/project/xml-references", body), body);
+    },
+  },
+  {
+    name: "get_forge_performance",
+    capabilityId: "performance.read",
+    capabilityVersion: 1,
+    description: "Read bounded Forge backend process/operation performance, existing cache counters and explicit producer coverage. Does not start collection, profiling, scans or validation. Returns up to 32 operations, 16 recent slow records and 20 latest resource samples with original totals; unknown metrics remain null.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    handler: async () => projectForgePerformanceReport(await forge("GET", "/api/agent/performance")),
+  },
+  {
+    name: "start_forge_performance_capture",
+    capabilityId: "performance.collect",
+    capabilityVersion: 1,
+    description: "Start an expiring in-memory performance collection for the current Forge backend, not a completed benchmark. Captures for at most 15 minutes with bounded retention; no workspace/configuration changes, commands or automatic file exports. Existing actor ownership refuses overlap.",
+    inputSchema: { type: "object", properties: {
+      durationMs: { type: "integer", description: "1000..900000 milliseconds; default 60000." },
+      intervalMs: { type: "integer", description: "1000..60000 milliseconds; default 2000." },
+      eventLoopDelay: { type: "boolean", description: "Opt in to event-loop delay monitoring; default false." },
+    }, additionalProperties: false },
+    handler: async (args) => {
+      const body = {
+        durationMs: performanceBound(args.durationMs, 60000, 1000, 900000, "durationMs"),
+        intervalMs: performanceBound(args.intervalMs, 2000, 1000, 60000, "intervalMs"),
+        eventLoopDelay: args.eventLoopDelay ?? false,
+      };
+      let response;
+      try { response = await forge("POST", "/api/agent/performance/collection", body); }
+      catch (error) { return performanceHttpFailure(error, PERFORMANCE_COLLECTION_HTTP_FAILURES); }
+      const result = requireResponse(response, "performance collection", { ok: "boolean", control: "object", backend: "object" });
+      return performanceOutput({ ok: result.ok, ...(result.error !== undefined ? { error: performanceText(result.error, "error", 512) } : {}), control: projectPerformanceControl(result.control), backend: projectPerformanceSnapshot(result.backend) });
+    },
+  },
+  {
+    name: "profile_forge_backend",
+    capabilityId: "performance.profile",
+    capabilityVersion: 1,
+    description: "Capture sampled self-time for functions in the current Forge backend only, for 100..2000ms. Native host/webview functions are unsupported here. Returns up to 32 function summaries with relative module labels, coverage, omissions and delayed-stop evidence; no raw source, private paths, debugger port or profile files. Server ownership/cooldown still apply.",
+    inputSchema: { type: "object", properties: {
+      durationMs: { type: "integer", description: "100..2000 milliseconds; default 250." },
+      samplingIntervalMicros: { type: "integer", description: "1000..100000 microseconds; default 1000." },
+      maxFunctions: { type: "integer", description: "1..32 function summaries; default 16." },
+    }, additionalProperties: false },
+    handler: async (args) => {
+      const body = {
+        durationMs: performanceBound(args.durationMs, 250, 100, 2000, "durationMs"),
+        samplingIntervalMicros: performanceBound(args.samplingIntervalMicros, 1000, 1000, 100000, "samplingIntervalMicros"),
+        maxFunctions: performanceBound(args.maxFunctions, 16, 1, 32, "maxFunctions"),
+      };
+      let response;
+      try { response = await forge("POST", "/api/agent/performance/profile", body); }
+      catch (error) { response = performanceHttpFailure(error, PERFORMANCE_PROFILE_HTTP_FAILURES); }
+      return projectPerformanceProfile(response, body.maxFunctions);
+    },
+  },
+  {
     name: "check_conflicts",
     capabilityId: "extensions.conflicts.analyze",
     capabilityVersion: 1,
@@ -317,6 +425,8 @@ const TOOLS = [
 const STATIC_TOOL_NAMES = new Set(TOOLS.map((tool) => tool.name));
 STATIC_TOOL_NAMES.delete("runtime_debugger");
 STATIC_TOOL_NAMES.delete("check_expression");
+STATIC_TOOL_NAMES.delete("get_xml_references");
+for (const name of PERFORMANCE_LIVE_TOOLS) STATIC_TOOL_NAMES.delete(name);
 
 function stableStringify(value) {
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
@@ -390,6 +500,271 @@ function requireResponse(value, label, fields = {}) {
     }
   }
   return value;
+}
+
+function isXmlReferencePath(value) {
+  if (typeof value !== "string" || !value || value.length > 1024 || /[\u0000-\u001f\u007f]/.test(value)) return false;
+  const normalized = value.replace(/\\/g, "/").replace(/^\.\//, "");
+  return !normalized.startsWith("/") && !/^[A-Za-z][A-Za-z0-9+.-]*:/.test(normalized) &&
+    normalized.split("/").every(part => part && part !== "." && part !== "..");
+}
+
+function xmlReferenceLimit(value, fallback, minimum, maximum, label) {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw new Error(`XML reference ${label} must be an integer from ${minimum} to ${maximum}`);
+  }
+  return value;
+}
+
+function projectXmlReferenceMap(value, requestedLimits) {
+  const label = "XML reference map";
+  const payload = requireResponse(value, label, {
+    ok: "boolean", schemaVersion: "string", signature: "string", files: "array", nodes: "array", edges: "array", coverage: "object", context: "object",
+  });
+  const invalid = (field) => {
+    const error = new Error(`${label} response has invalid ${field}`);
+    error.invalidResponse = true;
+    throw error;
+  };
+  const text = (item, field, maximum = 2048) => {
+    if (typeof item !== "string" || item.length > maximum) invalid(field);
+    return item;
+  };
+  const integer = (item, field) => {
+    if (!Number.isSafeInteger(item) || item < 0) invalid(field);
+    return item;
+  };
+  const origin = (item, field) => {
+    if (!["project", "reference"].includes(item)) invalid(field);
+    return item;
+  };
+  const filePath = (item, field) => {
+    if (!isXmlReferencePath(item)) invalid(field);
+    return item;
+  };
+  const optionalText = (item, fields) => Object.fromEntries(fields.filter(field => item[field] !== undefined)
+    .map(field => [field, text(item[field], field)]));
+  if (payload.schemaVersion !== "forge.xml-reference-map.v1") invalid("schemaVersion");
+  if (!/^[a-f0-9]{64}$/.test(payload.signature)) invalid("signature");
+  if (payload.context.workspaceId !== WORKSPACE_ID) invalid("context.workspaceId");
+  const projectFile = (file) => {
+    requireResponse(file, label, { id: "string", origin: "string", path: "string", sha256: "string", locationKind: "string", complete: "boolean", available: "boolean" });
+    if (!["authored", "effective"].includes(file.locationKind) || !/^[a-f0-9]{64}$/.test(file.sha256)) invalid("file identity");
+    const result = {
+      id: text(file.id, "file.id"), origin: origin(file.origin, "file.origin"), path: filePath(file.path, "file.path"),
+      sha256: file.sha256, locationKind: file.locationKind, complete: file.complete, available: file.available,
+      ...optionalText(file, ["reason"]),
+    };
+    if (file.depth !== undefined) result.depth = integer(file.depth, "file.depth");
+    // Authored source paths and native absolute roots are outside this curated projection.
+    return result;
+  };
+  const projectLocation = (location) => {
+    requireResponse(location, label, { origin: "string", path: "string", kind: "string" });
+    if (!["authored", "effective"].includes(location.kind)) invalid("location.kind");
+    const result = { origin: origin(location.origin, "location.origin"), path: filePath(location.path, "location.path"), kind: location.kind };
+    for (const coordinate of ["line", "column"]) if (location[coordinate] !== undefined) {
+      if (!Number.isSafeInteger(location[coordinate]) || location[coordinate] < 1 || location[coordinate] > 1_000_000_000) invalid(`location.${coordinate}`);
+      result[coordinate] = location[coordinate];
+    }
+    return result;
+  };
+  let candidateCount = 0;
+  let returnedCandidateCount = 0;
+  let targetIdCount = 0;
+  let returnedTargetIdCount = 0;
+  const edges = payload.edges.slice(0, requestedLimits.maxEdges).map(edge => {
+    requireResponse(edge, label, { id: "string", sourceId: "string", targetIds: "array", kind: "string", symbol: "string", status: "string", location: "object" });
+    if (!["macro", "component", "ware", "bullet", "index-file", "local-connection", "unknown"].includes(edge.kind) ||
+      !["resolved", "missing", "ambiguous", "dynamic", "unsupported", "incomplete"].includes(edge.status)) invalid("edge kind/status");
+    targetIdCount += edge.targetIds.length;
+    const targetIds = edge.targetIds.slice(0, XML_REFERENCE_MAX_CANDIDATES).map(id => text(id, "edge.targetIds"));
+    returnedTargetIdCount += targetIds.length;
+    const result = {
+      id: text(edge.id, "edge.id"), sourceId: text(edge.sourceId, "edge.sourceId"),
+      targetIds, targetIdCount: edge.targetIds.length, targetIdsTruncated: targetIds.length < edge.targetIds.length, kind: edge.kind,
+      symbol: text(edge.symbol, "edge.symbol", 512), status: edge.status, location: projectLocation(edge.location),
+      ...optionalText(edge, ["targetId", "reason"]),
+    };
+    if (edge.candidates !== undefined) {
+      if (!Array.isArray(edge.candidates)) invalid("edge.candidates");
+      candidateCount += edge.candidates.length;
+      result.candidates = edge.candidates.slice(0, XML_REFERENCE_MAX_CANDIDATES).map(candidate => {
+        requireResponse(candidate, label, { fileId: "string", origin: "string", path: "string" });
+        return { fileId: text(candidate.fileId, "candidate.fileId"), origin: origin(candidate.origin, "candidate.origin"), path: filePath(candidate.path, "candidate.path") };
+      });
+      returnedCandidateCount += result.candidates.length;
+      result.candidateCount = edge.candidates.length;
+      result.candidatesTruncated = result.candidates.length < edge.candidates.length;
+    }
+    return result;
+  });
+  const coverage = requireResponse(payload.coverage, label, { scope: "string", incomingScope: "string", truncated: "boolean", reasons: "array", limits: "object" });
+  if (coverage.reasons.length > 64) invalid("coverage.reasons limit");
+  const projectedCoverage = {
+    scope: text(coverage.scope, "coverage.scope"), incomingScope: text(coverage.incomingScope, "coverage.incomingScope"),
+    truncated: coverage.truncated, reasons: coverage.reasons.map(reason => text(reason, "coverage.reasons", 360)),
+    limits: {},
+  };
+  for (const field of ["scannedFiles", "scannedProjectFiles", "scannedReferenceFiles", "knownProjectFiles", "unsupported", "incomplete"]) {
+    projectedCoverage[field] = integer(coverage[field], `coverage.${field}`);
+  }
+  for (const field of ["maxDepth", "maxNodes", "maxEdges", "maxDocuments", "maxDocumentBytes", "maxTotalBytes", "maxPreviewChars", "maxResponseBytes"]) {
+    projectedCoverage.limits[field] = integer(coverage.limits[field], `coverage.limits.${field}`);
+  }
+  const files = payload.files.slice(0, XML_REFERENCE_MAX_FILES).map(projectFile);
+  const nodes = payload.nodes.slice(0, requestedLimits.maxNodes).map(projectFile);
+  const result = {
+    ok: payload.ok, schemaVersion: payload.schemaVersion, signature: payload.signature, files, nodes, edges,
+    coverage: projectedCoverage,
+    context: optionalText(payload.context, ["workspaceId", "inputMode", "inputFingerprint", "corpusSignature", "corpusGeneration", "usedSourceSignature"]),
+    projection: {
+      fileCount: payload.files.length, returnedFileCount: files.length,
+      nodeCount: payload.nodes.length, returnedNodeCount: nodes.length,
+      edgeCount: payload.edges.length, returnedEdgeCount: edges.length,
+      candidateCountInReturnedEdges: candidateCount, returnedCandidateCount,
+      targetIdCountInReturnedEdges: targetIdCount, returnedTargetIdCount,
+      truncated: files.length < payload.files.length || nodes.length < payload.nodes.length || edges.length < payload.edges.length || returnedCandidateCount < candidateCount || returnedTargetIdCount < targetIdCount,
+      sourceIncluded: false,
+      omittedFields: ["preview", "files.sourcePaths", "nodes.sourcePaths", "context.nativeSourceFolder"],
+    },
+  };
+  if (Buffer.byteLength(JSON.stringify(result), "utf8") > XML_REFERENCE_MAX_OUTPUT_BYTES) invalid("projection exceeds 512 KiB UTF-8; use the Agent API for this result");
+  return result;
+}
+
+function performanceInvalid(field) {
+  const error = new Error(`Forge performance response has invalid ${field}`);
+  error.invalidResponse = true;
+  throw error;
+}
+function performanceBound(value, fallback, minimum, maximum, label) {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) throw new Error(`${label} must be an integer from ${minimum} to ${maximum}`);
+  return value;
+}
+function performanceText(value, label, maximum = 160) {
+  if (typeof value !== "string" || value.length > maximum || /[\u0000-\u001f\u007f]/.test(value)) performanceInvalid(label);
+  return value;
+}
+function performanceNumbers(value, fields, nullable = false, integers = false) {
+  if (!isRecord(value)) performanceInvalid("metric object");
+  return Object.fromEntries(fields.map(field => {
+    const item = value[field];
+    if (!(nullable && item === null) && (typeof item !== "number" || !Number.isFinite(item) || item < 0 || integers && !Number.isSafeInteger(item))) performanceInvalid(field);
+    return [field, item];
+  }));
+}
+function performanceConstants(value, expected) {
+  if (!isRecord(value)) performanceInvalid("coverage");
+  for (const [field, wanted] of Object.entries(expected)) if (value[field] !== wanted) performanceInvalid(`coverage.${field}`);
+  return { ...expected };
+}
+function performanceProducer(value) {
+  if (!isRecord(value) || value.component !== "backend" || value.scope !== "owned-process" ||
+    !Number.isSafeInteger(value.pid) || value.pid < 1 || value.instanceId !== null &&
+    (typeof value.instanceId !== "string" || !/^[A-Za-z0-9_.-]{1,160}$/.test(value.instanceId))) performanceInvalid("backend producer identity");
+  return { component: value.component, scope: value.scope, pid: value.pid, instanceId: value.instanceId };
+}
+function performanceOutput(value) {
+  if (Buffer.byteLength(JSON.stringify(value), "utf8") > PERFORMANCE_MAX_OUTPUT_BYTES) performanceInvalid("projection exceeds 256 KiB UTF-8");
+  return value;
+}
+function performanceHttpFailure(error, expectedStatuses) {
+  const result = error?.performanceResponse;
+  if (!isRecord(result) || result.ok !== false || typeof result.code !== "string" || !Object.hasOwn(expectedStatuses, result.code) || expectedStatuses[result.code] !== error.status) throw error;
+  return { ok: false, code: result.code, error: performanceText(result.error, "control refusal error", 512) };
+}
+function projectPerformanceSnapshot(value) {
+  const input = requireResponse(value, "performance snapshot", { schemaVersion: "string", producer: "object", enabled: "boolean", disposed: "boolean", operations: "array", recentSlowOperations: "array", resources: "array", drops: "object", limits: "object", selfOverhead: "object", coverage: "object" });
+  if (input.schemaVersion !== "forge.performance.v1") performanceInvalid("snapshot.schemaVersion");
+  const operation = item => {
+    requireResponse(item, "performance operation", { name: "string", outcomes: "object", quantileMethod: "string", histogram: "object" });
+    if (!/^[A-Za-z][A-Za-z0-9_.:/ -]{0,159}$/.test(item.name) || item.name.includes("://") || item.name.includes("//")) performanceInvalid("operation.name");
+    if (item.quantileMethod !== "fixed-histogram-upper-bound" || !Array.isArray(item.histogram.upperBoundsMs) || !Array.isArray(item.histogram.counts) ||
+      item.histogram.upperBoundsMs.length > 24 || item.histogram.upperBoundsMs.length !== item.histogram.counts.length ||
+      item.histogram.upperBoundsMs.some(n => !Number.isFinite(n) || n < 0) || item.histogram.counts.some(n => !Number.isSafeInteger(n) || n < 0)) performanceInvalid("operation.histogram");
+    return { name: item.name, ...performanceNumbers(item, ["count"], false, true),
+      ...performanceNumbers(item, ["totalMs", "minMs", "maxMs", "meanMs"]), ...performanceNumbers(item, ["p50Ms", "p95Ms", "p99Ms"], true),
+      outcomes: performanceNumbers(item.outcomes, ["ok", "error", "cancelled", "aborted", "superseded"], false, true), quantileMethod: item.quantileMethod };
+  };
+  const operations = input.operations.slice(0, 128).map(operation).sort((left, right) => right.totalMs - left.totalMs || left.name.localeCompare(right.name)).slice(0, 32);
+  const recentSlowOperations = input.recentSlowOperations.slice(-16).map(item => {
+    requireResponse(item, "slow performance operation", { name: "string", outcome: "string" });
+    if (!/^[A-Za-z][A-Za-z0-9_.:/ -]{0,159}$/.test(item.name) || item.name.includes("://") || item.name.includes("//") || !["ok", "error", "cancelled", "aborted", "superseded"].includes(item.outcome)) performanceInvalid("slow operation identity");
+    const projected = { name: item.name, outcome: item.outcome, ...performanceNumbers(item, ["durationMs"]), ...performanceNumbers(item, ["atUnixMs"], true) };
+    if (item.correlationId !== undefined) {
+      if (typeof item.correlationId !== "string" || !/^[A-Za-z0-9_-]{1,80}$/.test(item.correlationId)) performanceInvalid("correlationId");
+      projected.correlationId = item.correlationId;
+    }
+    return projected;
+  });
+  const resources = input.resources.slice(-20).map(item => performanceNumbers(item, PERFORMANCE_RESOURCE_FIELDS, true));
+  return {
+    schemaVersion: input.schemaVersion, producer: performanceProducer(input.producer), enabled: input.enabled, disposed: input.disposed,
+    ...performanceNumbers(input, ["startedAtUnixMs", "capturedAtUnixMs"], true), operations, recentSlowOperations, resources,
+    drops: performanceNumbers(input.drops, ["disabled", "disposed", "invalidOperations", "invalidResources", "operationCapacity", "slowOverwrites", "resourceOverwrites", "duplicateFinishes", "recorderErrors", "snapshotOmissions", "staleFinishes"], false, true),
+    limits: performanceNumbers(input.limits, ["maxOperations", "maxSlowOperations", "maxResources", "maxSnapshotBytes", "maxNameChars", "maxCorrelationChars", "slowOperationMs"]),
+    selfOverhead: { ...performanceNumbers(input.selfOverhead, ["recordCalls", "snapshotCalls", "clockFailures"]),
+      ...performanceNumbers(input.selfOverhead, ["recordMs", "snapshotMs"], true),
+      ...performanceConstants(input.selfOverhead, { snapshotScope: "completed-prior-snapshots-including-serialization-and-freeze" }) },
+    coverage: performanceConstants(input.coverage, { operations: "instrumented-boundaries-only", cpuAttribution: "process-interval-not-exclusive-operation", memoryAttribution: "process-or-host-estimates-not-function-allocations", quantiles: "histogram-estimates", resourceFields: "null-means-unavailable-or-unsampled", functionProfiles: "separate-bounded-producer", limitsAre: "retained-state-not-os-quota" }),
+    projection: { operationCount: input.operations.length, scannedOperationCount: Math.min(input.operations.length, 128), returnedOperationCount: operations.length,
+      slowOperationCount: input.recentSlowOperations.length, returnedSlowOperationCount: recentSlowOperations.length,
+      resourceSampleCount: input.resources.length, returnedResourceSampleCount: resources.length,
+      truncated: operations.length < input.operations.length || recentSlowOperations.length < input.recentSlowOperations.length || resources.length < input.resources.length,
+      omittedFields: ["operations.histogram"] },
+  };
+}
+function projectPerformanceControl(value) {
+  if (!isRecord(value)) performanceInvalid("control");
+  const booleans = ["disposed", "collectionActive", "profilingEnabled", "profileActive", "eventLoopDelayMonitoring", "profileCleanupUnconfirmed", "collectionCleanupUnconfirmed", "abortListenerCleanupUnconfirmed"];
+  for (const field of booleans) if (typeof value[field] !== "boolean") performanceInvalid(`control.${field}`);
+  if (![null, "unavailable", "producer-identity-changed", "clock-unavailable"].includes(value.lastResourceError)) performanceInvalid("control.lastResourceError");
+  const coverage = performanceConstants(value.coverage, { extensionHost: "not-this-producer", webview: "not-this-producer", childProcesses: "excluded", memory: "process-not-function", cpu: "process-interval" });
+  return { ...Object.fromEntries(booleans.map(field => [field, value[field]])),
+    ...performanceNumbers(value, ["collectionStartedAtUnixMs", "collectionExpiresAtUnixMs", "collectionStopDelayMs", "profileCooldownRemainingMs"], true),
+    ...performanceNumbers(value, ["intervalMs", "resourceSamples", "resourceErrors", "throttledSamples", "counterResets", "sampleOverheadMs", "profileCapturesStarted", "profileCapturesSucceeded", "profileCapturesFailed", "profileRateLimited", "ownedTimerCount", "failedTimerCount"]),
+    lastResourceError: value.lastResourceError,
+    coverage: { ...coverage, ...performanceNumbers(value.coverage, ["backendPid"], false, true) },
+  };
+}
+function projectForgePerformanceReport(value) {
+  const input = requireResponse(value, "Forge performance report", { ok: "boolean", schemaVersion: "string", backend: "object", control: "object", caches: "object", coverage: "object" });
+  if (input.ok !== true || input.schemaVersion !== "forge.performance.report.v1") performanceInvalid("report schema/status");
+  const cacheFields = ["hits", "misses", "bypasses", "evictions", "entries", "accountedBytes"];
+  const cache = requireResponse(input.caches.projectValidation, "validation cache", { lua: "object", effectiveSchema: "object" });
+  return performanceOutput({ ok: true, schemaVersion: input.schemaVersion, backend: projectPerformanceSnapshot(input.backend), control: projectPerformanceControl(input.control),
+    caches: { projectValidation: { ...performanceNumbers(cache, cacheFields, false, true), lua: performanceNumbers(cache.lua, cacheFields, false, true), effectiveSchema: performanceNumbers(cache.effectiveSchema, cacheFields, false, true) } },
+    coverage: performanceConstants(input.coverage, { native: "unavailable-not-wired", webview: "local-current-panel-only", profiling: "backend-only-explicit-control", cacheBytes: "accounted-not-exact-heap", operations: "instrumented-boundaries-only" }),
+  });
+}
+function projectPerformanceProfile(value, maxFunctions) {
+  const input = requireResponse(value, "backend CPU profile", { ok: "boolean" });
+  if (!input.ok) {
+    if (typeof input.code !== "string" || !Object.hasOwn(PERFORMANCE_PROFILE_HTTP_FAILURES, input.code)) performanceInvalid("profile refusal code");
+    return { ok: false, code: input.code, error: performanceText(input.error, "profile.error", 512) };
+  }
+  requireResponse(input, "backend CPU profile", { schemaVersion: "string", producer: "object", functions: "array", omitted: "object", coverage: "object" });
+  if (input.schemaVersion !== "forge.cpu-profile.v1") performanceInvalid("profile.schemaVersion");
+  const functions = input.functions.slice(0, maxFunctions).map(item => {
+    requireResponse(item, "CPU function", { name: "string", module: "string" });
+    const module = performanceText(item.module, "function.module");
+    if (module !== "(external-or-runtime)" && !/^node:[A-Za-z0-9_./-]+$/.test(module) && !isXmlReferencePath(module)) performanceInvalid("function.module absolute/private path");
+    if (!/^[A-Za-z0-9_$ .<>()\[\]:-]{1,128}$/.test(item.name)) performanceInvalid("function.name");
+    return { name: performanceText(item.name, "function.name", 128), module,
+      ...performanceNumbers(item, ["line", "column", "selfSampleMicros"], true), ...performanceNumbers(item, ["selfSamples"], false, true) };
+  });
+  const samples = input.coverage.samples;
+  if (!["available", "unavailable"].includes(samples)) performanceInvalid("profile.coverage.samples");
+  return performanceOutput({ ok: true, schemaVersion: input.schemaVersion, producer: performanceProducer(input.producer),
+    ...performanceNumbers(input, ["requestedDurationMs", "samplingIntervalMicros", "scannedSampleCount"]),
+    ...performanceNumbers(input, ["observedDurationMs", "delayedStopMs", "profileDurationMicros", "sampleCount"], true), functions,
+    omitted: performanceNumbers(input.omitted, ["nodes", "samples", "functions", "unknownNodeSamples", "invalidNodes", "invalidDeltas", "redactedLabels"], false, true),
+    coverage: { ...performanceConstants(input.coverage, { process: "current-backend-only", attribution: "sampled-self-time-not-exact-operation-cpu", rawProfile: "not-returned-or-persisted", timer: "event-loop-blockage-can-delay-stop", resourceLimit: "no-os-heap-quota" }), samples },
+    projection: { functionCount: input.functions.length, returnedFunctionCount: functions.length, truncated: functions.length < input.functions.length },
+  });
 }
 
 function requireRuntimeDebuggerResponse(value, label) {
@@ -963,7 +1338,7 @@ async function availableTools() {
   if (stickyLiveToolNames !== null) {
     return {
       discovery,
-      toolNames: [...stickyLiveToolNames].filter(name => name !== "check_expression"),
+      toolNames: [...stickyLiveToolNames].filter(name => !["check_expression", "get_xml_references"].includes(name) && !PERFORMANCE_LIVE_TOOLS.has(name)),
       effectiveContract: lastValidContract,
       effectiveAuthority: lastValidAuthority,
       contractState: `${discovery.state}-sticky-live`,
@@ -1075,6 +1450,7 @@ async function forge(method, apiPath, body, signal) {
     const msg = (data && data.error) || `HTTP ${res.status}`;
     const error = new Error(`Forge API ${apiPath}: ${msg}${res.status === 401 ? " (is X4FORGE_KEY set to a valid agent key?)" : ""}${res.status === 403 ? " (check key scope and its workspace binding)" : ""}${data?.code === 'WORKSPACE_ID_REQUIRED' ? " (set X4FORGE_WORKSPACE_ID to the key-bound workspace)" : ""}`);
     error.status = res.status;
+    if (["/api/agent/performance/collection", "/api/agent/performance/profile"].includes(apiPath)) error.performanceResponse = data;
     throw error;
   }
   requireResponse(data, `Forge API ${apiPath}`);
@@ -1139,7 +1515,7 @@ rl.on("line", async (line) => {
         const result = await TOOLS[toolIndex].handler(toolArguments, { contractState: availability.contractState });
         return reply(id, {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-          ...(TOOLS[toolIndex].name === "compile_workspace" && result.success === false ? { isError: true } : {}),
+          ...(TOOLS[toolIndex].name === "compile_workspace" && result.success === false || PERFORMANCE_LIVE_TOOLS.has(TOOLS[toolIndex].name) && result.ok === false ? { isError: true } : {}),
         });
       } catch (err) {
         return reply(id, { content: [{ type: "text", text: `ERROR: ${err && err.message ? err.message : String(err)}` }], isError: true });

@@ -5,8 +5,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import os from 'node:os';
-import { startE2EViteServer } from '../tests/e2e/e2e-vite-server';
-import { E2E_STATE_DIR, resolveE2eRuntime } from '../playwright.config';
+import { EventEmitter } from 'node:events';
+import { createE2eRunStateOwner, E2E_RUN_STATE_ENV, readE2eRunState } from './e2e-runtime-bootstrap.mjs';
+import { configureProfileProxyCancellation } from '../src/lib/profileProxyCancellation';
+
+let startE2EViteServer: typeof import('../tests/e2e/e2e-vite-server').startE2EViteServer;
+let E2E_STATE_DIR: string;
+let resolveE2eRuntime: typeof import('../playwright.config').resolveE2eRuntime;
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ENV_KEYS = ['API_PORT', 'STUDIO_API_TOKEN', 'DISABLE_HMR'] as const;
@@ -157,8 +162,133 @@ async function cleanupRefusals(apiPort: number): Promise<void> {
   }
 }
 
+function profileProxyListenerControls(): void {
+  class Upstream extends EventEmitter {
+    destroyed = false;
+    destroys = 0;
+    throwOnDestroy = false;
+    destroy() { this.destroys++; this.destroyed = true; if (this.throwOnDestroy) throw new Error('owned destroy failed'); return this; }
+  }
+  class Downstream extends EventEmitter { destroyed = false; writableFinished = false; }
+  const proxy = new EventEmitter();
+  configureProfileProxyCancellation(proxy as Parameters<typeof configureProfileProxyCancellation>[0]);
+  const make = (method = 'POST', url = '/api/agent/performance/profile', before?: (upstream: Upstream, response: Downstream) => void) => {
+    const upstream = new Upstream(); const response = new Downstream(); const request = new EventEmitter();
+    const sentinel = () => {};
+    for (const event of ['response', 'error', 'close']) upstream.on(event, sentinel);
+    response.on('close', sentinel);
+    before?.(upstream, response);
+    proxy.emit('proxyReq', upstream, Object.assign(request, { method, url }), response);
+    return { upstream, response, request, retired: () => {
+      for (const event of ['response', 'error', 'close']) assert.deepEqual(upstream.listeners(event), [sentinel], `only owned ${event} listener retired`);
+      assert.deepEqual(response.listeners('close'), [sentinel], 'unrelated response listener survives');
+    } };
+  };
+  const disconnected = make(); disconnected.response.emit('close');
+  assert.equal(disconnected.upstream.destroys, 1); disconnected.retired();
+  disconnected.response.emit('close'); assert.equal(disconnected.upstream.destroys, 1, 'disconnect is once-only');
+  const normal = make(); normal.response.writableFinished = true; normal.response.emit('close');
+  assert.equal(normal.upstream.destroys, 0, 'finished response is not cancelled'); normal.retired();
+  const body = make(); body.request.emit('end'); body.request.emit('close');
+  assert.equal(body.request.listenerCount('close'), 0, 'incoming request close is not owned');
+  assert.equal(body.upstream.destroys, 0, 'body completion is not cancellation'); body.upstream.emit('response'); body.retired();
+  body.response.emit('close'); assert.equal(body.upstream.destroys, 0, 'post-header handling belongs to Vite');
+  for (const event of ['response', 'error', 'close']) {
+    const completed = make(); completed.upstream.emit(event); completed.retired();
+    completed.response.emit('close'); assert.equal(completed.upstream.destroys, 0, `${event} removes pre-header ownership`);
+  }
+  const alreadyGone = make('POST', '/api/agent/performance/profile', (_upstream, response) => { response.destroyed = true; });
+  assert.equal(alreadyGone.upstream.destroys, 1); alreadyGone.retired();
+  const upstreamGone = make('POST', '/api/agent/performance/profile', upstream => { upstream.destroyed = true; });
+  assert.equal(upstreamGone.upstream.destroys, 0); upstreamGone.retired();
+  const throwing = make('POST', '/api/agent/performance/profile', upstream => { upstream.throwOnDestroy = true; });
+  assert.doesNotThrow(() => throwing.response.emit('close')); throwing.retired();
+  for (const [method, url] of [['GET', '/api/agent/performance/profile'], ['PUT', '/api/agent/performance/profile'],
+    ['POST', '/api/agent/performance/collection'], ['POST', '/api/agent/performance/profile/extra'],
+    ['POST', '/api/agent/performance/profile?unexpected=1'], ['post', '/api/agent/performance/profile']]) {
+    const untouched = make(method, url); untouched.retired(); untouched.response.emit('close');
+    assert.equal(untouched.upstream.destroys, 0, `${method} ${url} retains existing behavior`);
+  }
+  console.log('[profile-proxy listener controls] PASS');
+}
+
+function profileProxyHttpControls() {
+  type Row = { ready: Promise<void>; received: () => void; settled: Promise<void>; settle: () => void; bodyComplete: boolean; earlyClose: boolean; finished: boolean };
+  const rows = new Map<string, Row>();
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  const responses = new Set<http.ServerResponse>();
+  const body = '{"probe":"owned-preheader-cancel"}';
+  const bounded = async <T,>(promise: Promise<T>, label: string): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try { return await Promise.race([promise, new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error(`${label} timed out`)), 3000); })]); }
+    finally { clearTimeout(timer); }
+  };
+  return {
+    handle(req: http.IncomingMessage, res: http.ServerResponse): boolean {
+      const id = req.headers['x-forge-profile-proxy-control'];
+      const row = typeof id === 'string' ? rows.get(id) : undefined;
+      if (!row) return false;
+      let text = ''; let bytes = 0; let timer: ReturnType<typeof setTimeout> | undefined;
+      responses.add(res);
+      res.once('finish', () => { row.finished = true; });
+      res.once('close', () => { clearTimeout(timer); if (timer) timers.delete(timer); responses.delete(res); row.earlyClose = !res.writableFinished; row.settle(); });
+      req.on('data', (chunk: Buffer) => { bytes += chunk.length; if (bytes > 64) { req.destroy(); return; } text += chunk.toString('utf8'); });
+      req.once('end', () => {
+        row.bodyComplete = req.complete && text === body; row.received();
+        timer = setTimeout(() => { if (timer) timers.delete(timer); res.writeHead(200, { 'Content-Type': 'text/plain', Connection: 'close' }).end('owned-profile-complete'); }, 500);
+        timers.add(timer);
+      });
+      return true;
+    },
+    async run(apiPort: number, proxyPort: number): Promise<void> {
+      const cases = [
+        { id: 'direct-abort', port: apiPort, method: 'POST', path: '/api/agent/performance/profile', abort: true, early: true },
+        { id: 'proxy-abort', port: proxyPort, method: 'POST', path: '/api/agent/performance/profile', abort: true, early: true },
+        { id: 'direct-complete', port: apiPort, method: 'POST', path: '/api/agent/performance/profile', abort: false, early: false },
+        { id: 'proxy-complete', port: proxyPort, method: 'POST', path: '/api/agent/performance/profile', abort: false, early: false },
+        { id: 'other-route-abort', port: proxyPort, method: 'POST', path: '/api/agent/performance/collection', abort: true, early: false },
+        { id: 'other-method-abort', port: proxyPort, method: 'PUT', path: '/api/agent/performance/profile', abort: true, early: false },
+      ];
+      for (const sample of cases) {
+        let received!: () => void; let settle!: () => void;
+        const row: Row = { ready: new Promise(resolve => { received = resolve; }), received: () => received(), settled: new Promise(resolve => { settle = resolve; }), settle: () => settle(), bodyComplete: false, earlyClose: false, finished: false };
+        rows.set(sample.id, row);
+        const controller = new AbortController(); let headers = false; let clientRequest: http.ClientRequest | undefined;
+        try {
+          const client = new Promise<{ status?: number; body?: string; error?: string }>(resolve => {
+            clientRequest = http.request({ host: '127.0.0.1', port: sample.port, path: sample.path, method: sample.method, agent: false, signal: controller.signal,
+              headers: { 'Content-Length': Buffer.byteLength(body), 'x-forge-profile-proxy-control': sample.id } }, res => {
+              headers = true; let content = ''; res.on('data', chunk => { content += chunk.toString(); });
+              res.once('end', () => resolve({ status: res.statusCode, body: content }));
+              res.once('error', error => resolve({ error: error.name }));
+            });
+            clientRequest.once('error', error => resolve({ error: error.name })); clientRequest.end(body);
+          });
+          await bounded(row.ready, `${sample.id} consumed body`); assert.equal(row.bodyComplete, true);
+          if (sample.abort) { assert.equal(headers, false, 'abort occurs before headers'); assert.equal(row.finished, false); controller.abort(); }
+          const result = await bounded(client, `${sample.id} client`); await bounded(row.settled, `${sample.id} backend`);
+          if (sample.abort) assert.equal(result.error, 'AbortError');
+          else { assert.equal(result.status, 200); assert.equal(result.body, 'owned-profile-complete'); }
+          assert.equal(row.earlyClose, sample.early, `${sample.id}: scoped pre-header cancellation`);
+          assert.equal(row.finished, !sample.early, `${sample.id}: normal completion is independent`);
+        } finally { controller.abort(); clientRequest?.destroy(); }
+      }
+      assert.equal(rows.size, 6); assert.equal(timers.size, 0); assert.equal(responses.size, 0);
+      console.log('[profile-proxy actual HTTP controls] PASS 6/6');
+    },
+    dispose() { for (const timer of timers) clearTimeout(timer); timers.clear(); for (const response of responses) response.destroy(); responses.clear(); },
+  };
+}
+
 async function main(): Promise<void> {
-  const stateExisted = fs.existsSync(E2E_STATE_DIR);
+  const stateOwner = createE2eRunStateOwner();
+  process.env[E2E_RUN_STATE_ENV] = stateOwner.environment[E2E_RUN_STATE_ENV];
+  try {
+  ({ E2E_STATE_DIR, resolveE2eRuntime } = await import('../playwright.config'));
+  ({ startE2EViteServer } = await import('../tests/e2e/e2e-vite-server'));
+  assert.equal(E2E_STATE_DIR, stateOwner.stateDir, 'config and Vite imports consume one bootstrap root');
+  assert.equal(readE2eRunState({ ...stateOwner.environment }).stateDir, E2E_STATE_DIR, 'worker-like consumer shares that root');
+  profileProxyListenerControls();
   const originalCaches = cacheNames();
   assert.equal(resolveE2eRuntime({}).mode, 'source');
   assert.equal(resolveE2eRuntime({ X4_FORGE_E2E_MODE: 'source' }).command, 'node node_modules/tsx/dist/cli.mjs server.ts');
@@ -258,7 +388,9 @@ async function main(): Promise<void> {
     }
 
     const builtHtml = '<html><script>window.__STUDIO_API_TOKEN__="compiled-selftest"</script><body>Exact compiled HTML</body></html>';
+    const cancellation = profileProxyHttpControls();
     const backend = http.createServer((req, res) => {
+      if (cancellation.handle(req, res)) return;
       if (req.url === '/') res.writeHead(200, { 'Content-Type': 'text/html' }).end(builtHtml);
       else if (req.url === '/assets/compiled.js') res.writeHead(200, { 'Content-Type': 'application/javascript' }).end('/* exact compiled asset */');
       else res.writeHead(404, { 'Content-Type': 'text/plain' }).end('compiled backend missing');
@@ -280,6 +412,7 @@ async function main(): Promise<void> {
       const missing = await fetch(`http://127.0.0.1:${proxy.port}/missing`);
       assert.equal(missing.status, 404, 'compiled backend refusal is preserved');
       assert.equal(await missing.text(), 'compiled backend missing');
+      await cancellation.run(address.port, proxy.port);
       assert.deepEqual(fs.readdirSync(proxy.cacheDir), ['.e2e-vite-owner'], 'compiled proxy never discovers/prebundles source dependencies');
 
       await proxy.close();
@@ -300,6 +433,7 @@ async function main(): Promise<void> {
         }
       }
     } finally {
+      cancellation.dispose();
       const proxyPort = proxy?.port;
       await proxy?.close();
       await new Promise<void>((resolve, reject) => backend.close(error => error ? reject(error) : resolve()));
@@ -309,7 +443,9 @@ async function main(): Promise<void> {
     assert.deepEqual(cacheNames(), originalCaches, 'all repeated/negative lifecycles preserve the initial cache set');
   } finally {
     restoreEnvironment(originalEnvironment);
-    if (!stateExisted && fs.existsSync(E2E_STATE_DIR) && fs.readdirSync(E2E_STATE_DIR).length === 0) fs.rmdirSync(E2E_STATE_DIR);
+  }
+  } finally {
+    try { stateOwner.retire(); } finally { delete process.env[E2E_RUN_STATE_ENV]; }
   }
 }
 
