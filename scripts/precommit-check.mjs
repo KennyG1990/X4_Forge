@@ -1,4 +1,7 @@
 import fs from "node:fs";
+import console from "node:console";
+import process from "node:process";
+import { Buffer } from "node:buffer";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -162,6 +165,13 @@ function checkBackendRecovery() {
   if (result.status !== 0) throw new Error(`backend recovery selftest failed with exit ${result.status ?? "unknown"}`);
 }
 
+function checkRuntimeStaging() {
+  console.log("[precommit] explicit runtime staging selftest");
+  const result = spawnSync(process.execPath, ["vscode-extension/scripts/stage-app.mjs", "--selftest"], { cwd: root, stdio: "inherit", windowsHide: true });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`runtime staging selftest failed with exit ${result.status ?? "unknown"}`);
+}
+
 function checkProductCopy() {
   console.log("[precommit] shipped product-copy guard");
   const result = spawnSync("npm run test:product-copy", { cwd: root, shell: true, stdio: "inherit" });
@@ -205,6 +215,7 @@ try {
   checkE2eVerdict();
   checkE2eViteLifecycle();
   checkBackendRecovery();
+  checkRuntimeStaging();
   checkProductCopy();
   checkDurableWriters();
   checkCapabilityContracts();

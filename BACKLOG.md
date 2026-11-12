@@ -6,6 +6,10 @@
 
 ## P0 — Active
 
+### Current isolated Dev payload qualification `in_progress` (#20, linked #64)
+
+FORGE DEVELOPMENT/CodeSense are running, but its bundled runtime53c960/manifest79 is older than current source. [Reconciled upgrade prerequisite](docs/plans/2026-11-11-dev-host-restoration.md): optional guarded runtime-source staging is implemented; selftests/lint/type/precommit, real refusal/preservation/repeat identity and current build/stage/probe19/19pass. Normal source hook/CI remain pending; current Dev variant/installed replay/swap still unapplied. Reuses qualified83closure without range re-resolution/new cache downloads. Preserve private profiles/mod/CodeSense, controller isolation and rollback. No public bump/release yet; whole64/game/native visual gates stay open.
+
 ### Validation and debuglog issue execution `in_progress` (existing #20/#74/#14 owners)
 
 Current #64 ware checkpoint: source d9a1e66 and API proof d2a1920 are committed/pushed with exact-head CI success. The affected file passes 5/5, including real project/Problems and both native aliases: 0/1/0 ware findings, identical source hashes, stale-source/changed-target refusal, exact selected bytes, reopened receipts and operation recovery/replay refusal. Incomplete coverage remains explicit. [Acceptance and evidence](docs/plans/2026-11-11-lua-ware-reference-consumers.md). Whole #64 and review36 remain PARTIAL/NOT_READY pending current compiled/installed/rendered/public qualification. Native proof-only commit/gate identities are recorded in its QA packet after observation. Three exact state roots retired 800,470 bytes / 207 entries; failed evidence retained, no helper/runtime copies. Serial headless checks authorized; no computer use/live Forge/X4. Stable83 unchanged.

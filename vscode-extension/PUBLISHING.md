@@ -83,6 +83,14 @@ time; 0.0.4/0.0.6 shipped pre-release and hit the "no release version" install w
 unexpected file in `dist/` — that guard exists because a recursive copy once admitted real mod
 content into the package. If it fails, FIX the input; do not bypass it.
 
+For an internal Dev build, an already qualified physical runtime can be reused with
+`npm run stage-app -- --runtime-from <absolute-app-directory>`. Its runtime manifest
+and lock must match the current dependency specifications exactly. Links, target aliases,
+oversized trees and source/copy drift refuse; validation precedes target replacement.
+This mode copies the supplied lock and runtime without invoking npm. It does not certify
+an arbitrary source as qualified, change the default installer, or install a Dev update.
+Keep the source qualification receipt/hashes and run the normal staged/native probes.
+
 **4. Publish** (token lives in `<REPO>/.env.local` as `OVSX_PAT`, gitignored — read it
 programmatically, never echo it, never paste it into chat):
 ```bash
