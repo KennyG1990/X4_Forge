@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import os from 'node:os';
 import { startE2EViteServer } from '../tests/e2e/e2e-vite-server';
-import { resolveE2eRuntime } from '../playwright.config';
+import { E2E_STATE_DIR, resolveE2eRuntime } from '../playwright.config';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ENV_KEYS = ['API_PORT', 'STUDIO_API_TOKEN', 'DISABLE_HMR'] as const;
@@ -84,7 +84,82 @@ async function getText(port: number): Promise<string> {
   });
 }
 
+function cacheNames(): string[] {
+  return fs.existsSync(E2E_STATE_DIR) ? fs.readdirSync(E2E_STATE_DIR).filter(name => name.startsWith('vite-cache-')).sort() : [];
+}
+
+function retireTestCache(dir: string): void {
+  assert.equal(path.dirname(dir), E2E_STATE_DIR, 'test cleanup is confined to the exact private state child');
+  assert.match(path.basename(dir), /^vite-cache-/u);
+  assert.equal(fs.lstatSync(dir).isSymbolicLink(), false);
+  assert.equal(fs.lstatSync(E2E_STATE_DIR).isSymbolicLink(), false);
+  // Called only after the actual server stopped and deliberate links/replacements
+  // were restored below. This is the test fixture's cleanup, not a retry by the owner.
+  fs.rmSync(dir, { recursive: true });
+}
+
+async function cleanupRefusals(apiPort: number): Promise<void> {
+  const callerEnvironment = snapshotEnvironment();
+  for (const kind of ['active', 'pretend', 'replaced', 'marker', 'linked', 'hardlinked'] as const) {
+    const vite = await startE2EViteServer({ rootDir: ROOT, port: 0, apiPort, compiled: true });
+    const originalClose = vite.server.close.bind(vite.server);
+    const markerPath = path.join(vite.cacheDir, '.e2e-vite-owner');
+    const marker = fs.readFileSync(markerPath, 'utf8');
+    const moved = `${vite.cacheDir}-moved`;
+    let foreign: string | undefined;
+    const link = path.join(vite.cacheDir, 'foreign-link');
+    try {
+      if (kind === 'active') vite.server.close = async () => { throw new Error('selftest unconfirmed writer shutdown'); };
+      if (kind === 'pretend') vite.server.close = async () => {};
+      if (kind === 'replaced') {
+        fs.renameSync(vite.cacheDir, moved);
+        fs.mkdirSync(vite.cacheDir);
+        fs.writeFileSync(markerPath, marker);
+        fs.writeFileSync(path.join(vite.cacheDir, 'foreign.txt'), 'preserve replacement');
+      }
+      if (kind === 'marker') fs.writeFileSync(markerPath, 'foreign-owner');
+      if (kind === 'linked' || kind === 'hardlinked') {
+        foreign = fs.mkdtempSync(path.join(E2E_STATE_DIR, 'foreign-cache-control-'));
+        const sentinel = path.join(foreign, 'sentinel.txt');
+        fs.writeFileSync(sentinel, 'preserve outside bytes');
+        if (kind === 'linked') fs.symlinkSync(foreign, link, 'junction');
+        else fs.linkSync(sentinel, link);
+      }
+      const close = vite.close();
+      assert.equal(vite.close(), close, `${kind}: close is once-only even on refusal`);
+      await assert.rejects(close, /unconfirmed writer shutdown|shutdown unconfirmed|cleanup refused/u, `${kind}: preserve and report instead of deleting`);
+      assert.equal(fs.existsSync(vite.cacheDir), true, `${kind}: cache is preserved`);
+      assert.deepEqual(snapshotEnvironment(), callerEnvironment, `${kind}: environment is restored on refusal`);
+      if (kind === 'active' || kind === 'pretend') assert.equal(vite.server.httpServer?.listening, true, 'active writer was not presented as stopped');
+      else await assertPortFree(vite.port);
+      if (kind === 'replaced') {
+        assert.equal(fs.readFileSync(path.join(vite.cacheDir, 'foreign.txt'), 'utf8'), 'preserve replacement');
+        assert.equal(fs.readFileSync(path.join(moved, '.e2e-vite-owner'), 'utf8'), marker, 'original cache also preserved');
+      }
+      if (foreign) assert.equal(fs.readFileSync(path.join(foreign, 'sentinel.txt'), 'utf8'), 'preserve outside bytes');
+    } finally {
+      vite.server.close = originalClose;
+      await originalClose();
+      await assertPortFree(vite.port);
+      if (kind === 'replaced') {
+        retireTestCache(vite.cacheDir);
+        fs.renameSync(moved, vite.cacheDir);
+      }
+      if (kind === 'marker') fs.writeFileSync(markerPath, marker);
+      if (foreign) {
+        fs.unlinkSync(link);
+        assert.equal(path.dirname(foreign), E2E_STATE_DIR);
+        fs.rmSync(foreign, { recursive: true });
+      }
+      retireTestCache(vite.cacheDir);
+    }
+    console.log(`[e2e-vite-cache selftest] refusal=${kind} PASS`);
+  }
+}
+
 async function main(): Promise<void> {
+  const stateExisted = fs.existsSync(E2E_STATE_DIR);
+  const originalCaches = cacheNames();
   assert.equal(resolveE2eRuntime({}).mode, 'source');
   assert.equal(resolveE2eRuntime({ X4_FORGE_E2E_MODE: 'source' }).command, 'node node_modules/tsx/dist/cli.mjs server.ts');
   for (const mode of ['', 'COMPILED', ' compiled ', null, 1, true]) {
@@ -120,6 +195,9 @@ async function main(): Promise<void> {
       successfulPort = vite.port;
       assert(vite.port > 0, 'Vite selected a disposable listener port');
       assert.equal(vite.server.httpServer?.listening, true, 'Vite listener is ready');
+      assert.equal(path.dirname(vite.cacheDir), E2E_STATE_DIR, 'cache belongs to private per-run state');
+      assert.equal(path.resolve(vite.server.config.cacheDir), vite.cacheDir);
+      assert.notEqual(vite.server.config.optimizeDeps.noDiscovery, true, 'source dependency discovery remains enabled');
       const html = await getText(vite.port);
       assert.match(html, /__STUDIO_API_TOKEN__/u, 'repository token plugin injected the E2E token');
       const resolvedServer = vite.server.config.server;
@@ -138,6 +216,7 @@ async function main(): Promise<void> {
     assert.equal(successfulPort !== undefined, true, 'successful lifecycle returned a port');
     await assertPortFree(successfulPort!);
     assert.deepEqual(snapshotEnvironment(), SENTINEL_ENV, 'successful close restored the caller environment');
+    assert.deepEqual(cacheNames(), originalCaches, 'successful source close retires its cache');
 
     const occupied = await listen(0);
     try {
@@ -156,6 +235,27 @@ async function main(): Promise<void> {
     }
     await assertPortFree(occupied.port);
     assert.deepEqual(snapshotEnvironment(), SENTINEL_ENV, 'failed startup restored the caller environment');
+    assert.deepEqual(cacheNames(), originalCaches, 'occupied-port failure retires its cache after shutdown');
+
+    const failedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-vite-config-failure-'));
+    try {
+      fs.writeFileSync(path.join(failedRoot, 'vite.config.ts'), "throw new Error('selftest original config failure');");
+      await assert.rejects(startE2EViteServer({ rootDir: failedRoot, port: 0 }), (error: Error) => {
+        assert.match(error.message, /selftest original config failure/u);
+        assert.match(error.message, /No Vite handle acquired; cache preserved/u);
+        assert.match(String(error.cause), /selftest original config failure/u);
+        return true;
+      });
+      const preserved = cacheNames().filter(name => !originalCaches.includes(name));
+      assert.equal(preserved.length, 1, 'unconfirmed startup reports and preserves its sole cache');
+      const dir = path.join(E2E_STATE_DIR, preserved[0]);
+      assert.deepEqual(fs.readdirSync(dir), ['.e2e-vite-owner'], 'top-level config failure started no dependency writer');
+      retireTestCache(dir);
+      assert.deepEqual(snapshotEnvironment(), SENTINEL_ENV, 'config failure restored caller environment');
+    } finally {
+      assert.equal(path.dirname(failedRoot), path.resolve(os.tmpdir()));
+      fs.rmSync(failedRoot, { recursive: true });
+    }
 
     const builtHtml = '<html><script>window.__STUDIO_API_TOKEN__="compiled-selftest"</script><body>Exact compiled HTML</body></html>';
     const backend = http.createServer((req, res) => {
@@ -173,11 +273,32 @@ async function main(): Promise<void> {
       assert.equal(proxy.server.config.configFile, undefined, 'compiled mode loads no project Vite config');
       assert.equal(proxy.server.config.inlineConfig.envFile, false);
       assert.equal(proxy.server.config.appType, 'custom');
+      assert.equal(proxy.server.config.optimizeDeps.noDiscovery, true);
+      assert.deepEqual(proxy.server.config.optimizeDeps.include, []);
       const response = await fetch(`http://127.0.0.1:${proxy.port}/assets/compiled.js`);
       assert.equal(await response.text(), '/* exact compiled asset */');
       const missing = await fetch(`http://127.0.0.1:${proxy.port}/missing`);
       assert.equal(missing.status, 404, 'compiled backend refusal is preserved');
       assert.equal(await missing.text(), 'compiled backend missing');
+      assert.deepEqual(fs.readdirSync(proxy.cacheDir), ['.e2e-vite-owner'], 'compiled proxy never discovers/prebundles source dependencies');
+
+      await proxy.close();
+      await cleanupRefusals(address.port);
+      for (let iteration = 0; iteration < 3; iteration++) {
+        for (const compiled of [false, true]) {
+          const before = cacheNames();
+          const repeat = await startE2EViteServer({ rootDir: ROOT, port: 0, apiPort: address.port, compiled });
+          await getText(repeat.port);
+          const closing = repeat.close();
+          assert.equal(repeat.close(), closing, 'successful close is once-only');
+          await closing;
+          await assertPortFree(repeat.port);
+          // A prior broken owner removed its cache then allowed the dependency
+          // scan to recreate it later. Observe after an event-loop interval too.
+          await new Promise(resolve => setTimeout(resolve, 100));
+          assert.deepEqual(cacheNames(), before, `iteration${iteration} compiled=${compiled}: no accumulated cache`);
+        }
+      }
     } finally {
       const proxyPort = proxy?.port;
       await proxy?.close();
@@ -185,8 +306,10 @@ async function main(): Promise<void> {
       if (proxyPort !== undefined) await assertPortFree(proxyPort);
     }
     assert.deepEqual(snapshotEnvironment(), SENTINEL_ENV, 'compiled close restored the caller environment');
+    assert.deepEqual(cacheNames(), originalCaches, 'all repeated/negative lifecycles preserve the initial cache set');
   } finally {
     restoreEnvironment(originalEnvironment);
+    if (!stateExisted && fs.existsSync(E2E_STATE_DIR) && fs.readdirSync(E2E_STATE_DIR).length === 0) fs.rmdirSync(E2E_STATE_DIR);
   }
 }
 
