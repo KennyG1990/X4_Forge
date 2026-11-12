@@ -6,10 +6,6 @@
 
 ## P0 — Active
 
-### Isolated Vite test-cache lifetime `SPECIFIED` (#99, child of #20)
-
-Next before further qualification/Windows packaging: fix the existing Vite helper's cache ownership/lifetime. After all producers stopped,87generated temporary directories retained907files/18,358,439B in this private checkout; all were safely retired, but source retention is still unfixed. [Contract and first reproduction](docs/plans/2026-11-11-vite-cache-retention.md), [owner #99](https://github.com/KennyG1990/X4_Forge/issues/99). #98's project-check crash staging is separate. Current compiled/web functional checkpoint f291408 has normal gates and exact-head CI success; do not mistake it for bounded storage or Windows installed proof.
-
 ### Validation and debuglog issue execution `in_progress` (existing #20/#74/#14 owners)
 
 Current #64 ware checkpoint: source d9a1e66 and API proof d2a1920 are committed/pushed with exact-head CI success. The affected file passes 5/5, including real project/Problems and both native aliases: 0/1/0 ware findings, identical source hashes, stale-source/changed-target refusal, exact selected bytes, reopened receipts and operation recovery/replay refusal. Incomplete coverage remains explicit. [Acceptance and evidence](docs/plans/2026-11-11-lua-ware-reference-consumers.md). Whole #64 and review36 remain PARTIAL/NOT_READY pending current compiled/installed/rendered/public qualification. Native proof-only commit/gate identities are recorded in its QA packet after observation. Three exact state roots retired 800,470 bytes / 207 entries; failed evidence retained, no helper/runtime copies. Serial headless checks authorized; no computer use/live Forge/X4. Stable83 unchanged.
