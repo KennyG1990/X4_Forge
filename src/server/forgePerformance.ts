@@ -2,7 +2,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Session } from 'node:inspector';
+import { Session, type Profiler } from 'node:inspector';
 import { types as utilTypes } from 'node:util';
 import { performance as nodePerformance, monitorEventLoopDelay } from 'node:perf_hooks';
 import { createForgePerformanceCollector, isForgePerformanceOperationName, FORGE_CPU_PROFILE_LIMITS, type ForgePerformanceCollector, type ForgePerformanceSnapshot, type ForgePerformanceResourceSample, type ForgeCpuProfileOptions, type ForgeCpuProfileResult, type ForgeCpuProfileReport, type ForgeCpuProfileFunction, type ForgeCpuProfileFailure } from '../lib/forgePerformance';
@@ -79,8 +79,8 @@ const failedProfile = (code: ForgeCpuProfileFailure['code']): ForgeCpuProfileFai
 
 /** Summarize only bounded current-backend samples. Raw source URLs never leave this adapter. */
 export function summarizeForgeCpuProfile(raw: unknown, options: { producer: ForgePerformanceSnapshot['producer']; sourceRoot: string; durationMs: number; observedDurationMs: number | null; samplingIntervalMicros: number; maxFunctions: number }): ForgeCpuProfileReport {
-  if (!raw || typeof raw !== 'object' || !Array.isArray((raw as any).nodes)) throw new TypeError('Invalid CPU profile.');
-  const profile = raw as { nodes: any[]; samples?: unknown[]; timeDeltas?: unknown[]; startTime?: number; endTime?: number };
+  if (!raw || typeof raw !== 'object' || !Array.isArray((raw as { nodes?: unknown }).nodes)) throw new TypeError('Invalid CPU profile.');
+  const profile = raw as { nodes: Profiler.ProfileNode[]; samples?: unknown[]; timeDeltas?: unknown[]; startTime?: number; endTime?: number };
   if (profile.samples !== undefined && !Array.isArray(profile.samples) || profile.timeDeltas !== undefined && !Array.isArray(profile.timeDeltas) || !positiveInteger(options.maxFunctions) || options.maxFunctions > FORGE_CPU_PROFILE_LIMITS.maxFunctions || options.producer.component !== 'backend' || options.producer.scope !== 'owned-process') throw new TypeError('Invalid bounded backend profile summary.');
   const omitted = { nodes: Math.max(0, profile.nodes.length - FORGE_CPU_PROFILE_LIMITS.maxNodes), samples: Math.max(0, (profile.samples?.length ?? 0) - FORGE_CPU_PROFILE_LIMITS.maxSamples), functions: 0, unknownNodeSamples: 0, invalidNodes: 0, invalidDeltas: 0, redactedLabels: 0 };
   const root = path.resolve(options.sourceRoot);

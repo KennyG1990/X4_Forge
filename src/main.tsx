@@ -93,7 +93,7 @@ function studioStrongRandomBytes(byteLength: number): Uint8Array {
   return strongCrypto.getRandomValues(new Uint8Array(byteLength));
 }
 
-const customFetch = async function(this: any, input: RequestInfo | URL, init?: RequestInit) {
+const customFetch = async function(this: unknown, input: RequestInfo | URL, init?: RequestInit) {
   const observation = beginWebviewPerformanceRequest(input, init);
   const url = typeof input === 'string' ? input : (input instanceof URL ? input.href : input.url);
   const method = methodOf(input, init);

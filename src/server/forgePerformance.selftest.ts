@@ -2,8 +2,8 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createForgeBackendPerformance, summarizeForgeCpuProfile, forgePerformanceApiOperationName, forgePerformanceHasNegativeDataResult, FORGE_BACKEND_PERFORMANCE_LIMITS, type ForgePerformanceTimer, type ForgePerformanceTimers, type ForgePerformanceInspectorSession, type ForgeBackendPerformanceOptions } from './forgePerformance';
-import { createForgePerformanceCollector, FORGE_CPU_PROFILE_LIMITS } from '../lib/forgePerformance';
+import { createForgeBackendPerformance, summarizeForgeCpuProfile, forgePerformanceApiOperationName, forgePerformanceHasNegativeDataResult, FORGE_BACKEND_PERFORMANCE_LIMITS, type ForgePerformanceTimer, type ForgePerformanceTimers, type ForgePerformanceInspectorSession, type ForgeBackendPerformanceOptions, type ForgePerformanceCollectionOptions } from './forgePerformance';
+import { createForgePerformanceCollector, FORGE_CPU_PROFILE_LIMITS, type ForgeCpuProfileOptions } from '../lib/forgePerformance';
 
 class FakeTimers implements ForgePerformanceTimers {
   now = 1000; private sequence = 0;
@@ -111,7 +111,7 @@ export async function runForgeBackendPerformanceSelftest() {
   });
   await check('invalid collection bounds and monitoring errors cannot alter observed work', async () => {
     const f = fixture({ delayHistogram: () => { throw new Error('unavailable'); } });
-    for (const options of [{ durationMs: 900_001 }, { intervalMs: 999 }, { intervalMs: Infinity }, { durationMs: 0 }, { extra: true }]) assert.equal(f.producer.startCollection(options as any).ok, false);
+    for (const options of [{ durationMs: 900_001 }, { intervalMs: 999 }, { intervalMs: Infinity }, { durationMs: 0 }, { extra: true }]) assert.equal(f.producer.startCollection(options as unknown as ForgePerformanceCollectionOptions).ok, false);
     assert.equal(f.producer.startCollection({ eventLoopDelay: true }).ok, false); assert.equal(f.clock.entries.size, 0); const result = {}; assert.equal(f.producer.collector.measureSync('work', () => result), result); await f.producer.dispose();
   });
   await check('failed collection cleanup retains ownership and refuses accumulating restarts', async () => {
@@ -131,7 +131,7 @@ export async function runForgeBackendPerformanceSelftest() {
   });
   await check('profile options fail closed before creating an Inspector', async () => {
     const f = fixture({ profilingEnabled: true });
-    for (const options of [{ durationMs: 99 }, { durationMs: 5001 }, { samplingIntervalMicros: 999 }, { maxFunctions: 65 }, { arbitrary: true }]) assert.equal((await f.producer.captureCpuProfile(options as any)).ok, false);
+    for (const options of [{ durationMs: 99 }, { durationMs: 5001 }, { samplingIntervalMicros: 999 }, { maxFunctions: 65 }, { arbitrary: true }]) assert.equal((await f.producer.captureCpuProfile(options as unknown as ForgeCpuProfileOptions)).ok, false);
     const abort = new AbortController(); abort.abort(); const cancelled = await f.producer.captureCpuProfile({ signal: abort.signal }); assert.equal(cancelled.ok, false); assert.equal(f.sessions.length, 0); await f.producer.dispose();
   });
   await check('bounded current-backend profile emits sampled functions without raw private URLs', async () => {
