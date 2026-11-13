@@ -4,6 +4,8 @@
     "server.ts",
     "shared/actionOperationId.ts",
     "shared/agentKeyCreationContract.ts",
+    "shared/forgePerformance.ts",
+    "shared/forgePerformanceResources.ts",
     "src/lib/actionCensus.ts",
     "src/lib/actionReceipt.selftest.ts",
     "src/lib/actionReceipt.ts",

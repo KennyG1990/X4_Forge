@@ -6,6 +6,7 @@ import { Session, type Profiler } from 'node:inspector';
 import { types as utilTypes } from 'node:util';
 import { performance as nodePerformance, monitorEventLoopDelay } from 'node:perf_hooks';
 import { createForgePerformanceCollector, isForgePerformanceOperationName, FORGE_CPU_PROFILE_LIMITS, type ForgePerformanceCollector, type ForgePerformanceSnapshot, type ForgePerformanceResourceSample, type ForgeCpuProfileOptions, type ForgeCpuProfileResult, type ForgeCpuProfileReport, type ForgeCpuProfileFunction, type ForgeCpuProfileFailure } from '../lib/forgePerformance';
+import { calculateForgeProcessResourceDelta } from '../../shared/forgePerformanceResources';
 
 const PERFORMANCE_HTTP_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'CONNECT', 'TRACE']);
 function hasControlOrQueryFragment(value: string): boolean {
@@ -198,17 +199,9 @@ export function createForgeBackendPerformance(options: ForgeBackendPerformanceOp
       let loop: EventLoopUsage | undefined;
       try { const candidate = resource.eventLoopUtilization?.(); if (candidate && nonnegative(candidate.idle) && nonnegative(candidate.active)) loop = candidate; } catch { /* unsupported loop fields remain null */ }
       const sample: Partial<ForgePerformanceResourceSample> = { atUnixMs: wall(), rssBytes: memory.rss, heapUsedBytes: memory.heapUsed, heapTotalBytes: memory.heapTotal, externalBytes: memory.external, arrayBuffersBytes: memory.arrayBuffers ?? null, logicalCpuCount, uptimeSeconds };
-      if (previous && start > previous.now && cpu.user >= previous.cpu.user && cpu.system >= previous.cpu.system) {
-        sample.elapsedMs = start - previous.now; sample.cpuUserMicros = cpu.user - previous.cpu.user; sample.cpuSystemMicros = cpu.system - previous.cpu.system;
-        const oneCore = (sample.cpuUserMicros + sample.cpuSystemMicros) / (sample.elapsedMs * 1000) * 100;
-        sample.cpuOneCorePercent = nonnegative(oneCore) ? oneCore : null;
-        const host = oneCore / logicalCpuCount;
-        sample.cpuHostPercent = nonnegative(host) && host <= 100 ? host : null;
-        if (loop && previous.loop && loop.active >= previous.loop.active && loop.idle >= previous.loop.idle) {
-          const used = loop.active - previous.loop.active; const total = used + loop.idle - previous.loop.idle;
-          sample.eventLoopUtilization = total > 0 ? used / total : null;
-        }
-      } else if (previous) counterResets++;
+      const delta = calculateForgeProcessResourceDelta({ now: start, cpu, loop }, previous, logicalCpuCount);
+      Object.assign(sample, delta.fields);
+      if (delta.counterReset) counterResets++;
       previous = { now: start, cpu: { ...cpu }, loop: loop ? { ...loop } : undefined };
       if (histogram && histogram.count !== undefined && histogram.count > 0) {
         const p50 = histogram.percentile(50) / 1e6; const p95 = histogram.percentile(95) / 1e6; const max = histogram.max / 1e6;

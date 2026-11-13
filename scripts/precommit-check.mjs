@@ -215,6 +215,13 @@ function checkActionReceiptCoverage() {
   }
 }
 
+function checkNativePerformanceFoundation() {
+  console.log("[precommit] bounded native performance foundation");
+  const result = spawnSync("npm run test:native-performance", { cwd: root, shell: true, stdio: "inherit" });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`native performance foundation failed with exit ${result.status ?? "unknown"}`);
+}
+
 function checkFocusedPerformanceAndXml() {
   for (const file of [
     "src/lib/forgePerformance.selftest.ts",
@@ -247,6 +254,7 @@ try {
   checkDurableWriters();
   checkCapabilityContracts();
   checkFocusedPerformanceAndXml();
+  checkNativePerformanceFoundation();
   checkActionReceiptCoverage();
   runTypecheck();
   checkLargeFiles();

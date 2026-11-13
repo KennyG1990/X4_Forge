@@ -92,6 +92,9 @@ jobs:
       - name: Prove isolated E2E API request transport
         run: npm run test:e2e-request-transport
 
+      - name: Prove bounded native performance foundation
+        run: npm run test:native-performance
+
       - name: Build production bundle
         run: npm run build
 

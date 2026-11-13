@@ -36,6 +36,7 @@
     "test:reference-api": "node scripts/reference-api-integration.mjs",
     "test:reference-corpus": "tsx scripts/reference-corpus-check.ts",
     "test:performance": "node --max-old-space-size=512 --import tsx src/lib/forgePerformance.selftest.ts && node --max-old-space-size=512 --import tsx src/server/forgePerformance.selftest.ts && node --max-old-space-size=512 --import tsx src/lib/webviewPerformance.selftest.ts && node --max-old-space-size=512 --import tsx src/components/PerformancePanel.selftest.tsx",
+    "test:native-performance": "node --max-old-space-size=512 --import tsx shared/forgePerformanceResources.selftest.ts && node --max-old-space-size=512 --import tsx shared/nativePerformanceProtocol.selftest.ts && node --max-old-space-size=512 --import tsx vscode-extension/src/nativePerformance.selftest.ts",
     "test:xml-references": "node --max-old-space-size=512 --import tsx src/server/xmlReferenceMap.selftest.ts",
     "test:schema-intelligence": "tsx scripts/schema-intelligence-check.ts",
     "test:diff-expression-values": "tsx scripts/diff-expression-values.selftest.ts",
