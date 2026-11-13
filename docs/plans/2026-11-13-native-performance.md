@@ -1,0 +1,119 @@
+# Native-host performance capture design and implementation plan
+> For Agent: use the planning workflow; this file is the combined design and execution contract to avoid duplicate design copies.
+
+**Goal:** implement owner109 under103: the same bounded native-host capture can be controlled/read through Forge UI, authenticated API and curated MCP, with truthful shared-host attribution and no changed modding results.
+**Architecture:** reuse the collector through shared/CommonJS, an activation-owned native producer, and a private handle-bound IPC relay over the existing process family. One backend native broker owns public controls; UI and MCP use the same three endpoints.
+**Tech stack:** TypeScript, Node18-compatible extension bundles, existing Node24 backend, React PerformancePanel, existing reviewed agent authority/MCP.
+**Status:** SPECIFIED, NOT IMPLEMENTED. Owner [109](https://github.com/KennyG1990/X4_Forge/issues/109), parent [103](https://github.com/KennyG1990/X4_Forge/issues/103).
+**Path convention:** repository paths below are exact and relative to the verified checkout root; execution uses its resolved absolute path. Private operational/QA paths are not published.
+
+## PLAN — complete outcome and bounded execution
+
+This is Full lane. The full owner109 slice includes shared foundation, real owned IPC, instrumented native operations, same-capture UI/API/MCP, isolated native/package/rendered and identical-workload overhead qualification. Batch1 is an intermediate foundation, never a user-facing completion. Parent103 still additionally requires demanded all-function/profile coverage and release delivery. Native and webview CPU profiling gaps stay explicit; this slice must not relabel resource totals or selected spans as complete per-function profiling.
+
+User authorization covers autonomous implementation, serial headless validation, coherent normal-hook commits/nonforcepushes and qualified releases through existing release gates. Keep live Forge/X4/AiLive/default Antigravity profile/other checkout/saves outside write scope. Actual game work stays Claude-owned. No computer use. Both numerical CPU/RAM admission rules remain retired. Reuse existing runtime/profile/browser/QA; no backup/runtime/helper/mod-copy family. New reusable modules and meaningful selftests are source owners, not ad hoc launch helpers.
+
+Assumptions: actual configured Node child IPC works in the isolated packaged host; unsupported host metrics can be null. No runtime observation yet proves that new IPC leg. Current typed producer resources/collector already support native shared scope. No new secret, port, disk export, debugger port or background cloud telemetry is needed. Native all-function Inspector capture remains a separate required103 work unit, not silently dropped.
+
+### Design alternatives and decision
+
+A public native HTTP ingestion endpoint would need a new producer credential because Studio HTML receives the ordinary bearer. A webview-only bridge can bind a panel but leaves MCP dependent on another transport and potentially an open panel. The existing owned process family provides the required channel authority without either duplication. Add exactly one IPC descriptor to extension→supervisor; reuse supervisor→backend IPC. Native endpoints operate through that channel, never accept caller PID/owner registration. Preserve ordinary backend startup even if native readiness is unavailable.
+
+Direct extension imports from root ESM src/ risk the Node16/CJS boundary. Move the unchanged browser-safe collector to shared/forgePerformance.ts (existing shared/package.json CommonJS) and keep src/lib/forgePerformance.ts as the public re-export. Extract only existing pure CPU/loop delta arithmetic; do not replace backend timer/Inspector owners or introduce new legacy sample/drop/error semantics.
+
+## BASELINE and reconciliation
+
+Revision d3f9fc825ba5d66937d8539ce95b7ac2fdbb2e54. Four existing dirty postclose records: BACKLOG, SESSION-HANDOFF, XMLplan, performanceplan. Old private Collection11 BATCH remains untracked/immutable/excluded. No dirty executable source at planning. Prior actual normal hook/push/Quality43358033415 PASS; current product code retains58's full130FIRST/zero-flake evidence. Separate extension tsc exits0, no diagnostics, owned process exited. CI build-ext itself also runs extension tsc; do not claim it was absent. Current game row READY/AwaitingClaude, no received new result.
+
+Authoritative owners: shared collector src/lib/forgePerformance.ts; backend src/server/forgePerformance.ts; extension spawnSidecar/requestManagedSidecarStop/BackendHandle; sidecarSupervisor.ts; parentLiveness.ts; server auth/startup/performance routes; agentAuthority/forgeCapabilities/projectApiContract; existing PerformancePanel and x4forge-mcp.cjs. Native producer/bridge absent within those code/docs/issue resources. Current three backend routes exclude overlap but have no actor lease/target-stop. Panel/MCP literally declare native unavailable. Remote census native performance/shared-host/performance.native/extension-host collector found103 parent and lifecycle53/20, no dedicated native child;109 created once.
+
+No ADR conflict found in the named capability/decision resources. Reuse existing owners; no recurring-failure evidence justifies replacing collector/lifecycle. Capability map delta is pending actual integration, not foundation credit.
+
+## Native ownership, lease and privacy contract
+
+The activation owns one native producer and stable opaque native instance ID. Producer identity is extension-host/shared-process; CPU/RSS include other extensions. Backend, native host, webview, CodeSense and X4 are never combined as exclusive Forge totals. Resource memory/counter deltas are not function allocations/CPU. Operation IDs are a fixed allowlist of Forge lifecycle/command/provider/validation boundaries; no paths, document text, XML/Lua, user queries, error strings, headers or tokens in records.
+
+Fresh private launch epoch/nonce binds exact supervisor/backend child handles plus host/backend incarnations. backendStopGeneration is not an unexpected-restart epoch. Preserve stdin EOF/parent-loss/Windows Job semantics and750ms shutdown grace. Telemetry must not delay shutdown. Receiver announces native readiness only after installed; inspect-brk/older supervisor/attach/standalone remains explicitly unavailable/paused and ordinary Forge remains usable. PID/stdout/discovery are diagnostic, not registration authority.
+
+Default OFF, no sampling timer/resource read until explicit start. Match existing60s default/15min maximum lease and1–60s sampling bounds, default2s. Retain collector128operations/64slow/120resources/1MiB. One host-wide capture, one pending control plus one cancellation slot, one replaceable latest snapshot, explicit drops. Wire frames closed/versioned/string-bounded to snapshot+2KiB, control4KiB, bounded IDs/sequence/depth/field counts. Decode raw strings before object traversal; reject foreign/oversize/malformed/replayed/unknown frames without echoing inputs. Private launch nonce never appears in public reports.
+
+Every start/stop ACK must match launch/capture/control identity. Send callback is delivery evidence only. Abort/timeout revokes pending operation and sends exact-capture cancellation. Late success cannot reactivate sampling, publish or satisfy a new epoch. Unconfirmed timer/histogram/Inspector cleanup latches in the surviving native host across backend replacement; refuse new capture until exact cleanup confirmed. Never kill shared extension host or use another debugger port. Host expiry is local and independent of backend. Stop disables recording immediately, stale callbacks are inert, cleanup failures cannot enter user work.
+
+Public actor derives from req.__actor only. Reviewed agent keyId owns its lease; no caller owner/client/workspace/PID substitution. Studio is one current backend-session operator principal, not a fake per-tab identity. Trusted Studio may explicitly target-stop the current capture; agent stop targets its own capture only. No implicit global stop on panel unmount. Public ownership is self/other/operator, no raw key IDs. Revalidate delayed agent authority at dispatch.
+
+## Same-capture API/MCP/UI contract
+
+Keep the three backend v1 contracts unchanged. Add explicit literal reviewed capabilities, workspaceMode:none:
+| Route | Capability |
+| --- | --- |
+| GET /api/agent/performance/native | performance.native.read@1 |
+| POST /api/agent/performance/native/collection | performance.native.collect@1 |
+| POST /api/agent/performance/native/stop | performance.native.stop@1 |
+
+Read gives bounded availability/reason/backend and native producer identity/current capture/cleanup state/latest immutable snapshot/freshness/omissions. Start has bounded durationMs/intervalMs/eventLoopDelay and expectedBackendInstanceId/expectedNativeInstanceId. Stop requires those identities and exact captureId. Reject extra owner/PID/workspace fields. Return distinct unavailable, busy, identity-changed, owner-denied, timeout/outcome-unknown and cleanup-unconfirmed outcomes. No accepted start before host ACK; no claimed stop before matching cleanup ACK.
+
+Add reviewed exact native entries to process-telemetry policy; backend-only grants do not gain native capabilities. Update body/query/authority/capabilities/audits/manifests/policy pin/MCP aliases/projections/route witnesses together through existing review/promotion. Same capture IDs/coverage/unknown fields/refusals flow to panel and MCP. Panel uses the same HTTP endpoints, with independent native identity epochs and existing cancellation/polling owner. Reject stale action/read results after panel/workspace/backend/native replacement. No second performance webview message protocol.
+
+Pre-commit authority correction: current process-telemetry validation requires all read/write/deploy presets, while absent capabilityConstraint deliberately permits legacy presets. Native must add an explicit narrow tuple rule: native.read agentScopes=[read,write,deploy]; native.collect/native.stop=[write,deploy]. Preserve all three existing backend tuples exactly. In agentCapabilityAuthority.ts share one exact-native-capability predicate between decideConstrainedAgentRoute and decideEffectiveCapability BEFORE their absent-constraint allow path. Require current capabilityConstraint.capabilityIdentities to include the exact id@version plus all allowedEffects; otherwise return existing CAPABILITY_NOT_GRANTED. No new caller/key/body authority field. Reject unconstrained read/write/deploy/all presets for ALL native routes; a read-scoped key with an explicit collect/stop grant still fails scope. Explicit constrained backend-only grants remain unchanged. Effective discovery and MCP inventory use the same predicate/exclusions, so legacy presets cannot advertise controls they cannot invoke. Studio's existing trusted operator fast path stays unchanged. Add exact audit tuple/legacy-unconstrained/effects/scope/discovery negatives; do not broaden a route prefix or silently change backend presets.
+
+Existing MCP performance handlers do not propagate caller cancellation or impose a control deadline; native MCP cancellation/control timeout support is new required integration, while host lease expiry remains independent. Do not claim old actor ownership or cancellation behavior already exists.
+
+Delayed dispatch reuses the existing fresh-store keyIsCurrent pattern without its deploy/workspace assumptions: fresh createAgentKeyStore(...).list(), find original authenticated keyId, reject revoked/expired or missing constraint, check current route scope and decideConstrainedAgentRoute against current constraint/effects/version. Retain no queued bearer. There is no explicitOnly manifest/key field; do not invent one. The exact route scope upper bound plus the shared native constraint predicate enforces this rule in execution and effective discovery. This correction resolves the independent pre-design review blocker; both reviewers otherwise found the actor/IPC/cleanup/parity design coherent.
+
+## Implementation batches — concrete files and checks
+
+### Batch1 — shared foundation and disabled native producer
+
+Files:
+- Move unchanged collector to shared/forgePerformance.ts; src/lib/forgePerformance.ts becomes re-export facade.
+- Create shared/forgePerformanceResources.ts and .selftest.ts for narrow existing CPU/loop delta arithmetic; modify only corresponding arithmetic in src/server/forgePerformance.ts.
+- Create shared/nativePerformanceProtocol.ts and .selftest.ts for closed frame codecs/types/limits and snapshot checks.
+- Create vscode-extension/src/nativePerformance.ts and .selftest.ts for injected resource/clock/timer/histogram producer. No vscode, launching, HTTP or Inspector dependency in these pure modules.
+- package.json, scripts/precommit-check.mjs, .github/workflows/quality.yml add one finite serial test:native-performance gate.
+- Existing design/backlog/handoff evidence records only; preserve other dirty docs/private batch.
+
+Public shape (precise contract, implementations belong to source):
+```ts
+type NativeCaptureKey = { epoch: string; captureId: string };
+interface NativeProducer {
+  startCollection(key: NativeCaptureKey, options: BoundedCollectionOptions): NativeControlResult;
+  stopCollection(key: NativeCaptureKey, reason: NativeStopReason): NativeControlResult;
+  beginOperation(id: NativeOperationId): (outcome?: ForgePerformanceOutcome) => void;
+  snapshot(): ForgePerformanceSnapshot;
+  status(): NativePerformanceStatus;
+  dispose(): NativeControlResult;
+}
+```
+Identity fixed at construction; operations runtime-checked against static IDs; collector not exposed for arbitrary caller names. Producer starts disabled. Instrumentation must use explicit begin/finish in existing owners, preserving return/promise/error identity and cancellation/debounce semantics. Telemetry failures cannot throw into original work.
+
+Tasks: relocate collector without byte/behavior drift; extract delta arithmetic with no new legacy rejection/drop semantics; implement strict codec and selftests; implement disabled producer and selftests; integrate finite gates. Test meaningful default-off/no reads/timers, normalized first/delta/reset/one-core>100/host-percent-null, expiry/manual stop/dispose, stale/duplicate finish/callback, synchronous timer/unref/clear/histogram failure, retained-state/privacy bounds, wrong binding/oversize/replay/cancel identifiers and errors. Fake collectors alone do not qualify actual transport. Named static baseline is no native producer, not a fabricated runtime failure.
+
+Root alone runs serial focused new tests, existing collector/backend/webview/panel suites, root and extension tsc, focused lint, extension build, meaningful negative checks, actual normal hook/coherent commit/push/exact CI. No unavailable/native/UI claim gets upgraded by batch1.
+
+### Batch2 — actual owned IPC and operation instrumentation
+
+Modify extension.ts/sidecarSupervisor.ts; add owner-bound bridge helpers in vscode-extension/src/ and src/server/ as needed; use shared codec. Keep parentLiveness behavior unchanged. Bind only exact owned handles, optional ready handshake, strict relay sender/direction, bounded queue/backpressure/cancel/retirement. Add native begin/finish IDs at lifecycle, commands, providers and continuous root/document validation boundaries (queue, scan/overlay, serialization, HTTP, mapping/application). Existing generation checks report superseded; do not invent fetch aborts.
+
+Tests execute actual owned child IPC, parent EOF/error/exit/restart, wrong sender/epoch/type/ID, startup-before-listener/paused debugger/attach, overflow, lost ACK/late success/cancel/cleanup-unknown across restarts. Existing mocked recovery test explicitly forbids spawn and cannot replace this. Injected state-machine tests and live process tests are separately labelled. Preserve strict process ownership/teardown/private ports and no orphan/native host kill.
+
+### Batch3 — full public parity
+
+Modify server.ts; src/lib/agentAuthority.ts, forgeCapabilities.ts; src/server/projectApiContract.ts; scripts/capability-contract-audit.ts; config/forge-route-dispositions.json and action-receipt-coverage.json through existing reviewed promotion/pin workflow; existing alias/body/authority/protocol integration owners; vscode-extension/mcp/x4forge-mcp.cjs; src/components/PerformancePanel.tsx/tests and E2E performance-panel. Add broker actual-response witnesses to independent route-integration inventories, never derive expected routes from implementation.
+
+Validate read-only key cannot collect/stop, wrong/stale subject/cross-actor stop, revoke-before-delayed-dispatch, same trusted Studio control, HTTP abort/late ACK/unknown cleanup, unavailable attach. Run actual API/MCP same-capture replay and source/compiled rendered panel with strict unfiltered normal gates. Do not loosen backend-only guards; add native validation explicitly. No claim of native installed proof from browser fixtures.
+
+### Batch4 — packaged host, overhead and delivery
+
+Use existing isolated Dev app/profile and exact candidate package, no live/default instance changes. Prove real extension-host PID/shared scope/native activation/operation events/expiry/stop/dispose/rebind and same API/MCP controls. Inspect rendered native UI. Equivalent disabled/enabled idle/small/large validation/deploy workloads must retain exact outputs/errors/cancellation and measure sample/serialization/IPC/poll overhead. Native function-profile coverage is still an explicit103 requirement; do not close parent from handpicked spans. Reuse normal release build/stage/probe/VSIX inspect/install/CI/OpenVSX/GitHub policies; no new release until required gates pass.
+
+## VALIDATE, evidence and negative path
+
+Record exact command/exit/timestamp/revision/fixture/runtime pins and concise structured evidence in existing private QA root. No raw profiles/source/token/payload persistence. Each named batch retains failures and honest PARTIAL gates. ROOT-only serial finite heaps/process handles; never restart because a poll times out. Browser/host/generated-package proof stays distinct. New source tests use512MiB; type/build heaps use existing bounded envelopes; no numerical admission floors. Required root/extension tsc, test:performance, new test:native-performance, focused lint, extension build and normal hook are batch1 gates; real IPC/API/MCP/rendered/installed/overhead/full normal suites qualify subsequent integration.
+
+New permission/network/control surface standing-hazard sweep: only existing owned IPC, no new TCP listener/cloud/spend/disk export/delete/credential surface. Strict frame/control/cardinality/lease limits and explicit failure states meter the channel. New native API grants require reviewed exact literals, actor/identity checks, no capability inheritance, bounded pending controls and failure/cancel behavior. Repeat hazard review at public integration before promotion.
+
+## REVIEW, rollback and close
+
+Rollback only this scoped source/gate delta from pinned baseline and end exact owned test handles; preserve unrelated docs/private batch/game/live state and every failed receipt. No reset/clean/config/hook bypass. Collector relocation has an inverse/import compatibility review; arithmetic extraction preserves existing output/error/drop statuses. Security fresh-eyes review challenges identity, alias, rebind, deadline, stale result and cleanup claims. Final source diff excludes unrelated/generated metadata.
+
+Close states are VERIFIED/PARTIAL/FAILED/BLOCKED/REVERTED at actual batch scope;109 remains open until its complete declared endstate is proven. Parent103 remains open for full coverage/delivery. Update capability map only on real integrated delta; no capability credit for a dormant pure producer. Update backlog/issue/handoff/AAR each checkpoint, normal-hook commits at coherent units, release readiness every three verified units. AAR already NON_CLEAN from corrected CJS/actor/CI-baseline assumptions and noisy result projection; record actual new failures/reviews without banking an untested skill or Codex memory.
