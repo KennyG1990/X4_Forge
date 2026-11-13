@@ -19,27 +19,53 @@ test('corpus authoring blocks collisions, completes XPath, previews, applies, an
     localStorage.removeItem('x4_mod_studio_version');
   });
 
+  // Hold both initial lookups until the real commit-time Checking state is inspected.
+  let releaseCollisionResponses!: () => void;
+  const collisionResponses = new Promise<void>(resolve => { releaseCollisionResponses = resolve; });
+  let collisionReleased = false;
+  const collisionArrivals = { advisory: 0, commit: 0 };
+  const collisionFulfillmentCalls = { advisory: 0, commit: 0 };
+  const collisionSettlements: Promise<void>[] = [];
+  const collisionFailures: unknown[] = [];
+
   await page.route('**/api/reference/suggest**', async route => {
     const url = new URL(route.request().url());
     const query = (url.searchParams.get('q') || '').toLowerCase();
     const kind = url.searchParams.get('kind') || 'ware';
-    // Keep the normal picker lookup slower than a human click so the test proves the
-    // commit-time authority check, rather than merely observing the debounced badge.
-    if (query === 'energycells') await new Promise(resolve => setTimeout(resolve, 300));
-    const catalog: Record<string, Array<{ id: string; name: string; path: string; selector?: string }>> = {
-      ware: [{ id: 'energycells', name: 'Energy Cells', path: 'libraries/wares.xml', selector: "/wares/ware[@id='energycells']" }],
-      faction: [{ id: 'argon', name: 'Argon Federation', path: 'libraries/factions.xml', selector: "/factions/faction[@id='argon']" }],
-      aiscript: [{ id: 'order.patrol', name: 'Order Patrol', path: 'aiscripts/order.patrol.xml' }],
-      macro: [{ id: 'ship_arg_l_destroyer_01_a_macro', name: 'Argon Destroyer', path: 'index/macros.xml' }],
-    };
-    const items = (catalog[kind] || [])
-      .filter(item => query.length > 0 && item.id.toLowerCase().includes(query))
-      .map(item => ({
-        label: item.id, insertText: item.id, kind, name: item.name,
-        detail: `${item.name} · base`, documentation: `${item.id} already exists in base`,
-        source: 'base', path: item.path, selector: item.selector, exists: true, score: 0,
-      }));
-    await route.fulfill({ json: { generation: 'e2e', kind, query, intent: url.searchParams.get('intent'), items } });
+    const limit = url.searchParams.get('limit');
+    const collisionLookup = !collisionReleased && route.request().method() === 'GET'
+      && url.pathname === '/api/reference/suggest' && url.searchParams.get('kind') === 'ware' && query === 'energycells'
+      && url.searchParams.get('intent') === 'new-definition'
+      ? limit === '25' ? 'advisory' : limit === '10' ? 'commit' : null : null;
+    let settleCollision: (() => void) | undefined;
+    try {
+      if (collisionLookup) {
+        collisionArrivals[collisionLookup] += 1;
+        collisionSettlements.push(new Promise<void>(resolve => { settleCollision = resolve; }));
+        await collisionResponses;
+      }
+      const catalog: Record<string, Array<{ id: string; name: string; path: string; selector?: string }>> = {
+        ware: [{ id: 'energycells', name: 'Energy Cells', path: 'libraries/wares.xml', selector: "/wares/ware[@id='energycells']" }],
+        faction: [{ id: 'argon', name: 'Argon Federation', path: 'libraries/factions.xml', selector: "/factions/faction[@id='argon']" }],
+        aiscript: [{ id: 'order.patrol', name: 'Order Patrol', path: 'aiscripts/order.patrol.xml' }],
+        macro: [{ id: 'ship_arg_l_destroyer_01_a_macro', name: 'Argon Destroyer', path: 'index/macros.xml' }],
+      };
+      const items = (catalog[kind] || [])
+        .filter(item => query.length > 0 && item.id.toLowerCase().includes(query))
+        .map(item => ({
+          label: item.id, insertText: item.id, kind, name: item.name,
+          detail: `${item.name} · base`, documentation: `${item.id} already exists in base`,
+          source: 'base', path: item.path, selector: item.selector, exists: true, score: 0,
+        }));
+      await route.fulfill({ json: { generation: 'e2e', kind, query, intent: url.searchParams.get('intent'), items } });
+      if (collisionLookup) collisionFulfillmentCalls[collisionLookup] += 1;
+    } catch (error) {
+      if (!collisionLookup) throw error;
+      // Surface held-route failures after settlement without replacing a primary assertion.
+      collisionFailures.push(error);
+    } finally {
+      settleCollision?.();
+    }
   });
 
   await page.route('**/api/reference/manifest**', async route => {
@@ -143,9 +169,22 @@ test('corpus authoring blocks collisions, completes XPath, previews, applies, an
   await page.locator('button[title="Wares & Jobs"]').click();
   await page.getByRole('button', { name: 'ADD', exact: true }).click();
   const newWare = page.getByPlaceholder('ware_antimatter_capsules');
-  await newWare.fill('energycells');
-  await page.getByRole('button', { name: 'Add', exact: true }).last().click();
-  await expect(page.getByRole('button', { name: 'Checking…', exact: true })).toBeVisible();
+  try {
+    await newWare.fill('energycells');
+    await expect.poll(() => collisionArrivals.advisory).toBe(1);
+    await page.getByRole('button', { name: 'Add', exact: true }).last().click();
+    await expect.poll(() => collisionArrivals.commit).toBe(1);
+    await expect(page.getByRole('button', { name: 'Checking…', exact: true })).toBeVisible();
+    expect(collisionArrivals).toEqual({ advisory: 1, commit: 1 });
+    expect(collisionFulfillmentCalls).toEqual({ advisory: 0, commit: 0 });
+  } finally {
+    collisionReleased = true;
+    releaseCollisionResponses();
+    await Promise.all(collisionSettlements);
+  }
+  if (collisionFailures.length) throw collisionFailures[0];
+  expect(collisionArrivals).toEqual({ advisory: 1, commit: 1 });
+  expect(collisionFulfillmentCalls).toEqual({ advisory: 1, commit: 1 });
   await expect(page.getByText('"energycells" already exists in the X4 corpus. Patch the existing definition instead.', { exact: true })).toBeVisible();
   await expect(page.getByText('EXISTS', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Add', exact: true }).last()).toBeDisabled();

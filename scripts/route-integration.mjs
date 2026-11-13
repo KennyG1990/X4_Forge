@@ -714,7 +714,8 @@ async function main() {
     : [];
   // Independent semantic inventory: unexpected additions/removals must fail.
   const expectedCapabilityIds = ['expression.check', 'extensions.conflicts.analyze', 'history.list', 'history.revert',
-    'patch.readiness.analyze', 'project.validate', 'readiness.read', 'runtime.debug.read', 'schema.domains.list',
+    'patch.readiness.analyze', 'performance.collect', 'performance.profile', 'performance.read',
+    'project.validate', 'project.xml.references', 'readiness.read', 'runtime.debug.read', 'schema.domains.list',
     'schema.element.explain', 'workspace.compile', 'workspace.generate.preview', 'workspace.read'];
   const sameCapabilityIds = (actual, expected) => Array.isArray(actual)
     && JSON.stringify([...actual].sort()) === JSON.stringify([...expected].sort());
@@ -1325,9 +1326,11 @@ async function main() {
     sameCapabilityIds(effectiveIds(studioEffective), expectedCapabilityIds) && effectiveHashIsValid(studioEffective),
   JSON.stringify({ public: publicEffective.json, bogus: bogusEffective.json, studio: { actor: studioEffective.json?.actor, ids: effectiveIds(studioEffective) } }));
   for (const [name, response, scope, expectedIds] of [
-    ['read', readEffective, 'read', ['expression.check', 'extensions.conflicts.analyze', 'history.list', 'readiness.read',
+    ['read', readEffective, 'read', ['expression.check', 'extensions.conflicts.analyze', 'history.list',
+      'performance.collect', 'performance.profile', 'performance.read', 'project.xml.references', 'readiness.read',
       'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'workspace.read']],
     ['write', writeEffective, 'write', ['expression.check', 'extensions.conflicts.analyze', 'history.list', 'project.validate',
+      'performance.collect', 'performance.profile', 'performance.read', 'project.xml.references',
       'readiness.read', 'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'workspace.compile', 'workspace.read']],
     ['deploy', deployEffective, 'deploy', expectedCapabilityIds],
   ]) {
@@ -1358,6 +1361,171 @@ async function main() {
   ok('read_write_deploy_effective_sets_are_monotonic',
     effectiveIds(readEffective).every(id => effectiveIds(writeEffective).includes(id)) &&
     effectiveIds(writeEffective).every(id => effectiveIds(deployEffective).includes(id)));
+
+  // #100/#103: canonical analysis outputs need real HTTP witnesses in this gate.
+  const analysisWorkspaceBefore = await req('GET', '/api/agent/workspace', SESSION_TOKEN);
+  const analysisReceiptFilesBefore = actionReceiptFiles();
+  const analysisTreesBefore = [safeWorkspace, gameRoot, referenceRoot]
+    .map(root => ({ root, hash: regularTreeHash(root) }));
+  const analysisBackendStatus = await req('GET', '/api/agent/status', SESSION_TOKEN);
+  const analysisBackendPid = analysisBackendStatus.json?.environment?.pid;
+  const performanceRead = await req('GET', '/api/agent/performance', readKey);
+  capabilityResponses.set('performance.read', performanceRead);
+  ok('performance_read_is_owned_bounded_and_default_off',
+    analysisBackendStatus.status === 200 && Number.isSafeInteger(analysisBackendPid) && analysisBackendPid > 0
+      && performanceRead.status === 200 && performanceRead.json?.ok === true
+      && performanceRead.json?.schemaVersion === 'forge.performance.report.v1'
+      && performanceRead.json?.backend?.producer?.component === 'backend'
+      && performanceRead.json?.backend?.producer?.scope === 'owned-process'
+      && performanceRead.json?.backend?.producer?.pid === analysisBackendPid
+      && performanceRead.json?.backend?.enabled === false
+      && performanceRead.json?.control?.collectionActive === false
+      && performanceRead.json?.control?.profileActive === false
+      && performanceRead.json?.control?.profilingEnabled === true
+      && performanceRead.json?.control?.ownedTimerCount === 0
+      && performanceRead.json?.coverage?.native === 'unavailable-not-wired',
+    `status=${performanceRead.status}`);
+  const xmlReferenceProject = {
+    id: 'route_reference_fixture', name: 'Route reference fixture', files: [
+      { path: 'index/macros.xml', content: '<index><entry name="route_reference_macro" value="assets/route_reference_macro"/></index>' },
+      { path: 'assets/route_reference_macro.xml', content: '<macros><macro name="route_reference_macro"/></macros>' },
+    ],
+  };
+  const xmlReferenceBody = {
+    project: xmlReferenceProject, focus: { origin: 'project', path: 'index/macros.xml' },
+    maxDepth: 2, maxNodes: 2, maxEdges: 2, includeSource: false,
+  };
+  for (const [method, route, body] of [
+    ['GET', '/api/agent/performance', undefined],
+    ['POST', '/api/agent/performance/collection', { durationMs: 1000, intervalMs: 1000, eventLoopDelay: false }],
+    ['POST', '/api/agent/performance/profile', { durationMs: 100, samplingIntervalMicros: 1000, maxFunctions: 1 }],
+    ['POST', '/api/agent/project/xml-references', xmlReferenceBody],
+  ]) {
+    const denied = await req(method, route, null, body);
+    ok(`analysis_anonymous_401_${route.split('/').pop()}`, denied.status === 401,
+      `status=${denied.status}`);
+  }
+  for (const [route, body] of [
+    ['/api/agent/performance/collection', { durationMs: 999 }],
+    ['/api/agent/performance/profile', { durationMs: 99 }],
+    ['/api/agent/project/xml-references', { ...xmlReferenceBody, maxNodes: 0 }],
+  ]) {
+    const invalid = await req('POST', route, readKey, body);
+    const invalidInputRejected = route.startsWith('/api/agent/performance/')
+      ? invalid.status === 400 && invalid.json?.ok === false && invalid.json?.success === false
+        && invalid.json?.category === 'request-invalid' && invalid.json?.code === 'PROJECT_INPUT_INVALID'
+        && typeof invalid.json?.error === 'string' && invalid.json.error.length > 0
+      : isProjectInputRefusal(invalid);
+    ok(`analysis_invalid_input_400_${route.split('/').pop()}`, invalidInputRejected,
+      JSON.stringify({ status: invalid.status, ok: invalid.json?.ok, success: invalid.json?.success,
+        category: invalid.json?.category, code: invalid.json?.code, error: invalid.json?.error,
+        modId: invalid.json?.modId, sourceHashScope: invalid.json?.sourceHashScope }));
+  }
+  const performanceAfterRefusals = await req('GET', '/api/agent/performance', readKey);
+  const unchangedControlFields = [
+    'collectionActive', 'collectionStartedAtUnixMs', 'collectionExpiresAtUnixMs',
+    'profileActive', 'profileCapturesStarted', 'profileCapturesSucceeded', 'profileCapturesFailed',
+    'ownedTimerCount', 'failedTimerCount', 'eventLoopDelayMonitoring', 'collectionCleanupUnconfirmed',
+    'profileCleanupUnconfirmed', 'abortListenerCleanupUnconfirmed',
+  ];
+  ok('analysis_refusals_do_not_start_or_mutate_producers',
+    performanceAfterRefusals.status === 200 && unchangedControlFields.every(field =>
+      Object.hasOwn(performanceRead.json?.control || {}, field)
+        && Object.hasOwn(performanceAfterRefusals.json?.control || {}, field)
+        && performanceAfterRefusals.json.control[field] === performanceRead.json.control[field]));
+  const analysisWorkspaceAfterRefusals = await req('GET', '/api/agent/workspace', SESSION_TOKEN);
+  ok('analysis_refusals_preserve_workspace_receipts_and_source_trees',
+    analysisWorkspaceBefore.status === 200 && analysisWorkspaceAfterRefusals.status === 200
+      && analysisWorkspaceAfterRefusals.json?.workspaceHash === analysisWorkspaceBefore.json?.workspaceHash
+      && analysisWorkspaceAfterRefusals.json?.snapshotHash === analysisWorkspaceBefore.json?.snapshotHash
+      && stableStringify(actionReceiptFiles()) === stableStringify(analysisReceiptFilesBefore)
+      && analysisTreesBefore.every(({ root, hash }) => regularTreeHash(root) === hash));
+  const performanceCollection = await req('POST', '/api/agent/performance/collection', readKey,
+    { durationMs: 1000, intervalMs: 1000, eventLoopDelay: false });
+  capabilityResponses.set('performance.collect', performanceCollection);
+  ok('performance_collection_starts_only_the_bounded_owned_backend',
+    performanceCollection.status === 200 && performanceCollection.json?.ok === true
+      && performanceCollection.json?.control?.collectionActive === true
+      && performanceCollection.json?.control?.intervalMs === 1000
+      && performanceCollection.json?.control?.collectionExpiresAtUnixMs
+        - performanceCollection.json?.control?.collectionStartedAtUnixMs === 1000
+      && performanceCollection.json?.control?.eventLoopDelayMonitoring === false
+      && performanceCollection.json?.control?.profileActive === false
+      && performanceCollection.json?.backend?.enabled === true
+      && performanceCollection.json?.backend?.producer?.pid === analysisBackendPid,
+    `status=${performanceCollection.status}`);
+  const collectionCleanupDeadline = Date.now() + 5000;
+  let collectionCleanup;
+  do {
+    collectionCleanup = await req('GET', '/api/agent/performance', readKey);
+    if (collectionCleanup.status === 200 && collectionCleanup.json?.control?.collectionActive === false
+      && collectionCleanup.json?.control?.ownedTimerCount === 0) break;
+    await sleep(100);
+  } while (Date.now() < collectionCleanupDeadline);
+  ok('performance_collection_expires_with_confirmed_cleanup',
+    collectionCleanup.status === 200 && collectionCleanup.json?.backend?.enabled === false
+      && collectionCleanup.json?.control?.collectionActive === false
+      && collectionCleanup.json?.control?.ownedTimerCount === 0
+      && collectionCleanup.json?.control?.failedTimerCount === 0
+      && collectionCleanup.json?.control?.eventLoopDelayMonitoring === false
+      && collectionCleanup.json?.control?.collectionCleanupUnconfirmed === false);
+  const performanceProfile = await req('POST', '/api/agent/performance/profile', readKey,
+    { durationMs: 100, samplingIntervalMicros: 1000, maxFunctions: 1 });
+  capabilityResponses.set('performance.profile', performanceProfile);
+  ok('performance_profile_returns_an_actual_bounded_backend_summary',
+    performanceProfile.status === 200 && performanceProfile.json?.ok === true
+      && performanceProfile.json?.schemaVersion === 'forge.cpu-profile.v1'
+      && performanceProfile.json?.producer?.pid === analysisBackendPid
+      && performanceProfile.json?.producer?.scope === 'owned-process'
+      && performanceProfile.json?.requestedDurationMs === 100
+      && performanceProfile.json?.samplingIntervalMicros === 1000
+      && Array.isArray(performanceProfile.json?.functions)
+      && performanceProfile.json.functions.length <= 1
+      && performanceProfile.json?.coverage?.process === 'current-backend-only'
+      && performanceProfile.json?.coverage?.rawProfile === 'not-returned-or-persisted',
+    `status=${performanceProfile.status}`);
+  const performanceAfterProfile = await req('GET', '/api/agent/performance', readKey);
+  ok('performance_profile_settles_with_confirmed_cleanup',
+    performanceAfterProfile.status === 200 && performanceAfterProfile.json?.control?.profileActive === false
+      && performanceAfterProfile.json?.control?.collectionActive === false
+      && performanceAfterProfile.json?.control?.profileCleanupUnconfirmed === false
+      && performanceAfterProfile.json?.control?.abortListenerCleanupUnconfirmed === false
+      && performanceAfterProfile.json?.control?.ownedTimerCount === 0
+      && performanceAfterProfile.json?.control?.failedTimerCount === 0
+      && performanceAfterProfile.json?.control?.profileCapturesStarted === performanceRead.json?.control?.profileCapturesStarted + 1
+      && performanceAfterProfile.json?.control?.profileCapturesSucceeded === performanceRead.json?.control?.profileCapturesSucceeded + 1
+      && performanceAfterProfile.json?.control?.profileCapturesFailed === performanceRead.json?.control?.profileCapturesFailed);
+  const xmlReferences = await req('POST', '/api/agent/project/xml-references', readKey, xmlReferenceBody);
+  capabilityResponses.set('project.xml.references', xmlReferences);
+  ok('xml_reference_capability_resolves_the_actual_inline_file_edge',
+    xmlReferences.status === 200 && xmlReferences.json?.ok === true
+      && xmlReferences.json?.schemaVersion === 'forge.xml-reference-map.v1'
+      && xmlReferences.json?.context?.inputMode === 'inline-project'
+      && xmlReferences.json?.context?.workspaceId === undefined
+      && xmlReferences.json?.coverage?.scannedProjectFiles === 2
+      && xmlReferences.json?.coverage?.truncated === false
+      && xmlReferences.json?.preview === undefined
+      && xmlReferences.json?.edges?.some(edge => edge.kind === 'index-file'
+        && edge.symbol === 'route_reference_macro' && edge.status === 'resolved'
+        && edge.sourceId === 'project:index/macros.xml'
+        && edge.targetIds?.length === 1 && edge.targetIds[0] === 'project:assets/route_reference_macro.xml'),
+    JSON.stringify({ status: xmlReferences.status, ok: xmlReferences.json?.ok,
+      schemaVersion: xmlReferences.json?.schemaVersion,
+      inputMode: xmlReferences.json?.context?.inputMode, workspaceId: xmlReferences.json?.context?.workspaceId,
+      scannedProjectFiles: xmlReferences.json?.coverage?.scannedProjectFiles,
+      truncated: xmlReferences.json?.coverage?.truncated, reasons: xmlReferences.json?.coverage?.reasons,
+      limits: { maxDepth: xmlReferences.json?.coverage?.limits?.maxDepth,
+        maxNodes: xmlReferences.json?.coverage?.limits?.maxNodes, maxEdges: xmlReferences.json?.coverage?.limits?.maxEdges },
+      previewPresent: xmlReferences.json?.preview !== undefined,
+      edges: xmlReferences.json?.edges?.map(edge => ({ kind: edge.kind, symbol: edge.symbol,
+        status: edge.status, sourceId: edge.sourceId, targetIds: edge.targetIds })) }));
+  const analysisWorkspaceAfter = await req('GET', '/api/agent/workspace', SESSION_TOKEN);
+  ok('analysis_successes_preserve_workspace_receipts_and_source_trees',
+    analysisWorkspaceAfter.status === 200
+      && analysisWorkspaceAfter.json?.workspaceHash === analysisWorkspaceBefore.json?.workspaceHash
+      && analysisWorkspaceAfter.json?.snapshotHash === analysisWorkspaceBefore.json?.snapshotHash
+      && stableStringify(actionReceiptFiles()) === stableStringify(analysisReceiptFilesBefore)
+      && analysisTreesBefore.every(({ root, hash }) => regularTreeHash(root) === hash));
 
   const keyStoreBeforeInvalidConstraint = fs.readFileSync(agentKeysFile);
   const invalidConstraints = await Promise.all([
