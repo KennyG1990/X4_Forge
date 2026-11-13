@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceFingerprint": "ab92ad1b0d1fb206272d17ada249d468f45fbd6fde466964598c3b5cd23707ae",
+  "sourceFingerprint": "38425442f3a200393e9fda35880a81a35f14dc9853679c8962d6942d5f6e1f21",
   "policy": "Every raw production filesystem mutation source is count-pinned here. Authoritative files use atomic sibling promotion; stronger tree, archive, append-log, SQLite, retention, ephemeral, and fixture contracts remain explicit exceptions.",
   "writers": [
     {
@@ -409,6 +409,14 @@
       "owners": ["runXmlReferenceMapSelftest"],
       "rationale": "Creates contained XML corpus, authored/effective source, malformed-directory and junction-escape fixtures only beneath one unique temporary parent, including external targets inside that same owned parent.",
       "failureContract": "The temporary extensions rename restores in an inner finally. Outer finally clears caches and refuses recursive cleanup unless the created root is directly beneath os.tmpdir with the expected unique prefix. Fixture, containment or cleanup errors add failed checks; no configured corpus, workspace, game, mod, save or production path is mutated."
+    },
+    {
+      "file": "vscode-extension/src/nativePerformanceIpc.selftest.ts",
+      "calls": { "writeFileSync": 1, "mkdirSync": 1, "rmSync": 1, "mkdtempSync": 1 },
+      "categories": ["fixture-only"],
+      "owners": ["runNativePerformanceIpcSelftest"],
+      "rationale": "Creates one uniquely named OS-temporary owner marker and an empty discovery directory for seven serial owned Node IPC workers. It exercises production performance modules and supervisor transport without a new app mutation route or persistent helper copy.",
+      "failureContract": "Recursive removal requires the exact owner, expected tree, no reparse points, terminal and drained owned supervisor handles, and confirmed absence of every receipt-bound worker PID. Unknown ownership, process identity, PID absence or cleanup failures fail the oracle and retain scratch. The fixture never targets a live profile, mod, game, save or standing configuration."
     }
   ],
   "hostStores": [

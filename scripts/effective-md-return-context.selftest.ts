@@ -652,8 +652,14 @@ function runEffectiveReferenceChecks() {
   };
   const unresolved = (result: Result) => {
     assert.ok(result.cueIndex.unresolved.length);
-    assert.ok(codeFindings(result, 'project.unresolved_cue_ref').length);
-    assert.ok(codeFindings(result, 'cue.unresolved').length);
+    const canonical = codeFindings(result, 'project.unresolved_cue_ref');
+    assert.equal(canonical.length, result.cueIndex.unresolved.length);
+    assert.deepEqual(codeFindings(result, 'cue.unresolved'), []);
+    assert.equal(result.crossFile.findings.filter(finding => finding.code === 'cue.unresolved').length,
+      result.cueIndex.unresolved.length, 'Raw cross-file facts remain available without duplicate flat errors');
+    assert.equal(result.evidence!.findings.filter(finding => finding.code === 'project.unresolved_cue_ref').length,
+      canonical.length);
+    assert.equal(new Set(canonical.map(finding => finding.findingId)).size, canonical.length);
     assert.equal(result.ok, false);
   };
   const unavailable = (result: Result) => assert.ok(referenceGaps(result).length, 'Unknown effective reference/argument context must remain explicit');

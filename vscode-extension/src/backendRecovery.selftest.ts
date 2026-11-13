@@ -15,6 +15,7 @@ const compiled = ts.transpileModule(source, { compilerOptions: {
 const localRequire = createRequire(controllerPath);
 const SAVED = `ws_${'a'.repeat(24)}`;
 const DEFAULT = `ws_${'b'.repeat(24)}`;
+let forbiddenAttempts = 0;
 
 interface Context {
   globalState: { get<T>(key: string): T | undefined; update(key: string, value: unknown): Promise<void> };
@@ -48,7 +49,10 @@ function harness(saved: string | undefined, mode: 'ready' | 'missing' | 'wrong' 
   let launches = 0;
   let paused: Promise<void> | undefined;
   let resume: (() => void) | undefined;
-  const forbidden = () => { throw new Error('The controller selftest attempted an actual external effect.'); };
+  const forbidden = () => {
+    forbiddenAttempts++;
+    throw new Error('The controller selftest attempted an actual external effect.');
+  };
   const mutations = /^(?:write|append|mkdir|mkdtemp|rename|copy|cp|rm|unlink|rmdir|symlink|link|chmod|chown|truncate|createWrite|open)/;
   const readOnlyFs = new Proxy(fs, { get(target, key) {
     if (typeof key === 'string' && mutations.test(key)) return forbidden;
@@ -72,6 +76,12 @@ function harness(saved: string | undefined, mode: 'ready' | 'missing' | 'wrong' 
       if (id === 'node:child_process') return { spawn: forbidden };
       if (id === 'node:fs') return readOnlyFs;
       if (id === 'node:net') return { createServer: forbidden, connect: forbidden, Socket: forbidden };
+      if (id === 'node:os') return { cpus: forbidden };
+      if (id === 'node:perf_hooks') return {
+        performance: { now: forbidden, eventLoopUtilization: forbidden }, monitorEventLoopDelay: forbidden,
+      };
+      if (id === './nativePerformance') return { createNativePerformance: forbidden };
+      if (id === './nativePerformanceHost') return { createNativePerformanceHost: forbidden };
       if (allowed.has(id) || id === 'node:crypto' || id === 'node:path') return localRequire(id);
       if (id.startsWith('./') || id.startsWith('../../shared/')) return {};
       throw new Error(`Unexpected controller import: ${id}`);
@@ -123,7 +133,12 @@ function harness(saved: string | undefined, mode: 'ready' | 'missing' | 'wrong' 
 
 const checks: { name: string; pass: boolean; detail?: string }[] = [];
 async function check(name: string, run: () => Promise<void>) {
-  try { await run(); checks.push({ name, pass: true }); }
+  const attemptsBefore = forbiddenAttempts;
+  try {
+    await run();
+    assert.equal(forbiddenAttempts - attemptsBefore, 0, 'Controlled recovery attempted a forbidden external effect.');
+    checks.push({ name, pass: true });
+  }
   catch (error) { checks.push({ name, pass: false, detail: String(error) }); }
 }
 
@@ -178,9 +193,12 @@ async function main() {
     const h = harness(SAVED, 'ready', false); await h.restart();
     assert.equal(h.requests.length, 0); assert.equal(h.information.length, 0); assert.equal(h.errors.length, 1);
   });
+  await check('controlled_recovery_never_attempts_native_construction_or_resource_effects', async () => {
+    assert.equal(forbiddenAttempts, 0);
+  });
   console.log(JSON.stringify({ allPassed: checks.every(c => c.pass), passed: checks.filter(c => c.pass).length,
     sourceSha256: createHash('sha256').update(source).digest('hex'), compilerVersion: ts.version,
-    total: checks.length, realControllerFunctions: true, controlledLifecycleOnly: true, compiledFilesWritten: 0, checks }));
+    total: checks.length, realControllerFunctions: true, controlledLifecycleOnly: true, compiledFilesWritten: 0, forbiddenAttempts, checks }));
   if (checks.some(c => !c.pass)) process.exitCode = 1;
 }
 const deadline = setTimeout(() => {

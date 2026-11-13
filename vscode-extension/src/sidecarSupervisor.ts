@@ -9,6 +9,12 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import { enterWindowsSidecarJob } from './windowsSidecarJob';
+import { createNativePerformanceRelay } from './nativePerformanceRelay';
+import {
+  createNativePerformanceRetirementNotice, isNativePerformanceRetirementNotice,
+  type NativePerformanceEndpoint,
+} from '../../shared/nativePerformanceChannel';
+import { isNativeInstanceId } from '../../shared/nativePerformanceProtocol';
 
 const MODE = 'pipe-v1';
 const NONCE_PATTERN = /^[a-f0-9]{32,128}$/i;
@@ -39,6 +45,11 @@ if (!validContract()) fail('invalid or missing pipe-v1 parent contract; refusing
 const [serverArg, ...nodeArgs] = process.argv.slice(2);
 if (!serverArg) fail('missing server entrypoint.', 64);
 const serverPath = path.resolve(serverArg);
+const nativeEpoch = process.env.X4_FORGE_NATIVE_EPOCH;
+const nativeEnabled = process.connected === true && typeof process.send === 'function'
+  && process.env.X4_FORGE_NATIVE_MODE === 'ipc-v1' && isNativeInstanceId(nativeEpoch);
+const nativeBinding = nativeEnabled
+  ? { nonce: String(process.env.X4_FORGE_PARENT_NONCE), epoch: nativeEpoch! } : undefined;
 if (process.platform === 'win32') {
   try { enterWindowsSidecarJob(); }
   catch (error) {
@@ -48,7 +59,11 @@ if (process.platform === 'win32') {
 
 const server = spawn(process.execPath, [...nodeArgs, serverPath], {
   cwd: process.cwd(),
-  env: process.env,
+  env: {
+    ...process.env,
+    X4_FORGE_NATIVE_MODE: nativeEnabled ? 'ipc-v1' : '',
+    X4_FORGE_NATIVE_EPOCH: nativeEnabled ? nativeEpoch : '',
+  },
   stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   windowsHide: true,
   detached: process.platform !== 'win32',
@@ -57,6 +72,59 @@ console.log(`[sidecar-supervisor] X4FORGE_SUPERVISED_PID=${server.pid || 0}`);
 server.stdout?.pipe(process.stdout);
 server.stderr?.pipe(process.stderr);
 
+let nativeRelay: ReturnType<typeof createNativePerformanceRelay> | undefined;
+let nativeRetirementAnnounced = false;
+let releaseNativeLifecycle: (() => void) | undefined;
+function announceNativeRetirement(): void {
+  const release = releaseNativeLifecycle;
+  releaseNativeLifecycle = undefined;
+  try { release?.(); } catch { /* observer listener cleanup cannot delay shutdown */ }
+  if (!nativeBinding || nativeRetirementAnnounced) return;
+  nativeRetirementAnnounced = true;
+  // Separate, once-only lifecycle propagation; never synthesize a telemetry ACK.
+  try {
+    if (process.connected && process.send) process.send(createNativePerformanceRetirementNotice(nativeBinding), () => {});
+  } catch { /* no resend; the activation-owned lease still expires locally */ }
+}
+if (nativeBinding) {
+  const host: NativePerformanceEndpoint = {
+    isConnected: () => process.connected === true,
+    send: (frame, callback) => {
+      if (!process.send) { callback(new Error('NATIVE_IPC_UNAVAILABLE')); return false; }
+      return process.send(frame, callback);
+    },
+    onMessage: listener => { process.on('message', listener); return () => { process.removeListener('message', listener); }; },
+    onDisconnect: listener => { process.on('disconnect', listener); return () => { process.removeListener('disconnect', listener); }; },
+  };
+  const backend: NativePerformanceEndpoint = {
+    isConnected: () => server.connected,
+    send: (frame, callback) => server.send(frame, callback),
+    onMessage: listener => { server.on('message', listener); return () => { server.removeListener('message', listener); }; },
+    onDisconnect: listener => { server.on('disconnect', listener); return () => { server.removeListener('disconnect', listener); }; },
+  };
+  const onNativeLifecycle = (raw: unknown) => {
+    if (isNativePerformanceRetirementNotice(raw, nativeBinding)) retireNativeRelay();
+  };
+  server.on('message', onNativeLifecycle);
+  releaseNativeLifecycle = () => { server.removeListener('message', onNativeLifecycle); };
+  try {
+    nativeRelay = createNativePerformanceRelay({
+      binding: nativeBinding,
+      host,
+      backend,
+      onRetire: announceNativeRetirement,
+    });
+  } catch {
+    announceNativeRetirement();
+    console.warn('[native-performance] relay unavailable; ordinary sidecar remains available');
+  }
+}
+
+function retireNativeRelay(): void {
+  try { nativeRelay?.retire(); } catch { /* telemetry cannot prevent owned shutdown */ }
+  announceNativeRetirement();
+}
+
 let shuttingDown = false;
 let forceTimer: ReturnType<typeof setTimeout> | null = null;
 let failsafeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -64,6 +132,7 @@ let failsafeTimer: ReturnType<typeof setTimeout> | null = null;
 function beginShutdown(reason: string, signalChild: boolean): void {
   if (shuttingDown) return;
   shuttingDown = true;
+  retireNativeRelay();
   console.error(`[sidecar-supervisor] ${reason}; waiting ${GRACE_MS} ms for owned server ${server.pid || 0} to exit.`);
   if (server.connected) {
     try {
@@ -98,6 +167,7 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
 server.once('error', error => fail(`server spawn failed: ${error.message}`, 1));
 server.once('exit', async (code, signal) => {
   shuttingDown = true;
+  retireNativeRelay();
   if (forceTimer) clearTimeout(forceTimer);
   if (failsafeTimer) clearTimeout(failsafeTimer);
   // Abrupt exit can skip the server's own cleanup. Leave a reused PID alone.
@@ -111,4 +181,4 @@ server.once('exit', async (code, signal) => {
   process.exit(code ?? (signal ? 1 : 0));
 });
 
-process.once('exit', () => forceKillOwnedTree(server));
+process.once('exit', () => { retireNativeRelay(); forceKillOwnedTree(server); });

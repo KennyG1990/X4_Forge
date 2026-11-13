@@ -5,7 +5,7 @@
  * (full-bleed iframe to a loopback origin) and the EXISTING Express backend runs as a
  * managed sidecar (dist/server.cjs, NODE_ENV=production) on a dynamically selected
  * loopback port with a per-session bearer token. No core Forge code is imported here
- * and no core file knows this shell exists.
+ * and an optional owned IPC channel reports native performance without requiring the shell.
  *
  * Ownership rules (deliberate):
  *  - ATTACH-FIRST: if an already-running Forge answers the agent-schema probe at
@@ -22,6 +22,13 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
+import * as os from "node:os";
+import { performance as nativePerformanceClock, monitorEventLoopDelay } from "node:perf_hooks";
+import { createNativePerformance } from "./nativePerformance";
+import { createNativePerformanceHost } from "./nativePerformanceHost";
+import type { NativeOperationId, NativeWireBinding } from "../../shared/nativePerformanceProtocol";
+import type { ForgePerformanceOutcome } from "../../shared/forgePerformance";
+import { isNativePerformanceRetirementNotice, type NativePerformanceEndpoint } from "../../shared/nativePerformanceChannel";
 import { mapFlatFindings, type FlatFinding } from "./diagnosticsMap";
 import { buildXmlAssociations, listModFolders, writeRecommendations, writeXmlAssociations } from "./modFolder";
 import { atomicWriteFile, replaceFileSetAtomically } from "./durableWrite";
@@ -69,9 +76,96 @@ interface BackendHandle {
   /** ADR-F5 explicit authority for extension-native API calls. */
   clientId?: string;
   workspaceId?: string;
+  nativeBridge?: ReturnType<ReturnType<typeof createNativePerformanceHost>["attach"]>;
 }
 
 let backend: BackendHandle | null = null;
+let nativePerformanceHost: ReturnType<typeof createNativePerformanceHost> | undefined;
+const nativeBridges = new WeakMap<ChildProcess, ReturnType<ReturnType<typeof createNativePerformanceHost>["attach"]>>();
+type NativeFinish = (outcome?: ForgePerformanceOutcome) => void;
+
+/** Telemetry never owns the result, promise or exception of the original operation. */
+function beginNativeOperation(id: NativeOperationId): NativeFinish {
+  try {
+    const finish = nativePerformanceHost?.beginOperation(id);
+    if (finish) return outcome => { try { finish(outcome); } catch { /* observer only */ } };
+  } catch { /* unavailable observer must not affect modding */ }
+  return () => undefined;
+}
+
+function initializeNativePerformance(): void {
+  // Never overwrite uncertain cleanup during reactivation in the same host VM.
+  if (nativePerformanceHost) {
+    try {
+      const prior = nativePerformanceHost.dispose();
+      if (!prior.ok || prior.status.collectionActive || prior.status.collectionCleanupUnconfirmed || prior.status.ownedTimerCount
+        || prior.status.failedTimerCount || prior.status.eventLoopDelayMonitoring) return;
+    } catch { return; }
+  }
+  try {
+    const producer = createNativePerformance({
+      pid: process.pid,
+      instanceId: crypto.randomUUID(),
+      now: () => nativePerformanceClock.now(),
+      wallNow: () => Date.now(),
+      resources: {
+        pid: () => process.pid,
+        cpuUsage: () => process.cpuUsage(),
+        memoryUsage: () => process.memoryUsage(),
+        uptime: () => process.uptime(),
+        logicalCpuCount: () => Math.max(1, os.cpus().length),
+        eventLoopUtilization: () => nativePerformanceClock.eventLoopUtilization(),
+      },
+      timers: {
+        set: (callback, delayMs) => setTimeout(callback, delayMs),
+        clear: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
+      },
+      delayHistogram: () => monitorEventLoopDelay({ resolution: 20 }),
+    });
+    nativePerformanceHost = createNativePerformanceHost({ producer });
+  } catch {
+    nativePerformanceHost = undefined;
+    log("native performance observer unavailable; ordinary Forge remains available");
+  }
+}
+
+function nativeChildEndpoint(child: ChildProcess, binding: NativeWireBinding): NativePerformanceEndpoint {
+  const capturedBinding = { nonce: binding.nonce, epoch: binding.epoch };
+  return {
+    isConnected: () => child.connected,
+    send: (frame, callback) => child.send(frame, callback),
+    onMessage: listener => {
+      child.on("message", listener);
+      return () => { child.removeListener("message", listener); };
+    },
+    onDisconnect: listener => {
+      let listening = true;
+      const disconnected = () => {
+        if (!listening) return;
+        listening = false;
+        try { listener(); } catch { /* observer cannot affect the owned backend */ }
+      };
+      const retired = (raw: unknown) => {
+        try {
+          if (listening && isNativePerformanceRetirementNotice(raw, capturedBinding)) disconnected();
+        } catch { /* unrelated or malformed lifecycle message */ }
+      };
+      child.on("disconnect", disconnected);
+      child.on("message", retired);
+      return () => {
+        listening = false;
+        child.removeListener("disconnect", disconnected);
+        child.removeListener("message", retired);
+      };
+    },
+  };
+}
+
+function retireNativeChild(child: ChildProcess, reason: string): void {
+  try { nativeBridges.get(child)?.retire(reason); } catch { /* telemetry cannot prevent shutdown */ }
+  nativeBridges.delete(child);
+}
+
 let panel: vscode.WebviewPanel | null = null;
 const panelBinding = new PanelBackendBinding();
 const backendEnsurer = new SharedBackendEnsure<BackendHandle>();
@@ -161,6 +255,7 @@ async function bindBackendWorkspace(
 }
 
 function requestManagedSidecarStop(child: ChildProcess): void {
+  retireNativeChild(child, "stopped");
   if (child.exitCode !== null || child.signalCode !== null || stoppingChildren.has(child)) return;
   stoppingChildren.add(child);
   retiringChild = child;
@@ -197,7 +292,16 @@ class NativeDiffContentProvider implements vscode.TextDocumentContentProvider {
   }
 
   provideTextDocumentContent(uri: vscode.Uri): string | undefined {
-    return this.documents.get(uri.toString());
+    const finish = beginNativeOperation('native.provider.read');
+    let outcome: ForgePerformanceOutcome = 'ok';
+    try {
+      return this.documents.get(uri.toString());
+    } catch (error) {
+      outcome = 'error';
+      throw error;
+    } finally {
+      finish(outcome);
+    }
   }
 }
 
@@ -252,46 +356,64 @@ class NativeNodeFileSystemProvider implements vscode.FileSystemProvider {
   readDirectory(): [string, vscode.FileType][] { return []; }
   createDirectory(): void { throw vscode.FileSystemError.NoPermissions('Node documents are virtual.'); }
   readFile(uri: vscode.Uri): Uint8Array {
-    const entry = this.entries.get(uri.toString());
-    if (!entry) throw vscode.FileSystemError.FileNotFound(uri);
-    // VS Code/Antigravity's native Revert reloads provider bytes without reliably
-    // emitting onDidChangeTextDocument for virtual file-system documents. Clear
-    // diagnostics produced by the discarded dirty buffer, then validate the
-    // restored provider content after the editor has consumed this read.
-    const open = vscode.workspace.textDocuments.find(document => document.uri.toString() === uri.toString());
-    if (open?.isDirty && (diagCollection?.get(uri)?.length || 0) > 0) {
-      diagCollection?.delete(uri);
-      setTimeout(() => {
-        const restored = vscode.workspace.textDocuments.find(document => document.uri.toString() === uri.toString());
-        if (restored) scheduleNodeDocumentValidation(restored, 80);
-      }, 80);
+    const finish = beginNativeOperation('native.provider.read');
+    let outcome: ForgePerformanceOutcome = 'ok';
+    try {
+      const entry = this.entries.get(uri.toString());
+      if (!entry) throw vscode.FileSystemError.FileNotFound(uri);
+      // VS Code/Antigravity's native Revert reloads provider bytes without reliably
+      // emitting onDidChangeTextDocument for virtual file-system documents. Clear
+      // diagnostics produced by the discarded dirty buffer, then validate the
+      // restored provider content after the editor has consumed this read.
+      const open = vscode.workspace.textDocuments.find(document => document.uri.toString() === uri.toString());
+      if (open?.isDirty && (diagCollection?.get(uri)?.length || 0) > 0) {
+        diagCollection?.delete(uri);
+        setTimeout(() => {
+          const restored = vscode.workspace.textDocuments.find(document => document.uri.toString() === uri.toString());
+          if (restored) scheduleNodeDocumentValidation(restored, 80);
+        }, 80);
+      }
+      return entry.content;
+    } catch (error) {
+      outcome = 'error';
+      throw error;
+    } finally {
+      finish(outcome);
     }
-    return entry.content;
   }
   async writeFile(uri: vscode.Uri, content: Uint8Array): Promise<void> {
-    const entry = this.entries.get(uri.toString());
-    if (!entry) throw vscode.FileSystemError.FileNotFound(uri);
-    if (entry.readOnly) throw vscode.FileSystemError.NoPermissions('This selection contains opaque raw XML and is view-only.');
-    const activePanel = panel;
-    if (!activePanel) throw vscode.FileSystemError.Unavailable('The X4 Forge Studio panel is closed. Reopen it before saving node edits.');
-    const requestId = crypto.randomUUID();
-    const result = await new Promise<NativeNodeSelectionResult>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(requestId);
-        reject(new Error('Forge did not answer the node-save request within 30 seconds. Nothing was applied.'));
-      }, 30_000);
-      this.pending.set(requestId, { uri, resolve, reject, timer });
-      void activePanel.webview.postMessage({
-        source: 'x4forge-native-host', type: 'apply-node-selection', requestId,
-        content: Buffer.from(content).toString('utf8'), token: entry.token, nodeIds: entry.nodeIds,
+    const finish = beginNativeOperation('native.provider.write');
+    let outcome: ForgePerformanceOutcome = 'ok';
+    try {
+      const entry = this.entries.get(uri.toString());
+      if (!entry) throw vscode.FileSystemError.FileNotFound(uri);
+      if (entry.readOnly) throw vscode.FileSystemError.NoPermissions('This selection contains opaque raw XML and is view-only.');
+      const activePanel = panel;
+      if (!activePanel) throw vscode.FileSystemError.Unavailable('The X4 Forge Studio panel is closed. Reopen it before saving node edits.');
+      const requestId = crypto.randomUUID();
+      const result = await new Promise<NativeNodeSelectionResult>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          this.pending.delete(requestId);
+          reject(new Error('Forge did not answer the node-save request within 30 seconds. Nothing was applied.'));
+        }, 30_000);
+        this.pending.set(requestId, { uri, resolve, reject, timer });
+        void activePanel.webview.postMessage({
+          source: 'x4forge-native-host', type: 'apply-node-selection', requestId,
+          content: Buffer.from(content).toString('utf8'), token: entry.token, nodeIds: entry.nodeIds,
+        });
       });
-    });
-    if (!result.ok) throw vscode.FileSystemError.Unavailable(result.message);
-    entry.content = Buffer.from(result.content ?? Buffer.from(content).toString('utf8'), 'utf8');
-    entry.token = result.token || entry.token;
-    entry.mtime = Date.now();
-    this.changeEmitter.fire([{ type: vscode.FileChangeType.Changed, uri }]);
-    void vscode.window.setStatusBarMessage(`X4 Forge: ${result.message}`, 8000);
+      if (!result.ok) throw vscode.FileSystemError.Unavailable(result.message);
+      entry.content = Buffer.from(result.content ?? Buffer.from(content).toString('utf8'), 'utf8');
+      entry.token = result.token || entry.token;
+      entry.mtime = Date.now();
+      this.changeEmitter.fire([{ type: vscode.FileChangeType.Changed, uri }]);
+      void vscode.window.setStatusBarMessage(`X4 Forge: ${result.message}`, 8000);
+    } catch (error) {
+      outcome = 'error';
+      throw error;
+    } finally {
+      finish(outcome);
+    }
   }
   delete(): void { throw vscode.FileSystemError.NoPermissions('Node documents are virtual.'); }
   rename(): void { throw vscode.FileSystemError.NoPermissions('Node documents are virtual.'); }
@@ -446,11 +568,20 @@ function currentIdeCapabilities() {
 }
 
 function showIdeCapabilities(): void {
-  const lines = formatIdeCapabilityReport(currentIdeCapabilities());
-  log('IDE capabilities:');
-  for (const line of lines) log(`  ${line}`);
-  output.show(true);
-  void vscode.window.showInformationMessage('X4 Forge capability report written to the X4 Forge output channel.');
+  const finish = beginNativeOperation('native.command');
+  let outcome: ForgePerformanceOutcome = 'ok';
+  try {
+    const lines = formatIdeCapabilityReport(currentIdeCapabilities());
+    log('IDE capabilities:');
+    for (const line of lines) log(`  ${line}`);
+    output.show(true);
+    void vscode.window.showInformationMessage('X4 Forge capability report written to the X4 Forge output channel.');
+  } catch (error) {
+    outcome = 'error';
+    throw error;
+  } finally {
+    finish(outcome);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -482,144 +613,175 @@ function resolveStateDir(context: vscode.ExtensionContext): string {
 async function spawnSidecar(
   context: vscode.ExtensionContext, generation: number, exactWorkspaceId?: string,
 ): Promise<BackendHandle> {
-  const appRoot = resolveAppRoot(context);
-  if (!appRoot) {
-    throw new Error(
-      "No Forge backend found: the extension has no bundled app and x4forge.forgeRoot is not set " +
-        "to a built checkout (needs dist/server.cjs). Run the extension's stage-app build or set the setting.",
-    );
-  }
-
-  const nodeExe = cfg().nodePath || "node";
-  const nodeVersion = await checkNodeExecutable(nodeExe);
-  if (!nodeVersion) {
-    throw new Error(
-      `Node.js executable not usable: "${nodeExe}". The Forge sidecar needs a real Node install ` +
-        `(its native modules are built for it). Install Node.js or set x4forge.nodePath.`,
-    );
-  }
-
-  const port = await findFreePort();
-  assertBackendStartCurrent(generation);
-  const token = crypto.randomBytes(32).toString("hex");
-  const parentNonce = crypto.randomBytes(32).toString('hex');
-  const stateDir = resolveStateDir(context);
-  fs.mkdirSync(stateDir, { recursive: true });
-  // B51: persist the user's Directory Settings (config.json) in global storage, NOT the
-  // extension's install dir — the latter is replaced on every extension update, which was
-  // wiping the configured game/schema/workspace paths each time the user updated.
-  const configDir = path.join(context.globalStorageUri.fsPath, "config");
-  fs.mkdirSync(configDir, { recursive: true });
-  // B53: the server's runtime-data root (AI keys, agent keys, spend meter, harvested schemas)
-  // also persists in global storage — not the install dir the next update wipes.
-  const dataDir = path.join(context.globalStorageUri.fsPath, "data");
-  fs.mkdirSync(dataDir, { recursive: true });
-
-  // B43: gold-standard debugging — spawn under --inspect and auto-attach the IDE debugger.
-  const debugMode = cfg().debug;
-  const nodeArgs: string[] = [];
-  let debugPort = 0;
-  if (debugMode !== "off") {
-    debugPort = await findFreePort();
-    nodeArgs.push(`--${debugMode}=127.0.0.1:${debugPort}`);
-  }
-
-  const supervisorPath = path.join(__dirname, 'sidecar-supervisor.js');
-  if (!fs.existsSync(supervisorPath)) {
-    throw new Error(`Managed sidecar supervisor is missing: ${supervisorPath}. Rebuild the extension package.`);
-  }
-  const serverPath = path.join(appRoot.root, 'dist', 'server.cjs');
-  assertBackendStartCurrent(generation);
-  log(`spawning supervised sidecar: ${nodeExe} (${nodeVersion}) ${supervisorPath} ${serverPath} ${nodeArgs.join(" ")}`.replace(/\s+/g, " "));
-  log(`  app root: ${appRoot.root} (${appRoot.source})`);
-  log(`  port: ${port} (dynamically selected)  state dir: ${stateDir}`);
-  if (debugPort) log(`  DEBUG: node inspector on 127.0.0.1:${debugPort} (${debugMode})`);
-
-  const extensionVersion = context.extension?.packageJSON?.version;
-  const child = spawn(nodeExe, [supervisorPath, serverPath, ...nodeArgs], {
-    cwd: appRoot.root,
-    windowsHide: true,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    env: {
-      ...process.env,
-      NODE_ENV: "production",
-      PORT: String(port),
-      STUDIO_API_TOKEN: token,
-      X4_STATE_DIR: stateDir,
-      X4_CONFIG_DIR: configDir, // B51: config.json persists across extension updates
-      X4_DATA_DIR: dataDir,     // B53: AI/agent keys, spend meter, harvested schemas persist too
-      X4_FORGE_EXTENSION_VERSION: typeof extensionVersion === "string" ? extensionVersion : "",
-      X4_FORGE_PARENT_MODE: 'pipe-v1',
-      X4_FORGE_PARENT_PID: String(process.pid),
-      X4_FORGE_PARENT_NONCE: parentNonce,
-      // Defense-in-depth: never allow the dev-only shell route in this shell.
-      FORGE_ALLOW_RUN_COMMAND: "",
-    },
-  });
-  startingChild = child;
-  child.stdout?.on("data", (d) => output.append(String(d)));
-  child.stderr?.on("data", (d) => output.append(String(d)));
-
-  const handle: BackendHandle = { baseUrl: `http://127.0.0.1:${port}`, owned: true, child, port, token, debugPort };
-
-  // Attach the debugger right after spawn (the inspector is up at process start). For
-  // --inspect-brk the process is paused at entry until this attach + a manual continue.
-  if (debugPort) {
-    void attachSidecarDebugger(debugPort, appRoot.root, debugMode === "inspect-brk");
-  }
-
-  child.on("exit", (code, signal) => {
-    if (retiringChild === child) retiringChild = null;
-    log(`sidecar exited (code=${code}, signal=${signal ?? "none"})`);
-    const wasCurrent = backend === handle;
-    if (wasCurrent) {
-      backend = null;
-      markStudioBackendOffline(handle.owned);
-    }
-    updateStatus();
-    if (wasCurrent && !stoppingDeliberately) {
-      // Watchdog (2026-07-16): anything can kill a long-lived local process (OOM killer, a
-      // stray taskkill, AV software — lived: a broad Stop-Process sweep took out a healthy
-      // sidecar mid-session). A ready-then-died backend is restartable by definition, so
-      // restart it instead of dead-ending the studio on a manual command.
-      void autoRestartSidecar(context, code);
-    }
-  });
-  child.on("error", (err) => {
-    log(`sidecar spawn error: ${err.message}`);
-  });
-
-  // Readiness: the server must answer its own public schema endpoint.
+  const finish = beginNativeOperation('native.backend.spawn');
+  let outcome: ForgePerformanceOutcome = 'ok';
   try {
-    const deadline = Date.now() + (debugMode === "off" ? 30_000 : 120_000);
-    while (Date.now() < deadline) {
-      assertBackendStartCurrent(generation);
-      if (child.exitCode !== null || child.signalCode !== null) {
-        throw new Error(
-          `Forge backend exited during startup (code ${child.exitCode ?? child.signalCode}). See "X4 Forge" output for its logs.`,
-        );
+    const appRoot = resolveAppRoot(context);
+    if (!appRoot) {
+      throw new Error(
+        "No Forge backend found: the extension has no bundled app and x4forge.forgeRoot is not set " +
+          "to a built checkout (needs dist/server.cjs). Run the extension's stage-app build or set the setting.",
+      );
+    }
+
+    const nodeExe = cfg().nodePath || "node";
+    const nodeVersion = await checkNodeExecutable(nodeExe);
+    if (!nodeVersion) {
+      throw new Error(
+        `Node.js executable not usable: "${nodeExe}". The Forge sidecar needs a real Node install ` +
+          `(its native modules are built for it). Install Node.js or set x4forge.nodePath.`,
+      );
+    }
+
+    const port = await findFreePort();
+    assertBackendStartCurrent(generation);
+    const token = crypto.randomBytes(32).toString("hex");
+    const parentNonce = crypto.randomBytes(32).toString('hex');
+    const nativeEpoch = crypto.randomBytes(16).toString('hex');
+    const stateDir = resolveStateDir(context);
+    fs.mkdirSync(stateDir, { recursive: true });
+    // B51: persist the user's Directory Settings (config.json) in global storage, NOT the
+    // extension's install dir — the latter is replaced on every extension update, which was
+    // wiping the configured game/schema/workspace paths each time the user updated.
+    const configDir = path.join(context.globalStorageUri.fsPath, "config");
+    fs.mkdirSync(configDir, { recursive: true });
+    // B53: the server's runtime-data root (AI keys, agent keys, spend meter, harvested schemas)
+    // also persists in global storage — not the install dir the next update wipes.
+    const dataDir = path.join(context.globalStorageUri.fsPath, "data");
+    fs.mkdirSync(dataDir, { recursive: true });
+
+    // B43: gold-standard debugging — spawn under --inspect and auto-attach the IDE debugger.
+    const debugMode = cfg().debug;
+    const nodeArgs: string[] = [];
+    let debugPort = 0;
+    if (debugMode !== "off") {
+      debugPort = await findFreePort();
+      nodeArgs.push(`--${debugMode}=127.0.0.1:${debugPort}`);
+    }
+
+    const supervisorPath = path.join(__dirname, 'sidecar-supervisor.js');
+    if (!fs.existsSync(supervisorPath)) {
+      throw new Error(`Managed sidecar supervisor is missing: ${supervisorPath}. Rebuild the extension package.`);
+    }
+    const serverPath = path.join(appRoot.root, 'dist', 'server.cjs');
+    assertBackendStartCurrent(generation);
+    log(`spawning supervised sidecar: ${nodeExe} (${nodeVersion}) ${supervisorPath} ${serverPath} ${nodeArgs.join(" ")}`.replace(/\s+/g, " "));
+    log(`  app root: ${appRoot.root} (${appRoot.source})`);
+    log(`  port: ${port} (dynamically selected)  state dir: ${stateDir}`);
+    if (debugPort) log(`  DEBUG: node inspector on 127.0.0.1:${debugPort} (${debugMode})`);
+
+    const extensionVersion = context.extension?.packageJSON?.version;
+    const child = spawn(nodeExe, [supervisorPath, serverPath, ...nodeArgs], {
+      cwd: appRoot.root,
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
+      env: {
+        ...process.env,
+        NODE_ENV: "production",
+        PORT: String(port),
+        STUDIO_API_TOKEN: token,
+        X4_STATE_DIR: stateDir,
+        X4_CONFIG_DIR: configDir, // B51: config.json persists across extension updates
+        X4_DATA_DIR: dataDir,     // B53: AI/agent keys, spend meter, harvested schemas persist too
+        X4_FORGE_EXTENSION_VERSION: typeof extensionVersion === "string" ? extensionVersion : "",
+        X4_FORGE_PARENT_MODE: 'pipe-v1',
+        X4_FORGE_PARENT_PID: String(process.pid),
+        X4_FORGE_PARENT_NONCE: parentNonce,
+        X4_FORGE_NATIVE_MODE: nativePerformanceHost ? 'ipc-v1' : '',
+        X4_FORGE_NATIVE_EPOCH: nativePerformanceHost ? nativeEpoch : '',
+        // Defense-in-depth: never allow the dev-only shell route in this shell.
+        FORGE_ALLOW_RUN_COMMAND: "",
+      },
+    });
+    startingChild = child;
+    child.stdout?.on("data", (d) => output.append(String(d)));
+    child.stderr?.on("data", (d) => output.append(String(d)));
+
+    const handle: BackendHandle = { baseUrl: `http://127.0.0.1:${port}`, owned: true, child, port, token, debugPort };
+
+    try {
+      const binding = { nonce: parentNonce, epoch: nativeEpoch };
+      const bridge = nativePerformanceHost?.attach({
+        binding,
+        channel: nativeChildEndpoint(child, binding),
+        isCurrent: () => generation === backendStopGeneration && !stoppingChildren.has(child)
+          && child.exitCode === null && child.signalCode === null
+          && (startingChild === child || backend === handle),
+      });
+      if (bridge) {
+        handle.nativeBridge = bridge;
+        nativeBridges.set(child, bridge);
       }
-      if (await probeForge(handle.baseUrl, 1500)) {
+    } catch {
+      log("native performance channel unavailable; ordinary backend startup continues");
+    }
+
+    // Attach the debugger right after spawn (the inspector is up at process start). For
+    // --inspect-brk the process is paused at entry until this attach + a manual continue.
+    if (debugPort) {
+      void attachSidecarDebugger(debugPort, appRoot.root, debugMode === "inspect-brk");
+    }
+
+    child.on("exit", (code, signal) => {
+      retireNativeChild(child, "backend-exit");
+      if (retiringChild === child) retiringChild = null;
+      log(`sidecar exited (code=${code}, signal=${signal ?? "none"})`);
+      const wasCurrent = backend === handle;
+      if (wasCurrent) {
+        backend = null;
+        markStudioBackendOffline(handle.owned);
+      }
+      updateStatus();
+      if (wasCurrent && !stoppingDeliberately) {
+        // Watchdog (2026-07-16): anything can kill a long-lived local process (OOM killer, a
+        // stray taskkill, AV software — lived: a broad Stop-Process sweep took out a healthy
+        // sidecar mid-session). A ready-then-died backend is restartable by definition, so
+        // restart it instead of dead-ending the studio on a manual command.
+        void autoRestartSidecar(context, code);
+      }
+    });
+    child.on("error", (err) => {
+      retireNativeChild(child, "backend-error");
+      log(`sidecar spawn error: ${err.message}`);
+    });
+
+    // Readiness: the server must answer its own public schema endpoint.
+    try {
+      const deadline = Date.now() + (debugMode === "off" ? 30_000 : 120_000);
+      while (Date.now() < deadline) {
         assertBackendStartCurrent(generation);
-        await bindBackendWorkspace(context, handle, generation, exactWorkspaceId);
-        assertBackendStartCurrent(generation);
-        log(`sidecar ready at ${handle.baseUrl}`);
+        if (child.exitCode !== null || child.signalCode !== null) {
+          throw new Error(
+            `Forge backend exited during startup (code ${child.exitCode ?? child.signalCode}). See "X4 Forge" output for its logs.`,
+          );
+        }
+        if (await probeForge(handle.baseUrl, 1500)) {
+          assertBackendStartCurrent(generation);
+          await bindBackendWorkspace(context, handle, generation, exactWorkspaceId);
+          assertBackendStartCurrent(generation);
+          log(`sidecar ready at ${handle.baseUrl}`);
+          return handle;
+        }
+        await new Promise((r) => setTimeout(r, 400));
+      }
+      assertBackendStartCurrent(generation);
+      // A debugger may deliberately hold the backend before its first instruction.
+      if (debugMode === "inspect-brk") {
+        log(`sidecar is paused at startup (--inspect-brk) — continue execution in the debugger to start the server.`);
         return handle;
       }
-      await new Promise((r) => setTimeout(r, 400));
+      throw new Error("Forge backend did not become ready within 30s. See \"X4 Forge\" output for its logs.");
+    } catch (error) {
+      requestManagedSidecarStop(child);
+      throw error;
+    } finally {
+      if (startingChild === child) startingChild = null;
     }
-    assertBackendStartCurrent(generation);
-    // A debugger may deliberately hold the backend before its first instruction.
-    if (debugMode === "inspect-brk") {
-      log(`sidecar is paused at startup (--inspect-brk) — continue execution in the debugger to start the server.`);
-      return handle;
-    }
-    throw new Error("Forge backend did not become ready within 30s. See \"X4 Forge\" output for its logs.");
   } catch (error) {
-    requestManagedSidecarStop(child);
+    outcome = generation !== backendStopGeneration ? 'superseded' : 'error';
     throw error;
   } finally {
-    if (startingChild === child) startingChild = null;
+    finish(outcome);
   }
 }
 
@@ -633,34 +795,45 @@ let restartTimestamps: number[] = [];
 
 async function autoRestartSidecar(context: vscode.ExtensionContext, exitCode: number | null): Promise<void> {
   const generation = backendStopGeneration;
-  const now = Date.now();
-  restartTimestamps = restartTimestamps.filter((t) => now - t < RESTART_WINDOW_MS);
-  if (restartTimestamps.length >= RESTART_MAX) {
-    showBackendError(
-      `The Forge backend exited unexpectedly (code ${exitCode ?? "?"}) and auto-restart gave up ` +
-        `after ${RESTART_MAX} attempts in 5 minutes. See "X4 Forge" output for its logs, then run ` +
-        `"X4 Forge: Open Studio" again.`,
-    );
-    return;
-  }
-  restartTimestamps.push(now);
-  const attempt = restartTimestamps.length;
-  log(`sidecar exited unexpectedly (code ${exitCode ?? "?"}) — auto-restarting (attempt ${attempt}/${RESTART_MAX})`);
-  await new Promise((r) => setTimeout(r, 1000 * attempt)); // linear backoff: 1s, 2s, 3s
-  if (backend || generation !== backendStopGeneration) return;
+  const finish = beginNativeOperation('native.backend.restart');
+  let outcome: ForgePerformanceOutcome = 'ok';
   try {
-    const saved = context.globalState.get<string>('x4forge.workspaceId') ?? '';
-    const handle = await ensureBackend(context, saved);
-    log(`sidecar auto-restarted at ${handle.baseUrl}`);
-    void vscode.window.showInformationMessage(
-      "X4 Forge: the backend stopped unexpectedly and was restarted automatically.",
-    );
-  } catch (err) {
-    if (generation !== backendStopGeneration) return;
-    showBackendError(
-      `The Forge backend exited unexpectedly and auto-restart failed: ` +
-        `${err instanceof Error ? err.message : String(err)} — run "X4 Forge: Open Studio" again.`,
-    );
+    const now = Date.now();
+    restartTimestamps = restartTimestamps.filter((t) => now - t < RESTART_WINDOW_MS);
+    if (restartTimestamps.length >= RESTART_MAX) {
+      outcome = 'error';
+      showBackendError(
+        `The Forge backend exited unexpectedly (code ${exitCode ?? "?"}) and auto-restart gave up ` +
+          `after ${RESTART_MAX} attempts in 5 minutes. See "X4 Forge" output for its logs, then run ` +
+          `"X4 Forge: Open Studio" again.`,
+      );
+      return;
+    }
+    restartTimestamps.push(now);
+    const attempt = restartTimestamps.length;
+    log(`sidecar exited unexpectedly (code ${exitCode ?? "?"}) — auto-restarting (attempt ${attempt}/${RESTART_MAX})`);
+    await new Promise((r) => setTimeout(r, 1000 * attempt)); // linear backoff: 1s, 2s, 3s
+    if (backend || generation !== backendStopGeneration) { outcome = 'superseded'; return; }
+    try {
+      const saved = context.globalState.get<string>('x4forge.workspaceId') ?? '';
+      const handle = await ensureBackend(context, saved);
+      log(`sidecar auto-restarted at ${handle.baseUrl}`);
+      void vscode.window.showInformationMessage(
+        "X4 Forge: the backend stopped unexpectedly and was restarted automatically.",
+      );
+    } catch (err) {
+      if (generation !== backendStopGeneration) { outcome = 'superseded'; return; }
+      outcome = 'error';
+      showBackendError(
+        `The Forge backend exited unexpectedly and auto-restart failed: ` +
+          `${err instanceof Error ? err.message : String(err)} — run "X4 Forge: Open Studio" again.`,
+      );
+    }
+  } catch (error) {
+    outcome = generation !== backendStopGeneration ? 'superseded' : 'error';
+    throw error;
+  } finally {
+    finish(outcome);
   }
 }
 
@@ -685,87 +858,105 @@ async function ensureBackend(context: vscode.ExtensionContext, exactWorkspaceId?
 
 async function ensureBackendOnce(context: vscode.ExtensionContext, exactWorkspaceId?: string): Promise<BackendHandle> {
   const generation = backendStopGeneration;
-  // Reuse a live handle.
-  const existing = backend;
-  if (existing) {
-    const ownedLiveness = existing.owned ? await probeOwnedForge(existing) : null;
-    const live = ownedLiveness?.live ?? await probeForge(existing.baseUrl, 2000);
+  const finish = beginNativeOperation('native.backend.ensure');
+  let outcome: ForgePerformanceOutcome = 'ok';
+  try {
+    // Reuse a live handle.
+    const existing = backend;
+    if (existing) {
+      const ownedLiveness = existing.owned ? await probeOwnedForge(existing) : null;
+      const live = ownedLiveness?.live ?? await probeForge(existing.baseUrl, 2000);
+      assertBackendStartCurrent(generation);
+      if (live && backend === existing) {
+        if (ownedLiveness?.reason === "responsive" && ownedLiveness.recoveredAfterRetry) {
+          log(`owned backend at ${existing.baseUrl} responsive after lightweight liveness retry ${ownedLiveness.attempts}; retaining handle`);
+        } else if (ownedLiveness?.reason === "running-but-busy") {
+          log(`owned backend at ${existing.baseUrl} remains running but busy after ${ownedLiveness.attempts} bounded lightweight probes; retaining handle`);
+        }
+        return existing;
+      }
+      if (backend && backend !== existing) { outcome = 'superseded'; return backend; }
+      if (backend === existing) {
+        const detail = ownedLiveness
+          ? ` after ${ownedLiveness.attempts} lightweight check${ownedLiveness.attempts === 1 ? "" : "s"}`
+          : "";
+        log(`existing backend at ${existing.baseUrl} no longer answers${detail}; discarding handle`);
+      }
+      if (existing.owned && existing.child && existing.child.exitCode === null && existing.child.signalCode === null) {
+        stoppingDeliberately = true;
+        try {
+          requestManagedSidecarStop(existing.child);
+        } finally {
+          stoppingDeliberately = false;
+        }
+      }
+      if (backend === existing) {
+        backend = null;
+        markStudioBackendOffline(existing.owned);
+      }
+    }
+
+    // Attach-first: an already-running Forge (e.g. the standalone dev stack) wins.
+    const { attachUrl } = cfg();
+    if (attachUrl) {
+      const available = await probeForge(attachUrl);
+      assertBackendStartCurrent(generation);
+      if (available) {
+        if (exactWorkspaceId !== undefined) throw new Error("A Forge backend already answers at the configured external address.");
+        log(`attached to already-running Forge at ${attachUrl} (externally owned — will not be stopped by the extension)`);
+        backend = { baseUrl: attachUrl, owned: false };
+        updateStatus();
+        return backend;
+      }
+      log(`no Forge answering at ${attachUrl}; starting a managed sidecar`);
+    }
+
+    await awaitManagedSidecarRetirement(generation);
     assertBackendStartCurrent(generation);
-    if (live && backend === existing) {
-      if (ownedLiveness?.reason === "responsive" && ownedLiveness.recoveredAfterRetry) {
-        log(`owned backend at ${existing.baseUrl} responsive after lightweight liveness retry ${ownedLiveness.attempts}; retaining handle`);
-      } else if (ownedLiveness?.reason === "running-but-busy") {
-        log(`owned backend at ${existing.baseUrl} remains running but busy after ${ownedLiveness.attempts} bounded lightweight probes; retaining handle`);
-      }
-      return existing;
-    }
-    if (backend && backend !== existing) return backend;
-    if (backend === existing) {
-      const detail = ownedLiveness
-        ? ` after ${ownedLiveness.attempts} lightweight check${ownedLiveness.attempts === 1 ? "" : "s"}`
-        : "";
-      log(`existing backend at ${existing.baseUrl} no longer answers${detail}; discarding handle`);
-    }
-    if (existing.owned && existing.child && existing.child.exitCode === null && existing.child.signalCode === null) {
-      stoppingDeliberately = true;
-      try {
-        requestManagedSidecarStop(existing.child);
-      } finally {
-        stoppingDeliberately = false;
-      }
-    }
-    if (backend === existing) {
+    backend = await spawnSidecar(context, generation, exactWorkspaceId);
+    const handle = backend;
+    if (generation !== backendStopGeneration) {
       backend = null;
-      markStudioBackendOffline(existing.owned);
+      requestManagedSidecarStop(handle.child!);
     }
-  }
-
-  // Attach-first: an already-running Forge (e.g. the standalone dev stack) wins.
-  const { attachUrl } = cfg();
-  if (attachUrl) {
-    const available = await probeForge(attachUrl);
     assertBackendStartCurrent(generation);
-    if (available) {
-      if (exactWorkspaceId !== undefined) throw new Error("A Forge backend already answers at the configured external address.");
-      log(`attached to already-running Forge at ${attachUrl} (externally owned — will not be stopped by the extension)`);
-      backend = { baseUrl: attachUrl, owned: false };
-      updateStatus();
-      return backend;
-    }
-    log(`no Forge answering at ${attachUrl}; starting a managed sidecar`);
+    updateStatus();
+    return handle;
+  } catch (error) {
+    outcome = generation !== backendStopGeneration ? 'superseded' : 'error';
+    throw error;
+  } finally {
+    finish(outcome);
   }
-
-  await awaitManagedSidecarRetirement(generation);
-  assertBackendStartCurrent(generation);
-  backend = await spawnSidecar(context, generation, exactWorkspaceId);
-  const handle = backend;
-  if (generation !== backendStopGeneration) {
-    backend = null;
-    requestManagedSidecarStop(handle.child!);
-  }
-  assertBackendStartCurrent(generation);
-  updateStatus();
-  return handle;
 }
 
 function stopOwnedSidecar(reason: string): boolean {
-  backendStopGeneration++;
-  const pending = startingChild;
-  startingChild = null;
-  if (pending) requestManagedSidecarStop(pending);
-  if (!backend?.owned || !backend.child) return !!pending;
-  log(`stopping owned sidecar (${reason})`);
-  const owned = backend;
-  backend = null;
-  markStudioBackendOffline(owned.owned);
-  stoppingDeliberately = true;
+  const finish = beginNativeOperation('native.backend.stop');
+  let outcome: ForgePerformanceOutcome = 'ok';
   try {
-    requestManagedSidecarStop(owned.child!);
+    backendStopGeneration++;
+    const pending = startingChild;
+    startingChild = null;
+    if (pending) requestManagedSidecarStop(pending);
+    if (!backend?.owned || !backend.child) return !!pending;
+    log(`stopping owned sidecar (${reason})`);
+    const owned = backend;
+    backend = null;
+    markStudioBackendOffline(owned.owned);
+    stoppingDeliberately = true;
+    try {
+      requestManagedSidecarStop(owned.child!);
+    } finally {
+      stoppingDeliberately = false;
+    }
+    updateStatus();
+    return true;
+  } catch (error) {
+    outcome = 'error';
+    throw error;
   } finally {
-    stoppingDeliberately = false;
+    finish(outcome);
   }
-  updateStatus();
-  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -1100,6 +1291,8 @@ function markStudioBackendOffline(owned: boolean): void {
 }
 
 async function startLocalBackend(context: vscode.ExtensionContext): Promise<void> {
+  const finish = beginNativeOperation('native.command');
+  let outcome: ForgePerformanceOutcome = 'ok';
   const generation = backendStopGeneration;
   const saved = context.globalState.get<string>('x4forge.workspaceId') ?? '';
   try {
@@ -1114,43 +1307,57 @@ async function startLocalBackend(context: vscode.ExtensionContext): Promise<void
     }
     void vscode.window.showInformationMessage("X4 Forge: local backend is running.");
   } catch (error) {
+    outcome = generation !== backendStopGeneration ? 'superseded' : 'error';
     if (generation === backendStopGeneration) showBackendError(error instanceof Error ? error.message : String(error));
+  } finally {
+    finish(outcome);
   }
 }
 
 async function openStudio(context: vscode.ExtensionContext): Promise<void> {
-  syncCanonicalStudioPanel();
-  const canonicalPanel = panel;
-  if (canonicalPanel) {
+  const finish = beginNativeOperation('native.panel.open');
+  let outcome: ForgePerformanceOutcome = 'ok';
+  try {
+    syncCanonicalStudioPanel();
+    const canonicalPanel = panel;
+    if (canonicalPanel) {
+      try {
+        await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: "X4 Forge: checking backend…" },
+          () => ensureBackend(context),
+        );
+      } catch (err) {
+        outcome = 'error';
+        showBackendError(err instanceof Error ? err.message : String(err));
+        return;
+      }
+      canonicalPanel.reveal();
+      return;
+    }
+    let handle: BackendHandle;
     try {
-      await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: "X4 Forge: checking backend…" },
+      handle = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: "X4 Forge: starting backend…" },
         () => ensureBackend(context),
       );
     } catch (err) {
+      outcome = 'error';
       showBackendError(err instanceof Error ? err.message : String(err));
       return;
     }
-    canonicalPanel.reveal();
-    return;
-  }
-  let handle: BackendHandle;
-  try {
-    handle = await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: "X4 Forge: starting backend…" },
-      () => ensureBackend(context),
-    );
-  } catch (err) {
-    showBackendError(err instanceof Error ? err.message : String(err));
-    return;
-  }
 
-  const createdPanel = vscode.window.createWebviewPanel("x4forge.studio", "X4 Forge Studio", vscode.ViewColumn.One, {
-    enableScripts: true,
-    retainContextWhenHidden: true,
-  });
-  trackStudioPanel(context, createdPanel);
-  bindStudioPanels(handle);
+    const createdPanel = vscode.window.createWebviewPanel("x4forge.studio", "X4 Forge Studio", vscode.ViewColumn.One, {
+      enableScripts: true,
+      retainContextWhenHidden: true,
+    });
+    trackStudioPanel(context, createdPanel);
+    bindStudioPanels(handle);
+  } catch (error) {
+    outcome = 'error';
+    throw error;
+  } finally {
+    finish(outcome);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1159,243 +1366,283 @@ async function openStudio(context: vscode.ExtensionContext): Promise<void> {
 
 export function activate(context: vscode.ExtensionContext): void {
   output = vscode.window.createOutputChannel("X4 Forge");
-  statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 50);
-  nativeDiffProvider = new NativeDiffContentProvider();
-  nativeNodeProvider = new NativeNodeFileSystemProvider();
-  context.subscriptions.push(
-    output,
-    statusItem,
-    vscode.workspace.registerTextDocumentContentProvider("x4forge-preview", nativeDiffProvider),
-    vscode.workspace.registerFileSystemProvider("x4forge-node", nativeNodeProvider, { isCaseSensitive: true, isReadonly: false }),
-  );
+  initializeNativePerformance();
+  const finish = beginNativeOperation('native.activate');
+  let outcome: ForgePerformanceOutcome = 'ok';
+  try {
+    statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 50);
+    nativeDiffProvider = new NativeDiffContentProvider();
+    nativeNodeProvider = new NativeNodeFileSystemProvider();
+    context.subscriptions.push(
+      output,
+      statusItem,
+      vscode.workspace.registerTextDocumentContentProvider("x4forge-preview", nativeDiffProvider),
+      vscode.workspace.registerFileSystemProvider("x4forge-node", nativeNodeProvider, { isCaseSensitive: true, isReadonly: false }),
+    );
 
-  log(`extension activated (host: ${vscode.env.appName} ${vscode.version})`);
-  for (const line of formatIdeCapabilityReport(currentIdeCapabilities())) log(`capability: ${line}`);
+    log(`extension activated (host: ${vscode.env.appName} ${vscode.version})`);
+    for (const line of formatIdeCapabilityReport(currentIdeCapabilities())) log(`capability: ${line}`);
 
-  // B50: the Activity Bar launcher view. An empty tree provider makes the view render its
-  // `viewsWelcome` buttons (Open Studio / Create Agent Key / Logs / Stop) — a click-to-run
-  // entry point so users never need the command palette.
-  const emptyLauncher: vscode.TreeDataProvider<vscode.TreeItem> = {
-    getChildren: () => [],
-    getTreeItem: (e) => e,
-  };
-  context.subscriptions.push(
-    vscode.window.registerTreeDataProvider("x4forge.launcher", emptyLauncher),
-    vscode.window.registerWebviewPanelSerializer("x4forge.studio", {
-      async deserializeWebviewPanel(restoredPanel): Promise<void> {
-        restoredPanel.webview.options = { enableScripts: true };
-        trackStudioPanel(context, restoredPanel);
-        try {
-          await ensureBackend(context);
-          restoredPanel.reveal(undefined, true);
-        } catch (err) {
-          restoredPanel.webview.html = offlineStudioHtml();
-          showBackendError(
-            `Could not restore the X4 Forge Studio panel: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-      },
-    }),
-  );
-
-  context.subscriptions.push(
-    vscode.commands.registerCommand("x4forge.openStudio", () => openStudio(context)),
-    vscode.commands.registerCommand("x4forge.startSidecar", () => startLocalBackend(context)),
-    vscode.commands.registerCommand("x4forge.showLogs", () => output.show(true)),
-    vscode.commands.registerCommand("x4forge.showCapabilities", showIdeCapabilities),
-    vscode.commands.registerCommand("x4forge.stopSidecar", () => {
-      if (stopOwnedSidecar("stop command")) {
-        void vscode.window.showInformationMessage("X4 Forge: backend shutdown requested.");
-      } else if (backend && !backend.owned) {
-        void vscode.window.showInformationMessage(
-          "X4 Forge: attached to an externally-run Forge — the extension will not stop it.",
-        );
-      } else {
-        void vscode.window.showInformationMessage("X4 Forge: no managed sidecar is running.");
-      }
-    }),
-  );
-
-  // B42: mint a scoped, expiring agent key against the OWNED sidecar and hand it to the
-  // user's clipboard — closes the "external agents can't discover the sidecar token" gap.
-  context.subscriptions.push(
-    vscode.commands.registerCommand("x4forge.createAgentKey", async () => {
-      try {
-        const handle = await ensureBackend(context);
-        if (!handle.owned || !handle.token) {
-          void vscode.window.showInformationMessage(
-            "X4 Forge: attached to an externally-run Forge — create keys in its UI (AGENT API → Agent Keys tab).",
-          );
-          return;
-        }
-        const label = await vscode.window.showInputBox({
-          prompt: "Key label (which agent is this for?)",
-          placeHolder: "e.g. codex-agent",
-          validateInput: (v) => (v.trim() ? undefined : "Label required"),
-        });
-        if (!label) return;
-        const scope = await vscode.window.showQuickPick(
-          [
-            { label: "read", description: "reviewed inspection and deterministic analysis routes" },
-            { label: "write", description: "guarded authoring / compile / validate / package — no deploys or spend" },
-            { label: "deploy", description: "exact deploy / recovery / guarded filesystem / caller-key AI routes; no administration" },
-          ],
-          { placeHolder: "Key scope" },
-        );
-        if (!scope) return;
-        const authorityMode = await vscode.window.showQuickPick(
-          [
-            { label: "Preset (recommended)", description: "Follow the current reviewed routes for this scope.", mode: 'preset' as const },
-            { label: "Exact capability contract", description: "Freeze exact capability.id@version and effect limits; noncanonical protected routes stop working.", mode: 'exact' as const },
-          ],
-          { placeHolder: "Authority mode" },
-        );
-        if (!authorityMode) return;
-        let capabilityIdentities: string[] | undefined;
-        let allowedEffects: string[] | undefined;
-        if (authorityMode.mode === 'exact') {
-          const optionsResponse = await fetch(`${handle.baseUrl}/api/agent/keys`, {
-            headers: backendApiHeaders(handle),
-          });
-          const optionsData = (await optionsResponse.json()) as {
-            error?: string;
-            capabilityOptions?: Array<{
-              identity: string;
-              title: string;
-              effects: string[];
-              agentScopes: string[];
-            }>;
-            effectOptions?: string[];
-          };
-          if (!optionsResponse.ok) throw new Error(optionsData.error || `HTTP ${optionsResponse.status}`);
-          const eligible = (optionsData.capabilityOptions || []).filter(option => option.agentScopes.includes(scope.label));
-          const pickedCapabilities = await vscode.window.showQuickPick(
-            eligible.map(option => ({
-              label: option.title,
-              description: option.identity,
-              detail: `effects: ${option.effects.join(', ')}`,
-              identity: option.identity,
-              effects: option.effects,
-              picked: true,
-            })),
-            {
-              canPickMany: true,
-              placeHolder: "Exact protected capabilities (none = public capabilities only)",
-              title: "Contract-only key: protected legacy Agent API routes will be denied",
-            },
-          );
-          if (!pickedCapabilities) return;
-          capabilityIdentities = pickedCapabilities.map(option => option.identity).sort();
-          const selectedEffectSet = new Set(pickedCapabilities.flatMap(option => option.effects));
-          const pickedEffects = await vscode.window.showQuickPick(
-            (optionsData.effectOptions || []).filter(effect => selectedEffectSet.has(effect)).map(effect => ({ label: effect, picked: true })),
-            {
-              canPickMany: true,
-              placeHolder: "Allowed effects (removing one blocks every selected capability that requires it)",
-              title: "Every effect required by a capability must remain allowed",
-            },
-          );
-          if (!pickedEffects) return;
-          allowedEffects = (optionsData.effectOptions || []).filter(effect => pickedEffects.some(item => item.label === effect));
-          const confirmed = await vscode.window.showWarningMessage(
-            `Create a contract-only ${scope.label} key with ${capabilityIdentities.length} protected capabilit${capabilityIdentities.length === 1 ? 'y' : 'ies'}? ` +
-            "Noncanonical protected Agent API routes will be denied. Public localhost reads remain public. Change this later by revoking and recreating the key.",
-            { modal: true },
-            "Create contract-only key",
-          );
-          if (confirmed !== "Create contract-only key") return;
-        }
-        const ttl = await vscode.window.showQuickPick(
-          [
-            { label: "1h", description: "expires in 1 hour" },
-            { label: "24h", description: "expires in 24 hours" },
-            { label: "7d", description: "expires in 7 days" },
-            { label: "30d", description: "expires in 30 days" },
-            { label: "never", description: "never expires (revoke manually)" },
-          ],
-          { placeHolder: "Key lifetime" },
-        );
-        if (!ttl) return;
-        const requestedAuthority: RequestedAgentKeyAuthority = authorityMode.mode === 'exact'
-          ? { authorityMode: 'exact', capabilityIdentities: capabilityIdentities || [], allowedEffects: allowedEffects || [] }
-          : { authorityMode: 'preset' };
-        const res = await fetch(`${handle.baseUrl}/api/agent/keys`, {
-          method: "POST",
-          headers: freshActionOperationHeaders(backendApiHeaders(handle, true)),
-          body: JSON.stringify({
-            label: label.trim(), scope: scope.label, ttl: ttl.label,
-            ...requestedAuthority,
-          }),
-        });
-        const data = (await res.json()) as {
-          token?: string;
-          error?: string;
-          record?: {
-            id?: string;
-            authorityMode?: string;
-            capabilityConstraint?: { capabilityIdentities?: unknown; allowedEffects?: unknown };
-          };
-        };
-        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-        const token = typeof data.token === 'string' ? data.token : '';
-        const tokenPresent = token.length > 0;
-        const authorityMatches = createdAgentKeyMatchesRequestedAuthority(requestedAuthority, data.record);
-        if (!tokenPresent || !authorityMatches) {
-          const keyId = typeof data.record?.id === 'string' ? data.record.id : '';
-          let revoked = false;
-          if (keyId) {
+    // B50: the Activity Bar launcher view. An empty tree provider makes the view render its
+    // `viewsWelcome` buttons (Open Studio / Create Agent Key / Logs / Stop) — a click-to-run
+    // entry point so users never need the command palette.
+    const emptyLauncher: vscode.TreeDataProvider<vscode.TreeItem> = {
+      getChildren: () => [],
+      getTreeItem: (e) => e,
+    };
+    context.subscriptions.push(
+      vscode.window.registerTreeDataProvider("x4forge.launcher", emptyLauncher),
+      vscode.window.registerWebviewPanelSerializer("x4forge.studio", {
+        async deserializeWebviewPanel(restoredPanel): Promise<void> {
+          const finishPanel = beginNativeOperation('native.panel.open');
+          let panelOutcome: ForgePerformanceOutcome = 'ok';
+          try {
+            restoredPanel.webview.options = { enableScripts: true };
+            trackStudioPanel(context, restoredPanel);
             try {
-              const revoke = await fetch(`${handle.baseUrl}/api/agent/keys/revoke`, {
-                method: 'POST',
-                headers: freshActionOperationHeaders(backendApiHeaders(handle, true)),
-                body: JSON.stringify({ id: keyId }),
-              });
-              revoked = revoke.ok;
-            } catch { /* reported below as an active-key hazard */ }
+              await ensureBackend(context);
+              restoredPanel.reveal(undefined, true);
+            } catch (err) {
+              panelOutcome = 'error';
+              restoredPanel.webview.html = offlineStudioHtml();
+              showBackendError(
+                `Could not restore the X4 Forge Studio panel: ${err instanceof Error ? err.message : String(err)}`,
+              );
+            }
+          } catch (error) {
+            panelOutcome = 'error';
+            throw error;
+          } finally {
+            finishPanel(panelOutcome);
           }
-          throw new Error(
-            `Forge did not confirm the requested ${requestedAuthority.authorityMode} key authority; no token was copied. ` +
-            (revoked
-              ? 'The mismatched key was revoked automatically.'
-              : `Automatic revocation failed${keyId ? ` for ${keyId}` : ' because no key id was returned'}; the key may still be active and must be revoked in Studio.`),
-          );
+        },
+      }),
+    );
+
+    context.subscriptions.push(
+      vscode.commands.registerCommand("x4forge.openStudio", () => openStudio(context)),
+      vscode.commands.registerCommand("x4forge.startSidecar", () => startLocalBackend(context)),
+      vscode.commands.registerCommand("x4forge.showLogs", () => {
+        const finishCommand = beginNativeOperation('native.command');
+        let commandOutcome: ForgePerformanceOutcome = 'ok';
+        try { return output.show(true); }
+        catch (error) { commandOutcome = 'error'; throw error; }
+        finally { finishCommand(commandOutcome); }
+      }),
+      vscode.commands.registerCommand("x4forge.showCapabilities", showIdeCapabilities),
+      vscode.commands.registerCommand("x4forge.stopSidecar", () => {
+        const finishCommand = beginNativeOperation('native.command');
+        let commandOutcome: ForgePerformanceOutcome = 'ok';
+        try {
+          if (stopOwnedSidecar("stop command")) {
+            void vscode.window.showInformationMessage("X4 Forge: backend shutdown requested.");
+          } else if (backend && !backend.owned) {
+            void vscode.window.showInformationMessage(
+              "X4 Forge: attached to an externally-run Forge — the extension will not stop it.",
+            );
+          } else {
+            void vscode.window.showInformationMessage("X4 Forge: no managed sidecar is running.");
+          }
+        } catch (error) {
+          commandOutcome = 'error';
+          throw error;
+        } finally {
+          finishCommand(commandOutcome);
         }
-        await vscode.env.clipboard.writeText(token);
-        log(`agent key created: label="${label.trim()}" scope=${scope.label} ttl=${ttl.label} authority=${requestedAuthority.authorityMode === 'exact' ? `contract-only:${capabilityIdentities?.length || 0}` : 'preset'}`);
-        log(`  endpoint: ${handle.baseUrl}/api  ·  header: Authorization: Bearer <key on your clipboard>`);
-        void vscode.window
-          .showInformationMessage(
-            `X4 Forge: key "${label.trim()}" (${scope.label}, ${ttl.label}${requestedAuthority.authorityMode === 'exact' ? ', contract-only' : ', preset'}) copied to clipboard — it will not be shown again. Endpoint: ${handle.baseUrl}`,
-            "Show Logs",
-          )
-          .then((pick) => pick === "Show Logs" && output.show(true));
-      } catch (err) {
-        showBackendError(`Could not create agent key: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }),
-  );
+      }),
+    );
 
-  // Problems-panel projection is continuous: the sidecar's FULL validator stack runs
-  // for open/change/save events and the extension only projects its one-referee result.
-  diagCollection = vscode.languages.createDiagnosticCollection("x4forge");
-  context.subscriptions.push(
-    diagCollection,
-    vscode.commands.registerCommand("x4forge.openModFolder", () => openModFolder(context)),
-    vscode.commands.registerCommand("x4forge.copyMcpConfig", () => copyMcpConfig(context)),
-    vscode.commands.registerCommand("x4forge.refreshAgentBrief", () => refreshAgentBrief(context)),
-    vscode.commands.registerCommand("x4forge.generateProof", () => generateProof(context)),
-    vscode.commands.registerCommand("x4forge.checkModConflicts", () => checkModConflicts(context)),
-  );
-  registerLangProviders(context);
-  registerNavProviders(context);
-  registerTwoWayEditing(context);
+    // B42: mint a scoped, expiring agent key against the OWNED sidecar and hand it to the
+    // user's clipboard — closes the "external agents can't discover the sidecar token" gap.
+    context.subscriptions.push(
+      vscode.commands.registerCommand("x4forge.createAgentKey", async () => {
+        const finishCommand = beginNativeOperation('native.command');
+        let commandOutcome: ForgePerformanceOutcome = 'ok';
+        try {
+          const handle = await ensureBackend(context);
+          if (!handle.owned || !handle.token) {
+            void vscode.window.showInformationMessage(
+              "X4 Forge: attached to an externally-run Forge — create keys in its UI (AGENT API → Agent Keys tab).",
+            );
+            return;
+          }
+          const label = await vscode.window.showInputBox({
+            prompt: "Key label (which agent is this for?)",
+            placeHolder: "e.g. codex-agent",
+            validateInput: (v) => (v.trim() ? undefined : "Label required"),
+          });
+          if (!label) { commandOutcome = 'cancelled'; return; }
+          const scope = await vscode.window.showQuickPick(
+            [
+              { label: "read", description: "reviewed inspection and deterministic analysis routes" },
+              { label: "write", description: "guarded authoring / compile / validate / package — no deploys or spend" },
+              { label: "deploy", description: "exact deploy / recovery / guarded filesystem / caller-key AI routes; no administration" },
+            ],
+            { placeHolder: "Key scope" },
+          );
+          if (!scope) { commandOutcome = 'cancelled'; return; }
+          const authorityMode = await vscode.window.showQuickPick(
+            [
+              { label: "Preset (recommended)", description: "Follow the current reviewed routes for this scope.", mode: 'preset' as const },
+              { label: "Exact capability contract", description: "Freeze exact capability.id@version and effect limits; noncanonical protected routes stop working.", mode: 'exact' as const },
+            ],
+            { placeHolder: "Authority mode" },
+          );
+          if (!authorityMode) { commandOutcome = 'cancelled'; return; }
+          let capabilityIdentities: string[] | undefined;
+          let allowedEffects: string[] | undefined;
+          if (authorityMode.mode === 'exact') {
+            const optionsResponse = await fetch(`${handle.baseUrl}/api/agent/keys`, {
+              headers: backendApiHeaders(handle),
+            });
+            const optionsData = (await optionsResponse.json()) as {
+              error?: string;
+              capabilityOptions?: Array<{
+                identity: string;
+                title: string;
+                effects: string[];
+                agentScopes: string[];
+              }>;
+              effectOptions?: string[];
+            };
+            if (!optionsResponse.ok) throw new Error(optionsData.error || `HTTP ${optionsResponse.status}`);
+            const eligible = (optionsData.capabilityOptions || []).filter(option => option.agentScopes.includes(scope.label));
+            const pickedCapabilities = await vscode.window.showQuickPick(
+              eligible.map(option => ({
+                label: option.title,
+                description: option.identity,
+                detail: `effects: ${option.effects.join(', ')}`,
+                identity: option.identity,
+                effects: option.effects,
+                picked: true,
+              })),
+              {
+                canPickMany: true,
+                placeHolder: "Exact protected capabilities (none = public capabilities only)",
+                title: "Contract-only key: protected legacy Agent API routes will be denied",
+              },
+            );
+            if (!pickedCapabilities) { commandOutcome = 'cancelled'; return; }
+            capabilityIdentities = pickedCapabilities.map(option => option.identity).sort();
+            const selectedEffectSet = new Set(pickedCapabilities.flatMap(option => option.effects));
+            const pickedEffects = await vscode.window.showQuickPick(
+              (optionsData.effectOptions || []).filter(effect => selectedEffectSet.has(effect)).map(effect => ({ label: effect, picked: true })),
+              {
+                canPickMany: true,
+                placeHolder: "Allowed effects (removing one blocks every selected capability that requires it)",
+                title: "Every effect required by a capability must remain allowed",
+              },
+            );
+            if (!pickedEffects) { commandOutcome = 'cancelled'; return; }
+            allowedEffects = (optionsData.effectOptions || []).filter(effect => pickedEffects.some(item => item.label === effect));
+            const confirmed = await vscode.window.showWarningMessage(
+              `Create a contract-only ${scope.label} key with ${capabilityIdentities.length} protected capabilit${capabilityIdentities.length === 1 ? 'y' : 'ies'}? ` +
+              "Noncanonical protected Agent API routes will be denied. Public localhost reads remain public. Change this later by revoking and recreating the key.",
+              { modal: true },
+              "Create contract-only key",
+            );
+            if (confirmed !== "Create contract-only key") { commandOutcome = 'cancelled'; return; }
+          }
+          const ttl = await vscode.window.showQuickPick(
+            [
+              { label: "1h", description: "expires in 1 hour" },
+              { label: "24h", description: "expires in 24 hours" },
+              { label: "7d", description: "expires in 7 days" },
+              { label: "30d", description: "expires in 30 days" },
+              { label: "never", description: "never expires (revoke manually)" },
+            ],
+            { placeHolder: "Key lifetime" },
+          );
+          if (!ttl) { commandOutcome = 'cancelled'; return; }
+          const requestedAuthority: RequestedAgentKeyAuthority = authorityMode.mode === 'exact'
+            ? { authorityMode: 'exact', capabilityIdentities: capabilityIdentities || [], allowedEffects: allowedEffects || [] }
+            : { authorityMode: 'preset' };
+          const res = await fetch(`${handle.baseUrl}/api/agent/keys`, {
+            method: "POST",
+            headers: freshActionOperationHeaders(backendApiHeaders(handle, true)),
+            body: JSON.stringify({
+              label: label.trim(), scope: scope.label, ttl: ttl.label,
+              ...requestedAuthority,
+            }),
+          });
+          const data = (await res.json()) as {
+            token?: string;
+            error?: string;
+            record?: {
+              id?: string;
+              authorityMode?: string;
+              capabilityConstraint?: { capabilityIdentities?: unknown; allowedEffects?: unknown };
+            };
+          };
+          if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+          const token = typeof data.token === 'string' ? data.token : '';
+          const tokenPresent = token.length > 0;
+          const authorityMatches = createdAgentKeyMatchesRequestedAuthority(requestedAuthority, data.record);
+          if (!tokenPresent || !authorityMatches) {
+            const keyId = typeof data.record?.id === 'string' ? data.record.id : '';
+            let revoked = false;
+            if (keyId) {
+              try {
+                const revoke = await fetch(`${handle.baseUrl}/api/agent/keys/revoke`, {
+                  method: 'POST',
+                  headers: freshActionOperationHeaders(backendApiHeaders(handle, true)),
+                  body: JSON.stringify({ id: keyId }),
+                });
+                revoked = revoke.ok;
+              } catch { /* reported below as an active-key hazard */ }
+            }
+            throw new Error(
+              `Forge did not confirm the requested ${requestedAuthority.authorityMode} key authority; no token was copied. ` +
+              (revoked
+                ? 'The mismatched key was revoked automatically.'
+                : `Automatic revocation failed${keyId ? ` for ${keyId}` : ' because no key id was returned'}; the key may still be active and must be revoked in Studio.`),
+            );
+          }
+          await vscode.env.clipboard.writeText(token);
+          log(`agent key created: label="${label.trim()}" scope=${scope.label} ttl=${ttl.label} authority=${requestedAuthority.authorityMode === 'exact' ? `contract-only:${capabilityIdentities?.length || 0}` : 'preset'}`);
+          log(`  endpoint: ${handle.baseUrl}/api  ·  header: Authorization: Bearer <key on your clipboard>`);
+          void vscode.window
+            .showInformationMessage(
+              `X4 Forge: key "${label.trim()}" (${scope.label}, ${ttl.label}${requestedAuthority.authorityMode === 'exact' ? ', contract-only' : ', preset'}) copied to clipboard — it will not be shown again. Endpoint: ${handle.baseUrl}`,
+              "Show Logs",
+            )
+            .then((pick) => pick === "Show Logs" && output.show(true));
+        } catch (err) {
+          commandOutcome = 'error';
+          showBackendError(`Could not create agent key: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+          finishCommand(commandOutcome);
+        }
+      }),
+    );
 
-  // Opt-in convenience (x4forge.autoOpen): open the studio once the workspace loads.
-  // Only ever runs in trusted workspaces — the manifest disables the extension
-  // entirely when untrusted, so activate() is not called there.
-  if (cfg().autoOpen) {
-    log("x4forge.autoOpen is set — opening the studio");
-    void openStudio(context);
+    // Problems-panel projection is continuous: the sidecar's FULL validator stack runs
+    // for open/change/save events and the extension only projects its one-referee result.
+    diagCollection = vscode.languages.createDiagnosticCollection("x4forge");
+    context.subscriptions.push(
+      diagCollection,
+      vscode.commands.registerCommand("x4forge.openModFolder", () => openModFolder(context)),
+      vscode.commands.registerCommand("x4forge.copyMcpConfig", () => copyMcpConfig(context)),
+      vscode.commands.registerCommand("x4forge.refreshAgentBrief", () => refreshAgentBrief(context)),
+      vscode.commands.registerCommand("x4forge.generateProof", () => generateProof(context)),
+      vscode.commands.registerCommand("x4forge.checkModConflicts", () => checkModConflicts(context)),
+    );
+    registerLangProviders(context);
+    registerNavProviders(context);
+    registerTwoWayEditing(context);
+
+    // Opt-in convenience (x4forge.autoOpen): open the studio once the workspace loads.
+    // Only ever runs in trusted workspaces — the manifest disables the extension
+    // entirely when untrusted, so activate() is not called there.
+    if (cfg().autoOpen) {
+      log("x4forge.autoOpen is set — opening the studio");
+      void openStudio(context);
+    }
+  } catch (error) {
+    outcome = 'error';
+    throw error;
+  } finally {
+    finish(outcome);
   }
 }
 
@@ -1417,6 +1664,8 @@ const DIAG_SEVERITY: Record<string, vscode.DiagnosticSeverity> = {
 // ---------------------------------------------------------------------------
 
 async function openModFolder(context: vscode.ExtensionContext): Promise<void> {
+  const finish = beginNativeOperation('native.command');
+  let outcome: ForgePerformanceOutcome = 'ok';
   try {
     const handle = await ensureBackend(context);
     if (!handle.owned || !handle.token) {
@@ -1445,7 +1694,7 @@ async function openModFolder(context: vscode.ExtensionContext): Promise<void> {
     const pick = mods.length === 1
       ? mods[0]
       : await vscode.window.showQuickPick(mods, { placeHolder: "Mod folder to open as an IDE workspace folder" });
-    if (!pick) return;
+    if (!pick) { outcome = 'cancelled'; return; }
     const modPath = path.join(root, pick);
     writeRecommendations(modPath);
     // B57s1: the folder describes itself to any resident agent.
@@ -1479,7 +1728,10 @@ async function openModFolder(context: vscode.ExtensionContext): Promise<void> {
     scheduleLiveRootValidation(context, modPath, 80);
     void vscode.window.setStatusBarMessage(`X4 Forge: "${pick}" added to the workspace — explorer, search, and git now see it.`, 8000);
   } catch (err) {
+    outcome = 'error';
     showBackendError(`Open Mod Folder failed: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    finish(outcome);
   }
 }
 
@@ -1591,110 +1843,128 @@ function registerLangProviders(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.languages.registerCompletionItemProvider(selector, {
       async provideCompletionItems(doc, pos) {
-        const nodeDocument = doc.uri.scheme === 'x4forge-node';
-        const root = nodeDocument ? null : modRootFor(doc.uri.fsPath);
-        if (!nodeDocument && !root) return undefined;
-        const text = doc.getText();
-        const ctx = xmlCursorContext(text, doc.offsetAt(pos));
-        const file = nodeDocument ? 'md/x4forge-node-selection.xml' : relModPath(root!, doc.uri.fsPath);
-        const rootHint = ctx.rootTag || "";
+        const finish = beginNativeOperation('native.provider.read');
+        let outcome: ForgePerformanceOutcome = 'ok';
+        try {
+          const nodeDocument = doc.uri.scheme === 'x4forge-node';
+          const root = nodeDocument ? null : modRootFor(doc.uri.fsPath);
+          if (!nodeDocument && !root) return undefined;
+          const text = doc.getText();
+          const ctx = xmlCursorContext(text, doc.offsetAt(pos));
+          const file = nodeDocument ? 'md/x4forge-node-selection.xml' : relModPath(root!, doc.uri.fsPath);
+          const rootHint = ctx.rootTag || "";
 
-        const modern = await referenceLanguagePost<ReferenceCompletionPayload[]>("complete", {
-          path: file,
-          content: text,
-          line: pos.line,
-          column: pos.character,
-        });
-        if (modern !== null) {
-          if (!modern.length) return undefined;
-          return modern.map((payload, index) => {
-            const item = new vscode.CompletionItem(payload.label, completionKind(payload.kind));
-            item.detail = payload.detail;
-            item.insertText = new vscode.SnippetString(payload.insertText);
-            item.sortText = payload.sortText || String(index).padStart(5, "0");
-            if (payload.documentation) item.documentation = new vscode.MarkdownString(payload.documentation);
-            return item;
+          const modern = await referenceLanguagePost<ReferenceCompletionPayload[]>("complete", {
+            path: file,
+            content: text,
+            line: pos.line,
+            column: pos.character,
           });
-        }
+          if (modern !== null) {
+            if (!modern.length) return undefined;
+            return modern.map((payload, index) => {
+              const item = new vscode.CompletionItem(payload.label, completionKind(payload.kind));
+              item.detail = payload.detail;
+              item.insertText = new vscode.SnippetString(payload.insertText);
+              item.sortText = payload.sortText || String(index).padStart(5, "0");
+              if (payload.documentation) item.documentation = new vscode.MarkdownString(payload.documentation);
+              return item;
+            });
+          }
 
-        if (ctx.elementStart && ctx.parentTag) {
-          const data = await langGet<{ items: Array<{ tag: string; curated: boolean; requiredAttrs: string[]; summary?: string }> }>(
-            "complete", { file, parent: ctx.parentTag, root: rootHint });
-          if (!data?.items?.length) return undefined;
-          return data.items.map((it, i) => {
-            const item = new vscode.CompletionItem(it.tag, vscode.CompletionItemKind.Class);
-            item.sortText = `${it.curated ? "0" : "1"}${String(i).padStart(4, "0")}`;
-            item.detail = [it.curated ? "curated" : "", it.summary || ""].filter(Boolean).join(" · ") || undefined;
-            if (it.requiredAttrs.length) {
-              const attrs = it.requiredAttrs.map((a, n) => `${a}="$${n + 1}"`).join(" ");
-              item.insertText = new vscode.SnippetString(`${it.tag} ${attrs}`);
-              item.documentation = `Required: ${it.requiredAttrs.join(", ")}`;
-            }
-            return item;
-          });
-        }
+          if (ctx.elementStart && ctx.parentTag) {
+            const data = await langGet<{ items: Array<{ tag: string; curated: boolean; requiredAttrs: string[]; summary?: string }> }>(
+              "complete", { file, parent: ctx.parentTag, root: rootHint });
+            if (!data?.items?.length) return undefined;
+            return data.items.map((it, i) => {
+              const item = new vscode.CompletionItem(it.tag, vscode.CompletionItemKind.Class);
+              item.sortText = `${it.curated ? "0" : "1"}${String(i).padStart(4, "0")}`;
+              item.detail = [it.curated ? "curated" : "", it.summary || ""].filter(Boolean).join(" · ") || undefined;
+              if (it.requiredAttrs.length) {
+                const attrs = it.requiredAttrs.map((a, n) => `${a}="$${n + 1}"`).join(" ");
+                item.insertText = new vscode.SnippetString(`${it.tag} ${attrs}`);
+                item.documentation = `Required: ${it.requiredAttrs.join(", ")}`;
+              }
+              return item;
+            });
+          }
 
-        if (ctx.inTag && ctx.inAttrValue) {
-          const data = await langGet<{ attrs: Array<{ name: string; enumValues?: string[] }> }>(
-            "attrs", { file, tag: ctx.inTag, root: rootHint });
-          const enums = data?.attrs?.find((a) => a.name === ctx.inAttrValue)?.enumValues;
-          if (!enums?.length) return undefined;
-          return enums.map((v) => new vscode.CompletionItem(v, vscode.CompletionItemKind.EnumMember));
-        }
+          if (ctx.inTag && ctx.inAttrValue) {
+            const data = await langGet<{ attrs: Array<{ name: string; enumValues?: string[] }> }>(
+              "attrs", { file, tag: ctx.inTag, root: rootHint });
+            const enums = data?.attrs?.find((a) => a.name === ctx.inAttrValue)?.enumValues;
+            if (!enums?.length) return undefined;
+            return enums.map((v) => new vscode.CompletionItem(v, vscode.CompletionItemKind.EnumMember));
+          }
 
-        if (ctx.inTag) {
-          const data = await langGet<{ attrs: Array<{ name: string; required: boolean; type?: string }> }>(
-            "attrs", { file, tag: ctx.inTag, root: rootHint });
-          if (!data?.attrs?.length) return undefined;
-          return data.attrs.map((a, i) => {
-            const item = new vscode.CompletionItem(a.name, vscode.CompletionItemKind.Property);
-            item.sortText = `${a.required ? "0" : "1"}${String(i).padStart(4, "0")}`;
-            item.detail = `${a.required ? "required" : "optional"}${a.type ? ` · ${a.type}` : ""}`;
-            item.insertText = new vscode.SnippetString(`${a.name}="$1"`);
-            return item;
-          });
+          if (ctx.inTag) {
+            const data = await langGet<{ attrs: Array<{ name: string; required: boolean; type?: string }> }>(
+              "attrs", { file, tag: ctx.inTag, root: rootHint });
+            if (!data?.attrs?.length) return undefined;
+            return data.attrs.map((a, i) => {
+              const item = new vscode.CompletionItem(a.name, vscode.CompletionItemKind.Property);
+              item.sortText = `${a.required ? "0" : "1"}${String(i).padStart(4, "0")}`;
+              item.detail = `${a.required ? "required" : "optional"}${a.type ? ` · ${a.type}` : ""}`;
+              item.insertText = new vscode.SnippetString(`${a.name}="$1"`);
+              return item;
+            });
+          }
+          return undefined;
+        } catch (error) {
+          outcome = 'error';
+          throw error;
+        } finally {
+          finish(outcome);
         }
-        return undefined;
       },
     }, "<", " ", "\"", "'", "."),
 
     vscode.languages.registerHoverProvider(selector, {
       async provideHover(doc, pos) {
-        const nodeDocument = doc.uri.scheme === 'x4forge-node';
-        const root = nodeDocument ? null : modRootFor(doc.uri.fsPath);
-        if (!nodeDocument && !root) return undefined;
-        const file = nodeDocument ? 'md/x4forge-node-selection.xml' : relModPath(root!, doc.uri.fsPath);
-        const modern = await referenceLanguagePost<ReferenceHoverPayload>("hover", {
-          path: file,
-          content: doc.getText(),
-          line: pos.line,
-          column: pos.character,
-        });
-        if (modern) {
-          const modernRange = doc.getWordRangeAtPosition(pos, /[A-Za-z_][\w.:-]*/);
-          const markdown = new vscode.MarkdownString();
-          markdown.appendCodeblock(modern.signature, "x4");
-          if (modern.documentation) markdown.appendMarkdown(`\n${modern.documentation}\n`);
-          if (modern.detail) markdown.appendMarkdown(`\n_${modern.detail}_`);
-          return new vscode.Hover(markdown, modernRange);
+        const finish = beginNativeOperation('native.provider.read');
+        let outcome: ForgePerformanceOutcome = 'ok';
+        try {
+          const nodeDocument = doc.uri.scheme === 'x4forge-node';
+          const root = nodeDocument ? null : modRootFor(doc.uri.fsPath);
+          if (!nodeDocument && !root) return undefined;
+          const file = nodeDocument ? 'md/x4forge-node-selection.xml' : relModPath(root!, doc.uri.fsPath);
+          const modern = await referenceLanguagePost<ReferenceHoverPayload>("hover", {
+            path: file,
+            content: doc.getText(),
+            line: pos.line,
+            column: pos.character,
+          });
+          if (modern) {
+            const modernRange = doc.getWordRangeAtPosition(pos, /[A-Za-z_][\w.:-]*/);
+            const markdown = new vscode.MarkdownString();
+            markdown.appendCodeblock(modern.signature, "x4");
+            if (modern.documentation) markdown.appendMarkdown(`\n${modern.documentation}\n`);
+            if (modern.detail) markdown.appendMarkdown(`\n_${modern.detail}_`);
+            return new vscode.Hover(markdown, modernRange);
+          }
+          const range = doc.getWordRangeAtPosition(pos, /[A-Za-z_][\w.:-]*/);
+          if (!range) return undefined;
+          const word = doc.getText(range);
+          const before = doc.getText(new vscode.Range(range.start.with(undefined, Math.max(0, range.start.character - 2)), range.start));
+          if (!before.includes("<")) return undefined; // hover element names only
+          const ctx = xmlCursorContext(doc.getText(), doc.offsetAt(range.start));
+          const data = await langGet<{ known: boolean; summary?: string; requiredAttrs: string[]; attrCount: number; semantics?: { description?: string; risk?: string; note?: string } }>(
+            "hover", { file, tag: word, root: ctx.rootTag || "" });
+          if (!data?.known) return undefined;
+          const md = new vscode.MarkdownString();
+          md.appendMarkdown(`**\`<${word}>\`**${data.summary ? ` — ${data.summary}` : ""}\n\n`);
+          if (data.semantics?.description) md.appendMarkdown(`${data.semantics.description}\n\n`);
+          if (data.requiredAttrs.length) md.appendMarkdown(`Required: ${data.requiredAttrs.map((a) => `\`${a}\``).join(", ")}\n\n`);
+          if (data.semantics?.risk && data.semantics.risk !== "none") md.appendMarkdown(`Risk: ${data.semantics.risk}\n\n`);
+          if (data.semantics?.note) md.appendMarkdown(`_${data.semantics.note}_\n`);
+          md.appendMarkdown(`\n*x4forge · ${data.attrCount} attribute(s) declared*`);
+          return new vscode.Hover(md, range);
+        } catch (error) {
+          outcome = 'error';
+          throw error;
+        } finally {
+          finish(outcome);
         }
-        const range = doc.getWordRangeAtPosition(pos, /[A-Za-z_][\w.:-]*/);
-        if (!range) return undefined;
-        const word = doc.getText(range);
-        const before = doc.getText(new vscode.Range(range.start.with(undefined, Math.max(0, range.start.character - 2)), range.start));
-        if (!before.includes("<")) return undefined; // hover element names only
-        const ctx = xmlCursorContext(doc.getText(), doc.offsetAt(range.start));
-        const data = await langGet<{ known: boolean; summary?: string; requiredAttrs: string[]; attrCount: number; semantics?: { description?: string; risk?: string; note?: string } }>(
-          "hover", { file, tag: word, root: ctx.rootTag || "" });
-        if (!data?.known) return undefined;
-        const md = new vscode.MarkdownString();
-        md.appendMarkdown(`**\`<${word}>\`**${data.summary ? ` — ${data.summary}` : ""}\n\n`);
-        if (data.semantics?.description) md.appendMarkdown(`${data.semantics.description}\n\n`);
-        if (data.requiredAttrs.length) md.appendMarkdown(`Required: ${data.requiredAttrs.map((a) => `\`${a}\``).join(", ")}\n\n`);
-        if (data.semantics?.risk && data.semantics.risk !== "none") md.appendMarkdown(`Risk: ${data.semantics.risk}\n\n`);
-        if (data.semantics?.note) md.appendMarkdown(`_${data.semantics.note}_\n`);
-        md.appendMarkdown(`\n*x4forge · ${data.attrCount} attribute(s) declared*`);
-        return new vscode.Hover(md, range);
       },
     }),
   );
@@ -1706,6 +1976,8 @@ function registerLangProviders(context: vscode.ExtensionContext): void {
 // ---------------------------------------------------------------------------
 
 async function copyMcpConfig(context: vscode.ExtensionContext): Promise<void> {
+  const finish = beginNativeOperation('native.command');
+  let outcome: ForgePerformanceOutcome = 'ok';
   try {
     const handle = await ensureBackend(context);
     const shimPath = vscode.Uri.joinPath(context.extensionUri, "mcp", "x4forge-mcp.cjs").fsPath;
@@ -1729,7 +2001,10 @@ async function copyMcpConfig(context: vscode.ExtensionContext): Promise<void> {
       "Create Agent Key",
     ).then((pick) => pick === "Create Agent Key" && vscode.commands.executeCommand("x4forge.createAgentKey"));
   } catch (err) {
+    outcome = 'error';
     showBackendError(`Copy MCP config failed: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    finish(outcome);
   }
 }
 
@@ -1756,6 +2031,8 @@ async function writeAgentBrief(context: vscode.ExtensionContext, modPath: string
 }
 
 async function refreshAgentBrief(context: vscode.ExtensionContext): Promise<void> {
+  const finish = beginNativeOperation('native.command');
+  let outcome: ForgePerformanceOutcome = 'ok';
   try {
     const handle = await ensureBackend(context);
     if (!handle.owned || !handle.token) {
@@ -1771,12 +2048,12 @@ async function refreshAgentBrief(context: vscode.ExtensionContext): Promise<void
       fromPath = path.basename(modPath);
     } else if (modFolders.length > 1) {
       const pick = await vscode.window.showQuickPick(modFolders.map((f) => f.name.replace("X4 Mod: ", "")), { placeHolder: "Which mod?" });
-      if (!pick) return;
+      if (!pick) { outcome = 'cancelled'; return; }
       modPath = modFolders.find((f) => f.name === `X4 Mod: ${pick}`)?.uri.fsPath ?? null;
       fromPath = pick;
     } else {
       fromPath = (await vscode.window.showInputBox({ prompt: "Mod folder name under the Mod Workspace root" }))?.trim() || null;
-      if (!fromPath) return;
+      if (!fromPath) { outcome = 'cancelled'; return; }
       const cfgRes = await fetch(`${handle.baseUrl}/api/schema/config`, { headers: { Authorization: `Bearer ${handle.token}` } });
       const cfgData = (await cfgRes.json()) as { resolved?: { modWorkspacePath?: string } };
       const root = (cfgData.resolved?.modWorkspacePath || "").trim();
@@ -1787,7 +2064,10 @@ async function refreshAgentBrief(context: vscode.ExtensionContext): Promise<void
     await writeAgentBrief(context, modPath, fromPath!);
     void vscode.window.setStatusBarMessage(`X4 Forge: agent brief refreshed for "${fromPath}".`, 6000);
   } catch (err) {
+    outcome = 'error';
     showBackendError(`Refresh Agent Brief failed: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    finish(outcome);
   }
 }
 
@@ -1810,39 +2090,57 @@ function registerNavProviders(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.languages.registerDefinitionProvider(selector, {
       provideDefinition(doc, pos) {
-        const root = modRootFor(doc.uri.fsPath);
-        if (!root) return undefined;
-        const range = doc.getWordRangeAtPosition(pos, /[A-Za-z_][\w.]*/);
-        if (!range) return undefined;
-        const word = parseCueWord(doc.getText(range));
-        if (!word) return undefined;
-        for (const file of mdFilesOf(root)) {
-          let text: string;
-          try { text = fs.readFileSync(file, "utf8"); } catch { continue; }
-          if (word.script && (mdscriptNameOf(text) || "").toLowerCase() !== word.script.toLowerCase()) continue;
-          const loc = findCueDefinition(text, word.cue);
-          if (loc) return new vscode.Location(vscode.Uri.file(file), new vscode.Position(loc.line, loc.column));
+        const finish = beginNativeOperation('native.provider.read');
+        let outcome: ForgePerformanceOutcome = 'ok';
+        try {
+          const root = modRootFor(doc.uri.fsPath);
+          if (!root) return undefined;
+          const range = doc.getWordRangeAtPosition(pos, /[A-Za-z_][\w.]*/);
+          if (!range) return undefined;
+          const word = parseCueWord(doc.getText(range));
+          if (!word) return undefined;
+          for (const file of mdFilesOf(root)) {
+            let text: string;
+            try { text = fs.readFileSync(file, "utf8"); } catch { continue; }
+            if (word.script && (mdscriptNameOf(text) || "").toLowerCase() !== word.script.toLowerCase()) continue;
+            const loc = findCueDefinition(text, word.cue);
+            if (loc) return new vscode.Location(vscode.Uri.file(file), new vscode.Position(loc.line, loc.column));
+          }
+          return undefined;
+        } catch (error) {
+          outcome = 'error';
+          throw error;
+        } finally {
+          finish(outcome);
         }
-        return undefined;
       },
     }),
     vscode.languages.registerReferenceProvider(selector, {
       provideReferences(doc, pos) {
-        const root = modRootFor(doc.uri.fsPath);
-        if (!root) return undefined;
-        const range = doc.getWordRangeAtPosition(pos, /[A-Za-z_][\w.]*/);
-        if (!range) return undefined;
-        const word = parseCueWord(doc.getText(range));
-        if (!word) return undefined;
-        const out: vscode.Location[] = [];
-        for (const file of mdFilesOf(root)) {
-          let text: string;
-          try { text = fs.readFileSync(file, "utf8"); } catch { continue; }
-          for (const loc of findCueReferences(text, word.cue)) {
-            out.push(new vscode.Location(vscode.Uri.file(file), new vscode.Position(loc.line, loc.column)));
+        const finish = beginNativeOperation('native.provider.read');
+        let outcome: ForgePerformanceOutcome = 'ok';
+        try {
+          const root = modRootFor(doc.uri.fsPath);
+          if (!root) return undefined;
+          const range = doc.getWordRangeAtPosition(pos, /[A-Za-z_][\w.]*/);
+          if (!range) return undefined;
+          const word = parseCueWord(doc.getText(range));
+          if (!word) return undefined;
+          const out: vscode.Location[] = [];
+          for (const file of mdFilesOf(root)) {
+            let text: string;
+            try { text = fs.readFileSync(file, "utf8"); } catch { continue; }
+            for (const loc of findCueReferences(text, word.cue)) {
+              out.push(new vscode.Location(vscode.Uri.file(file), new vscode.Position(loc.line, loc.column)));
+            }
           }
+          return out;
+        } catch (error) {
+          outcome = 'error';
+          throw error;
+        } finally {
+          finish(outcome);
         }
-        return out;
       },
     }),
   );
@@ -1875,18 +2173,29 @@ function registerNavProviders(context: vscode.ExtensionContext): void {
 
 const LIVE_FILE_LIMIT = 2000;
 const liveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+// One observer per existing debounce timer; no additional work or timer is scheduled.
+const liveQueueFinishes = new Map<string, NativeFinish>();
 const liveGenerations = new Map<string, number>();
 const diagnosticUrisByRoot = new Map<string, Set<string>>();
 
 function setRootValidationWarning(root: string, code: string, message: string): void {
-  const key = path.resolve(root).toLowerCase();
-  const uri = vscode.Uri.file(path.join(root, "content.xml"));
-  for (const stale of diagnosticUrisByRoot.get(key) || []) diagCollection?.delete(vscode.Uri.parse(stale));
-  const warning = new vscode.Diagnostic(new vscode.Range(0, 0, 0, 0), message, vscode.DiagnosticSeverity.Warning);
-  warning.source = "x4forge";
-  warning.code = code;
-  diagCollection?.set(uri, [warning]);
-  diagnosticUrisByRoot.set(key, new Set([uri.toString()]));
+  const finish = beginNativeOperation('native.validation.apply');
+  let outcome: ForgePerformanceOutcome = 'ok';
+  try {
+    const key = path.resolve(root).toLowerCase();
+    const uri = vscode.Uri.file(path.join(root, "content.xml"));
+    for (const stale of diagnosticUrisByRoot.get(key) || []) diagCollection?.delete(vscode.Uri.parse(stale));
+    const warning = new vscode.Diagnostic(new vscode.Range(0, 0, 0, 0), message, vscode.DiagnosticSeverity.Warning);
+    warning.source = "x4forge";
+    warning.code = code;
+    diagCollection?.set(uri, [warning]);
+    diagnosticUrisByRoot.set(key, new Set([uri.toString()]));
+  } catch (error) {
+    outcome = 'error';
+    throw error;
+  } finally {
+    finish(outcome);
+  }
 }
 
 function isAuthoringDocument(doc: vscode.TextDocument): boolean {
@@ -1909,29 +2218,52 @@ function scheduleNodeDocumentValidation(doc: vscode.TextDocument, delayMs: numbe
   const key = `node:${doc.uri.toString()}`;
   const prior = liveTimers.get(key);
   if (prior) clearTimeout(prior);
+  liveQueueFinishes.get(key)?.('superseded');
   const generation = (liveGenerations.get(key) || 0) + 1;
   liveGenerations.set(key, generation);
-  liveTimers.set(key, setTimeout(() => {
-    liveTimers.delete(key);
-    void validateNodeDocument(doc, key, generation);
-  }, delayMs));
+  const finishQueue = beginNativeOperation('native.validation.queue');
+  liveQueueFinishes.set(key, finishQueue);
+  try {
+    liveTimers.set(key, setTimeout(() => {
+      liveTimers.delete(key);
+      if (liveQueueFinishes.get(key) === finishQueue) liveQueueFinishes.delete(key);
+      finishQueue(liveGenerations.get(key) === generation ? 'ok' : 'superseded');
+      void validateNodeDocument(doc, key, generation);
+    }, delayMs));
+  } catch (error) {
+    liveQueueFinishes.delete(key);
+    finishQueue('error');
+    throw error;
+  }
 }
 
 async function validateNodeDocument(doc: vscode.TextDocument, key: string, generation: number): Promise<void> {
+  let finishPhase: NativeFinish = () => undefined;
   try {
     if (!backend?.owned || !backend.token) return;
     const pathName = 'md/x4forge-node-selection.xml';
     const response = await fetch(`${backend.baseUrl}/api/agent/project/validate/check`, {
       method: 'POST',
       headers: freshActionOperationHeaders({ Authorization: `Bearer ${backend.token}`, 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ project: { id: 'x4forge_node_selection', name: 'X4 Forge node selection', files: [
-        { path: 'content.xml', content: '<content id="x4forge_node_selection" name="X4 Forge node selection" version="1" />' },
-        { path: pathName, content: doc.getText() },
-      ] } }),
+      body: (() => {
+        finishPhase = beginNativeOperation('native.validation.overlay');
+        const content = doc.getText();
+        finishPhase();
+        finishPhase = beginNativeOperation('native.validation.serialize');
+        const body = JSON.stringify({ project: { id: 'x4forge_node_selection', name: 'X4 Forge node selection', files: [
+          { path: 'content.xml', content: '<content id="x4forge_node_selection" name="X4 Forge node selection" version="1" />' },
+          { path: pathName, content },
+        ] } });
+        finishPhase();
+        finishPhase = beginNativeOperation('native.validation.http');
+        return body;
+      })(),
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json() as { flat?: FlatFinding[] };
-    if (liveGenerations.get(key) !== generation) return;
+    if (liveGenerations.get(key) !== generation) { finishPhase('superseded'); return; }
+    finishPhase();
+    finishPhase = beginNativeOperation('native.validation.map');
     const relevant = (data.flat || []).filter(finding => {
       const code = String(finding.code || '').toLowerCase();
       const message = String(finding.message || '').toLowerCase();
@@ -1940,6 +2272,8 @@ async function validateNodeDocument(doc: vscode.TextDocument, key: string, gener
     });
     const mapped = mapFlatFindings(relevant, [pathName]);
     const list = mapped.byFile.get(pathName) || [];
+    finishPhase();
+    finishPhase = beginNativeOperation('native.validation.apply');
     diagCollection?.set(doc.uri, list.map(item => {
       const line = Math.min(item.line, Math.max(0, doc.lineCount - 1));
       const diagnostic = new vscode.Diagnostic(new vscode.Range(line, 0, line, doc.lineAt(line).text.length), item.message, DIAG_SEVERITY[item.severity]);
@@ -1947,11 +2281,22 @@ async function validateNodeDocument(doc: vscode.TextDocument, key: string, gener
       if (item.code) diagnostic.code = item.code;
       return diagnostic;
     }));
+    finishPhase();
   } catch (error) {
-    if (liveGenerations.get(key) !== generation) return;
-    const diagnostic = new vscode.Diagnostic(new vscode.Range(0, 0, 0, 0), `X4 Forge could not validate this node document: ${error instanceof Error ? error.message : String(error)}`, vscode.DiagnosticSeverity.Warning);
-    diagnostic.source = 'x4forge';
-    diagCollection?.set(doc.uri, [diagnostic]);
+    if (liveGenerations.get(key) !== generation) { finishPhase('superseded'); return; }
+    finishPhase('error');
+    const finishApply = beginNativeOperation('native.validation.apply');
+    let applyOutcome: ForgePerformanceOutcome = 'ok';
+    try {
+      const diagnostic = new vscode.Diagnostic(new vscode.Range(0, 0, 0, 0), `X4 Forge could not validate this node document: ${error instanceof Error ? error.message : String(error)}`, vscode.DiagnosticSeverity.Warning);
+      diagnostic.source = 'x4forge';
+      diagCollection?.set(doc.uri, [diagnostic]);
+    } catch (applyError) {
+      applyOutcome = 'error';
+      throw applyError;
+    } finally {
+      finishApply(applyOutcome);
+    }
   }
 }
 
@@ -1959,22 +2304,35 @@ function scheduleLiveRootValidation(context: vscode.ExtensionContext, root: stri
   const key = path.resolve(root).toLowerCase();
   const prior = liveTimers.get(key);
   if (prior) clearTimeout(prior);
+  liveQueueFinishes.get(key)?.('superseded');
   const generation = (liveGenerations.get(key) || 0) + 1;
   liveGenerations.set(key, generation);
-  liveTimers.set(key, setTimeout(() => {
-    liveTimers.delete(key);
-    void ensureBackend(context)
-      .then(() => liveValidateRoot(root, generation))
-      .catch((err) => log(`continuous validation unavailable: ${err instanceof Error ? err.message : String(err)}`));
-  }, delayMs));
+  const finishQueue = beginNativeOperation('native.validation.queue');
+  liveQueueFinishes.set(key, finishQueue);
+  try {
+    liveTimers.set(key, setTimeout(() => {
+      liveTimers.delete(key);
+      if (liveQueueFinishes.get(key) === finishQueue) liveQueueFinishes.delete(key);
+      finishQueue(liveGenerations.get(key) === generation ? 'ok' : 'superseded');
+      void ensureBackend(context)
+        .then(() => liveValidateRoot(root, generation))
+        .catch((err) => log(`continuous validation unavailable: ${err instanceof Error ? err.message : String(err)}`));
+    }, delayMs));
+  } catch (error) {
+    liveQueueFinishes.delete(key);
+    finishQueue('error');
+    throw error;
+  }
 }
 
 async function liveValidateRoot(root: string, generation: number): Promise<void> {
+  let finishPhase: NativeFinish = () => undefined;
   try {
     if (!backend?.owned || !backend.token) {
       setRootValidationWarning(root, "validation.backend_credential_unavailable", "X4 Forge continuous validation is unavailable because this extension attached to an externally managed backend without a credential. The Studio still validates continuously; native IDE squiggles require the extension-managed sidecar.");
       return;
     }
+    finishPhase = beginNativeOperation('native.validation.scan');
     const byPath = new Map<string, { path: string; content: string }>();
     let overflow = false;
     const walk = (rel: string) => {
@@ -1993,6 +2351,8 @@ async function liveValidateRoot(root: string, generation: number): Promise<void>
       }
     };
     walk("");
+    finishPhase();
+    finishPhase = beginNativeOperation('native.validation.overlay');
     for (const open of vscode.workspace.textDocuments) {
       if (!isAuthoringDocument(open)) continue;
       const rel = path.relative(root, open.uri.fsPath);
@@ -2000,6 +2360,7 @@ async function liveValidateRoot(root: string, generation: number): Promise<void>
       const normalized = rel.replace(/\\/g, "/");
       byPath.set(normalized.toLowerCase(), { path: normalized, content: open.getText() });
     }
+    finishPhase();
     if (overflow || byPath.size > LIVE_FILE_LIMIT) {
       setRootValidationWarning(root, "validation.file_limit", `X4 Forge continuous validation stopped: this mod exceeds the ${LIVE_FILE_LIMIT.toLocaleString()}-file safety limit. No partial clean result was reported.`);
       return;
@@ -2008,13 +2369,23 @@ async function liveValidateRoot(root: string, generation: number): Promise<void>
     const res = await fetch(`${backend.baseUrl}/api/agent/project/validate/check`, {
       method: "POST",
       headers: freshActionOperationHeaders({ Authorization: `Bearer ${backend.token}`, "Content-Type": "application/json" }),
-      body: JSON.stringify({ project: { id: path.basename(root), name: path.basename(root), files } }),
+      body: (() => {
+        finishPhase = beginNativeOperation('native.validation.serialize');
+        const body = JSON.stringify({ project: { id: path.basename(root), name: path.basename(root), files } });
+        finishPhase();
+        finishPhase = beginNativeOperation('native.validation.http');
+        return body;
+      })(),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = (await res.json()) as { flat?: FlatFinding[] };
     const key = path.resolve(root).toLowerCase();
-    if (liveGenerations.get(key) !== generation) return;
+    if (liveGenerations.get(key) !== generation) { finishPhase('superseded'); return; }
+    finishPhase();
+    finishPhase = beginNativeOperation('native.validation.map');
     const mapped = mapFlatFindings(data.flat || [], files.map((f) => f.path));
+    finishPhase();
+    finishPhase = beginNativeOperation('native.validation.apply');
     const currentUris = new Set<string>();
     for (const [rel, list] of mapped.byFile) {
       const uri = vscode.Uri.file(path.join(root, ...rel.split("/")));
@@ -2033,10 +2404,12 @@ async function liveValidateRoot(root: string, generation: number): Promise<void>
       if (!currentUris.has(stale)) diagCollection?.delete(vscode.Uri.parse(stale));
     }
     diagnosticUrisByRoot.set(key, currentUris);
+    finishPhase();
     log(`continuous validation: ${path.basename(root)} · ${mapped.total} finding(s) across ${files.length} file(s)`);
   } catch (error) {
     const key = path.resolve(root).toLowerCase();
-    if (liveGenerations.get(key) !== generation) return;
+    if (liveGenerations.get(key) !== generation) { finishPhase('superseded'); return; }
+    finishPhase('error');
     setRootValidationWarning(root, "validation.request_failed", `X4 Forge continuous validation could not refresh: ${error instanceof Error ? error.message : String(error)}. The previous result was discarded so it cannot masquerade as current.`);
   }
 }
@@ -2046,6 +2419,8 @@ async function liveValidateRoot(root: string, generation: number): Promise<void>
 // ---------------------------------------------------------------------------
 
 async function generateProof(context: vscode.ExtensionContext): Promise<void> {
+  const finish = beginNativeOperation('native.command');
+  let outcome: ForgePerformanceOutcome = 'ok';
   try {
     const handle = await ensureBackend(context);
     if (!handle.owned || !handle.token) {
@@ -2072,7 +2447,10 @@ async function generateProof(context: vscode.ExtensionContext): Promise<void> {
       await vscode.window.showTextDocument(doc, { preview: true });
     }
   } catch (err) {
+    outcome = 'error';
     showBackendError(`Generate Proof failed: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    finish(outcome);
   }
 }
 
@@ -2166,6 +2544,8 @@ async function adoptFolderIntoCanvas(context: vscode.ExtensionContext, folderNam
 let conflictCollection: vscode.DiagnosticCollection | null = null;
 
 async function checkModConflicts(context: vscode.ExtensionContext): Promise<void> {
+  const finish = beginNativeOperation('native.command');
+  let outcome: ForgePerformanceOutcome = 'ok';
   try {
     const handle = await ensureBackend(context);
     if (!handle.owned || !handle.token) {
@@ -2213,11 +2593,19 @@ async function checkModConflicts(context: vscode.ExtensionContext): Promise<void
       10000,
     );
   } catch (err) {
+    outcome = 'error';
     conflictCollection?.clear();
     showBackendError(`Check Mod Conflicts failed: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    finish(outcome);
   }
 }
 
 export function deactivate(): void {
+  try {
+    const result = nativePerformanceHost?.dispose();
+    if (result?.ok && !result.status.collectionActive && !result.status.collectionCleanupUnconfirmed && !result.status.ownedTimerCount
+      && !result.status.failedTimerCount && !result.status.eventLoopDelayMonitoring) nativePerformanceHost = undefined;
+  } catch { /* retain uncertain owner rather than overwrite it */ }
   stopOwnedSidecar("extension deactivate");
 }

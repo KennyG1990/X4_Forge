@@ -42,7 +42,7 @@ import {
   EFFECTIVE_INCLUDE_PURPOSE_CODE, EFFECTIVE_INCLUDE_PURPOSE_CHECK,
   type EffectiveMdReferenceContext, type MdEffectiveLibraryInput, type MdLibraryBaseline,
 } from '../lib/mdEffectiveLibraryPurpose';
-import { formatScriptPropertyFinding, lintScriptPropertyChains, type ScriptPropertyFinding } from "../lib/scriptProperties";
+import { buildScriptPropertyIndex, formatScriptPropertyFinding, lintScriptPropertyChains, type ScriptPropertyFinding, type ScriptPropertyIndex } from "../lib/scriptProperties";
 import { checkXmlWellformed } from "../lib/xmlWellformed";
 import { lintAiscript, type AiscriptLintFinding } from "../lib/aiscriptLint";
 import {
@@ -261,7 +261,9 @@ function referencesForProject(project: ExtensionProject, base?: ProjectValidatio
  */
 export function runProjectValidation(
   project: ExtensionProject,
-  opts: { references?: ProjectValidationReferences; jobsVocabulary?: JobsVocabulary; waresVocabulary?: WaresVocabulary; incremental?: boolean } = {},
+  opts: { references?: ProjectValidationReferences; jobsVocabulary?: JobsVocabulary; waresVocabulary?: WaresVocabulary;
+    /** Internal immutable resource override; never a caller-supplied HTTP field. Null means unavailable. */
+    scriptPropertyIndex?: ScriptPropertyIndex | null; incremental?: boolean } = {},
 ): ProjectValidationResult {
   const fileKeys = new Map<ProjectFile, string>();
   const fileIdentity = (file: ProjectFile): string => {
@@ -641,7 +643,8 @@ export function runProjectValidation(
   } catch { coverageGaps.push({ check: 'aiscript.lint', reason: 'AI-script analysis failed before completing.' }); }
 
   const scriptPropertyFindings: ScriptPropertyFinding[] = [];
-  const spIndex = getScriptPropertyIndex();
+  const propertyResource = opts.scriptPropertyIndex === undefined ? getScriptPropertyIndex() : opts.scriptPropertyIndex;
+  const spIndex = propertyResource?.loaded ? propertyResource : null;
   if (!spIndex && project.files.some(file => ['md', 'aiscript'].includes(classifyPath(file.path)))) {
     coverageGaps.push({ check: 'scriptproperties', reason: 'Required scriptproperties.xml index unavailable; property checks did not run.' });
   }
@@ -906,11 +909,28 @@ function flattenProjectValidationRaw(result: ProjectValidationResult): FlatProje
     if (finding.symbol) flatFinding.sourceRef = finding.symbol;
     out.push(flatFinding);
   }
+  // The cross-file layer wraps this same index. Keep the established project
+  // diagnostic/identity and consume only its exact generated alias, once per fact.
+  const sharedCueIndex = result.crossFile.cueIndex === result.cueIndex;
+  const cueAliases = new Map<string, number>();
   for (const r of result.cueIndex.unresolved) {
     out.push({ severity: "error", code: "project.unresolved_cue_ref", filePath: r.file, sourceRef: r.sourceRef ?? r.ref,
       line: r.line, column: r.column, message: `Cue reference "${r.ref}" resolves to nothing in this project.` });
+    if (sharedCueIndex) {
+      const key = JSON.stringify([r.file, r.line, r.column, r.sourceRef, `Unresolved cue reference "${r.ref}".`]);
+      cueAliases.set(key, (cueAliases.get(key) ?? 0) + 1);
+    }
   }
   for (const f of result.crossFile.findings) {
+    if (sharedCueIndex && f.code === 'cue.unresolved' && f.severity === 'error'
+      && f.target === undefined && f.event === undefined && f.dependencyId === undefined) {
+      const key = JSON.stringify([f.file, f.line, f.column, f.sourceRef, f.detail]);
+      const remaining = cueAliases.get(key) ?? 0;
+      if (remaining > 0) {
+        cueAliases.set(key, remaining - 1);
+        continue;
+      }
+    }
     const sourceRef = f.sourceRef ?? (f.event || f.dependencyId);
     out.push({ severity: f.severity, code: f.code, filePath: f.file, sourceRef,
       line: f.line, column: f.column, target: f.target, message: f.detail });
@@ -985,8 +1005,9 @@ function flattenProjectValidationRaw(result: ProjectValidationResult): FlatProje
   // authored diff token can legitimately assign multiple different attributes.
   const seen = new Set<string>();
   return out.filter(f => {
+    const cueOccurrence = f.code === 'project.unresolved_cue_ref' || f.code === 'cue.unresolved';
     const key = JSON.stringify([f.severity, f.filePath || "", f.message,
-      f.column === undefined ? null : [f.line, f.column, f.code || '', f.sourceRef || '']]);
+      f.column === undefined && !cueOccurrence ? null : [f.line, f.column, f.code || '', f.sourceRef || '']]);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -1113,7 +1134,198 @@ export function runProjectValidationSelftest(): { pass: boolean; checks: { name:
     { ...expressionProbe, sourceRef: 'set_value/@exact' },
     { ...expressionProbe, sourceRef: 'set_value/@exact', code: 'expression-null-safe-exists' },
   ]);
+  type CueRef = ProjectValidationResult['cueIndex']['unresolved'][number];
+  type CueFinding = ProjectValidationResult['crossFile']['findings'][number];
+  const missingCue: CueRef = {
+    ref: 'this.Missing', file: 'md/cue-projection.xml', scope: 'local', resolved: false,
+    line: 4, column: 17, sourceRef: 'signal_cue/@cue',
+  };
+  const cueAlias = (ref: CueRef): CueFinding => ({
+    code: 'cue.unresolved', severity: 'error', file: ref.file,
+    line: ref.line, column: ref.column, sourceRef: ref.sourceRef,
+    detail: `Unresolved cue reference "${ref.ref}".`,
+  });
+  const cueProjection = (refs: CueRef[], aliases = refs.map(cueAlias), sameIndex = true) => {
+    const cueIndex = { defined: [], references: refs, unresolved: refs };
+    return flattenProjectValidation({
+      ...clean, evidence: undefined, cueIndex,
+      crossFile: { ...clean.crossFile, cueIndex: sameIndex ? cueIndex : { ...cueIndex }, findings: aliases },
+    }).filter(finding => finding.code === 'project.unresolved_cue_ref'
+      || aliases.some(alias => alias.code === finding.code && alias.detail === finding.message));
+  };
+  const preservedCueDifferences: Array<{ name: string; change: Partial<CueFinding> }> = [
+    { name: 'file', change: { file: 'md/other.xml' } },
+    { name: 'line', change: { line: 5 } },
+    { name: 'column', change: { column: 18 } },
+    { name: 'source_role', change: { sourceRef: 'event_cue_signalled/@cue' } },
+    { name: 'message', change: { detail: 'Independent cue-resolution evidence.' } },
+    { name: 'severity', change: { severity: 'warning' } },
+    { name: 'rule', change: { code: 'project.structure' } },
+    { name: 'target', change: { target: { file: 'md/target.xml', line: 2, column: 3 } } },
+    { name: 'event', change: { event: 'OtherEvent' } },
+    { name: 'dependency', change: { dependencyId: 'other_extension' } },
+  ];
+  const cueProject = mdProjectFor('md/cue-projection.xml', [
+    '<mdscript name="CueProjection"><cues><cue name="Caller"><actions>',
+    '<signal_cue cue="this.Missing"/>',
+    '</actions></cue></cues></mdscript>',
+  ].join('\n'));
+  const cueResult = runProjectValidation(cueProject);
+  const cueFlat = flattenProjectValidation(cueResult);
+  const cueErrors = cueFlat.filter(finding => finding.code === 'project.unresolved_cue_ref'
+    || finding.code === 'cue.unresolved');
+  const canonicalCue = cueErrors.find(finding => finding.code === 'project.unresolved_cue_ref');
+  const sourceCue = cueResult.cueIndex.unresolved[0];
+  const expectedCueId = sourceCue && buildValidationEvidence(cueProject, [{
+    severity: 'error', code: 'project.unresolved_cue_ref', filePath: sourceCue.file,
+    sourceRef: sourceCue.sourceRef ?? sourceCue.ref, line: sourceCue.line, column: sourceCue.column,
+    message: `Cue reference "${sourceCue.ref}" resolves to nothing in this project.`,
+  }]).findings[0].findingId;
+  const multipleCueResult = runProjectValidation(mdProjectFor('md/multiple-cues.xml', [
+    '<mdscript name="MultipleCues"><cues><cue name="Caller"><actions>',
+    '<signal_cue cue="this.Missing"/>',
+    '<cancel_cue cue="this.Missing"/>',
+    '</actions></cue></cues></mdscript>',
+  ].join('\n')));
+  const multipleCueErrors = flattenProjectValidation(multipleCueResult)
+    .filter(finding => finding.code === 'project.unresolved_cue_ref' || finding.code === 'cue.unresolved');
+  const unavailableCueResult = runProjectValidation(mdProjectFor('md/reference-fragment.xml',
+    '<actions><signal_cue cue="this.Missing"/><cancel_cue cue="this.Missing"/></actions>'));
+  const unavailableCueErrors = flattenProjectValidation(unavailableCueResult)
+    .filter(finding => finding.code === 'project.unresolved_cue_ref' || finding.code === 'cue.unresolved');
+  const cuePropertyData = '<scriptproperties><keyword name="md"><property name="&lt;script&gt;.&lt;cue&gt;" type="cue"/></keyword>'
+    + '<datatype name="cue"><property name="parent" type="cue"/></datatype></scriptproperties>';
+  const cuePropertyIndex = buildScriptPropertyIndex(cuePropertyData);
+  const cuePropertyProject = mdProjectFor('md/cue-properties.xml', '<mdscript name="Probe"><cues>'
+    + '<cue name="Parent"><cues><cue name="Child"/></cues></cue><cue name="Caller"><actions>\n'
+    + '<signal_cue cue="md.Probe.Parent.Child"/>\n</actions></cue></cues></mdscript>');
+  const cuePropertyResult = runProjectValidation(cuePropertyProject, { scriptPropertyIndex: cuePropertyIndex });
+  const cuePropertyFindings = flattenProjectValidation(cuePropertyResult).filter(finding => finding.code === 'scriptproperty.unknown');
+  const changedCuePropertyIndex = buildScriptPropertyIndex(cuePropertyData.replace('</datatype>',
+    '<property name="Child" type="cue"/></datatype>'));
+  const changedCuePropertyResult = runProjectValidation(cuePropertyProject, { scriptPropertyIndex: changedCuePropertyIndex });
+  const unavailableCueProperties = runProjectValidation(cuePropertyProject, { scriptPropertyIndex: null });
+  const unloadedCueProperties = ['', '<unrelated/>'].map(xml => runProjectValidation(cuePropertyProject, {
+    scriptPropertyIndex: buildScriptPropertyIndex(xml),
+  }));
+  const correctedCueProperties = runProjectValidation({ ...cuePropertyProject, files: cuePropertyProject.files.map(file => ({
+    ...file, content: file.content?.replace('md.Probe.Parent.Child', 'md.Probe.Child'),
+  })) }, { scriptPropertyIndex: cuePropertyIndex });
+  const fullCueProperties = runProjectValidation(cuePropertyProject, { scriptPropertyIndex: cuePropertyIndex, incremental: false });
   const checks = [
+    {
+      name: 'shared_core_consumes_declared_cue_lookup_and_preserves_warning_policy',
+      pass: cuePropertyResult.scriptProperties.available && cuePropertyResult.summary.scriptPropertyWarnings === 1
+        && cuePropertyFindings.length === 1 && cuePropertyFindings[0].severity === 'warning'
+        && cuePropertyFindings[0].filePath === 'md/cue-properties.xml' && cuePropertyFindings[0].line === 2
+        && cuePropertyFindings[0].sourceRef === 'md.Probe.Parent.Child' && cuePropertyResult.ok === true,
+    },
+    {
+      name: 'shared_cue_property_finding_reaches_source_bound_evidence',
+      pass: !!cuePropertyFindings[0]?.findingId && cuePropertyResult.evidence?.findings.some(finding =>
+        finding.findingId === cuePropertyFindings[0].findingId && finding.code === 'scriptproperty.unknown'),
+    },
+    {
+      name: 'changed_property_resource_cannot_reuse_previous_generation_findings',
+      pass: changedCuePropertyResult.scriptProperties.available
+        && !flattenProjectValidation(changedCuePropertyResult).some(finding => finding.code === 'scriptproperty.unknown'),
+    },
+    {
+      name: 'explicit_unavailable_property_resource_retains_coverage_gap',
+      pass: !unavailableCueProperties.scriptProperties.available
+        && unavailableCueProperties.evidence?.coverage.gaps.some(gap => gap.check === 'scriptproperties'),
+    },
+    {
+      name: 'unloaded_internal_property_resource_cannot_report_checked_availability',
+      pass: unloadedCueProperties.every(result => !result.scriptProperties.available
+        && result.evidence?.coverage.gaps.some(gap => gap.check === 'scriptproperties')),
+    },
+    {
+      name: 'correct_flat_cue_name_stays_clean_in_shared_core',
+      pass: correctedCueProperties.scriptProperties.available && correctedCueProperties.cueIndex.unresolved.length === 0
+        && !flattenProjectValidation(correctedCueProperties).some(finding => finding.code === 'scriptproperty.unknown'),
+    },
+    {
+      name: 'full_and_incremental_cue_property_findings_agree',
+      pass: JSON.stringify(fullCueProperties.scriptProperties.findings) === JSON.stringify(cuePropertyResult.scriptProperties.findings)
+        && fullCueProperties.summary.scriptPropertyWarnings === 1,
+    },
+    {
+      name: 'real_plain_md_repeated_calls_preserve_positions_roles_and_two_evidence_errors',
+      pass: multipleCueResult.cueIndex.unresolved.length === 2
+        && multipleCueResult.crossFile.findings.filter(finding => finding.code === 'cue.unresolved').length === 2
+        && multipleCueResult.ok === false && multipleCueResult.evidence?.modErrorCount === 2
+        && multipleCueErrors.length === 2
+        && multipleCueErrors[0].line === 2 && multipleCueErrors[0].column === 1
+        && multipleCueErrors[1].line === 3 && multipleCueErrors[1].column === 1
+        && multipleCueErrors[0].sourceRef?.includes('signal_cue')
+        && multipleCueErrors[1].sourceRef?.includes('cancel_cue')
+        && new Set(multipleCueErrors.map(finding => finding.findingId)).size === 2,
+    },
+    {
+      name: 'unavailable_plain_reference_positions_preserve_occurrences_and_explicit_gap',
+      pass: unavailableCueResult.cueIndex.unresolved.length === 2 && unavailableCueResult.ok === false
+        && unavailableCueErrors.length === 2
+        && unavailableCueErrors.every(finding => finding.line === undefined && finding.column === undefined)
+        && new Set(unavailableCueErrors.map(finding => finding.findingId)).size === 2
+        && unavailableCueResult.evidence?.coverage.gaps.some(gap => gap.check === 'md.reference_context'),
+    },
+    {
+      name: 'unpositioned_cue_semantics_preserve_distinct_observed_occurrence_identities',
+      pass: cueProjection([
+        { ...missingCue, line: undefined, column: undefined },
+        { ...missingCue, line: undefined, column: undefined, sourceRef: 'other-observed-occurrence' },
+      ]).length === 2,
+    },
+    {
+      name: 'shared_cue_index_reports_one_canonical_flat_occurrence',
+      pass: cueProjection([missingCue]).length === 1
+        && cueProjection([missingCue])[0]?.code === 'project.unresolved_cue_ref',
+    },
+    {
+      name: 'same_target_at_distinct_positions_remains_two_cue_errors',
+      pass: cueProjection([missingCue, { ...missingCue, line: 5, column: 21 }]).length === 2,
+    },
+    {
+      name: 'same_position_with_distinct_source_roles_remains_two_cue_errors',
+      pass: cueProjection([missingCue, { ...missingCue, sourceRef: 'event_cue_signalled/@cue' }]).length === 2,
+    },
+    {
+      name: 'cue_index_only_finding_is_retained',
+      pass: cueProjection([missingCue], []).length === 1,
+    },
+    {
+      name: 'cross_file_only_finding_is_retained',
+      pass: cueProjection([], [cueAlias(missingCue)]).length === 1,
+    },
+    {
+      name: 'foreign_cue_index_cannot_authorize_alias_coalescing',
+      pass: cueProjection([missingCue], [cueAlias(missingCue)], false).length === 2,
+    },
+    ...preservedCueDifferences.map(({ name, change }) => ({
+      name: `cue_alias_with_distinct_${name}_is_retained`,
+      pass: cueProjection([missingCue], [{ ...cueAlias(missingCue), ...change }]).length === 2,
+    })),
+    {
+      name: 'cue_alias_matching_cannot_consume_more_records_than_its_source_index',
+      pass: cueProjection([missingCue], [cueAlias(missingCue), cueAlias(missingCue)]).length === 2,
+    },
+    {
+      name: 'real_unresolved_call_has_one_flat_and_evidence_error',
+      pass: cueErrors.length === 1 && cueResult.evidence?.modErrorCount === 1
+        && cueResult.evidence.findings.filter(finding => finding.severity === 'error').length === 1,
+    },
+    {
+      name: 'canonical_cue_finding_identity_is_preserved',
+      pass: !!expectedCueId && canonicalCue?.findingId === expectedCueId,
+    },
+    {
+      name: 'canonical_projection_preserves_raw_cue_layers_and_invalid_verdict',
+      pass: cueResult.cueIndex.unresolved.length === 1
+        && cueResult.crossFile.cueIndex === cueResult.cueIndex
+        && cueResult.crossFile.findings.filter(finding => finding.code === 'cue.unresolved').length === 1
+        && cueResult.ok === false,
+    },
     {
       name: 'same_authored_token_preserves_distinct_positioned_expression_roles',
       pass: differentExpressionRoles.length === 2

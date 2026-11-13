@@ -92,9 +92,9 @@ export function runActionReceiptPolicyBundleSelftest(): ActionReceiptPolicyBundl
   const positive = loadActionReceiptPolicyBundle();
   check(
     'bundled_policy_positive_counts',
-    positive.routeCount === 92 && positive.surfaceCount === 65
+    positive.routeCount === 92 && positive.surfaceCount === 66
       && positive.inventory.routes.length === 92
-      && positive.inventory.surfaces.length === 65,
+      && positive.inventory.surfaces.length === 66,
     `routes=${positive.routeCount} surfaces=${positive.surfaceCount}`,
   );
   check(
@@ -102,6 +102,19 @@ export function runActionReceiptPolicyBundleSelftest(): ActionReceiptPolicyBundl
     positive.manifestSha256 === ACTION_RECEIPT_COVERAGE_REVIEWED_MANIFEST_SHA256
       && positive.reviewedManifestSha256 === ACTION_RECEIPT_COVERAGE_REVIEWED_MANIFEST_SHA256,
     positive.manifestSha256,
+  );
+  const nativeIpcFixture = positive.manifest.surfaces.find(surface =>
+    surface.id === 'filesystem-writer:vscode-extension/src/nativePerformanceIpc.selftest.ts');
+  check(
+    'native_ipc_fixture_policy_is_internal_and_receipt_exempt',
+    !!nativeIpcFixture
+      && nativeIpcFixture.owner === 'runNativePerformanceIpcSelftest'
+      && nativeIpcFixture.sourceRef === 'config/durable-writers.json#/writers/48'
+      && nativeIpcFixture.integrationBatch === 'W3B0-internal'
+      && nativeIpcFixture.semanticClass === 'fixture-cache'
+      && nativeIpcFixture.policy === 'receipt-exempt'
+      && nativeIpcFixture.effects.join('|') === 'filesystem-write'
+      && nativeIpcFixture.authorityScopes.join('|') === 'global|profile|workspace',
   );
   check(
     'bundled_policy_source_refs_are_authoritative',
@@ -169,7 +182,7 @@ export function runActionReceiptPolicyBundleSelftest(): ActionReceiptPolicyBundl
       && JSON.stringify(later.manifest) === positiveManifestJson
       && JSON.stringify(later.inventory) === positiveInventoryJson
       && later.routeCount === 92
-      && later.surfaceCount === 65
+      && later.surfaceCount === 66
       && later.manifestSha256 === ACTION_RECEIPT_COVERAGE_REVIEWED_MANIFEST_SHA256,
   );
 

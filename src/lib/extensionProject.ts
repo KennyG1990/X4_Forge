@@ -17,8 +17,8 @@
  * extraction. Pure: no fs/network. House pattern: engine + oracle + public GET, then UI/API.
  */
 
-import { classifyCueRef, mdReferencePoint, parseSignalCueRefs, resolveMdLibraryReference } from './cueLineage';
-import type { EffectiveMdReferenceContext, MdReferenceCoverageGap } from './mdEffectiveLibraryPurpose';
+import { classifyCueRef, mdReferencePoint, parseSignalCueRefs, resolveMdLibraryReference, type MdReferenceFact } from './cueLineage';
+import { plainMdLibraryPurposeFacts, type EffectiveMdReferenceContext, type MdReferenceCoverageGap, type MdReferenceSourcePoint } from './mdEffectiveLibraryPurpose';
 import { normPath, parseXmlLenient, walkElements } from './xmlLite';
 import { parseModManifest, type ModDependency } from './modDependencyGraph';
 
@@ -263,11 +263,38 @@ export function indexCueReferences(project: ExtensionProject, options: { effecti
 
   const knownScripts = new Set([...cuesByScript.keys()].filter(Boolean));
   let references: CueRef[] = [];
+  const context = options.effectiveContext;
+  const fileKey = (file: string) => normPath(file).replace(/^\.\//, '');
+  const coverageGaps: MdReferenceCoverageGap[] = [];
 
   for (const f of mdFiles) {
     const ownScript = scriptByFile.get(normPath(f.path)) || '';
     const ownCues = cuesByScript.get(ownScript) || new Set<string>();
-    for (const raw of parseSignalCueRefs(f.content!)) {
+    const rawReferences = parseSignalCueRefs(f.content!);
+    const effectiveOwnsFile = context?.complete && context.referencesByFile.has(fileKey(f.path));
+    let sourceCalls: MdReferenceFact<MdReferenceSourcePoint>[] | undefined;
+    if (rawReferences.length && !effectiveOwnsFile) {
+      try {
+        const facts = plainMdLibraryPurposeFacts(f.path, f.content!, {
+          status: 'unavailable', reason: 'Canonical comparison is not requested for authored reference positions.',
+        });
+        if (!('unavailable' in facts) && !facts.referenceUnavailable) {
+          const calls = facts.references.filter(call => call.role !== 'cue' && call.ref.length > 0);
+          if (calls.length === rawReferences.length && calls.every((call, index) => call.ref === rawReferences[index])) {
+            sourceCalls = calls;
+          }
+        }
+      } catch { /* Position enrichment cannot erase the legacy reference inventory. */ }
+      if (!sourceCalls || sourceCalls.some(call => {
+        const point = mdReferencePoint(call);
+        return !Number.isInteger(point?.line) || !Number.isInteger(point?.column)
+          || (point?.line ?? 0) < 1 || (point?.column ?? 0) < 1;
+      })) {
+        coverageGaps.push({ check: 'md.reference_context', filePath: f.path,
+          reason: 'Some authored cue-reference positions were unavailable; legacy references and occurrence identities were retained.' });
+      }
+    }
+    for (const [ordinal, raw] of rawReferences.entries()) {
       const ref = raw.trim();
       let scope: CueRef['scope'];
       let resolved: boolean;
@@ -291,14 +318,21 @@ export function indexCueReferences(project: ExtensionProject, options: { effecti
       } else {
         scope = 'external'; resolved = true;
       }
-      references.push({ ref, file: f.path, scope, resolved });
+      const call = sourceCalls?.[ordinal];
+      const point = call && mdReferencePoint(call);
+      const positioned = Number.isInteger(point?.line) && Number.isInteger(point?.column)
+        && (point?.line ?? 0) > 0 && (point?.column ?? 0) > 0;
+      references.push({ ref, file: f.path, scope, resolved,
+        ...(!effectiveOwnsFile ? {
+          ...(positioned ? { line: point?.line, column: point?.column } : {}),
+          sourceRef: call ? `md.reference:${JSON.stringify([fileKey(f.path), call.id, call.role])}`
+            : `md.reference_unpositioned:${JSON.stringify([fileKey(f.path), ordinal])}`,
+        } : {}),
+      });
     }
   }
 
-  const context = options.effectiveContext;
-  const coverageGaps: MdReferenceCoverageGap[] = [];
   if (context?.complete) {
-    const fileKey = (file: string) => normPath(file).replace(/^\.\//, '');
     const rawReferences = references;
     const rawByReference = new Map(rawReferences.map(reference => [JSON.stringify([fileKey(reference.file), reference.ref]), reference]));
     references = references.filter(reference => !context.referencesByFile.has(fileKey(reference.file)));

@@ -604,6 +604,41 @@ function variablePathContexts(
   ];
 }
 
+/** A known lookup-only keyword can declare its receiver after literal selectors. */
+function literalKeywordLookup(
+  index: ScriptPropertyIndex,
+  keyword: string,
+  segments: readonly { kind: string; name: string }[],
+): { consumed: number; states: PathState[] } | undefined {
+  const entry = index.model.keywords.get(keyword);
+  if (!entry || entry.dynamic || entry.heads.size || !segments.length) return undefined;
+  const types = new Set<string>();
+  let consumed: number | undefined;
+  for (const property of pathPropertiesForContext(index, { kind: 'keyword', name: keyword })) {
+    const path = pathForProperty(property);
+    if (!path.length) continue;
+    const compatible = path.slice(0, segments.length).every((expected, position) => {
+      const actual = segments[position];
+      return actual.kind !== 'property' || isAuthoredPlaceholder(expected)
+        || normalizedPathSegment(expected) === actual.name;
+    });
+    if (!compatible) continue;
+    // Do not discard a competing shortcut, incomplete lookup or unknown result.
+    // readtext, for example, also owns a longer .test fallback template.
+    if (!path.every(isAuthoredPlaceholder) || path.length > segments.length
+      || segments.slice(0, path.length).some(segment => segment.kind !== 'property')) return undefined;
+    const datatype = property.type.trim().toLowerCase();
+    if (!datatype || !index.model.datatypes.has(datatype)
+      || (consumed !== undefined && consumed !== path.length)) return undefined;
+    consumed = path.length;
+    types.add(datatype);
+  }
+  if (consumed === undefined || !types.size) return undefined;
+  return { consumed, states: [...types].map(name => ({
+    kind: 'context' as const, context: { kind: 'datatype' as const, name },
+  })) };
+}
+
 type ScriptPropertyOptions = { filePath?: string; variableTypes?: Record<string, string> };
 type PropertyPosition = Pick<ScriptPropertyFinding, 'line' | 'column'>;
 type PropertyReadSpan = { start: number; end: number };
@@ -653,6 +688,7 @@ function npcGuardReadSpans(xml: string): PropertyReadSpan[] {
  * - untyped variable roots retain all datatype/path candidates and traverse them in order;
  * - non-dynamic keyword roots use that keyword's own authored paths;
  * - dynamic keyword roots skip the lookup selector and use its declared result datatype;
+ * - lookup-only keywords can bind a complete literal selector prefix to its declared result;
  * - actual dynamic/list/variable selectors remain conservative and can satisfy a pending path.
  * Unresolved receiver types are advisory. Unknown properties remain warnings.
  */
@@ -701,7 +737,11 @@ function lintPropertyChains(source: string, masked: string, index: ScriptPropert
       states = [{ kind: 'context', context: { kind: 'datatype', name: datatype } }];
       findingRoot = rootLower;
     } else if (!keywordEntry.heads.size) {
-      continue;
+      const lookup = literalKeywordLookup(index, rootLower, parsed.segments);
+      if (!lookup) continue;
+      firstSegment = lookup.consumed;
+      states = lookup.states;
+      findingRoot = rootLower;
     } else {
       states = [{ kind: 'context', context: { kind: 'keyword', name: rootLower } }];
       findingRoot = rootLower;
@@ -956,6 +996,78 @@ export function runScriptPropertiesSelftest(): {
 
   // --- parsing the real shape ---
   const idx = buildScriptPropertyIndex(SCRIPT_PROPERTIES_FIXTURE);
+  // The game's md keyword declares two lookup selectors yielding a cue, rather
+  // than literal property heads. A nested cue name is not a property of its parent.
+  const cueLookupProperties = [
+    '<scriptproperties>',
+    '<keyword name="md"><property name="&lt;mdscriptname&gt;.&lt;cuename&gt;" type="cue"/><property name="$&lt;variable&gt;"/></keyword>',
+    '<datatype name="cue">',
+    ...['parent', 'static', 'staticbase', 'namespace', 'library'].map(name => `<property name="${name}" type="cue"/>`),
+    '<property name="exists" type="boolean"/><property name="$&lt;variable&gt;"/>',
+    '</datatype><datatype name="boolean"/>',
+    '<datatype name="object"><property name="Child" type="cue"/></datatype>',
+    '</scriptproperties>',
+  ].join('');
+  const cueLookupIndex = buildScriptPropertyIndex(cueLookupProperties);
+  const cueSource = (role: string, ref: string) => `<mdscript name="Probe"><cues><cue name="Caller"><actions>\n<${role} cue="${ref}"/>\n</actions></cue></cues></mdscript>`;
+  for (const role of ['signal_cue', 'signal_cue_instantly', 'cancel_cue', 'reset_cue']) {
+    const source = cueSource(role, 'md.Probe.Parent.Child');
+    const findings = lintScriptPropertyChains(source, cueLookupIndex, { filePath: 'md/probe.xml' });
+    ok(`md_lookup_${role}_rejects_child_property_on_declared_cue`, findings.length === 1
+      && findings[0].code === 'scriptproperty.unknown' && findings[0].severity === 'warning'
+      && findings[0].segment === 'Child' && findings[0].root === 'md'
+      && findings[0].typeContext?.datatype === 'cue' && findings[0].typeContext.confidence === 'declared'
+      && findings[0].line === 2 && findings[0].column === source.split('\n')[1].indexOf('Child') + 1,
+    findings);
+  }
+  for (const ref of [
+    'md.Probe.Child', 'md.Probe.Parent.parent', 'md.Probe.Parent.static', 'md.Probe.Parent.staticbase',
+    'md.Probe.Parent.namespace', 'md.Probe.Parent.library', 'md.Probe.Parent.parent.parent',
+    'md.Probe.Parent.$target', 'md.Probe.Parent.$targets.{$i}', 'md.Probe.Parent.{$selector}',
+    'md.UnknownProvider.Cue.parent', 'md.Probe', 'md.Probe.$selector', 'md.$global.Child',
+  ]) {
+    ok(`md_lookup_preserves_${ref}`, lintScriptPropertyChains(cueSource('signal_cue', ref), cueLookupIndex).length === 0);
+  }
+  const replacement = '<diff>\n<replace sel="/mdscript/cues/cue/actions/signal_cue/@cue">md.Probe.Parent.Child</replace>\n</diff>';
+  const replacementFindings = lintScriptPropertyChains(replacement, cueLookupIndex);
+  ok('md_lookup_attribute_replacement_body_keeps_authored_position', replacementFindings.length === 1
+    && replacementFindings[0].segment === 'Child' && replacementFindings[0].line === 2
+    && replacementFindings[0].column === replacement.split('\n')[1].indexOf('Child') + 1, replacementFindings);
+  ok('md_lookup_does_not_turn_untyped_variable_candidates_into_wildcards',
+    lintScriptPropertyExpression('$receiver.GenuinelyUnknown', cueLookupIndex).some(f => f.code === 'scriptproperty.unknown'));
+  ok('md_lookup_unknown_bare_root_remains_conservative',
+    lintScriptPropertyExpression('Unknown.Probe.Parent.Child', cueLookupIndex).length === 0);
+  ok('md_lookup_comments_prose_and_string_literals_remain_masked',
+    lintScriptPropertyChains('<!-- md.Probe.Parent.Child --><debug_text text="\'md.Probe.Parent.Child\'" description="md.Probe.Parent.Child"/>', cueLookupIndex).length === 0);
+  const unknownResultIndex = buildScriptPropertyIndex(cueLookupProperties.replace('type="cue"', 'type="UnavailableType"'));
+  ok('md_lookup_missing_result_datatype_is_not_guessed',
+    lintScriptPropertyExpression('md.Probe.Parent.Child', unknownResultIndex).length === 0);
+  const alternateIndex = (property: string) => buildScriptPropertyIndex(cueLookupProperties.replace('</keyword>', `${property}</keyword>`));
+  ok('md_lookup_ambiguous_selector_counts_remain_conservative', lintScriptPropertyExpression('md.Probe.Parent.Child',
+    alternateIndex('<property name="&lt;lookup&gt;" type="object"/>')).length === 0);
+  ok('md_lookup_retains_all_declared_result_candidates', lintScriptPropertyExpression('md.Probe.Parent.Child',
+    alternateIndex('<property name="&lt;script&gt;.&lt;cue&gt;" type="object"/>')).length === 0);
+  ok('md_lookup_unavailable_result_alternative_cannot_be_discarded', lintScriptPropertyExpression('md.Probe.Parent.Child',
+    alternateIndex('<property name="&lt;script&gt;.&lt;cue&gt;"/>')).length === 0);
+  ok('md_lookup_keeps_explicit_literal_keyword_path_authority', lintScriptPropertyExpression('md.Known.Child',
+    alternateIndex('<property name="Known" type="object"/>')).length === 0);
+  const objectLookupIndex = buildScriptPropertyIndex(cueLookupProperties.replace('type="cue"', 'type="object"'));
+  ok('literal_lookup_uses_its_declared_result_instead_of_assuming_cue',
+    lintScriptPropertyExpression('md.Probe.Parent.Child', objectLookupIndex).length === 0
+      && lintScriptPropertyExpression('md.Probe.Parent.parent', objectLookupIndex).some(f => f.code === 'scriptproperty.unknown'));
+  const mixedLookupIndex = alternateIndex('<property name="&lt;script&gt;.&lt;cue&gt;.special" type="object"/>');
+  ok('literal_lookup_preserves_matching_mixed_prefix_and_ignores_only_incompatible_paths',
+    lintScriptPropertyExpression('md.Probe.Parent.special.Child', mixedLookupIndex).length === 0
+      && lintScriptPropertyExpression('md.Probe.Parent.Child', mixedLookupIndex).some(f => f.code === 'scriptproperty.unknown'));
+  ok('literal_lookup_incomplete_competing_template_is_not_discarded',
+    lintScriptPropertyExpression('md.Probe.Parent.Child', alternateIndex(
+      '<property name="&lt;a&gt;.&lt;b&gt;.&lt;c&gt;.&lt;d&gt;" type="object"/>')).length === 0);
+  const readtextLookupIndex = buildScriptPropertyIndex('<scriptproperties><keyword name="readtext">'
+    + '<property name="{$textpage}.{$textid}" type="string"/>'
+    + '<property name="{$textpage}.{$textid}.test.{$fallbackstring}" type="string"/>'
+    + '</keyword><datatype name="string"><property name="length" type="integer"/></datatype><datatype name="integer"/></scriptproperties>');
+  ok('readtext_keyword_test_continuation_is_not_mistaken_for_string_property',
+    lintScriptPropertyExpression('readtext.Page.Id.test.Fallback', readtextLookupIndex).length === 0);
   ok('index loads', idx.loaded);
   ok('parses keywords + datatypes', idx.model.keywords.size === 3 && idx.model.datatypes.size === 18,
     `kw=${idx.model.keywords.size} dt=${idx.model.datatypes.size}`);

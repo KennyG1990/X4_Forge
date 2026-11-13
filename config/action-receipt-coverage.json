@@ -3222,6 +3222,23 @@
       ]
     },
     {
+      "id": "filesystem-writer:vscode-extension/src/nativePerformanceIpc.selftest.ts",
+      "kind": "filesystem-writer",
+      "owner": "runNativePerformanceIpcSelftest",
+      "sourceRef": "config/durable-writers.json#/writers/48",
+      "integrationBatch": "W3B0-internal",
+      "semanticClass": "fixture-cache",
+      "policy": "receipt-exempt",
+      "effects": [
+        "filesystem-write"
+      ],
+      "authorityScopes": [
+        "global",
+        "profile",
+        "workspace"
+      ]
+    },
+    {
       "id": "host-store:src/App.tsx",
       "kind": "host-store",
       "owner": "Studio layout/release preferences | workspace-ID-scoped revision and content cache | experience confirmations",

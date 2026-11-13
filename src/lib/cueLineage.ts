@@ -242,7 +242,7 @@ export const MD_CUE_KEYWORDS = new Set(['this', 'parent', 'static', 'namespace']
 export type CueRefClass =
   | { kind: 'keyword' }                              // parent/this/static/namespace (exact lowercase)
   | { kind: 'local'; cue: string }                   // bare name or this.Name
-  | { kind: 'cross'; script: string; cue: string }   // md.<script>.<cue>[.deeper]
+  | { kind: 'cross'; script: string; cue: string }   // declaration base of md.<script>.<cue>[.property...]
   | { kind: 'external' };                            // $expr, {…}, other-qualified — never flagged
 
 export function classifyCueRef(raw: string): CueRefClass {
@@ -250,6 +250,8 @@ export function classifyCueRef(raw: string): CueRefClass {
   if (!ref) return { kind: 'external' };
   if (MD_CUE_KEYWORDS.has(ref)) return { kind: 'keyword' };
   const cross = ref.match(/^md\.([^.]+)\.(.+)$/i);
+  // This identifies a declaration base, not validity of the remaining property
+  // expression. Callers retain the full raw reference for ScriptProperty checks.
   if (cross) return { kind: 'cross', script: cross[1], cue: cross[2].split('.')[0] };
   const local = ref.startsWith('this.') ? ref.slice(5) : ref;
   if (!local || local.includes('.') || local.startsWith('$') || local.startsWith('{')) return { kind: 'external' };

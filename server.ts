@@ -119,6 +119,10 @@ import { analyzeXmlReferenceMap, XmlReferenceMapInputError } from './src/server/
 import { registerBulkTransformRoutes } from "./src/server/bulkTransformRoutes";
 import { computeModDrift, fingerprintModFolder, flattenProjectValidation, getProjectValidationCacheStats, getSchemaIndex, loadProjectFromDisk, runProjectValidation, type FlatProjectDiagnostic } from "./src/server/projectValidation";
 import { createForgeBackendPerformance, forgePerformanceApiOperationName, forgePerformanceHasNegativeDataResult } from './src/server/forgePerformance';
+import { createNativePerformanceBroker, type NativeBrokerRetireReason } from './src/server/nativePerformanceBroker';
+import { createNativePerformanceRetirementNotice, type NativePerformanceEndpoint } from './shared/nativePerformanceChannel';
+import { isNativeInstanceId } from './shared/nativePerformanceProtocol';
+import { performance as nativeBrokerClock } from 'node:perf_hooks';
 import { captureDeploymentSnapshot, type DeploymentSnapshot } from './src/server/deploymentSnapshot';
 import { previewLuaRegistrationChange } from './src/server/deployLuaRegistration';
 import { PROJECT_CHECKS_MAX_BYTES, PROJECT_CHECKS_PATH } from './src/server/projectCheckProposal';
@@ -340,7 +344,11 @@ import {
   type StudioDb, type SourceStamp
 } from "./src/lib/db";
 
-const launchOnlySettings = ['X4_FORGE_PROJECT_CHECK_OWNER_POLICY', 'X4_FORGE_DEV_SCRATCH_SETTINGS'];
+const launchOnlySettings = [
+  'X4_FORGE_PROJECT_CHECK_OWNER_POLICY', 'X4_FORGE_DEV_SCRATCH_SETTINGS',
+  'X4_FORGE_PARENT_MODE', 'X4_FORGE_PARENT_PID', 'X4_FORGE_PARENT_NONCE',
+  'X4_FORGE_NATIVE_MODE', 'X4_FORGE_NATIVE_EPOCH',
+];
 if (process.env.X4_FORGE_DEV_SCRATCH_SETTINGS !== undefined) {
   launchOnlySettings.push('X4_FORGE_MODE', 'X4_FORGE_DEV_ROOT', 'X4_GAME_PATH', 'X4_CONFIG_DIR', 'X4_STATE_DIR',
     'X4_DATA_DIR', 'X4_SOURCE_COORDINATION_DIR', 'X4FORGE_DISCOVERY_DIR', 'STUDIO_API_TOKEN',
@@ -360,8 +368,62 @@ validateDevScratchStorage();
 const app = express();
 // Availability permits explicit bounded captures; constructing this producer starts
 // no sampler, histogram or Inspector session. Ordinary collection starts disabled.
-const forgePerformance = createForgeBackendPerformance({ instanceId: crypto.randomUUID(), profilingEnabled: true });
-process.once('beforeExit', () => { void forgePerformance.dispose().catch(() => {}); });
+const backendPerformanceInstanceId = crypto.randomUUID();
+const forgePerformance = createForgeBackendPerformance({ instanceId: backendPerformanceInstanceId, profilingEnabled: true });
+const nativeParentContract = parseParentLivenessContract(process.env);
+const nativeEpoch = process.env.X4_FORGE_NATIVE_EPOCH;
+const nativeBinding = nativeParentContract && process.connected && typeof process.send === 'function'
+  && process.env.X4_FORGE_NATIVE_MODE === 'ipc-v1' && isNativeInstanceId(nativeEpoch)
+  ? { nonce: nativeParentContract.nonce, epoch: nativeEpoch } : undefined;
+const nativeParentEndpoint: NativePerformanceEndpoint | undefined = nativeBinding ? {
+  isConnected: () => process.connected === true,
+  send: (frame, callback) => {
+    if (!process.send) { callback(new Error('NATIVE_IPC_UNAVAILABLE')); return false; }
+    return process.send(frame, callback);
+  },
+  onMessage: listener => { process.on('message', listener); return () => { process.removeListener('message', listener); }; },
+  onDisconnect: listener => { process.on('disconnect', listener); return () => { process.removeListener('disconnect', listener); }; },
+} : undefined;
+let nativePerformanceBroker: ReturnType<typeof createNativePerformanceBroker> | undefined;
+let nativeRetirementAnnounced = false;
+function announceNativeRetirement(): void {
+  if (!nativeBinding || nativeRetirementAnnounced) return;
+  nativeRetirementAnnounced = true;
+  // One bounded ordinary-lifecycle message bypasses the retired telemetry queue,
+  // like parent-lost. Delivery is best effort, never a cleanup ACK or a retry.
+  try {
+    if (process.connected && process.send) process.send(createNativePerformanceRetirementNotice(nativeBinding), () => {});
+  } catch { /* local expiry remains the hard bound if the parent cannot receive */ }
+}
+try {
+  nativePerformanceBroker = createNativePerformanceBroker({
+    backendInstanceId: backendPerformanceInstanceId,
+    binding: nativeBinding,
+    channel: nativeParentEndpoint,
+    expectedHostPid: nativeBinding ? nativeParentContract?.parentPid : undefined,
+    now: () => nativeBrokerClock.now(),
+    onRetire: announceNativeRetirement,
+    timers: {
+      set: (callback, delayMs) => {
+        const timer = setTimeout(callback, delayMs);
+        try { timer.unref(); return timer; }
+        catch (error) { clearTimeout(timer); throw error; }
+      },
+      clear: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
+    },
+  });
+} catch {
+  announceNativeRetirement();
+  console.warn('[native-performance] observer unavailable; ordinary Forge remains available');
+}
+function retireNativePerformanceBroker(reason: NativeBrokerRetireReason): void {
+  try { nativePerformanceBroker?.retire(reason); } catch { /* observer cannot prevent process shutdown */ }
+}
+process.once('beforeExit', () => {
+  retireNativePerformanceBroker('backend-exit');
+  void forgePerformance.dispose().catch(() => {});
+});
+process.once('exit', () => retireNativePerformanceBroker('backend-exit'));
 function forgePerformanceRequestMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
   if (!req.path.startsWith('/api/') || req.path.startsWith('/api/agent/performance') || !forgePerformance.collector.isEnabled()) return next();
   try {
@@ -18053,6 +18115,7 @@ setupDevOrProd().then(() => {
     if (published) console.log(`[discovery] instance address published to ${published.latestFile}`);
     const releaseDiscovery = () => unpublishInstance(process.pid);
     const parentWatch = watchParentIpc(process.env, process, contract => {
+      retireNativePerformanceBroker('disconnect');
       console.error(`[parent-liveness] supervisor reported extension parent loss; shutting down sidecar owned by parent pid ${contract.parentPid}.`);
       releaseDiscovery();
       process.exit(0);
@@ -18062,7 +18125,7 @@ setupDevOrProd().then(() => {
     }
     process.on('exit', () => { parentWatch.release(); releaseDiscovery(); });
     for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
-      process.on(signal, () => { releaseDiscovery(); process.exit(0); });
+      process.on(signal, () => { retireNativePerformanceBroker('stopped'); releaseDiscovery(); process.exit(0); });
     }
   });
   configureHttpServerDeadlines(httpServer);

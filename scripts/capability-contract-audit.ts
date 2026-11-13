@@ -510,6 +510,470 @@ function readSource(relativePath: string): { file: ts.SourceFile; text: string }
   };
 }
 
+interface PrecommitCapabilityGateInput {
+  precommit: ts.SourceFile;
+  receipt: ts.SourceFile;
+  scripts: Readonly<Record<string, string | undefined>>;
+}
+
+function hasPrecommitCapabilityGate(input: PrecommitCapabilityGateInput): boolean {
+  if (normalizedRelative(input.precommit.fileName) !== 'scripts/precommit-check.mjs') return false;
+  const unwrap = unwrapStaticExpression;
+  const identifier = (expression: ts.Expression, name: string): boolean => {
+    const value = unwrap(expression);
+    return ts.isIdentifier(value) && value.text === name;
+  };
+  const number = (expression: ts.Expression, expected: number): boolean => {
+    const value = unwrap(expression);
+    return ts.isNumericLiteral(value) && Number(value.text) === expected;
+  };
+  const string = (expression: ts.Expression, expected: string): boolean => {
+    const value = unwrap(expression);
+    return ts.isStringLiteralLike(value) && value.text === expected;
+  };
+  const member = (expression: ts.Expression, receiver: string, name: string): boolean => {
+    const value = unwrap(expression);
+    return ts.isPropertyAccessExpression(value) && identifier(value.expression, receiver) && value.name.text === name;
+  };
+  const call = (expression: ts.Expression, name: string): ts.CallExpression | undefined => {
+    const value = unwrap(expression);
+    return ts.isCallExpression(value) && identifier(value.expression, name) ? value : undefined;
+  };
+  const namedFunction = (file: ts.SourceFile, name: string): ts.FunctionDeclaration | undefined => {
+    const matches = file.statements.filter(ts.isFunctionDeclaration).filter(node => node.name?.text === name);
+    return matches.length === 1 ? matches[0] : undefined;
+  };
+  const declaration = (statement: ts.Statement): ts.VariableDeclaration | undefined =>
+    ts.isVariableStatement(statement) && statement.declarationList.declarations.length === 1
+      ? statement.declarationList.declarations[0] : undefined;
+  const directCall = (statement: ts.Statement, name: string): ts.CallExpression | undefined =>
+    ts.isExpressionStatement(statement) ? call(statement.expression, name) : undefined;
+  const awaitedCall = (statement: ts.Statement, name: string): ts.CallExpression | undefined => {
+    if (!ts.isExpressionStatement(statement)) return undefined;
+    const value = unwrap(statement.expression);
+    return ts.isAwaitExpression(value) ? call(value.expression, name) : undefined;
+  };
+  const onlyThrow = (statement: ts.Statement): boolean => ts.isThrowStatement(statement)
+    || ts.isBlock(statement) && statement.statements.length === 1 && ts.isThrowStatement(statement.statements[0]);
+  const binary = (expression: ts.Expression, operator: ts.SyntaxKind): ts.BinaryExpression | undefined => {
+    const value = unwrap(expression);
+    return ts.isBinaryExpression(value) && value.operatorToken.kind === operator ? value : undefined;
+  };
+  const logStatement = (statement: ts.Statement): boolean => {
+    if (!ts.isExpressionStatement(statement)) return false;
+    const value = unwrap(statement.expression);
+    return ts.isCallExpression(value) && (member(value.expression, 'console', 'log') || member(value.expression, 'console', 'error'));
+  };
+  const property = (expression: ts.Expression, name: string): ts.Expression | undefined => {
+    const value = unwrap(expression);
+    if (!ts.isObjectLiteralExpression(value) || value.properties.some(node => !ts.isPropertyAssignment(node))) return undefined;
+    const matches = value.properties.filter(ts.isPropertyAssignment).filter(node =>
+      (ts.isIdentifier(node.name) || ts.isStringLiteralLike(node.name)) && node.name.text === name);
+    return matches.length === 1 ? matches[0].initializer : undefined;
+  };
+  const checkedSpawn = (statements: readonly ts.Statement[], command: string, variableCommand: boolean): boolean => {
+    const body = statements.filter(statement => !logStatement(statement));
+    if (body.length !== 3) return false;
+    const result = declaration(body[0]);
+    if (!result || !ts.isIdentifier(result.name) || !result.initializer) return false;
+    const spawn = call(result.initializer, 'spawnSync');
+    if (!spawn || spawn.arguments.length !== 2
+      || !(variableCommand ? identifier(spawn.arguments[0], command) : string(spawn.arguments[0], command))) return false;
+    const options = unwrap(spawn.arguments[1]);
+    const cwd = property(options, 'cwd'), shell = property(options, 'shell'), stdio = property(options, 'stdio');
+    if (!ts.isObjectLiteralExpression(options) || options.properties.length !== 3
+      || !cwd || !identifier(cwd, 'root') || !shell || shell.kind !== ts.SyntaxKind.TrueKeyword
+      || !stdio || !string(stdio, 'inherit')) return false;
+    const spawnError = body[1], nonzero = body[2];
+    if (!ts.isIfStatement(spawnError) || spawnError.elseStatement || !member(spawnError.expression, result.name.text, 'error')
+      || !onlyThrow(spawnError.thenStatement) || !ts.isIfStatement(nonzero) || nonzero.elseStatement
+      || !onlyThrow(nonzero.thenStatement)) return false;
+    const status = binary(nonzero.expression, ts.SyntaxKind.ExclamationEqualsEqualsToken);
+    return !!status && member(status.left, result.name.text, 'status') && number(status.right, 0);
+  };
+  const commandList = (owner: ts.FunctionDeclaration | undefined): string[] | undefined => {
+    if (!owner?.body || owner.parameters.length !== 0 || owner.body.statements.length !== 1) return undefined;
+    const loop = owner.body.statements[0];
+    if (!ts.isForOfStatement(loop) || !ts.isVariableDeclarationList(loop.initializer)
+      || loop.initializer.declarations.length !== 1 || !ts.isBlock(loop.statement)) return undefined;
+    const variable = loop.initializer.declarations[0].name, values = unwrap(loop.expression);
+    if (!ts.isIdentifier(variable) || !ts.isArrayLiteralExpression(values)
+      || !values.elements.every(ts.isStringLiteralLike) || !checkedSpawn(loop.statement.statements, variable.text, true)) return undefined;
+    return values.elements.filter(ts.isStringLiteralLike).map(value => value.text);
+  };
+  const callsOnce = (body: readonly ts.Statement[], name: string): number => {
+    const positions = body.flatMap((statement, index) => directCall(statement, name) ? [index] : []);
+    return positions.length === 1 ? positions[0] : -1;
+  };
+  const catchRejects = (handler: ts.CatchClause | undefined): boolean => {
+    const last = handler?.block.statements.at(-1);
+    if (!last || !ts.isExpressionStatement(last)) return false;
+    const exit = unwrap(last.expression);
+    return ts.isCallExpression(exit) && member(exit.expression, 'process', 'exit')
+      && exit.arguments.length === 1 && number(exit.arguments[0], 1)
+      && !handler?.block.statements.some(statement => ts.isReturnStatement(statement));
+  };
+  const normalTries: ts.TryStatement[] = [];
+  for (const statement of input.precommit.statements) {
+    if (ts.isTryStatement(statement)) normalTries.push(statement);
+    else if (ts.isIfStatement(statement) && statement.elseStatement && ts.isTryStatement(statement.elseStatement)) {
+      const condition = unwrap(statement.expression);
+      if (ts.isCallExpression(condition) && ts.isPropertyAccessExpression(condition.expression)
+        && member(condition.expression.expression, 'process', 'argv') && condition.expression.name.text === 'includes'
+        && condition.arguments.length === 1 && string(condition.arguments[0], '--selftest')) normalTries.push(statement.elseStatement);
+    }
+  }
+  if (normalTries.length !== 1 || normalTries[0].finallyBlock || !catchRejects(normalTries[0].catchClause)) return false;
+  const main = normalTries[0].tryBlock.statements;
+  if (main.some(statement => !ts.isExpressionStatement(statement))) return false;
+  const capabilityPosition = callsOnce(main, 'checkCapabilityContracts'), typePosition = callsOnce(main, 'runTypecheck');
+  if (capabilityPosition < 0 || typePosition < 0 || capabilityPosition >= typePosition) return false;
+  const commands = commandList(namedFunction(input.precommit, 'checkCapabilityContracts'));
+  const legacy = ['npm run test:capabilities', 'npm run test:mcp-capabilities', 'npm run test:configuration-grant', 'npm run test:configuration-operations'];
+  const delegated = legacy.slice(1);
+  if (!commands || input.scripts['test:mcp-capabilities'] !== 'tsx scripts/mcp-capability-selftest.ts') return false;
+  if (JSON.stringify(commands) === JSON.stringify(legacy)) return input.scripts['test:capabilities'] === 'tsx scripts/capability-contract-audit.ts';
+  if (JSON.stringify(commands) !== JSON.stringify(delegated)) return false;
+  const receiptPosition = callsOnce(main, 'checkActionReceiptCoverage');
+  if (receiptPosition < 0 || receiptPosition >= typePosition
+    || input.scripts['test:action-receipt-coverage'] !== 'tsx scripts/action-receipt-coverage-audit.ts --audit'
+    || input.scripts['pretest:action-receipt-coverage'] !== undefined || input.scripts['posttest:action-receipt-coverage'] !== undefined) return false;
+  const wrapper = namedFunction(input.precommit, 'checkActionReceiptCoverage');
+  if (!wrapper?.body || wrapper.parameters.length !== 0
+    || !checkedSpawn(wrapper.body.statements, 'npm run test:action-receipt-coverage', false)) return false;
+  if (normalizedRelative(input.receipt.fileName) !== 'scripts/action-receipt-coverage-audit.ts') return false;
+  const constant = (name: string): ts.Expression | undefined => {
+    const matches = input.receipt.statements.flatMap(statement => {
+      const value = declaration(statement);
+      return value && ts.isVariableStatement(statement) && (statement.declarationList.flags & ts.NodeFlags.Const)
+        && ts.isIdentifier(value.name) && value.name.text === name ? [value] : [];
+    });
+    return matches.length === 1 ? matches[0].initializer : undefined;
+  };
+  const resolvedPath = (name: string, suffix: string): boolean => {
+    const value = constant(name), resolved = value && call(value, 'resolve');
+    return !!resolved && resolved.arguments.length === 2
+      && identifier(resolved.arguments[0], 'SCRIPT_DIRECTORY') && string(resolved.arguments[1], suffix);
+  };
+  const directory = constant('SCRIPT_DIRECTORY');
+  if (!directory || unwrap(directory).getText(input.receipt).replace(/\s+/g, '') !== 'dirname(fileURLToPath(import.meta.url))'
+    || !resolvedPath('REPOSITORY_ROOT', '..') || !resolvedPath('CAPABILITY_AUDIT_PATH', 'capability-contract-audit.ts')
+    || !resolvedPath('DURABLE_AUDIT_PATH', 'durable-writer-audit.mjs')) return false;
+  const prerequisites = namedFunction(input.receipt, 'runActionReceiptCoveragePrerequisiteAudits');
+  if (!prerequisites?.body || prerequisites.parameters.length !== 0 || prerequisites.body.statements.length !== 4) return false;
+  const statements = prerequisites.body.statements, loader = declaration(statements[0]), acquire = statements[1];
+  if (!loader || !ts.isIdentifier(loader.name) || loader.name.text !== 'tsxCliPath' || loader.initializer
+    || !ts.isTryStatement(acquire) || acquire.finallyBlock || !acquire.catchClause
+    || acquire.tryBlock.statements.length !== 1 || acquire.catchClause.block.statements.length !== 1
+    || !ts.isThrowStatement(acquire.catchClause.block.statements[0])) return false;
+  const acquireStatement = acquire.tryBlock.statements[0];
+  const assignment = ts.isExpressionStatement(acquireStatement) ? binary(acquireStatement.expression, ts.SyntaxKind.EqualsToken) : undefined;
+  if (!assignment || !identifier(assignment.left, 'tsxCliPath')) return false;
+  const resolver = unwrap(assignment.right);
+  if (!ts.isCallExpression(resolver) || !ts.isPropertyAccessExpression(resolver.expression)
+    || resolver.expression.name.text !== 'resolve' || resolver.arguments.length !== 1 || !string(resolver.arguments[0], 'tsx/cli')) return false;
+  const factory = call(resolver.expression.expression, 'createRequire');
+  if (!factory || factory.arguments.length !== 1 || factory.arguments[0].getText(input.receipt) !== 'import.meta.url') return false;
+  for (const [index, label, targets] of [
+    [2, 'capability-contract-audit', ['tsxCliPath', 'CAPABILITY_AUDIT_PATH']],
+    [3, 'durable-writer-audit', ['DURABLE_AUDIT_PATH']],
+  ] as const) {
+    const audit = awaitedCall(statements[index], 'runPrerequisiteAudit');
+    if (!audit || audit.arguments.length !== 2 || !string(audit.arguments[0], label)) return false;
+    const args = unwrap(audit.arguments[1]);
+    if (!ts.isArrayLiteralExpression(args) || args.elements.length !== targets.length
+      || !args.elements.every((value, position) => identifier(value, targets[position]))) return false;
+  }
+  const prerequisiteOwner = namedFunction(input.receipt, 'runPrerequisiteAudit');
+  if (!prerequisiteOwner?.body || prerequisiteOwner.parameters.length !== 2
+    || !prerequisiteOwner.parameters.every((parameter, index) => ts.isIdentifier(parameter.name)
+      && parameter.name.text === ['label', 'args'][index] && !parameter.initializer && !parameter.dotDotDotToken && !parameter.questionToken)
+    || prerequisiteOwner.body.statements.length !== 1) return false;
+  const returned = prerequisiteOwner.body.statements[0];
+  const promise = ts.isReturnStatement(returned) && returned.expression ? unwrap(returned.expression) : undefined;
+  if (!promise || !ts.isNewExpression(promise) || !identifier(promise.expression, 'Promise') || promise.arguments?.length !== 1) return false;
+  const executor = promise.arguments[0];
+  if (!ts.isArrowFunction(executor) || !ts.isBlock(executor.body) || executor.parameters.length !== 2
+    || !ts.isIdentifier(executor.parameters[0].name) || !ts.isIdentifier(executor.parameters[1].name)
+    || executor.parameters[0].name.text !== 'accept' || executor.parameters[1].name.text !== 'reject'
+    || executor.parameters.some(parameter => parameter.initializer || parameter.dotDotDotToken || parameter.questionToken)
+    || executor.body.statements.length !== 1 || !ts.isExpressionStatement(executor.body.statements[0])) return false;
+  const accept = executor.parameters[0].name.text, reject = executor.parameters[1].name.text;
+  const execute = call(executor.body.statements[0].expression, 'execFile');
+  if (!execute || execute.arguments.length !== 4 || !member(execute.arguments[0], 'process', 'execPath')) return false;
+  const args = unwrap(execute.arguments[1]), options = unwrap(execute.arguments[2]), callback = execute.arguments[3];
+  const cwd = property(options, 'cwd'), shell = property(options, 'shell');
+  if (!ts.isArrayLiteralExpression(args) || args.elements.length !== 1 || !ts.isSpreadElement(args.elements[0])
+    || !identifier(args.elements[0].expression, 'args') || !cwd || !identifier(cwd, 'REPOSITORY_ROOT')
+    || !shell || shell.kind !== ts.SyntaxKind.FalseKeyword || !ts.isArrowFunction(callback)
+    || callback.parameters.length !== 1 || !ts.isIdentifier(callback.parameters[0].name) || !ts.isBlock(callback.body)) return false;
+  const errors = callback.body.statements, errorName = callback.parameters[0].name.text;
+  const success = errors[0];
+  if (!success || !ts.isIfStatement(success) || success.elseStatement || !ts.isBlock(success.thenStatement)
+    || success.thenStatement.statements.length !== 2) return false;
+  const clearError = binary(success.expression, ts.SyntaxKind.EqualsEqualsEqualsToken);
+  const accepted = directCall(success.thenStatement.statements[0], accept);
+  if (!clearError || !identifier(clearError.left, errorName) || unwrap(clearError.right).kind !== ts.SyntaxKind.NullKeyword
+    || !accepted || accepted.arguments.length !== 0 || !ts.isReturnStatement(success.thenStatement.statements[1])) return false;
+  const rejected = (statement: ts.Statement): boolean => {
+    const result = directCall(statement, reject);
+    return !!result && result.arguments.length === 1;
+  };
+  for (let index = 1; index < errors.length; index++) {
+    const statement = errors[index];
+    if (index === errors.length - 1) { if (!rejected(statement)) return false; }
+    else if (ts.isIfStatement(statement)) {
+      if (statement.elseStatement || !ts.isBlock(statement.thenStatement) || statement.thenStatement.statements.length !== 2
+        || !rejected(statement.thenStatement.statements[0]) || !ts.isReturnStatement(statement.thenStatement.statements[1])) return false;
+    } else {
+      const value = declaration(statement);
+      if (!value || !ts.isIdentifier(value.name) || !value.initializer
+        || !(value.name.text === 'execError' && identifier(value.initializer, errorName)
+          || value.name.text === 'code' && member(value.initializer, 'execError', 'code'))) return false;
+    }
+  }
+  if (errors.length < 2) return false;
+  const receiptMain = namedFunction(input.receipt, 'main');
+  if (!receiptMain?.body || receiptMain.parameters.length !== 1 || !ts.isIdentifier(receiptMain.parameters[0].name)
+    || receiptMain.parameters[0].name.text !== 'args' || receiptMain.parameters[0].initializer
+    || receiptMain.parameters[0].dotDotDotToken || receiptMain.parameters[0].questionToken) return false;
+  const singleMode = (statement: ts.IfStatement): string | undefined => {
+    const both = binary(statement.expression, ts.SyntaxKind.AmpersandAmpersandToken);
+    const length = both && binary(both.left, ts.SyntaxKind.EqualsEqualsEqualsToken);
+    const mode = both && binary(both.right, ts.SyntaxKind.EqualsEqualsEqualsToken);
+    const selected = mode && unwrap(mode.left);
+    if (!length || !member(length.left, 'args', 'length') || !number(length.right, 1)
+      || !mode || !selected || !ts.isElementAccessExpression(selected) || !identifier(selected.expression, 'args')
+      || !selected.argumentExpression || !number(selected.argumentExpression, 0)) return undefined;
+    const value = unwrap(mode.right);
+    return ts.isStringLiteralLike(value) ? value.text : undefined;
+  };
+  const auditBranches = receiptMain.body.statements.filter(ts.isIfStatement).filter(statement => singleMode(statement) === '--audit');
+  if (auditBranches.length !== 1 || !ts.isBlock(auditBranches[0].thenStatement)) return false;
+  // Earlier canonical other-mode branches are false for the exact ['--audit'] input.
+  // Unknown prefix statements may exit, mutate args or shadow the audited owners.
+  const prefix = receiptMain.body.statements.slice(0, receiptMain.body.statements.indexOf(auditBranches[0]));
+  if (prefix.some(statement => !ts.isIfStatement(statement) || statement.elseStatement
+    || singleMode(statement) === undefined || singleMode(statement) === '--audit')) return false;
+  const auditBody = auditBranches[0].thenStatement.statements;
+  const prerequisite = auditBody[0] && awaitedCall(auditBody[0], 'runActionReceiptCoveragePrerequisiteAudits');
+  if (auditBody.length !== 7 || !prerequisite || prerequisite.arguments.length !== 0
+    || !ts.isReturnStatement(auditBody[6]) || auditBody[6].expression) return false;
+  const build = declaration(auditBody[1]), candidate = declaration(auditBody[2]), promotion = declaration(auditBody[3]);
+  const inventory = build?.initializer && call(build.initializer, 'buildDiscoveredActionReceiptCoverageInventory');
+  if (!build || !ts.isIdentifier(build.name) || !inventory || inventory.arguments.length !== 0
+    || !candidate || !ts.isIdentifier(candidate.name) || !candidate.initializer || !promotion || !ts.isIdentifier(promotion.name) || !promotion.initializer) return false;
+  for (const [value, name] of [[candidate, 'runActionReceiptCoverageCandidateSelftests'], [promotion, 'runActionReceiptCoveragePromotionSelftest']] as const) {
+    const invoke = value.initializer && call(value.initializer, name);
+    if (!invoke || invoke.arguments.length !== 1 || !identifier(invoke.arguments[0], build.name.text)) return false;
+  }
+  const requireChecks = directCall(auditBody[4], 'requireCoverageSelftests');
+  if (!requireChecks || requireChecks.arguments.length !== 2 || !identifier(requireChecks.arguments[0], candidate.name.text)
+    || !identifier(requireChecks.arguments[1], promotion.name.text)) return false;
+  const output = ts.isExpressionStatement(auditBody[5]) ? unwrap(auditBody[5].expression) : undefined;
+  if (!output || !ts.isCallExpression(output) || !ts.isPropertyAccessExpression(output.expression)
+    || !member(output.expression.expression, 'process', 'stdout') || output.expression.name.text !== 'write'
+    || output.arguments.length !== 1) return false;
+  let serialized = unwrap(output.arguments[0]);
+  if (ts.isTemplateExpression(serialized)) {
+    if (serialized.head.text !== '' || serialized.templateSpans.length !== 1
+      || serialized.templateSpans[0].literal.text !== '\n') return false;
+    serialized = unwrap(serialized.templateSpans[0].expression);
+  }
+  if (!ts.isCallExpression(serialized) || !member(serialized.expression, 'JSON', 'stringify') || serialized.arguments.length !== 1) return false;
+  const manifestAudit = call(serialized.arguments[0], 'auditActionReceiptCoverageManifest');
+  if (!manifestAudit || manifestAudit.arguments.length !== 1 || !identifier(manifestAudit.arguments[0], build.name.text)) return false;
+  const entrypoints = input.receipt.statements.filter(ts.isIfStatement).filter(statement =>
+    statement.expression.getText(input.receipt).replace(/\s+/g, '') === 'process.argv[1]!==undefined&&pathToFileURL(resolve(process.argv[1])).href===import.meta.url');
+  if (entrypoints.length !== 1 || !ts.isBlock(entrypoints[0].thenStatement) || entrypoints[0].thenStatement.statements.length !== 1) return false;
+  const entry = entrypoints[0].thenStatement.statements[0];
+  if (!ts.isExpressionStatement(entry)) return false;
+  const voided = unwrap(entry.expression);
+  if (!ts.isVoidExpression(voided)) return false;
+  const failure = unwrap(voided.expression);
+  if (!ts.isCallExpression(failure) || !ts.isPropertyAccessExpression(failure.expression) || failure.expression.name.text !== 'catch'
+    || failure.arguments.length !== 1) return false;
+  const invokedMain = call(failure.expression.expression, 'main'), handler = failure.arguments[0];
+  if (!invokedMain || invokedMain.arguments.length !== 1
+    || invokedMain.arguments[0].getText(input.receipt).replace(/\s+/g, '') !== 'process.argv.slice(2)'
+    || !ts.isArrowFunction(handler) || !ts.isBlock(handler.body)) return false;
+  const last = handler.body.statements.at(-1);
+  const nonzero = last && ts.isExpressionStatement(last) ? binary(last.expression, ts.SyntaxKind.EqualsToken) : undefined;
+  return !!nonzero && member(nonzero.left, 'process', 'exitCode') && number(nonzero.right, 1)
+    && !handler.body.statements.some(statement => ts.isReturnStatement(statement));
+}
+
+/** Source fixtures only; this mode does not execute their commands or auditors. */
+function runPrecommitCapabilityGateSelftest() {
+  const checks: Array<{ name: string; pass: boolean; expected: boolean; actual: boolean }> = [];
+  const replaceOnce = (text: string, before: string, after: string): string => {
+    const index = text.indexOf(before);
+    if (index < 0 || text.indexOf(before, index + before.length) >= 0) throw new Error('PRECOMMIT_GATE_FIXTURE_NOT_UNIQUE');
+    return text.slice(0, index) + after + text.slice(index + before.length);
+  };
+  const legacyCommands = "'npm run test:capabilities', 'npm run test:mcp-capabilities', 'npm run test:configuration-grant', 'npm run test:configuration-operations'";
+  const delegatedCommands = "'npm run test:mcp-capabilities', 'npm run test:configuration-grant', 'npm run test:configuration-operations'";
+  const legacy = `
+const root = process.cwd();
+function checkCapabilityContracts() {
+  for (const command of [${legacyCommands}]) {
+    const result = spawnSync(command, { cwd: root, shell: true, stdio: 'inherit' });
+    if (result.error) throw result.error;
+    if (result.status !== 0) throw new Error('CAPABILITY_NONZERO');
+  }
+}
+function checkActionReceiptCoverage() {
+  const result = spawnSync('npm run test:action-receipt-coverage', { cwd: root, shell: true, stdio: 'inherit' });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error('RECEIPT_NONZERO');
+}
+function runTypecheck() {}
+try {
+  checkCapabilityContracts();
+  checkActionReceiptCoverage();
+  runTypecheck();
+} catch (error) { process.exit(1); }
+`;
+  const delegated = replaceOnce(legacy, legacyCommands, delegatedCommands);
+  const receipt = `
+const SCRIPT_DIRECTORY = dirname(fileURLToPath(import.meta.url));
+const REPOSITORY_ROOT = resolve(SCRIPT_DIRECTORY, '..');
+const CAPABILITY_AUDIT_PATH = resolve(SCRIPT_DIRECTORY, 'capability-contract-audit.ts');
+const DURABLE_AUDIT_PATH = resolve(SCRIPT_DIRECTORY, 'durable-writer-audit.mjs');
+function runPrerequisiteAudit(label, args) {
+  return new Promise((accept, reject) => {
+    execFile(process.execPath, [...args], { cwd: REPOSITORY_ROOT, shell: false, windowsHide: true }, error => {
+      if (error === null) { accept(); return; }
+      reject(new Error('PREREQUISITE_NONZERO'));
+    });
+  });
+}
+async function runActionReceiptCoveragePrerequisiteAudits() {
+  let tsxCliPath;
+  try { tsxCliPath = createRequire(import.meta.url).resolve('tsx/cli'); }
+  catch { throw new Error('TSX_CLI_UNAVAILABLE'); }
+  await runPrerequisiteAudit('capability-contract-audit', [tsxCliPath, CAPABILITY_AUDIT_PATH]);
+  await runPrerequisiteAudit('durable-writer-audit', [DURABLE_AUDIT_PATH]);
+}
+async function main(args) {
+  if (args.length === 1 && args[0] === '--audit') {
+    await runActionReceiptCoveragePrerequisiteAudits();
+    const buildResult = buildDiscoveredActionReceiptCoverageInventory();
+    const candidateSelftest = runActionReceiptCoverageCandidateSelftests(buildResult);
+    const promotionSelftest = runActionReceiptCoveragePromotionSelftest(buildResult);
+    requireCoverageSelftests(candidateSelftest, promotionSelftest);
+    process.stdout.write(JSON.stringify(auditActionReceiptCoverageManifest(buildResult)));
+    return;
+  }
+}
+if (process.argv[1] !== undefined && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+  void main(process.argv.slice(2)).catch(error => { console.error(error); process.exitCode = 1; });
+}
+`;
+  const scripts: Record<string, string> = {
+    'test:capabilities': 'tsx scripts/capability-contract-audit.ts',
+    'test:mcp-capabilities': 'tsx scripts/mcp-capability-selftest.ts',
+    'test:action-receipt-coverage': 'tsx scripts/action-receipt-coverage-audit.ts --audit',
+  };
+  const input = (precommit = delegated, receiptText = receipt, bindings = scripts): PrecommitCapabilityGateInput => ({
+    precommit: sourceFile('scripts/precommit-check.mjs', precommit),
+    receipt: sourceFile('scripts/action-receipt-coverage-audit.ts', receiptText), scripts: bindings,
+  });
+  const check = (name: string, fixture: PrecommitCapabilityGateInput, expected: boolean) => {
+    let actual = false;
+    try { actual = hasPrecommitCapabilityGate(fixture); } catch { /* An unverifiable source shape cannot grant coverage. */ }
+    checks.push({ name, pass: actual === expected, expected, actual });
+  };
+  const capabilityCall = "  await runPrerequisiteAudit('capability-contract-audit', [tsxCliPath, CAPABILITY_AUDIT_PATH]);";
+  const writerCall = "  await runPrerequisiteAudit('durable-writer-audit', [DURABLE_AUDIT_PATH]);";
+  const prerequisiteCall = '    await runActionReceiptCoveragePrerequisiteAudits();';
+  check('legacy_direct_default_audits_are_valid', input(legacy), true);
+  check('exact_unconditional_receipt_delegation_is_valid', input(), true);
+  check('missing_capability_invocation_rejected', input(replaceOnce(legacy, '  checkCapabilityContracts();', '')), false);
+  check('dead_capability_invocation_rejected', input(replaceOnce(legacy, '  checkCapabilityContracts();', '  if (false) checkCapabilityContracts();')), false);
+  check('conditional_capability_invocation_rejected', input(replaceOnce(legacy, '  checkCapabilityContracts();', '  if (enabled) checkCapabilityContracts();')), false);
+  check('capability_invocation_after_typecheck_rejected', input(replaceOnce(legacy,
+    '  checkCapabilityContracts();\n  checkActionReceiptCoverage();\n  runTypecheck();',
+    '  runTypecheck();\n  checkCapabilityContracts();\n  checkActionReceiptCoverage();')), false);
+  check('comment_only_direct_commands_rejected', input(replaceOnce(legacy,
+    `  for (const command of [${legacyCommands}]) {`,
+    "  // npm run test:capabilities; npm run test:mcp-capabilities; spawnSync\n  for (const command of ['echo no-audit']) {")), false);
+  check('missing_mcp_gate_rejected', input(replaceOnce(legacy, "'npm run test:mcp-capabilities', ", '')), false);
+  check('legacy_spawn_error_swallowed_rejected', input(replaceOnce(legacy,
+    "    if (result.error) throw result.error;\n    if (result.status !== 0) throw new Error('CAPABILITY_NONZERO');",
+    "    if (result.error) return;\n    if (result.status !== 0) throw new Error('CAPABILITY_NONZERO');")), false);
+  check('legacy_nonzero_swallowed_rejected', input(replaceOnce(legacy,
+    "if (result.status !== 0) throw new Error('CAPABILITY_NONZERO');", 'if (result.status !== 0) return;')), false);
+  check('missing_receipt_invocation_rejected', input(replaceOnce(delegated, '  checkActionReceiptCoverage();', '')), false);
+  check('dead_receipt_invocation_rejected', input(replaceOnce(delegated, '  checkActionReceiptCoverage();', '  if (false) checkActionReceiptCoverage();')), false);
+  check('conditional_receipt_invocation_rejected', input(replaceOnce(delegated, '  checkActionReceiptCoverage();', '  if (enabled) checkActionReceiptCoverage();')), false);
+  check('receipt_invocation_after_typecheck_rejected', input(replaceOnce(delegated,
+    '  checkActionReceiptCoverage();\n  runTypecheck();', '  runTypecheck();\n  checkActionReceiptCoverage();')), false);
+  check('wrong_receipt_command_rejected', input(replaceOnce(delegated,
+    "spawnSync('npm run test:action-receipt-coverage',", "spawnSync('npm run test:action-receipt-coverage:selftest',")), false);
+  check('wrong_receipt_package_entry_rejected', input(delegated, receipt,
+    { ...scripts, 'test:action-receipt-coverage': 'tsx scripts/other.ts --audit' }), false);
+  check('wrong_receipt_mode_rejected', input(delegated, receipt,
+    { ...scripts, 'test:action-receipt-coverage': 'tsx scripts/action-receipt-coverage-audit.ts --candidate-selftest' }), false);
+  check('receipt_package_shell_chain_rejected', input(delegated, receipt,
+    { ...scripts, 'test:action-receipt-coverage': scripts['test:action-receipt-coverage'] + ' && echo bypass' }), false);
+  check('receipt_spawn_error_swallowed_rejected', input(replaceOnce(delegated,
+    "  if (result.error) throw result.error;\n  if (result.status !== 0) throw new Error('RECEIPT_NONZERO');",
+    "  if (result.error) return;\n  if (result.status !== 0) throw new Error('RECEIPT_NONZERO');")), false);
+  check('receipt_nonzero_swallowed_rejected', input(replaceOnce(delegated,
+    "if (result.status !== 0) throw new Error('RECEIPT_NONZERO');", 'if (result.status !== 0) return;')), false);
+  check('receipt_prerequisites_missing_rejected', input(delegated, replaceOnce(receipt, prerequisiteCall, '')), false);
+  check('receipt_prerequisites_conditional_rejected', input(delegated,
+    replaceOnce(receipt, prerequisiteCall, '    if (enabled) await runActionReceiptCoveragePrerequisiteAudits();')), false);
+  check('receipt_prerequisites_dead_rejected', input(delegated,
+    replaceOnce(receipt, prerequisiteCall, '    return;\n' + prerequisiteCall)), false);
+  check('receipt_prerequisites_after_inventory_rejected', input(delegated, replaceOnce(receipt,
+    prerequisiteCall + '\n    const buildResult = buildDiscoveredActionReceiptCoverageInventory();',
+    '    const buildResult = buildDiscoveredActionReceiptCoverageInventory();\n' + prerequisiteCall)), false);
+  check('receipt_prerequisites_error_swallowed_rejected', input(delegated,
+    replaceOnce(receipt, prerequisiteCall, '    try { await runActionReceiptCoveragePrerequisiteAudits(); } catch {}')), false);
+  check('capability_prerequisite_missing_rejected', input(delegated, replaceOnce(receipt, capabilityCall, '')), false);
+  check('writer_prerequisite_missing_rejected', input(delegated, replaceOnce(receipt, writerCall, '')), false);
+  check('capability_prerequisite_conditional_rejected', input(delegated,
+    replaceOnce(receipt, capabilityCall, '  if (enabled) ' + capabilityCall.trim())), false);
+  check('writer_prerequisite_conditional_rejected', input(delegated,
+    replaceOnce(receipt, writerCall, '  if (enabled) ' + writerCall.trim())), false);
+  check('wrong_capability_auditor_rejected', input(delegated,
+    replaceOnce(receipt, "'capability-contract-audit.ts'", "'other-capability-audit.ts'")), false);
+  check('wrong_writer_auditor_rejected', input(delegated,
+    replaceOnce(receipt, "'durable-writer-audit.mjs'", "'other-writer-audit.mjs'")), false);
+  check('wrong_tsx_loader_rejected', input(delegated, replaceOnce(receipt, "resolve('tsx/cli')", "resolve('other/cli')")), false);
+  check('prerequisite_failure_swallowed_rejected', input(delegated,
+    replaceOnce(receipt, "reject(new Error('PREREQUISITE_NONZERO'));", 'accept();')), false);
+  check('prerequisite_wrong_working_directory_rejected', input(delegated,
+    replaceOnce(receipt, 'cwd: REPOSITORY_ROOT', 'cwd: otherRoot')), false);
+  check('comment_only_prerequisites_rejected', input(delegated,
+    replaceOnce(replaceOnce(receipt, capabilityCall, '// ' + capabilityCall.trim()), writerCall, '// ' + writerCall.trim())), false);
+  check('delegated_missing_mcp_gate_rejected', input(replaceOnce(delegated, "'npm run test:mcp-capabilities', ", '')), false);
+  check('receipt_cli_entry_missing_rejected', input(delegated, replaceOnce(receipt,
+    '  void main(process.argv.slice(2)).catch(error => { console.error(error); process.exitCode = 1; });', '')), false);
+  check('receipt_cli_failure_swallowed_rejected', input(delegated,
+    replaceOnce(receipt, 'console.error(error); process.exitCode = 1;', 'console.error(error);')), false);
+  check('receipt_cli_wrong_audit_branch_rejected', input(delegated,
+    replaceOnce(receipt, "args[0] === '--audit'", "args[0] === '--candidate-selftest'")), false);
+  check('receipt_prerequisites_not_awaited_rejected', input(delegated,
+    replaceOnce(receipt, prerequisiteCall, '    runActionReceiptCoveragePrerequisiteAudits();')), false);
+  check('capability_prerequisite_extra_mode_rejected', input(delegated,
+    replaceOnce(receipt, '[tsxCliPath, CAPABILITY_AUDIT_PATH]', "[tsxCliPath, CAPABILITY_AUDIT_PATH, '--json']")), false);
+  check('writer_default_replaced_by_selftest_rejected', input(delegated,
+    replaceOnce(receipt, '[DURABLE_AUDIT_PATH]', "[DURABLE_AUDIT_PATH, '--selftest']")), false);
+  check('prerequisite_auditors_after_return_rejected', input(delegated,
+    replaceOnce(receipt, capabilityCall, '  return;\n' + capabilityCall)), false);
+  check('receipt_main_unconditional_return_rejected', input(delegated,
+    replaceOnce(receipt, 'async function main(args) {\n', 'async function main(args) {\n  return;\n')), false);
+  check('prerequisite_runner_parameter_shadow_rejected', input(delegated,
+    replaceOnce(receipt, 'async function runActionReceiptCoveragePrerequisiteAudits() {',
+      'async function runActionReceiptCoveragePrerequisiteAudits(runPrerequisiteAudit = async (_label: string, _args: readonly string[]) => {}) {')), false);
+  const passed = checks.filter(check => check.pass).length;
+  return { pass: passed === checks.length, passed, total: checks.length, checks,
+    sourceFixturesOnly: true, realAuditExecution: false, filesystemMutation: false };
+}
+
 function enclosingFunctionName(node: ts.Node): string | undefined {
   let current: ts.Node | undefined = node.parent;
   while (current) {
@@ -7948,20 +8412,11 @@ function audit(manifestOverride?: RouteDispositionManifest): { errors: string[];
     errors.push('CLI package-script binding selftest failed exact runner/entrypoint/shell-chain controls');
   }
   const precommitSource = readSource('scripts/precommit-check.mjs').file;
-  let capabilityGateDeclared = false;
-  let capabilityGateInvoked = false;
-  const inspectPrecommit = (node: ts.Node): void => {
-    if (ts.isFunctionDeclaration(node) && node.name?.text === 'checkCapabilityContracts') {
-      const text = node.getText(precommitSource);
-      capabilityGateDeclared = text.includes('npm run test:capabilities') && text.includes('npm run test:mcp-capabilities') && text.includes('spawnSync');
-    }
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'checkCapabilityContracts') {
-      capabilityGateInvoked = true;
-    }
-    ts.forEachChild(node, inspectPrecommit);
-  };
-  inspectPrecommit(precommitSource);
-  if (!capabilityGateDeclared || !capabilityGateInvoked) errors.push('precommit does not declare and invoke both capability gates');
+  if (!hasPrecommitCapabilityGate({ precommit: precommitSource,
+    receipt: readSource('scripts/action-receipt-coverage-audit.ts').file, scripts: packageJson.scripts ?? {},
+  })) errors.push('precommit does not declare and invoke both capability gates');
+  const precommitGuardSelftest = runPrecommitCapabilityGateSelftest();
+  if (!precommitGuardSelftest.pass) errors.push(`precommit capability ownership guard selftest failed: ${precommitGuardSelftest.checks.filter(check => !check.pass).map(check => check.name).join(', ')}`);
   const qualityWorkflow = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'quality.yml'), 'utf8');
   if (!/^\s*run:\s*npm run test:capabilities\s*$/m.test(qualityWorkflow)) errors.push('GitHub quality workflow omits test:capabilities');
   if (!/^\s*run:\s*npm run test:mcp-capabilities\s*$/m.test(qualityWorkflow)) errors.push('GitHub quality workflow omits test:mcp-capabilities');
@@ -7974,6 +8429,16 @@ function audit(manifestOverride?: RouteDispositionManifest): { errors: string[];
     contractHash: contract.contractHash,
     mcpCount: mappings.length,
   };
+}
+
+if (process.argv.includes('--precommit-gate-selftest')) {
+  if (process.argv.length !== 3 || process.argv[2] !== '--precommit-gate-selftest') {
+    console.log(JSON.stringify({ pass: false, passed: 0, total: 1, checks: [{ name: 'exact_precommit_guard_selftest_arguments', pass: false }] }));
+    process.exit(1);
+  }
+  const result = runPrecommitCapabilityGateSelftest();
+  console.log(JSON.stringify(result));
+  process.exit(result.pass ? 0 : 1);
 }
 
 const initial = inventoryRoutes();

@@ -92,7 +92,7 @@ jobs:
       - name: Prove isolated E2E API request transport
         run: npm run test:e2e-request-transport
 
-      - name: Prove bounded native performance foundation
+      - name: Prove bounded native performance foundation and IPC owners
         run: npm run test:native-performance
 
       - name: Build production bundle
@@ -106,6 +106,12 @@ jobs:
 
       - name: Stage packaged application
         run: npm run stage-app --prefix vscode-extension
+
+      - name: Prove staged probe exact-child cleanup
+        run: node --max-old-space-size=512 vscode-extension/scripts/probe-staged-app.mjs --cleanup-selftest
+
+      - name: Prove precommit orchestration failure propagation
+        run: node --max-old-space-size=512 scripts/precommit-check.mjs --selftest
 
       - name: Probe staged packaged sidecar
         run: npm run probe-app --prefix vscode-extension
