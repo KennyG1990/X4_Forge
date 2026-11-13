@@ -3,7 +3,10 @@
   <cues>
     <cue name="Collection11C1112_Phase1_OnLoad" namespace="this">
       <conditions>
-        <event_game_loaded />
+        <check_any>
+          <event_game_started />
+          <event_game_loaded />
+        </check_any>
       </conditions>
       <actions>
         <debug_text text="'FORGE_COLLECTION11_C1112_PHASE1_BEGIN'" filter="general" />

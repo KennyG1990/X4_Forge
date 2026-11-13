@@ -1,14 +1,16 @@
 # Collection law c1112 — phase 1 source
 
-Status: static checks VERIFIED; game behavior UNTESTED. Six XML files parse, the observer validates against the actual game9.00 libraries/md.xsd plus common.xsd, and owned manifest/version/dependency checks pass. DTD and unknown-MD-action negatives reject. SHA256.json and BATCH.json bind the exact source. This is not Forge native-deploy or engine-collection proof.
+Status: schema/scenario static checks VERIFIED; game behavior PENDING. Full pinned MD/common XSD validation and 15 syntax/manifest/hash/scenario controls pass, including DTD and unknown-action rejection. Both failed lxml compilation attempts remain failed evidence; full-XSD proof uses the existing .NET validator, not Forge's indexed subset. The six payloads and current observer must pass syntax, full game9.00 MD/common XSD, manifest and explicit trigger-scenario checks before handoff. SHA256.json binds the current six files. Install only with the corrected private hash-bound handoff posted on the Agent Board. The old source-folder BATCH.json is intentionally immutable and superseded; its old manifest digest must refuse installation. This is not Forge native-deploy or engine-collection proof.
 
 Six XML files in three extension folders. Dependency order is `forge_collection11_c1112_a` → `forge_collection11_c1112_b` → `forge_collection11_c1112_c`. A and B each supply a full `libraries/wares.xml`; C contains only its manifest and the unique `md/forge_collection11_c1112.xml`. Nothing patches vanilla `md/setup.xml`.
 
-The content manifests follow the existing `buildContentXml` vocabulary (`version=100`, `save=0`, `enabled=1`). MD uses the vanilla standalone script shape, `event_game_loaded`, lookup-list iteration and debug formatting. Ware attributes/prices are corpus-grounded; the game has no applicable wares-content XSD, so this is not a ware-XSD validation claim. Existing TextDB IDs `{20201,701}` and `{20201,702}` supply labels only.
+The content manifests follow the existing `buildContentXml` vocabulary (`version=100`, `save=0`, `enabled=1`). MD uses the vanilla standalone script shape with one cue and `check_any` containing `event_game_started` and `event_game_loaded`, lookup-list iteration and debug formatting. The loaded alternative grants no permission to test a campaign or save/load; the prescribed run remains a cold disposable new game. Ware attributes/prices are corpus-grounded; the game has no applicable wares-content XSD, so this is not a ware-XSD validation claim. Existing TextDB IDs `{20201,701}` and `{20201,702}` supply labels only.
 
 The observer iterates `lookup.ware.list`, compares known entries' `.id`, increments cue-local counters and reports integer `.volume`. It never directly looks up a missing ware, uses `ware.exists`, emits a success verdict, creates objects, grants inventory, creates production/offers or changes an existing ware. Adding the fixture changes the test game's ware registry; use only a disposable new game and never save a campaign with it.
 
 ## Raw observations
+
+Use the fresh cold/new-game log boundary through 120 seconds after player control. Accept a complete fresh sequence already emitted before player control. Require exactly one BEGIN, one COUNTS and one END with every intervening OBS; duplicate, partial or timed-out sequences and fixture load errors are FIX/unavailable and establish no collection law. Do not reset or rearm the cue to hide duplicates.
 
 Capture one fresh, complete sequence from `FORGE_COLLECTION11_C1112_PHASE1_BEGIN` to `FORGE_COLLECTION11_C1112_PHASE1_END`, including every `FORGE_COLLECTION11_C1112_PHASE1_OBS` and the single `FORGE_COLLECTION11_C1112_PHASE1_COUNTS` line.
 
@@ -24,6 +26,8 @@ Capture one fresh, complete sequence from `FORGE_COLLECTION11_C1112_PHASE1_BEGIN
 | `forge_collection11_c1112_duplicate` | A: 14; B: 24 | Count and every emitted volume. No winner or duplicate-collapse rule is assumed. |
 
 Full-collection coexistence would leave the six unique A/B records observable together. This expectation is a hypothesis to test. Missing BEGIN/COUNTS/END, a diagnostic storm, missing controls or unexpected values require the raw failure report, not an inferred success or replacement-law verdict.
+
+Earlier handoff: Claude returned FIX/NOT RUN without installing or restarting X4. The loaded-only observer was schema-legal but could not observe the required new-game event. This revision changes only that trigger; no game result or collection law is inferred.
 
 ## Operator boundary
 
