@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, withClosingApiRequest, fetchRouteWithClosingConnection } from './request-transport';
 import { buildTemplateWorkspace } from '../../src/lib/modTemplates';
 import { seedServerWorkspace } from './ephemeral';
 
@@ -125,7 +125,7 @@ test('Agent Keys guides an exact contract-only key and proves its effective subs
     const keys = await keysResponse.json();
     return keys.keys.find((candidate: { label?: string }) => candidate.label === label);
   }, label);
-  const effectiveResponse = await page.request.get('/api/agent/capabilities/effective', {
+  const effectiveResponse = await withClosingApiRequest(page.request).get('/api/agent/capabilities/effective', {
     headers: {
       Authorization: `Bearer ${token}`,
       'x-workspace-id': row.workspaceId,
@@ -148,7 +148,7 @@ test('Agent Keys guides an exact contract-only key and proves its effective subs
     ['POST', '/api/agent/project/xml-references', 'project.xml.references@1',
       { maxDepth: 0, maxNodes: 1, maxEdges: 1, includeSource: false }],
   ] as const) {
-    const denied = await page.request.fetch(path, {
+    const denied = await withClosingApiRequest(page.request).fetch(path, {
       method,
       headers: {
         Authorization: `Bearer ${token}`,
@@ -179,7 +179,7 @@ test('Agent Keys revokes a mismatched mint instead of exposing a broader key', a
       await route.continue();
       return;
     }
-    const original = await route.fetch();
+    const original = await fetchRouteWithClosingConnection(route);
     const body = await original.json();
     mintedToken = String(body.token || '');
     mintedId = String(body.record?.id || '');

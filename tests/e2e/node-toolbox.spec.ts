@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './request-transport';
 import { seedServerWorkspace } from './ephemeral';
 
 const workspace = {

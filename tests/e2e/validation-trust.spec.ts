@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, withClosingApiRequest } from './request-transport';
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -274,7 +274,7 @@ test('ware diagnostics render actual validation results in the selected product 
       if (E2E_RUNTIME.mode === 'compiled') {
         const src = await page.locator('script[type="module"][src]').first().getAttribute('src');
         expect(src).toMatch(/^\/assets\/[a-zA-Z0-9_-]+\.js$/);
-        const asset = await page.request.get(src!);
+        const asset = await withClosingApiRequest(page.request).get(src!);
         expect(asset.status()).toBe(200);
         expect(await asset.body()).toEqual(fs.readFileSync(path.join(process.cwd(), 'dist', src!.slice(1))));
         expect(await page.content()).not.toContain('/@vite/client');

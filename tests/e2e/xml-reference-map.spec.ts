@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext, type Page, type Request as BrowserRequest, type Response as BrowserResponse, type Route, type TestInfo } from '@playwright/test';
+import { expect, test, withClosingApiRequest, fetchRouteWithClosingConnection, type APIRequestContext, type Page, type Request as BrowserRequest, type Response as BrowserResponse, type Route, type TestInfo } from './request-transport';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -317,7 +317,7 @@ async function renderedRuntime(page: Page, evidence: unknown[]) {
   expect(url.origin).toBe(origin);
   expect(url.username).toBe(''); expect(url.password).toBe('');
   expect(url.search).toBe(''); expect(url.hash).toBe('');
-  const response = await page.request.get(url.href);
+  const response = await withClosingApiRequest(page.request).get(url.href);
   expect(response.status()).toBe(200);
   expect(response.url()).toBe(url.href);
   const bytes = await response.body();
@@ -479,7 +479,7 @@ async function delayNextRealMap(page: Page): Promise<DelayedMap> {
         original = route.request();
         // Keep this original paused: removing its current handler would send it.
         counts.upstreamFetches++;
-        const upstream = await route.fetch({ timeout: 30_000 });
+        const upstream = await fetchRouteWithClosingConnection(route, { timeout: 30_000 });
         expect(upstream.status(), await upstream.text()).toBe(200);
         const bytes = await upstream.body();
         const result = JSON.parse(bytes.toString('utf8')) as XmlReferenceMapResult;

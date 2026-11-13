@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './request-transport';
 import { buildTemplateWorkspace } from '../../src/lib/modTemplates';
 import type { RuntimeDebuggerPayload } from '../../src/lib/runtimeDebuggerView';
 import type { ModWorkspace } from '../../src/types';

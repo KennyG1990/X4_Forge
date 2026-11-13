@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './request-transport';
 import { buildTemplateWorkspace } from '../../src/lib/modTemplates';
 import { DEFAULT_RELEASE_PREFERENCES, RELEASE_PREFERENCES_KEY, type ReleasePreferences } from '../../src/lib/releasePreferences';
 import { seedServerWorkspace } from './ephemeral';

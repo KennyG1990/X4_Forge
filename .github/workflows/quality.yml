@@ -89,6 +89,9 @@ jobs:
       - name: Prove fail-closed E2E flake policy
         run: npm run test:e2e-policy
 
+      - name: Prove isolated E2E API request transport
+        run: npm run test:e2e-request-transport
+
       - name: Build production bundle
         run: npm run build
 

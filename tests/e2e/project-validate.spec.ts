@@ -5,7 +5,7 @@
  * against the dev server (reuseExistingServer) — the exact acceptance checks that
  * were verified by hand in-session, pinned so they can't silently regress.
  */
-import { expect, test, type APIRequestContext } from '@playwright/test';
+import { expect, test, type APIRequestContext } from './request-transport';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';

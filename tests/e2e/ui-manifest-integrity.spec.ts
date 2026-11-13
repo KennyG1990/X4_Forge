@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './request-transport';
 import { E2E_API_ORIGIN } from '../../playwright.config';
 import { seedServerWorkspace } from './ephemeral';
 

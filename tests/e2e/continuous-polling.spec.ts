@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, fetchRouteWithClosingConnection } from './request-transport';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { buildTemplateWorkspace } from '../../src/lib/modTemplates';
@@ -447,7 +447,7 @@ test('malformed 200 autosave receipt recovers through CAS readback instead of st
     }
     workspacePosts += 1;
     if (workspacePosts === 1) {
-      const committed = await route.fetch();
+      const committed = await fetchRouteWithClosingConnection(route);
       expect(committed.ok()).toBe(true);
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ success: true }) });
       return;
@@ -947,7 +947,7 @@ test('AgentBridge pending snapshot follows a version-only commit without another
       await route.fallback();
       return;
     }
-    const response = await route.fetch();
+    const response = await fetchRouteWithClosingConnection(route);
     const body = await response.json();
     body.workspaces = Array.isArray(body.workspaces)
       ? body.workspaces.map((row: { workspaceId?: string }) => row.workspaceId === versionOnly.workspaceId

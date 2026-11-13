@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, fetchRouteWithClosingConnection } from './request-transport';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -208,7 +208,7 @@ test('Load Mod Project preserves manual paths, refreshes previews and rejects st
     // Delay actual API responses, preserving their bytes and status. No fabricated
     // discovery, preview or import result can satisfy this regression.
     await page.route('**/api/fs/list?**', async route => {
-      const response = await route.fetch();
+      const response = await fetchRouteWithClosingConnection(route);
       pendingScans += 1;
       await scanGate;
       await route.fulfill({ response });
@@ -217,7 +217,7 @@ test('Load Mod Project preserves manual paths, refreshes previews and rejects st
     await page.route('**/api/agent/round-trip-check', async route => {
       const holdForRefresh = holdNextRefreshPreview;
       if (holdForRefresh) holdNextRefreshPreview = false;
-      const response = await route.fetch();
+      const response = await fetchRouteWithClosingConnection(route);
       pendingPreviews += 1;
       await previewGate;
       if (holdForRefresh) {

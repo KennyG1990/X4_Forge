@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './request-transport';
 import { buildTemplateWorkspace } from '../../src/lib/modTemplates';
 import { workspaceContentHash, workspaceSnapshotHash } from '../../src/lib/workspaceIdentity';
 import { sanitizeWorkspace } from '../../src/types';

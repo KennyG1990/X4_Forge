@@ -158,6 +158,13 @@ function checkE2eViteLifecycle() {
   if (result.status !== 0) throw new Error(`e2e Vite lifecycle selftest failed with exit ${result.status ?? "unknown"}`);
 }
 
+function checkE2eRequestTransport() {
+  console.log("[precommit] E2E API request transport selftest");
+  const result = spawnSync("npm run test:e2e-request-transport", { cwd: root, shell: true, stdio: "inherit" });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`E2E request transport selftest failed with exit ${result.status ?? "unknown"}`);
+}
+
 function checkBackendRecovery() {
   console.log("[precommit] extension backend recovery selftest");
   const result = spawnSync("npm run test:extension-backend-recovery", { cwd: root, shell: true, stdio: "inherit" });
@@ -233,6 +240,7 @@ try {
   checkE2eRuntimeBootstrap();
   checkE2eVerdict();
   checkE2eViteLifecycle();
+  checkE2eRequestTransport();
   checkBackendRecovery();
   checkRuntimeStaging();
   checkProductCopy();

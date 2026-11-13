@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './request-transport';
 import { buildTemplateWorkspace } from '../../src/lib/modTemplates';
 import { seedServerWorkspace } from './ephemeral';
 import { E2E_API_ORIGIN, E2E_TOKEN } from '../../playwright.config';

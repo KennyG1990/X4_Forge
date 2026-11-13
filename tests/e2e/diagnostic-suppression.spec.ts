@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page } from './request-transport';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
