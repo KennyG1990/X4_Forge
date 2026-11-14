@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 
-import { superviseSpawnedE2eProcess } from './e2e-runner-lifecycle.mjs';
+import { createE2eProcessHandleLeaseOwner, superviseSpawnedE2eProcess } from './e2e-runner-lifecycle.mjs';
 import { sampleSpawnedProcessOwnership } from './e2e-process-ownership-sampler.mjs';
 
 const ROOT_PID = 7401;
@@ -1547,6 +1547,273 @@ async function runControlFailureDiagnosticsCase() {
   assertLifecycleCleanup(fixture, []);
 }
 
+function makeHandleLeaseFixture(overrides = {}) {
+  const actions = [];
+  const handles = [];
+  const owner = createE2eProcessHandleLeaseOwner({
+    openProcess(pid) {
+      actions.push(['open', pid]);
+      const handle = { pid, close() { actions.push(['unexpected-close']); } };
+      handles.push(handle);
+      return handle;
+    },
+    retireChild(child, code) { actions.push(['retire', child, code]); },
+    onFailure(code) { actions.push(['failure', code]); },
+    ...overrides,
+  });
+  return { owner, actions, handles };
+}
+
+function runHandleLeaseConfigurationCase() {
+  for (const key of ['openProcess', 'retireChild', 'onFailure']) {
+    assert.throws(() => makeHandleLeaseFixture({ [key]: null }), TypeError);
+  }
+  for (const limit of [0, -1, 4097, 1.5, NaN, Infinity, '1']) {
+    assert.throws(() => makeHandleLeaseFixture({ limit }), TypeError);
+  }
+  const fixture = makeHandleLeaseFixture();
+  assertExactRecordKeys(fixture.owner, ['spawn', 'snapshot']);
+  assert.equal(Object.isFrozen(fixture.owner), true);
+  const snapshot = fixture.owner.snapshot();
+  assertExactRecordKeys(snapshot, ['limit', 'retained', 'inFlight', 'spawnCalls', 'spawnThrows',
+    'acquisitionAttempts', 'noPidCalls', 'idempotentReuses', 'failed', 'failureCode',
+    'retirementAttempts', 'retirementFailed', 'reportingFailed', 'refusedCalls']);
+  assert.equal(Object.isFrozen(snapshot), true);
+  assert.equal(snapshot.limit, 4096);
+  assert.equal(snapshot.retained, 0);
+  assert.equal(snapshot.failed, false);
+  assert.equal(snapshot.failureCode, null);
+  assert.throws(() => { snapshot.retained = 100; }, TypeError);
+  assert.deepEqual(fixture.actions, []);
+}
+
+async function runHandleLeaseTimingAndCallCase() {
+  const child = { pid: undefined };
+  const argument = { original: true };
+  const result = { rawResult: true };
+  const order = [];
+  let yielded = false;
+  const fixture = makeHandleLeaseFixture({ openProcess(pid) {
+    order.push('open');
+    assert.equal(pid, 8101);
+    assert.equal(yielded, false);
+    assert.equal(fixture.owner.snapshot().inFlight, 1);
+    return { native: true };
+  } });
+  const actual = fixture.owner.spawn(function (...args) {
+    order.push('raw');
+    assert.strictEqual(this, child);
+    assert.strictEqual(args[0], argument);
+    assert.equal(args[1], undefined);
+    assert.equal(args[2], 'literal');
+    assert.equal(args.length, 3);
+    this.pid = 8101;
+    queueMicrotask(() => { yielded = true; });
+    return result;
+  }, child, [argument, undefined, 'literal']);
+  order.push('returned');
+  assert.strictEqual(actual, result);
+  assert.deepEqual(order, ['raw', 'open', 'returned']);
+  assert.equal(yielded, false);
+  assert.equal(fixture.owner.snapshot().retained, 1);
+  assert.equal(fixture.owner.snapshot().inFlight, 0);
+  await Promise.resolve();
+  assert.equal(yielded, true);
+}
+
+function runHandleLeaseOriginalFailureCase() {
+  const fixture = makeHandleLeaseFixture({ limit: 1 });
+  const original = new Error('CONTROLLED_ORIGINAL_SPAWN_ERROR');
+  assert.throws(() => fixture.owner.spawn(function () { throw original; }, {}, []), error => error === original);
+  assert.equal(fixture.owner.snapshot().spawnThrows, 1);
+  assert.equal(fixture.owner.snapshot().failed, false);
+  assert.equal(fixture.owner.snapshot().inFlight, 0);
+  for (const pid of [undefined, null]) {
+    const child = { pid };
+    const result = { noPid: pid };
+    assert.strictEqual(fixture.owner.spawn(function () { return result; }, child, []), result);
+  }
+  assert.deepEqual(fixture.actions, []);
+  assert.equal(fixture.owner.snapshot().noPidCalls, 2);
+  assert.equal(fixture.owner.snapshot().acquisitionAttempts, 0);
+  assert.equal(fixture.owner.spawn(function () { this.pid = 8102; return 0; }, {}, []), 0);
+  assert.equal(fixture.owner.snapshot().retained, 1);
+}
+
+function runHandleLeaseCreatedThenThrowCase() {
+  for (const unreadablePid of [false, true]) {
+    const child = {};
+    const original = new Error('CONTROLLED_CREATED_CHILD_THROW');
+    let retired;
+    let reported;
+    const fixture = makeHandleLeaseFixture({
+      retireChild(actual) { retired = actual; }, onFailure(code) { reported = code; },
+    });
+    assert.throws(() => fixture.owner.spawn(function () {
+      if (unreadablePid) Object.defineProperty(this, 'pid', { get() { throw new Error('CONTROLLED_PID_READ'); } });
+      else this.pid = 8111;
+      throw original;
+    }, child, []), error => error === original);
+    assert.strictEqual(retired, child);
+    assert.equal(reported, 'e2e-handle-lease-spawn-threw');
+    assert.equal(fixture.owner.snapshot().failed, true);
+    assert.equal(fixture.owner.snapshot().retirementAttempts, 1);
+    assert.equal(fixture.owner.snapshot().retained, 0);
+    assert.equal(fixture.owner.snapshot().acquisitionAttempts, 0);
+    assert.equal(fixture.owner.snapshot().inFlight, 0);
+  }
+  const fixture = makeHandleLeaseFixture({ limit: 1 });
+  const child = { pid: 8112 };
+  fixture.owner.spawn(() => 0, child, []);
+  const original = new Error('CONTROLLED_ALREADY_LEASED_THROW');
+  assert.throws(() => fixture.owner.spawn(() => { throw original; }, child, []), error => error === original);
+  assert.equal(fixture.owner.snapshot().failed, false);
+  assert.equal(fixture.owner.snapshot().retained, 1);
+  assert.equal(fixture.owner.snapshot().retirementAttempts, 0);
+  assert.deepEqual(fixture.actions, [['open', 8112]]);
+}
+
+function runHandleLeaseRetentionAndIdempotenceCase() {
+  const fixture = makeHandleLeaseFixture({ limit: 2 });
+  const child = new EventEmitter();
+  child.pid = 8103;
+  const before = fixture.owner.snapshot();
+  const result = {};
+  assert.strictEqual(fixture.owner.spawn(() => result, child, []), result);
+  child.exitCode = 0;
+  child._handle = null;
+  child.emit('exit', 0, null);
+  child.emit('close', 0, null);
+  assert.strictEqual(fixture.owner.spawn(() => undefined, child, []), undefined);
+  assert.equal(child.listenerCount('exit'), 0);
+  assert.equal(child.listenerCount('close'), 0);
+  assert.equal(fixture.owner.snapshot().retained, 1);
+  assert.equal(fixture.owner.snapshot().acquisitionAttempts, 1);
+  assert.equal(fixture.owner.snapshot().idempotentReuses, 1);
+  assert.equal(before.retained, 0, 'old immutable snapshots do not change');
+  const distinctChild = { pid: child.pid };
+  fixture.owner.spawn(() => null, distinctChild, []);
+  assert.equal(fixture.owner.snapshot().retained, 2, 'leases are keyed by actual child, not a reusable PID');
+  assert.equal(fixture.handles.length, 2);
+  assert.deepEqual(fixture.actions, [['open', 8103], ['open', 8103]]);
+}
+
+function runHandleLeaseChangedChildCase() {
+  const fixture = makeHandleLeaseFixture({ limit: 1 });
+  const child = { pid: 8104 };
+  fixture.owner.spawn(() => 0, child, []);
+  assert.throws(() => fixture.owner.spawn(function () { this.pid = 8105; return 0; }, child, []),
+    { code: 'e2e-handle-lease-child-changed' });
+  assert.equal(fixture.owner.snapshot().retained, 1);
+  assert.equal(fixture.owner.snapshot().acquisitionAttempts, 1);
+  assert.deepEqual(fixture.actions.slice(1), [['retire', child, 'e2e-handle-lease-child-changed'],
+    ['failure', 'e2e-handle-lease-child-changed']]);
+}
+
+function runHandleLeaseCapacityCase() {
+  const fixture = makeHandleLeaseFixture({ limit: 1 });
+  const child = { pid: 8106 };
+  fixture.owner.spawn(() => 0, child, []);
+  fixture.owner.spawn(() => 1, child, []);
+  let rawCalls = 0;
+  assert.throws(() => fixture.owner.spawn(() => { rawCalls += 1; }, {}, []),
+    { code: 'e2e-handle-lease-limit' });
+  assert.equal(rawCalls, 0, 'capacity is refused before raw spawn');
+  assert.equal(fixture.owner.snapshot().retained, 1);
+  assert.equal(fixture.owner.snapshot().spawnCalls, 2);
+  assert.equal(fixture.owner.snapshot().retirementAttempts, 0);
+  assert.deepEqual(fixture.actions, [['open', 8106], ['failure', 'e2e-handle-lease-limit']]);
+}
+
+function runHandleLeaseAcquisitionRefusalCase() {
+  const invalidHandles = [null, undefined, false, 0, 0n, -1, -1n, NaN,
+    Promise.resolve({ native: true }), { then() {} }, new Proxy({}, {})];
+  for (const mode of [...invalidHandles.map(handle => () => handle), () => { throw new Error('PRIVATE_NATIVE_ERROR'); }]) {
+    const child = { pid: undefined, originalOwnership: {} };
+    const order = [];
+    const fixture = makeHandleLeaseFixture({ openProcess(pid) {
+      assert.equal(pid, 8107); order.push('open'); return mode();
+    }, retireChild(actual, code) {
+      assert.strictEqual(actual, child);
+      assert.equal(code, 'e2e-handle-lease-acquire-failed');
+      assert.ok(actual.originalOwnership); order.push('retire');
+    }, onFailure(code) { order.push(code); } });
+    assert.throws(() => fixture.owner.spawn(function () { this.pid = 8107; return 'must-not-return'; }, child, []),
+      { code: 'e2e-handle-lease-acquire-failed', message: 'e2e-handle-lease-acquire-failed' });
+    assert.deepEqual(order, ['open', 'retire', 'e2e-handle-lease-acquire-failed']);
+    assert.equal(fixture.owner.snapshot().failed, true);
+    assert.equal(fixture.owner.snapshot().retained, 0);
+    assert.equal(fixture.owner.snapshot().retirementAttempts, 1);
+    assert.equal(fixture.owner.snapshot().inFlight, 0);
+  }
+}
+
+function runHandleLeaseFailureLatchCase() {
+  for (const retirementThrows of [false, true]) for (const reportingThrows of [false, true]) {
+    const child = { pid: 8108 };
+    let retired = 0;
+    let reports = 0;
+    let rawCalls = 0;
+    const fixture = makeHandleLeaseFixture({ openProcess: () => null,
+      retireChild(actual) { assert.strictEqual(actual, child); retired += 1; if (retirementThrows) throw new Error('PRIVATE_RETIRE_ERROR'); },
+      onFailure(code) { assert.equal(code, 'e2e-handle-lease-acquire-failed'); reports += 1; if (reportingThrows) throw new Error('PRIVATE_REPORT_ERROR'); } });
+    assert.throws(() => fixture.owner.spawn(() => { rawCalls += 1; return 0; }, child, []),
+      { code: 'e2e-handle-lease-acquire-failed' });
+    assert.throws(() => fixture.owner.spawn(() => { rawCalls += 1; return 0; }, child, []),
+      { code: 'e2e-handle-lease-acquire-failed' });
+    assert.equal(rawCalls, 1);
+    assert.equal(retired, 1);
+    assert.equal(reports, 1, 'mandatory failure callback is attempted even after retirement throws');
+    assert.equal(fixture.owner.snapshot().failed, true);
+    assert.equal(fixture.owner.snapshot().retirementFailed, retirementThrows);
+    assert.equal(fixture.owner.snapshot().reportingFailed, reportingThrows);
+    assert.equal(fixture.owner.snapshot().refusedCalls, 1);
+    assert.equal(fixture.owner.snapshot().inFlight, 0);
+  }
+}
+
+function runHandleLeaseReentrantCapacityCase() {
+  const child = { pid: 8109 };
+  const other = { pid: 8110 };
+  let otherSpawns = 0;
+  let reports = 0;
+  const retired = [];
+  let owner;
+  owner = createE2eProcessHandleLeaseOwner({ limit: 1,
+    openProcess() {
+      assert.throws(() => owner.spawn(() => { otherSpawns += 1; }, other, []), { code: 'e2e-handle-lease-limit' });
+      return { native: true };
+    }, retireChild(actual) { retired.push(actual); }, onFailure() { reports += 1; } });
+  assert.throws(() => owner.spawn(() => 0, child, []), { code: 'e2e-handle-lease-limit' });
+  assert.equal(otherSpawns, 0);
+  assert.equal(reports, 1);
+  assert.deepEqual(retired, [child]);
+  assert.equal(owner.snapshot().retained, 1, 'a returned native HANDLE remains retained even after reentrant failure');
+  assert.equal(owner.snapshot().inFlight, 0);
+  assert.equal(owner.snapshot().failed, true);
+}
+
+function runHandleLeaseInvalidCallCase() {
+  for (const args of [null, {}, 'not-an-array']) {
+    const fixture = makeHandleLeaseFixture();
+    let called = false;
+    assert.throws(() => fixture.owner.spawn(() => { called = true; }, {}, args),
+      { code: 'e2e-handle-lease-invalid-spawn' });
+    assert.equal(called, false);
+    assert.equal(fixture.owner.snapshot().spawnCalls, 0);
+    assert.deepEqual(fixture.actions, [['failure', 'e2e-handle-lease-invalid-spawn']]);
+  }
+  const fixture = makeHandleLeaseFixture();
+  const child = {};
+  assert.throws(() => fixture.owner.spawn(function () {
+    return fixture.owner.spawn(() => 0, child, []);
+  }, child, []), { code: 'e2e-handle-lease-reentrant-spawn' });
+  assert.equal(fixture.owner.snapshot().failed, true);
+  assert.equal(fixture.owner.snapshot().inFlight, 0);
+  assert.deepEqual(fixture.actions, [['failure', 'e2e-handle-lease-reentrant-spawn'],
+    ['retire', child, 'e2e-handle-lease-reentrant-spawn']]);
+}
+
 const cases = [
   ['invalid input', runInvalidInputCase],
   ['normal child close/tree gone', runNormalChildCloseCase],
@@ -1565,6 +1832,17 @@ const cases = [
   ['composed missing and ambiguous identity remains incomplete', runComposedMissingAndAmbiguousIdentityCase],
   ['diagnostic fallback and logger failure preserve verdicts', runDiagnosticFallbackAndLoggerFailureCase],
   ['control failure diagnostics preserve timer verdict', runControlFailureDiagnosticsCase],
+  ['HANDLE lease configuration and immutable metrics', runHandleLeaseConfigurationCase],
+  ['HANDLE lease synchronous acquisition and original call contract', runHandleLeaseTimingAndCallCase],
+  ['HANDLE lease ordinary throw and no-PID behavior', runHandleLeaseOriginalFailureCase],
+  ['HANDLE lease created-child throws retain exact receiver and original error', runHandleLeaseCreatedThenThrowCase],
+  ['HANDLE lease retains exited/closed children and deduplicates actual child', runHandleLeaseRetentionAndIdempotenceCase],
+  ['HANDLE lease refuses changed child identity', runHandleLeaseChangedChildCase],
+  ['HANDLE lease refuses capacity before spawning', runHandleLeaseCapacityCase],
+  ['HANDLE lease acquisition refusal retires exact child', runHandleLeaseAcquisitionRefusalCase],
+  ['HANDLE lease retirement/report failures latch permanently', runHandleLeaseFailureLatchCase],
+  ['HANDLE lease reserves capacity across synchronous reentry', runHandleLeaseReentrantCapacityCase],
+  ['HANDLE lease rejects invalid/reentrant calls before launch', runHandleLeaseInvalidCallCase],
 ];
 
 let passed = 0;

@@ -7,6 +7,166 @@ import {
 } from './e2e-process-ownership-sampler.mjs';
 import { terminateCapturedProcessTree } from './e2e-process-termination-executor.mjs';
 
+/**
+ * Inactive synchronous process-identity retention. The caller supplies native and
+ * failure adapters; importing this module installs nothing and opens no HANDLEs.
+ * Every acquired HANDLE remains retained until the owning process is destroyed.
+ * In particular, child exit/close must not retire a lease: dependency cleanup can
+ * still refer to an exited child while its own asynchronous cleanup is pending.
+ */
+export function createE2eProcessHandleLeaseOwner({ openProcess, retireChild, onFailure, limit = 4096 } = {}) {
+  if (typeof openProcess !== 'function'
+    || typeof retireChild !== 'function'
+    || typeof onFailure !== 'function'
+    || !Number.isSafeInteger(limit) || limit < 1 || limit > 4096) {
+    throw new TypeError('Invalid E2E process HANDLE lease owner.');
+  }
+
+  const retainedHandles = [];
+  const leasedChildren = new WeakMap();
+  const spawningChildren = new WeakSet();
+  // A retirement request is not proof of process exit. Keep the exact failed
+  // child strongly reachable even when its retirement adapter throws.
+  const retiredChildren = new Set();
+  let inFlight = 0;
+  let spawnCalls = 0;
+  let spawnThrows = 0;
+  let acquisitionAttempts = 0;
+  let noPidCalls = 0;
+  let idempotentReuses = 0;
+  let failed = false;
+  let failureCode = null;
+  let retirementAttempts = 0;
+  let retirementFailed = false;
+  let reportingFailed = false;
+  let refusedCalls = 0;
+
+  function failureError() {
+    const error = new Error(failureCode);
+    error.code = failureCode;
+    return error;
+  }
+
+  function retireExactChild(child) {
+    if (retiredChildren.has(child)) return;
+    retiredChildren.add(child);
+    retirementAttempts += 1;
+    try { retireChild(child, failureCode); }
+    catch { retirementFailed = true; }
+  }
+
+  function latchFailure(code, child) {
+    const firstFailure = !failed;
+    if (firstFailure) {
+      failed = true;
+      failureCode = code;
+    }
+    try {
+      if (child !== undefined) retireExactChild(child);
+    } finally {
+      if (firstFailure) {
+        try { onFailure(failureCode); }
+        catch { reportingFailed = true; }
+      }
+    }
+  }
+
+  function fail(code, child) {
+    latchFailure(code, child);
+    throw failureError();
+  }
+
+  function validHandle(handle) {
+    if (typeof handle === 'number') return Number.isSafeInteger(handle) && handle > 0;
+    if (typeof handle === 'bigint') return handle > 0n;
+    if (handle === null || typeof handle !== 'object'
+      || nodeUtilTypes.isProxy(handle) || nodeUtilTypes.isPromise(handle)) return false;
+    try { return typeof handle.then !== 'function'; }
+    catch { return false; }
+  }
+
+  function spawn(originalSpawn, child, args) {
+    if (failed) {
+      refusedCalls += 1;
+      throw failureError();
+    }
+    if (typeof originalSpawn !== 'function'
+      || child === null || (typeof child !== 'object' && typeof child !== 'function')
+      || nodeUtilTypes.isProxy(child) || !Array.isArray(args)) {
+      return fail('e2e-handle-lease-invalid-spawn');
+    }
+    if (spawningChildren.has(child)) return fail('e2e-handle-lease-reentrant-spawn');
+    const existing = leasedChildren.get(child);
+    if (existing === undefined && retainedHandles.length + inFlight >= limit) {
+      return fail('e2e-handle-lease-limit');
+    }
+
+    let reserved = existing === undefined;
+    if (reserved) inFlight += 1;
+    spawningChildren.add(child);
+    try {
+      let result;
+      spawnCalls += 1;
+      try { result = Reflect.apply(originalSpawn, child, args); }
+      catch (error) {
+        spawnThrows += 1;
+        let pid;
+        let pidReadFailed = false;
+        try { pid = child.pid; } catch { pidReadFailed = true; }
+        if (failed || pidReadFailed
+          || (pid !== undefined && pid !== null && (existing === undefined || existing.pid !== pid))) {
+          // A throwing raw call can still have created a process. Preserve the
+          // original thrown object, but never abandon its unleased receiver.
+          latchFailure('e2e-handle-lease-spawn-threw', child);
+        }
+        throw error;
+      }
+      let pid;
+      try { pid = child.pid; }
+      catch { return fail('e2e-handle-lease-invalid-pid', child); }
+      if (failed) return fail(failureCode, child);
+      if (pid === undefined || pid === null) {
+        if (existing !== undefined) return fail('e2e-handle-lease-child-changed', child);
+        noPidCalls += 1;
+        return result;
+      }
+      if (!Number.isSafeInteger(pid) || pid < 1) return fail('e2e-handle-lease-invalid-pid', child);
+      if (existing !== undefined) {
+        if (existing.pid !== pid) return fail('e2e-handle-lease-child-changed', child);
+        idempotentReuses += 1;
+        return result;
+      }
+
+      acquisitionAttempts += 1;
+      let handle;
+      try { handle = openProcess(pid); }
+      catch { return fail('e2e-handle-lease-acquire-failed', child); }
+      if (!validHandle(handle)) return fail('e2e-handle-lease-acquire-failed', child);
+      // Convert the reservation into a retained lease before exposing success.
+      // Even a reentrant adapter failure must not discard an acquired HANDLE.
+      inFlight -= 1;
+      reserved = false;
+      retainedHandles.push(handle);
+      leasedChildren.set(child, { pid, handle });
+      if (failed) return fail(failureCode, child);
+      return result;
+    } finally {
+      spawningChildren.delete(child);
+      if (reserved) inFlight -= 1;
+    }
+  }
+
+  function snapshot() {
+    return Object.freeze({
+      limit, retained: retainedHandles.length, inFlight, spawnCalls, spawnThrows,
+      acquisitionAttempts, noPidCalls, idempotentReuses, failed, failureCode,
+      retirementAttempts, retirementFailed, reportingFailed, refusedCalls,
+    });
+  }
+
+  return Object.freeze({ spawn, snapshot });
+}
+
 // Allow the 120-test serial suite one hour overall; per-test and cleanup limits stay unchanged.
 const DEFAULT_OVERALL_DEADLINE_MS = 3_600_000;
 const TERMINAL_GRACE_MS = 5_000;
