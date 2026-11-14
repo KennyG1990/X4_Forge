@@ -1,6 +1,6 @@
 import familyFs from 'node:fs';
 import familyPath from 'node:path';
-import { createE2eRunStateOwner } from './e2e-runtime-bootstrap.mjs';
+import { createE2eRunStateOwner, E2E_RUN_STATE_ENV } from './e2e-runtime-bootstrap.mjs';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 
@@ -1817,8 +1817,119 @@ function runHandleLeaseInvalidCallCase() {
     ['retire', child, 'e2e-handle-lease-reentrant-spawn']]);
 }
 
-function makeFamilyControlledFixture({ testProfile = null } = {}) {
-  const stateOwner = createE2eRunStateOwner();
+function controlledFixtureIdentity(stat) {
+  return { dev: String(stat.dev), ino: String(stat.ino), birthtimeNs: String(stat.birthtimeNs) };
+}
+function controlledFixtureSameIdentity(stat, expected) {
+  return Object.entries(controlledFixtureIdentity(stat)).every(([key, value]) => value === expected[key]);
+}
+function withControlledFixtureCleanup(stateOwner) {
+  const originalRetire = stateOwner.retire.bind(stateOwner);
+  try {
+    const root = familyPath.resolve(stateOwner.stateDir), parent = familyPath.dirname(root);
+    const samePath = (a, b) => process.platform === 'win32'
+      ? familyPath.resolve(a).toLowerCase() === familyPath.resolve(b).toLowerCase() : familyPath.resolve(a) === familyPath.resolve(b);
+    const initialRoot = familyFs.lstatSync(root, { bigint: true });
+    const initialParent = familyFs.lstatSync(parent, { bigint: true });
+    const rootIdentity = controlledFixtureIdentity(initialRoot), parentIdentity = controlledFixtureIdentity(initialParent);
+    const descriptor = JSON.parse(stateOwner.environment[E2E_RUN_STATE_ENV]);
+    const marker = familyPath.join(root, '.e2e-run-owner.json');
+    const initialMarker = familyFs.lstatSync(marker, { bigint: true });
+    const markerIdentity = controlledFixtureIdentity(initialMarker);
+    assert.ok(initialRoot.isDirectory() && !initialRoot.isSymbolicLink() && initialParent.isDirectory() && !initialParent.isSymbolicLink());
+    assert.ok(samePath(familyFs.realpathSync.native(root), root) && samePath(familyFs.realpathSync.native(parent), parent));
+    assert.ok(samePath(descriptor.stateDir, root) && samePath(descriptor.tempDir, parent));
+    assert.deepEqual(rootIdentity, descriptor.rootIdentity);
+    assert.deepEqual(markerIdentity, descriptor.markerIdentity);
+    assert.match(familyPath.basename(root), /^x4forge-e2e-state-[A-Za-z0-9_-]+$/u);
+    let cleaned = false;
+    function checkRoot() {
+      const actualParent = familyFs.lstatSync(parent, { bigint: true });
+      const actualRoot = familyFs.lstatSync(root, { bigint: true });
+      assert.ok(actualParent.isDirectory() && !actualParent.isSymbolicLink() && controlledFixtureSameIdentity(actualParent, parentIdentity));
+      assert.ok(actualRoot.isDirectory() && !actualRoot.isSymbolicLink() && controlledFixtureSameIdentity(actualRoot, rootIdentity));
+      assert.ok(samePath(familyPath.dirname(root), parent) && samePath(familyFs.realpathSync.native(parent), parent)
+        && samePath(familyFs.realpathSync.native(root), root));
+    }
+    function checked(entry) {
+      checkRoot();
+      const relative = familyPath.relative(root, entry.file);
+      assert.ok(!familyPath.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${familyPath.sep}`));
+      const actual = familyFs.lstatSync(entry.file, { bigint: true });
+      assert.ok(!actual.isSymbolicLink() && controlledFixtureSameIdentity(actual, entry.identity)
+        && samePath(familyFs.realpathSync.native(entry.file), entry.file));
+      if (entry.directory) assert.ok(actual.isDirectory());
+      else assert.ok(actual.isFile() && actual.nlink === 1n && actual.size === entry.size && actual.mtimeNs === entry.mtimeNs);
+      return actual;
+    }
+    stateOwner.retire = () => {
+      originalRetire(); // Retirement remains mandatory even when cleanup must refuse.
+      if (cleaned) return;
+      checkRoot();
+      const files = [], directories = [];
+      let bytes = 0n, directoryCount = 0;
+      function scan(folder) {
+        checkRoot();
+        const stat = familyFs.lstatSync(folder, { bigint: true });
+        const entry = { file: folder, identity: controlledFixtureIdentity(stat), directory: true };
+        checked(entry);
+        directoryCount += 1;
+        assert.ok(directoryCount <= 16, 'controlled-fixture-cleanup-directory-limit');
+        const directory = familyFs.opendirSync(folder);
+        try {
+          for (let item = directory.readSync(); item !== null; item = directory.readSync()) {
+            const file = familyPath.join(folder, item.name);
+            const child = familyFs.lstatSync(file, { bigint: true });
+            assert.ok(!child.isSymbolicLink() && samePath(familyFs.realpathSync.native(file), file));
+            if (child.isDirectory()) scan(file);
+            else {
+              assert.ok(child.isFile() && child.nlink === 1n, 'controlled-fixture-cleanup-linked-or-special-file');
+              bytes += child.size;
+              files.push({ file, identity: controlledFixtureIdentity(child), directory: false, size: child.size, mtimeNs: child.mtimeNs });
+              assert.ok(files.length <= 64 && bytes <= 1048576n, 'controlled-fixture-cleanup-file-or-byte-limit');
+            }
+          }
+        } finally { directory.closeSync(); }
+        directories.push(entry); // Child directories precede their parents.
+      }
+      scan(root);
+      const markerEntry = files.find(entry => samePath(entry.file, marker));
+      assert.ok(markerEntry && markerEntry.size <= 4096n && controlledFixtureSameIdentity(checked(markerEntry), markerIdentity));
+      const fd = familyFs.openSync(marker, 'r');
+      let record;
+      try {
+        assert.ok(controlledFixtureSameIdentity(familyFs.fstatSync(fd, { bigint: true }), markerIdentity));
+        const buffer = Buffer.alloc(Number(markerEntry.size));
+        assert.equal(familyFs.readSync(fd, buffer, 0, buffer.length, 0), buffer.length);
+        record = JSON.parse(buffer.toString('utf8'));
+        assert.ok(controlledFixtureSameIdentity(familyFs.fstatSync(fd, { bigint: true }), markerIdentity));
+      } finally { familyFs.closeSync(fd); }
+      assert.deepEqual(record, { schemaVersion: 'forge.e2e-run-state.v1', runId: stateOwner.runId,
+        stateDir: root, ownerPid: process.pid, status: 'retired' });
+      // Finish the complete preflight before unlinking anything, then recheck
+      // every exact snapshot/root/parent immediately before each deletion.
+      for (const entry of [...files, ...directories]) checked(entry);
+      for (const entry of files) if (!samePath(entry.file, marker)) { checked(entry); familyFs.unlinkSync(entry.file); }
+      for (const entry of directories) if (!samePath(entry.file, root)) { checked(entry); familyFs.rmdirSync(entry.file); }
+      assert.deepEqual(familyFs.readdirSync(root), ['.e2e-run-owner.json']);
+      checked(markerEntry);
+      familyFs.unlinkSync(marker); // The retired authority marker is removed LAST.
+      checkRoot();
+      familyFs.rmdirSync(root);
+      assert.equal(familyFs.existsSync(root), false);
+      cleaned = true;
+    };
+    return stateOwner;
+  } catch (error) {
+    try { originalRetire(); } catch { console.error('[e2e-controlled-cleanup] initial-retirement-failed'); }
+    throw error;
+  }
+}
+
+function makeFamilyControlledFixture({ testProfile = null, beforeFamily } = {}) {
+  const stateOwner = withControlledFixtureCleanup(createE2eRunStateOwner());
+  try {
+  beforeFamily?.(stateOwner);
   const cwd = process.cwd(), runtime = process.execPath;
   const identities = pid => ({ pid, creationToken: pid.toString(16).padStart(16, '0') });
   const handles = [];
@@ -1870,6 +1981,10 @@ function makeFamilyControlledFixture({ testProfile = null } = {}) {
     nativeFactory: () => nativeFor(9202), childProcessModule: cliModule,
     verifyFingerprint: value => assert.equal(value.sha256, '0'.repeat(64)), ...override });
   return { stateOwner, family, ticket, marker, options, child, launch, activate, cliModule, cliProcess, read, handles, roles, runtime };
+  } catch (error) {
+    try { stateOwner.retire(); } catch { console.error('[e2e-controlled-cleanup] setup-cleanup-failed'); }
+    throw error; // Never replace the original setup failure with cleanup diagnostics.
+  }
 }
 
 function runFamilyIntentAndNoPidCase() {
@@ -2158,6 +2273,102 @@ async function runFamilyExactFaultConsumptionCase() {
   }
 }
 
+function runControlledFixtureCleanupCase() {
+  let fixture, neighbor, neighborRoot, failure, cleanupFailure;
+  try {
+    fixture = makeFamilyControlledFixture();
+    neighbor = makeFamilyControlledFixture();
+    const root = fixture.stateOwner.stateDir;
+    neighborRoot = neighbor.stateOwner.stateDir;
+    const neighborFile = familyPath.join(neighbor.marker.root, 'family.json');
+    const neighborBytes = familyFs.readFileSync(neighborFile);
+    fixture.stateOwner.retire();
+    assert.equal(familyFs.existsSync(root), false);
+    assert.doesNotThrow(() => fixture.stateOwner.retire());
+    assert.equal(familyFs.existsSync(neighborRoot), true);
+    assert.deepEqual(familyFs.readFileSync(neighborFile), neighborBytes);
+    assert.equal(JSON.parse(familyFs.readFileSync(familyPath.join(neighborRoot, '.e2e-run-owner.json'), 'utf8')).status, 'active');
+    const original = new Error('CONTROLLED_FIXTURE_SETUP_FAILURE');
+    let failedRoot;
+    assert.throws(() => makeFamilyControlledFixture({ beforeFamily(owner) {
+      failedRoot = owner.stateDir;
+      throw original;
+    } }), error => error === original);
+    assert.equal(familyFs.existsSync(failedRoot), false, 'later setup failure retires and consumes its own root');
+  } catch (error) { failure = error; throw error; }
+  finally {
+    for (const owner of [fixture?.stateOwner, neighbor?.stateOwner]) {
+      try { owner?.retire(); } catch (error) { cleanupFailure ??= error; }
+    }
+    if (cleanupFailure && failure) console.error('[e2e-controlled-cleanup] secondary-cleanup-failed');
+  }
+  if (cleanupFailure) throw cleanupFailure;
+  assert.equal(familyFs.existsSync(neighborRoot), false);
+}
+
+function runControlledFixtureCleanupCapCase() {
+  const original = new Error('CONTROLLED_FIXTURE_SETUP_WITH_CAP_FAILURE');
+  const controls = [];
+  let owner, root, rootIdentity, parentIdentity, initialNames, initialMarker;
+  const messages = [];
+  const originalConsoleError = console.error;
+  let failure, cleanupFailure;
+  function removeExactControls() {
+    if (!root || !familyFs.existsSync(root)) return;
+    assert.ok(controlledFixtureSameIdentity(familyFs.lstatSync(root, { bigint: true }), rootIdentity));
+    assert.ok(controlledFixtureSameIdentity(familyFs.lstatSync(familyPath.dirname(root), { bigint: true }), parentIdentity));
+    assert.equal(familyFs.realpathSync.native(root), root);
+    for (const control of controls) if (familyFs.existsSync(control.file)) {
+      assert.equal(familyPath.dirname(control.file), root);
+      const stat = familyFs.lstatSync(control.file, { bigint: true });
+      assert.ok(stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1n && controlledFixtureSameIdentity(stat, control.identity));
+      familyFs.unlinkSync(control.file);
+    }
+  }
+  try {
+    console.error = (...args) => { messages.push(args); };
+    try {
+      assert.throws(() => makeFamilyControlledFixture({ beforeFamily(actual) {
+        owner = actual; root = owner.stateDir;
+        rootIdentity = controlledFixtureIdentity(familyFs.lstatSync(root, { bigint: true }));
+        parentIdentity = controlledFixtureIdentity(familyFs.lstatSync(familyPath.dirname(root), { bigint: true }));
+        initialMarker = JSON.parse(familyFs.readFileSync(familyPath.join(root, '.e2e-run-owner.json'), 'utf8'));
+        for (let i = 0; i < 64; i += 1) {
+          const file = familyPath.join(root, `cleanup-cap-${String(i).padStart(2, '0')}.txt`);
+          const bytes = Buffer.from(`owned cleanup control ${i}\n`);
+          familyFs.writeFileSync(file, bytes, { flag: 'wx' });
+          controls.push({ file, bytes, identity: controlledFixtureIdentity(familyFs.lstatSync(file, { bigint: true })) });
+        }
+        initialNames = familyFs.readdirSync(root).sort();
+        throw original;
+      } }), error => error === original);
+    } finally { console.error = originalConsoleError; }
+    assert.deepEqual(messages, [['[e2e-controlled-cleanup] setup-cleanup-failed']]);
+    assert.equal(initialNames.length, 65, 'the marker counts toward the 64-file cap');
+    assert.deepEqual(familyFs.readdirSync(root).sort(), initialNames);
+    assert.ok(controlledFixtureSameIdentity(familyFs.lstatSync(root, { bigint: true }), rootIdentity));
+    assert.deepEqual(JSON.parse(familyFs.readFileSync(familyPath.join(root, '.e2e-run-owner.json'), 'utf8')),
+      { ...initialMarker, status: 'retired' }, 'mandatory retirement writes first; cleanup has deleted nothing');
+    for (const control of controls) assert.deepEqual(familyFs.readFileSync(control.file), control.bytes);
+    assert.throws(() => owner.retire(), /controlled-fixture-cleanup-file-or-byte-limit/u);
+    assert.deepEqual(familyFs.readdirSync(root).sort(), initialNames);
+    for (const control of controls) assert.deepEqual(familyFs.readFileSync(control.file), control.bytes);
+    removeExactControls();
+    owner.retire();
+    assert.equal(familyFs.existsSync(root), false);
+    assert.doesNotThrow(() => owner.retire());
+  } catch (error) { failure = error; throw error; }
+  finally {
+    console.error = originalConsoleError;
+    try { removeExactControls(); owner?.retire(); }
+    catch (error) {
+      cleanupFailure = error;
+      if (failure) console.error('[e2e-controlled-cleanup] secondary-cleanup-failed');
+    }
+  }
+  if (cleanupFailure) throw cleanupFailure;
+}
+
 const cases = [
   ['invalid input', runInvalidInputCase],
   ['normal child close/tree gone', runNormalChildCloseCase],
@@ -2197,6 +2408,8 @@ const cases = [
   ['HANDLE family defers public-spawn admission and rejects missing actor authority', runFamilyPublicSpawnAndMissingAuthorityCase],
   ['HANDLE family reviewed Node prefixes cannot hide roles or reinterpret leaf data', runFamilyReviewedNodePrefixCase],
   ['HANDLE family exact fault consumption is once-only and observer-safe', runFamilyExactFaultConsumptionCase],
+  ['controlled fixture cleanup removes only its root and preserves its neighbor', runControlledFixtureCleanupCase],
+  ['controlled fixture cleanup cap refuses before deletion and permits exact retry', runControlledFixtureCleanupCapCase],
 ];
 
 let passed = 0;

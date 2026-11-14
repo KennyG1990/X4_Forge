@@ -403,6 +403,92 @@ function effectiveAuthority(
 }
 const routeCalls: Array<{ method: string; path: string; body: unknown }> = [];
 const discoveryCalls: Array<{ path: string; authorization?: string; workspaceId?: string }> = [];
+type DiscoveryFixturePath = '/api/agent/schema' | '/api/agent/capabilities/effective';
+interface DiscoveryFixtureBarrier {
+  arrived(): Promise<void>;
+  release(nextPath?: DiscoveryFixturePath): DiscoveryFixtureBarrier | undefined;
+  dispose(): void;
+}
+let discoveryFixtureBarrier: {
+  path: DiscoveryFixturePath;
+  capture(response: http.ServerResponse, resume: () => void): boolean;
+} | undefined;
+
+/** Park one pre-header discovery response; its release runs the unchanged fixture handler. */
+function armDiscoveryFixtureBarrier(pathname: DiscoveryFixturePath): DiscoveryFixtureBarrier {
+  assert.equal(discoveryFixtureBarrier, undefined, 'only one discovery barrier may be armed');
+  let response: http.ServerResponse | undefined;
+  let continuation: (() => void) | undefined;
+  let disposed = false;
+  let releaseAttempted = false;
+  let releasedPath: DiscoveryFixturePath | undefined;
+  let releasedNext: DiscoveryFixtureBarrier | undefined;
+  let releaseFailed = false;
+  let releaseFailure: unknown;
+  let signalArrival!: () => void;
+  const arrival = new Promise<void>(resolve => { signalArrival = resolve; });
+  const slot = {
+    path: pathname,
+    capture(nextResponse: http.ServerResponse, resume: () => void) {
+      if (disposed || response) return false;
+      response = nextResponse;
+      continuation = resume;
+      signalArrival();
+      return true;
+    },
+  };
+  discoveryFixtureBarrier = slot;
+  return {
+    async arrived() {
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        await Promise.race([
+          arrival,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`Discovery barrier did not observe ${pathname} within 4000 ms.`)), 4_000);
+          }),
+        ]);
+        assert.ok(response && !response.destroyed && !response.headersSent,
+          `${pathname} must still be held before response headers`);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    },
+    release(nextPath) {
+      if (releaseAttempted) {
+        assert.equal(nextPath, releasedPath, `${pathname} cannot change its next barrier after release`);
+        if (releaseFailed) throw releaseFailure;
+        return releasedNext;
+      }
+      releaseAttempted = true;
+      releasedPath = nextPath;
+      try {
+        assert.ok(!disposed && response && !response.destroyed && !response.headersSent && continuation,
+          `${pathname} cannot release an absent, closed or already-released response`);
+        const resume = continuation;
+        continuation = undefined;
+        if (discoveryFixtureBarrier === slot) discoveryFixtureBarrier = undefined;
+        // The next one-shot arm is owned before the old handler can issue its response.
+        releasedNext = nextPath === undefined ? undefined : armDiscoveryFixtureBarrier(nextPath);
+        resume();
+        return releasedNext;
+      } catch (error) {
+        releaseFailed = true;
+        releaseFailure = error;
+        try { releasedNext?.dispose(); } catch { /* retain the original release failure and owned next gate */ }
+        throw error;
+      }
+    },
+    dispose() {
+      disposed = true;
+      if (discoveryFixtureBarrier === slot) discoveryFixtureBarrier = undefined;
+      continuation = undefined;
+      try { releasedNext?.dispose(); } finally {
+        if (response && !response.writableEnded && !response.destroyed) response.destroy();
+      }
+    },
+  };
+}
 const runtimeHostileHome = `${process.env.USERPROFILE || 'C:\\Users\\Fixture'}\\private\\debuglog.txt`;
 function xmlReferenceFixture(): XmlReferenceMapResult {
   const files = Array.from({ length: 260 }, (_, index) => ({
@@ -499,7 +585,9 @@ function performanceProfileFixture(): ForgeCpuProfileReport {
       timer: 'event-loop-blockage-can-delay-stop', resourceLimit: 'no-os-heap-quota', samples: 'unavailable' },
   };
 }
-const server = http.createServer((request, response) => {
+const server = http.createServer(function serveMcpFixture(request, response): void {
+  const barrier = discoveryFixtureBarrier;
+  if (barrier && request.url === barrier.path && barrier.capture(response, () => serveMcpFixture(request, response))) return;
   if (request.url === '/api/agent/schema') {
     discoveryCalls.push({
       path: request.url,
@@ -868,6 +956,49 @@ async function runLegacyMcpCapabilitySelftest(): Promise<void> {
 const port = await listen(server);
 const baseUrl = `http://127.0.0.1:${port}`;
 try {
+  mode = 'narrowed';
+  await withMcp(baseUrl, async client => {
+    assert.deepEqual((await toolsFor(client)).map(tool => tool.name), CUSTOM_TOOLS,
+      'mixed-discovery control must first accept the exact narrowed live inventory');
+    let schemaBarrier: DiscoveryFixtureBarrier | undefined;
+    let effectiveBarrier: DiscoveryFixtureBarrier | undefined;
+    let mixedTools: Promise<any[]> | undefined;
+    try {
+      schemaBarrier = armDiscoveryFixtureBarrier('/api/agent/schema');
+      await schemaBarrier.arrived();
+      mode = 'legacy';
+      mixedTools = toolsFor(client);
+      void mixedTools.catch(() => {});
+      const joined = await client.request('ping');
+      assert.equal(joined.error, undefined, 'mixed-discovery waiter must enter before schema release');
+      const schemaCallsBeforeRelease = discoveryCalls.filter(call => call.path === '/api/agent/schema').length;
+      effectiveBarrier = schemaBarrier.release('/api/agent/capabilities/effective');
+      assert.ok(effectiveBarrier, 'mixed-discovery control must own its next effective-response barrier');
+      assert.deepEqual({
+        sameNext: schemaBarrier.release('/api/agent/capabilities/effective') === effectiveBarrier,
+        schemaCalls: discoveryCalls.filter(call => call.path === '/api/agent/schema').length,
+      }, { sameNext: true, schemaCalls: schemaCallsBeforeRelease + 1 },
+      'repeated schema release must retain its exact owned next barrier without invoking the handler twice');
+      assert.throws(() => schemaBarrier!.release('/api/agent/schema'), /cannot change its next barrier after release/,
+        'a released schema barrier must refuse a different next path');
+      await effectiveBarrier.arrived();
+      mode = 'hung';
+      effectiveBarrier.release();
+      assert.deepEqual(await mixedTools, [],
+        'reviewed legacy schema followed by successful current effective authority must fail closed');
+      routeCalls.length = 0;
+      const denied = await client.request('tools/call', { name: 'validate_mod', arguments: { fromPath: 'fixture' } });
+      assert.equal(denied.error?.code, -32602,
+        'mixed legacy/current discovery must keep direct calls blocked after the following schema timeout');
+      assert.deepEqual(routeCalls, [], 'mixed-discovery blocked call must not reach the project route');
+      console.log('MCP discovery causal control PASS: legacy-schema/current-effective=invalid; inventory=0; direct-call=blocked.');
+    } finally {
+      effectiveBarrier?.dispose();
+      schemaBarrier?.dispose();
+      await mixedTools?.catch(() => {});
+    }
+  });
+
   mode = 'read';
   await withMcp(baseUrl, async client => {
     assert.deepEqual((await toolsFor(client)).map(tool => tool.name), READ_TOOLS,
@@ -1489,11 +1620,31 @@ try {
     assert.equal(allowedAfterLegacy.error, undefined, allowedAfterLegacy.error?.message);
     assert.deepEqual(routeCalls.map(call => `${call.method} ${call.path}`), ['POST /api/agent/project/validate/check'],
       'legacy downgrade after live authority must retain current routes, not compatibility adapters');
-    mode = 'hung';
-    const stickyAfterTimeout = await toolsFor(client);
-    assert.deepEqual(stickyAfterTimeout.map(tool => tool.name), CUSTOM_TOOLS,
-      'timeout after live narrowing must not widen the MCP inventory');
-    assert.ok(stickyAfterTimeout.every(tool => tool._meta?.['x4forge/contractVersion'] === 'unavailable-sticky-live'));
+    const schemaBarrier = armDiscoveryFixtureBarrier('/api/agent/schema');
+    let timeoutTools: Promise<any[]> | undefined;
+    try {
+      await schemaBarrier.arrived();
+      timeoutTools = toolsFor(client);
+      void timeoutTools.catch(() => {});
+      const joined = await client.request('ping');
+      assert.equal(joined.error, undefined, 'timeout waiter must enter before the fresh schema is released');
+      mode = 'hung';
+      const schemaCallsBeforeRelease = discoveryCalls.filter(call => call.path === '/api/agent/schema').length;
+      schemaBarrier.release();
+      assert.deepEqual({
+        sameNext: schemaBarrier.release() === undefined,
+        schemaCalls: discoveryCalls.filter(call => call.path === '/api/agent/schema').length,
+      }, { sameNext: true, schemaCalls: schemaCallsBeforeRelease + 1 },
+      'repeated timeout release must neither arm another barrier nor invoke the handler twice');
+      const stickyAfterTimeout = await timeoutTools;
+      assert.deepEqual(stickyAfterTimeout.map(tool => tool.name), CUSTOM_TOOLS,
+        'timeout after live narrowing must not widen the MCP inventory');
+      assert.ok(stickyAfterTimeout.every(tool => tool._meta?.['x4forge/contractVersion'] === 'unavailable-sticky-live'));
+      console.log('MCP discovery causal control PASS: fresh-schema/pre-header-timeout=unavailable-sticky-live; inventory=5.');
+    } finally {
+      schemaBarrier.dispose();
+      await timeoutTools?.catch(() => {});
+    }
     mode = 'live';
     assert.deepEqual((await toolsFor(client)).map(tool => tool.name), CUSTOM_TOOLS,
       'a broader later live contract must not re-expand a process after narrowing');
