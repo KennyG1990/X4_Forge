@@ -1926,7 +1926,7 @@ function withControlledFixtureCleanup(stateOwner) {
   }
 }
 
-function makeFamilyControlledFixture({ testProfile = null, beforeFamily } = {}) {
+function makeFamilyControlledFixture({ testProfile = null, beforeFamily, now } = {}) {
   const stateOwner = withControlledFixtureCleanup(createE2eRunStateOwner());
   try {
   beforeFamily?.(stateOwner);
@@ -1935,7 +1935,14 @@ function makeFamilyControlledFixture({ testProfile = null, beforeFamily } = {}) 
   const handles = [];
   const nativeFor = pid => ({ self: () => identities(pid),
     open(childPid) { const handle = { pid: childPid, exitCode: 0 }; handles.push(handle); return handle; },
-    identity: handle => identities(handle.pid), exitCode: handle => handle.exitCode });
+    identity: handle => {
+      if (handle.identityError) throw new Error('CONTROLLED_IDENTITY_QUERY');
+      return handle.identity ?? identities(handle.pid);
+    },
+    isRunning: handle => {
+      if (handle.runningError) throw new Error('CONTROLLED_RUNNING_QUERY');
+      return handle.running !== false;
+    }, exitCode: handle => handle.exitCode });
   function fakeProcess(pid, ppid) {
     const actor = new EventEmitter();
     actor.pid = pid; actor.ppid = ppid; actor.execPath = runtime; actor.cwd = () => cwd; actor._exiting = false;
@@ -1961,7 +1968,8 @@ function makeFamilyControlledFixture({ testProfile = null, beforeFamily } = {}) 
   const family = createE2eProcessHandleLeaseFamily({ env: stateOwner.environment, cwd,
     preloadPath: familyPath.join(cwd, 'scripts/run-e2e.mjs'), runtimePath: runtime,
     extraPreloads, testProfile, nativeFactory: () => nativeFor(9201), catalogFactory,
-    processObject: fakeProcess(9201, 9200), childProcessModule: mainModule });
+    processObject: fakeProcess(9201, 9200), childProcessModule: mainModule,
+    ...(now === undefined ? {} : { now }) });
   const ticket = family.prepareProtectedSpawn({ role: 'cli', env: stateOwner.environment });
   const marker = JSON.parse(ticket.environment[E2E_PROCESS_HANDLE_ACTOR_ENV]);
   const options = { file: runtime, args: [runtime, ...ticket.execArgv, roles.cli],
@@ -2369,6 +2377,220 @@ function runControlledFixtureCleanupCapCase() {
   if (cleanupFailure) throw cleanupFailure;
 }
 
+async function runOwnershipReadyCloneAndOnceCase() {
+  const fixture = makeLifecycleInput({ terminationFactory: makeCompleteTermination });
+  const envelope = makeCompleteInitialOwnership(fixture.rootIdentity);
+  let calls = 0;
+  fixture.input.initializeOwnershipImpl = () => { fixture.calls.initialize += 1; return envelope; };
+  fixture.input.onOwnershipReady = facts => {
+    calls += 1;
+    assertExactRecordKeys(facts, ['rootIdentity', 'captured']);
+    assert.deepEqual(facts, { rootIdentity: fixture.rootIdentity, captured: [fixture.rootIdentity] });
+    assert.notStrictEqual(facts.rootIdentity, envelope.rootIdentity);
+    assert.notStrictEqual(facts.captured, envelope.captured);
+    assert.notStrictEqual(facts.captured[0], envelope.captured[0]);
+    facts.rootIdentity.creationToken = 'PRIVATE_CALLBACK_MUTATION';
+    facts.captured.length = 0;
+  };
+  fixture.input.probeTerminalReport = () => {
+    fixture.calls.probe += 1;
+    fixture.child.emit('close', 0, null);
+    return false;
+  };
+  const result = await withWatchdog('ownership readiness clone and once', () => superviseSpawnedE2eProcess(fixture.input));
+  assert.equal(calls, 1);
+  assert.equal(result.complete, true);
+  assert.deepEqual(result.rootIdentity, fixture.rootIdentity);
+  assert.deepEqual(result.captured, [fixture.rootIdentity]);
+  assert.deepEqual(envelope, makeCompleteInitialOwnership(fixture.rootIdentity));
+  assertLifecycleCleanup(fixture);
+  assertNoProcessCalls(fixture);
+  const sampled = makeLifecycleInput({ terminationFactory: makeCompleteTermination });
+  let sampledReady = 0;
+  sampled.input.initializeOwnershipImpl = () => makeCompleteInitialOwnership(sampled.rootIdentity);
+  sampled.input.onOwnershipReady = () => { sampledReady += 1; };
+  sampled.input.probeTerminalReport = () => {
+    if (sampled.calls.sample === 2) sampled.child.emit('close', 0, null);
+    return false;
+  };
+  const sampledResult = await withWatchdog('readiness is not repeated on samples', async () => {
+    const pending = superviseSpawnedE2eProcess(sampled.input);
+    for (let i = 0; i < 2; i += 1) {
+      const timer = await waitForFakeTimerRecord(sampled, 'readiness sample delay', record => record.handle !== 1 && record.active);
+      sampled.scheduler.fire(timer.handle);
+    }
+    return pending;
+  });
+  assert.equal(sampledReady, 1);
+  assert.equal(sampled.calls.sample, 2);
+  assert.equal(sampledResult.complete, true);
+  assert.equal(sampled.scheduler.activeTimers().length, 0);
+}
+
+async function runOwnershipReadyFailureAndLateCase() {
+  for (const outcome of ['throw', 'value', 'null', 'promise', 'thenable', 'async']) {
+    const fixture = makeLifecycleInput({ terminationFactory: makeCompleteTermination });
+    let calls = 0, thenReads = 0;
+    fixture.input.initializeOwnershipImpl = () => makeCompleteInitialOwnership(fixture.rootIdentity);
+    fixture.input.onOwnershipReady = () => {
+      calls += 1;
+      if (outcome === 'throw') throw new Error('PRIVATE_CALLBACK_FAILURE');
+      if (outcome === 'thenable') return Object.defineProperty({}, 'then', { get() { thenReads += 1; } });
+      return outcome === 'promise' ? Promise.resolve() : outcome === 'null' ? null : 1;
+    };
+    if (outcome === 'async') fixture.input.onOwnershipReady = async () => { calls += 1; };
+    fixture.input.probeTerminalReport = () => { fixture.child.emit('close', 0, null); return false; };
+    const { result, lines } = await captureLifecycleDiagnostics(() => withWatchdog(`readiness ${outcome}`, () => superviseSpawnedE2eProcess(fixture.input)));
+    assert.equal(calls, 1);
+    assert.equal(result.complete, false);
+    assert.equal(result.ownershipComplete, false);
+    assert.equal(thenReads, 0);
+    assert.deepEqual(result.captured, [fixture.rootIdentity]);
+    assert.equal(JSON.stringify(lines).includes('PRIVATE_CALLBACK_FAILURE'), false);
+    assertLifecycleCleanup(fixture);
+  }
+  for (const trigger of ['close', 'error', 'deadline']) {
+    const fixture = makeLifecycleInput({ terminationFactory: makeCompleteTermination });
+    let calls = 0;
+    fixture.input.onOwnershipReady = () => { calls += 1; };
+    fixture.input.initializeOwnershipImpl = () => {
+      if (trigger === 'deadline') fixture.scheduler.fire(fixture.scheduler.records()[0].handle);
+      else fixture.child.emit(trigger, 0, null);
+      return makeCompleteInitialOwnership(fixture.rootIdentity);
+    };
+    await withWatchdog(`readiness after ${trigger}`, () => superviseSpawnedE2eProcess(fixture.input));
+    assert.equal(calls, 0);
+    assert.equal(fixture.scheduler.activeTimers().length, 0);
+    assert.equal(fixture.child.listenerCount('close'), 0);
+    assert.equal(fixture.child.listenerCount('error'), 0);
+  }
+  const recovering = makeLifecycleInput({ terminationFactory: makeCompleteTermination });
+  let attempts = 0, ready = 0;
+  recovering.input.onOwnershipReady = () => { ready += 1; };
+  recovering.input.initializeOwnershipImpl = () => ++attempts === 1
+    ? makeOwnershipFailureEnvelope() : makeCompleteInitialOwnership(recovering.rootIdentity);
+  recovering.input.probeTerminalReport = () => {
+    if (attempts > 1) recovering.child.emit('close', 0, null);
+    return false;
+  };
+  const recovered = await withWatchdog('readiness cannot follow earlier failure', async () => {
+    const pending = superviseSpawnedE2eProcess(recovering.input);
+    const timer = await waitForFakeTimerRecord(recovering, 'readiness recovery delay', record => record.handle !== 1);
+    recovering.scheduler.fire(timer.handle);
+    return pending;
+  });
+  assert.equal(ready, 0);
+  assert.equal(recovered.ownershipComplete, false);
+  assert.equal(attempts, 2);
+  for (const kind of ['incomplete', 'proxy', 'getter']) {
+    const fixture = makeLifecycleInput({ terminationFactory: makeCompleteTermination });
+    let calls = 0, touched = false;
+    const proxyTraps = [];
+    let envelope = makeCompleteInitialOwnership(fixture.rootIdentity);
+    if (kind === 'incomplete') envelope.rootPresent = false;
+    else if (kind === 'proxy') envelope = new Proxy(envelope, {
+      get(_target, key) {
+        // Await performs this assimilation lookup before envelope validation.
+        proxyTraps.push(key === 'then' ? 'then' : 'payload-get');
+        if (key === 'then') return undefined;
+        touched = true; throw new Error('PRIVATE_PROXY_PAYLOAD');
+      },
+      ownKeys() { proxyTraps.push('ownKeys'); touched = true; throw new Error('PRIVATE_PROXY_KEYS'); },
+      getOwnPropertyDescriptor() { proxyTraps.push('descriptor'); touched = true; throw new Error('PRIVATE_PROXY_DESCRIPTOR'); },
+    });
+    else Object.defineProperty(envelope, 'captured', { enumerable: true, get() { touched = true; return []; } });
+    fixture.input.onOwnershipReady = () => { calls += 1; };
+    fixture.input.initializeOwnershipImpl = () => envelope;
+    fixture.input.probeTerminalReport = () => { fixture.child.emit('close', 0, null); return false; };
+    const result = await withWatchdog(`readiness rejects ${kind} capture`, () => superviseSpawnedE2eProcess(fixture.input));
+    assert.equal(result.ownershipComplete, false);
+    assert.equal(calls, 0);
+    assert.equal(touched, false);
+    assert.deepEqual(proxyTraps, kind === 'proxy' ? ['then'] : []);
+    assert.equal(fixture.scheduler.activeTimers().length, 0);
+  }
+  for (const kind of ['null', 'proxy', 'getter']) {
+    const fixture = makeLifecycleInput({ terminationFactory: makeCompleteTermination });
+    let touched = false;
+    if (kind === 'getter') Object.defineProperty(fixture.input, 'onOwnershipReady', {
+      enumerable: true, get() { touched = true; return () => {}; },
+    });
+    else fixture.input.onOwnershipReady = kind === 'null' ? null : new Proxy(() => { touched = true; }, {});
+    const result = await superviseSpawnedE2eProcess(fixture.input);
+    assert.equal(result.complete, false);
+    assert.equal(touched, false);
+    assert.equal(fixture.calls.initialize, 0);
+    assert.equal(fixture.scheduler.records().length, 0);
+  }
+}
+
+function runFamilyAdmissionRefreshAndDeadlineCase() {
+  for (const mode of ['running-259', 'expired', 'backwards', 'terminal-259', 'identity', 'identity-query', 'running-query', 'cancelled', 'cancel-during-query']) {
+    let now = 100;
+    const f = makeFamilyControlledFixture({ now: () => now });
+    try {
+      f.ticket.spawn(f.child.constructor.prototype.spawn, f.child, [f.options]);
+      assert.equal(f.family.snapshot().owner.retained, 1, 'native HANDLE is captured before admission');
+      assert.equal(familyFs.existsSync(familyPath.join(f.marker.root, 'cli.binding.json')), false);
+      const originalHandle = f.handles[0];
+      if (mode === 'running-259') { originalHandle.exitCode = 259; now = 5099; }
+      if (mode === 'expired') now = 5100;
+      if (mode === 'backwards') now = 99;
+      if (mode === 'terminal-259') { originalHandle.exitCode = 259; originalHandle.running = false; }
+      if (mode === 'identity') originalHandle.identity = { pid: f.child.pid, creationToken: 'f'.repeat(16) };
+      if (mode === 'identity-query') originalHandle.identityError = true;
+      if (mode === 'running-query') originalHandle.runningError = true;
+      if (mode === 'cancelled') f.ticket.cancel();
+      if (mode === 'cancel-during-query') Object.defineProperty(originalHandle, 'running', {
+        get() { f.ticket.cancel(); return true; },
+      });
+      if (mode === 'running-259') {
+        f.ticket.admit();
+        const binding = familyFs.readFileSync(familyPath.join(f.marker.root, 'cli.binding.json'));
+        assert.equal(f.read('cli', 'binding').disposition, 'created');
+        assert.throws(() => f.ticket.admit(), { code: 'e2e-handle-family-admission-order' });
+        assert.deepEqual(familyFs.readFileSync(familyPath.join(f.marker.root, 'cli.binding.json')), binding);
+      } else {
+        assert.throws(() => f.ticket.admit());
+        assert.equal(familyFs.existsSync(familyPath.join(f.marker.root, 'cli.binding.json')), false);
+        f.ticket.cancel();
+        assert.equal(f.child.retired, 'SIGKILL');
+      }
+      assert.strictEqual(f.handles[0], originalHandle);
+      assert.equal(f.handles.length, 1, 'admission never reopens a PID');
+    } finally { f.stateOwner.retire(); }
+  }
+  let now = 0;
+  const noPid = makeFamilyControlledFixture({ now: () => now });
+  try {
+    noPid.ticket.spawn(noPid.child.constructor.prototype.spawn, noPid.child, [{ ...noPid.options, noPid: true }]);
+    now = 6000;
+    noPid.ticket.admit();
+    assert.equal(noPid.read('cli', 'binding').disposition, 'not-created');
+    assert.equal(noPid.handles.length, 0);
+  } finally { noPid.stateOwner.retire(); }
+}
+
+async function runFamilyCliWaitDiagnosticCase() {
+  const f = makeFamilyControlledFixture();
+  try {
+    let elapsed = 0, waits = 0;
+    const { result, lines } = await captureLifecycleDiagnostics(() => f.activate({
+      now: () => elapsed, sleep: async () => { elapsed += 5; if (++waits === 2) f.launch(); },
+    }));
+    assert.equal(result.active, true);
+    assert.equal(waits, 2);
+    assert.deepEqual(lines, [['[e2e-runner-lifecycle] cli-admission-wait']]);
+  } finally { f.stateOwner.retire(); }
+  const immediate = makeFamilyControlledFixture();
+  try {
+    immediate.launch();
+    const { result, lines } = await captureLifecycleDiagnostics(() => immediate.activate());
+    assert.equal(result.active, true);
+    assert.deepEqual(lines, []);
+  } finally { immediate.stateOwner.retire(); }
+}
+
 const cases = [
   ['invalid input', runInvalidInputCase],
   ['normal child close/tree gone', runNormalChildCloseCase],
@@ -2410,6 +2632,10 @@ const cases = [
   ['HANDLE family exact fault consumption is once-only and observer-safe', runFamilyExactFaultConsumptionCase],
   ['controlled fixture cleanup removes only its root and preserves its neighbor', runControlledFixtureCleanupCase],
   ['controlled fixture cleanup cap refuses before deletion and permits exact retry', runControlledFixtureCleanupCapCase],
+  ['ownership readiness receives independent facts exactly once', runOwnershipReadyCloneAndOnceCase],
+  ['ownership readiness rejects invalid outcomes and earlier failure or triggers', runOwnershipReadyFailureAndLateCase],
+  ['HANDLE family admission refreshes the original HANDLE before its deadline', runFamilyAdmissionRefreshAndDeadlineCase],
+  ['CLI admission wait diagnostic is static and once-only', runFamilyCliWaitDiagnosticCase],
 ];
 
 let passed = 0;

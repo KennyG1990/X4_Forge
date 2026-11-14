@@ -14,6 +14,8 @@ import {
 } from './e2e-process-ownership-sampler.mjs';
 import { terminateCapturedProcessTree } from './e2e-process-termination-executor.mjs';
 
+const leaseMonotonicNow = () => Number(process.hrtime.bigint() / 1000000n);
+
 /**
  * Inactive synchronous process-identity retention. The caller supplies native and
  * failure adapters; importing this module installs nothing and opens no HANDLEs.
@@ -250,6 +252,7 @@ function leaseNative(manifest) {
   const getPid = kernel.func('__stdcall', 'GetProcessId', 'uint32_t', ['void *']);
   const times = kernel.func('__stdcall', 'GetProcessTimes', 'int', ['void *', 'void *', 'void *', 'void *', 'void *']);
   const getExit = kernel.func('__stdcall', 'GetExitCodeProcess', 'int', ['void *', 'void *']);
+  const wait = kernel.func('__stdcall', 'WaitForSingleObject', 'uint32_t', ['void *', 'uint32_t']);
   const current = kernel.func('__stdcall', 'GetCurrentProcess', 'void *', []);
   const retained = [];
   const identity = handle => {
@@ -267,6 +270,11 @@ function leaseNative(manifest) {
     },
     identity,
     self: () => identity(current()),
+    isRunning(handle) {
+      const state = wait(handle, 0);
+      leaseAssert(state === 0 || state === 258, 'e2e-handle-family-native-wait');
+      return state === 258;
+    },
     exitCode(handle) {
       const value = Buffer.alloc(4);
       leaseAssert(getExit(handle, value), 'e2e-handle-family-native-query');
@@ -488,7 +496,7 @@ function leaseReadSealed(store, manifest, actorId, expectedIdentity) {
   return { ...actor, phase };
 }
 
-function leaseMakeContext({ manifest, store, env, native, processObject, childProcessModule, actorId, role, identity, actorRecord = null }) {
+function leaseMakeContext({ manifest, store, env, native, processObject, childProcessModule, actorId, role, identity, actorRecord = null, now = leaseMonotonicNow }) {
   const originalKill = childProcessModule.ChildProcess.prototype.kill;
   const originalEmit = processObject.emit;
   const originalReallyExit = processObject.reallyExit;
@@ -549,6 +557,7 @@ function leaseMakeContext({ manifest, store, env, native, processObject, childPr
       const handle = native.open(pid);
       const retained = { handle, identity: null, actorId: launch.ticket?.actorId ?? null };
       nativeHandles.push(retained); // Preserve partial acquisition even if querying/publication fails.
+      if (launch.ticket) launch.ticket.retainedHandle = retained;
       if (nextFault === 'acquire') {
         faultConsumed('acquire', 'native-open', null);
         nextFault = null;
@@ -589,6 +598,10 @@ function leaseMakeContext({ manifest, store, env, native, processObject, childPr
       : role === 'cli' && ['loader', 'worker'].includes(childRole) && preparedActors < LEASE_ACTOR_LIMIT)) {
       return refuse('e2e-handle-family-role-graph');
     }
+    const preparedAt = role === 'main' ? now() : null;
+    if (role === 'main' && (!Number.isFinite(preparedAt) || preparedAt < 0)) {
+      return refuse('e2e-handle-family-admission-clock');
+    }
     const childId = role === 'main' ? 'cli' : `child-${String(preparedActors + 1).padStart(4, '0')}`;
     const intent = {
       schemaVersion: 'forge.e2e-handle-intent.v1', familyId: manifest.familyId, runId: manifest.runId,
@@ -598,7 +611,8 @@ function leaseMakeContext({ manifest, store, env, native, processObject, childPr
     const intentHash = publish(store.nameFor(childId, 'intent'), intent);
     const marker = JSON.stringify({ version: 1, root: manifest.root, manifestHash: manifest.hash, actorId: childId, intentHash });
     const ticket = { actorId: childId, role: childRole, intentHash, binding: null, bindingHash: null,
-      used: false, marker, child: null, pendingIdentity: null, rawReturned: false, cancelled: false, retirementRequested: false };
+      used: false, marker, child: null, pendingIdentity: null, retainedHandle: null, preparedAt,
+      rawReturned: false, cancelled: false, retirementRequested: false };
     children.set(childId, ticket);
     preparedActors += 1;
     return Object.freeze({
@@ -619,7 +633,24 @@ function leaseMakeContext({ manifest, store, env, native, processObject, childPr
         if (role !== 'main' || failed || ticket.cancelled || !ticket.rawReturned || ticket.binding !== null) {
           return refuse('e2e-handle-family-admission-order');
         }
-        try { publishBinding(ticket, ticket.pendingIdentity); }
+        try {
+          if (ticket.pendingIdentity !== null) {
+            const retained = ticket.retainedHandle;
+            leaseAssert(retained !== null && nativeHandles.includes(retained)
+              && retained.actorId === ticket.actorId, 'e2e-handle-family-admission-handle');
+            const actual = native.identity(retained.handle);
+            leaseAssert(leaseValidIdentity(actual)
+              && JSON.stringify(actual) === JSON.stringify(ticket.pendingIdentity)
+              && JSON.stringify(actual) === JSON.stringify(retained.identity), 'e2e-handle-family-admission-identity');
+            leaseAssert(native.isRunning(retained.handle) === true, 'e2e-handle-family-admission-terminal');
+            const admittedAt = now();
+            leaseAssert(Number.isFinite(admittedAt) && admittedAt >= ticket.preparedAt
+              && admittedAt - ticket.preparedAt < 5000, 'e2e-handle-family-admission-expired');
+          }
+          leaseAssert(!failed && !fenced && !ticket.cancelled && ticket.binding === null,
+            'e2e-handle-family-admission-order');
+          publishBinding(ticket, ticket.pendingIdentity);
+        }
         catch (error) { fail('e2e-handle-family-publication-failed'); throw error; }
       },
       cancel() {
@@ -740,10 +771,11 @@ function leaseMakeContext({ manifest, store, env, native, processObject, childPr
 export function createE2eProcessHandleLeaseFamily({
   env = process.env, cwd = process.cwd(), preloadPath, runtimePath = process.execPath, extraPreloads = [], testProfile = null,
   io = leaseFs, readRunState = leaseReadRunState, nativeFactory = leaseNative, catalogFactory = leaseCatalog,
-  processObject = process, childProcessModule = leaseChildProcess,
+  processObject = process, childProcessModule = leaseChildProcess, now = leaseMonotonicNow,
 } = {}) {
   leaseAssert(process.platform === 'win32' || nativeFactory !== leaseNative, 'e2e-handle-family-platform');
   leaseAssert(leaseSafeRuntime(process.versions.node, process.versions.uv) || nativeFactory !== leaseNative, 'e2e-handle-family-runtime');
+  leaseAssert(typeof now === 'function' && !nodeUtilTypes.isProxy(now), 'e2e-handle-family-admission-clock');
   const state = readRunState(env);
   cwd = leasePath.resolve(cwd);
   leaseAssert(testProfile === null || (extraPreloads.length === 1
@@ -764,7 +796,7 @@ export function createE2eProcessHandleLeaseFamily({
   const store = leaseStore({ env, root, rootIdentity, ...state, io, readRunState });
   manifest.hash = store.write('family.json', manifest);
   const context = leaseMakeContext({ manifest, store, env, native, processObject, childProcessModule,
-    actorId: 'main', role: 'main', identity: creator });
+    actorId: 'main', role: 'main', identity: creator, now });
   function inspect() {
     const errors = [];
     let actorCount = 0, recordFiles = 0, recordBytes = 0, cliExitCode = null;
@@ -861,9 +893,14 @@ export async function activateE2eProcessHandleLeaseRole({
     const intentRecord = store.read(store.nameFor(marker.actorId, 'intent'));
     leaseAssert(intentRecord.hash === marker.intentHash && intentRecord.value.role === candidate);
     const started = now();
+    let waitReported = false;
     while (!io.existsSync(leasePath.join(marker.root, store.nameFor(marker.actorId, 'binding')))) {
       leaseAssert(now() - started < 5000, 'e2e-handle-family-admission-timeout');
       store.check();
+      if (candidate === 'cli' && !waitReported) {
+        waitReported = true;
+        try { console.error('[e2e-runner-lifecycle] cli-admission-wait'); } catch { /* Diagnostic cannot grant or obstruct admission. */ }
+      }
       await sleep(5);
     }
     const actorRecord = leaseReadActor(store, manifest, marker.actorId);
@@ -1664,6 +1701,7 @@ function normalizeLifecycleInput(input) {
       'terminateImpl',
       'setTimeoutImpl',
       'clearTimeoutImpl',
+      'onOwnershipReady',
     ];
     const allowedKeys = new Set([...requiredKeys, ...optionalKeys]);
     const descriptors = new Map();
@@ -1693,6 +1731,9 @@ function normalizeLifecycleInput(input) {
     const rawSnapshotOptions = descriptors.get('snapshotOptions').value;
     const rawCommandOptions = descriptors.get('commandOptions').value;
     const probeTerminalReport = descriptors.get('probeTerminalReport').value;
+    const onOwnershipReady = descriptors.get('onOwnershipReady')?.value;
+    if (onOwnershipReady !== undefined
+      && (typeof onOwnershipReady !== 'function' || isProxyObject(onOwnershipReady))) return null;
     if (child === undefined
       || rootPid === undefined
       || rawSnapshotOptions === undefined
@@ -1774,6 +1815,7 @@ function normalizeLifecycleInput(input) {
       snapshotOptions,
       commandOptions,
       probeTerminalReport,
+      onOwnershipReady,
       overallDeadlineMs: bounds.overallDeadlineMs,
       terminalGraceMs: bounds.terminalGraceMs,
       sampleIntervalMs: bounds.sampleIntervalMs,
@@ -2180,6 +2222,7 @@ async function monitorLifecycleOwnership(normalized, control, diagnostics) {
   let rootIdentity = null;
   let captured = [];
   let reusedPids = [];
+  let readinessAttempted = false;
   const reusedPidSet = new Set();
 
   const cloneFacts = () => ({
@@ -2215,6 +2258,24 @@ async function monitorLifecycleOwnership(normalized, control, diagnostics) {
           rootIdentity = cloneIdentity(validated.rootIdentity);
           captured = cloneIdentityArray(validated.captured);
           unionReusedPids(validated);
+          if (normalized.onOwnershipReady !== undefined && ownershipComplete && !readinessAttempted) {
+            try {
+              if (control.readTrigger() === null) {
+                readinessAttempted = true;
+                const outcome = Reflect.apply(normalized.onOwnershipReady, undefined, [{
+                  rootIdentity: cloneIdentity(rootIdentity), captured: cloneIdentityArray(captured),
+                }]);
+                if (outcome !== undefined) {
+                  // Reject asynchronous outcomes without awaiting them or reading a thenable getter.
+                  if (nodeUtilTypes.isPromise(outcome)) Reflect.apply(Promise.prototype.then, outcome, [undefined, () => {}]);
+                  throw new Error('ownership-ready-nonvoid');
+                }
+              }
+            } catch {
+              diagnostics.fail('initialize-ready', 'callback-exception');
+              ownershipComplete = false;
+            }
+          }
         }
       } catch {
         diagnostics.fail('initialize', 'sampler-exception');

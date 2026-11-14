@@ -32,6 +32,7 @@ import { bootstrapE2eRuntime, createE2eRunStateOwner } from './e2e-runtime-boots
 
 const ROOT = process.cwd();
 const ORIGINAL_CHILD_PROCESS_SPAWN = ChildProcess.prototype.spawn;
+const PROTECTED_E2E_SPAWNERS = new WeakMap();
 export let activeE2eProcessHandleRole = Object.freeze({ active: false });
 const DEFAULT_MANIFEST_PATH = path.join(ROOT, 'scripts', 'e2e-quarantine.json');
 const DEFAULT_RECEIPT_PATH = path.join(ROOT, 'test-results', 'e2e-verdict.json');
@@ -1073,13 +1074,88 @@ function normalE2eRunState(args, env, createOwner = createE2eRunStateOwner) {
  * Actor processes install their own persistent guards in the existing preload.
  */
 export function createProtectedE2eSpawner(family, spawnImpl = spawn) {
-  return (command, args, options) => {
+  let pending = null;
+  let finalized = false;
+  let admissionFailed = false;
+  function cancelPending() {
+    finalized = true;
+    if (pending !== null && !pending.admitted && !pending.cancelled) {
+      admissionFailed = true;
+      pending.cancelled = true;
+      pending.ticket.cancel();
+    }
+    return admissionFailed;
+  }
+  function readReadyIdentity(value) {
+    if (nodeTypes.isProxy(value) || !isPlainRecord(value)) return null;
+    const keys = Reflect.ownKeys(value);
+    if (keys.length !== 2 || keys.some(key => !['pid', 'creationToken'].includes(key))) return null;
+    const pid = readOwnData(value, 'pid'), token = readOwnData(value, 'creationToken');
+    if (!pid.valid || !isSafePid(pid.value) || !token.valid || typeof token.value !== 'string'
+      || token.value.length === 0 || token.value.length > 128 || token.value.trim() !== token.value
+      || /[\u0000-\u001F\u007F]/u.test(token.value)) return null;
+    return { pid: pid.value, creationToken: token.value };
+  }
+  function admitFromOwnership(child, facts) {
+    try {
+      if (finalized || admissionFailed || pending === null || pending.child !== child
+        || pending.attempted || pending.admitted || pending.cancelled) {
+        throw new Error('E2E_PROCESS_HANDLE_MAIN_ADMISSION_ORDER');
+      }
+      pending.attempted = true;
+      if (nodeTypes.isProxy(facts) || !isPlainRecord(facts)) {
+        throw new Error('E2E_PROCESS_HANDLE_MAIN_OWNERSHIP_MISMATCH');
+      }
+      const keys = Reflect.ownKeys(facts);
+      const rootField = readOwnData(facts, 'rootIdentity'), capturedField = readOwnData(facts, 'captured');
+      const root = rootField.valid ? readReadyIdentity(rootField.value) : null;
+      const captured = capturedField.value;
+      const actualPid = Object.getOwnPropertyDescriptor(child, 'pid');
+      if (keys.length !== 2 || keys.some(key => !['rootIdentity', 'captured'].includes(key))
+        || root === null || !capturedField.valid || nodeTypes.isProxy(captured) || !Array.isArray(captured)
+        || !isSafePid(pending.pid) || root.pid !== pending.pid
+        || actualPid === undefined || !Object.prototype.hasOwnProperty.call(actualPid, 'value')
+        || actualPid.value !== pending.pid) {
+        throw new Error('E2E_PROCESS_HANDLE_MAIN_OWNERSHIP_MISMATCH');
+      }
+      const length = Object.getOwnPropertyDescriptor(captured, 'length')?.value;
+      if (!Number.isSafeInteger(length) || length < 1 || length > MAX_LIFECYCLE_PIDS
+        || Reflect.ownKeys(captured).length !== length + 1) {
+        throw new Error('E2E_PROCESS_HANDLE_MAIN_OWNERSHIP_MISMATCH');
+      }
+      let containsRoot = false;
+      const seen = new Set();
+      for (let index = 0; index < length; index += 1) {
+        const item = Object.getOwnPropertyDescriptor(captured, String(index));
+        const identity = item?.enumerable === true && Object.prototype.hasOwnProperty.call(item, 'value')
+          ? readReadyIdentity(item.value) : null;
+        if (identity === null || seen.has(identity.pid)) throw new Error('E2E_PROCESS_HANDLE_MAIN_OWNERSHIP_MISMATCH');
+        seen.add(identity.pid);
+        if (identity.pid === root.pid && identity.creationToken === root.creationToken) containsRoot = true;
+      }
+      if (!containsRoot) throw new Error('E2E_PROCESS_HANDLE_MAIN_OWNERSHIP_MISMATCH');
+      // The ticket verifies its original native HANDLE and deadline immediately
+      // before the existing immutable binding publication. Never reopen a PID.
+      if (pending.ticket.admit() !== undefined) throw new Error('E2E_PROCESS_HANDLE_MAIN_ADMISSION_RESULT');
+      pending.admitted = true;
+    } catch (error) {
+      admissionFailed = true;
+      try { cancelPending(); } catch { /* Keep the original readiness failure. */ }
+      throw error;
+    }
+  }
+  const protectedSpawner = (command, args, options) => {
+    if (pending !== null || finalized) {
+      admissionFailed = true;
+      throw new Error('E2E_PROCESS_HANDLE_MAIN_SPAWNER_REUSED');
+    }
     const prototype = ChildProcess.prototype;
     const descriptor = Object.getOwnPropertyDescriptor(prototype, 'spawn');
     if (descriptor?.value !== ORIGINAL_CHILD_PROCESS_SPAWN || descriptor.writable !== true) {
       throw new Error('E2E_PROCESS_HANDLE_MAIN_HOOK_CHANGED');
     }
     const ticket = family.prepareProtectedSpawn({ role: 'cli', env: options.env });
+    pending = { ticket, child: undefined, pid: undefined, attempted: false, admitted: false, cancelled: false };
     let createdChild;
     let child;
     let failed = false;
@@ -1087,6 +1163,7 @@ export function createProtectedE2eSpawner(family, spawnImpl = spawn) {
     const protectedSpawn = function (...spawnArgs) {
       if (createdChild !== undefined) throw new Error('E2E_PROCESS_HANDLE_MAIN_MULTIPLE_SPAWNS');
       createdChild = this;
+      pending.child = this;
       return ticket.spawn(ORIGINAL_CHILD_PROCESS_SPAWN, this, spawnArgs);
     };
     Object.defineProperty(prototype, 'spawn', { ...descriptor, value: protectedSpawn });
@@ -1107,17 +1184,27 @@ export function createProtectedE2eSpawner(family, spawnImpl = spawn) {
       failure = new Error('E2E_PROCESS_HANDLE_MAIN_CHILD_MISMATCH');
     }
     if (failed) {
-      try { ticket.cancel(); } catch { /* Existing runner still records the original failure. */ }
+      try { cancelPending(); } catch { /* Existing runner still records the original failure. */ }
       throw failure;
     }
     try {
-      ticket.admit();
+      pending.pid = child.pid;
+      if (pending.pid === undefined || pending.pid === null) {
+        // No process exists to admit; preserve the existing not-created record.
+        ticket.admit();
+        pending.admitted = true;
+      } else if (!isSafePid(pending.pid)) {
+        throw new Error('E2E_PROCESS_HANDLE_MAIN_INVALID_PID');
+      }
     } catch (error) {
-      try { ticket.cancel(); } catch { /* An unadmitted child cannot enter dependency main. */ }
+      admissionFailed = true;
+      try { cancelPending(); } catch { /* Preserve the original creation interaction failure. */ }
       throw error;
     }
     return child;
   };
+  PROTECTED_E2E_SPAWNERS.set(protectedSpawner, { admitFromOwnership, cancelPending });
+  return protectedSpawner;
 }
 
 function completeProcessLeaseInspection(value) {
@@ -1279,13 +1366,15 @@ export async function runE2e({
   }
 
   let lifecycleResult = null;
-  if (child !== null && child !== undefined) {
-    try {
+  const leaseAdmission = PROTECTED_E2E_SPAWNERS.get(spawnImpl);
+  try {
+    if (child !== null && child !== undefined) {
       lifecycleResult = await superviseImpl({
         child,
         rootPid: child.pid,
         snapshotOptions: runnerSnapshotOptions(),
         commandOptions: {},
+        ...(leaseAdmission ? { onOwnershipReady: facts => { leaseAdmission.admitFromOwnership(child, facts); } } : {}),
         probeTerminalReport: () => {
           try {
             const report = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
@@ -1295,9 +1384,18 @@ export async function runE2e({
           }
         },
       });
-    } catch {
-      interactionFailed = true;
-      console.error('[run-e2e] Playwright lifecycle interaction failed.');
+    }
+  } catch {
+    interactionFailed = true;
+    console.error('[run-e2e] Playwright lifecycle interaction failed.');
+  } finally {
+    if (leaseAdmission) {
+      try {
+        if (leaseAdmission.cancelPending()) interactionFailed = true;
+      } catch {
+        interactionFailed = true;
+        console.error('[run-e2e] Playwright pending admission cleanup failed.');
+      }
     }
   }
   if (runnerErrorObserverAttached) {

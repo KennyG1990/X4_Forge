@@ -1,16 +1,17 @@
 import assert from 'node:assert/strict';
-import { ChildProcess, fork } from 'node:child_process';
+import { ChildProcess, fork, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
+import { StringDecoder } from 'node:string_decoder';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { activeE2eProcessHandleRole, createProtectedE2eSpawner, runE2e, validateE2eVerdictReceipt } from './run-e2e.mjs';
 import { createE2eProcessHandleLeaseFamily, E2E_PROCESS_HANDLE_ACTOR_ENV, superviseSpawnedE2eProcess } from './e2e-runner-lifecycle.mjs';
-import { initializeSpawnedProcessOwnership } from './e2e-process-ownership-sampler.mjs';
+import { initializeSpawnedProcessOwnership, sampleSpawnedProcessOwnership } from './e2e-process-ownership-sampler.mjs';
 import { createE2eRunStateOwner, readE2eRunState } from './e2e-runtime-bootstrap.mjs';
 
 const CASE_PREFIX = 'x4-e2e-runner-integration-';
@@ -642,6 +643,7 @@ function assertMainSpawnerWithoutOsLaunch(mode) {
   const originalDescriptor = Object.getOwnPropertyDescriptor(prototype, 'spawn');
   const originalDefineProperty = Object.defineProperty;
   const child = new ChildProcess(); // Inactive receiver: no native spawn is invoked.
+  if (mode !== 'no-pid') Object.defineProperty(child, 'pid', { value: 7410, writable: true, enumerable: true, configurable: true });
   const secondChild = new ChildProcess();
   const original = new Error('private-lease-main-spawner-secret');
   const events = [];
@@ -705,9 +707,10 @@ function assertMainSpawnerWithoutOsLaunch(mode) {
         return Reflect.apply(originalDefineProperty, Object, [target, key, descriptor]);
       };
     }
-    if (mode === 'healthy') {
+    if (mode === 'healthy' || mode === 'admit-throws' || mode === 'no-pid') {
       assert.strictEqual(protectedSpawn('controlled-node', argumentsBefore, optionsBefore), child);
-      assert.deepEqual(events, ['prepare', 'public-call', 'capture', 'public-return', 'admit']);
+      assert.deepEqual(events, ['prepare', 'public-call', 'capture', 'public-return', ...(mode === 'no-pid' ? ['admit'] : [])],
+        'created children retain capture without admission; no-PID publishes only not-created');
     } else {
       assert.throws(() => protectedSpawn('controlled-node', argumentsBefore, optionsBefore), error => {
         if (mode === 'wrong-receiver') return error.message === 'E2E_PROCESS_HANDLE_MAIN_CHILD_MISMATCH';
@@ -715,7 +718,7 @@ function assertMainSpawnerWithoutOsLaunch(mode) {
         return error === original;
       });
       assert.equal(events.filter(value => value === 'cancel').length, 1);
-      assert.equal(events.includes('admit'), mode === 'admit-throws');
+      assert.equal(events.includes('admit'), false);
     }
     assert.equal(ticketCalls, mode === 'throw-before-capture' ? 0 : 1);
     assert.deepEqual(argumentsBefore, ['controlled-cli.js', 'test']);
@@ -1011,12 +1014,104 @@ const CASES = [
   },
 ];
 
+function makeOwnedAdmissionCase(mode) {
+  const healthy = mode === 'healthy';
+  return {
+    name: `owned CLI admission: ${mode}`,
+    reportFactory: makeStrictGreenReport,
+    lifecycleFactory: facts => makeCompleteLifecycle({ ...facts, trigger: 'child-close', childExit: { code: 0, signal: null } }),
+    probeAfterWrite: true,
+    expectedInteractionFailure: !healthy,
+    runOptions(harness) {
+      const events = [];
+      harness.state.admissionEvents = events;
+      let returned = false;
+      let savedReady;
+      const originalSpawn = ChildProcess.prototype.spawn;
+      const protectedSpawn = createProtectedE2eSpawner({
+        prepareProtectedSpawn({ role, env }) {
+          assert.equal(role, 'cli');
+          events.push('prepare');
+          return {
+            environment: env, execArgv: [],
+            spawn(nativeSpawn, child) {
+              assert.strictEqual(nativeSpawn, originalSpawn);
+              assert.strictEqual(child, harness.state.child);
+              events.push('capture');
+              return 0;
+            },
+            admit() {
+              assert.equal(returned, true);
+              assert.strictEqual(ChildProcess.prototype.spawn, originalSpawn);
+              assert.equal(events.filter(event => event === 'admit').length, 0);
+              events.push('admit');
+              if (mode === 'admit-throws') throw new Error('private-admission-secret');
+            },
+            cancel() { events.push('cancel'); },
+          };
+        },
+      }, (command, args, options) => {
+        const child = harness.spawnImpl(command, args, options);
+        Reflect.apply(ChildProcess.prototype.spawn, child, [{}]);
+        returned = true;
+        events.push('returned');
+        return child;
+      });
+      return {
+        spawnImpl: protectedSpawn,
+        async superviseImpl(input) {
+          assert.deepEqual(events, ['prepare', 'capture', 'returned']);
+          assert.equal(typeof input.onOwnershipReady, 'function');
+          savedReady = input.onOwnershipReady;
+          harness.state.savedAdmissionReady = savedReady;
+          const facts = { rootIdentity: cloneIdentity(harness.lifecycle.rootIdentity), captured: harness.lifecycle.captured.map(cloneIdentity) };
+          harness.state.savedAdmissionFacts = facts;
+          const { onOwnershipReady, ...ordinaryInput } = input;
+          if (mode === 'wrong-pid') facts.rootIdentity.pid += 1;
+          if (!['dropped', 'late', 'supervise-throws'].includes(mode)) {
+            if (['admit-throws', 'wrong-pid'].includes(mode)) assert.throws(() => savedReady(facts));
+            else {
+              assert.equal(savedReady(facts), undefined);
+              if (mode === 'duplicate') assert.throws(() => savedReady(facts));
+            }
+          }
+          const result = await harness.superviseImpl(ordinaryInput);
+          if (mode === 'supervise-throws') throw new Error('private-supervision-secret');
+          return result;
+        },
+        inspectProcessLeases() {
+          const admits = events.filter(event => event === 'admit').length;
+          assert.equal(admits, ['healthy', 'duplicate', 'admit-throws'].includes(mode) ? 1 : 0);
+          assert.equal(events.filter(event => event === 'cancel').length, ['healthy', 'duplicate'].includes(mode) ? 0 : 1);
+          events.push('inspect');
+          return makeLeaseInspectionReport();
+        },
+        finalizeRunState() { assert.equal(events.at(-1), 'inspect'); events.push('retire'); },
+      };
+    },
+    assertResult({ exitCode, receipt, receiptText, harness }) {
+      assert.equal(exitCode, healthy ? 0 : 1);
+      assert.equal(receipt.verdict.green, true, 'synthetic test success cannot hide unadmitted or failed ownership');
+      assert.equal(receipt.runnerInteractionFailed, !healthy);
+      assert.equal(receipt.lifecycle.complete, mode !== 'supervise-throws');
+      assert.equal(harness.state.admissionEvents.at(-1), 'retire');
+      if (mode === 'late') {
+        const before = [...harness.state.admissionEvents];
+        assert.throws(() => harness.state.savedAdmissionReady(harness.state.savedAdmissionFacts));
+        assert.deepEqual(harness.state.admissionEvents, before, 'late readiness cannot reopen a cancelled ticket');
+      }
+      assertNoLifecycleTokenOrSecretLeak(receiptText, [], ['private-admission-secret', 'private-supervision-secret']);
+    },
+  };
+}
+
 CASES.push(...makeLeaseInspectionCases());
-CASES.push(...['healthy', 'throw-before-capture', 'throw-after-capture', 'cancel-throws', 'admit-throws',
+CASES.push(...['healthy', 'no-pid', 'throw-before-capture', 'throw-after-capture', 'cancel-throws', 'admit-throws',
   'restore-throws', 'wrong-receiver', 'multiple-receivers'].map(mode => makeLeaseInspectionCase({
   name: `MAIN protected spawner ${mode} without OS launch`, green: true,
   result() { assertMainSpawnerWithoutOsLaunch(mode); return makeLeaseInspectionReport(); },
 })));
+CASES.push(...['healthy', 'admit-throws', 'wrong-pid', 'duplicate', 'dropped', 'late', 'supervise-throws'].map(makeOwnedAdmissionCase));
 
 const NATIVE_LEASE_MODES = new Set(['healthy', 'acquire', 'cap', 'persist']);
 const NATIVE_LEASE_SELECTOR = '__x4_e2e_native_lease_';
@@ -1117,6 +1212,17 @@ async function runNativeLeaseExtraPreload(actor) {
   assert.equal(manifest.extraPreloads.length, 1);
   assert.equal(manifest.extraPreloads[0].physical, fs.realpathSync.native(fileURLToPath(import.meta.url)));
   const admission = nativeLeaseAdmission(actor, manifest);
+  const state = readE2eRunState();
+  const fixtureRoot = path.join(state.stateDir, NATIVE_LEASE_DATA);
+  const realBodyRequest = path.join(fixtureRoot, 'real-body-mode.json');
+  if (fs.existsSync(realBodyRequest)) {
+    const request = readNativeLeaseJson(realBodyRequest, 1024);
+    assertExactRecordKeys(request, ['schemaVersion', 'mode']);
+    assert.equal(request.schemaVersion, 'forge.e2e-native-real-body.v1');
+    assert.ok(['healthy', 'malformed', 'expired'].includes(request.mode));
+    fs.writeFileSync(path.join(fixtureRoot, `entry-${actor.actorId}.json`), `${JSON.stringify(admission)}\n`, { flag: 'wx' });
+    return; // Unlike the native fault fixture, execute the actual dependency body.
+  }
   if (actor.role !== 'cli') {
     assert.ok(['loader', 'worker'].includes(actor.role));
     assert.equal(typeof process.send, 'function');
@@ -1128,8 +1234,6 @@ async function runNativeLeaseExtraPreload(actor) {
   assert.ok(selector?.startsWith(NATIVE_LEASE_SELECTOR));
   const scenario = selector.slice(NATIVE_LEASE_SELECTOR.length);
   assert.equal(NATIVE_LEASE_MODES.has(scenario), true);
-  const state = readE2eRunState();
-  const fixtureRoot = path.join(state.stateDir, NATIVE_LEASE_DATA);
   await waitNativeLeaseBarrier(path.join(fixtureRoot, 'observed-root.json'));
   const reportPath = process.env.PLAYWRIGHT_JSON_OUTPUT_NAME;
   assert.equal(path.dirname(reportPath), os.tmpdir());
@@ -1324,6 +1428,167 @@ async function runNativeLeaseQualification(scenario) {
     terminalInput: 'synthetic-green', dependencyBodiesExecuted: false, realPlaywrightExecutionProven: false })}`);
 }
 
+async function runNativeAdmissionQualification(mode) {
+  assert.equal(process.platform, 'win32');
+  assert.ok(['healthy', 'malformed', 'expired'].includes(mode));
+  const stateOwner = createE2eRunStateOwner();
+  try { await runNativeAdmissionInState(mode, stateOwner); }
+  finally { stateOwner.retire(); }
+}
+
+async function runNativeAdmissionInState(mode, stateOwner) {
+  const fixtureRoot = path.join(stateOwner.stateDir, NATIVE_LEASE_DATA);
+  fs.mkdirSync(fixtureRoot, { mode: 0o700 });
+  fs.writeFileSync(path.join(fixtureRoot, 'real-body-mode.json'), `${JSON.stringify({ schemaVersion: 'forge.e2e-native-real-body.v1', mode })}\n`, { flag: 'wx' });
+  const family = createE2eProcessHandleLeaseFamily({
+    env: stateOwner.environment, cwd: process.cwd(), preloadPath: path.join(process.cwd(), 'scripts/run-e2e.mjs'),
+    extraPreloads: [fileURLToPath(import.meta.url)], testProfile: { handleLimit: 4096 },
+  });
+  const familyRoots = fs.readdirSync(stateOwner.stateDir).filter(name => name.startsWith('process-handle-family-'));
+  assert.equal(familyRoots.length, 1);
+  const bindingPath = path.join(stateOwner.stateDir, familyRoots[0], 'cli.binding.json');
+  const entryPath = path.join(fixtureRoot, 'entry-cli.json');
+  const receiptPath = path.join(fixtureRoot, 'receipt.json');
+  let child, childClosed = false, witnessCount = 0, witnessError = null, retired = 0, initialized = 0, sampled = 0, malformedConsumed = 0;
+  let expiredObservedErrors = null;
+  let initializationFixtureError = null;
+  let originalChildClose = null;
+  let resolveWait, rejectWait, resolveClose, inspection;
+  const wait = new Promise((resolve, reject) => { resolveWait = resolve; rejectWait = reject; });
+  wait.catch(() => {}); // Close/error may precede the supervisor's await.
+  const close = new Promise(resolve => { resolveClose = resolve; });
+  const decoder = new StringDecoder('utf8');
+  let line = '', discarding = false;
+  const failWait = error => { witnessError ??= error; rejectWait(error); };
+  const onData = bytes => {
+    try {
+      for (const character of decoder.write(bytes)) {
+        if (character === '\n') {
+          if (!discarding && line.replace(/\r$/u, '') === '[e2e-runner-lifecycle] cli-admission-wait') {
+            witnessCount += 1;
+            assert.equal(witnessCount, 1, 'wait witness is exactly once');
+            assert.equal(fs.existsSync(bindingPath), false);
+            assert.equal(fs.existsSync(entryPath), false);
+            assert.equal(family.snapshot().owner.retained, 1);
+            resolveWait();
+          }
+          line = ''; discarding = false;
+        } else if (!discarding) {
+          line += character;
+          if (line.length > 4096) { line = ''; discarding = true; }
+        }
+      }
+    } catch (error) { failWait(error); }
+  };
+  const protectedSpawn = createProtectedE2eSpawner(family, (...args) => {
+    child = spawn(...args);
+    child.stderr.on('data', onData);
+    child.once('close', (code, signal) => {
+      originalChildClose = { code, signal };
+      childClosed = true;
+      if (witnessCount !== 1) failWait(new Error('native-admission-wait-witness-missing'));
+      resolveClose();
+    });
+    child.once('error', failWait);
+    return child;
+  });
+  let exitCode;
+  try {
+    exitCode = await runE2e({
+      args: ['--config=tests/fixtures/e2e-flake-policy/playwright.config.ts'], manifest: MANIFEST,
+      env: stateOwner.environment, receiptPath, spawnImpl: protectedSpawn,
+      superviseImpl: input => superviseSpawnedE2eProcess({
+        ...input,
+        initializeOwnershipImpl: async options => {
+          try {
+            await wait;
+            assert.equal(witnessError, null);
+            assert.equal(fs.existsSync(bindingPath), false);
+            assert.equal(fs.existsSync(entryPath), false);
+            assert.equal(options.snapshotOptions.timeoutMs, 10000);
+            if (mode === 'expired') await close;
+            else assert.equal(childClosed, false);
+            const observed = await initializeSpawnedProcessOwnership(options);
+            initialized += 1;
+            if (mode === 'expired') expiredObservedErrors = [...observed.errors];
+            assert.equal(fs.existsSync(bindingPath), false, 'actual capture cannot itself publish admission');
+            assert.equal(fs.existsSync(entryPath), false, 'real dependency entry stays blocked through actual capture');
+            if (mode === 'healthy' || (mode === 'malformed' && initialized === 1)) {
+              assert.equal(observed.complete, true);
+              assert.equal(observed.rootPresent, true);
+              assert.equal(observed.rootIdentity.pid, input.rootPid);
+            }
+            if (mode === 'expired') {
+              assert.equal(observed.complete, false);
+              assert.deepEqual(observed.errors, ['spawned-ownership-root-unavailable']);
+            }
+            if (mode === 'malformed' && observed.complete) {
+              malformedConsumed += 1;
+              return { ...observed, rootPresent: false };
+            }
+            return observed;
+          } catch (error) { initializationFixtureError ??= error; throw error; }
+        },
+        sampleOwnershipImpl(options) { sampled += 1; return sampleSpawnedProcessOwnership(options); },
+      }),
+      inspectProcessLeases() { inspection = family.inspect(); return inspection; },
+      finalizeRunState() { retired += 1; stateOwner.retire(); },
+    });
+  } finally {
+    if (child) { child.stderr.removeListener('data', onData); child.removeListener('error', failWait); }
+  }
+  const receipt = readNativeLeaseJson(receiptPath);
+  assert.equal(validateE2eVerdictReceipt(receipt), true);
+  assert.equal(exitCode, 1, 'real policy retry-pass remains a blocking flake, or admission is refused');
+  assert.equal(witnessError, null);
+  assert.equal(initializationFixtureError, null, 'supervisor exception handling cannot hide fixture assertion failures');
+  assert.equal(witnessCount, 1);
+  assert.equal(retired, 1);
+  assert.ok(initialized >= 1);
+  assert.equal(childClosed, true);
+  assert.deepEqual(receipt.lifecycle.childExit, originalChildClose);
+  assert.equal(receipt.childExit, originalChildClose.code);
+  assert.equal(family.snapshot().owner.retained, 1);
+  const healthy = mode === 'healthy';
+  assert.equal(fs.existsSync(bindingPath), healthy);
+  assert.equal(fs.existsSync(entryPath), healthy);
+  assert.equal(inspection.complete, healthy);
+  assert.equal(receipt.runnerInteractionFailed, !healthy);
+  assert.equal(receipt.lifecycle.ownershipComplete, healthy);
+  if (healthy) {
+    assert.equal(initialized, 1);
+    assert.equal(receipt.reportInspection.complete, true);
+    assert.equal(receipt.verdict.flaky, 1);
+    assert.equal(receipt.verdict.totalTests, 1);
+    assert.equal(receipt.lifecycle.complete, true);
+    assert.equal(receipt.lifecycle.termination.treeGone, true);
+    assert.equal(inspection.cliExitCode, 1);
+    assert.ok(inspection.actorCount >= 2, 'real policy workers also enter through protected preloads');
+    const entries = fs.readdirSync(fixtureRoot).filter(name => /^entry-(cli|child-\d{4})\.json$/u.test(name));
+    assert.equal(entries.length, inspection.actorCount);
+  } else {
+    assert.equal(receipt.verdict.green, false);
+    assert.equal(receipt.lifecycle.complete, false);
+    assert.deepEqual(originalChildClose, { code: 86, signal: null });
+    assert.equal(receipt.childExit, 86, 'the original ChildProcess reports pre-body admission refusal');
+    assert.equal(inspection.cliExitCode, null, 'cancelled family refuses inspection before querying the retained native HANDLE');
+    assert.deepEqual(fs.readdirSync(fixtureRoot).filter(name => name.startsWith('entry-')), []);
+    if (mode === 'malformed') assert.ok(malformedConsumed >= 1, 'the malformed negative must consume genuine successful capture');
+    if (mode === 'expired') {
+      assert.equal(initialized, 1); assert.equal(sampled, 0);
+      assert.deepEqual(expiredObservedErrors, ['spawned-ownership-root-unavailable'],
+        'assert outside the supervisor so its exception handling cannot hide a different snapshot failure');
+    }
+  }
+  console.log(`[e2e-native-admission] ${JSON.stringify({ mode, stateDir: stateOwner.stateDir, receiptPath,
+    witnessCount, initialized, sampled, malformedConsumed, expiredObservedErrors,
+    originalCliExitCode: inspection.cliExitCode, familyComplete: inspection.complete,
+    originalChildClose, nativeExitProbeAvailable: inspection.cliExitCode !== null,
+    nativeExitProbeUnavailableReason: healthy ? null : 'family-cancelled-before-inspection',
+    realPolicyBodiesExecuted: healthy, syntheticTerminalReport: false, bindingPublished: healthy,
+    receiptValid: true, ownershipComplete: receipt.lifecycle.ownershipComplete, exitCode })}`);
+}
+
 async function runSelftest() {
   for (let index = 0; index < CASES.length; index += 1) {
     await runCase(CASES[index], index + 1);
@@ -1342,7 +1607,9 @@ if (!isMain && activeE2eProcessHandleRole.active === true && typeof activeE2ePro
 if (isMain) {
   try {
     const nativeMode = /^--native-process-leases=(healthy|acquire|cap|persist)$/u.exec(process.argv[2] || '');
-    if (nativeMode && process.argv.length === 3) await runNativeLeaseQualification(nativeMode[1]);
+    const admissionMode = /^--native-process-admission=(healthy|malformed|expired)$/u.exec(process.argv[2] || '');
+    if (admissionMode && process.argv.length === 3) await runNativeAdmissionQualification(admissionMode[1]);
+    else if (nativeMode && process.argv.length === 3) await runNativeLeaseQualification(nativeMode[1]);
     else await runSelftest();
   } catch (error) {
     console.error(error instanceof Error ? error.stack || error.message : String(error));
