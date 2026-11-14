@@ -699,24 +699,35 @@ async function main() {
     ['workspace.read', workspaceSuccess],
     ['workspace.compile', firstCompile],
   ]);
-  const assertCapabilityOutput = (id, response) => {
+  const assertCapabilityOutput = (id, response, negativeCaseName) => {
     const descriptor = capabilityContract?.capabilities?.find(capability => capability?.id === id);
     const errors = descriptor ? schemaErrors(descriptor.outputSchema, response?.json) : ['descriptor missing'];
-    ok(`capability_${id.replaceAll('.', '_')}_output_envelope`,
-      response?.status >= 200 && response.status < 300 && errors.length === 0,
-      JSON.stringify({ status: response?.status, errors }));
+    const nativeControlOperation = id === 'performance.native.collect' ? 'start' : id === 'performance.native.stop' ? 'stop' : null;
+    // This standalone server has no host IPC. Only these two exact controls have
+    // truthful unavailable output witnesses; this never counts as a capture ACK.
+    const statusAccepted = nativeControlOperation !== null
+      ? response?.status === 503 && response.json?.schemaVersion === 'forge.native-performance.report.v1'
+        && response.json?.operation === nativeControlOperation && response.json?.ok === false
+        && response.json?.code === 'NATIVE_PERFORMANCE_UNAVAILABLE' && response.json?.availability === 'unavailable'
+        && response.json?.unavailableReason === 'transport-absent' && response.json?.ownership === 'none'
+        && response.json?.status === null
+      : response?.status >= 200 && response.status < 300;
+    // Negative probes mutate actual responses but are never canonical samples.
+    ok(negativeCaseName || `capability_${id.replaceAll('.', '_')}_output_envelope`,
+      negativeCaseName ? statusAccepted === false : statusAccepted && errors.length === 0,
+      JSON.stringify({ status: response?.status, statusAccepted, errors }));
     return { id, method: descriptor?.apiBindings?.find(binding => binding?.role === 'primary')?.method,
       path: descriptor?.apiBindings?.find(binding => binding?.role === 'primary')?.path,
-      status: response?.status, required: descriptor?.outputSchema?.required || [], errors };
+      status: response?.status, statusAccepted, required: descriptor?.outputSchema?.required || [], errors };
   };
   const capabilityIds = Array.isArray(capabilityContract?.capabilities)
     ? capabilityContract.capabilities.map(capability => capability?.id)
     : [];
   // Independent semantic inventory: unexpected additions/removals must fail.
   const expectedCapabilityIds = ['expression.check', 'extensions.conflicts.analyze', 'history.list', 'history.revert',
-    'patch.readiness.analyze', 'performance.collect', 'performance.profile', 'performance.read',
-    'project.validate', 'project.xml.references', 'readiness.read', 'runtime.debug.read', 'schema.domains.list',
-    'schema.element.explain', 'workspace.compile', 'workspace.generate.preview', 'workspace.read'];
+    'patch.readiness.analyze', 'performance.collect', 'performance.native.collect', 'performance.native.read', 'performance.native.stop',
+    'performance.profile', 'performance.read', 'project.validate', 'project.xml.references', 'readiness.read',
+    'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'workspace.compile', 'workspace.generate.preview', 'workspace.read'];
   const sameCapabilityIds = (actual, expected) => Array.isArray(actual)
     && JSON.stringify([...actual].sort()) === JSON.stringify([...expected].sort());
   const expectedCapabilityIdentity = id => `${id}@${['patch.readiness.analyze', 'workspace.compile', 'workspace.read'].includes(id) ? 2 : 1}`;
@@ -1332,7 +1343,9 @@ async function main() {
     ['write', writeEffective, 'write', ['expression.check', 'extensions.conflicts.analyze', 'history.list', 'project.validate',
       'performance.collect', 'performance.profile', 'performance.read', 'project.xml.references',
       'readiness.read', 'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'workspace.compile', 'workspace.read']],
-    ['deploy', deployEffective, 'deploy', expectedCapabilityIds],
+    ['deploy', deployEffective, 'deploy', expectedCapabilityIds.filter(id => ![
+      'performance.native.collect', 'performance.native.read', 'performance.native.stop',
+    ].includes(id))],
   ]) {
     ok(`${name}_key_effective_capabilities_are_exact_and_hashed`, response.status === 200 &&
       response.json?.api_version === '2026-08-01.agent-effective.v1' &&
@@ -1385,6 +1398,60 @@ async function main() {
       && performanceRead.json?.control?.ownedTimerCount === 0
       && performanceRead.json?.coverage?.native === 'unavailable-not-wired',
     `status=${performanceRead.status}`);
+  // BEGIN actual standalone native capability output fixtures.
+  // These valid closed IDs address no host; unavailable reports must stay honest.
+  const nativeNoHostIdentity = {
+    expectedBackendInstanceId: 'route_native_backend_fixture', expectedNativeInstanceId: 'route_native_host_fixture',
+  };
+  const nativePerformanceRead = await req('GET', '/api/agent/performance/native', SESSION_TOKEN);
+  const nativePerformanceCollection = await req('POST', '/api/agent/performance/native/collection', SESSION_TOKEN,
+    { ...nativeNoHostIdentity, durationMs: 1000, intervalMs: 1000, eventLoopDelay: false });
+  const nativePerformanceStop = await req('POST', '/api/agent/performance/native/stop', SESSION_TOKEN,
+    { ...nativeNoHostIdentity, captureId: 'route_native_capture_fixture' });
+  for (const [id, operation, response] of [
+    ['performance.native.read', 'read', nativePerformanceRead],
+    ['performance.native.collect', 'start', nativePerformanceCollection],
+    ['performance.native.stop', 'stop', nativePerformanceStop],
+  ]) {
+    capabilityResponses.set(id, response);
+    ok(`native_performance_${operation}_reports_absent_host_without_capture`,
+      response.status === (operation === 'read' ? 200 : 503)
+        && response.json?.schemaVersion === 'forge.native-performance.report.v1' && response.json?.operation === operation
+        && response.json?.availability === 'unavailable' && response.json?.unavailableReason === 'transport-absent'
+        && response.json?.ownership === 'none' && response.json?.status === null
+        && (operation === 'read' ? response.json?.ok === true && !Object.hasOwn(response.json, 'code')
+          : response.json?.ok === false && response.json?.code === 'NATIVE_PERFORMANCE_UNAVAILABLE'),
+      JSON.stringify({ status: response.status, report: response.json }));
+    if (operation !== 'read') {
+      assertCapabilityOutput(id, { ...response, status: 200 }, `native_performance_${operation}_oracle_rejects_wrong_http_status`);
+      for (const [name, field, value] of [
+        ['wrong_code', 'code', 'NATIVE_PERFORMANCE_START_FAILED'],
+        ['wrong_operation', 'operation', 'read'],
+        ['wrong_reason', 'unavailableReason', 'contract-invalid'],
+        ['wrong_ownership', 'ownership', 'operator'],
+        ['non_null_status', 'status', { snapshot: { unexpected: true } }],
+      ]) {
+        assertCapabilityOutput(id, { ...response, json: { ...response.json, [field]: value } },
+          `native_performance_${operation}_oracle_rejects_${name}`);
+      }
+    }
+  }
+  const performanceAfterNativeRefusals = await req('GET', '/api/agent/performance', readKey);
+  ok('native_performance_absent_host_controls_preserve_backend_default_off',
+    performanceAfterNativeRefusals.status === 200 && performanceAfterNativeRefusals.json?.backend?.enabled === false
+      && performanceAfterNativeRefusals.json?.backend?.producer?.pid === analysisBackendPid
+      && performanceAfterNativeRefusals.json?.control?.collectionActive === false
+      && performanceAfterNativeRefusals.json?.control?.profileActive === false
+      && performanceAfterNativeRefusals.json?.control?.ownedTimerCount === 0
+      && performanceAfterNativeRefusals.json?.control?.failedTimerCount === 0
+      && performanceAfterNativeRefusals.json?.control?.eventLoopDelayMonitoring === false
+      && ['collectionStartedAtUnixMs', 'collectionExpiresAtUnixMs', 'profileCapturesStarted', 'profileCapturesSucceeded',
+        'profileCapturesFailed', 'collectionCleanupUnconfirmed', 'profileCleanupUnconfirmed', 'abortListenerCleanupUnconfirmed'].every(field =>
+        Object.hasOwn(performanceRead.json?.control || {}, field)
+          && Object.hasOwn(performanceAfterNativeRefusals.json?.control || {}, field)
+          && performanceAfterNativeRefusals.json.control[field] === performanceRead.json.control[field]),
+    JSON.stringify({ status: performanceAfterNativeRefusals.status, control: performanceAfterNativeRefusals.json?.control }));
+  // END actual standalone native capability output fixtures.
   const xmlReferenceProject = {
     id: 'route_reference_fixture', name: 'Route reference fixture', files: [
       { path: 'index/macros.xml', content: '<index><entry name="route_reference_macro" value="assets/route_reference_macro"/></index>' },
@@ -4830,7 +4897,7 @@ async function main() {
   const capabilityOutputReport = (capabilityContract?.capabilities || [])
     .map(capability => assertCapabilityOutput(capability.id, capabilityResponses.get(capability.id)));
   ok('all_canonical_capability_outputs_exercised',
-    sameCapabilityIds(capabilityOutputReport.map(row => row.id), expectedCapabilityIds) && capabilityResponses.size === expectedCapabilityIds.length && capabilityOutputReport.every(row => row.status >= 200 && row.status < 300 && row.errors.length === 0),
+    sameCapabilityIds(capabilityOutputReport.map(row => row.id), expectedCapabilityIds) && capabilityResponses.size === expectedCapabilityIds.length && capabilityOutputReport.every(row => row.statusAccepted === true && row.errors.length === 0),
     JSON.stringify(capabilityOutputReport));
 
   // --- PRODUCTION SURFACE ---------------------------------------------------------------------

@@ -13,6 +13,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import ts from 'typescript';
+import { runInNewContext } from 'node:vm';
 import { scopeAllows } from '../src/lib/agentKeys';
 import {
   AGENT_CAPABILITY_DISCOVERY_DISPOSITION,
@@ -5610,6 +5611,32 @@ function projectionStatementAlwaysTerminates(statement: ts.Statement): boolean {
   return false;
 }
 
+const staticDeadBlockPrefixes = new WeakMap<ts.Block | ts.SourceFile, {
+  positions: Map<ts.Statement, number>;
+  prefixes: boolean[];
+}>();
+
+function hasTerminatingStatementBefore(parent: ts.Block | ts.SourceFile, current: ts.Statement): boolean {
+  let indexed = staticDeadBlockPrefixes.get(parent);
+  if (!indexed) {
+    const positions = new Map<ts.Statement, number>();
+    parent.statements.forEach((statement, index) => {
+      if (!positions.has(statement)) positions.set(statement, index);
+    });
+    indexed = { positions, prefixes: [false] };
+    staticDeadBlockPrefixes.set(parent, indexed);
+  }
+  const index = indexed.positions.get(current);
+  if (index === undefined || index === 0) return false;
+  // Only prior statements are examined; later queries cannot change earlier answers.
+  while (indexed.prefixes.length <= index) {
+    const previous = indexed.prefixes.length - 1;
+    indexed.prefixes.push(indexed.prefixes[previous]
+      || projectionStatementAlwaysTerminates(parent.statements[previous]));
+  }
+  return indexed.prefixes[index];
+}
+
 function nodeIsStaticallyDead(node: ts.Node): boolean {
   let current: ts.Node | undefined = node;
   while (current?.parent) {
@@ -5636,12 +5663,78 @@ function nodeIsStaticallyDead(node: ts.Node): boolean {
     if (ts.isCaseClause(parent) || ts.isDefaultClause(parent) || ts.isCaseBlock(parent) ||
       (ts.isPropertyDeclaration(parent) && parent.initializer && nodeIsWithin(parent.initializer, current))) return true;
     if ((ts.isBlock(parent) || ts.isSourceFile(parent)) && ts.isStatement(current)) {
-      const index = parent.statements.indexOf(current);
-      if (index > 0 && parent.statements.slice(0, index).some(statement => projectionStatementAlwaysTerminates(statement))) return true;
+      if (hasTerminatingStatementBefore(parent, current)) return true;
     }
     current = parent;
   }
   return false;
+}
+
+function runStaticReachabilityPrefixSelftest(): { pass: boolean; checks: Array<{ name: string; pass: boolean }> } {
+  try {
+    const relative = 'scripts/capability-contract-audit.ts';
+    const source = sourceFile(relative, fs.readFileSync(path.join(ROOT, relative), 'utf8'));
+    const names = ['unwrapProjectionExpression', 'staticBooleanValue', 'projectionStatementAlwaysTerminates',
+      'nodeIsWithin', 'hasTerminatingStatementBefore', 'nodeIsStaticallyDead'];
+    const declarations = names.map(name => {
+      const matches = source.statements.filter(statement => ts.isFunctionDeclaration(statement) && statement.name?.text === name);
+      if (matches.length !== 1) throw new Error('STATIC_PREFIX_SELFTEST_HELPER_AMBIGUOUS');
+      return matches[0].getText(source);
+    });
+    const indexes = source.statements.filter(statement => ts.isVariableStatement(statement)
+      && statement.declarationList.declarations.some(declaration => ts.isIdentifier(declaration.name)
+        && declaration.name.text === 'staticDeadBlockPrefixes'));
+    if (indexes.length !== 1) throw new Error('STATIC_PREFIX_SELFTEST_INDEX_AMBIGUOUS');
+    const fixtures = `
+      const checks = [];
+      const check = (name, pass) => checks.push({ name, pass });
+      const parse = text => ts.createSourceFile('same-prefix-fixture.ts', text, ts.ScriptTarget.Latest, true);
+      const bodyOf = text => parse(text).statements[0].body;
+      const body = bodyOf('function f(){' + Array.from({ length: 200 }, (_, i) => 'value' + i + ';').join('') + 'target();later();}');
+      const target = body.statements[200], later = body.statements[201];
+      const original = projectionStatementAlwaysTerminates;
+      let calls = 0, depth = 0, forbidden = false;
+      projectionStatementAlwaysTerminates = function(...args) {
+        if (depth++ === 0) { calls++; if (args[0] === target || args[0] === later) forbidden = true; }
+        try { return original(...args); } finally { depth--; }
+      };
+      try {
+        let live = true;
+        for (let i = 0; i < 200; i++) live = !nodeIsStaticallyDead(target) && live;
+        check('prefix_repeated_queries_remain_live', live);
+        check('prefix_each_prior_statement_inspected_once', calls === 200);
+        check('prefix_current_and_later_statements_not_analyzed', !forbidden);
+        const order = bodyOf('function f(){before();return;middle();after();}');
+        const beforeOrderCalls = calls;
+        check('prefix_later_query_preserves_earlier_positions', nodeIsStaticallyDead(order.statements[3])
+          && calls - beforeOrderCalls === 2
+          && !nodeIsStaticallyDead(order.statements[0]) && !nodeIsStaticallyDead(order.statements[1]));
+        const fresh = ['function f(){target();}', 'function f(){return;target();}', 'function f(){target();}'];
+        check('prefix_fresh_ast_same_filename_is_independent', fresh.every((text, index) => {
+          const statements = bodyOf(text).statements;
+          return nodeIsStaticallyDead(statements[statements.length - 1]) === (index === 1);
+        }));
+        const first = order.statements[0];
+        const duplicate = ts.factory.createBlock([first, order.statements[1], first]);
+        check('prefix_duplicate_statement_retains_first_position', !hasTerminatingStatementBefore(duplicate, first));
+        const before = calls;
+        check('prefix_missing_statement_does_not_analyze', !hasTerminatingStatementBefore(order, target) && calls === before);
+      } finally { projectionStatementAlwaysTerminates = original; }
+      check('prefix_vm_predicate_restored', projectionStatementAlwaysTerminates === original);
+      ({ pass: checks.every(check => check.pass), checks });
+    `;
+    const compiled = ts.transpileModule([indexes[0].getText(source), ...declarations, fixtures].join('\n'), {
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+    }).outputText;
+    const result = runInNewContext(compiled, { ts }, { timeout: 3000 }) as ReturnType<typeof runStaticReachabilityPrefixSelftest>;
+    if (!result || !Array.isArray(result.checks) || result.checks.length !== 8
+      || new Set(result.checks.map(check => check.name)).size !== 8
+      || result.checks.some(check => typeof check.name !== 'string' || typeof check.pass !== 'boolean')
+      || result.pass !== result.checks.every(check => check.pass)) throw new Error('STATIC_PREFIX_SELFTEST_RESULT_INVALID');
+    return result;
+  } catch {
+    return { pass: false, checks: [{ name: 'prefix_selftest_execution', pass: false }] };
+  }
 }
 
 const projectionFileCache = new Map<string, ts.SourceFile>();
@@ -8926,6 +9019,8 @@ function audit(manifestOverride?: RouteDispositionManifest): { errors: string[];
   })) errors.push('precommit does not declare and invoke both capability gates');
   const nativeAuthoritySelftest = runNativeAgentCapabilityAuthoritySelftest();
   if (!nativeAuthoritySelftest.pass) errors.push(`native capability authority selftest failed: ${nativeAuthoritySelftest.checks.filter(check => !check.pass).map(check => check.name).join(', ')}`);
+  const staticPrefixSelftest = runStaticReachabilityPrefixSelftest();
+  errors.push(...staticPrefixSelftest.checks.filter(check => !check.pass).map(check => `static reachability prefix selftest: ${check.name}`));
   const nativePerformanceAuditSelftest = runNativePerformanceAuditSelftest();
   if (!nativePerformanceAuditSelftest.pass) errors.push(`native performance audit selftest failed: ${nativePerformanceAuditSelftest.checks.filter(check => !check.pass).map(check => check.name).join(', ')}`);
   const nativeEntryAuditSelftest = runNativePerformanceEntryAuditSelftest();
