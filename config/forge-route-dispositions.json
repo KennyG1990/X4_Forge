@@ -1737,6 +1737,18 @@
       "resourceClass": "process-telemetry",
       "workspaceMode": "none"
     },
+    "GET /api/agent/performance/native": {
+      "disposition": "canonical-capability",
+      "owner": "performance.native.read",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "process-telemetry",
+      "workspaceMode": "none"
+    },
     "GET /api/agent/platform-release-selftest": {
       "disposition": "public-selftest",
       "owner": "runPlatformReleaseSelftest",
@@ -3114,6 +3126,28 @@
       "resourceClass": "process-telemetry",
       "workspaceMode": "none"
     },
+    "POST /api/agent/performance/native/collection": {
+      "disposition": "canonical-capability",
+      "owner": "performance.native.collect",
+      "registrations": 1,
+      "agentScopes": [
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "process-telemetry",
+      "workspaceMode": "none"
+    },
+    "POST /api/agent/performance/native/stop": {
+      "disposition": "canonical-capability",
+      "owner": "performance.native.stop",
+      "registrations": 1,
+      "agentScopes": [
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "process-telemetry",
+      "workspaceMode": "none"
+    },
     "POST /api/agent/performance/profile": {
       "disposition": "canonical-capability",
       "owner": "performance.profile",
@@ -3769,6 +3803,9 @@
     "history.revert@1": "2399e2dd2ec3263e0f6f5364ab3be8edf1fe8d065cea40bc736d72ee8c4bcd98",
     "patch.readiness.analyze@2": "7baa90f99f4f1a7cc4382caaf009c107388e9de6124d0d2b5bf155769ab91812",
     "performance.collect@1": "3388a193408ec6e83ad3228705b7b9acaeb488580995c4359a844047871bd9ff",
+    "performance.native.collect@1": "8521e03600b98b7ced7b49205f8dfe95b8e018337d6c63e83e9a88596e7792a2",
+    "performance.native.read@1": "c0e1f66557859226078fdb994589eb29bac9fc3b43b5f5775ecf1b9b739eb0b1",
+    "performance.native.stop@1": "f866ee72462be850e0a487a19d1f8a0c04f4bb37def73109da756164125e00a8",
     "performance.profile@1": "51831b0f7c83b8180091640aadd4b763740fcd26dd65d8b13961adf624b7510d",
     "performance.read@1": "b8c57d8f5873923817068bb5334e3430c5fee76b8633e0709a79352c386e1bfe",
     "project.validate@1": "34e6c5a213b07038e58d70dca27db474370300e38599f6299b5664a974dedf06",
@@ -3782,8 +3819,8 @@
     "workspace.read@2": "962774de4a25e8725a0d90d4982298cc72f100312075b1f6f4ff9de1482752d7"
   },
   "mcpModuleSignature": {
-    "version": 16,
-    "hash": "e986fe3213daead7efe4ef42696fe6ab31f6fd1b79205776033bac57b317b08b"
+    "version": 18,
+    "hash": "63e387b7095c68b109ea73bde5b62c0c1c5765dab995d29af21d30fc15566e1f"
   },
   "mcpSignatures": {
     "validate_mod": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",
@@ -3799,6 +3836,9 @@
     "get_forge_performance": "327e56f29eff19939be7c6214090aa49df02a86e6fb56e50242190efb0384681",
     "start_forge_performance_capture": "9c4647c5440d38c6aa3e466229b9ad654b6c2b6102841b3bbca5dd14c2fa9296",
     "profile_forge_backend": "56a8f7467b5783eef0d9efe168d8ed5e6a8f7e69826467811f2a3570d5aecb32",
+    "get_forge_native_performance": "3f1b585298c6eb3e1249ff6581ac6f2db04afbcc7b9c49a6496eec4fc0df0c5c",
+    "start_forge_native_performance_capture": "1ba3b29759b5a880167fb46cfb1a4a58575cf59df3f39b59f4ede1cd17939be9",
+    "stop_forge_native_performance_capture": "5a32e7d75eef743d45cf13c400ebe34ba116829807da4686e9468d8d0c94dcd1",
     "check_conflicts": "0bd9187ac3d013b361c04d91395f72e2859dd923cc8f167efe08696527ab1703",
     "check_patch_readiness": "a38c6f472937bb8f4df3f8aec0e8f43c3a8a9348120b7c577c2ac1c5d6543dec",
     "explain_element": "1ca4792d3d94435a3657f6dd2acad01d71f3ef6b138bab61ad456aaeb5f146d4"
@@ -3817,6 +3857,9 @@
     "get_forge_performance": "performance.read@1",
     "start_forge_performance_capture": "performance.collect@1",
     "profile_forge_backend": "performance.profile@1",
+    "get_forge_native_performance": "performance.native.read@1",
+    "start_forge_native_performance_capture": "performance.native.collect@1",
+    "stop_forge_native_performance_capture": "performance.native.stop@1",
     "check_conflicts": "extensions.conflicts.analyze@1",
     "check_patch_readiness": "patch.readiness.analyze@2",
     "explain_element": "schema.element.explain@1"

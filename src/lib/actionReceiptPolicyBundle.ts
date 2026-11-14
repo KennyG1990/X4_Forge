@@ -20,7 +20,7 @@ import { LEDGER_QUIET_ROUTES } from './agentHistory.js';
 import { FORGE_CAPABILITIES, type ForgeCapabilityDescriptorV1 } from './forgeCapabilities.js';
 
 export const ACTION_RECEIPT_COVERAGE_REVIEWED_MANIFEST_SHA256 =
-  '4dffd78bf950c74b86cbf0d3905b761a12d1e1c7f17f79c5b9f41d6a1c781f42' as const;
+  'ca5aef7ed98db36b62a1bbb6b40145f96f6697ddaf8fea416ed2b199fdf7d62d' as const;
 
 export const ACTION_RECEIPT_POLICY_BUNDLE_SCHEMA = 'forge.action-receipt-policy-bundle.v1' as const;
 

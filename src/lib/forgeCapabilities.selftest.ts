@@ -5,7 +5,7 @@
 
 import crypto from 'crypto';
 import { resolveAgentRouteTemplateAuthority, scopeAllows, type AgentKeyScope } from './agentKeys';
-import { decideEffectiveCapability } from './agentCapabilityAuthority';
+import { decideEffectiveCapability, type AgentCapabilityConstraint } from './agentCapabilityAuthority';
 import { LEDGER_QUIET_ROUTES, ledgerRouteKind } from './agentHistory';
 import {
   FORGE_CAPABILITIES,
@@ -46,7 +46,7 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
 
   const validationErrors = validateForgeCapabilityRegistry();
   check('registry invariants', validationErrors.length === 0, validationErrors.join(' | ') || undefined);
-  check('bounded initial registry', FORGE_CAPABILITIES.length === 17, `count=${FORGE_CAPABILITIES.length}`);
+  check('bounded initial registry', FORGE_CAPABILITIES.filter(capability => !capability.id.startsWith('performance.native.')).length === 17, `count=${FORGE_CAPABILITIES.length}`);
 
   const canonical = canonicalCapabilityContractPayload();
   const contract = buildForgeCapabilityContract(sha256);
@@ -447,5 +447,75 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
     [...malformedErrors, ...malformedSurfaceErrors, ...duplicateErrors].join(' | '),
   );
 
+  checks.push(...runNativeForgeCapabilitiesSelftest().checks);
   return { pass: checks.every(item => item.pass), checks, contractHash: contract.contractHash };
+}
+
+/** Native metadata is additional to the unchanged seventeen legacy capabilities. */
+export function runNativeForgeCapabilitiesSelftest() {
+  const checks: CapabilityCheck[] = [];
+  const check = (name: string, pass: boolean): void => { checks.push({ name, pass }); };
+  const expected = [
+    { id: 'performance.native.read', operation: 'read', method: 'GET', route: '/api/agent/performance/native', alias: 'get_forge_native_performance',
+      scopes: ['read', 'write', 'deploy'], fields: [], required: [] },
+    { id: 'performance.native.collect', operation: 'start', method: 'POST', route: '/api/agent/performance/native/collection', alias: 'start_forge_native_performance_capture',
+      scopes: ['write', 'deploy'], fields: ['expectedBackendInstanceId', 'expectedNativeInstanceId', 'durationMs', 'intervalMs', 'eventLoopDelay'],
+      required: ['expectedBackendInstanceId', 'expectedNativeInstanceId'] },
+    { id: 'performance.native.stop', operation: 'stop', method: 'POST', route: '/api/agent/performance/native/stop', alias: 'stop_forge_native_performance_capture',
+      scopes: ['write', 'deploy'], fields: ['expectedBackendInstanceId', 'expectedNativeInstanceId', 'captureId'],
+      required: ['expectedBackendInstanceId', 'expectedNativeInstanceId', 'captureId'] },
+  ] as const;
+  const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+  const keys = (value: object | undefined) => Object.keys(value || {}).sort();
+  check('native registry adds exactly the three reviewed identities to the seventeen legacy entries',
+    FORGE_CAPABILITIES.length === 20 &&
+      equal(FORGE_CAPABILITIES.filter(capability => capability.id.startsWith('performance.native.')).map(capability => capability.id).sort(),
+        expected.map(row => row.id).sort()));
+  for (const row of expected) {
+    const capability = findForgeCapability(row.id);
+    check(row.id + ' has one exact protected process-telemetry route and matching public projections',
+      !!capability && capability.version === 1 &&
+        equal(capability.context, { workspace: 'none', profile: 'none' }) &&
+        equal(capability.access, { public: false, studioSession: true, agentScopes: row.scopes }) &&
+        equal(capability.effects, ['read', 'analyze']) && capability.confirmation === 'none' &&
+        equal(capability.apiBindings, [{ method: row.method, path: row.route, inputLocation: row.method === 'GET' ? 'none' : 'body', role: 'primary' }]) &&
+        capability.surfaces.mcp.length === 1 && capability.surfaces.mcp[0].id === row.alias &&
+        capability.surfaces.mcp[0].anchor === 'vscode-extension/mcp/x4forge-mcp.cjs::name: "' + row.alias + '"' &&
+        capability.surfaces.ui.some(surface => surface.anchor === 'src/components/PerformancePanel.tsx::' + row.route));
+    check(row.id + ' declares only its closed flat input fields and required exact target IDs',
+      !!capability && capability.inputSchema.type === 'object' && capability.inputSchema.additionalProperties === false &&
+        equal(keys(capability.inputSchema.properties), [...row.fields].sort()) &&
+        equal([...(capability.inputSchema.required || [])].sort(), [...row.required].sort()) &&
+        row.required.every(field => capability.inputSchema.properties?.[field]?.type === 'string' &&
+          capability.inputSchema.properties[field].maxLength === 128));
+    const output = capability?.outputSchema;
+    const status = output?.properties?.status?.anyOf?.find(schema => schema.type === 'object');
+    const snapshot = status?.properties?.snapshot;
+    check(row.id + ' has a closed operation-specific report without private actor or control snapshot disclosure',
+      !!output && output.type === 'object' && output.additionalProperties === false &&
+        equal(keys(output.properties), ['schemaVersion', 'operation', 'ok', 'availability', 'unavailableReason', 'ownership', 'status', 'code'].sort()) &&
+        equal([...(output.required || [])].sort(), ['schemaVersion', 'operation', 'ok', 'availability', 'unavailableReason', 'ownership', 'status'].sort()) &&
+        equal(output.properties?.schemaVersion?.enum, ['forge.native-performance.report.v1']) &&
+        equal(output.properties?.operation?.enum, [row.operation]) &&
+        equal(output.properties?.ownership?.enum, ['none', 'self', 'other', 'operator']) &&
+        output.properties?.status?.anyOf?.some(schema => schema.type === 'null') === true &&
+        !!status && status.additionalProperties === false &&
+        !['actor', 'owner', 'keyId', 'nonce', 'epoch'].some(field => Object.hasOwn(status.properties || {}, field)) &&
+        (row.operation === 'read'
+          ? snapshot?.anyOf?.some(schema => schema.type === 'object') === true && snapshot.anyOf.some(schema => schema.type === 'null')
+          : snapshot?.type === 'null'));
+    const allowedEffects: AgentCapabilityConstraint['allowedEffects'] = ['read', 'analyze'];
+    const constrained = { kind: 'agent' as const, scope: 'write' as const,
+      constraint: { capabilityIdentities: [row.id + '@1'], allowedEffects } };
+    check(row.id + ' discovery uses the same explicit version/effects and scope authority as its exact route',
+      !!capability &&
+        decideEffectiveCapability(capability, constrained, resolveAgentRouteTemplateAuthority).allowed &&
+        !decideEffectiveCapability(capability, { kind: 'agent', scope: 'all' }, resolveAgentRouteTemplateAuthority).allowed &&
+        decideEffectiveCapability(capability, { ...constrained, constraint: { ...constrained.constraint, capabilityIdentities: [row.id + '@2'] } },
+          resolveAgentRouteTemplateAuthority).code === 'CAPABILITY_NOT_GRANTED' &&
+        decideEffectiveCapability(capability, { ...constrained, constraint: { ...constrained.constraint, allowedEffects: ['read'] } },
+          resolveAgentRouteTemplateAuthority).code === 'CAPABILITY_EFFECT_DENIED' &&
+        decideEffectiveCapability(capability, { ...constrained, scope: 'read' }, resolveAgentRouteTemplateAuthority).allowed === (row.operation === 'read'));
+  }
+  return { pass: checks.every(check => check.pass), passed: checks.filter(check => check.pass).length, total: checks.length, checks };
 }

@@ -61,9 +61,12 @@ async function mainFetchFixtureFactory() {
   const javascript = ts.transpileModule(`${method.getText(source)}\nconst API_BOOT_BACKOFFS_MS = ${backoffs.getText(source)};\nconst customFetch = ${owner.getText(source)};`, {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
   }).outputText;
-  return (delegate: typeof fetch) => {
+  return (delegate: typeof fetch, options?: { deadlineMs?: number }) => {
     const headers: Response[] = []; const failures: unknown[] = []; const delays: number[] = [];
     const deadlines = new Set<AbortDeadline>(); let released = 0; let ownedPromises = 0;
+    // BEGIN BATCH3 native fetch deadline fixture
+    const deadlineDurations: number[] = [];
+    // END BATCH3 native fetch deadline fixture
     const dependencies = {
       beginWebviewPerformanceRequest: () => ({
         headers: (response: Response) => { headers.push(response); },
@@ -75,7 +78,10 @@ async function mainFetchFixtureFactory() {
       }),
       location: { origin: 'https://forge.test' }, clientRequestDeadlineMs, timeoutError,
       createAbortDeadline: (upstream: AbortSignal | null | undefined, durationMs: number) => {
-        const deadline = createAbortDeadline(upstream, durationMs); deadlines.add(deadline);
+        // BEGIN BATCH3 native fetch bounded deadline injection
+        deadlineDurations.push(durationMs);
+        const deadline = createAbortDeadline(upstream, options?.deadlineMs ?? durationMs); deadlines.add(deadline);
+        // END BATCH3 native fetch bounded deadline injection
         return { ...deadline, release: () => { released++; deadlines.delete(deadline); deadline.release(); } };
       },
       originalFetch: delegate, sessionStorage: { getItem: () => 'fixture_session' },
@@ -86,7 +92,11 @@ async function mainFetchFixtureFactory() {
     };
     const fetch = new Function(...Object.keys(dependencies), `${javascript}\nreturn customFetch;`)(...Object.values(dependencies)) as typeof globalThis.fetch;
     return { fetch, headers, failures, delays, activeDeadlines: () => deadlines.size, released: () => released,
-      ownedPromises: () => ownedPromises, dispose: () => { for (const deadline of deadlines) deadline.release(); deadlines.clear(); } };
+      ownedPromises: () => ownedPromises,
+      // BEGIN BATCH3 native fetch fixture durations
+      deadlineDurations,
+      // END BATCH3 native fetch fixture durations
+      dispose: () => { for (const deadline of deadlines) deadline.release(); deadlines.clear(); } };
   };
 }
 
@@ -449,9 +459,119 @@ export async function runWebviewPerformanceSelftest() {
   }
   const actualRejection = unhandledRejectionProbe();
   check('actual unhandled-rejection identity and recorder-failure negative', actualRejection.pass, actualRejection);
+  // BEGIN BATCH3 native fetch default coverage
+  checks.push(...(await runNativePerformanceFetchSelftest()).checks);
+  // END BATCH3 native fetch default coverage
   const passed = checks.filter(row => row.pass).length;
   return { allPassed: passed === checks.length, passed, total: checks.length, checks };
 }
+// BEGIN BATCH3 native fetch cancellation tests
+/** Actual main.tsx customFetch AST, injected transport, existing deadline owner.
+ * The 5ms deadline probe changes only fixture timing, not the product's 30s budget. */
+export async function runNativePerformanceFetchSelftest() {
+  const checks: Array<{ name: string; pass: boolean; detail?: string }> = [];
+  const check = (name: string, pass: boolean) => checks.push({ name, pass });
+  const mainFetchFixture = await mainFetchFixtureFactory();
+  const routes = [
+    ['GET', '/api/agent/performance/native'],
+    ['POST', '/api/agent/performance/native/collection'],
+    ['POST', '/api/agent/performance/native/stop'],
+  ] as const;
+  for (const [method, route] of routes) {
+    const upstream = new AbortController(), pending = deferred<Response>();
+    let calls = 0, abortEvents = 0, removals = 0;
+    let calledInput: RequestInfo | URL | undefined, calledInit: RequestInit | undefined;
+    const remove = upstream.signal.removeEventListener.bind(upstream.signal);
+    upstream.signal.removeEventListener = (...args: Parameters<AbortSignal['removeEventListener']>) => { if (args[0] === 'abort') removals++; remove(...args); };
+    const body = method === 'POST' ? 'UNCHANGED_NATIVE_CONTROL_BODY' : undefined;
+    const fixture = mainFetchFixture((input, init) => {
+      calls++; calledInput = input; calledInit = init;
+      init?.signal?.addEventListener('abort', () => { abortEvents++; }, { once: true }); return pending.promise;
+    });
+    try {
+      const result = fixture.fetch(route, { method, signal: upstream.signal, body }).then(response => ({ response, error: undefined }), error => ({ response: undefined, error }));
+      check(`native ${method} ${route} retains owned deadline until headers`, calls === 1 && fixture.activeDeadlines() === 1 && fixture.released() === 0 && fixture.ownedPromises() === 0
+        && fixture.headers.length === 0 && fixture.failures.length === 0 && fixture.deadlineDurations.length === 1 && fixture.deadlineDurations[0] === 30_000);
+      const reason = new DOMException('native pre-header caller cancellation', 'AbortError'); upstream.abort(reason);
+      check(`native ${method} ${route} forwards caller cancellation before settlement`, abortEvents === 1 && calledInit?.signal?.aborted === true && calledInit.signal.reason === reason
+        && fixture.released() === 0 && fixture.activeDeadlines() === 1 && removals === 0);
+      pending.reject(reason); const settled = await result;
+      check(`native ${method} ${route} cancels once without retry and releases only owned listeners`, settled.error === reason && calls === 1 && fixture.delays.length === 0
+        && calledInput === route && calledInit?.body === body && fixture.released() === 1 && fixture.activeDeadlines() === 0 && removals === 1
+        && fixture.failures.length === 1 && fixture.failures[0] === reason && fixture.headers.length === 0);
+    } finally { pending.reject(new Error('fixture cleanup')); fixture.dispose(); }
+
+    let attempts = 0, bodyReads = 0;
+    const refusal = new Response('UNREAD_NATIVE_REFUSAL', { status: 503 });
+    Object.defineProperty(refusal, 'json', { value() { bodyReads++; throw new Error('transport must not parse native bodies'); } });
+    Object.defineProperty(refusal, 'clone', { value() { bodyReads++; throw new Error('transport must not duplicate native bodies'); } });
+    const refusalFixture = mainFetchFixture(() => { attempts++; return Promise.resolve(refusal); });
+    try {
+      const received = await refusalFixture.fetch(`https://forge.test${route}`, { method: method.toLowerCase(), body });
+      check(`native ${method} ${route} preserves unread refusal with no boot retry`, received === refusal && attempts === 1 && refusalFixture.delays.length === 0
+        && bodyReads === 0 && !refusal.bodyUsed && refusalFixture.headers.length === 1 && refusalFixture.headers[0] === refusal
+        && refusalFixture.failures.length === 0 && refusalFixture.released() === 1 && refusalFixture.activeDeadlines() === 0 && refusalFixture.ownedPromises() === 0);
+    } finally { refusalFixture.dispose(); }
+
+    let queryAttempts = 0;
+    const queryRefusal = new Response('UNREAD_NATIVE_QUERY_REFUSAL', { status: 503 });
+    const queryFixture = mainFetchFixture(() => { queryAttempts++; return Promise.resolve(queryRefusal); });
+    try {
+      const received = await queryFixture.fetch(`${route}?unexpected=1`, { method, body });
+      check(`native ${method} ${route} query variant keeps pathname-owned no-retry lifetime`, received === queryRefusal && queryAttempts === 1
+        && queryFixture.delays.length === 0 && queryFixture.ownedPromises() === 0 && queryFixture.released() === 1 && queryFixture.activeDeadlines() === 0 && !queryRefusal.bodyUsed);
+    } finally { queryFixture.dispose(); }
+
+    const requestAbort = new AbortController(), requestPending = deferred<Response>();
+    const request = new Request(`https://forge.test${route}`, { method, body, signal: requestAbort.signal });
+    let inherited: AbortSignal | null | undefined;
+    const requestFixture = mainFetchFixture((_input, init) => { inherited = init?.signal; return requestPending.promise; });
+    try {
+      const result = requestFixture.fetch(request).then(response => ({ response, error: undefined }), error => ({ response: undefined, error }));
+      const reason = new DOMException('native inherited Request cancellation', 'AbortError'); requestAbort.abort(reason);
+      const forwarded = inherited?.aborted === true && inherited.reason === reason && requestFixture.activeDeadlines() === 1 && requestFixture.released() === 0;
+      requestPending.reject(reason); const settled = await result;
+      check(`native ${method} ${route} inherits Request method and signal without retry`, forwarded && settled.error === reason && requestFixture.ownedPromises() === 0
+        && requestFixture.delays.length === 0 && requestFixture.released() === 1 && requestFixture.activeDeadlines() === 0);
+    } finally { requestPending.reject(new Error('fixture cleanup')); requestFixture.dispose(); }
+
+    let deadlineCalls = 0; let deadlineSignal: AbortSignal | null | undefined; let rescue: ReturnType<typeof setTimeout> | undefined;
+    const deadlineFixture = mainFetchFixture((_input, init) => {
+      deadlineCalls++; deadlineSignal = init?.signal;
+      return new Promise<Response>((_resolve, reject) => {
+        if (init?.signal?.aborted) { reject(init.signal.reason); return; }
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+        rescue = setTimeout(() => reject(new Error('native request lost its deadline before headers')), 50);
+      });
+    }, { deadlineMs: 5 });
+    try {
+      let error: unknown; try { await deadlineFixture.fetch(route, { method, body }); } catch (failure) { error = failure; }
+      check(`native ${method} ${route} deadline aborts pending transport without retry or success`, deadlineSignal?.aborted === true && error instanceof Error && error.name === 'TimeoutError'
+        && error.message.includes('30000') && deadlineCalls === 1 && deadlineFixture.delays.length === 0 && deadlineFixture.headers.length === 0
+        && deadlineFixture.failures.length === 1 && deadlineFixture.released() === 1 && deadlineFixture.activeDeadlines() === 0
+        && deadlineFixture.deadlineDurations.length === 1 && deadlineFixture.deadlineDurations[0] === 30_000);
+    } finally { clearTimeout(rescue); deadlineFixture.dispose(); }
+  }
+  for (const [input, method, expectedDeadlines] of [
+    ['/api/agent/performance/native-extra', 'POST', 1], ['/api/agent/performance/native/collection/extra', 'POST', 1],
+    ['/api/agent/performance/native/stop-extra', 'POST', 1], ['/api/agent/performance/native/stop', 'PUT', 1],
+    ['https://external.test/api/agent/performance/native/collection', 'POST', 0],
+  ] as const) {
+    const pending = deferred<Response>(), fixture = mainFetchFixture(() => pending.promise);
+    try {
+      const result = fixture.fetch(input, { method, body: 'UNCHANGED_UNOWNED_BODY' }).then(response => ({ response, error: undefined }), error => ({ response: undefined, error }));
+      const unchanged = fixture.released() === expectedDeadlines && fixture.activeDeadlines() === 0 && fixture.ownedPromises() === 1;
+      const reason = new Error('unchanged unowned rejection'); pending.reject(reason); const settled = await result;
+      check(`native exact ownership leaves ${method} ${input} unchanged`, unchanged && settled.error === reason && fixture.delays.length === 0 && fixture.failures[0] === reason);
+    } finally { pending.reject(new Error('fixture cleanup')); fixture.dispose(); }
+  }
+  const passed = checks.filter(row => row.pass).length;
+  return { allPassed: passed === checks.length, passed, total: checks.length, checks };
+}
+// END BATCH3 native fetch cancellation tests
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  void runWebviewPerformanceSelftest().then(result => { process.stdout.write(`${JSON.stringify(result, null, 2)}\n`); if (!result.allPassed) process.exitCode = 1; }).catch(error => { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
+  // BEGIN BATCH3 native fetch CLI selection
+  const run = process.argv.includes('--native-performance-selftest') ? runNativePerformanceFetchSelftest : runWebviewPerformanceSelftest;
+  // END BATCH3 native fetch CLI selection
+  void run().then(result => { process.stdout.write(`${JSON.stringify(result, null, 2)}\n`); if (!result.allPassed) process.exitCode = 1; }).catch(error => { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
 }

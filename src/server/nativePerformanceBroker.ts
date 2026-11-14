@@ -41,6 +41,7 @@ export type NativeBrokerRetireReason =
   'backend-exit' | 'disconnect' | 'stopped' | 'disposed' | 'protocol' | 'send-failed' | 'timer-failed';
 export type NativeBrokerRefreshOutcome =
   'never' | 'pending' | 'ok' | 'timeout' | 'aborted' | 'preempted' | 'rejected' | 'invalidated' | 'retired';
+export type NativeCaptureOwnership = 'none' | 'self' | 'other' | 'operator';
 export interface NativeBrokerView {
   schemaVersion: 'forge.native-performance.broker.v1';
   backendInstanceId: string;
@@ -73,6 +74,8 @@ export interface NativeBrokerStartRequest extends NativeBrokerIdentityRequest { 
 export interface NativeBrokerStopRequest extends NativeBrokerIdentityRequest { captureId: string }
 export interface NativePerformanceBroker {
   status(): Readonly<NativeBrokerView>;
+  /** Trusted relative projection only; never serialize the underlying actor identity. */
+  ownership(actor: NativeBrokerActor): NativeCaptureOwnership;
   read(request: NativeBrokerReadRequest): Promise<NativeBrokerResult>;
   start(request: NativeBrokerStartRequest): Promise<NativeBrokerResult>;
   stop(request: NativeBrokerStopRequest): Promise<NativeBrokerResult>;
@@ -410,6 +413,16 @@ export function createNativePerformanceBroker(options: NativePerformanceBrokerOp
     }
   }
   const authorized = (actor: NativeBrokerActor) => actorShape(actor) && current(actor);
+  const knownCapture = (captureId: string) => cancellation?.captureId === captureId ? cancellation
+    : lease?.captureId === captureId ? lease : history?.captureId === captureId ? history : null;
+  const ownership = (actor: NativeBrokerActor): NativeCaptureOwnership => {
+    if (retired || availability !== 'ready' || !authorized(actor)) return 'none';
+    const captureId = cancellation?.captureId ?? native?.captureId;
+    if (!captureId) return 'none';
+    if (actor.kind === 'studio') return 'operator';
+    const known = knownCapture(captureId);
+    return known && sameOwner(known.owner, actor) ? 'self' : 'other';
+  };
   const basicFailure = (request: NativeBrokerReadRequest): NativeBrokerFailureCode | null => {
     if (!request || !authorized(request.actor)) return 'NATIVE_PERFORMANCE_AUTHORITY_REVOKED';
     if (request.signal?.aborted) return 'NATIVE_PERFORMANCE_ABORTED';
@@ -518,8 +531,7 @@ export function createNativePerformanceBroker(options: NativePerformanceBrokerOp
     const code = identityFailure(request); if (code) return Promise.resolve(fail(code));
     if (!isNativeInstanceId(request.captureId)) return Promise.resolve(fail('NATIVE_PERFORMANCE_INPUT_INVALID'));
     if (pending && pending.kind !== 'read') return Promise.resolve(fail('NATIVE_PERFORMANCE_BUSY'));
-    const known = cancellation?.captureId === request.captureId ? cancellation
-      : lease?.captureId === request.captureId ? lease : history?.captureId === request.captureId ? history : null;
+    const known = knownCapture(request.captureId);
     const isStudio = request.actor.kind === 'studio';
     if (request.captureId !== cancellation?.captureId && request.captureId !== native?.captureId) {
       return Promise.resolve(fail('NATIVE_PERFORMANCE_CAPTURE_MISMATCH'));
@@ -529,7 +541,7 @@ export function createNativePerformanceBroker(options: NativePerformanceBrokerOp
     preemptRead();
     return makeControl('stop', request, request.captureId);
   };
-  const broker: NativePerformanceBroker = Object.freeze({ status: view, read, start, stop, retire });
+  const broker: NativePerformanceBroker = Object.freeze({ status: view, ownership, read, start, stop, retire });
   if (!options.channel || !options.binding) return broker;
   try {
     if (!options.channel.isConnected()) return broker;

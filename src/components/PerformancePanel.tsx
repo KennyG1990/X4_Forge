@@ -1,11 +1,13 @@
 import React from 'react';
 import { Activity, Play, RefreshCw, Square } from 'lucide-react';
 import type { ForgeCpuProfileReport, ForgePerformanceResourceSample, ForgePerformanceSnapshot } from '../lib/forgePerformance';
-import type { ForgeBackendPerformanceStatus } from '../server/forgePerformance';
+import type { ForgeBackendPerformanceStatus, ForgeNativePerformanceReport, ForgeNativePerformanceOperation, ForgeNativePerformanceFailureCode } from '../server/forgePerformance';
 import type { getProjectValidationCacheStats } from '../server/projectValidation';
 import { readWebviewPerformance, startWebviewPerformanceCollection, stopWebviewPerformanceCollection, type WebviewPerformanceView } from '../lib/webviewPerformance';
 import { useContinuousPolling } from '../lib/useContinuousPolling';
 import { fetchPollingJson, pollingResourceKey } from '../lib/continuousPolling';
+import { isNativeInstanceId, isNativePerformanceSnapshot, isNativePerformanceStatus, normalizeNativeCollectionOptions } from '../../shared/nativePerformanceProtocol';
+import { NATIVE_PERFORMANCE_TRANSPORT_LIMITS } from '../../shared/nativePerformanceChannel';
 
 export interface ForgePerformanceReport {
   ok: true; schemaVersion: 'forge.performance.report.v1';
@@ -85,6 +87,72 @@ export function isForgeCpuProfile(value: unknown): value is ForgeCpuProfileRepor
     && value.coverage.rawProfile === 'not-returned-or-persisted' && value.coverage.timer === 'event-loop-blockage-can-delay-stop'
     && value.coverage.resourceLimit === 'no-os-heap-quota' && ['available', 'unavailable'].includes(String(value.coverage.samples));
 }
+const nativeFailures: Readonly<Record<ForgeNativePerformanceFailureCode, { status: number; message: string }>> = {
+  NATIVE_PERFORMANCE_INPUT_INVALID: { status: 400, message: 'The native capture inputs are invalid.' },
+  NATIVE_PERFORMANCE_BUSY: { status: 409, message: 'Another native operation is pending. Refresh status.' },
+  NATIVE_PERFORMANCE_CAPTURE_MISMATCH: { status: 409, message: 'The selected native capture changed. Refresh before targeting another capture.' },
+  NATIVE_PERFORMANCE_IDENTITY_MISMATCH: { status: 409, message: 'The backend or native instance changed. Refresh its identity.' },
+  NATIVE_PERFORMANCE_PREEMPTED: { status: 409, message: 'Another operation replaced this request. Refresh status.' },
+  NATIVE_PERFORMANCE_CLEANUP_UNCONFIRMED: { status: 409, message: 'Native cleanup is unconfirmed. Refresh status before retrying cleanup.' },
+  NATIVE_PERFORMANCE_DISPOSED: { status: 503, message: 'The native producer was disposed.' },
+  NATIVE_PERFORMANCE_UNAVAILABLE: { status: 503, message: 'The native producer is unavailable.' },
+  NATIVE_PERFORMANCE_RETIRED: { status: 503, message: 'This native channel retired. Its previous status cannot confirm cleanup.' },
+  NATIVE_PERFORMANCE_AUTHORITY_REVOKED: { status: 403, message: 'Native telemetry access is no longer authorized.' },
+  NATIVE_PERFORMANCE_NOT_OWNER: { status: 403, message: 'This caller does not own the selected native capture.' },
+  NATIVE_PERFORMANCE_CONTROL_TIMEOUT: { status: 408, message: 'The native request timed out. Its execution and cleanup outcome are unknown; refresh status.' },
+  NATIVE_PERFORMANCE_ABORTED: { status: 408, message: 'Native cancellation was requested. Refresh status to establish execution and cleanup.' },
+  NATIVE_PERFORMANCE_PROTOCOL_ERROR: { status: 502, message: 'The native producer returned an invalid protocol result.' },
+  NATIVE_PERFORMANCE_READER_LIMIT: { status: 429, message: 'The native read limit was reached. Wait for the current read to settle.' },
+  NATIVE_PERFORMANCE_START_FAILED: { status: 500, message: 'The native producer could not start collection. Refresh status.' },
+  NATIVE_PERFORMANCE_REQUEST_FAILED: { status: 500, message: 'The native request failed. Refresh status; no execution result is claimed.' },
+};
+const nativeAvailability = ['unavailable', 'waiting', 'ready', 'retired'] as const;
+const nativeReasons = ['transport-absent', 'contract-invalid', 'waiting', 'ready-timeout', 'producer-disposed', 'retired', 'authority-revoked', null] as const;
+const nativeRefreshOutcomes = ['never', 'pending', 'ok', 'timeout', 'aborted', 'preempted', 'rejected', 'invalidated', 'retired'] as const;
+const nativeInteger = (value: unknown) => number(value) && Number.isSafeInteger(value);
+function nativeRecord(value: unknown, required: readonly string[], optional: readonly string[] = []): value is Record<string, unknown> {
+  return object(value) && required.every(key => Object.hasOwn(value, key)) && Reflect.ownKeys(value).every(key => {
+    if (typeof key !== 'string' || (!required.includes(key) && !optional.includes(key))) return false;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return !!descriptor?.enumerable && Object.hasOwn(descriptor, 'value');
+  });
+}
+/** Native DTOs have their own strict producer and control contract; backend v1 stays unchanged. */
+export function isForgeNativePerformanceReport(value: unknown, operation?: ForgeNativePerformanceOperation): value is ForgeNativePerformanceReport {
+  try {
+    if (!nativeRecord(value, ['schemaVersion', 'operation', 'ok', 'availability', 'unavailableReason', 'ownership', 'status'], ['code'])
+      || value.schemaVersion !== 'forge.native-performance.report.v1' || typeof value.operation !== 'string' || !['read', 'start', 'stop'].includes(value.operation)
+      || (operation !== undefined && value.operation !== operation) || typeof value.ok !== 'boolean'
+      || !nativeAvailability.some(item => item === value.availability) || !nativeReasons.some(item => item === value.unavailableReason)
+      || typeof value.ownership !== 'string' || !['none', 'self', 'other', 'operator'].includes(value.ownership)) return false;
+    if (value.ok ? Object.hasOwn(value, 'code') : typeof value.code !== 'string' || !Object.hasOwn(nativeFailures, value.code)) return false;
+    if (value.status === null) return value.availability === 'unavailable' && value.ownership === 'none'
+      && (value.ok ? value.operation === 'read' && value.unavailableReason === 'transport-absent'
+        : ['transport-absent', 'contract-invalid', 'authority-revoked'].includes(String(value.unavailableReason)));
+    const status = value.status;
+    if (!nativeRecord(status, ['schemaVersion', 'backendInstanceId', 'availability', 'unavailableReason', 'native', 'pending', 'cancellation',
+      'cleanupUnconfirmed', 'orphaned', 'captureOwned', 'readSubscribers', 'snapshot', 'snapshotAgeMs', 'lastRefreshOutcome',
+      'rejectedMessages', 'lateResults', 'droppedSnapshots', 'timerCleanupUnconfirmed'])
+      || status.schemaVersion !== 'forge.native-performance.broker.v1' || !isNativeInstanceId(status.backendInstanceId)
+      || status.availability !== value.availability || status.unavailableReason !== value.unavailableReason
+      || ![null, 'read', 'start', 'stop'].some(item => item === status.pending)
+      || typeof status.cancellation !== 'string' || !['none', 'pending', 'unknown'].includes(status.cancellation)
+      || !fields(status, ['cleanupUnconfirmed', 'orphaned', 'captureOwned', 'timerCleanupUnconfirmed'], item => typeof item === 'boolean')
+      || !fields(status, ['readSubscribers', 'rejectedMessages', 'lateResults', 'droppedSnapshots'], nativeInteger)
+      || Number(status.readSubscribers) > NATIVE_PERFORMANCE_TRANSPORT_LIMITS.readers || !nullable(status.snapshotAgeMs)
+      || !nativeRefreshOutcomes.some(item => item === status.lastRefreshOutcome)
+      || !(status.native === null || isNativePerformanceStatus(status.native))) return false;
+    if (status.availability === 'ready' && (status.native === null || (isNativePerformanceStatus(status.native) && status.native.disposed) || status.unavailableReason !== null)) return false;
+    if ((status.availability === 'waiting' && status.unavailableReason !== 'waiting') || (status.availability === 'retired' && status.unavailableReason !== 'retired')) return false;
+    if (!value.ok && (value.code === 'NATIVE_PERFORMANCE_AUTHORITY_REVOKED' || value.code === 'NATIVE_PERFORMANCE_NOT_OWNER')
+      && (status.snapshot !== null || status.snapshotAgeMs !== null)) return false;
+    if (value.operation !== 'read' && (status.snapshot !== null || status.snapshotAgeMs !== null)) return false;
+    if (status.snapshot === null) return status.snapshotAgeMs === null;
+    return status.native !== null && isNativePerformanceStatus(status.native) && isNativePerformanceSnapshot(status.snapshot)
+      && status.snapshot.producer.instanceId === status.native.producer.instanceId
+      && status.snapshot.producer.pid === status.native.producer.pid;
+  } catch { return false; }
+}
 export const performanceNumber = (value: number | null | undefined, suffix = '', digits = 1) => number(value) ? `${value.toLocaleString(undefined, { maximumFractionDigits: digits })}${suffix}` : 'Unknown';
 const bytes = (value: number | null | undefined) => number(value) ? performanceNumber(value / 1024 / 1024, ' MiB') : 'Unknown';
 const time = (value: number | null | undefined) => number(value) && Number.isFinite(new Date(value).getTime()) ? new Date(value).toLocaleTimeString() : 'Unknown';
@@ -97,7 +165,8 @@ export function SnapshotView({ title, snapshot }: { title: string; snapshot: For
   const rows = [...snapshot.operations].sort((a, b) => b.totalMs - a.totalMs);
   const shown = allOperations ? rows : rows.slice(0, 12);
   const backend = snapshot.producer.component === 'backend';
-  const metrics: Array<[string, keyof ForgePerformanceResourceSample, (value: number | null | undefined) => string]> = backend
+  const native = snapshot.producer.component === 'extension-host';
+  const metrics: Array<[string, keyof ForgePerformanceResourceSample, (value: number | null | undefined) => string]> = backend || native
     ? [['CPU / one core', 'cpuOneCorePercent', value => performanceNumber(value, '%')], ['CPU / host', 'cpuHostPercent', value => performanceNumber(value, '%')],
       ['RSS', 'rssBytes', bytes], ['Heap used', 'heapUsedBytes', bytes], ['Event-loop delay p95', 'eventLoopDelayP95Ms', value => performanceNumber(value, ' ms')]]
     : [['Frame cadence', 'fps', value => performanceNumber(value, ' FPS')], ['Frame interval', 'frameIntervalMs', value => performanceNumber(value, ' ms')],
@@ -109,7 +178,9 @@ export function SnapshotView({ title, snapshot }: { title: string; snapshot: For
       const sample = latest(snapshot, field);
       return <div key={field} className="rounded bg-white/[0.03] p-2"><dt className="text-[10px] text-slate-400">{label}</dt><dd className="font-mono text-sm text-cyan-200">{format(sample?.[field])}</dd><dd className="text-[9px] text-slate-500">Last sample: {time(sample?.atUnixMs)}</dd></div>;
     })}</dl>
-    <p className="mt-2 text-[10px] text-slate-400">{backend ? 'CPU covers the whole backend interval, including overlapping work. Memory is process memory, not function allocations.' : 'Frames describe visible paint cadence. HTTP spans end at headers, before body parsing or rendering. Heap is an optional browser estimate.'}</p>
+    <p className="mt-2 text-[10px] text-slate-400">{backend ? 'CPU covers the whole backend interval, including overlapping work. Memory is process memory, not function allocations.'
+      : native ? 'CPU and memory cover the shared extension-host process, including other extensions. They are not exclusive Forge or per-function costs.'
+        : 'Frames describe visible paint cadence. HTTP spans end at headers, before body parsing or rendering. Heap is an optional browser estimate.'}</p>
     <h4 className="mt-3 text-xs font-semibold">Operations · {rows.length} retained</h4>
     <p className="mb-1 text-[10px] text-slate-500">Elapsed spans can overlap; their sum is not exclusive CPU. p95 is a histogram upper-bound estimate.</p>
     {shown.length ? <div className="overflow-x-auto"><table className="w-full text-left text-[10px]"><thead className="text-slate-400"><tr><th className="pr-3">Operation</th><th className="pr-3">Count</th><th className="pr-3">Total ms</th><th className="pr-3">Mean ms</th><th className="pr-3">p95 ≈ ms</th><th>Outcomes</th></tr></thead><tbody>{shown.map(row => <tr key={row.name} className="border-t border-white/5"><td className="max-w-64 break-all py-1 pr-3 font-mono">{row.name}</td><td className="pr-3">{performanceNumber(row.count)}</td><td className="pr-3">{performanceNumber(row.totalMs)}</td><td className="pr-3">{performanceNumber(row.meanMs)}</td><td className="pr-3">{performanceNumber(row.p95Ms)}</td><td>{outcomes.filter(outcome => row.outcomes[outcome] > 0).map(outcome => `${outcome} ${row.outcomes[outcome]}`).join(' · ')}</td></tr>)}</tbody></table></div>
@@ -117,11 +188,231 @@ export function SnapshotView({ title, snapshot }: { title: string; snapshot: For
     {rows.length > 12 && <button type="button" onClick={() => setAllOperations(value => !value)} className="mt-2 text-[10px] text-cyan-300 underline">{allOperations ? 'Show top 12' : `Show all ${rows.length} operations`}</button>}
     <details className="mt-3 text-[10px]" onToggle={event => setHistory(event.currentTarget.open)}><summary className="cursor-pointer text-slate-300">Retained history and measurement limits</summary>{history && <div className="mt-2 space-y-2">
       <p>Resources {snapshot.resources.length}/{snapshot.limits.maxResources}; recent slow/error spans {snapshot.recentSlowOperations.length}/{snapshot.limits.maxSlowOperations}. Limits bound retained state, not OS memory.</p>
-      <div className="max-h-52 overflow-auto"><table className="w-full text-left"><thead><tr><th>Time</th><th>CPU / core %</th><th>RSS</th><th>FPS</th><th>Longtask ms</th></tr></thead><tbody>{snapshot.resources.map((row, index) => <tr key={index} className="border-t border-white/5"><td>{time(row.atUnixMs)}</td><td>{performanceNumber(row.cpuOneCorePercent)}</td><td>{bytes(row.rssBytes)}</td><td>{performanceNumber(row.fps)}</td><td>{performanceNumber(row.longTaskDurationMs)}</td></tr>)}</tbody></table></div>
+      <div className="max-h-52 overflow-auto"><table className="w-full text-left"><thead><tr><th>Time</th><th>CPU / core %</th><th>RSS</th>{!native && <><th>FPS</th><th>Longtask ms</th></>}</tr></thead><tbody>{snapshot.resources.map((row, index) => <tr key={index} className="border-t border-white/5"><td>{time(row.atUnixMs)}</td><td>{performanceNumber(row.cpuOneCorePercent)}</td><td>{bytes(row.rssBytes)}</td>{!native && <><td>{performanceNumber(row.fps)}</td><td>{performanceNumber(row.longTaskDurationMs)}</td></>}</tr>)}</tbody></table></div>
       <ul className="max-h-44 overflow-auto space-y-1">{snapshot.recentSlowOperations.map((row, index) => <li key={index} className="break-all font-mono">{time(row.atUnixMs)} · {row.name} · {performanceNumber(row.durationMs, ' ms')} · {row.outcome}{row.correlationId ? ` · ${row.correlationId}` : ''}</li>)}</ul>
       <p>Overwrites/drops: {Object.entries(snapshot.drops).map(([name, value]) => `${name} ${performanceNumber(value)}`).join(' · ')}</p>
       <p>Recorder work {performanceNumber(snapshot.selfOverhead.recordMs, ' ms')} / {snapshot.selfOverhead.recordCalls} calls; prior completed snapshot work {performanceNumber(snapshot.selfOverhead.snapshotMs, ' ms')}, including serialization/freezing; clock failures {snapshot.selfOverhead.clockFailures}. These counters do not measure the tracker’s entire overhead.</p>
     </div>}</details>
+  </section>;
+}
+
+const nativeProducerKey = (report: ForgeNativePerformanceReport) => report.status?.native
+  ? JSON.stringify([report.status.backendInstanceId, report.status.native.producer.instanceId, report.status.native.producer.pid]) : null;
+const nativeCleanupPending = (report: ForgeNativePerformanceReport) => !!report.status && (report.status.cleanupUnconfirmed
+  || report.status.timerCleanupUnconfirmed || report.status.cancellation !== 'none' || report.status.orphaned
+  || !!report.status.native?.collectionCleanupUnconfirmed || (report.status.native?.failedTimerCount ?? 0) > 0
+  || (!report.status.native?.collectionActive && ((report.status.native?.ownedTimerCount ?? 0) > 0 || !!report.status.native?.eventLoopDelayMonitoring)));
+/** Rendering only. The mounted section owns authority, exact targets and request cancellation. */
+export function NativePerformanceStatusView({ report, pending, onStop }: {
+  report: ForgeNativePerformanceReport; pending?: 'start' | 'stop' | null; onStop: () => void;
+}) {
+  const status = report.status, native = status?.native;
+  const cleanup = nativeCleanupPending(report);
+  const stale = !!status?.snapshot && (report.operation !== 'read' || !report.ok || report.availability !== 'ready' || status.lastRefreshOutcome !== 'ok');
+  const owner = report.ownership === 'operator' ? 'Studio operator' : report.ownership === 'self' ? 'This caller (self)'
+    : report.ownership === 'other' ? 'Another owner' : 'No current control authority';
+  const stoppable = !!native?.captureId && report.availability === 'ready' && (report.ownership === 'self' || report.ownership === 'operator')
+    && (native.collectionActive || cleanup);
+  return <div data-testid="forge-native-performance-status" className="space-y-2 text-[11px] text-slate-400">
+    <h3 className="text-xs font-semibold text-slate-200">{native ? 'Native extension host · shared process' : 'Native coverage unavailable'}</h3>
+    <p>Process totals include other extensions, including CodeSense when it shares this host. They do not measure X4 or attribute all cost to Forge. Native function profiles are unavailable.</p>
+    <p>Availability: {report.availability}{report.unavailableReason ? ` · ${report.unavailableReason}` : ''}. Current control owner: {owner}.</p>
+    {pending && <p role="status" className="text-cyan-200">{pending === 'start' ? 'Starting native collection' : 'Stopping native collection'} — pending execution and cleanup acknowledgement.</p>}
+    {!native && <p>Native metrics: Unknown. No current producer or capture is confirmed.</p>}
+    {native && <>
+      <p className="break-all">Backend instance {status!.backendInstanceId} · native instance {native.producer.instanceId} · shared PID {native.producer.pid} · capture {native.captureId ?? 'none'}.</p>
+      <p>Native collection: {native.collectionActive ? `active until ${time(native.collectionExpiresAtUnixMs)}` : 'inactive'} · owned timers {native.ownedTimerCount}; failed timer cleanup {native.failedTimerCount}; event-loop monitor {native.eventLoopDelayMonitoring ? 'active' : 'inactive'}.</p>
+      <p>Samples {native.resourceSamples}; resource errors {native.resourceErrors}; sample overhead {performanceNumber(native.sampleOverheadMs, ' ms')}.</p>
+    </>}
+    {cleanup && <p className="text-amber-200">Cleanup is unconfirmed{status?.cancellation === 'unknown' ? '; cancellation outcome is unknown' : ''}. Inactive recording or absent control ownership does not confirm cleanup. Another collection is refused.</p>}
+    {stoppable && <button type="button" onClick={onStop} disabled={!!pending} className="inline-flex items-center gap-1 rounded border border-white/20 px-2 py-1 text-slate-300 disabled:opacity-40"><Square className="h-3 w-3" />{cleanup ? 'Retry native capture cleanup' : 'Stop this native capture'}</button>}
+    {report.status?.snapshot && <>
+      <p className={stale ? 'text-amber-200' : 'text-slate-500'}>{stale ? 'Stale retained snapshot' : 'Last native read'} · last refresh {status!.lastRefreshOutcome} · snapshot age {performanceNumber(status!.snapshotAgeMs, ' ms')}. Retained samples are historical observations.</p>
+      <SnapshotView title="Shared native extension host" snapshot={report.status.snapshot} />
+    </>}
+    {report.operation !== 'read' && <p>Control acknowledgement only. A fresh native read is required before resource samples are shown.</p>}
+  </div>;
+}
+
+interface NativeReadState { scope: string; report?: ForgeNativePerformanceReport; error?: string; fresh: boolean }
+interface NativeActionState { scope: string; kind?: 'start' | 'stop'; notice?: string; error?: string }
+interface NativeRequestOwner {
+  controller: AbortController; scope: string; lifecycle: number; epoch: number; producer: string; operation: 'start' | 'stop';
+  expectedBackendInstanceId: string; expectedNativeInstanceId: string; captureId: string | null; readVersion: number;
+}
+function NativePerformanceSection({ authority, backendInstanceId, parentRefresh }: {
+  authority: string; backendInstanceId: string | null; parentRefresh: number;
+}) {
+  const scope = JSON.stringify([authority, backendInstanceId]);
+  const [readState, setReadState] = React.useState<NativeReadState>({ scope, fresh: false });
+  const [action, setAction] = React.useState<NativeActionState>({ scope });
+  const [refresh, setRefresh] = React.useState(0);
+  const [duration, setDuration] = React.useState('60'), [interval, setInterval] = React.useState('2');
+  const [eventLoopDelay, setEventLoopDelay] = React.useState(false);
+  const mounted = React.useRef({ scope, authority, active: false, lifecycle: 0 });
+  const pending = React.useRef<NativeRequestOwner | null>(null);
+  const controlEpoch = React.useRef(0), readEpoch = React.useRef(0);
+  const producer = React.useRef<string | null>(null);
+  const latestReport = React.useRef<ForgeNativePerformanceReport | null>(null);
+  const controlReady = React.useRef(false);
+  const readVersion = React.useRef(0);
+  const readOwner = React.useRef<{ scope: string; lifecycle: number; epoch: number; runId: number } | null>(null);
+  const current = readState.scope === scope ? readState : undefined;
+  const currentAction = action.scope === scope ? action : undefined;
+  const report = current?.report, busy = !!currentAction?.kind;
+  const accepts = (captured: { scope: string; lifecycle: number }) => mounted.current.active && mounted.current.scope === captured.scope
+    && mounted.current.lifecycle === captured.lifecycle
+    && `${window.__X4_WORKSPACE_CONTEXT__?.getWorkspaceId() || ''}|${window.__X4_WORKSPACE_CONTEXT__?.getSelectionRevision() || 0}` === mounted.current.authority;
+  React.useLayoutEffect(() => {
+    const lifecycle = mounted.current.lifecycle + 1;
+    // Keep the ref objects so cleanup invalidates their latest counter values.
+    const lifecycleControlEpoch = controlEpoch, lifecycleReadEpoch = readEpoch;
+    mounted.current = { scope, authority, active: true, lifecycle };
+    controlEpoch.current++; readEpoch.current++; producer.current = null; readOwner.current = null; latestReport.current = null; controlReady.current = false;
+    setReadState({ scope, fresh: false }); setAction({ scope });
+    return () => {
+      if (mounted.current.lifecycle !== lifecycle) return;
+      mounted.current.active = false; lifecycleControlEpoch.current++; lifecycleReadEpoch.current++; readOwner.current = null; latestReport.current = null; controlReady.current = false;
+      const owner = pending.current; pending.current = null; owner?.controller.abort();
+      // Releasing this panel never stops a completed native capture. Its lease owns expiry.
+    };
+  }, [scope, authority]);
+  React.useLayoutEffect(() => {
+    readEpoch.current++; controlReady.current = false;
+    setReadState(previous => previous.scope === scope ? { ...previous, fresh: false } : { scope, fresh: false });
+  }, [parentRefresh, scope]);
+  const refreshRead = () => {
+    readEpoch.current++; controlReady.current = false;
+    setReadState(previous => previous.scope === scope ? { ...previous, fresh: false } : { scope, fresh: false });
+    setRefresh(value => value + 1);
+  };
+  useContinuousPolling<{ value: ForgeNativePerformanceReport; owner: NonNullable<typeof readOwner.current> }>({
+    resourceKey: pollingResourceKey('forge-native-performance', `${scope}|${parentRefresh}|${refresh}`),
+    contract: 'GET /api/agent/performance/native', intervalMs: 2000, timeoutMs: 10_000,
+    run: async (signal, meta) => {
+      const owner = { scope, lifecycle: mounted.current.lifecycle, epoch: readEpoch.current, runId: meta.runId };
+      readOwner.current = owner;
+      const response = await fetch('/api/agent/performance/native', { signal });
+      const value: unknown = await response.json();
+      if (!isForgeNativePerformanceReport(value, 'read')) throw new Error(`The native read was refused (${response.status}) or returned an unsupported report.`);
+      if (response.status !== (value.ok ? 200 : nativeFailures[value.code!].status)) throw new Error('The native read returned a contradictory HTTP result.');
+      return { value, owner };
+    },
+    onResult: ({ value, owner }) => {
+      if (!accepts(owner) || owner.epoch !== readEpoch.current) return;
+      if (backendInstanceId !== null && value.status !== null && value.status.backendInstanceId !== backendInstanceId) {
+        const previous = pending.current; pending.current = null; controlEpoch.current++; readEpoch.current++; previous?.controller.abort();
+        producer.current = null; latestReport.current = null; controlReady.current = false;
+        setReadState({ scope, fresh: false, error: 'The backend instance changed. Refresh the backend and native reports.' });
+        setAction({ scope, notice: 'Earlier native controls were fenced; their execution and cleanup outcome requires a current read.' }); return;
+      }
+      const next = nativeProducerKey(value);
+      const targetReplaced = pending.current?.operation === 'stop' && value.status?.native?.captureId !== pending.current.captureId;
+      if ((producer.current !== null && (producer.current !== next || (!!pending.current && value.availability !== 'ready'))) || targetReplaced) {
+        const previous = pending.current; pending.current = null; controlEpoch.current++; readEpoch.current++; previous?.controller.abort();
+        setAction({ scope, notice: 'The native producer changed. Earlier capture data and control targets were discarded.' });
+      }
+      // A read may report the existing control as busy; it must neither preempt
+      // that owner nor replace its pending acknowledgement with stale samples.
+      if (pending.current && !value.ok && value.code === 'NATIVE_PERFORMANCE_BUSY' && producer.current === next) return;
+      producer.current = next;
+      const fresh = value.ok && (value.status === null || value.status.lastRefreshOutcome === 'ok');
+      if (fresh) readVersion.current++;
+      latestReport.current = value; controlReady.current = fresh;
+      setReadState({ scope, report: value, fresh, ...(value.ok ? {} : { error: nativeFailures[value.code!].message }) });
+    },
+    onError: (error, meta) => {
+      const owner = readOwner.current;
+      if (!owner || owner.runId !== meta.runId || !accepts(owner) || owner.epoch !== readEpoch.current) return;
+      controlReady.current = false;
+      setReadState(previous => ({ scope, report: previous.scope === scope ? previous.report : undefined, fresh: false, error: error.message }));
+    },
+  });
+  const ownsRequest = (owner: NativeRequestOwner) => pending.current === owner && accepts(owner) && owner.epoch === controlEpoch.current;
+  const controlNativeCapture = async (operation: 'start' | 'stop', selected: ForgeNativePerformanceReport) => {
+    const status = selected.status, native = status?.native, identity = nativeProducerKey(selected);
+    if (pending.current || !controlReady.current || latestReport.current !== selected || !status || !native || !identity
+      || producer.current !== identity || status.availability !== 'ready') return;
+    if (operation === 'start' && (!current?.fresh || selected.operation !== 'read' || !selected.ok || native.collectionActive || nativeCleanupPending(selected))) return;
+    if (operation === 'stop' && (!native.captureId || !(selected.ownership === 'self' || selected.ownership === 'operator'))) return;
+    const normalized = normalizeNativeCollectionOptions({ durationMs: Number(duration) * 1000, intervalMs: Number(interval) * 1000, eventLoopDelay });
+    if (operation === 'start' && !normalized.ok) { setAction({ scope, error: 'Use a native duration of 1–900 seconds and a resource interval of 1–60 seconds.' }); return; }
+    const owner: NativeRequestOwner = { controller: new AbortController(), scope, lifecycle: mounted.current.lifecycle, operation,
+      epoch: ++controlEpoch.current, producer: identity, expectedBackendInstanceId: status.backendInstanceId,
+      expectedNativeInstanceId: native.producer.instanceId, captureId: native.captureId, readVersion: readVersion.current };
+    if (!accepts(owner)) return;
+    pending.current = owner; readEpoch.current++; controlReady.current = false;
+    setReadState(previous => previous.scope === scope ? { ...previous, fresh: false } : { scope, fresh: false });
+    setAction({ scope, kind: operation });
+    try {
+      const identityBody = { expectedBackendInstanceId: owner.expectedBackendInstanceId, expectedNativeInstanceId: owner.expectedNativeInstanceId };
+      const body = operation === 'start' ? { ...identityBody, ...(normalized.ok ? normalized.options : {}) } : { ...identityBody, captureId: owner.captureId };
+      const response = operation === 'start' ? await fetch('/api/agent/performance/native/collection', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: owner.controller.signal,
+      }) : await fetch('/api/agent/performance/native/stop', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: owner.controller.signal,
+      });
+      const value: unknown = await response.json();
+      if (!ownsRequest(owner) || owner.controller.signal.aborted) return;
+      if (!isForgeNativePerformanceReport(value, operation)) throw new Error(`The native control was refused (${response.status}) or returned an unsupported acknowledgement.`);
+      if (response.status !== (value.ok ? 200 : nativeFailures[value.code!].status)) throw new Error('The native control returned a contradictory HTTP result.');
+      if (!value.ok) {
+        latestReport.current = value; controlReady.current = false;
+        setReadState({ scope, report: value, fresh: false, error: nativeFailures[value.code!].message });
+        setAction({ scope, error: nativeFailures[value.code!].message }); return;
+      }
+      if (producer.current !== owner.producer || nativeProducerKey(value) !== owner.producer) throw new Error('The native instance changed while the control was pending. This response is not attributed to the selected producer.');
+      const accepted = value.status!.native!;
+      if (operation === 'start' && (!accepted.collectionActive || !accepted.captureId || accepted.disposed || nativeCleanupPending(value))) throw new Error('The native host did not confirm active collection with clean timer ownership.');
+      if (operation === 'stop' && (accepted.collectionActive || nativeCleanupPending(value)
+        || (accepted.captureId !== null && accepted.captureId !== owner.captureId))) throw new Error('The native host did not confirm cleanup of the exact selected capture.');
+      const laterRead = readVersion.current > owner.readVersion && controlReady.current && latestReport.current?.operation === 'read'
+        ? latestReport.current : null;
+      const acknowledgedCapture = operation === 'start' ? accepted.captureId : owner.captureId;
+      if (laterRead?.status?.native?.captureId && laterRead.status.native.captureId !== acknowledgedCapture) {
+        throw new Error('The native capture changed while the acknowledgement was pending. Earlier control status cannot replace the current capture.');
+      }
+      if (!laterRead) {
+        latestReport.current = value; controlReady.current = true;
+        setReadState({ scope, report: value, fresh: false });
+      }
+      setAction({ scope, notice: laterRead
+        ? `Native ${operation} acknowledgement received for capture ${acknowledgedCapture}. Showing the newer native read for current status.`
+        : operation === 'start'
+          ? `Native capture ${accepted.captureId} was acknowledged. Resource samples await a fresh read; the capture has automatic expiry.`
+          : `Native cleanup for capture ${owner.captureId} was acknowledged. A fresh read will confirm the current status.` });
+    } catch (error) {
+      if (ownsRequest(owner)) setAction({ scope, error: owner.controller.signal.aborted
+        ? 'Native request cancelled. Execution and cleanup are unknown locally; refresh status. An acknowledged capture keeps its bounded lease.'
+        : error instanceof Error ? error.message : 'Native control outcome is unknown. Refresh status.' });
+    } finally {
+      // A late completion cannot release a replacement request or refresh another authority.
+      if (ownsRequest(owner)) {
+        pending.current = null; readEpoch.current++;
+        setAction(previous => previous.scope === scope && previous.kind ? { scope, notice: 'Native request ended without a confirmed result. Refresh status; cleanup is not established.' } : previous);
+        setRefresh(value => value + 1);
+      }
+    }
+  };
+  const canStart = !!report && current?.fresh && report.operation === 'read' && report.ok && report.availability === 'ready'
+    && !!report.status?.native && !report.status.native.collectionActive && !report.status.native.disposed && !nativeCleanupPending(report);
+  const controlsStale = !!current?.error || (!!report && report.operation === 'read' && !current?.fresh)
+    || (!!report && nativeProducerKey(report) !== producer.current);
+  const inputClass = 'w-full rounded border border-white/15 bg-[#101722] px-2 py-1 text-xs text-slate-200';
+  return <section className="rounded border border-white/10 p-3" aria-label="Native performance coverage" data-testid="forge-native-performance">
+    <div className="mb-2 flex items-center gap-2"><h3 className="mr-auto text-xs font-semibold">Native performance</h3><button type="button" disabled={busy} onClick={refreshRead} aria-label="Refresh native performance report" className="rounded p-1.5 hover:bg-white/10 disabled:opacity-40"><RefreshCw className="h-3.5 w-3.5" /></button></div>
+    {current?.error && <p role="alert" className="mb-2 text-xs text-amber-200">{current.error}{report ? ' Retained native data is stale; controls wait for a current read.' : ''}</p>}
+    {report && !current?.fresh && report.operation === 'read' && !current?.error && <p role="status" className="mb-2 text-[10px] text-amber-200">Retained native data is stale until a current read is confirmed.</p>}
+    {report ? <fieldset disabled={controlsStale || busy}><NativePerformanceStatusView report={report} pending={currentAction?.kind} onStop={() => void controlNativeCapture('stop', report)} /></fieldset>
+      : <p role="status" className="text-[11px] text-slate-400">Native metrics: Unknown. Reading native status…</p>}
+    <fieldset disabled={busy} className="mt-3 space-y-2">
+      <div className="grid grid-cols-2 gap-2"><label className="text-[10px] text-slate-400">Native duration (seconds)<input aria-label="Native performance collection duration seconds" type="number" min="1" max="900" value={duration} onChange={event => setDuration(event.target.value)} className={inputClass} /></label><label className="text-[10px] text-slate-400">Native interval (seconds)<input aria-label="Native performance resource interval seconds" type="number" min="1" max="60" value={interval} onChange={event => setInterval(event.target.value)} className={inputClass} /></label></div>
+      <label className="flex items-center gap-2 text-[11px]"><input type="checkbox" checked={eventLoopDelay} onChange={event => setEventLoopDelay(event.target.checked)} /> Include native event-loop delay monitoring</label>
+      <button type="button" disabled={!canStart || busy} onClick={() => { if (report) void controlNativeCapture('start', report); }} className="inline-flex items-center gap-1 rounded border border-cyan-500/30 px-2 py-1.5 text-xs text-cyan-200 disabled:opacity-40"><Play className="h-3.5 w-3.5" />Start native collection</button>
+    </fieldset>
+    {currentAction?.notice && <p role="status" className="mt-2 text-xs text-cyan-200">{currentAction.notice}</p>}
+    {currentAction?.error && <p role="alert" className="mt-2 text-xs text-amber-200">{currentAction.error}</p>}
+    {busy && <button type="button" onClick={() => pending.current?.controller.abort()} className="mt-2 text-xs text-slate-300 underline">Cancel native request</button>}
   </section>;
 }
 
@@ -285,7 +576,7 @@ export default function PerformancePanel() {
     {report && <SnapshotView title="Owned backend" snapshot={report.backend} />}
     <SnapshotView title="This webview" snapshot={local.snapshot} />
     <p className="text-[10px] text-slate-400">Webview: frames {local.coverage.frames}; visibility {local.coverage.visibility}; longtasks {local.coverage.longTasks}; heap {local.coverage.heap}. Adapter errors {local.coverage.adapterErrors}; ignored old completions {local.coverage.ignoredCompletions}. Local snapshots stay in this webview’s memory.</p>
-    <section className="rounded border border-white/10 p-3 text-[11px] text-slate-400" aria-label="Native performance coverage"><h3 className="mb-1 font-semibold text-slate-200">Native coverage unavailable</h3>Extension-host metrics are not wired into this report. X4, CodeSense and unrelated processes are excluded. Backend profiles do not cover native-host or webview functions.</section>
+    <NativePerformanceSection authority={authority} backendInstanceId={report?.backend.producer.instanceId ?? null} parentRefresh={refresh} />
     {report && <section className="rounded border border-white/10 p-3 text-[10px]" aria-label="Validation cache counters"><h3 className="mb-1 text-xs font-semibold">Validation cache counters</h3><p className="mb-2 text-slate-400">Accounted bytes omit exact JavaScript object/Map overhead; they are not total heap use.</p><div className="overflow-x-auto"><table className="w-full text-left"><thead><tr><th>Cache</th>{cacheFields.map(field => <th className="px-1" key={field}>{field}</th>)}</tr></thead><tbody>{cacheRows.map(([label, value]) => <tr key={label} className="border-t border-white/5"><td className="py-1">{label}</td>{cacheFields.map(field => <td key={field} className="px-1">{performanceNumber(value[field])}</td>)}</tr>)}</tbody></table></div></section>}
     <section className="rounded border border-white/10 p-3" aria-label="Backend function sampling"><h3 className="text-xs font-semibold">Backend function samples</h3><p className="mt-1 text-[10px] text-slate-400">Explicit capture only. Event-loop blockage can delay stopping. A 30-second cooldown and one-capture limit apply.</p>
       <div className="mt-2 grid grid-cols-3 gap-2"><label className="text-[10px] text-slate-400">Duration ms<input type="number" aria-label="Backend profile duration milliseconds" min="100" max="5000" value={profileDuration} onChange={event => setProfileDuration(event.target.value)} className={inputClass} /></label><label className="text-[10px] text-slate-400">Interval µs<input type="number" aria-label="Backend profile sampling interval microseconds" min="1000" max="100000" value={profileInterval} onChange={event => setProfileInterval(event.target.value)} className={inputClass} /></label><label className="text-[10px] text-slate-400">Functions<input type="number" aria-label="Backend profile function limit" min="1" max="64" value={maxFunctions} onChange={event => setMaxFunctions(event.target.value)} className={inputClass} /></label></div>

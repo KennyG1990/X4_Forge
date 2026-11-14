@@ -17,10 +17,12 @@ import { scopeAllows } from '../src/lib/agentKeys';
 import {
   AGENT_CAPABILITY_DISCOVERY_DISPOSITION,
   AGENT_CAPABILITY_DISCOVERY_ROUTE_KEY,
+  runNativeAgentCapabilityAuthoritySelftest,
 } from '../src/lib/agentCapabilityAuthority';
 import {
   AGENT_ROUTE_SCOPES,
   PROCESS_TELEMETRY_ROUTE_OWNERS,
+  NATIVE_PROCESS_TELEMETRY_ROUTE_TUPLES,
   createAgentRouteAuthority,
   processTelemetryRouteAuthorityErrors,
   type AgentRouteAuthority,
@@ -42,7 +44,7 @@ const ROOT = process.cwd();
 const MANIFEST_PATH = path.join(ROOT, 'config', 'forge-route-dispositions.json');
 const CANDIDATE_PATH = path.join(ROOT, 'test-results', 'forge-route-dispositions.candidate.json');
 const MCP_MODULE_PATH = path.join(ROOT, 'vscode-extension', 'mcp', 'x4forge-mcp.cjs');
-const MCP_MODULE_AUDIT_VERSION = 16;
+const MCP_MODULE_AUDIT_VERSION = 18;
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'all']);
 
 type RouteDisposition =
@@ -1268,6 +1270,8 @@ function variableDeclarationIsConst(declaration: ts.VariableDeclaration): boolea
   return ts.isVariableDeclarationList(declaration.parent) && !!(declaration.parent.flags & ts.NodeFlags.Const);
 }
 
+// ASTs are immutable: index all lexical writes once for this exact SourceFile.
+const lexicalBindingWriteIndex = new WeakMap<ts.SourceFile, Map<ts.Node, Set<string>>>();
 const lexicalBindingWriteCache = new WeakMap<ts.SourceFile, Map<ts.Node, boolean>>();
 
 function lexicalBindingIsWritten(file: ts.SourceFile, name: string, expected: ts.Node): boolean {
@@ -1278,9 +1282,16 @@ function lexicalBindingIsWritten(file: ts.SourceFile, name: string, expected: ts
   }
   const cached = fileCache.get(expected);
   if (cached !== undefined) return cached;
+  const indexed = lexicalBindingWriteIndex.get(file);
+  if (indexed) {
+    const written = indexed.get(expected)?.has(name) ?? false;
+    fileCache.set(expected, written);
+    return written;
+  }
+  const writes = new Map<ts.Node, Set<string>>();
   const resolveBinding = createLexicalBindingResolver(file);
   const targetIdentifiers = (node: ts.Node): ts.Identifier[] => {
-    if (ts.isIdentifier(node)) return node.text === name ? [node] : [];
+    if (ts.isIdentifier(node)) return [node];
     if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) ||
       ts.isNonNullExpression(node) || ts.isSatisfiesExpression(node) || ts.isSpreadElement(node)) return targetIdentifiers(node.expression);
     if (ts.isArrayLiteralExpression(node) || ts.isArrayBindingPattern(node)) {
@@ -1289,7 +1300,7 @@ function lexicalBindingIsWritten(file: ts.SourceFile, name: string, expected: ts
     if (ts.isObjectLiteralExpression(node)) {
       return node.properties.flatMap(property => {
         if (ts.isPropertyAssignment(property)) return targetIdentifiers(property.initializer);
-        if (ts.isShorthandPropertyAssignment(property) && property.name.text === name) return [property.name];
+        if (ts.isShorthandPropertyAssignment(property)) return [property.name];
         if (ts.isSpreadAssignment(property)) return targetIdentifiers(property.expression);
         return [];
       });
@@ -1298,21 +1309,27 @@ function lexicalBindingIsWritten(file: ts.SourceFile, name: string, expected: ts
     if (ts.isBindingElement(node)) return targetIdentifiers(node.name);
     return [];
   };
-  const writesExpectedBinding = (target: ts.Node): boolean => targetIdentifiers(target).some(identifier => {
-    const resolved = resolveBinding(identifier);
-    return !resolved.ambiguous && resolved.declaration === expected;
-  });
-  let written = false;
+  const markWrites = (target: ts.Node): void => {
+    for (const identifier of targetIdentifiers(target)) {
+      const resolved = resolveBinding(identifier);
+      if (!resolved.ambiguous && resolved.declaration) {
+        const names = writes.get(resolved.declaration) ?? new Set<string>();
+        names.add(identifier.text);
+        writes.set(resolved.declaration, names);
+      }
+    }
+  };
   const visit = (node: ts.Node): void => {
-    if (written) return;
     if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
-      node.operatorToken.kind <= ts.SyntaxKind.LastAssignment && writesExpectedBinding(node.left)) written = true;
-    if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) && writesExpectedBinding(node.operand)) written = true;
+      node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) markWrites(node.left);
+    if (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) markWrites(node.operand);
     if ((ts.isForInStatement(node) || ts.isForOfStatement(node)) && !ts.isVariableDeclarationList(node.initializer) &&
-      writesExpectedBinding(node.initializer)) written = true;
+      node.initializer) markWrites(node.initializer);
     ts.forEachChild(node, visit);
   };
   visit(file);
+  lexicalBindingWriteIndex.set(file, writes);
+  const written = writes.get(expected)?.has(name) ?? false;
   fileCache.set(expected, written);
   return written;
 }
@@ -2361,6 +2378,21 @@ interface ServerCallAnalysis {
   errors: string[];
 }
 
+interface ServerCallAnalysisReuseContext {
+  readonly inventory: RouteInventory;
+  readonly serverText: string;
+  readonly analysis: ServerCallAnalysis;
+}
+
+// Reuse belongs to one actual audit; every reader rechecks current filesystem bytes.
+function serverCallAnalysisForInventory(inventory: RouteInventory, context?: ServerCallAnalysisReuseContext): ServerCallAnalysis {
+  if (context === undefined) return serverCallAnalysis(inventory);
+  if (context.inventory !== inventory || context.serverText !== fs.readFileSync(path.join(ROOT, 'server.ts'), 'utf8')) {
+    throw new Error('Invalid per-audit server call-analysis reuse context');
+  }
+  return context.analysis;
+}
+
 function serverCallAnalysis(inventory: RouteInventory, textOverride?: string, source = 'server.ts'): ServerCallAnalysis {
   const text = textOverride ?? fs.readFileSync(path.join(ROOT, 'server.ts'), 'utf8');
   const file = sourceFile(source, text);
@@ -2547,13 +2579,17 @@ function effectiveAuthOrderErrors(
   inventory: RouteInventory,
   authLineOverride?: number,
   callLinesOverride?: Map<string, number[]>,
+  reuseContext?: ServerCallAnalysisReuseContext,
 ): string[] {
+  if (callLinesOverride !== undefined && reuseContext !== undefined) {
+    throw new Error('Cannot mix callLinesOverride with server call-analysis reuse context');
+  }
   const errors: string[] = [];
   const authMount = authLineOverride === undefined ? authMiddlewareMountAnalysis() : { line: authLineOverride, errors: [] };
   errors.push(...authMount.errors);
   const authLine = authMount.line;
   if (authLine === null) return [...errors, 'auth middleware mount app.use("/api", authMiddleware) is missing or unrecognized'];
-  const analysis = callLinesOverride ? { calls: callLinesOverride, errors: [] } : serverCallAnalysis(inventory);
+  const analysis = callLinesOverride ? { calls: callLinesOverride, errors: [] } : serverCallAnalysisForInventory(inventory, reuseContext);
   errors.push(...analysis.errors);
   const calls = analysis.calls;
   for (const fact of inventory.routes.filter(candidate => candidate.path.startsWith('/api/'))) {
@@ -2577,6 +2613,100 @@ function effectiveAuthOrderErrors(
   }
   return errors;
 }
+
+// BEGIN independent per-audit call-analysis reuse contract tests.
+function runServerCallAnalysisReuseSelftest() {
+  type ReuseContext = Readonly<{
+    inventory: RouteInventory;
+    serverText: string;
+    analysis: ServerCallAnalysis;
+  }>;
+  // The fourth argument is deliberately ignored by the unrepaired readers. These
+  // casts introduce tests without introducing the production reuse path first.
+  const authReader = effectiveAuthOrderErrors as unknown as (
+    inventory: RouteInventory, authLine?: number, legacyCalls?: Map<string, number[]>, context?: ReuseContext,
+  ) => string[];
+  const baselineReader = buildBaseline as unknown as (
+    inventory: RouteInventory, publicGets: Set<string>, authority?: RouteDispositionManifest, context?: ReuseContext,
+  ) => RouteDispositionManifest;
+  const source = fs.readFileSync(path.join(ROOT, 'server.ts'), 'utf8');
+  const registrar = 'registerIndependentAnalysisReuseProbe';
+  const key = 'GET /api/agent/__independent_analysis_reuse_probe';
+  const refusal = 'Invalid per-audit server call-analysis reuse context';
+  const mixedRefusal = 'Cannot mix callLinesOverride with server call-analysis reuse context';
+  const makeProbe = (errors: string[] = []): ReuseContext => {
+    const inventory: RouteInventory = {
+      routes: [{ method: 'GET', path: '/api/agent/__independent_analysis_reuse_probe',
+        source: 'src/routes/independentAnalysisReuseProbe.ts', line: 1, registrar }],
+      dynamic: [], unrecognizedForms: [],
+    };
+    inventory.routes.forEach(Object.freeze);
+    Object.freeze(inventory.routes); Object.freeze(inventory.dynamic); Object.freeze(inventory.unrecognizedForms);
+    Object.freeze(inventory);
+    const calls = new Map([[registrar, Object.freeze([51, 61, 71]) as unknown as number[]]]);
+    Object.freeze(calls);
+    const analysis: ServerCallAnalysis = { calls, errors: Object.freeze([...errors]) as unknown as string[] };
+    return Object.freeze({ inventory, serverText: source, analysis: Object.freeze(analysis) });
+  };
+  const snapshot = (context: ReuseContext) => JSON.stringify({ inventory: context.inventory,
+    calls: [...context.analysis.calls], errors: context.analysis.errors });
+  const rejects = (read: () => unknown, expected: string): boolean => {
+    try { read(); return false; } catch (error) { return error instanceof Error && error.message === expected; }
+  };
+  const rejectsBoth = (inventory: RouteInventory, context: ReuseContext): boolean => {
+    const auth = rejects(() => authReader(inventory, 20, undefined, context), refusal);
+    const baseline = rejects(() => baselineReader(inventory, new Set(), undefined, context), refusal);
+    return auth && baseline;
+  };
+  const cases = Object.freeze([
+    { name: 'reuse_auth_preserves_full_analysis_errors', run: () => {
+      const marker = 'independent frozen registrar analysis error';
+      const context = makeProbe([marker]);
+      return sameStrings(authReader(context.inventory, 20, undefined, context), [marker]);
+    } },
+    { name: 'reuse_baseline_uses_supplied_registration_counts', run: () => {
+      const context = makeProbe();
+      return baselineReader(context.inventory, new Set(), undefined, context).routes[key]?.registrations === 3;
+    } },
+    { name: 'reuse_both_readers_reject_changed_server_source', run: () => {
+      const context = makeProbe();
+      const stale = Object.freeze({ ...context, serverText: `${source}\n// independent changed-source refusal probe` });
+      return rejectsBoth(context.inventory, stale);
+    } },
+    { name: 'reuse_both_readers_reject_foreign_inventory', run: () => {
+      const context = makeProbe();
+      const foreign = makeProbe();
+      return rejectsBoth(foreign.inventory, context);
+    } },
+    { name: 'reuse_auth_rejects_mixed_legacy_override', run: () => {
+      const context = makeProbe();
+      return rejects(() => authReader(context.inventory, 20, new Map([[registrar, [99]]]), context), mixedRefusal);
+    } },
+    { name: 'reuse_original_explicit_override_behavior_unchanged', run: () => {
+      const context = makeProbe();
+      const legacy = new Map([[registrar, Object.freeze([19, 21]) as unknown as number[]]]);
+      const before = JSON.stringify([...legacy]);
+      const expected = `${key} registrar ${registrar} is invoked at server.ts:19 before auth middleware line 20`;
+      return sameStrings(authReader(context.inventory, 20, legacy), [expected]) && JSON.stringify([...legacy]) === before;
+    } },
+    { name: 'reuse_readers_leave_frozen_analysis_and_inventory_unchanged', run: () => {
+      const context = makeProbe(['immutable analysis marker']);
+      const before = snapshot(context);
+      authReader(context.inventory, 20, undefined, context);
+      baselineReader(context.inventory, new Set(), undefined, context);
+      return snapshot(context) === before && Object.isFrozen(context) && Object.isFrozen(context.analysis)
+        && Object.isFrozen(context.analysis.errors) && Object.isFrozen(context.analysis.calls.get(registrar))
+        && Object.isFrozen(context.inventory) && Object.isFrozen(context.inventory.routes);
+    } },
+  ].map(test => Object.freeze(test)));
+  const checks = cases.map(test => {
+    try { return { name: test.name, pass: test.run() }; }
+    catch (error) { return { name: test.name, pass: false, error: error instanceof Error ? error.message : String(error) }; }
+  });
+  const passed = checks.filter(check => check.pass).length;
+  return { pass: passed === checks.length, passed, total: checks.length, checks };
+}
+// END independent per-audit call-analysis reuse contract tests.
 
 function effectiveRegistrationCount(fact: { registrar?: string }, calls: Map<string, number[]>): number {
   if (!fact.registrar) return 1;
@@ -2607,21 +2737,23 @@ function reachableScopes(fact: RouteFact, authority?: AgentRouteAuthority): Arra
 function processTelemetryCapabilityErrors(
   key: string, entry: RouteDispositionEntry, capability: ForgeCapabilityDescriptorV1 | undefined, observedPublic: boolean,
 ): string[] {
-  const reserved = Object.hasOwn(PROCESS_TELEMETRY_ROUTE_OWNERS, key);
+  const nativeTuple = Object.hasOwn(NATIVE_PROCESS_TELEMETRY_ROUTE_TUPLES, key) ? NATIVE_PROCESS_TELEMETRY_ROUTE_TUPLES[key] : undefined;
+  const reserved = nativeTuple !== undefined || Object.hasOwn(PROCESS_TELEMETRY_ROUTE_OWNERS, key);
   if (entry.resourceClass !== 'process-telemetry') {
     // Keep generation's closed defaults reviewable; they still fail the normal
     // capability-scope check until their exact authority tuples are reviewed.
     return reserved && entry.agentScopes.length ? [`${key}: agent-readable performance controls require process-telemetry authority`] : [];
   }
   const errors = processTelemetryRouteAuthorityErrors(key, entry).map(error => `${key}: ${error}`);
-  const owner = reserved ? PROCESS_TELEMETRY_ROUTE_OWNERS[key] : undefined;
+  const owner = nativeTuple?.owner ?? (reserved ? PROCESS_TELEMETRY_ROUTE_OWNERS[key] : undefined);
+  const scopes = nativeTuple?.agentScopes ?? AGENT_ROUTE_SCOPES;
   if (!capability || capability.id !== owner || capability.version !== 1 || capability.apiBindings.length !== 1 ||
     routeKey(capability.apiBindings[0].method, capability.apiBindings[0].path) !== key || capability.apiBindings[0].role !== 'primary') {
     errors.push(`${key}: process-telemetry requires its exact version-1 canonical capability binding`);
   }
   if (observedPublic || !capability || capability.access.public || !capability.access.studioSession ||
-    !sameStrings(capability.access.agentScopes, [...AGENT_ROUTE_SCOPES])) {
-    errors.push(`${key}: process-telemetry must be authenticated, nonpublic and use the read/write/deploy preset`);
+    !sameStrings(capability.access.agentScopes, [...scopes])) {
+    errors.push(`${key}: process-telemetry must be authenticated, nonpublic and use the ${scopes.join('/')} preset`);
   }
   if (!capability || capability.context.workspace !== 'none' || capability.context.profile !== 'none' || capability.confirmation !== 'none' ||
     capability.effects.length !== 2 || !capability.effects.includes('read') || !capability.effects.includes('analyze')) {
@@ -2760,10 +2892,11 @@ function buildBaseline(
   inventory: RouteInventory,
   publicGets: Set<string>,
   authoritySource?: RouteDispositionManifest,
+  reuseContext?: ServerCallAnalysisReuseContext,
 ): RouteDispositionManifest {
   const owners = capabilityRouteOwners();
   const authority = authoritySource ? createAgentRouteAuthority(authoritySource) : undefined;
-  const calls = serverCallAnalysis(inventory).calls;
+  const calls = serverCallAnalysisForInventory(inventory, reuseContext).calls;
   const direct = groupedCounts(inventory.routes, fact => routeKey(fact.method, fact.path));
   const dynamic = groupedCounts(inventory.dynamic, dynamicRouteKey);
   const routes = Object.fromEntries([...direct.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([key, facts]) => {
@@ -3480,10 +3613,21 @@ function parseMcpMappings(text: string, relative = 'vscode-extension/mcp/x4forge
       (unwrapExpression(paramsInitializer.right) as ts.ObjectLiteralExpression).properties.length !== 0) return false;
 
     const context = unwrapExpression(current.arguments[1]);
-    if (!ts.isObjectLiteralExpression(context) || context.properties.length !== 1 ||
+    if (!ts.isObjectLiteralExpression(context) || ![1, 2].includes(context.properties.length) ||
       !ts.isPropertyAssignment(context.properties[0]) || !context.properties[0].name ||
       !(ts.isIdentifier(context.properties[0].name) || ts.isStringLiteralLike(context.properties[0].name)) ||
       context.properties[0].name.text !== 'contractState') return false;
+    const nativeContext = context.properties.length === 2;
+    const nativeAliases = ['get_forge_native_performance', 'start_forge_native_performance_capture', 'stop_forge_native_performance_capture'];
+    const toolsInitializer = sourceToolsDeclaration?.initializer ? unwrapExpression(sourceToolsDeclaration.initializer) : null;
+    const declaredNativeAliases = new Set<string>();
+    if (toolsInitializer && ts.isArrayLiteralExpression(toolsInitializer)) for (const element of toolsInitializer.elements) {
+      if (!ts.isObjectLiteralExpression(element)) continue;
+      for (const property of element.properties) if (ts.isPropertyAssignment(property) &&
+        (ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name)) && property.name.text === 'name' &&
+        ts.isStringLiteralLike(property.initializer) && nativeAliases.includes(property.initializer.text)) declaredNativeAliases.add(property.initializer.text);
+    }
+    if (nativeContext ? declaredNativeAliases.size !== nativeAliases.length : declaredNativeAliases.size !== 0) return false;
     const contractState = unwrapExpression(context.properties[0].initializer);
     if (!ts.isPropertyAccessExpression(contractState) || contractState.name.text !== 'contractState' ||
       !ts.isIdentifier(unwrapExpression(contractState.expression))) return false;
@@ -3498,7 +3642,7 @@ function parseMcpMappings(text: string, relative = 'vscode-extension/mcp/x4forge
     if (!ts.isAwaitExpression(availabilityInitializer)) return false;
     const availabilityCall = unwrapExpression(availabilityInitializer.expression);
     if (!ts.isCallExpression(availabilityCall) || !ts.isIdentifier(availabilityCall.expression) ||
-      availabilityCall.expression.text !== 'resolveAvailableTools' || availabilityCall.arguments.length !== 1 ||
+      availabilityCall.expression.text !== 'resolveAvailableTools' || availabilityCall.arguments.length !== (nativeContext ? 2 : 1) ||
       availabilityCall.arguments[0].kind !== ts.SyntaxKind.TrueKeyword) return false;
     const availabilityHelperBinding = resolveBinding(availabilityCall.expression);
     if (availabilityHelperBinding.ambiguous || !ts.isFunctionDeclaration(availabilityHelperBinding.declaration) ||
@@ -3515,6 +3659,178 @@ function parseMcpMappings(text: string, relative = 'vscode-extension/mcp/x4forge
     const toolIndexStatementIndex = directStatementIndex(indexDeclaration);
     const argumentsStatementIndex = directStatementIndex(argumentsDeclaration);
     if (availabilityIndex < 0 || toolIndexStatementIndex <= availabilityIndex || argumentsStatementIndex <= toolIndexStatementIndex) return false;
+
+    // The second context field is accepted only for the actual bounded native
+    // request owner. Legacy dispatch retains its original one-field contract.
+    if (nativeContext) {
+      if (!lineCallback || !ts.isBlock(lineCallback.body)) return false;
+      const sameBinding = (use: ts.Node, declaration: ts.Node): boolean => {
+        if (!ts.isIdentifier(use)) return false;
+        const binding = resolveBinding(use);
+        return !binding.ambiguous && binding.declaration === declaration;
+      };
+      const rootFunction = (use: ts.Expression, name: string): ts.FunctionDeclaration | null => {
+        const target = unwrapExpression(use);
+        if (!ts.isIdentifier(target) || target.text !== name) return null;
+        const binding = resolveBinding(target);
+        return !binding.ambiguous && !!binding.declaration && ts.isFunctionDeclaration(binding.declaration) && binding.declaration.parent === file &&
+          binding.declaration.name?.text === name && !!binding.declaration.body &&
+          !lexicalBindingIsWritten(file, name, binding.declaration) ? binding.declaration : null;
+      };
+      const signalProperty = context.properties[1];
+      if (!ts.isPropertyAssignment(signalProperty) ||
+        !(ts.isIdentifier(signalProperty.name) || ts.isStringLiteralLike(signalProperty.name)) || signalProperty.name.text !== 'signal') return false;
+      const signal = unwrapExpression(signalProperty.initializer);
+      if (!ts.isPropertyAccessExpression(signal) || signal.name.text !== 'signal' || signal.questionDotToken) return false;
+      const controller = unwrapExpression(signal.expression);
+      if (!ts.isPropertyAccessExpression(controller) || controller.name.text !== 'controller' || !controller.questionDotToken) return false;
+      const ownerUse = unwrapExpression(controller.expression);
+      if (!ts.isIdentifier(ownerUse) || ownerUse.text !== 'nativeRequest') return false;
+      const ownerBinding = resolveBinding(ownerUse);
+      const ownerDeclaration = !ownerBinding.ambiguous && ts.isVariableDeclaration(ownerBinding.declaration) ? ownerBinding.declaration : null;
+      const ownerList = ownerDeclaration?.parent;
+      const ownerStatement = ownerList?.parent;
+      if (!ownerDeclaration || ownerDeclaration.initializer || !ts.isIdentifier(ownerDeclaration.name) ||
+        ownerDeclaration.name.text !== 'nativeRequest' || !ownerList || !ts.isVariableDeclarationList(ownerList) ||
+        (ownerList.flags & ts.NodeFlags.Let) === 0 || ownerList.declarations.length !== 1 || !ownerStatement ||
+        !ts.isVariableStatement(ownerStatement) || ownerStatement.parent !== lineCallback.body ||
+        !sameBinding(unwrapExpression(availabilityCall.arguments[1]), ownerDeclaration) ||
+        lexicalBindingPropertyIsWritten(file, 'nativeRequest', ownerDeclaration, 'controller')) return false;
+      const targetWritesOwner = (target: ts.Node): boolean => {
+        if (ts.isIdentifier(target)) return sameBinding(target, ownerDeclaration);
+        if (ts.isExpression(target)) {
+          const unwrapped = unwrapExpression(target);
+          if (unwrapped !== target) return targetWritesOwner(unwrapped);
+        }
+        if (ts.isArrayLiteralExpression(target) || ts.isArrayBindingPattern(target)) return target.elements.some(element =>
+          !ts.isOmittedExpression(element) && targetWritesOwner(element));
+        if (ts.isSpreadElement(target) || ts.isSpreadAssignment(target)) return targetWritesOwner(target.expression);
+        if (ts.isBindingElement(target)) return targetWritesOwner(target.name);
+        if (ts.isObjectBindingPattern(target)) return target.elements.some(element => targetWritesOwner(element.name));
+        if (ts.isObjectLiteralExpression(target)) return target.properties.some(property =>
+          ts.isPropertyAssignment(property) ? targetWritesOwner(property.initializer)
+            : ts.isShorthandPropertyAssignment(property) ? targetWritesOwner(property.name)
+              : ts.isSpreadAssignment(property) && targetWritesOwner(property.expression));
+        return false;
+      };
+      const writes: ts.BinaryExpression[] = [];
+      let otherWrite = false;
+      const inspectOwnerWrites = (node: ts.Node): void => {
+        if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+          node.operatorToken.kind <= ts.SyntaxKind.LastAssignment && targetWritesOwner(node.left)) {
+          if (node.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isIdentifier(unwrapExpression(node.left))) writes.push(node);
+          else otherWrite = true;
+        }
+        if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+          [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(node.operator) && targetWritesOwner(node.operand)) otherWrite = true;
+        if ((ts.isForInStatement(node) || ts.isForOfStatement(node)) && !ts.isVariableDeclarationList(node.initializer) && targetWritesOwner(node.initializer)) otherWrite = true;
+        ts.forEachChild(node, inspectOwnerWrites);
+      };
+      inspectOwnerWrites(lineCallback.body);
+      if (otherWrite || writes.length !== 1) return false;
+      const assignment = writes[0], assignmentStatement = assignment.parent;
+      if (!ts.isExpressionStatement(assignmentStatement) || !ts.isBlock(assignmentStatement.parent)) return false;
+      const admissionBody = assignmentStatement.parent;
+      const admission = admissionBody.parent;
+      if (!ts.isIfStatement(admission) || admission.parent !== toolsCallBranch.thenStatement || admission.thenStatement !== admissionBody ||
+        admission.elseStatement || admissionBody.statements.length !== 2 || admissionBody.statements[0] !== assignment.parent ||
+        branchStatements.indexOf(admission) !== availabilityIndex - 1 || ownerStatement.getStart(file) >= admission.getStart(file)) return false;
+      const refusal = admissionBody.statements[1];
+      if (!ts.isIfStatement(refusal) || refusal.elseStatement || !ts.isPrefixUnaryExpression(refusal.expression) ||
+        refusal.expression.operator !== ts.SyntaxKind.ExclamationToken || !sameBinding(unwrapExpression(refusal.expression.operand), ownerDeclaration) ||
+        !ts.isReturnStatement(refusal.thenStatement) || refusal.thenStatement.expression) return false;
+      const admitted = unwrapExpression(assignment.right);
+      if (!ts.isCallExpression(admitted) || admitted.arguments.length !== 1 || !sameBinding(unwrapExpression(admitted.arguments[0]), messageDeclaration) ||
+        !ts.isIdentifier(unwrapExpression(admitted.arguments[0])) || (unwrapExpression(admitted.arguments[0]) as ts.Identifier).text !== 'id') return false;
+      const factory = rootFunction(admitted.expression, 'beginNativeRequest');
+      if (!factory?.body || factory.parameters.length !== 1 || !ts.isIdentifier(factory.parameters[0].name) ||
+        factory.parameters[0].name.text !== 'id' || factory.parameters[0].initializer || factory.parameters[0].dotDotDotToken || factory.parameters[0].questionToken) return false;
+      const factoryRows = factory.body.statements.flatMap(statement => ts.isVariableStatement(statement)
+        ? statement.declarationList.declarations.filter(declaration => ts.isIdentifier(declaration.name) && declaration.name.text === 'request') : []);
+      const factoryRow = factoryRows.length === 1 ? factoryRows[0] : null;
+      const factoryValue = factoryRow?.initializer ? unwrapExpression(factoryRow.initializer) : null;
+      if (!factoryRow || !variableDeclarationIsConst(factoryRow) || !factoryValue || !ts.isObjectLiteralExpression(factoryValue) ||
+        factoryValue.properties.some(property => (!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property)) ||
+          !property.name || (!ts.isIdentifier(property.name) && !ts.isStringLiteralLike(property.name)))) return false;
+      const controllerProperties = factoryValue.properties.filter(property =>
+        !!property.name &&
+        (ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name)) && property.name.text === 'controller');
+      const createdController = controllerProperties.length === 1 && ts.isPropertyAssignment(controllerProperties[0])
+        ? unwrapExpression(controllerProperties[0].initializer) : null;
+      if (!createdController || !ts.isNewExpression(createdController) || !ts.isIdentifier(createdController.expression) ||
+        createdController.expression.text !== 'AbortController' || createdController.arguments?.length !== 0) return false;
+      const constructorBinding = resolveBinding(createdController.expression);
+      const factoryReturn = factory.body.statements.at(-1);
+      if (constructorBinding.ambiguous || constructorBinding.declaration || !factoryReturn || !ts.isReturnStatement(factoryReturn) ||
+        !factoryReturn.expression || !sameBinding(unwrapExpression(factoryReturn.expression), factoryRow) ||
+        lexicalBindingPropertyIsWritten(file, 'request', factoryRow, 'controller')) return false;
+      let foreignFactoryReturn = false;
+      const inspectFactoryReturns = (node: ts.Node): void => {
+        if (node !== factory && ts.isFunctionLike(node)) return;
+        if (ts.isReturnStatement(node) && node.expression) {
+          const returned = unwrapExpression(node.expression);
+          const unavailable = ts.isIdentifier(returned) && returned.text === 'undefined' &&
+            !resolveBinding(returned).ambiguous && !resolveBinding(returned).declaration;
+          if (!unavailable && !sameBinding(returned, factoryRow)) foreignFactoryReturn = true;
+        }
+        ts.forEachChild(node, inspectFactoryReturns);
+      };
+      inspectFactoryReturns(factory);
+      if (foreignFactoryReturn) return false;
+      const gate = unwrapExpression(admission.expression);
+      const gateAccess = ts.isCallExpression(gate) ? staticMemberAccess(gate.expression) : null;
+      if (!ts.isCallExpression(gate) || gate.arguments.length !== 1 || gateAccess?.name !== 'has') return false;
+      const requestedName = unwrapExpression(gate.arguments[0]);
+      if (!ts.isPropertyAccessExpression(requestedName) || requestedName.name.text !== 'name' ||
+        !sameBinding(unwrapExpression(requestedName.expression), messageDeclaration)) return false;
+      const aliasesUse = unwrapExpression(gateAccess.receiver);
+      if (!ts.isIdentifier(aliasesUse) || aliasesUse.text !== 'NATIVE_PERFORMANCE_LIVE_TOOLS') return false;
+      const aliasesBinding = resolveBinding(aliasesUse);
+      const aliasesDeclaration = !aliasesBinding.ambiguous && ts.isVariableDeclaration(aliasesBinding.declaration) ? aliasesBinding.declaration : null;
+      const aliasesValue = aliasesDeclaration?.initializer ? unwrapExpression(aliasesDeclaration.initializer) : null;
+      if (!aliasesDeclaration || !variableDeclarationIsConst(aliasesDeclaration) || aliasesDeclaration.parent.parent.parent !== file ||
+        lexicalBindingIsWritten(file, aliasesUse.text, aliasesDeclaration) || !aliasesValue || !ts.isNewExpression(aliasesValue) ||
+        !ts.isIdentifier(aliasesValue.expression) || aliasesValue.expression.text !== 'Set' || aliasesValue.arguments?.length !== 1) return false;
+      const setConstructorBinding = resolveBinding(aliasesValue.expression);
+      const aliasNames = unwrapExpression(aliasesValue.arguments[0]);
+      if (setConstructorBinding.ambiguous || setConstructorBinding.declaration || !ts.isArrayLiteralExpression(aliasNames) ||
+        !aliasNames.elements.every(ts.isStringLiteralLike) ||
+        !sameStrings(aliasNames.elements.filter(ts.isStringLiteralLike).map(element => element.text), nativeAliases)) return false;
+      let escapedAliasSet = false;
+      const inspectAliasSet = (node: ts.Node): void => {
+        if (ts.isIdentifier(node) && node.text === aliasesUse.text && sameBinding(node, aliasesDeclaration)) {
+          const parent = node.parent;
+          const declared = ts.isVariableDeclaration(parent) && parent.name === node;
+          const member = ts.isPropertyAccessExpression(parent) && parent.expression === node && parent.name.text === 'has' &&
+            ts.isCallExpression(parent.parent) && parent.parent.expression === parent;
+          const iterated = ts.isForOfStatement(parent) && parent.expression === node;
+          if (!declared && !member && !iterated) escapedAliasSet = true;
+        }
+        ts.forEachChild(node, inspectAliasSet);
+      };
+      inspectAliasSet(file);
+      if (escapedAliasSet) return false;
+      const ownerFence = (statement: ts.Statement | undefined): boolean => {
+        if (!statement || !ts.isIfStatement(statement) || statement.elseStatement || !ts.isReturnStatement(statement.thenStatement) ||
+          statement.thenStatement.expression) return false;
+        const condition = unwrapExpression(statement.expression);
+        if (!ts.isBinaryExpression(condition) || condition.operatorToken.kind !== ts.SyntaxKind.AmpersandAmpersandToken ||
+          !sameBinding(unwrapExpression(condition.left), ownerDeclaration)) return false;
+        const rejected = unwrapExpression(condition.right);
+        const predicate = ts.isPrefixUnaryExpression(rejected) && rejected.operator === ts.SyntaxKind.ExclamationToken ? unwrapExpression(rejected.operand) : null;
+        if (!predicate || !ts.isCallExpression(predicate) || predicate.arguments.length !== 1 ||
+          !sameBinding(unwrapExpression(predicate.arguments[0]), ownerDeclaration)) return false;
+        const predicateOwner = rootFunction(predicate.expression, 'nativeRequestOwned');
+        return !!predicateOwner && predicateOwner.parameters.length === 1 && ts.isIdentifier(predicateOwner.parameters[0].name) &&
+          predicateOwner.parameters[0].name.text === 'request' && !predicateOwner.parameters[0].initializer &&
+          !predicateOwner.parameters[0].dotDotDotToken && !predicateOwner.parameters[0].questionToken;
+      };
+      if (!ownerFence(branchStatements[availabilityIndex + 1])) return false;
+      let resultStatement: ts.Node | undefined = current.parent;
+      while (resultStatement && !ts.isStatement(resultStatement)) resultStatement = resultStatement.parent;
+      if (!resultStatement || !ts.isStatement(resultStatement) || !ts.isBlock(resultStatement.parent) ||
+        !ownerFence(resultStatement.parent.statements[resultStatement.parent.statements.indexOf(resultStatement) + 1])) return false;
+    }
 
     const indexWrites: ts.BinaryExpression[] = [];
     const inspectIndexWrites = (candidate: ts.Node): void => {
@@ -4030,6 +4346,189 @@ function parseMcpMappings(text: string, relative = 'vscode-extension/mcp/x4forge
     }
     return false;
   };
+  // Only the native public-data walk may recurse without request authority.
+  // This proves its bounds, recursive inputs and complete data-only helper closure;
+  // collectForgeCalls still traverses every body and inventories every request.
+  const reviewedNativeDataRecursiveCalls = new Set<ts.CallExpression>();
+  const nativeDataTree = helpers.get('nativePublicTree');
+  const nativeDataFunction = nativeDataTree && ts.isFunctionDeclaration(nativeDataTree) && nativeDataTree.parent === file
+    ? nativeDataTree : null;
+  const nativeDataRecursionIsReviewed = (): boolean => {
+    if (!nativeDataFunction?.body || nativeDataFunction.parameters.length !== 3 ||
+      runtimeBindingDeclarations(file, 'nativePublicTree').length !== 1 ||
+      lexicalBindingIsWritten(file, 'nativePublicTree', nativeDataFunction)) return false;
+    const [valueParameter, depthParameter, budgetParameter] = nativeDataFunction.parameters;
+    const exactUse = (node: ts.Node, declaration: ts.Node, name: string): boolean => {
+      if (!ts.isIdentifier(node) || node.text !== name) return false;
+      const binding = resolveBinding(node);
+      return !binding.ambiguous && binding.declaration === declaration;
+    };
+    const numberIs = (node: ts.Node | undefined, value: number): boolean =>
+      !!node && ts.isNumericLiteral(node) && Number(node.text) === value;
+    const propertyIs = (node: ts.Node, declaration: ts.Node, name: string, property: string): boolean =>
+      ts.isPropertyAccessExpression(node) && !node.questionDotToken && node.name.text === property && exactUse(node.expression, declaration, name);
+    if (![valueParameter, depthParameter, budgetParameter].every(parameter => !parameter.dotDotDotToken && !parameter.questionToken) ||
+      !ts.isIdentifier(valueParameter.name) || valueParameter.name.text !== 'value' || valueParameter.initializer ||
+      !ts.isIdentifier(depthParameter.name) || depthParameter.name.text !== 'depth' || !numberIs(depthParameter.initializer, 0) ||
+      !ts.isIdentifier(budgetParameter.name) || budgetParameter.name.text !== 'budget' || !budgetParameter.initializer ||
+      !ts.isObjectLiteralExpression(budgetParameter.initializer) || budgetParameter.initializer.properties.length !== 1) return false;
+    const initialNodes = budgetParameter.initializer.properties[0];
+    if (!ts.isPropertyAssignment(initialNodes) || !ts.isIdentifier(initialNodes.name) || initialNodes.name.text !== 'nodes' ||
+      !numberIs(initialNodes.initializer, 0) || lexicalBindingIsWritten(file, 'value', valueParameter) ||
+      lexicalBindingIsWritten(file, 'depth', depthParameter) || lexicalBindingIsWritten(file, 'budget', budgetParameter)) return false;
+    const ownedHelper = (name: string): ts.FunctionDeclaration | null => {
+      const helper = helpers.get(name);
+      return helper && ts.isFunctionDeclaration(helper) && helper.parent === file && !!helper.body &&
+        runtimeBindingDeclarations(file, name).length === 1 && !lexicalBindingIsWritten(file, name, helper) ? helper : null;
+    };
+    const requireHelper = ownedHelper('nativeRequire'), invalidHelper = ownedHelper('nativeResponseInvalid'), recordHelper = ownedHelper('isRecord');
+    if (!requireHelper?.body || !invalidHelper?.body || !recordHelper?.body || requireHelper.parameters.length !== 1 ||
+      !ts.isIdentifier(requireHelper.parameters[0].name) || requireHelper.parameters[0].initializer ||
+      requireHelper.parameters[0].dotDotDotToken || requireHelper.parameters[0].questionToken ||
+      requireHelper.body.statements.length !== 1) return false;
+    const enforcement = requireHelper.body.statements[0];
+    if (!ts.isIfStatement(enforcement) || enforcement.elseStatement || !ts.isPrefixUnaryExpression(enforcement.expression) ||
+      enforcement.expression.operator !== ts.SyntaxKind.ExclamationToken ||
+      !exactUse(enforcement.expression.operand, requireHelper.parameters[0], requireHelper.parameters[0].name.text) ||
+      !ts.isThrowStatement(enforcement.thenStatement) || !ts.isCallExpression(enforcement.thenStatement.expression) ||
+      !exactUse(enforcement.thenStatement.expression.expression, invalidHelper, 'nativeResponseInvalid') ||
+      enforcement.thenStatement.expression.arguments.length !== 0) return false;
+    const first = nativeDataFunction.body.statements[0];
+    const guardCall = first && ts.isExpressionStatement(first) && ts.isCallExpression(first.expression) ? first.expression : null;
+    const bounds = guardCall?.arguments[0];
+    if (!guardCall || !exactUse(guardCall.expression, requireHelper, 'nativeRequire') || guardCall.arguments.length !== 1 ||
+      !bounds || !ts.isBinaryExpression(bounds) || bounds.operatorToken.kind !== ts.SyntaxKind.AmpersandAmpersandToken ||
+      !ts.isBinaryExpression(bounds.left) || bounds.left.operatorToken.kind !== ts.SyntaxKind.LessThanEqualsToken ||
+      !ts.isPrefixUnaryExpression(bounds.left.left) || bounds.left.left.operator !== ts.SyntaxKind.PlusPlusToken ||
+      !propertyIs(bounds.left.left.operand, budgetParameter, 'budget', 'nodes') || !numberIs(bounds.left.right, 30000) ||
+      !ts.isBinaryExpression(bounds.right) || bounds.right.operatorToken.kind !== ts.SyntaxKind.LessThanEqualsToken ||
+      !exactUse(bounds.right.left, depthParameter, 'depth') || !numberIs(bounds.right.right, 12)) return false;
+    const increment = bounds.left.left;
+    const builtinCall = (call: ts.CallExpression): boolean => {
+      const access = staticMemberAccess(call.expression);
+      return !!access?.name && ts.isIdentifier(access.receiver) && call.arguments.length === 1 &&
+        ((access.receiver.text === 'Array' && access.name === 'isArray') ||
+          (access.receiver.text === 'Number' && access.name === 'isFinite') ||
+          (access.receiver.text === 'Object' && ['keys', 'values'].includes(access.name))) &&
+        unshadowedGlobalBinding(file, access.receiver.text, access.receiver);
+    };
+    const closure = new Set<ts.FunctionDeclaration>([nativeDataFunction, requireHelper, invalidHelper, recordHelper]);
+    if ([...closure].some(helper => helper.asteriskToken || helper.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.AsyncKeyword))) return false;
+    let safe = true, loops = 0;
+    const inspect = (node: ts.Node, boundary: ts.FunctionDeclaration): void => {
+      if (!safe) return;
+      if (ts.isFunctionLike(node) || ts.isClassLike(node) || ts.isAwaitExpression(node) || ts.isYieldExpression(node) ||
+        ts.isTaggedTemplateExpression(node) || ts.isElementAccessExpression(node) || ts.isDeleteExpression(node) ||
+        ts.isWithStatement(node) || ts.isTryStatement(node) || ts.isSwitchStatement(node) || ts.isForStatement(node) ||
+        ts.isForInStatement(node) || ts.isWhileStatement(node) || ts.isDoStatement(node)) { safe = false; return; }
+      if (ts.isForOfStatement(node)) {
+        loops += 1;
+        const row = ts.isVariableDeclarationList(node.initializer) && node.initializer.declarations.length === 1
+          ? node.initializer.declarations[0] : null;
+        const iterable = node.expression;
+        const valuesCall = ts.isCallExpression(iterable) && builtinCall(iterable) &&
+          ts.isPropertyAccessExpression(iterable.expression) && iterable.expression.expression.getText(file) === 'Object' &&
+          iterable.expression.name.text === 'values' && exactUse(iterable.arguments[0], valueParameter, 'value');
+        const call = ts.isExpressionStatement(node.statement) && ts.isCallExpression(node.statement.expression) ? node.statement.expression : null;
+        if (boundary !== nativeDataFunction || node.awaitModifier || !row || !variableDeclarationIsConst(row) || row.initializer ||
+          !ts.isIdentifier(row.name) || row.name.text !== 'item' ||
+          (!exactUse(iterable, valueParameter, 'value') && !valuesCall) || !call ||
+          !exactUse(call.expression, nativeDataFunction, 'nativePublicTree') || call.arguments.length !== 3 ||
+          !exactUse(call.arguments[0], row, 'item') || !ts.isBinaryExpression(call.arguments[1]) ||
+          call.arguments[1].operatorToken.kind !== ts.SyntaxKind.PlusToken ||
+          !exactUse(call.arguments[1].left, depthParameter, 'depth') || !numberIs(call.arguments[1].right, 1) ||
+          !exactUse(call.arguments[2], budgetParameter, 'budget')) { safe = false; return; }
+        reviewedNativeDataRecursiveCalls.add(call);
+      }
+      if (ts.isCallExpression(node) && !builtinCall(node)) {
+        const binding = ts.isIdentifier(node.expression) ? resolveBinding(node.expression) : null;
+        if (!binding || binding.ambiguous || !binding.declaration || !ts.isFunctionDeclaration(binding.declaration) ||
+          !closure.has(binding.declaration) ||
+          !(binding.declaration === nativeDataFunction ? reviewedNativeDataRecursiveCalls.has(node)
+            : boundary === nativeDataFunction ? binding.declaration === requireHelper || binding.declaration === recordHelper
+              : boundary === requireHelper && binding.declaration === invalidHelper)) { safe = false; return; }
+      }
+      if (ts.isNewExpression(node) && (boundary !== invalidHelper || !ts.isIdentifier(node.expression) ||
+        node.expression.text !== 'Error' || !unshadowedGlobalBinding(file, 'Error', node.expression) ||
+        node.arguments?.length !== 1 || !ts.isStringLiteral(node.arguments[0]))) { safe = false; return; }
+      if (ts.isVariableDeclaration(node) && (!variableDeclarationIsConst(node) ||
+        (node.initializer && (boundary !== invalidHelper || !ts.isNewExpression(node.initializer))))) { safe = false; return; }
+      if (ts.isBinaryExpression(node) && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+        node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+        const access = staticMemberAccess(node.left);
+        const binding = access && ts.isIdentifier(access.receiver) ? resolveBinding(access.receiver) : null;
+        const declaration = binding && !binding.ambiguous && binding.declaration && ts.isVariableDeclaration(binding.declaration)
+          ? binding.declaration : null;
+        if (boundary !== invalidHelper || node.operatorToken.kind !== ts.SyntaxKind.EqualsToken ||
+          !access?.name || !['nativeCode', 'invalidResponse'].includes(access.name) || !declaration?.initializer ||
+          !nodeIsWithin(invalidHelper, declaration) || !ts.isNewExpression(declaration.initializer) ||
+          (!ts.isStringLiteral(node.right) && node.right.kind !== ts.SyntaxKind.TrueKeyword)) { safe = false; return; }
+      }
+      if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
+        [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(node.operator) && node !== increment) { safe = false; return; }
+      if (ts.isIdentifier(node)) {
+        const parent = node.parent;
+        const propertyName = (ts.isPropertyAccessExpression(parent) && parent.name === node) ||
+          (ts.isPropertyAssignment(parent) && parent.name === node);
+        const builtin = ((ts.isPropertyAccessExpression(parent) && parent.expression === node && ts.isCallExpression(parent.parent) &&
+          parent.parent.expression === parent && builtinCall(parent.parent)) ||
+          (ts.isNewExpression(parent) && parent.expression === node && node.text === 'Error' && unshadowedGlobalBinding(file, 'Error', node)));
+        const binding = resolveBinding(node);
+        const local = !binding.ambiguous && !!binding.declaration && nodeIsWithin(boundary, binding.declaration);
+        const helperCall = ts.isCallExpression(parent) && parent.expression === node && !binding.ambiguous &&
+          !!binding.declaration && ts.isFunctionDeclaration(binding.declaration) && closure.has(binding.declaration);
+        if (!propertyName && !builtin && !local && !helperCall) { safe = false; return; }
+      }
+      ts.forEachChild(node, child => inspect(child, boundary));
+    };
+    for (const helper of closure) inspect(helper.body!, helper);
+    if (!safe || loops !== 2 || reviewedNativeDataRecursiveCalls.size !== 2) return false;
+    // Defaults are part of the bound, so every nonrecursive entry must use them.
+    // Trust intrinsic methods only while their roots/members never escape or mutate.
+    const intrinsicReads = new Map<string, Set<string>>([
+      ['Object', new Set(['freeze', 'keys', 'values', 'entries', 'fromEntries', 'hasOwn', 'is'])],
+      ['Array', new Set(['isArray'])],
+      ['Number', new Set(['isFinite', 'isInteger', 'isSafeInteger'])],
+      ['Error', new Set()],
+    ]);
+    if ([...intrinsicReads.keys()].some(name => !unshadowedGlobalBinding(file, name))) return false;
+    let externalEntries = 0;
+    const inspectEntriesAndIntrinsics = (node: ts.Node): void => {
+      if (!safe) return;
+      if (ts.isIdentifier(node)) {
+        const parent = node.parent;
+        const propertyName = (ts.isPropertyAccessExpression(parent) && parent.name === node) ||
+          (ts.isPropertyAssignment(parent) && parent.name === node && !ts.isComputedPropertyName(parent.name));
+        if (!propertyName && exactUse(node, nativeDataFunction, 'nativePublicTree') &&
+          !(parent === nativeDataFunction && nativeDataFunction.name === node)) {
+          if (!ts.isCallExpression(parent) || parent.expression !== node) { safe = false; return; }
+          if (!reviewedNativeDataRecursiveCalls.has(parent)) {
+            if (nodeIsWithin(nativeDataFunction, parent) || parent.arguments.length !== 1 || ts.isSpreadElement(parent.arguments[0])) {
+              safe = false; return;
+            }
+            externalEntries += 1;
+          }
+        }
+        if (!propertyName && intrinsicReads.has(node.text)) {
+          const members = intrinsicReads.get(node.text)!;
+          const member = ts.isPropertyAccessExpression(parent) && parent.expression === node && !parent.questionDotToken &&
+            members.has(parent.name.text) && ts.isCallExpression(parent.parent) && parent.parent.expression === parent && !parent.parent.questionDotToken;
+          const coercion = node.text === 'Number' && ts.isCallExpression(parent) && parent.expression === node && !parent.questionDotToken;
+          const error = node.text === 'Error' && ts.isNewExpression(parent) && parent.expression === node;
+          if (!member && !coercion && !error) { safe = false; return; }
+        }
+        // A global-object alias or reflective route is outside this closed proof.
+        if (!propertyName && ['globalThis', 'global', 'window'].includes(node.text) && unshadowedGlobalBinding(file, node.text, node)) {
+          safe = false; return;
+        }
+      }
+      ts.forEachChild(node, inspectEntriesAndIntrinsics);
+    };
+    inspectEntriesAndIntrinsics(file);
+    return safe && externalEntries > 0;
+  };
+  if (!nativeDataRecursionIsReviewed()) reviewedNativeDataRecursiveCalls.clear();
+  // End reviewed native data-recursion proof.
   const collectForgeCalls = (root: ts.Node): { calls: string[]; unrecognized: string[] } => {
     const calls: string[] = [];
     const unrecognized = new Set<string>();
@@ -4126,7 +4625,7 @@ function parseMcpMappings(text: string, relative = 'vscode-extension/mcp/x4forge
       if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
         const boundaryName = (ts.isFunctionDeclaration(boundary) || ts.isFunctionExpression(boundary)) && boundary.name
           ? boundary.name.text : null;
-        if (boundaryName && node.expression.text === boundaryName) {
+        if (boundaryName && node.expression.text === boundaryName && !reviewedNativeDataRecursiveCalls.has(node)) {
           unrecognized.add(`recursive request handler/helper is not statically bounded: ${node.getText(file).slice(0, 160)}`);
         }
         if (node.expression.text === 'forge') {
@@ -4158,7 +4657,9 @@ function parseMcpMappings(text: string, relative = 'vscode-extension/mcp/x4forge
         }
         const helper = helpers.get(node.expression.text);
         if (helper && activeHelpers.has(node.expression.text)) {
-          unrecognized.add(`recursive request helper is not statically bounded: ${node.getText(file).slice(0, 160)}`);
+          if (!reviewedNativeDataRecursiveCalls.has(node)) {
+            unrecognized.add(`recursive request helper is not statically bounded: ${node.getText(file).slice(0, 160)}`);
+          }
         } else if (helper) {
           const expectedHelper = helperBinding(helper);
           if (!expectedHelper || !runtimeBindingResolvesTo(file, node.expression.text, node.expression, expectedHelper) ||
@@ -5953,8 +6454,12 @@ function projectionAnchorErrors(capability: ForgeCapabilityDescriptorV1, surface
 function audit(manifestOverride?: RouteDispositionManifest): { errors: string[]; routeCount: number; dynamicRegistrarCount: number; contractHash: string; mcpCount: number } {
   const errors = validateForgeCapabilityRegistry().map(error => `registry: ${error}`);
   const inventory = inventoryRoutes();
+  const serverText = fs.readFileSync(path.join(ROOT, 'server.ts'), 'utf8');
+  const analysisReuseContext: ServerCallAnalysisReuseContext = {
+    inventory, serverText, analysis: serverCallAnalysis(inventory, serverText),
+  };
   errors.push(...inventory.unrecognizedForms.map(form => `unrecognized route form: ${form}`));
-  errors.push(...effectiveAuthOrderErrors(inventory).map(error => `auth order: ${error}`));
+  errors.push(...effectiveAuthOrderErrors(inventory, undefined, undefined, analysisReuseContext).map(error => `auth order: ${error}`));
   const authBypassProbe: RouteInventory = {
     routes: [{ method: 'GET', path: '/api/agent/__auth_order_probe', source: 'server.ts', line: 1 }],
     dynamic: [],
@@ -7482,7 +7987,7 @@ function audit(manifestOverride?: RouteDispositionManifest): { errors: string[];
   const routeFacts = new Map<string, RouteFact>();
   const routeRegistrations = new Map<string, number>();
   const routeContributors = new Map<string, string[]>();
-  const callLines = serverCallAnalysis(inventory).calls;
+  const callLines = serverCallAnalysisForInventory(inventory, analysisReuseContext).calls;
   for (const fact of inventory.routes) {
     const key = routeKey(fact.method, fact.path);
     if (!routeFacts.has(key)) routeFacts.set(key, fact);
@@ -7508,9 +8013,13 @@ function audit(manifestOverride?: RouteDispositionManifest): { errors: string[];
     disposition: 'canonical-capability', owner: 'performance.read', registrations: 1,
     agentScopes: [...AGENT_ROUTE_SCOPES], resourceClass: 'process-telemetry', workspaceMode: 'none',
   };
-  for (const [key, owner] of Object.entries(PROCESS_TELEMETRY_ROUTE_OWNERS)) {
+  const telemetryWitnesses = [
+    ...Object.entries(PROCESS_TELEMETRY_ROUTE_OWNERS).map(([key, owner]) => ({ key, owner, scopes: AGENT_ROUTE_SCOPES })),
+    ...Object.entries(NATIVE_PROCESS_TELEMETRY_ROUTE_TUPLES).map(([key, tuple]) => ({ key, owner: tuple.owner, scopes: tuple.agentScopes })),
+  ];
+  for (const { key, owner, scopes } of telemetryWitnesses) {
     const capability = FORGE_CAPABILITIES.find(candidate => candidate.id === owner);
-    const probeErrors = processTelemetryCapabilityErrors(key, { ...telemetryProbeEntry, owner }, capability, false);
+    const probeErrors = processTelemetryCapabilityErrors(key, { ...telemetryProbeEntry, owner, agentScopes: [...scopes] }, capability, false);
     if (probeErrors.length) errors.push(`process-telemetry positive invariant failed: ${probeErrors.join(' | ')}`);
   }
   if (!telemetryProbeCapability) errors.push('process-telemetry negative controls lack their real canonical capability');
@@ -7563,7 +8072,7 @@ function audit(manifestOverride?: RouteDispositionManifest): { errors: string[];
     if (!sameStrings(manifest.sources, ROUTE_SOURCES)) errors.push('manifest source boundary differs from dynamically discovered route sources');
     errors.push(...manifestDriftErrors(routeRegistrations, manifest.routes || {}, 'route'));
     errors.push(...manifestDriftErrors(dynamicRegistrations, manifest.dynamicRoutes || {}, 'dynamic route'));
-    const expectedBaseline = buildBaseline(inventory, publicGets, manifest);
+    const expectedBaseline = buildBaseline(inventory, publicGets, manifest, analysisReuseContext);
     errors.push(...dispositionAuthorityErrors(expectedBaseline.routes, manifest.routes || {}, 'route'));
     errors.push(...dispositionAuthorityErrors(expectedBaseline.dynamicRoutes, manifest.dynamicRoutes || {}, 'dynamic route'));
     const changedAuthorityProbe = JSON.parse(JSON.stringify(expectedBaseline)) as RouteDispositionManifest;
@@ -7651,7 +8160,7 @@ function audit(manifestOverride?: RouteDispositionManifest): { errors: string[];
       reviewedFieldProbe.routes[authorityProbeKey].resourceClass = reviewedFieldProbe.routes[authorityProbeKey].resourceClass === 'configured-root'
         ? 'stateless-analysis'
         : 'configured-root';
-      const regeneratedReviewedProbe = buildBaseline(inventory, publicGets, reviewedFieldProbe);
+      const regeneratedReviewedProbe = buildBaseline(inventory, publicGets, reviewedFieldProbe, analysisReuseContext);
       if (regeneratedReviewedProbe.routes[authorityProbeKey].resourceClass !== reviewedFieldProbe.routes[authorityProbeKey].resourceClass ||
         serializedManifest(regeneratedReviewedProbe) !== serializedManifest(reviewedFieldProbe)) {
         errors.push('candidate preservation selftest failed to retain an exact reviewed authority edit');
@@ -8355,7 +8864,7 @@ function audit(manifestOverride?: RouteDispositionManifest): { errors: string[];
     truthyTerminationProbes.some(probe => probe.mappings[0]?.calls.length)) {
     errors.push('MCP TOOLS guard failed top-level/escape/handler/indirect-transport/full-truthiness probes');
   }
-  if (mappings.length !== 16) errors.push(`MCP tool inventory changed: expected 16 mappings, found ${mappings.length}`);
+  if (mappings.length !== 19) errors.push(`MCP tool inventory changed: expected 19 mappings, found ${mappings.length}`);
   const mappingNames = new Set<string>();
   for (const mapping of mappings) {
     if (mappingNames.has(mapping.name)) errors.push(`duplicate MCP tool name: ${mapping.name}`);
@@ -8415,8 +8924,18 @@ function audit(manifestOverride?: RouteDispositionManifest): { errors: string[];
   if (!hasPrecommitCapabilityGate({ precommit: precommitSource,
     receipt: readSource('scripts/action-receipt-coverage-audit.ts').file, scripts: packageJson.scripts ?? {},
   })) errors.push('precommit does not declare and invoke both capability gates');
+  const nativeAuthoritySelftest = runNativeAgentCapabilityAuthoritySelftest();
+  if (!nativeAuthoritySelftest.pass) errors.push(`native capability authority selftest failed: ${nativeAuthoritySelftest.checks.filter(check => !check.pass).map(check => check.name).join(', ')}`);
+  const nativePerformanceAuditSelftest = runNativePerformanceAuditSelftest();
+  if (!nativePerformanceAuditSelftest.pass) errors.push(`native performance audit selftest failed: ${nativePerformanceAuditSelftest.checks.filter(check => !check.pass).map(check => check.name).join(', ')}`);
+  const nativeEntryAuditSelftest = runNativePerformanceEntryAuditSelftest();
+  if (!nativeEntryAuditSelftest.pass) errors.push(`native performance entry audit selftest failed: ${nativeEntryAuditSelftest.checks.filter(check => !check.pass).map(check => check.name).join(', ')}`);
   const precommitGuardSelftest = runPrecommitCapabilityGateSelftest();
   if (!precommitGuardSelftest.pass) errors.push(`precommit capability ownership guard selftest failed: ${precommitGuardSelftest.checks.filter(check => !check.pass).map(check => check.name).join(', ')}`);
+  // BEGIN default per-audit call-analysis reuse contract invocation.
+  const analysisReuseSelftest = runServerCallAnalysisReuseSelftest();
+  if (!analysisReuseSelftest.pass) errors.push(`server call-analysis reuse selftest failed (${analysisReuseSelftest.passed}/${analysisReuseSelftest.total}): ${analysisReuseSelftest.checks.filter(check => !check.pass).map(check => check.name).join(', ')}`);
+  // END default per-audit call-analysis reuse contract invocation.
   const qualityWorkflow = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'quality.yml'), 'utf8');
   if (!/^\s*run:\s*npm run test:capabilities\s*$/m.test(qualityWorkflow)) errors.push('GitHub quality workflow omits test:capabilities');
   if (!/^\s*run:\s*npm run test:mcp-capabilities\s*$/m.test(qualityWorkflow)) errors.push('GitHub quality workflow omits test:mcp-capabilities');
@@ -8431,6 +8950,299 @@ function audit(manifestOverride?: RouteDispositionManifest): { errors: string[];
   };
 }
 
+// Entry-safety subgroup: source mutations only, selected before any probe executes.
+function runNativePerformanceEntryAuditSelftest() {
+  const checks: Array<{ name: string; pass: boolean; expected: false; actual: boolean; errors: string[] }> = [];
+  const rawSource = fs.readFileSync(MCP_MODULE_PATH, 'utf8');
+  const source = rawSource.replace(/\r\n?/g, '\n');
+  const tuples = [
+    { alias: 'get_forge_native_performance', owner: 'performance.native.read', call: 'GET /api/agent/performance/native' },
+    { alias: 'start_forge_native_performance_capture', owner: 'performance.native.collect', call: 'POST /api/agent/performance/native/collection' },
+    { alias: 'stop_forge_native_performance_capture', owner: 'performance.native.stop', call: 'POST /api/agent/performance/native/stop' },
+  ];
+  const complete = (inventory: McpInventory): boolean => inventory.errors.length === 0 && tuples.every(tuple => {
+    const matches = inventory.mappings.filter(mapping => mapping.name === tuple.alias);
+    return matches.length === 1 && matches[0].capabilityId === tuple.owner && matches[0].capabilityVersion === 1 &&
+      matches[0].unrecognizedCalls.length === 0 && sameStrings(matches[0].calls, [tuple.call]);
+  });
+  const baselineComplete = complete(parseMcpMappings(source, 'vscode-extension/mcp/x4forge-mcp.cjs'));
+  const payload = '(value) => { forge("GET", "/api/agent/workspace"); return []; }';
+  const insertion = 'const rl = readline.createInterface';
+  const mutations = [
+    { name: 'explicit_negative_depth_and_node_entry', before: '  nativePublicTree(value);',
+      after: '  nativePublicTree(value, -1e9, { nodes: -1e9 });' },
+    { name: 'direct_object_values_override', before: insertion, after: `Object.values = ${payload};\n${insertion}` },
+    { name: 'computed_object_values_override', before: insertion, after: `Object["values"] = ${payload};\n${insertion}` },
+    { name: 'aliased_object_values_override', before: insertion,
+      after: `const nativeObjectAlias = Object; nativeObjectAlias.values = ${payload};\n${insertion}` },
+    { name: 'defined_object_values_override', before: insertion,
+      after: `Object.defineProperty(Object, "values", { value: ${payload} });\n${insertion}` },
+    { name: 'aliased_define_object_values_override', before: insertion,
+      after: `const nativeDefineProperty = Object.defineProperty; nativeDefineProperty(Object, "values", { value: ${payload} });\n${insertion}` },
+    { name: 'assigned_object_values_override', before: insertion,
+      after: `Object.assign(Object, { values: ${payload} });\n${insertion}` },
+    { name: 'reflected_object_values_override', before: insertion,
+      after: `Reflect.set(Object, "values", ${payload});\n${insertion}` },
+  ];
+  for (const mutation of mutations) {
+    const name = `native_data_entry_${mutation.name}_rejected`;
+    try {
+      if (!baselineComplete) throw new Error('NATIVE_ENTRY_AUDIT_BASELINE_MAPPING_PREREQUISITE_FAILED');
+      const start = source.indexOf(mutation.before);
+      if (start < 0 || source.indexOf(mutation.before, start + mutation.before.length) >= 0) {
+        throw new Error('NATIVE_ENTRY_AUDIT_SOURCE_FIXTURE_ANCHOR_NOT_UNIQUE');
+      }
+      const mutated = source.slice(0, start) + mutation.after + source.slice(start + mutation.before.length);
+      const inventory = parseMcpMappings(mutated, 'vscode-extension/mcp/x4forge-mcp.cjs');
+      const actual = complete(inventory);
+      checks.push({ name, pass: !actual, expected: false, actual,
+        errors: [...inventory.errors, ...inventory.mappings.filter(mapping => tuples.some(tuple => tuple.alias === mapping.name))
+          .flatMap(mapping => mapping.unrecognizedCalls.map(call => `${mapping.name}: ${call}`))].slice(0, 6) });
+    } catch (error) {
+      checks.push({ name, pass: false, expected: false, actual: true,
+        errors: [error instanceof Error ? error.message : String(error)] });
+    }
+  }
+  const passed = checks.filter(check => check.pass).length;
+  return { pass: passed === checks.length, passed, total: checks.length, checks, baselineComplete,
+    selected: checks.length, omitted: 82, fullRequired: 90,
+    sourceFixturesOnly: true, actualMcpSourceSha256: sha256(rawSource), normalizedMcpSourceSha256: sha256(source),
+    realMcpRuntimeProof: false, realHttpOrBrokerExecution: false, filesystemMutations: false };
+}
+// End entry-safety subgroup.
+
+/** Pure source/tuple controls; never execute the MCP source or a route handler. */
+function runNativePerformanceAuditSelftest() {
+  const checks: Array<{ name: string; pass: boolean; expected: boolean; actual: boolean; errors: string[] }> = [];
+  const check = (name: string, expected: boolean, probe: () => { actual: boolean; errors?: string[] }) => {
+    try {
+      const result = probe();
+      checks.push({ name, pass: result.actual === expected, expected, actual: result.actual, errors: (result.errors ?? []).slice(0, 6) });
+    } catch (error) {
+      checks.push({ name, pass: false, expected, actual: !expected, errors: [error instanceof Error ? error.message : String(error)] });
+    }
+  };
+  const tuples = [
+    { method: 'GET', route: '/api/agent/performance/native', owner: 'performance.native.read', scopes: ['read', 'write', 'deploy'], alias: 'get_forge_native_performance' },
+    { method: 'POST', route: '/api/agent/performance/native/collection', owner: 'performance.native.collect', scopes: ['write', 'deploy'], alias: 'start_forge_native_performance_capture' },
+    { method: 'POST', route: '/api/agent/performance/native/stop', owner: 'performance.native.stop', scopes: ['write', 'deploy'], alias: 'stop_forge_native_performance_capture' },
+  ] as const;
+  const base = FORGE_CAPABILITIES.find(capability => capability.id === 'performance.read');
+  if (!base) throw new Error('NATIVE_AUDIT_FIXTURE_LEGACY_CAPABILITY_MISSING');
+  for (const tuple of tuples) {
+    const key = `${tuple.method} ${tuple.route}`;
+    const entry: RouteDispositionEntry = { disposition: 'canonical-capability', owner: tuple.owner, registrations: 1,
+      agentScopes: [...tuple.scopes], resourceClass: 'process-telemetry', workspaceMode: 'none' };
+    // Independent literal fixture: registry absence cannot manufacture the desired RED.
+    const capability: ForgeCapabilityDescriptorV1 = { ...base, id: tuple.owner, version: 1,
+      access: { public: false, studioSession: true, agentScopes: [...tuple.scopes] }, context: { workspace: 'none', profile: 'none' },
+      effects: ['read', 'analyze'], confirmation: 'none', apiBindings: [{ method: tuple.method, path: tuple.route,
+        inputLocation: tuple.method === 'GET' ? 'none' : 'body', role: 'primary' }] };
+    const probe = (candidateEntry = entry, candidateCapability: ForgeCapabilityDescriptorV1 | undefined = capability,
+      observedPublic = false, candidateKey = key) => {
+      const errors = processTelemetryCapabilityErrors(candidateKey, candidateEntry, candidateCapability, observedPublic);
+      return { actual: errors.length === 0, errors };
+    };
+    check(`${tuple.owner}_exact_owner_scope_tuple`, true, () => probe());
+    check(`${tuple.owner}_missing_canonical_capability_rejected`, false, () => {
+      const errors = processTelemetryCapabilityErrors(key, entry, undefined, false);
+      return { actual: errors.length === 0, errors };
+    });
+    check(`${tuple.owner}_missing_scope_grant_rejected`, false, () => probe({ ...entry, agentScopes: [] }));
+    check(`${tuple.owner}_wrong_owner_rejected`, false, () => probe({ ...entry, owner: 'performance.read' }));
+    check(`${tuple.owner}_public_route_rejected`, false, () => probe(entry, capability, true));
+    check(`${tuple.owner}_public_descriptor_rejected`, false, () => probe(entry, { ...capability, access: { ...capability.access, public: true } }));
+    check(`${tuple.owner}_write_effect_rejected`, false, () => probe(entry, { ...capability, effects: ['read', 'analyze', 'workspace-write'] }));
+    const wrongScopes: Array<'read' | 'write' | 'deploy'> = tuple.method === 'GET' ? ['write', 'deploy'] : ['read', 'write', 'deploy'];
+    check(`${tuple.owner}_wrong_descriptor_scope_rejected`, false, () => probe(entry, { ...capability, access: { ...capability.access, agentScopes: wrongScopes } }));
+    check(`${tuple.owner}_wrong_route_scope_rejected`, false, () => probe({ ...entry, agentScopes: wrongScopes }));
+    check(`${tuple.owner}_foreign_route_rejected`, false, () => probe(entry, capability, false, `${key}/extra`));
+    check(`${tuple.owner}_wrong_version_rejected`, false, () => probe(entry, { ...capability, version: 2 }));
+    check(`${tuple.owner}_extra_binding_rejected`, false, () => probe(entry, { ...capability,
+      apiBindings: [...capability.apiBindings, { method: 'GET', path: '/api/agent/workspace', inputLocation: 'none', role: 'supporting' }] }));
+    check(`${tuple.owner}_workspace_authority_rejected`, false, () => probe({ ...entry, workspaceMode: 'required' }));
+  }
+  for (const [key, owner] of Object.entries(PROCESS_TELEMETRY_ROUTE_OWNERS)) {
+    check(`${owner}_legacy_tuple_preserved`, true, () => {
+      const errors = processTelemetryCapabilityErrors(key, { disposition: 'canonical-capability', owner, registrations: 1,
+        agentScopes: ['read', 'write', 'deploy'], resourceClass: 'process-telemetry', workspaceMode: 'none' },
+      FORGE_CAPABILITIES.find(capability => capability.id === owner), false);
+      return { actual: errors.length === 0, errors };
+    });
+  }
+  const rawSource = fs.readFileSync(MCP_MODULE_PATH, 'utf8');
+  const source = rawSource.replace(/\r\n?/g, '\n');
+  const parsed = parseMcpMappings(source, 'vscode-extension/mcp/x4forge-mcp.cjs');
+  check('actual_native_mcp_literal_route_mappings_are_complete', true, () => ({
+    actual: tuples.every(tuple => {
+      const matches = parsed.mappings.filter(mapping => mapping.name === tuple.alias);
+      return matches.length === 1 && matches[0].capabilityId === tuple.owner && matches[0].capabilityVersion === 1
+        && matches[0].unrecognizedCalls.length === 0 && JSON.stringify(matches[0].calls) === JSON.stringify([`${tuple.method} ${tuple.route}`]);
+    }), errors: parsed.errors,
+  }));
+  check('actual_native_mcp_owned_signal_dispatch_is_accepted', true, () => ({ actual: parsed.errors.length === 0, errors: parsed.errors }));
+  const legacySchemaFile = sourceFile('vscode-extension/mcp/x4forge-mcp.cjs', source);
+  const legacySchemaDeclarations = legacySchemaFile.statements.filter(ts.isFunctionDeclaration)
+    .filter(declaration => declaration.name?.text === 'schemaValueError');
+  if (legacySchemaDeclarations.length !== 1 || !legacySchemaDeclarations[0].body) throw new Error('NATIVE_AUDIT_LEGACY_SCHEMA_DECLARATION_MISSING');
+  const legacySchemaValidator = legacySchemaDeclarations[0].getText(legacySchemaFile);
+  const legacyDispatch = `
+const readline = require("node:readline");
+const BASE = "";
+function forge(method, apiPath) { return fetch(\`${'${BASE}${apiPath}'}\`, { method }); }
+async function resolveAvailableTools() { return { toolNames: ["legacy_fixture"], contractState: "verified" }; }
+${legacySchemaValidator}
+const TOOLS = [{ name: "legacy_fixture", capabilityId: "workspace.read", capabilityVersion: 1,
+  description: "Legacy source fixture", inputSchema: { type: "object", properties: {}, additionalProperties: false },
+  handler: async () => forge("GET", "/api/agent/workspace") }];
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", async (line) => {
+  let msg; msg = JSON.parse(line);
+  const { id, method, params } = msg;
+  if (method === "tools/call") {
+    const availability = await resolveAvailableTools(true);
+    let toolIndex = -1;
+    if (availability.toolNames.includes(params?.name)) {
+      for (let candidateIndex = 0; candidateIndex < TOOLS.length; candidateIndex += 1) {
+        if (TOOLS[candidateIndex].name === params?.name) { toolIndex = candidateIndex; break; }
+      }
+    }
+    if (toolIndex < 0) return null;
+    const toolArguments = params?.arguments ?? {};
+    const inputError = schemaValueError(TOOLS[toolIndex].inputSchema, toolArguments);
+    if (inputError) return null;
+    try {
+      const result = await TOOLS[toolIndex].handler(toolArguments, { contractState: availability.contractState });
+      return result;
+    } catch { return null; }
+  }
+  return id;
+});
+`;
+  check('legacy_contract_state_only_dispatch_is_still_accepted', true, () => {
+    const inventory = parseMcpMappings(legacyDispatch, 'vscode-extension/mcp/x4forge-mcp.cjs');
+    return { actual: inventory.errors.length === 0 && inventory.mappings.length === 1, errors: inventory.errors };
+  });
+  const replaceOnce = (before: string, after: string): string => {
+    const start = source.indexOf(before);
+    if (start < 0 || source.indexOf(before, start + before.length) >= 0) throw new Error('NATIVE_AUDIT_SOURCE_FIXTURE_ANCHOR_NOT_UNIQUE');
+    return source.slice(0, start) + after + source.slice(start + before.length);
+  };
+  const signal = 'signal: nativeRequest?.controller.signal';
+  const admission = [
+    '      if (NATIVE_PERFORMANCE_LIVE_TOOLS.has(params.name)) {',
+    '        nativeRequest = beginNativeRequest(id);',
+    '        if (!nativeRequest) return;',
+    '      }',
+  ].join('\n');
+  const discovery = '      const availability = await resolveAvailableTools(true, nativeRequest);';
+  const aliasSet = 'const NATIVE_PERFORMANCE_LIVE_TOOLS = new Set(["get_forge_native_performance", "start_forge_native_performance_capture", "stop_forge_native_performance_capture"]);';
+  const mutations: Array<{ name: string; before: string; after: string }> = [
+    { name: 'caller_param_signal', before: signal, after: 'signal: params.signal' },
+    { name: 'unowned_controller_signal', before: signal, after: 'signal: new AbortController().signal' },
+    { name: 'missing_native_signal', before: signal, after: 'signal: undefined' },
+    { name: 'nonoptional_owner_signal', before: signal, after: 'signal: nativeRequest.controller.signal' },
+    { name: 'removed_admission', before: `${admission}\n`, after: '' },
+    { name: 'admission_after_discovery', before: `${admission}\n${discovery}`, after: `${discovery}\n${admission}` },
+    { name: 'backend_alias_gating', before: admission, after: admission.replace('NATIVE_PERFORMANCE_LIVE_TOOLS', 'PERFORMANCE_LIVE_TOOLS') },
+    { name: 'truthy_alias_gating', before: admission, after: admission.replace('NATIVE_PERFORMANCE_LIVE_TOOLS.has(params.name)', 'params.name') },
+    { name: 'missing_native_alias', before: aliasSet, after: aliasSet.replace(', "stop_forge_native_performance_capture"', '') },
+    { name: 'broadened_native_alias', before: aliasSet, after: aliasSet.replace(']);', ', "compile_workspace"]);') },
+    { name: 'owner_overwritten_before_discovery', before: discovery, after: `      nativeRequest = params.nativeRequest;\n${discovery}` },
+    { name: 'owner_overwritten_after_discovery', before: discovery, after: `${discovery}\n      nativeRequest = params.nativeRequest;` },
+    { name: 'caller_supplied_request_id', before: 'nativeRequest = beginNativeRequest(id);', after: 'nativeRequest = beginNativeRequest(params.id);' },
+    { name: 'missing_request_id', before: 'nativeRequest = beginNativeRequest(id);', after: 'nativeRequest = beginNativeRequest();' },
+    { name: 'owner_initialized_from_params', before: '  let nativeRequest;', after: '  let nativeRequest = params.nativeRequest;' },
+    { name: 'shadowed_begin_owner', before: 'rl.on("line", async (line) => {', after: 'rl.on("line", async (line, beginNativeRequest) => {' },
+    { name: 'shadowed_alias_set', before: 'rl.on("line", async (line) => {', after: 'rl.on("line", async (line, NATIVE_PERFORMANCE_LIVE_TOOLS) => {' },
+    { name: 'shadowed_handler_owner', before: '        const result = await TOOLS[toolIndex].handler', after: '        const nativeRequest = params.nativeRequest;\n        const result = await TOOLS[toolIndex].handler' },
+    { name: 'unowned_discovery_context', before: discovery, after: '      const availability = await resolveAvailableTools(true, params.nativeRequest);' },
+    { name: 'wrong_tool_selection', before: 'if (TOOLS[candidateIndex].name === params?.name)', after: 'if (candidateIndex === 0)' },
+    { name: 'unvalidated_handler_arguments', before: 'handler(toolArguments, { contractState:', after: 'handler(params.arguments, { contractState:' },
+    { name: 'missing_admission_refusal', before: '        if (!nativeRequest) return;\n', after: '' },
+    { name: 'missing_post_discovery_owner_fence', before: `${discovery}\n      if (nativeRequest && !nativeRequestOwned(nativeRequest)) return;\n      let toolIndex = -1;`,
+      after: `${discovery}\n      let toolIndex = -1;` },
+    { name: 'missing_post_handler_owner_fence', before: '        if (nativeRequest && !nativeRequestOwned(nativeRequest)) return;\n        return reply(id, {', after: '        return reply(id, {' },
+    { name: 'mutated_native_alias_set', before: 'const rl = readline.createInterface', after: 'NATIVE_PERFORMANCE_LIVE_TOOLS.add("compile_workspace");\nconst rl = readline.createInterface' },
+  ];
+  for (const mutation of mutations) {
+    check(`native_dispatch_${mutation.name}_rejected`, false, () => {
+      const inventory = parseMcpMappings(replaceOnce(mutation.before, mutation.after), 'vscode-extension/mcp/x4forge-mcp.cjs');
+      return { actual: inventory.errors.length === 0, errors: inventory.errors };
+    });
+  }
+  // Added bounded-data-recursion controls preserve all original 70 expectations.
+  const dataGuard = '  nativeRequire(++budget.nodes <= 30000 && depth <= 12);';
+  const arrayRecursion = '    for (const item of value) nativePublicTree(item, depth + 1, budget);';
+  const dataRecursionMutations = [
+    { name: 'missing_node_bound', before: dataGuard, after: '  nativeRequire(depth <= 12);' },
+    { name: 'missing_depth_bound', before: dataGuard, after: '  nativeRequire(++budget.nodes <= 30000);' },
+    { name: 'nondominating_bounds', before: dataGuard, after: '  if (value === null) nativeRequire(++budget.nodes <= 30000 && depth <= 12);' },
+    { name: 'wrong_recursive_value', before: arrayRecursion, after: arrayRecursion.replace('(item,', '(value,') },
+    { name: 'missing_depth_increment', before: arrayRecursion, after: arrayRecursion.replace('depth + 1', 'depth') },
+    { name: 'wrong_recursive_budget', before: arrayRecursion, after: arrayRecursion.replace(', budget)', ', { nodes: 0 })') },
+    { name: 'overwritten_data_helper', before: 'const rl = readline.createInterface', after: 'nativePublicTree = () => {};\nconst rl = readline.createInterface' },
+    { name: 'shadowed_data_helper', before: 'function projectNativePerformanceReport(response, operation, expected) {',
+      after: 'function projectNativePerformanceReport(response, operation, expected, nativePublicTree) {' },
+    { name: 'transport_bearing_recursion', before: dataGuard, after: `${dataGuard}\n  forge("GET", "/api/agent/workspace");` },
+    { name: 'transport_bearing_helper_closure', before: 'function nativeRequire(condition) {',
+      after: 'function nativeRequire(condition) {\n  forge("GET", "/api/agent/workspace");' },
+    { name: 'nonthrowing_bound_helper', before: '  if (!condition) throw nativeResponseInvalid();', after: '  if (!condition) return;' },
+  ];
+  for (const mutation of dataRecursionMutations) {
+    check(`native_data_recursion_${mutation.name}_rejected`, false, () => {
+      const inventory = parseMcpMappings(replaceOnce(mutation.before, mutation.after), 'vscode-extension/mcp/x4forge-mcp.cjs');
+      return { actual: inventory.errors.length === 0 && tuples.every(tuple => {
+        const matches = inventory.mappings.filter(mapping => mapping.name === tuple.alias);
+        return matches.length === 1 && matches[0].unrecognizedCalls.length === 0 &&
+          sameStrings(matches[0].calls, [`${tuple.method} ${tuple.route}`]);
+      }), errors: [...inventory.errors, ...inventory.mappings.filter(mapping => tuples.some(tuple => tuple.alias === mapping.name))
+        .flatMap(mapping => mapping.unrecognizedCalls.map(call => `${mapping.name}: ${call}`))] };
+    });
+  }
+  check('native_data_recursion_genuine_recursive_request_still_rejected', false, () => {
+    const inventory = parseMcpMappings(`
+function send() { forge("GET", "/api/agent/workspace"); return send(); }
+const TOOLS = [{ name: "live", capabilityId: "workspace.read", capabilityVersion: 1, handler: async () => send() }];
+`, '<mcp-native-data-recursive-request-probe>');
+    return { actual: inventory.errors.length === 0 && inventory.mappings.length === 1 &&
+      inventory.mappings[0].unrecognizedCalls.length === 0, errors: inventory.mappings.flatMap(mapping => mapping.unrecognizedCalls) };
+  });
+  // End added bounded-data-recursion controls.
+  const passed = checks.filter(check => check.pass).length;
+  return { pass: passed === checks.length, passed, total: checks.length, checks,
+    sourceFixturesOnly: true, actualMcpSourceSha256: sha256(rawSource), normalizedMcpSourceSha256: sha256(source),
+    realMcpRuntimeProof: false, realHttpOrBrokerExecution: false, filesystemMutations: false };
+}
+
+if (process.argv.includes('--native-performance-entry-audit-selftest')) {
+  if (process.argv.length !== 3 || process.argv[2] !== '--native-performance-entry-audit-selftest') {
+    console.log(JSON.stringify({ pass: false, passed: 0, total: 1, selected: 0, omitted: 90,
+      checks: [{ name: 'exact_native_entry_audit_selftest_arguments', pass: false }] }));
+    process.exit(1);
+  }
+  const nativeEntrySelftest = runNativePerformanceEntryAuditSelftest();
+  console.log(JSON.stringify(nativeEntrySelftest));
+  process.exit(nativeEntrySelftest.pass ? 0 : 1);
+}
+
+if (process.argv.includes('--native-performance-audit-selftest')) {
+  if (process.argv.length !== 3 || process.argv[2] !== '--native-performance-audit-selftest') {
+    console.log(JSON.stringify({ pass: false, passed: 0, total: 1, checks: [{ name: 'exact_native_audit_selftest_arguments', pass: false }] }));
+    process.exit(1);
+  }
+  const existingNativeAuditSelftest = runNativePerformanceAuditSelftest();
+  const entryNativeAuditSelftest = runNativePerformanceEntryAuditSelftest();
+  const nativeAuditSelftest = { ...existingNativeAuditSelftest,
+    pass: existingNativeAuditSelftest.pass && entryNativeAuditSelftest.pass,
+    passed: existingNativeAuditSelftest.passed + entryNativeAuditSelftest.passed,
+    total: existingNativeAuditSelftest.total + entryNativeAuditSelftest.total,
+    checks: [...existingNativeAuditSelftest.checks, ...entryNativeAuditSelftest.checks], selected: 90, omitted: 0,
+    entryBaselineComplete: entryNativeAuditSelftest.baselineComplete };
+  console.log(JSON.stringify(nativeAuditSelftest));
+  process.exit(nativeAuditSelftest.pass ? 0 : 1);
+}
+
 if (process.argv.includes('--precommit-gate-selftest')) {
   if (process.argv.length !== 3 || process.argv[2] !== '--precommit-gate-selftest') {
     console.log(JSON.stringify({ pass: false, passed: 0, total: 1, checks: [{ name: 'exact_precommit_guard_selftest_arguments', pass: false }] }));
@@ -8441,8 +9253,6 @@ if (process.argv.includes('--precommit-gate-selftest')) {
   process.exit(result.pass ? 0 : 1);
 }
 
-const initial = inventoryRoutes();
-const publicGets = readPublicGetPaths().paths;
 if (process.argv.includes('--write-baseline') || process.argv.includes('--reviewed')) {
   console.error('Refusing retired same-invocation baseline flags. Use --generate-candidate, review the diff, then --promote-candidate <sha256>.');
   process.exit(1);
@@ -8513,7 +9323,9 @@ function versionGuardRejects(previous: ReleasedRouteDispositionManifest, candida
 }
 
 if (process.argv.includes('--generate-candidate')) {
+  const initial = inventoryRoutes();
   const publicInventory = readPublicGetPaths();
+  const publicGets = publicInventory.paths;
   if (initial.unrecognizedForms.length || initial.dynamic.some(fact => !isRecognizedDynamicSelftest(fact)) || publicInventory.unresolvedAdds.length) {
     console.error('Refusing to generate a candidate with unrecognized registrations or public-allowlist additions.');
     process.exit(1);
@@ -8550,6 +9362,8 @@ if (process.argv.includes('--generate-candidate')) {
 
 const promoteIndex = process.argv.indexOf('--promote-candidate');
 if (promoteIndex >= 0) {
+  const initial = inventoryRoutes();
+  const publicGets = readPublicGetPaths().paths;
   const reviewedHash = String(process.argv[promoteIndex + 1] || '').toLowerCase();
   if (!/^[a-f0-9]{64}$/.test(reviewedHash) || !fs.existsSync(CANDIDATE_PATH)) {
     console.error('Promotion requires an existing generated candidate and its exact 64-character SHA-256.');

@@ -118,8 +118,8 @@ import { getReferenceLanguageResources } from './src/lib/referenceLanguage';
 import { analyzeXmlReferenceMap, XmlReferenceMapInputError } from './src/server/xmlReferenceMap';
 import { registerBulkTransformRoutes } from "./src/server/bulkTransformRoutes";
 import { computeModDrift, fingerprintModFolder, flattenProjectValidation, getProjectValidationCacheStats, getSchemaIndex, loadProjectFromDisk, runProjectValidation, type FlatProjectDiagnostic } from "./src/server/projectValidation";
-import { createForgeBackendPerformance, forgePerformanceApiOperationName, forgePerformanceHasNegativeDataResult } from './src/server/forgePerformance';
-import { createNativePerformanceBroker, type NativeBrokerRetireReason } from './src/server/nativePerformanceBroker';
+import { createForgeBackendPerformance, createForgeNativePerformanceAdapter, forgePerformanceApiOperationName, forgePerformanceHasNegativeDataResult, type ForgeNativePerformanceOperation, type ForgeNativePerformanceReport } from './src/server/forgePerformance';
+import { createNativePerformanceBroker, type NativeBrokerActor, type NativeBrokerRetireReason } from './src/server/nativePerformanceBroker';
 import { createNativePerformanceRetirementNotice, type NativePerformanceEndpoint } from './shared/nativePerformanceChannel';
 import { isNativeInstanceId } from './shared/nativePerformanceProtocol';
 import { performance as nativeBrokerClock } from 'node:perf_hooks';
@@ -416,6 +416,7 @@ try {
   announceNativeRetirement();
   console.warn('[native-performance] observer unavailable; ordinary Forge remains available');
 }
+const nativePerformanceApi = createForgeNativePerformanceAdapter({ broker: nativePerformanceBroker });
 function retireNativePerformanceBroker(reason: NativeBrokerRetireReason): void {
   try { nativePerformanceBroker?.retire(reason); } catch { /* observer cannot prevent process shutdown */ }
 }
@@ -574,6 +575,12 @@ function apiFailureEnvelopeMiddleware(req: express.Request, res: express.Respons
   if (!req.path.startsWith('/api')) return next();
   const originalJson = res.json.bind(res);
   res.json = ((body: unknown) => {
+    // The handler owns this closed DTO. Authentication and input failures never set
+    // this flag and retain the ordinary generic error contract below.
+    if (res.locals.nativePerformanceReport === true && (req.route?.path === '/api/agent/performance/native'
+      || req.route?.path === '/api/agent/performance/native/collection' || req.route?.path === '/api/agent/performance/native/stop')) {
+      return originalJson(body);
+    }
     // Boolean result metadata only; never retain response/error text or payloads.
     try {
       if (res.locals.forgePerformanceTracked === true && forgePerformance.collector.isEnabled()) {
@@ -779,6 +786,30 @@ type RequestActor = {
   capabilityConstraint?: AgentCapabilityConstraint;
   authority?: AgentRouteAuthorityDecision;
 };
+
+type NativePerformanceHttpRoute = '/api/agent/performance/native' | '/api/agent/performance/native/collection' | '/api/agent/performance/native/stop';
+// All Studio tabs share the one trusted operator principal of this backend session.
+const nativePerformanceStudioActor: NativeBrokerActor = Object.freeze({ kind: 'studio', id: `studio_${backendPerformanceInstanceId}`, isCurrent: () => true });
+function nativePerformanceAgentActor(keyId: string, method: 'GET' | 'POST', route: NativePerformanceHttpRoute): NativeBrokerActor {
+  // This closure has only the authenticated primitive ID and literal route. It
+  // never retains a request, bearer, cached constraint, or workspace/deploy owner.
+  return { kind: 'agent', id: keyId, isCurrent: () => {
+    try {
+      const key = createAgentKeyStore({ file: AGENT_KEYS_FILE }).list().find(row => row.id === keyId);
+      const authority = resolveAgentRouteTemplateAuthority(method, route);
+      return !!key && key.revokedAt === null && (key.expiresAt === null || key.expiresAt > Date.now())
+        && !!key.capabilityConstraint && authority.ok && authority.decision.routeKey === `${method} ${route}`
+        && agentScopeCovers(authority.decision.agentScopes, key.scope)
+        && decideConstrainedAgentRoute(authority.decision, key.capabilityConstraint).allowed;
+    } catch { return false; }
+  } };
+}
+function nativePerformanceRequestActor(req: express.Request, method: 'GET' | 'POST', route: NativePerformanceHttpRoute): NativeBrokerActor {
+  const actor = (req as express.Request & { __actor?: RequestActor }).__actor;
+  if (actor?.kind === 'studio') return nativePerformanceStudioActor;
+  if (actor?.kind === 'agent' && typeof actor.keyId === 'string' && actor.keyId) return nativePerformanceAgentActor(actor.keyId, method, route);
+  return { kind: 'agent', id: 'native_unauthenticated', isCurrent: () => false };
+}
 
 function requireStudioActor(req: express.Request, res: express.Response): boolean {
   const actor = (req as any).__actor as RequestActor | undefined;
@@ -9603,6 +9634,43 @@ app.post("/api/agent/performance/profile", async (req, res) => {
       error: error instanceof ValidationInputError ? error.message : 'The backend function capture failed.' });
   } finally { res.removeListener('close', onClose); }
 });
+
+async function nativePerformanceHttp(req: express.Request, res: express.Response, operation: ForgeNativePerformanceOperation, route: NativePerformanceHttpRoute) {
+  const responseUnavailable = () => req.aborted || res.destroyed || res.writableEnded
+    || (req as DeadlineAwareRequest).__forgeResponseDeadlineExceeded === true;
+  if (responseUnavailable()) return;
+  const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  const onClose = () => { if (!res.writableFinished || (req as DeadlineAwareRequest).__forgeResponseDeadlineExceeded === true) controller.abort(); };
+  req.once('aborted', onAbort); res.once('close', onClose);
+  try {
+    validateProjectApiQuery(route, req.query);
+    if (operation !== 'read') validateProjectApiBody(route, req.body);
+    if (responseUnavailable()) { controller.abort(); return; }
+    const actor = nativePerformanceRequestActor(req, operation === 'read' ? 'GET' : 'POST', route);
+    const identity = operation === 'read' ? undefined : {
+      actor, signal: controller.signal, expectedBackendInstanceId: req.body.expectedBackendInstanceId as string,
+      expectedNativeInstanceId: req.body.expectedNativeInstanceId as string,
+    };
+    const result = operation === 'read' ? await nativePerformanceApi.read({ actor, signal: controller.signal })
+      : operation === 'start' ? await nativePerformanceApi.start({ ...identity!, options: {
+        durationMs: req.body.durationMs, intervalMs: req.body.intervalMs, eventLoopDelay: req.body.eventLoopDelay,
+      } }) : await nativePerformanceApi.stop({ ...identity!, captureId: req.body.captureId as string });
+    if (responseUnavailable()) return;
+    res.locals.nativePerformanceReport = true;
+    return res.status(result.httpStatus).json(result.body);
+  } catch (error) {
+    if (responseUnavailable()) return;
+    if (error instanceof ValidationInputError) return res.status(400).json({ ok: false, code: 'PROJECT_INPUT_INVALID', error: error.message });
+    const body: ForgeNativePerformanceReport = { schemaVersion: 'forge.native-performance.report.v1', operation, ok: false,
+      code: 'NATIVE_PERFORMANCE_REQUEST_FAILED', availability: 'unavailable', unavailableReason: 'contract-invalid', ownership: 'none', status: null };
+    res.locals.nativePerformanceReport = true;
+    return res.status(500).json(body);
+  } finally { req.removeListener('aborted', onAbort); res.removeListener('close', onClose); }
+}
+app.get('/api/agent/performance/native', (req, res) => nativePerformanceHttp(req, res, 'read', '/api/agent/performance/native'));
+app.post('/api/agent/performance/native/collection', (req, res) => nativePerformanceHttp(req, res, 'start', '/api/agent/performance/native/collection'));
+app.post('/api/agent/performance/native/stop', (req, res) => nativePerformanceHttp(req, res, 'stop', '/api/agent/performance/native/stop'));
 
 /** Read-only file graph over explicit XML and the configured canonical reference pipeline. */
 app.post("/api/agent/project/xml-references", (req, res) => {

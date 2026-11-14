@@ -1,5 +1,11 @@
 # Restore and update FORGE DEVELOPMENT
 
+## 2026-11-14 recovery checkpoint — SPECIFIED
+
+Fresh native census at04:52UTC finds no private Dev/profile/extension/backend/CodeSense owner and no old native gate Node/Python Job owner. The last tool handle67779 is missing and its intended strict-current-MCP-default receipt is absent: that run has no qualified verdict and is not retried as though an observation timeout proved completion. Host boot remains2026-11-13T05:25UTC, so no reboot is claimed. All eight cold essential files match the last qualified f5a64b9f snapshot; only expected runtime discovery/latest.json is absent. Current saved workspace/config/launcher/payload remain unchanged, executable2.7.0 exists, and no replacement private instance was found.
+
+Reuse the exact existing launcher960f24b8 under its standing private restore authorization. No source/payload update, profile/cache/runtime/helper copy, standing config/credential edit or live/default/game action. Launch only after the absent-owner check; validate new main/profile/extension paths, supervisor/backend ancestry and fresh private discovery identity, then fresh CodeSense initialization. The launcher checks physical private roots and scratch-game/mod/config boundaries before starting. Acceptance is eight cold hashes unchanged plus new discovery bound to the new exact backend/port/mode/start time; no inherited old discovery authority. Bounded private unauthenticated identity read is allowed only after ownership/listener verification. Preserve no-verdict old run separately; resume serial isolated gates only after Dev ownership is restored. Failure leaves the old payload and saved workspace intact; rollback closes only the exact newly created private owners if necessary. No computer use or installed-current-source claim.
+
 Task: restore the isolated native Dev environment, then qualify and install its complete current payload.
 Lane: FULL. Owner: existing #20, linked #64.
 Status: PARTIAL overall. Internal staging and candidate qualification are VERIFIED; current native backend/CodeSense and bounded saved-state reads pass. Native pixels/game, full schema-body inspection and a complete post-start tree recheck remain deferred.

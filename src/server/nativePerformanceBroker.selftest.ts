@@ -660,11 +660,136 @@ export async function runNativePerformanceBrokerSelftest() {
       assert.equal(clock.sequence, 0); assert.equal(clock.tasks.size, 0);
     } finally { broker.retire(); }
   });
+  checks.push(...(await runNativePerformanceBrokerOwnershipSelftest()).checks);
+  return { pass: checks.every(result => result.pass), passed: checks.filter(result => result.pass).length, total: checks.length, checks };
+}
+
+/** Relative public ownership must reuse the broker's real stop-owner records. */
+export async function runNativePerformanceBrokerOwnershipSelftest() {
+  type Ownership = 'none' | 'self' | 'other' | 'operator';
+  type ProjectedBroker = NativePerformanceBroker & { ownership(actor: NativeBrokerActor): Ownership };
+  const probe = new Fixture();
+  const available = typeof (probe.broker as Partial<ProjectedBroker>).ownership === 'function'; probe.broker.retire();
+  const checks: Array<{ name: string; pass: boolean; detail?: string; blocked?: boolean }> = [];
+  const check = async (name: string, work: () => void | Promise<void>, prerequisite = true) => {
+    if (prerequisite && !available) {
+      checks.push({ name, pass: false, blocked: true, detail: 'BLOCKED: trusted relative-ownership projection absent; behavior not exercised.' }); return;
+    }
+    try { await work(); checks.push({ name, pass: true }); }
+    catch (error) { checks.push({ name, pass: false, detail: error instanceof Error ? error.message : String(error) }); }
+  };
+  const ownership = (f: Fixture, actor: NativeBrokerActor) => (f.broker as ProjectedBroker).ownership(actor);
+  await check('native relative-ownership prerequisite exists (absence is not a runtime defect)', () => assert.equal(available, true), false);
+  await check('native idle broker has no relative owner for agent or operator', () => {
+    const f = new Fixture(); try {
+      for (const actor of [f.agent, f.other, f.studio]) assert.equal(ownership(f, actor), 'none');
+      assert.equal(f.broker.status().captureOwned, false);
+    } finally { f.broker.retire(); }
+  });
+  await check('native active global lease projects self, other and trusted operator separately', async () => {
+    const { f } = await activeFixture(); try {
+      assert.equal(f.broker.status().captureOwned, true); assert.equal(ownership(f, f.agent), 'self');
+      assert.equal(ownership(f, f.other), 'other'); assert.equal(ownership(f, f.studio), 'operator');
+    } finally { f.broker.retire(); }
+  });
+  await check('native ownership matches both actor kind and ID rather than a caller string', async () => {
+    const f = new Fixture(); try {
+      const start = f.broker.start(f.request(f.studio)); const frame = f.startFrame(); f.active(frame.captureId); f.result(frame); await start;
+      const agentWithStudioId: NativeBrokerActor = { kind: 'agent', id: f.studio.id, isCurrent: () => true };
+      assert.equal(ownership(f, agentWithStudioId), 'other');
+      failed(await f.broker.stop({ ...f.request(agentWithStudioId), captureId: frame.captureId }), 'NATIVE_PERFORMANCE_NOT_OWNER');
+    } finally { f.broker.retire(); }
+  });
+  await check('native revoked or throwing authority has no ownership even with a retained lease', async () => {
+    const { f } = await activeFixture(); try {
+      f.actorCurrent = false; assert.equal(ownership(f, f.agent), 'none'); assert.equal(f.broker.status().captureOwned, true);
+      assert.equal(ownership(f, { ...f.agent, isCurrent() { throw new Error('PRIVATE_OWNERSHIP_AUTHORITY'); } }), 'none');
+      assert.equal(ownership(f, { ...f.agent, id: '' }), 'none');
+    } finally { f.broker.retire(); }
+  });
+  await check('native clean matching history retains original agent idempotent Stop ownership', async () => {
+    const { f, frame } = await activeFixture(); try {
+      const stop = f.broker.stop({ ...f.request(), captureId: frame.captureId }); const stopped = f.stopFrame(); f.inactive(); f.result(stopped); await stop;
+      assert.equal(f.broker.status().captureOwned, false); assert.equal(ownership(f, f.agent), 'self');
+      assert.equal(ownership(f, f.other), 'other'); assert.equal(ownership(f, f.studio), 'operator');
+      failed(await f.broker.stop({ ...f.request(f.other), captureId: frame.captureId }), 'NATIVE_PERFORMANCE_NOT_OWNER');
+    } finally { f.broker.retire(); }
+  });
+  await check('native operator Stop transfers matching idempotent history to its actual stop owner', async () => {
+    const { f, frame } = await activeFixture(); try {
+      const stop = f.broker.stop({ ...f.request(f.studio), captureId: frame.captureId }); const stopped = f.stopFrame(); f.inactive(); f.result(stopped); await stop;
+      assert.equal(ownership(f, f.agent), 'other'); assert.equal(ownership(f, f.studio), 'operator');
+      failed(await f.broker.stop({ ...f.request(), captureId: frame.captureId }), 'NATIVE_PERFORMANCE_NOT_OWNER');
+    } finally { f.broker.retire(); }
+  });
+  await check('native timed-out unACKed start exposes exact cancellation owner without a capture lease', async () => {
+    const f = new Fixture(); try {
+      const start = f.broker.start(f.request()); const frame = f.startFrame(); f.clock.advance(5000);
+      failed(await start, 'NATIVE_PERFORMANCE_CONTROL_TIMEOUT'); assert.equal(f.native.captureId, null);
+      assert.equal(f.broker.status().captureOwned, false); assert.notEqual(f.broker.status().cancellation, 'none');
+      assert.equal(ownership(f, f.agent), 'self'); assert.equal(ownership(f, f.other), 'other'); assert.equal(ownership(f, f.studio), 'operator');
+      failed(await f.broker.stop({ ...f.request(f.other), captureId: frame.captureId }), 'NATIVE_PERFORMANCE_NOT_OWNER');
+    } finally { f.broker.retire(); }
+  });
+  await check('native clean cancellation reconciliation retains known history for relative ownership', async () => {
+    const f = new Fixture(); try {
+      const start = f.broker.start(f.request()); const frame = f.startFrame(); f.clock.advance(5000); await start;
+      f.native = { ...f.native, captureId: frame.captureId }; f.inactive();
+      const read = f.broker.read({ actor: f.agent }); f.snapshot(f.readFrame().controlId); await read;
+      assert.equal(f.broker.status().cancellation, 'none'); assert.equal(ownership(f, f.agent), 'self'); assert.equal(ownership(f, f.other), 'other');
+    } finally { f.broker.retire(); }
+  });
+  await check('native failed admitted start cleanup projects its exact owner without pretending a lease', async () => {
+    const f = new Fixture(); try {
+      const start = f.broker.start(f.request()); const frame = f.startFrame(); f.native = { ...f.native, captureId: frame.captureId }; f.inactive(true);
+      f.result(frame, 'NATIVE_PERFORMANCE_START_FAILED'); failed(await start, 'NATIVE_PERFORMANCE_START_FAILED');
+      assert.equal(f.broker.status().captureOwned, false); assert.equal(ownership(f, f.agent), 'self'); assert.equal(ownership(f, f.other), 'other');
+    } finally { f.broker.retire(); }
+  });
+  await check('native unknown orphan capture belongs to neither agent and permits only trusted operator targeting', async () => {
+    const f = new Fixture({ native: { captureId: 'orphan_capture_owner_01', collectionActive: true, ownedTimerCount: 2 } }); try {
+      assert.equal(f.broker.status().orphaned, true); assert.equal(f.broker.status().captureOwned, false);
+      assert.equal(ownership(f, f.agent), 'other'); assert.equal(ownership(f, f.other), 'other'); assert.equal(ownership(f, f.studio), 'operator');
+      failed(await f.broker.stop({ ...f.request(), captureId: 'orphan_capture_owner_01' }), 'NATIVE_PERFORMANCE_NOT_OWNER');
+    } finally { f.broker.retire(); }
+  });
+  await check('native replacement capture invalidates old known-owner projection', async () => {
+    const { f } = await activeFixture(); try {
+      f.native = { ...f.native, captureId: 'foreign_capture_owner_01' };
+      const read = f.broker.read({ actor: f.agent }); f.snapshot(f.readFrame().controlId); await read;
+      assert.equal(f.broker.status().captureOwned, false); assert.equal(ownership(f, f.agent), 'other');
+    } finally { f.broker.retire(); }
+  });
+  await check('native ownership preserves admitted primitive owner identity despite later actor mutation', async () => {
+    const f = new Fixture(); try {
+      const actor: NativeBrokerActor = { kind: 'agent', id: 'private_immutable_original', isCurrent: () => true };
+      const original = { ...actor }; const start = f.broker.start(f.request(actor)); const frame = f.startFrame(); actor.id = 'private_mutated_owner';
+      f.active(frame.captureId); f.result(frame); await start;
+      assert.equal(ownership(f, original), 'self'); assert.equal(ownership(f, actor), 'other');
+    } finally { f.broker.retire(); }
+  });
+  await check('native retired broker cannot advertise live self or operator control ownership', async () => {
+    const { f } = await activeFixture(); f.broker.retire('backend-exit');
+    for (const actor of [f.agent, f.other, f.studio]) assert.equal(ownership(f, actor), 'none');
+    assert.equal(f.broker.status().availability, 'retired'); assert.equal(f.broker.status().captureOwned, false);
+  });
+  await check('native retired cleanup-unknown keeps uncertainty while withholding controllable ownership', async () => {
+    const f = new Fixture(); const start = f.broker.start(f.request()); f.startFrame(); f.broker.retire('backend-exit');
+    failed(await start, 'NATIVE_PERFORMANCE_RETIRED'); assert.equal(f.broker.status().cancellation, 'unknown');
+    assert.equal(f.broker.status().cleanupUnconfirmed, true);
+    for (const actor of [f.agent, f.other, f.studio]) assert.equal(ownership(f, actor), 'none');
+  });
+  await check('native relative projection serializes only its enum and never actor or channel secrets', async () => {
+    const { f } = await activeFixture(); try {
+      const serialized = JSON.stringify({ ownership: ownership(f, f.agent), status: f.broker.status() });
+      for (const secret of [f.agent.id, f.other.id, f.studio.id, binding.nonce, binding.epoch]) assert(!serialized.includes(secret));
+    } finally { f.broker.retire(); }
+  });
   return { pass: checks.every(result => result.pass), passed: checks.filter(result => result.pass).length, total: checks.length, checks };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  void runNativePerformanceBrokerSelftest().then(result => {
+  void (process.argv.includes('--native-ownership-selftest') ? runNativePerformanceBrokerOwnershipSelftest() : runNativePerformanceBrokerSelftest()).then(result => {
     process.stdout.write(JSON.stringify(result) + '\n');
     if (!result.pass) process.exitCode = 1;
   }).catch(error => { process.stderr.write((error instanceof Error ? error.message : 'SELFTEST_FAILED') + '\n'); process.exitCode = 1; });

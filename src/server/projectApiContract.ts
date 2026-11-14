@@ -4,6 +4,7 @@ import { canonicalWorkspaceContentString } from '../lib/workspaceIdentity';
 import { normalizeXmlReferencePath } from '../lib/xmlReferenceGraph';
 import { createHash } from 'node:crypto';
 import type { ModWorkspace } from '../types';
+import { isNativeInstanceId, normalizeNativeCollectionOptions } from '../../shared/nativePerformanceProtocol';
 
 type RecordValue = Record<string, any>;
 export const isApiObject = (value: unknown): value is RecordValue => !!value && typeof value === 'object' && !Array.isArray(value);
@@ -82,6 +83,8 @@ export const PROJECT_API_FIELDS: Record<string, readonly string[]> = {
   '/api/agent/project/xml-references': ['workspace', 'project', 'focus', 'maxDepth', 'maxNodes', 'maxEdges', 'includeSource'],
   '/api/agent/performance/collection': ['durationMs', 'intervalMs', 'eventLoopDelay'],
   '/api/agent/performance/profile': ['durationMs', 'samplingIntervalMicros', 'maxFunctions'],
+  '/api/agent/performance/native/collection': ['expectedBackendInstanceId', 'expectedNativeInstanceId', 'durationMs', 'intervalMs', 'eventLoopDelay'],
+  '/api/agent/performance/native/stop': ['expectedBackendInstanceId', 'expectedNativeInstanceId', 'captureId'],
   '/api/fs/write': ['path', 'content', 'expectedSha256', 'strict'],
   '/api/fs/create': ['name', 'type'],
   '/api/agent/workspaces/bootstrap': ['clientId', 'workspaceId'],
@@ -159,6 +162,7 @@ export function validateProjectApiQuery(route: string, query: unknown): void {
     '/api/agent/runtime-control': [], '/api/agent/runtime-control/preview': [], '/api/agent/runtime-control/reload': [],
     '/api/agent/diagnostics': ['workspaceId', 'clientId'], '/api/agent/readiness': ['workspaceId', 'clientId'], '/api/agent/workspaces': [],
     '/api/agent/performance': [], '/api/agent/performance/collection': [], '/api/agent/performance/profile': [],
+    '/api/agent/performance/native': [], '/api/agent/performance/native/collection': [], '/api/agent/performance/native/stop': [],
     '/api/agent/workspace': ['workspaceId', 'clientId'], '/api/agent/workspace/parked': ['workspaceId', 'clientId'],
   };
   const allowed = options[route];
@@ -195,6 +199,17 @@ export function validateProjectApiBody(route: string, value: unknown): void {
   const allowed = PROJECT_API_FIELDS[route];
   if (!allowed) return;
   fields(value, allowed, 'Body');
+  if (route === '/api/agent/performance/native/collection' || route === '/api/agent/performance/native/stop') {
+    for (const key of ['expectedBackendInstanceId', 'expectedNativeInstanceId']) {
+      if (!isNativeInstanceId(value[key])) invalid(`${key} must be a valid native performance identity.`);
+    }
+    if (route.endsWith('/stop')) {
+      if (!isNativeInstanceId(value.captureId)) invalid('captureId must be a valid native performance identity.');
+    } else if (!normalizeNativeCollectionOptions({ durationMs: value.durationMs, intervalMs: value.intervalMs, eventLoopDelay: value.eventLoopDelay }).ok) {
+      invalid('Native collection options must use the bounded native performance contract.');
+    }
+    return;
+  }
   if (route === '/api/agent/performance/collection' || route === '/api/agent/performance/profile') {
     const limits = route.endsWith('/collection')
       ? [['durationMs', 1000, 900000], ['intervalMs', 1000, 60000]] as const

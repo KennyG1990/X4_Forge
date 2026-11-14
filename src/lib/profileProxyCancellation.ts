@@ -1,9 +1,12 @@
 import type { ProxyOptions } from 'vite';
 
-/** Bridge the profile request's pre-header disconnect; Vite owns post-header IO. */
+/** Bridge owned performance requests' pre-header disconnect; Vite owns post-header IO. */
 export function configureProfileProxyCancellation(proxy: Parameters<NonNullable<ProxyOptions['configure']>>[0]): void {
   proxy.on('proxyReq', (upstream, request, response) => {
-    if (request.method !== 'POST' || request.url !== '/api/agent/performance/profile') return;
+    const owns = (request.method === 'POST' && (request.url === '/api/agent/performance/profile'
+      || request.url === '/api/agent/performance/native/collection' || request.url === '/api/agent/performance/native/stop'))
+      || (request.method === 'GET' && request.url === '/api/agent/performance/native');
+    if (!owns) return;
 
     let owned = true;
     const retire = () => {

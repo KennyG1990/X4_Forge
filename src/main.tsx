@@ -108,8 +108,10 @@ const customFetch = async function(this: unknown, input: RequestInfo | URL, init
     const u = new URL(url, location.origin);
     isApi = u.origin === location.origin && u.pathname.startsWith('/api/');
     isWorkspaceBootstrap = u.origin === location.origin && u.pathname === '/api/agent/workspaces/bootstrap';
-    isPerformanceControl = u.origin === location.origin && method === 'POST'
-      && (u.pathname === '/api/agent/performance/collection' || u.pathname === '/api/agent/performance/profile');
+    isPerformanceControl = u.origin === location.origin && (
+      (method === 'POST' && (u.pathname === '/api/agent/performance/collection' || u.pathname === '/api/agent/performance/profile'
+        || u.pathname === '/api/agent/performance/native/collection' || u.pathname === '/api/agent/performance/native/stop'))
+      || (method === 'GET' && u.pathname === '/api/agent/performance/native'));
   } catch { isApi = false; } // unparseable URL → never treat as our API
   const deadlineMs = clientRequestDeadlineMs(input, location.origin);
   const upstreamSignal = init?.signal || (input instanceof Request ? input.signal : undefined);
@@ -139,7 +141,8 @@ const customFetch = async function(this: unknown, input: RequestInfo | URL, init
       init = { ...init, headers };
     }
 
-    // These explicit controls must retain caller cancellation until headers settle.
+    // Explicit controls and the owned native read retain caller cancellation until
+    // headers settle. Native reads must not re-arm a broker read after cancellation.
     // Await here so the existing catch/finally owns errors and deadline cleanup.
     if (isPerformanceControl) {
       const res = await originalFetch.call(this, input, init);

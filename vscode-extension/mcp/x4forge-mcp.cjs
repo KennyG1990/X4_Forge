@@ -51,6 +51,32 @@ const PERFORMANCE_COLLECTION_HTTP_FAILURES = { PERFORMANCE_DISPOSED: 503, PERFOR
 const PERFORMANCE_MAX_OUTPUT_BYTES = 256 * 1024;
 const PERFORMANCE_RESOURCE_FIELDS = ["atUnixMs", "elapsedMs", "cpuUserMicros", "cpuSystemMicros", "cpuOneCorePercent", "cpuHostPercent", "logicalCpuCount", "rssBytes", "heapUsedBytes", "heapTotalBytes", "externalBytes", "arrayBuffersBytes", "uptimeSeconds", "eventLoopUtilization", "eventLoopDelayP50Ms", "eventLoopDelayP95Ms", "eventLoopDelayMaxMs", "fps", "frameIntervalMs", "longTaskDurationMs", "jsHeapUsedBytes"];
 
+// Native public transport owns a separate, finite request/response contract.
+const nativePerformanceClock = require("node:perf_hooks").performance;
+const NATIVE_PERFORMANCE_LIVE_TOOLS = new Set(["get_forge_native_performance", "start_forge_native_performance_capture", "stop_forge_native_performance_capture"]);
+const NATIVE_PERFORMANCE_CAPABILITIES = new Set(["performance.native.read", "performance.native.collect", "performance.native.stop"]);
+const NATIVE_PERFORMANCE_HTTP_FAILURES = Object.freeze({
+  NATIVE_PERFORMANCE_INPUT_INVALID: 400, NATIVE_PERFORMANCE_BUSY: 409, NATIVE_PERFORMANCE_CAPTURE_MISMATCH: 409,
+  NATIVE_PERFORMANCE_IDENTITY_MISMATCH: 409, NATIVE_PERFORMANCE_PREEMPTED: 409, NATIVE_PERFORMANCE_CLEANUP_UNCONFIRMED: 409,
+  NATIVE_PERFORMANCE_DISPOSED: 503, NATIVE_PERFORMANCE_UNAVAILABLE: 503, NATIVE_PERFORMANCE_RETIRED: 503,
+  NATIVE_PERFORMANCE_AUTHORITY_REVOKED: 403, NATIVE_PERFORMANCE_NOT_OWNER: 403,
+  NATIVE_PERFORMANCE_CONTROL_TIMEOUT: 408, NATIVE_PERFORMANCE_ABORTED: 408, NATIVE_PERFORMANCE_PROTOCOL_ERROR: 502,
+  NATIVE_PERFORMANCE_READER_LIMIT: 429, NATIVE_PERFORMANCE_START_FAILED: 500, NATIVE_PERFORMANCE_REQUEST_FAILED: 500,
+});
+const NATIVE_PERFORMANCE_REQUEST_LIMIT = 16;
+const NATIVE_PERFORMANCE_REQUEST_MS = 10000;
+const NATIVE_PERFORMANCE_RESPONSE_BYTES = 1024 * 1024;
+const NATIVE_PERFORMANCE_DISCOVERY_BYTES = 4 * 1024 * 1024;
+const NATIVE_PERFORMANCE_OPERATION_NAMES = new Set([
+  "native.activate", "native.backend.ensure", "native.backend.spawn", "native.backend.stop", "native.backend.restart",
+  "native.panel.open", "native.command", "native.provider.read", "native.provider.write", "native.validation.queue",
+  "native.validation.scan", "native.validation.overlay", "native.validation.serialize", "native.validation.http",
+  "native.validation.map", "native.validation.apply",
+]);
+const NATIVE_PERFORMANCE_HISTOGRAM_MS = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 60000, 120000, 300000, 600000, 1800000, 3600000, 86400000];
+const nativeRequests = new Map();
+let nativeTransportDisposed = false;
+
 /** Curated tool surface — additions require the B56s4 security review, not just code. */
 const TOOLS = [
   {
@@ -343,6 +369,47 @@ const TOOLS = [
     },
   },
   {
+    name: "get_forge_native_performance",
+    capabilityId: "performance.native.read",
+    capabilityVersion: 1,
+    description: "Read bounded native extension-host performance, shared-process attribution, current capture identity, cleanup state and snapshot freshness. This does not start collection. Native function profiles are unavailable; null metrics remain unknown.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    handler: async (_args, context) => projectNativePerformanceReport(
+      await forge("GET", "/api/agent/performance/native", undefined, context.signal), "read"),
+  },
+  {
+    name: "start_forge_native_performance_capture",
+    capabilityId: "performance.native.collect",
+    capabilityVersion: 1,
+    description: "Start one expiring native extension-host capture using the exact identities returned by native read. Shared-process telemetry only; success requires native execution ACK. Controls return cleanup/capture status without retained snapshot data.",
+    inputSchema: { type: "object", properties: {
+      expectedBackendInstanceId: { type: "string", maxLength: 128, description: "Current backend instance ID from native performance read; 8..128 letters, digits, underscores or hyphens." },
+      expectedNativeInstanceId: { type: "string", maxLength: 128, description: "Current native instance ID from native performance read; 8..128 letters, digits, underscores or hyphens." },
+      durationMs: { type: "integer", description: "1000..900000 milliseconds; default 60000." },
+      intervalMs: { type: "integer", description: "1000..60000 milliseconds; default 2000." },
+      eventLoopDelay: { type: "boolean", description: "Opt in to event-loop delay monitoring; default false." },
+    }, required: ["expectedBackendInstanceId", "expectedNativeInstanceId"], additionalProperties: false },
+    handler: async (args, context) => {
+      const body = nativePerformanceInput(args, "start");
+      return projectNativePerformanceReport(await forge("POST", "/api/agent/performance/native/collection", body, context.signal), "start", body);
+    },
+  },
+  {
+    name: "stop_forge_native_performance_capture",
+    capabilityId: "performance.native.stop",
+    capabilityVersion: 1,
+    description: "Stop the exact native capture using current backend/native IDs and captureId. Agent ownership and native cleanup ACK are required; refusal/unknown cleanup is not success. This does not read retained snapshots or globally stop on client disposal.",
+    inputSchema: { type: "object", properties: {
+      expectedBackendInstanceId: { type: "string", maxLength: 128, description: "Current backend instance ID from native performance read; 8..128 letters, digits, underscores or hyphens." },
+      expectedNativeInstanceId: { type: "string", maxLength: 128, description: "Current native instance ID from native performance read; 8..128 letters, digits, underscores or hyphens." },
+      captureId: { type: "string", maxLength: 128, description: "Exact capture ID returned by the native owner; 8..128 letters, digits, underscores or hyphens." },
+    }, required: ["expectedBackendInstanceId", "expectedNativeInstanceId", "captureId"], additionalProperties: false },
+    handler: async (args, context) => {
+      const body = nativePerformanceInput(args, "stop");
+      return projectNativePerformanceReport(await forge("POST", "/api/agent/performance/native/stop", body, context.signal), "stop", body);
+    },
+  },
+  {
     name: "check_conflicts",
     capabilityId: "extensions.conflicts.analyze",
     capabilityVersion: 1,
@@ -427,6 +494,7 @@ STATIC_TOOL_NAMES.delete("runtime_debugger");
 STATIC_TOOL_NAMES.delete("check_expression");
 STATIC_TOOL_NAMES.delete("get_xml_references");
 for (const name of PERFORMANCE_LIVE_TOOLS) STATIC_TOOL_NAMES.delete(name);
+for (const name of NATIVE_PERFORMANCE_LIVE_TOOLS) STATIC_TOOL_NAMES.delete(name);
 
 function stableStringify(value) {
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
@@ -972,6 +1040,258 @@ function projectRuntimeDebugger(payload) {
   };
 }
 
+// Native-only input, public DTO and transport lifecycle. Legacy projections above
+// keep their existing producer checks, truncation and HTTP behavior.
+function nativePerformanceId(value) {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{8,128}$/.test(value);
+}
+function nativePerformanceInput(args, operation) {
+  const keys = operation === "start" ? ["expectedBackendInstanceId", "expectedNativeInstanceId", "durationMs", "intervalMs", "eventLoopDelay"]
+    : ["expectedBackendInstanceId", "expectedNativeInstanceId", "captureId"];
+  const invalid = () => {
+    const error = new Error("Native controls require exact current instance IDs, closed fields and protocol-bounded options.");
+    error.nativeInputInvalid = true;
+    throw error;
+  };
+  if (!isRecord(args) || Object.keys(args).some(key => !keys.includes(key)) ||
+    !nativePerformanceId(args.expectedBackendInstanceId) || !nativePerformanceId(args.expectedNativeInstanceId)) invalid();
+  const identity = { expectedBackendInstanceId: args.expectedBackendInstanceId, expectedNativeInstanceId: args.expectedNativeInstanceId };
+  if (operation === "stop") {
+    if (!nativePerformanceId(args.captureId)) invalid();
+    return { ...identity, captureId: args.captureId };
+  }
+  const durationMs = args.durationMs === undefined ? 60000 : args.durationMs;
+  const intervalMs = args.intervalMs === undefined ? 2000 : args.intervalMs;
+  const eventLoopDelay = args.eventLoopDelay === undefined ? false : args.eventLoopDelay;
+  if (!Number.isSafeInteger(durationMs) || durationMs < 1000 || durationMs > 900000 ||
+    !Number.isSafeInteger(intervalMs) || intervalMs < 1000 || intervalMs > 60000 || typeof eventLoopDelay !== "boolean") invalid();
+  return { ...identity, durationMs, intervalMs, eventLoopDelay };
+}
+function nativeResponseInvalid() {
+  const error = new Error("Native performance response was not a valid bounded public report.");
+  error.nativeCode = "NATIVE_PERFORMANCE_RESPONSE_INVALID";
+  error.invalidResponse = true;
+  return error;
+}
+function nativeRequire(condition) {
+  if (!condition) throw nativeResponseInvalid();
+}
+function nativeExact(value, required, optional = []) {
+  return isRecord(value) && required.every(key => Object.hasOwn(value, key)) &&
+    Object.keys(value).every(key => required.includes(key) || optional.includes(key));
+}
+function nativeFinite(value) { return typeof value === "number" && Number.isFinite(value) && value >= 0; }
+function nativeInteger(value) { return nativeFinite(value) && Number.isSafeInteger(value); }
+function nativeNullable(value) { return value === null || nativeFinite(value); }
+function nativePublicTree(value, depth = 0, budget = { nodes: 0 }) {
+  nativeRequire(++budget.nodes <= 30000 && depth <= 12);
+  if (value === null || typeof value === "boolean") return;
+  if (typeof value === "number") { nativeRequire(Number.isFinite(value)); return; }
+  if (typeof value === "string") { nativeRequire(value.length <= 256); return; }
+  if (Array.isArray(value)) {
+    nativeRequire(value.length <= 128);
+    for (const item of value) nativePublicTree(item, depth + 1, budget);
+    return;
+  }
+  nativeRequire(isRecord(value) && Object.keys(value).length <= 48);
+  for (const item of Object.values(value)) nativePublicTree(item, depth + 1, budget);
+}
+function nativeProducer(value) {
+  nativeRequire(nativeExact(value, ["component", "scope", "pid", "instanceId"]) && value.component === "extension-host" &&
+    value.scope === "shared-process" && nativeInteger(value.pid) && value.pid > 0 && nativePerformanceId(value.instanceId));
+}
+function nativeStatus(value) {
+  nativeRequire(nativeExact(value, ["schemaVersion", "producer", "disposed", "collectionActive", "captureId", "collectionStartedAtUnixMs",
+    "collectionExpiresAtUnixMs", "intervalMs", "eventLoopDelayMonitoring", "resourceSamples", "resourceErrors", "throttledSamples",
+    "counterResets", "sampleOverheadMs", "lastResourceError", "collectionStopDelayMs", "collectionCleanupUnconfirmed", "ownedTimerCount",
+    "failedTimerCount", "lastStopReason"]) && value.schemaVersion === "forge.native-performance.status.v1");
+  nativeProducer(value.producer);
+  nativeRequire(["disposed", "collectionActive", "eventLoopDelayMonitoring", "collectionCleanupUnconfirmed"].every(key => typeof value[key] === "boolean") &&
+    (value.captureId === null || nativePerformanceId(value.captureId)) &&
+    ["collectionStartedAtUnixMs", "collectionExpiresAtUnixMs", "collectionStopDelayMs"].every(key => nativeNullable(value[key])) &&
+    nativeInteger(value.intervalMs) && value.intervalMs >= 1000 && value.intervalMs <= 60000 &&
+    ["resourceSamples", "resourceErrors", "throttledSamples", "counterResets", "ownedTimerCount", "failedTimerCount"].every(key => nativeInteger(value[key])) &&
+    value.ownedTimerCount <= 16 && value.failedTimerCount <= 16 && nativeFinite(value.sampleOverheadMs) &&
+    [null, "unavailable", "producer-identity-changed", "clock-unavailable"].includes(value.lastResourceError) &&
+    [null, "requested", "expired", "cancelled", "retired", "disposed"].includes(value.lastStopReason) &&
+    (!value.collectionActive || value.captureId !== null && !value.disposed));
+}
+function nativeSnapshot(value) {
+  nativeRequire(nativeExact(value, ["schemaVersion", "producer", "enabled", "disposed", "startedAtUnixMs", "capturedAtUnixMs", "operations",
+    "recentSlowOperations", "resources", "drops", "limits", "selfOverhead", "coverage"]) && value.schemaVersion === "forge.performance.v1");
+  nativeProducer(value.producer);
+  nativeRequire(typeof value.enabled === "boolean" && typeof value.disposed === "boolean" && nativeNullable(value.startedAtUnixMs) &&
+    nativeNullable(value.capturedAtUnixMs) && Array.isArray(value.operations) && value.operations.length <= 128 &&
+    Array.isArray(value.recentSlowOperations) && value.recentSlowOperations.length <= 64 && Array.isArray(value.resources) && value.resources.length <= 120);
+  const names = new Set(), outcomes = ["ok", "error", "cancelled", "aborted", "superseded"];
+  for (const row of value.operations) {
+    nativeRequire(nativeExact(row, ["name", "count", "outcomes", "totalMs", "minMs", "maxMs", "meanMs", "p50Ms", "p95Ms", "p99Ms", "quantileMethod", "histogram"]) &&
+      NATIVE_PERFORMANCE_OPERATION_NAMES.has(row.name) && !names.has(row.name) && nativeInteger(row.count) && row.count > 0 &&
+      ["totalMs", "minMs", "maxMs", "meanMs"].every(key => nativeFinite(row[key])) && ["p50Ms", "p95Ms", "p99Ms"].every(key => nativeNullable(row[key])) &&
+      row.quantileMethod === "fixed-histogram-upper-bound" && nativeExact(row.outcomes, outcomes) && outcomes.every(key => nativeInteger(row.outcomes[key])) &&
+      outcomes.reduce((sum, key) => sum + row.outcomes[key], 0) === row.count && nativeExact(row.histogram, ["upperBoundsMs", "counts"]) &&
+      Array.isArray(row.histogram.upperBoundsMs) && Array.isArray(row.histogram.counts) &&
+      row.histogram.upperBoundsMs.length === NATIVE_PERFORMANCE_HISTOGRAM_MS.length && row.histogram.counts.length === NATIVE_PERFORMANCE_HISTOGRAM_MS.length &&
+      row.histogram.upperBoundsMs.every((bound, index) => bound === NATIVE_PERFORMANCE_HISTOGRAM_MS[index]) && row.histogram.counts.every(nativeInteger) &&
+      row.histogram.counts.reduce((sum, count) => sum + count, 0) === row.count);
+    names.add(row.name);
+  }
+  for (const row of value.recentSlowOperations) nativeRequire(nativeExact(row, ["name", "durationMs", "outcome", "atUnixMs"]) &&
+    NATIVE_PERFORMANCE_OPERATION_NAMES.has(row.name) && nativeFinite(row.durationMs) && outcomes.includes(row.outcome) && nativeNullable(row.atUnixMs));
+  for (const row of value.resources) nativeRequire(nativeExact(row, PERFORMANCE_RESOURCE_FIELDS) && PERFORMANCE_RESOURCE_FIELDS.every(key => nativeNullable(row[key])) &&
+    ["fps", "frameIntervalMs", "longTaskDurationMs", "jsHeapUsedBytes"].every(key => row[key] === null));
+  const dropFields = ["disabled", "disposed", "invalidOperations", "invalidResources", "operationCapacity", "slowOverwrites", "resourceOverwrites", "duplicateFinishes", "recorderErrors", "snapshotOmissions", "staleFinishes"];
+  nativeRequire(nativeExact(value.drops, dropFields) && dropFields.every(key => nativeInteger(value.drops[key])));
+  const limits = { maxOperations: 128, maxSlowOperations: 64, maxResources: 120, maxSnapshotBytes: 1048576, maxNameChars: 160, maxCorrelationChars: 80 };
+  nativeRequire(nativeExact(value.limits, [...Object.keys(limits), "slowOperationMs"]) && Object.entries(limits).every(([key, maximum]) =>
+    nativeInteger(value.limits[key]) && value.limits[key] >= 1 && value.limits[key] <= maximum) && nativeFinite(value.limits.slowOperationMs) &&
+    value.limits.slowOperationMs <= 86400000 && value.operations.length <= value.limits.maxOperations &&
+    value.recentSlowOperations.length <= value.limits.maxSlowOperations && value.resources.length <= value.limits.maxResources &&
+    Buffer.byteLength(JSON.stringify(value), "utf8") <= value.limits.maxSnapshotBytes);
+  nativeRequire(nativeExact(value.selfOverhead, ["recordCalls", "recordMs", "snapshotCalls", "snapshotMs", "clockFailures", "snapshotScope"]) &&
+    ["recordCalls", "snapshotCalls", "clockFailures"].every(key => nativeInteger(value.selfOverhead[key])) && nativeNullable(value.selfOverhead.recordMs) &&
+    nativeNullable(value.selfOverhead.snapshotMs) && value.selfOverhead.snapshotScope === "completed-prior-snapshots-including-serialization-and-freeze");
+  const coverage = { operations: "instrumented-boundaries-only", cpuAttribution: "process-interval-not-exclusive-operation",
+    memoryAttribution: "process-or-host-estimates-not-function-allocations", quantiles: "histogram-estimates", resourceFields: "null-means-unavailable-or-unsampled",
+    functionProfiles: "separate-bounded-producer", limitsAre: "retained-state-not-os-quota" };
+  nativeRequire(nativeExact(value.coverage, Object.keys(coverage)) && Object.entries(coverage).every(([key, expected]) => value.coverage[key] === expected));
+}
+function projectNativePerformanceReport(response, operation, expected) {
+  nativeRequire(nativeExact(response, ["nativeHttpStatus", "nativePayload"]));
+  const value = response.nativePayload;
+  nativePublicTree(value);
+  nativeRequire(nativeExact(value, ["schemaVersion", "operation", "ok", "availability", "unavailableReason", "ownership", "status"], ["code"]) &&
+    value.schemaVersion === "forge.native-performance.report.v1" && value.operation === operation && typeof value.ok === "boolean" &&
+    ["unavailable", "waiting", "ready", "retired"].includes(value.availability) &&
+    [null, "transport-absent", "contract-invalid", "waiting", "ready-timeout", "producer-disposed", "retired", "authority-revoked"].includes(value.unavailableReason) &&
+    ["none", "self", "other", "operator"].includes(value.ownership));
+  nativeRequire(value.ok ? response.nativeHttpStatus === 200 && !Object.hasOwn(value, "code")
+    : typeof value.code === "string" && Object.hasOwn(NATIVE_PERFORMANCE_HTTP_FAILURES, value.code) &&
+      NATIVE_PERFORMANCE_HTTP_FAILURES[value.code] === response.nativeHttpStatus);
+  if (value.status === null) {
+    nativeRequire(value.availability === "unavailable" && value.ownership === "none" && (!value.ok || operation === "read"));
+    return value;
+  }
+  const status = value.status;
+  nativeRequire(nativeExact(status, ["schemaVersion", "backendInstanceId", "availability", "unavailableReason", "native", "pending", "cancellation",
+    "cleanupUnconfirmed", "orphaned", "captureOwned", "readSubscribers", "snapshot", "snapshotAgeMs", "lastRefreshOutcome", "rejectedMessages",
+    "lateResults", "droppedSnapshots", "timerCleanupUnconfirmed"]) && status.schemaVersion === "forge.native-performance.broker.v1" &&
+    nativePerformanceId(status.backendInstanceId) && status.availability === value.availability && status.unavailableReason === value.unavailableReason &&
+    [null, "read", "start", "stop"].includes(status.pending) && ["none", "pending", "unknown"].includes(status.cancellation) &&
+    ["cleanupUnconfirmed", "orphaned", "captureOwned", "timerCleanupUnconfirmed"].every(key => typeof status[key] === "boolean") &&
+    ["readSubscribers", "rejectedMessages", "lateResults", "droppedSnapshots"].every(key => nativeInteger(status[key])) &&
+    status.readSubscribers <= 16 && nativeNullable(status.snapshotAgeMs) &&
+    ["never", "pending", "ok", "timeout", "aborted", "preempted", "rejected", "invalidated", "retired"].includes(status.lastRefreshOutcome));
+  if (status.native !== null) nativeStatus(status.native);
+  if (status.availability === "ready") nativeRequire(status.native !== null && !status.native.disposed);
+  if (operation !== "read") nativeRequire(status.snapshot === null && status.snapshotAgeMs === null);
+  if (!value.ok && ["NATIVE_PERFORMANCE_AUTHORITY_REVOKED", "NATIVE_PERFORMANCE_NOT_OWNER"].includes(value.code)) nativeRequire(status.snapshot === null);
+  if (status.snapshot !== null) {
+    nativeRequire(operation === "read" && status.native !== null);
+    nativeSnapshot(status.snapshot);
+    nativeRequire(["component", "scope", "pid", "instanceId"].every(key => status.snapshot.producer[key] === status.native.producer[key]));
+  }
+  if (value.ok && operation !== "read") {
+    nativeRequire(expected && status.native !== null && status.availability === "ready" &&
+      status.backendInstanceId === expected.expectedBackendInstanceId && status.native.producer.instanceId === expected.expectedNativeInstanceId &&
+      !status.native.disposed && !status.cleanupUnconfirmed && !status.timerCleanupUnconfirmed && !status.native.collectionCleanupUnconfirmed);
+    nativeRequire(operation === "start" ? status.native.collectionActive && nativePerformanceId(status.native.captureId)
+      : !status.native.collectionActive && (status.native.captureId === null || status.native.captureId === expected.captureId) &&
+        status.native.ownedTimerCount === 0 && status.native.failedTimerCount === 0 && status.native.eventLoopDelayMonitoring === false);
+  }
+  return value;
+}
+async function readNativeJson(response, signal, maximum) {
+  let reader;
+  try {
+    const contentLength = response.headers.get("content-length");
+    if (contentLength !== null && (!/^\d+$/.test(contentLength) || Number(contentLength) > maximum)) throw nativeResponseInvalid();
+    nativeRequire(response.body !== null);
+    reader = response.body.getReader();
+    const chunks = [];
+    let bytes = 0;
+    while (true) {
+      if (signal?.aborted) throw nativeResponseInvalid();
+      const next = await reader.read();
+      if (signal?.aborted) throw nativeResponseInvalid();
+      if (next.done) break;
+      bytes += next.value.byteLength;
+      if (bytes > maximum) throw nativeResponseInvalid();
+      if (next.value.byteLength) chunks.push(next.value);
+    }
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks, bytes)));
+  } catch {
+    try { await reader?.cancel(); } catch { /* Owned transport refusal, never a cleanup ACK. */ }
+    if (!reader) try { await response.body?.cancel(); } catch { /* Preserve the fixed public failure. */ }
+    throw nativeResponseInvalid();
+  } finally {
+    try { reader?.releaseLock(); } catch { /* No native execution claim follows this local reader cleanup. */ }
+  }
+}
+function nativePerformanceRoute(method, apiPath) {
+  return method === "GET" && apiPath === "/api/agent/performance/native" ||
+    method === "POST" && (apiPath === "/api/agent/performance/native/collection" || apiPath === "/api/agent/performance/native/stop");
+}
+function nativeGrantAllowed(capability, authority) {
+  return NATIVE_PERFORMANCE_CAPABILITIES.has(capability.id) && capability.version === 1 && isRecord(authority?.constraint) &&
+    capability.access.agentScopes.includes(authority.actor.scope) &&
+    authority.constraint.capabilityIdentities.includes(`${capability.id}@1`) &&
+    capability.effects.every(effect => authority.constraint.allowedEffects.includes(effect));
+}
+function nativeRequestOwned(request) {
+  if (!request || !request.active || nativeTransportDisposed || nativeRequests.get(request.id) !== request) return false;
+  if (nativePerformanceClock.now() >= request.deadline) {
+    expireNativeRequest(request);
+    return false;
+  }
+  return true;
+}
+function retireNativeRequest(request, abort = false) {
+  if (!request || nativeRequests.get(request.id) !== request) return;
+  request.active = false;
+  nativeRequests.delete(request.id);
+  clearTimeout(request.timer);
+  if (abort) request.controller.abort();
+}
+function nativeToolError(id, code) {
+  const error = code === "NATIVE_PERFORMANCE_TRANSPORT_TIMEOUT" ? "Native control deadline exceeded; outcome unknown."
+    : code === "NATIVE_PERFORMANCE_REQUEST_LIMIT" ? "Native request admission refused; active request ownership was preserved."
+      : "Native response was unavailable or invalid; no native execution or cleanup result is claimed.";
+  return reply(id, { content: [{ type: "text", text: JSON.stringify({ ok: false, code, error,
+    ...(code === "NATIVE_PERFORMANCE_TRANSPORT_TIMEOUT" ? { outcome: "unknown" } : {}) }, null, 2) }], isError: true });
+}
+function expireNativeRequest(request) {
+  if (!request || !request.active || nativeTransportDisposed || nativeRequests.get(request.id) !== request) return;
+  retireNativeRequest(request, true);
+  nativeToolError(request.id, "NATIVE_PERFORMANCE_TRANSPORT_TIMEOUT");
+}
+function beginNativeRequest(id) {
+  if (nativeTransportDisposed) return undefined;
+  if (!(typeof id === "string" && id.length >= 1 && id.length <= 128 || typeof id === "number" && Number.isSafeInteger(id))) {
+    replyError(null, -32600, "Native tools require a bounded string or integer request ID.");
+    return undefined;
+  }
+  if (nativeRequests.has(id) || nativeRequests.size >= NATIVE_PERFORMANCE_REQUEST_LIMIT) {
+    nativeToolError(id, "NATIVE_PERFORMANCE_REQUEST_LIMIT");
+    return undefined;
+  }
+  const request = { id, active: true, controller: new AbortController(), timer: undefined,
+    deadline: nativePerformanceClock.now() + NATIVE_PERFORMANCE_REQUEST_MS };
+  nativeRequests.set(id, request);
+  request.timer = setTimeout(() => expireNativeRequest(request), NATIVE_PERFORMANCE_REQUEST_MS);
+  return request;
+}
+function cancelNativeRequest(params) {
+  if (!isRecord(params) || !(typeof params.requestId === "string" || typeof params.requestId === "number") ||
+    params.reason !== undefined && typeof params.reason !== "string") return;
+  const request = nativeRequests.get(params.requestId);
+  if (request) retireNativeRequest(request, true);
+}
+function disposeNativeTransport() {
+  nativeTransportDisposed = true;
+  for (const request of nativeRequests.values()) retireNativeRequest(request, true);
+}
+
 async function forgeValidation(context, body) {
   if (usesStaticCompatibilityRoutes(context)) {
     return requireResponse(await forge("POST", "/api/agent/project/validate", body), "project validation", {
@@ -1221,6 +1541,7 @@ function validateEffectiveAuthority(authority, canonicalContract) {
   }
   const expectedEffective = canonicalContract.capabilities.filter((capability) => {
     if (!capability.access.agentScopes.includes(authority.actor.scope)) return false;
+    if (NATIVE_PERFORMANCE_CAPABILITIES.has(capability.id)) return nativeGrantAllowed(capability, authority);
     if (capability.access.public || constraint === null) return true;
     const identity = `${capability.id}@${capability.version}`;
     return selectedIdentities.has(identity) && capability.effects.every((effect) => allowedEffects.has(effect));
@@ -1263,19 +1584,19 @@ const REVIEWED_LEGACY_SCHEMA_API_VERSIONS = new Set([
   "legacy.agent.v0",
 ]);
 
-async function loadCapabilityContract() {
-  if (discoveryInFlight) return discoveryInFlight;
+async function loadCapabilityContract(nativeRequest) {
+  if (!nativeRequest && discoveryInFlight) return discoveryInFlight;
   const current = (async () => {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), CAPABILITY_DISCOVERY_TIMEOUT_MS);
+    const controller = nativeRequest ? nativeRequest.controller : new AbortController();
+    const timeout = nativeRequest ? undefined : setTimeout(() => controller.abort(), CAPABILITY_DISCOVERY_TIMEOUT_MS);
     try {
       if (!KEY || !WORKSPACE_ID) return { state: "invalid" };
-      const schema = await forge("GET", "/api/agent/schema", undefined, controller.signal);
+      const schema = await forge("GET", "/api/agent/schema", undefined, controller.signal, !!nativeRequest);
       if (!schema || typeof schema !== "object" || Array.isArray(schema)) return { state: "invalid" };
       if (!("capability_contract" in schema)) {
         if (!REVIEWED_LEGACY_SCHEMA_API_VERSIONS.has(schema.api_version)) return { state: "invalid" };
         try {
-          await forge("GET", "/api/agent/capabilities/effective", undefined, controller.signal);
+          await forge("GET", "/api/agent/capabilities/effective", undefined, controller.signal, !!nativeRequest);
           return { state: "invalid" };
         } catch (error) {
           return Number(error?.status || 0) === 404 ? { state: "legacy" } : { state: "invalid" };
@@ -1283,17 +1604,21 @@ async function loadCapabilityContract() {
       }
       const canonicalContract = schema.capability_contract;
       if (!validateLiveContract(canonicalContract)) return { state: "invalid" };
-      const authority = await forge("GET", "/api/agent/capabilities/effective", undefined, controller.signal);
+      const authority = await forge("GET", "/api/agent/capabilities/effective", undefined, controller.signal, !!nativeRequest);
       return validateEffectiveAuthority(authority, canonicalContract)
         ? { state: "live", contract: authority.capability_contract, authority }
         : { state: "invalid" };
     } catch (error) {
+      if (nativeRequest && controller.signal.aborted) throw error;
       const status = Number(error?.status || 0);
       return error?.invalidResponse || (status >= 400 && status < 500) ? { state: "invalid" } : { state: "unavailable" };
     } finally {
-      clearTimeout(timeout);
+      if (timeout !== undefined) clearTimeout(timeout);
     }
   })();
+  // Native callers own discovery cancellation individually; cancelling one must
+  // not abort a legacy/shared discovery waiter or leave a later control queued.
+  if (nativeRequest) return current;
   discoveryInFlight = current;
   try {
     return await current;
@@ -1302,8 +1627,9 @@ async function loadCapabilityContract() {
   }
 }
 
-async function availableTools() {
-  const discovery = await loadCapabilityContract();
+async function availableTools(nativeRequest) {
+  const discovery = await loadCapabilityContract(nativeRequest);
+  if (nativeRequest && !nativeRequestOwned(nativeRequest)) throw nativeResponseInvalid();
   if (discovery.state === "invalid") {
     blockedUntilValidContract = true;
     reviewedLegacyConfirmed = false;
@@ -1319,6 +1645,7 @@ async function availableTools() {
     for (let toolIndex = 0; toolIndex < TOOLS.length; toolIndex += 1) {
       const capability = advertised.get(`${TOOLS[toolIndex].capabilityId}@${TOOLS[toolIndex].capabilityVersion}`);
       const projection = capability?.surfaces?.mcp?.find((candidate) => candidate.id === TOOLS[toolIndex].name);
+      if (NATIVE_PERFORMANCE_LIVE_TOOLS.has(TOOLS[toolIndex].name) && (!capability || !nativeGrantAllowed(capability, discovery.authority))) continue;
       if (projection && projection.status !== "disconnected") supportedNow.add(TOOLS[toolIndex].name);
     }
     stickyLiveToolNames = stickyLiveToolNames === null
@@ -1338,7 +1665,7 @@ async function availableTools() {
   if (stickyLiveToolNames !== null) {
     return {
       discovery,
-      toolNames: [...stickyLiveToolNames].filter(name => !["check_expression", "get_xml_references"].includes(name) && !PERFORMANCE_LIVE_TOOLS.has(name)),
+      toolNames: [...stickyLiveToolNames].filter(name => !["check_expression", "get_xml_references"].includes(name) && !PERFORMANCE_LIVE_TOOLS.has(name) && !NATIVE_PERFORMANCE_LIVE_TOOLS.has(name)),
       effectiveContract: lastValidContract,
       effectiveAuthority: lastValidAuthority,
       contractState: `${discovery.state}-sticky-live`,
@@ -1377,12 +1704,12 @@ function toolAvailabilitySignature(availability) {
 }
 
 function notifyToolListChanged() {
-  if (!clientInitialized) return;
+  if (!clientInitialized || nativeTransportDisposed) return;
   process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/tools/list_changed" })}\n`);
 }
 
 function scheduleCapabilityRecovery() {
-  if (recoveryTimer) return;
+  if (recoveryTimer || nativeTransportDisposed) return;
   recoveryTimer = setTimeout(async () => {
     recoveryTimer = null;
     try { await resolveAvailableTools(true); } catch { /* the next bounded retry records availability again */ }
@@ -1390,8 +1717,9 @@ function scheduleCapabilityRecovery() {
   recoveryTimer.unref?.();
 }
 
-async function resolveAvailableTools(notifyOnChange) {
-  const availability = await availableTools();
+async function resolveAvailableTools(notifyOnChange, nativeRequest) {
+  const availability = await availableTools(nativeRequest);
+  if (nativeRequest && !nativeRequestOwned(nativeRequest)) throw nativeResponseInvalid();
   const signature = toolAvailabilitySignature(availability);
   if (notifyOnChange && lastAdvertisedToolSignature !== null && signature !== lastAdvertisedToolSignature) {
     notifyToolListChanged();
@@ -1434,18 +1762,22 @@ async function listTools() {
   return listed;
 }
 
-async function forge(method, apiPath, body, signal) {
+async function forge(method, apiPath, body, signal, nativeDiscovery = false) {
   const headers = { "Content-Type": "application/json" };
   if (KEY) headers.Authorization = `Bearer ${KEY}`;
   if (WORKSPACE_ID) headers["x-workspace-id"] = WORKSPACE_ID;
+  const nativeRoute = nativePerformanceRoute(method, apiPath);
   const res = await fetch(`${BASE}${apiPath}`, {
     method,
     headers,
     ...(signal ? { signal } : {}),
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    ...(nativeRoute || nativeDiscovery ? { redirect: "error" } : {}),
   });
   let data = null;
-  try { data = await res.json(); } catch { /* non-JSON error body */ }
+  if (nativeRoute || nativeDiscovery) data = await readNativeJson(res, signal, nativeRoute ? NATIVE_PERFORMANCE_RESPONSE_BYTES : NATIVE_PERFORMANCE_DISCOVERY_BYTES);
+  else try { data = await res.json(); } catch { /* non-JSON error body */ }
+  if (nativeRoute) return { nativeHttpStatus: res.status, nativePayload: data };
   if (!res.ok) {
     const msg = (data && data.error) || `HTTP ${res.status}`;
     const error = new Error(`Forge API ${apiPath}: ${msg}${res.status === 401 ? " (is X4FORGE_KEY set to a valid agent key?)" : ""}${res.status === 403 ? " (check key scope and its workspace binding)" : ""}${data?.code === 'WORKSPACE_ID_REQUIRED' ? " (set X4FORGE_WORKSPACE_ID to the key-bound workspace)" : ""}`);
@@ -1471,12 +1803,17 @@ rl.on("line", async (line) => {
   let msg;
   try { msg = JSON.parse(text); } catch { return replyError(null, -32700, "Parse error"); }
   const { id, method, params } = msg;
+  let nativeRequest;
   try {
     if (method === "initialize") {
       return reply(id, { protocolVersion: PROTOCOL_VERSION, capabilities: { tools: { listChanged: true } }, serverInfo: SERVER_INFO });
     }
     if (method === "notifications/initialized") {
       clientInitialized = true;
+      return;
+    }
+    if (method === "notifications/cancelled") {
+      cancelNativeRequest(params);
       return;
     }
     if ((method || "").startsWith("notifications/")) return; // notifications: no response
@@ -1497,7 +1834,12 @@ rl.on("line", async (line) => {
         (Object.hasOwn(params, "arguments") && !isRecord(params.arguments))) {
         return replyError(id, -32602, "Invalid tools/call params: expected name and an optional object arguments field");
       }
-      const availability = await resolveAvailableTools(true);
+      if (NATIVE_PERFORMANCE_LIVE_TOOLS.has(params.name)) {
+        nativeRequest = beginNativeRequest(id);
+        if (!nativeRequest) return;
+      }
+      const availability = await resolveAvailableTools(true, nativeRequest);
+      if (nativeRequest && !nativeRequestOwned(nativeRequest)) return;
       let toolIndex = -1;
       if (availability.toolNames.includes(params?.name)) {
         for (let candidateIndex = 0; candidateIndex < TOOLS.length; candidateIndex += 1) {
@@ -1512,22 +1854,35 @@ rl.on("line", async (line) => {
       const inputError = schemaValueError(TOOLS[toolIndex].inputSchema, toolArguments);
       if (inputError) return replyError(id, -32602, `Invalid arguments for ${params?.name}: ${inputError}`);
       try {
-        const result = await TOOLS[toolIndex].handler(toolArguments, { contractState: availability.contractState });
+        const result = await TOOLS[toolIndex].handler(toolArguments, { contractState: availability.contractState, signal: nativeRequest?.controller.signal });
+        if (nativeRequest && !nativeRequestOwned(nativeRequest)) return;
         return reply(id, {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-          ...(TOOLS[toolIndex].name === "compile_workspace" && result.success === false || PERFORMANCE_LIVE_TOOLS.has(TOOLS[toolIndex].name) && result.ok === false ? { isError: true } : {}),
+          ...(TOOLS[toolIndex].name === "compile_workspace" && result.success === false || PERFORMANCE_LIVE_TOOLS.has(TOOLS[toolIndex].name) && result.ok === false || NATIVE_PERFORMANCE_LIVE_TOOLS.has(TOOLS[toolIndex].name) && result.ok === false ? { isError: true } : {}),
         });
       } catch (err) {
+        if (nativeRequest) {
+          if (!nativeRequestOwned(nativeRequest)) return;
+          if (err?.nativeInputInvalid) return replyError(id, -32602, err.message);
+          return nativeToolError(id, "NATIVE_PERFORMANCE_RESPONSE_INVALID");
+        }
         return reply(id, { content: [{ type: "text", text: `ERROR: ${err && err.message ? err.message : String(err)}` }], isError: true });
       }
     }
     return replyError(id, -32601, `Method not found: ${method}`);
   } catch (err) {
+    if (nativeRequest) {
+      if (!nativeRequestOwned(nativeRequest)) return;
+      return nativeToolError(id, "NATIVE_PERFORMANCE_RESPONSE_INVALID");
+    }
     return replyError(id, -32603, `Internal error: ${err && err.message ? err.message : String(err)}`);
+  } finally {
+    if (nativeRequest) retireNativeRequest(nativeRequest);
   }
 });
 
 rl.once("close", () => {
+  disposeNativeTransport();
   if (recoveryTimer) clearTimeout(recoveryTimer);
 });
 rl.on("close", () => process.exit(0));

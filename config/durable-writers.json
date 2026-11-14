@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceFingerprint": "38425442f3a200393e9fda35880a81a35f14dc9853679c8962d6942d5f6e1f21",
+  "sourceFingerprint": "169ed9563c1a9a5147ae33d4ef37771abb84ed4c3fdd203548ba68b72309904d",
   "policy": "Every raw production filesystem mutation source is count-pinned here. Authoritative files use atomic sibling promotion; stronger tree, archive, append-log, SQLite, retention, ephemeral, and fixture contracts remain explicit exceptions.",
   "writers": [
     {
@@ -412,11 +412,11 @@
     },
     {
       "file": "vscode-extension/src/nativePerformanceIpc.selftest.ts",
-      "calls": { "writeFileSync": 1, "mkdirSync": 1, "rmSync": 1, "mkdtempSync": 1 },
+      "calls": { "writeFileSync": 2, "mkdirSync": 4, "rmSync": 2, "mkdtempSync": 2 },
       "categories": ["fixture-only"],
-      "owners": ["runNativePerformanceIpcSelftest"],
-      "rationale": "Creates one uniquely named OS-temporary owner marker and an empty discovery directory for seven serial owned Node IPC workers. It exercises production performance modules and supervisor transport without a new app mutation route or persistent helper copy.",
-      "failureContract": "Recursive removal requires the exact owner, expected tree, no reparse points, terminal and drained owned supervisor handles, and confirmed absence of every receipt-bound worker PID. Unknown ownership, process identity, PID absence or cleanup failures fail the oracle and retain scratch. The fixture never targets a live profile, mod, game, save or standing configuration."
+      "owners": ["runNativePerformanceIpcSelftest", "runNativePerformancePublicReplaySelftest"],
+      "rationale": "Creates uniquely owned OS-temporary fixtures for the seven-scenario IPC mode and separately selected real-source public HTTP/MCP replay. Public replay creates native/legacy config, state, data, coordination, mod, schema, scratch-game and discovery directories; current production server owners write only within these private roots. No persistent helper copy or production writer grant is added.",
+      "failureContract": "Both modes require exact owner and expected physical tree, terminal and drained owned supervisors, and confirmed absence of receipt-bound workers/backends before recursive removal. Public replay additionally requires terminal, drained and absent owned MCP children, a disposed parent producer/histogram with zero owned/failed timers, and a closed physical single-link file/directory allowlist bounded to 512 entries and 32 MiB. Unknown files, ownership, identity, reparse points, quiescence or cleanup failures fail the oracle and retain scratch. No live profile, standing configuration, mod, game or save is targeted."
     }
   ],
   "hostStores": [

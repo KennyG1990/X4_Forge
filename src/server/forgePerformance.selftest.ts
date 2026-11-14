@@ -4,6 +4,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createForgeBackendPerformance, summarizeForgeCpuProfile, forgePerformanceApiOperationName, forgePerformanceHasNegativeDataResult, FORGE_BACKEND_PERFORMANCE_LIMITS, type ForgePerformanceTimer, type ForgePerformanceTimers, type ForgePerformanceInspectorSession, type ForgeBackendPerformanceOptions, type ForgePerformanceCollectionOptions } from './forgePerformance';
 import { createForgePerformanceCollector, FORGE_CPU_PROFILE_LIMITS, type ForgeCpuProfileOptions } from '../lib/forgePerformance';
+import * as nativePerformanceApi from './forgePerformance';
+import type { NativeBrokerActor, NativeBrokerReadRequest, NativeBrokerStartRequest, NativeBrokerStopRequest, NativeBrokerResult, NativeBrokerView, NativePerformanceBroker } from './nativePerformanceBroker';
 
 class FakeTimers implements ForgePerformanceTimers {
   now = 1000; private sequence = 0;
@@ -188,8 +190,177 @@ export async function runForgeBackendPerformanceSelftest() {
     assert.equal(result.omitted.samples, 7); assert.equal(result.scannedSampleCount, FORGE_CPU_PROFILE_LIMITS.maxSamples); assert.equal(result.functions[0].selfSampleMicros, null); assert.equal(result.omitted.invalidDeltas, FORGE_CPU_PROFILE_LIMITS.maxSamples); assert.equal(result.delayedStopMs, 100); assert.ok(Buffer.byteLength(JSON.stringify(result), 'utf8') <= FORGE_CPU_PROFILE_LIMITS.maxOutputBytes);
     assert.throws(() => summarizeForgeCpuProfile({ nodes: [], samples: {} }, { producer: result.producer, sourceRoot: appRoot, durationMs: 100, observedDurationMs: null, samplingIntervalMicros: 1000, maxFunctions: 1 }));
   });
+  checks.push(...(await runForgeNativePerformanceAdapterSelftest()).checks);
+  return { pass: checks.every(row => row.pass), passed: checks.filter(row => row.pass).length, total: checks.length, checks };
+}
+
+/** Public adapter contract only. Real HTTP and same-capture replay remain separate required gates. */
+export async function runForgeNativePerformanceAdapterSelftest() {
+  type Operation = 'read' | 'start' | 'stop';
+  type Ownership = 'none' | 'self' | 'other' | 'operator';
+  type Report = { schemaVersion: string; operation: Operation; ok: boolean; code?: string;
+    availability: NativeBrokerView['availability']; unavailableReason: NativeBrokerView['unavailableReason'];
+    ownership: Ownership; status: Readonly<NativeBrokerView> | null };
+  type Response = { httpStatus: number; body: Report };
+  type Adapter = { read(request: NativeBrokerReadRequest): Promise<Response>; start(request: NativeBrokerStartRequest): Promise<Response>; stop(request: NativeBrokerStopRequest): Promise<Response> };
+  type ProjectedBroker = NativePerformanceBroker & { ownership(actor: NativeBrokerActor): Ownership };
+  type Factory = (options: { broker?: ProjectedBroker }) => Adapter;
+  const factory = (nativePerformanceApi as unknown as { createForgeNativePerformanceAdapter?: Factory }).createForgeNativePerformanceAdapter;
+  const checks: Array<{ name: string; pass: boolean; detail?: string; blocked?: boolean }> = [];
+  const check = async (name: string, work: () => void | Promise<void>, prerequisite = true) => {
+    if (prerequisite && typeof factory !== 'function') {
+      checks.push({ name, pass: false, blocked: true, detail: 'BLOCKED: native public adapter export absent; behavior not exercised.' }); return;
+    }
+    try { await work(); checks.push({ name, pass: true }); }
+    catch (error) { checks.push({ name, pass: false, detail: error instanceof Error ? error.message : String(error) }); }
+  };
+  const actor: NativeBrokerActor = { kind: 'agent', id: 'private_adapter_actor_A', isCurrent: () => true };
+  const backendInstanceId = 'backend_instance_adapter_01', nativeInstanceId = 'native_instance_adapter_01', captureId = 'capture_instance_adapter_01';
+  const request = { actor, expectedBackendInstanceId: backendInstanceId, expectedNativeInstanceId: nativeInstanceId };
+  const snapshot = createForgePerformanceCollector({ component: 'extension-host', scope: 'shared-process', pid: 42, instanceId: nativeInstanceId }).snapshot();
+  const native: NonNullable<NativeBrokerView['native']> = { schemaVersion: 'forge.native-performance.status.v1',
+    producer: { component: 'extension-host', scope: 'shared-process', pid: 42, instanceId: nativeInstanceId },
+    disposed: false, collectionActive: true, captureId, collectionStartedAtUnixMs: 1000, collectionExpiresAtUnixMs: 61000,
+    intervalMs: 2000, eventLoopDelayMonitoring: false, resourceSamples: 0, resourceErrors: 0, throttledSamples: 0,
+    counterResets: 0, sampleOverheadMs: 0, lastResourceError: null, collectionStopDelayMs: null,
+    collectionCleanupUnconfirmed: false, ownedTimerCount: 2, failedTimerCount: 0, lastStopReason: null };
+  const status: Readonly<NativeBrokerView> = Object.freeze({ schemaVersion: 'forge.native-performance.broker.v1', backendInstanceId,
+    availability: 'ready', unavailableReason: null, native, pending: null, cancellation: 'none', cleanupUnconfirmed: false,
+    orphaned: false, captureOwned: true, readSubscribers: 0, snapshot, snapshotAgeMs: 17, lastRefreshOutcome: 'ok',
+    rejectedMessages: 0, lateResults: 0, droppedSnapshots: 0, timerCleanupUnconfirmed: false });
+  const fixture = (result: NativeBrokerResult = { ok: true, status }, ownership: Ownership = 'self') => {
+    const calls: Array<{ operation: Operation; request: NativeBrokerReadRequest }> = [];
+    const broker: ProjectedBroker = { status: () => status, ownership: () => ownership,
+      read: async value => { calls.push({ operation: 'read', request: value }); return result; },
+      start: async value => { calls.push({ operation: 'start', request: value }); return result; },
+      stop: async value => { calls.push({ operation: 'stop', request: value }); return result; }, retire: () => undefined };
+    return { broker, calls, api: () => factory!({ broker }) };
+  };
+  const report = (response: Response, operation: Operation, expectedStatus = 200) => {
+    assert.equal(response.httpStatus, expectedStatus); assert.equal(response.body.schemaVersion, 'forge.native-performance.report.v1');
+    assert.equal(response.body.operation, operation);
+    assert.deepEqual(Object.keys(response.body).sort(), ['schemaVersion', 'operation', 'ok', 'availability', 'unavailableReason', 'ownership', 'status',
+      ...(Object.hasOwn(response.body, 'code') ? ['code'] : [])].sort());
+    if (Object.hasOwn(response.body, 'code')) assert.equal(typeof response.body.code, 'string');
+  };
+  await check('native public adapter prerequisite exists (absence is not a runtime defect)', () => assert.equal(typeof factory, 'function'), false);
+  await check('native absent transport read is truthful unavailable with null status and no identity', async () => {
+    const response = await factory!({}).read({ actor }); report(response, 'read');
+    assert.equal(response.body.ok, true); assert.equal(response.body.availability, 'unavailable');
+    assert.equal(response.body.unavailableReason, 'transport-absent'); assert.equal(response.body.ownership, 'none'); assert.equal(response.body.status, null);
+    assert.equal(Object.hasOwn(response.body, 'code'), false);
+    assert(!JSON.stringify(response.body).includes(backendInstanceId)); assert(!JSON.stringify(response.body).includes(nativeInstanceId));
+  });
+  await check('native transport-absent broker read remains unavailable discovery rather than a failed refresh or fabricated identity', async () => {
+    const unavailable: Readonly<NativeBrokerView> = { ...status, availability: 'unavailable', unavailableReason: 'transport-absent',
+      native: null, snapshot: null, snapshotAgeMs: null, captureOwned: false };
+    const f = fixture({ ok: false, code: 'NATIVE_PERFORMANCE_UNAVAILABLE', status: unavailable }, 'none');
+    f.broker.status = () => unavailable;
+    const response = await f.api().read({ actor }); report(response, 'read');
+    assert.equal(response.body.ok, true); assert.equal(response.body.status, null); assert.equal(response.body.ownership, 'none');
+    assert.equal(response.body.availability, 'unavailable'); assert.equal(response.body.unavailableReason, 'transport-absent');
+    assert.equal(Object.hasOwn(response.body, 'code'), false); assert(!JSON.stringify(response.body).includes(backendInstanceId));
+  });
+  for (const operation of ['start', 'stop'] as const) await check(`native absent transport ${operation} is unavailable failure, never accepted`, async () => {
+    const api = factory!({}); const response = operation === 'start' ? await api.start(request) : await api.stop({ ...request, captureId });
+    report(response, operation, 503); assert.equal(response.body.ok, false); assert.equal(response.body.code, 'NATIVE_PERFORMANCE_UNAVAILABLE');
+    assert.equal(response.body.status, null); assert.equal(response.body.ownership, 'none');
+  });
+  await check('native read preserves same capture, snapshot, freshness, unknown values and shared-process coverage', async () => {
+    const f = fixture(); const response = await f.api().read({ actor }); report(response, 'read');
+    assert.equal(response.body.ok, true); assert.equal(response.body.status?.native?.captureId, captureId);
+    assert.deepEqual(response.body.status?.snapshot, snapshot); assert.equal(response.body.status?.snapshotAgeMs, 17);
+    assert.equal(response.body.status?.snapshot?.producer.scope, 'shared-process');
+    assert.equal(response.body.status?.snapshot?.coverage.cpuAttribution, 'process-interval-not-exclusive-operation');
+    assert.equal(response.body.status?.native?.lastResourceError, null); assert.equal(response.body.ownership, 'self');
+    assert.equal(f.calls.length, 1); assert.equal(f.calls[0].operation, 'read'); assert.equal(f.calls[0].request.actor, actor);
+  });
+  for (const operation of ['start', 'stop'] as const) await check(`native ${operation} masks retained snapshot and preserves exact ACK identity`, async () => {
+    const f = fixture(); const abort = new AbortController();
+    const response = operation === 'start' ? await f.api().start({ ...request, signal: abort.signal, options: { durationMs: 1000, intervalMs: 1000, eventLoopDelay: false } })
+      : await f.api().stop({ ...request, captureId, signal: abort.signal });
+    report(response, operation); assert.equal(response.body.ok, true); assert.equal(response.body.status?.native?.captureId, captureId);
+    assert.equal(response.body.status?.snapshot, null); assert.equal(response.body.status?.snapshotAgeMs, null);
+    assert.equal(status.snapshot, snapshot, 'projection must not mutate the broker read cache');
+    assert.equal(f.calls.length, 1); assert.equal(f.calls[0].operation, operation); assert.equal(f.calls[0].request.signal, abort.signal);
+    assert.equal((f.calls[0].request as NativeBrokerStartRequest).expectedBackendInstanceId, backendInstanceId);
+    assert.equal((f.calls[0].request as NativeBrokerStartRequest).expectedNativeInstanceId, nativeInstanceId);
+    if (operation === 'stop') assert.equal((f.calls[0].request as NativeBrokerStopRequest).captureId, captureId);
+  });
+  for (const ownership of ['none', 'self', 'other', 'operator'] as const) await check(`native report takes relative ${ownership} from trusted broker projection, never captureOwned`, async () => {
+    const f = fixture({ ok: true, status }, ownership); const response = await f.api().read({ actor });
+    report(response, 'read');
+    assert.equal(status.captureOwned, true); assert.equal(response.body.ownership, ownership);
+  });
+  for (const [suffix, httpStatus] of [
+    ['INPUT_INVALID', 400], ['BUSY', 409], ['CAPTURE_MISMATCH', 409], ['IDENTITY_MISMATCH', 409], ['PREEMPTED', 409], ['CLEANUP_UNCONFIRMED', 409],
+    ['DISPOSED', 503], ['UNAVAILABLE', 503], ['RETIRED', 503], ['AUTHORITY_REVOKED', 403], ['NOT_OWNER', 403], ['CONTROL_TIMEOUT', 408],
+    ['ABORTED', 408], ['PROTOCOL_ERROR', 502], ['READER_LIMIT', 429], ['START_FAILED', 500],
+  ] as const) await check(`native closed ${suffix} result maps to HTTP ${httpStatus} without false success`, async () => {
+    const code = `NATIVE_PERFORMANCE_${suffix}` as Exclude<NativeBrokerResult, { ok: true }>['code'];
+    const f = fixture({ ok: false, code, status }); const response = await f.api().start(request);
+    report(response, 'start', httpStatus); assert.equal(response.body.ok, false); assert.equal(response.body.code, code);
+    if (suffix === 'AUTHORITY_REVOKED') {
+      assert.equal(response.body.status, null); assert.equal(response.body.ownership, 'none');
+      assert.equal(response.body.availability, 'unavailable'); assert.equal(response.body.unavailableReason, 'authority-revoked');
+    } else {
+      assert.notEqual(response.body.status, null);
+      assert.equal(response.body.status?.snapshot, null); assert.equal(response.body.status?.snapshotAgeMs, null);
+    }
+  });
+  for (const suffix of ['AUTHORITY_REVOKED', 'NOT_OWNER'] as const) await check(`native denied ${suffix} read cannot disclose retained snapshots`, async () => {
+    const f = fixture({ ok: false, code: `NATIVE_PERFORMANCE_${suffix}`, status }); const response = await f.api().read({ actor });
+    report(response, 'read', 403); assert.equal(response.body.ok, false); assert.equal(response.body.status?.snapshot ?? null, null);
+    assert.equal(response.body.status?.snapshotAgeMs ?? null, null); assert(!JSON.stringify(response.body).includes('native.backend.ensure'));
+  });
+  // BEGIN native authority-ordering regression.
+  await check('native ownership-triggered revocation is checked before any read snapshot can serialize', async () => {
+    let actorCurrent = true, ownershipObserved = false;
+    const raceActor: NativeBrokerActor = { ...actor, isCurrent: () => actorCurrent };
+    const collector = createForgePerformanceCollector({ component: 'extension-host', scope: 'shared-process', pid: 42, instanceId: nativeInstanceId, enabled: true });
+    collector.recordOperation({ name: 'native.backend.ensure', durationMs: 5, outcome: 'ok' });
+    const retained = collector.snapshot(); assert.equal(retained.operations.length, 1);
+    const f = fixture({ ok: true, status: { ...status, snapshot: retained } });
+    f.broker.ownership = observedActor => {
+      assert.equal(observedActor, raceActor); ownershipObserved = true; actorCurrent = false; return 'none';
+    };
+    const response = await f.api().read({ actor: raceActor }); report(response, 'read', 403);
+    assert.equal(ownershipObserved, true); assert.equal(response.body.ok, false); assert.equal(response.body.code, 'NATIVE_PERFORMANCE_AUTHORITY_REVOKED');
+    assert.equal(response.body.status, null); assert.equal(response.body.ownership, 'none');
+    assert.equal(response.body.availability, 'unavailable'); assert.equal(response.body.unavailableReason, 'authority-revoked');
+    const serialized = JSON.stringify(response.body);
+    for (const privateValue of ['native.backend.ensure', backendInstanceId, nativeInstanceId, captureId, raceActor.id]) assert(!serialized.includes(privateValue));
+  });
+  // END native authority-ordering regression.
+  await check('native adapter never ACKs before broker execution or cleanup promise settles', async () => {
+    const f = fixture(); let release: (value: NativeBrokerResult) => void = () => assert.fail('FIXTURE_RELEASE_MISSING');
+    f.broker.start = () => new Promise(resolve => { release = resolve; });
+    let settled = false; const pending = f.api().start(request).then(value => { settled = true; return value; }); await flush();
+    assert.equal(settled, false); release({ ok: false, code: 'NATIVE_PERFORMANCE_CLEANUP_UNCONFIRMED', status });
+    const response = await pending; report(response, 'start', 409); assert.equal(response.body.ok, false);
+  });
+  await check('native stop does not report cleanup success before its matching broker result settles', async () => {
+    const f = fixture(); let release: (value: NativeBrokerResult) => void = () => assert.fail('FIXTURE_RELEASE_MISSING');
+    f.broker.stop = () => new Promise(resolve => { release = resolve; });
+    let settled = false; const pending = f.api().stop({ ...request, captureId }).then(value => { settled = true; return value; }); await flush();
+    assert.equal(settled, false); release({ ok: false, code: 'NATIVE_PERFORMANCE_CONTROL_TIMEOUT', status });
+    const response = await pending; report(response, 'stop', 408); assert.equal(response.body.ok, false);
+    assert.equal(response.body.code, 'NATIVE_PERFORMANCE_CONTROL_TIMEOUT'); assert.equal(response.body.status?.snapshot, null);
+  });
+  await check('native unexpected adapter failure is closed REQUEST_FAILED with no extra fields or private data', async () => {
+    const f = fixture(); f.broker.read = async () => { throw new Error('PRIVATE_ADAPTER_FAILURE_BEARER_PATH'); };
+    const response = await f.api().read({ actor }); report(response, 'read', 500);
+    assert.equal(response.body.ok, false); assert.equal(response.body.code, 'NATIVE_PERFORMANCE_REQUEST_FAILED');
+    assert.equal(response.body.status, null); assert.equal(response.body.ownership, 'none');
+    assert(!JSON.stringify(response.body).includes('PRIVATE_ADAPTER_FAILURE_BEARER_PATH'));
+  });
+  await check('native public report never serializes trusted actor identity or private channel binding', async () => {
+    const f = fixture(); const response = await f.api().start(request); const serialized = JSON.stringify(response.body);
+    report(response, 'start');
+    for (const secret of [actor.id, 'private_nonce_broker_01', 'epoch_broker_01', 'isCurrent']) assert(!serialized.includes(secret));
+  });
   return { pass: checks.every(row => row.pass), passed: checks.filter(row => row.pass).length, total: checks.length, checks };
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  void runForgeBackendPerformanceSelftest().then(result => { process.stdout.write(`${JSON.stringify(result, null, 2)}\n`); if (!result.pass) process.exitCode = 1; }).catch(error => { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
+  void (process.argv.includes('--native-performance-selftest') ? runForgeNativePerformanceAdapterSelftest() : runForgeBackendPerformanceSelftest()).then(result => { process.stdout.write(`${JSON.stringify(result, null, 2)}\n`); if (!result.pass) process.exitCode = 1; }).catch(error => { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1; });
 }

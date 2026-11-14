@@ -747,6 +747,54 @@
       ]
     },
     {
+      "routeKey": "POST /api/agent/performance/native/collection",
+      "method": "POST",
+      "template": "/api/agent/performance/native/collection",
+      "owner": "performance.native.collect",
+      "resourceClass": "process-telemetry",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1performance~1native~1collection",
+      "integrationBatch": "W3B0-internal",
+      "history": "quiet",
+      "capability": {
+        "kind": "canonical",
+        "id": "performance.native.collect",
+        "version": 1
+      },
+      "semanticClass": "read-analysis-only",
+      "policy": "receipt-exempt",
+      "effects": [
+        "read",
+        "analyze"
+      ],
+      "authorityScopes": [
+        "global"
+      ]
+    },
+    {
+      "routeKey": "POST /api/agent/performance/native/stop",
+      "method": "POST",
+      "template": "/api/agent/performance/native/stop",
+      "owner": "performance.native.stop",
+      "resourceClass": "process-telemetry",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1performance~1native~1stop",
+      "integrationBatch": "W3B0-internal",
+      "history": "quiet",
+      "capability": {
+        "kind": "canonical",
+        "id": "performance.native.stop",
+        "version": 1
+      },
+      "semanticClass": "read-analysis-only",
+      "policy": "receipt-exempt",
+      "effects": [
+        "read",
+        "analyze"
+      ],
+      "authorityScopes": [
+        "global"
+      ]
+    },
+    {
       "routeKey": "POST /api/agent/performance/profile",
       "method": "POST",
       "template": "/api/agent/performance/profile",
@@ -3224,7 +3272,7 @@
     {
       "id": "filesystem-writer:vscode-extension/src/nativePerformanceIpc.selftest.ts",
       "kind": "filesystem-writer",
-      "owner": "runNativePerformanceIpcSelftest",
+      "owner": "runNativePerformanceIpcSelftest | runNativePerformancePublicReplaySelftest",
       "sourceRef": "config/durable-writers.json#/writers/48",
       "integrationBatch": "W3B0-internal",
       "semanticClass": "fixture-cache",

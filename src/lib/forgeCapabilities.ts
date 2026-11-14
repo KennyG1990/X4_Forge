@@ -131,8 +131,9 @@ const EMPTY_INPUT: ForgeJsonSchema = {
 function objectOutput(
   properties: Readonly<Record<string, ForgeJsonSchema>>,
   required: readonly string[],
+  additionalProperties = true,
 ): ForgeJsonSchema {
-  return { type: 'object', properties, required, additionalProperties: true };
+  return { type: 'object', properties, required, additionalProperties };
 }
 
 function connected(id: string, anchor: string): ForgeSurfaceProjection {
@@ -257,6 +258,68 @@ const PERFORMANCE_PROFILE_SCHEMA = objectOutput({
 }, ['ok', 'schemaVersion', 'producer', 'requestedDurationMs', 'observedDurationMs', 'delayedStopMs', 'samplingIntervalMicros', 'profileDurationMicros', 'sampleCount', 'scannedSampleCount', 'functions', 'omitted', 'coverage']);
 const PERFORMANCE_COLLECTION_SUCCESS_SCHEMA = objectOutput({ ok: { type: 'boolean', enum: [true] }, control: PERFORMANCE_CONTROL_SCHEMA, backend: PERFORMANCE_SNAPSHOT_SCHEMA }, ['ok', 'control', 'backend']);
 const PERFORMANCE_COLLECTION_FAILURE_SCHEMA = objectOutput({ ok: { type: 'boolean', enum: [false] }, code: { type: 'string', enum: ['PERFORMANCE_DISPOSED', 'PERFORMANCE_COLLECTION_BUSY', 'PERFORMANCE_COLLECTION_REFUSED', 'PROJECT_INPUT_INVALID', 'PERFORMANCE_COLLECTION_FAILED'] }, error: { type: 'string' } }, ['ok', 'code', 'error']);
+
+// Native telemetry has a separate public contract. Backend v1 schemas stay unchanged.
+const NATIVE_PERFORMANCE_ID_SCHEMA: ForgeJsonSchema = {
+  type: 'string', maxLength: 128, description: 'Exact process/capture identity: 8–128 ASCII letters, digits, underscores or hyphens.',
+};
+const NATIVE_PERFORMANCE_PRODUCER_SCHEMA = objectOutput({
+  component: { type: 'string', enum: ['extension-host'] }, scope: { type: 'string', enum: ['shared-process'] },
+  pid: { type: 'number' }, instanceId: NATIVE_PERFORMANCE_ID_SCHEMA,
+}, ['component', 'scope', 'pid', 'instanceId'], false);
+const NATIVE_PERFORMANCE_SNAPSHOT_SCHEMA: ForgeJsonSchema = {
+  ...PERFORMANCE_SNAPSHOT_SCHEMA, additionalProperties: false,
+  properties: { ...PERFORMANCE_SNAPSHOT_SCHEMA.properties, producer: NATIVE_PERFORMANCE_PRODUCER_SCHEMA },
+};
+const NATIVE_PERFORMANCE_STATUS_PROPERTIES: Record<string, ForgeJsonSchema> = {
+  schemaVersion: { type: 'string', enum: ['forge.native-performance.status.v1'] }, producer: NATIVE_PERFORMANCE_PRODUCER_SCHEMA,
+  disposed: { type: 'boolean' }, collectionActive: { type: 'boolean' }, captureId: { anyOf: [NATIVE_PERFORMANCE_ID_SCHEMA, { type: 'null' }] },
+  ...performanceNumbers(['collectionStartedAtUnixMs', 'collectionExpiresAtUnixMs', 'collectionStopDelayMs'], true),
+  ...performanceNumbers(['intervalMs', 'resourceSamples', 'resourceErrors', 'throttledSamples', 'counterResets', 'sampleOverheadMs', 'ownedTimerCount', 'failedTimerCount']),
+  eventLoopDelayMonitoring: { type: 'boolean' }, collectionCleanupUnconfirmed: { type: 'boolean' },
+  lastResourceError: { type: ['string', 'null'], enum: [null, 'unavailable', 'producer-identity-changed', 'clock-unavailable'] },
+  lastStopReason: { type: ['string', 'null'], enum: [null, 'requested', 'expired', 'cancelled', 'retired', 'disposed'] },
+};
+const NATIVE_PERFORMANCE_STATUS_SCHEMA = objectOutput(NATIVE_PERFORMANCE_STATUS_PROPERTIES, Object.keys(NATIVE_PERFORMANCE_STATUS_PROPERTIES), false);
+const NATIVE_PERFORMANCE_AVAILABILITY: ForgeJsonSchema = { type: 'string', enum: ['unavailable', 'waiting', 'ready', 'retired'] };
+const NATIVE_PERFORMANCE_UNAVAILABLE_REASON: ForgeJsonSchema = {
+  type: ['string', 'null'], enum: [null, 'transport-absent', 'contract-invalid', 'waiting', 'ready-timeout', 'producer-disposed', 'retired', 'authority-revoked'],
+};
+const NATIVE_PERFORMANCE_CODES: ForgeJsonSchema = { type: 'string', enum: [
+  'NATIVE_PERFORMANCE_INPUT_INVALID', 'NATIVE_PERFORMANCE_BUSY', 'NATIVE_PERFORMANCE_CAPTURE_MISMATCH',
+  'NATIVE_PERFORMANCE_IDENTITY_MISMATCH', 'NATIVE_PERFORMANCE_PREEMPTED', 'NATIVE_PERFORMANCE_CLEANUP_UNCONFIRMED',
+  'NATIVE_PERFORMANCE_DISPOSED', 'NATIVE_PERFORMANCE_UNAVAILABLE', 'NATIVE_PERFORMANCE_RETIRED',
+  'NATIVE_PERFORMANCE_AUTHORITY_REVOKED', 'NATIVE_PERFORMANCE_NOT_OWNER', 'NATIVE_PERFORMANCE_CONTROL_TIMEOUT',
+  'NATIVE_PERFORMANCE_ABORTED', 'NATIVE_PERFORMANCE_PROTOCOL_ERROR', 'NATIVE_PERFORMANCE_READER_LIMIT',
+  'NATIVE_PERFORMANCE_START_FAILED', 'NATIVE_PERFORMANCE_REQUEST_FAILED',
+] };
+function nativePerformanceReportSchema(operation: 'read' | 'start' | 'stop'): ForgeJsonSchema {
+  const brokerProperties: Record<string, ForgeJsonSchema> = {
+    schemaVersion: { type: 'string', enum: ['forge.native-performance.broker.v1'] }, backendInstanceId: NATIVE_PERFORMANCE_ID_SCHEMA,
+    availability: NATIVE_PERFORMANCE_AVAILABILITY, unavailableReason: NATIVE_PERFORMANCE_UNAVAILABLE_REASON,
+    native: { anyOf: [NATIVE_PERFORMANCE_STATUS_SCHEMA, { type: 'null' }] },
+    pending: { type: ['string', 'null'], enum: [null, 'read', 'start', 'stop'] }, cancellation: { type: 'string', enum: ['none', 'pending', 'unknown'] },
+    cleanupUnconfirmed: { type: 'boolean' }, orphaned: { type: 'boolean' }, captureOwned: { type: 'boolean' },
+    ...performanceNumbers(['readSubscribers', 'rejectedMessages', 'lateResults', 'droppedSnapshots']),
+    snapshot: operation === 'read' ? { anyOf: [NATIVE_PERFORMANCE_SNAPSHOT_SCHEMA, { type: 'null' }] } : { type: 'null' },
+    snapshotAgeMs: operation === 'read' ? PERFORMANCE_NULLABLE_NUMBER : { type: 'null' },
+    lastRefreshOutcome: { type: 'string', enum: ['never', 'pending', 'ok', 'timeout', 'aborted', 'preempted', 'rejected', 'invalidated', 'retired'] },
+    timerCleanupUnconfirmed: { type: 'boolean' },
+  };
+  const properties = {
+    schemaVersion: { type: 'string', enum: ['forge.native-performance.report.v1'] }, operation: { type: 'string', enum: [operation] },
+    ok: { type: 'boolean' }, availability: NATIVE_PERFORMANCE_AVAILABILITY, unavailableReason: NATIVE_PERFORMANCE_UNAVAILABLE_REASON,
+    ownership: { type: 'string', enum: ['none', 'self', 'other', 'operator'] },
+    status: { anyOf: [objectOutput(brokerProperties, Object.keys(brokerProperties), false), { type: 'null' }] },
+  } satisfies Record<string, ForgeJsonSchema>;
+  return {
+    ...objectOutput({ ...properties, code: NATIVE_PERFORMANCE_CODES }, Object.keys(properties), false),
+    anyOf: [
+      objectOutput({ ...properties, ok: { type: 'boolean', enum: [true] } }, Object.keys(properties), false),
+      objectOutput({ ...properties, ok: { type: 'boolean', enum: [false] }, code: NATIVE_PERFORMANCE_CODES }, [...Object.keys(properties), 'code'], false),
+    ],
+  };
+}
 
 export const FORGE_CAPABILITIES = [
   {
@@ -465,6 +528,63 @@ export const FORGE_CAPABILITIES = [
       connected('performance-panel', 'src/components/PerformancePanel.tsx::/api/agent/performance/collection'),
       disconnected('vscode-extension-performance-collection', 'No dedicated native extension control or host producer is connected; use the app Performance panel. Installed native-host qualification remains pending.'),
     ], cli: [], mcp: [partial('start_forge_performance_capture', 'vscode-extension/mcp/x4forge-mcp.cjs::name: "start_forge_performance_capture"', 'Starts backend-only collection for at most 15 minutes with bounded retention. Returns bounded summaries; resource/operation attribution and unsupported producer coverage remain explicit.')], agentApi: true, builtInHarness: [], externalAgents: [connected('agent-api', 'server.ts::app.post("/api/agent/performance/collection"')] },
+  },
+  {
+    id: 'performance.native.collect',
+    version: 1,
+    title: 'Start bounded native host performance collection',
+    description: 'Collect expiring resource samples in the owned extension host. Its process is shared with other extensions. Requires an explicit native grant and the exact current backend/native identities; execution ACK is distinct from transport delivery.',
+    inputSchema: { type: 'object', properties: {
+      expectedBackendInstanceId: NATIVE_PERFORMANCE_ID_SCHEMA, expectedNativeInstanceId: NATIVE_PERFORMANCE_ID_SCHEMA,
+      durationMs: { type: 'integer', description: '1000–900000 milliseconds; defaults to 60000.' },
+      intervalMs: { type: 'integer', description: '1000–60000 milliseconds; defaults to 2000.' },
+      eventLoopDelay: { type: 'boolean', description: 'Explicit event-loop delay monitoring; defaults to false.' },
+    }, required: ['expectedBackendInstanceId', 'expectedNativeInstanceId'], additionalProperties: false },
+    outputSchema: nativePerformanceReportSchema('start'),
+    context: { workspace: 'none', profile: 'none' },
+    access: { public: false, studioSession: true, agentScopes: ['write', 'deploy'] },
+    effects: ['read', 'analyze'], confirmation: 'none',
+    apiBindings: [{ method: 'POST', path: '/api/agent/performance/native/collection', inputLocation: 'body', role: 'primary' }],
+    surfaces: { ui: [
+      connected('native-performance-panel', 'src/components/PerformancePanel.tsx::/api/agent/performance/native/collection'),
+      disconnected('vscode-extension-native-performance-collection', 'Use the connected shared app panel and native API; no dedicated native-host UI control is connected. Installed Antigravity rendering and native-control qualification remain pending Batch4.'),
+    ], cli: [], mcp: [partial('start_forge_native_performance_capture', 'vscode-extension/mcp/x4forge-mcp.cjs::name: "start_forge_native_performance_capture"', 'Native execution ACK only; no retained snapshots or function profiles. Installed host qualification remains pending.')],
+    agentApi: true, builtInHarness: [], externalAgents: [connected('agent-api', 'server.ts::app.post("/api/agent/performance/native/collection"')] },
+  },
+  {
+    id: 'performance.native.read',
+    version: 1,
+    title: 'Read native host performance evidence',
+    description: 'Read the bounded native extension-host snapshot and freshness/ownership state without starting collection. Shared-process resources include other extensions. Missing transport and unsampled metrics remain explicit.',
+    inputSchema: EMPTY_INPUT, outputSchema: nativePerformanceReportSchema('read'),
+    context: { workspace: 'none', profile: 'none' },
+    access: { public: false, studioSession: true, agentScopes: ['read', 'write', 'deploy'] },
+    effects: ['read', 'analyze'], confirmation: 'none',
+    apiBindings: [{ method: 'GET', path: '/api/agent/performance/native', inputLocation: 'none', role: 'primary' }],
+    surfaces: { ui: [
+      connected('native-performance-panel', 'src/components/PerformancePanel.tsx::/api/agent/performance/native'),
+      disconnected('vscode-extension-native-performance-read', 'Use the connected shared app panel and native API; no dedicated native-host UI control is connected. Installed Antigravity rendering and native-control qualification remain pending Batch4.'),
+    ], cli: [], mcp: [partial('get_forge_native_performance', 'vscode-extension/mcp/x4forge-mcp.cjs::name: "get_forge_native_performance"', 'Bounded native/shared-process evidence with exact producer identity, ownership and freshness. Installed host qualification remains pending.')],
+    agentApi: true, builtInHarness: [], externalAgents: [connected('agent-api', 'server.ts::app.get("/api/agent/performance/native"')] },
+  },
+  {
+    id: 'performance.native.stop',
+    version: 1,
+    title: 'Stop an exact native performance capture',
+    description: 'Stop the explicitly addressed native capture owned by the caller, or explicitly targeted by the trusted Studio operator. Requires exact backend/native/capture identities and an explicit native grant; uncertain cleanup remains a failure.',
+    inputSchema: { type: 'object', properties: {
+      expectedBackendInstanceId: NATIVE_PERFORMANCE_ID_SCHEMA, expectedNativeInstanceId: NATIVE_PERFORMANCE_ID_SCHEMA, captureId: NATIVE_PERFORMANCE_ID_SCHEMA,
+    }, required: ['expectedBackendInstanceId', 'expectedNativeInstanceId', 'captureId'], additionalProperties: false },
+    outputSchema: nativePerformanceReportSchema('stop'),
+    context: { workspace: 'none', profile: 'none' },
+    access: { public: false, studioSession: true, agentScopes: ['write', 'deploy'] },
+    effects: ['read', 'analyze'], confirmation: 'none',
+    apiBindings: [{ method: 'POST', path: '/api/agent/performance/native/stop', inputLocation: 'body', role: 'primary' }],
+    surfaces: { ui: [
+      connected('native-performance-panel', 'src/components/PerformancePanel.tsx::/api/agent/performance/native/stop'),
+      disconnected('vscode-extension-native-performance-stop', 'Use the connected shared app panel and native API; no dedicated native-host UI control is connected. Installed Antigravity rendering and native-control qualification remain pending Batch4.'),
+    ], cli: [], mcp: [partial('stop_forge_native_performance_capture', 'vscode-extension/mcp/x4forge-mcp.cjs::name: "stop_forge_native_performance_capture"', 'Exact-target cleanup ACK with caller-relative ownership; no implicit global stop or read grant. Installed host qualification remains pending.')],
+    agentApi: true, builtInHarness: [], externalAgents: [connected('agent-api', 'server.ts::app.post("/api/agent/performance/native/stop"')] },
   },
   {
     id: 'performance.profile',

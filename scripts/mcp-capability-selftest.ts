@@ -5,6 +5,7 @@ import assert from 'assert/strict';
 import crypto from 'crypto';
 import http from 'http';
 import path from 'path';
+import { fileURLToPath } from 'node:url';
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import {
   FORGE_CAPABILITIES,
@@ -14,6 +15,8 @@ import {
 import type { XmlReferenceMapResult, XmlReferenceStatus } from '../src/lib/xmlReferenceGraph';
 import type { ForgeCpuProfileReport, ForgePerformanceResourceSample, ForgePerformanceSnapshot } from '../src/lib/forgePerformance';
 import type { ForgeBackendPerformanceStatus } from '../src/server/forgePerformance';
+import { FORGE_PERFORMANCE_HISTOGRAM_MS } from '../src/lib/forgePerformance';
+import type { NativeBrokerView } from '../src/server/nativePerformanceBroker';
 
 const PERFORMANCE_TOOLS = ['get_forge_performance', 'start_forge_performance_capture', 'profile_forge_backend'];
 
@@ -77,25 +80,27 @@ async function stop(server: http.Server): Promise<void> {
 }
 
 interface JsonRpcMessage {
-  id?: number;
+  id?: number | string;
   method?: string;
   result?: { tools?: any[]; content?: Array<{ type?: string; text?: string }>; isError?: boolean };
   error?: { code?: number; message?: string };
 }
 
-interface McpClient {
+export interface McpClient {
   child: ChildProcessWithoutNullStreams;
+  receivedMessages: readonly JsonRpcMessage[];
   initializeResult: JsonRpcMessage;
   request(method: string, params?: unknown, timeoutMs?: number): Promise<JsonRpcMessage>;
   waitForNotification(method: string, timeoutMs?: number): Promise<void>;
   close(): Promise<void>;
 }
 
-async function startMcp(baseUrl: string, auth: { key?: string; workspaceId?: string } = {}): Promise<McpClient> {
-  const child = spawn(process.execPath, [path.join(process.cwd(), 'vscode-extension', 'mcp', 'x4forge-mcp.cjs')], {
+async function startMcp(baseUrl: string, auth: { key?: string; workspaceId?: string } = {}, privateReplay = false): Promise<McpClient> {
+  const child = spawn(process.execPath, [...(privateReplay ? ['--max-old-space-size=512'] : []), path.join(process.cwd(), 'vscode-extension', 'mcp', 'x4forge-mcp.cjs')], {
     cwd: process.cwd(),
     env: {
       ...process.env,
+      ...(privateReplay ? { NODE_OPTIONS: '--max-old-space-size=512' } : {}),
       X4FORGE_URL: baseUrl,
       X4FORGE_KEY: auth.key ?? MCP_KEY,
       X4FORGE_WORKSPACE_ID: auth.workspaceId ?? MCP_WORKSPACE_ID,
@@ -109,11 +114,24 @@ async function startMcp(baseUrl: string, auth: { key?: string; workspaceId?: str
   let buffer = '';
   let stderr = '';
   const notifications: string[] = [];
+  const receivedMessages: JsonRpcMessage[] = [];
   let nextId = 1;
+  let privateOutputBytes = 0, privateOverflow = false;
+  const privateOutput = (value: string) => {
+    if (!privateReplay) return true;
+    privateOutputBytes += Buffer.byteLength(value);
+    if (privateOutputBytes <= 1048576) return true;
+    privateOverflow = true; child.stdin.end(); return false;
+  };
   const pending = new Map<number, { resolve: (message: JsonRpcMessage) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
+  if (privateReplay) child.once('error', () => {
+    for (const waiter of pending.values()) { clearTimeout(waiter.timer); waiter.reject(new Error('Private MCP child could not start.')); }
+    pending.clear();
+  });
 
-  child.stderr.on('data', value => { stderr += value; });
+  child.stderr.on('data', value => { if (privateOutput(value)) stderr += value; });
   child.stdout.on('data', value => {
+    if (!privateOutput(value)) return;
     buffer += value;
     while (buffer.includes('\n')) {
       const newline = buffer.indexOf('\n');
@@ -122,6 +140,7 @@ async function startMcp(baseUrl: string, auth: { key?: string; workspaceId?: str
       if (!line) continue;
       let message: JsonRpcMessage;
       try { message = JSON.parse(line) as JsonRpcMessage; } catch { continue; }
+      receivedMessages.push(message);
       if (typeof message.method === 'string' && message.id === undefined) {
         notifications.push(message.method);
         continue;
@@ -144,6 +163,7 @@ async function startMcp(baseUrl: string, auth: { key?: string; workspaceId?: str
 
   const client = {
     child,
+    receivedMessages,
     initializeResult: {} as JsonRpcMessage,
     request(method, params = {}, timeoutMs = 6_000) {
       const id = nextId++;
@@ -177,13 +197,27 @@ async function startMcp(baseUrl: string, auth: { key?: string; workspaceId?: str
       });
     },
   } satisfies McpClient;
-  const initialized = await client.request('initialize');
-  assert.ok(initialized.result, 'MCP initialize failed');
-  client.initializeResult = initialized;
-  assert.equal((initialized.result as any)?.capabilities?.tools?.listChanged, true,
-    'dynamic MCP inventory must advertise tools.listChanged');
-  child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
-  return client;
+  try {
+    const initialized = await client.request('initialize');
+    assert.ok(initialized.result, 'MCP initialize failed');
+    client.initializeResult = initialized;
+    assert.equal((initialized.result as any)?.capabilities?.tools?.listChanged, true,
+      'dynamic MCP inventory must advertise tools.listChanged');
+    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
+    if (privateReplay) assert.equal(privateOverflow, false, 'Private MCP output exceeded its bound.');
+    return client;
+  } catch (error) { if (privateReplay) await client.close(); throw error; }
+}
+
+/** Existing stdio owner reused by the real public replay, with no live/default fallback. */
+export async function startPrivateNativeReplayMcp(baseUrl: string, auth: { key: string; workspaceId: string }): Promise<McpClient> {
+  const url = new URL(baseUrl);
+  assert.equal(url.protocol, 'http:'); assert.equal(url.hostname, '127.0.0.1');
+  assert.ok(url.port && !['3000', '3001', '3100', '3101'].includes(url.port));
+  assert.equal(url.pathname, '/'); assert.equal(url.search, ''); assert.equal(url.hash, '');
+  assert.equal(url.username, ''); assert.equal(url.password, '');
+  assert.ok(auth.key.startsWith('x4fk_')); assert.match(auth.workspaceId, /^ws_[a-f0-9]{24}$/);
+  return startMcp(baseUrl, auth, true);
 }
 
 async function toolsFor(client: McpClient): Promise<any[]> {
@@ -339,6 +373,7 @@ function effectiveAuthority(
   const selected = new Set(constraint?.capabilityIdentities || []);
   const capabilities = effectiveCapabilities || FORGE_CAPABILITIES.filter(capability => {
     if (!capability.access.agentScopes.some(candidate => candidate === scope)) return false;
+    if (['performance.native.read', 'performance.native.collect', 'performance.native.stop'].includes(capability.id) && constraint === null) return false;
     if (capability.access.public || constraint === null) return true;
     return selected.has(`${capability.id}@${capability.version}`) && capability.effects.every(effect => allowedEffects.has(effect));
   });
@@ -347,6 +382,7 @@ function effectiveAuthority(
     const identity = `${capability.id}@${capability.version}`;
     if (effectiveIdentities.has(identity)) return [];
     if (!capability.access.agentScopes.some(candidate => candidate === scope)) return [{ capabilityIdentity: identity, code: 'CAPABILITY_SCOPE_DENIED' }];
+    if (['performance.native.read', 'performance.native.collect', 'performance.native.stop'].includes(capability.id) && constraint === null) return [{ capabilityIdentity: identity, code: 'CAPABILITY_NOT_GRANTED' }];
     if (constraint !== null && !selected.has(identity)) return [{ capabilityIdentity: identity, code: 'CAPABILITY_NOT_GRANTED' }];
     const disallowedEffects = capability.effects.filter(effect => !allowedEffects.has(effect));
     return [{ capabilityIdentity: identity, code: 'CAPABILITY_EFFECT_DENIED', disallowedEffects }];
@@ -556,7 +592,10 @@ const server = http.createServer((request, response) => {
             : mode === 'v2'
               ? effectiveAuthority('write', customConstraint, [validationV2])
               : mode === 'effective-expanded'
-                ? effectiveAuthority('deploy', null, [...FORGE_CAPABILITIES, effectiveOrphanCapability])
+                ? effectiveAuthority('deploy', null, [
+                  ...(effectiveAuthority('deploy').capability_contract as ReturnType<typeof buildForgeCapabilityContract>).capabilities,
+                  effectiveOrphanCapability,
+                ])
               : mode === 'effective-malformed'
                 ? { api_version: EFFECTIVE_API_VERSION, actor: {} }
                 : effectiveAuthority('deploy');
@@ -825,6 +864,7 @@ const server = http.createServer((request, response) => {
   response.end(JSON.stringify({ error: 'not found' }));
 });
 
+async function runLegacyMcpCapabilitySelftest(): Promise<void> {
 const port = await listen(server);
 const baseUrl = `http://127.0.0.1:${port}`;
 try {
@@ -876,6 +916,13 @@ try {
 
   mode = 'live';
   discoveryCalls.length = 0;
+  const expectedLiveContract = effectiveAuthority('deploy').capability_contract as ReturnType<typeof buildForgeCapabilityContract>;
+  assert.ok(['performance.native.read', 'performance.native.collect', 'performance.native.stop'].every(id =>
+    contract.capabilities.some(capability => capability.id === id)
+      && !expectedLiveContract.capabilities.some(capability => capability.id === id)),
+  'the legacy deploy fixture must exclude every canonical native capability without explicit grants');
+  assert.notEqual(expectedLiveContract.contractHash, contract.contractHash,
+    'the ungranted legacy actor must advertise its effective contract rather than the canonical catalog');
   await withMcp(baseUrl, async client => {
     const liveTools = await toolsFor(client);
     assert.deepEqual(liveTools.map(tool => tool.name), EXPECTED_TOOLS, 'live discovery changed the curated MCP inventory');
@@ -889,7 +936,7 @@ try {
       'MCP inventory must never leak the plaintext key');
     for (const tool of liveTools) {
       assert.equal(tool._meta?.['x4forge/contractVersion'], 'forge.capability.v1');
-      assert.equal(tool._meta?.['x4forge/contractHash'], contract.contractHash);
+      assert.equal(tool._meta?.['x4forge/contractHash'], expectedLiveContract.contractHash);
       assert.equal(tool._meta?.['x4forge/authorityVersion'], EFFECTIVE_API_VERSION);
       assert.match(String(tool._meta?.['x4forge/authorityHash'] || ''), /^[a-f0-9]{64}$/);
       assert.equal(typeof tool._meta?.['x4forge/capabilityId'], 'string');
@@ -1506,4 +1553,531 @@ try {
   });
 } finally {
   await stop(server);
+}
+}
+
+// This owner tests the actual stdio child against an explicitly private HTTP fixture.
+// Missing aliases are a feature prerequisite failure, never cancellation evidence.
+const NATIVE_MCP_FIXTURE_TOOLS = [
+  { name: 'get_forge_native_performance', id: 'performance.native.read', method: 'GET', path: '/api/agent/performance/native', operation: 'read' },
+  { name: 'start_forge_native_performance_capture', id: 'performance.native.collect', method: 'POST', path: '/api/agent/performance/native/collection', operation: 'start' },
+  { name: 'stop_forge_native_performance_capture', id: 'performance.native.stop', method: 'POST', path: '/api/agent/performance/native/stop', operation: 'stop' },
+] as const;
+type NativeMcpOperation = (typeof NATIVE_MCP_FIXTURE_TOOLS)[number]['operation'];
+type NativeMcpReport = {
+  schemaVersion: 'forge.native-performance.report.v1'; operation: NativeMcpOperation; ok: boolean; code?: string;
+  availability: NativeBrokerView['availability']; unavailableReason: NativeBrokerView['unavailableReason'];
+  ownership: 'none' | 'self' | 'other' | 'operator'; status: NativeBrokerView | null;
+};
+const NATIVE_MCP_BACKEND_ID = 'backend_fixture_1113';
+const NATIVE_MCP_INSTANCE_ID = 'native_fixture_1113';
+const NATIVE_MCP_CAPTURE_ID = 'capture_fixture_1113';
+const NATIVE_MCP_IDENTITY = { expectedBackendInstanceId: NATIVE_MCP_BACKEND_ID, expectedNativeInstanceId: NATIVE_MCP_INSTANCE_ID };
+const NATIVE_MCP_STOP = { ...NATIVE_MCP_IDENTITY, captureId: NATIVE_MCP_CAPTURE_ID };
+// Root's frozen public HTTP map; this fixture does not derive policy from handlers.
+const NATIVE_MCP_HTTP_FAILURES = {
+  NATIVE_PERFORMANCE_INPUT_INVALID: 400, NATIVE_PERFORMANCE_BUSY: 409, NATIVE_PERFORMANCE_CAPTURE_MISMATCH: 409,
+  NATIVE_PERFORMANCE_IDENTITY_MISMATCH: 409, NATIVE_PERFORMANCE_PREEMPTED: 409, NATIVE_PERFORMANCE_CLEANUP_UNCONFIRMED: 409,
+  NATIVE_PERFORMANCE_DISPOSED: 503, NATIVE_PERFORMANCE_UNAVAILABLE: 503, NATIVE_PERFORMANCE_RETIRED: 503,
+  NATIVE_PERFORMANCE_AUTHORITY_REVOKED: 403, NATIVE_PERFORMANCE_NOT_OWNER: 403,
+  NATIVE_PERFORMANCE_CONTROL_TIMEOUT: 408, NATIVE_PERFORMANCE_ABORTED: 408, NATIVE_PERFORMANCE_PROTOCOL_ERROR: 502,
+  NATIVE_PERFORMANCE_READER_LIMIT: 429, NATIVE_PERFORMANCE_START_FAILED: 500, NATIVE_PERFORMANCE_REQUEST_FAILED: 500,
+} as const;
+
+function nativeMcpReportFixture(operation: NativeMcpOperation, unavailable = false): NativeMcpReport {
+  if (unavailable) return { schemaVersion: 'forge.native-performance.report.v1', operation, ok: true,
+    availability: 'unavailable', unavailableReason: 'transport-absent', ownership: 'none', status: null };
+  const source = performanceSnapshotFixture();
+  const producer = { component: 'extension-host' as const, scope: 'shared-process' as const, pid: 4242, instanceId: NATIVE_MCP_INSTANCE_ID };
+  const snapshot: ForgePerformanceSnapshot = { ...source, producer: { ...producer },
+    operations: [{ ...source.operations[0], name: 'native.command', histogram: {
+      upperBoundsMs: [...FORGE_PERFORMANCE_HISTOGRAM_MS], counts: FORGE_PERFORMANCE_HISTOGRAM_MS.map((_value, index) => index === 0 ? 1 : 0),
+    } }],
+    recentSlowOperations: [{ name: 'native.command', durationMs: 105, outcome: 'ok', atUnixMs: null }],
+    resources: source.resources.slice(0, 2),
+  };
+  const active = operation !== 'stop';
+  const status: NativeBrokerView = {
+    schemaVersion: 'forge.native-performance.broker.v1', backendInstanceId: NATIVE_MCP_BACKEND_ID,
+    availability: 'ready', unavailableReason: null,
+    native: { schemaVersion: 'forge.native-performance.status.v1', producer, disposed: false,
+      collectionActive: active, captureId: active ? NATIVE_MCP_CAPTURE_ID : null,
+      collectionStartedAtUnixMs: 1000, collectionExpiresAtUnixMs: active ? 61000 : null,
+      intervalMs: 2000, eventLoopDelayMonitoring: false, resourceSamples: 2, resourceErrors: 0,
+      throttledSamples: 0, counterResets: 0, sampleOverheadMs: 0.5, lastResourceError: null,
+      collectionStopDelayMs: active ? null : 5, collectionCleanupUnconfirmed: false,
+      ownedTimerCount: active ? 1 : 0, failedTimerCount: 0, lastStopReason: active ? null : 'requested' },
+    pending: null, cancellation: 'none', cleanupUnconfirmed: false, orphaned: false, captureOwned: active,
+    readSubscribers: 0, snapshot: operation === 'read' ? snapshot : null, snapshotAgeMs: operation === 'read' ? 25 : null,
+    lastRefreshOutcome: 'ok', rejectedMessages: 0, lateResults: 1, droppedSnapshots: 2, timerCleanupUnconfirmed: false,
+  };
+  return { schemaVersion: 'forge.native-performance.report.v1', operation, ok: true, availability: 'ready',
+    unavailableReason: null, ownership: active ? 'self' : 'none', status };
+}
+
+function nativeMcpDescriptorFixtures(): ForgeCapabilityDescriptorV1[] {
+  return NATIVE_MCP_FIXTURE_TOOLS.map((tool): ForgeCapabilityDescriptorV1 => {
+    const identityProperties = { expectedBackendInstanceId: { type: 'string', maxLength: 128 },
+      expectedNativeInstanceId: { type: 'string', maxLength: 128 } };
+    return {
+      id: tool.id, version: 1, title: `Native fixture ${tool.operation}`, description: 'Explicit bounded native telemetry fixture.',
+      inputSchema: tool.operation === 'read' ? { type: 'object', properties: {}, additionalProperties: false }
+        : { type: 'object', properties: tool.operation === 'stop' ? { ...identityProperties, captureId: { type: 'string', maxLength: 128 } }
+          : { ...identityProperties, durationMs: { type: 'integer' }, intervalMs: { type: 'integer' }, eventLoopDelay: { type: 'boolean' } },
+        required: tool.operation === 'stop' ? ['expectedBackendInstanceId', 'expectedNativeInstanceId', 'captureId']
+          : ['expectedBackendInstanceId', 'expectedNativeInstanceId'], additionalProperties: false },
+      outputSchema: { type: 'object', properties: { schemaVersion: { type: 'string' }, operation: { type: 'string' }, ok: { type: 'boolean' },
+        code: { type: 'string' }, availability: { type: 'string' }, unavailableReason: { type: ['string', 'null'] },
+        ownership: { type: 'string' }, status: { type: ['object', 'null'] } },
+      required: ['schemaVersion', 'operation', 'ok', 'availability', 'unavailableReason', 'ownership', 'status'], additionalProperties: false },
+      context: { workspace: 'none', profile: 'none' }, access: { public: false, studioSession: true,
+        agentScopes: tool.operation === 'read' ? ['read', 'write', 'deploy'] : ['write', 'deploy'] },
+      effects: ['read', 'analyze'], confirmation: 'none',
+      apiBindings: [{ method: tool.method, path: tool.path, inputLocation: tool.operation === 'read' ? 'none' : 'body', role: 'primary' }],
+      surfaces: { ui: [], cli: [], mcp: [{ id: tool.name, status: 'partial',
+        anchor: `vscode-extension/mcp/x4forge-mcp.cjs::name: "${tool.name}"`, note: 'Shared-process native telemetry; no function profile.' }],
+      agentApi: true, builtInHarness: [], externalAgents: [] },
+    };
+  }).sort((left, right) => left.id.localeCompare(right.id));
+}
+
+async function runNativePerformanceMcpSelftest(): Promise<void> {
+  type Grant = 'explicit' | 'absent' | 'backend-only' | 'wrong-version' | 'read-scope' | 'invalid-read-control';
+  type HttpRow = { path: string; method: string; body: unknown; ended: boolean; aborted: boolean; response: http.ServerResponse; release(): void };
+  const checks: Array<{ name: string; pass: boolean; outcome: 'pass' | 'fail' | 'blocked'; detail?: string }> = [];
+  const descriptors = nativeMcpDescriptorFixtures();
+  const nativeContract = buildForgeCapabilityContract(sha256, descriptors);
+  const rows: HttpRow[] = [];
+  const responses = new Set<http.ServerResponse>();
+  let grant: Grant = 'explicit';
+  let hold: 'none' | 'discovery' | 'native' | 'native-body' | 'oversized-native-body' = 'none';
+  let unavailable = false;
+  let featureReady = false;
+  let responseTransform: ((value: NativeMcpReport) => unknown) | undefined;
+  let responseStatus = 200;
+  let nextNativeId = 1_000_000;
+  const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+  const waitFor = async (predicate: () => boolean, label: string, timeoutMs = 4000) => {
+    const deadline = Date.now() + timeoutMs;
+    while (!predicate()) {
+      assert.ok(Date.now() < deadline, `${label}: missing actual ownership witness`);
+      await delay(20);
+    }
+  };
+  const fixtureAuthority = () => {
+    const scope = grant === 'read-scope' || grant === 'invalid-read-control' ? 'read' : 'write';
+    const identities = (grant === 'absent' ? [] : grant === 'backend-only' ? ['performance.read@1', 'performance.collect@1', 'performance.profile@1']
+      : grant === 'read-scope' ? ['performance.native.read@1']
+        : descriptors.map(capability => `${capability.id}@${grant === 'wrong-version' ? 2 : 1}`)).sort();
+    const constraint = grant === 'absent' ? null : { capabilityIdentities: identities, allowedEffects: ['read', 'analyze'] };
+    const selected = descriptors.filter(capability => capability.access.agentScopes.some(candidate => candidate === scope)
+      && constraint !== null && identities.includes(`${capability.id}@1`));
+    const selectedIds = new Set(selected.map(capability => `${capability.id}@1`));
+    const unsigned = { api_version: EFFECTIVE_API_VERSION, authority_schema_version: EFFECTIVE_SCHEMA_VERSION,
+      actor: { kind: 'agent', label: 'native-private-fixture', keyId: 'key_native_fixture', scope, workspaceId: MCP_WORKSPACE_ID },
+      route_policy: { version: ROUTE_POLICY_VERSION, hash: 'b'.repeat(64) }, constraint,
+      capability_contract: buildForgeCapabilityContract(sha256, selected),
+      exclusions: descriptors.filter(capability => !selectedIds.has(`${capability.id}@1`)).map(capability => ({
+        capabilityIdentity: `${capability.id}@1`, code: capability.access.agentScopes.some(candidate => candidate === scope)
+          ? 'CAPABILITY_NOT_GRANTED' : 'CAPABILITY_SCOPE_DENIED',
+      })).sort((left, right) => left.capabilityIdentity.localeCompare(right.capabilityIdentity)) };
+    return { ...unsigned, authority_hash: sha256(stableStringify(unsigned)) };
+  };
+  const nativeServer = http.createServer((request, response) => {
+    assert.equal(request.headers.authorization, `Bearer ${MCP_KEY}`, 'native fixture requires its explicit agent key');
+    assert.equal(request.headers['x-workspace-id'], MCP_WORKSPACE_ID, 'native fixture never relies on a live/default workspace');
+    responses.add(response);
+    const pathname = request.url || '';
+    let raw = '';
+    request.setEncoding('utf8');
+    request.on('data', chunk => { raw += chunk; if (Buffer.byteLength(raw) > 4096) request.destroy(); });
+    request.on('end', () => {
+      const tool = NATIVE_MCP_FIXTURE_TOOLS.find(candidate => candidate.path === pathname && candidate.method === request.method);
+      const discovery = pathname === '/api/agent/schema' || pathname === '/api/agent/capabilities/effective';
+      const payload = () => discovery ? pathname === '/api/agent/schema'
+        ? { api_version: '2026-07-30.agent.v4', capability_contract: nativeContract } : fixtureAuthority()
+        : tool ? (responseTransform?.(nativeMcpReportFixture(tool.operation, unavailable)) ?? nativeMcpReportFixture(tool.operation, unavailable))
+          : { error: 'Private native fixture route not found.' };
+      const row: HttpRow = { path: pathname, method: request.method || '', body: raw ? JSON.parse(raw) : null,
+        ended: false, aborted: false, response, release() {
+          if (row.ended) return;
+          row.ended = true;
+          if (!response.headersSent) response.writeHead(discovery ? 200 : tool ? responseStatus : 404, { 'Content-Type': 'application/json' });
+          response.end(JSON.stringify(payload()));
+        } };
+      rows.push(row);
+      response.once('close', () => { row.aborted = !response.writableFinished; responses.delete(response); });
+      if (hold === 'oversized-native-body' && tool) {
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        // The HTTP body deliberately never ends: refusal must follow a bounded
+        // streaming parse, rather than buffering arbitrary data until the deadline.
+        response.write(' '.repeat(4 * 1024 * 1024));
+        return;
+      }
+      if (hold === 'discovery' && discovery || (hold === 'native' || hold === 'native-body') && tool) {
+        if (hold === 'native-body' && tool) { response.writeHead(200, { 'Content-Type': 'application/json' }); response.write(' '); }
+        return;
+      }
+      row.release();
+    });
+  });
+  const privatePort = await listen(nativeServer);
+  assert.notEqual(privatePort, 3000); assert.notEqual(privatePort, 3001);
+  const privateUrl = `http://127.0.0.1:${privatePort}`;
+  const nativeRows = () => rows.filter(row => NATIVE_MCP_FIXTURE_TOOLS.some(tool => tool.path === row.path));
+  const send = (client: McpClient, name: string, args: Record<string, unknown>, id: number | string = nextNativeId++) => {
+    client.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } })}\n`);
+    return id;
+  };
+  const cancel = (client: McpClient, requestId: number | string) => client.child.stdin.write(
+    `${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId, reason: 'owned native selftest cancellation' } })}\n`);
+  const replies = (client: McpClient, id: number | string) => client.receivedMessages.filter(message => message.id === id);
+  const responseFor = async (client: McpClient, id: number | string, timeoutMs = 4000) => {
+    await waitFor(() => replies(client, id).length > 0, `RPC response ${id}`, timeoutMs);
+    assert.equal(replies(client, id).length, 1, 'one response owns one request');
+    return replies(client, id)[0];
+  };
+  const call = async (client: McpClient, name: string, args: Record<string, unknown> = {}) => responseFor(client, send(client, name, args));
+  const decoded = (message: JsonRpcMessage): NativeMcpReport => {
+    assert.equal(message.error, undefined, 'native request must reach its actual tool handler');
+    assert.equal(message.result?.isError, undefined, 'valid native report cannot be a tool error');
+    assert.equal(message.result?.content?.[0]?.type, 'text');
+    return JSON.parse(message.result!.content![0].text!) as NativeMcpReport;
+  };
+  const rejected = (message: JsonRpcMessage) => assert.ok(message.error?.code === -32602 || message.result?.isError === true,
+    'invalid native call/report must fail rather than return a successful tool result');
+  const withNativeClient = async (action: (client: McpClient) => Promise<void>) => {
+    rows.length = 0; hold = 'none'; unavailable = false; responseTransform = undefined; responseStatus = 200; grant = 'explicit';
+    const client = await startMcp(privateUrl, { key: MCP_KEY, workspaceId: MCP_WORKSPACE_ID });
+    try { await action(client); }
+    finally {
+      for (const response of responses) response.destroy();
+      await client.close();
+      assert.equal(client.child.exitCode, 0, 'native fixture child must retire through EOF without the fallback kill');
+    }
+  };
+  const check = async (name: string, action: () => Promise<void>, prerequisite = true) => {
+    if (prerequisite && !featureReady) { checks.push({ name, pass: false, outcome: 'blocked', detail: 'Native alias prerequisite absent; lifecycle behavior was not exercised.' }); return; }
+    try { await action(); checks.push({ name, pass: true, outcome: 'pass' }); }
+    catch (error) { checks.push({ name, pass: false, outcome: 'fail', detail: error instanceof Error ? error.message : String(error) }); }
+  };
+  try {
+    await check('native_alias_prerequisite_exact_current_grants_and_closed_schemas', () => withNativeClient(async client => {
+      const canonicalIds = nativeContract.capabilities.map(capability => capability.id);
+      assert.deepEqual(canonicalIds, [...canonicalIds].sort(), 'Fixture canonical contract must already be ordered; the builder does not sort it.');
+      const effectiveIds = fixtureAuthority().capability_contract.capabilities.map(capability => capability.id);
+      assert.deepEqual(effectiveIds, [...effectiveIds].sort(), 'Fixture effective contract must preserve canonical descriptor order.');
+      const tools = await toolsFor(client);
+      assert.deepEqual(tools.map(tool => tool.name).sort(), NATIVE_MCP_FIXTURE_TOOLS.map(tool => tool.name).sort(),
+        'Missing-feature prerequisite: actual native MCP aliases must exist before lifecycle tests can qualify cancellation.');
+      for (const expected of NATIVE_MCP_FIXTURE_TOOLS) {
+        const tool = tools.find(candidate => candidate.name === expected.name)!;
+        assert.equal(tool._meta?.['x4forge/capabilityId'], expected.id);
+        assert.equal(tool._meta?.['x4forge/capabilityVersion'], 1);
+        assert.deepEqual(tool.inputSchema.required || [], expected.operation === 'read' ? []
+          : expected.operation === 'start' ? ['expectedBackendInstanceId', 'expectedNativeInstanceId']
+            : ['expectedBackendInstanceId', 'expectedNativeInstanceId', 'captureId']);
+        for (const field of ['owner', 'pid', 'workspace', 'workspaceId', 'fromPath', 'rawProfile', 'persist']) assert.equal(tool.inputSchema.properties[field], undefined);
+      }
+      featureReady = true;
+    }), false);
+    await check('native_unavailable_read_has_no_fabricated_identity', () => withNativeClient(async client => {
+      unavailable = true;
+      assert.deepEqual(decoded(await call(client, NATIVE_MCP_FIXTURE_TOOLS[0].name)), nativeMcpReportFixture('read', true));
+      assert.deepEqual(nativeRows().map(row => [row.method, row.path, row.body]), [['GET', '/api/agent/performance/native', null]]);
+    }));
+    await check('native_read_preserves_shared_producer_snapshot_unknowns_and_freshness', () => withNativeClient(async client => {
+      const result = decoded(await call(client, NATIVE_MCP_FIXTURE_TOOLS[0].name));
+      assert.deepEqual(result, nativeMcpReportFixture('read'));
+      assert.equal(result.status?.snapshot?.resources[0].rssBytes, null);
+      assert.equal(result.status?.snapshot?.selfOverhead.recordMs, null);
+      assert.equal(nativeRows().length, 1);
+    }));
+    await check('native_start_ack_uses_flat_identity_defaults_and_never_returns_snapshot', () => withNativeClient(async client => {
+      assert.deepEqual(decoded(await call(client, NATIVE_MCP_FIXTURE_TOOLS[1].name, NATIVE_MCP_IDENTITY)), nativeMcpReportFixture('start'));
+      assert.deepEqual(nativeRows().map(row => [row.method, row.path, row.body]), [['POST', '/api/agent/performance/native/collection',
+        { ...NATIVE_MCP_IDENTITY, durationMs: 60000, intervalMs: 2000, eventLoopDelay: false }]]);
+    }));
+    await check('native_start_preserves_protocol_boundary_options', () => withNativeClient(async client => {
+      for (const options of [{ durationMs: 1000, intervalMs: 1000, eventLoopDelay: false },
+        { durationMs: 900000, intervalMs: 60000, eventLoopDelay: true }]) {
+        decoded(await call(client, NATIVE_MCP_FIXTURE_TOOLS[1].name, { ...NATIVE_MCP_IDENTITY, ...options }));
+        assert.deepEqual(nativeRows().at(-1)?.body, { ...NATIVE_MCP_IDENTITY, ...options });
+      }
+      assert.equal(nativeRows().length, 2, 'each explicit POST is sent exactly once');
+    }));
+    await check('native_stop_targets_exact_capture_and_cleanup_ack', () => withNativeClient(async client => {
+      assert.deepEqual(decoded(await call(client, NATIVE_MCP_FIXTURE_TOOLS[2].name, NATIVE_MCP_STOP)), nativeMcpReportFixture('stop'));
+      assert.deepEqual(nativeRows().map(row => [row.method, row.path, row.body]), [['POST', '/api/agent/performance/native/stop', NATIVE_MCP_STOP]]);
+      responseTransform = report => {
+        const value = structuredClone(report);
+        value.status!.native!.eventLoopDelayMonitoring = true;
+        return value;
+      };
+      const monitoringStop = await call(client, NATIVE_MCP_FIXTURE_TOOLS[2].name, NATIVE_MCP_STOP);
+      assert.equal(nativeRows().length, 2, 'the monitor-active stop rejection must follow an actual second HTTP response');
+      rejected(monitoringStop);
+    }));
+    for (const deniedGrant of ['absent', 'backend-only', 'wrong-version', 'read-scope', 'invalid-read-control'] as const) {
+      await check(`native_${deniedGrant}_grants_cannot_advertise_or_dispatch_controls`, () => withNativeClient(async client => {
+        grant = deniedGrant;
+        const tools = await toolsFor(client);
+        const denied = deniedGrant === 'read-scope' ? NATIVE_MCP_FIXTURE_TOOLS.slice(1) : NATIVE_MCP_FIXTURE_TOOLS;
+        assert.deepEqual(tools.map(tool => tool.name), deniedGrant === 'read-scope' ? [NATIVE_MCP_FIXTURE_TOOLS[0].name] : []);
+        for (const tool of denied) assert.equal((await call(client, tool.name, tool.operation === 'stop' ? NATIVE_MCP_STOP : NATIVE_MCP_IDENTITY)).error?.code, -32602);
+        assert.equal(nativeRows().length, 0, 'ungranted direct tools/call reached native HTTP');
+      }));
+    }
+    await check('native_invalid_closed_inputs_are_rejected_before_http', () => withNativeClient(async client => {
+      const invalid: Array<{ name: string; args: Record<string, unknown> }> = [];
+      for (const field of ['owner', 'pid', 'workspace', 'workspaceId', 'expectedBackendInstanceId']) invalid.push({ name: NATIVE_MCP_FIXTURE_TOOLS[0].name, args: { [field]: 'forbidden' } });
+      for (const tool of NATIVE_MCP_FIXTURE_TOOLS.slice(1)) {
+        const valid = tool.operation === 'stop' ? NATIVE_MCP_STOP : NATIVE_MCP_IDENTITY;
+        invalid.push({ name: tool.name, args: {} });
+        for (const field of ['owner', 'pid', 'workspace', 'workspaceId', 'options', 'nonce', 'epoch']) invalid.push({ name: tool.name, args: { ...valid, [field]: 'forbidden' } });
+        for (const field of ['expectedBackendInstanceId', 'expectedNativeInstanceId', ...(tool.operation === 'stop' ? ['captureId'] : [])]) {
+          const missing: Record<string, unknown> = { ...valid }; delete missing[field];
+          invalid.push({ name: tool.name, args: missing });
+          for (const value of ['', 'short', 'x'.repeat(129), 'bad id123', null, 42]) invalid.push({ name: tool.name, args: { ...valid, [field]: value } });
+        }
+      }
+      for (const [field, values] of Object.entries({ durationMs: [999, 900001, 1000.5, null], intervalMs: [999, 60001, 1000.5, null], eventLoopDelay: ['yes', 1, null] })) {
+        for (const value of values) invalid.push({ name: NATIVE_MCP_FIXTURE_TOOLS[1].name, args: { ...NATIVE_MCP_IDENTITY, [field]: value } });
+      }
+      for (const sample of invalid) rejected(await call(client, sample.name, sample.args));
+      assert.equal(nativeRows().length, 0, 'invalid native input reached HTTP');
+    }));
+    await check('native_malformed_public_report_envelopes_are_refused', () => withNativeClient(async client => {
+      const changes: Array<(value: Record<string, unknown>) => void> = [
+        value => { value.schemaVersion = 'forge.performance.report.v1'; }, value => { value.operation = 'start'; },
+        value => { delete value.ok; }, value => { value.ok = 'true'; }, value => { value.availability = 'complete'; },
+        value => { value.unavailableReason = 'invented'; }, value => { value.ownership = 'key_native_fixture'; },
+        value => { delete value.status; }, value => { value.status = {}; }, value => { value.code = 'ARBITRARY_NATIVE_FAILURE'; value.ok = false; },
+      ];
+      for (const change of changes) {
+        responseTransform = report => { const value = structuredClone(report) as unknown as Record<string, unknown>; change(value); return value; };
+        rejected(await call(client, NATIVE_MCP_FIXTURE_TOOLS[0].name));
+      }
+      assert.equal(nativeRows().length, changes.length, 'each malformed response came from an actual native HTTP call');
+    }));
+    await check('native_foreign_producer_and_mismatched_snapshot_are_refused', () => withNativeClient(async client => {
+      const independent = nativeMcpReportFixture('read');
+      assert.notEqual(independent.status!.snapshot!.producer, independent.status!.native!.producer,
+        'Mismatch fixture producers must be independent objects before mutation.');
+      assert.deepEqual(independent.status!.snapshot!.producer, independent.status!.native!.producer);
+      const changes: Array<(value: NativeMcpReport) => void> = [
+        value => { Object.assign(value.status!.native!.producer, { component: 'backend', scope: 'owned-process' }); },
+        value => { value.status!.snapshot!.producer.instanceId = 'foreign_native_instance'; },
+        value => { value.status!.snapshot!.producer.pid++; },
+        value => { Object.assign(value.status!.snapshot!.producer, { scope: 'owned-process' }); },
+      ];
+      for (const change of changes) {
+        responseTransform = report => { const value = structuredClone(report); change(value); return value; };
+        rejected(await call(client, NATIVE_MCP_FIXTURE_TOOLS[0].name));
+      }
+      assert.equal(nativeRows().length, changes.length);
+    }));
+    await check('native_control_reports_cannot_disclose_retained_read_snapshots', () => withNativeClient(async client => {
+      responseTransform = report => ({ ...report, status: { ...report.status!, snapshot: nativeMcpReportFixture('read').status!.snapshot } });
+      rejected(await call(client, NATIVE_MCP_FIXTURE_TOOLS[1].name, NATIVE_MCP_IDENTITY));
+      rejected(await call(client, NATIVE_MCP_FIXTURE_TOOLS[2].name, NATIVE_MCP_STOP));
+      assert.equal(nativeRows().length, 2);
+      responseTransform = report => ({ ...report, status: { ...report.status!, snapshot: null, snapshotAgeMs: 123 } });
+      const agedStart = await call(client, NATIVE_MCP_FIXTURE_TOOLS[1].name, NATIVE_MCP_IDENTITY);
+      const agedStop = await call(client, NATIVE_MCP_FIXTURE_TOOLS[2].name, NATIVE_MCP_STOP);
+      assert.equal(nativeRows().length, 4, 'both snapshot-age controls must receive actual HTTP responses before rejection assertions');
+      rejected(agedStart);
+      rejected(agedStop);
+    }));
+    await check('native_oversized_unfinished_http_body_is_aborted_before_transport_deadline', () => withNativeClient(async client => {
+      hold = 'oversized-native-body';
+      const id = send(client, NATIVE_MCP_FIXTURE_TOOLS[0].name, {});
+      await waitFor(() => nativeRows().length === 1, 'oversized native HTTP body was actually requested');
+      const result = await responseFor(client, id);
+      assert.equal(result.result?.isError, true);
+      assert.match(result.result!.content![0].text!, /NATIVE_PERFORMANCE_RESPONSE_INVALID/u);
+      await waitFor(() => nativeRows()[0].aborted, 'bounded parser aborted the unfinished oversized response');
+      assert.equal(nativeRows().length, 1);
+    }));
+    await check('native_successful_control_reports_require_the_requested_backend_and_native_identity', () => withNativeClient(async client => {
+      for (const tool of NATIVE_MCP_FIXTURE_TOOLS.slice(1)) {
+        for (const change of ['backend', 'native'] as const) {
+          responseTransform = report => {
+            const value = structuredClone(report);
+            if (change === 'backend') value.status!.backendInstanceId = 'foreign_backend_1113';
+            else value.status!.native!.producer.instanceId = 'foreign_native_1113';
+            return value;
+          };
+          const result = await call(client, tool.name, tool.operation === 'start' ? NATIVE_MCP_IDENTITY : NATIVE_MCP_STOP);
+          assert.equal(result.result?.isError, true);
+          assert.match(result.result!.content![0].text!, /NATIVE_PERFORMANCE_RESPONSE_INVALID/u);
+        }
+      }
+      assert.equal(nativeRows().length, 4);
+    }));
+    await check('native_closed_broker_refusals_are_tool_errors_and_post_is_never_retried', () => withNativeClient(async client => {
+      for (const [code, status] of Object.entries(NATIVE_MCP_HTTP_FAILURES)) {
+        responseStatus = status;
+        responseTransform = report => {
+          const value = structuredClone(report); value.ok = false; value.code = code;
+          if (code === 'NATIVE_PERFORMANCE_UNAVAILABLE' || code === 'NATIVE_PERFORMANCE_AUTHORITY_REVOKED') {
+            value.availability = 'unavailable'; value.unavailableReason = code === 'NATIVE_PERFORMANCE_UNAVAILABLE' ? 'transport-absent' : 'authority-revoked';
+            value.status = null; value.ownership = 'none';
+          } else if (code === 'NATIVE_PERFORMANCE_RETIRED') {
+            value.availability = value.status!.availability = 'retired'; value.unavailableReason = value.status!.unavailableReason = 'retired';
+          } else if (code === 'NATIVE_PERFORMANCE_DISPOSED') {
+            value.availability = value.status!.availability = 'unavailable'; value.unavailableReason = value.status!.unavailableReason = 'producer-disposed';
+            Object.assign(value.status!.native!, { disposed: true, collectionActive: false, captureId: null, ownedTimerCount: 0 });
+            value.status!.captureOwned = false; value.ownership = 'none';
+          } else if (code === 'NATIVE_PERFORMANCE_CLEANUP_UNCONFIRMED') {
+            value.status!.cleanupUnconfirmed = value.status!.native!.collectionCleanupUnconfirmed = true;
+          }
+          if (code === 'NATIVE_PERFORMANCE_NOT_OWNER') value.ownership = 'other';
+          return value;
+        };
+        const result = await call(client, NATIVE_MCP_FIXTURE_TOOLS[1].name, NATIVE_MCP_IDENTITY);
+        assert.equal(result.error, undefined); assert.equal(result.result?.isError, true);
+        const payload = JSON.parse(result.result!.content![0].text!) as NativeMcpReport;
+        assert.equal(payload.code, code); assert.equal(payload.ok, false); assert.equal(payload.status?.snapshot ?? null, null);
+      }
+      assert.equal(nativeRows().length, Object.keys(NATIVE_MCP_HTTP_FAILURES).length, 'native POST refusals must not be retried');
+    }));
+    await check('native_http_status_and_closed_report_failures_must_agree', () => withNativeClient(async client => {
+      for (const sample of [
+        { status: 409, ok: false, code: 'NATIVE_PERFORMANCE_CONTROL_TIMEOUT' },
+        { status: 409, ok: false, code: 'ARBITRARY_NATIVE_FAILURE' },
+        { status: 409, ok: true, code: 'NATIVE_PERFORMANCE_BUSY' },
+        { status: 200, ok: false, code: 'NATIVE_PERFORMANCE_BUSY' },
+      ]) {
+        responseStatus = sample.status; responseTransform = report => ({ ...report, ok: sample.ok, code: sample.code });
+        const result = await call(client, NATIVE_MCP_FIXTURE_TOOLS[1].name, NATIVE_MCP_IDENTITY);
+        assert.equal(result.result?.isError, true);
+        assert.match(result.result!.content![0].text!, /NATIVE_PERFORMANCE_RESPONSE_INVALID/u);
+      }
+      assert.equal(nativeRows().length, 4, 'invalid HTTP outcomes must not retry controls');
+    }));
+    await check('native_generic_prehandler_denials_cannot_become_native_ack_reports', () => withNativeClient(async client => {
+      for (const [code, status] of [['PROJECT_INPUT_INVALID', 400], ['CAPABILITY_NOT_GRANTED', 403]] as const) {
+        responseStatus = status; responseTransform = () => ({ ok: false, code, error: 'Private fixture prehandler refusal.' });
+        const result = await call(client, NATIVE_MCP_FIXTURE_TOOLS[1].name, NATIVE_MCP_IDENTITY);
+        assert.equal(result.result?.isError, true);
+        assert.doesNotMatch(result.result!.content![0].text!, /forge\.native-performance\.report\.v1/u);
+      }
+      assert.equal(nativeRows().length, 2);
+    }));
+    await check('native_cancellation_during_discovery_prevents_later_http_dispatch', () => withNativeClient(async client => {
+      hold = 'discovery';
+      const id = send(client, NATIVE_MCP_FIXTURE_TOOLS[1].name, NATIVE_MCP_IDENTITY, 'native-discovery-cancel');
+      await waitFor(() => rows.some(row => row.path === '/api/agent/schema'), 'held authenticated discovery');
+      cancel(client, id); hold = 'none';
+      for (const row of rows) row.release();
+      await delay(250);
+      assert.equal(nativeRows().length, 0, 'cancelled discovery waiter dispatched a native control afterward');
+      assert.equal(replies(client, id).length, 0, 'cancelled request must not produce a reply');
+      assert.ok((await client.request('ping')).result, 'unrelated MCP requests survive native cancellation');
+    }));
+    for (const holdMode of ['native', 'native-body'] as const) {
+      await check(`native_cancellation_aborts_owned_${holdMode}_and_fences_late_response`, () => withNativeClient(async client => {
+        hold = holdMode;
+        const id = send(client, NATIVE_MCP_FIXTURE_TOOLS[1].name, NATIVE_MCP_IDENTITY);
+        await waitFor(() => nativeRows().length === 1, 'one held native POST');
+        const row = nativeRows()[0]; cancel(client, id);
+        await waitFor(() => row.aborted, 'HTTP response closed before completion after caller cancellation');
+        row.release(); await delay(200);
+        assert.equal(replies(client, id).length, 0, 'late cancelled result cannot reply');
+        assert.equal(nativeRows().length, 1, 'cancel/late response cannot retry the POST');
+        assert.ok((await client.request('ping')).result);
+      }));
+    }
+    await check('native_unknown_cancellation_does_not_abort_another_request', () => withNativeClient(async client => {
+      hold = 'native';
+      const id = send(client, NATIVE_MCP_FIXTURE_TOOLS[2].name, NATIVE_MCP_STOP, 'native-owned-stop');
+      await waitFor(() => nativeRows().length === 1, 'owned stop HTTP request');
+      client.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: {} } })}\n`);
+      cancel(client, 'native-foreign-request'); await delay(150);
+      assert.equal(nativeRows()[0].aborted, false, 'foreign cancellation took ownership of another request');
+      nativeRows()[0].release(); assert.deepEqual(decoded(await responseFor(client, id)), nativeMcpReportFixture('stop'));
+    }));
+    await check('native_duplicate_inflight_id_cannot_replace_the_original_http_owner', () => withNativeClient(async client => {
+      hold = 'native'; const id = 'native-duplicate-id';
+      send(client, NATIVE_MCP_FIXTURE_TOOLS[1].name, NATIVE_MCP_IDENTITY, id);
+      await waitFor(() => nativeRows().length === 1, 'first duplicate-ID HTTP owner');
+      send(client, NATIVE_MCP_FIXTURE_TOOLS[2].name, NATIVE_MCP_STOP, id);
+      await waitFor(() => replies(client, id).length === 1, 'duplicate ID refusal');
+      assert.ok(replies(client, id)[0].error || replies(client, id)[0].result?.isError, 'duplicate active ID must be rejected');
+      assert.equal(nativeRows().length, 1, 'duplicate ID launched a second native operation');
+      cancel(client, id); await waitFor(() => nativeRows()[0].aborted, 'original owner remains cancellable');
+      nativeRows()[0].release(); await delay(150); assert.equal(replies(client, id).length, 1);
+    }));
+    await check('native_real_ten_second_deadline_aborts_http_without_success_or_retry', () => withNativeClient(async client => {
+      hold = 'discovery'; const started = Date.now();
+      const id = send(client, NATIVE_MCP_FIXTURE_TOOLS[1].name, NATIVE_MCP_IDENTITY);
+      await waitFor(() => rows.some(row => row.path === '/api/agent/schema'), 'deadline includes held discovery');
+      await delay(300); hold = 'native-body';
+      for (const row of rows) row.release();
+      await waitFor(() => nativeRows().length === 1, 'deadline owns an actual HTTP request');
+      const result = await responseFor(client, id, 12500); const elapsed = Date.now() - started;
+      assert.ok(elapsed >= 9500 && elapsed < 12500, `native 10000ms control deadline elapsed ${elapsed}ms`);
+      assert.equal(result.result?.isError, true, 'transport timeout cannot claim native ACK success');
+      assert.match(result.result!.content![0].text!, /NATIVE_PERFORMANCE_TRANSPORT_TIMEOUT/u);
+      assert.match(result.result!.content![0].text!, /unknown/iu, 'deadline cannot claim a native cleanup result');
+      assert.doesNotMatch(result.result!.content![0].text!, /forge\.native-performance\.report\.v1/u);
+      await waitFor(() => nativeRows()[0].aborted, 'deadline retires owned HTTP response');
+      nativeRows()[0].release(); await delay(200);
+      assert.equal(nativeRows().length, 1, 'timed-out POST was retried'); assert.equal(replies(client, id).length, 1);
+    }));
+    await check('native_sixteen_request_admission_limit_preserves_each_http_owner', () => withNativeClient(async client => {
+      hold = 'native';
+      const ids = Array.from({ length: 16 }, (_value, index) => send(client, NATIVE_MCP_FIXTURE_TOOLS[0].name, {}, `native-admission-${index}`));
+      await waitFor(() => nativeRows().length === 16, 'sixteen admitted native read requests');
+      const overflow = send(client, NATIVE_MCP_FIXTURE_TOOLS[1].name, NATIVE_MCP_IDENTITY, 'native-admission-overflow');
+      const refusal = await responseFor(client, overflow);
+      assert.equal(refusal.result?.isError, true);
+      assert.match(refusal.result!.content![0].text!, /NATIVE_PERFORMANCE_REQUEST_LIMIT/u);
+      assert.equal(nativeRows().length, 16, 'seventeenth request must be refused before HTTP');
+      for (const id of ids) cancel(client, id);
+      await waitFor(() => nativeRows().every(row => row.aborted), 'all sixteen exact HTTP owners cancelled');
+      for (const row of nativeRows()) row.release(); await delay(150);
+      for (const id of ids) assert.equal(replies(client, id).length, 0);
+    }));
+    await check('native_cancel_after_completed_ack_never_issues_global_stop', () => withNativeClient(async client => {
+      const id = send(client, NATIVE_MCP_FIXTURE_TOOLS[1].name, NATIVE_MCP_IDENTITY);
+      decoded(await responseFor(client, id)); cancel(client, id); await delay(150);
+      assert.equal(nativeRows().length, 1, 'completed control cancellation must not create a stop request');
+      assert.equal(replies(client, id).length, 1); assert.ok((await client.request('ping')).result);
+    }));
+    await check('native_eof_aborts_owned_http_and_emits_no_late_result', () => withNativeClient(async client => {
+      hold = 'native'; const id = send(client, NATIVE_MCP_FIXTURE_TOOLS[1].name, NATIVE_MCP_IDENTITY);
+      await waitFor(() => nativeRows().length === 1, 'EOF owns an actual HTTP control');
+      client.child.stdin.end();
+      await waitFor(() => nativeRows()[0].aborted, 'EOF closes pending native HTTP');
+      await waitFor(() => client.child.exitCode !== null, 'EOF clean process exit');
+      assert.equal(client.child.exitCode, 0); nativeRows()[0].release();
+      assert.equal(replies(client, id).length, 0, 'disposed MCP emitted a native result');
+    }));
+    await check('native_eof_retires_pending_discovery_without_dispatching_control', () => withNativeClient(async client => {
+      hold = 'discovery'; const id = send(client, NATIVE_MCP_FIXTURE_TOOLS[1].name, NATIVE_MCP_IDENTITY);
+      await waitFor(() => rows.some(row => row.path === '/api/agent/schema'), 'EOF owns actual discovery');
+      client.child.stdin.end();
+      await waitFor(() => rows.filter(row => row.path === '/api/agent/schema').every(row => row.aborted), 'EOF aborts discovery HTTP');
+      await waitFor(() => client.child.exitCode !== null, 'EOF discovery child exits');
+      assert.equal(client.child.exitCode, 0); assert.equal(nativeRows().length, 0); assert.equal(replies(client, id).length, 0);
+    }));
+  } finally {
+    for (const response of responses) response.destroy();
+    await stop(nativeServer);
+  }
+  const passed = checks.filter(row => row.outcome === 'pass').length;
+  const failed = checks.filter(row => row.outcome === 'fail').length;
+  const blocked = checks.filter(row => row.outcome === 'blocked').length;
+  console.log(JSON.stringify({ suite: 'native-performance-mcp', pass: failed === 0 && blocked === 0, passed, failed, blocked, total: checks.length,
+    checks, actualMcpChild: true, explicitPrivateHttpFixture: true, productionBrokerProof: false, nativeDeadlineMs: 10000 }));
+  if (failed || blocked) process.exitCode = 1;
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const nativeOnly = process.argv.length === 3 && process.argv[2] === '--native-performance-selftest';
+  if (process.argv.length > 2 && !nativeOnly) throw new Error('Expected no arguments or exact --native-performance-selftest.');
+  if (!nativeOnly) await runLegacyMcpCapabilitySelftest();
+  await runNativePerformanceMcpSelftest();
 }

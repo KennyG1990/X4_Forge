@@ -92,8 +92,8 @@ export function runActionReceiptPolicyBundleSelftest(): ActionReceiptPolicyBundl
   const positive = loadActionReceiptPolicyBundle();
   check(
     'bundled_policy_positive_counts',
-    positive.routeCount === 92 && positive.surfaceCount === 66
-      && positive.inventory.routes.length === 92
+    positive.routeCount === 94 && positive.surfaceCount === 66
+      && positive.inventory.routes.length === 94
       && positive.inventory.surfaces.length === 66,
     `routes=${positive.routeCount} surfaces=${positive.surfaceCount}`,
   );
@@ -108,7 +108,7 @@ export function runActionReceiptPolicyBundleSelftest(): ActionReceiptPolicyBundl
   check(
     'native_ipc_fixture_policy_is_internal_and_receipt_exempt',
     !!nativeIpcFixture
-      && nativeIpcFixture.owner === 'runNativePerformanceIpcSelftest'
+      && nativeIpcFixture.owner === 'runNativePerformanceIpcSelftest | runNativePerformancePublicReplaySelftest'
       && nativeIpcFixture.sourceRef === 'config/durable-writers.json#/writers/48'
       && nativeIpcFixture.integrationBatch === 'W3B0-internal'
       && nativeIpcFixture.semanticClass === 'fixture-cache'
@@ -181,7 +181,7 @@ export function runActionReceiptPolicyBundleSelftest(): ActionReceiptPolicyBundl
     later !== positive
       && JSON.stringify(later.manifest) === positiveManifestJson
       && JSON.stringify(later.inventory) === positiveInventoryJson
-      && later.routeCount === 92
+      && later.routeCount === 94
       && later.surfaceCount === 66
       && later.manifestSha256 === ACTION_RECEIPT_COVERAGE_REVIEWED_MANIFEST_SHA256,
   );

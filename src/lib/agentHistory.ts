@@ -125,6 +125,8 @@ export const LEDGER_QUIET_ROUTES: string[] = [
   '/api/agent/project/xml-references',
   '/api/agent/performance/collection',
   '/api/agent/performance/profile',
+  '/api/agent/performance/native/collection',
+  '/api/agent/performance/native/stop',
   '/api/agent/project-rules/prepare-suppression',
   '/api/agent/bulk-transform/preview',
   '/api/project-check-owner/review',

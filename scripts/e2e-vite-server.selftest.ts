@@ -162,7 +162,10 @@ async function cleanupRefusals(apiPort: number): Promise<void> {
   }
 }
 
-function profileProxyListenerControls(): void {
+// BEGIN BATCH3 native proxy test result type
+type NativeProxyCheck = { name: string; pass: boolean; detail?: string };
+// END BATCH3 native proxy test result type
+function profileProxyListenerControls(nativeChecks?: NativeProxyCheck[]): void {
   class Upstream extends EventEmitter {
     destroyed = false;
     destroys = 0;
@@ -184,6 +187,66 @@ function profileProxyListenerControls(): void {
       assert.deepEqual(response.listeners('close'), [sentinel], 'unrelated response listener survives');
     } };
   };
+  // BEGIN BATCH3 native proxy listener controls
+  if (nativeChecks) {
+    const attempt = (name: string, work: () => void) => {
+      try { work(); nativeChecks.push({ name, pass: true }); }
+      catch (error) { nativeChecks.push({ name, pass: false, detail: error instanceof Error ? error.message : String(error) }); }
+    };
+    for (const [method, url] of [
+      ['GET', '/api/agent/performance/native'], ['POST', '/api/agent/performance/native/collection'], ['POST', '/api/agent/performance/native/stop'],
+    ] as const) {
+      attempt(`native proxy ${method} ${url} owns pre-header disconnect once`, () => {
+        const row = make(method, url);
+        try {
+          row.request.emit('end'); row.request.emit('close'); assert.equal(row.upstream.destroys, 0, 'request body completion is not cancellation');
+          row.response.emit('close'); assert.equal(row.upstream.destroys, 1, 'downstream disconnect destroys exact upstream');
+          row.retired(); row.response.emit('close'); assert.equal(row.upstream.destroys, 1, 'owned disconnect runs once');
+        } finally { row.upstream.emit('response'); }
+      });
+      attempt(`native proxy ${method} ${url} retires pre-header listeners at headers`, () => {
+        const row = make(method, url);
+        try {
+          assert.equal(row.response.listenerCount('close'), 2, 'native downstream cancellation owner is attached before headers');
+          assert.equal(row.upstream.listenerCount('response'), 2, 'native upstream ownership is attached before retirement');
+          row.upstream.emit('response'); row.retired(); row.response.emit('close'); assert.equal(row.upstream.destroys, 0, 'post-header lifetime belongs to Vite');
+        }
+        finally { row.upstream.emit('response'); }
+      });
+      attempt(`native proxy ${method} ${url} preserves completed response and unrelated listeners`, () => {
+        const row = make(method, url);
+        try {
+          assert.equal(row.response.listenerCount('close'), 2, 'native downstream cancellation owner is attached before completion');
+          row.response.writableFinished = true; row.response.emit('close'); assert.equal(row.upstream.destroys, 0); row.retired();
+        }
+        finally { row.upstream.emit('response'); }
+      });
+      attempt(`native proxy ${method} ${url} handles already disconnected and already destroyed endpoints`, () => {
+        const downstream = make(method, url, (_upstream, response) => { response.destroyed = true; });
+        const upstream = make(method, url, request => { request.destroyed = true; });
+        try { assert.equal(downstream.upstream.destroys, 1); downstream.retired(); assert.equal(upstream.upstream.destroys, 0); upstream.retired(); }
+        finally { downstream.upstream.emit('response'); upstream.upstream.emit('response'); }
+      });
+      attempt(`native proxy ${method} ${url} contains cleanup throws and retires only owned listeners`, () => {
+        const row = make(method, url, request => { request.throwOnDestroy = true; });
+        try { assert.doesNotThrow(() => row.response.emit('close')); assert.equal(row.upstream.destroys, 1); row.retired(); }
+        finally { row.upstream.emit('response'); }
+      });
+    }
+    for (const [method, url] of [
+      ['POST', '/api/agent/performance/native'], ['PUT', '/api/agent/performance/native'],
+      ['GET', '/api/agent/performance/native/collection'], ['GET', '/api/agent/performance/native/stop'],
+      ['POST', '/api/agent/performance/native/collection-extra'], ['POST', '/api/agent/performance/native/stop/extra'],
+      ['GET', '/api/agent/performance/native?unexpected=1'], ['POST', '/api/agent/performance/native/collection?unexpected=1'],
+      ['POST', '/api/agent/performance/native/stop?unexpected=1'], ['post', '/api/agent/performance/native/stop'],
+    ] as const) {
+      attempt(`native proxy exact raw URL leaves ${method} ${url} unchanged`, () => {
+        const row = make(method, url); row.retired(); row.response.emit('close'); assert.equal(row.upstream.destroys, 0);
+      });
+    }
+    return;
+  }
+  // END BATCH3 native proxy listener controls
   const disconnected = make(); disconnected.response.emit('close');
   assert.equal(disconnected.upstream.destroys, 1); disconnected.retired();
   disconnected.response.emit('close'); assert.equal(disconnected.upstream.destroys, 1, 'disconnect is once-only');
@@ -211,6 +274,14 @@ function profileProxyListenerControls(): void {
   }
   console.log('[profile-proxy listener controls] PASS');
 }
+// BEGIN BATCH3 native proxy isolated entry
+/** No Vite stack, state-root writer or listener is started by this focused mode. */
+export function runNativePerformanceProxySelftest() {
+  const checks: NativeProxyCheck[] = []; profileProxyListenerControls(checks);
+  const passed = checks.filter(check => check.pass).length;
+  return { allPassed: passed === checks.length, passed, total: checks.length, checks };
+}
+// END BATCH3 native proxy isolated entry
 
 function profileProxyHttpControls() {
   type Row = { ready: Promise<void>; received: () => void; settled: Promise<void>; settle: () => void; bodyComplete: boolean; earlyClose: boolean; finished: boolean };
@@ -248,6 +319,23 @@ function profileProxyHttpControls() {
         { id: 'proxy-complete', port: proxyPort, method: 'POST', path: '/api/agent/performance/profile', abort: false, early: false },
         { id: 'other-route-abort', port: proxyPort, method: 'POST', path: '/api/agent/performance/collection', abort: true, early: false },
         { id: 'other-method-abort', port: proxyPort, method: 'PUT', path: '/api/agent/performance/profile', abort: true, early: false },
+        // BEGIN BATCH3 native proxy actual HTTP controls
+        { id: 'native-read-direct-abort', port: apiPort, method: 'GET', path: '/api/agent/performance/native', abort: true, early: true },
+        { id: 'native-read-proxy-abort', port: proxyPort, method: 'GET', path: '/api/agent/performance/native', abort: true, early: true },
+        { id: 'native-read-direct-complete', port: apiPort, method: 'GET', path: '/api/agent/performance/native', abort: false, early: false },
+        { id: 'native-read-proxy-complete', port: proxyPort, method: 'GET', path: '/api/agent/performance/native', abort: false, early: false },
+        { id: 'native-start-direct-abort', port: apiPort, method: 'POST', path: '/api/agent/performance/native/collection', abort: true, early: true },
+        { id: 'native-start-proxy-abort', port: proxyPort, method: 'POST', path: '/api/agent/performance/native/collection', abort: true, early: true },
+        { id: 'native-start-direct-complete', port: apiPort, method: 'POST', path: '/api/agent/performance/native/collection', abort: false, early: false },
+        { id: 'native-start-proxy-complete', port: proxyPort, method: 'POST', path: '/api/agent/performance/native/collection', abort: false, early: false },
+        { id: 'native-stop-direct-abort', port: apiPort, method: 'POST', path: '/api/agent/performance/native/stop', abort: true, early: true },
+        { id: 'native-stop-proxy-abort', port: proxyPort, method: 'POST', path: '/api/agent/performance/native/stop', abort: true, early: true },
+        { id: 'native-stop-direct-complete', port: apiPort, method: 'POST', path: '/api/agent/performance/native/stop', abort: false, early: false },
+        { id: 'native-stop-proxy-complete', port: proxyPort, method: 'POST', path: '/api/agent/performance/native/stop', abort: false, early: false },
+        { id: 'native-read-query-unowned', port: proxyPort, method: 'GET', path: '/api/agent/performance/native?unexpected=1', abort: true, early: false },
+        { id: 'native-stop-wrong-method', port: proxyPort, method: 'GET', path: '/api/agent/performance/native/stop', abort: true, early: false },
+        { id: 'native-stop-prefix-unowned', port: proxyPort, method: 'POST', path: '/api/agent/performance/native/stop-extra', abort: true, early: false },
+        // END BATCH3 native proxy actual HTTP controls
       ];
       for (const sample of cases) {
         let received!: () => void; let settle!: () => void;
@@ -273,8 +361,10 @@ function profileProxyHttpControls() {
           assert.equal(row.finished, !sample.early, `${sample.id}: normal completion is independent`);
         } finally { controller.abort(); clientRequest?.destroy(); }
       }
-      assert.equal(rows.size, 6); assert.equal(timers.size, 0); assert.equal(responses.size, 0);
-      console.log('[profile-proxy actual HTTP controls] PASS 6/6');
+      // BEGIN BATCH3 native proxy actual count
+      assert.equal(rows.size, cases.length); assert.equal(cases.length, 21); assert.equal(timers.size, 0); assert.equal(responses.size, 0);
+      console.log(`[profile-proxy actual HTTP controls] PASS ${cases.length}/${cases.length}`);
+      // END BATCH3 native proxy actual count
     },
     dispose() { for (const timer of timers) clearTimeout(timer); timers.clear(); for (const response of responses) response.destroy(); responses.clear(); },
   };
@@ -289,6 +379,9 @@ async function main(): Promise<void> {
   assert.equal(E2E_STATE_DIR, stateOwner.stateDir, 'config and Vite imports consume one bootstrap root');
   assert.equal(readE2eRunState({ ...stateOwner.environment }).stateDir, E2E_STATE_DIR, 'worker-like consumer shares that root');
   profileProxyListenerControls();
+  // BEGIN BATCH3 native proxy default coverage
+  const nativeProxy = runNativePerformanceProxySelftest(); assert.equal(nativeProxy.allPassed, true, JSON.stringify(nativeProxy));
+  // END BATCH3 native proxy default coverage
   const originalCaches = cacheNames();
   assert.equal(resolveE2eRuntime({}).mode, 'source');
   assert.equal(resolveE2eRuntime({ X4_FORGE_E2E_MODE: 'source' }).command, 'node node_modules/tsx/dist/cli.mjs server.ts');
@@ -449,7 +542,13 @@ async function main(): Promise<void> {
   }
 }
 
-main()
+// BEGIN BATCH3 native proxy CLI selection
+const run = process.argv.includes('--native-performance-selftest') ? async () => {
+  const result = runNativePerformanceProxySelftest(); process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  if (!result.allPassed) throw new Error('native proxy cancellation controls failed');
+} : main;
+// END BATCH3 native proxy CLI selection
+run()
   .then(() => console.log('[e2e-vite-server selftest] PASS'))
   .catch(error => {
     console.error(`[e2e-vite-server selftest] FAIL: ${error instanceof Error ? error.message : String(error)}`);

@@ -61,15 +61,27 @@ export const PROCESS_TELEMETRY_ROUTE_OWNERS: Readonly<Record<string, string>> = 
   'POST /api/agent/performance/profile': 'performance.profile',
 });
 
+/** Native telemetry has separately reviewed scopes; backend-only tuples stay unchanged. */
+export const NATIVE_PROCESS_TELEMETRY_ROUTE_TUPLES: Readonly<Record<string, Readonly<{
+  owner: string;
+  agentScopes: readonly AgentKeyScope[];
+}>>> = Object.freeze({
+  'GET /api/agent/performance/native': Object.freeze({ owner: 'performance.native.read', agentScopes: Object.freeze(['read', 'write', 'deploy'] as const) }),
+  'POST /api/agent/performance/native/collection': Object.freeze({ owner: 'performance.native.collect', agentScopes: Object.freeze(['write', 'deploy'] as const) }),
+  'POST /api/agent/performance/native/stop': Object.freeze({ owner: 'performance.native.stop', agentScopes: Object.freeze(['write', 'deploy'] as const) }),
+});
+
 export function processTelemetryRouteAuthorityErrors(routeKey: string, entry: unknown): string[] {
   if (!isRecord(entry) || entry.resourceClass !== 'process-telemetry') return [];
   const errors: string[] = [];
-  const owner = Object.hasOwn(PROCESS_TELEMETRY_ROUTE_OWNERS, routeKey) ? PROCESS_TELEMETRY_ROUTE_OWNERS[routeKey] : undefined;
+  const nativeTuple = Object.hasOwn(NATIVE_PROCESS_TELEMETRY_ROUTE_TUPLES, routeKey) ? NATIVE_PROCESS_TELEMETRY_ROUTE_TUPLES[routeKey] : undefined;
+  const owner = nativeTuple?.owner ?? (Object.hasOwn(PROCESS_TELEMETRY_ROUTE_OWNERS, routeKey) ? PROCESS_TELEMETRY_ROUTE_OWNERS[routeKey] : undefined);
+  const scopes = nativeTuple?.agentScopes ?? AGENT_ROUTE_SCOPES;
   if (!owner || entry.owner !== owner) errors.push('process-telemetry requires an exact reviewed performance method, route and owner');
   if (entry.disposition !== 'canonical-capability' || entry.registrations !== 1) errors.push('process-telemetry requires one canonical registration');
   if (entry.workspaceMode !== 'none') errors.push('process-telemetry requires workspaceMode none');
-  if (!Array.isArray(entry.agentScopes) || entry.agentScopes.join(',') !== AGENT_ROUTE_SCOPES.join(',')) {
-    errors.push('process-telemetry requires the read/write/deploy preset');
+  if (!Array.isArray(entry.agentScopes) || entry.agentScopes.join(',') !== scopes.join(',')) {
+    errors.push(`process-telemetry requires the ${scopes.join('/')} preset`);
   }
   return errors;
 }
@@ -418,6 +430,42 @@ export function runAgentRouteAuthoritySelftest(): {
   ok('process_telemetry_rejects_dynamic_registrar', agentRouteAuthorityManifestErrors(dynamicTelemetry).some(error => error.includes('exact literal route entries')));
   dynamicTelemetry.dynamicRoutes = { 'GET /api/agent/performance': readTelemetry };
   ok('process_telemetry_rejects_literal_key_inside_dynamic_routes', agentRouteAuthorityManifestErrors(dynamicTelemetry).some(error => error.includes('exact literal route entries')));
+
+  // Native tuples are literal fixtures, independent of the production route-owner registry.
+  const nativeTelemetryTuples: Array<[string, string, AgentRouteAuthorityEntry]> = [
+    ['GET', '/api/agent/performance/native', { ...telemetryEntry('performance.native.read'), agentScopes: ['read', 'write', 'deploy'] }],
+    ['POST', '/api/agent/performance/native/collection', { ...telemetryEntry('performance.native.collect'), agentScopes: ['write', 'deploy'] }],
+    ['POST', '/api/agent/performance/native/stop', { ...telemetryEntry('performance.native.stop'), agentScopes: ['write', 'deploy'] }],
+  ];
+  for (const [method, route, entry] of nativeTelemetryTuples) {
+    const routeKey = `${method} ${route}`;
+    let nativeAuthority: AgentRouteAuthority | undefined;
+    try { nativeAuthority = createAgentRouteAuthority(fixtureManifest({ [routeKey]: entry })); } catch { /* The positive must record RED rather than abort the remaining cases. */ }
+    ok(`native_process_telemetry_exact_tuple_${entry.owner}`,
+      processTelemetryRouteAuthorityErrors(routeKey, entry).length === 0 && !!nativeAuthority &&
+      ['read', 'write', 'deploy', 'all'].every(scope => nativeAuthority!.allows(scope as AgentKeyScope, method, route) === agentScopeCovers(entry.agentScopes, scope)));
+    const nativeNegatives: Array<[string, string, AgentRouteAuthorityEntry]> = [
+      ['wrong_method', `${method === 'GET' ? 'POST' : 'GET'} ${route}`, entry],
+      ['prefix_child', `${routeKey}/extra`, entry],
+      ['wrong_owner', routeKey, { ...entry, owner: 'performance.read' }],
+      ['wrong_scope', routeKey, { ...entry, agentScopes: entry.owner === 'performance.native.read' ? ['write', 'deploy'] : ['read', 'write', 'deploy'] }],
+      ['noncanonical', routeKey, { ...entry, disposition: 'legacy-agent-api' }],
+      ['workspace', routeKey, { ...entry, workspaceMode: 'optional' }],
+      ['duplicate_registration', routeKey, { ...entry, registrations: 2 }],
+      ['master_scope', routeKey, { ...entry, agentScopes: ['all'] }],
+    ];
+    for (const [name, key, invalidEntry] of nativeNegatives) {
+      let rejected = false;
+      try { createAgentRouteAuthority(fixtureManifest({ [key]: invalidEntry })); } catch { rejected = true; }
+      ok(`native_process_telemetry_rejects_${entry.owner}_${name}`, rejected);
+    }
+    for (const key of ['GET route @ fixture.ts', routeKey]) {
+      const dynamic = fixtureManifest({ 'GET /api/agent/workspace': fixtureEntry(['read', 'write', 'deploy']) });
+      dynamic.dynamicRoutes[key] = entry;
+      ok(`native_process_telemetry_rejects_dynamic_${entry.owner}_${key}`,
+        agentRouteAuthorityManifestErrors(dynamic).some(error => error.includes('exact literal route entries')));
+    }
+  }
 
   return { pass: checks.every(check => check.pass), checks };
 }

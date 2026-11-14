@@ -204,6 +204,113 @@ check('pasted log hashes supplied UTF-8 bytes in its own scope', () => {
   assert.equal(subject.sourceIdentityProvenance, 'caller-supplied-log');
 });
 
+// BEGIN native109 Batch3 body/query contracts. Existing cases above remain unchanged.
+const nativeReadRoute = '/api/agent/performance/native';
+const nativeStartRoute = '/api/agent/performance/native/collection';
+const nativeStopRoute = '/api/agent/performance/native/stop';
+const nativeIdentity = { expectedBackendInstanceId: 'backend_contract_native_01', expectedNativeInstanceId: 'native_contract_native_01' };
+const nativeStopBody = { ...nativeIdentity, captureId: 'capture_contract_native_01' };
+check('native collection declares only the flat public identity and bounded options', () => assert.deepEqual([...(contracts.PROJECT_API_FIELDS[nativeStartRoute] ?? [])].sort(),
+  ['expectedBackendInstanceId', 'expectedNativeInstanceId', 'durationMs', 'intervalMs', 'eventLoopDelay'].sort()));
+check('native stop declares only the exact public identity and capture target', () => assert.deepEqual([...(contracts.PROJECT_API_FIELDS[nativeStopRoute] ?? [])].sort(),
+  ['expectedBackendInstanceId', 'expectedNativeInstanceId', 'captureId'].sort()));
+check('native collection accepts required IDs, optional defaults and exact option boundaries', () => {
+  for (const body of [nativeIdentity, { ...nativeIdentity, durationMs: 1000, intervalMs: 1000, eventLoopDelay: false },
+    { ...nativeIdentity, durationMs: 900000, intervalMs: 60000, eventLoopDelay: true },
+    { expectedBackendInstanceId: 'A_0-z___', expectedNativeInstanceId: 'Z_'.repeat(64), durationMs: 60000, intervalMs: 2000 }]) {
+    contracts.validateProjectApiBody(nativeStartRoute, body);
+  }
+  api.validateProjectApiQuery(nativeStartRoute, {});
+});
+check('native stop accepts exact targets at both public ID length boundaries', () => {
+  for (const body of [nativeStopBody,
+    { expectedBackendInstanceId: 'A_0-z___', expectedNativeInstanceId: 'a'.repeat(128), captureId: 'A_0-z___' },
+    { expectedBackendInstanceId: 'z'.repeat(128), expectedNativeInstanceId: 'A_0-z___', captureId: 'Z_'.repeat(64) }]) {
+    contracts.validateProjectApiBody(nativeStopRoute, body);
+  }
+  api.validateProjectApiQuery(nativeStopRoute, {});
+});
+check('native collection requires both expected identities without substituting capture or options', () => {
+  for (const body of [{}, { expectedBackendInstanceId: nativeIdentity.expectedBackendInstanceId },
+    { expectedNativeInstanceId: nativeIdentity.expectedNativeInstanceId }, { durationMs: 1000 },
+    { captureId: nativeStopBody.captureId }, { options: nativeIdentity }]) {
+    assert.throws(() => contracts.validateProjectApiBody(nativeStartRoute, body), ValidationInputError);
+  }
+});
+check('native stop requires both expected identities and an exact captureId', () => {
+  for (const key of ['expectedBackendInstanceId', 'expectedNativeInstanceId', 'captureId'] as const) {
+    const body: Record<string, unknown> = { ...nativeStopBody }; delete body[key];
+    assert.throws(() => contracts.validateProjectApiBody(nativeStopRoute, body), ValidationInputError);
+  }
+  assert.throws(() => contracts.validateProjectApiBody(nativeStopRoute, {}), ValidationInputError);
+});
+for (const route of [nativeStartRoute, nativeStopRoute]) check(`native controls require a JSON object ${route}`, () => {
+  for (const body of [undefined, null, [], 'native', 42, false]) assert.throws(() => contracts.validateProjectApiBody(route, body), ValidationInputError);
+});
+for (const [route, body, keys] of [
+  [nativeStartRoute, nativeIdentity, ['expectedBackendInstanceId', 'expectedNativeInstanceId']],
+  [nativeStopRoute, nativeStopBody, ['expectedBackendInstanceId', 'expectedNativeInstanceId', 'captureId']],
+] as const) for (const key of keys) check(`native ID grammar and 8..128 bound are exact ${route} ${key}`, () => {
+  for (const value of [undefined, null, false, 42, [], {}, '', 'short_7', 'a'.repeat(129), 'identity space',
+    'identity/slash', 'identity.dot', 'identity\r\ninjected', 'identity\0nul', 'identity_\u00e9']) {
+    assert.throws(() => contracts.validateProjectApiBody(route, { ...body, [key]: value }), ValidationInputError);
+  }
+});
+for (const [route, body] of [[nativeStartRoute, nativeIdentity], [nativeStopRoute, nativeStopBody]] as const) {
+  check(`native controls reject caller owner, PID, workspace and authority substitution ${route}`, () => {
+    for (const extra of ['owner', 'actor', '__actor', 'keyId', 'pid', 'expectedHostPid', 'workspace', 'workspaceId', 'clientId',
+      'path', 'fromPath', 'sourceRoot', 'captureOwned', 'ownership', 'nonce', 'epoch', 'capabilityConstraint', 'allowedEffects', 'signal', 'controlId', 'unknown']) {
+      assert.throws(() => contracts.validateProjectApiBody(route, { ...body, [extra]: 'caller_supplied_value' }), ValidationInputError);
+    }
+  });
+}
+check('native collection accepts flat options only and never a caller capture selector', () => {
+  for (const body of [{ ...nativeIdentity, options: { durationMs: 1000 } }, { ...nativeIdentity, collection: { intervalMs: 1000 } },
+    { ...nativeIdentity, captureId: nativeStopBody.captureId }, { ...nativeIdentity, enabled: true }, { ...nativeIdentity, backendInstanceId: 'backend_alias_01' },
+    { ...nativeIdentity, nativeInstanceId: 'native_alias_01' }]) {
+    assert.throws(() => contracts.validateProjectApiBody(nativeStartRoute, body), ValidationInputError);
+  }
+});
+check('native stop rejects every collection option and nested control envelope', () => {
+  for (const extra of ['durationMs', 'intervalMs', 'eventLoopDelay', 'options', 'collection', 'reason']) {
+    assert.throws(() => contracts.validateProjectApiBody(nativeStopRoute, { ...nativeStopBody, [extra]: true }), ValidationInputError);
+  }
+});
+check('native duration uses protocol integer range 1000..900000 without coercion', () => {
+  for (const durationMs of [0, 999, 900001, 1000.5, -1, '1000', null, true, Infinity, NaN]) {
+    assert.throws(() => contracts.validateProjectApiBody(nativeStartRoute, { ...nativeIdentity, durationMs }), ValidationInputError);
+  }
+});
+check('native interval uses protocol integer range 1000..60000 without coercion', () => {
+  for (const intervalMs of [0, 999, 60001, 1000.5, -1, '1000', null, true, Infinity, NaN]) {
+    assert.throws(() => contracts.validateProjectApiBody(nativeStartRoute, { ...nativeIdentity, intervalMs }), ValidationInputError);
+  }
+});
+check('native eventLoopDelay accepts only a JSON boolean', () => {
+  for (const eventLoopDelay of [0, 1, 'true', 'false', null, [], {}]) {
+    assert.throws(() => contracts.validateProjectApiBody(nativeStartRoute, { ...nativeIdentity, eventLoopDelay }), ValidationInputError);
+  }
+});
+for (const route of [nativeReadRoute, nativeStartRoute, nativeStopRoute]) check(`native exact route rejects all query control and selector fields ${route}`, () => {
+  api.validateProjectApiQuery(route, {});
+  for (const key of ['expectedBackendInstanceId', 'expectedNativeInstanceId', 'captureId', 'durationMs', 'intervalMs', 'eventLoopDelay',
+    'options', 'owner', 'actor', 'pid', 'workspaceId', 'workspace', 'clientId', 'nonce', 'epoch', 'unknown']) {
+    assert.throws(() => api.validateProjectApiQuery(route, { [key]: 'caller_query_value' }), ValidationInputError);
+  }
+});
+check('native query contracts reject malformed non-object input on all three literal routes', () => {
+  for (const route of [nativeReadRoute, nativeStartRoute, nativeStopRoute]) {
+    for (const query of [null, [], 'native', 42, false]) assert.throws(() => api.validateProjectApiQuery(route, query), ValidationInputError);
+  }
+});
+check('native pre-handler shape failures retain generic ValidationInputError instead of broker ACK codes', () => {
+  for (const route of [nativeStartRoute, nativeStopRoute]) {
+    assert.throws(() => contracts.validateProjectApiBody(route, { ...nativeStopBody, owner: 'caller' }),
+      (error: unknown) => error instanceof ValidationInputError && error.code === 'VALIDATION_INPUT_INVALID');
+  }
+});
+// END native109 Batch3 body/query contracts.
+
 const passed = checks.filter(check => check.pass).length;
 console.log(JSON.stringify({ suite: 'c06b-api-contracts', passed, total: checks.length, allPassed: passed === checks.length, checks }, null, 2));
 if (passed !== checks.length) process.exitCode = 1;

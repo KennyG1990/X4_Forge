@@ -7,6 +7,77 @@ import { types as utilTypes } from 'node:util';
 import { performance as nodePerformance, monitorEventLoopDelay } from 'node:perf_hooks';
 import { createForgePerformanceCollector, isForgePerformanceOperationName, FORGE_CPU_PROFILE_LIMITS, type ForgePerformanceCollector, type ForgePerformanceSnapshot, type ForgePerformanceResourceSample, type ForgeCpuProfileOptions, type ForgeCpuProfileResult, type ForgeCpuProfileReport, type ForgeCpuProfileFunction, type ForgeCpuProfileFailure } from '../lib/forgePerformance';
 import { calculateForgeProcessResourceDelta } from '../../shared/forgePerformanceResources';
+import type { NativeBrokerActor, NativeBrokerFailureCode, NativeBrokerReadRequest, NativeBrokerStartRequest, NativeBrokerStopRequest, NativeBrokerResult, NativeBrokerView, NativeCaptureOwnership, NativePerformanceBroker } from './nativePerformanceBroker';
+
+export type ForgeNativePerformanceOperation = 'read' | 'start' | 'stop';
+export type ForgeNativePerformanceFailureCode = NativeBrokerFailureCode | 'NATIVE_PERFORMANCE_REQUEST_FAILED';
+/** UI consumers must import this model with import type; this module owns Node producers. */
+export interface ForgeNativePerformanceReport {
+  schemaVersion: 'forge.native-performance.report.v1';
+  operation: ForgeNativePerformanceOperation;
+  ok: boolean;
+  code?: ForgeNativePerformanceFailureCode;
+  availability: NativeBrokerView['availability'];
+  unavailableReason: NativeBrokerView['unavailableReason'];
+  ownership: NativeCaptureOwnership;
+  status: Readonly<NativeBrokerView> | null;
+}
+export interface ForgeNativePerformanceResponse { httpStatus: number; body: ForgeNativePerformanceReport }
+export interface ForgeNativePerformanceAdapter {
+  read(request: NativeBrokerReadRequest): Promise<ForgeNativePerformanceResponse>;
+  start(request: NativeBrokerStartRequest): Promise<ForgeNativePerformanceResponse>;
+  stop(request: NativeBrokerStopRequest): Promise<ForgeNativePerformanceResponse>;
+}
+const NATIVE_PERFORMANCE_HTTP_STATUS: Readonly<Record<ForgeNativePerformanceFailureCode, number>> = Object.freeze({
+  NATIVE_PERFORMANCE_INPUT_INVALID: 400,
+  NATIVE_PERFORMANCE_BUSY: 409, NATIVE_PERFORMANCE_CAPTURE_MISMATCH: 409, NATIVE_PERFORMANCE_IDENTITY_MISMATCH: 409,
+  NATIVE_PERFORMANCE_PREEMPTED: 409, NATIVE_PERFORMANCE_CLEANUP_UNCONFIRMED: 409,
+  NATIVE_PERFORMANCE_DISPOSED: 503, NATIVE_PERFORMANCE_UNAVAILABLE: 503, NATIVE_PERFORMANCE_RETIRED: 503,
+  NATIVE_PERFORMANCE_AUTHORITY_REVOKED: 403, NATIVE_PERFORMANCE_NOT_OWNER: 403,
+  NATIVE_PERFORMANCE_CONTROL_TIMEOUT: 408, NATIVE_PERFORMANCE_ABORTED: 408,
+  NATIVE_PERFORMANCE_PROTOCOL_ERROR: 502, NATIVE_PERFORMANCE_READER_LIMIT: 429,
+  NATIVE_PERFORMANCE_START_FAILED: 500, NATIVE_PERFORMANCE_REQUEST_FAILED: 500,
+});
+export function forgeNativePerformanceHttpStatus(code?: ForgeNativePerformanceFailureCode): number {
+  return code === undefined ? 200 : Object.hasOwn(NATIVE_PERFORMANCE_HTTP_STATUS, code) ? NATIVE_PERFORMANCE_HTTP_STATUS[code] : 500;
+}
+const nativeActorCurrent = (actor: NativeBrokerActor) => { try { return actor.isCurrent() === true; } catch { return false; } };
+/** One public model for HTTP/MCP/UI; transport delivery remains distinct from execution ACK. */
+export function createForgeNativePerformanceAdapter(options: { broker?: NativePerformanceBroker }): ForgeNativePerformanceAdapter {
+  const broker = options.broker;
+  const withoutStatus = (operation: ForgeNativePerformanceOperation, code?: ForgeNativePerformanceFailureCode,
+    reason: NativeBrokerView['unavailableReason'] = 'transport-absent'): ForgeNativePerformanceResponse => ({
+    httpStatus: forgeNativePerformanceHttpStatus(code),
+    body: { schemaVersion: 'forge.native-performance.report.v1', operation, ok: code === undefined, ...(code ? { code } : {}),
+      availability: 'unavailable', unavailableReason: reason, ownership: 'none', status: null },
+  });
+  const dispatch = async (operation: ForgeNativePerformanceOperation, request: NativeBrokerReadRequest | NativeBrokerStartRequest | NativeBrokerStopRequest): Promise<ForgeNativePerformanceResponse> => {
+    try {
+      if (!nativeActorCurrent(request.actor)) return withoutStatus(operation, 'NATIVE_PERFORMANCE_AUTHORITY_REVOKED', 'authority-revoked');
+      const discovery = broker?.status();
+      if (!broker || (discovery?.availability === 'unavailable' && discovery.unavailableReason === 'transport-absent')) {
+        return withoutStatus(operation, operation === 'read' ? undefined : 'NATIVE_PERFORMANCE_UNAVAILABLE');
+      }
+      const result: NativeBrokerResult = operation === 'read' ? await broker.read(request)
+        : operation === 'start' ? await broker.start(request as NativeBrokerStartRequest) : await broker.stop(request as NativeBrokerStopRequest);
+      const ownership = broker.ownership(request.actor);
+      if (!nativeActorCurrent(request.actor) || (result.ok === false && result.code === 'NATIVE_PERFORMANCE_AUTHORITY_REVOKED')) {
+        return withoutStatus(operation, 'NATIVE_PERFORMANCE_AUTHORITY_REVOKED', 'authority-revoked');
+      }
+      const code = result.ok === false ? result.code : undefined;
+      if (code !== undefined && !Object.hasOwn(NATIVE_PERFORMANCE_HTTP_STATUS, code)) {
+        return withoutStatus(operation, 'NATIVE_PERFORMANCE_REQUEST_FAILED', 'contract-invalid');
+      }
+      const canReadSnapshot = operation === 'read' && code !== 'NATIVE_PERFORMANCE_NOT_OWNER';
+      const status = canReadSnapshot ? result.status : Object.freeze({ ...result.status, snapshot: null, snapshotAgeMs: null });
+      return { httpStatus: forgeNativePerformanceHttpStatus(code),
+        body: { schemaVersion: 'forge.native-performance.report.v1', operation, ok: result.ok, ...(code ? { code } : {}),
+          availability: status.availability, unavailableReason: status.unavailableReason, ownership, status } };
+    } catch { return withoutStatus(operation, 'NATIVE_PERFORMANCE_REQUEST_FAILED', 'contract-invalid'); }
+  };
+  return Object.freeze({ read: (request: NativeBrokerReadRequest) => dispatch('read', request),
+    start: (request: NativeBrokerStartRequest) => dispatch('start', request), stop: (request: NativeBrokerStopRequest) => dispatch('stop', request) });
+}
 
 const PERFORMANCE_HTTP_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'CONNECT', 'TRACE']);
 function hasControlOrQueryFragment(value: string): boolean {

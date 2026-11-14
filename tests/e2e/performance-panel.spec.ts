@@ -9,6 +9,11 @@ import type { ForgePerformanceReport } from '../../src/components/PerformancePan
 import type { ForgeCpuProfileReport } from '../../src/lib/forgePerformance';
 import type { ModWorkspace } from '../../src/types';
 import { ephemeralWorkspaceHeaders, readServerWorkspaceEnvelope, seedServerWorkspace } from './ephemeral';
+// BEGIN BATCH3 mounted native imports
+import type { ForgeNativePerformanceOperation, ForgeNativePerformanceReport } from '../../src/server/forgePerformance';
+import { createForgePerformanceCollector } from '../../shared/forgePerformance';
+import { isNativePerformanceSnapshot, isNativePerformanceStatus } from '../../shared/nativePerformanceProtocol';
+// END BATCH3 mounted native imports
 
 test.use({ extraHTTPHeaders: { Authorization: `Bearer ${E2E_TOKEN}` }, viewport: { width: 1440, height: 1000 } });
 test.setTimeout(120_000);
@@ -103,7 +108,8 @@ async function renderedRuntime(page: Page, evidence: unknown[]) {
   evidence.push({ renderedRuntime: { mode: E2E_RUNTIME.mode, asset: src, servedUrl: url.href, sha256: sha(bytes) } });
 }
 
-async function withWorkspace(page: Page, request: APIRequestContext, info: TestInfo, name: string, run: (fixture: Fixture) => Promise<void>) {
+async function withWorkspace(page: Page, request: APIRequestContext, info: TestInfo, name: string, run: (fixture: Fixture) => Promise<void>,
+  beforeBoot?: (fixture: Fixture) => Promise<void | (() => Promise<void>)>) {
   const workspace = buildTemplateWorkspace('welcome'); workspace.name = name;
   await seedServerWorkspace(workspace);
   const before = await readServerWorkspaceEnvelope();
@@ -123,7 +129,13 @@ async function withWorkspace(page: Page, request: APIRequestContext, info: TestI
   page.on('request', onRequest);
   page.on('response', onResponse);
   let primaryFailed = false;
+  // BEGIN BATCH3 mounted native before-boot owner
+  let beforeBootCleanup: void | (() => Promise<void>) = undefined;
+  // END BATCH3 mounted native before-boot owner
   try {
+    // BEGIN BATCH3 mounted native before-boot setup
+    beforeBootCleanup = await beforeBoot?.({ headers, evidence, counts });
+    // END BATCH3 mounted native before-boot setup
     await boot(page, before.workspace);
     await run({ headers, evidence, counts });
   } catch (error) {
@@ -131,7 +143,11 @@ async function withWorkspace(page: Page, request: APIRequestContext, info: TestI
   } finally {
     page.off('request', onRequest);
     page.off('response', onResponse);
-    await cleanupPreservingPrimary(primaryFailed, evidence, [async () => {
+    await cleanupPreservingPrimary(primaryFailed, evidence, [
+    // BEGIN BATCH3 mounted native before-boot cleanup
+    ...(beforeBootCleanup ? [beforeBootCleanup] : []),
+    // END BATCH3 mounted native before-boot cleanup
+    async () => {
       const after = await readServerWorkspaceEnvelope();
       evidence.push({ finalWorkspace: { workspaceHash: after.workspaceHash, snapshotHash: after.snapshotHash,
         canonicalBytesSha256: sha(stableStringify(after.workspace)) }, pageRequestCounts: counts });
@@ -298,6 +314,458 @@ test('Performance opens read-only with default-off producers and one mounted pol
     fixture.evidence.push({ unmountedResources: await performanceResources(page), noAutomaticPerformanceControlPost: true });
   });
 });
+// BEGIN BATCH3 mounted native fixture owners
+const nativeReadPath = `${reportPath}/native`;
+const nativeStartPath = `${nativeReadPath}/collection`;
+const nativeStopPath = `${nativeReadPath}/stop`;
+const nativePaths = [nativeReadPath, nativeStartPath, nativeStopPath] as const;
+type NativeReply = { body: unknown; status: number };
+type NativeReceipt = { operation: ForgeNativePerformanceOperation; sequence: number; workspaceId: string | undefined; body: unknown; request: Request };
+interface NativeReplyPlan {
+  reply: NativeReply; receipt?: NativeReceipt; completed: boolean; release(): void; finished: Promise<void>; finish(): void;
+}
+interface NativeUiFixture {
+  backendInstanceId: string;
+  receipts: NativeReceipt[];
+  heldReads: NativeReplyPlan[];
+  setRead(body: unknown, status?: number): void;
+  freezeReads(): void;
+  queue(operation: ForgeNativePerformanceOperation, body: unknown, status?: number): NativeReplyPlan;
+  ownCleanup(cleanup: () => Promise<void>): void;
+  dispose(): Promise<void>;
+}
+type NativeFixture = Fixture & { native: NativeUiFixture };
+const nativeClone = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+function nativeFixtureRead(backendInstanceId: string, options: {
+  instanceId?: string; captureId?: string | null; active?: boolean; ownership?: ForgeNativePerformanceReport['ownership']; rssBytes?: number | null;
+} = {}): ForgeNativePerformanceReport {
+  const instanceId = options.instanceId ?? 'native_browser_instance_A', active = options.active ?? false;
+  const captureId = options.captureId ?? (active ? 'native_browser_capture_A' : null);
+  const collector = createForgePerformanceCollector({ component: 'extension-host', scope: 'shared-process', pid: 4242,
+    instanceId, enabled: true, now: () => 0, wallNow: () => 1000 });
+  let snapshot: ForgePerformanceReport['backend'];
+  try {
+    collector.recordResource({ rssBytes: options.rssBytes === undefined ? 0 : options.rssBytes, cpuOneCorePercent: 0, cpuHostPercent: null });
+    snapshot = nativeClone(collector.snapshot()); snapshot.enabled = active;
+  } finally { collector.dispose(); }
+  const native: NonNullable<NonNullable<ForgeNativePerformanceReport['status']>['native']> = {
+    schemaVersion: 'forge.native-performance.status.v1', producer: { component: 'extension-host', scope: 'shared-process', pid: 4242, instanceId },
+    disposed: false, collectionActive: active, captureId, collectionStartedAtUnixMs: captureId ? 1000 : null,
+    collectionExpiresAtUnixMs: active ? 61_000 : null, intervalMs: 2000, eventLoopDelayMonitoring: false,
+    resourceSamples: 1, resourceErrors: 0, throttledSamples: 0, counterResets: 0, sampleOverheadMs: 0,
+    lastResourceError: null, collectionStopDelayMs: active ? null : 0, collectionCleanupUnconfirmed: false,
+    ownedTimerCount: active ? 2 : 0, failedTimerCount: 0, lastStopReason: active || !captureId ? null : 'requested',
+  };
+  expect(isNativePerformanceSnapshot(snapshot), 'injected native browser snapshot satisfies actual shared protocol').toBe(true);
+  expect(isNativePerformanceStatus(native), 'injected native browser status satisfies actual shared protocol').toBe(true);
+  return { schemaVersion: 'forge.native-performance.report.v1', operation: 'read', ok: true, availability: 'ready', unavailableReason: null,
+    ownership: options.ownership ?? (captureId ? 'operator' : 'none'), status: { schemaVersion: 'forge.native-performance.broker.v1', backendInstanceId,
+      availability: 'ready', unavailableReason: null, native, pending: null, cancellation: 'none', cleanupUnconfirmed: false,
+      orphaned: false, captureOwned: active, readSubscribers: 0, snapshot, snapshotAgeMs: 25, lastRefreshOutcome: 'ok',
+      rejectedMessages: 0, lateResults: 0, droppedSnapshots: 0, timerCleanupUnconfirmed: false } };
+}
+function nativeFixtureAck(read: ForgeNativePerformanceReport, operation: 'start' | 'stop'): ForgeNativePerformanceReport {
+  const result = nativeClone(read); result.operation = operation;
+  result.status = { ...result.status!, snapshot: null, snapshotAgeMs: null }; return result;
+}
+function nativeFixtureBusy(read: ForgeNativePerformanceReport, operation: 'start' | 'stop'): ForgeNativePerformanceReport {
+  const result = nativeClone(read); result.ok = false; result.code = 'NATIVE_PERFORMANCE_BUSY'; result.status = { ...result.status!, pending: operation }; return result;
+}
+function nativeAbsent(): ForgeNativePerformanceReport {
+  return { schemaVersion: 'forge.native-performance.report.v1', operation: 'read', ok: true, availability: 'unavailable',
+    unavailableReason: 'transport-absent', ownership: 'none', status: null };
+}
+async function nativeResources(page: Page): Promise<PollResource[]> {
+  return page.evaluate(() => (window as StudioWindow).__X4_CONTINUOUS_POLLING__!.snapshot().resources
+    .filter(resource => resource.resourceKey.startsWith('forge-native-performance:')));
+}
+async function nativePlanReceived(plan: NativeReplyPlan): Promise<NativeReceipt> {
+  await expect.poll(() => !!plan.receipt, { timeout: 10_000 }).toBe(true); return plan.receipt!;
+}
+async function installNativeUiFixture(page: Page, backendInstanceId: string, evidence: unknown[]): Promise<NativeUiFixture> {
+  let read: NativeReply = { body: nativeFixtureRead(backendInstanceId), status: 200 }, freezeReads = false, disposing = false;
+  const receipts: NativeReceipt[] = [], heldReads: NativeReplyPlan[] = [], errors: unknown[] = [];
+  const additionalCleanup: Array<() => Promise<void>> = [];
+  const queue = new Map<ForgeNativePerformanceOperation, NativeReplyPlan[]>();
+  const plans: NativeReplyPlan[] = [], owners: Array<{ route: Route; settled: boolean; work?: Promise<void> }> = [];
+  const alreadySettled = (error: unknown) => /already handled|aborted|Target.*closed|Request.*intercept|Invalid InterceptionId/i.test(String(error));
+  const plan = (reply: NativeReply) => {
+    let release!: () => void, finish!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const item: NativeReplyPlan = { reply: nativeClone(reply), completed: false, release,
+      finished: new Promise<void>(resolve => { finish = resolve; }), finish: () => { item.completed = true; finish(); } };
+    plans.push(item); return { item, gate };
+  };
+  const gates = new Map<NativeReplyPlan, Promise<void>>();
+  const enqueue = (operation: ForgeNativePerformanceOperation, body: unknown, status = 200) => {
+    const created = plan({ body, status }); gates.set(created.item, created.gate);
+    const pending = queue.get(operation) ?? []; pending.push(created.item); queue.set(operation, pending); return created.item;
+  };
+  const abort = async (owner: typeof owners[number]) => {
+    if (owner.settled) return;
+    try { await owner.route.abort('failed'); owner.settled = true; }
+    catch (error) { if (alreadySettled(error)) owner.settled = true; else errors.push(error); }
+  };
+  const handler = (route: Route) => {
+    const owner: typeof owners[number] = { route, settled: false }; owners.push(owner);
+    owner.work = (async () => {
+      let selected: NativeReplyPlan | undefined;
+      try {
+        if (disposing) { await abort(owner); return; }
+        const request = route.request(), pathname = new URL(request.url()).pathname;
+        const operation: ForgeNativePerformanceOperation = pathname === nativeReadPath ? 'read' : pathname === nativeStartPath ? 'start' : 'stop';
+        expect(request.method()).toBe(operation === 'read' ? 'GET' : 'POST');
+        const receipt: NativeReceipt = { operation, sequence: receipts.length + 1, workspaceId: request.headers()['x-workspace-id'],
+          body: operation === 'read' ? null : request.postDataJSON(), request };
+        receipts.push(receipt);
+        selected = queue.get(operation)?.shift();
+        if (!selected && operation === 'read' && freezeReads) {
+          const created = plan(read); selected = created.item; gates.set(selected, created.gate); heldReads.push(selected);
+        }
+        if (!selected && operation !== 'read') throw new Error(`Unexpected injected native ${operation}; no explicit fixture response was queued.`);
+        if (operation !== 'read') {
+          // Default browser-fixture reads reflect the admitted control. Explicitly
+          // queued pre-control reads below can still model network overtaking it.
+          read = { body: nativeFixtureBusy(read.body as ForgeNativePerformanceReport, operation), status: 409 };
+        }
+        if (selected) { selected.receipt = receipt; await gates.get(selected); }
+        if (disposing || owner.settled) { await abort(owner); return; }
+        const reply = selected?.reply ?? read;
+        try { await route.fulfill({ status: reply.status, contentType: 'application/json', body: JSON.stringify(reply.body) }); owner.settled = true; }
+        catch (error) { if (!alreadySettled(error)) throw error; owner.settled = true; }
+      } catch (error) { errors.push(error); await abort(owner); }
+      finally { selected?.finish(); }
+    })();
+    return owner.work;
+  };
+  for (const pathname of nativePaths) await page.route(`**${pathname}`, handler);
+  return { backendInstanceId, receipts, heldReads, setRead: (body, status = 200) => { read = { body: nativeClone(body), status }; },
+    freezeReads: () => { freezeReads = true; }, queue: enqueue, ownCleanup: cleanup => { additionalCleanup.push(cleanup); },
+    dispose: async () => {
+      disposing = true;
+      for (const owner of owners) await abort(owner);
+      for (const item of plans) item.release();
+      await Promise.all(owners.map(owner => owner.work));
+      for (const item of plans) item.finish();
+      if (owners.some(owner => !owner.settled)) throw new Error('Injected native route ownership did not settle; handlers remain for page teardown.');
+      for (const pathname of nativePaths) await page.unroute(`**${pathname}`, handler);
+      for (const cleanup of additionalCleanup) { try { await cleanup(); } catch (error) { errors.push(error); } }
+      evidence.push({ nativeMountedFixture: { scope: 'injected public DTOs; not native IPC, installed sampling or game proof',
+        receipts: receipts.map(({ operation, sequence, workspaceId, body }) => ({ operation, sequence, workspaceId, body })),
+        lateFinallyLimit: 'Page.route delays before headers; late response/abort fencing does not force a delayed body-phase Promise.finally after a replacement request.',
+        cleanupErrors: errors.map(error => String(error).slice(0, 2000)), noAdditionalServerOrRuntime: true } });
+      if (errors.length) throw errors[0];
+    } };
+}
+async function withNativeWorkspace(page: Page, request: APIRequestContext, info: TestInfo, name: string,
+  run: (fixture: NativeFixture) => Promise<void>, configure?: (native: NativeUiFixture) => void) {
+  let native: NativeUiFixture;
+  await withWorkspace(page, request, info, name, async fixture => {
+    await expect(page.getByTestId('forge-native-performance-status')).toBeVisible(); await settlePaint(page);
+    await run({ ...fixture, native });
+    expect(fixture.counts.collections, 'native mounted controls must not fall back to backend collection').toBe(0);
+    expect(fixture.counts.profiles, 'native mounted controls must not start backend profiling').toBe(0);
+    await renderedRuntime(page, fixture.evidence);
+    await page.screenshot({ path: info.outputPath('native-performance.png'), fullPage: true });
+  }, async fixture => {
+    const backend = await readReport(request, fixture.headers);
+    expect(typeof backend.backend.producer.instanceId).toBe('string');
+    native = await installNativeUiFixture(page, backend.backend.producer.instanceId!, fixture.evidence);
+    try { configure?.(native); }
+    catch (error) { await cleanupPreservingPrimary(true, fixture.evidence, [() => native.dispose()]); throw error; }
+    return async () => {
+      await cleanupPreservingPrimary(false, fixture.evidence, [async () => {
+        if (!page.isClosed() && await page.getByTestId('forge-performance-panel').isVisible()) await page.getByTestId('diagnostics-scope-scripts').click();
+      }, () => native.dispose()]);
+    };
+  });
+}
+// END BATCH3 mounted native fixture owners
+
+// BEGIN BATCH3 mounted native behavior cases
+async function releaseNativeRead(native: NativeUiFixture, matches: (body: ForgeNativePerformanceReport) => boolean, issuedAfter = -Infinity) {
+  let selected: NativeReplyPlan | undefined;
+  await expect.poll(() => {
+    selected = [...native.heldReads].reverse().find(plan => !!plan.receipt && !plan.completed && !plan.receipt.request.failure()
+      && plan.receipt.request.timing().startTime >= issuedAfter
+      && matches(plan.reply.body as ForgeNativePerformanceReport));
+    return !!selected;
+  }, { timeout: 10_000 }).toBe(true);
+  selected!.release(); await selected!.finished; return selected!;
+}
+
+test('Native performance opens read-only and separates exact control ACKs from fresh resource reads', async ({ page, request }, info) => {
+  await withNativeWorkspace(page, request, info, 'Native Controls', async fixture => {
+    const panel = page.getByTestId('forge-native-performance'), native = fixture.native;
+    await expect(panel).toContainText('shared process'); await expect(panel).toContainText('other extensions');
+    await expect(panel.getByRole('region', { name: 'Shared native extension host', exact: true })).toContainText('0 MiB');
+    await expect(panel).toContainText('Unknown');
+    await expect.poll(async () => (await nativeResources(page)).map(row => row.subscribers)).toEqual([1]);
+    expect(native.receipts.filter(row => row.operation !== 'read')).toHaveLength(0);
+    await page.getByLabel('Native performance collection duration seconds', { exact: true }).fill('5');
+    await page.getByLabel('Native performance resource interval seconds', { exact: true }).fill('1');
+    const active = nativeFixtureRead(native.backendInstanceId, { active: true });
+    const start = native.queue('start', nativeFixtureAck(active, 'start'));
+    await panel.getByRole('button', { name: 'Start native collection', exact: true }).click();
+    const started = await nativePlanReceived(start);
+    expect(started.body).toEqual({ expectedBackendInstanceId: native.backendInstanceId, expectedNativeInstanceId: 'native_browser_instance_A',
+      durationMs: 5000, intervalMs: 1000, eventLoopDelay: false });
+    await expect(panel).toContainText('Starting native collection'); await expect(panel.getByRole('button', { name: 'Start native collection', exact: true })).toBeDisabled();
+    native.freezeReads(); native.setRead(active); start.release(); await start.finished;
+    await expect(panel).toContainText('Control acknowledgement only');
+    await expect(panel.getByRole('region', { name: 'Shared native extension host', exact: true })).toHaveCount(0);
+    await releaseNativeRead(native, value => value.status?.native?.collectionActive === true);
+    await expect(panel.getByRole('region', { name: 'Shared native extension host', exact: true })).toBeVisible();
+    await expect(panel).toContainText('native_browser_capture_A');
+    const stopped = nativeFixtureRead(native.backendInstanceId, { captureId: 'native_browser_capture_A', active: false });
+    const stop = native.queue('stop', nativeFixtureAck(stopped, 'stop'));
+    await panel.getByRole('button', { name: 'Stop this native capture', exact: true }).click();
+    const target = await nativePlanReceived(stop);
+    expect(target.body).toEqual({ expectedBackendInstanceId: native.backendInstanceId, expectedNativeInstanceId: 'native_browser_instance_A', captureId: 'native_browser_capture_A' });
+    await expect(panel).toContainText('Stopping native collection');
+    native.setRead(stopped); stop.release(); await stop.finished;
+    await expect(panel).toContainText('Native cleanup for capture native_browser_capture_A was acknowledged');
+    await releaseNativeRead(native, value => value.status?.native?.collectionActive === false && value.status.native.captureId === 'native_browser_capture_A');
+    await expect(panel).toContainText('Native collection: inactive');
+    fixture.evidence.push({ nativeControls: { start: started.body, stop: target.body,
+      startAckSnapshot: (start.reply.body as ForgeNativePerformanceReport).status!.snapshot,
+      stopAckSnapshot: (stop.reply.body as ForgeNativePerformanceReport).status!.snapshot, nativeResourceProof: 'injected browser DTO only' } });
+    const posts = native.receipts.filter(row => row.operation !== 'read').length;
+    await page.getByTestId('diagnostics-scope-scripts').click();
+    await expect.poll(async () => (await nativeResources(page)).length).toBe(0);
+    await page.waitForTimeout(2250);
+    expect(native.receipts.filter(row => row.operation !== 'read')).toHaveLength(posts);
+    await page.getByTestId('diagnostics-scope-performance').click();
+    await releaseNativeRead(native, value => value.status?.native?.collectionActive === false);
+    await expect(page.getByTestId('forge-native-performance')).toContainText('Native collection: inactive');
+  });
+});
+
+test('Native performance renders unavailable shared ownership cleanup and denied malformed packets honestly', async ({ page, request }, info) => {
+  await withNativeWorkspace(page, request, info, 'Native Packet Guard', async fixture => {
+    const native = fixture.native, panel = page.getByTestId('forge-native-performance');
+    await expect(panel).toContainText('Native coverage unavailable'); await expect(panel).toContainText('Unknown');
+    await expect(panel).not.toContainText('0 MiB');
+    await expect(panel.getByRole('button', { name: 'Start native collection', exact: true })).toBeDisabled();
+    const other = nativeFixtureRead(native.backendInstanceId, { active: true, ownership: 'other' });
+    native.setRead(other); await panel.getByRole('button', { name: 'Refresh native performance report', exact: true }).click();
+    await expect(panel).toContainText('Another owner'); await expect(panel.getByRole('button', { name: 'Stop this native capture', exact: true })).toHaveCount(0);
+    const unknown = nativeClone(other); unknown.ownership = 'none'; unknown.availability = 'retired'; unknown.unavailableReason = 'retired';
+    Object.assign(unknown.status!, { availability: 'retired', unavailableReason: 'retired', cancellation: 'unknown', cleanupUnconfirmed: true, captureOwned: false, lastRefreshOutcome: 'retired' });
+    native.setRead(unknown); await panel.getByRole('button', { name: 'Refresh native performance report', exact: true }).click();
+    await expect(panel).toContainText('Native collection: active'); await expect(panel).toContainText('Cleanup is unconfirmed');
+    await expect(panel).toContainText('cancellation outcome is unknown'); await expect(panel.getByRole('button', { name: 'Start native collection', exact: true })).toBeDisabled();
+    for (const code of ['NATIVE_PERFORMANCE_AUTHORITY_REVOKED', 'NATIVE_PERFORMANCE_NOT_OWNER'] as const) {
+      const denied: ForgeNativePerformanceReport = { ...nativeAbsent(), ok: false, code, unavailableReason: 'authority-revoked' };
+      native.setRead(denied, 403); await panel.getByRole('button', { name: 'Refresh native performance report', exact: true }).click();
+      await expect(panel).toContainText('Native metrics: Unknown'); await expect(panel.getByRole('region', { name: 'Shared native extension host', exact: true })).toHaveCount(0);
+      await expect(panel.getByRole('button', { name: 'Start native collection', exact: true })).toBeDisabled();
+      const leaked = nativeFixtureRead(native.backendInstanceId, { active: true, captureId: `denied_packet_${code}` }); leaked.ok = false; leaked.code = code;
+      native.setRead(leaked, 403); await panel.getByRole('button', { name: 'Refresh native performance report', exact: true }).click();
+      await expect(panel).toContainText('unsupported report'); await expect(panel).not.toContainText(`denied_packet_${code}`);
+    }
+    const malformed = nativeFixtureRead(native.backendInstanceId, { active: true, captureId: 'malformed_must_not_render' });
+    Object.assign(malformed.status!.native!.producer, { component: 'backend', scope: 'owned-process' });
+    native.setRead(malformed); await panel.getByRole('button', { name: 'Refresh native performance report', exact: true }).click();
+    await expect(panel).toContainText('unsupported report'); await expect(panel).not.toContainText('malformed_must_not_render');
+    await expect(panel.getByRole('button', { name: 'Start native collection', exact: true })).toBeDisabled();
+    expect(native.receipts.filter(row => row.operation !== 'read')).toHaveLength(0);
+  }, native => native.setRead(nativeAbsent()));
+});
+
+test('Native refresh and producer replacement fence a held old read without automatic controls', async ({ page, request }, info) => {
+  await withNativeWorkspace(page, request, info, 'Native Old Read', async fixture => {
+    const native = fixture.native, panel = page.getByTestId('forge-native-performance');
+    const oldResources = await nativeResources(page);
+    const old = native.queue('read', nativeFixtureRead(native.backendInstanceId, { active: true, captureId: 'old_read_capture_must_not_render', rssBytes: 1024 * 1024 }));
+    await panel.getByRole('button', { name: 'Refresh native performance report', exact: true }).click();
+    const stale = await nativePlanReceived(old);
+    native.setRead(nativeFixtureRead(native.backendInstanceId, { instanceId: 'native_browser_instance_B', active: true, captureId: 'current_read_capture_B', rssBytes: 2 * 1024 * 1024 }));
+    await panel.getByRole('button', { name: 'Refresh native performance report', exact: true }).click();
+    await expect(panel).toContainText('current_read_capture_B'); await expect(panel).toContainText('2 MiB');
+    await expect.poll(() => stale.request.failure()?.errorText ?? '').toBe('net::ERR_ABORTED');
+    old.release(); await old.finished; await settlePaint(page);
+    await expect(panel).not.toContainText('old_read_capture_must_not_render'); await expect(panel).toContainText('current_read_capture_B');
+    const currentResources = await nativeResources(page);
+    expect(currentResources.every(row => oldResources.every(before => before.resourceKey !== row.resourceKey))).toBe(true);
+    expect(native.receipts.filter(row => row.operation !== 'read')).toHaveLength(0);
+    fixture.evidence.push({ nativeOldRead: { browserAbort: stale.request.failure()?.errorText, oldResources, currentResources, noControlPosts: true } });
+  });
+});
+
+test('A late native start ACK cannot overwrite a newer capture or retarget its explicit stop', async ({ page, request }, info) => {
+  await withNativeWorkspace(page, request, info, 'Native Capture Replacement', async fixture => {
+    const native = fixture.native, panel = page.getByTestId('forge-native-performance');
+    const oldCapture = nativeFixtureRead(native.backendInstanceId, { active: true, captureId: 'old_start_capture_A' });
+    const old = native.queue('start', nativeFixtureAck(oldCapture, 'start'));
+    await panel.getByRole('button', { name: 'Start native collection', exact: true }).click(); await nativePlanReceived(old);
+    const replacement = nativeFixtureRead(native.backendInstanceId, { active: true, captureId: 'replacement_capture_B', rssBytes: 3 * 1024 * 1024 });
+    native.setRead(replacement);
+    await expect(panel).toContainText('replacement_capture_B'); await expect(panel).toContainText('Starting native collection');
+    old.release(); await old.finished;
+    await expect(panel).toContainText('capture changed while the acknowledgement was pending');
+    await expect(panel).toContainText('replacement_capture_B'); await expect(panel).not.toContainText('old_start_capture_A');
+    await expect(panel.getByRole('button', { name: 'Cancel native request', exact: true })).toHaveCount(0);
+    const stopped = nativeFixtureRead(native.backendInstanceId, { captureId: 'replacement_capture_B', active: false });
+    const stop = native.queue('stop', nativeFixtureAck(stopped, 'stop'));
+    await panel.getByRole('button', { name: 'Stop this native capture', exact: true }).click();
+    expect((await nativePlanReceived(stop)).body).toEqual({ expectedBackendInstanceId: native.backendInstanceId,
+      expectedNativeInstanceId: 'native_browser_instance_A', captureId: 'replacement_capture_B' });
+    native.freezeReads(); native.setRead(stopped); stop.release(); await stop.finished;
+    await expect(panel).toContainText('Native cleanup for capture replacement_capture_B was acknowledged');
+    expect(native.receipts.filter(row => row.operation === 'stop')).toHaveLength(1);
+  });
+});
+
+test('Native producer replacement fences an old pending control before a new request owns the panel', async ({ page, request }, info) => {
+  await withNativeWorkspace(page, request, info, 'Native Producer Replacement', async fixture => {
+    const native = fixture.native, panel = page.getByTestId('forge-native-performance');
+    const activeA = nativeFixtureRead(native.backendInstanceId, { active: true, captureId: 'replaced_native_capture_A' });
+    const old = native.queue('start', nativeFixtureAck(activeA, 'start'));
+    await panel.getByRole('button', { name: 'Start native collection', exact: true }).click(); const before = await nativePlanReceived(old);
+    const idleB = nativeFixtureRead(native.backendInstanceId, { instanceId: 'native_browser_instance_B' });
+    native.setRead(idleB); await expect(panel).toContainText('native_browser_instance_B');
+    await expect.poll(() => before.request.failure()?.errorText ?? '').toBe('net::ERR_ABORTED');
+    await expect(panel.getByRole('button', { name: 'Start native collection', exact: true })).toBeEnabled();
+    const activeB = nativeFixtureRead(native.backendInstanceId, { instanceId: 'native_browser_instance_B', active: true, captureId: 'new_native_capture_B' });
+    const current = native.queue('start', nativeFixtureAck(activeB, 'start'));
+    await panel.getByRole('button', { name: 'Start native collection', exact: true }).click(); const after = await nativePlanReceived(current);
+    old.release(); await old.finished; await settlePaint(page);
+    await expect(panel).toContainText('Starting native collection'); await expect(panel.getByRole('button', { name: 'Cancel native request', exact: true })).toBeVisible();
+    await expect(panel).not.toContainText('replaced_native_capture_A');
+    expect(after.body).toMatchObject({ expectedNativeInstanceId: 'native_browser_instance_B' });
+    native.freezeReads(); native.setRead(activeB); current.release(); await current.finished;
+    await expect(panel).toContainText('new_native_capture_B'); await expect(panel.getByRole('button', { name: 'Cancel native request', exact: true })).toHaveCount(0);
+    expect(native.receipts.filter(row => row.operation === 'stop')).toHaveLength(0);
+    fixture.evidence.push({ nativeReplacement: { old: before.body, current: after.body, lateRouteReleaseDidNotClearCurrentRequest: true,
+      finallyScope: 'Observable canceled-response fencing; no artificial delayed body-phase finally was injected.' } });
+  });
+});
+
+test('Backend identity replacement fences a pending native control and requires new exact backend IDs', async ({ page, request }, info) => {
+  await withNativeWorkspace(page, request, info, 'Native Backend Replacement', async fixture => {
+    const native = fixture.native, panel = page.getByTestId('forge-native-performance');
+    const oldActive = nativeFixtureRead(native.backendInstanceId, { active: true, captureId: 'old_backend_capture_A' });
+    const old = native.queue('start', nativeFixtureAck(oldActive, 'start'));
+    await panel.getByRole('button', { name: 'Start native collection', exact: true }).click(); const before = await nativePlanReceived(old);
+    const replacementBackend = 'backend_browser_replacement_B';
+    const backend = nativeClone(await readReport(request, fixture.headers)); backend.backend.producer.instanceId = replacementBackend;
+    const backendHandler = async (route: Route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(backend) });
+    await page.route(`**${reportPath}`, backendHandler); native.ownCleanup(() => page.unroute(`**${reportPath}`, backendHandler));
+    const replacementIdle = nativeFixtureRead(replacementBackend); native.setRead(replacementIdle);
+    await expect(page.getByRole('region', { name: 'Owned backend', exact: true })).toContainText(replacementBackend);
+    await expect(panel).toContainText(replacementBackend); await expect.poll(() => before.request.failure()?.errorText ?? '').toBe('net::ERR_ABORTED');
+    await expect(panel.getByRole('button', { name: 'Start native collection', exact: true })).toBeEnabled();
+    const replacementActive = nativeFixtureRead(replacementBackend, { active: true, captureId: 'current_backend_capture_B' });
+    const current = native.queue('start', nativeFixtureAck(replacementActive, 'start'));
+    await panel.getByRole('button', { name: 'Start native collection', exact: true }).click(); const after = await nativePlanReceived(current);
+    expect(after.body).toMatchObject({ expectedBackendInstanceId: replacementBackend });
+    old.release(); await old.finished; await settlePaint(page); await expect(panel).toContainText('Starting native collection');
+    await expect(panel).not.toContainText('old_backend_capture_A');
+    native.freezeReads(); native.setRead(replacementActive); current.release(); await current.finished;
+    await expect(panel).toContainText('current_backend_capture_B');
+    fixture.evidence.push({ backendReplacement: { scope: 'injected backend/native public identities, not a real process restart', old: before.body, current: after.body } });
+  });
+});
+
+test('Native pending requests cannot cross workspace A to B to A selection revisions', async ({ page, request }, info) => {
+  await withNativeWorkspace(page, request, info, 'Native Authority A', async fixture => {
+    const native = fixture.native, panel = page.getByTestId('forge-native-performance');
+    const selection = () => page.evaluate(() => ({ id: (window as StudioWindow).__X4_WORKSPACE_CONTEXT__!.getWorkspaceId(), revision: (window as StudioWindow).__X4_WORKSPACE_CONTEXT__!.getSelectionRevision() }));
+    const before = await selection(), idle = nativeFixtureRead(native.backendInstanceId);
+    const oldA = native.queue('start', nativeFixtureAck(nativeFixtureRead(native.backendInstanceId, { active: true, captureId: 'obsolete_workspace_A_capture' }), 'start'));
+    await panel.getByRole('button', { name: 'Start native collection', exact: true }).click(); const receiptA = await nativePlanReceived(oldA);
+    native.setRead(idle); await page.getByTestId('workspace-switcher').selectOption('__new');
+    await page.getByTestId('dialog-input').fill('Native Authority B'); await page.getByTestId('dialog-ok').click();
+    await expect(page.getByTestId('toast')).toContainText('Created independent workspace');
+    await expect.poll(async () => (await selection()).id).not.toBe(before.id);
+    const between = await selection(); expect(between.revision).toBeGreaterThan(before.revision);
+    await expect.poll(() => receiptA.request.failure()?.errorText ?? '').toBe('net::ERR_ABORTED');
+    await expect(panel.getByRole('button', { name: 'Start native collection', exact: true })).toBeEnabled();
+    const oldB = native.queue('start', nativeFixtureAck(nativeFixtureRead(native.backendInstanceId, { active: true, captureId: 'obsolete_workspace_B_capture' }), 'start'));
+    await panel.getByRole('button', { name: 'Start native collection', exact: true }).click(); const receiptB = await nativePlanReceived(oldB);
+    native.setRead(idle); await page.getByTestId('workspace-switcher').focus();
+    await expect(page.getByTestId('workspace-switcher').locator(`option[value="workspace:${before.id}"]`)).toHaveCount(1);
+    await page.getByTestId('workspace-switcher').selectOption(`workspace:${before.id}`); await page.getByTestId('dialog-ok').click();
+    await expect.poll(async () => (await selection()).id).toBe(before.id);
+    const after = await selection(); expect(after.revision).toBeGreaterThan(between.revision);
+    await expect.poll(() => receiptB.request.failure()?.errorText ?? '').toBe('net::ERR_ABORTED');
+    await expect(panel.getByRole('button', { name: 'Start native collection', exact: true })).toBeEnabled();
+    const finalRead = nativeFixtureRead(native.backendInstanceId, { active: true, captureId: 'current_workspace_A_capture' });
+    const current = native.queue('start', nativeFixtureAck(finalRead, 'start'));
+    await panel.getByRole('button', { name: 'Start native collection', exact: true }).click(); const receiptCurrent = await nativePlanReceived(current);
+    oldA.release(); oldB.release(); await Promise.all([oldA.finished, oldB.finished]); await settlePaint(page);
+    await expect(panel).toContainText('Starting native collection'); await expect(panel).not.toContainText('obsolete_workspace_A_capture'); await expect(panel).not.toContainText('obsolete_workspace_B_capture');
+    expect([receiptA.workspaceId, receiptB.workspaceId, receiptCurrent.workspaceId]).toEqual([before.id, between.id, before.id]);
+    native.freezeReads(); native.setRead(finalRead); current.release(); await current.finished;
+    await expect(panel).toContainText('current_workspace_A_capture'); expect(native.receipts.filter(row => row.operation === 'stop')).toHaveLength(0);
+    fixture.evidence.push({ nativeWorkspaceAuthority: { before, between, after, noGlobalStop: true, lateFinallyScope: 'HTTP abort/late-response fencing only' } });
+  });
+});
+
+test('Native cancellation and unmount never globally stop an acknowledged capture', async ({ page, request }, info) => {
+  await withNativeWorkspace(page, request, info, 'Native Cancel And Unmount', async fixture => {
+    const native = fixture.native, panel = page.getByTestId('forge-native-performance'), idle = nativeFixtureRead(native.backendInstanceId);
+    const cancelled = native.queue('start', nativeFixtureAck(nativeFixtureRead(native.backendInstanceId, { active: true, captureId: 'cancelled_capture_not_acknowledged' }), 'start'));
+    await panel.getByRole('button', { name: 'Start native collection', exact: true }).click(); const before = await nativePlanReceived(cancelled);
+    await panel.getByRole('button', { name: 'Cancel native request', exact: true }).click();
+    await expect.poll(() => before.request.failure()?.errorText ?? '').toBe('net::ERR_ABORTED');
+    native.setRead(idle); await expect(panel.getByRole('button', { name: 'Start native collection', exact: true })).toBeEnabled();
+    const active = nativeFixtureRead(native.backendInstanceId, { active: true, captureId: 'acknowledged_capture_keeps_lease' });
+    const current = native.queue('start', nativeFixtureAck(active, 'start'));
+    await panel.getByRole('button', { name: 'Start native collection', exact: true }).click(); await nativePlanReceived(current);
+    cancelled.release(); await cancelled.finished; await settlePaint(page); await expect(panel).toContainText('Starting native collection');
+    await expect(panel).not.toContainText('cancelled_capture_not_acknowledged');
+    native.freezeReads(); native.setRead(active); current.release(); await current.finished;
+    await expect(panel).toContainText('acknowledged_capture_keeps_lease');
+    const controls = native.receipts.filter(row => row.operation !== 'read').length;
+    await page.getByTestId('diagnostics-scope-scripts').click(); await expect.poll(async () => (await nativeResources(page)).length).toBe(0);
+    const reads = native.receipts.filter(row => row.operation === 'read').length; await page.waitForTimeout(2250);
+    expect(native.receipts.filter(row => row.operation === 'read')).toHaveLength(reads);
+    expect(native.receipts.filter(row => row.operation !== 'read')).toHaveLength(controls); expect(native.receipts.filter(row => row.operation === 'stop')).toHaveLength(0);
+    await page.getByTestId('diagnostics-scope-performance').click();
+    await releaseNativeRead(native, value => value.status?.native?.captureId === 'acknowledged_capture_keeps_lease');
+    await expect(page.getByTestId('forge-native-performance')).toContainText('Native collection: active');
+    fixture.evidence.push({ cancellationAndUnmount: { acknowledgedCaptureNotStopped: true, stops: 0, automaticControlsAfterUnmount: 0 } });
+  });
+});
+
+for (const operation of ['start', 'stop'] as const) {
+  test(`Native ${operation} ACK supersedes a pre-control read before a causally fresh read is delivered`, async ({ page, request }, info) => {
+    await withNativeWorkspace(page, request, info, `Native ${operation} Causal Read`, async fixture => {
+      const native = fixture.native, panel = page.getByTestId('forge-native-performance');
+      const before = nativeFixtureRead(native.backendInstanceId, { active: operation === 'stop', captureId: operation === 'stop' ? 'native_causal_capture_A' : null });
+      const after = nativeFixtureRead(native.backendInstanceId, { active: operation === 'start', captureId: 'native_causal_capture_A' });
+      const control = native.queue(operation, nativeFixtureAck(after, operation));
+      await panel.getByRole('button', { name: operation === 'start' ? 'Start native collection' : 'Stop this native capture', exact: true }).click();
+      const issued = await nativePlanReceived(control);
+      const preControl = nativeFixtureRead(native.backendInstanceId, { active: operation === 'stop', captureId: operation === 'stop' ? 'native_causal_capture_A' : null, rssBytes: 7 * 1024 * 1024 });
+      const oldRead = native.queue('read', preControl); const preControlReceipt = await nativePlanReceived(oldRead);
+      expect(preControlReceipt.request.timing().startTime, '[fixture ordering] the distinguished read must be issued after the control click').toBeGreaterThanOrEqual(issued.request.timing().startTime);
+      native.freezeReads(); native.setRead(after); oldRead.release(); await oldRead.finished;
+      await expect(panel.getByRole('region', { name: 'Shared native extension host', exact: true })).toContainText('7 MiB');
+      await expect(panel).toContainText(operation === 'start' ? 'Starting native collection' : 'Stopping native collection');
+      const delivered = page.waitForResponse(response => response.request() === issued.request); void delivered.catch(() => undefined);
+      control.release(); await control.finished; const ackResponse = await delivered; await ackResponse.finished();
+      const ackTiming = issued.request.timing(); expect(ackTiming.responseEnd).toBeGreaterThanOrEqual(0);
+      const ackBodyFinishedAt = ackTiming.startTime + ackTiming.responseEnd;
+      await expect(panel.getByRole('button', { name: 'Cancel native request', exact: true })).toHaveCount(0);
+      // A packet received during the control can precede execution at the host.
+      // Arrival/readVersion alone must not make that packet causally newer than ACK.
+      await expect(panel).toContainText(`Native collection: ${operation === 'start' ? 'active' : 'inactive'}`);
+      await expect(panel.getByRole('button', { name: 'Start native collection', exact: true })).toBeDisabled();
+      await expect(panel.getByRole('region', { name: 'Shared native extension host', exact: true })).toHaveCount(0);
+      const currentRead = await releaseNativeRead(native, value => value.status?.native?.collectionActive === (operation === 'start'), ackBodyFinishedAt);
+      await expect(panel.getByRole('region', { name: 'Shared native extension host', exact: true })).toBeVisible();
+      if (operation === 'stop') await expect(panel.getByRole('button', { name: 'Start native collection', exact: true })).toBeEnabled();
+      fixture.evidence.push({ causalNativeAck: { operation, issued: issued.body, preControlRead: { active: before.status!.native!.collectionActive,
+        captureId: before.status!.native!.captureId, distinguishedByRssBytes: 7 * 1024 * 1024 }, ack: control.reply.body,
+        freshReadDeliveriesHeldUntilAfterAckStateAssertions: true, ackBodyFinishedAt, freshReadStartedAt: currentRead.receipt!.request.timing().startTime,
+        scope: 'controlled browser public-response ordering; not host execution proof' } });
+    }, native => native.setRead(nativeFixtureRead(native.backendInstanceId, { active: operation === 'stop', captureId: operation === 'stop' ? 'native_causal_capture_A' : null })));
+  });
+}
+// END BATCH3 mounted native behavior cases
 
 test('Performance controls use real bounded collection and profiles with input, busy and cooldown refusals', async ({ page, request }, info) => {
   await withWorkspace(page, request, info, 'Performance Explicit Controls', async fixture => {
