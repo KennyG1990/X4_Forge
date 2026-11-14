@@ -1,3 +1,10 @@
+import leaseFs from 'node:fs';
+import leasePath from 'node:path';
+import leaseCrypto from 'node:crypto';
+import leaseChildProcess from 'node:child_process';
+import { createRequire as leaseCreateRequire } from 'node:module';
+import { fileURLToPath as leaseFileURLToPath, pathToFileURL as leasePathToFileURL } from 'node:url';
+import { readE2eRunState as leaseReadRunState, isSafeWindowsRuntimeVersion as leaseSafeRuntime } from './e2e-runtime-bootstrap.mjs';
 import { types as nodeUtilTypes } from 'node:util';
 
 import {
@@ -165,6 +172,718 @@ export function createE2eProcessHandleLeaseOwner({ openProcess, retireChild, onF
   }
 
   return Object.freeze({ spawn, snapshot });
+}
+
+export const E2E_PROCESS_HANDLE_ACTOR_ENV = 'X4_FORGE_E2E_HANDLE_ACTOR';
+export const E2E_PROCESS_HANDLE_FAILURE_EXIT_CODE = 86;
+const LEASE_RECORD_LIMIT = 64 * 1024;
+const LEASE_ACTOR_LIMIT = 512;
+const LEASE_FILE_LIMIT = 1543;
+const LEASE_PHASES = new Set(['active', 'exiting', 'sealed', 'failed']);
+const LEASE_ACTORS = new WeakMap();
+const LEASE_REQUIRE = leaseCreateRequire(import.meta.url);
+
+function leaseError(code) {
+  const error = new Error(code);
+  error.code = code;
+  return error;
+}
+function leaseAssert(condition, code = 'e2e-handle-family-invalid') {
+  if (!condition) throw leaseError(code);
+}
+function leaseHash(value) { return leaseCrypto.createHash('sha256').update(value).digest('hex'); }
+function leaseKeys(value, keys) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).sort().join(',') === [...keys].sort().join(',');
+}
+function leaseIdentity(stat) {
+  return { dev: String(stat.dev), ino: String(stat.ino), birthtimeNs: String(stat.birthtimeNs) };
+}
+function leaseSameIdentity(stat, identity) {
+  return Object.entries(leaseIdentity(stat)).every(([key, value]) => value === identity[key]);
+}
+function leaseSamePath(a, b) {
+  return typeof a === 'string' && typeof b === 'string'
+    && leasePath.resolve(a).toLowerCase() === leasePath.resolve(b).toLowerCase();
+}
+function leaseFingerprint(file, io) {
+  const lexical = leasePath.resolve(file);
+  const physical = io.realpathSync.native(lexical);
+  const before = io.lstatSync(physical, { bigint: true });
+  leaseAssert(before.isFile() && !before.isSymbolicLink() && before.size <= 256n * 1024n * 1024n);
+  const fd = io.openSync(physical, 'r');
+  const hash = leaseCrypto.createHash('sha256');
+  try {
+    leaseAssert(leaseSameIdentity(io.fstatSync(fd, { bigint: true }), leaseIdentity(before)));
+    const buffer = Buffer.alloc(65536);
+    let offset = 0;
+    while (true) {
+      const count = io.readSync(fd, buffer, 0, buffer.length, offset);
+      if (!count) break;
+      offset += count;
+      leaseAssert(offset <= Number(before.size));
+      hash.update(buffer.subarray(0, count));
+    }
+    const after = io.fstatSync(fd, { bigint: true });
+    leaseAssert(offset === Number(before.size) && after.size === before.size
+      && after.mtimeNs === before.mtimeNs && leaseSameIdentity(after, leaseIdentity(before)));
+  } finally { io.closeSync(fd); }
+  leaseAssert(leaseSamePath(io.realpathSync.native(lexical), physical));
+  return { lexical, physical, identity: leaseIdentity(before), size: String(before.size), sha256: hash.digest('hex') };
+}
+function leaseVerifyFingerprint(value, io) {
+  leaseAssert(leaseKeys(value, ['lexical', 'physical', 'identity', 'size', 'sha256']));
+  const actual = leaseFingerprint(value.lexical, io);
+  leaseAssert(JSON.stringify(actual) === JSON.stringify(value), 'e2e-handle-family-fingerprint');
+}
+function leaseRolePaths(cwd) {
+  return {
+    cli: leasePath.join(cwd, 'node_modules', '@playwright', 'test', 'cli.js'),
+    loader: leasePath.join(cwd, 'node_modules', 'playwright', 'lib', 'loader', 'loaderProcessEntry.js'),
+    worker: leasePath.join(cwd, 'node_modules', 'playwright', 'lib', 'worker', 'workerProcessEntry.js'),
+  };
+}
+function leaseNative(manifest) {
+  const koffi = LEASE_REQUIRE(manifest.files.koffi.lexical);
+  const kernel = koffi.load('kernel32.dll');
+  const open = kernel.func('__stdcall', 'OpenProcess', 'void *', ['uint32_t', 'int', 'uint32_t']);
+  const getPid = kernel.func('__stdcall', 'GetProcessId', 'uint32_t', ['void *']);
+  const times = kernel.func('__stdcall', 'GetProcessTimes', 'int', ['void *', 'void *', 'void *', 'void *', 'void *']);
+  const getExit = kernel.func('__stdcall', 'GetExitCodeProcess', 'int', ['void *', 'void *']);
+  const current = kernel.func('__stdcall', 'GetCurrentProcess', 'void *', []);
+  const retained = [];
+  const identity = handle => {
+    const pid = getPid(handle);
+    const creation = Buffer.alloc(8), exit = Buffer.alloc(8), kernelTime = Buffer.alloc(8), user = Buffer.alloc(8);
+    leaseAssert(pid > 0 && times(handle, creation, exit, kernelTime, user), 'e2e-handle-family-native-query');
+    return { pid, creationToken: creation.toString('hex') };
+  };
+  return {
+    open(pid) {
+      const handle = open(0x101000, 0, pid);
+      leaseAssert(handle, 'e2e-handle-family-native-open');
+      retained.push(handle); // Keep partial acquisitions too, before any later native query.
+      return handle;
+    },
+    identity,
+    self: () => identity(current()),
+    exitCode(handle) {
+      const value = Buffer.alloc(4);
+      leaseAssert(getExit(handle, value), 'e2e-handle-family-native-query');
+      return value.readUInt32LE(0);
+    },
+  };
+}
+function leaseCatalog({ cwd, preloadPath, runtimePath, extraPreloads, io }) {
+  leaseAssert(Array.isArray(extraPreloads) && extraPreloads.length <= 1);
+  const integration = leasePath.join(cwd, 'scripts', 'e2e-runner-integration.selftest.mjs');
+  leaseAssert(extraPreloads.every(file => leaseSamePath(file, integration)), 'e2e-handle-family-extra-preload');
+  const roles = Object.fromEntries(Object.entries(leaseRolePaths(cwd)).map(([role, file]) => [role, leaseFingerprint(file, io)]));
+  const koffi = leasePath.join(cwd, 'vscode-extension', 'node_modules', 'koffi', 'index.cjs');
+  const koffiRoot = leasePath.dirname(koffi);
+  const nativeFile = LEASE_REQUIRE.resolve(leasePath.join(cwd, 'vscode-extension', 'node_modules', '@koromix', `koffi-win32-${process.arch}`));
+  const files = {
+    preload: leaseFingerprint(preloadPath, io), runtime: leaseFingerprint(runtimePath, io),
+    lifecycle: leaseFingerprint(leaseFileURLToPath(import.meta.url), io), koffi: leaseFingerprint(koffi, io),
+    koffiLoader: leaseFingerprint(leasePath.join(koffiRoot, 'src', 'koffi', 'index.cjs'), io),
+    koffiPackage: leaseFingerprint(leasePath.join(koffiRoot, 'package.json'), io),
+    koffiNativeEntry: leaseFingerprint(nativeFile, io),
+    koffiNative: leaseFingerprint(leasePath.join(leasePath.dirname(nativeFile), `win32_${process.arch}`, 'koffi.node'), io),
+    runner: leaseFingerprint(leasePath.join(cwd, 'node_modules', 'playwright', 'lib', 'runner', 'index.js'), io),
+    core: leaseFingerprint(leasePath.join(cwd, 'node_modules', 'playwright-core', 'lib', 'coreBundle.js'), io),
+  };
+  return { roles, files, extraPreloads: extraPreloads.map(file => leaseFingerprint(file, io)) };
+}
+function leaseImports(manifest) {
+  return [manifest.files.preload, ...manifest.extraPreloads].map(file => leasePathToFileURL(file.lexical).href);
+}
+function leaseParseNodeArgs(args) {
+  leaseAssert(Array.isArray(args) && args.length <= 10000 && args.every(value => typeof value === 'string'));
+  const imports = [];
+  let ambiguous = false;
+  // Reviewed fixed-family prefixes, not a general parser for every Node option.
+  const values = new Set(['--import', '--require', '-r', '--loader', '--experimental-loader', '--conditions', '-C', '--inspect-port', '--input-type', '--experimental-default-type', '--env-file', '--env-file-if-exists', '--openssl-config', '--icu-data-dir', '--title', '--max-old-space-size', '--max_old_space_size', '--stack-size', '--redirect-warnings', '--redirect_warnings']);
+  const unary = new Set(['--version', '-v', '--help', '-h', '--no-warnings', '--trace-warnings', '--enable-source-maps', '--expose-gc', '--inspect', '--inspect-brk', '--inspect-wait', '--use-strict', '--experimental-strip-types', '--no-experimental-strip-types']);
+  for (let i = 1; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === '--') return { entry: args[i + 1] === '-' ? null : args[i + 1], imports, ambiguous, leaf: args[i + 1] === '-' };
+    if (arg === '-' || ['-e', '--eval', '-p', '--print'].includes(arg)
+      || /^(?:--eval|--print)=/u.test(arg) || /^-[ep].+/u.test(arg)) {
+      return { entry: null, imports, ambiguous: false, leaf: true };
+    }
+    if (values.has(arg)) {
+      leaseAssert(i + 1 < args.length);
+      if (arg === '--import') imports.push(args[i + 1]);
+      i += 1;
+    } else if (arg.startsWith('--import=')) imports.push(arg.slice(9));
+    else if (!arg.startsWith('-')) return { entry: arg, imports, ambiguous, leaf: false };
+    else if (!arg.includes('=') && !unary.has(arg)) ambiguous = true;
+  }
+  return { entry: null, imports, ambiguous, leaf: false };
+}
+function leaseRoleForEntry(entry, manifest) {
+  if (typeof entry !== 'string') return null;
+  return Object.keys(manifest.roles).find(role => leaseSamePath(entry, manifest.roles[role].lexical)
+    || leaseSamePath(entry, manifest.roles[role].physical)) ?? null;
+}
+function leaseClassify(options, manifest) {
+  const parsed = leaseParseNodeArgs(options?.args);
+  if (parsed.leaf) return null;
+  // A later canonical occurrence can only REFUSE an ambiguous prefix. It never
+  // positively selects a role or treats eval/stdin/script arguments as entries.
+  if (parsed.ambiguous && options.args.slice(1).some(value => leaseRoleForEntry(value, manifest) !== null)) {
+    throw leaseError('e2e-handle-family-ambiguous-canonical-target');
+  }
+  const role = leaseRoleForEntry(parsed.entry, manifest);
+  if (role) {
+    leaseAssert(leaseSamePath(options.file, manifest.files.runtime.lexical)
+      || leaseSamePath(options.file, manifest.files.runtime.physical), 'e2e-handle-family-runtime-mismatch');
+    leaseAssert(JSON.stringify(parsed.imports) === JSON.stringify(leaseImports(manifest)), 'e2e-handle-family-preload-mismatch');
+  }
+  return role;
+}
+function leaseEnvironment(env, marker) {
+  const result = Object.create(null);
+  for (const [key, value] of Object.entries(env)) {
+    leaseAssert(typeof value === 'string');
+    if (key.toUpperCase() !== E2E_PROCESS_HANDLE_ACTOR_ENV) result[key] = value;
+  }
+  if (marker !== null) result[E2E_PROCESS_HANDLE_ACTOR_ENV] = marker;
+  return Object.freeze(result);
+}
+function leaseForwardArgs(args, marker) {
+  leaseAssert(Array.isArray(args) && args.length > 0 && args[0] && Array.isArray(args[0].envPairs));
+  const envPairs = args[0].envPairs.filter(pair => {
+    leaseAssert(typeof pair === 'string');
+    return pair.slice(0, pair.indexOf('=')).toUpperCase() !== E2E_PROCESS_HANDLE_ACTOR_ENV;
+  });
+  if (marker !== null) envPairs.push(`${E2E_PROCESS_HANDLE_ACTOR_ENV}=${marker}`);
+  return [{ ...args[0], envPairs }, ...args.slice(1)];
+}
+function leaseStore({ env, root, rootIdentity, stateDir, runId, io, readRunState }) {
+  const known = new Map();
+  function check() {
+    const state = readRunState(env);
+    leaseAssert(state.runId === runId && leaseSamePath(state.stateDir, stateDir));
+    const stat = io.lstatSync(root, { bigint: true });
+    leaseAssert(stat.isDirectory() && !stat.isSymbolicLink() && leaseSameIdentity(stat, rootIdentity)
+      && leaseSamePath(io.realpathSync.native(root), root), 'e2e-handle-family-root-changed');
+  }
+  function nameFor(actorId, type) {
+    leaseAssert((actorId === 'cli' || /^child-\d{4}$/u.test(actorId)) && ['intent', 'binding', 'phase'].includes(type));
+    return `${actorId}.${type}.json`;
+  }
+  function fileStat(file) {
+    const stat = io.lstatSync(file, { bigint: true });
+    leaseAssert(stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 1n
+      && stat.size > 0n && stat.size <= BigInt(LEASE_RECORD_LIMIT), 'e2e-handle-family-record-kind');
+    return stat;
+  }
+  function read(name) {
+    check();
+    leaseAssert(name === 'family.json' || /^(?:cli|child-\d{4})\.(?:intent|binding|phase)\.json$/u.test(name));
+    const file = leasePath.join(root, name);
+    const before = fileStat(file);
+    const fd = io.openSync(file, 'r');
+    let text;
+    try {
+      leaseAssert(leaseSameIdentity(io.fstatSync(fd, { bigint: true }), leaseIdentity(before)));
+      const buffer = Buffer.alloc(Number(before.size));
+      leaseAssert(io.readSync(fd, buffer, 0, buffer.length, 0) === buffer.length);
+      text = buffer.toString('utf8');
+      const after = io.fstatSync(fd, { bigint: true });
+      leaseAssert(after.size === before.size && after.mtimeNs === before.mtimeNs && leaseSameIdentity(after, leaseIdentity(before)));
+    } finally { io.closeSync(fd); }
+    leaseAssert(leaseSameIdentity(fileStat(file), leaseIdentity(before)));
+    check();
+    return { value: JSON.parse(text), hash: leaseHash(text) };
+  }
+  function write(name, value, mutable = false) {
+    check();
+    const text = `${JSON.stringify(value)}\n`;
+    leaseAssert(Buffer.byteLength(text) <= LEASE_RECORD_LIMIT, 'e2e-handle-family-record-limit');
+    const target = leasePath.join(root, name);
+    if (io.existsSync(target)) {
+      leaseAssert(mutable && known.has(name) && leaseSameIdentity(fileStat(target), known.get(name)), 'e2e-handle-family-record-replaced');
+    } else leaseAssert(!known.has(name), 'e2e-handle-family-record-missing');
+    const temporary = leasePath.join(root, `${name}.tmp`);
+    leaseAssert(io.readdirSync(root).length < LEASE_FILE_LIMIT, 'e2e-handle-family-file-limit');
+    const fd = io.openSync(temporary, 'wx', 0o600);
+    try {
+      leaseAssert(io.writeSync(fd, text, null, 'utf8') === Buffer.byteLength(text));
+      io.fsyncSync(fd);
+    } finally { io.closeSync(fd); }
+    const publishedIdentity = leaseIdentity(fileStat(temporary));
+    const hash = leaseHash(text);
+    check();
+    // The rename is the final fallible admission operation. Its immutable bytes
+    // may be consumed by another process immediately after publication.
+    known.set(name, publishedIdentity);
+    io.renameSync(temporary, target);
+    return hash;
+  }
+  function inventory() {
+    check();
+    const names = io.readdirSync(root);
+    leaseAssert(names.length <= LEASE_FILE_LIMIT, 'e2e-handle-family-file-limit');
+    let bytes = 0;
+    for (const name of names) { leaseAssert(name === 'family.json' || /^(?:cli|child-\d{4})\.(?:intent|binding|phase)\.json$/u.test(name)); bytes += Number(fileStat(leasePath.join(root, name)).size); }
+    return { names, recordFiles: names.length, recordBytes: bytes };
+  }
+  return { check, read, write, inventory, nameFor };
+}
+function leaseValidIdentity(value) {
+  return leaseKeys(value, ['pid', 'creationToken']) && Number.isSafeInteger(value.pid) && value.pid > 0
+    && typeof value.creationToken === 'string' && /^[a-f0-9]{16}$/u.test(value.creationToken);
+}
+function leaseValidateManifest(manifest) {
+  leaseAssert(leaseKeys(manifest, ['schemaVersion', 'familyId', 'runId', 'stateDir', 'root', 'rootIdentity', 'cwd', 'creator', 'roles', 'files', 'extraPreloads', 'testProfile'])
+    && manifest.schemaVersion === 'forge.e2e-handle-family.v1' && leaseValidIdentity(manifest.creator)
+    && typeof manifest.familyId === 'string' && /^[a-f0-9-]{36}$/u.test(manifest.familyId)
+    && leaseKeys(manifest.roles, ['cli', 'loader', 'worker'])
+    && leaseKeys(manifest.files, ['preload', 'runtime', 'lifecycle', 'koffi', 'koffiLoader', 'koffiPackage', 'koffiNativeEntry', 'koffiNative', 'runner', 'core'])
+    && Array.isArray(manifest.extraPreloads) && manifest.extraPreloads.length <= 1);
+  leaseAssert(manifest.testProfile === null || (manifest.extraPreloads.length === 1
+    && leaseSamePath(manifest.extraPreloads[0].lexical, leasePath.join(manifest.cwd, 'scripts', 'e2e-runner-integration.selftest.mjs'))
+    && leaseKeys(manifest.testProfile, ['handleLimit']) && Number.isSafeInteger(manifest.testProfile.handleLimit)
+    && manifest.testProfile.handleLimit >= 1 && manifest.testProfile.handleLimit <= 4096), 'e2e-handle-family-test-profile');
+}
+function leaseReadActor(store, manifest, actorId) {
+  const intentRecord = store.read(store.nameFor(actorId, 'intent'));
+  const intent = intentRecord.value;
+  leaseAssert(leaseKeys(intent, ['schemaVersion', 'familyId', 'runId', 'actorId', 'parentId', 'parentIdentity', 'role', 'nonce'])
+    && intent.schemaVersion === 'forge.e2e-handle-intent.v1' && intent.familyId === manifest.familyId && intent.runId === manifest.runId
+    && intent.actorId === actorId && leaseValidIdentity(intent.parentIdentity)
+    && typeof intent.nonce === 'string' && /^[a-f0-9]{64}$/u.test(intent.nonce));
+  leaseAssert(actorId === 'cli' ? intent.role === 'cli' && intent.parentId === 'main'
+    : ['loader', 'worker'].includes(intent.role) && intent.parentId === 'cli' && Number(actorId.slice(6)) >= 1 && Number(actorId.slice(6)) <= LEASE_ACTOR_LIMIT);
+  const bindingRecord = store.read(store.nameFor(actorId, 'binding'));
+  const binding = bindingRecord.value;
+  leaseAssert(leaseKeys(binding, ['schemaVersion', 'familyId', 'actorId', 'intentHash', 'disposition', 'identity'])
+    && binding.schemaVersion === 'forge.e2e-handle-binding.v1' && binding.familyId === manifest.familyId && binding.actorId === actorId
+    && binding.intentHash === intentRecord.hash && ['created', 'not-created'].includes(binding.disposition)
+    && (binding.disposition === 'created' ? leaseValidIdentity(binding.identity) : binding.identity === null));
+  return { intent, binding, intentHash: intentRecord.hash, bindingHash: bindingRecord.hash };
+}
+function leaseHealthySnapshot(value) {
+  const counters = ['limit', 'retained', 'inFlight', 'spawnCalls', 'spawnThrows', 'acquisitionAttempts',
+    'noPidCalls', 'idempotentReuses', 'retirementAttempts', 'refusedCalls'];
+  return leaseKeys(value, [...counters, 'failed', 'failureCode', 'retirementFailed', 'reportingFailed'])
+    && counters.every(key => Number.isSafeInteger(value[key]) && value[key] >= 0)
+    && value.limit >= 1 && value.limit <= 4096 && value.retained <= value.limit && value.inFlight === 0
+    && value.failed === false && value.failureCode === null && value.retirementFailed === false && value.reportingFailed === false;
+}
+function leaseReadSealed(store, manifest, actorId, expectedIdentity) {
+  const actor = leaseReadActor(store, manifest, actorId);
+  leaseAssert(actor.binding.disposition === 'created' && JSON.stringify(actor.binding.identity) === JSON.stringify(expectedIdentity));
+  const phase = store.read(store.nameFor(actorId, 'phase')).value;
+  leaseAssert(leaseKeys(phase, ['schemaVersion', 'familyId', 'actorId', 'role', 'identity', 'intentHash', 'bindingHash', 'generation', 'phase', 'failed', 'failureCode', 'owner', 'children'])
+    && phase.schemaVersion === 'forge.e2e-handle-phase.v1' && phase.familyId === manifest.familyId && phase.actorId === actorId
+    && phase.role === actor.intent.role && JSON.stringify(phase.identity) === JSON.stringify(expectedIdentity)
+    && phase.intentHash === actor.intentHash && phase.bindingHash === actor.bindingHash
+    && Number.isSafeInteger(phase.generation) && phase.generation >= 1 && LEASE_PHASES.has(phase.phase)
+    && phase.phase === 'sealed' && phase.failed === false && phase.failureCode === null
+    && leaseHealthySnapshot(phase.owner) && phase.owner.limit === (manifest.testProfile?.handleLimit ?? 4096) && Array.isArray(phase.children)
+    && phase.children.length <= LEASE_ACTOR_LIMIT && new Set(phase.children).size === phase.children.length);
+  return { ...actor, phase };
+}
+
+function leaseMakeContext({ manifest, store, env, native, processObject, childProcessModule, actorId, role, identity, actorRecord = null }) {
+  const originalKill = childProcessModule.ChildProcess.prototype.kill;
+  const originalEmit = processObject.emit;
+  const originalReallyExit = processObject.reallyExit;
+  const originalPrototypeSpawn = childProcessModule.ChildProcess.prototype.spawn;
+  const children = new Map();
+  const nativeHandles = [];
+  const pending = [];
+  let failed = false, failureCode = null, preparedActors = 0, boundActors = 0;
+  let generation = 0, exitDepth = 0, fenced = false, installedSpawn, installedEmit, phaseReady = false;
+  let nextFault = null;
+  let faultObserver = null;
+  function faultConsumed(kind, stage, recordName) {
+    const observer = faultObserver;
+    faultObserver = null; // Sticky persistence refusal still reports only once.
+    if (observer !== null) {
+      try { observer(Object.freeze({ kind, stage, recordName })); }
+      catch { /* A test observer cannot replace the controlled owner failure. */ }
+    }
+  }
+  function publish(name, value, mutable = false) {
+    if (nextFault === 'persist') {
+      faultConsumed('persist', 'publish', name);
+      throw leaseError('e2e-handle-family-test-persist');
+    }
+    return store.write(name, value, mutable);
+  }
+  let owner;
+  function hardExit() {
+    leaseAssert(typeof originalReallyExit === 'function', 'e2e-handle-family-really-exit');
+    Reflect.apply(originalReallyExit, processObject, [E2E_PROCESS_HANDLE_FAILURE_EXIT_CODE]);
+    throw leaseError('e2e-handle-family-native-exit-returned');
+  }
+  function phase(phaseName) {
+    leaseAssert(actorRecord !== null);
+    return {
+      schemaVersion: 'forge.e2e-handle-phase.v1', familyId: manifest.familyId, actorId, role, identity,
+      intentHash: actorRecord.intentHash, bindingHash: actorRecord.bindingHash, generation,
+      phase: phaseName, failed, failureCode, owner: owner.snapshot(), children: [...children.keys()],
+    };
+  }
+  function writePhase(phaseName) {
+    publish(store.nameFor(actorId, 'phase'), phase(phaseName), phaseReady);
+    phaseReady = true;
+  }
+  function fail(code, fatal = role !== 'main') {
+    if (!failed) { failed = true; failureCode = code; }
+    if (actorRecord !== null) {
+      try { writePhase('failed'); } catch { if (role !== 'main') hardExit(); }
+    }
+    if (fatal) hardExit();
+  }
+  function refuse(code) { fail(code); throw leaseError(failureCode); }
+  owner = createE2eProcessHandleLeaseOwner({
+    limit: manifest.testProfile?.handleLimit ?? 4096,
+    openProcess(pid) {
+      const launch = pending[pending.length - 1];
+      leaseAssert(launch, 'e2e-handle-family-missing-launch');
+      const handle = native.open(pid);
+      const retained = { handle, identity: null, actorId: launch.ticket?.actorId ?? null };
+      nativeHandles.push(retained); // Preserve partial acquisition even if querying/publication fails.
+      if (nextFault === 'acquire') {
+        faultConsumed('acquire', 'native-open', null);
+        nextFault = null;
+        throw leaseError('e2e-handle-family-test-acquire');
+      }
+      const actual = native.identity(handle);
+      leaseAssert(leaseValidIdentity(actual) && actual.pid === pid, 'e2e-handle-family-native-identity');
+      retained.identity = actual;
+      if (launch.ticket) {
+        launch.ticket.pendingIdentity = actual;
+        // Fixed trusted Node fork/public-spawn inputs have no fallible work
+        // after this chokepoint. MAIN's public wrapper instead calls admit().
+        if (role !== 'main') publishBinding(launch.ticket, actual);
+      }
+      return handle;
+    },
+    retireChild(child) {
+      const ticket = pending[pending.length - 1]?.ticket;
+      if (ticket) ticket.retirementRequested = true;
+      Reflect.apply(originalKill, child, ['SIGKILL']);
+    },
+    onFailure: code => fail(code),
+  });
+  function publishBinding(ticket, actual) {
+    leaseAssert(ticket.binding === null);
+    const binding = {
+      schemaVersion: 'forge.e2e-handle-binding.v1', familyId: manifest.familyId,
+      actorId: ticket.actorId, intentHash: ticket.intentHash,
+      disposition: actual === null ? 'not-created' : 'created', identity: actual,
+    };
+    ticket.bindingHash = publish(store.nameFor(ticket.actorId, 'binding'), binding);
+    ticket.binding = binding;
+    boundActors += 1;
+  }
+  function prepareProtectedSpawn({ role: childRole, env: childEnv = env }) {
+    if (failed || fenced) return refuse('e2e-handle-family-launch-fenced');
+    if (!(role === 'main' ? childRole === 'cli' && preparedActors === 0
+      : role === 'cli' && ['loader', 'worker'].includes(childRole) && preparedActors < LEASE_ACTOR_LIMIT)) {
+      return refuse('e2e-handle-family-role-graph');
+    }
+    const childId = role === 'main' ? 'cli' : `child-${String(preparedActors + 1).padStart(4, '0')}`;
+    const intent = {
+      schemaVersion: 'forge.e2e-handle-intent.v1', familyId: manifest.familyId, runId: manifest.runId,
+      actorId: childId, parentId: actorId, parentIdentity: identity, role: childRole,
+      nonce: leaseCrypto.randomBytes(32).toString('hex'),
+    };
+    const intentHash = publish(store.nameFor(childId, 'intent'), intent);
+    const marker = JSON.stringify({ version: 1, root: manifest.root, manifestHash: manifest.hash, actorId: childId, intentHash });
+    const ticket = { actorId: childId, role: childRole, intentHash, binding: null, bindingHash: null,
+      used: false, marker, child: null, pendingIdentity: null, rawReturned: false, cancelled: false, retirementRequested: false };
+    children.set(childId, ticket);
+    preparedActors += 1;
+    return Object.freeze({
+      environment: leaseEnvironment(childEnv, marker),
+      execArgv: Object.freeze(leaseImports(manifest).flatMap(file => ['--import', file])),
+      spawn(originalSpawn, child, args) {
+        if (ticket.used || failed || fenced) return refuse('e2e-handle-family-launch-fenced');
+        ticket.used = true;
+        try { leaseAssert(leaseClassify(args[0], manifest) === childRole, 'e2e-handle-family-role-mismatch'); }
+        catch (error) {
+          fail(typeof error?.code === 'string' ? error.code : 'e2e-handle-family-launch-failed');
+          throw error;
+        }
+        ticket.child = child; // Keep exact ownership even if a public wrapper throws later.
+        return protect(originalSpawn, child, args, ticket);
+      },
+      admit() {
+        if (role !== 'main' || failed || ticket.cancelled || !ticket.rawReturned || ticket.binding !== null) {
+          return refuse('e2e-handle-family-admission-order');
+        }
+        try { publishBinding(ticket, ticket.pendingIdentity); }
+        catch (error) { fail('e2e-handle-family-publication-failed'); throw error; }
+      },
+      cancel() {
+        ticket.cancelled = true;
+        fail('e2e-handle-family-launch-cancelled', false);
+        if (ticket.child !== null && !ticket.retirementRequested) {
+          ticket.retirementRequested = true;
+          let hasPid = false;
+          try { hasPid = ticket.child.pid !== undefined && ticket.child.pid !== null; } catch { hasPid = true; }
+          if (hasPid) {
+            try { Reflect.apply(originalKill, ticket.child, ['SIGKILL']); }
+            catch { fail('e2e-handle-family-cancel-retirement-failed', false); }
+          }
+        }
+      },
+    });
+  }
+  function protect(originalSpawn, child, args, ticket) {
+    const forwarded = leaseForwardArgs(args, ticket?.marker ?? null);
+    const launch = { child, ticket };
+    pending.push(launch);
+    try {
+      const result = owner.spawn(originalSpawn, child, forwarded);
+      if (ticket) ticket.rawReturned = true;
+      if (ticket && ticket.binding === null && role !== 'main') {
+        try { publishBinding(ticket, null); }
+        catch { fail('e2e-handle-family-publication-failed'); throw leaseError('e2e-handle-family-publication-failed'); }
+      }
+      return result;
+    } catch (error) {
+      if (ticket && ticket.binding === null && !failed) {
+        let noPid = false;
+        try { noPid = child.pid === undefined || child.pid === null; } catch { /* Unknown identity never becomes not-created. */ }
+        if (noPid && role !== 'main') {
+          try { publishBinding(ticket, null); }
+          catch { fail('e2e-handle-family-publication-failed'); }
+        }
+      }
+      throw error;
+    } finally { pending.pop(); }
+  }
+  function inspectChildren() {
+    for (const retained of nativeHandles) {
+      leaseAssert(retained.identity !== null);
+      const exitCode = native.exitCode(retained.handle);
+      leaseAssert(Number.isInteger(exitCode) && exitCode >= 0 && exitCode !== 259
+        && (retained.actorId === null || exitCode !== E2E_PROCESS_HANDLE_FAILURE_EXIT_CODE), 'e2e-handle-family-child-not-terminal');
+      if (retained.actorId !== null) {
+        const child = leaseReadSealed(store, manifest, retained.actorId, retained.identity);
+        leaseAssert(JSON.stringify(child.intent.parentIdentity) === JSON.stringify(identity));
+      }
+    }
+    for (const ticket of children.values()) {
+      leaseAssert(ticket.binding !== null, 'e2e-handle-family-child-unbound');
+      if (ticket.binding.disposition === 'created') leaseAssert(nativeHandles.some(value => value.actorId === ticket.actorId));
+    }
+  }
+  function hooksCurrent() {
+    return childProcessModule.ChildProcess.prototype.spawn === installedSpawn && processObject.emit === installedEmit;
+  }
+  function install() {
+    leaseAssert(role !== 'main' && typeof originalEmit === 'function' && typeof originalReallyExit === 'function');
+    installedSpawn = function (...args) {
+      if (failed || fenced || !hooksCurrent()) return refuse('e2e-handle-family-launch-fenced');
+      let childRole, ticket;
+      try {
+        childRole = leaseClassify(args[0], manifest);
+        if (childRole !== null) ticket = prepareProtectedSpawn({ role: childRole });
+      } catch (error) {
+        fail(typeof error?.code === 'string' ? error.code : 'e2e-handle-family-spawn-failed');
+        throw error;
+      }
+      if (ticket) return ticket.spawn(originalPrototypeSpawn, this, args);
+      return protect(originalPrototypeSpawn, this, args, null);
+    };
+    installedEmit = function (...args) {
+      if (this !== processObject || args[0] !== 'exit' || processObject._exiting !== true) {
+        return Reflect.apply(originalEmit, this, args);
+      }
+      try {
+        if (failed || !hooksCurrent()) return refuse('e2e-handle-family-exit-guard');
+        generation += 1;
+        leaseAssert(Number.isSafeInteger(generation), 'e2e-handle-family-generation-limit');
+        writePhase('exiting'); // Invalidate any previous success before user exit listeners.
+      } catch { fail('e2e-handle-family-exit-publication'); return hardExit(); }
+      exitDepth += 1;
+      let result;
+      try { result = Reflect.apply(originalEmit, this, args); }
+      catch (error) { fail('e2e-handle-family-exit-listener-threw', false); throw error; }
+      finally { exitDepth -= 1; }
+      if (exitDepth === 0) {
+        try {
+          leaseAssert(!failed && hooksCurrent() && !owner.snapshot().failed && owner.snapshot().inFlight === 0);
+          inspectChildren();
+          fenced = true;
+          writePhase('sealed');
+        } catch { fail('e2e-handle-family-exit-incomplete'); return hardExit(); }
+      }
+      return result;
+    };
+    childProcessModule.ChildProcess.prototype.spawn = installedSpawn;
+    processObject.emit = installedEmit;
+    writePhase('active');
+  }
+  function snapshot() {
+    return Object.freeze({ failed, failureCode, owner: owner.snapshot(), preparedActors, boundActors });
+  }
+  function testFault(kind, onConsumed) {
+    leaseAssert(manifest.testProfile !== null && ['acquire', 'persist'].includes(kind) && nextFault === null
+      && (onConsumed === undefined || typeof onConsumed === 'function'), 'e2e-handle-family-test-profile');
+    faultObserver = onConsumed ?? null;
+    nextFault = kind;
+  }
+  return { prepareProtectedSpawn, snapshot, install, inspectChildren, nativeHandles, children, hardExit, fail, testFault };
+}
+
+/** Explicit creator only; ordinary imports never load Koffi or install hooks. */
+export function createE2eProcessHandleLeaseFamily({
+  env = process.env, cwd = process.cwd(), preloadPath, runtimePath = process.execPath, extraPreloads = [], testProfile = null,
+  io = leaseFs, readRunState = leaseReadRunState, nativeFactory = leaseNative, catalogFactory = leaseCatalog,
+  processObject = process, childProcessModule = leaseChildProcess,
+} = {}) {
+  leaseAssert(process.platform === 'win32' || nativeFactory !== leaseNative, 'e2e-handle-family-platform');
+  leaseAssert(leaseSafeRuntime(process.versions.node, process.versions.uv) || nativeFactory !== leaseNative, 'e2e-handle-family-runtime');
+  const state = readRunState(env);
+  cwd = leasePath.resolve(cwd);
+  leaseAssert(testProfile === null || (extraPreloads.length === 1
+    && leaseSamePath(extraPreloads[0], leasePath.join(cwd, 'scripts', 'e2e-runner-integration.selftest.mjs'))
+    && leaseKeys(testProfile, ['handleLimit']) && Number.isSafeInteger(testProfile.handleLimit)
+    && testProfile.handleLimit >= 1 && testProfile.handleLimit <= 4096), 'e2e-handle-family-test-profile');
+  const catalog = catalogFactory({ cwd, preloadPath, runtimePath, extraPreloads, io });
+  const native = nativeFactory({ files: catalog.files });
+  const creator = native.self();
+  leaseAssert(leaseValidIdentity(creator) && creator.pid === processObject.pid);
+  const root = io.mkdtempSync(leasePath.join(state.stateDir, 'process-handle-family-'));
+  const rootIdentity = leaseIdentity(io.lstatSync(root, { bigint: true }));
+  const manifest = {
+    schemaVersion: 'forge.e2e-handle-family.v1', familyId: leaseCrypto.randomUUID(), runId: state.runId,
+    stateDir: state.stateDir, root, rootIdentity, cwd, creator, ...catalog,
+    testProfile: testProfile === null ? null : { handleLimit: testProfile.handleLimit },
+  };
+  const store = leaseStore({ env, root, rootIdentity, ...state, io, readRunState });
+  manifest.hash = store.write('family.json', manifest);
+  const context = leaseMakeContext({ manifest, store, env, native, processObject, childProcessModule,
+    actorId: 'main', role: 'main', identity: creator });
+  function inspect() {
+    const errors = [];
+    let actorCount = 0, recordFiles = 0, recordBytes = 0, cliExitCode = null;
+    try {
+      const inventory = store.inventory();
+      ({ recordFiles, recordBytes } = inventory);
+      leaseAssert(!context.snapshot().failed && !context.snapshot().owner.failed);
+      leaseAssert(context.children.size === 1 && context.children.has('cli'), 'e2e-handle-family-cli-missing');
+      const cliHandle = context.nativeHandles.find(value => value.actorId === 'cli');
+      leaseAssert(cliHandle, 'e2e-handle-family-cli-missing');
+      cliExitCode = native.exitCode(cliHandle.handle);
+      context.inspectChildren();
+      const cli = leaseReadSealed(store, manifest, 'cli', cliHandle.identity);
+      const listed = new Set(['cli', ...cli.phase.children]);
+      leaseAssert(cli.phase.children.every(id => /^child-\d{4}$/u.test(id)));
+      for (const id of cli.phase.children) {
+        const actor = leaseReadActor(store, manifest, id);
+        leaseAssert(JSON.stringify(actor.intent.parentIdentity) === JSON.stringify(cliHandle.identity));
+        if (actor.binding.disposition === 'created') {
+          const child = leaseReadSealed(store, manifest, id, actor.binding.identity);
+          leaseAssert(child.phase.children.length === 0);
+        }
+      }
+      leaseAssert(inventory.names.every(name => name === 'family.json' || listed.has(name.split('.')[0])), 'e2e-handle-family-roster-mismatch');
+      const intents = inventory.names.filter(name => name.endsWith('.intent.json')).map(name => name.slice(0, -12));
+      leaseAssert(intents.length === listed.size && intents.every(id => listed.has(id)), 'e2e-handle-family-roster-mismatch');
+      actorCount = intents.length;
+    } catch (error) { errors.push(typeof error?.code === 'string' && /^e2e-handle-[a-z0-9-]{1,100}$/u.test(error.code) ? error.code : 'e2e-handle-family-inspection-failed'); }
+    return Object.freeze({ complete: errors.length === 0, errors: Object.freeze(errors), actorCount, recordFiles, recordBytes, cliExitCode, owner: context.snapshot().owner });
+  }
+  return Object.freeze({ prepareProtectedSpawn: context.prepareProtectedSpawn, inspect, snapshot: context.snapshot });
+}
+
+/** Called only by the explicitly requested existing-file preload. */
+export async function activateE2eProcessHandleLeaseRole({
+  env = process.env, argv = process.argv, execArgv = process.execArgv, processObject = process,
+  io = leaseFs, readRunState = leaseReadRunState, nativeFactory = leaseNative,
+  childProcessModule = leaseChildProcess, now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
+  verifyFingerprint = leaseVerifyFingerprint,
+} = {}) {
+  const markerText = env[E2E_PROCESS_HANDLE_ACTOR_ENV];
+  const cwd = leasePath.resolve(processObject.cwd());
+  const ownedPreloadPath = leasePath.join(cwd, 'scripts', 'run-e2e.mjs');
+  let ownedPreload = false;
+  try {
+    leaseAssert(Array.isArray(execArgv) && execArgv.length <= 10000 && execArgv.every(value => typeof value === 'string'));
+    // execArgv contains only Node's already-separated options, not script data.
+    // Detect this exact owned import even behind an unreviewed option prefix;
+    // missing authority must not turn that canonical role into an inert import.
+    const imports = execArgv.flatMap((value, index) => value === '--import' && index + 1 < execArgv.length
+      ? [execArgv[index + 1]] : value.startsWith('--import=') ? [value.slice(9)] : []);
+    ownedPreload = imports.some(value => value === leasePathToFileURL(ownedPreloadPath).href || leaseSamePath(value, ownedPreloadPath));
+  } catch { /* Unknown ordinary imports remain inert without actor authority. */ }
+  if (markerText === undefined && !ownedPreload) return Object.freeze({ active: false });
+  const paths = leaseRolePaths(cwd);
+  const candidate = Object.keys(paths).find(role => leaseSamePath(argv[1], paths[role])
+    || (() => { try { return leaseSamePath(argv[1], io.realpathSync.native(paths[role])); } catch { return false; } })());
+  if (!candidate) return Object.freeze({ active: false });
+  const reallyExit = processObject.reallyExit;
+  const fatal = () => {
+    Reflect.apply(reallyExit, processObject, [E2E_PROCESS_HANDLE_FAILURE_EXIT_CODE]);
+    throw leaseError('e2e-handle-family-native-exit-returned');
+  };
+  try {
+    leaseAssert(typeof markerText === 'string' && Buffer.byteLength(markerText) <= 8192);
+    const marker = JSON.parse(markerText);
+    leaseAssert(leaseKeys(marker, ['version', 'root', 'manifestHash', 'actorId', 'intentHash']) && marker.version === 1);
+    const cached = LEASE_ACTORS.get(processObject);
+    if (cached) {
+      leaseAssert(cached.actorId === marker.actorId && cached.manifestHash === marker.manifestHash
+        && cached.markerText === markerText && cached.entry === argv[1] && cached.execArgv === JSON.stringify(execArgv)
+        && cached.pid === processObject.pid && leaseSamePath(cached.cwd, cwd) && leaseSamePath(cached.execPath, processObject.execPath));
+      return cached.witness;
+    }
+    leaseAssert(leaseSafeRuntime(processObject.versions?.node ?? process.versions.node, processObject.versions?.uv ?? process.versions.uv)
+      || nativeFactory !== leaseNative, 'e2e-handle-family-runtime');
+    const state = readRunState(env);
+    leaseAssert(leaseSamePath(leasePath.dirname(marker.root), state.stateDir)
+      && /^process-handle-family-[A-Za-z0-9_-]+$/u.test(leasePath.basename(marker.root)));
+    const rootIdentity = leaseIdentity(io.lstatSync(marker.root, { bigint: true }));
+    const store = leaseStore({ env, root: marker.root, rootIdentity, ...state, io, readRunState });
+    const record = store.read('family.json');
+    const manifest = record.value;
+    leaseValidateManifest(manifest);
+    leaseAssert(record.hash === marker.manifestHash && manifest.runId === state.runId
+      && leaseSamePath(manifest.root, marker.root) && leaseSamePath(manifest.cwd, cwd)
+      && JSON.stringify(manifest.rootIdentity) === JSON.stringify(rootIdentity));
+    manifest.hash = record.hash;
+    for (const file of [...Object.values(manifest.files), ...Object.values(manifest.roles), ...manifest.extraPreloads]) verifyFingerprint(file, io);
+    leaseAssert(leaseSamePath(processObject.execPath, manifest.files.runtime.lexical)
+      || leaseSamePath(processObject.execPath, manifest.files.runtime.physical));
+    const imports = leaseParseNodeArgs([processObject.execPath, ...execArgv, argv[1]]).imports;
+    leaseAssert(JSON.stringify(imports) === JSON.stringify(leaseImports(manifest)), 'e2e-handle-family-preload-mismatch');
+    const intentRecord = store.read(store.nameFor(marker.actorId, 'intent'));
+    leaseAssert(intentRecord.hash === marker.intentHash && intentRecord.value.role === candidate);
+    const started = now();
+    while (!io.existsSync(leasePath.join(marker.root, store.nameFor(marker.actorId, 'binding')))) {
+      leaseAssert(now() - started < 5000, 'e2e-handle-family-admission-timeout');
+      store.check();
+      await sleep(5);
+    }
+    const actorRecord = leaseReadActor(store, manifest, marker.actorId);
+    const parent = candidate === 'cli' ? manifest.creator : leaseReadActor(store, manifest, 'cli').binding.identity;
+    leaseAssert(leaseValidIdentity(parent) && parent.pid === processObject.ppid
+      && JSON.stringify(parent) === JSON.stringify(actorRecord.intent.parentIdentity), 'e2e-handle-family-parent-identity');
+    const native = nativeFactory(manifest);
+    const identity = native.self();
+    leaseAssert(leaseValidIdentity(identity) && identity.pid === processObject.pid
+      && actorRecord.binding.disposition === 'created'
+      && JSON.stringify(identity) === JSON.stringify(actorRecord.binding.identity), 'e2e-handle-family-admission-identity');
+    const context = leaseMakeContext({ manifest, store, env, native, processObject, childProcessModule,
+      actorId: marker.actorId, role: candidate, identity, actorRecord });
+    context.install();
+    const witness = Object.freeze({ active: true, role: candidate, actorId: marker.actorId, snapshot: context.snapshot,
+      ...(manifest.testProfile === null ? {} : { testFault: context.testFault }) });
+    LEASE_ACTORS.set(processObject, { actorId: marker.actorId, manifestHash: marker.manifestHash, markerText,
+      entry: argv[1], execArgv: JSON.stringify(execArgv), pid: processObject.pid, cwd, execPath: processObject.execPath, witness });
+    return witness;
+  } catch { return fatal(); }
 }
 
 // Allow the 120-test serial suite one hour overall; per-test and cleanup limits stay unchanged.

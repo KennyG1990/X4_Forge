@@ -8,7 +8,7 @@
  *   exit 0  ⇔ at least one test passed AND zero failed/flaky/bad results
  *   exit 1  ⇔ anything else, invalid/expired policy, or missing receipt/report truth
  */
-import { spawn } from 'node:child_process';
+import { ChildProcess, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -22,10 +22,17 @@ import {
   validateQuarantineManifest,
 } from './e2e-flake-policy.mjs';
 import { inspectTerminalPlaywrightReport } from './e2e-terminal-contract.mjs';
-import { superviseSpawnedE2eProcess } from './e2e-runner-lifecycle.mjs';
+import {
+  activateE2eProcessHandleLeaseRole,
+  createE2eProcessHandleLeaseFamily,
+  E2E_PROCESS_HANDLE_FAILURE_EXIT_CODE,
+  superviseSpawnedE2eProcess,
+} from './e2e-runner-lifecycle.mjs';
 import { bootstrapE2eRuntime, createE2eRunStateOwner } from './e2e-runtime-bootstrap.mjs';
 
 const ROOT = process.cwd();
+const ORIGINAL_CHILD_PROCESS_SPAWN = ChildProcess.prototype.spawn;
+export let activeE2eProcessHandleRole = Object.freeze({ active: false });
 const DEFAULT_MANIFEST_PATH = path.join(ROOT, 'scripts', 'e2e-quarantine.json');
 const DEFAULT_RECEIPT_PATH = path.join(ROOT, 'test-results', 'e2e-verdict.json');
 const LIFECYCLE_TRIGGERS = new Set([
@@ -1062,6 +1069,101 @@ function normalE2eRunState(args, env, createOwner = createE2eRunStateOwner) {
   return args.includes('--selftest') ? null : createOwner({ env });
 }
 
+/** Only normal MAIN's synchronous CLI creation uses this temporary chokepoint.
+ * Actor processes install their own persistent guards in the existing preload.
+ */
+export function createProtectedE2eSpawner(family, spawnImpl = spawn) {
+  return (command, args, options) => {
+    const prototype = ChildProcess.prototype;
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, 'spawn');
+    if (descriptor?.value !== ORIGINAL_CHILD_PROCESS_SPAWN || descriptor.writable !== true) {
+      throw new Error('E2E_PROCESS_HANDLE_MAIN_HOOK_CHANGED');
+    }
+    const ticket = family.prepareProtectedSpawn({ role: 'cli', env: options.env });
+    let createdChild;
+    let child;
+    let failed = false;
+    let failure;
+    const protectedSpawn = function (...spawnArgs) {
+      if (createdChild !== undefined) throw new Error('E2E_PROCESS_HANDLE_MAIN_MULTIPLE_SPAWNS');
+      createdChild = this;
+      return ticket.spawn(ORIGINAL_CHILD_PROCESS_SPAWN, this, spawnArgs);
+    };
+    Object.defineProperty(prototype, 'spawn', { ...descriptor, value: protectedSpawn });
+    try {
+      child = spawnImpl(command, [...ticket.execArgv, ...args], { ...options, env: ticket.environment });
+    } catch (error) {
+      failed = true;
+      failure = error;
+    } finally {
+      try { Object.defineProperty(prototype, 'spawn', descriptor); }
+      catch (error) {
+        if (!failed) failure = error;
+        failed = true;
+      }
+    }
+    if (!failed && (createdChild === undefined || child !== createdChild)) {
+      failed = true;
+      failure = new Error('E2E_PROCESS_HANDLE_MAIN_CHILD_MISMATCH');
+    }
+    if (failed) {
+      try { ticket.cancel(); } catch { /* Existing runner still records the original failure. */ }
+      throw failure;
+    }
+    try {
+      ticket.admit();
+    } catch (error) {
+      try { ticket.cancel(); } catch { /* An unadmitted child cannot enter dependency main. */ }
+      throw error;
+    }
+    return child;
+  };
+}
+
+function completeProcessLeaseInspection(value) {
+  try {
+    if (nodeTypes.isProxy(value) || !isPlainRecord(value)) return false;
+    const keys = ['complete', 'errors', 'actorCount', 'recordFiles', 'recordBytes', 'cliExitCode', 'owner'];
+    const names = Reflect.ownKeys(value);
+    if (names.length !== keys.length || names.some(key => typeof key !== 'string' || !keys.includes(key))) return false;
+    const fields = {};
+    for (const key of keys) {
+      const field = readOwnData(value, key);
+      if (!field.valid) return false;
+      fields[key] = field.value;
+    }
+    if (fields.complete !== true || nodeTypes.isProxy(fields.errors) || !Array.isArray(fields.errors)
+      || fields.errors.length !== 0 || Reflect.ownKeys(fields.errors).length !== 1) return false;
+    const bounded = (number, minimum, maximum) => Number.isSafeInteger(number) && number >= minimum && number <= maximum;
+    if (!bounded(fields.actorCount, 1, 514) || !bounded(fields.recordFiles, 4, 1543)
+      || !bounded(fields.recordBytes, 1, 101122048) || !bounded(fields.cliExitCode, 0, 0xFFFFFFFF)
+      || fields.cliExitCode === E2E_PROCESS_HANDLE_FAILURE_EXIT_CODE || fields.cliExitCode === 259) return false;
+    if (nodeTypes.isProxy(fields.owner) || !isPlainRecord(fields.owner)) return false;
+    for (const key of Reflect.ownKeys(fields.owner)) {
+      if (typeof key !== 'string' || !readOwnData(fields.owner, key).valid) return false;
+    }
+    const ownerKeys = ['limit', 'retained', 'inFlight', 'spawnCalls', 'spawnThrows', 'acquisitionAttempts',
+      'noPidCalls', 'idempotentReuses', 'failed', 'failureCode', 'retirementAttempts',
+      'retirementFailed', 'reportingFailed', 'refusedCalls'];
+    const ownerNames = Reflect.ownKeys(fields.owner);
+    if (ownerNames.length !== ownerKeys.length || ownerNames.some(key => !ownerKeys.includes(key))) return false;
+    const owner = {};
+    for (const key of ownerKeys) owner[key] = readOwnData(fields.owner, key).value;
+    if (!bounded(owner.limit, 1, 4096) || !bounded(owner.retained, 1, owner.limit)
+      || owner.failed !== false || owner.failureCode !== null || owner.inFlight !== 0
+      || owner.retirementFailed !== false || owner.reportingFailed !== false
+      || owner.retirementAttempts !== 0 || owner.refusedCalls !== 0) return false;
+    for (const key of ['spawnCalls', 'spawnThrows', 'acquisitionAttempts', 'noPidCalls', 'idempotentReuses']) {
+      if (!bounded(owner[key], 0, Number.MAX_SAFE_INTEGER)) return false;
+    }
+    return owner.spawnCalls >= owner.acquisitionAttempts && owner.acquisitionAttempts >= owner.retained
+      && owner.spawnThrows <= owner.spawnCalls && owner.noPidCalls <= owner.spawnCalls
+      && owner.idempotentReuses <= owner.spawnCalls;
+  } catch {
+    return false;
+  }
+}
+
 export async function runE2e({
   args = [],
   manifest,
@@ -1073,6 +1175,7 @@ export async function runE2e({
   writeJsonAtomicImpl = writeJsonAtomic,
   readReceiptImpl = readReceiptText,
   finalizeRunState,
+  inspectProcessLeases,
 } = {}) {
   const argErrors = validateRunnerArgs(args);
   let manifestValue = manifest;
@@ -1110,7 +1213,8 @@ export async function runE2e({
   if (typeof spawnImpl !== 'function'
     || typeof superviseImpl !== 'function'
     || typeof writeJsonAtomicImpl !== 'function'
-    || typeof readReceiptImpl !== 'function') {
+    || typeof readReceiptImpl !== 'function'
+    || (inspectProcessLeases !== undefined && typeof inspectProcessLeases !== 'function')) {
     console.error('[run-e2e] RUNNER FAIL: injected runner dependency is invalid.');
     return 1;
   }
@@ -1132,6 +1236,10 @@ export async function runE2e({
   }
 
   try {
+    if (process.platform === 'win32' && spawnImpl === spawn && inspectProcessLeases === undefined) {
+      console.error('[run-e2e] LEASE FAIL: protected-family-required');
+      throw new Error('E2E_PROCESS_HANDLE_FAMILY_REQUIRED');
+    }
     child = spawnImpl(process.execPath, [
       playwrightCli,
       'test',
@@ -1199,6 +1307,22 @@ export async function runE2e({
     } catch {
       interactionFailed = true;
       console.error('[run-e2e] Playwright child error observer cleanup failed.');
+    }
+  }
+
+  // The family must be inspected while its run-state marker is still active.
+  // A green test report and a tolerated generic child exit cannot overrule it.
+  if (inspectProcessLeases !== undefined) {
+    try {
+      const inspection = inspectProcessLeases();
+      const nativeExit = boundedLifecycleProjection(lifecycleResult).childExit?.code;
+      if (!completeProcessLeaseInspection(inspection) || nativeExit === E2E_PROCESS_HANDLE_FAILURE_EXIT_CODE) {
+        interactionFailed = true;
+        console.error('[run-e2e] LEASE FAIL: process-family-incomplete');
+      }
+    } catch {
+      interactionFailed = true;
+      console.error('[run-e2e] LEASE FAIL: process-family-inspection-failed');
     }
   }
 
@@ -1573,6 +1697,15 @@ function runPureSelftest() {
 }
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (!isMain) {
+  const reallyExit = process.reallyExit.bind(process);
+  try {
+    activeE2eProcessHandleRole = await activateE2eProcessHandleLeaseRole();
+  } catch {
+    console.error('[run-e2e] LEASE FAIL: role-activation-failed');
+    reallyExit(E2E_PROCESS_HANDLE_FAILURE_EXIT_CODE);
+  }
+}
 if (isMain) {
   const args = process.argv.slice(2);
   const selftestMode = args.includes('--selftest');
@@ -1590,7 +1723,13 @@ if (isMain) {
   try {
     stateOwner = normalE2eRunState(args, runtime.environment ?? process.env);
     console.log(`[run-e2e] STATE: ${stateOwner.stateDir} run=${stateOwner.runId}`);
-    exitCode = await runE2e({ args, env: stateOwner.environment, finalizeRunState: () => stateOwner.retire() });
+    const family = process.platform === 'win32' ? createE2eProcessHandleLeaseFamily({
+      env: stateOwner.environment, cwd: ROOT, preloadPath: fileURLToPath(import.meta.url), runtimePath: process.execPath,
+    }) : null;
+    exitCode = await runE2e({
+      args, env: stateOwner.environment, finalizeRunState: () => stateOwner.retire(),
+      ...(family ? { spawnImpl: createProtectedE2eSpawner(family), inspectProcessLeases: () => family.inspect() } : {}),
+    });
   } catch (error) {
     const code = typeof error?.code === 'string' && /^[a-z0-9-]{1,80}$/u.test(error.code) ? error.code : 'run-state-bootstrap-failed';
     console.error(`[run-e2e] STATE FAIL: ${code}`);

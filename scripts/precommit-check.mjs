@@ -139,7 +139,7 @@ function checkMirrorDrift() {
 // never silently break how PASS/FAIL is decided.
 function checkE2eVerdict() {
   console.log("[precommit] e2e verdict selftest");
-  for (const command of ["node scripts/run-e2e.mjs --selftest", "node scripts/e2e-runner-lifecycle.selftest.mjs"]) {
+  for (const command of ["node scripts/run-e2e.mjs --selftest", "node scripts/e2e-runner-lifecycle.selftest.mjs", "node scripts/e2e-runner-integration.selftest.mjs"]) {
     const result = spawnSync(command, { cwd: root, shell: true, stdio: "inherit" });
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error(`e2e verdict selftest failed with exit ${result.status ?? "unknown"}: ${command}`);
@@ -292,6 +292,7 @@ async function runPrecommitOrchestrationSelftest() {
     "npm run test:e2e-runtime-bootstrap",
     "node scripts/run-e2e.mjs --selftest",
     "node scripts/e2e-runner-lifecycle.selftest.mjs",
+    "node scripts/e2e-runner-integration.selftest.mjs",
     "npm run test:e2e-vite-server",
     "npm run test:e2e-request-transport",
     "npm run test:extension-backend-recovery",
@@ -418,6 +419,10 @@ async function runPrecommitOrchestrationSelftest() {
   check("lifecycle_nonzero_blocks_later_gates", () => blocked(lifecycleSelftest, "nonzero", writerSelftests));
   check("lifecycle_spawn_error_blocks_later_gates", () => blocked(lifecycleSelftest, "error", writerSelftests));
   check("lifecycle_spawn_throw_blocks_later_gates", () => blocked(lifecycleSelftest, "throw", writerSelftests));
+  const runnerIntegrationSelftest = command => command === "node scripts/e2e-runner-integration.selftest.mjs";
+  check("runner_integration_nonzero_blocks_later_gates", () => blocked(runnerIntegrationSelftest, "nonzero", writerSelftests));
+  check("runner_integration_spawn_error_blocks_later_gates", () => blocked(runnerIntegrationSelftest, "error", writerSelftests));
+  check("runner_integration_spawn_throw_blocks_later_gates", () => blocked(runnerIntegrationSelftest, "throw", writerSelftests));
   check("typecheck_failure_prevents_final_success", () => blocked(command => command === typecheck, "nonzero"));
   check("regression_child_failure_blocks_default_execution", () => blocked(command => command === selftestCommand, "nonzero", writerSelftests));
   check("injected_runs_attempt_no_unowned_effects", () => expect(deniedEffectAttempts === 0 && fakeSpawnCalls > 0));

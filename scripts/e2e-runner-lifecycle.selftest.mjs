@@ -1,7 +1,10 @@
+import familyFs from 'node:fs';
+import familyPath from 'node:path';
+import { createE2eRunStateOwner } from './e2e-runtime-bootstrap.mjs';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 
-import { createE2eProcessHandleLeaseOwner, superviseSpawnedE2eProcess } from './e2e-runner-lifecycle.mjs';
+import { createE2eProcessHandleLeaseOwner, createE2eProcessHandleLeaseFamily, activateE2eProcessHandleLeaseRole, E2E_PROCESS_HANDLE_ACTOR_ENV, superviseSpawnedE2eProcess } from './e2e-runner-lifecycle.mjs';
 import { sampleSpawnedProcessOwnership } from './e2e-process-ownership-sampler.mjs';
 
 const ROOT_PID = 7401;
@@ -1814,6 +1817,347 @@ function runHandleLeaseInvalidCallCase() {
     ['retire', child, 'e2e-handle-lease-reentrant-spawn']]);
 }
 
+function makeFamilyControlledFixture({ testProfile = null } = {}) {
+  const stateOwner = createE2eRunStateOwner();
+  const cwd = process.cwd(), runtime = process.execPath;
+  const identities = pid => ({ pid, creationToken: pid.toString(16).padStart(16, '0') });
+  const handles = [];
+  const nativeFor = pid => ({ self: () => identities(pid),
+    open(childPid) { const handle = { pid: childPid, exitCode: 0 }; handles.push(handle); return handle; },
+    identity: handle => identities(handle.pid), exitCode: handle => handle.exitCode });
+  function fakeProcess(pid, ppid) {
+    const actor = new EventEmitter();
+    actor.pid = pid; actor.ppid = ppid; actor.execPath = runtime; actor.cwd = () => cwd; actor._exiting = false;
+    actor.exitCodes = []; actor.reallyExit = code => { actor.exitCodes.push(code); for (const handle of handles) if (handle.pid === pid) handle.exitCode = code; throw new Error('CONTROLLED_NATIVE_EXIT'); };
+    return actor;
+  }
+  function fakeModule(nextPid) {
+    class ChildProcess extends EventEmitter {
+      spawn(options) { this.rawOptions = options; this.rawCalls = (this.rawCalls || 0) + 1; if (!options.noPid) this.pid = nextPid; return options.rawResult; }
+      kill(signal) { this.retired = signal; return true; }
+    }
+    return { ChildProcess };
+  }
+  const roles = { cli: familyPath.join(cwd, 'node_modules/@playwright/test/cli.js'),
+    loader: familyPath.join(cwd, 'node_modules/playwright/lib/loader/loaderProcessEntry.js'),
+    worker: familyPath.join(cwd, 'node_modules/playwright/lib/worker/workerProcessEntry.js') };
+  const fp = lexical => ({ lexical, physical: lexical, identity: { dev: '1', ino: '2', birthtimeNs: '3' }, size: '1', sha256: '0'.repeat(64) });
+  const extraPreloads = testProfile ? [familyPath.join(cwd, 'scripts/e2e-runner-integration.selftest.mjs')] : [];
+  const catalogFactory = ({ preloadPath }) => ({ roles: Object.fromEntries(Object.entries(roles).map(([role, file]) => [role, fp(file)])),
+    files: Object.fromEntries(['preload', 'runtime', 'lifecycle', 'koffi', 'koffiLoader', 'koffiPackage', 'koffiNativeEntry', 'koffiNative', 'runner', 'core']
+      .map(key => [key, fp(key === 'runtime' ? runtime : preloadPath)])), extraPreloads: extraPreloads.map(fp) });
+  const mainModule = fakeModule(9202);
+  const family = createE2eProcessHandleLeaseFamily({ env: stateOwner.environment, cwd,
+    preloadPath: familyPath.join(cwd, 'scripts/run-e2e.mjs'), runtimePath: runtime,
+    extraPreloads, testProfile, nativeFactory: () => nativeFor(9201), catalogFactory,
+    processObject: fakeProcess(9201, 9200), childProcessModule: mainModule });
+  const ticket = family.prepareProtectedSpawn({ role: 'cli', env: stateOwner.environment });
+  const marker = JSON.parse(ticket.environment[E2E_PROCESS_HANDLE_ACTOR_ENV]);
+  const options = { file: runtime, args: [runtime, ...ticket.execArgv, roles.cli],
+    envPairs: [`UNRELATED=keep`, `${E2E_PROCESS_HANDLE_ACTOR_ENV}=stale`], stdio: [] };
+  const child = new mainModule.ChildProcess();
+  const cliModule = fakeModule(9203), cliProcess = fakeProcess(9202, 9201);
+  const read = (id, type) => JSON.parse(familyFs.readFileSync(familyPath.join(marker.root, `${id}.${type}.json`), 'utf8'));
+  const launch = (override = {}) => {
+    try {
+      const result = ticket.spawn(mainModule.ChildProcess.prototype.spawn, child, [{ ...options, ...override }]);
+      ticket.admit();
+      return result;
+    } catch (error) { ticket.cancel(); throw error; }
+  };
+  const activate = (override = {}) => activateE2eProcessHandleLeaseRole({ env: ticket.environment,
+    argv: [runtime, roles.cli], execArgv: ticket.execArgv, processObject: cliProcess,
+    nativeFactory: () => nativeFor(9202), childProcessModule: cliModule,
+    verifyFingerprint: value => assert.equal(value.sha256, '0'.repeat(64)), ...override });
+  return { stateOwner, family, ticket, marker, options, child, launch, activate, cliModule, cliProcess, read, handles, roles, runtime };
+}
+
+function runFamilyIntentAndNoPidCase() {
+  for (const noPid of [false, true]) {
+    const f = makeFamilyControlledFixture();
+    try {
+      assert.equal(f.read('cli', 'intent').role, 'cli');
+      assert.equal(familyFs.existsSync(familyPath.join(f.marker.root, 'cli.binding.json')), false);
+      const rawResult = { unchanged: true };
+      assert.strictEqual(f.launch({ noPid, rawResult }), rawResult);
+      assert.equal(f.read('cli', 'binding').disposition, noPid ? 'not-created' : 'created');
+      assert.equal(f.family.snapshot().owner.retained, noPid ? 0 : 1);
+      assert.equal(f.family.inspect().complete, false, 'a mandatory CLI without activation/seal cannot pass');
+    } finally { f.stateOwner.retire(); }
+  }
+}
+
+function runFamilyCanonicalPreloadRefusalCase() {
+  for (const imports of [[], ['--import', 'file:///wrong.mjs'], ['--import', 'file:///wrong.mjs', '--import', 'file:///wrong.mjs']]) {
+    const f = makeFamilyControlledFixture();
+    try {
+      assert.throws(() => f.launch({ args: [f.runtime, ...imports, f.roles.cli] }), { code: 'e2e-handle-family-preload-mismatch' });
+      assert.equal(f.child.rawCalls, undefined);
+      assert.equal(f.handles.length, 0);
+      assert.equal(f.family.snapshot().failed, true);
+    } finally { f.stateOwner.retire(); }
+  }
+}
+
+async function runFamilyActivationLeafAndSealCase() {
+  const f = makeFamilyControlledFixture();
+  try {
+    f.launch();
+    const actor = await f.activate();
+    assert.strictEqual(await f.activate(), actor);
+    assert.equal(actor.active, true);
+    assert.equal(Object.hasOwn(actor, 'testFault'), false);
+    assert.equal(f.cliProcess.emit('exit', 0), false, 'manual non-exiting emission preserves raw return');
+    assert.equal(f.read('cli', 'phase').phase, 'active');
+    const leaf = new f.cliModule.ChildProcess();
+    const stdio = [];
+    const result = {};
+    const options = { file: f.runtime, args: [f.runtime, '--version'], envPairs: ['KEEP=literal', `${E2E_PROCESS_HANDLE_ACTOR_ENV.toLowerCase()}=parent`], stdio, rawResult: result };
+    assert.strictEqual(leaf.spawn(options), result);
+    assert.strictEqual(leaf.rawOptions.stdio, stdio);
+    assert.deepEqual(leaf.rawOptions.envPairs, ['KEEP=literal']);
+    assert.deepEqual(options.envPairs, ['KEEP=literal', `${E2E_PROCESS_HANDLE_ACTOR_ENV.toLowerCase()}=parent`]);
+    f.cliProcess._exiting = true;
+    assert.equal(f.cliProcess.emit('exit', 0), false);
+    assert.equal(f.read('cli', 'phase').phase, 'sealed');
+    const inspected = f.family.inspect();
+    assert.equal(inspected.complete, true);
+    assert.equal(inspected.actorCount, 1);
+    assert.equal(inspected.recordFiles, 4);
+    assert.equal(inspected.cliExitCode, 0);
+    assert.equal(Object.isFrozen(inspected.errors), true);
+  } finally { f.stateOwner.retire(); }
+}
+
+async function runFamilyBindingAdmissionAndStateCase() {
+  const f = makeFamilyControlledFixture();
+  try {
+    let waits = 0, now = 0;
+    const actor = await f.activate({ now: () => now, sleep: async () => { waits += 1; now += 5; f.launch(); } });
+    assert.equal(waits, 1, 'entry admission waits for the parent-only binding');
+    assert.equal(actor.active, true);
+    const other = makeFamilyControlledFixture();
+    try {
+      other.launch();
+      other.cliProcess.ppid = 9999;
+      await assert.rejects(other.activate(), /CONTROLLED_NATIVE_EXIT/u);
+      assert.ok(other.cliProcess.exitCodes.includes(86));
+      assert.equal(familyFs.existsSync(familyPath.join(other.marker.root, 'cli.phase.json')), false);
+    } finally { other.stateOwner.retire(); }
+  } finally { f.stateOwner.retire(); }
+}
+
+async function runFamilyExitReentryAndFenceCase() {
+  const f = makeFamilyControlledFixture();
+  try {
+    f.launch(); await f.activate();
+    let nested = false, late;
+    f.cliProcess.on('exit', () => {
+      if (!nested) { nested = true; f.cliProcess.emit('exit', 0); }
+      queueMicrotask(() => {
+        const child = new f.cliModule.ChildProcess();
+        try { child.spawn({ file: f.runtime, args: [f.runtime, '--version'], envPairs: [] }); }
+        catch (error) { late = { child, error }; }
+      });
+    });
+    f.cliProcess._exiting = true;
+    assert.equal(f.cliProcess.emit('exit', 0), true);
+    assert.equal(f.read('cli', 'phase').generation, 2);
+    assert.equal(f.read('cli', 'phase').phase, 'sealed');
+    await Promise.resolve();
+    assert.equal(late.child.rawCalls, undefined);
+    assert.ok(f.cliProcess.exitCodes.includes(86));
+    assert.equal(f.family.inspect().complete, false);
+  } finally { f.stateOwner.retire(); }
+}
+
+async function runFamilyExitThrowAndPrivateFaultCase() {
+  const f = makeFamilyControlledFixture();
+  try {
+    f.launch(); await f.activate();
+    const original = new Error('CONTROLLED_EXIT_LISTENER_THROW');
+    f.cliProcess.on('exit', () => { throw original; });
+    f.cliProcess._exiting = true;
+    assert.throws(() => f.cliProcess.emit('exit', 0), error => error === original);
+    assert.equal(f.read('cli', 'phase').phase, 'failed');
+    assert.equal(f.family.inspect().complete, false);
+  } finally { f.stateOwner.retire(); }
+  const privateFixture = makeFamilyControlledFixture({ testProfile: { handleLimit: 1 } });
+  try {
+    privateFixture.launch();
+    const actor = await privateFixture.activate();
+    assert.equal(typeof actor.testFault, 'function');
+    actor.testFault('acquire');
+    const child = new privateFixture.cliModule.ChildProcess();
+    assert.throws(() => child.spawn({ file: privateFixture.runtime, args: [privateFixture.runtime, '--version'], envPairs: [] }),
+      { code: 'e2e-handle-lease-acquire-failed' });
+    assert.equal(child.retired, 'SIGKILL');
+    assert.ok(privateFixture.cliProcess.exitCodes.includes(86));
+    assert.equal(actor.snapshot().failed, true);
+  } finally { privateFixture.stateOwner.retire(); }
+}
+
+async function runFamilyLatePersistenceAndRecordRefusalCase() {
+  const f = makeFamilyControlledFixture({ testProfile: { handleLimit: 1 } });
+  try {
+    f.launch(); const actor = await f.activate();
+    f.cliProcess._exiting = true; f.cliProcess.emit('exit', 0);
+    assert.equal(f.family.inspect().complete, true);
+    actor.testFault('persist');
+    assert.throws(() => f.cliProcess.emit('exit', 0), /CONTROLLED_NATIVE_EXIT/u);
+    assert.equal(f.read('cli', 'phase').phase, 'sealed', 'persistent IO failure deliberately leaves the old seal untouched');
+    const inspected = f.family.inspect();
+    assert.equal(inspected.complete, false);
+    assert.equal(inspected.cliExitCode, 86, 'original HANDLE status defeats the stale successful seal');
+  } finally { f.stateOwner.retire(); }
+  const other = makeFamilyControlledFixture();
+  try {
+    other.launch(); await other.activate();
+    other.cliProcess._exiting = true; other.cliProcess.emit('exit', 0);
+    familyFs.writeFileSync(familyPath.join(other.marker.root, 'cli.phase.json'), ' '.repeat(65537));
+    assert.equal(other.family.inspect().complete, false, 'oversized records are refused before parsing');
+  } finally { other.stateOwner.retire(); }
+  const replaced = makeFamilyControlledFixture();
+  try {
+    replaced.launch(); await replaced.activate();
+    replaced.cliModule.ChildProcess.prototype.spawn = () => 0;
+    replaced.cliProcess._exiting = true;
+    assert.throws(() => replaced.cliProcess.emit('exit', 0), /CONTROLLED_NATIVE_EXIT/u);
+    assert.ok(replaced.cliProcess.exitCodes.includes(86));
+    assert.equal(replaced.family.inspect().complete, false);
+  } finally { replaced.stateOwner.retire(); }
+}
+
+async function runFamilyPublicSpawnAndMissingAuthorityCase() {
+  const f = makeFamilyControlledFixture();
+  try {
+    const original = new Error('CONTROLLED_PUBLIC_SPAWN_AFTER_NATIVE_THROW');
+    assert.throws(() => {
+      try {
+        f.ticket.spawn(function () { this.pid = 9202; return 0; }, f.child, [f.options]);
+        assert.equal(familyFs.existsSync(familyPath.join(f.marker.root, 'cli.binding.json')), false);
+        assert.equal(f.family.snapshot().owner.retained, 1);
+        throw original; // Models public spawn or temporary-hook restoration failing.
+      } catch (error) { f.ticket.cancel(); throw error; }
+    }, error => error === original);
+    assert.equal(f.child.retired, 'SIGKILL');
+    assert.equal(familyFs.existsSync(familyPath.join(f.marker.root, 'cli.binding.json')), false);
+    assert.equal(f.family.inspect().complete, false);
+  } finally { f.stateOwner.retire(); }
+  const other = makeFamilyControlledFixture();
+  try {
+    for (const value of [undefined, '']) {
+      const env = { ...other.ticket.environment };
+      if (value === undefined) delete env[E2E_PROCESS_HANDLE_ACTOR_ENV];
+      else env[E2E_PROCESS_HANDLE_ACTOR_ENV] = value;
+      await assert.rejects(other.activate({ env }), /CONTROLLED_NATIVE_EXIT/u);
+    }
+    assert.ok(other.cliProcess.exitCodes.includes(86));
+    const inert = await other.activate({ env: {}, execArgv: [], argv: [other.runtime, other.roles.cli] });
+    assert.deepEqual(inert, { active: false });
+    const leaf = await other.activate({ env: {}, argv: [other.runtime, familyPath.join(process.cwd(), 'ordinary-leaf.mjs')] });
+    assert.deepEqual(leaf, { active: false });
+  } finally { other.stateOwner.retire(); }
+}
+
+async function runFamilyReviewedNodePrefixCase() {
+  for (const [prefix, expectedCode] of [
+    [['--redirect-warnings', 'warnings.log'], 'e2e-handle-family-preload-mismatch'],
+    [['--unreviewed-separate-value', 'warnings.log'], 'e2e-handle-family-ambiguous-canonical-target'],
+  ]) {
+    const f = makeFamilyControlledFixture();
+    try {
+      assert.throws(() => f.launch({ args: [f.runtime, ...prefix, f.roles.cli] }), { code: expectedCode });
+      assert.equal(f.child.rawCalls, undefined);
+      assert.equal(f.handles.length, 0, 'concealed canonical targets refuse before process creation');
+    } finally { f.stateOwner.retire(); }
+  }
+  const prefixed = makeFamilyControlledFixture();
+  try {
+    prefixed.launch({ args: [prefixed.runtime, '--redirect-warnings', 'warnings.log', ...prefixed.ticket.execArgv, prefixed.roles.cli] });
+    assert.equal(prefixed.child.rawCalls, 1);
+    assert.equal(prefixed.read('cli', 'binding').disposition, 'created');
+  } finally { prefixed.stateOwner.retire(); }
+  const leaves = makeFamilyControlledFixture();
+  try {
+    leaves.launch(); const actor = await leaves.activate();
+    const dataArguments = [
+      ['-', leaves.roles.worker], ['-e', leaves.roles.worker], ['-p', leaves.roles.worker],
+      ['ordinary-leaf.mjs', '--unreviewed-separate-value', leaves.roles.worker], ['--version'],
+    ];
+    for (const data of dataArguments) {
+      const child = new leaves.cliModule.ChildProcess();
+      const args = [leaves.runtime, ...data];
+      child.spawn({ file: leaves.runtime, args, envPairs: [`${E2E_PROCESS_HANDLE_ACTOR_ENV}=parent`] });
+      assert.equal(child.rawCalls, 1);
+      assert.strictEqual(child.rawOptions.args, args);
+      assert.deepEqual(child.rawOptions.envPairs, []);
+    }
+    assert.equal(actor.snapshot().preparedActors, 0, 'a canonical role used only as leaf data never creates an actor intent');
+    assert.equal(actor.snapshot().owner.retained, dataArguments.length);
+  } finally { leaves.stateOwner.retire(); }
+  const concealed = makeFamilyControlledFixture();
+  try {
+    await assert.rejects(concealed.activate({ env: {},
+      execArgv: ['--unreviewed-separate-value', 'warnings.log', ...concealed.ticket.execArgv] }), /CONTROLLED_NATIVE_EXIT/u);
+    assert.ok(concealed.cliProcess.exitCodes.includes(86), 'an owned import behind an unknown prefix cannot lose the missing-authority refusal');
+  } finally { concealed.stateOwner.retire(); }
+}
+
+async function runFamilyExactFaultConsumptionCase() {
+  for (const observerThrows of [false, true]) {
+    const f = makeFamilyControlledFixture({ testProfile: { handleLimit: 1 } });
+    try {
+      f.launch(); const actor = await f.activate();
+      assert.throws(() => actor.testFault('acquire', 42), { code: 'e2e-handle-family-test-profile' });
+      assert.equal(actor.snapshot().failed, false);
+      const child = new f.cliModule.ChildProcess();
+      const witnesses = [];
+      let timing;
+      actor.testFault('acquire', witness => {
+        witnesses.push(witness);
+        timing = { rawCalls: child.rawCalls, opened: f.handles.length, retirement: child.retired ?? null };
+        if (observerThrows) throw new Error('PRIVATE_OBSERVER_ERROR');
+      });
+      assert.throws(() => child.spawn({ file: f.runtime, args: [f.runtime, '--version'], envPairs: [] }),
+        { code: 'e2e-handle-lease-acquire-failed' });
+      assert.deepEqual(witnesses, [{ kind: 'acquire', stage: 'native-open', recordName: null }]);
+      assert.equal(Object.isFrozen(witnesses[0]), true);
+      assert.deepEqual(timing, { rawCalls: 1, opened: 2, retirement: null });
+      assert.equal(child.retired, 'SIGKILL');
+      assert.equal(actor.snapshot().owner.failureCode, 'e2e-handle-lease-acquire-failed');
+      assert.equal(actor.snapshot().owner.retirementAttempts, 1);
+      const later = new f.cliModule.ChildProcess();
+      assert.throws(() => later.spawn({ file: f.runtime, args: [f.runtime, '--version'], envPairs: [] }), /CONTROLLED_NATIVE_EXIT/u);
+      assert.equal(later.rawCalls, undefined);
+      assert.equal(witnesses.length, 1);
+      assert.ok(f.cliProcess.exitCodes.includes(86));
+    } finally { f.stateOwner.retire(); }
+    const p = makeFamilyControlledFixture({ testProfile: { handleLimit: 1 } });
+    try {
+      p.launch(); const actor = await p.activate();
+      const child = new p.cliModule.ChildProcess();
+      const witnesses = [];
+      actor.testFault('persist', witness => {
+        witnesses.push(witness);
+        if (observerThrows) throw new Error('PRIVATE_OBSERVER_ERROR');
+      });
+      assert.throws(() => child.spawn({ file: p.runtime, args: [p.runtime, ...p.ticket.execArgv, p.roles.worker], envPairs: [] }),
+        /CONTROLLED_NATIVE_EXIT/u);
+      assert.deepEqual(witnesses, [{ kind: 'persist', stage: 'publish', recordName: 'child-0001.intent.json' }]);
+      assert.equal(Object.isFrozen(witnesses[0]), true);
+      assert.equal(child.rawCalls, undefined);
+      assert.equal(p.handles.length, 1);
+      assert.equal(familyFs.existsSync(familyPath.join(p.marker.root, 'child-0001.intent.json')), false);
+      assert.equal(p.read('cli', 'phase').phase, 'active', 'persistence stays refused through the failure-report attempt');
+      assert.equal(actor.snapshot().failureCode, 'e2e-handle-family-test-persist');
+      assert.throws(() => child.spawn({ file: p.runtime, args: [p.runtime, '--version'], envPairs: [] }), /CONTROLLED_NATIVE_EXIT/u);
+      assert.equal(witnesses.length, 1, 'sticky publisher refusal never replays the observer');
+      assert.equal(p.family.inspect().cliExitCode, 86);
+    } finally { p.stateOwner.retire(); }
+  }
+}
+
 const cases = [
   ['invalid input', runInvalidInputCase],
   ['normal child close/tree gone', runNormalChildCloseCase],
@@ -1843,6 +2187,16 @@ const cases = [
   ['HANDLE lease retirement/report failures latch permanently', runHandleLeaseFailureLatchCase],
   ['HANDLE lease reserves capacity across synchronous reentry', runHandleLeaseReentrantCapacityCase],
   ['HANDLE lease rejects invalid/reentrant calls before launch', runHandleLeaseInvalidCallCase],
+  ['HANDLE family pre-registers intent and records truthful no-PID disposition', runFamilyIntentAndNoPidCase],
+  ['HANDLE family rejects canonical roles without the exact preload before creation', runFamilyCanonicalPreloadRefusalCase],
+  ['HANDLE family activation, leaf authority stripping and final seal', runFamilyActivationLeafAndSealCase],
+  ['HANDLE family binding barrier and parent identity refusal', runFamilyBindingAdmissionAndStateCase],
+  ['HANDLE family reentrant exit and post-seal microtask fence', runFamilyExitReentryAndFenceCase],
+  ['HANDLE family preserves exit throws and private acquisition refusal', runFamilyExitThrowAndPrivateFaultCase],
+  ['HANDLE family rejects stale seals after persistence failure and malformed records', runFamilyLatePersistenceAndRecordRefusalCase],
+  ['HANDLE family defers public-spawn admission and rejects missing actor authority', runFamilyPublicSpawnAndMissingAuthorityCase],
+  ['HANDLE family reviewed Node prefixes cannot hide roles or reinterpret leaf data', runFamilyReviewedNodePrefixCase],
+  ['HANDLE family exact fault consumption is once-only and observer-safe', runFamilyExactFaultConsumptionCase],
 ];
 
 let passed = 0;
