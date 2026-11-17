@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { stop as stopEsbuild } from 'esbuild';
 import type { FullConfig } from '@playwright/test';
 import { startE2EViteServer } from './e2e-vite-server';
 import { E2E_RUNTIME } from '../../playwright.config';
@@ -8,5 +9,6 @@ export default async function globalSetup(config: FullConfig): Promise<() => Pro
   const vite = await startE2EViteServer({ rootDir, compiled: E2E_RUNTIME.mode === 'compiled' });
   return async () => {
     await vite.close();
+    await stopEsbuild();
   };
 }

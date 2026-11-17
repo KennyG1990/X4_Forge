@@ -555,7 +555,7 @@ function leaseMakeContext({ manifest, store, env, native, processObject, childPr
       const launch = pending[pending.length - 1];
       leaseAssert(launch, 'e2e-handle-family-missing-launch');
       const handle = native.open(pid);
-      const retained = { handle, identity: null, actorId: launch.ticket?.actorId ?? null };
+      const retained = { handle, identity: null, actorId: launch.ticket?.actorId ?? null, executable: launch.executable };
       nativeHandles.push(retained); // Preserve partial acquisition even if querying/publication fails.
       if (launch.ticket) launch.ticket.retainedHandle = retained;
       if (nextFault === 'acquire') {
@@ -670,7 +670,11 @@ function leaseMakeContext({ manifest, store, env, native, processObject, childPr
   }
   function protect(originalSpawn, child, args, ticket) {
     const forwarded = leaseForwardArgs(args, ticket?.marker ?? null);
-    const launch = { child, ticket };
+    const launch = { child, ticket, executable: null };
+    try {
+      // The forwarded options are already copied; retain no arguments or environment.
+      if (typeof forwarded[0].file === 'string') launch.executable = leasePath.basename(forwarded[0].file).slice(0, 128);
+    } catch { /* Diagnostic metadata cannot change spawn behavior. */ }
     pending.push(launch);
     try {
       const result = owner.spawn(originalSpawn, child, forwarded);
@@ -694,13 +698,26 @@ function leaseMakeContext({ manifest, store, env, native, processObject, childPr
   }
   function inspectChildren() {
     for (const retained of nativeHandles) {
-      leaseAssert(retained.identity !== null);
-      const exitCode = native.exitCode(retained.handle);
-      leaseAssert(Number.isInteger(exitCode) && exitCode >= 0 && exitCode !== 259
-        && (retained.actorId === null || exitCode !== E2E_PROCESS_HANDLE_FAILURE_EXIT_CODE), 'e2e-handle-family-child-not-terminal');
-      if (retained.actorId !== null) {
-        const child = leaseReadSealed(store, manifest, retained.actorId, retained.identity);
-        leaseAssert(JSON.stringify(child.intent.parentIdentity) === JSON.stringify(identity));
+      let exitCode = null;
+      try {
+        leaseAssert(retained.identity !== null);
+        exitCode = native.exitCode(retained.handle);
+        leaseAssert(Number.isInteger(exitCode) && exitCode >= 0 && exitCode !== 259
+          && (retained.actorId === null || exitCode !== E2E_PROCESS_HANDLE_FAILURE_EXIT_CODE), 'e2e-handle-family-child-not-terminal');
+        if (retained.actorId !== null) {
+          const child = leaseReadSealed(store, manifest, retained.actorId, retained.identity);
+          leaseAssert(JSON.stringify(child.intent.parentIdentity) === JSON.stringify(identity));
+        }
+      } catch (error) {
+        try {
+          const code = typeof error?.code === 'string' && /^e2e-handle-[a-z0-9-]{1,100}$/u.test(error.code)
+            ? error.code : 'e2e-handle-family-inspection-failed';
+          console.error(`[e2e-runner-lifecycle] child-inspection-refused ${JSON.stringify({
+            identity: retained.identity, actorId: retained.actorId, executable: retained.executable,
+            exitCode: Number.isInteger(exitCode) && exitCode >= 0 && exitCode <= 0xFFFFFFFF ? exitCode : null, code,
+          })}`);
+        } catch { /* A failed diagnostic must neither replace nor suppress the refusal. */ }
+        throw error;
       }
     }
     for (const ticket of children.values()) {
