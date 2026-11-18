@@ -5,7 +5,7 @@ import { buildTemplateWorkspace } from '../../src/lib/modTemplates';
 import { workspaceContentHash, workspaceSnapshotHash } from '../../src/lib/workspaceIdentity';
 import { sanitizeWorkspace } from '../../src/types';
 import { ephemeralWorkspaceHeaders, readServerWorkspaceEnvelope, seedServerWorkspace } from './ephemeral';
-import { E2E_API_ORIGIN, E2E_STATE_DIR } from '../../playwright.config';
+import { E2E_API_ORIGIN, E2E_STATE_DIR, E2E_TOKEN } from '../../playwright.config';
 import { resolveWorkspaceArtifactId } from '../../src/lib/modCompiler';
 import {
   buildLargeWorkspace,
@@ -1244,23 +1244,43 @@ test('AgentBridge Auto-Apply keeps a newer candidate pending while a prior sync 
   const remote = sanitizeWorkspace({ ...buildTemplateWorkspace('reward_on_kill'), name: 'B116_Conflict_Remote' });
   const newer = sanitizeWorkspace({ ...remote, name: 'B116_Conflict_Newer' });
   const localDescription = 'Keep this unresolved local side visible.';
-  const headers = await ephemeralWorkspaceHeaders(true);
+  expect(process.env.X4_GAME_PATH || '').toBe('');
   const configUrl = E2E_API_ORIGIN + '/api/schema/config';
-  const priorConfig = await request.get(configUrl, { headers });
+  const priorConfig = await request.get(configUrl, { headers: { Authorization: `Bearer ${E2E_TOKEN}` } });
   expect(priorConfig.status()).toBe(200);
   const prior = await priorConfig.json();
+  const savedGame = prior.config?.x4GamePath ?? '';
+  expect(typeof savedGame).toBe('string');
+  expect(prior.resolved?.x4GamePath, 'Baseline game path must match the saved setting').toBe(savedGame);
+  expect(prior.directorySafety).toMatchObject({ safe: true, issues: [] });
+  if (savedGame) {
+    expect(path.isAbsolute(savedGame), 'A prior scratch game path must be absolute').toBe(true);
+    const priorGame = path.resolve(savedGame);
+    const contains = (root: string, candidate: string) => {
+      const relative = path.relative(root, candidate);
+      return relative !== '' && !path.isAbsolute(relative) && relative.split(path.sep)[0] !== '..';
+    };
+    const ownedRoot = [path.resolve(E2E_STATE_DIR), path.resolve('test-results')].find(root => contains(root, priorGame));
+    if (!ownedRoot) throw new Error('Baseline game path must be beneath an owned E2E root');
+    const rootStat = await fs.lstat(ownedRoot);
+    const gameStat = await fs.lstat(priorGame);
+    expect(rootStat.isDirectory() && !rootStat.isSymbolicLink(), 'The E2E root must be a physical directory').toBe(true);
+    expect(gameStat.isDirectory() && !gameStat.isSymbolicLink(), 'The prior game must be a physical directory').toBe(true);
+    const physicalRoot = await fs.realpath(ownedRoot);
+    const physicalGame = await fs.realpath(priorGame);
+    expect(path.relative(ownedRoot, physicalRoot), 'The E2E root must not redirect').toBe('');
+    expect(path.relative(priorGame, physicalGame), 'The prior game must not redirect').toBe('');
+    expect(contains(physicalRoot, physicalGame), 'The prior game must remain inside the physical E2E root').toBe(true);
+    const marker = await fs.lstat(path.join(physicalGame, 'X4.exe'));
+    expect(marker.isFile() && !marker.isSymbolicLink() && marker.nlink === 1, 'The prior game needs a regular scratch marker').toBe(true);
+  }
+  const headers = await ephemeralWorkspaceHeaders(true);
   const restore = {
     modWorkspacePath: prior.config?.modWorkspacePath || '',
     filesystemPath: prior.config?.filesystemPath || '',
-    x4GamePath: prior.config?.x4GamePath || '',
+    x4GamePath: savedGame,
     deployFormat: prior.config?.deployFormat || 'loose',
   };
-  expect(process.env.X4_GAME_PATH || '').toBe('');
-  for (const value of [restore.x4GamePath, prior.resolved?.x4GamePath]) {
-    if (!value) continue;
-    const rel = path.relative(E2E_STATE_DIR, value);
-    expect(!path.isAbsolute(rel) && rel.split(path.sep)[0] !== '..', 'Baseline game path must be in the owned E2E state').toBe(true);
-  }
   const scratch = await fs.mkdtemp(path.join(E2E_STATE_DIR, 'polling-deploy-'));
   const game = path.join(scratch, 'game');
   const extensions = path.join(game, 'extensions');
@@ -1389,7 +1409,8 @@ test('AgentBridge Auto-Apply keeps a newer candidate pending while a prior sync 
     expect(server.workspace.name).toBe(newer.name);
     expect(posts).toHaveLength(2);
     console.log('Polling clean-conflict proof', JSON.stringify({ autosave: posts[0].status, convergence: posts[1].status,
-      acceptedVersion, beforePoll, pendingVersion: newerEnvelope.version, localClean: true, conflictVisible: true }));
+      acceptedVersion, beforePoll, pendingVersion: newerEnvelope.version, localClean: true, conflictVisible: true,
+      priorGame: savedGame ? path.relative(process.cwd(), savedGame) : null }));
   } finally {
     releaseAutosave();
     releaseConvergence();

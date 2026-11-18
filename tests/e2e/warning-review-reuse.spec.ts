@@ -14,7 +14,7 @@ test('C03 real warning approval reuse, invalidation, records and rendered revoca
   const base = JSON.parse(fs.readFileSync('tests/fixtures/forge-regression/project.json', 'utf8'));
   const md = base.files.find((f: any) => f.path === 'md/forge_regression_lab.xml');
   const cleanMd = md.content;
-  const warningMd = cleanMd.replace('</actions>', '<set_value name="$probe" exact="$x.forge_review_warning_a"/></actions>');
+  const warningMd = cleanMd.replace('</actions>', '<set_value name="$x" exact="player.ship"/><set_value name="$probe" exact="$x.forge_review_warning_a"/></actions>');
   md.content = warningMd;
   base.files.find((f: any) => f.path === 'ui/lab.lua').content = 'return {}\n';
   const write = (name: string, text: string) => { const p = path.join(source, name); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, text); };
