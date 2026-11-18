@@ -46,7 +46,7 @@ import { buildScriptPropertyIndex, formatScriptPropertyFinding, lintScriptProper
 import { checkXmlWellformed } from "../lib/xmlWellformed";
 import { lintAiscript, type AiscriptLintFinding } from "../lib/aiscriptLint";
 import {
-  EFFECTIVE_MD_RETURN_CHECK, isScriptExpressionAttribute, lintEffectiveMdCueReturns, lintMdPitfalls,
+  buildMdVariableAvailabilityContext, EFFECTIVE_MD_RETURN_CHECK, isScriptExpressionAttribute, lintEffectiveMdCueReturns, lintMdPitfalls,
   lintScriptExpressions, lintScriptExpressionValue, type MdPitfallFinding,
 } from "../lib/mdPitfallLints";
 import { lintJobsContent, type JobsVocabulary, type JobLintFinding } from "../lib/jobsContentLint";
@@ -689,12 +689,24 @@ export function runProjectValidation(
 
   // Corpus-grounded MD pitfall lints (dead UI listeners, offer-accept keyword refs,
   // param3 bare-key reads). Union-aware where the scriptproperty index is available.
+  // A different MD file can supply a writer or invalidate namespace authority.
+  // Bind both the project context and each consuming file fact to that complete input set.
+  const variableFiles = project.files.filter(file => file.kind === 'md' || classifyPath(file.path) === 'md');
+  const variableDependency = [resourceGeneration(mdIndexRef), variableFiles.map(fileIdentity).sort()];
+  const variableInputBytes = 2 * variableFiles.reduce((total, file) => total + file.path.length + (file.content?.length ?? 0), 0);
+  const buildVariableContext = () => buildMdVariableAvailabilityContext(variableFiles, mdIndexRef);
+  const variableAvailability = opts.incremental === false ? buildVariableContext()
+    : (validationFacts.get(JSON.stringify(['md-variable-context', variableDependency]), buildVariableContext, variableInputBytes) as ReturnType<typeof buildMdVariableAvailabilityContext>);
+  coverageGaps.push(...variableAvailability.coverageGaps);
   const pitfallFindings: MdPitfallFinding[] = [...diffExpressionFindings, ...diffReturnFindings];
   for (const f of project.files) {
     if (typeof f.content !== "string") continue;
     const pathKind = classifyPath(f.path);
     if (f.kind === "md" || pathKind === "md") {
-      pitfallFindings.push(...fact('pitfalls', f, propertyGeneration, () => lintMdPitfalls(f.content!, { propertyUnion: spIndex?.union, propertyIndex: spIndex || undefined, filePath: f.path })));
+      pitfallFindings.push(...fact('pitfalls', f, [propertyGeneration, variableDependency], () => lintMdPitfalls(f.content!, {
+        propertyUnion: spIndex?.union, propertyIndex: spIndex || undefined, filePath: f.path,
+        variableAvailability: variableAvailability.context,
+      })));
     }
     const kind = f.kind === "md" || f.kind === "aiscript" ? f.kind : pathKind;
     if (kind === "md" || kind === "aiscript") {
@@ -1212,7 +1224,116 @@ export function runProjectValidationSelftest(): { pass: boolean; checks: { name:
     ...file, content: file.content?.replace('md.Probe.Parent.Child', 'md.Probe.Child'),
   })) }, { scriptPropertyIndex: cuePropertyIndex });
   const fullCueProperties = runProjectValidation(cuePropertyProject, { scriptPropertyIndex: cuePropertyIndex, incremental: false });
+  const initialVariableCode = 'md_pitfall.variable_read_before_initialization';
+  const initialReader = '<mdscript name="AvailabilityA"><cues><cue name="Read"><actions>\n'
+    + '<debug_text text="$Value"/>\n</actions></cue><cue name="Other"/></cues></mdscript>';
+  const initialProject = mdProjectFor('md/availability-reader.xml', initialReader);
+  const writerProject = (target: string): ExtensionProject => ({ ...initialProject, files: [...initialProject.files, {
+    path: 'md/availability-writer.xml', kind: 'md', content: '<mdscript name="AvailabilityB"><cues><cue name="Writer"><actions>'
+      + `<set_value name="md.AvailabilityA.${target}.$Value" exact="1"/>`
+      + '</actions></cue></cues></mdscript>',
+  }] });
+  const initialRows = (result: ProjectValidationResult) => flattenProjectValidation(result)
+    .filter(finding => finding.code === initialVariableCode && finding.filePath === 'md/availability-reader.xml');
+  const withoutWriter = runProjectValidation(initialProject);
+  const beforeInitialWarm = getProjectValidationCacheStats();
+  const warmWithoutWriter = runProjectValidation(initialProject);
+  const afterInitialWarm = getProjectValidationCacheStats();
+  const withRemoteWriter = runProjectValidation(writerProject('Read'));
+  const withRetargetedWriter = runProjectValidation(writerProject('Other'));
+  const withRemovedWriter = runProjectValidation(initialProject);
+  const initialParity = [initialProject, writerProject('Read'), writerProject('Other')].every(project => {
+    const incremental = runProjectValidation(project);
+    const full = runProjectValidation(project, { incremental: false });
+    return JSON.stringify(incremental.pitfalls.findings) === JSON.stringify(full.pitfalls.findings)
+      && JSON.stringify(incremental.evidence?.coverage.gaps) === JSON.stringify(full.evidence?.coverage.gaps);
+  });
+  const correctedInitialProject: ExtensionProject = { ...initialProject, files: initialProject.files.map(file =>
+    file.path === 'md/availability-reader.xml' ? { ...file, content: file.content?.replace('<debug_text',
+      '<set_value name="$Value" exact="1"/><debug_text') } : file) };
+  const correctedInitial = runProjectValidation(correctedInitialProject);
+  const missingWriterInput: ExtensionProject = { ...initialProject, files: [...initialProject.files,
+    { path: 'md/unavailable-writer.xml', kind: 'md' }] };
+  const unavailableInitial = runProjectValidation(missingWriterInput);
+  const reorderedInitialProject: ExtensionProject = { ...missingWriterInput, files: [...missingWriterInput.files,
+    { path: 'md/another-unavailable-writer.xml', kind: 'md' }] };
+  const orderedInitial = runProjectValidation(reorderedInitialProject);
+  const reversedInitialProject = { ...reorderedInitialProject, files: [...reorderedInitialProject.files].reverse() };
+  const reversedInitial = runProjectValidation(reversedInitialProject);
+  const fullReversedInitial = runProjectValidation(reversedInitialProject, { incremental: false });
+  const cacheContext = buildMdVariableAvailabilityContext(initialProject.files.filter(file => file.kind === 'md'), null);
+  const plainContext = (value: unknown): boolean => {
+    if (value === null || value === undefined || ['string', 'number', 'boolean'].includes(typeof value)) return true;
+    if (Array.isArray(value)) return value.every(plainContext);
+    return typeof value === 'object' && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)
+      && Object.values(value as Record<string, unknown>).every(plainContext);
+  };
+  const contextCharge = 2 * ('a'.length + JSON.stringify(cacheContext).length);
+  let contextComputations = 0;
+  const computeCacheContext = () => { contextComputations++; return structuredClone(cacheContext); };
+  const tinyContextCache = createBoundedAnalysisCache<typeof cacheContext>({ maxEntries: 4, maxBytes: contextCharge - 1 });
+  const tinyContextFirst = tinyContextCache.get('a', computeCacheContext, 0);
+  tinyContextCache.get('a', computeCacheContext, 0);
+  const retainedContextCache = createBoundedAnalysisCache<typeof cacheContext>({ maxEntries: 4, maxBytes: contextCharge });
+  const returnedContext = retainedContextCache.get('a', computeCacheContext, 0);
+  const retainedContextStats = retainedContextCache.stats();
+  (returnedContext.context.scope as { eligibleCues: number }).eligibleCues = -1;
+  const contextCopyIsolated = retainedContextCache.get('a', computeCacheContext, 0).context.scope.eligibleCues
+    === cacheContext.context.scope.eligibleCues;
+  retainedContextCache.get('b', computeCacheContext, 0);
   const checks = [
+    {
+      name: 'initial_variable_advisory_has_authored_position_and_explicit_project_scope',
+      pass: initialRows(withoutWriter).length === 1 && initialRows(withoutWriter)[0].severity === 'warning'
+        && initialRows(withoutWriter)[0].line === 2 && initialRows(withoutWriter)[0].column === 19
+        && initialRows(withoutWriter)[0].sourceRef === 'debug_text/@text'
+        && /sav|external/i.test(initialRows(withoutWriter)[0].message),
+    },
+    {
+      name: 'unchanged_initial_variable_inputs_reuse_cache_without_changing_findings',
+      pass: afterInitialWarm.hits > beforeInitialWarm.hits
+        && JSON.stringify(initialRows(warmWithoutWriter)) === JSON.stringify(initialRows(withoutWriter)),
+    },
+    {
+      name: 'another_file_writer_add_retarget_remove_invalidates_initial_variable_facts',
+      pass: initialRows(withRemoteWriter).length === 0 && initialRows(withRetargetedWriter).length === 1
+        && initialRows(withRemovedWriter).length === 1 && initialReader === initialProject.files[1].content,
+    },
+    {
+      name: 'initial_variable_incremental_and_full_results_and_gaps_agree',
+      pass: initialParity,
+    },
+    {
+      name: 'unsaved_prior_initialization_clears_the_shared_initial_variable_advisory',
+      pass: initialRows(correctedInitial).length === 0 && initialRows(withoutWriter).length === 1,
+    },
+    {
+      name: 'unavailable_writer_file_is_a_coverage_gap_instead_of_an_unset_assertion',
+      pass: initialRows(unavailableInitial).length === 0 && !!unavailableInitial.evidence?.coverage.gaps.some(gap =>
+        gap.check === 'md.variable_initial_state'),
+    },
+    {
+      name: 'initial_variable_context_and_gap_order_are_independent_of_project_file_order',
+      pass: JSON.stringify(orderedInitial.pitfalls.findings) === JSON.stringify(reversedInitial.pitfalls.findings)
+        && JSON.stringify(reversedInitial.pitfalls.findings) === JSON.stringify(fullReversedInitial.pitfalls.findings)
+        && JSON.stringify(reversedInitial.evidence?.coverage.gaps.filter(gap => gap.check === 'md.variable_initial_state'))
+          === JSON.stringify(fullReversedInitial.evidence?.coverage.gaps.filter(gap => gap.check === 'md.variable_initial_state')),
+    },
+    {
+      name: 'initial_variable_cached_context_has_no_json_hidden_map_set_or_closure_payload',
+      pass: plainContext(cacheContext),
+    },
+    {
+      name: 'initial_variable_cache_accounts_retained_result_and_bypasses_oversize_without_source_gate',
+      pass: JSON.stringify(tinyContextFirst) === JSON.stringify(cacheContext)
+        && tinyContextCache.stats().entries === 0 && tinyContextCache.stats().bypasses === 2
+        && retainedContextStats.accountedBytes === contextCharge && retainedContextStats.entries === 1,
+    },
+    {
+      name: 'initial_variable_cache_clones_context_and_evicts_at_its_actual_result_budget',
+      pass: contextCopyIsolated && retainedContextCache.stats().evictions === 1
+        && retainedContextCache.stats().entries === 1 && contextComputations === 4,
+    },
     {
       name: 'shared_core_consumes_declared_cue_lookup_and_preserves_warning_policy',
       pass: cuePropertyResult.scriptProperties.available && cuePropertyResult.summary.scriptPropertyWarnings === 1

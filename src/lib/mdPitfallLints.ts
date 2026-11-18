@@ -43,12 +43,14 @@ import { maskNonExpressionSpans, type ScriptPropertyIndex } from './scriptProper
 import { assertXmlInputWithinLimits } from './xmlInputLimits';
 import type { SchemaIndex } from './xsdValidate';
 import type { DiffElementProvenance, DiffElementState } from './diffSimulator';
+import type { ValidationCoverageGap } from './validationEvidence';
 
 export interface MdPitfallFinding {
   code: 'md_pitfall.products_existence' | 'md_pitfall.cancel_conversation_actor_or_template' | 'md_pitfall.ui_listener_one_shot'
     | 'md_pitfall.offer_accepted_keyword_cue' | 'md_pitfall.param3_table_barekey' | 'md_pitfall.return_context'
     | 'md_pitfall.numeric_time_value' | 'md_pitfall.no_event_condition' | 'md_pitfall.illegal_instantiate'
     | 'md_pitfall.variable_read_after_removal' | 'md_pitfall.variable_read_when_absent'
+    | 'md_pitfall.variable_read_before_initialization'
     | MdExpressionFinding['code'];
   severity: 'error' | 'warning';
   cue?: string;
@@ -215,6 +217,292 @@ const LOCAL_EXISTENCE_TEST = /^(not\s+)?(?:namespace\.)?(\$[A-Za-z_]\w*)\?$/;
 const MAX_VARIABLE_BRANCH_DEPTH = 16;
 type AbsenceReason = 'removal' | 'flow';
 
+export interface MdVariableAvailabilityInput { path: string; content?: string }
+interface MdAvailabilityDestination { target?: string; variable?: string; initializes: boolean }
+interface MdAvailabilityAction {
+  order: number;
+  destinations: readonly MdAvailabilityDestination[];
+  opaque: boolean;
+  unknownVariables: readonly string[];
+  selfOrderingUnknown?: string;
+}
+interface MdAvailabilityCue {
+  namespace: string;
+  block: string;
+  unavailable: boolean;
+}
+interface MdAvailabilityBlocks { readonly count: number; readonly last: Readonly<Record<string, number>> }
+interface MdAvailabilityVariable { readonly writers: MdAvailabilityBlocks; readonly opaque: MdAvailabilityBlocks }
+interface MdAvailabilityAuthority {
+  readonly variables: Readonly<Record<string, MdAvailabilityVariable>>;
+  readonly opaque: MdAvailabilityBlocks;
+}
+interface MdAvailabilityFile {
+  source: string;
+  cues: Readonly<Record<string, MdAvailabilityCue>>;
+  actions: Readonly<Record<string, MdAvailabilityAction>>;
+}
+/** Immutable source facts only. Each lint call owns its separate forward-flow state. */
+export interface MdVariableAvailabilityContext {
+  readonly files: Readonly<Record<string, MdAvailabilityFile>>;
+  readonly authority: Readonly<Record<string, MdAvailabilityAuthority>>;
+  readonly global: MdAvailabilityAuthority;
+  readonly scope: { readonly eligibleCues: number; readonly skippedCues: number; readonly indexedFacts: number; readonly limited: boolean };
+}
+
+const availabilityRecord = <T>(): Record<string, T> => Object.create(null) as Record<string, T>;
+const availabilityOwn = <T>(record: Readonly<Record<string, T>> | undefined, key: string): T | undefined =>
+  record && Object.prototype.hasOwnProperty.call(record, key) ? record[key] : undefined;
+const availabilityOtherBlock = (index: MdAvailabilityBlocks | undefined, block: string) =>
+  !!index && index.count > (availabilityOwn(index.last, block) === undefined ? 0 : 1);
+
+const availabilityPath = (value: string) => value.replace(/\\/g, '/');
+const availabilityNode = (node: Element) => `${node.lineNumber ?? 0}:${node.columnNumber ?? 0}:${node.tagName}`;
+function availabilityCueKey(cue: Element): string {
+  const names: string[] = [];
+  for (let node: Element | null = cue; node; node = node.parentElement) {
+    if (node.tagName === 'cue') names.unshift(node.getAttribute('name') ?? '');
+  }
+  return JSON.stringify(names);
+}
+
+/** Build possible-writer authority, not an assertion that entry state is empty. */
+export function buildMdVariableAvailabilityContext(
+  files: readonly MdVariableAvailabilityInput[], schema: SchemaIndex | null,
+): { context: MdVariableAvailabilityContext; coverageGaps: ValidationCoverageGap[] } {
+  const reasons = new Map<string, Set<string>>();
+  const gap = (file: string, reason: string) => {
+    const values = reasons.get(file) ?? new Set<string>(); values.add(reason); reasons.set(file, values);
+  };
+  type Cue = { file: string; script: string; key: string; direct: string; namespace?: string; parent?: string; block: string; hasActions: boolean; element: Element };
+  type Parsed = { file: string; source: string; root: Element; cues: Cue[]; actions: Map<string, MdAvailabilityAction> };
+  type Writer = { target: string; variable: string; block: string; order: number };
+  type Opaque = { target?: string; variable?: string; block?: string };
+  const parsed: Parsed[] = [], scripts = new Map<string, Parsed[]>(), writers: Writer[] = [], opaque: Opaque[] = [];
+  const paths = new Set<string>();
+  const lvalues = new Set(['lvalueexpression', 'lvaluename', 'groupname', 'countresult']);
+  const directId = (script: string, cue: string) => JSON.stringify([script, cue]);
+  const primitive = new Set(['set_value', 'remove_value', 'debug_text', 'do_if', 'do_else', 'do_elseif', 'append_to_list', 'append_list_elements']);
+  const maxFacts = 131072;
+  const maxDerivedFacts = 262144;
+  let facts = 0, derivedFacts = 0, limited = false;
+  const reserve = (file: string, amount = 1) => {
+    derivedFacts += amount;
+    if (derivedFacts <= maxDerivedFacts) return true;
+    limited = true; gap(file, 'Project initial-state analysis reached its bounded derived-fact budget.'); return false;
+  };
+  const addOpaque = (effect: Opaque, file: string) => { if (reserve(file)) opaque.push(effect); };
+  const addWriter = (writer: Writer, file: string) => { if (reserve(file)) writers.push(writer); };
+  const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
+  for (const input of [...files].sort((a, b) => compare(a.path, b.path) || compare(a.content ?? '', b.content ?? ''))) {
+    const file = availabilityPath(input.path), folded = file.toLowerCase();
+    if (paths.has(folded)) { gap(file, 'Duplicate MD file identity leaves writer authority unavailable.'); addOpaque({}, file); continue; }
+    paths.add(folded);
+    if (typeof input.content !== 'string') { gap(file, 'MD source content is unavailable.'); addOpaque({}, file); continue; }
+    const source = input.content;
+    let invalid = false, root: Element | null = null;
+    try {
+      const xml = normalizeLineEndings(source.replace(/^\uFEFF/, ''));
+      assertXmlInputWithinLimits(xml);
+      root = new DOMParser({ onError: () => { invalid = true; } }).parseFromString(xml, 'text/xml').documentElement;
+    } catch { invalid = true; }
+    if (invalid || !root || root.tagName !== 'mdscript' || root.namespaceURI || !root.getAttribute('name')) {
+      gap(file, 'Malformed, patch-derived, foreign or unnamed MD script has unavailable writer authority.'); addOpaque({}, file); continue;
+    }
+    const nodeCount = root.getElementsByTagName('*').length;
+    if (facts + nodeCount > maxFacts) {
+      gap(file, 'Project MD writer analysis reached its bounded input-fact limit.'); addOpaque({}, file); limited = true; break;
+    }
+    facts += nodeCount;
+    const script = root.getAttribute('name')!;
+    const value: Parsed = { file, source, root, cues: [], actions: new Map() };
+    const names = new Set<string>();
+    const declaredCues = new Map<Element, Cue>();
+    for (const element of Array.from(root.getElementsByTagName('cue'))) {
+      const name = element.getAttribute('name');
+      if (!reserve(file)) break;
+      if (!name || names.has(name)) { gap(file, 'Unnamed or duplicate cue declarations leave script writer authority ambiguous.'); addOpaque({}, file); }
+      if (name) names.add(name);
+      const parent = element.parentElement?.parentElement;
+      const parentCue = parent?.tagName === 'cue' ? declaredCues.get(parent) : undefined;
+      const direct = directId(script, name ?? '');
+      const own = ['this', 'static'].includes(element.getAttribute('namespace') ?? '');
+      const namespace = isPlainVariableCue(element, root) && name ? own || !parentCue ? direct : parentCue.namespace : undefined;
+      if (!namespace) {
+        gap(file, 'Library, instance, reference or unsupported cue namespace leaves local writer authority unavailable.');
+        addOpaque({}, file);
+      }
+      const actions = Array.from(element.children).find(child => !child.namespaceURI && child.tagName === 'actions');
+      const cue: Cue = { file, script, key: availabilityCueKey(element), direct, namespace, parent: parentCue?.direct,
+        block: `${file}\u0000${actions ? availabilityNode(actions) : availabilityNode(element)}`, hasActions: !!actions, element };
+      value.cues.push(cue);
+      declaredCues.set(element, cue);
+    }
+    parsed.push(value);
+    const prior = scripts.get(script) ?? []; prior.push(value); scripts.set(script, prior);
+  }
+  for (const group of scripts.values()) if (group.length !== 1) {
+    for (const file of group) gap(file.file, 'Duplicate script names make exact remote writer destinations ambiguous.');
+    addOpaque({}, group[0].file);
+  }
+  const declarations = new Map<string, Cue>(), ambiguous = new Set<string>();
+  for (const file of parsed) for (const cue of file.cues) {
+    if (declarations.has(cue.direct) || ambiguous.has(cue.direct)) { declarations.delete(cue.direct); ambiguous.add(cue.direct); }
+    else declarations.set(cue.direct, cue);
+  }
+  const destination = (raw: string, cue: Cue | undefined): MdAvailabilityDestination => {
+    const value = raw.trim();
+    const local = LOCAL_VARIABLE.exec(value);
+    if (local) return { target: cue?.namespace, variable: local[1], initializes: true };
+    const remote = /^(?:(md)\.([A-Za-z_]\w*)\.)?([A-Za-z_]\w*)\.(\$[A-Za-z_]\w*)$/.exec(value);
+    if (remote) {
+      const [, md, script, name, variable] = remote;
+      const target = md ? declarations.get(directId(script, name))?.direct
+        : name === 'this' || name === 'static' ? cue?.direct
+          : name === 'parent' ? cue?.parent : cue ? declarations.get(directId(cue.script, name))?.direct : undefined;
+      return { target, variable, initializes: true };
+    }
+    // A member mutation cannot create its receiver root. A variable destination
+    // on an unknown receiver can still address that variable on a cue object.
+    const variableMember = /^\$[A-Za-z_]\w*\.(\$[A-Za-z_]\w*)$/.exec(value);
+    if (variableMember) return { variable: variableMember[1], initializes: true };
+    if (/^(?:namespace\.)?\$[A-Za-z_]\w*\./.test(value)
+      || /\.(\$[A-Za-z_]\w*)(?:\.[A-Za-z_]\w*)+$/.test(value)) return { initializes: false };
+    return { variable: /\.(\$[A-Za-z_]\w*)$/.exec(value)?.[1], initializes: true };
+  };
+  for (const file of parsed) {
+    const cueByElement = new Map(file.cues.map(cue => [cue.element, cue]));
+    const elements = Array.from(file.root.getElementsByTagName('*'));
+    for (let order = 0; order < elements.length; order++) {
+      const element = elements[order];
+      if (!reserve(file.file)) break;
+      let cue: Cue | undefined, block: Element | undefined;
+      for (let ancestor: Element | null = element; ancestor; ancestor = ancestor.parentElement) {
+        if (!block && ['actions', 'conditions'].includes(ancestor.tagName)) block = ancestor;
+        if (cueByElement.has(ancestor)) { cue = cueByElement.get(ancestor); break; }
+      }
+      const blockId = block ? `${file.file}\u0000${availabilityNode(block)}` : `${file.file}\u0000declaration`;
+      const inActions = block?.tagName === 'actions';
+      const declaredSpec = schema?.loaded ? schema.elements.get(element.tagName.toLowerCase()) : undefined;
+      const structural = element === block || ['check_all', 'check_any', 'event_game_started'].includes(element.tagName);
+      const unresolvedSpec = !structural && !!declaredSpec && (!declaredSpec.resolved || declaredSpec.openAttributes
+        || Array.from(element.attributes).some(attribute => {
+          const role = declaredSpec.attributes.get(attribute.name);
+          return !!role && !role.type;
+        }));
+      const spec = unresolvedSpec ? undefined : declaredSpec;
+      if (unresolvedSpec && block) gap(file.file, 'An unresolved or open schema declaration leaves possible destination attributes unavailable.');
+      const attributes = new Set<string>();
+      if (spec) for (const [name, attribute] of spec.attributes) if (attribute.type && lvalues.has(attribute.type)) attributes.add(name);
+      if (element.tagName === 'set_value' || element.tagName === 'remove_value') attributes.add('name');
+      const append = ['append_to_list', 'append_list_elements'].includes(element.tagName);
+      if (append && ['true', '1'].includes(element.getAttribute('create') ?? '')) attributes.add('name');
+      const destinations: MdAvailabilityDestination[] = [];
+      for (const name of attributes) {
+        const raw = element.getAttribute(name);
+        if (raw === null || !raw.trim()) continue;
+        const target = destination(raw, cue);
+        if (element.tagName === 'remove_value') target.initializes = false;
+        destinations.push(target);
+        if (target.initializes && target.target && target.variable) addWriter({ target: target.target, variable: target.variable, block: blockId, order }, file.file);
+        else if (target.initializes) {
+          addOpaque({ target: target.target, variable: target.variable, block: blockId }, file.file);
+          gap(file.file, 'A dynamic or unresolved variable destination leaves possible writer authority unknown.');
+        }
+      }
+      let branchDepth = 0;
+      for (let parent: Element | null = element; parent; parent = parent.parentElement) if (parent.tagName === 'do_if') branchDepth++;
+      let previousElement: Element | undefined;
+      if (element.tagName === 'do_else') {
+        let sibling = element.previousSibling;
+        while (sibling && sibling.nodeType !== 1) sibling = sibling.previousSibling;
+        if (sibling?.nodeType === 1) previousElement = sibling as Element;
+      }
+      const branchUnsupported = element.tagName === 'do_if' && (!LOCAL_EXISTENCE_TEST.test(element.getAttribute('value')?.trim() ?? '')
+        || !hasOnlyAttributes(element, ['value', 'comment']) || branchDepth > MAX_VARIABLE_BRANCH_DEPTH) || element.tagName === 'do_elseif'
+        || element.tagName === 'do_else' && (!hasOnlyAttributes(element, ['comment']) || previousElement?.tagName !== 'do_if');
+      const operationUnsupported = element.tagName === 'set_value' && ![null, 'set', 'add', 'subtract'].includes(element.getAttribute('operation'));
+      const leafUnsupported = ['set_value', 'debug_text', 'remove_value', 'append_to_list', 'append_list_elements'].includes(element.tagName)
+        && !!element.children.length;
+      const removalUnsupported = element.tagName === 'remove_value'
+        && (!LOCAL_VARIABLE.test(element.getAttribute('name')?.trim() ?? '') || !hasOnlyAttributes(element, ['name', 'comment']));
+      const unsupported = !!element.namespaceURI || (inActions && element !== block && !primitive.has(element.tagName))
+        || (!!block && !primitive.has(element.tagName) && !spec
+          && !['actions', 'conditions', 'event_game_started', 'check_all', 'check_any'].includes(element.tagName))
+        || branchUnsupported || operationUnsupported || leafUnsupported || removalUnsupported
+        || (!!block && unresolvedSpec && !primitive.has(element.tagName));
+      if (unsupported) {
+        const indirect = ['run_actions', 'include_actions', 'run_script'].includes(element.tagName) || (!spec && !primitive.has(element.tagName));
+        addOpaque({ target: indirect ? undefined : cue?.namespace, block: blockId }, file.file);
+        gap(file.file, spec ? 'An action has unsupported ordered effects; schema destinations are possible writers only.' : 'An undeclared or foreign action/condition has unavailable writer effects.');
+      }
+      const unknownVariables = destinations.filter(target => target.initializes && !target.target && target.variable).map(target => target.variable!);
+      const action: MdAvailabilityAction = { order, destinations, unknownVariables,
+        opaque: unsupported || destinations.some(target => target.initializes && !target.variable) };
+      const operation = element.getAttribute('operation');
+      const target = destinations.find(value => value.initializes && value.target === cue?.namespace && value.variable);
+      if (element.tagName === 'set_value' && ['add', 'subtract'].includes(operation ?? '') && target?.variable
+        && STRICT_LOCAL_READ.exec(element.getAttribute('exact')?.trim() ?? '')?.[1] === target.variable) {
+        action.selfOrderingUnknown = target.variable;
+        gap(file.file, 'Self-referential add/subtract RHS ordering is not established by the available engine evidence.');
+      }
+      file.actions.set(availabilityNode(element), action);
+    }
+  }
+  type Blocks = { count: number; last: Record<string, number> };
+  type Variable = { writers: Blocks; opaque: Blocks };
+  type Authority = { variables: Record<string, Variable>; opaque: Blocks };
+  const emptyBlocks = (): Blocks => ({ count: 0, last: availabilityRecord<number>() });
+  const emptyAuthority = (): Authority => ({ variables: availabilityRecord<Variable>(), opaque: emptyBlocks() });
+  const authority = availabilityRecord<Authority>(), global = emptyAuthority();
+  const coverage = (): ValidationCoverageGap[] => Array.from(reasons, ([filePath, values]) => ({ check: 'md.variable_initial_state', filePath,
+    reason: [...values].sort().slice(0, 8).join(' ') + (values.size > 8 ? ` ${values.size - 8} additional unsupported categories.` : '') }))
+    .sort((a, b) => compare(a.filePath, b.filePath));
+  const limitResult = () => ({ context: { files: availabilityRecord<MdAvailabilityFile>(), authority: availabilityRecord<MdAvailabilityAuthority>(),
+    global: emptyAuthority(), scope: { eligibleCues: 0, skippedCues: parsed.reduce((count, file) => count + file.cues.length, 0),
+      indexedFacts: Math.min(derivedFacts, maxDerivedFacts), limited: true } }, coverageGaps: coverage() });
+  if (limited) return limitResult();
+  const index = (target: string | undefined, variable: string | undefined, kind: 'writers' | 'opaque', block: string | undefined, order: number, file: string) => {
+    let owner = global;
+    if (target !== undefined) {
+      owner = availabilityOwn(authority, target)!;
+      if (!owner) { if (!reserve(file)) return; owner = emptyAuthority(); authority[target] = owner; }
+    }
+    let blocks = owner.opaque;
+    if (variable !== undefined) {
+      let entry = availabilityOwn(owner.variables, variable);
+      if (!entry) { if (!reserve(file)) return; entry = { writers: emptyBlocks(), opaque: emptyBlocks() }; owner.variables[variable] = entry; }
+      blocks = entry[kind];
+    }
+    const key = block ?? '\u0000outside';
+    const prior = availabilityOwn(blocks.last, key);
+    if (prior === undefined) { if (!reserve(file)) return; blocks.count++; }
+    blocks.last[key] = Math.max(prior ?? -1, order);
+  };
+  for (const writer of writers) index(writer.target, writer.variable, 'writers', writer.block, writer.order, writer.block.split('\u0000')[0]);
+  for (const effect of opaque) index(effect.target, effect.variable, 'opaque', effect.block, 0, effect.block?.split('\u0000')[0] ?? parsed[0]?.file ?? files[0]?.path ?? 'project');
+  if (limited) return limitResult();
+  const result = availabilityRecord<MdAvailabilityFile>();
+  let eligibleCues = 0, skippedCues = 0;
+  for (const file of parsed) {
+    const cues = availabilityRecord<MdAvailabilityCue>();
+    for (const cue of file.cues) {
+      if (!cue.namespace) { skippedCues++; continue; }
+      const owner = availabilityOwn(authority, cue.namespace);
+      const unavailable = !cue.hasActions || availabilityOtherBlock(global.opaque, cue.block) || availabilityOtherBlock(owner?.opaque, cue.block);
+      if (unavailable) skippedCues++; else eligibleCues++;
+      if (!reserve(file.file)) break;
+      cues[cue.key] = { namespace: cue.namespace, block: cue.block, unavailable };
+    }
+    if (!reserve(file.file, file.actions.size + 1)) break;
+    const actions = availabilityRecord<MdAvailabilityAction>();
+    for (const [key, action] of file.actions) actions[key] = action;
+    result[file.file] = { source: file.source, cues, actions };
+  }
+  if (limited) return limitResult();
+  return { context: { files: result, authority, global, scope: { eligibleCues, skippedCues, indexedFacts: derivedFacts, limited: false } }, coverageGaps: coverage() };
+}
+
 function isPlainVariableCue(cue: Element, root: Element): boolean {
   for (let current: Element | null = cue; current;) {
     const parent = current.parentElement;
@@ -239,24 +527,86 @@ function onlyVariableLogs(branch: Element | undefined): boolean {
     .every(action => action.tagName === 'debug_text' && !action.namespaceURI && !action.children.length);
 }
 
-function lintLocalVariableReads(root: Element, source: string, filePath?: string, leadingBom = false): MdPitfallFinding[] {
+function lintLocalVariableReads(root: Element, source: string, filePath?: string, leadingBom = false,
+  availability?: MdAvailabilityFile, projectAvailability?: MdVariableAvailabilityContext): MdPitfallFinding[] {
   if (root.namespaceURI) return [];
   const findings: MdPitfallFinding[] = [];
   let lines: number[] | undefined;
+  type InitialValue = { kind: 'present' | 'potential' | 'unknown'; joined?: boolean };
+  type InitialFlow = { facts: Map<string, InitialValue>; potential: boolean };
+  let activeCue: MdAvailabilityCue | undefined;
+  const activeAuthority = () => activeCue ? availabilityOwn(projectAvailability?.authority, activeCue.namespace) : undefined;
+  const suppressed = (variable: string) => {
+    if (!activeCue) return true;
+    const local = availabilityOwn(activeAuthority()?.variables, variable);
+    const global = availabilityOwn(projectAvailability?.global.variables, variable);
+    return availabilityOtherBlock(local?.writers, activeCue.block) || availabilityOtherBlock(local?.opaque, activeCue.block)
+      || availabilityOtherBlock(global?.opaque, activeCue.block);
+  };
+  const initialValue = (flow: InitialFlow, variable: string): InitialValue => flow.facts.get(variable)
+    ?? { kind: flow.potential && activeCue && !suppressed(variable) ? 'potential' : 'unknown' };
+  const clearInitial = (flow: InitialFlow | undefined) => { if (flow) { flow.facts.clear(); flow.potential = false; } };
+  const cloneInitial = (flow: InitialFlow | undefined) => flow ? { facts: new Map(flow.facts), potential: flow.potential } : undefined;
+  function joinInitial(target: InitialFlow | undefined, left: InitialFlow | undefined, right: InitialFlow | undefined) {
+    if (!target || !left || !right) return;
+    const joined = new Map<string, InitialValue>();
+    for (const variable of new Set([...left.facts.keys(), ...right.facts.keys()])) {
+      const a = initialValue(left, variable), b = initialValue(right, variable);
+      joined.set(variable, a.kind === 'unknown' || b.kind === 'unknown' ? { kind: 'unknown' }
+        : a.kind === 'present' && b.kind === 'present' ? { kind: 'present' }
+          : { kind: 'potential', joined: true });
+    }
+    target.facts = joined; target.potential = left.potential && right.potential;
+  }
+  function initialAction(action: Element, flow: InitialFlow | undefined, absent: Map<string, AbsenceReason>) {
+    if (!flow || !activeCue) return;
+    const fact = availabilityOwn(availability?.actions, availabilityNode(action));
+    if (!fact || fact.opaque || action.children.length) { clearInitial(flow); return; }
+    for (const variable of fact.unknownVariables) flow.facts.set(variable, { kind: 'unknown' });
+    const log = action.tagName === 'debug_text' && !action.hasAttribute('chance');
+    const attribute = action.tagName === 'set_value' ? action.getAttributeNode('exact') : log ? action.getAttributeNode('text') : null;
+    const read = attribute && STRICT_LOCAL_READ.exec(attribute.value.trim());
+    if (attribute && read && !absent.has(read[1]) && fact.selfOrderingUnknown !== read[1]) {
+      const state = initialValue(flow, read[1]);
+      if (state.kind === 'potential') {
+        lines ??= [0, ...Array.from(source.matchAll(/\n/g), match => match.index + 1)];
+        const position = expressionLocation(source, lines, attribute, attribute.value.indexOf(read[0]));
+        const writer = availabilityOwn(activeAuthority()?.variables, read[1]);
+        const later = (availabilityOwn(writer?.writers.last, activeCue.block) ?? -1) > fact.order;
+        const explanation = state.joined ? 'Modeled branches do not guarantee an earlier initialization'
+          : later ? 'A modeled writer occurs later in this action block, without a guaranteed earlier initialization'
+            : 'No guaranteed earlier initialization was found in the modeled project namespace';
+        findings.push({ code: 'md_pitfall.variable_read_before_initialization', severity: 'warning', filePath, cue: enclosingNamedCue(action),
+          sourceRef: `${action.tagName}/@${attribute.name}`, line: position.line,
+          column: leadingBom && position.line === 1 && position.column ? position.column + 1 : position.column,
+          detail: `Project-scoped advisory for strict read of ${read[1]}: ${explanation}. Saved values and writers outside the analyzed project remain unknown.` });
+      }
+    }
+    if (action.tagName === 'debug_text') return;
+    if (action.tagName === 'remove_value') { clearInitial(flow); return; }
+    if (fact.selfOrderingUnknown) flow.facts.set(fact.selfOrderingUnknown, { kind: 'unknown' });
+    for (const destination of fact.destinations) if (destination.initializes && destination.target === activeCue.namespace && destination.variable) {
+      if (destination.variable === fact.selfOrderingUnknown) continue;
+      if (!action.hasAttribute('chance')) flow.facts.set(destination.variable, { kind: 'present' });
+      else if (initialValue(flow, destination.variable).kind === 'potential') flow.facts.set(destination.variable, { kind: 'potential', joined: true });
+    }
+  }
 
-  function scanActions(container: Element | undefined, absent: Map<string, AbsenceReason>, cue: string | undefined, depth: number): Map<string, AbsenceReason> {
+  function scanActions(container: Element | undefined, absent: Map<string, AbsenceReason>, cue: string | undefined, depth: number, initial?: InitialFlow): Map<string, AbsenceReason> {
     if (!container) return absent;
     const actions = Array.from(container.children);
     for (let index = 0; index < actions.length; index++) {
       const action = actions[index];
       if (action.namespaceURI) {
         absent.clear();
+        clearInitial(initial);
         continue;
       }
       const name = LOCAL_VARIABLE.exec(action.getAttribute('name')?.trim() || '')?.[1];
       if (action.tagName === 'remove_value' && name && !action.children.length
         && hasOnlyAttributes(action, ['name', 'comment'])) {
         absent.set(name, 'removal');
+        initial?.facts.set(name, { kind: 'potential' });
         continue;
       }
       if (action.tagName === 'do_if') {
@@ -270,6 +620,7 @@ function lintLocalVariableReads(root: Element, source: string, filePath?: string
         const test = LOCAL_EXISTENCE_TEST.exec(action.getAttribute('value')?.trim() || '');
         if (!test || !simpleElse || !hasOnlyAttributes(action, ['value', 'comment']) || depth >= MAX_VARIABLE_BRANCH_DEPTH) {
           absent.clear();
+          clearInitial(initial);
           continue;
         }
 
@@ -278,35 +629,46 @@ function lintLocalVariableReads(root: Element, source: string, filePath?: string
         const absentBranch = absenceIsTrue ? action : alternative;
         const presentBranch = absenceIsTrue ? alternative : action;
         if (absent.has(variable)) {
-          absent = scanActions(absentBranch, absent, cue, depth + 1);
+          initial?.facts.set(variable, { kind: 'potential' });
+          absent = scanActions(absentBranch, absent, cue, depth + 1, initial);
           continue;
         }
         // Log-only arms cannot change incoming facts, so the condition adds only a temporary fact.
         if (onlyVariableLogs(presentBranch) && onlyVariableLogs(absentBranch)) {
-          scanActions(presentBranch, absent, cue, depth + 1);
+          const previous = initial?.facts.get(variable);
+          initial?.facts.set(variable, { kind: 'present' });
+          scanActions(presentBranch, absent, cue, depth + 1, initial);
           absent.set(variable, 'flow');
-          scanActions(absentBranch, absent, cue, depth + 1);
+          initial?.facts.set(variable, { kind: 'potential' });
+          scanActions(absentBranch, absent, cue, depth + 1, initial);
           absent.delete(variable);
+          if (initial) { if (previous) initial.facts.set(variable, previous); else initial.facts.delete(variable); }
           continue;
         }
-        const present = scanActions(presentBranch, new Map(absent), cue, depth + 1);
+        const presentInitial = cloneInitial(initial), absentInitial = cloneInitial(initial);
+        presentInitial?.facts.set(variable, { kind: 'present' });
+        absentInitial?.facts.set(variable, { kind: 'potential' });
+        const present = scanActions(presentBranch, new Map(absent), cue, depth + 1, presentInitial);
         absent.set(variable, 'flow');
-        absent = scanActions(absentBranch, absent, cue, depth + 1);
+        absent = scanActions(absentBranch, absent, cue, depth + 1, absentInitial);
         for (const [variable, reason] of absent) {
           const otherReason = present.get(variable);
           if (!otherReason) absent.delete(variable);
           else if (otherReason !== reason) absent.set(variable, 'flow');
         }
+        joinInitial(initial, presentInitial, absentInitial);
         continue;
       }
 
+      initialAction(action, initial, absent);
       const assignment = action.tagName === 'set_value' ? name : undefined;
       const log = action.tagName === 'debug_text';
       if ((!assignment && !log) || action.children.length) {
         absent.clear();
         continue;
       }
-      const plainAssignment = assignment && hasOnlyAttributes(action, ['name', 'exact', 'comment']);
+      const plainAssignment = assignment && (hasOnlyAttributes(action, ['name', 'exact', 'comment'])
+        || action.getAttribute('operation') === 'set' && hasOnlyAttributes(action, ['name', 'exact', 'operation', 'comment']));
       const unconditionalLog = log && !action.hasAttribute('chance');
       const attribute = plainAssignment ? action.getAttributeNode('exact') : unconditionalLog ? action.getAttributeNode('text') : null;
       const read = attribute && STRICT_LOCAL_READ.exec(attribute.value.trim());
@@ -330,7 +692,9 @@ function lintLocalVariableReads(root: Element, source: string, filePath?: string
     if (!isPlainVariableCue(cue, root)) continue;
     const actions = Array.from(cue.children).find(child => !child.namespaceURI && child.tagName === 'actions');
     // Save state and other cues can supply a value at entry, even in a child's inherited namespace.
-    scanActions(actions, new Map(), enclosingNamedCue(actions ?? cue), 0);
+    activeCue = availabilityOwn(availability?.cues, availabilityCueKey(cue));
+    const initial = activeCue ? { facts: new Map<string, InitialValue>(), potential: !activeCue.unavailable } : undefined;
+    scanActions(actions, new Map(), enclosingNamedCue(actions ?? cue), 0, initial);
   }
   return findings.sort((a, b) => (a.line ?? 0) - (b.line ?? 0) || (a.column ?? 0) - (b.column ?? 0));
 }
@@ -633,14 +997,17 @@ export function lintEffectiveMdCueReturns(filePath: string, trace: DiffElementPr
  * look like a custom key: it is flagged only when it contains no known-property hit,
  * so with no union supplied we skip the lint entirely rather than guess).
  */
-export function lintMdPitfalls(xml: string, opts: { propertyUnion?: Set<string>; propertyIndex?: ScriptPropertyIndex; filePath?: string } = {}): MdPitfallFinding[] {
+export function lintMdPitfalls(xml: string, opts: { propertyUnion?: Set<string>; propertyIndex?: ScriptPropertyIndex; filePath?: string;
+  variableAvailability?: MdVariableAvailabilityContext } = {}): MdPitfallFinding[] {
   const out: MdPitfallFinding[] = [];
   if (!xml || typeof xml !== 'string' || !/<mdscript\b/i.test(xml)) return out;
   const masked = maskNonExpressionSpans(xml);
 
   // DOM parse for the cue-tree lints
   const hasVariableFlow = xml.includes('<remove_value') || (xml.includes('<do_if') && (xml.includes('?') || xml.includes('&#')));
-  const leadingBom = hasVariableFlow && xml.startsWith('\uFEFF');
+  const candidateAvailability = opts.filePath ? availabilityOwn(opts.variableAvailability?.files, availabilityPath(opts.filePath)) : undefined;
+  const availability = candidateAvailability?.source === xml ? candidateAvailability : undefined;
+  const leadingBom = (hasVariableFlow || !!availability) && xml.startsWith('\uFEFF');
   const source = leadingBom ? xml.slice(1) : xml;
   let doc: Document;
   let parseError = false;
@@ -651,7 +1018,7 @@ export function lintMdPitfalls(xml: string, opts: { propertyUnion?: Set<string>;
   // Non-MD and malformed XML produce no semantic finding here; structural/wellformedness validation owns those diagnostics.
   if (!element || element.nodeName !== 'mdscript' || parseError) return out;
   const root = element as unknown as ElementLike;
-  if (hasVariableFlow) out.push(...lintLocalVariableReads(element, normalizeLineEndings(source), opts.filePath, leadingBom));
+  if (hasVariableFlow || availability) out.push(...lintLocalVariableReads(element, normalizeLineEndings(source), opts.filePath, leadingBom, availability, opts.variableAvailability));
   // The original cue-tree lints stop when their parser sees a leading BOM outside the root.
   if (leadingBom) return out;
   out.push(...lintMdCutsceneTimeouts(element, opts.filePath));
@@ -943,6 +1310,173 @@ export function runMdPitfallSelftest(): {
   ok('branch nesting bound stops analysis inside an unsupported depth',
     rootFlow('<do_if value="not $Value?">'.repeat(MAX_VARIABLE_BRANCH_DEPTH + 1) + reading
       + '</do_if>'.repeat(MAX_VARIABLE_BRANCH_DEPTH + 1)).length === 0);
+  const initialCode = 'md_pitfall.variable_read_before_initialization';
+  const initialRead = '<debug_text text="$X"/>';
+  const initialDocument = (actions: string, script = 'A', children = '') => `<mdscript name="${script}"><cues>`
+    + `<cue name="Root"><actions>${actions}</actions>${children}</cue></cues></mdscript>`;
+  const initialSchema = { loaded: true, sourceFiles: [], elementCount: 0, elements: new Map([
+    ...['actions', 'conditions', 'event_game_started', 'check_all', 'check_any', 'opaque_effect', 'run_actions'].map(name =>
+      [name, { resolved: true, openAttributes: false, attributes: new Map() }] as const),
+    ['set_value', { resolved: true, openAttributes: false, attributes: new Map([['name', { type: 'lvalueexpression', required: true }]]) }],
+    ['output_expression', { resolved: true, openAttributes: false, attributes: new Map([['result', { type: 'lvalueexpression', required: true }]]) }],
+    ['output_name', { resolved: true, openAttributes: false, attributes: new Map([['result', { type: 'lvaluename', required: true }]]) }],
+    ['output_group', { resolved: true, openAttributes: false, attributes: new Map([['result', { type: 'groupname', required: true }]]) }],
+    ['output_count', { resolved: true, openAttributes: false, attributes: new Map([['result', { type: 'countresult', required: true }]]) }],
+  ]) } as unknown as SchemaIndex;
+  const initialFiles = (actions: string, others: MdVariableAvailabilityInput[] = [], schema: SchemaIndex | null = initialSchema) => {
+    const content = initialDocument(actions);
+    const files = [{ path: 'md/a.xml', content }, ...others];
+    const built = buildMdVariableAvailabilityContext(files, schema);
+    return { ...built, content, rows: lintMdPitfalls(content, { filePath: 'md/a.xml', variableAvailability: built.context }) };
+  };
+  const initialRows = (actions: string, others: MdVariableAvailabilityInput[] = []) => initialFiles(actions, others).rows.filter(row => row.code === initialCode);
+  const remoteWriter = (destination: string, tag = 'set_value', attribute = 'name'): MdVariableAvailabilityInput => ({ path: 'md/b.xml',
+    content: initialDocument(`<${tag} ${attribute}="${destination}" exact="1"/>`, 'B') });
+  ok('project initial advisory distinguishes no modeled writer and a later same-block writer',
+    initialRows(initialRead)[0]?.detail.includes('No guaranteed earlier initialization')
+    && initialRows(initialRead + '<set_value name="$X" exact="1"/>')[0]?.detail.includes('later in this action block')
+    && initialRows(initialRead).every(row => row.severity === 'warning' && row.detail.includes('Saved values') && row.detail.includes('outside the analyzed project')));
+  const positionedInitial = '\uFEFF<mdscript name="A"><cues><cue name="Root"><actions><debug_text text="&#36;X"/></actions></cue></cues></mdscript>';
+  const positionedContext = buildMdVariableAvailabilityContext([{ path: 'md/a.xml', content: positionedInitial }], initialSchema);
+  const positionedRows = lintMdPitfalls(positionedInitial, { filePath: 'md/a.xml', variableAvailability: positionedContext.context });
+  ok('project initial advisory preserves exact first-line BOM and entity location', positionedRows[0]?.code === initialCode
+    && positionedRows[0]?.line === 1 && positionedRows[0]?.column === positionedInitial.indexOf('&#36;') + 1);
+  ok('project initial prior and namespace assignments clear only the exact case-matched fact',
+    initialRows('<set_value name="$X" exact="1"/>' + initialRead).length === 0
+    && initialRows('<set_value name="namespace.$X" exact="1"/>' + initialRead).length === 0
+    && initialRows('<set_value name="$x" exact="1"/>' + initialRead).length === 1);
+  ok('project initial explicit set operation follows the ordinary initializer',
+    initialRows('<set_value name="$X" operation="set" exact="1"/>' + initialRead).length === 0);
+  const receiverDocument = initialDocument('<debug_text text="$Probe.hull"/><debug_text text="namespace.$Probe.hull"/>');
+  const receiverContext = buildMdVariableAvailabilityContext([{ path: 'md/a.xml', content: receiverDocument }], initialSchema);
+  const receiverRows = lintMdPitfalls(receiverDocument, { filePath: 'md/a.xml', variableAvailability: receiverContext.context }).filter(row => row.code === initialCode);
+  ok('project initial ordinary and namespace receiver reads retain authored positions and preceding initialization control',
+    receiverRows.length === 2 && receiverRows[0].line === 1 && receiverRows[0].column === receiverDocument.indexOf('$Probe.hull') + 1
+    && receiverRows[1].column === receiverDocument.indexOf('namespace.$Probe.hull') + 1
+    && initialRows('<set_value name="$Probe" exact="player.ship"/><debug_text text="$Probe.hull"/><debug_text text="namespace.$Probe.hull"/>').length === 0);
+  ok('project initial ordinary RHS is read before its destination initialization',
+    initialRows('<set_value name="$X" exact="$X"/>' + initialRead).length === 1
+    && initialRows('<set_value name="$X" exact="$X"/>')[0]?.sourceRef === 'set_value/@exact');
+  const pairedInitial = initialFiles('<do_if value="$X?">' + initialRead + '</do_if>\r\n<!-- adjacency -->\r\n<do_else><debug_text text="1"/></do_else>');
+  ok('project initial positive guards are quiet and absent arms retain only the proven finding',
+    initialRows('<do_if value="$X?">' + initialRead + '</do_if>').length === 0
+    && pairedInitial.rows.filter(row => row.code === initialCode).length === 0 && pairedInitial.coverageGaps.length === 0
+    && initialFiles('<do_if value="not $X?">' + initialRead + '</do_if>').rows.filter(row => String(row.code).startsWith('md_pitfall.variable_')).length === 1
+    && initialFiles('<do_if value="not $X?">' + initialRead + '</do_if>').rows.some(row => row.code === absenceCode));
+  ok('project initial joins require initialization on every modeled reachable arm',
+    initialRows('<do_if value="$Gate?"><set_value name="$X" exact="1"/></do_if>' + initialRead)[0]?.detail.includes('branches')
+    && initialRows('<do_if value="$Gate?"><set_value name="$X" exact="1"/></do_if><do_else><set_value name="$X" exact="2"/></do_else>' + initialRead).length === 0);
+  ok('project initial chance initialization is possible rather than guaranteed',
+    initialRows('<set_value name="$X" exact="1" chance="50"/>' + initialRead).length === 1);
+  ok('project initial add and subtract initialize their destination but still inspect independent RHS reads',
+    initialRows('<set_value name="$X" operation="add" exact="1"/>' + initialRead).length === 0
+    && initialRows('<set_value name="$X" operation="subtract" exact="1"/>' + initialRead).length === 0
+    && initialRows('<set_value name="$X" operation="add" exact="$Y"/>' + initialRead)[0]?.detail.includes('$Y'));
+  const selfAdd = initialFiles('<set_value name="$X" operation="add" exact="$X"/>' + initialRead);
+  ok('project initial self-referential add ordering is explicitly unknown rather than an engine error',
+    selfAdd.rows.filter(row => row.code === initialCode).length === 0
+    && selfAdd.coverageGaps.some(row => row.reason.includes('Self-referential add/subtract')));
+  ok('project initial optional suppressed quoted and property mutation roots are distinct',
+    initialRows('<debug_text text="$X?"/><debug_text text="@$X"/><debug_text text="\'$X\'"/>').length === 0
+    && initialRows('<set_value name="$Object.$Member" exact="1"/><debug_text text="$Object"/>').length === 1);
+  ok('project initial removal does not initialize and proven reads never gain a duplicate advisory',
+    initialFiles('<remove_value name="$X"/>' + initialRead).rows.filter(row => String(row.code).startsWith('md_pitfall.variable_')).length === 1
+    && initialFiles('<remove_value name="$X"/>' + initialRead).rows.some(row => row.code === removalCode));
+  ok('project initial append exceptions initialize only exact roots with create enabled',
+    initialRows('<append_to_list name="$X" create="true" exact="1"/>' + initialRead).length === 0
+    && initialRows('<append_list_elements name="$X" create="true" other="$Other"/>' + initialRead).length === 0
+    && initialRows('<append_to_list name="$X" exact="1"/>' + initialRead).length === 1
+    && initialRows('<append_to_list name="$X.$Member" create="true" exact="1"/>' + initialRead).length === 1);
+  ok('project initial exact remote storage is distinct while unresolved spelling keeps uncertainty',
+    initialRows(initialRead, [remoteWriter('md.A.Root.$X')]).length === 0
+    && initialRows(initialRead, [remoteWriter('md.B.Root.$X')]).length === 1
+    && initialRows(initialRead, [remoteWriter('md.a.Root.$X')]).length === 0
+    && initialFiles(initialRead, [remoteWriter('md.a.Root.$X')]).coverageGaps.some(row => row.reason.includes('unresolved')));
+  ok('project initial schema discovers every declared lvalue destination kind',
+    ['output_expression', 'output_name', 'output_group', 'output_count'].every(tag =>
+      initialRows(initialRead + '<debug_text text="$Y"/>', [remoteWriter('md.A.Root.$X', tag, 'result')]).length === 1));
+  const conditionWriter: MdVariableAvailabilityInput = { path: 'md/b.xml', content: '<mdscript name="B"><cues><cue name="Root"><conditions>'
+    + '<output_count result="md.A.Root.$X"/></conditions><actions/></cue></cues></mdscript>' };
+  ok('project initial possible condition writers suppress only the addressed initial advisory',
+    initialRows(initialRead + '<debug_text text="$Y"/>', [conditionWriter]).length === 1);
+  const inheritedDocument = (childActions: string, own = '') => initialDocument('<set_value name="$X" exact="1"/>', 'A',
+    `<cues><cue name="Child"${own}><actions>${childActions}</actions></cue></cues>`);
+  const inheritedRows = (content: string, others: MdVariableAvailabilityInput[] = []) => {
+    const built = buildMdVariableAvailabilityContext([{ path: 'md/a.xml', content }, ...others], initialSchema);
+    return lintMdPitfalls(content, { filePath: 'md/a.xml', variableAvailability: built.context }).filter(row => row.code === initialCode);
+  };
+  ok('project initial inherited namespace and explicit this/static owners stay distinct',
+    inheritedRows(inheritedDocument(initialRead)).length === 0
+    && inheritedRows(inheritedDocument(initialRead, ' namespace="this"')).length === 1
+    && inheritedRows(inheritedDocument(initialRead, ' namespace="static"')).length === 1);
+  ok('project initial direct child storage is not the inherited namespace storage',
+    inheritedRows(inheritedDocument('<debug_text text="$Y"/>'), [remoteWriter('md.A.Child.$Y')]).length === 1
+    && inheritedRows(inheritedDocument('<debug_text text="$Y"/>'), [remoteWriter('md.A.Root.$Y')]).length === 0
+    && inheritedRows(inheritedDocument('<set_value name="this.$Y" exact="1"/><debug_text text="$Y"/>')).length === 1
+    && inheritedRows(inheritedDocument('<set_value name="this.$Y" exact="1"/><debug_text text="$Y"/>', ' namespace="this"')).length === 0);
+  const dynamicWriter = initialFiles(initialRead + '<debug_text text="$Y"/>', [remoteWriter('$Destination.$X')]);
+  ok('project initial unresolved destinations retain explicit authority gaps', dynamicWriter.coverageGaps.some(row => row.check === 'md.variable_initial_state')
+    && initialFiles(initialRead, [remoteWriter('{ $Destination }')]).rows.filter(row => row.code === initialCode).length === 0);
+  const opaqueFlow = initialFiles('<opaque_effect/>' + initialRead);
+  ok('project initial unknown effects clear potential authority without fabricating mod errors',
+    opaqueFlow.rows.filter(row => row.code === initialCode).length === 0 && opaqueFlow.coverageGaps.length > 0
+    && opaqueFlow.coverageGaps.every(row => row.check === 'md.variable_initial_state'));
+  const missingInput = initialFiles(initialRead, [{ path: 'md/missing.xml' }]);
+  ok('project initial missing source and ambiguous script identities never imply no writers',
+    missingInput.rows.filter(row => row.code === initialCode).length === 0 && missingInput.coverageGaps.length > 0
+    && initialFiles(initialRead, [{ path: 'md/duplicate.xml', content: initialDocument('', 'A') }]).rows.filter(row => row.code === initialCode).length === 0);
+  ok('project initial primitive semantics remain usable without a schema while unfamiliar declarations do not',
+    initialFiles(initialRead, [], null).rows.filter(row => row.code === initialCode).length === 1
+    && initialFiles(initialRead, [remoteWriter('md.A.Root.$X', 'output_name', 'result')], null).coverageGaps.length > 0);
+  const unresolvedSchema = { ...initialSchema, elements: new Map(initialSchema.elements) };
+  unresolvedSchema.elements.set('output_count', { ...initialSchema.elements.get('output_count')!, resolved: false, attributes: new Map() });
+  const unresolvedCondition = initialFiles(initialRead, [conditionWriter], unresolvedSchema);
+  ok('project initial unresolved condition declarations cannot masquerade as complete writer authority',
+    unresolvedCondition.rows.filter(row => row.code === initialCode).length === 0
+    && unresolvedCondition.coverageGaps.some(row => row.reason.includes('unresolved'))
+    && unresolvedCondition.context.scope.eligibleCues === 0 && unresolvedCondition.context.scope.skippedCues === 2);
+  const serializableContext = initialFiles(initialRead, [remoteWriter('md.B.Root.$Y')]);
+  const snapshotInitial = (value: unknown) => JSON.stringify(value, (_key, value) => value instanceof Map || value instanceof Set ? [...value] : value);
+  const beforeInitial = snapshotInitial(serializableContext.context);
+  const repeatedInitial = () => lintMdPitfalls(serializableContext.content, { filePath: 'md/a.xml', variableAvailability: serializableContext.context });
+  ok('project initial cached context is clone-compatible and never mutated by repeated lints',
+    snapshotInitial(repeatedInitial()) === snapshotInitial(repeatedInitial())
+    && beforeInitial === snapshotInitial(serializableContext.context)
+    && beforeInitial === snapshotInitial(structuredClone(serializableContext.context))
+    && beforeInitial === JSON.stringify(JSON.parse(JSON.stringify(serializableContext.context))));
+  const prototypeContent = initialDocument(initialRead);
+  const prototypeContext = buildMdVariableAvailabilityContext([{ path: '__proto__', content: prototypeContent }], initialSchema);
+  ok('project initial record lookups use exact own keys after JSON serialization',
+    lintMdPitfalls(prototypeContent, { filePath: '__proto__', variableAvailability: JSON.parse(JSON.stringify(prototypeContext.context)) })
+      .filter(row => row.code === initialCode).length === 1);
+  const orderedInputs = [{ path: 'md/a.xml', content: initialDocument(initialRead) }, remoteWriter('md.A.Root.$X')];
+  ok('project initial context and gaps are independent of project file order',
+    snapshotInitial(buildMdVariableAvailabilityContext(orderedInputs, initialSchema))
+      === snapshotInitial(buildMdVariableAvailabilityContext([...orderedInputs].reverse(), initialSchema)));
+  const manyInitial = (size: number, opaqueChild = false) => {
+    const writes = Array.from({ length: size }, (_, index) => `<set_value name="$Shared${index}" exact="1"/>`).join('');
+    const children = Array.from({ length: size }, (_, index) => `<cue name="Child${index}"><actions><debug_text text="$Shared${index}"/>`
+      + '<debug_text text="$Never"/></actions></cue>').join('');
+    const extra = opaqueChild ? '<cue name="Opaque"><actions><opaque_effect/></actions></cue>' : '';
+    const content = initialDocument(writes, 'A', `<cues>${children}${extra}</cues>`);
+    const built = buildMdVariableAvailabilityContext([{ path: 'md/a.xml', content }], initialSchema);
+    return { ...built, rows: lintMdPitfalls(content, { filePath: 'md/a.xml', variableAvailability: built.context }).filter(row => row.code === initialCode) };
+  };
+  const manySmall = manyInitial(16), manyLarge = manyInitial(64);
+  ok('project initial many-cue shared-owner indexing stores writer authority once with bounded scaling',
+    manySmall.rows.length === 16 && manyLarge.rows.length === 64
+    && manyLarge.context.scope.eligibleCues === 65 && manyLarge.context.scope.skippedCues === 0
+    && Object.keys(manyLarge.context.authority).length === 1
+    && Object.values(manyLarge.context.authority).every(owner => Object.keys(owner.variables).length === 64)
+    && JSON.stringify(manyLarge.context).length < JSON.stringify(manySmall.context).length * 6
+    && manyLarge.context.scope.indexedFacts < manySmall.context.scope.indexedFacts * 6
+    && !manyLarge.context.scope.limited && manyLarge.context.scope.indexedFacts <= 262144);
+  const manyOpaque = manyInitial(64, true);
+  ok('project initial targeted opaque authority is indexed and eligible counts follow its effective scope',
+    manyOpaque.rows.length === 0 && manyOpaque.coverageGaps.length > 0
+    && manyOpaque.context.scope.eligibleCues === 1 && manyOpaque.context.scope.skippedCues === 65
+    && manyOpaque.context.scope.eligibleCues + manyOpaque.context.scope.skippedCues === 66
+    && Object.keys(manyOpaque.context.authority).length === 1 && !manyOpaque.context.scope.limited);
   const triggerRules = (cues: string) => lintMdPitfalls(`<mdscript name="Trigger"><cues>\n${cues}\n</cues></mdscript>`,
     { filePath: 'md/trigger.xml' }).filter(f => f.code === 'md_pitfall.no_event_condition' || f.code === 'md_pitfall.illegal_instantiate');
   const triggerCue = (attributes = '', body = '<check_value value="true"/>') =>
