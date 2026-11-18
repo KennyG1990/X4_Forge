@@ -366,19 +366,17 @@ function NativePerformanceSection({ authority, backendInstanceId, parentRefresh 
       if (operation === 'start' && (!accepted.collectionActive || !accepted.captureId || accepted.disposed || nativeCleanupPending(value))) throw new Error('The native host did not confirm active collection with clean timer ownership.');
       if (operation === 'stop' && (accepted.collectionActive || nativeCleanupPending(value)
         || (accepted.captureId !== null && accepted.captureId !== owner.captureId))) throw new Error('The native host did not confirm cleanup of the exact selected capture.');
-      const laterRead = readVersion.current > owner.readVersion && controlReady.current && latestReport.current?.operation === 'read'
+      const interveningRead = readVersion.current > owner.readVersion && controlReady.current && latestReport.current?.operation === 'read'
         ? latestReport.current : null;
       const acknowledgedCapture = operation === 'start' ? accepted.captureId : owner.captureId;
-      if (laterRead?.status?.native?.captureId && laterRead.status.native.captureId !== acknowledgedCapture) {
+      if (interveningRead?.status?.native?.captureId && interveningRead.status.native.captureId !== acknowledgedCapture) {
         throw new Error('The native capture changed while the acknowledgement was pending. Earlier control status cannot replace the current capture.');
       }
-      if (!laterRead) {
-        latestReport.current = value; controlReady.current = true;
-        setReadState({ scope, report: value, fresh: false });
-      }
-      setAction({ scope, notice: laterRead
-        ? `Native ${operation} acknowledgement received for capture ${acknowledgedCapture}. Showing the newer native read for current status.`
-        : operation === 'start'
+      // A read completed during this control may predate host execution. Keep the
+      // exact ACK until the existing refresh delivers a causally fresh read.
+      latestReport.current = value; controlReady.current = true;
+      setReadState({ scope, report: value, fresh: false });
+      setAction({ scope, notice: operation === 'start'
           ? `Native capture ${accepted.captureId} was acknowledged. Resource samples await a fresh read; the capture has automatic expiry.`
           : `Native cleanup for capture ${owner.captureId} was acknowledged. A fresh read will confirm the current status.` });
     } catch (error) {

@@ -13,6 +13,7 @@ import { ephemeralWorkspaceHeaders, readServerWorkspaceEnvelope, seedServerWorks
 import type { ForgeNativePerformanceOperation, ForgeNativePerformanceReport } from '../../src/server/forgePerformance';
 import { createForgePerformanceCollector } from '../../shared/forgePerformance';
 import { isNativePerformanceSnapshot, isNativePerformanceStatus } from '../../shared/nativePerformanceProtocol';
+import { pollingResourceKey } from '../../src/lib/continuousPolling';
 // END BATCH3 mounted native imports
 
 test.use({ extraHTTPHeaders: { Authorization: `Bearer ${E2E_TOKEN}` }, viewport: { width: 1440, height: 1000 } });
@@ -24,7 +25,7 @@ const profilePath = `${reportPath}/profile`;
 const sha = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 type PollResource = { resourceKey: string; subscribers: number; running: boolean };
 type StudioWindow = Window & {
-  __X4_E2E__?: { getWorkspace: () => ModWorkspace };
+  AgentRuntime?: { getCurrentWorkspace: () => ModWorkspace };
   __X4_WORKSPACE_CONTEXT__?: { getWorkspaceId: () => string; getSelectionRevision: () => number };
   __X4_CONTINUOUS_POLLING__?: { snapshot: () => { resources: PollResource[] } };
 };
@@ -74,7 +75,7 @@ async function performanceResources(page: Page): Promise<PollResource[]> {
 async function boot(page: Page, workspace: ModWorkspace) {
   await page.goto('/');
   await expect.poll(async () => {
-    const current = await page.evaluate(() => (window as StudioWindow).__X4_E2E__?.getWorkspace());
+    const current = await page.evaluate(() => (window as StudioWindow).AgentRuntime?.getCurrentWorkspace());
     return current ? workspaceSnapshotHash(current) : '';
   }).toBe(workspaceSnapshotHash(workspace));
   const health = page.getByTestId('health-card');
@@ -483,11 +484,11 @@ async function withNativeWorkspace(page: Page, request: APIRequestContext, info:
 // END BATCH3 mounted native fixture owners
 
 // BEGIN BATCH3 mounted native behavior cases
-async function releaseNativeRead(native: NativeUiFixture, matches: (body: ForgeNativePerformanceReport) => boolean, issuedAfter = -Infinity) {
+async function releaseNativeRead(native: NativeUiFixture, matches: (body: ForgeNativePerformanceReport) => boolean, issuedAfterSequence = -Infinity) {
   let selected: NativeReplyPlan | undefined;
   await expect.poll(() => {
     selected = [...native.heldReads].reverse().find(plan => !!plan.receipt && !plan.completed && !plan.receipt.request.failure()
-      && plan.receipt.request.timing().startTime >= issuedAfter
+      && plan.receipt.sequence > issuedAfterSequence
       && matches(plan.reply.body as ForgeNativePerformanceReport));
     return !!selected;
   }, { timeout: 10_000 }).toBe(true);
@@ -536,6 +537,11 @@ test('Native performance opens read-only and separates exact control ACKs from f
     await page.waitForTimeout(2250);
     expect(native.receipts.filter(row => row.operation !== 'read')).toHaveLength(posts);
     await page.getByTestId('diagnostics-scope-performance').click();
+    await expect(page.getByRole('region', { name: 'Owned backend', exact: true })).toBeVisible();
+    const remountAuthority = await page.evaluate(() => `${(window as StudioWindow).__X4_WORKSPACE_CONTEXT__?.getWorkspaceId() || ''}|${(window as StudioWindow).__X4_WORKSPACE_CONTEXT__?.getSelectionRevision() || 0}`);
+    const remountKey = pollingResourceKey('forge-native-performance', `${JSON.stringify([remountAuthority, native.backendInstanceId])}|0|0`);
+    await expect.poll(async () => (await nativeResources(page)).map(resource => resource.resourceKey))
+      .toEqual([remountKey]);
     await releaseNativeRead(native, value => value.status?.native?.collectionActive === false);
     await expect(page.getByTestId('forge-native-performance')).toContainText('Native collection: inactive');
   });
@@ -724,6 +730,11 @@ test('Native cancellation and unmount never globally stop an acknowledged captur
     expect(native.receipts.filter(row => row.operation === 'read')).toHaveLength(reads);
     expect(native.receipts.filter(row => row.operation !== 'read')).toHaveLength(controls); expect(native.receipts.filter(row => row.operation === 'stop')).toHaveLength(0);
     await page.getByTestId('diagnostics-scope-performance').click();
+    await expect(page.getByRole('region', { name: 'Owned backend', exact: true })).toBeVisible();
+    const remountAuthority = await page.evaluate(() => `${(window as StudioWindow).__X4_WORKSPACE_CONTEXT__?.getWorkspaceId() || ''}|${(window as StudioWindow).__X4_WORKSPACE_CONTEXT__?.getSelectionRevision() || 0}`);
+    const remountKey = pollingResourceKey('forge-native-performance', `${JSON.stringify([remountAuthority, native.backendInstanceId])}|0|0`);
+    await expect.poll(async () => (await nativeResources(page)).map(resource => resource.resourceKey))
+      .toEqual([remountKey]);
     await releaseNativeRead(native, value => value.status?.native?.captureId === 'acknowledged_capture_keeps_lease');
     await expect(page.getByTestId('forge-native-performance')).toContainText('Native collection: active');
     fixture.evidence.push({ cancellationAndUnmount: { acknowledgedCaptureNotStopped: true, stops: 0, automaticControlsAfterUnmount: 0 } });
@@ -755,7 +766,10 @@ for (const operation of ['start', 'stop'] as const) {
       await expect(panel).toContainText(`Native collection: ${operation === 'start' ? 'active' : 'inactive'}`);
       await expect(panel.getByRole('button', { name: 'Start native collection', exact: true })).toBeDisabled();
       await expect(panel.getByRole('region', { name: 'Shared native extension host', exact: true })).toHaveCount(0);
-      const currentRead = await releaseNativeRead(native, value => value.status?.native?.collectionActive === (operation === 'start'), ackBodyFinishedAt);
+      const currentRead = await releaseNativeRead(native, value => value.status?.native?.collectionActive === (operation === 'start'), preControlReceipt.sequence);
+      const currentResponse = await currentRead.receipt!.request.response();
+      expect(currentResponse).not.toBeNull(); await currentResponse!.finished();
+      expect(currentRead.receipt!.request.timing().startTime, 'The fresh read must start after the ACK body finishes').toBeGreaterThanOrEqual(ackBodyFinishedAt);
       await expect(panel.getByRole('region', { name: 'Shared native extension host', exact: true })).toBeVisible();
       if (operation === 'stop') await expect(panel.getByRole('button', { name: 'Start native collection', exact: true })).toBeEnabled();
       fixture.evidence.push({ causalNativeAck: { operation, issued: issued.body, preControlRead: { active: before.status!.native!.collectionActive,
@@ -923,7 +937,7 @@ test('real delayed performance status and an active profile cannot cross immutab
       await expect(page.getByTestId('toast')).toContainText('Created independent workspace');
       const after = await page.evaluate(() => ({ id: (window as StudioWindow).__X4_WORKSPACE_CONTEXT__!.getWorkspaceId(),
         revision: (window as StudioWindow).__X4_WORKSPACE_CONTEXT__!.getSelectionRevision(),
-        workspace: (window as StudioWindow).__X4_E2E__!.getWorkspace() }));
+        workspace: (window as StudioWindow).AgentRuntime!.getCurrentWorkspace() }));
       expect(after.id).not.toBe(before.id); expect(after.revision).toBeGreaterThan(before.revision);
       requireReservationWindow(fixture, 'profile cancellation', profileIssuedAt, profileDurationMs, 'after workspace authority changed');
       const currentResponse = await switchedReport;
@@ -971,7 +985,7 @@ test('real delayed performance status and an active profile cannot cross immutab
       await expect.poll(async () => (await performanceResources(page)).map(row => row.subscribers)).toEqual([1]);
       const currentResources = await performanceResources(page);
       expect(currentResources.every(row => oldResources.every(oldRow => oldRow.resourceKey !== row.resourceKey))).toBe(true);
-      const finalWorkspace = await page.evaluate(() => (window as StudioWindow).__X4_E2E__!.getWorkspace());
+      const finalWorkspace = await page.evaluate(() => (window as StudioWindow).AgentRuntime!.getCurrentWorkspace());
       expect(workspaceSnapshotHash(finalWorkspace)).toBe(workspaceSnapshotHash(after.workspace));
       expect(finalWorkspace.name).toBe('Performance Authority B');
       const finalReport = await readReport(request, fixture.headers);

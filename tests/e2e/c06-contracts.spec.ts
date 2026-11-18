@@ -1,7 +1,7 @@
 import { expect, test } from './request-transport';
 import fs from 'node:fs';
 import path from 'node:path';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { E2E_API_ORIGIN } from '../../playwright.config';
 import { ACTION_OPERATION_ID_HEADER, createActionOperationId } from '../../shared/actionOperationId';
 import { canonicalWorkspaceContentString } from '../../src/lib/workspaceIdentity';
@@ -13,8 +13,9 @@ test.describe.configure({ mode: 'serial' });
 
 test('C06b addressed workspace, diagnostic and release contracts use truthful identities', async ({ request, page }) => {
   test.setTimeout(600_000);
-  const out = path.resolve('test-results/claude-C06b', `run-${randomUUID()}`);
-  fs.mkdirSync(out, { recursive: true });
+  const outputRoot = path.resolve('test-results');
+  fs.mkdirSync(outputRoot, { recursive: true });
+  const out = fs.mkdtempSync(path.join(outputRoot, 'c06-'));
   const headers = await ephemeralWorkspaceHeaders(true);
   const checks: string[] = [];
   const calls: any[] = [];
@@ -469,7 +470,7 @@ test('C06b addressed workspace, diagnostic and release contracts use truthful id
     await page.goto('/');
     await page.waitForFunction(({ workspaceId, name }) =>
       (window as any).__X4_WORKSPACE_CONTEXT__?.getWorkspaceId() === workspaceId
-      && (window as any).__X4_E2E__?.getWorkspace().name === name,
+      && (window as any).AgentRuntime?.getCurrentWorkspace().name === name,
     { workspaceId: current.data.workspaceId, name: current.data.workspace.name });
     const health = page.getByTestId('health-card');
     await health.waitFor({ state: 'visible', timeout: 1500 }).catch(() => undefined);
