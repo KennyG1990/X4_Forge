@@ -48,6 +48,7 @@ export interface MdPitfallFinding {
   code: 'md_pitfall.products_existence' | 'md_pitfall.cancel_conversation_actor_or_template' | 'md_pitfall.ui_listener_one_shot'
     | 'md_pitfall.offer_accepted_keyword_cue' | 'md_pitfall.param3_table_barekey' | 'md_pitfall.return_context'
     | 'md_pitfall.numeric_time_value' | 'md_pitfall.no_event_condition' | 'md_pitfall.illegal_instantiate'
+    | 'md_pitfall.variable_read_after_removal' | 'md_pitfall.variable_read_when_absent'
     | MdExpressionFinding['code'];
   severity: 'error' | 'warning';
   cue?: string;
@@ -205,6 +206,133 @@ function isStaticRootCue(node: Element | null, root: Element): boolean {
   return node?.tagName === 'cue' && node.parentElement?.tagName === 'cues'
     && node.parentElement.parentElement === root && !node.hasAttribute('ref')
     && (node.getAttribute('instantiate') === null || node.getAttribute('instantiate') === 'false');
+}
+
+// In ordinary cue actions, bare variables and namespace-qualified variables share one namespace.
+const LOCAL_VARIABLE = /^(?:namespace\.)?(\$[A-Za-z_]\w*)$/;
+const STRICT_LOCAL_READ = /^(?:namespace\.)?(\$[A-Za-z_]\w*)(?:\.[A-Za-z_]\w*)*$/;
+const LOCAL_EXISTENCE_TEST = /^(not\s+)?(?:namespace\.)?(\$[A-Za-z_]\w*)\?$/;
+const MAX_VARIABLE_BRANCH_DEPTH = 16;
+type AbsenceReason = 'removal' | 'flow';
+
+function isPlainVariableCue(cue: Element, root: Element): boolean {
+  for (let current: Element | null = cue; current;) {
+    const parent = current.parentElement;
+    const namespace = current.getAttribute('namespace');
+    const instantiate = current.getAttribute('instantiate');
+    if (current.tagName !== 'cue' || current.namespaceURI || current.hasAttribute('ref')
+      || (namespace !== null && !['default', 'this', 'static'].includes(namespace))
+      || (instantiate !== null && instantiate !== 'false' && instantiate !== '0')
+      || parent?.tagName !== 'cues' || parent.namespaceURI) return false;
+    if (parent.parentElement === root) return true;
+    current = parent.parentElement;
+  }
+  return false;
+}
+
+function hasOnlyAttributes(element: Element, names: string[]): boolean {
+  return Array.from(element.attributes).every(attribute => names.includes(attribute.name));
+}
+
+function onlyVariableLogs(branch: Element | undefined): boolean {
+  return !branch || Array.from(branch.children)
+    .every(action => action.tagName === 'debug_text' && !action.namespaceURI && !action.children.length);
+}
+
+function lintLocalVariableReads(root: Element, source: string, filePath?: string, leadingBom = false): MdPitfallFinding[] {
+  if (root.namespaceURI) return [];
+  const findings: MdPitfallFinding[] = [];
+  let lines: number[] | undefined;
+
+  function scanActions(container: Element | undefined, absent: Map<string, AbsenceReason>, cue: string | undefined, depth: number): Map<string, AbsenceReason> {
+    if (!container) return absent;
+    const actions = Array.from(container.children);
+    for (let index = 0; index < actions.length; index++) {
+      const action = actions[index];
+      if (action.namespaceURI) {
+        absent.clear();
+        continue;
+      }
+      const name = LOCAL_VARIABLE.exec(action.getAttribute('name')?.trim() || '')?.[1];
+      if (action.tagName === 'remove_value' && name && !action.children.length
+        && hasOnlyAttributes(action, ['name', 'comment'])) {
+        absent.set(name, 'removal');
+        continue;
+      }
+      if (action.tagName === 'do_if') {
+        let after = index + 1;
+        while (['do_elseif', 'do_else'].includes(actions[after]?.tagName)) after++;
+        const hasElse = after > index + 1;
+        const alternative = hasElse ? actions[index + 1] : undefined;
+        const simpleElse = !alternative || (after === index + 2 && alternative.tagName === 'do_else'
+          && !alternative.namespaceURI && hasOnlyAttributes(alternative, ['comment']));
+        index = after - 1;
+        const test = LOCAL_EXISTENCE_TEST.exec(action.getAttribute('value')?.trim() || '');
+        if (!test || !simpleElse || !hasOnlyAttributes(action, ['value', 'comment']) || depth >= MAX_VARIABLE_BRANCH_DEPTH) {
+          absent.clear();
+          continue;
+        }
+
+        const variable = test[2];
+        const absenceIsTrue = Boolean(test[1]);
+        const absentBranch = absenceIsTrue ? action : alternative;
+        const presentBranch = absenceIsTrue ? alternative : action;
+        if (absent.has(variable)) {
+          absent = scanActions(absentBranch, absent, cue, depth + 1);
+          continue;
+        }
+        // Log-only arms cannot change incoming facts, so the condition adds only a temporary fact.
+        if (onlyVariableLogs(presentBranch) && onlyVariableLogs(absentBranch)) {
+          scanActions(presentBranch, absent, cue, depth + 1);
+          absent.set(variable, 'flow');
+          scanActions(absentBranch, absent, cue, depth + 1);
+          absent.delete(variable);
+          continue;
+        }
+        const present = scanActions(presentBranch, new Map(absent), cue, depth + 1);
+        absent.set(variable, 'flow');
+        absent = scanActions(absentBranch, absent, cue, depth + 1);
+        for (const [variable, reason] of absent) {
+          const otherReason = present.get(variable);
+          if (!otherReason) absent.delete(variable);
+          else if (otherReason !== reason) absent.set(variable, 'flow');
+        }
+        continue;
+      }
+
+      const assignment = action.tagName === 'set_value' ? name : undefined;
+      const log = action.tagName === 'debug_text';
+      if ((!assignment && !log) || action.children.length) {
+        absent.clear();
+        continue;
+      }
+      const plainAssignment = assignment && hasOnlyAttributes(action, ['name', 'exact', 'comment']);
+      const unconditionalLog = log && !action.hasAttribute('chance');
+      const attribute = plainAssignment ? action.getAttributeNode('exact') : unconditionalLog ? action.getAttributeNode('text') : null;
+      const read = attribute && STRICT_LOCAL_READ.exec(attribute.value.trim());
+      const reason = read ? absent.get(read[1]) : undefined;
+      if (attribute && read && reason) {
+        const variable = read[1];
+        lines ??= [0, ...Array.from(source.matchAll(/\n/g), match => match.index + 1)];
+        const position = expressionLocation(source, lines, attribute, attribute.value.indexOf(read[0]));
+        const removal = reason === 'removal';
+        findings.push({ code: removal ? 'md_pitfall.variable_read_after_removal' : 'md_pitfall.variable_read_when_absent',
+          severity: 'warning', filePath, cue, sourceRef: `${action.tagName}/@${attribute.name}`,
+          line: position.line, column: leadingBom && position.line === 1 && position.column ? position.column + 1 : position.column,
+          detail: `Strict read of ${variable} ${removal ? 'after remove_value in this cue' : 'where this cue’s action flow proves it is absent'}. Assign a value first or use an existence check.` });
+      }
+      if (assignment) absent.delete(assignment);
+    }
+    return absent;
+  }
+
+  for (const cue of Array.from(root.getElementsByTagName('cue'))) {
+    if (!isPlainVariableCue(cue, root)) continue;
+    const actions = Array.from(cue.children).find(child => !child.namespaceURI && child.tagName === 'actions');
+    // Save state and other cues can supply a value at entry, even in a child's inherited namespace.
+    scanActions(actions, new Map(), enclosingNamedCue(actions ?? cue), 0);
+  }
+  return findings.sort((a, b) => (a.line ?? 0) - (b.line ?? 0) || (a.column ?? 0) - (b.column ?? 0));
 }
 
 function staticCueNames(root: Element): Set<string> {
@@ -511,15 +639,21 @@ export function lintMdPitfalls(xml: string, opts: { propertyUnion?: Set<string>;
   const masked = maskNonExpressionSpans(xml);
 
   // DOM parse for the cue-tree lints
+  const hasVariableFlow = xml.includes('<remove_value') || (xml.includes('<do_if') && (xml.includes('?') || xml.includes('&#')));
+  const leadingBom = hasVariableFlow && xml.startsWith('\uFEFF');
+  const source = leadingBom ? xml.slice(1) : xml;
   let doc: Document;
   let parseError = false;
   try {
-    doc = new DOMParser({ onError: () => { parseError = true; } }).parseFromString(xml, 'text/xml');
+    doc = new DOMParser({ onError: () => { parseError = true; } }).parseFromString(source, 'text/xml');
   } catch { return out; }
   const element = doc.documentElement;
   // Non-MD and malformed XML produce no semantic finding here; structural/wellformedness validation owns those diagnostics.
   if (!element || element.nodeName !== 'mdscript' || parseError) return out;
   const root = element as unknown as ElementLike;
+  if (hasVariableFlow) out.push(...lintLocalVariableReads(element, normalizeLineEndings(source), opts.filePath, leadingBom));
+  // The original cue-tree lints stop when their parser sees a leading BOM outside the root.
+  if (leadingBom) return out;
   out.push(...lintMdCutsceneTimeouts(element, opts.filePath));
 
   for (const cue of Array.from(element.getElementsByTagName('*'))) {
@@ -702,6 +836,113 @@ export function runMdPitfallSelftest(): {
   const ok = (name: string, cond: boolean, detail?: unknown) =>
     checks.push({ name, pass: !!cond, detail: detail === undefined ? undefined : (typeof detail === 'string' ? detail : JSON.stringify(detail)) });
   const lint = (xml: string) => lintMdPitfalls(xml, { propertyUnion: UNION_FIXTURE });
+  const removalCode = 'md_pitfall.variable_read_after_removal';
+  const removalRows = (actions: string[], cueAttributes = '') => lintMdPitfalls([
+    '\uFEFF<mdscript name="Removal"><cues>', `<cue name="Removal"${cueAttributes}><actions>`, ...actions,
+    '</actions></cue></cues></mdscript>',
+  ].join('\r\n'), { filePath: 'md/removal.xml' }).filter(row => row.code === removalCode);
+  const removal = '<remove_value name="$Value"/>';
+  const reading = '<debug_text text="&#36;Value.hull"/>';
+  const sameLine = reading + reading;
+  const duplicateReads = removalRows([removal, sameLine]);
+  ok('removed variable reads retain exact distinct XML entity positions', duplicateReads.length === 2
+    && duplicateReads[0].line === 4 && duplicateReads[0].column === sameLine.indexOf('&#36;') + 1
+    && duplicateReads[1].line === 4 && duplicateReads[1].column === sameLine.lastIndexOf('&#36;') + 1
+    && duplicateReads.every(row => row.severity === 'warning' && row.filePath === 'md/removal.xml'), duplicateReads);
+  const firstLine = `\uFEFF<mdscript><cues><cue><actions>${removal}${reading}</actions></cue></cues></mdscript>`;
+  const bomReads = lint(firstLine).filter(row => row.code === removalCode);
+  ok('removed variable location includes a first-line BOM in the original XML', bomReads.length === 1
+    && bomReads[0].line === 1 && bomReads[0].column === firstLine.indexOf('&#36;') + 1, bomReads);
+  const restoredReads = removalRows([removal, '<set_value name="$Value" exact="$Value"/>', reading]);
+  ok('assignment RHS is checked before the assignment invalidates the removal fact', restoredReads.length === 1
+    && restoredReads[0].sourceRef === 'set_value/@exact' && restoredReads[0].line === 4, restoredReads);
+  const guardedRemoval = removalRows([removal, '<do_if value="$Value?"><debug_text text="\'exists\'"/></do_if>',
+    '<do_else><debug_text text="\'absent\'"/></do_else>', '<set_value name="$Observed" exact="$Value"/>']);
+  ok('log-only existence branches preserve absence through the next strict read', guardedRemoval.length === 1
+    && guardedRemoval[0].line === 6, guardedRemoval);
+  ok('removal diagnostics require an observed removal and an ordinary strict local read',
+    removalRows([reading]).length === 0
+    && removalRows(['<remove_value name="$Value" chance="50"/>', reading]).length === 0
+    && removalRows([removal, '<debug_text text="@$Value.hull"/><debug_text text="$Value?"/>'
+      + '<debug_text text="\'$Value\'"/><debug_text text="$value"/><debug_text text="Other.$Value"/>']).length === 0
+    && removalRows([removal, reading], ' ref="External"').length === 0);
+  const conditionalLog = removalRows([removal, '<debug_text text="$Value" chance="0"/>', reading]);
+  ok('a conditional log does not report a read or invalidate absence', conditionalLog.length === 1
+    && conditionalLog[0].line === 5, conditionalLog);
+  ok('a possible write or suspension invalidates the known removal',
+    removalRows([removal, '<set_value name="$Value" exact="1" chance="50"/>', reading]).length === 0
+    && removalRows([removal, '<set_value name="namespace.$Value" exact="1"/>', reading]).length === 0
+    && removalRows([removal, '<wait exact="1s"/>', reading]).length === 0
+    && removalRows([removal, '<do_if value="$Other?"><set_value name="$Value" exact="1"/></do_if>', reading]).length === 0);
+  ok('foreign, malformed and raw diff content is outside the removal proof',
+    removalRows([removal, '<debug_text xmlns="urn:foreign" text="$Value"/>']).length === 0
+    && lint(`<mdscript><cues xmlns="urn:foreign"><cue xmlns=""><actions>${removal}${reading}</actions></cue></cues></mdscript>`)
+      .every(row => row.code !== removalCode)
+    && lint(`<diff><add sel="/mdscript">${removal}${reading}</add></diff>`).every(row => row.code !== removalCode)
+    && lint(`<mdscript><cues><cue><actions>${removal}${reading}</invalid>`).every(row => row.code !== removalCode));
+  const absenceCode = 'md_pitfall.variable_read_when_absent';
+  const flowRows = (body: string) => lintMdPitfalls(`<mdscript name="Removal"><cues>${body}</cues></mdscript>`,
+    { filePath: 'md/flow.xml' }).filter(row => row.code === absenceCode || row.code === removalCode);
+  const rootFlow = (actions: string) => flowRows(`<cue name="Root"><actions>${actions}</actions></cue>`);
+  const positiveCondition = `<do_if value="$Value?">${reading}</do_if>`;
+  const negativeCondition = `<do_if value="not $Value&#63;">${reading}</do_if>`;
+  const falseArm = `<do_else>${reading}</do_else>`;
+  ok('a negated existence test reports its strict read at the authored entity',
+    rootFlow(negativeCondition)[0]?.code === absenceCode
+    && rootFlow(negativeCondition)[0]?.column === (`<mdscript name="Removal"><cues><cue name="Root"><actions>` + negativeCondition).lastIndexOf('&#36;') + 1);
+  ok('present guard is quiet and its else arm proves absence', rootFlow(positiveCondition).length === 0
+    && rootFlow(positiveCondition + falseArm).length === 1 && rootFlow(positiveCondition + falseArm)[0].code === absenceCode);
+  ok('known absence skips the unreachable present branch without dropping the removal',
+    rootFlow(removal + positiveCondition + reading).length === 1
+    && rootFlow(removal + positiveCondition + reading)[0].code === removalCode);
+  ok('absence must hold on every reachable path after a branch',
+    rootFlow(`<do_if value="$Value?">${removal}</do_if>${reading}`)[0]?.code === absenceCode
+    && rootFlow(`<do_if value="not $Value?">${removal}</do_if>${reading}`).length === 0
+    && rootFlow(`<do_if value="$Other?">${removal}</do_if><do_else>${removal}</do_else>${reading}`)[0]?.code === removalCode
+    && rootFlow(removal + '<do_if value="not $Value?"><set_value name="$Value" exact="1"/></do_if>' + reading).length === 0);
+  ok('chance, comparisons, else-if chains and foreign branches stay outside existence flow',
+    rootFlow('<do_if value="$Value?" chance="0"/>' + falseArm).length === 0
+    && rootFlow('<do_if value="$Value?" exact="false"/>' + falseArm).length === 0
+    && rootFlow('<do_if value="$Value?"/><do_elseif value="true"/>' + falseArm).length === 0
+    && rootFlow('<do_if xmlns="urn:foreign" value="$Value?"/>' + falseArm).length === 0);
+  const childFlow = (actions: string, parentAttributes = '', childAttributes = ' namespace="this"') => flowRows(
+    `<cue name="Parent"${parentAttributes}><actions>${removal}</actions><cues>`
+    + `<cue name="Child"${childAttributes}><actions>${actions}</actions></cue></cues></cue>`);
+  ok('nested plain cues analyze their own flow and start with unknown entry state', childFlow(reading).length === 0
+    && childFlow(negativeCondition)[0]?.cue === 'Parent.Child'
+    && childFlow(removal + reading, '', ' namespace="default"')[0]?.code === removalCode
+    && childFlow(negativeCondition, ' ref="External"').length === 0
+    && childFlow(negativeCondition, ' instantiate="true"').length === 0);
+  const namespaceRemoval = '<remove_value name="namespace.$Value"/>';
+  const namespaceRead = '<debug_text text="namespace.&#36;Value.hull"/>';
+  const namespaceReadRows = rootFlow(removal + namespaceRead);
+  ok('exact namespace spelling shares local removal state and locates the authored qualified read',
+    rootFlow(namespaceRemoval + reading)[0]?.code === removalCode
+    && namespaceReadRows.length === 1 && namespaceReadRows[0].code === removalCode
+    && namespaceReadRows[0].column === ('<mdscript name="Removal"><cues><cue name="Root"><actions>' + removal + namespaceRead).indexOf('namespace.') + 1,
+    namespaceReadRows);
+  ok('exact namespace spelling shares existence test facts',
+    rootFlow(`<do_if value="not namespace.$Value?">${reading}</do_if>`)[0]?.code === absenceCode
+    && rootFlow(`<do_if value="namespace.$Value?">${namespaceRead}</do_if>`).length === 0
+    && rootFlow(`<do_if value="namespace.$Value?"/><do_else>${namespaceRead}</do_else>`)[0]?.code === absenceCode);
+  const namespaceRestore = '<set_value name="namespace.$Value" exact="$Value"/>';
+  const namespaceRestoreRows = rootFlow(removal + namespaceRestore + namespaceRead);
+  ok('namespace assignment reads the old value before invalidating the shared fact',
+    namespaceRestoreRows.length === 1 && namespaceRestoreRows[0].sourceRef === 'set_value/@exact'
+    && rootFlow(namespaceRemoval + '<set_value name="$Value" exact="1"/>' + namespaceRead).length === 0);
+  ok('namespace access keeps nested blocks isolated and other cue qualifiers outside the local proof',
+    childFlow(namespaceRead).length === 0
+    && childFlow(namespaceRemoval + reading, '', ' namespace="default"')[0]?.cue === 'Parent.Child'
+    && childFlow(namespaceRemoval + '<debug_text text="this.$Value"/>', '', ' namespace="default"').length === 0
+    && rootFlow(namespaceRemoval + '<set_value name="parent.$Value" exact="1"/>' + namespaceRead).length === 0);
+  ok('namespace analysis ignores case mismatches, optional and suppressed reads and compound targets',
+    rootFlow(namespaceRemoval + '<debug_text text="Namespace.$Value"/>'
+      + '<debug_text text="namespace.$value"/><debug_text text="@namespace.$Value"/>'
+      + '<debug_text text="namespace.$Value?"/><debug_text text="namespace.$Value.$Computed"/>').length === 0
+    && rootFlow('<remove_value name="namespace.$Value.member"/>' + namespaceRead).length === 0);
+  ok('branch nesting bound stops analysis inside an unsupported depth',
+    rootFlow('<do_if value="not $Value?">'.repeat(MAX_VARIABLE_BRANCH_DEPTH + 1) + reading
+      + '</do_if>'.repeat(MAX_VARIABLE_BRANCH_DEPTH + 1)).length === 0);
   const triggerRules = (cues: string) => lintMdPitfalls(`<mdscript name="Trigger"><cues>\n${cues}\n</cues></mdscript>`,
     { filePath: 'md/trigger.xml' }).filter(f => f.code === 'md_pitfall.no_event_condition' || f.code === 'md_pitfall.illegal_instantiate');
   const triggerCue = (attributes = '', body = '<check_value value="true"/>') =>
