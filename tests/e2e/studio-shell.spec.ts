@@ -12,8 +12,13 @@ import {
 import { readServerLayout, seedServerLayout, seedServerWorkspace } from './ephemeral';
 
 type E2EWindow = Window & {
-  __X4_E2E__?: { getWorkspaceHash: () => string };
+  AgentRuntime?: { getCurrentWorkspace: () => ReturnType<typeof buildTemplateWorkspace> };
 };
+
+async function liveWorkspaceHash(page: Page): Promise<string> {
+  const value = await page.evaluate(() => (window as E2EWindow).AgentRuntime!.getCurrentWorkspace());
+  return workspaceContentHash(sanitizeWorkspace(value));
+}
 
 async function bootExpert(page: Page, layout?: unknown) {
   const seededWorkspace = buildTemplateWorkspace('welcome');
@@ -35,7 +40,7 @@ async function bootExpert(page: Page, layout?: unknown) {
   // navigation immutability, otherwise a legitimate late boot adoption looks like a
   // shell action changed project data and flakes under a busy full-suite run.
   await expect.poll(
-    () => page.evaluate(() => (window as E2EWindow).__X4_E2E__!.getWorkspaceHash()),
+    () => liveWorkspaceHash(page),
     { timeout: 15_000 },
   ).toBe(seededHash);
   const health = page.getByTestId('health-card');
@@ -45,7 +50,7 @@ async function bootExpert(page: Page, layout?: unknown) {
 
 test('lossless registries keep every destination and utility recoverable', async ({ page }) => {
   await bootExpert(page);
-  const initialHash = await page.evaluate(() => (window as E2EWindow).__X4_E2E__!.getWorkspaceHash());
+  const initialHash = await liveWorkspaceHash(page);
 
   await expect(page.locator('[data-workspace-view]')).toHaveCount(WORKSPACE_NAV_ITEMS.length);
   for (const item of WORKSPACE_NAV_ITEMS) {
@@ -69,7 +74,7 @@ test('lossless registries keep every destination and utility recoverable', async
   await expect(page.locator('[data-global-action="shortcuts"]')).toBeVisible();
   await expect(page.locator('[data-global-action="workspace-switcher"]')).toBeVisible();
   await expect(page.getByTestId('experience-mode-switch')).toBeVisible();
-  expect(await page.evaluate(() => (window as E2EWindow).__X4_E2E__!.getWorkspaceHash())).toBe(initialHash);
+  expect(await liveWorkspaceHash(page)).toBe(initialHash);
 });
 
 test('layout customization docks, hides, reorders, collapses, restores, and persists', async ({ page, browser }) => {
@@ -80,7 +85,7 @@ test('layout customization docks, hides, reorders, collapses, restores, and pers
     await route.continue();
   });
   await bootExpert(page);
-  const initialHash = await page.evaluate(() => (window as E2EWindow).__X4_E2E__!.getWorkspaceHash());
+  const initialHash = await liveWorkspaceHash(page);
 
   const aiScriptsTab = page.locator('[data-workspace-view="aiscripts"]');
   const aiScriptsBox = await aiScriptsTab.boundingBox();
@@ -164,7 +169,7 @@ test('layout customization docks, hides, reorders, collapses, restores, and pers
   await expect(restartedPage.locator('[data-workspace-view="aiscripts"]')).toHaveAttribute('aria-current', 'page');
   await restartedPage.locator('[data-sidebar-tab="filesystem"]').click();
   await expect(restartedPage.locator('[data-sidebar-tab="filesystem"]')).toHaveAttribute('aria-current', 'page');
-  expect(await restartedPage.evaluate(() => (window as E2EWindow).__X4_E2E__!.getWorkspaceHash())).toBe(initialHash);
+  expect(await liveWorkspaceHash(restartedPage)).toBe(initialHash);
   await restartedContext.close();
 });
 

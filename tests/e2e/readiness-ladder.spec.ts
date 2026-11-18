@@ -1,24 +1,27 @@
 import { expect, test, type Page } from './request-transport';
 import { buildTemplateWorkspace } from '../../src/lib/modTemplates';
+import { workspaceContentHash } from '../../src/lib/workspaceIdentity';
+import { sanitizeWorkspace } from '../../src/types';
 import { seedServerWorkspace } from './ephemeral';
 
 type WatcherResponse = Record<string, unknown>;
 type E2EWindow = Window & {
-  __X4_E2E__?: {
-    getWorkspace: () => Record<string, unknown>;
-    setWorkspace: (workspace: Record<string, unknown>) => void;
-    getWorkspaceHash: () => string;
-  };
+  AgentRuntime?: { getCurrentWorkspace: () => ReturnType<typeof buildTemplateWorkspace> };
 };
+
+async function liveWorkspaceHash(page: Page): Promise<string> {
+  const value = await page.evaluate(() => (window as E2EWindow).AgentRuntime!.getCurrentWorkspace());
+  return workspaceContentHash(sanitizeWorkspace(value));
+}
 
 const workspace = buildTemplateWorkspace('welcome') as unknown as Record<string, unknown>;
 
 async function waitForApp(page: Page) {
   await page.goto('/');
   await expect(page.getByTestId('readiness-ladder')).toBeVisible();
-  await page.waitForFunction(() => Boolean((window as E2EWindow).__X4_E2E__));
+  await page.waitForFunction(() => Boolean((window as E2EWindow).AgentRuntime?.getCurrentWorkspace));
   await page.waitForFunction(
-    expectedName => (window as E2EWindow).__X4_E2E__?.getWorkspace().name === expectedName,
+    expectedName => (window as E2EWindow).AgentRuntime?.getCurrentWorkspace().name === expectedName,
     workspace.name,
   );
 }
@@ -46,7 +49,7 @@ test('readiness ladder routes to evidence, confirms experience, and invalidates 
   await expect(page.getByTestId('readiness-stage-package')).toHaveAttribute('data-status', 'pass');
   await expect(page.getByTestId('readiness-stage-deployed')).toHaveAttribute('data-status', 'pending');
 
-  const workspaceHash = await page.evaluate(() => (window as E2EWindow).__X4_E2E__!.getWorkspaceHash());
+  const workspaceHash = await liveWorkspaceHash(page);
   const deployedAt = '2026-07-14T18:00:00.000Z';
   watcher = {
     ok: true,
@@ -71,10 +74,10 @@ test('readiness ladder routes to evidence, confirms experience, and invalidates 
   await page.getByTestId('readiness-confirm-experience').click();
   await expect(page.getByTestId('readiness-stage-experience')).toHaveAttribute('data-status', 'pass');
 
-  await page.evaluate(() => {
-    const bridge = (window as E2EWindow).__X4_E2E__!;
-    bridge.setWorkspace({ ...bridge.getWorkspace(), description: 'Edited after deployment' });
-  });
+  await page.getByTestId('mode-expert').click();
+  await page.locator('[data-sidebar-tab="config"]').click();
+  await page.getByPlaceholder('Mod brief synopsis...').fill('Edited after deployment');
+  await page.waitForFunction(() => (window as E2EWindow).AgentRuntime?.getCurrentWorkspace().description === 'Edited after deployment');
   await expect(page.getByTestId('readiness-stage-deployed')).toHaveAttribute('data-status', 'stale');
   await expect(page.getByTestId('readiness-stage-seen')).toHaveAttribute('data-status', 'stale');
   await expect(page.getByTestId('readiness-stage-experience')).toHaveAttribute('data-status', 'stale');

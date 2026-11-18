@@ -1,13 +1,17 @@
 import { expect, test, type Page } from './request-transport';
 import { buildTemplateWorkspace } from '../../src/lib/modTemplates';
+import { workspaceContentHash } from '../../src/lib/workspaceIdentity';
+import { sanitizeWorkspace } from '../../src/types';
 import { seedServerWorkspace } from './ephemeral';
 
 type E2EWindow = Window & {
-  __X4_E2E__?: {
-    getWorkspace: () => { name: string; nodes: Array<{ id: string; label: string }> };
-    getWorkspaceHash: () => string;
-  };
+  AgentRuntime?: { getCurrentWorkspace: () => ReturnType<typeof buildTemplateWorkspace> };
 };
+
+async function liveWorkspaceHash(page: Page): Promise<string> {
+  const value = await page.evaluate(() => (window as E2EWindow).AgentRuntime!.getCurrentWorkspace());
+  return workspaceContentHash(sanitizeWorkspace(value));
+}
 
 const workspace = buildTemplateWorkspace('welcome');
 
@@ -23,7 +27,7 @@ async function bootBeginner(page: Page, corruptPreference = false) {
   await page.route('**/api/agent/debug-watcher/brief**', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, status: { lastDeploy: null }, verdict: { state: 'not_seen', detail: 'No current game evidence.', errorCount: 0 }, sinceDeploy: { hasDeploy: false, changedSinceDeploy: false, summary: 'No deploy.' } }) }));
   await page.goto('/');
   await expect(page.getByTestId('beginner-workspace')).toBeVisible();
-  await page.waitForFunction((name: string) => (window as E2EWindow).__X4_E2E__?.getWorkspace().name === name, workspace.name);
+  await page.waitForFunction((name: string) => (window as E2EWindow).AgentRuntime?.getCurrentWorkspace().name === name, workspace.name);
   const healthCard = page.getByTestId('health-card');
   await healthCard.waitFor({ state: 'visible', timeout: 1_500 }).catch(() => undefined);
   if (await healthCard.isVisible()) await page.getByTestId('health-card-dismiss').click();
@@ -47,8 +51,8 @@ test('Beginner exposes five tasks, preserves workspace and selection, and Expert
   await page.getByTestId('readiness-stage-seen').click();
   await expect(page.getByTestId('beginner-panel-confirm')).toBeVisible();
 
-  const initialHash = await page.evaluate(() => (window as E2EWindow).__X4_E2E__!.getWorkspaceHash());
-  const firstNodeId = await page.evaluate(() => (window as E2EWindow).__X4_E2E__!.getWorkspace().nodes[0].id);
+  const initialHash = await liveWorkspaceHash(page);
+  const firstNodeId = await page.evaluate(() => (window as E2EWindow).AgentRuntime!.getCurrentWorkspace().nodes[0].id);
   await page.getByTestId(`canvas-node-${firstNodeId}`).click();
   await page.getByTestId('beginner-step-customize').click();
   await expect(page.getByText('PROPERTIES INSPECTOR', { exact: true })).toBeVisible();
@@ -59,12 +63,12 @@ test('Beginner exposes five tasks, preserves workspace and selection, and Expert
   await expect(page.locator('#side_panel')).toBeVisible();
   await expect(page.getByTestId('native-project-files')).toBeVisible();
   await expect(page.locator('#antigravity_ide_container')).toHaveCount(0);
-  expect(await page.evaluate(() => (window as E2EWindow).__X4_E2E__!.getWorkspaceHash())).toBe(initialHash);
+  expect(await liveWorkspaceHash(page)).toBe(initialHash);
 
   await page.getByTestId('mode-beginner').click();
   await expect(page.getByText('PROPERTIES INSPECTOR', { exact: true })).toBeVisible();
   await expect(page.getByTestId('native-project-files')).toHaveCount(0);
-  expect(await page.evaluate(() => (window as E2EWindow).__X4_E2E__!.getWorkspaceHash())).toBe(initialHash);
+  expect(await liveWorkspaceHash(page)).toBe(initialHash);
 });
 
 test('corrupt preference falls back safely and blocking evidence cannot become green', async ({ page }) => {
@@ -77,7 +81,7 @@ test('corrupt preference falls back safely and blocking evidence cannot become g
   await page.route('**/api/agent/debug-watcher/brief**', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'watcher offline' }) }));
   await page.goto('/');
   await expect(page.getByTestId('beginner-workspace')).toBeVisible();
-  await page.waitForFunction((name: string) => (window as E2EWindow).__X4_E2E__?.getWorkspace().name === name, workspace.name);
+  await page.waitForFunction((name: string) => (window as E2EWindow).AgentRuntime?.getCurrentWorkspace().name === name, workspace.name);
 
   await page.getByTestId('beginner-step-validate').click();
   await expect(page.getByTestId('beginner-evidence-package')).toHaveAttribute('data-status', 'fail');
