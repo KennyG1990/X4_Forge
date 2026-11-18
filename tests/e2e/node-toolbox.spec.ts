@@ -42,8 +42,8 @@ test('node toolbox keeps the full schema searchable while the mounted DOM stays 
   await expect(reward).toBeVisible();
   await reward.click();
   await expect.poll(() => page.evaluate(() => (
-    window as Window & { __X4_E2E__?: { getWorkspace: () => { nodes: Array<{ xmlTag: string }> } } }
-  ).__X4_E2E__?.getWorkspace().nodes.some(node => node.xmlTag === 'reward_player') || false)).toBe(true);
+    window as Window & { AgentRuntime?: { getCurrentWorkspace: () => { nodes: Array<{ xmlTag: string }> } } }
+  ).AgentRuntime?.getCurrentWorkspace().nodes.some(node => node.xmlTag === 'reward_player') || false)).toBe(true);
 
   await search.fill('');
   await page.getByTestId('node-toolbox-mode').click();

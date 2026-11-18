@@ -18,12 +18,6 @@ import { seedServerWorkspace, readServerWorkspace } from './ephemeral';
  */
 
 type E2EWorkspace = { id?: string; name: string; nodes: unknown[]; links: unknown[]; [k: string]: unknown };
-type E2EWindow = Window & {
-  __X4_E2E__?: {
-    getWorkspace: () => E2EWorkspace;
-    setWorkspace: (workspace: E2EWorkspace) => void;
-  };
-};
 
 const emptyFixture: E2EWorkspace = {
   id: 'e2e_rail_empty',
@@ -44,7 +38,7 @@ test('template click summons the guided rail and walks all three steps', async (
   });
   await page.goto('/');
   await expect(page.getByTestId('grid-canvas')).toBeVisible();
-  await page.waitForFunction(() => !!(window as E2EWindow).__X4_E2E__);
+  await page.waitForFunction(() => Boolean(window.AgentRuntime?.getCurrentWorkspace));
   await page.waitForTimeout(650);
 
   // Empty workspace adopted → onboarding picker is up.

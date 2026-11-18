@@ -8,8 +8,8 @@ import { seedServerWorkspace } from './ephemeral';
 const RUNTIME_NODE_ID = 'cancel_conversation';
 
 type E2EWindow = Window & {
-  __X4_E2E__?: {
-    getWorkspace: () => { name: string };
+  AgentRuntime?: {
+    getCurrentWorkspace: () => { name: string };
   };
   __nativeMessages?: Record<string, unknown>[];
 };
@@ -394,7 +394,7 @@ async function bootRuntimeDebugger(
   } else {
     await page.goto('/');
     await expect(page.getByTestId('studio-workspace')).toBeVisible();
-    await expect.poll(() => page.evaluate(() => (window as E2EWindow).__X4_E2E__?.getWorkspace().name)).toBe('AiLive');
+    await expect.poll(() => page.evaluate(() => (window as E2EWindow).AgentRuntime?.getCurrentWorkspace().name)).toBe('AiLive');
     await page.locator('[data-sidebar-tab="playtest"]').click();
     await expect(page.getByTestId('runtime-debugger-panel')).toBeVisible();
   }

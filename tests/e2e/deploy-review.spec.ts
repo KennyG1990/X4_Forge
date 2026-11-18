@@ -53,7 +53,7 @@ test('wizard and Playtest distinguish actual test-mod deployment outcomes',async
     await route.fulfill({json:result});
   });
   await page.goto('/');
-  await page.waitForFunction(()=>Boolean((window as any).__X4_E2E__?.getWorkspace()));
+  await page.waitForFunction(()=>Boolean(window.AgentRuntime?.getCurrentWorkspace()));
   const dismiss=page.getByTestId('health-card-dismiss');if(await dismiss.isVisible())await dismiss.click();
   await page.getByTestId('beginner-step-deploy').click();
   await page.getByTestId('beginner-open-deploy').click();

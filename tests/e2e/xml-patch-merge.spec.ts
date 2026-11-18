@@ -57,8 +57,8 @@ test('diff-to-patch three-pane merge synthesizes and adopts a patch block', asyn
 
   await page.goto('/');
   await page.waitForFunction((name: string) => {
-    const api = (window as Window & { __X4_E2E__?: { getWorkspace: () => { name?: string } } }).__X4_E2E__;
-    return api?.getWorkspace().name === name;
+    const api = (window as Window & { AgentRuntime?: { getCurrentWorkspace: () => { name?: string } } }).AgentRuntime;
+    return api?.getCurrentWorkspace().name === name;
   }, workspace.name);
   await page.getByRole('button', { name: 'XML Patching' }).click();
   await page.getByRole('button', { name: 'Diff→Patch', exact: true }).click();
@@ -142,8 +142,8 @@ test('diff-to-patch keeps base, candidate, and late responses isolated by target
 
   await page.goto('/');
   await page.waitForFunction((name: string) => {
-    const api = (window as Window & { __X4_E2E__?: { getWorkspace: () => { name?: string } } }).__X4_E2E__;
-    return api?.getWorkspace().name === name;
+    const api = (window as Window & { AgentRuntime?: { getCurrentWorkspace: () => { name?: string } } }).AgentRuntime;
+    return api?.getCurrentWorkspace().name === name;
   }, workspace.name);
   await page.getByRole('button', { name: 'XML Patching' }).click();
   await page.getByRole('button', { name: 'Diff→Patch', exact: true }).click();

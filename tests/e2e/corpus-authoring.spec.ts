@@ -158,8 +158,8 @@ test('corpus authoring blocks collisions, completes XPath, previews, applies, an
 
   await page.goto('/');
   await page.waitForFunction((name: string) => {
-    const api = (window as Window & { __X4_E2E__?: { getWorkspace: () => { name?: string } } }).__X4_E2E__;
-    return api?.getWorkspace().name === name;
+    const api = (window as Window & { AgentRuntime?: { getCurrentWorkspace: () => { name?: string } } }).AgentRuntime;
+    return api?.getCurrentWorkspace().name === name;
   }, workspace.name);
 
   const healthCard = page.getByTestId('health-card');

@@ -86,7 +86,7 @@ test('C02 import identities, legacy layout, ambiguity and byte fidelity', async 
   await page.getByPlaceholder('Relative folder path, e.g. sn_mod_support_apis').fill('forge_regression_lab');
   await expect(page.getByPlaceholder('Relative folder path, e.g. sn_mod_support_apis')).toHaveValue('forge_regression_lab');
   await page.getByRole('button', { name: 'Load Project', exact: true }).click();
-  await page.waitForFunction((count: number) => (window as any).__X4_E2E__?.getWorkspace().nodes.length === count, updated.workspace.nodes.length, { timeout: 15_000 });
+  await page.waitForFunction((count: number) => window.AgentRuntime?.getCurrentWorkspace().nodes.length === count, updated.workspace.nodes.length, { timeout: 15_000 });
   await expect(rendered).toBeVisible();
   // Import intentionally refits the camera. Compare geometry at the same zoom/pan.
   await page.getByTitle('Reset Graph Zoom').click();

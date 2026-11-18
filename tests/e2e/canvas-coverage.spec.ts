@@ -61,14 +61,6 @@ type E2EWorkspace = {
   };
 };
 
-type E2EWindow = Window & {
-  __X4_E2E__?: {
-    getWorkspace: () => E2EWorkspace;
-    setWorkspace: (workspace: E2EWorkspace) => void;
-    getMdCode: () => string;
-  };
-};
-
 const controlledWorkspace: E2EWorkspace = {
   id: 'e2e_canvas_cov',
   name: 'E2E_Canvas_Coverage',
@@ -140,7 +132,7 @@ async function withSeededCanvas(page: Page, body: () => Promise<void>): Promise<
   });
   await page.goto('/');
   await expect(page.getByTestId('grid-canvas')).toBeVisible();
-  await page.waitForFunction(() => !!(window as E2EWindow).__X4_E2E__);
+  await page.waitForFunction(() => Boolean(window.AgentRuntime?.getCurrentWorkspace));
   await expect(page.getByTestId('canvas-node-cue_e2e')).toBeVisible();
   await expect(page.getByTestId('canvas-node-event_e2e')).toBeVisible();
   await expect(page.getByTestId('canvas-node-action_e2e')).toBeVisible();
@@ -148,8 +140,8 @@ async function withSeededCanvas(page: Page, body: () => Promise<void>): Promise<
   await body();
 }
 
-async function readWorkspace(page: Page): Promise<E2EWorkspace> {
-  return page.evaluate(() => (window as E2EWindow).__X4_E2E__!.getWorkspace());
+async function readWorkspace(page: Page) {
+  return page.evaluate(() => window.AgentRuntime!.getCurrentWorkspace());
 }
 
 test('single-node drag moves only the dragged node', async ({ page }) => {
