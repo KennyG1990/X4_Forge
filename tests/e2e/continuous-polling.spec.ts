@@ -28,16 +28,6 @@ type PollWindow = Window & {
     snapshot: () => { maxHeartbeatGapMs: number; worstLongTaskMs: number; ticks: number };
   };
   __X4_CONTINUOUS_POLLING__?: { snapshot: () => PollSnapshot };
-  __X4_E2E__?: {
-    getWorkspace: () => {
-      id?: string;
-      name?: string;
-      description?: string;
-      nodes?: Array<{ type?: string; properties?: Record<string, unknown> }>;
-      uiTheme?: { accentColor?: string };
-    };
-    setWorkspace: (workspace: unknown) => void;
-  };
 };
 
 async function bootWithFetchCounts(
@@ -105,6 +95,16 @@ async function openAgentBridge(page: import('@playwright/test').Page): Promise<v
   await page.getByTestId('studio-menu-button').click();
   await page.getByTestId('studio-menu').locator('[data-global-action="agent-api"]').click();
   await expect(page.getByText('AI Agent API Bridge')).toBeVisible();
+}
+
+async function ensureExpertMode(page: import('@playwright/test').Page): Promise<void> {
+  const expert = page.getByTestId('mode-expert');
+  if (await expert.getAttribute('aria-pressed') !== 'true') await expert.click();
+}
+
+async function openModConfig(page: import('@playwright/test').Page): Promise<void> {
+  await ensureExpertMode(page);
+  await page.locator('[data-sidebar-tab="config"]').click();
 }
 
 async function seedScopedWorkspaceOnce(
@@ -222,7 +222,7 @@ test('bootstrap snapshot digest mismatch fails before rendering an untrusted wor
   }));
   await page.goto('/');
   await expect(page.locator('#root')).toContainText('hash-mismatched snapshot');
-  expect(await page.evaluate(() => Boolean((window as unknown as PollWindow).__X4_E2E__))).toBe(false);
+  expect(await page.evaluate(() => Boolean(Reflect.get(window, '__X4_E2E__')))).toBe(false);
 });
 
 test('equal-version unmarked local divergence is retained and conflicts without overwriting server', async ({ page }) => {
@@ -238,7 +238,7 @@ test('equal-version unmarked local divergence is retained and conflicts without 
   await seedScopedWorkspaceOnce(page, { workspaceId: envelope.workspaceId, workspace: localWorkspace, version: envelope.version });
   await bootWithFetchCounts(page, { dismissHealthCard: false });
   expect(await page.evaluate(() =>
-    (window as unknown as PollWindow).__X4_E2E__?.getWorkspace().uiTheme?.accentColor
+    window.AgentRuntime?.getCurrentWorkspace().uiTheme?.accentColor
   )).toBe('#abcdef');
   await expect.poll(() => page.evaluate(() =>
     (window as unknown as PollWindow).__X4_FETCH_COUNTS__?.['/api/agent/workspace'] || 0
@@ -256,13 +256,10 @@ test('successful local autosave persists the matching scoped workspace before re
   const envelope = await readServerWorkspaceEnvelope();
   await seedScopedWorkspaceOnce(page, envelope);
   await bootWithFetchCounts(page);
+  await openModConfig(page);
 
   const editedDescription = 'B116 scoped cache and server must advance as one pair.';
-  await page.evaluate(description => {
-    const pollWindow = window as unknown as PollWindow;
-    const current = pollWindow.__X4_E2E__!.getWorkspace();
-    pollWindow.__X4_E2E__!.setWorkspace({ ...current, description });
-  }, editedDescription);
+  await page.getByPlaceholder('Mod brief synopsis...').fill(editedDescription);
   await expect.poll(async () => (await readServerWorkspaceEnvelope()).workspace.description, {
     timeout: 20_000,
   }).toBe(editedDescription);
@@ -275,8 +272,8 @@ test('successful local autosave persists the matching scoped workspace before re
   expect(Number(scoped.version)).toBe(Number(saved.version));
 
   await page.reload();
-  await page.waitForFunction(() => Boolean((window as unknown as PollWindow).__X4_E2E__?.getWorkspace().name));
-  expect(await page.evaluate(() => (window as unknown as PollWindow).__X4_E2E__?.getWorkspace().description)).toBe(editedDescription);
+  await page.waitForFunction(() => Boolean(window.AgentRuntime?.getCurrentWorkspace().name));
+  expect(await page.evaluate(() => window.AgentRuntime?.getCurrentWorkspace().description)).toBe(editedDescription);
 });
 
 test('failed local autosave retries without another edit and persists the recovered scoped pair', async ({ page }) => {
@@ -286,6 +283,7 @@ test('failed local autosave retries without another edit and persists the recove
   const envelope = await readServerWorkspaceEnvelope();
   await seedScopedWorkspaceOnce(page, envelope);
   await bootWithFetchCounts(page);
+  await openModConfig(page);
 
   let failedPosts = 0;
   await page.route('**/api/agent/workspace', async route => {
@@ -297,19 +295,15 @@ test('failed local autosave retries without another edit and persists the recove
     await route.fallback();
   });
   const editedDescription = 'B116 retry must recover this edit without another keystroke.';
-  await page.evaluate(description => {
-    const pollWindow = window as unknown as PollWindow;
-    const current = pollWindow.__X4_E2E__!.getWorkspace();
-    pollWindow.__X4_E2E__!.setWorkspace({ ...current, description });
-  }, editedDescription);
+  await page.getByPlaceholder('Mod brief synopsis...').fill(editedDescription);
   await expect.poll(() => failedPosts, { timeout: 10_000 }).toBe(4);
   await expect.poll(async () => (await readServerWorkspaceEnvelope()).workspace.description, {
     timeout: 35_000,
   }).toBe(editedDescription);
 
   await page.reload();
-  await page.waitForFunction(() => Boolean((window as unknown as PollWindow).__X4_E2E__?.getWorkspace().name));
-  expect(await page.evaluate(() => (window as unknown as PollWindow).__X4_E2E__?.getWorkspace().description)).toBe(editedDescription);
+  await page.waitForFunction(() => Boolean(window.AgentRuntime?.getCurrentWorkspace().name));
+  expect(await page.evaluate(() => window.AgentRuntime?.getCurrentWorkspace().description)).toBe(editedDescription);
 });
 
 test('failed local autosave preserves the scoped draft across reload before server recovery', async ({ page }) => {
@@ -319,6 +313,7 @@ test('failed local autosave preserves the scoped draft across reload before serv
   const envelope = await readServerWorkspaceEnvelope();
   await seedScopedWorkspaceOnce(page, envelope);
   await bootWithFetchCounts(page);
+  await openModConfig(page);
 
   let failedPosts = 0;
   await page.route('**/api/agent/workspace', async route => {
@@ -330,11 +325,7 @@ test('failed local autosave preserves the scoped draft across reload before serv
     await route.fallback();
   });
   const editedDescription = 'B116 unsaved scoped draft must survive a failed-network reload.';
-  await page.evaluate(description => {
-    const pollWindow = window as unknown as PollWindow;
-    const current = pollWindow.__X4_E2E__!.getWorkspace();
-    pollWindow.__X4_E2E__!.setWorkspace({ ...current, description });
-  }, editedDescription);
+  await page.getByPlaceholder('Mod brief synopsis...').fill(editedDescription);
   await expect.poll(() => failedPosts, { timeout: 10_000 }).toBeGreaterThanOrEqual(4);
   await page.evaluate(() => {
     localStorage.setItem('x4_mod_studio_aiscripts', JSON.stringify([{ name: 'legacy-global-must-not-touch-scoped-draft' }]));
@@ -349,8 +340,8 @@ test('failed local autosave preserves the scoped draft across reload before serv
   expect(Number(scopedBeforeReload.version)).toBe(Number(envelope.version));
 
   await page.reload();
-  await page.waitForFunction(() => Boolean((window as unknown as PollWindow).__X4_E2E__?.getWorkspace().name));
-  expect(await page.evaluate(() => (window as unknown as PollWindow).__X4_E2E__?.getWorkspace().description)).toBe(editedDescription);
+  await page.waitForFunction(() => Boolean(window.AgentRuntime?.getCurrentWorkspace().name));
+  expect(await page.evaluate(() => window.AgentRuntime?.getCurrentWorkspace().description)).toBe(editedDescription);
   const afterReload = await readServerWorkspaceEnvelope();
   expect(afterReload.workspace.description).toBe(initial.description);
 });
@@ -362,6 +353,7 @@ test('newer server bootstrap cannot silently replace a failed scoped draft', asy
   const envelope = await readServerWorkspaceEnvelope();
   await seedScopedWorkspaceOnce(page, envelope);
   await bootWithFetchCounts(page);
+  await openModConfig(page);
 
   let failedPosts = 0;
   const abortWorkspaceWrites = async (route: import('@playwright/test').Route) => {
@@ -374,11 +366,7 @@ test('newer server bootstrap cannot silently replace a failed scoped draft', asy
   };
   await page.route('**/api/agent/workspace', abortWorkspaceWrites);
   const editedDescription = 'B116 failed draft must survive a newer external bootstrap.';
-  await page.evaluate(description => {
-    const pollWindow = window as unknown as PollWindow;
-    const current = pollWindow.__X4_E2E__!.getWorkspace();
-    pollWindow.__X4_E2E__!.setWorkspace({ ...current, description });
-  }, editedDescription);
+  await page.getByPlaceholder('Mod brief synopsis...').fill(editedDescription);
   await expect.poll(() => failedPosts, { timeout: 10_000 }).toBeGreaterThanOrEqual(4);
   await page.evaluate(() => {
     localStorage.setItem('x4_mod_studio_aiscripts', JSON.stringify([{ name: 'legacy-global-must-not-invalidate-marked-draft' }]));
@@ -397,8 +385,8 @@ test('newer server bootstrap cannot silently replace a failed scoped draft', asy
   await seedServerWorkspace(remote);
   await page.unroute('**/api/agent/workspace', abortWorkspaceWrites);
   await page.reload();
-  await page.waitForFunction(() => Boolean((window as unknown as PollWindow).__X4_E2E__?.getWorkspace().name));
-  expect(await page.evaluate(() => (window as unknown as PollWindow).__X4_E2E__?.getWorkspace().description)).toBe(editedDescription);
+  await page.waitForFunction(() => Boolean(window.AgentRuntime?.getCurrentWorkspace().name));
+  expect(await page.evaluate(() => window.AgentRuntime?.getCurrentWorkspace().description)).toBe(editedDescription);
   await expect(page.getByTestId('sync-conflict-dialog')).toBeVisible({ timeout: 10_000 });
   const preservedRemote = await readServerWorkspaceEnvelope();
   expect(preservedRemote.workspace.name).toBe(remote.name);
@@ -427,7 +415,7 @@ test('pre-marker divergent scoped cache is conservatively retained against a new
   await seedServerWorkspace(remote);
   await bootWithFetchCounts(page, { dismissHealthCard: false });
 
-  expect(await page.evaluate(() => (window as unknown as PollWindow).__X4_E2E__?.getWorkspace().description)).toBe(unmarkedDraft.description);
+  expect(await page.evaluate(() => window.AgentRuntime?.getCurrentWorkspace().description)).toBe(unmarkedDraft.description);
   await expect(page.getByTestId('sync-conflict-dialog')).toBeVisible({ timeout: 10_000 });
   const preservedRemote = await readServerWorkspaceEnvelope();
   expect(preservedRemote.workspace.name).toBe(remote.name);
@@ -439,6 +427,7 @@ test('malformed 200 autosave receipt recovers through CAS readback instead of st
   const initial = buildTemplateWorkspace('welcome');
   await seedServerWorkspace(initial);
   await bootWithFetchCounts(page);
+  await openModConfig(page);
 
   let workspacePosts = 0;
   await page.route('**/api/agent/workspace', async route => {
@@ -456,11 +445,7 @@ test('malformed 200 autosave receipt recovers through CAS readback instead of st
     await route.fallback();
   });
   const editedDescription = 'B116 malformed success receipt must converge by readback.';
-  await page.evaluate(description => {
-    const pollWindow = window as unknown as PollWindow;
-    const current = pollWindow.__X4_E2E__!.getWorkspace();
-    pollWindow.__X4_E2E__!.setWorkspace({ ...current, description });
-  }, editedDescription);
+  await page.getByPlaceholder('Mod brief synopsis...').fill(editedDescription);
 
   await expect.poll(() => workspacePosts, { timeout: 15_000 }).toBeGreaterThanOrEqual(2);
   await expect.poll(async () => (await readServerWorkspaceEnvelope()).workspace.description, {
@@ -479,6 +464,17 @@ test('a successful omitted-field save cannot clear a newer debounced edit', asyn
   const workspace = buildTemplateWorkspace('welcome');
   await seedServerWorkspace(workspace);
   await bootWithFetchCounts(page);
+  await ensureExpertMode(page);
+  await page.locator('[data-workspace-view="ui-designer"]').click();
+  await page.getByRole('button', { name: 'Legacy pixel designer', exact: true }).click();
+  const accent = page.locator('label').filter({ hasText: /^Accent Command Elements$/ })
+    .locator('..').locator('input[type="color"]');
+  const setAccent = (value: string) => accent.evaluate((element, color) => {
+    // The browser's native setter lets React see the real color input change.
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(element, color);
+    element.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+  }, value);
   let browserWrites = 0;
   let releaseFirst!: () => void;
   const firstHeld = new Promise<void>(resolve => { releaseFirst = resolve; });
@@ -505,17 +501,9 @@ test('a successful omitted-field save cannot clear a newer debounced edit', asyn
       body: JSON.stringify({ success: true, applied: true, ...saved }),
     });
   });
-  await page.evaluate(() => {
-    const pollWindow = window as unknown as PollWindow;
-    const current = pollWindow.__X4_E2E__!.getWorkspace();
-    pollWindow.__X4_E2E__!.setWorkspace({ ...current, uiTheme: { ...current.uiTheme, accentColor: '#aaaaaa' } });
-  });
+  await setAccent('#aaaaaa');
   await firstSaved;
-  await page.evaluate(() => {
-    const pollWindow = window as unknown as PollWindow;
-    const current = pollWindow.__X4_E2E__!.getWorkspace();
-    pollWindow.__X4_E2E__!.setWorkspace({ ...current, uiTheme: { ...current.uiTheme, accentColor: '#bbbbbb' } });
-  });
+  await setAccent('#bbbbbb');
   releaseFirst();
   await expect.poll(async () => (await readServerWorkspaceEnvelope()).workspace?.uiTheme?.accentColor, {
     timeout: 12_000,
@@ -625,7 +613,7 @@ test('unchanged workspace ticks transfer summaries but no full workspace after b
 
   const changed = { ...workspace, name: 'B116_sparse_1424_changed' };
   await seedServerWorkspace(changed);
-  await expect.poll(() => page.evaluate(() => (window as unknown as PollWindow).__X4_E2E__?.getWorkspace().name), {
+  await expect.poll(() => page.evaluate(() => window.AgentRuntime?.getCurrentWorkspace().name), {
     timeout: 8_000,
   }).toBe(changed.name);
   expect(await page.evaluate(() => (window as unknown as PollWindow).__X4_FETCH_COUNTS__?.['/api/agent/workspace'] || 0)).toBe(1);
@@ -639,7 +627,7 @@ test('unchanged workspace ticks transfer summaries but no full workspace after b
   expect(workspaceSnapshotHash(sanitizeWorkspace(themeChanged))).not.toBe(workspaceSnapshotHash(sanitizeWorkspace(changed)));
   await seedServerWorkspace(themeChanged);
   await expect.poll(() => page.evaluate(() =>
-    (window as unknown as PollWindow).__X4_E2E__?.getWorkspace().uiTheme?.accentColor
+    window.AgentRuntime?.getCurrentWorkspace().uiTheme?.accentColor
   ), { timeout: 8_000 }).toBe('#abcdef');
   expect(await page.evaluate(() => (window as unknown as PollWindow).__X4_FETCH_COUNTS__?.['/api/agent/workspace'] || 0)).toBe(2);
   await page.waitForTimeout(3_600);
@@ -652,7 +640,7 @@ test('unchanged workspace ticks transfer summaries but no full workspace after b
   expect(workspaceSnapshotHash(sanitizeWorkspace(idChanged))).not.toBe(workspaceSnapshotHash(sanitizeWorkspace(themeChanged)));
   await seedServerWorkspace(idChanged);
   await expect.poll(() => page.evaluate(() =>
-    (window as unknown as PollWindow).__X4_E2E__?.getWorkspace().id
+    window.AgentRuntime?.getCurrentWorkspace().id
   ), { timeout: 8_000 }).toBe(idChanged.id);
   expect(await page.evaluate(() => (window as unknown as PollWindow).__X4_FETCH_COUNTS__?.['/api/agent/workspace'] || 0)).toBe(3);
   await page.waitForTimeout(3_600);
@@ -691,7 +679,7 @@ test('App and AgentBridge fan out one addressed workspace polling resource', asy
   const pausedFullCount = await page.evaluate(() => (window as unknown as PollWindow).__X4_FETCH_COUNTS__?.['/api/agent/workspace'] || 0);
   await seedServerWorkspace(external);
   await page.waitForTimeout(4_500);
-  expect(await page.evaluate(() => (window as unknown as PollWindow).__X4_E2E__?.getWorkspace().name)).toBe(initial.name);
+  expect(await page.evaluate(() => window.AgentRuntime?.getCurrentWorkspace().name)).toBe(initial.name);
   expect(await page.evaluate(() => (window as unknown as PollWindow).__X4_FETCH_COUNTS__?.['/api/agent/workspaces'] || 0)).toBe(pausedSummaryCount);
   expect(await page.evaluate(() => (window as unknown as PollWindow).__X4_FETCH_COUNTS__?.['/api/agent/workspace'] || 0)).toBe(pausedFullCount);
   let releaseResume!: () => void;
@@ -709,7 +697,7 @@ test('App and AgentBridge fan out one addressed workspace polling resource', asy
   releaseResume();
   await expect(page.getByTestId('agent-bridge-sync-status')).toContainText('External updates: Connected');
   await expect.poll(() => page.evaluate(() =>
-    (window as unknown as PollWindow).__X4_E2E__?.getWorkspace().name
+    window.AgentRuntime?.getCurrentWorkspace().name
   ), { timeout: 8_000 }).toBe(external.name);
   expect(await page.evaluate(() => (window as unknown as PollWindow).__X4_FETCH_COUNTS__?.['/api/agent/workspace'] || 0)).toBe(pausedFullCount + 1);
 
@@ -729,6 +717,7 @@ test('AgentBridge cannot apply a pending payload after workspace authority chang
   const pending = buildTemplateWorkspace('reward_on_kill');
   await seedServerWorkspace(workspace);
   await bootWithFetchCounts(page);
+  await openModConfig(page);
   const initialWorkspaceId = await page.evaluate(() => window.__X4_WORKSPACE_CONTEXT__?.getWorkspaceId() || '');
   expect(initialWorkspaceId).toMatch(/^ws_[a-f0-9]{24}$/i);
   let injectPending = false;
@@ -782,21 +771,13 @@ test('AgentBridge cannot apply a pending payload after workspace authority chang
 
   await page.getByTestId('studio-menu-button').click();
   await page.getByTestId('studio-menu').locator('[data-global-action="agent-api"]').click();
-  await page.evaluate(() => {
-    const pollWindow = window as unknown as PollWindow;
-    const current = pollWindow.__X4_E2E__!.getWorkspace();
-    pollWindow.__X4_E2E__!.setWorkspace({ ...current, description: 'Keep this local edit authoritative.' });
-  });
+  await page.getByPlaceholder('Mod brief synopsis...').fill('Keep this local edit authoritative.');
   injectPending = true;
   await expect(page.getByTestId('agent-bridge-pending-workspace')).toBeVisible({ timeout: 8_000 });
 
   const nextWorkspaceId = 'ws_bbbbbbbbbbbbbbbbbbbbbbbb';
-  await page.evaluate(nextId => {
-    window.__X4_WORKSPACE_CONTEXT__!.selectWorkspace(nextId);
-    const pollWindow = window as unknown as PollWindow;
-    const current = pollWindow.__X4_E2E__!.getWorkspace();
-    pollWindow.__X4_E2E__!.setWorkspace({ ...current, name: 'R13 Workspace B' });
-  }, nextWorkspaceId);
+  await page.evaluate(nextId => window.__X4_WORKSPACE_CONTEXT__!.selectWorkspace(nextId), nextWorkspaceId);
+  await page.getByPlaceholder('e.g. My_Elite_Mod').fill('R13 Workspace B');
   await expect(page.getByTestId('agent-bridge-pending-workspace')).toHaveCount(0);
   await expect(page.getByText('AI Agent API Bridge')).toBeVisible();
 });
@@ -811,6 +792,7 @@ test('AgentBridge Auto-Apply cannot replace a dirty queued canvas with a polled 
   });
   await seedServerWorkspace(initial);
   await bootWithFetchCounts(page);
+  await openModConfig(page);
   await openAgentBridge(page);
   await page.getByTestId('agent-bridge-auto-sync').click();
   await expect(page.getByTestId('agent-bridge-auto-sync')).toContainText('ON');
@@ -833,11 +815,7 @@ test('AgentBridge Auto-Apply cannot replace a dirty queued canvas with a polled 
 
   const localDescription = 'Keep this dirty queued edit authoritative.';
   try {
-    await page.evaluate(description => {
-      const pollWindow = window as unknown as PollWindow;
-      const current = pollWindow.__X4_E2E__!.getWorkspace();
-      pollWindow.__X4_E2E__!.setWorkspace({ ...current, description });
-    }, localDescription);
+    await page.getByPlaceholder('Mod brief synopsis...').fill(localDescription);
     await localWriteSeen;
     await page.evaluate(() => {
       const pollWindow = window as unknown as PollWindow;
@@ -849,10 +827,9 @@ test('AgentBridge Auto-Apply cannot replace a dirty queued canvas with a polled 
     ), { timeout: 10_000 }).toBeGreaterThanOrEqual(1);
     await expect(page.getByTestId('agent-bridge-pending-workspace')).toBeVisible({ timeout: 10_000 });
     const observedBeforeRelease = await page.evaluate(() => {
-      const pollWindow = window as unknown as PollWindow;
       return {
-        name: pollWindow.__X4_E2E__!.getWorkspace().name,
-        description: pollWindow.__X4_E2E__!.getWorkspace().description,
+        name: window.AgentRuntime!.getCurrentWorkspace().name,
+        description: window.AgentRuntime!.getCurrentWorkspace().description,
         pendingVisible: Boolean(document.querySelector('[data-testid="agent-bridge-pending-workspace"]')),
       };
     });
@@ -887,7 +864,7 @@ test('AgentBridge Auto-Apply OFF keeps a clean newer snapshot pending with one f
   await expect.poll(() => fullWorkspaceGets, { timeout: 10_000 }).toBe(1);
   await page.waitForTimeout(3_600);
 
-  expect(await page.evaluate(() => (window as unknown as PollWindow).__X4_E2E__?.getWorkspace().name)).toBe(initial.name);
+  expect(await page.evaluate(() => window.AgentRuntime?.getCurrentWorkspace().name)).toBe(initial.name);
   expect(fullWorkspaceGets).toBe(1);
   await openAgentBridge(page);
   await expect(page.getByTestId('agent-bridge-auto-sync')).toContainText('OFF');
@@ -896,7 +873,7 @@ test('AgentBridge Auto-Apply OFF keeps a clean newer snapshot pending with one f
   expect(fullWorkspaceGets).toBe(1);
   await page.getByTestId('agent-bridge-auto-sync').click();
   await expect.poll(() => page.evaluate(() =>
-    (window as unknown as PollWindow).__X4_E2E__?.getWorkspace().name
+    window.AgentRuntime?.getCurrentWorkspace().name
   ), { timeout: 10_000 }).toBe(external.name);
   await expect(page.getByTestId('agent-bridge-pending-workspace')).toHaveCount(0);
   expect(fullWorkspaceGets).toBe(1);
@@ -915,7 +892,7 @@ test('App server-copy adoption clears the matching AgentBridge pending candidate
 
   await page.getByTestId('sync-diverged-badge').click();
   await expect.poll(() => page.evaluate(() =>
-    (window as unknown as PollWindow).__X4_E2E__?.getWorkspace().name
+    window.AgentRuntime?.getCurrentWorkspace().name
   ), { timeout: 10_000 }).toBe(external.name);
   await expect(page.getByTestId('agent-bridge-pending-workspace')).toHaveCount(0);
 });
@@ -970,7 +947,7 @@ test('AgentBridge pending snapshot follows a version-only commit without another
 
   await page.getByRole('button', { name: 'Apply Changes' }).click();
   await expect.poll(() => page.evaluate(() =>
-    (window as unknown as PollWindow).__X4_E2E__?.getWorkspace().name
+    window.AgentRuntime?.getCurrentWorkspace().name
   ), { timeout: 5_000 }).toBe(external.name);
   await expect(page.getByTestId('agent-bridge-pending-workspace')).toHaveCount(0);
   expect(fullWorkspaceGets).toBe(2);
@@ -989,7 +966,7 @@ test('AgentBridge clears an obsolete pending snapshot when server authority retu
   await expect(page.getByTestId('agent-bridge-pending-workspace')).toBeVisible({ timeout: 10_000 });
   await seedServerWorkspace(initial);
   await expect(page.getByTestId('agent-bridge-pending-workspace')).toHaveCount(0, { timeout: 10_000 });
-  expect(await page.evaluate(() => (window as unknown as PollWindow).__X4_E2E__?.getWorkspace().name)).toBe(initial.name);
+  expect(await page.evaluate(() => window.AgentRuntime?.getCurrentWorkspace().name)).toBe(initial.name);
 });
 
 test('AgentBridge full Auto-Apply supersedes an older pending pair for the same workspace', async ({ page }) => {
@@ -1024,7 +1001,7 @@ test('AgentBridge full Auto-Apply supersedes an older pending pair for the same 
   releaseSummary();
 
   await expect.poll(() => page.evaluate(() =>
-    (window as unknown as PollWindow).__X4_E2E__?.getWorkspace().name
+    window.AgentRuntime?.getCurrentWorkspace().name
   ), { timeout: 10_000 }).toBe(appliedB.name);
   await expect(page.getByTestId('agent-bridge-pending-workspace')).toHaveCount(0);
 });
@@ -1039,16 +1016,13 @@ test('AgentBridge pending snapshot keeps prior CAS authority so a local edit can
   });
   await seedServerWorkspace(initial);
   await bootWithFetchCounts(page);
+  await openModConfig(page);
   await openAgentBridge(page);
   await expect(page.getByTestId('agent-bridge-auto-sync')).toContainText('OFF');
   await seedServerWorkspace(external);
   await expect(page.getByTestId('agent-bridge-pending-workspace')).toBeVisible({ timeout: 10_000 });
 
-  await page.evaluate(() => {
-    const pollWindow = window as unknown as PollWindow;
-    const current = pollWindow.__X4_E2E__!.getWorkspace();
-    pollWindow.__X4_E2E__!.setWorkspace({ ...current, description: 'A stale local edit must conflict.' });
-  });
+  await page.getByPlaceholder('Mod brief synopsis...').fill('A stale local edit must conflict.');
   await expect(page.getByTestId('sync-conflict-dialog')).toBeVisible({ timeout: 10_000 });
   const server = await readServerWorkspaceEnvelope();
   expect(server.workspace.name).toBe(external.name);
@@ -1075,7 +1049,7 @@ test('AgentBridge Auto-Apply adopts a clean snapshot once without echoing a work
   });
   await seedServerWorkspace(external);
   await expect.poll(() => page.evaluate(() =>
-    (window as unknown as PollWindow).__X4_E2E__?.getWorkspace().name
+    window.AgentRuntime?.getCurrentWorkspace().name
   ), { timeout: 10_000 }).toBe(external.name);
   await page.waitForTimeout(750);
 
@@ -1083,7 +1057,7 @@ test('AgentBridge Auto-Apply adopts a clean snapshot once without echoing a work
   await expect(page.getByTestId('agent-bridge-pending-workspace')).toHaveCount(0);
   await page.keyboard.press('Control+z');
   await expect.poll(() => page.evaluate(() =>
-    (window as unknown as PollWindow).__X4_E2E__?.getWorkspace().name
+    window.AgentRuntime?.getCurrentWorkspace().name
   )).toBe(initial.name);
 });
 
@@ -1120,7 +1094,7 @@ test('AgentBridge Auto-Apply keeps the persisted workspace/version pair repairab
 
   await seedServerWorkspace(external);
   await expect.poll(() => page.evaluate(() =>
-    (window as unknown as PollWindow).__X4_E2E__?.getWorkspace().name
+    window.AgentRuntime?.getCurrentWorkspace().name
   ), { timeout: 10_000 }).toBe(external.name);
   // Let the next summary-only tick run. It must not persist the new version over the
   // deliberately failed full workspace cache and make the stale pair look current.
@@ -1150,6 +1124,7 @@ test('AgentBridge manual pending Apply uses a fresh paired App-owned read and em
   });
   await seedServerWorkspace(initial);
   await bootWithFetchCounts(page);
+  await openModConfig(page);
   await openAgentBridge(page);
   let releaseLocalWrite!: () => void;
   const localWriteHeld = new Promise<void>(resolve => { releaseLocalWrite = resolve; });
@@ -1166,11 +1141,7 @@ test('AgentBridge manual pending Apply uses a fresh paired App-owned read and em
     await localWriteHeld;
     await route.fallback();
   });
-  await page.evaluate(() => {
-    const pollWindow = window as unknown as PollWindow;
-    const current = pollWindow.__X4_E2E__!.getWorkspace();
-    pollWindow.__X4_E2E__!.setWorkspace({ ...current, description: 'Unsaved local choice.' });
-  });
+  await page.getByPlaceholder('Mod brief synopsis...').fill('Unsaved local choice.');
   await localWriteSeen;
   await seedServerWorkspace(external);
   await expect(page.getByTestId('agent-bridge-pending-workspace')).toBeVisible({ timeout: 10_000 });
@@ -1202,13 +1173,13 @@ test('AgentBridge manual pending Apply uses a fresh paired App-owned read and em
 
   await page.getByRole('button', { name: 'Apply Changes' }).click();
   await expect(page.getByText('Server copy was not applied: Server workspace response did not include a valid numeric version.')).toBeVisible();
-  expect(await page.evaluate(() => (window as unknown as PollWindow).__X4_E2E__?.getWorkspace().description)).toBe('Unsaved local choice.');
+  expect(await page.evaluate(() => window.AgentRuntime?.getCurrentWorkspace().description)).toBe('Unsaved local choice.');
   await expect(page.getByTestId('agent-bridge-pending-workspace')).toBeVisible();
 
   manualReadMode = 'changed';
   await page.getByRole('button', { name: 'Apply Changes' }).click();
   await page.waitForTimeout(250);
-  expect(await page.evaluate(() => (window as unknown as PollWindow).__X4_E2E__?.getWorkspace().description)).toBe('Unsaved local choice.');
+  expect(await page.evaluate(() => window.AgentRuntime?.getCurrentWorkspace().description)).toBe('Unsaved local choice.');
   await expect(page.getByTestId('agent-bridge-pending-workspace')).toBeVisible();
   await expect(page.getByText('Server copy was not applied: The pending server workspace changed again. Review the refreshed pending change before applying it.')).toBeVisible();
 
@@ -1216,7 +1187,7 @@ test('AgentBridge manual pending Apply uses a fresh paired App-owned read and em
   await page.unroute('**/api/agent/workspace', manualReadRoute);
   await page.getByRole('button', { name: 'Apply Changes' }).click();
   await expect.poll(() => page.evaluate(() =>
-    (window as unknown as PollWindow).__X4_E2E__?.getWorkspace().name
+    window.AgentRuntime?.getCurrentWorkspace().name
   ), { timeout: 5_000 }).toBe(external.name);
   await page.waitForTimeout(750);
   await expect(page.getByTestId('agent-bridge-pending-workspace')).toHaveCount(0);
@@ -1232,6 +1203,7 @@ test('AgentBridge Auto-Apply cannot replace a manually adopted canvas while an i
   const newer = sanitizeWorkspace({ ...reviewed, name: 'B116_Newer_While_Queued' });
   await seedServerWorkspace(initial);
   await bootWithFetchCounts(page);
+  await openModConfig(page);
   await openAgentBridge(page);
 
   let releaseHeldPost!: () => void;
@@ -1249,24 +1221,20 @@ test('AgentBridge Auto-Apply cannot replace a manually adopted canvas while an i
     await heldPost;
     await route.fallback();
   });
-  await page.evaluate(() => {
-    const pollWindow = window as unknown as PollWindow;
-    const current = pollWindow.__X4_E2E__!.getWorkspace();
-    pollWindow.__X4_E2E__!.setWorkspace({ ...current, description: 'This write remains queued during manual adoption.' });
-  });
+  await page.getByPlaceholder('Mod brief synopsis...').fill('This write remains queued during manual adoption.');
   await postSeen;
   await seedServerWorkspace(reviewed);
   await expect(page.getByTestId('agent-bridge-pending-workspace')).toBeVisible({ timeout: 10_000 });
   await page.getByRole('button', { name: 'Apply Changes' }).click();
   await expect.poll(() => page.evaluate(() =>
-    (window as unknown as PollWindow).__X4_E2E__?.getWorkspace().name
+    window.AgentRuntime?.getCurrentWorkspace().name
   ), { timeout: 5_000 }).toBe(reviewed.name);
   await expect(page.getByTestId('agent-bridge-pending-workspace')).toHaveCount(0);
 
   await page.getByTestId('agent-bridge-auto-sync').click();
   await seedServerWorkspace(newer);
   await expect(page.getByTestId('agent-bridge-pending-workspace')).toBeVisible({ timeout: 10_000 });
-  expect(await page.evaluate(() => (window as unknown as PollWindow).__X4_E2E__?.getWorkspace().name)).toBe(reviewed.name);
+  expect(await page.evaluate(() => window.AgentRuntime?.getCurrentWorkspace().name)).toBe(reviewed.name);
   releaseHeldPost();
 });
 
@@ -1443,6 +1411,7 @@ test('failed manual pending Apply re-arms a dirty CAS save under the new authori
   });
   await seedServerWorkspace(initial);
   await bootWithFetchCounts(page);
+  await openModConfig(page);
   await openAgentBridge(page);
 
   let releaseFirstPost!: () => void;
@@ -1462,11 +1431,7 @@ test('failed manual pending Apply re-arms a dirty CAS save under the new authori
     }
     await route.fallback();
   });
-  await page.evaluate(() => {
-    const pollWindow = window as unknown as PollWindow;
-    const current = pollWindow.__X4_E2E__!.getWorkspace();
-    pollWindow.__X4_E2E__!.setWorkspace({ ...current, description: 'Dirty local edit must be re-armed.' });
-  });
+  await page.getByPlaceholder('Mod brief synopsis...').fill('Dirty local edit must be re-armed.');
   await firstPostSeen;
   await seedServerWorkspace(external);
   await expect(page.getByTestId('agent-bridge-pending-workspace')).toBeVisible({ timeout: 10_000 });
@@ -1508,6 +1473,7 @@ test('in-flight full workspace response cannot cross a workspace authority chang
   const pending = buildTemplateWorkspace('reward_on_kill');
   await seedServerWorkspace(workspace);
   await bootWithFetchCounts(page);
+  await openModConfig(page);
   const initialWorkspaceId = await page.evaluate(() => window.__X4_WORKSPACE_CONTEXT__?.getWorkspaceId() || '');
   const pendingHash = workspaceContentHash(sanitizeWorkspace(pending));
   const pendingSnapshotHash = workspaceSnapshotHash(sanitizeWorkspace(pending));
@@ -1565,17 +1531,13 @@ test('in-flight full workspace response cannot cross a workspace authority chang
   injectPending = true;
   await fullStarted;
   const nextWorkspaceId = 'ws_eeeeeeeeeeeeeeeeeeeeeeee';
-  await page.evaluate(({ nextId }) => {
-    window.__X4_WORKSPACE_CONTEXT__!.selectWorkspace(nextId);
-    const pollWindow = window as unknown as PollWindow;
-    const current = pollWindow.__X4_E2E__!.getWorkspace();
-    pollWindow.__X4_E2E__!.setWorkspace({ ...current, name: 'B116 Authority B' });
-  }, { nextId: nextWorkspaceId });
   injectPending = false;
+  await page.evaluate(nextId => window.__X4_WORKSPACE_CONTEXT__!.selectWorkspace(nextId), nextWorkspaceId);
+  await page.getByPlaceholder('e.g. My_Elite_Mod').fill('B116 Authority B');
   releaseFull();
 
   await page.waitForTimeout(750);
-  expect(await page.evaluate(() => (window as unknown as PollWindow).__X4_E2E__!.getWorkspace().name)).toBe('B116 Authority B');
+  expect(await page.evaluate(() => window.AgentRuntime!.getCurrentWorkspace().name)).toBe('B116 Authority B');
   await expect(page.getByTestId('agent-bridge-pending-workspace')).toHaveCount(0);
   await expect(page.getByText('AI Agent API Bridge')).toBeVisible();
 });
@@ -1673,16 +1635,7 @@ test('delayed Canvas LIVE response cannot cross a cue-list authority change', as
   await bootWithFetchCounts(page);
   await page.getByTestId('canvas-live-toggle').click();
   await sawOldRequest;
-  await page.evaluate(() => {
-    const pollWindow = window as unknown as PollWindow;
-    const current = pollWindow.__X4_E2E__!.getWorkspace();
-    pollWindow.__X4_E2E__!.setWorkspace({
-      ...current,
-      nodes: (current.nodes || []).map(node => node.type === 'cue'
-        ? { ...node, properties: { ...node.properties, name: 'R13FreshCue' } }
-        : node),
-    });
-  });
+  await page.evaluate(() => window.AgentRuntime!.updateNodeProperty('c', 'name', 'R13FreshCue'));
   await expect(page.getByTestId('canvas-live-watches')).toContainText('FRESH_NEW_AUTHORITY', { timeout: 15_000 });
   await expect(page.getByText('▶ 7', { exact: true })).toBeVisible();
 
@@ -1828,11 +1781,8 @@ test('GuidedRail clears the prior mod verdict while the new watcher is pending',
   await page.getByTestId('template-welcome').click();
   await page.getByTestId('rail-step-3').evaluate(element => (element as HTMLButtonElement).click());
   await expect(page.getByTestId('rail-game')).toContainText(/in the game.*clean/i, { timeout: 8_000 });
-  await page.evaluate(() => {
-    const pollWindow = window as unknown as PollWindow;
-    const current = pollWindow.__X4_E2E__!.getWorkspace();
-    pollWindow.__X4_E2E__!.setWorkspace({ ...current, name: 'R13 Rail Second' });
-  });
+  await openModConfig(page);
+  await page.getByPlaceholder('e.g. My_Elite_Mod').fill('R13 Rail Second');
   await sawSecond;
   await expect(page.getByTestId('rail-game')).toContainText('Checking this mod in the game');
   await expect(page.getByTestId('rail-game')).not.toContainText('Mod loaded and clean');
@@ -1912,11 +1862,8 @@ test('readiness clears old-mod evidence before the new mod request completes', a
   await bootWithFetchCounts(page);
   await expect(page.getByTestId('readiness-stage-deployed')).toHaveAttribute('data-status', 'pass');
   await expect(page.getByTestId('readiness-stage-seen')).toHaveAttribute('data-status', 'pass');
-  await page.evaluate(() => {
-    const pollWindow = window as unknown as PollWindow;
-    const current = pollWindow.__X4_E2E__!.getWorkspace();
-    pollWindow.__X4_E2E__!.setWorkspace({ ...current, name: 'R13 Second' });
-  });
+  await openModConfig(page);
+  await page.getByPlaceholder('e.g. My_Elite_Mod').fill('R13 Second');
   await sawSecond;
   await expect(page.getByTestId('readiness-stage-deployed')).toHaveAttribute('data-status', 'pending');
   await expect(page.getByTestId('readiness-stage-seen')).toHaveAttribute('data-status', 'pending');
