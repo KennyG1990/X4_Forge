@@ -4,9 +4,13 @@ import { workspaceContentHash, workspaceSnapshotHash } from '../../src/lib/works
 import { sanitizeWorkspace } from '../../src/types';
 import { seedServerWorkspace } from './ephemeral';
 
+type PublicStudioWindow = Window & {
+  AgentRuntime?: { getCurrentWorkspace: () => ReturnType<typeof buildTemplateWorkspace> };
+};
+
 async function boot(page: Page, name: string): Promise<void> {
   await page.goto('/');
-  await page.waitForFunction((expected: string) => (window as any).__X4_E2E__?.getWorkspace().name === expected, name);
+  await page.waitForFunction((expected: string) => (window as PublicStudioWindow).AgentRuntime?.getCurrentWorkspace().name === expected, name);
   const health = page.getByTestId('health-card');
   await health.waitFor({ state: 'visible', timeout: 1_500 }).catch(() => undefined);
   if (await health.isVisible()) await page.getByTestId('health-card-dismiss').click();
@@ -45,31 +49,29 @@ test('two Studio tabs keep duplicate-name workspaces isolated and switch by immu
   expect(independentId).toMatch(/^ws_[a-f0-9]{24}$/);
   expect(independentId).not.toBe(defaultId);
 
-  await page.evaluate(() => {
-    const current = (window as any).__X4_E2E__.getWorkspace();
-    (window as any).__X4_E2E__.setWorkspace({ ...current, description: 'owned by first tab' });
-  });
+  await page.getByTestId('mode-expert').click();
+  await page.locator('[data-sidebar-tab="config"]').click();
+  await page.getByPlaceholder('Mod brief synopsis...').fill('owned by first tab');
   await expect.poll(async () => (await serverWorkspace(page)).description, { timeout: 30_000 }).toBe('owned by first tab');
-  await other.evaluate(() => {
-    const current = (window as any).__X4_E2E__.getWorkspace();
-    (window as any).__X4_E2E__.setWorkspace({ ...current, description: 'owned by second tab' });
-  });
+  await other.getByTestId('mode-expert').click();
+  await other.locator('[data-sidebar-tab="config"]').click();
+  await other.getByPlaceholder('Mod brief synopsis...').fill('owned by second tab');
 
   await expect.poll(async () => (await serverWorkspace(other)).description, { timeout: 30_000 }).toBe('owned by second tab');
   await expect.poll(async () => (await serverWorkspace(page)).description, { timeout: 30_000 }).toBe('owned by first tab');
-  await expect.poll(async () => page.evaluate(() => (window as any).__X4_E2E__.getWorkspace().description)).toBe('owned by first tab');
-  await expect.poll(async () => other.evaluate(() => (window as any).__X4_E2E__.getWorkspace().description)).toBe('owned by second tab');
+  await expect.poll(async () => page.evaluate(() => (window as PublicStudioWindow).AgentRuntime!.getCurrentWorkspace().description)).toBe('owned by first tab');
+  await expect.poll(async () => other.evaluate(() => (window as PublicStudioWindow).AgentRuntime!.getCurrentWorkspace().description)).toBe('owned by second tab');
 
   await other.getByTestId('workspace-switcher').focus();
   await expect(other.getByTestId('workspace-switcher').locator(`option[value="workspace:${independentId}"]`)).toHaveCount(1);
   await other.getByTestId('workspace-switcher').selectOption(`workspace:${independentId}`);
   await other.getByTestId('dialog-ok').click();
   await expect.poll(() => selectedWorkspaceId(other)).toBe(independentId);
-  await expect.poll(async () => other.evaluate(() => (window as any).__X4_E2E__.getWorkspace().description)).toBe('owned by first tab');
+  await expect.poll(async () => other.evaluate(() => (window as PublicStudioWindow).AgentRuntime!.getCurrentWorkspace().description)).toBe('owned by first tab');
   await other.keyboard.press('Control+z');
   await other.waitForTimeout(750);
   expect(await selectedWorkspaceId(other)).toBe(independentId);
-  expect(await other.evaluate(() => (window as any).__X4_E2E__.getWorkspace().description)).toBe('owned by first tab');
+  expect(await other.evaluate(() => (window as PublicStudioWindow).AgentRuntime!.getCurrentWorkspace().description)).toBe('owned by first tab');
   expect((await serverWorkspace(other)).description).toBe('owned by first tab');
 });
 
@@ -125,6 +127,6 @@ test('restoring a parked workspace retains that target workspace scoped draft', 
   await page.getByTestId('workspace-switcher').selectOption(`workspace:${targetId}`);
   await page.getByTestId('dialog-ok').click();
   await expect.poll(() => selectedWorkspaceId(page)).toBe(targetId);
-  await expect.poll(async () => page.evaluate(() => (window as any).__X4_E2E__.getWorkspace().description)).toBe(draft.description);
+  await expect.poll(async () => page.evaluate(() => (window as PublicStudioWindow).AgentRuntime!.getCurrentWorkspace().description)).toBe(draft.description);
   await expect.poll(async () => (await serverWorkspace(page)).description, { timeout: 20_000 }).toBe(draft.description);
 });
