@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "extensionId": "forge_qa111_md_component",
+  "files": {
+    "forge_qa111_md_component/content.xml": "d087a7b7f495c750d675841fe254d23263b95d3231bf60addd4aea4c33691bae",
+    "forge_qa111_md_component/md/forge_qa111_component_writes.xml": "c3e7c1e23dbe5f1c93a1f76f620b5f2050fa1b5a3b73db2059b3f2bb783852c4"
+  }
+}

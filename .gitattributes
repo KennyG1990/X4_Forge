@@ -3,3 +3,7 @@
 *.tsx text eol=lf
 *.json text eol=lf
 dev-docs/**/debuglog*.txt binary
+
+# Preserve hash-pinned standalone game-witness payloads on every checkout.
+docs/testing/fixtures/md-component-writes-111/forge_qa111_md_component/** text eol=lf
+docs/testing/fixtures/md-variable-flow-114/forge_qa114_md_variables/** text eol=lf

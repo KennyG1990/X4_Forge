@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mdscript name="ForgeQa114Strict" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+  <cues>
+    <cue name="StrictLoaded">
+      <conditions><event_game_started /></conditions>
+      <actions>
+        <debug_text text="'FORGE_MD114_STRICT_LOADED'" filter="general" />
+      </actions>
+    </cue>
+    <cue name="ReadUnset">
+      <conditions><event_game_started /></conditions>
+      <actions>
+        <debug_text text="'FORGE_MD114_UNSET_BEFORE'" filter="general" />
+        <set_value name="$Qa114Observation" exact="$Qa114NeverWritten" />
+        <debug_text text="'FORGE_MD114_UNSET_AFTER'" filter="general" />
+      </actions>
+    </cue>
+    <cue name="ReadBeforeWrite">
+      <conditions><event_game_started /></conditions>
+      <actions>
+        <debug_text text="'FORGE_MD114_LATER_BEFORE'" filter="general" />
+        <set_value name="$Qa114Observation" exact="$Qa114LaterWrite" />
+        <set_value name="$Qa114LaterWrite" exact="23" />
+        <debug_text text="'FORGE_MD114_LATER_AFTER'" filter="general" />
+      </actions>
+    </cue>
+    <cue name="ReadAfterRemoval">
+      <conditions><event_game_started /></conditions>
+      <actions>
+        <set_value name="$Qa114Removed" exact="29" />
+        <do_if value="$Qa114Removed == 29">
+          <debug_text text="'FORGE_MD114_REMOVAL_VALUE_OK'" filter="general" />
+        </do_if>
+        <remove_value name="$Qa114Removed" />
+        <do_if value="$Qa114Removed?">
+          <debug_text text="'FORGE_MD114_REMOVAL_UNEXPECTED'" filter="general" />
+        </do_if>
+        <do_else>
+          <debug_text text="'FORGE_MD114_REMOVAL_ABSENT_OK'" filter="general" />
+        </do_else>
+        <debug_text text="'FORGE_MD114_REMOVED_BEFORE'" filter="general" />
+        <set_value name="$Qa114Observation" exact="$Qa114Removed" />
+        <debug_text text="'FORGE_MD114_REMOVED_AFTER'" filter="general" />
+      </actions>
+    </cue>
+    <cue name="NamespaceOwner">
+      <conditions><event_game_started /></conditions>
+      <delay exact="1s" />
+      <actions>
+        <set_value name="$Qa114NamespaceValue" exact="41" />
+        <debug_text text="'FORGE_MD114_NAMESPACE_OWNER_OK'" filter="general" />
+      </actions>
+      <cues>
+        <cue name="ReadInherited">
+          <conditions><event_cue_completed cue="parent" /></conditions>
+          <actions>
+            <debug_text text="'FORGE_MD114_INHERITED_ENTRY'" filter="general" />
+            <do_if value="$Qa114NamespaceValue == 41">
+              <debug_text text="'FORGE_MD114_INHERITED_OK'" filter="general" />
+            </do_if>
+            <do_else>
+              <debug_text text="'FORGE_MD114_INHERITED_UNEXPECTED'" filter="general" />
+            </do_else>
+          </actions>
+        </cue>
+        <cue name="ReadOwnNamespace" namespace="this">
+          <conditions><event_cue_completed cue="parent" /></conditions>
+          <actions>
+            <debug_text text="'FORGE_MD114_OWN_ENTRY'" filter="general" />
+            <debug_text text="'FORGE_MD114_OWN_BEFORE'" filter="general" />
+            <set_value name="$Qa114Observation" exact="$Qa114NamespaceValue" />
+            <debug_text text="'FORGE_MD114_OWN_AFTER'" filter="general" />
+          </actions>
+        </cue>
+      </cues>
+    </cue>
+  </cues>
+</mdscript>

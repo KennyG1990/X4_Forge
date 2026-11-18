@@ -1,0 +1,209 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mdscript name="ForgeQa111ComponentWrites" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+  <cues>
+    <cue name="Controls" checkinterval="1s">
+      <conditions><check_value value="player.entity.exists and player.ship.exists and player.ship.sector.exists" /></conditions>
+      <actions>
+        <debug_text text="'FORGE_MD111_CONTROLS_ENTRY'" filter="general" />
+        <debug_text text="'FORGE_MD111_CONTROLS_BEGIN'" filter="general" />
+        <do_if value="player.entity.exists">
+          <set_value name="player.entity.$ForgeQa111Entity" exact="101" />
+          <do_if value="@player.entity.$ForgeQa111Entity == 101">
+            <debug_text text="'FORGE_MD111_ENTITY_VALUE_OK'" filter="general" />
+          </do_if>
+          <do_else>
+            <debug_text text="'FORGE_MD111_ENTITY_UNEXPECTED'" filter="general" />
+          </do_else>
+          <remove_value name="player.entity.$ForgeQa111Entity" />
+          <do_if value="player.entity.$ForgeQa111Entity?">
+            <debug_text text="'FORGE_MD111_ENTITY_REMOVE_UNEXPECTED'" filter="general" />
+          </do_if>
+          <do_else>
+            <debug_text text="'FORGE_MD111_ENTITY_REMOVE_OK'" filter="general" />
+          </do_else>
+        </do_if>
+        <do_else>
+          <debug_text text="'FORGE_MD111_ENTITY_SKIP'" filter="general" />
+        </do_else>
+        <do_if value="player.ship.exists and player.ship.sector.exists">
+          <set_value name="$cr" exact="table[]" />
+          <set_value name="$cr.$ship" exact="player.ship" />
+          <set_value name="$cr.$ord" exact="101" />
+          <set_value name="$cr.$toName" exact="'FORGE_MD111'" />
+          <do_if value="player.entity.exists">
+            <set_value name="player.entity.$ForgeQa111EntityList" exact="[$cr.$ord, $cr.$toName, $cr.$ship.sector.knownname, player.age]" />
+            <do_if value="player.entity.$ForgeQa111EntityList?">
+              <debug_text text="'FORGE_MD111_ENTITY_LIST_OK'" filter="general" />
+            </do_if>
+            <do_else>
+              <debug_text text="'FORGE_MD111_ENTITY_LIST_UNEXPECTED'" filter="general" />
+            </do_else>
+            <remove_value name="player.entity.$ForgeQa111EntityList" />
+            <do_if value="player.entity.$ForgeQa111EntityList?">
+              <debug_text text="'FORGE_MD111_ENTITY_LIST_REMOVE_UNEXPECTED'" filter="general" />
+            </do_if>
+            <do_else>
+              <debug_text text="'FORGE_MD111_ENTITY_LIST_REMOVE_OK'" filter="general" />
+            </do_else>
+          </do_if>
+          <set_value name="$State" exact="table[]" />
+          <set_value name="$State.{$cr.$ship}" exact="[$cr.$ord, $cr.$toName, $cr.$ship.sector.knownname, player.age]" />
+          <do_if value="$State.{$cr.$ship}?">
+            <debug_text text="'FORGE_MD111_TABLE_VALUE_OK'" filter="general" />
+          </do_if>
+          <do_else>
+            <debug_text text="'FORGE_MD111_TABLE_UNEXPECTED'" filter="general" />
+          </do_else>
+          <remove_value name="$State.{$cr.$ship}" />
+          <do_if value="$State.{$cr.$ship}?">
+            <debug_text text="'FORGE_MD111_TABLE_REMOVE_UNEXPECTED'" filter="general" />
+          </do_if>
+          <do_else>
+            <debug_text text="'FORGE_MD111_TABLE_REMOVE_OK'" filter="general" />
+          </do_else>
+        </do_if>
+        <do_else>
+          <debug_text text="'FORGE_MD111_TABLE_SKIP'" filter="general" />
+        </do_else>
+        <debug_text text="'FORGE_MD111_CONTROLS_END'" filter="general" />
+      </actions>
+    </cue>
+    <cue name="ShipScalar" checkinterval="1s">
+      <conditions><check_value value="player.ship.exists" /></conditions>
+      <actions>
+        <do_if value="player.ship.exists">
+          <debug_text text="'FORGE_MD111_SCALAR_ENTRY'" filter="general" />
+          <debug_text text="'FORGE_MD111_SCALAR_BEFORE'" filter="general" />
+          <set_value name="player.ship.$ForgeQa111Scalar" exact="101" />
+          <debug_text text="'FORGE_MD111_SCALAR_AFTER'" filter="general" />
+          <do_if value="@player.ship.$ForgeQa111Scalar == 101">
+            <debug_text text="'FORGE_MD111_SCALAR_PRESENT'" filter="general" />
+            <remove_value name="player.ship.$ForgeQa111Scalar" />
+            <do_if value="player.ship.$ForgeQa111Scalar?">
+              <debug_text text="'FORGE_MD111_SCALAR_REMOVE_PRESENT'" filter="general" />
+            </do_if>
+            <do_else>
+              <debug_text text="'FORGE_MD111_SCALAR_REMOVE_ABSENT'" filter="general" />
+            </do_else>
+          </do_if>
+          <do_else>
+            <debug_text text="'FORGE_MD111_SCALAR_MISSING'" filter="general" />
+          </do_else>
+        </do_if>
+        <do_else>
+          <debug_text text="'FORGE_MD111_SCALAR_SKIP'" filter="general" />
+        </do_else>
+      </actions>
+    </cue>
+    <cue name="ShipList" checkinterval="1s">
+      <conditions><check_value value="player.ship.exists and player.ship.sector.exists" /></conditions>
+      <actions>
+        <do_if value="player.ship.exists and player.ship.sector.exists">
+          <debug_text text="'FORGE_MD111_LIST_ENTRY'" filter="general" />
+          <set_value name="$cr" exact="table[]" />
+          <set_value name="$cr.$ship" exact="player.ship" />
+          <set_value name="$cr.$ord" exact="101" />
+          <set_value name="$cr.$toName" exact="'FORGE_MD111'" />
+          <debug_text text="'FORGE_MD111_LIST_BEFORE'" filter="general" />
+          <set_value name="$cr.$ship.$ForgeQa111List" exact="[$cr.$ord, $cr.$toName, $cr.$ship.sector.knownname, player.age]" />
+          <debug_text text="'FORGE_MD111_LIST_AFTER'" filter="general" />
+          <do_if value="$cr.$ship.$ForgeQa111List?">
+            <debug_text text="'FORGE_MD111_LIST_PRESENT'" filter="general" />
+            <remove_value name="$cr.$ship.$ForgeQa111List" />
+            <do_if value="$cr.$ship.$ForgeQa111List?">
+              <debug_text text="'FORGE_MD111_LIST_REMOVE_PRESENT'" filter="general" />
+            </do_if>
+            <do_else>
+              <debug_text text="'FORGE_MD111_LIST_REMOVE_ABSENT'" filter="general" />
+            </do_else>
+          </do_if>
+          <do_else>
+            <debug_text text="'FORGE_MD111_LIST_MISSING'" filter="general" />
+          </do_else>
+        </do_if>
+        <do_else>
+          <debug_text text="'FORGE_MD111_LIST_SKIP'" filter="general" />
+        </do_else>
+      </actions>
+    </cue>
+    <cue name="ShipDirectList" checkinterval="1s">
+      <conditions><check_value value="player.ship.exists and player.ship.sector.exists" /></conditions>
+      <actions>
+        <do_if value="player.ship.exists and player.ship.sector.exists">
+          <debug_text text="'FORGE_MD111_DIRECT_LIST_ENTRY'" filter="general" />
+          <set_value name="$cr" exact="table[]" />
+          <set_value name="$cr.$ship" exact="player.ship" />
+          <set_value name="$cr.$ord" exact="101" />
+          <set_value name="$cr.$toName" exact="'FORGE_MD111'" />
+          <debug_text text="'FORGE_MD111_DIRECT_LIST_BEFORE'" filter="general" />
+          <set_value name="player.ship.$ForgeQa111DirectList" exact="[$cr.$ord, $cr.$toName, $cr.$ship.sector.knownname, player.age]" />
+          <debug_text text="'FORGE_MD111_DIRECT_LIST_AFTER'" filter="general" />
+          <do_if value="player.ship.$ForgeQa111DirectList?">
+            <debug_text text="'FORGE_MD111_DIRECT_LIST_PRESENT'" filter="general" />
+            <remove_value name="player.ship.$ForgeQa111DirectList" />
+            <do_if value="player.ship.$ForgeQa111DirectList?">
+              <debug_text text="'FORGE_MD111_DIRECT_LIST_REMOVE_PRESENT'" filter="general" />
+            </do_if>
+            <do_else>
+              <debug_text text="'FORGE_MD111_DIRECT_LIST_REMOVE_ABSENT'" filter="general" />
+            </do_else>
+          </do_if>
+          <do_else>
+            <debug_text text="'FORGE_MD111_DIRECT_LIST_MISSING'" filter="general" />
+          </do_else>
+        </do_if>
+        <do_else>
+          <debug_text text="'FORGE_MD111_DIRECT_LIST_SKIP'" filter="general" />
+        </do_else>
+      </actions>
+    </cue>
+    <cue name="ShipNestedScalar" checkinterval="1s">
+      <conditions><check_value value="player.ship.exists" /></conditions>
+      <actions>
+        <do_if value="player.ship.exists">
+          <debug_text text="'FORGE_MD111_NESTED_SCALAR_ENTRY'" filter="general" />
+          <set_value name="$cr" exact="table[]" />
+          <set_value name="$cr.$ship" exact="player.ship" />
+          <debug_text text="'FORGE_MD111_NESTED_SCALAR_BEFORE'" filter="general" />
+          <set_value name="$cr.$ship.$ForgeQa111NestedScalar" exact="101" />
+          <debug_text text="'FORGE_MD111_NESTED_SCALAR_AFTER'" filter="general" />
+          <do_if value="@$cr.$ship.$ForgeQa111NestedScalar == 101">
+            <debug_text text="'FORGE_MD111_NESTED_SCALAR_PRESENT'" filter="general" />
+            <remove_value name="$cr.$ship.$ForgeQa111NestedScalar" />
+            <do_if value="$cr.$ship.$ForgeQa111NestedScalar?">
+              <debug_text text="'FORGE_MD111_NESTED_SCALAR_REMOVE_PRESENT'" filter="general" />
+            </do_if>
+            <do_else>
+              <debug_text text="'FORGE_MD111_NESTED_SCALAR_REMOVE_ABSENT'" filter="general" />
+            </do_else>
+          </do_if>
+          <do_else>
+            <debug_text text="'FORGE_MD111_NESTED_SCALAR_MISSING'" filter="general" />
+          </do_else>
+        </do_if>
+        <do_else>
+          <debug_text text="'FORGE_MD111_NESTED_SCALAR_SKIP'" filter="general" />
+        </do_else>
+      </actions>
+    </cue>
+    <cue name="ShipRemoveUnset" checkinterval="1s">
+      <conditions><check_value value="player.ship.exists" /></conditions>
+      <actions>
+        <do_if value="player.ship.exists">
+          <debug_text text="'FORGE_MD111_UNSET_ENTRY'" filter="general" />
+          <do_if value="player.ship.$ForgeQa111Unset?">
+            <debug_text text="'FORGE_MD111_UNSET_UNEXPECTED'" filter="general" />
+          </do_if>
+          <do_else>
+            <debug_text text="'FORGE_MD111_UNSET_BEFORE'" filter="general" />
+            <remove_value name="player.ship.$ForgeQa111Unset" />
+            <debug_text text="'FORGE_MD111_UNSET_AFTER'" filter="general" />
+          </do_else>
+        </do_if>
+        <do_else>
+          <debug_text text="'FORGE_MD111_UNSET_SKIP'" filter="general" />
+        </do_else>
+      </actions>
+    </cue>
+  </cues>
+</mdscript>

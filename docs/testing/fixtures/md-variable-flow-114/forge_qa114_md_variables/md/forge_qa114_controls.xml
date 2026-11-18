@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mdscript name="ForgeQa114Controls" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+  <cues>
+    <cue name="Controls">
+      <conditions><event_game_started /></conditions>
+      <actions>
+        <debug_text text="'FORGE_MD114_CONTROLS_BEGIN'" filter="general" />
+        <set_value name="$Qa114Prior" exact="17" />
+        <do_if value="$Qa114Prior == 17">
+          <debug_text text="'FORGE_MD114_PRIOR_OK'" filter="general" />
+        </do_if>
+        <do_else>
+          <debug_text text="'FORGE_MD114_PRIOR_UNEXPECTED'" filter="general" />
+        </do_else>
+        <do_if value="$Qa114Guarded?">
+          <set_value name="$Qa114GuardedObservation" exact="$Qa114Guarded" />
+          <debug_text text="'FORGE_MD114_GUARD_UNEXPECTED'" filter="general" />
+        </do_if>
+        <do_else>
+          <debug_text text="'FORGE_MD114_GUARD_OK'" filter="general" />
+        </do_else>
+        <do_if value="@$Qa114Suppressed == null">
+          <debug_text text="'FORGE_MD114_SUPPRESS_OK'" filter="general" />
+        </do_if>
+        <do_else>
+          <debug_text text="'FORGE_MD114_SUPPRESS_UNEXPECTED'" filter="general" />
+        </do_else>
+        <debug_text text="'FORGE_MD114_LITERAL $Qa114Quoted'" filter="general" />
+        <debug_text text="'FORGE_MD114_CONTROLS_END'" filter="general" />
+      </actions>
+    </cue>
+  </cues>
+</mdscript>
