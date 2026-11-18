@@ -4,7 +4,9 @@ import path from 'node:path';
 import { buildTemplateWorkspace } from '../../src/lib/modTemplates';
 import { workspaceContentHash, workspaceSnapshotHash } from '../../src/lib/workspaceIdentity';
 import { sanitizeWorkspace } from '../../src/types';
-import { readServerWorkspaceEnvelope, seedServerWorkspace } from './ephemeral';
+import { ephemeralWorkspaceHeaders, readServerWorkspaceEnvelope, seedServerWorkspace } from './ephemeral';
+import { E2E_API_ORIGIN, E2E_STATE_DIR } from '../../playwright.config';
+import { resolveWorkspaceArtifactId } from '../../src/lib/modCompiler';
 import {
   buildLargeWorkspace,
   LARGE_WORKSPACE_LINK_COUNT,
@@ -35,7 +37,6 @@ type PollWindow = Window & {
       uiTheme?: { accentColor?: string };
     };
     setWorkspace: (workspace: unknown) => void;
-    setWorkspaceDirtyForTest: (dirty: boolean) => void;
   };
 };
 
@@ -90,7 +91,7 @@ async function bootWithFetchCounts(
   await page.goto('/');
   await page.waitForFunction(() => {
     const pollWindow = window as unknown as PollWindow;
-    return !!pollWindow.__X4_E2E__?.getWorkspace().name && !!pollWindow.__X4_CONTINUOUS_POLLING__;
+    return !!window.AgentRuntime?.getCurrentWorkspace().name && !!pollWindow.__X4_CONTINUOUS_POLLING__;
   });
   // Startup-conflict fixtures deliberately raise the modal before this helper returns.
   // Do not ask Playwright to click an unrelated card through that authoritative overlay.
@@ -1269,57 +1270,167 @@ test('AgentBridge Auto-Apply cannot replace a manually adopted canvas while an i
   releaseHeldPost();
 });
 
-test('AgentBridge Auto-Apply keeps a newer candidate pending while a prior sync conflict is unresolved', async ({ page }) => {
+test('AgentBridge Auto-Apply keeps a newer candidate pending while a prior sync conflict is unresolved', async ({ page, request }) => {
   test.setTimeout(45_000);
   const initial = buildTemplateWorkspace('welcome');
   const remote = sanitizeWorkspace({ ...buildTemplateWorkspace('reward_on_kill'), name: 'B116_Conflict_Remote' });
   const newer = sanitizeWorkspace({ ...remote, name: 'B116_Conflict_Newer' });
-  await seedServerWorkspace(initial);
-  await bootWithFetchCounts(page);
-  await openAgentBridge(page);
-  await page.getByTestId('agent-bridge-auto-sync').click();
-
-  let releaseHeldPost!: () => void;
-  const heldPost = new Promise<void>(resolve => { releaseHeldPost = resolve; });
-  let markPostSeen!: () => void;
-  const postSeen = new Promise<void>(resolve => { markPostSeen = resolve; });
-  let held = false;
-  await page.route('**/api/agent/workspace', async route => {
-    if (route.request().method() !== 'POST' || held) {
-      await route.fallback();
-      return;
-    }
-    held = true;
-    markPostSeen();
-    await heldPost;
-    await route.fallback();
-  });
   const localDescription = 'Keep this unresolved local side visible.';
-  await page.evaluate(description => {
-    const pollWindow = window as unknown as PollWindow;
-    const current = pollWindow.__X4_E2E__!.getWorkspace();
-    pollWindow.__X4_E2E__!.setWorkspace({ ...current, description });
-  }, localDescription);
-  await postSeen;
-  await seedServerWorkspace(remote);
-  await expect(page.getByTestId('agent-bridge-pending-workspace')).toBeVisible({ timeout: 10_000 });
-  releaseHeldPost();
-  await expect(page.getByTestId('sync-conflict-dialog')).toBeVisible({ timeout: 10_000 });
-  await page.evaluate(() => (window as unknown as PollWindow).__X4_E2E__!.setWorkspaceDirtyForTest(false));
-  await page.waitForTimeout(100);
+  const headers = await ephemeralWorkspaceHeaders(true);
+  const configUrl = E2E_API_ORIGIN + '/api/schema/config';
+  const priorConfig = await request.get(configUrl, { headers });
+  expect(priorConfig.status()).toBe(200);
+  const prior = await priorConfig.json();
+  const restore = {
+    modWorkspacePath: prior.config?.modWorkspacePath || '',
+    filesystemPath: prior.config?.filesystemPath || '',
+    x4GamePath: prior.config?.x4GamePath || '',
+    deployFormat: prior.config?.deployFormat || 'loose',
+  };
+  expect(process.env.X4_GAME_PATH || '').toBe('');
+  for (const value of [restore.x4GamePath, prior.resolved?.x4GamePath]) {
+    if (!value) continue;
+    const rel = path.relative(E2E_STATE_DIR, value);
+    expect(!path.isAbsolute(rel) && rel.split(path.sep)[0] !== '..', 'Baseline game path must be in the owned E2E state').toBe(true);
+  }
+  const scratch = await fs.mkdtemp(path.join(E2E_STATE_DIR, 'polling-deploy-'));
+  const game = path.join(scratch, 'game');
+  const extensions = path.join(game, 'extensions');
+  const mods = path.join(scratch, 'mods');
+  await fs.mkdir(extensions, { recursive: true });
+  await fs.mkdir(mods);
+  await fs.writeFile(path.join(game, 'X4.exe'), 'Inert test marker; never executed.');
 
-  await seedServerWorkspace(newer);
-  const newerEnvelope = await readServerWorkspaceEnvelope();
-  await expect(page.getByTestId('agent-bridge-pending-workspace')).toContainText(`v${newerEnvelope.version}`, { timeout: 10_000 });
-  const visible = await page.evaluate(() => {
-    const current = (window as unknown as PollWindow).__X4_E2E__!.getWorkspace();
+  let releaseAutosave!: () => void;
+  const autosaveHeld = new Promise<void>(resolve => { releaseAutosave = resolve; });
+  let releaseConvergence!: () => void;
+  const convergenceHeld = new Promise<void>(resolve => { releaseConvergence = resolve; });
+  const posts: Array<{ workspaceId: string; expectedHead: string; expectedSnapshotHash: string; status?: number }> = [];
+  let convergence: { success?: boolean; version?: number; workspaceHash?: string; snapshotHash?: string } | undefined;
+  const workspaceRoute = '**/api/agent/workspace';
+  const readLocal = () => page.evaluate(() => {
+    const current = window.AgentRuntime!.getCurrentWorkspace();
     return { name: current.name, description: current.description };
   });
-  expect(visible.name).toBe(initial.name);
-  expect(visible.description).toBe(localDescription);
-  await expect(page.getByTestId('sync-conflict-dialog')).toBeVisible();
-  const server = await readServerWorkspaceEnvelope();
-  expect(server.workspace.name).toBe(newer.name);
+  try {
+    const setup = await request.post(configUrl, {
+      headers,
+      data: { modWorkspacePath: mods, filesystemPath: extensions, x4GamePath: game, deployFormat: 'loose' },
+    });
+    expect(setup.status(), await setup.text()).toBe(200);
+    const resolved = (await setup.json()).resolved;
+    expect(path.resolve(resolved.x4GamePath)).toBe(game);
+    expect(path.resolve(resolved.modWorkspacePath)).toBe(mods);
+    expect(path.resolve(resolved.filesystemPath)).toBe(extensions);
+
+    await seedServerWorkspace(initial);
+    const baseline = await readServerWorkspaceEnvelope();
+    const readCache = () => page.evaluate(workspaceId => {
+      const raw = localStorage.getItem('x4_mod_studio_workspace:' + workspaceId);
+      const value = raw ? JSON.parse(raw) : {};
+      return { version: Number(localStorage.getItem('x4_mod_studio_version:' + workspaceId)),
+        draft: Boolean(value.__x4ForgeDraft), description: value.description ?? value.workspace?.description };
+    }, baseline.workspaceId);
+    await bootWithFetchCounts(page);
+    const expert = page.getByTestId('mode-expert');
+    if (await expert.getAttribute('aria-pressed') !== 'true') await expert.click();
+    await page.locator('[data-sidebar-tab="config"]').click();
+    await openAgentBridge(page);
+    await page.getByTestId('agent-bridge-auto-sync').click();
+    await expect(page.getByTestId('agent-bridge-auto-sync')).toHaveText('ON');
+    await page.getByRole('button', { name: 'Close Agent API Bridge' }).click();
+
+    await page.route(workspaceRoute, async route => {
+      if (route.request().method() !== 'POST') {
+        await route.fallback();
+        return;
+      }
+      const { expectedHead, expectedSnapshotHash } = route.request().postDataJSON();
+      const post = { workspaceId: route.request().headers()['x-workspace-id'], expectedHead, expectedSnapshotHash, status: undefined as number | undefined };
+      const number = posts.push(post);
+      if (number === 1) await autosaveHeld;
+      const response = await fetchRouteWithClosingConnection(route);
+      post.status = response.status();
+      if (number === 2) {
+        convergence = await response.json();
+        await convergenceHeld;
+      }
+      await route.fulfill({ response });
+    });
+
+    await page.getByPlaceholder('Mod brief synopsis...').fill(localDescription);
+    await expect.poll(() => posts.length).toBe(1);
+    await expect.poll(readCache).toMatchObject({ draft: true, description: localDescription });
+
+    await page.getByRole('button', { name: 'Compile Mod Extension' }).click();
+    const applied = page.waitForResponse(response => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/api/agent/deploy-verify'
+      && response.request().postDataJSON().dryRun !== true);
+    await page.getByRole('button', { name: 'Build & Staging' }).click();
+    const deployed = await applied;
+    const result = await deployed.json();
+    expect(deployed.status(), JSON.stringify(result.checklist || result.error)).toBe(200);
+    expect(result).toMatchObject({ ok: true, bytesConfirmed: true, workspace: { name: initial.name, description: localDescription } });
+    const expectedTarget = path.join(extensions, resolveWorkspaceArtifactId(initial));
+    expect(await fs.realpath(result.deployedPath)).toBe(await fs.realpath(expectedTarget));
+    expect((await fs.stat(path.join(expectedTarget, 'content.xml'))).size).toBeGreaterThan(0);
+    await expect.poll(() => convergence?.success).toBe(true);
+    expect(posts).toEqual([
+      { workspaceId: baseline.workspaceId, expectedHead: baseline.workspaceHash, expectedSnapshotHash: baseline.snapshotHash, status: undefined },
+      { workspaceId: baseline.workspaceId, expectedHead: baseline.workspaceHash, expectedSnapshotHash: baseline.snapshotHash, status: 200 },
+    ]);
+    const acceptedVersion = Number(convergence?.version);
+    expect(acceptedVersion).toBeGreaterThan(baseline.version);
+    const accepted = await readServerWorkspaceEnvelope();
+    expect(accepted).toMatchObject({ version: acceptedVersion, workspaceHash: convergence?.workspaceHash,
+      snapshotHash: convergence?.snapshotHash, workspace: { description: localDescription } });
+
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await openAgentBridge(page);
+    await expect(page.getByTestId('agent-bridge-auto-sync')).toHaveText('ON');
+    await seedServerWorkspace(remote);
+    const remoteEnvelope = await readServerWorkspaceEnvelope();
+    expect(remoteEnvelope.version).toBeGreaterThan(acceptedVersion);
+    await expect(page.getByTestId('agent-bridge-pending-workspace')).toContainText('v' + remoteEnvelope.version, { timeout: 10_000 });
+    releaseAutosave();
+    await expect.poll(() => posts[0]?.status).toBe(409);
+    await expect(page.getByTestId('sync-conflict-dialog')).toBeVisible({ timeout: 10_000 });
+    expect(await readLocal()).toEqual({ name: initial.name, description: localDescription });
+
+    releaseConvergence();
+    await expect.poll(readCache).toEqual({ version: acceptedVersion, draft: false, description: localDescription });
+    await expect(page.getByTestId('sync-conflict-dialog')).toBeVisible();
+    expect(await readLocal()).toEqual({ name: initial.name, description: localDescription });
+    expect(await readServerWorkspaceEnvelope()).toMatchObject({ workspaceId: remoteEnvelope.workspaceId,
+      version: remoteEnvelope.version, workspaceHash: remoteEnvelope.workspaceHash, snapshotHash: remoteEnvelope.snapshotHash });
+    expect(posts).toHaveLength(2);
+
+    await expect(page.getByTestId('agent-bridge-auto-sync')).toHaveText('ON');
+    const beforePoll = await page.evaluate(() =>
+      (window as PollWindow).__X4_FETCH_COUNTS__?.['/api/agent/workspaces'] || 0);
+    await seedServerWorkspace(newer);
+    const newerEnvelope = await readServerWorkspaceEnvelope();
+    await expect.poll(() => page.evaluate(() =>
+      (window as PollWindow).__X4_FETCH_COUNTS__?.['/api/agent/workspaces'] || 0), { timeout: 10_000 }).toBeGreaterThan(beforePoll);
+    await expect(page.getByTestId('agent-bridge-pending-workspace')).toContainText('v' + newerEnvelope.version, { timeout: 10_000 });
+    const visible = await readLocal();
+    expect(visible.name).toBe(initial.name);
+    expect(visible.description).toBe(localDescription);
+    await expect(page.getByTestId('sync-conflict-dialog')).toBeVisible();
+    const server = await readServerWorkspaceEnvelope();
+    expect(server.workspace.name).toBe(newer.name);
+    expect(posts).toHaveLength(2);
+    console.log('Polling clean-conflict proof', JSON.stringify({ autosave: posts[0].status, convergence: posts[1].status,
+      acceptedVersion, beforePoll, pendingVersion: newerEnvelope.version, localClean: true, conflictVisible: true }));
+  } finally {
+    releaseAutosave();
+    releaseConvergence();
+    await page.unroute(workspaceRoute);
+    const restored = await request.post(configUrl, { headers, data: restore });
+    expect(restored.status(), await restored.text()).toBe(200);
+    const actual = await request.get(configUrl, { headers });
+    expect((await actual.json()).config).toMatchObject(restore);
+  }
 });
 
 test('failed manual pending Apply re-arms a dirty CAS save under the new authority epoch', async ({ page }) => {
