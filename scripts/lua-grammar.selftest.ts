@@ -20,12 +20,42 @@ const check = (name: string, fn: () => void) => {
   try { fn(); checks.push({ name, pass: true }); }
   catch (error) { checks.push({ name, pass: false, detail: String(error) }); }
 };
+const declared = (count: number, prefix = 'v') =>
+  'local ' + Array.from({ length: count }, (_, index) => prefix + index).join(',');
+const formals = (count: number) => Array.from({ length: count }, (_, index) => 'arg' + index).join(',');
 const cases = [
   ['signed64', 'return 1LL', true], ['unsigned64', 'return 18446744073709551615ULL', true],
   ['imaginary', 'return 2i', true], ['contextual_goto', 'local goto = 1; return goto', true],
   ['goto_label', 'goto done; ::done:: return 1', true], ['plain_number', 'return 1.25', true],
   ['bad_integer', 'return 1LLL', false], ['bad_function', 'function Broken(', false],
   ['empty_statement', 'f();;g()', false], ['empty_statement_only', ';;', false],
+  ['local_200', declared(200), true],
+  ['local_201', declared(201), false],
+  ['sequential_201', declared(200) + '\nlocal overflow', false],
+  ['shadow_uses_another_slot', declared(200) + '\nlocal v0', false],
+  ['sibling_blocks_reuse_slots', 'do ' + declared(200) + ' end; do ' + declared(200) + ' end', true],
+  ['sibling_arms_reuse_slots', 'if choice then ' + declared(200) + ' elseif other then '
+    + declared(200) + ' else ' + declared(200) + ' end', true],
+  ['over_limit_even_in_dead_arm', 'if false then ' + declared(201) + ' end', false],
+  ['outer_plus_inner_live_slots', declared(200) + '; do local child end', false],
+  ['local_function_uses_slot', declared(200) + '; local function child() end', false],
+  ['nonlocal_definition_does_not_add_slot', declared(200) + '; function child() end', true],
+  ['inner_function_has_independent_slots', declared(200) + '; function child() ' + declared(200) + ' end', true],
+  ['inline_function_limit', 'local f = function() ' + declared(201) + ' end', false],
+  ['numeric_for_196', declared(196) + '; for i=1,1 do end', true],
+  ['numeric_for_197', declared(197) + '; for i=1,1 do end', false],
+  ['numeric_for_releases_slots', 'for i=1,1 do ' + declared(196) + ' end; ' + declared(200), true],
+  ['numeric_for_body_overflow', 'for i=1,1 do ' + declared(197) + ' end', false],
+  ['generic_for_195', declared(195) + '; for k,v in pairs({}) do end', true],
+  ['generic_for_196', declared(196) + '; for k,v in pairs({}) do end', false],
+  ['generic_for_body_overflow', 'for k,v in pairs({}) do ' + declared(196) + ' end', false],
+  ['repeat_releases_slots', 'repeat ' + declared(200) + ' until true; ' + declared(200), true],
+  ['while_inner_overflow', declared(200) + '; while choice do local inside end', false],
+  ['named_200_plus_varargs', 'function f(' + formals(200) + ', ...) end', true],
+  ['named_201', 'function f(' + formals(201) + ') end', false],
+  ['method_199_plus_self', 'function object:f(' + formals(199) + ') end', true],
+  ['method_200_plus_self', 'function object:f(' + formals(200) + ') end', false],
+  ['dot_method_has_no_implicit_self', 'function object.f(' + formals(200) + ') end', true],
 ] as const;
 const file = (rel: string, text: string): LuaFileInput => ({ rel, text, source: 'loose', sourcePath: `grammar:${rel}`,
   extension: { folder: 'grammar', id: 'grammar' } });
@@ -73,6 +103,28 @@ for (const [id, text, accepted] of cases) check(`compiler_and_forge_${id}`, () =
   assert.equal(result.runtimeScope.stages[0].status, accepted ? 'pass' : 'fail');
   assert.equal(result.findings.some(f => f.code === 'lua.syntax_error'), !accepted);
 });
+check('local_limit_has_position_and_preserves_parser_options', () => {
+  const raw = declared(200) + '\r\nlocal overflow\r\nfunction later() ' + declared(201) + ' end';
+  const options = { locations: true, ranges: true, comments: false };
+  const before = JSON.stringify(options);
+  assert.throws(() => parseX4Lua(raw, options), (error: unknown) => {
+    const finding = error as SyntaxError & { line?: number; column?: number };
+    return finding instanceof SyntaxError && finding.line === 2 && finding.column === 6
+      && finding.message.includes('200 active local variables');
+  });
+  assert.equal(JSON.stringify(options), before);
+  const result = analyzeLuaFiles([file('ui/local_limit.lua', raw)]);
+  const finding = result.findings.find(row => row.code === 'lua.syntax_error');
+  assert.equal(finding?.line, 2);
+  assert.equal(finding?.column, 6);
+});
+check('deferred_local_check_snapshots_wait_option', () => {
+  const options = { wait: true, locations: true };
+  const parser = parseX4Lua('', options) as { end(input: string): unknown };
+  options.wait = false;
+  assert.throws(() => parser.end(declared(201)), /200 active local variables/);
+});
+
 check('nine_retained_real_sources_compile_without_execution', () => {
   for (const source of corpus) {
     assert.equal(oracle.results.find(row => row.id === source.id)?.accepted, true, source.id);
