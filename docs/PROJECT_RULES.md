@@ -6,6 +6,14 @@ used by the Studio, agent API, CLI, compile, release, and deploy checks.
 
 The machine-readable schema is [`docs/schemas/forge.rules.schema.v1.json`](schemas/forge.rules.schema.v1.json).
 
+## Version policy for playtesting
+
+Add `"versionPolicy": "per-release"` if your project sets the player-facing version when it prepares a release.
+Native deploys then report changed files under the same version as information at `content.xml/@version`.
+Projects that omit the setting or use `"per-deploy"` continue to receive a warning. Forge compares against the
+last verified deployment to the selected target and never rewrites the version. Packaging uses its existing validation.
+Forge 0.0.83 treats `versionPolicy` as an unknown property. Use the setting once the running Forge supports it.
+
 ## Safety contract
 
 - Rules never suppress an error.

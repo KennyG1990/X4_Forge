@@ -15727,12 +15727,13 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       }
     }
     const previousBuild = build && receiptHistory && findUnchangedDeploymentVersion(build, receiptHistory, buildTarget);
+    const versionChangesPerRelease = preflight.rules.valid && preflight.rules.config?.versionPolicy === 'per-release';
     if (build && previousBuild) {
       preflightDiagnostics.push({
-        severity: 'warning',
+        severity: versionChangesPerRelease ? 'info' : 'warning',
         code: 'content.version_stale',
         filePath: 'content.xml',
-        sourceRef: `deploy-receipt:${previousBuild.id}`,
+        sourceRef: versionChangesPerRelease ? 'content.xml/@version' : `deploy-receipt:${previousBuild.id}`,
         message: `Files changed since the last verified deployment to this destination, but content.xml still declares version "${build.modVersion}".`,
       });
     }
@@ -15742,7 +15743,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       preflightDiagnostics,
     );
     const pfWarnings = preflight.summary.activeWarnings + diskValidationSkipped.length
-      + readinessUnavailable.filter(diagnostic => diagnostic.severity === 'warning').length + Number(Boolean(previousBuild));
+      + readinessUnavailable.filter(diagnostic => diagnostic.severity === 'warning').length + Number(Boolean(previousBuild) && !versionChangesPerRelease);
     const staticEvidence = buildValidationEvidence({ id: modId, name: modId, files: deployValidation.validationFiles },
       preflightDiagnostics.map(d => ({ severity: d.severity, code: d.code, target: d.target,
         filePath: d.filePath, line: d.line, column: d.column, sourceRef: typeof d.sourceRef === 'string' ? d.sourceRef : undefined,
@@ -15761,6 +15762,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     const subject: AcceptanceSubject = { evidence, artifactHash, validatorHash: nativeCheckProof
       ? trustHash([deployValidatorHash, nativeCheckProof.proof.reviewBasisHash]) : deployValidatorHash, corpusHash,
       targetHash: targetHashFor(deployFormat),
+      ...(versionChangesPerRelease && previousBuild ? { versionBaselineReceiptHash: previousBuild.hash } : {}),
       ...(selectedSource ? { sourceSelectionHash: trustHash([selectedSource.root, selectedSource.canonicalKey]) } : {}) };
     if (nativeCheckProof) subject.projectCheckProof = { id: nativeCheckProof.proof.id, hash: nativeCheckProof.proof.hash };
     if (canonicalReviewSource && receiptHistory) {

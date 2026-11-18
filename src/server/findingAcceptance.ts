@@ -20,6 +20,8 @@ export interface AcceptanceSubject {
   targetHash: string;
   /** Native path deploy may bind an explicitly selected configured root and source directory. */
   sourceSelectionHash?: string;
+  /** Prior verified deployment receipt used by the informational version check. */
+  versionBaselineReceiptHash?: string;
   /** Exact deployment attempt proof; remembered warning evidence uses the stable validator hash. */
   projectCheckProof?: { id: string; hash: string };
   /** Server-owned context; never accept history or scope from a request body. */
@@ -121,6 +123,9 @@ export function acceptanceBinding(subject: AcceptanceSubject) {
     refuse('ACCEPTANCE_SUBJECT_INVALID', 'Invalid server review context.');
   if (subject.sourceSelectionHash !== undefined && (typeof subject.sourceSelectionHash !== 'string' || !sha.test(subject.sourceSelectionHash)))
     refuse('ACCEPTANCE_SUBJECT_INVALID', 'Invalid resolved deploy source selection.');
+  if (subject.versionBaselineReceiptHash !== undefined
+    && (typeof subject.versionBaselineReceiptHash !== 'string' || !sha.test(subject.versionBaselineReceiptHash)))
+    refuse('ACCEPTANCE_SUBJECT_INVALID', 'Invalid prior deployment receipt hash.');
   if (subject.warningReviews?.history.some(r => r.metadata?.reviewScopeHash === subject.warningReviews?.scopeHash
     && r.metadata?.operation === 'revoke-warning-review' && r.status !== 'committed'))
     refuse('ACCEPTANCE_RECEIPT_INCOMPLETE', 'An incomplete revocation requires recovery before review reuse.');
@@ -131,6 +136,7 @@ export function acceptanceBinding(subject: AcceptanceSubject) {
     findings: evidence.findings.map(f => [f.findingId, f.category, f.severity]).sort(),
     coverage: { complete: evidence.coverage.complete, gaps: evidence.coverage.gaps.map(gap => JSON.stringify(gap)).sort() },
     ...(subject.sourceSelectionHash ? { sourceSelectionHash: subject.sourceSelectionHash } : {}),
+    ...(subject.versionBaselineReceiptHash ? { versionBaselineReceiptHash: subject.versionBaselineReceiptHash } : {}),
     ...(subject.projectCheckProof ? { projectCheckProof: subject.projectCheckProof } : {}),
     ...(subject.warningReviews ? { reviewScopeHash: subject.warningReviews.scopeHash,
       revocations: revocations(subject).map(r => r.id).sort() } : {}),

@@ -52,6 +52,7 @@ export interface ExpectedRegisterRule {
 
 export interface ProjectRulesV1 {
   version: 1;
+  versionPolicy?: 'per-deploy' | 'per-release';
   suppressions: WarningSuppressionRule[];
   contracts: {
     knownChains: KnownChainRule[];
@@ -109,7 +110,7 @@ export interface ProjectRulesEvaluation {
   activeWarnings: number;
 }
 
-const ROOT_KEYS = new Set(['$schema', 'version', 'suppressions', 'contracts']);
+const ROOT_KEYS = new Set(['$schema', 'version', 'versionPolicy', 'suppressions', 'contracts']);
 const CONTRACT_KEYS = new Set(['knownChains', 'wireKeys', 'expectedRegisters']);
 const REVIEWED_KEYS = ['id', 'owner', 'reason', 'reviewBy'] as const;
 const ID_RE = /^[a-z][a-z0-9._-]{2,63}$/;
@@ -198,6 +199,11 @@ function parseProjectRulesValue(value: unknown, now: Date): { config?: ProjectRu
   if (value.$schema !== undefined && (typeof value.$schema !== 'string' || value.$schema.length > 256)) {
     findings.push(error('rules.invalid_value', '$schema must be a string of at most 256 characters.', '$schema'));
   }
+  const versionPolicy = value.versionPolicy === 'per-deploy' || value.versionPolicy === 'per-release'
+    ? value.versionPolicy : undefined;
+  if (value.versionPolicy !== undefined && !versionPolicy) {
+    findings.push(error('rules.invalid_value', 'versionPolicy must be "per-deploy" or "per-release".', 'versionPolicy'));
+  }
 
   const ids = new Set<string>();
   const claimId = (id: string, at: string) => {
@@ -278,7 +284,10 @@ function parseProjectRulesValue(value: unknown, now: Date): { config?: ProjectRu
     expectedRegisters.push({ id, event, ...(file ? { file: normalizedPath(file) } : {}), reason });
   }
 
-  const config: ProjectRulesV1 = { version: 1, suppressions, contracts: { knownChains, wireKeys, expectedRegisters } };
+  const config: ProjectRulesV1 = {
+    version: 1, ...(versionPolicy ? { versionPolicy } : {}),
+    suppressions, contracts: { knownChains, wireKeys, expectedRegisters },
+  };
   return findings.length ? { findings } : { config, findings };
 }
 
@@ -391,6 +400,16 @@ export function runProjectRulesSelftest(): { allPassed: boolean; pass: boolean; 
   };
   const parsed = parseProjectRules(projectWithRules(config), { now });
   check('valid v1 parses', parsed.valid && parsed.version === 1, parsed.findings);
+  const versionRules = (versionPolicy: unknown) => parseProjectRules(projectWithRules({ version: 1, versionPolicy }), { now });
+  check('explicit version policies parse while omitted policy stays absent',
+    parsed.config?.versionPolicy === undefined
+    && versionRules('per-deploy').config?.versionPolicy === 'per-deploy'
+    && versionRules('per-release').config?.versionPolicy === 'per-release');
+  check('unsupported version policies fail closed', ['automatic', '', false, null].every(value => {
+    const result = versionRules(value);
+    return !result.valid && !result.config && result.findings.some(finding =>
+      finding.code === 'rules.invalid_value' && finding.sourceRef === 'versionPolicy');
+  }));
   const evaluated = evaluateProjectRuleContracts(parsed, {
     registered: [{ event: 'mod.chat.', file: 'ui/main.lua', prefix: true }],
     payloadReads: [{ key: 'offer', scope: 'global', file: 'md/main.xml', destination: '$offer' }],

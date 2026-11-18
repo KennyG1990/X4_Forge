@@ -8,6 +8,11 @@
   "properties": {
     "$schema": { "type": "string", "maxLength": 256 },
     "version": { "const": 1 },
+    "versionPolicy": {
+      "enum": ["per-deploy", "per-release"],
+      "default": "per-deploy",
+      "description": "Report same-version payload changes as information during native playtest deploys when set to per-release."
+    },
     "suppressions": {
       "type": "array",
       "maxItems": 256,

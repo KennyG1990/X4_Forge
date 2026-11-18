@@ -61,6 +61,13 @@ check('explicit deploy selection binds approval independently of identical artif
   assert.throws(() => decide(reviewed), /ACCEPTANCE_BINDING_STALE/);
   assert.throws(() => acceptanceBinding({ ...subject, sourceSelectionHash: '' }), /ACCEPTANCE_SUBJECT_INVALID/);
 });
+check('prior deploy receipt contributes independently to preview binding', () => {
+  const compared = { ...subject, versionBaselineReceiptHash: digest('d') };
+  const binding = acceptanceBinding(compared);
+  assert.notEqual(binding.hash, acceptanceBinding(subject).hash);
+  assert.notEqual(binding.hash, acceptanceBinding({ ...compared, versionBaselineReceiptHash: digest('f') }).hash);
+  assert.throws(() => acceptanceBinding({ ...compared, versionBaselineReceiptHash: 'not-a-digest' }), /ACCEPTANCE_SUBJECT_INVALID/);
+});
 check('mod identity change expires acceptance', () => assert.throws(() => decide(request(), principal, { ...subject, evidence: { ...evidence, modId: 'different_mod' } }), /ACCEPTANCE_BINDING_STALE/));
 check('unresolved identity is not overridable', () => assert.throws(() => decide(request(), principal, { ...subject, evidence: { ...evidence, modId: null } }), /ACCEPTANCE_SUBJECT_INVALID/));
 for (const code of ['AUTHORIZATION_DENIED', 'PATH_ESCAPE', 'SOURCE_STALE', 'WRITE_INTEGRITY_FAILED']) check(`${code} is non-overridable`, () =>
