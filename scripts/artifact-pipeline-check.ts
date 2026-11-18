@@ -8,8 +8,8 @@ import {
   verifyMaterializedArtifact,
   type ArtifactPlan,
 } from '../src/lib/artifactPipeline';
-import { verifyCatDatCatalogs, writeCatDatCatalogs } from '../src/lib/x4CatDat';
-import { materializeCatalogArtifact } from '../src/lib/artifactPackager';
+import { planCatDatCatalogs, verifyCatDatCatalogs, writeCatDatCatalogs } from '../src/lib/x4CatDat';
+import { forecastCatalogArtifact, materializeCatalogArtifact } from '../src/lib/artifactPackager';
 import { toTFileName } from '../src/lib/modCompiler';
 
 interface Check {
@@ -233,6 +233,17 @@ try {
   check('catalog reopen and hash verification succeeds', catalogVerification.ok, catalogVerification.errors.join('; '));
   check('catalog contains arbitrary and unicode paths', catalogs.volumes.some(volume => volume.entries.some(entry => entry.name === 'unicode/船/данные.bin')));
   check('content.xml and catalogLoose paths remain outside catalogs', catalogs.volumes.every(volume => volume.entries.every(entry => entry.name !== 'content.xml' && entry.name !== 'preview.jpg')));
+  const catalogLayout = planCatDatCatalogs(catalogEntries, { maxVolumeBytes: 2 * 1024 * 1024 });
+  check('split layout predicts exact CAT and DAT sizes on disk', catalogLayout.errors.length === 0
+    && catalogLayout.volumes.length === catalogs.volumes.length && catalogLayout.volumes.every((volume, index) => {
+      const actual = catalogs.volumes[index];
+      return volume.catName === path.basename(actual.catPath) && volume.datName === path.basename(actual.datPath)
+        && volume.catBytes === fs.statSync(actual.catPath).size && volume.datBytes === fs.statSync(actual.datPath).size;
+    }));
+  const boundaryLayout = planCatDatCatalogs([{ name: 'a', size: 1 }, { name: 'b', size: 1 }, { name: 'c', size: 3 }, { name: 'd', size: 0 }],
+    { maxVolumeBytes: 2 });
+  check('layout retains exact-limit, oversized-singleton and zero-byte partition behavior', boundaryLayout.errors.length === 0
+    && JSON.stringify(boundaryLayout.volumes.map(volume => [volume.datBytes, volume.entries.length])) === '[[2,2],[3,1],[0,1]]');
 
   const repeatedCatalogs = writeCatDatCatalogs(catalogEntries, catalogOutputRepeat, { maxVolumeBytes: 2 * 1024 * 1024 });
   const firstCatalogHashes = catalogs.volumes.flatMap(volume => [sha256File(volume.catPath), sha256File(volume.datPath)]);
@@ -255,6 +266,12 @@ try {
 
   const unsafeCatalog = writeCatDatCatalogs([{ name: '../escape.bin', size: 0, content: Buffer.alloc(0) }], path.join(root, 'unsafe-catalog'));
   check('catalog traversal path rejected', !unsafeCatalog.ok && unsafeCatalog.errors.some(error => error.includes('Unsafe')));
+  const ambiguousName = [{ name: ' leading.bin', size: 0, content: Buffer.alloc(0) }];
+  const ambiguousLayout = planCatDatCatalogs(ambiguousName);
+  const ambiguousOutput = path.join(root, 'ambiguous-catalog');
+  const ambiguousCatalog = writeCatDatCatalogs(ambiguousName, ambiguousOutput);
+  check('layout refuses a filename the CAT reader would trim', ambiguousLayout.errors.some(error => error.includes('round-trip'))
+    && !ambiguousCatalog.ok && !fs.existsSync(ambiguousOutput));
   const rollbackCatalogRoot = path.join(root, 'rollback-catalog');
   const rollbackCatalog = writeCatDatCatalogs([
     { name: 'a.bin', size: 1, content: Buffer.from([1]) },
@@ -262,13 +279,39 @@ try {
   ], rollbackCatalogRoot, { maxVolumeBytes: 1 });
   check('partial multi-volume failure rolls back prior volumes', !rollbackCatalog.ok && rollbackCatalog.volumes.length === 0 && fs.readdirSync(rollbackCatalogRoot).length === 0, rollbackCatalog.errors.join('; '));
 
-  const packaged = materializeCatalogArtifact(plan, packagedOutput, { maxVolumeBytes: 2 * 1024 * 1024 });
+  const packageOptions = { maxVolumeBytes: 2 * 1024 * 1024 };
+  const forecast = forecastCatalogArtifact(plan, packageOptions);
+  check('forecast does not create packaged output', !fs.existsSync(packagedOutput));
+  const packaged = materializeCatalogArtifact(plan, packagedOutput, packageOptions);
   check('packed artifact materialization succeeds', packaged.ok, packaged.errors.join('; '));
   check('packed artifact keeps content.xml loose', fs.existsSync(path.join(packagedOutput, 'content.xml')));
   check('packed artifact keeps configured preview loose', fs.existsSync(path.join(packagedOutput, 'preview.jpg')));
   check('packed artifact preserves pre-existing root catalog pair', fs.existsSync(path.join(packagedOutput, 'ext_07.cat')) && fs.existsSync(path.join(packagedOutput, 'ext_07.dat')));
   check('new catalogs follow pre-existing catalog index', packaged.catalogs.volumes[0]?.index === 8, packaged.catalogs.volumes.map(volume => volume.index).join(','));
   check('packed payload is not duplicated loose', !fs.existsSync(path.join(packagedOutput, 'md')) && !fs.existsSync(path.join(packagedOutput, 'assets')));
+  check('forecast includes exact sizes of every loose and generated output', 'files' in forecast
+    && JSON.stringify(forecast.files) === JSON.stringify(packaged.files.map(file => ({
+      path: file.path, size: fs.statSync(path.join(packagedOutput, ...file.path.split('/'))).size,
+    }))));
+
+  const allLoosePlan = buildArtifactPlan({ sourceRoot: '', memoryOnly: true, generatedFiles: {
+    'content.xml': '<content/>', 'ext_07.sig': 'old signature', 'preview.jpg': 'loose',
+  }, rules: { catalogLoose: ['preview.jpg'] } });
+  const allLooseForecast = forecastCatalogArtifact(allLoosePlan);
+  const allLooseOutput = path.join(root, 'all-loose-package');
+  const allLoose = materializeCatalogArtifact(allLoosePlan, allLooseOutput);
+  check('all-loose packages do not invent a catalog volume', allLoose.ok && allLoose.catalogs.volumes.length === 0
+    && 'files' in allLooseForecast && JSON.stringify(allLooseForecast.files) === JSON.stringify(allLoose.files.map(file => ({
+      path: file.path, size: fs.statSync(path.join(allLooseOutput, file.path)).size,
+    }))));
+  const conflictPlan = buildArtifactPlan({ sourceRoot: '', memoryOnly: true, generatedFiles: {
+    'ext_01.cat/loose.txt': 'loose', 'payload.bin': 'packed',
+  }, rules: { catalogLoose: ['ext_01.cat/**'] } });
+  const impossibleForecast = forecastCatalogArtifact(conflictPlan);
+  const impossibleOutput = path.join(root, 'impossible-package');
+  const impossiblePackage = materializeCatalogArtifact(conflictPlan, impossibleOutput);
+  check('forecast and packing refuse a catalog filename occupied by a loose directory', 'errors' in impossibleForecast
+    && impossibleForecast.errors.some(error => error.includes('ext_01.cat')) && !impossiblePackage.ok && !fs.existsSync(impossibleOutput));
 
   fs.rmSync(path.join(source, 'ui', 'over-256k.lua'));
   const broken = materializeArtifact(plan, brokenOutput);

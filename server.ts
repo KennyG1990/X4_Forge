@@ -272,7 +272,7 @@ import { parseParentLivenessContract, runParentLivenessSelftest, watchParentIpc 
 import { runLatestValueWriteQueueSelftest } from "./src/lib/latestValueWriteQueue";
 import { artifactPlanIdentity, buildArtifactPlan, buildArtifactPlanWithDiskIdentity, createArtifactPathMatcher, hashArtifactFile, materializeArtifact, sameArtifactStamp, verifyMaterializedArtifact, type ArtifactPlan } from "./src/lib/artifactPipeline";
 import { buildProjectFileInventory, runProjectFileInventorySelftest } from "./src/lib/projectFileInventory";
-import { materializeCatalogArtifact } from "./src/lib/artifactPackager";
+import { forecastCatalogArtifact, materializeCatalogArtifact } from "./src/lib/artifactPackager";
 import { dataPath, runDataDirSelftest } from "./src/lib/dataDir";
 import { discoverSchemaRegistry, getDomainIndex, runSchemaRegistrySelftest, schemaFilesSignature } from "./src/lib/schemaRegistry";
 import { routeProjectFile, runSchemaRoutingSelftest, validateRoutedFiles } from "./src/lib/schemaRouting";
@@ -12813,6 +12813,40 @@ function hasDeploymentPathAncestor(relativePath: string, paths: ReadonlySet<stri
   return false;
 }
 
+/** Resolve keep rules against the physical managed output before any preserved path is copied. */
+function resolveDeploymentPreservation(
+  targetPath: string, plan: ArtifactPlan, managed: readonly { path: string }[], ownsForgeState: boolean,
+  targetEntries?: readonly RegularTreeEntry[],
+) {
+  const candidates = preservedDeploymentEntries(targetPath, plan, ownsForgeState, targetEntries);
+  const accepted: Array<{ relativePath: string; source: string; directory: boolean }> = [];
+  const overrides: PreservationOverride[] = [];
+  if (!candidates.length) return { accepted, overrides };
+
+  const managedFiles = new Set(managed.map(entry => deployPreservationPathKey(entry.path)));
+  const managedDirectories = new Set<string>();
+  for (const file of managedFiles) {
+    for (let parent = path.posix.dirname(file); parent !== '.' && !managedDirectories.has(parent); parent = path.posix.dirname(parent)) {
+      managedDirectories.add(parent);
+    }
+  }
+  for (const { path: relativePath, origin } of candidates) {
+    const source = path.join(targetPath, ...relativePath.split('/'));
+    const stat = fs.lstatSync(source, { throwIfNoEntry: false });
+    if (!stat) continue;
+    const key = deployPreservationPathKey(relativePath);
+    if (managedFiles.has(key) || managedDirectories.has(key) || hasDeploymentPathAncestor(relativePath, managedFiles)) {
+      if (origin === 'runtime') throw new Error(`Runtime-owned path conflicts with built artifact: ${relativePath}`);
+      overrides.push({ path: relativePath, origin });
+      continue;
+    }
+    if (stat.isSymbolicLink()) throw new Error(`Runtime-owned path is a symbolic link or reparse point: ${relativePath}`);
+    if (stat.isDirectory() || stat.isFile()) accepted.push({ relativePath, source, directory: stat.isDirectory() });
+  }
+  const acceptedDirectories = new Set(accepted.filter(entry => entry.directory).map(entry => deployPreservationPathKey(entry.relativePath)));
+  return { accepted: accepted.filter(entry => !hasDeploymentPathAncestor(entry.relativePath, acceptedDirectories)), overrides };
+}
+
 interface DeploymentTransactionHooks {
   onBackupCleanupFailure?: (backupPath: string, manifestRetired: boolean) => void;
   onTargetWrite?: (state: 'mutated' | 'activated' | 'restored' | 'unconfirmed') => void;
@@ -12964,43 +12998,33 @@ function previewDeploymentEffect(ws: any, targetRoot: string, format: DeployForm
     }
     if (!plan.ok) return { error: `Cannot preview: artifact planning failed — ${plan.errors.join('; ')}` };
 
-    // Catalog mode packs the payload, so the on-disk names are the catalog volumes, not the
-    // sources. Say so rather than implying per-file placement that will not happen.
-    const willWrite = new Map<string, number>();
-    if (format === 'catalog') {
-      willWrite.set('content.xml', 0);
-      willWrite.set('ext_01.cat', 0);
-      willWrite.set('ext_01.dat', plan.totals.includedBytes);
-    } else {
-      for (const entry of plan.entries) willWrite.set(entry.path.replace(/\\/g, '/'), (entry as any).size ?? 0);
-    }
-
+    const output = format === 'catalog' ? forecastCatalogArtifact(plan) : { files: plan.entries };
+    if ('errors' in output) return { error: `Cannot preview: artifact layout failed — ${output.errors.join('; ')}` };
     const targetEntries = inspectRegularTree(targetRoot);
-    const preserved = preservedDeploymentEntries(targetRoot, plan, false, targetEntries).map(e => e.path);
+    const { accepted } = resolveDeploymentPreservation(targetRoot, plan, output.files, false, targetEntries);
+    const preserved = accepted.map(entry => entry.relativePath);
     const preservedKeys = new Set(preserved.map(deployPreservationPathKey));
     const isPreserved = (rel: string) => preservedKeys.has(deployPreservationPathKey(rel))
       || hasDeploymentPathAncestor(rel, preservedKeys);
 
-    const existing = new Map<string, number>();
-    if (fs.existsSync(targetRoot)) {
-      for (const entry of targetEntries) {
-        if (entry.type !== 'file') continue;
-        const abs = path.join(targetRoot, ...entry.path.split('/'));
-        existing.set(entry.path, (() => { try { return fs.statSync(abs).size; } catch { return 0; } })());
-      }
+    const existing = new Map<string, { path: string; bytes: number }>();
+    for (const entry of targetEntries) {
+      if (entry.type !== 'file') continue;
+      const stat = fs.lstatSync(path.join(targetRoot, ...entry.path.split('/')));
+      if (!stat.isFile()) throw new Error(`Deployment target entry changed: ${entry.path}`);
+      existing.set(deployPreservationPathKey(entry.path), { path: entry.path, bytes: stat.size });
     }
 
     const added: Array<{ path: string; bytes: number }> = [];
     const overwritten: Array<{ path: string; bytes: number; wasBytes: number }> = [];
-    for (const [rel, bytes] of willWrite) {
-      if (existing.has(rel)) overwritten.push({ path: rel, bytes, wasBytes: existing.get(rel)! });
-      else added.push({ path: rel, bytes });
+    for (const file of output.files) {
+      const key = deployPreservationPathKey(file.path);
+      const prior = existing.get(key);
+      if (prior) overwritten.push({ path: file.path, bytes: file.size, wasBytes: prior.bytes });
+      else added.push({ path: file.path, bytes: file.size });
+      existing.delete(key);
     }
-    const deleted: Array<{ path: string; bytes: number }> = [];
-    for (const [rel, bytes] of existing) {
-      if (willWrite.has(rel) || isPreserved(rel)) continue;
-      deleted.push({ path: rel, bytes });
-    }
+    const deleted = [...existing.values()].filter(entry => !isPreserved(entry.path));
 
     const sortByPath = <T extends { path: string }>(rows: T[]) => rows.sort((a, b) => a.path.localeCompare(b.path));
     return {
@@ -13165,30 +13189,11 @@ function replaceValidatedDeployment(
       requireArtifactDirectory(targetPath, observed);
     }
     if (targetExisted) {
-      const accepted: Array<{ relativePath: string; source: string; destination: string; directory: boolean }> = [];
-      const managedFiles = new Set(plan.rules.runtimeOwned.length ? expected.map(entry => deployPreservationPathKey(entry.path)) : []);
-      for (const { path: relativePath, origin } of preservedDeploymentEntries(targetPath, plan, ownsForgeState)) {
-        const source = path.join(targetPath, ...relativePath.split('/'));
-        const stat = fs.lstatSync(source, { throwIfNoEntry: false });
-        if (!stat) continue;
+      const { accepted, overrides } = resolveDeploymentPreservation(targetPath, plan, expected, ownsForgeState);
+      for (const entry of overrides) preservationOverrides.push(entry);
+      for (const { relativePath, source, directory } of accepted) {
         const destination = path.join(stage, ...relativePath.split('/'));
-        // Decide conflicts against only managed outputs, before a preserved path can create an ancestor in the stage.
-        if (fs.existsSync(destination) || (origin === 'runtime' && hasDeploymentPathAncestor(relativePath, managedFiles))) {
-          // An explicit `.forgeartifact.json` runtime-owned declaration colliding with
-          // managed content is a genuine contract contradiction — fail closed.
-          if (origin === 'runtime') throw new Error(`Runtime-owned path conflicts with built artifact: ${relativePath}`);
-          // A soft keep-hint yields to the build, and the override is REPORTED rather than
-          // silently applied. Letting the hint win would freeze the deployed copy against
-          // every future source edit.
-          preservationOverrides.push({ path: relativePath, origin });
-          continue;
-        }
-        if (stat.isSymbolicLink()) throw new Error(`Runtime-owned path is a symbolic link or reparse point: ${relativePath}`);
-        if (stat.isDirectory() || stat.isFile()) accepted.push({ relativePath, source, destination, directory: stat.isDirectory() });
-      }
-      const acceptedDirectories = new Set(accepted.filter(entry => entry.directory).map(entry => deployPreservationPathKey(entry.relativePath)));
-      for (const { relativePath, source, destination, directory } of accepted) {
-        if (hasDeploymentPathAncestor(relativePath, acceptedDirectories)) continue;
+        if (pathHasEntry(destination)) throw new Error(`Managed deployment layout changed before preservation: ${relativePath}`);
         const current = fs.lstatSync(source);
         if (directory ? !current.isDirectory() : !current.isFile()) {
           throw new Error(`Preserved deployment path changed before copying: ${relativePath}`);

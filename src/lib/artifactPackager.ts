@@ -17,8 +17,10 @@ import {
   type ArtifactPlan,
 } from './artifactPipeline';
 import {
+  planCatDatCatalogs,
   verifyCatDatCatalogs,
-  writeCatDatCatalogs,
+  writeCatDatLayout,
+  type CatDatPackEntry,
   type CatDatPackResult,
 } from './x4CatDat';
 
@@ -50,6 +52,41 @@ function nextCatalogStart(entries: ArtifactPlan['entries']): number {
   return highest + 1;
 }
 
+function catalogArtifactLayout(plan: ArtifactPlan, options: { maxVolumeBytes?: number }, looseRoot?: string) {
+  const looseEntries: ArtifactPlan['entries'] = [];
+  const packedEntries: CatDatPackEntry[] = [];
+  for (const entry of plan.entries) {
+    if (entry.path.toLowerCase() === 'content.xml' || entry.catalogLoose || isRootCatalogPart(entry.path)) {
+      looseEntries.push(entry);
+    } else {
+      packedEntries.push({ name: entry.path, size: entry.size, expectedSha256: entry.sha256,
+        ...(looseRoot ? { sourcePath: path.join(looseRoot, ...entry.path.split('/')) } : {}) });
+    }
+  }
+  const catalogs = planCatDatCatalogs(packedEntries, { maxVolumeBytes: options.maxVolumeBytes, startIndex: nextCatalogStart(plan.entries) });
+  const looseRoots = new Set(looseEntries.map(entry => entry.path.split('/', 1)[0].toLowerCase()));
+  const errors = [...catalogs.errors];
+  for (const volume of catalogs.volumes) {
+    for (const name of [volume.catName, volume.datName]) {
+      if (looseRoots.has(name.toLowerCase())) errors.push(`Generated catalog conflicts with a loose artifact path: ${name}`);
+    }
+  }
+  return { looseEntries, catalogs, errors };
+}
+
+/** Forecast exactly the physical output of catalog mode without touching the filesystem. */
+export function forecastCatalogArtifact(plan: ArtifactPlan, options: { maxVolumeBytes?: number } = {}):
+  { files: Array<{ path: string; size: number }> } | { errors: string[] } {
+  if (!plan.ok) return { errors: plan.errors };
+  const { looseEntries, catalogs, errors } = catalogArtifactLayout(plan, options);
+  if (errors.length) return { errors };
+  const files = looseEntries.map(entry => ({ path: entry.path, size: entry.size }));
+  for (const volume of catalogs.volumes) {
+    files.push({ path: volume.catName, size: volume.catBytes }, { path: volume.datName, size: volume.datBytes });
+  }
+  return { files: files.sort((left, right) => left.path.localeCompare(right.path)) };
+}
+
 function copyVerified(source: string, destination: string, expectedSize: number, expectedHash: string): void {
   fs.mkdirSync(path.dirname(destination), { recursive: true });
   fs.copyFileSync(source, destination);
@@ -79,6 +116,10 @@ export function materializeCatalogArtifact(
   const scratchParent = fs.mkdtempSync(path.join(os.tmpdir(), 'x4forge-pack-'));
   const looseRoot = path.join(scratchParent, 'loose');
   try {
+    const layout = catalogArtifactLayout(plan, options, looseRoot);
+    if (layout.errors.length > 0) {
+      return { ok: false, targetRoot, files, catalogs: emptyCatalogs, errors: [...errors, ...layout.errors] };
+    }
     const loose = materializeArtifact(plan, looseRoot);
     if (!loose.ok) {
       errors.push(...loose.errors);
@@ -91,30 +132,14 @@ export function materializeCatalogArtifact(
     }
     fs.mkdirSync(targetRoot, { recursive: true });
 
-    const looseEntries = plan.entries.filter(entry => entry.path.toLowerCase() === 'content.xml' || entry.catalogLoose || isRootCatalogPart(entry.path));
-    const packedEntries = plan.entries.filter(entry => !looseEntries.includes(entry));
-    for (const entry of looseEntries) {
+    for (const entry of layout.looseEntries) {
       const source = path.join(looseRoot, ...entry.path.split('/'));
       const destination = path.join(targetRoot, ...entry.path.split('/'));
       copyVerified(source, destination, entry.size, entry.sha256);
       files.push({ path: entry.path, size: entry.size, sha256: entry.sha256, role: 'loose' });
     }
 
-    const catalogs = writeCatDatCatalogs(
-      packedEntries.map(entry => ({
-        name: entry.path,
-        size: entry.size,
-        sourcePath: path.join(looseRoot, ...entry.path.split('/')),
-        expectedSha256: entry.sha256,
-        timestamp: 0,
-      })),
-      targetRoot,
-      {
-        baseName: 'ext',
-        maxVolumeBytes: options.maxVolumeBytes,
-        startIndex: nextCatalogStart(plan.entries),
-      },
-    );
+    const catalogs = writeCatDatLayout(layout.catalogs, targetRoot);
     if (!catalogs.ok) errors.push(...catalogs.errors);
     const catalogVerification = verifyCatDatCatalogs(catalogs);
     if (!catalogVerification.ok) errors.push(...catalogVerification.errors);

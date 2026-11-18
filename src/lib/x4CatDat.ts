@@ -126,6 +126,22 @@ export interface CatDatPackResult {
   errors: string[];
 }
 
+type CatDatOptions = { baseName?: string; maxVolumeBytes?: number; startIndex?: number };
+
+interface CatDatLayoutVolume {
+  index: number;
+  catName: string;
+  datName: string;
+  catBytes: number;
+  datBytes: number;
+  entries: CatDatPackEntry[];
+}
+
+interface CatDatLayout {
+  volumes: CatDatLayoutVolume[];
+  errors: string[];
+}
+
 function safeCatalogName(input: string): string | null {
   const normalized = String(input || '').replace(/\\/g, '/').replace(/^\/+/, '');
   if (!normalized || normalized.includes('\0') || /[\r\n]/.test(normalized) || /^[a-zA-Z]:\//.test(normalized)) return null;
@@ -188,23 +204,19 @@ function appendPackEntry(fd: number, entry: CatDatPackEntry): CatDatPackedEntry 
   };
 }
 
-/**
- * Stream arbitrary regular files into deterministic X4 extension catalogs.
- * The caller decides which paths remain loose; this function only packs the
- * entries supplied to it. No entry is loaded wholesale unless it was already
- * supplied as generated in-memory content.
- */
-export function writeCatDatCatalogs(
+function catalogRow(entry: CatDatPackEntry, md5: string): string {
+  return `${entry.name} ${entry.size} ${entry.timestamp ?? 0} ${md5}\n`;
+}
+
+/** Plan deterministic catalogs from metadata alone. CAT rows always contain a 32-byte MD5 field. */
+export function planCatDatCatalogs(
   entriesInput: CatDatPackEntry[],
-  outputRootInput: string,
-  options: { baseName?: string; maxVolumeBytes?: number; startIndex?: number } = {},
-): CatDatPackResult {
-  const outputRoot = path.resolve(outputRootInput);
+  options: CatDatOptions = {},
+): CatDatLayout {
   const baseName = String(options.baseName || 'ext').trim();
   const maxVolumeBytes = options.maxVolumeBytes ?? (2 * 1024 * 1024 * 1024);
   const startIndex = options.startIndex ?? 1;
   const errors: string[] = [];
-  const volumes: CatDatPackedVolume[] = [];
   if (!/^[a-zA-Z0-9_-]+$/.test(baseName)) errors.push(`Unsafe catalog base name: ${baseName}`);
   if (!Number.isSafeInteger(maxVolumeBytes) || maxVolumeBytes <= 0) errors.push(`Invalid maxVolumeBytes: ${maxVolumeBytes}`);
   if (!Number.isSafeInteger(startIndex) || startIndex < 1 || startIndex > 99) errors.push(`Invalid catalog startIndex: ${startIndex}`);
@@ -215,6 +227,10 @@ export function writeCatDatCatalogs(
     const name = safeCatalogName(input.name);
     if (!name) {
       errors.push(`Unsafe catalog entry path: ${input.name}`);
+      continue;
+    }
+    if (name !== name.trimStart()) {
+      errors.push(`Catalog entry path cannot round-trip through the manifest reader: ${name}`);
       continue;
     }
     if (!Number.isSafeInteger(input.size) || input.size < 0) {
@@ -231,8 +247,7 @@ export function writeCatDatCatalogs(
     entries.push({ ...input, name });
   }
   entries.sort((left, right) => left.name.localeCompare(right.name));
-  if (errors.length > 0) return { ok: false, volumes, errors };
-  fs.mkdirSync(outputRoot, { recursive: true });
+  if (errors.length > 0) return { volumes: [], errors };
 
   const partitions: CatDatPackEntry[][] = [];
   let current: CatDatPackEntry[] = [];
@@ -248,15 +263,40 @@ export function writeCatDatCatalogs(
   }
   if (current.length > 0) partitions.push(current);
 
-  for (let index = 0; index < partitions.length; index++) {
-    const volumeIndex = startIndex + index;
-    if (volumeIndex > 99) {
-      errors.push(`Catalog volume index exceeds ext_99: ${volumeIndex}`);
-      break;
-    }
-    const suffix = String(volumeIndex).padStart(2, '0');
-    const catPath = path.join(outputRoot, `${baseName}_${suffix}.cat`);
-    const datPath = path.join(outputRoot, `${baseName}_${suffix}.dat`);
+  if (startIndex + partitions.length - 1 > 99) {
+    return { volumes: [], errors: ['Catalog volume index exceeds ext_99: 100'] };
+  }
+  const md5Placeholder = '0'.repeat(32);
+  const volumes = partitions.map((entries, offset) => {
+    const index = startIndex + offset;
+    const base = `${baseName}_${String(index).padStart(2, '0')}`;
+    return {
+      index,
+      catName: `${base}.cat`,
+      datName: `${base}.dat`,
+      catBytes: entries.reduce((sum, entry) => sum + Buffer.byteLength(catalogRow(entry, md5Placeholder), 'utf8'), 0),
+      datBytes: entries.reduce((sum, entry) => sum + entry.size, 0),
+      entries,
+    };
+  });
+  for (const volume of volumes) {
+    if (volume.catBytes > MAX_CAT_MANIFEST_BYTES) errors.push(`${volume.catName} exceeds the ${MAX_CAT_MANIFEST_BYTES}-byte manifest limit`);
+    if (volume.entries.length > MAX_CAT_ENTRIES) errors.push(`${volume.catName} exceeds the ${MAX_CAT_ENTRIES}-entry limit`);
+  }
+  if (errors.length > 0) return { volumes: [], errors };
+  return { volumes, errors: [] };
+}
+
+/** Stream the planned entries and verify their byte counts and hashes while writing. */
+export function writeCatDatLayout(layout: CatDatLayout, outputRootInput: string): CatDatPackResult {
+  const outputRoot = path.resolve(outputRootInput);
+  const errors = [...layout.errors];
+  const volumes: CatDatPackedVolume[] = [];
+  if (errors.length > 0) return { ok: false, volumes, errors };
+  fs.mkdirSync(outputRoot, { recursive: true });
+  for (const volume of layout.volumes) {
+    const catPath = path.join(outputRoot, volume.catName);
+    const datPath = path.join(outputRoot, volume.datName);
     const catTemp = `${catPath}.tmp-${process.pid}`;
     const datTemp = `${datPath}.tmp-${process.pid}`;
     if (fs.existsSync(catPath) || fs.existsSync(datPath)) {
@@ -267,18 +307,19 @@ export function writeCatDatCatalogs(
     try {
       datFd = fs.openSync(datTemp, 'wx');
       const packed: CatDatPackedEntry[] = [];
-      for (const entry of partitions[index]) packed.push(appendPackEntry(datFd, entry));
+      for (const entry of volume.entries) packed.push(appendPackEntry(datFd, entry));
       fs.closeSync(datFd);
       datFd = undefined;
-      const manifest = packed.map(entry => `${entry.name} ${entry.size} ${entry.timestamp} ${entry.md5}`).join('\n') + '\n';
+      const manifest = packed.map(entry => catalogRow(entry, entry.md5)).join('');
+      if (Buffer.byteLength(manifest, 'utf8') !== volume.catBytes) throw new Error('catalog manifest size changed');
       fs.writeFileSync(catTemp, manifest, { encoding: 'utf8', flag: 'wx' });
       fs.renameSync(datTemp, datPath);
       fs.renameSync(catTemp, catPath);
       volumes.push({
-        index: volumeIndex,
+        index: volume.index,
         catPath,
         datPath,
-        bytes: packed.reduce((sum, entry) => sum + entry.size, 0),
+        bytes: volume.datBytes,
         entries: packed,
       });
     } catch (error) {
@@ -286,7 +327,7 @@ export function writeCatDatCatalogs(
       for (const candidate of [catTemp, datTemp, catPath, datPath]) {
         try { fs.rmSync(candidate, { force: true }); } catch { /* best effort rollback */ }
       }
-      errors.push(`Failed to write catalog volume ${volumeIndex}: ${error instanceof Error ? error.message : String(error)}`);
+      errors.push(`Failed to write catalog volume ${volume.index}: ${error instanceof Error ? error.message : String(error)}`);
       break;
     }
   }
@@ -298,7 +339,16 @@ export function writeCatDatCatalogs(
     }
     volumes.length = 0;
   }
-  return { ok: errors.length === 0 && volumes.length === partitions.length, volumes, errors };
+  return { ok: errors.length === 0 && volumes.length === layout.volumes.length, volumes, errors };
+}
+
+/** Stream arbitrary regular files into deterministic X4 extension catalogs. */
+export function writeCatDatCatalogs(
+  entries: CatDatPackEntry[],
+  outputRoot: string,
+  options: CatDatOptions = {},
+): CatDatPackResult {
+  return writeCatDatLayout(planCatDatCatalogs(entries, options), outputRoot);
 }
 
 function hashEntryRange(datPath: string, entry: CatEntry, algorithm: 'md5' | 'sha256'): string {

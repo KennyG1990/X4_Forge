@@ -55,6 +55,8 @@ the new folder is activated and re-verified, and a failed activation restores th
 
 Deploy API responses include an `artifact` report with source/generated file counts, bytes, exclusions,
 runtime-owned paths, output-file count, catalog-volume count, and `verified` status.
+The `effect` file rows show physical output paths and exact byte sizes. In catalog mode these are the
+loose files and CAT/DAT parts. `effect.totalBytes` counts the logical payload before packing.
 
 ## Size Limits
 
