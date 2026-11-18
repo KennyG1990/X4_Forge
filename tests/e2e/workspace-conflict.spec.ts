@@ -5,19 +5,17 @@ import { sanitizeWorkspace } from '../../src/types';
 import { E2E_API_ORIGIN } from '../../playwright.config';
 import { ephemeralWorkspaceHeaders, readServerWorkspace, seedServerWorkspace } from './ephemeral';
 
-type ConflictE2EWindow = Window & {
-  __X4_E2E__?: {
-    getWorkspace: () => { name: string };
-    setWorkspace: (workspace: any) => void;
-  };
+type PublicStudioWindow = Window & {
+  AgentRuntime?: { getCurrentWorkspace: () => ReturnType<typeof buildTemplateWorkspace> };
 };
 
 async function boot(page: Page, name: string) {
   const initial = buildTemplateWorkspace('welcome');
   initial.name = name;
   await seedServerWorkspace(initial);
+  await page.clock.install();
   await page.goto('/');
-  await page.waitForFunction((expected: string) => (window as ConflictE2EWindow).__X4_E2E__?.getWorkspace().name === expected, name);
+  await page.waitForFunction((expected: string) => (window as PublicStudioWindow).AgentRuntime?.getCurrentWorkspace().name === expected, name);
   const health = page.getByTestId('health-card');
   await health.waitFor({ state: 'visible', timeout: 1_500 }).catch(() => undefined);
   if (await health.isVisible()) await page.getByTestId('health-card-dismiss').click();
@@ -30,6 +28,11 @@ async function boot(page: Page, name: string) {
  * is visible, seed the same external copy into the ephemeral server before either real choice.
  */
 async function triggerConflict(page: Page, localCopy: unknown, serverCopy: unknown) {
+  await page.getByTestId('mode-expert').click();
+  await page.locator('[data-sidebar-tab="config"]').click();
+  const normalizedLocalCopy = sanitizeWorkspace(localCopy);
+  const localSnapshotHash = workspaceSnapshotHash(normalizedLocalCopy);
+  const initialServerSnapshotHash = workspaceSnapshotHash(sanitizeWorkspace(await readServerWorkspace()));
   let conflictServed = false;
   let mockServerReads = true;
   const handler = async (route: import('@playwright/test').Route) => {
@@ -52,36 +55,53 @@ async function triggerConflict(page: Page, localCopy: unknown, serverCopy: unkno
         }),
       });
     }
-    const body = request.postDataJSON() as { force?: boolean } | null;
+    const body = request.postDataJSON() as { force?: boolean; workspace?: unknown } | null;
     if (request.method() === 'POST' && !body?.force && !conflictServed) {
       conflictServed = true;
-      return route.fulfill({
-        status: 409,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          error: 'head_conflict',
-          currentHead: 'e2e-server-head',
-          expectedHead: 'e2e-old-head',
-          currentVersion: 42,
-          conflict: {
-            detectedAt: '2026-07-30T12:01:00.000Z',
-            server: { head: 'e2e-server-head', version: 42, savedAt: '2026-07-30T12:00:00.000Z', origin: 'e2e:external-writer', name: (serverCopy as any).name },
-            local: { head: 'e2e-local-head', name: (localCopy as any).name },
-            preview: {
-              counts: { added: 0, removed: 0, modified: 2, unchanged: 1, changed: 2 },
-              files: [{ path: 'content.xml', kind: 'modified', serverBytes: 100, localBytes: 104, lines: { added: 2, removed: 2 }, diff: '--- a/content.xml\n+++ b/content.xml\n-server copy\n+local copy' }],
-              changedPaths: ['content.xml', 'README.md'],
-              truncated: false,
+      try {
+        expect(workspaceSnapshotHash(sanitizeWorkspace(body?.workspace))).toBe(localSnapshotHash);
+      } finally {
+        await route.fulfill({
+          status: 409,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            error: 'head_conflict',
+            currentHead: 'e2e-server-head',
+            expectedHead: 'e2e-old-head',
+            currentVersion: 42,
+            conflict: {
+              detectedAt: '2026-07-30T12:01:00.000Z',
+              server: { head: 'e2e-server-head', version: 42, savedAt: '2026-07-30T12:00:00.000Z', origin: 'e2e:external-writer', name: (serverCopy as any).name },
+              local: { head: 'e2e-local-head', name: (localCopy as any).name },
+              preview: {
+                counts: { added: 0, removed: 0, modified: 2, unchanged: 1, changed: 2 },
+                files: [{ path: 'content.xml', kind: 'modified', serverBytes: 100, localBytes: 104, lines: { added: 2, removed: 2 }, diff: '--- a/content.xml\n+++ b/content.xml\n-server copy\n+local copy' }],
+                changedPaths: ['content.xml', 'README.md'],
+                truncated: false,
+              },
             },
-          },
-        }),
-      });
+          }),
+        });
+      }
+      return;
     }
     await route.continue();
   };
-  await page.route('**/api/agent/workspace', handler);
-  await page.evaluate(workspace => (window as ConflictE2EWindow).__X4_E2E__!.setWorkspace(workspace), localCopy);
+  // Coalesce the two real editor changes into the original single autosave target.
+  // Resume before observing the conflict; this spec does not measure autosave latency.
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 60_000));
+  try {
+    await page.route('**/api/agent/workspace', handler);
+    await page.getByPlaceholder('e.g. My_Elite_Mod').fill(normalizedLocalCopy.name);
+    await page.getByPlaceholder('Mod brief synopsis...').fill(normalizedLocalCopy.description);
+    await expect.poll(async () => workspaceSnapshotHash(sanitizeWorkspace(await page.evaluate(() =>
+      (window as PublicStudioWindow).AgentRuntime!.getCurrentWorkspace()
+    )))).toBe(localSnapshotHash);
+  } finally {
+    await page.clock.resume();
+  }
   await expect(page.getByTestId('sync-conflict-dialog')).toBeVisible({ timeout: 10_000 });
+  expect(workspaceSnapshotHash(sanitizeWorkspace(await readServerWorkspace()))).toBe(initialServerSnapshotHash);
   await seedServerWorkspace(serverCopy);
   mockServerReads = false;
   return async () => page.unroute('**/api/agent/workspace', handler);
@@ -107,13 +127,13 @@ test('workspace conflict dialog explains both copies and server adoption has loc
   await page.getByTestId('sync-conflict-review').click();
   await page.getByTestId('conflict-adopt-btn').click();
   await expect(dialog).toHaveCount(0);
-  await expect.poll(() => page.evaluate(() => (window as ConflictE2EWindow).__X4_E2E__!.getWorkspace().name)).toBe(serverCopy.name);
+  await expect.poll(() => page.evaluate(() => (window as PublicStudioWindow).AgentRuntime!.getCurrentWorkspace().name)).toBe(serverCopy.name);
   await releaseConflictRoute();
 
   const undo = page.locator('[data-global-action="undo"]');
   await expect(undo).toBeEnabled();
   await undo.click();
-  await expect.poll(() => page.evaluate(() => (window as ConflictE2EWindow).__X4_E2E__!.getWorkspace().name)).toBe(localCopy.name);
+  await expect.poll(() => page.evaluate(() => (window as PublicStudioWindow).AgentRuntime!.getCurrentWorkspace().name)).toBe(localCopy.name);
 });
 
 test('explicit local overwrite wins and records a durable recovery', async ({ page, request }) => {
