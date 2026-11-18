@@ -79,6 +79,7 @@ const unavailableCodes = new Set([
   'lua.runtime_scope_unverified',
   'lua_md.emit_verification_gap',
   'md_lua.registration_verification_gap',
+  'md_lua.payload_writer_unverified',
   'package.md_analysis_unavailable',
 ]);
 const normalizedPath = (value: string) => value.replace(/\\/g, '/').toLowerCase();

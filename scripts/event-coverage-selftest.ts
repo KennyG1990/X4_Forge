@@ -34,6 +34,160 @@ check('unsupported-encoding-explicit',()=>assert.ok(analyze('AddUITriggeredEvent
 check('large-file-tail-included',()=>assert.equal(analyze('-- filler\n'.repeat(65000)+dynamic).summary.luaEmitUnverified,1));
 check('one-gap-per-file',()=>{const r=analyze(Array.from({length:100},()=>dynamic).join('\n'));assert.equal(r.summary.luaEmitUnverified,100);assert.equal(r.findings.filter(f=>f.code==='lua_md.emit_verification_gap').length,1);});
 check('parse-failure-preserved',()=>{const r=analyze('function broken(');assert.ok(r.findings.some(f=>f.code==='validation.lua_ast_unavailable'));assert.equal(r.mdLua.emitCoverage.files.find(f=>f.file==='ui/lab.lua')!.parsed,false);});
+const finite = 'local function send(on) AddUITriggeredEvent("ForgeLab", on and "on" or "off", {}) end';
+const finiteControls: [string, string][] = [['ForgeLab', 'on'], ['ForgeLab', 'off']];
+function finiteCase(lua: string, listeners = finiteControls, payloadRead = false) {
+  const input = project(lua);
+  const cues = listeners.map(([screen, control], index) => `<cue name="Finite${index}">
+    <conditions><event_ui_triggered screen="'${screen}'" control="'${control}'"/></conditions>
+    ${payloadRead ? `<actions><set_value name="$order" exact="event.param3.{'$po' + $si}"/></actions>` : ''}
+  </cue>`).join('');
+  input.files.push({ path: 'md/finite.xml', kind: 'md', content: `<mdscript name="Finite"><cues>${cues}</cues></mdscript>` });
+  return validateProjectCrossFile(input);
+}
+const listenerErrors = (result: ReturnType<typeof finiteCase>) => result.findings
+  .filter(finding => finding.code === 'lua_md.missing_listener')
+  .map(finding => [finding.event, finding.severity]);
+const targetNames = (result: ReturnType<typeof finiteCase>) => result.mdLua.emitted
+  .filter(event => event.file === 'ui/lab.lua').map(event => event.control);
+
+check('finite-control-counts-one-exact-call-and-both-targets', () => {
+  const result = finiteCase(finite);
+  assert.deepEqual(targetNames(result), ['on', 'off']);
+  assert.equal(result.mdLua.emitCoverage.exact, 1);
+  assert.equal(result.summary.luaEmitUnverified, 0);
+  assert.deepEqual(listenerErrors(result), []);
+});
+check('finite-control-exposes-each-missing-listener', () => {
+  assert.deepEqual(listenerErrors(finiteCase(finite, [finiteControls[0]])), [['ForgeLab.off', 'error']]);
+  assert.deepEqual(listenerErrors(finiteCase(finite, [finiteControls[1]])), [['ForgeLab.on', 'error']]);
+});
+check('finite-control-selects-reachable-literal-truthiness', () => {
+  for (const [condition, target] of [['true', 'on'], ['false', 'off'], ['nil', 'off'], ['0', 'on'], ['""', 'on']]) {
+    const lua = finite.replace('on and', `${condition} and`);
+    assert.deepEqual(targetNames(finiteCase(lua)), [target], condition);
+  }
+  const localFalse = finite.replace('function send(on)', 'function send() local on = false;');
+  const result = finiteCase(localFalse, [finiteControls[1]]);
+  assert.deepEqual(targetNames(result), ['off']);
+  assert.deepEqual(listenerErrors(result), []);
+  for (const initializer of ['{}', '{ compute() }', 'function() end']) {
+    const lua = finite.replace('function send(on)', `function send() local on = ${initializer};`);
+    assert.deepEqual(targetNames(finiteCase(lua, [finiteControls[0]])), ['on'], initializer);
+  }
+  const alias = localFalse.replace('false;', 'false; local alias = on;').replace('on and', 'alias and');
+  assert.deepEqual(targetNames(finiteCase(alias, [finiteControls[1]])), ['off']);
+});
+check('finite-control-deduplicates-equal-arms', () => {
+  const result = finiteCase(finite.replace('or "off"', 'or "on"'), []);
+  assert.deepEqual(targetNames(result), ['on']);
+  assert.deepEqual(listenerErrors(result), [['ForgeLab.on', 'error']]);
+  assert.equal(result.mdLua.emitCoverage.exact, 1);
+});
+check('finite-control-preserves-unknown-arguments-and-callees', () => {
+  const unsupported = [
+    finite.replace('on and "on"', 'on'),
+    finite.replace(' or "off"', ''),
+    finite.replace('on and', 'compute() and'),
+    finite.replace('on and', '({ compute() }) and'),
+    finite.replace('AddUITriggeredEvent', 'if on then AddUITriggeredEvent').replace(', {}) end', ', {}) end end'),
+    finite.replace('AddUITriggeredEvent', 'while on do AddUITriggeredEvent').replace(', {}) end', ', {}) end end'),
+    finite.replace('function send(on)', 'function send()'),
+    finite.replace('or "off"', 'or dynamicName'),
+    finite.replace('or "off"', 'or ""'),
+    finite.replace('or "off"', 'or "日本"'),
+    finite.replace('"ForgeLab"', '"Forge" .. suffix'),
+    'AddUITriggeredEvent = alternate\n' + finite,
+    'rawset(_G, "AddUITriggeredEvent", alternate)\n' + finite,
+  ];
+  for (const lua of unsupported) {
+    const result = finiteCase(lua);
+    assert.equal(result.summary.luaEmitUnverified, 1, lua);
+    assert.deepEqual(targetNames(result), [], lua);
+    assert.deepEqual(listenerErrors(result), [], lua);
+  }
+});
+check('listener-matching-preserves-namespace-and-control-boundaries', () => {
+  const lua = finite.replace('"ForgeLab"', '"a"').replace('and "on"', 'and "b.c"');
+  assert.deepEqual(listenerErrors(finiteCase(lua, [['a.b', 'c'], ['a', 'off']])), [['a.b.c', 'error']]);
+  assert.deepEqual(listenerErrors(finiteCase(lua, [['a', 'b.c'], ['a', 'off']])), []);
+  const prefix = 'local function send(suffix) AddUITriggeredEvent("a", "b." .. suffix, {}) end';
+  assert.deepEqual(listenerErrors(finiteCase(prefix, [['a.b', 'c']])), [['a.b.', 'warning']]);
+  assert.deepEqual(listenerErrors(finiteCase(prefix, [['a', 'b.c']])), []);
+  const bothMissing = project('AddUITriggeredEvent("a", "b.c", {})\nAddUITriggeredEvent("a.b", "c", {})');
+  const flat = flattenProjectValidation(runProjectValidation(bothMissing)).filter(finding => finding.code === 'lua_md.missing_listener');
+  assert.equal(flat.length, 2);
+  assert.deepEqual(flat.map(finding => finding.message.match(/screen "[^"]+" and control "[^"]+"/)?.[0]).sort(),
+    ['screen "a" and control "b.c"', 'screen "a.b" and control "c"']);
+});
+check('finite-control-applies-indexed-payload-proof-to-both-targets', () => {
+  const authored = finite.replace('AddUITriggeredEvent', 'local p = {n = 1}; p["po" .. p.n] = "order"; AddUITriggeredEvent')
+    .replace(', {})', ', p)');
+  const result = finiteCase(authored, finiteControls, true);
+  assert.equal(result.mdLua.payload.reads.filter(read => read.file === 'md/finite.xml').length, 2);
+  assert.ok(!result.findings.some(finding => finding.code.startsWith('md_lua.payload_')));
+  for (const negative of [authored.replace('on and', 'compute(p) and'),
+    authored.replace('; AddUITriggeredEvent', '; p["po" .. p.n] = nil; AddUITriggeredEvent'),
+    authored.replace('; AddUITriggeredEvent', '; local alias = p; alias["po" .. alias.n] = nil; AddUITriggeredEvent'),
+    authored.replace('; AddUITriggeredEvent', '; p["po1"] = nil; AddUITriggeredEvent'),
+    authored.replace('p["po" .. p.n] = "order"', 'while false do p["po" .. p.n] = "order" end'),
+    authored.replace('= "order"', '= unknownOrder()'),
+    authored.replace('; AddUITriggeredEvent', '; AddUITriggeredEvent("ForgeLab", "probe", p); AddUITriggeredEvent')]) {
+    const findings = finiteCase(negative, finiteControls, true).findings;
+    assert.equal(findings.filter(finding => finding.code === 'md_lua.payload_writer_unverified').length, 2);
+  }
+});
+
+const localIndexPayloadHelper = `local function build()
+local p = { n = 1 }
+local i = p.n
+p["ri" .. i] = "order"
+return p
+end
+AddUITriggeredEvent("ForgeLab", "probe", build())`;
+for (const [name, lua, code, severity] of [
+  ['helper', localIndexPayloadHelper, 'md_lua.payload_writer_unverified', 'info'],
+  ['missing', 'local p = { n = 1 }; AddUITriggeredEvent("ForgeLab", "probe", p)', 'md_lua.payload_missing_writer', 'error'],
+  ['wrong-event', 'local p = { n = 1 }; local i = 1; p["ri" .. i] = "order"; AddUITriggeredEvent("ForgeLab", "other", p); AddUITriggeredEvent("ForgeLab", "probe", {})', 'md_lua.payload_missing_writer', 'error'],
+  ['cleared-wrong-event', 'local p = { n = 1 }; p["ri" .. p.n] = "order"; local i = p.n; p["ri" .. i] = nil; AddUITriggeredEvent("ForgeLab", "other", p); AddUITriggeredEvent("ForgeLab", "probe", {})', 'md_lua.payload_missing_writer', 'error'],
+] as const) {
+  check(`local-index-payload-${name}-classification`, () => {
+    const input = project(lua);
+    const md = input.files.find(file => file.path === 'md/forge_regression_lab.xml')!;
+    md.content = md.content!.replace('</cues>', `<cue name="LocalIndexPayload"><conditions>
+      <event_ui_triggered screen="'ForgeLab'" control="'probe'"/>
+    </conditions><actions><set_value name="$ri" exact="event.param3.{'$ri' + $si}"/></actions></cue></cues>`);
+    const result = validateProjectCrossFile(input);
+    const payloadFindings = result.findings.filter(finding => finding.code.startsWith('md_lua.payload_'));
+    assert.equal(payloadFindings.length, 1);
+    assert.equal(payloadFindings[0].code, code);
+    assert.equal(payloadFindings[0].severity, severity);
+    for (const write of result.mdLua.payload.writes) assert.deepEqual(Object.keys(write).sort(), ['file', 'key']);
+    const unavailable = code === 'md_lua.payload_writer_unverified';
+    // Classify these actual payload findings separately from unrelated project checks.
+    const scopedEvidence = buildValidationEvidence(input, payloadFindings.map(finding => ({
+      severity: finding.severity, code: finding.code, filePath: finding.file, message: finding.detail,
+    })));
+    const category = unavailable ? 'check-unavailable' : 'mod-finding';
+    assert.equal(scopedEvidence.findings[0].category, category);
+    assert.equal(scopedEvidence.outcome, unavailable ? 'incomplete' : 'mod-findings');
+    assert.equal(scopedEvidence.modErrorCount, unavailable ? 0 : 1);
+    assert.equal(scopedEvidence.coverage.gaps.some(gap => gap.check === 'md_lua.payload_writer_unverified'), unavailable);
+    const decision = evaluateFindingAcceptances({
+      evidence: scopedEvidence, artifactHash: 'a'.repeat(64), validatorHash: 'b'.repeat(64),
+      corpusHash: 'c'.repeat(64), targetHash: 'd'.repeat(64),
+    }, [], { kind: 'agent', id: 'fixture', label: 'Fixture', scope: 'deploy', deployAuthorized: true });
+    assert.equal(decision.validationAllowsDeploy, unavailable);
+    assert.equal(decision.validationClean, false);
+    assert.equal(decision.outcome, unavailable ? 'incomplete-checks' : 'blocked-mod-findings');
+
+    const full = runProjectValidation(input);
+    assert.ok(flattenProjectValidation(full).some(finding => finding.code === code && finding.severity === severity));
+    assert.ok(full.evidence!.findings.some(finding => finding.code === code && finding.category === category));
+    assert.equal(full.evidence!.coverage.gaps.some(gap => gap.check === 'md_lua.payload_writer_unverified'), unavailable);
+  });
+}
+
 const p=project(dynamic), r=validateProjectCrossFile(p);
 const diagnostics=r.findings.map(f=>({severity:f.severity,code:f.code,filePath:f.file,message:f.detail}));
 const evidence=buildValidationEvidence(p,diagnostics);
