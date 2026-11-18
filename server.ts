@@ -270,7 +270,7 @@ import {
 } from "./src/lib/requestDeadline";
 import { parseParentLivenessContract, runParentLivenessSelftest, watchParentIpc } from "./src/lib/parentLiveness";
 import { runLatestValueWriteQueueSelftest } from "./src/lib/latestValueWriteQueue";
-import { artifactPlanIdentity, buildArtifactPlan, buildArtifactPlanWithDiskIdentity, hashArtifactFile, materializeArtifact, sameArtifactStamp, verifyMaterializedArtifact, type ArtifactPlan } from "./src/lib/artifactPipeline";
+import { artifactPlanIdentity, buildArtifactPlan, buildArtifactPlanWithDiskIdentity, createArtifactPathMatcher, hashArtifactFile, materializeArtifact, sameArtifactStamp, verifyMaterializedArtifact, type ArtifactPlan } from "./src/lib/artifactPipeline";
 import { buildProjectFileInventory, runProjectFileInventorySelftest } from "./src/lib/projectFileInventory";
 import { materializeCatalogArtifact } from "./src/lib/artifactPackager";
 import { dataPath, runDataDirSelftest } from "./src/lib/dataDir";
@@ -12738,14 +12738,24 @@ function preservedDeploymentEntries(
    * dev artifacts into permanent litter in the folder the game loads.
    */
   ownsForgeState: boolean,
+  targetEntries?: readonly RegularTreeEntry[],
 ): Array<{ path: string; origin: PreservedOrigin }> {
-  const origins = new Map<string, PreservedOrigin>();
+  const origins = new Map<string, { path: string; origin: PreservedOrigin }>();
   const put = (relativePath: string, origin: PreservedOrigin) => {
     if (!relativePath || relativePath.split('/').includes('..')) return;
     // A hard runtime-owned declaration outranks a soft hint for the same path.
-    if (origin === 'runtime' || !origins.has(relativePath)) origins.set(relativePath, origin);
+    const key = deployPreservationPathKey(relativePath);
+    if (origin === 'runtime' || !origins.has(key)) origins.set(key, { path: relativePath, origin });
   };
-  for (const entry of plan.runtimeOwned) put(entry.path.replace(/\/\*\*$/, ''), 'runtime');
+  if (plan.rules.runtimeOwned.length > 0) {
+    const matchesRuntime = createArtifactPathMatcher(plan.rules.runtimeOwned);
+    const matchedDirectories = new Set<string>();
+    for (const entry of targetEntries ?? inspectRegularTree(targetPath)) {
+      if (hasDeploymentPathAncestor(entry.path, matchedDirectories) || !matchesRuntime(entry.path)) continue;
+      put(entry.path, 'runtime');
+      if (entry.type === 'directory') matchedDirectories.add(deployPreservationPathKey(entry.path));
+    }
+  }
   const keep = readForgeKeep(targetPath);
   for (const top of keep) put(top, 'forgekeep');
   if (keep.size > 0) put('.forgekeep', 'forgekeep');
@@ -12788,7 +12798,19 @@ function preservedDeploymentEntries(
       }
     }
   } catch { /* preservation must never break a deploy; the explicit lists still apply */ }
-  return [...origins.entries()].map(([path, origin]) => ({ path, origin }));
+  return [...origins.values()];
+}
+
+function deployPreservationPathKey(relativePath: string): string {
+  return process.platform === 'win32' ? relativePath.toLowerCase() : relativePath;
+}
+
+function hasDeploymentPathAncestor(relativePath: string, paths: ReadonlySet<string>): boolean {
+  if (paths.size === 0) return false;
+  for (let parent = path.posix.dirname(relativePath); parent !== '.'; parent = path.posix.dirname(parent)) {
+    if (paths.has(deployPreservationPathKey(parent))) return true;
+  }
+  return false;
 }
 
 interface DeploymentTransactionHooks {
@@ -12953,12 +12975,15 @@ function previewDeploymentEffect(ws: any, targetRoot: string, format: DeployForm
       for (const entry of plan.entries) willWrite.set(entry.path.replace(/\\/g, '/'), (entry as any).size ?? 0);
     }
 
-    const preserved = preservedDeploymentEntries(targetRoot, plan, false).map(e => e.path);
-    const isPreserved = (rel: string) => preserved.some(p => rel === p || rel.startsWith(`${p}/`));
+    const targetEntries = inspectRegularTree(targetRoot);
+    const preserved = preservedDeploymentEntries(targetRoot, plan, false, targetEntries).map(e => e.path);
+    const preservedKeys = new Set(preserved.map(deployPreservationPathKey));
+    const isPreserved = (rel: string) => preservedKeys.has(deployPreservationPathKey(rel))
+      || hasDeploymentPathAncestor(rel, preservedKeys);
 
     const existing = new Map<string, number>();
     if (fs.existsSync(targetRoot)) {
-      for (const entry of inspectRegularTree(targetRoot)) {
+      for (const entry of targetEntries) {
         if (entry.type !== 'file') continue;
         const abs = path.join(targetRoot, ...entry.path.split('/'));
         existing.set(entry.path, (() => { try { return fs.statSync(abs).size; } catch { return 0; } })());
@@ -13140,11 +13165,15 @@ function replaceValidatedDeployment(
       requireArtifactDirectory(targetPath, observed);
     }
     if (targetExisted) {
+      const accepted: Array<{ relativePath: string; source: string; destination: string; directory: boolean }> = [];
+      const managedFiles = new Set(plan.rules.runtimeOwned.length ? expected.map(entry => deployPreservationPathKey(entry.path)) : []);
       for (const { path: relativePath, origin } of preservedDeploymentEntries(targetPath, plan, ownsForgeState)) {
         const source = path.join(targetPath, ...relativePath.split('/'));
-        if (!fs.existsSync(source)) continue;
+        const stat = fs.lstatSync(source, { throwIfNoEntry: false });
+        if (!stat) continue;
         const destination = path.join(stage, ...relativePath.split('/'));
-        if (fs.existsSync(destination)) {
+        // Decide conflicts against only managed outputs, before a preserved path can create an ancestor in the stage.
+        if (fs.existsSync(destination) || (origin === 'runtime' && hasDeploymentPathAncestor(relativePath, managedFiles))) {
           // An explicit `.forgeartifact.json` runtime-owned declaration colliding with
           // managed content is a genuine contract contradiction — fail closed.
           if (origin === 'runtime') throw new Error(`Runtime-owned path conflicts with built artifact: ${relativePath}`);
@@ -13154,10 +13183,18 @@ function replaceValidatedDeployment(
           preservationOverrides.push({ path: relativePath, origin });
           continue;
         }
-        const stat = fs.lstatSync(source);
         if (stat.isSymbolicLink()) throw new Error(`Runtime-owned path is a symbolic link or reparse point: ${relativePath}`);
-        if (stat.isDirectory()) copyRegularTree(source, destination);
-        else if (stat.isFile()) {
+        if (stat.isDirectory() || stat.isFile()) accepted.push({ relativePath, source, destination, directory: stat.isDirectory() });
+      }
+      const acceptedDirectories = new Set(accepted.filter(entry => entry.directory).map(entry => deployPreservationPathKey(entry.relativePath)));
+      for (const { relativePath, source, destination, directory } of accepted) {
+        if (hasDeploymentPathAncestor(relativePath, acceptedDirectories)) continue;
+        const current = fs.lstatSync(source);
+        if (directory ? !current.isDirectory() : !current.isFile()) {
+          throw new Error(`Preserved deployment path changed before copying: ${relativePath}`);
+        }
+        if (directory) copyRegularTree(source, destination);
+        else {
           fs.mkdirSync(path.dirname(destination), { recursive: true });
           fs.copyFileSync(source, destination);
         }
@@ -13449,11 +13486,12 @@ function runCompileArtifactSelftest() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'x4forge-compile-selftest-'));
   const source = path.join(root, 'source');
   const deployRoot = path.join(root, 'extensions');
-  const sourceWrite = (relativePath: string, content: string | Buffer) => {
-    const filePath = path.join(source, ...relativePath.split('/'));
+  const fixtureWrite = (directory: string, relativePath: string, content: string | Buffer) => {
+    const filePath = path.join(directory, ...relativePath.split('/'));
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, content);
   };
+  const sourceWrite = (relativePath: string, content: string | Buffer) => fixtureWrite(source, relativePath, content);
   const exactLua = (marker: string, bytes: number): string => {
     const line = `-- ${marker}\n`;
     return line.repeat(Math.ceil(bytes / line.length)).slice(0, bytes);
@@ -13904,7 +13942,9 @@ function runCompileArtifactSelftest() {
     sourceWrite(omittedPath, omittedDiskLua);
     sourceWrite(unrelatedDiskPath, 'unrelated disk source survives');
     sourceWrite('.git/config', 'must not deploy');
-    sourceWrite('.forgeartifact.json', JSON.stringify({ runtimeOwned: ['runtime/**'] }));
+    sourceWrite('.forgeartifact.json', JSON.stringify({
+      runtimeOwned: ['runtime/**', 'RuntimeFresh/**', 'RuntimeFresh/sub/**', 'empty-owned/**', 'state/*.db', 'preserved/*.bin'],
+    }));
 
     const imported = importModFolder(source);
     const importedBinaryText = (imported.workspace.passthroughFiles || []).find(file => file.path.toLowerCase() === binaryTextPath.toLowerCase());
@@ -14157,13 +14197,17 @@ function runCompileArtifactSelftest() {
       path.resolve(String(imported.workspace.sourceStamp?.dir || '')) === path.resolve(source),
       JSON.stringify(imported.workspace.sourceStamp),
     );
-    fs.mkdirSync(path.join(target, 'runtime'), { recursive: true });
+    for (const directory of ['runtime', 'empty-owned']) fs.mkdirSync(path.join(target, directory), { recursive: true });
     fs.writeFileSync(path.join(target, 'runtime', 'state.db'), 'deployed mutable state');
     fs.writeFileSync(path.join(target, 'stale-loose.txt'), 'must disappear');
+    fixtureWrite(target, 'runtimefresh/sub/nested.bin', 'target-only nested runtime state');
+    fixtureWrite(target, 'state/match.db', 'target-only runtime leaf');
+    fixtureWrite(target, 'state/stale.tmp', 'unmanaged stale sibling');
     fs.mkdirSync(path.join(target, '.git'), { recursive: true });
     fs.writeFileSync(path.join(target, '.git', 'config'), 'stale deploy metadata');
     fs.mkdirSync(path.join(target, 'preserved'), { recursive: true });
     fs.writeFileSync(path.join(target, 'preserved', 'state.bin'), 'forgekeep state');
+    fixtureWrite(target, 'preserved/note.txt', 'soft hint sibling of hard runtime path');
     fs.writeFileSync(path.join(target, '.forgekeep'), 'preserved\n../outside\nC:\\escape\n');
 
     sourceWrite('.github/workflows/fixture.yml', 'name: fixture');
@@ -14190,7 +14234,15 @@ function runCompileArtifactSelftest() {
     record('GitHub workflow excluded from catalog deploy', !importedPlan.entries.some(entry => entry.path.startsWith('.github/'))
       && !fs.existsSync(path.join(target, '.github')));
     record('runtime-owned state preserved', fs.readFileSync(path.join(target, 'runtime', 'state.db'), 'utf8') === 'deployed mutable state');
+    record('target-only overlapping runtime rules preserve a matching tree and empty directory',
+      fs.existsSync(path.join(target, 'empty-owned'))
+      && fs.readFileSync(path.join(target, 'runtimefresh', 'sub', 'nested.bin'), 'utf8') === 'target-only nested runtime state');
+    record('a target-only runtime leaf survives while its unmatched sibling is removed',
+      fs.readFileSync(path.join(target, 'state', 'match.db'), 'utf8') === 'target-only runtime leaf'
+      && !fs.existsSync(path.join(target, 'state', 'stale.tmp')));
     record('valid forgekeep top-level path preserved', fs.readFileSync(path.join(target, 'preserved', 'state.bin'), 'utf8') === 'forgekeep state');
+    record('a soft parent and hard child preserve their full accepted tree without collision',
+      fs.readFileSync(path.join(target, 'preserved', 'note.txt'), 'utf8') === 'soft hint sibling of hard runtime path');
     record('unsafe forgekeep paths ignored', !fs.existsSync(path.join(deployRoot, 'outside')) && !fs.existsSync(path.join(deployRoot, 'C:', 'escape')));
 
     // R14: a verified deploy gets a durable, one-use, hash-bound pre-state. These fixtures use

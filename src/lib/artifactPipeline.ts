@@ -221,6 +221,12 @@ export function artifactPathMatches(relativePath: string, rules: string[]): bool
   return matchingRule(relativePath.replace(/\\/g, '/').replace(/^\/+/, ''), rules) !== null;
 }
 
+/** Compile rules once for a scan of normalized, root-relative artifact paths. */
+export function createArtifactPathMatcher(rules: readonly string[]): (relativePath: string) => boolean {
+  const matchers = rules.map(globRegex).filter((matcher): matcher is RegExp => matcher !== null);
+  return relativePath => matchers.some(matcher => matcher.test(relativePath));
+}
+
 function normalizeRules(values: unknown): string[] {
   if (!Array.isArray(values)) return [];
   return Array.from(new Set(values.map(value => String(value || '').trim()).filter(Boolean)));
