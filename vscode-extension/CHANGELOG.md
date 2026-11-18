@@ -3,6 +3,15 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
+## 0.0.84 — 2026-11-18
+
+- Deploy preview and history show the exact loose files and catalog parts Forge will add, replace or remove, with the byte sizes for each change.
+- Mark files created by the game as `runtimeOwned` to preserve them during loose and catalog deployments. Forge refuses collisions with its managed output.
+- Mods can opt into advancing `content.xml` only when cutting a release. Ordinary deployment keeps the mod’s configured version policy.
+- Forge checks LuaJIT local limits and invalid surrogate escapes. MD diagnostics point to reads that the modeled project cannot prove are initialized and preserve uncertainty around saved and external values.
+- Project’s XML References view follows incoming and outgoing links and opens their source from the mod and the configured unpacked corpus. It shows when available inputs are incomplete.
+- Performance diagnostics offers bounded capture of backend, webview and extension-host activity. A webview-only capture can show the exact Canvas XML generation and validation operations and refresh their snapshot locally.
+
 ## 0.0.83 — 2026-11-11
 
 - Native deploy keeps the selected mod files consistent between preview and apply, and refuses stale source or destination identities before managed writes.
