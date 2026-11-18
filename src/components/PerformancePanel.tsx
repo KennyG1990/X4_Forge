@@ -159,7 +159,17 @@ const time = (value: number | null | undefined) => number(value) && Number.isFin
 const producerKey = (value: ForgePerformanceSnapshot['producer']) => JSON.stringify([value.component, value.scope, value.pid, value.instanceId]);
 const latest = (snapshot: ForgePerformanceSnapshot, field: keyof ForgePerformanceResourceSample) => [...snapshot.resources].reverse().find(row => row[field] !== null);
 
-export function SnapshotView({ title, snapshot }: { title: string; snapshot: ForgePerformanceSnapshot }) {
+function SnapshotTimestamp({ label, unixMs }: { label: string; unixMs: number | null }) {
+  const date = number(unixMs) ? new Date(unixMs) : null;
+  if (!date || !Number.isFinite(date.getTime())) return 'Unknown';
+  return <time aria-label={label} dateTime={date.toISOString()}>{date.toLocaleTimeString()}</time>;
+}
+
+export function SnapshotView({ title, snapshot, webview }: {
+  title: string;
+  snapshot: ForgePerformanceSnapshot;
+  webview?: { onRefresh: () => void; collectionStartedAtUnixMs: number | null };
+}) {
   const [history, setHistory] = React.useState(false);
   const [allOperations, setAllOperations] = React.useState(false);
   const rows = [...snapshot.operations].sort((a, b) => b.totalMs - a.totalMs);
@@ -172,8 +182,16 @@ export function SnapshotView({ title, snapshot }: { title: string; snapshot: For
     : [['Frame cadence', 'fps', value => performanceNumber(value, ' FPS')], ['Frame interval', 'frameIntervalMs', value => performanceNumber(value, ' ms')],
       ['JS heap estimate', 'jsHeapUsedBytes', bytes], ['Last observed longtask', 'longTaskDurationMs', value => performanceNumber(value, ' ms')]];
   return <section className="min-w-0 rounded border border-white/10 bg-black/20 p-3" aria-label={title}>
-    <h3 className="text-sm font-semibold text-slate-200">{title} <span className="text-[10px] font-normal text-slate-400">{snapshot.enabled ? 'Collecting' : 'Collection off'}</span></h3>
-    <p className="mt-1 break-all text-[10px] text-slate-500">{snapshot.producer.scope} · PID {snapshot.producer.pid ?? 'Unknown'} · instance {snapshot.producer.instanceId ?? 'Unknown'} · snapshot {time(snapshot.capturedAtUnixMs)}</p>
+    <div className="flex flex-wrap items-center justify-between gap-2">
+      <h3 className="text-sm font-semibold text-slate-200">{title} <span className="text-[10px] font-normal text-slate-400">{snapshot.enabled ? 'Collecting' : 'Collection off'}</span></h3>
+      {webview && <button type="button" onClick={webview.onRefresh} className="rounded border border-cyan-500/30 px-2 py-1 text-[10px] text-cyan-200">Refresh webview snapshot</button>}
+    </div>
+    <p className="mt-1 break-all text-[10px] text-slate-500">
+      {snapshot.producer.scope} · PID {snapshot.producer.pid ?? 'Unknown'} · instance {snapshot.producer.instanceId ?? 'Unknown'} · snapshot {webview
+        ? <SnapshotTimestamp label="Snapshot captured" unixMs={snapshot.capturedAtUnixMs} />
+        : time(snapshot.capturedAtUnixMs)}
+      {webview && webview.collectionStartedAtUnixMs !== null && <> · collection started <SnapshotTimestamp label="Collection started" unixMs={webview.collectionStartedAtUnixMs} /></>}
+    </p>
     <dl className="mt-3 grid grid-cols-2 gap-2">{metrics.map(([label, field, format]) => {
       const sample = latest(snapshot, field);
       return <div key={field} className="rounded bg-white/[0.03] p-2"><dt className="text-[10px] text-slate-400">{label}</dt><dd className="font-mono text-sm text-cyan-200">{format(sample?.[field])}</dd><dd className="text-[9px] text-slate-500">Last sample: {time(sample?.atUnixMs)}</dd></div>;
@@ -500,14 +518,37 @@ export default function PerformancePanel() {
       epoch.current++; setRefresh(value => value + 1);
     }
   };
+  const collectionDuration = () => {
+    const durationMs = Number(duration) * 1000;
+    return Number.isSafeInteger(durationMs) && durationMs >= 1000 && durationMs <= 900_000 ? durationMs : null;
+  };
+  const canStartWebviewCollection = () => {
+    const currentLocal = readWebviewPerformance();
+    setLocal(currentLocal);
+    const refusal = webviewCollectionStartRefusal(currentLocal.collection);
+    if (refusal) setAction({ authority, error: refusal });
+    return refusal === null;
+  };
+  const startLocalCollection = () => {
+    if (pending.current || !accepts(authority)) return;
+    const durationMs = collectionDuration();
+    if (durationMs === null) {
+      setAction({ authority, error: 'Use a duration of 1–900 seconds.' });
+      return;
+    }
+    if (!canStartWebviewCollection()) return;
+    const started = startWebviewPerformanceCollection(durationMs);
+    setLocal(readWebviewPerformance());
+    setAction(started.ok === true
+      ? { authority, notice: 'Started bounded collection for this webview. Collection stops automatically.' }
+      : { authority, error: `Webview collection could not start (${started.code}).` });
+  };
   const startCollection = async () => {
-    const durationMs = Number(duration) * 1000; const intervalMs = Number(interval) * 1000;
-    if (!Number.isSafeInteger(durationMs) || durationMs < 1000 || durationMs > 900_000 || !Number.isSafeInteger(intervalMs) || intervalMs < 1000 || intervalMs > 60_000) {
+    const durationMs = collectionDuration(); const intervalMs = Number(interval) * 1000;
+    if (durationMs === null || !Number.isSafeInteger(intervalMs) || intervalMs < 1000 || intervalMs > 60_000) {
       setAction({ authority, error: 'Use a duration of 1–900 seconds and a resource interval of 1–60 seconds.' }); return;
     }
-    const currentLocal = readWebviewPerformance(); setLocal(currentLocal);
-    const localRefusal = webviewCollectionStartRefusal(currentLocal.collection);
-    if (localRefusal) { setAction({ authority, error: localRefusal }); return; }
+    if (!canStartWebviewCollection()) return;
     const owner = startAction('collection'); if (!owner) return;
     try {
       const response = await fetch('/api/agent/performance/collection', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -551,6 +592,7 @@ export default function PerformancePanel() {
   };
   const currentProfile = report && profile?.authority === authority && profile.producer === producerKey(report.backend.producer) ? profile.value : undefined;
   const cooldown = report?.control.profileCooldownRemainingMs;
+  const localStartRefusal = webviewCollectionStartRefusal(local.collection);
   const cacheRows: Array<[string, Record<typeof cacheFields[number], number>]> = report ? [['Validation', report.caches.projectValidation], ['Lua', report.caches.projectValidation.lua], ['Effective schema', report.caches.projectValidation.effectiveSchema]] : [];
   const inputClass = 'w-full rounded border border-white/15 bg-[#101722] px-2 py-1 text-xs text-slate-200';
   return <div data-testid="forge-performance-panel" className="h-full min-w-0 overflow-auto p-3 text-slate-200 space-y-3">
@@ -559,12 +601,15 @@ export default function PerformancePanel() {
     {readError && <p role="alert" className="rounded border border-amber-500/30 p-2 text-xs text-amber-200">{readError}{report ? ' Showing the last successful snapshot.' : ''}</p>}
     {!report && !readError && <p role="status" className="text-xs text-slate-400">Loading performance status…</p>}
     <section className="rounded border border-white/10 p-3" aria-label="Bounded performance collection">
-      <h3 className="text-xs font-semibold">Collect a workload</h3><p className="mt-1 text-[10px] text-slate-400">Start the backend first, then this webview. Collection continues while you work elsewhere; at most 120 resource samples are retained per producer.</p>
+      <h3 className="text-xs font-semibold">Collect a workload</h3><p className="mt-1 text-[10px] text-slate-400">Collect the backend and this webview together, or collect this webview on its own. Collection continues while you work elsewhere and retains up to 120 resource samples per producer.</p>
       <div className="mt-2 grid grid-cols-2 gap-2"><label className="text-[10px] text-slate-400">Duration (seconds)<input aria-label="Performance collection duration seconds" type="number" min="1" max="900" value={duration} onChange={event => setDuration(event.target.value)} className={inputClass} /></label><label className="text-[10px] text-slate-400">Backend interval (seconds)<input aria-label="Performance resource interval seconds" type="number" min="1" max="60" value={interval} onChange={event => setInterval(event.target.value)} className={inputClass} /></label></div>
       <label className="mt-2 flex items-center gap-2 text-[11px]"><input type="checkbox" checked={eventLoopDelay} onChange={event => setEventLoopDelay(event.target.checked)} /> Include event-loop delay monitoring</label>
-      <button type="button" onClick={() => void startCollection()} disabled={!report || !!readError || busy || report.control.disposed || report.control.collectionCleanupUnconfirmed || report.control.collectionActive || !!webviewCollectionStartRefusal(local.collection)} className="mt-2 inline-flex items-center gap-1 rounded border border-cyan-500/30 px-2 py-1.5 text-xs text-cyan-200 disabled:opacity-40"><Play className="h-3.5 w-3.5" /> Start bounded collection</button>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <button type="button" onClick={() => void startCollection()} disabled={!report || !!readError || busy || report.control.disposed || report.control.collectionCleanupUnconfirmed || report.control.collectionActive || !!localStartRefusal} className="inline-flex items-center gap-1 rounded border border-cyan-500/30 px-2 py-1.5 text-xs text-cyan-200 disabled:opacity-40"><Play className="h-3.5 w-3.5" /> Start bounded collection</button>
+        <button type="button" onClick={startLocalCollection} disabled={busy || !!localStartRefusal} className="rounded border border-cyan-500/30 px-2 py-1.5 text-xs text-cyan-200 disabled:opacity-40">Start webview collection only</button>
+      </div>
       <p className="mt-2 text-[10px] text-slate-400">Backend collection: {report ? report.control.collectionActive ? `active until ${time(report.control.collectionExpiresAtUnixMs)}` : 'inactive' : 'Unknown'}</p>
-      {report?.control.collectionCleanupUnconfirmed && <p className="mt-1 text-[10px] text-amber-200">Collection cleanup is unconfirmed; another collection is refused.</p>}
+      {report?.control.collectionCleanupUnconfirmed && <p className="mt-1 text-[10px] text-amber-200">Backend collection cleanup is unconfirmed. Starting another backend collection is disabled.</p>}
       {report && <p className="mt-1 text-[10px] text-slate-500">Owned backend timers {report.control.ownedTimerCount}; failed timer cleanup {report.control.failedTimerCount}; delay monitor {report.control.eventLoopDelayMonitoring ? 'active' : 'inactive'}; sampling overhead {performanceNumber(report.control.sampleOverheadMs, ' ms')}.</p>}
       <WebviewCollectionStatus collection={local.collection} onStop={() => { stopWebviewPerformanceCollection(); setLocal(readWebviewPerformance()); }} />
     </section>
@@ -572,7 +617,10 @@ export default function PerformancePanel() {
     {currentAction?.error && <p role="alert" className="rounded border border-amber-500/30 p-2 text-xs text-amber-200">{currentAction.error}</p>}
     {busy && <div className="flex items-center gap-2 text-xs text-slate-300"><span role="status">{currentAction?.kind === 'profile' ? 'Sampling backend functions…' : 'Starting collection…'}</span><button type="button" onClick={() => pending.current?.abort()} className="underline">Cancel request</button></div>}
     {report && <SnapshotView title="Owned backend" snapshot={report.backend} />}
-    <SnapshotView title="This webview" snapshot={local.snapshot} />
+    <SnapshotView title="This webview" snapshot={local.snapshot} webview={{
+      onRefresh: () => setLocal(readWebviewPerformance()),
+      collectionStartedAtUnixMs: local.collection.startedAtUnixMs,
+    }} />
     <p className="text-[10px] text-slate-400">Webview: frames {local.coverage.frames}; visibility {local.coverage.visibility}; longtasks {local.coverage.longTasks}; heap {local.coverage.heap}. Adapter errors {local.coverage.adapterErrors}; ignored old completions {local.coverage.ignoredCompletions}. Local snapshots stay in this webview’s memory.</p>
     <NativePerformanceSection authority={authority} backendInstanceId={report?.backend.producer.instanceId ?? null} parentRefresh={refresh} />
     {report && <section className="rounded border border-white/10 p-3 text-[10px]" aria-label="Validation cache counters"><h3 className="mb-1 text-xs font-semibold">Validation cache counters</h3><p className="mb-2 text-slate-400">Accounted bytes omit exact JavaScript object/Map overhead; they are not total heap use.</p><div className="overflow-x-auto"><table className="w-full text-left"><thead><tr><th>Cache</th>{cacheFields.map(field => <th className="px-1" key={field}>{field}</th>)}</tr></thead><tbody>{cacheRows.map(([label, value]) => <tr key={label} className="border-t border-white/5"><td className="py-1">{label}</td>{cacheFields.map(field => <td key={field} className="px-1">{performanceNumber(value[field])}</td>)}</tr>)}</tbody></table></div></section>}

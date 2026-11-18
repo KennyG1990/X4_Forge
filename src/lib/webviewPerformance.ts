@@ -36,12 +36,15 @@ export interface WebviewPerformanceRequestObservation {
   failure(error: unknown): void;
   observeOwnedPromise<T extends Promise<Response>>(promise: T): T;
 }
+const WEBVIEW_SYNC_OPERATIONS = ['canvas.law.generate', 'canvas.law.validate'] as const;
+export type WebviewPerformanceOperation = typeof WEBVIEW_SYNC_OPERATIONS[number];
 export interface WebviewPerformanceController {
   start(durationMs?: number): WebviewPerformanceStartResult;
   stop(): void;
   isCollecting(): boolean;
   read(): WebviewPerformanceView;
   beginRequest(input: RequestInfo | URL, init?: RequestInit): WebviewPerformanceRequestObservation;
+  measureSync<T>(name: WebviewPerformanceOperation, work: () => T): T;
   recordFrame(sample: WebviewPerformanceFrame): void;
   recordLongTask(durationMs: number, visible: boolean): void;
   setSupport(support: Partial<Pick<WebviewPerformanceView['coverage'], 'frames' | 'longTasks' | 'heap' | 'visibility'>>): void;
@@ -138,17 +141,18 @@ export function createWebviewPerformanceController(options: {
     cleanupTimer();
     safe(() => collector.setEnabled(false));
   };
-  const collecting = () => {
-    if (!active || disposed) return false;
+  const leaseTime = () => {
+    if (!active || disposed) return null;
     const now = clock(environment.now);
-    if (now === null) { end('clock-unavailable'); return false; }
-    if (expiresAt === null || now >= expiresAt) { end('expired'); return false; }
-    return true;
+    if (now === null) { end('clock-unavailable'); return null; }
+    if (expiresAt === null || now >= expiresAt) { end('expired'); return null; }
+    return now;
   };
+  const collecting = () => leaseTime() !== null;
   const record = (name: string, start: number, lease: number, outcome: ForgePerformanceOutcome) => safe(() => {
-    if (lease !== generation || !collecting()) { ignoredCompletions++; return; }
-    const now = clock(environment.now);
-    if (now === null || now < start) { adapterErrors++; return; }
+    const now = lease === generation ? leaseTime() : null;
+    if (now === null || lease !== generation) { ignoredCompletions++; return; }
+    if (now < start) { adapterErrors++; return; }
     collector.recordOperation({ name, durationMs: now - start, outcome });
   });
   const beginFetch = (input: RequestInfo | URL, init?: RequestInit): { name: string; start: number; lease: number } | null => {
@@ -218,6 +222,20 @@ export function createWebviewPerformanceController(options: {
       };
       return observation;
     },
+    measureSync(name, work) {
+      if (!WEBVIEW_SYNC_OPERATIONS.includes(name)) return work();
+      const start = leaseTime();
+      if (start === null) return work();
+      const lease = generation;
+      let outcome: ForgePerformanceOutcome = 'error';
+      try {
+        const result = work();
+        outcome = 'ok';
+        return result;
+      } finally {
+        record(name, start, lease, outcome);
+      }
+    },
     recordFrame(sample) { safe(() => {
       if (!collecting()) return;
       support.visibility = ['visible', 'hidden', 'unknown'].includes(sample.visibility) ? sample.visibility : 'unknown';
@@ -250,6 +268,9 @@ export const stopWebviewPerformanceCollection = () => webviewPerformance.stop();
 export const readWebviewPerformance = () => webviewPerformance.read();
 export const isWebviewPerformanceCollecting = () => webviewPerformance.isCollecting();
 export const beginWebviewPerformanceRequest = (input: RequestInfo | URL, init?: RequestInit) => webviewPerformance.beginRequest(input, init);
+export function measureWebviewOperation<T>(name: WebviewPerformanceOperation, work: () => T): T {
+  return webviewPerformance.measureSync(name, work);
+}
 export const recordWebviewFrame = (sample: WebviewPerformanceFrame) => webviewPerformance.recordFrame(sample);
 export const recordWebviewLongTask = (durationMs: number, visible: boolean) => webviewPerformance.recordLongTask(durationMs, visible);
 export const setWebviewPerformanceSupport: WebviewPerformanceController['setSupport'] = support => webviewPerformance.setSupport(support);

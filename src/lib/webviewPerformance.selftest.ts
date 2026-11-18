@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { createForgePerformanceCollector } from './forgePerformance';
 import { clientRequestDeadlineMs, createAbortDeadline, timeoutError, type AbortDeadline } from './requestDeadline';
 import { ACTION_OPERATION_ID_HEADER, resolveActionOperationId } from '../../shared/actionOperationId';
-import { createWebviewPerformanceController, observeOwnedFetchPromise, WEBVIEW_PERFORMANCE_MAX_DURATION_MS, type WebviewPerformanceController, type WebviewPerformanceEnvironment } from './webviewPerformance';
+import { createWebviewPerformanceController, observeOwnedFetchPromise, WEBVIEW_PERFORMANCE_MAX_DURATION_MS, type WebviewPerformanceController, type WebviewPerformanceEnvironment, type WebviewPerformanceOperation } from './webviewPerformance';
 
 class WebviewTestEnvironment implements WebviewPerformanceEnvironment {
   time = 0;
@@ -156,6 +156,54 @@ export async function runWebviewPerformanceSelftest() {
   const controller = createWebviewPerformanceController({ environment });
   check('default disabled has no lease timer or observations', !controller.read().snapshot.enabled && environment.timers.size === 0
     && controller.read().snapshot.resources.length === 0 && controller.read().snapshot.operations.length === 0);
+  const canvasEnvironment = new WebviewTestEnvironment();
+  let canvasClockReads = 0;
+  const canvasController = createWebviewPerformanceController({ environment: {
+    ...canvasEnvironment,
+    now: () => { canvasClockReads++; return canvasEnvironment.now(); },
+    wallNow: () => { canvasClockReads++; return canvasEnvironment.wallNow(); },
+  } });
+  const canvasResult = { xml: 'PRIVATE_CANVAS_XML' };
+  const canvasFailure = new Error('PRIVATE_CANVAS_ERROR');
+  let canvasCalls = 0;
+  const generate = () => { canvasCalls++; canvasEnvironment.time += 7; return canvasResult; };
+  const validate = () => { canvasCalls++; canvasEnvironment.time += 3; throw canvasFailure; };
+  const clocksBeforeDisabled = canvasClockReads;
+  const canvasDisabled = canvasController.measureSync('canvas.law.generate', generate);
+  check('disabled Canvas measurement calls work once with no clock reads', canvasDisabled === canvasResult && canvasCalls === 1
+    && canvasClockReads === clocksBeforeDisabled);
+  check('Canvas checks start a bounded lease', canvasController.start(100).ok);
+  const clocksBeforeUnknownOperation = canvasClockReads;
+  const unlistedResult = canvasController.measureSync('PRIVATE_CANVAS_NAME' as WebviewPerformanceOperation, generate);
+  check('unlisted Canvas operation calls work once without reading clocks', unlistedResult === canvasResult
+    && canvasCalls === 2 && canvasClockReads === clocksBeforeUnknownOperation);
+  const observedCanvasResult = canvasController.measureSync('canvas.law.generate', generate);
+  let observedCanvasFailure: unknown;
+  try { canvasController.measureSync('canvas.law.validate', validate); } catch (error) { observedCanvasFailure = error; }
+  const canvasSnapshot = canvasController.read().snapshot;
+  check('Canvas measurements preserve exact return and throw values and call work once', observedCanvasResult === canvasResult
+    && observedCanvasFailure === canvasFailure && canvasCalls === 4);
+  check('Canvas measurements record only fixed names, durations and outcomes', canvasSnapshot.operations.length === 2
+    && canvasSnapshot.operations.some(row => row.name === 'canvas.law.generate' && row.count === 1 && row.totalMs === 7 && row.outcomes.ok === 1)
+    && canvasSnapshot.operations.some(row => row.name === 'canvas.law.validate' && row.count === 1 && row.totalMs === 3 && row.outcomes.error === 1)
+    && !/PRIVATE_CANVAS_/.test(JSON.stringify(canvasSnapshot)));
+  const expiredCanvas = canvasController.measureSync('canvas.law.generate', () => {
+    canvasEnvironment.time += 100;
+    return canvasResult;
+  });
+  const expiredCanvasView = canvasController.read();
+  check('Canvas work crossing lease expiry is returned and cannot record a completion', expiredCanvas === canvasResult
+    && expiredCanvasView.collection.stopReason === 'expired' && expiredCanvasView.coverage.ignoredCompletions === 1
+    && expiredCanvasView.snapshot.operations.every(row => row.count === 1) && canvasEnvironment.timers.size === 0);
+  canvasController.start(100);
+  const replacedCanvas = canvasController.measureSync('canvas.law.validate', () => {
+    canvasController.stop();
+    return canvasController.start(100).ok;
+  });
+  check('Canvas work from a replaced lease cannot contaminate the new lease', replacedCanvas && canvasController.read().collection.active
+    && canvasController.read().snapshot.operations.length === 0 && canvasController.read().coverage.ignoredCompletions === 2);
+  canvasController.dispose();
+
   const disabledPromise = Promise.resolve(new Response('untouched'));
   let disabledThenReads = 0;
   Object.defineProperty(disabledPromise, 'then', { get() { disabledThenReads++; throw new Error('Disabled collection must not attach observers.'); } });
@@ -359,6 +407,12 @@ export async function runWebviewPerformanceSelftest() {
   await unaffectedReturned;
   broken.recordFrame({ fps: 60, frameIntervalMs: 16, visibility: 'visible' });
   check('recorder failures cannot alter transport or escape producers', unaffectedReturned === unaffected && broken.read().coverage.adapterErrors >= 2);
+  const recorderErrorsBeforeCanvas = broken.read().coverage.adapterErrors;
+  const canvasWithBrokenRecorder = broken.measureSync('canvas.law.generate', () => canvasResult);
+  let canvasThrowWithBrokenRecorder: unknown;
+  try { broken.measureSync('canvas.law.validate', () => { throw canvasFailure; }); } catch (error) { canvasThrowWithBrokenRecorder = error; }
+  check('recorder failures cannot alter Canvas return or throw values', canvasWithBrokenRecorder === canvasResult
+    && canvasThrowWithBrokenRecorder === canvasFailure && broken.read().coverage.adapterErrors === recorderErrorsBeforeCanvas + 2);
   broken.dispose(); clockFailure.dispose(); timerFailure.dispose(); immediateTimer.dispose(); maximumLease.dispose();
   cleanup.dispose(); settled.dispose(); setThenThrow.dispose(); synchronousThrow.dispose(); registrationStop.dispose();
   const mainFetchFixture = await mainFetchFixtureFactory();

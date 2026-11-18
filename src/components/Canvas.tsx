@@ -54,6 +54,7 @@ import { MOD_PATTERNS } from '../lib/modPatterns';
 import { COMPOSITE_BLOCKS } from '../lib/compositeBlocks';
 import { computeAutoLayout } from '../lib/mdAutoLayout';
 import { markE2EPerfCounter } from '../lib/e2ePerfCounters';
+import { measureWebviewOperation } from '../lib/webviewPerformance';
 import { summarizePackageStatus, type DiagnosticSource } from '../lib/packageStatus';
 import { fetchPollingJson, pollingResourceKey } from '../lib/continuousPolling';
 import { useContinuousPolling } from '../lib/useContinuousPolling';
@@ -1397,9 +1398,10 @@ function Canvas({
     const t = setTimeout(() => {
       try {
         markE2EPerfCounter('generateMDXML', 'Canvas.lawDiagnostics');
-        const mdCode = generateMDXML(workspace);
+        const mdCode = measureWebviewOperation('canvas.law.generate', () => generateMDXML(workspace));
         markE2EPerfCounter('validateModWorkspace', 'Canvas.lawDiagnostics');
-        setLawDiags(validateModWorkspace(workspace, mdCode));
+        const diagnostics = measureWebviewOperation('canvas.law.validate', () => validateModWorkspace(workspace, mdCode));
+        setLawDiags(diagnostics);
       }
       catch { setLawDiags([]); }
     }, 400);
