@@ -57,6 +57,29 @@ const cases = [
   ['method_200_plus_self', 'function object:f(' + formals(200) + ') end', false],
   ['dot_method_has_no_implicit_self', 'function object.f(' + formals(200) + ') end', true],
 ] as const;
+const unicodeEscapes = [
+  ["below","return \"\\u{D7FF}\"",true],
+  ["first","return \"\\u{D800}\"",false],
+  ["high","return \"\\u{DBFF}\"",false],
+  ["low","return '\\u{dc00}'",false],
+  ["last","return \"\\u{dFfF}\"",false],
+  ["above","return '\\u{e000}'",true],
+  ["zero_padded","return '\\u{000000d800}'",false],
+  ["max","return \"\\u{10FFFF}\"",true],
+  ["over_max","return \"\\u{110000}\"",false],
+  ["ordinary","return \"\\u{41}\\x80\\065\"",true],
+  ["even","return \"\\\\u{D800}\"",true],
+  ["odd","return \"\\\\\\u{D800}\"",false],
+  ["two_escape_runs","return \"\\\\u{D800}\\u{DFFF}\"",false],
+  ["raw_bracket","return [=[ \"\\u{D800}\" ]=]",true],
+  ["comment","-- \"\\u{D800}\"\nreturn true",true],
+  ["long_comment","--[=[ \"\\u{D800}\" ]=]\nreturn true",true],
+  ["bare_string_argument","DebugError \"\\u{D800}\"",false],
+  ["escaped_quote","return \"a\\\"\\u{D800}\"",false],
+  ["after_continuation","return \"ok\\\r\n\\u{D800}\"",false],
+  ["after_whitespace_escape","return \"\\z\n\r  \\u{D800}\"",false],
+  ["unclosed","return \"\\u{D800}",false],
+] as const;
 const file = (rel: string, text: string): LuaFileInput => ({ rel, text, source: 'loose', sourcePath: `grammar:${rel}`,
   extension: { folder: 'grammar', id: 'grammar' } });
 
@@ -123,6 +146,43 @@ check('deferred_local_check_snapshots_wait_option', () => {
   const parser = parseX4Lua('', options) as { end(input: string): unknown };
   options.wait = false;
   assert.throws(() => parser.end(declared(201)), /200 active local variables/);
+});
+
+
+for (const [id, text, accepted] of unicodeEscapes) check('unicode_escape_' + id, () => {
+  const result = analyzeLuaFiles([file('ui/escape.lua', text)]);
+  assert.equal(result.runtimeScope.stages[0].status, accepted ? 'pass' : 'fail');
+  assert.equal(result.findings.some(f => f.code === 'lua.syntax_error'), !accepted);
+});
+check('surrogate_escape_has_exact_continued_utf16_coordinates', () => {
+  const text = '-- prefix\r\nreturn "é\\\r\n  \\u{00D800}"';
+  const options = { locations: true, ranges: true, comments: false, encodingMode: 'pseudo-latin1' };
+  assert.throws(() => parseX4Lua(text, options), (error: unknown) => {
+    const e = error as SyntaxError & { line?: number; column?: number; index?: number };
+    return e instanceof SyntaxError && e.line === 3 && e.column === 2 && e.index === text.indexOf('\\u{');
+  });
+  const finding = analyzeLuaFiles([file('ui/escape.lua', text)]).findings.find(f => f.code === 'lua.syntax_error');
+  assert.equal(finding?.line, 3);
+  assert.equal(finding?.column, 2);
+});
+check('surrogate_and_local_limit_keep_earliest_profile_error', () => {
+  const escape = 'local s = "\\u{D800}"';
+  const overflow = declared(201);
+  const options = { locations: true, ranges: true };
+  assert.throws(() => parseX4Lua(escape + '\n' + overflow, options), /surrogate code points/);
+  assert.throws(() => parseX4Lua(overflow + '\n' + escape, options), /200 active local variables/);
+});
+check('deferred_surrogate_escape_and_valid_ast_metadata', () => {
+  const handle = parseX4Lua('', { wait: true }) as { write(input: string): unknown; end(input: string): unknown };
+  handle.write('return "\\u{');
+  assert.throws(() => handle.end('D800}"'), /surrogate code points/);
+  const valid = 'return "\\u{E000}", [[\\u{D800}]]';
+  const options = { comments: false, encodingMode: 'pseudo-latin1' };
+  const observed: unknown[] = [];
+  const upstream: unknown[] = [];
+  assert.deepEqual(parseX4Lua(valid, { ...options, onCreateNode(node: unknown) { observed.push(node); } }),
+    upstreamParse(valid, { ...options, luaVersion: 'LuaJIT', onCreateNode(node: unknown) { upstream.push(node); } }));
+  assert.deepEqual(observed, upstream);
 });
 
 check('nine_retained_real_sources_compile_without_execution', () => {
