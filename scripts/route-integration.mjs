@@ -724,7 +724,7 @@ async function main() {
     ? capabilityContract.capabilities.map(capability => capability?.id)
     : [];
   // Independent semantic inventory: unexpected additions/removals must fail.
-  const expectedCapabilityIds = ['expression.check', 'extensions.conflicts.analyze', 'history.list', 'history.revert',
+  const expectedCapabilityIds = ['expression.check', 'expression.inspect', 'extensions.conflicts.analyze', 'history.list', 'history.revert',
     'patch.readiness.analyze', 'performance.collect', 'performance.native.collect', 'performance.native.read', 'performance.native.stop',
     'performance.profile', 'performance.read', 'project.validate', 'project.xml.references', 'readiness.read',
     'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'workspace.compile', 'workspace.generate.preview', 'workspace.read'];
@@ -748,6 +748,20 @@ async function main() {
     validationCapability?.inputSchema?.anyOf?.some(branch => branch?.required?.[0] === 'project') &&
     validationCapability?.inputSchema?.anyOf?.some(branch => branch?.required?.[0] === 'fromPath'),
     JSON.stringify(validationCapability || {}));
+  const expressionInspectRoute = '/api/agent/expressions/inspect';
+  const expressionInspectCapability = capabilityContract?.capabilities?.find(capability => capability?.id === 'expression.inspect');
+  ok('expression_inspect_capability_is_a_distinct_optional_workspace_read',
+    expressionInspectCapability?.version === 1 && expressionInspectCapability?.context?.workspace === 'optional'
+      && expressionInspectCapability?.access?.public === false && expressionInspectCapability?.access?.studioSession === true
+      && sameCapabilityIds(expressionInspectCapability.access.agentScopes, ['read', 'write', 'deploy'])
+      && expressionInspectCapability.apiBindings?.length === 1
+      && expressionInspectCapability.apiBindings[0]?.path === expressionInspectRoute
+      && expressionInspectCapability.apiBindings[0]?.method === 'POST'
+      && expressionInspectCapability.apiBindings[0]?.role === 'primary'
+      && sameCapabilityIds(expressionInspectCapability.effects, ['read', 'analyze'])
+      && expressionInspectCapability.surfaces?.mcp?.length === 1
+      && expressionInspectCapability.surfaces.mcp[0]?.id === 'inspect_expression'
+      && expressionInspectCapability.surfaces.mcp[0]?.status === 'connected');
   const textLookupRoute = '/api/agent/text/lookup';
   const textCapability = capabilityContract?.capabilities?.find(capability => capability?.id === 'text.lookup');
   ok('text_lookup_capability_exposes_one_read_only_binding_and_mcp_tool',
@@ -1348,10 +1362,10 @@ async function main() {
     sameCapabilityIds(effectiveIds(studioEffective), expectedCapabilityIds) && effectiveHashIsValid(studioEffective),
   JSON.stringify({ public: publicEffective.json, bogus: bogusEffective.json, studio: { actor: studioEffective.json?.actor, ids: effectiveIds(studioEffective) } }));
   for (const [name, response, scope, expectedIds] of [
-    ['read', readEffective, 'read', ['expression.check', 'extensions.conflicts.analyze', 'history.list',
+    ['read', readEffective, 'read', ['expression.check', 'expression.inspect', 'extensions.conflicts.analyze', 'history.list',
       'performance.collect', 'performance.profile', 'performance.read', 'project.xml.references', 'readiness.read',
       'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'workspace.read']],
-    ['write', writeEffective, 'write', ['expression.check', 'extensions.conflicts.analyze', 'history.list', 'project.validate',
+    ['write', writeEffective, 'write', ['expression.check', 'expression.inspect', 'extensions.conflicts.analyze', 'history.list', 'project.validate',
       'performance.collect', 'performance.profile', 'performance.read', 'project.xml.references',
       'readiness.read', 'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'workspace.compile', 'workspace.read']],
     ['deploy', deployEffective, 'deploy', expectedCapabilityIds.filter(id => ![
@@ -1385,6 +1399,66 @@ async function main() {
   ok('read_write_deploy_effective_sets_are_monotonic',
     effectiveIds(readEffective).every(id => effectiveIds(writeEffective).includes(id)) &&
     effectiveIds(writeEffective).every(id => effectiveIds(deployEffective).includes(id)));
+
+  const inspectExpressionInput = { expression: '$f.id', variableTypes: { $f: 'faction' } };
+  const statelessInspection = { workspaceId: '', operationId: null };
+  const checkerOnly = await mkKey('read', {
+    label: 'route-int-check-expression-only', authorityMode: 'exact',
+    capabilityIdentities: ['expression.check@1'], allowedEffects: ['read', 'analyze'],
+  });
+  const inspectorOnly = await mkKey('read', {
+    label: 'route-int-inspect-expression-only', authorityMode: 'exact',
+    capabilityIdentities: ['expression.inspect@1'], allowedEffects: ['read', 'analyze'],
+  });
+  const inspectLedger = path.join(dataDir, 'history', 'ledger.jsonl');
+  const readInspectLedger = () => fs.existsSync(inspectLedger) ? fs.readFileSync(inspectLedger) : Buffer.alloc(0);
+  const inspectWorkspaceBefore = await req('GET', '/api/agent/workspace', SESSION_TOKEN);
+  const inspectLedgerBefore = readInspectLedger();
+  const inspectReceiptsBefore = stableStringify(actionReceiptFiles());
+  const inspectedExpression = await req('POST', expressionInspectRoute, readKey, inspectExpressionInput, statelessInspection);
+  capabilityResponses.set('expression.inspect', inspectedExpression);
+  ok('expression_inspect_resolves_a_typed_path_without_workspace_or_operation',
+    inspectedExpression.status === 200 && inspectedExpression.json?.status === 'resolved'
+      && inspectedExpression.json?.expression === inspectExpressionInput.expression
+      && inspectedExpression.json?.steps?.length > 0 && inspectedExpression.json?.resultType === 'string',
+    JSON.stringify(inspectedExpression.json));
+  const checkerExact = await req('POST', '/api/agent/expressions/check', checkerOnly.token, { expression: '1 + 2' }, statelessInspection);
+  const inspectDenied = await req('POST', expressionInspectRoute, checkerOnly.token, inspectExpressionInput, statelessInspection);
+  ok('expression_check_exact_grant_remains_usable_and_cannot_inspect',
+    checkerOnly.response.status === 200 && !!checkerOnly.token && checkerExact.status === 200 && checkerExact.json?.legal === true
+      && inspectDenied.status === 403 && inspectDenied.json?.authorityCode === 'CAPABILITY_NOT_GRANTED'
+      && inspectDenied.json?.capabilityIdentity === 'expression.inspect@1');
+  const inspectorExact = await req('POST', expressionInspectRoute, inspectorOnly.token, inspectExpressionInput, statelessInspection);
+  const checkDenied = await req('POST', '/api/agent/expressions/check', inspectorOnly.token, { expression: '1 + 2' }, statelessInspection);
+  ok('expression_inspect_exact_grant_cannot_check',
+    inspectorOnly.response.status === 200 && !!inspectorOnly.token && inspectorExact.status === 200
+      && stableStringify(inspectorExact.json) === stableStringify(inspectedExpression.json)
+      && checkDenied.status === 403 && checkDenied.json?.authorityCode === 'CAPABILITY_NOT_GRANTED'
+      && checkDenied.json?.capabilityIdentity === 'expression.check@1');
+  const unknownReceiver = await req('POST', expressionInspectRoute, readKey, { expression: '$f.id' }, statelessInspection);
+  ok('expression_inspect_preserves_unknown_receiver_without_a_result_type',
+    unknownReceiver.status === 200 && unknownReceiver.json?.status === 'unknown-receiver'
+      && unknownReceiver.json?.resultType === undefined);
+  const inspectedWrongWorkspace = await req('POST', expressionInspectRoute, readKey, inspectExpressionInput,
+    { workspaceId: SECOND_WORKSPACE_ID, operationId: null });
+  const inspectedAnonymous = await req('POST', expressionInspectRoute, null, inspectExpressionInput, statelessInspection);
+  ok('expression_inspect_refuses_anonymous_and_mismatched_workspace',
+    inspectedAnonymous.status === 401 && inspectedWrongWorkspace.status === 403
+      && inspectedWrongWorkspace.json?.code === 'WORKSPACE_BINDING_MISMATCH');
+  for (const [name, body] of [
+    ['array_body', []], ['unknown_field', { ...inspectExpressionInput, unexpected: true }],
+    ['whitespace_only', { expression: '  ' }], ['oversize_expression', { expression: '1'.repeat(4097) }],
+    ['invalid_hint_value', { ...inspectExpressionInput, variableTypes: { $f: 3 } }],
+  ]) {
+    const refused = await req('POST', expressionInspectRoute, readKey, body, statelessInspection);
+    ok(`expression_inspect_rejects_${name}`, refused.status === 400 && refused.json?.code === 'CAPABILITY_INPUT_INVALID');
+  }
+  const inspectWorkspaceAfter = await req('GET', '/api/agent/workspace', SESSION_TOKEN);
+  ok('expression_inspect_leaves_workspace_receipts_and_history_unchanged',
+    inspectWorkspaceBefore.status === 200 && inspectWorkspaceAfter.status === 200
+      && workspaceStateFingerprint(inspectWorkspaceAfter) === workspaceStateFingerprint(inspectWorkspaceBefore)
+      && stableStringify(actionReceiptFiles()) === inspectReceiptsBefore
+      && inspectLedgerBefore.equals(readInspectLedger()));
 
   const textLookupInput = { page: 926401, id: 1, language: 44, scope: 'reference' };
   const lookupWithoutOperation = (token, body, options) => req('POST', textLookupRoute, token, body, {

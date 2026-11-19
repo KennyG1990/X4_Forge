@@ -683,6 +683,124 @@ function npcGuardReadSpans(xml: string): PropertyReadSpan[] {
   return spans;
 }
 
+const MAX_TRACE_STEPS = 32;
+const MAX_TRACE_EXPRESSION_LENGTH = 4096;
+
+export interface ScriptPropertyTraceStep {
+  segment: string;
+  start: number;
+  end: number;
+  kind: 'keyword' | 'variable' | 'property';
+  confidence: 'declared' | 'hint' | 'unestablished';
+  owner?: string;
+  property?: string;
+  datatype?: string;
+  inherited?: boolean;
+}
+
+export interface ScriptPropertyTrace {
+  status: 'resolved' | 'unknown-receiver' | 'unknown-property' | 'ambiguous' | 'unsupported' | 'unavailable' | 'limit';
+  steps: ScriptPropertyTraceStep[];
+  resultType?: string;
+}
+
+function explicitTraceHints(root: string, variableTypes: Readonly<Record<string, string>> | undefined): string[] {
+  const name = root.slice(1).toLowerCase();
+  return [...new Set(Object.entries(variableTypes ?? {}).flatMap(([key, value]) =>
+    key.replace(/^\$/, '').toLowerCase() === name ? [value.trim().toLowerCase()] : []))];
+}
+
+/** Resolve authored property paths for one whole static chain, without editor guesses. */
+export function traceScriptPropertyExpression(
+  expression: string,
+  index: ScriptPropertyIndex | null | undefined,
+  opts?: Pick<ScriptPropertyOptions, 'variableTypes'>,
+): ScriptPropertyTrace {
+  const steps: ScriptPropertyTraceStep[] = [];
+  if (!index?.loaded) return { status: 'unavailable', steps };
+  const normalized = expression.trim();
+  if (normalized.length > MAX_TRACE_EXPRESSION_LENGTH) return { status: 'limit', steps };
+  const parsed = parseExpressionChains(normalized)
+    .find(chain => chain.start === 0 && chain.end === normalized.length);
+  if (!parsed || normalized.startsWith('@')
+    || parsed.segments.some(segment => segment.kind !== 'property' || segment.optional)) return { status: 'unsupported', steps };
+  if (parsed.segments.length + 1 > MAX_TRACE_STEPS) return { status: 'limit', steps };
+
+  const { root, segments } = parsed;
+  const variable = root.raw.startsWith('$');
+  const hints = variable ? explicitTraceHints(root.raw, opts?.variableTypes) : [];
+  const hint: string | undefined = hints[0];
+  const keyword = variable ? undefined : index.model.keywords.get(root.name);
+  const knownHint = hints.length === 1 && hint !== undefined && index.model.datatypes.has(hint);
+  const confidence = variable ? 'hint' : 'declared';
+  steps.push({
+    segment: root.raw, start: root.start, end: root.end,
+    kind: variable ? 'variable' : 'keyword',
+    confidence: knownHint || keyword ? confidence : 'unestablished',
+    ...(knownHint ? { datatype: hint } : {}),
+  });
+  if (hints.length > 1) return { status: 'ambiguous', steps };
+  if (!knownHint && !keyword) return { status: 'unknown-receiver', steps };
+  if (keyword?.dynamic) return { status: 'unsupported', steps };
+
+  let context: PathContext | undefined = knownHint
+    ? { kind: 'datatype', name: hint }
+    : { kind: 'keyword', name: root.name };
+  let resultType: string | undefined;
+  for (let position = 0; position < segments.length;) {
+    const segment = segments[position];
+    const unestablished = (status: ScriptPropertyTrace['status']): ScriptPropertyTrace => {
+      steps.push({ segment: segment.raw, start: segment.start, end: segment.end, kind: 'property', confidence: 'unestablished' });
+      return { status, steps };
+    };
+    if (!context) return unestablished('unknown-receiver');
+
+    const candidates = pathPropertiesForContext(index, context).flatMap(property => {
+      const path = pathForProperty(property);
+      if (!path.length || !pathHeadMatches(path[0], segment)) return [];
+      const compatible = path.every((token, offset) => {
+        const actual = segments[position + offset];
+        return !actual || isAuthoredPlaceholder(token) || normalizedPathSegment(token) === actual.name;
+      });
+      return compatible ? [{ property, path }] : [];
+    });
+    const exact = candidates.filter(({ path }) =>
+      path.length <= segments.length - position && !path.some(isAuthoredPlaceholder));
+    if (exact.length > 1) return unestablished('ambiguous');
+    const match = exact[0];
+    if (!match) return unestablished(candidates.length ? 'unsupported' : 'unknown-property');
+    const { property, path } = match;
+    const owner = context.kind === 'keyword' ? index.model.keywords.get(property.owner) : index.model.datatypes.get(property.owner);
+    // The inheritance index gives one winner per property name. Multiple definitions
+    // on that same owner are competing declarations, independent of inheritance.
+    if (owner?.properties.filter(candidate => candidate.name.toLowerCase() === property.name.toLowerCase()).length > 1) {
+      return unestablished('ambiguous');
+    }
+    const datatype = property.type.trim().toLowerCase();
+    if (candidates.some(candidate => candidate !== match
+      && candidate.path.length <= segments.length - position
+      && candidate.path.some(isAuthoredPlaceholder)
+      && (candidate.path.length !== path.length || candidate.property.type.trim().toLowerCase() !== datatype))) {
+      return unestablished('unsupported');
+    }
+
+    resultType = datatype || undefined;
+    for (let offset = 0; offset < path.length; offset++) {
+      const part = segments[position + offset];
+      steps.push({
+        segment: part.raw, start: part.start, end: part.end,
+        kind: 'property', confidence,
+        owner: property.owner, property: property.name, inherited: property.inherited,
+        ...(offset === path.length - 1 && resultType ? { datatype: resultType } : {}),
+      });
+    }
+    context = resultType && index.model.datatypes.has(resultType) ? { kind: 'datatype', name: resultType } : undefined;
+    position += path.length;
+  }
+
+  return resultType ? { status: 'resolved', steps, resultType } : { status: 'unknown-receiver', steps };
+}
+
 /**
  * Lint every `$var.prop…` / `keyword.prop…` chain in MD/AIScript XML text.
  * - untyped variable roots retain all datatype/path candidates and traverse them in order;

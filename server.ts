@@ -176,7 +176,7 @@ import { runXmlSourceSpanSelftest } from "./src/lib/xmlSourceSpans";
 import { runNodeSelectionDocumentSelftest } from "./src/lib/nodeSelectionDocument";
 import {
   buildScriptPropertyIndex, formatScriptPropertyFinding, lintScriptPropertyChains, lintScriptPropertyExpression,
-  SCRIPT_PROPERTIES_FIXTURE,
+  SCRIPT_PROPERTIES_FIXTURE, traceScriptPropertyExpression,
 } from "./src/lib/scriptProperties";
 import { lintMdExpressionRules } from "./src/lib/expressionAst";
 import { publishInstance, unpublishInstance, latestPath, runInstanceDiscoverySelftest } from "./src/lib/instanceDiscovery";
@@ -5643,7 +5643,7 @@ function checkExpressionRequest(req: express.Request, res: express.Response) {
           ? 'No unknown property was detected. The expression does not establish the receiver type for every keyed lookup.'
           : expressionProblems.length
             ? 'The literal format references more arguments than the list supplies.'
-            : 'Every property segment resolves against scriptproperties.xml. This does not assert the value is non-null at runtime, only that the properties exist.',
+            : 'The configured checks reported no unknown property. Receiver types may still be unestablished.',
     });
   } catch (error: any) {
     return res.status(500).json({ ok: false, error: error?.message || 'check-expression failed' });
@@ -5728,29 +5728,42 @@ app.post("/api/agent/text/lookup", (req, res) => {
 });
 
 
-app.post("/api/agent/expressions/check", (req, res) => {
-  const body = req.body;
-  res.set('Cache-Control', 'no-store');
+function expressionInputError(input: unknown): string | undefined {
+  const body = input as Record<string, unknown> | null;
   if (!body || typeof body !== 'object' || Array.isArray(body)
     || Object.keys(body).some(key => key !== 'expression' && key !== 'variableTypes')
     || typeof body.expression !== 'string' || !body.expression.trim()
     || body.expression.length > EXPRESSION_CHECK_MAX_LENGTH) {
-    return res.status(400).json({
-      code: 'CAPABILITY_INPUT_INVALID',
-      error: `Send one non-empty expression of at most ${EXPRESSION_CHECK_MAX_LENGTH} characters and optional variableTypes.`,
-    });
+    return `Send one non-empty expression of at most ${EXPRESSION_CHECK_MAX_LENGTH} characters and optional variableTypes.`;
   }
   const hints = body.variableTypes;
   if (hints !== undefined && (!hints || typeof hints !== 'object' || Array.isArray(hints)
     || Object.keys(hints).length > EXPRESSION_CHECK_MAX_HINTS
     || Object.entries(hints).some(([key, value]) => !key.trim() || key.length > EXPRESSION_CHECK_HINT_MAX_LENGTH
       || typeof value !== 'string' || !value.trim() || value.length > EXPRESSION_CHECK_HINT_MAX_LENGTH))) {
-    return res.status(400).json({
-      code: 'CAPABILITY_INPUT_INVALID',
-      error: `variableTypes must map up to ${EXPRESSION_CHECK_MAX_HINTS} names to types, each at most ${EXPRESSION_CHECK_HINT_MAX_LENGTH} characters.`,
-    });
+    return `variableTypes must map up to ${EXPRESSION_CHECK_MAX_HINTS} names to types, each at most ${EXPRESSION_CHECK_HINT_MAX_LENGTH} characters.`;
   }
+  return undefined;
+}
+
+app.post("/api/agent/expressions/check", (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const error = expressionInputError(req.body);
+  if (error) return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error });
   return checkExpressionRequest(req, res);
+});
+
+app.post("/api/agent/expressions/inspect", (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const error = expressionInputError(req.body);
+  if (error) return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error });
+  const expression = req.body.expression.trim();
+  if (lintMdExpressionRules(expression).some(finding => finding.severity === 'error')) {
+    return res.json({ expression, status: 'invalid-expression', steps: [] });
+  }
+  const index = getScriptPropertyIndex();
+  if (!index) return res.json({ expression, status: 'unavailable', steps: [] });
+  return res.json({ expression, ...traceScriptPropertyExpression(expression, index, { variableTypes: req.body.variableTypes }) });
 });
 
 app.get("/api/agent/status", async (req, res) => {

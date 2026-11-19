@@ -35,6 +35,7 @@ test('Agent API Bridge renders the live canonical capability contract', async ({
   expect(new Set(identities).size).toBe(FORGE_CAPABILITIES.length);
   expect(identities).toEqual(FORGE_CAPABILITIES.map(({ id, version }) => `${id}@${version}`));
   expect(contract.capabilities).toContainEqual(expect.objectContaining({ id: 'text.lookup', version: 1 }));
+  expect(contract.capabilities).toContainEqual(expect.objectContaining({ id: 'expression.inspect', version: 1 }));
   await expect(banner).toContainText(contract.contractHash.slice(0, 12));
   await expect(banner).toContainText('LIVE CONTRACT');
   await page.screenshot({ path: 'test-results/capability-contract-live.png', fullPage: true });
@@ -96,8 +97,10 @@ test('Agent Keys guides an exact contract-only key and proves its effective subs
   await expect(customToggle.locator('xpath=..')).toContainText('Change it later by revoking and recreating the key');
 
   await expect(page.getByTestId('agent-key-capability-text.lookup@1')).toBeChecked();
+  await expect(page.getByTestId('agent-key-capability-expression.inspect@1')).toBeChecked();
   for (const identity of [
     'expression.check@1',
+    'expression.inspect@1',
     'text.lookup@1',
     'extensions.conflicts.analyze@1',
     'history.list@1',
@@ -161,6 +164,8 @@ test('Agent Keys guides an exact contract-only key and proves its effective subs
       { maxDepth: 0, maxNodes: 1, maxEdges: 1, includeSource: false }],
     ['POST', '/api/agent/text/lookup', 'text.lookup@1',
       { page: 90001, id: 7, language: 49, scope: 'reference' }],
+    ['POST', '/api/agent/expressions/inspect', 'expression.inspect@1',
+      { expression: 'player.ship.sector' }],
   ] as const) {
     const denied = await withClosingApiRequest(page.request).fetch(path, {
       method,

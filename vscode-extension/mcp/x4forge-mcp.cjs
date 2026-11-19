@@ -292,6 +292,25 @@ const TOOLS = [
     },
   },
   {
+    name: "inspect_expression",
+    capabilityId: "expression.inspect",
+    capabilityVersion: 1,
+    description: "Read ordered ScriptProperties type evidence for one unsaved static MD or AIScript property chain. An explicit variable type hint remains an assumption throughout the trace. Unsupported or unresolved chains report a status.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        expression: { type: "string", maxLength: 4096 },
+        variableTypes: { type: "object", additionalProperties: { type: "string", maxLength: 128 } },
+      },
+      required: ["expression"],
+      additionalProperties: false,
+    },
+    handler: async args => requireExpressionInspection(
+      await forge("POST", "/api/agent/expressions/inspect", args),
+      args.expression.trim(),
+    ),
+  },
+  {
     name: "get_xml_references",
     capabilityId: "project.xml.references",
     capabilityVersion: 1,
@@ -512,6 +531,7 @@ const TOOLS = [
 const STATIC_TOOL_NAMES = new Set(TOOLS.map((tool) => tool.name));
 STATIC_TOOL_NAMES.delete("runtime_debugger");
 STATIC_TOOL_NAMES.delete("check_expression");
+STATIC_TOOL_NAMES.delete("inspect_expression");
 STATIC_TOOL_NAMES.delete("lookup_text");
 STATIC_TOOL_NAMES.delete("get_xml_references");
 for (const name of PERFORMANCE_LIVE_TOOLS) STATIC_TOOL_NAMES.delete(name);
@@ -600,6 +620,39 @@ function isXmlReferencePath(value) {
   const normalized = value.replace(/\\/g, "/").replace(/^\.\//, "");
   return !normalized.startsWith("/") && !/^[A-Za-z][A-Za-z0-9+.-]*:/.test(normalized) &&
     normalized.split("/").every(part => part && part !== "." && part !== "..");
+}
+
+function requireExpressionInspection(value, expression) {
+  const result = requireResponse(value, "expression inspection", { status: "string", expression: "string", steps: "array" });
+  const statuses = [
+    "resolved", "unknown-receiver", "unknown-property", "ambiguous", "unsupported", "invalid-expression", "unavailable", "limit",
+  ];
+  const invalid = () => new Error("Forge returned malformed expression type evidence");
+  if (result.expression !== expression || result.steps.length > 32 || !statuses.includes(result.status)) throw invalid();
+  const resolved = result.status === "resolved";
+  if (!hasExactKeys(result, resolved ? ["expression", "status", "steps", "resultType"] : ["expression", "status", "steps"])
+    || resolved && (!result.steps.length || !isNonEmptyString(result.resultType))) throw invalid();
+
+  let previousEnd = 0;
+  for (const item of result.steps) {
+    const step = requireResponse(item, "expression inspection step", {
+      segment: "string", kind: "string", confidence: "string", start: "number", end: "number",
+    });
+    if (Object.keys(step).some(key => !["segment", "kind", "confidence", "start", "end", "owner", "property", "datatype", "inherited"].includes(key))
+      || !Number.isSafeInteger(step.start) || !Number.isSafeInteger(step.end)
+      || step.start < previousEnd || step.end <= step.start || step.end > expression.length
+      || step.segment !== expression.slice(step.start, step.end)
+      || !["keyword", "variable", "property"].includes(step.kind)
+      || !["declared", "hint", "unestablished"].includes(step.confidence)
+      || ["owner", "property", "datatype"].some(key => Object.hasOwn(step, key) && !isNonEmptyString(step[key]))
+      || Object.hasOwn(step, "inherited") && typeof step.inherited !== "boolean") throw invalid();
+    if (resolved && (step.confidence === "unestablished" || (previousEnd === 0
+      ? step.start !== 0
+      : !/^\s*\.\s*$/.test(expression.slice(previousEnd, step.start))))) throw invalid();
+    previousEnd = step.end;
+  }
+  if (resolved && (previousEnd !== expression.length || result.steps.at(-1).datatype !== result.resultType)) throw invalid();
+  return result;
 }
 
 function xmlReferenceLimit(value, fallback, minimum, maximum, label) {
@@ -1690,7 +1743,7 @@ async function availableTools(nativeRequest) {
   if (stickyLiveToolNames !== null) {
     return {
       discovery,
-      toolNames: [...stickyLiveToolNames].filter(name => !["check_expression", "get_xml_references", "lookup_text"].includes(name) && !PERFORMANCE_LIVE_TOOLS.has(name) && !NATIVE_PERFORMANCE_LIVE_TOOLS.has(name)),
+      toolNames: [...stickyLiveToolNames].filter(name => !["check_expression", "inspect_expression", "get_xml_references", "lookup_text"].includes(name) && !PERFORMANCE_LIVE_TOOLS.has(name) && !NATIVE_PERFORMANCE_LIVE_TOOLS.has(name)),
       effectiveContract: lastValidContract,
       effectiveAuthority: lastValidAuthority,
       contractState: `${discovery.state}-sticky-live`,

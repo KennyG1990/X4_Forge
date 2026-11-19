@@ -32,17 +32,18 @@ const EXPECTED_TOOLS = [
   'runtime_debugger',
   'lookup_text',
   'check_expression',
+  'inspect_expression',
   'get_xml_references',
   ...PERFORMANCE_TOOLS,
   'check_conflicts',
   'check_patch_readiness',
   'explain_element',
 ];
-const LEGACY_TOOLS = EXPECTED_TOOLS.filter(tool => !['runtime_debugger', 'lookup_text', 'check_expression', 'get_xml_references', ...PERFORMANCE_TOOLS].includes(tool));
-const READ_TOOLS = ['list_schema_domains', 'get_workspace', 'readiness', 'runtime_debugger', 'lookup_text', 'check_expression', 'get_xml_references', ...PERFORMANCE_TOOLS, 'check_conflicts', 'explain_element'];
+const LEGACY_TOOLS = EXPECTED_TOOLS.filter(tool => !['runtime_debugger', 'lookup_text', 'check_expression', 'inspect_expression', 'get_xml_references', ...PERFORMANCE_TOOLS].includes(tool));
+const READ_TOOLS = ['list_schema_domains', 'get_workspace', 'readiness', 'runtime_debugger', 'lookup_text', 'check_expression', 'inspect_expression', 'get_xml_references', ...PERFORMANCE_TOOLS, 'check_conflicts', 'explain_element'];
 const WRITE_TOOLS = [
   'validate_mod', 'list_schema_domains', 'get_workspace', 'compile_workspace', 'author_check',
-  'stage_and_validate', 'readiness', 'runtime_debugger', 'lookup_text', 'check_expression', 'get_xml_references', ...PERFORMANCE_TOOLS, 'check_conflicts', 'explain_element',
+  'stage_and_validate', 'readiness', 'runtime_debugger', 'lookup_text', 'check_expression', 'inspect_expression', 'get_xml_references', ...PERFORMANCE_TOOLS, 'check_conflicts', 'explain_element',
 ];
 const CUSTOM_TOOLS = ['validate_mod', 'list_schema_domains', 'author_check', 'stage_and_validate', 'explain_element'];
 const MCP_KEY = `x4fk_${'a'.repeat(64)}`;
@@ -56,6 +57,28 @@ const TEXT_LOOKUP: LiteralTextLookupRequest = { page: 90001, id: 7, language: 49
 const TEXT_FOUND: LiteralTextLookupResult = {
   ...TEXT_LOOKUP, status: 'found', selectedLanguage: 49, authored: '  Fixture & text  ', text: '  Fixture & text  ',
   source: { file: 't/0001-L049.xml', line: 3, column: 5 },
+};
+
+const EXPRESSION_INSPECTION_INPUT = { expression: ' \tplayer.ship.sector\r\n' };
+const EXPRESSION_INSPECTION_RESOLVED = {
+  expression: 'player.ship.sector',
+  status: 'resolved',
+  steps: [
+    { segment: 'player', start: 0, end: 6, kind: 'keyword', confidence: 'declared' },
+    { segment: 'ship', start: 7, end: 11, kind: 'property', confidence: 'declared', owner: 'player', property: 'ship', datatype: 'ship', inherited: false },
+    { segment: 'sector', start: 12, end: 18, kind: 'property', confidence: 'declared', owner: 'object', property: 'sector', datatype: 'sector', inherited: true },
+  ],
+  resultType: 'sector',
+};
+
+const EXPRESSION_INSPECTION_BAD_RESULTS = {
+  'inspect-truncated': { ...EXPRESSION_INSPECTION_RESOLVED, steps: EXPRESSION_INSPECTION_RESOLVED.steps.slice(0, 1) },
+  'inspect-contradictory': { ...EXPRESSION_INSPECTION_RESOLVED, resultType: 'ship' },
+  'inspect-discontinuous': { ...EXPRESSION_INSPECTION_RESOLVED, steps: EXPRESSION_INSPECTION_RESOLVED.steps.filter((_, index) => index !== 1) },
+  'inspect-unestablished': {
+    ...EXPRESSION_INSPECTION_RESOLVED,
+    steps: EXPRESSION_INSPECTION_RESOLVED.steps.map((step, index) => index === 0 ? { ...step, confidence: 'unestablished' } : step),
+  },
 };
 
 function sha256(value: string): string {
@@ -283,9 +306,10 @@ type Mode = 'live' | 'read' | 'write' | 'legacy' | 'malformed' | 'current-missin
   'wrong-hash' | 'unauthorized' | 'forbidden' | 'incomplete' | 'duplicate-id' | 'binding-collision' |
   'fixed-body-type' | 'mcp-alias-collision' | 'extra-field' | 'api-path' | 'api-dot-path' | 'open-input' | 'hung' | 'outage' |
   'narrowed' | 'alias-narrowed' | 'v2' | 'wrong-workspace' | 'authority-wrong-hash' | 'effective-malformed' |
-  'effective-missing' | 'effective-expanded';
+  'effective-missing' | 'effective-expanded' | 'expression-check-only';
 let mode: Mode = 'live';
 let endpointMode: 'normal' | 'invalid-json' | 'empty-json' | 'missing-fields' | 'missing-workspace-snapshot' | 'compile-invalid' | 'compile-contradictory' | 'compile-missing-ok' |
+  'inspect-unavailable' | 'inspect-invalid-span' | keyof typeof EXPRESSION_INSPECTION_BAD_RESULTS |
   'xml-wrong-schema' | 'xml-wrong-workspace' | 'xml-invalid-status' | 'xml-invalid-location' | 'xml-output-budget' |
   'performance-missing-metric' | 'performance-foreign-producer' | 'performance-invalid-coverage' | 'performance-private-module' |
   'performance-profile-disabled' | 'performance-profile-busy' | 'performance-profile-cooldown' | 'performance-http-conflict' | 'performance-http-cooldown' |
@@ -369,6 +393,11 @@ type Constraint = { capabilityIdentities: string[]; allowedEffects: string[] };
 const customConstraint: Constraint = {
   capabilityIdentities: ['project.validate@1'],
   allowedEffects: ['read', 'analyze', 'audit-write', 'audit-retention-delete'],
+};
+
+const checkerConstraint: Constraint = {
+  capabilityIdentities: ['expression.check@1'],
+  allowedEffects: ['read', 'analyze'],
 };
 
 function effectiveAuthority(
@@ -610,7 +639,7 @@ const server = http.createServer(function serveMcpFixture(request, response): vo
     response.writeHead(200, { 'Content-Type': 'application/json' });
     const effectiveModes: Mode[] = [
       'live', 'read', 'write', 'narrowed', 'alias-narrowed', 'v2', 'unauthorized', 'forbidden',
-      'wrong-workspace', 'authority-wrong-hash', 'effective-malformed', 'effective-missing', 'effective-expanded',
+      'wrong-workspace', 'authority-wrong-hash', 'effective-malformed', 'effective-missing', 'effective-expanded', 'expression-check-only',
     ];
     const body = effectiveModes.includes(mode)
       ? { api_version: '2026-07-30.agent.v4', capability_contract: contract }
@@ -672,8 +701,8 @@ const server = http.createServer(function serveMcpFixture(request, response): vo
       response.end(JSON.stringify({ error: 'key scope denied' }));
       return;
     }
-    let authority = mode === 'read'
-      ? effectiveAuthority('read')
+    let authority = mode === 'read' || mode === 'expression-check-only'
+      ? effectiveAuthority('read', mode === 'expression-check-only' ? checkerConstraint : null)
       : mode === 'write'
         ? effectiveAuthority('write')
         : mode === 'narrowed'
@@ -739,6 +768,29 @@ const server = http.createServer(function serveMcpFixture(request, response): vo
         ok: false, legal: false, expression: body.expression,
         problems: Array.from({ length: 51 }, () => ({ code: 'expression-format-specifier', severity: 'error' })),
       }));
+    });
+    return;
+  }
+  if (request.method === 'POST' && request.url === '/api/agent/expressions/inspect') {
+    let raw = '';
+    request.setEncoding('utf8');
+    request.on('data', chunk => { raw += chunk; });
+    request.on('end', () => {
+      const body = JSON.parse(raw);
+      routeCalls.push({ method: request.method || '', path: request.url || '', body });
+      if (request.headers.authorization !== `Bearer ${MCP_KEY}` || request.headers['x-workspace-id'] !== MCP_WORKSPACE_ID) {
+        response.writeHead(403);
+        response.end();
+        return;
+      }
+      const result = endpointMode === 'inspect-unavailable'
+        ? { expression: EXPRESSION_INSPECTION_RESOLVED.expression, status: 'unavailable', steps: [] }
+        : endpointMode === 'inspect-invalid-span'
+          ? { ...EXPRESSION_INSPECTION_RESOLVED, steps: [{ ...EXPRESSION_INSPECTION_RESOLVED.steps[0], end: 7 }] }
+          : EXPRESSION_INSPECTION_BAD_RESULTS[endpointMode as keyof typeof EXPRESSION_INSPECTION_BAD_RESULTS]
+            ?? EXPRESSION_INSPECTION_RESOLVED;
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify(result));
     });
     return;
   }
@@ -1043,6 +1095,44 @@ try {
     const missingStatus = await client.request('tools/call', { name: 'lookup_text', arguments: TEXT_LOOKUP });
     assert.equal(missingStatus.result?.isError, true, 'lookup must reject a successful HTTP response without a lookup status');
     endpointMode = 'normal';
+
+    const inspection = tools.find(tool => tool.name === 'inspect_expression');
+    assert.equal(inspection?._meta?.['x4forge/capabilityId'], 'expression.inspect');
+    assert.equal(inspection?._meta?.['x4forge/capabilityVersion'], 1);
+    routeCalls.length = 0;
+    const inspected = await client.request('tools/call', { name: 'inspect_expression', arguments: EXPRESSION_INSPECTION_INPUT });
+    assert.equal(inspected.error, undefined, inspected.error?.message);
+    assert.equal(inspected.result?.isError, undefined);
+    assert.deepEqual(JSON.parse(String(inspected.result?.content?.[0]?.text || '{}')), EXPRESSION_INSPECTION_RESOLVED);
+    assert.deepEqual(routeCalls, [{ method: 'POST', path: '/api/agent/expressions/inspect', body: EXPRESSION_INSPECTION_INPUT }]);
+
+    endpointMode = 'inspect-unavailable';
+    const unavailable = await client.request('tools/call', { name: 'inspect_expression', arguments: EXPRESSION_INSPECTION_INPUT });
+    assert.equal(unavailable.result?.isError, undefined, 'missing script properties is a completed evidence read');
+    assert.deepEqual(JSON.parse(String(unavailable.result?.content?.[0]?.text || '{}')), {
+      expression: EXPRESSION_INSPECTION_RESOLVED.expression, status: 'unavailable', steps: [],
+    });
+    endpointMode = 'inspect-invalid-span';
+    const invalidSpan = await client.request('tools/call', { name: 'inspect_expression', arguments: EXPRESSION_INSPECTION_INPUT });
+    assert.equal(invalidSpan.result?.isError, true, 'step spans must point to the exact normalized expression text');
+    for (const malformed of Object.keys(EXPRESSION_INSPECTION_BAD_RESULTS) as Array<keyof typeof EXPRESSION_INSPECTION_BAD_RESULTS>) {
+      endpointMode = malformed;
+      const inspection = await client.request('tools/call', { name: 'inspect_expression', arguments: EXPRESSION_INSPECTION_INPUT });
+      assert.equal(inspection.result?.isError, true, 'inspect output guard must reject ' + malformed);
+    }
+    endpointMode = 'normal';
+  });
+
+  mode = 'expression-check-only';
+  await withMcp(baseUrl, async client => {
+    assert.deepEqual((await toolsFor(client)).map(tool => tool.name), ['list_schema_domains', 'check_expression', 'explain_element']);
+    routeCalls.length = 0;
+    const inspected = await client.request('tools/call', { name: 'inspect_expression', arguments: EXPRESSION_INSPECTION_INPUT });
+    assert.equal(inspected.error?.code, -32602, 'an exact expression.check@1 grant must not authorize inspection');
+    const checked = await client.request('tools/call', { name: 'check_expression', arguments: { expression: '$x' } });
+    assert.equal(checked.error, undefined, checked.error?.message);
+    assert.equal(checked.result?.isError, undefined, 'the existing exact checker grant must remain usable');
+    assert.deepEqual(routeCalls, [{ method: 'POST', path: '/api/agent/expressions/check', body: { expression: '$x' } }]);
   });
 
   mode = 'write';
@@ -1249,6 +1339,10 @@ try {
       { name: 'check_expression', arguments: { expression: 'x'.repeat(4097) } },
       { name: 'check_expression', arguments: { expression: '$x', variableTypes: { $x: 42 } } },
       { name: 'check_expression', arguments: { expression: '$x', recordBaseline: true } },
+      { name: 'inspect_expression', arguments: {} },
+      { name: 'inspect_expression', arguments: { expression: 'x'.repeat(4097) } },
+      { name: 'inspect_expression', arguments: { expression: '$x', variableTypes: { $x: 42 } } },
+      { name: 'inspect_expression', arguments: { expression: '$x', recordBaseline: true } },
       { name: 'lookup_text', arguments: { ...TEXT_LOOKUP, language: 0 } },
       { name: 'lookup_text', arguments: { ...TEXT_LOOKUP, id: '7' } },
       { name: 'lookup_text', arguments: { ...TEXT_LOOKUP, page: Number.MAX_SAFE_INTEGER + 1 } },
@@ -1534,7 +1628,9 @@ try {
     routeCalls.length = 0;
     const legacyLookup = await client.request('tools/call', { name: 'lookup_text', arguments: TEXT_LOOKUP });
     assert.equal(legacyLookup.error?.code, -32602, 'literal text lookup requires current discovery');
-    assert.deepEqual(routeCalls, [], 'legacy discovery must keep literal text lookup off HTTP');
+    const legacyInspect = await client.request('tools/call', { name: 'inspect_expression', arguments: EXPRESSION_INSPECTION_INPUT });
+    assert.equal(legacyInspect.error?.code, -32602, 'expression inspection requires current discovery');
+    assert.deepEqual(routeCalls, [], 'legacy discovery must keep literal text lookup and expression inspection off HTTP');
     const legacyXmlReferences = await client.request('tools/call', {
       name: 'get_xml_references', arguments: { focus: { origin: 'project', path: 'assets/fixture_0.xml' } },
     });
@@ -1704,12 +1800,14 @@ try {
   await withMcp(baseUrl, async client => {
     assert.deepEqual((await toolsFor(client)).map(tool => tool.name), EXPECTED_TOOLS);
     mode = 'outage';
-    assert.deepEqual((await toolsFor(client)).map(tool => tool.name), EXPECTED_TOOLS.filter(name => !['lookup_text', 'check_expression', 'get_xml_references', ...PERFORMANCE_TOOLS].includes(name)),
+    assert.deepEqual((await toolsFor(client)).map(tool => tool.name), EXPECTED_TOOLS.filter(name => !['lookup_text', 'check_expression', 'inspect_expression', 'get_xml_references', ...PERFORMANCE_TOOLS].includes(name)),
       'literal text, expression, XML reference and performance tools require current discovery even when other tools retain prior authority');
     routeCalls.length = 0;
     const staleLookup = await client.request('tools/call', { name: 'lookup_text', arguments: TEXT_LOOKUP });
     assert.equal(staleLookup.error?.code, -32602, 'stale discovery cannot authorize a direct literal text lookup');
-    assert.deepEqual(routeCalls, [], 'stale literal text lookup reached HTTP');
+    const staleInspect = await client.request('tools/call', { name: 'inspect_expression', arguments: EXPRESSION_INSPECTION_INPUT });
+    assert.equal(staleInspect.error?.code, -32602, 'stale discovery cannot authorize a direct expression inspection');
+    assert.deepEqual(routeCalls, [], 'stale literal text lookup or expression inspection reached HTTP');
     const staleExpression = await client.request('tools/call', { name: 'check_expression', arguments: { expression: '$x' } });
     assert.equal(staleExpression.error?.code, -32602, 'stale discovery cannot authorize a direct expression check');
     const staleXmlReferences = await client.request('tools/call', {

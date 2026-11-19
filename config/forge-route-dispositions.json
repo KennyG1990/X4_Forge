@@ -2950,6 +2950,18 @@
       "resourceClass": "stateless-analysis",
       "workspaceMode": "optional"
     },
+    "POST /api/agent/expressions/inspect": {
+      "disposition": "canonical-capability",
+      "owner": "expression.inspect",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "stateless-analysis",
+      "workspaceMode": "optional"
+    },
     "POST /api/agent/external-api/register": {
       "disposition": "session-only",
       "owner": "agent-api",
@@ -3816,6 +3828,7 @@
   },
   "capabilitySignatures": {
     "expression.check@1": "5bedec028862120254402ce60402204db079705db1d6ce27f16834ae77ddea8d",
+    "expression.inspect@1": "d9422df0de7b99ace351d90aad971baea0fe35d8fc6798c15a1a304dbd275f29",
     "extensions.conflicts.analyze@1": "5e8005a8422ebbe1039a848332caf8f40076ea7cce693b21df8039aec856697e",
     "history.list@1": "f55787b4089116ac1d375e1da9677fc978b0715aa6f841a70bfcd13870ee962e",
     "history.revert@1": "2399e2dd2ec3263e0f6f5364ab3be8edf1fe8d065cea40bc736d72ee8c4bcd98",
@@ -3838,8 +3851,8 @@
     "workspace.read@2": "962774de4a25e8725a0d90d4982298cc72f100312075b1f6f4ff9de1482752d7"
   },
   "mcpModuleSignature": {
-    "version": 19,
-    "hash": "bc34ae2917f855feec10a13998aa6ca1ea5ea52321a59c4a82cfaf45aac9c1d5"
+    "version": 20,
+    "hash": "ebf734a068bdb63f5a97dcfcd9b5ade8f4c11df4fc10e2bafca7c236cfc8cb02"
   },
   "mcpSignatures": {
     "validate_mod": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",
@@ -3852,6 +3865,7 @@
     "runtime_debugger": "4dace68d60d8096f0593ce1e933aa9a535da5621584656b2f0248caf2b28cc3c",
     "lookup_text": "e9573aee242af33fee34c6df067ff635b535a44c037223a1baf246358e116fa8",
     "check_expression": "930db8d7b3306396462d8339e452bccdb15fc97e8e55858a4c02749581cd1514",
+    "inspect_expression": "7fc6d02fe5f26db8aeadf23cc969bdc85780a1c4536ad5c09156f65a7f146723",
     "get_xml_references": "381374ceb06a15834fd6c09d76b0278a7415743080b8a0e0d3b15d8627a10ce1",
     "get_forge_performance": "327e56f29eff19939be7c6214090aa49df02a86e6fb56e50242190efb0384681",
     "start_forge_performance_capture": "9c4647c5440d38c6aa3e466229b9ad654b6c2b6102841b3bbca5dd14c2fa9296",
@@ -3874,6 +3888,7 @@
     "runtime_debugger": "runtime.debug.read@1",
     "lookup_text": "text.lookup@1",
     "check_expression": "expression.check@1",
+    "inspect_expression": "expression.inspect@1",
     "get_xml_references": "project.xml.references@1",
     "get_forge_performance": "performance.read@1",
     "start_forge_performance_capture": "performance.collect@1",

@@ -323,6 +323,24 @@ function nativePerformanceReportSchema(operation: 'read' | 'start' | 'stop'): Fo
   };
 }
 
+const EXPRESSION_INSPECTION_OTHER_STATUSES = [
+  'unknown-receiver', 'unknown-property', 'ambiguous', 'unsupported', 'invalid-expression', 'unavailable', 'limit',
+] as const;
+const EXPRESSION_INSPECTION_OUTPUT_FIELDS = {
+  expression: { type: 'string', maxLength: EXPRESSION_CHECK_MAX_LENGTH },
+  steps: { type: 'array', items: objectOutput({
+    segment: { type: 'string' },
+    start: { type: 'integer', minimum: 0, maximum: EXPRESSION_CHECK_MAX_LENGTH },
+    end: { type: 'integer', minimum: 1, maximum: EXPRESSION_CHECK_MAX_LENGTH },
+    kind: { type: 'string', enum: ['keyword', 'variable', 'property'] },
+    confidence: { type: 'string', enum: ['declared', 'hint', 'unestablished'] },
+    owner: { type: 'string' },
+    property: { type: 'string' },
+    datatype: { type: 'string' },
+    inherited: { type: 'boolean' },
+  }, ['segment', 'start', 'end', 'kind', 'confidence'], false) },
+} satisfies Record<string, ForgeJsonSchema>;
+
 export const FORGE_CAPABILITIES = [
   {
     id: 'expression.check',
@@ -360,6 +378,57 @@ export const FORGE_CAPABILITIES = [
       agentApi: true,
       builtInHarness: [],
       externalAgents: [connected('agent-api', 'server.ts::app.post("/api/agent/expressions/check"')],
+    },
+  },
+  {
+    id: 'expression.inspect',
+    version: 1,
+    title: 'Inspect X4 expression type evidence',
+    description: 'Read ordered type evidence for one unsaved static MD or AIScript property chain using the configured script property index and explicit variable hints.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        expression: { type: 'string', maxLength: EXPRESSION_CHECK_MAX_LENGTH },
+        variableTypes: { type: 'object', additionalProperties: { type: 'string', maxLength: EXPRESSION_CHECK_HINT_MAX_LENGTH } },
+      },
+      required: ['expression'],
+      additionalProperties: false,
+    },
+    outputSchema: {
+      ...objectOutput({
+        ...EXPRESSION_INSPECTION_OUTPUT_FIELDS,
+        status: { type: 'string', enum: ['resolved', ...EXPRESSION_INSPECTION_OTHER_STATUSES] },
+        resultType: { type: 'string' },
+      }, ['expression', 'status', 'steps'], false),
+      anyOf: [
+        objectOutput({
+          ...EXPRESSION_INSPECTION_OUTPUT_FIELDS,
+          status: { type: 'string', enum: ['resolved'] },
+          resultType: { type: 'string' },
+        }, ['expression', 'status', 'steps', 'resultType'], false),
+        objectOutput({
+          ...EXPRESSION_INSPECTION_OUTPUT_FIELDS,
+          status: { type: 'string', enum: EXPRESSION_INSPECTION_OTHER_STATUSES },
+        }, ['expression', 'status', 'steps'], false),
+      ],
+    },
+    context: { workspace: 'optional', profile: 'none' },
+    access: { public: false, studioSession: true, agentScopes: ['read', 'write', 'deploy'] },
+    effects: ['read', 'analyze'],
+    confirmation: 'none',
+    apiBindings: [
+      { method: 'POST', path: '/api/agent/expressions/inspect', inputLocation: 'body', role: 'primary' },
+    ],
+    surfaces: {
+      ui: [
+        disconnected('web-studio-expression-inspect', 'The web Studio has no dedicated expression type inspection control.'),
+        disconnected('vscode-extension-expression-inspect', 'The extension has no dedicated expression type inspection control.'),
+      ],
+      cli: [],
+      mcp: [connected('inspect_expression', 'vscode-extension/mcp/x4forge-mcp.cjs::name: "inspect_expression"')],
+      agentApi: true,
+      builtInHarness: [],
+      externalAgents: [connected('agent-api', 'server.ts::app.post("/api/agent/expressions/inspect"')],
     },
   },
   {
