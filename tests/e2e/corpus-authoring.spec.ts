@@ -133,7 +133,8 @@ test('corpus authoring blocks collisions, completes XPath, previews, applies, an
           sourceSignature: 'e2e-source-2', sources: [{ source: 'base', mode: 'base' }], findings: [],
         },
       ],
-      conflicts: [], findings: [], workspaceHash: envelope.workspaceHash, snapshotHash: envelope.snapshotHash,
+      conflicts: [], findings: [], workspaceId: envelope.workspaceId,
+      workspaceHash: envelope.workspaceHash, snapshotHash: envelope.snapshotHash,
     };
   };
 
@@ -267,4 +268,154 @@ test('corpus authoring blocks collisions, completes XPath, previews, applies, an
   await expect(page.locator('button[title="Undo last action (Ctrl+Z)"]')).toBeEnabled();
   await page.locator('button[title="Undo last action (Ctrl+Z)"]').click();
   await expect.poll(async () => (await readServerWorkspace()).xmlPatches?.length || 0, { timeout: 20_000 }).toBe(0);
+});
+
+test('guided hull editing binds one canonical attribute, applies its preview, and undoes it', async ({ page }) => {
+  const workspace = { ...buildTemplateWorkspace('welcome'), xmlPatches: [] };
+  await seedServerWorkspace(workspace);
+  await page.addInitScript(() => {
+    localStorage.removeItem('x4_mod_studio_workspace');
+    localStorage.removeItem('x4_mod_studio_version');
+  });
+
+  const [targetFile, ambiguousFile] = targetFiles;
+  const selector = "/macros/macro[@name='ship_test_a_macro']/properties/hull/@max";
+  const signature = 'guided-hull-source';
+  const baseXml = [
+    '<macros><macro name="ship_test_a_macro" class="ship_xl"><properties>',
+    '  <hull max="1190000"/>',
+    '</properties></macro></macros>',
+  ].join('\n');
+  const sources = [{ source: 'base', path: targetFile, mode: 'base' }];
+  await page.route('**/api/reference/effective-file**', async route => {
+    const path = new URL(route.request().url()).searchParams.get('path');
+    if (path !== targetFile && path !== ambiguousFile) {
+      return route.fulfill({ status: 404, json: { error: 'No effective file in this fixture.' } });
+    }
+    return route.fulfill({ json: {
+      available: true, complete: true, relativePath: path, signature, sources,
+      content: path === ambiguousFile ? baseXml.replace('</properties>', '<hull max="2"/></properties>') : baseXml,
+    } });
+  });
+
+  const patch = {
+    id: 'guided-hull-patch', action: 'replace' as const, sel: selector, targetFile, content: '1200000',
+    note: 'Guided hull fixture', includeInBuild: true, sourceSignature: signature,
+  };
+  const planFor = (match: boolean, envelope: { workspaceId: string; workspaceHash: string; snapshotHash: string }) => {
+    const row = {
+      targetFile, selector, oldValue: '1190000', newValue: '1200000',
+      sourceSignature: match ? signature : 'obsolete-source', sources, simulationOk: true, findings: [], patch,
+    };
+    return {
+      ok: true, planHash: 'guided-hull-plan', candidateCount: 1, matchedFiles: 1, skippedFiles: 0,
+      droppedCount: 0, rows: [row], conflicts: [], findings: [],
+      workspaceId: envelope.workspaceId, workspaceHash: envelope.workspaceHash, snapshotHash: envelope.snapshotHash,
+    };
+  };
+
+  let previewCount = 0;
+  let holdNextApply = false;
+  let applySavedBeforeReply = false;
+  let releaseApply!: () => void;
+  const heldApply = new Promise<void>(resolve => { releaseApply = resolve; });
+  await page.route('**/api/agent/bulk-transform/preview', async route => {
+    const { rule } = route.request().postDataJSON();
+    expect(rule).toMatchObject({
+      pathPrefix: targetFile, selector, maxFiles: 1, operation: 'set', operand: 1200000,
+      operations: [{ id: 'maximum-hull', selector, operation: 'set', operand: 1200000 }],
+    });
+    const plan = planFor(++previewCount > 1, await readServerWorkspaceEnvelope());
+    return route.fulfill({ json: previewCount === 2 ? { ...plan, workspaceId: 'different-workspace' } : plan });
+  });
+  await page.route('**/api/agent/bulk-transform/apply', async route => {
+    const before = await readServerWorkspaceEnvelope();
+    expect(route.request().headers()['x-forge-operation-id']).toBeTruthy();
+    expect(route.request().postDataJSON()).toMatchObject({
+      expectedPlanHash: 'guided-hull-plan', expectedHead: before.workspaceHash,
+      expectedSnapshotHash: before.snapshotHash,
+      rule: { pathPrefix: targetFile, selector, maxFiles: 1, operation: 'set', operand: 1200000 },
+    });
+    await seedServerWorkspace({ ...before.workspace, xmlPatches: [patch] });
+    const after = await readServerWorkspaceEnvelope();
+    if (holdNextApply) {
+      applySavedBeforeReply = true;
+      await heldApply;
+    }
+    return route.fulfill({ json: { success: true, plan: planFor(true, before), ...after } });
+  });
+
+  await page.goto('/');
+  await page.waitForFunction((name: string) => {
+    const api = (window as Window & { AgentRuntime?: { getCurrentWorkspace: () => { name?: string } } }).AgentRuntime;
+    return api?.getCurrentWorkspace().name === name;
+  }, workspace.name);
+  const healthCard = page.getByTestId('health-card');
+  if (await healthCard.isVisible()) await page.getByTestId('health-card-dismiss').click();
+  await page.getByRole('button', { name: 'XML Patching' }).click();
+
+  const picker = page.getByPlaceholder(/Search real base-game files/i);
+  const editHull = page.getByRole('button', { name: 'Edit max hull', exact: true });
+  await picker.fill(ambiguousFile);
+  await expect(page.getByText('effective: base', { exact: true })).toBeVisible();
+  await expect(editHull).toHaveCount(0);
+
+  await picker.fill(targetFile);
+  await editHull.click();
+  const hullValue = page.getByRole('spinbutton', { name: /maximum hull.*current 1190000/i });
+  await expect(hullValue).toHaveValue('1190000');
+  const preview = page.getByRole('button', { name: 'Preview against corpus', exact: true });
+  await hullValue.fill('');
+  await expect(preview).toBeDisabled();
+  await hullValue.fill('1200000');
+
+  await preview.click();
+  await expect(page.getByText('The hull preview does not match the selected macro and source revision.', { exact: false })).toBeVisible();
+  const apply = page.getByRole('button', { name: 'Apply hull change to workspace', exact: true });
+  await expect(apply).toHaveCount(0);
+  expect((await readServerWorkspace()).xmlPatches).toEqual([]);
+
+  await preview.click();
+  await expect(page.getByText('The workspace changed during preview.', { exact: false })).toBeVisible();
+  await expect(apply).toHaveCount(0);
+  expect((await readServerWorkspace()).xmlPatches).toEqual([]);
+
+  await preview.click();
+  await expect(page.getByText('1 VALIDATED', { exact: true })).toBeVisible();
+  await expect(page.getByText('1200000', { exact: true })).toBeVisible();
+  expect((await readServerWorkspace()).xmlPatches).toEqual([]);
+  if (await healthCard.isVisible()) await page.getByTestId('health-card-dismiss').click();
+  await apply.click();
+  await expect.poll(async () => (await readServerWorkspace()).xmlPatches?.map(({ sel, content }) => ({ sel, content })))
+    .toEqual([{ sel: selector, content: '1200000' }]);
+
+  await page.getByRole('button', { name: 'Single patch', exact: true }).click();
+  await page.getByRole('button', { name: 'Applied Preview', exact: true }).click();
+  const previewPane = page.locator('[data-xmlpatch-pane="preview"]');
+  await expect(previewPane.getByText('<hull max="1200000"/>', { exact: true })).toBeVisible();
+  await page.locator('button[title="Undo last action (Ctrl+Z)"]').click();
+  await expect.poll(async () => (await readServerWorkspace()).xmlPatches).toEqual([]);
+  await expect(previewPane.getByText('<hull max="1200000"/>', { exact: true })).toHaveCount(0);
+
+  await editHull.click();
+  await hullValue.fill('1200000');
+  await preview.click();
+  await expect(apply).toBeEnabled();
+  const nodeId = workspace.nodes[0].id;
+  const newName = 'LocalEditWhileHullReplyWaits';
+  const readName = () => page.evaluate(id => window.AgentRuntime!.getCurrentWorkspace().nodes.find(node => node.id === id)?.properties.name, nodeId);
+  holdNextApply = true;
+  const applyResponse = page.waitForResponse(response => response.url().endsWith('/api/agent/bulk-transform/apply'));
+  try {
+    await apply.click();
+    await expect.poll(() => applySavedBeforeReply).toBe(true);
+    await page.evaluate(({ id, name }) => window.AgentRuntime!.updateNodeProperty(id, 'name', name), { id: nodeId, name: newName });
+    await expect.poll(readName).toBe(newName);
+  } finally {
+    releaseApply();
+  }
+  await applyResponse;
+  await expect(hullValue).toBeEnabled();
+  expect(await readName()).toBe(newName);
+  await expect(page.getByText('The patch was saved on the server', { exact: false })).toBeVisible();
 });

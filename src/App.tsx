@@ -2941,12 +2941,18 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
               workspace={workspace}
               setWorkspace={setWorkspace}
               saveCheckpoint={saveCheckpoint}
+              readWorkspaceBinding={() => ({
+                workspaceId: selectedWorkspaceId(),
+                revision: workspaceRevisionRef.current,
+                authorityEpoch: syncAuthorityEpochRef.current,
+                pending: localWorkspaceDirtyRef.current || queuedWorkspaceSyncsRef.current > 0 || syncConflictRef.current,
+              })}
               onServerWorkspaceApplied={(nextWorkspace, metadata) => {
                 lastServerHashRef.current = metadata.workspaceHash;
                 lastServerSnapshotHashRef.current = metadata.snapshotHash;
                 setLocalVersion(metadata.version);
                 persistScopedWorkspaceSnapshot(
-                  sanitizeWorkspace(nextWorkspace),
+                  nextWorkspace,
                   metadata.version,
                   metadata.snapshotHash,
                 );
@@ -2956,7 +2962,8 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
                 // ordinary autosave effect immediately echoes a redundant second mutation.
                 localWorkspaceDirtyRef.current = false;
                 workspaceRevisionRef.current += 1;
-                setRawWorkspace(sanitizeWorkspace(nextWorkspace));
+                workspaceRef.current = nextWorkspace;
+                setRawWorkspace(nextWorkspace);
               }}
             />
           )}

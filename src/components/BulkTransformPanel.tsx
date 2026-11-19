@@ -16,6 +16,7 @@ interface OperationDraft {
 }
 interface PreviewRow {
   targetFile: string;
+  sourceSignature?: string;
   status?: 'matched' | 'skipped' | 'error';
   matchCount?: number;
   selector?: string;
@@ -28,6 +29,7 @@ interface PreviewRow {
 }
 interface PreviewPlan {
   ok: boolean;
+  workspaceId: string;
   rule: Record<string, unknown>;
   planHash: string;
   candidateCount: number;
@@ -42,11 +44,34 @@ interface PreviewPlan {
   snapshotHash: string;
 }
 
+export interface GuidedHullTarget {
+  targetFile: string;
+  macroName: string;
+  selector: string;
+  currentValue: string;
+  sourceSignature: string;
+  sourceLabel: string;
+}
+
+export interface BulkWorkspaceBinding {
+  workspaceId: string;
+  revision: number;
+  authorityEpoch: number;
+  pending: boolean;
+}
+
 interface Props {
   workspace: ModWorkspace;
+  readWorkspaceBinding: () => BulkWorkspaceBinding;
   setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
   saveCheckpoint?: (customTarget?: ModWorkspace) => void;
   onServerWorkspaceApplied?: (workspace: ModWorkspace, metadata: { workspaceHash: string; snapshotHash: string; version: number }) => void;
+  guidedHull?: GuidedHullTarget;
+}
+
+function sameWorkspaceBinding(expected: BulkWorkspaceBinding, current: BulkWorkspaceBinding): boolean {
+  return expected.workspaceId === current.workspaceId && expected.revision === current.revision
+    && expected.authorityEpoch === current.authorityEpoch && !current.pending;
 }
 
 const ROW_HEIGHT = 44;
@@ -78,18 +103,21 @@ async function jsonResponse(response: Response) {
   return body;
 }
 
-export default function BulkTransformPanel({ workspace, setWorkspace, saveCheckpoint, onServerWorkspaceApplied }: Props) {
-  const [pathPrefix, setPathPrefix] = useState('assets/units/size_xl/macros');
+export default function BulkTransformPanel({ workspace, readWorkspaceBinding, setWorkspace, saveCheckpoint, onServerWorkspaceApplied, guidedHull }: Props) {
+  const [pathPrefix, setPathPrefix] = useState(guidedHull?.targetFile ?? 'assets/units/size_xl/macros');
   const [samplePath, setSamplePath] = useState('');
-  const [operations, setOperations] = useState<OperationDraft[]>([newOperation(1)]);
-  const [maxFiles, setMaxFiles] = useState(250);
-  const [preview, setPreview] = useState<PreviewPlan | null>(null);
+  const [operations, setOperations] = useState<OperationDraft[]>(() => [guidedHull
+    ? { ...newOperation(1), id: 'maximum-hull', selector: guidedHull.selector, operation: 'set', operand: guidedHull.currentValue }
+    : newOperation(1)]);
+  const [maxFiles, setMaxFiles] = useState(guidedHull ? 1 : 250);
+  const [preview, setPreview] = useState<(PreviewPlan & { binding: BulkWorkspaceBinding }) | null>(null);
   const [busy, setBusy] = useState<'sample' | 'preview' | 'apply' | null>(null);
   const [error, setError] = useState('');
   const [scrollTop, setScrollTop] = useState(0);
   const [expandedTarget, setExpandedTarget] = useState<string | null>(null);
 
   useEffect(() => {
+    if (guidedHull) return;
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       const prefix = pathPrefix.trim();
@@ -114,7 +142,7 @@ export default function BulkTransformPanel({ workspace, setWorkspace, saveCheckp
       } finally { setBusy(current => current === 'sample' ? null : current); }
     }, 180);
     return () => { controller.abort(); window.clearTimeout(timer); };
-  }, [pathPrefix]);
+  }, [guidedHull, pathPrefix]);
 
   const rule = useMemo(() => {
     const normalized = operations.map(operation => ({
@@ -151,6 +179,7 @@ export default function BulkTransformPanel({ workspace, setWorkspace, saveCheckp
   };
 
   const runPreview = async () => {
+    const binding = readWorkspaceBinding();
     setBusy('preview'); setError(''); setPreview(null);
     try {
       const response = await fetch('/api/agent/bulk-transform/preview', {
@@ -158,12 +187,23 @@ export default function BulkTransformPanel({ workspace, setWorkspace, saveCheckp
       });
       const body = await response.json().catch(() => ({}));
       const plan = (body.plan || body) as PreviewPlan;
-      if (plan?.rows) setPreview(plan);
+      if (response.ok && (plan.workspaceId !== binding.workspaceId || !sameWorkspaceBinding(binding, readWorkspaceBinding()))) {
+        setError('The workspace changed during preview. Wait for it to synchronize, then preview again.');
+        return;
+      }
+      const row = plan.rows?.[0];
+      if (response.ok && guidedHull && (plan.rows?.length !== 1 || plan.candidateCount !== 1 || !row?.simulationOk
+        || row.targetFile !== guidedHull.targetFile || row.selector !== guidedHull.selector
+        || row.sourceSignature !== guidedHull.sourceSignature || row.oldValue !== guidedHull.currentValue)) {
+        setError('The hull preview does not match the selected macro and source revision. Reopen the target before applying.');
+        return;
+      }
+      if (plan?.rows) setPreview({ ...plan, binding });
       const localHash = workspaceContentHash(sanitizeWorkspace(workspace));
       const localSnapshotHash = workspaceSnapshotHash(sanitizeWorkspace(workspace));
       if (response.ok && (plan.workspaceHash !== localHash || plan.snapshotHash !== localSnapshotHash)) {
         setError('The canvas has not finished synchronizing to the server. Wait a moment, then preview again; no patches were applied.');
-        setPreview({ ...plan, ok: false });
+        setPreview({ ...plan, binding, ok: false });
       } else if (!response.ok) setError(body.message || body.error || plan.findings?.[0]?.message || `Preview failed (${response.status})`);
     } catch (previewError) { setError(previewError instanceof Error ? previewError.message : String(previewError)); }
     finally { setBusy(null); }
@@ -171,6 +211,12 @@ export default function BulkTransformPanel({ workspace, setWorkspace, saveCheckp
 
   const apply = async () => {
     if (!preview?.ok) return;
+    const binding = readWorkspaceBinding();
+    if (!sameWorkspaceBinding(preview.binding, binding)) {
+      setPreview(null);
+      setError('The workspace changed after preview. Wait for it to synchronize, then preview again.');
+      return;
+    }
     setBusy('apply'); setError('');
     try {
       const response = await fetch('/api/agent/bulk-transform/apply', {
@@ -183,17 +229,39 @@ export default function BulkTransformPanel({ workspace, setWorkspace, saveCheckp
         }),
       });
       const body = await jsonResponse(response);
+      if (body.workspaceId !== binding.workspaceId) {
+        setPreview(null);
+        setError('The apply response belongs to another workspace. Review the current workspace before retrying.');
+        return;
+      }
+      if (body.success !== true || !body.workspace || !Number.isInteger(body.version) || !Array.isArray(body.plan?.rows)) {
+        setPreview(null);
+        throw new Error('The apply response did not include a complete workspace result.');
+      }
+      const next = sanitizeWorkspace(body.workspace);
+      if (workspaceContentHash(next) !== body.workspaceHash || workspaceSnapshotHash(next) !== body.snapshotHash) {
+        setPreview(null);
+        throw new Error('The apply response did not match its workspace revision.');
+      }
+      if (!sameWorkspaceBinding(binding, readWorkspaceBinding())) {
+        setPreview(null);
+        setError('The patch was saved on the server. The canvas changed before the reply arrived, so Forge kept your current work. Review the workspace before continuing.');
+        return;
+      }
       saveCheckpoint?.(workspace);
-      if (onServerWorkspaceApplied) onServerWorkspaceApplied(body.workspace, {
+      if (onServerWorkspaceApplied) onServerWorkspaceApplied(next, {
         workspaceHash: body.workspaceHash,
         snapshotHash: body.snapshotHash,
         version: body.version,
       });
-      else setWorkspace(body.workspace);
-      setPreview({ ...body.plan, workspaceHash: body.workspaceHash, snapshotHash: body.snapshotHash });
+      else setWorkspace(next);
+      setPreview({ ...body.plan, workspaceId: body.workspaceId, workspaceHash: body.workspaceHash,
+        snapshotHash: body.snapshotHash, binding: readWorkspaceBinding() });
     } catch (applyError) {
       const body = (applyError as Error & { body?: any }).body;
-      if (body?.plan?.rows) setPreview({ ...body.plan, workspaceHash: body.currentHead || preview.workspaceHash });
+      if (body?.plan?.rows && sameWorkspaceBinding(binding, readWorkspaceBinding())) {
+        setPreview({ ...body.plan, workspaceId: binding.workspaceId, workspaceHash: body.currentHead || preview.workspaceHash, binding });
+      }
       setError(applyError instanceof Error ? applyError.message : String(applyError));
     } finally { setBusy(null); }
   };
@@ -206,10 +274,23 @@ export default function BulkTransformPanel({ workspace, setWorkspace, saveCheckp
     return { start, rows: rows.slice(start, start + 32), total: rows.length };
   }, [preview, scrollTop]);
 
+  const hullDraft = operations[0];
+  const hullValueReady = hullDraft.operand.trim() !== '' && Number.isFinite(Number(hullDraft.operand));
+
   return (
     <div className="flex-1 min-h-0 flex gap-4 p-4 bg-[#0a0c10] overflow-hidden">
       <section className="w-[390px] shrink-0 rounded-lg border border-white/10 bg-[#10131a] p-4 overflow-y-auto custom-scrollbar">
-        <div className="flex items-center gap-2 text-cyan-300 font-mono text-xs font-bold uppercase"><ShieldCheck className="w-4 h-4" /> Canonical Bulk Transform</div>
+        <div className="flex items-center gap-2 text-cyan-300 font-mono text-xs font-bold uppercase"><ShieldCheck className="w-4 h-4" /> {guidedHull ? 'Edit maximum hull' : 'Canonical Bulk Transform'}</div>
+        {guidedHull ? <>
+          <div className="mt-3 break-all font-mono text-xs text-slate-200">{guidedHull.macroName}</div>
+          <div className="mt-1 break-all font-mono text-[9px] text-slate-500">{guidedHull.targetFile} · {guidedHull.sourceLabel}</div>
+          <label className="mt-4 block text-xs text-slate-300">
+            Maximum hull <span className="text-slate-500">(current {guidedHull.currentValue})</span>
+            <input type="number" step="any" disabled={busy !== null} value={hullDraft.operand}
+              onChange={event => updateOperation(hullDraft.id, { operand: event.target.value })}
+              className="mt-1 block w-full rounded border border-white/10 bg-[#090b10] px-2 py-2 font-mono text-sm text-slate-200" />
+          </label>
+        </> : <>
         <p className="mt-2 text-[10px] leading-relaxed text-slate-500">Build numeric X4 diff patches from the effective base + DLC corpus. Preview is mandatory; vanilla and game folders remain read-only.</p>
         <label className="block mt-5 text-[9px] uppercase font-mono font-bold text-slate-500">Corpus path scope</label>
         <input data-testid="bulk-path-prefix" value={pathPrefix} onChange={event => { setPathPrefix(event.target.value); setPreview(null); }} className="mt-1 w-full rounded border border-white/10 bg-black/40 px-2 py-2 font-mono text-[11px] text-slate-200 focus:border-cyan-500 focus:outline-none" />
@@ -245,7 +326,8 @@ export default function BulkTransformPanel({ workspace, setWorkspace, saveCheckp
         <label className="mt-4 block text-[9px] uppercase font-mono font-bold text-slate-500">Safety cap
           <input type="number" min={1} max={500} value={maxFiles} onChange={event => { setMaxFiles(Number(event.target.value)); setPreview(null); }} className="mt-1 block w-full rounded border border-white/10 bg-[#090b10] px-2 py-2 text-[11px] text-slate-200" />
         </label>
-        <button onClick={runPreview} disabled={busy !== null} className="mt-5 flex w-full items-center justify-center gap-2 rounded border border-cyan-500/40 bg-cyan-500/10 py-2.5 font-mono text-[10px] font-bold uppercase text-cyan-300 hover:bg-cyan-500/20 disabled:opacity-40">{busy === 'preview' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />} Preview against corpus</button>
+        </>}
+        <button onClick={runPreview} disabled={busy !== null || Boolean(guidedHull && !hullValueReady)} className="mt-5 flex w-full items-center justify-center gap-2 rounded border border-cyan-500/40 bg-cyan-500/10 py-2.5 font-mono text-[10px] font-bold uppercase text-cyan-300 hover:bg-cyan-500/20 disabled:opacity-40">{busy === 'preview' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />} Preview against corpus</button>
         <div className="mt-3 rounded border border-amber-500/20 bg-amber-500/5 p-2 text-[9px] leading-relaxed text-amber-200/70">Apply changes workspace patch state only. Compile and Deploy remain separate validated operations.</div>
       </section>
 
@@ -284,7 +366,14 @@ export default function BulkTransformPanel({ workspace, setWorkspace, saveCheckp
               {row.changes.map(change => <div key={change.operationId} className="grid grid-cols-[minmax(240px,1fr)_160px] gap-3 border-t border-white/5 py-1"><span className="truncate text-slate-400" title={change.selector}>{change.selector}</span><span><span className="text-slate-500">{change.oldValue}</span> <span className="text-slate-700">→</span> <span className="text-emerald-300">{change.newValue}</span></span></div>)}
             </div>;
           })()}
-          <footer className="border-t border-white/10 p-3 flex items-center justify-between"><span className="font-mono text-[8.5px] text-slate-600">plan {preview.planHash?.slice(0, 12)} · conflicts {preview.conflicts.length}</span><button onClick={apply} disabled={!preview.ok || busy !== null} className="flex items-center gap-2 rounded border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 font-mono text-[10px] font-bold uppercase text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-35">{busy === 'apply' ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />} {preview.rows.length === preview.matchedFiles ? `Add ${preview.matchedFiles} validated patches to workspace` : `Add ${preview.rows.length} validated field patches to workspace`}</button></footer>
+          <footer className="border-t border-white/10 p-3 flex items-center justify-between">
+            <span className="font-mono text-[8.5px] text-slate-600">plan {preview.planHash?.slice(0, 12)} · conflicts {preview.conflicts.length}</span>
+            <button onClick={apply} disabled={!preview.ok || busy !== null} className="flex items-center gap-2 rounded border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 font-mono text-[10px] font-bold uppercase text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-35">
+              {busy === 'apply' ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+              {guidedHull ? 'Apply hull change to workspace' : preview.rows.length === preview.matchedFiles
+                ? `Add ${preview.matchedFiles} validated patches to workspace` : `Add ${preview.rows.length} validated field patches to workspace`}
+            </button>
+          </footer>
         </>}
       </section>
     </div>

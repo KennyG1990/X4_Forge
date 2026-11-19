@@ -89,7 +89,7 @@ function elKey(el: XmlElement): string {
   return id ? el.nodeName + '#' + id : el.nodeName;
 }
 
-function escapeXPathLiteral(v: string): string {
+export function escapeXPathLiteral(v: string): string {
   if (!v.includes("'")) return "'" + v + "'";
   if (!v.includes('"')) return '"' + v + '"';
   // contains both quote kinds — concat() form

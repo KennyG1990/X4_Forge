@@ -21,14 +21,16 @@ import {
 } from 'lucide-react';
 import { ModWorkspace } from '../types';
 import { compileDiffDocument as compileSharedDiffDocument } from '../lib/modCompiler';
+import { escapeXPathLiteral } from '../lib/xpathSynth';
 import ObjectIndexPicker from './ObjectIndexPicker';
 import XPathInput from './XPathInput';
-import BulkTransformPanel from './BulkTransformPanel';
+import BulkTransformPanel, { type BulkWorkspaceBinding, type GuidedHullTarget } from './BulkTransformPanel';
 import { openNativeTextDiff } from '../lib/nativeEditor';
 
 interface XMLPatchSystemProps {
   workspace: ModWorkspace;
   setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
+  readWorkspaceBinding: () => BulkWorkspaceBinding;
   saveCheckpoint?: (customTarget?: ModWorkspace) => void;
   onServerWorkspaceApplied?: (workspace: ModWorkspace, metadata: { workspaceHash: string; snapshotHash: string; version: number }) => void;
 }
@@ -191,7 +193,7 @@ if (typeof window !== 'undefined') {
   });
 }
 
-export default function XMLPatchSystem({ workspace, setWorkspace, saveCheckpoint, onServerWorkspaceApplied }: XMLPatchSystemProps) {
+export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceBinding, saveCheckpoint, onServerWorkspaceApplied }: XMLPatchSystemProps) {
   // QoL: default to a target that actually exists in vanilla (ship_macros.xml
   // does not — first open used to show a resolution error).
   const [targetFile, setTargetFile] = useState<string>('libraries/wares.xml');
@@ -206,7 +208,7 @@ export default function XMLPatchSystem({ workspace, setWorkspace, saveCheckpoint
   const [effectiveSources, setEffectiveSources] = useState<Array<{ source: string; mode: string }>>([]);
   const [rightPanelTab, setRightPanelTab] = useState<'patch' | 'preview' | 'difftool'>('patch');
   const [pretargetSelector, setPretargetSelector] = useState<string>('');
-  const [authoringMode, setAuthoringMode] = useState<'single' | 'bulk'>('single');
+  const [authoringMode, setAuthoringMode] = useState<'single' | 'bulk' | GuidedHullTarget>('single');
   const [compactPane, setCompactPane] = useState<'tree' | 'blocks' | 'preview'>('blocks');
 
   // T4.2 Inc 2 — Diff→Patch merge view: the user edits a copy of the vanilla
@@ -383,6 +385,23 @@ export default function XMLPatchSystem({ workspace, setWorkspace, saveCheckpoint
       return null;
     }
   }, [baseFileContent]);
+
+  const hullTarget = useMemo<GuidedHullTarget | null>(() => {
+    if (!parsedBaseDoc || parsedBaseDoc.documentElement.tagName !== 'macros' || !baseFileSession
+      || baseFileSession.targetFile !== targetFile) return null;
+    const ships = Array.from(parsedBaseDoc.documentElement.children).filter(element =>
+      element.tagName === 'macro' && element.getAttribute('class')?.startsWith('ship_'));
+    const macroName = ships.length === 1 ? ships[0].getAttribute('name') : null;
+    if (!macroName) return null;
+    const selector = `/macros/macro[@name=${escapeXPathLiteral(macroName)}]/properties/hull/@max`;
+    const matches = parsedBaseDoc.evaluate(selector, parsedBaseDoc, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+    const currentValue = matches.snapshotLength === 1 ? matches.snapshotItem(0)?.nodeValue?.trim() : null;
+    if (!currentValue || !Number.isFinite(Number(currentValue))) return null;
+    return {
+      targetFile: targetFile.replace(/\\/g, '/'), macroName, selector, currentValue, sourceSignature: baseFileSession.sourceSignature,
+      sourceLabel: effectiveSources.map(source => source.source).join(' + '),
+    };
+  }, [parsedBaseDoc, baseFileSession, targetFile, effectiveSources]);
 
   const applyPatchesResult = useMemo(() => {
     if (!parsedBaseDoc) return { doc: null, errors: {} as Record<string, string> };
@@ -902,6 +921,8 @@ export default function XMLPatchSystem({ workspace, setWorkspace, saveCheckpoint
               effective: {effectiveSources.map(source => source.source).join(' + ')}
             </span>
           )}
+          {hullTarget && <button type="button" onClick={() => { setTargetFile(hullTarget.targetFile); setAuthoringMode(hullTarget); }}
+            className="shrink-0 rounded border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-[9px] font-bold text-cyan-300 hover:bg-cyan-500/20">Edit max hull</button>}
           {pretargetSelector && (
             <span className="max-w-72 truncate rounded border border-amber-500/25 bg-amber-500/5 px-2 py-1 text-[8.5px] text-amber-300" title={pretargetSelector}>
               Patch existing: {pretargetSelector}
@@ -938,8 +959,10 @@ export default function XMLPatchSystem({ workspace, setWorkspace, saveCheckpoint
         </div>
       )}
 
-      {authoringMode === 'bulk' ? (
-        <BulkTransformPanel workspace={workspace} setWorkspace={setWorkspace} saveCheckpoint={saveCheckpoint} onServerWorkspaceApplied={onServerWorkspaceApplied} />
+      {authoringMode !== 'single' ? (
+        <BulkTransformPanel key={authoringMode === 'bulk' ? 'bulk' : 'hull'} workspace={workspace} setWorkspace={setWorkspace}
+          readWorkspaceBinding={readWorkspaceBinding} saveCheckpoint={saveCheckpoint} onServerWorkspaceApplied={onServerWorkspaceApplied}
+          guidedHull={authoringMode === 'bulk' ? undefined : authoringMode} />
       ) : (
       <div className="flex-1 flex min-w-0 overflow-hidden">
         {/* Left Side: Recipes and template insertions */}
