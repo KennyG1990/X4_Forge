@@ -1,4 +1,14 @@
 {
+  "0.0.86": [
+    "Hover an X4 text reference in XML or Lua to see its value and source. Choose one or two languages in Forge settings. Results distinguish saved workspace text from the unpacked game corpus.",
+    "In authored Mission Director XML, Go to Definition and Find References follow literal cue and library names to their owning script. Both use open editor buffers, so they pick up an unsaved rename. Find References includes the declaration when requested.",
+    "Diagnostics groups findings by file and lets you search, filter and page through large results. Source navigation uses the current validation result and can jump to exact saved positions or authored canvas nodes when Forge verifies the source.",
+    "Validation flags strict arithmetic reads that are provably unset in their MD scope. It also catches object destruction events with neither an object nor a group, including patches that remove the last source.",
+    "Lua syntax checks still cover supplied files outside the known menu registration. Forge now reports those files separately from genuinely uncertain loader behavior.",
+    "Agents can look up text by page, ID and language in the unpacked reference corpus or saved workspace. The tool returns the authored text, expanded text and source location when available.",
+    "Repeated lookup can reuse two recent reference-language indexes after Forge checks the current file contents. Edited text is reflected on the next lookup.",
+    "Agents can inspect how Forge resolves the type at each step of a static expression. The result shows inherited properties, caller-provided hints and where the evidence runs out."
+  ],
   "0.0.85": [
     "Forge verifies qualified references to vanilla Mission Director cues and libraries using your configured unpacked X4 corpus. These checks run in Project, Problems, deploy, package checks, and the validation CLI. A missing member in a known library still gets a diagnostic.",
     "MD coverage messages identify the authored reference and its role. They show the original line and column when Forge can establish the location.",
