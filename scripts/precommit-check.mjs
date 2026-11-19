@@ -240,6 +240,7 @@ function checkFocusedPerformanceAndXml() {
     "src/lib/webviewPerformance.selftest.ts",
     "src/components/PerformancePanel.selftest.tsx",
     "src/server/xmlReferenceMap.selftest.ts",
+    "vscode-extension/src/langCallHelp.selftest.ts",
   ]) {
     console.log(`[precommit] focused selftest ${file}`);
     const result = spawnSync(process.execPath, ["--max-old-space-size=512", "--import", "tsx", file], {
@@ -306,7 +307,7 @@ async function runPrecommitOrchestrationSelftest() {
     "npm run test:configuration-operations",
     ...["src/lib/forgePerformance.selftest.ts", "src/server/forgePerformance.selftest.ts",
       "src/lib/webviewPerformance.selftest.ts", "src/components/PerformancePanel.selftest.tsx",
-      "src/server/xmlReferenceMap.selftest.ts"].map(file => direct(["--max-old-space-size=512", "--import", "tsx", file])),
+      "src/server/xmlReferenceMap.selftest.ts", "vscode-extension/src/langCallHelp.selftest.ts"].map(file => direct(["--max-old-space-size=512", "--import", "tsx", file])),
     "npm run test:native-performance", receipt, typecheck,
   ];
   let fakeSpawnCalls = 0, deniedEffectAttempts = 0;

@@ -1,5 +1,5 @@
 /** Shared authored Mission Director script and declaration identity. */
-import { DOMParser, type Element } from '@xmldom/xmldom';
+import { DOMParser, type Element, type Node as XmlNode } from '@xmldom/xmldom';
 
 export function parseMdScriptRoot(content: string): Element | null {
   let malformed = false;
@@ -76,6 +76,78 @@ export interface MdLibraryIndexEntry<D = unknown, S = unknown> {
 }
 
 export type MdLibraryIndex<D = unknown, S = unknown> = Map<string, MdLibraryIndexEntry<D, S> | null>;
+
+export type MdLibrarySignature<S = unknown> =
+  | { readonly status: 'known'; readonly parameters: readonly MdLibraryParameter<S>[] }
+  | { readonly status: 'unavailable'; readonly reason: string };
+
+interface MdLibraryParameter<S> {
+  name: string;
+  hasDefault: boolean;
+  point?: S;
+  defaultValue?: string;
+  comment?: string;
+}
+
+function directMdChildren(element: Element, tag: string): Element[] {
+  return Array.from(element.childNodes).filter((node): node is Element => node.nodeType === 1 && node.nodeName === tag);
+}
+
+function parameterChildren(element: Element, tag: 'params' | 'param', namespaceAware: boolean): Element[] {
+  return namespaceAware ? Array.from(element.childNodes).filter((node): node is Element => node.nodeType === 1
+    && ((node as Element).localName || node.nodeName) === tag) : directMdChildren(element, tag);
+}
+
+function foreignParameter(element: Element, tag: 'params' | 'param'): boolean {
+  return element.nodeName !== tag || !!element.namespaceURI || !!element.getAttribute('xmlns');
+}
+
+/** Consulted effective arguments cannot treat foreign parameter-shaped nodes as absent. */
+export function mdReferenceArgumentNamespaceUnavailable(call: Element): string | undefined {
+  return parameterChildren(call, 'param', true).some(parameter => foreignParameter(parameter, 'param'))
+    ? 'A direct supplied parameter uses an unsupported XML namespace context.' : undefined;
+}
+
+/** The existing exact, direct-child signature contract; unknown never means empty. */
+export function readMdLibrarySignature<S>(library: Element, point: (node: XmlNode) => S | undefined,
+  options: { namespaceAware?: boolean; includePresentation?: boolean } = {}): MdLibrarySignature<S> {
+  const containers = parameterChildren(library, 'params', !!options.namespaceAware);
+  if (options.namespaceAware && containers.some(container => foreignParameter(container, 'params'))) {
+    return { status: 'unavailable', reason: 'The library params container uses an unsupported XML namespace context.' };
+  }
+  if (containers.length > 1) return { status: 'unavailable', reason: 'The library has multiple direct params containers.' };
+  const parameters = containers[0] ? parameterChildren(containers[0], 'param', !!options.namespaceAware) : [];
+  if (options.namespaceAware && parameters.some(parameter => foreignParameter(parameter, 'param'))) {
+    return { status: 'unavailable', reason: 'The library parameter uses an unsupported XML namespace context.' };
+  }
+  const names = new Set<string>();
+  const facts: MdLibraryParameter<S>[] = [];
+  for (const parameter of parameters) {
+    const name = parameter.getAttribute('name') ?? '';
+    if (!name || names.has(name)) return { status: 'unavailable', reason: 'The library signature has unnamed or duplicate parameters.' };
+    names.add(name);
+    const fact = { name, hasDefault: parameter.hasAttribute('default'), point: point(parameter) };
+    facts.push(options.includePresentation ? {
+      ...fact,
+      defaultValue: parameter.getAttribute('default') ?? undefined,
+      comment: parameter.getAttribute('comment') ?? undefined,
+    } : fact);
+  }
+  return Object.freeze({ status: 'known', parameters: Object.freeze(facts.map(fact => Object.freeze(fact))) });
+}
+
+/** Valid purposes of a library whose caller can supply named arguments. */
+export function mdLibraryAcceptsArguments(role: 'cue' | 'run_actions', purpose: string | null): boolean {
+  return role === 'cue' ? purpose === null || purpose === 'cue_ref' : purpose === 'run_actions';
+}
+
+/** Supplied names are case-sensitive; nested cue/action parameters are separate. */
+export function readMdReferenceArguments<S>(call: Element, point: (node: XmlNode) => S | undefined): readonly { name: string; point?: S }[] {
+  return Object.freeze(directMdChildren(call, 'param').flatMap(parameter => {
+    const name = parameter.getAttributeNode('name');
+    return name?.value ? [Object.freeze({ name: name.value, point: point(name) ?? point(parameter) })] : [];
+  }));
+}
 
 export interface MdLibraryResolution<D = unknown, S = unknown> {
   script: MdLibraryIndexEntry<D, S>;

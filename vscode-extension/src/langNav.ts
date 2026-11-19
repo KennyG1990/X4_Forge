@@ -5,15 +5,22 @@
  */
 
 import {
-  buildMdLibraryIndex, MD_CUE_KEYWORDS, mdReferenceRole, parseMdScriptRoot, resolveMdLibraryReference,
-  type MdLibraryDeclaration, type MdLibraryIndex, type MdLibraryScript,
+  buildMdLibraryIndex, MD_CUE_KEYWORDS, mdReferenceArgumentNamespaceUnavailable, mdReferenceRole,
+  parseMdScriptRoot, readMdLibrarySignature, readMdReferenceArguments, resolveMdLibraryReference,
+  type MdLibraryDeclaration, type MdLibraryIndex, type MdLibraryScript, type MdLibrarySignature,
 } from "../../shared/mdDeclarationResolution";
+import type { Attr } from "@xmldom/xmldom";
 import { createXmlNodePositionLocator } from "../../shared/xmlSourcePosition";
 import { MAX_PROJECT_XML_DEPTH } from "../../shared/xmlMarkup";
 
-interface DefinitionLocation { file: string; line: number; column: number; }
+export interface DefinitionLocation { file: string; line: number; column: number; }
 interface NameSpan { start: number; end: number; }
-interface DefinitionSource { location?: DefinitionLocation; libraryScope?: number; span?: NameSpan; }
+interface DefinitionSource {
+  location?: DefinitionLocation;
+  libraryScope?: number;
+  span?: NameSpan;
+  signature?: MdLibrarySignature<DefinitionLocation>;
+}
 interface LiteralReference {
   value: string;
   script?: string;
@@ -27,7 +34,14 @@ export type MdDefinitionDocument = MdLibraryScript<DefinitionSource, string> & {
   declaration: MdLibraryDeclaration<DefinitionSource> | undefined;
   references: readonly LiteralReference[];
   renameGap?: string;
+  call?: { role: "cue" | "run_actions"; ref: string; arguments: ReturnType<typeof readMdReferenceArguments<number>> };
 };
+
+interface MdDefinitionOptions {
+  suspectValue?: (value: string) => boolean;
+  includeSignatures?: boolean;
+  callStart?: number;
+}
 
 const IDENTIFIER = /^[A-Za-z_]\w*$/;
 const LITERAL_REFERENCE = /^(?:md\.([A-Za-z_]\w*)\.)?([A-Za-z_]\w*)$/;
@@ -76,7 +90,7 @@ function mdNameSpan(text: string, open: number, close: number, value: string): N
 /** Read literal cue references and declaration positions from the same authored bytes. */
 export function readMdDefinitionDocument(
   file: string, text: string, cursor?: number, collectReferences = false,
-  suspectValue?: (value: string) => boolean,
+  { suspectValue, includeSignatures, callStart }: MdDefinitionOptions = {},
 ): MdDefinitionDocument | undefined {
   if (text.length > MAX_MD_DEFINITION_SOURCE) return undefined;
   const root = parseMdScriptRoot(text);
@@ -89,6 +103,7 @@ export function readMdDefinitionDocument(
   let reference: LiteralReference | undefined;
   let declaration: MdLibraryDeclaration<DefinitionSource> | undefined;
   let renameGap: string | undefined;
+  let call: MdDefinitionDocument["call"];
   const location = ({ line, column }: { line: number; column: number }) => ({ file, line: line - 1, column: column - 1 });
   const pending = [{ element: root, depth: 0, libraryScope: undefined as number | undefined, opaque: false }];
   let seen = 0;
@@ -104,7 +119,8 @@ export function readMdDefinitionDocument(
     const owner = container?.parentElement;
     let declarationName;
     let modeledReference;
-    if (!opaque && kind && container?.tagName === "cues" && (owner === root || owner?.tagName === "cue" || owner?.tagName === "library")) {
+    const authoredDeclaration = container?.tagName === "cues" && (owner === root || owner?.tagName === "cue" || owner?.tagName === "library");
+    if (!opaque && kind && authoredDeclaration) {
       const attr = element.getAttributeNode("name");
       const point = attr && locator.point(attr);
       if (attr && IDENTIFIER.test(attr.value)) {
@@ -114,10 +130,27 @@ export function readMdDefinitionDocument(
         const span = suspectValue && start !== undefined ? mdNameSpan(text, start, close, attr.value) : undefined;
         const entry: MdLibraryDeclaration<DefinitionSource> = { name: attr.value, kind, purpose: element.getAttribute("purpose"),
           source: { libraryScope, location: point ? location(point) : undefined, span } };
+        if (includeSignatures && kind === "library") {
+          entry.source.signature = readMdLibrarySignature(element, node => {
+            const paramName = node.nodeType === 1 ? (node as typeof element).getAttributeNode("name") : null;
+            const position = (paramName && locator.point(paramName)) || locator.point(node);
+            return position ? location(position) : undefined;
+          }, { namespaceAware: true, includePresentation: true });
+        }
         declarations.push(entry);
         if (collectReferences && cursor !== undefined && start !== undefined && cursor > start && cursor < close) declaration = entry;
       }
       if (suspectValue && !declarationName) renameGap ??= `A <${tag}> declaration has an unsupported name in ${file}.`;
+    }
+    if (!opaque && callStart !== undefined && (tag === "run_actions" || (tag === "cue" && authoredDeclaration))
+      && locator.offset(element) === callStart && !mdReferenceArgumentNamespaceUnavailable(element)) {
+      const ref = element.getAttribute("ref")?.trim();
+      if (ref && LITERAL_REFERENCE.test(ref)) {
+        call = { role: tag, ref, arguments: readMdReferenceArguments(element, node => {
+          const ownerElement = node.nodeType === 2 ? (node as Attr).ownerElement : undefined;
+          return locator.offset(ownerElement ?? node);
+        }) };
+      }
     }
     if (!opaque && (collectReferences || (cursor !== undefined && !reference))) {
       const role = mdReferenceRole(tag);
@@ -165,7 +198,7 @@ export function readMdDefinitionDocument(
     if (instance && !suspectValue) continue;
     for (const child of Array.from(element.children)) pending.push({ element: child, depth: depth + 1, libraryScope, opaque: opaque || instance });
   }
-  return { name, source: file, declarations, reference, declaration, references, renameGap };
+  return { name, source: file, declarations, reference, declaration, references, renameGap, call };
 }
 
 function resolveReference(
@@ -263,7 +296,7 @@ export function planMdRename(
   const sourceByFile = new Map<string, string>();
   for (const source of sources) {
     const document = readMdDefinitionDocument(source.file, source.text, source.file === file ? cursor : undefined, true,
-      value => suspect.test(value));
+      { suspectValue: value => suspect.test(value) });
     if (sourceByFile.has(source.file) || !document) {
       return { reason: `Forge could not fully inspect ${source.file}. Check for an XML patch, malformed XML or an oversized script.` };
     }
@@ -308,7 +341,7 @@ export function planMdRename(
       text = text.slice(0, replacement.start) + replacement.after + text.slice(replacement.end);
       lastStart = replacement.start;
     }
-    const edited = readMdDefinitionDocument(original.source, text, undefined, true, value => suspect.test(value));
+    const edited = readMdDefinitionDocument(original.source, text, undefined, true, { suspectValue: value => suspect.test(value) });
     if (!edited || edited.renameGap || edited.declarations.length !== original.declarations.length
       || edited.references.length !== original.references.length) {
       return { reason: `The proposed edits change the script structure in ${original.source}.` };

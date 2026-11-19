@@ -20,6 +20,7 @@ import {
   type CueReferenceIndex,
 } from './extensionProject';
 import { parseModManifest, type ModDependency, type ModManifest } from './modDependencyGraph';
+import { mdLibraryAcceptsArguments } from '../../shared/mdDeclarationResolution';
 import {
   buildMdLibraryIndex, classifyCueRef, duplicateMdCueMessage, findDuplicateMdCueDeclarations,
   mdReferencePoint, parseMdScriptRoot, readMdLibrarySignature, readMdReferenceArguments, resolveMdLibraryReference,
@@ -1089,8 +1090,7 @@ function validateEffectiveReferenceContracts(context: EffectiveMdReferenceContex
         }
         continue;
       }
-      if ((call.role === 'run_actions' && library.purpose !== 'run_actions')
-        || (call.role === 'cue' && library.purpose !== null && library.purpose !== 'cue_ref')) {
+      if ((call.role === 'run_actions' || call.role === 'cue') && !mdLibraryAcceptsArguments(call.role, library.purpose)) {
         gap(EFFECTIVE_MD_REFERENCE_CHECK, document.file, `${describeAuthoredMdReference(call)} has an unsupported library-purpose contract.`);
         continue;
       }

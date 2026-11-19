@@ -33,6 +33,7 @@ import { mapFlatFindings, type FlatFinding } from "./diagnosticsMap";
 import { buildXmlAssociations, listModFolders, writeRecommendations, writeXmlAssociations } from "./modFolder";
 import { atomicWriteFile, replaceFileSetAtomically } from "./durableWrite";
 import { xmlCursorContext } from "./langContext";
+import { mdCallScriptHeader, readMdCallHelpRequest, resolveMdCallHelp } from "./langCallHelp";
 import {
   MAX_MD_DEFINITION_SOURCE, readMdDefinitionDocument, resolveMdDefinition, resolveMdReferences,
   type MdDefinitionDocument,
@@ -1936,7 +1937,7 @@ function registerLangProviders(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.languages.registerCompletionItemProvider(selector, {
-      async provideCompletionItems(doc, pos) {
+      async provideCompletionItems(doc, pos, token) {
         const finish = beginNativeOperation('native.provider.read');
         let outcome: ForgePerformanceOutcome = 'ok';
         try {
@@ -1944,6 +1945,24 @@ function registerLangProviders(context: vscode.ExtensionContext): void {
           const root = nodeDocument ? null : modRootFor(doc.uri.fsPath);
           if (!nodeDocument && !root) return undefined;
           const text = doc.getText();
+          if (root && isMdCallDocument(root, doc)) {
+            const version = doc.version;
+            const help = await editorMdCallHelp(root, doc, pos, token, true);
+            if (token.isCancellationRequested || doc.isClosed || doc.version !== version) return undefined;
+            if (help?.nameRange) {
+              const range = new vscode.Range(doc.positionAt(help.nameRange.start), doc.positionAt(help.nameRange.end));
+              return help.unsupplied.map((parameter, index) => {
+                const item = new vscode.CompletionItem(parameter.name, vscode.CompletionItemKind.Variable);
+                item.range = range;
+                item.insertText = parameter.name.replaceAll("&", "&amp;").replaceAll("<", "&lt;")
+                  .replaceAll('"', "&quot;").replaceAll("'", "&apos;");
+                item.detail = mdCallParameterDetail(parameter);
+                item.documentation = parameter.comment;
+                item.sortText = String(index).padStart(5, "0");
+                return item;
+              });
+            }
+          }
           const ctx = xmlCursorContext(text, doc.offsetAt(pos));
           const file = nodeDocument ? 'md/x4forge-node-selection.xml' : relModPath(root!, doc.uri.fsPath);
           const rootHint = ctx.rootTag || "";
@@ -2218,6 +2237,7 @@ function openMdDefinitionDocuments(directory: string) {
 
 async function mdNavigationSiblings(
   directory: string, caller: vscode.TextDocument, token: vscode.CancellationToken, scriptName?: string,
+  includeSignatures = false,
 ): Promise<MdDefinitionDocument[] | undefined> {
   const open = openMdDefinitionDocuments(directory);
   const keyOf = (name: string) => process.platform === "win32" ? name.toLowerCase() : name;
@@ -2234,15 +2254,23 @@ async function mdNavigationSiblings(
 
     let remaining = 4 * MAX_MD_DEFINITION_SOURCE;
     const closedReads: Array<{ file: string; text: string }> = [];
+    const skippedCallHeaders = new Map<string, string>();
+    const stampOf = (stat: fs.BigIntStats) => [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
     for (const [key, file] of files) {
       if (token.isCancellationRequested) return undefined;
       const buffer = open.get(key);
-      const size = buffer ? 0 : (await fs.promises.stat(file)).size;
+      const disk = buffer ? undefined : await fs.promises.stat(file, { bigint: true });
+      const size = Number(disk?.size ?? 0n);
       if (size > MAX_MD_DEFINITION_SOURCE || size > remaining) return undefined;
       const text = buffer ? buffer.document.getText() : await fs.promises.readFile(file, "utf8");
       remaining -= Buffer.byteLength(text);
       if (text.length > MAX_MD_DEFINITION_SOURCE || remaining < 0) return undefined;
-      const script = readMdDefinitionDocument(file, text, undefined, collectReferences);
+      if (includeSignatures && mdCallScriptHeader(text)?.toLowerCase() !== scriptKey) {
+        if (disk) skippedCallHeaders.set(file, stampOf(disk));
+        continue;
+      }
+      const script = readMdDefinitionDocument(file, text, undefined, collectReferences, { includeSignatures });
+      if (includeSignatures && !script) return undefined;
       const matchesScript = !!script && (collectReferences || script.name.toLowerCase() === scriptKey);
       if (matchesScript) matches.push(script);
       if (!collectReferences && matches.length > 1) return undefined;
@@ -2252,6 +2280,10 @@ async function mdNavigationSiblings(
     for (const { file, text } of closedReads) {
       if (token.isCancellationRequested || (await fs.promises.stat(file)).size > MAX_MD_DEFINITION_SOURCE
         || await fs.promises.readFile(file, "utf8") !== text) return undefined;
+    }
+    // A previously unrelated file can change into a duplicate provider during an awaited read.
+    for (const [file, stamp] of skippedCallHeaders) {
+      if (token.isCancellationRequested || stampOf(await fs.promises.stat(file, { bigint: true })) !== stamp) return undefined;
     }
     const currentDiskNames = await diskMdNavigationFiles(directory);
     const before = new Set(diskNames.map(keyOf));
@@ -2267,10 +2299,67 @@ async function mdNavigationSiblings(
   return matches;
 }
 
+function isMdCallDocument(root: string, doc: vscode.TextDocument): boolean {
+  const directory = path.relative(root, path.dirname(doc.uri.fsPath));
+  return (process.platform === "win32" ? directory.toLowerCase() : directory) === "md";
+}
+
+async function editorMdCallHelp(
+  root: string, doc: vscode.TextDocument, pos: vscode.Position, token: vscode.CancellationToken, nameCompletion = false,
+) {
+  if (token.isCancellationRequested) return undefined;
+  const version = doc.version;
+  const request = readMdCallHelpRequest(doc.uri.fsPath, doc.getText(), doc.offsetAt(pos), nameCompletion);
+  if (!request) return undefined;
+  const siblings = await mdNavigationSiblings(path.join(root, "md"), doc, token, request.script, true);
+  if (!siblings || token.isCancellationRequested || doc.isClosed || doc.version !== version) return undefined;
+  return resolveMdCallHelp(request, siblings);
+}
+
+function mdCallParameterDetail(parameter: { hasDefault: boolean; defaultValue?: string }): string {
+  return parameter.hasDefault ? 'Default: ' + (parameter.defaultValue || '""') : "Required";
+}
+
 function registerNavProviders(context: vscode.ExtensionContext): void {
   const selector: vscode.DocumentSelector = [{ scheme: "file", pattern: "**/md/*.xml" }];
 
   context.subscriptions.push(
+    vscode.languages.registerSignatureHelpProvider(selector, {
+      async provideSignatureHelp(doc, pos, token) {
+        const finish = beginNativeOperation("native.provider.read");
+        let outcome: ForgePerformanceOutcome = "ok";
+        try {
+          const root = modRootFor(doc.uri.fsPath);
+          if (!root || !isMdCallDocument(root, doc)) return undefined;
+          const help = await editorMdCallHelp(root, doc, pos, token);
+          if (!help) return undefined;
+
+          let label = help.name + "(";
+          const parameters = help.parameters.map((parameter, index) => {
+            if (index) label += ", ";
+            const start = label.length;
+            label += parameter.name;
+            const end = label.length;
+            if (parameter.hasDefault) label += ' = ' + (parameter.defaultValue || '""');
+            const detail = mdCallParameterDetail(parameter);
+            return new vscode.ParameterInformation([start, end], parameter.comment ? parameter.comment + "\n\n" + detail : detail);
+          });
+          const location = path.relative(root, help.location.file);
+          const signature = new vscode.SignatureInformation(label + ")", location + ":" + (help.location.line + 1));
+          signature.parameters = parameters;
+          const result = new vscode.SignatureHelp();
+          result.signatures = [signature];
+          result.activeSignature = 0;
+          result.activeParameter = help.activeParameter;
+          return result;
+        } catch (error) {
+          outcome = "error";
+          throw error;
+        } finally {
+          finish(outcome);
+        }
+      },
+    }, '"', "'", " "),
     vscode.languages.registerDefinitionProvider(selector, {
       async provideDefinition(doc, pos, token) {
         const finish = beginNativeOperation('native.provider.read');
