@@ -1,4 +1,8 @@
 {
+  "0.0.87": [
+    "Rename authored Mission Director cue and library symbols in an unpacked mod after reviewing the exact replacements. The editor applies one edit, and one Undo restores the edited buffers. If disk inputs change during application, Forge warns that the edits reached the buffers instead of reporting a verified rename.",
+    "See required and defaulted parameters for authored Mission Director library calls, with parameter-name completion while writing XML. Contextual hints support incomplete XML and unsaved authored provider files."
+  ],
   "0.0.86": [
     "Hover an X4 text reference in XML or Lua to see its value and source. Choose one or two languages in Forge settings. Results distinguish saved workspace text from the unpacked game corpus.",
     "In authored Mission Director XML, Go to Definition and Find References follow literal cue and library names to their owning script. Both use open editor buffers, so they pick up an unsaved rename. Find References includes the declaration when requested.",

@@ -3,6 +3,11 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
+## 0.0.87 — 2026-11-19
+
+- Rename authored Mission Director cue and library symbols in an unpacked mod after reviewing the exact replacements. The editor applies one edit, and one Undo restores the edited buffers. If disk inputs change during application, Forge warns that the edits reached the buffers instead of reporting a verified rename.
+- See required and defaulted parameters for authored Mission Director library calls, with parameter-name completion while writing XML. Contextual hints support incomplete XML and unsaved authored provider files.
+
 ## 0.0.86 — 2026-11-19
 
 - Hover an X4 text reference in XML or Lua to see its value and source. Choose one or two languages in Forge settings. Results distinguish saved workspace text from the unpacked game corpus.
