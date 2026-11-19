@@ -25,6 +25,7 @@ export interface ReferenceCompletionItem {
   kind: ReferenceCompletionKind;
   detail?: string;
   insertText: string;
+  replaceRange?: { start: number; end: number };
   documentation?: string;
   sortText?: string;
 }
@@ -59,6 +60,7 @@ interface CursorContext {
   inTag: string | null;
   inAttrValue: string | null;
   attrValuePrefix: string;
+  attrValueQuote: '"' | "'" | null;
   elementStart: boolean;
   rootTag: string | null;
   partialElement: string;
@@ -102,6 +104,7 @@ export function xmlCursorContext(content: string, offset: number): CursorContext
   let inTag: string | null = null;
   let inAttrValue: string | null = null;
   let attrValuePrefix = '';
+  let attrValueQuote: CursorContext['attrValueQuote'] = null;
   let elementStart = false;
   let partialElement = '';
   if (lastLt > lastGt) {
@@ -113,8 +116,12 @@ export function xmlCursorContext(content: string, offset: number): CursorContext
         partialElement = body.replace(/^\//, '').toLowerCase();
       } else if (name) {
         inTag = name;
-        const attr = /([A-Za-z_][\w.:-]*)\s*=\s*(["'])([^"']*)$/.exec(body);
-        if (attr) { inAttrValue = attr[1].toLowerCase(); attrValuePrefix = attr[3]; }
+        const attr = /(?:^|\s)([A-Za-z_][\w.:-]*)\s*=\s*(?:"([^"]*)|'([^']*))$/.exec(body);
+        if (attr) {
+          inAttrValue = attr[1].toLowerCase();
+          attrValuePrefix = attr[2] ?? attr[3];
+          attrValueQuote = attr[2] === undefined ? "'" : '"';
+        }
       }
     }
   }
@@ -138,6 +145,7 @@ export function xmlCursorContext(content: string, offset: number): CursorContext
     inTag,
     inAttrValue,
     attrValuePrefix,
+    attrValueQuote,
     elementStart,
     rootTag,
     partialElement,
@@ -287,6 +295,37 @@ function referenceItems(
   }));
 }
 
+const AI_SCRIPT_NAME = /^[!A-Za-z][A-Za-z0-9_.]*$/;
+
+function aiScriptCallName(domain: string, tag: string): boolean {
+  return (domain === 'md' || domain === 'aiscripts') && tag === 'start_script'
+    || domain === 'aiscripts' && (tag === 'run_script' || tag === 'run_interrupt_script');
+}
+
+function aiScriptLiteralValue(text: string): string | null {
+  if (/[\s<>]/.test(text)) return null;
+  const name = text.replace(/&apos;|&#0*39;|&#x0*27;/g, "'").replace(/^'/, '').replace(/'$/, '');
+  return name === '' || AI_SCRIPT_NAME.test(name) ? name : null;
+}
+
+function aiScriptNameItems(
+  content: string, context: CursorContext, resources: ReferenceLanguageResources,
+): ReferenceCompletionItem[] | null {
+  const { offset, attrValuePrefix, attrValueQuote } = context;
+  if (!attrValueQuote) return null;
+  const start = offset - attrValuePrefix.length;
+  let end = offset;
+  while (end < content.length && content[end] !== attrValueQuote && !/[\r\n<>]/.test(content[end])) end++;
+  if (end < content.length && content[end] !== attrValueQuote) return null;
+  const prefix = aiScriptLiteralValue(attrValuePrefix);
+  if (prefix === null || aiScriptLiteralValue(content.slice(start, end)) === null) return null;
+  const quote = attrValueQuote === '"' ? "'" : '&apos;';
+  const query = prefix.toLowerCase();
+  return referenceItems('aiscript', resources.corpus, undefined, prefix, resources.projectSymbols)
+    .filter(item => AI_SCRIPT_NAME.test(item.insertText) && item.insertText.toLowerCase().startsWith(query))
+    .map(item => ({ ...item, insertText: quote + item.insertText + quote, replaceRange: { start, end } }));
+}
+
 export function completeReferenceDocument(request: ReferenceLanguageRequest, resources: ReferenceLanguageResources): ReferenceCompletionItem[] {
   const offset = offsetAt(request.content, request.line, request.column);
   const context = xmlCursorContext(request.content, offset);
@@ -294,6 +333,10 @@ export function completeReferenceDocument(request: ReferenceLanguageRequest, res
   if (context.inTag && context.inAttrValue) {
     const element = schema?.elements.get(context.inTag);
     const attr = element?.attributes.get(context.inAttrValue);
+    if (context.inAttrValue === 'name' && attr?.type === 'expression' && aiScriptCallName(resources.domain, context.inTag)) {
+      const names = aiScriptNameItems(request.content, context, resources);
+      if (names?.length) return names;
+    }
     if (expressionAttribute(context.inAttrValue, attr)) {
       const variableTypes = buildProjectSymbols([{ path: request.path, content: request.content }], resources.scriptProperties).variableTypesFor(request.path);
       const suggestions = suggestExpression(request.content, offset, resources.scriptProperties, { dynamicValues: dynamicValues(resources.corpus, resources.projectSymbols), variableTypes });
@@ -465,6 +508,8 @@ export function runReferenceLanguageSelftest() {
       ['conditions', element([])], ['actions', element([])], ['cues', element([])],
       ['event_owner', element([['owner', attr('faction')]])],
       ['set_value', element([['exact', attr('expression')]])],
+      ...['start_script', 'run_script', 'run_interrupt_script'].map(name =>
+        [name, element([['name', attr('expression', true)]])] as [string, ElementSpec]),
     ]),
   };
   const corpus = {
@@ -473,6 +518,8 @@ export function runReferenceLanguageSelftest() {
     symbols: [
       { kind: 'faction', id: 'player', name: 'Player', source: 'base', path: 'libraries/factions.xml' },
       { kind: 'faction', id: 'argon', name: 'Argon', source: 'base', path: 'libraries/factions.xml' },
+      { kind: 'aiscript', id: 'order.patrol', name: 'order.patrol', source: 'base', path: 'aiscripts/order.patrol.xml' },
+      { kind: 'aiscript', id: '!Test.Run', name: '!Test.Run', source: 'ego_dlc_test', path: 'aiscripts/test.xml' },
     ],
     references: { macros: new Set<string>(), wares: new Set<string>(), factions: new Set<string>(), sectors: new Set<string>(), jobs: new Set<string>(), aiScripts: new Set<string>() },
   } as ReferenceCorpus;
@@ -495,6 +542,43 @@ export function runReferenceLanguageSelftest() {
   const hover = cursor('<set_value exact="faction.player.i|d"/>');
   const hoverResult = hoverReferenceDocument({ path: 'md/x.xml', ...hover }, resources);
   ok('typed property hover resolves signature', hoverResult?.kind === 'property' && hoverResult.signature === 'faction.id: string', hoverResult);
+  const aiResources: ReferenceLanguageResources = {
+    ...resources, domain: 'aiscripts',
+    projectSymbols: [...(resources.projectSymbols || []),
+      { kind: 'aiscript' as const, id: 'Project.Test', name: 'Project.Test', source: 'project', path: 'aiscripts/project.xml' }],
+  };
+  const aiNames = (marked: string, input = aiResources) =>
+    completeReferenceDocument({ path: 'aiscripts/x.xml', ...cursor(marked) }, input)
+      .filter(item => item.replaceRange !== undefined);
+  const edited = (marked: string, name: string, input = aiResources) => {
+    const item = aiNames(marked, input).find(entry => entry.label === name);
+    if (!item?.replaceRange) return null;
+    const { content } = cursor(marked);
+    const { start, end } = item.replaceRange;
+    return content.slice(0, start) + item.insertText + content.slice(end);
+  };
+  ok('empty script name inserts one expression literal',
+    edited('<run_script name="|"/>', 'order.patrol') === '<run_script name="\'order.patrol\'"/>');
+  ok('quoted AI script completion replaces the full value and retains adjacent attributes',
+    edited('<run_script name="\'order.pa|st\'" result="$r"/>', 'order.patrol') === '<run_script name="\'order.patrol\'" result="$r"/>');
+  ok('unclosed expression quote can be completed inside the XML delimiter',
+    edited('<run_script name="\'order.pa|"/>', 'order.patrol') === '<run_script name="\'order.patrol\'"/>');
+  ok('single-quoted XML uses escaped expression delimiters',
+    edited("<run_interrupt_script name='&apos;!test|&apos;'/>", '!Test.Run') === "<run_interrupt_script name='&apos;!Test.Run&apos;'/>");
+  ok('UTF-16 offsets across CRLF and a non-BMP character preserve the source',
+    edited('<actions>\r\n  <start_script note="🚀" name="order.pa|"/>\r\n</actions>', 'order.patrol', { ...aiResources, domain: 'md' })
+      === '<actions>\r\n  <start_script note="🚀" name="\'order.patrol\'"/>\r\n</actions>');
+  ok('workspace AI-script identity and provenance are retained',
+    aiNames('<start_script name="Project.|"/>').some(item => item.label === 'Project.Test' && /project/i.test(item.detail || '')));
+  ok('dynamic, unrelated, comment, and multiline inputs have no catalog replacement',
+    [
+      '<run_script name="$script|"/>', '<run_script name="player.ship|"/>', '<run_script name="\'order.pa|\' + $suffix"/>',
+      '<run_script result="order.pa|"/>', '<set_value name="order.pa|"/>',
+      '<!-- <run_script name="order.pa|"/> -->', '<run_script name="order.pa|\r\n  "/>',
+    ].every(marked => aiNames(marked).length === 0));
+  ok('missing schema and unsupported domain cannot grant a call-name replacement',
+    aiNames('<run_script name="order.pa|"/>', { ...aiResources, schema: null }).length === 0
+      && aiNames('<run_script name="order.pa|"/>', { ...aiResources, domain: 'md' }).length === 0);
   const owner = cursor('<event_owner owner="|"/>');
   ok('reference typed attribute completion', completeReferenceDocument({ path: 'md/x.xml', ...owner }, resources).length === 3);
   ok('declared schema wins', declaredSchemaDomain('<x xmlns:xsi="x" xsi:noNamespaceSchemaLocation="../md.xsd"/>') === 'md');

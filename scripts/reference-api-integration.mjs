@@ -192,6 +192,23 @@ try {
   const readScopedCompletionCursor = cursorDoc(`${mdHeader}<cues><cue name="Root"><|`);
   const readScopedCompletion = await request('/api/reference/complete', { method: 'POST', token: readToken, body: { path: 'md/b74.xml', ...readScopedCompletionCursor } });
   check('read-scoped agent key can use POST completion intelligence', readScopedCompletion.status === 200, `status=${readScopedCompletion.status}`);
+  const aiScript = 'order.player.attack';
+  const quotedCalls = [
+    ['double-quoted AI script', 'aiscripts/probe.xml', '<run_script name="\'order.pla|yer.attack\'" result="$receipt"/>', `<run_script name="'${aiScript}'" result="$receipt"/>`],
+    ['AI interrupt', 'aiscripts/probe.xml', '<run_interrupt_script name="\'order.pla|\'"/>', `<run_interrupt_script name="'${aiScript}'"/>`],
+    ['single-quoted MD start script', 'md/probe.xml', '<start_script object="player.ship" name=\'order.pla|\'/>', `<start_script object="player.ship" name='&apos;${aiScript}&apos;'/>`],
+  ];
+  for (const [label, file, marked, expected] of quotedCalls) {
+    const reply = await complete(file, marked);
+    const item = Array.isArray(reply.body) ? reply.body.find(candidate => candidate.label === aiScript) : undefined;
+    const range = item?.replaceRange;
+    const { content } = cursorDoc(marked);
+    const edited = range && content.slice(0, range.start) + item.insertText + content.slice(range.end);
+    check(`${label} returns an exact quoted replacement`, reply.response.ok && edited === expected, JSON.stringify(item || null));
+  }
+  const dynamicCall = await complete('aiscripts/probe.xml', '<run_script name="\'order.pla|\' + $suffix"/>');
+  check('dynamic AI script expression has no catalog replacement', dynamicCall.response.ok && Array.isArray(dynamicCall.body)
+    && dynamicCall.body.every(item => item.replaceRange === undefined));
   const afterConditions = await complete('md/b74.xml', `${mdHeader}<cues><cue name="Root"><conditions/><|`);
   const afterConditionLabels = afterConditions.body.map((item) => item.label);
   check('cue completion consumes prior sequence state', !afterConditionLabels.includes('conditions') && ['actions', 'delay', 'cues'].every((label) => afterConditionLabels.includes(label)), afterConditionLabels.join(','));
@@ -440,6 +457,7 @@ try {
       transport: 'container', volume: 1, minPrice: 1, avgPrice: 1, maxPrice: 1,
       prodTime: 1, prodAmount: 1, includeInBuild: true,
     });
+    conflictWorkspace.aiScripts.push({ id: 'ai_quoted_name_fixture', name: 'Project.Test' });
     conflictWorkspace.xmlPatches.push({
       id: 'manual_conflict', action: 'replace', sel: bulkPreview.rows[0].selector,
       content: bulkPreview.rows[0].newValue, note: 'manual conflict fixture',
@@ -467,6 +485,10 @@ try {
     check('project-defined symbols flow through document completion', projectCompletion.response.status === 200
       && projectCompletion.body?.some((item) => item.label === 'project_fuel' && /project/i.test(item.detail || '')),
     JSON.stringify(projectCompletion.body || null));
+    const projectScript = await complete('aiscripts/probe.xml', '<run_script name="Project.|"/>');
+    check('addressed project script completes with its exact authored case and provenance', projectScript.response.ok
+      && Array.isArray(projectScript.body) && projectScript.body.some(item => item.label === 'Project.Test'
+        && item.insertText === "'Project.Test'" && item.replaceRange && /project/i.test(item.detail)), JSON.stringify(projectScript.body || null));
   }
 
   check('completion POST requires authentication', (await request('/api/reference/complete', { method: 'POST', body: { path: 'md/x.xml', content: '<x/>', line: 0, column: 0 } })).status === 401);
@@ -487,17 +509,18 @@ try {
     files: [
       { path: 'md/b74_invalid.xml', kind: 'md', content: `${mdHeader}<cues><cue name="Root" bogus="1"><conditions><totally_illegal/><match_relation_of relation="bogus"/></conditions><actions><find_ship name="$target"/><set_value name="$x" exact="$target.knownnmae"/><set_value name="$f" exact="faction.riptide"/><set_value name="$w" exact="ware.notarealware"/></actions></cue></cues></mdscript>` },
       { path: 'md/b74_order_invalid.xml', kind: 'md', content: `${mdHeader}<cues><cue name="Root"><actions/><conditions/></cue></cues></mdscript>` },
-      { path: 'libraries/wares.xml', kind: 'xml', content: '<wares><ware id="projectware" name="Project Ware" group="test"/></wares>' },
-      { path: 'libraries/factions.xml', kind: 'xml', content: '<factions><faction id="projectfaction" name="Project Faction"/></factions>' },
-      { path: 'libraries/diff_fixture.xml', kind: 'xml', content: '<diff><add sel="/wares"><ware id="diffware"/></add></diff>' },
-      { path: 'libraries/gamestarts.xml', kind: 'xml', content: '<diff><remove sel="/gamestarts/definitely_missing"/><add sel="/gamestarts"><definitely_illegal/></add></diff>' },
+      { path: 'libraries/wares.xml', kind: 'library', content: '<wares><ware id="projectware" name="Project Ware" group="test"/></wares>' },
+      { path: 'libraries/factions.xml', kind: 'library', content: '<factions><faction id="projectfaction" name="Project Faction"/></factions>' },
+      { path: 'libraries/diff_fixture.xml', kind: 'library', content: '<diff><add sel="/wares"><ware id="diffware"/></add></diff>' },
+      { path: 'libraries/gamestarts.xml', kind: 'library', content: '<diff><remove sel="/gamestarts/definitely_missing"/><add sel="/gamestarts"><definitely_illegal/></add></diff>' },
       { path: 'ui/addons/reference_acceptance/reference.lua', kind: 'lua', content: 'GetWareData("projectware", "name")\nGetFactionData("projectfaction", "name")\nGetWareData("notarealware", "name")\nGetFactionData("notarealfaction", "name")' },
     ],
   };
   const validationResponse = await request('/api/agent/project/validate', { method: 'POST', token, body: { project, detail: 'full' } });
   const validation = await validationResponse.json();
   const referenceFindings = validation?.references?.findings || [];
-  check('project validation returned reference findings', validationResponse.status === 200 && validation?.references?.available === true, `status=${validationResponse.status}`);
+  check('project validation returned reference findings', validationResponse.status === 200 && validation?.references?.available === true,
+    `status=${validationResponse.status}${validationResponse.ok ? '' : ` ${validation.code || ''} ${validation.error || ''}`}`);
   check('unknown ware warning names bad id', referenceFindings.some((finding) => finding.severity === 'warning' && finding.id === 'notarealware'));
   check('unknown faction warning names bad id', referenceFindings.some((finding) => finding.severity === 'warning' && finding.id === 'notarealfaction'));
   check('project-owned ids remain clean', !referenceFindings.some((finding) => finding.id === 'projectware' || finding.id === 'projectfaction'));

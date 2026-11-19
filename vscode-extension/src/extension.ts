@@ -1831,6 +1831,7 @@ interface ReferenceCompletionPayload {
   kind: "Element" | "Attribute" | "Enum" | "Reference" | "Property" | "Function";
   detail?: string;
   insertText: string;
+  replaceRange?: { start: number; end: number };
   documentation?: string;
   sortText?: string;
 }
@@ -1967,21 +1968,37 @@ function registerLangProviders(context: vscode.ExtensionContext): void {
           const file = nodeDocument ? 'md/x4forge-node-selection.xml' : relModPath(root!, doc.uri.fsPath);
           const rootHint = ctx.rootTag || "";
 
+          const completionVersion = doc.version;
+          const cursorOffset = doc.offsetAt(pos);
+          const completionBackend = backend;
+          const completionWorkspace = completionBackend?.workspaceId;
           const modern = await referenceLanguagePost<ReferenceCompletionPayload[]>("complete", {
             path: file,
             content: text,
             line: pos.line,
             column: pos.character,
-          });
+          }, completionBackend, true);
+          if (token.isCancellationRequested || doc.isClosed || doc.version !== completionVersion
+            || backend !== completionBackend || completionBackend?.workspaceId !== completionWorkspace) return undefined;
           if (modern !== null) {
             if (!modern.length) return undefined;
-            return modern.map((payload, index) => {
+            return modern.flatMap((payload, index) => {
               const item = new vscode.CompletionItem(payload.label, completionKind(payload.kind));
               item.detail = payload.detail;
-              item.insertText = new vscode.SnippetString(payload.insertText);
+              if (payload.replaceRange !== undefined) {
+                const span = payload.replaceRange;
+                if (!span || !Number.isInteger(span.start) || !Number.isInteger(span.end)
+                  || span.start < 0 || span.start > cursorOffset || span.end < cursorOffset || span.end > text.length) return [];
+                const range = new vscode.Range(doc.positionAt(span.start), doc.positionAt(span.end));
+                if (!range.isSingleLine || !range.contains(pos)) return [];
+                item.range = range;
+                item.insertText = payload.insertText;
+              } else {
+                item.insertText = new vscode.SnippetString(payload.insertText);
+              }
               item.sortText = payload.sortText || String(index).padStart(5, "0");
               if (payload.documentation) item.documentation = new vscode.MarkdownString(payload.documentation);
-              return item;
+              return [item];
             });
           }
 
