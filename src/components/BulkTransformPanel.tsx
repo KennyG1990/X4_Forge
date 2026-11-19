@@ -1,14 +1,15 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Copy, Loader2, Play, Plus, ShieldCheck, Trash2 } from 'lucide-react';
 import { sanitizeWorkspace, type ModWorkspace } from '../types';
+import type { BulkTransformOperation, BulkTransformOperationRule } from '../lib/bulkCorpusTransform';
+import { BULK_RECIPE_MAX_BYTES, BULK_RECIPE_MAX_OPERATIONS, readBulkTransformRecipe, writeBulkTransformRecipe } from '../lib/bulkTransformRecipe';
 import { workspaceContentHash, workspaceSnapshotHash } from '../lib/workspaceIdentity';
 import XPathInput from './XPathInput';
 
-type Operation = 'multiply' | 'add' | 'set' | 'round' | 'min' | 'max' | 'clamp';
 interface OperationDraft {
   id: string;
   selector: string;
-  operation: Operation;
+  operation: BulkTransformOperation;
   operand: string;
   upperOperand: string;
   rounding: 'none' | 'round' | 'floor' | 'ceil';
@@ -75,7 +76,7 @@ function sameWorkspaceBinding(expected: BulkWorkspaceBinding, current: BulkWorks
 }
 
 const ROW_HEIGHT = 44;
-const MAX_OPERATIONS = 16;
+const MAX_OPERATIONS = BULK_RECIPE_MAX_OPERATIONS;
 
 function newOperation(index: number, copy?: OperationDraft): OperationDraft {
   return copy
@@ -111,10 +112,11 @@ export default function BulkTransformPanel({ workspace, readWorkspaceBinding, se
     : newOperation(1)]);
   const [maxFiles, setMaxFiles] = useState(guidedHull ? 1 : 250);
   const [preview, setPreview] = useState<(PreviewPlan & { binding: BulkWorkspaceBinding }) | null>(null);
-  const [busy, setBusy] = useState<'sample' | 'preview' | 'apply' | null>(null);
+  const [busy, setBusy] = useState<'sample' | 'preview' | 'apply' | 'recipe' | null>(null);
   const [error, setError] = useState('');
   const [scrollTop, setScrollTop] = useState(0);
   const [expandedTarget, setExpandedTarget] = useState<string | null>(null);
+  const recipeInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (guidedHull) return;
@@ -145,7 +147,7 @@ export default function BulkTransformPanel({ workspace, readWorkspaceBinding, se
   }, [guidedHull, pathPrefix]);
 
   const rule = useMemo(() => {
-    const normalized = operations.map(operation => ({
+    const normalized = operations.map<BulkTransformOperationRule>(operation => ({
       id: operation.id,
       selector: operation.selector.trim(),
       operation: operation.operation,
@@ -176,6 +178,47 @@ export default function BulkTransformPanel({ workspace, readWorkspaceBinding, se
   const removeOperation = (id: string) => {
     setOperations(current => current.length === 1 ? current : current.filter(operation => operation.id !== id));
     setPreview(null);
+  };
+
+  const saveRecipe = () => {
+    setError('');
+    try {
+      const content = writeBulkTransformRecipe(rule);
+      const url = URL.createObjectURL(new Blob([content], { type: 'application/json' }));
+      try {
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'x4-bulk-transform.recipe.json';
+        link.click();
+      } finally { URL.revokeObjectURL(url); }
+    } catch (failure) { setError(failure instanceof Error ? failure.message : 'Could not save the recipe.'); }
+  };
+
+  const openRecipe = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = '';
+    if (!file || busy !== null) return;
+    setBusy('recipe'); setError('');
+    try {
+      if (file.size > BULK_RECIPE_MAX_BYTES) throw new Error('A bulk transform recipe must be 2 MiB or smaller.');
+      const recipe = readBulkTransformRecipe(await file.text());
+      if (recipe.pathPrefix !== pathPrefix) setSamplePath('');
+      setPathPrefix(recipe.pathPrefix);
+      setMaxFiles(recipe.maxFiles);
+      setOperations(recipe.operations.map(operation => ({
+        id: operation.id,
+        selector: operation.selector,
+        operation: operation.operation,
+        operand: String(Array.isArray(operation.operand) ? operation.operand[0] : operation.operand),
+        upperOperand: String(Array.isArray(operation.operand) ? operation.operand[1] : 2),
+        rounding: operation.rounding ?? 'none',
+        roundingIncrement: String(operation.roundingIncrement ?? 1),
+      })));
+      setPreview(null);
+      setExpandedTarget(null);
+      setScrollTop(0);
+    } catch (failure) { setError(failure instanceof Error ? failure.message : 'Could not open the recipe.'); }
+    finally { setBusy(null); }
   };
 
   const runPreview = async () => {
@@ -290,8 +333,13 @@ export default function BulkTransformPanel({ workspace, readWorkspaceBinding, se
               onChange={event => updateOperation(hullDraft.id, { operand: event.target.value })}
               className="mt-1 block w-full rounded border border-white/10 bg-[#090b10] px-2 py-2 font-mono text-sm text-slate-200" />
           </label>
-        </> : <>
+        </> : <fieldset disabled={busy === 'recipe'} className="min-w-0">
         <p className="mt-2 text-[10px] leading-relaxed text-slate-500">Build numeric X4 diff patches from the effective base + DLC corpus. Preview is mandatory; vanilla and game folders remain read-only.</p>
+        <div className="mt-3 flex gap-2">
+          <button type="button" onClick={saveRecipe} disabled={busy !== null} className="rounded border border-white/15 px-3 py-1.5 text-[10px] text-slate-200 hover:bg-white/5 disabled:opacity-40">Save recipe</button>
+          <button type="button" onClick={() => recipeInput.current?.click()} disabled={busy !== null} className="rounded border border-white/15 px-3 py-1.5 text-[10px] text-slate-200 hover:bg-white/5 disabled:opacity-40">Open recipe</button>
+          <input ref={recipeInput} type="file" accept=".json,application/json" data-testid="bulk-recipe-file" onChange={openRecipe} hidden />
+        </div>
         <label className="block mt-5 text-[9px] uppercase font-mono font-bold text-slate-500">Corpus path scope</label>
         <input data-testid="bulk-path-prefix" value={pathPrefix} onChange={event => { setPathPrefix(event.target.value); setPreview(null); }} className="mt-1 w-full rounded border border-white/10 bg-black/40 px-2 py-2 font-mono text-[11px] text-slate-200 focus:border-cyan-500 focus:outline-none" />
         <div className="mt-1 min-h-4 truncate font-mono text-[8.5px] text-slate-600" title={samplePath}>{busy === 'sample' ? 'Finding a canonical sample…' : samplePath ? `sample: ${samplePath}` : 'No canonical XML sample found under this scope.'}</div>
@@ -312,7 +360,7 @@ export default function BulkTransformPanel({ workspace, readWorkspaceBinding, se
             {samplePath ? <XPathInput testId={index === 0 ? 'bulk-selector' : `bulk-selector-${index}`} targetPath={samplePath} value={draft.selector} onChange={value => updateOperation(draft.id, { selector: value })} className="w-full rounded border border-white/10 bg-black/40 px-2 py-2 font-mono text-[10px] text-emerald-300 focus:border-cyan-500 focus:outline-none" />
               : <input data-testid={index === 0 ? 'bulk-selector' : `bulk-selector-${index}`} value={draft.selector} onChange={event => updateOperation(draft.id, { selector: event.target.value })} className="w-full rounded border border-white/10 bg-black/40 px-2 py-2 font-mono text-[10px] text-emerald-300 focus:border-cyan-500 focus:outline-none" />}
             <div className="mt-2 grid grid-cols-2 gap-2">
-              <select data-testid={index === 0 ? 'bulk-operation' : `bulk-operation-${index}`} value={draft.operation} onChange={event => updateOperation(draft.id, { operation: event.target.value as Operation })} className="rounded border border-white/10 bg-[#090b10] px-2 py-1.5 text-[10px] text-slate-200">
+              <select data-testid={index === 0 ? 'bulk-operation' : `bulk-operation-${index}`} value={draft.operation} onChange={event => updateOperation(draft.id, { operation: event.target.value as BulkTransformOperation })} className="rounded border border-white/10 bg-[#090b10] px-2 py-1.5 text-[10px] text-slate-200">
                 <option value="multiply">Multiply</option><option value="add">Add</option><option value="set">Set</option><option value="round">Round value</option><option value="min">Minimum</option><option value="max">Maximum</option><option value="clamp">Clamp</option>
               </select>
               <input aria-label={`Field ${index + 1} operand`} type="number" step="any" disabled={draft.operation === 'round'} value={draft.operand} onChange={event => updateOperation(draft.id, { operand: event.target.value })} className="rounded border border-white/10 bg-[#090b10] px-2 py-1.5 text-[10px] text-slate-200 disabled:opacity-40" />
@@ -326,7 +374,7 @@ export default function BulkTransformPanel({ workspace, readWorkspaceBinding, se
         <label className="mt-4 block text-[9px] uppercase font-mono font-bold text-slate-500">Safety cap
           <input type="number" min={1} max={500} value={maxFiles} onChange={event => { setMaxFiles(Number(event.target.value)); setPreview(null); }} className="mt-1 block w-full rounded border border-white/10 bg-[#090b10] px-2 py-2 text-[11px] text-slate-200" />
         </label>
-        </>}
+        </fieldset>}
         <button onClick={runPreview} disabled={busy !== null || Boolean(guidedHull && !hullValueReady)} className="mt-5 flex w-full items-center justify-center gap-2 rounded border border-cyan-500/40 bg-cyan-500/10 py-2.5 font-mono text-[10px] font-bold uppercase text-cyan-300 hover:bg-cyan-500/20 disabled:opacity-40">{busy === 'preview' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />} Preview against corpus</button>
         <div className="mt-3 rounded border border-amber-500/20 bg-amber-500/5 p-2 text-[9px] leading-relaxed text-amber-200/70">Apply changes workspace patch state only. Compile and Deploy remain separate validated operations.</div>
       </section>

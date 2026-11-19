@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceFingerprint": "51dd0ff00d092e5e7364031db9ef5e2484e060ca64f540662c39428f04891ddc",
+  "sourceFingerprint": "ad5e981d96bc3d9ffa03dee10b0ab04395d036e1429adf08c080f54b4a614699",
   "policy": "Every raw production filesystem mutation source is count-pinned here. Authoritative files use atomic sibling promotion; stronger tree, archive, append-log, SQLite, retention, ephemeral, and fixture contracts remain explicit exceptions.",
   "writers": [
     {
@@ -533,6 +533,14 @@
       "owners": ["native UI preview PNG download"],
       "rationale": "Downloads the native preview PNG through the browser only after an explicit user action; the PNG is a non-authoritative visual output and does not become source or deployment state.",
       "failureContract": "Download failure reports no successful export and cannot mutate Lua source, preview state, deployment/game files, or credentials, and cannot falsely claim in-game verification."
+    },
+    {
+      "file": "src/components/BulkTransformPanel.tsx",
+      "calls": { "anchorDownload": 1 },
+      "categories": ["browser-file-output"],
+      "owners": ["portable bulk transform recipe download"],
+      "rationale": "An explicit Save recipe action hands one bounded JSON draft to the browser download manager. The draft contains only path scope, cap, and operations.",
+      "failureContract": "A failed download cannot change the workspace, corpus, preview approval, receipts, deployment, or game files."
     }
   ],
   "database": {

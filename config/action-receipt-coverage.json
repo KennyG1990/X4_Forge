@@ -2442,6 +2442,23 @@
       ]
     },
     {
+      "id": "browser-output:src/components/BulkTransformPanel.tsx",
+      "kind": "browser-output",
+      "owner": "portable bulk transform recipe download",
+      "sourceRef": "config/durable-writers.json#/browserOutputs/3",
+      "integrationBatch": "W3B2",
+      "semanticClass": "external-publish",
+      "policy": "receipt-required",
+      "effects": [
+        "publish"
+      ],
+      "authorityScopes": [
+        "global",
+        "profile",
+        "workspace"
+      ]
+    },
+    {
       "id": "browser-output:src/components/ReleaseCenter.tsx",
       "kind": "browser-output",
       "owner": "verified Nexus and Steam artifact export",

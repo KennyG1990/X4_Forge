@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { expect, test } from './request-transport';
 import { buildTemplateWorkspace } from '../../src/lib/modTemplates';
 import { readServerWorkspace, readServerWorkspaceEnvelope, seedServerWorkspace } from './ephemeral';
@@ -138,12 +139,16 @@ test('corpus authoring blocks collisions, completes XPath, previews, applies, an
     };
   };
 
+  const previewRules: Record<string, unknown>[] = [];
+  let applyRequests = 0;
   await page.route('**/api/agent/bulk-transform/preview', async route => {
     const body = route.request().postDataJSON() as { rule: Record<string, unknown> };
+    previewRules.push(body.rule);
     await route.fulfill({ status: 200, json: await planFor(body.rule) });
   });
 
   await page.route('**/api/agent/bulk-transform/apply', async route => {
+    applyRequests += 1;
     const body = route.request().postDataJSON() as { rule: Record<string, unknown>; expectedPlanHash: string; expectedHead: string; expectedSnapshotHash: string };
     expect(route.request().headers()['x-forge-operation-id']).toEqual(expect.stringMatching(/^[a-zA-Z][a-zA-Z0-9._:-]{0,127}$/));
     const before = await readServerWorkspaceEnvelope();
@@ -259,12 +264,58 @@ test('corpus authoring blocks collisions, completes XPath, previews, applies, an
   expect(afterPreview.workspaceHash).toBe(beforePreview.workspaceHash);
   expect(afterPreview.version).toBe(beforePreview.version);
 
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('button', { name: 'Save recipe', exact: true }).click(),
+  ]);
+  expect(download.suggestedFilename()).toBe('x4-bulk-transform.recipe.json');
+  const recipeBytes = await readFile(await download.path());
+  const recipe = JSON.parse(recipeBytes.toString('utf8'));
+  expect(Object.keys(recipe).sort()).toEqual(['maxFiles', 'operations', 'pathPrefix', 'schemaVersion']);
+  expect(recipe).toEqual({ schemaVersion: 'x4forge.bulk-transform-recipe.v1', pathPrefix: previewRules[0].pathPrefix,
+    maxFiles: previewRules[0].maxFiles, operations: previewRules[0].operations });
+  const fileInput = page.getByTestId('bulk-recipe-file');
+  await fileInput.setInputFiles({ name: 'invalid.recipe.json', mimeType: 'application/json', buffer: Buffer.from('{') });
+  await expect(page.getByText('This recipe file is not valid JSON.', { exact: true })).toBeVisible();
+  await fileInput.setInputFiles({ name: 'future.recipe.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify({ ...recipe, schemaVersion: 'v2' })) });
+  await expect(page.getByText('This bulk transform recipe version is unsupported.', { exact: true })).toBeVisible();
+  const duplicate = { ...recipe, operations: [recipe.operations[0], { ...recipe.operations[1], id: recipe.operations[0].id }] };
+  await fileInput.setInputFiles({ name: 'duplicate.recipe.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(duplicate)) });
+  await expect(page.getByText('A recipe needs a unique ID for each operation.', { exact: true })).toBeVisible();
+  await fileInput.setInputFiles({ name: 'oversized.recipe.json', mimeType: 'application/json', buffer: Buffer.alloc(2 * 1024 * 1024 + 1, 32) });
+  await expect(page.getByText('A bulk transform recipe must be 2 MiB or smaller.', { exact: true })).toBeVisible();
+  await expect(page.getByText('2 VALIDATED', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Field 2 operand')).toHaveValue('5');
+
+  await page.getByLabel('Field 2 operand').fill('8');
+  await page.getByRole('button', { name: 'Preview against corpus', exact: true }).click();
+  await expect(page.getByText('2 VALIDATED', { exact: true })).toBeVisible();
+  const [chooser] = await Promise.all([
+    page.waitForEvent('filechooser'),
+    page.getByRole('button', { name: 'Open recipe', exact: true }).click(),
+  ]);
+  await chooser.setFiles({ name: download.suggestedFilename(), mimeType: 'application/json', buffer: recipeBytes });
+  await expect(page.getByLabel('Field 2 operand')).toHaveValue('5');
+  await expect(page.getByText('Preview before applying', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Add 4 validated field patches to workspace', exact: true })).toHaveCount(0);
+  expect(previewRules).toHaveLength(2);
+  expect(applyRequests).toBe(0);
+  const afterImport = await readServerWorkspaceEnvelope();
+  expect(afterImport.workspaceHash).toBe(beforePreview.workspaceHash);
+  expect(afterImport.snapshotHash).toBe(beforePreview.snapshotHash);
+  expect(afterImport.version).toBe(beforePreview.version);
+  await page.getByRole('button', { name: 'Preview against corpus', exact: true }).click();
+  await expect(page.getByText('2 VALIDATED', { exact: true })).toBeVisible();
+  expect(previewRules).toHaveLength(3);
+  expect(previewRules[2]).toEqual(previewRules[0]);
+
   // The startup walkaround fetch is intentionally independent of this workflow and may
   // resolve after the initial 1.5 s dismissal probe on slower full-suite runs. Exercise
   // its real dismiss control again instead of forcing a click through the visible card.
   if (await healthCard.isVisible()) await page.getByTestId('health-card-dismiss').click();
   await page.getByRole('button', { name: 'Add 4 validated field patches to workspace', exact: true }).click();
   await expect.poll(async () => (await readServerWorkspace()).xmlPatches?.length || 0).toBe(4);
+  expect(applyRequests).toBe(1);
   await expect(page.locator('button[title="Undo last action (Ctrl+Z)"]')).toBeEnabled();
   await page.locator('button[title="Undo last action (Ctrl+Z)"]').click();
   await expect.poll(async () => (await readServerWorkspace()).xmlPatches?.length || 0, { timeout: 20_000 }).toBe(0);
