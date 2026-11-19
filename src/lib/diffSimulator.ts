@@ -571,7 +571,11 @@ function applyToNode(document: XmlDocument, target: XmlNode, operation: DiffOper
   if (!isElement(target)) throw new Error('add selector must resolve to an element');
   if (operation.attrType) {
     if (!operation.attrType.startsWith('@')) throw new Error(`unsupported add @type "${operation.attrType}"; expected @attribute`);
-    target.setAttribute(operation.attrType.slice(1), directPayloadText(operation.content || ''));
+    const name = operation.attrType.slice(1);
+    const existing = target.getAttributeNode(name);
+    const attribute = existing ?? document.createAttribute(name);
+    attribute.value = attribute.nodeValue = directPayloadText(operation.content || '');
+    if (!existing) target.setAttributeNode(attribute);
     return;
   }
   const nodes = payloadNodes(document, operation.content || '');
@@ -939,6 +943,24 @@ export function runDiffSimulatorSelftest(): { pass: boolean; allPassed: boolean;
   const addition = attributed('<root/>', '<diff><add sel="/root" type="@exact">else</add></diff>');
   check('attribute addition receives actual resulting Attr provenance', addition.ok
     && addition.attributeAssignments?.[0]?.attributeName === 'exact' && addition.attributeAssignments[0].value === 'else');
+  for (const name of ['', '1invalid', 'two words', 'p::name']) {
+    const invalidName = attributed(base, `<diff>\n<add sel="/root" type="@${name}">wrong</add>\n</diff>`);
+    check(`reject malformed attribute name ${JSON.stringify(name)} without applying`, !invalidName.ok
+      && invalidName.content === base && invalidName.operations[0]?.applied === false
+      && invalidName.attributeAssignments?.length === 0
+      && invalidName.findings.some(finding => finding.code === 'DIFF_APPLY_FAILED'
+        && finding.operation === 0 && finding.line === 2 && finding.selector === '/root'));
+  }
+  const qualifiedNames = attributed('<root xmlns:p="urn:fixture" p:weight="old"/>', `<diff>
+    <add sel="/root" type="@p:weight">new</add>
+    <add sel="/root" type="@p:height">tall</add>
+    <add sel="/root" type="@énergie">low</add>
+  </diff>`);
+  check('attribute addition accepts qualified and Unicode names and preserves provenance', qualifiedNames.ok
+    && qualifiedNames.content.includes('p:weight="new"') && qualifiedNames.content.includes('p:height="tall"')
+    && qualifiedNames.content.includes('énergie="low"') && qualifiedNames.attributeAssignments?.length === 3
+    && qualifiedNames.attributeAssignments[0]?.attributeName === 'p:weight'
+    && qualifiedNames.attributeAssignments[0]?.value === 'new');
   const overwrite = attributed('<root exact="old"/>', '<diff><replace sel="/root/@exact">bad</replace><add sel="/root" type="@exact">good</add></diff>');
   check('later attribute assignment replaces earlier provenance', overwrite.ok && overwrite.attributeAssignments?.length === 1
     && overwrite.attributeAssignments[0].operation === 1 && overwrite.attributeAssignments[0].value === 'good');
