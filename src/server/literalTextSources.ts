@@ -145,40 +145,59 @@ export function readLiteralReferenceTexts(rootInput: string, language: number): 
   }
 }
 
-
-// Independent admission bounds apply to retention. Larger inputs still use the ordinary resolver.
+// Retain at most two recent languages for the same corpus. Admission only affects performance.
 const REFERENCE_INDEX_MAX_SOURCE_BYTES = 8 * 1024 * 1024;
 const REFERENCE_INDEX_MAX_ENTRIES = 80_000;
+const REFERENCE_CACHE_MAX_SOURCE_BYTES = 14 * 1024 * 1024;
+const REFERENCE_CACHE_MAX_ENTRIES = 150_000;
+const REFERENCE_CACHE_LANGUAGES = 2;
 type ReadyTextIndex = Extract<ReturnType<typeof prepareLiteralTextLookup>, { status: 'ready' }>;
+type RetainedReference = { files: LiteralReferenceInput['files']; index: ReadyTextIndex };
 
-let retainedReference: {
-  root: string;
-  language: number;
-  files: LiteralReferenceInput['files'];
-  index: ReadyTextIndex;
-} | undefined;
+let retainedRoot: string | undefined;
+const retainedLanguages = new Map<number, RetainedReference>();
+
+function retainLanguage(language: number, candidate: RetainedReference): void {
+  let sourceBytes = candidate.index.sourceBytes;
+  let entries = candidate.index.entryCount;
+  for (const { index } of retainedLanguages.values()) {
+    sourceBytes += index.sourceBytes;
+    entries += index.entryCount;
+  }
+  for (const [oldLanguage, { index }] of retainedLanguages) {
+    if (retainedLanguages.size < REFERENCE_CACHE_LANGUAGES
+      && sourceBytes <= REFERENCE_CACHE_MAX_SOURCE_BYTES && entries <= REFERENCE_CACHE_MAX_ENTRIES) break;
+    retainedLanguages.delete(oldLanguage);
+    sourceBytes -= index.sourceBytes;
+    entries -= index.entryCount;
+  }
+  retainedLanguages.set(language, candidate);
+}
 
 export function resolveLiteralReferenceText(
   rootInput: string,
   request: LiteralTextLookupRequest & { scope: 'reference' },
 ): LiteralTextLookupResult {
-  const { files, complete } = readLiteralReferenceTexts(rootInput, request.language);
-  if (!complete) {
-    retainedReference = undefined;
-    return { ...request, status: 'unavailable', reason: 'incomplete-coverage' };
-  }
   const root = path.resolve(rootInput);
-  const retained = retainedReference;
-  if (retained?.root === root && retained.language === request.language
-    && retained.files.length === files.length && files.every((file, i) =>
-      file.path === retained.files[i].path && file.content === retained.files[i].content)) {
+  if (root !== retainedRoot) {
+    retainedLanguages.clear();
+    retainedRoot = root;
+  }
+  const { language } = request;
+  const { files, complete } = readLiteralReferenceTexts(rootInput, language);
+  const retained = retainedLanguages.get(language);
+  // Remove the slot before reusing it as most recent, rebuilding it or refusing coverage.
+  retainedLanguages.delete(language);
+  if (!complete) return { ...request, status: 'unavailable', reason: 'incomplete-coverage' };
+  if (retained?.files.length === files.length && files.every((file, i) =>
+    file.path === retained.files[i].path && file.content === retained.files[i].content)) {
+    retainedLanguages.set(language, retained);
     return resolvePreparedLiteralText(retained.index, request);
   }
-  retainedReference = undefined;
   const index = prepareLiteralTextLookup(files, request, complete);
   if (index.status === 'ready' && index.sourceBytes <= REFERENCE_INDEX_MAX_SOURCE_BYTES
     && index.entryCount <= REFERENCE_INDEX_MAX_ENTRIES) {
-    retainedReference = { root, language: request.language, files, index };
+    retainLanguage(language, { files, index });
   }
   return resolvePreparedLiteralText(index, request);
 }
