@@ -3,6 +3,12 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
+## 0.0.85 — 2026-11-19
+
+- Forge verifies qualified references to vanilla Mission Director cues and libraries using your configured unpacked X4 corpus. These checks run in Project, Problems, deploy, package checks, and the validation CLI. A missing member in a known library still gets a diagnostic.
+- MD coverage messages identify the authored reference and its role. They show the original line and column when Forge can establish the location.
+- If the corpus data used by a deploy check changes, Forge requires a fresh preview. Missing or incomplete MD input remains visible in the checks.
+
 ## 0.0.84 — 2026-11-18
 
 - Deploy preview and history show the exact loose files and catalog parts Forge will add, replace or remove, with the byte sizes for each change.

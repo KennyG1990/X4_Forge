@@ -1,4 +1,9 @@
 {
+  "0.0.85": [
+    "Forge verifies qualified references to vanilla Mission Director cues and libraries using your configured unpacked X4 corpus. These checks run in Project, Problems, deploy, package checks, and the validation CLI. A missing member in a known library still gets a diagnostic.",
+    "MD coverage messages identify the authored reference and its role. They show the original line and column when Forge can establish the location.",
+    "If the corpus data used by a deploy check changes, Forge requires a fresh preview. Missing or incomplete MD input remains visible in the checks."
+  ],
   "_comment": "Plain-English release notes for the CHANGELOG (B60). Add a version key with user-facing bullets — what a modder can now DO or what got better. Committed versions, dates, and semver ordering come from git; an exceptional version published before its corrective commit belongs under the reserved `_published` object as an exact `YYYY-MM-DD` date. That metadata is date-only, while note arrays remain the content authority; note-only versions are not emitted, and versions without notes fall back to a cleaned-up git subject when available.",
   "_published": {
     "0.0.78": "2026-09-10",
