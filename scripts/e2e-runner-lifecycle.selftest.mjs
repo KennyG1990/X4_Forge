@@ -4,7 +4,7 @@ import { createE2eRunStateOwner, E2E_RUN_STATE_ENV } from './e2e-runtime-bootstr
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 
-import { createE2eProcessHandleLeaseOwner, createE2eProcessHandleLeaseFamily, activateE2eProcessHandleLeaseRole, E2E_PROCESS_HANDLE_ACTOR_ENV, superviseSpawnedE2eProcess } from './e2e-runner-lifecycle.mjs';
+import { createE2eProcessHandleLeaseOwner, createE2eProcessHandleLeaseFamily, activateE2eProcessHandleLeaseRole, E2E_PROCESS_HANDLE_ACTOR_ENV, E2E_WINDOWS_CLI_ADMISSION_TIMEOUT_MS, superviseSpawnedE2eProcess } from './e2e-runner-lifecycle.mjs';
 import { sampleSpawnedProcessOwnership } from './e2e-process-ownership-sampler.mjs';
 
 const ROOT_PID = 7401;
@@ -2068,6 +2068,23 @@ async function runFamilyBindingAdmissionAndStateCase() {
       assert.equal(familyFs.existsSync(familyPath.join(other.marker.root, 'cli.phase.json')), false);
     } finally { other.stateOwner.retire(); }
   } finally { f.stateOwner.retire(); }
+  for (const bindingAt of [E2E_WINDOWS_CLI_ADMISSION_TIMEOUT_MS - 1, E2E_WINDOWS_CLI_ADMISSION_TIMEOUT_MS]) {
+    const fixture = makeFamilyControlledFixture();
+    try {
+      let elapsed = 0;
+      const pending = fixture.activate({ now: () => elapsed, sleep: async () => {
+        elapsed = bindingAt;
+        fixture.launch();
+      } });
+      if (bindingAt === E2E_WINDOWS_CLI_ADMISSION_TIMEOUT_MS) {
+        await assert.rejects(pending, /CONTROLLED_NATIVE_EXIT/u);
+        assert.deepEqual(fixture.cliProcess.exitCodes, [86]);
+        assert.equal(familyFs.existsSync(familyPath.join(fixture.marker.root, 'cli.phase.json')), false);
+      } else {
+        assert.equal((await pending).active, true);
+      }
+    } finally { fixture.stateOwner.retire(); }
+  }
 }
 
 async function runFamilyExitReentryAndFenceCase() {
@@ -2533,8 +2550,8 @@ function runFamilyAdmissionRefreshAndDeadlineCase() {
       assert.equal(f.family.snapshot().owner.retained, 1, 'native HANDLE is captured before admission');
       assert.equal(familyFs.existsSync(familyPath.join(f.marker.root, 'cli.binding.json')), false);
       const originalHandle = f.handles[0];
-      if (mode === 'running-259') { originalHandle.exitCode = 259; now = 5099; }
-      if (mode === 'expired') now = 5100;
+      if (mode === 'running-259') { originalHandle.exitCode = 259; now = 100 + E2E_WINDOWS_CLI_ADMISSION_TIMEOUT_MS - 1; }
+      if (mode === 'expired') now = 100 + E2E_WINDOWS_CLI_ADMISSION_TIMEOUT_MS;
       if (mode === 'backwards') now = 99;
       if (mode === 'terminal-259') { originalHandle.exitCode = 259; originalHandle.running = false; }
       if (mode === 'identity') originalHandle.identity = { pid: f.child.pid, creationToken: 'f'.repeat(16) };
@@ -2564,7 +2581,7 @@ function runFamilyAdmissionRefreshAndDeadlineCase() {
   const noPid = makeFamilyControlledFixture({ now: () => now });
   try {
     noPid.ticket.spawn(noPid.child.constructor.prototype.spawn, noPid.child, [{ ...noPid.options, noPid: true }]);
-    now = 6000;
+    now = E2E_WINDOWS_CLI_ADMISSION_TIMEOUT_MS + 1;
     noPid.ticket.admit();
     assert.equal(noPid.read('cli', 'binding').disposition, 'not-created');
     assert.equal(noPid.handles.length, 0);

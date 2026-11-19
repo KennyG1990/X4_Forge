@@ -1219,7 +1219,7 @@ async function runNativeLeaseExtraPreload(actor) {
     const request = readNativeLeaseJson(realBodyRequest, 1024);
     assertExactRecordKeys(request, ['schemaVersion', 'mode']);
     assert.equal(request.schemaVersion, 'forge.e2e-native-real-body.v1');
-    assert.ok(['healthy', 'malformed', 'expired'].includes(request.mode));
+    assert.ok(['healthy', 'delayed', 'malformed', 'expired'].includes(request.mode));
     fs.writeFileSync(path.join(fixtureRoot, `entry-${actor.actorId}.json`), `${JSON.stringify(admission)}\n`, { flag: 'wx' });
     return; // Unlike the native fault fixture, execute the actual dependency body.
   }
@@ -1430,7 +1430,7 @@ async function runNativeLeaseQualification(scenario) {
 
 async function runNativeAdmissionQualification(mode) {
   assert.equal(process.platform, 'win32');
-  assert.ok(['healthy', 'malformed', 'expired'].includes(mode));
+  assert.ok(['healthy', 'delayed', 'malformed', 'expired'].includes(mode));
   const stateOwner = createE2eRunStateOwner();
   try { await runNativeAdmissionInState(mode, stateOwner); }
   finally { stateOwner.retire(); }
@@ -1450,7 +1450,7 @@ async function runNativeAdmissionInState(mode, stateOwner) {
   const entryPath = path.join(fixtureRoot, 'entry-cli.json');
   const receiptPath = path.join(fixtureRoot, 'receipt.json');
   let child, childClosed = false, witnessCount = 0, witnessError = null, retired = 0, initialized = 0, sampled = 0, malformedConsumed = 0;
-  let expiredObservedErrors = null;
+  let expiredObservedErrors = null, delayedCapture = null;
   let initializationFixtureError = null;
   let originalChildClose = null;
   let resolveWait, rejectWait, resolveClose, inspection;
@@ -1508,8 +1508,17 @@ async function runNativeAdmissionInState(mode, stateOwner) {
             assert.equal(options.snapshotOptions.timeoutMs, 10000);
             if (mode === 'expired') await close;
             else assert.equal(childClosed, false);
-            const observed = await initializeSpawnedProcessOwnership(options);
+            const started = process.hrtime.bigint();
+            const capture = initializeSpawnedProcessOwnership(options);
+            const observed = mode === 'delayed'
+              ? (await Promise.all([capture, new Promise(resolve => setTimeout(resolve, 5600))]))[0]
+              : await capture;
             initialized += 1;
+            if (mode === 'delayed') {
+              delayedCapture = { elapsedMs: Number((process.hrtime.bigint() - started) / 1000000n),
+                complete: observed.complete, rootMatches: observed.rootIdentity?.pid === input.rootPid,
+                errors: [...observed.errors] };
+            }
             if (mode === 'expired') expiredObservedErrors = [...observed.errors];
             assert.equal(fs.existsSync(bindingPath), false, 'actual capture cannot itself publish admission');
             assert.equal(fs.existsSync(entryPath), false, 'real dependency entry stays blocked through actual capture');
@@ -1549,7 +1558,15 @@ async function runNativeAdmissionInState(mode, stateOwner) {
   assert.deepEqual(receipt.lifecycle.childExit, originalChildClose);
   assert.equal(receipt.childExit, originalChildClose.code);
   assert.equal(family.snapshot().owner.retained, 1);
-  const healthy = mode === 'healthy';
+  const healthy = mode === 'healthy' || mode === 'delayed';
+  if (mode === 'delayed') {
+    console.log(`[e2e-delayed-admission] ${JSON.stringify({ capture: delayedCapture, originalChildClose,
+      entry: fs.existsSync(entryPath), bound: fs.existsSync(bindingPath), ownership: receipt.lifecycle.ownershipComplete,
+      remaining: receipt.lifecycle.termination?.remainingPids, treeGone: receipt.lifecycle.termination?.treeGone })}`);
+    assert.ok(delayedCapture?.elapsedMs >= 5000, 'real ownership capture crossed the old admission deadline');
+    assert.equal(delayedCapture.complete, true, 'ownership capture must find the original live CLI after the old deadline');
+    assert.equal(delayedCapture.rootMatches, true);
+  }
   assert.equal(fs.existsSync(bindingPath), healthy);
   assert.equal(fs.existsSync(entryPath), healthy);
   assert.equal(inspection.complete, healthy);
@@ -1607,7 +1624,7 @@ if (!isMain && activeE2eProcessHandleRole.active === true && typeof activeE2ePro
 if (isMain) {
   try {
     const nativeMode = /^--native-process-leases=(healthy|acquire|cap|persist)$/u.exec(process.argv[2] || '');
-    const admissionMode = /^--native-process-admission=(healthy|malformed|expired)$/u.exec(process.argv[2] || '');
+    const admissionMode = /^--native-process-admission=(healthy|delayed|malformed|expired)$/u.exec(process.argv[2] || '');
     if (admissionMode && process.argv.length === 3) await runNativeAdmissionQualification(admissionMode[1]);
     else if (nativeMode && process.argv.length === 3) await runNativeLeaseQualification(nativeMode[1]);
     else await runSelftest();

@@ -14,6 +14,15 @@ import {
 } from './e2e-process-ownership-sampler.mjs';
 import { terminateCapturedProcessTree } from './e2e-process-termination-executor.mjs';
 
+// A cold Windows ownership snapshot can use the full CIM budget before the
+// runner can admit the exact Playwright CLI. Allow time to spawn and publish.
+export const E2E_WINDOWS_OWNERSHIP_SNAPSHOT_TIMEOUT_MS = 10_000;
+export const E2E_WINDOWS_CLI_ADMISSION_TIMEOUT_MS = E2E_WINDOWS_OWNERSHIP_SNAPSHOT_TIMEOUT_MS + 2_000;
+
+function leaseWithinAdmissionWindow(start, current, timeout) {
+  return Number.isFinite(start) && Number.isFinite(current) && current >= start && current - start < timeout;
+}
+
 const leaseMonotonicNow = () => Number(process.hrtime.bigint() / 1000000n);
 
 /**
@@ -644,8 +653,8 @@ function leaseMakeContext({ manifest, store, env, native, processObject, childPr
               && JSON.stringify(actual) === JSON.stringify(retained.identity), 'e2e-handle-family-admission-identity');
             leaseAssert(native.isRunning(retained.handle) === true, 'e2e-handle-family-admission-terminal');
             const admittedAt = now();
-            leaseAssert(Number.isFinite(admittedAt) && admittedAt >= ticket.preparedAt
-              && admittedAt - ticket.preparedAt < 5000, 'e2e-handle-family-admission-expired');
+            leaseAssert(leaseWithinAdmissionWindow(ticket.preparedAt, admittedAt, E2E_WINDOWS_CLI_ADMISSION_TIMEOUT_MS),
+              'e2e-handle-family-admission-expired');
           }
           leaseAssert(!failed && !fenced && !ticket.cancelled && ticket.binding === null,
             'e2e-handle-family-admission-order');
@@ -851,7 +860,7 @@ export function createE2eProcessHandleLeaseFamily({
 export async function activateE2eProcessHandleLeaseRole({
   env = process.env, argv = process.argv, execArgv = process.execArgv, processObject = process,
   io = leaseFs, readRunState = leaseReadRunState, nativeFactory = leaseNative,
-  childProcessModule = leaseChildProcess, now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
+  childProcessModule = leaseChildProcess, now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
   verifyFingerprint = leaseVerifyFingerprint,
 } = {}) {
   const markerText = env[E2E_PROCESS_HANDLE_ACTOR_ENV];
@@ -909,16 +918,21 @@ export async function activateE2eProcessHandleLeaseRole({
     leaseAssert(JSON.stringify(imports) === JSON.stringify(leaseImports(manifest)), 'e2e-handle-family-preload-mismatch');
     const intentRecord = store.read(store.nameFor(marker.actorId, 'intent'));
     leaseAssert(intentRecord.hash === marker.intentHash && intentRecord.value.role === candidate);
-    const started = now();
+    const clock = now ?? (candidate === 'cli' ? leaseMonotonicNow : Date.now);
+    const started = clock();
+    const timeout = candidate === 'cli' ? E2E_WINDOWS_CLI_ADMISSION_TIMEOUT_MS : 5_000;
     let waitReported = false;
     while (!io.existsSync(leasePath.join(marker.root, store.nameFor(marker.actorId, 'binding')))) {
-      leaseAssert(now() - started < 5000, 'e2e-handle-family-admission-timeout');
+      leaseAssert(clock() - started < timeout, 'e2e-handle-family-admission-timeout');
       store.check();
       if (candidate === 'cli' && !waitReported) {
         waitReported = true;
         try { console.error('[e2e-runner-lifecycle] cli-admission-wait'); } catch { /* Diagnostic cannot grant or obstruct admission. */ }
       }
       await sleep(5);
+    }
+    if (candidate === 'cli') {
+      leaseAssert(leaseWithinAdmissionWindow(started, clock(), timeout), 'e2e-handle-family-admission-timeout');
     }
     const actorRecord = leaseReadActor(store, manifest, marker.actorId);
     const parent = candidate === 'cli' ? manifest.creator : leaseReadActor(store, manifest, 'cli').binding.identity;

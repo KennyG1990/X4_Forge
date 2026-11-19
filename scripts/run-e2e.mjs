@@ -26,6 +26,7 @@ import {
   activateE2eProcessHandleLeaseRole,
   createE2eProcessHandleLeaseFamily,
   E2E_PROCESS_HANDLE_FAILURE_EXIT_CODE,
+  E2E_WINDOWS_OWNERSHIP_SNAPSHOT_TIMEOUT_MS,
   superviseSpawnedE2eProcess,
 } from './e2e-runner-lifecycle.mjs';
 import { bootstrapE2eRuntime, createE2eRunStateOwner } from './e2e-runtime-bootstrap.mjs';
@@ -1050,8 +1051,8 @@ async function verifyReceiptReadback(receiptPath, expectedReceipt, readImpl) {
 }
 
 function runnerSnapshotOptions(platform = process.platform) {
-  // Windows CIM tails reached 7.95s; keep this budget local to the runner.
-  return platform === 'win32' ? { timeoutMs: 10000 } : {};
+  // Windows CIM tails reached 7.95s. CLI admission also allows for startup and publication.
+  return platform === 'win32' ? { timeoutMs: E2E_WINDOWS_OWNERSHIP_SNAPSHOT_TIMEOUT_MS } : {};
 }
 
 function finalizeE2eRunState(finalizer) {
