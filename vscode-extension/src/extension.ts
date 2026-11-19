@@ -33,7 +33,10 @@ import { mapFlatFindings, type FlatFinding } from "./diagnosticsMap";
 import { buildXmlAssociations, listModFolders, writeRecommendations, writeXmlAssociations } from "./modFolder";
 import { atomicWriteFile, replaceFileSetAtomically } from "./durableWrite";
 import { xmlCursorContext } from "./langContext";
-import { findCueDefinition, findCueReferences, mdscriptNameOf, parseCueWord } from "./langNav";
+import {
+  findCueReferences, MAX_MD_DEFINITION_SOURCE, parseCueWord, readMdDefinitionDocument, resolveMdDefinition,
+  type MdDefinitionDocument,
+} from "./langNav";
 import { detectIdeCapabilities, formatIdeCapabilityReport } from "./capabilities";
 import { PanelBackendBinding, SharedBackendEnsure } from "./panelBinding";
 import { checkOwnedBackendLiveness, hasForgeSchemaIdentity } from "./backendLiveness";
@@ -2111,29 +2114,86 @@ function mdFilesOf(root: string): string[] {
   }
 }
 
+function openMdDefinitionDocuments(directory: string) {
+  const documents = new Map<string, { document: vscode.TextDocument; version: number }>();
+  for (const document of vscode.workspace.textDocuments) {
+    if (document.uri.scheme !== "file" || document.isClosed) continue;
+    const file = document.uri.fsPath;
+    const relative = path.relative(directory, file);
+    if (path.isAbsolute(relative) || path.dirname(relative) !== "." || path.extname(relative).toLowerCase() !== ".xml") continue;
+    documents.set(process.platform === "win32" ? relative.toLowerCase() : relative, { document, version: document.version });
+  }
+  return documents;
+}
+
+async function mdDefinitionSiblings(
+  directory: string, caller: vscode.TextDocument, scriptName: string, token: vscode.CancellationToken,
+): Promise<MdDefinitionDocument[] | undefined> {
+  const open = openMdDefinitionDocuments(directory);
+  const keyOf = (name: string) => process.platform === "win32" ? name.toLowerCase() : name;
+  const callerKey = keyOf(path.basename(caller.uri.fsPath));
+  const scriptKey = scriptName.toLowerCase();
+  const matches: MdDefinitionDocument[] = [];
+  try {
+    const entries = await fs.promises.readdir(directory, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return [];
+      throw error;
+    });
+    const files = new Map(entries.filter(entry => entry.isFile() && path.extname(entry.name).toLowerCase() === ".xml")
+      .map(entry => [keyOf(entry.name), path.join(directory, entry.name)]));
+    for (const [key, value] of open) files.set(key, value.document.uri.fsPath);
+    files.delete(callerKey);
+    if (files.size > LIVE_FILE_LIMIT) return undefined;
+
+    let remaining = 4 * MAX_MD_DEFINITION_SOURCE;
+    let closedMatch: { file: string; text: string } | undefined;
+    for (const [key, file] of files) {
+      if (token.isCancellationRequested) return undefined;
+      const buffer = open.get(key);
+      const size = buffer ? 0 : (await fs.promises.stat(file)).size;
+      if (size > MAX_MD_DEFINITION_SOURCE || size > remaining) return undefined;
+      const text = buffer ? buffer.document.getText() : await fs.promises.readFile(file, "utf8");
+      remaining -= Buffer.byteLength(text);
+      if (text.length > MAX_MD_DEFINITION_SOURCE || remaining < 0) return undefined;
+      const script = readMdDefinitionDocument(file, text);
+      if (script?.name.toLowerCase() !== scriptKey) continue;
+      matches.push(script);
+      if (matches.length > 1) return undefined;
+      if (!buffer) closedMatch = { file, text };
+    }
+    // A concurrent external edit can invalidate a disk-only destination during the scan.
+    if (closedMatch && await fs.promises.readFile(closedMatch.file, "utf8") !== closedMatch.text) return undefined;
+  } catch {
+    return undefined;
+  }
+  const current = openMdDefinitionDocuments(directory);
+  if (current.size !== open.size || [...open].some(([key, before]) => {
+    const after = current.get(key);
+    return after?.document !== before.document || after.version !== before.version;
+  })) return undefined;
+  return matches;
+}
+
 function registerNavProviders(context: vscode.ExtensionContext): void {
   const selector: vscode.DocumentSelector = [{ scheme: "file", pattern: "**/md/*.xml" }];
 
   context.subscriptions.push(
     vscode.languages.registerDefinitionProvider(selector, {
-      provideDefinition(doc, pos) {
+      async provideDefinition(doc, pos, token) {
         const finish = beginNativeOperation('native.provider.read');
         let outcome: ForgePerformanceOutcome = 'ok';
         try {
           const root = modRootFor(doc.uri.fsPath);
-          if (!root) return undefined;
-          const range = doc.getWordRangeAtPosition(pos, /[A-Za-z_][\w.]*/);
-          if (!range) return undefined;
-          const word = parseCueWord(doc.getText(range));
-          if (!word) return undefined;
-          for (const file of mdFilesOf(root)) {
-            let text: string;
-            try { text = fs.readFileSync(file, "utf8"); } catch { continue; }
-            if (word.script && (mdscriptNameOf(text) || "").toLowerCase() !== word.script.toLowerCase()) continue;
-            const loc = findCueDefinition(text, word.cue);
-            if (loc) return new vscode.Location(vscode.Uri.file(file), new vscode.Position(loc.line, loc.column));
-          }
-          return undefined;
+          if (!root || token.isCancellationRequested) return undefined;
+          const version = doc.version;
+          const origin = readMdDefinitionDocument(doc.uri.fsPath, doc.getText(), doc.offsetAt(pos));
+          if (!origin?.reference) return undefined;
+          const siblings = origin.reference.script
+            ? await mdDefinitionSiblings(path.join(root, "md"), doc, origin.reference.script, token)
+            : [];
+          if (!siblings || doc.isClosed || doc.version !== version || token.isCancellationRequested) return undefined;
+          const loc = resolveMdDefinition(origin, siblings);
+          return loc ? new vscode.Location(vscode.Uri.file(loc.file), new vscode.Position(loc.line, loc.column)) : undefined;
         } catch (error) {
           outcome = 'error';
           throw error;

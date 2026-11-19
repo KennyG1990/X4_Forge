@@ -1,4 +1,6 @@
 /** Quote-aware lexical spans for X4 XML documents and incomplete editor buffers. */
+export const MAX_PROJECT_XML_DEPTH = 256;
+
 function tagBoundary(xml: string, start: number, recoverMalformedTags = false): number {
   let quote = '';
   for (let i = start + 1; i < xml.length; i++) {

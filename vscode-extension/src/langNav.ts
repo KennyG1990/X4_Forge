@@ -1,10 +1,16 @@
 /**
  * langNav.ts — B57s3 (2026-07-17): vscode-free cue navigation helpers.
  *
- * NAVIGATION AID ONLY: plain-text location of cue/script definitions and references.
- * Resolution SEMANTICS (namespaces, this/parent keywords, cross-mod refs) belong to the
- * server's cue index — the validator remains the referee; this just moves the cursor.
+ * Literal MD definitions use authored XML and the shared declaration resolver.
+ * Find References still supplies a separate text search.
  */
+
+import {
+  buildMdLibraryIndex, mdReferenceRole, parseMdScriptRoot, resolveMdLibraryReference,
+  type MdLibraryDeclaration, type MdLibraryScript,
+} from "../../shared/mdDeclarationResolution";
+import { createXmlNodePositionLocator } from "../../shared/xmlSourcePosition";
+import { MAX_PROJECT_XML_DEPTH } from "../../shared/xmlMarkup";
 
 export interface CueWord {
   /** the full dotted chain under the cursor, e.g. "md.Setup.Start" or "Boot_Cue" */
@@ -31,18 +37,80 @@ export function parseCueWord(raw: string): CueWord | null {
 
 export interface TextLocation { line: number; column: number; }
 
-/** 0-based line/column of `<cue name="<cue>"` in one file's text (case-insensitive name). */
-export function findCueDefinition(text: string, cue: string): TextLocation | null {
-  const re = new RegExp(`<cue\\b[^>]*\\bname\\s*=\\s*"${escapeRe(cue)}"`, "i");
-  const m = re.exec(text);
-  if (!m) return null;
-  return offsetToLocation(text, m.index);
+interface DefinitionLocation extends TextLocation { file: string; }
+interface DefinitionSource { location?: DefinitionLocation; libraryScope?: number; }
+interface LiteralReference { value: string; script?: string; library: boolean; libraryScope?: number; }
+export type MdDefinitionDocument = MdLibraryScript<DefinitionSource, string> & {
+  reference: LiteralReference | undefined;
+};
+
+const IDENTIFIER = /^[A-Za-z_]\w*$/;
+const LITERAL_REFERENCE = /^(?:md\.([A-Za-z_]\w*)\.)?([A-Za-z_]\w*)$/;
+const CUE_EVENTS = new Set(["event_cue_signalled", "event_cue_completed"]);
+export const MAX_MD_DEFINITION_SOURCE = 8 * 1024 * 1024;
+
+/** Read literal cue references and declaration positions from the same authored bytes. */
+export function readMdDefinitionDocument(file: string, text: string, cursor?: number): MdDefinitionDocument | undefined {
+  if (text.length > MAX_MD_DEFINITION_SOURCE) return undefined;
+  const root = parseMdScriptRoot(text);
+  const name = root?.getAttribute("name");
+  if (!root || !name || !IDENTIFIER.test(name) || root.ownerDocument?.doctype) return undefined;
+
+  const locator = createXmlNodePositionLocator(text);
+  const declarations: MdLibraryDeclaration<DefinitionSource>[] = [];
+  let reference: LiteralReference | undefined;
+  const pending = [{ element: root, depth: 0, libraryScope: undefined as number | undefined }];
+  let seen = 0;
+  while (pending.length) {
+    const { element, depth, libraryScope: inheritedScope } = pending.pop()!;
+    if (++seen > 50_000 || depth > MAX_PROJECT_XML_DEPTH) return undefined;
+    if (element.namespaceURI || element.getAttribute("xmlns")) continue;
+    const tag = element.tagName;
+    const kind = tag === "cue" || tag === "library" ? tag : undefined;
+    const libraryScope = kind === "library" ? seen : inheritedScope;
+    const container = element.parentElement;
+    const owner = container?.parentElement;
+    if (kind && container?.tagName === "cues" && (owner === root || owner?.tagName === "cue" || owner?.tagName === "library")) {
+      const attr = element.getAttributeNode("name");
+      const point = attr && locator.point(attr);
+      if (attr && IDENTIFIER.test(attr.value)) {
+        declarations.push({
+          name: attr.value, kind, purpose: element.getAttribute("purpose"),
+          source: { libraryScope, location: point ? { file, line: point.line - 1, column: point.column - 1 } : undefined },
+        });
+      }
+    }
+    if (cursor !== undefined && !reference) {
+      const role = mdReferenceRole(tag);
+      const library = role === "cue" || role === "include_actions" || role === "run_actions";
+      const attr = (role || CUE_EVENTS.has(tag)) && element.getAttributeNode(library ? "ref" : "cue");
+      const start = attr ? locator.offset(attr) : undefined;
+      if (attr && start !== undefined && cursor > start && locator.point(attr)) {
+        const close = text.indexOf(text[start], start + 1);
+        const value = attr.value.trim();
+        const literal = LITERAL_REFERENCE.exec(value);
+        if (close > cursor && literal) reference = { value, script: literal[1], library, libraryScope };
+      }
+    }
+    if (tag === "cue" && element.hasAttribute("ref")) continue;
+    for (const child of Array.from(element.children)) pending.push({ element: child, depth: depth + 1, libraryScope });
+  }
+  return { name, source: file, declarations, reference };
 }
 
-/** True when the file's <mdscript name="..."> matches (used to narrow md.Script.Cue). */
-export function mdscriptNameOf(text: string): string | null {
-  const m = /<mdscript\b[^>]*\bname\s*=\s*"([^"]+)"/i.exec(text);
-  return m ? m[1] : null;
+export function resolveMdDefinition(
+  origin: MdDefinitionDocument,
+  siblings: readonly MdDefinitionDocument[] = [],
+): DefinitionLocation | undefined {
+  const ref = origin.reference;
+  if (!ref) return undefined;
+  const index = buildMdLibraryIndex([origin, ...siblings]);
+  const resolved = resolveMdLibraryReference(index, origin.name, ref.value, { cueReference: !ref.library });
+  if (ref.library) return resolved?.library?.source.location;
+  const target = resolved?.declaration;
+  if (!target || target.name !== resolved.targetName || target.source.libraryScope !== ref.libraryScope) return undefined;
+  if (ref.libraryScope !== undefined && resolved.script.source !== origin.source) return undefined;
+  return target.source.location;
 }
 
 /** All 0-based locations of the cue name as a whole word (references view). */
@@ -84,14 +152,47 @@ export function runLangNavSelftest() {
   ok("non_identifier_rejected", parseCueWord("$variable") === null && parseCueWord("") === null);
 
   const doc = `<mdscript name="Setup" xmlns:xsi="x">\n  <cues>\n    <cue name="Start" instantiate="true">\n      <actions><signal_cue_instantly cue="md.Setup.Start"/></actions>\n    </cue>\n  </cues>\n</mdscript>`;
-  const def = findCueDefinition(doc, "Start");
-  ok("definition_found_line", def?.line === 2, JSON.stringify(def));
-  ok("definition_case_insensitive", findCueDefinition(doc, "start")?.line === 2);
-  ok("definition_absent_null", findCueDefinition(doc, "Nope") === null);
-  ok("mdscript_name", mdscriptNameOf(doc) === "Setup");
   const refs = findCueReferences(doc, "Start");
   ok("references_found_both", refs.length === 2, JSON.stringify(refs));
   ok("references_word_boundary", findCueReferences('<x a="Restart Started"/>', "Start").length === 0);
+
+  const local = (value: string) => doc.replace('cue="md.Setup.Start"', `cue="${value}"`);
+  const other = readMdDefinitionDocument("other.xml", '<mdscript name="Other"><cues><cue name="Start"/><library name="Template"/></cues></mdscript>')!;
+  const find = (source: string, caret: string, siblings?: MdDefinitionDocument[]) => {
+    const parsed = readMdDefinitionDocument("setup.xml", source, source.indexOf(caret) + caret.length - 2);
+    return parsed && resolveMdDefinition(parsed, siblings);
+  };
+  const definition = find(local("Start"), 'cue="Start"', [other]);
+  ok("bare_resolves_in_own_script", JSON.stringify(definition) === JSON.stringify({ file: "setup.xml", line: 2, column: 15 }));
+  ok("qualified_uses_mdscript_identity", find(local("md.Other.Start"), 'cue="md.Other.Start"', [other])?.file === "other.xml");
+  ok("unknown_script_does_not_fall_back", !find(local("md.Unknown.Start"), 'cue="md.Unknown.Start"', [other]));
+  ok("matching_name_with_wrong_case_is_unsupported", !find(local("start"), 'cue="start"', [other]));
+  ok("computed_keyword_and_property_references_do_not_jump", ["$Start", "this", "this.Start", "parent.Start", "md.Setup.Start.status"].every(value =>
+    !find(local(value), `cue="${value}"`, [other])));
+  ok("duplicate_explicit_script_is_ambiguous", !find(local("md.Other.Start"), 'cue="md.Other.Start"', [other, other]));
+  const duplicate = doc.replace("</cue>", '<cues><cue name="Start"/></cues></cue>');
+  ok("duplicate_nested_declaration_is_ambiguous", !find(duplicate, 'cue="md.Setup.Start"'));
+  const ghost = local("Ghost").replace("<cues>", '<cues><!-- <cue name="Ghost"/> --><![CDATA[<cue name="Ghost"/>]]>');
+  ok("comments_and_cdata_are_not_declarations", !find(ghost, 'cue="Ghost"'));
+  const ordinary = local("Start").replace('<signal_cue_instantly cue=', '<debug_text text=');
+  ok("unrelated_attribute_is_not_a_reference", !find(ordinary, 'text="Start"'));
+  const foreign = local("Start").replace("<actions>", '<actions xmlns="urn:foreign">');
+  ok("foreign_namespace_is_not_a_reference", !find(foreign, 'cue="Start"'));
+  ok("incomplete_authored_xml_has_no_target", !find(local("Start").replace("</cues>", ""), 'cue="Start"'));
+  const library = doc.replace('<cue name="Start" instantiate="true">', "<cue name='Start' ref='md.Other.Templ&#97;te'>");
+  ok("single_quote_and_entity_in_library_reference", find(library, "ref='md.Other.Templ&#97;te'", [other])?.file === "other.xml");
+  ok("library_reference_cannot_target_plain_cue", !find(library.replace('Templ&#97;te', 'Start'), "ref='md.Other.Start'", [other]));
+  const scoped = local("Inner").replace("</cues>", '<library name="Shell"><cues><cue name="Inner"/></cues></library></cues>');
+  ok("library_subcue_cannot_be_named_by_ordinary_cue", !find(scoped, 'cue="Inner"'));
+  const inside = scoped.replace('<library name="Shell">', '<library name="Shell"><actions><signal_cue cue="Inner"/></actions>');
+  ok("library_subcue_resolves_for_own_library", !!find(inside.replace('cue="Inner"', 'cue="Absent"'), 'cue="Inner"'));
+  const otherLibrary = readMdDefinitionDocument("library.xml", scoped.replace('name="Setup"', 'name="Foreign"'))!;
+  ok("qualified_reference_cannot_target_foreign_library_subcue",
+    !find(local("md.Foreign.Inner"), 'cue="md.Foreign.Inner"', [otherLibrary]));
+  const inherited = local("Inner").replace("</cues>", '<cue name="FromLibrary" ref="Shell"><cues><cue name="Inner"/></cues></cue></cues>');
+  ok("reference_instance_does_not_declare_ignored_child", !find(inherited, 'cue="Inner"'));
+  const crlf = "\uFEFF" + local("Start").replaceAll("\n", "\r\n");
+  ok("bom_and_crlf_keep_exact_destination", JSON.stringify(find(crlf, 'cue="Start"')) === JSON.stringify(definition));
 
   const passed = checks.filter(c => c.pass).length;
   return { allPassed: passed === checks.length, passed, total: checks.length, checks };

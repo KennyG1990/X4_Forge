@@ -1,6 +1,8 @@
 /** Explicit project XML import budgets; large enough for real X4 files, finite for hostile input. */
+import { MAX_PROJECT_XML_DEPTH } from '../../shared/xmlMarkup';
+
+export { MAX_PROJECT_XML_DEPTH } from '../../shared/xmlMarkup';
 export const MAX_PROJECT_XML_BYTES = 64 * 1024 * 1024;
-export const MAX_PROJECT_XML_DEPTH = 256;
 export const SAFE_XML_ENTITY_OPTIONS = {
   enabled: true,
   maxEntitySize: 10_000,
