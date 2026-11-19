@@ -47,7 +47,7 @@ function parseAiscript(xml: string): { root: Element; recovered: boolean } | und
   let recovered = false;
   try {
     const root = new DOMParser({ onError: () => { recovered = true; } })
-      .parseFromString(xml, 'text/xml').documentElement;
+      .parseFromString(xml.replace(/^\uFEFF/, ''), 'text/xml').documentElement;
     if (root?.nodeName === 'aiscript') return { root, recovered };
   } catch {
     return;
@@ -199,6 +199,8 @@ export function runAiscriptLintSelftest(): {
   ok('vanilla-shaped order lints clean', good.length === 0, good);
 
   const bad = lintAiscriptOrderParams(BAD_FIXTURE);
+  ok('UTF-8 BOM and CRLF preserve findings and positions after an XML declaration',
+    JSON.stringify(lintAiscriptOrderParams('\uFEFF' + BAD_FIXTURE.replace(/\r?\n/g, '\r\n'))) === JSON.stringify(bad));
   ok('flags non-internal param without text (the in-game error class)',
     bad.some(f => f.code === 'aiscript.order_param_missing_text' && f.param === 'position'), bad);
   ok('flags type="text" as illegal order-param type',

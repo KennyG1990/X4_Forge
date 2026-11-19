@@ -9,6 +9,7 @@ import { ModWorkspace, PackageDiagnostic, generateMDXML } from '../types';
 import { critiqueWorkspace } from '../lib/mdCritic';
 import DiagnosticGuidance from './DiagnosticGuidance';
 import { resolveCueToNodeId } from '../lib/liveLogNav';
+import { openInNativeEditor } from '../lib/nativeEditor';
 import type { ValidationDeltaResult } from '../lib/validationDelta';
 
 interface PackageModDoctorProps {
@@ -87,18 +88,32 @@ function messageFromUnknown(error: unknown, fallback: string): string {
 
 const FINDINGS_PER_PAGE = 40;
 type FindingFilter = 'all' | PackageDiagnostic['severity'] | 'coverage';
-type PositionedFinding = PackageDiagnostic & { column?: number };
 const EDITOR_SOURCE_KINDS = new Set([
   'ui_widget', 'ai_script', 'ai_param', 'ware', 'job', 't_file', 't_page', 't_item', 'xml_patch',
 ]);
 
-function canNavigateToFinding(source: NonNullable<PackageDiagnostic['sourceRef']>, workspace: ModWorkspace): boolean {
-  if (source.kind === 'md_node' || source.kind === 'cue' || source.kind === 'node') {
-    const { id } = source;
-    return !!id && (workspace.nodes.some(node => node.id === id) || !!resolveCueToNodeId(id, workspace.nodes));
-  }
-  return EDITOR_SOURCE_KINDS.has(source.kind);
+function graphSourceForFinding(finding: PackageDiagnostic, workspace: ModWorkspace): string | undefined {
+  const ref = finding.sourceRef;
+  const graphKind = ref && (ref.kind === 'md_node' || ref.kind === 'cue' || ref.kind === 'node');
+  const authoredNode = finding.sourceNavigation?.status === 'ready' ? finding.sourceNavigation.nodeId : undefined;
+  const id = finding.nodeId || authoredNode || (graphKind ? ref.id : undefined);
+  if (!id) return;
+  const normalized = (file?: string) => file?.replace(/\\/g, '/').toLowerCase();
+  const filePath = normalized(finding.filePath);
+  const exact = workspace.nodes.filter(node => node.id === id);
+  if (exact.length) return exact.length === 1
+    && (!filePath || !exact[0].source || normalized(exact[0].source.path) === filePath) ? id : undefined;
+  if (finding.nodeId || authoredNode || !graphKind) return;
+  const cues = workspace.nodes.filter(node =>
+    (!filePath || normalized(node.source?.path) === filePath) && resolveCueToNodeId(id, [node]) === node.id);
+  if (cues.length === 1) return cues[0].id;
 }
+
+const sourceUnavailable = {
+  'materialized-source': 'No saved workspace copy is available for this finding.',
+  'source-mismatch': 'Validated text differs from the saved file.',
+  'position-unavailable': 'The validator did not supply a verified position.',
+};
 
 export default function PackageModDoctor({
   workspace,
@@ -119,10 +134,11 @@ export default function PackageModDoctor({
   const [findingQuery, setFindingQuery] = useState('');
   const [findingFilter, setFindingFilter] = useState<FindingFilter>('all');
   const [findingPage, setFindingPage] = useState(0);
+  const [sourceMessage, setSourceMessage] = useState<{ key: string; text: string } | null>(null);
   const findingSearch = useRef<HTMLInputElement>(null);
   const findingRows = useMemo(() => {
     const occurrences = new Map<string, number>();
-    return diagnostics.map((finding: PositionedFinding) => {
+    return diagnostics.map(finding => {
       const identity = JSON.stringify([workspace.id, finding]);
       const occurrence = occurrences.get(identity) ?? 0;
       occurrences.set(identity, occurrence + 1);
@@ -825,6 +841,12 @@ export default function PackageModDoctor({
                     : (diag.severity === 'warning' ? 'bg-amber-500/5 text-amber-300 border-amber-500/25' : 'bg-blue-500/5 text-blue-300 border-blue-500/20');
                   const source = diag.sourceRef;
                   const sourceLabel = source && `Source: ${[source.kind, source.label, source.id].filter(Boolean).join(' / ')}`;
+                  const current = diagnosticSource !== 'checking';
+                  const graph = current ? graphSourceForFinding(diag, workspace) : undefined;
+                  const native = diagnosticSource === 'project' && diag.sourceNavigation?.status === 'ready'
+                    ? diag.sourceNavigation : undefined;
+                  const editor = current && source && EDITOR_SOURCE_KINDS.has(source.kind) ? source : undefined;
+                  const jump = graph ? { kind: 'md_node', id: graph, label: source?.label } : (!native ? editor : undefined);
 
                   return (
                     <div
@@ -840,17 +862,32 @@ export default function PackageModDoctor({
                           {diag.line !== undefined && diag.column !== undefined && `:${diag.column}`}
                         </span>
                         <p className="text-slate-300 leading-normal [overflow-wrap:anywhere]">{diag.message}</p>
-                        {source && (canNavigateToFinding(source, workspace) ? (
+                        {jump ? (
                           <button
                             type="button"
-                            onClick={() => window.dispatchEvent(new CustomEvent('navigate-to-source', { detail: source }))}
+                            onClick={() => window.dispatchEvent(new CustomEvent('navigate-to-source', { detail: jump }))}
                             className="mt-1 block rounded px-1 py-0.5 text-left font-mono text-[9px] text-cyan-300 [overflow-wrap:anywhere] hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
                           >
-                            {sourceLabel}
+                            {diag.sourceNavigation?.status === 'ready' && diag.sourceNavigation.nodeId
+                              ? 'Go to canvas node' : sourceLabel ?? 'Go to canvas node'}
                           </button>
-                        ) : (
+                        ) : native ? (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const sent = openInNativeEditor(native.path, native, native.sourceFolder, native.sha256);
+                              setSourceMessage({ key, text: sent ? 'Native editor request sent.' : 'Open Forge in Antigravity to jump to this source.' });
+                            }}
+                            className="mt-1 block rounded px-1 py-0.5 text-left font-mono text-[9px] text-cyan-300 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+                          >
+                            Open source at line {native.line + 1}
+                          </button>
+                        ) : sourceLabel && (
                           <span className="mt-1 block font-mono text-[9px] text-slate-300 [overflow-wrap:anywhere]">{sourceLabel}</span>
-                        ))}
+                        )}
+                        {sourceMessage?.key === key && current && <p role="status">{sourceMessage.text}</p>}
+                        {!jump && diagnosticSource === 'project' && diag.sourceNavigation?.status === 'unavailable'
+                          && <p className="text-slate-400">{sourceUnavailable[diag.sourceNavigation.reason]}</p>}
                         <DiagnosticGuidance
                           diagnostic={diag}
                           workspace={workspace}

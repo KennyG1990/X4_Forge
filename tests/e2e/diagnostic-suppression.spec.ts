@@ -2,9 +2,11 @@ import { expect, test, type Page } from './request-transport';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
 import { buildTemplateWorkspace } from '../../src/lib/modTemplates';
+import type { ModWorkspace } from '../../src/types';
 import { E2E_API_ORIGIN, E2E_TOKEN } from '../../playwright.config';
-import { seedServerWorkspace } from './ephemeral';
+import { ephemeralWorkspaceHeaders, seedServerWorkspace } from './ephemeral';
 
 const API = E2E_API_ORIGIN;
 const auth = { Authorization: `Bearer ${E2E_TOKEN}`, 'Content-Type': 'application/json' };
@@ -157,6 +159,129 @@ async function waitForApp(page: Page) {
   await page.goto('/');
   await expect(page.getByTestId('readiness-ladder')).toBeVisible();
 }
+
+test('Diagnostics Center sends the source-bound native position from project validation', async ({ page, request, baseURL }, testInfo) => {
+  const temp = testInfo.outputPath('diagnostic-source');
+  const source = path.join(temp, 'source_fixture');
+  const filePath = 'aiscripts/orders.xml';
+  const xmlLines = [
+    '<?xml version="1.0" encoding="utf-8"?>',
+    '<aiscript name="FixtureOrders">',
+    '  <order id="Fixture" name="{1041, 551}" description="{1041, 552}" category="internal">',
+    '    <params>',
+    '      <!--🚀--><param name="radius" type="number"/>',
+    '    </params>',
+    '  </order>',
+    '</aiscript>',
+  ];
+  const sourceBytes = Buffer.from('\uFEFF' + xmlLines.join('\r\n'), 'utf8');
+  fs.mkdirSync(path.join(source, 'aiscripts'), { recursive: true });
+  fs.writeFileSync(path.join(source, 'content.xml'), '<content id="source_fixture" name="Source Fixture" version="100"/>');
+  const mdFiles = ['alpha', 'bravo'].map(stem => {
+    const path = `md/${stem}.xml`;
+    const value = stem === 'bravo' ? 'ware.forge_diagnostic_missing_fixture' : '1';
+    const content = `<mdscript name="${stem}"><cues><cue name="Repeated">
+      <conditions><event_game_started/></conditions><actions>
+        <set_value name="$anchor" exact="1"/><set_value name="$target" exact="${value}"/>
+      </actions></cue></cues></mdscript>`;
+    return { path, content };
+  });
+  fs.mkdirSync(path.join(source, 'md'));
+  for (const file of mdFiles) fs.writeFileSync(path.join(source, file.path), file.content);
+  let workspace: ModWorkspace;
+  const original = await request.get(`${API}/api/schema/config`, { headers: auth });
+  expect(original.ok(), await original.text()).toBeTruthy();
+  const state = await original.json();
+  const configure = (modWorkspacePath: string) =>
+    request.post(`${API}/api/schema/config`, { headers: auth, data: { modWorkspacePath } });
+  const compile = async (fileOverrides?: Record<string, string>) => {
+    const compiled = await request.post(`${API}/api/agent/compile`, { headers: auth, data: { workspace, fileOverrides } });
+    expect(compiled.ok(), await compiled.text()).toBeTruthy();
+    const result = await compiled.json();
+    return result.diagnostics as Array<{ filePath: string; code: string; sourceNavigation?: unknown }>;
+  };
+  const native = {
+    path: filePath, sourceFolder: path.basename(source),
+    sha256: createHash('sha256').update(sourceBytes).digest('hex'),
+    line: 4, column: xmlLines[4].indexOf('<param'),
+  };
+  try {
+    const configured = await configure(temp);
+    expect(configured.ok(), await configured.text()).toBeTruthy();
+    const imported = await request.post(`${API}/api/agent/mod-folder/import`, {
+      headers: { ...await ephemeralWorkspaceHeaders(true), 'x-forge-operation-id': `forge_op_${randomUUID().replaceAll('-', '')}` },
+      data: { root: 'workspace', path: path.basename(source) },
+    });
+    expect(imported.ok(), await imported.text()).toBeTruthy();
+    workspace = (await imported.json()).workspace;
+    const graphTarget = workspace.nodes.find(node => node.source?.path === mdFiles[1].path
+      && node.xmlTag === 'set_value' && node.properties.name === '$target');
+    if (!graphTarget) throw new Error('The workspace import did not model the target action');
+    workspace.nodes = workspace.nodes.map(node => node.properties.name === '$anchor' ? { ...node, x: 6000, y: 6000 } : node);
+    // Keep the AI script on disk so the compile route validates its untouched source bytes.
+    fs.writeFileSync(path.join(source, filePath), sourceBytes);
+    await seedServerWorkspace(workspace as unknown as Record<string, unknown>);
+    const aiFinding = (entries: Awaited<ReturnType<typeof compile>>) => entries.find(entry =>
+      entry.filePath === filePath && entry.code === 'aiscript.order_param_missing_text');
+    const findings = await compile();
+    expect(aiFinding(findings)).toMatchObject({ severity: 'error', sourceNavigation: { status: 'ready', ...native } });
+    expect(findings.find(entry => entry.filePath === mdFiles[1].path && entry.code === 'reference.unknown_ware')).toMatchObject({
+      sourceNavigation: { status: 'ready', nodeId: graphTarget.id },
+    });
+    expect(aiFinding(await compile({ [filePath]: xmlLines.join('\n') }))).toMatchObject({
+      sourceNavigation: { status: 'unavailable', reason: 'source-mismatch' },
+    });
+
+    await page.setContent(`<!doctype html><iframe id="forge" width="1200" height="700"></iframe>
+      <script>
+        const forge = document.querySelector('#forge');
+        window.addEventListener('message', event => {
+          if (event.source === forge.contentWindow && event.data?.type === 'open-validated-source') {
+            document.body.dataset.fileRequest = JSON.stringify(event.data);
+          }
+        });
+        forge.src = ${JSON.stringify(new URL('/', baseURL).href)};
+      </script>`);
+    const studio = page.frameLocator('#forge');
+    await studio.getByTestId('readiness-stage-package').click();
+    const action = studio.getByTestId('diagnostic-finding').filter({ hasText: 'aiscript.order_param_missing_text' })
+      .getByRole('button', { name: 'Open source at line 5' });
+    await action.press('Enter');
+    await expect(studio.getByText('Native editor request sent.', { exact: true })).toBeVisible();
+    await expect.poll(() => page.locator('body').getAttribute('data-file-request').then(value => value && JSON.parse(value))).toEqual({
+      source: 'x4forge-studio', type: 'open-validated-source', path: native.path, sourceFolder: native.sourceFolder,
+      line: native.line, column: native.column, expectedSourceSha256: native.sha256,
+    });
+    const scriptFilter = studio.getByTestId('canvas-md-script-filter');
+    await scriptFilter.selectOption('alpha');
+    await studio.locator('[data-sidebar-tab="cues"]').click();
+    await studio.getByRole('button', { name: 'CLEAR ALL', exact: true }).click();
+    const target = studio.getByTestId(`canvas-node-${graphTarget.id}`);
+    await expect(target).toHaveCount(0);
+    await studio.getByTestId('readiness-stage-package').click();
+    const graphFinding = studio.getByTestId('diagnostic-finding').filter({ hasText: 'forge_diagnostic_missing_fixture' })
+      .filter({ hasText: 'reference.unknown_ware' });
+    await expect(graphFinding.getByRole('button', { name: 'Open source at line', exact: false })).toHaveCount(0);
+    await graphFinding.getByRole('button', { name: 'Go to canvas node' }).press('Enter');
+    await expect(scriptFilter).toHaveValue('bravo');
+    await expect(target).toHaveClass(/ring-cyan-500/);
+    // Wait through the deferred file-fit so an immediately centered, then hidden node cannot pass.
+    const centered = await target.evaluate(node => new Promise<boolean>(resolve =>
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const viewport = node.closest('[data-testid="grid-canvas"]')!.getBoundingClientRect();
+        const bounds = node.getBoundingClientRect();
+        resolve(Math.abs(bounds.left - viewport.left - viewport.width / 2) < 35
+          && Math.abs(bounds.top - viewport.top - viewport.height / 2) < 35);
+      }))));
+    expect(centered).toBeTruthy();
+    expect(fs.readFileSync(path.join(source, filePath)).equals(sourceBytes)).toBeTruthy();
+  } finally {
+    const restored = await configure(state.config?.modWorkspacePath || '');
+    expect(restored.ok(), await restored.text()).toBeTruthy();
+    if (path.dirname(path.resolve(temp)) !== path.resolve(testInfo.outputDir)) throw new Error('Unexpected fixture location');
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
 
 test('Diagnostics Center renders deterministic Why guidance and the reviewed suppression dialog', async ({ page }, testInfo) => {
   const workspace = buildTemplateWorkspace('welcome');

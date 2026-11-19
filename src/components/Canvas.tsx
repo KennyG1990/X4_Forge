@@ -39,6 +39,7 @@ import {
 } from 'lucide-react';
 import { mapTelemetryToNodes, type LiveNodeBadge } from '../lib/liveCanvasTelemetry';
 import { MDNode, MDLink, ModWorkspace, Port, NODE_TEMPLATES, validateModWorkspace, generateMDXML, type PackageDiagnostic } from '../types';
+import { canvasCueOwners } from '../lib/mdFileIdentity';
 import { computeAlignment, type AlignMode } from '../lib/nodeAlign';
 import { simulateWorkspace, type SimStep, type SimVerdict } from '../lib/mdSimulate';
 import { compatibleTemplates, isContainerTag } from '../lib/portSemantics';
@@ -724,52 +725,10 @@ function Canvas({
     return { xStart, xEnd, yStart, yEnd };
   }, [panOffset, zoom, viewportSize]);
 
-  // Map each non-cue node to the cue it belongs to.
-  // Rewritten from O(cues × links × nodes) to O(nodes + links): prebuild a node-id
-  // lookup and an undirected adjacency list (excluding parent→sub-cue boundary links),
-  // then BFS each cue subtree with an index-pointer queue (no O(n) Array.shift).
-  const nodeToCueMap = React.useMemo(() => {
-    const map: Record<string, string> = {};
-    const nodeById = new Map<string, MDNode>();
-    for (const n of workspace.nodes) nodeById.set(n.id, n);
-
-    const adj = new Map<string, string[]>();
-    const addAdj = (a: string, b: string) => {
-      let arr = adj.get(a);
-      if (!arr) { arr = []; adj.set(a, arr); }
-      arr.push(b);
-    };
-    for (const link of workspace.links) {
-      // Skip parent-subcue transitions so we stay within the cue's boundary.
-      if (link.sourcePortId === 'out_sub' && link.targetPortId === 'in_flow') continue;
-      addAdj(link.sourceNodeId, link.targetNodeId);
-      addAdj(link.targetNodeId, link.sourceNodeId);
-    }
-
-    for (const cueNode of workspace.nodes) {
-      if (cueNode.type !== 'cue') continue;
-      map[cueNode.id] = cueNode.id;
-      const visited = new Set<string>([cueNode.id]);
-      const queue: string[] = [cueNode.id];
-      let head = 0;
-      while (head < queue.length) {
-        const currentId = queue[head++];
-        const neighbors = adj.get(currentId);
-        if (!neighbors) continue;
-        for (const neighborId of neighbors) {
-          if (visited.has(neighborId)) continue;
-          const neighborNode = nodeById.get(neighborId);
-          if (neighborNode && neighborNode.type !== 'cue') {
-            visited.add(neighborId);
-            map[neighborId] = cueNode.id;
-            queue.push(neighborId);
-          }
-        }
-      }
-    }
-
-    return map;
-  }, [workspace.nodes, workspace.links]);
+  const nodeToCueMap = React.useMemo(
+    () => canvasCueOwners({ nodes: workspace.nodes, links: workspace.links }),
+    [workspace.nodes, workspace.links],
+  );
 
   // Nodes that are active in the workspace (not hidden by cue filter)
   const nodesFilteredByCue = React.useMemo(() => {
@@ -1147,8 +1106,10 @@ function Canvas({
   // Auto-fit when the MD-script selection changes, so switching scripts never lands you on an
   // empty viewport (the nodes are filtered in, just off-screen). Skips the initial mount.
   const didMountFitRef = React.useRef(false);
+  const handledFocus = React.useRef<typeof focusNodeRequest>(null);
   useEffect(() => {
     if (!didMountFitRef.current) { didMountFitRef.current = true; return; }
+    if (focusNodeRequest && handledFocus.current !== focusNodeRequest) return;
     const t = setTimeout(() => fitToNodes(nodesFilteredByCue), 0);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1163,6 +1124,7 @@ function Canvas({
   useEffect(() => {
     if (previousProjectIdentityRef.current === projectIdentity) return;
     previousProjectIdentityRef.current = projectIdentity;
+    if (focusNodeRequest && handledFocus.current !== focusNodeRequest) return;
     const t = setTimeout(() => fitToNodes(nodesFilteredByCue), 0);
     return () => clearTimeout(t);
     // nodes are intentionally excluded: fit once for project adoption, not on each edit.
@@ -1171,25 +1133,14 @@ function Canvas({
 
   // Trigger camera focus / fit when focusNodeRequest is updated from the Sidebar Tree
   useEffect(() => {
-    if (focusNodeRequest) {
+    if (focusNodeRequest && handledFocus.current !== focusNodeRequest) {
       const node = workspace.nodes.find(n => n.id === focusNodeRequest.nodeId);
       if (node) {
+        handledFocus.current = focusNodeRequest;
         focusNode(node);
       }
     }
   }, [focusNodeRequest, workspace.nodes, focusNode]);
-
-  // Jump-to-node from anywhere (error indicators, Doctor) via a decoupled window event.
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const id = (e as CustomEvent)?.detail?.nodeId;
-      if (!id) return;
-      const node = workspace.nodes.find(n => n.id === id);
-      if (node) focusNode(node);
-    };
-    window.addEventListener('forge-focus-node', handler);
-    return () => window.removeEventListener('forge-focus-node', handler);
-  }, [workspace.nodes, focusNode]);
 
   // Cue & Variable dependency analysis builder
   const dependencies = React.useMemo(() => {

@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
 import {
+  checkNativeDiagnosticSource,
   copyVerifiedReleaseArtifact,
   inspectNativeWorkshopTool,
   parseNativeEditorRequest,
@@ -57,6 +58,31 @@ try {
   check("launcher rejects an unlisted URL", resolveExternalUrlLaunch("https://example.com", "win32") === null);
   const sourced = parseNativeEditorRequest({ source: "x4forge-studio", type: "open-workspace-file", path: "md/main.xml", sourceFolder: "fixture" });
   check("parses safe relative source folder", sourced?.type === "open-workspace-file" && sourced.sourceFolder === "fixture");
+  const diagnosticFile = path.join(modRoot, "md", "diagnostic.xml");
+  const diagnosticText = "<mdscript/>\r\n<!--🚀--><cue/>";
+  const diagnosticBytes = Buffer.from("\uFEFF" + diagnosticText, "utf8");
+  fs.writeFileSync(diagnosticFile, diagnosticBytes);
+  const expectedSourceSha256 = crypto.createHash("sha256").update(diagnosticBytes).digest("hex");
+  const lock = { source: "x4forge-studio" as const, type: "open-validated-source" as const,
+    path: "md/diagnostic.xml", sourceFolder: "fixture", expectedSourceSha256, line: 1, column: 9 };
+  const locked = parseNativeEditorRequest(lock);
+  check("parses a source-bound diagnostic location", locked?.type === "open-validated-source" && locked.expectedSourceSha256 === expectedSourceSha256);
+  check("refuses malformed lock rather than opening unbound", parseNativeEditorRequest({ ...lock, expectedSourceSha256: "bad" }) === null);
+  check("a validated request cannot fall through to an unbound open", parseNativeEditorRequest({ ...lock, type: "open-workspace-file" }) === null
+    && parseNativeEditorRequest({ ...lock, expectedSourceSha256: undefined }) === null);
+  check("requires both a folder and exact safe position when locked",
+    parseNativeEditorRequest({ ...lock, sourceFolder: undefined }) === null
+      && parseNativeEditorRequest({ ...lock, column: undefined }) === null
+      && parseNativeEditorRequest({ ...lock, line: Number.MAX_SAFE_INTEGER + 1 }) === null);
+  check("verifies raw BOM CRLF bytes and UTF-16 editor text", checkNativeDiagnosticSource(
+    diagnosticFile, lock, diagnosticText.replace("\r\n", "\n"), false) === undefined);
+  check("refuses dirty and differing editor text", Boolean(checkNativeDiagnosticSource(diagnosticFile, lock, diagnosticText, true))
+    && Boolean(checkNativeDiagnosticSource(diagnosticFile, lock, "<wrong/>", false)));
+  check("refuses an exact position outside the line", Boolean(checkNativeDiagnosticSource(
+    diagnosticFile, { ...lock, column: 200 }, diagnosticText, false)));
+  fs.writeFileSync(diagnosticFile, diagnosticText, "utf8");
+  check("refuses changed raw bytes even when displayed text is the same", Boolean(checkNativeDiagnosticSource(
+    diagnosticFile, lock, diagnosticText, false)));
   const diff = parseNativeEditorRequest({ source: "x4forge-studio", type: "open-text-diff", title: "Wares", leftLabel: "Base", rightLabel: "Edited", leftContent: "<wares/>", rightContent: "<wares><ware/></wares>", language: "xml" });
   check("parses bounded native diff", diff?.type === "open-text-diff" && diff.language === "xml" && diff.rightLabel === "Edited");
   check("rejects oversized native diff", parseNativeEditorRequest({ source: "x4forge-studio", type: "open-text-diff", leftContent: "x".repeat(8 * 1024 * 1024 + 1), rightContent: "" }) === null);

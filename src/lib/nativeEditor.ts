@@ -2,11 +2,12 @@ import type { ModWorkspace } from '../types';
 
 export interface NativeEditorOpenRequest {
   source: 'x4forge-studio';
-  type: 'open-workspace-file';
+  type: 'open-workspace-file' | 'open-validated-source';
   path: string;
   sourceFolder?: string;
   line?: number;
   column?: number;
+  expectedSourceSha256?: string;
 }
 
 export interface NativeTextDiffRequest {
@@ -206,15 +207,17 @@ export function openInNativeEditor(
   path: string,
   position?: { line?: number; column?: number },
   sourceFolder?: string,
+  expectedSourceSha256?: string,
 ): boolean {
   if (typeof window === 'undefined' || window.parent === window) return false;
   const message: NativeEditorOpenRequest = {
     source: 'x4forge-studio',
-    type: 'open-workspace-file',
+    type: expectedSourceSha256 === undefined ? 'open-workspace-file' : 'open-validated-source',
     path,
     ...(sourceFolder ? { sourceFolder } : {}),
     ...(Number.isInteger(position?.line) ? { line: position!.line } : {}),
     ...(Number.isInteger(position?.column) ? { column: position!.column } : {}),
+    ...(expectedSourceSha256 !== undefined ? { expectedSourceSha256 } : {}),
   };
   window.parent.postMessage(message, '*');
   return true;

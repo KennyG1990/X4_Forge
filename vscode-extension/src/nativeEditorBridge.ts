@@ -4,11 +4,12 @@ import * as crypto from "node:crypto";
 
 export interface NativeEditorRequest {
   source: "x4forge-studio";
-  type: "open-workspace-file";
+  type: "open-workspace-file" | "open-validated-source";
   path: string;
   sourceFolder?: string;
   line?: number;
   column?: number;
+  expectedSourceSha256?: string;
 }
 
 export interface NativeTextDiffRequest {
@@ -255,8 +256,9 @@ export function parseNativeEditorRequest(value: unknown): NativeStudioRequest | 
       ...(language ? { language } : {}),
     };
   }
-  if (candidate.type !== "open-workspace-file" || typeof candidate.path !== "string") return null;
-  const request: NativeEditorRequest = { source: "x4forge-studio", type: "open-workspace-file", path: candidate.path };
+  if ((candidate.type !== "open-workspace-file" && candidate.type !== "open-validated-source")
+      || typeof candidate.path !== "string") return null;
+  const request: NativeEditorRequest = { source: "x4forge-studio", type: candidate.type, path: candidate.path };
   if (candidate.sourceFolder !== undefined) {
     if (typeof candidate.sourceFolder !== "string") return null;
     const folder = candidate.sourceFolder.trim();
@@ -265,6 +267,11 @@ export function parseNativeEditorRequest(value: unknown): NativeStudioRequest | 
   }
   if (Number.isInteger(candidate.line) && Number(candidate.line) >= 0) request.line = Number(candidate.line);
   if (Number.isInteger(candidate.column) && Number(candidate.column) >= 0) request.column = Number(candidate.column);
+  if (candidate.type === "open-validated-source") {
+    if (typeof candidate.expectedSourceSha256 !== "string" || !/^[a-f0-9]{64}$/i.test(candidate.expectedSourceSha256)
+        || !request.sourceFolder || !Number.isSafeInteger(request.line) || !Number.isSafeInteger(request.column)) return null;
+    request.expectedSourceSha256 = candidate.expectedSourceSha256.toLowerCase();
+  } else if (candidate.expectedSourceSha256 !== undefined) return null;
   return request;
 }
 
@@ -435,4 +442,47 @@ export function resolveNativeEditorFile(workspaceRootInput: string, sourceFolder
   } catch (error) {
     return { ok: false, code: "unavailable", message: `Forge could not open ${relativePath}: ${error instanceof Error ? error.message : String(error)}` };
   }
+}
+
+/** Verify the selected raw UTF-8 bytes and the editor's decoded UTF-16 coordinates. */
+export function checkNativeDiagnosticSource(
+  filePath: string,
+  request: NativeEditorRequest,
+  documentText: string,
+  dirty: boolean,
+): string | undefined {
+  if (dirty) return "Save the file and revalidate before jumping to this diagnostic.";
+  const changed = "The saved source changed since validation. Revalidate before jumping to this diagnostic.";
+  try {
+    const fd = fs.openSync(filePath, "r");
+    let bytes: Buffer;
+    try {
+      const stat = fs.fstatSync(fd);
+      // Match the full-project validator's maximum disk-file size.
+      if (!stat.isFile() || stat.size > 4 * 1024 * 1024) return changed;
+      const buffer = Buffer.alloc(stat.size + 1);
+      let length = 0;
+      while (length < buffer.length) {
+        const count = fs.readSync(fd, buffer, length, buffer.length - length, null);
+        if (!count) break;
+        length += count;
+      }
+      if (length !== stat.size) return changed;
+      bytes = buffer.subarray(0, length);
+    } finally {
+      fs.closeSync(fd);
+    }
+    const hash = crypto.createHash("sha256").update(bytes).digest("hex");
+    if (hash !== request.expectedSourceSha256) return changed;
+    const text = bytes.toString("utf8");
+    if (!Buffer.from(text, "utf8").equals(bytes)) return changed;
+    const normalized = (input: string) => input.replace(/\r\n?|\n/g, "\n");
+    if (normalized(text.replace(/^\uFEFF/, "")) !== normalized(documentText)) return changed;
+    const { line, column } = request;
+    const lines = documentText.split(/\r\n?|\n/);
+    if (line === undefined || column === undefined || !Number.isSafeInteger(line) || !Number.isSafeInteger(column)
+        || line < 0 || line >= lines.length || column < 0 || column > lines[line].length) {
+      return "The diagnostic position is outside the verified file. Revalidate before jumping to it.";
+    }
+  } catch { return changed; }
 }

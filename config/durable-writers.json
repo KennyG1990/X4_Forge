@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceFingerprint": "9a073311803c9aafac2a910b3cadac2c5b1f3e17164acd2ae63d46d3fc08df70",
+  "sourceFingerprint": "51dd0ff00d092e5e7364031db9ef5e2484e060ca64f540662c39428f04891ddc",
   "policy": "Every raw production filesystem mutation source is count-pinned here. Authoritative files use atomic sibling promotion; stronger tree, archive, append-log, SQLite, retention, ephemeral, and fixture contracts remain explicit exceptions.",
   "writers": [
     {
@@ -334,10 +334,10 @@
     },
     {
       "file": "vscode-extension/src/nativeEditorBridge.selftest.ts",
-      "calls": { "writeFileSync": 7, "mkdirSync": 4, "rmSync": 1, "mkdtempSync": 1 },
+      "calls": { "writeFileSync": 9, "mkdirSync": 4, "rmSync": 1, "mkdtempSync": 1 },
       "categories": ["fixture-only"],
       "owners": ["runNativeEditorBridgeSelftest"],
-      "rationale": "Creates only disposable release ZIP/tool/command fixtures.",
+      "rationale": "Creates only disposable release ZIP, tool, command and verified source-navigation fixtures.",
       "failureContract": "No native dialog or user output path is touched and the unique temporary root is removed."
     },
     {

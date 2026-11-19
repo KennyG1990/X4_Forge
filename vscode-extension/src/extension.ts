@@ -38,6 +38,7 @@ import { detectIdeCapabilities, formatIdeCapabilityReport } from "./capabilities
 import { PanelBackendBinding, SharedBackendEnsure } from "./panelBinding";
 import { checkOwnedBackendLiveness, hasForgeSchemaIdentity } from "./backendLiveness";
 import {
+  checkNativeDiagnosticSource,
   copyVerifiedReleaseArtifact,
   inspectNativeWorkshopTool,
   parseNativeEditorRequest,
@@ -1000,7 +1001,7 @@ function webviewHtml(webview: vscode.Webview, forgeUrl: string, mode: string, fr
     window.addEventListener('message', (event) => {
       if (!notice.hidden || event.source !== frame.contentWindow || event.origin !== forgeOrigin) return;
       const data = event.data;
-      if (!data || data.source !== 'x4forge-studio' || !['open-workspace-file', 'open-text-diff', 'open-node-selection', 'node-selection-result', 'open-external-url', 'release-native-action', 'workspace-authority-changed'].includes(data.type)) return;
+      if (!data || data.source !== 'x4forge-studio' || !['open-workspace-file', 'open-validated-source', 'open-text-diff', 'open-node-selection', 'node-selection-result', 'open-external-url', 'release-native-action', 'workspace-authority-changed'].includes(data.type)) return;
       vscode.postMessage({ ...data, frameId });
     });
     window.addEventListener('message', (event) => {
@@ -1120,6 +1121,7 @@ async function handleStudioMessage(context: vscode.ExtensionContext, value: unkn
   }
   const request = parseNativeEditorRequest(value);
   if (!request) return;
+  const panelHandle = handle;
   try {
     if (request.type === "release-native-action") {
       await handleNativeReleaseAction(context, request);
@@ -1161,6 +1163,7 @@ async function handleStudioMessage(context: vscode.ExtensionContext, value: unkn
       log(`native diff opened: ${request.title}`);
       return;
     }
+    const boundWorkspaceId = panelHandle.workspaceId;
     const handle = await ensureBackend(context);
     if (!handle.owned || !handle.token) throw new Error("Native file opening requires the extension-managed Forge sidecar.");
     const headers = backendApiHeaders(handle);
@@ -1168,7 +1171,7 @@ async function handleStudioMessage(context: vscode.ExtensionContext, value: unkn
       fetch(`${handle.baseUrl}/api/agent/workspace`, { headers }),
       fetch(`${handle.baseUrl}/api/schema/config`, { headers }),
     ]);
-    const workspaceData = (await workspaceResponse.json()) as { workspace?: { sourceFolder?: string } };
+    const workspaceData = (await workspaceResponse.json()) as { workspace?: { sourceFolder?: string; sourceStamp?: { dir?: string } } };
     const configData = (await configResponse.json()) as { resolved?: { modWorkspacePath?: string }; config?: { modWorkspacePath?: string } };
     if (!workspaceResponse.ok || !configResponse.ok) throw new Error("Forge could not resolve the active workspace and directory settings.");
     const workspaceRoot = String(configData.resolved?.modWorkspacePath || configData.config?.modWorkspacePath || "").trim();
@@ -1184,11 +1187,20 @@ async function handleStudioMessage(context: vscode.ExtensionContext, value: unkn
       return;
     }
     const sourceRoot = fs.realpathSync(sourceFolder);
+    const locked = request.type === "open-validated-source";
+    const bindingCurrent = () => backend === handle && panelHandle === handle
+      && !!boundWorkspaceId && handle.workspaceId === boundWorkspaceId;
+    if (locked) {
+      const original = workspaceData.workspace?.sourceStamp?.dir;
+      if (!bindingCurrent() || !original || path.relative(sourceRoot, fs.realpathSync(original)) !== "") {
+        throw new Error("The active project changed. Revalidate before jumping to this diagnostic.");
+      }
+    }
     const alreadyMounted = (vscode.workspace.workspaceFolders || []).some((folder) => {
       try { return fs.realpathSync(folder.uri.fsPath).toLowerCase() === sourceRoot.toLowerCase(); }
       catch { return path.resolve(folder.uri.fsPath).toLowerCase() === sourceRoot.toLowerCase(); }
     });
-    if (!alreadyMounted) {
+    if (!locked && !alreadyMounted) {
       const mounted = vscode.workspace.updateWorkspaceFolders(
         vscode.workspace.workspaceFolders?.length || 0,
         0,
@@ -1198,10 +1210,25 @@ async function handleStudioMessage(context: vscode.ExtensionContext, value: unkn
       log(`native project mounted: ${sourceRoot}`);
     }
     const document = await vscode.workspace.openTextDocument(vscode.Uri.file(resolution.filePath));
+    const version = document.version;
+    const verifyLockedDocument = () => {
+      const current = resolveNativeEditorFile(workspaceRoot, sourceRoot, request.path);
+      if (!bindingCurrent() || !current.ok || path.relative(resolution.filePath, current.filePath) !== ""
+          || path.relative(current.filePath, document.uri.fsPath) !== "") {
+        throw new Error("The active project or source path changed. Revalidate before jumping to this diagnostic.");
+      }
+      const error = checkNativeDiagnosticSource(current.filePath, request, document.getText(), document.isDirty);
+      if (error) throw new Error(error);
+    };
+    if (locked) verifyLockedDocument();
     const editor = await vscode.window.showTextDocument(document, { viewColumn: vscode.ViewColumn.Beside, preview: false, preserveFocus: false });
+    if (locked && (!bindingCurrent() || editor.document !== document || document.isDirty || document.version !== version)) {
+      throw new Error("The active source changed. Revalidate before jumping to this diagnostic.");
+    }
+    if (locked) verifyLockedDocument();
     if (request.line !== undefined) {
-      const line = Math.min(request.line, Math.max(0, document.lineCount - 1));
-      const column = Math.min(request.column || 0, document.lineAt(line).text.length);
+      const line = locked ? request.line : Math.min(request.line, Math.max(0, document.lineCount - 1));
+      const column = locked ? request.column ?? 0 : Math.min(request.column || 0, document.lineAt(line).text.length);
       const position = new vscode.Position(line, column);
       editor.selection = new vscode.Selection(position, position);
       editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenterIfOutsideViewport);

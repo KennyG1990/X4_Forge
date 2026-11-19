@@ -200,6 +200,7 @@
     "src/server/deployLuaRegistration.ts",
     "src/server/deploymentSnapshot.ts",
     "src/server/deploymentTrust.ts",
+    "src/server/diagnosticSourceNavigation.ts",
     "src/server/directoryConfiguration.ts",
     "src/server/findingAcceptance.ts",
     "src/server/forgePerformance.ts",

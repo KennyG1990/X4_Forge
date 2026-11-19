@@ -65,6 +65,7 @@ import { applyNodeSelectionDocument, buildNodeSelectionDocument, isNodeSelection
 import type { SchemaLibrary } from './lib/schemaTypes';
 import { setSchemaTemplatesForImport } from './lib/xmlParser';
 import { resolveCueToNodeId } from './lib/liveLogNav';
+import { canvasCueOwners } from './lib/mdFileIdentity';
 import { getActiveProvider, getProviderModel, getProviderReasoning, getAIHeaders, handleApiResponse, hasProviderKey, migrateLocalAiKeys } from './lib/apiHelper';
 import { loadBlueprint, sampleBlueprint, saveBlueprint, recordRejection, evaluateBlueprintChecks, type ModBlueprint } from './lib/modBlueprint';
 import { vetTaskProposal, nextActiveTask } from './lib/architectLoop';
@@ -538,9 +539,13 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
 
   // Diagnostics / Mod Doctor state shared by readiness and the diagnostics panel.
   const [diagnostics, setDiagnostics] = useState<PackageDiagnostic[]>([]);
-  const [diagnosticSource, setDiagnosticSource] = useState<'checking' | 'project' | 'local'>('checking');
+  const [diagnosticInput, setDiagnosticInput] = useState<{
+    workspace: ModWorkspace; revision: number; source: 'project' | 'local';
+  } | null>(null);
   const [validationDelta, setValidationDelta] = useState<ValidationDeltaResult | null>(null);
   const [diagnosticRevision, setDiagnosticRevision] = useState(0);
+  const diagnosticSource = diagnosticInput?.workspace === workspace && diagnosticInput.revision === diagnosticRevision
+    ? diagnosticInput.source : 'checking';
   const [readinessWatcher, setReadinessWatcher] = useState<ReadinessWatcherEvidence>({ phase: 'loading' });
   const [experienceConfirmations, setExperienceConfirmations] = useState<Record<string, ExperienceConfirmation>>(
     () => parseExperienceConfirmations(localStorage.getItem(EXPERIENCE_CONFIRMATIONS_KEY))
@@ -572,7 +577,6 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
     let cancelled = false;
     const controller = new AbortController();
     const localReports = validateModWorkspace(workspace, mdCode);
-    setDiagnosticSource('checking');
 
     const timer = window.setTimeout(async () => {
       try {
@@ -589,7 +593,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
         if (!cancelled) {
           setDiagnostics(data.diagnostics || []);
           setValidationDelta(data.validationDelta || null);
-          setDiagnosticSource('project');
+          setDiagnosticInput({ workspace, revision: diagnosticRevision, source: 'project' });
         }
       } catch (err) {
         if (controller.signal.aborted) return;
@@ -597,7 +601,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
         if (!cancelled) {
           setDiagnostics(localReports);
           setValidationDelta(null);
-          setDiagnosticSource('local');
+          setDiagnosticInput({ workspace, revision: diagnosticRevision, source: 'local' });
         }
       }
     }, 400);
@@ -1237,6 +1241,20 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
   // with the diagnostic's sourceRef; jump to the owning editor surface (and, for MD
   // nodes, focus the node on the canvas).
   useEffect(() => {
+    const revealNode = (node: MDNode) => {
+      const cueId = canvasCueOwners(workspace)[node.id];
+      const cue = workspace.nodes.find(candidate => candidate.id === cueId && candidate.type === 'cue');
+      const stem = String(cue?.properties?.mdFileStem || '') || null;
+      setActiveMdScript(current => current === null ? null : stem);
+      if (cueId) {
+        setVisibleCueIds(current => current && !current.includes(cueId) ? [...current, cueId] : current);
+      }
+      setSelectedCueIds([]);
+      setSelectedNodeIds([]);
+      setWorkspaceView('blueprint');
+      setSelectedNode(node);
+      setFocusNodeRequest({ nodeId: node.id, timestamp: Date.now() });
+    };
     const handleNavigateToSource = (e: Event) => {
       const { kind, id } = (e as CustomEvent<{ kind: string; id?: string; label?: string }>).detail || {};
       if (!kind) return;
@@ -1244,17 +1262,13 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
         case 'md_node':
         case 'cue':
         case 'node': {
-          setWorkspaceView('blueprint');
           let node = id ? workspace.nodes.find(n => n.id === id) : undefined;
           // #23: a live-log alert passes the CUE NAME (not a node id) — resolve it to the owning cue node.
           if (!node && id) {
             const nid = resolveCueToNodeId(id, workspace.nodes);
             node = nid ? workspace.nodes.find(n => n.id === nid) : undefined;
           }
-          if (node) {
-            setSelectedNode(node);
-            setFocusNodeRequest({ nodeId: node.id, timestamp: Date.now() });
-          }
+          if (node) revealNode(node);
           break;
         }
         case 'ui_widget':
@@ -1280,8 +1294,17 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
           break;
       }
     };
+    const handleFocusNode = (e: Event) => {
+      const id = (e as CustomEvent<{ nodeId?: string }>).detail?.nodeId;
+      const node = id ? workspace.nodes.find(candidate => candidate.id === id) : undefined;
+      if (node) revealNode(node);
+    };
     window.addEventListener('navigate-to-source', handleNavigateToSource);
-    return () => window.removeEventListener('navigate-to-source', handleNavigateToSource);
+    window.addEventListener('forge-focus-node', handleFocusNode);
+    return () => {
+      window.removeEventListener('navigate-to-source', handleNavigateToSource);
+      window.removeEventListener('forge-focus-node', handleFocusNode);
+    };
   }, [workspace]);
 
   // B13b2: override-map → Diff→Patch pre-target. The Doctor dispatches; App switches the

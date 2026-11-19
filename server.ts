@@ -124,6 +124,8 @@ import { getReferenceLanguageResources } from './src/lib/referenceLanguage';
 import { analyzeXmlReferenceMap, XmlReferenceMapInputError } from './src/server/xmlReferenceMap';
 import { registerBulkTransformRoutes } from "./src/server/bulkTransformRoutes";
 import { computeModDrift, fingerprintModFolder, flattenProjectValidation, getProjectValidationCacheStats, getSchemaIndex, loadProjectFromDisk, runProjectValidation, validateProjectCrossFileWithCorpus, type FlatProjectDiagnostic } from "./src/server/projectValidation";
+import { bindDiagnosticSourceFiles, diagnosticSourceFolder } from './src/server/diagnosticSourceNavigation';
+import type { DiagnosticSourceNavigation } from './src/types';
 import { createForgeBackendPerformance, createForgeNativePerformanceAdapter, forgePerformanceApiOperationName, forgePerformanceHasNegativeDataResult, type ForgeNativePerformanceOperation, type ForgeNativePerformanceReport } from './src/server/forgePerformance';
 import { createNativePerformanceBroker, type NativeBrokerActor, type NativeBrokerRetireReason } from './src/server/nativePerformanceBroker';
 import { createNativePerformanceRetirementNotice, type NativePerformanceEndpoint } from './shared/nativePerformanceChannel';
@@ -1649,6 +1651,7 @@ type ServerDiagnostic = {
   line?: number;
   column?: number;
   target?: ValidationSourceLocation;
+  sourceNavigation?: DiagnosticSourceNavigation;
   nodeId?: string;
   message: string;
   sourceRef?: { kind: string; id?: string; label?: string };
@@ -6653,7 +6656,7 @@ function omittedWorkspaceMdSources(workspace: ModWorkspace, files: ExtensionProj
  * The generated manifest is validated as a complete X4 project; callers no longer
  * assemble narrower doctor/XSD subsets that can disagree with project validation.
  */
-function runFullWorkspaceValidation(ws: ModWorkspace, built?: { modId: string; files: CompiledFileManifest }): FullWorkspaceValidation {
+function runFullWorkspaceValidation(ws: ModWorkspace, built?: { modId: string; files: CompiledFileManifest }, includeSourceNavigation = false): FullWorkspaceValidation {
   const { modId, files } = built || buildWorkspaceFileManifest(ws);
   const projectFiles = new Map<string, ExtensionProject['files'][number]>(
     Object.entries(files).map(([filePath, content]) => [filePath.toLowerCase(), {
@@ -6663,14 +6666,19 @@ function runFullWorkspaceValidation(ws: ModWorkspace, built?: { modId: string; f
     }]),
   );
   let diskSkipped: Array<{ path: string; reason: string }> = [];
+  let diskFiles: ExtensionProject['files'] = [];
   const sourceDir = typeof (ws as any)?.sourceStamp?.dir === 'string' ? (ws as any).sourceStamp.dir : '';
   if (sourceDir && fs.existsSync(sourceDir)) {
     const diskLoad = loadProjectFromDisk(sourceDir, modId);
     diskSkipped = diskLoad.skipped;
-    for (const file of diskLoad.project.files) {
+    diskFiles = diskLoad.project.files;
+    for (const file of diskFiles) {
       if (!projectFiles.has(file.path.toLowerCase())) projectFiles.set(file.path.toLowerCase(), file);
     }
   }
+  const bindSource = includeSourceNavigation
+    ? bindDiagnosticSourceFiles(diagnosticSourceFolder(resolveXsdConfig().modWorkspacePath, sourceDir), projectFiles, diskFiles, ws)
+    : undefined;
   const project: ExtensionProject = {
     id: modId,
     name: ws.name || modId,
@@ -6727,6 +6735,7 @@ function runFullWorkspaceValidation(ws: ModWorkspace, built?: { modId: string; f
       line: finding.line,
       column: finding.column,
       target: finding.target,
+      sourceNavigation: bindSource?.(finding),
       message: finding.message,
       sourceRef: finding.sourceRef ? { kind: "project", label: finding.sourceRef } : undefined,
       ...(finding.severity === 'warning' && finding.code && (finding.filePath || finding.sourceRef) ? {
@@ -16544,7 +16553,7 @@ app.post("/api/agent/compile", coordinatedSourceOperation((req, res) => {
     const uiIndexPath = `ui.xml`;
     const uiLuaPath = `ui/${modId}.lua`;
     res.locals.apiSubject = fileApiSubject(modId, files);
-    const full = runFullWorkspaceValidation(ws, { modId, files });
+    const full = runFullWorkspaceValidation(ws, { modId, files }, true);
     const validationDelta = validationDeltaFor(
       modId,
       full.projectFiles,

@@ -26,6 +26,41 @@ export function mdNodeIdsForStem(workspace: Pick<ModWorkspace, 'nodes' | 'links'
   return owned;
 }
 
+/** Canvas ownership excludes parent-to-subcue transitions. */
+export function canvasCueOwners(workspace: Pick<ModWorkspace, 'nodes' | 'links'>): Record<string, string> {
+  const owners: Record<string, string> = Object.create(null);
+  const nodes = new Map(workspace.nodes.map(node => [node.id, node]));
+  const neighbors = new Map<string, string[]>();
+  const addNeighbor = (id: string, neighbor: string) => {
+    const linked = neighbors.get(id);
+    if (linked) linked.push(neighbor);
+    else neighbors.set(id, [neighbor]);
+  };
+  for (const link of workspace.links) {
+    if (link.sourcePortId === 'out_sub' && link.targetPortId === 'in_flow') continue;
+    addNeighbor(link.sourceNodeId, link.targetNodeId);
+    addNeighbor(link.targetNodeId, link.sourceNodeId);
+  }
+  for (const cue of workspace.nodes) {
+    if (cue.type !== 'cue') continue;
+    owners[cue.id] = cue.id;
+    const queue = [cue.id];
+    const visited = new Set(queue);
+    for (let index = 0; index < queue.length; index++) {
+      for (const neighbor of neighbors.get(queue[index]) || []) {
+        if (visited.has(neighbor)) continue;
+        const node = nodes.get(neighbor);
+        if (node && node.type !== 'cue') {
+          visited.add(neighbor);
+          owners[neighbor] = cue.id;
+          queue.push(neighbor);
+        }
+      }
+    }
+  }
+  return owners;
+}
+
 function fingerprintNode(node: MDNode): unknown {
   return {
     id: node.id,

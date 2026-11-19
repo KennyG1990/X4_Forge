@@ -1447,10 +1447,16 @@ export interface XMLDiagnostic {
   category: 'syntax' | 'references' | 'egosoft';
 }
 
+export type DiagnosticSourceNavigation =
+  | { status: 'ready'; path: string; sourceFolder: string; sha256: string; line: number; column: number; nodeId?: string }
+  | { status: 'unavailable'; reason: 'materialized-source' | 'source-mismatch' | 'position-unavailable' };
+
 export type PackageDiagnostic = XMLDiagnostic & {
   code?: string;
   domain?: string;
   filePath?: string;
+  column?: number;
+  sourceNavigation?: DiagnosticSourceNavigation;
   /** This informational diagnostic describes a check that could not complete. */
   coverageGap?: true;
   /** Server-proven exact scope accepted by forge.rules.json. Absent means this finding is not suppressible. */
