@@ -113,7 +113,7 @@ import { effectiveReferenceMetadata, resolveEffectiveReferenceDocument } from ".
 import { classifyPath, indexCueReferences, runExtensionProjectSelftest, buildContentXml, type ExtensionProject } from "./src/lib/extensionProject";
 import { buildDependencyHealth } from './src/server/dependencyHealth';
 import { getAiSchemaIndex, getScriptPropertyIndex, registerValidationAgentRoutes } from "./src/server/validationRoutes";
-import { readLiteralReferenceTexts } from "./src/server/literalTextSources";
+import { resolveLiteralReferenceText } from "./src/server/literalTextSources";
 import { LITERAL_TEXT_MAX_FILE_BYTES, LITERAL_TEXT_MAX_FILES, LITERAL_TEXT_MAX_TOTAL_BYTES, literalTextFilenameLanguage, resolveLiteralText, type LiteralTextLookupRequest } from "./src/lib/literalTextLookup";
 import { getCanonicalReferenceCorpus, getCanonicalReferenceSets, initializeReferenceCorpus, registerReferenceRoutes, startCanonicalReferenceManifest } from "./src/server/referenceRoutes";
 import { createCanonicalMdProviderPreparation, readCanonicalMdCompiledWorkerIdentity } from './src/server/canonicalMdProviderPreparation';
@@ -5721,9 +5721,10 @@ app.post("/api/agent/text/lookup", (req, res) => {
     error: 'Send page and id as nonnegative safe integers, a language from 1 to 999, and scope reference or workspace.',
   });
   const { workspace } = requestWorkspace(req);
-  const checked = lookup.scope === 'reference'
-    ? readLiteralReferenceTexts(resolveX4ReferenceRoot(), lookup.language)
-    : savedWorkspaceTextSources(workspace, lookup.language);
+  if (lookup.scope === 'reference') {
+    return res.json(resolveLiteralReferenceText(resolveX4ReferenceRoot(), { ...lookup, scope: 'reference' }));
+  }
+  const checked = savedWorkspaceTextSources(workspace, lookup.language);
   return res.json(resolveLiteralText(checked.files, lookup, checked.complete));
 });
 

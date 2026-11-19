@@ -6,6 +6,10 @@ import {
   LITERAL_TEXT_MAX_FILES,
   LITERAL_TEXT_MAX_TOTAL_BYTES,
   literalTextFilenameLanguage,
+  prepareLiteralTextLookup,
+  resolvePreparedLiteralText,
+  type LiteralTextLookupRequest,
+  type LiteralTextLookupResult,
 } from '../lib/literalTextLookup';
 
 type LiteralReferenceInput = {
@@ -139,4 +143,42 @@ export function readLiteralReferenceTexts(rootInput: string, language: number): 
   } catch {
     return { files: [], complete: false };
   }
+}
+
+
+// Independent admission bounds apply to retention. Larger inputs still use the ordinary resolver.
+const REFERENCE_INDEX_MAX_SOURCE_BYTES = 8 * 1024 * 1024;
+const REFERENCE_INDEX_MAX_ENTRIES = 80_000;
+type ReadyTextIndex = Extract<ReturnType<typeof prepareLiteralTextLookup>, { status: 'ready' }>;
+
+let retainedReference: {
+  root: string;
+  language: number;
+  files: LiteralReferenceInput['files'];
+  index: ReadyTextIndex;
+} | undefined;
+
+export function resolveLiteralReferenceText(
+  rootInput: string,
+  request: LiteralTextLookupRequest & { scope: 'reference' },
+): LiteralTextLookupResult {
+  const { files, complete } = readLiteralReferenceTexts(rootInput, request.language);
+  if (!complete) {
+    retainedReference = undefined;
+    return { ...request, status: 'unavailable', reason: 'incomplete-coverage' };
+  }
+  const root = path.resolve(rootInput);
+  const retained = retainedReference;
+  if (retained?.root === root && retained.language === request.language
+    && retained.files.length === files.length && files.every((file, i) =>
+      file.path === retained.files[i].path && file.content === retained.files[i].content)) {
+    return resolvePreparedLiteralText(retained.index, request);
+  }
+  retainedReference = undefined;
+  const index = prepareLiteralTextLookup(files, request, complete);
+  if (index.status === 'ready' && index.sourceBytes <= REFERENCE_INDEX_MAX_SOURCE_BYTES
+    && index.entryCount <= REFERENCE_INDEX_MAX_ENTRIES) {
+    retainedReference = { root, language: request.language, files, index };
+  }
+  return resolvePreparedLiteralText(index, request);
 }

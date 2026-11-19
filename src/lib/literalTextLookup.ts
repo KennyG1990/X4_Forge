@@ -46,8 +46,12 @@ export type LiteralTextLookupResult = LiteralTextLookupRequest & {
 };
 
 type ExpansionReason = 'missing-reference' | 'ambiguous-reference' | 'cycle' | 'limit';
-type Entry = { source: LiteralTextSource; content: string; offset: number; decoded: string };
-type Entries = Map<string, Entry[]>;
+type Entry = LiteralTextSource & { content: string; offset: number; decoded: string };
+type Entries = Map<string, Entry | Entry[]>;
+
+function copyTextSource({ file, line, column, representation }: LiteralTextSource): LiteralTextSource {
+  return { file, line, column, ...(representation ? { representation } : {}) };
+}
 
 function decimal(value: string | null): number | undefined {
   if (!value || !/^\d{1,32}$/.test(value)) return undefined;
@@ -168,10 +172,10 @@ function indexFile(
         ...(file.representation ? { representation: file.representation } : {}),
       };
       const key = `${pageId},${id}`;
-      const row = { source, content: file.content, offset, decoded: text.textContent ?? '' };
+      const row = { ...source, content: file.content, offset, decoded: text.textContent ?? '' };
       const prior = index.get(key);
-      if (prior) prior.push(row);
-      else index.set(key, [row]);
+      if (Array.isArray(prior)) prior.push(row);
+      else index.set(key, prior ? [prior, row] : row);
     }
   }
   return { selected: true, count };
@@ -197,11 +201,11 @@ function expand(index: Entries, rootKey: string): { text?: string; reason?: Expa
   function visit(key: string): { text?: string; reason?: ExpansionReason } {
     if (active.has(key)) return { reason: 'cycle' };
     if (active.size >= MAX_DEPTH || ++count > MAX_EXPANSIONS) return { reason: 'limit' };
-    const entries = index.get(key);
-    if (!entries?.length) return { reason: 'missing-reference' };
-    if (entries.length !== 1) return { reason: 'ambiguous-reference' };
-    if (entries[0].decoded.length > MAX_TEXT_LENGTH) return { reason: 'limit' };
-    const template = stripX4Comments(entries[0].decoded);
+    const entry = index.get(key);
+    if (!entry) return { reason: 'missing-reference' };
+    if (Array.isArray(entry)) return { reason: 'ambiguous-reference' };
+    if (entry.decoded.length > MAX_TEXT_LENGTH) return { reason: 'limit' };
+    const template = stripX4Comments(entry.decoded);
     let expanded = '';
     let offset = 0;
     let reason: ExpansionReason | undefined;
@@ -232,13 +236,19 @@ function expand(index: Entries, rootKey: string): { text?: string; reason?: Expa
   return visit(rootKey);
 }
 
-/** Query only the caller-supplied, explicitly addressed authority and language. */
-export function resolveLiteralText(
+type InputAuthority = Pick<LiteralTextLookupRequest, 'scope' | 'language'>;
+type UnavailableReason = 'incomplete-coverage' | 'language-unavailable';
+
+type PreparedLiteralText =
+  | { status: 'ready'; authority: InputAuthority; entries: Entries; sourceBytes: number; entryCount: number }
+  | { status: 'unavailable'; reason: UnavailableReason };
+
+export function prepareLiteralTextLookup(
   files: readonly LiteralTextDocument[],
-  request: LiteralTextLookupRequest,
-  coverageComplete = true,
-): LiteralTextLookupResult {
-  const unavailable = { ...request, status: 'unavailable', reason: 'incomplete-coverage' } as const;
+  { scope, language }: InputAuthority,
+  coverageComplete: boolean,
+): PreparedLiteralText {
+  const unavailable = { status: 'unavailable', reason: 'incomplete-coverage' } as const;
   if (!coverageComplete || files.length > LITERAL_TEXT_MAX_FILES) return unavailable;
   const paths = new Set<string>();
   const entries: Entries = new Map();
@@ -246,7 +256,7 @@ export function resolveLiteralText(
   let count = 0;
   let hasLanguage = false;
   for (const file of files) {
-    const relative = selectPath(file.path, request.scope);
+    const relative = selectPath(file.path, scope);
     const key = relative?.toLowerCase();
     if (!relative || !key || paths.has(key)) return unavailable;
     paths.add(key);
@@ -254,22 +264,43 @@ export function resolveLiteralText(
     const length = ENCODER.encode(file.content).byteLength;
     bytes += length;
     if (length > LITERAL_TEXT_MAX_FILE_BYTES || bytes > LITERAL_TEXT_MAX_TOTAL_BYTES) return unavailable;
-    const result = indexFile(file, relative, request.language, entries, MAX_ENTRIES - count);
+    const result = indexFile(file, relative, language, entries, MAX_ENTRIES - count);
     if (!result) return unavailable;
     hasLanguage ||= result.selected;
     count += result.count;
   }
-  if (!hasLanguage) return { ...request, status: 'unavailable', reason: 'language-unavailable' };
+  if (!hasLanguage) return { status: 'unavailable', reason: 'language-unavailable' };
+  return { status: 'ready', authority: { scope, language }, entries, sourceBytes: bytes, entryCount: count };
+}
+
+export function resolvePreparedLiteralText(
+  prepared: PreparedLiteralText,
+  request: LiteralTextLookupRequest,
+): LiteralTextLookupResult {
+  if (prepared.status === 'unavailable') return { ...request, status: 'unavailable', reason: prepared.reason };
+  if (prepared.authority.language !== request.language || prepared.authority.scope !== request.scope) {
+    return { ...request, status: 'unavailable', reason: 'incomplete-coverage' };
+  }
+  const { entries } = prepared;
   const result = { ...request, selectedLanguage: request.language };
   const key = `${request.page},${request.id}`;
-  const matching = entries.get(key);
-  if (!matching?.length) return { ...result, status: 'missing' };
-  if (matching.length > 1) {
-    return { ...result, status: 'ambiguous', sources: matching.slice(0, MAX_PROVENANCE_SOURCES).map(entry => entry.source) };
+  const entry = entries.get(key);
+  if (!entry) return { ...result, status: 'missing' };
+  if (Array.isArray(entry)) {
+    return { ...result, status: 'ambiguous', sources: entry.slice(0, MAX_PROVENANCE_SOURCES).map(copyTextSource) };
   }
-  const entry = matching[0];
+  const source = copyTextSource(entry);
   const authored = authoredValue(entry);
-  if (authored === undefined) return { ...result, status: 'unresolved', source: entry.source, reason: 'limit' };
+  if (authored === undefined) return { ...result, status: 'unresolved', source, reason: 'limit' };
   const expanded = expand(entries, key);
-  return { ...result, status: expanded.reason ? 'unresolved' : 'found', authored, source: entry.source, ...expanded };
+  return { ...result, status: expanded.reason ? 'unresolved' : 'found', authored, source, ...expanded };
+}
+
+/** Query only the caller-supplied, explicitly addressed authority and language. */
+export function resolveLiteralText(
+  files: readonly LiteralTextDocument[],
+  request: LiteralTextLookupRequest,
+  coverageComplete = true,
+): LiteralTextLookupResult {
+  return resolvePreparedLiteralText(prepareLiteralTextLookup(files, request, coverageComplete), request);
 }
