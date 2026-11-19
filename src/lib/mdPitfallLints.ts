@@ -212,10 +212,42 @@ function isStaticRootCue(node: Element | null, root: Element): boolean {
 
 // In ordinary cue actions, bare variables and namespace-qualified variables share one namespace.
 const LOCAL_VARIABLE = /^(?:namespace\.)?(\$[A-Za-z_]\w*)$/;
-const STRICT_LOCAL_READ = /^(?:namespace\.)?(\$[A-Za-z_]\w*)(?:\.[A-Za-z_]\w*)*$/;
+const STRICT_LOCAL_OPERAND = String.raw`(?:namespace\.)?(\$[A-Za-z_]\w*)(?:\.[A-Za-z_]\w*)*`;
+const STRICT_LOCAL_READ = new RegExp(`^${STRICT_LOCAL_OPERAND}$`);
+const STRICT_ARITHMETIC_TOKEN = new RegExp(String.raw`\s+|${STRICT_LOCAL_OPERAND}|((?:\d+(?:\.\d+)?|\.\d+)[fF]?)|.`, 'gs');
 const LOCAL_EXISTENCE_TEST = /^(not\s+)?(?:namespace\.)?(\$[A-Za-z_]\w*)\?$/;
 const MAX_VARIABLE_BRANCH_DEPTH = 16;
 type AbsenceReason = 'removal' | 'flow';
+
+function strictLocalReads(value: string): { variable: string; offset: number }[] {
+  const single = STRICT_LOCAL_READ.exec(value.trim());
+  if (single) return [{ variable: single[1], offset: value.indexOf(single[0]) }];
+  // Bound the work of repeatedly mapping operand offsets through the same raw XML attribute.
+  if (!value.includes('$') || value.length > 4096) return [];
+
+  const reads: { variable: string; offset: number }[] = [];
+  let depth = 0;
+  let needsOperand = true;
+  // Accept a complete arithmetic expression. Unknown and conditional syntax can change which reads run.
+  for (const match of value.matchAll(STRICT_ARITHMETIC_TOKEN)) {
+    const [token, variable, number] = match;
+    if (/^\s/.test(token)) continue;
+    if (needsOperand) {
+      if (token === '+' || token === '-') continue;
+      if (token === '(') { depth += 1; continue; }
+      if (!variable && !number) return [];
+      needsOperand = false;
+      if (variable) reads.push({ variable, offset: match.index });
+    } else if (token === ')' && depth > 0) {
+      depth -= 1;
+    } else if (token.length === 1 && '+-*/%^'.includes(token)) {
+      needsOperand = true;
+    } else {
+      return [];
+    }
+  }
+  return needsOperand || depth !== 0 ? [] : reads;
+}
 
 export interface MdVariableAvailabilityInput { path: string; content?: string }
 interface MdAvailabilityDestination { target?: string; variable?: string; initializes: boolean }
@@ -442,7 +474,7 @@ export function buildMdVariableAvailabilityContext(
       const operation = element.getAttribute('operation');
       const target = destinations.find(value => value.initializes && value.target === cue?.namespace && value.variable);
       if (element.tagName === 'set_value' && ['add', 'subtract'].includes(operation ?? '') && target?.variable
-        && STRICT_LOCAL_READ.exec(element.getAttribute('exact')?.trim() ?? '')?.[1] === target.variable) {
+        && strictLocalReads(element.getAttribute('exact') ?? '').some(read => read.variable === target.variable)) {
         action.selfOrderingUnknown = target.variable;
         gap(file.file, 'Self-referential add/subtract RHS ordering is not established by the available engine evidence.');
       }
@@ -565,13 +597,14 @@ function lintLocalVariableReads(root: Element, source: string, filePath?: string
     for (const variable of fact.unknownVariables) flow.facts.set(variable, { kind: 'unknown' });
     const log = action.tagName === 'debug_text' && !action.hasAttribute('chance');
     const attribute = action.tagName === 'set_value' ? action.getAttributeNode('exact') : log ? action.getAttributeNode('text') : null;
-    const read = attribute && STRICT_LOCAL_READ.exec(attribute.value.trim());
-    if (attribute && read && !absent.has(read[1]) && fact.selfOrderingUnknown !== read[1]) {
-      const state = initialValue(flow, read[1]);
-      if (state.kind === 'potential') {
+    if (attribute) {
+      for (const { variable, offset } of strictLocalReads(attribute.value)) {
+        if (absent.has(variable) || fact.selfOrderingUnknown === variable) continue;
+        const state = initialValue(flow, variable);
+        if (state.kind !== 'potential') continue;
         lines ??= [0, ...Array.from(source.matchAll(/\n/g), match => match.index + 1)];
-        const position = expressionLocation(source, lines, attribute, attribute.value.indexOf(read[0]));
-        const writer = availabilityOwn(activeAuthority()?.variables, read[1]);
+        const position = expressionLocation(source, lines, attribute, offset);
+        const writer = availabilityOwn(activeAuthority()?.variables, variable);
         const later = (availabilityOwn(writer?.writers.last, activeCue.block) ?? -1) > fact.order;
         const explanation = state.joined ? 'Modeled branches do not guarantee an earlier initialization'
           : later ? 'A modeled writer occurs later in this action block, without a guaranteed earlier initialization'
@@ -579,7 +612,7 @@ function lintLocalVariableReads(root: Element, source: string, filePath?: string
         findings.push({ code: 'md_pitfall.variable_read_before_initialization', severity: 'warning', filePath, cue: enclosingNamedCue(action),
           sourceRef: `${action.tagName}/@${attribute.name}`, line: position.line,
           column: leadingBom && position.line === 1 && position.column ? position.column + 1 : position.column,
-          detail: `Project-scoped advisory for strict read of ${read[1]}: ${explanation}. Saved values and writers outside the analyzed project remain unknown.` });
+          detail: `Project-scoped advisory for strict read of ${variable}: ${explanation}. Saved values and writers outside the analyzed project remain unknown.` });
       }
     }
     if (action.tagName === 'debug_text') return;
@@ -671,17 +704,18 @@ function lintLocalVariableReads(root: Element, source: string, filePath?: string
         || action.getAttribute('operation') === 'set' && hasOnlyAttributes(action, ['name', 'exact', 'operation', 'comment']));
       const unconditionalLog = log && !action.hasAttribute('chance');
       const attribute = plainAssignment ? action.getAttributeNode('exact') : unconditionalLog ? action.getAttributeNode('text') : null;
-      const read = attribute && STRICT_LOCAL_READ.exec(attribute.value.trim());
-      const reason = read ? absent.get(read[1]) : undefined;
-      if (attribute && read && reason) {
-        const variable = read[1];
-        lines ??= [0, ...Array.from(source.matchAll(/\n/g), match => match.index + 1)];
-        const position = expressionLocation(source, lines, attribute, attribute.value.indexOf(read[0]));
-        const removal = reason === 'removal';
-        findings.push({ code: removal ? 'md_pitfall.variable_read_after_removal' : 'md_pitfall.variable_read_when_absent',
-          severity: 'warning', filePath, cue, sourceRef: `${action.tagName}/@${attribute.name}`,
-          line: position.line, column: leadingBom && position.line === 1 && position.column ? position.column + 1 : position.column,
-          detail: `Strict read of ${variable} ${removal ? 'after remove_value in this cue' : 'where this cue’s action flow proves it is absent'}. Assign a value first or use an existence check.` });
+      if (attribute && absent.size) {
+        for (const { variable, offset } of strictLocalReads(attribute.value)) {
+          const reason = absent.get(variable);
+          if (!reason) continue;
+          lines ??= [0, ...Array.from(source.matchAll(/\n/g), match => match.index + 1)];
+          const position = expressionLocation(source, lines, attribute, offset);
+          const removal = reason === 'removal';
+          findings.push({ code: removal ? 'md_pitfall.variable_read_after_removal' : 'md_pitfall.variable_read_when_absent',
+            severity: 'warning', filePath, cue, sourceRef: `${action.tagName}/@${attribute.name}`,
+            line: position.line, column: leadingBom && position.line === 1 && position.column ? position.column + 1 : position.column,
+            detail: `Strict read of ${variable} ${removal ? 'after remove_value in this cue' : 'where this cue’s action flow proves it is absent'}. Assign a value first or use an existence check.` });
+        }
       }
       if (assignment) absent.delete(assignment);
     }
@@ -1354,6 +1388,36 @@ export function runMdPitfallSelftest(): {
     receiverRows.length === 2 && receiverRows[0].line === 1 && receiverRows[0].column === receiverDocument.indexOf('$Probe.hull') + 1
     && receiverRows[1].column === receiverDocument.indexOf('namespace.$Probe.hull') + 1
     && initialRows('<set_value name="$Probe" exact="player.ship"/><debug_text text="$Probe.hull"/><debug_text text="namespace.$Probe.hull"/>').length === 0);
+  const compound = '<debug_text text="1 + (namespace.&#36;Probe.hull * -&#36;Other)"/>';
+  const compoundFacts = initialFiles(compound);
+  const compoundRows = compoundFacts.rows.filter(row => row.code === initialCode);
+  ok('project arithmetic reports each strict operand at its authored XML position',
+    compoundRows.length === 2 && compoundRows[0].column === compoundFacts.content.indexOf('namespace.&#36;Probe') + 1
+    && compoundRows[1].column === compoundFacts.content.indexOf('&#36;Other') + 1
+    && compoundRows.every(row => row.severity === 'warning' && row.detail.includes('Saved values')));
+  const increment = '<set_value name="$Next" exact="$Counter + 1"/>';
+  const counter = '<set_value name="$Counter" exact="4"/>';
+  const removeCounter = '<remove_value name="$Counter"/>';
+  ok('project arithmetic distinguishes an earlier assignment, a later assignment and a proven removal',
+    initialRows(counter + increment).length === 0
+    && initialRows(increment + counter)[0]?.detail.includes('later in this action block')
+    && initialFiles(counter + removeCounter + increment).rows.filter(row => String(row.code).startsWith('md_pitfall.variable_')).length === 1
+    && initialFiles(counter + removeCounter + increment).rows.some(row => row.code === removalCode));
+  ok('project arithmetic respects local aliases, guards and external writers',
+    initialRows('<set_value name="namespace.$Counter" exact="4"/>' + increment).length === 0
+    && initialRows('<do_if value="$Counter?">' + increment + '</do_if>').length === 0
+    && initialRows(increment, [remoteWriter('md.A.Root.$Counter')]).length === 0
+    && initialRows('<debug_text text="-($Counter.hull + .5f) ^ 2 % 3 / 4"/>').length === 1);
+  ok('project arithmetic does not treat uncertain, lazy or malformed syntax as a strict read',
+    ['@$X + 1', '$X.hull? + 1', '$X.{1} + 1', '$X.[1] + 1', 'false and ($X + 1)', 'if false then $X + 1 else 0',
+      "'$X + 1'", '$X + ($Y * 2', '$X +', '$X 2 + 1', '$X + opaque(1)'].every(value =>
+      initialFiles(`<remove_value name="$X"/><debug_text text="${value}"/>`).rows
+        .every(row => !String(row.code).startsWith('md_pitfall.variable_'))));
+  const selfCompound = initialFiles('<set_value name="$X" operation="subtract" exact="$X + $Y"/>' + initialRead);
+  ok('project arithmetic self-referential updates keep destination ordering unknown and check the independent operand',
+    selfCompound.coverageGaps.some(row => row.reason.includes('Self-referential add/subtract'))
+    && selfCompound.rows.filter(row => row.code === initialCode).length === 1
+    && selfCompound.rows.some(row => row.code === initialCode && row.detail.includes('strict read of $Y:')));
   ok('project initial ordinary RHS is read before its destination initialization',
     initialRows('<set_value name="$X" exact="$X"/>' + initialRead).length === 1
     && initialRows('<set_value name="$X" exact="$X"/>')[0]?.sourceRef === 'set_value/@exact');

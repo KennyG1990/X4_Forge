@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mdscript name="ForgeQa114Arithmetic" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+  <cues>
+    <cue name="ReadRemoved">
+      <conditions><event_game_started /></conditions>
+      <actions>
+        <set_value name="$Qa114ArithmeticRemoved" exact="4" />
+        <remove_value name="$Qa114ArithmeticRemoved" />
+        <debug_text text="'FORGE_MD114_ARITHMETIC_REMOVED_BEFORE'" filter="general" />
+        <set_value name="$Qa114ArithmeticResult" exact="$Qa114ArithmeticRemoved + 1" />
+        <debug_text text="'FORGE_MD114_ARITHMETIC_REMOVED_AFTER=%1'.[$Qa114ArithmeticResult]" filter="general" />
+      </actions>
+    </cue>
+    <cue name="ReadUnset">
+      <conditions><event_game_started /></conditions>
+      <actions>
+        <debug_text text="'FORGE_MD114_ARITHMETIC_UNSET_BEFORE'" filter="general" />
+        <set_value name="$Qa114ArithmeticResult" exact="1 + $Qa114ArithmeticUnset" />
+        <debug_text text="'FORGE_MD114_ARITHMETIC_UNSET_AFTER=%1'.[$Qa114ArithmeticResult]" filter="general" />
+      </actions>
+    </cue>
+    <cue name="ObserveControls">
+      <conditions><event_game_started /></conditions>
+      <actions>
+        <set_value name="$Qa114ArithmeticReady" exact="4" />
+        <set_value name="$Qa114ArithmeticReadyResult" exact="($Qa114ArithmeticReady + 1) * 2" />
+        <debug_text text="'FORGE_MD114_ARITHMETIC_PRIOR=%1'.[$Qa114ArithmeticReadyResult]" filter="general" />
+        <set_value name="$Qa114ArithmeticSuppressed" exact="@$Qa114ArithmeticQuiet + 1" />
+        <debug_text text="'FORGE_MD114_ARITHMETIC_SUPPRESSED=%1'.[$Qa114ArithmeticSuppressed]" filter="general" />
+        <set_value name="$Qa114ArithmeticConditional" exact="if false then $Qa114ArithmeticSkipped + 1 else 9" />
+        <debug_text text="'FORGE_MD114_ARITHMETIC_CONDITIONAL=%1'.[$Qa114ArithmeticConditional]" filter="general" />
+      </actions>
+    </cue>
+  </cues>
+</mdscript>

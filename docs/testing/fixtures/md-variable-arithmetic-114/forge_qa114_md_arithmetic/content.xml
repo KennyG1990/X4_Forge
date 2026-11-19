@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="utf-8"?>
+<content id="forge_qa114_md_arithmetic" name="Forge QA MD Arithmetic" author="Forge QA" version="100" description="Standalone Mission Director numeric lookup witness. Writes only cue variables and debug markers." />
