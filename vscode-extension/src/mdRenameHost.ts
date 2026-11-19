@@ -92,14 +92,18 @@ function changedInput(): Error {
   return new Error("A reviewed file, editor buffer or MD folder changed. Run Rename Mission Director Symbol again.");
 }
 
+function recheckDisk(root: string, directory: string, limit: number, baseline: ReturnType<typeof captureDisk>) {
+  const current = captureDisk(root, directory, limit);
+  if (current.directories !== baseline.directories || current.files.size !== baseline.files.size
+    || [...current.files].some(([key, input]) => input.identity !== baseline.files.get(key)?.identity)) throw changedInput();
+  return current;
+}
+
 function recheck(
   root: string, directory: string, limit: number,
   baseline: ReturnType<typeof captureDisk>, editors: ReadonlyMap<string, EditorInput>,
 ): void {
-  const current = captureDisk(root, directory, limit);
-  if (current.directories !== baseline.directories || current.files.size !== baseline.files.size
-    || [...current.files].some(([key, input]) => input.identity !== baseline.files.get(key)?.identity)) throw changedInput();
-  const open = captureEditors(directory, current.files);
+  const open = captureEditors(directory, recheckDisk(root, directory, limit, baseline).files);
   if (open.size !== editors.size) throw changedInput();
   for (const [key, before] of editors) {
     const after = open.get(key);
@@ -212,8 +216,14 @@ export function registerMdRenameCommand(
             throw new Error("The editor applied the rename, but the buffers changed before Forge could verify them.");
           }
         }
-        outcome = "ok";
         await vscode.window.showTextDocument(original, { viewColumn: editor.viewColumn });
+        // Closed files and newly added paths have no document version for the host to fence.
+        try {
+          recheckDisk(root, directory, fileLimit, disk);
+        } catch {
+          throw new Error("Forge applied the rename to editor buffers. It could not verify the Mission Director files on disk afterward. Review the changes or use Undo before saving.");
+        }
+        outcome = "ok";
         vscode.window.setStatusBarMessage(`Renamed ${result.oldName} in ${targets.size} files. Use Undo to revert.`, 6000);
       } catch (error) {
         outcome = "error";
