@@ -334,15 +334,20 @@ export function writeXsdConfig(config: XsdConfig, options?: AtomicWriteOptions):
   atomicWriteFile(configPath(), `${JSON.stringify(config, null, 2)}\n`, options);
 }
 
+export function resolveX4ReferenceRoot(config = readXsdConfig(), isolatedScratch = Boolean(resolveDevScratchRoles())): string {
+  const configured = typeof config.x4ReferenceRoot === 'string' ? config.x4ReferenceRoot.trim() : '';
+  return path.resolve(
+    (isolatedScratch && configured)
+      || process.env.X4_REFERENCE_ROOT?.trim()
+      || configured
+      || DEFAULT_X4_REFERENCE_ROOT,
+  );
+}
+
 export function resolveXsdConfig(config = readXsdConfig()): ResolvedXsdConfig {
   const scratch = resolveDevScratchRoles();
   const gamePath = scratch?.x4GamePath || process.env.X4_GAME_PATH || config.x4GamePath || '';
-  const x4ReferenceRoot = path.resolve(
-    (scratch && config.x4ReferenceRoot?.trim())
-      || process.env.X4_REFERENCE_ROOT?.trim()
-      || config.x4ReferenceRoot?.trim()
-      || DEFAULT_X4_REFERENCE_ROOT,
-  );
+  const x4ReferenceRoot = resolveX4ReferenceRoot(config, Boolean(scratch));
   const referenceLibraries = path.join(x4ReferenceRoot, 'libraries');
   const configuredSchema = config.xsdSchemaPath && (path.isAbsolute(config.xsdSchemaPath)
     ? config.xsdSchemaPath : path.join(gamePath, config.xsdSchemaPath));

@@ -15,7 +15,7 @@ import zlib from "zlib";
 import { buildX4UiSourceBundle, addX4UiSourceBundleRegistration, buildX4MenuLuaRuntimeInventory } from './src/lib/x4UiSourceBundle';
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
-import { createEmptySchemaLibrary, getDefaultGamePath, loadSchemaLibrary, readXsdConfig, resolveXsdConfig, runSchemaDiscoverySelftest, writeXsdConfig, type ResolvedXsdConfig, type XsdConfig } from "./src/lib/xsdParser";
+import { createEmptySchemaLibrary, getDefaultGamePath, loadSchemaLibrary, readXsdConfig, resolveX4ReferenceRoot, resolveXsdConfig, runSchemaDiscoverySelftest, writeXsdConfig, type ResolvedXsdConfig, type XsdConfig } from "./src/lib/xsdParser";
 import { DEPLOY_FORMATS, DEFAULT_DEPLOY_FORMAT, normalizeDeployFormat, type DeployFormat } from './src/lib/deployFormat';
 import { planDirectoryConfigurationChange } from './src/server/directoryConfiguration';
 
@@ -113,6 +113,8 @@ import { effectiveReferenceMetadata, resolveEffectiveReferenceDocument } from ".
 import { classifyPath, indexCueReferences, runExtensionProjectSelftest, buildContentXml, type ExtensionProject } from "./src/lib/extensionProject";
 import { buildDependencyHealth } from './src/server/dependencyHealth';
 import { getAiSchemaIndex, getScriptPropertyIndex, registerValidationAgentRoutes } from "./src/server/validationRoutes";
+import { readLiteralReferenceTexts } from "./src/server/literalTextSources";
+import { LITERAL_TEXT_MAX_FILE_BYTES, LITERAL_TEXT_MAX_FILES, LITERAL_TEXT_MAX_TOTAL_BYTES, literalTextFilenameLanguage, resolveLiteralText, type LiteralTextLookupRequest } from "./src/lib/literalTextLookup";
 import { getCanonicalReferenceCorpus, getCanonicalReferenceSets, initializeReferenceCorpus, registerReferenceRoutes, startCanonicalReferenceManifest } from "./src/server/referenceRoutes";
 import { createCanonicalMdProviderPreparation, readCanonicalMdCompiledWorkerIdentity } from './src/server/canonicalMdProviderPreparation';
 import type { CanonicalMdConsultation } from './src/server/canonicalMdReferenceContext';
@@ -5649,6 +5651,83 @@ function checkExpressionRequest(req: express.Request, res: express.Response) {
 }
 
 app.post("/api/agent/check-expression", checkExpressionRequest);
+function parseLiteralTextLookupRequest(input: unknown): LiteralTextLookupRequest | null {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
+  const body = input as Record<string, unknown>;
+  if (Object.keys(body).length !== 4) return null;
+  const { page, id, language, scope } = body;
+  if (typeof page !== 'number' || !Number.isSafeInteger(page) || page < 0
+    || typeof id !== 'number' || !Number.isSafeInteger(id) || id < 0
+    || typeof language !== 'number' || !Number.isInteger(language) || language < 1 || language > 999
+    || (scope !== 'reference' && scope !== 'workspace')) return null;
+  return { page, id, language, scope };
+}
+
+function savedWorkspaceTextSources(ws: ModWorkspace, language: number) {
+  const files: { path: string; content: string; representation: 'source' | 'generated' }[] = [];
+  const originals = new Map<string, NonNullable<ModWorkspace['originalFiles']>[number]>();
+  const projected = new Set<string>();
+  const normalize = (name: string) => name.replace(/\\/g, '/');
+  const selected = (name: string) => {
+    const suffix = literalTextFilenameLanguage(name);
+    return /^t\/[^/]+\.xml$/i.test(name) && (suffix === undefined || suffix === 0 || suffix === language);
+  };
+  if (ws.compileSettings?.patches !== false && ws.xmlPatches?.some(patch =>
+    patch.includeInBuild !== false && selected(normalize(patch.targetFile ?? '')))) {
+    return { files, complete: false };
+  }
+  let bytes = 0;
+  const add = (file: typeof files[number]): boolean => {
+    const size = Buffer.byteLength(file.content);
+    bytes += size;
+    if (files.length >= LITERAL_TEXT_MAX_FILES || size > LITERAL_TEXT_MAX_FILE_BYTES || bytes > LITERAL_TEXT_MAX_TOTAL_BYTES) return false;
+    files.push(file);
+    return true;
+  };
+  for (const original of ws.originalFiles ?? []) {
+    const name = normalize(original.path).replace(/^\/+/, '');
+    if (original.kind !== 'tfile' || name.includes('..') || !selected(name)) continue;
+    if (originals.has(name)) return { files, complete: false };
+    originals.set(name, original);
+  }
+  for (const model of ws.tFiles ?? []) {
+    if (ws.compileSettings?.translations === false || model.includeInBuild === false) continue;
+    const name = `t/${toTFileName(model)}`;
+    if (!selected(name)) continue;
+    const key = name.toLowerCase();
+    if (projected.has(key)) return { files, complete: false };
+    projected.add(key);
+    // The compiler restores original XML only at the exact emitted path.
+    const original = originals.get(name);
+    const source = original && (!original.fingerprint || original.fingerprint === tFileFingerprint(model)) ? original : undefined;
+    if (!add({ path: name, content: source?.content ?? compileTFileXML(model), representation: source ? 'source' : 'generated' })) {
+      return { files, complete: false };
+    }
+  }
+  for (const entry of ws.passthroughFiles ?? []) {
+    const name = normalize(entry.path);
+    if (!selected(name) || projected.has(name.toLowerCase())) continue;
+    if (entry.omitted || entry.contentEncoding === 'base64' || typeof entry.content !== 'string'
+      || !add({ path: name, content: entry.content, representation: 'source' })) return { files, complete: false };
+  }
+  return { files, complete: true };
+}
+
+app.post("/api/agent/text/lookup", (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const lookup = parseLiteralTextLookupRequest(req.body);
+  if (!lookup) return res.status(400).json({
+    code: 'CAPABILITY_INPUT_INVALID',
+    error: 'Send page and id as nonnegative safe integers, a language from 1 to 999, and scope reference or workspace.',
+  });
+  const { workspace } = requestWorkspace(req);
+  const checked = lookup.scope === 'reference'
+    ? readLiteralReferenceTexts(resolveX4ReferenceRoot(), lookup.language)
+    : savedWorkspaceTextSources(workspace, lookup.language);
+  return res.json(resolveLiteralText(checked.files, lookup, checked.complete));
+});
+
+
 app.post("/api/agent/expressions/check", (req, res) => {
   const body = req.body;
   res.set('Cache-Control', 'no-store');

@@ -727,7 +727,7 @@ async function main() {
   const expectedCapabilityIds = ['expression.check', 'extensions.conflicts.analyze', 'history.list', 'history.revert',
     'patch.readiness.analyze', 'performance.collect', 'performance.native.collect', 'performance.native.read', 'performance.native.stop',
     'performance.profile', 'performance.read', 'project.validate', 'project.xml.references', 'readiness.read',
-    'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'workspace.compile', 'workspace.generate.preview', 'workspace.read'];
+    'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'workspace.compile', 'workspace.generate.preview', 'workspace.read'];
   const sameCapabilityIds = (actual, expected) => Array.isArray(actual)
     && JSON.stringify([...actual].sort()) === JSON.stringify([...expected].sort());
   const expectedCapabilityIdentity = id => `${id}@${['patch.readiness.analyze', 'workspace.compile', 'workspace.read'].includes(id) ? 2 : 1}`;
@@ -748,6 +748,17 @@ async function main() {
     validationCapability?.inputSchema?.anyOf?.some(branch => branch?.required?.[0] === 'project') &&
     validationCapability?.inputSchema?.anyOf?.some(branch => branch?.required?.[0] === 'fromPath'),
     JSON.stringify(validationCapability || {}));
+  const textLookupRoute = '/api/agent/text/lookup';
+  const textCapability = capabilityContract?.capabilities?.find(capability => capability?.id === 'text.lookup');
+  ok('text_lookup_capability_exposes_one_read_only_binding_and_mcp_tool',
+    textCapability?.version === 1 && textCapability?.context?.workspace === 'required'
+      && textCapability?.access?.public === false && textCapability?.access?.studioSession === true
+      && sameCapabilityIds(textCapability.access.agentScopes, ['read', 'write', 'deploy'])
+      && textCapability.apiBindings?.length === 1 && textCapability.apiBindings[0]?.path === textLookupRoute
+      && textCapability.apiBindings[0]?.method === 'POST' && textCapability.apiBindings[0]?.role === 'primary'
+      && sameCapabilityIds(textCapability.effects, ['read', 'analyze'])
+      && textCapability.surfaces?.mcp?.length === 1 && textCapability.surfaces.mcp[0]?.id === 'lookup_text'
+      && textCapability.surfaces.mcp[0]?.status === 'connected');
   const previewCapability = capabilityContract?.capabilities?.find(capability => capability?.id === 'workspace.generate.preview');
   ok('capability_generation_is_discovery_only_preview',
     previewCapability?.apiBindings?.[0]?.path === '/api/agent/generate/preview' &&
@@ -1339,10 +1350,10 @@ async function main() {
   for (const [name, response, scope, expectedIds] of [
     ['read', readEffective, 'read', ['expression.check', 'extensions.conflicts.analyze', 'history.list',
       'performance.collect', 'performance.profile', 'performance.read', 'project.xml.references', 'readiness.read',
-      'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'workspace.read']],
+      'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'workspace.read']],
     ['write', writeEffective, 'write', ['expression.check', 'extensions.conflicts.analyze', 'history.list', 'project.validate',
       'performance.collect', 'performance.profile', 'performance.read', 'project.xml.references',
-      'readiness.read', 'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'workspace.compile', 'workspace.read']],
+      'readiness.read', 'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'workspace.compile', 'workspace.read']],
     ['deploy', deployEffective, 'deploy', expectedCapabilityIds.filter(id => ![
       'performance.native.collect', 'performance.native.read', 'performance.native.stop',
     ].includes(id))],
@@ -1374,6 +1385,52 @@ async function main() {
   ok('read_write_deploy_effective_sets_are_monotonic',
     effectiveIds(readEffective).every(id => effectiveIds(writeEffective).includes(id)) &&
     effectiveIds(writeEffective).every(id => effectiveIds(deployEffective).includes(id)));
+
+  const textLookupInput = { page: 926401, id: 1, language: 44, scope: 'reference' };
+  const lookupWithoutOperation = (token, body, options) => req('POST', textLookupRoute, token, body, {
+    operationId: null, ...options,
+  });
+  const lookupWithoutTextCorpus = await lookupWithoutOperation(readKey, textLookupInput);
+  ok('text_lookup_without_text_corpus_reports_incomplete_coverage',
+    lookupWithoutTextCorpus.status === 200 && lookupWithoutTextCorpus.json?.status === 'unavailable'
+      && lookupWithoutTextCorpus.json?.reason === 'incomplete-coverage');
+  const anonymousLookup = await lookupWithoutOperation(null, textLookupInput);
+  const missingWorkspaceLookup = await lookupWithoutOperation(readKey, textLookupInput, { workspaceId: '' });
+  const crossWorkspaceLookup = await lookupWithoutOperation(readKey, { ...textLookupInput, scope: 'workspace' },
+    { workspaceId: SECOND_WORKSPACE_ID });
+  ok('text_lookup_requires_auth_and_rejects_missing_or_cross_workspace',
+    anonymousLookup.status === 401
+      && missingWorkspaceLookup.status === 400 && missingWorkspaceLookup.json?.code === 'WORKSPACE_ID_REQUIRED'
+      && crossWorkspaceLookup.status === 403 && crossWorkspaceLookup.json?.code === 'WORKSPACE_BINDING_MISMATCH');
+  for (const [name, invalidFields] of [
+    ['page_string', { page: '926401' }], ['negative_id', { id: -1 }],
+    ['fractional_language', { language: 44.5 }], ['invalid_scope', { scope: 'both' }],
+    ['caller_path', { path: 't/forbidden.xml' }],
+  ]) {
+    const lookup = await lookupWithoutOperation(readKey, { ...textLookupInput, ...invalidFields });
+    ok(`text_lookup_rejects_${name}`, lookup.status === 400 && lookup.json?.code === 'CAPABILITY_INPUT_INVALID');
+  }
+  const lookupTextDirectory = path.join(referenceRoot, 't');
+  const lookupTextFile = path.join(lookupTextDirectory, '0001-L044.xml');
+  fs.mkdirSync(lookupTextDirectory);
+  try {
+    fs.writeFileSync(lookupTextFile, '<language id="44"><page id="926401"><t id="1">Route {926401,2}</t><t id="2">reference</t></page></language>');
+    const referenceLookup = await lookupWithoutOperation(readKey, textLookupInput);
+    capabilityResponses.set('text.lookup', referenceLookup);
+    const missingLookup = await lookupWithoutOperation(readKey, { ...textLookupInput, id: 99 });
+    const workspaceLookup = await lookupWithoutOperation(readKey, { ...textLookupInput, scope: 'workspace' });
+    ok('text_lookup_reference_expands_a_literal_and_reports_provenance',
+      referenceLookup.status === 200 && referenceLookup.json?.status === 'found'
+        && referenceLookup.json?.authored === 'Route {926401,2}' && referenceLookup.json?.text === 'Route reference'
+        && referenceLookup.json?.selectedLanguage === 44 && referenceLookup.json?.source?.file === 't/0001-L044.xml');
+    ok('text_lookup_distinguishes_missing_and_does_not_fall_back_to_reference',
+      missingLookup.status === 200 && missingLookup.json?.status === 'missing'
+        && workspaceLookup.status === 200 && workspaceLookup.json?.scope === 'workspace'
+        && ['missing', 'unavailable'].includes(workspaceLookup.json?.status) && workspaceLookup.json?.text === undefined);
+  } finally {
+    if (fs.existsSync(lookupTextFile)) fs.unlinkSync(lookupTextFile);
+    fs.rmdirSync(lookupTextDirectory);
+  }
 
   // #100/#103: canonical analysis outputs need real HTTP witnesses in this gate.
   const analysisWorkspaceBefore = await req('GET', '/api/agent/workspace', SESSION_TOKEN);
@@ -4893,6 +4950,84 @@ async function main() {
   ok('compile_rejects_non_string_override_content',
     nonStringOverride.status === 400 && /content must be a string/i.test(String(nonStringOverride.json?.error || '')),
     JSON.stringify(nonStringOverride.json || {}));
+
+  const workspaceTextAddress = { workspaceId: distinctStudioWorkspaceId };
+  const workspaceTextSeed = await req('GET', '/api/agent/workspace', SESSION_TOKEN, undefined, workspaceTextAddress);
+  const workspaceTextSaved = await req('POST', '/api/agent/workspace', SESSION_TOKEN, {
+    workspace: { ...workspaceTextSeed.json?.workspace, tFiles: [{
+      languageId: '44', fileName: 'route-L044.xml',
+      pages: [{ id: '926401', items: [{ id: '1', value: 'Route workspace' }] }],
+    }] },
+    expectedHead: workspaceTextSeed.json?.workspaceHash,
+    expectedSnapshotHash: workspaceTextSeed.json?.snapshotHash,
+  }, workspaceTextAddress);
+  const textHistoryLedger = path.join(dataDir, 'history', 'ledger.jsonl');
+  const textHistoryBytes = () => fs.existsSync(textHistoryLedger) ? fs.readFileSync(textHistoryLedger) : Buffer.alloc(0);
+  const beforeWorkspaceText = await req('GET', '/api/agent/workspace', SESSION_TOKEN, undefined, workspaceTextAddress);
+  const beforeTextHistory = textHistoryBytes();
+  const beforeTextReceipts = stableStringify(actionReceiptFiles());
+  const savedWorkspaceLookup = await lookupWithoutOperation(SESSION_TOKEN, { ...textLookupInput, scope: 'workspace' }, workspaceTextAddress);
+  const afterWorkspaceText = await req('GET', '/api/agent/workspace', SESSION_TOKEN, undefined, workspaceTextAddress);
+  ok('text_lookup_reads_the_addressed_saved_workspace_without_a_history_entry',
+    workspaceTextSaved.status === 200 && savedWorkspaceLookup.status === 200 && savedWorkspaceLookup.json?.status === 'found'
+      && savedWorkspaceLookup.json?.text === 'Route workspace' && savedWorkspaceLookup.json?.source?.file === 't/route-L044.xml'
+      && savedWorkspaceLookup.json?.source?.representation === 'generated'
+      && beforeWorkspaceText.status === 200 && afterWorkspaceText.status === 200
+      && afterWorkspaceText.json?.workspaceHash === beforeWorkspaceText.json?.workspaceHash
+      && afterWorkspaceText.json?.snapshotHash === beforeWorkspaceText.json?.snapshotHash
+      && beforeTextHistory.equals(textHistoryBytes()) && beforeTextReceipts === stableStringify(actionReceiptFiles()),
+    JSON.stringify({
+      save: workspaceTextSaved.status, lookup: savedWorkspaceLookup.status, receiptListUnchanged: beforeTextReceipts === stableStringify(actionReceiptFiles()),
+      before: beforeWorkspaceText.status, after: afterWorkspaceText.status, historyUnchanged: beforeTextHistory.equals(textHistoryBytes()),
+      lookupStatus: savedWorkspaceLookup.json?.status, lookupSource: savedWorkspaceLookup.json?.source,
+    }));
+
+  let workspaceTextPatchBase = afterWorkspaceText;
+  for (const [name, includeInBuild] of [['disabled', false], ['active', true]]) {
+    const translationPatch = {
+      id: 'route-text-patch', action: 'replace', targetFile: 't/route-L044.xml',
+      sel: '/language/page/t', content: '<t id="1">Patched workspace</t>', note: '', includeInBuild,
+    };
+    const saved = await req('POST', '/api/agent/workspace', SESSION_TOKEN, {
+      workspace: {
+        ...workspaceTextPatchBase.json?.workspace,
+        compileSettings: { ...workspaceTextPatchBase.json?.workspace?.compileSettings, patches: true },
+        xmlPatches: [translationPatch],
+      },
+      expectedHead: workspaceTextPatchBase.json?.workspaceHash,
+      expectedSnapshotHash: workspaceTextPatchBase.json?.snapshotHash,
+    }, workspaceTextAddress);
+    workspaceTextPatchBase = await req('GET', '/api/agent/workspace', SESSION_TOKEN, undefined, workspaceTextAddress);
+    const lookup = await lookupWithoutOperation(SESSION_TOKEN, { ...textLookupInput, scope: 'workspace' }, workspaceTextAddress);
+    ok(`text_lookup_respects_${name}_selected_locale_patch`,
+      saved.status === 200 && workspaceTextPatchBase.status === 200
+        && workspaceTextPatchBase.json?.workspace?.xmlPatches?.some(patch => patch.id === translationPatch.id
+          && patch.targetFile === translationPatch.targetFile && patch.includeInBuild === includeInBuild)
+        && lookup.status === 200 && (includeInBuild
+          ? lookup.json?.status === 'unavailable' && lookup.json?.reason === 'incomplete-coverage'
+          : lookup.json?.status === 'found' && lookup.json?.text === 'Route workspace'));
+  }
+
+  for (const originalPath of ['T/route-L044.xml', 't/route-L044.xml']) {
+    const source = '<language id="44"><page id="926401"><t id="1">Original workspace</t></page></language>';
+    const saved = await req('POST', '/api/agent/workspace', SESSION_TOKEN, {
+      workspace: {
+        ...workspaceTextPatchBase.json?.workspace, xmlPatches: [],
+        originalFiles: [{ path: originalPath, kind: 'tfile', content: source }],
+      },
+      expectedHead: workspaceTextPatchBase.json?.workspaceHash,
+      expectedSnapshotHash: workspaceTextPatchBase.json?.snapshotHash,
+    }, workspaceTextAddress);
+    workspaceTextPatchBase = await req('GET', '/api/agent/workspace', SESSION_TOKEN, undefined, workspaceTextAddress);
+    const lookup = await lookupWithoutOperation(SESSION_TOKEN, { ...textLookupInput, scope: 'workspace' }, workspaceTextAddress);
+    const samePath = originalPath === 't/route-L044.xml';
+    ok('text_lookup_' + (samePath ? 'restores_exact_original_path' : 'ignores_case_only_original_alias'),
+      saved.status === 200 && workspaceTextPatchBase.json?.workspace?.originalFiles?.[0]?.path === originalPath
+        && lookup.status === 200 && lookup.json?.status === 'found'
+        && lookup.json?.text === (samePath ? 'Original workspace' : 'Route workspace')
+        && lookup.json?.source?.representation === (samePath ? 'source' : 'generated'),
+      JSON.stringify({ save: saved.status, originalPath, result: lookup.json }));
+  }
 
   const capabilityOutputReport = (capabilityContract?.capabilities || [])
     .map(capability => assertCapabilityOutput(capability.id, capabilityResponses.get(capability.id)));

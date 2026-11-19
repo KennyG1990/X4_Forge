@@ -1516,6 +1516,30 @@
       ]
     },
     {
+      "routeKey": "POST /api/agent/text/lookup",
+      "method": "POST",
+      "template": "/api/agent/text/lookup",
+      "owner": "text.lookup",
+      "resourceClass": "workspace",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1text~1lookup",
+      "integrationBatch": "W3B0-internal",
+      "history": "quiet",
+      "capability": {
+        "kind": "canonical",
+        "id": "text.lookup",
+        "version": 1
+      },
+      "semanticClass": "read-analysis-only",
+      "policy": "receipt-exempt",
+      "effects": [
+        "read",
+        "analyze"
+      ],
+      "authorityScopes": [
+        "workspace"
+      ]
+    },
+    {
       "routeKey": "POST /api/agent/warning-reviews/revoke",
       "method": "POST",
       "template": "/api/agent/warning-reviews/revoke",

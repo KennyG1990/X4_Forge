@@ -12,6 +12,7 @@ import {
   buildForgeCapabilityContract,
   type ForgeCapabilityDescriptorV1,
 } from '../src/lib/forgeCapabilities';
+import type { LiteralTextLookupRequest, LiteralTextLookupResult } from '../src/lib/literalTextLookup';
 import type { XmlReferenceMapResult, XmlReferenceStatus } from '../src/lib/xmlReferenceGraph';
 import type { ForgeCpuProfileReport, ForgePerformanceResourceSample, ForgePerformanceSnapshot } from '../src/lib/forgePerformance';
 import type { ForgeBackendPerformanceStatus } from '../src/server/forgePerformance';
@@ -29,6 +30,7 @@ const EXPECTED_TOOLS = [
   'stage_and_validate',
   'readiness',
   'runtime_debugger',
+  'lookup_text',
   'check_expression',
   'get_xml_references',
   ...PERFORMANCE_TOOLS,
@@ -36,11 +38,11 @@ const EXPECTED_TOOLS = [
   'check_patch_readiness',
   'explain_element',
 ];
-const LEGACY_TOOLS = EXPECTED_TOOLS.filter(tool => !['runtime_debugger', 'check_expression', 'get_xml_references', ...PERFORMANCE_TOOLS].includes(tool));
-const READ_TOOLS = ['list_schema_domains', 'get_workspace', 'readiness', 'runtime_debugger', 'check_expression', 'get_xml_references', ...PERFORMANCE_TOOLS, 'check_conflicts', 'explain_element'];
+const LEGACY_TOOLS = EXPECTED_TOOLS.filter(tool => !['runtime_debugger', 'lookup_text', 'check_expression', 'get_xml_references', ...PERFORMANCE_TOOLS].includes(tool));
+const READ_TOOLS = ['list_schema_domains', 'get_workspace', 'readiness', 'runtime_debugger', 'lookup_text', 'check_expression', 'get_xml_references', ...PERFORMANCE_TOOLS, 'check_conflicts', 'explain_element'];
 const WRITE_TOOLS = [
   'validate_mod', 'list_schema_domains', 'get_workspace', 'compile_workspace', 'author_check',
-  'stage_and_validate', 'readiness', 'runtime_debugger', 'check_expression', 'get_xml_references', ...PERFORMANCE_TOOLS, 'check_conflicts', 'explain_element',
+  'stage_and_validate', 'readiness', 'runtime_debugger', 'lookup_text', 'check_expression', 'get_xml_references', ...PERFORMANCE_TOOLS, 'check_conflicts', 'explain_element',
 ];
 const CUSTOM_TOOLS = ['validate_mod', 'list_schema_domains', 'author_check', 'stage_and_validate', 'explain_element'];
 const MCP_KEY = `x4fk_${'a'.repeat(64)}`;
@@ -50,6 +52,11 @@ const EFFECTIVE_SCHEMA_VERSION = 'forge.agent-capability-authority.v1';
 const ROUTE_POLICY_VERSION = 'forge.route-dispositions.v4';
 const RUNTIME_EXPECT_MAX_LENGTH = 256;
 const RUNTIME_MAX_COUNT = 1_000_000;
+const TEXT_LOOKUP: LiteralTextLookupRequest = { page: 90001, id: 7, language: 49, scope: 'reference' };
+const TEXT_FOUND: LiteralTextLookupResult = {
+  ...TEXT_LOOKUP, status: 'found', selectedLanguage: 49, authored: '  Fixture & text  ', text: '  Fixture & text  ',
+  source: { file: 't/0001-L049.xml', line: 3, column: 5 },
+};
 
 function sha256(value: string): string {
   return crypto.createHash('sha256').update(value, 'utf8').digest('hex');
@@ -735,6 +742,23 @@ const server = http.createServer(function serveMcpFixture(request, response): vo
     });
     return;
   }
+  if (request.method === 'POST' && request.url === '/api/agent/text/lookup') {
+    let raw = '';
+    request.setEncoding('utf8');
+    request.on('data', chunk => { raw += chunk; });
+    request.on('end', () => {
+      const body = JSON.parse(raw);
+      routeCalls.push({ method: request.method || '', path: request.url || '', body });
+      if (request.headers.authorization !== `Bearer ${MCP_KEY}` || request.headers['x-workspace-id'] !== MCP_WORKSPACE_ID) {
+        response.writeHead(403);
+        response.end();
+        return;
+      }
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify(endpointMode === 'missing-fields' ? body : TEXT_FOUND));
+    });
+    return;
+  }
   if (request.method === 'POST' && request.url === '/api/agent/project/xml-references') {
     let raw = '';
     request.setEncoding('utf8');
@@ -1001,8 +1025,24 @@ try {
 
   mode = 'read';
   await withMcp(baseUrl, async client => {
-    assert.deepEqual((await toolsFor(client)).map(tool => tool.name), READ_TOOLS,
+    const tools = await toolsFor(client);
+    assert.deepEqual(tools.map(tool => tool.name), READ_TOOLS,
       'read key effective discovery must expose exactly the declared read tools');
+    const lookup = tools.find(tool => tool.name === 'lookup_text');
+    assert.equal(lookup?._meta?.['x4forge/capabilityId'], 'text.lookup');
+    assert.equal(lookup?._meta?.['x4forge/capabilityVersion'], 1);
+    routeCalls.length = 0;
+    const reply = await client.request('tools/call', { name: 'lookup_text', arguments: TEXT_LOOKUP });
+    assert.equal(reply.error, undefined, reply.error?.message);
+    assert.equal(reply.result?.isError, undefined);
+    assert.deepEqual(JSON.parse(String(reply.result?.content?.[0]?.text || '{}')), TEXT_FOUND,
+      'lookup must preserve the exact language, source and literal whitespace');
+    assert.deepEqual(routeCalls, [{ method: 'POST', path: '/api/agent/text/lookup', body: TEXT_LOOKUP }]);
+
+    endpointMode = 'missing-fields';
+    const missingStatus = await client.request('tools/call', { name: 'lookup_text', arguments: TEXT_LOOKUP });
+    assert.equal(missingStatus.result?.isError, true, 'lookup must reject a successful HTTP response without a lookup status');
+    endpointMode = 'normal';
   });
 
   mode = 'write';
@@ -1209,6 +1249,10 @@ try {
       { name: 'check_expression', arguments: { expression: 'x'.repeat(4097) } },
       { name: 'check_expression', arguments: { expression: '$x', variableTypes: { $x: 42 } } },
       { name: 'check_expression', arguments: { expression: '$x', recordBaseline: true } },
+      { name: 'lookup_text', arguments: { ...TEXT_LOOKUP, language: 0 } },
+      { name: 'lookup_text', arguments: { ...TEXT_LOOKUP, id: '7' } },
+      { name: 'lookup_text', arguments: { ...TEXT_LOOKUP, page: Number.MAX_SAFE_INTEGER + 1 } },
+      { name: 'lookup_text', arguments: { ...TEXT_LOOKUP, path: 't/0001-L049.xml' } },
     ]) {
       const denied = await client.request('tools/call', invalid);
       assert.equal(denied.error?.code, -32602, `${invalid.name} malformed input must fail before HTTP`);
@@ -1487,6 +1531,10 @@ try {
       'runtime debugger must not bypass live capability discovery through legacy fallback');
     const legacyExpression = await client.request('tools/call', { name: 'check_expression', arguments: { expression: '$x' } });
     assert.equal(legacyExpression.error?.code, -32602, 'expression check requires live capability discovery');
+    routeCalls.length = 0;
+    const legacyLookup = await client.request('tools/call', { name: 'lookup_text', arguments: TEXT_LOOKUP });
+    assert.equal(legacyLookup.error?.code, -32602, 'literal text lookup requires current discovery');
+    assert.deepEqual(routeCalls, [], 'legacy discovery must keep literal text lookup off HTTP');
     const legacyXmlReferences = await client.request('tools/call', {
       name: 'get_xml_references', arguments: { focus: { origin: 'project', path: 'assets/fixture_0.xml' } },
     });
@@ -1592,11 +1640,13 @@ try {
     assert.deepEqual(narrowedTools.map(tool => tool.name), CUSTOM_TOOLS,
       'custom exact identity must retain public capabilities while narrowing protected tools');
     routeCalls.length = 0;
+    const ungrantedLookup = await client.request('tools/call', { name: 'lookup_text', arguments: TEXT_LOOKUP });
+    assert.equal(ungrantedLookup.error?.code, -32602, 'literal text lookup must require its own exact grant');
     for (const name of PERFORMANCE_TOOLS) {
       assert.equal((await client.request('tools/call', { name, arguments: {} })).error?.code, -32602,
         `${name} must require its own exact grant`);
     }
-    assert.deepEqual(routeCalls, [], 'ungranted performance tools reached HTTP');
+    assert.deepEqual(routeCalls, [], 'ungranted literal text lookup or performance tools reached HTTP');
     const narrowedAuthorityHash = narrowedTools[0]?._meta?.['x4forge/authorityHash'];
     assert.match(String(narrowedAuthorityHash || ''), /^[a-f0-9]{64}$/,
       'narrowed live tools must carry the effective authority hash');
@@ -1654,8 +1704,12 @@ try {
   await withMcp(baseUrl, async client => {
     assert.deepEqual((await toolsFor(client)).map(tool => tool.name), EXPECTED_TOOLS);
     mode = 'outage';
-    assert.deepEqual((await toolsFor(client)).map(tool => tool.name), EXPECTED_TOOLS.filter(name => !['check_expression', 'get_xml_references', ...PERFORMANCE_TOOLS].includes(name)),
-      'expression, XML reference and performance tools require current discovery even when other tools retain prior authority');
+    assert.deepEqual((await toolsFor(client)).map(tool => tool.name), EXPECTED_TOOLS.filter(name => !['lookup_text', 'check_expression', 'get_xml_references', ...PERFORMANCE_TOOLS].includes(name)),
+      'literal text, expression, XML reference and performance tools require current discovery even when other tools retain prior authority');
+    routeCalls.length = 0;
+    const staleLookup = await client.request('tools/call', { name: 'lookup_text', arguments: TEXT_LOOKUP });
+    assert.equal(staleLookup.error?.code, -32602, 'stale discovery cannot authorize a direct literal text lookup');
+    assert.deepEqual(routeCalls, [], 'stale literal text lookup reached HTTP');
     const staleExpression = await client.request('tools/call', { name: 'check_expression', arguments: { expression: '$x' } });
     assert.equal(staleExpression.error?.code, -32602, 'stale discovery cannot authorize a direct expression check');
     const staleXmlReferences = await client.request('tools/call', {

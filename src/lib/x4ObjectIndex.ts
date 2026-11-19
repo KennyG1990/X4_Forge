@@ -113,7 +113,7 @@ function expandLocRefs(raw: string, map: LocalizationMap, depth = 0): string {
  * parenthesis is escaped as `\(` / `\)`. Comments may nest. e.g.
  * "(Behemoth Vanguard)Behemoth Vanguard" → "Behemoth Vanguard".
  */
-function stripX4Comments(s: string): string {
+export function stripX4Comments(s: string): string {
   let out = '';
   let depth = 0;
   for (let i = 0; i < s.length; i++) {

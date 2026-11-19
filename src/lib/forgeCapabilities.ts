@@ -57,6 +57,8 @@ export interface ForgeJsonSchema {
   readonly type?: string | readonly string[];
   readonly description?: string;
   readonly maxLength?: number;
+  readonly minimum?: number;
+  readonly maximum?: number;
   readonly properties?: Readonly<Record<string, ForgeJsonSchema>>;
   readonly required?: readonly string[];
   readonly additionalProperties?: boolean | ForgeJsonSchema;
@@ -915,6 +917,50 @@ export const FORGE_CAPABILITIES = [
       agentApi: true,
       builtInHarness: [disconnected('schema-language-service', 'No built-in harness capability dispatcher is bound yet.')],
       externalAgents: [connected('agent-api', 'server.ts::app.get("/api/agent/lang/element-explain"')],
+    },
+  },
+  {
+    id: 'text.lookup',
+    version: 1,
+    title: 'Look up a literal X4 text entry',
+    description: 'Read one literal page and entry in an explicit language from the configured reference corpus or the bound saved workspace.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        page: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
+        id: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
+        language: { type: 'integer', minimum: 1, maximum: 999 },
+        scope: { type: 'string', enum: ['reference', 'workspace'] },
+      },
+      required: ['page', 'id', 'language', 'scope'],
+      additionalProperties: false,
+    },
+    outputSchema: objectOutput({
+      page: { type: 'integer' }, id: { type: 'integer' }, language: { type: 'integer' },
+      scope: { type: 'string', enum: ['reference', 'workspace'] },
+      status: { type: 'string', enum: ['found', 'missing', 'unavailable', 'ambiguous', 'unresolved'] },
+      selectedLanguage: { type: 'integer' },
+      authored: { type: 'string' }, text: { type: 'string' }, reason: { type: 'string' },
+      source: { type: 'object', additionalProperties: true },
+      sources: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    }, ['page', 'id', 'language', 'scope', 'status']),
+    context: { workspace: 'required', profile: 'none' },
+    access: { public: false, studioSession: true, agentScopes: ['read', 'write', 'deploy'] },
+    effects: ['read', 'analyze'],
+    confirmation: 'none',
+    apiBindings: [
+      { method: 'POST', path: '/api/agent/text/lookup', inputLocation: 'body', role: 'primary' },
+    ],
+    surfaces: {
+      ui: [
+        disconnected('web-studio-text-lookup', 'The web Studio has no literal text lookup control.'),
+        disconnected('vscode-extension-text-lookup', 'The extension has no literal text lookup control.'),
+      ],
+      cli: [],
+      mcp: [connected('lookup_text', 'vscode-extension/mcp/x4forge-mcp.cjs::name: "lookup_text"')],
+      agentApi: true,
+      builtInHarness: [],
+      externalAgents: [connected('agent-api', 'server.ts::app.post("/api/agent/text/lookup"')],
     },
   },
   {

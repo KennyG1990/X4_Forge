@@ -8,6 +8,7 @@
     "shared/forgePerformanceResources.ts",
     "shared/nativePerformanceChannel.ts",
     "shared/nativePerformanceProtocol.ts",
+    "shared/xmlMarkup.ts",
     "src/lib/actionCensus.ts",
     "src/lib/actionReceipt.selftest.ts",
     "src/lib/actionReceipt.ts",
@@ -77,6 +78,7 @@
     "src/lib/jobsContentLint.ts",
     "src/lib/langService.ts",
     "src/lib/latestValueWriteQueue.ts",
+    "src/lib/literalTextLookup.ts",
     "src/lib/liveCanvasTelemetry.ts",
     "src/lib/liveFixes.ts",
     "src/lib/liveLogNav.ts",
@@ -208,6 +210,7 @@
     "src/server/githubRoutes.ts",
     "src/server/installedExtensionRootFiles.ts",
     "src/server/installedLuaBootCoverage.ts",
+    "src/server/literalTextSources.ts",
     "src/server/liveBridge.ts",
     "src/server/modFolderImportRequest.ts",
     "src/server/nativePerformanceBroker.ts",
@@ -3450,6 +3453,18 @@
       "resourceClass": "stateless-analysis",
       "workspaceMode": "optional"
     },
+    "POST /api/agent/text/lookup": {
+      "disposition": "canonical-capability",
+      "owner": "text.lookup",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "workspace",
+      "workspaceMode": "required"
+    },
     "POST /api/agent/warning-reviews/revoke": {
       "disposition": "legacy-agent-api",
       "owner": "agent-api",
@@ -3817,13 +3832,14 @@
     "runtime.debug.read@1": "8d0d15b310655431fa08afdf161575c5873a62261f1e511e9b0ccf9260d84311",
     "schema.domains.list@1": "c2ecae2906cf231eb4384a63ea601c7449f4fc691b629b97bff9fa81e32f21b5",
     "schema.element.explain@1": "066fc8d2153c753a7f498044a0fb2e4a6921f81a2fe1deb6445a02894194286d",
+    "text.lookup@1": "45ecbc5abb71fb1e168c8b172399742251ca28c8b13fa96afb1352e11a8666a6",
     "workspace.compile@2": "aaa528d9b0b381b7af954ec78d2ba15212e9e0cc020d4af54eb5223caba9e185",
     "workspace.generate.preview@1": "76630ed9e34f95a4cc895088e0d3def92d5f3b2bb223d071e1e5a4fc1b4f6add",
     "workspace.read@2": "962774de4a25e8725a0d90d4982298cc72f100312075b1f6f4ff9de1482752d7"
   },
   "mcpModuleSignature": {
-    "version": 18,
-    "hash": "63e387b7095c68b109ea73bde5b62c0c1c5765dab995d29af21d30fc15566e1f"
+    "version": 19,
+    "hash": "bc34ae2917f855feec10a13998aa6ca1ea5ea52321a59c4a82cfaf45aac9c1d5"
   },
   "mcpSignatures": {
     "validate_mod": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",
@@ -3834,6 +3850,7 @@
     "stage_and_validate": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",
     "readiness": "8791e498bef78bc853bfd48e07e3404adc25171cb7ffdd16ffa183ff097c3fa7",
     "runtime_debugger": "4dace68d60d8096f0593ce1e933aa9a535da5621584656b2f0248caf2b28cc3c",
+    "lookup_text": "e9573aee242af33fee34c6df067ff635b535a44c037223a1baf246358e116fa8",
     "check_expression": "930db8d7b3306396462d8339e452bccdb15fc97e8e55858a4c02749581cd1514",
     "get_xml_references": "381374ceb06a15834fd6c09d76b0278a7415743080b8a0e0d3b15d8627a10ce1",
     "get_forge_performance": "327e56f29eff19939be7c6214090aa49df02a86e6fb56e50242190efb0384681",
@@ -3855,6 +3872,7 @@
     "stage_and_validate": "project.validate@1",
     "readiness": "readiness.read@1",
     "runtime_debugger": "runtime.debug.read@1",
+    "lookup_text": "text.lookup@1",
     "check_expression": "expression.check@1",
     "get_xml_references": "project.xml.references@1",
     "get_forge_performance": "performance.read@1",

@@ -247,6 +247,26 @@ const TOOLS = [
     },
   },
   {
+    name: "lookup_text",
+    capabilityId: "text.lookup",
+    capabilityVersion: 1,
+    description: "Look up one literal X4 text entry in a selected language. Choose the configured reference corpus or the saved workspace. Returns the checked scope and relative source evidence. Missing language, ambiguous definitions, and unresolved nested references are explicit.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        page: { type: "integer", minimum: 0, maximum: 9007199254740991 },
+        id: { type: "integer", minimum: 0, maximum: 9007199254740991 },
+        language: { type: "integer", minimum: 1, maximum: 999 },
+        scope: { type: "string", enum: ["reference", "workspace"] },
+      },
+      required: ["page", "id", "language", "scope"],
+      additionalProperties: false,
+    },
+    handler: async args => requireResponse(await forge("POST", "/api/agent/text/lookup", args), "text lookup", {
+      status: "string", page: "number", id: "number", language: "number", scope: "string",
+    }),
+  },
+  {
     name: "check_expression",
     capabilityId: "expression.check",
     capabilityVersion: 1,
@@ -492,6 +512,7 @@ const TOOLS = [
 const STATIC_TOOL_NAMES = new Set(TOOLS.map((tool) => tool.name));
 STATIC_TOOL_NAMES.delete("runtime_debugger");
 STATIC_TOOL_NAMES.delete("check_expression");
+STATIC_TOOL_NAMES.delete("lookup_text");
 STATIC_TOOL_NAMES.delete("get_xml_references");
 for (const name of PERFORMANCE_LIVE_TOOLS) STATIC_TOOL_NAMES.delete(name);
 for (const name of NATIVE_PERFORMANCE_LIVE_TOOLS) STATIC_TOOL_NAMES.delete(name);
@@ -525,6 +546,10 @@ function schemaValueError(schema, value, location = "arguments") {
   if (typeof value === "string" && typeof schema?.maxLength === "number" &&
     schema.maxLength >= 0 && schema.maxLength % 1 === 0 && value.length > schema.maxLength) {
     return `${location} must be at most ${schema.maxLength} characters`;
+  }
+  if (typeof value === "number") {
+    if (typeof schema?.minimum === "number" && value < schema.minimum) return `${location} must be at least ${schema.minimum}`;
+    if (typeof schema?.maximum === "number" && value > schema.maximum) return `${location} must be at most ${schema.maximum}`;
   }
   if (schema?.type === "object" && value && typeof value === "object" && !Array.isArray(value)) {
     for (const key of schema.required || []) if (!Object.hasOwn(value, key)) return `${location}.${key} is required`;
@@ -1665,7 +1690,7 @@ async function availableTools(nativeRequest) {
   if (stickyLiveToolNames !== null) {
     return {
       discovery,
-      toolNames: [...stickyLiveToolNames].filter(name => !["check_expression", "get_xml_references"].includes(name) && !PERFORMANCE_LIVE_TOOLS.has(name) && !NATIVE_PERFORMANCE_LIVE_TOOLS.has(name)),
+      toolNames: [...stickyLiveToolNames].filter(name => !["check_expression", "get_xml_references", "lookup_text"].includes(name) && !PERFORMANCE_LIVE_TOOLS.has(name) && !NATIVE_PERFORMANCE_LIVE_TOOLS.has(name)),
       effectiveContract: lastValidContract,
       effectiveAuthority: lastValidAuthority,
       contractState: `${discovery.state}-sticky-live`,
