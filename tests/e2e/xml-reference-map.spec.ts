@@ -286,19 +286,57 @@ async function boot(page: Page, fixture: Fixture) {
   await expect(page.getByTestId('xml-reference-file-picker')).toBeVisible();
 }
 
+function matchesMap(request: BrowserRequest, focus?: XmlReferenceFocus): boolean {
+  if (new URL(request.url()).pathname !== endpoint || request.method() !== 'POST') return false;
+  if (!focus) return true;
+  const body = request.postDataJSON();
+  return body?.focus?.origin === focus.origin && body?.focus?.path === focus.path
+    && (focus.line === undefined || body.focus.line === focus.line);
+}
+
 function waitForMap(page: Page, focus?: XmlReferenceFocus): Promise<XmlReferenceMapResult> {
-  return page.waitForResponse(response => {
-    if (new URL(response.url()).pathname !== endpoint || response.request().method() !== 'POST') return false;
-    const body = response.request().postDataJSON();
-    return !focus || body?.focus?.origin === focus.origin && body?.focus?.path === focus.path
-      && (focus.line === undefined || body.focus.line === focus.line);
-  }).then(async response => {
+  const response = new Promise<BrowserResponse>((resolve, reject) => {
+    const observed = new Set<BrowserRequest>();
+    const onRequest = (request: BrowserRequest) => { if (matchesMap(request, focus)) observed.add(request); };
+    const cleanup = () => {
+      page.off('request', onRequest);
+      page.off('response', onResponse);
+      page.off('requestfailed', onFailure);
+      page.off('close', onPageEnd);
+      page.off('crash', onPageEnd);
+    };
+    const onResponse = (value: BrowserResponse) => {
+      if (!observed.has(value.request())) return;
+      cleanup();
+      resolve(value);
+    };
+    const onFailure = (request: BrowserRequest) => {
+      if (!observed.delete(request)) return;
+      const reason = request.failure()?.errorText ?? 'unknown transport failure';
+      // Workspace and settings invalidation can cancel an obsolete request.
+      if (reason === 'net::ERR_ABORTED') return;
+      cleanup();
+      reject(new Error(`XML References request failed before a response (${focus?.path ?? 'initial map'}): ${reason}`));
+    };
+    const onPageEnd = () => {
+      cleanup();
+      reject(new Error('The page closed or crashed while waiting for XML References.'));
+    };
+    page.on('request', onRequest);
+    page.on('response', onResponse);
+    page.on('requestfailed', onFailure);
+    page.on('close', onPageEnd);
+    page.on('crash', onPageEnd);
+  });
+  const map = response.then(async response => {
     expect(response.status(), await response.text()).toBe(200);
     const result = await response.json() as XmlReferenceMapResult;
     expect(result.schemaVersion).toBe('forge.xml-reference-map.v1');
     expect(result.signature).toMatch(/^[a-f0-9]{64}$/);
     return result;
   });
+  void map.catch(() => undefined); // The browser can fail before the triggering action returns.
+  return map;
 }
 
 async function selectFile(page: Page, focus: XmlReferenceFocus) {
@@ -537,7 +575,19 @@ test('real delayed XML results cannot survive settings invalidation or an immuta
     const cleanupErrors: unknown[] = [];
     try {
     await boot(page, fixture);
-    await selectFile(page, { origin: 'project', path: shipPath });
+    const firstFocus = { origin: 'project', path: shipPath } as const;
+    const failFirstFocus = (route: Route) => matchesMap(route.request(), firstFocus)
+      ? route.abort('connectionreset') : route.fallback();
+    await page.route(routePattern, failFirstFocus);
+    try {
+      await expect(selectFile(page, firstFocus)).rejects.toThrow(/XML References request failed.*ERR_CONNECTION_RESET/);
+      await expect(page.getByRole('tabpanel', { name: 'XML References' }).getByRole('alert')).toContainText('Failed to fetch');
+    } finally {
+      if (!page.isClosed()) await page.unroute(routePattern, failFirstFocus);
+    }
+    const retried = waitForMap(page, firstFocus);
+    await page.getByRole('button', { name: 'Retry', exact: true }).click();
+    expect((await retried).preview?.path).toBe(shipPath);
     const deliveryControl = await delayNextRealMap(page); delays.push(deliveryControl);
     await page.getByRole('button', { name: 'Refresh', exact: true }).click();
     const held = await deliveryControl.response;
