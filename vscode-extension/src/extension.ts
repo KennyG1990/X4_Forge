@@ -34,7 +34,7 @@ import { buildXmlAssociations, listModFolders, writeRecommendations, writeXmlAss
 import { atomicWriteFile, replaceFileSetAtomically } from "./durableWrite";
 import { xmlCursorContext } from "./langContext";
 import {
-  findCueReferences, MAX_MD_DEFINITION_SOURCE, parseCueWord, readMdDefinitionDocument, resolveMdDefinition,
+  MAX_MD_DEFINITION_SOURCE, readMdDefinitionDocument, resolveMdDefinition, resolveMdReferences,
   type MdDefinitionDocument,
 } from "./langNav";
 import { detectIdeCapabilities, formatIdeCapabilityReport } from "./capabilities";
@@ -2105,13 +2105,13 @@ async function refreshAgentBrief(context: vscode.ExtensionContext): Promise<void
 // B57s3 — cue navigation (aid, not verdict) + unsaved-buffer diagnostics.
 // ---------------------------------------------------------------------------
 
-function mdFilesOf(root: string): string[] {
-  const dir = path.join(root, "md");
-  try {
-    return fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith(".xml")).map((f) => path.join(dir, f));
-  } catch {
-    return [];
-  }
+async function diskMdNavigationFiles(directory: string): Promise<string[]> {
+  const entries = await fs.promises.readdir(directory, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  });
+  return entries.filter(entry => entry.isFile() && path.extname(entry.name).toLowerCase() === ".xml")
+    .map(entry => entry.name);
 }
 
 function openMdDefinitionDocuments(directory: string) {
@@ -2126,27 +2126,24 @@ function openMdDefinitionDocuments(directory: string) {
   return documents;
 }
 
-async function mdDefinitionSiblings(
-  directory: string, caller: vscode.TextDocument, scriptName: string, token: vscode.CancellationToken,
+async function mdNavigationSiblings(
+  directory: string, caller: vscode.TextDocument, token: vscode.CancellationToken, scriptName?: string,
 ): Promise<MdDefinitionDocument[] | undefined> {
   const open = openMdDefinitionDocuments(directory);
   const keyOf = (name: string) => process.platform === "win32" ? name.toLowerCase() : name;
   const callerKey = keyOf(path.basename(caller.uri.fsPath));
-  const scriptKey = scriptName.toLowerCase();
+  const scriptKey = scriptName?.toLowerCase();
+  const collectReferences = scriptKey === undefined;
   const matches: MdDefinitionDocument[] = [];
   try {
-    const entries = await fs.promises.readdir(directory, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return [];
-      throw error;
-    });
-    const files = new Map(entries.filter(entry => entry.isFile() && path.extname(entry.name).toLowerCase() === ".xml")
-      .map(entry => [keyOf(entry.name), path.join(directory, entry.name)]));
+    const diskNames = await diskMdNavigationFiles(directory);
+    const files = new Map(diskNames.map(name => [keyOf(name), path.join(directory, name)]));
     for (const [key, value] of open) files.set(key, value.document.uri.fsPath);
     files.delete(callerKey);
     if (files.size > LIVE_FILE_LIMIT) return undefined;
 
     let remaining = 4 * MAX_MD_DEFINITION_SOURCE;
-    let closedMatch: { file: string; text: string } | undefined;
+    const closedReads: Array<{ file: string; text: string }> = [];
     for (const [key, file] of files) {
       if (token.isCancellationRequested) return undefined;
       const buffer = open.get(key);
@@ -2155,14 +2152,20 @@ async function mdDefinitionSiblings(
       const text = buffer ? buffer.document.getText() : await fs.promises.readFile(file, "utf8");
       remaining -= Buffer.byteLength(text);
       if (text.length > MAX_MD_DEFINITION_SOURCE || remaining < 0) return undefined;
-      const script = readMdDefinitionDocument(file, text);
-      if (script?.name.toLowerCase() !== scriptKey) continue;
-      matches.push(script);
-      if (matches.length > 1) return undefined;
-      if (!buffer) closedMatch = { file, text };
+      const script = readMdDefinitionDocument(file, text, undefined, collectReferences);
+      const matchesScript = !!script && (collectReferences || script.name.toLowerCase() === scriptKey);
+      if (matchesScript) matches.push(script);
+      if (!collectReferences && matches.length > 1) return undefined;
+      if (!buffer && (collectReferences || matchesScript)) closedReads.push({ file, text });
     }
-    // A concurrent external edit can invalidate a disk-only destination during the scan.
-    if (closedMatch && await fs.promises.readFile(closedMatch.file, "utf8") !== closedMatch.text) return undefined;
+    // Recheck closed buffers before returning positions computed from their earlier bytes.
+    for (const { file, text } of closedReads) {
+      if (token.isCancellationRequested || (await fs.promises.stat(file)).size > MAX_MD_DEFINITION_SOURCE
+        || await fs.promises.readFile(file, "utf8") !== text) return undefined;
+    }
+    const currentDiskNames = await diskMdNavigationFiles(directory);
+    const before = new Set(diskNames.map(keyOf));
+    if (currentDiskNames.length !== before.size || currentDiskNames.some(name => !before.has(keyOf(name)))) return undefined;
   } catch {
     return undefined;
   }
@@ -2189,7 +2192,7 @@ function registerNavProviders(context: vscode.ExtensionContext): void {
           const origin = readMdDefinitionDocument(doc.uri.fsPath, doc.getText(), doc.offsetAt(pos));
           if (!origin?.reference) return undefined;
           const siblings = origin.reference.script
-            ? await mdDefinitionSiblings(path.join(root, "md"), doc, origin.reference.script, token)
+            ? await mdNavigationSiblings(path.join(root, "md"), doc, token, origin.reference.script)
             : [];
           if (!siblings || doc.isClosed || doc.version !== version || token.isCancellationRequested) return undefined;
           const loc = resolveMdDefinition(origin, siblings);
@@ -2203,25 +2206,19 @@ function registerNavProviders(context: vscode.ExtensionContext): void {
       },
     }),
     vscode.languages.registerReferenceProvider(selector, {
-      provideReferences(doc, pos) {
+      async provideReferences(doc, pos, context, token) {
         const finish = beginNativeOperation('native.provider.read');
         let outcome: ForgePerformanceOutcome = 'ok';
         try {
           const root = modRootFor(doc.uri.fsPath);
-          if (!root) return undefined;
-          const range = doc.getWordRangeAtPosition(pos, /[A-Za-z_][\w.]*/);
-          if (!range) return undefined;
-          const word = parseCueWord(doc.getText(range));
-          if (!word) return undefined;
-          const out: vscode.Location[] = [];
-          for (const file of mdFilesOf(root)) {
-            let text: string;
-            try { text = fs.readFileSync(file, "utf8"); } catch { continue; }
-            for (const loc of findCueReferences(text, word.cue)) {
-              out.push(new vscode.Location(vscode.Uri.file(file), new vscode.Position(loc.line, loc.column)));
-            }
-          }
-          return out;
+          if (!root || token.isCancellationRequested) return undefined;
+          const version = doc.version;
+          const origin = readMdDefinitionDocument(doc.uri.fsPath, doc.getText(), doc.offsetAt(pos), true);
+          if (!origin || (!origin.reference && !origin.declaration)) return undefined;
+          const siblings = await mdNavigationSiblings(path.join(root, "md"), doc, token);
+          if (!siblings || doc.isClosed || doc.version !== version || token.isCancellationRequested) return undefined;
+          return resolveMdReferences(origin, siblings, context.includeDeclaration)
+            .map(loc => new vscode.Location(vscode.Uri.file(loc.file), new vscode.Position(loc.line, loc.column)));
         } catch (error) {
           outcome = 'error';
           throw error;
