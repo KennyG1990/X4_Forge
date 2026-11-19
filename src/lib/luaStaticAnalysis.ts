@@ -590,11 +590,6 @@ function analyzeRuntimeScopes(files: LuaFileInput[], manifestOnly: readonly LuaM
       const key = normalizeX4UiSourcePath(file.rel).key;
       if (key && !filesByPath.has(key)) filesByPath.set(key, file);
     }
-    for (const diagnostic of inventory.diagnostics) {
-      const source = diagnostic.path ? filesByPath.get(diagnostic.path) : undefined;
-      addGap(source || anchor, 'lua.registrations', diagnostic.message);
-      if (inventory.manifestStatus === 'known' && diagnostic.severity === 'error') registrationFailure = true;
-    }
     const rows = inventory.registrations;
     const matches = (row: typeof rows[number]): boolean => {
       const file = row.sourceIndex === undefined ? undefined : group[row.sourceIndex];
@@ -605,6 +600,22 @@ function analyzeRuntimeScopes(files: LuaFileInput[], manifestOnly: readonly LuaM
     };
     const mismatch = group.some(file => file.extension.folder !== anchor.extension.folder)
       || rows.some(row => row.resolution === 'resolved' && !matches(row));
+    const firstRegisteredIndex = !mismatch && inventory.manifestStatus === 'known'
+      ? rows.find(row => row.resolution === 'resolved')?.sourceIndex
+      : undefined;
+    const registrationAnchor = firstRegisteredIndex === undefined ? anchor : group[firstRegisteredIndex];
+    for (const diagnostic of inventory.diagnostics) {
+      if (inventory.manifestStatus === 'known' && !mismatch && diagnostic.code === 'unregistered-lua-file'
+        && diagnostic.severity === 'info' && diagnostic.sourceIndex !== undefined) {
+        const key = normalizeX4UiSourcePath(diagnostic.path).key;
+        const file = group[diagnostic.sourceIndex];
+        // A matched unlisted input is outside direct menu order. Its runtime reachability remains unknown.
+        if (key && file && filesByPath.get(key) === file && actualPathsByFolder.get(file.extension.folder)?.get(key) === 1) continue;
+      }
+      const source = diagnostic.path ? filesByPath.get(diagnostic.path) : undefined;
+      addGap(source || registrationAnchor, 'lua.registrations', diagnostic.message);
+      if (inventory.manifestStatus === 'known' && diagnostic.severity === 'error') registrationFailure = true;
+    }
     if (inventory.manifestStatus !== 'known' || mismatch) {
       unavailableInventories += 1;
       for (const file of group) {
@@ -766,12 +777,13 @@ function analyzeRuntimeScopes(files: LuaFileInput[], manifestOnly: readonly LuaM
   const globalGaps = gaps.filter(gap => gap.check === 'lua.globals-order').length;
   const runtimeFiles = [...files.filter(file => file.extension.runtimeInventory || gameGlobalFiles.has(file)), ...manifestOnly];
   const boundary = 'Bounded registered-source facts only; no complete dependency availability, invocation schedule, arbitrary Lua behavior, UI rendering or game acceptance is claimed.';
+  const registrationBoundary = 'When a direct menus list is available, this stage compares the supplied inputs with it. Unlisted Lua is outside direct menu order. Indirect loads and dependency availability require separate evidence.';
   return { gaps, truncated, stages: [
     { check: 'lua.syntax', status: !files.length ? 'not-applicable' : files.some(file => parsed.get(file)!.error) ? 'fail' : 'pass', files: references(files), gapCount: 0,
       evidenceBoundary: 'Syntax parsed with the luaparse LuaJIT profile; cdata scalar values, complete compiler parity and engine execution remain unverified.' },
     { check: 'lua.registrations', status: !runtimeFiles.length ? 'not-applicable' : registrationFailure ? 'fail'
       : !knownInventories && unavailableInventories ? 'unavailable' : registrationGaps ? 'partial' : 'pass',
-      files: references(runtimeFiles), gapCount: registrationGaps, evidenceBoundary: boundary },
+      files: references(runtimeFiles), gapCount: registrationGaps, evidenceBoundary: registrationBoundary },
     { check: 'lua.globals-order', status: !globalFiles.size ? 'not-applicable' : orderFailure ? 'fail'
       : !knownGlobalFiles ? 'unavailable' : globalGaps || registrationGaps ? 'partial' : 'pass',
       files: references(globalFiles), gapCount: globalGaps, evidenceBoundary: boundary }
@@ -1618,6 +1630,65 @@ export function runLuaStaticAnalysisSelftest(): { pass: boolean; checks: { name:
     gap.rel === consumerPath && gap.reason.includes('Dynamic or incomplete environment state'));
   const scopeChecks = [
     { name: 'runtime_unlisted_provider_cannot_mask_registered_use', pass: !!scopeFinding(runtimeCase('OrderedGlobal()', providerText, [consumerPath]), 'lua.undefined_global') },
+    { name: 'runtime_unlisted_source_is_syntax_checked_outside_menu_order', pass: (() => {
+      const result = runtimeCase('local ok = true', 'local broken = )', [consumerPath]);
+      const [syntax, registrations, order] = result.runtimeScope.stages;
+      return syntax.status === 'fail' && syntax.files.some(file => file.rel === providerPath)
+        && registrations.status === 'pass' && registrations.gapCount === 0
+        && order.files.length === 1 && order.files[0].rel === consumerPath
+        && !result.runtimeScope.gaps.some(gap => gap.rel === providerPath)
+        && result.findings.some(finding => finding.code === 'lua.syntax_error' && finding.rel === providerPath);
+    })() },
+    { name: 'runtime_empty_direct_menu_order_keeps_unlisted_scope_explicit', pass: (() => {
+      const result = runtimeCase('local ok = true', providerText, []);
+      return result.runtimeScope.stages[0].files.length === 2 && result.runtimeScope.stages[1].status === 'pass'
+        && result.runtimeScope.stages[2].status === 'not-applicable' && result.runtimeScope.gaps.length === 0;
+    })() },
+    { name: 'runtime_unlisted_notice_requires_matching_source_index', pass: (() => {
+      const sources = [focusedFile(consumerPath, 'local ok = true', 'scope'), focusedFile(providerPath, providerText, 'scope')];
+      const known = buildX4MenuLuaRuntimeInventory({
+        uiXml: `<addon name="ScopeProbe"><environment type="menus"><file name="${consumerPath}"/></environment></addon>`,
+        luaFiles: sources,
+      });
+      const runtimeInventory = { ...known, diagnostics: known.diagnostics.map(diagnostic =>
+        diagnostic.code === 'unregistered-lua-file' ? { ...diagnostic, sourceIndex: 0 } : diagnostic) };
+      const result = analyzeLuaFiles(sources.map(file => ({ ...file, extension: { ...file.extension, runtimeInventory } })));
+      return result.runtimeScope.stages[1].status === 'partial'
+        && result.runtimeScope.gaps.some(gap => gap.rel === providerPath && gap.check === 'lua.registrations');
+    })() },
+    { name: 'runtime_unlisted_notice_requires_matching_group_and_registered_provenance', pass: (() => {
+      const sources = [focusedFile(consumerPath, 'local ok = true', 'scope'), focusedFile(providerPath, providerText, 'scope')];
+      const known = buildX4MenuLuaRuntimeInventory({
+        uiXml: `<addon name="ScopeProbe"><environment type="menus"><file name="${consumerPath}"/></environment></addon>`,
+        luaFiles: sources,
+      });
+      const cases = [
+        { sources, inventory: { ...known, registrations: known.registrations.map(row => ({ ...row, sourcePath: 'other:source' })) } },
+        { sources: [sources[0], { ...sources[1], extension: { ...sources[1].extension, folder: 'other' } }], inventory: known },
+        { sources: [...sources, { ...sources[1], sourcePath: 'other:duplicate' }], inventory: known },
+      ];
+      return cases.every(({ sources: supplied, inventory: runtimeInventory }) => {
+        const result = analyzeLuaFiles(supplied.map(file => ({ ...file, extension: { ...file.extension, runtimeInventory } })));
+        return result.runtimeScope.stages[1].status !== 'pass'
+          && result.runtimeScope.gaps.some(gap => gap.rel === providerPath && gap.check === 'lua.registrations');
+      });
+    })() },
+    { name: 'runtime_unlisted_inventory_notice_does_not_hide_registered_loader_boundaries', pass: (() => {
+      const sources = [focusedFile(providerPath, providerText, 'scope'), focusedFile(consumerPath, 'require("dynamic.module")', 'scope')];
+      const runtimeInventory = buildX4MenuLuaRuntimeInventory({
+        uiXml: `<addon name="ScopeProbe"><environment type="menus"><dependency name="External"/><file name="${consumerPath}"/></environment></addon>`,
+        luaFiles: sources,
+      });
+      const before = JSON.stringify(runtimeInventory);
+      const result = analyzeLuaFiles(sources.map(file => ({ ...file, extension: { ...file.extension, runtimeInventory } })));
+      return JSON.stringify(runtimeInventory) === before
+        && runtimeInventory.diagnostics.some(diagnostic => diagnostic.code === 'unregistered-lua-file' && diagnostic.sourceIndex === 0)
+        && result.runtimeScope.stages[1].status === 'partial'
+        && result.runtimeScope.stages[2].files.length === 1 && result.runtimeScope.stages[2].files[0].rel === consumerPath
+        && result.runtimeScope.gaps.some(gap => gap.check === 'lua.registrations' && gap.rel === consumerPath && gap.reason.includes('depends on addon'))
+        && result.runtimeScope.gaps.some(gap => gap.check === 'lua.globals-order' && gap.rel === consumerPath)
+        && !result.runtimeScope.gaps.some(gap => gap.rel === providerPath);
+    })() },
     { name: 'runtime_later_registered_provider_is_positioned', pass: scopeFinding(runtimeCase('\nOrderedGlobal()'), GLOBAL_BEFORE_DEFINITION)?.line === 2 },
     { name: 'runtime_earlier_registered_provider_resolves', pass: !scopeFinding(runtimeCase('OrderedGlobal()', providerText, [providerPath, consumerPath]), GLOBAL_BEFORE_DEFINITION)
       && !scopeFinding(runtimeCase('OrderedGlobal()', providerText, [providerPath, consumerPath]), 'lua.undefined_global') },
