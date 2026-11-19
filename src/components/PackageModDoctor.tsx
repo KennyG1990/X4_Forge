@@ -3,11 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { Terminal, CheckCircle, AlertTriangle, Sparkles, Boxes, RefreshCw, FileCode, X, Layers, Crown, Copy, ShieldCheck } from 'lucide-react';
 import { ModWorkspace, PackageDiagnostic, generateMDXML } from '../types';
 import { critiqueWorkspace } from '../lib/mdCritic';
 import DiagnosticGuidance from './DiagnosticGuidance';
+import { resolveCueToNodeId } from '../lib/liveLogNav';
 import type { ValidationDeltaResult } from '../lib/validationDelta';
 
 interface PackageModDoctorProps {
@@ -84,6 +85,21 @@ function messageFromUnknown(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
+const FINDINGS_PER_PAGE = 40;
+type FindingFilter = 'all' | PackageDiagnostic['severity'] | 'coverage';
+type PositionedFinding = PackageDiagnostic & { column?: number };
+const EDITOR_SOURCE_KINDS = new Set([
+  'ui_widget', 'ai_script', 'ai_param', 'ware', 'job', 't_file', 't_page', 't_item', 'xml_patch',
+]);
+
+function canNavigateToFinding(source: NonNullable<PackageDiagnostic['sourceRef']>, workspace: ModWorkspace): boolean {
+  if (source.kind === 'md_node' || source.kind === 'cue' || source.kind === 'node') {
+    const { id } = source;
+    return !!id && (workspace.nodes.some(node => node.id === id) || !!resolveCueToNodeId(id, workspace.nodes));
+  }
+  return EDITOR_SOURCE_KINDS.has(source.kind);
+}
+
 export default function PackageModDoctor({
   workspace,
   diagnostics,
@@ -99,6 +115,48 @@ export default function PackageModDoctor({
   const firstNodeError = errors.find((e): e is PackageDiagnostic & { nodeId: string } =>
     typeof (e as PackageDiagnostic & { nodeId?: unknown }).nodeId === 'string'
   );
+
+  const [findingQuery, setFindingQuery] = useState('');
+  const [findingFilter, setFindingFilter] = useState<FindingFilter>('all');
+  const [findingPage, setFindingPage] = useState(0);
+  const findingSearch = useRef<HTMLInputElement>(null);
+  const findingRows = useMemo(() => {
+    const occurrences = new Map<string, number>();
+    return diagnostics.map((finding: PositionedFinding) => {
+      const identity = JSON.stringify([workspace.id, finding]);
+      const occurrence = occurrences.get(identity) ?? 0;
+      occurrences.set(identity, occurrence + 1);
+      const search = [
+        finding.filePath, finding.code, finding.category, finding.domain, finding.line, finding.message,
+        finding.line !== undefined && finding.column !== undefined ? `${finding.line}:${finding.column}` : '',
+        finding.sourceRef?.label, finding.sourceRef?.id,
+      ].join(' ').toLowerCase().replace(/\\/g, '/');
+      return { finding, key: `${identity}:${occurrence}`, search };
+    });
+  }, [diagnostics, workspace.id]);
+  const matches = useMemo(() => {
+    const terms = findingQuery.toLowerCase().replace(/\\/g, '/').trim().split(/\s+/).filter(Boolean);
+    return findingRows.filter(({ finding, search }) =>
+      (findingFilter === 'all' || (findingFilter === 'coverage'
+        ? finding.coverageGap === true : finding.severity === findingFilter))
+      && terms.every(term => search.includes(term)));
+  }, [findingRows, findingFilter, findingQuery]);
+  const lastFindingPage = Math.max(0, Math.ceil(matches.length / FINDINGS_PER_PAGE) - 1);
+  const currentFindingPage = Math.min(findingPage, lastFindingPage);
+  const pageStart = currentFindingPage * FINDINGS_PER_PAGE;
+  const visibleFindings = matches.slice(pageStart, pageStart + FINDINGS_PER_PAGE);
+  const findingsByFile = new Map<string | undefined, typeof visibleFindings>();
+  for (const row of visibleFindings) {
+    const file = row.finding.filePath || undefined;
+    const group = findingsByFile.get(file);
+    if (group) group.push(row);
+    else findingsByFile.set(file, [row]);
+  }
+  const clearFindingFilters = () => {
+    setFindingQuery('');
+    setFindingFilter('all');
+    setFindingPage(0);
+  };
 
   // Extension Doctor — cross-mod conflict scan over the whole installed extensions/ folder.
   const [extScan, setExtScan] = useState<ExtensionScanResult | null>(null);
@@ -351,6 +409,18 @@ export default function PackageModDoctor({
           )}
         </div>
 
+        {diagnostics.length > 0 && (
+          <button
+            type="button"
+            onClick={() => {
+              findingSearch.current?.scrollIntoView({ block: 'center' });
+              findingSearch.current?.focus({ preventScroll: true });
+            }}
+            className="w-full rounded border border-white/15 px-3 py-2 text-left font-sans text-xs text-cyan-300 hover:border-cyan-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+          >
+            Find diagnostics
+          </button>
+        )}
         {diagnostics.length > 0 && (
           <button
             onClick={sendDiagnosticsToAI}
@@ -670,7 +740,9 @@ export default function PackageModDoctor({
       {showPackage && (
       <div className="shrink-0 space-y-2 min-h-0 pr-1 transition-all">
         {diagnostics.length === 0 ? (
-          diagnosticSource === 'local' ? (
+          diagnosticSource === 'checking' ? (
+            <p role="status" className="p-3 text-xs text-slate-300">Checking project…</p>
+          ) : diagnosticSource === 'local' ? (
             <div className="text-amber-300/90 text-[10.5px] leading-normal flex flex-col items-center justify-center text-center gap-2 bg-amber-500/5 p-4 rounded-lg border border-amber-500/20 font-sans font-medium h-32">
               <AlertTriangle className="w-7 h-7 text-amber-400 shrink-0 mb-1" />
               <span className="font-mono font-bold uppercase text-[9px] text-amber-300 tracking-wider">Schema Check Offline</span>
@@ -684,50 +756,112 @@ export default function PackageModDoctor({
             </div>
           )
         ) : (
-          <div className="space-y-2 font-sans">
-            {diagnostics.map((diag, index) => {
-              const itemStyle = diag.severity === 'error'
-                ? 'bg-red-500/5 text-red-350 border-red-500/20'
-                : (diag.severity === 'warning' ? 'bg-amber-500/5 text-amber-300 border-amber-500/25' : 'bg-blue-500/5 text-blue-300 border-blue-500/20');
-
-              const navigable = !!diag.sourceRef;
-              const navigateToSource = () => {
-                if (!diag.sourceRef) return;
-                window.dispatchEvent(new CustomEvent('navigate-to-source', { detail: diag.sourceRef }));
-              };
-
-              return (
-                <div
-                  key={index}
-                  onClick={navigable ? navigateToSource : undefined}
-                  title={navigable ? 'Jump to source in the editor' : undefined}
-                  className={`p-2.5 rounded-lg border text-[10.5px] leading-relaxed flex items-start gap-2 ${itemStyle} ${navigable ? 'cursor-pointer hover:bg-white/5 transition-all' : ''}`}
+          <div className="space-y-3 font-sans" data-testid="diagnostic-findings">
+            <div role="group" aria-label="Diagnostic filters" className="flex flex-wrap gap-2">
+              <input
+                ref={findingSearch}
+                type="search"
+                aria-label="Search diagnostics"
+                placeholder="Search findings"
+                value={findingQuery}
+                onChange={event => { setFindingQuery(event.target.value); setFindingPage(0); }}
+                className="min-w-0 flex-1 rounded border border-white/15 bg-slate-950 px-2 py-1.5 text-xs text-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+              />
+              <select
+                aria-label="Filter diagnostics"
+                value={findingFilter}
+                onChange={event => { setFindingFilter(event.target.value as FindingFilter); setFindingPage(0); }}
+                className="rounded border border-white/15 bg-slate-950 px-2 py-1.5 text-xs text-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+              >
+                <option value="all">All findings</option>
+                <option value="error">Errors</option>
+                <option value="warning">Warnings</option>
+                <option value="info">Information</option>
+                <option value="coverage">Coverage gaps</option>
+              </select>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-300">
+              <p role="status">
+                {visibleFindings.length
+                  ? `Showing ${pageStart + 1}–${pageStart + visibleFindings.length} of ${matches.length} findings`
+                  : 'No matching diagnostics'}
+                {matches.length !== diagnostics.length && ` · ${diagnostics.length} total`}
+              </p>
+              {(findingFilter !== 'all' || findingQuery) && (
+                <button type="button" onClick={clearFindingFilters} className="rounded px-1 py-1 text-cyan-300 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400">
+                  Clear filters
+                </button>
+              )}
+            </div>
+            {lastFindingPage > 0 && (
+              <div className="flex items-center justify-between gap-2 text-xs text-slate-300">
+                <button
+                  type="button"
+                  aria-label="Previous findings"
+                  disabled={currentFindingPage === 0}
+                  onClick={() => setFindingPage(currentFindingPage - 1)}
+                  className="rounded border border-white/15 px-2 py-1 enabled:hover:border-cyan-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 disabled:opacity-40"
                 >
-                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-500" />
-                  <div className="space-y-1">
-                    <span className="font-mono font-bold tracking-tight text-white uppercase block text-[8px] leading-none mb-1">
-                      [{diag.severity}] {diag.domain ? `${diag.domain.toUpperCase()} / ` : ''}{diag.code || diag.category.toUpperCase()}
-                    </span>
-                    {diag.filePath && (
-                      <span className="font-mono text-[9px] text-slate-300 block bg-black/35 px-1 py-0.5 rounded border border-white/5 truncate max-w-full">
-                        {diag.filePath}
-                      </span>
-                    )}
-                    <p className="text-slate-300 leading-normal">{diag.message}</p>
-                    {diag.sourceRef && (
-                      <span className="font-mono text-[8px] text-cyan-300/90 block mt-1">
-                        SOURCE: {diag.sourceRef.kind}{diag.sourceRef.label ? ` / ${diag.sourceRef.label}` : ''}{diag.sourceRef.id ? ` / ${diag.sourceRef.id}` : ''} →
-                      </span>
-                    )}
-                    <DiagnosticGuidance
-                      diagnostic={diag}
-                      workspace={workspace}
-                      onSuppressionCommitted={onSuppressionCommitted}
-                    />
-                  </div>
-                </div>
-              );
-            })}
+                  Previous
+                </button>
+                <span className="shrink-0">{currentFindingPage + 1} of {lastFindingPage + 1}</span>
+                <button
+                  type="button"
+                  aria-label="Next findings"
+                  disabled={currentFindingPage === lastFindingPage}
+                  onClick={() => setFindingPage(currentFindingPage + 1)}
+                  className="rounded border border-white/15 px-2 py-1 enabled:hover:border-cyan-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 disabled:opacity-40"
+                >
+                  Next
+                </button>
+              </div>
+            )}
+            {[...findingsByFile].map(([file, rows]) => (
+              <div key={file ?? ''} className="space-y-2">
+                <h3 title={file} className="truncate px-1 font-mono text-[10px] text-slate-300">{file || 'Project'}</h3>
+                {rows.map(({ finding: diag, key }) => {
+                  const itemStyle = diag.severity === 'error'
+                    ? 'bg-red-500/5 text-red-350 border-red-500/20'
+                    : (diag.severity === 'warning' ? 'bg-amber-500/5 text-amber-300 border-amber-500/25' : 'bg-blue-500/5 text-blue-300 border-blue-500/20');
+                  const source = diag.sourceRef;
+                  const sourceLabel = source && `Source: ${[source.kind, source.label, source.id].filter(Boolean).join(' / ')}`;
+
+                  return (
+                    <div
+                      key={key}
+                      data-testid="diagnostic-finding"
+                      className={`p-2.5 rounded-lg border text-[10.5px] leading-relaxed flex items-start gap-2 ${itemStyle}`}
+                    >
+                      <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-500" />
+                      <div className="min-w-0 space-y-1">
+                        <span className="font-mono font-bold tracking-tight text-white uppercase block text-[8px] leading-none mb-1">
+                          [{diag.severity}] {diag.domain ? `${diag.domain.toUpperCase()} / ` : ''}{diag.code || diag.category.toUpperCase()}
+                          {diag.line !== undefined && ` · line ${diag.line}`}
+                          {diag.line !== undefined && diag.column !== undefined && `:${diag.column}`}
+                        </span>
+                        <p className="text-slate-300 leading-normal [overflow-wrap:anywhere]">{diag.message}</p>
+                        {source && (canNavigateToFinding(source, workspace) ? (
+                          <button
+                            type="button"
+                            onClick={() => window.dispatchEvent(new CustomEvent('navigate-to-source', { detail: source }))}
+                            className="mt-1 block rounded px-1 py-0.5 text-left font-mono text-[9px] text-cyan-300 [overflow-wrap:anywhere] hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+                          >
+                            {sourceLabel}
+                          </button>
+                        ) : (
+                          <span className="mt-1 block font-mono text-[9px] text-slate-300 [overflow-wrap:anywhere]">{sourceLabel}</span>
+                        ))}
+                        <DiagnosticGuidance
+                          diagnostic={diag}
+                          workspace={workspace}
+                          onSuppressionCommitted={onSuppressionCommitted}
+                        />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
           </div>
         )}
       </div>

@@ -158,7 +158,7 @@ async function waitForApp(page: Page) {
   await expect(page.getByTestId('readiness-ladder')).toBeVisible();
 }
 
-test('Diagnostics Center renders deterministic Why guidance and the reviewed suppression dialog', async ({ page }) => {
+test('Diagnostics Center renders deterministic Why guidance and the reviewed suppression dialog', async ({ page }, testInfo) => {
   const workspace = buildTemplateWorkspace('welcome');
   await seedServerWorkspace(workspace as unknown as Record<string, unknown>);
   await page.route('**/api/agent/compile', route => route.fulfill({
@@ -174,8 +174,16 @@ test('Diagnostics Center renders deterministic Why guidance and the reviewed sup
         severity: 'error', category: 'syntax', domain: 'schema', code: 'XSD_invalid_element',
         filePath: 'md/schema-fixture.xml', message: 'Fixture XSD structure finding.',
         sourceRef: { kind: 'project', label: 'XSD_invalid_element' },
-      }],
-      validation: { scope: 'full-project', ok: true },
+      }, ...Array.from({ length: 666 }, (_, index) => index === 600 || index === 601 ? {
+        severity: 'warning', category: 'references', code: 'fixture.late_rule',
+        filePath: 'md/late-group.xml', message: 'A repeated fixture warning.',
+        line: 601, column: index === 600 ? 8 : 29, sourceRef: { kind: 'node', label: 'Show Help', id: 'msg' },
+      } : {
+        severity: 'info', category: 'references', code: 'fixture.coverage',
+        filePath: `md/fixture-batch-${Math.floor(index / 32)}.xml`,
+        message: `Coverage fixture ${index + 1}.`, coverageGap: true,
+      })],
+      validation: { scope: 'full-project', ok: false },
       validationDelta: {
         status: 'compared', modId: 'x4_welcome_message', currentContentHash: 'b'.repeat(64),
         baseline: { status: 'available', contentHash: 'a'.repeat(64), recordedAt: '2026-07-30T12:00:00.000Z' },
@@ -195,8 +203,65 @@ test('Diagnostics Center renders deterministic Why guidance and the reviewed sup
   }));
   await waitForApp(page);
 
+  const opening = performance.now();
   await page.getByTestId('readiness-stage-package').click();
   await expect(page.getByTestId('diagnostics-scope-package')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('diagnostic-why-scriptproperty.unknown')).toBeVisible();
+  console.log(`FORGE_DIAGNOSTIC_LIST_COUNTS: ${JSON.stringify({
+    mounted: await page.locator('button[data-testid^="diagnostic-why-"]').count(),
+    openMs: performance.now() - opening,
+  })}`);
+  const list = page.getByTestId('diagnostic-findings');
+  const rows = list.getByTestId('diagnostic-finding');
+  const search = list.getByRole('searchbox', { name: 'Search diagnostics' });
+  const severity = list.getByRole('combobox', { name: 'Filter diagnostics' });
+  await expect(page.getByRole('button', { name: '1 Errors' })).toBeVisible();
+  await expect(page.getByText('3 Warnings', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Find diagnostics' }).click();
+  await expect(search).toBeFocused();
+  await expect(search).toBeInViewport();
+  await expect(list.getByRole('status')).toHaveText('Showing 1–40 of 668 findings');
+  await expect(rows).toHaveCount(40);
+  await expect(list.getByText('Source: project / XSD_invalid_element', { exact: true })).toBeVisible();
+  await expect(list.getByRole('button', { name: 'Source: project / XSD_invalid_element' })).toHaveCount(0);
+  await list.getByTestId('diagnostic-why-scriptproperty.unknown').click();
+  await expect(list.getByTestId('diagnostic-why-panel')).toBeVisible();
+  await list.getByRole('button', { name: 'Next findings' }).click();
+  await expect(list.getByRole('status')).toHaveText('Showing 41–80 of 668 findings');
+  await expect(rows).toHaveCount(40);
+  await severity.selectOption('coverage');
+  await expect(list.getByRole('status')).toHaveText('Showing 1–40 of 664 findings · 668 total');
+  await expect(rows).toHaveCount(40);
+  await severity.selectOption('warning');
+  await search.fill('md\\late-group.xml fixture.late_rule');
+  await expect(list.getByRole('heading', { name: 'md/late-group.xml' })).toBeVisible();
+  await expect(list.getByRole('status')).toHaveText('Showing 1–2 of 2 findings · 668 total');
+  await expect(rows).toHaveCount(2);
+  await expect(list.getByTestId('diagnostic-why-panel')).toHaveCount(0);
+  const firstMatch = rows.filter({ hasText: 'line 601:8' });
+  const secondMatch = rows.filter({ hasText: 'line 601:29' });
+  await expect(firstMatch.getByRole('button', { name: 'Source: node / Show Help / msg' })).toBeVisible();
+  await firstMatch.getByTestId('diagnostic-why-fixture.late_rule').click();
+  await expect(firstMatch.getByTestId('diagnostic-why-panel')).toBeVisible();
+  await search.fill('md\\late-group.xml fixture.late_rule 601:29');
+  await expect(rows).toHaveCount(1);
+  await expect(secondMatch.getByTestId('diagnostic-why-panel')).toHaveCount(0);
+  const target = page.getByTestId('canvas-node-msg');
+  await expect(target).not.toHaveClass(/ring-cyan-500/);
+  await secondMatch.getByRole('button', { name: 'Source: node / Show Help / msg' }).press('Enter');
+  await expect(target).toHaveClass(/ring-cyan-500/);
+  await search.fill('no matching fixture name');
+  await expect(list.getByRole('status')).toHaveText('No matching diagnostics · 668 total');
+  await expect(rows).toHaveCount(0);
+  await expect(page.getByText('Mod Status Clean', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '1 Errors' })).toBeVisible();
+  await list.getByRole('button', { name: 'Clear filters' }).click();
+  await expect(list.getByRole('status')).toHaveText('Showing 1–40 of 668 findings');
+  await expect(rows).toHaveCount(40);
+  await page.getByRole('button', { name: 'Find diagnostics' }).click();
+  await expect(severity).toBeInViewport();
+  await expect(list.getByRole('button', { name: 'Next findings' })).toBeInViewport();
+  await page.screenshot({ path: testInfo.outputPath('large-project-diagnostics.png') });
   await expect(page.getByTestId('validation-delta-card')).toContainText('2 new · 1 resolved · 1 unchanged');
   await expect(page.getByTestId('validation-delta-card')).toContainText('Since last green');
   const why = page.getByTestId('diagnostic-why-scriptproperty.unknown');
