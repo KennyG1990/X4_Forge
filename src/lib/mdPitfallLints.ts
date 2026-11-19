@@ -47,6 +47,7 @@ import type { ValidationCoverageGap } from './validationEvidence';
 
 export interface MdPitfallFinding {
   code: 'md_pitfall.products_existence' | 'md_pitfall.cancel_conversation_actor_or_template' | 'md_pitfall.ui_listener_one_shot'
+    | 'md_pitfall.destroyed_event_source_required'
     | 'md_pitfall.offer_accepted_keyword_cue' | 'md_pitfall.param3_table_barekey' | 'md_pitfall.return_context'
     | 'md_pitfall.numeric_time_value' | 'md_pitfall.no_event_condition' | 'md_pitfall.illegal_instantiate'
     | 'md_pitfall.variable_read_after_removal' | 'md_pitfall.variable_read_when_absent'
@@ -1025,6 +1026,68 @@ export function lintEffectiveMdCueReturns(filePath: string, trace: DiffElementPr
   return { findings, gaps };
 }
 
+const DESTROYED_EVENT_SOURCE_CODE = 'md_pitfall.destroyed_event_source_required';
+export const EFFECTIVE_MD_DESTROYED_EVENT_CHECK = 'diff.md_destroyed_event_source';
+const DESTROYED_EVENT_SOURCE_DETAIL = '<event_object_destroyed> needs an event source. Supply object="$Ship" for one object or group="$Watched" for a group. X4 rejects this event on load when both are absent.';
+
+function unsourcedDestroyedEvents(root: Element, onForeignNamespace?: () => void): Array<{ event: Element; cue?: string }> {
+  if (root.nodeName !== 'mdscript') return [];
+  const missing: Array<{ event: Element; cue?: string }> = [];
+  for (const event of Array.from(root.getElementsByTagName('event_object_destroyed'))) {
+    if (event.hasAttribute('object') || event.hasAttribute('group')) continue;
+    let parent = event.parentElement;
+    while (parent?.tagName === 'check_any' || parent?.tagName === 'check_all') parent = parent.parentElement;
+    const owner = parent?.tagName === 'conditions' ? parent.parentElement : null;
+    if (!owner || (owner.tagName !== 'cue' && owner.tagName !== 'library') || owner.parentElement?.tagName !== 'cues') continue;
+
+    let inScope = true;
+    for (let ancestor: Element | null = event; ancestor; ancestor = ancestor.parentElement) {
+      // A composed diff may set xmlns on an existing node without updating its DOM namespaceURI.
+      if (ancestor.namespaceURI || ancestor.getAttribute('xmlns')) { inScope = false; break; }
+      if (ancestor === root) break;
+    }
+    if (inScope) missing.push({ event, cue: owner.getAttribute('name') || undefined });
+    else onForeignNamespace?.();
+  }
+  return missing;
+}
+
+/** Report newly unsourced events at the final authored cause, using the existing diff trace. */
+export function lintEffectiveMdDestroyedEvents(filePath: string, trace: DiffElementProvenance | undefined): {
+  findings: MdPitfallFinding[];
+  gaps: Array<{ filePath: string; reason: string }>;
+} {
+  const root = trace?.document?.documentElement;
+  if (!trace?.available || !root) return { findings: [], gaps: [{ filePath,
+    reason: trace?.reason || 'Effective MD element provenance is unavailable for event source validation.' }] };
+  if (root.nodeName !== 'mdscript') return { findings: [], gaps: [{ filePath,
+    reason: 'The final document is not an MD script. Destruction event sources could not be checked.' }] };
+
+  const findings: MdPitfallFinding[] = [];
+  const reasons = new Set<string>();
+  const events = unsourcedDestroyedEvents(root, () => {
+    reasons.add('A destruction event uses an unsupported final XML namespace context.');
+  });
+  for (const [ordinal, { event, cue }] of events.entries()) {
+    const original = trace.initial.get(event);
+    if (original && !Object.hasOwn(original.attributes, 'object') && !Object.hasOwn(original.attributes, 'group')) continue;
+    const attributes = trace.attributes.get(event);
+    const object = attributes?.get('object');
+    const group = attributes?.get('group');
+    const removal = object && (!group || object.operation > group.operation) ? object : group;
+    const cause = removal ?? trace.elements.get(event);
+    if (!cause || cause.reason || !Number.isInteger(cause.line) || !Number.isInteger(cause.column)
+      || (cause.line ?? 0) < 1 || (cause.column ?? 0) < 1) {
+      reasons.add(cause?.reason || 'The newly unsourced destruction event has no reliable authored location.');
+      continue;
+    }
+    findings.push({ code: DESTROYED_EVENT_SOURCE_CODE, severity: 'error', filePath, cue,
+      line: cause.line, column: cause.column,
+      sourceRef: `event_object_destroyed:${original ? `base:${original.id}` : `added:${ordinal}`}`, detail: DESTROYED_EVENT_SOURCE_DETAIL });
+  }
+  return { findings, gaps: [...reasons].map(reason => ({ filePath, reason })) };
+}
+
 /**
  * Lint one MD file. `propertyUnion` (from the scriptproperty index) makes the param3
  * lint union-aware; without it the param3 lint stays conservative (identifier must
@@ -1041,7 +1104,7 @@ export function lintMdPitfalls(xml: string, opts: { propertyUnion?: Set<string>;
   const hasVariableFlow = xml.includes('<remove_value') || (xml.includes('<do_if') && (xml.includes('?') || xml.includes('&#')));
   const candidateAvailability = opts.filePath ? availabilityOwn(opts.variableAvailability?.files, availabilityPath(opts.filePath)) : undefined;
   const availability = candidateAvailability?.source === xml ? candidateAvailability : undefined;
-  const leadingBom = (hasVariableFlow || !!availability) && xml.startsWith('\uFEFF');
+  const leadingBom = xml.startsWith('\uFEFF');
   const source = leadingBom ? xml.slice(1) : xml;
   let doc: Document;
   let parseError = false;
@@ -1053,6 +1116,11 @@ export function lintMdPitfalls(xml: string, opts: { propertyUnion?: Set<string>;
   if (!element || element.nodeName !== 'mdscript' || parseError) return out;
   const root = element as unknown as ElementLike;
   if (hasVariableFlow || availability) out.push(...lintLocalVariableReads(element, normalizeLineEndings(source), opts.filePath, leadingBom, availability, opts.variableAvailability));
+  for (const { event, cue } of unsourcedDestroyedEvents(element)) {
+    const column = leadingBom && event.lineNumber === 1 && event.columnNumber ? event.columnNumber + 1 : event.columnNumber;
+    out.push({ code: DESTROYED_EVENT_SOURCE_CODE, severity: 'error', filePath: opts.filePath, cue,
+      line: event.lineNumber, column, sourceRef: 'event_object_destroyed', detail: DESTROYED_EVENT_SOURCE_DETAIL });
+  }
   // The original cue-tree lints stop when their parser sees a leading BOM outside the root.
   if (leadingBom) return out;
   out.push(...lintMdCutsceneTimeouts(element, opts.filePath));
@@ -1674,6 +1742,29 @@ export function runMdPitfallSelftest(): {
     `<cue name="State"/><cue name="Parent"><cues><cue name="State"/></cues></cue><cue name="Probe"><actions>${namedTimeout}</actions></cue>`,
     `<cue name="State"/><cue name="state"/><cue name="Probe"><actions>${namedTimeout}</actions></cue>`,
   ].every(cues => !lint(`<mdscript><cues>${cues}</cues></mdscript>`).some(finding => finding.code === timeoutCode)));
+  const destructionScript = (conditions: string) => '<mdscript name="DestroyFixture"><cues><cue name="Watcher"><conditions>'
+    + conditions + '</conditions></cue></cues></mdscript>';
+  const destroyedRows = (source: string) => lintMdPitfalls(source, { filePath: 'md/destroy.xml' })
+    .filter(row => row.code === DESTROYED_EVENT_SOURCE_CODE);
+  const bareDestructionEvent = '<event_object_destroyed/>';
+  const destructionSource = destructionScript(bareDestructionEvent);
+  const destroyed = destroyedRows(destructionSource);
+  ok('destroyed event without either selector is a located load error', destroyed.length === 1
+    && destroyed[0].severity === 'error' && destroyed[0].filePath === 'md/destroy.xml'
+    && destroyed[0].cue === 'Watcher' && destroyed[0].line === 1
+    && destroyed[0].column === destructionSource.indexOf(bareDestructionEvent) + 1);
+  ok('destroyed event position preserves leading BOM and CRLF',
+    destroyedRows('\uFEFF' + destructionSource)[0]?.column === destructionSource.indexOf(bareDestructionEvent) + 2
+    && destroyedRows('\uFEFF' + destructionScript('\r\n  ' + bareDestructionEvent))[0]?.line === 2
+    && destroyedRows('\uFEFF' + destructionScript('\r\n  ' + bareDestructionEvent))[0]?.column === 3);
+  const nestedDestruction = destructionScript('<check_any><event_object_destroyed killer="$Killer"/><event_object_destroyed check="false"/></check_any>');
+  ok('destroyed event reports separate nested tags and auxiliary attributes do not supply a source',
+    destroyedRows(nestedDestruction).length === 2 && new Set(destroyedRows(nestedDestruction).map(row => row.column)).size === 2);
+  ok('destroyed event preserves object or group and ignores misleading XML',
+    ['<event_object_destroyed object="$Ship"/>', '<event_object_destroyed group="$Tracked"/>',
+      '<!-- <event_object_destroyed/> -->', '<![CDATA[<event_object_destroyed/>]]>',
+      '<event_object_destroyed xmlns="urn:foreign"/>', '<event_object_destroyed>',
+      '<event_game_started/>'].every(value => destroyedRows(destructionScript(value)).length === 0));
   const cancelFindingCode = 'md_pitfall.cancel_conversation_actor_or_template';
   const cancelFindings = (xml: string) => lint(xml).filter(f => f.code === cancelFindingCode);
 

@@ -47,7 +47,8 @@ import { buildScriptPropertyIndex, formatScriptPropertyFinding, lintScriptProper
 import { checkXmlWellformed } from "../lib/xmlWellformed";
 import { lintAiscript, type AiscriptLintFinding } from "../lib/aiscriptLint";
 import {
-  buildMdVariableAvailabilityContext, EFFECTIVE_MD_RETURN_CHECK, isScriptExpressionAttribute, lintEffectiveMdCueReturns, lintMdPitfalls,
+  buildMdVariableAvailabilityContext, EFFECTIVE_MD_DESTROYED_EVENT_CHECK, EFFECTIVE_MD_RETURN_CHECK, isScriptExpressionAttribute,
+  lintEffectiveMdCueReturns, lintEffectiveMdDestroyedEvents, lintMdPitfalls,
   lintScriptExpressions, lintScriptExpressionValue, type MdPitfallFinding,
 } from "../lib/mdPitfallLints";
 import { lintJobsContent, type JobsVocabulary, type JobLintFinding } from "../lib/jobsContentLint";
@@ -551,8 +552,8 @@ export function runProjectValidation(
   // broad selectors that unexpectedly hit many nodes, and structurally illegal outcomes.
   const diffSimulation: ProjectValidationResult['diffSimulation']['files'] = [];
   const diffExpressionFindings: MdPitfallFinding[] = [];
-  const diffReturnFindings: MdPitfallFinding[] = [];
-  const returnContextInspected = new Set<string>();
+  const diffMdRuntimeFindings: MdPitfallFinding[] = [];
+  const effectiveMdContextInspected = new Set<string>();
   const hasMdDiffs = project.files.some(isProjectMdDiff);
   const effectiveMdFacts = new Map<string, MdEffectiveLibraryInput>();
   let mdReferenceRoot: string | undefined;
@@ -595,13 +596,21 @@ export function runProjectValidation(
               // only compact findings/coverage escape this pass.
               try {
                 const returns = lintEffectiveMdCueReturns(relativePath, simulation.elementProvenance);
-                diffReturnFindings.push(...returns.findings);
+                diffMdRuntimeFindings.push(...returns.findings);
                 for (const gap of returns.gaps) coverageGaps.push({ check: EFFECTIVE_MD_RETURN_CHECK, ...gap });
               } catch {
                 coverageGaps.push({ check: EFFECTIVE_MD_RETURN_CHECK, filePath: relativePath,
                   reason: 'Effective MD return ownership analysis failed internally; no result is claimed.' });
               }
-              returnContextInspected.add(relativePath);
+              try {
+                const events = lintEffectiveMdDestroyedEvents(relativePath, simulation.elementProvenance);
+                diffMdRuntimeFindings.push(...events.findings);
+                for (const gap of events.gaps) coverageGaps.push({ check: EFFECTIVE_MD_DESTROYED_EVENT_CHECK, ...gap });
+              } catch {
+                coverageGaps.push({ check: EFFECTIVE_MD_DESTROYED_EVENT_CHECK, filePath: relativePath,
+                  reason: 'Effective MD destruction event analysis failed internally. No event-source result is claimed.' });
+              }
+              effectiveMdContextInspected.add(relativePath);
             }
             if (script) {
               const seen = new Set<string>();
@@ -680,9 +689,11 @@ export function runProjectValidation(
   const referencesAnalysis = validateCrossFileWithMdContext(project, {
     hasMdDiffs, mdReferenceRoot, canonicalMd: opts.canonicalMd,
     readDiffFacts(_file, relativePath) {
-      if (!returnContextInspected.has(relativePath)) {
+      if (!effectiveMdContextInspected.has(relativePath)) {
         coverageGaps.push({ check: EFFECTIVE_MD_RETURN_CHECK, filePath: relativePath,
           reason: 'Effective MD composition or element provenance was unavailable; return ownership was not checked.' });
+        coverageGaps.push({ check: EFFECTIVE_MD_DESTROYED_EVENT_CHECK, filePath: relativePath,
+          reason: 'Effective MD composition or element provenance was unavailable. Destruction event sources were not checked.' });
       }
       return effectiveMdFacts.get(relativePath);
     },
@@ -774,7 +785,7 @@ export function runProjectValidation(
   const variableAvailability = opts.incremental === false ? buildVariableContext()
     : (validationFacts.get(JSON.stringify(['md-variable-context', variableDependency]), buildVariableContext, variableInputBytes) as ReturnType<typeof buildMdVariableAvailabilityContext>);
   coverageGaps.push(...variableAvailability.coverageGaps);
-  const pitfallFindings: MdPitfallFinding[] = [...diffExpressionFindings, ...diffReturnFindings];
+  const pitfallFindings: MdPitfallFinding[] = [...diffExpressionFindings, ...diffMdRuntimeFindings];
   for (const f of project.files) {
     if (typeof f.content !== "string") continue;
     const pathKind = classifyPath(f.path);
@@ -1637,6 +1648,35 @@ export function runProjectValidationSelftest(): { pass: boolean; checks: { name:
       }),
     },
   ];
+  const destroyedSelector = '/mdscript/cues/cue/conditions/event_object_destroyed';
+  const destroyedPatch = (base: string, operations: string) => lintEffectiveMdDestroyedEvents('md/destroy.xml',
+    simulateXmlDiff(`<mdscript name="Destroy"><cues><cue name="Watch"><conditions>${base}</conditions></cue></cues></mdscript>`,
+      `<diff>\n${operations}\n</diff>`, { elementProvenance: true }).elementProvenance);
+  const objectEvent = '<event_object_destroyed object="$Ship"/>';
+  const bareEvent = '<event_object_destroyed/>';
+  const removeObject = `<remove sel="${destroyedSelector}/@object"/>`;
+  const authoredBare = destroyedPatch('<event_game_started/>',
+    `  <add sel="/mdscript/cues/cue/conditions">\n    ${bareEvent}\n  </add>`);
+  const replacedBare = destroyedPatch(objectEvent,
+    `  <replace sel="${destroyedSelector}">\n    ${bareEvent}\n  </replace>`);
+  const finalMissing = destroyedPatch(objectEvent, `  ${removeObject}`);
+  const removedBoth = destroyedPatch('<event_object_destroyed object="$Ship" group="$Watched"/>',
+    `  ${removeObject}\n    <remove sel="${destroyedSelector}/@group"/>`);
+  const authoredLocations: Array<[ReturnType<typeof destroyedPatch>, number, number]> =
+    [[authoredBare, 3, 5], [replacedBare, 3, 5], [finalMissing, 2, 3], [removedBoth, 3, 5]];
+  checks.push({ name: 'destruction_event_patch_attributes_or_payload_are_attributed_to_the_authored_cause',
+    pass: authoredLocations.every(([result, line, column]) =>
+      result.gaps.length === 0 && result.findings.length === 1 && result.findings[0].severity === 'error'
+      && result.findings[0].line === line && result.findings[0].column === column) });
+  const retainedSource = destroyedPatch('<event_object_destroyed object="$Ship" group="$Watched"/>', removeObject);
+  const restoredSource = destroyedPatch(objectEvent, `${removeObject}\n<add sel="${destroyedSelector}" type="@group">$Watched</add>`);
+  const unchanged = destroyedPatch(bareEvent, '<replace sel="/mdscript/cues/cue/@name">Other</replace>');
+  const unproven = lintEffectiveMdDestroyedEvents('md/destroy.xml', undefined);
+  const foreign = destroyedPatch(objectEvent, `${removeObject}\n<add sel="/mdscript/cues/cue/conditions" type="@xmlns">urn:foreign</add>`);
+  checks.push({ name: 'destruction_event_patch_preserves_valid_or_unchanged_sources_and_reports_unproven_coverage',
+    pass: [retainedSource, restoredSource, unchanged].every(result => !result.findings.length && !result.gaps.length)
+      && !unproven.findings.length && unproven.gaps.length === 1 && !foreign.findings.length
+      && foreign.gaps.some(gap => gap.reason.includes('namespace')) });
   return { pass: checks.every(check => check.pass), checks };
 }
 
