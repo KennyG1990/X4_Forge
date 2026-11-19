@@ -3,6 +3,12 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
+## 0.0.89 — 2026-11-19
+
+- Complete an AI-script name inside an X4 call with the right quotes. Forge replaces the whole value, preserves neighboring XML, and discards suggestions after the buffer changes.
+- Save a numeric bulk transform as a recipe and reopen it later. Forge restores the operation IDs and asks for a fresh preview before applying.
+- Use Why in Diagnostics to see where static Lua UI analysis stopped and which coverage checks still need review.
+
 ## 0.0.88 — 2026-11-19
 
 - Select one canonical ship and edit its maximum hull. Review the original value and source, preview one patch, apply it to the workspace, and undo it through the existing history.
