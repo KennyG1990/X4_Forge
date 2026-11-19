@@ -3,6 +3,12 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
+## 0.0.88 — 2026-11-19
+
+- Select one canonical ship and edit its maximum hull. Review the original value and source, preview one patch, apply it to the workspace, and undo it through the existing history.
+- Applied Preview shows XML attribute additions as attributes. The shared simulator reports malformed attribute names at the operation instead of emitting invalid XML.
+- Bulk transforms check the selected workspace and its revision during preview and apply. A delayed successful reply preserves newer canvas edits and reports the server result.
+
 ## 0.0.87 — 2026-11-19
 
 - Rename authored Mission Director cue and library symbols in an unpacked mod after reviewing the exact replacements. The editor applies one edit, and one Undo restores the edited buffers. If disk inputs change during application, Forge warns that the edits reached the buffers instead of reporting a verified rename.
