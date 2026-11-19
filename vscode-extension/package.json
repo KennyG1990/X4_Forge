@@ -161,6 +161,22 @@
           "default": false,
           "description": "When opening a mod folder, optionally write per-file xml.fileAssociations for applicable game XSDs (plain-rooted factions, gamestarts, and addon files; never diff patches). Requires an XML extension to use these associations. Off by default; Forge validation remains authoritative."
         },
+        "x4forge.textHoverLanguage": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 999,
+          "default": 44,
+          "scope": "resource",
+          "description": "X4 language number used for text hovers. 44 is English. This is the editor preference."
+        },
+        "x4forge.textHoverAlternateLanguage": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 999,
+          "default": 0,
+          "scope": "resource",
+          "description": "Optional second X4 language number to display in text hovers. Use 0 to display only the primary language."
+        },
         "x4forge.twoWayEditing": {
           "type": "boolean",
           "default": true,

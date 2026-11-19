@@ -98,6 +98,7 @@ export function registerReferenceRoutes(
   app: Express,
   workspaceProvider?: (req: Request) => ModWorkspace | null | undefined,
   publicInstance?: () => Omit<InstanceRecord, 'cwd'>,
+  editorTextHover?: (req: Request, document: ReferenceLanguageRequest) => { status: number; value: unknown } | undefined,
 ): void {
   app.get('/api/reference/effective-file', (req, res) => {
     try {
@@ -173,8 +174,11 @@ export function registerReferenceRoutes(
   app.post('/api/reference/hover', (req, res) => {
     try {
       const request = languageRequest(req);
+      const textHover = editorTextHover?.(req, request);
+      if (textHover) return res.set('Cache-Control', 'no-store').status(textHover.status).json(textHover.value);
       const corpus = load(req);
-      return res.json(hoverReferenceDocument(request, getReferenceLanguageResources(corpus, request, workspaceProvider?.(req))));
+      const workspace = req.body.textLanguage === undefined ? workspaceProvider?.(req) : undefined;
+      return res.json(hoverReferenceDocument(request, getReferenceLanguageResources(corpus, request, workspace)));
     } catch (error) { return sendCorpusError(res, error); }
   });
 

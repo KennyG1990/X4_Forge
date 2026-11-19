@@ -114,6 +114,7 @@ import { classifyPath, indexCueReferences, runExtensionProjectSelftest, buildCon
 import { buildDependencyHealth } from './src/server/dependencyHealth';
 import { getAiSchemaIndex, getScriptPropertyIndex, registerValidationAgentRoutes } from "./src/server/validationRoutes";
 import { resolveLiteralReferenceText } from "./src/server/literalTextSources";
+import { offsetAt, type ReferenceLanguageRequest } from "./src/lib/referenceLanguage";
 import { LITERAL_TEXT_MAX_FILE_BYTES, LITERAL_TEXT_MAX_FILES, LITERAL_TEXT_MAX_TOTAL_BYTES, literalTextFilenameLanguage, resolveLiteralText, type LiteralTextLookupRequest } from "./src/lib/literalTextLookup";
 import { getCanonicalReferenceCorpus, getCanonicalReferenceSets, initializeReferenceCorpus, registerReferenceRoutes, startCanonicalReferenceManifest } from "./src/server/referenceRoutes";
 import { createCanonicalMdProviderPreparation, readCanonicalMdCompiledWorkerIdentity } from './src/server/canonicalMdProviderPreparation';
@@ -290,7 +291,7 @@ import { analyzePatchReadiness, runPatchReadinessSelftest } from "./src/lib/patc
 import { runJobsContentLintSelftest, learnJobsVocabularyMerged, type JobsVocabulary } from "./src/lib/jobsContentLint";
 import { runMigrationLintSelftest } from "./src/lib/migrationLint";
 import { runWaresContentLintSelftest, learnWaresVocabulary, type WaresVocabulary } from "./src/lib/waresContentLint";
-import { runTFileLintSelftest, buildModTextIndex, lintTextReferences } from "./src/lib/tFileLint";
+import { runTFileLintSelftest, buildModTextIndex, lintTextReferences, literalEditorTextReference } from "./src/lib/tFileLint";
 import { runFactionsLintSelftest, lintFactionRelations } from "./src/lib/factionsLint";
 import { runGodLintSelftest, lintGodMacros } from "./src/lib/godLint";
 import { atomicWriteFile, atomicWriteJson, runWorkspaceStateSelftest } from "./src/lib/workspaceState";
@@ -5716,6 +5717,46 @@ function savedWorkspaceTextSources(ws: ModWorkspace, language: number) {
   return { files, complete: true };
 }
 
+function resolveSavedWorkspaceText(ws: ModWorkspace, lookup: LiteralTextLookupRequest) {
+  const checked = savedWorkspaceTextSources(ws, lookup.language);
+  return resolveLiteralText(checked.files, lookup, checked.complete);
+}
+
+function editorTextHover(req: express.Request, document: ReferenceLanguageRequest) {
+  if (req.body.textLanguage === undefined) return undefined;
+  const request = req as express.Request & { __actor?: RequestActor; __workspaceRecord?: WorkspaceRecord };
+  if (request.__actor?.kind !== 'studio') {
+    return { status: 403, value: { code: 'EDITOR_TEXT_HOVER_FORBIDDEN', error: 'Use the text lookup capability with an agent key.' } };
+  }
+  const preferred: unknown = req.body.textLanguage;
+  const alternate: unknown = req.body.textAlternateLanguage;
+  const textLanguageId = (value: unknown): value is number =>
+    typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 999;
+  if (!textLanguageId(preferred) || (alternate !== undefined && !textLanguageId(alternate))) {
+    return { status: 400, value: { code: 'EDITOR_TEXT_HOVER_LANGUAGE_INVALID', error: 'Text hover languages must be integers from 1 to 999.' } };
+  }
+  const languages = [preferred];
+  if (textLanguageId(alternate) && alternate !== preferred) languages.push(alternate);
+  const lua = /\.(lua|xpl)$/i.test(document.path);
+  const target = literalEditorTextReference(document.content, lua ? 'lua' : 'xml',
+    offsetAt(document.content, document.line, document.column));
+  if (!target) return lua ? { status: 200, value: null } : undefined;
+  const { page, id } = target;
+  const values: ReturnType<typeof resolveLiteralText>[] = [];
+  const record = request.__workspaceRecord;
+  const ws = record?.workspace;
+  const modRoot: unknown = req.body.textSourceRoot;
+  const savedWorkspace = record && ws?.sourceFolder && ws.sourceStamp?.dir && record.workspaceId === req.get('x-workspace-id')
+    && typeof modRoot === 'string' && path.isAbsolute(modRoot)
+    && path.relative(ws.sourceFolder, modRoot) === '' && path.relative(ws.sourceStamp.dir, modRoot) === '' ? ws : undefined;
+  const referenceRoot = resolveX4ReferenceRoot();
+  for (const language of languages) {
+    if (savedWorkspace) values.push(resolveSavedWorkspaceText(savedWorkspace, { page, id, language, scope: 'workspace' }));
+    values.push(resolveLiteralReferenceText(referenceRoot, { page, id, language, scope: 'reference' }));
+  }
+  return { status: 200, value: { kind: 'text', ...target, values } };
+}
+
 app.post("/api/agent/text/lookup", (req, res) => {
   res.set('Cache-Control', 'no-store');
   const lookup = parseLiteralTextLookupRequest(req.body);
@@ -5727,8 +5768,7 @@ app.post("/api/agent/text/lookup", (req, res) => {
   if (lookup.scope === 'reference') {
     return res.json(resolveLiteralReferenceText(resolveX4ReferenceRoot(), { ...lookup, scope: 'reference' }));
   }
-  const checked = savedWorkspaceTextSources(workspace, lookup.language);
-  return res.json(resolveLiteralText(checked.files, lookup, checked.complete));
+  return res.json(resolveSavedWorkspaceText(workspace, lookup));
 });
 
 
@@ -10758,7 +10798,7 @@ app.get("/api/agent/selftest-index", (_req, res) => {
 
 registerValidationAgentRoutes(app);
 registerReferenceRoutes(app, req => ((req as any).__workspaceRecord as WorkspaceRecord | undefined)?.workspace as ModWorkspace | undefined,
-  publicForgeIdentity);
+  publicForgeIdentity, editorTextHover);
 registerBulkTransformRoutes(app, {
   workspace: req => requestWorkspace(req).workspace as ModWorkspace,
   workspaceId: req => requestWorkspace(req).workspaceId,

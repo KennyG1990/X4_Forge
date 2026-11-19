@@ -1840,12 +1840,74 @@ interface ReferenceHoverPayload {
   detail?: string;
 }
 
-async function referenceLanguagePost<T>(route: "complete" | "hover", body: Record<string, unknown>): Promise<T | null> {
-  if (!backend?.token) return null; // attach mode has no credential; legacy public GET remains the fallback
+interface EditorTextHoverPayload {
+  kind: "text";
+  page: number;
+  id: number;
+  start: number;
+  end: number;
+  localArguments?: Array<{ name: string; start: number; end: number }>;
+  values: Array<{
+    language: number;
+    scope: "workspace" | "reference";
+    status: "found" | "ambiguous" | "missing" | "unavailable" | "unresolved";
+    reason?: string;
+    text?: string;
+    authored?: string;
+    source?: { file: string; line: number; column: number };
+    sources?: Array<{ file: string; line: number; column: number }>;
+  }>;
+}
+
+function textHoverLanguages(uri: vscode.Uri): readonly [number, number] {
+  const settings = vscode.workspace.getConfiguration("x4forge", uri);
+  const preferred = settings.get<number>("textHoverLanguage", 44);
+  const alternate = settings.get<number>("textHoverAlternateLanguage", 0);
+  const language = Number.isInteger(preferred) && preferred >= 1 && preferred <= 999 ? preferred : 44;
+  const second = Number.isInteger(alternate) && alternate >= 1 && alternate <= 999 && alternate !== language ? alternate : 0;
+  return [language, second];
+}
+
+function renderTextHover(hover: EditorTextHoverPayload, document: vscode.TextDocument): vscode.MarkdownString {
+  const result = new vscode.MarkdownString();
+  result.appendText(`{${hover.page}, ${hover.id}}`);
+  for (const local of hover.localArguments ?? []) {
+    const position = document.positionAt(local.start);
+    result.appendMarkdown("\n\n");
+    result.appendText(`Local ${local.name} is set on line ${position.line + 1}.`);
+  }
+  for (const value of hover.values) {
+    result.appendMarkdown("\n\n");
+    result.appendText(`${value.scope === "workspace" ? "Saved workspace" : "Reference corpus"} · language ${value.language}`);
+    result.appendMarkdown("\n\n");
+    if (value.status === "found") result.appendText(value.text === "" ? "(blank text)" : value.text ?? "(text unavailable)");
+    else if (value.status === "unresolved") {
+      result.appendText("Unresolved text");
+      if (value.authored) {
+        result.appendMarkdown("\n\n");
+        result.appendText(value.authored);
+      }
+    } else if (value.status === "missing") result.appendText("Text entry missing");
+    else if (value.status === "ambiguous") result.appendText("Multiple definitions");
+    else result.appendText(value.reason === "language-unavailable" ? "Language unavailable" : "Incomplete text coverage");
+    for (const source of value.sources ?? (value.source ? [value.source] : [])) {
+      result.appendMarkdown("\n\n");
+      result.appendText(`${source.file}:${source.line}:${source.column}`);
+    }
+  }
+  return result;
+}
+
+async function referenceLanguagePost<T>(
+  route: "complete" | "hover", body: Record<string, unknown>, handle = backend, addressWorkspace = false,
+): Promise<T | null> {
+  if (!handle?.token) return null; // attach mode has no credential; legacy public GET remains the fallback
   try {
-    const response = await fetchWithTimeout(`${backend.baseUrl}/api/reference/${route}`, 3000, {
+    const headers = addressWorkspace ? backendApiHeaders(handle, true)
+      : { Authorization: `Bearer ${handle.token}`, "Content-Type": "application/json" };
+    const response = await fetchWithTimeout(`${handle.baseUrl}/api/reference/${route}`, 3000, {
       method: "POST",
-      headers: freshActionOperationHeaders({ Authorization: `Bearer ${backend.token}`, "Content-Type": "application/json" }),
+      headers: freshActionOperationHeaders(headers),
       body: JSON.stringify(body),
     });
     if (!response?.ok) return null;
@@ -1949,8 +2011,8 @@ function registerLangProviders(context: vscode.ExtensionContext): void {
       },
     }, "<", " ", "\"", "'", "."),
 
-    vscode.languages.registerHoverProvider(selector, {
-      async provideHover(doc, pos) {
+    vscode.languages.registerHoverProvider([...selector, { scheme: "file", language: "lua" }], {
+      async provideHover(doc, pos, token) {
         const finish = beginNativeOperation('native.provider.read');
         let outcome: ForgePerformanceOutcome = 'ok';
         try {
@@ -1958,12 +2020,38 @@ function registerLangProviders(context: vscode.ExtensionContext): void {
           const root = nodeDocument ? null : modRootFor(doc.uri.fsPath);
           if (!nodeDocument && !root) return undefined;
           const file = nodeDocument ? 'md/x4forge-node-selection.xml' : relModPath(root!, doc.uri.fsPath);
-          const modern = await referenceLanguagePost<ReferenceHoverPayload>("hover", {
+          const lua = /\.(lua|xpl)$/i.test(file);
+          if (token.isCancellationRequested) return undefined;
+          const handle = backend;
+          const workspaceId = handle?.workspaceId;
+          const clientId = handle?.clientId;
+          const backendToken = handle?.token;
+          const version = doc.version;
+          const [textLanguage, textAlternateLanguage] = textHoverLanguages(doc.uri);
+          const content = doc.getText();
+          const isCurrent = () => {
+            if (token.isCancellationRequested || doc.isClosed || doc.version !== version || backend !== handle
+              || handle?.workspaceId !== workspaceId || handle?.clientId !== clientId || handle?.token !== backendToken) return false;
+            const [current, currentAlternate] = textHoverLanguages(doc.uri);
+            return current === textLanguage && currentAlternate === textAlternateLanguage;
+          };
+          const modern = await referenceLanguagePost<ReferenceHoverPayload | EditorTextHoverPayload>("hover", {
             path: file,
-            content: doc.getText(),
+            content,
             line: pos.line,
             column: pos.character,
-          });
+            textLanguage,
+            ...(textAlternateLanguage ? { textAlternateLanguage } : {}),
+            ...(root ? { textSourceRoot: root } : {}),
+          }, handle, true);
+          if (!isCurrent()) return undefined;
+          if (modern?.kind === "text") {
+            if (!Number.isInteger(modern.start) || !Number.isInteger(modern.end) || modern.start < 0
+              || modern.end <= modern.start || modern.end > content.length) return undefined;
+            const range = new vscode.Range(doc.positionAt(modern.start), doc.positionAt(modern.end));
+            return new vscode.Hover(renderTextHover(modern, doc), range);
+          }
+          if (lua) return undefined;
           if (modern) {
             const modernRange = doc.getWordRangeAtPosition(pos, /[A-Za-z_][\w.:-]*/);
             const markdown = new vscode.MarkdownString();
@@ -1980,7 +2068,7 @@ function registerLangProviders(context: vscode.ExtensionContext): void {
           const ctx = xmlCursorContext(doc.getText(), doc.offsetAt(range.start));
           const data = await langGet<{ known: boolean; summary?: string; requiredAttrs: string[]; attrCount: number; semantics?: { description?: string; risk?: string; note?: string } }>(
             "hover", { file, tag: word, root: ctx.rootTag || "" });
-          if (!data?.known) return undefined;
+          if (!isCurrent() || !data?.known) return undefined;
           const md = new vscode.MarkdownString();
           md.appendMarkdown(`**\`<${word}>\`**${data.summary ? ` — ${data.summary}` : ""}\n\n`);
           if (data.semantics?.description) md.appendMarkdown(`${data.semantics.description}\n\n`);

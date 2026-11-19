@@ -18,6 +18,7 @@
 import { DOMParser } from "@xmldom/xmldom";
 import { parseX4Lua as parseLua } from "./x4LuaParser";
 import { createSourcePositionLocator } from "./xmlSourceSpans";
+import { maskXmlOpaqueMarkup, scanXmlTagTokens } from "../../shared/xmlMarkup";
 import { normalizeX4UiSourcePath } from "./x4UiSourceBundle";
 
 export interface ModTextIndex {
@@ -120,11 +121,79 @@ interface LuaTextNode {
   arguments?: LuaTextNode[];
   variables?: LuaTextNode[];
   init?: LuaTextNode[];
+  body?: LuaTextNode[];
 }
 
-function luaTextReferences(content: string, limit: number): Array<{ page: string; id: string; offset: number }> {
+interface EditorTextArgument {
+  name: string;
+  start: number;
+  end: number;
+}
+
+type LuaTextReference = {
+  page: string;
+  id: string;
+  offset: number;
+  start: number;
+  end: number;
+  localArguments?: EditorTextArgument[];
+};
+
+function numericLuaTextArgument(node?: LuaTextNode): number | undefined {
+  return node?.type === "NumericLiteral" && typeof node.value === "number"
+    && Number.isSafeInteger(node.value) && node.value >= 0 ? node.value : undefined;
+}
+
+function readLocalLuaTextArgument(node: LuaTextNode, statements: LuaTextNode[], containing: LuaTextNode,
+  writes: ReadonlySet<string>): { value: number; source?: EditorTextArgument } | undefined {
+  const number = numericLuaTextArgument(node);
+  if (number !== undefined) return { value: number };
+  const { name } = node;
+  if (node.type !== "Identifier" || node.isLocal !== true || !name || writes.has(name)) return undefined;
+  const stop = statements.indexOf(containing);
+  for (let i = stop - 1; i >= 0; i--) {
+    const declaration = statements[i];
+    if (declaration.type !== "LocalStatement") continue;
+    const index = declaration.variables?.findIndex(variable => variable.name === name) ?? -1;
+    if (index < 0) continue;
+    const variable = declaration.variables![index];
+    const value = numericLuaTextArgument(declaration.init?.[index]);
+    if (declaration.init?.length !== declaration.variables?.length || value === undefined || !variable.range) return undefined;
+    return { value, source: { name, start: variable.range[0], end: variable.range[1] } };
+  }
+  return undefined;
+}
+
+function localLuaTextReference(call: LuaTextNode, scopes: LuaTextNode[][], writes: ReadonlySet<string>): LuaTextReference | undefined {
+  const [page, id] = call.arguments ?? [];
+  if (!page || !id?.range || !call.range || !call.base?.range) return undefined;
+  const start = call.base.range[1];
+  const end = call.range[1];
+  let owner: { body: LuaTextNode[]; statement: LuaTextNode; width: number } | undefined;
+  for (const body of scopes) for (const statement of body) {
+    const range = statement.range;
+    if (!range || range[0] > start || range[1] < end) continue;
+    const width = range[1] - range[0];
+    if (!owner || width < owner.width) owner = { body, statement, width };
+  }
+  if (!owner) return undefined;
+  const pageValue = readLocalLuaTextArgument(page, owner.body, owner.statement, writes);
+  const idValue = readLocalLuaTextArgument(id, owner.body, owner.statement, writes);
+  if (!pageValue || !idValue) return undefined;
+  const localArguments = [pageValue.source, idValue.source].filter((item): item is EditorTextArgument => item !== undefined);
+  return { page: String(pageValue.value), id: String(idValue.value), offset: id.range[0], start, end,
+    ...(localArguments.length ? { localArguments } : {}) };
+}
+
+function luaTextReferences(content: string, limit: number, hoverOffset?: number): LuaTextReference[] {
   if (!content.includes("ReadText") || limit <= 0) return [];
-  const references: Array<{ page: string; id: string; offset: number }> = [];
+  const references: LuaTextReference[] = [];
+  const hoverScopes: LuaTextNode[][] = [];
+  const hoverWrites = new Set<string>();
+  let hoverCall: LuaTextNode | undefined;
+  const observeLocalWrite = (node?: LuaTextNode) => {
+    if (hoverOffset !== undefined && node?.type === "Identifier" && node.name) hoverWrites.add(node.name);
+  };
   let rebound = false;
   const globalName = (node?: LuaTextNode) => node?.type === "Identifier" && node.isLocal === false ? node.name : undefined;
   const environment = (node?: LuaTextNode) => ["_G", "_ENV"].includes(globalName(node) ?? "");
@@ -148,28 +217,122 @@ function luaTextReferences(content: string, limit: number): Array<{ page: string
         if (name === "_ENV") rebound = true;
       },
       onCreateNode(node: LuaTextNode) {
+        if (hoverOffset !== undefined && Array.isArray(node.body)) hoverScopes.push(node.body);
         if (node.type === "AssignmentStatement" || node.type === "LocalStatement") {
           if (node.init?.some(environment)) rebound = true;
           if (node.type === "AssignmentStatement") {
-            for (const variable of node.variables ?? []) markWrite(writeName(variable));
+            for (const variable of node.variables ?? []) {
+              markWrite(writeName(variable));
+              observeLocalWrite(variable);
+            }
           }
         } else if (node.type === "FunctionDeclaration") {
           markWrite(writeName(node.identifier));
+          observeLocalWrite(node.identifier);
         } else if (node.type === "CallExpression") {
           const callee = globalName(node.base);
           if (callee === "rawset" && environment(node.arguments?.[0])) markWrite(writeKey(node.arguments?.[1]));
           if (callee !== "ReadText" || references.length >= limit) return;
+          if (hoverOffset !== undefined) {
+            const rangeStart = node.base?.range?.[1];
+            if (node.range && rangeStart !== undefined && rangeStart <= hoverOffset && hoverOffset < node.range[1]
+              && rangeStart > (hoverCall?.base?.range?.[1] ?? -1)) hoverCall = node;
+            return;
+          }
           const [page, id] = node.arguments ?? [];
           if (page?.type !== "NumericLiteral" || id?.type !== "NumericLiteral" || !id.range
             || typeof page.value !== "number" || typeof id.value !== "number"
             || !Number.isSafeInteger(page.value) || !Number.isSafeInteger(id.value)
             || page.value < 0 || id.value < 0) return;
-          references.push({ page: String(page.value), id: String(id.value), offset: id.range[0] });
+          references.push({ page: String(page.value), id: String(id.value), offset: id.range[0],
+            start: node.base?.range?.[1] ?? id.range[0], end: node.range?.[1] ?? id.range[1] });
         }
       },
     });
   } catch { return []; }
-  return rebound ? [] : references;
+  if (rebound) return [];
+  if (hoverOffset === undefined) return references;
+  const hover = hoverCall && localLuaTextReference(hoverCall, hoverScopes, hoverWrites);
+  return hover ? [hover] : [];
+}
+
+
+interface EditorTextReference {
+  page: number;
+  id: number;
+  start: number;
+  end: number;
+  localArguments?: EditorTextArgument[];
+}
+
+function editorReference(pageText: string, idText: string, start: number, end: number): EditorTextReference | null {
+  const page = Number(pageText);
+  const id = Number(idText);
+  return Number.isSafeInteger(page) && Number.isSafeInteger(id) && page >= 0 && id >= 0
+    ? { page, id, start, end } : null;
+}
+
+function xmlBraceReference(content: string, offset: number, start: number, end: number): EditorTextReference | null {
+  const braces = new RegExp(TEXT_REF_RE.source, "g");
+  const value = content.slice(start, end);
+  for (let match = braces.exec(value); match; match = braces.exec(value)) {
+    const from = start + match.index;
+    if (from > offset) return null;
+    const to = from + match[0].length;
+    if (offset < to) return editorReference(match[1], match[2], from, to);
+  }
+  return null;
+}
+
+function xmlEditorReference(content: string, offset: number): EditorTextReference | null {
+  const active = maskXmlOpaqueMarkup(content);
+  if (/<!DOCTYPE\b/i.test(active)) return null;
+  let afterPreviousTag = 0;
+  for (const { start, end, token, complete } of scanXmlTagTokens(active)) {
+    if (offset < start) return xmlBraceReference(active, offset, afterPreviousTag, start);
+    if (offset < end) return complete ? xmlTagEditorReference(token, active, start, offset) : null;
+    afterPreviousTag = end;
+  }
+  return xmlBraceReference(active, offset, afterPreviousTag, active.length);
+}
+
+function xmlTagEditorReference(tag: string, content: string, start: number, offset: number): EditorTextReference | null {
+  const tagName = /^<([A-Za-z_][\w.:-]*)/.exec(tag);
+  if (!tagName) return null;
+  const attributes = new Map<string, { nameStart: number; start: number; end: number; value: string }>();
+  const attr = /\s+([A-Za-z_][\w.:-]*)\s*=\s*(["'])([\s\S]*?)\2/y;
+  let cursor = tagName[0].length;
+  attr.lastIndex = cursor;
+  for (let match = attr.exec(tag); match; match = attr.exec(tag)) {
+    const [, name, , value] = match;
+    if (attributes.has(name)) return null;
+    const valueEnd = start + attr.lastIndex - 1;
+    const nameStart = start + match.index + match[0].search(/\S/);
+    attributes.set(name, { nameStart, start: valueEnd - value.length, end: valueEnd, value });
+    cursor = attr.lastIndex;
+  }
+  if (!/^\s*\/?>$/.test(tag.slice(cursor))) return null;
+  for (const [name, value] of attributes) {
+    if (offset < value.start || offset >= value.end) continue;
+    if (name.toLowerCase() === "comment") return null;
+    const braces = xmlBraceReference(content, offset, value.start, value.end);
+    if (braces) return braces;
+    if (tagName[1] !== "text" || (name !== "page" && name !== "line")) return null;
+    const page = attributes.get("page");
+    const line = attributes.get("line");
+    if (!page || !line || !/^\s*\d+\s*$/.test(page.value) || !/^\s*\d+\s*$/.test(line.value)) return null;
+    return editorReference(page.value, line.value, Math.min(page.nameStart, line.nameStart), Math.max(page.end, line.end) + 1);
+  }
+  return null;
+}
+
+/** Find a direct X4 text reference under the cursor without resolving an input authority. */
+export function literalEditorTextReference(content: string, sourceType: "xml" | "lua", offset: number): EditorTextReference | null {
+  if (!Number.isInteger(offset) || offset < 0 || offset >= content.length) return null;
+  if (sourceType === "xml") return xmlEditorReference(content, offset);
+  const [match] = luaTextReferences(content, 1, offset);
+  return match ? { page: Number(match.page), id: Number(match.id), start: match.start, end: match.end,
+    ...(match.localArguments ? { localArguments: match.localArguments } : {}) } : null;
 }
 
 export function lintTextReferences(input: LintTextRefsInput): TFileLintResult {
@@ -381,6 +544,31 @@ export function runTFileLintSelftest() {
   ok("lua_standalone_host_tools_excluded", luaRefs("return ReadText(20201,99)", "tools/check.lua").summary.refsChecked === 0);
   ok("lua_registered_tool_checked", luaRefs("return ReadText(20201,99)", "tools/check.lua", new Set(["tools/check.lua"])).findings.length === 1);
   ok("lua_reference_budget_bounded", luaRefs("ReadText(20201,99)\n".repeat(MAX_REFS + 1)).summary.refsChecked === MAX_REFS);
+
+  const findEditor = (content: string, sourceType: "xml" | "lua", phrase: string, delta = 1) =>
+    literalEditorTextReference(content, sourceType, content.lastIndexOf(phrase) + delta);
+  const localText = 'local p, id = 20201, 2\r\nreturn ReadText(p,id)';
+  const localHover = findEditor(localText, "lua", "(p,id)");
+  ok("editor_lua_local_literals_with_declarations", localHover?.page === 20201 && localHover.id === 2
+    && localHover.localArguments?.map(argument => localText.slice(argument.start, argument.end)).join(",") === "p,id");
+  ok("editor_lua_saved_buffer_binding_respects_local_scope",
+    findEditor('local p=100; do local p=20201; return ReadText(p,2) end', "lua", "(p,2)")?.page === 20201);
+  for (const [name, content] of [
+    ['branch_write', 'local p=20201; if q then p=126 end; return ReadText(p,2)'],
+    ['closure_write', 'local p=20201; local f=function() p=55 end; f(); return ReadText(p,2)'],
+    ['captured_outer', 'local p=20201; local f=function() return ReadText(p,2) end'],
+    ['function_result', 'local p,id=some(); return ReadText(p,id)'],
+    ['computed', 'local p=20200+1; return ReadText(p,2)'],
+    ['local_shadow', 'local p=20201; local function ReadText(a,b) return b end; return ReadText(p,2)'],
+    ['malformed', 'local p=20201; return ReadText(p,2), function('],
+  ]) ok("editor_lua_refuses_" + name, findEditor(content, "lua", "(p,") === null);
+  ok("editor_inner_text_reference_retains_its_range",
+    findEditor('return ReadText(1, ReadText(20201,2))', "lua", "(20201,2)")?.page === 20201);
+  ok("editor_xml_quoted_greater_than_keeps_exact_pair",
+    findEditor('<text note=">" line="2" page="20201"/>', "xml", 'line="2"', 6)?.page === 20201);
+  ok("editor_xml_inactive_markup_and_comment_attributes_are_opaque",
+    findEditor('<a><![CDATA[ <!-- {20201,2} ]]></a>', "xml", "{20201,2}") === null
+    && findEditor("<a comment='{20201,2}'/>", "xml", "{20201,2}") === null);
 
   // --- B62b phase 2: translation coverage ---
   const covEn = { path: "t/0001-L044.xml", content: `<language id="44"><page id="20201"><t id="1">a</t><t id="2">b</t><t id="3">c</t></page></language>` };
