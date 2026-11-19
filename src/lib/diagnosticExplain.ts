@@ -126,6 +126,16 @@ const GUIDANCE: Array<{ matches: (code: string) => boolean; value: Guidance }> =
     },
   },
   {
+    matches: code => code === 'x4-ui.truncated-evidence',
+    value: {
+      title: 'Lua UI verification is incomplete',
+      why: 'Forge reached a limit while collecting static UI evidence for this file.',
+      impact: 'The file remains partly unverified. Unseen evidence may affect the result.',
+      next: 'Review the retained coverage gaps for this file. Resolve dynamic or unsupported UI calls, rerun validation, and verify any remaining UI behavior in X4.',
+      basis: 'bounded X4 Lua UI call analysis',
+    },
+  },
+  {
     matches: code => /^(cue\.|crossfile\.|project\.cue)/.test(code),
     value: {
       title: 'Cross-file cue relationship is broken',
@@ -270,6 +280,14 @@ export function runDiagnosticExplainSelftest() {
   check('rules name fail-closed behavior', /disabled/i.test(make('rules.review_overdue').impact));
   check('xsd guidance names schema', /schema/i.test(make('xsd.invalid').why));
   check('bridge guidance names both sides', /both sides/i.test(make('lua_md.missing_listener').next));
+  const truncatedUi = make('x4-ui.truncated-evidence', 'info');
+  check('truncated Lua UI evidence explains the limit and a revalidation path',
+    truncatedUi.title === 'Lua UI verification is incomplete'
+    && /limit/i.test(truncatedUi.why) && /partly unverified/i.test(truncatedUi.impact)
+    && /retained coverage gaps.*rerun validation/i.test(truncatedUi.next)
+    && truncatedUi.ruleProvenance.kind === 'unmatched');
+  check('an adjacent unregistered UI code retains generic guidance',
+    /no more specific explanation/i.test(make('x4-ui.future-rule', 'info').why));
   check('patch guidance names post-apply', /post-apply/i.test(make('diff.selector_missing').next));
   check('unavailable validator is not called clean', /not evidence.*clean/i.test(make('validation.md_schema_unavailable').impact));
   const fallback = make('future.unregistered', 'error');

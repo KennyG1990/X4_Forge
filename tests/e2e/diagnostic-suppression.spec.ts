@@ -350,7 +350,7 @@ test('Diagnostics Center renders deterministic Why guidance and the reviewed sup
         severity: 'error', category: 'syntax', domain: 'schema', code: 'XSD_invalid_element',
         filePath: 'md/schema-fixture.xml', message: 'Fixture XSD structure finding.',
         sourceRef: { kind: 'project', label: 'XSD_invalid_element' },
-      }, ...Array.from({ length: 666 }, (_, index) => index === 600 || index === 601 ? {
+      }, ...Array.from({ length: 665 }, (_, index) => index === 600 || index === 601 ? {
         severity: 'warning', category: 'references', code: 'fixture.late_rule',
         filePath: 'md/late-group.xml', message: 'A repeated fixture warning.',
         line: 601, column: index === 600 ? 8 : 29, sourceRef: { kind: 'node', label: 'Show Help', id: 'msg' },
@@ -358,7 +358,11 @@ test('Diagnostics Center renders deterministic Why guidance and the reviewed sup
         severity: 'info', category: 'references', code: 'fixture.coverage',
         filePath: `md/fixture-batch-${Math.floor(index / 32)}.xml`,
         message: `Coverage fixture ${index + 1}.`, coverageGap: true,
-      })],
+      }), {
+        severity: 'info', category: 'references', code: 'x4-ui.truncated-evidence', coverageGap: true,
+        filePath: 'ui/addons/ai_influence_chat/aic_account.lua', line: 1, column: 0,
+        message: 'X4 UI verification evidence was truncated. Not statically verified.',
+      }],
       validation: { scope: 'full-project', ok: false },
       validationDelta: {
         status: 'compared', modId: 'x4_welcome_message', currentContentHash: 'b'.repeat(64),
@@ -408,6 +412,14 @@ test('Diagnostics Center renders deterministic Why guidance and the reviewed sup
   await severity.selectOption('coverage');
   await expect(list.getByRole('status')).toHaveText('Showing 1–40 of 664 findings · 668 total');
   await expect(rows).toHaveCount(40);
+  await search.fill('ui/addons/ai_influence_chat/aic_account.lua x4-ui.truncated-evidence');
+  await expect(rows).toHaveCount(1);
+  await rows.getByTestId('diagnostic-why-x4-ui.truncated-evidence').click();
+  const coverageWhy = rows.getByTestId('diagnostic-why-panel');
+  await expect(coverageWhy).toContainText('Lua UI verification is incomplete');
+  await expect(coverageWhy).toContainText('The file remains partly unverified.');
+  await expect(coverageWhy).toContainText('Review the retained coverage gaps for this file.');
+  await expect(rows.getByRole('button', { name: 'Suppress' })).toHaveCount(0);
   await severity.selectOption('warning');
   await search.fill('md\\late-group.xml fixture.late_rule');
   await expect(list.getByRole('heading', { name: 'md/late-group.xml' })).toBeVisible();
