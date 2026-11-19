@@ -160,6 +160,57 @@ async function waitForApp(page: Page) {
   await expect(page.getByTestId('readiness-ladder')).toBeVisible();
 }
 
+test('Diagnostics summary waits for current validation and skips unresolvable node errors', async ({ page }) => {
+  const workspace = buildTemplateWorkspace('welcome');
+  await seedServerWorkspace(workspace as unknown as Record<string, unknown>);
+  let completeRecheck!: () => void;
+  const recheck = new Promise<void>(resolve => { completeRecheck = resolve; });
+  const graphError = {
+    severity: 'error', category: 'syntax', code: 'fixture.action_error',
+    message: 'Fixture action error.', nodeId: 'msg',
+  };
+  await page.route('**/api/agent/compile', async route => {
+    const submitted = route.request().postDataJSON() as { workspace: ModWorkspace };
+    const edited = !submitted.workspace.nodes.some(node => node.id === 'ev');
+    if (edited) await recheck;
+    await route.fulfill({ json: {
+      diagnostics: edited ? [
+        { ...graphError, nodeId: 'absent', message: 'No such canvas node.' },
+        { ...graphError, nodeId: undefined, sourceRef: { kind: 'node', id: 'msg' } },
+      ] : [graphError],
+      validation: { scope: 'full-project', ok: false },
+    } });
+  });
+
+  try {
+    await waitForApp(page);
+    const packageStage = page.getByTestId('readiness-stage-package');
+    await packageStage.click();
+    await expect(page.getByRole('button', { name: '1 Errors', exact: true })).toBeEnabled();
+    const pendingRequest = page.waitForRequest(request => request.url().endsWith('/api/agent/compile')
+      && request.method() === 'POST'
+      && !(request.postDataJSON() as { workspace: ModWorkspace }).workspace.nodes.some(node => node.id === 'ev'));
+    await page.getByTestId('canvas-node-ev').getByTitle('Delete Node').click();
+    await pendingRequest;
+    await packageStage.click();
+    await expect(page.getByText('CHECKING...', { exact: true })).toBeVisible();
+    const staleOrPending = page.getByRole('button', { name: /^(1 Errors|Checking errors…)$/ });
+    await expect(staleOrPending).toBeDisabled();
+    await expect(staleOrPending).toHaveText('Checking errors…');
+    await expect(page.getByText('Checking warnings…', { exact: true })).toBeVisible();
+
+    completeRecheck();
+    const fresh = page.getByRole('button', { name: '2 Errors', exact: true });
+    await expect(fresh).toBeEnabled();
+    const target = page.getByTestId('canvas-node-msg');
+    await expect(target).not.toHaveClass(/ring-cyan-500/);
+    await fresh.press('Enter');
+    await expect(target).toHaveClass(/ring-cyan-500/);
+  } finally {
+    completeRecheck();
+  }
+});
+
 test('Diagnostics Center sends the source-bound native position from project validation', async ({ page, request, baseURL }, testInfo) => {
   const temp = testInfo.outputPath('diagnostic-source');
   const source = path.join(temp, 'source_fixture');

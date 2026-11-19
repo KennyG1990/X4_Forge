@@ -127,9 +127,15 @@ export default function PackageModDoctor({
   const showInstall = focus !== 'package';
   const errors = diagnostics.filter(d => d.severity === 'error');
   const warnings = diagnostics.filter(d => d.severity === 'warning');
-  const firstNodeError = errors.find((e): e is PackageDiagnostic & { nodeId: string } =>
-    typeof (e as PackageDiagnostic & { nodeId?: unknown }).nodeId === 'string'
-  );
+  const checking = diagnosticSource === 'checking';
+  const firstGraphError = useMemo(() => {
+    if (checking) return;
+    for (const finding of diagnostics) {
+      if (finding.severity !== 'error') continue;
+      const nodeId = graphSourceForFinding(finding, workspace);
+      if (nodeId) return nodeId;
+    }
+  }, [checking, diagnostics, workspace]);
 
   const [findingQuery, setFindingQuery] = useState('');
   const [findingFilter, setFindingFilter] = useState<FindingFilter>('all');
@@ -384,17 +390,20 @@ export default function PackageModDoctor({
         <div className="grid grid-cols-2 gap-2 text-[10px] font-bold">
           <button
             type="button"
-            onClick={() => { if (firstNodeError) window.dispatchEvent(new CustomEvent('forge-focus-node', { detail: { nodeId: firstNodeError.nodeId } })); }}
-            disabled={!firstNodeError}
-            title={firstNodeError ? 'Click to jump to the first flagged node' : 'No node-located errors'}
+            onClick={() => {
+              if (!firstGraphError) return;
+              window.dispatchEvent(new CustomEvent('navigate-to-source', { detail: { kind: 'md_node', id: firstGraphError } }));
+            }}
+            disabled={!firstGraphError}
+            title={checking ? 'Waiting for current validation' : firstGraphError ? 'Jump to the first error with a canvas node' : 'No node-located errors'}
             className="flex items-center gap-2 text-slate-200 bg-red-500/10 p-2 rounded border border-red-500/20 text-left enabled:hover:bg-red-500/20 enabled:cursor-pointer transition-colors disabled:opacity-100"
           >
             <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse block shrink-0" />
-            <span>{errors.length} Errors</span>
+            <span>{checking ? 'Checking errors…' : `${errors.length} Errors`}</span>
           </button>
           <div className="flex items-center gap-2 text-slate-200 bg-amber-500/10 p-2 rounded border border-amber-500/20">
             <span className="w-2 h-2 rounded-full bg-amber-500 block shrink-0" />
-            <span>{warnings.length} Warnings</span>
+            <span>{checking ? 'Checking warnings…' : `${warnings.length} Warnings`}</span>
           </div>
         </div>
 
@@ -841,11 +850,10 @@ export default function PackageModDoctor({
                     : (diag.severity === 'warning' ? 'bg-amber-500/5 text-amber-300 border-amber-500/25' : 'bg-blue-500/5 text-blue-300 border-blue-500/20');
                   const source = diag.sourceRef;
                   const sourceLabel = source && `Source: ${[source.kind, source.label, source.id].filter(Boolean).join(' / ')}`;
-                  const current = diagnosticSource !== 'checking';
-                  const graph = current ? graphSourceForFinding(diag, workspace) : undefined;
+                  const graph = checking ? undefined : graphSourceForFinding(diag, workspace);
                   const native = diagnosticSource === 'project' && diag.sourceNavigation?.status === 'ready'
                     ? diag.sourceNavigation : undefined;
-                  const editor = current && source && EDITOR_SOURCE_KINDS.has(source.kind) ? source : undefined;
+                  const editor = !checking && source && EDITOR_SOURCE_KINDS.has(source.kind) ? source : undefined;
                   const jump = graph ? { kind: 'md_node', id: graph, label: source?.label } : (!native ? editor : undefined);
 
                   return (
@@ -885,7 +893,7 @@ export default function PackageModDoctor({
                         ) : sourceLabel && (
                           <span className="mt-1 block font-mono text-[9px] text-slate-300 [overflow-wrap:anywhere]">{sourceLabel}</span>
                         )}
-                        {sourceMessage?.key === key && current && <p role="status">{sourceMessage.text}</p>}
+                        {sourceMessage?.key === key && !checking && <p role="status">{sourceMessage.text}</p>}
                         {!jump && diagnosticSource === 'project' && diag.sourceNavigation?.status === 'unavailable'
                           && <p className="text-slate-400">{sourceUnavailable[diag.sourceNavigation.reason]}</p>}
                         <DiagnosticGuidance
