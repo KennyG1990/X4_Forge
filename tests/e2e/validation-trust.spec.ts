@@ -266,10 +266,12 @@ test('ware diagnostics render actual validation results in the selected product 
       await expect(why).toHaveCount(variant.count);
       if (variant.count) {
         expect(findings[0]).toMatchObject({ filePath: 'ui/ware64.lua', line: 1, column: 27, severity: 'warning' });
-        const message = page.getByText(findings[0].message, { exact: true });
+        const fileHeading = page.getByRole('heading', { name: 'ui/ware64.lua', exact: true });
+        await expect(fileHeading).toBeVisible();
+        const fileFindings = fileHeading.locator('..').getByTestId('diagnostic-finding');
+        const message = fileFindings.getByText(findings[0].message, { exact: true });
         await message.scrollIntoViewIfNeeded();
         await expect(message).toBeVisible();
-        await expect(message.locator('xpath=..').getByText('ui/ware64.lua', { exact: true })).toBeVisible();
       }
       if (E2E_RUNTIME.mode === 'compiled') {
         const src = await page.locator('script[type="module"][src]').first().getAttribute('src');
