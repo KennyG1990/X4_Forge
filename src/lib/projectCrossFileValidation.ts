@@ -25,7 +25,7 @@ import {
   mdReferencePoint, parseMdScriptRoot, readMdLibrarySignature, readMdReferenceArguments, resolveMdLibraryReference,
   type MdLibraryDeclaration, type MdLibraryScript, type MdLibrarySignature, type MdReferenceFact,
 } from './cueLineage';
-import { EFFECTIVE_MD_ARGUMENT_CHECK, EFFECTIVE_MD_REFERENCE_CHECK,
+import { describeAuthoredMdReference, EFFECTIVE_MD_ARGUMENT_CHECK, EFFECTIVE_MD_REFERENCE_CHECK,
   type EffectiveMdReferenceContext, type MdReferenceCoverageGap, type MdReferenceSourcePoint } from './mdEffectiveLibraryPurpose';
 import { collectMdStringResults } from './expressionAst';
 import type { ValidationSourceLocation } from './validationEvidence';
@@ -1013,7 +1013,7 @@ function validateEffectiveReferenceContracts(context: EffectiveMdReferenceContex
     call: MdReferenceFact<MdReferenceSourcePoint>, point: MdReferenceSourcePoint | undefined, detail: string,
     target?: ValidationSourceLocation, suffix = '') => {
     if (!usable(point)) {
-      gap(EFFECTIVE_MD_REFERENCE_CHECK, file, `Authored ${call.role} reference ${call.id} has no reliable original diagnostic cause position.`);
+      gap(EFFECTIVE_MD_REFERENCE_CHECK, file, `${describeAuthoredMdReference(call)} has no reliable original diagnostic cause position.`);
       return;
     }
     findings.push({ code, severity, file: point.file, line: point.line, column: point.column, target,
@@ -1042,7 +1042,7 @@ function validateEffectiveReferenceContracts(context: EffectiveMdReferenceContex
         return { checked, findings, coverageGaps };
       }
       if (call.argumentsUnavailable) {
-        gap(EFFECTIVE_MD_ARGUMENT_CHECK, document.file, `Authored ${call.role} reference ${call.id} has unavailable supplied arguments. ${call.argumentsUnavailable}`);
+        gap(EFFECTIVE_MD_ARGUMENT_CHECK, document.file, `${describeAuthoredMdReference(call)} has unavailable supplied arguments. ${call.argumentsUnavailable}`);
       }
       if (call.role === 'reset_cue' || call.role === 'cancel_cue') continue; // Name resolution is their existing contract.
       const primary = mdReferencePoint(call);
@@ -1051,7 +1051,7 @@ function validateEffectiveReferenceContracts(context: EffectiveMdReferenceContex
       if (signal && classification.kind === 'keyword') continue;
       const resolved = resolveMdLibraryReference(context.index, document.name, call.ref, { cueReference: signal });
       if (!resolved || (resolved.declaration && resolved.declaration.name !== resolved.targetName) || (resolved.declared && !resolved.declaration)) {
-        gap(EFFECTIVE_MD_REFERENCE_CHECK, document.file, `Authored ${call.role} reference ${call.id} has an external, unsupported, case-mismatched or ambiguous final target.`);
+        gap(EFFECTIVE_MD_REFERENCE_CHECK, document.file, `${describeAuthoredMdReference(call)} has an external, unsupported, case-mismatched or ambiguous final target.`);
         continue;
       }
       if (call.role === 'cue') {
@@ -1077,26 +1077,26 @@ function validateEffectiveReferenceContracts(context: EffectiveMdReferenceContex
         continue;
       }
       if (!library) {
-        gap(EFFECTIVE_MD_REFERENCE_CHECK, document.file, `Authored ${call.role} reference ${call.id} has no exact final library contract.`);
+        gap(EFFECTIVE_MD_REFERENCE_CHECK, document.file, `${describeAuthoredMdReference(call)} has no exact final library contract.`);
         continue;
       }
       if (call.role === 'include_actions') {
         // The existing effective include-purpose pass owns run-library errors and
         // inherited provider changes, using this same final declaration index.
         if (library.purpose !== null && library.purpose !== 'include_actions' && library.purpose !== 'run_actions') {
-          gap(EFFECTIVE_MD_REFERENCE_CHECK, document.file, `Authored include_actions reference ${call.id} has an unsupported library-purpose contract.`);
+          gap(EFFECTIVE_MD_REFERENCE_CHECK, document.file, `${describeAuthoredMdReference(call)} has an unsupported library-purpose contract.`);
         }
         continue;
       }
       if ((call.role === 'run_actions' && library.purpose !== 'run_actions')
         || (call.role === 'cue' && library.purpose !== null && library.purpose !== 'cue_ref')) {
-        gap(EFFECTIVE_MD_REFERENCE_CHECK, document.file, `Authored ${call.role} reference ${call.id} has an unsupported library-purpose contract.`);
+        gap(EFFECTIVE_MD_REFERENCE_CHECK, document.file, `${describeAuthoredMdReference(call)} has an unsupported library-purpose contract.`);
         continue;
       }
       const signature = library.source.signature;
       if (call.argumentsUnavailable) continue;
       if (!signature || signature.status !== 'known') {
-        gap(EFFECTIVE_MD_ARGUMENT_CHECK, document.file, `Authored ${call.role} reference ${call.id} has an unavailable parameter signature. ${signature?.status === 'unavailable' ? signature.reason : ''}`);
+        gap(EFFECTIVE_MD_ARGUMENT_CHECK, document.file, `${describeAuthoredMdReference(call)} has an unavailable parameter signature. ${signature?.status === 'unavailable' ? signature.reason : ''}`);
         continue;
       }
       const provider = resolved.script.source.file;
@@ -1112,7 +1112,7 @@ function validateEffectiveReferenceContracts(context: EffectiveMdReferenceContex
           return { checked, findings, coverageGaps };
         }
         if (!usable(finding.point)) {
-          gap(EFFECTIVE_MD_ARGUMENT_CHECK, document.file, `Authored argument contract ${call.id}:${index} has no reliable original argument/call position.`);
+          gap(EFFECTIVE_MD_ARGUMENT_CHECK, document.file, `${describeAuthoredMdReference(call)} has an argument diagnostic without a reliable original position. ${finding.detail}`);
           continue;
         }
         const target = related(provider, finding.target);

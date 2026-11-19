@@ -86,6 +86,14 @@ function usable(point: SourcePoint | undefined): point is SourcePoint & { line: 
   return !!point && !point.reason && Number.isInteger(point.line) && Number.isInteger(point.column)
     && (point.line ?? 0) > 0 && (point.column ?? 0) > 0;
 }
+
+export function describeAuthoredMdReference(call: MdReferenceFact<SourcePoint>): string {
+  const point = mdReferencePoint(call);
+  const ref = call.ref.trim();
+  const label = JSON.stringify(ref.length > 160 ? `${ref.slice(0, 160)}…` : ref);
+  const location = usable(point) ? ` at line ${point.line}, column ${point.column}` : '';
+  return `Authored ${call.role} reference ${label}${location}`;
+}
 function elements(root: XmlElement): XmlElement[] | null {
   const out: XmlElement[] = [];
   const pending = [root];
@@ -153,7 +161,7 @@ export function buildEffectiveMdReferenceContext(inputs: readonly MdEffectiveLib
     referencesByFile.set(input.file, input.references);
     for (const call of input.references) if (!usable(mdReferencePoint(call))) {
       gaps.push({ check: EFFECTIVE_MD_REFERENCE_CHECK, filePath: input.file,
-        reason: `Authored ${call.role} reference ${call.id} has no reliable original cause position.` });
+        reason: `${describeAuthoredMdReference(call)} has no reliable original cause position.` });
     }
   }
   const index = buildMdLibraryIndex(documents.map(document => ({ name: document.name,

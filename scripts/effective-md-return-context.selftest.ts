@@ -673,8 +673,22 @@ function runEffectiveReferenceChecks() {
     const attributes = new Map(trace.attributes); attributes.delete(target);
     const facts = diffMdLibraryPurposeFacts('md/probe.xml', { ...trace, elements, attributes });
     const context = buildEffectiveMdReferenceContext([facts]);
-    assert.ok(context.gaps.some(gap => gap.check === 'md.reference_context' && /position/.test(gap.reason)));
+    assert.ok(context.gaps.some(gap => gap.check === 'md.reference_context'
+      && gap.filePath === 'md/probe.xml'
+      && gap.reason === 'Authored run_actions reference "Run" has no reliable original cause position.'));
   });
+  const external = '<run_actions ref="md.ProbeVanilla.Transfer"/>\n  <run_actions ref="md.ProbeVanilla.Missing"/>';
+  const externalCaller = call('\n' + '<debug_text text="\'fixture\'"/>'.repeat(697) + '\n' + external + '\n');
+  validate('effective external reference gaps name each authored occurrence and its actual source position',
+    provider(), externalCaller, 0, actual => {
+      const gaps = referenceGaps(actual).filter(gap => gap.check === 'md.reference_context');
+      assert.equal(gaps.length, 2);
+      for (const [target, occurrence] of ['md.ProbeVanilla.Transfer', 'md.ProbeVanilla.Missing'].map((ref, index) => [ref, index] as const)) {
+        const { line, column } = authoredPosition(externalCaller, '<run_actions', occurrence);
+        assert.ok(gaps.some(gap => gap.filePath === 'md/probe.xml'
+          && gap.reason === `Authored run_actions reference "${target}" at line ${line}, column ${column} has an external, unsupported, case-mismatched or ambiguous final target.`));
+      }
+    });
   for (const result of ['', ' result="$Value"']) {
     validate(`effective reference authored caller ${result ? 'captures' : 'discards'} inherited library without authored-definition inflation`, provider(), call(`<run_actions ref="Run"${result}/>`), 0, actual => {
       accepted(actual);
