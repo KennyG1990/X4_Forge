@@ -37,6 +37,7 @@ import {
   MAX_MD_DEFINITION_SOURCE, readMdDefinitionDocument, resolveMdDefinition, resolveMdReferences,
   type MdDefinitionDocument,
 } from "./langNav";
+import { registerMdRenameCommand } from "./mdRenameHost";
 import { detectIdeCapabilities, formatIdeCapabilityReport } from "./capabilities";
 import { PanelBackendBinding, SharedBackendEnsure } from "./panelBinding";
 import { checkOwnedBackendLiveness, hasForgeSchemaIdentity } from "./backendLiveness";
@@ -1659,6 +1660,7 @@ export function activate(context: vscode.ExtensionContext): void {
     );
     registerLangProviders(context);
     registerNavProviders(context);
+    registerMdRenameCommand(context, modRootFor, LIVE_FILE_LIMIT, () => beginNativeOperation("native.provider.write"));
     registerTwoWayEditing(context);
 
     // Opt-in convenience (x4forge.autoOpen): open the studio once the workspace loads.

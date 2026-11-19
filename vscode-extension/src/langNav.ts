@@ -5,25 +5,28 @@
  */
 
 import {
-  buildMdLibraryIndex, mdReferenceRole, parseMdScriptRoot, resolveMdLibraryReference,
+  buildMdLibraryIndex, MD_CUE_KEYWORDS, mdReferenceRole, parseMdScriptRoot, resolveMdLibraryReference,
   type MdLibraryDeclaration, type MdLibraryIndex, type MdLibraryScript,
 } from "../../shared/mdDeclarationResolution";
 import { createXmlNodePositionLocator } from "../../shared/xmlSourcePosition";
 import { MAX_PROJECT_XML_DEPTH } from "../../shared/xmlMarkup";
 
 interface DefinitionLocation { file: string; line: number; column: number; }
-interface DefinitionSource { location?: DefinitionLocation; libraryScope?: number; }
+interface NameSpan { start: number; end: number; }
+interface DefinitionSource { location?: DefinitionLocation; libraryScope?: number; span?: NameSpan; }
 interface LiteralReference {
   value: string;
   script?: string;
   library: boolean;
   libraryScope?: number;
   location: DefinitionLocation;
+  span?: NameSpan;
 }
 export type MdDefinitionDocument = MdLibraryScript<DefinitionSource, string> & {
   reference: LiteralReference | undefined;
   declaration: MdLibraryDeclaration<DefinitionSource> | undefined;
   references: readonly LiteralReference[];
+  renameGap?: string;
 };
 
 const IDENTIFIER = /^[A-Za-z_]\w*$/;
@@ -46,9 +49,34 @@ const CUE_ELEMENTS = new Set([
 ]);
 export const MAX_MD_DEFINITION_SOURCE = 8 * 1024 * 1024;
 
+/** Prove the raw terminal identifier before changing an XML attribute. */
+function mdNameSpan(text: string, open: number, close: number, value: string): NameSpan | undefined {
+  if (close <= open) return undefined;
+  let decoded = "";
+  let start: number | undefined;
+  let end = open + 1;
+  const raw = text.slice(open + 1, close);
+  for (const match of raw.matchAll(/&#(?:\d+|x[\da-fA-F]+);|[\s\S]/g)) {
+    const atom = match[0];
+    const offset = open + 1 + match.index;
+    const character = atom.startsWith("&#x") ? Number.parseInt(atom.slice(3, -1), 16)
+      : atom.startsWith("&#") ? Number(atom.slice(2, -1)) : atom.charCodeAt(0);
+    if (character > 127) return undefined;
+    const token = String.fromCharCode(character);
+    decoded += token;
+    if (token === ".") start = undefined;
+    else if (/[A-Za-z0-9_]/.test(token)) {
+      start ??= offset;
+      end = offset + atom.length;
+    } else if (!/[ \t\r\n]/.test(token)) return undefined;
+  }
+  return start !== undefined && decoded.trim() === value ? { start, end } : undefined;
+}
+
 /** Read literal cue references and declaration positions from the same authored bytes. */
 export function readMdDefinitionDocument(
   file: string, text: string, cursor?: number, collectReferences = false,
+  suspectValue?: (value: string) => boolean,
 ): MdDefinitionDocument | undefined {
   if (text.length > MAX_MD_DEFINITION_SOURCE) return undefined;
   const root = parseMdScriptRoot(text);
@@ -60,36 +88,45 @@ export function readMdDefinitionDocument(
   const references: LiteralReference[] = [];
   let reference: LiteralReference | undefined;
   let declaration: MdLibraryDeclaration<DefinitionSource> | undefined;
+  let renameGap: string | undefined;
   const location = ({ line, column }: { line: number; column: number }) => ({ file, line: line - 1, column: column - 1 });
-  const pending = [{ element: root, depth: 0, libraryScope: undefined as number | undefined }];
+  const pending = [{ element: root, depth: 0, libraryScope: undefined as number | undefined, opaque: false }];
   let seen = 0;
   while (pending.length) {
-    const { element, depth, libraryScope: inheritedScope } = pending.pop()!;
+    const { element, depth, libraryScope: inheritedScope, opaque: opaqueParent } = pending.pop()!;
     if (++seen > 50_000 || depth > MAX_PROJECT_XML_DEPTH) return undefined;
-    if (element.namespaceURI || element.getAttribute("xmlns")) continue;
+    const opaque = opaqueParent || !!element.namespaceURI || !!element.getAttribute("xmlns");
+    if (opaque && !suspectValue) continue;
     const tag = element.tagName;
     const kind = tag === "cue" || tag === "library" ? tag : undefined;
     const libraryScope = kind === "library" ? seen : inheritedScope;
     const container = element.parentElement;
     const owner = container?.parentElement;
-    if (kind && container?.tagName === "cues" && (owner === root || owner?.tagName === "cue" || owner?.tagName === "library")) {
+    let declarationName;
+    let modeledReference;
+    if (!opaque && kind && container?.tagName === "cues" && (owner === root || owner?.tagName === "cue" || owner?.tagName === "library")) {
       const attr = element.getAttributeNode("name");
       const point = attr && locator.point(attr);
       if (attr && IDENTIFIER.test(attr.value)) {
+        declarationName = attr;
+        const start = point ? locator.offset(attr) : undefined;
+        const close = start === undefined ? -1 : text.indexOf(text[start], start + 1);
+        const span = suspectValue && start !== undefined ? mdNameSpan(text, start, close, attr.value) : undefined;
         const entry: MdLibraryDeclaration<DefinitionSource> = { name: attr.value, kind, purpose: element.getAttribute("purpose"),
-          source: { libraryScope, location: point ? location(point) : undefined } };
+          source: { libraryScope, location: point ? location(point) : undefined, span } };
         declarations.push(entry);
-        if (collectReferences && point && cursor !== undefined) {
-          const start = locator.offset(attr)!;
-          if (cursor > start && cursor < text.indexOf(text[start], start + 1)) declaration = entry;
-        }
+        if (collectReferences && cursor !== undefined && start !== undefined && cursor > start && cursor < close) declaration = entry;
       }
+      if (suspectValue && !declarationName) renameGap ??= `A <${tag}> declaration has an unsupported name in ${file}.`;
     }
-    if (collectReferences || (cursor !== undefined && !reference)) {
+    if (!opaque && (collectReferences || (cursor !== undefined && !reference))) {
       const role = mdReferenceRole(tag);
       const library = role === "cue" || role === "include_actions" || role === "run_actions";
       const attr = (role || CUE_ELEMENTS.has(tag)) && element.getAttributeNode(library ? "ref" : "cue");
       const start = attr ? locator.offset(attr) : undefined;
+      if (suspectValue && attr && !LITERAL_REFERENCE.test(attr.value.trim())) {
+        renameGap ??= `The ${tag}/@${attr.name} reference in ${file} uses an expression Forge cannot rename safely.`;
+      }
       if (attr && start !== undefined && locator.point(attr)) {
         const close = text.indexOf(text[start], start + 1);
         const value = attr.value.trim();
@@ -102,16 +139,33 @@ export function readMdDefinitionDocument(
             // A script qualifier can spell a dot as an XML numeric character entity.
             for (const separator of raw.matchAll(/\.|&#0*46;|&#x0*2e;/gi)) nameAt = separator.index + separator[0].length;
           }
-          const entry = { value, script: literal[1], library, libraryScope, location: location(locator.locateRaw(start + 1 + nameAt)) };
+          const span = suspectValue ? mdNameSpan(text, start, close, value) : undefined;
+          const entry = { value, script: literal[1], library, libraryScope, location: location(locator.locateRaw(start + 1 + nameAt)), span };
+          if (span) modeledReference = attr;
           if (selected) reference = entry;
           if (collectReferences) references.push(entry);
         }
       }
     }
-    if (tag === "cue" && element.hasAttribute("ref")) continue;
-    for (const child of Array.from(element.children)) pending.push({ element: child, depth: depth + 1, libraryScope });
+    if (suspectValue && !renameGap) {
+      for (const attr of Array.from(element.attributes)) {
+        if (attr === declarationName || attr === modeledReference || (element === root && attr.name === "name")) continue;
+        // The MD schema uses its prose-only comment type here.
+        if (!opaque && attr.name === "comment") continue;
+        const value = attr.value.trim();
+        if ((!opaque && (attr.name === "exact" || (tag === "debug_text" && attr.name === "text")))
+          && /^'(?:\\.|[^'\\])*'$/.test(value)) continue;
+        if (suspectValue(value)) {
+          renameGap = `An unsupported use in ${tag}/@${attr.name} could refer to this name in ${file}.`;
+          break;
+        }
+      }
+    }
+    const instance = tag === "cue" && element.hasAttribute("ref");
+    if (instance && !suspectValue) continue;
+    for (const child of Array.from(element.children)) pending.push({ element: child, depth: depth + 1, libraryScope, opaque: opaque || instance });
   }
-  return { name, source: file, declarations, reference, declaration, references };
+  return { name, source: file, declarations, reference, declaration, references, renameGap };
 }
 
 function resolveReference(
@@ -136,11 +190,7 @@ export function resolveMdReferences(
 ): DefinitionLocation[] {
   const documents = [origin, ...siblings];
   const index = buildMdLibraryIndex(documents);
-  const caller = index.get(origin.name.toLowerCase());
-  if (!caller || caller.source !== origin.source) return [];
-  const selected = origin.declaration;
-  const target = origin.reference ? resolveReference(index, origin, origin.reference)
-    : selected && caller.declarations.get(selected.name.toLowerCase()) === selected ? selected : undefined;
+  const target = selectedMdDeclaration(index, origin);
   if (!target?.source.location) return [];
   const locations = includeDeclaration ? [target.source.location] : [];
   for (const document of documents) {
@@ -150,6 +200,130 @@ export function resolveMdReferences(
     }
   }
   return locations;
+}
+
+function selectedMdDeclaration(index: MdLibraryIndex<DefinitionSource, string>, origin: MdDefinitionDocument) {
+  const caller = index.get(origin.name.toLowerCase());
+  if (!caller || caller.source !== origin.source) return undefined;
+  const selected = origin.declaration;
+  return origin.reference ? resolveReference(index, origin, origin.reference)
+    : selected && caller.declarations.get(selected.name.toLowerCase()) === selected ? selected : undefined;
+}
+
+export interface MdRenameSource { file: string; text: string; }
+export interface MdRenameEdit extends NameSpan { file: string; before: string; after: string; }
+export type MdRenamePlan = { reason: string } | {
+  script: string; kind: "cue" | "library"; oldName: string; newName: string; edits: MdRenameEdit[];
+};
+
+/** Compare identities by structural ordinal, which is stable across identifier edits. */
+function mdRenameInventory(documents: readonly MdDefinitionDocument[]): { reason: string } | {
+  index: MdLibraryIndex<DefinitionSource, string>;
+  identities: Map<MdLibraryDeclaration<DefinitionSource>, string>;
+  uses: { document: MdDefinitionDocument; reference: LiteralReference; target?: MdLibraryDeclaration<DefinitionSource> }[];
+} {
+  const index = buildMdLibraryIndex(documents);
+  const identities = new Map<MdLibraryDeclaration<DefinitionSource>, string>();
+  for (const [fileOrdinal, document] of documents.entries()) {
+    const script = index.get(document.name.toLowerCase());
+    if (!script) return { reason: `Mission Director script ${document.name} is declared more than once.` };
+    for (const [ordinal, declaration] of document.declarations.entries()) {
+      if (script.declarations.get(declaration.name.toLowerCase()) !== declaration) {
+        return { reason: `Mission Director name ${document.name}.${declaration.name} is ambiguous.` };
+      }
+      if (!declaration.source.span) return { reason: `The name in ${document.source} has no verified source range.` };
+      identities.set(declaration, `${fileOrdinal}:${ordinal}`);
+    }
+  }
+  const uses = documents.flatMap(document => document.references.map(reference => ({ document, reference,
+    target: resolveReference(index, document, reference),
+  })));
+  return { index, identities, uses };
+}
+
+/** Build and verify a read-only plan for an already captured authored MD inventory. */
+export function planMdRename(
+  sources: readonly MdRenameSource[], file: string, cursor: number, newName: string,
+): MdRenamePlan {
+  if (!IDENTIFIER.test(newName) || MD_CUE_KEYWORDS.has(newName.toLowerCase())) {
+    return { reason: "Enter an unreserved Mission Director identifier using letters, digits or underscores." };
+  }
+  const selected = sources.find(source => source.file === file);
+  if (!selected) return { reason: "The selected file is outside the reviewed Mission Director inventory." };
+  const selection = readMdDefinitionDocument(file, selected.text, cursor, true);
+  if (!selection) return { reason: `Forge could not fully inspect ${file}. Check for an XML patch, malformed XML or an oversized script.` };
+  const oldName = selection.reference?.value.split(".").pop() ?? selection.declaration?.name;
+  if (!oldName || MD_CUE_KEYWORDS.has(oldName.toLowerCase())) {
+    return { reason: "Place the cursor on an authored cue or library name or one of its supported literal references." };
+  }
+  if (oldName === newName) return { reason: "The new name is already in use by this declaration." };
+
+  const suspect = new RegExp(`(?<![\\w$])(?:${oldName}|${newName})(?!\\w)`, "i");
+  const originals: MdDefinitionDocument[] = [];
+  const sourceByFile = new Map<string, string>();
+  for (const source of sources) {
+    const document = readMdDefinitionDocument(source.file, source.text, source.file === file ? cursor : undefined, true,
+      value => suspect.test(value));
+    if (sourceByFile.has(source.file) || !document) {
+      return { reason: `Forge could not fully inspect ${source.file}. Check for an XML patch, malformed XML or an oversized script.` };
+    }
+    if (document.renameGap) return { reason: document.renameGap };
+    originals.push(document);
+    sourceByFile.set(source.file, source.text);
+  }
+  const before = mdRenameInventory(originals);
+  if ("reason" in before) return { reason: before.reason };
+  const origin = originals.find(document => document.source === file)!;
+  const selectedSpan = origin.reference?.span ?? origin.declaration?.source.span;
+  if (!selectedSpan || cursor < selectedSpan.start || cursor > selectedSpan.end) {
+    return { reason: "Place the cursor on the cue or library name. Rename preserves the script qualifier." };
+  }
+  const target = selectedMdDeclaration(before.index, origin);
+  if (!target?.source.location || !target.source.span) return { reason: "The selected name has no unique authored declaration." };
+  const targetFile = target.source.location.file;
+  const script = originals.find(document => document.source === targetFile)!.name;
+  const collision = before.index.get(script.toLowerCase())!.declarations.get(newName.toLowerCase());
+  if (collision && collision !== target) return { reason: `The script ${script} already declares ${newName}.` };
+
+  const editsByFile = new Map<string, MdRenameEdit[]>();
+  const edit = (targetPath: string, span: NameSpan) => {
+    const fileEdits = editsByFile.get(targetPath) ?? [];
+    fileEdits.push({ ...span, file: targetPath, before: sourceByFile.get(targetPath)!.slice(span.start, span.end), after: newName });
+    editsByFile.set(targetPath, fileEdits);
+  };
+  edit(targetFile, target.source.span);
+  for (const use of before.uses) {
+    if (!use.reference.span) return { reason: `A reference in ${use.document.source} has no verified source range.` };
+    if (use.target === target) edit(use.document.source, use.reference.span);
+  }
+
+  const changed: MdDefinitionDocument[] = [];
+  for (const original of originals) {
+    const fileEdits = editsByFile.get(original.source);
+    if (!fileEdits) { changed.push(original); continue; }
+    let text = sourceByFile.get(original.source)!;
+    let lastStart = text.length;
+    for (const replacement of fileEdits.sort((a, b) => b.start - a.start)) {
+      if (replacement.end > lastStart) return { reason: `Overlapping name ranges in ${original.source}.` };
+      text = text.slice(0, replacement.start) + replacement.after + text.slice(replacement.end);
+      lastStart = replacement.start;
+    }
+    const edited = readMdDefinitionDocument(original.source, text, undefined, true, value => suspect.test(value));
+    if (!edited || edited.renameGap || edited.declarations.length !== original.declarations.length
+      || edited.references.length !== original.references.length) {
+      return { reason: `The proposed edits change the script structure in ${original.source}.` };
+    }
+    changed.push(edited);
+  }
+  const after = mdRenameInventory(changed);
+  if ("reason" in after) return { reason: after.reason };
+  for (const [ordinal, use] of before.uses.entries()) {
+    const next = after.uses[ordinal];
+    if ((use.target && before.identities.get(use.target)) !== (next.target && after.identities.get(next.target))) {
+      return { reason: `The proposed rename would change the binding of ${use.reference.value} in ${use.document.source}.` };
+    }
+  }
+  return { script, kind: target.kind, oldName, newName, edits: [...editsByFile.values()].flat() };
 }
 
 /* ------------------------------------------------------------------ *
@@ -254,6 +428,60 @@ export function runLangNavSelftest() {
   ok("schema_cue_attributes_include_actions_and_events", actual.length === 2);
   ok("references_skip_encoded_leading_space",
     actual.some(result => result.column === useLine.indexOf("Shared")));
+
+  const renameFile = "md/one.xml";
+  const renameSource = "\uFEFF" + [
+    '<mdscript name="One"><cues><cue name="Shared"><actions>',
+    '<signal_cue cue="Shared" comment="Tell Shared to start"/><set_value name="$hint" exact="\'Shared\'"/>',
+    '</actions></cue><library name="Templ&#97;te"/></cues></mdscript>',
+  ].join("\r\n");
+  const remoteFile = "md/two.xml";
+  const remoteSource = [
+    '<mdscript name="Two"><cues><cue name="Shared"><actions>',
+    '<signal_cue cue="Shared"/><signal_cue cue="md.One.Sh&#97;red"/>',
+    '</actions></cue><!-- Shared -->',
+    "<cue name='Instance' ref='&#32;md&#46;One&#x2e;Templ&#97;te&#32;'/></cues></mdscript>",
+  ].join("\r\n");
+  const renameInputs = [{ file: renameFile, text: renameSource }, { file: remoteFile, text: remoteSource }];
+  const plan = (newName: string, inputs = renameInputs, source = renameFile, word = 'name="Shared"') =>
+    planMdRename(inputs, source, inputs.find(input => input.file === source)!.text.indexOf(word) + word.length - 2, newName);
+  const apply = (result: MdRenamePlan, file: string, input: string) => {
+    if ("reason" in result) return undefined;
+    for (const edit of result.edits.filter(edit => edit.file === file).sort((a, b) => b.start - a.start)) {
+      if (input.slice(edit.start, edit.end) !== edit.before) return undefined;
+      input = input.slice(0, edit.start) + edit.after + input.slice(edit.end);
+    }
+    return input;
+  };
+  const cuePlan = plan("Renamed");
+  ok("rename_cue_exact_spans_two_scripts", "edits" in cuePlan && cuePlan.edits.length === 3
+    && apply(cuePlan, renameFile, renameSource) === renameSource.replace('name="Shared"', 'name="Renamed"').replace('cue="Shared"', 'cue="Renamed"')
+    && apply(cuePlan, remoteFile, remoteSource) === remoteSource.replace('Sh&#97;red', 'Renamed'),
+    "reason" in cuePlan ? cuePlan.reason : undefined);
+  const libraryPlan = plan("NewTemplate", renameInputs, remoteFile, "Templ&#97;te");
+  ok("rename_library_from_encoded_reference_preserves_instance_and_qualifiers", "edits" in libraryPlan && libraryPlan.edits.length === 2
+    && apply(libraryPlan, renameFile, renameSource) === renameSource.replace('Templ&#97;te', 'NewTemplate')
+    && apply(libraryPlan, remoteFile, remoteSource) === remoteSource.replace('Templ&#97;te', 'NewTemplate'),
+    "reason" in libraryPlan ? libraryPlan.reason : undefined);
+  const withAction = (action: string) => renameInputs.map(source => source.file === remoteFile
+    ? { ...source, text: source.text.replace('<actions>', `<actions>${action}`) } : source);
+  const capture = plan("Future", withAction('<signal_cue cue="md.One.Future"/>'));
+  ok("rename_rejects_capture_of_previously_unresolved_reference", "reason" in capture && capture.reason.includes("binding"));
+  const expression = plan("Renamed", withAction("<set_value name='$a' exact='md.One.Shared.$Value'/>"));
+  ok("rename_refuses_unmodeled_property_use_in_single_quoted_xml", "reason" in expression && expression.reason.includes("unsupported use"));
+  const dynamic = plan("Renamed", withAction('<signal_cue cue="$which"/>'));
+  ok("rename_refuses_opaque_cue_operand", "reason" in dynamic && dynamic.reason.includes("cannot rename safely"));
+  const collision = plan("Template");
+  ok("rename_refuses_casefolded_collisions", "reason" in collision && collision.reason.includes("already declares"));
+  ok("rename_refuses_structural_keywords", "reason" in plan("THIS"));
+  const malformed = plan("Renamed", [...renameInputs, { file: "md/bad.xml", text: "<diff>" }]);
+  ok("rename_refuses_uninspected_script_or_patch", "reason" in malformed && malformed.reason.includes("bad.xml"));
+  const duplicatePlan = plan("Renamed", [...renameInputs, { file: "md/duplicate.xml", text: renameSource }]);
+  ok("rename_refuses_duplicate_script_identity", "reason" in duplicatePlan && duplicatePlan.reason.includes("more than once"));
+  const caseChange = plan("shared");
+  ok("rename_accepts_unambiguous_case_only_change", "edits" in caseChange && caseChange.edits.length === 3);
+  const qualifier = planMdRename(renameInputs, remoteFile, remoteSource.indexOf("md.One.") + 4, "Renamed");
+  ok("rename_requires_caret_on_terminal_name", "reason" in qualifier && qualifier.reason.includes("script qualifier"));
 
   const passed = checks.filter(c => c.pass).length;
   return { allPassed: passed === checks.length, passed, total: checks.length, checks };
