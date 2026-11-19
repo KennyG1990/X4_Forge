@@ -9,7 +9,7 @@ const baseXml = `<?xml version="1.0" encoding="utf-8"?>
 
 const editedXml = `<?xml version="1.0" encoding="utf-8"?>
 <wares>
-  <ware id="energycells" volume="2" />
+  <ware id="energycells" volume="2" tags="energy &amp; economy" />
 </wares>`;
 
 test('diff-to-patch three-pane merge synthesizes and adopts a patch block', async ({ page }) => {
@@ -48,8 +48,18 @@ test('diff-to-patch three-pane merge synthesizes and adopts a patch block', asyn
             sel: "/wares/ware[@id='energycells']/@volume",
             content: '2',
           },
+          {
+            type: 'add',
+            sel: "/wares/ware[@id='energycells']",
+            attrType: '@tags',
+            content: 'energy & economy',
+          },
         ],
-        diffXml: `<?xml version="1.0" encoding="utf-8"?>\n<diff>\n  <replace sel="/wares/ware[@id='energycells']/@volume">2</replace>\n</diff>`,
+        diffXml: `<?xml version="1.0" encoding="utf-8"?>
+<diff>
+  <replace sel="/wares/ware[@id='energycells']/@volume">2</replace>
+  <add sel="/wares/ware[@id='energycells']" type="@tags">energy &amp; economy</add>
+</diff>`,
         warnings: [],
       },
     });
@@ -78,7 +88,7 @@ test('diff-to-patch three-pane merge synthesizes and adopts a patch block', asyn
   await editedPane.fill(editedXml);
   await page.getByRole('button', { name: 'Synthesize Patch' }).click();
 
-  await expect(workbench.getByText('1 op(s)')).toBeVisible();
+  await expect(workbench.getByText('2 op(s)')).toBeVisible();
   await expect(workbench.getByText("/wares/ware[@id='energycells']/@volume")).toBeVisible();
   expect(synthPayload).toMatchObject({
     targetFile: 'libraries/wares.xml',
@@ -94,16 +104,27 @@ test('diff-to-patch three-pane merge synthesizes and adopts a patch block', asyn
     { timeout: 20_000 },
   );
   await page.getByRole('button', { name: 'Add to Workspace' }).click();
-  await expect(workbench.locator('span').filter({ hasText: 'Diff→Patch synthesized' })).toBeVisible();
   await expect(workbench.getByText("/wares/ware[@id='energycells']/@volume")).toBeVisible();
   const saveResponse = await saveResponsePromise;
   const saveBody = await saveResponse.json();
-  const hasPatch = (candidate: { xmlPatches?: Array<{ note?: string; sel?: string }> }) =>
-    candidate.xmlPatches?.some(patch => patch.note === 'Diff→Patch synthesized'
-      && patch.sel === "/wares/ware[@id='energycells']/@volume") === true;
-  expect(hasPatch(saveBody.workspace)).toBe(true);
+  const adoptedBlocks = [
+    expect.objectContaining({ note: 'Diff→Patch synthesized', sel: "/wares/ware[@id='energycells']/@volume" }),
+    expect.objectContaining({
+      note: 'Diff→Patch synthesized',
+      sel: "/wares/ware[@id='energycells']",
+      attrType: '@tags',
+      content: 'energy & economy',
+    }),
+  ];
+  expect(saveBody.workspace.xmlPatches).toEqual(adoptedBlocks);
   const saved = await readServerWorkspace();
-  expect(hasPatch(saved)).toBe(true);
+  expect(saved.xmlPatches).toEqual(adoptedBlocks);
+
+  const previewPane = page.locator('[data-xmlpatch-pane="preview"]');
+  await page.getByRole('button', { name: 'Patch XML', exact: true }).click();
+  await expect(previewPane.locator('pre')).toContainText('type="@tags">energy &amp; economy</add>');
+  await page.getByRole('button', { name: 'Applied Preview', exact: true }).first().click();
+  await expect(previewPane.getByText('<ware id="energycells" volume="2" tags="energy &amp; economy"/>', { exact: true })).toBeVisible();
 });
 
 test('diff-to-patch keeps base, candidate, and late responses isolated by target', async ({ page }) => {

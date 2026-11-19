@@ -442,6 +442,13 @@ export default function XMLPatchSystem({ workspace, setWorkspace, saveCheckpoint
             }
           } else if (b.action === 'add') {
             if (target.nodeType === Node.ELEMENT_NODE) {
+              if (b.attrType) {
+                if (!b.attrType.startsWith('@')) {
+                  throw new Error(`Unsupported add type "${b.attrType}". Expected @attribute.`);
+                }
+                (target as Element).setAttribute(b.attrType.slice(1), (b.content || '').trim());
+                continue;
+              }
               const fragDoc = new DOMParser().parseFromString(`<root>${b.content}</root>`, 'text/xml');
               const parserError = fragDoc.getElementsByTagName("parsererror");
               if (parserError.length > 0) {
@@ -480,7 +487,9 @@ export default function XMLPatchSystem({ workspace, setWorkspace, saveCheckpoint
                 });
               }
             } else {
-              throw new Error("Cannot add children to non-element target.");
+              throw new Error(b.attrType
+                ? "Cannot add an attribute to a non-element target."
+                : "Cannot add children to non-element target.");
             }
           }
         }
