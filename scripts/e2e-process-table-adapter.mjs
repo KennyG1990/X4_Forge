@@ -274,6 +274,22 @@ export async function captureWindowsProcessTableSnapshot(options = {}) {
   });
 }
 
+/** Select one Windows source before the launcher creates a protected child. */
+export async function selectWindowsSnapshotOptions(timeoutMs, { arch = process.arch, runCommand = execFile } = {}) {
+  const legacy = { timeoutMs };
+  if (arch !== 'x64') return legacy;
+  const helperPath = fileURLToPath(new URL('./e2e-windows-process-snapshot.mjs', import.meta.url));
+  const env = process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {};
+  // A leaf helper has no Playwright role and must not inherit Node preloads or lease tickets.
+  const native = {
+    timeoutMs,
+    execFileImpl: (_command, _args, options, callback) =>
+      runCommand(process.execPath, [helperPath], { ...options, env }, callback),
+  };
+  const probe = await captureWindowsProcessTableSnapshot(native);
+  return probe.complete ? native : legacy;
+}
+
 /**
  * Capture and parse the POSIX ps process table.
  *

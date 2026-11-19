@@ -21,6 +21,8 @@ import {
   classifyE2eReport,
   validateQuarantineManifest,
 } from './e2e-flake-policy.mjs';
+import { selectWindowsSnapshotOptions } from './e2e-process-table-adapter.mjs';
+import { runWindowsProcessSnapshotSelftest } from './e2e-windows-process-snapshot.mjs';
 import { inspectTerminalPlaywrightReport } from './e2e-terminal-contract.mjs';
 import {
   activateE2eProcessHandleLeaseRole,
@@ -1264,6 +1266,7 @@ export async function runE2e({
   readReceiptImpl = readReceiptText,
   finalizeRunState,
   inspectProcessLeases,
+  snapshotOptions = runnerSnapshotOptions(),
 } = {}) {
   const argErrors = validateRunnerArgs(args);
   let manifestValue = manifest;
@@ -1373,7 +1376,7 @@ export async function runE2e({
       lifecycleResult = await superviseImpl({
         child,
         rootPid: child.pid,
-        snapshotOptions: runnerSnapshotOptions(),
+        snapshotOptions,
         commandOptions: {},
         ...(leaseAdmission ? { onOwnershipReady: facts => { leaseAdmission.admitFromOwnership(child, facts); } } : {}),
         probeTerminalReport: () => {
@@ -1495,6 +1498,7 @@ export async function runE2e({
 function runPureSelftest() {
   const checks = [];
   const ok = (name, condition) => checks.push({ name, pass: !!condition });
+  ok('native_windows_table_layout_and_identity', runWindowsProcessSnapshotSelftest());
   let stateAllocations = 0;
   const allocateState = () => { stateAllocations += 1; return { controlled: true }; };
   ok('pure_selftest_never_allocates_normal_run_state', normalE2eRunState(['--selftest'], {}, allocateState) === null && stateAllocations === 0);
@@ -1825,8 +1829,10 @@ if (isMain) {
     const family = process.platform === 'win32' ? createE2eProcessHandleLeaseFamily({
       env: stateOwner.environment, cwd: ROOT, preloadPath: fileURLToPath(import.meta.url), runtimePath: process.execPath,
     }) : null;
+    const snapshotOptions = family ? await selectWindowsSnapshotOptions(E2E_WINDOWS_OWNERSHIP_SNAPSHOT_TIMEOUT_MS) : runnerSnapshotOptions();
+    if (family) console.log('[run-e2e] Windows ownership source: ' + (snapshotOptions.execFileImpl ? 'native' : 'CIM'));
     exitCode = await runE2e({
-      args, env: stateOwner.environment, finalizeRunState: () => stateOwner.retire(),
+      args, env: stateOwner.environment, snapshotOptions, finalizeRunState: () => stateOwner.retire(),
       ...(family ? { spawnImpl: createProtectedE2eSpawner(family), inspectProcessLeases: () => family.inspect() } : {}),
     });
   } catch (error) {
