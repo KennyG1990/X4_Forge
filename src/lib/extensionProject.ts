@@ -18,7 +18,7 @@
  */
 
 import { classifyCueRef, mdReferencePoint, parseSignalCueRefs, resolveMdLibraryReference, type MdReferenceFact } from './cueLineage';
-import { plainMdLibraryPurposeFacts, type EffectiveMdReferenceContext, type MdReferenceCoverageGap, type MdReferenceSourcePoint } from './mdEffectiveLibraryPurpose';
+import { describeAuthoredMdReference, plainMdLibraryPurposeFacts, type EffectiveMdReferenceContext, type MdReferenceCoverageGap, type MdReferenceSourcePoint } from './mdEffectiveLibraryPurpose';
 import { normPath, parseXmlLenient, walkElements } from './xmlLite';
 import { parseModManifest, type ModDependency } from './modDependencyGraph';
 
@@ -241,7 +241,17 @@ function definedCueNames(content: string): string[] {
  * (qualified ref to a script not in this project — never flagged). `unresolved` is the
  * actionable subset: in-project refs that resolve to no defined cue.
  */
-export function indexCueReferences(project: ExtensionProject, options: { effectiveContext?: EffectiveMdReferenceContext } = {}): CueReferenceIndex {
+function canonicalCueResolution(index: EffectiveMdReferenceContext['index'], ref: string): boolean | undefined {
+  if (!/^md\.[A-Za-z_][\w]*\.[A-Za-z_][\w]*$/.test(ref)) return;
+  const target = resolveMdLibraryReference(index, '', ref, { cueReference: true });
+  if (!target || (target.declared && target.declaration?.name !== target.targetName)) return;
+  return target.declared;
+}
+
+export function indexCueReferences(project: ExtensionProject, options: {
+  effectiveContext?: EffectiveMdReferenceContext;
+  canonicalIndex?: EffectiveMdReferenceContext['index'];
+} = {}): CueReferenceIndex {
   const mdFiles = (project?.files || []).filter(f => f.kind === 'md' && typeof f.content === 'string');
 
   const defined: CueDef[] = [];
@@ -310,7 +320,9 @@ export function indexCueReferences(project: ExtensionProject, options: { effecti
           scope = 'cross_file';
           resolved = (cuesByScript.get(c.script) || new Set()).has(c.cue);
         } else {
-          scope = 'external'; resolved = true; // script not in project → external, never flagged
+          const canonical = options.canonicalIndex && canonicalCueResolution(options.canonicalIndex, ref);
+          scope = canonical === undefined ? 'external' : 'cross_file';
+          resolved = canonical ?? true;
         }
       } else if (c.kind === 'local') {
         scope = 'local';
@@ -346,16 +358,20 @@ export function indexCueReferences(project: ExtensionProject, options: { effecti
         const script = classified.kind === 'local' ? context.callerByFile.get(file) || '' : classified.script;
         const entry = context.index.get(script.toLowerCase());
         scope = classified.kind === 'local' ? 'local' : entry === undefined ? 'external' : 'cross_file';
-        if (entry === null || !script) {
+        if (classified.kind === 'cross' && context.canonicalIndex?.has(script.toLowerCase())) {
+          const canonical = canonicalCueResolution(context.canonicalIndex, ref);
+          scope = canonical === undefined ? 'external' : 'cross_file';
+          resolved = canonical ?? true;
+        } else if (entry === null || !script) {
           const fallback = rawByReference.get(JSON.stringify([file, ref]));
           resolved = fallback?.resolved ?? false;
           coverageGaps.push({ check: 'md.reference_context', filePath: file,
-            reason: `Authored reference ${call.id} has an ambiguous or unavailable final script identity.` });
+            reason: `${describeAuthoredMdReference(call)} has an ambiguous or unavailable final script identity.` });
         } else if (entry !== undefined) {
           const target = resolveMdLibraryReference(context.index, context.callerByFile.get(file) || '', ref, { cueReference: true });
           resolved = !!target?.declaration && target.script.name === script && target.declaration.name === classified.cue;
           if (target?.declared && !target.declaration) coverageGaps.push({ check: 'md.reference_context', filePath: file,
-            reason: `Authored reference ${call.id} has an ambiguous final declaration.` });
+            reason: `${describeAuthoredMdReference(call)} has an ambiguous final declaration.` });
         }
       }
       const point = mdReferencePoint(call);

@@ -37,6 +37,7 @@ import {
   type ProjectFile,
 } from "../lib/extensionProject";
 import { validateProjectCrossFile } from "../lib/projectCrossFileValidation";
+import { withCanonicalMdReferences, type CanonicalMdValidationOptions } from './canonicalMdReferenceContext';
 import {
   buildEffectiveMdReferenceContext, canonicalMdLibraryBaseline, diffMdLibraryPurposeFacts, plainMdLibraryPurposeFacts, evaluateEffectiveMdLibraryPurpose,
   EFFECTIVE_INCLUDE_PURPOSE_CODE, EFFECTIVE_INCLUDE_PURPOSE_CHECK,
@@ -255,6 +256,117 @@ function referencesForProject(project: ExtensionProject, base?: ProjectValidatio
   return references;
 }
 
+function isProjectMdDiff(file: ProjectFile): boolean {
+  return typeof file.content === 'string' && (file.kind === 'md' || classifyPath(file.path) === 'md')
+    && sniffRootElement(file.content) === 'diff';
+}
+
+function mayHaveCanonicalMdReference(project: ExtensionProject): boolean {
+  // Numeric XML entities can encode the prefix. The decoded references decide whether to read the catalog.
+  return project.files.some(file => (file.kind === 'md' || classifyPath(file.path) === 'md')
+    && (file.content?.includes('md.') || file.content?.includes('&#')));
+}
+
+function validateCrossFileWithMdContext(project: ExtensionProject, opts: {
+  hasMdDiffs: boolean;
+  mdReferenceRoot?: string;
+  canonicalMd?: CanonicalMdValidationOptions;
+  readDiffFacts: (file: ProjectFile, relativePath: string) => MdEffectiveLibraryInput | undefined;
+  readPlainFacts?: (file: ProjectFile, relativePath: string) => MdEffectiveLibraryInput;
+}) {
+  const { hasMdDiffs, mdReferenceRoot } = opts;
+  const coverageGaps: ValidationCoverageGap[] = [];
+  let effectiveContext: EffectiveMdReferenceContext | undefined;
+  let canonicalOnlyContext: EffectiveMdReferenceContext | undefined;
+  let effectivePurpose: ReturnType<typeof evaluateEffectiveMdLibraryPurpose> | undefined;
+  if (hasMdDiffs || (opts.canonicalMd && mayHaveCanonicalMdReference(project))) {
+    const mdInputs: MdEffectiveLibraryInput[] = [];
+    for (const file of project.files) {
+      if (file.kind !== 'md' && classifyPath(file.path) !== 'md') continue;
+      const relativePath = file.path.replace(/\\/g, '/').replace(/^\.\//, '');
+      if (typeof file.content !== 'string') {
+        mdInputs.push({ file: relativePath, unavailable: 'Project MD source content is unavailable for include-target context.' });
+        continue;
+      }
+      if (sniffRootElement(file.content) === 'diff') {
+        mdInputs.push(opts.readDiffFacts(file, relativePath) ?? { file: relativePath,
+          unavailable: 'Effective MD composition or element provenance was unavailable; include-target purpose was not checked.' });
+        continue;
+      }
+      if (!hasMdDiffs) {
+        mdInputs.push(opts.readPlainFacts?.(file, relativePath)
+          ?? plainMdLibraryPurposeFacts(relativePath, file.content, { status: 'absent' }));
+        continue;
+      }
+      let baseline: MdLibraryBaseline;
+      try {
+        if (!mdReferenceRoot) throw new Error('Reference configuration unavailable');
+        const before = resolveEffectiveReferenceDocument(mdReferenceRoot, relativePath);
+        baseline = before.available && before.complete && before.content !== undefined
+          ? canonicalMdLibraryBaseline(before.content)
+          : !before.available && before.sources.length === 0 && before.incompleteFindings.length === 0
+            ? { status: 'absent' }
+            : { status: 'unavailable', reason: 'Canonical-before MD composition is incomplete.' };
+      } catch { baseline = { status: 'unavailable', reason: 'Canonical-before MD source could not be resolved.' }; }
+      mdInputs.push(plainMdLibraryPurposeFacts(relativePath, file.content, baseline));
+    }
+    const context = buildEffectiveMdReferenceContext(mdInputs);
+    const canonical = opts.canonicalMd && withCanonicalMdReferences(context,
+      mdInputs.map(file => file.file), mdReferenceRoot ?? '', opts.canonicalMd, !hasMdDiffs);
+    if (hasMdDiffs) {
+      effectiveContext = canonical ?? context;
+      coverageGaps.push(...effectiveContext.gaps);
+      effectivePurpose = evaluateEffectiveMdLibraryPurpose(mdInputs, effectiveContext);
+    } else if (canonical) {
+      canonicalOnlyContext = canonical;
+      coverageGaps.push(...canonical.gaps);
+      effectivePurpose = evaluateEffectiveMdLibraryPurpose(canonical.documents, canonical);
+    }
+    for (const gap of effectivePurpose?.gaps ?? []) coverageGaps.push({ check: EFFECTIVE_INCLUDE_PURPOSE_CHECK, ...gap });
+  }
+  // Resolve authored calls once against trusted final declarations. The index's
+  // public defined list stays authored for save-impact; canonical names are lookup-only.
+  const cueIndex = indexCueReferences(project, { effectiveContext, canonicalIndex: canonicalOnlyContext?.canonicalIndex });
+  const crossFile = validateProjectCrossFile(project, { cueIndex, effectiveContext, canonicalOnlyContext });
+  coverageGaps.push(...(cueIndex.coverageGaps ?? []), ...(crossFile.coverageGaps ?? []));
+  // The existing effective include pass additionally owns inherited calls affected
+  // by provider changes. Other contracts never import untouched canonical callers.
+  if (effectivePurpose && !effectivePurpose.incompleteInventory) {
+    if (hasMdDiffs) crossFile.findings = crossFile.findings.filter(finding => finding.code !== EFFECTIVE_INCLUDE_PURPOSE_CODE);
+    crossFile.findings.push(...effectivePurpose.findings);
+    crossFile.summary.findings = crossFile.findings.length;
+    crossFile.summary.errors = crossFile.findings.filter(finding => finding.severity === 'error').length;
+    crossFile.ok = crossFile.summary.errors === 0;
+  }
+  return { crossFile, cueIndex, coverageGaps };
+}
+
+/** Narrow project routes reuse the MD context without running the full schema or rules gates. */
+export function validateProjectCrossFileWithCorpus(project: ExtensionProject, canonicalMd: CanonicalMdValidationOptions) {
+  const hasMdDiffs = project.files.some(isProjectMdDiff);
+  if (!hasMdDiffs && !mayHaveCanonicalMdReference(project)) return validateProjectCrossFile(project);
+
+  let mdReferenceRoot: string | undefined;
+  try { mdReferenceRoot = resolveXsdConfig().x4ReferenceRoot; }
+  catch { /* Without a corpus, external targets and effective patches remain unverified. */ }
+  const { crossFile, coverageGaps } = validateCrossFileWithMdContext(project, {
+    hasMdDiffs, mdReferenceRoot, canonicalMd,
+    readDiffFacts(file, relativePath) {
+      if (!mdReferenceRoot || file.content === undefined || file.kind === 'aiscript') return;
+      try {
+        const effective = resolveEffectiveReferenceDocument(mdReferenceRoot, relativePath);
+        if (!effective.complete || effective.content === undefined) return;
+        const simulation = simulateXmlDiff(effective.content, file.content, { elementProvenance: true });
+        if (simulation.ok) return diffMdLibraryPurposeFacts(relativePath, simulation.elementProvenance);
+      } catch { /* A failed composition cannot supply declaration or call authority. */ }
+    },
+  });
+  if (!coverageGaps.length) return crossFile;
+  crossFile.coverageGaps = [...new Map(coverageGaps.map(gap =>
+    [JSON.stringify([gap.check, gap.filePath, gap.reason]), gap])).values()];
+  return crossFile;
+}
+
 /**
  * The full validation layering. Each layer degrades honestly when its data source
  * is unavailable (`available:false`) — it never claims a check it didn't run.
@@ -263,7 +375,7 @@ export function runProjectValidation(
   project: ExtensionProject,
   opts: { references?: ProjectValidationReferences; jobsVocabulary?: JobsVocabulary; waresVocabulary?: WaresVocabulary;
     /** Internal immutable resource override; never a caller-supplied HTTP field. Null means unavailable. */
-    scriptPropertyIndex?: ScriptPropertyIndex | null; incremental?: boolean } = {},
+    scriptPropertyIndex?: ScriptPropertyIndex | null; incremental?: boolean; canonicalMd?: CanonicalMdValidationOptions } = {},
 ): ProjectValidationResult {
   const fileKeys = new Map<ProjectFile, string>();
   const fileIdentity = (file: ProjectFile): string => {
@@ -441,8 +553,7 @@ export function runProjectValidation(
   const diffExpressionFindings: MdPitfallFinding[] = [];
   const diffReturnFindings: MdPitfallFinding[] = [];
   const returnContextInspected = new Set<string>();
-  const hasMdDiffs = project.files.some(file => typeof file.content === 'string'
-    && (file.kind === 'md' || classifyPath(file.path) === 'md') && sniffRootElement(file.content) === 'diff');
+  const hasMdDiffs = project.files.some(isProjectMdDiff);
   const effectiveMdFacts = new Map<string, MdEffectiveLibraryInput>();
   let mdReferenceRoot: string | undefined;
   try {
@@ -566,57 +677,22 @@ export function runProjectValidation(
     }
   }
 
-  let effectiveContext: EffectiveMdReferenceContext | undefined;
-  let effectivePurpose: ReturnType<typeof evaluateEffectiveMdLibraryPurpose> | undefined;
-  if (hasMdDiffs) {
-    const mdInputs: MdEffectiveLibraryInput[] = [];
-    for (const file of project.files) {
-      if (file.kind !== 'md' && classifyPath(file.path) !== 'md') continue;
-      const relativePath = file.path.replace(/\\/g, '/').replace(/^\.\//, '');
-      if (typeof file.content !== 'string') {
-        mdInputs.push({ file: relativePath, unavailable: 'Project MD source content is unavailable for include-target context.' });
-        continue;
+  const referencesAnalysis = validateCrossFileWithMdContext(project, {
+    hasMdDiffs, mdReferenceRoot, canonicalMd: opts.canonicalMd,
+    readDiffFacts(_file, relativePath) {
+      if (!returnContextInspected.has(relativePath)) {
+        coverageGaps.push({ check: EFFECTIVE_MD_RETURN_CHECK, filePath: relativePath,
+          reason: 'Effective MD composition or element provenance was unavailable; return ownership was not checked.' });
       }
-      if (sniffRootElement(file.content) === 'diff') {
-        if (!returnContextInspected.has(relativePath)) {
-          coverageGaps.push({ check: EFFECTIVE_MD_RETURN_CHECK, filePath: relativePath,
-            reason: 'Effective MD composition or element provenance was unavailable; return ownership was not checked.' });
-        }
-        mdInputs.push(effectiveMdFacts.get(relativePath) ?? { file: relativePath,
-          unavailable: 'Effective MD composition or element provenance was unavailable; include-target purpose was not checked.' });
-        continue;
-      }
-      let baseline: MdLibraryBaseline;
-      try {
-        if (!mdReferenceRoot) throw new Error('Reference configuration unavailable');
-        const before = resolveEffectiveReferenceDocument(mdReferenceRoot, relativePath);
-        baseline = before.available && before.complete && before.content !== undefined
-          ? canonicalMdLibraryBaseline(before.content)
-          : !before.available && before.sources.length === 0 && before.incompleteFindings.length === 0
-            ? { status: 'absent' }
-            : { status: 'unavailable', reason: 'Canonical-before MD composition is incomplete.' };
-      } catch { baseline = { status: 'unavailable', reason: 'Canonical-before MD source could not be resolved.' }; }
-      mdInputs.push(plainMdLibraryPurposeFacts(relativePath, file.content, baseline));
-    }
-    effectiveContext = buildEffectiveMdReferenceContext(mdInputs);
-    coverageGaps.push(...effectiveContext.gaps);
-    effectivePurpose = evaluateEffectiveMdLibraryPurpose(mdInputs, effectiveContext);
-    for (const gap of effectivePurpose.gaps) coverageGaps.push({ check: EFFECTIVE_INCLUDE_PURPOSE_CHECK, ...gap });
-  }
-  // Resolve authored calls once against trusted final declarations. The index's
-  // public defined list stays authored for save-impact; canonical names are lookup-only.
-  const cueIndex = indexCueReferences(project, { effectiveContext });
-  const crossFile = validateProjectCrossFile(project, { cueIndex, effectiveContext });
-  coverageGaps.push(...(cueIndex.coverageGaps ?? []), ...(crossFile.coverageGaps ?? []));
-  // The existing effective include pass additionally owns inherited calls affected
-  // by provider changes. Other contracts never import untouched canonical callers.
-  if (effectivePurpose && !effectivePurpose.incompleteInventory) {
-    crossFile.findings = crossFile.findings.filter(finding => finding.code !== EFFECTIVE_INCLUDE_PURPOSE_CODE);
-    crossFile.findings.push(...effectivePurpose.findings);
-    crossFile.summary.findings = crossFile.findings.length;
-    crossFile.summary.errors = crossFile.findings.filter(finding => finding.severity === 'error').length;
-    crossFile.ok = crossFile.summary.errors === 0;
-  }
+      return effectiveMdFacts.get(relativePath);
+    },
+    readPlainFacts(file, relativePath) {
+      return fact('canonical-md-authored-facts', file, null,
+        () => plainMdLibraryPurposeFacts(relativePath, file.content!, { status: 'absent' }));
+    },
+  });
+  const { cueIndex, crossFile } = referencesAnalysis;
+  coverageGaps.push(...referencesAnalysis.coverageGaps);
 
   // MD/AI files intentionally pass through the dedicated indexes and the general
   // registry router. Collapse identical diagnostics at this shared boundary so a

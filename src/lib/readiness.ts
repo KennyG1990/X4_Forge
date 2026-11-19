@@ -102,11 +102,17 @@ function diagnosticStage(
 ): ReadinessStage {
   const errors = countSeverity(diagnostics, 'error');
   const warnings = countSeverity(diagnostics, 'warning');
+  const coverageGaps = id === 'package' ? diagnostics.filter(item => item.coverageGap === true).length : 0;
   if (errors > 0) return {
     id, label: id === 'graph' ? 'Graph invalid' : 'Project validation failed',
     shortLabel: id === 'graph' ? 'Graph' : 'Validation', status: 'fail', owner,
     summary: `${errors} error${errors === 1 ? '' : 's'}`,
     evidence: `${errors} blocking error(s), ${warnings} warning(s) in current workspace evidence.`,
+  };
+  if (coverageGaps > 0) return {
+    id, label: 'Project checks incomplete', shortLabel: 'Validation', status: 'warning', owner,
+    summary: 'Coverage incomplete',
+    evidence: `${coverageGaps} validation ${coverageGaps === 1 ? 'check is' : 'checks are'} incomplete.${warnings ? ` ${warnings} warning(s) need review.` : ''}`,
   };
   if (warnings > 0) return {
     id, label, shortLabel: id === 'graph' ? 'Graph' : 'Validation', status: 'warning', owner,
@@ -213,6 +219,11 @@ export function runReadinessSelftest() {
   ok('package_offline_unavailable', stage({ diagnosticSource: 'local' }, 'package').status === 'unavailable');
   const invalidProject = stage({ packageDiagnostics: [diag('error')] }, 'package');
   ok('package_error_fails', invalidProject.status === 'fail' && invalidProject.label === 'Project validation failed');
+  const gap: PackageDiagnostic = { ...diag('info'), coverageGap: true };
+  const incompleteProject = stage({ packageDiagnostics: [gap] }, 'package');
+  ok('package_gap_is_nonblocking_and_incomplete', incompleteProject.status === 'warning' && incompleteProject.summary === 'Coverage incomplete');
+  ok('package_info_without_gap_stays_pass', stage({ packageDiagnostics: [diag('info')] }, 'package').status === 'pass');
+  ok('package_error_takes_precedence_over_gap', stage({ packageDiagnostics: [diag('error'), gap] }, 'package').status === 'fail');
   ok('no_deploy_pending', stage({ watcher: { phase: 'ready', lastDeploy: null, sinceDeploy: { hasDeploy: false, changedSinceDeploy: false, summary: 'none' }, verdict: { state: 'not_seen', detail: 'none', errorCount: 0 } } }, 'deployed').status === 'pending');
   ok('no_deploy_blocks_seen_even_if_log_has_markers', stage({ watcher: { phase: 'ready', lastDeploy: null, sinceDeploy: { hasDeploy: false, changedSinceDeploy: false, summary: 'none' }, verdict: { state: 'loaded_clean', detail: 'old marker', errorCount: 0 } } }, 'seen').status === 'pending');
   ok('staging_is_not_deployed', stage({ watcher: { ...readyWatcher, lastDeploy: { ...deploy, deployedPath: undefined, stagingPath: 'F:/stage' } } }, 'deployed').status === 'pending');

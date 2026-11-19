@@ -7,6 +7,7 @@ import { actionReceiptIdForOperation, transitionActionReceipt, type ActionReceip
 import type { ActionReceiptStore } from '../lib/actionReceiptStore';
 import type { DeploymentRecoveryRecord, DestructiveRecoveryStore } from '../lib/destructiveRecovery';
 import { readContentManifestIdentity } from '../lib/validationEvidence';
+import { readCanonicalMdCompiledWorkerIdentity, type CanonicalMdCompiledWorkerIdentity } from './canonicalMdProviderPreparation';
 import type { DeploymentSnapshot } from './deploymentSnapshot';
 import type { AcceptanceDecision, AcceptancePrincipal, AcceptanceSubject } from './findingAcceptance';
 import { processLiveness } from './sharedSourceCoordinator';
@@ -99,16 +100,16 @@ const inside = (root: string, file: string) => {
  * blessing a stale node_modules directory. This does not resolve conditional exports, support
  * custom loaders/PnP, or audit same-version package tampering.
  */
-export function deploymentImplementationHash(entry: string): string {
+export function deploymentImplementationHash(entry: string, compiledWorker?: CanonicalMdCompiledWorkerIdentity): string {
   try {
-    return implementationHash(entry);
+    return implementationHash(entry, compiledWorker);
   } catch (cause) {
     throw Object.assign(new Error(`Validator fingerprint unavailable: ${cause instanceof Error ? cause.message : String(cause)}`),
       { code: 'VALIDATOR_FINGERPRINT_UNAVAILABLE', cause });
   }
 }
 
-function implementationHash(entry: string): string {
+function implementationHash(entry: string, compiledWorker?: CanonicalMdCompiledWorkerIdentity): string {
   const entryPath = fs.realpathSync.native(path.resolve(entry));
   const source = /\.ts$/.test(entryPath);
   if (!source && path.basename(path.dirname(entryPath)) !== 'dist') throw new Error('Unsupported validator entry layout.');
@@ -193,6 +194,13 @@ function implementationHash(entry: string): string {
       }
     };
     visit(path.join(owner, 'src'));
+  } else {
+    const worker = compiledWorker ?? readCanonicalMdCompiledWorkerIdentity(entryPath);
+    if (path.relative(path.join(path.dirname(entryPath), 'canonical-md-worker.cjs'), worker.path)
+      || createHash('sha256').update(worker.source, 'utf8').digest('hex') !== worker.sha256) {
+      throw new Error('Compiled canonical MD worker identity does not match its captured source.');
+    }
+    hashes.set(worker.path, worker.sha256);
   }
   for (const file of files) hashes.set(file, createHash('sha256').update(fs.readFileSync(file)).digest('hex'));
   return trustHash([...hashes].sort(([a], [b]) => a.localeCompare(b)));

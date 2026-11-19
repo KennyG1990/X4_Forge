@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { buildSync } from 'esbuild';
 import { ActionReceiptStore } from '../src/lib/actionReceiptStore';
 import { buildValidationEvidence, type EvidenceDiagnostic } from '../src/lib/validationEvidence';
+import { readCanonicalMdCompiledWorkerIdentity } from '../src/server/canonicalMdProviderPreparation';
 import { deploymentImplementationHash } from '../src/server/deploymentTrust';
 import { acceptanceBinding, evaluateFindingAcceptances, projectFindingReview, recordFindingAcceptances,
   verifyFindingAcceptanceReceipts, revokeWarningReview, type AcceptanceSubject } from '../src/server/findingAcceptance';
@@ -29,8 +30,10 @@ const check = (name: string, fn: () => void) => { fn(); checks++; console.log(`P
 function validatorFixture(source = false) {
   const directory = fs.mkdtempSync(path.join(root, 'validator-'));
   const entry = path.join(directory, source ? 'server.ts' : 'dist/server.cjs');
+  const worker = path.join(directory, 'dist/canonical-md-worker.cjs');
   fs.mkdirSync(path.dirname(entry), { recursive: true });
   fs.writeFileSync(entry, '// unchanged validator entry\n');
+  if (!source) fs.writeFileSync(worker, '// original canonical MD worker\n');
   fs.mkdirSync(path.join(directory, 'src'));
   const names = ['@xmldom/xmldom', 'fast-xml-parser', 'luaparse', 'xpath', 'fixture-transitive'];
   const packages: Record<string, { version: string }> = {};
@@ -54,7 +57,7 @@ function validatorFixture(source = false) {
     fs.writeFileSync(file, JSON.stringify({ ...metadata, version }));
     if (updateLock) { packages[`node_modules/${name}`].version = version; fs.writeFileSync(lockPath, JSON.stringify({ lockfileVersion: 3, packages })); }
   };
-  return { directory, entry, lockPath, update };
+  return { directory, entry, lockPath, update, worker };
 }
 function withValidatorFixture(fn: (fixture: ReturnType<typeof validatorFixture>) => void, source = false) {
   const fixture = validatorFixture(source);
@@ -68,6 +71,38 @@ const unavailable = { code: 'VALIDATOR_FINGERPRINT_UNAVAILABLE' };
 check('packaged dependency hash is stable and does not execute package code', () => withValidatorFixture(f => {
   assert.equal(deploymentImplementationHash(f.entry), deploymentImplementationHash(f.entry));
 }));
+check('compiled worker changes invalidate warning review for new captures only', () => withValidatorFixture(f => {
+  const pinned = readCanonicalMdCompiledWorkerIdentity(f.entry);
+  assert.ok(Object.isFrozen(pinned));
+  assert.equal(pinned.source, fs.readFileSync(f.worker, 'utf8'));
+  const original = deploymentImplementationHash(f.entry, pinned);
+  const receipts = new ActionReceiptStore({ root: path.join(f.directory, 'receipts') });
+  const subject = (validatorHash: string): AcceptanceSubject => ({ ...make(), validatorHash,
+    warningReviews: { scopeHash: 'e'.repeat(64), history: receipts.listVerified(), invocationId: randomUUID() } });
+  const before = subject(original);
+  recordFindingAcceptances(receipts, before, approve(before), actor);
+  assert.equal(evaluateFindingAcceptances(subject(original), [], nextActor).counts.acceptedWarnings, 1);
+
+  fs.writeFileSync(f.worker, '// replaced canonical MD worker\n');
+  assert.equal(deploymentImplementationHash(f.entry, pinned), original);
+  assert.notEqual(deploymentImplementationHash(f.entry), original);
+  assert.equal(evaluateFindingAcceptances(subject(deploymentImplementationHash(f.entry)), [], nextActor)
+    .warningReviews?.rows[0].state, 'invalidated');
+  fs.writeFileSync(f.worker, pinned.source);
+  assert.equal(deploymentImplementationHash(f.entry), original);
+}));
+for (const invalid of ['missing', 'empty', 'oversized', 'invalid UTF-8', 'hard-linked'] as const) {
+  check(`${invalid} compiled worker cannot establish a new fingerprint`, () => withValidatorFixture(f => {
+    const pinned = readCanonicalMdCompiledWorkerIdentity(f.entry);
+    if (invalid === 'missing') fs.unlinkSync(f.worker);
+    if (invalid === 'empty') fs.truncateSync(f.worker, 0);
+    if (invalid === 'oversized') fs.truncateSync(f.worker, 1024 * 1024 + 1);
+    if (invalid === 'invalid UTF-8') fs.writeFileSync(f.worker, Buffer.from([0xff]));
+    if (invalid === 'hard-linked') fs.linkSync(f.worker, path.join(f.directory, 'worker-link.cjs'));
+    assert.throws(() => deploymentImplementationHash(f.entry), unavailable);
+    assert.match(deploymentImplementationHash(f.entry, pinned), /^[a-f0-9]{64}$/);
+  }));
+}
 for (const source of [false, true]) check(`${source ? 'source' : 'packaged'} parser upgrade invalidates durable warning approval`, () => withValidatorFixture(f => {
   const receipts = new ActionReceiptStore({ root: path.join(f.directory, 'receipts') });
   const subject = (): AcceptanceSubject => ({ ...make(), validatorHash: deploymentImplementationHash(f.entry),
@@ -137,6 +172,7 @@ check('ancestor dependency fallback cannot certify the addressed package', () =>
   for (const file of ['package.json', 'package-lock.json']) fs.copyFileSync(path.join(f.directory, file), path.join(child, file));
   const entry = path.join(child, 'dist/server.cjs');
   fs.writeFileSync(entry, '// fixture\n');
+  fs.copyFileSync(f.worker, path.join(child, 'dist/canonical-md-worker.cjs'));
   assert.throws(() => deploymentImplementationHash(entry), unavailable);
 }));
 check('validator dependency traversal has a bounded package count', () => withValidatorFixture(f => {
@@ -223,7 +259,9 @@ check('real installed parser closure fingerprints in source and compiled CommonJ
   const repository = process.cwd();
   const sourceEntry = path.join(repository, 'server.ts');
   const compiledEntry = path.join(repository, 'dist/server.cjs');
-  assert.ok(fs.existsSync(sourceEntry) && fs.existsSync(compiledEntry), 'Real source and built entry are required smoke inputs');
+  const compiledWorker = path.join(repository, 'dist/canonical-md-worker.cjs');
+  assert.ok([sourceEntry, compiledEntry, compiledWorker].every(file => fs.existsSync(file)),
+    'Real source, built server and compiled worker are required smoke inputs');
   const expectedSource = deploymentImplementationHash(sourceEntry);
   const expectedCompiled = deploymentImplementationHash(compiledEntry);
   assert.match(expectedSource, /^[a-f0-9]{64}$/);

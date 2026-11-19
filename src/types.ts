@@ -1451,6 +1451,8 @@ export type PackageDiagnostic = XMLDiagnostic & {
   code?: string;
   domain?: string;
   filePath?: string;
+  /** This informational diagnostic describes a check that could not complete. */
+  coverageGap?: true;
   /** Server-proven exact scope accepted by forge.rules.json. Absent means this finding is not suppressible. */
   suppressionScope?: {
     code: string;

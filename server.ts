@@ -114,10 +114,14 @@ import { classifyPath, indexCueReferences, runExtensionProjectSelftest, buildCon
 import { buildDependencyHealth } from './src/server/dependencyHealth';
 import { getAiSchemaIndex, getScriptPropertyIndex, registerValidationAgentRoutes } from "./src/server/validationRoutes";
 import { getCanonicalReferenceCorpus, getCanonicalReferenceSets, initializeReferenceCorpus, registerReferenceRoutes, startCanonicalReferenceManifest } from "./src/server/referenceRoutes";
+import { createCanonicalMdProviderPreparation, readCanonicalMdCompiledWorkerIdentity } from './src/server/canonicalMdProviderPreparation';
+import type { CanonicalMdConsultation } from './src/server/canonicalMdReferenceContext';
+import { readCanonicalMdProviderGeneration, readCanonicalMdProviderProof } from './src/lib/canonicalMdProviderCatalog';
+import { isMdReferenceCoverageCheck } from './src/lib/mdEffectiveLibraryPurpose';
 import { getReferenceLanguageResources } from './src/lib/referenceLanguage';
 import { analyzeXmlReferenceMap, XmlReferenceMapInputError } from './src/server/xmlReferenceMap';
 import { registerBulkTransformRoutes } from "./src/server/bulkTransformRoutes";
-import { computeModDrift, fingerprintModFolder, flattenProjectValidation, getProjectValidationCacheStats, getSchemaIndex, loadProjectFromDisk, runProjectValidation, type FlatProjectDiagnostic } from "./src/server/projectValidation";
+import { computeModDrift, fingerprintModFolder, flattenProjectValidation, getProjectValidationCacheStats, getSchemaIndex, loadProjectFromDisk, runProjectValidation, validateProjectCrossFileWithCorpus, type FlatProjectDiagnostic } from "./src/server/projectValidation";
 import { createForgeBackendPerformance, createForgeNativePerformanceAdapter, forgePerformanceApiOperationName, forgePerformanceHasNegativeDataResult, type ForgeNativePerformanceOperation, type ForgeNativePerformanceReport } from './src/server/forgePerformance';
 import { createNativePerformanceBroker, type NativeBrokerActor, type NativeBrokerRetireReason } from './src/server/nativePerformanceBroker';
 import { createNativePerformanceRetirementNotice, type NativePerformanceEndpoint } from './shared/nativePerformanceChannel';
@@ -472,6 +476,29 @@ const SERVER_INSTANCE_MODE = process.env.X4_FORGE_MODE?.trim()
 const PUBLIC_INSTANCE_MODES = new Set(['sidecar', 'standalone', 'dev-build', 'release-host']);
 const SERVER_EXTENSION_VERSION = process.env.X4_FORGE_EXTENSION_VERSION?.trim();
 let serverListenerPort = PORT;
+const serverEntry = process.argv[1] || '';
+const canonicalMdCompiledWorker = path.basename(serverEntry) === 'server.cjs'
+  ? readCanonicalMdCompiledWorkerIdentity(serverEntry) : undefined;
+const canonicalMdPreparation = createCanonicalMdProviderPreparation(serverEntry, undefined, canonicalMdCompiledWorker);
+let pendingCanonicalMd: { root: string } | undefined;
+let failedCanonicalMd: { root: string; retryAt: number } | undefined;
+
+function scheduleCanonicalMd(root: string, force = false): void {
+  if (pendingCanonicalMd?.root === root || (!force && failedCanonicalMd?.root === root && Date.now() < failedCanonicalMd.retryAt)) return;
+  const request = { root };
+  pendingCanonicalMd = request;
+  void canonicalMdPreparation.prepare(root).then(result => {
+    if (pendingCanonicalMd !== request) return;
+    pendingCanonicalMd = undefined;
+    failedCanonicalMd = result.status === 'unavailable' ? { root, retryAt: Date.now() + 5000 } : undefined;
+  });
+}
+
+function readCanonicalMdForValidation(root: string) {
+  const ready = canonicalMdPreparation.read(root);
+  if (!ready) scheduleCanonicalMd(root);
+  return ready;
+}
 
 function publicForgeIdentity() {
   return {
@@ -1025,7 +1052,7 @@ const destructiveRecoveryStore = new DestructiveRecoveryStore({ root: dataPath('
 // remain mutation-time failures so read-only diagnostics can still start.
 const projectCheckRuns = new ProjectCheckRunService(actionReceiptStore, forgeSourceCoordinator);
 const projectCheckOwnerEnrollment = new ProjectCheckOwnerEnrollment(actionReceiptStore, forgeSourceCoordinator);
-const deployValidatorHash = deploymentImplementationHash(process.argv[1]);
+const deployValidatorHash = deploymentImplementationHash(serverEntry, canonicalMdCompiledWorker);
 const deployStudioActorId = `studio:${crypto.randomUUID()}`;
 const workspaceReceiptService = new WorkspaceReceiptService();
 
@@ -1616,6 +1643,7 @@ type ServerDiagnostic = {
   code: string;
   domain: string;
   filePath: string;
+  coverageGap?: true;
   line?: number;
   column?: number;
   target?: ValidationSourceLocation;
@@ -4940,6 +4968,7 @@ app.post("/api/schema/config", (req, res) => {
     const { nextConfig, resolved, scratch, schemaComplete, schemaWarning, referenceRootChanged } = plan;
     if (scratch) validateDevScratchStorage();
     writeXsdConfig(nextConfig);
+    if (referenceRootChanged) scheduleCanonicalMd(resolved.x4ReferenceRoot, true);
     const library = reloadSchemaLibrary();
     // Only an effective corpus-root change forces a manifest generation.
     const manifest = startCanonicalReferenceManifest(referenceRootChanged);
@@ -6514,6 +6543,18 @@ function diagnosticCategory(code: string): string {
   return "egosoft";
 }
 
+function mdReferenceCoverageGaps(validation: FullWorkspaceValidation['validation']) {
+  return validation.evidence?.coverage.gaps.filter(gap => isMdReferenceCoverageCheck(gap.check)) ?? [];
+}
+
+function omittedWorkspaceMdSources(workspace: ModWorkspace, files: ExtensionProject['files']) {
+  const omitted = workspaceSourceFiles(workspace).filter(file => file.omitted && classifyPath(file.path) === 'md');
+  if (!omitted.length) return omitted;
+  const key = (filePath: string) => filePath.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
+  const loaded = new Set(files.filter(file => typeof file.content === 'string').map(file => key(file.path)));
+  return omitted.filter(file => !loaded.has(key(file.path)));
+}
+
 /**
  * One validation chokepoint for canvas, API agents, packaging, readiness, and deploy.
  * The generated manifest is validated as a complete X4 project; callers no longer
@@ -6547,6 +6588,8 @@ function runFullWorkspaceValidation(ws: ModWorkspace, built?: { modId: string; f
     references,
     jobsVocabulary: getJobsVocabulary(),
     waresVocabulary: getWaresVocabulary(),
+    canonicalMd: { read: readCanonicalMdForValidation,
+      skippedFiles: [...diskSkipped, ...omittedWorkspaceMdSources(ws, project.files)] },
   });
   const hasMd = project.files.some((file) => file.kind === "md" || classifyPath(file.path) === "md");
   const hasAiScript = project.files.some((file) => file.kind === "aiscript" || classifyPath(file.path) === "aiscript");
@@ -6564,6 +6607,10 @@ function runFullWorkspaceValidation(ws: ModWorkspace, built?: { modId: string; f
   for (const skipped of diskSkipped) warnUnavailable('validation.disk_file_skipped', `Disk-backed validation skipped ${skipped.path}: ${skipped.reason}. The artifact still includes the file, so this is not a clean validation result.`, skipped.path);
   const combined: ServerDiagnostic[] = [
     ...unavailable,
+    ...mdReferenceCoverageGaps(validation).map((gap): ServerDiagnostic => ({
+      severity: 'info', category: 'references', code: gap.check, domain: 'validation',
+      filePath: gap.filePath || 'project', message: gap.reason, coverageGap: true,
+    })),
     ...runModDoctor(ws, files, modId, { canonicalAiScripts: references?.aiScripts }).map((finding): ServerDiagnostic => ({
       severity: finding.severity,
       category: finding.category || "egosoft",
@@ -9773,11 +9820,15 @@ app.post("/api/agent/project/files", (req, res) => {
   }
 });
 
+function validateAgentProjectCrossFile(project: ExtensionProject) {
+  return validateProjectCrossFileWithCorpus(project, { read: readCanonicalMdForValidation });
+}
+
 app.post("/api/agent/project/generate", (req, res) => {
   try {
     const spec = req.body?.spec || req.body || {};
     const project = generateAgentProject(spec);
-    const packaged = packageAgentProject(project);
+    const packaged = packageAgentProject(project, validateAgentProjectCrossFile);
     return res.json({ ...generatedOutputVerdict(packaged.ok), project, summary: packaged.summary,
       validation: { ...packaged.validation, ok: packaged.ok, scope: 'project-package-checks' } });
   } catch (error) {
@@ -9791,7 +9842,7 @@ app.post("/api/agent/project/package", (req, res) => {
     if (!project || !Array.isArray(project.files)) {
       return res.status(400).json({ error: "Body must be { project: { id, name, files } }." });
     }
-    const packaged = packageAgentProject(project);
+    const packaged = packageAgentProject(project, validateAgentProjectCrossFile);
     return res.json({ ...generatedOutputVerdict(packaged.ok), ...packaged,
       validation: { ...packaged.validation, ok: packaged.ok, scope: 'project-package-checks' } });
   } catch (error) {
@@ -9809,7 +9860,7 @@ app.post("/api/agent/project/validate-crossfile", (req, res) => {
       return res.status(413).json({ error: "Project has too many files (>2000)." });
     }
     res.locals.apiSubject = projectApiSubject(parseValidationProject(project));
-    return res.json(validateProjectCrossFile(project));
+    return res.json(validateAgentProjectCrossFile(project));
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) || "project cross-file validate failed" });
   }
@@ -9935,7 +9986,10 @@ function validateProjectRequest(req: express.Request, res: express.Response, lea
     subjectIdentity = { modId: subjectEvidence.modId, sourceHash: subjectEvidence.sourceHash };
 
     const references = (() => { try { return getReferenceSets(); } catch { return undefined; } })();
-    const result = runProjectValidation(project, { references, jobsVocabulary: getJobsVocabulary(), waresVocabulary: getWaresVocabulary() });
+    let canonicalMd: CanonicalMdConsultation | undefined;
+    const result = runProjectValidation(project, { references, jobsVocabulary: getJobsVocabulary(), waresVocabulary: getWaresVocabulary(),
+      canonicalMd: { read: readCanonicalMdForValidation, skippedFiles: source.mode === 'fromPath' ? source.skipped : undefined,
+        consulted: memo => { canonicalMd = memo; } } });
     if (source.mode === 'fromPath' && source.skipped.length) {
       result.evidence = buildValidationEvidence(project, flattenProjectValidation(result), [
         ...(result.evidence?.coverage.gaps || []),
@@ -9961,6 +10015,7 @@ function validateProjectRequest(req: express.Request, res: express.Response, lea
       'project-validation-result-v1', evidenceScalars, result.ok, result.summary,
       findings.map(finding => finding.findingId).sort(), coverage.gaps.map(gap => JSON.stringify(gap)).sort(),
       proof && [proof.artifactHash, proof.suite.id, proof.suite.hash, proof.checks.map(check => check.receiptHash).sort()],
+      ...(canonicalMd ? [canonicalMd] : []),
     ])).digest('hex');
     const compact = () => {
       // The existing ledger bounds and redacts its sample independently of the wire projection.
@@ -10331,9 +10386,8 @@ function computeServerReadiness(record: WorkspaceRecord) {
   const mdCode = generateMDXML(ws);
   const graphDiagnostics = validateModWorkspace(ws, mdCode);
   const { modId, files } = buildWorkspaceFileManifest(ws);
-  // The stage builder only counts severities; adapt server diagnostics to its shape.
   const packageDiagnostics = runFullWorkspaceValidation(ws, { modId, files }).diagnostics
-    .map(d => ({ severity: d.severity, message: d.message, category: "egosoft" as const }));
+    .map(d => ({ severity: d.severity, message: d.message, category: "egosoft" as const, coverageGap: d.coverageGap }));
   const brief = buildAddressedDebugWatcherBrief(record, []);
   const stages = buildReadinessStages({
     workspaceName: ws.name,
@@ -10380,8 +10434,12 @@ app.get("/api/agent/proof", (req, res) => {
       } else {
         const load = loadProjectFromDisk(resolvedFolder.abs);
         const references = (() => { try { return getReferenceSets(); } catch { return undefined; } })();
-        const result = runProjectValidation(load.project, { references, jobsVocabulary: getJobsVocabulary(), waresVocabulary: getWaresVocabulary() });
+        const result = runProjectValidation(load.project, {
+          references, jobsVocabulary: getJobsVocabulary(), waresVocabulary: getWaresVocabulary(),
+          canonicalMd: { read: readCanonicalMdForValidation, skippedFiles: load.skipped },
+        });
         const flat = flattenProjectValidation(result);
+        const mdGaps = mdReferenceCoverageGaps(result);
         const errors = flat.filter(f => f.severity === "error").length;
         const warnings = flat.filter(f => f.severity === "warning").length;
         // B58c — save-impact FACTS (deterministic; no judgment rules): what this mod adds
@@ -10395,6 +10453,8 @@ app.get("/api/agent/proof", (req, res) => {
           `- Verdict: **${result.ok ? "OK" : "FAILING"}** — ${errors} error(s), ${warnings} warning(s)`,
           ...flat.slice(0, 10).map(f => `  - ${f.severity.toUpperCase()} \`${f.code || "?"}\` ${f.filePath || ""}${f.line ? `:${f.line}` : ""} — ${f.message.slice(0, 110)}`),
           flat.length > 10 ? `  - …and ${flat.length - 10} more` : "",
+          ...(mdGaps.length ? [`- MD reference coverage: incomplete (${mdGaps.length} ${mdGaps.length === 1 ? 'gap' : 'gaps'})`,
+            ...mdGaps.slice(0, 10).map(gap => `  - \`${gap.check}\` ${gap.filePath || 'project'} — ${gap.reason}`)] : []),
           "",
           "### Save-impact facts",
           `- Cues this mod adds to saves: ${cueNames.length ? cueNames.slice(0, 20).map(c => `\`${c}\``).join(", ") : "(none)"}${cueNames.length ? " — renaming released cues breaks existing saves." : ""}`,
@@ -14849,12 +14909,17 @@ app.post("/api/agent/deploy", coordinatedSourceOperation(deployVerifyHandler));
 
 function buildDeployProjectValidation(modId: string, snapshot: DeploymentSnapshot) {
   const references = (() => { try { return getReferenceSets(); } catch { return undefined; } })();
+  let canonicalMd: CanonicalMdConsultation | undefined;
   const preflight = runProjectValidation({
     id: modId,
     name: modId,
     files: snapshot.files,
-  } as any, { references, jobsVocabulary: getJobsVocabulary(), waresVocabulary: getWaresVocabulary() });
-  return { preflight, diskValidationSkipped: snapshot.skipped, validationFiles: snapshot.files };
+  } as any, {
+    references, jobsVocabulary: getJobsVocabulary(), waresVocabulary: getWaresVocabulary(),
+    canonicalMd: { read: readCanonicalMdForValidation, skippedFiles: snapshot.skipped,
+      consulted: memo => { canonicalMd = memo; } },
+  });
+  return { preflight, canonicalMd, diskValidationSkipped: snapshot.skipped, validationFiles: snapshot.files };
 }
 
 function deploymentPlan(ws: any, format: DeployFormat, compiled?: ReturnType<typeof buildWorkspaceFileManifest>) {
@@ -14905,7 +14970,7 @@ function omittedAddressedProjectChecks(plan: ArtifactPlan, workspace?: ModWorksp
   return workspaceSourceFiles(workspace).some(file => file.path.toLowerCase() === PROJECT_CHECKS_PATH);
 }
 
-function deploymentCorpusIdentity(projectPaths: string[]): string {
+function deploymentCorpusIdentity(projectPaths: string[]) {
   const resolved = resolveXsdConfig();
   const corpus = getCanonicalReferenceCorpus();
   const files = (corpus?.sourceFiles || []).map(relative => path.join(corpus!.root, relative));
@@ -14937,9 +15002,24 @@ function deploymentCorpusIdentity(projectPaths: string[]): string {
     }
   };
   for (const root of new Set(schemaRoots)) visit(root);
-  return trustHash({ roots: schemaRoots, files: deploymentCorpusFiles(files),
+  const hash = trustHash({ roots: schemaRoots, files: deploymentCorpusFiles(files),
     references: getReferenceSets(), md, ai,
     properties: getScriptPropertyIndex(), jobs: getJobsVocabulary(), wares: getWaresVocabulary() });
+  return { hash, root: resolved.x4ReferenceRoot };
+}
+
+function bindDeploymentCorpus(base: ReturnType<typeof deploymentCorpusIdentity>, memo?: CanonicalMdConsultation): string {
+  if (!memo) return base.hash;
+  const stale = () => Object.assign(new Error('The canonical MD corpus changed during deployment. Review a fresh preview.'),
+    { code: 'DEPLOY_SOURCE_CHANGED' });
+  if (memo.root && path.relative(base.root, memo.root)) throw stale();
+  if (!memo.generation) {
+    const generation = readCanonicalMdProviderGeneration(base.root)?.generation ?? null;
+    return trustHash(['canonical-md-v1', base.hash, 'unavailable', generation]);
+  }
+  const providers = readCanonicalMdProviderProof(base.root, memo.generation, memo.paths);
+  if (!providers) throw stale();
+  return trustHash(['canonical-md-v1', base.hash, 'ready', memo.generation, providers]);
 }
 
 function deploymentPrincipal(req: express.Request): AcceptancePrincipal {
@@ -15610,7 +15690,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     const frozenPlan = snapshot.plan;
     const files = Object.fromEntries(snapshot.files.map(file => [file.path, file.content || '']));
     const corpusPaths = sourcePlan.entries.map(entry => entry.path);
-    const corpusHash = deploymentCorpusIdentity(corpusPaths);
+    const baseCorpus = deploymentCorpusIdentity(corpusPaths);
     responseIdentity = { ...responseIdentity, artifactHash, validatedArtifact: snapshot.manifest };
     startStage('validate');
     const readinessStartedAt = performance.now();
@@ -15674,7 +15754,8 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     const projectValidationStartedAt = performance.now();
     const deployValidation = buildDeployProjectValidation(modId, snapshot);
     validationStagesMs.project = performance.now() - projectValidationStartedAt;
-    const { preflight, diskValidationSkipped } = deployValidation;
+    const { preflight, canonicalMd, diskValidationSkipped } = deployValidation;
+    const corpusHash = bindDeploymentCorpus(baseCorpus, canonicalMd);
     const luaValidation = { filesScanned: preflight.lua.filesScanned, runtimeScope: preflight.lua.runtimeScope };
     const projectChecks = preflight.projectChecks;
     const extensionsPath = path.join(x4GamePath, 'extensions');
@@ -15923,7 +16004,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
         return currentDisk.ok && artifactPlanIdentity(currentDisk, deployFormat) === diskIdentity;
       });
       if (!diskMatches || projectCheckArtifactIssue(sourcePlan) || omittedAddressedProjectChecks(sourcePlan, addressedBuild)
-        || measureSourceRecheck('corpusMs', () => deploymentCorpusIdentity(corpusPaths)) !== corpusHash
+        || measureSourceRecheck('corpusMs', () => bindDeploymentCorpus(deploymentCorpusIdentity(corpusPaths), canonicalMd)) !== corpusHash
         || path.resolve(currentTarget) !== path.resolve(targetRoot)) {
         throw Object.assign(new Error('Source, corpus or target changed during deployment. Review a fresh preview.'), { code: 'DEPLOY_SOURCE_CHANGED' });
       }
@@ -16631,7 +16712,11 @@ function prepareReleaseBuild(
       };
     }
     const warnings = full.diagnostics.filter(diagnostic => diagnostic.severity === 'warning').length;
-    stages.push(releaseStage('validation', 'Validate project', warnings ? 'warning' : 'pass', warnings ? `${warnings} warning(s); zero errors.` : 'Full-project validation has zero errors.', { warnings }));
+    const coverageGaps = mdReferenceCoverageGaps(full.validation).length;
+    const detail = coverageGaps ? `${coverageGaps} MD reference coverage gap(s). ${warnings} warning(s) and zero errors.`
+      : warnings ? `${warnings} warning(s); zero errors.` : 'Full-project validation has zero errors.';
+    stages.push(releaseStage('validation', 'Validate project', warnings || coverageGaps ? 'warning' : 'pass',
+      detail, { warnings, ...(coverageGaps ? { coverageGaps } : {}) }));
 
     const currentManifest = built.files['content.xml'] || '';
     const currentVersion = inspectContentManifest(currentManifest)?.version || '';
@@ -17513,7 +17598,10 @@ Create, update, or reposition HUD window containers and nested controller elemen
           id: modId, name: modId,
           files: Object.entries(files).map(([p, c]) => ({ path: p, kind: classifyPath(p), content: String(c) })),
         };
-        out.push(...flattenProjectValidation(runProjectValidation(project, { references: getReferenceSets(), jobsVocabulary: getJobsVocabulary(), waresVocabulary: getWaresVocabulary() })));
+        out.push(...flattenProjectValidation(runProjectValidation(project, {
+          references: getReferenceSets(), jobsVocabulary: getJobsVocabulary(), waresVocabulary: getWaresVocabulary(),
+          canonicalMd: { read: readCanonicalMdForValidation, skippedFiles: omittedWorkspaceMdSources(ws, project.files) },
+        })));
       } catch { /* project layer unavailable — workspace laws still drive the loop */ }
       return out;
     };
@@ -18254,6 +18342,12 @@ setupDevOrProd().then(() => {
     for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
       process.on(signal, () => { retireNativePerformanceBroker('stopped'); releaseDiscovery(); process.exit(0); });
     }
+    setImmediate(() => {
+      try {
+        const reference = resolveXsdConfig();
+        if (reference.x4ReferenceExists) scheduleCanonicalMd(reference.x4ReferenceRoot);
+      } catch { /* The validation route retains an explicit coverage gap until authority is available. */ }
+    });
   });
   configureHttpServerDeadlines(httpServer);
 }).catch(err => {

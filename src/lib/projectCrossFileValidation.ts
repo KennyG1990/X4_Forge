@@ -1077,6 +1077,7 @@ function validateEffectiveReferenceContracts(context: EffectiveMdReferenceContex
         continue;
       }
       if (!library) {
+        if (!resolved.declared && context.canonicalIndex?.has(resolved.script.name.toLowerCase())) continue;
         gap(EFFECTIVE_MD_REFERENCE_CHECK, document.file, `${describeAuthoredMdReference(call)} has no exact final library contract.`);
         continue;
       }
@@ -1134,6 +1135,7 @@ function validateEffectiveReferenceContracts(context: EffectiveMdReferenceContex
 
 export function validateProjectCrossFile(project: ExtensionProject, options: {
   cueIndex?: CueReferenceIndex; effectiveContext?: EffectiveMdReferenceContext;
+  canonicalOnlyContext?: EffectiveMdReferenceContext;
 } = {}): ProjectCrossFileValidationResult {
   const files = Array.isArray(project?.files) ? project.files : [];
   const structure = validateProjectStructure(project);
@@ -1347,7 +1349,10 @@ export function validateProjectCrossFile(project: ExtensionProject, options: {
 
   const effectiveReferences = options.effectiveContext?.complete ? validateEffectiveReferenceContracts(options.effectiveContext) : undefined;
   const libraryReferences = effectiveReferences ?? validateCueLibraryReferences(mdFiles);
-  findings.push(...libraryReferences.findings);
+  const supplemental = options.canonicalOnlyContext && validateEffectiveReferenceContracts(options.canonicalOnlyContext);
+  const libraryFindings = [...libraryReferences.findings, ...(supplemental?.findings ?? [])];
+  const coverageGaps = [...(effectiveReferences?.coverageGaps ?? []), ...(supplemental?.coverageGaps ?? [])];
+  findings.push(...libraryFindings);
   const errors = findings.filter(f => f.severity === 'error').length;
   return {
     ok: errors === 0,
@@ -1356,8 +1361,8 @@ export function validateProjectCrossFile(project: ExtensionProject, options: {
       findings: findings.length,
       errors,
       structuralErrors: structure.filter(i => i.severity === 'error').length,
-      cueReferences: cueIndex.references.length + libraryReferences.checked,
-      unresolvedCueRefs: cueIndex.unresolved.length + libraryReferences.findings
+      cueReferences: cueIndex.references.length + libraryReferences.checked + (supplemental?.checked ?? 0),
+      unresolvedCueRefs: cueIndex.unresolved.length + libraryFindings
         .filter(finding => finding.code === 'md.cue_duplicate_name' || finding.code === 'md.cue_library_ref_unresolved').length,
       mdLuaMissingRegisters: missingRegisters.length,
       luaMdMissingListeners: missingListeners.length,
@@ -1368,7 +1373,7 @@ export function validateProjectCrossFile(project: ExtensionProject, options: {
     },
     findings,
     cueIndex,
-    ...(effectiveReferences?.coverageGaps.length ? { coverageGaps: effectiveReferences.coverageGaps } : {}),
+    ...(coverageGaps.length ? { coverageGaps } : {}),
     mdLua: { raised, registered, emitted, listened, missingRegisters, missingListeners, parseUnavailable, emitCoverage, payload: { reads: payload.reads, writes: payload.writes } },
     deps: { manifest, dependencies: manifest?.deps || [] },
   };

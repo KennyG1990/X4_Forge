@@ -192,9 +192,14 @@ const RUNTIME_DEPS = [
 ];
 
 const repoDist = path.join(REPO_ROOT, "dist");
-if (!fs.existsSync(path.join(repoDist, "server.cjs")) || !fs.existsSync(path.join(repoDist, "index.html"))) {
-  console.error(`[stage-app] repo build output missing at ${repoDist} — run \`npm run build\` in the repo root first.`);
-  process.exit(1);
+const allowedRootFiles = ["index.html", "favicon.svg", "server.cjs", "canonical-md-worker.cjs"];
+for (const name of allowedRootFiles) {
+  const file = path.join(repoDist, name);
+  const stat = fs.lstatSync(file, { throwIfNoEntry: false });
+  if (!stat?.isFile() || stat.isSymbolicLink() || !stat.size || canonical(fs.realpathSync(file)) !== canonical(file)) {
+    console.error(`[stage-app] required physical repo build artifact missing or empty: ${name}. Run npm run build in the repo root first.`);
+    process.exit(1);
+  }
 }
 
 // Copy only declared production artifacts, excluding sourcemaps. A recursive copy of
@@ -215,7 +220,6 @@ function copyDir(from, to) {
     }
   }
 }
-const allowedRootFiles = ["index.html", "favicon.svg", "server.cjs"];
 const allowedRootEntries = new Set([...allowedRootFiles, "assets", "server.cjs.map"]);
 const unexpectedEntries = fs.readdirSync(repoDist).filter((name) => !allowedRootEntries.has(name));
 if (unexpectedEntries.length > 0) {
@@ -244,10 +248,6 @@ fs.rmSync(APP, { recursive: true, force: true });
 fs.mkdirSync(path.join(APP, "dist"), { recursive: true });
 for (const name of allowedRootFiles) {
   const src = path.join(repoDist, name);
-  if (!fs.existsSync(src)) {
-    console.error(`[stage-app] required repo build artifact missing: ${name}`);
-    process.exit(1);
-  }
   fs.copyFileSync(src, path.join(APP, "dist", name));
   copied++;
 }

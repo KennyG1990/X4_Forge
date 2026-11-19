@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { runProjectValidation, flattenProjectValidation } from '../src/server/projectValidation';
 import type { ExtensionProject } from '../src/lib/extensionProject';
 import { simulateXmlDiff, type DiffElementProvenance, type DiffSimulationOptions } from '../src/lib/diffSimulator';
+import { readCanonicalMdProviderCatalog } from '../src/lib/canonicalMdProviderCatalog';
 import { lintEffectiveMdCueReturns } from '../src/lib/mdPitfallLints';
 import { buildEffectiveMdReferenceContext, diffMdLibraryPurposeFacts } from '../src/lib/mdEffectiveLibraryPurpose';
 
@@ -632,8 +633,53 @@ function runLibraryChecks() {
     }, { extraFiles: [{ path: 'md/direct-library.xml', kind: 'md', content: library('include_actions', '<return/>').replace('name="Probe"', 'name="DirectLibrary"') }] });
 }
 
+function runCanonicalMdInventoryChecks() {
+  const corpus = path.join(root, 'canonical-corpus');
+  const providers = path.join(corpus, 'md');
+  fs.mkdirSync(providers, { recursive: true });
+  fs.writeFileSync(path.join(providers, 'off_stem.xml'),
+    '<mdscript name="CanonicalWitness"><cues><library name="Act" purpose="run_actions"><actions/></library></cues></mdscript>');
+  const catalog = readCanonicalMdProviderCatalog(corpus);
+  assert.equal(catalog.status, 'ready');
+  if (catalog.status !== 'ready') return;
+
+  const project: ExtensionProject = { id: 'canonical_inventory_witness', name: 'Canonical inventory witness', files: [
+    { path: 'content.xml', kind: 'content', content },
+    { path: 'md/caller.xml', kind: 'md', content: host('<run_actions ref="md.CanonicalWitness.Act"/>') },
+  ] };
+  const prior = process.env.X4_REFERENCE_ROOT;
+  process.env.X4_REFERENCE_ROOT = corpus;
+  try {
+    for (const [name, skippedFiles, canConsult] of [
+      ['complete authored inventory resolves a vanilla library', [], true],
+      ['omitted off-stem authored MD can shadow a vanilla provider', [{ path: 'MD\\hidden_provider.XML' }], false],
+      ['an unreadable mod root leaves the MD inventory incomplete', [{ path: '.' }], false],
+      ['an unreadable MD directory leaves the MD inventory incomplete', [{ path: 'MD' }], false],
+      ['omitted Lua does not obscure the authored MD inventory', [{ path: 'ui/unavailable.lua' }], true],
+    ] as const) {
+      check(name, () => {
+        let consulted = 0;
+        const result = runProjectValidation(project, {
+          canonicalMd: { skippedFiles, read: () => { consulted++; return catalog; } },
+        });
+        assert.equal(consulted, canConsult ? 1 : 0);
+        const gaps = result.evidence?.coverage.gaps.filter(gap => gap.check === 'md.reference_context') ?? [];
+        assert.equal(gaps.length, canConsult ? 0 : 1);
+        if (!canConsult) {
+          assert.equal(gaps[0].filePath, 'md/caller.xml');
+          assert.match(gaps[0].reason, /md\.CanonicalWitness\.Act.*line 1, column/);
+        }
+      });
+    }
+  } finally {
+    if (prior === undefined) delete process.env.X4_REFERENCE_ROOT;
+    else process.env.X4_REFERENCE_ROOT = prior;
+  }
+}
+
 function runEffectiveReferenceChecks() {
   configureEnvironment();
+  runCanonicalMdInventoryChecks();
   const declaration = (name = 'Run', purpose = 'run_actions', parameters = '') => `<library name="${name}" purpose="${purpose}">${parameters}<actions/></library>`;
   const provider = (definitions = declaration(), actions = '') => `<mdscript name="Probe"><cues>${definitions}<cue name="Caller"><conditions><event_game_started/></conditions><actions>${actions}</actions></cue></cues></mdscript>`;
   const call = (payload: string) => `<diff><add sel="/mdscript/cues/cue[@name='Caller']/actions">${payload}</add></diff>`;

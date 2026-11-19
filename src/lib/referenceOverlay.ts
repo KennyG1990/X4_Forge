@@ -106,27 +106,34 @@ function sniffRoot(xml: string): string | null {
   return match ? match[1].toLowerCase() : null;
 }
 
-function readDlcInfo(extensionRoot: string, folder: string): DlcInfo {
+function readDlcInfo(extensionRoot: string, folder: string, requireManifest: boolean): DlcInfo {
   const root = path.join(extensionRoot, folder);
   const contentPath = path.join(root, 'content.xml');
   let id = folder.toLowerCase();
   const dependencies: string[] = [];
   try {
     const xml = fs.readFileSync(contentPath, 'utf8').replace(/^\uFEFF/, '');
-    const document = new DOMParser({ onError: () => undefined }).parseFromString(xml, 'text/xml');
+    let malformed = false;
+    const document = new DOMParser({ onError: () => { malformed = true; } }).parseFromString(xml, 'text/xml');
     const content = document.documentElement;
+    if (requireManifest && (malformed || content?.nodeName !== 'content' || !/^ego_dlc_/i.test(content.getAttribute('id') ?? ''))) {
+      throw new Error('Invalid official DLC manifest.');
+    }
     if (content?.getAttribute('id')) id = content.getAttribute('id')!.toLowerCase();
     const nodes = content?.getElementsByTagName('dependency') || [];
     for (let index = 0; index < nodes.length; index++) {
       const dependency = nodes[index].getAttribute('id');
       if (dependency) dependencies.push(dependency.toLowerCase());
     }
-  } catch { /* a missing content.xml falls back to deterministic folder order */ }
+  } catch {
+    if (requireManifest) throw new Error(`The official DLC manifest for ${folder} is unavailable or invalid.`);
+    // Other callers retain the existing deterministic folder-order fallback.
+  }
   return { folder, id: id as `ego_dlc_${string}`, root, dependencies };
 }
 
 /** content.xml dependencies are explicitly documented by Egosoft as extension load order. */
-export function discoverOfficialDlcOrder(referenceRoot: string): DlcInfo[] {
+export function discoverOfficialDlcOrder(referenceRoot: string, requireManifest = false): DlcInfo[] {
   const extensionRoot = path.join(referenceRoot, 'extensions');
   let folders: string[] = [];
   try {
@@ -135,14 +142,18 @@ export function discoverOfficialDlcOrder(referenceRoot: string): DlcInfo[] {
       .map(entry => entry.name)
       .sort((a, b) => a.localeCompare(b));
   } catch { return []; }
-  const infos = folders.map(folder => readDlcInfo(extensionRoot, folder));
+  const infos = folders.map(folder => readDlcInfo(extensionRoot, folder, requireManifest));
   const byId = new Map<string, DlcInfo>(infos.map(info => [info.id, info]));
+  if (requireManifest && byId.size !== infos.length) throw new Error('Official DLC IDs are ambiguous.');
   const visited = new Set<string>();
   const visiting = new Set<string>();
   const ordered: DlcInfo[] = [];
   const visit = (info: DlcInfo) => {
     if (visited.has(info.id)) return;
-    if (visiting.has(info.id)) return; // corrupt cycle: deterministic lexical fallback finishes it
+    if (visiting.has(info.id)) {
+      if (requireManifest) throw new Error('Official DLC dependency order is ambiguous.');
+      return; // Other callers retain the deterministic lexical fallback.
+    }
     visiting.add(info.id);
     for (const dependency of info.dependencies) {
       const local = byId.get(dependency);
@@ -167,16 +178,19 @@ function signatureFor(paths: string[]): string {
   return crypto.createHash('sha256').update(parts.join('\n')).digest('hex');
 }
 
-export function resolveEffectiveReferenceDocument(referenceRootInput: string, relativeInput: string, force = false): EffectiveReferenceDocument {
+export function resolveEffectiveReferenceDocument(
+  referenceRootInput: string, relativeInput: string, force = false,
+  options: { dlcs?: ReturnType<typeof discoverOfficialDlcOrder>; cache?: boolean } = {},
+): EffectiveReferenceDocument {
   const root = path.resolve(referenceRootInput);
   if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) throw new Error(`Reference root unavailable or not a directory: ${root}`);
   const relativePath = normalizeRelative(relativeInput);
-  const dlcs = discoverOfficialDlcOrder(root);
+  const dlcs = options.dlcs ?? discoverOfficialDlcOrder(root);
   const basePath = safeJoin(root, relativePath);
   const candidatePaths = [basePath, ...dlcs.flatMap(dlc => [path.join(dlc.root, 'content.xml'), safeJoin(dlc.root, relativePath)])];
   const signature = signatureFor(candidatePaths);
   const key = `${root.toLowerCase()}|${relativePath.toLowerCase()}`;
-  const previous = !force ? cached(key, signature) : null;
+  const previous = !force && options.cache !== false ? cached(key, signature) : null;
   if (previous) return previous;
 
   let content: string | undefined;
@@ -239,7 +253,7 @@ export function resolveEffectiveReferenceDocument(referenceRootInput: string, re
     findings,
     signature,
   };
-  storeCached(key, result);
+  if (options.cache !== false) storeCached(key, result);
   return result;
 }
 

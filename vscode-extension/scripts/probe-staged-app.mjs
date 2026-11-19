@@ -241,6 +241,7 @@ const configuredReferenceRoot = process.env.X4_REFERENCE_ROOT?.trim();
 const localReferenceRoot = 'F:\\Downskies\\x4unpackersuiteV1\\X4 unpacked 9.00';
 let referenceRoot = configuredReferenceRoot || localReferenceRoot;
 let fixtureReference = false;
+const stagedMdProvider = 'ForgeStagedMdProvider';
 if (!fs.existsSync(path.join(referenceRoot, 'libraries'))) {
   fixtureReference = true;
   referenceRoot = path.join(tmp, 'reference');
@@ -249,6 +250,10 @@ if (!fs.existsSync(path.join(referenceRoot, 'libraries'))) {
   fs.writeFileSync(path.join(libraries, 'factions.xml'), '<factions><faction id="ci_probe_faction" name="CI Probe Faction" tags="economic"/></factions>');
   fs.writeFileSync(path.join(libraries, 'wares.xml'), '<wares><ware id="ci_probe_ware" name="CI Probe Ware" group="test" tags="economy"/></wares>');
   fs.writeFileSync(path.join(libraries, 'scriptproperties.xml'), '<scriptproperties><datatype name="faction"><property name="id" result="ID" type="string"/></datatype></scriptproperties>');
+  const md = path.join(referenceRoot, 'md');
+  fs.mkdirSync(md);
+  fs.writeFileSync(path.join(md, 'off-stem.xml'),
+    `<mdscript name="${stagedMdProvider}"><cues><library name="Existing" purpose="run_actions"><actions/></library></cues></mdscript>`);
 }
 const canonicalReference = !fixtureReference
   && fs.existsSync(path.join(referenceRoot, 'extensions', 'ego_dlc_split'))
@@ -275,6 +280,57 @@ async function waitForExit(processHandle, timeoutMs) {
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const auth = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+
+async function probeCanonicalMdWorker(baseUrl, headers) {
+  const filePath = 'md/probe.xml';
+  const id = 'forge_staged_md_probe';
+  const reference = member => `md.${stagedMdProvider}.${member}`;
+  const hasGap = body => body.evidence.coverage.gaps.some(gap => gap.check === 'md.reference_context' && gap.filePath === filePath);
+  async function validate(member, signal) {
+    const response = await fetch(`${baseUrl}/api/agent/project/validate`, {
+      method: 'POST', headers, signal, redirect: 'error',
+      body: JSON.stringify({ detail: 'full', project: { id, name: id, files: [
+        { path: 'content.xml', kind: 'content', content: `<content id="${id}" name="${id}" version="100"/>` },
+        { path: filePath, kind: 'md', content: '<mdscript name="ForgeStagedMdCaller"><cues>\n'
+          + '<cue name="Start"><actions>\n'
+          + `<run_actions ref="${reference(member)}"/>\n`
+          + '</actions></cue></cues></mdscript>' },
+      ] } }),
+    });
+    if (!response.ok) throw new Error(`Staged canonical MD validation returned HTTP ${response.status}`);
+    const body = await response.json();
+    if (body.modId !== id || typeof body.ok !== 'boolean' || !Array.isArray(body.flat)
+      || !Array.isArray(body.cueIndex?.references) || !Array.isArray(body.cueIndex?.defined)
+      || !Array.isArray(body.cueIndex?.unresolved) || !Array.isArray(body.evidence?.coverage?.gaps)) {
+      throw new Error('Staged canonical MD validation did not return a full report for the fixture');
+    }
+    return body;
+  }
+
+  const budget = 4000;
+  const deadline = performance.now() + budget;
+  const signal = AbortSignal.timeout(budget);
+  let positive;
+  for (;;) {
+    positive = await validate('Existing', signal);
+    if (positive.ok !== true || !hasGap(positive) || performance.now() + 75 >= deadline) break;
+    await sleep(75);
+  }
+  const resolved = positive.ok && !hasGap(positive)
+    && positive.cueIndex.references.some(row => row.file === filePath && row.ref === reference('Existing')
+      && row.scope === 'cross_file' && row.resolved === true && row.line === 3 && row.column > 0)
+    && !positive.cueIndex.defined.some(row => row.script === stagedMdProvider);
+  if (!resolved) return { resolved: false, rejectedMissing: false };
+
+  const negative = await validate('Missing', AbortSignal.timeout(budget));
+  const missing = negative.cueIndex.unresolved.find(row => row.file === filePath && row.ref === reference('Missing')
+    && row.scope === 'cross_file' && row.resolved === false && row.line === 3 && row.column > 0);
+  const rejectedMissing = negative.ok === false && !hasGap(negative) && Boolean(missing?.sourceRef)
+    && negative.flat.some(row => row.code === 'project.unresolved_cue_ref' && row.severity === 'error'
+      && row.filePath === filePath && row.sourceRef === missing.sourceRef && row.line === missing.line && row.column === missing.column);
+  return { resolved, rejectedMissing };
+}
+
 let child;
 let stubborn;
 let nativeChild;
@@ -560,11 +616,17 @@ try {
   const publicStatus = await fetch(`${base}/api/reference/status`);
   const { instance } = await publicStatus.json();
   const discovery = JSON.parse(fs.readFileSync(path.join(discoveryDir, 'latest.json'), 'utf8'));
-  check('public identity agrees with the staged host discovery', publicStatus.ok && publicStatus.headers.get('cache-control') === 'no-store'
+  const matchesDiscovery = publicStatus.ok && publicStatus.headers.get('cache-control') === 'no-store'
     && instance?.mode === 'release-host' && instance.pid === supervisedPid && instance.port === port
     && instance.startedAt === discovery.startedAt && instance.version === extensionVersion
     && instance.mode === discovery.mode && instance.pid === discovery.pid && instance.port === discovery.port
-    && instance.version === discovery.version && Object.keys(instance).sort().join(',') === 'mode,pid,port,startedAt,version');
+    && instance.version === discovery.version && Object.keys(instance).sort().join(',') === 'mode,pid,port,startedAt,version';
+  check('public identity agrees with the staged host discovery', matchesDiscovery);
+  if (fixtureReference && matchesDiscovery) {
+    const { resolved, rejectedMissing } = await probeCanonicalMdWorker(base, auth);
+    check('staged canonical MD worker resolves the off-stem library', resolved);
+    check('staged canonical MD validation rejects the missing member at its call site', rejectedMissing);
+  }
   check('claimed parent pid is alive before orphan drill', pidAlive(process.pid), String(process.pid));
   child.stdin.end();
   const gracefulExit = await waitForExit(child, 3000);

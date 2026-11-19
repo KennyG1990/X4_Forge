@@ -14,7 +14,6 @@ import {
   buildContentXml,
   classifyPath,
   createProject,
-  indexCueReferences,
   validateProjectStructure,
   type ContentMeta,
   type ExtensionProject,
@@ -128,14 +127,13 @@ export function generateAgentProject(spec: ProjectGenerationSpec): ExtensionProj
   return project;
 }
 
-export function packageAgentProject(project: ExtensionProject) {
+export function packageAgentProject(project: ExtensionProject, validateCrossFile = validateProjectCrossFile) {
   const normalized = normalizeProject(project);
   const files: Record<string, string> = {};
   for (const file of normalized.files) {
     files[file.path.replace(/\\/g, '/').replace(/^\/+/, '')] = file.content || '';
   }
   const structure = validateProjectStructure(normalized);
-  const cueIndex = indexCueReferences(normalized);
   const luaFiles = normalized.files
     .filter((f): f is ProjectFile & { content: string } => /\.lua$/i.test(f.path) && typeof f.content === 'string')
     .map(f => {
@@ -154,7 +152,8 @@ export function packageAgentProject(project: ExtensionProject) {
     rel: uiManifest.path, source: 'loose' as const, sourcePath: uiManifest.path, extension,
   }] : [];
   const lua = analyzeLuaFiles(luaFiles.map(file => ({ ...file, extension })), manifestOnly);
-  const crossFile = validateProjectCrossFile(normalized);
+  const crossFile = validateCrossFile(normalized);
+  const { cueIndex } = crossFile;
   const errors = structure.filter(i => i.severity === 'error').length + cueIndex.unresolved.length + lua.findings.filter(f => f.severity === 'error').length + crossFile.summary.errors;
   const luaWarnings = lua.findings.filter(f => f.severity === 'warning').length;
   const x4UiFiles = lua.x4UiSummary.filesAnalyzed;

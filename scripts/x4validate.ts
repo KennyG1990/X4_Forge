@@ -23,6 +23,8 @@
 import path from "path";
 import { parseArgs } from 'node:util';
 import { flattenProjectValidation, loadProjectFromDisk, runProjectValidation, type FlatProjectDiagnostic, type ProjectValidationResult } from "../src/server/projectValidation";
+import { readCanonicalMdProviderCatalog } from '../src/lib/canonicalMdProviderCatalog';
+import { isMdReferenceCoverageCheck } from '../src/lib/mdEffectiveLibraryPurpose';
 import { buildValidationEvidence } from '../src/lib/validationEvidence';
 import { renderValidationReport, safeValidationLog, stringifyValidationJson, validationSeverity, type ValidationReportFormat, type ValidationSeverity } from './x4validate-report';
 
@@ -70,7 +72,15 @@ function main(): number {
     console.error("Expected an extension folder containing content.xml / md/*.xml / aiscripts/*.xml / *.lua");
     return 2;
   }
-  const result = runProjectValidation(load.project);
+  const result = runProjectValidation(load.project, {
+    canonicalMd: {
+      skippedFiles: load.skipped,
+      read(root) {
+        const catalog = readCanonicalMdProviderCatalog(root);
+        return catalog.status === 'ready' ? catalog : undefined;
+      },
+    },
+  });
   const flat = flattenProjectValidation(result);
   const failOn = threshold as ValidationSeverity;
   const gated = values.format !== undefined || values['fail-on'] !== undefined;
@@ -115,12 +125,21 @@ function printHumanReport(target: string, id: string, skipped: number, result: P
   const lines = flat.map(f =>
     `[${f.severity}] ${f.code || "validation"}: ${f.message}${f.filePath ? ` (${f.filePath}${f.line ? `:${f.line}` : ""})` : ""}`,
   );
+  const mdReferenceGaps = result.evidence?.coverage.gaps.filter(gap => isMdReferenceCoverageCheck(gap.check)) ?? [];
 
   if (lines.length) {
     console.log(`\nFindings (${lines.length}):`);
     for (const l of lines) console.log("  " + logText(l));
   } else {
-    console.log("\nNo findings.");
+    console.log(mdReferenceGaps.length ? "\nNo findings from completed checks." : "\nNo findings.");
+  }
+
+  if (mdReferenceGaps.length) {
+    console.log('\nMD reference coverage incomplete:');
+    for (const gap of mdReferenceGaps) {
+      const location = gap.filePath ? `${gap.filePath}: ` : '';
+      console.log(`  ${logText(`[${gap.check}] ${location}${gap.reason}`)}`);
+    }
   }
 }
 

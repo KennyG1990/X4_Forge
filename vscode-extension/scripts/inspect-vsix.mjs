@@ -16,6 +16,7 @@ const REQUIRED = [
   'extension/app/package.json',
   'extension/app/dist/index.html',
   'extension/app/dist/server.cjs',
+  'extension/app/dist/canonical-md-worker.cjs',
 ];
 const NATIVE_SQLITE = /^extension\/app\/node_modules\/better-sqlite3\/(?:build\/Release\/better_sqlite3\.node|prebuilds\/[^/]+\/better_sqlite3\.node)$/i;
 
@@ -180,6 +181,8 @@ function runSelftest() {
     ['valid_minimum_accepts', valid, true],
     ['missing_supervisor_rejects', valid.filter(item => item.name !== 'extension/out/sidecar-supervisor.js'), false],
     ['missing_server_rejects', valid.filter(item => item.name !== 'extension/app/dist/server.cjs'), false],
+    ['missing_canonical_md_worker_rejects', valid.filter(item => item.name !== 'extension/app/dist/canonical-md-worker.cjs'), false],
+    ['empty_canonical_md_worker_rejects', valid.map(item => item.name === 'extension/app/dist/canonical-md-worker.cjs' ? entry(item.name, 0) : item), false],
     ['empty_required_rejects', valid.map(item => item.name === 'extension/out/extension.js' ? entry(item.name, 0) : item), false],
     ['secret_rejects', [...valid, entry('extension/app/.env')], false],
     ['sourcemap_rejects', [...valid, entry('extension/out/extension.js.map')], false],

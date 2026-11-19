@@ -13,6 +13,11 @@ export const EFFECTIVE_INCLUDE_PURPOSE_CODE = 'md.include_actions_run_library';
 export const EFFECTIVE_INCLUDE_PURPOSE_CHECK = 'md.include_actions_context';
 export const EFFECTIVE_MD_REFERENCE_CHECK = 'md.reference_context';
 export const EFFECTIVE_MD_ARGUMENT_CHECK = 'md.library_arguments';
+
+export function isMdReferenceCoverageCheck(check: string): boolean {
+  return check === EFFECTIVE_MD_REFERENCE_CHECK || check === EFFECTIVE_MD_ARGUMENT_CHECK || check === EFFECTIVE_INCLUDE_PURPOSE_CHECK;
+}
+
 const MAX_ELEMENTS = 50_000;
 const MAX_SOURCE_CHARS = 8 * 1024 * 1024;
 
@@ -71,6 +76,7 @@ export interface MdReferenceCoverageGap { check: string; filePath?: string; reas
 export interface EffectiveMdReferenceContext {
   readonly complete: boolean;
   readonly index: MdLibraryIndex<DeclarationFact, MdEffectiveLibraryFacts>;
+  readonly canonicalIndex?: MdLibraryIndex<DeclarationFact, MdEffectiveLibraryFacts>;
   readonly callerByFile: ReadonlyMap<string, string>;
   readonly referencesByFile: ReadonlyMap<string, readonly MdReferenceFact<SourcePoint>[]>;
   readonly documents: readonly MdEffectiveLibraryFacts[];
@@ -436,6 +442,9 @@ export function evaluateEffectiveMdLibraryPurpose(inputs: readonly MdEffectiveLi
     declarations: wrap(document.declarations), source: document })));
   const beforeIndex = buildMdLibraryIndex(documents.flatMap(document => document.baseline.status === 'known'
     ? [{ name: document.baseline.script.name, declarations: wrap(document.baseline.script.declarations), source: document }] : []));
+  for (const [key, provider] of context?.canonicalIndex ?? []) {
+    if (!beforeIndex.has(key)) beforeIndex.set(key, provider);
+  }
   const beforeInventoryUnavailable = documents.some(document => document.baseline.status === 'unavailable');
   // Identity and causality lookups are linear to build, then constant per call.
   // They are not a second reference resolver and never grant target authority.
