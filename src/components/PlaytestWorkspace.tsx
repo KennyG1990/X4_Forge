@@ -1,4 +1,4 @@
-import { bindDeployPreview, type DeployReviewData } from '../lib/deployClient';
+import { prepareDeployReview, type DeployReviewData } from '../lib/deployClient';
 import DeployValidationSummary from './DeployValidationSummary';
 import React, { useState } from 'react';
 import type { ModWorkspace } from '../types';
@@ -453,8 +453,6 @@ type PlaytestDeployResult = DeployReviewData & {
   deployedPath?: string;
   deployedBytes?: number;
   doctor?: { blocking?: unknown[] };
-  deployRecord?: { id?: string };
-  effect?: DeployReviewData['effect'] & { added?: unknown[]; overwritten?: unknown[]; deleted?: unknown[]; preserved?: unknown[] };
 };
 
 export default function PlaytestWorkspace({
@@ -562,11 +560,7 @@ export default function PlaytestWorkspace({
         setDeployAttempt({ result });
         return;
       }
-      if (result.dryRun !== true || typeof result.targetRoot !== 'string' || !result.targetRoot.trim()) {
-        throw new Error('Forge did not return a preview with an exact X4 install destination.');
-      }
-      const applyBody = JSON.stringify(bindDeployPreview(JSON.parse(body), result));
-      setDeployAttempt({ result, review: { destination: result.targetRoot, applyBody, epoch } });
+      setDeployAttempt({ result, review: { ...prepareDeployReview(body, result), epoch } });
     } catch (error) {
       if (stillSelected()) setDeployAttempt({ result: { ok: false, error: error instanceof Error ? error.message : 'Deploy request failed.' } });
     } finally {

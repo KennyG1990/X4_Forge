@@ -9,6 +9,17 @@ export function bindDeployPreview(body: Record<string, unknown>, preview: Record
     expectedArtifactHash: artifactHash, expectedBindingHash: bindingHash, expectedTargetFingerprint: targetFingerprint };
 }
 
+/** Freeze one reviewed destination and the exact five identities for a separate Apply. */
+export function prepareDeployReview(body: string, preview: Record<string, unknown>) {
+  if (preview.dryRun !== true || typeof preview.targetRoot !== 'string' || !preview.targetRoot.trim()) {
+    throw new Error('Forge did not return a preview with an exact X4 install destination.');
+  }
+  return {
+    destination: preview.targetRoot,
+    applyBody: JSON.stringify(bindDeployPreview(JSON.parse(body), preview)),
+  };
+}
+
 /** Every browser deploy is preview-bound. This helper never approves a finding for the user. */
 export async function fetchVerifiedDeploy(init: RequestInit, fetcher: typeof fetch = fetch): Promise<Response> {
   if (typeof init.body !== 'string') throw new Error('Deploy body must be serialized JSON.');
@@ -26,7 +37,12 @@ export interface DeployReviewData {
   bytesConfirmed?: boolean;
   modId?: string;
   sourceHash?: string;
+  deployRecord?: { id?: string; status?: string };
   effect?: {
+    added?: unknown[];
+    overwritten?: unknown[];
+    deleted?: unknown[];
+    preserved?: unknown[];
     luaRegistration?: { status: 'added'; addedCount: number; addedPaths: string[]; restartMayBeRequired: true }
       | { status: 'unavailable'; detail: string };
   };
@@ -75,8 +91,9 @@ export function deployReviewView(data: DeployReviewData) {
     : 'Review counts are unavailable.';
   const preview = data.dryRun === true || data.stage === 'preview';
   const confirmed = data.ok === true && data.bytesConfirmed === true && !preview;
+  const committedReceipt = !preview && data.deployRecord?.status === 'committed';
   const title = preview ? 'Preview — not deployed'
-    : data.ok !== true ? 'Deployment failed'
+    : data.ok !== true ? committedReceipt ? 'Deployment committed — verify receipt' : 'Deployment failed'
     : !confirmed ? 'Deployment reported — bytes unconfirmed'
     : clean ? 'Deployed — validation checks passed'
     : counts && (counts.unacceptedErrors || counts.unacceptedWarnings) ? 'Deployed — outstanding findings'
@@ -84,7 +101,7 @@ export function deployReviewView(data: DeployReviewData) {
     : counts && (counts.acceptedErrors || counts.acceptedWarnings) ? review?.status === 'recorded' ? 'Deployed — accepted findings' : 'Deployed — approvals unconfirmed'
     : 'Deployed — validation unconfirmed';
   return { title, validationText, countText, counts, clean, confirmed, preview,
-    tone: !preview && data.ok !== true ? 'error' as const : confirmed && clean ? 'clean' as const : 'qualified' as const };
+    tone: !preview && !committedReceipt && data.ok !== true ? 'error' as const : confirmed && clean ? 'clean' as const : 'qualified' as const };
 }
 
 export function deployValidationLabel(data: DeployReviewData): string {

@@ -33,7 +33,11 @@ export interface DeployChecklistRow {
 interface CompileConfirmationModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onPreview: () => void;
   onConfirm: () => void;
+  onFormatChange: () => void;
+  phase: 'preview' | 'apply' | null;
+  reviewedDestination?: string;
   workspace: ModWorkspace;
   setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
   modWorkspacePath?: string;
@@ -57,7 +61,11 @@ const CHECK_GLYPH: Record<DeployChecklistRow['status'], string> = {
 export default function CompileConfirmationModal({
   isOpen,
   onClose,
+  onPreview,
   onConfirm,
+  onFormatChange,
+  phase,
+  reviewedDestination,
   workspace,
   setWorkspace,
   modWorkspacePath,
@@ -90,7 +98,8 @@ export default function CompileConfirmationModal({
   }, [isOpen]);
 
   const chooseDeployFormat = async (next: 'loose' | 'catalog') => {
-    if (next === deployFormat || formatBusy) return;
+    if (next === deployFormat || formatBusy || phase) return;
+    onFormatChange();
     setFormatBusy(true);
     setFormatError('');
     const previous = deployFormat;
@@ -339,7 +348,7 @@ export default function CompileConfirmationModal({
                   key={option.key}
                   type="button"
                   onClick={() => chooseDeployFormat(option.key)}
-                  disabled={formatBusy}
+                  disabled={formatBusy || phase !== null}
                   aria-pressed={selected}
                   data-testid={`deploy-format-${option.key}`}
                   className={`text-left p-2 rounded border transition-colors disabled:opacity-60 ${
@@ -383,15 +392,16 @@ export default function CompileConfirmationModal({
         )}
 
         {/* B7: deploy-verify preflight result — rendered IN the wizard, not hidden in Playtest */}
-        {compileStatus !== 'idle' && (
+        {(deployResult || compileStatus !== 'idle') && (
           <div className="mx-4 mb-4 p-2.5 bg-[#0f131c] border border-white/5 rounded text-[10px] font-mono leading-relaxed space-y-1 shrink-0 max-h-[40vh] overflow-y-auto custom-scrollbar" data-testid="wizard-preflight-card">
             {deployResult && compileStatus !== 'compiling' ? <DeployValidationSummary result={deployResult} /> :
             <div className={`uppercase text-[8.5px] font-bold tracking-wider ${
               compileStatus === 'compiling' ? 'text-cyan-400' : 'text-slate-300'
             }`}>
-              {compileStatus === 'compiling' ? 'Running preflight & deploy…' : compileStatus === 'success' ? 'Deployment result unavailable' : 'Build stopped'}
+              {phase === 'preview' ? 'Running deployment preview…' : phase === 'apply' ? 'Deploying and verifying…' : compileStatus === 'success' ? 'Deployment result unavailable' : 'Build stopped'}
             </div>}
             {compileMessage && <div className="text-slate-300 break-all">{compileMessage}</div>}
+            {deployResult?.deployRecord?.id && <p className="text-slate-400 break-all">Deploy receipt · {deployResult.deployRecord.id}</p>}
             {checklist.map(row => (
               <div key={row.id} className="flex items-start gap-1.5">
                 <span className={`${CHECK_COLORS[row.status]} font-bold w-3 shrink-0`}>{CHECK_GLYPH[row.status]}</span>
@@ -410,6 +420,23 @@ export default function CompileConfirmationModal({
         )}
 
         </div>
+        {reviewedDestination && <div className="px-4 py-3 shrink-0 border-t border-white/5 bg-[#0f131c] flex flex-wrap items-center gap-x-4 gap-y-2">
+          <div className="min-w-0 flex-1 space-y-1 text-[10px] font-mono" role="status">
+            <p className="text-slate-200 break-all" data-testid="wizard-deploy-destination">X4 install destination · {reviewedDestination}</p>
+            {deployResult?.effect && <p className="text-slate-300">
+              Files · {deployResult.effect.added?.length ?? 0} added · {deployResult.effect.overwritten?.length ?? 0} replaced · {deployResult.effect.deleted?.length ?? 0} removed · {deployResult.effect.preserved?.length ?? 0} preserved
+            </p>}
+          </div>
+          <button
+            type="button"
+            data-testid="wizard-apply-deploy"
+            onClick={onConfirm}
+            disabled={selectedCount === 0 || phase !== null || formatBusy}
+            className="px-4 py-1.5 bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-800 disabled:text-slate-500 text-black rounded text-[10.5px] font-mono font-bold uppercase transition-all cursor-pointer disabled:cursor-not-allowed shrink-0"
+          >
+            Deploy + Verify
+          </button>
+        </div>}
         {/* Footer controls wrapper block */}
         <div className="p-4 shrink-0 border-t border-white/5 bg-[#070a0f] flex items-center justify-between rounded-b-xl select-none">
           <div className="text-[10px] font-mono text-slate-500">
@@ -420,15 +447,16 @@ export default function CompileConfirmationModal({
               onClick={onClose}
               className="px-3 py-1.5 border border-white/10 hover:border-white/20 hover:bg-white/5 text-slate-400 hover:text-white rounded text-[10.5px] font-mono font-bold uppercase transition-all cursor-pointer"
             >
-              {compileStatus === 'success' || compileStatus === 'error' ? 'Close' : 'Cancel'}
+              {phase === 'apply' || compileStatus === 'success' || compileStatus === 'error' ? 'Close' : 'Cancel'}
             </button>
             <button
-              onClick={() => { onConfirm(); }}
-              disabled={selectedCount === 0 || compileStatus === 'compiling'}
+              data-testid="wizard-preview-deploy"
+              onClick={onPreview}
+              disabled={selectedCount === 0 || phase !== null || formatBusy}
               className="px-4 py-1.5 bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-800 disabled:text-slate-500 disabled:border-transparent text-black rounded text-[10.5px] font-mono font-bold uppercase transition-all cursor-pointer shadow-lg shadow-emerald-500/10 disabled:cursor-not-allowed inline-flex items-center gap-1"
             >
               <CheckCircle className="w-3.5 h-3.5 shrink-0" />
-              {compileStatus === 'success' || compileStatus === 'error' ? 'Build Again' : 'Build & Staging'}
+              Preview deployment
             </button>
           </div>
         </div>

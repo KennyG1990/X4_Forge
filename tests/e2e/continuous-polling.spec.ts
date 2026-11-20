@@ -1350,16 +1350,42 @@ test('AgentBridge Auto-Apply keeps a newer candidate pending while a prior sync 
     await expect.poll(() => posts.length).toBe(1);
     await expect.poll(readCache).toMatchObject({ draft: true, description: localDescription });
 
+    const deployRequests: Array<Record<string, unknown>> = [];
+    page.on('request', incoming => {
+      if (incoming.method() === 'POST' && new URL(incoming.url()).pathname === '/api/agent/deploy-verify') {
+        deployRequests.push(incoming.postDataJSON());
+      }
+    });
     await page.getByRole('button', { name: 'Compile Mod Extension' }).click();
+    const expectedTarget = path.join(extensions, resolveWorkspaceArtifactId(initial));
+    const frozenWorkspace = await page.evaluate(() => window.AgentRuntime!.getCurrentWorkspace());
+    const previewed = page.waitForResponse(response => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/api/agent/deploy-verify'
+      && response.request().postDataJSON().dryRun === true);
+    await page.getByTestId('wizard-preview-deploy').click();
+    const previewResponse = await previewed;
+    const preview = await previewResponse.json();
+    expect(previewResponse.status(), JSON.stringify(preview.checklist || preview.error)).toBe(200);
+    await expect(page.getByTestId('wizard-deploy-destination')).toContainText(expectedTarget);
+    await expect(page.getByTestId('wizard-preflight-card').getByTestId('deploy-review-title')).toHaveText('Preview — not deployed');
+    expect(deployRequests).toEqual([{ workspace: frozenWorkspace, dryRun: true }]);
+    expect(posts).toHaveLength(1);
+    expect(await fs.readdir(extensions)).toEqual([]);
+    expect(await fs.readdir(mods)).toEqual([]);
     const applied = page.waitForResponse(response => response.request().method() === 'POST'
       && new URL(response.url()).pathname === '/api/agent/deploy-verify'
       && response.request().postDataJSON().dryRun !== true);
-    await page.getByRole('button', { name: 'Build & Staging' }).click();
+    await page.getByTestId('wizard-apply-deploy').click();
     const deployed = await applied;
     const result = await deployed.json();
     expect(deployed.status(), JSON.stringify(result.checklist || result.error)).toBe(200);
     expect(result).toMatchObject({ ok: true, bytesConfirmed: true, workspace: { name: initial.name, description: localDescription } });
-    const expectedTarget = path.join(extensions, resolveWorkspaceArtifactId(initial));
+    expect(deployRequests).toEqual([
+      { workspace: frozenWorkspace, dryRun: true },
+      { workspace: frozenWorkspace, dryRun: false, expectedModId: preview.modId,
+        expectedSourceHash: preview.sourceHash, expectedArtifactHash: preview.artifactHash,
+        expectedBindingHash: preview.bindingHash, expectedTargetFingerprint: preview.targetFingerprint },
+    ]);
     expect(await fs.realpath(result.deployedPath)).toBe(await fs.realpath(expectedTarget));
     expect((await fs.stat(path.join(expectedTarget, 'content.xml'))).size).toBeGreaterThan(0);
     await expect.poll(() => convergence?.success).toBe(true);
@@ -1373,7 +1399,7 @@ test('AgentBridge Auto-Apply keeps a newer candidate pending while a prior sync 
     expect(accepted).toMatchObject({ version: acceptedVersion, workspaceHash: convergence?.workspaceHash,
       snapshotHash: convergence?.snapshotHash, workspace: { description: localDescription } });
 
-    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await page.getByRole('button', { name: 'Close', exact: true }).click();
     await openAgentBridge(page);
     await expect(page.getByTestId('agent-bridge-auto-sync')).toHaveText('ON');
     await seedServerWorkspace(remote);

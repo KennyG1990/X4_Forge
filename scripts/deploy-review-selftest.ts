@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import DeployValidationSummary from '../src/components/DeployValidationSummary';
-import { deployReviewView, deployValidationLabel, type DeployReviewData } from '../src/lib/deployClient';
+import { deployReviewView, deployValidationLabel, prepareDeployReview, type DeployReviewData } from '../src/lib/deployClient';
 import { parseCatManifest } from '../src/lib/x4CatDat';
 import { readX4MenuLuaPaths } from '../src/lib/x4UiSourceBundle';
 
@@ -59,5 +59,66 @@ check('strict-catalog-comparison-refuses-unparseable-index-rows', () => {
   for (const name of ['../ui.xml', './ui.xml', '/ui.xml', 'C:ui.xml']) {
     assert.throws(() => parseCatManifest(`${name} 12 0 ${'a'.repeat(32)}`, { strict: true }), /unsafe entry path/);
   }
+});
+check('review-freezes-serialized-body-and-destination', () => {
+  const request = { workspace: { name: 'Reviewed workspace', description: 'Exact draft' },
+    allowStaleOverwrite: true, allowErrors: ['reviewed-error'], allowWarnings: ['reviewed-warning'], dryRun: true };
+  const preview = { dryRun: true, targetRoot: 'C:/owned-scratch/game/extensions/reviewed', modId: 'reviewed',
+    sourceHash: 'a'.repeat(64), artifactHash: 'b'.repeat(64), bindingHash: 'c'.repeat(64), targetFingerprint: 'd'.repeat(64) };
+  const body = JSON.stringify(request);
+  const review = prepareDeployReview(body, preview);
+  const expected = { ...JSON.parse(body), dryRun: false, expectedModId: 'reviewed', expectedSourceHash: 'a'.repeat(64),
+    expectedArtifactHash: 'b'.repeat(64), expectedBindingHash: 'c'.repeat(64), expectedTargetFingerprint: 'd'.repeat(64) };
+  assert.equal(review.destination, preview.targetRoot);
+  assert.equal(review.applyBody, JSON.stringify(expected));
+  assert.deepEqual(JSON.parse(review.applyBody), expected);
+  request.workspace.description = 'Later unreviewed draft';
+  request.allowErrors.push('later-error');
+  preview.targetRoot = 'C:/different-destination';
+  preview.bindingHash = 'e'.repeat(64);
+  assert.equal(review.destination, 'C:/owned-scratch/game/extensions/reviewed');
+  assert.equal(review.applyBody, JSON.stringify(expected));
+});
+check('review-refuses-invalid-preview-or-destination', () => {
+  const preview = { dryRun: true, targetRoot: 'C:/owned-scratch/game/extensions/reviewed', modId: 'reviewed',
+    sourceHash: 'a'.repeat(64), artifactHash: 'b'.repeat(64), bindingHash: 'c'.repeat(64), targetFingerprint: 'absent' };
+  for (const dryRun of [undefined, false, 'true', 1]) {
+    assert.throws(() => prepareDeployReview('{}', { ...preview, dryRun }), /exact X4 install destination/);
+  }
+  for (const targetRoot of [undefined, null, '', ' \t ', 42]) {
+    assert.throws(() => prepareDeployReview('{}', { ...preview, targetRoot }), /exact X4 install destination/);
+  }
+  assert.equal(JSON.parse(prepareDeployReview('{}', preview).applyBody).expectedTargetFingerprint, 'absent');
+});
+check('review-refuses-missing-or-invalid-binding-identities', () => {
+  const preview = { dryRun: true, targetRoot: 'C:/owned-scratch/game/extensions/reviewed', modId: 'reviewed',
+    sourceHash: 'a'.repeat(64), artifactHash: 'b'.repeat(64), bindingHash: 'c'.repeat(64), targetFingerprint: 'd'.repeat(64) };
+  for (const key of ['modId', 'sourceHash', 'artifactHash', 'bindingHash', 'targetFingerprint']) {
+    for (const value of [undefined, '', 7]) {
+      assert.throws(() => prepareDeployReview('{}', { ...preview, [key]: value }), /deploy identity/);
+    }
+  }
+  for (const key of ['sourceHash', 'artifactHash', 'bindingHash', 'targetFingerprint']) {
+    for (const value of ['a'.repeat(63), 'g'.repeat(64)]) {
+      assert.throws(() => prepareDeployReview('{}', { ...preview, [key]: value }), /deploy identity/);
+    }
+  }
+  assert.throws(() => prepareDeployReview('{broken', preview), SyntaxError);
+});
+check('failed-response-with-committed-receipt-stays-qualified', () => {
+  const result: DeployReviewData = { ...fixtures.clean, ok: false,
+    deployRecord: { id: 'receipt-committed-before-response-failure', status: 'committed' } };
+  const view = deployReviewView(result);
+  assert.equal(view.title, 'Deployment committed — verify receipt');
+  assert.equal(view.tone, 'qualified');
+  assert.equal(view.confirmed, false);
+  assert.equal(view.preview, false);
+  const html = renderToStaticMarkup(createElement(DeployValidationSummary, { result }));
+  assert.match(html, /Deployment committed — verify receipt/);
+  assert.doesNotMatch(html, /Deployment failed/);
+  assert.equal(deployReviewView({ ...result, deployRecord: { status: 'prepared' } }).tone, 'error');
+  const preview = deployReviewView({ ...result, dryRun: true });
+  assert.equal(preview.title, 'Preview — not deployed');
+  assert.equal(preview.confirmed, false);
 });
 console.log(JSON.stringify({pass:true,total:checks.length,checks}));

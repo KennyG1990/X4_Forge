@@ -24,6 +24,8 @@ test('wizard and Playtest distinguish actual test-mod deployment outcomes',async
   await page.route('**/api/schema/config',route=>route.fulfill({json:{loaded:true,config:{modWorkspacePath:path.join(evidence,'ui-only-staging')},resolved:{mdExists:true},deployFormat:{format:'loose'}}}));
   await page.route('**/api/agent/compile',route=>route.fulfill({json:{success:true,diagnostics:[],validation:{scope:'full-project',ok:true}}}));
   let fixture=fixtures.accepted, delay=0, omitTargetFingerprint=false, omitTargetRoot=false;
+  let holdNextPreview=false;
+  let releaseHeldPreview: (() => void) | undefined;
   const requests: Array<Record<string, unknown>> = [];
   const applyIdentities: unknown[] = [];
   const modeledTargetFingerprint = 'absent';
@@ -31,6 +33,10 @@ test('wizard and Playtest distinguish actual test-mod deployment outcomes',async
   await page.route('**/api/agent/deploy-verify',async route=>{
     const body=route.request().postDataJSON();
     requests.push(body);
+    if(body.dryRun === true && holdNextPreview){
+      holdNextPreview=false;
+      await new Promise<void>(resolve=>{releaseHeldPreview=resolve;});
+    }
     if(delay)await new Promise(resolve=>setTimeout(resolve,delay));
     const result=structuredClone(fixture);
     // Workspace adoption is a separate API contract; never write a historical fixture's workspace.
@@ -52,14 +58,54 @@ test('wizard and Playtest distinguish actual test-mod deployment outcomes',async
     }
     await route.fulfill({json:result});
   });
+  try {
   await page.goto('/');
   await page.waitForFunction(()=>Boolean(window.AgentRuntime?.getCurrentWorkspace()));
   const dismiss=page.getByTestId('health-card-dismiss');if(await dismiss.isVisible())await dismiss.click();
   await page.getByTestId('beginner-step-deploy').click();
   await page.getByTestId('beginner-open-deploy').click();
   await expect(page.getByText('Compile & Deploy Wizard',{exact:true})).toBeVisible();
-  await page.getByRole('button',{name:'Build & Staging',exact:true}).click();
   const card=page.getByTestId('wizard-preflight-card');
+  const wizardPreview=page.getByTestId('wizard-preview-deploy');
+  const wizardApply=page.getByTestId('wizard-apply-deploy');
+  const wizardDestination=page.getByTestId('wizard-deploy-destination');
+  async function previewWizard(){
+    const previousCalls=requests.length;
+    const previousApplies=applyIdentities.length;
+    const frozenWorkspace=await page.evaluate(()=>window.AgentRuntime!.getCurrentWorkspace());
+    await wizardPreview.click();
+    await expect(wizardDestination).toContainText(modeledTargetRoot);
+    await expect(card.getByTestId('deploy-review-title')).toHaveText('Preview — not deployed');
+    expect(requests.slice(previousCalls)).toEqual([{workspace:frozenWorkspace,dryRun:true}]);
+    expect(applyIdentities).toHaveLength(previousApplies);
+    await expect(wizardApply).toBeEnabled();
+    return {previousCalls,previousApplies,frozenWorkspace};
+  }
+  async function confirmWizard(review: Awaited<ReturnType<typeof previewWizard>>){
+    await wizardApply.click();
+    await expect.poll(()=>requests.length).toBe(review.previousCalls+2);
+    expect(requests[review.previousCalls+1]).toEqual({
+      workspace:review.frozenWorkspace,
+      dryRun:false,
+      expectedModId:fixture.modId,
+      expectedSourceHash:fixture.sourceHash,
+      expectedArtifactHash:fixture.artifactHash,
+      expectedBindingHash:fixture.bindingHash,
+      expectedTargetFingerprint:modeledTargetFingerprint,
+    });
+    await expect.poll(()=>applyIdentities.length).toBe(review.previousApplies+1);
+  }
+  async function roundTripWorkspaceSelection(){
+    await page.evaluate(()=>{
+      const context=window.__X4_WORKSPACE_CONTEXT__!;
+      const original=context.getWorkspaceId();
+      const alternate=original==='ws_000000000000000000000000'?'ws_111111111111111111111111':'ws_000000000000000000000000';
+      context.selectWorkspace(alternate);
+      context.selectWorkspace(original);
+    });
+  }
+  expect(requests).toHaveLength(0);
+  await confirmWizard(await previewWizard());
   await expect(card.getByTestId('deploy-review-title')).toHaveText('Deployed — accepted findings');
   await expect(card.getByTestId('deploy-review-summary')).toHaveAttribute('data-tone','qualified');
   await expect(card.getByTestId('deploy-review-counts')).toContainText('Accepted: 0 errors, 1 warnings');
@@ -71,8 +117,9 @@ test('wizard and Playtest distinguish actual test-mod deployment outcomes',async
   await card.getByText(`Actor: ${approval.actor.label} (${approval.actor.id})`,{exact:true}).scrollIntoViewIfNeeded();
   await page.screenshot({path:path.join(evidence,'wizard-approval-detail.png'),fullPage:true});
   fixture=fixtures.mixed;delay=150;
-  await page.getByRole('button',{name:'Build Again',exact:true}).click();
+  const retriedPreview=previewWizard();
   await expect(card.getByTestId('deploy-review-summary')).toHaveCount(0);
+  await confirmWizard(await retriedPreview);
   await expect(card.getByTestId('deploy-review-title')).toHaveText('Deployed — outstanding findings');
   await expect(card).toContainText('Outstanding: 0 errors, 1 warnings. Accepted: 0 errors, 1 warnings.');
   delay=0;
@@ -80,6 +127,53 @@ test('wizard and Playtest distinguish actual test-mod deployment outcomes',async
   await page.getByRole('button',{name:'Close',exact:true}).click();
   await page.getByTestId('beginner-open-deploy').click();
   await expect(page.getByTestId('wizard-preflight-card')).toHaveCount(0);
+  await expect(wizardDestination).toHaveCount(0);
+  await expect(wizardApply).toHaveCount(0);
+  const staleReview=await previewWizard();
+  await roundTripWorkspaceSelection();
+  if(await wizardApply.isVisible())await wizardApply.click();
+  await expect(wizardApply).toHaveCount(0);
+  expect(requests).toHaveLength(staleReview.previousCalls+1);
+  expect(applyIdentities).toHaveLength(staleReview.previousApplies);
+  await wizardPreview.locator('..').getByRole('button',{name:/^(Cancel|Close)$/}).click();
+  await page.getByTestId('beginner-open-deploy').click();
+  holdNextPreview=true;
+  const beforeCancelledPreview=requests.length;
+  const appliesBeforeCancellation=applyIdentities.length;
+  const cancelledResponse=page.waitForResponse(response=>
+    new URL(response.url()).pathname==='/api/agent/deploy-verify'
+      && response.request().postDataJSON().dryRun===true);
+  await wizardPreview.click();
+  await expect.poll(()=>Boolean(releaseHeldPreview)).toBe(true);
+  await page.getByRole('button',{name:'Cancel',exact:true}).click();
+  await page.getByTestId('beginner-open-deploy').click();
+  await expect(card).toHaveCount(0);
+  releaseHeldPreview!();
+  await (await cancelledResponse).finished();
+  await page.evaluate(()=>new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve()))));
+  await expect(card).toHaveCount(0);
+  await expect(wizardDestination).toHaveCount(0);
+  await expect(wizardApply).toHaveCount(0);
+  expect(requests).toHaveLength(beforeCancelledPreview+1);
+  expect(applyIdentities).toHaveLength(appliesBeforeCancellation);
+  await page.getByRole('button',{name:'Cancel',exact:true}).click();
+  await page.getByTestId('beginner-open-deploy').click();
+  releaseHeldPreview=undefined;
+  holdNextPreview=true;
+  const beforeLatePreview=requests.length;
+  const lateResponse=page.waitForResponse(response=>
+    new URL(response.url()).pathname==='/api/agent/deploy-verify'
+      && response.request().postDataJSON().dryRun===true);
+  await wizardPreview.click();
+  await expect.poll(()=>Boolean(releaseHeldPreview)).toBe(true);
+  await roundTripWorkspaceSelection();
+  releaseHeldPreview!();
+  await (await lateResponse).finished();
+  await expect(wizardPreview).toBeEnabled();
+  await expect(wizardDestination).toHaveCount(0);
+  await expect(wizardApply).toHaveCount(0);
+  expect(requests).toHaveLength(beforeLatePreview+1);
+  expect(applyIdentities).toHaveLength(appliesBeforeCancellation);
   await page.getByRole('button',{name:'Cancel',exact:true}).click();
   // Expert navigation exposes the existing Playtest surface; no new product hook.
   await page.evaluate(()=>localStorage.setItem('x4_forge_experience_mode','expert'));
@@ -166,4 +260,7 @@ test('wizard and Playtest distinguish actual test-mod deployment outcomes',async
   await expect(applyButton).toHaveCount(0);
   expect(requests).toHaveLength(beforeSelectionChange + 1);
   expect(applyIdentities).toHaveLength(7);
+  } finally {
+    releaseHeldPreview?.();
+  }
 });

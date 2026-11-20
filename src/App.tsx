@@ -1,4 +1,4 @@
-import { fetchVerifiedDeploy, type DeployReviewData } from './lib/deployClient';
+import { prepareDeployReview, type DeployReviewData } from './lib/deployClient';
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
@@ -36,7 +36,7 @@ import DirectorySettingsModal from './components/DirectorySettingsModal';
 import WorkspaceNavigationBar from './components/WorkspaceNavigationBar';
 import FirstRunWizard from './components/FirstRunWizard';
 import { ttfm } from './lib/ttfm';
-import CompileConfirmationModal from './components/CompileConfirmationModal';
+import CompileConfirmationModal, { type DeployChecklistRow } from './components/CompileConfirmationModal';
 import AIScriptEditor from './components/AIScriptEditor';
 import LibraryConfigurator from './components/LibraryConfigurator';
 import XMLPatchSystem from './components/XMLPatchSystem';
@@ -152,6 +152,13 @@ const BLANK_WORKSPACE: ModWorkspace = {
     showIcons: true
   }
 };
+
+interface CompileDeployScope {
+  workspaceId: string;
+  selectionRevision: number;
+  revision: number;
+  authorityEpoch: number;
+}
 
 function selectedWorkspaceId(): string {
   return window.__X4_WORKSPACE_CONTEXT__?.getWorkspaceId() || '';
@@ -853,8 +860,22 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
   // Bumped when Directory Settings closes so the Sidebar's read-only schema panel refreshes.
   const [schemaConfigVersion, setSchemaConfigVersion] = useState<number>(0);
   const [isCompileModalOpen, setIsCompileModalOpen] = useState<boolean>(false);
+  const [compilePhase, setCompilePhase] = useState<'preview' | 'apply' | null>(null);
+  const compilePendingRef = useRef<{ phase: 'preview' | 'apply' } | null>(null);
+  const compileViewEpochRef = useRef(0);
+  const [compileReview, setCompileReview] = useState<{
+    scope: CompileDeployScope;
+    prepared: ReturnType<typeof prepareDeployReview>;
+    result: DeployReviewData;
+    checklist: DeployChecklistRow[];
+  } | null>(null);
+  const invalidateCompileReview = React.useCallback(() => {
+    compileViewEpochRef.current += 1;
+    setCompileReview(null);
+  }, []);
+  React.useLayoutEffect(invalidateCompileReview, [invalidateCompileReview, modWorkspacePath]);
   // B7: deploy-verify checklist rows surfaced in the Compile wizard itself.
-  const [deployChecklist, setDeployChecklist] = useState<Array<{ id: string; label: string; status: 'pass' | 'warn' | 'fail' | 'skipped'; detail: string }>>([]);
+  const [deployChecklist, setDeployChecklist] = useState<DeployChecklistRow[]>([]);
   const [deployResult, setDeployResult] = useState<DeployReviewData | null>(null);
   // B1 sync-trust: persistent canvas↔server content divergence gets a visible badge.
   const [syncDiverged, setSyncDiverged] = useState<boolean>(false);
@@ -1768,65 +1789,161 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
     };
   }, [localVersion, persistScopedWorkspaceSnapshot, workspace, workspaceSyncEpoch]);
 
-  const executeCompileModProject = async () => {
+  const readCompileScope = (): CompileDeployScope => ({
+    workspaceId: selectedWorkspaceId(),
+    selectionRevision: window.__X4_WORKSPACE_CONTEXT__?.getSelectionRevision() ?? -1,
+    revision: workspaceRevisionRef.current,
+    authorityEpoch: syncAuthorityEpochRef.current,
+  });
+
+  const sameCompileSelection = (scope: CompileDeployScope, current = readCompileScope()) =>
+    !!scope.workspaceId && scope.workspaceId === current.workspaceId
+    && scope.selectionRevision === current.selectionRevision;
+
+  const matchesCompileScope = (scope: CompileDeployScope) => {
+    const current = readCompileScope();
+    return sameCompileSelection(scope, current) && scope.revision === current.revision
+      && scope.authorityEpoch === current.authorityEpoch;
+  };
+
+  const activeCompileReview = compileReview && matchesCompileScope(compileReview.scope) ? compileReview : null;
+
+  const executeCompileModProject = async (phase: 'preview' | 'apply') => {
+    if (compilePendingRef.current || !isCompileModalOpen) return;
+    const scope = readCompileScope();
+    const review = phase === 'apply' ? activeCompileReview : null;
+    if (!scope.workspaceId || (phase === 'apply' && (!review || !matchesCompileScope(review.scope)))) {
+      invalidateCompileReview();
+      setCompileStatus('error');
+      setCompileMessage('Workspace selection or source changed. Get a fresh deployment preview.');
+      return;
+    }
+
+    const requestedAt = compileViewEpochRef.current;
+    const expectedHead = lastServerHashRef.current;
+    const expectedSnapshotHash = lastServerSnapshotHashRef.current;
+    const body = review?.prepared.applyBody ?? JSON.stringify({ workspace: workspaceRef.current, dryRun: true });
+    const stillInScope = () => matchesCompileScope(scope);
+    const previewCurrent = () => stillInScope() && requestedAt === compileViewEpochRef.current;
+
+    const pending = { phase };
+    compilePendingRef.current = pending;
+    setCompileReview(null);
+    setCompilePhase(phase);
     setCompileStatus('compiling');
     setDeployResult(null);
     setDeployChecklist([]);
-    setCompileMessage('Compiling and deploying project on the server...');
+    setCompileMessage(phase === 'preview' ? 'Checking the source and deployment destination…' : 'Deploying and verifying installed files…');
     try {
       // Audit R4: deploy-verify (full 9-stage preflight) replaces the deprecated /deploy.
-      const deployRes = await fetchVerifiedDeploy( {
+      const deployRes = await fetch('/api/agent/deploy-verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspace })
+        body,
       });
       const deployData = await deployRes.json();
+      const checklist = Array.isArray(deployData.checklist) ? deployData.checklist : [];
+      if (phase === 'preview') {
+        if (!previewCurrent()) return;
+        if (deployRes.ok && deployData.ok === true) {
+          setCompileReview({ scope, prepared: prepareDeployReview(body, deployData), result: deployData, checklist });
+          setCompileMessage('');
+          return;
+        }
+      } else if (!sameCompileSelection(scope)) {
+        return;
+      }
       setDeployResult(deployData);
-      setDeployChecklist(Array.isArray(deployData.checklist) ? deployData.checklist : []);
-      if (deployRes.ok && deployData.ok) {
+      setDeployChecklist(checklist);
+      if (phase === 'apply' && deployRes.ok && deployData.ok === true) {
+        if (deployData.dryRun === true || deployData.stage === 'preview' || deployData.bytesConfirmed !== true) {
+          setCompileStatus('error');
+          setCompileMessage('Forge did not confirm the installed files. Check the deployment record before retrying.');
+          return;
+        }
+        if (!stillInScope()) {
+          setCompileStatus('error');
+          setCompileMessage('Deployment succeeded. The local workspace changed before the refreshed source could be adopted.');
+          return;
+        }
         if (deployData.workspace && typeof deployData.workspace === 'object') {
           const convergenceRes = await fetch('/api/agent/workspace', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               workspace: deployData.workspace,
-              expectedHead: lastServerHashRef.current,
-              expectedSnapshotHash: lastServerSnapshotHashRef.current,
+              expectedHead,
+              expectedSnapshotHash,
             }),
           });
           const convergence = await convergenceRes.json().catch(() => ({}));
+          if (!sameCompileSelection(scope)) return;
+          if (!stillInScope()) {
+            setCompileStatus('error');
+            setCompileMessage('Deployment succeeded. Your newer local workspace was retained.');
+            return;
+          }
           if (!convergenceRes.ok || !convergence?.success) {
             setCompileStatus('error');
             setCompileMessage(`Deployment succeeded, but this tab could not adopt the refreshed source state (${convergence?.error || convergenceRes.status}). Reload the server copy before deploying again.`);
             return;
           }
-          setWorkspace(deployData.workspace);
-          localWorkspaceDirtyRef.current = false;
-          if (convergence.version) {
-            setLocalVersion(convergence.version);
-            persistScopedWorkspaceSnapshot(
-              sanitizeWorkspace(deployData.workspace),
-              Number(convergence.version),
-              String(convergence.snapshotHash),
-            );
+          const normalized = sanitizeWorkspace(deployData.workspace);
+          if (convergence.workspaceId !== scope.workspaceId || !Number.isSafeInteger(convergence.version) || convergence.version < 1
+            || convergence.workspaceHash !== workspaceContentHash(normalized)
+            || convergence.snapshotHash !== workspaceSnapshotHash(normalized)) {
+            setCompileStatus('error');
+            setCompileMessage('Deployment succeeded, but the refreshed workspace identity could not be confirmed. Review the server copy before deploying again.');
+            return;
           }
-          if (convergence.workspaceHash) lastServerHashRef.current = String(convergence.workspaceHash);
-          if (convergence.snapshotHash) lastServerSnapshotHashRef.current = String(convergence.snapshotHash);
+          workspaceRef.current = normalized;
+          workspaceRevisionRef.current += 1;
+          setRawWorkspace(normalized);
+          localWorkspaceDirtyRef.current = false;
+          setLocalVersion(convergence.version);
+          persistScopedWorkspaceSnapshot(normalized, convergence.version, convergence.snapshotHash, scope.workspaceId);
+          lastServerHashRef.current = convergence.workspaceHash;
+          lastServerSnapshotHashRef.current = convergence.snapshotHash;
         }
         setCompileStatus('success');
         setCompileMessage(`Deployment target: ${deployData.deployedPath || deployData.stagingPath || 'not supplied'}.`);
       } else {
-        const failed = (deployData.checklist || []).find((c: { status: string }) => c.status === 'fail');
+        const failed = checklist.find((row: DeployChecklistRow) => row.status === 'fail');
         setCompileStatus('error');
         setCompileMessage(deployData.error || (failed ? `${failed.label}: ${failed.detail}` : 'Compilation or deployment failed.'));
       }
     } catch (e: unknown) {
-      setCompileStatus('error');
-      setCompileMessage(e instanceof Error ? e.message : 'Compilation failed. Connection error.');
+      if (phase === 'preview' ? previewCurrent() : stillInScope()) {
+        setCompileStatus('error');
+        const detail = e instanceof Error ? e.message : 'Connection error.';
+        setCompileMessage(phase === 'apply'
+          ? `Deployment result could not be confirmed. Check the deployment record before retrying. ${detail}`
+          : detail);
+      }
+    } finally {
+      if (compilePendingRef.current === pending) {
+        compilePendingRef.current = null;
+        setCompilePhase(null);
+        setCompileStatus(status => status === 'compiling' ? 'idle' : status);
+      }
+    }
+  };
+
+  const closeCompileWizard = () => {
+    invalidateCompileReview();
+    setIsCompileModalOpen(false);
+    // A cancelled read may finish later. It does not own the reopened wizard.
+    // Closing during apply hides the view while the committed outcome still converges.
+    if (compilePendingRef.current?.phase === 'preview') {
+      compilePendingRef.current = null;
+      setCompilePhase(null);
+      setCompileStatus('idle');
+      setCompileMessage('');
     }
   };
 
   const handleCompileModProject = async () => {
+    if (compilePendingRef.current) return;
     if (!modWorkspacePath) {
       setCompileStatus('error');
       setCompileMessage('No workspace staging folder configured. Please configure it in Settings.');
@@ -1836,6 +1953,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
     setCompileMessage('');
     setDeployChecklist([]);
     setDeployResult(null);
+    invalidateCompileReview();
     setIsCompileModalOpen(true);
   };
 
@@ -3118,15 +3236,19 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
       {/* Selectable Compile Targets Confirmation Wizard Modal */}
       <CompileConfirmationModal
         isOpen={isCompileModalOpen}
-        onClose={() => setIsCompileModalOpen(false)}
-        onConfirm={executeCompileModProject}
+        onClose={closeCompileWizard}
+        onPreview={() => void executeCompileModProject('preview')}
+        onConfirm={() => void executeCompileModProject('apply')}
+        onFormatChange={invalidateCompileReview}
+        phase={compilePhase}
+        reviewedDestination={activeCompileReview?.prepared.destination}
         workspace={workspace}
         setWorkspace={setWorkspace}
         modWorkspacePath={modWorkspacePath}
         compileStatus={compileStatus}
         compileMessage={compileMessage}
-        checklist={deployChecklist}
-        deployResult={deployResult}
+        checklist={activeCompileReview?.checklist ?? deployChecklist}
+        deployResult={activeCompileReview?.result ?? deployResult}
       />
     </div>
   );
