@@ -6,7 +6,7 @@ import { DOMParser, XMLSerializer, type Document as XmlDocument, type Node as Xm
 import * as xpath from 'xpath';
 import { simulateXmlDiff } from '../lib/diffSimulator';
 import { resolveReferenceFile } from '../lib/referenceCorpus';
-import { discoverOfficialDlcOrder, resolveEffectiveReferenceDocument } from '../lib/referenceOverlay';
+import { discoverOfficialDlcOrder, isWareCollectionPath, resolveEffectiveReferenceDocument } from '../lib/referenceOverlay';
 import { sniffRootElement } from '../lib/schemaRouting';
 import {
   analyzeXmlReferenceDocument, normalizeXmlReferencePath, selectXmlReferenceNeighborhood,
@@ -159,6 +159,7 @@ export function analyzeXmlReferenceMap(input: XmlReferenceMapInput): XmlReferenc
   const failedReferencePaths = new Set<string>();
   const root = input.referenceRoot ? path.resolve(input.referenceRoot) : null;
   let dlcs: ReturnType<typeof discoverOfficialDlcOrder> = [];
+  let dlcFolders: string[] = [];
   let dlcCoverageComplete = true;
   const corpusAvailable = Boolean(root && fs.existsSync(root) && fs.statSync(root).isDirectory());
   if (!corpusAvailable) note('The configured unpacked reference corpus is unavailable; external asset resolution is incomplete.');
@@ -227,6 +228,7 @@ export function analyzeXmlReferenceMap(input: XmlReferenceMapInput): XmlReferenc
       }
     }
     if (folders.length > 32) { folders = folders.slice(0, 32); dlcCoverageComplete = false; truncated = true; note('Official DLC source limit reached; further sources are unscanned.'); }
+    dlcFolders = folders;
     for (const folder of folders) {
       const manifest = `extensions/${folder}/content.xml`;
       if (fs.existsSync(path.join(root, ...manifest.split('/'))) && !readReference(manifest)) dlcCoverageComplete = false;
@@ -268,9 +270,18 @@ export function analyzeXmlReferenceMap(input: XmlReferenceMapInput): XmlReferenc
     if (!guarded || !dlcCoverageComplete) return incompleteReference('Canonical composition was refused because source containment/coverage is incomplete; only the guarded raw source is shown.');
     let composition: CompositionBudget | null = null;
     for (const source of present) {
-      composition = sniffRootElement(source.raw.content) === 'diff'
-        ? composition && compositionPatch(composition, source.raw.content, limits.maxDocumentBytes)
-        : compositionDocument(source.raw.content, limits.maxDocumentBytes);
+      if (sniffRootElement(source.raw.content) === 'diff') {
+        composition = composition && compositionPatch(composition, source.raw.content, limits.maxDocumentBytes);
+      } else {
+        const next = compositionDocument(source.raw.content, limits.maxDocumentBytes);
+        if (composition && next && isWareCollectionPath(safe)) {
+          const bytes = composition.bytes + next.bytes;
+          const nodes = composition.nodes + next.nodes;
+          // Later selectors must be bounded against the union, not the saved base DOM.
+          composition = bytes <= limits.maxDocumentBytes && nodes <= COMPOSITION_NODES
+            ? { ...composition, bytes, nodes, mutated: true } : null;
+        } else composition = next;
+      }
       if (!composition) break;
     }
     if (!composition) {
@@ -278,7 +289,7 @@ export function analyzeXmlReferenceMap(input: XmlReferenceMapInput): XmlReferenc
     }
     if (!reserveComposition(composition, safe)) return incompleteReference('Aggregate raw/composed source budget prevents canonical composition; only guarded raw source is shown.');
     try {
-      const effective = resolveEffectiveReferenceDocument(root, safe, true);
+      const effective = resolveEffectiveReferenceDocument(root, safe, true, { dlcs });
       // The resolver is the existing authority. Verify that it used exactly the
       // guarded snapshots and did not race a change between preflight and use.
       const returnedPaths = effective.sources.map(source => source.path);
@@ -506,18 +517,16 @@ export function analyzeXmlReferenceMap(input: XmlReferenceMapInput): XmlReferenc
     const activeAnalysis = current ? parse('reference', logical, current.effective) : null;
     const candidates: SourceDocument[] = [];
     let sourcesComplete = corpusAvailable && dlcCoverageComplete;
-    for (const sourcePath of [logical, ...dlcs.map(dlc => `extensions/${dlc.folder}/${logical}`)]) {
+    for (const sourcePath of [logical, ...dlcFolders.map(folder => `extensions/${folder}/${logical}`)]) {
       const document = referenceDocument(sourcePath);
       if (document) {
         candidates.push(document);
         if (!document.analysis.definitionsComplete) sourcesComplete = false;
       } else if (sourcePath === logical || failedReferencePaths.has(key(sourcePath))) sourcesComplete = false;
     }
-    const fullDlcCollection = candidates.some(document => document.file.path !== logical && document.analysis.root === 'wares');
     wareSources = { documents: candidates,
       active: new Set(activeAnalysis?.definitions.filter(definition => definition.kind === 'ware').map(definition => key(definition.symbol)) ?? []),
-      activeComplete: !!current?.complete && !!activeAnalysis?.definitionsComplete && !fullDlcCollection, sourcesComplete };
-    if (fullDlcCollection) note('Full DLC ware collections require the existing canonical collection-merge repair (#11); raw contributors are candidates, not an inferred active merged result.');
+      activeComplete: !!current?.complete && !!activeAnalysis?.definitionsComplete, sourcesComplete };
     if (!wareSources.activeComplete) note('Current canonical ware identity is incomplete; authored contributor candidates remain navigable without an active-definition claim.');
     return wareSources;
   };
@@ -567,7 +576,7 @@ export function analyzeXmlReferenceMap(input: XmlReferenceMapInput): XmlReferenc
         }
         if (!wares.activeComplete || !wares.sourcesComplete) {
           incompleteResolution = true; canonicalWareReason = 'Canonical ware composition or contributor inventory is incomplete; this is an authored candidate, not a proven active canonical identity.';
-        } else if (!wares.active.has(key(reference.value)) && [...targets.values()].every(document => document.file.origin === 'reference')) {
+        } else if (targets.size && !wares.active.has(key(reference.value)) && [...targets.values()].every(document => document.file.origin === 'reference')) {
           incompleteResolution = true; canonicalWareReason = 'The authored ware declaration is absent from the complete effective canonical data (removed or renamed); it is a historical source candidate.';
         } else if (!targets.size && wares.active.has(key(reference.value))) {
           incompleteResolution = true; canonicalWareReason = 'The effective canonical ware exists, but its exact authored declaration/rename source could not be attributed; missing is not established.';

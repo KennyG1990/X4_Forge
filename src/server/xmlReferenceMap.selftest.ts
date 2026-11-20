@@ -181,10 +181,49 @@ export function runXmlReferenceMapSelftest() {
     }
     const renamedWare = analyze({ projectFiles: [{ path: 'consumer.xml', content: wareConsumer('renamed_ware') }], focus: { origin: 'project', path: 'consumer.xml' } });
     check('active rename without raw declaration attribution is never missing', hasEdge(renamedWare, 'renamed_ware', 'incomplete') && !hasEdge(renamedWare, 'renamed_ware', 'missing'));
-    write('extensions/ego_dlc_fixture/libraries/wares.xml', '<wares><ware id="full_collection_fuel"/></wares>');
-    const fullWareCollection = analyze({ projectFiles: [{ path: 'consumer.xml', content: wareConsumer('energycells') }], focus: { origin: 'project', path: 'consumer.xml' } });
-    check('unqualified full collection composition retains incomplete source candidate', hasEdge(fullWareCollection, 'energycells', 'incomplete') && fullWareCollection.coverage.reasons.some(reason => reason.includes('#11')));
-    fs.unlinkSync(path.join(root, 'extensions', 'ego_dlc_fixture', 'libraries', 'wares.xml'));
+    const fullContributor = 'extensions/ego_dlc_fixture/libraries/wares.xml';
+    const collectionPatch = 'extensions/ego_dlc_ware_patch/libraries/wares.xml';
+    const collectionManifest = 'extensions/ego_dlc_ware_patch/content.xml';
+    const wareEdge = (id: string) => analyze({ projectFiles: [{ path: 'consumer.xml', content: wareConsumer(id) }],
+      focus: { origin: 'project', path: 'consumer.xml' } }).edges.find(edge => edge.symbol === id && edge.kind === 'ware');
+    write(fullContributor, '<wares><ware id="full_collection_fuel"/><ware id="full_collection_rename"/></wares>');
+    write(collectionManifest, '<content id="ego_dlc_ware_patch"><dependency id="ego_dlc_fixture"/></content>');
+    write(collectionPatch, `<diff><remove sel="/wares/ware[@id='removed_ware']"/><replace sel="/wares/ware[@id='full_collection_rename']/@id">full_collection_renamed</replace></diff>`);
+    const retainedBaseWare = wareEdge('energycells');
+    const appendedWare = wareEdge('full_collection_fuel');
+    check('qualified base and full collection retain their real source paths', retainedBaseWare?.status === 'resolved'
+      && retainedBaseWare.targetId === 'reference:libraries/wares.xml' && appendedWare?.status === 'resolved' && appendedWare.targetId === `reference:${fullContributor}`);
+    const introduced = wareEdge('full_collection_renamed');
+    const historical = wareEdge('full_collection_rename');
+    check('later diff separates active renamed identity from attribution and historical source', introduced?.status === 'incomplete'
+      && introduced.targetIds.length === 0 && !!introduced.reason?.includes('could not be attributed')
+      && historical?.status === 'incomplete' && historical.targetId === `reference:${fullContributor}` && !!historical.reason?.includes('historical'));
+    const absent = wareEdge('unknown_complete_ware');
+    check('true absence in a qualified ware collection stays distinct from historical declarations', absent?.status === 'missing' && !absent.targetIds.length);
+    write(fullContributor, '<wares><ware id="energycells"/></wares>');
+    const duplicate = wareEdge('energycells');
+    check('collection duplicates keep both raw source candidates and no winner', duplicate?.status === 'ambiguous'
+      && !duplicate.targetId && duplicate.targetIds.includes('reference:libraries/wares.xml') && duplicate.targetIds.includes(`reference:${fullContributor}`)
+      && !!duplicate.reason?.includes('incomplete') && wareEdge('unknown_with_ware_collision')?.status === 'incomplete');
+    const duplicateManifest = 'extensions/ego_dlc_ware_alias/content.xml';
+    const duplicateFolderWares = 'extensions/ego_dlc_ware_alias/libraries/wares.xml';
+    write(fullContributor, '<wares><ware id="duplicate_manifest_ware"/></wares>');
+    write(duplicateManifest, '<content id="ego_dlc_fixture"/>');
+    write(duplicateFolderWares, '<wares><ware id="duplicate_manifest_ware"/></wares>');
+    const conflictingManifest = wareEdge('duplicate_manifest_ware');
+    check('duplicate manifest identities retain both physical ware candidates', conflictingManifest?.status === 'ambiguous'
+      && !conflictingManifest.targetId && conflictingManifest.targetIds.includes(`reference:${fullContributor}`)
+      && conflictingManifest.targetIds.includes(`reference:${duplicateFolderWares}`));
+    for (const relative of [duplicateManifest, duplicateFolderWares]) fs.unlinkSync(path.join(root, relative));
+    const baseWares = fs.readFileSync(path.join(root, 'libraries', 'wares.xml'), 'utf8');
+    const payload = 'x'.repeat(1_060_000);
+    write('libraries/wares.xml', `<wares><ware id="energycells" name="${payload}"/></wares>`);
+    write(fullContributor, `<wares><ware id="oversize_contributor" name="${payload}"/></wares>`);
+    const bounded = analyze({ projectFiles: [{ path: 'consumer.xml', content: wareConsumer('energycells') }], focus: { origin: 'project', path: 'consumer.xml' } });
+    check('sum of individually readable full ware contributors is bounded before composition', hasEdge(bounded, 'energycells', 'incomplete')
+      && bounded.coverage.reasons.some(reason => reason.includes('bounded node/operation/selector/output estimate')));
+    write('libraries/wares.xml', baseWares);
+    for (const relative of [fullContributor, collectionPatch, collectionManifest]) fs.unlinkSync(path.join(root, relative));
     write('assets/many_refs.xml', macro('many_refs', '<connections><connection>'.concat('<macro ref="bullet"/>'.repeat(2001), '</connection></connections>')));
     const incompleteProject = analyze({ projectFiles: [{ path: 'assets/many_refs.xml', content: '<diff><add sel="/macros/macro/properties"><property/></add></diff>' },
       { path: 'consumer.xml', content: macro('consumer', '<connections><connection><macro ref="unknown_with_effective_gap"/></connection></connections>') }], focus: { origin: 'project', path: 'consumer.xml' } });

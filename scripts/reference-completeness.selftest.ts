@@ -246,6 +246,43 @@ async function run() {
       assert.equal((await request('/api/reference/simulate-diff', { path: '../outside.xml', content: patch })).status, 403);
       assert.equal((await request('/api/reference/effective-file?path=missing.xml')).status, 404);
     });
+    const warePath = 'libraries/wares.xml';
+    const wareContributor = `extensions/ego_dlc_a/${warePath}`;
+    const stock = '<wares><ware id="stock" volume="1"/></wares>';
+    const mergedWareSelector = `/wares/ware[@id='added']/@volume`;
+    const warePatch = `<diff><replace sel="${mergedWareSelector}">5</replace></diff>`;
+    const warePlan = () => plan({ ...rule, pathPrefix: 'libraries', selector: mergedWareSelector }, [warePath]);
+    write(warePath, stock);
+    write(wareContributor, '<wares><ware id="added" volume="3"/></wares>');
+    await check('qualified collection is shared by effective file, patch preview and bulk transform', async () => {
+      const sources = [hash(warePath), hash(wareContributor)];
+      const file = await request(`/api/reference/effective-file?path=${warePath}`);
+      assert.equal(file.status, 200);
+      assert.equal(file.body.complete, true);
+      assert.match(file.body.content!, /id="stock" volume="1"/);
+      assert.match(file.body.content!, /id="added" volume="3"/);
+      const simulation = await request('/api/reference/simulate-diff', { path: warePath, content: warePatch });
+      assert.equal(simulation.status, 200);
+      assert.equal(simulation.body.ok, true);
+      assert.match(simulation.body.content!, /id="added" volume="5"/);
+      assert.equal(warePlan().rows[0]?.newValue, '6');
+      assert.deepEqual([hash(warePath), hash(wareContributor)], sources);
+    });
+    write(wareContributor, '<wares><ware id="added" volume="3"/><ware id="stock" volume="2"/></wares>');
+    await check('unqualified ware collision refuses XPath, simulation and bulk with contributor evidence', async () => {
+      const file = await request(`/api/reference/effective-file?path=${warePath}`);
+      assert.equal(file.status, 503);
+      assert.ok(file.body.incompleteFindings?.some(finding => finding.source === 'ego_dlc_a' && finding.code === 'REFERENCE_WARES_UNQUALIFIED'));
+      const completion = await request('/api/reference/xpath-complete', { path: warePath, selector: '/wares/', cursor: 7 });
+      assert.equal(completion.status, 503);
+      assert.deepEqual(completion.body.items, []);
+      const simulation = await request('/api/reference/simulate-diff', { path: warePath, content: warePatch });
+      assert.equal(simulation.status, 503);
+      const result = warePlan();
+      assert.equal(result.ok, false);
+      assert.deepEqual(result.rows, []);
+      assert.ok(result.findings.some(finding => finding.code === 'BULK_EFFECTIVE_INCOMPLETE' && finding.path === warePath));
+    });
   } finally {
     server.closeIdleConnections();
     await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));

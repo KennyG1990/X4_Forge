@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceFingerprint": "ad5e981d96bc3d9ffa03dee10b0ab04395d036e1429adf08c080f54b4a614699",
+  "sourceFingerprint": "48ea647717c4498bb385e81d11341ffa4f43ca87291c380447b21a8e724d0159",
   "policy": "Every raw production filesystem mutation source is count-pinned here. Authoritative files use atomic sibling promotion; stronger tree, archive, append-log, SQLite, retention, ephemeral, and fixture contracts remain explicit exceptions.",
   "writers": [
     {
@@ -142,7 +142,7 @@
     },
     {
       "file": "src/lib/referenceOverlay.ts",
-      "calls": { "writeFileSync": 1, "mkdirSync": 1, "rmSync": 2, "mkdtempSync": 1 },
+      "calls": {"writeFileSync": 1, "mkdirSync": 2, "rmSync": 2, "unlinkSync": 1, "mkdtempSync": 1},
       "categories": ["fixture-only"],
       "owners": ["runReferenceOverlaySelftest"],
       "rationale": "Builds a disposable base/DLC overlay fixture and removes one DLC to prove refresh.",
@@ -404,7 +404,7 @@
     },
     {
       "file": "src/server/xmlReferenceMap.selftest.ts",
-      "calls": { "writeFileSync": 4, "renameSync": 2, "mkdirSync": 3, "rmSync": 1, "unlinkSync": 2, "mkdtempSync": 1, "symlinkSync": 2 },
+      "calls": {"writeFileSync": 4, "renameSync": 2, "mkdirSync": 3, "rmSync": 1, "unlinkSync": 3, "mkdtempSync": 1, "symlinkSync": 2},
       "categories": ["fixture-only"],
       "owners": ["runXmlReferenceMapSelftest"],
       "rationale": "Creates contained XML corpus, authored/effective source, malformed-directory and junction-escape fixtures only beneath one unique temporary parent, including external targets inside that same owned parent.",
