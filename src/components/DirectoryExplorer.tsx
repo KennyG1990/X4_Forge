@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   FolderIcon,
   ChevronRight,
@@ -18,7 +18,8 @@ import {
 } from 'lucide-react';
 import { ModWorkspace, sanitizeWorkspace, TranslationItem, TranslationPage, TFile } from '../types';
 import { parseXMLToWorkspace } from '../lib/xmlParser';
-import { confirmDialog, promptDialog } from '../lib/uiDialogs';
+import { chooseDialog, promptDialog } from '../lib/uiDialogs';
+import { canonicalMd } from '../lib/mdCanonicalComparison';
 import { generateMDXML } from '../types';
 
 export interface FSItem {
@@ -33,10 +34,59 @@ export interface FSItem {
 
 // QoL panel cache: the FILES tree survives panel switches (background-refreshed
 // on mount instead of refetched with a visible empty state).
-const FILE_TREE_CACHE: { tree: FSItem[] | null } = { tree: null };
+const FILE_TREE_CACHE: { root: string; tree: FSItem[] | null } = { root: '', tree: null };
 
 interface FileReadResponse {
   content?: unknown;
+  root?: unknown;
+  absolutePath?: unknown;
+  sha256?: unknown;
+}
+
+interface FileScope {
+  root: string;
+  workspaceId: string;
+  selectionRevision: number;
+}
+
+type FileIdentity = { path: string; sha256: string };
+type FileStatus = { type: 'success' | 'error' | 'info'; text: string };
+type SaveKind = { kind: 'json' } | { kind: 'md'; source: string; generated: string };
+type FileSaveTarget = FileIdentity & SaveKind & {
+  scope: FileScope;
+  draftId: string;
+  selection: number;
+};
+
+const normalizedDiskPath = (value: string) => value.replace(/\\/g, '/');
+const workspaceFilePath = (root: string, relative: string) =>
+  `${normalizedDiskPath(root).replace(/\/+$/, '')}/${normalizedDiskPath(relative)}`;
+const isSha256 = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+
+async function writeFile(path: string, content: string, expectedSha256: string | null): Promise<string> {
+  const response = await fetch('/api/fs/write', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, content, expectedSha256, strict: true }),
+  });
+  if (!response.ok) throw new Error(await responseErrorMessage(response, 'Failed to write file on server.'));
+  const reply = await response.json() as { success?: boolean; written?: {
+    root?: string; absolutePath?: string; sha256?: string; byteExact?: boolean;
+  } };
+  const written = reply.written;
+  if (reply.success !== true || written?.byteExact !== true || written.root !== 'workspace'
+    || typeof written.absolutePath !== 'string' || normalizedDiskPath(written.absolutePath) !== normalizedDiskPath(path)
+    || !isSha256(written.sha256)) {
+    throw new Error('Forge could not confirm the saved bytes. Reopen the file before retrying.');
+  }
+  return written.sha256;
+}
+
+function isBlueprint(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const draft = value as Record<string, unknown>;
+  return typeof draft.name === 'string' && Array.isArray(draft.nodes)
+    && (draft.links === undefined || Array.isArray(draft.links));
 }
 
 interface ErrorResponse {
@@ -72,7 +122,6 @@ interface DirectoryExplorerProps {
 
 export default function DirectoryExplorer({
   modWorkspacePath,
-  filesystemPath,
   workspace,
   setWorkspace,
   saveCheckpoint,
@@ -85,10 +134,52 @@ export default function DirectoryExplorer({
   const [expandedPaths, setExpandedPaths] = useState<Record<string, boolean>>({});
   
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
-  const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+  const [saveTarget, setSaveTarget] = useState<FileSaveTarget | null>(null);
+  const [writing, setWriting] = useState(false);
+  const fileSelection = useRef(0);
+  const writingRef = useRef(false);
+  const mounted = useRef(true);
+  const statusTimer = useRef<number | null>(null);
+  const current = useRef({ modWorkspacePath, workspace });
+  current.current = { modWorkspacePath, workspace };
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      fileSelection.current += 1;
+      if (statusTimer.current !== null) window.clearTimeout(statusTimer.current);
+    };
+  }, []);
+
+  const readScope = (): FileScope => ({
+    root: current.current.modWorkspacePath,
+    workspaceId: window.__X4_WORKSPACE_CONTEXT__?.getWorkspaceId() ?? '',
+    selectionRevision: window.__X4_WORKSPACE_CONTEXT__?.getSelectionRevision() ?? -1,
+  });
+  const scopeMatches = (scope: FileScope) => {
+    const selected = readScope();
+    return mounted.current && Boolean(scope.root) && Boolean(scope.workspaceId)
+      && scope.root === selected.root && scope.workspaceId === selected.workspaceId
+      && scope.selectionRevision === selected.selectionRevision;
+  };
+  const isCurrentTarget = (target: FileSaveTarget) => scopeMatches(target.scope)
+    && fileSelection.current === target.selection && current.current.workspace.id === target.draftId;
+  const activeSaveTarget = saveTarget && isCurrentTarget(saveTarget) ? saveTarget : null;
+  const [statusMessage, updateStatus] = useState<FileStatus | null>(null);
+  const setStatusMessage = useCallback((message: FileStatus, ttl?: number) => {
+    if (statusTimer.current !== null) window.clearTimeout(statusTimer.current);
+    statusTimer.current = null;
+    updateStatus(message);
+    if (ttl !== undefined) {
+      statusTimer.current = window.setTimeout(() => {
+        statusTimer.current = null;
+        updateStatus(null);
+      }, ttl);
+    }
+  }, []);
 
   const handleRefreshDirectory = useCallback(async () => {
-    if (!filesystemPath && !modWorkspacePath) {
+    if (!modWorkspacePath) {
       setFileTree([]);
       return;
     }
@@ -98,29 +189,33 @@ export default function DirectoryExplorer({
       // Mod Workspace source. Deployed files remain available in Project Browser
       // as a separate, read-only comparison source.
       const response = await fetch('/api/fs/list?root=workspace');
+      if (!mounted.current || current.current.modWorkspacePath !== modWorkspacePath) return;
       if (response.ok) {
         const tree = await response.json() as unknown;
         if (!Array.isArray(tree)) {
           throw new Error("Filesystem tree response was not an array.");
         }
+        if (!mounted.current || current.current.modWorkspacePath !== modWorkspacePath) return;
+        FILE_TREE_CACHE.root = modWorkspacePath;
         FILE_TREE_CACHE.tree = tree;
         setFileTree(tree);
-        setStatusMessage({ type: 'success', text: "Synced project filesystem!" });
+        setStatusMessage({ type: 'success', text: "Synced project filesystem!" }, 2000);
       } else {
         throw new Error("Failed to load filesystem tree.");
       }
-      setTimeout(() => setStatusMessage(null), 2000);
     } catch (error: unknown) {
-      setStatusMessage({ type: 'error', text: `Sync failed: ${messageFromUnknown(error)}` });
+      if (mounted.current && current.current.modWorkspacePath === modWorkspacePath) {
+        setStatusMessage({ type: 'error', text: `Sync failed: ${messageFromUnknown(error)}` });
+      }
     }
-  }, [filesystemPath, modWorkspacePath]);
+  }, [modWorkspacePath, setStatusMessage]);
 
   // Re-scan whenever configured paths change. Serve the cached tree instantly
   // (panel switches), then refresh in the background.
   useEffect(() => {
-    if (FILE_TREE_CACHE.tree) setFileTree(FILE_TREE_CACHE.tree);
+    setFileTree(FILE_TREE_CACHE.root === modWorkspacePath ? FILE_TREE_CACHE.tree ?? [] : []);
     handleRefreshDirectory();
-  }, [handleRefreshDirectory]);
+  }, [handleRefreshDirectory, modWorkspacePath]);
 
   const toggleFolder = (path: string) => {
     setExpandedPaths(prev => ({
@@ -131,16 +226,32 @@ export default function DirectoryExplorer({
 
   // 4. File Click and Content Loader
   const handleFileClick = async (file: FSItem) => {
+    const selection = ++fileSelection.current;
+    const scope = readScope();
+    const openingWorkspace = workspace;
+    const stillOpening = () => scopeMatches(scope) && fileSelection.current === selection
+      && current.current.workspace === openingWorkspace;
+    setActiveFilePath(file.path);
+    setSaveTarget(null);
     try {
       saveCheckpoint();
-      setActiveFilePath(file.path);
-
       const response = await fetch(`/api/fs/read?root=workspace&path=${encodeURIComponent(file.path)}`);
       if (!response.ok) {
         throw new Error("Could not read file from server.");
       }
       const data = await response.json() as FileReadResponse;
-      const fileText = typeof data.content === 'string' ? data.content : '';
+      if (!stillOpening()) return;
+      if (typeof data.content !== 'string') throw new Error('Forge did not return file content.');
+      const fileText = data.content;
+      if (data.root !== 'workspace' || typeof data.absolutePath !== 'string'
+        || normalizedDiskPath(data.absolutePath) !== workspaceFilePath(scope.root, file.path)) {
+        throw new Error('The file no longer belongs to the displayed Mod Workspace. Reopen it after refreshing Settings.');
+      }
+      const identity: FileIdentity | null = isSha256(data.sha256)
+        ? { path: data.absolutePath, sha256: data.sha256 } : null;
+      const bindSave = (draft: ModWorkspace, kind: SaveKind) => {
+        if (identity) setSaveTarget({ ...identity, ...kind, scope, draftId: draft.id, selection });
+      };
       const sourceFolderName = String(workspace.sourceFolder || '')
         .replace(/\\/g, '/')
         .replace(/\/$/, '')
@@ -161,13 +272,13 @@ export default function DirectoryExplorer({
       if (fileExtension === 'json') {
         try {
           const parsed = JSON.parse(fileText);
-          if (parsed && typeof parsed === 'object') {
+          if (isBlueprint(parsed)) {
             const sanitized = sanitizeWorkspace(parsed);
             setWorkspace(sanitized);
-            setStatusMessage({ type: 'success', text: `Opened Blueprint: ${file.name}` });
-            setTimeout(() => setStatusMessage(null), 2000);
+            bindSave(sanitized, { kind: 'json' });
+            setStatusMessage({ type: 'success', text: `Opened Blueprint: ${file.name}` }, 2000);
           } else {
-            throw new Error("Invalid Mod Workspace configuration root.");
+            throw new Error('This JSON file is not a Forge blueprint. Open the source to edit it.');
           }
         } catch (error: unknown) {
           setStatusMessage({ type: 'error', text: `JSON parse failed: ${messageFromUnknown(error)}` });
@@ -227,36 +338,39 @@ export default function DirectoryExplorer({
               if (setWorkspaceView) {
                 setWorkspaceView('translation');
               }
-              setStatusMessage({ type: 'success', text: `Loaded Language t-file (${languageId}): ${file.name}` });
+              setStatusMessage({ type: 'success', text: `Loaded Language t-file (${languageId}): ${file.name}` }, 2500);
             } else {
               throw new Error("No language root tag identified.");
             }
           } catch (error: unknown) {
-            setStatusMessage({ type: 'error', text: `Could not parse Language XML: ${messageFromUnknown(error)}` });
+            setStatusMessage({ type: 'error', text: `Could not parse Language XML: ${messageFromUnknown(error)}` }, 2500);
           }
-          setTimeout(() => setStatusMessage(null), 2500);
         } else if (isAIScript) {
           if (setWorkspaceView) {
             setWorkspaceView('aiscripts');
           }
-          setStatusMessage({ type: 'success', text: `Loaded AIScript Behavior: ${file.name}` });
-          setTimeout(() => setStatusMessage(null), 2500);
+          setStatusMessage({ type: 'success', text: `Loaded AIScript Behavior: ${file.name}` }, 2500);
         } else if (isLibrary) {
           if (setWorkspaceView) {
             setWorkspaceView('xmlpatch');
           }
-          setStatusMessage({ type: 'success', text: `Opened Library XML Patch: ${file.name}` });
-          setTimeout(() => setStatusMessage(null), 2500);
+          setStatusMessage({ type: 'success', text: `Opened Library XML Patch: ${file.name}` }, 2500);
         } else {
           // Fallback to standard MD script parser
           const decoded = parseXMLToWorkspace(fileText, { identityPath: file.path });
           if (decoded && decoded.nodes.length > 0) {
-            setWorkspace(decoded);
+            const draft = sanitizeWorkspace(decoded);
+            const generated = generateMDXML(draft);
+            const root = new DOMParser().parseFromString(fileText, 'application/xml').documentElement;
+            const faithful = root.tagName === 'mdscript' && canonicalMd(fileText) === canonicalMd(generated);
+            setWorkspace(draft);
+            if (faithful) bindSave(draft, { kind: 'md', source: fileText, generated });
             if (setWorkspaceView) {
               setWorkspaceView('blueprint');
             }
-            setStatusMessage({ type: 'success', text: `Imported XML Script: ${file.name}` });
-            setTimeout(() => setStatusMessage(null), 2500);
+            setStatusMessage(faithful && identity
+              ? { type: 'success', text: `Imported XML Script: ${file.name}` }
+              : { type: 'info', text: `Imported ${file.name} for graph viewing. Open the original source to save edits.` }, 2500);
           } else {
             setStatusMessage({ 
               type: 'error', 
@@ -266,86 +380,69 @@ export default function DirectoryExplorer({
         }
       } else {
         // Non-node standard text file
-        setStatusMessage({ type: 'info', text: `Inspected text: ${file.name} (Opening in graph is restricted)` });
-        setTimeout(() => setStatusMessage(null), 2000);
+        setStatusMessage({ type: 'info', text: `Inspected text: ${file.name} (Opening in graph is restricted)` }, 2000);
       }
     } catch (error: unknown) {
-      console.error(error);
-      setStatusMessage({ type: 'error', text: `Failed opening file: ${messageFromUnknown(error)}` });
+      if (stillOpening()) setStatusMessage({ type: 'error', text: `Failed opening file: ${messageFromUnknown(error)}` });
     }
   };
 
-  // 5. Save Workspace back to active target file
   const handleSaveActiveFile = async () => {
-    if (!activeFilePath) {
-      setStatusMessage({ type: 'info', text: "Please select a file from the list to target for real-time saving." });
-      return;
-    }
-
-    const fileExtension = activeFilePath.split('.').pop()?.toLowerCase();
-    const contentToSave = fileExtension === 'json' 
-      ? JSON.stringify(workspace, null, 2)
-      : generateMDXML(workspace);
-
+    if (!activeSaveTarget || !isCurrentTarget(activeSaveTarget) || writingRef.current) return;
+    const target = activeSaveTarget;
+    const draft = current.current.workspace;
+    writingRef.current = true;
+    setWriting(true);
     try {
-      const response = await fetch('/api/fs/write', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: activeFilePath, content: contentToSave })
-      });
-      if (response.ok) {
-        setStatusMessage({ type: 'success', text: `Saved file: ${activeFilePath.split('/').pop()}` });
-      } else {
-        throw new Error(await responseErrorMessage(response, "Failed to write file on server."));
-      }
-      setTimeout(() => setStatusMessage(null), 2500);
+      const generated = target.kind === 'md' ? generateMDXML(draft) : JSON.stringify(draft, null, 2);
+      const content = target.kind === 'md' && generated === target.generated ? target.source : generated;
+      const sha256 = await writeFile(target.path, content, target.sha256);
+      if (!isCurrentTarget(target)) return;
+      setSaveTarget(target.kind === 'md'
+        ? { ...target, source: content, generated, sha256 }
+        : { ...target, sha256 });
+      const filename = normalizedDiskPath(target.path).split('/').pop();
+      setStatusMessage({ type: 'success', text: `Saved file: ${filename}` });
     } catch (error: unknown) {
-      setStatusMessage({ type: 'error', text: `Save failed: ${messageFromUnknown(error)}` });
-    }
-  };
-
-  // 6. Create or Add a new File element to targeted filesystem
-  const handleAddNewFile = async (name: string, type: 'json' | 'xml') => {
-    if (!name.trim()) return;
-    const cleanName = name.replace(/[^a-zA-Z0-9_.-]/g, '_');
-    const filename = cleanName.endsWith(`.${type}`) ? cleanName : `${cleanName}.${type}`;
-
-    try {
-      const initialContent = type === 'json' 
-        ? JSON.stringify(workspace, null, 2)
-        : generateMDXML(workspace);
-
-      const createResponse = await fetch('/api/fs/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: filename, type: 'file' })
-      });
-      if (!createResponse.ok) {
-        throw new Error(await responseErrorMessage(createResponse, "Failed to create file on server."));
-      }
-
-      const writeResponse = await fetch('/api/fs/write', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: filename, content: initialContent })
-      });
-      if (!writeResponse.ok) {
-        throw new Error("Failed to write initial content.");
-      }
-
-      await handleRefreshDirectory();
-      setStatusMessage({ type: 'success', text: `Created file: ${filename}` });
-      setTimeout(() => setStatusMessage(null), 2500);
-    } catch (error: unknown) {
-      setStatusMessage({ type: 'error', text: `Could not create file: ${messageFromUnknown(error)}` });
+      if (isCurrentTarget(target)) setStatusMessage({ type: 'error', text: `Save failed: ${messageFromUnknown(error)}` });
+    } finally {
+      writingRef.current = false;
+      if (mounted.current) setWriting(false);
     }
   };
 
   const handleCreatePrompt = async () => {
-    const filename = await promptDialog("Enter name for a new blueprint/script file (e.g., custom_patrol):", "custom_patrol");
-    if (!filename) return;
-    const selectType = await confirmDialog("Create as a Visual JSON Blueprint, or raw Egosoft MD Script XML?", { okLabel: 'JSON Blueprint', cancelLabel: 'MD Script XML' });
-    handleAddNewFile(filename, selectType ? 'json' : 'xml');
+    const scope = readScope();
+    if (writingRef.current || !scopeMatches(scope)) return;
+    const draft = current.current.workspace;
+    writingRef.current = true;
+    setWriting(true);
+    try {
+      const name = await promptDialog("Enter name for a new blueprint/script file (e.g., custom_patrol):", "custom_patrol");
+      if (!name?.trim() || !scopeMatches(scope)) return;
+      const selection = await chooseDialog("Create as a Visual JSON Blueprint, or raw Egosoft MD Script XML?", {
+        firstLabel: 'JSON Blueprint', secondLabel: 'MD Script XML',
+      });
+      if (selection === null || !scopeMatches(scope)) return;
+      if (current.current.workspace !== draft) {
+        setStatusMessage({ type: 'info', text: 'The workspace changed. Open New File again.' });
+        return;
+      }
+
+      const type = selection === 'first' ? 'json' : 'xml';
+      const cleanName = name.replace(/[^a-zA-Z0-9_.-]/g, '_');
+      const filename = cleanName.endsWith(`.${type}`) ? cleanName : `${cleanName}.${type}`;
+      const content = type === 'json' ? JSON.stringify(draft, null, 2) : generateMDXML(draft);
+      await writeFile(workspaceFilePath(scope.root, filename), content, null);
+      if (!scopeMatches(scope)) return;
+      await handleRefreshDirectory();
+      if (scopeMatches(scope)) setStatusMessage({ type: 'success', text: `Created file: ${filename}` });
+    } catch (error: unknown) {
+      if (scopeMatches(scope)) setStatusMessage({ type: 'error', text: `Could not create file: ${messageFromUnknown(error)}` });
+    } finally {
+      writingRef.current = false;
+      if (mounted.current) setWriting(false);
+    }
   };
 
   // Recursively filter tree lists
@@ -442,16 +539,18 @@ export default function DirectoryExplorer({
               onClick={handleCreatePrompt}
               className="p-1 px-1.5 rounded hover:bg-white/5 text-cyan-400 hover:text-cyan-200 transition-all cursor-pointer font-bold"
               title="Create new script or workspace"
+              disabled={writing || !modWorkspacePath}
             >
               + NEW FILE
             </button>
           </div>
           <div className="flex gap-1">
-            {activeFilePath && (
+            {activeSaveTarget && (
               <button
                 onClick={handleSaveActiveFile}
+                disabled={writing}
                 className="p-1 px-2 rounded bg-cyan-600/10 hover:bg-cyan-600/20 text-cyan-400 hover:text-cyan-200 border border-cyan-500/25 transition-all cursor-pointer flex items-center gap-1 text-[9px] font-bold font-mono uppercase"
-                title="Save current nodes back to active file file"
+                title={activeSaveTarget.kind === 'md' ? 'Save the loaded Mission Director file' : 'Save the loaded Forge blueprint'}
               >
                 <Save className="w-3 h-3" />
                 <span>Save</span>
@@ -465,8 +564,8 @@ export default function DirectoryExplorer({
           <span className="font-mono text-[9.5px] text-cyan-500 flex-shrink-0">
             path://
           </span>
-          <span className="font-mono text-[9.5px] font-bold text-slate-350 truncate tracking-wide flex-1" title={filesystemPath || modWorkspacePath || "No folder configured"}>
-            {filesystemPath || modWorkspacePath || "No folder configured"}
+          <span className="font-mono text-[9.5px] font-bold text-slate-350 truncate tracking-wide flex-1" title={modWorkspacePath || "No Mod Workspace folder configured"}>
+            {modWorkspacePath || "No Mod Workspace folder configured"}
           </span>
         </div>
 
@@ -489,7 +588,7 @@ export default function DirectoryExplorer({
         <div className="space-y-1">
           {filteredTree.length === 0 ? (
             <div className="text-center py-6 px-3 text-[10px] font-mono text-slate-500 leading-relaxed">
-              {(filesystemPath || modWorkspacePath) ? "No files matched filters" : "No folder configured. Use Settings to configure your Filesystem folder."}
+              {modWorkspacePath ? "No files matched filters" : "No folder configured. Use Settings to configure the Mod Workspace folder."}
             </div>
           ) : (
             filteredTree.map(item => renderFSNode(item))
@@ -518,7 +617,7 @@ export default function DirectoryExplorer({
       {/* Godot style Footer feedback detail */}
       <div className="p-2 border-t border-white/5 bg-[#17191e]/50 flex items-center justify-between font-mono text-[9px] text-slate-500 shrink-0">
         <span>Active File: {activeFilePath ? activeFilePath.split('/').pop() : 'None Loaded'}</span>
-        {(filesystemPath || modWorkspacePath) && <span className="text-emerald-500">● Server Connected</span>}
+        {modWorkspacePath && <span className="text-emerald-500">● Server Connected</span>}
       </div>
     </div>
   );

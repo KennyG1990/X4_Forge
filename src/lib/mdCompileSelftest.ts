@@ -13,6 +13,7 @@
 
 import type { MDNode, MDLink, ModWorkspace } from '../types';
 import { sanitizeWorkspace, generateMDXML, reindentRawXmlBlock } from '../types';
+import { parseXMLToWorkspace } from './xmlParser';
 
 const N = (id: string, type: any, xmlTag: string, properties: any = {}): Partial<MDNode> =>
   ({ id, type, xmlTag, properties, label: id, x: 0, y: 0 } as any);
@@ -90,6 +91,41 @@ export function runCompileSelftest() {
     ok('show_help_custom', /<show_help custom="'Hi'"/.test(xml), xml.match(/<show_help[^>]*>/)?.[0]);
     ok('show_help_duration_unit', /duration="5s"/.test(xml), xml.match(/<show_help[^>]*>/)?.[0]);
   }
+  // ---- show_help survives generated-file reopening and older saved graph fields ----
+  {
+    const banner = 'Welcome to "Forge" & friends';
+    const xml = compile(
+      [N('c', 'cue', 'cue', { name: 'C' }), N('a', 'action', 'show_help', { text: banner, duration: 8 })],
+      [L('l', 'c', 'out_act', 'a', 'in_act')],
+    );
+    const parsed = parseXMLToWorkspace(xml, { identityPath: 'md/quoted_banner.xml' });
+    const reopened = parsed ? generateMDXML(sanitizeWorkspace(parsed)) : '';
+    const originalHelp = xml.match(/<show_help[^>]*\/>/)?.[0];
+    const reopenedHelp = reopened.match(/<show_help[^>]*\/>/)?.[0];
+    ok('show_help_generated_quoted_banner', xml.includes('custom="\'Welcome to &quot;Forge&quot; &amp; friends\'"'), originalHelp);
+    ok('show_help_roundtrip_quoted_banner', Boolean(originalHelp) && reopenedHelp === originalHelp, { originalHelp, reopenedHelp });
+    ok('show_help_roundtrip_seconds', /duration="8s"/.test(reopenedHelp || ''), reopenedHelp);
+  }
+  for (const duration of ['2min', '1h', '$bannerDuration']) {
+    const xml = compile(
+      [N('c', 'cue', 'cue', { name: 'C' }), N('a', 'action', 'show_help', { text: 'Keep duration', duration })],
+      [L('l', 'c', 'out_act', 'a', 'in_act')],
+    );
+    const parsed = parseXMLToWorkspace(xml, { identityPath: 'md/banner_duration.xml' });
+    const reopened = parsed ? generateMDXML(sanitizeWorkspace(parsed)) : '';
+    const originalHelp = xml.match(/<show_help[^>]*\/>/)?.[0];
+    const reopenedHelp = reopened.match(/<show_help[^>]*\/>/)?.[0];
+    ok(`show_help_roundtrip_duration_${duration}`, Boolean(originalHelp) && reopenedHelp === originalHelp
+      && (reopenedHelp || '').includes(`duration="${duration}"`), { originalHelp, reopenedHelp });
+  }
+  {
+    const xml = compile(
+      [N('c', 'cue', 'cue', { name: 'C' }), N('a', 'action', 'show_help', { custom: 'Older "saved" banner & hints', duration: 8 })],
+      [L('l', 'c', 'out_act', 'a', 'in_act')],
+    );
+    ok('show_help_legacy_custom_only_text', xml.includes('custom="\'Older &quot;saved&quot; banner &amp; hints\'"'), xml.match(/<show_help[^>]*>/)?.[0]);
+  }
+
   // ---- create_ship: owner as a CHILD element, not a faction attr ----
   {
     const xml = compile(

@@ -1,15 +1,17 @@
-import { expect, test } from './request-transport';
+import { expect, test, fetchRouteWithClosingConnection, type APIRequestContext, type Page } from './request-transport';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { buildTemplateWorkspace } from '../../src/lib/modTemplates';
 import { needsManifestMaterialization } from '../../src/lib/nativeEditor';
-import { E2E_API_ORIGIN, E2E_TOKEN, E2E_WEB_ORIGIN } from '../../playwright.config';
+import { E2E_API_ORIGIN, E2E_TOKEN, E2E_WEB_ORIGIN, E2E_STATE_DIR } from '../../playwright.config';
 import { parseXMLToWorkspace } from '../../src/lib/xmlParser';
 import { mdStemFingerprint } from '../../src/lib/mdFileIdentity';
 import { applyNodeSelectionDocument, buildNodeSelectionDocument, isNodeSelectionFailure } from '../../src/lib/nodeSelectionDocument';
-import { seedServerWorkspace } from './ephemeral';
+import { ephemeralWorkspaceHeaders, readServerWorkspaceEnvelope, seedServerWorkspace } from './ephemeral';
 import { validatePackageReadiness } from '../../src/lib/modCompiler';
+import { generateMDXML, sanitizeWorkspace } from '../../src/types';
 
 const API = E2E_API_ORIGIN;
 const auth = { Authorization: `Bearer ${E2E_TOKEN}` };
@@ -155,6 +157,316 @@ test('patch-only projects emit no fake MD and materialization refuses stale over
     expect(verifiedBody.config?.filesystemPath).toBe(restore.filesystemPath);
     fs.rmSync(temp, { recursive: true, force: true });
   }
+});
+
+const filesDigest = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex');
+const diskPath = (value: string) => path.resolve(value).replaceAll('\\', '/');
+
+function filesInventory(root: string): Record<string, string> {
+  return Object.fromEntries(fs.readdirSync(root).sort().flatMap(name => {
+    const absolute = path.join(root, name);
+    const stat = fs.lstatSync(absolute);
+    expect(stat.isSymbolicLink(), 'Files fixtures must not redirect outside the owned root').toBe(false);
+    if (stat.isDirectory()) {
+      return Object.entries(filesInventory(absolute)).map(([relative, hash]) => [`${name}/${relative}`, hash]);
+    }
+    expect(stat.isFile() && stat.nlink === 1, 'Files fixtures must be owned regular files').toBe(true);
+    return [[name, filesDigest(fs.readFileSync(absolute))]];
+  }));
+}
+
+async function withFilesPanel(
+  page: Page,
+  request: APIRequestContext,
+  exercise: (fixture: {
+    source: string; installed: string; workspace: ReturnType<typeof sanitizeWorkspace>;
+    writes: Array<Record<string, unknown>>; creates: string[];
+  }) => Promise<void>,
+) {
+  expect(new URL(API).hostname).toBe('127.0.0.1');
+  expect(new URL(API).port).not.toBe('3001');
+  const stateRoot = path.resolve(E2E_STATE_DIR);
+  expect(fs.lstatSync(stateRoot).isDirectory() && !fs.lstatSync(stateRoot).isSymbolicLink()).toBe(true);
+  expect(diskPath(fs.realpathSync(stateRoot))).toBe(diskPath(stateRoot));
+  const headers = await ephemeralWorkspaceHeaders(true);
+  const priorConfigResponse = await request.get(`${API}/api/schema/config`, { headers });
+  expect(priorConfigResponse.status(), await priorConfigResponse.text()).toBe(200);
+  const priorConfig = await priorConfigResponse.json();
+  const restore = {
+    modWorkspacePath: priorConfig.config?.modWorkspacePath || '',
+    filesystemPath: priorConfig.config?.filesystemPath || '',
+  };
+  const priorWorkspace = await readServerWorkspaceEnvelope();
+  const scratch = fs.mkdtempSync(path.join(stateRoot, 'files-authority-'));
+  const source = path.join(scratch, 'source');
+  const installed = path.join(scratch, 'installed');
+  fs.mkdirSync(source);
+  fs.mkdirSync(installed);
+  fs.writeFileSync(path.join(installed, 'inspect.lua'), '-- installed bytes must never change\r\n');
+  fs.writeFileSync(path.join(installed, 'blueprint.json'), '{"installed":true}\r\n');
+  const installedBefore = filesInventory(installed);
+  const workspace = sanitizeWorkspace({ ...buildTemplateWorkspace('welcome'),
+    id: 'files_authority_fixture', name: 'Files_Authority_Fixture', sourceFolder: source });
+  const writes: Array<Record<string, unknown>> = [];
+  const creates: string[] = [];
+  page.on('request', incoming => {
+    const url = new URL(incoming.url());
+    if (incoming.method() === 'POST' && url.pathname === '/api/fs/write') writes.push(incoming.postDataJSON());
+    if (incoming.method() === 'POST' && url.pathname === '/api/fs/create') creates.push(incoming.url());
+  });
+  try {
+    const configured = await request.post(`${API}/api/schema/config`, {
+      headers, data: { modWorkspacePath: source, filesystemPath: installed },
+    });
+    expect(configured.status(), await configured.text()).toBe(200);
+    await seedServerWorkspace(workspace);
+    // All reads and writes below go to the actual ephemeral filesystem routes.
+    await exercise({ source, installed, workspace, writes, creates });
+    expect(filesInventory(installed)).toEqual(installedBefore);
+    expect(creates, 'Files creation must not create an intermediate placeholder').toEqual([]);
+  } finally {
+    // Retire the browser before restoring shared settings, including any in-flight autosave.
+    await page.close();
+    const restored = await request.post(`${API}/api/schema/config`, { headers, data: restore });
+    expect(restored.status(), await restored.text()).toBe(200);
+    const verified = await request.get(`${API}/api/schema/config`, { headers });
+    expect(verified.status(), await verified.text()).toBe(200);
+    expect((await verified.json()).config).toMatchObject(restore);
+    await seedServerWorkspace(priorWorkspace.workspace);
+    expect(filesInventory(installed)).toEqual(installedBefore);
+    const relative = path.relative(stateRoot, scratch);
+    expect(relative !== '' && !path.isAbsolute(relative) && relative.split(path.sep)[0] !== '..').toBe(true);
+    expect(diskPath(fs.realpathSync(scratch))).toBe(diskPath(scratch));
+    fs.rmSync(scratch, { recursive: true });
+    expect(fs.existsSync(scratch)).toBe(false);
+  }
+}
+
+async function openFilesPanel(page: Page) {
+  await page.goto('/');
+  const expert = page.getByTestId('mode-expert');
+  if (await expert.getAttribute('aria-pressed') !== 'true') await expert.click();
+  await page.locator('[data-sidebar-tab="filesystem"]').click();
+  await expect(page.getByPlaceholder('Search Files...')).toBeVisible();
+  await expect(page.getByTitle('Create new script or workspace')).toBeEnabled();
+}
+
+async function readFilesSelection(page: Page, filename: string, source: string) {
+  const pending = page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return response.request().method() === 'GET' && url.pathname === '/api/fs/read'
+      && url.searchParams.get('root') === 'workspace' && url.searchParams.get('path') === filename;
+  });
+  await page.getByRole('button', { name: filename, exact: true }).click();
+  const response = await pending;
+  expect(response.status(), await response.text()).toBe(200);
+  const body = await response.json();
+  expect(body).toMatchObject({ root: 'workspace', content: fs.readFileSync(path.join(source, filename), 'utf8'),
+    sha256: filesDigest(fs.readFileSync(path.join(source, filename))) });
+  expect(diskPath(body.absolutePath)).toBe(diskPath(path.join(source, filename)));
+  return body as { content: string; absolutePath: string; sha256: string };
+}
+
+test('Files Save binds admitted blueprint and MD bytes and refuses inspected, stale or superseded selections', async ({ page, request }) => {
+  test.setTimeout(120_000);
+  await withFilesPanel(page, request, async ({ source, installed, workspace, writes }) => {
+    const originals = {
+      'blueprint.json': JSON.stringify(workspace, null, 2),
+      'inspect.lua': '-- source Lua sentinel\r\nlocal untouched = true\r\n',
+      'metadata.json': '{"purpose":"ordinary JSON, not a blueprint"}\r\n',
+      'broken.json': '{"nodes":',
+      'broken.xml': '<mdscript><cues><cue',
+      'unsupported.xml': '<catalog><entry id="untouched"/></catalog>\r\n',
+      'generated.xml': generateMDXML(workspace).replace('<mdscript ', '<!-- retain this exact source comment -->\r\n<mdscript '),
+    };
+    for (const [filename, content] of Object.entries(originals)) fs.writeFileSync(path.join(source, filename), content);
+    const sourceBefore = filesInventory(source);
+    const installedBefore = filesInventory(installed);
+    await openFilesPanel(page);
+    const save = page.getByRole('button', { name: 'Save', exact: true });
+    const blueprint = await readFilesSelection(page, 'blueprint.json', source);
+    await expect(page.getByText('Opened Blueprint: blueprint.json', { exact: true })).toBeVisible();
+    await expect(save).toBeEnabled();
+    for (const filename of ['inspect.lua', 'metadata.json', 'broken.json', 'broken.xml', 'unsupported.xml']) {
+      await readFilesSelection(page, filename, source);
+      await expect(page.getByText(`Active File: ${filename}`, { exact: true })).toBeVisible();
+      await expect(save).toHaveCount(0);
+      expect(writes).toEqual([]);
+      expect(filesInventory(source)).toEqual(sourceBefore);
+      expect(filesInventory(installed)).toEqual(installedBefore);
+    }
+
+    await readFilesSelection(page, 'blueprint.json', source);
+    await expect(page.getByText('Opened Blueprint: blueprint.json', { exact: true })).toBeVisible();
+    const jsonSaved = page.waitForResponse(response => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/api/fs/write');
+    await save.click();
+    const jsonReply = await jsonSaved;
+    expect(jsonReply.status(), await jsonReply.text()).toBe(200);
+    const jsonWrite = writes[0];
+    expect(Object.keys(jsonWrite).sort()).toEqual(['content', 'expectedSha256', 'path', 'strict']);
+    expect(jsonWrite).toMatchObject({ expectedSha256: blueprint.sha256, strict: true });
+    expect(diskPath(String(jsonWrite.path))).toBe(diskPath(blueprint.absolutePath));
+    expect(path.isAbsolute(String(jsonWrite.path))).toBe(true);
+    expect(JSON.parse(String(jsonWrite.content))).toMatchObject({ id: workspace.id, name: workspace.name });
+    expect(fs.readFileSync(path.join(source, 'blueprint.json'), 'utf8')).toBe(jsonWrite.content);
+    expect(await jsonReply.json()).toMatchObject({ success: true, written: { byteExact: true, root: 'workspace',
+      sha256: filesDigest(String(jsonWrite.content)) } });
+    await expect(page.getByText('Saved file: blueprint.json', { exact: true })).toBeVisible();
+
+    const mdRead = await readFilesSelection(page, 'generated.xml', source);
+    await expect(page.getByText('Imported XML Script: generated.xml', { exact: true })).toBeVisible();
+    await expect(save).toBeEnabled();
+    const mdSaved = page.waitForResponse(response => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/api/fs/write');
+    await save.click();
+    const mdReply = await mdSaved;
+    expect(mdReply.status(), await mdReply.text()).toBe(200);
+    expect(writes[1]).toEqual({ path: mdRead.absolutePath, content: originals['generated.xml'],
+      expectedSha256: mdRead.sha256, strict: true });
+    expect(fs.readFileSync(path.join(source, 'generated.xml'), 'utf8')).toBe(originals['generated.xml']);
+    expect(await mdReply.json()).toMatchObject({ success: true, written: { byteExact: true, root: 'workspace', sha256: mdRead.sha256 } });
+    await expect(page.getByText('Saved file: generated.xml', { exact: true })).toBeVisible();
+
+    const external = '<!-- external writer sentinel; retain on stale Save -->\r\n' + originals['generated.xml'];
+    fs.writeFileSync(path.join(source, 'generated.xml'), external);
+    const staleSave = page.waitForResponse(response => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/api/fs/write');
+    await save.click();
+    const refusal = await staleSave;
+    expect(refusal.status()).toBe(409);
+    expect(await refusal.json()).toMatchObject({ success: false, code: 'FILE_CHANGED', expectedSha256: mdRead.sha256 });
+    expect(writes[2]).toEqual(writes[1]);
+    await expect(page.getByText(/^Save failed:/)).toBeVisible();
+    await expect(page.getByText('Saved file: generated.xml', { exact: true })).toHaveCount(0);
+    expect(fs.readFileSync(path.join(source, 'generated.xml'), 'utf8')).toBe(external);
+
+    let releaseRead!: () => void;
+    const release = new Promise<void>(resolve => { releaseRead = resolve; });
+    let held = false;
+    const staleRead = page.waitForResponse(response => new URL(response.url()).pathname === '/api/fs/read'
+      && new URL(response.url()).searchParams.get('path') === 'blueprint.json');
+    await page.route('**/api/fs/read?**', async route => {
+      if (new URL(route.request().url()).searchParams.get('path') !== 'blueprint.json') return route.continue();
+      const response = await fetchRouteWithClosingConnection(route);
+      held = true;
+      await release;
+      await route.fulfill({ response });
+    });
+    try {
+      await page.getByRole('button', { name: 'blueprint.json', exact: true }).click();
+      await expect.poll(() => held).toBe(true);
+      await expect(save).toHaveCount(0);
+      await readFilesSelection(page, 'inspect.lua', source);
+      await expect(page.getByText(/^Inspected text: inspect\.lua/)).toBeVisible();
+      releaseRead();
+      await (await staleRead).finished();
+      await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      await expect(page.getByText('Active File: inspect.lua', { exact: true })).toBeVisible();
+      await expect(save).toHaveCount(0);
+      await expect(page.getByText('Opened Blueprint: blueprint.json', { exact: true })).toHaveCount(0);
+    } finally {
+      releaseRead();
+      await page.unroute('**/api/fs/read?**');
+    }
+    await readFilesSelection(page, 'blueprint.json', source);
+    await expect(save).toBeEnabled();
+    await page.evaluate(() => {
+      const context = window.__X4_WORKSPACE_CONTEXT__!;
+      const original = context.getWorkspaceId();
+      context.selectWorkspace(original === 'ws_000000000000000000000000'
+        ? 'ws_111111111111111111111111' : 'ws_000000000000000000000000');
+      context.selectWorkspace(original);
+      // If React has not rendered the new revision yet, the handler must still refuse synchronously.
+      const oldSave = Array.from(document.querySelectorAll('button')).find(button => button.textContent?.trim() === 'Save');
+      oldSave?.click();
+    });
+    await expect(save).toHaveCount(0);
+    expect(writes).toHaveLength(3);
+    expect(filesInventory(source)).toEqual({ ...sourceBefore,
+      'blueprint.json': filesDigest(String(jsonWrite.content)), 'generated.xml': filesDigest(external) });
+    expect(filesInventory(installed)).toEqual(installedBefore);
+  });
+});
+
+test('Files New File dismissals write nothing and both types create atomically without replacing duplicates', async ({ page, request }) => {
+  test.setTimeout(120_000);
+  await withFilesPanel(page, request, async ({ source, installed, workspace, writes, creates }) => {
+    fs.writeFileSync(path.join(source, 'existing.lua'), '-- source sentinel\r\n');
+    const sourceBefore = filesInventory(source);
+    const installedBefore = filesInventory(installed);
+    await openFilesPanel(page);
+    const newFile = page.getByTitle('Create new script or workspace');
+    const chooserTitle = 'Create as a Visual JSON Blueprint, or raw Egosoft MD Script XML?';
+    const dismiss = async (method: 'Cancel' | 'Escape' | 'backdrop') => {
+      if (method === 'Cancel') await page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click();
+      else if (method === 'Escape') await page.keyboard.press('Escape');
+      else await page.getByTestId('dialog-modal').click({ position: { x: 5, y: 5 } });
+      await expect(page.getByRole('dialog')).toHaveCount(0);
+      await expect(newFile).toBeEnabled();
+    };
+    const beginChoice = async (filename: string) => {
+      await newFile.click();
+      await page.getByTestId('dialog-input').fill(filename);
+      await page.getByTestId('dialog-ok').click();
+      await expect(page.getByRole('dialog', { name: chooserTitle, exact: true })).toBeVisible();
+      await expect(page.getByTestId('dialog-ok')).toHaveText('JSON Blueprint');
+      await expect(page.getByTestId('dialog-alternative')).toHaveText('MD Script XML');
+      await expect(page.getByTestId('dialog-cancel')).toHaveText('Cancel');
+    };
+    for (const method of ['Cancel', 'Escape', 'backdrop'] as const) {
+      await newFile.click();
+      await page.getByTestId('dialog-input').fill(`dismiss_name_${method}`);
+      await dismiss(method);
+      await beginChoice(`dismiss_type_${method}`);
+      await dismiss(method);
+      expect(writes).toEqual([]);
+      expect(creates).toEqual([]);
+      expect(filesInventory(source)).toEqual(sourceBefore);
+      expect(filesInventory(installed)).toEqual(installedBefore);
+    }
+    for (const type of ['json', 'xml'] as const) {
+      const basename = `atomic_${type}`;
+      const filename = `${basename}.${type}`;
+      await beginChoice(basename);
+      const written = page.waitForResponse(response => response.request().method() === 'POST'
+        && new URL(response.url()).pathname === '/api/fs/write');
+      await page.getByTestId(type === 'json' ? 'dialog-ok' : 'dialog-alternative').click();
+      const response = await written;
+      expect(response.status(), await response.text()).toBe(200);
+      const expectedContent = type === 'json' ? JSON.stringify(workspace, null, 2) : generateMDXML(workspace);
+      const sent = writes.at(-1)!;
+      expect(Object.keys(sent).sort()).toEqual(['content', 'expectedSha256', 'path', 'strict']);
+      expect(sent).toMatchObject({ content: expectedContent, expectedSha256: null, strict: true });
+      expect(path.isAbsolute(String(sent.path))).toBe(true);
+      expect(diskPath(String(sent.path))).toBe(diskPath(path.join(source, filename)));
+      const reply = await response.json();
+      expect(reply).toMatchObject({ success: true, written: { byteExact: true, root: 'workspace', sha256: filesDigest(expectedContent) } });
+      expect(diskPath(reply.written.absolutePath)).toBe(diskPath(path.join(source, filename)));
+      expect(fs.readFileSync(path.join(source, filename), 'utf8')).toBe(expectedContent);
+      if (type === 'json') expect(JSON.parse(expectedContent)).toMatchObject({ id: workspace.id, name: workspace.name });
+      else expect(parseXMLToWorkspace(expectedContent)?.nodes.length).toBeGreaterThan(0);
+      await expect(page.getByText(`Created file: ${filename}`, { exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: filename, exact: true })).toBeVisible();
+      expect(writes).toHaveLength(type === 'json' ? 1 : 2);
+      expect(creates).toEqual([]);
+    }
+    const createdBefore = filesInventory(source);
+    await beginChoice('atomic_json');
+    const duplicate = page.waitForResponse(response => response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/api/fs/write');
+    await page.getByTestId('dialog-ok').click();
+    const refusal = await duplicate;
+    expect(refusal.status()).toBe(409);
+    expect(await refusal.json()).toMatchObject({ success: false, code: 'FILE_CHANGED' });
+    expect(writes).toHaveLength(3);
+    expect(writes[2]).toEqual(writes[0]);
+    await expect(page.getByText(/^Could not create file:/)).toBeVisible();
+    await expect(page.getByText('Created file: atomic_json.json', { exact: true })).toHaveCount(0);
+    expect(filesInventory(source)).toEqual(createdBefore);
+    expect(filesInventory(installed)).toEqual(installedBefore);
+    expect(creates).toEqual([]);
+  });
 });
 
 test('selected node edit compiles from an exact source splice without touching sibling bytes', async ({ request }) => {

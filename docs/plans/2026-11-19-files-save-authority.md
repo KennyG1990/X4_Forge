@@ -1,0 +1,42 @@
+# Files panel save authority and creation cancellation
+
+**SPECIFIED** under [#20](https://github.com/KennyG1990/X4_Forge/issues/20) and its [W3B1b filesystem transaction scope](2026-08-02-w3b1-addressed-state-receipts.md). The related [#19](https://github.com/KennyG1990/X4_Forge/issues/19) native surface and [B100 source ownership](2026-07-28-native-antigravity-authoring.md) retain their current contracts. This is a Files panel consumer repair. The broader receipt migration remains independently owned.
+
+## Baseline
+
+At `7a0ed7e4bfc9b37e6c1cc25ba99051c4ab295c57`, DirectoryExplorer, the shared dialogs and the filesystem backend match the exact 0.0.89 package source. In the private packaged Studio, opening a Lua sentinel yielded the expected Inspected text status. Save submitted only `path` and `content`. The server returned 200 and replaced the Lua sentinel with generated MD XML. Escape in the name prompt issued zero writes. Accepting a name and pressing Escape in the type chooser issued create plus write, leaving MD XML. Both scratch roots and their listener retired. Evidence `r090-files-safety-baseline-a1.json`, SHA-256 `f231e7a267f53350c4edf8bb1b3f3d2b294d97d242e5b2a10a6b7f96027838a4`.
+
+## Scope and design
+
+- Separate file selection and graph-write eligibility. A successful read binds the workspace root, exact absolute resource and raw SHA to the selected workspace and the successfully opened draft. New, failed and superseded reads discard previous eligibility. Native opening and the present XML domain viewers keep their behavior.
+- Accept identifiable Forge blueprint JSON and MD XML with a faithful initial graph projection. Reuse the existing import comparison for the MD projection. Retain original bytes when that projection is unchanged. Preserve both typed graph-save paths. Other data, incompatible source, invalid representations and stale scope retain a native inspect/edit path.
+- Save uses the existing workspace writer with the resolved source path, strict input check and exact SHA. Expect a successful byte-exact reply from the same resource, advance the binding only from that reply and keep the draft on refusal. The existing server coordinator continues to own the write. This cooperative guard is not a claim of OS-level atomic compare-and-swap against independent writers.
+- Use an explicit two-option dialog with a distinct Cancel, preserving the shared modal's existing Open, Escape, backdrop and focus semantics for current callers. Both positive choices create through one write with a null precondition. The existing writer supplies strict admission, absence check, atomic file replacement and byte readback. Retain filename sanitization and refuse duplicates or a changed scope.
+- Existing API and MCP callers, native materialization, deployed/project-reference browsing and game state are outside the change. Use only the owned Dev projection and standalone fixtures. Rollback is the exact Files component, shared-dialog/comparison changes and focused test delta.
+
+Reconciliation found a pre-existing round-trip defect when the candidate reopened Forge's own Welcome template. The parser stored `show_help custom` under the wrong graph field and converted `8s` to the default `5s`. The unmodified generator emitted an empty message and changed the duration. Include the bounded parser correction and the compiler fallback for old graphs with only `custom`. Preserve exact text, seconds literals and existing unit/expression duration forms. Add a focused check to the existing compiled MD oracle. This keeps the generated file eligible for graph Save without weakening the source comparison. Other parser mappings remain independently scoped.
+
+The first permanent browser run observed a successful, byte-exact MD Save whose status disappeared before inspection. A previous import/refresh timeout could clear a later success or refusal. Bind expiration to the current status so the confirmation stays available, then rerun the exact case without accepting a flaky verdict.
+
+The first ordinary hook stopped at capability source discovery. Sharing the existing MD comparison introduced one reachable source file. The official generated candidate has 250 sources and 315 route dispositions. Its sole semantic delta adds `src/lib/mdCanonicalComparison.ts` to `sources`. Review and promote that exact candidate through the existing manifest mechanism, then rerun the full hook.
+
+## Promotion gates
+
+- Use the real Files panel and private native writer. Demonstrate zero writes for inspected Lua, failed/malformed/unsupported selections and name/type dismissal by Escape, backdrop or Cancel. File and separate installed-root hashes must remain identical. Late reads and a workspace round trip cannot re-authorize an obsolete file.
+- Prove valid JSON and MD can still save against their own current hashes. Unedited admitted MD retains its exact original text. Changed source yields `409 FILE_CHANGED` with the external edit intact. A wrong source root or superseded selection must refuse before touching another resource. Only confirmed byte-exact replies advance Save authority.
+- Prove both New File types create the complete parseable content in one request, repeat creation leaves existing bytes unchanged, and no cancelling action creates a placeholder.
+- Run focused serial rendered regression, direct source checks and the ordinary precommit hook. Check the same logic with compiled Studio and real scratch routes. Preserve compact hashes/receipts, clear owned temporary state and qualify exact Antigravity packaging at release. No live game run is required for the Files panel behavior.
+
+## Rendered verification
+
+- The final compiled client ran against the unchanged 0.0.89 backend in private scratch. The four dismissals sent zero writes and the Lua sentinel kept its exact hash. Explicit JSON and MD creation each used one guarded write. Reopening and modifying the Welcome message in the graph produced the new text with the original `8s` duration. Five writes had byte-exact readback. Duplicate creation and a changed source refused with 409. A newly configured root with the same file bytes could neither intercept the write nor supply a file for the old view to open. Evidence `r090-files-safety-compiled-a5.json`, SHA-256 `c624c10287bd1b94c1ae5b0340e3fe54a6a30cf1a9e15aaa0138e0d39e87f3bc`.
+- The six serial native-authoring cases passed at source with zero flakes. The new cases use the real workspace writer and prove typed save ownership, retained native inspection, superseded reads and selection round trips, no writes on either dialog's cancellations, and both atomic create options. The original four cases still pass. Runner ownership and both private ports retired. Evidence `r090-files-native-authoring-source-a2.json`, SHA-256 `5590fd0c11c5e5783e285ec8630ef341b293b1d40cc284119b3c283ad38e1cb7`.
+
+- The MD compiler oracle passed all 23 checks, including seven new witnesses for quoted messages, source duration forms and older persisted banner nodes. Changed-file ESLint exited zero in error-only mode. Evidence `r090-files-client-checks-a1.json`, SHA-256 `937131c6bcc65a71453807735f727d8ff9bec0700a408912f6b46121061e052a`.
+- The reviewed route-source manifest promoted at SHA-256 `be169f8aa34f9e776989c2553732f1d3fae655be52aae31009984750b6731f5a`. Its route dispositions and all associated authority records compare equal to the committed baseline. The action-receipt prerequisite and audit passed with 96 routes and 67 surfaces. Evidence `r090-files-capability-promoted-a1.json`, SHA-256 `8d042702b64ee7bb8b311b67a86af6227c3c0eba5187b5af9b83a70d5b1e510e`.
+
+**PARTIAL** for exact installed Antigravity delivery. The compiled browser rendered the distinct Cancel, MD Script XML and JSON Blueprint controls. Native source tabs and existing tool routes retain their ownership at source. The exact candidate VSIX remains a release gate.
+
+## AAR
+
+Use a real scratch Lua file and check the hash, since HTTP success alone hid the wrong serializer. A browser exception exposed two references to the old directory variable before any action ran. Typecheck confirmed the corrected render. The rerun then caught the existing Welcome parser loss and an older status timer that hid a successful write. The final checks retain a generated-and-edited MD fixture and require a non-flaky visible Save verdict alongside exact disk evidence. Keep the final rendered frame and compact receipts.

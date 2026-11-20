@@ -1070,7 +1070,7 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
           // md.xsd: custom text goes in `custom`, not `text`. `duration` is an
           // X4 time value — a bare number ("8") is rejected at runtime, it must
           // carry a unit ("8s").
-          xml += `${ind}<show_help custom="'${escapeXMLAttribute(String(node.properties.text || ''))}'" duration="${escapeXMLAttribute(formatX4Time(node.properties.duration ?? 5))}" />\n`;
+          xml += `${ind}<show_help custom="'${escapeXMLAttribute(String(node.properties.text ?? node.properties.custom ?? ''))}'" duration="${escapeXMLAttribute(formatX4Time(node.properties.duration ?? 5))}" />\n`;
         } else if (tag === 'create_station') {
           // md.xsd: owner is a REQUIRED attribute (not a child); location via
           // the `sector` attribute + a <position> child. No `faction` attr, no <space>.

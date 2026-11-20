@@ -411,8 +411,11 @@ export function parseXMLToWorkspace(xmlText: string, options: { path?: string; i
           } else if (tag === 'show_help') {
             label = 'Show Briefing';
             const rawText = child.getAttribute("custom") || child.getAttribute("text") || '';
-            const text = rawText.replace(/^'|'$/g, '');
-            properties = { custom: text, duration: Number(child.getAttribute("duration")) || 5 };
+            const text = rawText.startsWith("'") && rawText.endsWith("'") ? rawText.slice(1, -1) : rawText;
+            const duration = child.getAttribute("duration") || '5s';
+            const secondsLiteral = /^(\d+(?:\.\d+)?)s$/.exec(duration);
+            const seconds = secondsLiteral ? Number(secondsLiteral[1]) : null;
+            properties = { text, duration: seconds !== null && String(seconds) + 's' === duration ? seconds : duration };
           } else if (tag === 'create_station') {
             label = 'Spawn Station';
             const name = child.getAttribute("name") || '$MyDefenseStation';

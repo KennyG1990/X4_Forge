@@ -10,6 +10,7 @@
  *   - toast(message, kind?)            — fire-and-forget notification (replaces alert)
  *   - confirmDialog(message, opts?)    — Promise<boolean> (replaces confirm)
  *   - promptDialog(message, def?, opts?) — Promise<string|null> (replaces prompt)
+ *   - chooseDialog(message, opts)      — two choices with a distinct Cancel
  * plus <DialogHost/>, mounted once at the app root, that renders the toast stack and the
  * active confirm/prompt modal. window.alert is also globally routed to toast() in main.tsx,
  * so any stray/legacy alert() becomes a toast too.
@@ -26,10 +27,11 @@ export interface ToastItem { id: number; message: string; kind: ToastKind }
 interface PromptRequest {
   id: number;
   message: string;
-  kind: 'confirm' | 'prompt';
+  kind: 'confirm' | 'prompt' | 'choice';
   defaultValue?: string;
   okLabel: string;
   cancelLabel: string;
+  alternativeLabel?: string;
   resolve: (value: boolean | string | null) => void;
 }
 
@@ -97,6 +99,21 @@ export function promptDialog(
   });
 }
 
+/** Two explicit choices; Cancel, Escape and the backdrop resolve null. */
+export function chooseDialog(
+  message: string,
+  opts: { firstLabel: string; secondLabel: string },
+): Promise<'first' | 'second' | null> {
+  return new Promise(resolve => {
+    activeRequest = {
+      id: seq++, message: String(message ?? ''), kind: 'choice',
+      okLabel: opts.firstLabel, alternativeLabel: opts.secondLabel, cancelLabel: 'Cancel',
+      resolve: value => resolve(value === 'first' || value === 'second' ? value : null),
+    };
+    emit();
+  });
+}
+
 function resolveActive(value: boolean | string | null): void {
   const req = activeRequest;
   activeRequest = null;
@@ -127,7 +144,7 @@ export default function DialogHost() {
   }, [activeRequest?.id]);
 
   // B64-A1 (audit C-A11Y-2/3): make the app-wide confirm/prompt dialog accessible — Escape
-  // closes (BOTH kinds; previously only the prompt input handled it), Tab is trapped inside
+  // closes every kind (previously only the prompt input handled it), Tab is trapped inside
   // the dialog, and focus returns to the opener on close. Runs only while a request is open.
   useEffect(() => {
     const open = activeRequest;
@@ -178,7 +195,7 @@ export default function DialogHost() {
         })}
       </div>
 
-      {/* confirm / prompt modal */}
+      {/* confirm / prompt / choice modal */}
       {req && (
         <div data-testid="dialog-modal"
           style={{ position: 'fixed', inset: 0, zIndex: 100001, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
@@ -193,14 +210,20 @@ export default function DialogHost() {
                 onKeyDown={e => { if (e.key === 'Enter') resolveActive(inputValue); if (e.key === 'Escape') resolveActive(null); }}
                 style={{ width: '100%', boxSizing: 'border-box', background: '#0b0d12', border: '1px solid rgba(255,255,255,0.18)', borderRadius: 6, color: '#e2e8f0', padding: '7px 9px', fontSize: 13, marginBottom: 14, fontFamily: 'monospace' }} />
             )}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', flexWrap: req.kind === 'choice' ? 'wrap' : undefined, gap: 8 }}>
               <button data-testid="dialog-cancel" onClick={() => resolveActive(req.kind === 'confirm' ? false : null)}
-                style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.18)', color: '#cbd5e1', borderRadius: 6, padding: '6px 14px', fontSize: 12.5, cursor: 'pointer' }}>
+                style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.18)', color: '#cbd5e1', borderRadius: 6, padding: '6px 14px', fontSize: 12.5, cursor: 'pointer', maxWidth: req.kind === 'choice' ? '100%' : undefined, overflowWrap: req.kind === 'choice' ? 'anywhere' : undefined }}>
                 {req.cancelLabel}
               </button>
-              <button data-testid="dialog-ok" autoFocus={req.kind === 'confirm'}
-                onClick={() => resolveActive(req.kind === 'confirm' ? true : inputValue)}
-                style={{ background: '#2563eb', border: '1px solid #2563eb', color: '#fff', borderRadius: 6, padding: '6px 14px', fontSize: 12.5, cursor: 'pointer', fontWeight: 600 }}>
+              {req.kind === 'choice' && (
+                <button type="button" data-testid="dialog-alternative" onClick={() => resolveActive('second')}
+                  style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.18)', color: '#cbd5e1', borderRadius: 6, padding: '6px 14px', fontSize: 12.5, cursor: 'pointer', maxWidth: '100%', overflowWrap: 'anywhere' }}>
+                  {req.alternativeLabel}
+                </button>
+              )}
+              <button data-testid="dialog-ok" autoFocus={req.kind === 'confirm' || req.kind === 'choice'}
+                onClick={() => resolveActive(req.kind === 'confirm' ? true : req.kind === 'choice' ? 'first' : inputValue)}
+                style={{ background: '#2563eb', border: '1px solid #2563eb', color: '#fff', borderRadius: 6, padding: '6px 14px', fontSize: 12.5, cursor: 'pointer', fontWeight: 600, maxWidth: req.kind === 'choice' ? '100%' : undefined, overflowWrap: req.kind === 'choice' ? 'anywhere' : undefined }}>
                 {req.okLabel}
               </button>
             </div>
