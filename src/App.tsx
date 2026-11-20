@@ -1820,8 +1820,6 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
     }
 
     const requestedAt = compileViewEpochRef.current;
-    const expectedHead = lastServerHashRef.current;
-    const expectedSnapshotHash = lastServerSnapshotHashRef.current;
     const body = review?.prepared.applyBody ?? JSON.stringify({ workspace: workspaceRef.current, dryRun: true });
     const stillInScope = () => matchesCompileScope(scope);
     const previewCurrent = () => stillInScope() && requestedAt === compileViewEpochRef.current;
@@ -1872,8 +1870,10 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               workspace: deployData.workspace,
-              expectedHead,
-              expectedSnapshotHash,
+              // A pending save of the reviewed canvas may finish while deploy runs.
+              // The scope check above excludes a different canvas or authority.
+              expectedHead: lastServerHashRef.current,
+              expectedSnapshotHash: lastServerSnapshotHashRef.current,
             }),
           });
           const convergence = await convergenceRes.json().catch(() => ({}));

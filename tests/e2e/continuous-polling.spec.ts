@@ -1238,7 +1238,10 @@ test('AgentBridge Auto-Apply cannot replace a manually adopted canvas while an i
   releaseHeldPost();
 });
 
-test('AgentBridge Auto-Apply keeps a newer candidate pending while a prior sync conflict is unresolved', async ({ page, request }) => {
+for (const autosaveBeforeDeployResponse of [false, true]) {
+test(autosaveBeforeDeployResponse
+  ? 'wizard deploy convergence uses accepted autosave heads when native apply returns later'
+  : 'AgentBridge Auto-Apply keeps a newer candidate pending while a prior sync conflict is unresolved', async ({ page, request }) => {
   test.setTimeout(45_000);
   const initial = buildTemplateWorkspace('welcome');
   const remote = sanitizeWorkspace({ ...buildTemplateWorkspace('reward_on_kill'), name: 'B116_Conflict_Remote' });
@@ -1293,9 +1296,15 @@ test('AgentBridge Auto-Apply keeps a newer candidate pending while a prior sync 
   const autosaveHeld = new Promise<void>(resolve => { releaseAutosave = resolve; });
   let releaseConvergence!: () => void;
   const convergenceHeld = new Promise<void>(resolve => { releaseConvergence = resolve; });
+  let releaseApplyResponse!: () => void;
+  const applyResponseHeld = new Promise<void>(resolve => { releaseApplyResponse = resolve; });
+  let heldNativeApply: { status: number; result: { ok?: boolean; bytesConfirmed?: boolean; workspace?: unknown } } | undefined;
+  let autosaved: { workspaceId: string; version: number; workspaceHash: string; snapshotHash: string; workspace: unknown } | undefined;
+  let convergenceSource: unknown;
   const posts: Array<{ workspaceId: string; expectedHead: string; expectedSnapshotHash: string; status?: number }> = [];
   let convergence: { success?: boolean; version?: number; workspaceHash?: string; snapshotHash?: string } | undefined;
   const workspaceRoute = '**/api/agent/workspace';
+  const deployRoute = '**/api/agent/deploy-verify';
   const readLocal = () => page.evaluate(() => {
     const current = window.AgentRuntime!.getCurrentWorkspace();
     return { name: current.name, description: current.description };
@@ -1337,6 +1346,7 @@ test('AgentBridge Auto-Apply keeps a newer candidate pending while a prior sync 
       const post = { workspaceId: route.request().headers()['x-workspace-id'], expectedHead, expectedSnapshotHash, status: undefined as number | undefined };
       const number = posts.push(post);
       if (number === 1) await autosaveHeld;
+      if (number === 2) convergenceSource = route.request().postDataJSON().workspace;
       const response = await fetchRouteWithClosingConnection(route);
       post.status = response.status();
       if (number === 2) {
@@ -1345,6 +1355,18 @@ test('AgentBridge Auto-Apply keeps a newer candidate pending while a prior sync 
       }
       await route.fulfill({ response });
     });
+    if (autosaveBeforeDeployResponse) {
+      await page.route(deployRoute, async route => {
+        if (route.request().method() !== 'POST' || route.request().postDataJSON().dryRun === true) {
+          await route.fallback();
+          return;
+        }
+        const response = await fetchRouteWithClosingConnection(route);
+        heldNativeApply = { status: response.status(), result: await response.json() };
+        await applyResponseHeld;
+        await route.fulfill({ response });
+      });
+    }
 
     await page.getByPlaceholder('Mod brief synopsis...').fill(localDescription);
     await expect.poll(() => posts.length).toBe(1);
@@ -1376,6 +1398,29 @@ test('AgentBridge Auto-Apply keeps a newer candidate pending while a prior sync 
       && new URL(response.url()).pathname === '/api/agent/deploy-verify'
       && response.request().postDataJSON().dryRun !== true);
     await page.getByTestId('wizard-apply-deploy').click();
+    if (autosaveBeforeDeployResponse) {
+      await expect.poll(() => heldNativeApply?.status).toBe(200);
+      expect(heldNativeApply).toMatchObject({
+        status: 200, result: { ok: true, bytesConfirmed: true, workspace: { name: initial.name, description: localDescription } },
+      });
+      expect(posts).toHaveLength(1);
+      releaseAutosave();
+      await expect.poll(() => posts[0]?.status).toBe(200);
+      autosaved = await readServerWorkspaceEnvelope();
+      expect(autosaved).toMatchObject({
+        workspaceId: baseline.workspaceId,
+        workspaceHash: workspaceContentHash(sanitizeWorkspace(frozenWorkspace)),
+        snapshotHash: workspaceSnapshotHash(sanitizeWorkspace(frozenWorkspace)),
+        workspace: { name: initial.name, description: localDescription },
+      });
+      expect(autosaved!.version).toBeGreaterThan(baseline.version);
+      expect(autosaved!.workspaceHash).not.toBe(baseline.workspaceHash);
+      expect(autosaved!.snapshotHash).not.toBe(baseline.snapshotHash);
+      await expect.poll(readCache).toEqual({ version: autosaved!.version, draft: false, description: localDescription });
+      expect(await readLocal()).toEqual({ name: initial.name, description: localDescription });
+      await expect(page.getByTestId('sync-conflict-dialog')).toHaveCount(0);
+      releaseApplyResponse();
+    }
     const deployed = await applied;
     const result = await deployed.json();
     expect(deployed.status(), JSON.stringify(result.checklist || result.error)).toBe(200);
@@ -1389,15 +1434,53 @@ test('AgentBridge Auto-Apply keeps a newer candidate pending while a prior sync 
     expect(await fs.realpath(result.deployedPath)).toBe(await fs.realpath(expectedTarget));
     expect((await fs.stat(path.join(expectedTarget, 'content.xml'))).size).toBeGreaterThan(0);
     await expect.poll(() => convergence?.success).toBe(true);
-    expect(posts).toEqual([
-      { workspaceId: baseline.workspaceId, expectedHead: baseline.workspaceHash, expectedSnapshotHash: baseline.snapshotHash, status: undefined },
-      { workspaceId: baseline.workspaceId, expectedHead: baseline.workspaceHash, expectedSnapshotHash: baseline.snapshotHash, status: 200 },
-    ]);
+    if (autosaveBeforeDeployResponse) {
+      expect(posts).toEqual([
+        { workspaceId: baseline.workspaceId, expectedHead: baseline.workspaceHash, expectedSnapshotHash: baseline.snapshotHash, status: 200 },
+        { workspaceId: baseline.workspaceId, expectedHead: autosaved!.workspaceHash, expectedSnapshotHash: autosaved!.snapshotHash, status: 200 },
+      ]);
+      expect(convergenceSource).toEqual(result.workspace);
+      expect(result.workspace).toEqual(heldNativeApply!.result.workspace);
+    } else {
+      expect(posts).toEqual([
+        { workspaceId: baseline.workspaceId, expectedHead: baseline.workspaceHash, expectedSnapshotHash: baseline.snapshotHash, status: undefined },
+        { workspaceId: baseline.workspaceId, expectedHead: baseline.workspaceHash, expectedSnapshotHash: baseline.snapshotHash, status: 200 },
+      ]);
+    }
     const acceptedVersion = Number(convergence?.version);
     expect(acceptedVersion).toBeGreaterThan(baseline.version);
     const accepted = await readServerWorkspaceEnvelope();
     expect(accepted).toMatchObject({ version: acceptedVersion, workspaceHash: convergence?.workspaceHash,
       snapshotHash: convergence?.snapshotHash, workspace: { description: localDescription } });
+
+    if (autosaveBeforeDeployResponse) {
+      const refreshed = sanitizeWorkspace(result.workspace);
+      expect(accepted.workspace).toEqual(refreshed);
+      expect(accepted.workspaceHash).toBe(workspaceContentHash(refreshed));
+      expect(accepted.snapshotHash).toBe(workspaceSnapshotHash(refreshed));
+      expect(acceptedVersion).toBeGreaterThanOrEqual(autosaved!.version);
+      releaseConvergence();
+      await expect.poll(readCache).toEqual({ version: acceptedVersion, draft: false, description: localDescription });
+      await expect.poll(() => page.evaluate(() => window.AgentRuntime!.getCurrentWorkspace())).toEqual(refreshed);
+      const cached = await page.evaluate(workspaceId => JSON.parse(localStorage.getItem('x4_mod_studio_workspace:' + workspaceId) || 'null'), baseline.workspaceId);
+      expect(workspaceContentHash(sanitizeWorkspace(cached))).toBe(accepted.workspaceHash);
+      expect(workspaceSnapshotHash(sanitizeWorkspace(cached))).toBe(accepted.snapshotHash);
+      await expect(page.getByTestId('sync-conflict-dialog')).toHaveCount(0);
+      expect(posts).toHaveLength(2);
+      expect(deployRequests).toHaveLength(2);
+      expect(await readServerWorkspaceEnvelope()).toMatchObject({
+        workspaceId: baseline.workspaceId, version: acceptedVersion,
+        workspaceHash: accepted.workspaceHash, snapshotHash: accepted.snapshotHash,
+      });
+      console.log('Polling deploy-autosave ordering proof', JSON.stringify({
+        autosave: posts[0].status, convergence: posts[1].status,
+        initialHead: baseline.workspaceHash, acceptedAutosaveHead: autosaved!.workspaceHash,
+        initialSnapshot: baseline.snapshotHash, acceptedAutosaveSnapshot: autosaved!.snapshotHash,
+        finalHead: accepted.workspaceHash, finalSnapshot: accepted.snapshotHash,
+        acceptedVersion, exactDeployResponse: true, conflictVisible: false,
+      }));
+      return;
+    }
 
     await page.getByRole('button', { name: 'Close', exact: true }).click();
     await openAgentBridge(page);
@@ -1440,6 +1523,8 @@ test('AgentBridge Auto-Apply keeps a newer candidate pending while a prior sync 
   } finally {
     releaseAutosave();
     releaseConvergence();
+    releaseApplyResponse();
+    await page.unroute(deployRoute);
     await page.unroute(workspaceRoute);
     const restored = await request.post(configUrl, { headers, data: restore });
     expect(restored.status(), await restored.text()).toBe(200);
@@ -1447,6 +1532,7 @@ test('AgentBridge Auto-Apply keeps a newer candidate pending while a prior sync 
     expect((await actual.json()).config).toMatchObject(restore);
   }
 });
+}
 
 test('failed manual pending Apply re-arms a dirty CAS save under the new authority epoch', async ({ page }) => {
   test.setTimeout(45_000);
