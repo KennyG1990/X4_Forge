@@ -276,3 +276,35 @@ type BulkTransformBundle = {
   after a `foreach`/`try` block; the stable pattern is to assign the block result before piping. Open VSX accepted the
   upload immediately but exposed the version-specific endpoint only after propagation; no duplicate publish was
   attempted. Public hash parity proves users receive the same artifact that passed the installed-host checks.
+
+## B104 follow-up — bind synthesis to the edited XML and workspace
+
+**SPECIFIED — 2026-11-19.** The next preview slice belongs to [#74 P1-1](https://github.com/KennyG1990/X4_Forge/issues/74) and reuses B104, the effective-file resolver and `xpath-synth`. Scope is the browser-side lifetime of manual Diff to Patch synthesis and adoption. Preserve Applied Preview, canonical composition, public routes, MCP, write permissions and manual synthesis. Automatic refresh is a later preview decision. Rollback is the bounded client/test commit on top of `86363b0`.
+
+### Reproduced baseline
+
+- Released 0.0.89 package SHA-256 `6695c5b59b1d87844c7638e26cdc8e0847520bf0523ccdf4082d6e51e15e5fae`. `XMLPatchSystem.tsx` is identical at the package source and local/remote `86363b0`. A real signed synthesis for `libraries/wares.xml` asked for volume `2`. While the successful response was held, the candidate was changed to `3`. The old result reappeared and Add to Workspace appended `2`. `r090-xml-candidate-freshness-baseline-a1.json`, SHA-256 `999df535df6fe07a04fa05e450a76623f4831ad01ed45f67b109ec0689bb6b84`.
+- The same held response became adoptable after creating independent workspace B through the Studio switcher. B started with zero patches, inherited the candidate text from A, and received the stale change to `2`. A remained unchanged. `r090-xml-workspace-freshness-baseline-a1.json`, SHA-256 `23efb29f823c7ad84f7658b5a81ae0cd944f0022e22e1c47d0acf965fc6488f5`.
+- Both headless runs used disposable state, a synthetic wares file and private ports. Both Jobs and listeners retired. Their 2,065,300-byte and 2,073,342-byte profiles were removed. This browser-state defect has no game-specific gate.
+
+### Reconciled design and acceptance
+
+- `src/components/XMLPatchSystem.tsx` checks the target and canonical source signature at response and adoption. The server already checks that signature and the effective base bytes. Those checks cannot identify a later edit, Reset, an A-to-B-to-A transition or a workspace switch. The current `tests/e2e/xml-patch-merge.spec.ts` delays an effective-file read. Extend that suite to delay synthesis itself.
+- Bind each attempt and its result to the exact effective-file session, candidate revision, selected workspace and live authority epoch. Retire the attempt on edit, Reset, target/workspace change or replacement. Check the same binding for successful output, failure messages, busy updates and Add to Workspace. Cancellation can stop waiting on obsolete work. Freshness checks must still refuse replies that complete after cancellation.
+- Keep per-target draft restoration and separate draft identity by workspace. Returning to a parked workspace may restore its own draft with a fresh synthesis required. Discard a draft only through the existing Reset action. Ordinary unsaved workspace edits preserve the manual workflow since adoption is a local append. A change of ownership invalidates it. Preview makes no patch or disk write.
+- Add fail-first assertions through the real controls for same-target edits, same-text Reset and replaced requests. Delay a successful or rejected older reply across target or workspace changes and prove it cannot offer Add, emit an irrelevant error, clear a newer busy state or append anything. Verify a fresh signed synthesis and exact operation adoption in the intended workspace. Exercise target switches, parked-workspace restoration and the existing target-mismatch tests. Preserve manual native diff and canonical server refusal.
+- Validation uses the targeted serial headless source suite, exact private compiled or installed demonstration for the accepted unit, existing synthesis oracle, typecheck and ordinary precommit. Exact packaged qualification follows at release. Review the changed behavior in the private render. No capability-map delta at specification.
+
+### Candidate close and evidence
+
+- Pending, error and ready share one request. Editing or resetting invalidates it even if the current text is identical. Target sessions bind the workspace ID, authority epoch and the existing selection revision. The same check protects Add and prevents an out-of-order request from replacing newer state. The ordinary workspace append and canonical synthesis route are reused.
+- Independent review found two paths within this scope. The global selection context can cycle A to B to A while the ID and authority epoch compare equal. The new check uses the existing selection revision to refuse that adoption. Returning a cached draft to the base text now retires the cached entry, so a later visit keeps the latest text. The compiled browser tested both cases.
+- The serial source suite passed 6/6 at the final UI source hash with the four added tests, zero flakes and full retirement. `r090-xml-freshness-source-a1.json`, SHA-256 `e9aee2ebe2645c58daa412cb20f6261116d2c37619457bd5506ea56e2996c84e`. The serial compiled suite passed 6/6 with the final test refinements, zero flakes and full retirement. `r090-xml-freshness-compiled-a1.json`, SHA-256 `375641a346986695b285650f62387fe24f424d23faca0e72379e025d8b9ccf0c`.
+- With the real compiled server, a signed reply for `2` arrived after the candidate held `3`. Add stayed disabled and the workspace held zero patches. Fresh synthesis rendered a single replacement with `3`, and the explicit Add persisted that operation in the expected workspace. The scratch game directory remained empty. `r090-xml-candidate-compiled-live-a1.json`, SHA-256 `10cb25fa6b7a8c9c73c27d1e584a8a242bcbee455484eed93dc586a1012d0f84`. One reviewed render retained, SHA-256 `852d1b9c13d2f6e92d6cb5b7502d53f2ac70b3701444116c14580c41457aa14a`. Standalone XPath synthesis oracle passed 12/12.
+- **PARTIAL** for exact installed candidate delivery. The final normal hook confirms the typecheck and source gates at commit. No route, capability, authority-grant or persistence-schema changes. No capability-map delta.
+
+### Follow-up AAR
+
+- Sustain holding an actual server response. That exposed stale adoption without changing the synthesis engine, and the compiled replay proved adoption of the correct signed operation.
+- Improve verification with same-text Reset, direct A-to-B-to-A selection, and latest-draft controls. A constrained standalone TypeScript check initially hit a 1,536 MiB heap limit. The successful retry at the existing 2,048 MiB setting used the pre-review source checkpoint. The final normal hook checks the reviewed bytes.
+- The highest-risk defect was accepting an old ready result with the same file signature after the draft or workspace changed. The correction ties eligibility to the candidate and authority already used by the rest of Forge. Automatic refresh remains a separate acceptance decision.
