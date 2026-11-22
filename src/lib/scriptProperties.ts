@@ -96,6 +96,16 @@ export interface ScriptPropertyIndex {
   loaded: boolean;
 }
 
+/** Source offsets use UTF-16 units in the validated, unmodified XML text. */
+export interface ScriptPropertyCorrection {
+  start: number;
+  end: number;
+  expectedText: string;
+  replacement: string;
+  datatype: string;
+  declarationOwner: string;
+}
+
 export interface ScriptPropertyFinding {
   code: 'scriptproperty.unknown' | 'scriptproperty.requires_subselector' | 'scriptproperty.unresolved_type';
   severity: 'warning' | 'info';
@@ -111,6 +121,7 @@ export interface ScriptPropertyFinding {
   column: number;
   typeContext?: { datatype: string; confidence: 'declared' | 'guarded' | 'hint' };
   suggestions: string[];
+  correction?: ScriptPropertyCorrection;
   detail: string;
 }
 
@@ -353,12 +364,16 @@ function maskMdAttributeStrings(value: string): string {
   return parts.join('');
 }
 
+type XmlAttributeSpan = { element: string; name: string; start: number; end: number; value: string };
+
 /** Hide opaque markup, prose attributes and MD strings at their original source widths. */
-export function maskNonExpressionSpans(xml: string): string {
+export function maskNonExpressionSpans(xml: string, onAttribute?: (attribute: XmlAttributeSpan) => void): string {
   const source = maskXmlOpaqueMarkup(String(xml || ''));
   const parts: string[] = [];
   let cursor = 0;
-  for (const { start, token } of scanXmlTagTokens(source)) {
+  for (const { start, token, complete } of scanXmlTagTokens(source)) {
+    const element = onAttribute && complete ? /^<([A-Za-z_][\w.:-]*)\b/.exec(token)?.[1] : undefined;
+    const attributes: XmlAttributeSpan[] | undefined = element ? [] : undefined;
     for (const match of token.matchAll(/\s+([A-Za-z_][\w.:-]*)\s*=\s*(["'])([\s\S]*?)\2/g)) {
       const [, name, quote, value] = match;
       const end = start + match.index + match[0].length;
@@ -366,12 +381,18 @@ export function maskNonExpressionSpans(xml: string): string {
         const attributeStart = start + match.index;
         parts.push(source.slice(cursor, attributeStart), blankXmlSpan(match[0]));
       } else {
+        if (element && attributes) {
+          attributes.push({ element, name, start: end - value.length - 1, end: end - 1, value });
+        }
         const masked = maskMdAttributeStrings(value);
         if (quote === '"' && masked === value) continue;
         // Normalize XML delimiters for downstream scans of the masked text.
         parts.push(source.slice(cursor, end - value.length - 2), '"', masked, '"');
       }
       cursor = end;
+    }
+    if (onAttribute && attributes?.length && new Set(attributes.map(attribute => attribute.name)).size === attributes.length) {
+      attributes.forEach(onAttribute);
     }
   }
   parts.push(source.slice(cursor));
@@ -720,7 +741,11 @@ function literalKeywordLookup(
   })) };
 }
 
-type ScriptPropertyOptions = { filePath?: string; variableTypes?: Record<string, string> };
+type ScriptPropertyOptions = {
+  filePath?: string;
+  variableTypes?: Record<string, string>;
+  correctionAttribute?: (element: string, attribute: string) => boolean;
+};
 type PropertyPosition = Pick<ScriptPropertyFinding, 'line' | 'column'>;
 type PropertyReadSpan = { start: number; end: number };
 
@@ -890,7 +915,14 @@ export function traceScriptPropertyExpression(
 export function lintScriptPropertyChains(xml: string, index: ScriptPropertyIndex, opts?: ScriptPropertyOptions): ScriptPropertyFinding[] {
   if (!index.loaded) return [];
   const guardedReads = index.model.datatypes.has('npc') ? npcGuardReadSpans(xml) : [];
-  return lintPropertyChains(xml, maskNonExpressionSpans(xml), index, opts, guardedReads);
+  const correctionSpans: { start: number; end: number }[] = [];
+  const accepts = opts?.correctionAttribute;
+  const masked = maskNonExpressionSpans(xml, accepts && (attribute => {
+    if (!attribute.value.includes('&') && accepts(attribute.element, attribute.name)) {
+      correctionSpans.push({ start: attribute.start, end: attribute.end });
+    }
+  }));
+  return lintPropertyChains(xml, masked, index, opts, guardedReads, correctionSpans);
 }
 
 export function lintScriptPropertyExpression(expression: string, index: ScriptPropertyIndex, opts?: ScriptPropertyOptions): ScriptPropertyFinding[] {
@@ -901,13 +933,16 @@ export function lintScriptPropertyExpression(expression: string, index: ScriptPr
 }
 
 function lintPropertyChains(source: string, masked: string, index: ScriptPropertyIndex, opts?: ScriptPropertyOptions,
-  guardedReads: PropertyReadSpan[] = [],
+  guardedReads: PropertyReadSpan[] = [], correctionSpans: { start: number; end: number }[] = [],
 ): ScriptPropertyFinding[] {
   const out: ScriptPropertyFinding[] = [];
   let guardIndex = 0;
+  let attributeIndex = 0;
   const locate = createSourcePositionLocator(source);
   const headCache = new Map<string, PropertyHeadLookup>();
   for (const parsed of parseExpressionChains(masked)) {
+    while (attributeIndex < correctionSpans.length && correctionSpans[attributeIndex].end <= parsed.start) attributeIndex++;
+    const correctionSpan = correctionSpans[attributeIndex];
     const rootRaw = parsed.root.raw;
     const rootLower = rootRaw.toLowerCase();
     while (guardIndex < guardedReads.length && guardedReads[guardIndex].end <= parsed.start) guardIndex++;
@@ -992,7 +1027,18 @@ function lintPropertyChains(source: string, masked: string, index: ScriptPropert
           const typeContext: ScriptPropertyFinding['typeContext'] = declared
             ? { datatype: declared, confidence: narrowedTarget && segmentIndex === 1 ? 'guarded' : 'declared' }
             : hint ? { datatype: hint, confidence: 'hint' as const } : undefined;
-          pushFinding(out, buildFinding(locate(segment.start), chain, segment.raw, findingRoot, candidateHeads(index, states), opts, typeContext));
+          const candidates = candidateHeads(index, states);
+          const finding = buildFinding(locate(segment.start), chain, segment.raw, findingRoot, candidates, opts, typeContext);
+          if (correctionSpan && correctionSpan.start <= parsed.start && parsed.end <= correctionSpan.end
+            && typeContext?.confidence === 'declared' && firstSegment === 0 && !narrowedTarget
+            && segmentIndex === parsed.segments.length - 1
+            && parsed.segments.every(part => part.kind === 'property' && !part.optional)
+            && source.slice(parsed.start, parsed.end) === parsed.raw
+            && source[parsed.end] !== '.') {
+            const correction = directPropertyCorrection(index, typeContext.datatype, segment, candidates);
+            if (correction) finding.correction = correction;
+          }
+          pushFinding(out, finding);
         }
         stopQuietly = true;
         break;
@@ -1026,6 +1072,22 @@ function lintPropertyChains(source: string, masked: string, index: ScriptPropert
     }
   }
   return out;
+}
+
+/** Offer one exact one-edit candidate only if it completes a real declared property. */
+function directPropertyCorrection(
+  index: ScriptPropertyIndex, datatype: string, segment: { name: string; raw: string; start: number; end: number },
+  candidates: Set<string>,
+): ScriptPropertyCorrection | undefined {
+  if (segment.raw.length < 3 || segment.raw.length > 128) return undefined;
+  const close = [...candidates].filter(name => editDistance(segment.name, name, 1) === 1);
+  if (close.length !== 1 || !/^[A-Za-z_]\w*$/.test(close[0])) return undefined;
+  const [replacement] = close;
+  const declaration = pathPropertiesForContext(index, { kind: 'datatype', name: datatype })
+    .find(property => property.path.length === 1 && property.path[0] === replacement);
+  if (!declaration) return undefined;
+  return { start: segment.start, end: segment.end, expectedText: segment.raw,
+    replacement, datatype, declarationOwner: declaration.owner };
 }
 
 function buildSubselectorFinding(position: PropertyPosition, chain: string, head: string, index: ScriptPropertyIndex, opts?: ScriptPropertyOptions): ScriptPropertyFinding {

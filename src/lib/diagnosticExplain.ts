@@ -299,9 +299,9 @@ export function runDiagnosticExplainSelftest() {
     'uppercase XSD resolves the governed rule identity and hash',
     xsdProvenance.kind === 'matched'
       && xsdProvenance.packId === 'x4.core.diagnostics'
-      && xsdProvenance.packVersion === '1.0.0'
+      && xsdProvenance.packVersion === '1.1.0'
       && xsdProvenance.packSha256 === X4_CORE_RULE_PACK_EXPECTED_SHA256
-      && xsdProvenance.packSha256 === '351cb0199c815df91861205bf0bce85b22ed98f1bb695dcaa9345f5001e2f9c0'
+      && xsdProvenance.packSha256 === '55f96f23783d6b3acfe11b02eb14b9a063818babf21ca87c62adf8f99eca54a7'
       && xsdProvenance.ruleId === 'x4.schema.routed_validation'
       && xsdProvenance.ruleVersion === '1.0.0',
     xsdProvenance,
@@ -333,14 +333,29 @@ export function runDiagnosticExplainSelftest() {
     applicableTarget.ruleProvenance.kind === 'matched' && applicableTarget.ruleProvenance.applicability === 'applicable',
     applicableTarget.ruleProvenance,
   );
-  const scriptProperty = make('scriptproperty.unknown');
+  const scriptProperty = makeForVersion('scriptproperty.unknown', '9.00');
+  const propertyProvenance = scriptProperty.ruleProvenance;
   check(
-    'scriptproperty stays unmatched with legacy null guidance',
-    scriptProperty.ruleProvenance.kind === 'unmatched'
-      && scriptProperty.ruleProvenance.input.code === 'scriptproperty.unknown'
-      && /null/i.test(scriptProperty.impact),
+    'scriptproperty resolves exact governed corpus authority and bounded correction guidance',
+    propertyProvenance.kind === 'matched'
+      && propertyProvenance.packVersion === '1.1.0'
+      && propertyProvenance.packSha256 === X4_CORE_RULE_PACK_EXPECTED_SHA256
+      && propertyProvenance.ruleId === 'x4.scriptproperty.unknown' && propertyProvenance.ruleVersion === '1.0.0'
+      && propertyProvenance.applicability === 'applicable' && propertyProvenance.evidence.grade === 'corpus'
+      && propertyProvenance.evidence.digestSha256 === '58f878efc06bd66752c4c66fd57cc168fa19e5b9136ee712a450ca84eaf76ff8'
+      && scriptProperty.basis.includes('1b641b638c8892284bbf5943f9ed283e0adf79f696341a2f00a2361f16485a8f')
+      && /null/i.test(scriptProperty.impact) && /declared datatype/.test(scriptProperty.next)
+      && /unique one-edit/.test(scriptProperty.next) && /complete single-segment/.test(scriptProperty.next)
+      && /exact source\/rule identity before the editor edit/.test(scriptProperty.next)
+      && /Refuse embedded entities, ambiguous candidates, hinted receivers, unavailable applicability and stale input/.test(scriptProperty.next),
     scriptProperty,
   );
+  const propertyWithoutVersion = make('scriptproperty.unknown').ruleProvenance;
+  check('scriptproperty without target version withholds applicable authority',
+    propertyWithoutVersion.kind === 'matched' && propertyWithoutVersion.applicability === 'unavailable');
+  check('neighboring scriptproperty codes keep their independent fallback guidance',
+    make('scriptproperty.requires_subselector').ruleProvenance.kind === 'unmatched'
+      && make('scriptproperty.unresolved_type').ruleProvenance.kind === 'unmatched');
   const ambiguousCandidates: readonly X4RuleIdentityV1[] = [
     { packId: 'fixture.pack', packVersion: '1.0.0', packSha256: 'a'.repeat(64), ruleId: 'fixture.rule.a', ruleVersion: '1.0.0' },
     { packId: 'fixture.pack', packVersion: '1.0.0', packSha256: 'a'.repeat(64), ruleId: 'fixture.rule.b', ruleVersion: '1.0.0' },

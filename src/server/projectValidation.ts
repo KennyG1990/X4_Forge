@@ -43,7 +43,7 @@ import {
   EFFECTIVE_INCLUDE_PURPOSE_CODE, EFFECTIVE_INCLUDE_PURPOSE_CHECK,
   type EffectiveMdReferenceContext, type MdEffectiveLibraryInput, type MdLibraryBaseline,
 } from '../lib/mdEffectiveLibraryPurpose';
-import { buildScriptPropertyIndex, formatScriptPropertyFinding, lintScriptPropertyChains, type ScriptPropertyFinding, type ScriptPropertyIndex } from "../lib/scriptProperties";
+import { buildScriptPropertyIndex, formatScriptPropertyFinding, lintScriptPropertyChains, type ScriptPropertyCorrection, type ScriptPropertyFinding, type ScriptPropertyIndex } from "../lib/scriptProperties";
 import { checkXmlWellformed } from "../lib/xmlWellformed";
 import { analyzeAiscript, lintAiscriptCalls, type AiscriptLintFinding } from "../lib/aiscriptLint";
 import {
@@ -86,6 +86,10 @@ function resourceGeneration(resource: object | null | undefined): number {
   if (!generation) { generation = ++nextResourceGeneration; resourceGenerations.set(resource, generation); }
   return generation;
 }
+type ProjectScriptPropertyFinding = Omit<ScriptPropertyFinding, 'correction'> & {
+  correction?: ScriptPropertyCorrection & { sourceSha256: string };
+};
+
 const LUA_FACT_BUDGET = 4 * 1024 * 1024;
 const EFFECTIVE_SCHEMA_FACT_BUDGET = 4 * 1024 * 1024;
 const EFFECTIVE_DIFF_FACT_BUDGET = 4 * 1024 * 1024;
@@ -209,7 +213,7 @@ export interface ProjectValidationResult {
     routed: Array<Pick<RoutedFileResult, "path" | "route" | "domainAvailable" | "severityCapped">>;
   };
   aiscript: { findings: ProjectAiscriptFinding[] };
-  scriptProperties: { available: boolean; findings: ScriptPropertyFinding[] };
+  scriptProperties: { available: boolean; findings: ProjectScriptPropertyFinding[] };
   symbols: { available: boolean; variables: ProjectVariableSymbol[] };
   pitfalls: { findings: MdPitfallFinding[] };
   /** B61: corpus-grounded content lint for jobs.xml (the game ships no jobs XSD). available:false
@@ -789,7 +793,7 @@ export function runProjectValidation(
     if (coverage.checked || coverage.skipped) runScript = coverage;
   } catch { coverageGaps.push({ check: 'aiscript.lint', reason: 'AI-script analysis failed before completing.' }); }
 
-  const scriptPropertyFindings: ScriptPropertyFinding[] = [];
+  const scriptPropertyFindings: ProjectScriptPropertyFinding[] = [];
   const propertyResource = opts.scriptPropertyIndex === undefined ? getScriptPropertyIndex() : opts.scriptPropertyIndex;
   const spIndex = propertyResource?.loaded ? propertyResource : null;
   if (!spIndex && project.files.some(file => ['md', 'aiscript'].includes(classifyPath(file.path)))) {
@@ -814,10 +818,26 @@ export function runProjectValidation(
       const k = f.kind || classifyPath(f.path);
       if ((k === "md" || k === "aiscript") && typeof f.content === "string") {
         const variableTypes = projectSymbols?.variableTypesFor(f.path);
-        scriptPropertyFindings.push(...fact('properties', f, [propertyGeneration, variableTypes], () => lintScriptPropertyChains(f.content!, spIndex, {
-          filePath: f.path,
-          variableTypes,
-        })));
+        const schema = k === 'md' ? mdIndexRef : aiIndexRef;
+        const source = f.content;
+        const root = k === 'md' ? 'mdscript' : 'aiscript';
+        scriptPropertyFindings.push(...fact('properties', f, [propertyGeneration, variableTypes, resourceGeneration(schema)], () => {
+          const canOfferCorrection = /\.xml$/i.test(f.path)
+            && sniffRootElement(source) === root && fact('xml', f, null, () => checkXmlWellformed(source)).ok;
+          const findings = lintScriptPropertyChains(source, spIndex, {
+            filePath: f.path,
+            variableTypes,
+            correctionAttribute: canOfferCorrection
+              ? (element, attribute) => isScriptExpressionAttribute(element, attribute, schema)
+              : undefined,
+          });
+          const sourceSha256 = findings.some(finding => finding.correction)
+            ? crypto.createHash('sha256').update(source).digest('hex')
+            : undefined;
+          return findings.map(({ correction, ...finding }) => correction && sourceSha256
+            ? { ...finding, correction: { ...correction, sourceSha256 } }
+            : finding);
+        }));
       }
     }
   }
@@ -1396,6 +1416,37 @@ export function runProjectValidationSelftest(): { pass: boolean; checks: { name:
     ...file, content: file.content?.replace('md.Probe.Parent.Child', 'md.Probe.Child'),
   })) }, { scriptPropertyIndex: cuePropertyIndex });
   const fullCueProperties = runProjectValidation(cuePropertyProject, { scriptPropertyIndex: cuePropertyIndex, incremental: false });
+
+  const shipPropertyData = '<scriptproperties><keyword name="player"><property name="ship" type="ship"/></keyword>'
+    + '<datatype name="ship" type="destructible"/><datatype name="destructible"><property name="hull" type="integer"/></datatype>'
+    + '</scriptproperties>';
+  const shipPropertyIndex = buildScriptPropertyIndex(shipPropertyData);
+  const typoSource = '<mdscript name="PropertyFix"><cues><cue name="Start"><actions>'
+    + '<!--🚀--><debug_text text="player.ship.hulll + player.ship.hulll"/>'
+    + '</actions></cue></cues></mdscript>';
+  const propertyProject = (source: string, index = shipPropertyIndex, incremental = true) =>
+    runProjectValidation(mdProjectFor('md/property-fix.xml', source), { scriptPropertyIndex: index, incremental });
+  const propertyCandidates = (result: ProjectValidationResult) =>
+    result.scriptProperties.findings.flatMap(finding => finding.correction ? [finding.correction] : []);
+  const propertyBefore = propertyProject(typoSource);
+  const correctionCandidates = propertyCandidates(propertyBefore);
+  const first = correctionCandidates[0];
+  const correctedSource = first ? typoSource.slice(0, first.start) + first.replacement + typoSource.slice(first.end) : typoSource;
+  const propertyAfter = propertyProject(correctedSource);
+  const propertyRefusals = [
+    typoSource.replaceAll('player.ship.hulll', '$Ship.hulll').replace('<debug_text', '<create_ship name="$Ship"/><debug_text'),
+    typoSource.replaceAll('player.ship.hulll', 'player.ship.hu&#108;ll'),
+    typoSource.replaceAll('player.ship.hulll', 'player.ship.hulll.more'),
+    typoSource.replace('<debug_text text=', '<debug_text comment='),
+    typoSource.replace('<debug_text text=', '<debug_text text="player.ship.hulll" text='),
+    typoSource.replace('</mdscript>', ''),
+    typoSource.replace('<mdscript name="PropertyFix">', '<diff>').replace('</mdscript>', '</diff>'),
+    typoSource.replaceAll('player.ship.hulll', "'player.ship.hulll'"),
+  ];
+  const ambiguousShipIndex = buildScriptPropertyIndex(shipPropertyData.replace('</datatype>',
+    '<property name="hully" type="integer"/></datatype>'));
+  const incompleteShipIndex = buildScriptPropertyIndex(shipPropertyData.replace('name="hull"', 'name="hull.value"'));
+
   const initialVariableCode = 'md_pitfall.variable_read_before_initialization';
   const initialReader = '<mdscript name="AvailabilityA"><cues><cue name="Read"><actions>\n'
     + '<debug_text text="$Value"/>\n</actions></cue><cue name="Other"/></cues></mdscript>';
@@ -1598,6 +1649,33 @@ export function runProjectValidationSelftest(): { pass: boolean; checks: { name:
       name: 'correct_flat_cue_name_stays_clean_in_shared_core',
       pass: correctedCueProperties.scriptProperties.available && correctedCueProperties.cueIndex.unresolved.length === 0
         && !flattenProjectValidation(correctedCueProperties).some(finding => finding.code === 'scriptproperty.unknown'),
+    },
+    {
+      name: 'property_correction_retains_distinct_exact_source_spans_and_inherited_authority',
+      pass: correctionCandidates.length === 2
+        && correctionCandidates[0].start !== correctionCandidates[1].start
+        && correctionCandidates.every(candidate => typoSource.slice(candidate.start, candidate.end) === 'hulll'
+          && candidate.expectedText === 'hulll' && candidate.replacement === 'hull'
+          && candidate.datatype === 'ship' && candidate.declarationOwner === 'destructible'
+          && candidate.sourceSha256 === crypto.createHash('sha256').update(typoSource).digest('hex')),
+    },
+    {
+      name: 'applying_one_property_candidate_clears_only_its_original_finding',
+      pass: correctedSource === typoSource.replace('player.ship.hulll', 'player.ship.hull')
+        && propertyAfter.scriptProperties.findings.filter(finding => finding.code === 'scriptproperty.unknown').length === 1
+        && propertyCandidates(propertyAfter)[0]?.start === correctionCandidates[1]?.start - 1
+        && propertyCandidates(propertyAfter)[0]?.sourceSha256 !== first?.sourceSha256,
+    },
+    {
+      name: 'property_correction_refuses_unproved_or_ambiguous_source',
+      pass: propertyRefusals.every(source => !propertyCandidates(propertyProject(source)).length)
+        && !propertyCandidates(propertyProject(typoSource, ambiguousShipIndex)).length
+        && !propertyCandidates(propertyProject(typoSource, incompleteShipIndex)).length,
+    },
+    {
+      name: 'incremental_and_full_property_corrections_agree',
+      pass: JSON.stringify(propertyCandidates(propertyProject(typoSource, shipPropertyIndex, false)))
+        === JSON.stringify(correctionCandidates),
     },
     {
       name: 'full_and_incremental_cue_property_findings_agree',

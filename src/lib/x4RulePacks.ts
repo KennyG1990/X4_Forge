@@ -8,7 +8,7 @@ import type {
 } from './x4RulePackTypes';
 
 export const X4_CORE_RULE_PACK_EXPECTED_SHA256 =
-  '351cb0199c815df91861205bf0bce85b22ed98f1bb695dcaa9345f5001e2f9c0' as const;
+  '55f96f23783d6b3acfe11b02eb14b9a063818babf21ca87c62adf8f99eca54a7' as const;
 
 function deepFreeze<T>(value: T): T {
   if (value !== null && typeof value === 'object') {

@@ -161,10 +161,16 @@ export function runX4RulePacksSelftest(): {
       version: '1.0.0',
       evidenceDigest: 'f5786993e68ba1df76e89fba409a300ccd6e948dc84b9e1542e86e789bc0d847',
     },
+    {
+      id: 'x4.scriptproperty.unknown',
+      version: '1.0.0',
+      evidenceDigest: '58f878efc06bd66752c4c66fd57cc168fa19e5b9136ee712a450ca84eaf76ff8',
+    },
   ] as const;
   check(
-    'core_has_exactly_three_stable_rule_and_evidence_identities',
-    X4_CORE_RULE_PACK.rules.length === 3
+    'core_1_1_has_four_stable_rule_and_evidence_identities',
+    X4_CORE_RULE_PACK.packVersion === '1.1.0'
+      && X4_CORE_RULE_PACK.rules.length === 4
       && JSON.stringify(X4_CORE_RULE_PACK.rules.map(rule => ({
         id: rule.id,
         version: rule.version,
@@ -317,21 +323,34 @@ export function runX4RulePacksSelftest(): {
   const xsdMatch = resolveCoreX4DiagnosticRule({ code: 'XSD_UNKNOWN_ELEMENT' });
   const registerMatch = resolveCoreX4DiagnosticRule({ code: 'md_lua.missing_register' });
   const listenerMatch = resolveCoreX4DiagnosticRule({ code: 'lua_md.missing_listener' });
+  const propertyMatch = resolveCoreX4DiagnosticRule({ code: 'scriptproperty.unknown', targetGameVersion: '9.00' });
   check(
-    'xsd_prefix_and_two_exact_matches_resolve',
+    'xsd_prefix_and_three_exact_matches_resolve_with_bounded_property_authority',
     xsdMatch.kind === 'matched'
       && xsdMatch.ruleId === 'x4.schema.routed_validation'
       && registerMatch.kind === 'matched'
       && registerMatch.ruleId === 'x4.bridge.md_event_register'
       && listenerMatch.kind === 'matched'
-      && listenerMatch.ruleId === 'x4.bridge.ui_event_listener',
+      && listenerMatch.ruleId === 'x4.bridge.ui_event_listener'
+      && propertyMatch.kind === 'matched' && propertyMatch.ruleId === 'x4.scriptproperty.unknown'
+      && propertyMatch.ruleVersion === '1.0.0' && propertyMatch.packVersion === '1.1.0'
+      && propertyMatch.applicability === 'applicable'
+      && propertyMatch.scope.minGameVersion === '9.00' && propertyMatch.scope.maxGameVersion === '9.00'
+      && propertyMatch.evidence.grade === 'corpus'
+      && propertyMatch.evidence.basis.includes('1b641b638c8892284bbf5943f9ed283e0adf79f696341a2f00a2361f16485a8f')
+      && ['8.99', '9.10'].every(targetGameVersion => {
+        const match = resolveCoreX4DiagnosticRule({ code: 'scriptproperty.unknown', targetGameVersion });
+        return match.kind === 'matched' && match.applicability === 'not_applicable';
+      }),
   );
 
   const unrelated = resolveCoreX4DiagnosticRule({ code: 'unrelated.diagnostic' });
   check(
     'unrelated_code_is_unmatched',
     unrelated.kind === 'unmatched'
-      && JSON.stringify(unrelated.input) === JSON.stringify({ code: 'unrelated.diagnostic' }),
+      && JSON.stringify(unrelated.input) === JSON.stringify({ code: 'unrelated.diagnostic' })
+      && ['scriptproperty.unknown.extra', 'scriptproperty.requires_subselector', 'scriptproperty.unresolved_type',
+        'SCRIPTPROPERTY.UNKNOWN'].every(code => resolveCoreX4DiagnosticRule({ code }).kind === 'unmatched'),
   );
 
   const overlapPack = buildSyntheticPack([

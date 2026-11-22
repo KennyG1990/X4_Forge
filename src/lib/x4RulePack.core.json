@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "packId": "x4.core.diagnostics",
-  "packVersion": "1.0.0",
-  "packSha256": "351cb0199c815df91861205bf0bce85b22ed98f1bb695dcaa9345f5001e2f9c0",
+  "packVersion": "1.1.0",
+  "packSha256": "55f96f23783d6b3acfe11b02eb14b9a063818babf21ca87c62adf8f99eca54a7",
   "rules": [
     {
       "id": "x4.bridge.md_event_register",
@@ -66,6 +66,31 @@
         "why": "The XML element, attribute, value, or placement does not satisfy the routed X4 game schema.",
         "impact": "X4 may reject the document or ignore the affected structure.",
         "next": "Align the named element or attribute with the schema diagnostic."
+      }
+    },
+    {
+      "id": "x4.scriptproperty.unknown",
+      "version": "1.0.0",
+      "detector": {
+        "id": "diagnostic.code_exact",
+        "codes": [
+          "scriptproperty.unknown"
+        ]
+      },
+      "applicability": {
+        "minGameVersion": "9.00",
+        "maxGameVersion": "9.00"
+      },
+      "evidence": {
+        "grade": "corpus",
+        "basis": "X4 9.00 unpacked libraries/scriptproperties.xml:2414 declares player.ship as ship; :172 declares destructible.hull, inherited through ship, container, defensible, controllable and object. Source SHA-256: 1b641b638c8892284bbf5943f9ed283e0adf79f696341a2f00a2361f16485a8f. This is corpus vocabulary evidence, not an engine execution verdict.",
+        "digestSha256": "58f878efc06bd66752c4c66fd57cc168fa19e5b9136ee712a450ca84eaf76ff8"
+      },
+      "guidance": {
+        "title": "Script-property segment is not declared",
+        "why": "The shared property traversal could not match this segment in the loaded scriptproperties.xml vocabulary. An editor correction requires one declared receiver.",
+        "impact": "An unknown property can leave a value null or a condition false. A suggested spelling does not establish the author's intent.",
+        "next": "Offer an editor edit only for a directly authored terminal token with one declared datatype and a unique one-edit correction to a complete single-segment property in its full inherited vocabulary. Validate the corrected chain and exact source/rule identity before the editor edit. Refuse embedded entities, ambiguous candidates, hinted receivers, unavailable applicability and stale input; keep the diagnostic without an edit."
       }
     }
   ]
