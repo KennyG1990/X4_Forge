@@ -3,6 +3,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { atomicWriteJson } from './workspaceState';
+import { validationProjectContentHash } from '../../shared/projectValidationInput';
 
 export const VALIDATION_BASELINE_SCHEMA = 1 as const;
 export const VALIDATION_BASELINE_MAX_MODS = 128;
@@ -99,14 +100,7 @@ function sha256(value: string): string {
   return crypto.createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
-/** Hash the exact validation subject independently of array order or Windows path spelling. */
-export function validationProjectContentHash(files: ValidationProjectFileInput[]): string {
-  const rows = files.map(file => ({
-    path: normalizePath(file.path),
-    contentHash: sha256(String(file.content || '')),
-  })).sort((left, right) => left.path.localeCompare(right.path) || left.contentHash.localeCompare(right.contentHash));
-  return sha256(JSON.stringify(rows));
-}
+export { validationProjectContentHash };
 
 type WarningDetails = Omit<StoredValidationWarning, 'identity'>;
 

@@ -76,6 +76,7 @@ export interface ScriptPropertyPathIndex {
 }
 
 export interface ScriptPropertyIndex {
+  sourceInputs?: readonly { path: string; source: string; sha256: string }[];
   model: ScriptPropertyModel;
   /** union of every literal property head across all keywords + datatypes */
   union: Set<string>;

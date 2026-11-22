@@ -11,10 +11,11 @@
  */
 
 import fs from 'fs';
+import { createHash } from 'node:crypto';
 import os from 'os';
 import path from 'path';
 import { DOMParser } from '@xmldom/xmldom';
-import { parseScriptProperties } from './scriptProperties';
+import { parseScriptProperties, type ScriptPropertyIndex } from './scriptProperties';
 import { parseLocalizationXml, resolveLocName, type LocalizationMap } from './x4ObjectIndex';
 import { listReferenceManifestFiles } from './referenceManifest';
 import { directElementChildren, type ElementLike } from './xmlLite';
@@ -119,6 +120,8 @@ export interface ReferenceCorpus {
   sectors: SectorReference[];
   symbols: CanonicalSymbol[];
   scriptProperties: ScriptPropertyReference[];
+  /** Exact ordered bytes consumed by the property parser; absent on older/manual corpus values. */
+  scriptPropertySourceInputs?: ScriptPropertyIndex['sourceInputs'];
   references: {
     macros: Set<string>;
     wares: Set<string>;
@@ -424,7 +427,10 @@ function parseSectorsAndMacros(files: ReferenceFile[], loc: LocalizationMap): {
   };
 }
 
-function parsePropertyReferences(files: ReferenceFile[]): ScriptPropertyReference[] {
+function parsePropertyReferences(files: ReferenceFile[]): {
+  properties: ScriptPropertyReference[]; sourceInputs: NonNullable<ScriptPropertyIndex['sourceInputs']>;
+} {
+  const sourceInputs: { path: string; source: string; sha256: string }[] = [];
   const found = new Map<string, ScriptPropertyReference>();
   const merge = (
     kind: ScriptPropertyReference['kind'],
@@ -462,7 +468,11 @@ function parsePropertyReferences(files: ReferenceFile[]): ScriptPropertyReferenc
     });
   };
   for (const file of files.filter(f => f.kind === 'scriptproperties')) {
-    const xml = fs.readFileSync(file.absolute, 'utf8');
+    const bytes = fs.readFileSync(file.absolute);
+    const xml = bytes.toString('utf8');
+    sourceInputs.push(Object.freeze({
+      path: file.relative, source: file.source, sha256: createHash('sha256').update(bytes).digest('hex'),
+    }));
     const model = parseScriptProperties(xml);
     for (const entry of [...model.keywords.values(), ...model.datatypes.values()]) {
       merge(entry.kind, entry.name, entry.properties, entry.parent, entry.dynamic, entry.dynamicResultType, entry.pseudo);
@@ -487,7 +497,10 @@ function parsePropertyReferences(files: ReferenceFile[]): ScriptPropertyReferenc
       }
     }
   }
-  return [...found.values()].sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
+  return {
+    properties: [...found.values()].sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name)),
+    sourceInputs: Object.freeze(sourceInputs),
+  };
 }
 
 function buildCorpus(root: string, files: ReferenceFile[], signature: string, manifestGeneration?: string): ReferenceCorpus {
@@ -500,6 +513,7 @@ function buildCorpus(root: string, files: ReferenceFile[], signature: string, ma
   const jobs = parseJobs(files, loc);
   const aiScripts = parseAIScripts(files);
   const { sectors, macros, macroDefinitions } = parseSectorsAndMacros(files, loc);
+  const scriptProperties = parsePropertyReferences(files);
   const factionIds = new Set<string>();
   for (const f of factions) { factionIds.add(f.id); factionIds.add(`faction.${f.id}`); }
   const symbols: CanonicalSymbol[] = [
@@ -522,7 +536,8 @@ function buildCorpus(root: string, files: ReferenceFile[], signature: string, ma
     aiScripts,
     sectors,
     symbols,
-    scriptProperties: parsePropertyReferences(files),
+    scriptProperties: scriptProperties.properties,
+    scriptPropertySourceInputs: scriptProperties.sourceInputs,
     references: {
       macros,
       wares: new Set(wares.map(w => w.id)),
@@ -554,6 +569,103 @@ export function getReferenceCorpus(rootInput: string, force = false): ReferenceC
   const corpus = buildCorpus(root, files, signature, discovery.manifestGeneration);
   cache = { root, signature, corpus, checkedAt: Date.now() };
   return corpus;
+}
+
+/** Bounds apply only to an explicit native-correction freshness check, never to ordinary discovery. */
+export const SCRIPT_PROPERTY_INPUT_LIMITS = Object.freeze({
+  files: 128, fileBytes: 8 * 1024 * 1024, totalBytes: 32 * 1024 * 1024, extensionEntries: 512,
+});
+
+function samePropertyInputStamp(before: fs.BigIntStats, after: fs.BigIntStats): boolean {
+  return before.dev === after.dev && before.ino === after.ino && before.mode === after.mode
+    && before.nlink === after.nlink && before.size === after.size
+    && before.mtimeNs === after.mtimeNs && before.ctimeNs === after.ctimeNs;
+}
+
+/** Re-read only direct base/official-DLC property inputs, without the manifest or any corpus reindex. */
+export function readCurrentScriptPropertySourceInputs(
+  rootInput: string,
+): NonNullable<ScriptPropertyIndex['sourceInputs']> | undefined {
+  const root = path.resolve(rootInput);
+  const key = (value: string) => process.platform === 'win32' ? value.toLowerCase() : value;
+  const directories: { file: string; stamp: fs.BigIntStats }[] = [];
+  const files: { file: string; stamp: fs.BigIntStats }[] = [];
+  const inputs: { path: string; source: string; sha256: string }[] = [];
+  let remaining = SCRIPT_PROPERTY_INPUT_LIMITS.totalBytes;
+  const observed = (file: string): fs.BigIntStats | undefined => {
+    try { return fs.lstatSync(file, { bigint: true }); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error; }
+  };
+  const physicalDirectory = (file: string) => {
+    const stamp = observed(file);
+    if (!stamp) return false;
+    if (!stamp.isDirectory() || stamp.isSymbolicLink() || key(fs.realpathSync.native(file)) !== key(file)) {
+      throw new Error('Property input directory is not physical.');
+    }
+    directories.push({ file, stamp });
+    return true;
+  };
+  const include = (sourceRoot: string, source: string) => {
+    const directory = path.join(sourceRoot, 'libraries');
+    if (!physicalDirectory(directory)) return;
+    const file = path.join(directory, 'scriptproperties.xml');
+    const stamp = observed(file);
+    if (!stamp) return;
+    if (!stamp.isFile() || stamp.isSymbolicLink() || stamp.nlink !== 1n
+      || key(fs.realpathSync.native(file)) !== key(file)
+      || inputs.length >= SCRIPT_PROPERTY_INPUT_LIMITS.files
+      || stamp.size > BigInt(SCRIPT_PROPERTY_INPUT_LIMITS.fileBytes) || stamp.size > BigInt(remaining)) {
+      throw new Error('Property input is unavailable or exceeds its bounds.');
+    }
+    const size = Number(stamp.size);
+    const fd = fs.openSync(file, fs.constants.O_RDONLY | (process.platform === 'win32' ? 0 : fs.constants.O_NOFOLLOW));
+    try {
+      if (!samePropertyInputStamp(stamp, fs.fstatSync(fd, { bigint: true }))) throw new Error('Property input changed.');
+      const bytes = Buffer.allocUnsafe(size + 1);
+      let read = 0;
+      while (read < bytes.length) {
+        const count = fs.readSync(fd, bytes, read, bytes.length - read, read);
+        if (!count) break;
+        read += count;
+      }
+      if (read !== size || !samePropertyInputStamp(stamp, fs.fstatSync(fd, { bigint: true }))
+        || !samePropertyInputStamp(stamp, fs.lstatSync(file, { bigint: true }))) throw new Error('Property input changed.');
+      inputs.push(Object.freeze({
+        path: forward(path.relative(root, file)), source,
+        sha256: createHash('sha256').update(bytes.subarray(0, read)).digest('hex'),
+      }));
+      files.push({ file, stamp });
+      remaining -= read;
+    } finally { fs.closeSync(fd); }
+  };
+  try {
+    if (!physicalDirectory(root)) return;
+    include(root, 'base');
+    const extensions = path.join(root, 'extensions');
+    if (physicalDirectory(extensions)) {
+      const directory = fs.opendirSync(extensions);
+      const official: string[] = [];
+      try {
+        let seen = 0;
+        for (let entry = directory.readSync(); entry; entry = directory.readSync()) {
+          if (++seen > SCRIPT_PROPERTY_INPUT_LIMITS.extensionEntries) return;
+          if (!/^ego_dlc_/i.test(entry.name)) continue;
+          if (!entry.isDirectory() || entry.isSymbolicLink()) return;
+          official.push(entry.name);
+        }
+      } finally { directory.closeSync(); }
+      for (const name of official.sort((a, b) => a.localeCompare(b))) {
+        const sourceRoot = path.join(extensions, name);
+        if (!physicalDirectory(sourceRoot)) return;
+        include(sourceRoot, name.toLowerCase());
+      }
+    }
+    for (const { file, stamp } of [...directories, ...files]) {
+      if (!samePropertyInputStamp(stamp, fs.lstatSync(file, { bigint: true }))
+        || key(fs.realpathSync.native(file)) !== key(file)) return;
+    }
+    return Object.freeze(inputs);
+  } catch { return; }
 }
 
 /** Resolve one reference-root-relative file with traversal, absolute-path and symlink containment checks. */
@@ -608,6 +720,29 @@ export function runReferenceCorpusSelftest(): {
     const first = getReferenceCorpus(tmp);
     const second = getReferenceCorpus(tmp);
     ok('cache reused while signature unchanged', first === second);
+    const propertyPath = path.join(tmp, 'libraries', 'scriptproperties.xml');
+    const originalPropertyBytes = fs.readFileSync(propertyPath);
+    const originalPropertyHash = createHash('sha256').update(originalPropertyBytes).digest('hex');
+    ok('property provenance hashes the exact base bytes and retains their source',
+      JSON.stringify(first.scriptPropertySourceInputs) === JSON.stringify([
+        { path: 'libraries/scriptproperties.xml', source: 'base', sha256: originalPropertyHash },
+      ]));
+    ok('bounded property snapshot agrees with the exact consumed base inputs',
+      JSON.stringify(readCurrentScriptPropertySourceInputs(tmp)) === JSON.stringify(first.scriptPropertySourceInputs));
+    ok('property provenance array and records are immutable',
+      Object.isFrozen(first.scriptPropertySourceInputs) && first.scriptPropertySourceInputs?.every(Object.isFrozen) === true);
+    const changedPropertyBytes = Buffer.concat([originalPropertyBytes, Buffer.from('\n')]);
+    fs.writeFileSync(propertyPath, changedPropertyBytes);
+    const changedPropertyHash = createHash('sha256').update(changedPropertyBytes).digest('hex');
+    ok('bounded property snapshot observes changed bytes before the corpus cache rebuilds',
+      readCurrentScriptPropertySourceInputs(tmp)?.[0].sha256 === changedPropertyHash
+        && first.scriptPropertySourceInputs?.[0].sha256 === originalPropertyHash);
+    ok('retained corpus evidence does not follow later disk bytes',
+      first.scriptPropertySourceInputs?.[0].sha256 === originalPropertyHash && originalPropertyHash !== changedPropertyHash);
+    const changedProperties = getReferenceCorpus(tmp, true);
+    ok('forced corpus rebuild binds newly consumed property bytes without changing vocabulary',
+      changedProperties.scriptPropertySourceInputs?.[0].sha256 === changedPropertyHash
+        && JSON.stringify(changedProperties.scriptProperties) === JSON.stringify(first.scriptProperties));
     ok('base faction + derived category', first.factions.find(f => f.id === 'argon')?.isreal === true && first.factions.find(f => f.id === 'ownerless')?.category === 'system');
     ok('localized ware + sector', first.wares[0]?.name === 'Energy Cells' && first.sectors[0]?.name === 'Test Sector');
     ok('job IDs indexed with provenance', first.jobs[0]?.id === 'argon_patrol' && first.jobs[0]?.source === 'base');
@@ -631,7 +766,17 @@ export function runReferenceCorpusSelftest(): {
     write('extensions/ego_dlc_test/aiscripts/patrol.xml', '<diff><replace sel="/aiscript/order/@id">Patched</replace></diff>');
     write('extensions/ego_dlc_test/libraries/scriptproperties.xml', '<diff><add sel="/scriptproperties/datatype[@name=\'faction\']"><property name="dlcproperty" result="DLC value" type="string"/></add></diff>');
     write('extensions/ego_dlc_test/index/macros.xml', '<diff><add sel="/index"><entry name="ship_dlc_macro" value="extensions/ego_dlc_test/assets/ship_dlc"/></add></diff>');
+    const freshAddedInputs = readCurrentScriptPropertySourceInputs(tmp);
+    ok('bounded property snapshot observes an added official input missing from the retained index',
+      freshAddedInputs?.length === 2 && first.scriptPropertySourceInputs?.length === 1);
     const added = getReferenceCorpus(tmp, true);
+    const dlcPropertyBytes = fs.readFileSync(path.join(tmp, 'extensions', 'ego_dlc_test', 'libraries', 'scriptproperties.xml'));
+    ok('property provenance retains ordered base and DLC inputs used by the merge',
+      JSON.stringify(added.scriptPropertySourceInputs) === JSON.stringify([
+        { path: 'libraries/scriptproperties.xml', source: 'base', sha256: changedPropertyHash },
+        { path: 'extensions/ego_dlc_test/libraries/scriptproperties.xml', source: 'ego_dlc_test',
+          sha256: createHash('sha256').update(dlcPropertyBytes).digest('hex') },
+      ]));
     ok('DLC add appears after cache refresh', added !== second && added.factions.some(f => f.id === 'dlcfaction' && f.source === 'ego_dlc_test'));
     ok('DLC jobs and scripts appear after refresh', added.jobs.some(job => job.id === 'dlc_patrol' && job.source === 'ego_dlc_test') && added.aiScripts.some(script => script.id === 'order.dlc' && script.source === 'ego_dlc_test'));
     const dlcOrder = added.aiScripts.find(script => script.id === 'order.dlc')?.order;
@@ -644,6 +789,19 @@ export function runReferenceCorpusSelftest(): {
     ok('DLC scriptproperty overlays base datatype', added.scriptProperties.find(p => p.kind === 'datatype' && p.name === 'faction')?.properties.some(p => p.name === 'dlcproperty' && p.type === 'string') === true);
     fs.rmSync(path.join(tmp, 'extensions', 'ego_dlc_test'), { recursive: true, force: true });
     const removed = getReferenceCorpus(tmp, true);
+    ok('bounded property snapshot observes removed official inputs without a reindex',
+      JSON.stringify(readCurrentScriptPropertySourceInputs(tmp)) === JSON.stringify(removed.scriptPropertySourceInputs));
+    const linkedSource = path.join(tmp, 'extensions', 'ego_dlc_linked');
+    const linkedTarget = path.join(tmp, 'property-link-target');
+    fs.mkdirSync(linkedTarget);
+    fs.symlinkSync(linkedTarget, linkedSource, process.platform === 'win32' ? 'junction' : 'dir');
+    try {
+      ok('bounded property snapshot refuses a linked official source', readCurrentScriptPropertySourceInputs(tmp) === undefined);
+    } finally { fs.unlinkSync(linkedSource); }
+    ok('removed DLC cannot remain in refreshed property provenance',
+      removed.scriptPropertySourceInputs?.length === 1
+        && removed.scriptPropertySourceInputs[0].source === 'base'
+        && removed.scriptPropertySourceInputs[0].sha256 === changedPropertyHash);
     ok('DLC removal appears after cache refresh', removed !== added && !removed.factions.some(f => f.id === 'dlcfaction'));
     ok('safe file resolves', resolveReferenceFile(tmp, 'libraries/factions.xml').endsWith(path.join('libraries', 'factions.xml')));
     let traversal = false; try { resolveReferenceFile(tmp, '../outside.xml'); } catch (e) { traversal = /traversal/i.test(String(e)); }

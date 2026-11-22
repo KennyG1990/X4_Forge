@@ -72,9 +72,10 @@ import {
   decodeProjectCheckManifest, inspectProjectCheckProposal, PROJECT_CHECKS_MAX_BYTES, PROJECT_CHECKS_PATH,
   type ProjectCheckInspection,
 } from "./projectCheckProposal";
-import { getAiOrderParamTypes, getAiSchemaIndex, getScriptPropertyIndex } from "./validationRoutes";
+import { getAiOrderParamTypes, getAiSchemaIndex, getScriptPropertyIndex, scriptPropertyInputsAreCurrent } from "./validationRoutes";
 import { buildValidationEvidence, decodeValidationSourceText, VALIDATION_TEXT_ENCODING_UNAVAILABLE, type SkippedValidationFile, type PayloadWriterScope, type ValidationCoverageGap, type ValidationEvidence, type ValidationSourceLocation } from '../lib/validationEvidence';
 import { createBoundedAnalysisCache } from '../lib/x4UiAnalysisCache';
+import { X4_CORE_RULE_PACK_EXPECTED_SHA256, resolveCoreX4DiagnosticRule } from '../lib/x4RulePacks';
 
 // Resource services replace their owned immutable indexes on a new generation. Weak keys do
 // not retain old corpora. File facts additionally bind exact source and project reference sets.
@@ -89,6 +90,57 @@ function resourceGeneration(resource: object | null | undefined): number {
 type ProjectScriptPropertyFinding = Omit<ScriptPropertyFinding, 'correction'> & {
   correction?: ScriptPropertyCorrection & { sourceSha256: string };
 };
+
+interface ProjectScriptPropertyCorrectionAuthority {
+  targetGameVersion: string;
+  ruleId: string;
+  ruleVersion: string;
+  ruleHash: string;
+  vocabularyHash: string;
+}
+
+const REVIEWED_PROPERTY_GAME_VERSION = '9.00';
+const REVIEWED_PROPERTY_SOURCE_HASH = '1b641b638c8892284bbf5943f9ed283e0adf79f696341a2f00a2361f16485a8f';
+
+function scriptPropertyCorrectionAuthority(
+  index: ScriptPropertyIndex | null,
+  findings: readonly ProjectScriptPropertyFinding[],
+  verifyRequested: boolean,
+  verifyInputs?: (index: ScriptPropertyIndex) => boolean,
+): ProjectScriptPropertyCorrectionAuthority | undefined {
+  const inputs = index?.sourceInputs;
+  if (!index || !inputs?.length
+    || (!verifyRequested && !findings.some(finding => finding.code === 'scriptproperty.unknown' && finding.correction))) return;
+  const base = inputs.filter(input => input.source === 'base');
+  if (base.length !== 1 || base[0].path !== 'libraries/scriptproperties.xml'
+    || base[0].sha256 !== REVIEWED_PROPERTY_SOURCE_HASH) return;
+
+  const rule = resolveCoreX4DiagnosticRule({
+    code: 'scriptproperty.unknown',
+    targetGameVersion: REVIEWED_PROPERTY_GAME_VERSION,
+  });
+  if (rule.kind !== 'matched' || rule.applicability !== 'applicable'
+    || rule.packSha256 !== X4_CORE_RULE_PACK_EXPECTED_SHA256
+    || rule.ruleId !== 'x4.scriptproperty.unknown' || rule.ruleVersion !== '1.0.0'
+    || rule.evidence.grade !== 'corpus' || !rule.evidence.basis.includes(REVIEWED_PROPERTY_SOURCE_HASH)) return;
+
+  try {
+    if (verifyInputs && !verifyInputs(index)) return;
+  } catch {
+    // A failed freshness check removes edit authority while retaining diagnostics.
+    return;
+  }
+  return {
+    targetGameVersion: REVIEWED_PROPERTY_GAME_VERSION,
+    ruleId: rule.ruleId,
+    ruleVersion: rule.ruleVersion,
+    ruleHash: rule.evidence.digestSha256,
+    // Contributor order is part of the model's overlay semantics.
+    vocabularyHash: crypto.createHash('sha256')
+      .update(JSON.stringify(inputs.map(input => [input.path, input.source, input.sha256])))
+      .digest('hex'),
+  };
+}
 
 const LUA_FACT_BUDGET = 4 * 1024 * 1024;
 const EFFECTIVE_SCHEMA_FACT_BUDGET = 4 * 1024 * 1024;
@@ -213,7 +265,11 @@ export interface ProjectValidationResult {
     routed: Array<Pick<RoutedFileResult, "path" | "route" | "domainAvailable" | "severityCapped">>;
   };
   aiscript: { findings: ProjectAiscriptFinding[] };
-  scriptProperties: { available: boolean; findings: ProjectScriptPropertyFinding[] };
+  scriptProperties: {
+    available: boolean;
+    findings: ProjectScriptPropertyFinding[];
+    correctionAuthority?: ProjectScriptPropertyCorrectionAuthority;
+  };
   symbols: { available: boolean; variables: ProjectVariableSymbol[] };
   pitfalls: { findings: MdPitfallFinding[] };
   /** B61: corpus-grounded content lint for jobs.xml (the game ships no jobs XSD). available:false
@@ -401,7 +457,10 @@ export function runProjectValidation(
   project: ExtensionProject,
   opts: { references?: ProjectValidationReferences; jobsVocabulary?: JobsVocabulary; waresVocabulary?: WaresVocabulary;
     /** Internal immutable resource override; never a caller-supplied HTTP field. Null means unavailable. */
-    scriptPropertyIndex?: ScriptPropertyIndex | null; incremental?: boolean; canonicalMd?: CanonicalMdValidationOptions } = {},
+    scriptPropertyIndex?: ScriptPropertyIndex | null;
+    /** Native preview uses the loaded vocabulary. Exact recheck also works after the last finding. */
+    scriptPropertyAuthority?: 'offer' | 'verify';
+    incremental?: boolean; canonicalMd?: CanonicalMdValidationOptions } = {},
 ): ProjectValidationResult {
   const fileKeys = new Map<ProjectFile, string>();
   const fileIdentity = (file: ProjectFile): string => {
@@ -842,6 +901,13 @@ export function runProjectValidation(
     }
   }
 
+  // Normal validation never rereads the corpus for an editor action. An offer describes the
+  // loaded vocabulary. The explicit review/apply recheck verifies the exact current contributors.
+  const correctionAuthority = opts.scriptPropertyAuthority && scriptPropertyCorrectionAuthority(
+    spIndex, scriptPropertyFindings, opts.scriptPropertyAuthority === 'verify',
+    opts.scriptPropertyAuthority === 'verify' ? scriptPropertyInputsAreCurrent : undefined,
+  );
+
   const referenceFindings: ReferenceLiteralFinding[] = [];
   if (references) {
     for (const f of project.files) {
@@ -1033,7 +1099,8 @@ export function runProjectValidation(
       routed: routed.map(({ path: p, route, domainAvailable, severityCapped }) => ({ path: p, route, domainAvailable, severityCapped })),
     },
     aiscript: { findings: aiscriptLint },
-    scriptProperties: { available: !!spIndex, findings: scriptPropertyFindings },
+    scriptProperties: { available: !!spIndex, findings: scriptPropertyFindings,
+      ...(correctionAuthority ? { correctionAuthority } : {}) },
     symbols: { available: !!projectSymbols, variables: projectSymbols?.variables || [] },
     pitfalls: { findings: pitfallFindings },
     jobsLint: { available: !!jobsVocab, findings: jobsLintFindings },
@@ -1430,6 +1497,24 @@ export function runProjectValidationSelftest(): { pass: boolean; checks: { name:
     result.scriptProperties.findings.flatMap(finding => finding.correction ? [finding.correction] : []);
   const propertyBefore = propertyProject(typoSource);
   const correctionCandidates = propertyCandidates(propertyBefore);
+  const reviewedBase = { path: 'libraries/scriptproperties.xml', source: 'base', sha256: REVIEWED_PROPERTY_SOURCE_HASH };
+  const dlcPropertyInput = (id: string, sha256: string) => ({
+    path: `extensions/${id}/libraries/scriptproperties.xml`, source: id, sha256,
+  });
+  const dlcA = dlcPropertyInput('ego_dlc_a', 'a'.repeat(64));
+  const dlcB = dlcPropertyInput('ego_dlc_b', 'b'.repeat(64));
+  const reviewedAuthority = (
+    sourceInputs: ScriptPropertyIndex['sourceInputs'],
+    findings = propertyBefore.scriptProperties.findings,
+    verifyInputs = () => true,
+    verifyRequested = false,
+  ) => scriptPropertyCorrectionAuthority({ ...shipPropertyIndex, sourceInputs }, findings, verifyRequested, verifyInputs);
+  const exactPropertyAuthority = reviewedAuthority([reviewedBase, dlcA, dlcB]);
+  const differentPropertyAuthorities = [
+    reviewedAuthority([reviewedBase, dlcB, dlcA]),
+    reviewedAuthority([reviewedBase, dlcA]),
+    reviewedAuthority([reviewedBase, dlcA, { ...dlcB, sha256: 'c'.repeat(64) }]),
+  ];
   const first = correctionCandidates[0];
   const correctedSource = first ? typoSource.slice(0, first.start) + first.replacement + typoSource.slice(first.end) : typoSource;
   const propertyAfter = propertyProject(correctedSource);
@@ -1658,6 +1743,35 @@ export function runProjectValidationSelftest(): { pass: boolean; checks: { name:
           && candidate.expectedText === 'hulll' && candidate.replacement === 'hull'
           && candidate.datatype === 'ship' && candidate.declarationOwner === 'destructible'
           && candidate.sourceSha256 === crypto.createHash('sha256').update(typoSource).digest('hex')),
+    },
+    {
+      name: 'property_correction_authority_binds_exact_reviewed_rule_and_full_ordered_vocabulary',
+      pass: exactPropertyAuthority?.targetGameVersion === '9.00'
+        && exactPropertyAuthority.ruleId === 'x4.scriptproperty.unknown' && exactPropertyAuthority.ruleVersion === '1.0.0'
+        && exactPropertyAuthority.ruleHash === '58f878efc06bd66752c4c66fd57cc168fa19e5b9136ee712a450ca84eaf76ff8'
+        && exactPropertyAuthority.vocabularyHash === crypto.createHash('sha256').update(JSON.stringify([
+          ['libraries/scriptproperties.xml', 'base', REVIEWED_PROPERTY_SOURCE_HASH],
+          ['extensions/ego_dlc_a/libraries/scriptproperties.xml', 'ego_dlc_a', 'a'.repeat(64)],
+          ['extensions/ego_dlc_b/libraries/scriptproperties.xml', 'ego_dlc_b', 'b'.repeat(64)],
+        ])).digest('hex')
+        && differentPropertyAuthorities.every(authority => authority
+          && authority.vocabularyHash !== exactPropertyAuthority.vocabularyHash),
+    },
+    {
+      name: 'property_correction_refuses_unreviewed_or_unverified_vocabulary_without_hiding_diagnostics',
+      pass: propertyBefore.scriptProperties.correctionAuthority === undefined && correctionCandidates.length === 2
+        && reviewedAuthority(undefined) === undefined
+        && reviewedAuthority([dlcA]) === undefined
+        && reviewedAuthority([reviewedBase, reviewedBase]) === undefined
+        && reviewedAuthority([{ ...reviewedBase, sha256: 'f'.repeat(64) }, dlcA]) === undefined
+        && reviewedAuthority([reviewedBase, dlcA], []) === undefined
+        && reviewedAuthority([reviewedBase, dlcA], undefined, () => false) === undefined,
+    },
+    {
+      name: 'property_correction_can_explicitly_recheck_authority_after_the_last_finding',
+      pass: !!exactPropertyAuthority
+        && reviewedAuthority([reviewedBase, dlcA, dlcB], [], () => true, true)?.vocabularyHash === exactPropertyAuthority.vocabularyHash
+        && reviewedAuthority([reviewedBase, dlcA, dlcB], [], () => false, true) === undefined,
     },
     {
       name: 'applying_one_property_candidate_clears_only_its_original_finding',

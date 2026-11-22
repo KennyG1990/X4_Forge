@@ -25,7 +25,7 @@ import { extractBaseGameFile as catDatExtractBaseGameFile } from "../lib/x4CatDa
 import { buildScriptPropertyIndex, runScriptPropertiesSelftest, type ScriptPropertyIndex } from "../lib/scriptProperties";
 import { ORDER_PARAM_TYPES, runAiscriptLintSelftest } from "../lib/aiscriptLint";
 import { runMdPitfallSelftest } from "../lib/mdPitfallLints";
-import { getReferenceCorpus } from "../lib/referenceCorpus";
+import { getReferenceCorpus, readCurrentScriptPropertySourceInputs, SCRIPT_PROPERTY_INPUT_LIMITS } from "../lib/referenceCorpus";
 import { getReferenceScriptPropertyIndex } from "../lib/referenceLanguage";
 import { atomicWriteFile } from "../lib/workspaceState";
 
@@ -78,7 +78,7 @@ export function getAiOrderParamTypes(aiIndex: SchemaIndex | null): Set<string> {
 
 // Scriptproperty index (ROADMAP TOOL GAP, 2026-06-27): parsed from the game's
 // libraries/scriptproperties.xml (loose or packed). Cached in-memory per game path.
-let scriptPropertyCache: { key: string; index: ScriptPropertyIndex } | null = null;
+let scriptPropertyCache: { key: string; index: ScriptPropertyIndex; sourceRoot?: string } | null = null;
 export function getScriptPropertyIndex(): ScriptPropertyIndex | null {
   try {
     const resolved = resolveXsdConfig();
@@ -88,7 +88,7 @@ export function getScriptPropertyIndex(): ScriptPropertyIndex | null {
       if (scriptPropertyCache?.key === key) return scriptPropertyCache.index;
       const index = getReferenceScriptPropertyIndex(corpus);
       if (index.loaded) {
-        scriptPropertyCache = { key, index };
+        scriptPropertyCache = { key, index, sourceRoot: corpus.root };
         return index;
       }
     }
@@ -104,6 +104,30 @@ export function getScriptPropertyIndex(): ScriptPropertyIndex | null {
   } catch {
     return null;
   }
+}
+
+/** Explicit editor-only freshness gate; diagnostics and their ordinary caches keep existing behavior. */
+export function scriptPropertyInputsAreCurrent(index: ScriptPropertyIndex): boolean {
+  const owner = scriptPropertyCache;
+  const inputs = index.sourceInputs;
+  if (!owner || owner.index !== index || !owner.sourceRoot || !inputs?.length
+    || inputs.length > SCRIPT_PROPERTY_INPUT_LIMITS.files) return false;
+  try {
+    const sameRoot = (value: string) => {
+      const resolved = path.resolve(value);
+      const expected = path.resolve(owner.sourceRoot!);
+      return process.platform === 'win32' ? resolved.toLowerCase() === expected.toLowerCase() : resolved === expected;
+    };
+    const configured = resolveXsdConfig();
+    if (!configured.x4ReferenceExists || !sameRoot(configured.x4ReferenceRoot)) return false;
+    const current = readCurrentScriptPropertySourceInputs(owner.sourceRoot);
+    if (!current || current.length !== inputs.length || !current.every((input, position) => {
+      const expected = inputs[position];
+      return input.path === expected.path && input.source === expected.source && input.sha256 === expected.sha256;
+    })) return false;
+    const after = resolveXsdConfig();
+    return owner === scriptPropertyCache && after.x4ReferenceExists && sameRoot(after.x4ReferenceRoot);
+  } catch { return false; }
 }
 
 /** Public read-only GETs owned by this module (each is in PUBLIC_READONLY_GETS). */

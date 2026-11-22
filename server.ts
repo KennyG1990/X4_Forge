@@ -10264,9 +10264,27 @@ function validateProjectRequest(req: express.Request, res: express.Response, lea
     const subjectEvidence = buildValidationEvidence(project, []);
     subjectIdentity = { modId: subjectEvidence.modId, sourceHash: subjectEvidence.sourceHash };
 
+    const correctionPhase = canonical && source.mode === 'inline' ? req.get('X-Forge-Verify-Property-Correction') : undefined;
+    let correctionWorkspace: { id: string; head: string; version: number } | undefined;
+    if ((correctionPhase === 'offer' || correctionPhase === '1') && (req as ReferenceEditorRequest).__actor?.kind === 'studio') {
+      const record = resolveWorkspaceAuthority(req, res);
+      if (!record) return;
+      let editorRoot: string | undefined;
+      try {
+        editorRoot = decodeURIComponent(req.get('X-Forge-Editor-Source') || '');
+      } catch { /* Malformed editor authority cannot authorize an edit. */ }
+      if (addressedEditorSource(req, editorRoot)) {
+        correctionWorkspace = { id: record.workspaceId, head: workspaceHash(record), version: record.version };
+      }
+    }
+    if (correctionPhase === '1' && !correctionWorkspace) {
+      return res.status(409).json({ ...subjectIdentity, code: 'CORRECTION_SOURCE_WORKSPACE_MISMATCH',
+        error: 'Select the imported source workspace before applying this Quick Fix.' });
+    }
     const references = (() => { try { return getReferenceSets(); } catch { return undefined; } })();
     let canonicalMd: CanonicalMdConsultation | undefined;
     const result = runProjectValidation(project, { references, jobsVocabulary: getJobsVocabulary(), waresVocabulary: getWaresVocabulary(),
+      scriptPropertyAuthority: correctionWorkspace ? (correctionPhase === '1' ? 'verify' : 'offer') : undefined,
       canonicalMd: { read: readCanonicalMdForValidation, skippedFiles: source.mode === 'fromPath' ? source.skipped : undefined,
         consulted: memo => { canonicalMd = memo; } } });
     if (source.mode === 'fromPath' && source.skipped.length) {
@@ -10338,6 +10356,7 @@ function validateProjectRequest(req: express.Request, res: express.Response, lea
     }
     return res.status(baselineError !== undefined ? 409 : 200).json({
       ...(full ? { ...result, ...identity, flat, capsules: buildRemediationCapsules(flat), source, validationDelta,
+        ...(correctionWorkspace && result.scriptProperties.correctionAuthority ? { correctionWorkspace } : {}),
         ...(drift ? { drift } : {}), ...(canonical ? {} : { detail: 'full', resultId }) } : compact()),
       ...(baselinePromotion ? { baselinePromotion } : {}),
       ...(baselineError !== undefined ? { ok: false, code: 'VALIDATION_BASELINE_RECORD_FAILED',

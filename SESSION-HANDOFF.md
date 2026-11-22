@@ -6,7 +6,7 @@ X4 Forge Studio 0.0.90 shipped to Open VSX and GitHub. The same tested VSIX has 
 
 ## Current editor checkpoint
 
-#10 and #74 use the existing 2026-07-17 native phase B plan. Typed ScriptProperty spelling candidates are source-backed and retain exact position, original text, replacement, receiver, declaration owner and source SHA-256. The repository proof uses the same controlled fixture as the installed CodeSense CLI. Focused validation and the actual 9.00 ScriptProperty probe pass. The ordinary source precommit and CI lint command passed. Installed Code Actions, guarded application, post-edit validation, Undo and audit receipt remain open. Keep source and installed proof separate.
+#10 and #74 use the existing 2026-07-17 native phase B plan. The Dev Quick Fix supports one reviewed ScriptProperty spelling at its exact range. It binds the imported workspace and X4 9.00 corpus, reviews one buffer edit, checks the resulting project and retains an audit receipt. Eight controlled editor checks and the 17-check real HTTP replay passed. The replay lives under the G: QA checkpoint property-quickfix-20261122. Continue with the exact installed Antigravity review, apply and Undo witness before qualifying a release. Packed corpus edit authority and the remaining safe-fix families stay open.
 
 ## Operator dependencies
 

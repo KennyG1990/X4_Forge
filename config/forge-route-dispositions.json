@@ -3,6 +3,7 @@
   "sources": [
     "server.ts",
     "shared/actionOperationId.ts",
+    "shared/actionReceipt.ts",
     "shared/agentKeyCreationContract.ts",
     "shared/aiScriptIdentity.ts",
     "shared/aiScriptNavigation.ts",
@@ -14,6 +15,8 @@
     "shared/mdScriptNavigation.ts",
     "shared/nativePerformanceChannel.ts",
     "shared/nativePerformanceProtocol.ts",
+    "shared/projectFileKind.ts",
+    "shared/projectValidationInput.ts",
     "shared/referenceEditorOrders.ts",
     "shared/scriptExpressionRole.ts",
     "shared/workspaceScriptSymbols.ts",

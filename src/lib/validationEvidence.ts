@@ -2,7 +2,7 @@
 import crypto from 'node:crypto';
 import { isUtf8 } from 'node:buffer';
 import { classifyPath, type ExtensionProject, type ProjectFileKind } from './extensionProject';
-import { validationProjectContentHash } from './validationDelta';
+import { validationSubjectSourceHash } from '../../shared/projectValidationInput';
 import { checkXmlWellformed } from './xmlWellformed';
 import { parseXmlLenient } from './xmlLite';
 import { contentManifestIdentityFromRoot } from '../../shared/contentManifestIdentity';
@@ -192,12 +192,7 @@ export function buildValidationEvidence(
   diagnostics: readonly EvidenceDiagnostic[],
   coverageGaps: readonly ValidationCoverageGap[] = [],
 ): ValidationEvidence {
-  // Reuse the canonical validation hasher, but encode presence and declared kind too:
-  // absent source must not have the same identity as an inspected empty file.
-  const sourceHash = validationProjectContentHash(project.files.map(file => ({
-    path: file.path,
-    content: JSON.stringify([file.kind, typeof file.content === 'string', file.content ?? null]),
-  })));
+  const sourceHash = validationSubjectSourceHash(project.files);
   const manifests = project.files.filter(file => normalizedPath(file.path) === 'content.xml');
   const manifest = manifests.length === 1 ? readContentManifestIdentity(manifests[0].content) : null;
   const modId = manifest?.modId ?? null;

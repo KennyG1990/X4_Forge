@@ -192,6 +192,14 @@ function scriptIndexFor(corpus: ReferenceCorpus): ScriptPropertyIndex {
     model.parsedProperties += entry.properties.length;
   }
   const index = buildScriptPropertyIndexFromModel(model);
+  if (corpus.scriptPropertySourceInputs !== undefined) {
+    // Evidence belongs to the bytes that built this exact index, never to a later cache lookup.
+    Object.defineProperty(index, 'sourceInputs', {
+      enumerable: true, value: Object.freeze(corpus.scriptPropertySourceInputs.map(input => Object.freeze({
+        path: input.path, source: input.source, sha256: input.sha256,
+      }))),
+    });
+  }
   scriptState = { corpusSignature: corpus.signature, index };
   return index;
 }
@@ -722,6 +730,41 @@ export function runReferenceLanguageSelftest() {
   try { offsetAt('<x/>', 3, 0); } catch { rejected = true; }
   ok('invalid cursor rejected', rejected);
   ok('CRLF cursor offset is exact', offsetAt('<x>\r\n  <y/>', 1, 2) === 7, offsetAt('<x>\r\n  <y/>', 1, 2));
+  const priorScriptState = scriptState;
+  try {
+    const inputs = [
+      { path: 'libraries/scriptproperties.xml', source: 'base', sha256: 'a'.repeat(64) },
+      { path: 'extensions/ego_dlc_test/libraries/scriptproperties.xml', source: 'ego_dlc_test', sha256: 'b'.repeat(64) },
+    ];
+    const propertyCorpus: ReferenceCorpus = {
+      ...corpus, signature: 'property-source-transport-fixture', scriptPropertySourceInputs: inputs,
+      scriptProperties: [{ kind: 'datatype', name: 'ship', dynamic: false,
+        properties: [{ name: 'hull', result: 'Hull value', type: 'hitpoints' }], functions: [] }],
+    };
+    const derived = getReferenceScriptPropertyIndex(propertyCorpus);
+    ok('derived property index captures ordered source evidence without retaining mutable corpus records',
+      JSON.stringify(derived.sourceInputs) === JSON.stringify(inputs)
+        && derived.sourceInputs !== inputs && derived.sourceInputs?.[0] !== inputs[0]);
+    ok('derived property source evidence cannot be changed or replaced',
+      Object.isFrozen(derived.sourceInputs) && derived.sourceInputs?.every(Object.isFrozen) === true
+        && Object.getOwnPropertyDescriptor(derived, 'sourceInputs')?.writable === false
+        && Object.getOwnPropertyDescriptor(derived, 'sourceInputs')?.configurable === false);
+    inputs[0].sha256 = 'c'.repeat(64);
+    inputs.reverse();
+    const cached = getReferenceScriptPropertyIndex(propertyCorpus);
+    ok('warm property index keeps its original consumed-byte provenance after corpus metadata changes',
+      cached === derived && cached.sourceInputs?.[0].source === 'base'
+        && cached.sourceInputs[0].sha256 === 'a'.repeat(64) && cached.sourceInputs[1].sha256 === 'b'.repeat(64));
+    const refreshed = getReferenceScriptPropertyIndex({ ...propertyCorpus, signature: 'property-source-transport-refreshed' });
+    ok('new property index captures the changed input snapshot after ordinary signature invalidation',
+      refreshed !== derived && JSON.stringify(refreshed.sourceInputs) === JSON.stringify(inputs)
+        && derived.sourceInputs?.[0].sha256 === 'a'.repeat(64));
+    const legacy = getReferenceScriptPropertyIndex({ ...corpus, signature: 'property-source-transport-legacy' });
+    ok('legacy corpus without consumed-byte evidence cannot claim property source authority',
+      legacy.sourceInputs === undefined && !Object.hasOwn(legacy, 'sourceInputs'));
+  } finally {
+    scriptState = priorScriptState;
+  }
   const passed = checks.filter(check => check.pass).length;
   return { allPassed: passed === checks.length, pass: passed === checks.length, passed, total: checks.length, checks };
 }

@@ -669,6 +669,7 @@ function deriveAuthorityScopes(
 const AUDIT_WRITE_ONLY_SURFACES = new Set([
   'filesystem-writer:src/lib/actionReceiptStore.ts',
   'filesystem-writer:src/lib/validationDelta.ts',
+  'host-store:vscode-extension/src/propertyCorrectionReceipt.ts',
 ]);
 
 const AUDIT_RETENTION_SURFACES = new Set([

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceFingerprint": "3bce801c67c0d541c945a9b31e6dc2e89ce3b96f16fd72a291801edaa3967a26",
+  "sourceFingerprint": "a2e6b6676dd9f7dfc4c47724d6bfb5f28d818517ce6e00e75e119e50969e2f0c",
   "policy": "Every raw production filesystem mutation source is count-pinned here. Authoritative files use atomic sibling promotion; stronger tree, archive, append-log, SQLite, retention, ephemeral, and fixture contracts remain explicit exceptions.",
   "writers": [
     {
@@ -117,10 +117,10 @@
     },
     {
       "file": "src/lib/referenceCorpus.ts",
-      "calls": { "writeFileSync": 1, "mkdirSync": 1, "rmSync": 2 },
+      "calls": { "writeFileSync": 2, "mkdirSync": 2, "rmSync": 2, "unlinkSync": 1, "symlinkSync": 1 },
       "categories": ["fixture-only"],
       "owners": ["runReferenceCorpusSelftest"],
-      "rationale": "Creates and removes a disposable vanilla/DLC reference corpus fixture.",
+      "rationale": "Creates and removes a disposable vanilla/DLC reference corpus fixture, including temporary contributor edits and a linked-extension refusal case.",
       "failureContract": "Production corpus indexing is read-only and cache invalidation never mutates the corpus."
     },
     {
@@ -417,6 +417,14 @@
       "owners": ["runNativePerformanceIpcSelftest", "runNativePerformancePublicReplaySelftest"],
       "rationale": "Creates uniquely owned OS-temporary fixtures for the seven-scenario IPC mode and separately selected real-source public HTTP/MCP replay. Public replay creates native/legacy config, state, data, coordination, mod, schema, scratch-game and discovery directories; current production server owners write only within these private roots. No persistent helper copy or production writer grant is added.",
       "failureContract": "Both modes require exact owner and expected physical tree, terminal and drained owned supervisors, and confirmed absence of receipt-bound workers/backends before recursive removal. Public replay additionally requires terminal, drained and absent owned MCP children, a disposed parent producer/histogram with zero owned/failed timers, and a closed physical single-link file/directory allowlist bounded to 512 entries and 32 MiB. Unknown files, ownership, identity, reparse points, quiescence or cleanup failures fail the oracle and retain scratch. No live profile, standing configuration, mod, game or save is targeted."
+    },
+    {
+      "file": "vscode-extension/src/propertyCorrectionHost.selftest.ts",
+      "calls": { "writeFileSync": 5, "mkdirSync": 1, "rmSync": 1, "mkdtempSync": 1 },
+      "categories": ["fixture-only"],
+      "owners": ["controlled native property correction regression"],
+      "rationale": "Creates a disposable manifest, authored XML and project rules. Edits only that fixture's manifest to test the stale-input refusal.",
+      "failureContract": "The fixture is unique and cleanup requires its resolved parent to match the original temporary root. A fixture or cleanup failure fails the test."
     }
   ],
   "hostStores": [
@@ -507,6 +515,14 @@
       "owners": ["managed-sidecar workspace selection", "two-way-editing telemetry counters"],
       "rationale": "Stores the last selected immutable workspace ID for restart bootstrap plus non-authoritative adoption/decline/refusal/conflict counters in IDE-managed global state.",
       "failureContract": "Workspace selection is accepted only after the authenticated backend binds the ID; persistence failure fails that host handoff or falls back to safe bootstrap on restart, while telemetry never changes authorization or source state."
+    },
+    {
+      "file": "vscode-extension/src/propertyCorrectionReceipt.ts",
+      "calls": { "globalStateUpdate": 1 },
+      "categories": ["extension-global-state"],
+      "owners": ["native property correction journal"],
+      "rationale": "Stores up to 32 editor-buffer receipts in the extension profile. Contains workspace IDs, mod-relative paths, outcome codes and evidence hashes.",
+      "failureContract": "Preparation failure prevents the editor edit. Terminal persistence retries the same verified facts, and unresolved receipts survive pruning. A full unresolved journal refuses further edits."
     }
   ],
   "browserOutputs": [

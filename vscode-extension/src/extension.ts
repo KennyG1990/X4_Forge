@@ -41,6 +41,7 @@ import {
   type MdDefinitionDocument,
 } from "./langNav";
 import { registerMdRenameCommand } from "./mdRenameHost";
+import { registerPropertyCorrection, type PropertyCorrectionAccess, type PropertyCorrectionValidation } from "./propertyCorrectionHost";
 import { registerWorkspaceScriptSymbols } from "./workspaceScriptSymbolsHost";
 import { provideAuthoredAiScriptDefinition, provideAuthoredAiScriptReferences } from "./aiScriptDefinitionHost";
 import type { AiScriptLocation } from "./aiScriptNavigation";
@@ -87,10 +88,12 @@ interface BackendHandle {
   /** ADR-F5 explicit authority for extension-native API calls. */
   clientId?: string;
   workspaceId?: string;
+  workspaceSelection?: number;
   nativeBridge?: ReturnType<ReturnType<typeof createNativePerformanceHost>["attach"]>;
 }
 
 let backend: BackendHandle | null = null;
+let propertyCorrection: ReturnType<typeof registerPropertyCorrection> | undefined;
 let nativePerformanceHost: ReturnType<typeof createNativePerformanceHost> | undefined;
 const nativeBridges = new WeakMap<ChildProcess, ReturnType<ReturnType<typeof createNativePerformanceHost>["attach"]>>();
 type NativeFinish = (outcome?: ForgePerformanceOutcome) => void;
@@ -1129,6 +1132,7 @@ async function handleStudioMessage(context: vscode.ExtensionContext, value: unkn
       const body = await response.json() as { workspaceId?: string; error?: string };
       if (backend !== handle) return;
       if (!response.ok || body.workspaceId !== workspaceId) throw new Error(body.error || `HTTP ${response.status}`);
+      if (handle.workspaceId !== workspaceId) handle.workspaceSelection = (handle.workspaceSelection ?? 0) + 1;
       handle.workspaceId = workspaceId;
       await context.globalState.update('x4forge.workspaceId', workspaceId);
       log(`workspace authority selected by Studio tab: ${workspaceId}`);
@@ -1740,6 +1744,7 @@ export function activate(context: vscode.ExtensionContext): void {
       };
     }, log);
     registerMdRenameCommand(context, modRootFor, LIVE_FILE_LIMIT, () => beginNativeOperation("native.provider.write"));
+    propertyCorrection = registerPropertyCorrection(context, LIVE_FILE_LIMIT, modRootFor, () => beginNativeOperation("native.provider.write"));
     registerTwoWayEditing(context);
 
     // Opt-in convenience (x4forge.autoOpen): open the studio once the workspace loads.
@@ -2823,10 +2828,34 @@ function scheduleLiveRootValidation(context: vscode.ExtensionContext, root: stri
   }
 }
 
+function nativePropertyCorrectionAccess(handle: BackendHandle, root: string): PropertyCorrectionAccess | undefined {
+  const { token, clientId, workspaceId, baseUrl, workspaceSelection } = handle;
+  if (!handle.owned || !token || !clientId || !workspaceId) return undefined;
+  const isCurrent = () => backend === handle && handle.token === token && handle.clientId === clientId
+    && handle.workspaceId === workspaceId && handle.baseUrl === baseUrl && handle.workspaceSelection === workspaceSelection;
+  return {
+    workspaceId,
+    isCurrent,
+    async validate(project) {
+      if (!isCurrent()) throw new Error("Select the current Forge workspace before applying this Quick Fix.");
+      const headers = freshActionOperationHeaders(backendApiHeaders(handle, true));
+      headers.set("X-Forge-Verify-Property-Correction", "1");
+      headers.set("X-Forge-Editor-Source", encodeURIComponent(root));
+      const response = await fetchWithTimeout(`${baseUrl}/api/agent/project/validate/check`, 20_000, {
+        method: "POST", redirect: "error", headers, body: JSON.stringify({ project }),
+      });
+      if (response?.status === 409) throw new Error("The selected Forge workspace no longer owns this mod source.");
+      if (!response?.ok) throw new Error("Forge could not validate the current Quick Fix inputs.");
+      return await response.json() as PropertyCorrectionValidation;
+    },
+  };
+}
+
 async function liveValidateRoot(root: string, generation: number): Promise<void> {
   let finishPhase: NativeFinish = () => undefined;
   try {
-    if (!backend?.owned || !backend.token) {
+    const handle = backend;
+    if (!handle?.owned || !handle.token) {
       setRootValidationWarning(root, "validation.backend_credential_unavailable", "X4 Forge continuous validation is unavailable because this extension attached to an externally managed backend without a credential. The Studio still validates continuously; native IDE squiggles require the extension-managed sidecar.");
       return;
     }
@@ -2864,9 +2893,17 @@ async function liveValidateRoot(root: string, generation: number): Promise<void>
       return;
     }
     const files = [...byPath.values()];
-    const res = await fetch(`${backend.baseUrl}/api/agent/project/validate/check`, {
+    const correctionAccess = nativePropertyCorrectionAccess(handle, root);
+    const headers = freshActionOperationHeaders(correctionAccess
+      ? backendApiHeaders(handle, true)
+      : { Authorization: `Bearer ${handle.token}`, "Content-Type": "application/json" });
+    if (correctionAccess) {
+      headers.set("X-Forge-Verify-Property-Correction", "offer");
+      headers.set("X-Forge-Editor-Source", encodeURIComponent(root));
+    }
+    const res = await fetch(`${handle.baseUrl}/api/agent/project/validate/check`, {
       method: "POST",
-      headers: freshActionOperationHeaders({ Authorization: `Bearer ${backend.token}`, "Content-Type": "application/json" }),
+      headers,
       body: (() => {
         finishPhase = beginNativeOperation('native.validation.serialize');
         const body = JSON.stringify({ project: { id: path.basename(root), name: path.basename(root), files } });
@@ -2876,7 +2913,7 @@ async function liveValidateRoot(root: string, generation: number): Promise<void>
       })(),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = (await res.json()) as { flat?: FlatFinding[] };
+    const data = (await res.json()) as PropertyCorrectionValidation & { flat?: FlatFinding[] };
     const key = path.resolve(root).toLowerCase();
     if (liveGenerations.get(key) !== generation) { finishPhase('superseded'); return; }
     finishPhase();
@@ -2891,9 +2928,15 @@ async function liveValidateRoot(root: string, generation: number): Promise<void>
       const open = vscode.workspace.textDocuments.find((candidate) => candidate.uri.toString() === uri.toString());
       const snapshot = list.some(item => item.column !== undefined) ? byPath.get(rel.toLowerCase())?.content : undefined;
       const rangeFor = createDiagnosticRangeMapper(snapshot, open);
+      const correctionRanges = open && snapshot !== undefined
+        ? propertyCorrection?.remember(root, open, rel, snapshot, data, correctionAccess,
+          () => liveGenerations.get(key) === generation)
+        : undefined;
       diagCollection?.set(uri, list.map((d) => {
         const { line, start, end } = rangeFor(d);
-        const diag = new vscode.Diagnostic(new vscode.Range(line, start, line, end), d.message, DIAG_SEVERITY[d.severity] ?? vscode.DiagnosticSeverity.Information);
+        const exact = d.code === "scriptproperty.unknown" && d.column !== undefined
+          ? correctionRanges?.get(`${d.line}:${d.column}`) : undefined;
+        const diag = new vscode.Diagnostic(exact ?? new vscode.Range(line, start, line, end), d.message, DIAG_SEVERITY[d.severity] ?? vscode.DiagnosticSeverity.Information);
         diag.source = "x4forge";
         if (d.code) diag.code = d.code;
         return diag;

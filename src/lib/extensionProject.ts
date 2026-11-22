@@ -22,7 +22,8 @@ import { describeAuthoredMdReference, plainMdLibraryPurposeFacts, type Effective
 import { normPath, parseXmlLenient, walkElements } from './xmlLite';
 import { parseModManifest, type ModDependency } from './modDependencyGraph';
 
-export type ProjectFileKind = 'md' | 'lua' | 'ui' | 'content' | 't' | 'library' | 'aiscript' | 'other';
+import { classifyPath, type ProjectFileKind } from '../../shared/projectFileKind';
+export { classifyPath, type ProjectFileKind };
 
 export interface ProjectFile {
   /** relative path within the extension, e.g. "md/chat.xml", "ui/chat.lua", "content.xml" */
@@ -69,19 +70,6 @@ export interface CueReferenceIndex {
 /* ------------------------------------------------------------------ *
  * Path classification + file ops (pure; ops return a new project).
  * ------------------------------------------------------------------ */
-
-export function classifyPath(path: string): ProjectFileKind {
-  const p = (path || '').replace(/\\/g, '/').toLowerCase();
-  if (p === 'content.xml') return 'content';
-  if (p === 'ui.xml') return 'ui';
-  if (p.endsWith('.lua')) return 'lua';
-  if (/(^|\/)md\/.+\.xml$/.test(p)) return 'md';
-  if (/(^|\/)aiscripts\/.+\.xml$/.test(p)) return 'aiscript';
-  if (/(^|\/)t\/.+\.xml$/.test(p)) return 't';
-  if (/(^|\/)(libraries|index|maps|assets)\/.+/.test(p)) return 'library';
-  if (/(^|\/)ui\/.+/.test(p)) return 'ui';
-  return 'other';
-}
 
 // normPath: shared via xmlLite (audit R2).
 
