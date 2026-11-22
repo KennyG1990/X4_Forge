@@ -1298,6 +1298,7 @@ test(autosaveBeforeDeployResponse
   const convergenceHeld = new Promise<void>(resolve => { releaseConvergence = resolve; });
   let releaseApplyResponse!: () => void;
   const applyResponseHeld = new Promise<void>(resolve => { releaseApplyResponse = resolve; });
+  const nativeApplyTimeoutMs = 20_000;
   let heldNativeApply: { status: number; result: { ok?: boolean; bytesConfirmed?: boolean; workspace?: unknown } } | undefined;
   let autosaved: { workspaceId: string; version: number; workspaceHash: string; snapshotHash: string; workspace: unknown } | undefined;
   let convergenceSource: unknown;
@@ -1361,7 +1362,7 @@ test(autosaveBeforeDeployResponse
           await route.fallback();
           return;
         }
-        const response = await fetchRouteWithClosingConnection(route);
+        const response = await fetchRouteWithClosingConnection(route, { timeout: nativeApplyTimeoutMs });
         heldNativeApply = { status: response.status(), result: await response.json() };
         await applyResponseHeld;
         await route.fulfill({ response });
@@ -1399,7 +1400,10 @@ test(autosaveBeforeDeployResponse
       && response.request().postDataJSON().dryRun !== true);
     await page.getByTestId('wizard-apply-deploy').click();
     if (autosaveBeforeDeployResponse) {
-      await expect.poll(() => heldNativeApply?.status).toBe(200);
+      await expect.poll(() => heldNativeApply, {
+        timeout: nativeApplyTimeoutMs + 2_000,
+        message: 'Wait for the real Apply response before releasing autosave',
+      }).toBeDefined();
       expect(heldNativeApply).toMatchObject({
         status: 200, result: { ok: true, bytesConfirmed: true, workspace: { name: initial.name, description: localDescription } },
       });
@@ -1524,8 +1528,7 @@ test(autosaveBeforeDeployResponse
     releaseAutosave();
     releaseConvergence();
     releaseApplyResponse();
-    await page.unroute(deployRoute);
-    await page.unroute(workspaceRoute);
+    await page.unrouteAll({ behavior: 'wait' });
     const restored = await request.post(configUrl, { headers, data: restore });
     expect(restored.status(), await restored.text()).toBe(200);
     const actual = await request.get(configUrl, { headers });

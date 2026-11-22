@@ -17,3 +17,7 @@ X4 Forge Studio 0.0.90 shipped to Open VSX and GitHub. The same tested VSIX has 
 #85 still needs the exact separate deploy2.py revision, runnable command, writer evidence and operator verdict. Claude's known AiLive wrapper uses native preview and apply. Its missing-Lua false success has a separate tested proposal, awaiting integration and the exact, missing and changed readback reruns. The primary Forge handoff is https://app.notion.com/p/4124618ed15b814489ecd88e7d531ebc.
 
 #122 remains READY and awaiting Claude's in-game verdict. Sixteen payloads are hash-qualified in seven cases. See https://app.notion.com/p/4204618ed15b81c7b84dccb97669ed87. Work from the isolated G: checkout and disposable G: fixtures.
+
+## 0.0.91 headless release checks
+
+The first complete source pass at 4bf0306 finished with 144 passes, four failures and two flakes. Two diagnostics cases expected the previous rule pack. A scratch game path leaked from C05, and two UI fixtures required a visible warning card even though health was ready. The first native Apply completed after its test wait. One Vite entry module failed with Chromium ERR_NO_BUFFER_SPACE. The fixture-only changes preserve production behavior. The seven affected cases passed in one run, and the final full-height layout check passed separately. The full precommit gate also passed. Keep the red baseline and run the full source and compiled suites again before packaging.

@@ -23,10 +23,13 @@ test('UI source conflict visibly explains preservation refusal', async ({ page }
       { path: 'ui/first.lua', reason: 'partial', content: 'local first = 1' },
     ],
   });
+  await page.route('**/api/agent/health-card', route => route.fulfill({ json: {
+    verdict: 'ready',
+    summary: 'The fixture environment is ready.',
+    rows: [{ id: 'game_path', label: 'X4 game path', status: 'pass', detail: 'Scratch installation is configured.' }],
+  } }));
   await page.goto('/');
   await expect(page.getByTestId('studio-workspace')).toBeVisible();
-  await expect(page.getByTestId('health-card')).toBeVisible();
-  await page.getByTestId('health-card-dismiss').click();
   await page.locator('[data-workspace-view="ui-designer"]').click();
   await expect(page.getByTestId('x4-ui-source-editor')).toBeVisible();
   // The released editor exposes this in Source authority without an Inspect

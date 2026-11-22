@@ -1,5 +1,6 @@
 import { expect, test, type Page } from './request-transport';
 import { openStudioAction } from './studio-actions';
+import { buildHealthCard } from '../../src/lib/healthCard';
 import { buildTemplateWorkspace } from '../../src/lib/modTemplates';
 import { workspaceContentHash } from '../../src/lib/workspaceIdentity';
 import { sanitizeWorkspace } from '../../src/types';
@@ -175,56 +176,64 @@ test('lossless registries keep every destination and utility recoverable', async
 });
 
 test('layout customization docks, hides, reorders, collapses, restores, and persists', async ({ page, browser }) => {
+  const lateHealthCard = buildHealthCard({ mdSchema: { loaded: true, elements: 1 } });
+  expect(lateHealthCard.verdict).toBe('attention');
+  let showHealthCard!: () => void;
+  const healthCardHeld = new Promise<void>(resolve => { showHealthCard = resolve; });
   await page.route('**/api/agent/health-card', async route => {
-    // Keep the first response beyond bootExpert's 1.5s dismissal window so the
-    // late-appearance safe-area regression remains deterministic.
-    await new Promise(resolve => setTimeout(resolve, 2_500));
-    await route.continue();
+    await healthCardHeld;
+    await route.fulfill({ json: lateHealthCard });
   });
-  await bootExpert(page);
-  const initialHash = await liveWorkspaceHash(page);
+  let initialHash: string;
+  try {
+    await bootExpert(page);
+    initialHash = await liveWorkspaceHash(page);
 
-  const aiScriptsTab = page.locator('[data-workspace-view="aiscripts"]');
-  const aiScriptsBox = await aiScriptsTab.boundingBox();
-  expect(aiScriptsBox).not.toBeNull();
-  await page.locator('[data-workspace-view="blueprint"]').dragTo(aiScriptsTab, {
-    targetPosition: { x: aiScriptsBox!.width - 2, y: aiScriptsBox!.height / 2 },
-  });
-  await expect(page.locator('[data-workspace-view]').first()).toHaveAttribute('data-workspace-view', 'aiscripts');
+    const aiScriptsTab = page.locator('[data-workspace-view="aiscripts"]');
+    const aiScriptsBox = await aiScriptsTab.boundingBox();
+    expect(aiScriptsBox).not.toBeNull();
+    await page.locator('[data-workspace-view="blueprint"]').dragTo(aiScriptsTab, {
+      targetPosition: { x: aiScriptsBox!.width - 2, y: aiScriptsBox!.height / 2 },
+    });
+    await expect(page.locator('[data-workspace-view]').first()).toHaveAttribute('data-workspace-view', 'aiscripts');
 
-  const cuesTool = page.locator('[data-sidebar-tab="cues"]');
-  const cuesBox = await cuesTool.boundingBox();
-  expect(cuesBox).not.toBeNull();
-  await page.locator('[data-sidebar-tab="script"]').dragTo(cuesTool, {
-    targetPosition: { x: cuesBox!.width / 2, y: cuesBox!.height - 2 },
-  });
-  await expect(page.locator('[data-sidebar-tab]').first()).toHaveAttribute('data-sidebar-tab', 'cues');
-  await page.getByTestId('workspace-nav-collapse').click();
-  await expect(page.getByTestId('workspace-bar-collapsed')).toBeVisible();
-  await page.getByTestId('workspace-bar-collapsed').getByRole('button').click();
-  await expect(page.getByTestId('workspace-navigation')).toBeVisible();
+    const cuesTool = page.locator('[data-sidebar-tab="cues"]');
+    const cuesBox = await cuesTool.boundingBox();
+    expect(cuesBox).not.toBeNull();
+    await page.locator('[data-sidebar-tab="script"]').dragTo(cuesTool, {
+      targetPosition: { x: cuesBox!.width / 2, y: cuesBox!.height - 2 },
+    });
+    await expect(page.locator('[data-sidebar-tab]').first()).toHaveAttribute('data-sidebar-tab', 'cues');
+    await page.getByTestId('workspace-nav-collapse').click();
+    await expect(page.getByTestId('workspace-bar-collapsed')).toBeVisible();
+    await page.getByTestId('workspace-bar-collapsed').getByRole('button').click();
+    await expect(page.getByTestId('workspace-navigation')).toBeVisible();
 
-  await page.getByTestId('studio-settings-tool').click();
-  const layoutSettings = page.getByTestId('studio-layout-settings');
-  await expect(layoutSettings).toBeVisible();
-  await layoutSettings.getByTestId('workspace-dock-select').selectOption('bottom');
-  await layoutSettings.getByTestId('tool-dock-select').selectOption('right');
-  await layoutSettings.getByRole('button', { name: 'Move MD Scripts down' }).click();
-  await layoutSettings.getByRole('button', { name: 'Move MD Scripts down' }).click();
-  await layoutSettings.getByRole('button', { name: 'Hide AI Scripts' }).click();
-  await layoutSettings.getByRole('button', { name: 'Hide Files' }).click();
-  await layoutSettings.getByRole('button', { name: 'Hide panel', exact: true }).click();
-  await page.getByRole('button', { name: 'Close settings' }).click();
+    await page.getByTestId('studio-settings-tool').click();
+    const layoutSettings = page.getByTestId('studio-layout-settings');
+    await expect(layoutSettings).toBeVisible();
+    await layoutSettings.getByTestId('workspace-dock-select').selectOption('bottom');
+    await layoutSettings.getByTestId('tool-dock-select').selectOption('right');
+    await layoutSettings.getByRole('button', { name: 'Move MD Scripts down' }).click();
+    await layoutSettings.getByRole('button', { name: 'Move MD Scripts down' }).click();
+    await layoutSettings.getByRole('button', { name: 'Hide AI Scripts' }).click();
+    await layoutSettings.getByRole('button', { name: 'Hide Files' }).click();
+    await layoutSettings.getByRole('button', { name: 'Hide panel', exact: true }).click();
+    await page.getByRole('button', { name: 'Close settings' }).click();
 
-  await expect(page.getByTestId('workspace-navigation')).toHaveAttribute('data-dock', 'bottom');
-  await expect(page.locator('[data-workspace-view="aiscripts"]')).toHaveCount(0);
-  await expect(page.getByTestId('side-panel-restore')).toBeVisible();
-  await page.getByTestId('side-panel-restore').click();
-  await expect(page.locator('#side_panel')).toHaveAttribute('data-tool-dock', 'right');
-  await expect(page.locator('[data-sidebar-tab="filesystem"]')).toHaveCount(0);
+    await expect(page.getByTestId('workspace-navigation')).toHaveAttribute('data-dock', 'bottom');
+    await expect(page.locator('[data-workspace-view="aiscripts"]')).toHaveCount(0);
+    await expect(page.getByTestId('side-panel-restore')).toBeVisible();
+    await page.getByTestId('side-panel-restore').click();
+    await expect(page.locator('#side_panel')).toHaveAttribute('data-tool-dock', 'right');
+    await expect(page.locator('[data-sidebar-tab="filesystem"]')).toHaveCount(0);
+  } finally {
+    showHealthCard();
+  }
 
   const healthCard = page.getByTestId('health-card');
   await expect(healthCard).toBeVisible();
+  await expect(healthCard).toContainText(lateHealthCard.summary);
   const healthCardBox = await healthCard.boundingBox();
   const toolRailCollapseBox = await page.getByTestId('tool-rail-collapse').boundingBox();
   const workspaceNavigationBox = await page.getByTestId('workspace-navigation').boundingBox();

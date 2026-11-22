@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { buildTemplateWorkspace } from '../../src/lib/modTemplates';
+import { X4_CORE_RULE_PACK } from '../../src/lib/x4RulePacks';
 import type { ModWorkspace } from '../../src/types';
 import { E2E_API_ORIGIN, E2E_TOKEN } from '../../playwright.config';
 import { ephemeralWorkspaceHeaders, seedServerWorkspace } from './ephemeral';
@@ -86,9 +87,9 @@ test('reviewed exact suppression creates rules, rejects stale/error paths, and r
         deterministic: true,
         ruleProvenance: {
           kind: 'matched',
-          packId: 'x4.core.diagnostics',
-          packVersion: '1.0.0',
-          packSha256: '351cb0199c815df91861205bf0bce85b22ed98f1bb695dcaa9345f5001e2f9c0',
+          packId: X4_CORE_RULE_PACK.packId,
+          packVersion: X4_CORE_RULE_PACK.packVersion,
+          packSha256: X4_CORE_RULE_PACK.packSha256,
           ruleId: 'x4.schema.routed_validation',
           ruleVersion: '1.0.0',
           applicability: 'unavailable',
@@ -559,7 +560,7 @@ test('Diagnostics Center renders deterministic Why guidance and the reviewed sup
   expect(geometry.footer, JSON.stringify(geometry)).not.toBeNull();
   expect(geometry.button.bottom, JSON.stringify(geometry)).toBeLessThanOrEqual(geometry.footer!.top);
   await why.click();
-  await expect(page.getByTestId('diagnostic-why-panel')).toContainText('Unknown X4 script properties commonly evaluate to null');
+  await expect(page.getByTestId('diagnostic-why-panel')).toContainText('An unknown property can leave a value null or a condition false.');
   await expect(page.getByTestId('diagnostic-why-panel')).toContainText('deterministic, no AI');
 
   const xsdWhy = page.getByTestId('diagnostic-why-XSD_invalid_element');
@@ -570,8 +571,8 @@ test('Diagnostics Center renders deterministic Why guidance and the reviewed sup
   await expect(xsdPanel).toContainText('Rule ID/version: x4.schema.routed_validation / 1.0.0');
   await expect(xsdPanel).toContainText('Evidence grade: schema');
   await expect(xsdPanel).toContainText('Applicability: unavailable');
-  await expect(xsdPanel).toContainText('Pack ID/version: x4.core.diagnostics / 1.0.0');
-  await expect(xsdPanel).toContainText('Pack SHA-256: 351cb0199c815df91861205bf0bce85b22ed98f1bb695dcaa9345f5001e2f9c0');
+  await expect(xsdPanel).toContainText(`Pack ID/version: ${X4_CORE_RULE_PACK.packId} / ${X4_CORE_RULE_PACK.packVersion}`);
+  await expect(xsdPanel).toContainText(`Pack SHA-256: ${X4_CORE_RULE_PACK.packSha256}`);
   await expect(xsdPanel).toContainText('Evidence basis: Configured X4 XSD selected by deterministic schema routing.');
   await expect(xsdPanel).toContainText('Evidence digest: f5786993e68ba1df76e89fba409a300ccd6e948dc84b9e1542e86e789bc0d847');
   await expect(xsdPanel).toContainText('Game scope: all versions (no explicit bounds)');
