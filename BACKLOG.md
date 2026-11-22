@@ -278,6 +278,10 @@ Dev shares the checking-mode and instantiation decisions between Studio critic, 
 
 The prior Dev candidate reports an unknown literal argument as a warning and an omitted required argument as information. The sealed 0.0.90 archive lacks the two diagnostic codes. The retained Dev patch now restores the check on the shared authored AI resolver. AI lint 33/33, Project 59/59, the four exact comparison cases, scoped types and 42 compiled native-route checks passed. A stale bound request refused before writes, and the valid warning apply reopened a committed receipt. Claude's seven-case engine witness is [READY](https://app.notion.com/p/4204618ed15b81c7b84dccb97669ed87). All 16 staged files match the prior schema-qualified manifest. Engine severity and delivery remain open. [Issue and evidence](https://github.com/KennyG1990/X4_Forge/issues/122#issuecomment-7079772542).
 
+### Authored AI call parameter assistance `in_progress` (GitHub #134 under #74)
+
+[Plan and evidence](docs/plans/2026-11-21-authored-ai-script-navigation.md). The integrated private Antigravity package verified all fourteen saved CodeSense cases and seventeen installed controls. It adds signature help, parameter-name completion, hover and definition for one authored AI call target in the same mod. A mixed-case duplicate regression is fixed. The full public release remains open.
+
 ### Exact cue-library arguments `in_progress` (GitHub #82, part of #74)
 
 Claude's [action-call report](https://github.com/KennyG1990/X4_Forge/issues/82#issuecomment-6771223421) is received; [dedicated row](https://app.notion.com/p/4144618ed15b819e8787db4f4ee64ff8) VERIFIED/Integrated. DEFAULT returns11/42. Missing/case/typo calls log runtime parameter errors but still execute with observed fallback/default values; -901 is the fixture's own fallback, not an engine default. Case sensitivity is witnessed. Reconcile exact source/advisory severity before closing remaining signature/installed/public work.

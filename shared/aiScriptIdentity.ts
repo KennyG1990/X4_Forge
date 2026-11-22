@@ -1,5 +1,5 @@
 /** Shared identity rules for authored X4 AI script declarations and calls. */
-import type { Element } from '@xmldom/xmldom';
+import type { Attr, Element } from '@xmldom/xmldom';
 
 // The authored aiscriptname grammar in X4 9.00.
 const scriptNamePattern = /^[!A-Za-z][A-Za-z0-9_.]+$/;
@@ -48,4 +48,56 @@ export function resolveAuthoredAiScript<T extends { path: string }>(
 ): T | undefined {
   const file = index.get(name.toLowerCase());
   if (file && normalizedAiPath(file.path) === `aiscripts/${name}.xml` && scriptName(file) === name) return file;
+}
+
+/** Direct script parameters use the authored X4 paramname grammar. */
+export function isAuthoredAiScriptParameterName(name: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
+}
+
+export interface AiScriptInputParameter {
+  readonly name: string;
+  readonly attribute: Attr;
+  readonly element: Element;
+}
+
+/** Exclude only the selected editor argument; validators qualify every supplied argument. */
+export function readAiScriptInputParameters(
+  parent: Element, supplied: boolean, selected?: Element,
+): AiScriptInputParameter[] | undefined {
+  const names = new Set<string>();
+  const result: AiScriptInputParameter[] = [];
+  for (const parameter of Array.from(parent.children).filter(child => child.localName === 'param')) {
+    if (parameter === selected) continue;
+    const name = parameter.getAttributeNode('name');
+    if (parameter.namespaceURI || !name || !isAuthoredAiScriptParameterName(name.value)
+      || (supplied && !parameter.getAttribute('value')?.trim()) || names.has(name.value.toLowerCase())) return;
+    names.add(name.value.toLowerCase());
+    result.push({ name: name.value, attribute: name, element: parameter });
+  }
+  return result;
+}
+
+export interface AiScriptSignatureParameter extends AiScriptInputParameter {
+  readonly hasDefault: boolean;
+  readonly defaultValue?: string;
+  readonly comment?: string;
+}
+
+/** An order's independent context cannot establish a direct script-call signature. */
+export function readAiScriptSignature(root: Element): AiScriptSignatureParameter[] | undefined {
+  const children = Array.from(root.children);
+  if (children.some(child => child.localName === 'order')) return;
+  const containers = children.filter(child => child.localName === 'params');
+  if (containers.length === 0) return [];
+  if (containers.length !== 1 || containers[0].namespaceURI) return;
+  const nodes = Array.from(containers[0].children);
+  if (nodes.some(node => node.localName !== 'param'
+    || (node.hasAttribute('default') && !node.getAttribute('default')?.trim()))) return;
+  return readAiScriptInputParameters(containers[0], false)?.map(parameter => ({
+    ...parameter,
+    hasDefault: parameter.element.hasAttribute('default'),
+    ...(parameter.element.hasAttribute('default') ? { defaultValue: parameter.element.getAttribute('default')! } : {}),
+    ...(parameter.element.hasAttribute('comment') ? { comment: parameter.element.getAttribute('comment')! } : {}),
+  }));
 }

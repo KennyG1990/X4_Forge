@@ -34,7 +34,9 @@ import { buildXmlAssociations, listModFolders, writeRecommendations, writeXmlAss
 import { atomicWriteFile, replaceFileSetAtomically } from "./durableWrite";
 import { xmlCursorContext } from "./langContext";
 import { MAX_EDITOR_ORDER_BYTES, MAX_EDITOR_ORDER_FILES, parseEditorOrderFiles } from "../../shared/referenceEditorOrders";
-import { mdCallScriptHeader, readMdCallHelpRequest, resolveMdCallHelp, type MdCallHelpMode } from "./langCallHelp";
+import {
+  isAiScriptCallCandidate, mdCallScriptHeader, readMdCallHelpRequest, resolveMdCallHelp, type AiScriptCallHelp, type MdCallHelpMode,
+} from "./langCallHelp";
 import { isScriptExpressionRole, type ScriptAttributeType } from "../../shared/scriptExpressionRole";
 import {
   MAX_MD_DEFINITION_SOURCE, readMdDefinitionDocument, resolveMdDefinition, resolveMdReferences,
@@ -43,7 +45,9 @@ import {
 import { registerMdRenameCommand } from "./mdRenameHost";
 import { registerPropertyCorrection, type PropertyCorrectionAccess, type PropertyCorrectionValidation } from "./propertyCorrectionHost";
 import { registerWorkspaceScriptSymbols } from "./workspaceScriptSymbolsHost";
-import { provideAuthoredAiScriptDefinition, provideAuthoredAiScriptReferences } from "./aiScriptDefinitionHost";
+import {
+  provideAuthoredAiScriptCallHelp, provideAuthoredAiScriptDefinition, provideAuthoredAiScriptReferences,
+} from "./aiScriptDefinitionHost";
 import type { AiScriptLocation } from "./aiScriptNavigation";
 import { detectIdeCapabilities, formatIdeCapabilityReport } from "./capabilities";
 import { PanelBackendBinding, SharedBackendEnsure } from "./panelBinding";
@@ -2090,8 +2094,11 @@ function registerLangProviders(context: vscode.ExtensionContext): void {
           const root = nodeDocument ? null : modRootFor(doc.uri.fsPath);
           if (!nodeDocument && !root) return undefined;
           const text = doc.getText();
-          if (root && isMdCallDocument(root, doc)) {
-            const help = await editorMdCallHelp(root, doc, pos, token, "completion");
+          const callKind = root && editorCallKind(root, doc);
+          if (root && callKind) {
+            const help = callKind === "aiscripts"
+              ? await provideAuthoredAiScriptCallHelp(root, doc, doc.offsetAt(pos), token, LIVE_FILE_LIMIT, "completion")
+              : await editorMdCallHelp(root, doc, pos, token, "completion");
             if (!isDocumentCurrent()) return undefined;
             if (help?.nameRange) {
               const range = new vscode.Range(doc.positionAt(help.nameRange.start), doc.positionAt(help.nameRange.end));
@@ -2100,7 +2107,7 @@ function registerLangProviders(context: vscode.ExtensionContext): void {
                 item.range = range;
                 item.insertText = parameter.name.replaceAll("&", "&amp;").replaceAll("<", "&lt;")
                   .replaceAll('"', "&quot;").replaceAll("'", "&apos;");
-                item.detail = mdCallParameterDetail(parameter);
+                item.detail = callParameterDetail(parameter);
                 item.documentation = parameter.comment;
                 item.sortText = String(index).padStart(5, "0");
                 return item;
@@ -2228,6 +2235,20 @@ function registerLangProviders(context: vscode.ExtensionContext): void {
             const [current, currentAlternate] = textHoverLanguages(doc.uri);
             return current === textLanguage && currentAlternate === textAlternateLanguage;
           };
+          if (root && editorCallKind(root, doc) === "aiscripts") {
+            const help = await provideAuthoredAiScriptCallHelp(root, doc, doc.offsetAt(pos), token, LIVE_FILE_LIMIT, "hover");
+            if (!isCurrent()) return undefined;
+            if (help?.parameter && help.parameterLocation && help.nameRange) {
+              const { parameter, parameterLocation } = help;
+              const markdown = new vscode.MarkdownString();
+              markdown.appendText(parameter.name + " (parameter of " + help.name + ")\n\n");
+              if (parameter.comment) markdown.appendText(parameter.comment + "\n\n");
+              markdown.appendText(callParameterDetail(parameter) + "\n\n"
+                + path.relative(root, parameterLocation.file) + ":" + (parameterLocation.start.line + 1));
+              const range = new vscode.Range(doc.positionAt(help.nameRange.start), doc.positionAt(help.nameRange.end));
+              return new vscode.Hover(markdown, range);
+            }
+          }
           const modern = await referenceLanguagePost<ReferenceHoverPayload | EditorTextHoverPayload>("hover", {
             path: file,
             content,
@@ -2471,9 +2492,10 @@ async function mdNavigationSiblings(
   return matches;
 }
 
-function isMdCallDocument(root: string, doc: vscode.TextDocument): boolean {
-  const directory = path.relative(root, path.dirname(doc.uri.fsPath));
-  return (process.platform === "win32" ? directory.toLowerCase() : directory) === "md";
+function editorCallKind(root: string, doc: vscode.TextDocument): "md" | "aiscripts" | undefined {
+  const relative = path.relative(root, path.dirname(doc.uri.fsPath));
+  const directory = process.platform === "win32" ? relative.toLowerCase() : relative;
+  return directory === "md" || directory === "aiscripts" ? directory : undefined;
 }
 
 async function editorMdCallHelp(
@@ -2488,8 +2510,32 @@ async function editorMdCallHelp(
   return resolveMdCallHelp(request, siblings);
 }
 
-function mdCallParameterDetail(parameter: { hasDefault: boolean; defaultValue?: string }): string {
+function callParameterDetail(parameter: { hasDefault: boolean; defaultValue?: string }): string {
   return parameter.hasDefault ? 'Default: ' + (parameter.defaultValue || '""') : "Required";
+}
+
+function editorCallSignatureHelp(
+  root: string, help: NonNullable<Awaited<ReturnType<typeof editorMdCallHelp>>> | AiScriptCallHelp,
+): vscode.SignatureHelp {
+  let label = help.name + "(";
+  const parameters = help.parameters.map((parameter, index) => {
+    if (index) label += ", ";
+    const start = label.length;
+    label += parameter.name;
+    const end = label.length;
+    if (parameter.hasDefault) label += ' = ' + (parameter.defaultValue || '""');
+    const detail = callParameterDetail(parameter);
+    return new vscode.ParameterInformation([start, end], parameter.comment ? parameter.comment + "\n\n" + detail : detail);
+  });
+  const location = path.relative(root, help.location.file);
+  const line = "start" in help.location ? help.location.start.line : help.location.line;
+  const signature = new vscode.SignatureInformation(label + ")", location + ":" + (line + 1));
+  signature.parameters = parameters;
+  const result = new vscode.SignatureHelp();
+  result.signatures = [signature];
+  result.activeSignature = 0;
+  result.activeParameter = help.activeParameter;
+  return result;
 }
 
 function registerNavProviders(context: vscode.ExtensionContext): void {
@@ -2507,7 +2553,12 @@ function registerNavProviders(context: vscode.ExtensionContext): void {
         try {
           const root = modRootFor(doc.uri.fsPath);
           if (!root) return undefined;
-          const result = await provideAuthoredAiScriptDefinition(root, doc, doc.offsetAt(pos), token, LIVE_FILE_LIMIT);
+          const version = doc.version;
+          const offset = doc.offsetAt(pos);
+          const help = await provideAuthoredAiScriptCallHelp(root, doc, offset, token, LIVE_FILE_LIMIT, "definition");
+          if (doc.isClosed || doc.version !== version || token.isCancellationRequested) return undefined;
+          const result = help?.parameterLocation
+            ?? await provideAuthoredAiScriptDefinition(root, doc, offset, token, LIVE_FILE_LIMIT);
           return result ? aiLocation(result) : undefined;
         } catch (error) {
           outcome = "error";
@@ -2536,34 +2587,22 @@ function registerNavProviders(context: vscode.ExtensionContext): void {
         }
       },
     }),
-    vscode.languages.registerSignatureHelpProvider(selector, {
+    vscode.languages.registerSignatureHelpProvider([...selector, ...aiSelector], {
       async provideSignatureHelp(doc, pos, token) {
+        if (token.isCancellationRequested) return undefined;
+        const containingDirectory = path.basename(path.dirname(doc.uri.fsPath));
+        const aiDocument = (process.platform === "win32" ? containingDirectory.toLowerCase() : containingDirectory) === "aiscripts";
+        if (aiDocument && !isAiScriptCallCandidate(doc.getText(), doc.offsetAt(pos), "signature")) return undefined;
         const finish = beginNativeOperation("native.provider.read");
         let outcome: ForgePerformanceOutcome = "ok";
         try {
           const root = modRootFor(doc.uri.fsPath);
-          if (!root || !isMdCallDocument(root, doc)) return undefined;
-          const help = await editorMdCallHelp(root, doc, pos, token);
-          if (!help) return undefined;
-
-          let label = help.name + "(";
-          const parameters = help.parameters.map((parameter, index) => {
-            if (index) label += ", ";
-            const start = label.length;
-            label += parameter.name;
-            const end = label.length;
-            if (parameter.hasDefault) label += ' = ' + (parameter.defaultValue || '""');
-            const detail = mdCallParameterDetail(parameter);
-            return new vscode.ParameterInformation([start, end], parameter.comment ? parameter.comment + "\n\n" + detail : detail);
-          });
-          const location = path.relative(root, help.location.file);
-          const signature = new vscode.SignatureInformation(label + ")", location + ":" + (help.location.line + 1));
-          signature.parameters = parameters;
-          const result = new vscode.SignatureHelp();
-          result.signatures = [signature];
-          result.activeSignature = 0;
-          result.activeParameter = help.activeParameter;
-          return result;
+          const callKind = root && editorCallKind(root, doc);
+          if (!root || !callKind) return undefined;
+          const help = callKind === "aiscripts"
+            ? await provideAuthoredAiScriptCallHelp(root, doc, doc.offsetAt(pos), token, LIVE_FILE_LIMIT, "signature")
+            : await editorMdCallHelp(root, doc, pos, token);
+          return help ? editorCallSignatureHelp(root, help) : undefined;
         } catch (error) {
           outcome = "error";
           throw error;
@@ -2580,7 +2619,7 @@ function registerNavProviders(context: vscode.ExtensionContext): void {
           const root = modRootFor(doc.uri.fsPath);
           if (!root || token.isCancellationRequested) return undefined;
           const version = doc.version;
-          const inMod = isMdCallDocument(root, doc);
+          const inMod = editorCallKind(root, doc) === "md";
           const origin = readMdDefinitionDocument(doc.uri.fsPath, doc.getText(), doc.offsetAt(pos), false, { expressionDefinition: inMod });
           if (!origin) return undefined;
           const expression = origin.reference ? undefined : origin.expressionReference;

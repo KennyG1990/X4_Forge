@@ -23,7 +23,7 @@
  */
 
 import { DOMParser, type Attr, type Element } from '@xmldom/xmldom';
-import { buildAuthoredAiScriptIndex, isAuthoredAiScriptName, isInsideAiScriptActions, readLiteralAiScriptName, resolveAuthoredAiScript } from '../../shared/aiScriptIdentity';
+import { buildAuthoredAiScriptIndex, isAuthoredAiScriptName, isInsideAiScriptActions, readAiScriptInputParameters, readAiScriptSignature, readLiteralAiScriptName, resolveAuthoredAiScript } from '../../shared/aiScriptIdentity';
 import type { ValidationSourceLocation } from './validationEvidence';
 
 /** orderparamlookup from aiscripts.xsd (unpacked 9.00) — curated fallback set. */
@@ -96,38 +96,19 @@ interface AiscriptAnalysis {
   readonly calls: readonly ScriptCall[];
 }
 
-// The authored paramname grammar in the X4 9.00 schemas.
-const parameterNamePattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
 function attributePoint(attribute: Attr): Point {
   return { line: attribute.lineNumber, column: attribute.columnNumber };
 }
 
 function inputParameters(parent: Element, supplied: boolean): ParameterName[] | undefined {
-  const names = new Set<string>();
-  const result: ParameterName[] = [];
-  for (const parameter of Array.from(parent.children).filter(child => child.localName === 'param')) {
-    const name = parameter.getAttributeNode('name');
-    if (parameter.namespaceURI || !name || !parameterNamePattern.test(name.value)
-      || (supplied && !parameter.getAttribute('value')?.trim()) || names.has(name.value.toLowerCase())) return;
-    names.add(name.value.toLowerCase());
-    result.push({ name: name.value, ...attributePoint(name) });
-  }
-  return result;
+  return readAiScriptInputParameters(parent, supplied)?.map(parameter =>
+    ({ name: parameter.name, ...attributePoint(parameter.attribute) }));
 }
 
 function readAiSignature(root: Element): AiscriptAnalysis['signature'] {
-  const children = Array.from(root.children);
-  // An order carries its own parameter context. It cannot establish a direct script signature.
-  if (children.some(child => child.localName === 'order')) return;
-  const containers = children.filter(child => child.localName === 'params');
-  if (containers.length === 0) return [];
-  if (containers.length !== 1 || containers[0].namespaceURI) return;
-  const nodes = Array.from(containers[0].children);
-  if (nodes.some(node => node.localName !== 'param'
-    || (node.hasAttribute('default') && !node.getAttribute('default')?.trim()))) return;
-  return inputParameters(containers[0], false)?.map((parameter, index) =>
-    ({ ...parameter, hasDefault: nodes[index].hasAttribute('default') }));
+  return readAiScriptSignature(root)?.map(parameter => ({
+    name: parameter.name, ...attributePoint(parameter.attribute), hasDefault: parameter.hasDefault,
+  }));
 }
 
 /** Cache only file-local values. Resolving a call requires the current project's entire index. */

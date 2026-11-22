@@ -1,5 +1,9 @@
 import { strict as assert } from "node:assert";
-import { mdCallScriptHeader, readMdCallHelpRequest, resolveMdCallHelp, type MdCallHelpMode } from "./langCallHelp";
+import {
+  mdCallScriptHeader, readAiScriptCallHelpRequest, readMdCallHelpRequest, resolveAiScriptCallHelp, resolveMdCallHelp,
+  type AiScriptCallHelpMode, type MdCallHelpMode,
+} from "./langCallHelp";
+import { readAiScriptCallDocument } from "./aiScriptNavigation";
 import { readMdDefinitionDocument } from "./langNav";
 import "./aiScriptNavigation.selftest";
 
@@ -37,7 +41,7 @@ const recovered = query(local, [], "completion");
 assert.equal(recovered?.name, "md.LibraryScript.Task");
 assert.equal(local.replace("|", "").slice(recovered.nameRange!.start, recovered.nameRange!.end), "Sec");
 assert.deepEqual(recovered.unsupplied.map(parameter => parameter.name), ["First", "Second"]);
-const reversed = definition(provider.replace(/(    <param name="First"[^\n]*\n)(    <param name="Second"[^\n]*\n)/, "$2$1"));
+const reversed = definition(provider.replace(/( {4}<param name="First"[^\n]*\n)( {4}<param name="Second"[^\n]*\n)/, "$2$1"));
 const ranked = query(run(`<param name='|'/>`), [reversed], "completion");
 assert.deepEqual(ranked?.parameters.map(parameter => parameter.name), ["Second", "First"]);
 assert.deepEqual(ranked?.unsupplied.map(parameter => parameter.name), ["First", "Second"]);
@@ -81,3 +85,47 @@ assert.equal(definitionAt(run(`<param name="Sec|ond value="1"/>`)), undefined);
 assert.equal(definitionAt(run(`<param name="Sec|ond" value="1"/>`), [definition(provider), definition(provider)]), undefined);
 assert.equal(definitionAt(caller(`<!-- <run_actions ref="md.LibraryScript.Task"><param name="Sec|ond"/></run_actions> -->`)), undefined);
 console.log("MD call help and parameter definition checks passed");
+
+const aiDeclaration = `<aiscript name="forge.call.target"><params>
+  <param name="budget" default="5" comment="Optional budget"/>
+  <param name="target" comment="Required target"/>
+</params></aiscript>`;
+const aiDocument = readAiScriptCallDocument("aiscripts/forge.call.target.xml", aiDeclaration, { includeSignature: true });
+const aiWrap = (body: string) =>
+  `<aiscript name="forge.call.caller"><attention min="unknown"><actions>${body}</actions></attention></aiscript>`;
+const aiCall = (body: string, target = "'forge.call.target'") =>
+  aiWrap(`<run_script name="${target}">${body}</run_script>`);
+function aiQuery(marked: string, mode: AiScriptCallHelpMode = "signature", siblings = [aiDocument]) {
+  const cursor = marked.indexOf("|");
+  assert.ok(cursor >= 0);
+  const request = readAiScriptCallHelpRequest("aiscripts/forge.call.caller.xml", marked.replace("|", ""), cursor, mode);
+  return request ? resolveAiScriptCallHelp(request, [request.origin, ...siblings]) : undefined;
+}
+
+const aiSignature = aiQuery(aiCall('<param name="target" value="1|"/>'));
+assert.deepEqual(aiSignature?.parameters.map(parameter => [parameter.name, parameter.defaultValue]),
+  [["budget", "5"], ["target", undefined]]);
+assert.equal(aiSignature?.activeParameter, 1);
+assert.equal(aiSignature?.parameter?.comment, "Required target");
+const aiCompleted = aiQuery(aiCall('<param name="|" value="1"/>'), "completion");
+assert.deepEqual(aiCompleted?.unsupplied.map(parameter => parameter.name), ["target", "budget"]);
+const aiPart = aiCall('<param name="target" value="1"/><param name="bu|');
+const aiPartial = aiQuery(aiPart, "completion");
+assert.deepEqual(aiPartial?.unsupplied.map(parameter => parameter.name), ["budget"]);
+assert.equal(aiPart.replace("|", "").slice(aiPartial!.nameRange!.start, aiPartial!.nameRange!.end), "bu");
+const aiName = aiQuery(aiCall('<param name="tar|&#103;et" value="1"/>'), "definition");
+assert.deepEqual(aiName?.parameterLocation,
+  { file: "aiscripts/forge.call.target.xml", start: { line: 2, column: 15 }, end: { line: 2, column: 21 } });
+assert.equal(aiQuery(aiCall('<param name="target" value="1|"/>').replace("<run_script ", '<run_script chance="0" '))?.activeParameter, 1);
+assert.equal(aiQuery(aiCall('<param name="target" value="1|"/>', "$dynamic")), undefined);
+assert.equal(aiQuery(aiCall('<param name="target" value="1|"/>'), "signature", [aiDocument, { ...aiDocument, path: "aiscripts/another.xml" }]), undefined);
+assert.equal(aiQuery(aiCall('<param xmlns="urn:foreign" name="tar|get" value="1"/>'), "hover"), undefined);
+assert.equal(aiQuery(aiCall('<wrap><param name="tar|get" value="1"/></wrap>'), "definition"), undefined);
+assert.equal(aiQuery(aiCall('<param name="target" value="1|"/>'), "completion"), undefined);
+const duplicateAiParam = aiCall('<param name="target" value="1"/><param name="tar|get" value="2"/>');
+assert.deepEqual(aiQuery(duplicateAiParam, "completion")?.unsupplied.map(parameter => parameter.name), ["budget"]);
+assert.equal(aiQuery(duplicateAiParam, "definition"), undefined);
+const foldedAiParam = aiCall('<param name="TARGET" value="1"/><param name="tar|get" value="2"/>');
+assert.deepEqual(aiQuery(foldedAiParam, "completion")?.unsupplied.map(parameter => parameter.name), ["budget"]);
+assert.equal(aiQuery(foldedAiParam, "definition"), undefined);
+console.log("AI call help, completion and parameter location checks passed");

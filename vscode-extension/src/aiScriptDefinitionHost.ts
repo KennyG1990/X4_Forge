@@ -4,12 +4,17 @@ import * as path from "node:path";
 import { createHash } from "node:crypto";
 import * as vscode from "vscode";
 import {
-  readAiScriptNavigationDocument, resolveAiScriptDefinition, resolveAiScriptReferences, type AiScriptLocation,
+  readAiScriptCallDocument, readAiScriptNavigationDocument, resolveAiScriptDefinition, resolveAiScriptReferences,
+  type AiScriptLocation, type AiScriptNavigationDocument,
 } from "./aiScriptNavigation";
+import {
+  isAiScriptCallCandidate, readAiScriptCallHelpRequest, resolveAiScriptCallHelp, type AiScriptCallHelp, type AiScriptCallHelpMode,
+} from "./langCallHelp";
 
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 32 * 1024 * 1024;
 const MAX_REFERENCES = 2_048;
+const RECHECK_BATCH_SIZE = 4;
 const fileKey = (file: string) => process.platform === "win32" ? file.toLowerCase() : file;
 const openFlags = fs.constants.O_RDONLY
   | (process.platform === "win32" ? 0 : fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
@@ -99,10 +104,87 @@ export function provideAuthoredAiScriptReferences(
   return readAuthoredAiScriptLocations(root, caller, offset, token, fileLimit, { includeDeclaration });
 }
 
-async function readAuthoredAiScriptLocations(
+type AbsoluteAiScriptLocation = (location: AiScriptLocation) => AiScriptLocation | undefined;
+
+interface AuthoredAiScriptRequest<Result> {
+  selectedName: string;
+  readDocument(file: string, text: string, isCaller: boolean, isTarget: boolean): AiScriptNavigationDocument | undefined;
+  resolve(
+    origin: AiScriptNavigationDocument, scripts: readonly AiScriptNavigationDocument[], absolute: AbsoluteAiScriptLocation,
+  ): Result | undefined;
+}
+
+function readAuthoredAiScriptLocations(
   root: string, caller: vscode.TextDocument, offset: number, token: vscode.CancellationToken, fileLimit: number,
   mode: 'definition' | { includeDeclaration: boolean },
 ): Promise<AiScriptLocation[] | undefined> {
+  return readAuthoredAiScripts<AiScriptLocation[]>(root, caller, token, fileLimit, (callerPath, callerText) => {
+    const initial = readAiScriptNavigationDocument(callerPath, callerText, offset);
+    const selectedName = mode !== 'definition' && initial.selectedDeclaration ? initial.name : initial.callee;
+    if (!selectedName) return undefined;
+    let remainingReferences = MAX_REFERENCES;
+    return {
+      selectedName,
+      readDocument(scriptPath, text, isCaller) {
+        const referenceQuery = mode === 'definition' ? undefined : { name: selectedName, limit: remainingReferences };
+        if (isCaller && scriptPath === callerPath && !referenceQuery) return initial;
+        const script = readAiScriptNavigationDocument(scriptPath, text, isCaller ? offset : undefined, referenceQuery);
+        if (referenceQuery) {
+          if (!script.references) return undefined;
+          remainingReferences -= script.references.length;
+        }
+        return script;
+      },
+      resolve(origin, scripts, absolute) {
+        const definition = mode === 'definition' ? resolveAiScriptDefinition(origin, scripts) : undefined;
+        const locations = mode === 'definition' ? definition && [definition]
+          : resolveAiScriptReferences(origin, scripts, mode.includeDeclaration);
+        if (!locations) return undefined;
+        const results: AiScriptLocation[] = [];
+        for (const location of locations) {
+          const result = absolute(location);
+          if (!result) return undefined;
+          results.push(result);
+        }
+        return results;
+      },
+    };
+  });
+}
+
+export function provideAuthoredAiScriptCallHelp(
+  root: string, caller: vscode.TextDocument, offset: number, token: vscode.CancellationToken, fileLimit: number,
+  mode: AiScriptCallHelpMode,
+): Promise<AiScriptCallHelp | undefined> {
+  return readAuthoredAiScripts<AiScriptCallHelp>(root, caller, token, fileLimit, (callerPath, callerText) => {
+    const request = readAiScriptCallHelpRequest(callerPath, callerText, offset, mode);
+    const selectedName = request?.origin.call?.callee;
+    if (!request || !selectedName) return undefined;
+    return {
+      selectedName,
+      readDocument(scriptPath, text, isCaller, isTarget) {
+        if (isCaller) return scriptPath === callerPath ? request.origin
+          : readAiScriptCallHelpRequest(scriptPath, text, offset, mode)?.origin;
+        return isTarget ? readAiScriptCallDocument(scriptPath, text, { includeSignature: true })
+          : readAiScriptNavigationDocument(scriptPath, text);
+      },
+      resolve(origin, scripts, absolute) {
+        const help = resolveAiScriptCallHelp({ ...request, origin }, scripts);
+        if (!help) return undefined;
+        const location = absolute(help.location);
+        const parameterLocation = help.parameterLocation && absolute(help.parameterLocation);
+        if (!location || (help.parameterLocation && !parameterLocation)) return undefined;
+        return { ...help, location, parameterLocation };
+      },
+    };
+  }, text => isAiScriptCallCandidate(text, offset, mode));
+}
+
+async function readAuthoredAiScripts<Result>(
+  root: string, caller: vscode.TextDocument, token: vscode.CancellationToken, fileLimit: number,
+  prepare: (file: string, text: string) => AuthoredAiScriptRequest<Result> | undefined,
+  mayRead?: (text: string) => boolean,
+): Promise<Result | undefined> {
   if (token.isCancellationRequested || caller.isClosed || caller.uri.scheme !== "file") return undefined;
   const resolvedRoot = path.resolve(root);
   const directory = path.join(resolvedRoot, "aiscripts");
@@ -113,10 +195,9 @@ async function readAuthoredAiScriptLocations(
   const callerVersion = caller.version;
   const callerText = caller.getText();
   const callerPath = `aiscripts/${relative}`;
-  if (Buffer.byteLength(callerText) > MAX_FILE_BYTES) return undefined;
-  const initial = readAiScriptNavigationDocument(callerPath, callerText, offset);
-  const selectedName = mode !== 'definition' && initial.selectedDeclaration ? initial.name : initial.callee;
-  if (!selectedName) return undefined;
+  if ((mayRead && !mayRead(callerText)) || Buffer.byteLength(callerText) > MAX_FILE_BYTES) return undefined;
+  const request = prepare(callerPath, callerText);
+  if (!request) return undefined;
 
   try {
     const rootStamp = await physicalStamp(resolvedRoot);
@@ -131,7 +212,7 @@ async function readAuthoredAiScriptLocations(
       names.set(key, entry.name);
     }
     if (!names.has(callerKey)) return undefined;
-    const targetFilename = `${selectedName}.xml`;
+    const targetFilename = `${request.selectedName}.xml`;
     // A declaration or editor buffer cannot stand in for the exact physical filename.
     if (names.get(fileKey(targetFilename)) !== targetFilename) return undefined;
     const editors = captureEditors(directory, names, caller);
@@ -139,11 +220,10 @@ async function readAuthoredAiScriptLocations(
 
     const decoder = new TextDecoder("utf-8", { fatal: true });
     const inputs: DiskInput[] = [];
-    const scripts: ReturnType<typeof readAiScriptNavigationDocument>[] = [];
+    const scripts: AiScriptNavigationDocument[] = [];
     const absoluteByRelative = new Map<string, string>();
-    let origin = initial;
+    let origin: AiScriptNavigationDocument | undefined;
     let remaining = MAX_TOTAL_BYTES;
-    let remainingReferences = MAX_REFERENCES;
 
     for (const [key, name] of names) {
       if (token.isCancellationRequested) return undefined;
@@ -171,34 +251,28 @@ async function readAuthoredAiScriptLocations(
       const scriptPath = `aiscripts/${name}`;
       absoluteByRelative.set(scriptPath, file);
       const isCaller = key === callerKey;
-      const referenceQuery = mode === 'definition' ? undefined : { name: selectedName, limit: remainingReferences };
-      const script = isCaller && scriptPath === callerPath && !referenceQuery ? initial
-        : readAiScriptNavigationDocument(scriptPath, text, isCaller ? offset : undefined, referenceQuery);
-      if (referenceQuery) {
-        if (!script.references) return undefined;
-        remainingReferences -= script.references.length;
-      }
+      const script = request.readDocument(scriptPath, text, isCaller, name === targetFilename);
+      if (!script) return undefined;
       if (isCaller) origin = script;
       scripts.push(script);
     }
 
-    const definition = mode === 'definition' ? resolveAiScriptDefinition(origin, scripts) : undefined;
-    const locations = mode === 'definition' ? definition && [definition]
-      : resolveAiScriptReferences(origin, scripts, mode.includeDeclaration);
-    if (!locations || token.isCancellationRequested) return undefined;
-    const results: AiScriptLocation[] = [];
-    for (const location of locations) {
+    if (!origin || token.isCancellationRequested) return undefined;
+    const result = request.resolve(origin, scripts, location => {
       const file = absoluteByRelative.get(location.file);
-      if (!file) return undefined;
-      results.push({ ...location, file });
-    }
+      return file ? { ...location, file } : undefined;
+    });
+    if (result === undefined) return undefined;
 
-    // Validate every claim, including files that could have become a duplicate while awaiting a read.
-    for (const input of inputs) {
-      if (token.isCancellationRequested || !sameStamp(input.stamp, await physicalStamp(input.file))) return undefined;
-      if (input.digest && createHash("sha256").update(await readDiskInput(input)).digest("hex") !== input.digest) {
-        return undefined;
-      }
+    // Validate every claim, including siblings that could now duplicate a declaration.
+    for (let start = 0; start < inputs.length; start += RECHECK_BATCH_SIZE) {
+      if (token.isCancellationRequested) return undefined;
+      // Wait for every started read to close its handle even when one check fails.
+      const checks = await Promise.allSettled(inputs.slice(start, start + RECHECK_BATCH_SIZE).map(async input => {
+        if (!sameStamp(input.stamp, await physicalStamp(input.file)) || token.isCancellationRequested) return false;
+        return !input.digest || createHash("sha256").update(await readDiskInput(input)).digest("hex") === input.digest;
+      }));
+      if (checks.some(check => check.status === "rejected" || !check.value)) return undefined;
     }
     const currentEntries = await fs.promises.readdir(directory, { withFileTypes: true });
     const currentNames = currentEntries.filter(entry => /\.xml$/i.test(entry.name));
@@ -214,7 +288,7 @@ async function readAuthoredAiScriptLocations(
       const after = currentEditors.get(key);
       return after?.document !== before.document || after.version !== before.version;
     }) || caller.version !== callerVersion || caller.isClosed || token.isCancellationRequested) return undefined;
-    return results;
+    return result;
   } catch {
     return undefined;
   }

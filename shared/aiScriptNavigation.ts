@@ -1,8 +1,8 @@
 import { Buffer } from 'node:buffer';
 import { DOMParser, type Attr, type Element, type Node as XmlNode } from '@xmldom/xmldom';
 import {
-  buildAuthoredAiScriptIndex, isAuthoredAiScriptName,
-  readLiteralAiScriptName, resolveAuthoredAiScript,
+  buildAuthoredAiScriptIndex, isAuthoredAiScriptName, isAuthoredAiScriptParameterName,
+  readAiScriptInputParameters, readAiScriptSignature, readLiteralAiScriptName, resolveAuthoredAiScript,
 } from './aiScriptIdentity';
 import { MAX_PROJECT_XML_DEPTH, maskXmlOpaqueMarkup, scanXmlTagTokens } from './xmlMarkup';
 import { createXmlNodePositionLocator } from './xmlSourcePosition';
@@ -23,6 +23,25 @@ export interface AiScriptNavigationDocument {
   selectedDeclaration?: true;
   callee?: string;
   references?: NameRange[];
+  call?: {
+    callee: string;
+    arguments: readonly { name: string; point: number }[];
+    activeArgument?: string;
+  };
+  signature?: readonly {
+    name: string;
+    hasDefault: boolean;
+    defaultValue?: string;
+    comment?: string;
+    location: AiScriptLocation;
+  }[];
+}
+
+interface AiScriptCallDocumentOptions {
+  callStart?: number;
+  parameterStart?: number;
+  includeSignature?: boolean;
+  editingParameterName?: boolean;
 }
 
 interface AiScriptReadCoverage {
@@ -106,6 +125,7 @@ function readInterruptLibraries(
 function readAiScriptNavigationDocumentCore(
   path: string, text: string, cursor?: number, referenceQuery?: { name: string; limit: number },
   coverage?: AiScriptReadCoverage, includeInterruptLibraries = false,
+  callOptions?: AiScriptCallDocumentOptions,
 ): AiScriptNavigationDocument {
   const document: AiScriptNavigationDocument = { path };
   if (text.length > 8 * 1024 * 1024) return document;
@@ -140,7 +160,24 @@ function readAiScriptNavigationDocumentCore(
     }
   }
   if (includeInterruptLibraries) document.interruptLibraries = readInterruptLibraries(root, text, locator, zeroBased);
-  if (cursor === undefined && !referenceQuery) return document;
+  if (callOptions?.includeSignature) {
+    const parameters = readAiScriptSignature(root);
+    if (parameters) {
+      const signature: NonNullable<AiScriptNavigationDocument['signature']>[number][] = [];
+      for (const parameter of parameters) {
+        const span = attributeSpan(text, parameter.attribute, locator, 0, parameter.name.length);
+        if (!span) break;
+        signature.push({
+          name: parameter.name, hasDefault: parameter.hasDefault,
+          ...(parameter.hasDefault ? { defaultValue: parameter.defaultValue } : {}),
+          ...(parameter.comment !== undefined ? { comment: parameter.comment } : {}),
+          location: { file: path, start: zeroBased(span.start), end: zeroBased(span.end) },
+        });
+      }
+      if (signature.length === parameters.length) document.signature = signature;
+    }
+  }
+  if (cursor === undefined && !referenceQuery && callOptions?.callStart === undefined) return document;
   const references: NameRange[] = [];
   const pending: Array<{ node: XmlNode; depth: number; inActions: boolean }> = [];
   if (root.firstChild) pending.push({ node: root.firstChild, depth: 1, inActions: false });
@@ -160,6 +197,26 @@ function readAiScriptNavigationDocumentCore(
     const attribute = call.getAttributeNode('name');
     const callee = attribute && readLiteralAiScriptName(attribute.value);
     if (!attribute || !callee) continue;
+    if (callOptions?.callStart !== undefined && callOptions.callStart === locator.offset(call)) {
+      if (!locator.point(call)) return document;
+      const selected = callOptions.parameterStart === undefined ? undefined
+        : Array.from(call.children).find(parameter => locator.offset(parameter) === callOptions.parameterStart);
+      if (callOptions.parameterStart !== undefined && (!selected || selected.nodeName !== 'param'
+        || selected.namespaceURI || !locator.point(selected))) return document;
+      const activeName = selected?.getAttributeNode('name');
+      if (selected && (!activeName || (activeName.value !== '' && !isAuthoredAiScriptParameterName(activeName.value)))) return document;
+      const supplied = readAiScriptInputParameters(call, true, selected);
+      if (!supplied || (!callOptions.editingParameterName && activeName?.value
+        && supplied.some(parameter => parameter.name.toLowerCase() === activeName.value.toLowerCase()))) return document;
+      const arguments_: { name: string; point: number }[] = [];
+      for (const parameter of supplied) {
+        const span = attributeSpan(text, parameter.attribute, locator, 0, parameter.name.length);
+        if (!span) return document;
+        arguments_.push({ name: parameter.name, point: span.start });
+      }
+      document.call = { callee, arguments: arguments_, ...(activeName ? { activeArgument: activeName.value } : {}) };
+      return document;
+    }
     const collect = referenceQuery?.name === callee;
     if (!collect && cursor === undefined) continue;
     const first = attribute.value.length - attribute.value.trimStart().length + 1;
@@ -180,6 +237,17 @@ function readAiScriptNavigationDocumentCore(
   if (coverage && pending.length > 0 && (!document.callee || referenceQuery)) coverage.scanLimited = true;
   if (referenceQuery && pending.length === 0) document.references = references;
   return document;
+}
+
+/** Read editor call/signature facts from complete authored XML without resolving or opening a path. */
+export function readAiScriptCallDocument(
+  path: string, text: string, options: AiScriptCallDocumentOptions,
+): AiScriptNavigationDocument {
+  if (text.length > 8 * 1024 * 1024 || snapshotMarkupIssue(text)) return { path };
+  const validOffsets = [options.callStart, options.parameterStart].every(offset =>
+    offset === undefined || (Number.isSafeInteger(offset) && offset >= 0 && offset < text.length));
+  return readAiScriptNavigationDocumentCore(path, text, undefined, undefined, undefined, false,
+    validOffsets ? options : { includeSignature: options.includeSignature });
 }
 
 /** Native callers keep the original document shape and behavior. */

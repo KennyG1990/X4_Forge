@@ -1,11 +1,13 @@
-/** Authored Mission Director library-call help and exact parameter-name ranges. */
+/** Authored script call help and exact parameter-name ranges. */
+import { buildAuthoredAiScriptIndex, resolveAuthoredAiScript } from "../../shared/aiScriptIdentity";
+import { readAiScriptCallDocument, type AiScriptNavigationDocument } from "./aiScriptNavigation";
 import { buildMdLibraryIndex, mdLibraryAcceptsArguments, parseMdScriptRoot, resolveMdLibraryReference } from "../../shared/mdDeclarationResolution";
 import { MAX_PROJECT_XML_DEPTH, scanXmlTagTokens } from "../../shared/xmlMarkup";
 import { MAX_MD_DEFINITION_SOURCE, readMdDefinitionDocument, type MdDefinitionDocument } from "./langNav";
 
 interface TagPosition { tag: string; start: number; }
 interface AttributeSpan { start: number; end: number; }
-interface MdCallCursor {
+interface CallCursor {
   callStart: number;
   parameterStart?: number;
   argumentName?: string;
@@ -56,27 +58,38 @@ function readParameterCursor(text: string, start: number, cursor: number) {
   return { argumentName, nameRange, unfinishedEnd };
 }
 
-/** Identify a direct call or direct parameter using the same XML token scanner as Forge's source tools. */
-function mdCallCursor(text: string, cursor: number, nameCompletion: boolean): MdCallCursor | undefined {
+function scriptCallOpening(
+  text: string, cursor: number, nameCompletion: boolean, script: "mdscript" | "aiscript",
+): number | undefined {
   if (text.length > MAX_MD_DEFINITION_SOURCE || cursor < 1 || cursor > text.length) return undefined;
   const start = text.lastIndexOf("<", cursor - 1);
-  if (nameCompletion && !text.startsWith("<param", start)) return undefined;
-  if (start < 0 || !/^<(?:param|run_actions|cue)(?=[\s/>]|$)/.test(text.slice(start, start + 14))) return undefined;
+  if (start < 0 || (nameCompletion && !text.startsWith("<param", start))) return undefined;
+  const opening = script === "mdscript" ? /^<(?:param|run_actions|cue)(?=[\s/>]|$)/ : /^<(?:param|run_script)(?=[\s/>]|$)/;
+  return opening.test(text.slice(start, start + 14)) ? start : undefined;
+}
+
+/** Identify a direct call or direct parameter using Forge's XML token scanner. */
+function scriptCallCursor(
+  text: string, cursor: number, nameCompletion: boolean, script: "mdscript" | "aiscript",
+): CallCursor | undefined {
+  const start = scriptCallOpening(text, cursor, nameCompletion, script);
+  if (start === undefined) return undefined;
+  const isCall = (tag?: string) => script === "aiscript" ? tag === "run_script" : tag === "run_actions" || tag === "cue";
   const stack: TagPosition[] = [];
   for (const token of scanXmlTagTokens(text.slice(0, cursor))) {
     const opener = /^<(\/?)([A-Za-z_][\w.:-]*)(?=[\s/>]|$)/.exec(token.token);
     if (!opener) return undefined;
     const [, closing, tag] = opener;
     if (!token.complete) {
-      if (closing || token.start !== start || stack[0]?.tag !== "mdscript") return undefined;
+      if (closing || token.start !== start || stack[0]?.tag !== script) return undefined;
       if (tag === "param") {
         const parent = stack.at(-1);
-        if (parent?.tag !== "run_actions" && parent?.tag !== "cue") return undefined;
+        if (!parent || !isCall(parent.tag)) return undefined;
         const parameter = readParameterCursor(text, token.start, cursor);
         if (!parameter || (nameCompletion && !parameter.nameRange)) return undefined;
         return { callStart: parent.start, parameterStart: token.start, ...parameter };
       }
-      if (!nameCompletion && (tag === "run_actions" || tag === "cue")) return { callStart: token.start };
+      if (!nameCompletion && isCall(tag)) return { callStart: token.start };
       return undefined;
     }
     if (closing) {
@@ -92,16 +105,14 @@ function mdCallCursor(text: string, cursor: number, nameCompletion: boolean): Md
 export type MdCallHelpMode = "signature" | "completion" | "definition";
 
 export function readMdCallHelpRequest(file: string, text: string, cursor: number, mode: MdCallHelpMode = "signature") {
-  const context = mdCallCursor(text, cursor, mode !== "signature");
+  const context = scriptCallCursor(text, cursor, mode !== "signature", "mdscript");
   if (!context || (mode === "definition" && (!context.argumentName || context.unfinishedEnd !== undefined))) return undefined;
   const options = { callStart: context.callStart, includeSignatures: true };
   let origin = readMdDefinitionDocument(file, text, undefined, false, options);
   if (!origin && context.parameterStart !== undefined && context.unfinishedEnd !== undefined) {
     // For a single unfinished direct param tag, keep all surviving declarations at their authored offsets.
     // The recovered text is used only to query the caller and its declarations.
-    const { parameterStart, unfinishedEnd } = context;
-    const masked = text.slice(parameterStart, unfinishedEnd).replace(/[^\r\n]/g, " ");
-    origin = readMdDefinitionDocument(file, text.slice(0, parameterStart) + masked + text.slice(unfinishedEnd), undefined, false, options);
+    origin = readMdDefinitionDocument(file, maskCurrentParameter(text, context.parameterStart, context.unfinishedEnd), undefined, false, options);
   }
   if (!origin?.call) return undefined;
   const { ref } = origin.call;
@@ -137,3 +148,66 @@ export function resolveMdCallHelp(
     nameRange: context.nameRange,
   };
 }
+
+function maskCurrentParameter(text: string, start: number, end: number): string {
+  const masked = text.slice(start, end).replace(/[^\r\n]/g, " ");
+  return text.slice(0, start) + masked + text.slice(end);
+}
+
+export type AiScriptCallHelpMode = "signature" | "completion" | "hover" | "definition";
+
+export function isAiScriptCallCandidate(text: string, cursor: number, mode: AiScriptCallHelpMode): boolean {
+  return scriptCallOpening(text, cursor, mode !== "signature", "aiscript") !== undefined;
+}
+
+export function readAiScriptCallHelpRequest(
+  file: string, text: string, cursor: number, mode: AiScriptCallHelpMode,
+) {
+  const context = scriptCallCursor(text, cursor, mode !== "signature", "aiscript");
+  const requiresExactName = mode === "definition" || mode === "hover";
+  if (!context || (requiresExactName && (!context.argumentName || context.unfinishedEnd !== undefined))) return undefined;
+
+  const options = {
+    callStart: context.callStart, parameterStart: context.parameterStart, includeSignature: true,
+    editingParameterName: mode === "completion",
+  };
+  let origin = readAiScriptCallDocument(file, text, options);
+  if (!origin.call && context.parameterStart !== undefined && context.unfinishedEnd !== undefined) {
+    origin = readAiScriptCallDocument(file, maskCurrentParameter(text, context.parameterStart, context.unfinishedEnd), {
+      ...options, parameterStart: undefined,
+    });
+  }
+  if (!origin.call || (requiresExactName && !origin.call.activeArgument)) return undefined;
+  return { origin, context };
+}
+
+export function resolveAiScriptCallHelp(
+  request: NonNullable<ReturnType<typeof readAiScriptCallHelpRequest>>, files: readonly AiScriptNavigationDocument[],
+) {
+  const { origin, context } = request;
+  const call = origin.call;
+  if (!origin.name || !call) return undefined;
+  const scriptName = (file: AiScriptNavigationDocument) => file.name;
+  const index = buildAuthoredAiScriptIndex(files, scriptName);
+  if (resolveAuthoredAiScript(index, origin.name, scriptName) !== origin) return undefined;
+  const target = resolveAuthoredAiScript(index, call.callee, scriptName);
+  if (!target?.declaration || !target.signature) return undefined;
+
+  const supplied = new Set(call.arguments.map(argument => argument.name.toLowerCase()));
+  const activeIndex = target.signature.findIndex(parameter => parameter.name === (call.activeArgument ?? context.argumentName));
+  const unsupplied = target.signature.filter(parameter => !supplied.has(parameter.name.toLowerCase()));
+  unsupplied.sort((first, second) => Number(first.hasDefault) - Number(second.hasDefault));
+  const parameter = target.signature[activeIndex];
+  return {
+    name: call.callee,
+    location: { file: target.path, ...target.declaration },
+    parameters: target.signature,
+    parameter,
+    parameterLocation: context.nameRange && call.activeArgument ? parameter?.location : undefined,
+    activeParameter: activeIndex >= 0 ? activeIndex : Math.max(0, target.signature.findIndex(parameter => !supplied.has(parameter.name.toLowerCase()))),
+    unsupplied,
+    nameRange: context.nameRange,
+  };
+}
+
+export type AiScriptCallHelp = NonNullable<ReturnType<typeof resolveAiScriptCallHelp>>;
