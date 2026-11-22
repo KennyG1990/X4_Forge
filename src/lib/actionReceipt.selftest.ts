@@ -477,6 +477,22 @@ export function runActionReceiptSelftest(): ActionReceiptSelftestResult {
     ok('natural_same_operation_changed_metadata_conflicts', store.tryPrepare(metadataConflict).ok === false);
     ok('natural_same_operation_changed_rollback_conflicts', store.tryPrepare(rollbackConflict).ok === false);
 
+    const blobs = new ActionReceiptStore({ root: path.join(root, 'verified-blobs') });
+    const reportBytes = Buffer.from('{"added":[],"overwritten":[],"deleted":[]}');
+    const reportHash = blobs.putVerifiedBlob(reportBytes, 1024);
+    const reportFile = path.join(blobs.root, reportHash);
+    const reportStamp = fs.statSync(reportFile).mtimeMs;
+    ok('verified_blobs_reuse_exact_content', blobs.putVerifiedBlob(reportBytes, 1024) === reportHash
+      && fs.statSync(reportFile).mtimeMs === reportStamp && fs.readdirSync(blobs.root).length === 1
+      && blobs.readVerifiedBlob(reportHash, 1024)?.equals(reportBytes) === true);
+    ok('verified_blob_read_refuses_traversal_and_large_file', blobs.readVerifiedBlob('../record.json', 1024) === null
+      && blobs.readVerifiedBlob(reportHash, reportBytes.length - 1) === null);
+    fs.writeFileSync(reportFile, Buffer.alloc(reportBytes.length));
+    let refusedBlob = false;
+    try { blobs.putVerifiedBlob(reportBytes, 1024); } catch { refusedBlob = true; }
+    ok('verified_blob_corruption_is_not_overwritten', refusedBlob && blobs.readVerifiedBlob(reportHash, 1024) === null
+      && fs.readFileSync(reportFile).equals(Buffer.alloc(reportBytes.length)));
+
     fs.writeFileSync(store.pathFor(stored.id), originalBytes.replace('"status":"prepared"', '"status":"failed"'), 'utf8');
     const tamperedRead = store.tryRead(stored.id);
     ok('tampered_bytes_fail_closed', tamperedRead.ok === false && tamperedRead.code === 'RECEIPT_CORRUPT');

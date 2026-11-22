@@ -37,7 +37,7 @@ import {
   type ProjectFile,
 } from "../lib/extensionProject";
 import { validateProjectCrossFile } from "../lib/projectCrossFileValidation";
-import { withCanonicalMdReferences, type CanonicalMdValidationOptions } from './canonicalMdReferenceContext';
+import { authoredMdSourceKey, authoredMdSourcePath, isAuthoredMdInventoryPath, withCanonicalMdReferences, type CanonicalMdValidationOptions } from './canonicalMdReferenceContext';
 import {
   buildEffectiveMdReferenceContext, canonicalMdLibraryBaseline, diffMdLibraryPurposeFacts, plainMdLibraryPurposeFacts, evaluateEffectiveMdLibraryPurpose,
   EFFECTIVE_INCLUDE_PURPOSE_CODE, EFFECTIVE_INCLUDE_PURPOSE_CHECK,
@@ -45,7 +45,7 @@ import {
 } from '../lib/mdEffectiveLibraryPurpose';
 import { buildScriptPropertyIndex, formatScriptPropertyFinding, lintScriptPropertyChains, type ScriptPropertyFinding, type ScriptPropertyIndex } from "../lib/scriptProperties";
 import { checkXmlWellformed } from "../lib/xmlWellformed";
-import { lintAiscript, type AiscriptLintFinding } from "../lib/aiscriptLint";
+import { analyzeAiscript, lintAiscriptCalls, type AiscriptLintFinding } from "../lib/aiscriptLint";
 import {
   buildMdVariableAvailabilityContext, EFFECTIVE_MD_DESTROYED_EVENT_CHECK, EFFECTIVE_MD_RETURN_CHECK, isScriptExpressionAttribute,
   lintEffectiveMdCueReturns, lintEffectiveMdDestroyedEvents, lintMdPitfalls,
@@ -73,7 +73,7 @@ import {
   type ProjectCheckInspection,
 } from "./projectCheckProposal";
 import { getAiOrderParamTypes, getAiSchemaIndex, getScriptPropertyIndex } from "./validationRoutes";
-import { buildValidationEvidence, type ValidationCoverageGap, type ValidationEvidence, type ValidationSourceLocation } from '../lib/validationEvidence';
+import { buildValidationEvidence, decodeValidationSourceText, VALIDATION_TEXT_ENCODING_UNAVAILABLE, type SkippedValidationFile, type PayloadWriterScope, type ValidationCoverageGap, type ValidationEvidence, type ValidationSourceLocation } from '../lib/validationEvidence';
 import { createBoundedAnalysisCache } from '../lib/x4UiAnalysisCache';
 
 // Resource services replace their owned immutable indexes on a new generation. Weak keys do
@@ -88,9 +88,21 @@ function resourceGeneration(resource: object | null | undefined): number {
 }
 const LUA_FACT_BUDGET = 4 * 1024 * 1024;
 const EFFECTIVE_SCHEMA_FACT_BUDGET = 4 * 1024 * 1024;
+const EFFECTIVE_DIFF_FACT_BUDGET = 4 * 1024 * 1024;
+type EffectiveDiffValidationFacts = {
+  findings: DiffFinding[];
+  postApplyFindings: XsdDiagnostic[];
+  expressionFindings: MdPitfallFinding[];
+  runtimeFindings: MdPitfallFinding[];
+  coverageGaps: ValidationCoverageGap[];
+  mdFacts?: MdEffectiveLibraryInput;
+  reusable: boolean;
+};
 // A 500-file validation can use up to nine ordinary facts per file. Bound both
 // entry overhead and retained payload while keeping that working set warm.
-const validationFacts = createBoundedAnalysisCache<unknown>({ maxEntries: 4_500, maxBytes: 24 * 1024 * 1024 });
+const validationFacts = createBoundedAnalysisCache<unknown>({
+  maxEntries: 4_500, maxBytes: 24 * 1024 * 1024 - EFFECTIVE_DIFF_FACT_BUDGET,
+});
 const projectLuaFacts = createBoundedAnalysisCache<LuaStaticAnalysisResult>(
   { maxEntries: 4, maxBytes: LUA_FACT_BUDGET },
   result => !result.runtimeScope.truncated,
@@ -98,14 +110,22 @@ const projectLuaFacts = createBoundedAnalysisCache<LuaStaticAnalysisResult>(
 const effectiveSchemaFacts = createBoundedAnalysisCache<XsdDiagnostic[]>(
   { maxEntries: 512, maxBytes: EFFECTIVE_SCHEMA_FACT_BUDGET },
 );
+const effectiveDiffFacts = createBoundedAnalysisCache<EffectiveDiffValidationFacts>(
+  { maxEntries: 128, maxBytes: EFFECTIVE_DIFF_FACT_BUDGET },
+  result => result.reusable,
+);
 /** Internal deterministic observability; no additional HTTP surface or persistent state. */
 export function clearProjectValidationCache() {
   validationFacts.clear();
   projectLuaFacts.clear();
   effectiveSchemaFacts.clear();
+  effectiveDiffFacts.clear();
 }
 export function getProjectValidationCacheStats() {
-  return { ...validationFacts.stats(), lua: projectLuaFacts.stats(), effectiveSchema: effectiveSchemaFacts.stats() };
+  return {
+    ...validationFacts.stats(), lua: projectLuaFacts.stats(), effectiveSchema: effectiveSchemaFacts.stats(),
+    effectiveDiff: effectiveDiffFacts.stats(),
+  };
 }
 
 /**
@@ -158,6 +178,7 @@ export interface ProjectValidationResult {
     schemaErrors: number;
     schemaWarnings: number;
     aiscriptErrors: number;
+    aiRunScript?: { checked: number; skipped: number; caseUnresolved: number };
     scriptPropertyWarnings: number;
     mdPitfallErrors: number;
     mdPitfallWarnings: number;
@@ -586,87 +607,120 @@ export function runProjectValidation(
           const scriptKind = file.kind === 'md' || file.kind === 'aiscript' ? file.kind : classifyPath(relativePath);
           const script = scriptKind === 'md' || scriptKind === 'aiscript';
           const index = scriptKind === 'md' ? mdIndexRef : aiIndexRef;
-          const simulation = simulateXmlDiff(effective.content, file.content, script
-            ? { attributeProvenance: true, ...(scriptKind === 'md' ? { elementProvenance: true } : {}) } : undefined);
-          entry.findings = simulation.findings;
-          if (simulation.ok) {
-            if (scriptKind === 'md') {
-              effectiveMdFacts.set(relativePath, diffMdLibraryPurposeFacts(relativePath, simulation.elementProvenance));
-              // Consume one composed document while its actual identities are available;
-              // only compact findings/coverage escape this pass.
-              try {
-                const returns = lintEffectiveMdCueReturns(relativePath, simulation.elementProvenance);
-                diffMdRuntimeFindings.push(...returns.findings);
-                for (const gap of returns.gaps) coverageGaps.push({ check: EFFECTIVE_MD_RETURN_CHECK, ...gap });
-              } catch {
-                coverageGaps.push({ check: EFFECTIVE_MD_RETURN_CHECK, filePath: relativePath,
-                  reason: 'Effective MD return ownership analysis failed internally; no result is claimed.' });
-              }
-              try {
-                const events = lintEffectiveMdDestroyedEvents(relativePath, simulation.elementProvenance);
-                diffMdRuntimeFindings.push(...events.findings);
-                for (const gap of events.gaps) coverageGaps.push({ check: EFFECTIVE_MD_DESTROYED_EVENT_CHECK, ...gap });
-              } catch {
-                coverageGaps.push({ check: EFFECTIVE_MD_DESTROYED_EVENT_CHECK, filePath: relativePath,
-                  reason: 'Effective MD destruction event analysis failed internally. No event-source result is claimed.' });
-              }
-              effectiveMdContextInspected.add(relativePath);
-            }
-            if (script) {
-              const seen = new Set<string>();
-              const gaps = new Set<string>();
-              for (const gap of simulation.attributeAttributionGaps ?? []) {
-                if (isScriptExpressionAttribute(gap.elementName, gap.attributeName, index)) {
-                  gaps.add(`Operation ${gap.operation + 1} ${gap.elementName}/@${gap.attributeName}: ${gap.reason}`);
+          const effectiveIndex = kind === 'md' ? mdIndexRef : kind === 'aiscript' ? aiIndexRef : null;
+          const canonicalContent = effective.content;
+          const authoredContent = file.content;
+          const analyze = (): EffectiveDiffValidationFacts => {
+            const expressionFindings: MdPitfallFinding[] = [];
+            const runtimeFindings: MdPitfallFinding[] = [];
+            const localGaps: ValidationCoverageGap[] = [];
+            let postApplyFindings: XsdDiagnostic[] = [];
+            let mdFacts: MdEffectiveLibraryInput | undefined;
+            const simulation = simulateXmlDiff(canonicalContent, authoredContent, script
+              ? { attributeProvenance: true, ...(scriptKind === 'md' ? { elementProvenance: true } : {}) } : undefined);
+            if (simulation.ok) {
+              if (scriptKind === 'md') {
+                mdFacts = diffMdLibraryPurposeFacts(relativePath, simulation.elementProvenance);
+                // Consume one composed document while its actual identities are available;
+                // only compact findings/coverage escape this pass.
+                try {
+                  const returns = lintEffectiveMdCueReturns(relativePath, simulation.elementProvenance);
+                  runtimeFindings.push(...returns.findings);
+                  for (const gap of returns.gaps) localGaps.push({ check: EFFECTIVE_MD_RETURN_CHECK, ...gap });
+                } catch {
+                  localGaps.push({ check: EFFECTIVE_MD_RETURN_CHECK, filePath: relativePath,
+                    reason: 'Effective MD return ownership analysis failed internally; no result is claimed.' });
+                }
+                try {
+                  const events = lintEffectiveMdDestroyedEvents(relativePath, simulation.elementProvenance);
+                  runtimeFindings.push(...events.findings);
+                  for (const gap of events.gaps) localGaps.push({ check: EFFECTIVE_MD_DESTROYED_EVENT_CHECK, ...gap });
+                } catch {
+                  localGaps.push({ check: EFFECTIVE_MD_DESTROYED_EVENT_CHECK, filePath: relativePath,
+                    reason: 'Effective MD destruction event analysis failed internally. No event-source result is claimed.' });
                 }
               }
-              for (const assignment of simulation.attributeAssignments ?? []) {
-                const findings = lintScriptExpressionValue({ ...assignment, schema: index, filePath: relativePath,
-                  locate: offset => {
-                    const position = assignment.payload.locate(offset);
-                    if (!position) gaps.add(`Operation ${assignment.operation + 1} ${assignment.elementName}/@${assignment.attributeName}: authored token position unavailable.`);
-                    return position;
-                  },
-                });
-                for (const finding of findings) {
-                  const key = JSON.stringify([assignment.operation, finding.code, finding.sourceRef, finding.line, finding.column, finding.detail]);
-                  if (!seen.has(key)) { seen.add(key); diffExpressionFindings.push(finding); }
+              if (script) {
+                const seen = new Set<string>();
+                const gaps = new Set<string>();
+                for (const gap of simulation.attributeAttributionGaps ?? []) {
+                  if (isScriptExpressionAttribute(gap.elementName, gap.attributeName, index)) {
+                    gaps.add(`Operation ${gap.operation + 1} ${gap.elementName}/@${gap.attributeName}: ${gap.reason}`);
+                  }
                 }
+                for (const assignment of simulation.attributeAssignments ?? []) {
+                  const findings = lintScriptExpressionValue({ ...assignment, schema: index, filePath: relativePath,
+                    locate: offset => {
+                      const position = assignment.payload.locate(offset);
+                      if (!position) gaps.add(`Operation ${assignment.operation + 1} ${assignment.elementName}/@${assignment.attributeName}: authored token position unavailable.`);
+                      return position;
+                    },
+                  });
+                  for (const finding of findings) {
+                    const key = JSON.stringify([assignment.operation, finding.code, finding.sourceRef, finding.line, finding.column, finding.detail]);
+                    if (!seen.has(key)) { seen.add(key); expressionFindings.push(finding); }
+                  }
+                }
+                for (const reason of gaps) localGaps.push({ check: 'diff.expressions', filePath: relativePath, reason });
               }
-              for (const reason of gaps) coverageGaps.push({ check: 'diff.expressions', filePath: relativePath, reason });
+              const validateEffective = (content: string): XsdDiagnostic[] => {
+                if (effectiveIndex?.loaded) {
+                  const domain = kind === 'md' ? 'mission_director' : 'ai_scripts';
+                  const validate = () => validateXmlAgainstSchema(content, effectiveIndex, {
+                    filePath: relativePath, domain, reportUnknownElements: true,
+                    references, strictStructure: true,
+                  });
+                  const sourceBytes = 2 * (relativePath.length + content.length);
+                  if (opts.incremental === false || sourceBytes > EFFECTIVE_SCHEMA_FACT_BUDGET) return validate();
+                  // The caller already resolved the current overlay and schema. Cache
+                  // diagnostics for those exact inputs, without holding either XML tree.
+                  const contentHash = crypto.createHash('sha256').update(content, 'utf16le').digest('hex');
+                  const key = JSON.stringify([relativePath, domain, resourceGeneration(effectiveIndex), referenceGeneration, contentHash]);
+                  return effectiveSchemaFacts.get(key, validate, sourceBytes);
+                }
+                if (schemaRegistryRef) {
+                  return validateRoutedFiles([{ path: relativePath, content }], schemaRegistryRef, {
+                    references, strictStructure: true,
+                  }).flatMap(result => result.findings);
+                }
+                return [];
+              };
+              const diagnosticKey = (finding: XsdDiagnostic) => [
+                finding.severity, finding.domain, finding.code, finding.sourceRef, finding.message,
+              ].join('|');
+              const baseline = new Set(validateEffective(canonicalContent).map(diagnosticKey));
+              postApplyFindings = validateEffective(simulation.content)
+                .filter(finding => !baseline.has(diagnosticKey(finding)));
+            } else if (script) {
+              localGaps.push({ check: 'diff.expressions', filePath: relativePath,
+                reason: 'Patch simulation failed; effective expression values were not checked.' });
             }
-            const validateEffective = (content: string): XsdDiagnostic[] => {
-              const index = kind === 'md' ? mdIndexRef : kind === 'aiscript' ? aiIndexRef : null;
-              if (index?.loaded) {
-                const domain = kind === 'md' ? 'mission_director' : 'ai_scripts';
-                const validate = () => validateXmlAgainstSchema(content, index, {
-                  filePath: relativePath, domain, reportUnknownElements: true,
-                  references, strictStructure: true,
-                });
-                const sourceBytes = 2 * (relativePath.length + content.length);
-                if (opts.incremental === false || sourceBytes > EFFECTIVE_SCHEMA_FACT_BUDGET) return validate();
-                // The caller already resolved the current overlay and schema. Cache
-                // diagnostics for those exact inputs, without holding either XML tree.
-                const contentHash = crypto.createHash('sha256').update(content, 'utf16le').digest('hex');
-                const key = JSON.stringify([relativePath, domain, resourceGeneration(index), referenceGeneration, contentHash]);
-                return effectiveSchemaFacts.get(key, validate, sourceBytes);
-              }
-              if (schemaRegistryRef) {
-                return validateRoutedFiles([{ path: relativePath, content }], schemaRegistryRef, {
-                  references, strictStructure: true,
-                }).flatMap(result => result.findings);
-              }
-              return [];
+            const mdComplete = !mdFacts || (!('unavailable' in mdFacts)
+              && !mdFacts.referenceUnavailable && mdFacts.gaps.length === 0);
+            return {
+              findings: simulation.findings, postApplyFindings, expressionFindings, runtimeFindings,
+              coverageGaps: localGaps, mdFacts,
+              reusable: simulation.ok && mdComplete && localGaps.length === 0,
             };
-            const diagnosticKey = (finding: XsdDiagnostic) => [
-              finding.severity, finding.domain, finding.code, finding.sourceRef, finding.message,
-            ].join('|');
-            const baseline = new Set(validateEffective(effective.content).map(diagnosticKey));
-            entry.postApplyFindings = validateEffective(simulation.content)
-              .filter(finding => !baseline.has(diagnosticKey(finding)));
-          } else if (script) {
-            coverageGaps.push({ check: 'diff.expressions', filePath: relativePath,
-              reason: 'Patch simulation failed; effective expression values were not checked.' });
+          };
+          const sourceBytes = 2 * (canonicalContent.length + authoredContent.length);
+          // Effective resolution and its current lineage are deliberately outside the cache.
+          // Routed registry identity alone cannot establish its current schema dependencies.
+          // Cache only dedicated, loaded script analyses, without composed text or DOM provenance.
+          const analysis = opts.incremental === false || !effectiveIndex?.loaded || sourceBytes > EFFECTIVE_DIFF_FACT_BUDGET
+            ? analyze()
+            : effectiveDiffFacts.get(JSON.stringify([
+                fileIdentity(file), relativePath, resourceGeneration(index), resourceGeneration(effectiveIndex), referenceGeneration,
+                crypto.createHash('sha256').update(canonicalContent, 'utf16le').digest('hex'),
+              ]), analyze, sourceBytes);
+          entry.findings = analysis.findings;
+          entry.postApplyFindings = analysis.postApplyFindings;
+          diffExpressionFindings.push(...analysis.expressionFindings);
+          diffMdRuntimeFindings.push(...analysis.runtimeFindings);
+          coverageGaps.push(...analysis.coverageGaps);
+          if (analysis.mdFacts) {
+            effectiveMdFacts.set(relativePath, analysis.mdFacts);
+            effectiveMdContextInspected.add(relativePath);
           }
         } else {
           entry.findings.push({
@@ -717,16 +771,22 @@ export function runProjectValidation(
   }
 
   const aiscriptLint: ProjectAiscriptFinding[] = [];
+  let runScript: ProjectValidationResult['summary']['aiRunScript'];
   try {
     const legalTypes = getAiOrderParamTypes(aiIndexRef);
+    const legalTypeKey = [...legalTypes];
+    const analyses: Parameters<typeof lintAiscriptCalls>[0][number][] = [];
     for (const f of project.files) {
-      if ((f.kind === "aiscript" || classifyPath(f.path) === "aiscript") && typeof f.content === "string") {
-        const findings = fact('aiscript-lint', f, [...legalTypes], () => lintAiscript(f.content!, legalTypes));
-        for (const finding of findings) {
-          aiscriptLint.push({ ...finding, filePath: f.path });
-        }
+      if (f.kind !== "aiscript" && classifyPath(f.path) !== "aiscript") continue;
+      const analysis = fact('aiscript-analysis', f, legalTypeKey, () => analyzeAiscript(f.content ?? '', legalTypes));
+      analyses.push({ path: f.path, analysis });
+      for (const finding of analysis.findings) {
+        aiscriptLint.push({ ...finding, filePath: f.path });
       }
     }
+    const { findings, ...coverage } = lintAiscriptCalls(analyses);
+    for (const finding of findings) aiscriptLint.push(finding);
+    if (coverage.checked || coverage.skipped) runScript = coverage;
   } catch { coverageGaps.push({ check: 'aiscript.lint', reason: 'AI-script analysis failed before completing.' }); }
 
   const scriptPropertyFindings: ScriptPropertyFinding[] = [];
@@ -779,21 +839,36 @@ export function runProjectValidation(
   // A different MD file can supply a writer or invalidate namespace authority.
   // Bind both the project context and each consuming file fact to that complete input set.
   const variableFiles = project.files.filter(file => file.kind === 'md' || classifyPath(file.path) === 'md');
-  const variableDependency = [resourceGeneration(mdIndexRef), variableFiles.map(fileIdentity).sort()];
-  const variableInputBytes = 2 * variableFiles.reduce((total, file) => total + file.path.length + (file.content?.length ?? 0), 0);
-  const buildVariableContext = () => buildMdVariableAvailabilityContext(variableFiles, mdIndexRef);
+  const includedMd = new Set(variableFiles.map(file => authoredMdSourcePath(file.path)));
+  const skippedMd = new Set<string>();
+  for (const skipped of opts.canonicalMd?.skippedFiles ?? []) {
+    const path = authoredMdSourcePath(skipped.path);
+    if (isAuthoredMdInventoryPath(authoredMdSourceKey(path), skipped.directory) && !includedMd.has(path)) skippedMd.add(path);
+  }
+  const omittedMd = { paths: [...skippedMd].sort().slice(0, MAX_FILES), additionalCount: Math.max(0, skippedMd.size - MAX_FILES) };
+  const omittedIdentity = skippedMd.size ? crypto.createHash('sha256').update(JSON.stringify(omittedMd)).digest('hex') : null;
+  const variableDependency = [resourceGeneration(mdIndexRef), variableFiles.map(fileIdentity).sort(), omittedIdentity];
+  const variableInputBytes = 2 * (variableFiles.reduce((total, file) => total + file.path.length + (file.content?.length ?? 0), 0)
+    + omittedMd.paths.reduce((total, path) => total + path.length, 0));
+  const buildVariableContext = () => buildMdVariableAvailabilityContext(variableFiles, mdIndexRef, omittedMd);
   const variableAvailability = opts.incremental === false ? buildVariableContext()
     : (validationFacts.get(JSON.stringify(['md-variable-context', variableDependency]), buildVariableContext, variableInputBytes) as ReturnType<typeof buildMdVariableAvailabilityContext>);
-  coverageGaps.push(...variableAvailability.coverageGaps);
+  const initialStateGaps: ValidationCoverageGap[] = [...variableAvailability.inputGaps];
   const pitfallFindings: MdPitfallFinding[] = [...diffExpressionFindings, ...diffMdRuntimeFindings];
   for (const f of project.files) {
     if (typeof f.content !== "string") continue;
     const pathKind = classifyPath(f.path);
     if (f.kind === "md" || pathKind === "md") {
-      pitfallFindings.push(...fact('pitfalls', f, [propertyGeneration, variableDependency], () => lintMdPitfalls(f.content!, {
-        propertyUnion: spIndex?.union, propertyIndex: spIndex || undefined, filePath: f.path,
-        variableAvailability: variableAvailability.context,
-      })));
+      const md = fact('pitfalls', f, [propertyGeneration, variableDependency], () => {
+        const gaps: ValidationCoverageGap[] = [];
+        const findings = lintMdPitfalls(f.content!, {
+          propertyUnion: spIndex?.union, propertyIndex: spIndex || undefined, filePath: f.path,
+          variableAvailability: variableAvailability.context, initialStateGaps: gaps,
+        });
+        return { findings, gaps };
+      });
+      pitfallFindings.push(...md.findings);
+      initialStateGaps.push(...md.gaps);
     }
     const kind = f.kind === "md" || f.kind === "aiscript" ? f.kind : pathKind;
     if (kind === "md" || kind === "aiscript") {
@@ -803,6 +878,12 @@ export function runProjectValidation(
       for (const finding of expressions) pitfallFindings.push(finding);
     }
   }
+
+  initialStateGaps.sort((a, b) => {
+    const left = a.filePath ?? '', right = b.filePath ?? '';
+    return left < right ? -1 : left > right ? 1 : (a.line ?? 0) - (b.line ?? 0) || (a.column ?? 0) - (b.column ?? 0);
+  });
+  coverageGaps.push(...initialStateGaps);
 
   // B63 (registry refactor): the per-basename content lints (jobs/wares/factions) share ONE loop via a
   // small table — adding a domain is a spec entry, not a copy-pasted per-file loop (the recurring
@@ -902,6 +983,7 @@ export function runProjectValidation(
       schemaErrors,
       schemaWarnings: schemaFindings.filter(d => d.severity === "warning").length,
       aiscriptErrors,
+      ...(runScript ? { aiRunScript: runScript } : {}),
       scriptPropertyWarnings: scriptPropertyFindings.filter(finding => finding.severity === 'warning').length,
       mdPitfallErrors,
       mdPitfallWarnings: pitfallFindings.filter(finding => finding.severity === "warning").length,
@@ -987,6 +1069,7 @@ export interface FlatProjectDiagnostic {
   line?: number;
   column?: number;
   target?: ValidationSourceLocation;
+  payloadWriterScope?: PayloadWriterScope;
   findingId?: string;
   category?: 'mod-finding' | 'check-unavailable';
 }
@@ -1032,13 +1115,15 @@ function flattenProjectValidationRaw(result: ProjectValidationResult): FlatProje
     }
     const sourceRef = f.sourceRef ?? (f.event || f.dependencyId);
     out.push({ severity: f.severity, code: f.code, filePath: f.file, sourceRef,
-      line: f.line, column: f.column, target: f.target, message: f.detail });
+      line: f.line, column: f.column, target: f.target, message: f.detail,
+      ...(f.payloadWriterScope ? { payloadWriterScope: f.payloadWriterScope } : {}) });
   }
   for (const d of result.schema.findings) {
     out.push({ severity: d.severity, code: d.code, filePath: d.filePath, sourceRef: d.sourceRef, line: d.line, message: d.message });
   }
   for (const f of result.aiscript.findings) {
     out.push({ severity: f.severity, code: f.code, filePath: f.filePath, line: f.line, column: f.column,
+      ...(f.target ? { target: f.target } : {}),
       sourceRef: f.sourceRef ?? (f.order ? `${f.order}${f.param ? `@${f.param}` : ""}` : f.param), message: f.detail });
   }
   for (const f of result.scriptProperties.findings) {
@@ -1348,6 +1433,36 @@ export function runProjectValidationSelftest(): { pass: boolean; checks: { name:
   const reversedInitialProject = { ...reorderedInitialProject, files: [...reorderedInitialProject.files].reverse() };
   const reversedInitial = runProjectValidation(reversedInitialProject);
   const fullReversedInitial = runProjectValidation(reversedInitialProject, { incremental: false });
+  const unavailableAuthoredInputs = (...paths: string[]) => ({
+    read: () => undefined,
+    skippedFiles: paths.map(file => ({ path: file })),
+  });
+  const withOmittedMd = runProjectValidation(initialProject, { canonicalMd: unavailableAuthoredInputs('md/omitted-writer.xml') });
+  const fullOmittedMd = runProjectValidation(initialProject, { canonicalMd: unavailableAuthoredInputs('md/omitted-writer.xml'), incremental: false });
+  const initialGaps = (result: ProjectValidationResult) => result.evidence?.coverage.gaps
+    .filter(gap => gap.check === 'md.variable_initial_state') ?? [];
+  const stillOmittedMd = runProjectValidation(initialProject, { canonicalMd: unavailableAuthoredInputs(
+    './md/omitted-writer.xml', 'md\\omitted-writer.xml') });
+  const rootOmitted = runProjectValidation(initialProject, { canonicalMd: unavailableAuthoredInputs('.') });
+  const mdDirectoryOmitted = runProjectValidation(initialProject, { canonicalMd: unavailableAuthoredInputs('md') });
+  const nestedOmitted = runProjectValidation(initialProject, { canonicalMd: {
+    read: () => undefined, skippedFiles: [{ path: 'md/nested', directory: true }],
+  } });
+  const unrelatedDirectory = runProjectValidation(initialProject, { canonicalMd: {
+    read: () => undefined, skippedFiles: [{ path: 'ui/nested', directory: true }],
+  } });
+  const unrelatedOmitted = runProjectValidation(initialProject, { canonicalMd: unavailableAuthoredInputs('ui/unavailable.lua') });
+  const redundantOmission = runProjectValidation(initialProject, { canonicalMd: unavailableAuthoredInputs('md/availability-reader.xml') });
+  const caseDistinctOmission = runProjectValidation(initialProject, { canonicalMd: unavailableAuthoredInputs('md/Availability-reader.xml') });
+  const largeOmittedInventory = runProjectValidation(initialProject, { canonicalMd: unavailableAuthoredInputs(
+    ...Array.from({ length: MAX_FILES + 3 }, (_, i) => `md/skipped_${String(i).padStart(4, '0')}.xml`)) });
+  const withoutOmissionAgain = runProjectValidation(initialProject);
+  const provenRemovalProject: ExtensionProject = { ...initialProject, files: initialProject.files.map(file =>
+    file.path === 'md/availability-reader.xml' ? { ...file, content: file.content?.replace('<debug_text',
+      '<do_if value="not $Absent?"><debug_text text="$Absent"/></do_if>'
+      + '<remove_value name="$Value"/><debug_text') } : file) };
+  const provenRemovalWithOmittedMd = runProjectValidation(provenRemovalProject,
+    { canonicalMd: unavailableAuthoredInputs('md/omitted-writer.xml') });
   const cacheContext = buildMdVariableAvailabilityContext(initialProject.files.filter(file => file.kind === 'md'), null);
   const plainContext = (value: unknown): boolean => {
     if (value === null || value === undefined || ['string', 'number', 'boolean'].includes(typeof value)) return true;
@@ -1397,7 +1512,38 @@ export function runProjectValidationSelftest(): { pass: boolean; checks: { name:
     {
       name: 'unavailable_writer_file_is_a_coverage_gap_instead_of_an_unset_assertion',
       pass: initialRows(unavailableInitial).length === 0 && !!unavailableInitial.evidence?.coverage.gaps.some(gap =>
-        gap.check === 'md.variable_initial_state'),
+        gap.check === 'md.variable_initial_state' && gap.filePath === 'md/availability-reader.xml' && (gap.line ?? 0) > 0)
+        && initialGaps(unavailableInitial).some(gap => gap.filePath === 'md/unavailable-writer.xml' && gap.line === undefined),
+    },
+    {
+      name: 'omitted_md_input_never_becomes_a_no_writer_advisory_and_cache_recovers_after_removal',
+      pass: initialRows(withoutWriter).length === 1 && initialRows(withOmittedMd).length === 0
+        && initialRows(fullOmittedMd).length === 0 && initialRows(withoutOmissionAgain).length === 1
+        && initialGaps(withOmittedMd).some(gap => gap.filePath === 'md/omitted-writer.xml'
+          && gap.mdInitialState?.causes.some(cause => cause.code === 'omitted_input'))
+        && JSON.stringify(initialGaps(withOmittedMd)) === JSON.stringify(initialGaps(fullOmittedMd))
+        && JSON.stringify(initialGaps(withOmittedMd)) === JSON.stringify(initialGaps(stillOmittedMd)),
+    },
+    {
+      name: 'missing_root_and_md_inventory_are_separate_from_unrelated_or_loaded_files',
+      pass: initialRows(rootOmitted).length === 0 && initialGaps(rootOmitted).some(gap => gap.filePath === '.')
+        && initialRows(mdDirectoryOmitted).length === 0 && initialGaps(mdDirectoryOmitted).some(gap => gap.filePath === 'md')
+        && initialRows(nestedOmitted).length === 0 && initialGaps(nestedOmitted).some(gap => gap.filePath === 'md/nested')
+        && initialRows(unrelatedDirectory).length === 1 && initialGaps(unrelatedDirectory).length === 0
+        && initialRows(unrelatedOmitted).length === 1 && initialGaps(unrelatedOmitted).length === 0
+        && initialRows(redundantOmission).length === 1 && initialGaps(redundantOmission).length === 0
+        && initialRows(caseDistinctOmission).length === 0
+        && initialGaps(caseDistinctOmission).some(gap => gap.filePath === 'md/Availability-reader.xml')
+        && ['md_pitfall.variable_read_after_removal', 'md_pitfall.variable_read_when_absent'].every(code =>
+          flattenProjectValidation(provenRemovalWithOmittedMd).some(finding => finding.code === code)),
+    },
+    {
+      name: 'omitted_md_path_summary_is_bounded_without_losing_the_additional_input_count',
+      pass: initialRows(largeOmittedInventory).length === 0
+        && initialGaps(largeOmittedInventory).filter(gap => gap.line === undefined).length === MAX_FILES + 1
+        && initialGaps(largeOmittedInventory).filter(gap => gap.line !== undefined).length === 1
+        && initialGaps(largeOmittedInventory).some(gap => gap.filePath === '.' && gap.mdInitialState?.causes.some(cause =>
+          cause.code === 'omitted_paths_unlisted' && cause.count === 3 && cause.samples.length === 0)),
     },
     {
       name: 'initial_variable_context_and_gap_order_are_independent_of_project_file_order',
@@ -1677,6 +1823,43 @@ export function runProjectValidationSelftest(): { pass: boolean; checks: { name:
     pass: [retainedSource, restoredSource, unchanged].every(result => !result.findings.length && !result.gaps.length)
       && !unproven.findings.length && unproven.gaps.length === 1 && !foreign.findings.length
       && foreign.gaps.some(gap => gap.reason.includes('namespace')) });
+
+  const aiCaller = `<aiscript name="forge.qa.caller"><actions>
+    <run_script name="'forge.qa.target'"><param name="Supplied" value="1"/></run_script><run_script name="'forge.qa.target'"><param name="Supplied" value="2"/></run_script>
+    <run_script name="$Chosen"><param name="Supplied" value="1"/></run_script>
+  </actions></aiscript>`;
+  const aiProject = (input: string): ExtensionProject => ({
+    id: "forge-ai-arguments",
+    name: "Forge AI arguments",
+    files: [
+      { path: "content.xml", kind: "content", content: contentXml },
+      { path: "aiscripts/forge.qa.caller.xml", kind: "aiscript", content: aiCaller },
+      { path: "aiscripts/forge.qa.target.xml", kind: "aiscript",
+        content: `<aiscript name="forge.qa.target"><params><param name="${input}"/><param name="Optional" default="null"/></params></aiscript>` },
+    ],
+  });
+  const aiBad = runProjectValidation(aiProject("Required"));
+  const aiEvidence = aiBad.evidence?.findings.filter(f => f.code?.startsWith("aiscript.run_script_")) ?? [];
+  const aiWarnings = aiEvidence.filter(f => f.severity === "warning");
+  const aiRequired = aiEvidence.filter(f => f.severity === "info");
+  checks.push({ name: 'ai_script_call_advisories_share_source_and_target_evidence_without_blocking',
+    pass: aiBad.ok && aiBad.summary.aiscriptErrors === 0
+      && aiBad.summary.aiRunScript?.checked === 2 && aiBad.summary.aiRunScript.skipped === 1
+      && aiWarnings.length === 2 && aiRequired.length === 2
+      && new Set(aiWarnings.map(f => f.sourceRef)).size === 2
+      && new Set(aiEvidence.map(f => f.findingId)).size === 4
+      && aiEvidence.every(f => f.filePath === "aiscripts/forge.qa.caller.xml" && f.line === 2
+        && !!f.column && f.target?.file === "aiscripts/forge.qa.target.xml" && f.target.line === 1)
+      && flattenProjectValidation(aiBad).filter(f => f.code?.startsWith("aiscript.run_script_")).length === 4 });
+  const aiFixed = runProjectValidation(aiProject("Supplied"));
+  const aiFixedFull = runProjectValidation(aiProject("Supplied"), { incremental: false });
+  const aiBadFull = runProjectValidation(aiProject("Required"), { incremental: false });
+  checks.push({ name: 'changing_only_the_ai_callee_rechecks_cached_callers',
+    pass: aiFixed.ok && aiFixed.aiscript.findings.length === 0 && aiFixed.summary.aiRunScript?.checked === 2
+      && JSON.stringify(aiFixed.aiscript) === JSON.stringify(aiFixedFull.aiscript)
+      && JSON.stringify(aiBad.aiscript) === JSON.stringify(aiBadFull.aiscript)
+      && JSON.stringify(aiFixed.summary.aiRunScript) === JSON.stringify(aiFixedFull.summary.aiRunScript)
+      && JSON.stringify(aiBad.evidence?.findings) === JSON.stringify(aiBadFull.evidence?.findings) });
   return { pass: checks.every(check => check.pass), checks };
 }
 
@@ -1685,7 +1868,7 @@ export function runProjectValidationSelftest(): { pass: boolean; checks: { name:
  * ------------------------------------------------------------------ */
 
 // B46P2: ui/**/*.xml added — ui addon documents now route to addon/coreaddon.xsd.
-const LOADABLE_RE = /^(content\.xml|ui\.xml|forge\.rules\.json|md\/[^/]+\.xml|aiscripts\/[^/]+\.xml|t\/[^/]+\.xml|libraries\/[^/]+\.xml|ui\/.+\.xml|(?:ui|lua|subst_lua)\/.+\.lua|[^/]+\.lua)$/i;
+const LOADABLE_RE = /^(content\.xml|ui\.xml|forge\.rules\.json|md\/[^/]+\.xml|aiscripts\/[^/]+\.xml|t\/[^/]+\.xml|libraries\/[^/]+\.xml|(?:ui|assets|maps|index)\/.+\.xml|(?:ui|lua|subst_lua)\/.+\.lua|[^/]+\.lua)$/i;
 const MAX_FILES = 500;
 const MAX_FILE_BYTES = 4 * 1024 * 1024;
 const LOAD_SKIP_DIRS = new Set(['.git', '.hg', '.svn', '.claude', '.kilo', '.forge', '.snapshots', 'node_modules', '__pycache__']);
@@ -1694,14 +1877,14 @@ export interface DiskProjectLoad {
   project: ExtensionProject;
   root: string;
   loaded: string[];
-  skipped: { path: string; reason: string }[];
+  skipped: SkippedValidationFile[];
 }
 
 /** Build an ExtensionProject from a real mod folder (workspace or live extensions dir). */
 export function loadProjectFromDisk(rootDir: string, id?: string): DiskProjectLoad {
   const root = path.resolve(rootDir);
   const loaded: string[] = [];
-  const skipped: { path: string; reason: string }[] = [];
+  const skipped: DiskProjectLoad['skipped'] = [];
   const files: ProjectFile[] = [];
   const toolsRoots: string[] = [];
   const registeredTools = new Set<string>();
@@ -1710,7 +1893,7 @@ export function loadProjectFromDisk(rootDir: string, id?: string): DiskProjectLo
   const walk = (dir: string) => {
     let entries: fs.Dirent[] = [];
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
-    catch { skipped.push({ path: path.relative(root, dir).replace(/\\/g, '/') || '.', reason: 'Directory could not be enumerated; validation inventory is incomplete.' }); return; }
+    catch { skipped.push({ path: path.relative(root, dir).replace(/\\/g, '/') || '.', reason: 'Directory could not be enumerated; validation inventory is incomplete.', directory: true }); return; }
     for (const e of entries) {
       const abs = path.join(dir, e.name);
       if (dir === root && e.name.toLowerCase() === PROJECT_CHECKS_PATH) {
@@ -1766,7 +1949,15 @@ export function loadProjectFromDisk(rootDir: string, id?: string): DiskProjectLo
       }
       if (statSize > MAX_FILE_BYTES) { skipped.push({ path: rel, reason: `file exceeds ${MAX_FILE_BYTES} bytes` }); continue; }
       try {
-        const content = fs.readFileSync(abs, "utf8");
+        const bytes = fs.readFileSync(abs);
+        const content = decodeValidationSourceText(bytes);
+        if (content === undefined) {
+          // Preserve presence without passing replacement text to validators.
+          files.push({ path: rel, kind: classifyPath(rel) });
+          skipped.push({ path: rel, reason: VALIDATION_TEXT_ENCODING_UNAVAILABLE,
+            sourceSha256: crypto.createHash('sha256').update(bytes).digest('hex') });
+          continue;
+        }
         files.push({ path: rel, kind: classifyPath(rel), content });
         loaded.push(rel);
       } catch (err) {

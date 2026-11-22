@@ -358,6 +358,15 @@ function parseAIScriptOrder(root: ElementLike): AIScriptOrderReference | null {
   };
 }
 
+
+/** Read an unambiguous authored order header from a complete workspace AI document. */
+export function readAIScriptOrderId(content: string): string | null {
+  const root: ElementLike | undefined = parseXml(content)?.documentElement;
+  if (root?.nodeName !== 'aiscript') return null;
+  const orders = directElementChildren(root, 'order');
+  return orders.length === 1 ? orders[0].getAttribute('id') : null;
+}
+
 function parseAIScripts(files: ReferenceFile[]): AIScriptReference[] {
   const found = new Map<string, AIScriptReference>();
   for (const file of files.filter(f => f.kind === 'aiscript')) {

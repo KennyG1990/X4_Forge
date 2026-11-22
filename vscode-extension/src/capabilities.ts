@@ -58,6 +58,7 @@ export function detectIdeCapabilities(input: IdeCapabilityInput): IdeCapabilityR
       'X4 hover documentation',
       'X4 deterministic diagnostics',
       'MD cue definitions and references',
+      'AI script call definitions and references',
       'project validation in Problems',
     ],
     companions,

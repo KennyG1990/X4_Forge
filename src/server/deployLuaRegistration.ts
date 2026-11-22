@@ -1,8 +1,8 @@
 import { readX4MenuLuaPaths } from '../lib/x4UiSourceBundle';
 import type { DeploymentSnapshot } from './deploymentSnapshot';
-import { MAX_INSTALLED_ROOT_FILE_BYTES, readInstalledExtensionRootFiles } from './installedExtensionRootFiles';
+import { installedRootFileVariants, MAX_INSTALLED_ROOT_FILE_BYTES, readInstalledExtensionRootVariants } from './installedExtensionRootFiles';
 
-const EXTENSION_CATALOG_PART = /^ext_(?:\d{2}(?:_diff_v\d{3,})?|v\d{3,})\.(cat|dat)$/i;
+const EXTENSION_CATALOG_PART = /^(?:ext|subst)_(?:\d{2}(?:_diff_v\d{3,})?|v\d{3,})\.(cat|dat)$/i;
 
 function pathKey(value: string): string {
   return process.platform === 'win32' ? value.toLowerCase() : value;
@@ -22,12 +22,23 @@ export function previewLuaRegistrationChange(snapshot: DeploymentSnapshot, targe
     const next = readX4MenuLuaPaths(manifest.content, true);
     if (!next) return unavailable;
     if (!next.size) return null;
-    const priorText = readInstalledExtensionRootFiles(target, ['ui.xml']).get('ui.xml');
-    const prior = priorText === undefined ? [] : readX4MenuLuaPaths(priorText, true);
-    if (!prior) return unavailable;
-    const previous = new Set([...prior].map(pathKey));
+    const sources = readInstalledExtensionRootVariants(target, ['ui.xml']);
+    const { loosePreferred, catalogPreferred } = installedRootFileVariants(sources, 'ui.xml');
     const uniqueNext = new Map([...next].map(name => [pathKey(name), name]));
-    const added = [...uniqueNext].filter(([name]) => !previous.has(name)).map(([, name]) => name).sort();
+    const additions = (text: string | undefined) => {
+      const prior = text === undefined ? [] : readX4MenuLuaPaths(text, true);
+      if (!prior) return null;
+      const previous = new Set([...prior].map(pathKey));
+      return [...uniqueNext].filter(([name]) => !previous.has(name)).map(([, name]) => name).sort();
+    };
+    const added = additions(loosePreferred);
+    if (!added) return unavailable;
+    if (loosePreferred !== catalogPreferred) {
+      const catalogAdded = additions(catalogPreferred);
+      if (!catalogAdded || catalogAdded.length !== added.length || catalogAdded.some((name, i) => name !== added[i])) {
+        return { ...unavailable, detail: 'The installed loose and packed ui.xml give different Lua registration comparisons. Forge could not verify which copy X4 uses.' };
+      }
+    }
     return added.length ? { status: 'added' as const, addedCount: added.length,
       addedPaths: added.slice(0, 64), restartMayBeRequired: true as const } : null;
   } catch {

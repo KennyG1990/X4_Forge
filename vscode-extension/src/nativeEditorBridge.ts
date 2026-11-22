@@ -4,9 +4,10 @@ import * as crypto from "node:crypto";
 
 export interface NativeEditorRequest {
   source: "x4forge-studio";
-  type: "open-workspace-file" | "open-validated-source";
+  type: "open-workspace-file" | "open-validated-source" | "open-bound-workspace-file";
   path: string;
   sourceFolder?: string;
+  expectedWorkspaceRootId?: string;
   line?: number;
   column?: number;
   expectedSourceSha256?: string;
@@ -256,8 +257,8 @@ export function parseNativeEditorRequest(value: unknown): NativeStudioRequest | 
       ...(language ? { language } : {}),
     };
   }
-  if ((candidate.type !== "open-workspace-file" && candidate.type !== "open-validated-source")
-      || typeof candidate.path !== "string") return null;
+  if ((candidate.type !== "open-workspace-file" && candidate.type !== "open-validated-source"
+      && candidate.type !== "open-bound-workspace-file") || typeof candidate.path !== "string") return null;
   const request: NativeEditorRequest = { source: "x4forge-studio", type: candidate.type, path: candidate.path };
   if (candidate.sourceFolder !== undefined) {
     if (typeof candidate.sourceFolder !== "string") return null;
@@ -265,6 +266,11 @@ export function parseNativeEditorRequest(value: unknown): NativeStudioRequest | 
     if (!folder || folder === "." || folder === ".." || !/^[a-zA-Z0-9._-]+$/.test(folder)) return null;
     request.sourceFolder = folder;
   }
+  if (candidate.type === "open-bound-workspace-file") {
+    if (!request.sourceFolder || typeof candidate.expectedWorkspaceRootId !== "string"
+        || !/^[a-f0-9]{64}$/.test(candidate.expectedWorkspaceRootId)) return null;
+    request.expectedWorkspaceRootId = candidate.expectedWorkspaceRootId;
+  } else if (candidate.expectedWorkspaceRootId !== undefined) return null;
   if (Number.isInteger(candidate.line) && Number(candidate.line) >= 0) request.line = Number(candidate.line);
   if (Number.isInteger(candidate.column) && Number(candidate.column) >= 0) request.column = Number(candidate.column);
   if (candidate.type === "open-validated-source") {

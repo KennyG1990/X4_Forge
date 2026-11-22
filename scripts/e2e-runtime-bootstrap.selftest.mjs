@@ -499,13 +499,21 @@ function stateFilesystem() {
   };
   const stat = value => ({
     dev: BigInt(value.dev), ino: BigInt(value.ino) + (controls.largeIdentities ? 9_007_199_254_740_992n : 0n), birthtimeNs: BigInt(value.birthtimeMs) * 1_000_000n, nlink: BigInt(value.nlink),
-    size: BigInt(value.bytes?.length ?? 0),
+    size: BigInt(value.bytes?.length ?? 0), mtimeNs: value.mtimeNs ?? 1n, ctimeNs: value.ctimeNs ?? 1n,
     isDirectory: () => value.type === 'directory', isFile: () => value.type === 'file',
     isSymbolicLink: () => value.symbolic === true,
   });
   const fsImpl = {
     realpathSync: { native(file) { const value = node(file); return value.target ?? file; } },
-    lstatSync(file) { return stat(node(file)); },
+    lstatSync(file, options) {
+      if (options?.throwIfNoEntry === false && !nodes.has(file)) return undefined;
+      return stat(node(file));
+    },
+    mkdirSync(file) {
+      if (nodes.has(file) || node(path.dirname(file)).type !== 'directory') throw new Error('controlled nonexclusive directory');
+      nodes.set(file, directory());
+    },
+    unlinkSync(file) { events.push({ kind: 'unlink', file }); nodes.delete(file); },
     mkdtempSync(prefix) {
       const file = `${prefix}${String(++suffix).padStart(6, '0')}`;
       if (nodes.has(file)) throw new Error('controlled exclusive collision');
@@ -531,7 +539,8 @@ function stateFilesystem() {
     ftruncateSync(handle, length) { handles.get(handle).value.bytes = handles.get(handle).value.bytes.subarray(0, length); },
     fsyncSync() {}, closeSync(handle) { handles.delete(handle); },
   };
-  return { tempDir, fsImpl, nodes, events, controls, directory };
+  const file = bytes => ({ ...directory(), type: 'file', bytes: Buffer.from(bytes) });
+  return { tempDir, fsImpl, nodes, events, controls, directory, file };
 }
 
 function stateOptions(fixture, overrides = {}) {
@@ -649,6 +658,55 @@ for (const change of ['linked-root', 'replaced-root', 'linked-marker', 'hardlink
   fixture.controls.failRetirement = false;
   check('retirement_failure_stays_latched_without_retry', rejectsState(() => owner.retire())
     && fixture.events.filter(event => event.kind === 'retire-marker').length === attempts);
+}
+
+for (const fault of [null, 'active', 'root', 'marker', 'data', 'cache', 'junction', 'link', 'hardlink', 'replaced-file', 'same-size-edit', 'temp']) {
+  const fixture = stateFilesystem();
+  const owner = api.createE2eRunStateOwner(stateOptions(fixture));
+  const clean = owner.prepareReferenceCache();
+  const data = path.join(owner.stateDir, 'data');
+  const dir = path.join(data, 'reference-manifest');
+  const index = path.join(dir, 'index.db');
+  const wal = path.join(dir, 'index.db-wal');
+  const evidence = path.join(dir, 'diagnostics.json');
+  const outside = path.join(fixture.tempDir, 'outside');
+  fixture.nodes.set(index, fixture.file('1234'));
+  fixture.nodes.set(wal, fixture.file('567'));
+  fixture.nodes.set(evidence, fixture.file('details'));
+  fixture.nodes.set(outside, fixture.file('adjacent'));
+  if (fault !== 'active') owner.retire();
+  if (fault === 'temp') fixture.nodes.set(fixture.tempDir, fixture.directory());
+  if (fault === 'root') fixture.nodes.set(owner.stateDir, fixture.directory());
+  if (fault === 'marker') fixture.nodes.set(path.join(owner.stateDir, '.e2e-run-owner.json'), fixture.file('{}'));
+  if (fault === 'data') fixture.nodes.set(data, fixture.directory());
+  if (fault === 'cache') fixture.nodes.set(dir, fixture.directory());
+  if (fault === 'junction') fixture.nodes.get(dir).symbolic = true;
+  if (fault === 'link') fixture.nodes.get(wal).symbolic = true;
+  if (fault === 'hardlink') fixture.nodes.get(wal).nlink = 2;
+  if (fault === 'replaced-file' || fault === 'same-size-edit') {
+    const lstat = fixture.fsImpl.lstatSync;
+    let indexReads = 0;
+    fixture.fsImpl.lstatSync = (file, options) => {
+      if (file === index && ++indexReads === 2) {
+        if (fault === 'replaced-file') fixture.nodes.set(index, fixture.file('1234'));
+        else {
+          const entry = fixture.nodes.get(index);
+          entry.bytes = Buffer.from('4321');
+          entry.mtimeNs = 2n;
+        }
+      }
+      return lstat(file, options);
+    };
+  }
+  if (fault) {
+    check(`reference_cache_refuses_${fault}`, rejectsState(clean) && fixture.nodes.has(index) && fixture.nodes.has(wal)
+      && !fixture.events.some(event => event.kind === 'unlink'));
+  } else {
+    const result = clean();
+    check('retired_reference_cache_removes_only_known_files_with_exact_bytes', result.files === 2 && result.bytes === 7n
+      && !fixture.nodes.has(index) && !fixture.nodes.has(wal) && fixture.nodes.has(owner.stateDir)
+      && fixture.nodes.has(evidence) && fixture.nodes.has(outside) && clean().files === 0);
+  }
 }
 
 const passed = checks.filter(item => item.pass).length;

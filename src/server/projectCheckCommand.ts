@@ -90,6 +90,7 @@ function bindProjectChecks(input: ProjectCheckBindingInput, checkId?: string) {
       ...(setup.maxParallelChecks === undefined ? {} : { maxParallelChecks: setup.maxParallelChecks }),
       coveredFiles,
       ...(check.coversChecks === undefined ? {} : { coveredChecks: Object.freeze([...check.coversChecks]) }),
+      ...(check.coversFacts === undefined ? {} : { coveredFacts: Object.freeze([...check.coversFacts]) }),
       command,
     });
     const bindingHash = createHash('sha256').update(canonicalJson(binding)).digest('hex');

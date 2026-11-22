@@ -21,3 +21,23 @@ Status PARTIAL overall. The exact Dev backend behavior is VERIFIED. Rendered and
 ## AAR
 
 The default sandbox refused loopback with 10013 before launch. The host rerun started one owned backend and verified cleanup. Using normal Prepare and Verify on two distinct copies was necessary to separate a product defect from arbitrary report tampering. The highest-risk remaining gap is delivery. The previous frozen tree still accepts the old confirmation, so it cannot be promoted as the final #92 correction.
+
+## Exact packaged backend verification — 2026-11-22
+
+**VERIFIED** in the shipped 0.0.89 and private 0.0.90 backend. The exact VSIX SHA-256 values are `6695c5b59b1d87844c7638e26cdc8e0847520bf0523ccdf4082d6e51e15e5fae` and `3d10bd51d7d7de35704dd28c0cf37eb89db915e2fca1e182ff53c8a2ae563e14`. Both passed the same 43 checks. Their owned Jobs completed in 2.235 and 2.141 seconds and retired both listeners and G: scratch trees.
+
+The Filesystem import still prepared and verified locally, then refused both adoption requests. An eligible-looking legacy report also refused. A same-ID staged change, confirmation without a binding, replacement with a second physical source having identical bytes, and a fresh Verify each refused before a source or report write. A fresh confirmation wrote the exact verified manifest to the selected authoring copy and required re-import. The other authoring copy, staged artifact, and scratch installed extension retained exact bytes.
+
+Private evidence key `packaged_steam_adoption_92_backend_close` in the existing G: evidence ledger. The local replay simulated the Workshop-managed ID in staging. Prepare produced no upload command, and the test used no Workshop executable. Installed Release Center rendering remains **PARTIAL**. Current E2E coverage for the review sequence is in [release-center.spec.ts](../../tests/e2e/release-center.spec.ts). No capability-map delta.
+
+**AAR.** Comparing two authorized authoring folders with identical manifest bytes proves why the physical source and verified report belong in the preview binding. The unresolved experience proof is whether Release Center presents the correct action or recovery instruction for each source role and stale review.
+
+## Exact packaged Release Center render — 2026-11-22
+
+**VERIFIED** for the #92 rendered acceptance. Exact 0.0.90 archive `3d10bd51d7d7de35704dd28c0cf37eb89db915e2fca1e182ff53c8a2ae563e14` ran through Playtest and Release Center using the actual archived browser bundle and private backend. All 10 checks passed in a 4.953-second owned Job. Both browser contexts and the private listener, scratch, and temporary launcher retired. The served scripts and stylesheet matched the archive bytes.
+
+Filesystem Prepare and Verify worked with a simulated Workshop ID and exposed neither adoption action nor any unverified source write. The authoring preview showed the exact physical destination and before/after XML. Re-verifying rotated the private report without changing the staged bytes. Confirming the old preview returned 409, removed Confirm, retained Preview and left every tracked byte intact. A fresh preview and confirmation sent the reviewed hashes, wrote only the selected authoring manifest, and displayed the re-import step.
+
+Evidence key `release_090_rendered_steam_adoption_92_close` in the existing G: ledger. One inspected screenshot `release-center-adoption-review.png` shows the stale confirmation feedback. Full 0.0.90 release qualification and the Antigravity shell retain their own gates. The independent early Verify issue [#132](https://github.com/KennyG1990/X4_Forge/issues/132) captures the missing retry and narrow failure-code readability. No capability-map delta.
+
+**AAR.** Separate browser contexts verified that Playtest hydrated the intended project in each role. The earlier shared context retained the wrong project and the test refused to claim success. A short temporary launcher avoided the Windows command length limit and retired alongside the test. The narrow result still needs a wrapped status code under #132.

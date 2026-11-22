@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceFingerprint": "48ea647717c4498bb385e81d11341ffa4f43ca87291c380447b21a8e724d0159",
+  "sourceFingerprint": "3bce801c67c0d541c945a9b31e6dc2e89ce3b96f16fd72a291801edaa3967a26",
   "policy": "Every raw production filesystem mutation source is count-pinned here. Authoritative files use atomic sibling promotion; stronger tree, archive, append-log, SQLite, retention, ephemeral, and fixture contracts remain explicit exceptions.",
   "writers": [
     {
@@ -13,7 +13,7 @@
     },
     {
       "file": "src/lib/actionReceipt.selftest.ts",
-      "calls": { "writeFileSync": 7, "renameSync": 1, "mkdirSync": 2, "rmSync": 3, "mkdtempSync": 2, "symlinkSync": 2 },
+      "calls": { "writeFileSync": 8, "renameSync": 1, "mkdirSync": 2, "rmSync": 3, "mkdtempSync": 2, "symlinkSync": 2 },
       "categories": ["fixture-only"],
       "owners": ["runActionReceiptSelftest"],
       "rationale": "Creates canonical, corrupt, tampered, unavailable-root, and junction-escape fixtures only beneath unique temporary roots; extra mkdir/symlink calls construct isolated physical-ancestor realpath-EPERM and link-refusal fixtures beneath unique temporary roots. Recovery-reference clock-phase and canonical legacy-read fixtures add an owned child, a target sentinel and a legacy record; the rename stays within that child's recovery root.",
@@ -21,15 +21,15 @@
     },
     {
       "file": "src/lib/actionReceiptStore.ts",
-      "calls": { "writeFileSync": 1, "renameSync": 1, "mkdirSync": 1, "rmSync": 1 },
+      "calls": { "writeFileSync": 1, "renameSync": 1, "mkdirSync": 1, "rmSync": 1, "linkSync": 1 },
       "categories": ["authoritative-atomic"],
       "owners": ["ActionReceiptStore.ensureRoot", "ActionReceiptStore.atomicWrite"],
       "rationale": "Stores canonical receipt bytes through a sibling temporary file, fsync, and atomic rename under the relocatable receipt root.",
-      "failureContract": "Root, ID, symlink/junction, corrupt-byte, and write failures fail closed; a pre-promotion failure leaves the prior receipt bytes untouched and cleans the temporary file."
+      "failureContract": "Root, ID, symlink/junction, corrupt-byte, and write failures fail closed. Receipt promotion leaves prior bytes untouched on pre-promotion failure and cleans the temporary file. Verified report blobs reuse the guarded writer with exclusive publication and exact bounded readback."
     },
     {
       "file": "src/lib/agentHistory.selftest.ts",
-      "calls": { "appendFileSync": 1, "rmSync": 1, "mkdtempSync": 1 },
+      "calls": { "appendFileSync": 1, "rmSync": 1, "mkdtempSync": 1, "writeFileSync": 3, "mkdirSync": 1 },
       "categories": ["fixture-only"],
       "owners": ["runAgentHistorySelftest"],
       "rationale": "Creates a torn JSONL tail only inside a unique temporary fixture.",
@@ -142,11 +142,11 @@
     },
     {
       "file": "src/lib/referenceOverlay.ts",
-      "calls": {"writeFileSync": 1, "mkdirSync": 2, "rmSync": 2, "unlinkSync": 1, "mkdtempSync": 1},
+      "calls": {"writeFileSync": 2, "mkdirSync": 2, "renameSync": 1, "rmSync": 2, "unlinkSync": 1, "mkdtempSync": 1},
       "categories": ["fixture-only"],
       "owners": ["runReferenceOverlaySelftest"],
-      "rationale": "Builds a disposable base/DLC overlay fixture and removes one DLC to prove refresh.",
-      "failureContract": "Production overlay resolution is read-only; the temp root is always cleaned."
+      "rationale": "Builds disposable overlay fixtures. Exercises DLC removal and a same-size manifest replacement with its modification time preserved.",
+      "failureContract": "Production overlay resolution is read-only. This fixture writes and renames only within its unique temporary root and removes the root after verification."
     },
     {
       "file": "src/lib/runtimeDebugSession.selftest.ts",

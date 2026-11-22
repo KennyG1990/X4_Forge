@@ -171,6 +171,29 @@ check('explicit subject cannot be overridden by unrelated payload evidence', () 
   const result = contracts.projectApiEnvelope('/api/agent/diagnostics', { sourceHash: 'wrong', modId: 'wrong', evidence: { sourceHash: 'wrong', hashScope: 'wrong' } }, api.workspaceApiSubject(workspace, { head }));
   assert.equal(result.sourceHash, head); assert.equal(result.modId, 'c06_test'); assert.equal(result.sourceHashScope, 'workspace-head');
 });
+for (const route of ['/api/agent/deploy', '/api/agent/deploy-verify']) {
+  check(`${route} keeps the validated artifact subject with or without the workspace`, () => {
+    const validation = { evidence: { modId: 'artifact_mod', sourceHash: sha256, hashScope: 'project-validation-inputs-v1' } };
+    const preview = api.projectApiEnvelope(route, { stage: 'preview', validation });
+    const full = api.projectApiEnvelope(route, { stage: 'done', validation, workspace });
+    const compact = api.projectApiEnvelope(route, { stage: 'done', validation });
+    for (const report of [preview, full, compact]) {
+      assert.equal(report.modId, 'artifact_mod');
+      assert.equal(report.sourceHash, sha256);
+      assert.equal(report.sourceHashScope, 'project-validation-inputs-v1');
+      assert.equal(report.validation, validation);
+    }
+    assert.equal(full.workspace, workspace);
+    assert.equal(compact.workspace, undefined);
+  });
+  check(`${route} falls back to the workspace when validation evidence is absent`, () => {
+    const subject = api.workspaceApiSubject(workspace);
+    const result = api.projectApiEnvelope(route, { ok: false, workspace });
+    assert.equal(result.modId, subject.modId);
+    assert.equal(result.sourceHash, subject.sourceHash);
+    assert.equal(result.sourceHashScope, subject.sourceHashScope);
+  });
+}
 check('legacy release metadata never invents source from zip hash', () => assert.equal(api.releaseReportApiSubject({ modId: 'c06_test', sha256 }).sourceHash, null));
 check('recorded release evidence is explicitly labelled', () => {
   const source = { modId: 'c06_test', sourceHash: sha256, sourceHashScope: 'project-validation-inputs-v1' };

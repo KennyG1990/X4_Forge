@@ -11,12 +11,15 @@ import DiagnosticGuidance from './DiagnosticGuidance';
 import { resolveCueToNodeId } from '../lib/liveLogNav';
 import { openInNativeEditor } from '../lib/nativeEditor';
 import type { ValidationDeltaResult } from '../lib/validationDelta';
+import type { WorkspaceValidationInputs } from '../lib/workspaceValidationInputs';
 
 interface PackageModDoctorProps {
   workspace: ModWorkspace;
   diagnostics: PackageDiagnostic[];
   diagnosticSource: 'checking' | 'project' | 'local';
   validationDelta?: ValidationDeltaResult | null;
+  validationInputs?: WorkspaceValidationInputs;
+  aiEnabled?: boolean;
   /** H7: which diagnostics scope to render. 'package' = this mod's build/critic/
    *  selftests; 'install' = the cross-mod Install Diagnostics (Extension Doctor);
    *  'all' (default) = both, for standalone use. */
@@ -119,7 +122,9 @@ export default function PackageModDoctor({
   workspace,
   diagnostics,
   diagnosticSource,
+  validationInputs,
   validationDelta,
+  aiEnabled = false,
   focus = 'all',
   onSuppressionCommitted,
 }: PackageModDoctorProps) {
@@ -128,6 +133,11 @@ export default function PackageModDoctor({
   const errors = diagnostics.filter(d => d.severity === 'error');
   const warnings = diagnostics.filter(d => d.severity === 'warning');
   const checking = diagnosticSource === 'checking';
+  const inputs = diagnosticSource === 'project' ? validationInputs : undefined;
+  let validationLabel = 'FULL PROJECT';
+  if (checking) validationLabel = 'CHECKING...';
+  else if (diagnosticSource === 'local') validationLabel = 'LOCAL ENGINE';
+  else if (inputs) validationLabel = inputs.diskFiles > 0 ? 'WORKSPACE + DISK' : 'WORKSPACE SNAPSHOT';
   const firstGraphError = useMemo(() => {
     if (checking) return;
     for (const finding of diagnostics) {
@@ -382,10 +392,35 @@ export default function PackageModDoctor({
             <Terminal className="w-4 h-4 text-cyan-400 animate-pulse" />
             FULL-PROJECT VALIDATION
           </div>
-          <span className="text-[9px] font-bold text-slate-400 bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/20">
-            {diagnosticSource === 'checking' ? 'CHECKING...' : diagnosticSource === 'project' ? 'FULL PROJECT · LIVE' : 'LOCAL ENGINE'}
+          <span data-testid="validation-inputs-label" className="text-[9px] font-bold text-slate-400 bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/20">
+            {validationLabel}
           </span>
         </div>
+        {inputs?.diskSource === 'unavailable' && (
+          <p className="text-[10px] text-amber-300">The linked disk folder was unavailable for this check.</p>
+        )}
+        {inputs && (inputs.differentDiskFileCount > 0 || inputs.resultId) && (
+          <details className="text-[10px] text-amber-200">
+            <summary className="cursor-pointer">
+              {inputs.differentDiskFileCount > 0
+                ? `${inputs.overrideFiles ? 'Workspace or override content' : 'Workspace content'} checked in ${inputs.differentDiskFileCount} ${inputs.differentDiskFileCount === 1 ? 'file that differs' : 'files that differ'} on disk`
+                : 'Validation result ID'}
+            </summary>
+            {inputs.differentDiskFileCount > 0 && (
+              <ul className="mt-1 list-disc space-y-0.5 pl-4 text-slate-300">
+                {inputs.differentDiskPaths.map(file => <li key={file} className="break-all">{file}</li>)}
+                {inputs.differentDiskFileCount > inputs.differentDiskPaths.length && (
+                  <li>{inputs.differentDiskFileCount - inputs.differentDiskPaths.length} more</li>
+                )}
+              </ul>
+            )}
+            {inputs.resultId && (
+              <p className="mt-1 text-slate-300">
+                Result ID <code data-testid="validation-result-id" className="select-all break-all">{inputs.resultId}</code>
+              </p>
+            )}
+          </details>
+        )}
 
         <div className="grid grid-cols-2 gap-2 text-[10px] font-bold">
           <button
@@ -446,7 +481,33 @@ export default function PackageModDoctor({
             Find diagnostics
           </button>
         )}
-        {diagnostics.length > 0 && (
+
+      </div>
+
+      <details data-testid="diagnostic-tools" className="shrink-0 rounded-lg border border-white/10 bg-[#12141a]/90">
+        <summary
+          aria-label="Diagnostic tools"
+          className="cursor-pointer rounded-lg px-3 py-2 text-[11px] font-semibold text-slate-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+        >
+          Diagnostic tools
+          <span
+            role="status"
+            data-testid="diagnostic-tools-status"
+            className={stResults && !stAllPass ? 'mt-1 block text-[9.5px] font-normal text-red-300' : 'mt-1 block text-[9.5px] font-normal text-slate-400'}
+          >
+            Local critic: {critic.findings.length} {critic.findings.length === 1 ? 'finding' : 'findings'}
+            {' · '}
+            {stRunning
+              ? 'Selftests running ' + (stProgress || '…')
+              : stResults
+                ? 'Selftests: ' + stResults.filter(result => result.pass).length + '/' + stResults.length + ' passed'
+                : 'Selftests: not run'}
+            {aiEnabled && diagnostics.length > 0 ? ' · AI help available' : ''}
+          </span>
+        </summary>
+        <div className="space-y-3 p-2">
+
+        {aiEnabled && diagnostics.length > 0 && (
           <button
             onClick={sendDiagnosticsToAI}
             className="w-full flex items-center justify-center gap-2 text-xs font-semibold text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 px-3 py-2 rounded-md border border-cyan-500/30 cursor-pointer uppercase transition-all"
@@ -456,8 +517,6 @@ export default function PackageModDoctor({
             Ask AI Assistant For Fixes
           </button>
         )}
-      </div>
-
       {/* DETERMINISTIC CRITIC (Phase 3) — rule-based, no AI. Every finding is justified
           from the graph + semantics registry; equivalent refs are never flagged. */}
       <div className="bg-[#12141a]/90 border border-white/5 rounded-lg p-3 space-y-2 shrink-0">
@@ -520,6 +579,9 @@ export default function PackageModDoctor({
           </div>
         )}
       </div>
+
+        </div>
+      </details>
 
       </>)}
 
@@ -865,7 +927,7 @@ export default function PackageModDoctor({
                       <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-500" />
                       <div className="min-w-0 space-y-1">
                         <span className="font-mono font-bold tracking-tight text-white uppercase block text-[8px] leading-none mb-1">
-                          [{diag.severity}] {diag.domain ? `${diag.domain.toUpperCase()} / ` : ''}{diag.code || diag.category.toUpperCase()}
+                          [{diag.coverageGap ? 'Coverage gap' : diag.severity}] {diag.domain ? `${diag.domain.toUpperCase()} / ` : ''}{diag.code || diag.category.toUpperCase()}
                           {diag.line !== undefined && ` · line ${diag.line}`}
                           {diag.line !== undefined && diag.column !== undefined && `:${diag.column}`}
                         </span>

@@ -740,6 +740,65 @@ export function createE2eRunStateOwner({
   let retirementFailure;
   return {
     stateDir, runId, environment: Object.freeze(environment),
+    prepareReferenceCache() {
+      readStateRecord(descriptor, fsImpl);
+      // Playwright sets X4_DATA_DIR to this run's data directory. The reference
+      // manifest stores only rebuildable SQLite index data in its own subdirectory.
+      const dataDir = path.join(stateDir, 'data');
+      const cacheDir = path.join(dataDir, 'reference-manifest');
+      const dataFolders = [dataDir, cacheDir].map(folder => {
+        fsImpl.mkdirSync(folder);
+        return { folder, identity: stateIdentity(fsImpl.lstatSync(folder, { bigint: true })) };
+      });
+
+      function verifyDirectories() {
+        const marker = readStateRecord(descriptor, fsImpl, 'retired');
+        if (marker.ownerPid !== ownerPid || !sameStateIdentity(fsImpl.lstatSync(physicalTemp, { bigint: true }), stateIdentity(parent))) {
+          throw stateFailure('run-state-reference-cache-owner-changed');
+        }
+        for (const { folder, identity } of dataFolders) {
+          const stat = fsImpl.lstatSync(folder, { bigint: true });
+          if (!stat.isDirectory() || stat.isSymbolicLink() || !sameStateIdentity(stat, identity)
+            || !sameStatePath(fsImpl.realpathSync.native(folder), folder)) {
+            throw stateFailure('run-state-reference-cache-directory-changed');
+          }
+        }
+      }
+
+      function readCacheFile(file) {
+        const stat = fsImpl.lstatSync(file, { bigint: true, throwIfNoEntry: false });
+        if (stat && (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1n
+          || !sameStatePath(fsImpl.realpathSync.native(file), file))) {
+          throw stateFailure('run-state-reference-cache-file-unsafe');
+        }
+        return stat;
+      }
+
+      // The runner calls this only after verified results and process shutdown.
+      // Keep the metadata directory, the owner marker, and all diagnostic state.
+      return () => {
+        if (!retired) throw stateFailure('run-state-reference-cache-active');
+        verifyDirectories();
+        const entries = [];
+        for (const name of ['index.db', 'index.db-wal', 'index.db-shm', 'index.db-journal']) {
+          const file = path.join(cacheDir, name);
+          const stat = readCacheFile(file);
+          if (stat) entries.push({ file, stat });
+        }
+        let bytes = 0n;
+        for (const { file, stat } of entries) {
+          verifyDirectories();
+          const current = readCacheFile(file);
+          if (!current || !sameStateIdentity(current, stateIdentity(stat))
+            || current.size !== stat.size || current.mtimeNs !== stat.mtimeNs || current.ctimeNs !== stat.ctimeNs) {
+            throw stateFailure('run-state-reference-cache-file-changed');
+          }
+          fsImpl.unlinkSync(file);
+          bytes += stat.size;
+        }
+        return { files: entries.length, bytes };
+      };
+    },
     retire() {
       if (retirementFailure) throw retirementFailure;
       if (retired) return;

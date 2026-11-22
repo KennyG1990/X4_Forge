@@ -24,6 +24,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
+import { once } from 'node:events';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -287,10 +288,60 @@ function workspaceStateFingerprint(response) {
   });
 }
 
-function killTree(pid) {
-  if (!pid) return;
-  if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
-  else { try { process.kill(-pid, 'SIGKILL'); } catch { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } } }
+const routeOwners = new Set();
+
+function requireVacantRoutePort(port) {
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535 || [3000, 3001].includes(port)) {
+    throw new Error('Invalid private route test port.');
+  }
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.unref();
+    probe.once('error', reject);
+    probe.listen(port, '127.0.0.1', () => probe.close(error => error ? reject(error) : resolve()));
+  });
+}
+
+function launchRouteServer(port, args, options) {
+  const processHandle = spawn(process.execPath, args, options);
+  const owner = { processHandle, port, output: '', bound: false, error: false };
+  routeOwners.add(owner);
+  const bindMessage = 'X4 Forge Dev Server running on http://127.0.0.1:' + port + '\n';
+  let stdoutTail = '';
+  processHandle.stdout.setEncoding('utf8');
+  processHandle.stdout.on('data', text => {
+    stdoutTail = (stdoutTail + text).replace(/\r\n/g, '\n').slice(-8192);
+    if (stdoutTail.includes(bindMessage)) owner.bound = true;
+    owner.output += text;
+  });
+  processHandle.stderr.setEncoding('utf8');
+  processHandle.stderr.on('data', text => { owner.output += text; });
+  processHandle.on('error', () => { owner.error = true; });
+  return owner;
+}
+
+function hasExited(handle) {
+  return handle.exitCode !== null || handle.signalCode !== null;
+}
+
+async function awaitOwnedRouteListener(owner, timeoutMs) {
+  const deadline = performance.now() + timeoutMs;
+  while (!owner.bound && !owner.error && !hasExited(owner.processHandle) && performance.now() < deadline) {
+    await sleep(25);
+  }
+  return owner.bound && !owner.error && !hasExited(owner.processHandle);
+}
+
+async function retireOwnedRouteServer(owner) {
+  if (!routeOwners.has(owner)) return;
+  const { processHandle, port } = owner;
+  if (processHandle.pid && !hasExited(processHandle)) {
+    const exited = once(processHandle, 'exit', { signal: AbortSignal.timeout(5000) });
+    processHandle.kill();
+    await exited;
+  }
+  await requireVacantRoutePort(port);
+  routeOwners.delete(owner);
 }
 
 /* global Buffer, URLSearchParams, console, fetch, process, setTimeout */
@@ -349,14 +400,15 @@ function regularTreeHash(root) {
 
 let child;
 async function main() {
+  await requireVacantRoutePort(PORT);
   // Production assertions must always use bytes emitted by this invocation.
   // Keep the build synchronous so no route server can start before it passes.
   runRequiredBuild();
 
-  const tsxCli = path.join(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs');
   const duplicateHook = path.join(process.cwd(), 'tests', 'fixtures', 'deploy-late-duplicate.cjs');
   const lateDuplicateTrigger = path.join(tmp, 'late-duplicate.trigger');
-  child = spawn(process.execPath, [tsxCli, 'server.ts'], {
+  await requireVacantRoutePort(PORT);
+  child = launchRouteServer(PORT, ['--import', 'tsx', 'server.ts'], {
     cwd: process.cwd(),
     shell: false,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -364,6 +416,7 @@ async function main() {
       ...process.env,
       PORT: String(PORT),
       NODE_ENV: 'development',
+      DISABLE_HMR: 'true',
       NODE_OPTIONS: [process.env.NODE_OPTIONS, '--require', JSON.stringify(duplicateHook)].filter(Boolean).join(' '),
       FORGE_ALLOW_RUN_COMMAND: 'true',
       STUDIO_API_TOKEN: SESSION_TOKEN,
@@ -387,18 +440,10 @@ async function main() {
       FORGE_ROUTE_TEST_RESPONSE_TIMEOUT_MS: '100',
     },
   });
-  let serverOut = '';
-  child.stdout.on('data', (d) => { serverOut += d; });
-  child.stderr.on('data', (d) => { serverOut += d; });
-
-  // readiness: poll a public route until it answers
-  let up = false;
-  for (let i = 0; i < 40; i++) {
-    await sleep(500);
-    const r = await req('GET', '/api/agent/schema', null);
-    if (r.status && r.status !== 0) { up = true; break; }
+  if (!await awaitOwnedRouteListener(child, 20_000)) {
+    ok('server_came_up', false, child.output.slice(-400));
+    return;
   }
-  if (!up) { ok('server_came_up', false, serverOut.slice(-400)); return; }
   ok('server_came_up', true);
 
   // --- auth basics ---
@@ -679,13 +724,30 @@ async function main() {
   const firstAfterIsolation = await req('GET', '/api/agent/workspace', SESSION_TOKEN);
   const secondAfterIsolation = await req('GET', '/api/agent/workspace', SESSION_TOKEN, undefined, { workspaceId: SECOND_WORKSPACE_ID, clientId: SECOND_CLIENT_ID });
   ok('workspace_reads_do_not_cross', firstAfterIsolation.json?.workspace?.description === 'first tab isolated' && secondAfterIsolation.json?.workspace?.description === 'second tab isolated');
-  const firstCompile = await req('POST', '/api/agent/compile', SESSION_TOKEN, {});
+  const firstCompile = await req('POST', '/api/agent/compile', SESSION_TOKEN, {}, {
+    headers: { 'x-forge-retain-validation': '1' },
+  });
+  const firstCompileResult = await req('GET',
+    '/api/agent/compile/result/' + encodeURIComponent(firstCompile.json?.validationResult?.id || 'missing'), SESSION_TOKEN);
   const secondCompile = await req('POST', '/api/agent/compile', SESSION_TOKEN, {}, { workspaceId: SECOND_WORKSPACE_ID, clientId: SECOND_CLIENT_ID });
   ok('workspace_compile_echoes_independent_authority', firstCompile.json?.workspaceId === WORKSPACE_ID && secondCompile.json?.workspaceId === SECOND_WORKSPACE_ID);
   ok('stateful_route_missing_identity_fails_named', (await req('GET', '/api/agent/workspace', SESSION_TOKEN, undefined, { workspaceId: '' })).json?.code === 'WORKSPACE_ID_REQUIRED');
   ok('stateful_route_unknown_identity_fails_named', (await req('GET', '/api/agent/workspace', SESSION_TOKEN, undefined, { workspaceId: 'ws_ffffffffffffffffffffffff' })).json?.code === 'WORKSPACE_NOT_FOUND');
   ok('legacy_unbound_key_denied_workspace_state', (await req('GET', '/api/agent/workspace', LEGACY_UNBOUND_KEY, undefined, { workspaceId: WORKSPACE_ID })).json?.code === 'WORKSPACE_BINDING_REQUIRED');
   const agentSchema = await req('GET', '/api/agent/schema', null);
+  const deployStatusEntries = agentSchema.json?.endpoints?.filter(endpoint =>
+    endpoint.path === '/api/agent/status' && endpoint.method === 'GET') ?? [];
+  const deployStatus = deployStatusEntries[0];
+  ok('deploy_status_modes_are_discoverable', agentSchema.status === 200 && deployStatusEntries.length === 1
+    && deployStatus.auth === true
+    && new RegExp(deployStatus.query?.deployOperationId?.pattern ?? '^$').test('forge_op_0123456789abcdef')
+    && JSON.stringify(deployStatus.query?.inspectDeployTarget?.enum) === '["1","managed"]'
+    && deployStatus.query.inspectDeployTarget.requires === 'deployOperationId'
+    && deployStatus.query.inspectDeployTarget.responseFields?.['1'] === 'targetObservation'
+    && deployStatus.query.inspectDeployTarget.responseFields?.managed === 'managedObservation'
+    && JSON.stringify(deployStatus.query?.inspectDeployEffect?.enum) === '["1"]'
+    && deployStatus.query.inspectDeployEffect.requires === 'deployOperationId'
+    && deployStatus.query.inspectDeployEffect.responseField === 'effectReport');
   for (const deployPath of ['/api/agent/deploy', '/api/agent/deploy-verify']) {
     const descriptor = agentSchema.json?.endpoints?.find(endpoint => endpoint.path === deployPath && endpoint.method === 'POST');
     ok(`deploy_identity_contract_discoverable_${deployPath.split('/').pop()}`, descriptor
@@ -698,6 +760,7 @@ async function main() {
   const capabilityResponses = new Map([
     ['workspace.read', workspaceSuccess],
     ['workspace.compile', firstCompile],
+    ['workspace.compile.result', firstCompileResult],
   ]);
   const assertCapabilityOutput = (id, response, negativeCaseName) => {
     const descriptor = capabilityContract?.capabilities?.find(capability => capability?.id === id);
@@ -726,8 +789,8 @@ async function main() {
   // Independent semantic inventory: unexpected additions/removals must fail.
   const expectedCapabilityIds = ['expression.check', 'expression.inspect', 'extensions.conflicts.analyze', 'history.list', 'history.revert',
     'patch.readiness.analyze', 'performance.collect', 'performance.native.collect', 'performance.native.read', 'performance.native.stop',
-    'performance.profile', 'performance.read', 'project.validate', 'project.xml.references', 'readiness.read',
-    'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'workspace.compile', 'workspace.generate.preview', 'workspace.read'];
+    'performance.profile', 'performance.read', 'project.ai.navigation', 'project.md.navigation', 'project.validate', 'project.xml.references', 'readiness.read',
+    'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'workspace.compile', 'workspace.compile.result', 'workspace.generate.preview', 'workspace.read'];
   const sameCapabilityIds = (actual, expected) => Array.isArray(actual)
     && JSON.stringify([...actual].sort()) === JSON.stringify([...expected].sort());
   const expectedCapabilityIdentity = id => `${id}@${['patch.readiness.analyze', 'workspace.compile', 'workspace.read'].includes(id) ? 2 : 1}`;
@@ -1367,9 +1430,9 @@ async function main() {
       'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'workspace.read']],
     ['write', writeEffective, 'write', ['expression.check', 'expression.inspect', 'extensions.conflicts.analyze', 'history.list', 'project.validate',
       'performance.collect', 'performance.profile', 'performance.read', 'project.xml.references',
-      'readiness.read', 'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'workspace.compile', 'workspace.read']],
+      'readiness.read', 'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'workspace.compile', 'workspace.compile.result', 'workspace.read']],
     ['deploy', deployEffective, 'deploy', expectedCapabilityIds.filter(id => ![
-      'performance.native.collect', 'performance.native.read', 'performance.native.stop',
+      'performance.native.collect', 'performance.native.read', 'performance.native.stop', 'project.ai.navigation', 'project.md.navigation',
     ].includes(id))],
   ]) {
     ok(`${name}_key_effective_capabilities_are_exact_and_hashed`, response.status === 200 &&
@@ -1717,6 +1780,161 @@ async function main() {
       previewPresent: xmlReferences.json?.preview !== undefined,
       edges: xmlReferences.json?.edges?.map(edge => ({ kind: edge.kind, symbol: edge.symbol,
         status: edge.status, sourceId: edge.sourceId, targetIds: edge.targetIds })) }));
+  const mdNavRoute = '/api/agent/project/md-navigation';
+  const mdCallerPath = 'md/Caller.bits.xml';
+  const mdTargetPath = 'md/Provider-file.xml';
+  const mdCaller = '<mdscript name="Caller"><cues><cue name="Run"><actions><signal_cue cue="md.Provider.Acquire"/></actions></cue></cues></mdscript>';
+  const mdTarget = '<mdscript name="Provider"><cues><cue name="Acquire"/><cue name="Unused"/></cues></mdscript>';
+  const mdNavigation = { project: { id: analysisWorkspaceBefore.json?.modId, name: 'Authored MD navigation', files: [
+    { path: mdCallerPath, content: mdCaller }, { path: 'md\\Provider-file.xml', content: mdTarget }, { path: 't/0001.xml' },
+  ] }, path: mdCallerPath, offset: mdCaller.indexOf('Acquire'), mode: 'definition' };
+  const mdNavigationMint = await mkKey('read', {
+    authorityMode: 'exact', capabilityIdentities: ['project.md.navigation@1'], allowedEffects: ['read', 'analyze'],
+  });
+  const unrelatedAnalysisMint = await mkKey('read', {
+    authorityMode: 'exact', capabilityIdentities: ['project.xml.references@1'], allowedEffects: ['read', 'analyze'],
+  });
+  const mdNavigationKeyBefore = fs.readFileSync(agentKeysFile);
+  const mdEffective = await req('GET', '/api/agent/capabilities/effective', mdNavigationMint.token);
+  ok('md_navigation_effective_discovery_requires_the_exact_grant',
+    mdEffective.status === 200 && effectiveIds(mdEffective)?.includes('project.md.navigation')
+    && !effectiveIds(readEffective)?.includes('project.md.navigation')
+    && !effectiveIds(deployEffective)?.includes('project.md.navigation') && effectiveHashIsValid(mdEffective));
+  const mdNavigationResult = await req('POST', mdNavRoute, mdNavigationMint.token, mdNavigation, { operationId: null });
+  capabilityResponses.set('project.md.navigation', mdNavigationResult);
+  const mdNavHash = crypto.createHash('sha256').update(JSON.stringify([
+    mdNavigation.project.id, mdNavigation.project.files.map(file => [file.path, file.content ?? null]),
+  ])).digest('hex');
+  const mdLocation = (file, text, word) => ({
+    file, start: { line: 0, column: text.indexOf(word) }, end: { line: 0, column: text.indexOf(word) + word.length },
+  });
+  const mdDefinition = mdLocation(mdTargetPath, mdTarget, 'Acquire');
+  const mdUse = mdLocation(mdCallerPath, mdCaller, 'Acquire');
+  ok('md_navigation_uses_declared_script_and_exact_snapshot_hash', mdNavigationResult.status === 200
+    && mdNavigationResult.json?.schemaVersion === 'forge.md-navigation.v1'
+    && mdNavigationResult.json?.scope === 'authored-md-snapshot' && mdNavigationResult.json?.status === 'resolved'
+    && mdNavigationResult.json?.workspaceId === WORKSPACE_ID && mdNavigationResult.json?.inputHash === mdNavHash
+    && stableStringify(mdNavigationResult.json?.locations) === stableStringify([mdDefinition]), JSON.stringify(mdNavigationResult.json));
+  const mdReferenceRequest = { ...mdNavigation, path: mdTargetPath, offset: mdTarget.indexOf('Acquire'),
+    mode: 'references', includeDeclaration: true };
+  const mdReferences = await req('POST', mdNavRoute, mdNavigationMint.token, mdReferenceRequest);
+  const mdUnused = await req('POST', mdNavRoute, mdNavigationMint.token,
+    { ...mdReferenceRequest, offset: mdTarget.indexOf('Unused'), includeDeclaration: false });
+  const mdMissing = await req('POST', mdNavRoute, mdNavigationMint.token, { ...mdNavigation,
+    project: { ...mdNavigation.project, files: [...mdNavigation.project.files, { path: 'md/Omitted.xml' }] },
+  });
+  ok('md_navigation_distinguishes_references_unused_declaration_and_absent_source',
+    mdReferences.status === 200 && mdReferences.json?.status === 'resolved'
+    && stableStringify(mdReferences.json?.locations) === stableStringify([mdUse, mdDefinition])
+    && mdUnused.status === 200 && mdUnused.json?.status === 'resolved' && stableStringify(mdUnused.json?.locations) === '[]'
+    && mdMissing.status === 200 && mdMissing.json?.status === 'unavailable' && mdMissing.json?.reason === 'source'
+    && !mdMissing.json?.locations, JSON.stringify({ references: mdReferences.json, unused: mdUnused.json, missing: mdMissing.json }));
+  const mdNavigationLegacy = await req('POST', mdNavRoute, readKey, mdNavigation, { operationId: null });
+  const mdNavigationWrongGrant = await req('POST', mdNavRoute, unrelatedAnalysisMint.token, mdNavigation, { operationId: null });
+  const mdNavigationGrantCannotReadGraph = await req('POST', '/api/agent/project/xml-references', mdNavigationMint.token, xmlReferenceBody);
+  const mdNavigationDeniedAnonymous = await req('POST', mdNavRoute, null, mdNavigation, { operationId: null });
+  const mdNavigationMissingWorkspace = await req('POST', mdNavRoute, mdNavigationMint.token, mdNavigation, { workspaceId: '' });
+  const mdNavigationWrongWorkspace = await req('POST', mdNavRoute, mdNavigationMint.token, mdNavigation, { workspaceId: SECOND_WORKSPACE_ID });
+  const mdNavigationWrongMod = await req('POST', mdNavRoute, mdNavigationMint.token,
+    { ...mdNavigation, project: { ...mdNavigation.project, id: 'foreign_route_mod' } });
+  ok('md_navigation_requires_its_own_grant_and_workspace',
+    [mdNavigationLegacy, mdNavigationWrongGrant, mdNavigationGrantCannotReadGraph].every(response =>
+      response.status === 403 && response.json?.authorityCode === 'CAPABILITY_NOT_GRANTED' && !response.json?.locations)
+    && mdNavigationDeniedAnonymous.status === 401 && !mdNavigationDeniedAnonymous.json?.locations
+    && mdNavigationMissingWorkspace.status === 400 && mdNavigationMissingWorkspace.json?.code === 'WORKSPACE_ID_REQUIRED'
+    && mdNavigationWrongWorkspace.status === 403 && mdNavigationWrongWorkspace.json?.code === 'WORKSPACE_BINDING_MISMATCH'
+    && !mdNavigationWrongWorkspace.json?.locations
+    && mdNavigationWrongMod.status === 409 && mdNavigationWrongMod.json?.code === 'MD_NAVIGATION_WORKSPACE_MISMATCH'
+    && !mdNavigationWrongMod.json?.locations);
+  const mdOtherShape = await req('POST', mdNavRoute, mdNavigationMint.token, { ...mdNavigation, workspace: {} });
+  const mdExcessFiles = await req('POST', mdNavRoute, mdNavigationMint.token, { ...mdNavigation,
+    project: { ...mdNavigation.project, files: Array.from({ length: 513 }, (_, i) => ({ path: 't/snapshot-' + i + '.xml' })) },
+  });
+  const mdUnsafePath = await req('POST', mdNavRoute, mdNavigationMint.token, { ...mdNavigation,
+    project: { ...mdNavigation.project, files: [...mdNavigation.project.files, { path: '../outside.xml' }] },
+  });
+  const mdInvalidOffset = await req('POST', mdNavRoute, mdNavigationMint.token, { ...mdNavigation, offset: -1 });
+  ok('md_navigation_rejects_invalid_or_oversized_snapshots_without_using_key',
+    [mdOtherShape, mdExcessFiles, mdUnsafePath, mdInvalidOffset].every(response => response.status === 400 && !response.json?.locations)
+    && fs.readFileSync(agentKeysFile).equals(mdNavigationKeyBefore),
+    JSON.stringify([mdOtherShape, mdExcessFiles, mdUnsafePath, mdInvalidOffset].map(response => [response.status, response.json?.code])));
+  const aiNavRoute = '/api/agent/project/ai-navigation';
+  const aiCallerPath = 'aiscripts/Route.NavCaller.xml';
+  const aiTargetPath = 'aiscripts/Route.NavTarget.xml';
+  const aiTargetName = 'Route.NavTarget';
+  const aiCaller = '<aiscript name="Route.NavCaller"><attention min="unknown"><actions><!-- \u{1f680} --><run_script name="&apos;Route.NavTarget&apos;"/></actions></attention></aiscript>';
+  const aiTarget = '<aiscript name="Route.NavTarget"><attention min="unknown"><actions/></attention></aiscript>';
+  const aiNavigation = { project: { id: analysisWorkspaceBefore.json?.modId, name: 'Authored AI navigation', files: [
+    { path: aiCallerPath, content: aiCaller }, { path: 'aiscripts\\Route.NavTarget.xml', content: aiTarget }, { path: 't/0001.xml' },
+  ] }, path: aiCallerPath, offset: aiCaller.indexOf(aiTargetName), mode: 'definition' };
+  const aiNavigationMint = await mkKey('read', {
+    authorityMode: 'exact', capabilityIdentities: ['project.ai.navigation@1'], allowedEffects: ['read', 'analyze'],
+  });
+  const aiNavigationKeyBefore = fs.readFileSync(agentKeysFile);
+  const aiEffective = await req('GET', '/api/agent/capabilities/effective', aiNavigationMint.token);
+  ok('ai_navigation_effective_discovery_requires_the_exact_grant',
+    aiEffective.status === 200 && effectiveIds(aiEffective)?.includes('project.ai.navigation')
+    && !effectiveIds(aiEffective)?.includes('project.md.navigation') && !effectiveIds(mdEffective)?.includes('project.ai.navigation')
+    && !effectiveIds(readEffective)?.includes('project.ai.navigation')
+    && !effectiveIds(deployEffective)?.includes('project.ai.navigation') && effectiveHashIsValid(aiEffective));
+  const aiNavRequest = (body, options = {}) => req('POST', aiNavRoute, aiNavigationMint.token, body, { operationId: null, ...options });
+  const aiNavigationResult = await aiNavRequest(aiNavigation);
+  capabilityResponses.set('project.ai.navigation', aiNavigationResult);
+  const aiNavHash = crypto.createHash('sha256').update(JSON.stringify([
+    aiNavigation.project.id, aiNavigation.project.files.map(file => [file.path, file.content ?? null]),
+  ])).digest('hex');
+  const aiLocation = (file, text) => ({
+    file, start: { line: 0, column: text.indexOf(aiTargetName) },
+    end: { line: 0, column: text.indexOf(aiTargetName) + aiTargetName.length },
+  });
+  const aiDefinition = aiLocation(aiTargetPath, aiTarget);
+  const aiUse = aiLocation(aiCallerPath, aiCaller);
+  ok('ai_navigation_resolves_exact_authored_definition_and_snapshot_scope',
+    aiNavigationResult.status === 200 && aiNavigationResult.json?.schemaVersion === 'forge.ai-navigation.v1'
+    && aiNavigationResult.json?.scope === 'authored-ai-snapshot' && aiNavigationResult.json?.status === 'resolved'
+    && aiNavigationResult.json?.workspaceId === WORKSPACE_ID && aiNavigationResult.json?.modId === aiNavigation.project.id
+    && aiNavigationResult.json?.inputHash === aiNavHash && aiNavigationResult.json?.sourceHash === aiNavHash
+    && aiNavigationResult.json?.sourceHashScope === 'authored-ai-snapshot'
+    && stableStringify(aiNavigationResult.json?.locations) === stableStringify([aiDefinition]), JSON.stringify(aiNavigationResult.json));
+  const aiReferenceRequest = { ...aiNavigation, path: aiTargetPath, offset: aiTarget.indexOf(aiTargetName), mode: 'references' };
+  const aiReferences = await aiNavRequest({ ...aiReferenceRequest, includeDeclaration: true });
+  const aiUses = await aiNavRequest({ ...aiReferenceRequest, includeDeclaration: false });
+  const aiDynamicCaller = aiCaller.replace('&apos;Route.NavTarget&apos;', '$script');
+  const aiDynamic = await aiNavRequest({ ...aiNavigation, offset: aiDynamicCaller.indexOf('$script'),
+    project: { ...aiNavigation.project, files: [
+      { path: aiCallerPath, content: aiDynamicCaller }, ...aiNavigation.project.files.slice(1),
+    ] },
+  });
+  const aiMalformedSource = await aiNavRequest({ ...aiNavigation, project: { ...aiNavigation.project,
+    files: [...aiNavigation.project.files, { path: 'aiscripts/Route.Malformed.xml', content: '<aiscript name="Route.Malformed">' }],
+  } });
+  ok('ai_navigation_distinguishes_exact_references_dynamic_calls_and_malformed_source',
+    aiReferences.status === 200 && aiReferences.json?.status === 'resolved'
+    && stableStringify(aiReferences.json?.locations) === stableStringify([aiUse, aiDefinition])
+    && aiUses.status === 200 && aiUses.json?.status === 'resolved'
+    && stableStringify(aiUses.json?.locations) === stableStringify([aiUse])
+    && aiDynamic.status === 200 && aiDynamic.json?.status === 'not-a-literal' && !aiDynamic.json?.locations
+    && aiMalformedSource.status === 200 && aiMalformedSource.json?.status === 'unavailable'
+    && aiMalformedSource.json?.reason === 'source' && !aiMalformedSource.json?.locations,
+    JSON.stringify({ references: aiReferences.json, uses: aiUses.json, dynamic: aiDynamic.json, malformed: aiMalformedSource.json }));
+  const aiNavigationLegacy = await req('POST', aiNavRoute, readKey, aiNavigation, { operationId: null });
+  const aiNavigationMdGrant = await req('POST', aiNavRoute, mdNavigationMint.token, aiNavigation, { operationId: null });
+  const mdNavigationAiGrant = await req('POST', mdNavRoute, aiNavigationMint.token, mdNavigation, { operationId: null });
+  const aiNavigationMissingWorkspace = await aiNavRequest(aiNavigation, { workspaceId: '' });
+  const aiNavigationWrongWorkspace = await aiNavRequest(aiNavigation, { workspaceId: SECOND_WORKSPACE_ID });
+  const aiNavigationWrongMod = await aiNavRequest({ ...aiNavigation, project: { ...aiNavigation.project, id: 'foreign_route_mod' } });
+  ok('ai_navigation_requires_its_own_grant_and_workspace',
+    [aiNavigationLegacy, aiNavigationMdGrant, mdNavigationAiGrant].every(response =>
+      response.status === 403 && response.json?.authorityCode === 'CAPABILITY_NOT_GRANTED' && !response.json?.locations)
+    && aiNavigationMissingWorkspace.status === 400 && aiNavigationMissingWorkspace.json?.code === 'WORKSPACE_ID_REQUIRED'
+    && aiNavigationWrongWorkspace.status === 403 && aiNavigationWrongWorkspace.json?.code === 'WORKSPACE_BINDING_MISMATCH'
+    && !aiNavigationWrongWorkspace.json?.locations
+    && aiNavigationWrongMod.status === 409 && aiNavigationWrongMod.json?.code === 'AI_NAVIGATION_WORKSPACE_MISMATCH'
+    && !aiNavigationWrongMod.json?.locations);
+  const aiInvalidRequest = await aiNavRequest({ ...aiNavigation, offset: -1 });
+  ok('ai_navigation_rejects_malformed_requests_and_keeps_key_bytes_unchanged',
+    aiInvalidRequest.status === 400 && aiInvalidRequest.json?.code === 'PROJECT_INPUT_INVALID' && !aiInvalidRequest.json?.locations
+    && fs.readFileSync(agentKeysFile).equals(aiNavigationKeyBefore), JSON.stringify(aiInvalidRequest.json));
   const analysisWorkspaceAfter = await req('GET', '/api/agent/workspace', SESSION_TOKEN);
   ok('analysis_successes_preserve_workspace_receipts_and_source_trees',
     analysisWorkspaceAfter.status === 200
@@ -1983,8 +2201,8 @@ async function main() {
     callerKeyDispatches.length === 1 && callerKeyDispatches[0]?.credentialSource === 'caller',
     JSON.stringify({ response: callerKeyProvider.json, before: callerKeyUsageBefore.json, after: callerKeyUsageAfter.json, dispatches: callerKeyDispatches }));
   ok('caller_provider_key_is_not_logged_or_written_to_evidence',
-    !callerKeyMarkerText.includes(CALLER_PROVIDER_KEY) && !serverOut.includes(CALLER_PROVIDER_KEY),
-    JSON.stringify({ markerContainsKey: callerKeyMarkerText.includes(CALLER_PROVIDER_KEY), serverOutputContainsKey: serverOut.includes(CALLER_PROVIDER_KEY) }));
+    !callerKeyMarkerText.includes(CALLER_PROVIDER_KEY) && !child.output.includes(CALLER_PROVIDER_KEY),
+    JSON.stringify({ markerContainsKey: callerKeyMarkerText.includes(CALLER_PROVIDER_KEY), serverOutputContainsKey: child.output.includes(CALLER_PROVIDER_KEY) }));
 
   const unknownAgentRoute = await req('GET', '/api/agent/unreviewed-future-route', deployKey);
   ok('unknown_route_never_inherits_deploy_authority',
@@ -4095,8 +4313,17 @@ async function main() {
   // #4 autoReimport actually unblocks the deploy the guard refused.
   const deployIdentity = preview => ({ expectedModId: preview.modId, expectedSourceHash: preview.sourceHash,
     expectedArtifactHash: preview.artifactHash, expectedBindingHash: preview.bindingHash });
+  const deployValidationIdentityMatches = (preview, applied) => {
+    const scope = 'project-validation-inputs-v1';
+    const hash = preview?.sourceHash;
+    return typeof hash === 'string' && /^[a-f0-9]{64}$/.test(hash)
+      && [preview, applied].every(row => row?.sourceHashScope === scope && row.sourceHash === hash
+        && row.validation?.evidence?.hashScope === scope && row.validation.evidence.sourceHash === hash);
+  };
   const autoDeploy = await req('POST', '/api/agent/deploy-verify', SESSION_TOKEN, { workspace: staleImport.json?.workspace, autoReimport: true, ...deployIdentity(dry.json) });
   ok('auto_reimport_unblocks_the_deploy', autoDeploy.status === 200 && autoDeploy.json?.ok === true, `status=${autoDeploy.status} stage=${autoDeploy.json?.stage}`);
+  ok('default_deploy_preserves_validation_source_identity', Array.isArray(autoDeploy.json?.workspace?.nodes)
+    && deployValidationIdentityMatches(dry.json, autoDeploy.json));
   ok('auto_reimport_deploy_writes_and_returns_staging_path', autoDeploy.json?.stagingPath === dryStagingTarget && fs.existsSync(dryStagingTarget),
     `expected=${dryStagingTarget} actual=${autoDeploy.json?.stagingPath}`);
   ok('verified_deploy_returns_ready_recovery', autoDeploy.json?.recovery?.kind === 'deploy' && /^[a-f0-9]{64}$/.test(String(autoDeploy.json?.recovery?.expectedCurrentHash || '')), JSON.stringify(autoDeploy.json?.recovery || {}));
@@ -4135,6 +4362,26 @@ async function main() {
 
   // A known duplicate refuses before writes. A later duplicate still triggers rollback.
   const duplicateBody = { workspace: staleImport.json?.workspace, autoReimport: true };
+  const blockedDlcInventory = path.join(referenceRoot, 'extensions');
+  const corpusRefusalRoots = [dryTarget, dryStagingTarget, path.join(dataDir, 'action-receipts')];
+  const beforeCorpusRefusal = corpusRefusalRoots.map(regularTreeHash);
+  fs.writeFileSync(blockedDlcInventory, 'This fixture path is a file, not a DLC directory.', { flag: 'wx' });
+  try {
+    for (const alias of ['/api/agent/deploy', '/api/agent/deploy-verify']) {
+      const denied = await req('POST', alias, SESSION_TOKEN, { ...duplicateBody, dryRun: true });
+      const blocked = denied.json;
+      ok(`native_${alias.split('/').pop()}_unavailable_dlc_inventory_is_preflight_refusal`,
+        denied.status === 503 && blocked?.ok === false && blocked?.stage === 'preflight'
+        && blocked?.code === 'DEPLOY_CORPUS_UNAVAILABLE' && blocked?.corpus?.resource === 'dlc-inventory'
+        && blocked?.validation?.outcome === 'incomplete-checks' && blocked?.validation?.clean === false
+        && blocked?.deployment?.writeAttempted === false && blocked?.bindingHash === undefined
+        && blocked?.checklist?.some(row => row.id === 'reference-corpus' && row.status === 'fail')
+        && JSON.stringify(corpusRefusalRoots.map(regularTreeHash)) === JSON.stringify(beforeCorpusRefusal),
+        `status=${denied.status} code=${blocked?.code}`);
+    }
+  } finally {
+    fs.unlinkSync(blockedDlcInventory);
+  }
   const beforeDuplicate = await req('POST', '/api/agent/deploy-verify', SESSION_TOKEN, { ...duplicateBody, dryRun: true });
   const duplicateApply = { ...duplicateBody, ...deployIdentity(beforeDuplicate.json),
     expectedTargetFingerprint: beforeDuplicate.json?.targetFingerprint };
@@ -4199,6 +4446,128 @@ async function main() {
   if (fs.existsSync(lateManifest)) {
     fs.unlinkSync(lateManifest);
     fs.rmdirSync(lateDir);
+  }
+
+  const beforeWrongFaultWorkspace = regularTreeHash(dryTarget);
+  const wrongFaultWorkspace = await req('POST', '/api/agent/deploy-verify', deployKey,
+    { ...duplicateBody, dryRun: true });
+  ok('lost_reply_fixture_refuses_the_wrong_workspace_before_writes', wrongFaultWorkspace.status === 409
+    && wrongFaultWorkspace.json?.code === 'DEPLOY_WORKSPACE_MOD_MISMATCH'
+    && wrongFaultWorkspace.json?.deployment?.writeAttempted === false
+    && regularTreeHash(dryTarget) === beforeWrongFaultWorkspace);
+  const faultClientId = 'client_route_fault_' + process.pid;
+  const faultCreated = await req('POST', '/api/agent/workspaces', SESSION_TOKEN, {
+    clientId: faultClientId, workspace: staleImport.json?.workspace,
+  }, { clientId: faultClientId });
+  const faultWorkspaceId = String(faultCreated.json?.workspaceId || '');
+  if (faultCreated.status !== 201 || !/^ws_[a-f0-9]{24}$/i.test(faultWorkspaceId) || faultWorkspaceId === WORKSPACE_ID) {
+    throw new Error('Could not create the isolated lost-reply fixture workspace: ' + faultCreated.status);
+  }
+  const faultAddress = { workspaceId: faultWorkspaceId, clientId: faultClientId };
+  const faultMint = await req('POST', '/api/agent/keys', SESSION_TOKEN, {
+    label: 'route-int-fault-deploy', scope: 'deploy', ttl: '1h',
+  }, faultAddress);
+  const faultDeployKey = faultMint.json?.token || faultMint.json?.key;
+  if (!faultDeployKey || faultMint.json?.record?.workspaceId !== faultWorkspaceId) {
+    throw new Error('Could not mint the workspace-bound lost-reply fixture key: ' + faultMint.status);
+  }
+  const faultRequest = (method, url, body, options) => req(method, url, faultDeployKey, body, { ...options, ...faultAddress });
+  const faultPreview = async () => {
+    const preview = await faultRequest('POST', '/api/agent/deploy-verify', { ...duplicateBody, dryRun: true });
+    const info = preview.json || {};
+    const hashes = [info.sourceHash, info.artifactHash, info.bindingHash, info.targetFingerprint];
+    if (preview.status !== 200 || info.ok !== true || info.workspaceId !== faultWorkspaceId
+        || info.modId !== 'stale_probe_mod' || info.workspaceModId !== info.modId
+        || !hashes.every(hash => typeof hash === 'string' && /^[a-f0-9]{64}$/.test(hash))) {
+      throw new Error('The isolated lost-reply preview did not bind the expected fixture: ' + preview.status + ' ' + (info.code || ''));
+    }
+    return preview;
+  };
+
+  // An addressed rollback must retain its evidence when the terminal write and first reply both fail.
+  const operationId = 'forge_op_' + crypto.randomBytes(16).toString('hex');
+  const guardedPreview = await faultPreview();
+  const guardedApply = { ...duplicateBody, ...deployIdentity(guardedPreview.json || {}),
+    expectedTargetFingerprint: guardedPreview.json?.targetFingerprint, dryRun: false };
+  const sourceBeforeRollbackFault = regularTreeHash(staleMod);
+  const replyFaultMarker = lateDuplicateTrigger + '.reply-fault';
+  fs.writeFileSync(lateDuplicateTrigger, operationId);
+  try {
+    const refused = await faultRequest('POST', '/api/agent/deploy', guardedApply, { operationId });
+    const observed = fs.existsSync(replyFaultMarker) ? JSON.parse(fs.readFileSync(replyFaultMarker, 'utf8')) : null;
+    const lookup = '/api/agent/status?deployOperationId=' + operationId;
+    const status = await faultRequest('GET', lookup);
+    const receipt = status.json?.receipt;
+    const recoveryPath = observed && path.join(dataDir, 'recoveries', observed.recoveryId, 'record.json');
+    const recovery = recoveryPath && fs.existsSync(recoveryPath) ? JSON.parse(fs.readFileSync(recoveryPath, 'utf8')) : null;
+    const rollbackStayedExact = () => regularTreeHash(dryTarget) === targetBeforeFailedDeploy
+      && regularTreeHash(staleMod) === sourceBeforeRollbackFault;
+    ok('late_doctor_rollback_reply_retains_exact_restore_and_diagnostics', observed && refused.status === 507
+      && refused.json?.code === 'DEPLOY_ROLLBACK_RECEIPT_UNCONFIRMED'
+      && refused.json?.doctor?.blocking?.some(finding => finding.code === 'ext.duplicate_id')
+      && refused.json?.rollback?.applied === true && refused.json?.deployment?.fidelityScope === 'none'
+      && !refused.json?.recovery && rollbackStayedExact(), JSON.stringify({ status: refused.status, code: refused.json?.code }));
+    ok('late_doctor_rollback_reply_preserves_prepared_hash_and_recovery', observed && status.status === 200
+      && status.json?.outcome === 'unknown' && receipt?.status === 'prepared' && receipt.id === observed.id
+      && receipt.hash === observed.hash && recovery?.status === 'preparing'
+      && recovery.writeAdmission?.phase === 'started-v1' && recovery.stagedEvidence?.preparedReceiptHash === observed.hash
+      && !recovery.postcheckEvidence && !status.json?.postchecks);
+    if (fs.existsSync(lateManifest)) {
+      fs.unlinkSync(lateManifest);
+      fs.rmdirSync(lateDir);
+    }
+    const receiptRoot = path.join(dataDir, 'action-receipts');
+    const recoveryRoot = path.join(dataDir, 'recoveries');
+    const receiptBeforeReplay = regularTreeHash(receiptRoot);
+    const recoveryBeforeReplay = regularTreeHash(recoveryRoot);
+    const replay = await faultRequest('POST', '/api/agent/deploy', guardedApply, { operationId });
+    ok('late_doctor_rollback_same_attempt_refuses_a_second_write', replay.status === 409
+      && replay.json?.code === 'DEPLOY_OPERATION_ALREADY_RECORDED'
+      && replay.json?.deployment?.writeAttempted === false && rollbackStayedExact()
+      && regularTreeHash(receiptRoot) === receiptBeforeReplay && regularTreeHash(recoveryRoot) === recoveryBeforeReplay);
+  } finally {
+    if (fs.existsSync(lateDuplicateTrigger)) fs.unlinkSync(lateDuplicateTrigger);
+    if (fs.existsSync(replyFaultMarker)) fs.unlinkSync(replyFaultMarker);
+    if (fs.existsSync(lateManifest)) {
+      fs.unlinkSync(lateManifest);
+      fs.rmdirSync(lateDir);
+    }
+  }
+
+  // Receipt recovery survives a lost reply after verified output was restored.
+  const finalizeOperationId = 'forge_op_' + crypto.randomBytes(16).toString('hex');
+  const finalizePreview = await faultPreview();
+  const finalizeApply = { ...duplicateBody, ...deployIdentity(finalizePreview.json || {}),
+    expectedTargetFingerprint: finalizePreview.json?.targetFingerprint, dryRun: false };
+  fs.writeFileSync(lateDuplicateTrigger, 'finalize:' + finalizeOperationId);
+  try {
+    const ending = await faultRequest('POST', '/api/agent/deploy-verify', finalizeApply, { operationId: finalizeOperationId });
+    const marker = fs.existsSync(replyFaultMarker) ? JSON.parse(fs.readFileSync(replyFaultMarker, 'utf8')) : null;
+    const status = await faultRequest('GET', '/api/agent/status?deployOperationId=' + finalizeOperationId);
+    const receipt = status.json?.receipt;
+    const recoveryRoot = path.join(dataDir, 'recoveries');
+    const file = marker && path.join(recoveryRoot, marker.recoveryId, 'record.json');
+    const recovery = file && fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : null;
+    const exact = () => regularTreeHash(dryTarget) === targetBeforeFailedDeploy
+      && regularTreeHash(staleMod) === sourceBeforeRollbackFault;
+    ok('verified_deploy_lost_reply_restores_the_exact_target', marker?.headersSent === true
+      && marker.commitRefused === true && ending.status === 0 && exact()
+      && !fs.existsSync(lateDuplicateTrigger) && !fs.existsSync(lateManifest));
+    ok('verified_deploy_lost_reply_preserves_ready_recovery', marker && status.status === 200
+      && status.json?.outcome === 'unknown' && receipt?.status === 'prepared'
+      && receipt.id === marker.id && receipt.hash === marker.hash && recovery?.status === 'ready'
+      && recovery.stagedEvidence?.preparedReceiptHash === marker.hash
+      && typeof recovery.postcheckEvidence?.hash === 'string');
+    const owners = [recoveryRoot, path.join(dataDir, 'action-receipts')];
+    const beforeReplay = owners.map(regularTreeHash);
+    const replay = await faultRequest('POST', '/api/agent/deploy', finalizeApply, { operationId: finalizeOperationId });
+    ok('verified_deploy_lost_reply_duplicate_is_nonmutating', replay.status === 409
+      && replay.json?.code === 'DEPLOY_OPERATION_ALREADY_RECORDED'
+      && replay.json?.deployment?.writeAttempted === false && exact()
+      && owners.every((root, index) => regularTreeHash(root) === beforeReplay[index]));
+  } finally {
+    if (fs.existsSync(lateDuplicateTrigger)) fs.unlinkSync(lateDuplicateTrigger);
+    if (fs.existsSync(replyFaultMarker)) fs.unlinkSync(replyFaultMarker);
   }
 
   const undoDeploy = await req('POST', `/api/agent/history/${deployRow?.id}/revert`, SESSION_TOKEN, {});
@@ -4656,6 +5025,8 @@ async function main() {
   const hostileDeployPreview = await req('POST', '/api/agent/deploy-verify', SESSION_TOKEN, { workspace: hostileImport.json?.workspace, deployFormat: 'catalog', dryRun: true });
   const hostileDeploy = await req('POST', '/api/agent/deploy', SESSION_TOKEN, { workspace: hostileImport.json?.workspace, deployFormat: 'catalog', ...deployIdentity(hostileDeployPreview.json) });
   ok('hostile_mod_deployed_as_verified_catalog_artifact', hostileDeploy.status === 200 && hostileDeploy.json?.success === true && hostileDeploy.json?.artifact?.verified === true && hostileDeploy.json?.artifact?.mode === 'catalog', `status=${hostileDeploy.status} artifact=${JSON.stringify(hostileDeploy.json?.artifact || {})}`);
+  ok('catalog_deploy_preserves_validation_source_identity', Array.isArray(hostileDeploy.json?.workspace?.nodes)
+    && deployValidationIdentityMatches(hostileDeployPreview.json, hostileDeploy.json));
   const hostileLooseStage = path.join(safeWorkspace, '.forge-builds', 'loose', hostileName);
   ok('deploy_stages_outside_source_checkout', hostileDeploy.json?.lastDeploy?.stagingPath === hostileLooseStage && fs.existsSync(path.join(hostileLooseStage, 'assets', 'large.weird')));
   ok('build_and_deploy_leave_source_checkout_byte_identical', [...sourceSentinels].every(([rel, expected]) => {
@@ -4940,7 +5311,11 @@ async function main() {
       'md/fixture.xml': '<?xml version="1.0"?><mdscript name="fixture"><cues><cue name="Root"><actions><set_value name="$x" exact="$faction.noexist"/></actions></cue></cues></mdscript>',
     },
   });
-  ok('compile_runs_full_project_validator', liveCompile.status === 200 && liveCompile.json?.validation?.scope === 'full-project', `status=${liveCompile.status} scope=${liveCompile.json?.validation?.scope}`);
+  ok('compile_runs_full_project_validator', liveCompile.status === 200
+    && liveCompile.json?.validation?.scope === 'full-project'
+    && liveCompile.json.validation.inputs?.sourceHashScope === 'project-validation-inputs-v1'
+    && /^[a-f0-9]{64}$/.test(liveCompile.json.validation.inputs?.sourceHash || '')
+    && liveCompile.json.validation.inputs?.overrideFiles === 1, `status=${liveCompile.status} scope=${liveCompile.json?.validation?.scope}`);
   ok('compile_live_buffer_reports_unknown_scriptproperty', liveCompile.json?.diagnostics?.some((d) => d.code === 'scriptproperty.unknown' && d.filePath === 'md/fixture.xml'), JSON.stringify(liveCompile.json?.diagnostics || []));
   ok('compile_never_reports_false_clean_when_schema_unavailable', liveCompile.json?.diagnostics?.some((d) => d.code === 'validation.md_schema_unavailable' && d.severity === 'warning'));
   const nestedCompileWorkspace = { id: 'fixture', name: 'fixture', nodes: [], links: [], uiWidgets: [] };
@@ -5122,7 +5497,7 @@ async function main() {
     const defaultClosedToken = `${SESSION_TOKEN}-default-closed`;
     const defaultClosedEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
       !['NODE_ENV', 'FORGE_ALLOW_RUN_COMMAND'].includes(key.toUpperCase())));
-    const defaultClosedChild = spawn(process.execPath, [distServer], {
+    const defaultClosedChild = launchRouteServer(defaultClosedPort, [distServer], {
       cwd: process.cwd(), shell: false, stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...defaultClosedEnv, PORT: String(defaultClosedPort), API_ONLY: 'true', STUDIO_API_TOKEN: defaultClosedToken,
              X4_STATE_DIR: path.join(tmp, 'state-default-closed'), X4_DATA_DIR: path.join(tmp, 'data-default-closed'),
@@ -5131,11 +5506,7 @@ async function main() {
              X4FORGE_DISCOVERY_DIR: path.join(tmp, 'discovery-default-closed') },
     });
     try {
-      let defaultClosedUp = false;
-      for (let i = 0; i < 60; i++) {
-        await sleep(500);
-        try { const r = await fetch(`http://127.0.0.1:${defaultClosedPort}/api/agent/schema`); if (r.status) { defaultClosedUp = true; break; } } catch { /* not yet */ }
-      }
+      const defaultClosedUp = await awaitOwnedRouteListener(defaultClosedChild, 30_000);
       let defaultClosedEvidence = null;
       if (defaultClosedUp) {
         const base = `http://127.0.0.1:${defaultClosedPort}`;
@@ -5151,12 +5522,12 @@ async function main() {
         defaultClosedUp && defaultClosedEvidence?.every(item => item.status === 404 && item.body?.code === 'UNKNOWN_ENDPOINT'),
         JSON.stringify({ serverUp: defaultClosedUp, responses: defaultClosedEvidence }));
     } finally {
-      killTree(defaultClosedChild.pid);
+      await retireOwnedRouteServer(defaultClosedChild);
     }
 
-    const prodPort = PORT + 3;
+    const prodPort = await findFreePort();
     const prodToken = SESSION_TOKEN + '-prod';
-    const prodChild = spawn(process.execPath, [distServer], {
+    const prodChild = launchRouteServer(prodPort, [distServer], {
       cwd: process.cwd(), shell: false, stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, PORT: String(prodPort), NODE_ENV: 'production', FORGE_ALLOW_RUN_COMMAND: '', STUDIO_API_TOKEN: prodToken,
              X4_STATE_DIR: stateDir, X4_DATA_DIR: dataDir, X4_CONFIG_DIR: configDir, X4_REFERENCE_ROOT: referenceRoot,
@@ -5164,11 +5535,7 @@ async function main() {
              X4FORGE_DISCOVERY_DIR: path.join(tmp, 'discovery-prod') },
     });
     try {
-      let prodUp = false;
-      for (let i = 0; i < 60; i++) {
-        await sleep(500);
-        try { const r = await fetch(`http://127.0.0.1:${prodPort}/api/agent/schema`); if (r.status) { prodUp = true; break; } } catch { /* not yet */ }
-      }
+      const prodUp = await awaitOwnedRouteListener(prodChild, 30_000);
       ok('production_bundle_came_up', prodUp);
       if (prodUp) {
         const base = `http://127.0.0.1:${prodPort}`;
@@ -5191,11 +5558,11 @@ async function main() {
         ok('prod_app_shell_still_loads', shell.status === 200 && shellBody.includes('<!doctype'), `status=${shell.status}`);
       }
     } finally {
-      killTree(prodChild.pid);
+      await retireOwnedRouteServer(prodChild);
     }
     const optInPort = await findFreePort();
     const optInToken = `${prodToken}-opt-in`;
-    const optInChild = spawn(process.execPath, [distServer], {
+    const optInChild = launchRouteServer(optInPort, [distServer], {
       cwd: process.cwd(), shell: false, stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env, PORT: String(optInPort), NODE_ENV: 'production', FORGE_ALLOW_RUN_COMMAND: 'true', STUDIO_API_TOKEN: optInToken,
              X4_STATE_DIR: path.join(tmp, 'state-prod-opt-in'), X4_DATA_DIR: path.join(tmp, 'data-prod-opt-in'),
@@ -5204,11 +5571,7 @@ async function main() {
              X4FORGE_DISCOVERY_DIR: path.join(tmp, 'discovery-prod-opt-in') },
     });
     try {
-      let optInUp = false;
-      for (let i = 0; i < 60; i++) {
-        await sleep(500);
-        try { const r = await fetch(`http://127.0.0.1:${optInPort}/api/agent/schema`); if (r.status) { optInUp = true; break; } } catch { /* not yet */ }
-      }
+      const optInUp = await awaitOwnedRouteListener(optInChild, 30_000);
       const optInResponse = optInUp
         ? await fetch(`http://127.0.0.1:${optInPort}/api/run_command/job`, {
           method: 'POST', headers: { Authorization: `Bearer ${optInToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({}),
@@ -5217,7 +5580,7 @@ async function main() {
       ok('prod_run_command_routes_register_only_with_explicit_opt_in', optInResponse?.status === 400,
         JSON.stringify({ serverUp: optInUp, status: optInResponse?.status }));
     } finally {
-      killTree(optInChild.pid);
+      await retireOwnedRouteServer(optInChild);
     }
   }
 }
@@ -5227,14 +5590,13 @@ try {
 } catch (e) {
   ok('harness_ran_without_throwing', false, String(e));
 } finally {
-  killTree(child && child.pid);
-  // best-effort: also clear the port in case the tree kill missed a grandchild
-  if (process.platform === 'win32') {
-    const ns = spawnSync('netstat', ['-ano'], { encoding: 'utf8' });
-    const line = (ns.stdout || '').split(/\r?\n/).find((l) => l.includes(`:${PORT}`) && /LISTENING/i.test(l));
-    if (line) { const pid = line.trim().split(/\s+/).pop(); spawnSync('taskkill', ['/PID', pid, '/F'], { stdio: 'ignore' }); }
+  const retired = await Promise.allSettled([...routeOwners].map(retireOwnedRouteServer));
+  if (retired.some(result => result.status === 'rejected')) {
+    ok('owned_route_server_cleanup', false, 'Owned process exit or port retirement could not be verified.');
   }
-  try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+  if (routeOwners.size === 0) {
+    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
 }
 
 const passed = checks.filter((c) => c.pass).length;

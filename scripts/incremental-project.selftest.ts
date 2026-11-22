@@ -6,6 +6,7 @@ import { runProjectValidation, clearProjectValidationCache, getProjectValidation
 import { getReferenceCorpus, clearReferenceCorpusCache } from '../src/lib/referenceCorpus';
 import { clearReferenceLanguageCaches } from '../src/lib/referenceLanguage';
 import { createBoundedAnalysisCache } from '../src/lib/x4UiAnalysisCache';
+import { resolveEffectiveReferenceDocument } from '../src/lib/referenceOverlay';
 import type { ExtensionProject } from '../src/lib/extensionProject';
 
 const root = process.env.X4_REFERENCE_ROOT!;
@@ -181,8 +182,15 @@ try {
     const initial = parity(p);
     assert.ok(initial.diffSimulation.files[0].postApplyFindings.some(finding => finding.message.includes('forge_unknown')));
     assert.equal(stats().misses, 2);
+    const coldDiff = getProjectValidationCacheStats().effectiveDiff;
+    assert.equal(coldDiff.misses, 1);
     assert.deepEqual(parity(structuredClone(p)), initial);
-    assert.equal(stats().hits, 2);
+    assert.equal(getProjectValidationCacheStats().effectiveDiff.hits, coldDiff.hits + 1);
+    assert.equal(stats().hits, 0, 'An exact diff hit skips both effective-schema lookups');
+    patch.content = patch.content.replace('<diff>', '<diff><!-- same composed output -->');
+    assert.deepEqual(parity(p).diffSimulation, initial.diffSimulation);
+    assert.equal(getProjectValidationCacheStats().effectiveDiff.misses, coldDiff.misses + 1);
+    assert.equal(stats().hits, 2, 'Changed authored input with identical output reuses both schema results');
 
     patch.content = patch.content.replace('forge_unknown', 'forge_other');
     const edited = parity(p);
@@ -226,10 +234,218 @@ try {
     const cold = parity(p);
     assert.ok(cold.diffSimulation.files[0].postApplyFindings.some(finding =>
       finding.domain === 'ai_scripts' && finding.message.includes('forge_unknown_ai')));
+    const coldDiff = getProjectValidationCacheStats().effectiveDiff;
     assert.deepEqual(parity(p), cold);
+    assert.equal(getProjectValidationCacheStats().effectiveDiff.hits, coldDiff.hits + 1);
+    assert.equal(getProjectValidationCacheStats().effectiveSchema.hits, before.hits);
+    p.files.find(file => file.path === relative)!.content = p.files.find(file => file.path === relative)!.content!
+      .replace('<diff>', '<diff><!-- identical AI output -->');
+    assert.deepEqual(parity(p).diffSimulation, cold.diffSimulation);
+    assert.equal(getProjectValidationCacheStats().effectiveDiff.misses, coldDiff.misses + 1);
     const after = getProjectValidationCacheStats().effectiveSchema;
     assert.equal(after.hits, before.hits + 2);
     assert.equal(after.misses, before.misses + 2);
+  });
+
+  const returnPath = 'md/diff_cache_return.xml';
+  const scopePath = 'md/diff_cache_scope.xml';
+  const aiPath = 'aiscripts/diff_cache_ai.xml';
+  const fixedReferenceTime = new Date('2020-01-01T00:00:00Z');
+  const referenceDocuments = [
+    [returnPath, '<mdscript name="CacheReturn"><cues><cue name="Init"><actions/></cue></cues></mdscript>'],
+    [scopePath, '<mdscript name="CacheScope"><cues><library name="Run" purpose="run_actions"><actions/></library><cue name="Caller"><actions/></cue></cues></mdscript>'],
+    [aiPath, '<aiscript name="CacheAi"><actions><debug_text text="0"/></actions></aiscript>'],
+  ] as const;
+  for (const [relative, content] of referenceDocuments) {
+    const filename = path.join(tmp, relative);
+    fs.mkdirSync(path.dirname(filename), { recursive: true });
+    fs.writeFileSync(filename, content);
+    fs.utimesSync(filename, fixedReferenceTime, fixedReferenceTime);
+  }
+  function diffProject(): ExtensionProject {
+    const p = project();
+    p.files = [...p.files.filter(file => file.path === 'content.xml'),
+      { path: returnPath, kind: 'md', content: '<diff>\n  <add sel="/mdscript/cues/cue/actions">\n    <return/>\n  </add>\n</diff>' },
+      { path: scopePath, kind: 'md', content: '<diff>\n  <add sel="/mdscript/cues/cue/actions">\n    <include_actions ref="Run"/>\n  </add>\n</diff>' },
+      { path: aiPath, kind: 'aiscript', content: '<diff>\n  <add sel="/aiscript/actions">\n    <set_value name="$probe" exact="1 else 2"/>\n    <debug_text text="0" forge_diff_unknown="1"/>\n  </add>\n</diff>' },
+    ];
+    return p;
+  }
+  const diffStats = () => getProjectValidationCacheStats().effectiveDiff;
+  const returnFinding = (result: ReturnType<typeof runProjectValidation>) =>
+    result.pitfalls.findings.find(finding => finding.code === 'md_pitfall.return_context' && finding.filePath === returnPath);
+  check('three exact authored diffs retain provenance and skip inner schema work on warm hits', () => {
+    clearProjectValidationCache();
+    const p = diffProject();
+    const cold = parity(p);
+    assert.equal(cold.diffSimulation.files.length, 3);
+    assert.deepEqual({ line: returnFinding(cold)?.line, column: returnFinding(cold)?.column }, { line: 3, column: 5 });
+    assert.ok(cold.crossFile.findings.some(finding => finding.code === 'md.include_actions_run_library'
+      && finding.file === scopePath && finding.line === 3 && finding.column === 5));
+    assert.ok(cold.pitfalls.findings.some(finding => finding.code === 'md.unmatched_else'
+      && finding.filePath === aiPath && finding.line === 3 && (finding.column ?? 0) > 5));
+    assert.ok(cold.diffSimulation.files.find(file => file.path === aiPath)!.postApplyFindings.some(finding =>
+      finding.domain === 'ai_scripts' && finding.message.includes('forge_diff_unknown')));
+    assert.equal(diffStats().misses, 3);
+    assert.equal(diffStats().entries, 3);
+    const before = getProjectValidationCacheStats();
+    assert.deepEqual(parity(structuredClone(p)), cold);
+    const after = getProjectValidationCacheStats();
+    assert.equal(after.effectiveDiff.hits, before.effectiveDiff.hits + 3);
+    assert.equal(after.effectiveDiff.misses, before.effectiveDiff.misses);
+    assert.deepEqual(after.effectiveSchema, before.effectiveSchema);
+    assert.ok(after.effectiveDiff.accountedBytes <= 4 * 1024 * 1024);
+    assert.ok(after.accountedBytes + after.lua.accountedBytes + after.effectiveSchema.accountedBytes
+      + after.effectiveDiff.accountedBytes <= 32 * 1024 * 1024);
+  });
+  check('changed authored diff misses exactly one local result and keeps raw positions', () => {
+    const p = diffProject();
+    parity(p);
+    const before = diffStats();
+    p.files.find(file => file.path === returnPath)!.content = '\n\n' + p.files.find(file => file.path === returnPath)!.content;
+    const changed = parity(p);
+    assert.deepEqual({ line: returnFinding(changed)?.line, column: returnFinding(changed)?.column }, { line: 5, column: 5 });
+    assert.equal(diffStats().misses, before.misses + 1);
+    assert.equal(diffStats().hits, before.hits + 2);
+  });
+  check('equal-size canonical text with restored mtime invalidates the authored diff result', () => {
+    const p = diffProject();
+    const beforeResult = parity(p);
+    const before = diffStats();
+    const filename = path.join(tmp, returnPath);
+    const original = fs.readFileSync(filename, 'utf8');
+    const originalStat = fs.statSync(filename, { bigint: true });
+    const changed = original.replace('name="Init"', 'name="Next"');
+    assert.notEqual(changed, original);
+    assert.equal(Buffer.byteLength(changed), Buffer.byteLength(original));
+    try {
+      fs.writeFileSync(filename, changed);
+      fs.utimesSync(filename, fixedReferenceTime, fixedReferenceTime);
+      const currentStat = fs.statSync(filename, { bigint: true });
+      assert.equal(currentStat.size, originalStat.size);
+      assert.equal(currentStat.mtimeNs, originalStat.mtimeNs);
+      // Qualify the current resolver input explicitly; this tests the outer cache's
+      // exact-content dependency independently of filesystem metadata cache policy.
+      assert.equal(resolveEffectiveReferenceDocument(tmp, returnPath, true).content, changed);
+      const after = parity(p);
+      assert.equal(returnFinding(beforeResult)?.cue, 'Init');
+      assert.equal(returnFinding(after)?.cue, 'Next');
+      assert.equal(diffStats().misses, before.misses + 1);
+      assert.equal(diffStats().hits, before.hits + 2);
+    } finally {
+      fs.writeFileSync(filename, original);
+      fs.utimesSync(filename, fixedReferenceTime, fixedReferenceTime);
+      resolveEffectiveReferenceDocument(tmp, returnPath, true);
+    }
+    assert.deepEqual(parity(p), beforeResult);
+  });
+  check('reference vocabulary and governing schema invalidate all three local diff facts', () => {
+    clearProjectValidationCache();
+    const p = diffProject();
+    parity(p);
+    const beforeReferences = diffStats();
+    const references = structuredClone(corpus.references);
+    references.wares.add('forge_diff_cache_reference');
+    const withReferences = parity(p, references);
+    assert.equal(diffStats().misses, beforeReferences.misses + 3);
+    assert.equal(diffStats().hits, beforeReferences.hits);
+    const filename = path.join(tmp, 'libraries/common.xsd');
+    const original = fs.readFileSync(filename, 'utf8');
+    const originalStat = fs.statSync(filename);
+    assert.ok(original.includes('name="debug_text"'));
+    try {
+      fs.writeFileSync(filename, original.replaceAll('name="debug_text"', 'name="forge_diff_debug_text"'));
+      const changedTime = new Date(originalStat.mtimeMs + 2000);
+      fs.utimesSync(filename, changedTime, changedTime);
+      const beforeSchema = diffStats();
+      const changed = parity(p, references);
+      assert.equal(diffStats().misses, beforeSchema.misses + 3);
+      assert.equal(diffStats().hits, beforeSchema.hits);
+      assert.notDeepEqual(changed.diffSimulation.files.find(file => file.path === aiPath)!.postApplyFindings,
+        withReferences.diffSimulation.files.find(file => file.path === aiPath)!.postApplyFindings);
+    } finally {
+      fs.writeFileSync(filename, original);
+      const restoredTime = new Date(originalStat.mtimeMs + 4000);
+      fs.utimesSync(filename, restoredTime, restoredTime);
+    }
+    assert.deepEqual(parity(p, references), withReferences);
+  });
+  check('warm incomplete reference cannot reuse prior authored findings and recovers', () => {
+    clearProjectValidationCache();
+    const p = diffProject();
+    const healthy = parity(p);
+    assert.ok(returnFinding(healthy));
+    const before = diffStats();
+    const overlay = path.join(tmp, 'extensions/ego_dlc_effective_probe', returnPath);
+    fs.mkdirSync(path.dirname(overlay), { recursive: true });
+    fs.writeFileSync(overlay, '<diff><add sel="/mdscript/cues"><cue name="Broken"></add></diff>');
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const unavailable = parity(p);
+        assert.ok(unavailable.evidence!.coverage.gaps.some(gap => gap.check === 'diff.reference' && gap.filePath === returnPath));
+        assert.equal(returnFinding(unavailable), undefined);
+        assert.equal(diffStats().misses, before.misses);
+        assert.equal(diffStats().hits, before.hits + (attempt + 1) * 2);
+        assert.equal(diffStats().entries, before.entries);
+      }
+    } finally {
+      fs.unlinkSync(overlay);
+      resolveEffectiveReferenceDocument(tmp, returnPath, true);
+    }
+    assert.deepEqual(parity(p), healthy);
+  });
+  check('cold and warm returned diff findings cannot contaminate retained local facts', () => {
+    clearProjectValidationCache();
+    const p = diffProject();
+    const expected = runProjectValidation(p, { references: corpus.references, incremental: false });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = parity(p);
+      result.pitfalls.findings.length = 0;
+      result.crossFile.findings.length = 0;
+      for (const entry of result.diffSimulation.files) { entry.findings.length = 0; entry.postApplyFindings.length = 0; }
+      result.evidence!.findings.length = 0;
+      assert.deepEqual(parity(p), expected);
+    }
+    assert.ok(diffStats().hits >= 9);
+    assert.equal(diffStats().misses, 3);
+  });
+  check('successful simulation with a local namespace gap is retried without retaining facts', () => {
+    clearProjectValidationCache();
+    const p = diffProject();
+    p.files = p.files.filter(file => file.path === 'content.xml' || file.path === returnPath);
+    p.files.find(file => file.path === returnPath)!.content =
+      '<diff><add sel="/mdscript/cues/cue/actions"><return xmlns="urn:forge-cache-unsupported"/></add></diff>';
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = parity(p);
+      assert.ok(result.diffSimulation.files[0].findings.every(finding => finding.severity !== 'error'));
+      assert.ok(result.evidence!.coverage.gaps.some(gap => gap.check === 'md.return_context'
+        && gap.filePath === returnPath && /namespace/i.test(gap.reason)));
+      assert.equal(diffStats().hits, 0);
+      assert.equal(diffStats().misses, attempt + 1);
+      assert.equal(diffStats().bypasses, attempt + 1);
+      assert.equal(diffStats().entries, 0);
+    }
+  });
+  check('ordinary routed library diffs remain fresh and never enter the dedicated script cache', () => {
+    for (const relative of ['libraries/factions.xsd', 'libraries/diff.xsd']) {
+      fs.copyFileSync(path.join(root, relative), path.join(tmp, relative));
+    }
+    const relative = 'libraries/factions.xml';
+    fs.writeFileSync(path.join(tmp, relative), '<factions><faction id="forge_cache_faction"/></factions>');
+    const p = project();
+    p.files = [...p.files.filter(file => file.path === 'content.xml'), {
+      path: relative, kind: 'library',
+      content: '<diff><add sel="/factions/faction" type="@forge_routed_unknown">1</add></diff>',
+    }];
+    clearProjectValidationCache();
+    const cold = parity(p);
+    assert.ok(cold.schema.routed.some(route => route.path === relative && route.domainAvailable));
+    assert.ok(cold.diffSimulation.files[0].postApplyFindings.some(finding => finding.message.includes('forge_routed_unknown')));
+    const before = diffStats();
+    assert.equal(before.misses, 0);
+    assert.equal(before.entries, 0);
+    assert.deepEqual(parity(structuredClone(p)), cold);
+    assert.deepEqual(diffStats(), before);
   });
 } finally {
   process.env.X4_REFERENCE_ROOT=saved;clearReferenceCorpusCache();clearReferenceLanguageCaches();

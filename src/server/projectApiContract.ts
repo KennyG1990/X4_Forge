@@ -3,6 +3,8 @@ import { classifyPath, type ExtensionProject } from '../lib/extensionProject';
 import { canonicalWorkspaceContentString } from '../lib/workspaceIdentity';
 import { normalizeXmlReferencePath } from '../lib/xmlReferenceGraph';
 import { createHash } from 'node:crypto';
+import { AI_SCRIPT_NAVIGATION_LIMITS } from '../../shared/aiScriptNavigation';
+import { MD_SCRIPT_NAVIGATION_LIMITS } from '../../shared/mdScriptNavigation';
 import type { ModWorkspace } from '../types';
 import { isNativeInstanceId, normalizeNativeCollectionOptions } from '../../shared/nativePerformanceProtocol';
 
@@ -80,12 +82,14 @@ export const PROJECT_API_FIELDS: Record<string, readonly string[]> = {
   '/api/agent/package': ['workspace'],
   '/api/agent/artifact/build': ['workspace', 'format'],
   '/api/agent/project/files': ['workspace'],
+  '/api/agent/project/ai-navigation': ['project', 'path', 'offset', 'mode', 'includeDeclaration'],
+  '/api/agent/project/md-navigation': ['project', 'path', 'offset', 'mode', 'includeDeclaration'],
   '/api/agent/project/xml-references': ['workspace', 'project', 'focus', 'maxDepth', 'maxNodes', 'maxEdges', 'includeSource'],
   '/api/agent/performance/collection': ['durationMs', 'intervalMs', 'eventLoopDelay'],
   '/api/agent/performance/profile': ['durationMs', 'samplingIntervalMicros', 'maxFunctions'],
   '/api/agent/performance/native/collection': ['expectedBackendInstanceId', 'expectedNativeInstanceId', 'durationMs', 'intervalMs', 'eventLoopDelay'],
   '/api/agent/performance/native/stop': ['expectedBackendInstanceId', 'expectedNativeInstanceId', 'captureId'],
-  '/api/fs/write': ['path', 'content', 'expectedSha256', 'strict'],
+  '/api/fs/write': ['path', 'content', 'expectedSha256', 'strict', 'expectedWorkspaceRootId'],
   '/api/fs/create': ['name', 'type'],
   '/api/agent/workspaces/bootstrap': ['clientId', 'workspaceId'],
   '/api/agent/workspace/restore-parked': ['targetWorkspaceId'],
@@ -220,6 +224,31 @@ export function validateProjectApiBody(route: string, value: unknown): void {
     if (route.endsWith('/collection')) booleanField(value, 'eventLoopDelay');
     return;
   }
+  const limits = route === '/api/agent/project/ai-navigation' ? AI_SCRIPT_NAVIGATION_LIMITS
+    : route === '/api/agent/project/md-navigation' ? MD_SCRIPT_NAVIGATION_LIMITS : undefined;
+  if (limits) {
+    fields(value.project, ['id', 'name', 'files'], 'Project snapshot');
+    const files = value.project.files;
+    if (!Array.isArray(files) || files.length > limits.files) invalid('Too many project snapshot files.');
+    let bytes = 0;
+    for (const file of files) {
+      fields(file, ['path', 'content'], 'Project snapshot file');
+      if (typeof file.content !== 'string') continue;
+      const length = Buffer.byteLength(file.content, 'utf8');
+      bytes += length;
+      if (length > limits.fileBytes || bytes > limits.totalBytes) {
+        invalid('The project snapshot exceeds the source byte budget.');
+      }
+    }
+    parseValidationProject(value.project);
+    stringField(value, 'path', { required: true, max: 1024, singleLine: true });
+    if (!Number.isSafeInteger(value.offset) || value.offset < 0 || value.offset > limits.fileBytes) {
+      invalid('offset must be a nonnegative bounded UTF-16 offset.');
+    }
+    if (!['definition', 'references'].includes(value.mode)) invalid('mode must be definition or references.');
+    booleanField(value, 'includeDeclaration');
+    return;
+  }
   if (route.endsWith('/content-xml')) meta(value.meta);
   if (Object.hasOwn(value, 'project')) parseValidationProject(value.project);
   if (['/api/agent/project/file/create', '/api/agent/project/package', '/api/agent/project/validate-crossfile'].includes(route) && !Object.hasOwn(value, 'project')) invalid('project is required.');
@@ -307,6 +336,7 @@ export function validateProjectApiBody(route: string, value: unknown): void {
   if (route === '/api/fs/write') {
     if (typeof value.path !== 'string' || !value.path.trim() || typeof value.content !== 'string') invalid('write requires path and content strings.');
     if (value.strict !== undefined && typeof value.strict !== 'boolean') invalid('strict must be boolean.');
+    stringField(value, 'expectedWorkspaceRootId', { pattern: /^[a-f0-9]{64}$/ });
     if (value.expectedSha256 !== undefined && value.expectedSha256 !== null && (typeof value.expectedSha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(value.expectedSha256))) invalid('expectedSha256 must be a SHA-256 string or null.');
   }
   if (route === '/api/fs/create' && (typeof value.name !== 'string' || !value.name.trim() || !['file', 'directory'].includes(value.type))) invalid('create requires name and type file or directory.');
@@ -334,14 +364,17 @@ export function projectApiEnvelope(route: string, body: unknown, subject?: ApiSu
     return { ...body, ...workspaceApiSubject(body.previewWorkspace), ...(subject ? { currentSource: subject } : {}) };
   }
   if (!actual && isApiObject(body.project) && Array.isArray(body.project.files)) actual = projectApiSubject(body.project as ExtensionProject);
+  const evidence = body.validation?.evidence || body.evidence;
+  const validationSubject = isApiObject(evidence) && typeof evidence.sourceHash === 'string' && typeof evidence.hashScope === 'string'
+    ? { modId: typeof evidence.modId === 'string' ? evidence.modId : null,
+      sourceHash: evidence.sourceHash, sourceHashScope: evidence.hashScope }
+    : undefined;
+  // Apply can include the canvas workspace for clients. Deploy identity is the artifact validation subject.
+  if (route === '/api/agent/deploy' || route === '/api/agent/deploy-verify') actual ??= validationSubject;
   if (!actual && isApiObject(body.workspace) && Array.isArray(body.workspace.nodes) && Array.isArray(body.workspace.links)) {
     actual = workspaceApiSubject(body.workspace);
   }
-  const evidence = body.validation?.evidence || body.evidence;
-  if (!actual && isApiObject(evidence) && typeof evidence.sourceHash === 'string' && typeof evidence.hashScope === 'string') {
-    actual = { modId: typeof evidence.modId === 'string' ? evidence.modId : null,
-      sourceHash: evidence.sourceHash, sourceHashScope: evidence.hashScope };
-  }
+  actual ??= validationSubject;
   if (route.startsWith('/api/agent/release/') || route === '/api/agent/package/release'
     || route === '/api/agent/runtime-control' || route.startsWith('/api/agent/runtime-control/')) {
     // Runtime control also uses the folder ID as its operational selector and helper marker.

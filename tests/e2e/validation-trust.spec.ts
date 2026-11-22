@@ -261,7 +261,28 @@ test('ware diagnostics render actual validation results in the selected product 
       expect(findings).toHaveLength(variant.count);
       await page.locator('[data-sidebar-tab="diagnostics"]').click();
       await page.getByTestId('diagnostics-scope-package').click();
-      await expect(page.getByText('FULL PROJECT · LIVE', { exact: true })).toBeVisible();
+      expect(validation.validation.inputs).toMatchObject({
+        sourceHash: expect.stringMatching(/^[a-f0-9]{64}$/), sourceHashScope: 'project-validation-inputs-v1',
+        workspaceFiles: expect.any(Number), overrideFiles: 0, diskFiles: expect.any(Number),
+      });
+      await expect(page.getByTestId('validation-inputs-label')).toHaveText(
+        validation.validation.inputs.diskFiles ? 'WORKSPACE + DISK' : 'WORKSPACE SNAPSHOT',
+      );
+      const retained = validation.validationResult;
+      expect(retained).toMatchObject({ status: 'retained', id: expect.stringMatching(/^[a-f0-9-]{36}$/) });
+      await expect(page.getByTestId('validation-result-id')).toHaveText(retained.id);
+      const headers = response.request().headers();
+      expect(headers['x-workspace-id']).toBeTruthy();
+      expect(headers['x-client-id']).toBeTruthy();
+      const reopened = await withClosingApiRequest(page.request).get(
+        '/api/agent/compile/result/' + retained.id, { headers: {
+          Authorization: 'Bearer ' + E2E_TOKEN, 'x-workspace-id': headers['x-workspace-id'], 'x-client-id': headers['x-client-id'],
+        } },
+      );
+      expect(reopened.status()).toBe(200);
+      const reopenedValidation = await reopened.json();
+      expect(reopenedValidation.diagnostics).toEqual(validation.diagnostics);
+      expect(reopenedValidation.validation).toEqual(validation.validation);
       const why = page.getByTestId('diagnostic-why-reference.unknown_ware');
       await expect(why).toHaveCount(variant.count);
       if (variant.count) {

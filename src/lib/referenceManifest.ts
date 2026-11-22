@@ -277,12 +277,13 @@ export async function refreshReferenceManifest(rootInput: string): Promise<Refer
   return active.promise;
 }
 
-export function getReferenceManifestStatus(rootInput: string): ReferenceManifestStatus {
+export function getReferenceManifestStatus(rootInput: string, options: { openDatabase?: boolean } = {}): ReferenceManifestStatus {
   const root = normalizedRoot(rootInput);
   const key = rootKey(root);
   let validRoot = false;
   try { validRoot = Boolean(rootInput.trim() && fs.existsSync(root) && fs.statSync(root).isDirectory()); } catch { validRoot = false; }
   if (!validRoot) return { available: false, state: 'unavailable', root, error: `X4 unpacked root is not a directory: ${root}` };
+  if (options.openDatabase === false && database === undefined) return { available: false, state: 'idle', root };
   const db = manifestDb();
   if (!db) return { available: false, state: 'unavailable', root, error: isDbAvailable().reason || 'SQLite unavailable' };
   const currentRow = latestReferenceGeneration(db, key);

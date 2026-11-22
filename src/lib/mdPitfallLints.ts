@@ -38,12 +38,13 @@
 
 import { DOMParser, normalizeLineEndings, type Attr, type Document, type Element } from '@xmldom/xmldom';
 import { lintMdExpressionRules, type MdExpressionFinding } from './expressionAst';
+import { isScriptExpressionRole } from '../../shared/scriptExpressionRole';
 import { analyzeMdCueTrigger, classifyCueRef, mdConditionKind } from './cueLineage';
 import { maskNonExpressionSpans, type ScriptPropertyIndex } from './scriptProperties';
 import { assertXmlInputWithinLimits } from './xmlInputLimits';
 import type { SchemaIndex } from './xsdValidate';
 import type { DiffElementProvenance, DiffElementState } from './diffSimulator';
-import type { ValidationCoverageGap } from './validationEvidence';
+import { MD_INITIAL_STATE_COVERAGE_CHECK, type MdInitialStateCause, type MdInitialStateSample, type ValidationCoverageGap } from './validationEvidence';
 
 export interface MdPitfallFinding {
   code: 'md_pitfall.products_existence' | 'md_pitfall.cancel_conversation_actor_or_template' | 'md_pitfall.ui_listener_one_shot'
@@ -68,15 +69,9 @@ function lineOf(haystack: string, needleIndex: number): number {
   return haystack.slice(0, Math.max(0, needleIndex)).split('\n').length;
 }
 
-const EXPRESSION_TYPE = /^(?:\w+:)?(?:lvalue|boolean)?expression$/i;
-
 /** The same actual attribute role governs direct scripts and effective diff writes. */
 export function isScriptExpressionAttribute(elementName: string, attributeName: string, schema: SchemaIndex | null): boolean {
-  const spec = schema?.elements.get(elementName)?.attributes.get(attributeName);
-  return (elementName === 'set_value' && attributeName === 'exact')
-    || (elementName === 'debug_text' && attributeName === 'text')
-    || (elementName === 'do_if' && attributeName === 'value')
-    || EXPRESSION_TYPE.test(spec?.type ?? '') || EXPRESSION_TYPE.test(spec?.baseType ?? '');
+  return isScriptExpressionRole(elementName, attributeName, schema?.elements.get(elementName)?.attributes.get(attributeName));
 }
 
 /** Apply shared grammar rules using a caller-owned decoded-value source mapping. */
@@ -299,13 +294,58 @@ function availabilityCueKey(cue: Element): string {
   return JSON.stringify(names);
 }
 
+const MD_INITIAL_STATE_REASONS: Readonly<Record<MdInitialStateCause, string>> = {
+  ambiguous_cue: 'Unnamed or duplicate cue declarations leave script writer authority ambiguous.',
+  ambiguous_script: 'Duplicate script names make exact remote writer destinations ambiguous.',
+  analysis_budget: 'Project initial-state analysis reached its bounded derived-fact budget.',
+  duplicate_file: 'Duplicate MD file identity leaves writer authority unavailable.',
+  dynamic_destination: 'A dynamic or unresolved variable destination leaves possible writer authority unknown.',
+  input_limit: 'Project MD writer analysis reached its bounded input-fact limit.',
+  missing_source: 'MD source content is unavailable.',
+  omitted_input: 'An authored MD file or its containing inventory was skipped before writer analysis.',
+  omitted_paths_unlisted: 'Additional omitted MD paths exceeded the per-file coverage reporting limit.',
+  self_update_order: 'Self-referential add/subtract RHS ordering is not established by the available engine evidence.',
+  unknown_effect: 'An undeclared or foreign action/condition has unavailable writer effects.',
+  unresolved_schema: 'An unresolved or open schema declaration leaves possible destination attributes unavailable.',
+  unsupported_effect: 'An action has unsupported ordered effects; schema destinations are possible writers only.',
+  unsupported_namespace: 'Library, instance, reference or unsupported cue namespace leaves local writer authority unavailable.',
+  unusable_script: 'Malformed, patch-derived, foreign or unnamed MD script has unavailable writer authority.',
+};
+const MAX_INITIAL_STATE_SAMPLES = 2;
+const MAX_INITIAL_STATE_READ_GAPS = 128;
+const INITIAL_STATE_INPUT_FAILURES: ReadonlySet<MdInitialStateCause> = new Set([
+  'ambiguous_cue', 'ambiguous_script', 'analysis_budget', 'duplicate_file', 'input_limit',
+  'missing_source', 'omitted_input', 'omitted_paths_unlisted', 'unusable_script',
+]);
+
 /** Build possible-writer authority, not an assertion that entry state is empty. */
 export function buildMdVariableAvailabilityContext(
   files: readonly MdVariableAvailabilityInput[], schema: SchemaIndex | null,
-): { context: MdVariableAvailabilityContext; coverageGaps: ValidationCoverageGap[] } {
-  const reasons = new Map<string, Set<string>>();
-  const gap = (file: string, reason: string) => {
-    const values = reasons.get(file) ?? new Set<string>(); values.add(reason); reasons.set(file, values);
+  omissions: { paths: readonly string[]; additionalCount: number } = { paths: [], additionalCount: 0 },
+): { context: MdVariableAvailabilityContext; coverageGaps: ValidationCoverageGap[]; inputGaps: ValidationCoverageGap[] } {
+  type Cause = { code: MdInitialStateCause; count: number; locatedCount: number; samples: MdInitialStateSample[] };
+  const reasons = new Map<string, Map<MdInitialStateCause, Cause>>();
+  const leadingBoms = new Set<string>();
+  const gap = (file: string, code: MdInitialStateCause, element?: Element, attribute?: Attr, count = 1) => {
+    let values = reasons.get(file);
+    if (!values) { values = new Map(); reasons.set(file, values); }
+    let cause = values.get(code);
+    if (!cause) {
+      cause = { code, count: 0, locatedCount: 0, samples: [] };
+      values.set(code, cause);
+    }
+    // Repeated failures after exhausting the same file's budget are one interruption.
+    if (code === 'analysis_budget' && cause.count) return;
+    cause.count += count;
+    const location = attribute ?? element;
+    const line = location?.lineNumber ?? 0, column = location?.columnNumber ?? 0;
+    if (!element || line < 1 || column < 1) return;
+    cause.locatedCount++;
+    if (cause.samples.length < MAX_INITIAL_STATE_SAMPLES) {
+      cause.samples.push({ line, column: line === 1 && leadingBoms.has(file) ? column + 1 : column,
+        ...(element.tagName.length <= 96 ? { element: element.tagName } : {}),
+        ...(attribute && attribute.name.length <= 96 ? { attribute: attribute.name } : {}) });
+    }
   };
   type Cue = { file: string; script: string; key: string; direct: string; namespace?: string; parent?: string; block: string; hasActions: boolean; element: Element };
   type Parsed = { file: string; source: string; root: Element; cues: Cue[]; actions: Map<string, MdAvailabilityAction> };
@@ -322,17 +362,21 @@ export function buildMdVariableAvailabilityContext(
   const reserve = (file: string, amount = 1) => {
     derivedFacts += amount;
     if (derivedFacts <= maxDerivedFacts) return true;
-    limited = true; gap(file, 'Project initial-state analysis reached its bounded derived-fact budget.'); return false;
+    limited = true; gap(file, 'analysis_budget'); return false;
   };
   const addOpaque = (effect: Opaque, file: string) => { if (reserve(file)) opaque.push(effect); };
   const addWriter = (writer: Writer, file: string) => { if (reserve(file)) writers.push(writer); };
   const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
+  for (const file of omissions.paths) gap(file, 'omitted_input');
+  if (omissions.additionalCount) gap('.', 'omitted_paths_unlisted', undefined, undefined, omissions.additionalCount);
+  if (omissions.paths.length || omissions.additionalCount) addOpaque({}, omissions.paths[0] ?? '.');
   for (const input of [...files].sort((a, b) => compare(a.path, b.path) || compare(a.content ?? '', b.content ?? ''))) {
     const file = availabilityPath(input.path), folded = file.toLowerCase();
-    if (paths.has(folded)) { gap(file, 'Duplicate MD file identity leaves writer authority unavailable.'); addOpaque({}, file); continue; }
+    if (paths.has(folded)) { gap(file, 'duplicate_file'); addOpaque({}, file); continue; }
     paths.add(folded);
-    if (typeof input.content !== 'string') { gap(file, 'MD source content is unavailable.'); addOpaque({}, file); continue; }
+    if (typeof input.content !== 'string') { gap(file, 'missing_source'); addOpaque({}, file); continue; }
     const source = input.content;
+    if (source.charCodeAt(0) === 0xfeff) leadingBoms.add(file);
     let invalid = false, root: Element | null = null;
     try {
       const xml = normalizeLineEndings(source.replace(/^\uFEFF/, ''));
@@ -340,11 +384,11 @@ export function buildMdVariableAvailabilityContext(
       root = new DOMParser({ onError: () => { invalid = true; } }).parseFromString(xml, 'text/xml').documentElement;
     } catch { invalid = true; }
     if (invalid || !root || root.tagName !== 'mdscript' || root.namespaceURI || !root.getAttribute('name')) {
-      gap(file, 'Malformed, patch-derived, foreign or unnamed MD script has unavailable writer authority.'); addOpaque({}, file); continue;
+      gap(file, 'unusable_script'); addOpaque({}, file); continue;
     }
     const nodeCount = root.getElementsByTagName('*').length;
     if (facts + nodeCount > maxFacts) {
-      gap(file, 'Project MD writer analysis reached its bounded input-fact limit.'); addOpaque({}, file); limited = true; break;
+      gap(file, 'input_limit'); addOpaque({}, file); limited = true; break;
     }
     facts += nodeCount;
     const script = root.getAttribute('name')!;
@@ -354,7 +398,7 @@ export function buildMdVariableAvailabilityContext(
     for (const element of Array.from(root.getElementsByTagName('cue'))) {
       const name = element.getAttribute('name');
       if (!reserve(file)) break;
-      if (!name || names.has(name)) { gap(file, 'Unnamed or duplicate cue declarations leave script writer authority ambiguous.'); addOpaque({}, file); }
+      if (!name || names.has(name)) { gap(file, 'ambiguous_cue', element); addOpaque({}, file); }
       if (name) names.add(name);
       const parent = element.parentElement?.parentElement;
       const parentCue = parent?.tagName === 'cue' ? declaredCues.get(parent) : undefined;
@@ -362,7 +406,7 @@ export function buildMdVariableAvailabilityContext(
       const own = ['this', 'static'].includes(element.getAttribute('namespace') ?? '');
       const namespace = isPlainVariableCue(element, root) && name ? own || !parentCue ? direct : parentCue.namespace : undefined;
       if (!namespace) {
-        gap(file, 'Library, instance, reference or unsupported cue namespace leaves local writer authority unavailable.');
+        gap(file, 'unsupported_namespace', element);
         addOpaque({}, file);
       }
       const actions = Array.from(element.children).find(child => !child.namespaceURI && child.tagName === 'actions');
@@ -375,7 +419,7 @@ export function buildMdVariableAvailabilityContext(
     const prior = scripts.get(script) ?? []; prior.push(value); scripts.set(script, prior);
   }
   for (const group of scripts.values()) if (group.length !== 1) {
-    for (const file of group) gap(file.file, 'Duplicate script names make exact remote writer destinations ambiguous.');
+    for (const file of group) gap(file.file, 'ambiguous_script');
     addOpaque({}, group[0].file);
   }
   const declarations = new Map<string, Cue>(), ambiguous = new Set<string>();
@@ -424,7 +468,7 @@ export function buildMdVariableAvailabilityContext(
           return !!role && !role.type;
         }));
       const spec = unresolvedSpec ? undefined : declaredSpec;
-      if (unresolvedSpec && block) gap(file.file, 'An unresolved or open schema declaration leaves possible destination attributes unavailable.');
+      if (unresolvedSpec && block) gap(file.file, 'unresolved_schema', element);
       const attributes = new Set<string>();
       if (spec) for (const [name, attribute] of spec.attributes) if (attribute.type && lvalues.has(attribute.type)) attributes.add(name);
       if (element.tagName === 'set_value' || element.tagName === 'remove_value') attributes.add('name');
@@ -440,7 +484,7 @@ export function buildMdVariableAvailabilityContext(
         if (target.initializes && target.target && target.variable) addWriter({ target: target.target, variable: target.variable, block: blockId, order }, file.file);
         else if (target.initializes) {
           addOpaque({ target: target.target, variable: target.variable, block: blockId }, file.file);
-          gap(file.file, 'A dynamic or unresolved variable destination leaves possible writer authority unknown.');
+          gap(file.file, 'dynamic_destination', element, element.getAttributeNode(name) ?? undefined);
         }
       }
       let branchDepth = 0;
@@ -467,7 +511,7 @@ export function buildMdVariableAvailabilityContext(
       if (unsupported) {
         const indirect = ['run_actions', 'include_actions', 'run_script'].includes(element.tagName) || (!spec && !primitive.has(element.tagName));
         addOpaque({ target: indirect ? undefined : cue?.namespace, block: blockId }, file.file);
-        gap(file.file, spec ? 'An action has unsupported ordered effects; schema destinations are possible writers only.' : 'An undeclared or foreign action/condition has unavailable writer effects.');
+        gap(file.file, spec ? 'unsupported_effect' : 'unknown_effect', element);
       }
       const unknownVariables = destinations.filter(target => target.initializes && !target.target && target.variable).map(target => target.variable!);
       const action: MdAvailabilityAction = { order, destinations, unknownVariables,
@@ -477,7 +521,7 @@ export function buildMdVariableAvailabilityContext(
       if (element.tagName === 'set_value' && ['add', 'subtract'].includes(operation ?? '') && target?.variable
         && strictLocalReads(element.getAttribute('exact') ?? '').some(read => read.variable === target.variable)) {
         action.selfOrderingUnknown = target.variable;
-        gap(file.file, 'Self-referential add/subtract RHS ordering is not established by the available engine evidence.');
+        gap(file.file, 'self_update_order', element, element.getAttributeNode('exact') ?? undefined);
       }
       file.actions.set(availabilityNode(element), action);
     }
@@ -488,12 +532,17 @@ export function buildMdVariableAvailabilityContext(
   const emptyBlocks = (): Blocks => ({ count: 0, last: availabilityRecord<number>() });
   const emptyAuthority = (): Authority => ({ variables: availabilityRecord<Variable>(), opaque: emptyBlocks() });
   const authority = availabilityRecord<Authority>(), global = emptyAuthority();
-  const coverage = (): ValidationCoverageGap[] => Array.from(reasons, ([filePath, values]) => ({ check: 'md.variable_initial_state', filePath,
-    reason: [...values].sort().slice(0, 8).join(' ') + (values.size > 8 ? ` ${values.size - 8} additional unsupported categories.` : '') }))
-    .sort((a, b) => compare(a.filePath, b.filePath));
+  const coverage = (inputsOnly = false): ValidationCoverageGap[] => Array.from(reasons).flatMap(([filePath, values]) => {
+    const causes = [...values.values()].filter(cause => !inputsOnly || INITIAL_STATE_INPUT_FAILURES.has(cause.code));
+    if (!causes.length) return [];
+    const summaries = causes.map(cause => MD_INITIAL_STATE_REASONS[cause.code]).sort();
+    return [{ check: MD_INITIAL_STATE_COVERAGE_CHECK, filePath,
+      reason: summaries.slice(0, 8).join(' ') + (summaries.length > 8 ? ` ${summaries.length - 8} additional unsupported categories.` : ''),
+      mdInitialState: { analysisLimited: limited, causes: causes.sort((a, b) => compare(a.code, b.code)) } }];
+  }).sort((a, b) => compare(a.filePath, b.filePath));
   const limitResult = () => ({ context: { files: availabilityRecord<MdAvailabilityFile>(), authority: availabilityRecord<MdAvailabilityAuthority>(),
     global: emptyAuthority(), scope: { eligibleCues: 0, skippedCues: parsed.reduce((count, file) => count + file.cues.length, 0),
-      indexedFacts: Math.min(derivedFacts, maxDerivedFacts), limited: true } }, coverageGaps: coverage() });
+      indexedFacts: Math.min(derivedFacts, maxDerivedFacts), limited: true } }, coverageGaps: coverage(), inputGaps: coverage(true) });
   if (limited) return limitResult();
   const index = (target: string | undefined, variable: string | undefined, kind: 'writers' | 'opaque', block: string | undefined, order: number, file: string) => {
     let owner = global;
@@ -533,7 +582,7 @@ export function buildMdVariableAvailabilityContext(
     result[file.file] = { source: file.source, cues, actions };
   }
   if (limited) return limitResult();
-  return { context: { files: result, authority, global, scope: { eligibleCues, skippedCues, indexedFacts: derivedFacts, limited: false } }, coverageGaps: coverage() };
+  return { context: { files: result, authority, global, scope: { eligibleCues, skippedCues, indexedFacts: derivedFacts, limited: false } }, coverageGaps: coverage(), inputGaps: coverage(true) };
 }
 
 function isPlainVariableCue(cue: Element, root: Element): boolean {
@@ -561,23 +610,50 @@ function onlyVariableLogs(branch: Element | undefined): boolean {
 }
 
 function lintLocalVariableReads(root: Element, source: string, filePath?: string, leadingBom = false,
-  availability?: MdAvailabilityFile, projectAvailability?: MdVariableAvailabilityContext): MdPitfallFinding[] {
+  availability?: MdAvailabilityFile, projectAvailability?: MdVariableAvailabilityContext, initialStateGaps?: ValidationCoverageGap[]): MdPitfallFinding[] {
   if (root.namespaceURI) return [];
   const findings: MdPitfallFinding[] = [];
   let lines: number[] | undefined;
-  type InitialValue = { kind: 'present' | 'potential' | 'unknown'; joined?: boolean };
+  type InitialValue = { kind: 'present' | 'potential' | 'unknown' | 'unavailable'; joined?: boolean };
   type InitialFlow = { facts: Map<string, InitialValue>; potential: boolean };
   let activeCue: MdAvailabilityCue | undefined;
   const activeAuthority = () => activeCue ? availabilityOwn(projectAvailability?.authority, activeCue.namespace) : undefined;
-  const suppressed = (variable: string) => {
-    if (!activeCue) return true;
+  const initialValue = (flow: InitialFlow, variable: string): InitialValue => {
+    const established = flow.facts.get(variable);
+    if (established) return established;
+    if (!flow.potential || !activeCue) return { kind: 'unavailable' };
     const local = availabilityOwn(activeAuthority()?.variables, variable);
     const global = availabilityOwn(projectAvailability?.global.variables, variable);
-    return availabilityOtherBlock(local?.writers, activeCue.block) || availabilityOtherBlock(local?.opaque, activeCue.block)
-      || availabilityOtherBlock(global?.opaque, activeCue.block);
+    if (availabilityOtherBlock(local?.opaque, activeCue.block) || availabilityOtherBlock(global?.opaque, activeCue.block)) {
+      return { kind: 'unavailable' };
+    }
+    return { kind: availabilityOtherBlock(local?.writers, activeCue.block) ? 'unknown' : 'potential' };
   };
-  const initialValue = (flow: InitialFlow, variable: string): InitialValue => flow.facts.get(variable)
-    ?? { kind: flow.potential && activeCue && !suppressed(variable) ? 'potential' : 'unknown' };
+  let gapCount = 0;
+  const readPosition = (attribute: Attr, offset: number) => {
+    lines ??= [0, ...Array.from(source.matchAll(/\n/g), match => match.index + 1)];
+    const { line, column } = expressionLocation(source, lines, attribute, offset);
+    return { line, column: leadingBom && line === 1 && column ? column + 1 : column };
+  };
+  const unavailableRead = (attribute: Attr, variable: string, offset: number, selfOrdering = false) => {
+    if (!initialStateGaps || !availability) return;
+    gapCount++;
+    if (gapCount > MAX_INITIAL_STATE_READ_GAPS) return;
+    const reason = selfOrdering ? MD_INITIAL_STATE_REASONS.self_update_order
+      : `Earlier initialization could not be verified for strict read of ${variable.slice(0, 96)}.`;
+    initialStateGaps.push({ check: MD_INITIAL_STATE_COVERAGE_CHECK, filePath, reason, ...readPosition(attribute, offset) });
+  };
+  const readAttribute = (action: Element) => action.namespaceURI ? null
+    : action.tagName === 'set_value' ? action.getAttributeNode('exact')
+      : action.tagName === 'debug_text' && !action.hasAttribute('chance') ? action.getAttributeNode('text') : null;
+  const inspectUnmodeled = (scope: Element) => {
+    if (!initialStateGaps || !availability) return;
+    for (const action of [scope, ...Array.from(scope.getElementsByTagName('*'))]) {
+      const attr = readAttribute(action);
+      if (!attr) continue;
+      for (const { variable, offset } of strictLocalReads(attr.value)) unavailableRead(attr, variable, offset);
+    }
+  };
   const clearInitial = (flow: InitialFlow | undefined) => { if (flow) { flow.facts.clear(); flow.potential = false; } };
   const cloneInitial = (flow: InitialFlow | undefined) => flow ? { facts: new Map(flow.facts), potential: flow.potential } : undefined;
   function joinInitial(target: InitialFlow | undefined, left: InitialFlow | undefined, right: InitialFlow | undefined) {
@@ -585,40 +661,49 @@ function lintLocalVariableReads(root: Element, source: string, filePath?: string
     const joined = new Map<string, InitialValue>();
     for (const variable of new Set([...left.facts.keys(), ...right.facts.keys()])) {
       const a = initialValue(left, variable), b = initialValue(right, variable);
-      joined.set(variable, a.kind === 'unknown' || b.kind === 'unknown' ? { kind: 'unknown' }
-        : a.kind === 'present' && b.kind === 'present' ? { kind: 'present' }
-          : { kind: 'potential', joined: true });
+      joined.set(variable, a.kind === 'unavailable' || b.kind === 'unavailable' ? { kind: 'unavailable' }
+        : a.kind === 'unknown' || b.kind === 'unknown' ? { kind: 'unknown' }
+          : a.kind === 'present' && b.kind === 'present' ? { kind: 'present' }
+            : { kind: 'potential', joined: true });
     }
     target.facts = joined; target.potential = left.potential && right.potential;
   }
   function initialAction(action: Element, flow: InitialFlow | undefined, absent: Map<string, AbsenceReason>) {
     if (!flow || !activeCue) return;
     const fact = availabilityOwn(availability?.actions, availabilityNode(action));
-    if (!fact || fact.opaque || action.children.length) { clearInitial(flow); return; }
-    for (const variable of fact.unknownVariables) flow.facts.set(variable, { kind: 'unknown' });
-    const log = action.tagName === 'debug_text' && !action.hasAttribute('chance');
-    const attribute = action.tagName === 'set_value' ? action.getAttributeNode('exact') : log ? action.getAttributeNode('text') : null;
+    if (!fact || fact.opaque || action.children.length) {
+      inspectUnmodeled(action);
+      clearInitial(flow);
+      return;
+    }
+    for (const variable of fact.unknownVariables) flow.facts.set(variable, { kind: 'unavailable' });
+    const attribute = readAttribute(action);
     if (attribute) {
       for (const { variable, offset } of strictLocalReads(attribute.value)) {
-        if (absent.has(variable) || fact.selfOrderingUnknown === variable) continue;
+        if (fact.selfOrderingUnknown === variable) {
+          unavailableRead(attribute, variable, offset, true);
+          continue;
+        }
+        if (absent.has(variable)) continue;
         const state = initialValue(flow, variable);
+        if (state.kind === 'unavailable') {
+          unavailableRead(attribute, variable, offset);
+          continue;
+        }
         if (state.kind !== 'potential') continue;
-        lines ??= [0, ...Array.from(source.matchAll(/\n/g), match => match.index + 1)];
-        const position = expressionLocation(source, lines, attribute, offset);
         const writer = availabilityOwn(activeAuthority()?.variables, variable);
         const later = (availabilityOwn(writer?.writers.last, activeCue.block) ?? -1) > fact.order;
         const explanation = state.joined ? 'Modeled branches do not guarantee an earlier initialization'
           : later ? 'A modeled writer occurs later in this action block, without a guaranteed earlier initialization'
             : 'No guaranteed earlier initialization was found in the modeled project namespace';
         findings.push({ code: 'md_pitfall.variable_read_before_initialization', severity: 'warning', filePath, cue: enclosingNamedCue(action),
-          sourceRef: `${action.tagName}/@${attribute.name}`, line: position.line,
-          column: leadingBom && position.line === 1 && position.column ? position.column + 1 : position.column,
+          sourceRef: `${action.tagName}/@${attribute.name}`, ...readPosition(attribute, offset),
           detail: `Project-scoped advisory for strict read of ${variable}: ${explanation}. Saved values and writers outside the analyzed project remain unknown.` });
       }
     }
     if (action.tagName === 'debug_text') return;
     if (action.tagName === 'remove_value') { clearInitial(flow); return; }
-    if (fact.selfOrderingUnknown) flow.facts.set(fact.selfOrderingUnknown, { kind: 'unknown' });
+    if (fact.selfOrderingUnknown) flow.facts.set(fact.selfOrderingUnknown, { kind: 'unavailable' });
     for (const destination of fact.destinations) if (destination.initializes && destination.target === activeCue.namespace && destination.variable) {
       if (destination.variable === fact.selfOrderingUnknown) continue;
       if (!action.hasAttribute('chance')) flow.facts.set(destination.variable, { kind: 'present' });
@@ -632,6 +717,7 @@ function lintLocalVariableReads(root: Element, source: string, filePath?: string
     for (let index = 0; index < actions.length; index++) {
       const action = actions[index];
       if (action.namespaceURI) {
+        inspectUnmodeled(action);
         absent.clear();
         clearInitial(initial);
         continue;
@@ -650,9 +736,11 @@ function lintLocalVariableReads(root: Element, source: string, filePath?: string
         const alternative = hasElse ? actions[index + 1] : undefined;
         const simpleElse = !alternative || (after === index + 2 && alternative.tagName === 'do_else'
           && !alternative.namespaceURI && hasOnlyAttributes(alternative, ['comment']));
+        const first = index;
         index = after - 1;
         const test = LOCAL_EXISTENCE_TEST.exec(action.getAttribute('value')?.trim() || '');
         if (!test || !simpleElse || !hasOnlyAttributes(action, ['value', 'comment']) || depth >= MAX_VARIABLE_BRANCH_DEPTH) {
+          for (let branch = first; branch < after; branch++) inspectUnmodeled(actions[branch]);
           absent.clear();
           clearInitial(initial);
           continue;
@@ -724,12 +812,27 @@ function lintLocalVariableReads(root: Element, source: string, filePath?: string
   }
 
   for (const cue of Array.from(root.getElementsByTagName('cue'))) {
-    if (!isPlainVariableCue(cue, root)) continue;
     const actions = Array.from(cue.children).find(child => !child.namespaceURI && child.tagName === 'actions');
+    if (!isPlainVariableCue(cue, root)) {
+      if (actions) inspectUnmodeled(actions);
+      continue;
+    }
     // Save state and other cues can supply a value at entry, even in a child's inherited namespace.
     activeCue = availabilityOwn(availability?.cues, availabilityCueKey(cue));
     const initial = activeCue ? { facts: new Map<string, InitialValue>(), potential: !activeCue.unavailable } : undefined;
+    if (!initial && actions) inspectUnmodeled(actions);
     scanActions(actions, new Map(), enclosingNamedCue(actions ?? cue), 0, initial);
+  }
+  if (initialStateGaps && availability) {
+    for (const library of Array.from(root.getElementsByTagName('library'))) {
+      for (const actions of Array.from(library.children).filter(child => !child.namespaceURI && child.tagName === 'actions')) {
+        inspectUnmodeled(actions);
+      }
+    }
+    if (gapCount > MAX_INITIAL_STATE_READ_GAPS) initialStateGaps.push({
+      check: MD_INITIAL_STATE_COVERAGE_CHECK, filePath,
+      reason: `${gapCount - MAX_INITIAL_STATE_READ_GAPS} additional strict reads exceeded the per-file coverage reporting limit.`,
+    });
   }
   return findings.sort((a, b) => (a.line ?? 0) - (b.line ?? 0) || (a.column ?? 0) - (b.column ?? 0));
 }
@@ -1095,7 +1198,7 @@ export function lintEffectiveMdDestroyedEvents(filePath: string, trace: DiffElem
  * so with no union supplied we skip the lint entirely rather than guess).
  */
 export function lintMdPitfalls(xml: string, opts: { propertyUnion?: Set<string>; propertyIndex?: ScriptPropertyIndex; filePath?: string;
-  variableAvailability?: MdVariableAvailabilityContext } = {}): MdPitfallFinding[] {
+  variableAvailability?: MdVariableAvailabilityContext; initialStateGaps?: ValidationCoverageGap[] } = {}): MdPitfallFinding[] {
   const out: MdPitfallFinding[] = [];
   if (!xml || typeof xml !== 'string' || !/<mdscript\b/i.test(xml)) return out;
   const masked = maskNonExpressionSpans(xml);
@@ -1115,7 +1218,8 @@ export function lintMdPitfalls(xml: string, opts: { propertyUnion?: Set<string>;
   // Non-MD and malformed XML produce no semantic finding here; structural/wellformedness validation owns those diagnostics.
   if (!element || element.nodeName !== 'mdscript' || parseError) return out;
   const root = element as unknown as ElementLike;
-  if (hasVariableFlow || availability) out.push(...lintLocalVariableReads(element, normalizeLineEndings(source), opts.filePath, leadingBom, availability, opts.variableAvailability));
+  if (hasVariableFlow || availability) out.push(...lintLocalVariableReads(element, normalizeLineEndings(source), opts.filePath,
+    leadingBom, availability, opts.variableAvailability, opts.initialStateGaps));
   for (const { event, cue } of unsourcedDestroyedEvents(element)) {
     const column = leadingBom && event.lineNumber === 1 && event.columnNumber ? event.columnNumber + 1 : event.columnNumber;
     out.push({ code: DESTROYED_EVENT_SOURCE_CODE, severity: 'error', filePath: opts.filePath, cue,
@@ -1429,7 +1533,9 @@ export function runMdPitfallSelftest(): {
     const content = initialDocument(actions);
     const files = [{ path: 'md/a.xml', content }, ...others];
     const built = buildMdVariableAvailabilityContext(files, schema);
-    return { ...built, content, rows: lintMdPitfalls(content, { filePath: 'md/a.xml', variableAvailability: built.context }) };
+    const readGaps: ValidationCoverageGap[] = [];
+    const rows = lintMdPitfalls(content, { filePath: 'md/a.xml', variableAvailability: built.context, initialStateGaps: readGaps });
+    return { ...built, content, rows, readGaps };
   };
   const initialRows = (actions: string, others: MdVariableAvailabilityInput[] = []) => initialFiles(actions, others).rows.filter(row => row.code === initialCode);
   const remoteWriter = (destination: string, tag = 'set_value', attribute = 'name'): MdVariableAvailabilityInput => ({ path: 'md/b.xml',
@@ -1508,6 +1614,17 @@ export function runMdPitfallSelftest(): {
   ok('project initial self-referential add ordering is explicitly unknown rather than an engine error',
     selfAdd.rows.filter(row => row.code === initialCode).length === 0
     && selfAdd.coverageGaps.some(row => row.reason.includes('Self-referential add/subtract')));
+  ok('self-update ordering remains explicitly unavailable after removal or an absence guard',
+    ['add', 'subtract'].every(operation => {
+      const update = `<set_value name="$X" operation="${operation}" exact="$X"/>`;
+      return ['<remove_value name="$X"/>\n' + update, '<do_if value="not $X?">\n' + update + '\n</do_if>']
+        .every(actions => {
+          const result = initialFiles(actions);
+          return result.readGaps.length === 1 && result.readGaps[0].reason.includes('Self-referential add/subtract')
+            && (result.readGaps[0].line ?? 0) >= 2 && (result.readGaps[0].column ?? 0) > 1
+            && !result.rows.some(row => String(row.code).startsWith('md_pitfall.variable_'));
+        });
+    }));
   ok('project initial optional suppressed quoted and property mutation roots are distinct',
     initialRows('<debug_text text="$X?"/><debug_text text="@$X"/><debug_text text="\'$X\'"/>').length === 0
     && initialRows('<set_value name="$Object.$Member" exact="1"/><debug_text text="$Object"/>').length === 1);
@@ -1553,6 +1670,42 @@ export function runMdPitfallSelftest(): {
   ok('project initial unknown effects clear potential authority without fabricating mod errors',
     opaqueFlow.rows.filter(row => row.code === initialCode).length === 0 && opaqueFlow.coverageGaps.length > 0
     && opaqueFlow.coverageGaps.every(row => row.check === 'md.variable_initial_state'));
+  const opaqueWithoutReads = initialFiles('<opaque_effect/><debug_text text="42"/>');
+  const restoredAfterOpaque = initialFiles('<opaque_effect/>' + initialRead
+    + '<set_value name="$X" exact="1"/>' + initialRead + '<remove_value name="$X"/>' + initialRead);
+  ok('initial coverage belongs only to strict reads blocked by an unmodeled effect',
+    opaqueWithoutReads.coverageGaps.length === 1 && opaqueWithoutReads.inputGaps.length === 0 && opaqueWithoutReads.readGaps.length === 0
+    && opaqueFlow.readGaps.length === 1 && (opaqueFlow.readGaps[0].line ?? 0) > 0
+    && restoredAfterOpaque.readGaps.length === 1
+    && restoredAfterOpaque.rows.filter(row => row.code === removalCode).length === 1);
+  ok('initial coverage distinguishes known writers from opaque readers and preserves guarded reads',
+    initialFiles(initialRead, [remoteWriter('md.A.Root.$X')]).readGaps.length === 0
+    && dynamicWriter.readGaps.length === 1 && dynamicWriter.readGaps[0].reason.includes('$X')
+    && initialFiles('<opaque_effect/><do_if value="$X?">' + initialRead + '</do_if>').readGaps.length === 0
+    && initialFiles('<opaque_effect/><debug_text text="$X?"/>').readGaps.length === 0);
+  const unmodeledBranch = initialFiles('<do_if value="true">' + initialRead + '</do_if>');
+  const unmodeledFile = initialDocument(initialRead).replace('<cue name="Root"', '<cue name="Root" instantiate="true"');
+  const unmodeledCue = buildMdVariableAvailabilityContext([{ path: 'md/scope.xml', content: unmodeledFile }], initialSchema);
+  const scopeGaps: ValidationCoverageGap[] = [];
+  const scopeRows = lintMdPitfalls(unmodeledFile, { filePath: 'md/scope.xml', variableAvailability: unmodeledCue.context, initialStateGaps: scopeGaps });
+  ok('unsupported branches and instantiated cues locate strict reads without asserting their execution',
+    unmodeledBranch.readGaps.length === 1 && unmodeledBranch.rows.every(row => row.code !== initialCode)
+    && scopeGaps.length === 1 && scopeGaps[0].filePath === 'md/scope.xml' && scopeRows.every(row => row.code !== initialCode));
+  const locatedLine = '<debug_text text="&#36;X + &#36;X"/>';
+  const locatedFile = '\uFEFF<mdscript name="Located"><cues><cue name="Run"><actions>\r\n<opaque_effect/>\r\n'
+    + locatedLine + '\r\n</actions></cue></cues></mdscript>';
+  const locatedContext = buildMdVariableAvailabilityContext([{ path: 'md/located.xml', content: locatedFile }], initialSchema);
+  const positionedGaps: ValidationCoverageGap[] = [];
+  lintMdPitfalls(locatedFile, { filePath: 'md/located.xml', variableAvailability: locatedContext.context, initialStateGaps: positionedGaps });
+  ok('same-line strict reads keep distinct authored entity positions through CRLF and BOM',
+    positionedGaps.length === 2 && positionedGaps.every(gap => gap.line === 3)
+    && positionedGaps[0].column === locatedLine.indexOf('&#36;') + 1
+    && positionedGaps[1].column === locatedLine.lastIndexOf('&#36;') + 1);
+  const boundedReads = initialFiles('<opaque_effect/>' + initialRead.repeat(MAX_INITIAL_STATE_READ_GAPS + 3));
+  ok('initial coverage keeps a bounded read inventory and an honest overflow',
+    boundedReads.readGaps.length === MAX_INITIAL_STATE_READ_GAPS + 1
+    && boundedReads.readGaps.filter(gap => gap.line !== undefined).length === MAX_INITIAL_STATE_READ_GAPS
+    && boundedReads.readGaps.some(gap => gap.line === undefined && gap.reason.startsWith('3 additional strict reads')));
   const missingInput = initialFiles(initialRead, [{ path: 'md/missing.xml' }]);
   ok('project initial missing source and ambiguous script identities never imply no writers',
     missingInput.rows.filter(row => row.code === initialCode).length === 0 && missingInput.coverageGaps.length > 0
@@ -1560,6 +1713,32 @@ export function runMdPitfallSelftest(): {
   ok('project initial primitive semantics remain usable without a schema while unfamiliar declarations do not',
     initialFiles(initialRead, [], null).rows.filter(row => row.code === initialCode).length === 1
     && initialFiles(initialRead, [remoteWriter('md.A.Root.$X', 'output_name', 'result')], null).coverageGaps.length > 0);
+  const observedInput = '\uFEFF<mdscript name="Reasons"><cues><cue name="Read"><actions>\r\n'
+    + '<set_value name="$Receiver.$X" exact="1"/>\r\n<set_value name="$Receiver.$Y" exact="1"/>\r\n'
+    + '<opaque_effect/>\r\n<opaque_effect/>\r\n<opaque_effect/>\r\n<unknown_effect/>\r\n</actions></cue></cues></mdscript>';
+  const observed = buildMdVariableAvailabilityContext([{ path: 'md/reasons.xml', content: observedInput }], initialSchema);
+  const detailed = observed.coverageGaps[0]?.mdInitialState;
+  const causes = detailed?.causes;
+  ok('initial-state gaps keep one summary with counted causes and bounded authored samples',
+    observed.coverageGaps.length === 1 && typeof observed.coverageGaps[0].reason === 'string'
+    && detailed?.analysisLimited === false && causes?.length === 3
+    && causes[0].code === 'dynamic_destination' && causes[0].count === 2 && causes[0].locatedCount === 2
+    && causes[0].samples.every((sample, index) => sample.line === 2 + index && sample.attribute === 'name' && sample.column >= 1)
+    && causes[1].code === 'unknown_effect' && causes[1].count === 1 && causes[1].samples[0].line === 7
+    && causes[2].code === 'unsupported_effect' && causes[2].count === 3 && causes[2].locatedCount === 3
+    && causes[2].samples.length === 2 && causes[2].samples.every((sample, index) => sample.line === 4 + index
+      && sample.element === 'opaque_effect' && sample.column === 1));
+  ok('missing initial-state source does not acquire an invented authored position',
+    missingInput.coverageGaps.some(gap => gap.filePath === 'md/missing.xml'
+      && gap.mdInitialState?.causes.some(cause => cause.code === 'missing_source' && cause.count === 1
+        && cause.locatedCount === 0 && cause.samples.length === 0)));
+  const firstLineInitialDocument = initialDocument('<set_value name="$Receiver.$X" exact="1"/>');
+  const firstSample = (content: string) => buildMdVariableAvailabilityContext([{ path: 'md/first.xml', content }], initialSchema)
+    .coverageGaps[0]?.mdInitialState?.causes[0].samples[0];
+  const firstPlain = firstSample(firstLineInitialDocument);
+  const firstBom = firstSample('\uFEFF' + firstLineInitialDocument);
+  ok('initial-state sampling maps a leading BOM to the authored first-line column',
+    firstPlain?.line === 1 && firstBom?.line === 1 && firstBom.column === firstPlain.column + 1);
   const unresolvedSchema = { ...initialSchema, elements: new Map(initialSchema.elements) };
   unresolvedSchema.elements.set('output_count', { ...initialSchema.elements.get('output_count')!, resolved: false, attributes: new Map() });
   const unresolvedCondition = initialFiles(initialRead, [conditionWriter], unresolvedSchema);

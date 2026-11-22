@@ -11,11 +11,14 @@ export type CanonicalMdConsultation = { root: string; generation?: string; paths
 export type CanonicalMdValidationOptions = {
   read: (root: string) => Ready | undefined;
   /** Authored inputs that could not be loaded for validation. */
-  skippedFiles?: readonly { path: string }[];
+  skippedFiles?: readonly { path: string; directory?: true }[];
   consulted?: (memo: CanonicalMdConsultation) => void;
 };
 
-const sourceKey = (file: string) => file.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
+export const authoredMdSourcePath = (file: string) => file.replace(/\\/g, '/').replace(/^\.\//, '');
+export const authoredMdSourceKey = (file: string) => authoredMdSourcePath(file).toLowerCase();
+export const isAuthoredMdInventoryPath = (key: string, directory = false) =>
+  key === '.' || key === 'md' || classifyPath(key) === 'md' || (directory && key.split('/').includes('md'));
 const qualifiedScript = (reference: string) => /^md\.([A-Za-z_][\w]*)\.[A-Za-z_][\w]*$/.exec(reference.trim())?.[1];
 const MAX_PROVIDERS = 32;
 
@@ -42,20 +45,17 @@ export function withCanonicalMdReferences(
   }
   if (!requested.size) return undefined;
 
-  const claimed = new Set(projectPaths.map(sourceKey));
+  const claimed = new Set(projectPaths.map(authoredMdSourceKey));
   const memo: CanonicalMdConsultation = { root: referenceRoot, paths: [] };
   const loaded: Document[] = [];
   // Even an off-stem authored file could declare a competing script identity.
-  const skippedMd = options.skippedFiles?.some(file => {
-    const key = sourceKey(file.path);
-    return key === '.' || key === 'md' || classifyPath(key) === 'md';
-  });
+  const skippedMd = options.skippedFiles?.some(file => isAuthoredMdInventoryPath(authoredMdSourceKey(file.path), file.directory));
   const catalog = context.complete && !skippedMd && referenceRoot ? options.read(referenceRoot) : undefined;
   if (catalog) {
     for (const [key, variants] of [...requested].sort(([a], [b]) => a.localeCompare(b))) {
       if (memo.paths.length >= MAX_PROVIDERS) break;
       const provider = catalog.providers.get(key);
-      if (!provider || !variants.has(provider.name) || claimed.has(sourceKey(provider.relativePath))) continue;
+      if (!provider || !variants.has(provider.name) || claimed.has(authoredMdSourceKey(provider.relativePath))) continue;
       memo.paths.push(provider.relativePath);
       try {
         const document = resolveEffectiveReferenceDocument(catalog.root, provider.relativePath, true);

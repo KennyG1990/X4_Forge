@@ -9,6 +9,7 @@
  */
 
 import crypto from "crypto";
+import { isX4FileSignatureNotice } from '../lib/logTelemetry';
 import { parseRuntimeLifecycle, type RuntimeLifecycleEvent } from '../lib/runtimeLifecycle';
 import fs from "fs";
 import path from "path";
@@ -64,7 +65,7 @@ import type { WorkspaceRecord } from "../lib/workspaceRegistry";
 
 export const RUNTIME_DEBUGGER_ADAPTER_SCHEMA_VERSION = 1 as const;
 export const RUNTIME_DEBUGGER_COVERAGE_TARGET = 0.99 as const;
-export const RUNTIME_DEBUGGER_ANALYZER_POLICY_VERSION = 5 as const;
+export const RUNTIME_DEBUGGER_ANALYZER_POLICY_VERSION = 7 as const;
 
 const INTERNAL_DEPLOY_KEY = "__forge_runtime_deploy_metadata__";
 const INTERNAL_EXPECTED_PREFIX = "__forge_runtime_expected__:";
@@ -681,7 +682,9 @@ function incidentInputs(
   return candidates.map(candidate => {
     const position = candidatePosition(candidate, lines, segmentId);
     const key = incidentKeyFor(candidate, keyCache);
-    const severity = candidate.isEngineFailure ? "error" : candidate.kind === "authored_diagnostic" ? "info" : "warning";
+    const informational = candidate.kind === "authored_diagnostic"
+      || (candidate.kind === "file_io" && isX4FileSignatureNotice(candidate.lines[0] || ""));
+    const severity = candidate.isEngineFailure ? "error" : informational ? "info" : "warning";
     const attrs: Record<string, RuntimeValue> = {
       [INTERNAL_ATTR]: "runtime",
       runtimeKind: candidate.kind,

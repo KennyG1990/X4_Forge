@@ -25,6 +25,7 @@ export interface LangAttribute {
   name: string;
   required: boolean;
   type?: string;
+  baseType?: string;
   enumValues?: string[];
 }
 
@@ -112,6 +113,7 @@ export function attributesFor(index: SchemaIndex, tag: string | null | undefined
       name,
       required: !!attr.required,
       ...(attr.type ? { type: attr.type } : {}),
+      ...(attr.baseType ? { baseType: attr.baseType } : {}),
       ...(attr.enumValues?.length ? { enumValues: attr.enumValues } : {}),
     });
   }
@@ -143,7 +145,7 @@ export function runLangServiceSelftest() {
   const checks: { name: string; pass: boolean; detail?: string }[] = [];
   const ok = (name: string, pass: boolean, detail?: string) => checks.push({ name, pass, ...(detail ? { detail } : {}) });
 
-  const el = (attrs: Array<[string, { required?: boolean; type?: string; enumValues?: string[] }]>, children: string[] = [], resolved = true) => ({
+  const el = (attrs: Array<[string, { required?: boolean; type?: string; baseType?: string; enumValues?: string[] }]>, children: string[] = [], resolved = true) => ({
     attributes: new Map(attrs.map(([n, a]) => [n, a])),
     openAttributes: false,
     resolved,
@@ -157,7 +159,8 @@ export function runLangServiceSelftest() {
       // 'actions' parents a census tag (set_value is in CENSUS_TOP_52) + a niche tag + a wildcard orphan
       ['actions', el([], ['zeta_custom', 'set_value', 'unresolved_ghost'])],
       ['set_value', el([['name', { required: true }], ['exact', {}]])],
-      ['zeta_custom', el([['id', { required: true }], ['mode', { enumValues: ['a', 'b'] }]])],
+      ['zeta_custom', el([['id', { required: true }], ['mode', { enumValues: ['a', 'b'] }],
+        ['derived', { type: 'customExpression', baseType: 'expression' }]])],
       ['sealed', el([], [], false)],
     ]),
   } as unknown as SchemaIndex;
@@ -173,6 +176,7 @@ export function runLangServiceSelftest() {
   const attrs = attributesFor(index, 'zeta_custom');
   ok('required_attr_sorts_first', attrs[0]?.name === 'id' && attrs[0]?.required === true);
   ok('enum_values_carried', JSON.stringify(attrs.find(a => a.name === 'mode')?.enumValues) === JSON.stringify(['a', 'b']));
+  ok('declared_base_type_carried', attrs.find(a => a.name === 'derived')?.baseType === 'expression');
   ok('unresolved_element_no_attrs', attributesFor(index, 'sealed').length === 0);
 
   const hover = hoverFor(index, 'SET_VALUE');

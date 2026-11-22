@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { Socket } from 'node:net';
 import { request as playwrightRequest, type APIRequestContext, type Request, type Route } from '@playwright/test';
-import { fetchRouteWithClosingConnection, withClosingApiRequest } from '../tests/e2e/request-transport';
+import { fetchFixtureResponse, fetchRouteWithClosingConnection, withClosingApiRequest } from '../tests/e2e/request-transport';
 
 type HttpMethod = 'get' | 'post' | 'put' | 'patch' | 'delete' | 'head' | 'fetch';
 type FetchOptions = NonNullable<Parameters<APIRequestContext['fetch']>[1]>;
@@ -16,6 +16,8 @@ async function main() {
   const socketIds = new WeakMap<Socket, number>();
   const closures = new Map<number, Promise<void>>();
   const attempts = new Map<string, number>();
+  const nodeReplay: { body: string; operationId: string | string[] | undefined; connection: string | undefined }[] = [];
+  const nodeSockets: number[] = [];
   const observed: { last?: Echo } = {};
   const serverErrors: string[] = [];
   let requestCount = 0;
@@ -56,7 +58,17 @@ async function main() {
           connection: req.headers.connection, contentType: req.headers['content-type'],
           inherited: req.headers['x-inherited'] },
       };
-      const payload = route === '/body' ? 'complete-body:'.repeat(512) : JSON.stringify(observed.last);
+      if (route === '/node-body-stall') {
+        nodeSockets.push(observed.last.socketId);
+        nodeReplay.push({ body: observed.last.body, operationId: req.headers['x-forge-operation-id'],
+          connection: req.headers.connection });
+        if (attempts.get(route) === 1) {
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': 40 });
+          res.write('{');
+          return;
+        }
+      }
+      const payload = route === '/body'  ? 'complete-body:'.repeat(512) : JSON.stringify(observed.last);
       if (Buffer.byteLength(payload) > 16_384) { serverErrors.push('OUTPUT_LIMIT'); req.socket.destroy(); return; }
       if (route === '/cookie') res.setHeader('Set-Cookie', 'fixture_cookie=present; Path=/; HttpOnly');
       res.writeHead(route === '/status' ? 409 : 200, {
@@ -289,6 +301,22 @@ async function main() {
         const dispose = disposable.dispose;
         await dispose({ reason: 'owned transport selftest complete' });
         await assert.rejects(disposable.get('/disposed'));
+      });
+      await check('Node fixture retries an incomplete body with the exact operation and closes both connections', async () => {
+        const response = await fetchFixtureResponse(baseURL + '/node-body-stall', {
+          method: 'POST', headers: { 'x-forge-operation-id': 'same_fixture_operation' },
+          body: 'same fixture bytes',
+        }, 500);
+        assert.equal(response.status, 200);
+        const body = await response.json() as Echo;
+        assert.equal(body.body, 'same fixture bytes');
+        const request = { body: 'same fixture bytes', operationId: 'same_fixture_operation', connection: 'close' };
+        assert.deepEqual(nodeReplay, [request, request]);
+        assert.equal(new Set(nodeSockets).size, 2);
+        await Promise.all(nodeSockets.map(id => closures.get(id)));
+        const statusAttempts = attempts.get('/status') || 0;
+        assert.equal((await fetchFixtureResponse(baseURL + '/status', {}, 500)).status, 409);
+        assert.equal(attempts.get('/status'), statusAttempts + 1);
       });
       assert.deepEqual(serverErrors, []);
       assert(requestCount <= 128);

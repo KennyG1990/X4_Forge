@@ -3,13 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { Brain, PackageCheck, Boxes, Activity } from 'lucide-react';
 import { ModWorkspace, PackageDiagnostic } from '../types';
 import { analyzeCueLineage } from '../lib/cueLineage';
 import DiagnosticsHub from './DiagnosticsHub';
 import PackageModDoctor from './PackageModDoctor';
 import type { ValidationDeltaResult } from '../lib/validationDelta';
+import type { WorkspaceValidationInputs } from '../lib/workspaceValidationInputs';
 import PerformancePanel from './PerformancePanel';
 
 /**
@@ -31,11 +32,13 @@ interface DiagnosticsCenterProps {
   diagnostics: PackageDiagnostic[];
   diagnosticSource: 'checking' | 'project' | 'local';
   validationDelta?: ValidationDeltaResult | null;
+  validationInputs?: WorkspaceValidationInputs;
   /** Jump to the Cues tab (the cue-health summary deep-links there). */
   onOpenCues?: () => void;
   /** A4.10 — gates the optional AI-polish affordance in the Scripts (MDScanner) view. */
   aiEnabled?: boolean;
-  requestedScope?: DiagnosticsScope;
+  scope: DiagnosticsScope;
+  onScopeChange: (scope: DiagnosticsScope) => void;
   onSuppressionCommitted?: (sourceHash: string) => void;
 }
 
@@ -56,17 +59,14 @@ export default function DiagnosticsCenter({
   setWorkspaceView,
   diagnostics,
   diagnosticSource,
+  validationInputs,
   validationDelta,
   onOpenCues,
   aiEnabled = false,
-  requestedScope = 'scripts',
+  scope,
+  onScopeChange,
   onSuppressionCommitted,
 }: DiagnosticsCenterProps) {
-  const [scope, setScope] = useState<DiagnosticsScope>(requestedScope);
-
-  useEffect(() => {
-    setScope(requestedScope);
-  }, [requestedScope]);
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-[#080a0e]">
@@ -80,7 +80,7 @@ export default function DiagnosticsCenter({
               key={s.id}
               data-testid={`diagnostics-scope-${s.id}`}
               aria-pressed={active}
-              onClick={() => setScope(s.id)}
+              onClick={() => onScopeChange(s.id)}
               title={`${s.label} Diagnostics`}
               className={`shrink-0 px-2.5 py-1 rounded text-[9.5px] font-bold uppercase transition-all flex items-center gap-1.5 cursor-pointer border ${
                 active ? s.activeClass : 'text-slate-400 hover:text-slate-200 border-transparent'
@@ -136,8 +136,10 @@ export default function DiagnosticsCenter({
                 workspace={workspace}
                 diagnostics={diagnostics}
                 diagnosticSource={diagnosticSource}
+                validationInputs={validationInputs}
                 validationDelta={validationDelta}
                 focus="package"
+                aiEnabled={aiEnabled}
                 onSuppressionCommitted={onSuppressionCommitted}
               />
             </div>

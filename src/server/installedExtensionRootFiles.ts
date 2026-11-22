@@ -1,13 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { parseCatManifest } from '../lib/x4CatDat';
+import { numberedExtensionCatalogPairs, parseCatManifest, VERSIONED_EXTENSION_CATALOG_PART, type CatEntry } from '../../shared/x4CatalogManifest';
 import { readContentManifestIdentity } from '../lib/validationEvidence';
 
 export const MAX_INSTALLED_ROOT_FILE_BYTES = 64 * 1024;
 const MAX_INDEX_BYTES = 1024 * 1024;
-const MAX_CATALOG_FILES = 32;
-const VERSIONED_CATALOG_PART = /^ext_(?:\d{2}_diff_)?v\d{3,}\.(cat|dat)$/i;
 
 function pathKey(value: string): string {
   return process.platform === 'win32' ? value.toLowerCase() : value;
@@ -37,6 +35,8 @@ function sameStamp(before: fs.BigIntStats, after: fs.BigIntStats): boolean {
 function withRegularFile<T>(root: string, name: string, observed: Map<string, fs.BigIntStats>, read: (fd: number, size: number) => T): T {
   const file = path.join(root, name);
   const before = fs.lstatSync(file, { bigint: true });
+  const previouslyObserved = observed.get(file);
+  if (previouslyObserved && !sameStamp(previouslyObserved, before)) throw new Error('Installed manifest input changed.');
   if (!before.isFile() || pathKey(fs.realpathSync.native(file)) !== pathKey(file)) {
     throw new Error('Installed manifest inputs must be contained regular files.');
   }
@@ -68,68 +68,85 @@ function decode(bytes: Buffer): string {
   return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
 }
 
-/** Read exact extension-root text files with loose precedence and bounded catalog validation. */
-export function readInstalledExtensionRootFiles(target: string, filenames: readonly string[]): Map<string, string> {
+interface InstalledRootSources {
+  loose: Map<string, string>;
+  packed: Map<string, string>;
+  tombstones: Set<string>;
+}
+
+function readRootSources(
+  target: string,
+  filenames: readonly string[],
+  numberedPaths?: ReadonlySet<string>,
+): InstalledRootSources {
   if (filenames.some(name => !/^[a-z0-9_.-]+$/i.test(name) || name === '.' || name === '..')) {
     throw new Error('Installed extension lookup requires root filenames.');
   }
-  const result = new Map<string, string>();
-  if (!filenames.length) return result;
+  const loose = new Map<string, string>();
+  const packed = new Map<string, string>();
+  const tombstones = new Set<string>();
+  if (!filenames.length) return { loose, packed, tombstones };
   const directory = fs.lstatSync(target, { bigint: true, throwIfNoEntry: false });
-  if (!directory) return result;
+  if (!directory) return { loose, packed, tombstones };
   if (!directory.isDirectory()) throw new Error('Installed target is not a regular directory.');
   const root = fs.realpathSync.native(target);
   const physical = fs.lstatSync(root, { bigint: true });
   if (!physical.isDirectory() || !sameStamp(directory, physical)) throw new Error('Installed target directory changed.');
   const names = fs.readdirSync(root);
-  if (names.some(name => VERSIONED_CATALOG_PART.test(name))) {
-    throw new Error('Versioned catalogs need an active-game manifest selection.');
+  if (names.some(name => VERSIONED_EXTENSION_CATALOG_PART.test(name)
+    || (numberedPaths && /^subst_.+\.(cat|dat)$/i.test(name)))) {
+    throw new Error('Versioned or substitution catalogs need an active-game manifest selection.');
   }
 
   const observed = new Map<string, fs.BigIntStats>();
-  const packedNames = new Set(filenames.map(name => name.toLowerCase()));
-  for (const name of packedNames) {
-    const loose = names.filter(file => file.toLowerCase() === name);
-    if (!loose.length) continue;
-    if (loose.length > 1) throw new Error('Installed loose root file is ambiguous.');
-    result.set(name, withRegularFile(root, loose[0], observed, (fd, size) => {
+  const requested = new Set(filenames.map(name => name.toLowerCase()));
+  const packedNames = new Set(numberedPaths ?? requested);
+  for (const name of requested) {
+    const matches = names.filter(file => file.toLowerCase() === name);
+    if (!matches.length) continue;
+    if (matches.length > 1) throw new Error('Installed loose root file is ambiguous.');
+    loose.set(name, withRegularFile(root, matches[0], observed, (fd, size) => {
       if (size > MAX_INSTALLED_ROOT_FILE_BYTES) throw new Error('Installed loose root file exceeds the read limit.');
       return decode(readBytes(fd, 0, size));
     }));
-    packedNames.delete(name);
+    if (!numberedPaths) packedNames.delete(name);
   }
 
   if (packedNames.size) {
-    const volumes = names.filter(name => /^ext_\d{2}\.(cat|dat)$/i.test(name));
-    const byName = new Map(volumes.map(name => [name.toLowerCase(), name]));
-    if (volumes.length > MAX_CATALOG_FILES || byName.size !== volumes.length) {
-      throw new Error('Installed catalog inventory is outside the read limits.');
-    }
     let remaining = MAX_INDEX_BYTES;
-    for (const [name, volume] of byName) {
-      const catalog = name.endsWith('.cat');
-      const pair = byName.get(name.slice(0, -4) + (catalog ? '.dat' : '.cat'));
-      if (!pair) throw new Error('Installed catalog volume is missing its pair.');
-      if (!catalog) continue;
-      const entries = withRegularFile(root, volume, observed, (fd, size) => {
+    const pairs = numberedExtensionCatalogPairs(names);
+    if (numberedPaths) pairs.sort((a, b) => a.cat.toLowerCase().localeCompare(b.cat.toLowerCase()));
+    const selected = new Map<string, { part: string; entry: CatEntry }>();
+    for (const { cat, dat } of pairs) {
+      const entries = withRegularFile(root, cat, observed, (fd, size) => {
         if (size > remaining) throw new Error('Installed catalog indexes exceed the read limit.');
         remaining -= size;
         return parseCatManifest(decode(readBytes(fd, 0, size)), { strict: true, maxEntries: 16_384 });
       });
       const end = entries.at(-1);
-      withRegularFile(root, pair, observed, (fd, size) => {
+      withRegularFile(root, dat, observed, (_fd, size) => {
         if ((end ? end.offset + end.size : 0) !== size) throw new Error('Installed catalog index does not cover its data volume.');
-        for (const entry of entries) {
-          const entryName = entry.name.toLowerCase();
-          if (!packedNames.has(entryName)) continue;
-          if (result.has(entryName) || entry.size > MAX_INSTALLED_ROOT_FILE_BYTES) {
-            throw new Error('Installed packed root file is ambiguous or oversized.');
-          }
-          const bytes = readBytes(fd, entry.offset, entry.size);
-          if (createHash('md5').update(bytes).digest('hex') !== entry.md5) throw new Error('Installed packed root file checksum differs.');
-          result.set(entryName, decode(bytes));
-        }
       });
+      const seen = new Set<string>();
+      for (const entry of entries) {
+        const name = entry.name.toLowerCase();
+        if (!packedNames.has(name)) continue;
+        if (seen.has(name) || (!numberedPaths && selected.has(name))) throw new Error('Installed packed root file is ambiguous.');
+        seen.add(name);
+        selected.set(name, { part: dat, entry });
+      }
+    }
+    for (const [name, { part, entry }] of selected) {
+      if (entry.size > MAX_INSTALLED_ROOT_FILE_BYTES) throw new Error('Installed packed root file exceeds the read limit.');
+      packed.set(name, withRegularFile(root, part, observed, (fd) => {
+        const bytes = readBytes(fd, entry.offset, entry.size);
+        const explicitEmpty = numberedPaths && entry.size === 0 && entry.md5 === '0'.repeat(32);
+        if (!explicitEmpty && createHash('md5').update(bytes).digest('hex') !== entry.md5) {
+          throw new Error('Installed packed root file checksum differs.');
+        }
+        return decode(bytes);
+      }));
+      if (numberedPaths && entry.size === 0 && entry.timestamp === 0) tombstones.add(name);
     }
   }
 
@@ -141,5 +158,24 @@ export function readInstalledExtensionRootFiles(target: string, filenames: reado
   if (!current.isDirectory() || !sameStamp(directory, current) || pathKey(fs.realpathSync.native(target)) !== pathKey(root)) {
     throw new Error('Installed target directory changed.');
   }
-  return result;
+  return { loose, packed, tombstones };
+}
+
+/** Read exact extension-root text files with loose precedence and bounded catalog validation. */
+export function readInstalledExtensionRootFiles(target: string, filenames: readonly string[]): Map<string, string> {
+  const { loose, packed } = readRootSources(target, filenames);
+  return new Map([...loose, ...packed]);
+}
+
+/** Read both file preferences over a single verified numbered catalog inventory. */
+export function readInstalledExtensionRootVariants(target: string, selectable: readonly string[], looseOnly: readonly string[] = []) {
+  return readRootSources(target, [...selectable, ...looseOnly], new Set(selectable.map(name => name.toLowerCase())));
+}
+
+export function installedRootFileVariants(sources: InstalledRootSources, name: string) {
+  const loose = sources.loose.get(name);
+  // A deletion entry masks this path in the catalog-first view.
+  const packed = sources.packed.get(name);
+  const catalogValue = sources.tombstones.has(name) ? undefined : packed;
+  return { loosePreferred: loose ?? catalogValue, catalogPreferred: packed === undefined ? loose : catalogValue };
 }

@@ -45,6 +45,27 @@ const XML_REFERENCE_MAX_EDGES = 120;
 const XML_REFERENCE_MAX_FILES = 256;
 const XML_REFERENCE_MAX_CANDIDATES = 16;
 const XML_REFERENCE_MAX_OUTPUT_BYTES = 512 * 1024;
+const AUTHORED_NAVIGATION_TOOLS = new Set(["navigate_ai_script", "navigate_md_script"]);
+const AUTHORED_NAVIGATION_CAPABILITIES = new Set(["project.ai.navigation", "project.md.navigation"]);
+const AUTHORED_NAVIGATION_ROUTES = new Set(["/api/agent/project/ai-navigation", "/api/agent/project/md-navigation"]);
+const AUTHORED_NAVIGATION_MAX_FILES = 512;
+const AUTHORED_NAVIGATION_MAX_FILE_BYTES = 8 * 1024 * 1024;
+const AUTHORED_NAVIGATION_MAX_TOTAL_BYTES = 4 * AUTHORED_NAVIGATION_MAX_FILE_BYTES;
+const AUTHORED_NAVIGATION_MAX_REFERENCES = 2048;
+const MD_NAVIGATION_EVIDENCE = {
+  label: "Mission Director navigation",
+  subject: "Mission Director scripts",
+  schemaVersion: "forge.md-navigation.v1",
+  scope: "authored-md-snapshot",
+  file: /^md\/[^/\\:<>"|?*\x00-\x1f\x7f]+\.xml$/i,
+};
+const AI_NAVIGATION_EVIDENCE = {
+  label: "AI script navigation",
+  subject: "AI scripts",
+  schemaVersion: "forge.ai-navigation.v1",
+  scope: "authored-ai-snapshot",
+  file: /^aiscripts\/[^/\\:<>"|?*\x00-\x1f\x7f]+\.xml$/i,
+};
 const PERFORMANCE_LIVE_TOOLS = new Set(["get_forge_performance", "start_forge_performance_capture", "profile_forge_backend"]);
 const PERFORMANCE_PROFILE_HTTP_FAILURES = { PROFILE_DISABLED: 503, PROFILE_BUSY: 409, PROFILE_RATE_LIMITED: 429, PROFILE_DISPOSED: 503, PROFILE_INPUT_INVALID: 400, PROFILE_ABORTED: 408, PROFILE_FAILED: 500, PROFILE_CLEANUP_UNCONFIRMED: 409 };
 const PERFORMANCE_COLLECTION_HTTP_FAILURES = { PERFORMANCE_DISPOSED: 503, PERFORMANCE_COLLECTION_BUSY: 409, PERFORMANCE_COLLECTION_REFUSED: 409, PROJECT_INPUT_INVALID: 400, PERFORMANCE_COLLECTION_FAILED: 500 };
@@ -355,6 +376,98 @@ const TOOLS = [
     },
   },
   {
+    name: "navigate_ai_script",
+    capabilityId: "project.ai.navigation",
+    capabilityVersion: 1,
+    description: "Resolve literal AIScript run_script definitions and references at a zero-based UTF-16 offset in submitted XML. Requires an explicit grant in the bound workspace. Supports up to 512 files, 8 MiB UTF-8 per file and 32 MiB total.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: {
+          type: "object",
+          properties: {
+            id: { type: "string", maxLength: 256 },
+            name: { type: "string", maxLength: 512 },
+            files: {
+              type: "array", maxItems: AUTHORED_NAVIGATION_MAX_FILES,
+              items: {
+                type: "object",
+                properties: {
+                  path: { type: "string", maxLength: 1024 },
+                  content: { type: "string", maxLength: AUTHORED_NAVIGATION_MAX_FILE_BYTES },
+                },
+                required: ["path"], additionalProperties: false,
+              },
+            },
+          },
+          required: ["id", "name", "files"], additionalProperties: false,
+        },
+        path: { type: "string", maxLength: 1024 },
+        offset: { type: "integer", minimum: 0, maximum: AUTHORED_NAVIGATION_MAX_FILE_BYTES },
+        mode: { type: "string", enum: ["definition", "references"] },
+        includeDeclaration: { type: "boolean" },
+      },
+      required: ["project", "path", "offset", "mode"], additionalProperties: false,
+    },
+    handler: async (args) => {
+      validateAuthoredNavigationInput(args, AI_NAVIGATION_EVIDENCE);
+      let result;
+      try {
+        result = await forge("POST", "/api/agent/project/ai-navigation", args);
+      } catch (error) {
+        const status = Number.isInteger(error?.status) ? " (HTTP " + error.status + ")" : "";
+        throw new Error("Forge AI script navigation request failed" + status);
+      }
+      return projectAuthoredNavigation(result, args, AI_NAVIGATION_EVIDENCE);
+    },
+  },
+  {
+    name: "navigate_md_script",
+    capabilityId: "project.md.navigation",
+    capabilityVersion: 1,
+    description: "Resolve literal Mission Director cue or library definitions and references at a zero-based UTF-16 offset in submitted XML. Requires an explicit grant in the bound workspace. Supports up to 512 files, 8 MiB UTF-8 per file and 32 MiB total.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: {
+          type: "object",
+          properties: {
+            id: { type: "string", maxLength: 256 },
+            name: { type: "string", maxLength: 512 },
+            files: {
+              type: "array", maxItems: AUTHORED_NAVIGATION_MAX_FILES,
+              items: {
+                type: "object",
+                properties: {
+                  path: { type: "string", maxLength: 1024 },
+                  content: { type: "string", maxLength: AUTHORED_NAVIGATION_MAX_FILE_BYTES },
+                },
+                required: ["path"], additionalProperties: false,
+              },
+            },
+          },
+          required: ["id", "name", "files"], additionalProperties: false,
+        },
+        path: { type: "string", maxLength: 1024 },
+        offset: { type: "integer", minimum: 0, maximum: AUTHORED_NAVIGATION_MAX_FILE_BYTES },
+        mode: { type: "string", enum: ["definition", "references"] },
+        includeDeclaration: { type: "boolean" },
+      },
+      required: ["project", "path", "offset", "mode"], additionalProperties: false,
+    },
+    handler: async (args) => {
+      validateAuthoredNavigationInput(args, MD_NAVIGATION_EVIDENCE);
+      let result;
+      try {
+        result = await forge("POST", "/api/agent/project/md-navigation", args);
+      } catch (error) {
+        const status = Number.isInteger(error?.status) ? " (HTTP " + error.status + ")" : "";
+        throw new Error("Forge Mission Director navigation request failed" + status);
+      }
+      return projectAuthoredNavigation(result, args, MD_NAVIGATION_EVIDENCE);
+    },
+  },
+  {
     name: "get_forge_performance",
     capabilityId: "performance.read",
     capabilityVersion: 1,
@@ -534,6 +647,7 @@ STATIC_TOOL_NAMES.delete("check_expression");
 STATIC_TOOL_NAMES.delete("inspect_expression");
 STATIC_TOOL_NAMES.delete("lookup_text");
 STATIC_TOOL_NAMES.delete("get_xml_references");
+for (const name of AUTHORED_NAVIGATION_TOOLS) STATIC_TOOL_NAMES.delete(name);
 for (const name of PERFORMANCE_LIVE_TOOLS) STATIC_TOOL_NAMES.delete(name);
 for (const name of NATIVE_PERFORMANCE_LIVE_TOOLS) STATIC_TOOL_NAMES.delete(name);
 
@@ -620,6 +734,64 @@ function isXmlReferencePath(value) {
   const normalized = value.replace(/\\/g, "/").replace(/^\.\//, "");
   return !normalized.startsWith("/") && !/^[A-Za-z][A-Za-z0-9+.-]*:/.test(normalized) &&
     normalized.split("/").every(part => part && part !== "." && part !== "..");
+}
+
+function validateAuthoredNavigationInput(args, evidence) {
+  if (!WORKSPACE_ID) throw new Error("Set X4FORGE_WORKSPACE_ID to the key-bound workspace before navigating " + evidence.subject);
+  if (args.project.files.length > AUTHORED_NAVIGATION_MAX_FILES) throw new Error(evidence.label + " accepts at most 512 project files");
+  let totalBytes = 0;
+  for (const file of args.project.files) {
+    const bytes = Buffer.byteLength(file.content ?? "", "utf8");
+    totalBytes += bytes;
+    if (bytes > AUTHORED_NAVIGATION_MAX_FILE_BYTES || totalBytes > AUTHORED_NAVIGATION_MAX_TOTAL_BYTES) {
+      throw new Error(evidence.label + " snapshot exceeds its UTF-8 byte budget");
+    }
+  }
+}
+
+function projectAuthoredNavigation(value, args, evidence) {
+  const result = requireResponse(value, evidence.label, {
+    schemaVersion: "string", workspaceId: "string", inputHash: "string", scope: "string", status: "string",
+  });
+  const invalid = () => { throw new Error("Forge returned invalid " + evidence.label + " evidence"); };
+  const inputHash = crypto.createHash("sha256").update(JSON.stringify([
+    args.project.id, args.project.files.map(file => [file.path, file.content ?? null]),
+  ]), "utf8").digest("hex");
+  const { schemaVersion, workspaceId, scope, status } = result;
+  if (schemaVersion !== evidence.schemaVersion || workspaceId !== WORKSPACE_ID || result.inputHash !== inputHash
+    || scope !== evidence.scope || result.modId !== args.project.id || result.sourceHash !== inputHash
+    || result.sourceHashScope !== scope || !["resolved", "not-found", "not-a-literal", "ambiguous", "unavailable"].includes(status)) invalid();
+
+  const projected = { schemaVersion, workspaceId, inputHash, scope, status };
+  const base = [...Object.keys(projected), "modId", "sourceHash", "sourceHashScope"];
+  if (status === "unavailable") {
+    if (!hasExactKeys(result, [...base, "reason"]) || !["focus", "inventory", "source", "limit"].includes(result.reason)) invalid();
+    return { ...projected, reason: result.reason };
+  }
+  if (status !== "resolved") {
+    if (!hasExactKeys(result, base)) invalid();
+    return projected;
+  }
+
+  const limit = AUTHORED_NAVIGATION_MAX_REFERENCES + (args.includeDeclaration === true ? 1 : 0);
+  if (!hasExactKeys(result, [...base, "locations"]) || !Array.isArray(result.locations) || result.locations.length > limit
+    || (args.mode === "definition" && result.locations.length !== 1)) invalid();
+  const sourcePaths = new Set(args.project.files
+    .filter(file => typeof file.content === "string").map(file => file.path.replace(/\\/g, "/")));
+  const position = point => {
+    if (!isRecord(point) || !hasExactKeys(point, ["line", "column"]) || [point.line, point.column].some(coordinate =>
+      !Number.isSafeInteger(coordinate) || coordinate < 0 || coordinate > AUTHORED_NAVIGATION_MAX_FILE_BYTES)) invalid();
+    return { line: point.line, column: point.column };
+  };
+  const locations = result.locations.map(location => {
+    if (!isRecord(location) || !hasExactKeys(location, ["file", "start", "end"]) || !isXmlReferencePath(location.file)
+      || !evidence.file.test(location.file) || !sourcePaths.has(location.file)) invalid();
+    const start = position(location.start);
+    const end = position(location.end);
+    if (end.line < start.line || (end.line === start.line && end.column <= start.column)) invalid();
+    return { file: location.file, start, end };
+  });
+  return { ...projected, locations };
 }
 
 function requireExpressionInspection(value, expression) {
@@ -1577,6 +1749,13 @@ function validateLiveContract(contract) {
   return expected === String(contract.contractHash).toLowerCase();
 }
 
+function authoredNavigationGrantAllowed(capability, authority) {
+  const grant = authority.constraint;
+  return capability.version === 1 && isRecord(grant)
+    && grant.capabilityIdentities.includes(capability.id + "@1")
+    && grant.allowedEffects.includes("read") && grant.allowedEffects.includes("analyze");
+}
+
 function validateEffectiveAuthority(authority, canonicalContract) {
   if (!isRecord(authority) || !hasExactKeys(authority, [
     "actor", "api_version", "authority_hash", "authority_schema_version", "capability_contract",
@@ -1620,6 +1799,7 @@ function validateEffectiveAuthority(authority, canonicalContract) {
   const expectedEffective = canonicalContract.capabilities.filter((capability) => {
     if (!capability.access.agentScopes.includes(authority.actor.scope)) return false;
     if (NATIVE_PERFORMANCE_CAPABILITIES.has(capability.id)) return nativeGrantAllowed(capability, authority);
+    if (AUTHORED_NAVIGATION_CAPABILITIES.has(capability.id)) return authoredNavigationGrantAllowed(capability, authority);
     if (capability.access.public || constraint === null) return true;
     const identity = `${capability.id}@${capability.version}`;
     return selectedIdentities.has(identity) && capability.effects.every((effect) => allowedEffects.has(effect));
@@ -1724,6 +1904,7 @@ async function availableTools(nativeRequest) {
       const capability = advertised.get(`${TOOLS[toolIndex].capabilityId}@${TOOLS[toolIndex].capabilityVersion}`);
       const projection = capability?.surfaces?.mcp?.find((candidate) => candidate.id === TOOLS[toolIndex].name);
       if (NATIVE_PERFORMANCE_LIVE_TOOLS.has(TOOLS[toolIndex].name) && (!capability || !nativeGrantAllowed(capability, discovery.authority))) continue;
+      if (AUTHORED_NAVIGATION_TOOLS.has(TOOLS[toolIndex].name) && (!capability || !authoredNavigationGrantAllowed(capability, discovery.authority))) continue;
       if (projection && projection.status !== "disconnected") supportedNow.add(TOOLS[toolIndex].name);
     }
     stickyLiveToolNames = stickyLiveToolNames === null
@@ -1743,7 +1924,7 @@ async function availableTools(nativeRequest) {
   if (stickyLiveToolNames !== null) {
     return {
       discovery,
-      toolNames: [...stickyLiveToolNames].filter(name => !["check_expression", "inspect_expression", "get_xml_references", "lookup_text"].includes(name) && !PERFORMANCE_LIVE_TOOLS.has(name) && !NATIVE_PERFORMANCE_LIVE_TOOLS.has(name)),
+      toolNames: [...stickyLiveToolNames].filter(name => !["check_expression", "inspect_expression", "get_xml_references", "lookup_text"].includes(name) && !AUTHORED_NAVIGATION_TOOLS.has(name) && !PERFORMANCE_LIVE_TOOLS.has(name) && !NATIVE_PERFORMANCE_LIVE_TOOLS.has(name)),
       effectiveContract: lastValidContract,
       effectiveAuthority: lastValidAuthority,
       contractState: `${discovery.state}-sticky-live`,
@@ -1845,12 +2026,13 @@ async function forge(method, apiPath, body, signal, nativeDiscovery = false) {
   if (KEY) headers.Authorization = `Bearer ${KEY}`;
   if (WORKSPACE_ID) headers["x-workspace-id"] = WORKSPACE_ID;
   const nativeRoute = nativePerformanceRoute(method, apiPath);
+  const forwardsAuthoredSource = method === "POST" && AUTHORED_NAVIGATION_ROUTES.has(apiPath);
   const res = await fetch(`${BASE}${apiPath}`, {
     method,
     headers,
     ...(signal ? { signal } : {}),
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-    ...(nativeRoute || nativeDiscovery ? { redirect: "error" } : {}),
+    ...(nativeRoute || nativeDiscovery || forwardsAuthoredSource ? { redirect: "error" } : {}),
   });
   let data = null;
   if (nativeRoute || nativeDiscovery) data = await readNativeJson(res, signal, nativeRoute ? NATIVE_PERFORMANCE_RESPONSE_BYTES : NATIVE_PERFORMANCE_DISCOVERY_BYTES);

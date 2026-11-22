@@ -3,7 +3,7 @@
 import fs from 'fs';
 import path from 'path';
 import type { Express, Request, Response } from 'express';
-import { resolveXsdConfig } from '../lib/xsdParser';
+import { resolveX4ReferenceRoot, resolveXsdConfig } from '../lib/xsdParser';
 import {
   getReferenceCorpus,
   resolveReferenceFile,
@@ -30,6 +30,7 @@ import type { CanonicalSymbolKind } from '../lib/referenceCorpus';
 import type { ModWorkspace } from '../types';
 import { completeXPath } from '../lib/xpathCompletion';
 import type { InstanceRecord } from '../lib/instanceDiscovery';
+import { parseEditorOrderFiles } from '../../shared/referenceEditorOrders';
 
 function errorText(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function forceRefresh(req: Request): boolean { return /^(1|true|yes)$/i.test(String(req.query.refresh || '')); }
@@ -90,7 +91,7 @@ function sendCorpusError(res: Response, error: unknown, instance?: Omit<Instance
   if (/invalid request|outside the document|outside line|missing path/i.test(message)) return res.status(400).json(body);
   if (/traversal/i.test(message)) return res.status(403).json(body);
   if (/file not found/i.test(message)) return res.status(404).json(body);
-  if (/root.*(unavailable|does not exist|not a directory)/i.test(message)) return res.status(503).json(body);
+  if (/root.*(unavailable|does not exist|not a directory)|script symbol origins unavailable/i.test(message)) return res.status(503).json(body);
   return res.status(500).json(body);
 }
 
@@ -99,14 +100,23 @@ export function registerReferenceRoutes(
   workspaceProvider?: (req: Request) => ModWorkspace | null | undefined,
   publicInstance?: () => Omit<InstanceRecord, 'cwd'>,
   editorTextHover?: (req: Request, document: ReferenceLanguageRequest) => { status: number; value: unknown } | undefined,
+  editorOrderScope?: (req: Request, sourceRoot: unknown) => { allowed: boolean; workspace?: ModWorkspace },
 ): void {
   app.get('/api/reference/effective-file', (req, res) => {
     try {
-      const corpus = load(req);
-      const effective = resolveEffectiveReferenceDocument(corpus.root, String(req.query.path || ''), forceRefresh(req));
+      const origins = req.query.view === 'script-symbol-origins';
+      const root = origins ? resolveX4ReferenceRoot() : load(req).root;
+      if (origins) res.set('Cache-Control', 'no-store');
+      const effective = resolveEffectiveReferenceDocument(root, String(req.query.path || ''), forceRefresh(req), { scriptSymbolOrigins: origins });
       if (!effective.available || effective.content === undefined) return res.status(404).json({ error: `Canonical effective file not found: ${String(req.query.path || '')}`, ...effective });
       if (effective.complete !== true) return res.status(503).json({ ...effective,
         code: 'REFERENCE_EFFECTIVE_INCOMPLETE', error: 'Canonical reference composition is incomplete; inspect the active source findings.' });
+      if (origins && !effective.scriptSymbolOrigins?.complete) return res.status(503).json({ ...effective,
+        code: 'REFERENCE_SCRIPT_ORIGINS_INCOMPLETE', error: effective.scriptSymbolOrigins?.detail ?? 'Script symbol origins unavailable.' });
+      if (origins && req.query.compact === '1') return res.json({
+        root: effective.root, relativePath: effective.relativePath, complete: effective.complete,
+        scriptSymbolOrigins: effective.scriptSymbolOrigins,
+      });
       return res.json(effective);
     } catch (error) { return sendCorpusError(res, error); }
   });
@@ -166,8 +176,20 @@ export function registerReferenceRoutes(
   app.post('/api/reference/complete', (req, res) => {
     try {
       const request = languageRequest(req);
+      let workspace = workspaceProvider?.(req);
+      if (req.body.editorOrderFiles !== undefined) {
+        res.set('Cache-Control', 'no-store');
+        const scope = editorOrderScope?.(req, req.body.editorSourceRoot);
+        if (!scope?.allowed) return res.status(403).json({
+          code: 'EDITOR_ORDER_OVERLAY_FORBIDDEN', error: 'Editor order buffers require the Studio actor.',
+        });
+        const files = parseEditorOrderFiles(req.body.editorOrderFiles);
+        if (!files) throw new Error('Invalid request: editor order files require unique direct AI XML paths within the text budget.');
+        workspace = scope.workspace;
+        if (workspace) request.editorOrderFiles = files;
+      }
       const corpus = load(req);
-      return res.json(completeReferenceDocument(request, getReferenceLanguageResources(corpus, request, workspaceProvider?.(req))));
+      return res.json(completeReferenceDocument(request, getReferenceLanguageResources(corpus, request, workspace)));
     } catch (error) { return sendCorpusError(res, error); }
   });
 
@@ -203,13 +225,17 @@ export function registerReferenceRoutes(
 
   app.get('/api/reference/manifest', (req, res) => {
     try {
-      const resolved = resolveXsdConfig();
-      let status = forceRefresh(req)
-        ? scheduleReferenceManifest(resolved.x4ReferenceRoot, true)
-        : getReferenceManifestStatus(resolved.x4ReferenceRoot);
-      if (status.state === 'idle') status = scheduleReferenceManifest(resolved.x4ReferenceRoot, false);
+      const observe = req.query.observe === '1';
+      const root = observe ? resolveX4ReferenceRoot() : resolveXsdConfig().x4ReferenceRoot;
+      if (observe) res.set('Cache-Control', 'no-store');
+      let status = !observe && forceRefresh(req)
+        ? scheduleReferenceManifest(root, true)
+        : getReferenceManifestStatus(root, { openDatabase: !observe });
+      if (!observe && status.state === 'idle') status = scheduleReferenceManifest(root, false);
+      if (observe && !status.current) return res.status(status.state === 'unavailable' || status.state === 'error' ? 503 : 202)
+        .json({ status, files: [], total: 0 });
       const extensionInput = String(req.query.extension || '').trim().toLowerCase();
-      const result = queryReferenceManifest(resolved.x4ReferenceRoot, {
+      const result = queryReferenceManifest(root, {
         q: String(req.query.q || '').trim(),
         extension: extensionInput ? (extensionInput.startsWith('.') ? extensionInput : `.${extensionInput}`) : undefined,
         source: String(req.query.source || '').trim().toLowerCase() || undefined,

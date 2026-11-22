@@ -46,7 +46,14 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
 
   const validationErrors = validateForgeCapabilityRegistry();
   check('registry invariants', validationErrors.length === 0, validationErrors.join(' | ') || undefined);
-  check('bounded non-native registry', FORGE_CAPABILITIES.filter(capability => !capability.id.startsWith('performance.native.')).length === 19, `count=${FORGE_CAPABILITIES.length}`);
+  check('bounded non-native registry', FORGE_CAPABILITIES.filter(capability => !capability.id.startsWith('performance.native.')).length === 22, `count=${FORGE_CAPABILITIES.length}`);
+  const compileResult = findForgeCapability('workspace.compile.result');
+  check('retained compile report access is workspace-scoped and read-only',
+    compileResult?.context.workspace === 'required'
+      && compileResult.effects.length === 1 && compileResult.effects[0] === 'read'
+      && compileResult.access.public === false && compileResult.surfaces.mcp.length === 0
+      && compileResult.apiBindings.length === 1 && compileResult.apiBindings[0].method === 'GET'
+      && compileResult.apiBindings[0].path === '/api/agent/compile/result/:id');
 
   const canonical = canonicalCapabilityContractPayload();
   const contract = buildForgeCapabilityContract(sha256);
@@ -261,6 +268,40 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
         ledgerRouteKind('POST', '/api/agent/project/xml-references') === null,
     );
   }
+  for (const [kind, other] of [['ai', 'md'], ['md', 'ai']] as const) {
+    const id = 'project.' + kind + '.navigation';
+    const otherId = 'project.' + other + '.navigation';
+    const capability = findForgeCapability(id)!;
+    const route = '/api/agent/project/' + kind + '-navigation';
+    const grant: AgentCapabilityConstraint = { capabilityIdentities: [id + '@1'], allowedEffects: ['read', 'analyze'] };
+    const actor = { kind: 'agent', scope: 'read', workspaceId: 'ws_navigation_fixture' } as const;
+    const authority = resolveAgentRouteTemplateAuthority('POST', route);
+    check(`${kind} navigation is one private workspace-bound read/analyze capability`,
+      capability?.version === 1 && !capability.access.public
+        && capability.context.workspace === 'required' && capability.confirmation === 'none'
+        && JSON.stringify(capability.effects) === JSON.stringify(['read', 'analyze'])
+        && JSON.stringify(capability.apiBindings) === JSON.stringify([{ method: 'POST', path: route, inputLocation: 'body', role: 'primary' }])
+        && capability.surfaces.mcp.length === 1 && capability.surfaces.mcp[0].id === 'navigate_' + kind + '_script'
+        && authority.ok && authority.decision.owner === capability.id && authority.decision.workspaceMode === 'required');
+    check(`${kind} navigation advertises only exact addressed grants and remains ledger quiet`,
+      ['read', 'write', 'deploy'].every(scope => decideEffectiveCapability(capability, {
+        ...actor, scope: scope as AgentKeyScope,
+      }, resolveAgentRouteTemplateAuthority).code === 'CAPABILITY_NOT_GRANTED')
+        && decideEffectiveCapability(capability, { ...actor, constraint: grant }, resolveAgentRouteTemplateAuthority).allowed
+        && decideEffectiveCapability(capability, { ...actor, workspaceId: undefined, constraint: grant }, resolveAgentRouteTemplateAuthority).code === 'CAPABILITY_WORKSPACE_REQUIRED'
+        && decideEffectiveCapability(capability, {
+          ...actor, constraint: { ...grant, allowedEffects: ['read'] },
+        }, resolveAgentRouteTemplateAuthority).code === 'CAPABILITY_EFFECT_DENIED'
+        && decideEffectiveCapability(capability, {
+          ...actor, constraint: { ...grant, capabilityIdentities: ['project.xml.references@1'] },
+        }, resolveAgentRouteTemplateAuthority).code === 'CAPABILITY_NOT_GRANTED'
+        && decideEffectiveCapability(capability, {
+          ...actor, constraint: { ...grant, capabilityIdentities: [otherId + '@1'] },
+        }, resolveAgentRouteTemplateAuthority).code === 'CAPABILITY_NOT_GRANTED'
+        && decideEffectiveCapability(capability, { kind: 'studio' }, resolveAgentRouteTemplateAuthority).allowed
+        && !resolveAgentRouteTemplateAuthority('POST', route + '/extra').ok
+        && LEDGER_QUIET_ROUTES.includes(route) && ledgerRouteKind('POST', route) === null);
+  }
   const performanceBindings = [
     { id: 'performance.read', method: 'GET', path: '/api/agent/performance', alias: 'get_forge_performance' },
     { id: 'performance.collect', method: 'POST', path: '/api/agent/performance/collection', alias: 'start_forge_performance_capture' },
@@ -468,7 +509,7 @@ export function runNativeForgeCapabilitiesSelftest() {
   const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   const keys = (value: object | undefined) => Object.keys(value || {}).sort();
   check('native registry has exactly the three reviewed process telemetry identities',
-    FORGE_CAPABILITIES.length === 22 &&
+    FORGE_CAPABILITIES.length === 25 &&
       equal(FORGE_CAPABILITIES.filter(capability => capability.id.startsWith('performance.native.')).map(capability => capability.id).sort(),
         expected.map(row => row.id).sort()));
   for (const row of expected) {

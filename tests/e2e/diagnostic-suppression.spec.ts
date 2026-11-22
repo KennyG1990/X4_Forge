@@ -131,6 +131,35 @@ test('reviewed exact suppression creates rules, rejects stale/error paths, and r
     expect(await errorResponse.json()).toMatchObject({ code: 'DIAGNOSTIC_NOT_SUPPRESSIBLE' });
     expect(fs.readFileSync(rulesPath, 'utf8')).toBe(beforeErrorAttempt);
 
+
+    const priorRule = {
+      id: 'existing-rule', owner: 'Fixture Maintainer', reason: 'Previously reviewed %%BYTE%% note.',
+      reviewBy: prepared.defaults.reviewBy, code: 'migration.deprecated_element', file: 'md/another.xml',
+    };
+    const annotatedRules = JSON.stringify({ version: 1, suppressions: [priorRule] });
+    const [prefix, suffix] = annotatedRules.split('%%BYTE%%');
+    const malformedRules = Buffer.concat([Buffer.from(prefix), Buffer.from([0x80]), Buffer.from(suffix)]);
+    fs.writeFileSync(rulesPath, malformedRules);
+
+    const invalidRulesPrepare = await request.post(`${API}/api/agent/project-rules/prepare-suppression`, {
+      headers: auth, data: { workspace, scope: warning!.suppressionScope },
+    });
+    expect(invalidRulesPrepare.status()).toBe(409);
+    expect(await invalidRulesPrepare.json()).toMatchObject({
+      code: 'RULES_FILE_INVALID',
+      details: expect.arrayContaining([expect.objectContaining({ code: 'rules.invalid_encoding', filePath: 'forge.rules.json' })]),
+    });
+    const invalidRulesApply = await request.post(`${API}/api/agent/project-rules/suppress`, {
+      headers: auth,
+      data: { workspace, scope: warning!.suppressionScope, expectedSha256: createHash('sha256').update(malformedRules).digest('hex'),
+        review: { ...prepared.defaults, owner: 'Fixture Maintainer' } },
+    });
+    expect(invalidRulesApply.status()).toBe(409);
+    expect(await invalidRulesApply.json()).toMatchObject({ code: 'RULES_FILE_INVALID' });
+    expect(fs.readFileSync(rulesPath)).toEqual(malformedRules);
+    const validRules = annotatedRules.replace('%%BYTE%%', '\uFFFD');
+    fs.writeFileSync(rulesPath, validRules, 'utf8');
+
     const freshPrepareResponse = await request.post(`${API}/api/agent/project-rules/prepare-suppression`, {
       headers: auth, data: { workspace, scope: warning!.suppressionScope },
     });
@@ -142,7 +171,9 @@ test('reviewed exact suppression creates rules, rejects stale/error paths, and r
     });
     expect(commitResponse.ok(), await commitResponse.text()).toBeTruthy();
     expect(await commitResponse.json()).toMatchObject({ success: true, status: 'VERIFIED', rule: { code: warning!.code, file: warning!.filePath } });
-    expect(JSON.parse(fs.readFileSync(rulesPath, 'utf8')).suppressions).toHaveLength(1);
+    const savedRules = JSON.parse(fs.readFileSync(rulesPath, 'utf8'));
+    expect(savedRules.suppressions).toHaveLength(2);
+    expect(savedRules.suppressions[0]).toEqual({ ...priorRule, reason: 'Previously reviewed \uFFFD note.' });
 
     const afterResponse = await request.post(`${API}/api/agent/compile`, { headers: auth, data: { workspace } });
     expect(afterResponse.ok(), await afterResponse.text()).toBeTruthy();
@@ -249,6 +280,16 @@ test('Diagnostics Center sends the source-bound native position from project val
     const compiled = await request.post(`${API}/api/agent/compile`, { headers: auth, data: { workspace, fileOverrides } });
     expect(compiled.ok(), await compiled.text()).toBeTruthy();
     const result = await compiled.json();
+    expect(result.validation.inputs).toMatchObject({
+      diskSource: 'read', sourceHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      sourceHashScope: 'project-validation-inputs-v1',
+    });
+    if (fileOverrides?.[filePath] !== undefined) {
+      expect(result.validation.inputs.overrideFiles).toBe(1);
+      expect(result.validation.inputs.differentDiskPaths).toContain(filePath);
+    } else {
+      expect(result.validation.inputs.differentDiskPaths).not.toContain(filePath);
+    }
     return result.diagnostics as Array<{ filePath: string; code: string; sourceNavigation?: unknown }>;
   };
   const native = {
@@ -381,6 +422,14 @@ test('Diagnostics Center renders deterministic Why guidance and the reviewed sup
       defaults: { id: 'suppress-scriptproperty-unknown', owner: '', reason: 'Reviewed exact fixture warning.', reviewBy: '2026-10-28' },
     }),
   }));
+  await page.addInitScript(() => localStorage.setItem('x4_ai_tier', 'off'));
+  let releaseFirstSelftest!: () => void;
+  const firstSelftestCanFinish = new Promise<void>(resolve => { releaseFirstSelftest = resolve; });
+  const coreSelftestPath = '/api/agent/selftest';
+  await page.route(/\/api\/agent\/(?:selftest|[\w-]+-selftest|md-audit|lua-snippets|patch-audit)$/, async route => {
+    if (new URL(route.request().url()).pathname === coreSelftestPath) await firstSelftestCanFinish;
+    await route.fulfill({ json: { pass: true } });
+  });
   await waitForApp(page);
 
   const opening = performance.now();
@@ -395,6 +444,44 @@ test('Diagnostics Center renders deterministic Why guidance and the reviewed sup
   const rows = list.getByTestId('diagnostic-finding');
   const search = list.getByRole('searchbox', { name: 'Search diagnostics' });
   const severity = list.getByRole('combobox', { name: 'Filter diagnostics' });
+  const tools = page.getByTestId('diagnostic-tools');
+  const toolsSummary = tools.locator('summary');
+  const toolsStatus = tools.getByTestId('diagnostic-tools-status');
+  const runAllSelftests = tools.getByRole('button', { name: 'Run All Selftests' });
+  try {
+    await expect(toolsSummary).toContainText('Diagnostic tools');
+    await expect(tools).toHaveJSProperty('open', false);
+    await expect(runAllSelftests).toBeHidden();
+    await expect(rows.filter({ hasText: 'Unknown property segment cargo.' })).toBeVisible();
+
+    await toolsSummary.press('Enter');
+    await expect(tools).toHaveJSProperty('open', true);
+    await expect(tools.getByText('DETERMINISTIC CRITIC', { exact: true })).toBeVisible();
+    await expect(runAllSelftests).toBeVisible();
+    await expect(tools.getByRole('button', { name: 'Ask AI Assistant For Fixes', includeHidden: true })).toHaveCount(0);
+
+    const firstSelftest = page.waitForRequest(request => new URL(request.url()).pathname === coreSelftestPath);
+    await runAllSelftests.click();
+    await firstSelftest;
+    await expect(tools.getByRole('button', { name: /Running/ })).toBeDisabled();
+    await toolsSummary.press('Enter');
+    await expect(tools).toHaveJSProperty('open', false);
+    await expect(toolsStatus).toContainText('Selftests running');
+  } finally {
+    releaseFirstSelftest();
+  }
+  await expect(toolsStatus).toBeVisible();
+  await expect(toolsStatus).toContainText('Selftests: 31/31 passed');
+  await expect(tools).toHaveJSProperty('open', false);
+  await expect(toolsSummary).toBeFocused();
+  await toolsSummary.press('Enter');
+  await expect(runAllSelftests).toBeVisible();
+  await expect(tools.getByText('31/31 PASS', { exact: true })).toBeVisible();
+  await toolsSummary.press('Enter');
+  await expect(tools).toHaveJSProperty('open', false);
+  await expect(toolsSummary).toBeFocused();
+  await expect(rows.filter({ hasText: 'Unknown property segment cargo.' })).toBeVisible();
+
   await expect(page.getByRole('button', { name: '1 Errors' })).toBeVisible();
   await expect(page.getByText('3 Warnings', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Find diagnostics' }).click();

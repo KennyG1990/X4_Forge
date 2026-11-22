@@ -1,4 +1,5 @@
 import { expect, test, type Page } from './request-transport';
+import { openStudioAction } from './studio-actions';
 import { buildTemplateWorkspace } from '../../src/lib/modTemplates';
 import { workspaceContentHash } from '../../src/lib/workspaceIdentity';
 import { sanitizeWorkspace } from '../../src/types';
@@ -49,6 +50,15 @@ async function bootExpert(page: Page, layout?: unknown) {
 }
 
 test('lossless registries keep every destination and utility recoverable', async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 900 });
+  let inventoryReads = 0;
+  await page.route('**/api/agent/project/files', route => {
+    inventoryReads += 1;
+    return route.fulfill({ json: { ok: true, sourceAvailable: true, excludedCount: 0, entries: [
+      { path: 'md/welcome.xml', state: 'source', size: 90, text: true, openable: true, materializable: false },
+      { path: 'md/other.xml', state: 'conflict', size: 110, text: true, openable: true, materializable: true },
+    ] } });
+  });
   await bootExpert(page);
   const initialHash = await liveWorkspaceHash(page);
 
@@ -65,15 +75,102 @@ test('lossless registries keep every destination and utility recoverable', async
     await expect(page.locator(`[data-sidebar-tab="${item.id}"]`)).toHaveAttribute('aria-current', 'page');
   }
 
-  await page.getByTestId('studio-menu-button').click();
-  for (const action of GLOBAL_ACTION_IDS.filter(id => !['undo', 'redo', 'shortcuts', 'workspace-switcher', 'experience-mode', 'ai-settings'].includes(id))) {
-    await expect(page.getByTestId('studio-menu').locator(`[data-global-action="${action}"]`)).toBeVisible();
+  const trigger = page.getByTestId('studio-menu-button');
+  const menu = page.getByTestId('studio-menu');
+  const picker = page.getByTestId('native-project-files');
+  const projectFiles = picker.getByRole('combobox', { name: 'Project Files' });
+  await expect(picker).toHaveCount(1);
+  await projectFiles.selectOption('md/other.xml');
+  const initialInventoryReads = inventoryReads;
+  const consolidated = ['sync-mod', 'agent-api', 'report-bug', 'settings', 'reset-workspace'];
+  for (const action of consolidated) {
+    await expect(page.locator(`[data-global-action="${action}"]`)).toHaveCount(0);
   }
+
+  await trigger.press('Enter');
+  await expect(trigger).toHaveAccessibleName('Studio actions');
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  await page.keyboard.press('Tab');
+  await expect(projectFiles).toBeFocused();
+  await expect(menu.getByTestId('native-project-files')).toHaveCount(0);
+  for (const action of GLOBAL_ACTION_IDS.filter(id => ![
+    'undo', 'redo', 'shortcuts', 'workspace-switcher', 'native-project-files', 'experience-mode', 'ai-settings',
+  ].includes(id))) {
+    await expect(menu.locator(`[data-global-action="${action}"]`)).toBeVisible();
+  }
+  for (const action of consolidated) {
+    await expect(page.locator(`[data-global-action="${action}"]`)).toHaveCount(1);
+  }
+  await expect(menu.locator('[data-global-action="ai-settings"]')).toHaveCount(0);
+  await expect(menu.getByTestId('report-bug-button')).toBeVisible();
+
+  await menu.getByRole('button', { name: 'Sync Mod' }).press('Escape');
+  await expect(menu).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+
+  await page.setViewportSize({ width: 1024, height: 900 });
+  await expect(picker).toBeHidden();
+  await trigger.press('Space');
+  await expect(picker).toHaveCount(1);
+  await expect(projectFiles).toBeVisible();
+  await expect(projectFiles).toHaveValue('md/other.xml');
+  await expect(picker.getByTitle('Compare workspace source with Forge-generated md/other.xml')).toBeVisible();
+  await expect(picker.getByTitle('Generated and source bytes differ; review instead of overwriting')).toBeDisabled();
+  await trigger.press('Escape');
+  await expect(picker).toBeHidden();
+  await page.setViewportSize({ width: 1600, height: 900 });
+  await expect(projectFiles).toHaveValue('md/other.xml');
+  expect(inventoryReads).toBe(initialInventoryReads);
+
+  await trigger.press('Enter');
+  await page.keyboard.press('?');
+  await expect(page.getByTestId('shortcuts-overlay')).toBeVisible();
+  await trigger.press('Escape');
+  await expect(menu).toHaveCount(0);
+  await expect(page.getByTestId('shortcuts-overlay')).toHaveCount(0);
+
+  await trigger.press('Space');
+  await expect(page.getByText('CREATE NODE HERE', { exact: true })).toHaveCount(0);
+  await menu.getByRole('button', { name: 'Reset Workspace…' }).press('Enter');
+  await expect(menu).toHaveCount(0);
+  const keepWorkspace = page.getByRole('button', { name: 'Keep workspace' });
+  await expect(keepWorkspace).toBeVisible();
+  await keepWorkspace.click();
+  await expect(trigger).toBeFocused();
   await expect(page.locator('[data-global-action="undo"]')).toBeVisible();
   await expect(page.locator('[data-global-action="redo"]')).toBeVisible();
   await expect(page.locator('[data-global-action="shortcuts"]')).toBeVisible();
   await expect(page.locator('[data-global-action="workspace-switcher"]')).toBeVisible();
   await expect(page.getByTestId('experience-mode-switch')).toBeVisible();
+
+  const searchLauncher = page.getByRole('button', { name: 'Search workspace', exact: true });
+  const searchPanel = page.getByTestId('workspace-search-panel');
+  const searchInput = searchPanel.locator('input');
+  await expect(searchLauncher).toBeHidden();
+  await expect(searchInput).toHaveCount(1);
+  await expect(searchInput).toBeVisible();
+  await page.setViewportSize({ width: 1023, height: 900 });
+  await expect(searchLauncher).toBeVisible();
+  await expect(searchInput).toBeHidden();
+  await page.keyboard.press('Control+k');
+  await expect(searchInput).toBeFocused();
+  await searchInput.fill('show_help');
+  await expect(searchPanel.getByText('Matched Search Targets (1)')).toBeVisible();
+  await page.setViewportSize({ width: 1024, height: 900 });
+  await expect(searchLauncher).toBeHidden();
+  await expect(searchInput).toBeFocused();
+  await expect(searchInput).toHaveValue('show_help');
+  await page.setViewportSize({ width: 800, height: 900 });
+  await searchInput.press('Escape');
+  await expect(searchLauncher).toBeFocused();
+  await expect(searchInput).toBeHidden();
+  await searchLauncher.click();
+  await expect(searchInput).toBeFocused();
+  await expect(searchInput).toHaveValue('show_help');
+  await searchInput.press('Enter');
+  await expect(page.locator('[data-workspace-view="blueprint"]')).toHaveAttribute('aria-current', 'page');
+  await expect(searchInput).toBeHidden();
+  await expect(searchLauncher).toBeFocused();
   expect(await liveWorkspaceHash(page)).toBe(initialHash);
 });
 
@@ -160,7 +257,7 @@ test('layout customization docks, hides, reorders, collapses, restores, and pers
   await expect(restartedPage.getByTestId('workspace-navigation')).toHaveAttribute('data-dock', 'bottom');
   await expect(restartedPage.locator('#side_panel')).toHaveAttribute('data-tool-dock', 'right');
   await expect(restartedPage.locator('[data-workspace-view="aiscripts"]')).toHaveCount(0);
-  await restartedPage.getByTitle('Manage all folders the studio uses (Mod Workspace, X4 game path, schema)').click();
+  await openStudioAction(restartedPage, 'settings');
   const restoredSettings = restartedPage.getByTestId('studio-layout-settings');
   await restoredSettings.getByRole('button', { name: 'Show AI Scripts' }).click();
   await restoredSettings.getByRole('button', { name: 'Show Files' }).click();
@@ -200,6 +297,17 @@ for (const width of [2560, 1920, 1600, 1366, 1024, 800]) {
     }));
     expect(dimensions.scroll).toBeLessThanOrEqual(dimensions.client);
     expect(dimensions.body).toBeLessThanOrEqual(dimensions.client);
+
+    const trigger = page.getByTestId('studio-menu-button');
+    await trigger.click();
+    const menu = page.getByTestId('studio-menu');
+    await expect(menu.getByTestId('report-bug-button')).toBeVisible();
+    const bounds = await menu.boundingBox();
+    expect(bounds).not.toBeNull();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+    await trigger.press('Escape');
+    await expect(menu).toHaveCount(0);
 
     await page.locator('[data-workspace-view="xmlpatch"]').click();
     if (width < 1500) {

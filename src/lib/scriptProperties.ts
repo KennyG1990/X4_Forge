@@ -28,7 +28,8 @@
 import { DOMParser } from '@xmldom/xmldom';
 import { parseMdScriptRoot } from './cueLineage';
 import { parseExpressionChains } from './expressionAst';
-import { createSourcePositionLocator } from './xmlSourceSpans';
+import { createSourcePositionLocator, createXmlNodePositionLocator } from './xmlSourceSpans';
+import { maskXmlOpaqueMarkup, scanXmlTagTokens } from '../../shared/xmlMarkup';
 
 export interface SPEntry {
   kind: 'keyword' | 'datatype';
@@ -322,19 +323,59 @@ export function suggestProperties(segment: string, candidates: Iterable<string>,
   return scored.slice(0, max).map(s => s.name);
 }
 
-/**
- * Mask spans whose contents must not be scanned as property chains, preserving
- * offsets/line numbers: XML comments, single-quoted MD string literals, and the
- * prose attributes (comment=, result=, description=) which legitimately contain
- * dotted sentences. Replaces non-newline chars with spaces.
- */
+const PROSE_XML_ATTRIBUTES = new Set(['comment', 'result', 'description']);
+const MD_STRING_MARKERS = /('|&apos;|&#(?:0*39|x0*27);)|\\|&#(?:0*92|x0*5[cC]);/g;
+const blankXmlSpan = (source: string) => source.replace(/[^\r\n]/g, ' ');
+
+function maskMdAttributeStrings(value: string): string {
+  if (!value.includes("'") && !value.includes('&')) return value;
+  let start: number | undefined;
+  let escapedAt = -1;
+  let cursor = 0;
+  const parts: string[] = [];
+  for (const match of value.matchAll(MD_STRING_MARKERS)) {
+    const { index } = match;
+    const end = index + match[0].length;
+    if (start === undefined) {
+      if (match[1]) start = index;
+    } else if (index !== escapedAt) {
+      if (match[1]) {
+        parts.push(value.slice(cursor, start), blankXmlSpan(value.slice(start, end)));
+        cursor = end;
+        start = undefined;
+      } else {
+        escapedAt = end;
+      }
+    }
+  }
+  if (start !== undefined) parts.push(value.slice(cursor, start), blankXmlSpan(value.slice(start)));
+  else parts.push(value.slice(cursor));
+  return parts.join('');
+}
+
+/** Hide opaque markup, prose attributes and MD strings at their original source widths. */
 export function maskNonExpressionSpans(xml: string): string {
-  return String(xml || '')
-    .replace(/<!--[\s\S]*?-->/g, s => s.replace(/[^\n]/g, ' '))
-    // prose attributes (never expressions)
-    .replace(/\b(?:comment|result|description)\s*=\s*"[^"]*"/gi, s => s.replace(/[^\n]/g, ' '))
-    // MD string literals inside attribute values: '...'
-    .replace(/'(?:\\[^"\r\n]|[^'"\\\r\n])*'?/g, s => ' '.repeat(s.length));
+  const source = maskXmlOpaqueMarkup(String(xml || ''));
+  const parts: string[] = [];
+  let cursor = 0;
+  for (const { start, token } of scanXmlTagTokens(source)) {
+    for (const match of token.matchAll(/\s+([A-Za-z_][\w.:-]*)\s*=\s*(["'])([\s\S]*?)\2/g)) {
+      const [, name, quote, value] = match;
+      const end = start + match.index + match[0].length;
+      if (PROSE_XML_ATTRIBUTES.has(name.toLowerCase())) {
+        const attributeStart = start + match.index;
+        parts.push(source.slice(cursor, attributeStart), blankXmlSpan(match[0]));
+      } else {
+        const masked = maskMdAttributeStrings(value);
+        if (quote === '"' && masked === value) continue;
+        // Normalize XML delimiters for downstream scans of the masked text.
+        parts.push(source.slice(cursor, end - value.length - 2), '"', masked, '"');
+      }
+      cursor = end;
+    }
+  }
+  parts.push(source.slice(cursor));
+  return parts.join('');
 }
 
 /** Roots that behave like untyped object references in MD/AIScript context. */
@@ -496,12 +537,58 @@ function statesAfterProperty(
   return [{ kind: 'complete', property }, { kind: 'opaque', property }];
 }
 
+interface PropertyHeadCandidate {
+  property: ResolvedScriptProperty;
+  path: string[];
+  head: string;
+}
+
+interface PropertyHeadGroup {
+  candidates: PropertyHeadCandidate[];
+  hasBareForm: boolean;
+}
+
+interface PropertyHeadLookup {
+  literal: Map<string, PropertyHeadGroup>;
+  placeholder: PropertyHeadGroup;
+}
+
+function propertyHeadsForContext(
+  index: ScriptPropertyIndex, context: PathContext, cache: Map<string, PropertyHeadLookup>,
+): PropertyHeadLookup {
+  const key = `${context.kind}:${context.name}`;
+  const cached = cache.get(key);
+  if (cached) return cached;
+
+  const lookup: PropertyHeadLookup = { literal: new Map(), placeholder: { candidates: [], hasBareForm: false } };
+  for (const property of pathPropertiesForContext(index, context)) {
+    const path = pathForProperty(property);
+    if (!path.length) continue;
+    const literalHead = normalizedPathSegment(path[0]);
+    const candidate = { property, path, head: propertyHead(property.name) || literalHead };
+    if (isAuthoredPlaceholder(path[0])) {
+      lookup.placeholder.candidates.push(candidate);
+      continue;
+    }
+    let group = lookup.literal.get(literalHead);
+    if (!group) {
+      group = { candidates: [], hasBareForm: false };
+      lookup.literal.set(literalHead, group);
+    }
+    group.candidates.push(candidate);
+    if (path.length === 1) group.hasBareForm = true;
+  }
+  cache.set(key, lookup);
+  return lookup;
+}
+
 function advancePathStates(
   index: ScriptPropertyIndex,
   states: PathState[],
   segment: { kind: string; name: string },
   chainAt: string,
   at: number,
+  headCache: Map<string, PropertyHeadLookup>,
 ): PathState[] {
   const next: PathState[] = [];
   for (const state of states) {
@@ -510,18 +597,12 @@ function advancePathStates(
       continue;
     }
     if (state.kind === 'context') {
-      const contextProperties = pathPropertiesForContext(index, state.context);
-      for (const property of contextProperties) {
-        const path = pathForProperty(property);
-        if (!path.length || !pathHeadMatches(path[0], segment)) continue;
-        const head = propertyHead(property.name) || normalizedPathSegment(path[0]);
-        const hasBareForm = contextProperties.some(candidate => {
-          const candidatePath = pathForProperty(candidate);
-          return candidatePath.length === 1
-            && !isAuthoredPlaceholder(candidatePath[0])
-            && normalizedPathSegment(candidatePath[0]) === normalizedPathSegment(path[0]);
-        });
-        next.push(...statesAfterProperty(index, property, path.slice(1), { head, at, chainAt }, !hasBareForm));
+      const heads = propertyHeadsForContext(index, state.context, headCache);
+      // Only dynamic selectors may start at an authored placeholder.
+      const group = segment.kind === 'property' ? heads.literal.get(segment.name) : heads.placeholder;
+      if (!group) continue;
+      for (const { property, path, head } of group.candidates) {
+        next.push(...statesAfterProperty(index, property, path.slice(1), { head, at, chainAt }, !group.hasBareForm));
       }
       continue;
     }
@@ -652,7 +733,7 @@ function npcGuardReadSpans(xml: string): PropertyReadSpan[] {
   if (!root || root.namespaceURI) return [];
 
   const spans: PropertyReadSpan[] = [];
-  let lineStarts: number[] | undefined;
+  const locate = createXmlNodePositionLocator(xml);
   for (const branch of Array.from(root.getElementsByTagName('do_if'))) {
     const actions = branch.parentElement;
     const owner = actions?.parentElement;
@@ -668,15 +749,11 @@ function npcGuardReadSpans(xml: string): PropertyReadSpan[] {
           && !child.hasAttribute('operation') ? child.getAttributeNode('exact') : null;
       // The next action could change the selected target. Do not carry the guard across it.
       if (!read) break;
-      if (read.lineNumber === undefined || read.columnNumber === undefined) continue;
-      // Match xmldom's line normalization while keeping offsets into the original XML.
-      lineStarts ??= [0, ...Array.from(xml.matchAll(/\r[\n\u0085]|[\r\n\u0085\u2028\u2029]/g),
-        match => match.index + match[0].length)];
-      // xmldom locates the opening quote. parseMdScriptRoot strips a possible leading BOM.
-      const quote = lineStarts[read.lineNumber - 1] + read.columnNumber - 1
-        + Number(read.lineNumber === 1 && xml.startsWith('\uFEFF'));
-      if (xml[quote] !== '"') continue;
-      const end = xml.indexOf('"', quote + 1);
+      const quote = locate.offset(read);
+      if (quote === undefined) continue;
+      const delimiter = xml[quote];
+      if (delimiter !== '"' && delimiter !== "'") continue;
+      const end = xml.indexOf(delimiter, quote + 1);
       if (end > quote) spans.push({ start: quote + 1, end });
     }
   }
@@ -829,6 +906,7 @@ function lintPropertyChains(source: string, masked: string, index: ScriptPropert
   const out: ScriptPropertyFinding[] = [];
   let guardIndex = 0;
   const locate = createSourcePositionLocator(source);
+  const headCache = new Map<string, PropertyHeadLookup>();
   for (const parsed of parseExpressionChains(masked)) {
     const rootRaw = parsed.root.raw;
     const rootLower = rootRaw.toLowerCase();
@@ -872,7 +950,7 @@ function lintPropertyChains(source: string, masked: string, index: ScriptPropert
       const segment = parsed.segments[segmentIndex];
       chain += `.${segment.raw}`;
       const isDynamic = segment.kind !== 'property';
-      const nextStates = advancePathStates(index, states, segment, chain, segment.start);
+      const nextStates = advancePathStates(index, states, segment, chain, segment.start, headCache);
 
       if (isDynamic) {
         // A partial path can stay opaque when no candidate has a result.
@@ -1372,6 +1450,27 @@ export function runScriptPropertiesSelftest(): {
     && bareFindings[1].line === 3 && bareFindings[1].column === '$receiver.'.length + 1
     && bareFindings[1].typeContext?.datatype === 'ship' && bareFindings[1].typeContext.confidence === 'hint',
     JSON.stringify(bareFindings));
+  const quoteCases: [string, string, number[]][] = [
+    ['single-quoted XML attribute', "<debug_text text='" + typo + "'/>", [0]],
+    ['encoded MD literal', '<debug_text text="&apos;' + typo + '&apos;"/>', []],
+    ['numeric MD literal in a single-quoted attribute',
+      "<debug_text text='&#039;" + typo + "&#x027;'/>", []],
+    ['a backslash-escaped entity stays in the string',
+      "<debug_text text='&apos;I&#92;&#39;m " + typo + "&apos; + " + typo + "'/>", [1]],
+    ['a formatted literal keeps its real argument',
+      "<debug_text text='&apos;%s&apos;.[" + typo + "]'/>", [0]],
+    ['single-quoted prose and opaque markup',
+      "<!-- " + typo + " --><?example " + typo + "?><debug_text text='true' comment='" + typo + "'/>", []],
+    ['two differently quoted attributes retain separate positions',
+      '<debug_text text="' + typo + '"/><debug_text text=\'' + typo + '\'/>', [0, 1]],
+  ];
+  for (const [label, fragment, occurrences] of quoteCases) {
+    const positions = [...fragment.matchAll(/knownnmae/g)].map(match => match.index + 1);
+    const actual = lintScriptPropertyChains('<mdscript>\r\n' + fragment + '\r</mdscript>', idx);
+    ok(label, actual.length === occurrences.length && actual.every((finding, i) =>
+      finding.line === 2 && finding.column === positions[occurrences[i]]
+      && finding.suggestions.includes('knownname')), actual);
+  }
   ok('single-quoted string literals masked',
     lintScriptPropertyChains(`<raise_lua_event name="'ai_influence.chat.fetchmode'"/>`, idx).length === 0);
   ok('comment attributes masked',
@@ -1405,6 +1504,13 @@ export function runScriptPropertiesSelftest(): {
     && scoped[0].suggestions[0] === 'npctemplate'
     && scoped[0].typeContext?.datatype === 'npc' && scoped[0].typeContext?.confidence === 'guarded'
     && scoped.slice(1).every(finding => finding.typeContext?.datatype === 'object'), scoped);
+  const singleQuotedGuard = mdActions(npcGuard(npcValid + npcTypo).replaceAll('"', "'"));
+  const singleGuardFindings = lintScriptPropertyChains(singleQuotedGuard, idx);
+  ok('single-quoted guard retains NPC provenance and the raw typo position',
+    singleGuardFindings.length === 1 && singleGuardFindings[0].typeContext?.confidence === 'guarded'
+    && singleGuardFindings[0].typeContext?.datatype === 'npc'
+    && singleGuardFindings[0].column === singleQuotedGuard.lastIndexOf('npctemplat') + 1,
+    singleGuardFindings);
   const unguarded = [
     ...[' exact="false"', ' negate="true"', ' min="0"', ' max="0"', ' list="[false]"']
       .map(attrs => mdActions(npcGuard(npcValid, attrs))),
@@ -1427,6 +1533,17 @@ export function runScriptPropertiesSelftest(): {
   ok('XML-only line separators cannot move narrowing onto an aligned unguarded read', normalizedLines.length === 2
     && normalizedLines[0].typeContext?.confidence === 'guarded'
     && normalizedLines[1].typeContext?.datatype === 'object', normalizedLines);
+
+  const fallback = buildScriptPropertyIndex('<scriptproperties><datatype name="receiver"><property name="first" type="number"/></datatype><datatype name="number"/></scriptproperties>');
+  fallback.pathProperties = undefined;
+  const fallbackOpts = { variableTypes: { $known: 'receiver' } };
+  const beforeChange = lintScriptPropertyChains('<do_if value="$known.first"/>', fallback, fallbackOpts);
+  const receiver = fallback.model.datatypes.get('receiver')!;
+  receiver.properties[0] = { ...receiver.properties[0], name: 'replacement' };
+  const removed = lintScriptPropertyChains('<do_if value="$known.first"/>', fallback, fallbackOpts);
+  const replaced = lintScriptPropertyChains('<do_if value="$known.replacement"/>', fallback, fallbackOpts);
+  ok('path-head lookup is rebuilt after a model-only receiver changes',
+    beforeChange.length === 0 && removed.length === 1 && removed[0].segment === 'first' && replaced.length === 0);
 
   const passed = checks.filter(c => c.pass).length;
   const allPassed = passed === checks.length;

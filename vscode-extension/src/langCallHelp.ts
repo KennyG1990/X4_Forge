@@ -89,9 +89,11 @@ function mdCallCursor(text: string, cursor: number, nameCompletion: boolean): Md
   return undefined;
 }
 
-export function readMdCallHelpRequest(file: string, text: string, cursor: number, nameCompletion = false) {
-  const context = mdCallCursor(text, cursor, nameCompletion);
-  if (!context) return undefined;
+export type MdCallHelpMode = "signature" | "completion" | "definition";
+
+export function readMdCallHelpRequest(file: string, text: string, cursor: number, mode: MdCallHelpMode = "signature") {
+  const context = mdCallCursor(text, cursor, mode !== "signature");
+  if (!context || (mode === "definition" && (!context.argumentName || context.unfinishedEnd !== undefined))) return undefined;
   const options = { callStart: context.callStart, includeSignatures: true };
   let origin = readMdDefinitionDocument(file, text, undefined, false, options);
   if (!origin && context.parameterStart !== undefined && context.unfinishedEnd !== undefined) {
@@ -117,9 +119,8 @@ export function resolveMdCallHelp(
   const signature = library?.source.signature;
   if (!resolved || !library || !library.source.location || signature?.status !== "known"
     || !mdLibraryAcceptsArguments(call.role, library.purpose)) return undefined;
-  const active = context.parameterStart !== undefined
-    ? call.arguments.find(argument => argument.point === context.parameterStart)?.name ?? context.argumentName
-    : undefined;
+  const argument = call.arguments.find(argument => argument.point === context.parameterStart);
+  const active = argument?.name ?? context.argumentName;
   const supplied = new Set(call.arguments.filter(argument => argument.point !== context.parameterStart).map(argument => argument.name));
   const activeIndex = signature.parameters.findIndex(parameter => parameter.name === active);
   const unsupplied = signature.parameters.filter(parameter => !supplied.has(parameter.name));
@@ -128,6 +129,9 @@ export function resolveMdCallHelp(
     name: `md.${resolved.script.name}.${library.name}`,
     location: library.source.location,
     parameters: signature.parameters,
+    parameterLocation: context.nameRange && argument && activeIndex >= 0
+      ? signature.parameters[activeIndex].point
+      : undefined,
     activeParameter: activeIndex >= 0 ? activeIndex : Math.max(0, signature.parameters.findIndex(parameter => !supplied.has(parameter.name))),
     unsupplied,
     nameRange: context.nameRange,

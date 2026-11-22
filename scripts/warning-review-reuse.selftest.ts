@@ -303,7 +303,7 @@ const referenceWarning: EvidenceDiagnostic = {
   ...warning, code: 'reference.unknown_ware', sourceRef: 'fixture_ware', line: 132, message: 'Unknown fixture ware',
 };
 const referenceOccurrences = [{ ...referenceWarning, column: 41 }, { ...referenceWarning, column: 58 }];
-for (const code of ['reference.unknown_ware', 'md.run_actions_param_undeclared']) {
+for (const code of ['reference.unknown_ware', 'md.run_actions_param_undeclared', 'md.run_actions_param_required']) {
   check(`durable ${code} review reuses only the approved same-line occurrence`, () => {
     const receipts = new ActionReceiptStore({ root: path.join(root, code) });
     const occurrences = referenceOccurrences.map(finding => ({ ...finding, code }));

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { actionReceiptIdForOperation, transitionActionReceipt, type ActionReceipt, type ActionReceiptOperationIdentity } from '../lib/actionReceipt';
 import type { ActionReceiptStore } from '../lib/actionReceiptStore';
+import { LEDGER_MAX_BYTES, type AgentHistoryStore } from '../lib/agentHistoryStore';
 import type { DeploymentRecoveryRecord, DestructiveRecoveryStore } from '../lib/destructiveRecovery';
 import { readContentManifestIdentity } from '../lib/validationEvidence';
 import { readCanonicalMdCompiledWorkerIdentity, type CanonicalMdCompiledWorkerIdentity } from './canonicalMdProviderPreparation';
@@ -32,6 +33,41 @@ export function deploymentBuildIdentity(snapshot: DeploymentSnapshot, canonicalT
 type DeploymentBuild = NonNullable<ReturnType<typeof deploymentBuildIdentity>>;
 const BUILD_SUMMARY_PREFIX = 'X4 deployment build v1 ';
 const digest = /^[a-f0-9]{64}$/;
+const DEPLOY_EFFECT_REF = 'deploy-effect-v1:';
+
+export function prepareDeployEffect(effect: object) {
+  const content = JSON.stringify(effect, null, 2);
+  if (Buffer.byteLength(content, 'utf8') > LEDGER_MAX_BYTES) {
+    return { reference: DEPLOY_EFFECT_REF + 'unavailable', bytes: null };
+  }
+  const bytes = Buffer.from(content, 'utf8');
+  return { reference: DEPLOY_EFFECT_REF + createHash('sha256').update(bytes).digest('hex'), bytes };
+}
+
+export function deployEffectReference(receipt: ActionReceipt | undefined): string | undefined {
+  const trace = receipt?.metadata?.traceId;
+  return receipt?.metadata?.operation === 'deploy' && typeof trace === 'string' && trace.startsWith(DEPLOY_EFFECT_REF)
+    ? trace.slice(DEPLOY_EFFECT_REF.length) : undefined;
+}
+
+export function readDeployEffect(history: AgentHistoryStore, receipt: ActionReceipt) {
+  if (receipt.status !== 'committed') return { report: { status: 'not-committed' as const }, raw: null };
+  const hash = deployEffectReference(receipt);
+  if (hash === undefined) return { report: { status: 'legacy' as const }, raw: null };
+  const raw = digest.test(hash) ? history.readVerifiedDeployEffect(hash) : null;
+  if (raw) {
+    try {
+      const effect = JSON.parse(raw.toString('utf8')) as Record<string, unknown> | null;
+      if (effect && Array.isArray(effect.added) && Array.isArray(effect.overwritten) && Array.isArray(effect.deleted)
+        && Array.isArray(effect.preserved) && Number.isSafeInteger(effect.totalBytes)
+        && (effect.format === 'catalog' || effect.format === 'loose')) {
+        return { report: { status: 'available' as const, hash, effect }, raw };
+      }
+    } catch { /* Unavailable evidence leaves the committed outcome intact. */ }
+  }
+  return { report: { status: 'unavailable' as const }, raw: null };
+}
+
 const numericVersion = (input: unknown) =>
   typeof input === 'string' && /^\d{1,32}$/.test(input.trim()) ? BigInt(input.trim()) : null;
 
@@ -247,7 +283,7 @@ export function readDeployOperationReceipt(store: ActionReceiptStore, identity: 
 
 const prewriteStage = (record: DeploymentRecoveryRecord) => `deploy-prewrite-v1:${trustHash(record)}`;
 
-type ObserveDeployTarget = (record: DeploymentRecoveryRecord, bindingHash: string) =>
+type ObserveDeployTarget = (folder: string, bindingHash: string, recovery?: DeploymentRecoveryRecord) =>
   { targetState: 'unavailable' | 'binding-mismatch' } | { fingerprint: string };
 
 function compareTargetFingerprints(before: string, staged: string, current: string) {
@@ -258,8 +294,39 @@ function compareTargetFingerprints(before: string, staged: string, current: stri
     : (matchesStaged ? 'matches-staged' : 'matches-neither');
 }
 
+export function committedDeployTargetEvidence(receipt: ActionReceipt) {
+  const bindingHash = receipt.metadata?.targetHash;
+  if (receipt.status !== 'committed' || receipt.metadata?.operation !== 'deploy'
+    || typeof bindingHash !== 'string' || !digest.test(bindingHash)
+    || receipt.validation.status !== 'passed' || receipt.validation.code !== 'DEPLOYED_BYTES_VERIFIED'
+    || receipt.after?.outcome !== 'applied') return undefined;
+
+  const targets = receipt.authority.resources.filter(resource => resource.role === 'deploy');
+  const outputs = receipt.after.resources.filter(resource => resource.role === 'deploy');
+  const target = targets[0];
+  const output = outputs[0];
+  if (targets.length !== 1 || outputs.length !== 1 || target.root !== 'extensions' || output.root !== target.root
+    || output.relativePath !== target.relativePath || !digest.test(output.hash)) return undefined;
+
+  const folder = target.relativePath;
+  if (!folder || folder === '.' || folder === '..' || /[\\/:\x00]/.test(folder)) return undefined;
+  return { folder, bindingHash, fingerprint: output.hash };
+}
+
+function observeCommittedDeployTarget(receipt: ActionReceipt, observeTarget: ObserveDeployTarget) {
+  const evidence = committedDeployTargetEvidence(receipt);
+  if (!evidence) return undefined;
+  const observation = observeTarget(evidence.folder, evidence.bindingHash);
+  if (!('fingerprint' in observation)) return observation;
+  if (observation.fingerprint === 'absent') return { targetState: 'absent' as const };
+  return { targetState: observation.fingerprint === evidence.fingerprint ? 'matches-committed' as const : 'differs-from-committed' as const };
+}
+
 export function deployOperationStatus(receipt: ActionReceipt, recovery: DestructiveRecoveryStore, observeTarget?: ObserveDeployTarget) {
-  if (receipt.status !== 'prepared') return { outcome: receipt.status };
+  if (receipt.status !== 'prepared') {
+    const targetObservation = receipt.status === 'committed' && observeTarget ? observeCommittedDeployTarget(receipt, observeTarget) : undefined;
+    return { outcome: receipt.status, ...(targetObservation ? { targetObservation } : {}) };
+  }
   const unknown = { outcome: 'unknown' as const };
   const recoveryId = receipt.rollback.reference;
   if (!recoveryId || !String(receipt.metadata?.stage).startsWith('deploy-prewrite-v1:')) return unknown;
@@ -279,7 +346,7 @@ export function deployOperationStatus(receipt: ActionReceipt, recovery: Destruct
   if (writeAdmission.phase === 'pending-v1') return { outcome: 'not-applied' as const };
   const targetBindingHash = receipt.metadata?.targetHash;
   if (stagedEvidence?.preparedReceiptHash !== receipt.hash || typeof targetBindingHash !== 'string') return unknown;
-  const observation = observeTarget?.(retired.record, targetBindingHash);
+  const observation = observeTarget?.(retired.record.modId, targetBindingHash, retired.record);
   const targetObservation = observation && ('fingerprint' in observation
     ? { targetState: compareTargetFingerprints(preState.beforeFingerprint, stagedEvidence.fingerprint, observation.fingerprint) }
     : observation);
@@ -328,6 +395,7 @@ export function prepareDeployRecord(
   projectCheckSuite?: { id: string; hash: string },
   prewriteRecovery?: DeploymentRecoveryRecord,
   build?: DeploymentBuild,
+  effectReference?: string,
 ): ActionReceipt {
   const maxApprovals = projectCheckSuite ? 126 : 127;
   if (approvals.length > maxApprovals) throw new Error(`At most ${maxApprovals} finding approvals fit a deployment record.`);
@@ -364,6 +432,7 @@ export function prepareDeployRecord(
     metadata: { operation: 'deploy', ...Object.fromEntries(Object.entries(decision.binding).filter(([k]) => k !== 'hash')),
       actorLabel: principal.label, outcome: decision.outcome, recoveryId,
       ...decision.counts,
+      ...(effectReference !== undefined ? { traceId: effectReference } : {}),
       ...(prewriteRecovery ? { stage: prewriteStage(prewriteRecovery) } : {}),
       ...(build ? { summary: deploymentBuildSummary(build) } : {}),
       ...(validatedArtifactHash ? { validatedArtifactHash, validatedArtifactScope: 'logical-artifact-bytes' } : {}) },
@@ -391,13 +460,37 @@ export function recordIncompleteDeployOutput(store: ActionReceiptStore, prepared
   });
 }
 
-export function commitDeployRecord(store: ActionReceiptStore, prepared: ActionReceipt, fingerprint: string): ActionReceipt {
+export function recordRolledBackDeploy(store: ActionReceiptStore, prepared: ActionReceipt): ActionReceipt | undefined {
+  const code = 'DEPLOY_ROLLED_BACK';
+  let expectedHash: string | undefined;
+  try {
+    const current = store.tryRead(prepared.id);
+    if (!current.ok || current.receipt.hash !== prepared.hash) return undefined;
+    const rollback = {
+      at: new Date(Math.max(Date.now(), Date.parse(prepared.times.preparedAt))).toISOString(),
+      validation: { ...prepared.validation, status: 'failed' as const, code },
+      failure: { code },
+      rollbackStatus: 'performed' as const,
+    };
+    expectedHash = transitionActionReceipt(prepared, { ...rollback, to: 'rolled_back' }).hash;
+    const written = store.rollBack(prepared.id, rollback);
+    if (written.hash === expectedHash) return written;
+  } catch { /* A failed readback may follow a successful promotion. */ }
+  if (!expectedHash) return undefined;
+  const durable = store.tryRead(prepared.id);
+  return durable.ok && durable.receipt.hash === expectedHash ? durable.receipt : undefined;
+}
+
+export function commitDeployRecord(
+  store: ActionReceiptStore, prepared: ActionReceipt, fingerprint: string, managedReference?: string,
+): ActionReceipt {
   const commit = {
     at: new Date().toISOString(),
     validation: { ...prepared.validation, status: 'passed' as const, code: 'DEPLOYED_BYTES_VERIFIED',
       summary: String(prepared.metadata?.outcome) },
     rollbackStatus: 'available' as const,
-    after: { outcome: 'applied' as const, resources: deploymentAfterResources(prepared, fingerprint) },
+    after: { outcome: 'applied' as const, resources: deploymentAfterResources(prepared, fingerprint),
+      ...(managedReference ? { code: managedReference } : {}) },
   };
   const expected = transitionActionReceipt(prepared, { ...commit, to: 'committed' });
   try {

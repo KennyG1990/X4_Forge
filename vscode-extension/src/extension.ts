@@ -29,16 +29,21 @@ import { createNativePerformanceHost } from "./nativePerformanceHost";
 import type { NativeOperationId, NativeWireBinding } from "../../shared/nativePerformanceProtocol";
 import type { ForgePerformanceOutcome } from "../../shared/forgePerformance";
 import { isNativePerformanceRetirementNotice, type NativePerformanceEndpoint } from "../../shared/nativePerformanceChannel";
-import { mapFlatFindings, type FlatFinding } from "./diagnosticsMap";
+import { createDiagnosticRangeMapper, mapFlatFindings, type FlatFinding } from "./diagnosticsMap";
 import { buildXmlAssociations, listModFolders, writeRecommendations, writeXmlAssociations } from "./modFolder";
 import { atomicWriteFile, replaceFileSetAtomically } from "./durableWrite";
 import { xmlCursorContext } from "./langContext";
-import { mdCallScriptHeader, readMdCallHelpRequest, resolveMdCallHelp } from "./langCallHelp";
+import { MAX_EDITOR_ORDER_BYTES, MAX_EDITOR_ORDER_FILES, parseEditorOrderFiles } from "../../shared/referenceEditorOrders";
+import { mdCallScriptHeader, readMdCallHelpRequest, resolveMdCallHelp, type MdCallHelpMode } from "./langCallHelp";
+import { isScriptExpressionRole, type ScriptAttributeType } from "../../shared/scriptExpressionRole";
 import {
   MAX_MD_DEFINITION_SOURCE, readMdDefinitionDocument, resolveMdDefinition, resolveMdReferences,
   type MdDefinitionDocument,
 } from "./langNav";
 import { registerMdRenameCommand } from "./mdRenameHost";
+import { registerWorkspaceScriptSymbols } from "./workspaceScriptSymbolsHost";
+import { provideAuthoredAiScriptDefinition, provideAuthoredAiScriptReferences } from "./aiScriptDefinitionHost";
+import type { AiScriptLocation } from "./aiScriptNavigation";
 import { detectIdeCapabilities, formatIdeCapabilityReport } from "./capabilities";
 import { PanelBackendBinding, SharedBackendEnsure } from "./panelBinding";
 import { checkOwnedBackendLiveness, hasForgeSchemaIdentity } from "./backendLiveness";
@@ -187,8 +192,13 @@ let startingChild: ChildProcess | null = null;
 let retiringChild: ChildProcess | null = null;
 const stoppingChildren = new WeakSet<ChildProcess>();
 
-function assertBackendStartCurrent(generation: number): void {
+function assertBackendStartCurrent(generation: number, child?: ChildProcess): void {
   if (generation !== backendStopGeneration) throw new Error("Forge backend startup was stopped.");
+  if (child && (child.exitCode !== null || child.signalCode !== null)) {
+    throw new Error(
+      `Forge backend exited during startup (code ${child.exitCode ?? child.signalCode}). See "X4 Forge" output for its logs.`,
+    );
+  }
 }
 
 function backendApiHeaders(handle: BackendHandle, json = false): Record<string, string> {
@@ -224,6 +234,7 @@ async function bindBackendWorkspace(
   context: vscode.ExtensionContext, handle: BackendHandle, generation: number, exactWorkspaceId?: string,
 ): Promise<void> {
   if (!handle.owned || !handle.token) return;
+  assertBackendStartCurrent(generation, handle.child);
   handle.clientId ||= `client_extension_${process.pid}_${Date.now().toString(36)}`;
   const saved = exactWorkspaceId ?? context.globalState.get<string>('x4forge.workspaceId') ?? '';
   const attempt = async (workspaceId: string) => {
@@ -244,20 +255,22 @@ async function bindBackendWorkspace(
     };
   };
   let result = await attempt(saved);
-  assertBackendStartCurrent(generation);
+  assertBackendStartCurrent(generation, handle.child);
   if (!result.response.ok && saved && ['WORKSPACE_NOT_FOUND', 'WORKSPACE_ID_INVALID'].includes(String(result.body.code || ''))) {
     if (exactWorkspaceId !== undefined) {
       throw new Error("The saved Forge workspace is unavailable. Open Studio to select a workspace.");
     }
     result = await attempt('');
   }
-  assertBackendStartCurrent(generation);
+  assertBackendStartCurrent(generation, handle.child);
   if (!workspaceAuthorityResponseAcceptable(result.response.ok, result.requestedWorkspaceId, result.body.workspaceId)) {
     throw new Error(result.body.error || `workspace bootstrap failed (${result.response.status})`);
   }
-  handle.workspaceId = result.body.workspaceId;
-  await context.globalState.update('x4forge.workspaceId', handle.workspaceId);
-  log(`workspace authority bound: ${handle.workspaceId}`);
+  const workspaceId = result.body.workspaceId;
+  await context.globalState.update('x4forge.workspaceId', workspaceId);
+  assertBackendStartCurrent(generation, handle.child);
+  handle.workspaceId = workspaceId;
+  log(`workspace authority bound: ${workspaceId}`);
 }
 
 function requestManagedSidecarStop(child: ChildProcess): void {
@@ -755,22 +768,17 @@ async function spawnSidecar(
     try {
       const deadline = Date.now() + (debugMode === "off" ? 30_000 : 120_000);
       while (Date.now() < deadline) {
-        assertBackendStartCurrent(generation);
-        if (child.exitCode !== null || child.signalCode !== null) {
-          throw new Error(
-            `Forge backend exited during startup (code ${child.exitCode ?? child.signalCode}). See "X4 Forge" output for its logs.`,
-          );
-        }
+        assertBackendStartCurrent(generation, child);
         if (await probeForge(handle.baseUrl, 1500)) {
-          assertBackendStartCurrent(generation);
+          assertBackendStartCurrent(generation, child);
           await bindBackendWorkspace(context, handle, generation, exactWorkspaceId);
-          assertBackendStartCurrent(generation);
+          assertBackendStartCurrent(generation, child);
           log(`sidecar ready at ${handle.baseUrl}`);
           return handle;
         }
         await new Promise((r) => setTimeout(r, 400));
       }
-      assertBackendStartCurrent(generation);
+      assertBackendStartCurrent(generation, child);
       // A debugger may deliberately hold the backend before its first instruction.
       if (debugMode === "inspect-brk") {
         log(`sidecar is paused at startup (--inspect-brk) — continue execution in the debugger to start the server.`);
@@ -823,6 +831,7 @@ async function autoRestartSidecar(context: vscode.ExtensionContext, exitCode: nu
     try {
       const saved = context.globalState.get<string>('x4forge.workspaceId') ?? '';
       const handle = await ensureBackend(context, saved);
+      assertBackendStartCurrent(generation, handle.child);
       log(`sidecar auto-restarted at ${handle.baseUrl}`);
       void vscode.window.showInformationMessage(
         "X4 Forge: the backend stopped unexpectedly and was restarted automatically.",
@@ -848,7 +857,7 @@ async function ensureBackend(context: vscode.ExtensionContext, exactWorkspaceId?
   return backendEnsurer.run(
     () => ensureBackendOnce(context, exactWorkspaceId),
     (handle) => {
-      assertBackendStartCurrent(generation);
+      assertBackendStartCurrent(generation, handle.child);
       if (exactWorkspaceId !== undefined) {
         if (!handle.owned) throw new Error("The configured backend is externally managed.");
         if ((!handle.debugPort || handle.workspaceId) && (!handle.workspaceId
@@ -902,9 +911,10 @@ async function ensureBackendOnce(context: vscode.ExtensionContext, exactWorkspac
       }
     }
 
-    // Attach-first: an already-running Forge (e.g. the standalone dev stack) wins.
+    // Scratch launch roles are checked by the managed server. An attached server
+    // would bypass that check, including when the scratch opt-in is malformed.
     const { attachUrl } = cfg();
-    if (attachUrl) {
+    if (attachUrl && process.env.X4_FORGE_DEV_SCRATCH_SETTINGS === undefined) {
       const available = await probeForge(attachUrl);
       assertBackendStartCurrent(generation);
       if (available) {
@@ -921,11 +931,13 @@ async function ensureBackendOnce(context: vscode.ExtensionContext, exactWorkspac
     assertBackendStartCurrent(generation);
     backend = await spawnSidecar(context, generation, exactWorkspaceId);
     const handle = backend;
-    if (generation !== backendStopGeneration) {
+    try {
+      assertBackendStartCurrent(generation, handle.child);
+    } catch (error) {
       backend = null;
-      requestManagedSidecarStop(handle.child!);
+      if (handle.child) requestManagedSidecarStop(handle.child);
+      throw error;
     }
-    assertBackendStartCurrent(generation);
     updateStatus();
     return handle;
   } catch (error) {
@@ -1006,7 +1018,7 @@ function webviewHtml(webview: vscode.Webview, forgeUrl: string, mode: string, fr
     window.addEventListener('message', (event) => {
       if (!notice.hidden || event.source !== frame.contentWindow || event.origin !== forgeOrigin) return;
       const data = event.data;
-      if (!data || data.source !== 'x4forge-studio' || !['open-workspace-file', 'open-validated-source', 'open-text-diff', 'open-node-selection', 'node-selection-result', 'open-external-url', 'release-native-action', 'workspace-authority-changed'].includes(data.type)) return;
+      if (!data || data.source !== 'x4forge-studio' || !['open-workspace-file', 'open-validated-source', 'open-bound-workspace-file', 'open-text-diff', 'open-node-selection', 'node-selection-result', 'open-external-url', 'release-native-action', 'workspace-authority-changed'].includes(data.type)) return;
       vscode.postMessage({ ...data, frameId });
     });
     window.addEventListener('message', (event) => {
@@ -1040,7 +1052,7 @@ function updateStatus(): void {
   statusItem.show();
 }
 
-function trackStudioPanel(context: vscode.ExtensionContext, nextPanel: vscode.WebviewPanel): void {
+function trackStudioPanel(context: vscode.ExtensionContext, nextPanel: vscode.WebviewPanel): string {
   const panelKey = `studio-${nextStudioPanelKey++}`;
   studioPanels.set(panelKey, nextPanel);
   panelBinding.track(panelKey, (current) => {
@@ -1088,6 +1100,7 @@ function trackStudioPanel(context: vscode.ExtensionContext, nextPanel: vscode.We
     }
     syncCanonicalStudioPanel();
   });
+  return panelKey;
 }
 
 function syncCanonicalStudioPanel(): void {
@@ -1177,9 +1190,19 @@ async function handleStudioMessage(context: vscode.ExtensionContext, value: unkn
       fetch(`${handle.baseUrl}/api/schema/config`, { headers }),
     ]);
     const workspaceData = (await workspaceResponse.json()) as { workspace?: { sourceFolder?: string; sourceStamp?: { dir?: string } } };
-    const configData = (await configResponse.json()) as { resolved?: { modWorkspacePath?: string }; config?: { modWorkspacePath?: string } };
+    const configData = (await configResponse.json()) as {
+      resolved?: { modWorkspacePath?: string };
+      config?: { modWorkspacePath?: string };
+      workspaceRoot?: { id: string; path: string };
+    };
     if (!workspaceResponse.ok || !configResponse.ok) throw new Error("Forge could not resolve the active workspace and directory settings.");
-    const workspaceRoot = String(configData.resolved?.modWorkspacePath || configData.config?.modWorkspacePath || "").trim();
+    const boundRoot = request.type === "open-bound-workspace-file" ? configData.workspaceRoot : undefined;
+    if (request.type === "open-bound-workspace-file" && (!boundRoot
+      || boundRoot.id !== request.expectedWorkspaceRootId
+      || typeof boundRoot.path !== "string" || !path.isAbsolute(boundRoot.path))) {
+      throw new Error("The configured Mod Workspace folder changed or is unavailable. Refresh Project Files.");
+    }
+    const workspaceRoot = (boundRoot?.path || configData.resolved?.modWorkspacePath || configData.config?.modWorkspacePath || "").trim();
     if (!workspaceRoot) throw new Error("No Mod Workspace folder is configured.");
     const sourceFolder = request.sourceFolder
       ? path.resolve(workspaceRoot, request.sourceFolder)
@@ -1311,6 +1334,42 @@ function offlineStudioHtml(): string {
 <p>Run X4 Forge: Start Local Backend for a managed sidecar. For an attached backend, start it in its owning host and open Studio.</p></body></html>`;
 }
 
+async function restoreStudioPanel(context: vscode.ExtensionContext, restoredPanel: vscode.WebviewPanel): Promise<void> {
+  const finish = beginNativeOperation('native.panel.open');
+  let outcome: ForgePerformanceOutcome = 'ok';
+  try {
+    restoredPanel.webview.options = { enableScripts: true };
+    const panelKey = trackStudioPanel(context, restoredPanel);
+    try {
+      await ensureBackend(context);
+      if (studioPanels.get(panelKey) !== restoredPanel) {
+        outcome = 'superseded';
+        return;
+      }
+      restoredPanel.reveal(undefined, true);
+    } catch (error) {
+      outcome = 'error';
+      const message = `Could not restore the X4 Forge Studio panel: ${error instanceof Error ? error.message : String(error)}`;
+      if (studioPanels.get(panelKey) !== restoredPanel) {
+        log(`ERROR: ${message}`);
+        return;
+      }
+      showBackendError(message);
+      try {
+        restoredPanel.webview.html = offlineStudioHtml();
+      } catch (fallbackError) {
+        // The host can reject a write before its disposal event reaches this extension.
+        log(`ERROR: Could not show the offline Studio panel: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`);
+      }
+    }
+  } catch (error) {
+    outcome = 'error';
+    throw error;
+  } finally {
+    finish(outcome);
+  }
+}
+
 function markStudioBackendOffline(owned: boolean): void {
   panelBinding.reset();
   const message = owned
@@ -1332,7 +1391,7 @@ async function startLocalBackend(context: vscode.ExtensionContext): Promise<void
       { location: vscode.ProgressLocation.Notification, title: "X4 Forge: starting local backend…" },
       () => ensureBackend(context, saved),
     );
-    assertBackendStartCurrent(generation);
+    assertBackendStartCurrent(generation, handle.child);
     if (handle.debugPort && !handle.workspaceId) {
       void vscode.window.showInformationMessage("X4 Forge: local backend is waiting for the debugger.");
       return;
@@ -1425,29 +1484,7 @@ export function activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
       vscode.window.registerTreeDataProvider("x4forge.launcher", emptyLauncher),
       vscode.window.registerWebviewPanelSerializer("x4forge.studio", {
-        async deserializeWebviewPanel(restoredPanel): Promise<void> {
-          const finishPanel = beginNativeOperation('native.panel.open');
-          let panelOutcome: ForgePerformanceOutcome = 'ok';
-          try {
-            restoredPanel.webview.options = { enableScripts: true };
-            trackStudioPanel(context, restoredPanel);
-            try {
-              await ensureBackend(context);
-              restoredPanel.reveal(undefined, true);
-            } catch (err) {
-              panelOutcome = 'error';
-              restoredPanel.webview.html = offlineStudioHtml();
-              showBackendError(
-                `Could not restore the X4 Forge Studio panel: ${err instanceof Error ? err.message : String(err)}`,
-              );
-            }
-          } catch (error) {
-            panelOutcome = 'error';
-            throw error;
-          } finally {
-            finishPanel(panelOutcome);
-          }
-        },
+        deserializeWebviewPanel: restoredPanel => restoreStudioPanel(context, restoredPanel),
       }),
     );
 
@@ -1661,6 +1698,47 @@ export function activate(context: vscode.ExtensionContext): void {
     );
     registerLangProviders(context);
     registerNavProviders(context);
+    registerWorkspaceScriptSymbols(context, modRootFor, LIVE_FILE_LIMIT, () => beginNativeOperation("native.provider.read"), () => {
+      const handle = backend;
+      if (!handle?.owned || !handle.token) return undefined;
+      const token = handle.token;
+      const readRoot = async (view: "game-root" | "filesystem-root", field: "x4GamePath" | "filesystemPath") => {
+        const response = await fetch(`${handle.baseUrl}/api/schema/config?view=${view}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          redirect: "error",
+          signal: AbortSignal.timeout(1_500),
+        });
+        if (!response.ok) throw new Error("The configured Forge reference root is unavailable.");
+        const value = await response.json() as { resolved?: Record<string, unknown> };
+        const root = value.resolved?.[field];
+        return typeof root === "string" ? root : undefined;
+      };
+      return {
+        owner: handle,
+        readGameRoot: () => readRoot("game-root", "x4GamePath"),
+        readInstalledRoot: () => readRoot("filesystem-root", "filesystemPath"),
+        async readScriptOrigins(logical) {
+          const query = new URLSearchParams({ view: "script-symbol-origins", compact: "1", path: logical });
+          const response = await fetch(`${handle.baseUrl}/api/reference/effective-file?${query}`, {
+            headers: { Authorization: `Bearer ${token}` },
+            redirect: "error",
+            signal: AbortSignal.timeout(900),
+          });
+          if (!response.ok) throw new Error("The effective Forge script origins are unavailable.");
+          return response.json();
+        },
+        async readPage(domain, offset, limit) {
+          const query = new URLSearchParams({ observe: "1", domain, extension: ".xml", offset: String(offset), limit: String(limit) });
+          const response = await fetch(`${handle.baseUrl}/api/reference/manifest?${query}`, {
+            headers: { Authorization: `Bearer ${token}` },
+            redirect: "error",
+            signal: AbortSignal.timeout(1_500),
+          });
+          if (!response.ok) throw new Error("The prepared Forge reference inventory is unavailable.");
+          return response.json();
+        },
+      };
+    }, log);
     registerMdRenameCommand(context, modRootFor, LIVE_FILE_LIMIT, () => beginNativeOperation("native.provider.write"));
     registerTwoWayEditing(context);
 
@@ -1776,7 +1854,7 @@ async function openModFolder(context: vscode.ExtensionContext): Promise<void> {
 // ---------------------------------------------------------------------------
 
 const LANG_CACHE_TTL_MS = 30_000;
-const langCache = new Map<string, { at: number; data: unknown }>();
+let langCache: { owner: BackendHandle; entries: Map<string, { at: number; data: unknown }> } | undefined;
 
 /** A file participates in X4 IntelliSense when it lives under a known mod root. */
 function modRootFor(fsPath: string): string | null {
@@ -1804,18 +1882,25 @@ function modRootFor(fsPath: string): string | null {
   return null;
 }
 
-async function langGet<T>(route: "complete" | "attrs" | "hover", params: Record<string, string>): Promise<T | null> {
-  if (!backend) return null; // never spawn a sidecar from a keystroke
+async function langGet<T>(route: "complete" | "attrs" | "hover", params: Record<string, string>,
+  { fresh = false } = {}): Promise<T | null> {
+  const owner = backend;
+  if (!owner) return null; // never spawn a sidecar from a keystroke
+  const cache = fresh ? undefined : langCache?.owner === owner ? langCache : (langCache = { owner, entries: new Map() });
   const qs = new URLSearchParams(params).toString();
   const key = `${route}?${qs}`;
-  const hit = langCache.get(key);
+  const hit = cache?.entries.get(key);
   if (hit && Date.now() - hit.at < LANG_CACHE_TTL_MS) return hit.data as T;
   try {
-    const res = await fetchWithTimeout(`${backend.baseUrl}/api/agent/lang/${route}?${qs}`, 3000);
+    const res = await fetchWithTimeout(`${owner.baseUrl}/api/agent/lang/${route}?${qs}`, 3000,
+      fresh ? { cache: "no-store" } : undefined);
     if (!res || !res.ok) return null;
     const data = (await res.json()) as T;
-    langCache.set(key, { at: Date.now(), data });
-    if (langCache.size > 200) langCache.delete(langCache.keys().next().value as string);
+    if (backend !== owner || (cache && langCache !== cache)) return null;
+    if (cache) {
+      cache.entries.set(key, { at: Date.now(), data });
+      if (cache.entries.size > 200) cache.entries.delete(cache.entries.keys().next().value as string);
+    }
     return data;
   } catch {
     return null;
@@ -1930,6 +2015,57 @@ function completionKind(kind: ReferenceCompletionPayload["kind"]): vscode.Comple
   }
 }
 
+function captureEditorOrderSiblings(root: string, caller: vscode.TextDocument) {
+  const directory = path.join(root, "aiscripts");
+  const siblings = () => {
+    // Closing a tab can leave its TextDocument loaded in the extension host.
+    const editorPaths = new Set<string>();
+    for (const group of vscode.window.tabGroups.all) {
+      for (const { input } of group.tabs) {
+        const uri = input instanceof vscode.TabInputText ? input.uri
+          : input instanceof vscode.TabInputTextDiff ? input.modified : undefined;
+        if (uri?.scheme !== "file") continue;
+        const relative = path.relative(directory, uri.fsPath);
+        editorPaths.add(process.platform === "win32" ? relative.toLowerCase() : relative);
+      }
+    }
+    const open = openXmlDirectoryDocuments(directory);
+    for (const [name, item] of open) {
+      if (item.document === caller || !editorPaths.has(name)) open.delete(name);
+    }
+    return open;
+  };
+  const before = siblings();
+  if (before.size > MAX_EDITOR_ORDER_FILES) return undefined;
+  try {
+    let remaining = MAX_EDITOR_ORDER_BYTES;
+    const files = [];
+    for (const { document } of before.values()) {
+      const file = document.uri.fsPath;
+      const info = fs.lstatSync(file);
+      if (!info.isFile() || info.nlink !== 1 || path.relative(file, fs.realpathSync.native(file)) !== "") return undefined;
+      const content = document.getText();
+      remaining -= Buffer.byteLength(content, "utf8");
+      if (remaining < 0) return undefined;
+      files.push({ path: relModPath(root, file), content });
+    }
+    const editorOrderFiles = parseEditorOrderFiles(files);
+    if (!editorOrderFiles) return undefined;
+    return {
+      files: editorOrderFiles,
+      isCurrent: () => {
+        const current = siblings();
+        return current.size === before.size && [...before].every(([name, item]) => {
+          const candidate = current.get(name);
+          return candidate?.document === item.document && candidate.version === item.version;
+        });
+      },
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 function registerLangProviders(context: vscode.ExtensionContext): void {
   const selector: vscode.DocumentSelector = [
     { scheme: "file", pattern: "**/*.xml" },
@@ -1942,14 +2078,16 @@ function registerLangProviders(context: vscode.ExtensionContext): void {
         const finish = beginNativeOperation('native.provider.read');
         let outcome: ForgePerformanceOutcome = 'ok';
         try {
+          const completionVersion = doc.version;
+          const isDocumentCurrent = () => !token.isCancellationRequested && !doc.isClosed && doc.version === completionVersion;
+          if (!isDocumentCurrent()) return undefined;
           const nodeDocument = doc.uri.scheme === 'x4forge-node';
           const root = nodeDocument ? null : modRootFor(doc.uri.fsPath);
           if (!nodeDocument && !root) return undefined;
           const text = doc.getText();
           if (root && isMdCallDocument(root, doc)) {
-            const version = doc.version;
-            const help = await editorMdCallHelp(root, doc, pos, token, true);
-            if (token.isCancellationRequested || doc.isClosed || doc.version !== version) return undefined;
+            const help = await editorMdCallHelp(root, doc, pos, token, "completion");
+            if (!isDocumentCurrent()) return undefined;
             if (help?.nameRange) {
               const range = new vscode.Range(doc.positionAt(help.nameRange.start), doc.positionAt(help.nameRange.end));
               return help.unsupplied.map((parameter, index) => {
@@ -1968,18 +2106,29 @@ function registerLangProviders(context: vscode.ExtensionContext): void {
           const file = nodeDocument ? 'md/x4forge-node-selection.xml' : relModPath(root!, doc.uri.fsPath);
           const rootHint = ctx.rootTag || "";
 
-          const completionVersion = doc.version;
           const cursorOffset = doc.offsetAt(pos);
           const completionBackend = backend;
           const completionWorkspace = completionBackend?.workspaceId;
+          const completionClient = completionBackend?.clientId;
+          const completionToken = completionBackend?.token;
+          const orderSourceRoot = root && completionToken && ctx.inTag === "create_order" && ctx.inAttrValue === "id"
+            ? root : undefined;
+          const editorOrders = orderSourceRoot ? captureEditorOrderSiblings(orderSourceRoot, doc) : undefined;
+          const isCurrent = () => isDocumentCurrent() && backend === completionBackend
+            && completionBackend?.workspaceId === completionWorkspace && completionBackend?.clientId === completionClient
+            && completionBackend?.token === completionToken && (!editorOrders || editorOrders.isCurrent());
           const modern = await referenceLanguagePost<ReferenceCompletionPayload[]>("complete", {
             path: file,
             content: text,
             line: pos.line,
             column: pos.character,
+            // If capture failed, keep canonical suggestions without reviving any saved sibling ID.
+            ...(orderSourceRoot ? {
+              editorSourceRoot: editorOrders ? orderSourceRoot : undefined,
+              editorOrderFiles: editorOrders?.files ?? [],
+            } : {}),
           }, completionBackend, true);
-          if (token.isCancellationRequested || doc.isClosed || doc.version !== completionVersion
-            || backend !== completionBackend || completionBackend?.workspaceId !== completionWorkspace) return undefined;
+          if (!isCurrent()) return undefined;
           if (modern !== null) {
             if (!modern.length) return undefined;
             return modern.flatMap((payload, index) => {
@@ -2005,7 +2154,7 @@ function registerLangProviders(context: vscode.ExtensionContext): void {
           if (ctx.elementStart && ctx.parentTag) {
             const data = await langGet<{ items: Array<{ tag: string; curated: boolean; requiredAttrs: string[]; summary?: string }> }>(
               "complete", { file, parent: ctx.parentTag, root: rootHint });
-            if (!data?.items?.length) return undefined;
+            if (!isCurrent() || !data?.items?.length) return undefined;
             return data.items.map((it, i) => {
               const item = new vscode.CompletionItem(it.tag, vscode.CompletionItemKind.Class);
               item.sortText = `${it.curated ? "0" : "1"}${String(i).padStart(4, "0")}`;
@@ -2022,6 +2171,7 @@ function registerLangProviders(context: vscode.ExtensionContext): void {
           if (ctx.inTag && ctx.inAttrValue) {
             const data = await langGet<{ attrs: Array<{ name: string; enumValues?: string[] }> }>(
               "attrs", { file, tag: ctx.inTag, root: rootHint });
+            if (!isCurrent()) return undefined;
             const enums = data?.attrs?.find((a) => a.name === ctx.inAttrValue)?.enumValues;
             if (!enums?.length) return undefined;
             return enums.map((v) => new vscode.CompletionItem(v, vscode.CompletionItemKind.EnumMember));
@@ -2030,7 +2180,7 @@ function registerLangProviders(context: vscode.ExtensionContext): void {
           if (ctx.inTag) {
             const data = await langGet<{ attrs: Array<{ name: string; required: boolean; type?: string }> }>(
               "attrs", { file, tag: ctx.inTag, root: rootHint });
-            if (!data?.attrs?.length) return undefined;
+            if (!isCurrent() || !data?.attrs?.length) return undefined;
             return data.attrs.map((a, i) => {
               const item = new vscode.CompletionItem(a.name, vscode.CompletionItemKind.Property);
               item.sortText = `${a.required ? "0" : "1"}${String(i).padStart(4, "0")}`;
@@ -2240,7 +2390,7 @@ async function diskMdNavigationFiles(directory: string): Promise<string[]> {
     .map(entry => entry.name);
 }
 
-function openMdDefinitionDocuments(directory: string) {
+function openXmlDirectoryDocuments(directory: string) {
   const documents = new Map<string, { document: vscode.TextDocument; version: number }>();
   for (const document of vscode.workspace.textDocuments) {
     if (document.uri.scheme !== "file" || document.isClosed) continue;
@@ -2256,7 +2406,7 @@ async function mdNavigationSiblings(
   directory: string, caller: vscode.TextDocument, token: vscode.CancellationToken, scriptName?: string,
   includeSignatures = false,
 ): Promise<MdDefinitionDocument[] | undefined> {
-  const open = openMdDefinitionDocuments(directory);
+  const open = openXmlDirectoryDocuments(directory);
   const keyOf = (name: string) => process.platform === "win32" ? name.toLowerCase() : name;
   const callerKey = keyOf(path.basename(caller.uri.fsPath));
   const scriptKey = scriptName?.toLowerCase();
@@ -2308,7 +2458,7 @@ async function mdNavigationSiblings(
   } catch {
     return undefined;
   }
-  const current = openMdDefinitionDocuments(directory);
+  const current = openXmlDirectoryDocuments(directory);
   if (current.size !== open.size || [...open].some(([key, before]) => {
     const after = current.get(key);
     return after?.document !== before.document || after.version !== before.version;
@@ -2322,11 +2472,11 @@ function isMdCallDocument(root: string, doc: vscode.TextDocument): boolean {
 }
 
 async function editorMdCallHelp(
-  root: string, doc: vscode.TextDocument, pos: vscode.Position, token: vscode.CancellationToken, nameCompletion = false,
+  root: string, doc: vscode.TextDocument, pos: vscode.Position, token: vscode.CancellationToken, mode: MdCallHelpMode = "signature",
 ) {
   if (token.isCancellationRequested) return undefined;
   const version = doc.version;
-  const request = readMdCallHelpRequest(doc.uri.fsPath, doc.getText(), doc.offsetAt(pos), nameCompletion);
+  const request = readMdCallHelpRequest(doc.uri.fsPath, doc.getText(), doc.offsetAt(pos), mode);
   if (!request) return undefined;
   const siblings = await mdNavigationSiblings(path.join(root, "md"), doc, token, request.script, true);
   if (!siblings || token.isCancellationRequested || doc.isClosed || doc.version !== version) return undefined;
@@ -2339,8 +2489,48 @@ function mdCallParameterDetail(parameter: { hasDefault: boolean; defaultValue?: 
 
 function registerNavProviders(context: vscode.ExtensionContext): void {
   const selector: vscode.DocumentSelector = [{ scheme: "file", pattern: "**/md/*.xml" }];
+  const aiSelector: vscode.DocumentSelector = [{ scheme: "file", pattern: "**/aiscripts/*.xml" }];
+  const aiLocation = ({ file, start, end }: AiScriptLocation) => new vscode.Location(vscode.Uri.file(file),
+    new vscode.Range(new vscode.Position(start.line, start.column), new vscode.Position(end.line, end.column)));
 
   context.subscriptions.push(
+    vscode.languages.registerDefinitionProvider(aiSelector, {
+      async provideDefinition(doc, pos, token) {
+        if (token.isCancellationRequested) return undefined;
+        const finish = beginNativeOperation("native.provider.read");
+        let outcome: ForgePerformanceOutcome = "ok";
+        try {
+          const root = modRootFor(doc.uri.fsPath);
+          if (!root) return undefined;
+          const result = await provideAuthoredAiScriptDefinition(root, doc, doc.offsetAt(pos), token, LIVE_FILE_LIMIT);
+          return result ? aiLocation(result) : undefined;
+        } catch (error) {
+          outcome = "error";
+          throw error;
+        } finally {
+          finish(outcome);
+        }
+      },
+    }),
+    vscode.languages.registerReferenceProvider(aiSelector, {
+      async provideReferences(doc, pos, referenceContext, token) {
+        if (token.isCancellationRequested) return undefined;
+        const finish = beginNativeOperation("native.provider.read");
+        let outcome: ForgePerformanceOutcome = "ok";
+        try {
+          const root = modRootFor(doc.uri.fsPath);
+          if (!root) return undefined;
+          const result = await provideAuthoredAiScriptReferences(
+            root, doc, doc.offsetAt(pos), token, LIVE_FILE_LIMIT, referenceContext.includeDeclaration);
+          return result?.map(aiLocation);
+        } catch (error) {
+          outcome = "error";
+          throw error;
+        } finally {
+          finish(outcome);
+        }
+      },
+    }),
     vscode.languages.registerSignatureHelpProvider(selector, {
       async provideSignatureHelp(doc, pos, token) {
         const finish = beginNativeOperation("native.provider.read");
@@ -2385,14 +2575,40 @@ function registerNavProviders(context: vscode.ExtensionContext): void {
           const root = modRootFor(doc.uri.fsPath);
           if (!root || token.isCancellationRequested) return undefined;
           const version = doc.version;
-          const origin = readMdDefinitionDocument(doc.uri.fsPath, doc.getText(), doc.offsetAt(pos));
-          if (!origin?.reference) return undefined;
-          const siblings = origin.reference.script
-            ? await mdNavigationSiblings(path.join(root, "md"), doc, token, origin.reference.script)
-            : [];
-          if (!siblings || doc.isClosed || doc.version !== version || token.isCancellationRequested) return undefined;
-          const loc = resolveMdDefinition(origin, siblings);
-          return loc ? new vscode.Location(vscode.Uri.file(loc.file), new vscode.Position(loc.line, loc.column)) : undefined;
+          const inMod = isMdCallDocument(root, doc);
+          const origin = readMdDefinitionDocument(doc.uri.fsPath, doc.getText(), doc.offsetAt(pos), false, { expressionDefinition: inMod });
+          if (!origin) return undefined;
+          const expression = origin.reference ? undefined : origin.expressionReference;
+          let isCurrent = () => !doc.isClosed && doc.version === version && !token.isCancellationRequested;
+          let location: ReturnType<typeof resolveMdDefinition>;
+          if (!origin.reference && inMod) {
+            location = (await editorMdCallHelp(root, doc, pos, token, "definition"))?.parameterLocation;
+          }
+          const target = origin.reference ?? expression?.target;
+          if (!location && target && isCurrent()) {
+            if (expression && !isScriptExpressionRole(expression.tag, expression.attribute)) {
+              const authority = backend;
+              if (!authority) return undefined;
+              const { baseUrl, workspaceId, clientId, token: credential } = authority;
+              const documentIsCurrent = isCurrent;
+              isCurrent = () => documentIsCurrent() && backend === authority
+                && authority.baseUrl === baseUrl && authority.workspaceId === workspaceId
+                && authority.clientId === clientId && authority.token === credential;
+              const facts = await langGet<{ domain: string; tag: string; attrs: Array<ScriptAttributeType & { name: string }> }>(
+                "attrs", { file: relModPath(root, doc.uri.fsPath), root: "mdscript", tag: expression.tag }, { fresh: true });
+              const spec = facts?.domain === "md" && facts.tag === expression.tag && Array.isArray(facts.attrs)
+                ? facts.attrs.find(attr => attr?.name === expression.attribute)
+                : undefined;
+              if (!isCurrent() || !isScriptExpressionRole(expression.tag, expression.attribute, spec)) return undefined;
+            }
+            const siblings = target.script
+              ? await mdNavigationSiblings(path.join(root, "md"), doc, token, target.script)
+              : [];
+            if (!siblings || !isCurrent()) return undefined;
+            location = resolveMdDefinition(origin, siblings, { allowExpression: !!expression });
+          }
+          if (!location || !isCurrent()) return undefined;
+          return new vscode.Location(vscode.Uri.file(location.file), new vscode.Position(location.line, location.column));
         } catch (error) {
           outcome = 'error';
           throw error;
@@ -2522,13 +2738,13 @@ async function validateNodeDocument(doc: vscode.TextDocument, key: string, gener
   try {
     if (!backend?.owned || !backend.token) return;
     const pathName = 'md/x4forge-node-selection.xml';
+    finishPhase = beginNativeOperation('native.validation.overlay');
+    const content = doc.getText();
+    finishPhase();
     const response = await fetch(`${backend.baseUrl}/api/agent/project/validate/check`, {
       method: 'POST',
       headers: freshActionOperationHeaders({ Authorization: `Bearer ${backend.token}`, 'Content-Type': 'application/json' }),
       body: (() => {
-        finishPhase = beginNativeOperation('native.validation.overlay');
-        const content = doc.getText();
-        finishPhase();
         finishPhase = beginNativeOperation('native.validation.serialize');
         const body = JSON.stringify({ project: { id: 'x4forge_node_selection', name: 'X4 Forge node selection', files: [
           { path: 'content.xml', content: '<content id="x4forge_node_selection" name="X4 Forge node selection" version="1" />' },
@@ -2554,9 +2770,11 @@ async function validateNodeDocument(doc: vscode.TextDocument, key: string, gener
     const list = mapped.byFile.get(pathName) || [];
     finishPhase();
     finishPhase = beginNativeOperation('native.validation.apply');
+    const snapshot = list.some(item => item.column !== undefined) ? content : undefined;
+    const rangeFor = createDiagnosticRangeMapper(snapshot, doc);
     diagCollection?.set(doc.uri, list.map(item => {
-      const line = Math.min(item.line, Math.max(0, doc.lineCount - 1));
-      const diagnostic = new vscode.Diagnostic(new vscode.Range(line, 0, line, doc.lineAt(line).text.length), item.message, DIAG_SEVERITY[item.severity]);
+      const { line, start, end } = rangeFor(item);
+      const diagnostic = new vscode.Diagnostic(new vscode.Range(line, start, line, end), item.message, DIAG_SEVERITY[item.severity]);
       diagnostic.source = 'x4forge';
       if (item.code) diagnostic.code = item.code;
       return diagnostic;
@@ -2671,10 +2889,11 @@ async function liveValidateRoot(root: string, generation: number): Promise<void>
       const uri = vscode.Uri.file(path.join(root, ...rel.split("/")));
       currentUris.add(uri.toString());
       const open = vscode.workspace.textDocuments.find((candidate) => candidate.uri.toString() === uri.toString());
+      const snapshot = list.some(item => item.column !== undefined) ? byPath.get(rel.toLowerCase())?.content : undefined;
+      const rangeFor = createDiagnosticRangeMapper(snapshot, open);
       diagCollection?.set(uri, list.map((d) => {
-        const line = open ? Math.min(d.line, Math.max(0, open.lineCount - 1)) : d.line;
-        const end = open ? open.lineAt(line).text.length : 200;
-        const diag = new vscode.Diagnostic(new vscode.Range(line, 0, line, end), d.message, DIAG_SEVERITY[d.severity] ?? vscode.DiagnosticSeverity.Information);
+        const { line, start, end } = rangeFor(d);
+        const diag = new vscode.Diagnostic(new vscode.Range(line, start, line, end), d.message, DIAG_SEVERITY[d.severity] ?? vscode.DiagnosticSeverity.Information);
         diag.source = "x4forge";
         if (d.code) diag.code = d.code;
         return diag;

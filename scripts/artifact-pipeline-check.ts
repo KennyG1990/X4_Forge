@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   buildArtifactPlan,
+  buildArtifactPlanWithDiskIdentity,
   materializeArtifact,
   verifyMaterializedArtifact,
   type ArtifactPlan,
@@ -62,6 +63,70 @@ const catalogOutputRepeat = path.join(root, 'catalog-output-repeat');
 const packagedOutput = path.join(root, 'packaged-output');
 
 try {
+  const encodingRoot = path.join(root, 'text-ownership');
+  const malformedPath = 'md/legacy.xml';
+  const truncatedPath = 'ui/truncated.lua';
+  const malformed = Buffer.concat([Buffer.from('<mdscript/> <!-- '), Buffer.from([0x80]), Buffer.from(' -->')]);
+  const truncated = Buffer.from([0x61, 0xe2, 0x82]);
+  write(encodingRoot, malformedPath, malformed);
+  write(encodingRoot, truncatedPath, truncated);
+  const replacement = { [malformedPath]: malformed.toString('utf8'), [truncatedPath]: truncated.toString('utf8') };
+  for (const format of ['loose', 'catalog'] as const) {
+    const observed = buildArtifactPlanWithDiskIdentity({ sourceRoot: encodingRoot, passthroughFiles: replacement }, format);
+    check(`native ${format} refuses replacement-text overlays before selecting an artifact`,
+      !observed.plan.ok && observed.diskIdentity === null
+      && [malformedPath, truncatedPath].every(file => observed.plan.sourceEncodingConflicts?.includes(file)));
+  }
+  const ordinary = buildArtifactPlan({ sourceRoot: encodingRoot, generatedFiles: replacement });
+  check('ordinary artifact planning refuses generated overlay of undecodable source',
+    !ordinary.ok && ordinary.sourceEncodingConflicts?.length === 2);
+  const diskOnly = buildArtifactPlan({ sourceRoot: encodingRoot });
+  check('raw disk-copy remains admissible without a competing text overlay',
+    diskOnly.ok && diskOnly.entries.every(entry => entry.disposition === 'source-copy'));
+  const equal = buildArtifactPlan({ sourceRoot: encodingRoot, generatedFiles: { [malformedPath]: malformed } });
+  check('an exact raw Buffer overlay preserves bytes and remains admissible', equal.ok
+    && equal.entries.some(entry => entry.path === malformedPath && entry.sha256 === sha256Buffer(malformed)));
+  const byteEdit = Buffer.from([0x80, 0x61]);
+  const explicitBytes = buildArtifactPlanWithDiskIdentity({
+    sourceRoot: encodingRoot, passthroughFiles: { [malformedPath]: byteEdit },
+  }, 'catalog');
+  check('explicit byte passthrough retains precedence without text decoding', explicitBytes.plan.ok
+    && explicitBytes.plan.entries.some(entry => entry.path === malformedPath && entry.sha256 === sha256Buffer(byteEdit)));
+  const splitPath = 'split.txt';
+  const validSplit = Buffer.concat([Buffer.alloc(1024 * 1024 - 1, 0x61), Buffer.from('\uFFFD')]);
+  write(encodingRoot, splitPath, validSplit);
+  const validOptions = { sourceRoot: encodingRoot, generatedFiles: { [splitPath]: 'intentional text edit' } };
+  check('normal text editing preserves support for a valid multibyte sequence split across hash blocks',
+    buildArtifactPlan(validOptions).ok);
+  const physical = path.join(encodingRoot, splitPath);
+  let opened = 0;
+  const previousOpen = fs.openSync;
+  fs.openSync = ((filePath, ...args) => {
+    if (filePath === physical) opened++;
+    return Reflect.apply(previousOpen, fs, [filePath, ...args]);
+  }) as typeof fs.openSync;
+  try {
+    const observed = buildArtifactPlanWithDiskIdentity(validOptions, 'loose');
+    check('native text-overlay validation reads the selected disk path once', observed.plan.ok && opened === 1, opened);
+  } finally {
+    fs.openSync = previousOpen;
+  }
+  const ignored = buildArtifactPlan({ sourceRoot: encodingRoot, passthroughFiles: replacement,
+    rules: { exclude: [malformedPath], runtimeOwned: [truncatedPath] } });
+  check('excluded and runtime-owned files keep their existing precedence',
+    ignored.ok && ignored.excluded.some(file => file.path === malformedPath)
+    && ignored.runtimeOwned.some(file => file.path === truncatedPath) && ignored.sourceEncodingConflicts === undefined);
+  const caseConflict = buildArtifactPlan({ sourceRoot: encodingRoot, generatedFiles: { 'md/Legacy.xml': 'new' } });
+  check('case collision refusal remains ahead of text inspection', !caseConflict.ok
+    && caseConflict.errors.some(problem => problem.includes('case normalization')) && caseConflict.sourceEncodingConflicts === undefined);
+  const ruleLabelRoot = path.join(root, 'rule-labels');
+  write(ruleLabelRoot, 'probe.txt', 'rule order');
+  const overlappingRules = ['p*.txt', '*.txt'];
+  const firstLabel = buildArtifactPlan({ sourceRoot: ruleLabelRoot, rules: { exclude: overlappingRules } });
+  const reversedLabel = buildArtifactPlan({ sourceRoot: ruleLabelRoot, rules: { exclude: [...overlappingRules].reverse() } });
+  check('overlapping exclusions report the first matching rule in caller order', firstLabel.ok && reversedLabel.ok
+    && firstLabel.excluded.find(entry => entry.path === 'probe.txt')?.rule === overlappingRules[0]
+    && reversedLabel.excluded.find(entry => entry.path === 'probe.txt')?.rule === overlappingRules[1]);
   const explicitTextNames = [
     ['0001-L044.xml', '44', '0001-L044.xml'],
     ['0002-l44.xml', '44', '0002-l44.xml'],
@@ -94,6 +159,22 @@ try {
   const memoryPlan = buildArtifactPlan({ sourceRoot: '', memoryOnly: true, generatedFiles: { 'content.xml': '<content id="memory"/>' } });
   check('memory-only plan never enumerates current directory', memoryPlan.ok && memoryPlan.sourceRoot === '' && memoryPlan.entries.length === 1);
   check('memory-only plan refuses a simultaneous disk root', !buildArtifactPlan({ sourceRoot: root, memoryOnly: true }).ok);
+  const originalCwd = process.cwd();
+  try {
+    process.chdir(root);
+    const target = path.join(root, 'memory-artifact');
+    const built = materializeArtifact(memoryPlan, target);
+    check('generated-only artifact can materialize below the working directory',
+      built.ok && verifyMaterializedArtifact(memoryPlan, target).ok, built.errors.join('; '));
+    const diskPlan = buildArtifactPlan({ sourceRoot: root });
+    const nestedTarget = path.join(root, 'nested-disk-target');
+    const overlapping = materializeArtifact(diskPlan, nestedTarget);
+    check('disk-backed artifact still refuses nested output before creating it',
+      diskPlan.ok && !overlapping.ok && !fs.existsSync(nestedTarget)
+      && overlapping.errors.some(error => error.includes('must not overlap')));
+  } finally {
+    process.chdir(originalCwd);
+  }
   fs.mkdirSync(source, { recursive: true });
   write(source, 'content.xml', '<?xml version="1.0"?><content id="artifact_torture" name="Artifact Torture" version="100"/>');
   write(source, 'md/source.xml', '<?xml version="1.0"?><mdscript name="Source"><cues/></mdscript>\r\n');
@@ -194,6 +275,33 @@ try {
   check('materialization succeeds', build.ok, build.errors.join('; '));
   const verification = verifyMaterializedArtifact(plan, output);
   check('materialized artifact verifies', verification.ok, verification.errors.join('; '));
+  for (const relativePath of ['empty/zero.bin', loadedTextPath]) {
+    const growingPath = path.join(output, ...relativePath.split('/'));
+    const originalBytes = fs.readFileSync(growingPath);
+    const previousStat = fs.statSync;
+    let growthTriggered = false;
+    const statWithGrowth = ((filePath, ...args) => {
+      const observed = Reflect.apply(previousStat, fs, [filePath, ...args]);
+      if (filePath === growingPath && !growthTriggered) {
+        // Return the genuine earlier size after the file has grown. The verifier
+        // must consume the added byte even when that size hint was zero.
+        fs.appendFileSync(growingPath, Buffer.from([0xa5]));
+        growthTriggered = true;
+      }
+      return observed;
+    }) as typeof fs.statSync;
+    if (!Reflect.set(fs, 'statSync', statWithGrowth)) throw new Error('Could not install the fixture stat hook.');
+    try {
+      const growth = verifyMaterializedArtifact(plan, output);
+      check(`stale observed size still hashes ${relativePath} growth through EOF`, growthTriggered && !growth.ok
+        && growth.checked === plan.entries.length
+        && growth.errors.some(error => error.startsWith(`Artifact hash mismatch for ${relativePath}:`))
+        && !growth.errors.some(error => error.startsWith(`Artifact size mismatch for ${relativePath}:`)), growth.errors.join('; '));
+    } finally {
+      Reflect.set(fs, 'statSync', previousStat);
+      fs.writeFileSync(growingPath, originalBytes);
+    }
+  }
   check('large text hash-identical', sha256File(path.join(source, 'ui', 'over-256k.lua')) === sha256File(path.join(output, 'ui', 'over-256k.lua')));
   check('multi-megabyte binary hash-identical', sha256File(path.join(source, 'assets', 'multi-megabyte.weirdbin')) === sha256File(path.join(output, 'assets', 'multi-megabyte.weirdbin')));
   check('loaded .py passthrough materializes exact bytes', fs.readFileSync(path.join(output, ...loadedTextPath.split('/'))).equals(loadedTextBytes));

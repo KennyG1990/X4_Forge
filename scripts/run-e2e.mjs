@@ -1266,6 +1266,7 @@ export async function runE2e({
   readReceiptImpl = readReceiptText,
   finalizeRunState,
   inspectProcessLeases,
+  cleanSuccessfulRunCache,
   snapshotOptions = runnerSnapshotOptions(),
 } = {}) {
   const argErrors = validateRunnerArgs(args);
@@ -1305,7 +1306,8 @@ export async function runE2e({
     || typeof superviseImpl !== 'function'
     || typeof writeJsonAtomicImpl !== 'function'
     || typeof readReceiptImpl !== 'function'
-    || (inspectProcessLeases !== undefined && typeof inspectProcessLeases !== 'function')) {
+    || (inspectProcessLeases !== undefined && typeof inspectProcessLeases !== 'function')
+    || (cleanSuccessfulRunCache !== undefined && typeof cleanSuccessfulRunCache !== 'function')) {
     console.error('[run-e2e] RUNNER FAIL: injected runner dependency is invalid.');
     return 1;
   }
@@ -1492,6 +1494,16 @@ export async function runE2e({
   });
   console.log(`\n[run-e2e] VERDICT: ${success ? 'PASS' : 'FAIL'} — ${detail}`);
   if (success) console.log(`[run-e2e] receipt: ${receiptPath}`);
+  if (success && cleanSuccessfulRunCache) {
+    try {
+      const { files, bytes } = cleanSuccessfulRunCache();
+      console.log(`[run-e2e] CACHE: retired ${files} reference index files (${bytes} bytes).`);
+    } catch (error) {
+      const reason = typeof error?.code === 'string' && /^[a-z0-9-]{1,80}$/u.test(error.code)
+        ? error.code : 'cache-cleanup-failed';
+      console.warn(`[run-e2e] CACHE RETENTION WARNING: ${reason}.`);
+    }
+  }
   return success ? 0 : 1;
 }
 
@@ -1826,6 +1838,7 @@ if (isMain) {
   try {
     stateOwner = normalE2eRunState(args, runtime.environment ?? process.env);
     console.log(`[run-e2e] STATE: ${stateOwner.stateDir} run=${stateOwner.runId}`);
+    const cleanSuccessfulRunCache = stateOwner.prepareReferenceCache();
     const family = process.platform === 'win32' ? createE2eProcessHandleLeaseFamily({
       env: stateOwner.environment, cwd: ROOT, preloadPath: fileURLToPath(import.meta.url), runtimePath: process.execPath,
     }) : null;
@@ -1833,6 +1846,7 @@ if (isMain) {
     if (family) console.log('[run-e2e] Windows ownership source: ' + (snapshotOptions.execFileImpl ? 'native' : 'CIM'));
     exitCode = await runE2e({
       args, env: stateOwner.environment, snapshotOptions, finalizeRunState: () => stateOwner.retire(),
+      cleanSuccessfulRunCache,
       ...(family ? { spawnImpl: createProtectedE2eSpawner(family), inspectProcessLeases: () => family.inspect() } : {}),
     });
   } catch (error) {

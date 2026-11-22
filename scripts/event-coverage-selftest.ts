@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { validateProjectCrossFile, runProjectCrossFileSelftest } from '../src/lib/projectCrossFileValidation';
-import { buildValidationEvidence } from '../src/lib/validationEvidence';
+import { applyProjectCheckCoverage, buildValidationEvidence, type ProjectCheckVerification } from '../src/lib/validationEvidence';
 import { runProjectValidation, flattenProjectValidation } from '../src/server/projectValidation';
 import { evaluateFindingAcceptances } from '../src/server/findingAcceptance';
 import type { ExtensionProject } from '../src/lib/extensionProject';
@@ -187,6 +187,156 @@ for (const [name, lua, code, severity] of [
     assert.equal(full.evidence!.coverage.gaps.some(gap => gap.check === 'md_lua.payload_writer_unverified'), unavailable);
   });
 }
+
+const payloadUnavailable = 'md_lua.payload_writer_unverified';
+check('payload-writer-target-prefers-an-observed-recipient-across-keys', () => {
+  const input = project([
+    'local p = { n = 1 }',
+    'p["v" .. p.n] = "message"',
+    'pcall(function() AddUITriggeredEvent("ForgeLab", "spend_request", p) end)',
+  ].join('\n'));
+  const writerPath = 'ui/player_orders.lua';
+  input.files.push({ path: writerPath, kind: 'lua', content: [
+    'local p = { n = 1 }',
+    'local i = p.n',
+    'p["cq" .. i] = "query"',
+    'AddUITriggeredEvent("ForgeLab", "probe", p)',
+  ].join('\n') });
+  const reader = input.files.find(file => file.path === 'md/forge_regression_lab.xml')!;
+  reader.content = reader.content!.replace('</cues>', [
+    '<cue name="Spend"><conditions><event_ui_triggered screen="\'ForgeLab\'" control="\'spend_request\'"/></conditions></cue>',
+    '<cue name="Orders"><conditions><event_ui_triggered screen="\'ForgeLab\'" control="\'probe\'"/></conditions><actions>',
+    '<set_value name="$verb" exact="event.param3.{\'$v\' + $si}"/>',
+    '<set_value name="$query" exact="event.param3.{\'$cq\' + $si}"/>',
+    '</actions></cue></cues>',
+  ].join('\n'));
+  const replay = (project: ExtensionProject) => {
+    const evidence = runProjectValidation(project).evidence!;
+    const findings = evidence.findings.filter(finding => finding.code === payloadUnavailable);
+    assert.equal(findings.length, 1);
+    const [finding] = findings;
+    assert.equal(finding.severity, 'info');
+    assert.equal(finding.category, 'check-unavailable');
+    assert.equal(finding.target?.file, writerPath);
+    assert.deepEqual(finding.payloadWriterScope?.keys, ['cq', 'v']);
+    assert.deepEqual(finding.payloadWriterScope?.writerPaths, ['ui/lab.lua', writerPath]);
+    assert.ok(finding.projectCheckFact);
+    return finding.projectCheckFact;
+  };
+  const forward = replay(input);
+  assert.deepEqual(replay({ ...input, files: [...input.files].reverse() }), forward);
+});
+
+check('reviewed-payload-fact-covers-only-the-exact-event-and-every-input-byte', () => {
+  const input = project(`${localIndexPayloadHelper}\nAddUITriggeredEvent("ForgeLab", "also", build())`);
+  input.files.push({ path: 'ui/other.lua', kind: 'lua', content: localIndexPayloadHelper });
+  const payloadCue = (name: string, control: string, keys: string[]) => `<cue name="${name}">
+    <conditions><event_ui_triggered screen="'ForgeLab'" control="'${control}'"/></conditions>
+    <actions>${keys.map(key => `<set_value name="$${key}" exact="event.param3.{'$${key}' + $si}"/>`).join('')}</actions>
+  </cue>`;
+  const reader = input.files.find(file => file.path === 'md/forge_regression_lab.xml')!;
+  reader.content = reader.content!.replace('</cues>', payloadCue('FirstPayload', 'probe', ['ri'])
+    + payloadCue('OtherPayload', 'also', ['ri']) + payloadCue('MissingPayload', 'probe', ['missing']) + '</cues>');
+  const collidingReader = payloadCue('Another', 'probe', ['ri']).replace('</actions>',
+    `<do_if value="$sv == 'collider'"><set_value name="$ri" exact="event.param3.{'$ri' + $si}"/></do_if></actions>`);
+  input.files.push({ path: 'md/second_reader.xml', kind: 'md',
+    content: `<mdscript name="SecondReader"><cues>${collidingReader}</cues></mdscript>` });
+
+  const collect = (p: ExtensionProject) => {
+    const result = runProjectValidation(p);
+    const evidence = result.evidence!;
+    const findings = evidence.findings.filter(finding => finding.code === payloadUnavailable);
+    const fact = findings.find(finding => finding.payloadWriterScope?.event[1] === 'probe')?.projectCheckFact;
+    assert(fact, 'Expected an exact project-check fact for the complete probe payload scope');
+    return { evidence, findings, fact };
+  };
+  const { evidence, findings, fact } = collect(input);
+  assert.deepEqual(fact.files.map(file => file.path), [
+    'md/forge_regression_lab.xml', 'md/second_reader.xml', 'ui/lab.lua', 'ui/other.lua',
+  ]);
+  assert.equal(findings.length, 2);
+  assert.notEqual(findings[0].projectCheckFact?.id, findings[1].projectCheckFact?.id);
+  const onlyProbe = findings.find(finding => finding.projectCheckFact?.id === fact.id)!;
+  assert.equal(onlyProbe.target, undefined);
+  const withCandidateTarget = buildValidationEvidence(input, [{ ...onlyProbe, target: { file: 'ui/lab.lua', line: 4 } }]).findings[0];
+  assert.deepEqual(withCandidateTarget.projectCheckFact, fact);
+  assert.equal(withCandidateTarget.findingId, onlyProbe.findingId);
+  for (const rejected of [
+    { ...onlyProbe, target: { file: 'ui/unrelated.lua', line: 1 } },
+    { ...onlyProbe, payloadWriterScope: { ...onlyProbe.payloadWriterScope!, writerPaths: [] } },
+  ]) {
+    assert.equal(buildValidationEvidence(input, [rejected]).findings[0].projectCheckFact, undefined);
+  }
+  const coveredFiles = fact.files.map(file => ({ ...file, size: Buffer.byteLength(input.files.find(candidate => candidate.path === file.path)!.content!) }));
+  const hex = 'a'.repeat(64);
+  const proof: ProjectCheckVerification = { suite: { id: 'suite', hash: hex }, artifactHash: hex,
+    checks: [{ id: 'wire', receiptId: 'receipt', receiptHash: hex, durationMs: 1, outputBytes: 0, outputTailSha256: hex,
+      coveredFiles, coveredFacts: [fact.id] }] };
+  const rawGapCount = evidence.coverage.gaps.length;
+  const apply = (checks: ProjectCheckVerification['checks']) => applyProjectCheckCoverage(evidence, { ...proof, checks });
+
+  const matched = apply(proof.checks);
+  assert.equal(matched.coverage.gaps.length, rawGapCount - 1);
+  assert.equal(matched.coverage.projectVerification!.status, 'project-verified');
+  assert.equal(matched.coverage.projectVerification!.forgeComplete, false);
+  assert.deepEqual(matched.coverage.projectVerification!.creditedFindingIds, [onlyProbe.findingId]);
+  assert.deepEqual(matched.coverage.projectVerification!.resolvedGaps[0].projectCheckFact, fact);
+  assert.equal(matched.findings, evidence.findings);
+  assert(matched.findings.some(finding => finding.code === 'md_lua.payload_missing_writer' && finding.severity === 'error'));
+  assert(matched.findings.some(finding => finding.code === 'md_lua.payload_collision' && finding.severity === 'error'));
+  const initializationGap = { check: 'md.variable_initial_state', filePath: reader.path, reason: 'Synthetic unmatched initialization check' };
+  const mixed = buildValidationEvidence(input, findings, [initializationGap]);
+  assert(applyProjectCheckCoverage(mixed, proof).coverage.gaps.some(gap => gap.check === initializationGap.check));
+  assert.equal(matched.modErrorCount, evidence.modErrorCount);
+  assert.deepEqual(applyProjectCheckCoverage(matched, proof), matched);
+
+  const child = proof.checks[0];
+  const wrongFile = coveredFiles.map((file, index) => index === 0 ? { ...file, path: file.path.toUpperCase() } : file);
+  const wrongHash = coveredFiles.map((file, index) => index === 0 ? { ...file, sha256: hex } : file);
+  for (const checks of [
+    [{ ...child, coveredFacts: undefined, coveredChecks: [payloadUnavailable] }],
+    [{ ...child, coveredFacts: [`md-payload-writer.v2:${hex}`] }],
+    [{ ...child, coveredFiles: wrongFile }],
+    [{ ...child, coveredFiles: wrongHash }],
+    [{ ...child, coveredFiles: coveredFiles.slice(0, 1) }, { ...child, id: 'other', coveredFiles: coveredFiles.slice(1) }],
+    ...coveredFiles.map(missing => [{ ...child, coveredFiles: coveredFiles.filter(file => file !== missing) }]),
+  ]) {
+    const uncredited = apply(checks);
+    assert.equal(uncredited.coverage.gaps.length, rawGapCount);
+    assert.deepEqual(uncredited.coverage.projectVerification!.creditedFindingIds, []);
+  }
+  assert.equal(applyProjectCheckCoverage(matched, { ...proof, checks: [] }).checkUnavailableCount, rawGapCount);
+
+  const withManifest = structuredClone(input);
+  withManifest.files.push({ path: 'forge.checks.json', kind: 'other', content: JSON.stringify({ version: 1, checks: [
+    { id: 'wire', script: 'checks/wire.py', covers: fact.files.map(file => file.path), coversFacts: [fact.id] },
+  ] }) });
+  assert.equal(collect(withManifest).fact.id, fact.id, 'Fact identity must not depend on a declaration containing it');
+  const changed = structuredClone(input);
+  changed.files.find(file => file.path === 'ui/other.lua')!.content += '\n-- newly reviewed writer bytes';
+  const changedEvidence = collect(changed);
+  assert.equal(changedEvidence.fact.id, fact.id, 'Changing writer bytes must preserve the reviewed selector for the same obligation');
+  assert.notEqual(changedEvidence.evidence.sourceHash, evidence.sourceHash);
+  assert.notDeepEqual(changedEvidence.fact.files, fact.files);
+  assert.deepEqual(applyProjectCheckCoverage(changedEvidence.evidence, proof).coverage.projectVerification!.creditedFindingIds, []);
+  const freshProof = { ...proof, checks: [{ ...child, coveredFiles: changedEvidence.fact.files.map(file => ({
+    ...file, size: Buffer.byteLength(changed.files.find(candidate => candidate.path === file.path)!.content!),
+  })) }] };
+  const nextCredit = applyProjectCheckCoverage(changedEvidence.evidence, freshProof);
+  assert.deepEqual(nextCredit.coverage.projectVerification!.creditedFindingIds,
+    [changedEvidence.findings.find(finding => finding.projectCheckFact?.id === fact.id)!.findingId]);
+
+  const lessScope = { ...input, files: input.files.filter(file => file.path !== 'md/second_reader.xml') };
+  assert.notEqual(collect(lessScope).fact.id, fact.id, 'Changing the reader path set must require another declaration');
+  const anotherKey = structuredClone(input);
+  for (const file of anotherKey.files) {
+    if (file.kind === 'md') file.content = file.content?.replaceAll('$ri', '$rj');
+    if (file.kind === 'lua') file.content = file.content?.replaceAll('"ri"', '"rj"');
+  }
+  const renamed = collect(anotherKey);
+  assert.notEqual(renamed.fact.id, fact.id, 'Changing the key set must require another declaration');
+  assert.deepEqual(renamed.fact.files.map(file => file.path), fact.files.map(file => file.path));
+});
 
 const p=project(dynamic), r=validateProjectCrossFile(p);
 const diagnostics=r.findings.map(f=>({severity:f.severity,code:f.code,filePath:f.file,message:f.detail}));

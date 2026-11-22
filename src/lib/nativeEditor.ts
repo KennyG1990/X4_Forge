@@ -2,9 +2,10 @@ import type { ModWorkspace } from '../types';
 
 export interface NativeEditorOpenRequest {
   source: 'x4forge-studio';
-  type: 'open-workspace-file' | 'open-validated-source';
+  type: 'open-workspace-file' | 'open-validated-source' | 'open-bound-workspace-file';
   path: string;
   sourceFolder?: string;
+  expectedWorkspaceRootId?: string;
   line?: number;
   column?: number;
   expectedSourceSha256?: string;
@@ -138,6 +139,7 @@ interface NativeProjectFileEntry {
 interface NativeProjectInventoryResponse {
   sourceAvailable?: boolean;
   sourceFolder?: string | null;
+  workspaceRootId?: string;
   entries?: NativeProjectFileEntry[];
   errors?: string[];
   error?: string;
@@ -153,6 +155,30 @@ export function needsManifestMaterialization(projectPath: string, sourceAvailabl
   return projectPath !== 'content.xml' && !sourceAvailable;
 }
 
+function bindNativeProjectSelection(): () => void {
+  const context = window.__X4_WORKSPACE_CONTEXT__;
+  const workspaceId = context?.getWorkspaceId();
+  if (context && !/^ws_[a-f0-9]{24}$/i.test(workspaceId ?? '')) {
+    throw new Error('Select a Forge workspace before using native file actions.');
+  }
+  const selectionRevision = context?.getSelectionRevision();
+  return () => {
+    if (window.__X4_WORKSPACE_CONTEXT__ !== context
+      || context?.getWorkspaceId() !== workspaceId
+      || context?.getSelectionRevision() !== selectionRevision) {
+      throw new Error('The workspace selection changed before the file action finished.');
+    }
+  };
+}
+
+function requireNativeProjectRoot(inventory: NativeProjectInventoryResponse): string {
+  const id = inventory.workspaceRootId;
+  if (typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id)) {
+    throw new Error('Forge could not identify the Mod Workspace folder. Refresh Project Files.');
+  }
+  return id;
+}
+
 export async function openSourceVsGeneratedDiff(
   workspace: ModWorkspace,
   projectPath: string,
@@ -161,24 +187,38 @@ export async function openSourceVsGeneratedDiff(
     return { ok: false, materialized: false, message: 'Native diffs are available in the installed Antigravity/VS Code extension.' };
   }
   try {
+    const requireSameSelection = bindNativeProjectSelection();
     const inventoryResponse = await fetch('/api/agent/project/files', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workspace }),
     });
+    requireSameSelection();
     const inventory = await inventoryResponse.json() as NativeProjectInventoryResponse;
+    requireSameSelection();
     const entry = inventory.entries?.find(candidate => candidate.path === projectPath);
     if (!inventoryResponse.ok || !entry || !entry.openable || !entry.text || !inventory.sourceFolder) {
       throw new Error(inventory.error || `${projectPath} has no source/generated text pair to compare.`);
     }
+    const expectedWorkspaceRootId = requireNativeProjectRoot(inventory);
+    const sourceQuery = new URLSearchParams({
+      root: 'workspace',
+      path: `${inventory.sourceFolder}/${projectPath}`,
+      expectedWorkspaceRootId,
+    });
     const [sourceResponse, compileResponse] = await Promise.all([
-      fetch(`/api/fs/read?root=workspace&path=${encodeURIComponent(`${inventory.sourceFolder}/${projectPath}`)}`),
+      fetch(`/api/fs/read?${sourceQuery}`),
       fetch('/api/agent/compile', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ workspace }),
       }),
     ]);
-    const source = await sourceResponse.json() as { content?: string; error?: string };
+    requireSameSelection();
+    const source = await sourceResponse.json() as { content?: string; error?: string; workspaceRootId?: string };
+    requireSameSelection();
     const compiled = await compileResponse.json() as { files?: Record<string, string>; error?: string };
+    requireSameSelection();
     const generated = compiled.files?.[projectPath];
-    if (!sourceResponse.ok || typeof source.content !== 'string') throw new Error(source.error || `Could not read ${projectPath}.`);
+    if (!sourceResponse.ok || typeof source.content !== 'string' || source.workspaceRootId !== expectedWorkspaceRootId) {
+      throw new Error(source.error || `Could not confirm the Mod Workspace folder for ${projectPath}.`);
+    }
     if (!compileResponse.ok || typeof generated !== 'string') throw new Error(compiled.error || `Forge did not generate ${projectPath}.`);
     if (new Blob([source.content]).size > 8 * 1024 * 1024 || new Blob([generated]).size > 8 * 1024 * 1024) {
       throw new Error('Native diff preview is limited to 8 MB per text side. The source file remains editable in Antigravity.');
@@ -218,6 +258,16 @@ export function openInNativeEditor(
     ...(Number.isInteger(position?.line) ? { line: position!.line } : {}),
     ...(Number.isInteger(position?.column) ? { column: position!.column } : {}),
     ...(expectedSourceSha256 !== undefined ? { expectedSourceSha256 } : {}),
+  };
+  window.parent.postMessage(message, '*');
+  return true;
+}
+
+/** Ask the host to open a relative file from the same folder used by Project Files. */
+export function openBoundWorkspaceFile(path: string, sourceFolder: string, expectedWorkspaceRootId: string): boolean {
+  if (!hasNativeReleaseHost()) return false;
+  const message: NativeEditorOpenRequest = {
+    source: 'x4forge-studio', type: 'open-bound-workspace-file', path, sourceFolder, expectedWorkspaceRootId,
   };
   window.parent.postMessage(message, '*');
   return true;
@@ -273,22 +323,28 @@ export async function openOrMaterializeInNativeEditor(
     return { ok: false, materialized: false, message: 'Native tabs are available in the installed Antigravity/VS Code extension.' };
   }
 
+  let manifestWritten = false;
+  let materialized = false;
+  let unconfirmedPath: string | undefined;
   try {
+    const requireSameSelection = bindNativeProjectSelection();
     const inventoryResponse = await fetch('/api/agent/project/files', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ workspace }),
     });
+    requireSameSelection();
     const inventory = await inventoryResponse.json() as NativeProjectInventoryResponse;
+    requireSameSelection();
     if (!inventoryResponse.ok && !inventory.entries) {
       throw new Error(inventory.error || inventory.errors?.join(' ') || `HTTP ${inventoryResponse.status}`);
     }
     const entry = inventory.entries?.find(candidate => candidate.path === projectPath);
     if (!entry) return { ok: false, materialized: false, message: `${projectPath} is not part of the compiled project.` };
     if (!entry.text) return { ok: false, materialized: false, message: `${projectPath} is preserved as binary data and cannot be opened as text.` };
-    if (entry.openable) {
-      openInNativeEditor(projectPath, undefined, inventory.sourceFolder || undefined);
-      return { ok: true, materialized: false, message: `Opened ${projectPath} in Antigravity.` };
+    if (entry.openable && inventory.sourceFolder) {
+      openBoundWorkspaceFile(projectPath, inventory.sourceFolder, requireNativeProjectRoot(inventory));
+      return { ok: true, materialized: false, message: `Requested ${projectPath} in Antigravity.` };
     }
     if (entry.state === 'conflict') {
       return {
@@ -305,17 +361,22 @@ export async function openOrMaterializeInNativeEditor(
       };
     }
 
+    const expectedWorkspaceRootId = requireNativeProjectRoot(inventory);
     const compileResponse = await fetch('/api/agent/compile', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ workspace }),
     });
+    requireSameSelection();
     const compiled = await compileResponse.json() as { files?: Record<string, string>; error?: string };
+    requireSameSelection();
     const content = compiled.files?.[projectPath];
     if (!compileResponse.ok || typeof content !== 'string') {
       throw new Error(compiled.error || `Forge did not generate ${projectPath}.`);
     }
     const materializeFile = async (relativePath: string, fileContent: string) => {
+      requireSameSelection();
+      unconfirmedPath = relativePath;
       const writeResponse = await fetch('/api/fs/write', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -324,10 +385,29 @@ export async function openOrMaterializeInNativeEditor(
           content: fileContent,
           strict: true,
           expectedSha256: null,
+          expectedWorkspaceRootId,
         }),
       });
-      const written = await writeResponse.json() as { error?: string };
-      if (!writeResponse.ok) throw new Error(written.error || `HTTP ${writeResponse.status}`);
+      // Read the acknowledgement even after a selection change. The prior write
+      // may have committed and its result must survive cancellation of the next step.
+      const reply = await writeResponse.json() as {
+        success?: boolean;
+        error?: string;
+        code?: string;
+        workspaceRootId?: string;
+        written?: { root?: string; byteExact?: boolean };
+      };
+      if (!writeResponse.ok) {
+        if (reply.code === 'FILE_CHANGED' || reply.code === 'REJECTED_BY_STRICT_VALIDATION' || reply.code === 'WORKSPACE_ROOT_CHANGED') {
+          unconfirmedPath = undefined;
+        }
+        throw new Error(reply.error || `HTTP ${writeResponse.status}`);
+      }
+      if (reply.success !== true || reply.workspaceRootId !== expectedWorkspaceRootId
+        || reply.written?.root !== 'workspace' || reply.written.byteExact !== true) {
+        throw new Error('Forge could not verify the saved bytes.');
+      }
+      unconfirmedPath = undefined;
     };
     // A brand-new source folder needs its manifest created before any nested file can
     // become a usable mod. Existing source folders already have content.xml (that is
@@ -336,19 +416,27 @@ export async function openOrMaterializeInNativeEditor(
       const manifest = compiled.files?.['content.xml'];
       if (typeof manifest !== 'string') throw new Error('Forge did not generate content.xml for the materialized mod.');
       await materializeFile('content.xml', manifest);
+      manifestWritten = true;
     }
     await materializeFile(projectPath, content);
-    openInNativeEditor(projectPath, undefined, inventory.sourceFolder);
+    materialized = true;
+    requireSameSelection();
+    openBoundWorkspaceFile(projectPath, inventory.sourceFolder, expectedWorkspaceRootId);
     return {
       ok: true,
       materialized: true,
-      message: `${projectPath} was materialized through Forge validation and opened in Antigravity.`,
+      message: `${projectPath} was materialized through Forge validation. Native open was requested.`,
     };
   } catch (error) {
-    return {
-      ok: false,
-      materialized: false,
-      message: error instanceof Error ? error.message : `Could not open ${projectPath}.`,
-    };
+    const message = [error instanceof Error ? error.message : `Could not open ${projectPath}.`];
+    if (materialized) {
+      message.push(`${projectPath} was materialized in the original workspace. Native open was canceled.`);
+    } else if (manifestWritten) {
+      message.push('Forge created content.xml in the original workspace before stopping.');
+    }
+    if (unconfirmedPath) {
+      message.push(`Check ${unconfirmedPath} in the original workspace before retrying. Its write could not be confirmed.`);
+    }
+    return { ok: false, materialized, message: message.join(' ') };
   }
 }

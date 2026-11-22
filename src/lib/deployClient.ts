@@ -1,3 +1,5 @@
+import type { ValidationCoverageGap } from './validationEvidence';
+
 export function bindDeployPreview(body: Record<string, unknown>, preview: Record<string, unknown>) {
   const { modId, sourceHash, artifactHash, bindingHash, targetFingerprint } = preview;
   const isHash = (value: unknown) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
@@ -30,6 +32,11 @@ export async function fetchVerifiedDeploy(init: RequestInit, fetcher: typeof fet
   return fetcher('/api/agent/deploy-verify', { ...init, body: JSON.stringify(bindDeployPreview(body, data)) });
 }
 
+interface DeployFileSize {
+  path: string;
+  bytes: number;
+}
+
 export interface DeployReviewData {
   ok?: boolean;
   stage?: string;
@@ -39,14 +46,15 @@ export interface DeployReviewData {
   sourceHash?: string;
   deployRecord?: { id?: string; status?: string };
   effect?: {
-    added?: unknown[];
-    overwritten?: unknown[];
-    deleted?: unknown[];
-    preserved?: unknown[];
+    added?: DeployFileSize[];
+    overwritten?: Array<DeployFileSize & { wasBytes: number }>;
+    deleted?: DeployFileSize[];
+    preserved?: string[];
     luaRegistration?: { status: 'added'; addedCount: number; addedPaths: string[]; restartMayBeRequired: true }
       | { status: 'unavailable'; detail: string };
   };
   validation?: {
+    evidence?: { coverage?: { gaps?: ValidationCoverageGap[] } };
     outcome?: string;
     clean?: boolean;
     review?: {

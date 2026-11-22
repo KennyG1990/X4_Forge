@@ -45,6 +45,7 @@ try {
   const { setupHash: legacyHash, ...legacySetup } = original;
   assert(!Object.hasOwn(legacySetup, 'maxParallelChecks'));
   assert(!Object.hasOwn(original.checks[0], 'coversChecks'));
+  assert(!Object.hasOwn(original.checks[0], 'coversFacts'));
   // Spell out the pre-budget serialization rather than comparing two new captures.
   const oldShape = { version: legacySetup.version, modId: legacySetup.modId, sourceRoot: legacySetup.sourceRoot,
     manifest: legacySetup.manifest, interpreter: legacySetup.interpreter, harness: legacySetup.harness, checks: legacySetup.checks };
@@ -75,6 +76,17 @@ try {
   configure([check]);
   assert.equal(captureProjectCheckSetup(input).setupHash, legacyHash);
   assert.notEqual(captureProjectCheckSetup({ ...input, modId: 'other' }).setupHash, original.setupHash);
+
+  const fact = `md-payload-writer.v2:${'a'.repeat(64)}`;
+  configure([{ ...check, coversFacts: [fact] }]);
+  const exactFact = captureProjectCheckSetup(input);
+  assert.deepEqual(exactFact.checks[0].coversFacts, [fact]);
+  assert.notEqual(exactFact.setupHash, legacyHash);
+  for (const invalid of [null, fact, [1], ['*'], [fact, fact], [fact.toUpperCase()], [fact.replace('.v2:', '.v1:')], Array(65).fill(fact)]) {
+    configure([{ ...check, coversFacts: invalid }]);
+    assert.throws(() => captureProjectCheckSetup(input), /coversFacts/);
+  }
+  configure([check]);
 
   for (const [file, value] of originalBytes) {
     fs.appendFileSync(file, ' changed');

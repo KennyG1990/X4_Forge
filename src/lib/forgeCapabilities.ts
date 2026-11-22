@@ -697,6 +697,108 @@ export const FORGE_CAPABILITIES = [
     ], cli: [], mcp: [partial('get_forge_performance', 'vscode-extension/mcp/x4forge-mcp.cjs::name: "get_forge_performance"', 'Returns backend summaries capped at 32 operations, 16 recent slow records and 20 latest resource samples, with totals and omission flags. Preserves unknown/unsupported producer and cache coverage; does not start a capture.')], agentApi: true, builtInHarness: [], externalAgents: [connected('agent-api', 'server.ts::app.get("/api/agent/performance"')] },
   },
   {
+    id: 'project.ai.navigation',
+    version: 1,
+    title: 'Navigate authored AI scripts',
+    description: 'Find the exact definition or references for a literal run_script name in a supplied authored AI XML snapshot. Requires a key explicitly granted this capability and the addressed workspace. Locations refer to the submitted text.',
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: ['project', 'path', 'offset', 'mode'],
+      properties: {
+        project: {
+          type: 'object', additionalProperties: false, required: ['id', 'name', 'files'],
+          properties: {
+            id: { type: 'string', maxLength: 256 }, name: { type: 'string', maxLength: 512 },
+            files: { type: 'array', description: 'Up to 512 authored files, each up to 8 MiB UTF-8, up to 32 MiB total before transport limits.',
+              items: { type: 'object', additionalProperties: false, required: ['path'], properties: {
+                path: { type: 'string', maxLength: 1024 }, content: { type: 'string' },
+              } } },
+          },
+        },
+        path: { type: 'string', maxLength: 1024, description: 'Exact project-relative aiscripts XML path.' },
+        offset: { type: 'integer', minimum: 0, maximum: 8_388_608, description: 'Zero-based UTF-16 character offset in the supplied file.' },
+        mode: { type: 'string', enum: ['definition', 'references'] },
+        includeDeclaration: { type: 'boolean', default: false },
+      },
+    },
+    outputSchema: objectOutput({
+      schemaVersion: { type: 'string', enum: ['forge.ai-navigation.v1'] }, workspaceId: { type: 'string' },
+      scope: { type: 'string', enum: ['authored-ai-snapshot'] }, inputHash: { type: 'string' },
+      modId: { type: 'string' }, sourceHash: { type: 'string' }, sourceHashScope: { type: 'string' },
+      status: { type: 'string', enum: ['resolved', 'not-found', 'not-a-literal', 'ambiguous', 'unavailable'] },
+      reason: { type: 'string', enum: ['focus', 'inventory', 'source', 'limit'] },
+      locations: { type: 'array', items: objectOutput({
+        file: { type: 'string' },
+        start: objectOutput({ line: { type: 'integer', minimum: 0 }, column: { type: 'integer', minimum: 0 } }, ['line', 'column']),
+        end: objectOutput({ line: { type: 'integer', minimum: 0 }, column: { type: 'integer', minimum: 0 } }, ['line', 'column']),
+      }, ['file', 'start', 'end']) },
+    }, ['schemaVersion', 'workspaceId', 'scope', 'inputHash', 'status']),
+    context: { workspace: 'required', profile: 'none' },
+    access: { public: false, studioSession: true, agentScopes: ['read', 'write', 'deploy'] },
+    effects: ['read', 'analyze'], confirmation: 'none',
+    apiBindings: [{ method: 'POST', path: '/api/agent/project/ai-navigation', inputLocation: 'body', role: 'primary' }],
+    surfaces: {
+      ui: [
+        disconnected('vscode-extension-ai-snapshot-navigation', 'Native editor navigation uses the active document and its authored context.'),
+        disconnected('studio-ai-snapshot-navigation', 'The agent submits the authored snapshot and caret offset through API or MCP.'),
+      ],
+      cli: [],
+      mcp: [connected('navigate_ai_script', 'vscode-extension/mcp/x4forge-mcp.cjs::name: "navigate_ai_script"')],
+      agentApi: true, builtInHarness: [],
+      externalAgents: [connected('agent-api', "server.ts::app.post('/api/agent/project/ai-navigation'")],
+    },
+  },
+  {
+    id: 'project.md.navigation',
+    version: 1,
+    title: 'Navigate authored Mission Director scripts',
+    description: 'Find the exact definition or references for a literal cue or library name in a supplied authored Mission Director XML snapshot. Requires a key explicitly granted this capability and the addressed workspace. Locations refer to the submitted text.',
+    inputSchema: {
+      type: 'object', additionalProperties: false, required: ['project', 'path', 'offset', 'mode'],
+      properties: {
+        project: {
+          type: 'object', additionalProperties: false, required: ['id', 'name', 'files'],
+          properties: {
+            id: { type: 'string', maxLength: 256 }, name: { type: 'string', maxLength: 512 },
+            files: { type: 'array', description: 'Up to 512 authored files, each up to 8 MiB UTF-8, up to 32 MiB total before transport limits.',
+              items: { type: 'object', additionalProperties: false, required: ['path'], properties: {
+                path: { type: 'string', maxLength: 1024 }, content: { type: 'string' },
+              } } },
+          },
+        },
+        path: { type: 'string', maxLength: 1024, description: 'Exact project-relative md XML path.' },
+        offset: { type: 'integer', minimum: 0, maximum: 8_388_608, description: 'Zero-based UTF-16 character offset in the supplied file.' },
+        mode: { type: 'string', enum: ['definition', 'references'] },
+        includeDeclaration: { type: 'boolean', default: false },
+      },
+    },
+    outputSchema: objectOutput({
+      schemaVersion: { type: 'string', enum: ['forge.md-navigation.v1'] }, workspaceId: { type: 'string' },
+      scope: { type: 'string', enum: ['authored-md-snapshot'] }, inputHash: { type: 'string' },
+      modId: { type: 'string' }, sourceHash: { type: 'string' }, sourceHashScope: { type: 'string' },
+      status: { type: 'string', enum: ['resolved', 'not-found', 'not-a-literal', 'ambiguous', 'unavailable'] },
+      reason: { type: 'string', enum: ['focus', 'inventory', 'source', 'limit'] },
+      locations: { type: 'array', items: objectOutput({
+        file: { type: 'string' },
+        start: objectOutput({ line: { type: 'integer', minimum: 0 }, column: { type: 'integer', minimum: 0 } }, ['line', 'column']),
+        end: objectOutput({ line: { type: 'integer', minimum: 0 }, column: { type: 'integer', minimum: 0 } }, ['line', 'column']),
+      }, ['file', 'start', 'end']) },
+    }, ['schemaVersion', 'workspaceId', 'scope', 'inputHash', 'status']),
+    context: { workspace: 'required', profile: 'none' },
+    access: { public: false, studioSession: true, agentScopes: ['read', 'write', 'deploy'] },
+    effects: ['read', 'analyze'], confirmation: 'none',
+    apiBindings: [{ method: 'POST', path: '/api/agent/project/md-navigation', inputLocation: 'body', role: 'primary' }],
+    surfaces: {
+      ui: [
+        disconnected('vscode-extension-md-snapshot-navigation', 'Native editor navigation uses the active document and its authored context.'),
+        disconnected('studio-md-snapshot-navigation', 'The agent submits the authored snapshot and caret offset through API or MCP.'),
+      ],
+      cli: [],
+      mcp: [connected('navigate_md_script', 'vscode-extension/mcp/x4forge-mcp.cjs::name: "navigate_md_script"')],
+      agentApi: true, builtInHarness: [],
+      externalAgents: [connected('agent-api', "server.ts::app.post('/api/agent/project/md-navigation'")],
+    },
+  },
+  {
     id: 'project.validate',
     version: 1,
     title: 'Validate an X4 extension project',
@@ -1079,6 +1181,42 @@ export const FORGE_CAPABILITIES = [
       agentApi: true,
       builtInHarness: [disconnected('workspace-compiler', 'No built-in harness capability dispatcher is bound yet.')],
       externalAgents: [connected('agent-api', 'server.ts::app.post("/api/agent/compile"')],
+    },
+  },
+  {
+    id: 'workspace.compile.result',
+    version: 1,
+    title: 'Reopen a compile validation report',
+    description: 'Read an exact retained validation report from this workspace without recompiling. Request retention with X-Forge-Retain-Validation: 1 on workspace.compile. Reports expire and do not authorize deploy.',
+    inputSchema: {
+      type: 'object',
+      properties: { id: { type: 'string' } },
+      required: ['id'],
+      additionalProperties: false,
+    },
+    outputSchema: objectOutput({
+      modId: { type: 'string' },
+      success: { type: 'boolean' },
+      diagnostics: { type: 'array', items: { type: 'object', additionalProperties: true } },
+      validation: { type: 'object', additionalProperties: true },
+    }, ['modId', 'success', 'diagnostics', 'validation']),
+    context: { workspace: 'required', profile: 'none' },
+    access: { public: false, studioSession: true, agentScopes: ['write', 'deploy'] },
+    effects: ['read'],
+    confirmation: 'none',
+    apiBindings: [
+      { method: 'GET', path: '/api/agent/compile/result/:id', inputLocation: 'path', role: 'primary' },
+    ],
+    surfaces: {
+      ui: [
+        disconnected('web-studio-compile-result-read', 'Studio displays the retained result ID. The passive read is available through the Agent API.'),
+        disconnected('vscode-extension-compile-result-read', 'The extension has no dedicated native result readback command.'),
+      ],
+      cli: [],
+      mcp: [],
+      agentApi: true,
+      builtInHarness: [],
+      externalAgents: [connected('agent-api', 'server.ts::app.get("/api/agent/compile/result/:id"')],
     },
   },
   {

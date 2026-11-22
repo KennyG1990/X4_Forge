@@ -20,23 +20,74 @@ let forbiddenAttempts = 0;
 interface Context {
   globalState: { get<T>(key: string): T | undefined; update(key: string, value: unknown): Promise<void> };
 }
-interface Handle { baseUrl: string; owned: boolean; token?: string; workspaceId?: string; clientId?: string }
+interface StartupChild { exitCode: number | null; signalCode: NodeJS.Signals | null }
+interface Handle { baseUrl: string; owned: boolean; token?: string; workspaceId?: string; clientId?: string; child?: StartupChild }
 interface Probe {
   restart(context: Context, code: number | null): Promise<void>;
   start(context: Context): Promise<void>;
+  restore(context: Context, panel: ReturnType<typeof restoredPanel>): Promise<void>;
   bootstrap(context: Context, handle: Handle, generation: number, exact?: string): Promise<void>;
   factory(fn: (context: Context, exact?: string) => Promise<Handle>): void;
   generation(): number;
   setCurrent(handle: Handle | null): void;
+  current(): Handle | null;
   stop(): boolean;
   init(log: (line: string) => void): void;
+  acquire(context: Context, exact?: string): Promise<Handle>;
+  acquisition(
+    probe: (url: string) => Promise<boolean>,
+    spawn: (context: Context, generation: number, exact?: string) => Promise<Handle>,
+    retire: (generation: number) => Promise<void>,
+  ): void;
+}
+interface AcquisitionOptions {
+  attachUrl?: string;
+  scratch?: string;
+  externalAvailable?: boolean;
+  startupError?: Error;
+  retirementError?: Error;
+  child?: StartupChild;
+}
+
+function restoredPanel() {
+  let onDispose: (() => void) | undefined;
+  let disposed = false;
+  let htmlAttempts = 0;
+  const html: string[] = [];
+  const reveals: unknown[][] = [];
+  return {
+    active: true,
+    webview: {
+      options: {},
+      set html(value: string) {
+        htmlAttempts++;
+        if (disposed) throw new Error(htmlAttempts === 1 ? 'host rejected first panel write' : 'Webview is disposed');
+        html.push(value);
+      },
+      onDidReceiveMessage: () => ({ dispose() {} }),
+    },
+    onDidChangeViewState: () => {},
+    onDidDispose: (listener: () => void) => { onDispose = listener; },
+    reveal: (...args: unknown[]) => {
+      if (disposed) throw new Error('Cannot reveal a disposed panel');
+      reveals.push(args);
+    },
+    close(deliverEvent = true) {
+      assert(onDispose, 'The controller must track the panel before startup settles.');
+      disposed = true;
+      if (deliverEvent) onDispose();
+    },
+    get htmlAttempts() { return htmlAttempts; },
+    html,
+    reveals,
+  };
 }
 
 function harness(saved: string | undefined, mode: 'ready' | 'missing' | 'wrong' = 'ready', owned = true) {
   const values = new Map<string, unknown>();
   if (saved !== undefined) values.set('x4forge.workspaceId', saved);
   const updates: unknown[] = [];
-  const context: Context = { globalState: {
+  const context: Context & { subscriptions: unknown[] } = { subscriptions: [], globalState: {
     get: <T>(key: string) => values.get(key) as T | undefined,
     update: async (key, value) => { updates.push(value); values.set(key, value); },
   } };
@@ -46,8 +97,14 @@ function harness(saved: string | undefined, mode: 'ready' | 'missing' | 'wrong' 
   const information: string[] = [];
   const errors: string[] = [];
   const logs: string[] = [];
+  const launchEnvironment: Record<string, string | undefined> = {};
+  let attachUrl = 'http://127.0.0.1:3000';
+  const externalProbes: string[] = [];
+  const managedStarts: { context: Context; generation: number; exact: string | undefined }[] = [];
+  const retirements: number[] = [];
   let launches = 0;
   let paused: Promise<void> | undefined;
+  let afterProgress: (() => void) | undefined;
   let resume: (() => void) | undefined;
   const forbidden = () => {
     forbiddenAttempts++;
@@ -64,9 +121,16 @@ function harness(saved: string | undefined, mode: 'ready' | 'missing' | 'wrong' 
   const vscode = { window: {
     showInformationMessage: async (message: string) => { information.push(message); },
     showErrorMessage: async (message: string) => { errors.push(message); return undefined; },
-    withProgress: (_options: unknown, task: () => unknown) => task(),
+    withProgress: (_options: unknown, task: () => unknown) => {
+      const result = task();
+      return afterProgress ? Promise.resolve(result).then(value => {
+        afterProgress?.();
+        return value;
+      }) : result;
+    },
     createWebviewPanel: forbidden,
-  }, ProgressLocation: { Notification: 15 }, DiagnosticSeverity: { Error: 0, Warning: 1, Information: 2, Hint: 3 } };
+  }, workspace: { getConfiguration: () => ({ get: (key: string) => key === 'attachUrl' ? attachUrl : undefined }) },
+  ProgressLocation: { Notification: 15 }, DiagnosticSeverity: { Error: 0, Warning: 1, Information: 2, Hint: 3 } };
   const module = { exports: {} as { __probe?: Probe } };
   const allowed = new Set(['./panelBinding', './workspaceAuthorityHeaders', '../../shared/actionOperationId']);
   const sandbox = {
@@ -86,7 +150,7 @@ function harness(saved: string | undefined, mode: 'ready' | 'missing' | 'wrong' 
       if (id.startsWith('./') || id.startsWith('../../shared/')) return {};
       throw new Error(`Unexpected controller import: ${id}`);
     },
-    process: { pid: 1, platform: process.platform, env: {} }, console, Headers, URL, Buffer,
+    process: { pid: 1, platform: process.platform, env: launchEnvironment }, console, Headers, URL, Buffer,
     setTimeout: (fn: () => void, delay: number) => { timers.push({ fn, delay }); delays.push(delay); return timers.length; },
     clearTimeout: forbidden,
     fetch: async (url: string, init: RequestInit) => {
@@ -103,13 +167,21 @@ function harness(saved: string | undefined, mode: 'ready' | 'missing' | 'wrong' 
   };
   // These accessors exist only in memory; production exports and functions are unchanged.
   const access = `\nmodule.exports.__probe = {
-    restart: autoRestartSidecar, start: startLocalBackend,
+    restart: autoRestartSidecar, start: startLocalBackend, restore: restoreStudioPanel,
     bootstrap: bindBackendWorkspace,
+    acquire: ensureBackendOnce,
+    acquisition(probe, spawn, retire) {
+      probeForge = probe; spawnSidecar = spawn; awaitManagedSidecarRetirement = retire;
+    },
     factory(fn) { ensureBackendOnce = fn; },
     generation() { return backendStopGeneration; },
     setCurrent(handle) { backend = handle; },
+    current() { return backend; },
     stop() { return stopOwnedSidecar('controller selftest'); },
-    init(appendLine) { output = { appendLine, show() {} }; }
+    init(appendLine) {
+      output = { appendLine, show() {} };
+      statusItem = { show() {}, hide() {} };
+    }
   };`;
   new vm.Script(compiled + access, { filename: controllerPath }).runInNewContext(sandbox, { timeout: 2000 });
   const probe = module.exports.__probe!;
@@ -123,13 +195,33 @@ function harness(saved: string | undefined, mode: 'ready' | 'missing' | 'wrong' 
     return handle;
   });
   return { probe, context, updates, requests, information, errors, logs, delays,
+    externalProbes, managedStarts, retirements,
+    afterProgress(callback: () => void) { afterProgress = callback; },
     get launches() { return launches; }, get saved() { return values.get('x4forge.workspaceId'); },
     pause() { paused = new Promise<void>(resolve => { resume = resolve; }); },
     resume() { resume?.(); paused = undefined; },
     async fire() { const timer = timers.shift(); assert(timer, 'No restart backoff was scheduled.'); timer.fn(); await new Promise<void>(resolve => setImmediate(resolve)); },
     async restart() { probe.setCurrent(null); const pending = probe.restart(context, 1); await this.fire(); await pending; },
+    async acquire(options: AcquisitionOptions = {}, exact?: string) {
+      attachUrl = options.attachUrl ?? 'http://127.0.0.1:3000';
+      if (options.scratch !== undefined) launchEnvironment.X4_FORGE_DEV_SCRATCH_SETTINGS = options.scratch;
+      probe.acquisition(async url => {
+        externalProbes.push(url);
+        return options.externalAvailable ?? true;
+      }, async (ctx, generation, requested) => {
+        managedStarts.push({ context: ctx, generation, exact: requested });
+        if (options.startupError) throw options.startupError;
+        return { baseUrl: 'http://127.0.0.1:1', owned: true, token: 'fixture-only', child: options.child };
+      }, async generation => {
+        retirements.push(generation);
+        if (options.retirementError) throw options.retirementError;
+      });
+      return probe.acquire(context, exact);
+    },
   };
 }
+
+const exitedDuringStartup = /exited during startup/;
 
 const checks: { name: string; pass: boolean; detail?: string }[] = [];
 async function check(name: string, run: () => Promise<void>) {
@@ -143,6 +235,60 @@ async function check(name: string, run: () => Promise<void>) {
 }
 
 async function main() {
+  for (const [scratch, attachUrl] of [
+    ['1', undefined], ['1', 'http://127.0.0.1:4567'],
+    ['', undefined], ['0', 'http://127.0.0.1:4567'], ['malformed', undefined],
+  ] as const) {
+    await check(`scratch_${JSON.stringify(scratch)}_skips_available_${attachUrl ? 'custom' : 'default'}_external_forge`, async () => {
+      const h = harness(SAVED);
+      const startupError = scratch === '1' ? undefined : new Error('Scratch launch marker rejected by managed startup.');
+      const pending = h.acquire({ scratch, attachUrl, startupError });
+      if (startupError) await assert.rejects(pending, error => error === startupError);
+      else assert.equal((await pending).owned, true);
+      assert.deepEqual(h.externalProbes, []);
+      assert.deepEqual(h.retirements, [h.probe.generation()]);
+      assert.equal(h.managedStarts.length, 1);
+      assert.equal(h.managedStarts[0].context, h.context);
+    });
+  }
+  for (const [attachUrl, expected] of [
+    [undefined, 'http://127.0.0.1:3000'], [' http://127.0.0.1:4567/// ', 'http://127.0.0.1:4567'],
+  ] as const) {
+    await check(`ordinary_start_attaches_to_available_${attachUrl ? 'custom' : 'default'}_forge`, async () => {
+      const h = harness(SAVED); const handle = await h.acquire({ attachUrl });
+      assert.equal(handle.owned, false); assert.equal(handle.baseUrl, expected);
+      assert.deepEqual(h.externalProbes, [expected]);
+      assert.deepEqual(h.retirements, []); assert.deepEqual(h.managedStarts, []);
+    });
+  }
+  for (const [attachUrl, expectedProbes] of [['', []], [undefined, ['http://127.0.0.1:3000']]] as const) {
+    await check(`ordinary_${attachUrl === '' ? 'disabled_attach' : 'non_forge_response'}_starts_managed_sidecar`, async () => {
+      const h = harness(SAVED); const handle = await h.acquire({ attachUrl, externalAvailable: false });
+      assert.equal(handle.owned, true); assert.deepEqual(h.externalProbes, [...expectedProbes]);
+      assert.deepEqual(h.retirements, [h.probe.generation()]); assert.equal(h.managedStarts.length, 1);
+    });
+  }
+  await check('scratch_managed_startup_error_propagates_without_external_fallback', async () => {
+    const h = harness(SAVED); const error = new Error('Managed startup failed.');
+    await assert.rejects(h.acquire({ scratch: '1', startupError: error }), actual => actual === error);
+    assert.deepEqual(h.externalProbes, []); assert.equal(h.managedStarts.length, 1);
+  });
+  await check('scratch_managed_start_keeps_exact_workspace_request', async () => {
+    const h = harness(SAVED); await h.acquire({ scratch: '1' }, SAVED);
+    assert.deepEqual(h.externalProbes, []); assert.equal(h.managedStarts[0].exact, SAVED);
+  });
+  await check('ordinary_exact_workspace_request_refuses_external_attachment', async () => {
+    const h = harness(SAVED);
+    await assert.rejects(h.acquire({}, SAVED), /already answers at the configured external address/);
+    assert.deepEqual(h.externalProbes, ['http://127.0.0.1:3000']);
+    assert.deepEqual(h.retirements, []); assert.deepEqual(h.managedStarts, []);
+  });
+  await check('scratch_waits_for_retirement_before_starting_managed_sidecar', async () => {
+    const h = harness(SAVED); const error = new Error('Previous managed child has not retired.');
+    await assert.rejects(h.acquire({ scratch: '1', retirementError: error }), actual => actual === error);
+    assert.deepEqual(h.externalProbes, []); assert.deepEqual(h.retirements, [h.probe.generation()]);
+    assert.deepEqual(h.managedStarts, []);
+  });
   await check('watchdog_restores_exact_saved_workspace_without_a_panel', async () => {
     const h = harness(SAVED); await h.restart();
     assert.deepEqual(h.requests, [{ workspaceId: SAVED, header: SAVED }]);
@@ -192,6 +338,170 @@ async function main() {
   await check('watchdog_does_not_claim_external_backend_as_owned', async () => {
     const h = harness(SAVED, 'ready', false); await h.restart();
     assert.equal(h.requests.length, 0); assert.equal(h.information.length, 0); assert.equal(h.errors.length, 1);
+  });
+  await check('restored_panel_binds_and_reveals_without_taking_focus', async () => {
+    const h = harness(SAVED);
+    const panel = restoredPanel();
+    await h.probe.restore(h.context, panel);
+    assert(panel.html[0]?.includes('http://127.0.0.1:1/'));
+    assert.deepEqual(panel.reveals, [[undefined, true]]);
+    assert.equal(h.errors.length, 0);
+  });
+  await check('restore_success_after_disposal_does_not_reveal_or_render_old_panel', async () => {
+    const h = harness(SAVED);
+    const panel = restoredPanel();
+    h.pause();
+    const pending = h.probe.restore(h.context, panel);
+    panel.close();
+    h.resume();
+    await pending;
+    assert.equal(panel.htmlAttempts, 0);
+    assert.equal(panel.reveals.length, 0);
+    assert.equal(h.errors.length, 0);
+    const replacement = restoredPanel();
+    await h.probe.restore(h.context, replacement);
+    assert.deepEqual(replacement.reveals, [[undefined, true]]);
+  });
+  await check('restore_failure_after_disposal_preserves_original_in_log', async () => {
+    const h = harness(SAVED);
+    const panel = restoredPanel();
+    h.probe.factory(async () => { throw new Error('sidecar startup failed'); });
+    const pending = h.probe.restore(h.context, panel);
+    panel.close();
+    await pending;
+    assert.equal(panel.htmlAttempts, 0);
+    assert.equal(h.errors.length, 0);
+    assert.equal(h.logs.filter(line => line.includes('sidecar startup failed')).length, 1);
+  });
+  await check('restore_failure_on_open_panel_renders_existing_fallback', async () => {
+    const h = harness(SAVED);
+    const panel = restoredPanel();
+    h.probe.factory(async () => { throw new Error('sidecar startup failed'); });
+    await h.probe.restore(h.context, panel);
+    assert.equal(panel.htmlAttempts, 1);
+    assert(panel.html[0]?.includes('Forge backend is offline'));
+    assert.equal(h.errors.length, 1);
+    assert(h.errors[0].includes('sidecar startup failed'));
+  });
+  await check('restore_logs_original_binding_error_when_host_rejects_fallback_before_disposal_event', async () => {
+    const h = harness(SAVED);
+    const panel = restoredPanel();
+    h.pause();
+    const pending = h.probe.restore(h.context, panel);
+    panel.close(false);
+    h.resume();
+    await pending;
+    assert.equal(panel.htmlAttempts, 2);
+    const original = h.logs.findIndex(line => line.includes('host rejected first panel write'));
+    assert(original >= 0 && h.logs.findIndex(line => line.includes('Webview is disposed')) > original);
+    assert.equal(h.errors.length, 1);
+    panel.close();
+  });
+  await check('child_exit_during_workspace_bootstrap_does_not_write_workspace', async () => {
+    const h = harness(undefined);
+    const child: StartupChild = { exitCode: null, signalCode: null };
+    const handle: Handle = { baseUrl: 'http://127.0.0.1:1', owned: true, token: 'fixture-only', child };
+    h.pause();
+    const pending = h.probe.bootstrap(h.context, handle, h.probe.generation());
+    child.exitCode = 1;
+    h.resume();
+    await assert.rejects(pending, exitedDuringStartup);
+    assert.equal(handle.workspaceId, undefined);
+    assert.deepEqual(h.updates, []);
+    assert.equal(h.saved, undefined);
+  });
+  await check('signaled_child_does_not_start_fallback_after_missing_saved_workspace', async () => {
+    const h = harness(SAVED, 'missing');
+    const child: StartupChild = { exitCode: null, signalCode: null };
+    const handle: Handle = { baseUrl: 'http://127.0.0.1:1', owned: true, token: 'fixture-only', child };
+    h.pause();
+    const pending = h.probe.bootstrap(h.context, handle, h.probe.generation());
+    child.signalCode = 'SIGTERM';
+    h.resume();
+    await assert.rejects(pending, /exited during startup \(code SIGTERM\)/);
+    assert.deepEqual(h.requests, [{ workspaceId: SAVED, header: SAVED }]);
+    assert.deepEqual(h.updates, []);
+    assert.equal(h.saved, SAVED);
+  });
+  await check('child_exit_during_workspace_save_does_not_report_ready', async () => {
+    const h = harness(SAVED);
+    const child: StartupChild = { exitCode: null, signalCode: null };
+    const handle: Handle = { baseUrl: 'http://127.0.0.1:1', owned: true, token: 'fixture-only', child };
+    const write = h.context.globalState.update;
+    let writeStarted!: () => void;
+    let resumeWrite!: () => void;
+    const started = new Promise<void>(resolve => { writeStarted = resolve; });
+    const resume = new Promise<void>(resolve => { resumeWrite = resolve; });
+    h.context.globalState.update = async (key, value) => {
+      writeStarted();
+      await resume;
+      await write(key, value);
+    };
+    h.probe.factory(async () => {
+      await h.probe.bootstrap(h.context, handle, h.probe.generation(), SAVED);
+      return handle;
+    });
+    const pending = h.probe.start(h.context);
+    await started;
+    child.exitCode = 9;
+    resumeWrite();
+    await pending;
+    assert.equal(h.saved, SAVED);
+    assert.deepEqual(h.updates, [SAVED]);
+    assert.equal(handle.workspaceId, undefined);
+    assert.equal(h.information.length, 0);
+    assert.equal(h.errors.length, 1);
+    assert.match(h.errors[0], exitedDuringStartup);
+    assert.equal(h.logs.some(line => line.includes('workspace authority bound')), false);
+  });
+  await check('startup_never_publishes_an_exited_handle_and_allows_a_live_retry', async () => {
+    const h = harness(SAVED);
+    await assert.rejects(h.acquire({ scratch: '1', child: { exitCode: 1, signalCode: null } }, SAVED),
+      exitedDuringStartup);
+    assert.equal(h.probe.current(), null);
+    const child: StartupChild = { exitCode: null, signalCode: null };
+    const handle = await h.acquire({ scratch: '1', child }, SAVED);
+    assert.equal(handle.child, child);
+    assert.equal(h.probe.current(), handle);
+    assert.equal(h.managedStarts.length, 2);
+    assert.deepEqual(h.externalProbes, []);
+  });
+  await check('shared_ready_callback_does_not_render_a_disconnected_backend', async () => {
+    const h = harness(SAVED);
+    const panel = restoredPanel();
+    h.probe.factory(async () => {
+      const child: StartupChild = { exitCode: 1, signalCode: null };
+      const handle: Handle = {
+        baseUrl: 'http://127.0.0.1:1', owned: true, token: 'fixture-only', workspaceId: SAVED, child,
+      };
+      h.probe.setCurrent(handle);
+      return handle;
+    });
+    await h.probe.restore(h.context, panel);
+    assert.deepEqual(panel.reveals, []);
+    assert.equal(panel.htmlAttempts, 1);
+    assert.match(panel.html[0], /Forge backend is offline/);
+    assert.equal(h.errors.length, 1);
+    assert.match(h.errors[0], exitedDuringStartup);
+  });
+  await check('manual_start_checks_child_again_when_progress_wrapper_resolves', async () => {
+    const h = harness(SAVED);
+    const child: StartupChild = { exitCode: null, signalCode: null };
+    const handle: Handle = {
+      baseUrl: 'http://127.0.0.1:1', owned: true, token: 'fixture-only', workspaceId: SAVED, child,
+    };
+    h.probe.factory(async () => {
+      h.probe.setCurrent(handle);
+      return handle;
+    });
+    h.afterProgress(() => {
+      child.exitCode = 1;
+      h.probe.setCurrent(null);
+    });
+    await h.probe.start(h.context);
+    assert.deepEqual(h.information, []);
+    assert.equal(h.errors.length, 1);
+    assert.match(h.errors[0], exitedDuringStartup);
   });
   await check('controlled_recovery_never_attempts_native_construction_or_resource_effects', async () => {
     assert.equal(forbiddenAttempts, 0);

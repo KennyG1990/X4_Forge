@@ -2,18 +2,31 @@
 **
 !out/extension.js
 !out/sidecar-supervisor.js
-!app/**
+!app/package.json
+!app/package-lock.json
+!app/dist/**
+!app/node_modules/**
 !package.json
 !README.md
 !CHANGELOG.md
 !LICENSE.txt
 !icon.png
-!media/**
-!mcp/**
+# Keep the activity icon and the screenshots referenced by the packaged README.
+!media/activitybar.svg
+!media/showcase/01_visual_mission_director_graph.png
+!media/showcase/02_xml_patching_and_diff_simulation.png
+!media/showcase/03_bulk_xml_transforms_workbench.png
+!media/showcase/04_x4_ui_hud_and_lua_editor.png
+!media/showcase/05_external_integration_contracts_editor.png
+!media/showcase/06_project_overview_and_release_center.png
+!media/showcase/07_galaxy_map_and_sector_navigator.png
+!media/showcase/08_wares_and_jobs_configurator.png
+!media/showcase/09_aiscripts_behavior_editor.png
+!media/showcase/10_t_file_localization_editor.png
+!mcp/x4forge-mcp.cjs
 
-# Never ship these even if present under an allowed tree (runtime writes land in
-# app/ because the server resolves some paths from cwd — staging is re-run fresh
-# before packaging, and these rules are the second line of defense).
+# VSCE includes take precedence over these exclusions. Stage-app and the VSIX
+# inspector verify release files inside the included runtime trees.
 **/.env
 **/.studio-api-token
 **/.studio-state/**

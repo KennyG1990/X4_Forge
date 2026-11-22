@@ -16,11 +16,12 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import crypto from 'crypto';
 import {
   describeAction, lineDelta, unifiedDiff, looksBinary, redactSecrets, encodeRow, decodeRows,
   filterRows, revertibility, ledgerRouteKind, compactDiagnostics, normalizeHistoryRecoveryTruth, LedgerRow,
 } from './agentHistory';
-import { AgentHistoryStore } from './agentHistoryStore';
+import { AgentHistoryStore, LEDGER_MAX_BYTES } from './agentHistoryStore';
 
 export function runAgentHistorySelftest(): { pass: boolean; checks: Array<{ name: string; pass: boolean; detail?: string }> } {
   const checks: Array<{ name: string; pass: boolean; detail?: string }> = [];
@@ -338,6 +339,55 @@ export function runAgentHistorySelftest(): { pass: boolean; checks: Array<{ name
     const onDisk = fs.readFileSync(path.join(scratch, 'history', 'ledger.jsonl'), 'utf8');
     ok('no key material is ever written to disk', !onDisk.includes('x4fk_741de45f46e28d16e8ec8129099e0442'));
     ok('the redaction marker is present instead', onDisk.includes('[redacted-key]'));
+
+    // --- optional deploy reports: verified bytes share the existing blob namespace -----------
+    {
+      const reportRoot = path.join(scratch, 'deploy-reports');
+      const reports = new AgentHistoryStore({ root: reportRoot });
+      const report = Buffer.from('{"format":"catalog","added":[{"path":"assets/\u03b1.bin","bytes":7}],"totalBytes":7}\n', 'utf8');
+      const hash = crypto.createHash('sha256').update(report).digest('hex');
+      const reportPath = path.join(reportRoot, 'blobs', hash.slice(0, 2), hash);
+      ok('deploy report returns its exact content hash', reports.putVerifiedDeployEffect(report) === hash);
+      ok('deploy report reopens exact UTF-8 bytes', new AgentHistoryStore({ root: reportRoot })
+        .readVerifiedDeployEffect(hash)?.equals(report) === true);
+      const bytesBeforeDuplicate = reports.diskBytes();
+      ok('duplicate deploy report reuses one content-addressed copy', reports.putVerifiedDeployEffect(report) === hash
+        && reports.diskBytes() === bytesBeforeDuplicate
+        && fs.readdirSync(path.dirname(reportPath)).join(',') === hash);
+      ok('verified deploy report remains readable by legacy History', reports.readBlob(hash)?.equals(report) === true
+        && reports.putBlob(report) === hash && reports.diskBytes() === bytesBeforeDuplicate);
+      ok('missing and malformed deploy report references are unavailable', reports.readVerifiedDeployEffect('0'.repeat(64)) === null
+        && reports.readVerifiedDeployEffect('../outside') === null && reports.readVerifiedDeployEffect(hash.toUpperCase()) === null);
+
+      const corrupt = Buffer.alloc(report.length, 0x78);
+      fs.writeFileSync(reportPath, corrupt);
+      ok('corrupt deploy report bytes are unavailable', reports.readVerifiedDeployEffect(hash) === null);
+      const failuresBeforeCorruptPut = reports.failures;
+      ok('corrupt deploy report is not rewritten or reported stored', reports.putVerifiedDeployEffect(report) === null
+        && reports.failures === failuresBeforeCorruptPut + 1 && fs.readFileSync(reportPath).equals(corrupt));
+
+      const oversized = Buffer.alloc(LEDGER_MAX_BYTES + 1, 0x61);
+      const oversizedHash = crypto.createHash('sha256').update(oversized).digest('hex');
+      const oversizedPath = path.join(reportRoot, 'blobs', oversizedHash.slice(0, 2), oversizedHash);
+      const failuresBeforeOversizedPut = reports.failures;
+      ok('oversized deploy report publication fails softly before writing', reports.putVerifiedDeployEffect(oversized) === null
+        && reports.failures === failuresBeforeOversizedPut + 1 && !fs.existsSync(oversizedPath));
+      fs.mkdirSync(path.dirname(oversizedPath), { recursive: true });
+      fs.writeFileSync(oversizedPath, oversized);
+      ok('oversized existing deploy report is unavailable', reports.readVerifiedDeployEffect(oversizedHash) === null);
+
+      const blockedRoot = path.join(scratch, 'blocked-deploy-reports');
+      const sentinel = 'Existing file must stay intact.';
+      fs.writeFileSync(blockedRoot, sentinel, 'utf8');
+      const blocked = new AgentHistoryStore({ root: blockedRoot });
+      ok('unsafe deploy report storage fails softly and preserves the blocker', blocked.putVerifiedDeployEffect(report) === null
+        && blocked.failures === 1 && blocked.readVerifiedDeployEffect(hash) === null
+        && fs.readFileSync(blockedRoot, 'utf8') === sentinel);
+      const legacy = Buffer.from('Ordinary legacy blob remains independent.', 'utf8');
+      const legacyHash = reports.putBlob(legacy);
+      ok('legacy blob storage still works after optional report failures', typeof legacyHash === 'string'
+        && reports.readBlob(legacyHash)?.equals(legacy) === true && reports.readAll().length === 0);
+    }
 
     // --- torn lines never poison the history -------------------------------------------------
     fs.appendFileSync(path.join(scratch, 'history', 'ledger.jsonl'), '{"id":"torn","tit\n', 'utf8');

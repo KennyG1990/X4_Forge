@@ -112,3 +112,7 @@ Improve tools: Windows path globs/guessed filenames and oversized reads failed b
 ## Combined source checkpoint qualification
 
 The exact current native+cue source combination now passes the original normal headless precommit through native-host execution:7e4a862185f4873c71c9502a609341310459293c5d33e1e06c9955d59411ca79,195.000s execution/196.669s outer,exit0/finalOK/current root typing/wholeJob drain/stable585primary+critical+dependency pins. This strengthens shared source integration only; all named API/installed/rendered/performance/native acceptance gaps remain PARTIAL/open. Checkpoint both source units together rather than infer native-only compatibility from mixed-tree tests. Actual hook/push/exact CI are the next gates; no mod/live/draft overwrite, warning suppression or completed feature claim. See native-performance plan for exact28implementation+nine-record staging contract and retained failures.
+
+## 2026-11-21 G candidate requalification
+
+The owned effective-reference subset passed 51 of 51 in 1.344 seconds. One expected flat and evidence diagnostic survived per actual unresolved patched occurrence; raw cross-file aliases remained present. Unavailable, inactive, removed and inherited source controls passed. The fixture used 94,582 bytes and was retired. The current G order-completion receipt records exact three-source hashes under native_problems_columns.effectiveCueControls. Full installed and delivery gates remain open.

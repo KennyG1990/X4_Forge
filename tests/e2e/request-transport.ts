@@ -1,3 +1,4 @@
+import { setTimeout as delay } from 'node:timers/promises';
 import { test as base, type APIRequestContext, type Route } from '@playwright/test';
 
 export { expect } from '@playwright/test';
@@ -17,6 +18,24 @@ function closingHeaders(selected: Headers | undefined): Headers {
 function closingOptions<T extends { headers?: Headers }>(options: T | undefined) {
   const copied = { ...options };
   return { ...copied, headers: closingHeaders(copied.headers) };
+}
+
+/** Give the separate Node fixture client a full-response deadline per attempt. */
+export async function fetchFixtureResponse(input: string, init: RequestInit = {}, attemptTimeoutMs = 6_000): Promise<Response> {
+  const headers = new globalThis.Headers(init.headers);
+  headers.set('Connection', 'close');
+  for (let attempt = 1; ; attempt += 1) {
+    const timeout = AbortSignal.timeout(attemptTimeoutMs);
+    const signal = init.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+    try {
+      const response = await fetch(input, { ...init, headers, signal });
+      const body = response.body ? await response.arrayBuffer() : null;
+      return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+    } catch (error) {
+      if (attempt === 4 || init.signal?.aborted) throw error;
+      await delay(150 * attempt, undefined, { signal: init.signal ?? undefined });
+    }
+  }
 }
 
 /** Keep Playwright's context, defaults and cookie jar; retire each API connection. */

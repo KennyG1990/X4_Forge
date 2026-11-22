@@ -1,7 +1,7 @@
 import React from 'react';
 import { ExternalLink, File, FileDown, FileWarning, GitCompare, RefreshCw } from 'lucide-react';
 import type { ModWorkspace } from '../types';
-import { openInNativeEditor, openOrMaterializeInNativeEditor, openSourceVsGeneratedDiff } from '../lib/nativeEditor';
+import { hasNativeReleaseHost, openBoundWorkspaceFile, openOrMaterializeInNativeEditor, openSourceVsGeneratedDiff } from '../lib/nativeEditor';
 
 interface InventoryEntry {
   path: string;
@@ -18,18 +18,41 @@ interface InventoryResponse {
   entries: InventoryEntry[];
   excludedCount: number;
   sourceFolder?: string | null;
+  workspaceRootId?: string;
   errors?: string[];
   error?: string;
 }
 
-export default function NativeProjectFiles({ workspace }: { workspace: ModWorkspace }) {
-  const [inventory, setInventory] = React.useState<InventoryResponse | null>(null);
+export default function NativeProjectFiles({ workspace, workspaceId }: { workspace: ModWorkspace; workspaceId: string }) {
+  const [snapshot, setSnapshot] = React.useState<{ workspace: ModWorkspace; inventory: InventoryResponse } | null>(null);
   const [selected, setSelected] = React.useState('');
   const [loading, setLoading] = React.useState(false);
   const [message, setMessage] = React.useState('');
   const [materializing, setMaterializing] = React.useState(false);
+  const activeWorkspace = React.useRef<ModWorkspace | null>(null);
+  const pendingRequest = React.useRef<AbortController | null>(null);
+
+  React.useLayoutEffect(() => {
+    activeWorkspace.current = workspace;
+    return () => {
+      activeWorkspace.current = null;
+      pendingRequest.current?.abort();
+    };
+  }, [workspace]);
+
+  const isCurrentWorkspace = React.useCallback(() => {
+    const selectedId = window.__X4_WORKSPACE_CONTEXT__?.getWorkspaceId();
+    return activeWorkspace.current === workspace && (!selectedId || selectedId === workspaceId);
+  }, [workspace, workspaceId]);
 
   const refresh = React.useCallback(async () => {
+    if (!isCurrentWorkspace()) return;
+    pendingRequest.current?.abort();
+    const request = new AbortController();
+    pendingRequest.current = request;
+    const revision = window.__X4_WORKSPACE_CONTEXT__?.getSelectionRevision();
+    const isCurrentRequest = () => !request.signal.aborted && isCurrentWorkspace()
+      && revision === window.__X4_WORKSPACE_CONTEXT__?.getSelectionRevision();
     setLoading(true);
     setMessage('');
     try {
@@ -37,67 +60,84 @@ export default function NativeProjectFiles({ workspace }: { workspace: ModWorksp
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workspace }),
+        signal: request.signal,
       });
       const data = await response.json() as InventoryResponse;
-      if (!response.ok && !data.entries) throw new Error(data.error || data.errors?.join(' ') || `HTTP ${response.status}`);
-      setInventory(data);
+      if (!isCurrentRequest()) return;
+      if (!Array.isArray(data.entries)) throw new Error(data.error || data.errors?.join(' ') || 'Could not load project files.');
+      setSnapshot({ workspace, inventory: data });
       setSelected((current) => data.entries.some(entry => entry.path === current)
         ? current
         : data.entries.find(entry => entry.openable)?.path || data.entries[0]?.path || '');
     } catch (error) {
-      setInventory(null);
+      if (!isCurrentRequest()) return;
+      setSnapshot(null);
       setMessage(error instanceof Error ? error.message : 'Could not load project files.');
     } finally {
-      setLoading(false);
+      if (pendingRequest.current === request) {
+        pendingRequest.current = null;
+        if (isCurrentWorkspace()) setLoading(false);
+      }
     }
-  }, [workspace]);
+  }, [isCurrentWorkspace, workspace]);
 
   React.useEffect(() => {
     const timer = window.setTimeout(() => { void refresh(); }, 500);
     return () => window.clearTimeout(timer);
   }, [refresh]);
 
+  const inventory = snapshot?.workspace === workspace ? snapshot.inventory : null;
   const entry = inventory?.entries.find(candidate => candidate.path === selected);
   const open = () => {
+    if (!isCurrentWorkspace()) return;
     if (!entry?.openable) {
       setMessage(entry?.text
         ? 'This generated file is not materialized in the Mod Workspace yet.'
         : 'Binary payloads are preserved but are not opened as text.');
       return;
     }
-    if (!openInNativeEditor(entry.path, undefined, inventory?.sourceFolder || undefined)) {
+    if (!hasNativeReleaseHost()) {
       setMessage('Native tabs are available in the installed Antigravity/VS Code extension.');
+      return;
     }
+    if (!inventory?.sourceFolder || !inventory.workspaceRootId) {
+      setMessage('Forge could not identify the Mod Workspace folder. Refresh Project Files.');
+      return;
+    }
+    openBoundWorkspaceFile(entry.path, inventory.sourceFolder, inventory.workspaceRootId);
   };
 
   const materialize = async () => {
-    if (!entry) return;
+    if (!entry || !isCurrentWorkspace()) return;
     setMaterializing(true);
     setMessage('');
     try {
       const result = await openOrMaterializeInNativeEditor(workspace, entry.path);
-      setMessage(result.message);
-      await refresh();
+      if (isCurrentWorkspace()) {
+        setMessage(result.message);
+        await refresh();
+      }
     } finally {
       setMaterializing(false);
     }
   };
 
   const compare = async () => {
-    if (!entry) return;
+    if (!entry || !isCurrentWorkspace()) return;
     setMessage('');
     const result = await openSourceVsGeneratedDiff(workspace, entry.path);
-    setMessage(result.message);
+    if (isCurrentWorkspace()) setMessage(result.message);
   };
 
   return (
     <div data-testid="native-project-files" className="flex items-center gap-1 rounded border border-cyan-500/20 bg-black/30 px-1.5 py-1 min-w-0">
       <File className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
       <select
-        value={selected}
+        aria-label="Project Files"
+        value={entry?.path || ''}
         onChange={(event) => { setSelected(event.target.value); setMessage(''); }}
         title={message || `${inventory?.entries.length || 0} packaged project files`}
-        className="max-w-[260px] min-w-[150px] bg-[#0f131b] border border-white/10 rounded px-2 py-1 text-[10px] font-mono text-slate-200 focus:outline-none focus:border-cyan-500"
+        className="min-w-0 flex-1 max-w-[260px] min-[1200px]:min-w-[150px] bg-[#0f131b] border border-white/10 rounded px-2 py-1 text-[10px] font-mono text-slate-200 focus:outline-none focus:border-cyan-500"
       >
         {!inventory?.entries.length && <option value="">{loading ? 'Scanning project files…' : 'No project files'}</option>}
         {inventory?.entries.map(file => (

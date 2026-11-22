@@ -44,3 +44,7 @@ Claude's board still read HELD. The brief absence of an X4 process at the readba
 ## AAR
 
 Sustain byte-identical loose and packed deployment before runtime assertions. The first baseline attempt used a key missing an existing audit effect. The corrected fixture uses the existing authorized runtime capability and still proves under-scoped denial. Fresh review caught stale marker reuse after a manifest revision, a foreign content identity, cache invalidation pressure and an older renamed log. The final runtime and repository controls cover those cases. The highest-risk remaining weakness is assuming marker presence establishes behavior after the marker or guarantees the installed artifact ran. The guide defines the observation boundary.
+
+## Mixed source preference checkpoint
+
+**PARTIAL · 2026-11-21.** The installed observer now evaluates both verified numbered-catalog and loose-preferred views. Equivalent opt-in outcome preserves the marker stream. Conflicting registration or boot-manifest presence makes the window unavailable and clears previous evidence until fresh markers. Physical loose content identity is still required. The focused fixture covered an observed run, source conflict, ambiguity clearance and a fresh run. [Shared comparison and proof](2026-11-09-deploy-lua-registration-advisory.md#comparison-checkpoint)

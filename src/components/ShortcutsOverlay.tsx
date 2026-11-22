@@ -21,7 +21,7 @@ interface ShortcutRow {
 const SHORTCUTS: ShortcutRow[] = [
   { keys: ['Ctrl', 'Z'], what: 'Undo last action', where: 'Everywhere' },
   { keys: ['Ctrl', 'Y'], what: 'Redo (also Ctrl+Shift+Z)', where: 'Everywhere' },
-  { keys: ['Ctrl', 'K'], what: 'Focus global search (also /)', where: 'Everywhere' },
+  { keys: ['Ctrl', 'K'], what: 'Search workspace (also Cmd+K or /)', where: 'Expert' },
   { keys: ['?'], what: 'Show this shortcuts list', where: 'Everywhere' },
   { keys: ['Space'], what: 'Quick-add node palette at the cursor', where: 'Canvas' },
   { keys: ['C'], what: 'Add a Comment Box (groups selected nodes)', where: 'Canvas' },

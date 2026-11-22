@@ -3,6 +3,8 @@ import crypto from 'node:crypto';
 import { bindDiagnosticSourceFiles } from '../src/server/diagnosticSourceNavigation';
 import type { ProjectFile } from '../src/lib/extensionProject';
 import { lintAiscript, runAiscriptLintSelftest } from '../src/lib/aiscriptLint';
+import { buildMdVariableAvailabilityContext, lintMdPitfalls } from '../src/lib/mdPitfallLints';
+import type { ValidationCoverageGap } from '../src/lib/validationEvidence';
 import { createSourcePositionLocator, indexXmlElementSpans } from '../src/lib/xmlSourceSpans';
 import { fnvHash } from '../src/lib/workspaceIdentity';
 import type { MDNode, OriginalModeledFile } from '../src/types';
@@ -44,6 +46,76 @@ const ai = bindDiagnosticSourceFiles('fixture', new Map([[aiPath, aiFile]]), [ai
 assert.equal(ai?.status, 'ready');
 assert.equal(ai?.line, 0);
 assert.equal(ai?.column, singleLine.indexOf('<param name'));
+
+const initialStatePath = 'md/initial-state.xml';
+const initialStateLine = '<mdscript name="SourceGap"><cues><cue name="Run"><actions><opaque_effect/>'
+  + '<debug_text text="&#36;Probe + &#36;Probe"/></actions></cue></cues></mdscript>';
+const initialStateSample = (raw: string) => {
+  const file: ProjectFile = { path: initialStatePath, kind: 'md', content: raw };
+  const selected = new Map([[initialStatePath, file]]);
+  const context = buildMdVariableAvailabilityContext([file], null);
+  const gaps: ValidationCoverageGap[] = [];
+  lintMdPitfalls(raw, { filePath: initialStatePath, variableAvailability: context.context, initialStateGaps: gaps });
+  return { file, selected, gaps, bind: bindDiagnosticSourceFiles('fixture', selected, [file]) };
+};
+const initialStateFinding = {
+  code: 'md.variable_initial_state', filePath: initialStatePath, line: 1,
+  column: initialStateLine.indexOf('&#36;Probe') + 1,
+};
+const initialStateExpected = (raw: string, line: number, column: number) => ({
+  status: 'ready', path: initialStatePath, sourceFolder: 'fixture',
+  sha256: crypto.createHash('sha256').update(raw).digest('hex'), line, column,
+});
+for (const prefix of ['', '\uFEFF']) {
+  const raw = prefix + initialStateLine;
+  const sample = initialStateSample(raw);
+  assert.equal(sample.gaps.length, 2);
+  assert.deepEqual(sample.gaps.map(gap => [gap.line, gap.column]), [
+    [1, raw.indexOf('&#36;Probe') + 1], [1, raw.lastIndexOf('&#36;Probe') + 1],
+  ]);
+  assert.deepEqual(sample.gaps.map(gap => sample.bind({ ...gap, code: gap.check })), [
+    initialStateExpected(raw, 0, initialStateLine.indexOf('&#36;Probe')),
+    initialStateExpected(raw, 0, initialStateLine.lastIndexOf('&#36;Probe')),
+  ]);
+}
+const initialStateCrLf = '\uFEFF' + initialStateLine.replace('<debug_text', '\r\n<debug_text');
+const initialStateSecondLine = initialStateCrLf.split('\r\n')[1];
+const crLfSample = initialStateSample(initialStateCrLf);
+assert.deepEqual(crLfSample.gaps.map(gap => [gap.line, gap.column]), [
+  [2, initialStateSecondLine.indexOf('&#36;Probe') + 1],
+  [2, initialStateSecondLine.lastIndexOf('&#36;Probe') + 1],
+]);
+assert.deepEqual(crLfSample.gaps.map(gap => crLfSample.bind({ ...gap, code: gap.check })), [
+  initialStateExpected(initialStateCrLf, 1, initialStateSecondLine.indexOf('&#36;Probe')),
+  initialStateExpected(initialStateCrLf, 1, initialStateSecondLine.lastIndexOf('&#36;Probe')),
+]);
+const plainInitialState = initialStateSample(initialStateLine);
+assert.deepEqual(bindDiagnosticSourceFiles('fixture', plainInitialState.selected, [])(initialStateFinding),
+  { status: 'unavailable', reason: 'materialized-source' });
+assert.deepEqual(bindDiagnosticSourceFiles(undefined, plainInitialState.selected, [plainInitialState.file])(initialStateFinding),
+  { status: 'unavailable', reason: 'materialized-source' });
+assert.deepEqual(bindDiagnosticSourceFiles('fixture', new Map(), [plainInitialState.file])(initialStateFinding),
+  { status: 'unavailable', reason: 'materialized-source' });
+const changedInitialState = { ...plainInitialState.file, content: initialStateLine.replace('SourceGap', 'EditedGap') };
+assert.deepEqual(bindDiagnosticSourceFiles('fixture', plainInitialState.selected, [changedInitialState])(initialStateFinding),
+  { status: 'unavailable', reason: 'source-mismatch' });
+assert.deepEqual(bindDiagnosticSourceFiles('fixture', new Map([[initialStatePath, changedInitialState]]),
+  [plainInitialState.file])(initialStateFinding), { status: 'unavailable', reason: 'source-mismatch' });
+assert.deepEqual(plainInitialState.bind({ ...initialStateFinding, line: undefined }),
+  { status: 'unavailable', reason: 'position-unavailable' });
+assert.deepEqual(plainInitialState.bind({ ...initialStateFinding, column: undefined }),
+  { status: 'unavailable', reason: 'position-unavailable' });
+assert.deepEqual(plainInitialState.bind({ ...initialStateFinding, line: 0 }),
+  { status: 'unavailable', reason: 'position-unavailable' });
+assert.deepEqual(plainInitialState.bind({ ...initialStateFinding, column: 0 }),
+  { status: 'unavailable', reason: 'position-unavailable' });
+for (const separator of ['\u0085', '\u2028', '\u2029']) {
+  const exceptionalFile = { ...plainInitialState.file, content: initialStateLine + separator };
+  const bindExceptionalInitialState = bindDiagnosticSourceFiles('fixture',
+    new Map([[initialStatePath, exceptionalFile]]), [exceptionalFile]);
+  assert.deepEqual(bindExceptionalInitialState(initialStateFinding), { status: 'unavailable', reason: 'position-unavailable' });
+}
+assert.equal(plainInitialState.bind({ ...initialStateFinding, code: 'diff.post-apply.md.variable_initial_state' }), undefined);
 
 const mdContent = '\uFEFF<mdscript><cues><cue name="Repeated">\r\n<actions>\r'
   + '<!--🚀--><set_value name="$x" exact="ware.missing" /><opaque exact="ware.absent" />'

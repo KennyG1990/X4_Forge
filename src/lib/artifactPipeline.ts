@@ -15,6 +15,10 @@ import path from 'node:path';
 
 export type ArtifactDisposition = 'generated' | 'source-copy';
 
+export const ROUND_TRIP_TEXT_EXTS: ReadonlySet<string> = new Set([
+  '.xml', '.lua', '.xsd', '.txt', '.md', '.json', '.css', '.html', '.csv', '.cfg', '.ini',
+]);
+
 export interface ArtifactEntry {
   path: string;
   disposition: ArtifactDisposition;
@@ -47,6 +51,7 @@ export interface ArtifactPlan {
   runtimeOwned: ArtifactExcludedEntry[];
   rules: ArtifactRules;
   errors: string[];
+  sourceEncodingConflicts?: string[];
   totals: {
     generatedFiles: number;
     sourceCopyFiles: number;
@@ -141,6 +146,34 @@ export function sameArtifactStamp(expected: fs.BigIntStats, actual: fs.BigIntSta
 }
 
 export function hashArtifactFile(filePath: string, algorithm: 'sha256' | 'md5' = 'sha256', expected?: fs.BigIntStats): string {
+  return hashArtifactFileBytes(filePath, algorithm, { expected });
+}
+
+/** Read bounded, physically observed file bytes and verify the exact returned buffer. */
+export function readVerifiedArtifactFile(filePath: string, entry: Pick<ArtifactEntry, 'size' | 'sha256'>, maxBytes: number): Buffer {
+  if (!Number.isSafeInteger(entry.size) || entry.size < 0 || entry.size > maxBytes) {
+    throw new Error('Artifact file size is outside the read limit.');
+  }
+  const expected = fs.lstatSync(filePath, { bigint: true });
+  if (!expected.isFile() || expected.nlink !== 1n || expected.size !== BigInt(entry.size)
+    || path.relative(filePath, fs.realpathSync.native(filePath)) !== '') {
+    throw new Error('Artifact file changed before reading.');
+  }
+  const content = Buffer.allocUnsafe(entry.size);
+  if (hashArtifactFileBytes(filePath, 'sha256', { expected, retained: content }) !== entry.sha256) {
+    throw new Error('Artifact file hash does not match the manifest.');
+  }
+  return content;
+}
+
+function hashArtifactFileBytes(filePath: string, algorithm: 'sha256' | 'md5',
+  { expected, sizeHint, observe, retained }: {
+    expected?: fs.BigIntStats;
+    sizeHint?: number;
+    observe?: (bytes: Buffer) => void;
+    retained?: Buffer;
+  },
+): string {
   const hash = crypto.createHash(algorithm);
   const guardFlags = expected && process.platform !== 'win32' ? fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK : 0;
   const fd = fs.openSync(filePath, fs.constants.O_RDONLY | guardFlags);
@@ -149,12 +182,21 @@ export function hashArtifactFile(filePath: string, algorithm: 'sha256' | 'md5' =
       throw new Error('Deployment observation file changed before reading.');
     }
     let remaining = expected ? Number(expected.size) : Infinity;
-    const buffer = Buffer.allocUnsafe(Math.min(Math.max(remaining, 1), 1024 * 1024));
+    // A size observation is only a buffer hint. Unguarded inputs are read to EOF.
+    const chunkBytes = 1024 * 1024;
+    let hintRemaining = !expected && sizeHint !== undefined ? sizeHint : Infinity;
+    const capacity = expected ? remaining : Math.min(hintRemaining, chunkBytes);
+    let buffer = retained ?? Buffer.allocUnsafe(Math.min(Math.max(capacity, 1), chunkBytes));
     while (remaining > 0) {
-      const read = fs.readSync(fd, buffer, 0, Math.min(remaining, buffer.length), null);
+      const offset = retained ? retained.length - remaining : 0;
+      const read = fs.readSync(fd, buffer, offset, Math.min(remaining, buffer.length - offset, chunkBytes), null);
       if (read <= 0) break;
       remaining -= read;
-      hash.update(buffer.subarray(0, read));
+      const bytes = buffer.subarray(offset, offset + read);
+      hash.update(bytes);
+      observe?.(bytes);
+      hintRemaining -= read;
+      if (hintRemaining < 0 && buffer.length < chunkBytes) buffer = Buffer.allocUnsafe(chunkBytes);
     }
     if (expected && (remaining !== 0 || !sameArtifactStamp(expected, fs.fstatSync(fd, { bigint: true })))) {
       throw new Error('Deployment observation file changed while reading.');
@@ -163,6 +205,25 @@ export function hashArtifactFile(filePath: string, algorithm: 'sha256' | 'md5' =
     fs.closeSync(fd);
   }
   return hash.digest('hex');
+}
+
+/** Read the disk identity and UTF-8 validity from the same byte stream. */
+function hashArtifactTextSource(filePath: string, sizeHint: number): { sha256: string; utf8: boolean } {
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  let utf8 = true;
+  const sha256 = hashArtifactFileBytes(filePath, 'sha256', {
+    sizeHint,
+    observe(bytes) {
+      if (!utf8) return;
+      try { decoder.decode(bytes, { stream: true }); }
+      catch { utf8 = false; }
+    },
+  });
+  if (utf8) {
+    try { decoder.decode(); }
+    catch { utf8 = false; }
+  }
+  return { sha256, utf8 };
 }
 
 function comparisonKey(relativePath: string): string {
@@ -221,10 +282,18 @@ export function artifactPathMatches(relativePath: string, rules: string[]): bool
   return matchingRule(relativePath.replace(/\\/g, '/').replace(/^\/+/, ''), rules) !== null;
 }
 
+function compileArtifactRuleLookup(rules: readonly string[]): (relativePath: string) => string | null {
+  const matchers = rules.map(rule => ({ rule, matcher: globRegex(rule) }));
+  return relativePath => {
+    for (const { rule, matcher } of matchers) if (matcher?.test(relativePath)) return rule;
+    return null;
+  };
+}
+
 /** Compile rules once for a scan of normalized, root-relative artifact paths. */
 export function createArtifactPathMatcher(rules: readonly string[]): (relativePath: string) => boolean {
-  const matchers = rules.map(globRegex).filter((matcher): matcher is RegExp => matcher !== null);
-  return relativePath => matchers.some(matcher => matcher.test(relativePath));
+  const lookup = compileArtifactRuleLookup(rules);
+  return relativePath => lookup(relativePath) !== null;
 }
 
 function normalizeRules(values: unknown): string[] {
@@ -287,6 +356,7 @@ export function buildArtifactPlanWithDiskIdentity(
 function planArtifact(options: BuildArtifactPlanOptions, diskEntries?: ArtifactEntry[]): ArtifactPlan {
   const sourceRoot = options.memoryOnly === true ? '' : path.resolve(String(options.sourceRoot || ''));
   const errors: string[] = [];
+  const sourceEncodingConflicts: string[] = [];
   const entries: ArtifactEntry[] = [];
   const excluded: ArtifactExcludedEntry[] = [];
   const runtimeOwned: ArtifactExcludedEntry[] = [];
@@ -295,6 +365,9 @@ function planArtifact(options: BuildArtifactPlanOptions, diskEntries?: ArtifactE
     errors.push(`Artifact source root does not exist or is not a directory: ${sourceRoot}`);
   }
   const rules = mergeRules(sourceRoot, options.rules, errors);
+  const findExclusion = compileArtifactRuleLookup(rules.exclude);
+  const findRuntimeOwned = compileArtifactRuleLookup(rules.runtimeOwned);
+  const findCatalogLoose = compileArtifactRuleLookup(rules.catalogLoose);
   const generated = new Map<string, ArtifactEntry>();
   const occupied = new Map<string, string>();
 
@@ -318,7 +391,7 @@ function planArtifact(options: BuildArtifactPlanOptions, diskEntries?: ArtifactE
       size: bytes,
       sha256: sha256Buffer(content),
       content,
-      catalogLoose: Boolean(matchingRule(relativePath, rules.catalogLoose)),
+      catalogLoose: Boolean(findCatalogLoose(relativePath)),
     };
     occupied.set(key, relativePath);
     generated.set(key, entry);
@@ -336,13 +409,13 @@ function planArtifact(options: BuildArtifactPlanOptions, diskEntries?: ArtifactE
     }
     const key = comparisonKey(relativePath);
     if (generated.has(key)) continue;
-    const excludeRule = matchingRule(relativePath, rules.exclude);
+    const excludeRule = findExclusion(relativePath);
     if (excludeRule) {
       // The disk walk records excluded source paths (including an omitted passthrough's
       // original file) with the directory-aware path that the artifact report expects.
       continue;
     }
-    const runtimeRule = matchingRule(relativePath, rules.runtimeOwned);
+    const runtimeRule = findRuntimeOwned(relativePath);
     if (runtimeRule) {
       // Runtime-owned bytes are never an in-memory artifact claim. The source walk below
       // records the runtime-owned declaration and the deploy preservation layer copies the
@@ -362,7 +435,7 @@ function planArtifact(options: BuildArtifactPlanOptions, diskEntries?: ArtifactE
       size: bytes,
       sha256: sha256Buffer(content),
       content,
-      catalogLoose: Boolean(matchingRule(relativePath, rules.catalogLoose)),
+      catalogLoose: Boolean(findCatalogLoose(relativePath)),
     };
     occupied.set(key, relativePath);
     generated.set(key, entry);
@@ -391,8 +464,8 @@ function planArtifact(options: BuildArtifactPlanOptions, diskEntries?: ArtifactE
         continue;
       }
 
-      const excludeRule = matchingRule(relativePath, rules.exclude);
-      const runtimeRule = matchingRule(relativePath, rules.runtimeOwned);
+      const excludeRule = findExclusion(relativePath);
+      const runtimeRule = findRuntimeOwned(relativePath);
       if (excludeRule) {
         excluded.push({ path: stat.isDirectory() ? `${relativePath}/**` : relativePath, reason: excludeRule.startsWith('.') || excludeRule.startsWith('node_modules') ? 'universal development metadata exclusion' : 'project exclusion', rule: excludeRule });
         continue;
@@ -421,21 +494,31 @@ function planArtifact(options: BuildArtifactPlanOptions, diskEntries?: ArtifactE
         errors.push(`Artifact source paths collide after case normalization: ${prior} and ${safe}`);
         continue;
       }
-      const overlaid = generated.has(key);
-      if (overlaid && !diskEntries) continue;
+      const overlay = generated.get(key);
+      // Explicit byte buffers have no text-decoding step. Keep their existing ownership semantics.
+      const inspectText = typeof overlay?.content === 'string'
+        && ROUND_TRIP_TEXT_EXTS.has(path.extname(safe).toLowerCase());
+      if (overlay && !diskEntries && !inspectText) continue;
       occupied.set(key, safe);
       try {
+        const text = inspectText ? hashArtifactTextSource(absolutePath, stat.size) : undefined;
+        const sha256 = text?.sha256 ?? hashArtifactFileBytes(absolutePath, 'sha256', { sizeHint: stat.size });
+        if (overlay && text?.utf8 === false && sha256 !== overlay.sha256) {
+          sourceEncodingConflicts.push(safe);
+          errors.push(`Workspace output would replace undecodable source ${safe}. Reimport to preserve the original bytes or save a UTF-8 repair on disk before retrying.`);
+          continue;
+        }
         const entry: ArtifactEntry = {
           path: safe,
           disposition: 'source-copy',
           reason: 'source file not claimed by a compiler output',
           size: stat.size,
-          sha256: hashArtifactFile(absolutePath),
+          sha256,
           mtimeMs: stat.mtimeMs,
           sourcePath: absolutePath,
-          catalogLoose: Boolean(matchingRule(safe, rules.catalogLoose)),
+          catalogLoose: Boolean(findCatalogLoose(safe)),
         };
-        if (!overlaid) entries.push(entry);
+        if (!overlay) entries.push(entry);
         diskEntries?.push(entry);
       } catch (error) {
         errors.push(`Could not hash source artifact ${safe}: ${error instanceof Error ? error.message : String(error)}`);
@@ -457,6 +540,7 @@ function planArtifact(options: BuildArtifactPlanOptions, diskEntries?: ArtifactE
     runtimeOwned,
     rules,
     errors,
+    ...(sourceEncodingConflicts.length ? { sourceEncodingConflicts } : {}),
     totals: {
       generatedFiles: entries.filter(entry => entry.disposition === 'generated').length,
       sourceCopyFiles: entries.filter(entry => entry.disposition === 'source-copy').length,
@@ -473,12 +557,13 @@ export function materializeArtifact(
   targetRootInput: string,
   verification: 'per-file' | 'complete-tree' = 'per-file',
   assertOwnership?: (target: string) => void,
+  onEntryFailure?: (failure: unknown) => void,
 ): ArtifactBuildResult {
   const targetRoot = path.resolve(targetRootInput);
   const verifyPerFile = verification === 'per-file';
   const errors = [...plan.errors];
   if (!plan.ok) return { ok: false, targetRoot, written: 0, bytes: 0, errors };
-  if (inside(targetRoot, plan.sourceRoot) || inside(plan.sourceRoot, targetRoot)) {
+  if (plan.sourceRoot && (inside(targetRoot, plan.sourceRoot) || inside(plan.sourceRoot, targetRoot))) {
     errors.push(`Artifact target must not overlap its source root: ${targetRoot}`);
     return { ok: false, targetRoot, written: 0, bytes: 0, errors };
   }
@@ -514,7 +599,7 @@ export function materializeArtifact(
         const sourceStat = fs.lstatSync(entry.sourcePath);
         if (sourceStat.isSymbolicLink() || !sourceStat.isFile()) throw new Error('planned source is no longer a regular file');
         if (verifyPerFile) {
-          const currentHash = hashArtifactFile(entry.sourcePath);
+          const currentHash = hashArtifactFileBytes(entry.sourcePath, 'sha256', { sizeHint: sourceStat.size });
           if (currentHash !== entry.sha256) throw new Error(`source changed after planning (${entry.sha256} -> ${currentHash})`);
         }
         assertOwnership?.(destination);
@@ -522,7 +607,7 @@ export function materializeArtifact(
       }
       if (verifyPerFile) {
         const destinationStat = fs.statSync(destination);
-        const destinationHash = hashArtifactFile(destination);
+        const destinationHash = hashArtifactFileBytes(destination, 'sha256', { sizeHint: destinationStat.size });
         if (destinationStat.size !== entry.size || destinationHash !== entry.sha256) {
           throw new Error(`destination verification mismatch (size ${destinationStat.size}/${entry.size}, hash ${destinationHash}/${entry.sha256})`);
         }
@@ -530,6 +615,7 @@ export function materializeArtifact(
       written++;
       bytes += entry.size;
     } catch (error) {
+      onEntryFailure?.(error);
       errors.push(`Failed to materialize ${entry.path}: ${error instanceof Error ? error.message : String(error)}`);
       break;
     }
@@ -575,7 +661,7 @@ export function verifyMaterializedArtifact(plan: ArtifactPlan, targetRootInput: 
     }
     const absolutePath = path.join(targetRoot, ...actualPath.split('/'));
     const stat = fs.statSync(absolutePath);
-    const hash = hashArtifactFile(absolutePath);
+    const hash = hashArtifactFileBytes(absolutePath, 'sha256', { sizeHint: stat.size });
     if (stat.size !== entry.size) errors.push(`Artifact size mismatch for ${entry.path}: ${stat.size} != ${entry.size}`);
     if (hash !== entry.sha256) errors.push(`Artifact hash mismatch for ${entry.path}: ${hash} != ${entry.sha256}`);
     checked++;

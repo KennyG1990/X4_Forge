@@ -84,13 +84,44 @@ export function buildChangelog(releases) {
   return `${lines.join("\n").replace(/\r\n?/g, "\n").replace(/\n+$/g, "")}\n`;
 }
 
+/** Parse sections produced by buildChangelog, retaining their full text. */
+function readChangelogSections(markdown) {
+  const [header, ...blocks] = markdown.replace(/\r\n?/g, "\n").split(/(?=^##(?:[ \t]|$))/m);
+  if (!header.startsWith("# What's New in X4 Forge Studio\n") || !blocks.length) {
+    throw new Error("Expected a generated Forge changelog with release sections");
+  }
+
+  const sections = new Map();
+  for (const block of blocks) {
+    const heading = block.split("\n", 1)[0];
+    const [, version, date] = /^## (\S+)(?: — (\S+))?$/.exec(heading) || [];
+    if (!isSupportedVersion(version) || (date && !isCalendarDate(date)) || !block.includes("\n\n- ")) {
+      throw new Error("Invalid changelog release section: " + heading);
+    }
+    if (sections.has(version)) throw new Error("Duplicate changelog version: " + version);
+    sections.set(version, { version, markdown: block.replace(/\n+$/, "") });
+  }
+  return { header, sections };
+}
+
+/** Shallow Git cannot reconstruct earlier release ranges. Keep the sections recorded at HEAD. */
+function preserveShallowChangelog(generated, committed) {
+  const { header, sections } = readChangelogSections(generated);
+  for (const section of readChangelogSections(committed).sections.values()) {
+    sections.set(section.version, section);
+  }
+  const body = sortReleases([...sections.values()]).map((section) => section.markdown).join("\n\n");
+  return header + body + "\n";
+}
+
 /** Subjects that are pure version-bump bookkeeping — the version header already conveys them. */
 function isReleaseNoise(subject) {
   return /^chore\(release\)/i.test(subject) || /^\s*bump (the )?extension/i.test(subject);
 }
 
-function git(args) {
-  return execSync(`git ${args}`, { cwd: REPO_ROOT, encoding: "utf8" }).trim();
+function git(args, { trim = true } = {}) {
+  const output = execSync(`git ${args}`, { cwd: REPO_ROOT, encoding: "utf8" });
+  return trim ? output.trim() : output;
 }
 
 /** Version string in package.json AT a given commit (null if unreadable/absent). */
@@ -366,6 +397,47 @@ function selftest() {
       === `${workingVersion} > ${intermediateVersion} > ${committedVersion}`,
   );
 
+
+  const previousChangelog = buildChangelog([
+    { version: "0.0.10", date: "2026-07-17", changes: ["Previously published wording."] },
+    { version: "0.0.2", date: "2026-07-08", changes: ["Only available in the committed changelog.  "] },
+  ]);
+  const currentShallowOutput = buildChangelog([
+    { version: "0.0.10", date: "2026-07-19", changes: ["Restated by the shallow history boundary."] },
+    { version: "0.0.7", date: "2026-07-12", changes: ["Recovered from the published ledger."] },
+    { version: "0.0.11", date: "2026-07-20", changes: ["Current working release."] },
+  ]);
+  const preserved = preserveShallowChangelog(currentShallowOutput, previousChangelog);
+  ok(
+    "shallow_changelog_keeps_committed_sections",
+    readChangelogSections(preserved).sections.get("0.0.10").markdown
+      === readChangelogSections(previousChangelog).sections.get("0.0.10").markdown
+      && preserved.includes("Only available in the committed changelog.  \n")
+      && !preserved.includes("Restated by the shallow history boundary."),
+  );
+  ok(
+    "shallow_changelog_inserts_current_and_published_versions",
+    [...readChangelogSections(preserved).sections.keys()].join(" ") === "0.0.11 0.0.10 0.0.7 0.0.2"
+      && preserved.includes("Recovered from the published ledger.")
+      && preserved.includes("Current working release."),
+  );
+
+  for (const [name, background] of [
+    ["missing", "# What's New in X4 Forge Studio\n"],
+    ["invalid", previousChangelog.replace("## 0.0.2", "## malformed")],
+    ["tab_heading", previousChangelog.replace("## 0.0.2", "##\t0.0.2")],
+    ["bare_heading", previousChangelog + "\n##\n"],
+    ["duplicate", previousChangelog.replace("## 0.0.2", "## 0.0.10")],
+  ]) {
+    let rejected = false;
+    try {
+      preserveShallowChangelog(currentShallowOutput, background);
+    } catch {
+      rejected = true;
+    }
+    ok(`shallow_changelog_rejects_${name}_history`, rejected);
+  }
+
   const passed = checks.filter((c) => c.pass).length;
   const allPassed = passed === checks.length;
   console.log(`gen-changelog selftest: ${passed}/${checks.length} allPassed=${allPassed}`);
@@ -378,8 +450,20 @@ if (process.argv.includes("--selftest")) {
   selftest();
 } else {
   const releases = readReleasesFromGit();
-  const md = buildChangelog(releases);
+  let md = buildChangelog(releases);
+  let versions = releases.map(({ version }) => version);
+  if (git("rev-parse --is-shallow-repository") === "true") {
+    try {
+      md = preserveShallowChangelog(md, git("show HEAD:vscode-extension/CHANGELOG.md", { trim: false }));
+      versions = [...readChangelogSections(md).sections.keys()];
+    } catch (error) {
+      throw new Error(
+        "Cannot preserve the committed changelog in this shallow checkout. Restore it at HEAD or use a checkout with full Git history.",
+        { cause: error },
+      );
+    }
+  }
   const out = path.join(EXT_ROOT, "CHANGELOG.md");
   fs.writeFileSync(out, md, "utf8");
-  console.log(`[gen-changelog] wrote ${path.relative(REPO_ROOT, out)} — ${releases.length} version(s), newest ${releases[0]?.version || "?"}`);
+  console.log(`[gen-changelog] wrote ${path.relative(REPO_ROOT, out)} — ${versions.length} version(s), newest ${versions[0] || "?"}`);
 }

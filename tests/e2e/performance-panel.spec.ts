@@ -84,7 +84,8 @@ async function boot(page: Page, workspace: ModWorkspace) {
   await page.locator('[data-sidebar-tab="diagnostics"]').click();
   await page.getByTestId('diagnostics-scope-performance').click();
   await expect(page.getByTestId('forge-performance-panel')).toBeVisible();
-  await expect(page.getByRole('region', { name: 'Owned backend', exact: true })).toBeVisible();
+  // Allow the first 10s deadline, 4s backoff and one real report retry.
+  await expect(page.getByRole('region', { name: 'Owned backend', exact: true })).toBeVisible({ timeout: 27_000 });
 }
 
 async function renderedRuntime(page: Page, evidence: unknown[]) {

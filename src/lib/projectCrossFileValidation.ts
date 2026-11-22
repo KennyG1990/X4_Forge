@@ -23,13 +23,13 @@ import { parseModManifest, type ModDependency, type ModManifest } from './modDep
 import { mdLibraryAcceptsArguments } from '../../shared/mdDeclarationResolution';
 import {
   buildMdLibraryIndex, classifyCueRef, duplicateMdCueMessage, findDuplicateMdCueDeclarations,
-  mdReferencePoint, parseMdScriptRoot, readMdLibrarySignature, readMdReferenceArguments, resolveMdLibraryReference,
+  mdReferenceArgumentNamespaceUnavailable, mdReferencePoint, parseMdScriptRoot, readMdLibrarySignature, readMdReferenceArguments, resolveMdLibraryReference,
   type MdLibraryDeclaration, type MdLibraryScript, type MdLibrarySignature, type MdReferenceFact,
 } from './cueLineage';
 import { describeAuthoredMdReference, EFFECTIVE_MD_ARGUMENT_CHECK, EFFECTIVE_MD_REFERENCE_CHECK,
   type EffectiveMdReferenceContext, type MdReferenceCoverageGap, type MdReferenceSourcePoint } from './mdEffectiveLibraryPurpose';
 import { collectMdStringResults } from './expressionAst';
-import type { ValidationSourceLocation } from './validationEvidence';
+import type { PayloadWriterScope, ValidationSourceLocation } from './validationEvidence';
 import { normPath, parseXmlLenient, walkElements } from './xmlLite';
 import { parseX4Lua as parse } from './x4LuaParser';
 import { DOMParser, type Attr as XmlAttr, type Document as XmlDocument, type Element as XmlElement } from '@xmldom/xmldom';
@@ -56,6 +56,7 @@ export type ProjectCrossFileFindingCode =
   | 'md.cue_library_param_undeclared'
   | 'md.cue_library_param_required'
   | 'md.run_actions_param_undeclared'
+  | 'md.run_actions_param_required'
   | 'md.cue_duplicate_name'
   | 'validation.lua_ast_unavailable'
   | 'ui.invalid_registration';
@@ -71,6 +72,7 @@ export interface ProjectCrossFileFinding {
   sourceRef?: string;
   event?: string;
   dependencyId?: string;
+  payloadWriterScope?: PayloadWriterScope;
   detail: string;
 }
 
@@ -516,7 +518,10 @@ function validateIndexedPayloadContract(mdFiles: ExtensionProject['files'], luaW
   // indexed key shape must exist somewhere in the project.
   if (reads.size === 0 && writes.size === 0) return { findings: [], reads: [], writes: [] };
   const findings: ProjectCrossFileFinding[] = [];
-  const unavailable = new Map<string, { event: [string, string]; reader: PayloadReadSite; writer: PayloadWriteSite; candidateOnly: boolean; keys: Set<string> }>();
+  const unavailable = new Map<string, {
+    event: [string, string]; reader: PayloadReadSite; writer?: PayloadWriteSite;
+    candidateOnly: boolean; keys: Set<string>; readerPaths: Set<string>; writerPaths: Set<string>;
+  }>();
   for (const key of new Set([...reads.keys(), ...writes.keys()])) {
     const read = reads.get(key) || { global: [], verb: [] };
     const write = writes.get(key) || [];
@@ -527,21 +532,32 @@ function validateIndexedPayloadContract(mdFiles: ExtensionProject['files'], luaW
       });
     }
     const sites = [...read.global, ...read.verb];
-    const seenEvents = new Set<string>();
+    const eventReads = new Map<string, { site: PayloadReadSite; paths: Set<string> }>();
     for (const site of sites) {
       const identity = JSON.stringify(site.event ?? null);
-      if (seenEvents.has(identity)) continue;
-      seenEvents.add(identity);
+      const known = eventReads.get(identity);
+      if (known) known.paths.add(site.file);
+      else eventReads.set(identity, { site, paths: new Set([site.file]) });
+    }
+    for (const [identity, { site, paths }] of eventReads) {
       if (write.some(candidate => !candidate.candidateOnly && (site.event ? candidate.events.includes(identity) : candidate.table === 'payload'))) continue;
-      const possible = write.find(candidate => !site.event || candidate.recipientUnverified || candidate.recipientEvents.includes(identity));
+      const candidates = write.filter(candidate => !site.event || candidate.recipientUnverified || candidate.recipientEvents.includes(identity));
+      const possible = candidates[0];
       if (possible && site.event) {
+        const matchedRecipient = candidates.find(candidate => candidate.recipientEvents.includes(identity));
         let group = unavailable.get(identity);
         if (!group) {
-          group = { event: site.event, reader: site, writer: possible, candidateOnly: false, keys: new Set() };
+          group = { event: site.event, reader: site, writer: matchedRecipient, candidateOnly: false,
+            keys: new Set(), readerPaths: new Set(), writerPaths: new Set() };
           unavailable.set(identity, group);
+        } else if (matchedRecipient && !group.writer) {
+          group.writer = matchedRecipient;
         }
+        // The display target does not change the candidate evidence for the group.
         group.candidateOnly ||= possible.candidateOnly;
         group.keys.add(key);
+        for (const file of paths) group.readerPaths.add(file);
+        for (const candidate of candidates) group.writerPaths.add(candidate.file);
         continue;
       }
       const event = site.event?.join('.');
@@ -565,13 +581,17 @@ function validateIndexedPayloadContract(mdFiles: ExtensionProject['files'], luaW
       });
     }
   }
-  for (const [identity, { event, reader, writer, candidateOnly, keys }] of unavailable) {
-    const sample = [...keys].sort().slice(0, 8).map(key => key.length > 48 ? `${key.slice(0, 48)}…` : key);
+  for (const [identity, { event, reader, writer, candidateOnly, keys, readerPaths, writerPaths }] of unavailable) {
+    const sortedKeys = [...keys].sort();
+    const sample = sortedKeys.slice(0, 8).map(key => key.length > 48 ? `${key.slice(0, 48)}…` : key);
     const remainder = keys.size > sample.length ? ` and ${keys.size - sample.length} more` : '';
     findings.push({
       code: 'md_lua.payload_writer_unverified', severity: 'info', event: event.join('.'), sourceRef: `event_ui_triggered:${identity}`,
       file: reader.file, line: reader.line, column: reader.column,
-      target: { file: writer.file, line: writer.line, column: writer.column },
+      ...(writer ? { target: { file: writer.file, line: writer.line, column: writer.column } } : {}),
+      ...(sortedKeys.length <= 64 && readerPaths.size + writerPaths.size <= 64
+        ? { payloadWriterScope: { event, keys: sortedKeys, readerPaths: [...readerPaths].sort(), writerPaths: [...writerPaths].sort() } }
+        : {}),
       detail: candidateOnly
         ? `Lua includes a local index assignment, but Forge could not verify the index value or indexed key membership for MD screen ${JSON.stringify(event[0])}, control ${JSON.stringify(event[1])}. Table flow may also be unresolved. Indexed keys (${keys.size}): ${sample.join(', ')}${remainder}.`
         : `Forge could not verify the Lua table received by MD for screen ${JSON.stringify(event[0])}, control ${JSON.stringify(event[1])}. Indexed keys (${keys.size}): ${sample.join(', ')}${remainder}.`,
@@ -869,7 +889,8 @@ function findContentManifest(project: ExtensionProject): ModManifest | null {
 function libraryArgumentFacts<S>(call: MdReferenceFact<S>, signature: MdLibrarySignature<S>, library: S | undefined,
   parameterIndex?: ReadonlyMap<string, { name: string; hasDefault: boolean; point?: S }>,
   requiredIndex?: ReadonlyMap<string, { name: string; hasDefault: boolean; point?: S }>) {
-  const findings: Array<{ code: 'md.cue_library_param_undeclared' | 'md.cue_library_param_required' | 'md.run_actions_param_undeclared';
+  const findings: Array<{ code: 'md.cue_library_param_undeclared' | 'md.cue_library_param_required'
+    | 'md.run_actions_param_undeclared' | 'md.run_actions_param_required';
     severity: 'error' | 'warning'; point?: S; target?: S; detail: string }> = [];
   if (signature.status !== 'known') return findings;
   const declared = parameterIndex ?? new Map(signature.parameters.map(parameter => [parameter.name, parameter]));
@@ -885,12 +906,12 @@ function libraryArgumentFacts<S>(call: MdReferenceFact<S>, signature: MdLibraryS
         detail: `${caller} passes parameter "${argument.name}", which library "${ref}" does not declare.` });
     }
   }
-  // Omitted action arguments need a separate X4 witness.
-  if (action) return findings;
   const required = requiredIndex ?? new Map([...declared].filter(([, declaration]) => !declaration.hasDefault));
   for (const [parameter, declaration] of required) {
     if (!supplied.has(parameter)) {
-      findings.push({ code: 'md.cue_library_param_required', severity: 'error',
+      // X4 logs the binding problem and still executes a run_actions library.
+      findings.push({ code: action ? 'md.run_actions_param_required' : 'md.cue_library_param_required',
+        severity: action ? 'warning' : 'error',
         point: call.missingArgumentPoints?.get(parameter) ?? (call.missingArgumentsUnavailable ? undefined : call.refPoint ?? call.point), target: declaration.point,
         detail: `${caller} calls library "${ref}" without required parameter "${parameter}".` });
     }
@@ -898,16 +919,25 @@ function libraryArgumentFacts<S>(call: MdReferenceFact<S>, signature: MdLibraryS
   return findings;
 }
 
+function hasForeignMdNamespace(element: XmlElement): boolean {
+  for (let node: XmlElement | null = element; node; node = node.parentElement) {
+    if (node.namespaceURI || node.getAttribute('xmlns')) return true;
+  }
+  return false;
+}
+
 function libraryArgumentFindings(
   call: XmlElement, reference: XmlAttr, library: XmlElement, file: string, targetFile: string,
 ): ProjectCrossFileFinding[] {
+  const action = call.nodeName === 'run_actions';
+  if (action && (hasForeignMdNamespace(call) || hasForeignMdNamespace(library) || mdReferenceArgumentNamespaceUnavailable(call))) return [];
   type DomPoint = { node: XmlElement; attribute?: XmlAttr };
   const point = (node: XmlElement | XmlAttr): DomPoint => node.nodeType === 2
     ? { node: (node as XmlAttr).ownerElement!, attribute: node as XmlAttr } : { node: node as XmlElement };
-  const facts = libraryArgumentFacts<DomPoint>({ id: '', role: call.nodeName === 'run_actions' ? 'run_actions' : 'cue',
+  const facts = libraryArgumentFacts<DomPoint>({ id: '', role: action ? 'run_actions' : 'cue',
     ref: reference.value, name: call.getAttribute('name') ?? undefined, point: point(call), refPoint: point(reference),
     arguments: readMdReferenceArguments(call, node => point(node as XmlElement | XmlAttr)) },
-  readMdLibrarySignature(library, node => point(node as XmlElement)), point(library));
+  readMdLibrarySignature(library, node => point(node as XmlElement), { namespaceAware: action }), point(library));
   return facts.map(finding => {
     const declaration = finding.target?.node ?? library;
     const target = { file: targetFile, line: declaration.lineNumber, column: declaration.columnNumber };
@@ -1119,14 +1149,6 @@ function validateEffectiveReferenceContracts(context: EffectiveMdReferenceContex
         const target = related(provider, finding.target);
         const coordinate = [target.file, target.line, target.column].filter(part => part !== undefined).join(':');
         report(finding.code, finding.severity, document.file, call, finding.point, `${finding.detail} See ${coordinate}.`, target, String(index));
-      }
-      if (call.role === 'run_actions') {
-        const supplied = new Set(call.arguments.map(argument => argument.name));
-        let suppliedRequired = 0;
-        for (const name of supplied) if (compiled.required.has(name)) suppliedRequired++;
-        if (suppliedRequired < compiled.required.size) {
-          gap(EFFECTIVE_MD_ARGUMENT_CHECK, document.file, `Authored run_actions reference ${call.id} omits required library arguments; required action-argument policy remains a separate check.`);
-        }
       }
     }
   }
@@ -1779,7 +1801,7 @@ AddUITriggeredEvent("forge_qa", "player_orders", build())`;
       && actual[0].code === 'md_lua.payload_writer_unverified' && actual[0].severity === 'info'
       && (name !== 'local_index' || (actual[0].detail.includes('index value') && actual[0].detail.includes('key membership')))
       && actual[0].file === 'md/orders.xml' && actual[0].line === 3 && (actual[0].column ?? 0) > 0
-      && actual[0].target?.file === 'ui/orders.lua' && actual[0].target.line === 4 && actual[0].target.column === 1
+      && actual[0].target === undefined
       && actual[0].sourceRef === 'event_ui_triggered:["forge_qa","player_orders"]'
       && result.summary.payloadContractErrors === 0
       && result.mdLua.payload.reads.length === 1 && result.mdLua.payload.reads[0].key === 'ri'
@@ -1850,7 +1872,7 @@ payload["po" .. ${suffix}] = "order"`;
   const manyFindings = manyResult.findings.filter(finding => finding.code === 'md_lua.payload_writer_unverified');
   ok('indexed_payload_groups_unverified_keys_and_keeps_source_locations', manyFindings.length === 1
     && manyFindings[0].severity === 'info' && manyFindings[0].line === 3 && (manyFindings[0].column ?? 0) > 0
-    && manyFindings[0].target?.file === 'ui/orders.lua' && manyFindings[0].target.line === 3 && manyFindings[0].target.column === 1
+    && manyFindings[0].target === undefined
     && manyFindings[0].detail.includes('Indexed keys (40)') && manyFindings[0].detail.includes('and 32 more')
     && manyResult.mdLua.payload.reads.length === 40 && manyResult.mdLua.payload.writes.length === 40, manyFindings);
 
@@ -1866,7 +1888,7 @@ end`;
   ok('indexed_payload_local_index_groups_keys_and_keeps_source_locations', manyLocalIndexFindings.length === 1
     && manyLocalIndexFindings[0].code === 'md_lua.payload_writer_unverified' && manyLocalIndexFindings[0].severity === 'info'
     && manyLocalIndexFindings[0].file === 'md/orders.xml' && manyLocalIndexFindings[0].line === 3 && (manyLocalIndexFindings[0].column ?? 0) > 0
-    && manyLocalIndexFindings[0].target?.file === 'ui/orders.lua' && manyLocalIndexFindings[0].target.line === 4 && manyLocalIndexFindings[0].target.column === 1
+    && manyLocalIndexFindings[0].target === undefined
     && manyLocalIndexFindings[0].sourceRef === 'event_ui_triggered:["forge_qa","player_orders"]'
     && manyLocalIndexFindings[0].detail.includes('index value') && manyLocalIndexFindings[0].detail.includes('key membership')
     && manyLocalIndexFindings[0].detail.includes('Indexed keys (40)') && manyLocalIndexFindings[0].detail.includes('and 32 more')
@@ -1888,7 +1910,7 @@ AddUITriggeredEvent("forge_qa", "player_orders", build())`;
   ok('indexed_payload_mixed_helper_group_keeps_index_uncertainty', mixedIndexFindings.length === 1
     && mixedIndexFindings[0].code === 'md_lua.payload_writer_unverified' && mixedIndexFindings[0].severity === 'info'
     && mixedIndexFindings[0].sourceRef === 'event_ui_triggered:["forge_qa","player_orders"]'
-    && mixedIndexFindings[0].target?.file === 'ui/orders.lua' && mixedIndexFindings[0].target.line === 4
+    && mixedIndexFindings[0].target === undefined
     && mixedIndexFindings[0].detail.includes('index value') && mixedIndexFindings[0].detail.includes('key membership')
     && mixedIndexFindings[0].detail.includes('Indexed keys (2)')
     && mixedIndexResult.summary.payloadContractErrors === 0 && mixedIndexResult.mdLua.payload.reads.length === 2
@@ -2088,6 +2110,36 @@ AddUITriggeredEvent("forge_qa", "player_orders", build())`;
     && actionFindings[2]?.target?.line === 1 && actionFindings[2]?.target?.column === actionProvider.indexOf('<library') + 1
     && actionResult.summary.errors === 2
     && actionResult.cueIndex.unresolved.map(r => r.ref).join(',') === 'run,Missing', actionResult.findings);
+  const missingActionCode: string = 'md.run_actions_param_required';
+  const requiredActionFindings = actionResult.findings.filter(f => f.code === missingActionCode);
+  ok('run_actions reports required omissions with separate same-line positions',
+    requiredActionFindings.map(f => f.line).join(',') === '7,7,9,10'
+    && requiredActionFindings[0]?.column === actionCalls.indexOf('"Run') + 1
+    && requiredActionFindings[1]?.column === actionCalls.lastIndexOf('"Run') + 1
+    && requiredActionFindings.every(f => f.severity === 'warning' && f.file === actionFile
+      && f.target?.file === actionFile && f.target.line === 2 && f.detail.includes('"required"')),
+    requiredActionFindings);
+  const foreignActionProject = addFile(fixtureProject(), {
+    path: 'md/foreign_action_argument.xml', kind: 'md',
+    content: '<mdscript name="ForeignActionArgument"><cues><library name="Run" purpose="run_actions"><params><param name="Required"/></params></library>'
+      + '<cue name="Caller"><actions><run_actions ref="Run"><x:param xmlns:x="urn:fixture" name="Required" value="1"/></run_actions></actions></cue></cues></mdscript>',
+  });
+  ok('run_actions does not infer required absence from foreign supplied parameters',
+    validateProjectCrossFile(foreignActionProject).findings.every(f => f.code !== missingActionCode));
+  const scopedLibrary = '<library name="Run" purpose="run_actions"><params><param name="Required"/></params></library>';
+  const scopedCall = '<run_actions ref="Run"/>';
+  const wrapForeign = (element: string) => `<foreign xmlns="urn:fixture">${element.replace(' ', ' xmlns="" ')}</foreign>`;
+  for (const [name, library, invocation] of [
+    ['caller', scopedLibrary, wrapForeign(scopedCall)],
+    ['provider', wrapForeign(scopedLibrary), scopedCall],
+  ]) {
+    const actionInForeignContext = addFile(fixtureProject(), {
+      path: 'md/foreign_action_context.xml', kind: 'md',
+      content: `<mdscript name="ForeignActionContext"><cues>${library}<cue name="Caller"><actions>${invocation}</actions></cue></cues></mdscript>`,
+    });
+    const missing = validateProjectCrossFile(actionInForeignContext).findings.filter(f => f.code === missingActionCode);
+    ok(`run_actions does not infer required absence under foreign ${name} ancestry`, missing.length === 0, missing);
+  }
   const ambiguousActions = validateProjectCrossFile(addFile(actionProject, {
     path: 'md/ambiguous_action_provider.xml', kind: 'md',
     content: '<mdscript name="actionprovider"><cues/></mdscript>',

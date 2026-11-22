@@ -450,6 +450,9 @@ async function runCase(spec, caseNumber) {
     const receiptPath = path.join(caseRoot, 'receipt.json');
     const harness = makeCaseHarness(spec, caseNumber, receiptPath);
     const runOptions = typeof spec.runOptions === 'function' ? spec.runOptions(harness) : {};
+    const readReceipt = runOptions.readReceiptImpl ?? (file => fs.readFileSync(file, 'utf8'));
+    let readbackFinished = false;
+    const cacheCalls = [];
 
     const exitCode = await withWatchdog(spec.name, () => runE2e({
       args: RUNNER_ARGS,
@@ -458,8 +461,18 @@ async function runCase(spec, caseNumber) {
       spawnImpl: harness.spawnImpl,
       superviseImpl: harness.superviseImpl,
       ...runOptions,
+      async readReceiptImpl(file) {
+        const result = await readReceipt(file);
+        readbackFinished = true;
+        return result;
+      },
+      cleanSuccessfulRunCache() {
+        cacheCalls.push(readbackFinished);
+        return { files: 0, bytes: 0n };
+      },
     }));
 
+    assert.deepEqual(cacheCalls, exitCode === 0 ? [true] : [], 'cache cleanup follows only a successful receipt readback and verdict');
     assert.equal(harness.state.spawnCalls, 1);
     assert.equal(harness.state.superviseCalls, 1);
     assert.equal(harness.state.probeCalls, 2);

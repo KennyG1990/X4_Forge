@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { ProjectFile } from '../lib/extensionProject';
 import { fnvHash } from '../lib/workspaceIdentity';
+import { MD_INITIAL_STATE_COVERAGE_CHECK } from '../lib/validationEvidence';
 import { indexXmlElementSpans, type XmlElementSourceSpan } from '../lib/xmlSourceSpans';
 import type { DiagnosticSourceNavigation, ModWorkspace } from '../types';
 
@@ -86,25 +87,29 @@ export function bindDiagnosticSourceFiles(
     if (!code || !filePath) return;
     const rawReference = rawReferenceCodes.has(code);
     const orderParameter = orderParameterCodes.has(code);
-    if (!rawReference && !orderParameter) return;
+    const initialState = code === MD_INITIAL_STATE_COVERAGE_CHECK;
+    if (!rawReference && !orderParameter && !initialState) return;
     const file = selected.get(filePath.toLowerCase());
-    if (!sourceFolder || file?.path !== filePath || typeof file.content !== 'string' || !disk.has(filePath)) {
+    if (!sourceFolder || file?.path !== filePath || typeof file.content !== 'string' || !disk.has(filePath)
+      || (initialState && file.kind !== 'md')) {
       return { status: 'unavailable', reason: 'materialized-source' };
     }
     if (file.content !== disk.get(filePath)?.content) {
       return { status: 'unavailable', reason: 'source-mismatch' };
     }
     const content = file.content;
-    // The raw scanner includes the BOM in its first line. xmldom removes it
-    // and normalizes additional XML line separators beyond the editor's CR/LF.
+    // Raw references and initial-state evidence count the leading BOM; the
+    // editor does not. DOM coordinates also require the editor's line endings.
     const authoredLine = line ?? 0;
-    const authoredColumn = (column ?? 0) - Number(rawReference && authoredLine === 1 && content.startsWith('\uFEFF'));
-    if (orderParameter && !standardXmlLines.has(filePath)) {
+    const includesBom = rawReference || initialState;
+    const authoredColumn = (column ?? 0) - Number(includesBom && authoredLine === 1 && content.startsWith('\uFEFF'));
+    const domPosition = orderParameter || initialState;
+    if (domPosition && !standardXmlLines.has(filePath)) {
       standardXmlLines.set(filePath, !/[\u0085\u2028\u2029]/.test(content));
     }
     if (!Number.isSafeInteger(authoredLine) || authoredLine < 1
         || !Number.isSafeInteger(authoredColumn) || authoredColumn < 1
-        || (orderParameter && standardXmlLines.get(filePath) === false)) {
+        || (domPosition && standardXmlLines.get(filePath) === false)) {
       return { status: 'unavailable', reason: 'position-unavailable' };
     }
     let sha256 = hashes.get(filePath);

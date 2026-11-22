@@ -30,6 +30,8 @@ test.beforeEach(async () => {
 test('Nexus and Steam are separate guided flows with explicit workspace and stage truth', async ({ page }) => {
   let nexusBody: Record<string, unknown> | null = null;
   let steamBody: Record<string, unknown> | null = null;
+  let steamPrepareCount = 0;
+  const steamVerifyBodies: Array<Record<string, unknown>> = [];
   await page.route('**/api/agent/release/nexus/prepare', async route => {
     nexusBody = route.request().postDataJSON() as Record<string, unknown>;
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
@@ -42,6 +44,7 @@ test('Nexus and Steam are separate guided flows with explicit workspace and stag
     }) });
   });
   await page.route('**/api/agent/release/steam/prepare', async route => {
+    steamPrepareCount++;
     steamBody = route.request().postDataJSON() as Record<string, unknown>;
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({
       success: true, status: 'PARTIAL', platform: 'steam', readyForUpload: false, modId: 'welcome_message', version: '101',
@@ -58,10 +61,21 @@ test('Nexus and Steam are separate guided flows with explicit workspace and stag
       ], failedStages: ['tool'],
     }) });
   });
-  await page.route('**/api/agent/release/steam/verify', route => route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({
-    success: false, status: 'FAILED', platform: 'steam', code: 'STEAM_WORKSHOP_ID_MISSING', error: 'WorkshopTool did not write a ws_<numeric> id.',
-    stages: [{ id: 'post-tool', label: 'Verify Workshop result', status: 'fail', detail: 'No Workshop id found.' }], failedStages: ['post-tool'],
-  }) }));
+  await page.route('**/api/agent/release/steam/verify', route => {
+    steamVerifyBodies.push(route.request().postDataJSON() as Record<string, unknown>);
+    if (steamVerifyBodies.length === 1) {
+      return route.fulfill({ status: 409, json: {
+        success: false, status: 'FAILED', code: 'STEAM_WORKSHOP_ID_MISSING', error: 'WorkshopTool did not write a ws_<numeric> id.',
+        stages: [{ id: 'post-tool', label: 'Verify Workshop result', status: 'fail', detail: 'No Workshop id found.' }], failedStages: ['post-tool'],
+      } });
+    }
+    return route.fulfill({ status: 200, json: {
+      success: true, status: 'VERIFIED_AFTER_WORKSHOP_TOOL', platform: 'steam', modId: 'welcome_message',
+      targetPath: 'C:/fixture/releases/steam/welcome_message', workshopId: 'ws_123456789',
+      sourceManifestAdoptionRequired: true, sourceManifestAdoptionAvailable: true,
+      stages: [{ id: 'post-tool', label: 'Verify Workshop result', status: 'pass', detail: 'Workshop ID verified.' }], failedStages: [],
+    } });
+  });
 
   await openReleaseCenter(page);
   await expect(page.getByTestId('package-nexus-btn')).toBeVisible();
@@ -96,6 +110,15 @@ test('Nexus and Steam are separate guided flows with explicit workspace and stag
   await page.getByTestId('verify-steam-result').click();
   await expect(page.getByTestId('release-result')).toContainText('STEAM_WORKSHOP_ID_MISSING');
   await expect(page.getByTestId('release-result')).toContainText('No Workshop id found.');
+  await expect(page.getByTestId('verify-steam-result')).toBeEnabled();
+  await expect(page.getByTestId('preview-steam-adoption')).toHaveCount(0);
+  await expect(page.getByTestId('confirm-steam-adoption')).toHaveCount(0);
+  await expect(page.getByTestId('open-steam-terminal')).toHaveCount(0);
+  await page.getByTestId('verify-steam-result').click();
+  await expect(page.getByTestId('release-result')).toContainText('VERIFIED_AFTER_WORKSHOP_TOOL');
+  await expect(page.getByTestId('preview-steam-adoption')).toBeVisible();
+  expect(steamVerifyBodies).toEqual([{ modId: 'welcome_message' }, { modId: 'welcome_message' }]);
+  expect(steamPrepareCount).toBe(1);
 });
 
 test('Express mode collapses successful explanations but keeps failures and required actions visible', async ({ page }) => {

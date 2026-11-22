@@ -1,6 +1,7 @@
 /** Cursor-aware X4 language intelligence over the canonical reference corpus and XSD graph. */
 
 import path from 'path';
+import { parseEditorOrderFiles, type EditorOrderFile } from '../../shared/referenceEditorOrders';
 import { discoverSchemaRegistry, getDomainIndex, schemaFilesSignature, type SchemaRegistry } from './schemaRegistry';
 import {
   buildScriptPropertyIndexFromModel,
@@ -12,8 +13,8 @@ import {
 } from './scriptProperties';
 import { resolveExpressionState, suggestExpression, type ExpressionSuggestOptions } from './expressionSuggest';
 import { buildProjectSymbols } from './projectSymbols';
-import type { CanonicalSymbol, ReferenceCorpus, ScriptPropertyReference } from './referenceCorpus';
-import type { ModWorkspace } from '../types';
+import { readAIScriptOrderId, type CanonicalSymbol, type ReferenceCorpus, type ScriptPropertyReference } from './referenceCorpus';
+import type { ModWorkspace, PassthroughFile } from '../types';
 import { fallbackLibrarySchemaDomain, resolveReferenceBinding } from './referenceBindings';
 import { projectReferenceSymbols, suggestReferences } from './referenceSuggestions';
 import { contentParticleState, type AttrSpec, type ElementSpec, type SchemaIndex } from './xsdValidate';
@@ -43,6 +44,7 @@ export interface ReferenceLanguageRequest {
   content: string;
   line: number;
   column: number;
+  editorOrderFiles?: readonly EditorOrderFile[];
 }
 
 export interface ReferenceLanguageResources {
@@ -52,6 +54,7 @@ export interface ReferenceLanguageResources {
   domain: string;
   scriptProperties: ScriptPropertyIndex;
   projectSymbols?: CanonicalSymbol[];
+  projectOrderSources?: readonly PassthroughFile[];
 }
 
 interface CursorContext {
@@ -251,6 +254,7 @@ export function getReferenceLanguageResources(corpus: ReferenceCorpus, request: 
     domain,
     scriptProperties: scriptIndexFor(corpus),
     projectSymbols: projectReferenceSymbols(workspace),
+    projectOrderSources: workspace?.passthroughFiles,
   };
 }
 
@@ -302,28 +306,80 @@ function aiScriptCallName(domain: string, tag: string): boolean {
     || domain === 'aiscripts' && (tag === 'run_script' || tag === 'run_interrupt_script');
 }
 
-function aiScriptLiteralValue(text: string): string | null {
+
+function literalName(text: string, grammar: RegExp): string | null {
   if (/[\s<>]/.test(text)) return null;
   const name = text.replace(/&apos;|&#0*39;|&#x0*27;/g, "'").replace(/^'/, '').replace(/'$/, '');
-  return name === '' || AI_SCRIPT_NAME.test(name) ? name : null;
+  return name === '' || grammar.test(name) ? name : null;
 }
 
-function aiScriptNameItems(
-  content: string, context: CursorContext, resources: ReferenceLanguageResources,
-): ReferenceCompletionItem[] | null {
+function quotedNameItems(
+  content: string, context: CursorContext, grammar: RegExp, lookup: (prefix: string) => ReferenceCompletionItem[],
+): ReferenceCompletionItem[] {
   const { offset, attrValuePrefix, attrValueQuote } = context;
-  if (!attrValueQuote) return null;
+  if (!attrValueQuote) return [];
   const start = offset - attrValuePrefix.length;
   let end = offset;
   while (end < content.length && content[end] !== attrValueQuote && !/[\r\n<>]/.test(content[end])) end++;
-  if (end < content.length && content[end] !== attrValueQuote) return null;
-  const prefix = aiScriptLiteralValue(attrValuePrefix);
-  if (prefix === null || aiScriptLiteralValue(content.slice(start, end)) === null) return null;
+  if (end < content.length && content[end] !== attrValueQuote) return [];
+  const prefix = literalName(attrValuePrefix, grammar);
+  if (prefix === null || literalName(content.slice(start, end), grammar) === null) return [];
   const quote = attrValueQuote === '"' ? "'" : '&apos;';
   const query = prefix.toLowerCase();
-  return referenceItems('aiscript', resources.corpus, undefined, prefix, resources.projectSymbols)
-    .filter(item => AI_SCRIPT_NAME.test(item.insertText) && item.insertText.toLowerCase().startsWith(query))
+  return lookup(prefix)
+    .filter(item => grammar.test(item.insertText) && item.insertText.toLowerCase().startsWith(query))
     .map(item => ({ ...item, insertText: quote + item.insertText + quote, replaceRange: { start, end } }));
+}
+
+const AI_ORDER_ID = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const loadedOrderHeaders = new WeakMap<PassthroughFile, { content: string; id: string | null }>();
+
+function aiOrderSourcePath(path: string): string | null {
+  const normalized = path.replace(/\\/g, '/');
+  return /^aiscripts\/.+\.xml$/i.test(normalized) && normalized.split('/').every(part => part && part !== '.' && part !== '..')
+    ? normalized : null;
+}
+
+function orderIdItems(
+  prefix: string, request: ReferenceLanguageRequest, resources: ReferenceLanguageResources,
+): ReferenceCompletionItem[] {
+  const query = prefix.toLowerCase();
+  const definitions = new Map<string, Set<string>>();
+  const include = (id: string | null | undefined, source: string, path: string) => {
+    if (!id || !AI_ORDER_ID.test(id) || !id.toLowerCase().startsWith(query)) return;
+    const locations = definitions.get(id) ?? new Set<string>();
+    locations.add(`${source} · ${path}`);
+    definitions.set(id, locations);
+  };
+  for (const script of resources.corpus.aiScripts) include(script.order?.id, script.source, script.path);
+
+  const activePath = resources.domain === 'aiscripts' ? aiOrderSourcePath(request.path) : null;
+  const activeKey = activePath?.toLowerCase();
+  const editorFiles = request.editorOrderFiles ?? [];
+  const editorPaths = new Set(editorFiles.map(file => file.path.toLowerCase()));
+  for (const file of resources.projectOrderSources || []) {
+    const path = aiOrderSourcePath(file.path);
+    if (!path || path.toLowerCase() === activeKey || editorPaths.has(path.toLowerCase())
+      || file.omitted || file.contentEncoding === 'base64' || file.reason === 'binary' || typeof file.content !== 'string') continue;
+    let header = loadedOrderHeaders.get(file);
+    if (header?.content !== file.content) {
+      header = { content: file.content, id: readAIScriptOrderId(file.content) };
+      loadedOrderHeaders.set(file, header);
+    }
+    include(header.id, 'project', path);
+  }
+  for (const file of editorFiles) {
+    if (file.path.toLowerCase() !== activeKey) include(readAIScriptOrderId(file.content), 'editor', file.path);
+  }
+  if (activePath && /<order\b/.test(request.content)) include(readAIScriptOrderId(request.content), 'editor', activePath);
+
+  return [...definitions].sort(([left], [right]) => left.localeCompare(right)).slice(0, 100)
+    .map(([id, locations], index) => ({
+      label: id, insertText: id, kind: 'Reference',
+      detail: locations.size === 1 ? `Order ID · ${[...locations][0]}` : 'Order ID · multiple declarations',
+      documentation: locations.size > 1 ? [...locations].sort().join('\n') : undefined,
+      sortText: String(index).padStart(5, '0'),
+    }));
 }
 
 export function completeReferenceDocument(request: ReferenceLanguageRequest, resources: ReferenceLanguageResources): ReferenceCompletionItem[] {
@@ -333,9 +389,18 @@ export function completeReferenceDocument(request: ReferenceLanguageRequest, res
   if (context.inTag && context.inAttrValue) {
     const element = schema?.elements.get(context.inTag);
     const attr = element?.attributes.get(context.inAttrValue);
-    if (context.inAttrValue === 'name' && attr?.type === 'expression' && aiScriptCallName(resources.domain, context.inTag)) {
-      const names = aiScriptNameItems(request.content, context, resources);
-      if (names?.length) return names;
+
+    if (attr?.type === 'expression') {
+      if (context.inAttrValue === 'name' && aiScriptCallName(resources.domain, context.inTag)) {
+        const names = quotedNameItems(request.content, context, AI_SCRIPT_NAME,
+          prefix => referenceItems('aiscript', resources.corpus, undefined, prefix, resources.projectSymbols));
+        if (names.length) return names;
+      }
+      if (context.inTag === 'create_order' && context.inAttrValue === 'id'
+        && (resources.domain === 'md' || resources.domain === 'aiscripts')) {
+        const orders = quotedNameItems(request.content, context, AI_ORDER_ID, prefix => orderIdItems(prefix, request, resources));
+        if (orders.length) return orders;
+      }
     }
     if (expressionAttribute(context.inAttrValue, attr)) {
       const variableTypes = buildProjectSymbols([{ path: request.path, content: request.content }], resources.scriptProperties).variableTypesFor(request.path);
@@ -508,6 +573,7 @@ export function runReferenceLanguageSelftest() {
       ['conditions', element([])], ['actions', element([])], ['cues', element([])],
       ['event_owner', element([['owner', attr('faction')]])],
       ['set_value', element([['exact', attr('expression')]])],
+      ['create_order', element([['id', attr('expression', true)]])],
       ...['start_script', 'run_script', 'run_interrupt_script'].map(name =>
         [name, element([['name', attr('expression', true)]])] as [string, ElementSpec]),
     ]),
@@ -579,6 +645,74 @@ export function runReferenceLanguageSelftest() {
   ok('missing schema and unsupported domain cannot grant a call-name replacement',
     aiNames('<run_script name="order.pa|"/>', { ...aiResources, schema: null }).length === 0
       && aiNames('<run_script name="order.pa|"/>', { ...aiResources, domain: 'md' }).length === 0);
+
+  const orderResources: ReferenceLanguageResources = {
+    ...aiResources,
+    corpus: { ...corpus, aiScripts: [
+      { id: 'order.fight.attack', name: 'Fight Attack', path: 'aiscripts/order.fight.attack.xml', source: 'base',
+        order: { id: 'Attack', category: 'combat', infinite: false, params: [] } },
+      { id: 'order.experimental', name: 'Experiment', path: 'extensions/ego_dlc_test/aiscripts/order.experimental.xml',
+        source: 'ego_dlc_test', order: { id: 'Attack', category: null, infinite: false, params: [] } },
+      { id: 'order.other', name: 'Other', path: 'aiscripts/order.other.xml', source: 'base', order: null },
+    ] },
+    projectOrderSources: [
+      { path: 'aiscripts/project-with-orders.xml', content: '<aiscript name="Project"><order id="_ProjectOrder"/></aiscript>' },
+      { path: 'aiscripts/old.xml', content: '<aiscript name="Old"><order id="OldIgnored"/></aiscript>', omitted: true },
+      { path: 'aiscripts/binary.xml', content: '<aiscript name="Binary"><order id="BinaryIgnored"/></aiscript>', contentEncoding: 'base64' },
+    ],
+  };
+  ok('order completion preserves the existing quote and range contract',
+    edited('<create_order id="\'At|tackOld\'" object="this.ship"/>', 'Attack', orderResources)
+      === '<create_order id="\'Attack\'" object="this.ship"/>');
+  ok('addressed project orders use their authored case and idname grammar',
+    edited("<create_order id='&apos;_project|&apos;'/>", '_ProjectOrder', { ...orderResources, domain: 'md' })
+      === "<create_order id='&apos;_ProjectOrder&apos;'/>");
+  const orderItems = aiNames('<create_order id="Att|"/>', orderResources);
+  ok('one order literal may report multiple declarations without pretending one resolved',
+    orderItems.length === 1 && orderItems[0].label === 'Attack'
+      && orderItems[0].detail?.includes('multiple declarations') === true
+      && orderItems[0].documentation?.includes('ego_dlc_test') === true);
+  const allOrderItems = aiNames('<create_order id="|"/>', orderResources);
+  ok('script names, missing, omitted and binary headers never become order IDs',
+    allOrderItems.every(item => ['Attack', '_ProjectOrder'].includes(item.label)));
+  ok('order completion does not treat dotted properties or absent schema as an order role',
+    aiNames('<create_order id="Attack.suffix|"/>', orderResources).length === 0
+      && aiNames('<create_order id="Att|"/>', { ...orderResources, schema: null }).length === 0);
+  const projectHeader = orderResources.projectOrderSources![0];
+  projectHeader.content = '<aiscript name="Project"><order id="RevisedOrder"/></aiscript>';
+  ok('a changed project header cannot reuse a cached order ID',
+    aiNames('<create_order id="_Project|"/>', orderResources).length === 0
+      && aiNames('<create_order id="Revised|"/>', orderResources).some(item => item.label === 'RevisedOrder'));
+  const orderCaller = cursor('<create_order id="|"/>');
+  const completeWithEditors = (editorOrderFiles?: EditorOrderFile[]) => completeReferenceDocument({
+    path: 'aiscripts/x.xml', ...orderCaller, editorOrderFiles,
+  }, orderResources).filter(item => item.replaceRange !== undefined);
+  const sibling = {
+    path: 'aiscripts/project-with-orders.xml',
+    content: '<aiscript name="Project"><order id="EditorOrder"/></aiscript>',
+  };
+  const overlay = completeWithEditors([sibling]);
+  ok('a sibling editor order replaces its saved header',
+    overlay.some(item => item.label === 'EditorOrder' && item.insertText === "'EditorOrder'" && item.detail?.startsWith('Order ID · editor'))
+      && !overlay.some(item => item.label === 'RevisedOrder')
+      && overlay.some(item => item.label === 'Attack'));
+  ok('closing the sibling restores saved ordering evidence',
+    completeWithEditors().some(item => item.label === 'RevisedOrder')
+      && !completeWithEditors().some(item => item.label === 'EditorOrder'));
+  ok('an invalid or removed editor header does not resurrect its old order',
+    ['', '<diff/>'].every(content => !completeWithEditors([{ ...sibling, content }]).some(item => item.label === 'RevisedOrder')));
+  const activeCaller = cursor('<aiscript name="Act"><order id="ActiveOrder"/><create_order id="|"/></aiscript>');
+  const active = completeReferenceDocument({
+    path: 'aiscripts/x.xml', ...activeCaller, editorOrderFiles: [{ ...sibling, path: 'aiscripts/x.xml' }],
+  }, orderResources);
+  ok('active text takes precedence over a sibling payload for the same path',
+    active.some(item => item.label === 'ActiveOrder') && !active.some(item => item.label === 'EditorOrder'));
+  ok('editor overlay admits direct AI paths with bounded unique text',
+    parseEditorOrderFiles([{ ...sibling, path: 'aiscripts\\order.xml' }])?.[0].path === 'aiscripts/order.xml'
+      && parseEditorOrderFiles([{ ...sibling }, { ...sibling, path: sibling.path.toUpperCase() }]) === undefined
+      && parseEditorOrderFiles([{ ...sibling, path: 'aiscripts/../outside.xml' }]) === undefined
+      && parseEditorOrderFiles([{ ...sibling, path: 'md/order.xml' }]) === undefined
+      && parseEditorOrderFiles([{ ...sibling, content: 'é'.repeat(2 * 1024 * 1024 + 1) }]) === undefined);
   const owner = cursor('<event_owner owner="|"/>');
   ok('reference typed attribute completion', completeReferenceDocument({ path: 'md/x.xml', ...owner }, resources).length === 3);
   ok('declared schema wins', declaredSchemaDomain('<x xmlns:xsi="x" xsi:noNamespaceSchemaLocation="../md.xsd"/>') === 'md');

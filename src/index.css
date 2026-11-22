@@ -9,6 +9,10 @@ body,
   overflow: hidden;
 }
 
+@utility studio-actions-popover {
+  @apply absolute right-0 top-9 z-[10000] max-h-[calc(100dvh-3rem)] w-64 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-lg border border-cyan-500/25 bg-[#0b0e14]/98 p-1.5 shadow-2xl;
+}
+
 .studio-menu-item {
   width: 100%;
   min-height: 32px;
@@ -25,7 +29,9 @@ body,
   cursor: pointer;
 }
 
-.studio-menu-item:hover {
+.studio-menu-item:hover,
+.studio-menu-item:focus-visible,
+.studio-menu-item[aria-pressed='true'] {
   background: rgba(255, 255, 255, 0.06);
   color: white;
 }

@@ -3,6 +3,18 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
+## 0.0.90 — 2026-11-22
+
+- Review which files a deploy will add, replace, remove or preserve. Reopen the receipt after a dropped reply and check whether the managed files still match.
+- Project validation now checks ship asset, map and index XML. Diagnostics points to the line and column of Mission Director reads that need review when those locations can be established.
+- Find authored Mission Director and AI script symbols across your workspace. Open supported game and DLC declarations read-only with their source identified.
+- In Expert mode, open Project Files from Studio actions in a narrow window. Canvas shows separate counts for modeled Mission Director files and the source files Forge found.
+- Keep attributed UI and Lua faults visible as the recent log rolls over. Supported unsigned-file notices appear as information, while real errors quoting those notices remain errors.
+- On Windows, Forge reports when its local backend exits during startup. After an unexpected exit, it can reopen the selected workspace when the replacement backend is ready.
+- Deploy review groups unavailable validation checks by file. Lua event diagnostics point to a writer for the same event when Forge can establish the connection.
+- See undeclared and missing required arguments in supported Mission Director run_actions and literal AI script calls. Forge checks script properties with fewer repeated lookups.
+- After Workshop Tool writes the item ID, retry Steam Workshop verification from the same release.
+
 ## 0.0.89 — 2026-11-19
 
 - Complete an AI-script name inside an X4 call with the right quotes. Forge replaces the whole value, preserves neighboring XML, and discards suggestions after the buffer changes.

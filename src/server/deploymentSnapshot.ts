@@ -2,9 +2,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { artifactPlanIdentity, materializeArtifact, verifyMaterializedArtifact, type ArtifactPlan } from '../lib/artifactPipeline';
+import { artifactPlanIdentity, materializeArtifact, readVerifiedArtifactFile, verifyMaterializedArtifact, type ArtifactEntry, type ArtifactPlan } from '../lib/artifactPipeline';
 import { classifyPath, type ProjectFile } from '../lib/extensionProject';
-import { PROJECT_RULES_MAX_BYTES } from '../lib/projectRules';
+import { PROJECT_RULES_MAX_BYTES, PROJECT_RULES_PATH } from '../lib/projectRules';
+import { decodeValidationSourceText, VALIDATION_TEXT_ENCODING_UNAVAILABLE } from '../lib/validationEvidence';
 import { decodeProjectCheckManifest, PROJECT_CHECKS_MAX_BYTES, PROJECT_CHECKS_PATH } from './projectCheckProposal';
 import { createOwnedProjectCheckStage, type ProjectCheckStageContext } from './projectCheckStaging';
 import { canonicalSourceKey } from './resourceCoordinator';
@@ -13,30 +14,73 @@ const MAX_TEXT_BYTES = 4 * 1024 * 1024;
 const MAX_TEXT_FILES = 500;
 const MAX_TOTAL_TEXT_BYTES = 64 * 1024 * 1024;
 
+function scratchCapacityCode(error: unknown, parent: string) {
+  if (!(error instanceof Error)) return undefined;
+  const failure = error as NodeJS.ErrnoException & { dest?: string };
+  if (failure.code !== 'ENOSPC' && failure.code !== 'EDQUOT') return undefined;
+  const writePath = failure.dest ?? failure.path;
+  if (typeof writePath === 'string') {
+    const within = path.relative(parent, writePath);
+    if (within === '..' || within.startsWith(`..${path.sep}`) || path.isAbsolute(within)) return undefined;
+  }
+  return failure.code;
+}
+
+export class DeploymentSnapshotStorageError extends Error {
+  readonly code = 'DEPLOY_SNAPSHOT_NO_SPACE';
+  readonly storage: {
+    errno: 'ENOSPC' | 'EDQUOT'; directory: string; volume?: string; payloadBytes: number;
+    availableBytes?: number; cleanupIncomplete?: true;
+  };
+
+  constructor(cause: unknown, errno: 'ENOSPC' | 'EDQUOT', directory: string, payloadBytes: number, cleanupIncomplete: boolean) {
+    const volume = process.platform === 'win32' ? path.parse(directory).root : undefined;
+    const state = errno === 'EDQUOT' ? 'has exhausted its storage quota' : 'is out of space';
+    const temporaryVariables = process.platform === 'win32' ? 'TEMP/TMP' : 'TMPDIR';
+    const retry = `Free space in Forge’s temporary directory or restart Forge with ${temporaryVariables} on a writable volume, then retry.`;
+    super(`Forge’s snapshot storage at ${volume ?? directory} ${state}. ${retry}`
+      + (cleanupIncomplete ? ' Forge could not verify cleanup of its temporary snapshot.' : ''), { cause });
+    let availableBytes: number | undefined;
+    try {
+      const capacity = fs.statfsSync(directory, { bigint: true });
+      const available = Number(capacity.bavail * capacity.bsize);
+      if (Number.isSafeInteger(available) && available >= 0) availableBytes = available;
+    } catch { /* A failed sample cannot hide the operating system error. */ }
+    this.storage = { errno, directory, payloadBytes, ...(volume ? { volume } : {}),
+      ...(availableBytes !== undefined ? { availableBytes } : {}), ...(cleanupIncomplete ? { cleanupIncomplete: true } : {}) };
+  }
+}
+
 export function captureDeploymentSnapshot(plan: ArtifactPlan, format: 'loose' | 'catalog', context?: ProjectCheckStageContext) {
   if (context && plan.sourceRoot && canonicalSourceKey(plan.sourceRoot) !== context.sourceKey) throw new Error('Owned snapshot does not match the claimed source.');
-  const stage = context && createOwnedProjectCheckStage(context, fs.realpathSync.native(os.tmpdir()), 'snapshot',
-    plan.entries.map(entry => ({ path: `payload/${entry.path}`, size: entry.size, sha256: entry.sha256 })));
-  const root = stage?.root ?? fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'x4forge-deploy-snapshot-'));
-  const payload = path.join(root, 'payload');
-  const rootStamp = fs.lstatSync(root, { bigint: true });
-  let disposed = false;
-  const assertOwnedDirectory = (directory: string, expected: fs.BigIntStats) => {
-    const current = fs.lstatSync(directory, { bigint: true, throwIfNoEntry: false });
-    if (!current?.isDirectory() || current.dev !== expected.dev || current.ino !== expected.ino
-      || fs.realpathSync.native(directory) !== directory) {
-      throw Object.assign(new Error('Deployment snapshot directory changed.'), { code: 'DEPLOY_SNAPSHOT_CHANGED' });
-    }
-  };
-  const dispose = () => {
-    if (disposed) return;
-    if (stage) { stage.dispose(); disposed = true; return; }
-    assertOwnedDirectory(root, rootStamp);
-    fs.rmSync(root, { recursive: true, force: true });
-    disposed = true;
-  };
+  const parent = fs.realpathSync.native(os.tmpdir());
+  let cleanup: (() => void) | undefined;
   try {
-    const built = materializeArtifact(plan, payload, 'per-file', stage?.assertOwned);
+    const stage = context && createOwnedProjectCheckStage(context, parent, 'snapshot',
+      plan.entries.map(entry => ({ path: `payload/${entry.path}`, size: entry.size, sha256: entry.sha256 })));
+    cleanup = stage?.dispose;
+    const root = stage?.root ?? fs.mkdtempSync(path.join(parent, 'x4forge-deploy-snapshot-'));
+    const payload = path.join(root, 'payload');
+    const rootStamp = fs.lstatSync(root, { bigint: true });
+    let disposed = false;
+    const assertOwnedDirectory = (directory: string, expected: fs.BigIntStats) => {
+      const current = fs.lstatSync(directory, { bigint: true, throwIfNoEntry: false });
+      if (!current?.isDirectory() || current.dev !== expected.dev || current.ino !== expected.ino
+        || fs.realpathSync.native(directory) !== directory) {
+        throw Object.assign(new Error('Deployment snapshot directory changed.'), { code: 'DEPLOY_SNAPSHOT_CHANGED' });
+      }
+    };
+    const dispose = () => {
+      if (disposed) return;
+      if (stage) { stage.dispose(); disposed = true; return; }
+      assertOwnedDirectory(root, rootStamp);
+      fs.rmSync(root, { recursive: true, force: true });
+      disposed = true;
+    };
+    cleanup = dispose;
+    const built = materializeArtifact(plan, payload, 'per-file', stage?.assertOwned, failure => {
+      if (scratchCapacityCode(failure, parent)) throw failure;
+    });
     if (!built.ok) throw Object.assign(new Error(`Deployment snapshot refused: ${built.errors.join('; ')}`), {
       code: built.errors.some(message => /changed|hash|mismatch/i.test(message)) ? 'DEPLOY_SOURCE_CHANGED' : 'DEPLOY_SNAPSHOT_FAILED',
     });
@@ -71,38 +115,53 @@ export function captureDeploymentSnapshot(plan: ArtifactPlan, format: 'loose' | 
     const files: ProjectFile[] = [];
     const skipped: Array<{ path: string; reason: string }> = [];
     let textBytes = 0;
-    const manifestFiles = plan.entries.map(entry => {
+    const readSnapshotEntry = (entry: ArtifactEntry, maxBytes: number) => {
+      try {
+        return readVerifiedArtifactFile(path.join(payload, ...entry.path.split('/')), entry, maxBytes);
+      } catch (cause) {
+        if (scratchCapacityCode(cause, parent)) throw cause;
+        throw Object.assign(new Error(`Deployment snapshot changed: could not verify ${entry.path}.`, { cause }), {
+          code: 'DEPLOY_SNAPSHOT_CHANGED',
+        });
+      }
+    };
+    const manifestFiles = frozenPlan.entries.map(entry => {
       const item = { path: entry.path, size: entry.size, sha256: entry.sha256, validation: 'bytes-only' as 'text' | 'bytes-only' | 'unavailable' };
       if (entry.path.toLowerCase() === PROJECT_CHECKS_PATH) {
         const content = entry.size <= PROJECT_CHECKS_MAX_BYTES
-          ? decodeProjectCheckManifest(fs.readFileSync(path.join(payload, entry.path))) : undefined;
+          ? decodeProjectCheckManifest(readSnapshotEntry(entry, PROJECT_CHECKS_MAX_BYTES)) : undefined;
         files.push({ path: entry.path, kind: 'other', content });
         item.validation = content === undefined ? 'unavailable' : 'text';
         return item;
       }
-      if (entry.path.toLowerCase() === 'forge.rules.json' && entry.size > PROJECT_RULES_MAX_BYTES) {
+      const isRules = entry.path.toLowerCase() === PROJECT_RULES_PATH;
+      if (isRules && entry.size > PROJECT_RULES_MAX_BYTES) {
         throw Object.assign(new Error(`forge.rules.json exceeds ${PROJECT_RULES_MAX_BYTES} bytes; invalid validation rules cannot be deployed.`), { code: 'DEPLOY_INPUT_INVALID' });
       }
-      if (!/\.(xml|lua)$/i.test(entry.path) && entry.path.toLowerCase() !== 'forge.rules.json') return item;
+      if (!/\.(xml|lua)$/i.test(entry.path) && !isRules) return item;
       let reason = '';
       if (entry.size > MAX_TEXT_BYTES) reason = `Semantic validation limit: file exceeds ${MAX_TEXT_BYTES} bytes.`;
       else if (files.length >= MAX_TEXT_FILES) reason = `Semantic validation limit: ${MAX_TEXT_FILES} text files.`;
       else if (textBytes + entry.size > MAX_TOTAL_TEXT_BYTES) reason = `Semantic validation limit: ${MAX_TOTAL_TEXT_BYTES} total text bytes.`;
       else {
-        const bytes = fs.readFileSync(path.join(payload, ...entry.path.split('/')));
-        const content = bytes.toString('utf8');
-        if (!Buffer.from(content, 'utf8').equals(bytes)) reason = 'Text encoding is not losslessly decodable as UTF-8; semantic validation unavailable.';
+        const bytes = readSnapshotEntry(entry, isRules ? PROJECT_RULES_MAX_BYTES : MAX_TEXT_BYTES);
+        const content = decodeValidationSourceText(bytes);
+        if (content === undefined) reason = VALIDATION_TEXT_ENCODING_UNAVAILABLE;
         else {
           files.push({ path: entry.path, kind: classifyPath(entry.path), content });
           textBytes += bytes.length;
           item.validation = 'text';
         }
       }
-      if (reason) { skipped.push({ path: entry.path, reason }); item.validation = 'unavailable'; }
+      if (reason) {
+        if (isRules) throw Object.assign(new Error(`${PROJECT_RULES_PATH} could not be validated. ${reason}`), { code: 'DEPLOY_INPUT_INVALID' });
+        skipped.push({ path: entry.path, reason });
+        item.validation = 'unavailable';
+      }
       return item;
     });
     assertIntegrity();
-    const manifest = Object.freeze({ version: 1, scope: 'logical-artifact-bytes', hash: artifactPlanIdentity(plan, format),
+    const manifest = Object.freeze({ version: 1, scope: 'logical-artifact-bytes', hash: artifactPlanIdentity(frozenPlan, format),
       format, files: Object.freeze(manifestFiles.map(entry => Object.freeze(entry))) });
     const assertProjectCheckStageContext = (expected: ProjectCheckStageContext) => {
       if (!stage || !context || context !== expected) throw new Error('Deployment snapshot does not belong to this owned check context.');
@@ -110,7 +169,14 @@ export function captureDeploymentSnapshot(plan: ArtifactPlan, format: 'loose' | 
     };
     return Object.freeze({ plan: frozenPlan, payloadRoot: payload, files, skipped, assertIntegrity, dispose, manifest, assertProjectCheckStageContext });
   } catch (error) {
-    dispose();
+    const aggregated = error instanceof AggregateError;
+    const errno = scratchCapacityCode(aggregated ? error.errors[0] : error, parent);
+    try { cleanup?.(); }
+    catch (cleanupError) {
+      if (!errno) throw cleanupError;
+      throw new DeploymentSnapshotStorageError(new AggregateError([error, cleanupError]), errno, parent, plan.totals.includedBytes, true);
+    }
+    if (errno) throw new DeploymentSnapshotStorageError(error, errno, parent, plan.totals.includedBytes, aggregated);
     throw error;
   }
 }

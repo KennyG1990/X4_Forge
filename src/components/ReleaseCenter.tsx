@@ -240,7 +240,13 @@ export default function ReleaseCenter({ workspace, preferences }: ReleaseCenterP
     setAdoption(null);
     try {
       const response = await fetch('/api/agent/release/steam/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modId: result.modId }) });
-      setResult(await responseJson(response));
+      const verified = await responseJson(response);
+      if (response.status === 409 && verified.code === 'STEAM_WORKSHOP_ID_MISSING') {
+        // The tool can still finish against this stage after the first verification attempt.
+        setResult({ ...verified, platform: 'steam', modId: result.modId, targetPath: result.targetPath });
+      } else {
+        setResult(verified);
+      }
     } catch (error) {
       setResult(previous => ({
         success: false, status: 'FAILED', platform: 'steam', modId: previous?.modId,
@@ -325,7 +331,7 @@ export default function ReleaseCenter({ workspace, preferences }: ReleaseCenterP
           </div>}
           <button type="button" data-testid={`prepare-${platform}-btn`} disabled={Boolean(busy)} onClick={() => void prepare(platform)} className={`w-full px-3 py-1.5 rounded text-[10px] font-bold text-black disabled:opacity-40 ${platform === 'nexus' ? 'bg-violet-400' : 'bg-sky-400'}`}>{busy === `prepare-${platform}` ? 'Running verified stages…' : platform === 'nexus' ? 'Build and verify Nexus ZIP' : 'Build and verify Steam staging'}</button>
           {result && <div data-testid="release-result" className={`rounded border p-2 space-y-1 ${result.status === 'PARTIAL' ? 'border-amber-500/40' : result.success ? 'border-emerald-500/30' : 'border-red-500/40'}`}>
-            <div className={`text-[10px] font-bold ${result.status === 'PARTIAL' ? 'text-amber-300' : result.success ? 'text-emerald-300' : 'text-red-300'}`}>{result.status || (result.success ? 'READY' : 'FAILED')}{result.code ? ` · ${result.code}` : ''}</div>
+            <div className={`break-words text-[10px] font-bold ${result.status === 'PARTIAL' ? 'text-amber-300' : result.success ? 'text-emerald-300' : 'text-red-300'}`}>{result.status || (result.success ? 'READY' : 'FAILED')}{result.code ? ` · ${result.code}` : ''}</div>
             {result.error && <div className="text-[9px] text-red-300">{result.error}</div>}
             {stages.map(stage => <details key={`${stage.id}-${stage.status}`} open={guided || stage.status === 'fail' || stage.status === 'warning'} className="text-[9px]"><summary className="flex items-center gap-1 cursor-pointer text-slate-300">{stageIcon(stage.status)}<span>{stage.label}</span><span className="ml-auto uppercase text-[8px] text-slate-600">{stage.status}</span></summary><div className="pl-4 text-slate-500 break-words">{stage.detail}</div></details>)}
             {artifact?.path && <button type="button" data-testid="export-release-artifact" disabled={Boolean(busy)} onClick={() => void exportArtifact()} className="w-full settings-button justify-center"><Download className="w-3 h-3" /> {busy === 'export' ? 'Verifying output…' : `Choose output file for ${result.platform === 'nexus' ? 'Nexus ZIP' : 'Steam rollback ZIP'}`}</button>}
@@ -334,7 +340,7 @@ export default function ReleaseCenter({ workspace, preferences }: ReleaseCenterP
             {result.platform === 'steam' && result.targetPath && <button type="button" data-testid="verify-steam-result" disabled={Boolean(busy)} onClick={() => void verifySteam()} className="w-full settings-button justify-center">Verify after WorkshopTool finishes</button>}
             {result.platform === 'steam' && result.sourceManifestAdoptionRequired && <button type="button" data-testid="preview-steam-adoption" disabled={Boolean(busy)} onClick={() => void requestSteamAdoption(false)} className="w-full settings-button justify-center">Preview guarded source metadata adoption</button>}
             {adoption && <div data-testid="steam-adoption-result" className={`rounded border p-1.5 space-y-1 ${adoption.status === 'READY_TO_ADOPT' || adoption.status === 'PARTIAL' ? 'border-amber-500/30' : adoption.success ? 'border-emerald-500/30' : 'border-red-500/30'}`}>
-              <div className="text-[9px] font-bold text-slate-200">{adoption.status || 'ADOPTION'}{adoption.code ? ` · ${adoption.code}` : ''}</div>
+              <div className="break-words text-[9px] font-bold text-slate-200">{adoption.status || 'ADOPTION'}{adoption.code ? ` · ${adoption.code}` : ''}</div>
               {adoption.error && <div className="text-[9px] text-red-300">{adoption.error}</div>}
               {adoption.sourceManifestPath && <div className="text-[8px] text-slate-500 break-all">Source: {adoption.sourceManifestPath}</div>}
               {adoption.workshopId && <div className="text-[8px] text-slate-400">Workshop id {adoption.workshopId} · version {adoption.version}</div>}

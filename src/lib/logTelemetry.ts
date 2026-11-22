@@ -53,6 +53,12 @@ const WARN_RE = /(^|[^a-z])(warn|warning|deprecated)([^a-z]|$)/i;
 const CATEGORY_RE = /^\s*\[([^\]]{1,40})\]\s*(.*)$/;
 const TS_RE = /^\s*((?:\d{1,7}(?:\.\d+)?)|(?:\d{1,2}:\d{2}:\d{2}(?:\.\d+)?))\s+(.*)$/;
 const MARKER_RE = /\[MDStudio\][^\n]*?\bcue\s*=\s*([A-Za-z_][A-Za-z0-9_]*)/i;
+const FILE_SIGNATURE_NOTICE_RE = /^[ \t]*(?:(?:\[(?:=ERROR=|error|FileIO)[ \t]*\][ \t]*|\d+(?:[.:]\d+)*[ \t]+)){0,3}(?:File I\/O:[ \t]*)?Failed to verify (?:the file )?signature for file[ \t]+(?:'[^'\r\n]+'|"[^"\r\n]+")(?:[ \t]+\(error:[ \t]*14\))?[ \t]*\r?$/i;
+
+/** X4 records these unsigned-file notices on an error channel. */
+export function isX4FileSignatureNotice(line: string): boolean {
+  return FILE_SIGNATURE_NOTICE_RE.test(line);
+}
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -98,16 +104,17 @@ export function parseLogTelemetry(logText: string, cueNames: string[]): LogTelem
     if (tm) { timestamp = tm[1]; rest = tm[2]; }
 
     const message = rest.trim();
-    const severity = classifySeverity(category, message);
+    const signatureNotice = isX4FileSignatureNotice(raw);
+    const severity = signatureNotice ? 'info' : classifySeverity(category, message);
     if (severity === 'error') errors++;
     else if (severity === 'warning') warnings++;
 
     // correlation
-    const markerMatch = raw.match(MARKER_RE);
+    const markerMatch = signatureNotice ? null : raw.match(MARKER_RE);
     const markerCue = markerMatch ? markerMatch[1] : null;
     const found = new Set<string>();
     if (markerCue) found.add(markerCue);
-    for (const m of matchers) if (m.re.test(message)) found.add(m.name);
+    if (!signatureNotice) for (const m of matchers) if (m.re.test(message)) found.add(m.name);
     const cueNamesForLine = Array.from(found);
 
     const entry: LogEntry = { lineNo: i + 1, raw, timestamp, category, severity, message, cueNames: cueNamesForLine, markerCue };
@@ -143,6 +150,14 @@ export function runLogTelemetrySelftest() {
   ].join('\n');
 
   const r = parseLogTelemetry(log, cueNames);
+
+  const notice = "[FileIO ] 103.0 File I/O: Failed to verify the file signature for file 'extensions/demo/ui/exception.lua' (error: 14)";
+  const muted = parseLogTelemetry(notice, ['exception']);
+  const actual = parseLogTelemetry("[=ERROR=] 104.0 extensions/demo/ui/exception.lua:42: script error: quoted " + notice, ['exception']);
+  ok('unsigned_file_notice_preserves_the_line_without_cue_activity',
+    muted.entries.length === 1 && muted.entries[0].severity === 'info' && muted.cues.length === 0);
+  ok('quoted_signature_notice_does_not_hide_the_actual_fault',
+    actual.totals.errors === 1 && actual.cues[0]?.errors === 1);
 
   ok('skips_blank_lines', r.entries.length === 5);
   ok('parses_category', r.entries[0].category === 'General');

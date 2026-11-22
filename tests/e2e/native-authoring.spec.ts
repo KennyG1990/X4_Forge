@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { buildTemplateWorkspace } from '../../src/lib/modTemplates';
-import { needsManifestMaterialization } from '../../src/lib/nativeEditor';
+import { needsManifestMaterialization, openOrMaterializeInNativeEditor } from '../../src/lib/nativeEditor';
 import { E2E_API_ORIGIN, E2E_TOKEN, E2E_WEB_ORIGIN, E2E_STATE_DIR } from '../../playwright.config';
 import { parseXMLToWorkspace } from '../../src/lib/xmlParser';
 import { mdStemFingerprint } from '../../src/lib/mdFileIdentity';
@@ -50,7 +50,77 @@ test('package readiness distinguishes data-only, inert legacy MD, empty, and rea
   ]));
 });
 
+async function checkNativeMaterializationWorkspaceSwitch() {
+  const workspace = buildTemplateWorkspace('welcome');
+  const selectedFile = 'md/welcome.xml';
+  const manifest = '<content id="fixture"/>';
+  const workspaceRootId = 'a'.repeat(64);
+  const firstWorkspaceId = 'ws_000000000000000000000000';
+  const nextWorkspaceId = 'ws_111111111111111111111111';
+  let selectedWorkspaceId = firstWorkspaceId;
+  let revision = 0;
+  const requests: string[] = [];
+  const nativeMessages: unknown[] = [];
+  const originalFetch = globalThis.fetch;
+  const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: {
+      parent: { postMessage: (message: unknown) => nativeMessages.push(message) },
+      __X4_WORKSPACE_CONTEXT__: {
+        getWorkspaceId: () => selectedWorkspaceId,
+        getSelectionRevision: () => revision,
+      },
+    },
+  });
+  try {
+    globalThis.fetch = async (url, init) => {
+      const endpoint = String(url);
+      requests.push(`${endpoint} ${selectedWorkspaceId}`);
+      if (endpoint === '/api/agent/project/files') {
+        return Response.json({ sourceAvailable: false, sourceFolder: 'fixture', workspaceRootId,
+          entries: [{ path: selectedFile, state: 'generated-only', text: true, openable: false, materializable: true }],
+        });
+      }
+      if (endpoint === '/api/agent/compile') {
+        return Response.json({ files: { 'content.xml': manifest, [selectedFile]: '<mdscript name="Welcome"/>' } });
+      }
+      const request = JSON.parse(String(init?.body));
+      expect(endpoint).toBe('/api/fs/write');
+      expect(request).toEqual({
+        path: 'fixture/content.xml', content: manifest, strict: true, expectedSha256: null,
+        expectedWorkspaceRootId: workspaceRootId,
+      });
+      const reply = Response.json({ success: true, workspaceRootId, written: {
+        bytes: Buffer.byteLength(manifest), sha256: createHash('sha256').update(manifest).digest('hex'),
+        root: 'workspace', byteExact: true, absolutePath: path.resolve('fixture', 'content.xml'),
+      } });
+      const read = reply.json.bind(reply);
+      reply.json = async () => {
+        const body = await read();
+        selectedWorkspaceId = nextWorkspaceId;
+        revision += 1;
+        return body;
+      };
+      return reply;
+    };
+
+    const result = await openOrMaterializeInNativeEditor(workspace, selectedFile);
+    expect(requests).toEqual(['/api/agent/project/files', '/api/agent/compile', '/api/fs/write']
+      .map(endpoint => `${endpoint} ${firstWorkspaceId}`));
+    expect(nativeMessages).toEqual([]);
+    expect(result).toMatchObject({ ok: false, materialized: false });
+    expect(result.message).toContain('Forge created content.xml in the original workspace');
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalWindow) Object.defineProperty(globalThis, 'window', originalWindow);
+    else Reflect.deleteProperty(globalThis, 'window');
+  }
+}
+
 test('patch-only projects emit no fake MD and materialization refuses stale overwrite', async ({ request }) => {
+  await test.step('workspace change stops after the acknowledged manifest write', checkNativeMaterializationWorkspaceSwitch);
   expect(needsManifestMaterialization('libraries/wares.xml', true)).toBe(false);
   expect(needsManifestMaterialization('libraries/wares.xml', false)).toBe(true);
   expect(needsManifestMaterialization('content.xml', false)).toBe(false);
@@ -110,7 +180,11 @@ test('patch-only projects emit no fake MD and materialization refuses stale over
 
     const inventoryResponse = await request.post(`${API}/api/agent/project/files`, { headers: auth, data: { workspace } });
     expect(inventoryResponse.ok(), await inventoryResponse.text()).toBeTruthy();
-    const inventory = await inventoryResponse.json() as { entries: Array<{ path: string; state: string; materializable: boolean }> };
+    const inventory = await inventoryResponse.json() as {
+      workspaceRootId: string;
+      entries: Array<{ path: string; state: string; materializable: boolean }>;
+    };
+    expect(inventory.workspaceRootId).toMatch(/^[a-f0-9]{64}$/);
     expect(inventory.entries).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: 'libraries/wares.xml', state: 'generated-only', materializable: true }),
     ]));
@@ -147,6 +221,33 @@ test('patch-only projects emit no fake MD and materialization refuses stale over
     const readBack = await request.get(`${API}/api/fs/read?root=workspace&path=${encodeURIComponent(relative)}`, { headers: auth });
     expect(readBack.ok(), await readBack.text()).toBeTruthy();
     expect((await readBack.json()).content).toBe(compiled.files['libraries/wares.xml']);
+
+    await test.step('changed Mod Workspace folder refuses bound file operations', async () => {
+      const nextStaging = path.join(temp, 'next-staging');
+      fs.mkdirSync(nextStaging);
+      const changed = await request.post(`${API}/api/schema/config`, {
+        headers: auth,
+        data: { modWorkspacePath: nextStaging, filesystemPath: deployment },
+      });
+      expect(changed.ok(), await changed.text()).toBeTruthy();
+      const expectedWorkspaceRootId = inventory.workspaceRootId;
+      const staleRead = await request.get(`${API}/api/fs/read`, {
+        headers: auth, params: { root: 'workspace', path: relative, expectedWorkspaceRootId },
+      });
+      expect(staleRead.status()).toBe(409);
+      expect(await staleRead.json()).toMatchObject({ code: 'WORKSPACE_ROOT_CHANGED' });
+
+      const stalePath = 'patch_only_fixture/libraries/late.xml';
+      const staleWrite = await request.post(`${API}/api/fs/write`, {
+        headers: auth,
+        data: { path: stalePath, content: compiled.files['libraries/wares.xml'], strict: true,
+          expectedSha256: null, expectedWorkspaceRootId },
+      });
+      expect(staleWrite.status()).toBe(409);
+      expect(await staleWrite.json()).toMatchObject({ code: 'WORKSPACE_ROOT_CHANGED' });
+      expect(fs.existsSync(path.join(staging, stalePath))).toBe(false);
+      expect(fs.existsSync(path.join(nextStaging, stalePath))).toBe(false);
+    });
   } finally {
     const restored = await request.post(`${API}/api/schema/config`, { headers: auth, data: restore });
     expect(restored.ok(), await restored.text()).toBeTruthy();
@@ -242,12 +343,13 @@ async function withFilesPanel(
   }
 }
 
-async function openFilesPanel(page: Page) {
+async function openFilesPanel(page: Page, sourceSentinel: string) {
   await page.goto('/');
   const expert = page.getByTestId('mode-expert');
   if (await expert.getAttribute('aria-pressed') !== 'true') await expert.click();
   await page.locator('[data-sidebar-tab="filesystem"]').click();
   await expect(page.getByPlaceholder('Search Files...')).toBeVisible();
+  await expect(page.getByRole('button', { name: sourceSentinel, exact: true })).toBeVisible({ timeout: 45_000 });
   await expect(page.getByTitle('Create new script or workspace')).toBeEnabled();
 }
 
@@ -282,7 +384,7 @@ test('Files Save binds admitted blueprint and MD bytes and refuses inspected, st
     for (const [filename, content] of Object.entries(originals)) fs.writeFileSync(path.join(source, filename), content);
     const sourceBefore = filesInventory(source);
     const installedBefore = filesInventory(installed);
-    await openFilesPanel(page);
+    await openFilesPanel(page, 'blueprint.json');
     const save = page.getByRole('button', { name: 'Save', exact: true });
     const blueprint = await readFilesSelection(page, 'blueprint.json', source);
     await expect(page.getByText('Opened Blueprint: blueprint.json', { exact: true })).toBeVisible();
@@ -395,7 +497,7 @@ test('Files New File dismissals write nothing and both types create atomically w
     fs.writeFileSync(path.join(source, 'existing.lua'), '-- source sentinel\r\n');
     const sourceBefore = filesInventory(source);
     const installedBefore = filesInventory(installed);
-    await openFilesPanel(page);
+    await openFilesPanel(page, 'existing.lua');
     const newFile = page.getByTitle('Create new script or workspace');
     const chooserTitle = 'Create as a Visual JSON Blueprint, or raw Egosoft MD Script XML?';
     const dismiss = async (method: 'Cancel' | 'Escape' | 'backdrop') => {

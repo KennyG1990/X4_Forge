@@ -8479,3 +8479,20 @@ Exact six-file checkpoint084e64c5df6d49cfc174e686413f098c1e7c4394 passed real re
 ### 2026-11-14 — VERIFIED inactive E2E HANDLE retention and required lifecycle gate (#112 unit1)
 
 Checkpoint b98f4c50c19dde5b275fb1fd309b7a0daa374052 is committed/pushed with actual normal215.782s and unchanged mandatory hook215.344s, direct remote parity and exact Quality43589739470 SUCCESS/all37steps. Pure28 preserves original17, actual isolated Windows17 proves spawn/fork original HANDLE pin across exit/held streams/close and exact refusal retirement, and orchestration23 preserves original20 plus three new gate failures. Existing normal precommit now requires this lifecycle suite. All source/dependency/Dev/Git/Job guards pass; finite12datafiles1766313bytes, no helper/runtime/profile copies. Full routes562/oracles134/staged33/VSIXpolicy13/final2201entries pass. [Contract, failures, review, close and AAR](docs/plans/2026-11-14-e2e-process-handle-leases.md). Mechanism remains INACTIVE; whole112/109, exact activation/late-failure channel, mounted/full/compiled/installed/overhead/public gates remain PARTIAL. No live/game/CUA/install/version/publication action; no capability-map delta. Commit point: test(e2e): qualify original process handle retention.
+
+### 2026-11-22 — VERIFIED native deploy target ownership (#87)
+
+The published 0.0.89 backend and the exact 0.0.90 candidate passed 29 checks each. Both preview and bound Apply aliases reject a selected folder owned by another extension before writes. Stale and unknown ownership refusals preserved the incumbent, staging, baselines and receipts. The valid alias wrote the exact selected bytes and its receipt reopened. [Contract and package evidence](docs/plans/2026-11-09-native-deploy-incumbent-identity.md) · [Issue #87](https://github.com/KennyG1990/X4_Forge/issues/87). The 0.0.90 release and #85 operator cutover remain open.
+
+### 2026-11-22 — VERIFIED native deploy build version (#65)
+
+The exact published 0.0.89 backend and private 0.0.90 candidate passed the same 37 checks. Native Preview and Apply report the authored version and date. A changed payload at version 210 produced one reviewable warning tied to the prior verified receipt. An unchanged payload or format-only preview stayed clear. Approval kept the finding visible, wrote the exact files and preserved last green. Advancing the authored version to 211 cleared the warning. [Plan and packaged evidence](docs/plans/2026-11-09-native-deploy-build-version.md) · [Issue #65](https://github.com/KennyG1990/X4_Forge/issues/65). The #102 policy and 0.0.90 full release qualification remain separate.
+
+### 2026-11-22 — VERIFIED Steam adoption ownership and review (#92)
+
+Published 0.0.89 and the private 0.0.90 backend passed 43 checks each. Ten rendered checks on the exact private package then verified Filesystem Verify with no adoption action, the authoring preview path and manifest texts, stale confirmation refusal, and a fresh write to only the selected source. [Packaged and rendered proof](docs/plans/2026-11-09-steam-adoption-preview-binding.md) · [Issue #92](https://github.com/KennyG1990/X4_Forge/issues/92). The early Verify retry remains tracked under [#132](https://github.com/KennyG1990/X4_Forge/issues/132).
+
+
+### 2026-11-22 · VERIFIED 0.0.90 release qualification and Open VSX delivery
+
+Forge Studio 0.0.90 passed 616 route assertions, 134 runtime oracles, all 150 source browser cases, all 150 compiled browser cases, and ordinary precommit. The exact Windows VSIX passed 33 staged sidecar checks, installed file parity, and six native Antigravity completion checks. Open VSX serves the tested archive, SHA-256 dc9247d1540e4f1ca044b5a3914cd9e4b19cd7d5267121c9c27fd48c98f8c91e. [Release evidence](https://github.com/KennyG1990/X4_Forge/issues/20#issuecomment-7080097174).

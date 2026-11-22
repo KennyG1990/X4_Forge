@@ -796,8 +796,30 @@ function runEffectiveReferenceChecks() {
     noUnresolved(actual); assert.equal(codeFindings(actual, 'md.run_actions_param_undeclared').length, 1);
   });
   const required = '<params><param name="Required"/></params>';
-  validate('effective reference missing required action contract is explicit coverage while its policy remains separate', provider(declaration('Run', 'run_actions', required)), call('<run_actions ref="Run"/>'), 0, actual => {
-    noUnresolved(actual); unavailable(actual);
+  const missingAction = call('<run_actions ref="Run"/>');
+  const requiredActionCode = 'md.run_actions_param_required';
+  validate('effective reference missing required action argument is a complete positioned warning', provider(declaration('Run', 'run_actions', required)), missingAction, 0, actual => {
+    accepted(actual);
+    const [finding, ...extra] = codeFindings(actual, requiredActionCode);
+    assert.equal(extra.length, 0);
+    assert.equal(finding.severity, 'warning');
+    assert.deepEqual({ line: finding.line, column: finding.column }, authoredPosition(missingAction, 'Run'));
+  });
+  const removeActionArgument = '<diff>\n<remove sel="/mdscript/cues/cue/actions/run_actions/param"/>\n</diff>';
+  validate('effective reference removed required action argument points to the authored removal',
+    provider(declaration('Run', 'run_actions', required), '<run_actions ref="Run"><param name="Required" value="1"/></run_actions>'),
+    removeActionArgument, 0, actual => {
+      accepted(actual);
+      const [finding, ...extra] = codeFindings(actual, requiredActionCode);
+      assert.equal(extra.length, 0);
+      assert.equal(finding.severity, 'warning');
+      assert.deepEqual({ line: finding.line, column: finding.column }, authoredPosition(removeActionArgument, '<remove'));
+    });
+  validate('effective reference case-only required action argument is both undeclared and omitted',
+    provider(declaration('Run', 'run_actions', required)), call('<run_actions ref="Run"><param name="required" value="1"/></run_actions>'), 0, actual => {
+      accepted(actual);
+      assert.equal(codeFindings(actual, requiredActionCode).length, 1);
+      assert.equal(codeFindings(actual, 'md.run_actions_param_undeclared').length, 1);
   });
   validate('effective reference unknown provider signature remains explicit when consulted', provider(declaration('Run', 'run_actions', '<params/><params/>')), call('<run_actions ref="Run"/>'), 0, unavailable);
   for (const [name, parameters] of [

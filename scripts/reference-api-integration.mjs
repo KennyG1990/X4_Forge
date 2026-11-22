@@ -194,6 +194,7 @@ try {
   check('read-scoped agent key can use POST completion intelligence', readScopedCompletion.status === 200, `status=${readScopedCompletion.status}`);
   const aiScript = 'order.player.attack';
   const quotedCalls = [
+    ['quoted MD order ID', 'md/b74.xml', '<create_order id="\'Att|ack\'" object="player.ship"/>', `<create_order id="'Attack'" object="player.ship"/>`],
     ['double-quoted AI script', 'aiscripts/probe.xml', '<run_script name="\'order.pla|yer.attack\'" result="$receipt"/>', `<run_script name="'${aiScript}'" result="$receipt"/>`],
     ['AI interrupt', 'aiscripts/probe.xml', '<run_interrupt_script name="\'order.pla|\'"/>', `<run_interrupt_script name="'${aiScript}'"/>`],
     ['single-quoted MD start script', 'md/probe.xml', '<start_script object="player.ship" name=\'order.pla|\'/>', `<start_script object="player.ship" name='&apos;${aiScript}&apos;'/>`],

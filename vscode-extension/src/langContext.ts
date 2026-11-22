@@ -48,7 +48,7 @@ export function xmlCursorContext(fullText: string, offset: number): XmlCursorCon
       } else if (name) {
         inTag = name;
         // inside an attribute value? count unescaped quotes after the name
-        const attrMatch = /([A-Za-z_][\w.:-]*)\s*=\s*"[^"]*$/.exec(body);
+        const attrMatch = /([A-Za-z_][\w.:-]*)\s*=\s*(?:"[^"]*|'[^']*)$/.exec(body);
         if (attrMatch) inAttrValue = attrMatch[1].toLowerCase();
       }
     }
@@ -95,6 +95,9 @@ export function runLangContextSelftest() {
   ok("inside_open_tag_attrs", c.inTag === "set_value" && c.elementStart === false);
   c = at(base + '<set_value name="$x" exact="|');
   ok("inside_attr_value", c.inTag === "set_value" && c.inAttrValue === "exact");
+  c = at("<aiscript><actions><create_order id='&apos;Att|&apos;'/>");
+  ok("single_quoted_order_value", c.inTag === "create_order" && c.inAttrValue === "id");
+
   c = at(base + '<set_value name="$x"/><|');
   ok("self_closing_pops", c.parentTag === "actions" && c.elementStart === true);
   c = at(base + "<do_if>...</do_if><|".replace("...", '<set_value name="a"/>'));

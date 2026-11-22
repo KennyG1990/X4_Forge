@@ -1,4 +1,5 @@
 import { expect, test } from './request-transport';
+import { openStudioAction } from './studio-actions';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -62,6 +63,7 @@ test('C02 import identities, legacy layout, ambiguity and byte fidelity', async 
   const target = legacy.nodes[0];
   const rendered = page.getByTestId(`canvas-node-${target.id}`);
   await expect(rendered).toBeVisible();
+  await page.getByRole('button', { name: 'Graph tools', exact: true }).click();
   await page.getByTitle('Reset Graph Zoom').click();
   await expect.poll(async () => Math.round((await rendered.boundingBox())!.width)).toBe(240);
   const beforeBox = await rendered.boundingBox(); expect(beforeBox).not.toBeNull();
@@ -82,13 +84,14 @@ test('C02 import identities, legacy layout, ambiguity and byte fidelity', async 
   checks.push('legacy-node-layout-and-link-waypoints', 'unrelated-file-cue-insertion', 'new-source-properties-win');
   // Exercise the real caller that adopts the import response, rather than a server
   // replacement followed by a browser reload with an intentionally stale local draft.
-  await page.getByTitle('Load existing mods or push updates to GitHub').click();
+  await openStudioAction(page, 'sync-mod');
   await page.getByPlaceholder('Relative folder path, e.g. sn_mod_support_apis').fill('forge_regression_lab');
   await expect(page.getByPlaceholder('Relative folder path, e.g. sn_mod_support_apis')).toHaveValue('forge_regression_lab');
   await page.getByRole('button', { name: 'Load Project', exact: true }).click();
   await page.waitForFunction((count: number) => window.AgentRuntime?.getCurrentWorkspace().nodes.length === count, updated.workspace.nodes.length, { timeout: 15_000 });
   await expect(rendered).toBeVisible();
   // Import intentionally refits the camera. Compare geometry at the same zoom/pan.
+  await page.getByRole('button', { name: 'Graph tools', exact: true }).click();
   await page.getByTitle('Reset Graph Zoom').click();
   await expect.poll(async () => Math.round((await rendered.boundingBox())!.width)).toBe(240);
   await expect(rendered).toHaveCSS('left', `${target.x}px`);

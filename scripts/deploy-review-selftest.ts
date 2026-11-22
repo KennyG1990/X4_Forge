@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import DeployValidationSummary from '../src/components/DeployValidationSummary';
 import { deployReviewView, deployValidationLabel, prepareDeployReview, type DeployReviewData } from '../src/lib/deployClient';
-import { parseCatManifest } from '../src/lib/x4CatDat';
+import { parseCatManifest, writeCatDatCatalogs } from '../src/lib/x4CatDat';
+import { previewLuaRegistrationChange } from '../src/server/deployLuaRegistration';
+import { installedLuaBootCoverage } from '../src/server/installedLuaBootCoverage';
+import type { DeploymentSnapshot } from '../src/server/deploymentSnapshot';
 import { readX4MenuLuaPaths } from '../src/lib/x4UiSourceBundle';
 
 const fixtures=JSON.parse(fs.readFileSync('tests/fixtures/forge-regression/deploy-responses.json','utf8'));
@@ -58,6 +63,55 @@ check('strict-catalog-comparison-refuses-unparseable-index-rows', () => {
   assert.throws(() => parseCatManifest(index, { strict: true }), /malformed entry/);
   for (const name of ['../ui.xml', './ui.xml', '/ui.xml', 'C:ui.xml']) {
     assert.throws(() => parseCatManifest(`${name} 12 0 ${'a'.repeat(32)}`, { strict: true }), /unsafe entry path/);
+  }
+});
+check('installed Lua advisory and boot coverage compare both file preferences', () => {
+  const parent = fs.realpathSync.native(os.tmpdir());
+  const root = fs.mkdtempSync(path.join(parent, 'x4-lua-source-preference-'));
+  try {
+    const target = path.join(root, 'mixed');
+    const ui = (file: string) => `<addon name="fixture"><environment type="menus"><file name="${file}"/></environment></addon>`;
+    const next = ui('ui/planned.lua');
+    const packed = ui('ui/packed.lua');
+    const snapshot = {
+      plan: { entries: [{ path: 'ui.xml', size: Buffer.byteLength(next) }] },
+      files: [{ path: 'ui.xml', content: next }],
+      manifest: { format: 'loose' },
+    } as DeploymentSnapshot;
+
+    const first = previewLuaRegistrationChange(snapshot, path.join(root, 'first-install'), []);
+    assert.equal(first?.status, 'added');
+    const built = writeCatDatCatalogs([{ name: 'ui.xml', size: Buffer.byteLength(packed), content: packed }], target);
+    assert.ok(built.ok, built.errors.join('\n'));
+    fs.writeFileSync(path.join(target, 'ui.xml'), next);
+    const conflict = previewLuaRegistrationChange(snapshot, target, []);
+    assert.equal(conflict?.status, 'unavailable');
+    assert.match(conflict?.status === 'unavailable' ? conflict.detail : '', /loose and packed/i);
+
+    fs.writeFileSync(path.join(target, 'content.xml'), '<content id="mixed"/>');
+    fs.writeFileSync(path.join(target, 'forge-lua-boot.json'), JSON.stringify({ version: 1, files: ['ui/planned.lua'] }));
+    const boot = installedLuaBootCoverage({ extensionsRoot: root, target, modId: 'mixed', logPath: '' });
+    assert.equal(boot?.status, 'window-unavailable');
+    assert.equal(boot?.missing, null);
+    assert.match(boot && 'detail' in boot ? boot.detail : '', /loose and packed/i);
+
+    fs.writeFileSync(path.join(target, 'ui.xml'), ui('ui/loose.lua'));
+    const common = previewLuaRegistrationChange(snapshot, target, []);
+    assert.deepEqual(common?.status === 'added' ? common.addedPaths : null, ['ui/planned.lua']);
+
+    const empty = path.join(root, 'empty_manifest');
+    const emptyCatalog = writeCatDatCatalogs([
+      { name: 'forge-lua-boot.json', size: 0, content: '', timestamp: 5 },
+    ], empty);
+    assert.ok(emptyCatalog.ok, emptyCatalog.errors.join('\n'));
+    fs.writeFileSync(path.join(empty, 'content.xml'), '<content id="empty_manifest"/>');
+    const invalidBoot = installedLuaBootCoverage({ extensionsRoot: root, target: empty, modId: 'empty_manifest', logPath: '' });
+    assert.equal(invalidBoot?.status, 'invalid-manifest');
+  } finally {
+    const owned = fs.realpathSync.native(root);
+    assert.equal(path.dirname(owned), parent);
+    assert.equal(owned, root);
+    fs.rmSync(owned, { recursive: true });
   }
 });
 check('review-freezes-serialized-body-and-destination', () => {

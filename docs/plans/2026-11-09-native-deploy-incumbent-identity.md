@@ -31,3 +31,13 @@ The existing deploy snapshot oracle passed 53 checks. TypeScript, durable writer
 ## AAR
 
 Preserve an unrelated sentinel and prove exact receipt readback. The prior receipt was authentic even though the selected folder belonged to another extension. Fresh-eyes review found an occupied manifest-free catalog fixture and the existing sibling error precedence. The updated fixture retains runtime-state preservation and stale-file cleanup, and the final replay covers the precedence and invalid encoding. The remaining operational gap is visible user confirmation of the selected native target in Playtest. It has its own [issue #34 replay](https://github.com/KennyG1990/X4_Forge/issues/34#issuecomment-6721562907).
+
+## Packaged recheck — 2026-11-22
+
+**VERIFIED** for native deployment ownership in published 0.0.89 and the private 0.0.90 candidate. The exact archive SHA-256 values were `6695c5b59b1d87844c7638e26cdc8e0847520bf0523ccdf4082d6e51e15e5fae` and `3d10bd51d7d7de35704dd28c0cf37eb89db915e2fca1e182ff53c8a2ae563e14`. All 29 assertions passed in each isolated sidecar replay. The published and candidate Jobs ran in 3.344 and 3.125 seconds and both owned listeners and G: scratch trees retired.
+
+Both preview and addressed Apply aliases returned HTTP 409 with the typed incumbent mismatch and no write attempted. A stale preview independently returned target-changed. A case-variant sibling kept duplicate-ID precedence, and a nonempty folder without a manifest got the distinct unresolved-owner refusal. In each refusal the source, staging and target trees, validation baseline, recoveries and action receipts kept their exact state. The supported alias installed the selected files under its own folder, preserved the authored manifest ID and reopened the exact authenticated receipt.
+
+Private evidence key `packaged_native_target_ownership_87_close` in the existing G: native deploy verification ledger. Both packages were read-only inputs. The replay qualified the shipped backend contract. The installed Studio presentation is covered under [#34](https://github.com/KennyG1990/X4_Forge/issues/34), and [#85](https://github.com/KennyG1990/X4_Forge/issues/85) still needs the separate script invocation or operator cutover verdict. No capability-map delta.
+
+**AAR.** Reuse the same standalone fixture and a pinned public artifact. The first public replay preparation caught a mistyped hash before launch. The final run revalidated the archive, backend and package lock and retired its temporary extraction. The scratch target cannot establish operator cutover.

@@ -942,6 +942,30 @@
       ]
     },
     {
+      "routeKey": "POST /api/agent/project/ai-navigation",
+      "method": "POST",
+      "template": "/api/agent/project/ai-navigation",
+      "owner": "project.ai.navigation",
+      "resourceClass": "workspace",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1project~1ai-navigation",
+      "integrationBatch": "W3B0-internal",
+      "history": "quiet",
+      "capability": {
+        "kind": "canonical",
+        "id": "project.ai.navigation",
+        "version": 1
+      },
+      "semanticClass": "read-analysis-only",
+      "policy": "receipt-exempt",
+      "effects": [
+        "read",
+        "analyze"
+      ],
+      "authorityScopes": [
+        "workspace"
+      ]
+    },
+    {
       "routeKey": "POST /api/agent/project/content-xml",
       "method": "POST",
       "template": "/api/agent/project/content-xml",
@@ -1078,6 +1102,30 @@
       "authorityScopes": [
         "global",
         "profile",
+        "workspace"
+      ]
+    },
+    {
+      "routeKey": "POST /api/agent/project/md-navigation",
+      "method": "POST",
+      "template": "/api/agent/project/md-navigation",
+      "owner": "project.md.navigation",
+      "resourceClass": "workspace",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1project~1md-navigation",
+      "integrationBatch": "W3B0-internal",
+      "history": "quiet",
+      "capability": {
+        "kind": "canonical",
+        "id": "project.md.navigation",
+        "version": 1
+      },
+      "semanticClass": "read-analysis-only",
+      "policy": "receipt-exempt",
+      "effects": [
+        "read",
+        "analyze"
+      ],
+      "authorityScopes": [
         "workspace"
       ]
     },

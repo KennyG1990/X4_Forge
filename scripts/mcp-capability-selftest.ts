@@ -10,6 +10,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import {
   FORGE_CAPABILITIES,
   buildForgeCapabilityContract,
+  findForgeCapability,
   type ForgeCapabilityDescriptorV1,
 } from '../src/lib/forgeCapabilities';
 import type { LiteralTextLookupRequest, LiteralTextLookupResult } from '../src/lib/literalTextLookup';
@@ -20,6 +21,60 @@ import { FORGE_PERFORMANCE_HISTOGRAM_MS } from '../src/lib/forgePerformance';
 import type { NativeBrokerView } from '../src/server/nativePerformanceBroker';
 
 const PERFORMANCE_TOOLS = ['get_forge_performance', 'start_forge_performance_capture', 'profile_forge_backend'];
+
+const MD_NAVIGATION_TOOL = 'navigate_md_script';
+const MD_NAVIGATION_ID = 'project.md.navigation';
+const MD_NAVIGATION_ROUTE = '/api/agent/project/md-navigation';
+const MD_NAVIGATION_SCOPE = 'authored-md-snapshot';
+const MD_NAVIGATION_CALLER = '<mdscript name="Caller"><cues><cue name="Start"><actions><signal_cue cue="md.Provider.Action"/></actions></cue></cues></mdscript>';
+const MD_NAVIGATION_PROVIDER = '<mdscript name="Provider"><cues><cue name="Action"/></cues></mdscript>';
+const MD_NAVIGATION_ARGS = {
+  project: { id: 'Forge_MdFixture', name: 'MD fixture', files: [
+    { path: 'md/Caller.xml', content: MD_NAVIGATION_CALLER },
+    { path: 'md\\Provider-Alias.xml', content: MD_NAVIGATION_PROVIDER },
+    { path: 'aiscripts/Unrelated.xml', content: '<aiscript name="Unrelated"/>' },
+    { path: 't/Omitted.xml' },
+  ] },
+  path: 'md/Caller.xml', offset: MD_NAVIGATION_CALLER.indexOf('Action') + 1, mode: 'definition',
+};
+const MD_NAVIGATION_COLUMN = MD_NAVIGATION_PROVIDER.indexOf('Action');
+const MD_NAVIGATION_LOCATION = {
+  file: 'md/Provider-Alias.xml',
+  start: { line: 0, column: MD_NAVIGATION_COLUMN },
+  end: { line: 0, column: MD_NAVIGATION_COLUMN + 'Action'.length },
+};
+const AI_NAVIGATION_ARGS = {
+  project: { id: 'Forge_AiFixture', name: 'AI fixture', files: [
+    { path: 'aiscripts/Forge.Caller.xml', content: '<aiscript name="Forge.Caller"><actions><run_script name="\'Forge.Target\'"/></actions></aiscript>' },
+    { path: 'aiscripts\\Forge.Target.xml', content: '<aiscript name="Forge.Target"/>' },
+    { path: 'md/Omitted.xml' },
+    { path: 'md/Unrelated.xml', content: '<mdscript name="Unrelated"/>' },
+  ] },
+  path: 'aiscripts/Forge.Caller.xml', offset: 59, mode: 'definition',
+};
+const AUTHORED_NAVIGATION_FIXTURES = [
+  {
+    family: 'md', tool: MD_NAVIGATION_TOOL, id: MD_NAVIGATION_ID, route: MD_NAVIGATION_ROUTE,
+    scope: MD_NAVIGATION_SCOPE, schemaVersion: 'forge.md-navigation.v1', args: MD_NAVIGATION_ARGS,
+    location: MD_NAVIGATION_LOCATION, directory: 'md', wrongFamilyPath: 'aiscripts/Unrelated.xml',
+    allowed: 'md-navigation', readOnly: 'md-navigation-read-only',
+  },
+  {
+    family: 'ai', tool: 'navigate_ai_script', id: 'project.ai.navigation', route: '/api/agent/project/ai-navigation',
+    scope: 'authored-ai-snapshot', schemaVersion: 'forge.ai-navigation.v1', args: AI_NAVIGATION_ARGS,
+    location: { file: 'aiscripts/Forge.Target.xml', start: { line: 0, column: 16 }, end: { line: 0, column: 28 } },
+    directory: 'aiscripts', wrongFamilyPath: 'md/Unrelated.xml',
+    allowed: 'ai-navigation', readOnly: 'ai-navigation-read-only',
+  },
+] as const;
+type AuthoredNavigationFixture = (typeof AUTHORED_NAVIGATION_FIXTURES)[number];
+const EXPLICIT_ONLY_MCP_CAPABILITIES = new Set<string>([
+  ...AUTHORED_NAVIGATION_FIXTURES.map(fixture => fixture.id),
+  'performance.native.read', 'performance.native.collect', 'performance.native.stop',
+]);
+const AUTHORED_NAVIGATION_SECRET = 'PRIVATE SOURCE MUST NOT LEAK';
+const AUTHORED_NAVIGATION_REDIRECT_SINK = '/fixture-authored-navigation-redirect';
+
 
 const EXPECTED_TOOLS = [
   'validate_mod',
@@ -306,7 +361,8 @@ type Mode = 'live' | 'read' | 'write' | 'legacy' | 'malformed' | 'current-missin
   'wrong-hash' | 'unauthorized' | 'forbidden' | 'incomplete' | 'duplicate-id' | 'binding-collision' |
   'fixed-body-type' | 'mcp-alias-collision' | 'extra-field' | 'api-path' | 'api-dot-path' | 'open-input' | 'hung' | 'outage' |
   'narrowed' | 'alias-narrowed' | 'v2' | 'wrong-workspace' | 'authority-wrong-hash' | 'effective-malformed' |
-  'effective-missing' | 'effective-expanded' | 'expression-check-only';
+  'effective-missing' | 'effective-expanded' | 'expression-check-only' |
+  'md-navigation' | 'md-navigation-read-only' | 'ai-navigation' | 'ai-navigation-read-only';
 let mode: Mode = 'live';
 let endpointMode: 'normal' | 'invalid-json' | 'empty-json' | 'missing-fields' | 'missing-workspace-snapshot' | 'compile-invalid' | 'compile-contradictory' | 'compile-missing-ok' |
   'inspect-unavailable' | 'inspect-invalid-span' | keyof typeof EXPRESSION_INSPECTION_BAD_RESULTS |
@@ -400,6 +456,19 @@ const checkerConstraint: Constraint = {
   allowedEffects: ['read', 'analyze'],
 };
 
+function authoredNavigationEvidence(fixture: AuthoredNavigationFixture, body: typeof MD_NAVIGATION_ARGS) {
+  const inputHash = sha256(JSON.stringify([body.project.id, body.project.files.map(file => [file.path, file.content ?? null])]));
+  return {
+    schemaVersion: fixture.schemaVersion, workspaceId: MCP_WORKSPACE_ID, inputHash,
+    scope: fixture.scope, modId: body.project.id, sourceHash: inputHash, sourceHashScope: fixture.scope,
+  };
+}
+type AuthoredNavigationFixtureEvidence = ReturnType<typeof authoredNavigationEvidence>;
+const resolvedAuthoredNavigation = (base: AuthoredNavigationFixtureEvidence, fixture: AuthoredNavigationFixture): Record<string, unknown> =>
+  ({ ...base, status: 'resolved', locations: [fixture.location] });
+let authoredNavigationReply = resolvedAuthoredNavigation;
+let authoredNavigationHttp: 'success' | 'redirect' | 'denied' = 'success';
+
 function effectiveAuthority(
   scope: 'read' | 'write' | 'deploy',
   constraint: Constraint | null = null,
@@ -409,7 +478,7 @@ function effectiveAuthority(
   const selected = new Set(constraint?.capabilityIdentities || []);
   const capabilities = effectiveCapabilities || FORGE_CAPABILITIES.filter(capability => {
     if (!capability.access.agentScopes.some(candidate => candidate === scope)) return false;
-    if (['performance.native.read', 'performance.native.collect', 'performance.native.stop'].includes(capability.id) && constraint === null) return false;
+    if (EXPLICIT_ONLY_MCP_CAPABILITIES.has(capability.id) && constraint === null) return false;
     if (capability.access.public || constraint === null) return true;
     return selected.has(`${capability.id}@${capability.version}`) && capability.effects.every(effect => allowedEffects.has(effect));
   });
@@ -418,7 +487,7 @@ function effectiveAuthority(
     const identity = `${capability.id}@${capability.version}`;
     if (effectiveIdentities.has(identity)) return [];
     if (!capability.access.agentScopes.some(candidate => candidate === scope)) return [{ capabilityIdentity: identity, code: 'CAPABILITY_SCOPE_DENIED' }];
-    if (['performance.native.read', 'performance.native.collect', 'performance.native.stop'].includes(capability.id) && constraint === null) return [{ capabilityIdentity: identity, code: 'CAPABILITY_NOT_GRANTED' }];
+    if (EXPLICIT_ONLY_MCP_CAPABILITIES.has(capability.id) && constraint === null) return [{ capabilityIdentity: identity, code: 'CAPABILITY_NOT_GRANTED' }];
     if (constraint !== null && !selected.has(identity)) return [{ capabilityIdentity: identity, code: 'CAPABILITY_NOT_GRANTED' }];
     const disallowedEffects = capability.effects.filter(effect => !allowedEffects.has(effect));
     return [{ capabilityIdentity: identity, code: 'CAPABILITY_EFFECT_DENIED', disallowedEffects }];
@@ -640,6 +709,7 @@ const server = http.createServer(function serveMcpFixture(request, response): vo
     const effectiveModes: Mode[] = [
       'live', 'read', 'write', 'narrowed', 'alias-narrowed', 'v2', 'unauthorized', 'forbidden',
       'wrong-workspace', 'authority-wrong-hash', 'effective-malformed', 'effective-missing', 'effective-expanded', 'expression-check-only',
+      'md-navigation', 'md-navigation-read-only', 'ai-navigation', 'ai-navigation-read-only',
     ];
     const body = effectiveModes.includes(mode)
       ? { api_version: '2026-07-30.agent.v4', capability_contract: contract }
@@ -723,6 +793,13 @@ const server = http.createServer(function serveMcpFixture(request, response): vo
               : mode === 'effective-malformed'
                 ? { api_version: EFFECTIVE_API_VERSION, actor: {} }
                 : effectiveAuthority('deploy');
+    const navigation = AUTHORED_NAVIGATION_FIXTURES.find(fixture => mode === fixture.allowed || mode === fixture.readOnly);
+    if (navigation) {
+      authority = effectiveAuthority('read', {
+        capabilityIdentities: [navigation.id + '@1'],
+        allowedEffects: mode === navigation.allowed ? ['read', 'analyze'] : ['read'],
+      });
+    }
     if (mode === 'authority-wrong-hash') authority = { ...authority, authority_hash: '0'.repeat(64) };
     response.writeHead(200, { 'Content-Type': 'application/json' });
     response.end(JSON.stringify(authority));
@@ -808,6 +885,36 @@ const server = http.createServer(function serveMcpFixture(request, response): vo
       }
       response.writeHead(200, { 'Content-Type': 'application/json' });
       response.end(JSON.stringify(endpointMode === 'missing-fields' ? body : TEXT_FOUND));
+    });
+    return;
+  }
+  if (request.url === AUTHORED_NAVIGATION_REDIRECT_SINK) {
+    routeCalls.push({ method: request.method || '', path: request.url, body: null });
+    response.writeHead(404);
+    response.end();
+    return;
+  }
+  const navigation = AUTHORED_NAVIGATION_FIXTURES.find(fixture => request.url === fixture.route);
+  if (request.method === 'POST' && navigation) {
+    let raw = '';
+    request.setEncoding('utf8');
+    request.on('data', chunk => { raw += chunk; });
+    request.on('end', () => {
+      const body = JSON.parse(raw) as typeof MD_NAVIGATION_ARGS;
+      routeCalls.push({ method: 'POST', path: navigation.route, body });
+      if (request.headers.authorization !== 'Bearer ' + MCP_KEY
+        || request.headers['x-workspace-id'] !== MCP_WORKSPACE_ID || authoredNavigationHttp === 'denied') {
+        response.writeHead(403, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ error: AUTHORED_NAVIGATION_SECRET }));
+        return;
+      }
+      if (authoredNavigationHttp === 'redirect') {
+        response.writeHead(307, { Location: AUTHORED_NAVIGATION_REDIRECT_SINK });
+        response.end();
+        return;
+      }
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify(authoredNavigationReply(authoredNavigationEvidence(navigation, body), navigation)));
     });
     return;
   }
@@ -1859,6 +1966,144 @@ try {
 }
 }
 
+async function runAuthoredNavigationMcpSelftest(fixture: AuthoredNavigationFixture): Promise<void> {
+  const other = AUTHORED_NAVIGATION_FIXTURES.find(candidate => candidate.family !== fixture.family)!;
+  const started = performance.now();
+  const port = await listen(server);
+  const baseUrl = 'http://127.0.0.1:' + port;
+  const completed: string[] = [];
+  const run = async (test: (client: McpClient) => Promise<void>) => {
+    const client = await startPrivateNativeReplayMcp(baseUrl, { key: MCP_KEY, workspaceId: MCP_WORKSPACE_ID });
+    try { await test(client); } finally {
+      await client.close();
+      assert.equal(client.child.exitCode, 0, 'the exact MCP child must exit cleanly');
+    }
+  };
+  try {
+    const descriptor = findForgeCapability(fixture.id);
+    assert.ok(descriptor?.surfaces.mcp.some(tool => tool.id === fixture.tool),
+      'the actual Forge capability registry must advertise the authored navigation MCP projection');
+    for (const deniedMode of ['legacy', 'read', fixture.readOnly, 'wrong-workspace'] as const) {
+      mode = deniedMode;
+      routeCalls.length = 0;
+      await run(async client => {
+        assert.equal((await toolsFor(client)).some(tool => tool.name === fixture.tool), false, deniedMode);
+        const refused = await client.request('tools/call', { name: fixture.tool, arguments: fixture.args });
+        assert.equal(refused.error?.code, -32602, deniedMode);
+        assert.deepEqual(routeCalls, []);
+      });
+      completed.push('refusal: ' + deniedMode);
+    }
+    mode = fixture.allowed;
+    routeCalls.length = 0;
+    discoveryCalls.length = 0;
+    await run(async client => {
+      const tools = await toolsFor(client);
+      assert.deepEqual(tools.map(tool => tool.name), ['list_schema_domains', fixture.tool, 'explain_element']);
+      const navigation = tools.find(tool => tool.name === fixture.tool)!;
+      assert.equal(navigation._meta?.['x4forge/capabilityId'], fixture.id);
+      assert.equal(navigation._meta?.['x4forge/capabilityVersion'], 1);
+      assert.deepEqual(navigation.inputSchema.required, ['project', 'path', 'offset', 'mode']);
+      assert.equal(navigation.inputSchema.properties.project.additionalProperties, false);
+      assert.equal(navigation.inputSchema.properties.project.properties.files.items.additionalProperties, false);
+      assert.ok(discoveryCalls.some(call => call.path === '/api/agent/capabilities/effective'));
+      assert.ok(discoveryCalls.every(call => call.authorization === 'Bearer ' + MCP_KEY && call.workspaceId === MCP_WORKSPACE_ID));
+      completed.push('exact grant and schema');
+      const deniedOther = await client.request('tools/call', { name: other.tool, arguments: other.args });
+      assert.equal(deniedOther.error?.code, -32602, 'an authored navigation grant is independent across script families');
+      assert.deepEqual(routeCalls, []);
+      completed.push('other script family requires its own grant');
+
+      const invoke = (args: unknown = fixture.args) => client.request('tools/call', { name: fixture.tool, arguments: args });
+      const projection = (reply: JsonRpcMessage) => {
+        assert.equal(reply.error, undefined);
+        assert.equal(reply.result?.isError, undefined, reply.result?.content?.[0]?.text);
+        return JSON.parse(String(reply.result?.content?.[0]?.text));
+      };
+      const rejected = async (args: unknown = fixture.args) => {
+        const reply = await invoke(args);
+        assert.equal(reply.result?.isError, true);
+        assert.equal(reply.result?.content?.[0]?.text?.includes(AUTHORED_NAVIGATION_SECRET), false);
+        return reply;
+      };
+      const base = authoredNavigationEvidence(fixture, fixture.args);
+      const scope = { schemaVersion: base.schemaVersion, workspaceId: base.workspaceId, inputHash: base.inputHash, scope: base.scope };
+      assert.deepEqual(projection(await invoke()), { ...scope, status: 'resolved', locations: [fixture.location] });
+      assert.deepEqual(routeCalls, [{ method: 'POST', path: fixture.route, body: fixture.args }],
+        'forward exact XML, raw paths, ordered payload and omitted source using the bound workspace header');
+      completed.push('exact request and definition');
+
+      const references = { ...fixture.args, mode: 'references', includeDeclaration: true };
+      assert.deepEqual(projection(await invoke(references)), { ...scope, status: 'resolved', locations: [fixture.location] });
+      assert.deepEqual(routeCalls.at(-1)?.body, references);
+      authoredNavigationReply = evidence => ({ ...evidence, status: 'resolved', locations: [] });
+      assert.deepEqual(projection(await invoke({ ...references, includeDeclaration: false })), { ...scope, status: 'resolved', locations: [] });
+      await rejected();
+      for (const status of ['not-found', 'not-a-literal', 'ambiguous']) {
+        authoredNavigationReply = evidence => ({ ...evidence, status });
+        assert.deepEqual(projection(await invoke()), { ...scope, status });
+      }
+      for (const reason of ['focus', 'inventory', 'source', 'limit']) {
+        authoredNavigationReply = evidence => ({ ...evidence, status: 'unavailable', reason });
+        assert.deepEqual(projection(await invoke(references)), { ...scope, status: 'unavailable', reason });
+      }
+      completed.push('finite result modes');
+
+      routeCalls.length = 0;
+      for (const args of [
+        {}, { ...fixture.args, workspaceId: MCP_WORKSPACE_ID },
+        { ...fixture.args, offset: 8_388_609 }, { ...fixture.args, mode: 'go-to-definition' },
+        { ...fixture.args, project: { ...fixture.args.project, sourceFolder: 'private' } },
+        { ...fixture.args, project: { ...fixture.args.project, files: [{ path: fixture.directory + '/File.xml', kind: fixture.family }] } },
+      ]) assert.equal((await invoke(args)).error?.code, -32602);
+      await rejected({ ...fixture.args, project: { ...fixture.args.project,
+        files: Array.from({ length: 513 }, (_, index) => ({ path: fixture.directory + '/File' + index + '.xml' })) } });
+      assert.deepEqual(routeCalls, []);
+      completed.push('closed input schemas and file count');
+
+      for (const overrides of [
+        { schemaVersion: other.schemaVersion }, { workspaceId: 'ws_222222222222222222222222' },
+        { inputHash: '0'.repeat(64) }, { sourceHash: '0'.repeat(64) }, { modId: 'different_mod' },
+        { scope: 'filesystem' }, { sourceHashScope: 'filesystem' }, { source: AUTHORED_NAVIGATION_SECRET },
+        { locations: [{ ...fixture.location, file: fixture.directory + '/Other.xml' }] },
+        { locations: [{ ...fixture.location, file: fixture.wrongFamilyPath }] },
+        { locations: [{ ...fixture.location, file: '../' + fixture.location.file }] },
+        { locations: [{ ...fixture.location, end: fixture.location.start }] },
+        { locations: [{ ...fixture.location, excerpt: AUTHORED_NAVIGATION_SECRET }] },
+        { locations: Array.from({ length: 2050 }, () => fixture.location) },
+      ]) {
+        authoredNavigationReply = evidence => ({ ...evidence, status: 'resolved', locations: [fixture.location], ...overrides });
+        await rejected(references);
+      }
+      completed.push('hostile response refuses without leaking source');
+
+      routeCalls.length = 0;
+      authoredNavigationHttp = 'redirect';
+      await rejected();
+      assert.deepEqual(routeCalls, [{ method: 'POST', path: fixture.route, body: fixture.args }]);
+      authoredNavigationHttp = 'denied';
+      assert.match(String((await rejected()).result?.content?.[0]?.text), /HTTP 403/);
+      authoredNavigationHttp = 'success';
+      completed.push('redirect and error-body refusal');
+
+      routeCalls.length = 0;
+      mode = 'outage';
+      assert.deepEqual((await toolsFor(client)).map(tool => tool.name), ['list_schema_domains', 'explain_element']);
+      assert.equal((await invoke()).error?.code, -32602);
+      assert.deepEqual(routeCalls, []);
+      completed.push('live grant withdrawn during discovery outage');
+    });
+  } finally {
+    mode = 'live';
+    authoredNavigationHttp = 'success';
+    authoredNavigationReply = resolvedAuthoredNavigation;
+    await stop(server);
+  }
+  assert.equal(server.listening, false);
+  console.log(JSON.stringify({ suite: fixture.family + '-navigation-mcp', pass: true, checks: completed,
+    seconds: (performance.now() - started) / 1000, actualMcpChild: true, listenerRetired: true }));
+}
+
 // This owner tests the actual stdio child against an explicitly private HTTP fixture.
 // Missing aliases are a feature prerequisite failure, never cancellation evidence.
 const NATIVE_MCP_FIXTURE_TOOLS = [
@@ -2379,8 +2624,13 @@ async function runNativePerformanceMcpSelftest(): Promise<void> {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const nativeOnly = process.argv.length === 3 && process.argv[2] === '--native-performance-selftest';
-  if (process.argv.length > 2 && !nativeOnly) throw new Error('Expected no arguments or exact --native-performance-selftest.');
-  if (!nativeOnly) await runLegacyMcpCapabilitySelftest();
-  await runNativePerformanceMcpSelftest();
+  const focus = process.argv[2];
+  if (process.argv.length > 3 || focus !== undefined && !['--ai-navigation-selftest', '--md-navigation-selftest', '--native-performance-selftest'].includes(focus)) {
+    throw new Error('Expected no arguments or exactly one supported focused MCP selftest flag.');
+  }
+  if (!focus) await runLegacyMcpCapabilitySelftest();
+  for (const fixture of AUTHORED_NAVIGATION_FIXTURES) {
+    if (!focus || focus === '--' + fixture.family + '-navigation-selftest') await runAuthoredNavigationMcpSelftest(fixture);
+  }
+  if (!focus || focus === '--native-performance-selftest') await runNativePerformanceMcpSelftest();
 }

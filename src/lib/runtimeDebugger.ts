@@ -11,6 +11,7 @@ import { workspaceSourceFiles } from '../types';
 
 import type { MDNode, ModWorkspace } from '../types';
 import { normPath, parseXmlLenient, walkElements } from './xmlLite';
+import { isX4FileSignatureNotice } from './logTelemetry';
 
 export type RuntimeAttributionDisposition =
   | 'confirmed_active'
@@ -199,6 +200,8 @@ export interface RuntimeCandidateIncident {
   explicitUnknown: boolean;
   isEngineFailure: boolean;
   engineSignature?: string;
+  /** Positioned tagged Lua faults require exact installed-folder attribution. */
+  physicalLuaSource?: true;
   source: RuntimeCandidateSource;
   evidence: RuntimeCandidateEvidence[];
 }
@@ -650,7 +653,7 @@ function extractExtensionPath(text: string): { folder: string; relativePath: str
     if (!folderMatch) continue;
     const folder = folderMatch[1];
     const afterFolder = rest.slice(folder.length).replace(/^\/+/, '');
-    const pathMatch = afterFolder.match(/^([^()\s"'`,]+?)(?:\((\d+)\)(?::)?|:(\d+))?(?=\s|$|["'`,])/);
+    const pathMatch = afterFolder.match(/^([^()\s"'`,]+?)(?:(?:\((\d+)\)|:(\d+)):?)?(?=\s|$|["'`,])/);
     if (!pathMatch || !pathMatch[1]) continue;
     return { folder, relativePath: normalizeRuntimePath(pathMatch[1]), line: pathMatch[2] || pathMatch[3] ? Number(pathMatch[2] || pathMatch[3]) : undefined };
   }
@@ -660,11 +663,23 @@ function extractExtensionPath(text: string): { folder: string; relativePath: str
 function extractFileReferences(text: string): Array<{ file: string; line?: number }> {
   const value = normalizedText(text);
   const found: Array<{ file: string; line?: number }> = [];
-  const re = /((?:[A-Za-z]:\/)?[^()\s"'`]+?\.(?:lua|xpl|xml))(?:(?::(\d+))|\((\d+)\))(?::?)/gi;
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(value))) {
-    const file = normalizeRuntimePath(match[1].replace(/^[([{]+/, '').replace(/[\]},]+$/, ''));
-    if (file) found.push({ file, line: Number(match[2] || match[3]) });
+  const tokens = /[^()\s"'`]+/g;
+  const reference = /((?:[A-Za-z]:\/)?[^()\s"'`]+?\.(?:lua|xpl|xml))(?:(?::(\d+))|\((\d+)\))(?::?)/iy;
+  let token: RegExpExecArray | null;
+  while ((token = tokens.exec(value))) {
+    const tokenEnd = tokens.lastIndex;
+    let start = token.index;
+    while (start < tokenEnd) {
+      reference.lastIndex = start;
+      const match = reference.exec(value);
+      // A later start in this token cannot supply a missing positioned suffix.
+      if (!match) break;
+      const file = normalizeRuntimePath(match[1].replace(/^[([{]+/, '').replace(/[\]},]+$/, ''));
+      if (file) found.push({ file, line: Number(match[2] || match[3]) });
+      start = reference.lastIndex;
+    }
+    // A parenthesized coordinate can extend beyond the filename token.
+    tokens.lastIndex = Math.max(tokenEnd, start);
   }
   return found;
 }
@@ -767,12 +782,41 @@ const FILE_IO_RE = /\b(?:file\s*i\/?o|fileio|signature|failed to verify|loading 
 const BRACKETED_DIAGNOSTIC_TAG_RE = /\[[A-Za-z][A-Za-z0-9_-]{2,}\]/i;
 const TWO_BRACKETED_DIAGNOSTIC_TAGS_RE = /(?:\[[A-Za-z][A-Za-z0-9_-]{2,}\]){2,}/i;
 
+function taggedRuntimePayload(line: string): string | undefined {
+  if (!/^\s*\[=ERROR=\]/i.test(line) || isX4FileSignatureNotice(line)) return;
+  return /^(?:\[[A-Za-z][A-Za-z0-9_-]{2,}\][ \t]*)+(.+)$/i.exec(compactMessage(line))?.[1];
+}
+
+/** Undefined means another format. Null means a Lua source without a usable position. */
+function positionedTaggedLuaSource(payload: string) {
+  const source = /^extensions[\\/]([a-z0-9_-][a-z0-9_.-]{0,127})[\\/]([^():\s"'`,]+?\.(?:lua|xpl))(?=$|[:(\s])/i.exec(payload);
+  if (!source) return;
+  const located = /^(?::(\d+)|\((\d+)\)):?[ \t]+(.+)$/.exec(payload.slice(source[0].length));
+  if (!located) return null;
+  const relative = normalizedText(source[2]);
+  const line = Number(located[1] || located[2]);
+  if (!Number.isSafeInteger(line) || line < 1 || relative.length > RUNTIME_DEBUGGER_LIMITS.maxSourceTokenChars
+    || relative.split('/').some(part => !part || part === '.' || part === '..')) return null;
+  const signature = ENGINE_SIGNATURES.find(({ re, label }) => label !== 'engine *** marker' && re.exec(located[3])?.index === 0)?.label;
+  return { folder: normalizeIdentity(source[1]), file: normalizeRuntimePath(relative), line, signature };
+}
+
+export function taggedLuaFaultFolder(line: string): string | undefined {
+  const payload = taggedRuntimePayload(line);
+  const source = payload ? positionedTaggedLuaSource(payload) : undefined;
+  return source?.signature ? source.folder : undefined;
+}
+
+function isAuthoredTaggedPayload(payload: string): boolean {
+  return !/^(?:extensions[\\/]|\S+\.(?:lua|xml|xpl)[:(]\d+|script error\b|error in (?:md|ai)\b|attempt to\b|stack traceback\b|invalid (?:argument|parameter)\b)/i.test(payload);
+}
+
 /** A tagged status can quote a fault while reporting ordinary mod activity. */
 export function isAuthoredRuntimeDiagnostic(line: string): boolean {
-  if (!/^\s*\[=ERROR=\]/i.test(line) || /verify the file signature/i.test(line)) return false;
-  const tagged = /^(?:\[[A-Za-z][A-Za-z0-9_-]{2,}\]\s*)+(.+)$/i.exec(compactMessage(line));
-  if (!tagged) return false;
-  return !/^(?:extensions[\\/]|\S+\.(?:lua|xml|xpl)[:(]\d+|script error\b|error in (?:md|ai)\b|attempt to\b|stack traceback\b|invalid (?:argument|parameter)\b)/i.test(tagged[1]);
+  const payload = taggedRuntimePayload(line);
+  if (!payload) return false;
+  const source = positionedTaggedLuaSource(payload);
+  return source === undefined ? isAuthoredTaggedPayload(payload) : !source?.signature;
 }
 
 function isUiWidgetFault(line: string): boolean {
@@ -782,6 +826,9 @@ function isUiWidgetFault(line: string): boolean {
 function isUiReload(line: string): boolean {
   return /^(?:Errormessage:\s*[^\r\n]*?:\d+:\s*)?Failed to create view for menu\s+[^\r\n]+?\.\s+Reloading UI\b/i.test(compactMessage(line));
 }
+
+const UI_TRACE_START = /^\s*stack traceback:/i;
+const RUNTIME_GROUP_LINE_LIMIT = 80;
 
 function luaExtensionFrame(line: string): { folder: string; frame: RuntimeStackFrame } | undefined {
   const match = /^\s*\[string (["'])extensions[\\/]([a-z0-9_-][a-z0-9_.-]{0,127})[\\/]([^"'\r\n]+)\1\]:(\d+)(?=$|:|\s)/i.exec(line);
@@ -798,7 +845,7 @@ function luaExtensionFrame(line: string): { folder: string; frame: RuntimeStackF
 }
 
 function uiFaultSource(lines: string[], widget: boolean): RuntimeCandidateSource {
-  const traceStart = widget ? lines.findIndex(line => /^\s*stack traceback:/i.test(line)) : -1;
+  const traceStart = widget ? lines.findIndex(line => UI_TRACE_START.test(line)) : -1;
   const frames = traceStart < 0 ? [] : lines.slice(traceStart + 1).flatMap(line => luaExtensionFrame(line) ?? []);
   const folders = new Set(frames.map(({ folder }) => folder));
   const primary = frames[0];
@@ -843,6 +890,43 @@ function isContinuation(line: RuntimeLogLine): boolean {
     || Boolean(extractFileReferences(text).length && /\.(?:lua|xpl|xml)/i.test(text));
 }
 
+function runtimeGroupContinuation(line: RuntimeLogLine, widget: boolean): 'boundary' | 'reload' | 'continue' {
+  if (isUiWidgetFault(line.text) || isX4FileSignatureNotice(line.text)) return 'boundary';
+  if (isUiReload(line.text)) return widget ? 'reload' : 'boundary';
+  return isContinuation(line) || (widget && luaExtensionFrame(line.text)) ? 'continue' : 'boundary';
+}
+
+export type RuntimeWidgetFaultGroup = {
+  lines: number;
+  hasTrace: boolean;
+  /** Undefined until a frame establishes a folder. Null means conflicting folders. */
+  folder?: string | null;
+};
+
+/** Advance a complete physical line without retaining text or source frames across polls. */
+export function advanceRuntimeWidgetFaultGroup(pending: RuntimeWidgetFaultGroup | undefined, text: string):
+  { pending?: RuntimeWidgetFaultGroup; closedFolder?: string } | undefined {
+  if (!pending) {
+    if (!/CWidgetController::UpdateFrame/i.test(text) || !isUiWidgetFault(text)) return;
+    return { pending: { lines: 1, hasTrace: false } };
+  }
+
+  const continuation = runtimeGroupContinuation(parseLogLine(text, pending.lines + 1), true);
+  if (continuation === 'boundary') {
+    return {
+      closedFolder: pending.folder ?? undefined,
+      pending: isUiWidgetFault(text) ? { lines: 1, hasTrace: false } : undefined,
+    };
+  }
+
+  const frameFolder = pending.hasTrace ? luaExtensionFrame(text)?.folder : undefined;
+  let folder = pending.folder;
+  if (frameFolder) folder = folder === undefined || folder === frameFolder ? frameFolder : null;
+  const lines = pending.lines + 1;
+  if (continuation === 'reload' || lines === RUNTIME_GROUP_LINE_LIMIT) return { closedFolder: folder ?? undefined };
+  return { pending: { lines, hasTrace: pending.hasTrace || UI_TRACE_START.test(text), folder } };
+}
+
 function compactMessage(text: string): string {
   return text.replace(/^\s*\[[^\]]+\]\s*/, '').replace(/^\s*\d+(?:\.\d+)?\s+/, '').trim();
 }
@@ -881,13 +965,24 @@ function parseCandidate(lines: RuntimeLogLine[]): RuntimeCandidateIncident {
   const raw = clipText(rawLines.join('\n'), RUNTIME_DEBUGGER_LIMITS.maxGroupChars);
   const widget = isUiWidgetFault(fullLines[0]);
   const uiFault = widget || isUiReload(fullLines[0]);
+  const signatureNotice = isX4FileSignatureNotice(fullLines[0]);
   const source = boundRuntimeSource(uiFault ? uiFaultSource(fullLines, widget) : extractSource(fullRaw, fullLines));
+  const tagged = taggedRuntimePayload(fullLines[0]);
+  const taggedLua = tagged ? positionedTaggedLuaSource(tagged) : undefined;
+  if (taggedLua) {
+    source.extensionFolder = taggedLua.folder;
+    source.file = taggedLua.file;
+    source.line = taggedLua.line;
+  }
   const signature = uiFault ? 'X4 UI validation and reload'
-    : isAuthoredRuntimeDiagnostic(fullLines[0]) ? undefined : engineSignature(fullRaw);
+    : signatureNotice ? undefined
+      : taggedLua !== undefined ? taggedLua?.signature
+        : tagged && isAuthoredTaggedPayload(tagged) ? undefined : engineSignature(fullRaw);
   const authored = isAuthoredDiagnostic(fullRaw);
   const fileIo = FILE_IO_RE.test(fullRaw);
   const classification = uiFault ? { kind: 'ui_reload_fault' as const, isEngineFailure: true }
-    : candidateKind(source, fullRaw, signature, authored, fileIo);
+    : signatureNotice ? { kind: 'file_io' as const, isEngineFailure: false }
+      : candidateKind(source, fullRaw, signature, authored, fileIo);
   const recognized = classification.kind !== 'unknown';
   const timestamps = lines.map(line => line.timestamp).filter(Boolean) as string[];
   const evidence: RuntimeCandidateEvidence[] = [];
@@ -928,6 +1023,7 @@ function parseCandidate(lines: RuntimeLogLine[]): RuntimeCandidateIncident {
     explicitUnknown: !recognized,
     isEngineFailure: classification.isEngineFailure,
     ...(signature ? { engineSignature: signature } : {}),
+    ...(taggedLua?.signature ? { physicalLuaSource: true as const } : {}),
     source,
     evidence,
   };
@@ -957,22 +1053,23 @@ export function parseRuntimeCandidateBatch(logText: string, options?: RuntimePar
     const group = [lines[index]];
     const widget = isUiWidgetFault(lines[index].text);
     const orphanReload = isUiReload(lines[index].text);
+    const signatureNotice = isX4FileSignatureNotice(lines[index].text);
     const isolated = isolatedLines?.has(lines[index].lineNumber);
     let cursor = index + 1;
     let closedByReload = false;
-    while (!isolated && !orphanReload && cursor < lines.length && group.length < 80) {
+    while (!isolated && !orphanReload && !signatureNotice && cursor < lines.length && group.length < RUNTIME_GROUP_LINE_LIMIT) {
       const next = lines[cursor];
-      if (isolatedLines?.has(next.lineNumber) || isUiWidgetFault(next.text)) break;
-      const reload = isUiReload(next.text);
-      if (reload ? !widget : !isContinuation(next) && !(widget && luaExtensionFrame(next.text))) break;
+      if (isolatedLines?.has(next.lineNumber)) break;
+      const continuation = runtimeGroupContinuation(next, widget);
+      if (continuation === 'boundary') break;
       group.push(next);
       cursor++;
-      if (reload) {
+      if (continuation === 'reload') {
         closedByReload = true;
         break;
       }
     }
-    if (widget && !isolated && !closedByReload && cursor === lines.length && group.length < 80) {
+    if (widget && !isolated && !closedByReload && cursor === lines.length && group.length < RUNTIME_GROUP_LINE_LIMIT) {
       openUiFaultStartLine = lines[index].lineNumber;
     }
     candidates.push(parseCandidate(group));
@@ -1061,6 +1158,7 @@ function ownerDisplayEvidence(owner: RuntimeOwnerRecord, candidate: RuntimeCandi
 /** Attribute one candidate; weak names can never produce confirmed_active. */
 export function attributeRuntimeCandidate(index: RuntimeOwnershipIndex, candidate: RuntimeCandidateIncident): RuntimeAttribution {
   const uiFault = candidate.kind === 'ui_reload_fault';
+  const physicalFolderRequired = uiFault || candidate.physicalLuaSource;
   const folder = candidate.source.extensionFolder;
   if (uiFault && !folder) {
     return { disposition: 'unknown', confidence: 0,
@@ -1071,7 +1169,7 @@ export function attributeRuntimeCandidate(index: RuntimeOwnershipIndex, candidat
   if (authoredEmitters.length) return attributeAuthoredEmitter(index, authoredEmitters);
 
   const exact = index.owners.map(owner => {
-    if (!uiFault) return { owner, evidence: exactOwnerEvidence(owner, candidate) };
+    if (!physicalFolderRequired) return { owner, evidence: exactOwnerEvidence(owner, candidate) };
     const evidence: RuntimeAttributionEvidence[] = [];
     if (folder && owner.exactDeployedFolders.includes(folder)) addOwnerMatch(evidence, owner, 'exact deployed extension folder', folder, 120);
     return { owner, evidence };
@@ -1114,8 +1212,8 @@ export function attributeRuntimeCandidate(index: RuntimeOwnershipIndex, candidat
     };
   }
 
-  if (uiFault) return { disposition: 'unknown', confidence: 0,
-    reason: 'The extension named by the Lua frame is outside the physical folder inventory.', evidence: [] };
+  if (physicalFolderRequired) return { disposition: 'unknown', confidence: 0,
+    reason: 'The extension named by the Lua source is outside the physical folder inventory.', evidence: [] };
 
   const aliases = index.owners.flatMap(owner => ownerAliasEvidence(owner, candidate));
   if (aliases.length) {

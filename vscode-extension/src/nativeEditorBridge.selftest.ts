@@ -83,6 +83,18 @@ try {
   fs.writeFileSync(diagnosticFile, diagnosticText, "utf8");
   check("refuses changed raw bytes even when displayed text is the same", Boolean(checkNativeDiagnosticSource(
     diagnosticFile, lock, diagnosticText, false)));
+  const workspaceRootId = "a".repeat(64);
+  const boundFile = { source: "x4forge-studio", type: "open-bound-workspace-file", path: "md/main.xml",
+    sourceFolder: "fixture", expectedWorkspaceRootId: workspaceRootId };
+  const parsedBoundFile = parseNativeEditorRequest(boundFile);
+  check("parses a native file open bound to its Mod Workspace folder",
+    parsedBoundFile?.type === "open-bound-workspace-file" && parsedBoundFile.expectedWorkspaceRootId === workspaceRootId);
+  check("refuses missing or malformed folder identity and traversal on bound file opens",
+    parseNativeEditorRequest({ ...boundFile, expectedWorkspaceRootId: undefined }) === null
+      && parseNativeEditorRequest({ ...boundFile, expectedWorkspaceRootId: "invalid" }) === null
+      && parseNativeEditorRequest({ ...boundFile, sourceFolder: "../fixture" }) === null);
+  check("a bound file request cannot fall through to a legacy open",
+    parseNativeEditorRequest({ ...boundFile, type: "open-workspace-file" }) === null);
   const diff = parseNativeEditorRequest({ source: "x4forge-studio", type: "open-text-diff", title: "Wares", leftLabel: "Base", rightLabel: "Edited", leftContent: "<wares/>", rightContent: "<wares><ware/></wares>", language: "xml" });
   check("parses bounded native diff", diff?.type === "open-text-diff" && diff.language === "xml" && diff.rightLabel === "Edited");
   check("rejects oversized native diff", parseNativeEditorRequest({ source: "x4forge-studio", type: "open-text-diff", leftContent: "x".repeat(8 * 1024 * 1024 + 1), rightContent: "" }) === null);

@@ -25,7 +25,7 @@ import { parseArgs } from 'node:util';
 import { flattenProjectValidation, loadProjectFromDisk, runProjectValidation, type FlatProjectDiagnostic, type ProjectValidationResult } from "../src/server/projectValidation";
 import { readCanonicalMdProviderCatalog } from '../src/lib/canonicalMdProviderCatalog';
 import { isMdReferenceCoverageCheck } from '../src/lib/mdEffectiveLibraryPurpose';
-import { buildValidationEvidence } from '../src/lib/validationEvidence';
+import { buildValidationEvidence, MD_INITIAL_STATE_COVERAGE_CHECK, sourceInventoryGaps } from '../src/lib/validationEvidence';
 import { renderValidationReport, safeValidationLog, stringifyValidationJson, validationSeverity, type ValidationReportFormat, type ValidationSeverity } from './x4validate-report';
 
 function printUsage() {
@@ -86,14 +86,14 @@ function main(): number {
   const gated = values.format !== undefined || values['fail-on'] !== undefined;
   const passed = result.ok && (!gated || !flat.some(finding => validationSeverity[finding.severity] >= validationSeverity[failOn]));
 
+  const evidence = load.skipped.length || !result.evidence ? buildValidationEvidence(load.project, flat, [
+    ...(result.evidence?.coverage.gaps || []),
+    ...sourceInventoryGaps(load.skipped),
+  ]) : result.evidence;
   if (values.format !== undefined) {
-    const evidence = load.skipped.length || !result.evidence ? buildValidationEvidence(load.project, flat, [
-      ...(result.evidence?.coverage.gaps || []),
-      ...load.skipped.map(file => ({ check: 'source.inventory', filePath: file.path, reason: file.reason })),
-    ]) : result.evidence;
     console.log(renderValidationReport(values.format as ValidationReportFormat, target, load.loaded, evidence, result.ok, passed, failOn));
   } else if (values.json) {
-    console.log(stringifyValidationJson({ target, loaded: load.loaded, skipped: load.skipped, ...result, flat }, 2));
+    console.log(stringifyValidationJson({ target, loaded: load.loaded, skipped: load.skipped, ...result, evidence, flat }, 2));
   } else {
     printHumanReport(target, load.project.id, load.skipped.length, result, flat);
     if (values['fail-on'] !== undefined) console.log(`Severity gate (${failOn}): ${passed ? 'PASS' : 'FAIL'}`);
@@ -125,19 +125,21 @@ function printHumanReport(target: string, id: string, skipped: number, result: P
   const lines = flat.map(f =>
     `[${f.severity}] ${f.code || "validation"}: ${f.message}${f.filePath ? ` (${f.filePath}${f.line ? `:${f.line}` : ""})` : ""}`,
   );
-  const mdReferenceGaps = result.evidence?.coverage.gaps.filter(gap => isMdReferenceCoverageCheck(gap.check)) ?? [];
+  const mdCoverageGaps = result.evidence?.coverage.gaps.filter(gap =>
+    isMdReferenceCoverageCheck(gap.check) || gap.check === MD_INITIAL_STATE_COVERAGE_CHECK) ?? [];
 
   if (lines.length) {
     console.log(`\nFindings (${lines.length}):`);
     for (const l of lines) console.log("  " + logText(l));
   } else {
-    console.log(mdReferenceGaps.length ? "\nNo findings from completed checks." : "\nNo findings.");
+    console.log(mdCoverageGaps.length ? "\nNo findings from completed checks." : "\nNo findings.");
   }
 
-  if (mdReferenceGaps.length) {
-    console.log('\nMD reference coverage incomplete:');
-    for (const gap of mdReferenceGaps) {
-      const location = gap.filePath ? `${gap.filePath}: ` : '';
+  if (mdCoverageGaps.length) {
+    console.log('\nMD coverage incomplete:');
+    for (const gap of mdCoverageGaps) {
+      const position = gap.line === undefined ? '' : `:${gap.line}${gap.column === undefined ? '' : `:${gap.column}`}`;
+      const location = gap.filePath ? `${gap.filePath}${position}: ` : '';
       console.log(`  ${logText(`[${gap.check}] ${location}${gap.reason}`)}`);
     }
   }

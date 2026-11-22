@@ -98,7 +98,14 @@ test('cancel_conversation actor/template semantic lint blocks only the missing-a
   expect(template.summary.mdPitfallErrors).toBe(0);
 });
 
-test('fromPath validation reads a real mod folder server-side', async ({ request }) => {
+async function withFromPathDirectoryFixture(
+  request: APIRequestContext,
+  exercise: () => Promise<void>,
+): Promise<void> {
+  const prior = await request.get('/api/schema/config', { headers: bearer() });
+  expect(prior.ok(), await prior.text()).toBeTruthy();
+  const { config = {} } = await prior.json() as { config?: { modWorkspacePath?: string; filesystemPath?: string } };
+  const restore = { modWorkspacePath: config.modWorkspacePath || '', filesystemPath: config.filesystemPath || '' };
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'x4forge-from-path-'));
   const staging = path.join(temp, 'staging');
   const deployment = path.join(temp, 'deployment');
@@ -121,6 +128,19 @@ test('fromPath validation reads a real mod folder server-side', async ({ request
     });
     expect(configured.ok(), await configured.text()).toBeTruthy();
 
+    await exercise();
+  } finally {
+    const restored = await request.post('/api/schema/config', { headers: bearer(), data: restore });
+    expect(restored.ok(), await restored.text()).toBeTruthy();
+    const readback = await request.get('/api/schema/config', { headers: bearer() });
+    expect(readback.ok(), await readback.text()).toBeTruthy();
+    expect((await readback.json()).config).toMatchObject(restore);
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+}
+
+test('fromPath validation reads a real mod folder server-side', async ({ request }) => {
+  await withFromPathDirectoryFixture(request, async () => {
     const v = await validate(request, { fromPath: 'from_path_fixture' });
     expect(v.source.mode).toBe('fromPath');
     expect(v.source.loaded.length).toBeGreaterThan(5);
@@ -128,14 +148,14 @@ test('fromPath validation reads a real mod folder server-side', async ({ request
     // layers report availability honestly
     expect(v.schema.mdAvailable).toBe(true);
     expect(v.scriptProperties.available).toBe(true);
-  } finally {
-    fs.rmSync(temp, { recursive: true, force: true });
-  }
+  });
 });
 
 test('fromPath refuses paths outside the configured roots', async ({ request }) => {
-  const res = await request.post('/api/agent/project/validate', { headers: bearer(), data: { fromPath: '..\\..\\Windows' } });
-  expect([400, 404]).toContain(res.status());
+  await withFromPathDirectoryFixture(request, async () => {
+    const res = await request.post('/api/agent/project/validate', { headers: bearer(), data: { fromPath: '..\\..\\Windows' } });
+    expect([400, 404]).toContain(res.status());
+  });
 });
 
 test('new public selftest endpoints are green', async ({ request }) => {

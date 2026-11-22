@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useId, useMemo } from 'react';
 import { 
   X, 
   RefreshCw, 
@@ -35,7 +35,8 @@ import {
   AlignVerticalDistributeCenter,
   GitBranch,
   Repeat,
-  Activity
+  Activity,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { mapTelemetryToNodes, type LiveNodeBadge } from '../lib/liveCanvasTelemetry';
 import { MDNode, MDLink, ModWorkspace, Port, NODE_TEMPLATES, validateModWorkspace, generateMDXML, type PackageDiagnostic } from '../types';
@@ -125,6 +126,30 @@ interface CanvasProps {
   onActiveMdScriptChange?: (script: string | null) => void;
   packageDiagnostics?: PackageDiagnostic[];
   diagnosticSource?: DiagnosticSource;
+  modWorkspacePath?: string;
+  filesystemPath?: string;
+}
+
+function sourceMdListUrl(source: string, workspaceRoot: string, filesystemRoot: string): string | null {
+  const normalize = (value: string) => value.trim().replace(/\\/g, '/');
+  const absolute = (value: string) => /^(?:[A-Za-z]:\/|\/)/.test(value) && !/(?:^|\/)\.{1,2}(?:\/|$)/.test(value);
+  const directory = normalize(source);
+  if (!absolute(directory)) return null;
+  const roots = [['workspace', workspaceRoot], ['filesystem', filesystemRoot]] as const;
+  const candidates = roots.map(([role, root]) => ({ role, root: normalize(root) }))
+    .filter(({ root }) => absolute(root))
+    .sort((left, right) => right.root.length - left.root.length);
+  for (const { role, root } of candidates) {
+    const cleanRoot = root.replace(/\/+$/, '');
+    const cleanDirectory = directory.replace(/\/+$/, '');
+    const key = (value: string) => /^(?:[A-Za-z]:|\/\/)/.test(root) ? value.toLowerCase() : value;
+    const prefix = cleanRoot + '/';
+    if (key(cleanDirectory) !== key(cleanRoot) && !key(cleanDirectory).startsWith(key(prefix))) continue;
+    const relative = cleanDirectory.slice(prefix.length);
+    const query = new URLSearchParams({ root: role, depth: '1', path: relative ? relative + '/md' : 'md' });
+    return '/api/fs/list?' + query;
+  }
+  return null;
 }
 
 function Canvas({
@@ -143,7 +168,9 @@ function Canvas({
   activeMdScript = null,
   onActiveMdScriptChange,
   packageDiagnostics = [],
-  diagnosticSource = 'checking'
+  diagnosticSource = 'checking',
+  modWorkspacePath = '',
+  filesystemPath = '',
 }: CanvasProps) {
   const [zoom, setZoom] = useState<number>(1);
   const mdScriptOptions = useMemo(() => [...new Set(
@@ -151,12 +178,65 @@ function Canvas({
       .map(node => String((node.properties as any)?.mdFileStem || '').trim())
       .filter(Boolean),
   )].sort((a, b) => a.localeCompare(b)), [workspace.nodes]);
+  const modeledMdPaths = useMemo(() => new Set(workspace.nodes.flatMap(node => {
+    const file = node.source?.path?.replace(/\\/g, '/');
+    const stem = String(node.properties?.mdFileStem || '').trim();
+    const mdPath = file || (stem ? 'md/' + stem + '.xml' : '');
+    return /^md\/[^/]+\.xml$/i.test(mdPath) ? [mdPath.toLowerCase()] : [];
+  })), [workspace.nodes]);
+  const sourceDirectory = workspace.sourceStamp?.dir || workspace.sourceFolder || '';
+  const sourceMdUrl = useMemo(() => sourceMdListUrl(sourceDirectory, modWorkspacePath, filesystemPath),
+    [sourceDirectory, modWorkspacePath, filesystemPath]);
+  const context = window.__X4_WORKSPACE_CONTEXT__;
+  const sourceMdAuthority = pollingResourceKey('canvas-md-source',
+    [context?.getWorkspaceId(), context?.getSelectionRevision(), sourceDirectory, sourceMdUrl]);
+  const [sourceMd, setSourceMd] = useState<{ authority: string; files: string[] | null } | null>(null);
+  React.useLayoutEffect(() => setSourceMd(null), [sourceMdAuthority]);
+  useContinuousPolling({
+    enabled: !!sourceMdUrl,
+    resourceKey: sourceMdAuthority,
+    contract: 'GET ' + sourceMdUrl,
+    intervalMs: 15000,
+    run: async signal => {
+      if (!sourceMdUrl) throw new Error('Source directory listing is unavailable.');
+      const entries = await fetchPollingJson<unknown>(sourceMdUrl, undefined, signal);
+      if (!Array.isArray(entries)) throw new Error('Source directory listing is unavailable.');
+      return entries.flatMap(entry => entry?.kind === 'file' && typeof entry.name === 'string' && /^[^/\\]+\.xml$/i.test(entry.name)
+        ? [entry.name] : []);
+    },
+    onResult: files => setSourceMd({ authority: sourceMdAuthority, files }),
+    onError: () => setSourceMd({ authority: sourceMdAuthority, files: null }),
+  });
+  const currentSourceMd = sourceMd?.authority === sourceMdAuthority ? sourceMd : null;
+  const outsideGraph = currentSourceMd?.files?.filter(name => !modeledMdPaths.has('md/' + name.toLowerCase())) || [];
   // Dependency-graph panel defaults CLOSED: open-by-default it floats at z-40 over the
   // canvas showing only its empty placeholder ("select a node…") while SILENTLY EATING
   // pointer events — node/port/delete clicks under its 320×380px footprint retried until
   // timeout (found via the canvas e2e suite, 2026-07-09: 3/4 tests red on exactly this).
-  // The toolbar Filter toggle (violet when open) remains the way in.
+  // The Graph tools disclosure retains the dependency panel toggle.
   const [depPanelOpen, setDepPanelOpen] = useState<boolean>(false);
+  const [graphToolsOpen, setGraphToolsOpen] = useState(false);
+  const graphToolsId = useId();
+  const graphToolsButton = useRef<HTMLButtonElement>(null);
+  const graphToolsPanel = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!graphToolsOpen) return;
+
+    function dismissOutside(event: PointerEvent) {
+      if (!(event.target instanceof Node)) return;
+      if (graphToolsButton.current?.contains(event.target) || graphToolsPanel.current?.contains(event.target)) return;
+      setGraphToolsOpen(false);
+    }
+
+    document.addEventListener('pointerdown', dismissOutside);
+    return () => document.removeEventListener('pointerdown', dismissOutside);
+  }, [graphToolsOpen]);
+
+  function closeGraphTools() {
+    setGraphToolsOpen(false);
+    graphToolsButton.current?.focus({ preventScroll: true });
+  }
   // LIVE game telemetry (Play-In-Editor-adjacent, 2026-07-09): when ON, the canvas polls
   // the X4 debug log and lights up cue nodes that are firing (green ▶ hits) or erroring
   // (red ✗) IN THE RUNNING GAME. Silence is not a fault — silent cues get no badge.
@@ -1464,6 +1544,8 @@ function Canvas({
         e.preventDefault();
         addCommentBox();
       } else if (e.key === ' ' || e.code === 'Space') {
+        // Let focused controls handle Space before treating it as a canvas shortcut.
+        if (e.defaultPrevented || activeEl?.closest('summary, button, select, a[href], [role="button"]')) return;
         // Spacebar opens the quick-add node palette AT THE CURSOR (Unreal-style), keyboard-driven.
         e.preventDefault();
         if (!canvasRef.current) return;
@@ -1559,194 +1641,215 @@ function Canvas({
           />
         );
       })()}
-      {/* Canvas Top Controls Toolbar */}
-      <div className="absolute top-4 left-4 z-10 flex items-center gap-1.5 bg-[#0f131a]/95 border border-cyan-500/20 p-2 rounded-lg shadow-2xl glass-effect">
-        <button
-          onClick={() => setZoom(prev => Math.min(prev + 0.1, 1.4))}
-          title="Zoom In (Scroll Up)"
-          className="p-1.5 rounded hover:bg-white/5 text-slate-400 hover:text-cyan-400 transition-all cursor-pointer"
-        >
-          <ZoomIn className="w-4 h-4" />
-        </button>
-        <button
-          onClick={() => setZoom(prev => Math.max(prev - 0.1, 0.6))}
-          title="Zoom Out (Scroll Down)"
-          className="p-1.5 rounded hover:bg-white/5 text-slate-400 hover:text-cyan-400 transition-all cursor-pointer"
-        >
-          <ZoomOut className="w-4 h-4" />
-        </button>
-        <button
-          onClick={() => fitToNodes(nodesFilteredByCue)}
-          title="Fit view to nodes (frame all)"
-          className="p-1.5 rounded hover:bg-white/5 text-slate-400 hover:text-cyan-400 transition-all cursor-pointer"
-        >
-          <Maximize2 className="w-4 h-4" />
-        </button>
-        <button
-          onClick={() => { setZoom(1); setPanOffset({ x: 0, y: 0 }); }}
-          title="Reset Graph Zoom"
-          className="p-1.5 rounded hover:bg-white/5 text-slate-400 hover:text-cyan-400 text-[11px] font-mono font-medium flex items-center gap-1 cursor-pointer"
-        >
-          <RefreshCw className="w-3.5 h-3.5" />
-          100%
-        </button>
-
-        {mdScriptOptions.length > 1 && onActiveMdScriptChange && (
-          <select
-            data-testid="canvas-md-script-filter"
-            value={activeMdScript || ''}
-            onChange={(event) => onActiveMdScriptChange(event.target.value || null)}
-            title="Show the complete graph or isolate one Mission Director file"
-            aria-label="Mission Director file filter"
-            className="h-7 max-w-[190px] rounded border border-cyan-500/25 bg-[#0a0e14] px-2 text-[10px] font-mono font-bold text-cyan-200 outline-none hover:border-cyan-400/50 focus:border-cyan-400"
+      <div
+        className={`pointer-events-none absolute inset-4 flex flex-col items-start gap-1.5 ${graphToolsOpen ? 'z-[60]' : 'z-10'}`}
+        onBlur={event => {
+          if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) setGraphToolsOpen(false);
+        }}
+        onKeyDown={event => {
+          if (!graphToolsOpen || event.key !== 'Escape' || event.defaultPrevented) return;
+          event.preventDefault();
+          event.stopPropagation();
+          closeGraphTools();
+        }}
+      >
+        <div className="flex min-h-0 w-fit max-w-full flex-col items-end gap-1.5">
+          <div
+            data-testid="canvas-toolbar"
+            className="pointer-events-auto flex w-fit max-w-full shrink-0 flex-wrap items-center gap-1.5 rounded-lg border border-cyan-500/20 bg-[#0f131a]/95 p-2 shadow-2xl glass-effect"
           >
-            <option value="">ALL MD FILES ({mdScriptOptions.length})</option>
-            {mdScriptOptions.map(script => (
-              <option key={script} value={script}>{script}.xml</option>
-            ))}
-          </select>
-        )}
-        
-        <div className="h-5 w-px bg-white/10 mx-1" />
+            <button
+              onClick={() => setZoom(prev => Math.min(prev + 0.1, 1.4))}
+              title="Zoom In (Scroll Up)"
+              className="p-1.5 rounded hover:bg-white/5 text-slate-400 hover:text-cyan-400 transition-all cursor-pointer"
+            >
+              <ZoomIn className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => setZoom(prev => Math.max(prev - 0.1, 0.6))}
+              title="Zoom Out (Scroll Down)"
+              className="p-1.5 rounded hover:bg-white/5 text-slate-400 hover:text-cyan-400 transition-all cursor-pointer"
+            >
+              <ZoomOut className="w-4 h-4" />
+            </button>
 
-        {/* Comment Box Group (icon-only — compact) */}
-        <button
-          onClick={addCommentBox}
-          title="Group selected nodes inside a Comment Box (Shortcut: C)"
-          className="p-1.5 rounded bg-purple-950/20 hover:bg-purple-900/30 border border-purple-500/20 text-purple-400 hover:text-white transition-all flex items-center cursor-pointer"
-        >
-          <Plus className="w-3.5 h-3.5" />
-        </button>
+            {/* AAA Feature 2: Stepped logic Flow Simulator */}
+            <button
+              onClick={() => triggerLogicSimulator()}
+              className={`p-1.5 px-2.5 rounded border text-[11px] font-mono font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                simActive
+                  ? 'bg-red-500/10 border-red-500/40 text-red-400'
+                  : 'bg-emerald-950/20 hover:bg-emerald-900/30 border-emerald-500/20 text-emerald-400 hover:text-white'
+              }`}
+              title={simActive ? "Halt Visual Stimulation Flow" : "Boot Interactive XML Step Testing Simulator"}
+            >
+              {simActive ? (
+                <>
+                  <Square className="w-3.5 h-3.5 fill-red-400 shrink-0" />
+                  STOP SIM
+                </>
+              ) : (
+                <>
+                  <Play className="w-3.5 h-3.5 fill-emerald-400 shrink-0" />
+                  PLAY SIMULATION
+                </>
+              )}
+            </button>
 
-        {/* Find in Blueprints Search Bar toggle */}
-        <button
-          onClick={() => setSearchOpen(prev => !prev)}
-          title="Search All Nodes by label, tag, or field properties (Shortcut: Ctrl+F)"
-          className={`p-1.5 px-2.5 rounded border text-[11px] font-mono font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-            searchOpen 
-              ? 'bg-cyan-500/10 border-cyan-500/40 text-cyan-400' 
-              : 'bg-slate-900 hover:bg-slate-800 border-white/10 text-slate-300'
-          }`}
-        >
-          <Search className="w-3.5 h-3.5 font-bold" />
-          FIND
-        </button>
+            <button
+              onClick={() => setIsConsoleDockOpen(prev => !prev)}
+              title="Toggle Simulation Terminal dock"
+              className={`p-1.5 rounded hover:bg-white/5 transition-all relative cursor-pointer ${isConsoleDockOpen ? 'text-amber-400' : 'text-slate-400'}`}
+            >
+              <TerminalIcon className="w-4 h-4" />
+              {simLogs.length > 0 && (
+                <span className="absolute -top-1.5 -right-1 px-1 py-0.5 rounded-full bg-amber-500 text-[8px] leading-none font-bold text-black border border-black">
+                  {simLogs.length}
+                </span>
+              )}
+            </button>
 
-        {/* Compile / Diagnostic checks badge */}
-        <button
-          onClick={() => setDiagnosticPanelOpen(prev => !prev)}
-          data-testid="package-status-badge"
-          className={`p-1.5 px-2.5 rounded text-[11px] font-mono font-bold flex items-center gap-1.5 transition-all border cursor-pointer ${
-            packageStatus.tone === 'red'
-              ? 'bg-red-500/10 border-red-500/20 text-red-400 hover:bg-red-500/15'
-              : packageStatus.tone === 'amber'
-              ? 'bg-amber-500/10 border-amber-500/20 text-amber-400 hover:bg-amber-500/15'
-              : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/15'
-          }`}
-          title={diagnosticSource === 'project'
-            ? 'Continuous full-project validation status. Open for corpus, schema, package, and graph details.'
-            : diagnosticSource === 'checking'
-              ? 'Package compiler is checking the current workspace.'
-              : 'Package compiler is unavailable; showing local MD validation only.'}
-        >
-          {packageStatus.tone === 'red' ? (
-            <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />
-          ) : packageStatus.tone === 'amber' ? (
-            <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-          ) : (
-            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+
+            {mdScriptOptions.length > 1 && onActiveMdScriptChange && (
+              <select
+                data-testid="canvas-md-script-filter"
+                value={activeMdScript || ''}
+                onChange={(event) => onActiveMdScriptChange(event.target.value || null)}
+                title="Show the complete graph or isolate one modeled Mission Director script"
+                aria-label="Mission Director file filter"
+                className="h-7 max-w-[min(190px,100%)] rounded border border-cyan-500/25 bg-[#0a0e14] px-2 text-[10px] font-mono font-bold text-cyan-200 outline-none hover:border-cyan-400/50 focus:border-cyan-400"
+              >
+                <option value="">ALL MODELED MD ({mdScriptOptions.length})</option>
+                {mdScriptOptions.map(script => (
+                  <option key={script} value={script}>{script}.xml</option>
+                ))}
+              </select>
+            )}
+            {sourceDirectory && (
+              <span
+                className={`max-w-full break-words text-[10px] font-mono ${outsideGraph.length ? 'text-amber-300' : 'text-slate-400'}`}
+                title={outsideGraph.length ? 'Source files outside the graph: ' + outsideGraph.join(', ') : 'Top-level XML files in the imported source folder’s md directory'}
+                data-testid="canvas-md-source-inventory"
+              >
+                {currentSourceMd?.files
+                  ? `Source MD: ${currentSourceMd.files.length} files${outsideGraph.length ? ` · ${outsideGraph.length} outside graph` : ''}`
+                  : !sourceMdUrl || currentSourceMd ? 'Source MD inventory unavailable' : 'Checking source MD…'}
+              </span>
+            )}
+
+            {/* Comment Box Group (icon-only — compact) */}
+            <button
+              onClick={addCommentBox}
+              title="Group selected nodes inside a Comment Box (Shortcut: C)"
+              className="p-1.5 rounded bg-purple-950/20 hover:bg-purple-900/30 border border-purple-500/20 text-purple-400 hover:text-white transition-all flex items-center cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+            </button>
+
+            {/* Find in Blueprints Search Bar toggle */}
+            <button
+              onClick={() => setSearchOpen(prev => !prev)}
+              title="Search All Nodes by label, tag, or field properties (Shortcut: Ctrl+F)"
+              className={`p-1.5 px-2.5 rounded border text-[11px] font-mono font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                searchOpen
+                  ? 'bg-cyan-500/10 border-cyan-500/40 text-cyan-400'
+                  : 'bg-slate-900 hover:bg-slate-800 border-white/10 text-slate-300'
+              }`}
+            >
+              <Search className="w-3.5 h-3.5 font-bold" />
+              FIND
+            </button>
+
+            {/* Compile / Diagnostic checks badge */}
+            <button
+              onClick={() => setDiagnosticPanelOpen(prev => !prev)}
+              data-testid="package-status-badge"
+              className={`p-1.5 px-2.5 rounded text-[11px] font-mono font-bold flex items-center gap-1.5 transition-all border cursor-pointer ${
+                packageStatus.tone === 'red'
+                  ? 'bg-red-500/10 border-red-500/20 text-red-400 hover:bg-red-500/15'
+                  : packageStatus.tone === 'amber'
+                  ? 'bg-amber-500/10 border-amber-500/20 text-amber-400 hover:bg-amber-500/15'
+                  : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/15'
+              }`}
+              title={diagnosticSource === 'project'
+                ? 'Continuous full-project validation status. Open for corpus, schema, package, and graph details.'
+                : diagnosticSource === 'checking'
+                  ? 'Package compiler is checking the current workspace.'
+                  : 'Package compiler is unavailable; showing local MD validation only.'}
+            >
+              {packageStatus.tone === 'red' ? (
+                <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+              ) : packageStatus.tone === 'amber' ? (
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              ) : (
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              )}
+              <span>VALIDATION: {packageStatus.label}</span>
+            </button>
+
+
+            <button
+              onClick={() => setLiveMode(prev => !prev)}
+              data-testid="canvas-live-toggle"
+              title={liveMode
+                ? `LIVE game telemetry ON — ${liveStatus ? (liveStatus.error ? `telemetry unavailable: ${liveStatus.error}` : liveStatus.available ? (liveStatus.live ? 'debug log is ACTIVE (game writing now)' : `log found, last update ${liveStatus.updatedAt || 'unknown'}`) : 'no X4 debug log found') : liveCueNames.length ? 'connecting…' : 'no named cue nodes to watch'}. ${liveStatus?.bridge ? liveStatus.bridge.summary + ' ' : ''}Firing cues get green ▶ badges, erroring cues red ✗ — straight from the running game.`
+                : 'LIVE — light up cue nodes from the running game\'s debug log (Play-In-Editor mode)'}
+              className={`p-1.5 rounded flex items-center gap-1 transition-all border cursor-pointer ${
+                liveMode
+                  ? (liveStatus?.live
+                    ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-400'
+                    : 'bg-amber-500/10 border-amber-500/35 text-amber-400')
+                  : 'bg-slate-900 border-white/10 text-slate-350 hover:bg-slate-800'
+              }`}
+            >
+              <Activity className={`w-3.5 h-3.5 ${liveMode ? 'animate-pulse' : ''}`} />
+              <span className="text-[8px] font-mono font-bold tracking-wider">LIVE</span>
+            </button>
+            <button
+              ref={graphToolsButton}
+              type="button"
+              aria-expanded={graphToolsOpen}
+              aria-controls={graphToolsOpen ? graphToolsId : undefined}
+              onClick={() => setGraphToolsOpen(open => !open)}
+              className="flex items-center gap-1.5 whitespace-nowrap rounded border border-white/10 bg-slate-900 px-2.5 py-1.5 font-mono text-[11px] font-bold text-slate-200 hover:border-cyan-500/40 hover:text-cyan-300 focus-visible:outline-2 focus-visible:outline-cyan-400"
+            >
+              <SlidersHorizontal aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+              Graph tools
+            </button>
+          </div>
+          {graphToolsOpen && (
+            <div
+              id={graphToolsId}
+              ref={graphToolsPanel}
+              role="group"
+              aria-label="Graph tools"
+              className="pointer-events-auto min-h-0 w-56 max-w-full overflow-y-auto rounded-lg border border-cyan-500/25 bg-[#0b0e14]/98 p-1.5 shadow-2xl"
+            >
+              {[
+                { label: 'Fit view to nodes', title: 'Fit view to nodes (frame all)', Icon: Maximize2, run: () => fitToNodes(nodesFilteredByCue) },
+                { label: 'Reset zoom to 100%', title: 'Reset Graph Zoom', Icon: RefreshCw, run: () => { setZoom(1); setPanOffset({ x: 0, y: 0 }); } },
+                { label: 'Tidy graph', title: 'Tidy graph — auto-align node layout', Icon: Sparkles, run: autoAlignGraph },
+                { label: 'Dependency trace', title: 'Deps trace — toggle dependency analyzer panel', Icon: Filter, run: () => setDepPanelOpen(open => !open), pressed: depPanelOpen },
+                { label: 'Clear all wires', title: 'Clear all wires/links', Icon: Trash2, run: clearLinks, destructive: true },
+              ].map(({ label, title, Icon, run, pressed, destructive }) => (
+                <button
+                  type="button"
+                  key={label}
+                  title={title}
+                  aria-pressed={pressed}
+                  className="studio-menu-item"
+                  onClick={() => {
+                    closeGraphTools();
+                    run();
+                  }}
+                >
+                  <Icon aria-hidden="true" className={`h-3.5 w-3.5 shrink-0 ${destructive ? 'text-red-300' : ''}`} />
+                  {label}
+                </button>
+              ))}
+            </div>
           )}
-          <span>VALIDATION: {packageStatus.label}</span>
-        </button>
-        
-        <div className="h-5 w-px bg-white/10 mx-1" />
-
-        {/* Tidy Graph Optimizer (icon-only — compact) */}
-        <button
-          onClick={autoAlignGraph}
-          title="Tidy graph — auto-align node layout"
-          className="p-1.5 rounded bg-cyan-950/20 hover:bg-cyan-900/30 border border-cyan-500/20 text-cyan-400 hover:text-white transition-all flex items-center cursor-pointer"
-        >
-          <Sparkles className="w-3.5 h-3.5" />
-        </button>
-
-        {/* AAA Feature 2: Stepped logic Flow Simulator */}
-        <button
-          onClick={() => triggerLogicSimulator()}
-          className={`p-1.5 px-2.5 rounded border text-[11px] font-mono font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-            simActive 
-              ? 'bg-red-500/10 border-red-500/40 text-red-400' 
-              : 'bg-emerald-950/20 hover:bg-emerald-900/30 border-emerald-500/20 text-emerald-400 hover:text-white'
-          }`}
-          title={simActive ? "Halt Visual Stimulation Flow" : "Boot Interactive XML Step Testing Simulator"}
-        >
-          {simActive ? (
-            <>
-              <Square className="w-3.5 h-3.5 fill-red-400 shrink-0" />
-              STOP SIM
-            </>
-          ) : (
-            <>
-              <Play className="w-3.5 h-3.5 fill-emerald-400 shrink-0" />
-              PLAY SIMULATION
-            </>
-          )}
-        </button>
-
-        <button
-          onClick={() => setIsConsoleDockOpen(prev => !prev)}
-          title="Toggle Simulation Terminal dock"
-          className={`p-1.5 rounded hover:bg-white/5 transition-all relative cursor-pointer ${isConsoleDockOpen ? 'text-amber-400' : 'text-slate-400'}`}
-        >
-          <TerminalIcon className="w-4 h-4" />
-          {simLogs.length > 0 && (
-            <span className="absolute -top-1.5 -right-1 px-1 py-0.5 rounded-full bg-amber-500 text-[8px] leading-none font-bold text-black border border-black">
-              {simLogs.length}
-            </span>
-          )}
-        </button>
-        
-        <div className="h-5 w-px bg-white/10 mx-1" />
-
-        <button
-          onClick={clearLinks}
-          title="Clear all wires/links"
-          className="p-1.5 rounded hover:bg-red-500/10 text-slate-400 hover:text-red-400 transition-all flex items-center cursor-pointer"
-        >
-          <Trash2 className="w-3.5 h-3.5" />
-        </button>
-
-        <div className="h-5 w-px bg-white/10 mx-1" />
-
-        <button
-          onClick={() => setDepPanelOpen(prev => !prev)}
-          title="Deps trace — toggle dependency analyzer panel"
-          className={`p-1.5 rounded flex items-center transition-all border cursor-pointer ${
-            depPanelOpen
-              ? 'bg-violet-500/15 border-violet-500/35 text-violet-400'
-              : 'bg-slate-900 border-white/10 text-slate-350 hover:bg-slate-800'
-          }`}
-        >
-          <Filter className="w-3.5 h-3.5" />
-        </button>
-
-        <button
-          onClick={() => setLiveMode(prev => !prev)}
-          data-testid="canvas-live-toggle"
-          title={liveMode
-            ? `LIVE game telemetry ON — ${liveStatus ? (liveStatus.error ? `telemetry unavailable: ${liveStatus.error}` : liveStatus.available ? (liveStatus.live ? 'debug log is ACTIVE (game writing now)' : `log found, last update ${liveStatus.updatedAt || 'unknown'}`) : 'no X4 debug log found') : liveCueNames.length ? 'connecting…' : 'no named cue nodes to watch'}. ${liveStatus?.bridge ? liveStatus.bridge.summary + ' ' : ''}Firing cues get green ▶ badges, erroring cues red ✗ — straight from the running game.`
-            : 'LIVE — light up cue nodes from the running game\'s debug log (Play-In-Editor mode)'}
-          className={`p-1.5 rounded flex items-center gap-1 transition-all border cursor-pointer ${
-            liveMode
-              ? (liveStatus?.live
-                ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-400'
-                : 'bg-amber-500/10 border-amber-500/35 text-amber-400')
-              : 'bg-slate-900 border-white/10 text-slate-350 hover:bg-slate-800'
-          }`}
-        >
-          <Activity className={`w-3.5 h-3.5 ${liveMode ? 'animate-pulse' : ''}`} />
-          <span className="text-[8px] font-mono font-bold tracking-wider">LIVE</span>
-        </button>
+        </div>
       </div>
 
       {/* Selective node ALIGNMENT toolbar — appears when 2+ nodes are selected (UE5-style). */}

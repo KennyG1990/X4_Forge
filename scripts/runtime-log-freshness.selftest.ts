@@ -57,6 +57,26 @@ try {
     const finishedLoad = readHistory();
     checks.completedLoadRecoversCoverage = finishedLoad.load !== null && !finishedLoad.coverageLimited;
 
+    const widgetLog = path.join(root, 'widget-history.log');
+    const readWidget = (owner = deploy.modId) => readGameLogLoadEvidence(widgetLog, [deploy.modId], () => false, undefined, owner);
+    const loadLine = `[General] Loading extension ${deploy.modId}\r\n`;
+    fs.writeFileSync(widgetLog, loadLine + '[=ERROR=] 25.1 CWidgetController::UpdateFrame() - Validation error: Invalid cell content\r\nstack traceback:\r\n');
+    const openGroup = readWidget();
+    checks.openWidgetGroupHasIncompleteHistory = openGroup.load?.fault === false && openGroup.coverageLimited;
+    fs.appendFileSync(widgetLog, `[string "extensions/${deploy.modId}/ui/fixture.lua"]:42: in function onShowMenu\r\n`);
+    checks.ownedWidgetFrameDoesNotCloseGroup = readWidget().coverageLimited;
+    fs.appendFileSync(widgetLog, '[=ERROR=] 25.2 Failed to create view for menu Fixture_Hub. Reloading UI\r\n');
+    const closedGroup = readWidget();
+    checks.closedWidgetGroupLatchesExactFolderFault = closedGroup.load?.fault === true && !closedGroup.coverageLimited;
+    checks.noPhysicalOwnerWithholdsWidgetAttribution = readWidget('').load?.fault === false;
+    fs.appendFileSync(widgetLog, 'noise\n'.repeat(50_000));
+    const agedGroup = readWidget();
+    checks.widgetFaultSurvivesTailWithoutRawTrace = agedGroup.tailStartByte > 0 && agedGroup.load?.fault === true
+      && !agedGroup.tail.includes('Fixture_Hub');
+    checks.warmWidgetPollReusesHistory = readWidget().bytesScanned === 0;
+    fs.appendFileSync(widgetLog, loadLine);
+    checks.exactLoadClearsHistoricalWidgetFault = readWidget().load?.fault === false;
+
     const bootLog = path.join(root, 'lua-boot.log');
     const bootFiles = ['ui/observed.lua', 'ui/silent.lua'];
     const bootManifest = readLuaBootManifest(JSON.stringify({ version: 1, files: bootFiles }),

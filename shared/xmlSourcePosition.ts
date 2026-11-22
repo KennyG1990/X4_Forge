@@ -58,3 +58,31 @@ export function createXmlNodePositionLocator(source: string) {
     return locateRaw(offset);
   } };
 }
+
+const XML_VALUE_ENTITIES = new Map([
+  ['&amp;', '&'], ['&apos;', "'"], ['&quot;', '"'], ['&lt;', '<'], ['&gt;', '>'],
+]);
+
+/** Map a raw XML attribute caret back to its decoded UTF-16 offset if the parser agrees. */
+export function decodedXmlAttributeCursor(raw: string, value: string, rawCursor: number): number | undefined {
+  if (rawCursor < 0 || rawCursor >= raw.length) return undefined;
+  if (raw === value) return rawCursor;
+
+  let cursor = rawCursor;
+  const decoded = raw.replace(/&(?:#(?:x[\da-fA-F]+|\d+)|amp|apos|quot|lt|gt);|\r[\n\u0085]?|[\t\n\u0085\u2028\u2029]/g,
+    (token, offset: number) => {
+      let replacement = XML_VALUE_ENTITIES.get(token) ?? ' ';
+      if (token.startsWith('&#')) {
+        const hex = token.startsWith('&#x');
+        const number = Number.parseInt(token.slice(hex ? 3 : 2, -1), hex ? 16 : 10);
+        if (number < 1 || number > 0x10ffff) return token;
+        replacement = String.fromCodePoint(number);
+      }
+
+      if (rawCursor > offset) {
+        cursor += rawCursor < offset + token.length ? offset - rawCursor : replacement.length - token.length;
+      }
+      return replacement;
+    });
+  return decoded === value ? cursor : undefined;
+}

@@ -70,11 +70,17 @@ subject, which reads badly on the store.
 cd <REPO> && npm run build                     # ✱ REQUIRED FIRST — produces dist/
 cd <REPO>/vscode-extension
 npm run changelog     # [gen-changelog] wrote CHANGELOG.md — 29 version(s), newest 0.0.31
-npm run stage-app     # [stage-app] OK — app/ staged (… native binding present; no secrets)
+npm run stage-app     # installs the reviewed platform runtime lock
+npm audit --prefix app --omit=dev --audit-level=high   # audit the exact staged runtime lock
 npm run build         # [build-ext] OK — out/extension.js written from a fresh out/
 npx --yes @vscode/vsce package --allow-missing-repository
                       # DONE Packaged: …/x4-forge-studio-0.0.31.vsix (2098 files, 16.99 MB)
 ```
+In a shallow checkout, `npm run changelog` keeps historical release sections from the
+committed `CHANGELOG.md` at `HEAD` and adds newly discovered versions. If that historical file
+is unavailable or invalid, generation stops before modifying the output. Use full Git history
+when you need to revise existing historical sections.
+
 **NEVER pass `--pre-release`** (standing rule, Ken 2026-07-16). The flag is baked at PACKAGE
 time; 0.0.4/0.0.6 shipped pre-release and hit the "no release version" install wall.
 
@@ -82,6 +88,22 @@ time; 0.0.4/0.0.6 shipped pre-release and hit the "no release version" install w
 `.studio-api-token` / `.studio-state` / `data/` / `debuglog.txt` staged. It exits non-zero on any
 unexpected file in `dist/` — that guard exists because a recursive copy once admitted real mod
 content into the package. If it fails, FIX the input; do not bypass it.
+
+Normal staging selects `runtime-locks/windows.json` on Windows and
+`runtime-locks/portable.json` on other hosts. The Windows graph also contains the
+Job binding. Staging checks the lock against the generated runtime manifest before
+replacing `app/`, runs `npm ci --omit=dev`, and checks that the staged lock bytes match.
+The root and extension-tooling locks cover different trees.
+When started with npm run stage-app, staging and lock refresh use the npm CLI
+from that invocation and the staging script's Node runtime. Install scripts see
+that same Node first on PATH.
+
+Refresh these locks deliberately when changing the runtime manifest or updating
+its dependencies. Run `npm run stage-app -- --refresh-runtime-locks` from
+`vscode-extension/`. It resolves both locks without installing modules or running
+package scripts. Review both lock diffs and run the exact staged runtime audit, native
+probe, and installed VSIX checks for the release target. Commit the reviewed locks
+with the source change.
 
 For an internal Dev build, an already qualified physical runtime can be reused with
 `npm run stage-app -- --runtime-from <absolute-app-directory>`. Its runtime manifest

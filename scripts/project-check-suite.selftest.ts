@@ -133,8 +133,17 @@ function meterFixture() {
 }
 
 type Mode = 'wait' | 'wait-nonzero' | 'nonzero' | 'nonzero-empty' | 'pass' | 'pass-empty';
+
+const fixtureMd = (id: string) => `<mdscript name="${id}"/>\n`;
+const fixtureLua = 'return 1\n';
+function fixturePayloadDiagnostic(reader: string, writer: string) {
+  const event = ['ReceiptFixture', 'payload'] as const;
+  return { severity: 'info' as const, code: 'md_lua.payload_writer_unverified', filePath: reader,
+    sourceRef: `event_ui_triggered:${JSON.stringify(event)}`, target: { file: writer }, message: 'Synthetic payload assertion',
+    payloadWriterScope: { event, keys: ['ri'], readerPaths: [reader], writerPaths: [writer] } };
+}
 function fixture(name: string, declarations: ReadonlyArray<readonly [string, Mode, number?]>, interpreter: ReturnType<typeof stageInterpreter>,
-  maxParallelChecks?: number, coversChecks?: string[]) {
+  maxParallelChecks?: number, coversChecks?: string[], declarePayloadFact = false) {
   const directory = path.join(root, name);
   const sourceRoot = path.join(directory, 'source');
   const scratch = path.join(directory, 'scratch');
@@ -143,16 +152,25 @@ function fixture(name: string, declarations: ReadonlyArray<readonly [string, Mod
   fs.mkdirSync(scratch);
   fs.writeFileSync(script, probe, 'utf8');
   const commands = declarations.map(([id, mode, timeoutSeconds = 12]) => ({
-    id, mode, timeoutSeconds, covered: `md/${id}.xml`, luaCovered: coversChecks === undefined ? undefined : `ui/${id}.lua`,
+    id, mode, timeoutSeconds, covered: `md/${id}.xml`, luaCovered: coversChecks || declarePayloadFact ? `ui/${id}.lua` : undefined,
     marker: path.join(directory, `${id}-started.txt`),
     release: path.join(directory, `${id}-release.txt`),
   }));
+  const payloadFactId = (command: typeof commands[number]) => {
+    const writer = command.luaCovered!;
+    const frame = buildValidationEvidence({ id: modId, name: 'Fixture', files: [
+      { path: command.covered, kind: 'md', content: fixtureMd(command.id) },
+      { path: writer, kind: 'lua', content: fixtureLua },
+    ] }, [fixturePayloadDiagnostic(command.covered, writer)]);
+    return frame.findings[0].projectCheckFact!.id;
+  };
   const manifest = JSON.stringify({ version: 1, ...(maxParallelChecks === undefined ? {} : { maxParallelChecks }),
     checks: commands.map(command => ({
     id: command.id, script: 'checks/run.py', covers: [command.covered, ...(command.luaCovered ? [command.luaCovered] : [])],
     timeoutSeconds: command.timeoutSeconds,
     args: [command.id, command.marker, command.release, command.mode, ...(command.luaCovered ? [command.luaCovered] : [])],
     ...(coversChecks === undefined ? {} : { coversChecks }),
+    ...(declarePayloadFact ? { coversFacts: [payloadFactId(command)] } : {}),
   })) });
   fs.writeFileSync(path.join(sourceRoot, 'forge.checks.json'), manifest, 'utf8');
 
@@ -175,8 +193,8 @@ function fixture(name: string, declarations: ReadonlyArray<readonly [string, Mod
       'content.xml': `<content id="${modId}" name="Fixture" version="100"/>`,
       'forge.checks.json': manifest,
       ...Object.fromEntries(commands.map((command, index) => [command.covered,
-        `<mdscript name="${changeArtifact && index === 0 ? 'different' : command.id}"/>\n`])),
-      ...Object.fromEntries(commands.filter(command => command.luaCovered).map(command => [command.luaCovered!, 'return 1\n'])),
+        fixtureMd(changeArtifact && index === 0 ? 'different' : command.id)])),
+      ...Object.fromEntries(commands.filter(command => command.luaCovered).map(command => [command.luaCovered!, fixtureLua])),
     } });
     assert(plan.ok, plan.errors.join('\n'));
     const snapshot = captureDeploymentSnapshot(plan, 'loose');
@@ -523,6 +541,29 @@ async function nativeStagingAdapters(f: ReturnType<typeof fixture>) {
 
 try {
   const interpreter = stageInterpreter();
+  const exactPayload = fixture('payload-fact', [['wire', 'pass']], interpreter, undefined, undefined, true);
+  const payloadReceipt = await exactPayload.execute();
+  assert.equal(payloadReceipt.status, 'committed');
+  const payloadReopen = requirePassedProjectCheckSuite(exactPayload.inputs(), payloadReceipt.id);
+  const payloadCommand = exactPayload.commands[0];
+  const payloadEvidence = buildValidationEvidence({ id: modId, name: 'Fixture', files: exactPayload.exact.artifact.snapshot.files },
+    [fixturePayloadDiagnostic(payloadCommand.covered, payloadCommand.luaCovered!)]);
+  const coveredFact = payloadEvidence.findings[0].projectCheckFact!;
+  assert.deepEqual(payloadReopen.verification.checks[0].coveredFacts, [coveredFact.id]);
+  assert(Object.isFrozen(exactPayload.exact.frozen.setup.checks[0].coversFacts));
+  assert(Object.isFrozen(payloadReopen.verification.checks[0].coveredFacts));
+  const credited = applyProjectCheckCoverage(payloadEvidence, payloadReopen.verification);
+  assert.deepEqual(credited.coverage.projectVerification!.creditedFindingIds, [payloadEvidence.findings[0].findingId]);
+  assert.equal(credited.coverage.projectVerification!.forgeComplete, false);
+  assert.equal(credited.findings, payloadEvidence.findings);
+  assert.throws(() => requirePassedProjectCheckSuite(exactPayload.inputs(true), payloadReceipt.id));
+  const payloadManifestPath = path.join(exactPayload.exact.setupInput.sourceRoot, 'forge.checks.json');
+  const payloadManifestBytes = fs.readFileSync(payloadManifestPath, 'utf8');
+  fs.writeFileSync(payloadManifestPath, payloadManifestBytes.replace(coveredFact.id, `md-payload-writer.v2:${'a'.repeat(64)}`));
+  try { assert.throws(() => requirePassedProjectCheckSuite(exactPayload.exact, payloadReceipt.id)); }
+  finally { fs.writeFileSync(payloadManifestPath, payloadManifestBytes); }
+  exactPayload.retireInputs();
+  record('exact payload fact survives a real passing owned Windows check and reopen, rejects changed bytes and approval drift');
   if (nativeAdaptersOnly) {
     await nativeStagingAdapters(fixture('native-adapters', [['probe', 'pass']], interpreter));
     meterFixture();

@@ -1,14 +1,13 @@
 /**
  * B115 W3A — atomic, content-verified persistence for authoritative action receipts.
  *
- * The store owns only receipts.  Agent History remains an optional projection and is deliberately
- * not imported here.  A store failure is therefore visible to a future mutating caller instead of
- * being converted into an ordinary success or a fail-soft audit row.
+ * Receipt failures remain visible to mutating callers. History can reuse the same physical-path
+ * and publication checks for verified blobs in its own directory.
  */
 
 import fs from 'fs';
 import path from 'path';
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import { dataPath } from './dataDir';
 import {
   assertValidActionReceipt,
@@ -217,7 +216,7 @@ export class ActionReceiptStore {
     }
   }
 
-  private atomicWrite(file: string, bytes: Buffer): void {
+  private atomicWrite(file: string, bytes: Buffer, replace = true): void {
     this.assertEntrySafe(file);
     const temporary = path.join(this.root, `.${path.basename(file)}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`);
     let descriptor: number | undefined;
@@ -229,7 +228,15 @@ export class ActionReceiptStore {
       descriptor = undefined;
       const tempStat = fs.lstatSync(temporary);
       if (tempStat.isSymbolicLink() || !tempStat.isFile()) throw new ActionReceiptStoreError('RECEIPT_PATH_ESCAPE', 'Receipt temporary path is not a regular file.');
-      fs.renameSync(temporary, file);
+      if (replace) {
+        fs.renameSync(temporary, file);
+      } else {
+        // A content-addressed name is immutable. A concurrent publisher may win,
+        // but its bytes must pass the same verification as a newly published file.
+        try { fs.linkSync(temporary, file); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        }
+      }
     } catch (error) {
       if (error instanceof ActionReceiptStoreError) throw error;
       throw new ActionReceiptStoreError('RECEIPT_STORE_WRITE_FAILED', `Receipt atomic write failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -238,6 +245,49 @@ export class ActionReceiptStore {
         try { fs.closeSync(descriptor); } catch { /* best effort */ }
       }
       try { fs.rmSync(temporary, { force: true }); } catch { /* best effort */ }
+    }
+  }
+
+  putVerifiedBlob(bytes: Buffer, maxBytes: number): string {
+    if (bytes.length > maxBytes) throw new ActionReceiptStoreError('BLOB_SIZE_LIMIT', 'Blob exceeds its storage limit.');
+    const hash = createHash('sha256').update(bytes).digest('hex');
+    this.ensureRoot(true);
+    const file = path.join(this.root, hash);
+    if (!fs.existsSync(file)) this.atomicWrite(file, bytes, false);
+    if (!this.readVerifiedBlob(hash, maxBytes)?.equals(bytes)) {
+      throw new ActionReceiptStoreError('BLOB_UNVERIFIED', 'Blob publication could not be verified.');
+    }
+    return hash;
+  }
+
+  readVerifiedBlob(hash: string, maxBytes: number): Buffer | null {
+    if (!/^[a-f0-9]{64}$/.test(hash) || !this.ensureRoot(false)) return null;
+    const file = path.join(this.root, hash);
+    if (!fs.existsSync(file)) return null;
+    this.assertEntrySafe(file);
+    const entry = fs.lstatSync(file);
+    if (!entry.isFile() || entry.nlink !== 1 || entry.size > maxBytes) return null;
+    const handle = fs.openSync(file, 'r');
+    try {
+      const opened = fs.fstatSync(handle);
+      if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== entry.dev || opened.ino !== entry.ino
+        || opened.size !== entry.size) return null;
+      const bytes = Buffer.alloc(opened.size);
+      let offset = 0;
+      while (offset < bytes.length) {
+        const count = fs.readSync(handle, bytes, offset, bytes.length - offset, offset);
+        if (count === 0) return null;
+        offset += count;
+      }
+      const finished = fs.fstatSync(handle);
+      if (!this.ensureRoot(false)) return null;
+      this.assertEntrySafe(file);
+      const current = fs.lstatSync(file);
+      if (finished.size !== opened.size || finished.mtimeMs !== opened.mtimeMs || current.nlink !== 1
+        || current.dev !== opened.dev || current.ino !== opened.ino) return null;
+      return createHash('sha256').update(bytes).digest('hex') === hash ? bytes : null;
+    } finally {
+      fs.closeSync(handle);
     }
   }
 

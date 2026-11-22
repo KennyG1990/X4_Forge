@@ -5,19 +5,7 @@ import { prepareDeployReview, type DeployReviewData } from './lib/deployClient';
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import {
-  Trash,
-  Cpu,
-  Undo2,
-  Redo2,
-  FolderGit2,
-  Sparkles,
-  Settings as SettingsGear,
-  Keyboard,
-  Bug,
-  Menu,
-  PanelLeftOpen
-} from 'lucide-react';
+import { Undo2, Redo2, Keyboard, PanelLeftOpen } from 'lucide-react';
 import BugReportModal from './components/BugReportModal';
 import Sidebar from './components/Sidebar';
 import FpsMeter from './components/FpsMeter';
@@ -28,6 +16,7 @@ import WorkspaceConflictDialog, { type WorkspaceConflictDetail } from './compone
 import Canvas from './components/Canvas';
 import UIBuilder from './components/UIBuilder';
 import NativeProjectFiles from './components/NativeProjectFiles';
+import StudioActionsMenu from './components/StudioActionsMenu';
 import { notifyNativeWorkspaceAuthority, openInNativeEditor, openNativeNodeSelection, postNativeNodeSelectionResult, type NativeNodeApplyRequest } from './lib/nativeEditor';
 import AIHelper from './components/AIHelper';
 import AgentBridge from './components/AgentBridge';
@@ -73,6 +62,8 @@ import { getE2EPerfCounters, resetE2EPerfCounters, type E2EPerfCounters } from '
 import type { ArchitectStepView } from './components/BlueprintPanel';
 import type { DiagnosticsScope } from './components/DiagnosticsCenter';
 import type { ValidationDeltaResult } from './lib/validationDelta';
+import type { WorkspaceValidationInputs } from './lib/workspaceValidationInputs';
+import type { CompileValidationCapture } from './server/compileValidationReports';
 import ReadinessLadder from './components/ReadinessLadder';
 import BeginnerWorkspace from './components/BeginnerWorkspace';
 import { toSafeModId } from './lib/modCompiler';
@@ -439,7 +430,6 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
   const releasePreferencesRef = useRef(releasePreferences);
   const releasePreferencesSaveChainRef = useRef<Promise<void>>(Promise.resolve());
   const releasePreferencesTouchedRef = useRef(false);
-  const [isStudioMenuOpen, setIsStudioMenuOpen] = useState(false);
   const [experienceMode, setExperienceMode] = useState<ExperienceMode>(() => parseExperienceMode(localStorage.getItem(EXPERIENCE_MODE_KEY)));
   const [beginnerStep, setBeginnerStep] = useState<BeginnerStep>('idea');
   // B57s4: evidence deep links — ?panel=<sidebar tab> lands directly on that panel, so
@@ -547,12 +537,13 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
   // Diagnostics / Mod Doctor state shared by readiness and the diagnostics panel.
   const [diagnostics, setDiagnostics] = useState<PackageDiagnostic[]>([]);
   const [diagnosticInput, setDiagnosticInput] = useState<{
-    workspace: ModWorkspace; revision: number; source: 'project' | 'local';
+    workspace: ModWorkspace; revision: number; source: 'project' | 'local'; inputs?: WorkspaceValidationInputs;
   } | null>(null);
   const [validationDelta, setValidationDelta] = useState<ValidationDeltaResult | null>(null);
   const [diagnosticRevision, setDiagnosticRevision] = useState(0);
-  const diagnosticSource = diagnosticInput?.workspace === workspace && diagnosticInput.revision === diagnosticRevision
-    ? diagnosticInput.source : 'checking';
+  const currentDiagnosticInput = diagnosticInput?.workspace === workspace && diagnosticInput.revision === diagnosticRevision
+    ? diagnosticInput : null;
+  const diagnosticSource = currentDiagnosticInput?.source ?? 'checking';
   const [readinessWatcher, setReadinessWatcher] = useState<ReadinessWatcherEvidence>({ phase: 'loading' });
   const [experienceConfirmations, setExperienceConfirmations] = useState<Record<string, ExperienceConfirmation>>(
     () => parseExperienceConfirmations(localStorage.getItem(EXPERIENCE_CONFIRMATIONS_KEY))
@@ -589,18 +580,25 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
       try {
         const response = await fetch('/api/agent/compile', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(selectedWorkspaceId() ? { 'X-Forge-Retain-Validation': '1' } : {}),
+          },
           body: JSON.stringify({ workspace }),
           signal: controller.signal,
         });
-        const data = await handleApiResponse<{ diagnostics?: PackageDiagnostic[]; validation?: { scope?: string }; validationDelta?: ValidationDeltaResult }>(response, 'Full project validation failed.');
+        const data = await handleApiResponse<{ diagnostics?: PackageDiagnostic[]; validation?: { scope?: string; inputs?: WorkspaceValidationInputs }; validationDelta?: ValidationDeltaResult; validationResult?: CompileValidationCapture }>(response, 'Full project validation failed.');
         if (data.validation?.scope !== 'full-project') {
           throw new Error('The connected Forge backend does not expose full-project live validation. Restart or update the backend.');
         }
         if (!cancelled) {
           setDiagnostics(data.diagnostics || []);
           setValidationDelta(data.validationDelta || null);
-          setDiagnosticInput({ workspace, revision: diagnosticRevision, source: 'project' });
+          const inputs = data.validation.inputs;
+          const resultId = data.validationResult?.status === 'retained' ? data.validationResult.id : undefined;
+          setDiagnosticInput({ workspace, revision: diagnosticRevision, source: 'project',
+            inputs: inputs && { ...inputs, resultId },
+          });
         }
       } catch (err) {
         if (controller.signal.aborted) return;
@@ -1246,6 +1244,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
   // Listen to open-ai-chat events triggered by Wiki Browser or nodes clicks
   useEffect(() => {
     const handleOpenChatEvent = (e: Event) => {
+      if (!aiEnabled) return;
       const customEvent = e as CustomEvent<{ prompt: string }>;
       if (customEvent.detail && customEvent.detail.prompt) {
         setActiveSidebarTab('ai');
@@ -1256,7 +1255,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
     return () => {
       window.removeEventListener('open-ai-chat', handleOpenChatEvent);
     };
-  }, [workspace, handleSendChatMode]);
+  }, [aiEnabled, workspace, handleSendChatMode]);
 
   // Diagnostics click-to-navigate: Mod Doctor findings dispatch 'navigate-to-source'
   // with the diagnostic's sourceRef; jump to the owning editor surface (and, for MD
@@ -1508,7 +1507,6 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
         setIsShortcutsOpen(prev => !prev);
       } else if (e.key === 'Escape') {
         setIsShortcutsOpen(false);
-        setIsStudioMenuOpen(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -2578,16 +2576,15 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
 
           {/* Full cross-domain search belongs to Expert; Beginner keeps one task path. */}
           {experienceMode === 'expert' && (
-            <div className="hidden lg:block min-w-0">
             <GlobalSearch
               workspace={workspace}
+              modalOpen={isSyncModalOpen || isAIConfigOpen || isShortcutsOpen || isDirSettingsOpen || isBugReportOpen || isCompileModalOpen}
               workspaceView={workspaceView}
               setWorkspaceView={setWorkspaceView}
               setActiveSidebarTab={setActiveSidebarTab}
               setSelectedNode={setSelectedNode}
               setSelectedWidget={setSelectedWidget}
             />
-            </div>
           )}
         </div>
 
@@ -2686,123 +2683,23 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
             </select>
           </div>
 
-          {experienceMode === 'expert' && <div className="hidden min-[1200px]:block" data-global-action="native-project-files"><NativeProjectFiles workspace={workspace} /></div>}
-
           {/* B29: the conflict card / diverged badge moved OUT of the header into the fixed
               sync-status layer below — a header slot gets clipped on narrow windows, and the
               conflict UI must be visible exactly when a conflict blocks sync. */}
-          {experienceMode === 'expert' && (
-          <button
-            onClick={() => setIsSyncModalOpen(true)}
-            data-global-action="sync-mod"
-            className="flex px-2 py-1 border border-cyan-500/30 hover:border-cyan-500/80 bg-cyan-500/10 text-cyan-400 rounded font-mono text-[11px] hover:bg-cyan-500/20 transition-all items-center gap-1.5 cursor-pointer"
-            title="Load existing mods or push updates to GitHub"
-          >
-            <FolderGit2 className="w-3.5 h-3.5" />
-            <span className="hidden min-[2150px]:inline">SYNC MOD</span>
-          </button>
-          )}
-
-          {experienceMode === 'expert' && aiEnabled && (
-          <button
-            onClick={() => setIsAIConfigOpen(true)}
-            data-global-action="ai-settings"
-            className="hidden min-[1700px]:flex px-2 py-1 border border-amber-500/25 hover:border-[#df9825] bg-amber-500/5 text-amber-400 rounded font-mono text-[11px] hover:bg-amber-500/15 transition-all flex-col justify-center items-start text-left cursor-pointer select-none leading-tight gap-0.5"
-            title={`Configure AI: Active Engine: ${activeAIProvider.toUpperCase()} | Model: ${activeAIModel} | Reasoning: ${activeReasoning}`}
-          >
-            <div className="flex items-center gap-1.5">
-              <Sparkles className="w-3 h-3 text-amber-500 animate-pulse" />
-              <span className="font-bold text-[9px] tracking-wide text-slate-200 uppercase"><span className="hidden min-[2150px]:inline">AI ENGINE: </span>{activeAIProvider.toUpperCase()}</span>
-            </div>
-            <div className="hidden min-[2150px]:flex items-center gap-1.5 text-[8.5px] text-[#df9825] font-mono leading-none">
-              <span className="opacity-95">{activeAIModel.length > 20 ? activeAIModel.substring(0, 18) + '...' : activeAIModel}</span>
-              {activeReasoning !== 'none' && (
-                <span className="bg-[#df9825]/15 px-1 py-0.5 rounded border border-[#df9825]/20 text-[7px] uppercase font-bold text-emerald-400">
-                  THINK:{activeReasoning}
-                </span>
-              )}
-            </div>
-          </button>
-          )}
-
-          {experienceMode === 'expert' && (
-          <button
-            onClick={() => setIsAgentBridgeOpen(prev => !prev)}
-            data-global-action="agent-api"
-            className={`flex px-2 py-1 border rounded font-mono text-[11px] transition-all items-center gap-1.5 cursor-pointer ${
-              isAgentBridgeOpen
-                ? 'bg-cyan-600/20 text-cyan-400 border-cyan-500/50 hover:bg-cyan-600/30 font-bold'
-                : 'bg-black/40 text-slate-300 border-white/10 hover:border-cyan-400/40 hover:text-white'
-            }`}
-            title="Open External AI Agent API Control panel and documentation"
-          >
-            <Cpu className="w-3.5 h-3.5" />
-            <span className="hidden min-[2150px]:inline">AGENT API</span>
-          </button>
-          )}
-
-          <button
-            data-testid="report-bug-button"
-            onClick={() => setIsBugReportOpen(true)}
-            data-global-action="report-bug"
-            className="hidden min-[1100px]:flex px-2 py-1 border border-amber-500/30 hover:border-amber-400/60 bg-black/40 text-amber-300 hover:text-amber-200 rounded font-mono text-[11px] transition-all items-center gap-1.5 cursor-pointer"
-            title="Report a bug — opens a pre-filled GitHub issue (no account? it can copy the report instead)"
-          >
-            <Bug className="w-3.5 h-3.5" />
-            <span className="hidden min-[2150px]:inline">REPORT BUG</span>
-          </button>
-
-          <button
-            onClick={() => setIsDirSettingsOpen(true)}
-            data-global-action="settings"
-            className="flex px-2 py-1 border border-white/10 hover:border-cyan-400/40 bg-black/40 text-slate-300 hover:text-white rounded font-mono text-[11px] transition-all items-center gap-1.5 cursor-pointer"
-            title="Manage all folders the studio uses (Mod Workspace, X4 game path, schema)"
-          >
-            <SettingsGear className="w-3.5 h-3.5" />
-            <span className="hidden min-[2150px]:inline">SETTINGS</span>
-          </button>
-
-          <button
-            onClick={requestClearWorkspace}
-            data-global-action="reset-workspace"
-            className="hidden min-[1700px]:flex px-2 py-1 border border-red-500/10 hover:border-red-500/30 bg-red-500/5 text-red-400 rounded font-mono text-[11px] hover:bg-red-500/10 transition-all items-center gap-1 cursor-pointer"
-            title="Clean workspace back to blank state"
-          >
-            <Trash className="w-3.5 h-3.5" />
-            <span className="hidden min-[2150px]:inline">RESET</span>
-          </button>
-
-          {/* Every utility remains available at every width through this compact menu. */}
-          <div className="relative">
-            <button
-              type="button"
-              data-testid="studio-menu-button"
-              aria-haspopup="menu"
-              aria-expanded={isStudioMenuOpen}
-              onClick={() => setIsStudioMenuOpen(open => !open)}
-              className="h-8 w-8 grid place-items-center rounded border border-white/10 bg-black/40 text-slate-300 hover:text-cyan-300 hover:border-cyan-500/40"
-              title="Studio actions"
-            >
-              <Menu className="w-4 h-4" />
-            </button>
-            {isStudioMenuOpen && (
-              <div role="menu" data-testid="studio-menu" className="absolute right-0 top-9 z-[10000] w-64 rounded-lg border border-cyan-500/25 bg-[#0b0e14]/98 p-1.5 shadow-2xl">
-                {experienceMode === 'expert' && <div data-global-action="native-project-files" className="mb-1"><NativeProjectFiles workspace={workspace} /></div>}
-                {experienceMode === 'expert' && (
-                  <button role="menuitem" data-global-action="sync-mod" onClick={() => { setIsStudioMenuOpen(false); setIsSyncModalOpen(true); }} className="studio-menu-item"><FolderGit2 className="w-3.5 h-3.5" /> Sync Mod</button>
-                )}
-                {experienceMode === 'expert' && aiEnabled && (
-                  <button role="menuitem" data-global-action="ai-settings" onClick={() => { setIsStudioMenuOpen(false); setIsAIConfigOpen(true); }} className="studio-menu-item"><Sparkles className="w-3.5 h-3.5" /> AI Engine</button>
-                )}
-                {experienceMode === 'expert' && (
-                  <button role="menuitem" data-global-action="agent-api" onClick={() => { setIsStudioMenuOpen(false); setIsAgentBridgeOpen(open => !open); }} className="studio-menu-item"><Cpu className="w-3.5 h-3.5" /> Agent API</button>
-                )}
-                <button role="menuitem" data-global-action="report-bug" onClick={() => { setIsStudioMenuOpen(false); setIsBugReportOpen(true); }} className="studio-menu-item text-amber-300"><Bug className="w-3.5 h-3.5" /> Report Bug</button>
-                <button role="menuitem" data-global-action="settings" onClick={() => { setIsStudioMenuOpen(false); setIsDirSettingsOpen(true); }} className="studio-menu-item"><SettingsGear className="w-3.5 h-3.5" /> Studio Settings</button>
-                <button role="menuitem" data-global-action="reset-workspace" onClick={() => { setIsStudioMenuOpen(false); void requestClearWorkspace(); }} className="studio-menu-item text-red-300"><Trash className="w-3.5 h-3.5" /> Reset Workspace…</button>
-              </div>
-            )}
-          </div>
+          <StudioActionsMenu
+            expert={experienceMode === 'expert'}
+            ai={aiEnabled ? { provider: activeAIProvider, model: activeAIModel, reasoning: activeReasoning } : null}
+            agentOpen={isAgentBridgeOpen}
+            nativeFiles={<NativeProjectFiles key={currentWorkspaceId} workspaceId={currentWorkspaceId} workspace={workspace} />}
+            actions={{
+              'sync-mod': () => setIsSyncModalOpen(true),
+              'ai-settings': () => setIsAIConfigOpen(true),
+              'agent-api': () => setIsAgentBridgeOpen(open => !open),
+              'report-bug': () => setIsBugReportOpen(true),
+              settings: () => setIsDirSettingsOpen(true),
+              'reset-workspace': requestClearWorkspace,
+            }}
+          />
         </div>
       </header>
 
@@ -2950,8 +2847,10 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
           architectRunDisabledReason={architectCanRun ? undefined : 'No AI key set — add one in Settings → AI Assistant → Configure AI engine.'}
           diagnostics={effectiveDiagnostics}
           diagnosticSource={diagnosticSource}
+          validationInputs={currentDiagnosticInput?.inputs}
           validationDelta={validationDelta}
           diagnosticsScope={diagnosticsScope}
+          onDiagnosticsScopeChange={setDiagnosticsScope}
           onSuppressionCommitted={(sourceHash) => {
             setWorkspace(previous => previous.sourceStamp
               ? { ...previous, sourceStamp: { ...previous.sourceStamp, hash: sourceHash, at: new Date().toISOString() } }
@@ -3012,6 +2911,8 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
               onActiveMdScriptChange={handleActiveMdScriptChange}
               packageDiagnostics={effectiveDiagnostics}
               diagnosticSource={diagnosticSource}
+              modWorkspacePath={modWorkspacePath}
+              filesystemPath={filesystemPath}
             />
           ) : workspaceView === 'ui-designer' ? (
             <UIBuilder

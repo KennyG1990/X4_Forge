@@ -98,27 +98,14 @@ test('Agent Keys guides an exact contract-only key and proves its effective subs
 
   await expect(page.getByTestId('agent-key-capability-text.lookup@1')).toBeChecked();
   await expect(page.getByTestId('agent-key-capability-expression.inspect@1')).toBeChecked();
-  for (const identity of [
-    'expression.check@1',
-    'expression.inspect@1',
-    'text.lookup@1',
-    'extensions.conflicts.analyze@1',
-    'history.list@1',
-    'readiness.read@1',
-    'workspace.compile@2',
-    'workspace.read@2',
-    'runtime.debug.read@1',
-    'performance.collect@1',
-    'performance.profile@1',
-    'performance.read@1',
-    'performance.native.collect@1',
-    'performance.native.read@1',
-    'performance.native.stop@1',
-    'project.xml.references@1',
-  ]) {
-    await page.getByTestId(`agent-key-capability-${identity}`).uncheck();
+  const validateCapability = 'agent-key-capability-project.validate@1';
+  const capabilityBoxes = panel.getByTestId(/^agent-key-capability-/);
+  for (const capability of await capabilityBoxes.all()) {
+    if (await capability.getAttribute('data-testid') === validateCapability) continue;
+    await capability.uncheck();
   }
-  await expect(page.getByTestId('agent-key-capability-project.validate@1')).toBeChecked();
+  await expect(panel.getByTestId(validateCapability)).toBeChecked();
+  await expect(capabilityBoxes.and(panel.locator(':checked'))).toHaveCount(1);
   for (const effect of ['read', 'analyze', 'audit-write', 'audit-retention-delete']) {
     await expect(page.getByTestId(`agent-key-effect-${effect}`)).toBeChecked();
   }

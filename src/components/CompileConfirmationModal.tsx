@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { ModWorkspace } from '../types';
 import DeployValidationSummary from './DeployValidationSummary';
+import DeployFileChanges from './DeployFileChanges';
 import type { DeployReviewData } from '../lib/deployClient';
 
 export interface DeployChecklistRow {
@@ -421,11 +422,9 @@ export default function CompileConfirmationModal({
 
         </div>
         {reviewedDestination && <div className="px-4 py-3 shrink-0 border-t border-white/5 bg-[#0f131c] flex flex-wrap items-center gap-x-4 gap-y-2">
-          <div className="min-w-0 flex-1 space-y-1 text-[10px] font-mono" role="status">
-            <p className="text-slate-200 break-all" data-testid="wizard-deploy-destination">X4 install destination · {reviewedDestination}</p>
-            {deployResult?.effect && <p className="text-slate-300">
-              Files · {deployResult.effect.added?.length ?? 0} added · {deployResult.effect.overwritten?.length ?? 0} replaced · {deployResult.effect.deleted?.length ?? 0} removed · {deployResult.effect.preserved?.length ?? 0} preserved
-            </p>}
+          <div className="min-w-0 flex-1 space-y-1 text-[10px] font-mono">
+            <p className="text-slate-200 break-all" role="status" data-testid="wizard-deploy-destination">X4 install destination · {reviewedDestination}</p>
+            {deployResult?.effect && <DeployFileChanges effect={deployResult.effect} />}
           </div>
           <button
             type="button"

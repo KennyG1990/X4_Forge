@@ -1,4 +1,5 @@
 import { expect, test, fetchRouteWithClosingConnection } from './request-transport';
+import { openStudioAction } from './studio-actions';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -91,7 +92,7 @@ test('Load Mod Project browses and imports the explicitly selected source root',
   await page.getByTestId('health-card-dismiss').click();
   await expect(startupWalkaround).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Dismiss setup' })).toHaveCount(0);
-  await page.getByTitle('Load existing mods or push updates to GitHub').click();
+  await openStudioAction(page, 'sync-mod');
   await expect(page.getByText('Load Mod Project', { exact: true })).toBeVisible();
 
   const workspaceSource = page.getByTestId('project-source-workspace');
@@ -163,7 +164,7 @@ test('Load Mod Project keeps a healthy source browsable when the other root fail
   const startupWalkaround = page.getByTestId('health-card');
   await expect(startupWalkaround).toBeVisible();
   await page.getByTestId('health-card-dismiss').click();
-  await page.getByTitle('Load existing mods or push updates to GitHub').click();
+  await openStudioAction(page, 'sync-mod');
 
   const workspaceSource = page.getByTestId('project-source-workspace');
   const filesystemSource = page.getByTestId('project-source-filesystem');
@@ -229,7 +230,7 @@ test('Load Mod Project preserves manual paths, refreshes previews and rejects st
       completedPreviews += 1;
       if (holdForRefresh) completedRefreshPreviews += 1;
     });
-    await page.getByTitle('Load existing mods or push updates to GitHub').click();
+    await openStudioAction(page, 'sync-mod');
     const input = page.getByPlaceholder('Relative folder path, e.g. sn_mod_support_apis');
     await expect.poll(() => pendingScans).toBeGreaterThanOrEqual(2);
     await expect(page.getByTestId('project-source-workspace')).toContainText(staging);
@@ -373,7 +374,7 @@ test('Load Mod Project visibly decomposes a complex multi-script project without
     await page.goto('/');
     const startupWalkaround = page.getByTestId('health-card');
     if (await startupWalkaround.isVisible().catch(() => false)) await page.getByTestId('health-card-dismiss').click();
-    await page.getByTitle('Load existing mods or push updates to GitHub').click();
+    await openStudioAction(page, 'sync-mod');
     const source = page.getByTestId('project-source-workspace');
     await source.getByRole('button', { name: 'Select complex_mod from Mod Workspace' }).click();
     await expect(page.getByText('workspace: complex_mod', { exact: true })).toBeVisible();
@@ -409,6 +410,9 @@ test('Load Mod Project visibly decomposes a complex multi-script project without
     await expect(page.getByText('Load Mod Project', { exact: true })).toHaveCount(0);
     const scriptFilter = page.getByTestId('canvas-md-script-filter');
     await expect(scriptFilter).toBeVisible();
+    await expect(scriptFilter.locator('option[value=""]')).toHaveText('ALL MODELED MD (2)');
+    const sourceInventory = page.getByTestId('canvas-md-source-inventory');
+    await expect(sourceInventory).toHaveText('Source MD: 2 files');
     await scriptFilter.selectOption('alpha');
     await expect(alpha).toBeVisible();
     for (const node of betaNodes) await expect(page.getByTestId(`canvas-node-${node.id}`)).toHaveCount(0);
@@ -426,6 +430,11 @@ test('Load Mod Project visibly decomposes a complex multi-script project without
     });
     expect(roundTrip.ok(), await roundTrip.text()).toBeTruthy();
     expect(await roundTrip.json()).toMatchObject({ lossless: true, strictLossless: true, droppedFiles: [] });
+    fs.writeFileSync(path.join(mod, 'md', 'late_added.xml'), lossyMd('LateAdded', 'LateChild'), 'utf8');
+    await expect(sourceInventory).toHaveText('Source MD: 3 files · 1 outside graph', { timeout: 20_000 });
+    await expect(sourceInventory).toHaveAttribute('title', 'Source files outside the graph: late_added.xml');
+    await expect(scriptFilter.locator('option')).toHaveCount(3);
+    await expect(scriptFilter.locator('option[value="late_added"]')).toHaveCount(0);
   } finally {
     const restored = await request.post(`${API}/api/schema/config`, { headers, data: restore });
     expect(restored.ok(), await restored.text()).toBeTruthy();

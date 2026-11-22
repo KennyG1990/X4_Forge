@@ -25,6 +25,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { dataPath } from './dataDir';
 import { LedgerRow, decodeRows, encodeRow } from './agentHistory';
+import { ActionReceiptStore } from './actionReceiptStore';
 
 /** Rotate a segment once it passes this, keeping history bounded without losing recent detail. */
 export const LEDGER_MAX_BYTES = 4 * 1024 * 1024;
@@ -85,6 +86,30 @@ export class AgentHistoryStore {
       if (!/^[a-f0-9]{64}$/i.test(String(hash))) return null;
       const target = path.join(this.blobDir, hash.slice(0, 2), hash);
       return fs.existsSync(target) ? fs.readFileSync(target) : null;
+    } catch (error) {
+      this.note(error);
+      return null;
+    }
+  }
+
+  /** Publish one bounded deploy report in the existing History blob namespace. */
+  putVerifiedDeployEffect(bytes: Buffer): string | null {
+    try {
+      const hash = crypto.createHash('sha256').update(bytes).digest('hex');
+      const store = new ActionReceiptStore({ root: path.join(this.blobDir, hash.slice(0, 2)) });
+      return store.putVerifiedBlob(bytes, LEDGER_MAX_BYTES);
+    } catch (error) {
+      this.note(error);
+      return null;
+    }
+  }
+
+  /** Unavailable or unverifiable reports never change the committed deploy outcome. */
+  readVerifiedDeployEffect(hash: string): Buffer | null {
+    if (!/^[a-f0-9]{64}$/.test(hash)) return null;
+    try {
+      const store = new ActionReceiptStore({ root: path.join(this.blobDir, hash.slice(0, 2)) });
+      return store.readVerifiedBlob(hash, LEDGER_MAX_BYTES);
     } catch (error) {
       this.note(error);
       return null;

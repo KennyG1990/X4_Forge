@@ -5,7 +5,13 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { DOMParser, XMLSerializer, type Document as XmlDocument, type Element as XmlElement } from '@xmldom/xmldom';
-import { simulateXmlDiff, validateDiffSourceXml, type DiffFinding } from './diffSimulator';
+import { simulateXmlDiff, validateDiffSourceXml, MAX_SCRIPT_ORIGIN_SOURCE_CHARS, type DiffFinding } from './diffSimulator';
+import {
+  MAX_SCRIPT_ORIGIN_INPUTS, scriptOriginInputStamp,
+  type EffectiveScriptOrigins, type ScriptOriginInput,
+} from '../../shared/workspaceScriptSymbols';
+import { projectScriptSymbolOrigins } from '../../shared/x4ScriptComposition';
+import { orderExtensionDependencies, readExtensionDependencies } from '../../shared/contentManifestIdentity';
 
 export interface OverlaySource {
   source: 'base' | `ego_dlc_${string}`;
@@ -31,6 +37,7 @@ export interface EffectiveReferenceDocument {
   sources: OverlaySource[];
   findings: OverlayFinding[];
   signature: string;
+  scriptSymbolOrigins?: EffectiveScriptOrigins;
 }
 
 /** Canonical consumer wire evidence; content is exposed separately only for inspection. */
@@ -47,6 +54,7 @@ interface DlcInfo {
   dependencies: string[];
   requiredDependencies?: string[];
   manifestQualified?: boolean;
+  manifestStamp?: string;
   duplicateId?: boolean;
 }
 
@@ -55,6 +63,8 @@ const cacheSizes = new Map<string, number>();
 let cacheBytes = 0;
 const MAX_CACHE_BYTES = 64 * 1024 * 1024;
 const MAX_CACHE_ENTRIES = 64;
+const MAX_CACHED_MANIFEST_BYTES = 64n * 1024n;
+const dlcManifests = new Map<string, { signature: string; info: DlcInfo }>();
 
 function cached(key: string, signature: string): EffectiveReferenceDocument | null {
   const value = cache.get(key);
@@ -140,6 +150,14 @@ function duplicateWareId(root: XmlElement): string | undefined {
   return undefined;
 }
 
+function dlcManifestSignature(file: number): string | undefined {
+  try {
+    const info = fs.fstatSync(file, { bigint: true });
+    if (!info.isFile() || info.ino === 0n || info.size > MAX_CACHED_MANIFEST_BYTES) return;
+    return scriptOriginInputStamp(info);
+  } catch { /* Still attempt the ordinary read when metadata cannot qualify a cache hit. */ }
+}
+
 function readDlcInfo(extensionRoot: string, folder: string, requireManifest: boolean): DlcInfo {
   const root = path.join(extensionRoot, folder);
   const contentPath = path.join(root, 'content.xml');
@@ -148,23 +166,40 @@ function readDlcInfo(extensionRoot: string, folder: string, requireManifest: boo
   const requiredDependencies: string[] = [];
   let manifestQualified = false;
   try {
-    const xml = fs.readFileSync(contentPath, 'utf8').replace(/^\uFEFF/, '');
-    let malformed = false;
-    const document = new DOMParser({ onError: () => { malformed = true; } }).parseFromString(xml, 'text/xml');
-    const content = document.documentElement;
-    manifestQualified = !malformed && content?.nodeName === 'content' && /^ego_dlc_/i.test(content.getAttribute('id') ?? '');
-    if (requireManifest && !manifestQualified) {
-      throw new Error('Invalid official DLC manifest.');
-    }
-    if (content?.getAttribute('id')) id = content.getAttribute('id')!.toLowerCase();
-    const nodes = content?.getElementsByTagName('dependency') || [];
-    for (let index = 0; index < nodes.length; index++) {
-      const dependency = nodes[index].getAttribute('id');
-      if (dependency) {
-        const dependencyId = dependency.toLowerCase();
-        dependencies.push(dependencyId);
-        if (!/^(?:true|1)$/i.test(nodes[index].getAttribute('optional') ?? '')) requiredDependencies.push(dependencyId);
+    const file = fs.openSync(contentPath, 'r');
+    try {
+      // Check readability and the current physical file on every discovery.
+      const signature = dlcManifestSignature(file);
+      const cached = signature && dlcManifests.get(contentPath);
+      dlcManifests.delete(contentPath);
+      if (cached && cached.signature === signature) {
+        dlcManifests.set(contentPath, cached);
+        return structuredClone(cached.info);
       }
+      const xml = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
+      let malformed = false;
+      const document = new DOMParser({ onError: () => { malformed = true; } }).parseFromString(xml, 'text/xml');
+      const content = document.documentElement;
+      manifestQualified = !malformed && content?.nodeName === 'content' && /^ego_dlc_/i.test(content.getAttribute('id') ?? '');
+      if (requireManifest && !manifestQualified) {
+        throw new Error('Invalid official DLC manifest.');
+      }
+      if (content?.getAttribute('id')) id = content.getAttribute('id')!.toLowerCase();
+      const declared = readExtensionDependencies(content);
+      dependencies.push(...declared.dependencies);
+      requiredDependencies.push(...declared.requiredDependencies);
+      if (manifestQualified && signature && signature === dlcManifestSignature(file)) {
+        const info: DlcInfo = { folder, root, id: id as DlcInfo['id'], dependencies, requiredDependencies, manifestQualified, manifestStamp: signature };
+        // Discovery marks duplicate IDs on its own results. Keep those mutations out of the cache.
+        dlcManifests.set(contentPath, { signature, info: structuredClone(info) });
+        if (dlcManifests.size > MAX_CACHE_ENTRIES) {
+          const oldest = dlcManifests.keys().next().value;
+          if (oldest !== undefined) dlcManifests.delete(oldest);
+        }
+        return structuredClone(info);
+      }
+    } finally {
+      fs.closeSync(file);
     }
   } catch {
     if (requireManifest) throw new Error(`The official DLC manifest for ${folder} is unavailable or invalid.`);
@@ -197,26 +232,7 @@ export function discoverOfficialDlcOrder(referenceRoot: string, requireManifest 
     }
     byId.set(info.id, info);
   }
-  const visited = new Set<string>();
-  const visiting = new Set<string>();
-  const ordered: DlcInfo[] = [];
-  const visit = (info: DlcInfo) => {
-    if (visited.has(info.id)) return;
-    if (visiting.has(info.id)) {
-      if (requireManifest) throw new Error('Official DLC dependency order is ambiguous.');
-      return; // Other callers retain the deterministic lexical fallback.
-    }
-    visiting.add(info.id);
-    for (const dependency of info.dependencies) {
-      const local = byId.get(dependency);
-      if (local) visit(local);
-    }
-    visiting.delete(info.id);
-    visited.add(info.id);
-    ordered.push(info);
-  };
-  for (const info of infos) visit(info);
-  return ordered;
+  return orderExtensionDependencies(infos, requireManifest);
 }
 
 function signatureFor(paths: string[]): string {
@@ -230,22 +246,82 @@ function signatureFor(paths: string[]): string {
   return crypto.createHash('sha256').update(parts.join('\n')).digest('hex');
 }
 
+function observeScriptOriginInput(root: string, absolute: string): ScriptOriginInput {
+  const relative = path.relative(root, absolute).split(path.sep).join('/');
+  let stamp: fs.BigIntStats;
+  try { stamp = fs.lstatSync(absolute, { bigint: true }); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { path: relative, stamp: null };
+    throw new Error('Script symbol origins unavailable: a contributor could not be observed.');
+  }
+  if (!stamp.isFile() && !stamp.isDirectory()) throw new Error('Script symbol origins unavailable: a contributor is nonphysical.');
+  return { path: relative, stamp: scriptOriginInputStamp(stamp) };
+}
+
+function readScriptOriginSource(absolute: string): string | undefined {
+  const deny = 'Script symbol origins unavailable: a reference script is oversized, nonphysical or changed during its read.';
+  const normalize = (file: string) => process.platform === 'win32' ? file.toLowerCase() : file;
+  try {
+    fs.lstatSync(absolute);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+    throw new Error(deny);
+  }
+  let fd: number | undefined;
+  try {
+    if (normalize(fs.realpathSync.native(absolute)) !== normalize(absolute)) throw new Error(deny);
+    fd = fs.openSync(absolute, 'r');
+    const before = fs.fstatSync(fd, { bigint: true });
+    if (!before.isFile() || before.nlink !== 1n || before.size > BigInt(MAX_SCRIPT_ORIGIN_SOURCE_CHARS)) throw new Error(deny);
+    const signature = scriptOriginInputStamp(before);
+    if (signature !== scriptOriginInputStamp(fs.lstatSync(absolute, { bigint: true }))) throw new Error(deny);
+    const bytes = Buffer.alloc(Number(before.size) + 1);
+    let size = 0;
+    while (size < bytes.length) {
+      const count = fs.readSync(fd, bytes, size, bytes.length - size, size);
+      if (!count) break;
+      size += count;
+    }
+    if (BigInt(size) !== before.size || signature !== scriptOriginInputStamp(fs.lstatSync(absolute, { bigint: true }))
+      || normalize(fs.realpathSync.native(absolute)) !== normalize(absolute)) throw new Error(deny);
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes.subarray(0, size));
+  } catch {
+    throw new Error(deny);
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
 export function resolveEffectiveReferenceDocument(
   referenceRootInput: string, relativeInput: string, force = false,
-  options: { dlcs?: ReturnType<typeof discoverOfficialDlcOrder>; cache?: boolean } = {},
+  options: { dlcs?: ReturnType<typeof discoverOfficialDlcOrder>; cache?: boolean; scriptSymbolOrigins?: boolean } = {},
 ): EffectiveReferenceDocument {
   const root = path.resolve(referenceRootInput);
   if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) throw new Error(`Reference root unavailable or not a directory: ${root}`);
   const relativePath = normalizeRelative(relativeInput);
   const wareCollection = isWareCollectionPath(relativePath);
+  if (options.scriptSymbolOrigins && !/^(md|aiscripts)\/[^/]+\.xml$/i.test(relativePath)) {
+    throw new Error('Invalid request: script symbol origins require a direct MD or AIScript XML path.');
+  }
+  const scriptSources: Array<{ source: string; path: string; text: string }> | undefined = options.scriptSymbolOrigins ? [] : undefined;
+  let scriptSourceChars = 0;
+  const scriptInputHashes: Array<{ path: string; hash: string | null }> = [];
+  const extensionRoot = path.join(root, 'extensions');
+  const extensionsBefore = scriptSources ? observeScriptOriginInput(root, extensionRoot) : undefined;
   let contributorsUnavailable = false;
   const dlcs = options.dlcs ?? discoverOfficialDlcOrder(root, false, () => { contributorsUnavailable = true; });
   const basePath = safeJoin(root, relativePath);
   const candidatePaths = [basePath, ...dlcs.flatMap(dlc => [path.join(dlc.root, 'content.xml'), safeJoin(dlc.root, relativePath)])];
-  if (wareCollection) candidatePaths.push(path.join(root, 'extensions'));
+  if (wareCollection) candidatePaths.push(extensionRoot);
+  if (scriptSources && candidatePaths.length + 1 > MAX_SCRIPT_ORIGIN_INPUTS) {
+    throw new Error('Script symbol origins unavailable: the contributor set exceeds the read budget.');
+  }
+  const scriptInputs = extensionsBefore ? [extensionsBefore, ...candidatePaths.map(file => observeScriptOriginInput(root, file))] : undefined;
   const signature = signatureFor(candidatePaths);
   const key = `${root.toLowerCase()}|${relativePath.toLowerCase()}`;
-  const previous = !force && options.cache !== false ? cached(key, signature) : null;
+  // A read or enumeration error can change coverage without changing path stamps.
+  const cacheEffective = !scriptSources && options.cache !== false && !contributorsUnavailable
+    && !dlcs.some(dlc => dlc.manifestQualified === false);
+  const previous = !force && cacheEffective ? cached(key, signature) : null;
   if (previous) return previous;
 
   let content: string | undefined;
@@ -267,7 +343,15 @@ export function resolveEffectiveReferenceDocument(
     incompleteFindings.push(finding);
   };
   const readSource = (absolute: string, source: string, sourcePath: string): string | undefined => {
-    if (!wareCollection) return fs.existsSync(absolute) && fs.statSync(absolute).isFile() ? fs.readFileSync(absolute, 'utf8') : undefined;
+    if (!wareCollection) {
+      if (scriptSources) {
+        const text = readScriptOriginSource(absolute);
+        scriptInputHashes.push({ path: sourcePath, hash: text === undefined ? null : crypto.createHash('sha256').update(text).digest('hex') });
+        return text;
+      }
+      if (!fs.existsSync(absolute)) return undefined;
+      return fs.statSync(absolute).isFile() ? fs.readFileSync(absolute, 'utf8') : undefined;
+    }
     let found = false;
     try {
       const stat = fs.statSync(absolute);
@@ -289,6 +373,8 @@ export function resolveEffectiveReferenceDocument(
   content = readSource(basePath, 'base', relativePath);
   if (content !== undefined) {
     sources.push({ source: 'base', path: relativePath, mode: 'base' });
+    scriptSources?.push({ source: 'base', path: relativePath, text: content });
+    scriptSourceChars = content.length;
     validateFullSource(content, 'base', relativePath);
   }
   if (wareCollection && contributorsUnavailable) wareGap('base', 'extensions', 'Official ware contributors could not be enumerated.');
@@ -306,6 +392,13 @@ export function resolveEffectiveReferenceDocument(
         findings.push(finding);
         incompleteFindings.push(finding);
         continue;
+      }
+      if (scriptSources) {
+        scriptSourceChars += overlay.length;
+        if (scriptSourceChars > MAX_SCRIPT_ORIGIN_SOURCE_CHARS) {
+          throw new Error('Script symbol origins unavailable: the reference patch chain exceeds the source budget.');
+        }
+        scriptSources.push({ source: dlc.id, path: sourcePath, text: overlay });
       }
       const result = simulateXmlDiff(content, overlay);
       content = result.content;
@@ -357,6 +450,10 @@ export function resolveEffectiveReferenceDocument(
     } else {
       const hadContent = content !== undefined;
       content = overlay;
+      if (scriptSources) {
+        scriptSources.splice(0, scriptSources.length, { source: dlc.id, path: sourcePath, text: overlay });
+        scriptSourceChars = overlay.length;
+      }
       sources.push({ source: dlc.id, path: sourcePath, mode: hadContent ? 'replace' : 'base' });
       validateFullSource(overlay, dlc.id, sourcePath);
     }
@@ -385,7 +482,31 @@ export function resolveEffectiveReferenceDocument(
     findings,
     signature,
   };
-  if (options.cache !== false) storeCached(key, result);
+  if (scriptSources && scriptInputs) {
+    const inputByPath = new Map(scriptInputs.map(input => [input.path, input.stamp]));
+    const earlier = new Set<string>();
+    const ids = new Set<string>(dlcs.map(dlc => dlc.id));
+    const ordered = !contributorsUnavailable && dlcs.every(dlc => {
+      const qualified = dlc.manifestQualified === true && !dlc.duplicateId && !earlier.has(dlc.id)
+        && dlc.manifestStamp !== undefined && dlc.manifestStamp === inputByPath.get(`extensions/${dlc.folder}/content.xml`)
+        && !dlc.requiredDependencies?.some(id => !ids.has(id))
+        && !dlc.dependencies.some(id => ids.has(id) && !earlier.has(id));
+      earlier.add(dlc.id);
+      return qualified;
+    });
+    const projection = result.complete && ordered && content !== undefined && scriptSources.length
+      ? projectScriptSymbolOrigins(relativePath, content, scriptSources)
+      : { complete: false, detail: 'Reference script coverage or official DLC order is incomplete.', symbols: [] };
+
+    const current = projection.complete && scriptInputs.every(input =>
+      input.stamp === observeScriptOriginInput(root, safeJoin(root, input.path)).stamp);
+    result.scriptSymbolOrigins = current ? {
+      ...projection, inputs: scriptInputs,
+      identity: crypto.createHash('sha256')
+        .update(JSON.stringify([root, relativePath, scriptInputs, scriptInputHashes, projection.symbols])).digest('hex'),
+    } : projection.complete ? { complete: false, detail: 'A script origin contributor changed during composition.', symbols: [] } : projection;
+  }
+  if (cacheEffective) storeCached(key, result);
   return result;
 }
 
@@ -423,6 +544,25 @@ export function runReferenceOverlaySelftest(): { pass: boolean; allPassed: boole
     let traversal = false;
     try { resolveEffectiveReferenceDocument(tmp, '../outside.xml'); } catch (error) { traversal = /traversal/i.test(String(error)); }
     check('traversal rejected', traversal);
+
+    const manifestRefreshRoot = path.join(tmp, 'manifest-refresh');
+    const refreshManifest = 'manifest-refresh/extensions/ego_dlc_a/content.xml';
+    const refreshPath = path.join(tmp, refreshManifest);
+    const replacementPath = path.join(path.dirname(refreshPath), 'replacement.xml');
+    const fixedTime = new Date('2020-01-01T00:00:00Z');
+    write(refreshManifest, '<content id="ego_dlc_a"><dependency id="ego_dlc_z"/></content>');
+    write('manifest-refresh/extensions/ego_dlc_b/content.xml', '<content id="ego_dlc_b"/>');
+    fs.utimesSync(refreshPath, fixedTime, fixedTime);
+    const beforeReplacement = fs.statSync(refreshPath, { bigint: true });
+    const initialOrder = discoverOfficialDlcOrder(manifestRefreshRoot, true).map(dlc => dlc.id);
+    fs.writeFileSync(replacementPath, '<content id="ego_dlc_a"><dependency id="ego_dlc_b"/></content>');
+    fs.utimesSync(replacementPath, fixedTime, fixedTime);
+    fs.renameSync(replacementPath, refreshPath);
+    const afterReplacement = fs.statSync(refreshPath, { bigint: true });
+    const refreshedOrder = discoverOfficialDlcOrder(manifestRefreshRoot, true).map(dlc => dlc.id);
+    check('same-size manifest replacement with preserved mtime refreshes DLC order',
+      beforeReplacement.size === afterReplacement.size && beforeReplacement.mtimeNs === afterReplacement.mtimeNs
+      && initialOrder.join(',') === 'ego_dlc_a,ego_dlc_b' && refreshedOrder.join(',') === 'ego_dlc_b,ego_dlc_a');
 
     const wares = 'libraries/wares.xml';
     const wareA = `extensions/ego_dlc_a/${wares}`;

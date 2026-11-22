@@ -73,7 +73,7 @@ function refuse(code: string, message: string): never { throw new FindingAccepta
 const warningContext = (f: ValidationEvidenceFinding) => hash([f.category, f.severity, f.code || '',
   (f.filePath || '').replace(/\\/g, '/').toLowerCase(), f.sourceRef || '', f.line ?? null, f.message,
   // These positioned warnings can repeat on one line. Keep other review contexts compatible.
-  ...((f.code?.startsWith('reference.') || f.code === 'md.run_actions_param_undeclared')
+  ...((f.code?.startsWith('reference.') || f.code === 'md.run_actions_param_undeclared' || f.code === 'md.run_actions_param_required')
     && f.line !== undefined && f.column !== undefined ? [f.column] : [])]);
 const reusable = (r: ActionReceipt, scope: string) => r.status === 'committed'
   && r.metadata?.operation === 'accept-finding' && r.metadata.reviewScopeHash === scope

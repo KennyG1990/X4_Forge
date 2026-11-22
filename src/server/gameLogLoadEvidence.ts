@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { advanceRuntimeWidgetFaultGroup, type RuntimeWidgetFaultGroup } from '../lib/runtimeDebugger';
 
 const TAIL_BYTES = 256 * 1024;
 const SCAN_BYTES = 16 * 1024 * 1024;
@@ -13,7 +14,7 @@ export interface GameLogDeployBoundary {
   offset: number;
 }
 
-type LoadRecord = { offset: number; fault: boolean };
+type LoadRecord = { offset: number; fault: boolean; pendingWidget?: RuntimeWidgetFaultGroup };
 export type GameLogDeployFence = { at: string; boundary?: GameLogDeployBoundary };
 type Cursor<T> = {
   identity: string;
@@ -176,16 +177,40 @@ function scanGameLog<T>(file: string, cacheKey: string, fold: GameLogEvidenceFol
 const loadReader = createGameLogEvidenceReader<LoadRecord | null>();
 
 /** Read recent output and bounded load evidence from the same open log. */
-export function readGameLogLoadEvidence(file: string, modIds: readonly string[], isFault: (line: string) => boolean, deploy?: GameLogDeployFence) {
+export function readGameLogLoadEvidence(
+  file: string, modIds: readonly string[], isFault: (line: string) => boolean,
+  deploy?: GameLogDeployFence, ownedUiFolder = '',
+) {
   const mods = new Set(modIds);
-  const { evidence: load, ...result } = loadReader.read(file, modIds, {
+  const { evidence, ...result } = loadReader.read(file, [modIds, ownedUiFolder], {
     initial: () => null,
     copy: value => value && { ...value },
-    line: (load, line, offset) => {
+    gap: load => {
+      if (load) load.pendingWidget = undefined;
+      return load;
+    },
+    line: (load, rawLine, offset) => {
+      const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
       const loading = /^\s*\[general\]\s+(?:[\d.:]+\s+)?loading extension\s+['"]?([a-z0-9_.-]+)(?=$|[\s'"])/i.exec(line)?.[1].toLowerCase();
       if (loading && mods.has(loading)) return { offset, fault: false };
-      if (load && !load.fault && isFault(line)) load.fault = true;
+      if (!load || load.fault) return;
+      if (isFault(line)) {
+        load.fault = true;
+        load.pendingWidget = undefined;
+        return;
+      }
+      if (!ownedUiFolder) return;
+      const update = advanceRuntimeWidgetFaultGroup(load.pendingWidget, line);
+      if (!update) return;
+      load.fault = update.closedFolder === ownedUiFolder;
+      load.pendingWidget = load.fault ? undefined : update.pending;
     },
   }, deploy, { includeTail: true });
-  return { ...result, load };
+  const pending = evidence?.pendingWidget;
+  const pendingOwnedFault = !!pending && (pending.folder === undefined || pending.folder === ownedUiFolder);
+  return {
+    ...result,
+    coverageLimited: result.coverageLimited || pendingOwnedFault,
+    load: evidence && { offset: evidence.offset, fault: evidence.fault },
+  };
 }

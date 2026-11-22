@@ -10,6 +10,8 @@
  * active Lua buffer when possible.
  */
 
+import { isX4FileSignatureNotice } from './logTelemetry';
+
 export type LuaRuntimeSeverity = 'error' | 'warning' | 'info';
 
 export interface LuaRuntimeFile {
@@ -73,7 +75,7 @@ const RUNTIME_LUA_RE = /(?:^|\s)([A-Za-z]:[\\/][^:\n]+?\.lua|\.?[\\/][^:\n]+?\.l
 const STACK_FRAME_RE = /^\s*(?:\[[Cc]\]:\s*)?(?:in function\s+["']([^"']+)["']|([A-Za-z]:[\\/][^:\n]+?\.lua|\.?[\\/][^:\n]+?\.lua|ui[\\/][^:\n]+?\.lua):(\d+):\s*in function\s+["']?([^"']+)["']?)\s*$/i;
 const XPL_FILE_RE = /([A-Za-z]:[\\/][^:\n]+?\.(?:xpl|lua)|\.?[\\/][^:\n]+?\.(?:xpl|lua)|ui[\\/][^:\n]+?\.(?:xpl|lua))\((\d+)\):\s*(.+)$/i;
 const RESTRICTED_RE = /Restricted function\s+([A-Za-z_][A-Za-z0-9_.]*)\s*\(\)\s+called from non-verified source\s+['"]([^'"]+)['"]/i;
-const SIGNATURE_RE = /Failed to verify the file signature for file\s+['"]([^'"]+)['"]/i;
+const SIGNATURE_RE = /signature for file[ \t]+(?:'([^'\r\n]+)'|"([^"\r\n]+)")/i;
 
 function normalizePath(value: string): string {
   return value
@@ -199,9 +201,9 @@ function runtimeIssueFromLine(raw: string, lineNo: number, symbols: LuaRuntimeSy
     };
   }
 
-  const signature = raw.match(SIGNATURE_RE);
+  const signature = isX4FileSignatureNotice(raw) ? raw.match(SIGNATURE_RE) : null;
   if (signature) {
-    const file = signature[1];
+    const file = signature[1] || signature[2];
     return {
       severity: 'warning',
       code: 'lua.signature_warning',
@@ -337,6 +339,12 @@ export function runLuaRuntimeLogSelftest() {
   ok('parses_restricted_call', restricted?.restrictedFunction === 'OnlineGetVersionIncompatibilityState', restricted?.restrictedFunction);
   ok('captures_xpl_file_line', restricted?.file?.endsWith('gameoptions.xpl') === true && restricted.line === 6340, `${restricted?.file}:${restricted?.line}`);
   ok('parses_signature_warning', signature?.severity === 'warning' && signature.file?.includes('gameoptions.xpl') === true);
+  const alternateNotice = '[FileIO ] 22.92 Failed to verify signature for file "ui/other.lua" (error: 14)';
+  const alternate = analyzeLuaRuntimeLog(alternateNotice, files).issues[0];
+  ok('parses_alternate_signature_notice', alternate?.code === 'lua.signature_warning' && alternate.file === 'ui/other.lua');
+  const quoted = analyzeLuaRuntimeLog('ui/ai_influence_chat.lua:42: script error: quoted ' + alternateNotice, files).issues[0];
+  ok('quotes_do_not_remove_direct_lua_position', quoted?.code === 'lua.runtime_error'
+    && quoted.line === 42 && quoted.file === 'ui/ai_influence_chat.lua');
   ok('parses_lua_runtime_error', runtime?.line === 42 && runtime.message.includes('nil value'), `${runtime?.line}:${runtime?.message}`);
   ok('matches_known_lua_file', result.totals.matchedFiles === 1, String(result.totals.matchedFiles));
   ok('captures_stack_frame', result.frames.some(frame => frame.functionName === 'menu.onResponse' && frame.line === 42));

@@ -40,8 +40,14 @@ test('Beginner exposes five tasks, preserves workspace and selection, and Expert
   await expect(page.locator('#view_selection_modes')).toHaveCount(0);
   await expect(page.locator('#side_panel')).toHaveCount(0);
   await expect(page.getByTestId('native-project-files')).toHaveCount(0);
-  await expect(page.getByTitle('Load existing mods or push updates to GitHub')).toHaveCount(0);
-  await expect(page.getByTitle('Open External AI Agent API Control panel and documentation')).toHaveCount(0);
+  const studioActions = page.getByTestId('studio-menu-button');
+  await studioActions.click();
+  const studioMenu = page.getByTestId('studio-menu');
+  await expect(studioMenu.locator('[data-global-action="sync-mod"], [data-global-action="agent-api"], [data-global-action="ai-settings"]')).toHaveCount(0);
+  await expect(studioMenu.getByRole('button', { name: 'Studio Settings' })).toBeVisible();
+  await expect(studioMenu.getByRole('button', { name: 'Reset Workspace…' })).toBeVisible();
+  await expect(studioMenu.getByTestId('report-bug-button')).toBeVisible();
+  await studioActions.press('Escape');
   await expect(page.getByTestId('mode-beginner')).toHaveAttribute('aria-pressed', 'true');
 
   await page.getByTestId('readiness-stage-package').click();

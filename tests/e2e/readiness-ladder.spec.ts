@@ -63,9 +63,35 @@ test('readiness ladder routes to evidence, confirms experience, and invalidates 
   await expect(page.getByTestId('readiness-stage-seen')).toHaveAttribute('data-status', 'pass');
   await expect(page.getByTestId('readiness-stage-experience')).toHaveAttribute('data-status', 'pending');
 
-  await page.getByTestId('readiness-stage-package').click();
-  await expect(page.getByTestId('diagnostics-scope-package')).toHaveAttribute('aria-pressed', 'true');
+  const packageReadiness = page.getByTestId('readiness-stage-package');
+  const validationTab = page.getByTestId('diagnostics-scope-package');
+  const validation = page.getByText('FULL-PROJECT VALIDATION', { exact: true });
+  await packageReadiness.click();
+  await expect(validationTab).toHaveAttribute('aria-pressed', 'true');
+  await expect(validation).toBeVisible();
   await expect(page.getByTestId('readiness-evidence')).toContainText('Project valid');
+
+  const installTab = page.getByTestId('diagnostics-scope-install');
+  const install = page.getByRole('button', { name: 'Scan Installed Extensions' });
+  await installTab.click();
+  await expect(installTab).toHaveAttribute('aria-pressed', 'true');
+  await expect(install).toBeVisible();
+  await expect(validation).toBeHidden();
+  await packageReadiness.press('Enter');
+  await expect(validationTab).toHaveAttribute('aria-pressed', 'true');
+  await expect(validation).toBeVisible();
+  await expect(install).toBeHidden();
+
+  const performanceTab = page.getByTestId('diagnostics-scope-performance');
+  const performancePanel = page.getByTestId('forge-performance-panel');
+  await performanceTab.click();
+  await expect(performanceTab).toHaveAttribute('aria-pressed', 'true');
+  await expect(performancePanel).toBeVisible();
+  await expect(validation).toBeHidden();
+  await packageReadiness.click();
+  await expect(validationTab).toHaveAttribute('aria-pressed', 'true');
+  await expect(validation).toBeVisible();
+  await expect(performancePanel).toBeHidden();
 
   await page.getByTestId('readiness-stage-seen').click();
   await expect(page.getByText('Playtest Workspace', { exact: true })).toBeVisible();

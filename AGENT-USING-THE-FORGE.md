@@ -153,6 +153,25 @@ extension ID (`DEPLOY_TARGET_EXTENSION_ID_MISMATCH`). A nonempty folder without 
 verifiable manifest ID returns `DEPLOY_TARGET_EXTENSION_ID_UNRESOLVED`. The refusal
 identifies the selected folder before staging or receipt creation.
 
+`DEPLOY_SNAPSHOT_NO_SPACE` is HTTP 507 at the `snapshot` stage with
+`deployment.writeAttempted: false`. `storage.directory` identifies the backend’s
+physical temporary directory and `storage.volume` gives its Windows path root.
+`storage.payloadBytes` counts the selected file bytes before any filesystem overhead.
+`storage.availableBytes` is a best-effort sample and can be omitted. Release space
+there, or start Forge with a writable temporary location through `TEMP` and `TMP`
+on Windows or `TMPDIR` on Unix. A managed sidecar inherits the IDE’s launch
+environment. An independently started sidecar uses its own launch environment.
+Keep isolated Dev temporary paths inside the physical Dev lab. Run a fresh preview
+after resolving the storage error and use that preview for Apply.
+
+Both native aliases return HTTP 503 with DEPLOY_CORPUS_UNAVAILABLE when Forge
+cannot verify a required reference input. The corpus.resource field identifies
+DLC inventory, schema inventory, or reference-file access. Validation is
+incomplete and Forge returns no usable binding. Restore access to the unpacked
+corpus or schema folder and request a new preview before retrying Apply. If
+staging had already started, use the returned deployment and rollback fields
+to understand what occurred before the refusal.
+
 If the reply disappears, query `GET /api/agent/status?deployOperationId=<encoded-id>`
 with the same deploy key and workspace headers. A committed receipt identifies the
 historical write. `not-applied` means Forge verified that the retired local backend
@@ -161,6 +180,40 @@ never reached the managed write phase for this operation. The receipt can remain
 record. A missing receipt or an unproven write phase leaves the outcome `unknown`.
 Reusing a recorded operation ID refuses a second apply and returns the existing receipt
 pointer. Start a fresh preview before deciding on a new operation.
+
+Add `inspectDeployEffect=1` to the status lookup with the original deploy key
+and workspace to recover the verified file-effect report. `effectReport.status`
+is `available`, `unavailable`, `not-committed`, or `legacy`. Only `available`
+includes the exact effect and its hash. Report availability is independent of
+the recorded deployment outcome.
+
+Check the GET `/api/agent/status` entry in `/api/agent/schema` before choosing
+an optional inspection on a different Forge instance. Its
+`query.inspectDeployTarget.enum` lists advertised target modes, and
+`query.inspectDeployEffect.enum` lists the report flag. With no advertised
+managed mode, treat current managed verification as unavailable. A receipt
+lookup without those flags still describes the historical operation.
+
+Add `inspectDeployTarget=1` to check the current destination using the original
+deploy key and workspace. For a committed receipt with usable physical output
+evidence, `targetObservation.targetState` is `matches-committed`,
+`differs-from-committed`, or `absent`. A different target binding returns
+`binding-mismatch`. Missing, linked, unstable, unreadable or oversized evidence
+can return `unavailable`. Compare the whole installed extension tree, including
+runtime-owned files. A mismatch does not identify which file changed. The
+receipt still describes the historical Apply. This lookup needs no source
+folder, works after rollback retention, and performs no Apply or recovery.
+
+Use `inspectDeployTarget=managed` to check only the physical files written by a
+committed agent deployment. `managedObservation.scope` is `managed-physical`.
+On `matches-committed` or `differs-from-committed`, `checkedFiles` is the number
+of recorded paths assessed, including `missingPaths` and `changedPaths`.
+Preserved runtime files are outside this check. For a catalog deployment the
+paths are the physical CAT/DAT files and any deployed loose files. `absent`
+means the recorded destination is missing. `binding-mismatch` means Forge is
+configured for a different destination. `unavailable` covers older receipts,
+unverified evidence and targets that cannot be safely read. The committed
+receipt and the separate `inspectDeployEffect=1` report remain historical.
 
 If the retired backend recorded successful installed-byte, manifest and Doctor checks
 before publishing the commit, status also returns `postchecks.status: "passed"` and
@@ -299,10 +352,23 @@ Static gates prove *legality*. They cannot prove *behaviour*. So:
 | `GET /api/agent/schema` | self-documenting endpoint list (public) |
 | `GET /api/agent/workspace` | addressed workspace + `workspaceHash` and complete `snapshotHash` |
 | `POST /api/agent/expressions/check` | Check one unsaved MD or AI-script expression with optional `variableTypes`. MCP exposes the same verdict as `check_expression` when the current key has authority. |
+| `POST /api/agent/project/ai-navigation` | Find authored AIScript definitions and references in submitted XML. MCP exposes `navigate_ai_script` with the exact `project.ai.navigation@1` grant. |
+| `POST /api/agent/project/md-navigation` | Look up a literal Mission Director cue or library definition or its references in submitted XML. MCP exposes `navigate_md_script` with the exact `project.md.navigation@1` grant. |
 | `POST /api/agent/project/validate` | **Authoritative** compact verdict by default. Use `?detail=full` or body `detail: "full"` for layered findings, remediation capsules, and file lists. To expand a specific verdict, supply the same validation subject and its `resultId` as `expectedResultId` in the body. |
 | `POST /api/agent/deploy-verify` | 10-stage compile + deploy preflight; requires explicit `path` or `workspace` |
 | `GET /api/agent/selftest-index` | the oracle list |
 | `GET /api/reference/status` | cheap authenticated probe — use for port discovery |
+
+Mission Director navigation requires a key bound to the addressed workspace with `read` and `analyze` effects.
+Send the project ID, name and authored files, the focused relative MD path, a zero-based UTF-16 offset, and
+`definition` or `references` mode. `includeDeclaration` optionally adds the definition to references.
+The snapshot hash identifies the ordered paths and text. Returned ranges refer to those exact bytes, including
+unsaved edits and XML entity spelling. A resolved declaration can have zero references. Missing, ambiguous,
+non-literal and unavailable selections have distinct statuses.
+
+AIScript navigation accepts the same snapshot and caret shape with its own workspace-bound read/analyze grant.
+An AIScript destination must match both the exact `aiscripts/<name>.xml` filename and the declared script name.
+References include the declaration when requested. Source coordinates refer to the submitted XML.
 
 **Related:** `AGENTS.md` (workflow), `CODEX-ONBOARDING.md` (architecture), `ROADMAP.md` §KNOWN BUGS
 (current Forge defects with reproductions).

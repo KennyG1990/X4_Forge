@@ -126,6 +126,7 @@ function buildSuitePlan(input: ProjectCheckSuiteInput) {
     checks: commands.map(({ bound: { binding } }) => ({
       id: binding.command.checkId, coveredFiles: binding.coveredFiles,
       ...(binding.coveredChecks === undefined ? {} : { coveredChecks: binding.coveredChecks }),
+      ...(binding.coveredFacts === undefined ? {} : { coveredFacts: binding.coveredFacts }),
     })),
     ...policy,
   });
@@ -207,6 +208,7 @@ function readPassingChild(plan: SuitePlan, command: SuitePlan['commands'][number
     coveredFiles: binding.coveredFiles,
     ...(message === undefined ? {} : { message }),
     ...(binding.coveredChecks === undefined ? {} : { coveredChecks: binding.coveredChecks }),
+    ...(binding.coveredFacts === undefined ? {} : { coveredFacts: binding.coveredFacts }),
   };
   return { child, check };
 }

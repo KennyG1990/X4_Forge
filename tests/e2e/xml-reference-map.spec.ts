@@ -1,4 +1,5 @@
 import { expect, test, withClosingApiRequest, fetchRouteWithClosingConnection, type APIRequestContext, type Page, type Request as BrowserRequest, type Response as BrowserResponse, type Route, type TestInfo } from './request-transport';
+import { openStudioAction } from './studio-actions';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
@@ -604,7 +605,7 @@ test('real delayed XML results cannot survive settings invalidation or an immuta
     settingsResponse = await delayedSettings.response;
     expect(settingsResponse.delivery()).toEqual({ upstreamFetches: 1, responses: 0, failures: 0 });
     const settingsRequested = waitForMap(page);
-    await page.getByTitle('Manage all folders the studio uses (Mod Workspace, X4 game path, schema)').click();
+    await openStudioAction(page, 'settings');
     const saved = page.waitForResponse(response => new URL(response.url()).pathname === '/api/schema/config' && response.request().method() === 'POST');
     await page.getByRole('button', { name: 'Save Paths', exact: true }).click();
     const savedResponse = await saved;

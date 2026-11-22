@@ -22,7 +22,9 @@
  * XML parsing: xmldom (nested <aiscript><order><params><param><input_param…>).
  */
 
-import { DOMParser, type Element } from '@xmldom/xmldom';
+import { DOMParser, type Attr, type Element } from '@xmldom/xmldom';
+import { buildAuthoredAiScriptIndex, isAuthoredAiScriptName, isInsideAiScriptActions, readLiteralAiScriptName, resolveAuthoredAiScript } from '../../shared/aiScriptIdentity';
+import type { ValidationSourceLocation } from './validationEvidence';
 
 /** orderparamlookup from aiscripts.xsd (unpacked 9.00) — curated fallback set. */
 export const ORDER_PARAM_TYPES = new Set([
@@ -32,13 +34,15 @@ export const ORDER_PARAM_TYPES = new Set([
 
 export interface AiscriptLintFinding {
   code: 'aiscript.order_param_missing_type' | 'aiscript.order_param_illegal_type' | 'aiscript.order_param_missing_text' | 'aiscript.not_aiscript'
-    | 'aiscript.label_duplicate' | 'aiscript.resume_label_unresolved';
-  severity: 'error' | 'warning';
+    | 'aiscript.label_duplicate' | 'aiscript.resume_label_unresolved'
+    | 'aiscript.run_script_param_undeclared' | 'aiscript.run_script_param_required';
+  severity: 'error' | 'warning' | 'info';
   order?: string;
   param?: string;
   sourceRef?: string;
   line?: number;
   column?: number;
+  target?: ValidationSourceLocation;
   detail: string;
 }
 
@@ -71,11 +75,156 @@ export function lintAiscriptOrderParams(xml: string, legalTypes: Set<string> = O
 
 export function lintAiscript(xml: string, legalTypes: Set<string> = ORDER_PARAM_TYPES): AiscriptLintFinding[] {
   const parsed = parseAiscript(xml);
-  if (!parsed) return [];
+  return parsed ? lintParsedAiscript(parsed, legalTypes) : [];
+}
+
+function lintParsedAiscript(parsed: { root: Element; recovered: boolean }, legalTypes: Set<string>): AiscriptLintFinding[] {
   const findings = lintOrderParams(parsed.root, legalTypes);
   // Structural validation owns malformed XML. Label keys use the no-namespace schema.
   if (!parsed.recovered && !parsed.root.namespaceURI) lintActionLabels(parsed.root, findings);
   return findings;
+}
+
+type Point = Pick<ValidationSourceLocation, 'line' | 'column'>;
+type ParameterName = Point & { readonly name: string };
+type ScriptCall = Point & { readonly callee?: string; readonly arguments?: readonly ParameterName[] };
+
+interface AiscriptAnalysis {
+  readonly findings: readonly AiscriptLintFinding[];
+  readonly script?: ParameterName;
+  readonly signature?: readonly (ParameterName & { readonly hasDefault: boolean })[];
+  readonly calls: readonly ScriptCall[];
+}
+
+// The authored paramname grammar in the X4 9.00 schemas.
+const parameterNamePattern = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function attributePoint(attribute: Attr): Point {
+  return { line: attribute.lineNumber, column: attribute.columnNumber };
+}
+
+function inputParameters(parent: Element, supplied: boolean): ParameterName[] | undefined {
+  const names = new Set<string>();
+  const result: ParameterName[] = [];
+  for (const parameter of Array.from(parent.children).filter(child => child.localName === 'param')) {
+    const name = parameter.getAttributeNode('name');
+    if (parameter.namespaceURI || !name || !parameterNamePattern.test(name.value)
+      || (supplied && !parameter.getAttribute('value')?.trim()) || names.has(name.value.toLowerCase())) return;
+    names.add(name.value.toLowerCase());
+    result.push({ name: name.value, ...attributePoint(name) });
+  }
+  return result;
+}
+
+function readAiSignature(root: Element): AiscriptAnalysis['signature'] {
+  const children = Array.from(root.children);
+  // An order carries its own parameter context. It cannot establish a direct script signature.
+  if (children.some(child => child.localName === 'order')) return;
+  const containers = children.filter(child => child.localName === 'params');
+  if (containers.length === 0) return [];
+  if (containers.length !== 1 || containers[0].namespaceURI) return;
+  const nodes = Array.from(containers[0].children);
+  if (nodes.some(node => node.localName !== 'param'
+    || (node.hasAttribute('default') && !node.getAttribute('default')?.trim()))) return;
+  return inputParameters(containers[0], false)?.map((parameter, index) =>
+    ({ ...parameter, hasDefault: nodes[index].hasAttribute('default') }));
+}
+
+/** Cache only file-local values. Resolving a call requires the current project's entire index. */
+export function analyzeAiscript(xml: string, legalTypes: Set<string>): AiscriptAnalysis {
+  const parsed = parseAiscript(xml);
+  if (!parsed) return { findings: [], calls: [] };
+  const { root, recovered } = parsed;
+  const findings = lintParsedAiscript(parsed, legalTypes);
+  const scriptName = root.getAttributeNode('name');
+  if (recovered || root.namespaceURI || !scriptName || !isAuthoredAiScriptName(scriptName.value)) {
+    return { findings, calls: [] };
+  }
+  const calls: ScriptCall[] = [];
+  for (const call of Array.from(root.getElementsByTagName('run_script'))) {
+    if (!isInsideAiScriptActions(call, root) || call.getAttribute('chance')?.trim() === '0') continue;
+    const name = call.getAttributeNode('name');
+    if (!name) continue;
+    calls.push({
+      ...attributePoint(name),
+      callee: readLiteralAiScriptName(name.value),
+      arguments: inputParameters(call, true),
+    });
+  }
+  return {
+    findings,
+    script: { name: scriptName.value, ...attributePoint(scriptName) },
+    signature: readAiSignature(root),
+    calls,
+  };
+}
+
+type AiFile = { path: string; analysis: AiscriptAnalysis };
+type ProjectAiFinding = AiscriptLintFinding & { filePath: string };
+
+export function lintAiscriptCalls(files: readonly AiFile[]): {
+  findings: ProjectAiFinding[]; checked: number; skipped: number; caseUnresolved: number;
+} {
+  const scriptName = (file: AiFile) => file.analysis.script?.name;
+  const names = buildAuthoredAiScriptIndex(files, scriptName);
+
+  const findings: ProjectAiFinding[] = [];
+  const parameterIndexes = new Map<AiFile, { declared: ReadonlyMap<string, string>; required: readonly ParameterName[] }>();
+  let checked = 0;
+  let skipped = 0;
+  let caseUnresolved = 0;
+  for (const file of files) {
+    const owner = file.analysis.script?.name;
+    const callerIsUnique = owner !== undefined && resolveAuthoredAiScript(names, owner, scriptName) === file;
+    for (const call of file.analysis.calls) {
+      const callee = call.callee;
+      const targetFile = callee ? resolveAuthoredAiScript(names, callee, scriptName) : undefined;
+      const script = targetFile?.analysis.script;
+      const signature = targetFile?.analysis.signature;
+      if (!callerIsUnique || !callee || !targetFile || !script
+        || !signature || !call.arguments) {
+        skipped++;
+        continue;
+      }
+      checked++;
+      let parameters = parameterIndexes.get(targetFile);
+      if (!parameters) {
+        parameters = {
+          declared: new Map(signature.map(parameter => [parameter.name.toLowerCase(), parameter.name])),
+          required: signature.filter(parameter => !parameter.hasDefault),
+        };
+        parameterIndexes.set(targetFile, parameters);
+      }
+      const suppliedFolded = new Set(call.arguments.map(parameter => parameter.name.toLowerCase()));
+      const { line, column } = script;
+      const target = { file: targetFile.path, line, column };
+      // Exact spelling is established. A case-only mismatch has no qualified engine verdict yet.
+      for (const argument of call.arguments) {
+        const declaredName = parameters.declared.get(argument.name.toLowerCase());
+        if (declaredName !== undefined) {
+          if (declaredName !== argument.name) caseUnresolved++;
+          continue;
+        }
+        findings.push({
+          code: 'aiscript.run_script_param_undeclared', severity: 'warning', filePath: file.path, target,
+          line: argument.line, column: argument.column, param: argument.name,
+          sourceRef: `run_script@${argument.column}/${callee}/${argument.name}`,
+          detail: `AI script "${callee}" does not declare the supplied parameter "${argument.name}".`,
+        });
+      }
+      for (const parameter of parameters.required) {
+        if (suppliedFolded.has(parameter.name.toLowerCase())) continue;
+        findings.push({
+          code: 'aiscript.run_script_param_required', severity: 'info', filePath: file.path,
+          target: { file: targetFile.path, line: parameter.line, column: parameter.column },
+          line: call.line, column: call.column, param: parameter.name,
+          sourceRef: `run_script@${call.column}/${callee}/${parameter.name}`,
+          detail: `AI script "${callee}" declares "${parameter.name}" without a default. This call supplies no value for it.`,
+        });
+      }
+    }
+  }
+  return { findings, checked, skipped, caseUnresolved };
 }
 
 function lintOrderParams(root: Element, legalTypes: Set<string>): AiscriptLintFinding[] {
@@ -260,6 +409,85 @@ export function runAiscriptLintSelftest(): {
   const duplicateColumns = [...sameLine.matchAll(/"x"/g)].slice(1).map(match => match.index + 1);
   ok('duplicate attributes on one line have distinct exact columns',
     lintAiscript(sameLine).map(f => f.column).join(',') === duplicateColumns.join(','));
+
+  const provider = `<aiscript name="forge.qa.target">
+    <params><param name="Target"/><param name="number" default="0"/><param name="flag" default="false"/><param name="text" default="''"/></params>
+  </aiscript>`;
+  const caller = (actions: string) => `<aiscript name="forge.qa.caller"><actions>${actions}</actions></aiscript>`;
+  const call = (args: string, name = "'forge.qa.target'", option = '') =>
+    `<run_script name="${name}"${option}>${args}</run_script>`;
+  const argument = (name: string) => `<param name="${name}" value="1"/>`;
+  const resolved = (xml: string, target = provider, targetPath = 'aiscripts/forge.qa.target.xml', extras: AiFile[] = []) =>
+    lintAiscriptCalls([
+      { path: 'aiscripts/forge.qa.caller.xml', analysis: analyzeAiscript(xml, ORDER_PARAM_TYPES) },
+      { path: targetPath, analysis: analyzeAiscript(target, ORDER_PARAM_TYPES) },
+      ...extras,
+    ]);
+  const validInput = argument('Target');
+  const unknownInput = argument('targett');
+  const validCall = call(validInput);
+  const unknownCall = call(validInput + unknownInput);
+  const passedDefaults = resolved(caller(`<do_if value="true">${validCall}</do_if>`));
+  ok('nested active literal call and omitted defaults are valid',
+    passedDefaults.checked === 1 && passedDefaults.skipped === 0 && passedDefaults.findings.length === 0);
+  const repeatedCaller = caller(unknownCall + unknownCall);
+  const repeatedArgs = resolved(repeatedCaller).findings;
+  const wantedColumns = [...repeatedCaller.matchAll(/"targett"/g)].map(match => match.index + 1);
+  ok('same-line typo diagnostics retain exact columns and distinct review identities',
+    repeatedArgs.length === 2 && repeatedArgs.every(f => f.code === 'aiscript.run_script_param_undeclared'
+      && f.severity === 'warning' && f.target?.file === 'aiscripts/forge.qa.target.xml')
+      && repeatedArgs.map(f => f.column).join(',') === wantedColumns.join(',')
+      && new Set(repeatedArgs.map(f => f.sourceRef)).size === 2, repeatedArgs);
+  const missingArg = resolved(caller(call('<save_retval name="Target" variable="$out"/>'))).findings;
+  ok('a return assignment cannot fill a required input',
+    missingArg.length === 1 && missingArg[0].code === 'aiscript.run_script_param_required'
+      && missingArg[0].severity === 'info' && missingArg[0].target?.line === 2 && missingArg[0].param === 'Target', missingArg);
+  const disabled = resolved(caller(call(unknownInput, undefined, ' chance="0"')));
+  ok('the schema-defined disabled action makes no claim',
+    disabled.checked === 0 && disabled.skipped === 0 && disabled.findings.length === 0);
+  const caseOnly = resolved(caller(call(argument('target'))));
+  ok('case-only parameter behavior remains unqualified',
+    caseOnly.caseUnresolved === 1 && caseOnly.findings.length === 0);
+  const unknownCalls = resolved(caller(call(unknownInput, '$script') + call(unknownInput, "'Forge.Qa.Target'")));
+  ok('dynamic and unqualified case spelling do not choose a callee',
+    unknownCalls.skipped === 2 && unknownCalls.checked === 0 && unknownCalls.findings.length === 0);
+  const empty = resolved(caller(call(unknownInput)), '<aiscript name="forge.qa.target"/>');
+  ok('a known empty signature still rejects an undeclared name as a warning',
+    empty.checked === 1 && empty.findings.length === 1 && empty.findings[0].severity === 'warning', empty);
+  const unavailable = [
+    '', '<diff><add sel="/aiscript"><params><param name="Target"/></params></add></diff>',
+    '<aiscript name="forge.qa.target"><order/></aiscript>',
+    '<aiscript name="forge.qa.target"><params/><params/></aiscript>',
+    '<aiscript name="forge.qa.target"><params><param name="Target"/><param name="Target"/></params></aiscript>',
+    '<aiscript name="forge.qa.target"><params xmlns="urn:foreign"><param name="Target"/></params></aiscript>',
+    '<aiscript name="forge.qa.target"><params><param name="Target" default=""/></params></aiscript>',
+    '<aiscript name="forge.qa.target"><params></aiscript>',
+  ];
+  ok('absent, rewritten, unsupported or malformed signatures stay unqualified', unavailable.every(target => {
+    const r = resolved(caller(unknownCall), target);
+    return r.checked === 0 && r.skipped === 1 && r.findings.length === 0;
+  }));
+  ok('a callee path alias and a second declaration cannot authorize diagnostics',
+    resolved(caller(unknownCall), provider, 'aiscripts/some.other.xml').skipped === 1
+    && resolved(caller(unknownCall), provider, 'aiscripts/forge.qa.target.xml', [
+      { path: 'aiscripts/alias.xml', analysis: analyzeAiscript(provider, ORDER_PARAM_TYPES) },
+    ]).skipped === 1);
+  ok('comments and foreign parameter contexts cannot supply arguments',
+    resolved(caller(`<!-- ${unknownCall} -->${call('<param xmlns="urn:foreign" name="Target" value="1"/>')}`)).skipped === 1
+    && resolved(caller(`<!-- ${unknownCall} -->`)).checked === 0);
+  const competingPath = (name: string): AiFile => ({
+    path: 'aiscripts/' + name + '.xml',
+    analysis: analyzeAiscript('', ORDER_PARAM_TYPES),
+  });
+  ok('an unreadable file still reserves a case-folded caller or callee path',
+    ['Forge.Qa.Caller', 'Forge.Qa.Target'].every(name => {
+      const result = resolved(caller(unknownCall), provider, 'aiscripts/forge.qa.target.xml', [competingPath(name)]);
+      return result.checked === 0 && result.skipped === 1 && result.findings.length === 0;
+    }));
+
+  const multilineCaller = caller('\n  ' + unknownCall);
+  ok('UTF-8 BOM and CRLF preserve advisory coordinates',
+    JSON.stringify(resolved(multilineCaller)) === JSON.stringify(resolved('\uFEFF' + multilineCaller.replace(/\n/g, '\r\n'))));
 
   const passed = checks.filter(c => c.pass).length;
   const allPassed = passed === checks.length;

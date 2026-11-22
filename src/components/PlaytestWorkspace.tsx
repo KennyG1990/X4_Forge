@@ -1,5 +1,6 @@
 import { prepareDeployReview, type DeployReviewData } from '../lib/deployClient';
 import DeployValidationSummary from './DeployValidationSummary';
+import DeployFileChanges from './DeployFileChanges';
 import React, { useState } from 'react';
 import type { ModWorkspace } from '../types';
 import ReleaseCenter from './ReleaseCenter';
@@ -46,7 +47,7 @@ interface LogAnalysisResult {
 }
 
 interface GameLogIssue {
-  severity: 'error' | 'warning';
+  severity: 'error' | 'warning' | 'info';
   lineNumber: number;
   text: string;
   matchesActiveMod: boolean;
@@ -719,9 +720,7 @@ export default function PlaytestWorkspace({
                   {reviewedDeploy && (
                     <div className="mt-2 space-y-1.5 rounded border border-cyan-500/25 p-2">
                       <p className="break-all text-slate-200" data-testid="playtest-deploy-destination">X4 install destination · {reviewedDeploy.destination}</p>
-                      {verifyResult.effect && <p className="text-slate-300">
-                        Files · {verifyResult.effect.added?.length ?? 0} added · {verifyResult.effect.overwritten?.length ?? 0} replaced · {verifyResult.effect.deleted?.length ?? 0} removed · {verifyResult.effect.preserved?.length ?? 0} preserved
-                      </p>}
+                      {verifyResult.effect && <DeployFileChanges effect={verifyResult.effect} />}
                       <button
                         type="button"
                         onClick={() => void requestDeploy('apply')}

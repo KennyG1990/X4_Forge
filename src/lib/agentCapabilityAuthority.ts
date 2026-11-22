@@ -67,9 +67,10 @@ export type ResolveAgentRouteTemplate = (method: string, template: string) => Ag
 const EFFECT_ORDER = new Map(FORGE_CAPABILITY_EFFECTS.map((effect, index) => [effect, index]));
 const EFFECT_SET = new Set<ForgeCapabilityEffect>(FORGE_CAPABILITY_EFFECTS);
 
-/** Exact protected native identities require an explicit key grant, including legacy presets. */
-function isNativePerformanceCapabilityId(id: string): boolean {
-  return id === 'performance.native.read' || id === 'performance.native.collect' || id === 'performance.native.stop';
+/** These capabilities require an explicit key grant, including for legacy presets. */
+function requiresExplicitCapabilityGrant(id: string): boolean {
+  return id === 'performance.native.read' || id === 'performance.native.collect' || id === 'performance.native.stop'
+    || id === 'project.ai.navigation' || id === 'project.md.navigation';
 }
 
 export function forgeCapabilityIdentity(capability: Pick<ForgeCapabilityDescriptorV1, 'id' | 'version'>): string {
@@ -164,10 +165,10 @@ export function decideEffectiveCapability(
   if ((route.decision.workspaceMode === 'required' || capability.context.workspace === 'required') && !actor.workspaceId) {
     return { allowed: false, code: 'CAPABILITY_WORKSPACE_REQUIRED', capabilityIdentity: identity };
   }
-  const native = isNativePerformanceCapabilityId(capability.id);
-  if (native && !actor.constraint) return { allowed: false, code: 'CAPABILITY_NOT_GRANTED', capabilityIdentity: identity };
-  // The key cannot make a public route private. Native identities remain explicitly protected.
-  if (capability.access.public && !native) return { allowed: true, code: 'ALLOWED', capabilityIdentity: identity };
+  const requiresGrant = requiresExplicitCapabilityGrant(capability.id);
+  if (requiresGrant && !actor.constraint) return { allowed: false, code: 'CAPABILITY_NOT_GRANTED', capabilityIdentity: identity };
+  // A key cannot make a public capability private unless it already requires an explicit grant.
+  if (capability.access.public && !requiresGrant) return { allowed: true, code: 'ALLOWED', capabilityIdentity: identity };
   if (!actor.constraint) return { allowed: true, code: 'ALLOWED', capabilityIdentity: identity };
   if (!actor.constraint.capabilityIdentities.includes(identity)) {
     return { allowed: false, code: 'CAPABILITY_NOT_GRANTED', capabilityIdentity: identity };
@@ -211,7 +212,7 @@ export function decideConstrainedAgentRoute(
   constraint: AgentCapabilityConstraint | undefined,
   capabilities: readonly ForgeCapabilityDescriptorV1[] = FORGE_CAPABILITIES,
 ): AgentCapabilityDecision {
-  if (!constraint && isNativePerformanceCapabilityId(decision.owner)) {
+  if (!constraint && requiresExplicitCapabilityGrant(decision.owner)) {
     const capability = capabilities.find(candidate => candidate.id === decision.owner);
     return { allowed: false, code: 'CAPABILITY_NOT_GRANTED',
       ...(capability ? { capabilityIdentity: forgeCapabilityIdentity(capability) } : {}) };

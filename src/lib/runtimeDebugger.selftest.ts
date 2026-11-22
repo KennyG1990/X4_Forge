@@ -10,6 +10,7 @@ import {
   mapRuntimeFileLineToNode,
   parseRuntimeCandidateBatch,
   parseRuntimeCandidates,
+  taggedLuaFaultFolder,
   RUNTIME_DEBUGGER_LIMITS,
   type RuntimeCandidateIncident,
   type RuntimeExtensionInput,
@@ -279,6 +280,24 @@ export function runRuntimeDebuggerSelftest(): RuntimeDebuggerSelftestResult {
     check('multiline_lua_group_contains_stack_frames', genuineLua.endLine === 4 && genuineLua.source.stackFrames.some(frame => frame.file === 'ui/ai_influence_chat.lua' && frame.line === 42));
     check('genuine_lua_fault_is_engine_failure', genuineLua.kind === 'lua_fault' && genuineLua.isEngineFailure);
 
+    const fileNotice = "[FileIO ] 25.1 File I/O: Failed to verify the file signature for file 'extensions/x4_ai_influence/ui/exception.lua' (error: 14)";
+    const quotedFault = '[=ERROR=] 25.2 [AICHAT][UIX] extensions/x4_ai_influence/ui/exception.lua:42: script error: quoted ' + fileNotice;
+    const isolatedNotice = '  ' + fileNotice.replace('[FileIO ] 25.1 ', '');
+    const noticeCandidates = parseRuntimeCandidates([isolatedNotice, quotedFault, isolatedNotice].join('\n'));
+    check('complete_notices_do_not_join_or_hide_a_quoted_engine_fault', noticeCandidates.length === 3
+      && noticeCandidates[0].kind === 'file_io' && !noticeCandidates[0].isEngineFailure
+      && noticeCandidates[1].isEngineFailure && noticeCandidates[1].source.line === 42
+      && noticeCandidates[1].source.file === 'ui/exception.lua'
+      && noticeCandidates[1].source.extensionFolder === 'x4_ai_influence'
+      && noticeCandidates[2].kind === 'file_io' && !noticeCandidates[2].isEngineFailure, noticeCandidates);
+
+    const adjacentSources = parseRuntimeCandidates(
+      '[=ERROR=] 25.0 C:/UI/a.lua(42):D:/ui/b.xpl:9: attempt to index a nil value',
+    )[0].source.stackFrames;
+    check('adjacent_positioned_files_keep_both_stack_frames_in_order', adjacentSources.length === 2
+      && adjacentSources[0].file === 'c:/ui/a.lua' && adjacentSources[0].line === 42
+      && adjacentSources[1].file === 'd:/ui/b.xpl' && adjacentSources[1].line === 9, adjacentSources);
+
     const widget = '[=ERROR=] 25.1 CWidgetController::UpdateFrame() - Validation error: Invalid cell content';
     const reload = '[=ERROR=] 25.2 Errormessage: P:/SVN/temp/helper.lua:4267: Failed to create view for menu AIC_Hub. Reloading UI';
     const frame = '[string "extensions/x4_ai_influence/ui/ai_influence_chat.lua"]:42: in function onShowMenu';
@@ -339,6 +358,36 @@ export function runRuntimeDebuggerSelftest(): RuntimeDebuggerSelftestResult {
     check('quoted_timer_is_authored_but_a_real_tagged_lua_source_fault_remains_an_error',
       isAuthoredRuntimeDiagnostic(quotedTimer) && parseRuntimeCandidates(quotedTimer)[0].kind === 'authored_diagnostic'
       && !isAuthoredRuntimeDiagnostic(realTagged) && parseRuntimeCandidates(realTagged)[0].isEngineFailure);
+
+    const taggedFault = parseRuntimeCandidates(realTagged)[0];
+    const foreignTagged = parseRuntimeCandidates(realTagged.replace('x4_ai_influence', 'other_physical_folder'))[0];
+    const sharedLuaOwnership = buildRuntimeOwnershipIndex({ active, otherExtensions: [{
+      workspaceId: 'other-lua', contentId: 'foreign_mod', deployedFolder: 'other_physical_folder',
+      manifest: { 'ui/ai_influence_chat.lua': 'local shared = true' },
+    }] });
+    check('positioned_tagged_fault_requires_exact_physical_ownership',
+      taggedLuaFaultFolder(realTagged + '\r') === 'x4_ai_influence'
+      && taggedFault.source.line === 42 && attributeRuntimeCandidate(ownership, taggedFault).disposition === 'confirmed_active'
+      && attributeRuntimeCandidate(ownership, foreignTagged).disposition === 'unknown'
+      && attributeRuntimeCandidate(sharedLuaOwnership, foreignTagged).disposition === 'excluded_other_mod'
+      && attributeRuntimeCandidate(aliasedOwnership, taggedFault).disposition === 'unknown'
+      && attributeRuntimeCandidate(aliasedOwnership, parseRuntimeCandidates(realTagged.replace('x4_ai_influence', 'physical_alias'))[0]).disposition === 'confirmed_active');
+
+    const taggedStatus = realTagged.replace('ai_influence_chat.lua', 'exception.lua').replace('attempt to index a nil value', 'routine status');
+    check('tagged_source_filename_cannot_supply_the_engine_signature',
+      isAuthoredRuntimeDiagnostic(taggedStatus) && !taggedLuaFaultFolder(taggedStatus)
+      && parseRuntimeCandidates(taggedStatus)[0].kind === 'authored_diagnostic');
+    const unsupportedTagged = [realTagged.replace('extensions/', 'Quoted status: extensions/'),
+      realTagged.replace('ui/', '../ui/'), realTagged.replace(':42:', ':0:'),
+      realTagged.replace(':42:', ':9007199254740994:'), realTagged.replace(':42:', ':'),
+      realTagged.replace('attempt to index', 'Report quoted the phrase attempt to index'),
+      realTagged.replace('attempt to index a nil value', '***')];
+    check('unsupported_tagged_locations_do_not_establish_an_engine_fault',
+      unsupportedTagged.every(line => !taggedLuaFaultFolder(line) && !parseRuntimeCandidates(line)[0]?.isEngineFailure));
+    const xpl = realTagged.replace('lua:42:', 'xpl(42):').replaceAll('/', '\\');
+    check('parenthesized_xpl_position_and_backslashes_preserve_exact_source',
+      taggedLuaFaultFolder(xpl) === 'x4_ai_influence' && parseRuntimeCandidates(xpl)[0].source.file === 'ui/ai_influence_chat.xpl'
+      && parseRuntimeCandidates(xpl)[0].source.line === 42);
 
     const genuineMd = parseRuntimeCandidates([
       "[=ERROR=] 26.0 Error in MD script 'ai_influence_conversation' cue 'cancel_conversation' line 98: missing actor/template",

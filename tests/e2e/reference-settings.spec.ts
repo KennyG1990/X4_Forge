@@ -1,4 +1,5 @@
 import { expect, test } from './request-transport';
+import { openStudioAction } from './studio-actions';
 
 const unpackedRoot = 'F:\\Downskies\\x4unpackersuiteV1\\X4 unpacked 9.00';
 
@@ -47,7 +48,7 @@ test('Directory Settings presents one corpus root, measured coverage, and the cr
   }));
 
   await page.goto('/');
-  await page.getByTitle('Manage all folders the studio uses (Mod Workspace, X4 game path, schema)').click();
+  await openStudioAction(page, 'settings');
 
   await expect(page.getByText('Studio Settings', { exact: true })).toBeVisible();
   await expect(page.getByText(/Could not load directory config from the server/)).toHaveCount(0);
@@ -107,10 +108,10 @@ test('Directory Settings routes both external links through the installed-host b
       window.forgeMessages = [];
       window.addEventListener('message', event => window.forgeMessages.push(event.data));
     </script>
-    <iframe title="Forge extension frame" src="${appUrl}"></iframe>
+    <iframe title="Forge extension frame" src="${appUrl}" style="display:block; width:100%; height:95vh; border:0"></iframe>
   `);
   const forge = page.frameLocator('iframe[title="Forge extension frame"]');
-  await forge.getByTitle('Manage all folders the studio uses (Mod Workspace, X4 game path, schema)').click();
+  await openStudioAction(forge, 'settings');
 
   await forge.getByRole('link', { name: /Find X4 Unpacker/ }).click();
   await forge.getByRole('link', { name: /Open Discord/ }).click();
@@ -150,7 +151,7 @@ test('Directory Settings auto-detects distinct development and deployed filesyst
   await page.route('**/api/reference/coverage', route => route.fulfill({ status: 202, contentType: 'application/json', body: JSON.stringify({ status: { state: 'scanning' } }) }));
 
   await page.goto('/');
-  await page.getByTitle('Manage all folders the studio uses (Mod Workspace, X4 game path, schema)').click();
+  await openStudioAction(page, 'settings');
 
   await expect(page.getByTestId('game-install-settings').locator('input')).toHaveValue(game);
   await expect(page.getByTestId('mod-workspace-settings').locator('input')).toHaveValue(workspace);
@@ -195,7 +196,7 @@ test('Directory Settings exposes and repairs a legacy live-extensions workspace'
   await page.route('**/api/reference/coverage', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: { state: 'ready' }, coverage: { generation: 'safe', totalFiles: 0, totalBytes: 0, byRole: [], byConsumer: [] } }) }));
 
   await page.goto('/');
-  await page.getByTitle('Manage all folders the studio uses (Mod Workspace, X4 game path, schema)').click();
+  await openStudioAction(page, 'settings');
   await expect(page.getByText('Mod Workspace Folder must be an isolated development directory.')).toBeVisible();
   await page.getByRole('button', { name: 'Detect X4 installation' }).click();
   await expect(page.getByTestId('mod-workspace-settings').locator('input')).toHaveValue(safe);
@@ -253,7 +254,7 @@ test('Directory Settings displays Dev scratch pins and saves only reference path
     route.fulfill({ status: 202, json: { status: { state: 'scanning' } } }));
 
   await page.goto('/');
-  await page.getByTitle('Manage all folders the studio uses (Mod Workspace, X4 game path, schema)').click();
+  await openStudioAction(page, 'settings');
 
   const target = page.getByTestId('game-install-settings');
   await expect(target.getByText('Dev Scratch Deploy Target', { exact: true })).toBeVisible();
@@ -306,7 +307,7 @@ test('Directory Settings shows owner profile paths without offering a path save'
     route.fulfill({ status: 202, json: { status: { state: 'scanning' } } }));
 
   await page.goto('/');
-  await page.getByTitle('Manage all folders the studio uses (Mod Workspace, X4 game path, schema)').click();
+  await openStudioAction(page, 'settings');
 
   const reference = page.getByTestId('x4-corpus-settings').locator('input');
   await expect(reference).toHaveValue(unpackedRoot);

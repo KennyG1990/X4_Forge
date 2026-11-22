@@ -237,5 +237,25 @@ test('creates a link on the conditions orientation (cue.conditions -> event.cond
       targetNodeId: 'event_e2e',
       targetPortId: 'in_cond',
     }));
+
+    const tools = page.getByRole('button', { name: 'Graph tools', exact: true });
+    const commands = page.getByRole('group', { name: 'Graph tools' });
+    await tools.press('Space');
+    await expect(commands).toBeVisible();
+    await expect(page.getByText('CREATE NODE HERE', { exact: true })).toHaveCount(0);
+    await page.keyboard.press('Tab');
+    await expect(commands.getByRole('button', { name: 'Fit view to nodes' })).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(commands).toHaveCount(0);
+    await expect(tools).toBeFocused();
+    expect((await readWorkspace(page)).links).toEqual(after.links);
+
+    await tools.click();
+    await commands.getByRole('button', { name: 'Clear all wires' }).click();
+    await expect(commands).toHaveCount(0);
+    await expect(tools).toBeFocused();
+    await expect.poll(async () => (await readWorkspace(page)).links).toEqual([]);
+    await page.getByTitle('Undo last action (Ctrl+Z)').click();
+    await expect.poll(async () => (await readWorkspace(page)).links).toEqual(after.links);
   });
 });

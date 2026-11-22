@@ -22,24 +22,15 @@ import path from 'path';
 import os from 'os';
 import zlib from 'zlib';
 import crypto from 'node:crypto';
+import { MAX_CAT_ENTRIES, MAX_CAT_MANIFEST_BYTES, parseCatManifest, safeCatalogName, type CatEntry } from '../../shared/x4CatalogManifest';
 
-export interface CatEntry {
-  /** forward-slash normalized relative path, e.g. "libraries/wares.xml" */
-  name: string;
-  size: number;
-  offset: number;
-  timestamp?: number;
-  md5?: string;
-}
+export { MAX_CAT_ENTRIES, MAX_CAT_MANIFEST_BYTES, parseCatManifest, type CatEntry } from '../../shared/x4CatalogManifest';
 
 export interface CatDatArchive {
   catPath: string;
   datPath: string;
   entries: CatEntry[];
 }
-
-export const MAX_CAT_MANIFEST_BYTES = 64 * 1024 * 1024;
-export const MAX_CAT_ENTRIES = 1_000_000;
 
 interface CatParseLimits {
   maxManifestBytes?: number;
@@ -55,44 +46,6 @@ export function parseCat(catPath: string, limits: CatParseLimits = {}): CatEntry
     throw new Error(`CAT manifest is ${manifestBytes} bytes; the limit is ${maxManifestBytes} bytes: ${catPath}`);
   }
   return parseCatManifest(fs.readFileSync(catPath, 'utf8'), { maxEntries, sourcePath: catPath });
-}
-
-/** Parse already bounded CAT text, optionally rejecting any unparseable entry. */
-export function parseCatManifest(text: string, { maxEntries = MAX_CAT_ENTRIES, strict = false, sourcePath = '' } = {}): CatEntry[] {
-  const lines = text.split(/\r?\n/);
-  const entries: CatEntry[] = [];
-  const location = sourcePath ? `: ${sourcePath}` : '';
-  let offset = 0;
-  for (const raw of lines) {
-    const line = raw.trim();
-    if (!line) continue;
-    if (strict && !/^.+ \d+ \d+ [a-f0-9]{32}$/i.test(line)) throw new Error('CAT manifest has a malformed entry.');
-    const parts = line.split(' ');
-    if (parts.length < 4) continue;
-    const size = parseInt(parts[parts.length - 3], 10);
-    if (!Number.isFinite(size) || size < 0) {
-      if (strict) throw new Error('CAT manifest has an invalid entry size.');
-      continue;
-    }
-    if (entries.length >= maxEntries) throw new Error(`CAT manifest exceeds the ${maxEntries}-entry limit${location}`);
-    if (!Number.isSafeInteger(offset + size)) throw new Error(`CAT entry offsets exceed JavaScript's safe integer range${location}`);
-    const name = parts.slice(0, parts.length - 3).join(' ').replace(/\\/g, '/');
-    if (strict && (safeCatalogName(name) !== name || /^[a-z]:/i.test(name))) {
-      throw new Error('CAT manifest has an unsafe entry path.');
-    }
-    const timestamp = parseInt(parts[parts.length - 2], 10);
-    if (strict && !Number.isSafeInteger(timestamp)) throw new Error('CAT manifest has an invalid entry timestamp.');
-    const md5 = parts[parts.length - 1].toLowerCase();
-    entries.push({
-      name,
-      size,
-      offset,
-      ...(Number.isFinite(timestamp) ? { timestamp } : {}),
-      ...(/^[0-9a-f]{32}$/.test(md5) ? { md5 } : {}),
-    });
-    offset += size;
-  }
-  return entries;
 }
 
 export interface CatDatPackEntry {
@@ -140,14 +93,6 @@ interface CatDatLayoutVolume {
 interface CatDatLayout {
   volumes: CatDatLayoutVolume[];
   errors: string[];
-}
-
-function safeCatalogName(input: string): string | null {
-  const normalized = String(input || '').replace(/\\/g, '/').replace(/^\/+/, '');
-  if (!normalized || normalized.includes('\0') || /[\r\n]/.test(normalized) || /^[a-zA-Z]:\//.test(normalized)) return null;
-  const parts = normalized.split('/');
-  if (parts.some(part => !part || part === '.' || part === '..')) return null;
-  return parts.join('/');
 }
 
 function writeAll(fd: number, buffer: Buffer): void {

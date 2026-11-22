@@ -125,6 +125,8 @@ export const LEDGER_QUIET_ROUTES: string[] = [
   '/api/agent/quick-fixes',
   '/api/agent/project/validate-crossfile',
   '/api/agent/project/xml-references',
+  '/api/agent/project/ai-navigation',
+  '/api/agent/project/md-navigation',
   '/api/agent/performance/collection',
   '/api/agent/performance/profile',
   '/api/agent/performance/native/collection',

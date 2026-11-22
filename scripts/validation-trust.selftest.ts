@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { flattenProjectValidation, loadProjectFromDisk, runProjectValidation } from '../src/server/projectValidation';
-import { applyProjectCheckCoverage, buildValidationEvidence, parseValidationProject, readContentManifestIdentity, ValidationInputError } from '../src/lib/validationEvidence';
+import { applyProjectCheckCoverage, buildValidationEvidence, parseValidationProject, readContentManifestIdentity, sourceInventoryGaps, ValidationInputError } from '../src/lib/validationEvidence';
 import { packageAgentProject } from '../src/lib/projectOrchestration';
 import type { ExtensionProject } from '../src/lib/extensionProject';
 
@@ -234,6 +235,69 @@ try {
   check('unreadable/missing directory is explicit incomplete inventory', () => {
     const result = loadProjectFromDisk(path.join(scratch, 'absent'));
     assert.equal(result.loaded.length, 0); assert.equal(result.skipped.length, 1);
+  });
+  check('disk input keeps valid replacement text and preserves invalid byte identities without decoding', () => {
+    const root = path.join(scratch, 'source-encoding');
+    fs.mkdirSync(root);
+    const relative = 'probe.lua';
+    const filename = path.join(root, relative);
+    const valid = '\uFEFFlocal x = 1 -- \uFFFD\n';
+    fs.writeFileSync(filename, valid);
+    const initial = loadProjectFromDisk(root);
+    assert.deepEqual(initial.loaded, [relative]);
+    assert.equal(initial.project.files[0].content, valid);
+    const ids = [0x80, 0x81].map(byte => {
+      const raw = Buffer.concat([Buffer.from('local x = 1 -- '), Buffer.from([byte])]);
+      fs.writeFileSync(filename, raw);
+      const changed = loadProjectFromDisk(root);
+      assert.deepEqual(changed.loaded, []);
+      assert.deepEqual(changed.project.files[0], { path: relative, kind: 'lua' });
+      const evidence = buildValidationEvidence(changed.project, [], sourceInventoryGaps(changed.skipped));
+      const gap = evidence.coverage.gaps.find(item => item.check === 'source.inventory');
+      assert.equal(evidence.coverage.complete, false);
+      assert.equal(gap?.filePath, relative);
+      assert.equal(gap?.sourceSha256, createHash('sha256').update(raw).digest('hex'));
+      return gap?.sourceSha256;
+    });
+    assert.notEqual(...ids as [string, string]);
+  });
+  check('invalid UTF-8 root rules stay present and block validation', () => {
+    const root = path.join(scratch, 'rules-source-encoding');
+    fs.mkdirSync(root);
+    fs.writeFileSync(path.join(root, 'forge.rules.json'),
+      Buffer.concat([Buffer.from('{"version":1,"$schema":"a'), Buffer.from([0x80]), Buffer.from('b"}')]));
+    const loaded = loadProjectFromDisk(root);
+    const validated = runProjectValidation(loaded.project);
+    assert.equal(validated.rules.present, true);
+    assert.equal(validated.rules.valid, false);
+    assert.equal(validated.ok, false);
+  });
+  check('disk validation includes authored XML under asset, map, and index roots', () => {
+    const root = path.join(scratch, 'asset-inventory');
+    const files = {
+      'content.xml': '<content id="asset_inventory" version="1" name="Assets"/>',
+      'assets/units/ships/macros/probe.xml': '<macros/>',
+      'maps/example/probe.xml': '<universe/>',
+      'index/macros.xml': '<index/>',
+      'docs/metadata.xml': '<fixture/>',
+      'assets/.snapshots/excluded.xml': '<fixture/>',
+    };
+    for (const [relative, content] of Object.entries(files)) {
+      const file = path.join(root, relative);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, content, { flag: 'wx' });
+    }
+    const initial = loadProjectFromDisk(root);
+    assert.deepEqual(initial.loaded.sort(), [
+      'assets/units/ships/macros/probe.xml', 'content.xml', 'index/macros.xml', 'maps/example/probe.xml',
+    ]);
+    const asset = 'assets/units/ships/macros/probe.xml';
+    const validated = runProjectValidation(initial.project);
+    assert.equal(validated.ok, true);
+    fs.writeFileSync(path.join(root, asset), '<macros><macro');
+    const malformed = runProjectValidation(loadProjectFromDisk(root).project);
+    assert.equal(malformed.ok, false);
+    assert.ok(malformed.evidence?.findings.some(finding => finding.code === 'project.xml_not_wellformed' && finding.filePath === asset));
   });
   check('disk inventory loads only tools Lua registered by the root menu manifest', () => {
     const root = path.join(scratch, 'registered-tools');
