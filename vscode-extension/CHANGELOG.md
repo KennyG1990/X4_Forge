@@ -3,6 +3,11 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
+## 0.0.91 — 2026-11-22
+
+- Review and apply a supported script-property spelling correction in the native XML editor. Forge checks the exact token against the unpacked X4 9.00 vocabulary. One Undo restores the buffer.
+- Start the local backend while Forge is opening a mod. The two requests share one startup and use the same workspace.
+
 ## 0.0.90 — 2026-11-22
 
 - Review which files a deploy will add, replace, remove or preserve. Reopen the receipt after a dropped reply and check whether the managed files still match.

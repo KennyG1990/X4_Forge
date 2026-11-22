@@ -10,7 +10,7 @@ X4 Forge Studio 0.0.90 shipped to Open VSX and GitHub. The same tested VSIX has 
 
 ## Current startup checkpoint
 
-#53 now permits automatic validation and manual Start with no saved workspace to share one owned startup. The controlled controller reproducer was red at 37/39 and is green at 39/39. Panel binding is 15/15 and headless precommit passed. Exact installed package verification is pending. The 0.0.91 release review covers the property correction contract, editor Quick Fix and startup repair. The full release suite and the exact VSIX must pass before publication.
+#53 now permits automatic validation and manual Start with no saved workspace to share one owned startup. The controlled controller reproducer was red at 37/39 and is green at 39/39. Panel binding is 15/15 and headless precommit passed. The exact 0.0.91 VSIX SHA-256 is 8d18f54426537d21d666cdfb10dd462a9bbfa2df73c2e1cd03c22e7440f4b0b2. Private Antigravity verified both the startup fix and the governed Quick Fix. See release-qualification.json in the G-drive initial-startup-20261122 checkpoint. Source and compiled browser suites each passed 150/150, route integration passed 616/616 and production oracles passed 134/134. The staged native probe passed 33/33. Open VSX published 0.0.91 and the official download matched the qualified archive byte for byte. The store readback is in release-public-open-vsx.json. GitHub release delivery uses the same archive.
 
 ## Operator dependencies
 

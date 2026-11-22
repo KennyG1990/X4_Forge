@@ -1,4 +1,8 @@
 {
+  "0.0.91": [
+    "Review and apply a supported script-property spelling correction in the native XML editor. Forge checks the exact token against the unpacked X4 9.00 vocabulary. One Undo restores the buffer.",
+    "Start the local backend while Forge is opening a mod. The two requests share one startup and use the same workspace."
+  ],
   "0.0.90": [
     "Review which files a deploy will add, replace, remove or preserve. Reopen the receipt after a dropped reply and check whether the managed files still match.",
     "Project validation now checks ship asset, map and index XML. Diagnostics points to the line and column of Mission Director reads that need review when those locations can be established.",
