@@ -2769,10 +2769,6 @@ The booted Studio replay reproduced a Space collision between a focused Studio a
 
 The [owner issue](https://github.com/KennyG1990/X4_Forge/issues/127) tracks the workspace-bound API and MCP for literal cues and libraries under #74 P0-6 and #19. The shared resolver and actual compiled API are integrated in G: Dev. The 47 private HTTP checks, 11 real MCP fixture groups, ten CodeSense comparisons and ordinary 97-route/67-writer-surface audit passed. The [reconciled plan](docs/plans/2026-11-20-authored-md-navigation.md) records exact scope and qualifications. The ordinary full route, precommit, commit and installed version remain open.
 
-### #128 · Authored AIScript navigation · PARTIAL
-
-The [owner issue](https://github.com/KennyG1990/X4_Forge/issues/128) covers the editor and agent surfaces. The native commands are integrated in G: Dev and passed 41 registered-provider cases against byte-matched fixtures and local controls. The [native plan](docs/plans/2026-11-21-authored-ai-script-navigation.md) records the scope. The existing MD providers retain their regression results. The exact compiled API and real stdio MCP bridge also passed 38 checks, including independent grants and unchanged state. Normal precommit, commit and exact installed IDE proof remain open.
-
 ### B112 · Diagnostic explanations and navigation parity `in_progress` (P1, GitHub #33)
 
 Dev locates all three existing AI order-parameter errors. Full project validation and both native deploy aliases identify all six errors from the standalone batch 387 reproduction. [Isolated evidence](docs/plans/2026-11-09-order-parameter-finding-locations.md). Installed navigation and the wider diagnostic explanation work remain open.
