@@ -309,6 +309,7 @@ export function committedDeployTargetEvidence(receipt: ActionReceipt) {
     || output.relativePath !== target.relativePath || !digest.test(output.hash)) return undefined;
 
   const folder = target.relativePath;
+  // eslint-disable-next-line no-control-regex -- Reject NUL in committed deploy receipt folder names.
   if (!folder || folder === '.' || folder === '..' || /[\\/:\x00]/.test(folder)) return undefined;
   return { folder, bindingHash, fingerprint: output.hash };
 }
