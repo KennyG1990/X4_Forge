@@ -8,9 +8,9 @@ X4 Forge Studio 0.0.90 shipped to Open VSX and GitHub. The same tested VSIX has 
 
 #10 and #74 use the existing 2026-07-17 native phase B plan. The Dev Quick Fix supports one reviewed ScriptProperty spelling at its exact range. It binds the imported workspace and X4 9.00 corpus, reviews one buffer edit, checks the resulting project and retains an audit receipt. Eight controlled editor checks and the 17-check real HTTP replay passed. GitHub Quality and the exact private Antigravity install passed. The real review, cancellation, exact second-token edit, one-step Undo, stale-corpus refusal and persisted receipts were verified. The single private VSIX, image and combined receipt are in the G-drive property-quickfix-20261122 checkpoint. Release qualification, packed edit authority and the remaining fix families stay open.
 
-## Next startup repair
+## Current startup checkpoint
 
-The installed replay reproduced the compatible startup conflict in #53. First mod validation started the owned sidecar while a manual Start with an empty saved workspace ID reported a conflict. Reuse the existing shared startup arbiter. Keep the explicit nonempty workspace refusal and Stop guard. Evidence is linked from issue #53.
+#53 now permits automatic validation and manual Start with no saved workspace to share one owned startup. The controlled controller reproducer was red at 37/39 and is green at 39/39. Panel binding is 15/15 and headless precommit passed. Exact installed package verification is pending. The 0.0.91 release review covers the property correction contract, editor Quick Fix and startup repair. The full release suite and the exact VSIX must pass before publication.
 
 ## Operator dependencies
 

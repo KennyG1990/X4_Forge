@@ -82,7 +82,10 @@ export class SharedBackendEnsure<T> {
   private pending: { promise: Promise<T>; policy?: string } | null = null;
 
   async run(start: () => Promise<T>, onReady: (value: T) => void, policy?: string): Promise<T> {
-    if (this.pending && policy !== undefined && this.pending.policy !== policy) {
+    // A manual initial start can share an unspecified acquisition. Its
+    // readiness callback still checks ownership and the resulting workspace.
+    const joinsUnspecifiedStartup = policy === "" && this.pending?.policy === undefined;
+    if (this.pending && policy !== undefined && this.pending.policy !== policy && !joinsUnspecifiedStartup) {
       throw new Error("A different Forge backend startup is already in progress.");
     }
     const active = this.pending ?? { promise: start(), policy };

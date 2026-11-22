@@ -33,6 +33,7 @@ interface Probe {
   current(): Handle | null;
   stop(): boolean;
   init(log: (line: string) => void): void;
+  ensure(context: Context, exact?: string): Promise<Handle>;
   acquire(context: Context, exact?: string): Promise<Handle>;
   acquisition(
     probe: (url: string) => Promise<boolean>,
@@ -169,6 +170,7 @@ function harness(saved: string | undefined, mode: 'ready' | 'missing' | 'wrong' 
   const access = `\nmodule.exports.__probe = {
     restart: autoRestartSidecar, start: startLocalBackend, restore: restoreStudioPanel,
     bootstrap: bindBackendWorkspace,
+    ensure: ensureBackend,
     acquire: ensureBackendOnce,
     acquisition(probe, spawn, retire) {
       probeForge = probe; spawnSidecar = spawn; awaitManagedSidecarRetirement = retire;
@@ -334,6 +336,64 @@ async function main() {
     await h.fire(); const manual = h.probe.start(h.context); h.resume(); await Promise.all([restart, manual]);
     assert.equal(h.launches, 1); assert.equal(h.requests.length, 1); assert.equal(h.saved, SAVED);
     assert.equal(h.errors.length, 0); assert.equal(h.information.length, 2);
+  });
+  await check('fresh_manual_start_joins_background_validation_startup', async () => {
+    const h = harness(undefined);
+    h.pause();
+    const automatic = h.probe.ensure(h.context);
+    assert.equal(h.requests.length, 1);
+    const manual = h.probe.start(h.context);
+    h.resume();
+    const [handle] = await Promise.all([automatic, manual]);
+    assert.equal(h.launches, 1);
+    assert.deepEqual(h.requests, [{ workspaceId: undefined, header: null }]);
+    assert.equal(handle.workspaceId, DEFAULT);
+    assert.deepEqual(h.updates, [DEFAULT]);
+    assert.deepEqual(h.errors, []);
+    assert.deepEqual(h.information, ['X4 Forge: local backend is running.']);
+  });
+  await check('specific_manual_start_refuses_ordinary_workspace_fallback', async () => {
+    const h = harness(SAVED, 'missing');
+    h.pause();
+    const automatic = h.probe.ensure(h.context);
+    await h.probe.start(h.context);
+    assert.match(h.errors[0], /different Forge backend startup/);
+    assert.deepEqual(h.requests, [{ workspaceId: SAVED, header: SAVED }]);
+    h.resume();
+    await automatic;
+    assert.equal(h.launches, 1);
+    assert.equal(h.saved, DEFAULT);
+    assert.deepEqual(h.information, []);
+  });
+  await check('joining_manual_start_refuses_ordinary_external_attachment', async () => {
+    const h = harness(undefined, 'ready', false);
+    const automatic = h.probe.ensure(h.context);
+    const manual = h.probe.start(h.context);
+    const [handle] = await Promise.all([automatic, manual]);
+    assert.equal(handle.owned, false);
+    assert.equal(h.launches, 1);
+    assert.deepEqual(h.requests, []);
+    assert.deepEqual(h.updates, []);
+    assert.deepEqual(h.information, []);
+    assert.match(h.errors[0], /externally managed/);
+  });
+  await check('stop_while_fresh_manual_start_is_joined_prevents_ready', async () => {
+    const h = harness(undefined);
+    h.pause();
+    const automatic = h.probe.ensure(h.context);
+    const manual = h.probe.start(h.context);
+    h.probe.stop();
+    h.resume();
+    await assert.rejects(automatic, /Forge backend startup was stopped/);
+    await manual;
+    assert.equal(h.launches, 1);
+    assert.deepEqual(h.updates, []);
+    assert.deepEqual(h.errors, []);
+    assert.deepEqual(h.information, []);
+    await h.probe.start(h.context);
+    assert.equal(h.launches, 2);
+    assert.deepEqual(h.updates, [DEFAULT]);
+    assert.deepEqual(h.information, ['X4 Forge: local backend is running.']);
   });
   await check('watchdog_does_not_claim_external_backend_as_owned', async () => {
     const h = harness(SAVED, 'ready', false); await h.restart();

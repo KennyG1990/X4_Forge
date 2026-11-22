@@ -136,7 +136,7 @@ Dev preserves explicit translation filenames, no-edit XML bytes and intentional 
 
 ### Native backend recovery and interrupted apply `in_progress` (GitHub #53)
 
-**Concurrent first startup.** The installed Quick Fix replay reproduced a false conflict when the manual Start command with an empty saved workspace ID meets automatic mod validation. The compatible callers should share one owned startup and bound workspace. Exact saved workspace and Stop refusal behavior stay required. [Installed reproduction](https://github.com/KennyG1990/X4_Forge/issues/53#issuecomment-7085313784).
+**Concurrent first startup.** The controller fix shares one startup and workspace when automatic validation and manual Start with an empty saved ID meet. The 39 controller checks, 15 panel checks and full headless precommit pass. A specific saved workspace, external ownership and Stop retain their existing refusals. Exact installed-package qualification remains open. [Reproduction and source evidence](https://github.com/KennyG1990/X4_Forge/issues/53#issuecomment-7085313784).
 
 **Private Dev attachment guard.** The #53 controller skips external Forge attachment when the launch-only Dev scratch opt-in is present. The original G: launch probed port 3000 before starting its private server. The controller baseline failed eight scratch startup checks and the final candidate passed 24/24 total. Normal external attach, exact workspace recovery and managed startup failures are covered. See g_dev_scratch_external_attach_guard in the G deploy receipt. The running 0.0.89 still uses the earlier package. Full precommit, commit and installed qualification remain open. [Proof plan](docs/plans/2026-11-11-watchdog-workspace-authority.md).
 
