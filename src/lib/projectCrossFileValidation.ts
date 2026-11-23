@@ -359,13 +359,14 @@ interface LuaLocalBinding {
   stringValue?: LuaStringValue;
 }
 
-interface LuaRegistrationScopeIndex {
+interface LuaLexicalScopeIndex {
   bindings: LuaLocalBinding[];
   declToBinding: Map<LuaAstNode, LuaLocalBinding>;
   identToBinding: Map<LuaAstNode, LuaLocalBinding>;
   functions: Map<LuaAstNode, LuaLocalBinding | undefined>;
   forLoops: { node: LuaAstNode; fnScope?: LuaAstNode }[];
   nodeFnScope: Map<LuaAstNode, LuaAstNode | undefined>;
+  parents: Map<LuaAstNode, LuaAstNode>;
   jumpFnScopes: Set<LuaAstNode | undefined>;
   reboundGlobals: Set<string>;
   opaqueGlobals: boolean;
@@ -373,7 +374,7 @@ interface LuaRegistrationScopeIndex {
 
 const LUA_REG_AST_SKIP_KEYS = new Set(['loc', 'range', 'comments', 'tokens', 'globals']);
 
-function collectLuaRegistrationScopes(root: LuaAstNode, initialOpaqueGlobals: boolean): LuaRegistrationScopeIndex {
+function collectLuaLexicalScopes(root: LuaAstNode, initialOpaqueGlobals: boolean): LuaLexicalScopeIndex {
   const scopeStack: Map<string, LuaLocalBinding>[] = [new Map()];
   const bindings: LuaLocalBinding[] = [];
   const declToBinding = new Map<LuaAstNode, LuaLocalBinding>();
@@ -381,6 +382,7 @@ function collectLuaRegistrationScopes(root: LuaAstNode, initialOpaqueGlobals: bo
   const functions = new Map<LuaAstNode, LuaLocalBinding | undefined>();
   const forLoops: { node: LuaAstNode; fnScope?: LuaAstNode }[] = [];
   const nodeFnScope = new Map<LuaAstNode, LuaAstNode | undefined>();
+  const parents = new Map<LuaAstNode, LuaAstNode>();
   const jumpFnScopes = new Set<LuaAstNode | undefined>();
   const reboundGlobals = new Set<string>();
   let opaqueGlobals = initialOpaqueGlobals;
@@ -453,6 +455,7 @@ function collectLuaRegistrationScopes(root: LuaAstNode, initialOpaqueGlobals: bo
     grandParent?: LuaAstNode,
   ): void => {
     if (!node || typeof node !== 'object') return;
+    if (parent) parents.set(node, parent);
     nodeFnScope.set(node, fnScope);
     switch (node.type) {
       case 'Chunk':
@@ -477,6 +480,7 @@ function collectLuaRegistrationScopes(root: LuaAstNode, initialOpaqueGlobals: bo
         return;
       case 'IfStatement':
         for (const clause of node.clauses ?? []) {
+          parents.set(clause, node);
           if (clause.condition) visit(clause.condition as LuaAstNode, scopeBlock, fnScope, clause, node);
           scopeStack.push(new Map());
           visitStatements(clause.body, clause, fnScope, clause);
@@ -594,7 +598,7 @@ function collectLuaRegistrationScopes(root: LuaAstNode, initialOpaqueGlobals: bo
   };
 
   visit(root, root, undefined);
-  return { bindings, declToBinding, identToBinding, functions, forLoops, nodeFnScope, jumpFnScopes, reboundGlobals, opaqueGlobals };
+  return { bindings, declToBinding, identToBinding, functions, forLoops, nodeFnScope, parents, jumpFnScopes, reboundGlobals, opaqueGlobals };
 }
 
 function resolveLuaRegistrationStrings(
@@ -640,6 +644,17 @@ function resolveLuaRegistrationStrings(
   return null;
 }
 
+function populateLuaBindingStrings(
+  scopeIndex: LuaLexicalScopeIndex,
+  substituted: Uint8Array,
+): void {
+  for (const binding of scopeIndex.bindings) {
+    if (binding.kind !== 'local' || binding.writes !== 1 || !binding.init) continue;
+    const resolved = resolveLuaRegistrationStrings(binding.init, scopeIndex.identToBinding, substituted);
+    if (resolved?.length === 1) binding.stringValue = resolved[0];
+  }
+}
+
 function luaNodeContainsCall(node: LuaAstNode | undefined): boolean {
   let hasCall = false;
   walkLuaAst(node, inner => {
@@ -679,7 +694,7 @@ function isPlainLocalBookkeepingTable(
 
 function extractPureIpairsEventList(
   loopNode: LuaAstNode,
-  scopeIndex: LuaRegistrationScopeIndex,
+  scopeIndex: LuaLexicalScopeIndex,
   substituted: Uint8Array,
   isUnshadowedGlobal: (node: LuaAstNode | undefined, name: string) => boolean,
 ): { elemBinding: LuaLocalBinding; values: LuaStringValue[]; tainted?: boolean } | undefined {
@@ -734,18 +749,14 @@ function parseLuaRegisteredEvents(content: string, file: string): LuaRegistratio
     return { events: [], available: false, detail: boundedLuaParseDetail(error) };
   }
 
-  const scopeIndex = collectLuaRegistrationScopes(ast as LuaAstNode, envRebound);
+  const scopeIndex = collectLuaLexicalScopes(ast as LuaAstNode, envRebound);
   const { bindings, identToBinding, functions, forLoops, nodeFnScope, jumpFnScopes, reboundGlobals, opaqueGlobals } = scopeIndex;
   const isImmutable = (binding: LuaLocalBinding | undefined): binding is LuaLocalBinding =>
     !!binding && (binding.kind === 'local' || binding.kind === 'function') && binding.writes === 1;
   const isUnshadowedGlobal = (node: LuaAstNode | undefined, expected: string): boolean =>
     luaIdentifier(node) === expected && node?.isLocal === false && !opaqueGlobals && !reboundGlobals.has(expected);
 
-  for (const binding of bindings) {
-    if (binding.kind !== 'local' || binding.writes !== 1 || !binding.init) continue;
-    const resolved = resolveLuaRegistrationStrings(binding.init, identToBinding, source.substituted);
-    if (resolved?.length === 1) binding.stringValue = resolved[0];
-  }
+  populateLuaBindingStrings(scopeIndex, source.substituted);
 
   const registrarBindings = new Set<LuaLocalBinding>();
   const possibleRegistrarBindings = new Set<LuaLocalBinding>();
@@ -2090,6 +2101,220 @@ function verifyProjectEmitterForwarding(
   return true;
 }
 
+interface LuaEmitWrapperSpec {
+  namespace: LuaStringValue;
+  paramIndex: number;
+  usesProtectedCall: boolean;
+}
+
+function collectReadOnlyStringLookupTables(
+  scopeIndex: LuaLexicalScopeIndex,
+  substituted: Uint8Array,
+): Map<LuaLocalBinding, { values: LuaStringValue[]; tainted: boolean }> {
+  const out = new Map<LuaLocalBinding, { values: LuaStringValue[]; tainted: boolean }>();
+  for (const binding of scopeIndex.bindings) {
+    if (binding.kind !== 'local' || binding.writes !== 1 || binding.init?.type !== 'TableConstructorExpression') continue;
+    const fields = binding.init.fields ?? [];
+    if (fields.length === 0 || fields.length > 128) continue;
+    const readOnlyIndexed = binding.refs.every(ref => {
+      const { node, parent, grandParent } = ref;
+      if ((parent?.type !== 'IndexExpression' && parent?.type !== 'MemberExpression') || parent.base !== node || parent.indexer === ':') {
+        return false;
+      }
+      if (grandParent?.type === 'AssignmentStatement' && grandParent.variables?.includes(parent)) return false;
+      if (grandParent?.type === 'FunctionDeclaration' && grandParent.identifier === parent) return false;
+      if (grandParent?.type === 'CallExpression' && grandParent.base === parent) return false;
+      return true;
+    });
+    if (!readOnlyIndexed) continue;
+
+    const values: LuaStringValue[] = [];
+    const seen = new Set<string>();
+    let valid = true;
+    let tainted = false;
+    for (const field of fields) {
+      const resolved = resolveLuaRegistrationStrings(field.value as LuaAstNode | undefined, scopeIndex.identToBinding, substituted);
+      if (!resolved || resolved.length !== 1) { valid = false; break; }
+      const [item] = resolved;
+      if (item.tainted) { tainted = true; continue; }
+      if (!item.value || item.prefix) { valid = false; break; }
+      if (!seen.has(item.value)) { seen.add(item.value); values.push(item); }
+    }
+    if (valid && (values.length > 0 || tainted)) out.set(binding, { values, tainted });
+  }
+  return out;
+}
+
+function resolveLookupTableControls(
+  expr: LuaAstNode | undefined,
+  callNode: LuaAstNode,
+  scopeIndex: LuaLexicalScopeIndex,
+  lookupTables: ReadonlyMap<LuaLocalBinding, { values: LuaStringValue[]; tainted: boolean }>,
+): LuaStringValue[] | undefined {
+  let indexExpr: LuaAstNode | undefined = expr?.type === 'IndexExpression' ? expr : undefined;
+  if (!indexExpr && expr?.type === 'Identifier' && expr.isLocal) {
+    const varBinding = scopeIndex.identToBinding.get(expr);
+    if (!varBinding || varBinding.kind !== 'local' || varBinding.writes !== 1 || varBinding.init?.type !== 'IndexExpression') return undefined;
+    if (!varBinding.declRange || !callNode.range || varBinding.declRange[1] > callNode.range[0]) return undefined;
+    if (!luaContains(varBinding.scopeNode, callNode)) return undefined;
+    indexExpr = varBinding.init;
+  }
+  if (!indexExpr || indexExpr.base?.type !== 'Identifier' || !indexExpr.base.isLocal) return undefined;
+  const tblBinding = scopeIndex.identToBinding.get(indexExpr.base);
+  if (!tblBinding || !tblBinding.declRange || !callNode.range || tblBinding.declRange[1] > callNode.range[0]) return undefined;
+  if (!luaContains(tblBinding.scopeNode, callNode)) return undefined;
+  const entry = lookupTables.get(tblBinding);
+  if (!entry) return undefined;
+  return entry.tainted ? [{ value: '', prefix: false, tainted: true }] : entry.values;
+}
+
+function resolveGuardedMemberControls(
+  expr: LuaAstNode | undefined,
+  callNode: LuaAstNode,
+  scopeIndex: LuaLexicalScopeIndex,
+  substituted: Uint8Array,
+  ambiguousProtectedCall: (base: LuaAstNode | undefined) => boolean,
+): LuaStringValue[] | undefined {
+  if (!expr || expr.type !== 'MemberExpression' || expr.indexer !== '.' || !expr.base?.isLocal) return undefined;
+  const baseBinding = scopeIndex.identToBinding.get(expr.base);
+  const memberName = luaIdentifier(expr.identifier);
+  if (!baseBinding || baseBinding.kind !== 'local' || baseBinding.writes !== 1 || !memberName) return undefined;
+
+  const isSameMember = (candidate: LuaAstNode | undefined): boolean =>
+    candidate?.type === 'MemberExpression' && candidate.indexer === '.' && !!candidate.base?.isLocal
+    && scopeIndex.identToBinding.get(candidate.base) === baseBinding
+    && luaIdentifier(candidate.identifier) === memberName;
+
+  const collectAndConjuncts = (cond: LuaAstNode | undefined, outList: LuaAstNode[]) => {
+    if (!cond) return;
+    if (cond.type === 'LogicalExpression' && cond.operator === 'and') {
+      collectAndConjuncts(cond.left, outList);
+      collectAndConjuncts(cond.right, outList);
+      return;
+    }
+    outList.push(cond);
+  };
+
+  let cur: LuaAstNode | undefined = callNode;
+  let usedProtectedThunk = false;
+  while (cur) {
+    const parent = scopeIndex.parents.get(cur);
+    if (!parent) break;
+    if (parent.type === 'WhileStatement' || parent.type === 'RepeatStatement' || parent.type === 'ForNumericStatement' || parent.type === 'ForGenericStatement') {
+      break;
+    }
+    if (parent.type === 'FunctionDeclaration') {
+      const pcallNode = scopeIndex.parents.get(parent);
+      if (usedProtectedThunk || !pcallNode || pcallNode.type !== 'CallExpression'
+        || luaIdentifier(pcallNode.base) !== 'pcall' || ambiguousProtectedCall(pcallNode.base)
+        || pcallNode.arguments?.length !== 1 || pcallNode.arguments[0] !== parent
+        || parent.identifier || parent.parameters?.length) {
+        break;
+      }
+      usedProtectedThunk = true;
+      cur = pcallNode;
+      continue;
+    }
+    if (parent.type === 'IfClause' || parent.type === 'ElseifClause') {
+      const clauseCondition = parent.condition as LuaAstNode | undefined;
+      if (clauseCondition && callNode.range && luaContains(parent, callNode)) {
+        const mutatedInClause = baseBinding.refs.some(ref => {
+          if (!luaContains(parent, ref.node) || (ref.node.range?.[0] ?? 0) >= callNode.range![0]) return false;
+          if (clauseCondition.range && luaContains(clauseCondition, ref.node)) return false;
+          if (ref.grandParent?.type !== 'AssignmentStatement' && ref.grandParent?.type !== 'FunctionDeclaration') return false;
+          if (ref.parent?.type === 'IndexExpression' && ref.parent.base === ref.node) return true;
+          return ref.parent?.type === 'MemberExpression' && ref.parent.base === ref.node && luaIdentifier(ref.parent.identifier) === memberName;
+        });
+        if (!mutatedInClause) {
+          const conjuncts: LuaAstNode[] = [];
+          collectAndConjuncts(clauseCondition, conjuncts);
+          for (const item of conjuncts) {
+            if (item.type !== 'BinaryExpression' || item.operator !== '==') continue;
+            const lit = isSameMember(item.left) ? item.right : isSameMember(item.right) ? item.left : undefined;
+            if (lit?.type === 'StringLiteral' && typeof lit.value === 'string') {
+              return [{ value: lit.value, prefix: false, tainted: luaStringLiteralTainted(lit, substituted) }];
+            }
+          }
+        }
+      }
+    }
+    cur = parent;
+  }
+  return undefined;
+}
+
+function collectLocalEmitWrappers(
+  scopeIndex: LuaLexicalScopeIndex,
+  substituted: Uint8Array,
+  ambiguousGlobal: (name: string) => boolean,
+  ambiguousProtectedCall: (base: LuaAstNode | undefined) => boolean,
+): { emitWrappers: Map<LuaLocalBinding, LuaEmitWrapperSpec>; wrappedInnerEmitCalls: Set<LuaAstNode> } {
+  const emitWrappers = new Map<LuaLocalBinding, LuaEmitWrapperSpec>();
+  const wrappedInnerEmitCalls = new Set<LuaAstNode>();
+  if (ambiguousGlobal('AddUITriggeredEvent')) return { emitWrappers, wrappedInnerEmitCalls };
+
+  for (const [fnDecl, fnBinding] of scopeIndex.functions) {
+    if (!fnBinding || fnBinding.kind !== 'function' || fnBinding.writes !== 1 || !fnBinding.declRange) continue;
+    if (fnBinding.refs.length === 0) continue;
+    const onlyDirectCalls = fnBinding.refs.every(ref =>
+      ref.parent?.type === 'CallExpression' && ref.parent.base === ref.node
+      && !!ref.parent.range && ref.parent.range[0] >= fnBinding.declRange![0]);
+    if (!onlyDirectCalls) continue;
+
+    const params = (fnDecl.parameters || []).map(luaIdentifier);
+    if (!params.length || new Set(params).size !== params.length) continue;
+
+    const innerEmits: { call: LuaAstNode; forwarded: boolean; insidePcallThunk: boolean }[] = [];
+    let unsafeReference = false;
+    walkLuaAst(fnDecl.body, inner => {
+      if (inner.type === 'AssignmentStatement' && (inner.variables || []).some(v => {
+        const b = v.isLocal ? scopeIndex.identToBinding.get(v) : undefined;
+        return b?.scopeNode === fnDecl && b.kind === 'param';
+      })) {
+        unsafeReference = true;
+      }
+      if (inner.type !== 'CallExpression') return;
+      if (luaIdentifier(inner.base) === 'pcall' && ambiguousProtectedCall(inner.base)) {
+        unsafeReference = true;
+        return;
+      }
+      const forwarded = luaIdentifier(inner.base) === 'pcall';
+      const emitter = forwarded ? inner.arguments?.[0] : inner.base;
+      if (luaIdentifier(emitter) !== 'AddUITriggeredEvent') return;
+      if (emitter?.isLocal !== false || (forwarded && ambiguousProtectedCall(inner.base))) {
+        unsafeReference = true;
+        return;
+      }
+      const enclosingFn = scopeIndex.parents.get(inner)?.type === 'CallStatement' ? scopeIndex.nodeFnScope.get(inner) : undefined;
+      const thunkCall = enclosingFn && enclosingFn !== fnDecl ? scopeIndex.parents.get(enclosingFn) : undefined;
+      const insidePcallThunk = !!thunkCall && thunkCall.type === 'CallExpression'
+        && luaIdentifier(thunkCall.base) === 'pcall' && !ambiguousProtectedCall(thunkCall.base);
+      innerEmits.push({ call: inner, forwarded, insidePcallThunk });
+    });
+    if (unsafeReference || innerEmits.length !== 1) continue;
+
+    const [inner] = innerEmits;
+    const innerArgs = inner.forwarded ? inner.call.arguments?.slice(1) : inner.call.arguments;
+    const nsResolved = resolveLuaRegistrationStrings(innerArgs?.[0], scopeIndex.identToBinding, substituted);
+    if (!nsResolved || nsResolved.length !== 1 || nsResolved[0].prefix || nsResolved[0].tainted || !nsResolved[0].value) continue;
+
+    const ctrlNode = innerArgs?.[1];
+    if (ctrlNode?.type !== 'Identifier' || !ctrlNode.isLocal) continue;
+    const ctrlBinding = scopeIndex.identToBinding.get(ctrlNode);
+    if (!ctrlBinding || ctrlBinding.kind !== 'param' || ctrlBinding.scopeNode !== fnDecl || ctrlBinding.writes !== 1) continue;
+    const paramIndex = params.indexOf(ctrlBinding.name);
+    if (paramIndex < 0) continue;
+
+    emitWrappers.set(fnBinding, {
+      namespace: nsResolved[0],
+      paramIndex,
+      usesProtectedCall: inner.forwarded || inner.insidePcallThunk,
+    });
+    wrappedInnerEmitCalls.add(inner.call);
+  }
+  return { emitWrappers, wrappedInnerEmitCalls };
+}
+
 function parseLuaUiEmits(content: string, file: string): {
   events: ProjectUiEventRef[]; coverage: LuaEmitCoverage; payloadWrites: PayloadWriteSite[]; hasProtectedCalls: boolean; mutations: LuaBuilderMutationFacts;
 } {
@@ -2502,6 +2727,12 @@ function parseLuaUiEmits(content: string, file: string): {
   }
   const ambiguousProtectedCall = (base: LuaAstNode | undefined) =>
     base?.isLocal !== false || dynamicGlobalWrite || changesFunctionEnvironment || ambiguousGlobal('pcall');
+  const scopeIndex = collectLuaLexicalScopes(ast as LuaAstNode, environmentRebound);
+  populateLuaBindingStrings(scopeIndex, source.substituted);
+  const lookupTables = collectReadOnlyStringLookupTables(scopeIndex, source.substituted);
+  const { emitWrappers, wrappedInnerEmitCalls } = collectLocalEmitWrappers(
+    scopeIndex, source.substituted, ambiguousGlobal, ambiguousProtectedCall,
+  );
   const strings = new Map<string, LuaStringValue>();
   const resolve = (expression: LuaAstNode): LuaStringValue | null => {
     // luaparse's lexical annotation prevents a later local declaration from
@@ -2527,6 +2758,58 @@ function parseLuaUiEmits(content: string, file: string): {
   const protectedBodies = new Map<LuaAstNode, { call: LuaAstNode; caller?: LuaAstNode }>();
   const protectedSends: LuaProtectedPayloadSend[] = [];
   const returnedTableInitializers = new Map<LuaAstNode | undefined, LuaAstNode[]>();
+  const recordEmitResolution = (
+    namespace: LuaStringValue | null,
+    controls: LuaStringValue[] | undefined,
+    node: LuaAstNode,
+    control: LuaStringValue | null,
+    forwarded: boolean,
+    direct: boolean,
+    block: LuaAstNode,
+    args?: LuaAstNode[],
+    payloadEmit?: LuaPayloadEmit,
+    argument?: LuaAstNode,
+  ) => {
+    if (namespace?.tainted || controls?.some(value => value.tainted)) {
+      coverage.unresolved++; gap('source-encoding'); return;
+    }
+    if (!namespace?.value || namespace.prefix || !controls || controls.length === 0 || controls.some(value => !value.value)) {
+      coverage.unresolved++; gap('dynamic-arguments'); return;
+    }
+    if (controls.some(value => value.prefix)) { coverage.prefix++; gap('prefix-only'); }
+    else {
+      coverage.exact++;
+      const enclosing = protectedBodies.get(node);
+      if (enclosing && control && args?.length === 3 && argument?.isLocal === true) {
+        protectedSends.push({ ...enclosing, table: argument, identity: JSON.stringify([namespace.value, control.value]) });
+      }
+      if (payloadEmit) {
+        payloadEmit.identities = controls.map(value => JSON.stringify([namespace.value, value.value]));
+        payloadEmit.needsUnaliasedTable = forwarded || !control;
+        if (forwarded || direct) payloadEmit.directBlock = block;
+      }
+    }
+    // A literal trailing underscore is still an exact name; only an actual
+    // unresolved concatenation justifies prefix matching.
+    for (const value of controls) {
+      out.push({ namespace: namespace.value, control: value.value, event: `${namespace.value}.${value.value}`, file, ...(value.prefix ? { prefix: true } : {}) });
+    }
+  };
+  const resolveEmitControl = (
+    controlNode: LuaAstNode | undefined,
+    callNode: LuaAstNode,
+    direct: boolean,
+    branches: readonly LuaAstNode[],
+  ): { single: LuaStringValue | null; list: LuaStringValue[] | undefined } => {
+    const resolved = controlNode ? resolve(controlNode) : null;
+    if (resolved) return { single: resolved, list: [resolved] };
+    const finite = finiteLuaControl(controlNode, source.substituted, immutableLocal, direct && branches.length === 0);
+    if (finite) return { single: null, list: finite };
+    const fromTable = resolveLookupTableControls(controlNode, callNode, scopeIndex, lookupTables);
+    if (fromTable) return { single: null, list: fromTable };
+    const guarded = resolveGuardedMemberControls(controlNode, callNode, scopeIndex, source.substituted, ambiguousProtectedCall);
+    return { single: null, list: guarded };
+  };
   let canJump = false;
   walkLuaAst(ast, (node, scope, branches) => {
     if (node.type === 'GotoStatement') canJump = true;
@@ -2550,6 +2833,20 @@ function parseLuaUiEmits(content: string, file: string): {
       });
     }
     if (node.type !== 'CallExpression') return;
+    if (wrappedInnerEmitCalls.has(node)) {
+      if (luaIdentifier(node.base) === 'pcall') hasProtectedCalls = true;
+      return;
+    }
+    const baseBinding = node.base?.type === 'Identifier' && node.base.isLocal ? scopeIndex.identToBinding.get(node.base) : undefined;
+    const wrapper = baseBinding ? emitWrappers.get(baseBinding) : undefined;
+    if (wrapper) {
+      if (wrapper.usesProtectedCall) hasProtectedCalls = true;
+      const block = branches.at(-1) ?? scope ?? (ast as LuaAstNode);
+      const direct = !!block.body?.some(statement => statement.type === 'CallStatement' && statement.expression === node);
+      const { single, list } = resolveEmitControl((node.arguments || [])[wrapper.paramIndex], node, direct, branches);
+      recordEmitResolution(wrapper.namespace, list, node, single, false, direct, block);
+      return;
+    }
     const forwarded = luaIdentifier(node.base) === 'pcall';
     const callback = forwarded && node.arguments?.length === 1 ? node.arguments[0] : undefined;
     if (callback?.type === 'FunctionDeclaration' && !callback.identifier && !callback.parameters?.length
@@ -2577,34 +2874,10 @@ function parseLuaUiEmits(content: string, file: string): {
       coverage.unresolved++; gap('ambiguous-callee'); return;
     }
     const namespace = resolve(args?.[0]);
-    const control = resolve(args?.[1]);
     const block = branches.at(-1) ?? scope ?? (ast as LuaAstNode);
-    const direct = !control && !forwarded && block.body?.some(statement => statement.type === 'CallStatement' && statement.expression === node);
-    const controls = control ? [control] : finiteLuaControl(args?.[1], source.substituted, immutableLocal, !!direct && branches.length === 0);
-    if (namespace?.tainted || controls?.some(value => value.tainted)) {
-      coverage.unresolved++; gap('source-encoding'); return;
-    }
-    if (!namespace?.value || namespace.prefix || !controls || controls.some(value => !value.value)) {
-      coverage.unresolved++; gap('dynamic-arguments'); return;
-    }
-    if (controls[0].prefix) { coverage.prefix++; gap('prefix-only'); }
-    else {
-      coverage.exact++;
-      const enclosing = protectedBodies.get(node);
-      if (enclosing && control && args?.length === 3 && argument?.isLocal === true) {
-        protectedSends.push({ ...enclosing, table: argument, identity: JSON.stringify([namespace.value, control.value]) });
-      }
-      if (payloadEmit) {
-        payloadEmit.identities = controls.map(value => JSON.stringify([namespace.value, value.value]));
-        payloadEmit.needsUnaliasedTable = forwarded || !control;
-        if (forwarded || direct) payloadEmit.directBlock = block;
-      }
-    }
-    // A literal trailing underscore is still an exact name; only an actual
-    // unresolved concatenation justifies prefix matching.
-    for (const value of controls) {
-      out.push({ namespace: namespace.value, control: value.value, event: `${namespace.value}.${value.value}`, file, ...(value.prefix ? { prefix: true } : {}) });
-    }
+    const direct = !forwarded && !!block.body?.some(statement => statement.type === 'CallStatement' && statement.expression === node);
+    const { single, list } = resolveEmitControl(args?.[1], node, direct, branches);
+    recordEmitResolution(namespace, list, node, single, forwarded, direct, block, args, payloadEmit, argument);
   });
   const unaliasedPayloads = unaliasedLuaPayloads(ast, payloadEmits, indexedWrites, indexedClears);
   const returnedPayloads = indexedWrites.length ? linkReturnedLuaPayloads(ast as LuaAstNode, protectedSends, returnedTableInitializers, source) : undefined;

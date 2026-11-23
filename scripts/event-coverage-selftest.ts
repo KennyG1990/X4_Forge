@@ -807,4 +807,116 @@ end`;
   }
 });
 
+check('emit-local-forwarding-wrappers-and-thunk-factories', () => {
+  const lua = `local function unrelated() local send = 1; return send end
+local function directWrap(ev, p)
+  if not AddUITriggeredEvent then return false end
+  AddUITriggeredEvent("ForgeLab", ev, p or {})
+  return true
+end
+local function pcallWrap(name, p)
+  if not AddUITriggeredEvent then return false end
+  return pcall(AddUITriggeredEvent, "ForgeLab", name, p)
+end
+local function thunkPcallWrap(ctl, p)
+  pcall(function() AddUITriggeredEvent("ForgeLab", ctl, p) end)
+end
+local function factoryWrap(ctl, p)
+  return function()
+    if type(AddUITriggeredEvent) ~= "function" then return false end
+    AddUITriggeredEvent("ForgeLab", ctl, p or {})
+    return true
+  end
+end
+directWrap("probe", {})
+pcallWrap("probe", {})
+thunkPcallWrap("probe", {})
+factoryWrap("probe", {})`;
+  const okRes = analyze(lua);
+  assert.equal(okRes.summary.luaEmitUnverified, 0);
+  assert.equal(okRes.mdLua.emitCoverage.exact, 4);
+  assert.equal(okRes.mdLua.emitCoverage.scope, 'direct-and-pcall-global-AddUITriggeredEvent-calls');
+  assert.deepEqual(listenerErrors(okRes), []);
+
+  const badTarget = analyze(lua.replace('pcallWrap("probe"', 'pcallWrap("absent_wrapped"'));
+  assert.equal(badTarget.summary.luaEmitUnverified, 0);
+  assert.deepEqual(listenerErrors(badTarget), [['ForgeLab.absent_wrapped', 'error']]);
+});
+
+check('emit-local-wrapper-negative-controls', () => {
+  const negativeCases = [
+    'local function unusedWrap(name) AddUITriggeredEvent("ForgeLab", name, {}) end',
+    'local function escWrap(name) AddUITriggeredEvent("ForgeLab", name, {}) end\nlocal f = escWrap\nf("probe")',
+    'local function mutWrap(name) name = GetDyn()\nAddUITriggeredEvent("ForgeLab", name, {}) end\nmutWrap("probe")',
+    'local function twoWrap(name) AddUITriggeredEvent("ForgeLab", name, {})\nAddUITriggeredEvent("ForgeLab", dynName, {}) end\ntwoWrap("probe")',
+    'AddUITriggeredEvent = customEmit\nlocal function rewWrap(name) AddUITriggeredEvent("ForgeLab", name, {}) end\nrewWrap("probe")',
+    'local pcall = customPcall\nlocal function pWrap(name) pcall(AddUITriggeredEvent, "ForgeLab", name, {}) end\npWrap("probe")',
+    'local pcall = customPcall\nlocal function ptWrap(name) pcall(function() AddUITriggeredEvent("ForgeLab", name, {}) end) end\nptWrap("probe")',
+    'local function cbWrap(name) AddUITriggeredEvent("ForgeLab", name, {}) end\ncbWrap(GetDynamic())',
+  ];
+  for (const lua of negativeCases) {
+    const r = analyze(lua);
+    assert.ok(r.summary.luaEmitUnverified >= 1, lua);
+    assert.ok(r.findings.some(f => f.code === 'lua_md.emit_verification_gap'), lua);
+  }
+});
+
+check('emit-lookup-table-and-conjunctive-equality-guards', () => {
+  const lookupLua = `local routes = { Plan_review = "probe", Gov_review = "probe" }
+local function debugRun(control, payload)
+  if type(AddUITriggeredEvent) ~= "function" then return false end
+  return pcall(AddUITriggeredEvent, "ForgeLab", control, payload)
+end
+local function run(what)
+  local control = routes[what]
+  if not control then return false end
+  return debugRun(control, {})
+end`;
+  const lookupOk = analyze(lookupLua);
+  assert.equal(lookupOk.summary.luaEmitUnverified, 0);
+  assert.equal(lookupOk.mdLua.emitCoverage.exact, 1);
+  assert.deepEqual(listenerErrors(lookupOk), []);
+
+  const lookupMissing = analyze(lookupLua.replace('Gov_review = "probe"', 'Gov_review = "missing_route"'));
+  assert.equal(lookupMissing.summary.luaEmitUnverified, 0);
+  assert.deepEqual(listenerErrors(lookupMissing), [['ForgeLab.missing_route', 'error']]);
+
+  for (const badLookup of [
+    lookupLua.replace('local function debugRun', 'routes.Extra = dynRoute\nlocal function debugRun'),
+    lookupLua.replace('local function debugRun', 'table.insert(routes, dynRoute)\nlocal function debugRun'),
+    lookupLua.replace('local function debugRun', 'local alias = routes\nlocal function debugRun'),
+    lookupLua.replace('Gov_review = "probe"', 'Gov_review = "pre" .. dynSuffix'),
+  ]) {
+    const neg = analyze(badLookup);
+    assert.equal(neg.summary.luaEmitUnverified, 1, badLookup);
+  }
+
+  const taintedLookup = analyze(lookupLua.replace('Gov_review = "probe"', 'Gov_review = "bad—"'));
+  assert.equal(taintedLookup.summary.luaEmitUnverified, 1);
+  assert.ok(taintedLookup.mdLua.emitCoverage.files.some(f => f.reasons.includes('source-encoding')));
+
+  const guardLua = `local pending = menu._pendingAction
+if pending and pending.control == "aic_stn_act" and pending.dc == "probe" and AddUITriggeredEvent then
+  pcall(function() AddUITriggeredEvent("ForgeLab", pending.dc, { s = pending.s }) end)
+end`;
+  const guardOk = analyze(guardLua);
+  assert.equal(guardOk.summary.luaEmitUnverified, 0);
+  assert.equal(guardOk.mdLua.emitCoverage.exact, 1);
+  assert.deepEqual(listenerErrors(guardOk), []);
+
+  const guardMissing = analyze(guardLua.replace('== "probe"', '== "missing_guard"'));
+  assert.equal(guardMissing.summary.luaEmitUnverified, 0);
+  assert.deepEqual(listenerErrors(guardMissing), [['ForgeLab.missing_guard', 'error']]);
+
+  for (const badGuard of [
+    guardLua.replace('and pending.dc == "probe"', 'or pending.dc == "probe"'),
+    guardLua.replace('pcall(function()', 'pending.dc = dynDc\n  pcall(function()'),
+    guardLua.replace('local pending = menu._pendingAction', 'local pending = menu._pendingAction; pending = other'),
+    guardLua.replace('pcall(function() AddUITriggeredEvent("ForgeLab", pending.dc, { s = pending.s }) end)', 'Queue(function() AddUITriggeredEvent("ForgeLab", pending.dc, {}) end)'),
+  ]) {
+    const neg = analyze(badGuard);
+    assert.equal(neg.summary.luaEmitUnverified, 1, badGuard);
+  }
+});
+
 console.log(JSON.stringify({pass:true,total:checks.length,checks}));
