@@ -30,7 +30,10 @@ import {
   type SurfaceAuthorityMetadata,
 } from '../src/lib/actionReceiptCoverageInventory.js';
 import { ACTION_RECEIPT_COVERAGE_REVIEWED_MANIFEST_SHA256 } from '../src/lib/actionReceiptPolicyBundle.js';
-import { runActionReceiptPolicyBundleSelftest } from '../src/lib/actionReceiptPolicyBundle.selftest.js';
+import {
+  runActionReceiptPolicyBundleSelftest,
+  type ActionReceiptPolicyBundleSelftestResult,
+} from '../src/lib/actionReceiptPolicyBundle.selftest.js';
 
 export type { ActionReceiptCoverageInventoryBuildResult } from '../src/lib/actionReceiptCoverageInventory.js';
 
@@ -305,6 +308,127 @@ export function runActionReceiptCoverageCandidatePathSelftest(): ActionReceiptCo
   };
 }
 
+function summarizeTextStream(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (Buffer.isBuffer(value)) return value.toString('utf8');
+  return '';
+}
+
+const ANSI_ESCAPE_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
+
+function sanitizePrerequisiteDiagnosticLine(line: string): string {
+  const normalizedRoot = REPOSITORY_ROOT.replace(/\\/g, '/');
+  const unixCwd = normalizedRoot.endsWith('/') ? normalizedRoot : `${normalizedRoot}/`;
+  let text = line
+    .replace(ANSI_ESCAPE_PATTERN, '')
+    .replace(/\r/g, '')
+    .trim()
+    .replace(/^(?:[-*]\s+)+/, '')
+    .replace(/\\/g, '/');
+  if (unixCwd.length > 1) {
+    const lowerText = text.toLowerCase();
+    const lowerCwd = unixCwd.toLowerCase();
+    let offset = lowerText.indexOf(lowerCwd);
+    while (offset >= 0) {
+      text = `${text.slice(0, offset)}${text.slice(offset + unixCwd.length)}`;
+      offset = text.toLowerCase().indexOf(lowerCwd);
+    }
+  }
+  // Abbreviate long hex digests so multiple path diagnostics fit inside the error bound.
+  text = text.replace(/\b([0-9a-f]{12})[0-9a-f]{20,}\b/gi, '$1...');
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+function isPrerequisiteHeaderBanner(line: string): boolean {
+  return /^\[durable-writer audit\] FAILED \(\d+\):?$/i.test(line)
+    || /^Capability contract audit FAILED \(\d+\):?$/i.test(line);
+}
+
+function isJsonDumpLine(line: string): boolean {
+  return line === '{' || line === '}' || line === '[' || line === ']' || /^\{["']/.test(line);
+}
+
+export interface PrerequisiteFailureOutput {
+  readonly stdout?: unknown;
+  readonly stderr?: unknown;
+  readonly message?: unknown;
+}
+
+function extractMessageStderrLines(message: unknown): string[] {
+  if (typeof message !== 'string' || message.trim().length === 0) return [];
+  const lines = message.split(/\r?\n/);
+  // Callback-mode child_process.execFile omits error.stderr and places stderr lines after "Command failed: ...".
+  if (/^Command failed:\s/i.test(lines[0] ?? '')) {
+    return lines.slice(1);
+  }
+  return lines;
+}
+
+export function summarizePrerequisiteFailureOutput(
+  output: PrerequisiteFailureOutput,
+  maxItems = 3,
+  maxChars = 280,
+): string | undefined {
+  const stderrText = summarizeTextStream(output.stderr);
+  const messageLines = stderrText.trim().length > 0 ? [] : extractMessageStderrLines(output.message);
+  const rawLines = [
+    ...stderrText.split(/\r?\n/),
+    ...messageLines,
+    ...summarizeTextStream(output.stdout).split(/\r?\n/),
+  ]
+    .map(sanitizePrerequisiteDiagnosticLine)
+    .filter(line => line.length > 0 && !isJsonDumpLine(line));
+
+  if (rawLines.length === 0) return undefined;
+  const detailLines = rawLines.filter(line => !isPrerequisiteHeaderBanner(line));
+  const candidates = detailLines.length > 0 ? detailLines : rawLines;
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const line of candidates) {
+    if (seen.has(line)) continue;
+    seen.add(line);
+    unique.push(line);
+  }
+  if (unique.length === 0) return undefined;
+
+  const perItemLimit = 120;
+  const selected: string[] = [];
+  let totalLength = 0;
+  for (const item of unique) {
+    if (selected.length >= maxItems) break;
+    const boundedItem = item.length > perItemLimit
+      ? `${item.slice(0, perItemLimit - 3)}...`
+      : item;
+    const separatorCost = selected.length === 0 ? 0 : 2;
+    const remainingCount = unique.length - (selected.length + 1);
+    const suffixReserve = remainingCount > 0 ? `; +${remainingCount} more`.length : 0;
+    if (selected.length > 0 && totalLength + separatorCost + boundedItem.length + suffixReserve > maxChars) {
+      break;
+    }
+    if (selected.length === 0 && boundedItem.length + suffixReserve > maxChars) {
+      const budget = Math.max(24, maxChars - suffixReserve);
+      selected.push(`${boundedItem.slice(0, budget - 3)}...`);
+      break;
+    }
+    selected.push(boundedItem);
+    totalLength += separatorCost + boundedItem.length;
+  }
+  const omitted = unique.length - selected.length;
+  const joined = selected.join('; ');
+  return omitted > 0 ? `${joined}; +${omitted} more` : joined;
+}
+
+export function formatPrerequisiteFailureDetail(
+  label: string,
+  status: string,
+  output?: PrerequisiteFailureOutput,
+): string {
+  const base = `${label}:${status}`;
+  if (output === undefined) return base;
+  const summary = summarizePrerequisiteFailureOutput(output);
+  return summary === undefined ? base : `${base} (${summary})`;
+}
+
 function runPrerequisiteAudit(label: string, args: readonly string[]): Promise<void> {
   return new Promise((accept, reject) => {
     execFile(process.execPath, [...args], {
@@ -322,12 +446,14 @@ function runPrerequisiteAudit(label: string, args: readonly string[]): Promise<v
       const execError = error as NodeJS.ErrnoException & {
         code?: string | number;
         killed?: boolean;
+        stdout?: unknown;
+        stderr?: unknown;
       };
       const code = execError.code;
       if (execError.killed === true || code === 'ETIMEDOUT') {
         reject(stableError(
           'ACTION_RECEIPT_COVERAGE_PREREQUISITE_TIMEOUT',
-          `${label}:timeout`,
+          formatPrerequisiteFailureDetail(label, 'timeout', execError),
         ));
         return;
       }
@@ -337,7 +463,11 @@ function runPrerequisiteAudit(label: string, args: readonly string[]): Promise<v
       }
       reject(stableError(
         'ACTION_RECEIPT_COVERAGE_PREREQUISITE_NONZERO',
-        `${label}:exit=${typeof code === 'number' ? code : 'unknown'}`,
+        formatPrerequisiteFailureDetail(
+          label,
+          `exit=${typeof code === 'number' ? code : 'unknown'}`,
+          execError,
+        ),
       ));
     });
   });
@@ -2291,6 +2421,161 @@ export function runActionReceiptCoverageCandidateInvariantSelftest(
   check('candidate_bytes_repeat', JSON.stringify(candidate) === JSON.stringify(repeated));
   check('candidate_input_unchanged', inputBefore === inputAfter);
 
+  const syntheticAggregate = (
+    overrides: Partial<{
+      pass: boolean;
+      pathPass: boolean;
+      pathFailures: string[];
+      envelopePass: boolean;
+      envelopeFailures: string[];
+      semanticPass: boolean;
+      semanticFailures: string[];
+    }> = {},
+  ): ActionReceiptCoverageCandidateSelftestAggregate => {
+    const pathPass = overrides.pathPass ?? true;
+    const pathFailures = overrides.pathFailures ?? (pathPass ? [] : ['path_check_failed']);
+    const envelopePass = overrides.envelopePass ?? true;
+    const envelopeFailures = overrides.envelopeFailures ?? (envelopePass ? [] : ['envelope_check_failed']);
+    const semanticPass = overrides.semanticPass ?? true;
+    const semanticFailures = overrides.semanticFailures ?? (semanticPass ? [] : ['semantic_check_failed']);
+    const pathResult: ActionReceiptCoverageCandidatePathSelftestResult = {
+      pass: pathPass,
+      passed: 9 - pathFailures.length,
+      total: 9,
+      failures: pathFailures,
+      resolvedPath: 'test-results/fixture.candidate.json',
+      checks: [],
+    };
+    const envelopeResult: ActionReceiptCoverageCandidateEnvelopeSelftestResult = {
+      pass: envelopePass,
+      passed: 5 - envelopeFailures.length,
+      total: 5,
+      failures: envelopeFailures,
+      envelopeHash: '0'.repeat(64),
+      routeCount: buildResult.nonGetRouteCount,
+      surfaceCount: expectedSurfaceCount,
+      checks: [],
+    };
+    const semanticResult: ActionReceiptCoverageCandidateInvariantSelftestResult = {
+      pass: semanticPass,
+      passed: 44 - semanticFailures.length,
+      total: 44,
+      failures: semanticFailures,
+      checks: [],
+    };
+    const failures = [
+      ...pathFailures.map(name => `path:${name}`),
+      ...envelopeFailures.map(name => `envelope:${name}`),
+      ...semanticFailures.map(name => `semantic:${name}`),
+    ];
+    return {
+      pass: overrides.pass ?? failures.length === 0,
+      passed: pathResult.passed + envelopeResult.passed + semanticResult.passed,
+      total: pathResult.total + envelopeResult.total + semanticResult.total,
+      failures,
+      path: pathResult,
+      envelope: envelopeResult,
+      semantic: semanticResult,
+    };
+  };
+  const syntheticPolicy = (
+    overrides: Partial<ActionReceiptPolicyBundleSelftestResult> = {},
+  ): ActionReceiptPolicyBundleSelftestResult => {
+    const failures = overrides.failures ?? [];
+    const total = overrides.total ?? 19;
+    const passed = overrides.passed ?? (total - failures.length);
+    const pass = overrides.pass ?? failures.length === 0;
+    return {
+      allPassed: overrides.allPassed ?? pass,
+      pass,
+      passed,
+      total,
+      failures,
+      checks: [],
+    };
+  };
+  const allPassReport = compactCandidateSelftest(syntheticAggregate(), syntheticPolicy());
+  const policyFailReport = compactCandidateSelftest(
+    syntheticAggregate(),
+    syntheticPolicy({
+      pass: false,
+      allPassed: false,
+      passed: 17,
+      total: 19,
+      failures: ['bundled_policy_positive_counts', 'later_load_is_not_poisoned'],
+    }),
+  );
+  const candidateFailReport = compactCandidateSelftest(
+    syntheticAggregate({ envelopePass: false }),
+    syntheticPolicy(),
+  );
+  const hiddenFlagFailReport = compactCandidateSelftest(
+    syntheticAggregate(),
+    syntheticPolicy({ pass: false, allPassed: false, passed: 19, total: 19, failures: [] }),
+  );
+  check(
+    'compact_selftest_verdict_requires_every_child_family',
+    allPassReport.pass === true
+      && allPassReport.passed === 77
+      && allPassReport.total === 77
+      && allPassReport.failures.length === 0
+      && policyFailReport.pass === false
+      && policyFailReport.passed === 75
+      && policyFailReport.total === 77
+      && policyFailReport.failures.join(',') === 'policyBundle:bundled_policy_positive_counts,policyBundle:later_load_is_not_poisoned'
+      && policyFailReport.path.pass === true
+      && policyFailReport.envelope.pass === true
+      && policyFailReport.semantic.pass === true
+      && policyFailReport.policyBundle.pass === false
+      && policyFailReport.policyBundle.passed === 17
+      && policyFailReport.policyBundle.total === 19
+      && candidateFailReport.pass === false
+      && candidateFailReport.passed === 76
+      && candidateFailReport.total === 77
+      && candidateFailReport.failures.join(',') === 'envelope:envelope_check_failed'
+      && hiddenFlagFailReport.pass === false
+      && hiddenFlagFailReport.failures.join(',') === 'policyBundle:failed',
+  );
+
+  const durableSummary = formatPrerequisiteFailureDetail('durable-writer-audit', 'exit=1', {
+    stderr: [
+      '[durable-writer audit] FAILED (2)',
+      `  - writer source fingerprint changed; declared=${'a'.repeat(64)} actual=${'b'.repeat(64)}`,
+      `  - ${REPOSITORY_ROOT}\\server.ts: raw call counts changed; declared={"writeFileSync":1} actual={"writeFileSync":2}`,
+    ].join('\n'),
+    stdout: '{"ignoredJsonDump":true}\n',
+  });
+  const noisyLines = Array.from({ length: 12 }, (_, index) => `- src/item-${index}.ts: mismatch-${index}`);
+  const boundedSummary = formatPrerequisiteFailureDetail('capability-contract-audit', 'exit=1', {
+    stderr: `Capability contract audit FAILED (12):\n${noisyLines.join('\n')}\n`,
+    stdout: '',
+  });
+  const emptySummary = formatPrerequisiteFailureDetail('capability-contract-audit', 'exit=1', {
+    stderr: '   \n',
+    stdout: '{"routes":[]}\n',
+  });
+  const messageStderrSummary = formatPrerequisiteFailureDetail('durable-writer-audit', 'exit=1', {
+    message: 'Command failed: node scripts/durable-writer-audit.mjs\n[durable-writer audit] FAILED (1)\n  - src/lib/example.ts: raw call counts changed\n',
+  });
+  const timeoutBannerOnlySummary = formatPrerequisiteFailureDetail('durable-writer-audit', 'timeout', {
+    message: 'Command failed: node scripts/durable-writer-audit.mjs\n',
+  });
+  check(
+    'prerequisite_failure_summary_is_bounded_and_preserves_codes_and_paths',
+    durableSummary.startsWith('durable-writer-audit:exit=1 (')
+      && durableSummary.includes('writer source fingerprint changed')
+      && durableSummary.includes('declared=aaaaaaaaaaaa... actual=bbbbbbbbbbbb...')
+      && durableSummary.includes('server.ts: raw call counts changed')
+      && !durableSummary.includes('ignoredJsonDump')
+      && !durableSummary.includes(REPOSITORY_ROOT.replace(/\\/g, '/'))
+      && boundedSummary.includes('src/item-0.ts: mismatch-0')
+      && boundedSummary.includes('+9 more')
+      && boundedSummary.length <= 340
+      && emptySummary === 'capability-contract-audit:exit=1'
+      && messageStderrSummary === 'durable-writer-audit:exit=1 (src/lib/example.ts: raw call counts changed)'
+      && timeoutBannerOnlySummary === 'durable-writer-audit:timeout',
+  );
+
   const failures = checks.filter(entry => !entry.pass).map(entry => entry.name);
   return {
     pass: failures.length === 0,
@@ -2628,26 +2913,98 @@ export function runActionReceiptCoverageCandidateSelftests(
   };
 }
 
-function compactCandidateSelftest(result: ActionReceiptCoverageCandidateSelftestAggregate): object {
+export interface CompactCandidateSelftestFamilySummary {
+  pass: boolean;
+  passed: number;
+  total: number;
+}
+
+export interface CompactCandidateSelftestReport {
+  pass: boolean;
+  passed: number;
+  total: number;
+  failures: string[];
+  path: CompactCandidateSelftestFamilySummary;
+  envelope: CompactCandidateSelftestFamilySummary & {
+    envelopeHash: string;
+    routeCount: number;
+    surfaceCount: number;
+  };
+  semantic: CompactCandidateSelftestFamilySummary;
+  policyBundle: CompactCandidateSelftestFamilySummary & {
+    failures: string[];
+  };
+}
+
+function prefixedCandidateFamilyFailures(
+  family: 'path' | 'envelope' | 'semantic' | 'policyBundle',
+  summary: { pass: boolean; passed: number; total: number; failures: readonly string[] },
+): string[] {
+  if (summary.failures.length > 0) {
+    return summary.failures.map(name => `${family}:${name}`);
+  }
+  if (!summary.pass || summary.passed < summary.total) {
+    return [`${family}:failed`];
+  }
+  return [];
+}
+
+export function compactCandidateSelftest(
+  result: ActionReceiptCoverageCandidateSelftestAggregate,
+  policyBundle: ActionReceiptPolicyBundleSelftestResult,
+): CompactCandidateSelftestReport {
+  const pathSummary: CompactCandidateSelftestFamilySummary = {
+    pass: result.path.pass,
+    passed: result.path.passed,
+    total: result.path.total,
+  };
+  const envelopeSummary = {
+    pass: result.envelope.pass,
+    passed: result.envelope.passed,
+    total: result.envelope.total,
+    envelopeHash: result.envelope.envelopeHash,
+    routeCount: result.envelope.routeCount,
+    surfaceCount: result.envelope.surfaceCount,
+  };
+  const semanticSummary: CompactCandidateSelftestFamilySummary = {
+    pass: result.semantic.pass,
+    passed: result.semantic.passed,
+    total: result.semantic.total,
+  };
+  const policyPass = policyBundle.pass && policyBundle.allPassed !== false;
+  const policySummary = {
+    pass: policyPass,
+    passed: policyBundle.passed,
+    total: policyBundle.total,
+    failures: [...policyBundle.failures],
+  };
+  const failures = [
+    ...prefixedCandidateFamilyFailures('path', result.path),
+    ...prefixedCandidateFamilyFailures('envelope', result.envelope),
+    ...prefixedCandidateFamilyFailures('semantic', result.semantic),
+    ...prefixedCandidateFamilyFailures('policyBundle', { ...policySummary, pass: policyPass }),
+  ];
+  if (!result.pass && failures.length === 0) {
+    failures.push('candidate:failed');
+  }
+  const passed = pathSummary.passed + envelopeSummary.passed + semanticSummary.passed + policySummary.passed;
+  const total = pathSummary.total + envelopeSummary.total + semanticSummary.total + policySummary.total;
+  const pass = result.pass
+    && pathSummary.pass
+    && envelopeSummary.pass
+    && semanticSummary.pass
+    && policyPass
+    && failures.length === 0
+    && passed === total;
   return {
-    pass: result.pass,
-    passed: result.passed,
-    total: result.total,
-    failures: result.failures,
-    path: { pass: result.path.pass, passed: result.path.passed, total: result.path.total },
-    envelope: {
-      pass: result.envelope.pass,
-      passed: result.envelope.passed,
-      total: result.envelope.total,
-      envelopeHash: result.envelope.envelopeHash,
-      routeCount: result.envelope.routeCount,
-      surfaceCount: result.envelope.surfaceCount,
-    },
-    semantic: {
-      pass: result.semantic.pass,
-      passed: result.semantic.passed,
-      total: result.semantic.total,
-    },
+    pass,
+    passed,
+    total,
+    failures,
+    path: pathSummary,
+    envelope: envelopeSummary,
+    semantic: semanticSummary,
+    policyBundle: policySummary,
   };
 }
 
@@ -2686,16 +3043,9 @@ async function main(args: readonly string[]): Promise<void> {
   if (args.length === 1 && args[0] === '--candidate-selftest') {
     const result = runActionReceiptCoverageCandidateSelftests();
     const policyBundle = runActionReceiptPolicyBundleSelftest();
-    process.stdout.write(`${JSON.stringify({
-      ...compactCandidateSelftest(result),
-      policyBundle: {
-        pass: policyBundle.pass,
-        passed: policyBundle.passed,
-        total: policyBundle.total,
-        failures: policyBundle.failures,
-      },
-    })}\n`);
-    if (!result.pass || !policyBundle.pass) process.exitCode = 1;
+    const report = compactCandidateSelftest(result, policyBundle);
+    process.stdout.write(`${JSON.stringify(report)}\n`);
+    if (!report.pass) process.exitCode = 1;
     return;
   }
   if (args.length === 1 && args[0] === '--promotion-selftest') {
