@@ -184,17 +184,6 @@ function isRecord(value: unknown): value is DestructiveRecoveryRecord {
       && row.postcheckEvidence.hash === postcheckEvidenceHash(row.id, row.stagedEvidence.hash, row.postcheckEvidence.checkedAt)));
 }
 
-function directoryBytes(root: string): number {
-  let total = 0;
-  if (!fs.existsSync(root)) return total;
-  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-    const full = path.join(root, entry.name);
-    if (entry.isDirectory()) total += directoryBytes(full);
-    else if (entry.isFile()) total += fs.statSync(full).size;
-  }
-  return total;
-}
-
 export class DestructiveRecoveryStore {
   readonly root: string;
   private readonly maxEntries: number;
@@ -485,7 +474,7 @@ export class DestructiveRecoveryStore {
         const read = this.read(entry.name);
         const created = read.ok ? Date.parse(read.record.createdAt) : fs.statSync(dir).mtimeMs;
         const expired = !read.ok || Date.parse(read.record.expiresAt) <= this.now();
-        return { id: entry.name, dir, created, expired, bytes: directoryBytes(dir) };
+        return { id: entry.name, dir, created, expired };
       })
       .sort((a, b) => a.created - b.created);
     for (const row of rows.filter(row => row.expired)) fs.rmSync(row.dir, { recursive: true, force: true });
