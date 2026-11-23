@@ -320,6 +320,133 @@ const INITIAL_STATE_INPUT_FAILURES: ReadonlySet<MdInitialStateCause> = new Set([
   'missing_source', 'omitted_input', 'omitted_paths_unlisted', 'unusable_script',
 ]);
 
+function splitTopLevelMdSegments(raw: string): string[] {
+  const value = raw.trim();
+  if (!value) return [];
+  const segments: string[] = [];
+  let start = 0;
+  let depth = 0;
+  let quote = '';
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+    if (quote) {
+      if (ch === '\\') { i++; continue; }
+      if (ch === quote) quote = '';
+      continue;
+    }
+    if (ch === "'" || ch === '"') { quote = ch; continue; }
+    if (ch === '(' || ch === '[' || ch === '{') { depth++; continue; }
+    if ((ch === ')' || ch === ']' || ch === '}') && depth > 0) { depth--; continue; }
+    if (ch === '.' && depth === 0) {
+      segments.push(value.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  segments.push(value.slice(start).trim());
+  return segments;
+}
+
+function isSubMemberDestination(raw: string): boolean {
+  const value = raw.trim();
+  if (/^(?:namespace\.)?\$[A-Za-z_]\w*\.(?!\$[A-Za-z_]\w*$)/.test(value)) return true;
+  const segments = splitTopLevelMdSegments(value);
+  if (segments.length < 2) return false;
+  const last = segments[segments.length - 1] ?? '';
+  if (/^\$[A-Za-z_]\w*$/.test(last)) return false;
+  return segments.slice(0, -1).some(segment => segment.startsWith('$'));
+}
+
+function extractGuaranteedExistenceVars(rawExpr: string): string[] {
+  const collect = (raw: string, out: Set<string>): boolean => {
+    let expr = raw.trim();
+    if (!expr || !expr.includes('?')) return true;
+    while (expr.startsWith('(') && expr.endsWith(')')) {
+      let depth = 0;
+      let quote = '';
+      let encloses = true;
+      for (let i = 0; i < expr.length; i++) {
+        const ch = expr[i];
+        if (quote) {
+          if (ch === '\\') { i++; continue; }
+          if (ch === quote) quote = '';
+          continue;
+        }
+        if (ch === "'" || ch === '"') { quote = ch; continue; }
+        if (ch === '(' || ch === '[' || ch === '{') depth++;
+        else if (ch === ')' || ch === ']' || ch === '}') {
+          depth--;
+          if (depth === 0 && i < expr.length - 1) { encloses = false; break; }
+        }
+      }
+      if (!encloses || depth !== 0) break;
+      expr = expr.slice(1, -1).trim();
+    }
+    if (!expr) return true;
+    const parts: string[] = [];
+    let start = 0;
+    let depth = 0;
+    let quote = '';
+    for (let i = 0; i < expr.length; i++) {
+      const ch = expr[i];
+      if (quote) {
+        if (ch === '\\') { i++; continue; }
+        if (ch === quote) quote = '';
+        continue;
+      }
+      if (ch === "'" || ch === '"') { quote = ch; continue; }
+      if (ch === '(' || ch === '[' || ch === '{') { depth++; continue; }
+      if ((ch === ')' || ch === ']' || ch === '}') && depth > 0) { depth--; continue; }
+      if (depth === 0 && /[A-Za-z_]/.test(ch)) {
+        const prev = i > 0 ? expr[i - 1] : '';
+        if (/[A-Za-z0-9_.$]/.test(prev)) continue;
+        let end = i + 1;
+        while (end < expr.length && /\w/.test(expr[end])) end++;
+        const next = end < expr.length ? expr[end] : '';
+        if (next === '$') { i = end - 1; continue; }
+        const word = expr.slice(i, end);
+        const lower = word.toLowerCase();
+        if (lower === 'or' || lower === 'if' || lower === 'then' || lower === 'else') return false;
+        if (word === 'and') {
+          parts.push(expr.slice(start, i).trim());
+          start = end;
+        }
+        i = end - 1;
+      }
+    }
+    parts.push(expr.slice(start).trim());
+    for (const part of parts) {
+      const direct = /^(?:namespace\.)?(\$[A-Za-z_]\w*)\?$/.exec(part);
+      if (direct) {
+        out.add(direct[1]);
+        continue;
+      }
+      if (part.startsWith('(') && part.endsWith(')') && part.includes('?')) {
+        const nested = new Set<string>();
+        if (collect(part, nested)) for (const v of nested) out.add(v);
+      }
+    }
+    return true;
+  };
+  const found = new Set<string>();
+  return collect(rawExpr, found) ? [...found] : [];
+}
+
+function findGuaranteedLocalOutputs(action: Element): string[] {
+  if (!/^find_/.test(action.tagName) || action.hasAttribute('chance')) return [];
+  const out = new Set<string>();
+  const groupTarget = LOCAL_VARIABLE.exec(action.getAttribute('groupname')?.trim() || '')?.[1];
+  if (groupTarget) out.add(groupTarget);
+  const multiple = ['true', '1'].includes((action.getAttribute('multiple') ?? '').trim());
+  const append = ['true', '1'].includes((action.getAttribute('append') ?? '').trim());
+  if (multiple && !append) {
+    for (const attr of ['name', 'result']) {
+      const target = LOCAL_VARIABLE.exec(action.getAttribute(attr)?.trim() || '')?.[1];
+      if (target) out.add(target);
+    }
+  }
+  return [...out];
+}
+
 /** Build possible-writer authority, not an assertion that entry state is empty. */
 export function buildMdVariableAvailabilityContext(
   files: readonly MdVariableAvailabilityInput[], schema: SchemaIndex | null,
@@ -445,7 +572,7 @@ export function buildMdVariableAvailabilityContext(
     // on an unknown receiver can still address that variable on a cue object.
     const variableMember = /^\$[A-Za-z_]\w*\.(\$[A-Za-z_]\w*)$/.exec(value);
     if (variableMember) return { variable: variableMember[1], initializes: true };
-    if (/^(?:namespace\.)?\$[A-Za-z_]\w*\./.test(value)
+    if (isSubMemberDestination(value)
       || /\.(\$[A-Za-z_]\w*)(?:\.[A-Za-z_]\w*)+$/.test(value)) return { initializes: false };
     return { variable: /\.(\$[A-Za-z_]\w*)$/.exec(value)?.[1], initializes: true };
   };
@@ -681,9 +808,10 @@ function lintLocalVariableReads(root: Element, source: string, filePath?: string
         break;
       }
       if (node.tagName === 'remove_value') {
-        const removedName = LOCAL_VARIABLE.exec(node.getAttribute('name')?.trim() || '')?.[1];
+        const rawName = node.getAttribute('name')?.trim() || '';
+        const removedName = LOCAL_VARIABLE.exec(rawName)?.[1];
         if (removedName) removed.add(removedName);
-        else clearAll = true;
+        else if (!rawName || !isSubMemberDestination(rawName)) clearAll = true;
       }
     }
     return { clearAll, removed };
@@ -704,12 +832,52 @@ function lintLocalVariableReads(root: Element, source: string, filePath?: string
     if (!flow) return;
     const fact = availabilityOwn(availability?.actions, availabilityNode(action));
     if (!fact || fact.opaque || action.children.length) {
-      inspectUnmodeled(action);
+      const ownAttr = !action.namespaceURI ? readAttribute(action) : null;
+      if (ownAttr) {
+        for (const { variable, offset } of strictLocalReads(ownAttr.value)) {
+          if (fact?.selfOrderingUnknown === variable) {
+            unavailableRead(ownAttr, variable, offset, true);
+            continue;
+          }
+          if (flow.facts.get(variable)?.kind === 'present') continue;
+          unavailableRead(ownAttr, variable, offset);
+        }
+      }
+      for (const descendant of Array.from(action.getElementsByTagName('*'))) {
+        if (descendant.namespaceURI) continue;
+        const descAttr = readAttribute(descendant);
+        if (!descAttr) continue;
+        for (const { variable, offset } of strictLocalReads(descAttr.value)) unavailableRead(descAttr, variable, offset);
+      }
       const childUnsafe = action.children.length > 0 && Array.from(action.getElementsByTagName('*')).some(child =>
         child.namespaceURI || child.tagName === 'remove_value' || OPAQUE_OR_INLINE_ACTIONS.has(child.tagName));
       if (fact?.knownDeclaration && !action.namespaceURI && !childUnsafe) {
-        for (const variable of fact.unknownVariables) flow.facts.delete(variable);
-        for (const dest of fact.destinations) if (dest.initializes && dest.variable) flow.facts.delete(dest.variable);
+        if (action.tagName === 'remove_value') {
+          const removeRaw = action.getAttribute('name')?.trim() || '';
+          if (removeRaw && isSubMemberDestination(removeRaw)) {
+            flow.potential = false;
+            return;
+          }
+          const resolvedVars = fact.destinations
+            .filter(dest => dest.variable && (!dest.target || dest.target === activeCue?.namespace))
+            .map(dest => dest.variable!);
+          if (resolvedVars.length || (removeRaw && fact.destinations.some(dest => !!dest.target))) {
+            for (const variable of resolvedVars) flow.facts.delete(variable);
+            flow.potential = false;
+            return;
+          }
+          clearInitial(flow);
+          return;
+        }
+        for (const variable of fact.unknownVariables) {
+          if (flow.facts.get(variable)?.kind !== 'present') flow.facts.delete(variable);
+        }
+        for (const dest of fact.destinations) {
+          if (dest.initializes && dest.variable && flow.facts.get(dest.variable)?.kind !== 'present') {
+            flow.facts.delete(dest.variable);
+          }
+        }
+        for (const variable of findGuaranteedLocalOutputs(action)) flow.facts.set(variable, { kind: 'present' });
         flow.potential = false;
         return;
       }
@@ -741,7 +909,12 @@ function lintLocalVariableReads(root: Element, source: string, filePath?: string
       }
     }
     if (action.tagName === 'debug_text') return;
-    if (action.tagName === 'remove_value') { clearInitial(flow); return; }
+    if (action.tagName === 'remove_value') {
+      const removeRaw = action.getAttribute('name')?.trim() || '';
+      if (removeRaw && isSubMemberDestination(removeRaw)) flow.potential = false;
+      else clearInitial(flow);
+      return;
+    }
     const initializedVars = new Set<string>();
     if (activeCue) {
       for (const destination of fact.destinations) {
@@ -759,7 +932,9 @@ function lintLocalVariableReads(root: Element, source: string, filePath?: string
       }
     }
     for (const variable of fact.unknownVariables) {
-      if (!initializedVars.has(variable)) flow.facts.set(variable, { kind: 'unavailable' });
+      if (!initializedVars.has(variable) && flow.facts.get(variable)?.kind !== 'present') {
+        flow.facts.set(variable, { kind: 'unavailable' });
+      }
     }
     if (fact.selfOrderingUnknown) flow.facts.set(fact.selfOrderingUnknown, { kind: 'unavailable' });
     for (const variable of initializedVars) {
@@ -818,6 +993,12 @@ function lintLocalVariableReads(root: Element, source: string, filePath?: string
               continue;
             }
             const armInitial: InitialFlow = { facts: copyPresentFacts(prePresent), potential: false };
+            if ((armEl.tagName === 'do_if' || armEl.tagName === 'do_elseif')
+              && !armEl.hasAttribute('chance') && hasOnlyAttributes(armEl, ['value', 'comment'])) {
+              for (const guardedVar of extractGuaranteedExistenceVars(armEl.getAttribute('value') ?? '')) {
+                armInitial.facts.set(guardedVar, { kind: 'present' });
+              }
+            }
             scanActions(armEl, new Map(), cue, depth + 1, armInitial, allowAbsence);
             armOutputs.push(armInitial.facts);
           }
@@ -1657,9 +1838,17 @@ export function runMdPitfallSelftest(): {
   const initialDocument = (actions: string, script = 'A', children = '') => `<mdscript name="${script}"><cues>`
     + `<cue name="Root"><actions>${actions}</actions>${children}</cue></cues></mdscript>`;
   const initialSchema = { loaded: true, sourceFiles: [], elementCount: 0, elements: new Map([
-    ...['actions', 'conditions', 'event_game_started', 'check_all', 'check_any', 'opaque_effect', 'run_actions'].map(name =>
+    ...['actions', 'conditions', 'event_game_started', 'check_all', 'check_any', 'opaque_effect', 'run_actions', 'match_distance'].map(name =>
       [name, { resolved: true, openAttributes: false, attributes: new Map() }] as const),
     ['set_value', { resolved: true, openAttributes: false, attributes: new Map([['name', { type: 'lvalueexpression', required: true }]]) }],
+    ['remove_value', { resolved: true, openAttributes: false, attributes: new Map([['name', { type: 'lvalueexpression', required: true }]]) }],
+    ['remove_cargo', { resolved: true, openAttributes: false, attributes: new Map([['result', { type: 'lvalueexpression' }]]) }],
+    ['find_ship', { resolved: true, openAttributes: false, attributes: new Map([
+      ['name', { type: 'lvaluename' }], ['groupname', { type: 'groupname' }], ['multiple', { type: 'findmultiple' }], ['append', { type: 'findappend' }],
+    ]) }],
+    ['find_buy_offer', { resolved: true, openAttributes: false, attributes: new Map([
+      ['result', { type: 'lvaluename' }], ['multiple', { type: 'findmultiple' }],
+    ]) }],
     ['output_expression', { resolved: true, openAttributes: false, attributes: new Map([['result', { type: 'lvalueexpression', required: true }]]) }],
     ['output_name', { resolved: true, openAttributes: false, attributes: new Map([['result', { type: 'lvaluename', required: true }]]) }],
     ['output_group', { resolved: true, openAttributes: false, attributes: new Map([['result', { type: 'groupname', required: true }]]) }],
@@ -1975,6 +2164,81 @@ export function runMdPitfallSelftest(): {
     && instGaps.some(g => g.reason.includes('$Missing'))
     && instGaps.some(g => g.reason.includes('$Dyn'))
     && instGaps.some(g => g.reason.includes('$UnsetLib')));
+
+  const subMemberDoc = flowDoc(
+    '<library name="Sub" purpose="run_actions"><params><param name="ship"/></params><actions>'
+    + '<set_value name="$Val" exact="1"/><set_value name="$Key" exact="\'k\'"/><set_value name="$Tbl" exact="table[$f = 1]"/>'
+    + '<set_value name="$Tbl.$ship" exact="$ship"/>'
+    + '<do_for_each name="$e" in="md.FlowCov.Store.$Seen.keys"><remove_value name="md.FlowCov.Store.$Seen.{$e}"/></do_for_each>'
+    + '<set_value name="md.FlowCov.Store.$Plans.{\'p\' + $Key}.{2}" exact="$Val"/>'
+    + '<remove_value name="$Tbl.$f"/><remove_value name="md.Other.Cue.$f"/>'
+    + '<debug_text text="$ship"/><debug_text text="$Val"/>'
+    + '<set_value name="$Removed" exact="null"/><remove_cargo result="$Removed"/><debug_text text="$Removed"/>'
+    + '<set_value name="Cards.{$Key}" exact="$Val"/><debug_text text="$Val"/>'
+    + '<remove_value name="this.$Val"/><debug_text text="$Val"/>'
+    + '</actions></library>',
+  );
+  const subMemberBuilt = buildMdVariableAvailabilityContext([{ path: 'md/submember.xml', content: subMemberDoc }], initialSchema);
+  const subMemberGaps: ValidationCoverageGap[] = [];
+  const subMemberRows = lintMdPitfalls(subMemberDoc, { filePath: 'md/submember.xml', variableAvailability: subMemberBuilt.context, initialStateGaps: subMemberGaps });
+  const subActions = Object.values(subMemberBuilt.context.files['md/submember.xml']?.actions ?? {});
+  const cueBraceDoc = flowDoc('<cue name="Store"><actions><set_value name="$Key" exact="\'k\'"/>'
+    + '<set_value name="md.FlowCov.Store.$Plans.{\'p\' + $Key}.{2}" exact="1"/>'
+    + '<set_value name="Cards.{$Key}" exact="1"/></actions></cue>');
+  const cueBraceBuilt = buildMdVariableAvailabilityContext([{ path: 'md/bracecue.xml', content: cueBraceDoc }], initialSchema);
+  ok('sub-member brace writes/removals and pre-initialized result outputs preserve present state while dynamic targets clear',
+    subMemberRows.length === 0
+    && subActions.some(a => a.destinations.length === 1 && a.destinations[0].initializes === false && !a.opaque)
+    && subActions.some(a => a.destinations.length === 1 && a.destinations[0].initializes === true && a.destinations[0].variable === undefined && a.opaque)
+    && cueBraceBuilt.coverageGaps.some(g => g.mdInitialState?.causes.some(c => c.code === 'dynamic_destination' && c.count === 1))
+    && subMemberGaps.filter(g => g.reason.includes('$Val')).length === 1
+    && subMemberGaps.length === 1, { cueBraceBuilt, subMemberGaps });
+
+  const conjunctiveDoc = flowDoc(
+    '<cue name="Conj"><actions>'
+    + '<do_if value="$GuardOk? and $GuardOk != null and ($Ready? and $GuardOk.exists)"><debug_text text="$GuardOk"/><debug_text text="$Ready"/></do_if>'
+    + '<do_elseif value="$BranchVar? and $BranchVar == 1"><debug_text text="$BranchVar"/></do_elseif>'
+    + '<do_else><debug_text text="$GuardOk"/></do_else>'
+    + '<debug_text text="$GuardOk"/>'
+    + '<do_if value="$OrGuard? or $Fallback"><debug_text text="$OrGuard"/></do_if>'
+    + '<do_if value="not ($NegParen? and $Flag)"><debug_text text="$NegParen"/></do_if>'
+    + '<do_if value="if $Flag then $Cond? else true"><debug_text text="$Cond"/></do_if>'
+    + '<do_if value="$NegatedAttr? and true" exact="false"><debug_text text="$NegatedAttr"/></do_if>'
+    + '<do_if value="$Chancy? and true" chance="50"><debug_text text="$Chancy"/></do_if>'
+    + '</actions></cue>',
+  );
+  const conjBuilt = buildMdVariableAvailabilityContext([{ path: 'md/conj.xml', content: conjunctiveDoc }], initialSchema);
+  const conjGaps: ValidationCoverageGap[] = [];
+  const conjRows = lintMdPitfalls(conjunctiveDoc, { filePath: 'md/conj.xml', variableAvailability: conjBuilt.context, initialStateGaps: conjGaps });
+  ok('conjunctive existence guards protect guarded arms without leaking or accepting or/negated/chance arms',
+    conjRows.length === 0
+    && !conjGaps.some(g => g.reason.includes('$Ready') || g.reason.includes('$BranchVar'))
+    && conjGaps.filter(g => g.reason.includes('$GuardOk')).length === 2
+    && ['$OrGuard', '$NegParen', '$Cond', '$NegatedAttr', '$Chancy'].every(v => conjGaps.some(g => g.reason.includes(v))),
+    { conjRows, conjGaps });
+
+  const findDoc = flowDoc(
+    '<cue name="Find" instantiate="true"><conditions><event_game_started/></conditions><actions>'
+    + '<find_ship name="$List" multiple="true"><match_distance/></find_ship><debug_text text="$List"/>'
+    + '<find_ship groupname="$Group"/><debug_text text="$Group"/>'
+    + '<find_buy_offer result="$Offers" multiple="true"/><debug_text text="$Offers"/>'
+    + '<find_ship name="$Single" multiple="false"/><debug_text text="$Single"/>'
+    + '<find_ship name="$Appended" multiple="true" append="true"/><debug_text text="$Appended"/>'
+    + '<find_ship name="$ChanceList" multiple="true" chance="50"/><debug_text text="$ChanceList"/>'
+    + '<find_ship name="$ForeignList" multiple="true"><unknown xmlns="urn:foreign"/></find_ship><debug_text text="$ForeignList"/>'
+    + '</actions></cue>',
+  );
+  const findBuilt = buildMdVariableAvailabilityContext([{ path: 'md/find.xml', content: findDoc }], initialSchema);
+  const findGaps: ValidationCoverageGap[] = [];
+  lintMdPitfalls(findDoc, { filePath: 'md/find.xml', variableAvailability: findBuilt.context, initialStateGaps: findGaps });
+  const findNoSchema = buildMdVariableAvailabilityContext([{ path: 'md/find.xml', content: findDoc }], null);
+  const findNoSchemaGaps: ValidationCoverageGap[] = [];
+  lintMdPitfalls(findDoc, { filePath: 'md/find.xml', variableAvailability: findNoSchema.context, initialStateGaps: findNoSchemaGaps });
+  ok('find_* initializes multiple=true and groupname outputs only when schema-resolved and unconditional',
+    findGaps.length === 4
+    && ['$Single', '$Appended', '$ChanceList', '$ForeignList'].every(v => findGaps.some(g => g.reason.includes(v)))
+    && findNoSchemaGaps.some(g => g.reason.includes('$List')),
+    { findGaps, findNoSchemaGaps });
   const triggerRules = (cues: string) => lintMdPitfalls(`<mdscript name="Trigger"><cues>\n${cues}\n</cues></mdscript>`,
     { filePath: 'md/trigger.xml' }).filter(f => f.code === 'md_pitfall.no_event_condition' || f.code === 'md_pitfall.illegal_instantiate');
   const triggerCue = (attributes = '', body = '<check_value value="true"/>') =>
