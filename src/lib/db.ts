@@ -476,11 +476,15 @@ export function queryReferenceFiles(
   if (!generation) return { total: 0, files: [] };
   const clauses = ['f.generation_seq = ?'];
   const params: unknown[] = [generation.seq];
+  const classClauses: string[] = [];
   for (const [column, value] of [
     ['extension', filters.extension], ['source', filters.source], ['domain', filters.domain],
     ['role', filters.role], ['authority', filters.authority], ['consumer', filters.consumer],
   ] as Array<[string, string | undefined]>) {
-    if (value) { clauses.push(`c.${column} = ?`); params.push(value); }
+    if (value) { classClauses.push(`${column} = ?`); params.push(value); }
+  }
+  if (classClauses.length) {
+    clauses.push(`f.class_id IN (SELECT class_id FROM reference_classes WHERE ${classClauses.join(' AND ')})`);
   }
   if (filters.q) { clauses.push('f.rel_path LIKE ?'); params.push(`%${filters.q}%`); }
   const where = clauses.join(' AND ');
