@@ -97,6 +97,28 @@ try {
   check('manifest and coverage are public read-only', (await request('/api/reference/manifest?limit=1')).status === 200 && (await request('/api/reference/coverage')).status === 200);
   const canonicalStatus = await request('/api/reference/status?refresh=1').then(response => response.json());
   check('reference corpus consumes complete manifest generation', canonicalStatus.manifestGeneration === coverage.generation, String(canonicalStatus.manifestGeneration));
+  const observedStatus = await request('/api/reference/status?observe=1').then(response => response.json());
+  check('observe=1 status returns warm corpus and identity without forcing rebuild',
+    observedStatus.available === true && observedStatus.observed === true
+    && observedStatus.generatedAt === canonicalStatus.generatedAt
+    && observedStatus.manifestGeneration === coverage.generation
+    && observedStatus.instance?.pid > 0,
+    JSON.stringify(observedStatus));
+  await sleep(1100);
+  const stableStatus = await request('/api/reference/status').then(response => response.json());
+  check('status after 1s expiry reuses immutable corpus object on unchanged disk',
+    stableStatus.available === true && stableStatus.generatedAt === canonicalStatus.generatedAt,
+    JSON.stringify({ before: canonicalStatus.generatedAt, after: stableStatus.generatedAt }));
+  write('libraries/wares.xml', '<wares><ware id="energycells"/><ware id="quantumtubes"/></wares>');
+  await sleep(1100);
+  const updatedStatus = await request('/api/reference/status').then(response => response.json());
+  check('status after 1s expiry detects physical edit even when manifest generation is unchanged',
+    updatedStatus.available === true && updatedStatus.generatedAt !== canonicalStatus.generatedAt
+    && updatedStatus.counts?.wares === 2,
+    JSON.stringify({ before: canonicalStatus.counts, after: updatedStatus.counts }));
+  write('libraries/wares.xml', '<wares><ware id="energycells"/></wares>');
+  await sleep(1100);
+  await request('/api/reference/status?refresh=1');
   const registry = await request('/api/agent/schema-registry?domain=md').then(response => response.json());
   const mdDomain = registry.domains?.find(domain => domain.domain === 'md');
   check('schema registry selects base and shadows DLC variant', mdDomain?.shadowedCopies === 1 && /[\\/]libraries[\\/]md\.xsd$/i.test(mdDomain.file) && registry.domains?.some(domain => domain.domain === 'addon'), JSON.stringify(mdDomain));
@@ -110,6 +132,48 @@ try {
   await request('/api/reference/coverage?refresh=1');
   const removed = await waitForCoverage();
   check('DLC removal appears after refresh', removed?.body?.coverage?.totalFiles === 11, String(removed?.body?.coverage?.totalFiles));
+
+  const fakeHome = path.join(tmp, 'fake-home');
+  const isoState = path.join(tmp, 'iso-state');
+  const isoData = path.join(tmp, 'iso-data');
+  const isoConfig = path.join(tmp, 'iso-config');
+  for (const dir of [fakeHome, isoState, isoData, isoConfig]) fs.mkdirSync(dir, { recursive: true });
+  const isoPort = Number(process.env.REFERENCE_MANIFEST_ISOLATED_PORT || port + 3);
+  const isoEnv = { ...process.env };
+  delete isoEnv.X4FORGE_DISCOVERY_DIR;
+  let isoServer;
+  try {
+    isoServer = spawn(process.execPath, [tsxCli, 'server.ts'], {
+      cwd: process.cwd(), shell: false, stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...isoEnv, PORT: String(isoPort), NODE_ENV: 'development', API_ONLY: 'true', DISABLE_HMR: 'true',
+        HOME: fakeHome, USERPROFILE: fakeHome,
+        STUDIO_API_TOKEN: token, X4_FORGE_MODE: 'release-host',
+        X4_STATE_DIR: isoState, X4_DATA_DIR: isoData, X4_CONFIG_DIR: isoConfig,
+        X4_SOURCE_COORDINATION_DIR: path.join(isoState, 'source-coordination'),
+        X4_REFERENCE_ROOT: path.join(tmp, 'missing-ref'),
+      },
+    });
+    let isoIdentity = null;
+    let isoStatus = 0;
+    for (let attempt = 0; attempt < 60; attempt++) {
+      await sleep(250);
+      try {
+        const res = await fetch(`http://127.0.0.1:${isoPort}/api/reference/status?observe=1`);
+        isoStatus = res.status;
+        isoIdentity = await res.json();
+        if (isoIdentity?.instance) break;
+      } catch { /* wait for listener */ }
+    }
+    check('release-host without X4FORGE_DISCOVERY_DIR omits default ~/.x4forge discovery',
+      !fs.existsSync(path.join(fakeHome, '.x4forge', 'latest.json'))
+      && !fs.existsSync(path.join(fakeHome, '.x4forge', 'instances')));
+    check('observe=1 on missing ref root still returns 503 with release-host instance',
+      isoStatus === 503 && isoIdentity?.instance?.mode === 'release-host' && isoIdentity?.instance?.pid > 0,
+      JSON.stringify({ status: isoStatus, body: isoIdentity }));
+  } finally {
+    killTree(isoServer?.pid);
+  }
 } catch (error) {
   check('harness completed without exception', false, error instanceof Error ? error.message : String(error));
 } finally {

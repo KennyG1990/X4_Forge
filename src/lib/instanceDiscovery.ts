@@ -29,7 +29,10 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { canonicalDirectoryPath, isCanonicalSameOrDescendant } from './pathRoles.js';
 import { atomicWriteFile } from './workspaceState.js';
+
+export const ISOLATED_DISCOVERY_MODES = new Set(['dev-build', 'release-host', 'lab']);
 
 export interface InstanceRecord {
   port: number;
@@ -41,10 +44,31 @@ export interface InstanceRecord {
   version?: string;
 }
 
+export function defaultDiscoveryRoot(homeDir = os.homedir()): string {
+  return path.join(homeDir, '.x4forge');
+}
+
+export function allowsDiscoveryForMode(
+  mode: string | undefined,
+  options: { override?: string | null; homeDir?: string; env?: NodeJS.ProcessEnv } = {},
+): boolean {
+  const normalizedMode = String(mode ?? '').trim().toLowerCase();
+  if (!ISOLATED_DISCOVERY_MODES.has(normalizedMode)) return true;
+  const rawOverride = 'override' in options
+    ? options.override
+    : (options.env ?? process.env).X4FORGE_DISCOVERY_DIR;
+  const explicit = rawOverride?.trim();
+  if (!explicit || !path.isAbsolute(explicit) || /^(?:\\\\|\/\/)/.test(explicit)) return false;
+  const defaultCanonical = canonicalDirectoryPath(defaultDiscoveryRoot(options.homeDir));
+  const targetCanonical = canonicalDirectoryPath(explicit);
+  if (!defaultCanonical || !targetCanonical) return false;
+  return !isCanonicalSameOrDescendant(targetCanonical, defaultCanonical);
+}
+
 export function discoveryRoot(): string {
   // X4FORGE_DISCOVERY_DIR exists so tests never touch the real user profile.
   const override = process.env.X4FORGE_DISCOVERY_DIR?.trim();
-  return override ? path.resolve(override) : path.join(os.homedir(), '.x4forge');
+  return override ? path.resolve(override) : defaultDiscoveryRoot();
 }
 
 export function instancesDir(): string { return path.join(discoveryRoot(), 'instances'); }
@@ -157,6 +181,7 @@ export function listInstances({ migrateLegacy = true }: { migrateLegacy?: boolea
  */
 export function publishInstance(record: InstanceRecord): { instanceFile: string; latestFile: string } | null {
   try {
+    if (!allowsDiscoveryForMode(record.mode)) return null;
     pruneDeadInstances();
     const safeRecord = sanitizeRecord(record);
     if (!safeRecord) return null;
@@ -173,8 +198,9 @@ export function publishInstance(record: InstanceRecord): { instanceFile: string;
 }
 
 /** Remove this instance's record on shutdown. `latest.json` is repointed if it named us. */
-export function unpublishInstance(pid: number): void {
+export function unpublishInstance(pid: number, mode = process.env.X4_FORGE_MODE): void {
   try {
+    if (mode && !allowsDiscoveryForMode(mode)) return;
     fs.rmSync(instancePath(pid), { force: true });
     const latestFile = latestPath();
     const latest = readSanitizedRecord(latestFile, false);
@@ -252,6 +278,23 @@ export function runInstanceDiscoverySelftest(): { pass: boolean; checks: Array<{
     unpublishInstance(process.pid);
     ok('shutdown removes the record', !fs.existsSync(instancePath(process.pid)));
     ok('shutdown clears latest when nothing is left', !fs.existsSync(latestPath()));
+
+    const fakeHome = path.join(scratch, 'fake-home');
+    const fakeDefault = defaultDiscoveryRoot(fakeHome);
+    for (const mode of ['dev-build', 'release-host', 'lab', ' RELEASE-HOST ']) {
+      ok(`${mode.trim()} refuses missing discovery dir`, !allowsDiscoveryForMode(mode, { override: undefined, homeDir: fakeHome }));
+      ok(`${mode.trim()} refuses default discovery root`, !allowsDiscoveryForMode(mode, { override: fakeDefault, homeDir: fakeHome }));
+      ok(`${mode.trim()} refuses nested default discovery dir`, !allowsDiscoveryForMode(mode, { override: path.join(fakeDefault, 'nested'), homeDir: fakeHome }));
+      ok(`${mode.trim()} accepts explicit isolated discovery dir`, allowsDiscoveryForMode(mode, { override: path.join(scratch, 'isolated'), homeDir: fakeHome }));
+    }
+    if (process.platform === 'win32') {
+      ok('windows case-folded default discovery root refused', !allowsDiscoveryForMode('dev-build', { override: fakeDefault.toUpperCase(), homeDir: fakeHome }));
+    }
+    ok('sidecar allows default discovery root', allowsDiscoveryForMode('sidecar', { override: undefined, homeDir: fakeHome }));
+    ok('standalone allows default discovery root', allowsDiscoveryForMode('standalone', { override: undefined, homeDir: fakeHome }));
+    delete process.env.X4FORGE_DISCOVERY_DIR;
+    ok('publishInstance refuses release-host without explicit isolated dir', publishInstance({ ...mine, mode: 'release-host' }) === null);
+    process.env.X4FORGE_DISCOVERY_DIR = scratch;
   } finally {
     if (saved === undefined) delete process.env.X4FORGE_DISCOVERY_DIR; else process.env.X4FORGE_DISCOVERY_DIR = saved;
     try { fs.rmSync(scratch, { recursive: true, force: true }); } catch { /* best effort */ }

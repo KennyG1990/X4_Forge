@@ -277,6 +277,18 @@ export async function refreshReferenceManifest(rootInput: string): Promise<Refer
   return active.promise;
 }
 
+export function getCurrentReferenceManifestGeneration(
+  rootInput: string,
+  options: { openDatabase?: boolean } = {},
+): string | undefined {
+  const root = normalizedRoot(rootInput);
+  if (!rootInput.trim()) return undefined;
+  if (options.openDatabase === false && database === undefined) return undefined;
+  const db = manifestDb();
+  if (!db) return undefined;
+  return latestReferenceGeneration(db, rootKey(root))?.id;
+}
+
 export function getReferenceManifestStatus(rootInput: string, options: { openDatabase?: boolean } = {}): ReferenceManifestStatus {
   const root = normalizedRoot(rootInput);
   const key = rootKey(root);
@@ -384,6 +396,49 @@ export async function runReferenceManifestSelftest(): Promise<{ pass: boolean; c
     ok('official AI script is a canonical reference', aiScript?.authority === 'canonical' && aiScript.consumer === 'reference-corpus');
     const coverage = getReferenceCoverage(corpusRoot);
     ok('coverage indexed', Boolean(coverage?.byRole.some(row => row.key === 'grammar' && row.count === 1)));
+
+    const {
+      clearReferenceCorpusCache,
+      expireReferenceCorpusCheckCache,
+      getReferenceCorpus,
+      getReferenceCorpusStats,
+      resetReferenceCorpusStats,
+    } = await import('./referenceCorpus');
+    await write('libraries/factions.xml', '<factions><faction id="argon" name="Argon"/></factions>');
+    await write('libraries/wares.xml', '<wares><ware id="energycells" name="Energy Cells" group="energy"/></wares>');
+    const gen1 = await refreshReferenceManifest(corpusRoot);
+    clearReferenceCorpusCache();
+    resetReferenceCorpusStats();
+    const c1 = getReferenceCorpus(corpusRoot);
+    const s1 = getReferenceCorpusStats();
+    ok('manifest-backed corpus loads with generation and single selection',
+      c1.manifestGeneration === gen1.generation && s1.manifestSelections === 1 && s1.corpusRebuilds === 1,
+      JSON.stringify({ gen: c1.manifestGeneration, expected: gen1.generation, stats: s1 }));
+    expireReferenceCorpusCheckCache();
+    const c2 = getReferenceCorpus(corpusRoot);
+    const s2 = getReferenceCorpusStats();
+    ok('expired cache interval reuses manifest selection without re-querying SQLite',
+      c2 === c1 && s2.manifestSelections === 1 && s2.manifestSelectionReuses === 1 && s2.physicalStatRechecks > 0 && s2.corpusRebuilds === 1,
+      JSON.stringify(s2));
+    await write('libraries/factions.xml', '<factions><faction id="edited" name="Edited"/></factions>');
+    expireReferenceCorpusCheckCache();
+    const c3 = getReferenceCorpus(corpusRoot);
+    const s3 = getReferenceCorpusStats();
+    ok('physical edit after interval expiry rebuilds corpus without re-querying unchanged manifest generation',
+      c3 !== c1 && c3.factions.some(f => f.id === 'edited') && s3.manifestSelections === 1 && s3.corpusRebuilds === 2,
+      JSON.stringify({ factions: c3.factions.map(f => f.id), stats: s3 }));
+    const cForced = getReferenceCorpus(corpusRoot, true);
+    const sForced = getReferenceCorpusStats();
+    ok('explicit force refresh reselects manifest paths', cForced !== c3 && sForced.manifestSelections === 2, JSON.stringify(sForced));
+    await write('extensions/ego_dlc_test/libraries/jobs.xml', '<diff><add sel="/jobs"><job id="dlc_job" name="DLC Job"/></add></diff>');
+    const gen2 = await refreshReferenceManifest(corpusRoot);
+    expireReferenceCorpusCheckCache();
+    const c4 = getReferenceCorpus(corpusRoot);
+    const s4 = getReferenceCorpusStats();
+    ok('new completed manifest generation invalidates selection cache',
+      c4.manifestGeneration === gen2.generation && s4.manifestSelections === 3 && c4.jobs.some(j => j.id === 'dlc_job'),
+      JSON.stringify({ gen: c4.manifestGeneration, stats: s4 }));
+    clearReferenceCorpusCache();
   } finally {
     scanState.delete(rootKey(corpusRoot));
     lastScanErrors.delete(rootKey(corpusRoot));

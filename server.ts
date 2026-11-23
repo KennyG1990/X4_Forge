@@ -485,9 +485,10 @@ const TOKEN_FILE = path.join(process.cwd(), ".studio-api-token");
 const SERVER_STARTED_AT = new Date().toISOString();
 const SERVER_INSTANCE_MODE = process.env.X4_FORGE_MODE?.trim()
   || (process.connected && parseParentLivenessContract(process.env) ? 'sidecar' : 'standalone');
-const PUBLIC_INSTANCE_MODES = new Set(['sidecar', 'standalone', 'dev-build', 'release-host']);
+const PUBLIC_INSTANCE_MODES = new Set(['sidecar', 'standalone', 'dev-build', 'release-host', 'lab']);
 const SERVER_EXTENSION_VERSION = process.env.X4_FORGE_EXTENSION_VERSION?.trim();
 let serverListenerPort = PORT;
+let serverDiscoveryPublished = false;
 const serverEntry = process.argv[1] || '';
 const canonicalMdCompiledWorker = path.basename(serverEntry) === 'server.cjs'
   ? readCanonicalMdCompiledWorkerIdentity(serverEntry) : undefined;
@@ -5960,7 +5961,7 @@ app.get("/api/agent/status", async (req, res) => {
       ok: true,
       ...publicForgeIdentity(),
       mode: SERVER_INSTANCE_MODE,
-      discoveryFile: latestPath(),
+      discoveryFile: serverDiscoveryPublished ? latestPath() : null,
       workspace: {
         workspaceId: record.workspaceId,
         name: ws?.name,
@@ -19309,8 +19310,11 @@ setupDevOrProd().then(() => {
       cwd: process.cwd(),
       mode: SERVER_INSTANCE_MODE,
     });
-    if (published) console.log(`[discovery] instance address published to ${published.latestFile}`);
-    const releaseDiscovery = () => unpublishInstance(process.pid);
+    if (published) {
+      serverDiscoveryPublished = true;
+      console.log(`[discovery] instance address published to ${published.latestFile}`);
+    }
+    const releaseDiscovery = () => unpublishInstance(process.pid, SERVER_INSTANCE_MODE);
     const parentWatch = watchParentIpc(process.env, process, contract => {
       retireNativePerformanceBroker('disconnect');
       console.error(`[parent-liveness] supervisor reported extension parent loss; shutting down sidecar owned by parent pid ${contract.parentPid}.`);

@@ -5,7 +5,9 @@ import path from 'path';
 import type { Express, Request, Response } from 'express';
 import { resolveX4ReferenceRoot, resolveXsdConfig } from '../lib/xsdParser';
 import {
+  assertReferenceRootDirectory,
   getReferenceCorpus,
+  peekReferenceCorpus,
   resolveReferenceFile,
   runReferenceCorpusSelftest,
   type ReferenceCorpus,
@@ -207,7 +209,39 @@ export function registerReferenceRoutes(
   app.get('/api/reference/status', (req, res) => {
     res.set('Cache-Control', 'no-store');
     const instance = publicInstance?.();
+    const observe = req.query.observe === '1';
     try {
+      if (observe) {
+        const resolved = resolveXsdConfig();
+        const root = assertReferenceRootDirectory(resolved.x4ReferenceRoot);
+        const manifest = getReferenceManifestStatus(root, { openDatabase: false });
+        const corpus = peekReferenceCorpus(root);
+        if (!corpus) {
+          return res.json({
+            available: false,
+            observed: true,
+            state: manifest.state === 'scanning' || manifest.state === 'stale' ? 'scanning' : 'cold',
+            instance,
+            root,
+            generatedAt: null,
+            manifestGeneration: manifest.current?.generation || null,
+            sourceFiles: 0,
+            counts: null,
+            manifest,
+          });
+        }
+        return res.json({
+          available: true,
+          observed: true,
+          instance,
+          root: corpus.root,
+          generatedAt: corpus.generatedAt,
+          manifestGeneration: corpus.manifestGeneration || null,
+          sourceFiles: corpus.sourceFiles.length,
+          counts: { factions: corpus.factions.length, wares: corpus.wares.length, jobs: corpus.jobs.length, aiScripts: corpus.aiScripts.length, sectors: corpus.sectors.length, scriptProperties: corpus.scriptProperties.length },
+          manifest,
+        });
+      }
       const corpus = load(req);
       const manifest = getReferenceManifestStatus(corpus.root);
       return res.json({

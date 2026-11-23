@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceFingerprint": "b643581f18a8332532a3091486f2ee00f68780d7af862d448898e32c0cf4161f",
+  "sourceFingerprint": "51213cb1c4a0f2ca1fb7cc6bf373da96d86b926f12448f59d64e5b9163cb6012",
   "policy": "Every raw production filesystem mutation source is count-pinned here. Authoritative files use atomic sibling promotion; stronger tree, archive, append-log, SQLite, retention, ephemeral, and fixture contracts remain explicit exceptions.",
   "writers": [
     {

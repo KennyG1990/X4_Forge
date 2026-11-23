@@ -17,7 +17,7 @@ import path from 'path';
 import { DOMParser } from '@xmldom/xmldom';
 import { parseScriptProperties, type ScriptPropertyIndex } from './scriptProperties';
 import { parseLocalizationXml, resolveLocName, type LocalizationMap } from './x4ObjectIndex';
-import { listReferenceManifestFiles } from './referenceManifest';
+import { getCurrentReferenceManifestGeneration, listReferenceManifestFiles } from './referenceManifest';
 import { directElementChildren, type ElementLike } from './xmlLite';
 
 export type ReferenceSource = 'base' | `ego_dlc_${string}`;
@@ -141,8 +141,36 @@ interface ReferenceFile {
   stamp: fs.Stats;
 }
 
-let cache: { root: string; signature: string; corpus: ReferenceCorpus; checkedAt: number } | null = null;
+interface CachedManifestSelection {
+  generation: string;
+  entries: Array<Omit<ReferenceFile, 'stamp'>>;
+}
+
+let cache: {
+  root: string;
+  signature: string;
+  corpus: ReferenceCorpus;
+  checkedAt: number;
+  manifestSelection?: CachedManifestSelection;
+} | null = null;
 const REFERENCE_SIGNATURE_CHECK_MS = 1000;
+const cacheStats = {
+  manifestSelections: 0,
+  manifestSelectionReuses: 0,
+  physicalStatRechecks: 0,
+  corpusRebuilds: 0,
+};
+
+export function getReferenceCorpusStats() { return { ...cacheStats }; }
+export function resetReferenceCorpusStats(): void {
+  cacheStats.manifestSelections = 0;
+  cacheStats.manifestSelectionReuses = 0;
+  cacheStats.physicalStatRechecks = 0;
+  cacheStats.corpusRebuilds = 0;
+}
+export function expireReferenceCorpusCheckCache(): void {
+  if (cache) cache.checkedAt = 0;
+}
 
 function isDirectory(p: string): boolean {
   try { return fs.statSync(p).isDirectory(); } catch { return false; }
@@ -200,12 +228,32 @@ function referenceKind(relativeInput: string): ReferenceFileKind | null {
   return null;
 }
 
-function discoverReferenceFiles(rootInput: string): { files: ReferenceFile[]; manifestGeneration?: string } {
+function discoverReferenceFiles(
+  rootInput: string,
+  previousSelection?: CachedManifestSelection,
+): { files: ReferenceFile[]; manifestGeneration?: string; manifestSelection?: CachedManifestSelection } {
   const root = path.resolve(rootInput);
   if (!isDirectory(root)) return { files: [] };
+  if (previousSelection) {
+    const currentGeneration = getCurrentReferenceManifestGeneration(root);
+    if (currentGeneration && currentGeneration === previousSelection.generation) {
+      cacheStats.manifestSelectionReuses++;
+      const files: ReferenceFile[] = [];
+      for (const entry of previousSelection.entries) {
+        cacheStats.physicalStatRechecks++;
+        const stamp = referenceFileStat(entry.absolute);
+        if (!stamp) continue;
+        files.push({ ...entry, stamp });
+      }
+      if (files.length) {
+        return { files, manifestGeneration: currentGeneration, manifestSelection: previousSelection };
+      }
+    }
+  }
   // Query by both consumer and intrinsic location. Older persisted manifest generations
   // predate jobs/AI-script classification; intrinsic queries keep corpus loading correct
   // until the background refresh atomically replaces that generation.
+  cacheStats.manifestSelections++;
   const manifests = [
     listReferenceManifestFiles(root, { consumer: 'reference-corpus' }, 20_000),
     listReferenceManifestFiles(root, { q: 'libraries/jobs.xml' }, 1_000),
@@ -225,7 +273,14 @@ function discoverReferenceFiles(rootInput: string): { files: ReferenceFile[]; ma
       })
       .filter((file): file is ReferenceFile => Boolean(file))
       .sort((a, b) => (Number(a.source !== 'base') - Number(b.source !== 'base')) || a.source.localeCompare(b.source) || a.relative.localeCompare(b.relative));
-    if (files.length) return { files, manifestGeneration: manifests[0].generation };
+    if (files.length) {
+      const manifestGeneration = manifests[0].generation;
+      const manifestSelection: CachedManifestSelection = {
+        generation: manifestGeneration,
+        entries: files.map(({ absolute, relative, source, kind }) => ({ absolute, relative, source, kind })),
+      };
+      return { files, manifestGeneration, manifestSelection };
+    }
   }
   const files: ReferenceFile[] = [];
   const seen = new Set<string>();
@@ -559,25 +614,41 @@ function buildCorpus(root: string, files: ReferenceFile[], signature: string, ma
   };
 }
 
+export function assertReferenceRootDirectory(rootInput: string): string {
+  const root = path.resolve(String(rootInput || '').trim());
+  if (!isDirectory(root)) throw new Error(`X4 unpacked reference root does not exist or is not a directory: ${root}`);
+  return root;
+}
+
+export function peekReferenceCorpus(rootInput: string): ReferenceCorpus | null {
+  const root = path.resolve(String(rootInput || '').trim());
+  if (cache && cache.root.toLowerCase() === root.toLowerCase()) return cache.corpus;
+  return null;
+}
+
 export function clearReferenceCorpusCache(): void { cache = null; }
 
 export function getReferenceCorpus(rootInput: string, force = false): ReferenceCorpus {
-  const root = path.resolve(String(rootInput || '').trim());
-  if (!isDirectory(root)) throw new Error(`X4 unpacked reference root does not exist or is not a directory: ${root}`);
+  const root = assertReferenceRootDirectory(rootInput);
   const now = Date.now();
   if (!force && cache && cache.root.toLowerCase() === root.toLowerCase() && now - cache.checkedAt < REFERENCE_SIGNATURE_CHECK_MS) {
     return cache.corpus;
   }
-  const discovery = discoverReferenceFiles(root);
+  const previousSelection = !force && cache && cache.root.toLowerCase() === root.toLowerCase()
+    ? cache.manifestSelection
+    : undefined;
+  const discovery = discoverReferenceFiles(root, previousSelection);
   const files = discovery.files;
   const signature = signatureFor(files);
   if (!force && cache && cache.root.toLowerCase() === root.toLowerCase() && cache.signature === signature
     && cache.corpus.manifestGeneration === discovery.manifestGeneration) {
     cache.checkedAt = Date.now();
+    cache.manifestSelection = discovery.manifestSelection;
     return cache.corpus;
   }
+  cacheStats.corpusRebuilds++;
   const corpus = buildCorpus(root, files, signature, discovery.manifestGeneration);
-  cache = { root, signature, corpus, checkedAt: Date.now() };
+  cache = { root, signature, corpus, checkedAt: Date.now(), manifestSelection: discovery.manifestSelection };
   return corpus;
 }
 
