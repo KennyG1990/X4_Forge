@@ -3911,8 +3911,8 @@
     "workspace.read@2": "962774de4a25e8725a0d90d4982298cc72f100312075b1f6f4ff9de1482752d7"
   },
   "mcpModuleSignature": {
-    "version": 22,
-    "hash": "a3d430b336cd63a7caa4fffdf8bb5db2b9408e881de7d15885775edb2c430cba"
+    "version": 23,
+    "hash": "92d1f3d465f8edf46dbdc0dd189bc1e2a04d44221a11d65807a9e40825426061"
   },
   "mcpSignatures": {
     "validate_mod": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",

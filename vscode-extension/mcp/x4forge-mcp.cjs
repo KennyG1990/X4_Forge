@@ -1539,6 +1539,7 @@ function cancelNativeRequest(params) {
 }
 function disposeNativeTransport() {
   nativeTransportDisposed = true;
+  discoveryController?.abort();
   for (const request of nativeRequests.values()) retireNativeRequest(request, true);
 }
 
@@ -1829,6 +1830,7 @@ function validateEffectiveAuthority(authority, canonicalContract) {
 }
 
 let discoveryInFlight;
+let discoveryController;
 let stickyLiveToolNames = null;
 let lastValidContract = null;
 let lastValidAuthority = null;
@@ -1846,6 +1848,7 @@ async function loadCapabilityContract(nativeRequest) {
   if (!nativeRequest && discoveryInFlight) return discoveryInFlight;
   const current = (async () => {
     const controller = nativeRequest ? nativeRequest.controller : new AbortController();
+    if (!nativeRequest) discoveryController = controller;
     const timeout = nativeRequest ? undefined : setTimeout(() => controller.abort(), CAPABILITY_DISCOVERY_TIMEOUT_MS);
     try {
       if (!KEY || !WORKSPACE_ID) return { state: "invalid" };
@@ -1872,6 +1875,7 @@ async function loadCapabilityContract(nativeRequest) {
       return error?.invalidResponse || (status >= 400 && status < 500) ? { state: "invalid" } : { state: "unavailable" };
     } finally {
       if (timeout !== undefined) clearTimeout(timeout);
+      if (!nativeRequest && discoveryController === controller) discoveryController = undefined;
     }
   })();
   // Native callers own discovery cancellation individually; cancelling one must
@@ -2144,5 +2148,6 @@ rl.on("line", async (line) => {
 rl.once("close", () => {
   disposeNativeTransport();
   if (recoveryTimer) clearTimeout(recoveryTimer);
+  // Let Node drain naturally on EOF instead of forcing process.exit(0) while Windows libuv closes handles (async.c:76).
+  process.stdin.destroy();
 });
-rl.on("close", () => process.exit(0));
