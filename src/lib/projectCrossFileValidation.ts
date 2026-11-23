@@ -340,106 +340,582 @@ function boundedLuaParseDetail(error: unknown): string {
   return `${prefix}${message.slice(0, 160 - prefix.length)}`;
 }
 
+interface LuaBindingRef {
+  node: LuaAstNode;
+  parent?: LuaAstNode;
+  grandParent?: LuaAstNode;
+  fnScope?: LuaAstNode;
+}
+
+interface LuaLocalBinding {
+  id: number;
+  name: string;
+  kind: 'local' | 'function' | 'param' | 'for';
+  init?: LuaAstNode;
+  writes: number;
+  declRange?: [number, number];
+  scopeNode: LuaAstNode;
+  refs: LuaBindingRef[];
+  stringValue?: LuaStringValue;
+}
+
+interface LuaRegistrationScopeIndex {
+  bindings: LuaLocalBinding[];
+  declToBinding: Map<LuaAstNode, LuaLocalBinding>;
+  identToBinding: Map<LuaAstNode, LuaLocalBinding>;
+  functions: Map<LuaAstNode, LuaLocalBinding | undefined>;
+  forLoops: { node: LuaAstNode; fnScope?: LuaAstNode }[];
+  nodeFnScope: Map<LuaAstNode, LuaAstNode | undefined>;
+  jumpFnScopes: Set<LuaAstNode | undefined>;
+  reboundGlobals: Set<string>;
+  opaqueGlobals: boolean;
+}
+
+const LUA_REG_AST_SKIP_KEYS = new Set(['loc', 'range', 'comments', 'tokens', 'globals']);
+
+function collectLuaRegistrationScopes(root: LuaAstNode, initialOpaqueGlobals: boolean): LuaRegistrationScopeIndex {
+  const scopeStack: Map<string, LuaLocalBinding>[] = [new Map()];
+  const bindings: LuaLocalBinding[] = [];
+  const declToBinding = new Map<LuaAstNode, LuaLocalBinding>();
+  const identToBinding = new Map<LuaAstNode, LuaLocalBinding>();
+  const functions = new Map<LuaAstNode, LuaLocalBinding | undefined>();
+  const forLoops: { node: LuaAstNode; fnScope?: LuaAstNode }[] = [];
+  const nodeFnScope = new Map<LuaAstNode, LuaAstNode | undefined>();
+  const jumpFnScopes = new Set<LuaAstNode | undefined>();
+  const reboundGlobals = new Set<string>();
+  let opaqueGlobals = initialOpaqueGlobals;
+
+  const lookup = (name: string): LuaLocalBinding | undefined => {
+    for (let i = scopeStack.length - 1; i >= 0; i -= 1) {
+      const hit = scopeStack[i].get(name);
+      if (hit) return hit;
+    }
+    return undefined;
+  };
+
+  const bind = (
+    declNode: LuaAstNode | undefined,
+    kind: LuaLocalBinding['kind'],
+    scopeNode: LuaAstNode,
+    init?: LuaAstNode,
+    rangeNode?: LuaAstNode,
+  ): LuaLocalBinding | undefined => {
+    const name = declNode ? luaIdentifier(declNode) : null;
+    if (!declNode || !name) return undefined;
+    const range = Array.isArray(rangeNode?.range) && rangeNode.range.length >= 2
+      ? [rangeNode.range[0], rangeNode.range[1]] as [number, number]
+      : undefined;
+    const binding: LuaLocalBinding = { id: bindings.length, name, kind, init, writes: 1, declRange: range, scopeNode, refs: [] };
+    bindings.push(binding);
+    scopeStack[scopeStack.length - 1].set(name, binding);
+    declToBinding.set(declNode, binding);
+    identToBinding.set(declNode, binding);
+    return binding;
+  };
+
+  const recordGlobalEnvWrite = (target: LuaAstNode | undefined) => {
+    if (!target) return;
+    if (target.type === 'Identifier' && !target.isLocal && target.name) {
+      reboundGlobals.add(target.name);
+      if (target.name === '_ENV') opaqueGlobals = true;
+      return;
+    }
+    if ((target.type === 'MemberExpression' || target.type === 'IndexExpression') && isLuaGlobalEnvironment(target.base)) {
+      const member = luaMemberName(target);
+      if (member !== undefined) reboundGlobals.add(member);
+      else opaqueGlobals = true;
+    }
+  };
+
+  const visitChildren = (node: LuaAstNode, scopeBlock: LuaAstNode, fnScope: LuaAstNode | undefined, parent: LuaAstNode | undefined, skip: ReadonlySet<string>) => {
+    for (const [key, value] of Object.entries(node)) {
+      if (LUA_REG_AST_SKIP_KEYS.has(key) || skip.has(key)) continue;
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          if (item && typeof item === 'object') visit(item as LuaAstNode, scopeBlock, fnScope, node, parent);
+        }
+      } else if (value && typeof value === 'object') {
+        visit(value as LuaAstNode, scopeBlock, fnScope, node, parent);
+      }
+    }
+  };
+
+  const visitStatements = (stmts: LuaAstNode[] | undefined, scopeBlock: LuaAstNode, fnScope: LuaAstNode | undefined, parent: LuaAstNode) => {
+    if (!stmts) return;
+    for (const stmt of stmts) visit(stmt, scopeBlock, fnScope, parent, undefined);
+  };
+
+  const visit = (
+    node: LuaAstNode | undefined,
+    scopeBlock: LuaAstNode,
+    fnScope: LuaAstNode | undefined,
+    parent?: LuaAstNode,
+    grandParent?: LuaAstNode,
+  ): void => {
+    if (!node || typeof node !== 'object') return;
+    nodeFnScope.set(node, fnScope);
+    switch (node.type) {
+      case 'Chunk':
+        visitStatements(node.body, node, fnScope, node);
+        return;
+      case 'DoStatement':
+        scopeStack.push(new Map());
+        visitStatements(node.body, node, fnScope, node);
+        scopeStack.pop();
+        return;
+      case 'WhileStatement':
+        visit(node.condition as LuaAstNode | undefined, scopeBlock, fnScope, node, parent);
+        scopeStack.push(new Map());
+        visitStatements(node.body, node, fnScope, node);
+        scopeStack.pop();
+        return;
+      case 'RepeatStatement':
+        scopeStack.push(new Map());
+        visitStatements(node.body, node, fnScope, node);
+        visit(node.condition as LuaAstNode | undefined, node, fnScope, node, parent);
+        scopeStack.pop();
+        return;
+      case 'IfStatement':
+        for (const clause of node.clauses ?? []) {
+          if (clause.condition) visit(clause.condition as LuaAstNode, scopeBlock, fnScope, clause, node);
+          scopeStack.push(new Map());
+          visitStatements(clause.body, clause, fnScope, clause);
+          scopeStack.pop();
+        }
+        return;
+      case 'ForNumericStatement':
+        visit(node.start as LuaAstNode | undefined, scopeBlock, fnScope, node, parent);
+        visit(node.end as LuaAstNode | undefined, scopeBlock, fnScope, node, parent);
+        visit(node.step as LuaAstNode | undefined, scopeBlock, fnScope, node, parent);
+        scopeStack.push(new Map());
+        bind(node.variable, 'for', node);
+        visitStatements(node.body, node, fnScope, node);
+        scopeStack.pop();
+        return;
+      case 'ForGenericStatement':
+        forLoops.push({ node, fnScope });
+        for (const iter of node.iterators ?? []) visit(iter, scopeBlock, fnScope, node, parent);
+        scopeStack.push(new Map());
+        for (const variable of node.variables ?? []) bind(variable, 'for', node);
+        visitStatements(node.body, node, fnScope, node);
+        scopeStack.pop();
+        return;
+      case 'LocalStatement':
+        for (const initExpr of node.init ?? []) visit(initExpr, scopeBlock, fnScope, node, parent);
+        (node.variables ?? []).forEach((variable, index) => {
+          bind(variable, 'local', scopeBlock, node.init?.[index], node);
+        });
+        return;
+      case 'AssignmentStatement':
+        for (const initExpr of node.init ?? []) visit(initExpr, scopeBlock, fnScope, node, parent);
+        for (const variable of node.variables ?? []) {
+          if (variable.type === 'Identifier') {
+            if (variable.isLocal) {
+              const binding = variable.name ? lookup(variable.name) : undefined;
+              if (binding) {
+                binding.writes += 1;
+                identToBinding.set(variable, binding);
+                binding.refs.push({ node: variable, parent: node, grandParent: parent, fnScope });
+              }
+            } else {
+              recordGlobalEnvWrite(variable);
+            }
+          } else {
+            recordGlobalEnvWrite(variable);
+            visit(variable, scopeBlock, fnScope, node, parent);
+          }
+        }
+        return;
+      case 'FunctionDeclaration': {
+        let fnBinding: LuaLocalBinding | undefined;
+        if (node.isLocal && node.identifier?.type === 'Identifier') {
+          fnBinding = bind(node.identifier, 'function', scopeBlock, node, node);
+        } else if (node.identifier) {
+          recordGlobalEnvWrite(node.identifier);
+          if (node.identifier.type !== 'Identifier') visit(node.identifier, scopeBlock, fnScope, node, parent);
+        }
+        functions.set(node, fnBinding);
+        scopeStack.push(new Map());
+        for (const param of node.parameters ?? []) bind(param, 'param', node);
+        visitStatements(node.body, node, node, node);
+        scopeStack.pop();
+        return;
+      }
+      case 'MemberExpression':
+        visit(node.base, scopeBlock, fnScope, node, parent);
+        return;
+      case 'IndexExpression':
+        visit(node.base, scopeBlock, fnScope, node, parent);
+        visit(node.index, scopeBlock, fnScope, node, parent);
+        return;
+      case 'TableKeyString':
+        visit(node.value as LuaAstNode | undefined, scopeBlock, fnScope, node, parent);
+        return;
+      case 'TableKey':
+        visit(node.key, scopeBlock, fnScope, node, parent);
+        visit(node.value as LuaAstNode | undefined, scopeBlock, fnScope, node, parent);
+        return;
+      case 'TableValue':
+        visit(node.value as LuaAstNode | undefined, scopeBlock, fnScope, node, parent);
+        return;
+      case 'CallExpression':
+        if (node.base?.isLocal === false) {
+          const callee = luaIdentifier(node.base);
+          if (callee === 'setfenv') opaqueGlobals = true;
+          const rawArgs = callee === 'pcall' && node.arguments?.[0]?.isLocal === false && luaIdentifier(node.arguments[0]) === 'rawset'
+            ? node.arguments.slice(1) : callee === 'rawset' ? node.arguments : undefined;
+          if (rawArgs?.[0] && isLuaGlobalEnvironment(rawArgs[0])) {
+            const keyArg = rawArgs[1];
+            if (keyArg?.type === 'StringLiteral' && typeof keyArg.value === 'string') reboundGlobals.add(keyArg.value);
+            else opaqueGlobals = true;
+          }
+        }
+        visit(node.base, scopeBlock, fnScope, node, parent);
+        for (const arg of node.arguments ?? []) visit(arg, scopeBlock, fnScope, node, parent);
+        return;
+      case 'BreakStatement':
+      case 'ReturnStatement':
+      case 'GotoStatement':
+        jumpFnScopes.add(fnScope);
+        visitChildren(node, scopeBlock, fnScope, parent, new Set());
+        return;
+      case 'Identifier':
+        if (node.isLocal && node.name) {
+          const binding = lookup(node.name);
+          if (binding) {
+            identToBinding.set(node, binding);
+            binding.refs.push({ node, parent, grandParent, fnScope });
+          }
+        }
+        return;
+      default:
+        visitChildren(node, scopeBlock, fnScope, parent, new Set());
+    }
+  };
+
+  visit(root, root, undefined);
+  return { bindings, declToBinding, identToBinding, functions, forLoops, nodeFnScope, jumpFnScopes, reboundGlobals, opaqueGlobals };
+}
+
+function resolveLuaRegistrationStrings(
+  node: LuaAstNode | undefined,
+  identToBinding: ReadonlyMap<LuaAstNode, LuaLocalBinding>,
+  substituted: Uint8Array,
+  loopValues?: ReadonlyMap<LuaLocalBinding, LuaStringValue[]>,
+): LuaStringValue[] | null {
+  if (!node) return null;
+  if (node.type === 'StringLiteral' && typeof node.value === 'string') {
+    return [{ value: node.value, prefix: false, tainted: luaStringLiteralTainted(node, substituted) }];
+  }
+  if (node.type === 'Identifier') {
+    if (!node.isLocal) return null;
+    const binding = identToBinding.get(node);
+    if (!binding) return null;
+    const expanded = loopValues?.get(binding);
+    if (expanded) return expanded;
+    return binding.stringValue ? [binding.stringValue] : null;
+  }
+  if (node.type === 'BinaryExpression' && node.operator === '..') {
+    const left = resolveLuaRegistrationStrings(node.left, identToBinding, substituted, loopValues);
+    if (!left) return null;
+    const right = node.right && left.some(item => !item.prefix)
+      ? resolveLuaRegistrationStrings(node.right, identToBinding, substituted, loopValues)
+      : null;
+    if (!right) {
+      return left.map(item => ({ value: item.value, prefix: true, tainted: item.tainted }));
+    }
+    const out: LuaStringValue[] = [];
+    for (const l of left) {
+      if (l.prefix) {
+        out.push(l);
+        continue;
+      }
+      for (const r of right) {
+        if (out.length >= 256) return null;
+        out.push({ value: l.value + r.value, prefix: r.prefix, tainted: l.tainted || r.tainted });
+      }
+    }
+    return out;
+  }
+  return null;
+}
+
+function luaNodeContainsCall(node: LuaAstNode | undefined): boolean {
+  let hasCall = false;
+  walkLuaAst(node, inner => {
+    if (inner.type === 'CallExpression' || inner.type === 'FunctionDeclaration') hasCall = true;
+  });
+  return hasCall;
+}
+
+function isPlainLocalBookkeepingTable(
+  binding: LuaLocalBinding,
+  reboundGlobals: ReadonlySet<string>,
+  opaqueGlobals: boolean,
+): boolean {
+  if (binding.kind !== 'local' || binding.writes !== 1 || binding.init?.type !== 'TableConstructorExpression') return false;
+  return binding.refs.every(ref => {
+    const { node, parent, grandParent } = ref;
+    if (parent?.type === 'UnaryExpression' && parent.operator === '#') return true;
+    if ((parent?.type === 'IndexExpression' || parent?.type === 'MemberExpression') && parent.base === node && parent.indexer !== ':'
+      && !(grandParent?.type === 'CallExpression' && grandParent.base === parent)) {
+      return true;
+    }
+    if (parent?.type === 'CallExpression' && parent.arguments?.[0] === node
+      && !opaqueGlobals && !reboundGlobals.has('table')) {
+      const member = parent.base?.type === 'MemberExpression' && parent.base.indexer === '.' && parent.base.base?.isLocal === false
+        && luaIdentifier(parent.base.base) === 'table'
+        ? luaIdentifier(parent.base.identifier) : undefined;
+      if (member === 'concat') return true;
+    }
+    if (parent?.type === 'CallExpression' && parent.arguments?.[0] === node && parent.base?.isLocal === false
+      && !opaqueGlobals && !reboundGlobals.has('ipairs') && luaIdentifier(parent.base) === 'ipairs'
+      && grandParent?.type === 'ForGenericStatement') {
+      return true;
+    }
+    return false;
+  });
+}
+
+function extractPureIpairsEventList(
+  loopNode: LuaAstNode,
+  scopeIndex: LuaRegistrationScopeIndex,
+  substituted: Uint8Array,
+  isUnshadowedGlobal: (node: LuaAstNode | undefined, name: string) => boolean,
+): { elemBinding: LuaLocalBinding; values: LuaStringValue[]; tainted?: boolean } | undefined {
+  const iter = loopNode.iterators?.length === 1 ? loopNode.iterators[0] : undefined;
+  if (!iter || iter.type !== 'CallExpression' || !isUnshadowedGlobal(iter.base, 'ipairs') || iter.arguments?.length !== 1) return undefined;
+  const listArg = iter.arguments[0];
+  if (listArg?.type !== 'Identifier' || !listArg.isLocal) return undefined;
+  const listBinding = scopeIndex.identToBinding.get(listArg);
+  if (!listBinding || listBinding.kind !== 'local' || listBinding.writes !== 1) return undefined;
+  if (listBinding.init?.type !== 'TableConstructorExpression') return undefined;
+  const fields = listBinding.init.fields ?? [];
+  if (fields.length === 0 || fields.length > 256) return undefined;
+  if (!listBinding.declRange || !loopNode.range || listBinding.declRange[1] > loopNode.range[0]) return undefined;
+  if (!luaContains(listBinding.scopeNode, loopNode)) return undefined;
+  const readOnlyEverywhere = listBinding.refs.length > 0 && listBinding.refs.every(ref =>
+    ref.parent?.type === 'CallExpression'
+    && ref.parent.arguments?.length === 1
+    && ref.parent.arguments[0] === ref.node
+    && isUnshadowedGlobal(ref.parent.base, 'ipairs')
+    && ref.grandParent?.type === 'ForGenericStatement'
+    && ref.grandParent.iterators?.[0] === ref.parent);
+  if (!readOnlyEverywhere) return undefined;
+
+  const loopVars = loopNode.variables ?? [];
+  const elemVar = loopVars.length >= 2 ? loopVars[1] : undefined;
+  const elemBinding = elemVar ? scopeIndex.declToBinding.get(elemVar) : undefined;
+  if (!elemBinding || elemBinding.name === '_' || elemBinding.writes !== 1) return undefined;
+
+  const values: LuaStringValue[] = [];
+  for (const field of fields) {
+    if (field.type !== 'TableValue') return undefined;
+    const resolved = resolveLuaRegistrationStrings(field.value as LuaAstNode | undefined, scopeIndex.identToBinding, substituted);
+    if (!resolved || resolved.length !== 1) return undefined;
+    const [item] = resolved;
+    if (item.tainted) return { elemBinding, values: [], tainted: true };
+    if (!item.value || item.prefix) return undefined;
+    values.push(item);
+  }
+  return { elemBinding, values };
+}
+
 function parseLuaRegisteredEvents(content: string, file: string): LuaRegistrationParseResult {
   const source = buildLuaAnalysisSource(content || '');
+  let envRebound = false;
   let ast: unknown;
   try {
-    ast = parse(source.content, { comments: false, locations: true, ranges: true, scope: true, encodingMode: 'pseudo-latin1' });
+    ast = parse(source.content, {
+      comments: false, locations: true, ranges: true, scope: true, encodingMode: 'pseudo-latin1',
+      onLocalDeclaration(name: string) { if (name === '_ENV') envRebound = true; },
+    });
   } catch (error) {
     return { events: [], available: false, detail: boundedLuaParseDetail(error) };
   }
 
-  const assignments = new Map<string, { count: number; init: LuaAstNode; local: boolean }>();
-  const parameters = new Set<string>();
-  const functions = new Map<string, LuaAstNode>();
-  walkLuaAst(ast, node => {
-    if (node.type === 'FunctionDeclaration') {
-      const name = luaIdentifier(node.identifier);
-      if (name) {
-        functions.set(name, node);
-        assignments.set(name, { count: (assignments.get(name)?.count || 0) + 1, init: node, local: !!node.isLocal });
-      }
-      for (const parameter of node.parameters || []) {
-        const name = luaIdentifier(parameter); if (name) parameters.add(name);
-      }
-    }
-    if (node.type === 'ForGenericStatement' || node.type === 'ForNumericStatement') {
-      for (const variable of node.variables || [node.variable]) {
-        const name = luaIdentifier(variable); if (name) parameters.add(name);
-      }
-    }
-    if (node.type !== 'LocalStatement' && node.type !== 'AssignmentStatement') return;
-    (node.variables || []).forEach((variable, index) => {
-      const name = luaIdentifier(variable);
-      if (name) assignments.set(name, { count: (assignments.get(name)?.count || 0) + 1,
-        init: (node.init || [])[index], local: node.type === 'LocalStatement' });
-    });
-  });
-  const strings = new Map<string, LuaStringValue>();
-  const resolve = (expression: LuaAstNode) => {
-    let foreign = false;
-    walkLuaAst(expression, node => { if (node.type === 'Identifier' && strings.has(node.name) && !node.isLocal) foreign = true; });
-    return foreign ? null : luaStringPrefix(expression, strings, source.substituted);
-  };
-  const immutable = (name: string) => assignments.get(name)?.count === 1 && assignments.get(name)?.local && !parameters.has(name);
-  for (const [name, assignment] of assignments) {
-    if (!immutable(name)) continue;
-    const value = resolve(assignment.init); if (value) strings.set(name, value);
+  const scopeIndex = collectLuaRegistrationScopes(ast as LuaAstNode, envRebound);
+  const { bindings, identToBinding, functions, forLoops, nodeFnScope, jumpFnScopes, reboundGlobals, opaqueGlobals } = scopeIndex;
+  const isImmutable = (binding: LuaLocalBinding | undefined): binding is LuaLocalBinding =>
+    !!binding && (binding.kind === 'local' || binding.kind === 'function') && binding.writes === 1;
+  const isUnshadowedGlobal = (node: LuaAstNode | undefined, expected: string): boolean =>
+    luaIdentifier(node) === expected && node?.isLocal === false && !opaqueGlobals && !reboundGlobals.has(expected);
+
+  for (const binding of bindings) {
+    if (binding.kind !== 'local' || binding.writes !== 1 || !binding.init) continue;
+    const resolved = resolveLuaRegistrationStrings(binding.init, identToBinding, source.substituted);
+    if (resolved?.length === 1) binding.stringValue = resolved[0];
   }
-  const registrars = new Set<string>();
-  const possibleRegistrars = new Set<string>(['RegisterEvent']);
+
+  const registrarBindings = new Set<LuaLocalBinding>();
+  const possibleRegistrarBindings = new Set<LuaLocalBinding>();
+  const recordPossibleAliases = () => {
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const binding of bindings) {
+        if (possibleRegistrarBindings.has(binding)) continue;
+        const isAliasExpr = (expr: LuaAstNode | undefined): boolean => {
+          if (expr?.type !== 'Identifier') return false;
+          if (!expr.isLocal && expr.name === 'RegisterEvent') return true;
+          const target = expr.isLocal ? identToBinding.get(expr) : undefined;
+          return !!target && possibleRegistrarBindings.has(target);
+        };
+        let hit = isAliasExpr(binding.init);
+        if (!hit) {
+          for (const ref of binding.refs) {
+            if (ref.parent?.type === 'AssignmentStatement') {
+              const assignIndex = ref.parent.variables?.indexOf(ref.node) ?? -1;
+              if (assignIndex >= 0 && isAliasExpr(ref.parent.init?.[assignIndex])) { hit = true; break; }
+            }
+          }
+        }
+        if (hit) {
+          possibleRegistrarBindings.add(binding);
+          changed = true;
+        }
+      }
+    }
+  };
   // Retain possible aliases even after reassignment so they produce a gap, not invented certainty.
-  walkLuaAst(ast, node => {
-    if (node.type !== 'LocalStatement' && node.type !== 'AssignmentStatement') return;
-    (node.variables || []).forEach((variable, i) => {
-      const name = luaIdentifier(variable), sourceName = luaIdentifier(node.init?.[i]);
-      if (name && sourceName && possibleRegistrars.has(sourceName)) possibleRegistrars.add(name);
+  recordPossibleAliases();
+  for (const binding of bindings) {
+    if (binding.kind !== 'function' || !binding.init?.parameters?.length) continue;
+    const initNode = binding.init;
+    const paramNames = new Set((initNode.parameters || []).map(luaIdentifier).filter(Boolean));
+    let forwardsParam = false;
+    walkLuaAst(initNode.body, inner => {
+      if (inner.type !== 'CallExpression' || nodeFnScope.get(inner) !== initNode) return;
+      const base = inner.base;
+      const isGlobalReg = base?.type === 'Identifier' && !base.isLocal && base.name === 'RegisterEvent';
+      const baseBinding = base?.type === 'Identifier' && base.isLocal ? identToBinding.get(base) : undefined;
+      if (!isGlobalReg && (!baseBinding || !possibleRegistrarBindings.has(baseBinding))) return;
+      if ((inner.arguments || []).some(arg => {
+        const argName = luaIdentifier(arg);
+        const argBinding = arg?.type === 'Identifier' && arg.isLocal ? identToBinding.get(arg) : undefined;
+        return !!argName && paramNames.has(argName) && argBinding?.scopeNode === initNode;
+      })) {
+        forwardsParam = true;
+      }
     });
-  });
-  const engineRegistrar = (node: LuaAstNode): boolean => {
-    const name = luaIdentifier(node);
-    if (name === 'RegisterEvent') return !node.isLocal && !assignments.has(name) && !parameters.has(name);
-    return !!name && node.isLocal && registrars.has(name);
-  };
-  for (const [name, assignment] of assignments) {
-    if (immutable(name) && engineRegistrar(assignment.init)) registrars.add(name);
+    if (forwardsParam) possibleRegistrarBindings.add(binding);
   }
-  // Support only a single unconditional forwarding call. More complex wrappers remain unverified.
-  const wrappers = new Map<string, number>();
+  recordPossibleAliases();
+
+  const engineRegistrar = (node: LuaAstNode | undefined): boolean => {
+    if (!node) return false;
+    if (isUnshadowedGlobal(node, 'RegisterEvent')) return true;
+    if (!node.isLocal) return false;
+    const binding = identToBinding.get(node);
+    return !!binding && registrarBindings.has(binding);
+  };
+  for (const binding of bindings) {
+    if (isImmutable(binding) && engineRegistrar(binding.init)) {
+      registrarBindings.add(binding);
+      possibleRegistrarBindings.add(binding);
+    }
+  }
+
+  // Support single unconditional forwarding calls plus optional plain local-table log appends.
+  const wrappers = new Map<LuaLocalBinding, number>();
   const forwardingCalls = new Set<LuaAstNode>();
-  for (const [wrapperName, node] of functions) {
-    if (!immutable(wrapperName) || node.body?.length !== 1) continue;
-    const call = node.body[0]?.type === 'CallStatement' ? node.body[0].expression : null;
-    if (!call || !engineRegistrar(call.base)) continue;
-    const params = (node.parameters || []).map(luaIdentifier);
-    if (new Set(params).size !== params.length) continue;
-    const index = params.indexOf(luaIdentifier(call.arguments?.[0]));
-    if (index >= 0) { wrappers.set(wrapperName, index); forwardingCalls.add(call); }
+  for (const [fnDecl, fnBinding] of functions) {
+    if (!isImmutable(fnBinding) || !fnDecl.body?.length) continue;
+    const params = (fnDecl.parameters || []).map(luaIdentifier);
+    if (!params.length || new Set(params).size !== params.length) continue;
+
+    let forwardCall: LuaAstNode | undefined;
+    let forwardArgIndex = -1;
+    let validBody = true;
+    for (const stmt of fnDecl.body) {
+      if (stmt.type === 'CallStatement') {
+        if (forwardCall) { validBody = false; break; }
+        const call = stmt.expression;
+        if (!call || !engineRegistrar(call.base)) { validBody = false; break; }
+        const argNode = call.arguments?.[0];
+        const argBinding = argNode?.type === 'Identifier' && argNode.isLocal ? identToBinding.get(argNode) : undefined;
+        const paramIndex = argNode ? params.indexOf(luaIdentifier(argNode)) : -1;
+        if (paramIndex < 0 || argBinding?.scopeNode !== fnDecl || argBinding.writes !== 1) { validBody = false; break; }
+        forwardCall = call;
+        forwardArgIndex = paramIndex;
+        continue;
+      }
+      if (stmt.type === 'AssignmentStatement' && stmt.variables?.length === 1 && stmt.init?.length === 1) {
+        const lhs = stmt.variables[0];
+        const rhs = stmt.init[0];
+        const tableIdent = lhs.type === 'IndexExpression' || lhs.type === 'MemberExpression' ? lhs.base : undefined;
+        const tableBinding = tableIdent?.type === 'Identifier' && tableIdent.isLocal ? identToBinding.get(tableIdent) : undefined;
+        if (!tableBinding || !isPlainLocalBookkeepingTable(tableBinding, reboundGlobals, opaqueGlobals)
+          || (lhs.type === 'IndexExpression' && luaNodeContainsCall(lhs.index))
+          || luaNodeContainsCall(rhs)) {
+          validBody = false;
+          break;
+        }
+        continue;
+      }
+      validBody = false;
+      break;
+    }
+    if (validBody && forwardCall && forwardArgIndex >= 0) {
+      wrappers.set(fnBinding, forwardArgIndex);
+      possibleRegistrarBindings.add(fnBinding);
+      forwardingCalls.add(forwardCall);
+    }
+  }
+
+  let taintedEventArgument = false;
+  let unverified = false;
+  const activeLoopCalls = new Map<LuaAstNode, Map<LuaLocalBinding, LuaStringValue[]>>();
+  for (const { node: loopNode, fnScope: loopFnScope } of forLoops) {
+    if (jumpFnScopes.has(loopFnScope)) continue;
+    const extracted = extractPureIpairsEventList(loopNode, scopeIndex, source.substituted, isUnshadowedGlobal);
+    if (!extracted) continue;
+    if (extracted.tainted) {
+      taintedEventArgument = true;
+      continue;
+    }
+    for (const stmt of loopNode.body ?? []) {
+      if (stmt.type !== 'CallStatement' || !stmt.expression) continue;
+      if (nodeFnScope.get(stmt.expression) !== loopFnScope) continue;
+      let existing = activeLoopCalls.get(stmt.expression);
+      if (!existing) activeLoopCalls.set(stmt.expression, existing = new Map());
+      existing.set(extracted.elemBinding, extracted.values);
+    }
   }
 
   const out: ProjectEventRef[] = [];
   const seen = new Set<string>();
-  let taintedEventArgument = false;
-  let unverified = false;
-  walkLuaAst(ast, node => {
-    if (node.type !== 'CallExpression' || forwardingCalls.has(node)) return;
-    const callee = luaIdentifier(node.base);
-    if (!callee) return;
-    // A locally defined function named RegisterEvent is not the engine API.
-    if (callee === 'RegisterEvent' && node.base.isLocal) return;
-    const argIndex = engineRegistrar(node.base) ? 0 : node.base.isLocal ? wrappers.get(callee) : undefined;
-    if (argIndex === undefined) { if (possibleRegistrars.has(callee)) unverified = true; return; }
-    const value = resolve((node.arguments || [])[argIndex]);
-    if (value?.tainted) {
+  const recordEvent = (value: LuaStringValue) => {
+    if (value.tainted) {
       taintedEventArgument = true;
       return;
     }
-    if (!value?.value) { unverified = true; return; }
+    if (!value.value) { unverified = true; return; }
     if (value.prefix) unverified = true;
     const key = `${value.value}\0${value.prefix}`;
     if (seen.has(key)) return;
     seen.add(key);
     out.push({ event: value.value, file, ...(value.prefix ? { prefix: true } : {}) });
+  };
+
+  walkLuaAst(ast, node => {
+    if (node.type !== 'CallExpression' || forwardingCalls.has(node)) return;
+    const callee = luaIdentifier(node.base);
+    if (!callee) return;
+    const binding = node.base?.isLocal ? identToBinding.get(node.base) : undefined;
+    const argIndex = engineRegistrar(node.base) ? 0 : binding ? wrappers.get(binding) : undefined;
+    if (argIndex === undefined) {
+      // A locally defined non-wrapper function named RegisterEvent is not the engine API.
+      if (callee === 'RegisterEvent' && node.base?.isLocal) return;
+      if ((binding && possibleRegistrarBindings.has(binding)) || (!node.base?.isLocal && callee === 'RegisterEvent')) {
+        unverified = true;
+      }
+      return;
+    }
+    const loopValues = activeLoopCalls.get(node);
+    const resolved = resolveLuaRegistrationStrings((node.arguments || [])[argIndex], identToBinding, source.substituted, loopValues);
+    if (!resolved || resolved.length === 0) { unverified = true; return; }
+    for (const value of resolved) recordEvent(value);
   });
   return taintedEventArgument
     ? {
@@ -449,7 +925,7 @@ function parseLuaRegisteredEvents(content: string, file: string): LuaRegistratio
       detail: 'Lua registration event argument contains non-Latin-1 source text; registration analysis unavailable.',
     }
     : unverified ? { events: out, available: false, gap: true,
-      detail: 'MD-to-Lua registration wiring is unverified: dynamic arguments, prefix-only matches, reassigned aliases or ambiguous callees cannot prove runtime registrations. Only immutable aliases and simple unconditional forwarding wrappers are supported.' }
+      detail: 'MD-to-Lua registration wiring is unverified: dynamic arguments, prefix-only matches, reassigned aliases or ambiguous callees cannot prove runtime registrations. Only immutable aliases, unescaped literal ipairs lists, and simple unconditional forwarding wrappers are supported.' }
     : { events: out, available: true };
 }
 

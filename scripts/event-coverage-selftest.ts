@@ -679,4 +679,132 @@ check('suppression-cannot-hide-coverage',()=>{
   const result=runProjectValidation(rules);assert.ok(result.evidence!.coverage.gaps.some(g=>g.check==='lua_md.emit_verification_gap'));assert.ok(flattenProjectValidation(result).some(f=>f.code==='lua_md.emit_verification_gap'));
 });
 check('existing-cross-file-regressions',()=>{const result=runProjectCrossFileSelftest();assert.equal(result.allPassed,true,JSON.stringify(result.checks.filter(c=>!c.pass)));});
+
+function raiseProject(lua: string, raisedEvents: string[]) {
+  const input = project(lua);
+  const cues = raisedEvents.map((ev, index) => `<cue name="Raise${index}"><actions><raise_lua_event name="'${ev}'"/></actions></cue>`).join('');
+  input.files.push({ path: 'md/raises.xml', kind: 'md', content: `<mdscript name="Raises"><cues>${cues}</cues></mdscript>` });
+  return validateProjectCrossFile(input);
+}
+
+check('registration-ipairs-literal-list', () => {
+  const lua = `local EVENTS = { "ForgeLab.a", "ForgeLab.b" }
+if RegisterEvent then
+  for _, ev in ipairs(EVENTS) do
+    RegisterEvent(ev, function(_, param) local _p = ev; return param end)
+  end
+  RegisterEvent("ForgeLab.c", function() end)
+end`;
+  const r = raiseProject(lua, ['ForgeLab.a', 'ForgeLab.b', 'ForgeLab.c']);
+  assert.equal(r.summary.luaRegistrationUnavailable, 0);
+  assert.equal(r.summary.mdLuaMissingRegisters, 0);
+  assert.deepEqual(r.mdLua.registered.filter(e => e.file === 'ui/lab.lua').map(e => e.event), ['ForgeLab.a', 'ForgeLab.b', 'ForgeLab.c']);
+
+  const missing = raiseProject(lua.replace(', "ForgeLab.b"', ''), ['ForgeLab.a', 'ForgeLab.b', 'ForgeLab.c']);
+  assert.equal(missing.summary.luaRegistrationUnavailable, 0);
+  assert.equal(missing.summary.mdLuaMissingRegisters, 1);
+  assert.equal(missing.mdLua.missingRegisters[0]?.event, 'ForgeLab.b');
+});
+
+check('registration-ipairs-negative-controls', () => {
+  const base = `local EVENTS = { "ForgeLab.a", "ForgeLab.b" }
+for _, ev in ipairs(EVENTS) do
+  RegisterEvent(ev, function() end)
+end`;
+  const unverifiedCases = [
+    base + '\nEVENTS = { "ForgeLab.c" }',
+    base.replace('for _, ev', 'EVENTS[3] = "ForgeLab.c"\nfor _, ev'),
+    base.replace('for _, ev', 'table.insert(EVENTS, dynEv)\nfor _, ev'),
+    base.replace('{ "ForgeLab.a", "ForgeLab.b" }', '{ "ForgeLab.a", nil, "ForgeLab.b" }'),
+    base.replace('{ "ForgeLab.a", "ForgeLab.b" }', '{ k = "ForgeLab.a" }'),
+    base.replace('{ "ForgeLab.a", "ForgeLab.b" }', '{ "ForgeLab.a", GetDyn() }'),
+    'local ipairs = customIpairs\n' + base,
+    base.replace('RegisterEvent(ev', 'if stop then break end\n  RegisterEvent(ev'),
+    base.replace('RegisterEvent(ev, function() end)', 'Queue(function() RegisterEvent(ev, function() end) end)'),
+    base.replace('RegisterEvent(ev', 'ev = GetDyn()\n  RegisterEvent(ev'),
+    base.replace('local EVENTS =', 'EVENTS ='),
+    base.replace('RegisterEvent(ev, function() end)', 'if flag then RegisterEvent(ev, function() end) end'),
+  ];
+  for (const lua of unverifiedCases) {
+    const r = raiseProject(lua, ['ForgeLab.a']);
+    assert.equal(r.summary.luaRegistrationUnavailable, 1, lua);
+    assert.ok(r.findings.some(f => f.code === 'md_lua.registration_verification_gap'), lua);
+    assert.ok(!r.mdLua.registered.some(e => e.event === 'ForgeLab.a'), lua);
+  }
+  const tainted = raiseProject(base.replace('"ForgeLab.b"', '"ForgeLab.b—"'), ['ForgeLab.a']);
+  assert.equal(tainted.summary.luaRegistrationUnavailable, 1);
+  assert.ok(tainted.findings.some(f => f.code === 'md_lua.registration_verification_gap' && /non-Latin-1/.test(f.detail)));
+  assert.ok(!tainted.mdLua.registered.some(e => e.event === 'ForgeLab.a'));
+});
+
+check('registration-scoped-wrapper-avoids-unrelated-parameter-collision', () => {
+  const lua = `local A = {}
+function A.RewardFunds(pic, ent, held, on, known)
+  if not on then return nil end
+  return held
+end
+local function shadow() local on = "unrelated"; return on end
+if RegisterEvent then
+  local function on(ev, f)
+    RegisterEvent(ev, function(_, param)
+      local ok = pcall(f, param)
+      if not ok then log("REWARD " .. ev) end
+    end)
+  end
+  on("ForgeLab.a", function() end)
+  on("ForgeLab.b", A.RewardFunds)
+end`;
+  const r = raiseProject(lua, ['ForgeLab.a', 'ForgeLab.b']);
+  assert.equal(r.summary.luaRegistrationUnavailable, 0);
+  assert.equal(r.summary.mdLuaMissingRegisters, 0);
+  assert.deepEqual(r.mdLua.registered.filter(e => e.file === 'ui/lab.lua').map(e => e.event), ['ForgeLab.a', 'ForgeLab.b']);
+
+  const shadowedParam = raiseProject('local function inner(on) RegisterEvent(on, function() end) end\ninner(dyn)', ['ForgeLab.a']);
+  assert.equal(shadowedParam.summary.luaRegistrationUnavailable, 1);
+  assert.ok(shadowedParam.findings.some(f => f.code === 'md_lua.registration_verification_gap'));
+});
+
+check('registration-captured-shadow-and-bookkeeping-wrapper', () => {
+  const lua = `local function init()
+  local _REG = {}
+  local _RegisterEvent = RegisterEvent
+  local function RegisterEvent(name, handler)
+    _RegisterEvent(name, handler)
+    _REG[#_REG + 1] = name
+  end
+  RegisterEvent("ForgeLab.a", function() end)
+  log(table.concat(_REG, ", "))
+end
+init()
+if RegisterEvent then
+  RegisterEvent("ForgeLab.b", function() end)
+end`;
+  const r = raiseProject(lua, ['ForgeLab.a', 'ForgeLab.b']);
+  assert.equal(r.summary.luaRegistrationUnavailable, 0);
+  assert.equal(r.summary.mdLuaMissingRegisters, 0);
+  assert.deepEqual(r.mdLua.registered.filter(e => e.file === 'ui/lab.lua').map(e => e.event), ['ForgeLab.a', 'ForgeLab.b']);
+
+  const emptyShadow = raiseProject('local function RegisterEvent(a, b) end\nRegisterEvent("ForgeLab.a", function() end)', ['ForgeLab.a']);
+  assert.equal(emptyShadow.summary.luaRegistrationUnavailable, 0);
+  assert.equal(emptyShadow.summary.mdLuaMissingRegisters, 1);
+
+  const negativeWrappers = [
+    lua.replace('_RegisterEvent(name, handler)', 'if cond then _RegisterEvent(name, handler) end'),
+    lua.replace('local _REG = {}', 'local _REG = {}; setmetatable(_REG, {})'),
+    lua.replace('_REG[#_REG + 1] = name', '_REG[#_REG + 1] = name; Helper(name)'),
+    lua.replace('_REG[#_REG + 1] = name', '_REG[nextIdx()] = name'),
+    lua.replace('_REG[#_REG + 1] = name', 'return _REG'),
+    lua + '\nRegisterEvent = customReg',
+    lua + '\n_G.RegisterEvent = customReg',
+    lua + '\nrawset(_G, "RegisterEvent", customReg)',
+    'local _ENV = {}\n' + lua,
+    lua.replace('RegisterEvent("ForgeLab.b"', 'local r2 = RegisterEvent\nr2 = GetDyn()\nr2("ForgeLab.b"'),
+  ];
+  for (const negLua of negativeWrappers) {
+    const neg = raiseProject(negLua, ['ForgeLab.a', 'ForgeLab.b']);
+    assert.equal(neg.summary.luaRegistrationUnavailable, 1, negLua);
+    assert.ok(neg.findings.some(f => f.code === 'md_lua.registration_verification_gap'), negLua);
+  }
+});
+
 console.log(JSON.stringify({pass:true,total:checks.length,checks}));
