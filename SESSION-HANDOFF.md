@@ -38,6 +38,10 @@ AAR. The original release failure was pinned to an earlier preview after the fin
 
 AAR. The first hold was before the admission guard, so its 409 reflected a real refusal. The matched hold after admission confirmed successful receipt recovery. Forge version values are timestamp-based. The verification counts the actual mutation callback and compares persisted resources on subsequent requests. The probe corrected its sanitizer import and passed the exact compiled server entry to the existing implementation fingerprint guard. Both isolated processes and scratch phases retired. No capability-map delta.
 
+## Indexed Lua diagnostic follow-up
+
+The isolated post-0.0.92 source checkpoint makes grouped Lua payload coverage give the same explanation when Lua candidate files are reordered. The exact historical 264-file AiLive 794 source still produced one informational group at line 1340, column 50 for 49 keys, eleven candidate writer files and zero missing-writer errors for player orders. Each key has at least one recognized table-index candidate. The unresolved flow crosses a returned order table and a protected callback on several senders. The installed 0.0.92 evidence precedes this wording fix. The indexed-payload plan records 34 focused checks, the frozen replay, the scoped lint and passed precommit with log hash. Issues #71 and #101 remain open for recipient flow.
+
 ## Operator dependencies
 
 #85 still needs the exact separate deploy2.py revision, runnable command, writer evidence and operator verdict. Claude's known AiLive wrapper uses native preview and apply. Its missing-Lua false success has a separate tested proposal, awaiting integration and the exact, missing and changed readback reruns. The primary Forge handoff is https://app.notion.com/p/4124618ed15b814489ecd88e7d531ebc.

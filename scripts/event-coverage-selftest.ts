@@ -189,6 +189,43 @@ for (const [name, lua, code, severity] of [
 }
 
 const payloadUnavailable = 'md_lua.payload_writer_unverified';
+
+check('payload-writer-explanation-is-independent-of-candidate-file-order', () => {
+  const input = project([
+    'local pack = { n = 1 }',
+    'local i = pack.n',
+    'pack["ri" .. i] = "risk"',
+    'pack["po" .. i] = "priority"',
+  ].join('\n'));
+  input.files.push({ path: 'ui/build_payload.lua', kind: 'lua', content: [
+    'local pack = { n = 1 }',
+    'pack["ri" .. pack.n] = "risk"',
+    'return pack',
+  ].join('\n') });
+  const reader = input.files.find(file => file.path === 'md/forge_regression_lab.xml')!;
+  reader.content = reader.content!.replace('</cues>', `<cue name="PayloadExplanation"><conditions>
+    <event_ui_triggered screen="'ForgeLab'" control="'probe'"/>
+  </conditions><actions>
+    <set_value name="$risk" exact="event.param3.{'$ri' + $si}"/>
+    <set_value name="$priority" exact="event.param3.{'$po' + $si}"/>
+  </actions></cue></cues>`);
+  const diagnose = (files: ExtensionProject['files'], keys = ['po', 'ri']) => {
+    const variant = { ...input, files };
+    const finding = validateProjectCrossFile(variant).findings.find(item => item.code === payloadUnavailable)!;
+    const fact = runProjectValidation(variant).evidence!.findings.find(item => item.code === payloadUnavailable)!.projectCheckFact;
+    assert.deepEqual(finding.payloadWriterScope?.keys, keys);
+    assert.equal(finding.target, undefined);
+    assert.ok(fact);
+    return { detail: finding.detail, fact };
+  };
+  const oneKey = input.files.map(file => file === reader
+    ? { ...file, content: file.content!.replace(/^.*name="\$priority".*$/m, '') } : file);
+  assert.deepEqual(diagnose(oneKey, ['ri']), diagnose([...oneKey].reverse(), ['ri']));
+  const forward = diagnose(input.files);
+  assert.deepEqual(diagnose([...input.files].reverse()), forward);
+  assert.match(forward.detail, /Only local-index assignments were found for 1 of these 2 keys/);
+  assert.match(forward.detail, /Indexed keys \(2\): po, ri/);
+});
 check('payload-writer-target-prefers-an-observed-recipient-across-keys', () => {
   const input = project([
     'local p = { n = 1 }',

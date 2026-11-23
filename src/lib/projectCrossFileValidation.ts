@@ -520,7 +520,7 @@ function validateIndexedPayloadContract(mdFiles: ExtensionProject['files'], luaW
   const findings: ProjectCrossFileFinding[] = [];
   const unavailable = new Map<string, {
     event: [string, string]; reader: PayloadReadSite; writer?: PayloadWriteSite;
-    candidateOnly: boolean; keys: Set<string>; readerPaths: Set<string>; writerPaths: Set<string>;
+    localIndexOnlyCount: number; keys: Set<string>; readerPaths: Set<string>; writerPaths: Set<string>;
   }>();
   for (const key of new Set([...reads.keys(), ...writes.keys()])) {
     const read = reads.get(key) || { global: [], verb: [] };
@@ -547,14 +547,13 @@ function validateIndexedPayloadContract(mdFiles: ExtensionProject['files'], luaW
         const matchedRecipient = candidates.find(candidate => candidate.recipientEvents.includes(identity));
         let group = unavailable.get(identity);
         if (!group) {
-          group = { event: site.event, reader: site, writer: matchedRecipient, candidateOnly: false,
+          group = { event: site.event, reader: site, writer: matchedRecipient, localIndexOnlyCount: 0,
             keys: new Set(), readerPaths: new Set(), writerPaths: new Set() };
           unavailable.set(identity, group);
         } else if (matchedRecipient && !group.writer) {
           group.writer = matchedRecipient;
         }
-        // The display target does not change the candidate evidence for the group.
-        group.candidateOnly ||= possible.candidateOnly;
+        if (candidates.every(candidate => candidate.candidateOnly)) group.localIndexOnlyCount++;
         group.keys.add(key);
         for (const file of paths) group.readerPaths.add(file);
         for (const candidate of candidates) group.writerPaths.add(candidate.file);
@@ -581,10 +580,13 @@ function validateIndexedPayloadContract(mdFiles: ExtensionProject['files'], luaW
       });
     }
   }
-  for (const [identity, { event, reader, writer, candidateOnly, keys, readerPaths, writerPaths }] of unavailable) {
+  for (const [identity, { event, reader, writer, localIndexOnlyCount, keys, readerPaths, writerPaths }] of unavailable) {
     const sortedKeys = [...keys].sort();
     const sample = sortedKeys.slice(0, 8).map(key => key.length > 48 ? `${key.slice(0, 48)}…` : key);
     const remainder = keys.size > sample.length ? ` and ${keys.size - sample.length} more` : '';
+    const indexDetail = localIndexOnlyCount
+      ? ` Only local-index assignments were found for ${keys.size === 1 ? 'this key' : `${localIndexOnlyCount} of these ${keys.size} keys`}. Forge could not verify the index values.`
+      : '';
     findings.push({
       code: 'md_lua.payload_writer_unverified', severity: 'info', event: event.join('.'), sourceRef: `event_ui_triggered:${identity}`,
       file: reader.file, line: reader.line, column: reader.column,
@@ -592,9 +594,7 @@ function validateIndexedPayloadContract(mdFiles: ExtensionProject['files'], luaW
       ...(sortedKeys.length <= 64 && readerPaths.size + writerPaths.size <= 64
         ? { payloadWriterScope: { event, keys: sortedKeys, readerPaths: [...readerPaths].sort(), writerPaths: [...writerPaths].sort() } }
         : {}),
-      detail: candidateOnly
-        ? `Lua includes a local index assignment, but Forge could not verify the index value or indexed key membership for MD screen ${JSON.stringify(event[0])}, control ${JSON.stringify(event[1])}. Table flow may also be unresolved. Indexed keys (${keys.size}): ${sample.join(', ')}${remainder}.`
-        : `Forge could not verify the Lua table received by MD for screen ${JSON.stringify(event[0])}, control ${JSON.stringify(event[1])}. Indexed keys (${keys.size}): ${sample.join(', ')}${remainder}.`,
+      detail: `Forge could not verify indexed Lua writers for MD screen ${JSON.stringify(event[0])}, control ${JSON.stringify(event[1])}. Indexed keys (${keys.size}): ${sample.join(', ')}${remainder}.${indexDetail}`,
     });
   }
   return {
@@ -1799,7 +1799,7 @@ AddUITriggeredEvent("forge_qa", "player_orders", build())`;
     const actual = result.findings.filter(finding => finding.code.startsWith('md_lua.payload_'));
     ok(`indexed_payload_helper_${name}_keeps_coverage_gap`, actual.length === 1
       && actual[0].code === 'md_lua.payload_writer_unverified' && actual[0].severity === 'info'
-      && (name !== 'local_index' || (actual[0].detail.includes('index value') && actual[0].detail.includes('key membership')))
+      && (name !== 'local_index' || (actual[0].detail.includes('Only local-index assignments were found for this key')))
       && actual[0].file === 'md/orders.xml' && actual[0].line === 3 && (actual[0].column ?? 0) > 0
       && actual[0].target === undefined
       && actual[0].sourceRef === 'event_ui_triggered:["forge_qa","player_orders"]'
@@ -1890,7 +1890,7 @@ end`;
     && manyLocalIndexFindings[0].file === 'md/orders.xml' && manyLocalIndexFindings[0].line === 3 && (manyLocalIndexFindings[0].column ?? 0) > 0
     && manyLocalIndexFindings[0].target === undefined
     && manyLocalIndexFindings[0].sourceRef === 'event_ui_triggered:["forge_qa","player_orders"]'
-    && manyLocalIndexFindings[0].detail.includes('index value') && manyLocalIndexFindings[0].detail.includes('key membership')
+    && manyLocalIndexFindings[0].detail.includes('Only local-index assignments were found for 40 of these 40 keys')
     && manyLocalIndexFindings[0].detail.includes('Indexed keys (40)') && manyLocalIndexFindings[0].detail.includes('and 32 more')
     && manyLocalIndexResult.summary.payloadContractErrors === 0
     && manyLocalIndexResult.mdLua.emitCoverage.files.find(file => file.file === 'ui/orders.lua')?.exact === 11
@@ -1911,7 +1911,7 @@ AddUITriggeredEvent("forge_qa", "player_orders", build())`;
     && mixedIndexFindings[0].code === 'md_lua.payload_writer_unverified' && mixedIndexFindings[0].severity === 'info'
     && mixedIndexFindings[0].sourceRef === 'event_ui_triggered:["forge_qa","player_orders"]'
     && mixedIndexFindings[0].target === undefined
-    && mixedIndexFindings[0].detail.includes('index value') && mixedIndexFindings[0].detail.includes('key membership')
+    && mixedIndexFindings[0].detail.includes('Only local-index assignments were found for 1 of these 2 keys')
     && mixedIndexFindings[0].detail.includes('Indexed keys (2)')
     && mixedIndexResult.summary.payloadContractErrors === 0 && mixedIndexResult.mdLua.payload.reads.length === 2
     && mixedIndexResult.mdLua.payload.writes.length === 2
