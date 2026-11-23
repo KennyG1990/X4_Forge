@@ -4577,6 +4577,138 @@ async function main() {
   const replayDeploy = await req('POST', `/api/agent/history/${deployRow?.id}/revert`, SESSION_TOKEN, {});
   ok('deployment_recovery_replay_is_rejected', replayDeploy.status === 409 && replayDeploy.json?.code === 'RECOVERY_ALREADY_USED', `status=${replayDeploy.status} code=${replayDeploy.json?.code}`);
 
+  // Unit 2 (#97): Bound-Apply reuses matching Preview static validation and coalesces
+  // redundant immediate sourceRecheck barriers without bypassing any identity, acceptance,
+  // workspace-model, or disk invalidation gate.
+  const reuseMod = path.join(safeWorkspace, 'preview_reuse_mod');
+  const reuseTarget = path.join(path.dirname(dryTarget), 'preview_reuse_mod');
+  const reuseStaging = path.join(safeWorkspace, '.forge-builds', 'loose', 'preview_reuse_mod');
+  fs.mkdirSync(path.join(reuseMod, 'md'), { recursive: true });
+  fs.mkdirSync(path.join(reuseMod, 't'), { recursive: true });
+  fs.writeFileSync(path.join(reuseMod, 'content.xml'),
+    '<?xml version="1.0" encoding="utf-8"?>\n<content id="preview_reuse_mod" name="Preview Reuse Mod" description="Reuse fixture" author="RouteInt" version="100"/>\n');
+  fs.writeFileSync(path.join(reuseMod, 't', '0001-l044.xml'),
+    '<?xml version="1.0" encoding="utf-8"?>\n<language id="44"><page id="99801" title="Reuse" descr="Reuse" voice="no"><t id="1">Ok</t></page></language>\n');
+  fs.writeFileSync(path.join(reuseMod, 'md', 'preview_reuse_mod.xml'), [
+    '<?xml version="1.0" encoding="utf-8"?>',
+    '<mdscript name="Preview_Reuse_Mod" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">',
+    '  <cues><cue name="Reuse_Start" instantiate="false"><conditions><event_game_loaded/></conditions><actions><set_value name="$ok" exact="true"/></actions></cue></cues>',
+    '</mdscript>',
+  ].join(NL));
+  try {
+    const reuseImport = await req('POST', '/api/agent/mod-folder/import', SESSION_TOKEN, { root: 'workspace', path: 'preview_reuse_mod' });
+    const reuseClientId = 'client_route_reuse_' + process.pid;
+    const reuseCreated = await req('POST', '/api/agent/workspaces', SESSION_TOKEN, {
+      clientId: reuseClientId, workspace: reuseImport.json?.workspace,
+    }, { clientId: reuseClientId });
+    const reuseWorkspaceId = String(reuseCreated.json?.workspaceId || '');
+    const reuseAddress = { workspaceId: reuseWorkspaceId, clientId: reuseClientId };
+    const reuseMint = await req('POST', '/api/agent/keys', SESSION_TOKEN, {
+      label: 'route-int-reuse-deploy', scope: 'deploy', ttl: '1h',
+    }, reuseAddress);
+    const reuseKey = reuseMint.json?.token || reuseMint.json?.key;
+    const reuseReq = (url, body, options) => req('POST', url, reuseKey, body, { ...options, ...reuseAddress });
+
+    const reusePreview1 = await reuseReq('/api/agent/deploy-verify', { root: 'workspace', path: 'preview_reuse_mod', dryRun: true });
+    ok('deploy_preview_validation_cache_populates_on_preview',
+      reusePreview1.status === 200 && reusePreview1.json?.ok === true
+      && reusePreview1.json?.timings?.validationStagesMs?.project >= 0
+      && reusePreview1.json?.timings?.sourceRechecks?.count === 1,
+      JSON.stringify({ status: reusePreview1.status, timings: reusePreview1.json?.timings }));
+
+    const reuseOp1 = 'forge_op_' + crypto.randomBytes(16).toString('hex');
+    const reuseApply1 = await reuseReq('/api/agent/deploy-verify', {
+      root: 'workspace', path: 'preview_reuse_mod', dryRun: false,
+      ...deployIdentity(reusePreview1.json || {}),
+      expectedTargetFingerprint: reusePreview1.json?.targetFingerprint,
+    }, { operationId: reuseOp1 });
+    ok('deploy_preview_validation_reused_on_bound_apply_with_coalesced_barriers',
+      reuseApply1.status === 200 && reuseApply1.json?.ok === true
+      && reuseApply1.json?.timings?.validationStagesMs?.readiness === 0
+      && reuseApply1.json?.timings?.validationStagesMs?.project === 0
+      && reuseApply1.json?.timings?.sourceRechecks?.count === 5
+      && reuseApply1.json?.modId === reusePreview1.json?.modId
+      && reuseApply1.json?.sourceHash === reusePreview1.json?.sourceHash
+      && reuseApply1.json?.artifactHash === reusePreview1.json?.artifactHash
+      && reuseApply1.json?.bindingHash === reusePreview1.json?.bindingHash
+      && JSON.stringify(reuseApply1.json?.validation?.evidence) === JSON.stringify(reusePreview1.json?.validation?.evidence),
+      JSON.stringify({ status: reuseApply1.status, timings: reuseApply1.json?.timings, code: reuseApply1.json?.code }));
+
+    // Negative 1: editing source on disk after preview must invalidate cache & refuse stale identity.
+    const beforeStaleApplyHash = regularTreeHash(reuseTarget);
+    fs.writeFileSync(path.join(reuseMod, 'md', 'preview_reuse_mod.xml'), [
+      '<?xml version="1.0" encoding="utf-8"?>',
+      '<mdscript name="Preview_Reuse_Mod" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">',
+      '  <cues><cue name="Reuse_Start" instantiate="false"><conditions><event_game_loaded/></conditions><actions><set_value name="$ok" exact="2"/></actions></cue></cues>',
+      '</mdscript>',
+    ].join(NL));
+    const staleOp = 'forge_op_' + crypto.randomBytes(16).toString('hex');
+    const staleReuseApply = await reuseReq('/api/agent/deploy-verify', {
+      root: 'workspace', path: 'preview_reuse_mod', dryRun: false,
+      ...deployIdentity(reusePreview1.json || {}),
+      expectedTargetFingerprint: reuseApply1.json?.deployedFingerprint,
+    }, { operationId: staleOp });
+    ok('deploy_preview_reuse_refuses_post_preview_source_edit',
+      staleReuseApply.status === 409 && staleReuseApply.json?.code === 'DEPLOY_IDENTITY_MISMATCH'
+      && staleReuseApply.json?.deployment?.writeAttempted === false
+      && regularTreeHash(reuseTarget) === beforeStaleApplyHash,
+      JSON.stringify({ status: staleReuseApply.status, code: staleReuseApply.json?.code }));
+
+    // Negative 2: workspace model change with identical emitted files must miss cache & run fresh validation.
+    const wsReimport = await req('POST', '/api/agent/mod-folder/import', SESSION_TOKEN, { root: 'workspace', path: 'preview_reuse_mod' });
+    const wsModelA = structuredClone(wsReimport.json?.workspace);
+    wsModelA.compileSettings = { md: false, ui: false, ai: false, library: false, translations: false, patches: false };
+    const wsPreviewA = await reuseReq('/api/agent/deploy-verify', { workspace: wsModelA, dryRun: true });
+    const wsModelB = structuredClone(wsModelA);
+    wsModelB.nodes = [{ id: 'ui_note_only', type: 'cue', x: 500, y: 200, properties: { name: 'Ignored_Model_Node' } }];
+    const wsOpB = 'forge_op_' + crypto.randomBytes(16).toString('hex');
+    const wsApplyB = await reuseReq('/api/agent/deploy-verify', {
+      workspace: wsModelB, dryRun: false,
+      ...deployIdentity(wsPreviewA.json || {}),
+      expectedTargetFingerprint: wsPreviewA.json?.targetFingerprint,
+    }, { operationId: wsOpB });
+    ok('deploy_preview_reuse_invalidates_when_workspace_model_differs',
+      wsApplyB.status === 200 && wsApplyB.json?.ok === true
+      && Number(wsApplyB.json?.timings?.validationStagesMs?.readiness) > 0,
+      JSON.stringify({ status: wsApplyB.status, validationStagesMs: wsApplyB.json?.timings?.validationStagesMs, code: wsApplyB.json?.code }));
+
+    // Negative 3: unaccepted blocking preview caches static evidence safely while enforcing acceptances fresh on Apply.
+    fs.writeFileSync(path.join(reuseMod, 'md', 'preview_reuse_mod.xml'), [
+      '<?xml version="1.0" encoding="utf-8"?>',
+      '<mdscript name="Preview_Reuse_Mod" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">',
+      '  <cues><cue name="Reuse_Start" instantiate="false"><conditions><event_game_loaded/></conditions><actions><set_value name="$ok" exact="true"/><signal_cue cue="this.Missing"/></actions></cue></cues>',
+      '</mdscript>',
+    ].join(NL));
+    const acceptancePreview = await reuseReq('/api/agent/deploy-verify', { root: 'workspace', path: 'preview_reuse_mod', dryRun: true });
+    const acceptReqBody = acceptancePreview.json?.acceptanceRequest?.body;
+    const targetBeforeUnaccepted = regularTreeHash(reuseTarget);
+    const unacceptedApply = acceptReqBody ? await reuseReq('/api/agent/deploy-verify', acceptReqBody, {
+      operationId: 'forge_op_' + crypto.randomBytes(16).toString('hex'),
+    }) : null;
+    const targetAfterUnaccepted = regularTreeHash(reuseTarget);
+    const acceptedBody = acceptReqBody ? {
+      ...acceptReqBody,
+      acceptances: acceptReqBody.acceptances.map(entry => ({ ...entry, reason: 'Route integration controlled acceptance fixture' })),
+    } : null;
+    const acceptedApply = acceptedBody ? await reuseReq('/api/agent/deploy-verify', acceptedBody, {
+      operationId: 'forge_op_' + crypto.randomBytes(16).toString('hex'),
+    }) : null;
+    ok('deploy_preview_reuse_preserves_acceptance_gate_and_applies_on_approval',
+      acceptancePreview.json?.code === 'UNACCEPTED_MOD_FINDINGS'
+      && unacceptedApply?.status === 400 && targetAfterUnaccepted === targetBeforeUnaccepted
+      && acceptedApply?.status === 200 && acceptedApply.json?.ok === true
+      && acceptedApply.json?.timings?.validationStagesMs?.readiness === 0
+      && acceptedApply.json?.timings?.validationStagesMs?.project === 0,
+      JSON.stringify({ previewCode: acceptancePreview.json?.code, unacceptedStatus: unacceptedApply?.status,
+        targetPreservedBeforeAcceptance: targetAfterUnaccepted === targetBeforeUnaccepted,
+        acceptedStatus: acceptedApply?.status, acceptedOk: acceptedApply?.json?.ok,
+        acceptedTimings: acceptedApply?.json?.timings?.validationStagesMs }));
+  } finally {
+    fs.rmSync(reuseMod, { recursive: true, force: true });
+    fs.rmSync(reuseTarget, { recursive: true, force: true });
+    fs.rmSync(reuseStaging, { recursive: true, force: true });
+  }
+
   // --- B93 wave 3: catch what is LEGAL and does NOTHING ------------------------------------
   // #10 the exact shape that killed a subsystem for weeks while structuralErrors stayed 0:
   // a </do_else> closing a <do_elseif>. Well-formedness now runs FIRST, as an error.

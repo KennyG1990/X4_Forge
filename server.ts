@@ -15282,6 +15282,110 @@ function runCompileArtifactSelftest() {
 // Legacy callers use the identical authenticated identity/approval/transaction contract.
 app.post("/api/agent/deploy", coordinatedSourceOperation(deployVerifyHandler));
 
+const MAX_DEPLOY_PREVIEW_VALIDATION_CACHE = 4;
+
+type DeployValidationDepsToken = {
+  macros?: Set<string>;
+  wares?: Set<string>;
+  factions?: Set<string>;
+  sectors?: Set<string>;
+  jobs?: Set<string>;
+  aiScripts?: Set<string>;
+  jobsClasses?: unknown;
+  jobsFactions?: unknown;
+  waresVocab?: ReturnType<typeof getWaresVocabulary>;
+};
+
+function captureDeployValidationDeps(): DeployValidationDepsToken {
+  const refs = (() => { try { return getReferenceSets(); } catch { return undefined; } })();
+  const jobs = getJobsVocabulary();
+  const waresVocab = getWaresVocabulary();
+  return {
+    macros: refs?.macros,
+    wares: refs?.wares,
+    factions: refs?.factions,
+    sectors: refs?.sectors,
+    jobs: refs?.jobs,
+    aiScripts: refs?.aiScripts,
+    jobsClasses: jobs?.classes,
+    jobsFactions: jobs?.factions,
+    waresVocab,
+  };
+}
+
+function sameDeployValidationDeps(a: DeployValidationDepsToken, b: DeployValidationDepsToken): boolean {
+  return a.macros === b.macros
+    && a.wares === b.wares
+    && a.factions === b.factions
+    && a.sectors === b.sectors
+    && a.jobs === b.jobs
+    && a.aiScripts === b.aiScripts
+    && a.jobsClasses === b.jobsClasses
+    && a.jobsFactions === b.jobsFactions
+    && a.waresVocab === b.waresVocab;
+}
+
+const WORKSPACE_FILE_PAYLOAD_KEYS = new Set(['sourceFiles', 'passthroughFiles', 'files', 'sourceStamp']);
+
+function deployWorkspaceDoctorModelHash(
+  ws: any,
+  generatedCustomLuaPath: string,
+  hasGeneratedCustomLua: boolean,
+  hasOmittedGeneratedCustomLua: boolean,
+  skippedPaths: readonly string[],
+): string {
+  const model: Record<string, unknown> = {};
+  if (ws && typeof ws === 'object') {
+    for (const [key, value] of Object.entries(ws)) {
+      if (!WORKSPACE_FILE_PAYLOAD_KEYS.has(key)) model[key] = value;
+    }
+  }
+  return trustHash({
+    model,
+    generatedCustomLuaPath,
+    hasGeneratedCustomLua,
+    hasOmittedGeneratedCustomLua,
+    skippedPaths,
+  });
+}
+
+type DeployPreviewValidationCacheEntry = {
+  modId: string;
+  artifactHash: string;
+  snapshotManifestHash: string;
+  deployFormat: DeployFormat;
+  configSignature: string;
+  wsDoctorHash: string;
+  baseCorpusHash: string;
+  corpusHash: string;
+  deps: DeployValidationDepsToken;
+  canonicalReviewSource: string;
+  targetRoot: string;
+  selectedSourceKey: string;
+  previousBuildStateKey: string;
+  emittedXmlCount: number;
+  compileDiagnosticsCount: number;
+  preflight: ReturnType<typeof runProjectValidation>;
+  canonicalMd?: CanonicalMdConsultation;
+  readinessUnavailable: Array<ReturnType<typeof runModDoctor>[number] | ServerDiagnostic>;
+  preflightDiagnostics: FlatProjectDiagnostic[];
+  preflightContentHash: string;
+  pfWarnings: number;
+  staticEvidence: ReturnType<typeof buildValidationEvidence>;
+  luaValidation: { filesScanned: number; runtimeScope: unknown };
+  versionChangesPerRelease: boolean;
+};
+
+const deployPreviewValidationCache = new Map<string, DeployPreviewValidationCacheEntry>();
+
+function rememberDeployPreviewValidation(key: string, entry: DeployPreviewValidationCacheEntry): void {
+  if (deployPreviewValidationCache.has(key)) deployPreviewValidationCache.delete(key);
+  else if (deployPreviewValidationCache.size >= MAX_DEPLOY_PREVIEW_VALIDATION_CACHE) {
+    const oldest = deployPreviewValidationCache.keys().next().value;
+    if (oldest !== undefined) deployPreviewValidationCache.delete(oldest);
+  }
+  deployPreviewValidationCache.set(key, entry);
+}
 
 function buildDeployProjectValidation(modId: string, snapshot: DeploymentSnapshot) {
   const references = (() => { try { return getReferenceSets(); } catch { return undefined; } })();
@@ -16178,202 +16282,384 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     startStage('validate');
     const readinessStartedAt = performance.now();
 
-    // 1c. Wellformedness over the EMITTED manifest — closes the passthrough hole: a
-    // byte-fidelity import carries its ORIGINAL (possibly truncated/corrupted) files
-    // straight into the deploy payload, so "well-formed by construction" is only true
-    // for generated XML. Found live 2026-07-09: the forked workspace copy of
-    // x4_ai_influence contains truncated files an active-workspace deploy would have
-    // written OVER the working in-game mod. This gate makes that impossible.
-    {
-      const emittedMalformed: Array<{ file: string; errors: unknown[] }> = [];
-      for (const [rel, content] of Object.entries(files)) {
-        if (!/\.xml$/i.test(rel)) continue;
-        const wf = checkXmlWellformed(String(content));
-        if (!wf.ok) emittedMalformed.push({ file: rel, errors: wf.errors.slice(0, 3) });
-      }
-      if (emittedMalformed.length > 0) {
-        check('wellformed', 'XML well-formed', 'fail', 'EMITTED files malformed (corrupted passthrough?): ' + emittedMalformed.map(m => m.file).join(', '));
-        return res.json(failWith('wellformed', { modId: ws?.name || reqPath, malformed: emittedMalformed }));
-      }
-      if (!checklist.some(c => c.id === 'wellformed')) {
-        check('wellformed', 'XML well-formed', 'pass', `${Object.keys(files).filter(k => /\.xml$/i.test(k)).length} emitted XML file(s) parse cleanly`);
-      }
-    }
-
-    // Audit A3 (2026-07-09): runSchemaValidation removed from this gate — the PREFLIGHT
-    // stage below runs the same XSD layer (and more) via runProjectValidation, so the
-    // schema pass ran twice per deploy. Doctor + patch stay here; preflight owns schema.
-    const deployReferences = (() => { try { return getReferenceSets(); } catch { return undefined; } })();
-    // Loaded passthrough can also be in-memory. Bind the custom-Lua compile gate to
-    // actual compiler emission and exact planned bytes; other Lua belongs to preflight.
+    const extensionsPath = path.join(x4GamePath, 'extensions');
+    const targetRoot = path.join(extensionsPath, effectiveModId(activeBuildWorkspace(ws)));
+    const artifactFolder = path.basename(targetRoot);
     const generatedCustomLua = sourcePlan.entries.find(entry => entry.path === generatedCustomLuaPath
       && entry.reason === 'claimed by compiler output' && entry.content === generatedFiles[entry.path]);
     const omittedGeneratedCustomLua = generatedCustomLua && typeof generatedCustomLua.content === 'string'
       && snapshot.skipped.some(file => file.path === generatedCustomLua.path)
       ? { path: generatedCustomLua.path, text: generatedCustomLua.content } : undefined;
-    const diagnostics = [...runModDoctor(ws, files, modId, {
-      canonicalAiScripts: deployReferences?.aiScripts,
-      artifactReadiness: {
-        includedPaths: frozenPlan.entries.map(entry => entry.path), availableText: files,
-        reportedUnavailablePaths: snapshot.skipped.map(skipped => skipped.path),
-        omittedGeneratedCustomLua,
-      },
-    }), ...runPatchDiagnostics(ws)];
-    const compileErrors = diagnostics.filter(diagnostic => {
-      if (diagnostic.severity !== 'error') return false;
-      const luaReadinessError = diagnostic.domain === 'ui_layout' && /^(?:lua\.|x4-ui\.)/.test(diagnostic.code || '');
-      return !luaReadinessError || (generatedCustomLua !== undefined && diagnostic.filePath === generatedCustomLua.path);
-    });
-    validationStagesMs.readiness = performance.now() - readinessStartedAt;
-    if (compileErrors.length > 0) {
-      check('compile', 'Compile diagnostics', 'fail', compileErrors.slice(0, 3).map((d: any) => d.message).join(' | '));
-      return res.json(failWith('compile', { modId, compileErrors: compileErrors.slice(0, 10) }));
-    }
-    check('compile', 'Compile diagnostics', 'pass', `0 compile gate errors across doctor/patch (${diagnostics.length} findings; artifact Lua and schema run in preflight)`);
+    const emittedXmlCount = Object.keys(files).filter(k => /\.xml$/i.test(k)).length;
+    const hasXmlPatches = Array.isArray(ws?.xmlPatches) && ws.xmlPatches.some((p: any) => p?.includeInBuild !== false);
+    const configSignature = trustHash([
+      x4GamePath,
+      modWorkspacePath || '',
+      resolved.x4ReferenceRoot || '',
+      resolved.filesystemPath || '',
+      (resolved as { x4Version?: string }).x4Version || '',
+    ]);
+    const wsDoctorHash = deployWorkspaceDoctorModelHash(
+      ws,
+      generatedCustomLuaPath,
+      Boolean(generatedCustomLua),
+      Boolean(omittedGeneratedCustomLua),
+      snapshot.skipped.map(s => s.path),
+    );
+    const currentValidationDeps = captureDeployValidationDeps();
+    const selectedSourceKey = selectedSource ? `${selectedSource.root}:${selectedSource.canonicalKey}` : '';
+    const previewCacheKey = trustHash([modId, artifactHash, snapshot.manifest.hash, deployFormat]);
+    const cachedPreview = body.dryRun !== true
+      && !hasXmlPatches
+      && typeof body.expectedModId === 'string' && body.expectedModId === modId
+      && typeof body.expectedArtifactHash === 'string' && body.expectedArtifactHash === artifactHash
+      && typeof body.expectedBindingHash === 'string'
+      ? deployPreviewValidationCache.get(previewCacheKey)
+      : undefined;
+    const previewStaticMatches = Boolean(
+      cachedPreview
+      && cachedPreview.modId === modId
+      && cachedPreview.artifactHash === artifactHash
+      && cachedPreview.snapshotManifestHash === snapshot.manifest.hash
+      && cachedPreview.deployFormat === deployFormat
+      && cachedPreview.configSignature === configSignature
+      && cachedPreview.wsDoctorHash === wsDoctorHash
+      && cachedPreview.baseCorpusHash === baseCorpus.hash
+      && cachedPreview.targetRoot === targetRoot
+      && cachedPreview.selectedSourceKey === selectedSourceKey
+      && sameDeployValidationDeps(cachedPreview.deps, currentValidationDeps)
+      && (() => {
+        try { return bindDeploymentCorpus(baseCorpus, cachedPreview.canonicalMd) === cachedPreview.corpusHash; }
+        catch { return false; }
+      })(),
+    );
 
-    // 2b. PREFLIGHT — the FULL validation stack over the emitted manifest (same engine as
-    // project/validate: structure, cue refs, MD↔Lua wiring, XSD md+aiscript, order-param
-    // lint, scriptproperty chains, pitfall lints). Errors block; warnings surface.
-    const projectValidationStartedAt = performance.now();
-    const deployValidation = buildDeployProjectValidation(modId, snapshot);
-    validationStagesMs.project = performance.now() - projectValidationStartedAt;
-    const { preflight, canonicalMd, diskValidationSkipped } = deployValidation;
-    const corpusHash = bindDeploymentCorpus(baseCorpus, canonicalMd);
-    const luaValidation = { filesScanned: preflight.lua.filesScanned, runtimeScope: preflight.lua.runtimeScope };
-    const projectChecks = preflight.projectChecks;
-    const extensionsPath = path.join(x4GamePath, 'extensions');
-    const targetRoot = path.join(extensionsPath, effectiveModId(activeBuildWorkspace(ws)));
-    const artifactFolder = path.basename(targetRoot);
-    responseIdentity = { ...responseIdentity, artifactFolder };
-    const suiteId = body.projectCheckSuiteReceiptId;
-    if (projectChecks && (projectChecks.status === 'invalid' || suiteId === undefined)) {
-      const invalid = projectChecks.status === 'invalid';
-      const detail = invalid ? projectChecks.error : 'Required project checks need an approved asynchronous verification result for this artifact.';
-      check('preflight', 'Required project checks', 'fail', detail);
-      return res.status(invalid ? 422 : 409).json(failWith('preflight', {
-        code: invalid ? 'PROJECT_CHECK_MANIFEST_INVALID' : 'ASYNC_VERIFICATION_REQUIRED',
-        error: detail,
-        projectChecks: invalid
-          ? { status: projectChecks.status, execution: projectChecks.execution }
-          : { status: projectChecks.status, execution: projectChecks.execution, manifestHash: projectChecks.manifestHash,
-            checkIds: projectChecks.checks.map(projectCheck => projectCheck.id) },
-        validation: { outcome: invalid ? 'blocked-mod-findings' : 'incomplete-checks', clean: false, evidence: preflight.evidence, lua: luaValidation },
-      }));
-    }
-    if (suiteId !== undefined) {
-      const proofRefusal = () => {
-        const detail = 'The exact approved check suite could not be verified for this addressed source and artifact.';
-        check('preflight', 'Required project checks', 'fail', detail);
-        return res.status(409).json(failWith('preflight', { code: 'PROJECT_CHECK_PROOF_MISMATCH', error: detail }));
-      };
-      const addressedSourceRoot = addressedBuild?.sourceStamp?.dir;
-      if (body.dryRun !== true && !operation) {
-        return res.status(400).json(failWith('preflight', { code: 'DEPLOY_OPERATION_INPUT_INVALID',
-          error: 'A project-check apply requires an addressed x-forge-operation-id.' }));
-      }
-      if (!projectChecks || principal.kind !== 'agent' || !addressedWorkspaceId || !addressedSourceRoot
-        || !lease || !modSourceDir || !sourcePlan.sourceRoot || !modWorkspacePath || !projectCheckStaging
-        || body.autoReimport === true || body.allowStaleOverwrite === true
-        || canonicalSourceKey(modSourceDir) !== canonicalSourceKey(sourcePlan.sourceRoot)) return proofRefusal();
+    const resolveTargetState = (versionChangesPerReleaseFlag: boolean) => {
+      const targetChangedErr = () => Object.assign(
+        new Error('Deployment target contents changed. Review a new dry-run preview before retrying.'),
+        { code: 'DEPLOY_TARGET_CHANGED' },
+      );
+      let resolvedTargetFingerprint: string;
       try {
-        lease.assertProjectCheckAuthority(canonicalSourceKey(sourcePlan.sourceRoot), addressedWorkspaceId, principal.id);
-        lease.assertProjectCheckAuthority(projectCheckApprovalCoordinationKey(actionReceiptStore), addressedWorkspaceId, principal.id);
-        nativeCheckProof = openNativeProjectCheckProof({ store: actionReceiptStore, receiptId: suiteId,
-          actorId: principal.id, workspaceId: addressedWorkspaceId, modId, sourceRoot: sourcePlan.sourceRoot, addressedSourceRoot,
-          workspaceRoot: modWorkspacePath, filesystemRoot: resolveXsdConfig().filesystemPath, targetRoot,
-          stagingRoot: path.join(modWorkspacePath, '.forge-builds', 'loose'), snapshot, stageContext: projectCheckStaging });
-        if ((body.dryRun !== true || body.expectedProjectCheckSuiteReceiptHash !== undefined)
-          && body.expectedProjectCheckSuiteReceiptHash !== nativeCheckProof.proof.hash) return proofRefusal();
-        responseIdentity = { ...responseIdentity, projectCheckSuite: nativeCheckProof.proof };
-        check('project-checks', 'Required project checks', 'pass', 'The exact approved suite receipt and every required command were verified.');
-      } catch { return proofRefusal(); }
-    }
-    const preflightFindings = flattenProjectValidation(preflight);
-    const readinessUnavailable = diagnostics.filter(diagnostic => diagnostic.code === 'package.md_analysis_unavailable'
-      || (diagnostic.code === 'lua.runtime_scope_unverified' && !preflightFindings.some(finding =>
-        finding.code === diagnostic.code && finding.filePath === diagnostic.filePath
-        && finding.line === diagnostic.line && finding.message === diagnostic.message)));
-    const preflightDiagnostics: FlatProjectDiagnostic[] = [
-      ...preflightFindings,
-      ...readinessUnavailable.map<FlatProjectDiagnostic>(diagnostic => ({
-        severity: diagnostic.severity, code: diagnostic.code, filePath: diagnostic.filePath, line: diagnostic.line, message: diagnostic.message,
-      })),
-      ...diskValidationSkipped.map<FlatProjectDiagnostic>(skipped => ({
-        severity: 'warning',
-        code: 'validation.disk_file_skipped',
-        filePath: skipped.path,
-        message: `Disk-backed validation skipped ${skipped.path}: ${skipped.reason}.`,
-      })),
-    ];
-    const targetChanged = () => Object.assign(
-      new Error('Deployment target contents changed. Review a new dry-run preview before retrying.'),
-      { code: 'DEPLOY_TARGET_CHANGED' },
-    );
-    let targetFingerprint: string;
-    try {
-      targetFingerprint = deploymentTargetFingerprint(targetRoot);
-    } catch (error) {
-      const invalid = error as Error & { code?: string };
-      if (invalid.code !== 'DEPLOY_TARGET_INVALID') throw error;
-      const stale = body.dryRun !== true && body.expectedTargetFingerprint !== undefined;
-      const refusal = stale ? targetChanged() : invalid;
-      check('preflight', 'Deployment target contents', 'fail', refusal.message);
-      return res.status(stale ? 409 : 400).json(failWith('preflight', { code: refusal.code, error: refusal.message }));
-    }
-    const canonicalTarget = canonicalSourceKey(targetRoot);
-    const assertCurrentTarget = () => {
-      let current: string;
-      try {
-        if (canonicalSourceKey(targetRoot) !== canonicalTarget) throw targetChanged();
-        current = deploymentTargetFingerprint(targetRoot);
-      }
-      catch { throw targetChanged(); }
-      if (current !== targetFingerprint) throw targetChanged();
-    };
-    const targetHashFor = (format: DeployFormat) => deploymentTargetBindingHash(targetRoot, format);
-    const build = deploymentBuildIdentity(snapshot, canonicalTarget);
-    const buildTarget = { folder: artifactFolder, fingerprint: targetFingerprint, legacyHashes: [targetHashFor('loose'), targetHashFor('catalog')] };
-    const reviewSource = modSourceDir || ws.sourceStamp?.dir;
-    const canonicalReviewSource = reviewSource ? fs.realpathSync.native(reviewSource) : undefined;
-    let receiptHistory: ActionReceipt[] | undefined;
-    let receiptHistoryUnavailable = false;
-    if (canonicalReviewSource || (build?.modVersion && targetFingerprint !== 'absent')) {
-      try {
-        receiptHistory = actionReceiptStore.listVerified();
+        resolvedTargetFingerprint = deploymentTargetFingerprint(targetRoot);
       } catch (error) {
-        const incompleteHistory = error instanceof ActionReceiptStoreError
-          && (error.code === 'RECEIPT_CORRUPT' || error.code === 'RECEIPT_SCAN_LIMIT');
-        if (canonicalReviewSource && (!incompleteHistory || acceptances.length)) throw error;
-        receiptHistoryUnavailable = true;
+        const invalid = error as Error & { code?: string };
+        if (invalid.code !== 'DEPLOY_TARGET_INVALID') throw error;
+        const stale = body.dryRun !== true && body.expectedTargetFingerprint !== undefined;
+        const refusal = stale ? targetChangedErr() : invalid;
+        check('preflight', 'Deployment target contents', 'fail', refusal.message);
+        return { errorResponse: res.status(stale ? 409 : 400).json(failWith('preflight', { code: refusal.code, error: refusal.message })) };
+      }
+      const canonicalTarget = canonicalSourceKey(targetRoot);
+      const assertCurrentTargetFn = () => {
+        let current: string;
+        try {
+          if (canonicalSourceKey(targetRoot) !== canonicalTarget) throw targetChangedErr();
+          current = deploymentTargetFingerprint(targetRoot);
+        } catch { throw targetChangedErr(); }
+        if (current !== resolvedTargetFingerprint) throw targetChangedErr();
+      };
+      const targetHashFn = (format: DeployFormat) => deploymentTargetBindingHash(targetRoot, format);
+      const buildIdentity = deploymentBuildIdentity(snapshot, canonicalTarget);
+      const buildTargetInfo = {
+        folder: artifactFolder,
+        fingerprint: resolvedTargetFingerprint,
+        legacyHashes: [targetHashFn('loose'), targetHashFn('catalog')],
+      };
+      const reviewSource = modSourceDir || ws.sourceStamp?.dir;
+      const canonicalReviewSourcePath = reviewSource ? fs.realpathSync.native(reviewSource) : undefined;
+      let loadedReceiptHistory: ActionReceipt[] | undefined;
+      let receiptHistoryMissing = false;
+      if (canonicalReviewSourcePath || (buildIdentity?.modVersion && resolvedTargetFingerprint !== 'absent')) {
+        try {
+          loadedReceiptHistory = actionReceiptStore.listVerified();
+        } catch (error) {
+          const incompleteHistory = error instanceof ActionReceiptStoreError
+            && (error.code === 'RECEIPT_CORRUPT' || error.code === 'RECEIPT_SCAN_LIMIT');
+          if (canonicalReviewSourcePath && (!incompleteHistory || acceptances.length)) throw error;
+          receiptHistoryMissing = true;
+        }
+      }
+      const prevBuild = buildIdentity && loadedReceiptHistory && findUnchangedDeploymentVersion(buildIdentity, loadedReceiptHistory, buildTargetInfo);
+      const prevBuildKey = `${versionChangesPerReleaseFlag}:${Boolean(prevBuild)}:${prevBuild?.id ?? ''}:${receiptHistoryMissing}`;
+      return {
+        targetChanged: targetChangedErr,
+        targetFingerprint: resolvedTargetFingerprint,
+        canonicalTarget,
+        assertCurrentTarget: assertCurrentTargetFn,
+        targetHashFor: targetHashFn,
+        build: buildIdentity,
+        buildTarget: buildTargetInfo,
+        canonicalReviewSource: canonicalReviewSourcePath,
+        receiptHistory: loadedReceiptHistory,
+        receiptHistoryUnavailable: receiptHistoryMissing,
+        previousBuild: prevBuild,
+        previousBuildStateKey: prevBuildKey,
+      };
+    };
+
+    const verifyProjectChecksStep = (
+      projectChecks: ReturnType<typeof runProjectValidation>['projectChecks'],
+      evidenceForGate: ReturnType<typeof runProjectValidation>['evidence'],
+      luaInfo: { filesScanned: number; runtimeScope: unknown },
+    ) => {
+      const suiteIdValue = body.projectCheckSuiteReceiptId;
+      if (projectChecks && (projectChecks.status === 'invalid' || suiteIdValue === undefined)) {
+        const invalid = projectChecks.status === 'invalid';
+        const detail = invalid ? projectChecks.error : 'Required project checks need an approved asynchronous verification result for this artifact.';
+        check('preflight', 'Required project checks', 'fail', detail);
+        return {
+          errorResponse: res.status(invalid ? 422 : 409).json(failWith('preflight', {
+            code: invalid ? 'PROJECT_CHECK_MANIFEST_INVALID' : 'ASYNC_VERIFICATION_REQUIRED',
+            error: detail,
+            projectChecks: invalid
+              ? { status: projectChecks.status, execution: projectChecks.execution }
+              : {
+                  status: projectChecks.status, execution: projectChecks.execution, manifestHash: projectChecks.manifestHash,
+                  checkIds: projectChecks.checks.map(projectCheck => projectCheck.id),
+                },
+            validation: { outcome: invalid ? 'blocked-mod-findings' : 'incomplete-checks', clean: false, evidence: evidenceForGate, lua: luaInfo },
+          })),
+        };
+      }
+      if (suiteIdValue !== undefined) {
+        const proofRefusal = () => {
+          const detail = 'The exact approved check suite could not be verified for this addressed source and artifact.';
+          check('preflight', 'Required project checks', 'fail', detail);
+          return { errorResponse: res.status(409).json(failWith('preflight', { code: 'PROJECT_CHECK_PROOF_MISMATCH', error: detail })) };
+        };
+        const addressedSourceRoot = addressedBuild?.sourceStamp?.dir;
+        if (body.dryRun !== true && !operation) {
+          return {
+            errorResponse: res.status(400).json(failWith('preflight', {
+              code: 'DEPLOY_OPERATION_INPUT_INVALID',
+              error: 'A project-check apply requires an addressed x-forge-operation-id.',
+            })),
+          };
+        }
+        if (!projectChecks || principal.kind !== 'agent' || !addressedWorkspaceId || !addressedSourceRoot
+          || !lease || !modSourceDir || !sourcePlan.sourceRoot || !modWorkspacePath || !projectCheckStaging
+          || body.autoReimport === true || body.allowStaleOverwrite === true
+          || canonicalSourceKey(modSourceDir) !== canonicalSourceKey(sourcePlan.sourceRoot)) return proofRefusal();
+        try {
+          lease.assertProjectCheckAuthority(canonicalSourceKey(sourcePlan.sourceRoot), addressedWorkspaceId, principal.id);
+          lease.assertProjectCheckAuthority(projectCheckApprovalCoordinationKey(actionReceiptStore), addressedWorkspaceId, principal.id);
+          nativeCheckProof = openNativeProjectCheckProof({
+            store: actionReceiptStore, receiptId: suiteIdValue,
+            actorId: principal.id, workspaceId: addressedWorkspaceId, modId, sourceRoot: sourcePlan.sourceRoot, addressedSourceRoot,
+            workspaceRoot: modWorkspacePath, filesystemRoot: resolveXsdConfig().filesystemPath, targetRoot,
+            stagingRoot: path.join(modWorkspacePath, '.forge-builds', 'loose'), snapshot, stageContext: projectCheckStaging,
+          });
+          if ((body.dryRun !== true || body.expectedProjectCheckSuiteReceiptHash !== undefined)
+            && body.expectedProjectCheckSuiteReceiptHash !== nativeCheckProof.proof.hash) return proofRefusal();
+          responseIdentity = { ...responseIdentity, projectCheckSuite: nativeCheckProof.proof };
+          check('project-checks', 'Required project checks', 'pass', 'The exact approved suite receipt and every required command were verified.');
+        } catch { return proofRefusal(); }
+      }
+      return { errorResponse: undefined };
+    };
+
+    let deployValidation!: ReturnType<typeof buildDeployProjectValidation>;
+    let corpusHash!: string;
+    let luaValidation!: { filesScanned: number; runtimeScope: unknown };
+    let readinessUnavailable!: Array<ReturnType<typeof runModDoctor>[number] | ServerDiagnostic>;
+    let preflightDiagnostics!: FlatProjectDiagnostic[];
+    let targetState!: Exclude<ReturnType<typeof resolveTargetState>, { errorResponse: unknown }>;
+    let versionChangesPerRelease!: boolean;
+    let preflightContentHash!: string;
+    let validationDelta!: ValidationDeltaResult;
+    let pfWarnings!: number;
+    let staticEvidence!: ReturnType<typeof buildValidationEvidence>;
+    let reusedPreviewValidation = false;
+
+    if (previewStaticMatches && cachedPreview) {
+      responseIdentity = { ...responseIdentity, artifactFolder };
+      const projectChecksGate = verifyProjectChecksStep(
+        cachedPreview.preflight.projectChecks,
+        cachedPreview.preflight.evidence,
+        cachedPreview.luaValidation,
+      );
+      if (projectChecksGate.errorResponse) return;
+      const resolvedTargetState = resolveTargetState(cachedPreview.versionChangesPerRelease);
+      if ('errorResponse' in resolvedTargetState) return;
+      if ((resolvedTargetState.canonicalReviewSource || '') === cachedPreview.canonicalReviewSource
+        && resolvedTargetState.previousBuildStateKey === cachedPreview.previousBuildStateKey) {
+        reusedPreviewValidation = true;
+        targetState = resolvedTargetState;
+        deployValidation = {
+          preflight: cachedPreview.preflight,
+          canonicalMd: cachedPreview.canonicalMd,
+          diskValidationSkipped: snapshot.skipped,
+          validationFiles: snapshot.files,
+        };
+        corpusHash = cachedPreview.corpusHash;
+        luaValidation = cachedPreview.luaValidation;
+        readinessUnavailable = cachedPreview.readinessUnavailable;
+        preflightDiagnostics = cachedPreview.preflightDiagnostics;
+        versionChangesPerRelease = cachedPreview.versionChangesPerRelease;
+        preflightContentHash = cachedPreview.preflightContentHash;
+        validationDelta = compareValidationWarnings(
+          modId,
+          preflightContentHash,
+          preflightDiagnostics,
+          validationBaselineStore.read(modId),
+        );
+        pfWarnings = cachedPreview.pfWarnings;
+        staticEvidence = cachedPreview.staticEvidence;
+        if (!checklist.some(c => c.id === 'wellformed')) {
+          check('wellformed', 'XML well-formed', 'pass', `${cachedPreview.emittedXmlCount} emitted XML file(s) parse cleanly`);
+        }
+        check('compile', 'Compile diagnostics', 'pass', `0 compile gate errors across doctor/patch (${cachedPreview.compileDiagnosticsCount} findings; artifact Lua and schema run in preflight)`);
+        validationStagesMs.readiness = 0;
+        validationStagesMs.project = 0;
+      } else {
+        // Project checks or target/receipt history invalidated exact reuse; reset and run fresh validation.
+        nativeCheckProof = undefined;
+        delete responseIdentity.projectCheckSuite;
+        const pcIndex = checklist.findIndex(c => c.id === 'project-checks');
+        if (pcIndex >= 0) checklist.splice(pcIndex, 1);
       }
     }
-    const previousBuild = build && receiptHistory && findUnchangedDeploymentVersion(build, receiptHistory, buildTarget);
-    const versionChangesPerRelease = preflight.rules.valid && preflight.rules.config?.versionPolicy === 'per-release';
-    if (build && previousBuild) {
-      preflightDiagnostics.push({
-        severity: versionChangesPerRelease ? 'info' : 'warning',
-        code: 'content.version_stale',
-        filePath: 'content.xml',
-        sourceRef: versionChangesPerRelease ? 'content.xml/@version' : `deploy-receipt:${previousBuild.id}`,
-        message: `Files changed since the last verified deployment to this destination, but content.xml still declares version "${build.modVersion}".`,
+
+    if (!reusedPreviewValidation) {
+      // 1c. Wellformedness over the EMITTED manifest — closes the passthrough hole: a
+      // byte-fidelity import carries its ORIGINAL (possibly truncated/corrupted) files
+      // straight into the deploy payload, so "well-formed by construction" is only true
+      // for generated XML. Found live 2026-07-09: the forked workspace copy of
+      // x4_ai_influence contains truncated files an active-workspace deploy would have
+      // written OVER the working in-game mod. This gate makes that impossible.
+      {
+        const emittedMalformed: Array<{ file: string; errors: unknown[] }> = [];
+        for (const [rel, content] of Object.entries(files)) {
+          if (!/\.xml$/i.test(rel)) continue;
+          const wf = checkXmlWellformed(String(content));
+          if (!wf.ok) emittedMalformed.push({ file: rel, errors: wf.errors.slice(0, 3) });
+        }
+        if (emittedMalformed.length > 0) {
+          check('wellformed', 'XML well-formed', 'fail', 'EMITTED files malformed (corrupted passthrough?): ' + emittedMalformed.map(m => m.file).join(', '));
+          return res.json(failWith('wellformed', { modId: ws?.name || reqPath, malformed: emittedMalformed }));
+        }
+        if (!checklist.some(c => c.id === 'wellformed')) {
+          check('wellformed', 'XML well-formed', 'pass', `${emittedXmlCount} emitted XML file(s) parse cleanly`);
+        }
+      }
+
+      // Audit A3 (2026-07-09): runSchemaValidation removed from this gate — the PREFLIGHT
+      // stage below runs the same XSD layer (and more) via runProjectValidation, so the
+      // schema pass ran twice per deploy. Doctor + patch stay here; preflight owns schema.
+      const deployReferences = (() => { try { return getReferenceSets(); } catch { return undefined; } })();
+      // Loaded passthrough can also be in-memory. Bind the custom-Lua compile gate to
+      // actual compiler emission and exact planned bytes; other Lua belongs to preflight.
+      const diagnostics = [...runModDoctor(ws, files, modId, {
+        canonicalAiScripts: deployReferences?.aiScripts,
+        artifactReadiness: {
+          includedPaths: frozenPlan.entries.map(entry => entry.path), availableText: files,
+          reportedUnavailablePaths: snapshot.skipped.map(skipped => skipped.path),
+          omittedGeneratedCustomLua,
+        },
+      }), ...runPatchDiagnostics(ws)];
+      const compileErrors = diagnostics.filter(diagnostic => {
+        if (diagnostic.severity !== 'error') return false;
+        const luaReadinessError = diagnostic.domain === 'ui_layout' && /^(?:lua\.|x4-ui\.)/.test(diagnostic.code || '');
+        return !luaReadinessError || (generatedCustomLua !== undefined && diagnostic.filePath === generatedCustomLua.path);
       });
+      validationStagesMs.readiness = performance.now() - readinessStartedAt;
+      if (compileErrors.length > 0) {
+        check('compile', 'Compile diagnostics', 'fail', compileErrors.slice(0, 3).map((d: any) => d.message).join(' | '));
+        return res.json(failWith('compile', { modId, compileErrors: compileErrors.slice(0, 10) }));
+      }
+      check('compile', 'Compile diagnostics', 'pass', `0 compile gate errors across doctor/patch (${diagnostics.length} findings; artifact Lua and schema run in preflight)`);
+
+      // 2b. PREFLIGHT — the FULL validation stack over the emitted manifest (same engine as
+      // project/validate: structure, cue refs, MD↔Lua wiring, XSD md+aiscript, order-param
+      // lint, scriptproperty chains, pitfall lints). Errors block; warnings surface.
+      const projectValidationStartedAt = performance.now();
+      deployValidation = buildDeployProjectValidation(modId, snapshot);
+      validationStagesMs.project = performance.now() - projectValidationStartedAt;
+      const { preflight, canonicalMd, diskValidationSkipped } = deployValidation;
+      corpusHash = bindDeploymentCorpus(baseCorpus, canonicalMd);
+      luaValidation = { filesScanned: preflight.lua.filesScanned, runtimeScope: preflight.lua.runtimeScope };
+      responseIdentity = { ...responseIdentity, artifactFolder };
+      const projectChecksGate = verifyProjectChecksStep(preflight.projectChecks, preflight.evidence, luaValidation);
+      if (projectChecksGate.errorResponse) return;
+      const preflightFindings = flattenProjectValidation(preflight);
+      readinessUnavailable = diagnostics.filter(diagnostic => diagnostic.code === 'package.md_analysis_unavailable'
+        || (diagnostic.code === 'lua.runtime_scope_unverified' && !preflightFindings.some(finding =>
+          finding.code === diagnostic.code && finding.filePath === diagnostic.filePath
+          && finding.line === diagnostic.line && finding.message === diagnostic.message)));
+      preflightDiagnostics = [
+        ...preflightFindings,
+        ...readinessUnavailable.map<FlatProjectDiagnostic>(diagnostic => ({
+          severity: diagnostic.severity, code: diagnostic.code, filePath: diagnostic.filePath, line: diagnostic.line, message: diagnostic.message,
+        })),
+        ...diskValidationSkipped.map<FlatProjectDiagnostic>(skipped => ({
+          severity: 'warning',
+          code: 'validation.disk_file_skipped',
+          filePath: skipped.path,
+          message: `Disk-backed validation skipped ${skipped.path}: ${skipped.reason}.`,
+        })),
+      ];
+      const resolvedTargetState = resolveTargetState(preflight.rules.valid && preflight.rules.config?.versionPolicy === 'per-release');
+      if ('errorResponse' in resolvedTargetState) return;
+      targetState = resolvedTargetState;
+      versionChangesPerRelease = preflight.rules.valid && preflight.rules.config?.versionPolicy === 'per-release';
+      if (targetState.build && targetState.previousBuild) {
+        preflightDiagnostics.push({
+          severity: versionChangesPerRelease ? 'info' : 'warning',
+          code: 'content.version_stale',
+          filePath: 'content.xml',
+          sourceRef: versionChangesPerRelease ? 'content.xml/@version' : `deploy-receipt:${targetState.previousBuild.id}`,
+          message: `Files changed since the last verified deployment to this destination, but content.xml still declares version "${targetState.build.modVersion}".`,
+        });
+      }
+      ({ contentHash: preflightContentHash, delta: validationDelta } = validationDeltaFor(
+        modId,
+        deployValidation.validationFiles,
+        preflightDiagnostics,
+      ));
+      pfWarnings = preflight.summary.activeWarnings + diskValidationSkipped.length
+        + readinessUnavailable.filter(diagnostic => diagnostic.severity === 'warning').length + Number(Boolean(targetState.previousBuild) && !versionChangesPerRelease);
+      staticEvidence = buildValidationEvidence({ id: modId, name: modId, files: deployValidation.validationFiles },
+        preflightDiagnostics.map(d => ({ severity: d.severity, code: d.code, target: d.target,
+          filePath: d.filePath, line: d.line, column: d.column, sourceRef: typeof d.sourceRef === 'string' ? d.sourceRef : undefined,
+          message: String(d.message || d.code || 'Validation finding'),
+          ...(d.payloadWriterScope ? { payloadWriterScope: d.payloadWriterScope } : {}) })), [
+          ...(preflight.evidence?.coverage.gaps || []),
+          ...(targetState.receiptHistoryUnavailable ? [{ check: 'deploy.receipt_history',
+            reason: 'Receipt history could not be verified. Prior build comparison and remembered warning reviews were omitted.' }] : []),
+        ]);
+      if (body.dryRun === true && !hasXmlPatches && staticEvidence.modId) {
+        rememberDeployPreviewValidation(previewCacheKey, {
+          modId,
+          artifactHash,
+          snapshotManifestHash: snapshot.manifest.hash,
+          deployFormat,
+          configSignature,
+          wsDoctorHash,
+          baseCorpusHash: baseCorpus.hash,
+          corpusHash,
+          deps: currentValidationDeps,
+          canonicalReviewSource: targetState.canonicalReviewSource || '',
+          targetRoot,
+          selectedSourceKey,
+          previousBuildStateKey: targetState.previousBuildStateKey,
+          emittedXmlCount,
+          compileDiagnosticsCount: diagnostics.length,
+          preflight,
+          canonicalMd,
+          readinessUnavailable,
+          preflightDiagnostics,
+          preflightContentHash,
+          pfWarnings,
+          staticEvidence,
+          luaValidation,
+          versionChangesPerRelease,
+        });
+      }
     }
-    const { contentHash: preflightContentHash, delta: validationDelta } = validationDeltaFor(
-      modId,
-      deployValidation.validationFiles,
-      preflightDiagnostics,
-    );
-    const pfWarnings = preflight.summary.activeWarnings + diskValidationSkipped.length
-      + readinessUnavailable.filter(diagnostic => diagnostic.severity === 'warning').length + Number(Boolean(previousBuild) && !versionChangesPerRelease);
-    const staticEvidence = buildValidationEvidence({ id: modId, name: modId, files: deployValidation.validationFiles },
-      preflightDiagnostics.map(d => ({ severity: d.severity, code: d.code, target: d.target,
-        filePath: d.filePath, line: d.line, column: d.column, sourceRef: typeof d.sourceRef === 'string' ? d.sourceRef : undefined,
-        message: String(d.message || d.code || 'Validation finding'),
-        ...(d.payloadWriterScope ? { payloadWriterScope: d.payloadWriterScope } : {}) })), [
-        ...(preflight.evidence?.coverage.gaps || []),
-        ...(receiptHistoryUnavailable ? [{ check: 'deploy.receipt_history',
-          reason: 'Receipt history could not be verified. Prior build comparison and remembered warning reviews were omitted.' }] : []),
-      ]);
+    const { preflight, canonicalMd, diskValidationSkipped } = deployValidation;
+    const { targetChanged, targetFingerprint, assertCurrentTarget, targetHashFor, build, buildTarget,
+      canonicalReviewSource, receiptHistory, receiptHistoryUnavailable, previousBuild } = targetState;
     const evidence = nativeCheckProof ? applyProjectCheckCoverage(staticEvidence, nativeCheckProof.verification) : staticEvidence;
     const manifestId = evidence.modId;
     if (!manifestId) {
@@ -16543,9 +16829,9 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     const { receipts: approvalRecords, decision: recordedDecision } = recordFindingAcceptances(actionReceiptStore, subject, acceptances, principal);
     responseIdentity.validation = { outcome: decision.outcome, clean: decision.validationClean, ...validationScope, evidence, lua: luaValidation,
       review: projectFindingReview(recordedDecision, principal, approvalRecords) };
-    const assertWriteAuthority = () => {
+    const assertWriteAuthority = (skipSourceRecheck = false) => {
       if (resolved.isolatedScratch) validateDevScratchStorage();
-      assertCurrentSource();
+      if (!skipSourceRecheck) assertCurrentSource();
       nativeCheckProof?.verify();
       if (subject.warningReviews) subject.warningReviews.history = actionReceiptStore.listVerified();
       if (build && previousBuild) {
@@ -16562,7 +16848,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
         throw new Error('Deployment receipt changed before target activation.');
       }
     };
-    assertWriteAuthority();
+    assertWriteAuthority(true);
     // 3. Persist recovery and deployment authority BEFORE staging or extension writes.
     let stagingPath = '';
     const deploymentTarget = targetRoot;
@@ -16589,7 +16875,10 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     writeAttempted = true;
     if (modWorkspacePath) {
       const stagingRoot = path.join(modWorkspacePath, '.forge-builds', 'loose');
-      stagingPath = compileWorkspaceToFolder(ws, stagingRoot, 'store', true, 'loose', { beforeActivate: assertWriteAuthority }, snapshot);
+      let stagingCheck = 0;
+      stagingPath = compileWorkspaceToFolder(ws, stagingRoot, 'store', true, 'loose', {
+        beforeActivate: () => { stagingCheck++; assertWriteAuthority(stagingCheck === 1); },
+      }, snapshot);
     }
     let stagedRecovery: DeploymentRecoveryRecord | undefined;
     let managedFiles: readonly DeployManagedFile[] | undefined;
