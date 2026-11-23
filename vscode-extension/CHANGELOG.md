@@ -3,6 +3,13 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
+## 0.0.92 — 2026-11-23
+
+- For literal run_script calls to an AI script in the same mod, see the signature, required arguments and defaults in the editor.
+- Complete an argument name, hover to read its declaration, or jump straight to it. Forge follows unsaved declaration edits and omits names already supplied.
+- Filtered corpus lookups use the existing index and preserve the same matches and result order.
+- Workspace replacement and deployment skip an unused scan of retained recovery files. Forge still keeps and verifies the recovery data.
+
 ## 0.0.91 — 2026-11-22
 
 - Review and apply a supported script-property spelling correction in the native XML editor. Forge checks the exact token against the unpacked X4 9.00 vocabulary. One Undo restores the buffer.
