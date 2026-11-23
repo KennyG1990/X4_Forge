@@ -5558,6 +5558,104 @@ async function main() {
     && releaseHistoryRows.some(row => row.outcome?.code === 'STEAM_ADOPTION_SOURCE_CHANGED'),
   JSON.stringify(releaseHistoryRows.map(row => ({ kind: row.kind, status: row.outcome?.status, code: row.outcome?.code }))));
 
+  // --- #118: Steam release preparation on valid long Windows workspace paths (>260 char scratch prefix) ---
+  let longSteamWorkspace = path.join(tmp, 'long-steam-root');
+  while (path.join(longSteamWorkspace, '.forge-builds', 'releases', 'steam').length < 228) {
+    longSteamWorkspace = path.join(longSteamWorkspace, 'seg_1234567890_abcdefghij');
+  }
+  const longSteamName = 'long_path_steam_fixture';
+  const longSteamSource = path.join(longSteamWorkspace, longSteamName);
+  const longSteamRoot = path.join(longSteamWorkspace, '.forge-builds', 'releases', 'steam');
+  const longScratchPrefix = path.join(longSteamRoot, `.${longSteamName}.x4forge-steam-next-`);
+  fs.mkdirSync(path.join(longSteamSource, 'md'), { recursive: true });
+  fs.mkdirSync(path.join(longSteamSource, 'assets'), { recursive: true });
+  fs.writeFileSync(path.join(longSteamSource, 'content.xml'), '<?xml version="1.0"?><content id="long_path_steam_fixture" name="Long Path Steam Fixture" version="100" author="Forge Route Test" description="Long Windows path Steam release fixture"/>');
+  fs.writeFileSync(path.join(longSteamSource, 'md', 'main.xml'), '<?xml version="1.0"?><mdscript name="LongPathSteamFixture"><cues/></mdscript>');
+  fs.writeFileSync(path.join(longSteamSource, 'assets', 'payload.bin'), releaseBinary);
+  fs.writeFileSync(path.join(longSteamSource, 'preview.png'), previewBytes);
+  try {
+    const longConfig = await req('POST', '/api/schema/config', SESSION_TOKEN, { ...deployedRolesConfig, modWorkspacePath: longSteamWorkspace, filesystemPath: safeWorkspace });
+    ok('steam_long_path_workspace_configured', longConfig.status === 200 && longScratchPrefix.length >= 273, `status=${longConfig.status} prefixLen=${longScratchPrefix.length}`);
+    const longImport = await req('POST', '/api/agent/mod-folder/import', SESSION_TOKEN, { root: 'workspace', path: longSteamName });
+    ok('steam_long_path_fixture_imported', longImport.status === 200 && !!longImport.json?.workspace, `status=${longImport.status}`);
+
+    const longPreparePartial = await req('POST', '/api/agent/release/steam/prepare', SESSION_TOKEN, { workspace: longImport.json?.workspace });
+    ok('steam_long_path_prepare_allocates_and_stages_cleanly',
+      longPreparePartial.status === 200
+      && longPreparePartial.json?.status === 'PARTIAL'
+      && typeof longPreparePartial.json?.targetPath === 'string'
+      && !longPreparePartial.json.targetPath.startsWith('\\\\?\\')
+      && typeof longPreparePartial.json?.backupPath === 'string'
+      && !longPreparePartial.json.backupPath.startsWith('\\\\?\\')
+      && typeof longPreparePartial.json?.reportPath === 'string'
+      && !longPreparePartial.json.reportPath.startsWith('\\\\?\\')
+      && fs.existsSync(path.join(longPreparePartial.json.targetPath, 'ext_01.cat'))
+      && fs.existsSync(path.join(longPreparePartial.json.targetPath, 'ext_01.dat'))
+      && fs.existsSync(path.join(longPreparePartial.json.targetPath, 'preview.png')),
+      `status=${longPreparePartial.status} code=${longPreparePartial.json?.code} error=${longPreparePartial.json?.error || ''}`);
+
+    const longPrepareReady = await req('POST', '/api/agent/release/steam/prepare', SESSION_TOKEN, { workspace: longImport.json?.workspace, toolPath: fixtureTool });
+    const longSteamEntries = fs.existsSync(longSteamRoot) ? fs.readdirSync(longSteamRoot) : [];
+    ok('steam_long_path_repeat_prepare_replaces_target_and_cleans_scratch',
+      longPrepareReady.status === 200
+      && longPrepareReady.json?.status === 'READY_FOR_INTERACTIVE_UPLOAD'
+      && typeof longPrepareReady.json?.command?.display === 'string'
+      && !longPrepareReady.json.command.display.includes('\\\\?\\')
+      && !longSteamEntries.some(name => name.includes('.x4forge-steam-next-') || name.includes('.x4forge-release-backup-')),
+      `status=${longPrepareReady.status} entries=${longSteamEntries.join(',')}`);
+
+    const longBackupDownload = await fetch(`${BASE}/api/agent/release/artifact/download`, {
+      method: 'POST', headers: { Authorization: `Bearer ${SESSION_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ platform: 'steam', modId: longSteamName, artifactPath: longPrepareReady.json?.backupPath }),
+    });
+    const longBackupBytes = Buffer.from(await longBackupDownload.arrayBuffer());
+    ok('steam_long_path_backup_download_matches_hash',
+      longBackupDownload.status === 200
+      && crypto.createHash('sha256').update(longBackupBytes).digest('hex') === longPrepareReady.json?.backupHash,
+      `status=${longBackupDownload.status}`);
+
+    const longVerifyMissing = await req('POST', '/api/agent/release/steam/verify', SESSION_TOKEN, { modId: longSteamName });
+    ok('steam_long_path_verify_refuses_missing_id', longVerifyMissing.status === 409 && longVerifyMissing.json?.code === 'STEAM_WORKSHOP_ID_MISSING', `status=${longVerifyMissing.status} code=${longVerifyMissing.json?.code}`);
+
+    const longStagedContent = path.join(longPrepareReady.json.targetPath, 'content.xml');
+    fs.writeFileSync(longStagedContent, fs.readFileSync(longStagedContent, 'utf8').replace(/\bid="[^"]*"/, 'id="ws_444555666"'));
+    const longVerifyOk = await req('POST', '/api/agent/release/steam/verify', SESSION_TOKEN, { modId: longSteamName });
+    ok('steam_long_path_verify_accepts_workshop_id', longVerifyOk.status === 200 && longVerifyOk.json?.status === 'VERIFIED_AFTER_WORKSHOP_TOOL' && longVerifyOk.json?.workshopId === 'ws_444555666', `status=${longVerifyOk.status}`);
+
+    const longAdoptPreview = await req('POST', '/api/agent/release/steam/adopt', SESSION_TOKEN, { modId: longSteamName, apply: false });
+    const longAdoptUnbound = await req('POST', '/api/agent/release/steam/adopt', SESSION_TOKEN, {
+      modId: longSteamName, apply: true, expectedSourceSha256: longAdoptPreview.json?.beforeSha256, expectedWorkshopId: 'ws_444555666',
+    });
+    const longAdoptApply = await req('POST', '/api/agent/release/steam/adopt', SESSION_TOKEN, {
+      modId: longSteamName, apply: true, expectedSourceSha256: longAdoptPreview.json?.beforeSha256, expectedWorkshopId: 'ws_444555666', expectedBindingHash: longAdoptPreview.json?.bindingHash,
+    });
+    const longSourceManifest = path.join(longSteamSource, 'content.xml');
+    ok('steam_long_path_adoption_preserves_guards_and_writes_source',
+      longAdoptPreview.status === 200
+      && longAdoptUnbound.status === 409 && longAdoptUnbound.json?.code === 'STEAM_ADOPTION_PREVIEW_CHANGED'
+      && longAdoptApply.status === 200 && longAdoptApply.json?.status === 'VERIFIED_AND_ADOPTED'
+      && /id="ws_444555666"/.test(fs.readFileSync(longSourceManifest, 'utf8')),
+      `preview=${longAdoptPreview.status} unbound=${longAdoptUnbound.status} apply=${longAdoptApply.status}`);
+
+    // Stale source refusal after adoption mutates source content.xml
+    const longStalePrepare = await req('POST', '/api/agent/release/steam/prepare', SESSION_TOKEN, { workspace: longImport.json?.workspace });
+    ok('steam_long_path_refuses_stale_source', longStalePrepare.status === 409 && longStalePrepare.json?.code === 'RELEASE_SOURCE_STALE', `status=${longStalePrepare.status} code=${longStalePrepare.json?.code}`);
+
+    // Unsafe symlink release root refusal on long path
+    const longReimport = await req('POST', '/api/agent/mod-folder/import', SESSION_TOKEN, { root: 'workspace', path: longSteamName });
+    fs.rmSync(longSteamRoot, { recursive: true, force: true });
+    const longEscapedTarget = path.join(tmp, 'long-steam-escaped');
+    fs.mkdirSync(longEscapedTarget, { recursive: true });
+    fs.symlinkSync(longEscapedTarget, longSteamRoot, process.platform === 'win32' ? 'junction' : 'dir');
+    const longUnsafeRoot = await req('POST', '/api/agent/release/steam/prepare', SESSION_TOKEN, { workspace: longReimport.json?.workspace });
+    ok('steam_long_path_refuses_symlink_release_root',
+      longUnsafeRoot.status === 409 && longUnsafeRoot.json?.code === 'RELEASE_OUTPUT_ROOT_UNSAFE' && fs.readdirSync(longEscapedTarget).length === 0,
+      `status=${longUnsafeRoot.status} code=${longUnsafeRoot.json?.code}`);
+    fs.unlinkSync(longSteamRoot);
+  } finally {
+    await req('POST', '/api/schema/config', SESSION_TOKEN, deployedRolesConfig);
+  }
+
   // --- fs/write path containment and positive safe-root write ---
   const safeFilesystemConfig = await req('POST', '/api/schema/config', SESSION_TOKEN, { ...deployedRolesConfig, filesystemPath: safeWorkspace });
   ok('optional_safe_filesystem_root_saved', safeFilesystemConfig.status === 200, `status=${safeFilesystemConfig.status}`);

@@ -17970,7 +17970,11 @@ app.post('/api/agent/release/steam/prepare', coordinatedSourceOperation((req, re
       const detail = errorMessage(error) || 'Release output root is unsafe.';
       return sendReleaseFailure(res, 409, 'FAILED', 'RELEASE_OUTPUT_ROOT_UNSAFE', detail, [...prepared.stages, releaseStage('output', 'Resolve release output root', 'fail', detail)]);
     }
-    scratchParent = fs.mkdtempSync(path.join(steamRoot, `.${prepared.modId}.x4forge-steam-next-`));
+    const scratchPrefix = path.join(steamRoot, `.${prepared.modId}.x4forge-steam-next-`);
+    scratchParent = path.join(steamRoot, path.basename(fs.mkdtempSync(path.toNamespacedPath(scratchPrefix))));
+    if (!isPathWithin(scratchParent, steamRoot)) {
+      throw new Error('Steam staging scratch directory escaped the release output root.');
+    }
     const scratchArtifact = path.join(scratchParent, prepared.folderName);
     const packaged = materializeCatalogArtifact(prepared.plan, scratchArtifact);
     if (!packaged.ok) return sendReleaseFailure(res, 500, 'FAILED', 'STEAM_CATALOG_BUILD_FAILED', packaged.errors.join('; '), [...prepared.stages, releaseStage('catalogs', 'Build and verify CAT/DAT', 'fail', packaged.errors.join('; '))]);
