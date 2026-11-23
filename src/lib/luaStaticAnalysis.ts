@@ -121,16 +121,154 @@ const LUA_STANDARD_GLOBALS = new Set([
   'load', 'loadfile', 'loadstring', 'module', 'next', 'pairs', 'pcall', 'print',
   'rawequal', 'rawget', 'rawset', 'require', 'select', 'setfenv', 'setmetatable',
   'tonumber', 'tostring', 'type', 'unpack', 'xpcall',
-  'coroutine', 'debug', 'io', 'math', 'os', 'package', 'string', 'table'
+  'coroutine', 'debug', 'io', 'math', 'os', 'package', 'string', 'table',
+  // Built-in LuaJIT 2.1 standard globals in X4's runtime.
+  'bit', 'jit', 'newproxy'
 ]);
 
+/** Non-callable UI framework tables provided only inside resolved `<environment type="menus">` addons. */
+const X4_MENU_VALUE_GLOBALS = new Set([
+  'Color', 'ColorText', 'DebugConfig', 'Matrix', 'Menus', 'Rotation', 'Vector', 'View', 'addonSystem'
+]);
+
+/**
+ * Deterministic X4 9.00 C/Anark/widget-shell callables and legacy shared tables
+ * grounded in unpacked X4 9.00 `ui/` (`addons/`, `widget_fullscreen.lua`, `core/lua/`).
+ */
 const X4_ENGINE_GLOBALS = new Set([
-  'AddUITriggeredEvent', 'ConvertStringTo64Bit', 'DebugError', 'DebugText', 'GetComponentData',
-  'GetCurRealTime', 'GetCurTime', 'GetNPCBlackboard', 'GetPlayerID', 'GetWareData',
-  // X4 9.00 widget_fullscreen.lua:18830 exports GetTopRow via AddGlobalAccess.
-  'GetTopRow', 'Helper', 'IsValidWidgetElement', 'OpenMenu', 'ReadText', 'OnlineGetUserItemAmount',
-  'OnlineGetUserItems', 'RegisterEvent', 'RemoveEvent', 'RemoveScript', 'SetNPCBlackboard',
-  'SetScript', 'SignalObject', 'TraceBack', 'ffi', 'json', 'widgetSystem'
+  'ActivateEditBox', 'ActivateSliderCellInput', 'AddAmmo', 'AddGlobalAccess',
+  'AddInventory', 'AddKnownItem', 'AddLicence', 'AddLogbookEntry',
+  'AddTradeToShipQueue', 'AddUITriggeredEvent', 'AdjustMultilineString', 'CallEventScripts',
+  'CallHotkeyScripts', 'CallTabScrollScripts', 'CallUpdateScripts', 'CallWidgetEventScripts',
+  'CancelEditBoxInput', 'CheckInputProfileRegression', 'CheckSuitableTransportType', 'ClearLogbook',
+  'ClipLine', 'CloseDropDownOptions', 'CloseFrame', 'CloseMenusUponMouseClick',
+  'ConfirmEditBoxInput', 'ConvertIDTo64Bit', 'ConvertIntegerString', 'ConvertMissionLevelString',
+  'ConvertMoneyString', 'ConvertStringTo64Bit', 'ConvertStringToLuaID', 'ConvertTimeString',
+  'CreateButton', 'CreateCutsceneDescriptor', 'CreateFontString', 'CreateFrame',
+  'CreateFrame2', 'CreateInputBar', 'CreateInteractionDescriptor2', 'CreateObjectInPresentationCluster',
+  'CreateOrder', 'CreateSink', 'CreateSource', 'CreateTable',
+  'CreateView', 'DebugError', 'DebugText', 'DestroyPresentationCluster',
+  'DialogMenuHidden', 'DialogMenuShown', 'DisableCameraEffectSync', 'DisplayView',
+  'DrawCircle', 'DrawRect', 'DrawTriangle', 'DumpAllMessageSinks',
+  'DumpAllMessageSources', 'DumpAllMessages', 'ExecuteDebugCommand', 'ForceAnarkUpdate',
+  'GetAccountData', 'GetActionInfo', 'GetActiveFrame', 'GetActiveGuidanceMissionComponent',
+  'GetAdapterOption', 'GetAimAssistOption', 'GetAlignment', 'GetAllExtensionSettings',
+  'GetAllStatIDs', 'GetAllWeapons', 'GetAutorollOption', 'GetAutosaveOption',
+  'GetBonusContentData', 'GetBoostToggleOption', 'GetBuildAnchor', 'GetButtonColor',
+  'GetButtonHotkeyDetails', 'GetButtonIcon', 'GetButtonIcon2', 'GetButtonIcon2Color',
+  'GetButtonIcon2Offset', 'GetButtonIcon2Size', 'GetButtonIconColor', 'GetButtonIconOffset',
+  'GetButtonIconSize', 'GetButtonSwapIcon', 'GetButtonSwapIcon2', 'GetButtonText',
+  'GetButtonTextAlignment', 'GetButtonTextColor', 'GetButtonTextFont', 'GetButtonTextOffset',
+  'GetCaptureHQOption', 'GetCellContent', 'GetCellText', 'GetChildren',
+  'GetClusters', 'GetCollectableData', 'GetCollisionAvoidanceAssistOption', 'GetColor',
+  'GetCommander', 'GetComponentData', 'GetComponentName', 'GetConfineMouseOption',
+  'GetContainedBuildStoragesByOwner', 'GetContainedObjectsByOwner', 'GetContainedStationsByOwner', 'GetContainerWarePrice',
+  'GetContextByClass', 'GetControlEntity', 'GetControllerInfo', 'GetCrashReportOption',
+  'GetCurRealTime', 'GetCurTime', 'GetCurrentMouseOverFont', 'GetCurrentMouseOverWidth',
+  'GetDate', 'GetDeadzoneOption', 'GetDialogOption', 'GetDiplomaticActionOperationParamValues',
+  'GetDiplomaticActionTargetParameters', 'GetDistortionOption', 'GetEditBoxCloseMenuOption', 'GetEditBoxColor',
+  'GetEditBoxFont', 'GetEditBoxHotkeyDetails', 'GetEditBoxText', 'GetEditBoxTextAlignment',
+  'GetEditBoxTextColor', 'GetEffectDistanceOption', 'GetError', 'GetErrorSeverity',
+  'GetErrorTimestamp', 'GetExtensionList', 'GetExtensionUpdateWarningText', 'GetFOVOption',
+  'GetFactionData', 'GetFlowchartData', 'GetFlowchartEdgeData', 'GetFlowchartEdgeID',
+  'GetFlowchartFirstVisibleCell', 'GetFlowchartNodeData', 'GetFlowchartNodeExpandedFrameData', 'GetFlowchartNodeID',
+  'GetFlowchartSelectedCell', 'GetFont', 'GetFontHeight', 'GetFrameLayer',
+  'GetFramePosition', 'GetFullscreenOption', 'GetGamepadModeOption', 'GetGammaOption',
+  'GetGfxQualityOption', 'GetGlobalSyncSetting', 'GetGlowOption', 'GetHeader',
+  'GetHintPosition', 'GetIconDetails', 'GetInputActionMap', 'GetInputProfiles',
+  'GetInputRangeMap', 'GetInputStateMap', 'GetInteractiveObject', 'GetInventory',
+  'GetInversionSetting', 'GetJoysticksOption', 'GetLODOption', 'GetLibrary',
+  'GetLibraryEntry', 'GetLiveData', 'GetLiveDataBridge', 'GetLoadingInfo',
+  'GetLocalMouseClickPosition', 'GetLocalMousePosition', 'GetLocalizedKeyName', 'GetLocalizedRawKeyName',
+  'GetLogbook', 'GetMacroData', 'GetMacroUnitStorageCapacity', 'GetMappedJoysticks',
+  'GetMessageCutsceneParameter', 'GetMessageScreenPosition', 'GetMissionDetails', 'GetMissionObjectiveEncyclopediaReference',
+  'GetMissionOfferAtConnection', 'GetMissionOfferDetails', 'GetMouseLookToggleOption', 'GetNPCBlackboard',
+  'GetNPCs', 'GetNotificationDetails', 'GetNotificationPriority', 'GetNumErrors',
+  'GetNumLogbook', 'GetNumMissions', 'GetOffset', 'GetOrderParams',
+  'GetOwnLicences', 'GetPersonalizedCrashReportsOption', 'GetPlayerActivity', 'GetPlayerContextByClass',
+  'GetPlayerID', 'GetPlayerInventory', 'GetPlayerMoney', 'GetPlayerShipHullShield',
+  'GetPlayerSpeed', 'GetPlayerSteeringStrength', 'GetPlayerTarget', 'GetPossibleAdapters',
+  'GetPossibleResolutions', 'GetPrioritizedPlatformNPCs', 'GetProductionModuleData', 'GetProductionModules',
+  'GetRadarOption', 'GetRegisteredModules', 'GetRelativeMousePosition', 'GetRenderTargetMousePosition',
+  'GetRenderTargetTexture', 'GetResolutionOption', 'GetRoleTierNPCs', 'GetRumbleOption',
+  'GetSSAOOption', 'GetSaveList', 'GetSectors', 'GetSelectedRows',
+  'GetSensitivitySetting', 'GetShaderQualityOption', 'GetShadowOption', 'GetShiftStartEndRow',
+  'GetSize', 'GetSoftShadowsOption', 'GetSoundOption', 'GetStandardButtons',
+  'GetStatData', 'GetSteeringNoteOption', 'GetStopShipInMenuOption', 'GetStorageData',
+  'GetSubordinates', 'GetSubtitleOption', 'GetTableBackgroundColumnSpan', 'GetTableCellColor',
+  'GetTableColumnSpan', 'GetTableColumnWidths', 'GetTableFullHeight', 'GetTableNumFixedRows',
+  'GetTableNumRows', 'GetTableRowHeight', 'GetTargetElementInfo', 'GetTargetMonitorDetails',
+  'GetTargetMonitorDetailsBridge', 'GetText', 'GetTextLines', 'GetTextNumLines',
+  'GetTopRow', 'GetTopTargetPriorityMessages', 'GetTradeList', 'GetTradesForWare',
+  'GetUIElementRectangleScreenPosition', 'GetUIElementScreenPosition', 'GetUIRelation', 'GetUISafeModeOption',
+  'GetUnitStorageData', 'GetUsableTableWidth', 'GetVersionString', 'GetVolumeOption',
+  'GetWareCapacity', 'GetWareData', 'GetWidgetSystemSize', 'GetWidgetSystemSizes',
+  'GetWordWrap', 'GetWorkForceRaceResources', 'HasAllResourcesToCraft', 'HasFlightControl',
+  'HasLicence', 'HasTag', 'HaveExtensionSettingsChanged', 'HideAllCircles',
+  'HideAllRects', 'HideAllShapes', 'HideAllTriangles', 'HideCircle',
+  'HidePresentation', 'HideRect', 'HideTriangle', 'HideView',
+  'InstallSteamDLC', 'IsBorderEnabled', 'IsButtonActive', 'IsCheatVersion',
+  'IsComponentClass', 'IsComponentConstruction', 'IsComponentOperational', 'IsDialogActive',
+  'IsDockingPossible', 'IsFactionKnown', 'IsFirstPerson', 'IsFullscreenWidgetSystem',
+  'IsInfoUnlockedForPlayer', 'IsInteractive', 'IsKnownItem', 'IsLuaDebugInputEnabled',
+  'IsMacroClass', 'IsObstructed', 'IsSameComponent', 'IsSavingPossible',
+  'IsSelectable', 'IsSofttargetLocked', 'IsSteamworksEnabled', 'IsTableColumnWidthPercentage',
+  'IsTableWrapAround', 'IsType', 'IsValidComponent', 'IsValidWidgetElement',
+  'IsWareIllegalTo', 'ListenForInput', 'LoadGame', 'LoadInputProfile',
+  'LockPresentation', 'MakeGlobalAvailable', 'MinimizeFrame', 'NewGame',
+  'NotifyOnActiveWeaponGroupChanged', 'NotifyOnChangedEnvironmentObject', 'NotifyOnConversationFinished', 'NotifyOnConversationStarted',
+  'NotifyOnCutsceneReady', 'NotifyOnCutsceneStopped', 'NotifyOnIncomingMail', 'NotifyOnIncomingMissile',
+  'NotifyOnInventoryWaresAdded', 'NotifyOnMailRead', 'NotifyOnMissileLockInitiated', 'NotifyOnMissileLockLost',
+  'NotifyOnMissionInfoUpdate', 'NotifyOnMissionObjectiveBarUpdate', 'NotifyOnNotificationFreed', 'NotifyOnPlayerActivityChanged',
+  'NotifyOnPlayerFlightControlStarted', 'NotifyOnPlayerFlightControlStopped', 'NotifyOnScanAborted', 'NotifyOnScanFinished',
+  'NotifyOnScanStarted', 'NotifyOnStartDialog', 'NotifyOnStopDialog', 'NotifyOnTeleportSucceeded',
+  'NotifyOnWeaponGroupChanged', 'NotifyTargetElementShown', 'NotifyVoiceOutput', 'OnlineGetChatGroupUsers',
+  'OnlineGetChatMessages', 'OnlineGetCurrentUserLanguage', 'OnlineGetMultiversePatronInfo', 'OnlineGetNumUnreadChatMessages',
+  'OnlineGetScenarioRankings', 'OnlineGetUserItemAmount', 'OnlineGetUserItems', 'OnlineGetUserName',
+  'OnlineGetVentureConfig', 'OnlineGetVersionIncompatibilityState', 'OnlineHasPreviousSessionToken', 'OnlineHasSession',
+  'OnlineIsCurrentTeamValid', 'OnlineIsGameRegistered', 'OnlineLogIn', 'OnlineLogOut',
+  'OnlineRequestScenarioRankings', 'OnlineSendChatMessage', 'OnlineSetUserLanguage', 'OnlineSetVentureConfig',
+  'OnlineUploadScenarioStats', 'OnlineUserAllowForumAttribution', 'OnlineUserAllowInvites', 'OnlineUserAllowPrivateMessages',
+  'OnlineUserArePrivateMessagesAllowed', 'OpenMenu', 'OpenSteamOverlayStorePage', 'OpenWorkshop',
+  'Pause', 'PerformAction', 'PlaySound', 'PrepareIcon',
+  'PrepareMesh', 'PrepareRenderTarget', 'PrepareTexture', 'QuitGame',
+  'QuitModule', 'RaisePlayerInteractionEvent', 'ReadLuaDebugInput', 'ReadText',
+  'RegisterAddonBindings', 'RegisterEvent', 'RegisterMouseInteractions', 'RegisterWidget',
+  'ReleaseCutsceneDescriptor', 'ReleaseDescriptor', 'ReleaseNotification', 'ReleaseViewDescriptor',
+  'RemoveEvent', 'RemoveHighlightOverlay', 'RemoveInputBar', 'RemoveInventory',
+  'RemoveScript', 'RemoveSofttarget', 'RemoveSofttargetLockRequest', 'RequestSofttargetLock',
+  'ResetAllExtensionSettings', 'RestoreDisplayOptions', 'RestoreFrame', 'RestoreGameOptions',
+  'RestoreGraphicOptions', 'RestoreSoundOptions', 'RoundTotalTradePrice', 'SaveFullscreenOption',
+  'SaveGame', 'SaveInputProfile', 'SaveInputSettings', 'SaveOnlineGame',
+  'SaveResolutionOption', 'SelectColumn', 'SelectDialogOption', 'SelectGraphDataPoint',
+  'SelectRow', 'SetAdapterOption', 'SetAimAssistOption', 'SetAutorollOption',
+  'SetAutosaveOption', 'SetBoostToggleOption', 'SetButtonColor', 'SetButtonText',
+  'SetCaptureHQOption', 'SetCollisionAvoidanceAssistOption', 'SetComponentName', 'SetConfineMouseOption',
+  'SetContainerWarePriceOverride', 'SetCrashReportOption', 'SetDeadzoneOption', 'SetDiffuseColor',
+  'SetDistortionOption', 'SetEGOGlobals', 'SetEffectDistanceOption', 'SetExtensionSettings',
+  'SetFOVOption', 'SetFullScreenOneToOne', 'SetFullScreenWorldSpace', 'SetFullscreenOption',
+  'SetGamepadModeOption', 'SetGammaOption', 'SetGfxQualityOption', 'SetGlowOption',
+  'SetIcon', 'SetInversionSetting', 'SetJoysticksOption', 'SetLODOption',
+  'SetLuaDebugOutput', 'SetMaxBudget', 'SetMinBudget', 'SetMouseCursorOverride',
+  'SetMouseLookToggleOption', 'SetMouseOverOverride', 'SetNPCBlackboard', 'SetOrderParam',
+  'SetPersonalizedCrashReportsOption', 'SetPointerOverride', 'SetPresentationPosition', 'SetPriorityMissionTargetMessage',
+  'SetRadarOption', 'SetRenderTargetNoise', 'SetRenderTargetSize', 'SetResolutionOption',
+  'SetRumbleOption', 'SetSSAOOption', 'SetScript', 'SetSelectedRows',
+  'SetSensitivitySetting', 'SetShaderQualityOption', 'SetShadowOption', 'SetSliderCellValue',
+  'SetSoftShadowsOption', 'SetSofttarget', 'SetSoundOption', 'SetSteeringNoteOption',
+  'SetStopShipInMenuOption', 'SetSubtitleOption', 'SetText', 'SetTextureColorMode',
+  'SetTopRow', 'SetUISafeModeOption', 'SetVolumeOption', 'SetWidth',
+  'ShowHighlightOverlay', 'SignalObject', 'StartCutscene', 'StartDiplomacyActionOperation',
+  'StopCutscene', 'StopPlayingSound', 'SwitchInteractiveObject', 'TargetMonitorInteractionHidden2',
+  'TargetMonitorInteractionShown2', 'ToReprString', 'TraceBack', 'TransferInventoryToPlayer',
+  'TransferMoneyToPlayer', 'TransferPlayerInventoryTo', 'TransferPlayerMoneyTo', 'TruncateText',
+  'UninstallSteamDLC', 'Unpause', 'UnregisterAddonBindings', 'UnregisterEvent',
+  'UnregisterMouseInteractions', 'UnsetPointerOverride', 'UpdateFrame', 'UpdateInputBar',
+  'calculateGlobalTransform', 'clone', 'getAttribute', 'getCurrentSlide',
+  'getElapsedTime', 'getElement', 'getScreenInfo', 'goToSlide',
+  'goToTime', 'play', 'registerForChange', 'registerForEvent',
+  'setAttribute', 'unregisterForChange', 'unregisterForEvent',
+  'Helper', 'ffi', 'json', 'widgetSystem'
 ]);
 
 const RESTRICTED_X4_UI_CALLS = [
@@ -692,6 +830,7 @@ function analyzeRuntimeScopes(files: LuaFileInput[], manifestOnly: readonly LuaM
       const available = new Map<string, 'seed' | Provider>();
       const maybeAvailable = new Set<string>();
       for (const name of seed) available.set(name, 'seed');
+      for (const name of X4_MENU_VALUE_GLOBALS) available.set(name, 'seed');
       for (const item of ordered) {
         const { file, event } = item;
         if (event.kind === 'boundary') {
@@ -723,14 +862,15 @@ function analyzeRuntimeScopes(files: LuaFileInput[], manifestOnly: readonly LuaM
         const authorityUnknown = event.authority && rebound.has(event.authority);
         const phase = authorityUnknown ? 'unknown' : event.phase;
         if (authorityUnknown) addGap(file, 'lua.globals-order', 'A modeled guard or protected-call authority was rebound; its execution behavior is unproven.', event.node);
+        const isMenuSeed = seed.has(event.name) || X4_MENU_VALUE_GLOBALS.has(event.name);
         if (present === 'seed' && !authorityUnknown) continue;
         if (phase !== 'load' || event.conditional || event.guarded || event.protected) {
           addGap(file, 'lua.globals-order', 'Guarded, protected, conditional or deferred global availability is not an unconditional load-time proof.', event.node);
-          if (!event.guarded && !event.protected && !present && !candidates.has(event.name) && !seed.has(event.name)) finding(file, event.name, event.node);
+          if (!event.guarded && !event.protected && !present && !candidates.has(event.name) && !isMenuSeed) finding(file, event.name, event.node);
           continue;
         }
         if (present) continue;
-        if (seed.has(event.name)) {
+        if (isMenuSeed) {
           addGap(file, 'lua.globals-order', environmentUnknown
             ? 'Dynamic or incomplete environment state prevents a complete load-order conclusion.'
             : 'A Lua/X4 seed has been rebound; its current availability is not established.', event.node);
@@ -1759,6 +1899,40 @@ export function runLuaStaticAnalysisSelftest(): { pass: boolean; checks: { name:
       return !scopeFinding(result, GLOBAL_BEFORE_DEFINITION) && result.runtimeScope.gaps.some(gap => gap.reason.includes('Repeated menu environments'));
     })() },
     { name: 'runtime_seed_remains_advisory_free_under_unknown_loader', pass: !scopeFinding(runtimeCase('require("dynamic.module"); GetTopRow()'), 'lua.undefined_global', 'GetTopRow') },
+    { name: 'runtime_x4_900_engine_and_menu_globals_resolve_while_typos_and_calls_remain_bounded', pass: (() => {
+      const apiCalls = [
+        'local c = Color and Color["text_normal"]',
+        'local ct = ColorText and ColorText.positive',
+        'local m = Menus and #Menus',
+        'local v = View and View.createView',
+        'ConvertStringToLuaID("x"); ConvertIDTo64Bit(1); ConvertMoneyString(10, false, true, 0, true)',
+        'GetLibraryEntry("wares", "energycells"); GetSubordinates(1); SetOrderParam(1, 1, 1, 1)',
+        'GetPlayerMoney(); PlaySound("ui_click"); GetMacroData("ship", "name"); GetControllerInfo()',
+        'local t = getElapsedTime(); local b = bit.band(3, 1); local arch = jit.arch',
+      ].join('\n');
+      const clean = runtimeCase(apiCalls, '', [consumerPath]);
+      const withTypo = runtimeCase(`${apiCalls}\nColro.bad()`, '', [consumerPath]);
+      const calledColor = runtimeCase('local x = Color()', '', [consumerPath]);
+      const reboundColor = runtimeCase('Color = nil; local x = Color["text_normal"]', '', [consumerPath]);
+      const dynamicColor = runtimeCase('_G["other"] = 1; local x = Color["text_normal"]', '', [consumerPath]);
+      const deferredAfterBoundary = runtimeCase('_G["other"] = 1; local function render() return Color["text_normal"], Menus, View end', '', [consumerPath]);
+      const invalidSources = [focusedFile(consumerPath, 'local c = Color["text_normal"]', 'invalid-menu')];
+      const invalidManifest = analyzeLuaFiles(invalidSources.map(file => ({
+        ...file, extension: { ...file.extension, runtimeInventory: buildX4MenuLuaRuntimeInventory({ uiXml: '<addon', luaFiles: invalidSources }) }
+      })));
+      return clean.findings.filter(f => f.code === 'lua.undefined_global').length === 0
+        && !clean.runtimeScope.gaps.some(gap => gap.rel === consumerPath && gap.reason.includes('unseeded global'))
+        && scopeFinding(withTypo, 'lua.undefined_global', 'Colro')?.line === 9
+        && calledColor.runtimeScope.stages[2].status === 'partial'
+        && calledColor.runtimeScope.gaps.some(gap => gap.rel === consumerPath && gap.reason.includes('named or indirect callable'))
+        && reboundColor.runtimeScope.stages[2].status === 'partial'
+        && reboundColor.runtimeScope.gaps.some(gap => gap.rel === consumerPath && gap.reason.includes('seed has been rebound'))
+        && dynamicColor.runtimeScope.stages[2].status === 'partial'
+        && hasUnknownConsumerEnvironment(dynamicColor)
+        && deferredAfterBoundary.findings.filter(f => f.code === 'lua.undefined_global').length === 0
+        && deferredAfterBoundary.runtimeScope.stages[2].status === 'partial'
+        && invalidManifest.findings.some(f => f.code === 'lua.undefined_global' && f.symbol === 'Color');
+    })() },
     { name: 'unreachable_calls_preserve_existing_x4_ui_eligibility', pass: analyzeLuaFiles([
       focusedFile('scripts/lexical-ui.lua', 'if false then Helper.createFrameHandle({}, {}) end', 'lexical-ui')
     ]).x4UiResults.length === 1 },
