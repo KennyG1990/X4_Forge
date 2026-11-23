@@ -42,6 +42,12 @@ AAR. The first hold was before the admission guard, so its 409 reflected a real 
 
 The isolated post-0.0.92 source checkpoint makes grouped Lua payload coverage give the same explanation when Lua candidate files are reordered. The exact historical 264-file AiLive 794 source still produced one informational group at line 1340, column 50 for 49 keys, eleven candidate writer files and zero missing-writer errors for player orders. Each key has at least one recognized table-index candidate. The unresolved flow crosses a returned order table and a protected callback on several senders. The installed 0.0.92 evidence precedes this wording fix. The indexed-payload plan records 34 focused checks, the frozen replay, the scoped lint and passed precommit with log hash. Issues #71 and #101 remain open for recipient flow.
 
+## Protected Lua sends and release review
+
+The isolated post-0.0.92 validator recognizes `pcall(AddUITriggeredEvent, screen, control, payload)` with the exact engine and built-in forwarder. The frozen AiLive 794 replay detected 53 extra exact sends, including the thirteenth player-orders send. It kept zero cross-file errors and missing listeners and made eight previously invisible dynamic sends explicit. An owned exact table passed Project Validation. The 49-key historical table-flow group stays open. The next exact caller to trace is `aic_uix.lua:7722`, which passes the same-file `BuildOrderPayload` return through a protected callback. The builder contains candidate writes for 24 of the 49 keys.
+
+The source checkpoint passed 37 focused checks, the 264-file replay, scoped lint and ordinary precommit. Three post-release checkpoints now have evidence. The #137 recovery replay is operational evidence for 0.0.92. Both #71 changes are eligible for the next user-facing build after the release gates. The exact candidate still needs the release suites, Windows VSIX build, and installed Antigravity proof before Open VSX publication. See the existing indexed-payload plan for receipt hashes and reproducible controls.
+
 ## Operator dependencies
 
 #85 still needs the exact separate deploy2.py revision, runnable command, writer evidence and operator verdict. Claude's known AiLive wrapper uses native preview and apply. Its missing-Lua false success has a separate tested proposal, awaiting integration and the exact, missing and changed readback reruns. The primary Forge handoff is https://app.notion.com/p/4124618ed15b814489ecd88e7d531ebc.

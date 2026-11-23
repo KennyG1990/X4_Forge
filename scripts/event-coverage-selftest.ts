@@ -138,6 +138,77 @@ check('finite-control-applies-indexed-payload-proof-to-both-targets', () => {
   }
 });
 
+
+const protectedProbe = 'pcall(AddUITriggeredEvent, "ForgeLab", "probe", p)';
+check('protected-global-emitter-uses-forwarded-screen-and-control', () => {
+  const sent = analyze(protectedProbe);
+  assert.equal(sent.mdLua.emitCoverage.exact, 1);
+  assert.equal(sent.mdLua.emitCoverage.scope, 'direct-and-pcall-global-AddUITriggeredEvent-calls');
+  assert.deepEqual(sent.mdLua.emitted.map(event => [event.namespace, event.control]), [['ForgeLab', 'probe']]);
+  assert.deepEqual(listenerErrors(sent), []);
+  assert.deepEqual(listenerErrors(analyze(protectedProbe.replace('"probe"', '"absent"'))), [['ForgeLab.absent', 'error']]);
+  const dynamicControl = analyze(protectedProbe.replace('"probe"', 'nextControl()'));
+  assert.equal(dynamicControl.mdLua.emitCoverage.unresolved, 1);
+  assert.ok(dynamicControl.mdLua.emitCoverage.files.find(file => file.file === 'ui/lab.lua')?.reasons.includes('dynamic-arguments'));
+});
+
+check('rebound-protected-callee-does-not-prove-an-event', () => {
+  for (const rebind of [
+    'local pcall = invoke;',
+    'pcall = invoke;',
+    '_G["pcall"] = invoke;',
+    'rawset(_G, "pcall", invoke);',
+    '_G[dynamicName] = invoke;',
+    'rawset(_G, dynamicName, invoke);',
+    'setfenv(1, env);',
+    'function _G.pcall(...) return invoke(...) end;',
+    '_G.AddUITriggeredEvent = invoke;',
+  ]) {
+    const result = analyze(`${rebind} ${protectedProbe}`);
+    assert.equal(result.mdLua.emitted.length, 0, rebind);
+    assert.equal(result.mdLua.emitCoverage.unresolved, 1, rebind);
+    assert.ok(result.mdLua.emitCoverage.files.find(file => file.file === 'ui/lab.lua')?.reasons.includes('ambiguous-callee'), rebind);
+  }
+  assert.deepEqual(analyze('local AddUITriggeredEvent = invoke; ' + protectedProbe).mdLua.emitted, []);
+  assert.equal(analyze('local _G = {}; _G.pcall = invoke; ' + protectedProbe).mdLua.emitCoverage.exact, 1);
+  assert.deepEqual(analyze('pcall(function() return p end)').mdLua.emitted, []);
+});
+
+check('protected-emitter-proves-only-an-owned-exact-indexed-write', () => {
+  const table = 'local p = {n = 1};';
+  const write = 'p["po" .. p.n] = "order";';
+  const send = protectedProbe.replace('"probe"', '"on"');
+  const authored = `${table} ${write} ${send}`;
+  const listeners: [string, string][] = [['ForgeLab', 'on']];
+  const checkPayload = (lua: string) => finiteCase(lua, listeners, true).findings.filter(finding => finding.code.startsWith('md_lua.payload_'));
+  assert.deepEqual(checkPayload(authored), []);
+  const input = project(authored);
+  input.files.push({ path: 'md/orders.xml', kind: 'md', content: `<mdscript name="Orders"><cues><cue name="OnOrder">
+    <conditions><event_ui_triggered screen="'ForgeLab'" control="'on'"/></conditions>
+    <actions><set_value name="$order" exact="event.param3.{'$po' + $si}"/></actions>
+  </cue></cues></mdscript>` });
+  const validated = runProjectValidation(input);
+  assert.ok(!flattenProjectValidation(validated).some(finding => finding.code.startsWith('md_lua.payload_')));
+  assert.ok(!validated.evidence?.coverage.gaps.some(gap => gap.check === 'md_lua.payload_writer_unverified'));
+  const wrong = checkPayload(authored.replace('"on"', '"other"'));
+  assert.equal(wrong[0]?.code, 'md_lua.payload_missing_writer');
+  assert.equal(wrong[0]?.severity, 'error');
+  for (const unproved of [
+    `${table} ${write} p["po" .. p.n] = nil; ${send}`,
+    `${table} ${write} local alias = p; alias["po" .. alias.n] = nil; ${send}`,
+    `${table} p["po" .. p.n] = ${send}`,
+    `${table} ${write} ${send.replace(', p)', ', p, mutate(p))')}`,
+    `${table} ${write} local function send() ${send} end`,
+    `${table} ${write} p = {}; ${send}`,
+    `${table} ${write} ${send.replace('"on"', 'nextControl()')}`,
+    `${table} ${write} pcall = invoke; ${send}`,
+  ]) {
+    const findings = checkPayload(unproved);
+    assert.equal(findings[0]?.code, 'md_lua.payload_writer_unverified', unproved);
+    assert.equal(findings[0]?.severity, 'info', unproved);
+  }
+});
+
 const localIndexPayloadHelper = `local function build()
 local p = { n = 1 }
 local i = p.n
