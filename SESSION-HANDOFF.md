@@ -1,7 +1,7 @@
 # Session Handoff — X4_Forge (`G:\Forge-QA\forge-development`)
 
 - **Updated:** 2026-11-23
-- **Branch / HEAD:** `main` (ready for local commit of `#101`/`#71` Unit A on top of `#48` `d220464`)
+- **Branch / HEAD:** `main` (ready for local commit of `#129` unit on top of `#101`/`#71` Unit A `becb2b7`)
 - **Active Project:** `X4_Forge` (Forge QA / Dev ownership; NOT `X4_AiLive`, NOT `G:\F-rescue-2026-09-26\DEV_ENV\X4_Forge`)
 - **Isolated IDE State:** `FORGE DEVELOPMENT` (`PID 34076`, `G:\Forge-QA\development-ide`) still running `0.0.89` with `X4CodeSense 1.2.0` side-by-side. Do NOT restart/upgrade until Machine-State Ask authorizes `0.0.94` build/qualification.
 
@@ -24,20 +24,23 @@
    - `scripts/action-receipt-coverage-audit.ts`: exported `compactCandidateSelftest(result, policyBundle)` incorporating all 4 required families (`path`, `envelope`, `semantic`, `policyBundle`); added `summarizePrerequisiteFailureOutput` / `formatPrerequisiteFailureDetail` into `runPrerequisiteAudit` (extracting stderr from callback `execFile`'s `error.message` while preserving `hasPrecommitCapabilityGate` AST invariants); added positive/negative selftest checks inside `runActionReceiptCoverageCandidateInvariantSelftest`.
    - `src/lib/actionReceiptPolicyBundle.selftest.ts`: synced hardcoded `surfaceCount` oracle (`67 -> 69` from `a03fb13`).
    - Verified: live pre-sync negative `--candidate-selftest` (`pass: false, 77/79`, exit `1`), real Node `execFile` failure probe, `actionReceiptPolicyBundle.selftest.ts` (`19/19`), `test:action-receipt-coverage:selftest` (`79/79` + `23/23`), `eslint` (`0` errors), and `precommit:check` (`[precommit] OK`).
-10. **`#101` / `#71` Unit A — Finite registry wraps & `AddUITriggeredEvent` forwarding wrappers (`docs/plans/2026-11-23-lua-health-hook-and-emitter-wrappers.md`):**
+10. **`becb2b7` — `#101` / `#71` Unit A — Finite registry wraps & `AddUITriggeredEvent` forwarding wrappers (`docs/plans/2026-11-23-lua-health-hook-and-emitter-wrappers.md`):**
    - `src/lib/projectCrossFileValidation.ts`: added `resolveFiniteRegistries` + `isLuaParamReadOnlyInFunction` (`escapesTrackedTable` handling `LogicalExpression`) and `verifyProjectEmitterForwarding` + `verifyIdentityPreservingTableCleaner` + `isStringOnlyLeafCleaner` (with `noShadowNames` vs `noReadNames` split allowing harmless `tostring(control)` telemetry while blocking aliasing/mutation/clears).
    - `scripts/event-coverage-selftest.ts`: added `finite-registry-member-wrap-verification` & `emitter-forwarding-wrapper-verification` (`41/41` PASS).
    - Verified: `eslint` (`0`), `typecheck` (`0`), `event-coverage-selftest` (`41/41`), `claude-validation-matrix` (`34/34`), `validation-noise` (`25/25 + 38`), `ui-manifest-integrity` (`16/16` w/ `X4_XSD_PATH`), `project-validation-overlay` (`24/24`), `x4-ui-integration` (`21/21`), `test:routes`, `test:oracles`, `precommit:check` (`[precommit] OK`), and full 269-file read-only `x4_ai_influence` replay (`0` errors, `64` findings, `player_orders` unverified keys `50 -> 27`, zero `"returned table"` / `"event forwarding"` caveat).
+11. **`#129` / `#114` — Sound intra-block MD initial-state flow across branches, loops, instantiated cues & libraries (`docs/plans/2026-11-23-md-initial-state-branch-loop-library-flow.md`):**
+   - `src/lib/mdPitfallLints.ts`: extracted `OPAQUE_OR_INLINE_ACTIONS` and `MdAvailabilityAction.knownDeclaration`; propagated sequential `present` facts across non-existence `<do_if>`/`<do_elseif>`/`<do_else>` joins, `<do_for_each>` (`name`/`valuename`/`counter`), `<do_all>` (`counter`), `<do_while>` (with `collectLoopInvalidations`), `!isPlainVariableCue` / `<library>` `<actions>` (seeding `<params><param name="..."/></params>` with `allowAbsence = false`), and `knownDeclaration` non-inline schema actions (`<run_actions>`, `<remove_object_commander>`, etc.) while evaluating RHS strict reads before `unknownVariables` invalidation and keeping uninitialized/`result`/`<find_*>` paths conservative. Added 3 selftest suites in `runMdPitfallSelftest()`.
+   - Verified post-final-edit: `eslint` (`0`), `typecheck` (`0`), `diagnostic-source-navigation-selftest.ts` (`33/33`), `event-coverage-selftest.ts` (`41/41`), `project-validation-overlay` (`24/24`), `test:oracles`, `test:routes`, `precommit:check` (`[precommit] OK`), `claude-validation-matrix.selftest.ts` (`34/34`), `validation-noise.selftest.ts` (`25/25 + 38`), and live read-only `x4_ai_influence` (`264` files + `canonicalMd`: `0` errors/warnings, `md.variable_initial_state` dropped **`768 -> 159` [`-79.3%`]**).
 
 ## Live Hazards & Environment Rules
 
 - Shell starts in `G:\F-rescue-2026-09-26\DEV_ENV\X4_Forge`: ALWAYS `Set-Location 'G:\Forge-QA\forge-development'` first and set `TEMP`, `TMP`, `npm_config_cache` to `G:\Forge-QA\temp...`.
-- Always pass `X4_REFERENCE_ROOT='G:\F-rescue-2026-09-26\Downskies\x4unpackersuiteV1\X4 unpacked 9.00'` (and `X4_XSD_PATH` for `ui-manifest-integrity`) when running reference/schema checks.
+- Always pass `X4_REFERENCE_ROOT='G:\F-rescue-2026-09-26\Downskies\x4unpackersuiteV1\X4 unpacked 9.00'` (and `X4_XSD_PATH` for `ui-manifest-integrity`) when running reference/schema checks, AND explicitly clear `X4_XSD_PATH` / `X4_REFERENCE_ROOT` before running `npm run test:routes` (otherwise `compile_*_schema_unavailable` route tests inherit `X4_XSD_PATH` and fail).
 - `config/durable-writers.json` `sourceFingerprint` is `97bb4caec9be084b54a49358f96bd7831add0f6b96cd621b6ac390a472b15050`.
 - Remember to run `npm run test:action-receipt-coverage:selftest` whenever `config/action-receipt-coverage.json` changes (`precommit:check` only runs `--audit`).
 - On Windows `pwsh`, pass inline scripts to `node --import tsx --input-type=module -e` (single line or `@' ... '@` here-string) instead of multi-line `npx` args (`cmd.exe` truncates on `\n`).
 
 ## Immediate Next Queue
 
-1. **Tier 2 Headless Source Queue (while awaiting Machine-State Ask on `0.0.94` IDE/E2E):** `#101` / `#71` Unit B (`CONV_ONLY(25)` in `aic_uix.lua:11895-12577` + conditional `g` clear + `ri` in `aic_confirm.lua:400`); `#129` MD unset variable read accuracy; `#80` quote-aware property positions; `#77`/`#78`/`#79`/`#64`/`#66`.
-2. **`0.0.94` Release Gate (Machine-State Ask + Write Gate pending Ken go-ahead):** Tier 1 items `#95`, `#105`, `#118`, `#131`, `#132` + `#53` + `#97` Units 1–5 + `#48` + `#101`/`#71` Unit A awaiting E2E / `FORGE DEVELOPMENT` upgrade & release.
+1. **Tier 2 Headless Source Queue (while awaiting Machine-State Ask on `0.0.94` IDE/E2E):** `#86` (`lua.undefined_global` / `tools/` scope in `217` `lua.runtime_scope_unverified` gaps); `#80` quote-aware property positions; `#74` P0 items (`#77`, `#78`, `#79`, `#64`, `#66`).
+2. **`0.0.94` Release Gate (Machine-State Ask + Write Gate pending Ken go-ahead):** Tier 1 items `#95`, `#105`, `#118`, `#131`, `#132` + `#53` + `#97` Units 1–5 + `#48` + `#101`/`#71` Unit A + `#129` awaiting E2E / `FORGE DEVELOPMENT` upgrade & release.

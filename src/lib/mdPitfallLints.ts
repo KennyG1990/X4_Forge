@@ -194,6 +194,7 @@ function hasXmlAttribute(element: ElementLike, name: string): boolean {
 const UNITLESS_NUMBER = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)f?$/i;
 const STORAGE = /^(?:([A-Za-z_]\w*|\$[A-Za-z_]\w*)\.)?(\$[A-Za-z_]\w*)$/;
 const CONDITIONAL_ACTIONS = new Set(['do_if', 'do_elseif', 'do_else']);
+const OPAQUE_OR_INLINE_ACTIONS = new Set(['opaque_effect', 'include_actions', 'signal_cue', 'signal_cue_instantly', 'reset_cue', 'cancel_cue']);
 
 interface NumericFact {
   line?: number;
@@ -251,6 +252,7 @@ interface MdAvailabilityAction {
   order: number;
   destinations: readonly MdAvailabilityDestination[];
   opaque: boolean;
+  knownDeclaration?: boolean;
   unknownVariables: readonly string[];
   selfOrderingUnknown?: string;
 }
@@ -515,6 +517,7 @@ export function buildMdVariableAvailabilityContext(
       }
       const unknownVariables = destinations.filter(target => target.initializes && !target.target && target.variable).map(target => target.variable!);
       const action: MdAvailabilityAction = { order, destinations, unknownVariables,
+        ...(spec && !OPAQUE_OR_INLINE_ACTIONS.has(element.tagName) ? { knownDeclaration: true } : {}),
         opaque: unsupported || destinations.some(target => target.initializes && !target.variable) };
       const operation = element.getAttribute('operation');
       const target = destinations.find(value => value.initializes && value.target === cue?.namespace && value.variable);
@@ -656,6 +659,35 @@ function lintLocalVariableReads(root: Element, source: string, filePath?: string
   };
   const clearInitial = (flow: InitialFlow | undefined) => { if (flow) { flow.facts.clear(); flow.potential = false; } };
   const cloneInitial = (flow: InitialFlow | undefined) => flow ? { facts: new Map(flow.facts), potential: flow.potential } : undefined;
+  const copyPresentFacts = (facts: ReadonlyMap<string, InitialValue> | undefined): Map<string, InitialValue> => {
+    const out = new Map<string, InitialValue>();
+    if (facts) for (const [key, value] of facts) if (value.kind === 'present') out.set(key, { kind: 'present' });
+    return out;
+  };
+  const intersectPresentFacts = (maps: readonly Map<string, InitialValue>[]): Map<string, InitialValue> => {
+    const out = new Map<string, InitialValue>();
+    if (!maps.length) return out;
+    for (const [key, value] of maps[0]) {
+      if (value.kind === 'present' && maps.every(map => map.get(key)?.kind === 'present')) out.set(key, { kind: 'present' });
+    }
+    return out;
+  };
+  const collectLoopInvalidations = (loopEl: Element): { clearAll: boolean; removed: Set<string> } => {
+    const removed = new Set<string>();
+    let clearAll = false;
+    for (const node of Array.from(loopEl.getElementsByTagName('*'))) {
+      if (node.namespaceURI || OPAQUE_OR_INLINE_ACTIONS.has(node.tagName)) {
+        clearAll = true;
+        break;
+      }
+      if (node.tagName === 'remove_value') {
+        const removedName = LOCAL_VARIABLE.exec(node.getAttribute('name')?.trim() || '')?.[1];
+        if (removedName) removed.add(removedName);
+        else clearAll = true;
+      }
+    }
+    return { clearAll, removed };
+  };
   function joinInitial(target: InitialFlow | undefined, left: InitialFlow | undefined, right: InitialFlow | undefined) {
     if (!target || !left || !right) return;
     const joined = new Map<string, InitialValue>();
@@ -669,14 +701,21 @@ function lintLocalVariableReads(root: Element, source: string, filePath?: string
     target.facts = joined; target.potential = left.potential && right.potential;
   }
   function initialAction(action: Element, flow: InitialFlow | undefined, absent: Map<string, AbsenceReason>) {
-    if (!flow || !activeCue) return;
+    if (!flow) return;
     const fact = availabilityOwn(availability?.actions, availabilityNode(action));
     if (!fact || fact.opaque || action.children.length) {
       inspectUnmodeled(action);
+      const childUnsafe = action.children.length > 0 && Array.from(action.getElementsByTagName('*')).some(child =>
+        child.namespaceURI || child.tagName === 'remove_value' || OPAQUE_OR_INLINE_ACTIONS.has(child.tagName));
+      if (fact?.knownDeclaration && !action.namespaceURI && !childUnsafe) {
+        for (const variable of fact.unknownVariables) flow.facts.delete(variable);
+        for (const dest of fact.destinations) if (dest.initializes && dest.variable) flow.facts.delete(dest.variable);
+        flow.potential = false;
+        return;
+      }
       clearInitial(flow);
       return;
     }
-    for (const variable of fact.unknownVariables) flow.facts.set(variable, { kind: 'unavailable' });
     const attribute = readAttribute(action);
     if (attribute) {
       for (const { variable, offset } of strictLocalReads(attribute.value)) {
@@ -692,7 +731,7 @@ function lintLocalVariableReads(root: Element, source: string, filePath?: string
         }
         if (state.kind !== 'potential') continue;
         const writer = availabilityOwn(activeAuthority()?.variables, variable);
-        const later = (availabilityOwn(writer?.writers.last, activeCue.block) ?? -1) > fact.order;
+        const later = (availabilityOwn(writer?.writers.last, activeCue?.block ?? '') ?? -1) > fact.order;
         const explanation = state.joined ? 'Modeled branches do not guarantee an earlier initialization'
           : later ? 'A modeled writer occurs later in this action block, without a guaranteed earlier initialization'
             : 'No guaranteed earlier initialization was found in the modeled project namespace';
@@ -703,15 +742,34 @@ function lintLocalVariableReads(root: Element, source: string, filePath?: string
     }
     if (action.tagName === 'debug_text') return;
     if (action.tagName === 'remove_value') { clearInitial(flow); return; }
+    const initializedVars = new Set<string>();
+    if (activeCue) {
+      for (const destination of fact.destinations) {
+        if (destination.initializes && destination.target === activeCue.namespace && destination.variable) {
+          initializedVars.add(destination.variable);
+        }
+      }
+    } else if (!action.hasAttribute('chance')) {
+      const localTarget = LOCAL_VARIABLE.exec(action.getAttribute('name')?.trim() || '')?.[1];
+      const localInitAction = action.tagName === 'set_value'
+        || ((action.tagName === 'append_to_list' || action.tagName === 'append_list_elements')
+          && ['true', '1'].includes(action.getAttribute('create') ?? ''));
+      if (localTarget && localInitAction && fact.destinations.some(dest => dest.initializes && dest.variable === localTarget)) {
+        initializedVars.add(localTarget);
+      }
+    }
+    for (const variable of fact.unknownVariables) {
+      if (!initializedVars.has(variable)) flow.facts.set(variable, { kind: 'unavailable' });
+    }
     if (fact.selfOrderingUnknown) flow.facts.set(fact.selfOrderingUnknown, { kind: 'unavailable' });
-    for (const destination of fact.destinations) if (destination.initializes && destination.target === activeCue.namespace && destination.variable) {
-      if (destination.variable === fact.selfOrderingUnknown) continue;
-      if (!action.hasAttribute('chance')) flow.facts.set(destination.variable, { kind: 'present' });
-      else if (initialValue(flow, destination.variable).kind === 'potential') flow.facts.set(destination.variable, { kind: 'potential', joined: true });
+    for (const variable of initializedVars) {
+      if (variable === fact.selfOrderingUnknown) continue;
+      if (!action.hasAttribute('chance')) flow.facts.set(variable, { kind: 'present' });
+      else if (initialValue(flow, variable).kind === 'potential') flow.facts.set(variable, { kind: 'potential', joined: true });
     }
   }
 
-  function scanActions(container: Element | undefined, absent: Map<string, AbsenceReason>, cue: string | undefined, depth: number, initial?: InitialFlow): Map<string, AbsenceReason> {
+  function scanActions(container: Element | undefined, absent: Map<string, AbsenceReason>, cue: string | undefined, depth: number, initial?: InitialFlow, allowAbsence = true): Map<string, AbsenceReason> {
     if (!container) return absent;
     const actions = Array.from(container.children);
     for (let index = 0; index < actions.length; index++) {
@@ -725,8 +783,12 @@ function lintLocalVariableReads(root: Element, source: string, filePath?: string
       const name = LOCAL_VARIABLE.exec(action.getAttribute('name')?.trim() || '')?.[1];
       if (action.tagName === 'remove_value' && name && !action.children.length
         && hasOnlyAttributes(action, ['name', 'comment'])) {
-        absent.set(name, 'removal');
-        initial?.facts.set(name, { kind: 'potential' });
+        if (allowAbsence) {
+          absent.set(name, 'removal');
+          initial?.facts.set(name, { kind: 'potential' });
+        } else {
+          initial?.facts.delete(name);
+        }
         continue;
       }
       if (action.tagName === 'do_if') {
@@ -740,9 +802,31 @@ function lintLocalVariableReads(root: Element, source: string, filePath?: string
         index = after - 1;
         const test = LOCAL_EXISTENCE_TEST.exec(action.getAttribute('value')?.trim() || '');
         if (!test || !simpleElse || !hasOnlyAttributes(action, ['value', 'comment']) || depth >= MAX_VARIABLE_BRANCH_DEPTH) {
-          for (let branch = first; branch < after; branch++) inspectUnmodeled(actions[branch]);
+          if (depth >= MAX_VARIABLE_BRANCH_DEPTH || !initial) {
+            for (let branch = first; branch < after; branch++) inspectUnmodeled(actions[branch]);
+            absent.clear();
+            clearInitial(initial);
+            continue;
+          }
+          const prePresent = copyPresentFacts(initial.facts);
+          const arms = actions.slice(first, after);
+          const armOutputs: Map<string, InitialValue>[] = [];
+          for (const armEl of arms) {
+            if (armEl.namespaceURI) {
+              inspectUnmodeled(armEl);
+              armOutputs.push(new Map());
+              continue;
+            }
+            const armInitial: InitialFlow = { facts: copyPresentFacts(prePresent), potential: false };
+            scanActions(armEl, new Map(), cue, depth + 1, armInitial, allowAbsence);
+            armOutputs.push(armInitial.facts);
+          }
+          const lastArm = arms[arms.length - 1];
+          const unconditionalElse = lastArm?.tagName === 'do_else' && !lastArm.namespaceURI
+            && hasOnlyAttributes(lastArm, ['comment']) && !arms.some(arm => arm.hasAttribute('chance'));
+          initial.facts = intersectPresentFacts(unconditionalElse ? armOutputs : [prePresent, ...armOutputs]);
+          initial.potential = false;
           absent.clear();
-          clearInitial(initial);
           continue;
         }
 
@@ -750,35 +834,67 @@ function lintLocalVariableReads(root: Element, source: string, filePath?: string
         const absenceIsTrue = Boolean(test[1]);
         const absentBranch = absenceIsTrue ? action : alternative;
         const presentBranch = absenceIsTrue ? alternative : action;
-        if (absent.has(variable)) {
+        if (allowAbsence && absent.has(variable)) {
           initial?.facts.set(variable, { kind: 'potential' });
-          absent = scanActions(absentBranch, absent, cue, depth + 1, initial);
+          absent = scanActions(absentBranch, absent, cue, depth + 1, initial, allowAbsence);
           continue;
         }
         // Log-only arms cannot change incoming facts, so the condition adds only a temporary fact.
-        if (onlyVariableLogs(presentBranch) && onlyVariableLogs(absentBranch)) {
+        if (allowAbsence && onlyVariableLogs(presentBranch) && onlyVariableLogs(absentBranch)) {
           const previous = initial?.facts.get(variable);
           initial?.facts.set(variable, { kind: 'present' });
-          scanActions(presentBranch, absent, cue, depth + 1, initial);
+          scanActions(presentBranch, absent, cue, depth + 1, initial, allowAbsence);
           absent.set(variable, 'flow');
           initial?.facts.set(variable, { kind: 'potential' });
-          scanActions(absentBranch, absent, cue, depth + 1, initial);
+          scanActions(absentBranch, absent, cue, depth + 1, initial, allowAbsence);
           absent.delete(variable);
           if (initial) { if (previous) initial.facts.set(variable, previous); else initial.facts.delete(variable); }
           continue;
         }
         const presentInitial = cloneInitial(initial), absentInitial = cloneInitial(initial);
         presentInitial?.facts.set(variable, { kind: 'present' });
-        absentInitial?.facts.set(variable, { kind: 'potential' });
-        const present = scanActions(presentBranch, new Map(absent), cue, depth + 1, presentInitial);
-        absent.set(variable, 'flow');
-        absent = scanActions(absentBranch, absent, cue, depth + 1, absentInitial);
-        for (const [variable, reason] of absent) {
-          const otherReason = present.get(variable);
-          if (!otherReason) absent.delete(variable);
-          else if (otherReason !== reason) absent.set(variable, 'flow');
+        if (allowAbsence) absentInitial?.facts.set(variable, { kind: 'potential' });
+        else absentInitial?.facts.delete(variable);
+        const present = scanActions(presentBranch, new Map(absent), cue, depth + 1, presentInitial, allowAbsence);
+        if (allowAbsence) absent.set(variable, 'flow');
+        absent = scanActions(absentBranch, absent, cue, depth + 1, absentInitial, allowAbsence);
+        for (const [key, reason] of absent) {
+          const otherReason = present.get(key);
+          if (!otherReason) absent.delete(key);
+          else if (otherReason !== reason) absent.set(key, 'flow');
         }
         joinInitial(initial, presentInitial, absentInitial);
+        continue;
+      }
+      if (action.tagName === 'do_for_each' || action.tagName === 'do_all' || action.tagName === 'do_while') {
+        if (depth >= MAX_VARIABLE_BRANCH_DEPTH || !initial) {
+          inspectUnmodeled(action);
+          absent.clear();
+          clearInitial(initial);
+          continue;
+        }
+        const { clearAll, removed } = collectLoopInvalidations(action);
+        const preSafe = new Map<string, InitialValue>();
+        if (!clearAll) {
+          for (const [key, value] of initial.facts) {
+            if (value.kind === 'present' && !removed.has(key)) preSafe.set(key, { kind: 'present' });
+          }
+        }
+        const loopInitial: InitialFlow = { facts: copyPresentFacts(preSafe), potential: false };
+        if (action.tagName === 'do_for_each') {
+          const itemVar = LOCAL_VARIABLE.exec(action.getAttribute('name')?.trim() || '')?.[1];
+          if (itemVar) loopInitial.facts.set(itemVar, { kind: 'present' });
+          const valueVar = LOCAL_VARIABLE.exec(action.getAttribute('valuename')?.trim() || '')?.[1];
+          if (valueVar) loopInitial.facts.set(valueVar, { kind: 'present' });
+        }
+        if (action.tagName === 'do_for_each' || action.tagName === 'do_all') {
+          const counterVar = LOCAL_VARIABLE.exec(action.getAttribute('counter')?.trim() || '')?.[1];
+          if (counterVar) loopInitial.facts.set(counterVar, { kind: 'present' });
+        }
+        scanActions(action, new Map(), cue, depth + 1, loopInitial, allowAbsence);
+        initial.facts = clearAll ? new Map() : intersectPresentFacts([preSafe, loopInitial.facts]);
+        initial.potential = false;
+        absent.clear();
         continue;
       }
 
@@ -793,7 +909,7 @@ function lintLocalVariableReads(root: Element, source: string, filePath?: string
         || action.getAttribute('operation') === 'set' && hasOnlyAttributes(action, ['name', 'exact', 'operation', 'comment']));
       const unconditionalLog = log && !action.hasAttribute('chance');
       const attribute = plainAssignment ? action.getAttributeNode('exact') : unconditionalLog ? action.getAttributeNode('text') : null;
-      if (attribute && absent.size) {
+      if (allowAbsence && attribute && absent.size) {
         for (const { variable, offset } of strictLocalReads(attribute.value)) {
           const reason = absent.get(variable);
           if (!reason) continue;
@@ -814,19 +930,39 @@ function lintLocalVariableReads(root: Element, source: string, filePath?: string
   for (const cue of Array.from(root.getElementsByTagName('cue'))) {
     const actions = Array.from(cue.children).find(child => !child.namespaceURI && child.tagName === 'actions');
     if (!isPlainVariableCue(cue, root)) {
-      if (actions) inspectUnmodeled(actions);
+      if (actions) {
+        if (initialStateGaps && availability) {
+          activeCue = undefined;
+          scanActions(actions, new Map(), enclosingNamedCue(actions), 0, { facts: new Map(), potential: false }, false);
+        } else {
+          inspectUnmodeled(actions);
+        }
+      }
       continue;
     }
     // Save state and other cues can supply a value at entry, even in a child's inherited namespace.
     activeCue = availabilityOwn(availability?.cues, availabilityCueKey(cue));
-    const initial = activeCue ? { facts: new Map<string, InitialValue>(), potential: !activeCue.unavailable } : undefined;
+    const initial = activeCue ? { facts: new Map<string, InitialValue>(), potential: !activeCue.unavailable }
+      : availability ? { facts: new Map<string, InitialValue>(), potential: false } : undefined;
     if (!initial && actions) inspectUnmodeled(actions);
-    scanActions(actions, new Map(), enclosingNamedCue(actions ?? cue), 0, initial);
+    scanActions(actions, new Map(), enclosingNamedCue(actions ?? cue), 0, initial, true);
   }
   if (initialStateGaps && availability) {
+    activeCue = undefined;
+    const paramNamePattern = /^[A-Za-z_]\w*$/;
     for (const library of Array.from(root.getElementsByTagName('library'))) {
+      if (library.namespaceURI) continue;
+      const libraryFacts = new Map<string, InitialValue>();
+      const paramsBlock = Array.from(library.children).find(child => !child.namespaceURI && child.tagName === 'params');
+      if (paramsBlock) {
+        for (const paramEl of Array.from(paramsBlock.children)) {
+          if (paramEl.namespaceURI || paramEl.tagName !== 'param') continue;
+          const paramName = paramEl.getAttribute('name')?.trim() || '';
+          if (paramNamePattern.test(paramName)) libraryFacts.set(`$${paramName}`, { kind: 'present' });
+        }
+      }
       for (const actions of Array.from(library.children).filter(child => !child.namespaceURI && child.tagName === 'actions')) {
-        inspectUnmodeled(actions);
+        scanActions(actions, new Map(), enclosingNamedCue(actions), 0, { facts: copyPresentFacts(libraryFacts), potential: false }, false);
       }
     }
     if (gapCount > MAX_INITIAL_STATE_READ_GAPS) initialStateGaps.push({
@@ -1788,6 +1924,57 @@ export function runMdPitfallSelftest(): {
     && manyOpaque.context.scope.eligibleCues === 1 && manyOpaque.context.scope.skippedCues === 65
     && manyOpaque.context.scope.eligibleCues + manyOpaque.context.scope.skippedCues === 66
     && Object.keys(manyOpaque.context.authority).length === 1 && !manyOpaque.context.scope.limited);
+
+  const flowDoc = (body: string) => `<mdscript name="FlowCov"><cues>${body}</cues></mdscript>`;
+  const runFlowCov = (doc: string) => {
+    const built = buildMdVariableAvailabilityContext([{ path: 'md/flowcov.xml', content: doc }], initialSchema);
+    const readGaps: ValidationCoverageGap[] = [];
+    const rows = lintMdPitfalls(doc, { filePath: 'md/flowcov.xml', variableAvailability: built.context, initialStateGaps: readGaps });
+    return { ...built, rows, readGaps };
+  };
+  const ifChainOk = runFlowCov(flowDoc('<cue name="C"><actions><set_value name="$Pre" exact="1"/>'
+    + '<do_if value="$Pre gt 0"><set_value name="$Arm" exact="$Pre"/><set_value name="$Both" exact="1"/></do_if>'
+    + '<do_elseif value="$Pre eq 0"><set_value name="$Both" exact="2"/><set_value name="$OnlyOne" exact="1"/></do_elseif>'
+    + '<do_else><set_value name="$Both" exact="3"/></do_else>'
+    + '<debug_text text="$Pre"/><debug_text text="$Both"/>'
+    + '<debug_text text="$Arm"/><debug_text text="$OnlyOne"/></actions></cue>'));
+  ok('unmodeled do_if/elseif/else chains preserve pre-branch and all-branch present vars while flagging partial arms',
+    ifChainOk.readGaps.length === 2 && ifChainOk.readGaps.some(g => g.reason.includes('$Arm'))
+    && ifChainOk.readGaps.some(g => g.reason.includes('$OnlyOne'))
+    && !ifChainOk.readGaps.some(g => g.reason.includes('$Pre') || g.reason.includes('$Both')));
+
+  const loopOk = runFlowCov(flowDoc('<cue name="C"><actions><set_value name="$Keep" exact="1"/><set_value name="$Rm" exact="1"/>'
+    + '<do_for_each name="$k" valuename="$v" counter="$i" in="$Keep">'
+    + '<set_value name="$Step" exact="$k"/><debug_text text="$Keep"/><debug_text text="$v"/><debug_text text="$i"/><debug_text text="$Step"/>'
+    + '<debug_text text="$Rm"/><remove_value name="$Rm"/></do_for_each>'
+    + '<do_all counter="$j" exact="3"><debug_text text="$j"/><set_value name="$InAll" exact="1"/></do_all>'
+    + '<debug_text text="$Keep"/><debug_text text="$k"/><debug_text text="$Step"/><debug_text text="$InAll"/></actions></cue>'));
+  ok('loops bind name/valuename/counter inside body, invalidate loop-removed pre vars, and withhold post-loop leaks',
+    loopOk.readGaps.length === 4 && loopOk.readGaps.some(g => g.reason.includes('$Rm'))
+    && loopOk.readGaps.some(g => g.reason.includes('$k')) && loopOk.readGaps.some(g => g.reason.includes('$Step'))
+    && loopOk.readGaps.some(g => g.reason.includes('$InAll')) && !loopOk.readGaps.some(g => g.reason.includes('$Keep')));
+
+  const instLibDoc = flowDoc(
+    '<cue name="Inst" instantiate="true"><conditions><event_game_started/></conditions><actions>'
+    + '<set_value name="$Out" exact="0"/><set_value name="$Out" exact="$Out + 1"/>'
+    + '<remove_value name="$Missing"/><do_if value="not $Missing?"><debug_text text="$Missing"/></do_if>'
+    + '<run_actions ref="Lib"><param name="arg" value="$Out"/></run_actions><debug_text text="$Out"/>'
+    + '<output_name result="$Dyn"/><debug_text text="$Dyn"/>'
+    + '<include_actions ref="Other"/><debug_text text="$Out"/>'
+    + '</actions></cue>'
+    + '<library name="Lib" purpose="run_actions"><params><param name="arg"/></params><actions>'
+    + '<set_value name="$Acc" exact="$arg"/><set_value name="$Acc" exact="$Acc + 1"/><debug_text text="$Acc"/><debug_text text="$UnsetLib"/>'
+    + '</actions></library>',
+  );
+  const instBuilt = buildMdVariableAvailabilityContext([{ path: 'md/instlib.xml', content: instLibDoc }], initialSchema);
+  const instGaps: ValidationCoverageGap[] = [];
+  const instRows = lintMdPitfalls(instLibDoc, { filePath: 'md/instlib.xml', variableAvailability: instBuilt.context, initialStateGaps: instGaps });
+  ok('libraries and instantiated cues track params and sequential writes cleanly without false warnings or unsafe clears',
+    instRows.length === 0 && instGaps.length === 4
+    && instGaps.filter(g => g.reason.includes('$Out')).length === 1
+    && instGaps.some(g => g.reason.includes('$Missing'))
+    && instGaps.some(g => g.reason.includes('$Dyn'))
+    && instGaps.some(g => g.reason.includes('$UnsetLib')));
   const triggerRules = (cues: string) => lintMdPitfalls(`<mdscript name="Trigger"><cues>\n${cues}\n</cues></mdscript>`,
     { filePath: 'md/trigger.xml' }).filter(f => f.code === 'md_pitfall.no_event_condition' || f.code === 'md_pitfall.illegal_instantiate');
   const triggerCue = (attributes = '', body = '<check_value value="true"/>') =>
