@@ -3,6 +3,12 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
+## 0.0.93 — 2026-11-23
+
+- Validate Lua UI events sent through protected calls (pcall) and follow indexed payload tables returned from same-file helper builders.
+- Keep cross-file Lua payload coverage explanations consistent regardless of file order, while keeping wrapped or dynamic emitters explicitly flagged for review.
+- Avoid redundant file-metadata reads when checking unpacked game corpus freshness during validation.
+
 ## 0.0.92 — 2026-11-23
 
 - For literal run_script calls to an AI script in the same mod, see the signature, required arguments and defaults in the editor.
