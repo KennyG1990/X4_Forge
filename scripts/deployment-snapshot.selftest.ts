@@ -15,7 +15,7 @@ import { observeManagedOutputs } from '../src/server/deployManagedObservation';
 import { redactReceiptMetadata } from '../src/lib/actionReceipt';
 import { DestructiveRecoveryStore } from '../src/lib/destructiveRecovery';
 import { evaluateFindingAcceptances } from '../src/server/findingAcceptance';
-import { prepareDeployRecord, commitDeployRecord, deployOperationStatus, deployReceiptIdentity, readDeployOperationStatus, compareDeployPreviewTarget, deploymentBuildIdentity, findUnchangedDeploymentVersion } from '../src/server/deploymentTrust';
+import { prepareDeployRecord, commitDeployRecord, deployOperationStatus, deployReceiptIdentity, readDeployOperationStatus, compareDeployPreviewTarget, deploymentBuildIdentity, findUnchangedDeploymentVersion, deploymentCorpusFiles } from '../src/server/deploymentTrust';
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-snapshot-test-'));
 let assertions = 0;
@@ -543,5 +543,29 @@ try {
   } finally { fs.renameSync = rename; }
   check('failed publication leaves the exact prepared record', store.read(unpublished.id).hash === unpublished.hash);
   assert.throws(() => redactReceiptMetadata({ arbitraryUnreviewedField: 'not allowed' }), /narrow safe metadata policy/); assertions++;
+
+  const corpusDir = path.join(root, 'corpus-files');
+  const corpusLarge = path.join(corpusDir, 'large.xml');
+  const corpusEmpty = path.join(corpusDir, 'empty.xml');
+  const corpusMissing = path.join(corpusDir, 'missing.xml');
+  fs.mkdirSync(corpusDir);
+  const largeA = Buffer.alloc(1024 * 1024 + 513, 0x41);
+  const largeB = Buffer.from(largeA);
+  largeB[largeB.length - 1] = 0x42;
+  fs.writeFileSync(corpusLarge, largeA);
+  fs.writeFileSync(corpusEmpty, Buffer.alloc(0));
+  const corpusFirst = deploymentCorpusFiles([corpusLarge, corpusEmpty, corpusMissing, corpusLarge]);
+  check('corpus files hash empty, multi-chunk, absent and deduplicate',
+    corpusFirst.length === 3
+      && corpusFirst.some(([f, h]) => f === path.resolve(corpusEmpty) && h === 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')
+      && corpusFirst.some(([f, h]) => f === path.resolve(corpusMissing) && h === 'absent'));
+  const origLargeStat = fs.statSync(corpusLarge);
+  fs.writeFileSync(corpusLarge, largeB);
+  fs.utimesSync(corpusLarge, origLargeStat.atime, origLargeStat.mtime);
+  const corpusSecond = deploymentCorpusFiles([corpusLarge]);
+  check('corpus files detect same-size mtime-preserved change beyond 1 MiB chunk',
+    corpusSecond[0][1] !== corpusFirst.find(([f]) => f === path.resolve(corpusLarge))?.[1]);
+  assert.throws(() => deploymentCorpusFiles([corpusDir])); assertions++;
+
   console.log(JSON.stringify({ pass: true, assertions }));
 } finally { fs.rmSync(root, { recursive: true, force: true }); }

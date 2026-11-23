@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { actionReceiptIdForOperation, transitionActionReceipt, type ActionReceipt, type ActionReceiptOperationIdentity } from '../lib/actionReceipt';
 import type { ActionReceiptStore } from '../lib/actionReceiptStore';
+import { hashArtifactFile } from '../lib/artifactPipeline';
 import { LEDGER_MAX_BYTES, type AgentHistoryStore } from '../lib/agentHistoryStore';
 import type { DeploymentRecoveryRecord, DestructiveRecoveryStore } from '../lib/destructiveRecovery';
 import { readContentManifestIdentity } from '../lib/validationEvidence';
@@ -245,7 +246,7 @@ function implementationHash(entry: string, compiledWorker?: CanonicalMdCompiledW
 /** Byte signatures supplement the effective parsed indices, including same-size edits. */
 export function deploymentCorpusFiles(files: string[]): Array<[string, string]> {
   return [...new Set(files.map(file => path.resolve(file)))].sort().map(file => {
-    try { return [file, createHash('sha256').update(fs.readFileSync(file)).digest('hex')]; }
+    try { return [file, hashArtifactFile(file)]; }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [file, 'absent'];
       throw error;

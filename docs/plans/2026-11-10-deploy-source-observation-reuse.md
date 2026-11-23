@@ -72,3 +72,59 @@ The exact native source passed 19 routed checks through both aliases. Loose and 
 Use the same materializer and retain bidirectional overlap refusal for every nonempty disk source. Add a regression that enters its own disposable fixture directory, writes a generated-only artifact below it, and verifies the bytes. Assert a real disk source still refuses a nested output before creating it. Capture that red test before the patch, then require the unchanged artifact and snapshot suites, the writer audit, and all stock runtime oracles with the previously failing Temp layout. Preserve existing release source edits and the sealed VSIX. Exact prior file hashes and the inverse of the two edits are the rollback. Evidence stays in the existing G: QA ledger. No capability-map delta.
 
 **PARTIAL release · VERIFIED source and production backend.** The new regression failed alone before the fix (85/86) and passed after (86/86). A disk source still refused nested output without creating it. Deployment snapshot checks passed 138/138 and the durable-writer audit passed. The production backend `d024783c8639d5ecbf87696867c6b3081d185cd080e17de31ade66f475cf9934` passed 134/134 stock runtime oracles with Temp under the app CWD. The worker, normal-layout index and verdict digests matched. The private process, listener, output and fixture were retired. The combined capability and receipt audit, full app build, normal precommit, exact package and release remain open. [Issue evidence](https://github.com/KennyG1990/X4_Forge/issues/135#issuecomment-7081919499).
+
+## Reusable read buffers, corpus dictionary digest, and recovery tree walk · 2026-11-23
+
+**FULL · SPECIFIED.** Bounded Unit 1 under [#97](https://github.com/KennyG1990/X4_Forge/issues/97) on clean `0.0.93` `main` baseline `e9c12e17a3c543d709de5df7749b00403ca49801`. On a disposable 1,000-file compiled `dist/server.cjs` benchmark against the read-only X4 9.00 reference corpus (`G:\Forge-QA\temp\bench97-baseline.json`), Preview took `11.02 s` (`10.83 s` handler) while bound Apply took `36.10 s` (`35.74 s` handler): `sourceRecheck 12.32 s` (`count: 7`; `snapshotMs 4.87 s`, `diskMs 4.52 s`, `corpusMs 2.84 s`), `write 8.16 s`, `validate 3.63 s`, `prepare 3.59 s`, `snapshot 3.16 s`, `doctor 1.54 s`, `verify 1.14 s`, `compile 0.93 s`, `finalize 0.75 s`, `import 0.52 s`. V8 CPU profiling (`170,935` hits) measured `open` `47.9%`, `read` `6.1%`, `stat`/`lstat` `7.3%`, `trustHash` `3.1%` (`5,284` hits), `copyFile` `2.8%`, GC `2.3%`, and `createUnsafeBuffer` `0.8%`.
+
+**In scope:**
+1. Reuse one module-level 1 MiB chunk scratch `Buffer` in `hashArtifactFileBytes` (`src/lib/artifactPipeline.ts`) whenever `retained` is omitted, retaining full EOF reads, `expected` stamp checks, and exact SHA-256 outputs while removing ~14,000 per-file `Buffer.allocUnsafe` allocations per deploy.
+2. Replace `fs.readFileSync(file)` inside `deploymentCorpusFiles` (`src/server/deploymentTrust.ts`) with `hashArtifactFile(file)` so corpus checks reuse chunked buffer reads while preserving `ENOENT -> 'absent'` and non-ENOENT failures.
+3. Memoize the static `[schemaRoots, references, md, ai, properties, jobs, wares]` digest inside `deploymentCorpusIdentity` (`server.ts`) keyed by exact cached reference identity on the inner sets/indexes (`references.*`, `md`, `ai`, `properties`, `jobs`, `wares`, `schemaRoots`), preserving fresh `deploymentCorpusFiles` reads at every barrier.
+4. Compute `{ fingerprint, bytes }` together in `regularTreeFingerprintAndBytes` (`server.ts`) so `prepareDeploymentRecoveryReceipt` eliminates its two extra `regularTreeBytes` full-tree walks over `resolvedTarget` and `payload` while preserving all existing recovery fingerprint/byte assertions.
+
+**Out of scope:** Bound-Apply validation caching, staging `.snapshots` format/copy changes, reducing the 7 `assertCurrentSource` barrier count, `runExtensionDoctor` scoping, or any mutation to live Forge, `FORGE DEVELOPMENT` IDE, X4, or `DEV_ENV`.
+
+**Acceptance & validation:** `npm run typecheck`, `npm run lint`, `node --import tsx scripts/artifact-pipeline-check.ts` (including `fs.statSync` EOF growth check), `scripts/deployment-snapshot.selftest.ts`, focused negative/parity checks on corpus digest invalidation and recovery byte/fingerprint parity, `npm run test:writers`, `npm run build`, matched before/after `bench97.mjs` timings, `npm run test:routes`, and `npm run precommit:check`. Rollback is the exact `git diff` inverse.
+
+
+## Unit 1 Close (2026-11-23): Buffer Reuse, Combined Recovery Walk, and Static Corpus Digest
+
+Status: **Unit 1 VERIFIED** (`#97` overall remains **PARTIAL / in_progress** — Bound-Apply validation reuse and `.snapshots`/staging I/O reduction follow in Unit 2).
+
+### What Changed (Unit 1)
+1. [src/lib/artifactPipeline.ts](src/lib/artifactPipeline.ts): Added a module-level lazily allocated 1 MiB `sharedHashChunkBuffer` (`HASH_READ_CHUNK_BYTES`) reused inside `hashArtifactFileBytes` whenever `retained` is omitted, removing repeated per-file `Buffer.allocUnsafe` churn while keeping `expected` size/mtime guards and `verifyMaterializedArtifact` EOF growth checks intact.
+2. [src/server/deploymentTrust.ts](src/server/deploymentTrust.ts): Updated `deploymentCorpusFiles` to compute SHA-256 digests through `hashArtifactFile(file)` instead of full-file `fs.readFileSync`, aligning corpus trust hashing with chunked hashing and shared read buffers.
+3. [server.ts](server.ts):
+   - Added `regularTreeFingerprintAndBytes(rootPath)` and refactored `prepareDeploymentRecoveryReceipt` (`regularTreeFingerprintAndBytes`) to compute fingerprint and byte count in one pass per tree (eliminating two separate full-tree `regularTreeBytes` walks per Apply). Added parity assertion in `runCompileArtifactSelftest`.
+   - Added bounded memoization (`deploymentCorpusStaticDigest`) inside `deploymentCorpusIdentity` keyed by `[schemaRoots, references, md, ai, properties, jobs, wares]` underlying object/Set/Index references so warm `sourceRecheck` cycles skip re-hashing unchanged reference files.
+4. [scripts/deployment-snapshot.selftest.ts](scripts/deployment-snapshot.selftest.ts): Added `deploymentCorpusFiles` parity/negative coverage for empty files, `> 1 MiB` files, same-size/same-mtime edits, `'absent'`, and `EISDIR`.
+5. [config/durable-writers.json](config/durable-writers.json): Updated `sourceFingerprint` (`a2e6b6676dd9f7dfc4c47724d6bfb5f28d818517ce6e00e75e119e50969e2f0c -> 09c0958828d25ebaa90463416a073e6027da260efc07a4b945df929b787e6bb9`) after verifying via diff against `HEAD` that raw filesystem writer counts (`191` in `server.ts`, `4` in `artifactPipeline.ts`, `0` in `deploymentTrust.ts`) and contracts were unchanged (only context slice around `prepareDeploymentRecoveryReceipt` in `runCompileArtifactSelftest` shifted).
+
+### Unit 1 A/B Benchmark (`bench97.mjs`, 1,000-file mod + X4 9.00 corpus, compiled `dist/server.cjs`, Node `v24.15.0`)
+Receipts: `G:\Forge-QA\temp\bench97-unit1-before.json` (`e9c12e17`) vs `G:\Forge-QA\temp\bench97-unit1-after.json`.
+- `preview1` wall: `12,996.4 -> 12,445.3 ms` (`-551.1 ms`, `-4.2%`); `corpusMs: 422.4 -> 176.0 ms`
+- `apply1` wall: `37,390.8 -> 30,821.1 ms` (`-6,569.7 ms`, `-17.6%`); `prepare: 3,608.2 -> 2,718.9 ms` (`-24.6%`); `sourceRecheck.corpusMs: 2,872.7 -> 1,183.1 ms` (`-58.8%`)
+- `preview2` wall: `11,015.6 -> 9,821.3 ms` (`-1,194.3 ms`, `-10.8%`); `corpusMs: 408.9 -> 170.7 ms` (`-58.2%`)
+- `apply2` wall: `36,103.5 -> 31,697.3 ms` (`-4,406.2 ms`, `-12.2%`); `prepare: 3,593.5 -> 2,726.4 ms` (`-24.1%`); `sourceRecheck.corpusMs: 2,836.2 -> 1,181.4 ms` (`-58.3%`)
+- CPU self-time profile: `totalCpuHits: 170,935 -> 150,130` (`-12.2%`); `trustHash`: `5,284 hits (3.1%) -> 0` (dropped out of top 25); `createUnsafeBuffer`: `1,339 -> 0`; `read@:-1`: `10,422 -> 6,631` (`-36.4%`).
+
+### Validation Results
+- `npm run test:writers`: PASS (`30/30` selftest, audit PASS `50` raw sources, `durableWrite selftest: 8/8`).
+- `npm run typecheck`: PASS (exit `0`).
+- `npm run lint`: PASS (`0` errors, `599` pre-existing warnings, exit `0`).
+- `npm run test:artifact-pipeline`: PASS (`86/86`; `symlink negative skipped when host forbids fixture creation`, exit `0`).
+- `npx tsx scripts/deployment-snapshot.selftest.ts`: PASS (`141` assertions, exit `0`).
+- `npm run test:routes`: PASS (`616/616`, exit `0`).
+- `npm run test:oracles`: PASS (`134/134`, exit `0`).
+- `npm run precommit:check`: PASS (`[precommit] OK`, exit `0`).
+- Negative paths covered: `deployment-snapshot.selftest.ts` checks empty/`>1 MiB`/same-size-mtime/`absent`/`EISDIR`; `artifact-pipeline-check.ts` retains EOF growth mismatch tamper detection.
+- Capability-map delta: none from `#97` Unit 1 edits.
+- Suggested commit title: `perf(deploy): reuse read buffers, recovery walk bytes, and corpus static digest (#97)`
+
+### AAR (Unit 1)
+- Triggers: `config/durable-writers.json` failed initially as expected after adding a `runCompileArtifactSelftest` assertion near a `fs.writeFileSync` fixture call; `npm run precommit:check` also uncovered a pre-existing Windows `Node v24.15.0` libuv `UV_HANDLE_CLOSING` teardown race in `vscode-extension/mcp/x4forge-mcp.cjs` (resolved and committed separately).
+- Sustain: Recording `timings.stagesMs` plus V8 CPU self-time hits pinpointed exact bottlenecks (`trustHash`, `read`, `corpusMs`, `prepare`, `sourceRecheck`, `write`, `validate`) and let Unit 1 land cleanly without guesswork.
+- Improve work/approach: Inspecting `scripts/durable-writer-audit.mjs` context-window hashing upfront avoids wondering why non-writer code edits near `fs.*Sync` shift `sourceFingerprint`.
+- Improve tools: No owned tool issue for `#97` Unit 1 itself beyond the separate MCP EOF teardown fix (`2026-11-23-mcp-stdin-eof-exit.md`).
+- Highest-risk evidenced weakness: Even after Unit 1, `sourceRecheck` runs `7` snapshot/disk tree walks (`~9.4 s`) and `write` copies accumulated `.snapshots` history on swap; Unit 2 (`deploy-preview-validation-reuse` + staging/snapshot copy reduction) and Unit 3 (`sourceRecheck` barrier coalescing) remain necessary to bring Apply comfortably under the `< 60 s` `#97` budget on Claude-sized mods.

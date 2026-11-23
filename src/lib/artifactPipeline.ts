@@ -166,8 +166,16 @@ export function readVerifiedArtifactFile(filePath: string, entry: Pick<ArtifactE
   return content;
 }
 
+const HASH_READ_CHUNK_BYTES = 1024 * 1024;
+let sharedHashChunkBuffer: Buffer | undefined;
+
+function getSharedHashChunkBuffer(): Buffer {
+  if (!sharedHashChunkBuffer) sharedHashChunkBuffer = Buffer.allocUnsafe(HASH_READ_CHUNK_BYTES);
+  return sharedHashChunkBuffer;
+}
+
 function hashArtifactFileBytes(filePath: string, algorithm: 'sha256' | 'md5',
-  { expected, sizeHint, observe, retained }: {
+  { expected, sizeHint: _sizeHint, observe, retained }: {
     expected?: fs.BigIntStats;
     sizeHint?: number;
     observe?: (bytes: Buffer) => void;
@@ -182,21 +190,18 @@ function hashArtifactFileBytes(filePath: string, algorithm: 'sha256' | 'md5',
       throw new Error('Deployment observation file changed before reading.');
     }
     let remaining = expected ? Number(expected.size) : Infinity;
-    // A size observation is only a buffer hint. Unguarded inputs are read to EOF.
-    const chunkBytes = 1024 * 1024;
-    let hintRemaining = !expected && sizeHint !== undefined ? sizeHint : Infinity;
-    const capacity = expected ? remaining : Math.min(hintRemaining, chunkBytes);
-    let buffer = retained ?? Buffer.allocUnsafe(Math.min(Math.max(capacity, 1), chunkBytes));
+    const chunkBytes = HASH_READ_CHUNK_BYTES;
+    const buffer = retained ?? getSharedHashChunkBuffer();
     while (remaining > 0) {
       const offset = retained ? retained.length - remaining : 0;
-      const read = fs.readSync(fd, buffer, offset, Math.min(remaining, buffer.length - offset, chunkBytes), null);
+      const maxRead = retained ? Math.min(remaining, buffer.length - offset, chunkBytes) : Math.min(remaining, chunkBytes);
+      if (maxRead <= 0) break;
+      const read = fs.readSync(fd, buffer, offset, maxRead, null);
       if (read <= 0) break;
       remaining -= read;
       const bytes = buffer.subarray(offset, offset + read);
       hash.update(bytes);
       observe?.(bytes);
-      hintRemaining -= read;
-      if (hintRemaining < 0 && buffer.length < chunkBytes) buffer = Buffer.allocUnsafe(chunkBytes);
     }
     if (expected && (remaining !== 0 || !sameArtifactStamp(expected, fs.fstatSync(fd, { bigint: true })))) {
       throw new Error('Deployment observation file changed while reading.');

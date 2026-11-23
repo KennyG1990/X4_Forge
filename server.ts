@@ -12551,10 +12551,11 @@ function inspectRegularTree(rootPath: string, observed?: Map<string, fs.BigIntSt
   return entries.sort((a, b) => a.path.localeCompare(b.path));
 }
 
-function regularTreeFingerprint(rootPath: string, observationRoot?: fs.BigIntStats): string {
+function regularTreeFingerprintAndBytes(rootPath: string, observationRoot?: fs.BigIntStats): { fingerprint: string; bytes: number } {
   const observed = observationRoot ? new Map([[rootPath, observationRoot]]) : undefined;
   const digest = crypto.createHash('sha256');
   let remaining = DEPLOY_TARGET_OBSERVATION_MAX_BYTES;
+  let bytes = 0;
   for (const entry of inspectRegularTree(rootPath, observed)) {
     digest.update(entry.type === 'directory' ? 'D\0' : 'F\0');
     digest.update(entry.path.replace(/\\/g, '/'));
@@ -12569,6 +12570,7 @@ function regularTreeFingerprint(rootPath: string, observationRoot?: fs.BigIntSta
         }
         remaining -= Number(stamp.size);
       }
+      bytes += Number(stat.size);
       digest.update(String(stat.size));
       digest.update('\0');
       digest.update(hashArtifactFile(filePath, 'sha256', stamp));
@@ -12578,7 +12580,11 @@ function regularTreeFingerprint(rootPath: string, observationRoot?: fs.BigIntSta
   for (const [file, stamp] of observed ?? []) {
     if (!sameArtifactStamp(stamp, fs.lstatSync(file, { bigint: true }))) throw new Error('Deployment observation changed.');
   }
-  return digest.digest('hex');
+  return { fingerprint: digest.digest('hex'), bytes };
+}
+
+function regularTreeFingerprint(rootPath: string, observationRoot?: fs.BigIntStats): string {
+  return regularTreeFingerprintAndBytes(rootPath, observationRoot).fingerprint;
 }
 
 function regularTreeBytes(rootPath: string): number {
@@ -12787,8 +12793,9 @@ function prepareDeploymentRecoveryReceipt(
     const stat = fs.lstatSync(resolvedTarget);
     if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('Deployment target is not a regular directory.');
   }
-  const beforeFingerprint = priorExisted ? regularTreeFingerprint(resolvedTarget) : 'absent';
-  const beforeBytes = priorExisted ? regularTreeBytes(resolvedTarget) : 0;
+  const { fingerprint: beforeFingerprint, bytes: beforeBytes } = priorExisted
+    ? regularTreeFingerprintAndBytes(resolvedTarget)
+    : { fingerprint: 'absent', bytes: 0 };
   const record = store.prepareDeployment({
     priorExisted,
     targetRoot: resolvedRoot,
@@ -12803,12 +12810,12 @@ function prepareDeploymentRecoveryReceipt(
     if (priorExisted) {
       const payload = store.payloadPath(record.id);
       copyRegularTree(resolvedTarget, payload);
-      const payloadFingerprint = regularTreeFingerprint(payload);
+      const { fingerprint: payloadFingerprint, bytes: payloadBytes } = regularTreeFingerprintAndBytes(payload);
       const sourceFingerprintAfterCopy = regularTreeFingerprint(resolvedTarget);
       if (payloadFingerprint !== beforeFingerprint || sourceFingerprintAfterCopy !== beforeFingerprint) {
         throw new Error('Deployment changed while its recovery snapshot was being captured.');
       }
-      if (regularTreeBytes(payload) !== beforeBytes) throw new Error('Deployment recovery snapshot byte count did not verify.');
+      if (payloadBytes !== beforeBytes) throw new Error('Deployment recovery snapshot byte count did not verify.');
     }
     return record;
   } catch (error) {
@@ -14681,6 +14688,9 @@ function runCompileArtifactSelftest() {
     const recoveryStore = new DestructiveRecoveryStore({ root: path.join(root, 'recoveries') });
     fs.writeFileSync(path.join(target, 'recovery-before.txt'), 'before deploy');
     const beforeRecoveryFingerprint = regularTreeFingerprint(target);
+    const beforeRecoveryPair = regularTreeFingerprintAndBytes(target);
+    record('combined tree fingerprint and bytes matches separate walks',
+      beforeRecoveryPair.fingerprint === beforeRecoveryFingerprint && beforeRecoveryPair.bytes === regularTreeBytes(target));
     const recoveryReceipt = prepareDeploymentRecoveryReceipt(deployRoot, target, path.basename(target), recoveryStore);
     fs.rmSync(path.join(target, 'recovery-before.txt'));
     fs.writeFileSync(path.join(target, 'recovery-after.txt'), 'after deploy');
@@ -15362,6 +15372,78 @@ function readDeploymentCorpusDirectory(directory: string, resource: DeploymentCo
   }
 }
 
+let corpusStaticIdentityCache: {
+  rootsKey: string;
+  macros: Set<string>;
+  wares: Set<string>;
+  factions: Set<string>;
+  sectors: Set<string>;
+  jobsSet: Set<string>;
+  aiScripts: Set<string>;
+  md: ReturnType<typeof getSchemaIndex>;
+  ai: ReturnType<typeof getAiSchemaIndex>;
+  properties: ReturnType<typeof getScriptPropertyIndex>;
+  jobsClasses?: Set<string>;
+  jobsOrders?: Set<string>;
+  jobsSizes?: Set<string>;
+  jobsFactions?: Set<string>;
+  waresVocab: ReturnType<typeof getWaresVocabulary>;
+  digest: string;
+} | undefined;
+
+function deploymentCorpusStaticDigest(
+  schemaRoots: string[],
+  md: ReturnType<typeof getSchemaIndex>,
+  ai: ReturnType<typeof getAiSchemaIndex>,
+): string {
+  const rootsKey = schemaRoots.join('\0');
+  const references = getReferenceSets();
+  const properties = getScriptPropertyIndex();
+  const jobs = getJobsVocabulary();
+  const wares = getWaresVocabulary();
+  const cached = corpusStaticIdentityCache;
+  if (
+    cached
+    && cached.rootsKey === rootsKey
+    && cached.macros === references.macros
+    && cached.wares === references.wares
+    && cached.factions === references.factions
+    && cached.sectors === references.sectors
+    && cached.jobsSet === references.jobs
+    && cached.aiScripts === references.aiScripts
+    && cached.md === md
+    && cached.ai === ai
+    && cached.properties === properties
+    && cached.jobsClasses === jobs?.classes
+    && cached.jobsOrders === jobs?.orders
+    && cached.jobsSizes === jobs?.sizes
+    && cached.jobsFactions === jobs?.factions
+    && cached.waresVocab === wares
+  ) {
+    return cached.digest;
+  }
+  const digest = trustHash({ roots: schemaRoots, references, md, ai, properties, jobs, wares });
+  corpusStaticIdentityCache = {
+    rootsKey,
+    macros: references.macros,
+    wares: references.wares,
+    factions: references.factions,
+    sectors: references.sectors,
+    jobsSet: references.jobs,
+    aiScripts: references.aiScripts,
+    md,
+    ai,
+    properties,
+    jobsClasses: jobs?.classes,
+    jobsOrders: jobs?.orders,
+    jobsSizes: jobs?.sizes,
+    jobsFactions: jobs?.factions,
+    waresVocab: wares,
+    digest,
+  };
+  return digest;
+}
+
 function deploymentCorpusIdentity(projectPaths: string[]) {
   const resolved = resolveXsdConfig();
   const corpus = getCanonicalReferenceCorpus();
@@ -15395,8 +15477,7 @@ function deploymentCorpusIdentity(projectPaths: string[]) {
   try { referenceFiles = deploymentCorpusFiles(files); }
   catch (error) { throw new DeploymentCorpusUnavailableError('reference-files', error); }
   const hash = trustHash({ roots: schemaRoots, files: referenceFiles,
-    references: getReferenceSets(), md, ai,
-    properties: getScriptPropertyIndex(), jobs: getJobsVocabulary(), wares: getWaresVocabulary() });
+    staticDigest: deploymentCorpusStaticDigest(schemaRoots, md, ai) });
   return { hash, root: resolved.x4ReferenceRoot };
 }
 
