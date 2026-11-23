@@ -133,7 +133,13 @@ export interface ReferenceCorpus {
 }
 
 type ReferenceFileKind = 'factions' | 'wares' | 'jobs' | 'aiscript' | 'scriptproperties' | 'localization' | 'map' | 'macro-index';
-interface ReferenceFile { absolute: string; relative: string; source: ReferenceSource; kind: ReferenceFileKind }
+interface ReferenceFile {
+  absolute: string;
+  relative: string;
+  source: ReferenceSource;
+  kind: ReferenceFileKind;
+  stamp: fs.Stats;
+}
 
 let cache: { root: string; signature: string; corpus: ReferenceCorpus; checkedAt: number } | null = null;
 const REFERENCE_SIGNATURE_CHECK_MS = 1000;
@@ -142,8 +148,11 @@ function isDirectory(p: string): boolean {
   try { return fs.statSync(p).isDirectory(); } catch { return false; }
 }
 
-function isFile(p: string): boolean {
-  try { return fs.statSync(p).isFile(); } catch { return false; }
+function referenceFileStat(filePath: string): fs.Stats | undefined {
+  try {
+    const stamp = fs.statSync(filePath);
+    if (stamp.isFile()) return stamp;
+  } catch { /* An unavailable entry is omitted from discovery. */ }
 }
 
 function forward(p: string): string { return p.replace(/\\/g, '/'); }
@@ -210,8 +219,9 @@ function discoverReferenceFiles(rootInput: string): { files: ReferenceFile[]; ma
         const kind = referenceKind(record.path);
         if (!kind || (record.source !== 'base' && !/^ego_dlc_/i.test(record.source))) return null;
         const absolute = path.join(root, ...record.path.split('/'));
-        if (!isFile(absolute)) return null;
-        return { absolute, relative: record.path, source: record.source as ReferenceSource, kind } satisfies ReferenceFile;
+        const stamp = referenceFileStat(absolute);
+        if (!stamp) return null;
+        return { absolute, relative: record.path, source: record.source as ReferenceSource, kind, stamp } satisfies ReferenceFile;
       })
       .filter((file): file is ReferenceFile => Boolean(file))
       .sort((a, b) => (Number(a.source !== 'base') - Number(b.source !== 'base')) || a.source.localeCompare(b.source) || a.relative.localeCompare(b.relative));
@@ -220,11 +230,12 @@ function discoverReferenceFiles(rootInput: string): { files: ReferenceFile[]; ma
   const files: ReferenceFile[] = [];
   const seen = new Set<string>();
   const add = (absolute: string, source: ReferenceSource, kind: ReferenceFileKind) => {
-    if (!isFile(absolute)) return;
     const key = absolute.toLowerCase();
     if (seen.has(key)) return;
+    const stamp = referenceFileStat(absolute);
+    if (!stamp) return;
     seen.add(key);
-    files.push({ absolute, relative: forward(path.relative(root, absolute)), source, kind });
+    files.push({ absolute, relative: forward(path.relative(root, absolute)), source, kind, stamp });
   };
   const addTree = (dir: string, source: ReferenceSource, kind: ReferenceFileKind, filter?: (p: string) => boolean) => {
     const found: string[] = [];
@@ -254,10 +265,9 @@ function discoverReferenceFiles(rootInput: string): { files: ReferenceFile[]; ma
 }
 
 function signatureFor(files: ReferenceFile[]): string {
-  return files.map(f => {
-    const s = fs.statSync(f.absolute);
-    return `${f.relative.toLowerCase()}|${s.size}|${Math.floor(s.mtimeMs)}|${Math.floor(s.ctimeMs)}`;
-  }).join('\n');
+  return files.map(({ relative, stamp }) =>
+    `${relative.toLowerCase()}|${stamp.size}|${Math.floor(stamp.mtimeMs)}|${Math.floor(stamp.ctimeMs)}`,
+  ).join('\n');
 }
 
 function factionCategory(id: string, tags: string[]): FactionCategory {
@@ -678,7 +688,7 @@ export function resolveReferenceFile(rootInput: string, relativeInput: string): 
   }
   if (!isDirectory(root)) throw new Error('X4 unpacked reference root is unavailable.');
   const candidate = path.resolve(root, ...relative.split('/'));
-  if (!isFile(candidate)) throw new Error('File not found.');
+  if (!referenceFileStat(candidate)) throw new Error('File not found.');
   const realRoot = fs.realpathSync(root);
   const realCandidate = fs.realpathSync(candidate);
   const rel = path.relative(realRoot, realCandidate);

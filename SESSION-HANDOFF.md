@@ -4,6 +4,12 @@
 
 X4 Forge Studio 0.0.92 is available from Open VSX. The public download matches the tested VSIX SHA-256 466b2e8832ba985f80bdca7b4c05fbc548b7506a14293062ee18ced88c97d322. The isolated G-drive build passed 150 source and 150 compiled browser tests with zero flakes, 616 routes, 134 compiled oracles, 33 staged checks, the VSIX audit, and an exact installed Antigravity witness.
 
+## 0.0.93 qualification and corpus read checkpoint
+
+The full serial Windows source gate at 26004b79 had 149 clean passes and one flaky test. The trace failed while the 1024px case was seeding the workspace. The matching receipt records preparation and commit 45.656 s apart. Both reserved ports were released and the one trace retained on G. Publication and the authorized announcements are pending qualification.
+
+Fifteen focused replays passed. Instrumentation identified repeated metadata reads in canonical corpus discovery. The source correction reuses file metadata for the freshness signature. The exact 383-file corpus and signature digests matched the baseline with half the calls. The 32 existing corpus checks and SQLite-manifest fixture passed. The hypothesis that duplicate reads contribute to the historical stall remains open. No source test artifacts or extra backup trees are required. The next unit is full serial source qualification at the new exact HEAD before re-bump, package, or publication. See the existing #137 backlog and the G-drive 0.0.93 checkpoint.
+
 ## Current editor checkpoint
 
 #128 is verified on public 0.0.91. The exact installed Antigravity witness passed 15 location, reference, editor-jump and refusal cases. The prior compiled API/MCP transport remains verified. Both owned hosts and scratch phases retired. See the authored AIScript navigation plan and the retained G-drive receipt.
