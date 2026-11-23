@@ -275,6 +275,162 @@ check('returned-table-proof-refuses-unresolved-ownership-and-clears', () => {
   }
 });
 
+check('finite-registry-member-wrap-verification', () => {
+  const input = project(returnedOrders);
+  const reader = input.files.find(file => file.path === 'md/forge_regression_lab.xml')!;
+  reader.content = reader.content!.replace('</cues>', `<cue name="ReturnedRegistry"><conditions>
+    <event_ui_triggered screen="'ForgeLab'" control="'on'"/>
+  </conditions><actions><set_value name="$order" exact="event.param3.{'$po' + $si}"/></actions></cue></cues>`);
+
+  const safeHealthLua = `local T = rawget(_G, "OrderTools") or {}
+OrderTools = T
+T.HOOKS = {
+  { "noop", "misc", every = 60 },
+  { "tick", "ops", lua = "Tick", every = 5 },
+}
+function T.Tick() return 1 end
+function T.Every(e) return type(e) == "table" and tonumber(e.every) or nil end
+function T.Inspect(expect)
+  local seen = {}
+  for _, e in ipairs(expect or T.HOOKS) do
+    if e[1] then seen[e[1]] = true end
+  end
+  return seen
+end
+for _, e in ipairs(T.HOOKS) do
+  local fname = e.lua
+  local orig = fname and T[fname]
+  if type(orig) == "function" then
+    T[fname] = function(...) return orig(...) end
+  end
+end`;
+  const safeUiConsumerLua = `OrderTools = OrderTools or {}
+function OrderTools.BoardRows(expect)
+  local out = {}
+  for _, e in ipairs(type(expect) == "table" and expect or {}) do
+    out[#out + 1] = OrderTools.Every(e)
+  end
+  return out
+end
+local _rows = OrderTools.BoardRows(OrderTools.HOOKS)`;
+
+  const verifiedProject = {
+    ...input,
+    files: [
+      ...input.files,
+      { path: 'ui/safe_health.lua', kind: 'lua' as const, content: safeHealthLua },
+      { path: 'ui/safe_board.lua', kind: 'lua' as const, content: safeUiConsumerLua },
+    ],
+  };
+  assert.ok(!validateProjectCrossFile(verifiedProject).findings.some(f => f.code === 'md_lua.payload_writer_unverified'));
+
+  const negativeCases = [
+    safeHealthLua.replace('{ "tick", "ops", lua = "Tick", every = 5 }', '{ "tick", "ops", lua = "Build", every = 5 }'),
+    safeHealthLua.replace('{ "tick", "ops", lua = "Tick", every = 5 }', '{ "tick", "ops", lua = dynamicName(), every = 5 }'),
+    safeHealthLua.replace('if type(orig) == "function" then', 'fname = dynamicTarget()\n  if type(orig) == "function" then'),
+    safeHealthLua + '\ntable.insert(T.HOOKS, { "bad", "ops", lua = "Build" })',
+    safeHealthLua + '\nfunction T.Sneak(expect) expect[1].lua = "Build" end\nlocal _x = T.Sneak(T.HOOKS)',
+  ];
+  for (const lua of negativeCases) {
+    const negProject = {
+      ...input,
+      files: [...input.files, { path: 'ui/bad_health.lua', kind: 'lua' as const, content: lua }],
+    };
+    const finding = validateProjectCrossFile(negProject).findings.find(item => item.code === 'md_lua.payload_writer_unverified');
+    assert.ok(finding, lua);
+    assert.match(finding.detail, /the builder binding/);
+  }
+});
+
+check('emitter-forwarding-wrapper-verification', () => {
+  const input = project(returnedOrders);
+  const reader = input.files.find(file => file.path === 'md/forge_regression_lab.xml')!;
+  reader.content = reader.content!.replace('</cues>', `<cue name="ReturnedWrapped"><conditions>
+    <event_ui_triggered screen="'ForgeLab'" control="'on'"/>
+  </conditions><actions><set_value name="$order" exact="event.param3.{'$po' + $si}"/></actions></cue></cues>`);
+
+  const utf8StyleWrapper = `local T = OrderTools
+local concat = table.concat
+function T.CleanStr(s)
+  if type(s) ~= "string" then return s end
+  local out = { s }
+  return concat(out)
+end
+function T.CleanParam(p, depth)
+  if type(p) == "string" then local c = T.CleanStr(p); return c, 1 end
+  if type(p) ~= "table" or (depth or 0) > 3 then return p, 0 end
+  local fixed = 0
+  for k, v in pairs(p) do
+    if type(v) == "string" or type(v) == "table" then
+      local c, f = T.CleanParam(v, (depth or 0) + 1)
+      if f > 0 then p[k] = c; fixed = fixed + 1 end
+    end
+  end
+  return p, fixed
+end
+if type(AddUITriggeredEvent) == "function" then
+  local orig = AddUITriggeredEvent
+  AddUITriggeredEvent = function(screen, control, param, ...)
+    if screen == "ForgeLab" and param ~= nil then
+      local ok, c, f = pcall(T.CleanParam, param)
+      if ok then
+        param = c
+        if f > 0 then local _n = f end
+      end
+    end
+    return orig(screen, control, param, ...)
+  end
+end`;
+
+  const plaintextStyleWrapper = `OrderTools = OrderTools or {}
+function OrderTools.FoldOther(s) return tostring(s or "") end
+function OrderTools.WrapOther(add)
+  return function(screen, control, param, ...)
+    if screen == "ForgeLab" and control == "other_msg" and type(param) == "table" then
+      param.body = OrderTools.FoldOther(param.body)
+    elseif screen == "ForgeLab" and control == "bulletin" and type(param) == "table" then
+      for k, v in pairs(param) do
+        if type(k) == "string" and type(v) == "string" then param[k] = OrderTools.FoldOther(v) end
+      end
+    end
+    return add(screen, control, param, ...)
+  end
+end
+if AddUITriggeredEvent then
+  AddUITriggeredEvent = OrderTools.WrapOther(AddUITriggeredEvent)
+end`;
+
+  const combinedPositive = {
+    ...input,
+    files: [
+      ...input.files,
+      { path: 'ui/wrap_utf8.lua', kind: 'lua' as const, content: utf8StyleWrapper },
+      { path: 'ui/wrap_plain.lua', kind: 'lua' as const, content: plaintextStyleWrapper },
+    ],
+  };
+  assert.ok(!validateProjectCrossFile(combinedPositive).findings.some(f => f.code === 'md_lua.payload_writer_unverified'));
+
+  const negativeWrappers = [
+    utf8StyleWrapper.replace('if screen == "ForgeLab" and param ~= nil then', 'if control == "other" then return end\n    if screen == "ForgeLab" and param ~= nil then'),
+    utf8StyleWrapper.replace('return orig(screen, control, param, ...)', 'control = "hijack"\n    return orig(screen, control, param, ...)'),
+    utf8StyleWrapper.replace('if ok then', 'param = {}\n      if ok then'),
+    utf8StyleWrapper.replace('p[k] = c', 'p.po1 = nil; p[k] = c'),
+    utf8StyleWrapper.replace('return concat(out)', 'return nil'),
+    utf8StyleWrapper.replace('local concat = table.concat', 'local concat = unknownFn'),
+    plaintextStyleWrapper.replace('control == "other_msg"', 'control == "on"'),
+    utf8StyleWrapper + '\nAddUITriggeredEvent = decorate(AddUITriggeredEvent)',
+  ];
+  for (const lua of negativeWrappers) {
+    const neg = {
+      ...input,
+      files: [...input.files, { path: 'ui/bad_wrap.lua', kind: 'lua' as const, content: lua }],
+    };
+    const finding = validateProjectCrossFile(neg).findings.find(item => item.code === 'md_lua.payload_writer_unverified');
+    assert.ok(finding, lua);
+    assert.match(finding.detail, /event forwarding/);
+  }
+});
+
 const localIndexPayloadHelper = `local function build()
 local p = { n = 1 }
 local i = p.n

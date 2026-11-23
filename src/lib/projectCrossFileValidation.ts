@@ -213,10 +213,13 @@ interface LuaAstNode {
   left?: LuaAstNode;
   right?: LuaAstNode;
   identifier?: LuaAstNode;
+  key?: LuaAstNode;
   variable?: LuaAstNode;
   variables?: LuaAstNode[];
   init?: LuaAstNode[];
   parameters?: LuaAstNode[];
+  iterators?: LuaAstNode[];
+  clauses?: LuaAstNode[];
   body?: LuaAstNode[];
   expression?: LuaAstNode;
   base?: LuaAstNode;
@@ -959,6 +962,658 @@ function preserveLuaNamespace(root: string, value: LuaAstNode | undefined, rawge
     && readLuaNamespace(value.left, rawgetAvailable) === root;
 }
 
+interface LuaFiniteRegistryCandidate {
+  targetRoot: string;
+  registryRoot: string;
+  registryMember: string;
+  memberKeys: string[];
+  propName: string;
+}
+
+interface LuaEmitterWrapperCandidate {
+  kind: 'inline' | 'factory' | 'unverified';
+  prevName?: string;
+  wrapperAst?: LuaAstNode;
+  substituted?: Uint8Array;
+  factoryRoot?: string;
+  factoryMember?: string;
+}
+
+interface LuaQualifiedFunctionDef {
+  root: string;
+  member: string;
+  ast: LuaAstNode;
+  aliasRoots: ReadonlyMap<string, string>;
+  concatAliases: ReadonlySet<string>;
+  substituted: Uint8Array;
+}
+
+interface LuaPendingRegistryArgCheck {
+  registryKey: string;
+  calleeKey: string;
+  argIndex: number;
+}
+
+interface LuaRegistryRowFact {
+  fields: ReadonlyMap<string, string | null>;
+  dynamicFields: ReadonlySet<string>;
+  hasComputedKey: boolean;
+}
+
+interface LuaBuilderMutationFacts {
+  members: Map<string, number>;
+  replacedRoots: Set<string>;
+  opaqueGlobals: boolean;
+  ambiguousBuiltins: Set<string>;
+  registryDefs: Map<string, LuaRegistryRowFact[]>;
+  registryCandidates: LuaFiniteRegistryCandidate[];
+  unsafeRegistries: Set<string>;
+  pendingRegistryArgChecks: LuaPendingRegistryArgCheck[];
+  emitterWrappers: LuaEmitterWrapperCandidate[];
+  qualifiedFunctions: Map<string, LuaQualifiedFunctionDef>;
+}
+
+const PURE_READ_BUILTINS = new Set(['type', 'tostring', 'tonumber', 'ipairs', 'pairs', 'next', 'rawget']);
+
+function luaStaticString(node: LuaAstNode | undefined, substituted: Uint8Array): string | undefined {
+  if (node?.type !== 'StringLiteral' || typeof node.value !== 'string') return undefined;
+  if (luaStringLiteralTainted(node, substituted)) return undefined;
+  return node.value;
+}
+
+function luaConjunctionEventFilter(
+  condition: LuaAstNode | undefined,
+  screenParam: string,
+  controlParam: string,
+  substituted: Uint8Array,
+): { screen?: string; control?: string } | undefined {
+  const result: { screen?: string; control?: string } = {};
+  const collect = (expr: LuaAstNode | undefined): void => {
+    if (!expr) return;
+    if (expr.type === 'LogicalExpression' && expr.operator === 'and') {
+      collect(expr.left);
+      collect(expr.right);
+      return;
+    }
+    if (expr.type === 'BinaryExpression' && expr.operator === '==') {
+      const checkPair = (idNode: LuaAstNode | undefined, litNode: LuaAstNode | undefined) => {
+        if (!idNode?.isLocal || !litNode) return;
+        const lit = luaStaticString(litNode, substituted);
+        if (lit === undefined) return;
+        const id = luaIdentifier(idNode);
+        if (id === screenParam) result.screen = lit;
+        else if (id === controlParam) result.control = lit;
+      };
+      checkPair(expr.left, expr.right);
+      checkPair(expr.right, expr.left);
+    }
+  };
+  collect(condition);
+  return result.screen !== undefined || result.control !== undefined ? result : undefined;
+}
+
+function isLuaParamReadOnlyInFunction(
+  fnKey: string,
+  argIndex: number,
+  qualifiedFunctions: ReadonlyMap<string, LuaQualifiedFunctionDef>,
+  members: ReadonlyMap<string, number>,
+  replacedRoots: ReadonlySet<string>,
+  visited: Set<string>,
+): boolean {
+  const visitKey = `${fnKey}#${argIndex}`;
+  if (visited.has(visitKey)) return true;
+  if (visited.size >= 8) return false;
+  const dot = fnKey.indexOf('.');
+  if (dot <= 0) return false;
+  const member = fnKey.slice(dot + 1);
+  if (members.get(member) !== 1 || replacedRoots.has(fnKey.slice(0, dot))) return false;
+  const def = qualifiedFunctions.get(fnKey);
+  if (!def) return false;
+  const paramNode = def.ast.parameters?.[argIndex];
+  const paramName = paramNode ? luaIdentifier(paramNode) : null;
+  if (!paramName) return false;
+
+  visited.add(visitKey);
+  const scan = scanLuaScope(def.ast);
+  const trackedLocals = new Set<string>([paramName]);
+  let mutatedOrEscaped = false;
+
+  // Track safe read-only loop elements from ipairs(param [or ...]) without allowing writes or escapes.
+  const loopElems = new Set<string>();
+  const refersTracked = (node: LuaAstNode | undefined): boolean => {
+    if (!node) return false;
+    const name = node.isLocal === true ? luaIdentifier(node) : null;
+    if (name && (trackedLocals.has(name) || loopElems.has(name))) return true;
+    if (node.type === 'LogicalExpression' && (node.operator === 'or' || node.operator === 'and')) {
+      return refersTracked(node.left) || refersTracked(node.right);
+    }
+    return false;
+  };
+  const containsTracked = (node: LuaAstNode | undefined): boolean => {
+    let found = false;
+    walkLuaAst(node, sub => {
+      if (sub.type === 'FunctionDeclaration') return;
+      const name = sub.isLocal === true ? luaIdentifier(sub) : null;
+      if (name && (trackedLocals.has(name) || loopElems.has(name))) found = true;
+    });
+    return found;
+  };
+
+  const mutatesTrackedTarget = (node: LuaAstNode | undefined): boolean => {
+    for (let cur = node; cur; cur = cur.base) {
+      const name = cur.isLocal === true ? luaIdentifier(cur) : null;
+      if (name && (trackedLocals.has(name) || loopElems.has(name))) return true;
+    }
+    return false;
+  };
+  const escapesTrackedTable = (node: LuaAstNode | undefined): boolean => {
+    if (!node) return false;
+    const name = node.isLocal === true ? luaIdentifier(node) : null;
+    if (name && (trackedLocals.has(name) || loopElems.has(name))) return true;
+    if (node.type === 'TableConstructorExpression') {
+      return (node.fields ?? []).some(f => escapesTrackedTable(f.value as LuaAstNode | undefined));
+    }
+    if (node.type === 'LogicalExpression') {
+      return escapesTrackedTable(node.left) || escapesTrackedTable(node.right);
+    }
+    return false;
+  };
+
+  for (const node of scan.nodes) {
+    if (node.type === 'ForGenericStatement') {
+      const iter = node.iterators?.[0];
+      const iterBase = iter?.type === 'CallExpression' ? luaIdentifier(iter.base) : null;
+      if ((iterBase === 'ipairs' || iterBase === 'pairs') && iter?.arguments?.length === 1 && refersTracked(iter.arguments[0])) {
+        const elem = node.variables?.[1] ?? node.variables?.[0];
+        const elemName = elem ? luaIdentifier(elem) : null;
+        if (elemName && elemName !== '_') loopElems.add(elemName);
+      }
+      continue;
+    }
+    if (node.type === 'LocalStatement') {
+      (node.variables || []).forEach((variable, idx) => {
+        const name = luaIdentifier(variable);
+        const init = node.init?.[idx];
+        if (name && (trackedLocals.has(name) || loopElems.has(name))) mutatedOrEscaped = true;
+        else if (init && escapesTrackedTable(init)) mutatedOrEscaped = true;
+      });
+      if (mutatedOrEscaped) return false;
+      continue;
+    }
+    if (node.type === 'AssignmentStatement') {
+      for (const target of node.variables || []) {
+        if (mutatesTrackedTarget(target)) return false;
+      }
+      for (const init of node.init || []) {
+        if (escapesTrackedTable(init)) return false;
+      }
+      continue;
+    }
+    if (node.type === 'ReturnStatement') {
+      if ((node.arguments || []).some(arg => escapesTrackedTable(arg))) return false;
+      continue;
+    }
+    if (node.type === 'CallExpression') {
+      const args = node.arguments || [];
+      args.forEach((arg, idx) => {
+        if (!containsTracked(arg)) return;
+        // Allow pure field reads passed as expressions like `tonumber(e.every)`.
+        const argName = arg.isLocal === true ? luaIdentifier(arg) : null;
+        if (!argName || (!trackedLocals.has(argName) && !loopElems.has(argName))) return;
+        const directBuiltin = arg.type === 'Identifier' && node.base?.isLocal === false
+          ? luaIdentifier(node.base) : null;
+        if (directBuiltin && PURE_READ_BUILTINS.has(directBuiltin)) return;
+        const baseName = node.base?.type === 'MemberExpression' && node.base.indexer === '.'
+          ? luaIdentifier(node.base.base) : null;
+        const memberName = node.base?.type === 'MemberExpression' && node.base.indexer === '.'
+          ? luaIdentifier(node.base.identifier) : null;
+        const resolvedBase = baseName
+          ? (node.base?.base?.isLocal === false ? baseName : def.aliasRoots.get(baseName))
+          : undefined;
+        if (!resolvedBase || !memberName
+          || !isLuaParamReadOnlyInFunction(`${resolvedBase}.${memberName}`, idx, qualifiedFunctions, members, replacedRoots, visited)) {
+          mutatedOrEscaped = true;
+        }
+      });
+      if (mutatedOrEscaped) return false;
+    }
+  }
+  return !mutatedOrEscaped;
+}
+
+function resolveFiniteRegistries(
+  emitAnalyses: ReadonlyArray<{ mutations: LuaBuilderMutationFacts }>,
+  baseMembers: Map<string, number>,
+  baseReplacedRoots: Set<string>,
+): void {
+  const baseMemberCounts = new Map(baseMembers);
+  const opaqueGlobals = emitAnalyses.some(analysis => analysis.mutations.opaqueGlobals);
+  const qualifiedFunctions = new Map<string, LuaQualifiedFunctionDef>();
+  const registryDefs = new Map<string, LuaRegistryRowFact[]>();
+  const unsafeRegistries = new Set<string>();
+  const pendingArgChecks: LuaPendingRegistryArgCheck[] = [];
+  const allCandidates: LuaFiniteRegistryCandidate[] = [];
+  let unsafeEnvForRegistry = opaqueGlobals || baseReplacedRoots.has('rawget');
+
+  for (const { mutations } of emitAnalyses) {
+    if (mutations.ambiguousBuiltins.has('ipairs') || mutations.ambiguousBuiltins.has('type')
+      || mutations.ambiguousBuiltins.has('rawget')) {
+      unsafeEnvForRegistry = true;
+    }
+    for (const [k, def] of mutations.qualifiedFunctions) {
+      if (!qualifiedFunctions.has(k)) qualifiedFunctions.set(k, def);
+    }
+    for (const [k, rows] of mutations.registryDefs) {
+      if (!registryDefs.has(k)) registryDefs.set(k, rows);
+    }
+    for (const k of mutations.unsafeRegistries) unsafeRegistries.add(k);
+    pendingArgChecks.push(...mutations.pendingRegistryArgChecks);
+    allCandidates.push(...mutations.registryCandidates);
+  }
+
+  for (const candidate of allCandidates) {
+    const regKey = `${candidate.registryRoot}.${candidate.registryMember}`;
+    const argChecks = pendingArgChecks.filter(item => item.registryKey === regKey);
+    const argsReadOnly = !unsafeEnvForRegistry
+      && baseMemberCounts.get(candidate.registryMember) === 1
+      && !baseReplacedRoots.has(candidate.registryRoot)
+      && !baseReplacedRoots.has(candidate.targetRoot)
+      && !unsafeRegistries.has(regKey)
+      && argChecks.every(check => isLuaParamReadOnlyInFunction(
+        check.calleeKey,
+        check.argIndex,
+        qualifiedFunctions,
+        baseMemberCounts,
+        baseReplacedRoots,
+        new Set<string>(),
+      ));
+    if (!argsReadOnly) {
+      baseReplacedRoots.add(candidate.targetRoot);
+      continue;
+    }
+    for (const memberKey of candidate.memberKeys) {
+      baseMembers.set(memberKey, (baseMembers.get(memberKey) ?? 0) + 1);
+    }
+  }
+}
+
+function isStringOnlyLeafCleaner(
+  fnKey: string,
+  qualifiedFunctions: ReadonlyMap<string, LuaQualifiedFunctionDef>,
+  members: ReadonlyMap<string, number>,
+  replacedRoots: ReadonlySet<string>,
+): boolean {
+  const dot = fnKey.indexOf('.');
+  if (dot <= 0) return false;
+  const member = fnKey.slice(dot + 1);
+  if (members.get(member) !== 1 || replacedRoots.has(fnKey.slice(0, dot))) return false;
+  const def = qualifiedFunctions.get(fnKey);
+  if (!def || !def.ast.parameters?.length) return false;
+  const strParam = luaIdentifier(def.ast.parameters[0]);
+  if (!strParam) return false;
+
+  // Locate immutable local aliases for table.concat (file-level or function-local).
+  const concatLocals = new Set<string>(def.concatAliases);
+  const scan = scanLuaScope(def.ast);
+  for (const node of scan.nodes) {
+    if (node.type === 'AssignmentStatement') {
+      for (const v of node.variables || []) {
+        const nm = v.isLocal === true ? luaIdentifier(v) : null;
+        if (nm === strParam) return false;
+        if (nm) concatLocals.delete(nm);
+      }
+    }
+    if (node.type === 'LocalStatement') {
+      (node.variables || []).forEach((v, idx) => {
+        const name = luaIdentifier(v);
+        const init = node.init?.[idx];
+        if (!name) return;
+        if (init?.type === 'MemberExpression' && init.indexer === '.'
+          && init.base?.isLocal === false && luaIdentifier(init.base) === 'table'
+          && luaIdentifier(init.identifier) === 'concat') {
+          concatLocals.add(name);
+        } else {
+          concatLocals.delete(name);
+        }
+      });
+    }
+  }
+  const returns = scan.nodes.filter(n => n.type === 'ReturnStatement');
+  if (returns.length === 0) return false;
+  return returns.every(ret => {
+    const val = ret.arguments?.[0];
+    if (!val) return false;
+    if (val.isLocal === true && luaIdentifier(val) === strParam) return true;
+    if (val.type === 'StringLiteral') return true;
+    if (val.type === 'CallExpression') {
+      const callee = val.base?.isLocal === true ? luaIdentifier(val.base) : null;
+      if (callee && concatLocals.has(callee)) return true;
+      if (val.base?.type === 'MemberExpression' && val.base.indexer === '.'
+        && val.base.base?.isLocal === false && luaIdentifier(val.base.base) === 'table'
+        && luaIdentifier(val.base.identifier) === 'concat') return true;
+    }
+    return false;
+  });
+}
+
+function isTypeCheck(node: LuaAstNode | undefined, targetName: string, expectedType: string): boolean {
+  if (node?.type !== 'BinaryExpression' || node.operator !== '==') return false;
+  const check = (callNode: LuaAstNode | undefined, strNode: LuaAstNode | undefined) =>
+    callNode?.type === 'CallExpression' && callNode.base?.isLocal === false
+    && luaIdentifier(callNode.base) === 'type' && callNode.arguments?.length === 1
+    && callNode.arguments[0].isLocal === true && luaIdentifier(callNode.arguments[0]) === targetName
+    && strNode?.type === 'StringLiteral' && strNode.value === expectedType;
+  return check(node.left, node.right) || check(node.right, node.left);
+}
+
+function verifyIdentityPreservingTableCleaner(
+  fnKey: string,
+  qualifiedFunctions: ReadonlyMap<string, LuaQualifiedFunctionDef>,
+  members: ReadonlyMap<string, number>,
+  replacedRoots: ReadonlySet<string>,
+): boolean {
+  const dot = fnKey.indexOf('.');
+  if (dot <= 0) return false;
+  const member = fnKey.slice(dot + 1);
+  if (members.get(member) !== 1 || replacedRoots.has(fnKey.slice(0, dot))) return false;
+  const def = qualifiedFunctions.get(fnKey);
+  if (!def || !def.ast.parameters?.length) return false;
+  const tblParam = luaIdentifier(def.ast.parameters[0]);
+  if (!tblParam) return false;
+
+  const scan = scanLuaScope(def.ast);
+  const loopKeyVars = new Set<string>();
+  const loopValVars = new Set<string>();
+  const cleanResultLocals = new Set<string>();
+  let unsafe = false;
+
+  for (const node of scan.nodes) {
+    if (node.type === 'FunctionDeclaration' && node !== def.ast) return false;
+    if (node.type === 'ForGenericStatement') {
+      const iter = node.iterators?.[0];
+      if (iter?.type === 'CallExpression' && iter.base?.isLocal === false && luaIdentifier(iter.base) === 'pairs'
+        && iter.arguments?.length === 1 && iter.arguments[0].isLocal === true && luaIdentifier(iter.arguments[0]) === tblParam) {
+        const k = node.variables?.[0] ? luaIdentifier(node.variables[0]) : null;
+        const v = node.variables?.[1] ? luaIdentifier(node.variables[1]) : null;
+        if (k) loopKeyVars.add(k);
+        if (v) loopValVars.add(v);
+      }
+    }
+  }
+
+  for (const node of scan.nodes) {
+    if (node.type === 'ReturnStatement') {
+      const arg = node.arguments?.[0];
+      if (!arg) return false;
+      if (arg.isLocal === true && luaIdentifier(arg) === tblParam) continue;
+      // Non-table string return allowed only directly inside `if type(p) == "string"` calling verified LeafCleaner.
+      const parent = scan.parents.get(node);
+      if (parent?.type !== 'IfClause' || !isTypeCheck(parent.condition as LuaAstNode, tblParam, 'string')) return false;
+      const argName = arg.isLocal === true ? luaIdentifier(arg) : null;
+      if (!argName) return false;
+      const defLocal = parent.body?.find(st => st.type === 'LocalStatement'
+        && st.variables?.some(v => luaIdentifier(v) === argName));
+      const init = defLocal?.init?.[0];
+      if (init?.type !== 'CallExpression' || init.base?.type !== 'MemberExpression' || init.base.indexer !== '.') return false;
+      const baseName = luaIdentifier(init.base.base);
+      const leafMember = luaIdentifier(init.base.identifier);
+      const leafRoot = baseName ? (init.base.base?.isLocal === false ? baseName : def.aliasRoots.get(baseName)) : undefined;
+      if (!leafRoot || !leafMember || !isStringOnlyLeafCleaner(`${leafRoot}.${leafMember}`, qualifiedFunctions, members, replacedRoots)) {
+        return false;
+      }
+      continue;
+    }
+    if (node.type === 'LocalStatement') {
+      const firstInit = node.init?.[0];
+      if (firstInit?.type === 'CallExpression' && firstInit.base?.type === 'MemberExpression' && firstInit.base.indexer === '.') {
+        const b = luaIdentifier(firstInit.base.base);
+        const m = luaIdentifier(firstInit.base.identifier);
+        const r = b ? (firstInit.base.base?.isLocal === false ? b : def.aliasRoots.get(b)) : undefined;
+        const arg0 = firstInit.arguments?.[0];
+        if (r === def.root && m === def.member && arg0?.isLocal === true && loopValVars.has(luaIdentifier(arg0) ?? '')) {
+          const outName = node.variables?.[0] ? luaIdentifier(node.variables[0]) : null;
+          if (outName) cleanResultLocals.add(outName);
+        }
+      }
+      for (const v of node.variables || []) {
+        if (v.isLocal === true && luaIdentifier(v) === tblParam) return false;
+      }
+      continue;
+    }
+    if (node.type === 'AssignmentStatement') {
+      for (const v of node.variables || []) {
+        if (v.isLocal === true && luaIdentifier(v) === tblParam) return false;
+        let hitsTblParam = false;
+        for (let cur: LuaAstNode | undefined = v.base; cur; cur = cur.base) {
+          if (cur.isLocal === true && luaIdentifier(cur) === tblParam) { hitsTblParam = true; break; }
+        }
+        if (hitsTblParam) {
+          if (v.type !== 'IndexExpression' || v.base?.isLocal !== true || luaIdentifier(v.base) !== tblParam) return false;
+          const idxName = v.index?.isLocal === true ? luaIdentifier(v.index) : null;
+          const pos = node.variables?.indexOf(v) ?? -1;
+          const rhs = pos >= 0 ? node.init?.[pos] : undefined;
+          const rhsName = rhs?.isLocal === true ? luaIdentifier(rhs) : null;
+          // Must write only non-nil cleaned value from recursive cleaner guarded by string-or-table type check.
+          let insideLoop = false;
+          let insideStringTableGuard = false;
+          const valVar = loopValVars.size === 1 ? [...loopValVars][0] : undefined;
+          for (let cur = scan.parents.get(node); cur && cur !== def.ast; cur = scan.parents.get(cur)) {
+            if (cur.type === 'ForGenericStatement') insideLoop = true;
+            if (cur.type === 'IfClause' && valVar) {
+              const cond = cur.condition as LuaAstNode | undefined;
+              const isStrOrTbl = cond?.type === 'LogicalExpression' && cond.operator === 'or'
+                && ((isTypeCheck(cond.left, valVar, 'string') && isTypeCheck(cond.right, valVar, 'table'))
+                  || (isTypeCheck(cond.left, valVar, 'table') && isTypeCheck(cond.right, valVar, 'string')));
+              if (isStrOrTbl) insideStringTableGuard = true;
+            }
+          }
+          if (!idxName || !loopKeyVars.has(idxName) || !rhsName || !cleanResultLocals.has(rhsName) || !insideLoop || !insideStringTableGuard) {
+            unsafe = true;
+          }
+        }
+      }
+      if (unsafe) return false;
+    }
+  }
+  return !unsafe;
+}
+
+function verifyProjectEmitterForwarding(
+  emitAnalyses: ReadonlyArray<{ mutations: LuaBuilderMutationFacts }>,
+  members: ReadonlyMap<string, number>,
+  replacedRoots: ReadonlySet<string>,
+  targetEventIdentity: string,
+): boolean {
+  const allWrappers: LuaEmitterWrapperCandidate[] = [];
+  const qualifiedFunctions = new Map<string, LuaQualifiedFunctionDef>();
+  for (const { mutations } of emitAnalyses) {
+    if (mutations.opaqueGlobals || mutations.ambiguousBuiltins.has('pcall')
+      || mutations.ambiguousBuiltins.has('pairs') || mutations.ambiguousBuiltins.has('type')
+      || mutations.ambiguousBuiltins.has('rawget')) {
+      return false;
+    }
+    for (const [k, def] of mutations.qualifiedFunctions) {
+      if (!qualifiedFunctions.has(k)) qualifiedFunctions.set(k, def);
+    }
+    allWrappers.push(...mutations.emitterWrappers);
+  }
+  if (!replacedRoots.has('AddUITriggeredEvent')) return !replacedRoots.has('pcall');
+  if (allWrappers.length === 0 || replacedRoots.has('pcall') || replacedRoots.has('rawget')) return false;
+
+  const targetPair = JSON.parse(targetEventIdentity) as [string, string];
+  const [targetScreen, targetControl] = targetPair;
+
+  for (const wrapper of allWrappers) {
+    if (wrapper.kind === 'unverified') return false;
+    let wrapperAst = wrapper.wrapperAst;
+    let prevName = wrapper.prevName;
+    let defAliasRoots: ReadonlyMap<string, string> = new Map();
+    let wrapperSubstituted = wrapper.substituted ?? new Uint8Array(0);
+
+    if (wrapper.kind === 'factory') {
+      if (!wrapper.factoryRoot || !wrapper.factoryMember || replacedRoots.has(wrapper.factoryRoot)
+        || members.get(wrapper.factoryMember) !== 1) return false;
+      const factoryDef = qualifiedFunctions.get(`${wrapper.factoryRoot}.${wrapper.factoryMember}`);
+      if (!factoryDef || factoryDef.ast.parameters?.length !== 1) return false;
+      const factoryPrev = luaIdentifier(factoryDef.ast.parameters[0]);
+      if (!factoryPrev || factoryDef.ast.body?.length !== 1) return false;
+      const ret = factoryDef.ast.body[0];
+      if (ret?.type !== 'ReturnStatement' || ret.arguments?.length !== 1 || ret.arguments[0].type !== 'FunctionDeclaration') return false;
+      prevName = factoryPrev;
+      wrapperAst = ret.arguments[0];
+      defAliasRoots = factoryDef.aliasRoots;
+      wrapperSubstituted = factoryDef.substituted;
+    }
+    if (!wrapperAst || !prevName) return false;
+    const params = wrapperAst.parameters ?? [];
+    if (params.length < 3 || params.length > 4) return false;
+    const screenParam = luaIdentifier(params[0]);
+    const controlParam = luaIdentifier(params[1]);
+    const paramParam = luaIdentifier(params[2]);
+    if (!screenParam || !controlParam || !paramParam || new Set([screenParam, controlParam, paramParam, prevName]).size !== 4) return false;
+    if (params.length === 4 && params[3].type !== 'VarargLiteral') return false;
+
+    const body = wrapperAst.body ?? [];
+    if (body.length === 0) return false;
+    const last = body[body.length - 1];
+    if (last?.type !== 'ReturnStatement' || last.arguments?.length !== 1) return false;
+    const tailCall = last.arguments[0];
+    if (tailCall?.type !== 'CallExpression' || tailCall.base?.isLocal !== true || luaIdentifier(tailCall.base) !== prevName) return false;
+    const tailArgs = tailCall.arguments ?? [];
+    if (tailArgs.length !== params.length
+      || luaIdentifier(tailArgs[0]) !== screenParam
+      || luaIdentifier(tailArgs[1]) !== controlParam
+      || luaIdentifier(tailArgs[2]) !== paramParam
+      || (params.length === 4 && tailArgs[3]?.type !== 'VarargLiteral')) return false;
+
+    // Inspect prefix statements (everything before unconditional final `return prev(screen, control, param, ...)`).
+    const prefix = body.slice(0, -1);
+    const scanPrefix = scanLuaScope({ type: 'Block', body: prefix });
+    const innerReturns = scanPrefix.nodes.some(n => n.type === 'ReturnStatement' || n.type === 'FunctionDeclaration');
+    if (innerReturns) return false;
+    const altersRoutingParams = scanPrefix.nodes.some(n => {
+      if (n.type !== 'AssignmentStatement' && n.type !== 'LocalStatement') return false;
+      return (n.variables || []).some(v => {
+        const nm = luaIdentifier(v);
+        return nm === screenParam || nm === controlParam || nm === prevName;
+      });
+    });
+    if (altersRoutingParams) return false;
+
+    // Resolve immutable file-level aliases in addition to local ones for factory vs inline file context.
+    const resolveCleanerCall = (callExpr: LuaAstNode | undefined, aliasMap: ReadonlyMap<string, string>): string | undefined => {
+      if (callExpr?.type !== 'CallExpression' || callExpr.base?.type !== 'MemberExpression' || callExpr.base.indexer !== '.') return undefined;
+      const baseId = luaIdentifier(callExpr.base.base);
+      const memberId = luaIdentifier(callExpr.base.identifier);
+      const root = baseId ? (callExpr.base.base?.isLocal === false ? baseId : aliasMap.get(baseId)) : undefined;
+      return root && memberId ? `${root}.${memberId}` : undefined;
+    };
+    const fileAliases = defAliasRoots.size > 0 ? defAliasRoots : (() => {
+      const m = new Map<string, string>();
+      for (const f of emitAnalyses) {
+        for (const [, qdef] of f.mutations.qualifiedFunctions) {
+          for (const [k, v] of qdef.aliasRoots) m.set(k, v);
+        }
+      }
+      return m;
+    })();
+
+    const containsForbiddenWrite = (stList: readonly LuaAstNode[], insideDifferentEventGuard: boolean): boolean => {
+      for (const st of stList) {
+        // Check assignments/locals on screen/control/prev everywhere.
+        if (st.type === 'LocalStatement') {
+          if ((st.variables || []).some(v => {
+            const nm = luaIdentifier(v);
+            return nm === screenParam || nm === controlParam || nm === prevName || nm === paramParam;
+          })) return true;
+        }
+        if (st.type === 'AssignmentStatement') {
+          for (const target of st.variables || []) {
+            if (target.isLocal === true) {
+              const nm = luaIdentifier(target);
+              if (nm === screenParam || nm === controlParam || nm === prevName || nm === paramParam) return true;
+            }
+            if ((target.type === 'IndexExpression' || target.type === 'MemberExpression')
+              && target.base?.isLocal === true && luaIdentifier(target.base) === paramParam && !insideDifferentEventGuard) {
+              return true;
+            }
+          }
+          continue;
+        }
+        if (st.type === 'IfStatement') {
+          for (const clause of (st.clauses as LuaAstNode[] | undefined) ?? []) {
+            const filter = clause.type !== 'ElseClause'
+              ? luaConjunctionEventFilter(clause.condition as LuaAstNode, screenParam, controlParam, wrapperSubstituted)
+              : undefined;
+            const mismatchedEvent = !!filter
+              && ((filter.screen !== undefined && filter.screen !== targetScreen)
+                || (filter.control !== undefined && filter.control !== targetControl));
+            const clauseBody = (clause.body as LuaAstNode[] | undefined) ?? [];
+
+            // Check safe cleaner pattern: `local ok, c, f = pcall(Root.Cleaner, param)` + `if ok then param = c ... end`.
+            if (clauseBody.length === 2 && clauseBody[0]?.type === 'LocalStatement' && clauseBody[1]?.type === 'IfStatement') {
+              const pcallStmt = clauseBody[0];
+              const pcallInit = pcallStmt.init?.[0];
+              const okVar = pcallStmt.variables?.[0] ? luaIdentifier(pcallStmt.variables[0]) : null;
+              const cleanVar = pcallStmt.variables?.[1] ? luaIdentifier(pcallStmt.variables[1]) : null;
+              const updateClauses = clauseBody[1].clauses as LuaAstNode[] | undefined;
+              if (pcallInit?.type === 'CallExpression' && pcallInit.base?.isLocal === false
+                && luaIdentifier(pcallInit.base) === 'pcall' && pcallInit.arguments?.length === 2
+                && pcallInit.arguments[1].isLocal === true && luaIdentifier(pcallInit.arguments[1]) === paramParam
+                && okVar && cleanVar && okVar !== cleanVar && updateClauses?.length === 1
+                && updateClauses[0].type === 'IfClause' && luaIdentifier(updateClauses[0].condition as LuaAstNode) === okVar) {
+                const cleanerMember = pcallInit.arguments[0];
+                const cleanerFakeCall: LuaAstNode = { type: 'CallExpression', base: cleanerMember, arguments: [pcallInit.arguments[1]] };
+                const cleanerKey = resolveCleanerCall(cleanerFakeCall, fileAliases);
+                const updateBody = (updateClauses[0].body as LuaAstNode[] | undefined) ?? [];
+                const assignParam = updateBody[0];
+                const validParamReassign = assignParam?.type === 'AssignmentStatement' && assignParam.variables?.length === 1
+                  && assignParam.variables[0].isLocal === true && luaIdentifier(assignParam.variables[0]) === paramParam
+                  && assignParam.init?.length === 1 && assignParam.init[0].isLocal === true && luaIdentifier(assignParam.init[0]) === cleanVar;
+                const noShadowNames = new Set([paramParam, cleanVar, screenParam, controlParam, prevName]);
+                const noReadNames = new Set([paramParam, cleanVar, prevName]);
+                const remainingSafe = !updateBody.slice(1).some(extra => {
+                  let touchesForbidden = false;
+                  walkLuaAst(extra, n => {
+                    if (n.type === 'AssignmentStatement' || n.type === 'FunctionDeclaration') touchesForbidden = true;
+                    if (n.type === 'LocalStatement' && (n.variables || []).some(v => {
+                      const vName = luaIdentifier(v);
+                      return vName !== null && noShadowNames.has(vName);
+                    })) {
+                      touchesForbidden = true;
+                    }
+                    const nm = n.isLocal === true ? luaIdentifier(n) : null;
+                    if (nm && noReadNames.has(nm)) touchesForbidden = true;
+                  });
+                  return touchesForbidden;
+                });
+                if (cleanerKey && validParamReassign && remainingSafe
+                  && verifyIdentityPreservingTableCleaner(cleanerKey, qualifiedFunctions, members, replacedRoots)) {
+                  continue;
+                }
+              }
+            }
+            if (containsForbiddenWrite(clauseBody, insideDifferentEventGuard || mismatchedEvent)) return true;
+          }
+          continue;
+        }
+        // Reject unverified direct calls/loops mutating paramParam outside a different-event guard.
+        if (!insideDifferentEventGuard) {
+          let touchesParam = false;
+          walkLuaAst(st, n => {
+            if (n.isLocal === true && luaIdentifier(n) === paramParam) touchesParam = true;
+          });
+          if (touchesParam) return true;
+        }
+      }
+      return false;
+    };
+
+    if (containsForbiddenWrite(prefix, false)) return false;
+  }
+  return true;
+}
+
 function parseLuaUiEmits(content: string, file: string): {
   events: ProjectUiEventRef[]; coverage: LuaEmitCoverage; payloadWrites: PayloadWriteSite[]; hasProtectedCalls: boolean; mutations: LuaBuilderMutationFacts;
 } {
@@ -970,7 +1625,18 @@ function parseLuaUiEmits(content: string, file: string): {
   const source = buildLuaAnalysisSource(content || '');
   let environmentRebound = false;
   let hasProtectedCalls = false;
-  const mutations: LuaBuilderMutationFacts = { members: new Map(), replacedRoots: new Set(), opaqueGlobals: false };
+  const mutations: LuaBuilderMutationFacts = {
+    members: new Map(),
+    replacedRoots: new Set(),
+    opaqueGlobals: false,
+    ambiguousBuiltins: new Set(),
+    registryDefs: new Map(),
+    registryCandidates: [],
+    unsafeRegistries: new Set(),
+    pendingRegistryArgChecks: [],
+    emitterWrappers: [],
+    qualifiedFunctions: new Map(),
+  };
   let ast: unknown;
   try {
     ast = parse(source.content, {
@@ -986,8 +1652,11 @@ function parseLuaUiEmits(content: string, file: string): {
   const assignments = new Map<string, { count: number; init: LuaAstNode; local: boolean; block?: LuaAstNode }>();
   const rootWrites: { root: string; statement: LuaAstNode; value?: LuaAstNode; parent?: LuaAstNode }[] = [];
   const uncertainObjects: LuaAstNode[] = [];
+  const pendingDynamicTargets: { node: LuaAstNode; base: LuaAstNode; statement: LuaAstNode; rhs?: LuaAstNode }[] = [];
   const shadowed = new Set<string>();
   const reboundGlobals = new Set<string>();
+  const functionDeclarations: { node: LuaAstNode; parent?: LuaAstNode }[] = [];
+  const globalEmitterWrites: { statement: LuaAstNode; parent?: LuaAstNode; value?: LuaAstNode; opaque: boolean }[] = [];
   let dynamicGlobalWrite = false;
   let changesFunctionEnvironment = false;
   const trackGlobalWrite = (target: LuaAstNode | undefined) => {
@@ -998,17 +1667,27 @@ function parseLuaUiEmits(content: string, file: string): {
     else dynamicGlobalWrite = true;
   };
   const recordMember = (name: string) => mutations.members.set(name, (mutations.members.get(name) ?? 0) + 1);
-  const recordTarget = (node: LuaAstNode | undefined) => {
+  const recordTarget = (node: LuaAstNode | undefined, statement?: LuaAstNode, rhs?: LuaAstNode) => {
     if (node?.type !== 'MemberExpression' && node?.type !== 'IndexExpression') return;
     const field = luaMemberName(node);
     if (field !== undefined) recordMember(field);
-    else if (node.base) uncertainObjects.push(node.base);
+    else if (node.base) {
+      if (node.type === 'IndexExpression' && statement?.type === 'AssignmentStatement') {
+        pendingDynamicTargets.push({ node, base: node.base, statement, rhs });
+      } else {
+        uncertainObjects.push(node.base);
+      }
+    }
     if (isLuaGlobalEnvironment(node.base) && field !== undefined) mutations.replacedRoots.add(field);
   };
   walkLuaAst(ast, (node, _scope, _branches, parent) => {
     if (node.type === 'FunctionDeclaration') {
+      functionDeclarations.push({ node, parent });
+      if (node.identifier && luaIdentifier(node.identifier) === 'AddUITriggeredEvent' && node.identifier.isLocal === false) {
+        globalEmitterWrites.push({ statement: node, parent, opaque: true });
+      }
       trackGlobalWrite(node.identifier);
-      recordTarget(node.identifier);
+      recordTarget(node.identifier, node);
       const functionName = luaIdentifier(node.identifier);
       if (functionName) {
         shadowed.add(functionName);
@@ -1033,7 +1712,10 @@ function parseLuaUiEmits(content: string, file: string): {
       if (args?.[0]) {
         if (typeof args[1]?.value === 'string') {
           recordMember(args[1].value);
-          if (isLuaGlobalEnvironment(args[0])) mutations.replacedRoots.add(args[1].value);
+          if (isLuaGlobalEnvironment(args[0])) {
+            mutations.replacedRoots.add(args[1].value);
+            if (args[1].value === 'AddUITriggeredEvent') globalEmitterWrites.push({ statement: node, parent, opaque: true });
+          }
         } else uncertainObjects.push(args[0]);
       }
       if (callee === 'setmetatable' && node.arguments?.[0]) uncertainObjects.push(node.arguments[0]);
@@ -1046,11 +1728,19 @@ function parseLuaUiEmits(content: string, file: string): {
     if (node.type !== 'LocalStatement' && node.type !== 'AssignmentStatement') return;
     (node.variables || []).forEach((variable, index) => {
       trackGlobalWrite(variable);
-      recordTarget(variable);
+      const init = node.init?.[index];
+      recordTarget(variable, node, init);
       const name = luaIdentifier(variable);
       if (!name) return;
-      const init = node.init?.[index];
-      if (node.type === 'AssignmentStatement' && variable.isLocal === false) rootWrites.push({ root: name, statement: node, value: init, parent });
+      if (node.type === 'AssignmentStatement' && variable.isLocal === false) {
+        rootWrites.push({ root: name, statement: node, value: init, parent });
+        if (name === 'AddUITriggeredEvent' && (node.variables?.length ?? 0) === 1) {
+          globalEmitterWrites.push({ statement: node, parent, value: init, opaque: false });
+        }
+      } else if (node.type === 'AssignmentStatement' && isLuaGlobalEnvironment(variable.base)) {
+        const gMember = luaMemberName(variable);
+        if (gMember === 'AddUITriggeredEvent') globalEmitterWrites.push({ statement: node, parent, value: init, opaque: true });
+      }
       assignments.set(name, { count: (assignments.get(name)?.count || 0) + 1, init, local: node.type === 'LocalStatement', block: parent });
     });
   });
@@ -1062,6 +1752,259 @@ function parseLuaUiEmits(content: string, file: string): {
   };
   const ambiguousGlobal = (name: string) => environmentRebound || reboundGlobals.has(name) || assignments.has(name) || shadowed.has(name);
   const rawgetAvailable = !dynamicGlobalWrite && !changesFunctionEnvironment && !ambiguousGlobal('rawget');
+  for (const builtin of ['ipairs', 'pairs', 'type', 'rawget', 'pcall']) {
+    if (ambiguousGlobal(builtin)) mutations.ambiguousBuiltins.add(builtin);
+  }
+  const resolveNamespaceRoot = (node: LuaAstNode | undefined): string | undefined => {
+    if (!node) return undefined;
+    const direct = readLuaNamespace(node, rawgetAvailable);
+    if (direct) return direct;
+    const alias = unambiguousAlias(node);
+    const init = alias?.type === 'LogicalExpression' && alias.operator === 'or' ? alias.left : alias;
+    return readLuaNamespace(init, rawgetAvailable);
+  };
+  const resolveQualifiedMember = (node: LuaAstNode | undefined): { root: string; member: string } | undefined => {
+    if (!node || (node.type !== 'MemberExpression' && node.type !== 'IndexExpression') || node.indexer === ':') return undefined;
+    const root = resolveNamespaceRoot(node.base);
+    const member = luaMemberName(node);
+    return root && member ? { root, member } : undefined;
+  };
+  // Index single-def alias roots, file-level table.concat aliases, and qualified member functions.
+  const fileAliasRoots = new Map<string, string>();
+  const fileConcatAliases = new Set<string>();
+  for (const [aliasName, entry] of assignments) {
+    if (entry.count === 1 && entry.local && !shadowed.has(aliasName)) {
+      const init = entry.init?.type === 'LogicalExpression' && entry.init.operator === 'or' ? entry.init.left : entry.init;
+      const root = readLuaNamespace(init, rawgetAvailable);
+      if (root) fileAliasRoots.set(aliasName, root);
+      if (entry.init?.type === 'MemberExpression' && entry.init.indexer === '.'
+        && entry.init.base?.isLocal === false && luaIdentifier(entry.init.base) === 'table'
+        && luaIdentifier(entry.init.identifier) === 'concat') {
+        fileConcatAliases.add(aliasName);
+      }
+    }
+  }
+  for (const { node } of functionDeclarations) {
+    const q = resolveQualifiedMember(node.identifier);
+    if (q) {
+      const key = `${q.root}.${q.member}`;
+      if (!mutations.qualifiedFunctions.has(key)) {
+        mutations.qualifiedFunctions.set(key, {
+          root: q.root,
+          member: q.member,
+          ast: node,
+          aliasRoots: fileAliasRoots,
+          concatAliases: fileConcatAliases,
+          substituted: source.substituted,
+        });
+      }
+    }
+  }
+  // Collect static literal array registry definitions and all cross-file member references in this file.
+  const scopeScan = scanLuaScope(ast as LuaAstNode);
+  for (const st of scopeScan.nodes) {
+    if (st.type !== 'AssignmentStatement' || st.variables?.length !== 1 || st.init?.length !== 1) continue;
+    const target = st.variables[0];
+    const q = resolveQualifiedMember(target);
+    const initTbl = st.init[0];
+    if (!q || initTbl?.type !== 'TableConstructorExpression') continue;
+    const rows: LuaRegistryRowFact[] = [];
+    let validTable = true;
+    for (const entry of initTbl.fields ?? []) {
+      const entryValue = entry.value as LuaAstNode | undefined;
+      if (entry.type !== 'TableValue' || entryValue?.type !== 'TableConstructorExpression') {
+        validTable = false;
+        break;
+      }
+      const fields = new Map<string, string | null>();
+      const dynamicFields = new Set<string>();
+      let hasComputedKey = false;
+      for (const f of entryValue.fields ?? []) {
+        const fieldValue = f.value as LuaAstNode | undefined;
+        if (f.type === 'TableKeyString') {
+          const k = f.key ? luaIdentifier(f.key) : null;
+          if (!k) { hasComputedKey = true; continue; }
+          if (fieldValue?.type === 'StringLiteral') {
+            const str = luaStaticString(fieldValue, source.substituted);
+            if (str !== undefined) fields.set(k, str);
+            else dynamicFields.add(k);
+          } else if (fieldValue?.type === 'NilLiteral') {
+            fields.set(k, null);
+          } else {
+            dynamicFields.add(k);
+          }
+        } else if (f.type === 'TableKey') {
+          const keyStr = f.key?.type === 'StringLiteral' ? luaStaticString(f.key, source.substituted) : undefined;
+          if (!keyStr) { hasComputedKey = true; continue; }
+          if (fieldValue?.type === 'StringLiteral') {
+            const valStr = luaStaticString(fieldValue, source.substituted);
+            if (valStr !== undefined) fields.set(keyStr, valStr);
+            else dynamicFields.add(keyStr);
+          } else if (fieldValue?.type === 'NilLiteral') {
+            fields.set(keyStr, null);
+          } else {
+            dynamicFields.add(keyStr);
+          }
+        }
+      }
+      rows.push({ fields, dynamicFields, hasComputedKey });
+    }
+    if (validTable && rows.length > 0) {
+      const regKey = `${q.root}.${q.member}`;
+      if (mutations.registryDefs.has(regKey)) mutations.unsafeRegistries.add(regKey);
+      else mutations.registryDefs.set(regKey, rows);
+    }
+  }
+  // Evaluate pending dynamic index writes (e.g. `A[fname] = function(...)` over an immutable static registry).
+  for (const pending of pendingDynamicTargets) {
+    let resolved: LuaFiniteRegistryCandidate | undefined;
+    const targetRoot = resolveNamespaceRoot(pending.base);
+    if (targetRoot && !ambiguousGlobal('ipairs') && !ambiguousGlobal('type')
+      && pending.node.index?.isLocal === true) {
+      const idxVarName = luaIdentifier(pending.node.index);
+      let loopNode: LuaAstNode | undefined;
+      for (let cur = scopeScan.parents.get(pending.statement); cur; cur = scopeScan.parents.get(cur)) {
+        if (cur.type === 'ForGenericStatement') { loopNode = cur; break; }
+      }
+      const iterators = loopNode?.iterators;
+      if (loopNode && idxVarName && iterators?.length === 1) {
+        const iter = iterators[0];
+        if (iter?.type === 'CallExpression' && iter.base?.isLocal === false && luaIdentifier(iter.base) === 'ipairs'
+          && iter.arguments?.length === 1) {
+          const regQ = resolveQualifiedMember(iter.arguments[0]);
+          const regKey = regQ ? `${regQ.root}.${regQ.member}` : undefined;
+          const regRows = regKey ? mutations.registryDefs.get(regKey) : undefined;
+          const loopVars = loopNode.variables ?? [];
+          const elemVar = loopVars[1] ?? loopVars[0];
+          const elemName = elemVar ? luaIdentifier(elemVar) : null;
+          if (regQ && regRows && !mutations.unsafeRegistries.has(regKey!) && elemName && elemName !== '_') {
+            // Confirm `idxVarName` is declared once inside loop as `elemVar.<propName>` and never reassigned.
+            const loopScan = scanLuaScope(loopNode);
+            let propName: string | undefined;
+            let idxLocalCount = 0;
+            let idxBadAssign = false;
+            for (const sub of loopScan.nodes) {
+              if (sub.type === 'LocalStatement') {
+                (sub.variables || []).forEach((v, i) => {
+                  const vName = luaIdentifier(v);
+                  if (vName === elemName) idxBadAssign = true;
+                  if (vName !== idxVarName) return;
+                  idxLocalCount++;
+                  const initExpr = sub.init?.[i];
+                  if (initExpr?.type === 'MemberExpression' && initExpr.indexer === '.'
+                    && initExpr.base?.isLocal === true && luaIdentifier(initExpr.base) === elemName) {
+                    const prop = initExpr.identifier ? luaIdentifier(initExpr.identifier) : null;
+                    if (prop) propName = prop;
+                  }
+                });
+              } else if (sub.type === 'AssignmentStatement') {
+                for (const v of sub.variables || []) {
+                  const vName = v.isLocal === true ? luaIdentifier(v) : null;
+                  if (vName === idxVarName || vName === elemName) idxBadAssign = true;
+                }
+              }
+            }
+            if (idxLocalCount === 1 && !idxBadAssign && propName) {
+              const keys: string[] = [];
+              let allLiteralKeys = true;
+              for (const row of regRows) {
+                if (row.hasComputedKey || row.dynamicFields.has(propName)) { allLiteralKeys = false; break; }
+                const keyVal = row.fields.get(propName);
+                if (keyVal === undefined || keyVal === null) continue;
+                keys.push(keyVal);
+              }
+              if (allLiteralKeys && keys.length > 0) {
+                resolved = {
+                  targetRoot,
+                  registryRoot: regQ.root,
+                  registryMember: regQ.member,
+                  memberKeys: [...new Set(keys)],
+                  propName,
+                };
+              }
+            }
+          }
+        }
+      }
+    }
+    if (resolved) mutations.registryCandidates.push(resolved);
+    else uncertainObjects.push(pending.base);
+  }
+  // Check references to every qualified global Root.Member across this file so external mutations or escapes cannot hide.
+  const recordRegistryUse = (node: LuaAstNode, q: { root: string; member: string }) => {
+    const regKey = `${q.root}.${q.member}`;
+    const parent = scopeScan.parents.get(node);
+    if (!parent) { mutations.unsafeRegistries.add(regKey); return; }
+    if (parent.type === 'FunctionDeclaration' && parent.identifier === node) return;
+    if (parent.type === 'CallExpression' && parent.base === node) return;
+    if (parent.type === 'AssignmentStatement' && parent.variables?.includes(node)) return;
+    if (parent.type === 'CallExpression' && parent.arguments?.includes(node)) {
+      const argIndex = parent.arguments.indexOf(node);
+      const directBuiltin = parent.base?.isLocal === false ? luaIdentifier(parent.base) : null;
+      if (directBuiltin === 'ipairs' || directBuiltin === 'pairs') return;
+      const calleeQ = resolveQualifiedMember(parent.base);
+      if (calleeQ) {
+        mutations.pendingRegistryArgChecks.push({
+          registryKey: regKey,
+          calleeKey: `${calleeQ.root}.${calleeQ.member}`,
+          argIndex,
+        });
+        return;
+      }
+      mutations.unsafeRegistries.add(regKey);
+      return;
+    }
+    if (parent.type === 'LogicalExpression' && parent.operator === 'or') {
+      const gp = scopeScan.parents.get(parent);
+      if (gp?.type === 'CallExpression' && gp.base?.isLocal === false
+        && (luaIdentifier(gp.base) === 'ipairs' || luaIdentifier(gp.base) === 'pairs')) {
+        return;
+      }
+    }
+    if (parent.type === 'LogicalExpression' && parent.operator === 'and') {
+      const gp = scopeScan.parents.get(parent);
+      if (gp?.type === 'IfClause' || gp?.type === 'ElseifClause') return;
+    }
+    mutations.unsafeRegistries.add(regKey);
+  };
+  for (const node of scopeScan.nodes) {
+    const q = resolveQualifiedMember(node);
+    if (q) recordRegistryUse(node, q);
+  }
+  // Record global AddUITriggeredEvent assignment shapes for wrapper verification.
+  for (const gw of globalEmitterWrites) {
+    if (gw.opaque || !gw.value) {
+      mutations.emitterWrappers.push({ kind: 'unverified' });
+      continue;
+    }
+    if (gw.value.type === 'FunctionDeclaration') {
+      const siblings = (gw.parent?.body as LuaAstNode[] | undefined) ?? [];
+      const stmtPos = siblings.indexOf(gw.statement);
+      const prevStmt = stmtPos > 0 ? siblings[stmtPos - 1] : undefined;
+      const prevVar = prevStmt?.type === 'LocalStatement' && prevStmt.variables?.length === 1 && prevStmt.init?.length === 1
+        ? prevStmt.variables[0] : undefined;
+      const prevName = prevVar ? luaIdentifier(prevVar) : null;
+      const prevInit = prevStmt?.init?.[0];
+      if (prevName && prevInit?.isLocal === false && luaIdentifier(prevInit) === 'AddUITriggeredEvent'
+        && assignments.get(prevName)?.count === 1 && !shadowed.has(prevName)) {
+        mutations.emitterWrappers.push({
+          kind: 'inline',
+          prevName,
+          wrapperAst: gw.value,
+          substituted: source.substituted,
+        });
+        continue;
+      }
+    } else if (gw.value.type === 'CallExpression' && gw.value.arguments?.length === 1
+      && gw.value.arguments[0].isLocal === false && luaIdentifier(gw.value.arguments[0]) === 'AddUITriggeredEvent') {
+      const fq = resolveQualifiedMember(gw.value.base);
+      if (fq) {
+        mutations.emitterWrappers.push({ kind: 'factory', factoryRoot: fq.root, factoryMember: fq.member });
+        continue;
+      }
+    }
+    mutations.emitterWrappers.push({ kind: 'unverified' });
+  }
   for (const { root, statement, value, parent } of rootWrites) {
     const before = parent?.body?.[(parent.body.indexOf(statement) ?? -1) - 1];
     const aliasInit = value?.isLocal === true && before?.type === 'LocalStatement' && before.variables?.length === 1
@@ -1576,11 +2519,18 @@ export function validateProjectCrossFile(project: ExtensionProject, options: {
       for (const [member, count] of mutations.members) members.set(member, (members.get(member) ?? 0) + count);
       for (const root of mutations.replacedRoots) replacedRoots.add(root);
     }
-    const stableForwarding = !replacedRoots.has('AddUITriggeredEvent') && !replacedRoots.has('pcall');
+    resolveFiniteRegistries(emitAnalyses, members, replacedRoots);
+    const forwardingByEvent = new Map<string, boolean>();
     for (const write of writes) {
       for (const link of write.returned ?? []) {
+        let forwardingVerified = forwardingByEvent.get(link.identity);
+        if (forwardingVerified === undefined) {
+          forwardingVerified = visibleBindings
+            && verifyProjectEmitterForwarding(emitAnalyses, members, replacedRoots, link.identity);
+          forwardingByEvent.set(link.identity, forwardingVerified);
+        }
         link.bindingUnverified = !visibleBindings || replacedRoots.has('rawget') || members.get(link.member) !== 1 || replacedRoots.has(link.root);
-        link.forwardingUnverified = !stableForwarding;
+        link.forwardingUnverified = !forwardingVerified;
         if (link.bindingUnverified || link.forwardingUnverified) continue;
         if (!write.events.includes(link.identity)) write.events.push(link.identity);
         if (!write.recipientEvents.includes(link.identity)) write.recipientEvents.push(link.identity);

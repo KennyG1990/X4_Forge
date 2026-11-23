@@ -1,7 +1,7 @@
 # Session Handoff — X4_Forge (`G:\Forge-QA\forge-development`)
 
 - **Updated:** 2026-11-23
-- **Branch / HEAD:** `main` (ready for local commit of `#48` unit on top of `#97` Unit 5 `b334c40`)
+- **Branch / HEAD:** `main` (ready for local commit of `#101`/`#71` Unit A on top of `#48` `d220464`)
 - **Active Project:** `X4_Forge` (Forge QA / Dev ownership; NOT `X4_AiLive`, NOT `G:\F-rescue-2026-09-26\DEV_ENV\X4_Forge`)
 - **Isolated IDE State:** `FORGE DEVELOPMENT` (`PID 34076`, `G:\Forge-QA\development-ide`) still running `0.0.89` with `X4CodeSense 1.2.0` side-by-side. Do NOT restart/upgrade until Machine-State Ask authorizes `0.0.94` build/qualification.
 
@@ -20,20 +20,24 @@
    - `server.ts` & `config/durable-writers.json` (`sourceFingerprint: 97bb4caec9be084b54a49358f96bd7831add0f6b96cd621b6ac390a472b15050`): `importModFolderWithIndex` single `MdStemIdentityIndex` + fresh source stamp reuse, internal staging `beforeActivate` `assertWriteAuthority(true)` (`sourceRechecks.count: 4 -> 3` preserving `targetCheck === 2` before live `extensions/` activation), and `detail: 'compact' | 'full'` (`#97`/`#48`) omitting `workspace` echo in favor of `workspaceSummary`.
    - `bench97_42mb` (`42.24 MB`, default `full`): `preview1` `18.15s`, `apply1` `29.86s` (`-52.0%` vs `62.24s`), `apply2` `29.87s`; `bench97` (`1,000` files): `apply1` `20.99s` (`-43.9%` vs `0.0.93`).
    - Verified: `typecheck` (`0`), `lint` (`0` err), `test:writers` (`30/30` + `8/8`), `test:capabilities`, `deployment-snapshot.selftest.ts` (`141`), `test:routes` (`624/624 PASS`), `test:oracles` (`134/134`), `test:reference-manifest-api` (`21/21`), `test:reference-api` (`93/93`), `precommit:check` (`OK`).
-9. **`#48` CLI compact verdict, prerequisite diagnostics & policy-bundle oracle sync (`docs/plans/2026-11-23-compact-coverage-verdict-and-prereq-summary.md`):**
+9. **`d220464` — `#48` CLI compact verdict, prerequisite diagnostics & policy-bundle oracle sync (`docs/plans/2026-11-23-compact-coverage-verdict-and-prereq-summary.md`):**
    - `scripts/action-receipt-coverage-audit.ts`: exported `compactCandidateSelftest(result, policyBundle)` incorporating all 4 required families (`path`, `envelope`, `semantic`, `policyBundle`); added `summarizePrerequisiteFailureOutput` / `formatPrerequisiteFailureDetail` into `runPrerequisiteAudit` (extracting stderr from callback `execFile`'s `error.message` while preserving `hasPrecommitCapabilityGate` AST invariants); added positive/negative selftest checks inside `runActionReceiptCoverageCandidateInvariantSelftest`.
    - `src/lib/actionReceiptPolicyBundle.selftest.ts`: synced hardcoded `surfaceCount` oracle (`67 -> 69` from `a03fb13`).
    - Verified: live pre-sync negative `--candidate-selftest` (`pass: false, 77/79`, exit `1`), real Node `execFile` failure probe, `actionReceiptPolicyBundle.selftest.ts` (`19/19`), `test:action-receipt-coverage:selftest` (`79/79` + `23/23`), `eslint` (`0` errors), and `precommit:check` (`[precommit] OK`).
+10. **`#101` / `#71` Unit A — Finite registry wraps & `AddUITriggeredEvent` forwarding wrappers (`docs/plans/2026-11-23-lua-health-hook-and-emitter-wrappers.md`):**
+   - `src/lib/projectCrossFileValidation.ts`: added `resolveFiniteRegistries` + `isLuaParamReadOnlyInFunction` (`escapesTrackedTable` handling `LogicalExpression`) and `verifyProjectEmitterForwarding` + `verifyIdentityPreservingTableCleaner` + `isStringOnlyLeafCleaner` (with `noShadowNames` vs `noReadNames` split allowing harmless `tostring(control)` telemetry while blocking aliasing/mutation/clears).
+   - `scripts/event-coverage-selftest.ts`: added `finite-registry-member-wrap-verification` & `emitter-forwarding-wrapper-verification` (`41/41` PASS).
+   - Verified: `eslint` (`0`), `typecheck` (`0`), `event-coverage-selftest` (`41/41`), `claude-validation-matrix` (`34/34`), `validation-noise` (`25/25 + 38`), `ui-manifest-integrity` (`16/16` w/ `X4_XSD_PATH`), `project-validation-overlay` (`24/24`), `x4-ui-integration` (`21/21`), `test:routes`, `test:oracles`, `precommit:check` (`[precommit] OK`), and full 269-file read-only `x4_ai_influence` replay (`0` errors, `64` findings, `player_orders` unverified keys `50 -> 27`, zero `"returned table"` / `"event forwarding"` caveat).
 
 ## Live Hazards & Environment Rules
 
 - Shell starts in `G:\F-rescue-2026-09-26\DEV_ENV\X4_Forge`: ALWAYS `Set-Location 'G:\Forge-QA\forge-development'` first and set `TEMP`, `TMP`, `npm_config_cache` to `G:\Forge-QA\temp...`.
-- Always pass `X4_REFERENCE_ROOT='G:\F-rescue-2026-09-26\Downskies\x4unpackersuiteV1\X4 unpacked 9.00'` when running `npm run test:reference-api`.
+- Always pass `X4_REFERENCE_ROOT='G:\F-rescue-2026-09-26\Downskies\x4unpackersuiteV1\X4 unpacked 9.00'` (and `X4_XSD_PATH` for `ui-manifest-integrity`) when running reference/schema checks.
 - `config/durable-writers.json` `sourceFingerprint` is `97bb4caec9be084b54a49358f96bd7831add0f6b96cd621b6ac390a472b15050`.
 - Remember to run `npm run test:action-receipt-coverage:selftest` whenever `config/action-receipt-coverage.json` changes (`precommit:check` only runs `--audit`).
-- On Windows `pwsh`, pass inline scripts to `node --import tsx --input-type=module -e` (single line) instead of multi-line `npx` args (`cmd.exe` truncates on `\n`).
+- On Windows `pwsh`, pass inline scripts to `node --import tsx --input-type=module -e` (single line or `@' ... '@` here-string) instead of multi-line `npx` args (`cmd.exe` truncates on `\n`).
 
 ## Immediate Next Queue
 
-1. **Tier 2 Headless Source Queue (while awaiting Machine-State Ask on `0.0.94` IDE/E2E):** `#101` / `#71` remaining 26 keys / health-hook & emitter wrappers in `player_orders`; `#129` MD unset variable read accuracy; `#80` quote-aware property positions; `#77`/`#78`/`#79`/`#64`.
-2. **`0.0.94` Release Gate (Machine-State Ask + Write Gate pending Ken go-ahead):** Tier 1 items `#95`, `#105`, `#118`, `#131`, `#132` + `#53` + `#97` Units 1–5 + `#48` awaiting E2E / `FORGE DEVELOPMENT` upgrade & release.
+1. **Tier 2 Headless Source Queue (while awaiting Machine-State Ask on `0.0.94` IDE/E2E):** `#101` / `#71` Unit B (`CONV_ONLY(25)` in `aic_uix.lua:11895-12577` + conditional `g` clear + `ri` in `aic_confirm.lua:400`); `#129` MD unset variable read accuracy; `#80` quote-aware property positions; `#77`/`#78`/`#79`/`#64`/`#66`.
+2. **`0.0.94` Release Gate (Machine-State Ask + Write Gate pending Ken go-ahead):** Tier 1 items `#95`, `#105`, `#118`, `#131`, `#132` + `#53` + `#97` Units 1–5 + `#48` + `#101`/`#71` Unit A awaiting E2E / `FORGE DEVELOPMENT` upgrade & release.
