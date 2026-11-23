@@ -17,9 +17,7 @@
    - `src/lib/instanceDiscovery.ts` & `server.ts`: prevented `dev-build`/`release-host`/`lab` without isolated `X4FORGE_DISCOVERY_DIR` (including aliases/nested defaults) from writing or pruning `~/.x4forge`, added `'lab'` mode, and emitted `discoveryFile: null` when unpublished.
    - Verified: `test:writers` (`30/30` + `8/8`), `typecheck` + `vscode-extension` `tsc`, `lint` (`0` errors), `test:capabilities`, `reference-manifest-check.ts` (`13/13`), `test:reference-manifest-api` (`21/21`), `test:oracles` (`134/134`), `test:routes` (`621/621`), `precommit:check` (`OK`).
 
-## Pre-Existing Baseline Finding (Not `#53` Regression)
-
-- `npm run test:reference-api` (`scripts/reference-api-integration.mjs:204`) fails `92/93` since `0.0.90` (`b2d3f0b7`): `quotedCalls[0]` tests `<create_order id="'Att|ack'" .../>` expecting `Attack`, while line 204 searches `candidate.label === aiScript` (`'order.player.attack'`, whose order ID is `PlayerAttack`). Queue a clean isolated fix before `0.0.94`.
+6. **`test:reference-api` `93/93` fix (`scripts/reference-api-integration.mjs:196-206`):** Fixed `quotedCalls` in `scripts/reference-api-integration.mjs` (regression since `b2d3f0b7`) to pass per-case target label (`'Attack'` for `<create_order id="'Att|ack'">`, `aiScript` for script-name cases); verified `npm run test:reference-api` `93/93 PASS`.
 
 ## Live Hazards & Environment Rules
 
@@ -30,7 +28,5 @@
 
 ## Immediate Next Queue
 
-1. Commit `#53` (`fix(discovery): isolate lab/release discovery and cache manifest corpus selection (#53)`).
-2. Fix pre-existing `scripts/reference-api-integration.mjs:196-208` `quoted MD order ID` target label bug (`'Attack'` vs `aiScript`), verify `test:reference-api` `93/93`, and commit.
-3. Run a realistic `44 MB` `x4_ai_influence`-scale fixture deploy benchmark (`G:\Forge-QA\temp\`) using `bench97` pattern to verify `#97` bound Apply latency and determine if `.forge-builds/loose` dual-write Unit 4 is needed.
-4. Confirm Tier 1 release readiness (`#95`, `#105`, `#118`, `#131`, `#132` already have code+tests on `main` awaiting `0.0.94` packaged/IDE qualification) -> ask Machine-State Ask before building/upgrading `FORGE DEVELOPMENT` IDE (`G:\Forge-QA\development-ide`), updating Notion **Forge QA Field Log**, and proceeding to Tier 2 (`#61`, `#101`/`#71`, `#129`/`#114`, `#107`, `#55`, `#102`, `#64`) & Tier 3 (`#74`).
+1. Run a realistic `44 MB` `x4_ai_influence`-scale fixture deploy benchmark (`G:\Forge-QA\temp\`) using `bench97` pattern to verify `#97` bound Apply latency and determine if `.forge-builds/loose` dual-write Unit 4 is needed.
+2. Confirm Tier 1 release readiness (`#95`, `#105`, `#118`, `#131`, `#132` already have code+tests on `main` awaiting `0.0.94` packaged/IDE qualification) -> ask Machine-State Ask before building/upgrading `FORGE DEVELOPMENT` IDE (`G:\Forge-QA\development-ide`), updating Notion **Forge QA Field Log**, and proceeding to Tier 2 (`#61`, `#101`/`#71`, `#129`/`#114`, `#107`, `#55`, `#102`, `#64`) & Tier 3 (`#74`).
