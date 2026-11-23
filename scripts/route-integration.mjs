@@ -4703,6 +4703,107 @@ async function main() {
         targetPreservedBeforeAcceptance: targetAfterUnaccepted === targetBeforeUnaccepted,
         acceptedStatus: acceptedApply?.status, acceptedOk: acceptedApply?.json?.ok,
         acceptedTimings: acceptedApply?.json?.timings?.validationStagesMs }));
+
+    // Unit 4 (#97): Batched doctorEvidence acceptance verification for lua.syntax_error + negative guards.
+    const doctorAcceptDupDir = path.join(path.dirname(reuseTarget), 'doctor_accept_dup');
+    try {
+      fs.writeFileSync(path.join(reuseMod, 'md', 'preview_reuse_mod.xml'), [
+        '<?xml version="1.0" encoding="utf-8"?>',
+        '<mdscript name="Preview_Reuse_Mod" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">',
+        '  <cues><cue name="Reuse_Start" instantiate="false"><conditions><event_game_loaded/></conditions><actions><set_value name="$ok" exact="true"/></actions></cue></cues>',
+        '</mdscript>',
+      ].join(NL));
+      fs.mkdirSync(path.join(reuseMod, 'ui', 'addons', 'doctor_accept'), { recursive: true });
+      fs.writeFileSync(path.join(reuseMod, 'ui.xml'),
+        '<addon name="doctor_accept"><environment type="menus"><file name="ui/addons/doctor_accept/main.lua"/></environment></addon>\n');
+      fs.writeFileSync(path.join(reuseMod, 'ui', 'addons', 'doctor_accept', 'main.lua'),
+        'local function broken(\nreturn 1\n');
+
+      const luaPreview1 = await reuseReq('/api/agent/deploy-verify', { root: 'workspace', path: 'preview_reuse_mod', dryRun: true });
+      const luaReqBody1 = luaPreview1.json?.acceptanceRequest?.body;
+      const luaAcceptedBody1 = luaReqBody1 ? {
+        ...luaReqBody1,
+        acceptances: luaReqBody1.acceptances.map(entry => ({ ...entry, reason: 'Controlled Unit 4 batch doctorEvidence approval' })),
+      } : null;
+      const luaApply1 = luaAcceptedBody1 ? await reuseReq('/api/agent/deploy-verify', luaAcceptedBody1, {
+        operationId: 'forge_op_' + crypto.randomBytes(16).toString('hex'),
+      }) : null;
+      const luaDoctorCheck1 = Array.isArray(luaApply1?.json?.checklist)
+        ? luaApply1.json.checklist.find(item => item.id === 'doctor')
+        : null;
+      ok('doctor_evidence_batch_accepts_exact_lua_syntax_finding',
+        luaPreview1.json?.code === 'UNACCEPTED_MOD_FINDINGS'
+        && luaApply1?.status === 200 && luaApply1.json?.ok === true
+        && Array.isArray(luaApply1.json?.doctor?.accepted)
+        && luaApply1.json.doctor.accepted.length >= 1
+        && luaApply1.json.doctor.accepted.some(f => f.code === 'lua.syntax_error' && String(f.filePath || '').endsWith('ui/addons/doctor_accept/main.lua'))
+        && Array.isArray(luaApply1.json?.doctor?.blocking) && luaApply1.json.doctor.blocking.length === 0
+        && luaDoctorCheck1?.status === 'warn',
+        JSON.stringify({ previewCode: luaPreview1.json?.code, status: luaApply1?.status, ok: luaApply1?.json?.ok,
+          doctor: luaApply1?.json?.doctor, doctorCheck: luaDoctorCheck1 }));
+
+      // Add a second lua.syntax_error file: partial approval must refuse without writes; full approval batches both.
+      fs.writeFileSync(path.join(reuseMod, 'ui.xml'),
+        '<addon name="doctor_accept"><environment type="menus"><file name="ui/addons/doctor_accept/main.lua"/><file name="ui/addons/doctor_accept/extra_unapproved.lua"/></environment></addon>\n');
+      fs.writeFileSync(path.join(reuseMod, 'ui', 'addons', 'doctor_accept', 'extra_unapproved.lua'),
+        'local also_broken = (\nreturn 2\n');
+      const luaPreview2 = await reuseReq('/api/agent/deploy-verify', { root: 'workspace', path: 'preview_reuse_mod', dryRun: true });
+      const luaReqBody2 = luaPreview2.json?.acceptanceRequest?.body;
+      const targetBeforePartialLua = regularTreeHash(reuseTarget);
+      const partialLuaBody = luaReqBody2 && Array.isArray(luaReqBody2.acceptances) && luaReqBody2.acceptances.length >= 2 ? {
+        ...luaReqBody2,
+        acceptances: luaReqBody2.acceptances.slice(0, 1).map(entry => ({ ...entry, reason: 'Approve only one of two findings' })),
+      } : null;
+      const partialLuaApply = partialLuaBody ? await reuseReq('/api/agent/deploy-verify', partialLuaBody, {
+        operationId: 'forge_op_' + crypto.randomBytes(16).toString('hex'),
+      }) : null;
+      const targetAfterPartialLua = regularTreeHash(reuseTarget);
+      const fullLuaBody2 = luaReqBody2 ? {
+        ...luaReqBody2,
+        acceptances: luaReqBody2.acceptances.map(entry => ({ ...entry, reason: 'Approve both controlled lua.syntax_error fixtures' })),
+      } : null;
+      const fullLuaApply2 = fullLuaBody2 ? await reuseReq('/api/agent/deploy-verify', fullLuaBody2, {
+        operationId: 'forge_op_' + crypto.randomBytes(16).toString('hex'),
+      }) : null;
+      const dupPreview = await reuseReq('/api/agent/deploy-verify', { root: 'workspace', path: 'preview_reuse_mod', dryRun: true });
+      const dupAcceptedBody = dupPreview.json?.acceptanceRequest?.body ? {
+        ...dupPreview.json.acceptanceRequest.body,
+        acceptances: dupPreview.json.acceptanceRequest.body.acceptances.map(entry => ({ ...entry, reason: 'Approved Lua before ext.duplicate_id check' })),
+      } : null;
+      const targetBeforeDup = regularTreeHash(reuseTarget);
+      fs.mkdirSync(doctorAcceptDupDir, { recursive: true });
+      fs.writeFileSync(path.join(doctorAcceptDupDir, 'content.xml'), '<content id="preview_reuse_mod" name="Duplicate" version="100"/>\n');
+      const dupRefusal = dupAcceptedBody ? await reuseReq('/api/agent/deploy-verify', dupAcceptedBody, {
+        operationId: 'forge_op_' + crypto.randomBytes(16).toString('hex'),
+      }) : null;
+      ok('doctor_evidence_batch_refuses_unapproved_second_finding_and_duplicate_id',
+        (luaReqBody2?.acceptances?.length || 0) >= 2
+        && partialLuaApply?.status === 200 && partialLuaApply.json?.ok === false
+        && partialLuaApply.json?.code === 'UNACCEPTED_MOD_FINDINGS'
+        && (partialLuaApply.json?.blockingFindings?.length || 0) >= 1
+        && partialLuaApply.json?.deployment?.writeAttempted === false
+        && targetAfterPartialLua === targetBeforePartialLua
+        && fullLuaApply2?.status === 200 && fullLuaApply2.json?.ok === true
+        && (fullLuaApply2.json?.doctor?.accepted?.filter(f => f.code === 'lua.syntax_error')?.length || 0) >= 2
+        && fullLuaApply2.json?.doctor?.blocking?.length === 0
+        && dupRefusal?.status === 409 && dupRefusal.json?.code === 'DEPLOY_DUPLICATE_EXTENSION_ID'
+        && dupRefusal.json?.deployment?.writeAttempted === false
+        && regularTreeHash(reuseTarget) === targetBeforeDup,
+        JSON.stringify({
+          preview2AcceptCount: luaReqBody2?.acceptances?.length,
+          partialOk: partialLuaApply?.json?.ok,
+          partialBlockingLen: partialLuaApply?.json?.blockingFindings?.length,
+          partialWriteAttempted: partialLuaApply?.json?.deployment?.writeAttempted,
+          partialHashEq: targetAfterPartialLua === targetBeforePartialLua,
+          full2Ok: fullLuaApply2?.json?.ok,
+          full2BlockingLen: fullLuaApply2?.json?.doctor?.blocking?.length,
+          dupStatus: dupRefusal?.status, dupCode: dupRefusal?.json?.code,
+          dupWriteAttempted: dupRefusal?.json?.deployment?.writeAttempted,
+          dupHashEq: regularTreeHash(reuseTarget) === targetBeforeDup,
+        }));
+    } finally {
+      fs.rmSync(doctorAcceptDupDir, { recursive: true, force: true });
+    }
   } finally {
     fs.rmSync(reuseMod, { recursive: true, force: true });
     fs.rmSync(reuseTarget, { recursive: true, force: true });
