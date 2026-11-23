@@ -116,7 +116,17 @@ const GUIDANCE: Array<{ matches: (code: string) => boolean; value: Guidance }> =
     },
   },
   {
-    matches: code => /^(lua_md\.|contract\.)/.test(code),
+    matches: code => code === 'md_lua.conversation_menu_without_deferred_redraw',
+    value: {
+      title: 'Conversation-triggered UI menu lacks a deferred redraw',
+      why: 'An MD <event_conversation_started> cue raises a Lua event that opens this UI menu via OpenMenu, without scheduling a deferred redraw after its initial display.',
+      impact: 'In X4, a menu drawn in the same frame as a starting native conversation renders underneath the conversation menu, so clicks or Return keys reach and cancel the conversation instead of the overlay.',
+      next: 'Schedule one deferred redraw after open (for example ~0.3 s later in menu.onUpdate) so the overlay repaints above the native conversation menu.',
+      basis: 'MD-Lua conversation-open and menu redraw cross-file analysis',
+    },
+  },
+  {
+    matches: code => /^(lua_md\.|md_lua\.|contract\.)/.test(code),
     value: {
       title: 'MD and Lua do not agree',
       why: 'The deterministic bridge scan found a listener, event, payload key, or contract declared on only one side.',
@@ -280,6 +290,12 @@ export function runDiagnosticExplainSelftest() {
   check('rules name fail-closed behavior', /disabled/i.test(make('rules.review_overdue').impact));
   check('xsd guidance names schema', /schema/i.test(make('xsd.invalid').why));
   check('bridge guidance names both sides', /both sides/i.test(make('lua_md.missing_listener').next));
+  check('md_lua bridge guidance names both sides', /both sides/i.test(make('md_lua.missing_register').next));
+  const convRedraw = make('md_lua.conversation_menu_without_deferred_redraw', 'warning');
+  check('conversation menu redraw guidance names deferred redraw',
+    convRedraw.title === 'Conversation-triggered UI menu lacks a deferred redraw'
+    && /deferred redraw/i.test(convRedraw.next)
+    && convRedraw.ruleProvenance.kind === 'unmatched', convRedraw);
   const truncatedUi = make('x4-ui.truncated-evidence', 'info');
   check('truncated Lua UI evidence explains the limit and a revalidation path',
     truncatedUi.title === 'Lua UI verification is incomplete'

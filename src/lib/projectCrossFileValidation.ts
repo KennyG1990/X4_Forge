@@ -58,6 +58,7 @@ export type ProjectCrossFileFindingCode =
   | 'md.run_actions_param_undeclared'
   | 'md.run_actions_param_required'
   | 'md.cue_duplicate_name'
+  | 'md_lua.conversation_menu_without_deferred_redraw'
   | 'validation.lua_ast_unavailable'
   | 'ui.invalid_registration';
 
@@ -3053,6 +3054,1143 @@ function validateCueLibraryReferences(mdFiles: ExtensionProject['files']) {
   return { checked, findings };
 }
 
+function walkOwnMdElements(container: XmlElement, visit: (element: XmlElement) => void): void {
+  for (const child of Array.from(container.childNodes || [])) {
+    if (child.nodeType !== 1) continue;
+    const element = child as XmlElement;
+    if (element.nodeName === 'cues' || element.nodeName === 'cue' || element.nodeName === 'library') continue;
+    visit(element);
+    walkOwnMdElements(element, visit);
+  }
+}
+
+function collectConversationStartedLuaEvents(mdFiles: ExtensionProject['files']): Map<string, ValidationSourceLocation> {
+  const out = new Map<string, ValidationSourceLocation>();
+  if (!mdFiles.some(f => typeof f.content === 'string' && f.content.includes('event_conversation_started'))) {
+    return out;
+  }
+
+  const parsedDocs: Array<{ file: string; scriptName: string; root: XmlElement }> = [];
+  const parsedScripts: MdLibraryScript<XmlElement, { file: string }>[] = [];
+  for (const file of mdFiles) {
+    if (typeof file.content !== 'string' || !file.content.trim()) continue;
+    const mdRoot = parseMdScriptRoot(file.content);
+    let docRoot: XmlElement | null = mdRoot;
+    if (!docRoot) {
+      try {
+        let malformed = false;
+        const parsed = new DOMParser({ onError: () => { malformed = true; } })
+          .parseFromString(file.content.replace(/^\uFEFF/, ''), 'text/xml').documentElement;
+        if (!malformed) docRoot = parsed;
+      } catch { /* Ignore unparseable XML fragments here; XSD/XML layers own syntax errors. */ }
+    }
+    if (!docRoot) continue;
+    const scriptName = mdRoot?.getAttribute('name')?.trim() || '';
+    parsedDocs.push({ file: file.path, scriptName, root: docRoot });
+    if (mdRoot && scriptName) {
+      const declarations: MdLibraryDeclaration<XmlElement>[] = [];
+      for (const node of Array.from(mdRoot.getElementsByTagName('*'))) {
+        if (node.nodeName !== 'cue' && node.nodeName !== 'library') continue;
+        const declName = node.getAttribute('name');
+        if (declName) {
+          declarations.push({ name: declName, kind: node.nodeName, purpose: node.getAttribute('purpose'), source: node });
+        }
+      }
+      parsedScripts.push({ name: scriptName, declarations, source: { file: file.path } });
+    }
+  }
+
+  const scripts = buildMdLibraryIndex(parsedScripts);
+  const collectActionsEvents = (
+    actionsRoot: XmlElement,
+    file: string,
+    callerScript: string,
+    visited: Set<string>,
+  ) => {
+    walkOwnMdElements(actionsRoot, element => {
+      if (element.nodeName === 'raise_lua_event') {
+        const attr = element.getAttributeNode('name');
+        if (!attr?.value?.trim()) return;
+        const { values } = collectMdStringResults(attr.value);
+        for (const ev of values) {
+          if (ev && !out.has(ev)) {
+            out.set(ev, {
+              file,
+              line: attr.lineNumber ?? element.lineNumber,
+              column: attr.columnNumber ?? element.columnNumber,
+            });
+          }
+        }
+        return;
+      }
+      if (element.nodeName === 'run_actions' || element.nodeName === 'include_actions') {
+        const ref = element.getAttribute('ref')?.trim();
+        if (!ref) return;
+        const resolved = resolveMdLibraryReference(scripts, callerScript, ref);
+        const libEl = resolved?.library?.source;
+        if (!resolved || !libEl || !resolved.library) return;
+        const visitKey = `lib:${resolved.script.name.toLowerCase()}:${resolved.library.name}`;
+        if (visited.has(visitKey)) return;
+        visited.add(visitKey);
+        for (const child of Array.from(libEl.childNodes || [])) {
+          if (child.nodeType === 1 && (child as XmlElement).nodeName === 'actions') {
+            collectActionsEvents(child as XmlElement, resolved.script.source.file, resolved.script.name, visited);
+          }
+        }
+        return;
+      }
+      if (element.nodeName === 'signal_cue_instantly') {
+        const cueRef = element.getAttribute('cue')?.trim();
+        if (!cueRef) return;
+        const resolved = resolveMdLibraryReference(scripts, callerScript, cueRef, { cueReference: true });
+        const cueEl = resolved?.declaration?.kind === 'cue' ? resolved.declaration.source : undefined;
+        if (!resolved || !cueEl || !resolved.declaration) return;
+        const visitKey = `cue:${resolved.script.name.toLowerCase()}:${resolved.declaration.name}`;
+        if (visited.has(visitKey)) return;
+        visited.add(visitKey);
+        for (const child of Array.from(cueEl.childNodes || [])) {
+          if (child.nodeType === 1 && (child as XmlElement).nodeName === 'actions') {
+            collectActionsEvents(child as XmlElement, resolved.script.source.file, resolved.script.name, visited);
+          }
+        }
+      }
+    });
+  };
+
+  for (const doc of parsedDocs) {
+    const cues = Array.from(doc.root.getElementsByTagName('cue'));
+    if (doc.root.nodeName === 'cue') cues.unshift(doc.root);
+    for (const cue of cues) {
+      let hasConvStarted = false;
+      for (const child of Array.from(cue.childNodes || [])) {
+        if (child.nodeType !== 1 || (child as XmlElement).nodeName !== 'conditions') continue;
+        walkOwnMdElements(child as XmlElement, condEl => {
+          if (condEl.nodeName === 'event_conversation_started'
+            && (condEl.getAttribute('check') || '').trim().toLowerCase() !== 'false') {
+            hasConvStarted = true;
+          }
+        });
+      }
+      if (!hasConvStarted) continue;
+      const visited = new Set<string>();
+      for (const child of Array.from(cue.childNodes || [])) {
+        if (child.nodeType === 1 && (child as XmlElement).nodeName === 'actions') {
+          collectActionsEvents(child as XmlElement, doc.file, doc.scriptName, visited);
+        }
+      }
+    }
+  }
+  return out;
+}
+
+interface ConvUiMenuCandidate {
+  file: string;
+  menuName?: string;
+  declLoc?: { line: number; column: number };
+  globalNames: Set<string>;
+  localBindings: Set<LuaLocalBinding>;
+  methods: Map<string, LuaAstNode>;
+  selfParams: Map<LuaAstNode, string>;
+  topLevelTruthyFields: Map<string, boolean>;
+  mutatedInFunctions: Set<string>;
+  constantTruthyFields: Set<string>;
+  scopeIndex: LuaLexicalScopeIndex;
+  substituted: Uint8Array;
+}
+
+interface ConvParsedLuaFile {
+  file: string;
+  ast: LuaAstNode;
+  source: LuaAnalysisSource;
+  scopeIndex: LuaLexicalScopeIndex;
+  localFunctions: Map<LuaLocalBinding, LuaAstNode>;
+  globalFunctions: Map<string, LuaAstNode>;
+  registrations: Array<{ event: string; handlerExpr: LuaAstNode }>;
+}
+
+const LUA_CLOCK_FUNCTIONS = new Set(['GetCurRealTime', 'GetCurTime']);
+const LUA_TIMER_CALLEE_RE = /(?:set|add|start|schedule)?(?:timer|timeout)|defer|delay|schedule/i;
+
+function isGuaranteedTruthyMenuWrite(expr: LuaAstNode | undefined): boolean {
+  if (!expr) return false;
+  switch (expr.type) {
+    case 'BooleanLiteral':
+      return expr.value === true;
+    case 'NumericLiteral':
+    case 'StringLiteral':
+    case 'TableConstructorExpression':
+    case 'FunctionDeclaration':
+      return true;
+    case 'BinaryExpression':
+      return expr.operator === '+' || expr.operator === '-' || expr.operator === '*'
+        || expr.operator === '/' || expr.operator === '..' || expr.operator === '%';
+    case 'UnaryExpression':
+      return expr.operator === '-' || expr.operator === '#';
+    case 'LogicalExpression':
+      if (expr.operator === 'or') {
+        return isGuaranteedTruthyMenuWrite(expr.left) || isGuaranteedTruthyMenuWrite(expr.right);
+      }
+      if (expr.operator === 'and') {
+        return isGuaranteedTruthyMenuWrite(expr.left) && isGuaranteedTruthyMenuWrite(expr.right);
+      }
+      return false;
+    case 'CallExpression': {
+      const callee = expr.base?.isLocal === false ? luaIdentifier(expr.base) : null;
+      if (callee && LUA_CLOCK_FUNCTIONS.has(callee)) return true;
+      if (expr.base?.type === 'MemberExpression' && expr.base.indexer === '.'
+        && expr.base.base?.isLocal === false && luaIdentifier(expr.base.base) === 'os') {
+        const osMember = luaIdentifier(expr.base.identifier);
+        return osMember === 'clock' || osMember === 'time';
+      }
+      return false;
+    }
+    default:
+      return false;
+  }
+}
+
+function isFalsyLiteralMenuWrite(expr: LuaAstNode | undefined): boolean {
+  return !expr || expr.type === 'NilLiteral' || (expr.type === 'BooleanLiteral' && expr.value === false);
+}
+
+function clauseEndsWithReturn(stmts: readonly LuaAstNode[] | undefined): boolean {
+  if (!stmts?.length) return false;
+  return stmts[stmts.length - 1]?.type === 'ReturnStatement';
+}
+
+function applySequentialMenuWrites(
+  stmts: readonly LuaAstNode[] | undefined,
+  resolveBaseIsMenu: (base: LuaAstNode | undefined) => boolean,
+  armedOnOpen: Set<string>,
+  stopAtNode?: LuaAstNode,
+): boolean {
+  for (const stmt of stmts ?? []) {
+    if (stopAtNode && stmt.range && stopAtNode.range && stmt.range[0] > stopAtNode.range[0]) {
+      return true;
+    }
+    const containsStop = !!stopAtNode && luaContains(stmt, stopAtNode);
+    if (stmt.type === 'DoStatement') {
+      if (applySequentialMenuWrites(stmt.body, resolveBaseIsMenu, armedOnOpen, stopAtNode)) return true;
+      continue;
+    }
+    if (stmt.type === 'IfStatement') {
+      const clauses = (stmt.clauses as LuaAstNode[] | undefined) ?? [];
+      if (containsStop) {
+        for (const clause of clauses) {
+          if (stopAtNode && luaContains(clause, stopAtNode)) {
+            return applySequentialMenuWrites(clause.body, resolveBaseIsMenu, armedOnOpen, stopAtNode);
+          }
+        }
+        return true;
+      }
+      // Skip early guard-returns (`if not menu._openRequested then ... return end`); fallthrough means guard was false.
+      if (clauses.length === 1 && clauses[0].type === 'IfClause' && clauseEndsWithReturn(clauses[0].body)) {
+        continue;
+      }
+      continue;
+    }
+    if (stmt.type === 'AssignmentStatement') {
+      (stmt.variables ?? []).forEach((variable, idx) => {
+        if ((variable.type !== 'MemberExpression' && variable.type !== 'IndexExpression') || variable.indexer === ':') return;
+        if (!resolveBaseIsMenu(variable.base)) return;
+        const field = luaMemberName(variable);
+        if (!field) return;
+        const rhs = stmt.init?.[idx];
+        if (isFalsyLiteralMenuWrite(rhs)) armedOnOpen.delete(field);
+        else if (isGuaranteedTruthyMenuWrite(rhs)) armedOnOpen.add(field);
+      });
+    }
+    if (containsStop) return true;
+  }
+  return false;
+}
+
+function isMenuObjectRef(
+  node: LuaAstNode | undefined,
+  menu: ConvUiMenuCandidate,
+  fnNode?: LuaAstNode,
+): boolean {
+  if (!node || node.type !== 'Identifier' || !node.name) return false;
+  if (!node.isLocal) return menu.globalNames.has(node.name);
+  if (fnNode && menu.selfParams.get(fnNode) === node.name) {
+    const b = menu.scopeIndex.identToBinding.get(node);
+    if (b?.scopeNode === fnNode && b.kind === 'param') return true;
+  }
+  const binding = menu.scopeIndex.identToBinding.get(node);
+  return !!binding && menu.localBindings.has(binding);
+}
+
+function readMenuFieldAccess(
+  node: LuaAstNode | undefined,
+  menu: ConvUiMenuCandidate,
+  fnNode?: LuaAstNode,
+): string | undefined {
+  if (!node || (node.type !== 'MemberExpression' && node.type !== 'IndexExpression') || node.indexer === ':') {
+    return undefined;
+  }
+  if (!isMenuObjectRef(node.base, menu, fnNode)) return undefined;
+  return luaMemberName(node);
+}
+
+function callsMenuDisplay(
+  root: LuaAstNode | undefined,
+  menu: ConvUiMenuCandidate,
+  fnNode?: LuaAstNode,
+  depth = 0,
+): boolean {
+  if (!root || depth > 2) return false;
+  let found = false;
+  walkLuaAst(root, node => {
+    if (found || node.type !== 'CallExpression') return;
+    const isPcall = node.base?.isLocal === false && luaIdentifier(node.base) === 'pcall';
+    const target = isPcall ? node.arguments?.[0] : node.base;
+    if (!target) return;
+    if ((target.type === 'MemberExpression' || target.type === 'IndexExpression')
+      && isMenuObjectRef(target.base, menu, fnNode)) {
+      const member = luaMemberName(target);
+      if (member === 'display') {
+        found = true;
+        return;
+      }
+      if (member && member !== 'onShowMenu' && member !== 'showMenuCallback' && member !== 'onUpdate') {
+        const helperAst = menu.methods.get(member);
+        if (helperAst && callsMenuDisplay(helperAst.body ? { type: 'Block', body: helperAst.body } : undefined, menu, helperAst, depth + 1)) {
+          found = true;
+        }
+      }
+    }
+  });
+  return found;
+}
+
+function hasScheduledTimerRedraw(
+  fnAst: LuaAstNode | undefined,
+  menu: ConvUiMenuCandidate,
+): boolean {
+  if (!fnAst) return false;
+  let scheduled = false;
+  walkLuaAst(fnAst, node => {
+    if (scheduled || node.type !== 'CallExpression') return;
+    const calleeName = node.base?.type === 'Identifier'
+      ? luaIdentifier(node.base)
+      : node.base?.type === 'MemberExpression'
+        ? luaIdentifier(node.base.identifier)
+        : null;
+    if (!calleeName || !LUA_TIMER_CALLEE_RE.test(calleeName)) return;
+    for (const arg of node.arguments ?? []) {
+      if (arg.type === 'FunctionDeclaration' && callsMenuDisplay({ type: 'Block', body: arg.body }, menu, arg)) {
+        scheduled = true;
+        return;
+      }
+      const field = readMenuFieldAccess(arg, menu, fnAst);
+      if (field === 'display' || (field && callsMenuDisplay({ type: 'Block', body: menu.methods.get(field)?.body }, menu, menu.methods.get(field)))) {
+        scheduled = true;
+        return;
+      }
+    }
+  });
+  return scheduled;
+}
+
+interface MenuCondEval {
+  ok: boolean;
+  fields: Set<string>;
+  alwaysTrue?: boolean;
+}
+
+function collectDynamicMenuFieldsInExpr(
+  expr: LuaAstNode | undefined,
+  menu: ConvUiMenuCandidate,
+  fnNode: LuaAstNode | undefined,
+  outFields: Set<string>,
+): boolean {
+  if (!expr) return true;
+  let safe = true;
+  walkLuaAst(expr, node => {
+    if (!safe) return;
+    if (node.type === 'CallExpression' && (node.base?.type === 'MemberExpression' || node.base?.type === 'IndexExpression')
+      && isMenuObjectRef(node.base.base, menu, fnNode)) {
+      safe = false;
+      return;
+    }
+    const field = readMenuFieldAccess(node, menu, fnNode);
+    if (!field) return;
+    if (menu.methods.has(field) || menu.constantTruthyFields.has(field)) return;
+    outFields.add(field);
+  });
+  return safe;
+}
+
+function evaluateMenuRedrawCondition(
+  cond: LuaAstNode | undefined,
+  menu: ConvUiMenuCandidate,
+  armedOnOpen: ReadonlySet<string>,
+  fnNode: LuaAstNode | undefined,
+  inverted = false,
+  depth = 0,
+): MenuCondEval {
+  const fail = (): MenuCondEval => ({ ok: false, fields: new Set() });
+  if (!cond || depth > 4) return fail();
+
+  if (cond.type === 'UnaryExpression' && cond.operator === 'not') {
+    return evaluateMenuRedrawCondition(cond.argument as LuaAstNode | undefined, menu, armedOnOpen, fnNode, !inverted, depth + 1);
+  }
+
+  if (cond.type === 'LogicalExpression') {
+    const effectiveAnd = (!inverted && cond.operator === 'and') || (inverted && cond.operator === 'or');
+    const left = evaluateMenuRedrawCondition(cond.left, menu, armedOnOpen, fnNode, inverted, depth + 1);
+    const right = evaluateMenuRedrawCondition(cond.right, menu, armedOnOpen, fnNode, inverted, depth + 1);
+    if (effectiveAnd) {
+      if (!left.ok || !right.ok) return fail();
+      return {
+        ok: true,
+        fields: new Set([...left.fields, ...right.fields]),
+        alwaysTrue: Boolean(left.alwaysTrue && right.alwaysTrue),
+      };
+    }
+    const leftValid = left.ok && (left.fields.size > 0 || left.alwaysTrue);
+    const rightValid = right.ok && (right.fields.size > 0 || right.alwaysTrue);
+    if (!leftValid && !rightValid) return fail();
+    const chosen = leftValid ? left : right;
+    return { ok: true, fields: new Set(chosen.fields), alwaysTrue: chosen.alwaysTrue };
+  }
+
+  if (cond.type === 'BooleanLiteral') {
+    const val = inverted ? cond.value !== true : cond.value === true;
+    return val ? { ok: true, fields: new Set(), alwaysTrue: true } : fail();
+  }
+  if (cond.type === 'NumericLiteral' || cond.type === 'StringLiteral') {
+    return inverted ? fail() : { ok: true, fields: new Set(), alwaysTrue: true };
+  }
+  if (cond.type === 'NilLiteral') {
+    return inverted ? { ok: true, fields: new Set(), alwaysTrue: true } : fail();
+  }
+
+  if (cond.type === 'BinaryExpression') {
+    const op = cond.operator;
+    const leftField = readMenuFieldAccess(cond.left, menu, fnNode);
+    const rightField = readMenuFieldAccess(cond.right, menu, fnNode);
+    if (op === '==' || op === '~=') {
+      const effectiveEq = inverted ? op === '~=' : op === '==';
+      const field = leftField ?? rightField;
+      const other = leftField ? cond.right : rightField ? cond.left : undefined;
+      if (field && other) {
+        const isNilOrFalse = other.type === 'NilLiteral' || (other.type === 'BooleanLiteral' && other.value === false);
+        const isTrueLit = other.type === 'BooleanLiteral' && other.value === true;
+        if (effectiveEq) {
+          if (isNilOrFalse) return fail();
+          if (menu.methods.has(field) || menu.constantTruthyFields.has(field)) {
+            return { ok: true, fields: new Set(), alwaysTrue: true };
+          }
+          return armedOnOpen.has(field) ? { ok: true, fields: new Set([field]) } : fail();
+        }
+        // effective `~=`: `menu._liftAt ~= nil` or `menu._liftAt ~= false` is a positive armed check.
+        if (isNilOrFalse) {
+          if (menu.methods.has(field) || menu.constantTruthyFields.has(field)) {
+            return { ok: true, fields: new Set(), alwaysTrue: true };
+          }
+          return armedOnOpen.has(field) ? { ok: true, fields: new Set([field]) } : fail();
+        }
+        if (isTrueLit) return fail();
+      }
+      return fail();
+    }
+    if (op === '>' || op === '>=' || op === '<' || op === '<=') {
+      const fields = new Set<string>();
+      if (!collectDynamicMenuFieldsInExpr(cond.left, menu, fnNode, fields)
+        || !collectDynamicMenuFieldsInExpr(cond.right, menu, fnNode, fields)) {
+        return fail();
+      }
+      if (fields.size === 0 || ![...fields].every(f => armedOnOpen.has(f))) return fail();
+      return { ok: true, fields };
+    }
+    return fail();
+  }
+
+  if (cond.type === 'CallExpression') {
+    if (inverted) return fail();
+    const base = cond.base;
+    if ((base?.type === 'MemberExpression' || base?.type === 'IndexExpression') && isMenuObjectRef(base.base, menu, fnNode)) {
+      const methodName = luaMemberName(base);
+      const methodAst = methodName ? menu.methods.get(methodName) : undefined;
+      if (!methodAst?.body?.length) return fail();
+      // Reject call arguments that depend on un-armed dynamic menu fields.
+      const argFields = new Set<string>();
+      for (const arg of cond.arguments ?? []) {
+        if (!collectDynamicMenuFieldsInExpr(arg, menu, fnNode, argFields)) return fail();
+      }
+      if (![...argFields].every(f => armedOnOpen.has(f))) return fail();
+      if (methodAst.body.length !== 1 || methodAst.body[0]?.type !== 'ReturnStatement') return fail();
+      const retExpr = methodAst.body[0].arguments?.[0];
+      const inner = evaluateMenuRedrawCondition(retExpr, menu, armedOnOpen, methodAst, false, depth + 1);
+      if (!inner.ok) return fail();
+      return { ok: true, fields: new Set([...argFields, ...inner.fields]), alwaysTrue: inner.alwaysTrue };
+    }
+    return fail();
+  }
+
+  const directField = readMenuFieldAccess(cond, menu, fnNode);
+  if (directField) {
+    if (inverted) return fail();
+    if (menu.methods.has(directField) || menu.constantTruthyFields.has(directField)) {
+      return { ok: true, fields: new Set(), alwaysTrue: true };
+    }
+    return armedOnOpen.has(directField) ? { ok: true, fields: new Set([directField]) } : fail();
+  }
+
+  if (!inverted && cond.type === 'Identifier' && cond.isLocal === false && cond.name === 'Helper') {
+    return { ok: true, fields: new Set(), alwaysTrue: true };
+  }
+  return fail();
+}
+
+function onUpdateHasArmedRedraw(
+  onUpdateAst: LuaAstNode,
+  menu: ConvUiMenuCandidate,
+  armedOnOpen: ReadonlySet<string>,
+): boolean {
+  const scan = scanLuaScope(onUpdateAst);
+  const displayCalls: LuaAstNode[] = [];
+  for (const node of scan.nodes) {
+    if (node.type !== 'CallExpression') continue;
+    const isPcall = node.base?.isLocal === false && luaIdentifier(node.base) === 'pcall';
+    const target = isPcall ? node.arguments?.[0] : node.base;
+    if (!target || (target.type !== 'MemberExpression' && target.type !== 'IndexExpression')) continue;
+    if (!isMenuObjectRef(target.base, menu, onUpdateAst)) continue;
+    const member = luaMemberName(target);
+    if (member === 'display') {
+      displayCalls.push(node);
+    } else if (member && member !== 'onUpdate' && member !== 'onShowMenu' && member !== 'showMenuCallback') {
+      const helperAst = menu.methods.get(member);
+      if (helperAst && callsMenuDisplay({ type: 'Block', body: helperAst.body }, menu, helperAst, 1)) {
+        displayCalls.push(node);
+      }
+    }
+  }
+  if (displayCalls.length === 0) return false;
+
+  for (const call of displayCalls) {
+    // Do not cross nested FunctionDeclarations unless wrapped in a zero-arg pcall(function() ... end).
+    const enclosingClauses: LuaAstNode[] = [];
+    let blocked = false;
+    for (let cur: LuaAstNode | undefined = call, parent = scan.parents.get(call);
+      parent && cur !== onUpdateAst;
+      cur = parent, parent = scan.parents.get(parent)) {
+      if (parent === onUpdateAst) break;
+      if (parent.type === 'FunctionDeclaration') {
+        const pcallParent = scan.parents.get(parent);
+        const isSafeThunk = pcallParent?.type === 'CallExpression'
+          && pcallParent.base?.isLocal === false && luaIdentifier(pcallParent.base) === 'pcall'
+          && pcallParent.arguments?.length === 1 && pcallParent.arguments[0] === parent;
+        if (!isSafeThunk) { blocked = true; break; }
+        continue;
+      }
+      if (parent.type === 'ElseClause') { blocked = true; break; }
+      if (parent.type === 'IfClause' || parent.type === 'ElseifClause') {
+        const ifStmt = scan.parents.get(parent);
+        if (parent.type === 'ElseifClause' && ifStmt?.clauses) {
+          // Ensure no earlier clause is unconditionally true.
+          for (const sibling of ifStmt.clauses) {
+            if (sibling === parent) break;
+            if (literalLuaTruthiness(sibling.condition as LuaAstNode) === true) blocked = true;
+          }
+        }
+        enclosingClauses.push(parent);
+      }
+    }
+    if (blocked) continue;
+
+    // Include inverted conditions from top-level early guard-returns preceding this call in onUpdate.
+    const guardConditions: Array<{ cond: LuaAstNode; inverted: boolean }> = [];
+    const callStart = call.range?.[0] ?? Number.MAX_SAFE_INTEGER;
+    for (const stmt of onUpdateAst.body ?? []) {
+      if ((stmt.range?.[0] ?? 0) >= callStart) break;
+      if (luaContains(stmt, call)) break;
+      if (stmt.type === 'ReturnStatement') { blocked = true; break; }
+      if (stmt.type === 'IfStatement') {
+        const clauses = (stmt.clauses as LuaAstNode[] | undefined) ?? [];
+        if (clauses.length === 1 && clauses[0].type === 'IfClause' && clauseEndsWithReturn(clauses[0].body) && clauses[0].condition) {
+          guardConditions.push({ cond: clauses[0].condition as LuaAstNode, inverted: true });
+        }
+      }
+    }
+    if (blocked) continue;
+
+    for (const clause of enclosingClauses) {
+      if (clause.condition) guardConditions.push({ cond: clause.condition as LuaAstNode, inverted: false });
+    }
+
+    if (guardConditions.length === 0) {
+      // Unconditional display() in onUpdate redraws on every tick.
+      return true;
+    }
+
+    let allOk = true;
+    const totalDynamicFields = new Set<string>();
+    for (const item of guardConditions) {
+      const res = evaluateMenuRedrawCondition(item.cond, menu, armedOnOpen, onUpdateAst, item.inverted);
+      if (!res.ok) { allOk = false; break; }
+      for (const f of res.fields) totalDynamicFields.add(f);
+    }
+    if (allOk && (totalDynamicFields.size > 0 || guardConditions.every(g =>
+      evaluateMenuRedrawCondition(g.cond, menu, armedOnOpen, onUpdateAst, g.inverted).alwaysTrue))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function validateConversationMenuRedraw(
+  mdFiles: ExtensionProject['files'],
+  luaFiles: ExtensionProject['files'],
+): ProjectCrossFileFinding[] {
+  const convEvents = collectConversationStartedLuaEvents(mdFiles);
+  if (convEvents.size === 0 || luaFiles.length === 0) return [];
+
+  const parsedFiles: ConvParsedLuaFile[] = [];
+  const menusByName = new Map<string, ConvUiMenuCandidate[]>();
+  const menusByGlobal = new Map<string, ConvUiMenuCandidate>();
+
+  for (const luaFile of luaFiles) {
+    const source = buildLuaAnalysisSource(luaFile.content || '');
+    let envRebound = false;
+    let astNode: LuaAstNode;
+    try {
+      astNode = parse(source.content, {
+        comments: false, locations: true, ranges: true, scope: true, encodingMode: 'pseudo-latin1',
+        onLocalDeclaration(name: string) { if (name === '_ENV') envRebound = true; },
+      }) as LuaAstNode;
+    } catch {
+      continue;
+    }
+    const scopeIndex = collectLuaLexicalScopes(astNode, envRebound);
+    populateLuaBindingStrings(scopeIndex, source.substituted);
+    const { bindings, declToBinding, identToBinding, functions, nodeFnScope, reboundGlobals, opaqueGlobals } = scopeIndex;
+
+    const localFnDefs = new Map<LuaLocalBinding, { fn: LuaAstNode; count: number; tainted: boolean }>();
+    const globalFnDefs = new Map<string, { fn: LuaAstNode; count: number; tainted: boolean }>();
+    const recordLocalFn = (binding: LuaLocalBinding | undefined, expr: LuaAstNode | undefined) => {
+      if (!binding || !expr) return;
+      if (expr.type === 'FunctionDeclaration') {
+        const cur = localFnDefs.get(binding);
+        localFnDefs.set(binding, { fn: expr, count: (cur?.count ?? 0) + 1, tainted: cur?.tainted ?? false });
+      } else if (expr.type !== 'NilLiteral') {
+        const cur = localFnDefs.get(binding);
+        if (cur) cur.tainted = true;
+        else localFnDefs.set(binding, { fn: expr, count: 0, tainted: true });
+      }
+    };
+    const recordGlobalFn = (name: string | null, expr: LuaAstNode | undefined) => {
+      if (!name || !expr) return;
+      if (expr.type === 'FunctionDeclaration') {
+        const cur = globalFnDefs.get(name);
+        globalFnDefs.set(name, { fn: expr, count: (cur?.count ?? 0) + 1, tainted: cur?.tainted ?? false });
+      } else if (expr.type !== 'NilLiteral') {
+        const cur = globalFnDefs.get(name);
+        if (cur) cur.tainted = true;
+        else globalFnDefs.set(name, { fn: expr, count: 0, tainted: true });
+      }
+    };
+
+    // Discover UI menu table candidates and function definitions in this file.
+    const candidates: ConvUiMenuCandidate[] = [];
+    const candidateByGlobal = new Map<string, ConvUiMenuCandidate>();
+    const candidateByBinding = new Map<LuaLocalBinding, ConvUiMenuCandidate>();
+
+    const makeCandidate = (loc?: { line: number; column: number }): ConvUiMenuCandidate => {
+      const c: ConvUiMenuCandidate = {
+        file: luaFile.path,
+        declLoc: loc,
+        globalNames: new Set(),
+        localBindings: new Set(),
+        methods: new Map(),
+        selfParams: new Map(),
+        topLevelTruthyFields: new Map(),
+        mutatedInFunctions: new Set(),
+        constantTruthyFields: new Set(),
+        scopeIndex,
+        substituted: source.substituted,
+      };
+      candidates.push(c);
+      return c;
+    };
+
+    const inspectTableCtor = (cand: ConvUiMenuCandidate, ctor: LuaAstNode) => {
+      if (ctor.loc?.start && !cand.declLoc) {
+        cand.declLoc = { line: ctor.loc.start.line, column: ctor.loc.start.column + 1 };
+      }
+      for (const field of ctor.fields ?? []) {
+        if (field.type !== 'TableKeyString' && field.type !== 'TableKey') continue;
+        const fieldName = field.type === 'TableKeyString'
+          ? luaIdentifier(field.key as LuaAstNode)
+          : (field.key?.type === 'StringLiteral' && typeof field.key.value === 'string' ? field.key.value : null);
+        const val = field.value as LuaAstNode | undefined;
+        if (!fieldName || !val) continue;
+        if (fieldName === 'name' && val.type === 'StringLiteral' && typeof val.value === 'string'
+          && val.value && !luaStringLiteralTainted(val, source.substituted)) {
+          cand.menuName ??= val.value;
+        }
+        if (val.type === 'FunctionDeclaration') {
+          cand.methods.set(fieldName, val);
+        } else if (!isFalsyLiteralMenuWrite(val) && isGuaranteedTruthyMenuWrite(val)) {
+          cand.topLevelTruthyFields.set(fieldName, true);
+        } else if (isFalsyLiteralMenuWrite(val)) {
+          cand.topLevelTruthyFields.set(fieldName, false);
+        }
+      }
+    };
+
+    const extractCtorFromInit = (init: LuaAstNode | undefined): LuaAstNode | undefined => {
+      if (!init) return undefined;
+      if (init.type === 'TableConstructorExpression') return init;
+      if (init.type === 'LogicalExpression' && init.operator === 'or' && init.right?.type === 'TableConstructorExpression') {
+        return init.right;
+      }
+      return undefined;
+    };
+
+    walkLuaAst(astNode, node => {
+      if (node.type === 'FunctionDeclaration' && node.identifier?.type === 'Identifier') {
+        if (node.isLocal) recordLocalFn(declToBinding.get(node.identifier), node);
+        else recordGlobalFn(luaIdentifier(node.identifier), node);
+      } else if (node.type === 'LocalStatement') {
+        (node.variables ?? []).forEach((v, idx) => {
+          const b = declToBinding.get(v);
+          const init = node.init?.[idx];
+          if (init) recordLocalFn(b, init);
+          if (!b || b.writes !== 1 || !init) return;
+          const ctor = extractCtorFromInit(init);
+          if (ctor && nodeFnScope.get(node) === undefined) {
+            const cand = makeCandidate(node.loc?.start ? { line: node.loc.start.line, column: node.loc.start.column + 1 } : undefined);
+            cand.localBindings.add(b);
+            candidateByBinding.set(b, cand);
+            inspectTableCtor(cand, ctor);
+          } else if (init.type === 'Identifier' && !init.isLocal && init.name) {
+            const existing = candidateByGlobal.get(init.name);
+            if (existing) {
+              existing.localBindings.add(b);
+              candidateByBinding.set(b, existing);
+            }
+          } else if (init.type === 'Identifier' && init.isLocal) {
+            const targetB = identToBinding.get(init);
+            const existing = targetB ? candidateByBinding.get(targetB) : undefined;
+            if (existing) {
+              existing.localBindings.add(b);
+              candidateByBinding.set(b, existing);
+            }
+          }
+        });
+      } else if (node.type === 'AssignmentStatement') {
+        (node.variables ?? []).forEach((v, idx) => {
+          const init = node.init?.[idx];
+          if (v.type === 'Identifier') {
+            if (v.isLocal) recordLocalFn(identToBinding.get(v), init);
+            else recordGlobalFn(luaIdentifier(v), init);
+            if (!v.isLocal && v.name && init && nodeFnScope.get(node) === undefined) {
+              const ctor = extractCtorFromInit(init);
+              if (ctor) {
+                let cand = candidateByGlobal.get(v.name);
+                if (!cand) {
+                  cand = makeCandidate(node.loc?.start ? { line: node.loc.start.line, column: node.loc.start.column + 1 } : undefined);
+                  cand.globalNames.add(v.name);
+                  candidateByGlobal.set(v.name, cand);
+                }
+                inspectTableCtor(cand, ctor);
+              } else if (init.type === 'Identifier' && init.isLocal) {
+                const targetB = identToBinding.get(init);
+                const existing = targetB ? candidateByBinding.get(targetB) : undefined;
+                if (existing) {
+                  existing.globalNames.add(v.name);
+                  candidateByGlobal.set(v.name, existing);
+                }
+              }
+            }
+          }
+        });
+      }
+    });
+
+    // Second pass over member declarations and assignments to populate menu methods, `.name`, and constant vs dynamic fields.
+    const resolveCand = (base: LuaAstNode | undefined): ConvUiMenuCandidate | undefined => {
+      if (!base || base.type !== 'Identifier' || !base.name) return undefined;
+      if (!base.isLocal) return candidateByGlobal.get(base.name);
+      const b = identToBinding.get(base);
+      return b ? candidateByBinding.get(b) : undefined;
+    };
+
+    walkLuaAst(astNode, node => {
+      if (node.type === 'FunctionDeclaration'
+        && (node.identifier?.type === 'MemberExpression' || node.identifier?.type === 'IndexExpression')) {
+        const cand = resolveCand(node.identifier.base);
+        const member = luaMemberName(node.identifier);
+        if (cand && member) {
+          cand.methods.set(member, node);
+          if (node.identifier.indexer === ':') cand.selfParams.set(node, 'self');
+          if (nodeFnScope.get(node) !== undefined) cand.mutatedInFunctions.add(member);
+        }
+        return;
+      }
+      if (node.type === 'AssignmentStatement') {
+        const inFn = nodeFnScope.get(node) !== undefined;
+        (node.variables ?? []).forEach((v, idx) => {
+          if (v.type !== 'MemberExpression' && v.type !== 'IndexExpression') return;
+          const cand = resolveCand(v.base);
+          if (!cand) return;
+          const member = luaMemberName(v);
+          if (!member) return;
+          const rhs = node.init?.[idx];
+          if (!inFn && member === 'name' && rhs?.type === 'StringLiteral' && typeof rhs.value === 'string'
+            && rhs.value && !luaStringLiteralTainted(rhs, source.substituted)) {
+            cand.menuName ??= rhs.value;
+          }
+          if (rhs?.type === 'FunctionDeclaration') {
+            cand.methods.set(member, rhs);
+            if (inFn) cand.mutatedInFunctions.add(member);
+            return;
+          }
+          if (inFn) {
+            cand.mutatedInFunctions.add(member);
+          } else if (isFalsyLiteralMenuWrite(rhs)) {
+            cand.topLevelTruthyFields.set(member, false);
+          } else if (isGuaranteedTruthyMenuWrite(rhs)) {
+            cand.topLevelTruthyFields.set(member, true);
+          }
+        });
+      }
+    });
+
+    for (const cand of candidates) {
+      if (!cand.menuName || (!cand.methods.has('onShowMenu') && !cand.methods.has('showMenuCallback'))) continue;
+      for (const [field, truthy] of cand.topLevelTruthyFields) {
+        if (truthy && field !== 'active' && !cand.mutatedInFunctions.has(field)) {
+          cand.constantTruthyFields.add(field);
+        }
+      }
+      const list = menusByName.get(cand.menuName) ?? [];
+      list.push(cand);
+      menusByName.set(cand.menuName, list);
+      for (const g of cand.globalNames) {
+        if (!menusByGlobal.has(g)) menusByGlobal.set(g, cand);
+      }
+    }
+
+    // Extract RegisterEvent calls for events in convEvents (supporting direct, pcall, immutable aliases, and forwarding wrappers).
+    const isUnshadowedGlobal = (node: LuaAstNode | undefined, expected: string): boolean =>
+      luaIdentifier(node) === expected && node?.isLocal === false && !opaqueGlobals && !reboundGlobals.has(expected);
+    const registrarBindings = new Set<LuaLocalBinding>();
+    for (const b of bindings) {
+      if ((b.kind === 'local' || b.kind === 'function') && b.writes === 1 && isUnshadowedGlobal(b.init, 'RegisterEvent')) {
+        registrarBindings.add(b);
+      }
+    }
+    const isEngineRegistrar = (node: LuaAstNode | undefined): boolean => {
+      if (!node) return false;
+      if (isUnshadowedGlobal(node, 'RegisterEvent')) return true;
+      if (!node.isLocal) return false;
+      const b = identToBinding.get(node);
+      return !!b && registrarBindings.has(b);
+    };
+
+    const regWrappers = new Map<LuaLocalBinding, { eventIdx: number; handlerIdx: number }>();
+    const wrapperInnerCalls = new Set<LuaAstNode>();
+    for (const [fnDecl, fnBinding] of functions) {
+      if (!fnBinding || fnBinding.writes !== 1 || !fnDecl.body?.length) continue;
+      const params = (fnDecl.parameters || []).map(luaIdentifier);
+      if (params.length < 2 || new Set(params).size !== params.length) continue;
+      let innerCall: LuaAstNode | undefined;
+      let eventIdx = -1;
+      let handlerIdx = -1;
+      let valid = true;
+      for (const stmt of fnDecl.body) {
+        if (stmt.type === 'CallStatement') {
+          if (innerCall || !stmt.expression || !isEngineRegistrar(stmt.expression.base)) { valid = false; break; }
+          const a0 = stmt.expression.arguments?.[0];
+          const a1 = stmt.expression.arguments?.[1];
+          const eIdx = a0?.type === 'Identifier' && a0.isLocal ? params.indexOf(luaIdentifier(a0)) : -1;
+          const hIdx = a1?.type === 'Identifier' && a1.isLocal ? params.indexOf(luaIdentifier(a1)) : -1;
+          if (eIdx < 0 || hIdx < 0) { valid = false; break; }
+          innerCall = stmt.expression;
+          eventIdx = eIdx;
+          handlerIdx = hIdx;
+          continue;
+        }
+        if (stmt.type === 'AssignmentStatement') continue;
+        valid = false;
+        break;
+      }
+      if (valid && innerCall && eventIdx >= 0 && handlerIdx >= 0) {
+        regWrappers.set(fnBinding, { eventIdx, handlerIdx });
+        wrapperInnerCalls.add(innerCall);
+      }
+    }
+
+    const registrations: Array<{ event: string; handlerExpr: LuaAstNode }> = [];
+    walkLuaAst(astNode, node => {
+      if (node.type !== 'CallExpression' || wrapperInnerCalls.has(node)) return;
+      let eventArg: LuaAstNode | undefined;
+      let handlerArg: LuaAstNode | undefined;
+      if (isEngineRegistrar(node.base)) {
+        eventArg = node.arguments?.[0];
+        handlerArg = node.arguments?.[1];
+      } else if (isUnshadowedGlobal(node.base, 'pcall') && isEngineRegistrar(node.arguments?.[0])) {
+        eventArg = node.arguments?.[1];
+        handlerArg = node.arguments?.[2];
+      } else if (node.base?.type === 'Identifier' && node.base.isLocal) {
+        const b = identToBinding.get(node.base);
+        const spec = b ? regWrappers.get(b) : undefined;
+        if (spec) {
+          eventArg = node.arguments?.[spec.eventIdx];
+          handlerArg = node.arguments?.[spec.handlerIdx];
+        }
+      }
+      if (!eventArg || !handlerArg) return;
+      const resolved = resolveLuaRegistrationStrings(eventArg, identToBinding, source.substituted);
+      if (!resolved) return;
+      for (const item of resolved) {
+        if (!item.prefix && !item.tainted && convEvents.has(item.value)) {
+          registrations.push({ event: item.value, handlerExpr: handlerArg });
+        }
+      }
+    });
+
+    const localFunctions = new Map<LuaLocalBinding, LuaAstNode>();
+    for (const [b, info] of localFnDefs) {
+      if (info.count === 1 && !info.tainted) localFunctions.set(b, info.fn);
+    }
+    const globalFunctions = new Map<string, LuaAstNode>();
+    for (const [name, info] of globalFnDefs) {
+      if (info.count === 1 && !info.tainted) globalFunctions.set(name, info.fn);
+    }
+
+    parsedFiles.push({ file: luaFile.path, ast: astNode, source, scopeIndex, localFunctions, globalFunctions, registrations });
+  }
+
+  if (menusByName.size === 0) return [];
+
+  const resolveHandlerFunction = (
+    luaDoc: ConvParsedLuaFile,
+    expr: LuaAstNode,
+  ): { fn: LuaAstNode; ownerMenu?: ConvUiMenuCandidate } | undefined => {
+    if (expr.type === 'FunctionDeclaration') return { fn: expr };
+    if (expr.type === 'Identifier') {
+      if (expr.isLocal) {
+        const b = luaDoc.scopeIndex.identToBinding.get(expr);
+        const fn = b ? luaDoc.localFunctions.get(b) : undefined;
+        return fn ? { fn } : undefined;
+      }
+      const fn = expr.name ? luaDoc.globalFunctions.get(expr.name) : undefined;
+      return fn ? { fn } : undefined;
+    }
+    if (expr.type === 'MemberExpression' || expr.type === 'IndexExpression') {
+      const member = luaMemberName(expr);
+      if (!member) return undefined;
+      if (expr.base?.type === 'Identifier' && !expr.base.isLocal && expr.base.name) {
+        const menu = menusByGlobal.get(expr.base.name);
+        const fn = menu?.methods.get(member);
+        if (menu && fn) return { fn, ownerMenu: menu };
+      }
+      if (expr.base?.type === 'Identifier' && expr.base.isLocal) {
+        const b = luaDoc.scopeIndex.identToBinding.get(expr.base);
+        for (const list of menusByName.values()) {
+          for (const menu of list) {
+            if (b && menu.localBindings.has(b)) {
+              const fn = menu.methods.get(member);
+              if (fn) return { fn, ownerMenu: menu };
+            }
+          }
+        }
+      }
+    }
+    return undefined;
+  };
+
+  const inspectOpenSitesInFunction = (
+    luaDoc: ConvParsedLuaFile,
+    fnAst: LuaAstNode,
+    hop = 0,
+  ): Array<{ menu: ConvUiMenuCandidate; callNode: LuaAstNode; viaOpenMethod: boolean; isMenuAlias: (n: LuaAstNode | undefined) => boolean }> => {
+    const results: Array<{ menu: ConvUiMenuCandidate; callNode: LuaAstNode; viaOpenMethod: boolean; isMenuAlias: (n: LuaAstNode | undefined) => boolean }> = [];
+    const rawgetAvailable = !luaDoc.scopeIndex.opaqueGlobals && !luaDoc.scopeIndex.reboundGlobals.has('rawget');
+    const localMenuMap = new Map<LuaLocalBinding, ConvUiMenuCandidate>();
+
+    // Collect local menu aliases inside fnAst (`rawget(_G, "MenuGlobal")`, `MenuGlobal`, or `if m.name == "MenuName" then alias = m`).
+    walkLuaAst(fnAst.body ? { type: 'Block', body: fnAst.body } : fnAst, node => {
+      if (node.type === 'LocalStatement') {
+        (node.variables ?? []).forEach((v, idx) => {
+          const b = luaDoc.scopeIndex.declToBinding.get(v);
+          const init = node.init?.[idx];
+          if (!b || !init) return;
+          const ns = readLuaNamespace(init, rawgetAvailable);
+          if (ns && menusByGlobal.has(ns)) {
+            localMenuMap.set(b, menusByGlobal.get(ns)!);
+          } else if (init.type === 'Identifier' && init.isLocal) {
+            const srcB = luaDoc.scopeIndex.identToBinding.get(init);
+            if (srcB && localMenuMap.has(srcB)) localMenuMap.set(b, localMenuMap.get(srcB)!);
+          }
+        });
+      }
+      if (node.type === 'IfClause' || node.type === 'ElseifClause') {
+        const cond = node.condition as LuaAstNode | undefined;
+        if (cond?.type === 'BinaryExpression' && cond.operator === '==') {
+          const checkSide = (memberSide: LuaAstNode | undefined, litSide: LuaAstNode | undefined) => {
+            if (memberSide?.type === 'MemberExpression' && luaIdentifier(memberSide.identifier) === 'name'
+              && litSide?.type === 'StringLiteral' && typeof litSide.value === 'string') {
+              const targetMenus = menusByName.get(litSide.value);
+              const targetMenu = targetMenus?.[0];
+              if (!targetMenu) return;
+              for (const st of node.body ?? []) {
+                if (st.type === 'AssignmentStatement' && st.variables?.[0]?.type === 'Identifier' && st.variables[0].isLocal) {
+                  const b = luaDoc.scopeIndex.identToBinding.get(st.variables[0]);
+                  if (b && !localMenuMap.has(b)) localMenuMap.set(b, targetMenu);
+                }
+              }
+            }
+          };
+          checkSide(cond.left, cond.right);
+          checkSide(cond.right, cond.left);
+        }
+      }
+    });
+
+    const resolveMenuRefInFn = (base: LuaAstNode | undefined): ConvUiMenuCandidate | undefined => {
+      if (!base) return undefined;
+      const ns = readLuaNamespace(base, rawgetAvailable);
+      if (ns && menusByGlobal.has(ns)) return menusByGlobal.get(ns);
+      if (base.type === 'Identifier' && base.isLocal) {
+        const b = luaDoc.scopeIndex.identToBinding.get(base);
+        if (!b) return undefined;
+        if (localMenuMap.has(b)) return localMenuMap.get(b);
+        for (const list of menusByName.values()) {
+          for (const menu of list) {
+            if (menu.file === luaDoc.file && menu.localBindings.has(b)) return menu;
+          }
+        }
+      }
+      return undefined;
+    };
+
+    walkLuaAst(fnAst.body ? { type: 'Block', body: fnAst.body } : fnAst, node => {
+      if (node.type !== 'CallExpression') return;
+      const isPcall = node.base?.isLocal === false && luaIdentifier(node.base) === 'pcall';
+      const callee = isPcall ? node.arguments?.[0] : node.base;
+      const args = isPcall ? (node.arguments ?? []).slice(1) : (node.arguments ?? []);
+      if (!callee) return;
+
+      if (callee.isLocal === false && luaIdentifier(callee) === 'OpenMenu') {
+        const nameArg = args[0];
+        let matchedMenus: ConvUiMenuCandidate[] | undefined;
+        if (nameArg?.type === 'MemberExpression' && luaIdentifier(nameArg.identifier) === 'name') {
+          const refMenu = resolveMenuRefInFn(nameArg.base);
+          if (refMenu) matchedMenus = [refMenu];
+        } else {
+          const strs = resolveLuaRegistrationStrings(nameArg, luaDoc.scopeIndex.identToBinding, luaDoc.source.substituted);
+          const lit = strs?.length === 1 && !strs[0].prefix && !strs[0].tainted ? strs[0].value : undefined;
+          if (lit) matchedMenus = menusByName.get(lit);
+        }
+        for (const menu of matchedMenus ?? []) {
+          results.push({
+            menu,
+            callNode: node,
+            viaOpenMethod: false,
+            isMenuAlias: cand => resolveMenuRefInFn(cand) === menu,
+          });
+        }
+        return;
+      }
+
+      if (callee.type === 'MemberExpression' || callee.type === 'IndexExpression') {
+        const refMenu = resolveMenuRefInFn(callee.base);
+        const member = luaMemberName(callee);
+        if (refMenu && member === 'open') {
+          const openMethod = refMenu.methods.get('open');
+          let callsOpenMenu = false;
+          walkLuaAst(openMethod, inner => {
+            if (inner.type !== 'CallExpression') return;
+            const innerCallee = inner.base?.isLocal === false && luaIdentifier(inner.base) === 'pcall'
+              ? inner.arguments?.[0] : inner.base;
+            if (innerCallee?.isLocal === false && luaIdentifier(innerCallee) === 'OpenMenu') callsOpenMenu = true;
+          });
+          if (callsOpenMenu) {
+            results.push({
+              menu: refMenu,
+              callNode: node,
+              viaOpenMethod: true,
+              isMenuAlias: cand => resolveMenuRefInFn(cand) === refMenu,
+            });
+          }
+          return;
+        }
+      }
+
+      if (hop < 2 && callee.type === 'Identifier') {
+        const nextFn = resolveHandlerFunction(luaDoc, callee);
+        if (nextFn && nextFn.fn !== fnAst) {
+          results.push(...inspectOpenSitesInFunction(luaDoc, nextFn.fn, hop + 1));
+        }
+      }
+    });
+
+    return results;
+  };
+
+  const findings: ProjectCrossFileFinding[] = [];
+  const emittedKeys = new Set<string>();
+
+  for (const luaDoc of parsedFiles) {
+    for (const reg of luaDoc.registrations) {
+      const targetLoc = convEvents.get(reg.event);
+      const resolvedHandler = resolveHandlerFunction(luaDoc, reg.handlerExpr);
+      if (!resolvedHandler) continue;
+      const openSites = inspectOpenSitesInFunction(luaDoc, resolvedHandler.fn);
+      for (const site of openSites) {
+        const { menu } = site;
+        const menuName = menu.menuName!;
+        const dedupeKey = `${menu.file}\0${menuName}\0${reg.event}`;
+        if (emittedKeys.has(dedupeKey)) continue;
+
+        // Compute dynamic fields guaranteed armed along this conversation-open path.
+        const armedOnOpen = new Set<string>(menu.constantTruthyFields);
+        applySequentialMenuWrites(resolvedHandler.fn.body, site.isMenuAlias, armedOnOpen, site.callNode);
+        if (site.viaOpenMethod) {
+          const openAst = menu.methods.get('open');
+          if (openAst) applySequentialMenuWrites(openAst.body, b => isMenuObjectRef(b, menu, openAst), armedOnOpen);
+        }
+        const showCbAst = menu.methods.get('showMenuCallback');
+        const onShowAst = menu.methods.get('onShowMenu');
+        if (showCbAst) applySequentialMenuWrites(showCbAst.body, b => isMenuObjectRef(b, menu, showCbAst), armedOnOpen);
+        if (onShowAst) applySequentialMenuWrites(onShowAst.body, b => isMenuObjectRef(b, menu, onShowAst), armedOnOpen);
+
+        const hasTimerRedraw = hasScheduledTimerRedraw(resolvedHandler.fn, menu)
+          || (site.viaOpenMethod && hasScheduledTimerRedraw(menu.methods.get('open'), menu))
+          || hasScheduledTimerRedraw(showCbAst, menu)
+          || hasScheduledTimerRedraw(onShowAst, menu);
+
+        const onUpdateAst = menu.methods.get('onUpdate');
+        const hasUpdateRedraw = !!onUpdateAst && onUpdateHasArmedRedraw(onUpdateAst, menu, armedOnOpen);
+        if (hasTimerRedraw || hasUpdateRedraw) continue;
+
+        emittedKeys.add(dedupeKey);
+        const anchorAst = onShowAst ?? showCbAst;
+        const line = anchorAst?.loc?.start.line ?? menu.declLoc?.line;
+        const column = anchorAst?.loc?.start ? anchorAst.loc.start.column + 1 : menu.declLoc?.column;
+        findings.push({
+          code: 'md_lua.conversation_menu_without_deferred_redraw',
+          severity: 'warning',
+          file: menu.file,
+          ...(line !== undefined ? { line } : {}),
+          ...(column !== undefined ? { column } : {}),
+          ...(targetLoc ? { target: targetLoc } : {}),
+          event: reg.event,
+          sourceRef: `${reg.event}->${menuName}`,
+          detail: `UI menu "${menuName}" is opened via OpenMenu from <event_conversation_started> Lua event "${reg.event}" without a deferred redraw after open; in X4 an overlay drawn in the same frame is drawn under the conversation menu - add a deferred redraw (e.g. in ${menuName}.onUpdate ~0.3 s after open).`,
+        });
+      }
+    }
+  }
+
+  return findings;
+}
+
 /** Final declarations are authority; only compact authored calls can produce new diagnostics. */
 function validateEffectiveReferenceContracts(context: EffectiveMdReferenceContext) {
   const findings: ProjectCrossFileFinding[] = [];
@@ -3353,6 +4491,7 @@ export function validateProjectCrossFile(project: ExtensionProject, options: {
         : `Lua emits UI event ${label} but no project MD file listens for it.`,
     });
   }
+  findings.push(...validateConversationMenuRedraw(mdFiles, luaFiles));
 
   const manifest = findContentManifest(project);
   if (!manifest) {
@@ -4272,6 +5411,136 @@ AddUITriggeredEvent("forge_qa", "player_orders", build())`;
   });
   const dup = validateProjectCrossFile(duplicateDeps);
   ok('flags_duplicate_dependency', dup.findings.some(f => f.code === 'dep.duplicate' && f.severity === 'warning'), dup.findings);
+
+  // #62 (FF-23): Conversation-triggered UI menu without deferred redraw.
+  const convDirectNoRedraw = addFile(addFile(fixtureProject(), {
+    path: 'md/conv_direct.xml', kind: 'md',
+    content: `<mdscript name="ConvDirect"><cues><cue name="OnTalk" instantiate="true">
+      <conditions><event_conversation_started conversation="default"/></conditions>
+      <actions><raise_lua_event name="'qa.open_conv_menu'"/></actions>
+    </cue></cues></mdscript>`,
+  }), {
+    path: 'ui/conv_menu.lua', kind: 'lua',
+    content: `local menu = { name = "QA_Conv_Menu", active = false }
+function menu.onShowMenu()
+  menu.active = true
+  menu.display()
+end
+function menu.display() end
+RegisterEvent("qa.open_conv_menu", function() OpenMenu(menu.name, nil, nil, true) end)`,
+  });
+  const convDirectFindings = validateProjectCrossFile(convDirectNoRedraw).findings
+    .filter(f => f.code === 'md_lua.conversation_menu_without_deferred_redraw');
+  ok('conversation_menu_without_onupdate_redraw_is_flagged',
+    convDirectFindings.length === 1
+      && convDirectFindings[0].severity === 'warning'
+      && convDirectFindings[0].file === 'ui/conv_menu.lua'
+      && convDirectFindings[0].line === 2
+      && convDirectFindings[0].event === 'qa.open_conv_menu'
+      && convDirectFindings[0].sourceRef === 'qa.open_conv_menu->QA_Conv_Menu'
+      && convDirectFindings[0].target?.file === 'md/conv_direct.xml'
+      && convDirectFindings[0].detail.includes('drawn under the conversation menu - add a deferred redraw'),
+    convDirectFindings);
+
+  // Transitive <run_actions> + cross-file rawget(_G, ...) + unrelated _cardDirty redraw + reset _openRequested = false:
+  // mirrors pre-fix #110 in x4_ai_influence (must flag) vs post-fix _liftAt + liftDue (must pass).
+  const buildCrossFileConvMenuProject = (withLift: boolean) => addFile(addFile(addFile(addFile(fixtureProject(), {
+    path: 'md/conv_entry.xml', kind: 'md',
+    content: `<mdscript name="ConvEntry"><cues><cue name="StartTalk" instantiate="true">
+      <conditions><check_any><event_conversation_started conversation="default"/></check_any></conditions>
+      <actions><run_actions ref="md.ConvLib.Open_overlay"/></actions>
+    </cue></cues></mdscript>`,
+  }), {
+    path: 'md/conv_lib.xml', kind: 'md',
+    content: `<mdscript name="ConvLib"><cues>
+      <library name="Open_overlay" purpose="run_actions"><actions>
+        <raise_lua_event name="'qa.open_terminal'"/>
+      </actions></library>
+    </cues></mdscript>`,
+  }), {
+    path: 'ui/transport.lua', kind: 'lua',
+    content: `local onOpen
+onOpen = function()
+  local m = rawget(_G, "QA_Terminal_Menu")
+  if m then
+    m._openRequested = true
+    pcall(OpenMenu, m.name, nil, nil, true)
+  end
+end
+local _reg = RegisterEvent
+local function RegisterEvent(ev, fn) _reg(ev, fn) end
+RegisterEvent("qa.open_terminal", onOpen)`,
+  }), {
+    path: 'ui/terminal_menu.lua', kind: 'lua',
+    content: `QA_Terminal_Menu = { name = "QA_Terminal", active = false }
+local menu = QA_Terminal_Menu
+menu.LIFT_S = 0.3
+function menu.liftDue(now)
+  return menu._liftAt ~= nil and menu.active == true and (tonumber(now) or 0) >= menu._liftAt
+end
+function menu.onShowMenu()
+  if not menu._openRequested then return end
+  menu._openRequested = false
+  menu.active = true
+  menu.display()
+  ${withLift ? 'menu._liftAt = ((GetCurRealTime and GetCurRealTime()) or 0) + menu.LIFT_S' : ''}
+end
+function menu.display() end
+function menu.onUpdate()
+  if menu._cardDirty and menu.active then
+    menu._cardDirty = nil
+    menu.display()
+  end
+  if menu.liftDue((GetCurRealTime and GetCurRealTime()) or 0) then
+    menu._liftAt = nil
+    menu.display()
+  end
+end`,
+  });
+
+  const preLiftFindings = validateProjectCrossFile(buildCrossFileConvMenuProject(false)).findings
+    .filter(f => f.code === 'md_lua.conversation_menu_without_deferred_redraw');
+  ok('conversation_menu_with_only_unarmed_or_reset_flags_in_onupdate_is_flagged',
+    preLiftFindings.length === 1
+      && preLiftFindings[0].file === 'ui/terminal_menu.lua'
+      && preLiftFindings[0].target?.file === 'md/conv_lib.xml',
+    preLiftFindings);
+
+  const postLiftFindings = validateProjectCrossFile(buildCrossFileConvMenuProject(true)).findings
+    .filter(f => f.code === 'md_lua.conversation_menu_without_deferred_redraw');
+  ok('conversation_menu_with_open_armed_lift_deadline_is_clean',
+    postLiftFindings.length === 0,
+    postLiftFindings);
+
+  const nonConvAndChildCueProject = addFile(addFile(fixtureProject(), {
+    path: 'md/non_conv.xml', kind: 'md',
+    content: `<mdscript name="NonConv"><cues>
+      <cue name="UiOpen"><conditions><event_ui_triggered screen="'s'" control="'c'"/></conditions>
+        <actions><raise_lua_event name="'qa.ui_only_open'"/></actions>
+      </cue>
+      <cue name="DisabledConv"><conditions><event_conversation_started check="false"/></conditions>
+        <actions><raise_lua_event name="'qa.disabled_conv_open'"/></actions>
+      </cue>
+      <cue name="ParentConv"><conditions><event_conversation_started/></conditions>
+        <cues><cue name="NestedChild"><conditions><event_cue_signalled/></conditions>
+          <actions><raise_lua_event name="'qa.nested_child_open'"/></actions>
+        </cue></cues>
+      </cue>
+    </cues></mdscript>`,
+  }), {
+    path: 'ui/non_conv_menu.lua', kind: 'lua',
+    content: `local menu = { name = "QA_NonConv_Menu" }
+function menu.onShowMenu() menu.display() end
+function menu.display() end
+RegisterEvent("qa.ui_only_open", function() OpenMenu(menu.name) end)
+RegisterEvent("qa.disabled_conv_open", function() OpenMenu(menu.name) end)
+RegisterEvent("qa.nested_child_open", function() OpenMenu(menu.name) end)`,
+  });
+  const nonConvFindings = validateProjectCrossFile(nonConvAndChildCueProject).findings
+    .filter(f => f.code === 'md_lua.conversation_menu_without_deferred_redraw');
+  ok('menus_not_opened_from_active_conversation_started_are_not_flagged',
+    nonConvFindings.length === 0,
+    nonConvFindings);
 
   const passed = checks.filter(c => c.pass).length;
   return { allPassed: passed === checks.length, pass: passed === checks.length, passed, total: checks.length, checks };
