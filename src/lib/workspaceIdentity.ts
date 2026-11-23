@@ -14,13 +14,47 @@
 
 import type { ModWorkspace } from '../types';
 
+function writeStableJson(value: unknown, out: string[]): void {
+  if (value === null || typeof value !== 'object') {
+    out.push(JSON.stringify(value) ?? 'null');
+    return;
+  }
+  if (Array.isArray(value)) {
+    out.push('[');
+    for (let i = 0; i < value.length; i++) {
+      if (i > 0) out.push(',');
+      const item = value[i];
+      writeStableJson(item === undefined ? null : item, out);
+    }
+    out.push(']');
+    return;
+  }
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj);
+  if (keys.length === 0) {
+    out.push('{}');
+    return;
+  }
+  keys.sort();
+  out.push('{');
+  let wrote = false;
+  for (let i = 0; i < keys.length; i++) {
+    const k = keys[i];
+    const v = obj[k];
+    if (v === undefined) continue;
+    if (wrote) out.push(',');
+    out.push(JSON.stringify(k), ':');
+    writeStableJson(v, out);
+    wrote = true;
+  }
+  out.push('}');
+}
+
 /** Deterministic JSON: objects serialize with sorted keys; undefined drops (like JSON). */
 export function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
-  if (Array.isArray(value)) return `[${value.map(v => stableStringify(v === undefined ? null : v)).join(',')}]`;
-  const obj = value as Record<string, unknown>;
-  const keys = Object.keys(obj).filter(k => obj[k] !== undefined).sort();
-  return `{${keys.map(k => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(',')}}`;
+  const out: string[] = [];
+  writeStableJson(value, out);
+  return out.join('');
 }
 
 /** FNV-1a 32-bit ×2 over a string (same recipe as compileFidelity — proven adequate for
@@ -150,9 +184,12 @@ export function runWorkspaceIdentitySelftest(): {
   ok('null_and_undefined_hash_empty', workspaceContentHash(null) === 'empty' && workspaceContentHash(undefined) === 'empty');
   ok('snapshot_null_and_undefined_hash_empty', workspaceSnapshotHash(null) === 'empty' && workspaceSnapshotHash(undefined) === 'empty');
 
-  // stableStringify basics
+  // stableStringify basics & JSON compatibility edge cases
   ok('stable_stringify_sorts_keys', stableStringify({ b: 1, a: 2 }) === '{"a":2,"b":1}');
   ok('stable_stringify_arrays_ordered', stableStringify([1, 2]) !== stableStringify([2, 1]));
+  ok('stable_stringify_edge_values',
+    stableStringify({ z: undefined, a: [undefined, -0, Number.NaN, 'x\n"y'], b: {}, empty: [] })
+    === '{"a":[null,0,null,"x\\n\\"y"],"b":{},"empty":[]}');
 
   const passed = checks.filter(c => c.pass).length;
   const allPassed = passed === checks.length;

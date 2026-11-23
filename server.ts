@@ -1914,7 +1914,7 @@ function namespaceModAiScripts(ws: ModWorkspace, modId: string): void {
   }
 }
 
-function buildWorkspaceFileManifest(workspaceInput: unknown): {
+function buildWorkspaceFileManifest(workspaceInput: unknown, existingMdIndex?: MdStemIdentityIndex): {
   modId: string;
   files: CompiledFileManifest;
   generatedFiles: CompiledFileManifest;
@@ -1937,8 +1937,8 @@ function buildWorkspaceFileManifest(workspaceInput: unknown): {
     const rel = original.path.replace(/\\/g, '/').replace(/^\/+/, '');
     if (rel && !rel.includes('..')) originalMdByPath.set(rel, original);
   }
-  const mdIdentityIndex = originalMdByPath.size || (ws?.originalFiles || []).some((o: any) => o?.kind === 'md')
-    ? createMdStemIdentityIndex(ws)
+  const mdIdentityIndex = (originalMdByPath.size || (ws?.originalFiles || []).some((o: any) => o?.kind === 'md'))
+    ? (existingMdIndex && ws === workspaceInput ? existingMdIndex : createMdStemIdentityIndex(ws))
     : undefined;
 
   if (settings.md && hasGeneratedMdDomain(ws)) {
@@ -4632,6 +4632,7 @@ app.get("/api/agent/schema", (req, res) => {
         body: { path: "explicit mod folder, mutually exclusive with workspace", workspace: "explicit ModWorkspace, mutually exclusive with path",
           root: "optional workspace | filesystem for path requests",
           dryRun: "true to preview without writes", inspectDeployOperationId: "optional agent dry-run comparison with an earlier operation in this workspace",
+          detail: "optional compact | full (default full); compact omits the echoed workspace object on apply responses",
           expectedModId: "required on apply, from preview",
           expectedSourceHash: "required on apply, from preview", expectedArtifactHash: "required on apply, from preview",
           expectedBindingHash: "required on apply, from preview", expectedTargetFingerprint: "targetFingerprint from preview; required for agent apply with x-forge-operation-id, optional otherwise",
@@ -4648,6 +4649,7 @@ app.get("/api/agent/schema", (req, res) => {
           root: "optional workspace | filesystem for path requests; select the same root for preview and apply",
           workspace: "required when path is omitted: ModWorkspace payload",
           dryRun: "optional boolean; run the full preflight and exact deployment preview without writing",
+          detail: "optional compact | full (default full); compact omits the echoed workspace object on apply while keeping workspaceSummary, hashes, receipt, recovery, effects, doctor and validation",
           inspectDeployOperationId: "optional on dryRun:true for a deploy agent; compares current target with its earlier operation in this workspace",
           autoReimport: "optional boolean; when the stamped source is stale, re-import it from disk before continuing",
           deployFormat: "optional loose | catalog; request value wins, then persisted config, then loose default",
@@ -8364,7 +8366,7 @@ function mdRoundTripMissingElements(original: string, regenerated: string): Arra
 }
 
 /** Import a mod folder into a workspace, preserving every file losslessly. */
-function importModFolder(absDir: string, previous?: ModWorkspace, sourceFolder = absDir): { workspace: ModWorkspace; report: any } {
+function importModFolderWithIndex(absDir: string, previous?: ModWorkspace, sourceFolder = absDir): { workspace: ModWorkspace; report: any; mdIndex?: MdStemIdentityIndex } {
   const relFiles = walkFilesRelative(absDir);
   const undecodable = new Map<string, number>();
   const readSourceText = (rel: string) => {
@@ -8631,7 +8633,7 @@ function importModFolder(absDir: string, previous?: ModWorkspace, sourceFolder =
   ws.originalFiles = originalFiles;
 
   // Paths the manifest will regenerate from the parsed/modeled domains.
-  const regenPaths = new Set<string>(Object.keys(buildWorkspaceFileManifest(ws).files).map(p => p.toLowerCase()));
+  const regenPaths = new Set<string>(Object.keys(buildWorkspaceFileManifest(ws, importMdIndex).files).map(p => p.toLowerCase()));
 
   // Four-way file classification for round-trip safety awareness.
   //   editable    — parsed into a fully-modeled, graph-editable domain (the MD file)
@@ -8758,7 +8760,12 @@ function importModFolder(absDir: string, previous?: ModWorkspace, sourceFolder =
     classification,
     summary: `editable:${counts.editable || 0} generated:${counts.generated || 0} partial:${counts.partial || 0} passthrough:${counts.passthrough || 0} binary:${counts.binary || 0}`
   };
-  return { workspace: ws, report };
+  return { workspace: ws, report, mdIndex: importMdIndex };
+}
+
+function importModFolder(absDir: string, previous?: ModWorkspace, sourceFolder = absDir): { workspace: ModWorkspace; report: any } {
+  const { workspace, report } = importModFolderWithIndex(absDir, previous, sourceFolder);
+  return { workspace, report };
 }
 
 type ResolvedModFolder = { abs: string; physical?: { directory: string; canonicalKey: string } } | { error: string; status: number };
@@ -16175,10 +16182,11 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
   };
   try {
     const body = req.body;
-    const allowed = new Set(['path', 'root', 'workspace', 'dryRun', 'deployFormat', 'autoReimport', 'allowStaleOverwrite',
+    const allowed = new Set(['path', 'root', 'workspace', 'dryRun', 'detail', 'deployFormat', 'autoReimport', 'allowStaleOverwrite',
       'expectedModId', 'expectedSourceHash', 'expectedArtifactHash', 'expectedBindingHash', 'expectedTargetFingerprint',
       'projectCheckSuiteReceiptId', 'expectedProjectCheckSuiteReceiptHash', 'acceptances', 'inspectDeployOperationId']);
     if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(k => !allowed.has(k))
+      || (body.detail !== undefined && body.detail !== 'compact' && body.detail !== 'full')
       || (body.workspace !== undefined && (!body.workspace || typeof body.workspace !== 'object' || Array.isArray(body.workspace)))
       || (body.path !== undefined && (typeof body.path !== 'string' || !body.path.trim()))
       || (body.root !== undefined && (typeof body.path !== 'string' || body.workspace !== undefined
@@ -16194,6 +16202,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       || ['dryRun', 'autoReimport', 'allowStaleOverwrite'].some(k => body[k] !== undefined && typeof body[k] !== 'boolean')) {
       return res.status(400).json(failWith('config', { code: 'DEPLOY_INPUT_INVALID', error: 'Unknown or malformed deployment fields.' }));
     }
+    const detailMode: 'compact' | 'full' = body.detail === 'compact' ? 'compact' : 'full';
     const principal = deploymentPrincipal(req);
     if (body.inspectDeployOperationId !== undefined) {
       res.set('Cache-Control', 'no-store');
@@ -16254,6 +16263,8 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     let ws: any;
     let modSourceDir = '';
     let selectedSource: ExplicitDeploySource | undefined;
+    let freshImportedSource = false;
+    let freshMdIndex: MdStemIdentityIndex | undefined;
     if (reqPath) {
       const r = resolveNativeDeployFolder(reqPath, body.root);
       if ('error' in r) {
@@ -16268,7 +16279,10 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
         return res.status(409).json(failWith('import', { code: 'DEPLOY_SOURCE_CHANGED', error: detail }));
       }
       modSourceDir = selectedSource?.directory ?? r.abs;
-      ws = importModFolder(modSourceDir, undefined, r.abs).workspace;
+      const imported = importModFolderWithIndex(modSourceDir, undefined, r.abs);
+      ws = imported.workspace;
+      freshMdIndex = imported.mdIndex;
+      freshImportedSource = true;
       if (selectedSource) responseIdentity.sourceRoot = selectedSource.root;
       check('import', 'Mod source read', 'pass', `fresh from ${selectedSource ? `${selectedSource.root}:` : ''}${reqPath} (${(ws.nodes || []).length} nodes)`);
     } else if (hasWorkspace) {
@@ -16295,7 +16309,11 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     {
       let currentSourceHash: string | null = null;
       if (sourceStamp?.dir) {
-        try { if (fs.existsSync(sourceStamp.dir)) currentSourceHash = hashFolderFingerprint(fingerprintModFolder(sourceStamp.dir)); } catch { currentSourceHash = null; }
+        if (freshImportedSource && sourceStamp.hash && sameResolvedPath(sourceStamp.dir, modSourceDir)) {
+          currentSourceHash = sourceStamp.hash;
+        } else {
+          try { if (fs.existsSync(sourceStamp.dir)) currentSourceHash = hashFolderFingerprint(fingerprintModFolder(sourceStamp.dir)); } catch { currentSourceHash = null; }
+        }
       }
       const verdict = assessSourceSync(sourceStamp, currentSourceHash, req.body?.allowStaleOverwrite === true);
       if (!verdict.ok) {
@@ -16307,8 +16325,9 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
         if (req.body?.autoReimport === true && stampedDir && fs.existsSync(stampedDir)) {
           assertSelectedSource();
           try {
-            const reimported = importModFolder(stampedDir, ws, selectedSource?.folder);
+            const reimported = importModFolderWithIndex(stampedDir, ws, selectedSource?.folder);
             ws = reimported.workspace as any;
+            freshMdIndex = reimported.mdIndex;
             (ws as any).sourceStamp = {
               dir: stampedDir,
               hash: hashFolderFingerprint(fingerprintModFolder(stampedDir)),
@@ -16345,7 +16364,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     // graph), so runModDoctor's "no cue nodes" (package.readiness) false-fires even though the
     // deployed file has cues. Exclude that one code when the emitted MD actually contains cues.
     startStage('compile');
-    const compiled = buildWorkspaceFileManifest(ws);
+    const compiled = buildWorkspaceFileManifest(ws, freshMdIndex);
     const { modId, generatedCustomLuaPath, generatedFiles } = compiled;
     responseIdentity = { ...responseIdentity, modId };
     // Expected artifact hashes establish what will ship, not which agent workspace
@@ -16849,6 +16868,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       const acceptanceRequest = receiptHistoryUnavailable && canonicalReviewSource ? undefined : { method: 'POST', path: '/api/agent/deploy-verify',
         body: { ...(selectedSource ? { path: reqPath, root: selectedSource.root }
           : body.path ? { path: body.path } : { workspace: body.workspace }), deployFormat,
+          ...(body.detail !== undefined ? { detail: body.detail } : {}),
           ...(body.autoReimport !== undefined ? { autoReimport: body.autoReimport } : {}),
           dryRun: false, expectedModId: evidence.modId, expectedSourceHash: evidence.sourceHash,
           expectedArtifactHash: artifactHash, expectedBindingHash: decision.binding.hash,
@@ -16930,6 +16950,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
         ok: true,
         dryRun: true,
         stage: 'preview',
+        ...(detailMode === 'compact' ? { detail: 'compact' } : {}),
         deployment: deploymentFidelity(),
         ...responseIdentity,
         ...(previousOperation ? { previousOperation } : {}),
@@ -16999,9 +17020,8 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     writeAttempted = true;
     if (modWorkspacePath) {
       const stagingRoot = path.join(modWorkspacePath, '.forge-builds', 'loose');
-      let stagingCheck = 0;
       stagingPath = compileWorkspaceToFolder(ws, stagingRoot, 'store', true, 'loose', {
-        beforeActivate: () => { stagingCheck++; assertWriteAuthority(stagingCheck === 1); },
+        beforeActivate: () => { assertWriteAuthority(true); },
       }, snapshot);
     }
     let stagedRecovery: DeploymentRecoveryRecord | undefined;
@@ -17273,7 +17293,17 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       } : {}),
       deployment: deploymentFidelity(),
       ...(ok ? { deployRecord: deployReceipt, acceptanceRecords: approvalRecords } : {}),
-      workspace: ws,
+      ...(detailMode === 'compact' ? {
+        detail: 'compact',
+        workspaceSummary: {
+          id: ws.id,
+          name: ws.name,
+          modId,
+          contentId: manifestId,
+          nodeCount: Array.isArray(ws.nodes) ? ws.nodes.length : 0,
+          linkCount: Array.isArray(ws.links) ? ws.links.length : 0,
+        },
+      } : { workspace: ws }),
       ...(successfulDeploy ? { lastDeploy: successfulDeploy, deployedFingerprint } : {}),
       ...(ok ? { effect, ...(effectReport ? { effectReport } : {}) } : {}),
       ...(deploymentRecovery ? { recovery: {

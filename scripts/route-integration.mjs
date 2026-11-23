@@ -4626,7 +4626,8 @@ async function main() {
       reuseApply1.status === 200 && reuseApply1.json?.ok === true
       && reuseApply1.json?.timings?.validationStagesMs?.readiness === 0
       && reuseApply1.json?.timings?.validationStagesMs?.project === 0
-      && reuseApply1.json?.timings?.sourceRechecks?.count === 4
+      && reuseApply1.json?.timings?.sourceRechecks?.count === 3
+      && reuseApply1.json?.workspace && Array.isArray(reuseApply1.json.workspace.nodes)
       && reuseApply1.json?.modId === reusePreview1.json?.modId
       && reuseApply1.json?.sourceHash === reusePreview1.json?.sourceHash
       && reuseApply1.json?.artifactHash === reusePreview1.json?.artifactHash
@@ -4804,6 +4805,46 @@ async function main() {
     } finally {
       fs.rmSync(doctorAcceptDupDir, { recursive: true, force: true });
     }
+
+    // Unit 5 (#97/#48): compact detail mode omits bulky workspace echo while preserving identity/receipts & propagating detail in acceptances.
+    const compactBadDetail = await reuseReq('/api/agent/deploy-verify', {
+      root: 'workspace', path: 'preview_reuse_mod', dryRun: true, detail: 'bogus',
+    });
+    const compactAcceptancePreview = await reuseReq('/api/agent/deploy-verify', {
+      root: 'workspace', path: 'preview_reuse_mod', dryRun: true, detail: 'compact',
+    });
+    fs.rmSync(path.join(reuseMod, 'ui.xml'), { force: true });
+    fs.rmSync(path.join(reuseMod, 'ui'), { recursive: true, force: true });
+    const compactPreview = await reuseReq('/api/agent/deploy-verify', {
+      root: 'workspace', path: 'preview_reuse_mod', dryRun: true, detail: 'compact',
+    });
+    const compactApply = compactPreview.json?.ok ? await reuseReq('/api/agent/deploy-verify', {
+      root: 'workspace', path: 'preview_reuse_mod', dryRun: false, detail: 'compact',
+      ...deployIdentity(compactPreview.json || {}),
+      expectedTargetFingerprint: compactPreview.json?.targetFingerprint,
+    }, { operationId: 'forge_op_' + crypto.randomBytes(16).toString('hex') }) : null;
+    ok('deploy_compact_detail_omits_workspace_echo_and_preserves_identity',
+      compactBadDetail.status === 400 && compactBadDetail.json?.code === 'DEPLOY_INPUT_INVALID'
+      && compactAcceptancePreview.json?.code === 'UNACCEPTED_MOD_FINDINGS'
+      && compactAcceptancePreview.json?.acceptanceRequest?.body?.detail === 'compact'
+      && compactPreview.status === 200 && compactPreview.json?.detail === 'compact'
+      && compactApply?.status === 200 && compactApply.json?.ok === true
+      && compactApply.json?.detail === 'compact'
+      && !('workspace' in (compactApply.json || {}))
+      && compactApply.json?.workspaceSummary?.modId === 'preview_reuse_mod'
+      && (compactApply.json?.workspaceSummary?.nodeCount || 0) >= 1
+      && compactApply.json?.modId === compactPreview.json?.modId
+      && compactApply.json?.sourceHash === compactPreview.json?.sourceHash
+      && compactApply.json?.artifactHash === compactPreview.json?.artifactHash
+      && compactApply.json?.bindingHash === compactPreview.json?.bindingHash
+      && typeof compactApply.json?.deployedFingerprint === 'string'
+      && compactApply.json?.deployRecord?.status === 'committed',
+      JSON.stringify({
+        badStatus: compactBadDetail.status, badCode: compactBadDetail.json?.code,
+        acceptDetail: compactAcceptancePreview.json?.acceptanceRequest?.body?.detail,
+        applyStatus: compactApply?.status, hasWorkspace: 'workspace' in (compactApply?.json || {}),
+        summary: compactApply?.json?.workspaceSummary,
+      }));
   } finally {
     fs.rmSync(reuseMod, { recursive: true, force: true });
     fs.rmSync(reuseTarget, { recursive: true, force: true });

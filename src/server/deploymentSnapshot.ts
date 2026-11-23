@@ -111,7 +111,11 @@ export function captureDeploymentSnapshot(plan: ArtifactPlan, format: 'loose' | 
       assertOwnedDirectory(payload, payloadStamp);
       assertOwnedDirectory(root, rootStamp);
     };
-    assertIntegrity();
+    // materializeArtifact(..., 'per-file') already verified every entry hash on copy;
+    // keep lightweight root/payload identity here and run full assertIntegrity() below after manifest reads.
+    stage?.assertOwned();
+    assertOwnedDirectory(root, rootStamp);
+    assertOwnedDirectory(payload, payloadStamp);
     const files: ProjectFile[] = [];
     const skipped: Array<{ path: string; reason: string }> = [];
     let textBytes = 0;
