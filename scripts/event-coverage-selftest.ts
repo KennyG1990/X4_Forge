@@ -209,6 +209,72 @@ check('protected-emitter-proves-only-an-owned-exact-indexed-write', () => {
   }
 });
 
+
+const returnedOrders = `OrderTools = OrderTools or {}
+function OrderTools.Build(rows)
+  local p = { n = 0 }
+  for _, row in ipairs(rows) do
+    p.n = p.n + 1
+    local alias = p
+    alias["po" .. alias.n] = row.order
+  end
+  return p
+end
+local function send(rows)
+  local p = OrderTools.Build(rows)
+  if p.n > 0 then
+    p.flag = true
+    pcall(function() AddUITriggeredEvent("ForgeLab", "on", p) end)
+  end
+end`;
+
+check('protected-callback-sends-the-indexed-builder-return', () => {
+  const result = finiteCase(returnedOrders, [['ForgeLab', 'on']], true);
+  assert.equal(result.mdLua.emitCoverage.exact, 1);
+  assert.deepEqual(result.findings.filter(finding => finding.code.startsWith('md_lua.payload_')), []);
+});
+
+check('returned-table-proof-refuses-unresolved-ownership-and-clears', () => {
+  for (const variant of [
+    returnedOrders + '\nOrderTools.Build = replacement',
+    returnedOrders + '\nOrderTools = {}',
+    returnedOrders.replace('  local p = OrderTools.Build', '  local OrderTools = foreign; local p = OrderTools.Build'),
+    returnedOrders.replace('  return p', '  return {}, p'),
+    returnedOrders.replace('  return p', '  unknown(p); return p'),
+    returnedOrders.replace('  return p', '  p["po" .. p.n] = nil; return p'),
+    returnedOrders.replace('    p.flag = true', '    p.po1 = nil'),
+    returnedOrders.replace('    p.flag = true', '    p[unknown] = nil'),
+    returnedOrders.replace('    p.flag = true', '    mutate(p)'),
+    returnedOrders.replace('  local p = OrderTools.Build', '  local pcall = foreign; local p = OrderTools.Build'),
+    returnedOrders.replace('function() AddUITriggeredEvent', 'function() local p = {}; AddUITriggeredEvent'),
+    returnedOrders.replace('    alias["po" .. alias.n] = row.order', '    if false then alias["po" .. alias.n] = row.order end'),
+    returnedOrders.replace('  for _, row in ipairs(rows) do', '  while false do'),
+    returnedOrders.replace('  for _, row in ipairs(rows) do', '  for i = 2, 1 do'),
+  ]) {
+    const findings = finiteCase(variant, [['ForgeLab', 'on']], true).findings;
+    assert.ok(findings.some(finding => finding.code === 'md_lua.payload_writer_unverified'), variant);
+  }
+  const input = project(returnedOrders);
+  const reader = input.files.find(file => file.path === 'md/forge_regression_lab.xml')!;
+  reader.content = reader.content!.replace('</cues>', `<cue name="Returned"><conditions>
+    <event_ui_triggered screen="'ForgeLab'" control="'on'"/>
+  </conditions><actions><set_value name="$order" exact="event.param3.{'$po' + $si}"/></actions></cue></cues>`);
+  const full = runProjectValidation(input);
+  assert.ok(!flattenProjectValidation(full).some(finding => finding.code.startsWith('md_lua.payload_')));
+  assert.ok(!full.evidence?.coverage.gaps.some(gap => gap.check === 'md_lua.payload_writer_unverified'));
+  input.files.push({ path: 'ui/initialize_builder.lua', kind: 'lua', content: 'local alias = rawget(_G, "OrderTools") or {}; OrderTools = alias' });
+  assert.ok(!validateProjectCrossFile(input).findings.some(finding => finding.code === 'md_lua.payload_writer_unverified'));
+  for (const content of ['local alias = OrderTools; alias["Build"] = replacement', 'rawget = replacement',
+    'local alias = rawget(_G, "OrderTools") or {}; alias[dynamicField] = replacement', 'rawset(_G, "OrderTools", replacement)',
+    'AddUITriggeredEvent = decorate(AddUITriggeredEvent)', 'function AddUITriggeredEvent() end', 'function pcall() end']) {
+    const changed = { ...input, files: [...input.files, { path: 'ui/replace_builder.lua', kind: 'lua' as const, content }] };
+    const finding = validateProjectCrossFile(changed).findings.find(item => item.code === 'md_lua.payload_writer_unverified');
+    assert.ok(finding, content);
+    assert.match(finding.detail, /A returned table is passed to an authored callback/);
+    assert.match(finding.detail, /AddUITriggeredEvent|^function pcall/.test(content) ? /event forwarding/ : /the builder binding/);
+  }
+});
+
 const localIndexPayloadHelper = `local function build()
 local p = { n = 1 }
 local i = p.n

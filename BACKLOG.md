@@ -233,7 +233,7 @@ Dev checks faction literals at direct engine-shaped Lua calls and owner comparis
 
 ### Indexed Lua payload writer evidence `in_progress` (GitHub #71)
 
-Dev accepts direct indexed assignments on the table sent to the matching event and rejects a read-only lookup or a writer bound only to another event. Builder, shadow and captured-table cases remain eligible with an explicit warning. The exact direct fixture committed its scratch bytes and stale and read-only bindings refused without writes. Forge now also finds direct engine calls passed through stock protected calls and can link an owned local table to an exact recipient. The historical builder and callback flow remains open. [Isolated evidence](docs/plans/2026-11-09-indexed-payload-writer-evidence.md). Installed and public delivery remain open.
+Dev accepts direct indexed assignments on the table sent to the matching event and rejects a read-only lookup or a writer bound only to another event. Builder, shadow and captured-table cases remain eligible with an explicit warning. The exact direct fixture committed its scratch bytes and stale and read-only bindings refused without writes. Forge now also finds direct engine calls passed through stock protected calls and can link an owned local table to an exact recipient. The historical replay now traces 23 keys to the returned table and callback. Dynamic namespace and emitter wrappers still leave end-to-end verification open. [Isolated evidence](docs/plans/2026-11-09-indexed-payload-writer-evidence.md). Installed and public delivery remain open.
 
 ### Canonical AI order headers `in_progress` (GitHub #63)
 

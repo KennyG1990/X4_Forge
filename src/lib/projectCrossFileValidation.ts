@@ -229,13 +229,14 @@ interface LuaAstNode {
 
 function walkLuaAst(
   node: unknown,
-  visit: (node: LuaAstNode, scope: LuaAstNode | undefined, branches: readonly LuaAstNode[]) => void,
+  visit: (node: LuaAstNode, scope: LuaAstNode | undefined, branches: readonly LuaAstNode[], parent?: LuaAstNode) => void,
   scope?: LuaAstNode,
   branches: readonly LuaAstNode[] = [],
+  parent?: LuaAstNode,
 ): void {
   if (!node || typeof node !== 'object') return;
   const ast = node as LuaAstNode;
-  visit(ast, scope, branches);
+  visit(ast, scope, branches, parent);
   if (ast.type === 'FunctionDeclaration') {
     scope = ast;
     branches = [];
@@ -244,8 +245,8 @@ function walkLuaAst(
   }
   for (const [key, value] of Object.entries(node)) {
     if (key === 'loc' || key === 'range' || key === 'comments' || key === 'tokens' || key === 'globals') continue;
-    if (Array.isArray(value)) value.forEach(item => walkLuaAst(item, visit, scope, branches));
-    else if (value && typeof value === 'object') walkLuaAst(value, visit, scope, branches);
+    if (Array.isArray(value)) value.forEach(item => walkLuaAst(item, visit, scope, branches, ast));
+    else if (value && typeof value === 'object') walkLuaAst(value, visit, scope, branches, ast);
   }
 }
 
@@ -450,7 +451,10 @@ function parseLuaRegisteredEvents(content: string, file: string): LuaRegistratio
 }
 
 interface PayloadReadSite extends ValidationSourceLocation { destination: string; branch?: string; event?: [string, string] }
-interface PayloadWriteSite extends ValidationSourceLocation { key: string; table: string; events: string[]; recipientEvents: string[]; recipientUnverified: boolean; candidateOnly: boolean }
+interface PayloadWriteSite extends ValidationSourceLocation {
+  key: string; table: string; events: string[]; recipientEvents: string[]; recipientUnverified: boolean; candidateOnly: boolean;
+  returned?: LuaReturnedPayloadLink[];
+}
 
 function payloadReadEvent(element: XmlElement): [string, string] | undefined {
   for (let owner = element.parentElement; owner; owner = owner.parentElement) {
@@ -520,7 +524,8 @@ function validateIndexedPayloadContract(mdFiles: ExtensionProject['files'], luaW
   const findings: ProjectCrossFileFinding[] = [];
   const unavailable = new Map<string, {
     event: [string, string]; reader: PayloadReadSite; writer?: PayloadWriteSite;
-    localIndexOnlyCount: number; keys: Set<string>; readerPaths: Set<string>; writerPaths: Set<string>;
+    localIndexOnlyCount: number; returnedCount: number; bindingUnverified: boolean; forwardingUnverified: boolean;
+    keys: Set<string>; readerPaths: Set<string>; writerPaths: Set<string>;
   }>();
   for (const key of new Set([...reads.keys(), ...writes.keys()])) {
     const read = reads.get(key) || { global: [], verb: [] };
@@ -547,13 +552,19 @@ function validateIndexedPayloadContract(mdFiles: ExtensionProject['files'], luaW
         const matchedRecipient = candidates.find(candidate => candidate.recipientEvents.includes(identity));
         let group = unavailable.get(identity);
         if (!group) {
-          group = { event: site.event, reader: site, writer: matchedRecipient, localIndexOnlyCount: 0,
-            keys: new Set(), readerPaths: new Set(), writerPaths: new Set() };
+          group = { event: site.event, reader: site, writer: matchedRecipient, localIndexOnlyCount: 0, returnedCount: 0,
+            bindingUnverified: false, forwardingUnverified: false, keys: new Set(), readerPaths: new Set(), writerPaths: new Set() };
           unavailable.set(identity, group);
         } else if (matchedRecipient && !group.writer) {
           group.writer = matchedRecipient;
         }
         if (candidates.every(candidate => candidate.candidateOnly)) group.localIndexOnlyCount++;
+        const returned = candidates.flatMap(candidate => candidate.returned?.filter(link => link.identity === identity) ?? []);
+        if (returned.length) {
+          group.returnedCount++;
+          group.bindingUnverified ||= returned.some(link => link.bindingUnverified);
+          group.forwardingUnverified ||= returned.some(link => link.forwardingUnverified);
+        }
         group.keys.add(key);
         for (const file of paths) group.readerPaths.add(file);
         for (const candidate of candidates) group.writerPaths.add(candidate.file);
@@ -580,12 +591,20 @@ function validateIndexedPayloadContract(mdFiles: ExtensionProject['files'], luaW
       });
     }
   }
-  for (const [identity, { event, reader, writer, localIndexOnlyCount, keys, readerPaths, writerPaths }] of unavailable) {
+  for (const [identity, group] of unavailable) {
+    const { event, reader, writer, localIndexOnlyCount, returnedCount, keys, readerPaths, writerPaths } = group;
     const sortedKeys = [...keys].sort();
     const sample = sortedKeys.slice(0, 8).map(key => key.length > 48 ? `${key.slice(0, 48)}…` : key);
     const remainder = keys.size > sample.length ? ` and ${keys.size - sample.length} more` : '';
     const indexDetail = localIndexOnlyCount
       ? ` Only local-index assignments were found for ${keys.size === 1 ? 'this key' : `${localIndexOnlyCount} of these ${keys.size} keys`}. Forge could not verify the index values.`
+      : '';
+    const unresolved = [
+      group.bindingUnverified ? 'the builder binding' : '',
+      group.forwardingUnverified ? 'event forwarding' : '',
+    ].filter(Boolean).join(' and ');
+    const returnedDetail = returnedCount && unresolved
+      ? ` A returned table is passed to an authored callback for ${returnedCount} of these ${keys.size} ${keys.size === 1 ? 'key' : 'keys'}. Cross-file Lua prevents Forge from verifying ${unresolved}.`
       : '';
     findings.push({
       code: 'md_lua.payload_writer_unverified', severity: 'info', event: event.join('.'), sourceRef: `event_ui_triggered:${identity}`,
@@ -594,7 +613,7 @@ function validateIndexedPayloadContract(mdFiles: ExtensionProject['files'], luaW
       ...(sortedKeys.length <= 64 && readerPaths.size + writerPaths.size <= 64
         ? { payloadWriterScope: { event, keys: sortedKeys, readerPaths: [...readerPaths].sort(), writerPaths: [...writerPaths].sort() } }
         : {}),
-      detail: `Forge could not verify indexed Lua writers for MD screen ${JSON.stringify(event[0])}, control ${JSON.stringify(event[1])}. Indexed keys (${keys.size}): ${sample.join(', ')}${remainder}.${indexDetail}`,
+      detail: `Forge could not verify indexed Lua writers for MD screen ${JSON.stringify(event[0])}, control ${JSON.stringify(event[1])}. Indexed keys (${keys.size}): ${sample.join(', ')}${remainder}.${indexDetail}${returnedDetail}`,
     });
   }
   return {
@@ -637,6 +656,7 @@ function indexedPayloadTarget(variable: LuaAstNode, source: LuaAnalysisSource): 
 interface LuaPayloadPosition { scope?: LuaAstNode; branches: readonly LuaAstNode[]; at: number }
 interface LuaPayloadAssignment extends LuaPayloadPosition {
   table: string; key: string; local: boolean; candidateOnly: boolean; localTableUses: number; location?: LuaAstNode['loc']; directValueBlock?: LuaAstNode;
+  target: LuaAstNode;
 }
 interface LuaPayloadEmit extends LuaPayloadPosition {
   identities?: string[]; needsUnaliasedTable?: boolean; directBlock?: LuaAstNode;
@@ -715,8 +735,232 @@ function unaliasedLuaPayloads(
   return new Set([...remainingUses].filter(([, remaining]) => remaining === 0).map(([table]) => table));
 }
 
+
+interface LuaProtectedPayloadSend {
+  call: LuaAstNode;
+  caller?: LuaAstNode;
+  table: LuaAstNode;
+  identity: string;
+}
+
+interface LuaReturnedPayloadLink {
+  root: string; member: string; identity: string;
+  bindingUnverified?: boolean; forwardingUnverified?: boolean;
+}
+
+function luaMemberName(node: LuaAstNode | undefined): string | undefined {
+  if (node?.type === 'MemberExpression') return luaIdentifier(node.identifier) ?? undefined;
+  if (node?.type === 'IndexExpression' && typeof node.index?.value === 'string') return node.index.value;
+  return undefined;
+}
+
+function globalLuaMember(node: LuaAstNode | undefined): { root: string; member: string } | undefined {
+  if (node?.indexer !== '.' || node.base?.isLocal !== false) return undefined;
+  const root = luaIdentifier(node.base);
+  const member = luaMemberName(node);
+  return root && member ? { root, member } : undefined;
+}
+
+function scanLuaScope(root: LuaAstNode) {
+  const nodes: LuaAstNode[] = [];
+  const parents = new Map<LuaAstNode, LuaAstNode>();
+  walkLuaAst(root, (node, _scope, _branches, parent) => {
+    nodes.push(node);
+    if (parent) parents.set(node, parent);
+  });
+  return { nodes, parents };
+}
+
+function luaContains(outer: LuaAstNode | undefined, node: LuaAstNode): boolean {
+  return !!outer?.range && !!node.range && outer.range[0] <= node.range[0] && node.range[1] <= outer.range[1];
+}
+
+function luaPossibleTableWrite(node: LuaAstNode, parents: ReadonlyMap<LuaAstNode, LuaAstNode>): boolean {
+  for (let child = node, parent = parents.get(child); parent; child = parent, parent = parents.get(child)) {
+    const condition = parent.condition as LuaAstNode | undefined;
+    if (['IfClause', 'ElseifClause', 'WhileStatement'].includes(parent.type ?? '') && literalLuaTruthiness(condition) === false) return false;
+    if (parent.type === 'ForNumericStatement') {
+      const from = parent.start as LuaAstNode | undefined;
+      const to = parent.end as LuaAstNode | undefined;
+      const step = parent.step as LuaAstNode | undefined;
+      if (from?.type === 'NumericLiteral' && to?.type === 'NumericLiteral' && (!step || step.type === 'NumericLiteral')
+        && typeof from.value === 'number' && typeof to.value === 'number' && (!step || typeof step.value === 'number')) {
+        const delta = typeof step?.value === 'number' ? step.value : 1;
+        if ((delta > 0 && from.value > to.value) || (delta < 0 && from.value < to.value)) return false;
+      }
+    }
+    if (parent.type === 'IfStatement') {
+      for (const clause of parent.clauses as LuaAstNode[]) {
+        if (clause === child) break;
+        if (literalLuaTruthiness(clause.condition as LuaAstNode) === true) return false;
+      }
+    }
+  }
+  return true;
+}
+
+function inspectLuaTable(
+  scan: ReturnType<typeof scanLuaScope>,
+  declaration: LuaAstNode,
+  lastUse: LuaAstNode,
+  source: LuaAnalysisSource,
+  allowAliases: boolean,
+) {
+  const { nodes, parents } = scan;
+  const root = declaration.variables?.[0];
+  const name = luaIdentifier(root);
+  const block = parents.get(declaration);
+  if (!name || declaration.variables?.length !== 1 || declaration.init?.length !== 1 || !block?.body?.includes(declaration)) return;
+  const visible = (declaration: LuaAstNode, node: LuaAstNode) =>
+    node.range![0] >= declaration.range![1] && luaContains(parents.get(declaration), node);
+  const bindings = new Map<string, LuaAstNode>([[name, declaration]]);
+  const allowed = new Set([root, lastUse]);
+  if (allowAliases) {
+    for (const node of nodes) {
+      if (node.type !== 'LocalStatement' || node.variables?.length !== 1 || node.init?.length !== 1 || !visible(declaration, node)) continue;
+      const alias = node.variables[0];
+      const init = node.init[0];
+      const aliasName = luaIdentifier(alias);
+      if (!aliasName || init.isLocal !== true || luaIdentifier(init) !== name) continue;
+      if (bindings.has(aliasName) || !parents.get(node)?.body?.includes(node)) return;
+      bindings.set(aliasName, node);
+      allowed.add(alias);
+      allowed.add(init);
+    }
+  }
+  const indexed = new Map<LuaAstNode, string>();
+  const cleared = new Set<string>();
+  const fields = new Set<string>();
+  for (const node of nodes) {
+    if (!luaContains(block, node) || node.range![0] < declaration.range![0]) continue;
+    if (node.type === 'GotoStatement') return;
+    const binding = node.isLocal === true ? bindings.get(luaIdentifier(node) ?? '') : undefined;
+    if (!binding || allowed.has(node)) continue;
+    if (!visible(binding, node)) return;
+    const access = parents.get(node);
+    if (access?.base !== node || (access.type !== 'MemberExpression' && access.type !== 'IndexExpression') || access.indexer === ':') return;
+    for (let parent = parents.get(access); parent && parent !== block; parent = parents.get(parent)) {
+      if (parent.type === 'FunctionDeclaration') return;
+    }
+    const statement = parents.get(access);
+    if (statement?.type !== 'AssignmentStatement' && statement?.type !== 'FunctionDeclaration') continue;
+    const position = statement.variables?.indexOf(access) ?? -1;
+    if (position < 0 && statement.identifier !== access) continue;
+    const target = indexedPayloadTarget(access, source);
+    if (target) {
+      const value = statement.init?.[position];
+      if (!target.candidateOnly && value && value.type !== 'NilLiteral' && luaPossibleTableWrite(statement, parents)) {
+        indexed.set(access, target.key);
+      } else {
+        cleared.add(target.key);
+      }
+    } else {
+      const field = luaMemberName(access);
+      if (field === undefined) return;
+      fields.add(field);
+    }
+  }
+  return { indexed, cleared, fields };
+}
+
+function luaTableChangesKey(fields: ReadonlySet<string>, key: string): boolean {
+  for (const field of fields) if (field.startsWith(key) && /^\d+$/.test(field.slice(key.length))) return true;
+  return false;
+}
+
+function linkReturnedLuaPayloads(
+  ast: LuaAstNode,
+  sends: readonly LuaProtectedPayloadSend[],
+  initializers: ReadonlyMap<LuaAstNode | undefined, readonly LuaAstNode[]>,
+  source: LuaAnalysisSource,
+) {
+  const links = new Map<LuaAstNode, LuaReturnedPayloadLink[]>();
+  if (!sends.length) return links;
+  const definitions = new Map<string, LuaAstNode>();
+  for (const statement of ast.body ?? []) {
+    const builder = statement.type === 'FunctionDeclaration' ? globalLuaMember(statement.identifier) : undefined;
+    const first = statement.body?.[0];
+    const last = statement.body?.at(-1);
+    if (builder && first?.type === 'LocalStatement' && first.init?.[0]?.type === 'TableConstructorExpression'
+      && last?.type === 'ReturnStatement' && last.arguments?.length === 1 && last.arguments[0].isLocal === true
+      && luaIdentifier(last.arguments[0]) === luaIdentifier(first.variables?.[0])) {
+      definitions.set(builder.root + '.' + builder.member, statement);
+    }
+  }
+  if (!definitions.size) return links;
+  const scans = new Map<LuaAstNode, ReturnType<typeof scanLuaScope>>();
+  const scan = (node: LuaAstNode) => {
+    let result = scans.get(node);
+    if (!result) scans.set(node, result = scanLuaScope(node));
+    return result;
+  };
+  const builders = new Map<LuaAstNode, ReturnType<typeof inspectLuaTable>>();
+  for (const send of sends) {
+    const name = luaIdentifier(send.table);
+    const potential = initializers.get(send.caller)?.some(node => {
+      if (node.range![1] >= send.call.range![0] || luaIdentifier(node.variables?.[0]) !== name) return false;
+      const member = globalLuaMember(node.init?.[0]?.base);
+      return member && definitions.has(member.root + '.' + member.member);
+    });
+    if (!potential) continue;
+    const context = scan(send.caller ?? ast);
+    const locals = context.nodes.filter(node => node.type === 'LocalStatement'
+      && node.range![1] < send.call.range![0] && luaContains(context.parents.get(node), send.call)
+      && node.variables?.some(variable => luaIdentifier(variable) === name));
+    if (locals.length !== 1) continue;
+    const declaration = locals[0];
+    const call = declaration.init?.[0];
+    const member = call?.type === 'CallExpression' ? globalLuaMember(call.base) : undefined;
+    if (!member) continue;
+    const builder = definitions.get(member.root + '.' + member.member);
+    if (!builder || builder.range![1] >= call!.range![0]) continue;
+    const receiver = inspectLuaTable(context, declaration, send.table, source, false);
+    if (!receiver || receiver.indexed.size || receiver.cleared.size || receiver.fields.has('n')) continue;
+    if (!builders.has(builder)) {
+      const origin = scan(builder);
+      const first = builder.body?.[0];
+      const returns = origin.nodes.filter(node => node.type === 'ReturnStatement');
+      const out = returns[0]?.arguments;
+      const owner = returns.length === 1 && returns[0] === builder.body?.at(-1) && out?.length === 1
+        && out[0].isLocal === true && luaIdentifier(out[0]) === luaIdentifier(first?.variables?.[0]);
+      builders.set(builder, first?.type === 'LocalStatement' && first.init?.[0]?.type === 'TableConstructorExpression' && owner
+        ? inspectLuaTable(origin, first, out![0], source, true) : undefined);
+    }
+    const built = builders.get(builder);
+    if (!built) continue;
+    for (const [site, key] of built.indexed) {
+      if (built.cleared.has(key) || luaTableChangesKey(built.fields, key) || luaTableChangesKey(receiver.fields, key)) continue;
+      const known = links.get(site) ?? [];
+      known.push({ ...member, identity: send.identity });
+      links.set(site, known);
+    }
+  }
+  return links;
+}
+
+interface LuaBuilderMutationFacts {
+  members: Map<string, number>;
+  replacedRoots: Set<string>;
+  opaqueGlobals: boolean;
+}
+
+function readLuaNamespace(node: LuaAstNode | undefined, rawgetAvailable: boolean): string | undefined {
+  if (node?.isLocal === false && node.type === 'Identifier') return luaIdentifier(node) ?? undefined;
+  if (rawgetAvailable && node?.type === 'CallExpression' && node.base?.isLocal === false
+    && luaIdentifier(node.base) === 'rawget' && node.arguments?.length === 2 && isLuaGlobalEnvironment(node.arguments[0])
+    && typeof node.arguments[1].value === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(node.arguments[1].value)) {
+    return node.arguments[1].value;
+  }
+  return undefined;
+}
+
+function preserveLuaNamespace(root: string, value: LuaAstNode | undefined, rawgetAvailable: boolean): boolean {
+  return value?.type === 'LogicalExpression' && value.operator === 'or' && value.right?.type === 'TableConstructorExpression'
+    && readLuaNamespace(value.left, rawgetAvailable) === root;
+}
+
 function parseLuaUiEmits(content: string, file: string): {
-  events: ProjectUiEventRef[]; coverage: LuaEmitCoverage; payloadWrites: PayloadWriteSite[]; hasProtectedCalls: boolean;
+  events: ProjectUiEventRef[]; coverage: LuaEmitCoverage; payloadWrites: PayloadWriteSite[]; hasProtectedCalls: boolean; mutations: LuaBuilderMutationFacts;
 } {
   const out: ProjectUiEventRef[] = [];
   const coverage: LuaEmitCoverage = { file, parsed: false, exact: 0, prefix: 0, unresolved: 0, reasons: [] };
@@ -726,6 +970,7 @@ function parseLuaUiEmits(content: string, file: string): {
   const source = buildLuaAnalysisSource(content || '');
   let environmentRebound = false;
   let hasProtectedCalls = false;
+  const mutations: LuaBuilderMutationFacts = { members: new Map(), replacedRoots: new Set(), opaqueGlobals: false };
   let ast: unknown;
   try {
     ast = parse(source.content, {
@@ -733,12 +978,14 @@ function parseLuaUiEmits(content: string, file: string): {
       onLocalDeclaration(name: string) { if (name === '_ENV') environmentRebound = true; },
     });
   } catch {
-    return { events: out, coverage, payloadWrites: [], hasProtectedCalls }; // Registration analysis reports the parse failure for this file.
+    return { events: out, coverage, payloadWrites: [], hasProtectedCalls, mutations }; // Registration analysis reports the parse failure for this file.
   }
   coverage.parsed = true;
   // Only immutable, unambiguous local constants may supply event arguments.
   // Shadowing or another assignment makes the name unknown, not a guessed value.
-  const assignments = new Map<string, { count: number; init: LuaAstNode; local: boolean }>();
+  const assignments = new Map<string, { count: number; init: LuaAstNode; local: boolean; block?: LuaAstNode }>();
+  const rootWrites: { root: string; statement: LuaAstNode; value?: LuaAstNode; parent?: LuaAstNode }[] = [];
+  const uncertainObjects: LuaAstNode[] = [];
   const shadowed = new Set<string>();
   const reboundGlobals = new Set<string>();
   let dynamicGlobalWrite = false;
@@ -750,11 +997,23 @@ function parseLuaUiEmits(content: string, file: string): {
     if (typeof member === 'string') reboundGlobals.add(member);
     else dynamicGlobalWrite = true;
   };
-  walkLuaAst(ast, node => {
+  const recordMember = (name: string) => mutations.members.set(name, (mutations.members.get(name) ?? 0) + 1);
+  const recordTarget = (node: LuaAstNode | undefined) => {
+    if (node?.type !== 'MemberExpression' && node?.type !== 'IndexExpression') return;
+    const field = luaMemberName(node);
+    if (field !== undefined) recordMember(field);
+    else if (node.base) uncertainObjects.push(node.base);
+    if (isLuaGlobalEnvironment(node.base) && field !== undefined) mutations.replacedRoots.add(field);
+  };
+  walkLuaAst(ast, (node, _scope, _branches, parent) => {
     if (node.type === 'FunctionDeclaration') {
       trackGlobalWrite(node.identifier);
+      recordTarget(node.identifier);
       const functionName = luaIdentifier(node.identifier);
-      if (functionName) shadowed.add(functionName);
+      if (functionName) {
+        shadowed.add(functionName);
+        if (node.identifier?.isLocal === false) mutations.replacedRoots.add(functionName);
+      }
       for (const parameter of node.parameters || []) {
         const name = luaIdentifier(parameter);
         if (name) shadowed.add(name);
@@ -769,6 +1028,15 @@ function parseLuaUiEmits(content: string, file: string): {
     if (node.type === 'CallExpression' && node.base?.isLocal === false) {
       const callee = luaIdentifier(node.base);
       if (callee === 'setfenv') changesFunctionEnvironment = true;
+      const args = callee === 'pcall' && node.arguments?.[0]?.isLocal === false && luaIdentifier(node.arguments[0]) === 'rawset'
+        ? node.arguments.slice(1) : callee === 'rawset' ? node.arguments : undefined;
+      if (args?.[0]) {
+        if (typeof args[1]?.value === 'string') {
+          recordMember(args[1].value);
+          if (isLuaGlobalEnvironment(args[0])) mutations.replacedRoots.add(args[1].value);
+        } else uncertainObjects.push(args[0]);
+      }
+      if (callee === 'setmetatable' && node.arguments?.[0]) uncertainObjects.push(node.arguments[0]);
       if (callee === 'rawset' && isLuaGlobalEnvironment(node.arguments?.[0])) {
         const member = node.arguments?.[1]?.value;
         if (typeof member === 'string') reboundGlobals.add(member);
@@ -778,12 +1046,43 @@ function parseLuaUiEmits(content: string, file: string): {
     if (node.type !== 'LocalStatement' && node.type !== 'AssignmentStatement') return;
     (node.variables || []).forEach((variable, index) => {
       trackGlobalWrite(variable);
+      recordTarget(variable);
       const name = luaIdentifier(variable);
       if (!name) return;
-      assignments.set(name, { count: (assignments.get(name)?.count || 0) + 1, init: (node.init || [])[index], local: node.type === 'LocalStatement' });
+      const init = node.init?.[index];
+      if (node.type === 'AssignmentStatement' && variable.isLocal === false) rootWrites.push({ root: name, statement: node, value: init, parent });
+      assignments.set(name, { count: (assignments.get(name)?.count || 0) + 1, init, local: node.type === 'LocalStatement', block: parent });
     });
   });
+  const unambiguousAlias = (value: LuaAstNode | undefined) => {
+    const name = value?.isLocal === true ? luaIdentifier(value) : null;
+    const binding = name ? assignments.get(name) : undefined;
+    return binding?.count === 1 && binding.local && !shadowed.has(name!) && value && luaContains(binding.block, value)
+      && binding.init?.range && binding.init.range[1] < value.range![0] ? binding.init : undefined;
+  };
   const ambiguousGlobal = (name: string) => environmentRebound || reboundGlobals.has(name) || assignments.has(name) || shadowed.has(name);
+  const rawgetAvailable = !dynamicGlobalWrite && !changesFunctionEnvironment && !ambiguousGlobal('rawget');
+  for (const { root, statement, value, parent } of rootWrites) {
+    const before = parent?.body?.[(parent.body.indexOf(statement) ?? -1) - 1];
+    const aliasInit = value?.isLocal === true && before?.type === 'LocalStatement' && before.variables?.length === 1
+      && before.init?.length === 1 && luaIdentifier(before.variables[0]) === luaIdentifier(value) ? before.init[0] : undefined;
+    const condition = parent?.condition as LuaAstNode | undefined;
+    const guardedInit = parent?.type === 'IfClause' && parent.body?.length === 1 && condition?.type === 'UnaryExpression'
+      && condition.operator === 'not' && (condition.argument as LuaAstNode | undefined)?.isLocal === false
+      && luaIdentifier(condition.argument as LuaAstNode) === root && value?.type === 'TableConstructorExpression';
+    if (!guardedInit && !preserveLuaNamespace(root, value, rawgetAvailable) && !preserveLuaNamespace(root, aliasInit, rawgetAvailable)) {
+      mutations.replacedRoots.add(root);
+    }
+  }
+  for (const object of uncertainObjects) {
+    if (isLuaGlobalEnvironment(object)) mutations.opaqueGlobals = true;
+    const alias = unambiguousAlias(object);
+    const init = alias?.type === 'LogicalExpression' && alias.operator === 'or' ? alias.left : alias ?? object;
+    const root = readLuaNamespace(init, rawgetAvailable);
+    if (root) mutations.replacedRoots.add(root);
+  }
+  const ambiguousProtectedCall = (base: LuaAstNode | undefined) =>
+    base?.isLocal !== false || dynamicGlobalWrite || changesFunctionEnvironment || ambiguousGlobal('pcall');
   const strings = new Map<string, LuaStringValue>();
   const resolve = (expression: LuaAstNode): LuaStringValue | null => {
     // luaparse's lexical annotation prevents a later local declaration from
@@ -806,9 +1105,18 @@ function parseLuaUiEmits(content: string, file: string): {
   const indexedWrites: LuaPayloadAssignment[] = [];
   const indexedClears: LuaPayloadAssignment[] = [];
   const payloadEmits = new Map<string, LuaPayloadEmit[]>();
+  const protectedBodies = new Map<LuaAstNode, { call: LuaAstNode; caller?: LuaAstNode }>();
+  const protectedSends: LuaProtectedPayloadSend[] = [];
+  const returnedTableInitializers = new Map<LuaAstNode | undefined, LuaAstNode[]>();
   let canJump = false;
   walkLuaAst(ast, (node, scope, branches) => {
     if (node.type === 'GotoStatement') canJump = true;
+    if (node.type === 'LocalStatement' && node.variables?.length === 1 && node.init?.[0]?.type === 'CallExpression'
+      && globalLuaMember(node.init[0].base)) {
+      let initializers = returnedTableInitializers.get(scope);
+      if (!initializers) returnedTableInitializers.set(scope, initializers = []);
+      initializers.push(node);
+    }
     if (node.type === 'AssignmentStatement') {
       (node.variables || []).forEach((variable, index) => {
         const target = indexedPayloadTarget(variable, source);
@@ -819,11 +1127,16 @@ function parseLuaUiEmits(content: string, file: string): {
         const block = branches.at(-1) ?? scope ?? (ast as LuaAstNode);
         const directValueBlock = sites === indexedWrites && literalLuaTruthiness(value) !== undefined && block.body?.includes(node)
           ? block : undefined;
-        sites.push({ ...target, local: variable.base?.isLocal === true, scope, branches, at: node.range![1], location: variable.loc, directValueBlock });
+        sites.push({ ...target, target: variable, local: variable.base?.isLocal === true, scope, branches, at: node.range![1], location: variable.loc, directValueBlock });
       });
     }
     if (node.type !== 'CallExpression') return;
     const forwarded = luaIdentifier(node.base) === 'pcall';
+    const callback = forwarded && node.arguments?.length === 1 ? node.arguments[0] : undefined;
+    if (callback?.type === 'FunctionDeclaration' && !callback.identifier && !callback.parameters?.length
+      && callback.body?.length === 1 && callback.body[0].type === 'CallStatement' && !ambiguousProtectedCall(node.base)) {
+      protectedBodies.set(callback.body[0].expression!, { call: node, caller: scope });
+    }
     const emitter = forwarded ? node.arguments?.[0] : node.base;
     if (luaIdentifier(emitter) !== 'AddUITriggeredEvent') return;
     const args = forwarded ? node.arguments?.slice(1) : node.arguments;
@@ -840,7 +1153,7 @@ function parseLuaUiEmits(content: string, file: string): {
     }
     if (emitter?.isLocal) return;
     if (forwarded) hasProtectedCalls = true;
-    const ambiguousForwarder = forwarded && (node.base?.isLocal || dynamicGlobalWrite || changesFunctionEnvironment || ambiguousGlobal('pcall'));
+    const ambiguousForwarder = forwarded && ambiguousProtectedCall(node.base);
     if (ambiguousGlobal('AddUITriggeredEvent') || ambiguousForwarder) {
       coverage.unresolved++; gap('ambiguous-callee'); return;
     }
@@ -858,6 +1171,10 @@ function parseLuaUiEmits(content: string, file: string): {
     if (controls[0].prefix) { coverage.prefix++; gap('prefix-only'); }
     else {
       coverage.exact++;
+      const enclosing = protectedBodies.get(node);
+      if (enclosing && control && args?.length === 3 && argument?.isLocal === true) {
+        protectedSends.push({ ...enclosing, table: argument, identity: JSON.stringify([namespace.value, control.value]) });
+      }
       if (payloadEmit) {
         payloadEmit.identities = controls.map(value => JSON.stringify([namespace.value, value.value]));
         payloadEmit.needsUnaliasedTable = forwarded || !control;
@@ -871,6 +1188,7 @@ function parseLuaUiEmits(content: string, file: string): {
     }
   });
   const unaliasedPayloads = unaliasedLuaPayloads(ast, payloadEmits, indexedWrites, indexedClears);
+  const returnedPayloads = indexedWrites.length ? linkReturnedLuaPayloads(ast as LuaAstNode, protectedSends, returnedTableInitializers, source) : undefined;
   const payloadWrites = indexedWrites.map((write): PayloadWriteSite => {
     const { key, table } = write;
     const emits = write.local ? payloadEmits.get(table) || [] : [];
@@ -895,11 +1213,12 @@ function parseLuaUiEmits(content: string, file: string): {
       } else recipientUnverified = true;
     }
     const start = write.location?.start;
-    return { key, file, table, events: [...events], recipientEvents: [...recipientEvents],
+    const returned = returnedPayloads?.get(write.target);
+    return { key, file, table, events: [...events], recipientEvents: [...recipientEvents], ...(returned ? { returned } : {}),
       recipientUnverified: recipientUnverified || recipientEvents.size === 0, candidateOnly: write.candidateOnly,
       ...(start ? { line: start.line, column: start.column + 1 } : {}) };
   });
-  return { events: out, coverage, payloadWrites, hasProtectedCalls };
+  return { events: out, coverage, payloadWrites, hasProtectedCalls, mutations };
 }
 
 function findContentManifest(project: ExtensionProject): ModManifest | null {
@@ -1248,7 +1567,27 @@ export function validateProjectCrossFile(project: ExtensionProject, options: {
       detail: `Lua-to-MD event wiring is not fully verified for ${unverified} AddUITriggeredEvent call(s): ${coverage.prefix} prefix-only, ${coverage.unresolved} unresolved (${coverage.reasons.join(', ')}). A possible prefix match is not proof of every runtime event.`,
     });
   }
-  const payload = validateIndexedPayloadContract(mdFiles, emitAnalyses.flatMap(analysis => analysis.payloadWrites));
+  const writes = emitAnalyses.flatMap(analysis => analysis.payloadWrites);
+  if (writes.some(write => write.returned)) {
+    const visibleBindings = emitAnalyses.every(analysis => analysis.coverage.parsed && !analysis.mutations.opaqueGlobals);
+    const members = new Map<string, number>();
+    const replacedRoots = new Set<string>();
+    for (const { mutations } of emitAnalyses) {
+      for (const [member, count] of mutations.members) members.set(member, (members.get(member) ?? 0) + count);
+      for (const root of mutations.replacedRoots) replacedRoots.add(root);
+    }
+    const stableForwarding = !replacedRoots.has('AddUITriggeredEvent') && !replacedRoots.has('pcall');
+    for (const write of writes) {
+      for (const link of write.returned ?? []) {
+        link.bindingUnverified = !visibleBindings || replacedRoots.has('rawget') || members.get(link.member) !== 1 || replacedRoots.has(link.root);
+        link.forwardingUnverified = !stableForwarding;
+        if (link.bindingUnverified || link.forwardingUnverified) continue;
+        if (!write.events.includes(link.identity)) write.events.push(link.identity);
+        if (!write.recipientEvents.includes(link.identity)) write.recipientEvents.push(link.identity);
+      }
+    }
+  }
+  const payload = validateIndexedPayloadContract(mdFiles, writes);
   findings.push(...payload.findings);
   for (const unavailable of parseUnavailable) {
     findings.push({

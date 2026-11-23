@@ -48,6 +48,12 @@ The isolated post-0.0.92 validator recognizes `pcall(AddUITriggeredEvent, screen
 
 The source checkpoint passed 37 focused checks, the 264-file replay, scoped lint and ordinary precommit. Three post-release checkpoints now have evidence. The #137 recovery replay is operational evidence for 0.0.92. Both #71 changes are eligible for the next user-facing build after the release gates. The exact candidate still needs the release suites, Windows VSIX build, and installed Antigravity proof before Open VSX publication. See the existing indexed-payload plan for receipt hashes and reproducible controls.
 
+## Returned indexed payload tables
+
+Forge now follows a fresh same-file builder table, including a local alias, to its returned binding and exact protected callback. It refuses positive evidence for ambiguous scope, late replacement, escaping tables and clears. In the frozen AiLive 794 replay it identifies the trace for 23 of 49 keys. The 49-key check stays unresolved because of the dynamic health wrapper and two global emitter wrappers. Counts remain 362 exact sends, 16 unresolved sends, zero cross-file errors and zero missing listeners.
+
+A matched off-game LuaJIT witness ran the frozen health registry and both emitter wrappers in manifest order. The five health methods wrapped without touching the builder in the fixture, and both emitter wrappers preserved the 23 prepared keys and the same table when they reached a stub listener. The G-drive runtime copy retired. Source tests 39/39, frozen paired replay, lint and precommit passed. The source plan contains the fixture and gate hashes. The next coverage step is proving the health registry's mutation boundary and both emitter wrappers from source without promoting the fixture to a project-wide guarantee.
+
 ## Operator dependencies
 
 #85 still needs the exact separate deploy2.py revision, runnable command, writer evidence and operator verdict. Claude's known AiLive wrapper uses native preview and apply. Its missing-Lua false success has a separate tested proposal, awaiting integration and the exact, missing and changed readback reruns. The primary Forge handoff is https://app.notion.com/p/4124618ed15b814489ecd88e7d531ebc.
