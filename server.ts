@@ -12842,8 +12842,7 @@ function replaceRegularTreeExact(sourceRoot: string, targetPath: string, hooks: 
   const parent = path.dirname(targetPath);
   fs.mkdirSync(parent, { recursive: true });
   const rename = hooks.rename || ((oldPath: string, newPath: string) => fs.renameSync(oldPath, newPath));
-  const expected = expectedRegularFiles(sourceRoot);
-  const expectedFingerprint = regularTreeFingerprint(sourceRoot);
+  const { expected, fingerprint: expectedFingerprint } = regularTreeExpectedAndFingerprint(sourceRoot);
   const { root, stage, backup } = createDeploymentTransaction(targetPath, 'recovery-next');
   let movedOld = false;
   let activated = false;
@@ -12865,8 +12864,12 @@ function replaceRegularTreeExact(sourceRoot: string, targetPath: string, hooks: 
     }
     rename(stage, targetPath);
     activated = true;
-    verifyExpectedFiles(targetPath, expected);
-    if (regularTreeFingerprint(targetPath) !== expectedFingerprint) throw new Error('Deployment recovery fingerprint did not verify after restore.');
+    verifyExpectedFilesAndFingerprint(
+      targetPath,
+      expected,
+      expectedFingerprint,
+      'Deployment recovery fingerprint did not verify after restore.',
+    );
     hooks.beforeFinalize?.();
   } catch (error) {
     try { if (fs.existsSync(stage)) fs.rmSync(stage, { recursive: true, force: true }); } catch { /* best effort */ }
@@ -13131,6 +13134,73 @@ function verifyRegularTreeMirror(expectedRoot: string, actualRoot: string): void
   if (expectedFingerprint !== actualFingerprint) {
     throw new Error(`Deployed tree verification failed: expected ${expectedFingerprint}, got ${actualFingerprint}`);
   }
+}
+
+function regularTreeExpectedAndFingerprint(rootPath: string): {
+  expected: Array<{ path: string; size: number; sha256: string }>;
+  fingerprint: string;
+} {
+  const digest = crypto.createHash('sha256');
+  const expected: Array<{ path: string; size: number; sha256: string }> = [];
+  for (const entry of inspectRegularTree(rootPath)) {
+    const normalizedPath = entry.path.replace(/\\/g, '/');
+    digest.update(entry.type === 'directory' ? 'D\0' : 'F\0');
+    digest.update(normalizedPath);
+    digest.update('\0');
+    if (entry.type === 'file') {
+      const filePath = path.join(rootPath, ...entry.path.split('/'));
+      const size = fs.statSync(filePath).size;
+      const sha256 = hashArtifactFile(filePath);
+      digest.update(String(size));
+      digest.update('\0');
+      digest.update(sha256);
+      digest.update('\0');
+      expected.push({ path: entry.path, size, sha256 });
+    }
+  }
+  return { expected, fingerprint: digest.digest('hex') };
+}
+
+function verifyExpectedFilesAndFingerprint(
+  targetRoot: string,
+  expected: Array<{ path: string; size: number; sha256: string }>,
+  expectedFingerprint?: string,
+  fingerprintMismatchMessage = 'Deployed artifact fingerprint verification failed.',
+): string {
+  const digest = crypto.createHash('sha256');
+  const byExactPath = new Map<string, { size: number; sha256: string }>();
+  const byLowerPath = process.platform === 'win32' ? new Map<string, { size: number; sha256: string }>() : undefined;
+  for (const entry of inspectRegularTree(targetRoot)) {
+    const normalizedPath = entry.path.replace(/\\/g, '/');
+    digest.update(entry.type === 'directory' ? 'D\0' : 'F\0');
+    digest.update(normalizedPath);
+    digest.update('\0');
+    if (entry.type === 'file') {
+      const filePath = path.join(targetRoot, ...entry.path.split('/'));
+      const size = fs.statSync(filePath).size;
+      const sha256 = hashArtifactFile(filePath);
+      digest.update(String(size));
+      digest.update('\0');
+      digest.update(sha256);
+      digest.update('\0');
+      const info = { size, sha256 };
+      byExactPath.set(normalizedPath, info);
+      byLowerPath?.set(normalizedPath.toLowerCase(), info);
+    }
+  }
+  for (const entry of expected) {
+    const normalizedPath = entry.path.replace(/\\/g, '/');
+    const observed = byExactPath.get(normalizedPath) ?? byLowerPath?.get(normalizedPath.toLowerCase());
+    if (!observed) throw new Error(`Deployed artifact is missing ${entry.path}`);
+    if (observed.size !== entry.size || observed.sha256 !== entry.sha256) {
+      throw new Error(`Deployed artifact verification failed for ${entry.path}`);
+    }
+  }
+  const fingerprint = digest.digest('hex');
+  if (expectedFingerprint !== undefined && fingerprint !== expectedFingerprint) {
+    throw new Error(fingerprintMismatchMessage);
+  }
+  return fingerprint;
 }
 
 function verifyExpectedFiles(targetRoot: string, expected: Array<{ path: string; size: number; sha256: string }>): void {
@@ -13642,7 +13712,7 @@ function replaceValidatedDeployment(
       requireArtifactDirectory(stage, observed);
     }
     if (hooks.onStagedFingerprint) {
-      stagedFingerprint = regularTreeFingerprint(stage);
+      stagedFingerprint = artifactStage?.fingerprint ?? regularTreeFingerprint(stage);
       hooks.onStagedFingerprint(stagedFingerprint);
     }
     hooks.beforeActivate?.();
@@ -13690,7 +13760,13 @@ function replaceValidatedDeployment(
       activated = true;
       hooks.onTargetWrite?.('activated');
     }
-    verifyExpectedFiles(targetPath, expected);
+    if (artifactRetry) verifyExpectedFiles(targetPath, expected);
+    else verifyExpectedFilesAndFingerprint(
+      targetPath,
+      expected,
+      stagedFingerprint,
+      'Deployed artifact fingerprint verification failed after activation.',
+    );
   } catch (error) {
     if (artifactRetry) {
       const failures = [error instanceof Error ? error.message : String(error)];
@@ -14703,6 +14779,33 @@ function runCompileArtifactSelftest() {
       () => recoveryStore.markUsed(readyRecovery.id),
     );
     record('verified deploy recovery restores exact prior tree', restoredRecovery.restoredFingerprint === beforeRecoveryFingerprint && regularTreeFingerprint(target) === beforeRecoveryFingerprint);
+    const expectedPair = regularTreeExpectedAndFingerprint(target);
+    record('fused expected files and fingerprint match separate walks',
+      expectedPair.fingerprint === beforeRecoveryFingerprint
+      && JSON.stringify(expectedPair.expected) === JSON.stringify(expectedRegularFiles(target))
+      && verifyExpectedFilesAndFingerprint(target, expectedPair.expected, beforeRecoveryFingerprint) === beforeRecoveryFingerprint);
+    const verifyPairExtra = path.join(root, 'verify-pair-extra');
+    copyRegularTree(target, verifyPairExtra);
+    fixtureWrite(verifyPairExtra, 'extra-unexpected.txt', 'unexpected');
+    let pairExtraError = '';
+    try { verifyExpectedFilesAndFingerprint(verifyPairExtra, expectedPair.expected, beforeRecoveryFingerprint); }
+    catch (error) { pairExtraError = error instanceof Error ? error.message : String(error); }
+    const verifyPairTamper = path.join(root, 'verify-pair-tamper');
+    copyRegularTree(target, verifyPairTamper);
+    fixtureWrite(verifyPairTamper, 'recovery-before.txt', 'tampered');
+    let pairTamperError = '';
+    try { verifyExpectedFilesAndFingerprint(verifyPairTamper, expectedPair.expected, beforeRecoveryFingerprint); }
+    catch (error) { pairTamperError = error instanceof Error ? error.message : String(error); }
+    const verifyPairMissing = path.join(root, 'verify-pair-missing');
+    fixtureWrite(verifyPairMissing, 'unrelated.txt', 'other');
+    let pairMissingError = '';
+    try { verifyExpectedFilesAndFingerprint(verifyPairMissing, expectedPair.expected, beforeRecoveryFingerprint); }
+    catch (error) { pairMissingError = error instanceof Error ? error.message : String(error); }
+    record('fused tree verification rejects extra, tampered, and missing files',
+      pairExtraError.includes('fingerprint verification failed')
+      && pairTamperError.includes('Deployed artifact verification failed for recovery-before.txt')
+      && pairMissingError.includes('Deployed artifact is missing '),
+      JSON.stringify({ pairExtraError, pairTamperError, pairMissingError }));
     const usedRecovery = recoveryStore.read(readyRecovery.id);
     record('verified deploy recovery is one use', usedRecovery.ok && usedRecovery.record.status === 'used');
 
@@ -16882,10 +16985,12 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     }
     let stagedRecovery: DeploymentRecoveryRecord | undefined;
     let managedFiles: readonly DeployManagedFile[] | undefined;
+    let targetCheck = 0;
     const deployedPath = compileWorkspaceToFolder(ws, extensionsPath, 'store', false, deployFormat, {
       onManagedFiles: operation && principal.kind === 'agent' ? files => { managedFiles = files; } : undefined,
       beforeActivate: () => {
-        assertWriteAuthority();
+        targetCheck++;
+        assertWriteAuthority(targetCheck === 1);
         assertCurrentTarget();
         if (stagedFingerprint !== undefined) {
           // The transaction has already attempted its legacy sweep before staging.

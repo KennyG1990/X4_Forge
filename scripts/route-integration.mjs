@@ -4626,7 +4626,7 @@ async function main() {
       reuseApply1.status === 200 && reuseApply1.json?.ok === true
       && reuseApply1.json?.timings?.validationStagesMs?.readiness === 0
       && reuseApply1.json?.timings?.validationStagesMs?.project === 0
-      && reuseApply1.json?.timings?.sourceRechecks?.count === 5
+      && reuseApply1.json?.timings?.sourceRechecks?.count === 4
       && reuseApply1.json?.modId === reusePreview1.json?.modId
       && reuseApply1.json?.sourceHash === reusePreview1.json?.sourceHash
       && reuseApply1.json?.artifactHash === reusePreview1.json?.artifactHash
