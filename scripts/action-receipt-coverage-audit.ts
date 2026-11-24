@@ -664,6 +664,7 @@ const SESSION_WRITE_ROUTES = new Set([
 const CREDENTIAL_ROUTES = new Set([
   'DELETE /api/github/credential',
   'POST /api/agent/keys',
+  'POST /api/agent/keys/configuration-access/decision',
   'POST /api/agent/keys/revoke',
   'POST /api/ai/keys',
   'POST /api/github/credential',

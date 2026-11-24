@@ -215,6 +215,7 @@
     "src/server/canonicalMdProviderPreparation.ts",
     "src/server/canonicalMdReferenceContext.ts",
     "src/server/compileValidationReports.ts",
+    "src/server/configurationOperations.ts",
     "src/server/dependencyHealth.ts",
     "src/server/deployLuaRegistration.ts",
     "src/server/deployManagedEvidence.ts",
@@ -628,6 +629,42 @@
         "deploy"
       ],
       "resourceClass": "public",
+      "workspaceMode": "optional"
+    },
+    "GET /api/agent/configuration": {
+      "disposition": "canonical-capability",
+      "owner": "configuration.read",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "optional"
+    },
+    "GET /api/agent/configuration/access": {
+      "disposition": "canonical-capability",
+      "owner": "configuration.access.status",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "optional"
+    },
+    "GET /api/agent/configuration/status": {
+      "disposition": "canonical-capability",
+      "owner": "configuration.status",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
       "workspaceMode": "optional"
     },
     "GET /api/agent/continuous-polling-selftest": {
@@ -1159,6 +1196,14 @@
       "workspaceMode": "optional"
     },
     "GET /api/agent/keys": {
+      "disposition": "session-only",
+      "owner": "agent-api",
+      "registrations": 1,
+      "agentScopes": [],
+      "resourceClass": "global-session",
+      "workspaceMode": "optional"
+    },
+    "GET /api/agent/keys/configuration-access": {
       "disposition": "session-only",
       "owner": "agent-api",
       "registrations": 1,
@@ -2939,6 +2984,40 @@
       "resourceClass": "inline-or-addressed",
       "workspaceMode": "input-first"
     },
+    "POST /api/agent/configuration/access/request": {
+      "disposition": "canonical-capability",
+      "owner": "configuration.access.request",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "optional"
+    },
+    "POST /api/agent/configuration/apply": {
+      "disposition": "canonical-capability",
+      "owner": "configuration.apply",
+      "registrations": 1,
+      "agentScopes": [
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "optional"
+    },
+    "POST /api/agent/configuration/preview": {
+      "disposition": "canonical-capability",
+      "owner": "configuration.preview",
+      "registrations": 1,
+      "agentScopes": [
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "optional"
+    },
     "POST /api/agent/critic": {
       "disposition": "legacy-agent-api",
       "owner": "agent-api",
@@ -3044,6 +3123,14 @@
       "workspaceMode": "required"
     },
     "POST /api/agent/keys": {
+      "disposition": "session-only",
+      "owner": "agent-api",
+      "registrations": 1,
+      "agentScopes": [],
+      "resourceClass": "global-session",
+      "workspaceMode": "optional"
+    },
+    "POST /api/agent/keys/configuration-access/decision": {
       "disposition": "session-only",
       "owner": "agent-api",
       "registrations": 1,
@@ -3896,6 +3983,12 @@
     }
   },
   "capabilitySignatures": {
+    "configuration.access.request@1": "ad89a954f21f5814cea5a39ddf7c2cb7c52fcd2270c587a1b81533c31a790f6a",
+    "configuration.access.status@1": "2033fab305cf8477e62753217e14efafeba23866d14cb09cfc92951cfee5f333",
+    "configuration.apply@1": "b8821352043e1a8bbf54f0603d38f7e5e706001a97cde267419c729c2d4e0654",
+    "configuration.preview@1": "6538637b45b11b698e3ece15ec0ffb0c160416ce9ea1da695a6ed01f0f457e4e",
+    "configuration.read@1": "ac31b04673c8035ee4729c5096a13792433c1fc62cbcbfe36a8067a1c757df4c",
+    "configuration.status@1": "7a0ad35da24685fbef6614b87c615e915fb81b8ae2680e01b995def2c4c91795",
     "expression.check@1": "5bedec028862120254402ce60402204db079705db1d6ce27f16834ae77ddea8d",
     "expression.inspect@1": "d9422df0de7b99ace351d90aad971baea0fe35d8fc6798c15a1a304dbd275f29",
     "extensions.conflicts.analyze@1": "5e8005a8422ebbe1039a848332caf8f40076ea7cce693b21df8039aec856697e",
@@ -3923,8 +4016,8 @@
     "workspace.read@2": "962774de4a25e8725a0d90d4982298cc72f100312075b1f6f4ff9de1482752d7"
   },
   "mcpModuleSignature": {
-    "version": 23,
-    "hash": "92d1f3d465f8edf46dbdc0dd189bc1e2a04d44221a11d65807a9e40825426061"
+    "version": 24,
+    "hash": "19d73938c8e20d65bd293614c1142b757c440b3f2fca9a0a8aaefecb1df9bd1c"
   },
   "mcpSignatures": {
     "validate_mod": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",
@@ -3949,7 +4042,13 @@
     "stop_forge_native_performance_capture": "5a32e7d75eef743d45cf13c400ebe34ba116829807da4686e9468d8d0c94dcd1",
     "check_conflicts": "0bd9187ac3d013b361c04d91395f72e2859dd923cc8f167efe08696527ab1703",
     "check_patch_readiness": "a38c6f472937bb8f4df3f8aec0e8f43c3a8a9348120b7c577c2ac1c5d6543dec",
-    "explain_element": "1ca4792d3d94435a3657f6dd2acad01d71f3ef6b138bab61ad456aaeb5f146d4"
+    "explain_element": "1ca4792d3d94435a3657f6dd2acad01d71f3ef6b138bab61ad456aaeb5f146d4",
+    "request_configuration_access": "c23c0466c7e53e62a36e82dea569b957c14adc3445472eedbe92d57adced0cbd",
+    "get_configuration_access_status": "d60075b86829fd6fc617ad0224dc87d2ce92ccd3d48f551a55e537025d9aa619",
+    "get_configuration": "19edf5308387d9116d1bea029d6336e1accf1d3cc6898e881848df5ae19e2fef",
+    "preview_configuration_change": "3e39c0c90961c371f7cbaf9e81fc84c00971e06e4702215426600a4a8d06a6b0",
+    "apply_configuration_change": "5017822d22feb651f3a0506b3761f4a33b82f57c98dbb9fb3f972e3e334f321b",
+    "get_configuration_operation_status": "bbeb81b42bafc168e71bdacebad0dfb092f623aaa5ca09ad1bd82b7d6faf12cb"
   },
   "mcpCapabilityIdentities": {
     "validate_mod": "project.validate@1",
@@ -3974,6 +4073,12 @@
     "stop_forge_native_performance_capture": "performance.native.stop@1",
     "check_conflicts": "extensions.conflicts.analyze@1",
     "check_patch_readiness": "patch.readiness.analyze@2",
-    "explain_element": "schema.element.explain@1"
+    "explain_element": "schema.element.explain@1",
+    "request_configuration_access": "configuration.access.request@1",
+    "get_configuration_access_status": "configuration.access.status@1",
+    "get_configuration": "configuration.read@1",
+    "preview_configuration_change": "configuration.preview@1",
+    "apply_configuration_change": "configuration.apply@1",
+    "get_configuration_operation_status": "configuration.status@1"
   }
 }

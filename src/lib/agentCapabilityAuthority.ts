@@ -67,10 +67,26 @@ export type ResolveAgentRouteTemplate = (method: string, template: string) => Ag
 const EFFECT_ORDER = new Map(FORGE_CAPABILITY_EFFECTS.map((effect, index) => [effect, index]));
 const EFFECT_SET = new Set<ForgeCapabilityEffect>(FORGE_CAPABILITY_EFFECTS);
 
+export const CONFIGURATION_EXPLICIT_GRANT_CAPABILITIES = [
+  'configuration.access.request',
+  'configuration.access.status',
+  'configuration.apply',
+  'configuration.preview',
+  'configuration.read',
+  'configuration.status',
+] as const;
+const EXPLICIT_CAPABILITY_GRANT_IDS = new Set<string>([
+  'performance.native.read',
+  'performance.native.collect',
+  'performance.native.stop',
+  'project.ai.navigation',
+  'project.md.navigation',
+  ...CONFIGURATION_EXPLICIT_GRANT_CAPABILITIES,
+]);
+
 /** These capabilities require an explicit key grant, including for legacy presets. */
-function requiresExplicitCapabilityGrant(id: string): boolean {
-  return id === 'performance.native.read' || id === 'performance.native.collect' || id === 'performance.native.stop'
-    || id === 'project.ai.navigation' || id === 'project.md.navigation';
+export function requiresExplicitCapabilityGrant(id: string): boolean {
+  return EXPLICIT_CAPABILITY_GRANT_IDS.has(id);
 }
 
 export function forgeCapabilityIdentity(capability: Pick<ForgeCapabilityDescriptorV1, 'id' | 'version'>): string {

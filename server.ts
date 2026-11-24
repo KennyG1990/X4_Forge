@@ -17,9 +17,17 @@ import zlib from "zlib";
 import { buildX4UiSourceBundle, addX4UiSourceBundleRegistration, buildX4MenuLuaRuntimeInventory } from './src/lib/x4UiSourceBundle';
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
-import { createEmptySchemaLibrary, getDefaultGamePath, loadSchemaLibrary, readXsdConfig, resolveX4ReferenceRoot, resolveXsdConfig, runSchemaDiscoverySelftest, writeXsdConfig, type ResolvedXsdConfig, type XsdConfig } from "./src/lib/xsdParser";
+import { configPath, createEmptySchemaLibrary, getDefaultGamePath, loadSchemaLibrary, readXsdConfig, resolveX4ReferenceRoot, resolveXsdConfig, runSchemaDiscoverySelftest, writeXsdConfig, type ResolvedXsdConfig, type XsdConfig } from "./src/lib/xsdParser";
 import { DEPLOY_FORMATS, DEFAULT_DEPLOY_FORMAT, normalizeDeployFormat, type DeployFormat } from './src/lib/deployFormat';
 import { planDirectoryConfigurationChange } from './src/server/directoryConfiguration';
+import { inspectConfigurationDirectory, type ConfigurationGrantInstance } from './src/lib/configurationGrant';
+import {
+  configurationProfileIdentity,
+  createConfigurationOperations,
+  ConfigurationOperationError,
+  type ConfigurationActor,
+  type ConfigurationOperationOptions,
+} from './src/server/configurationOperations';
 
 // Import types & helpers from the frontend shared file
 import {
@@ -296,7 +304,7 @@ import { runLatestValueWriteQueueSelftest } from "./src/lib/latestValueWriteQueu
 import { artifactPlanIdentity, buildArtifactPlan, buildArtifactPlanWithDiskIdentity, createArtifactPathMatcher, hashArtifactFile, materializeArtifact, ROUND_TRIP_TEXT_EXTS, sameArtifactStamp, verifyMaterializedArtifact, type ArtifactPlan } from "./src/lib/artifactPipeline";
 import { buildProjectFileInventory, runProjectFileInventorySelftest } from "./src/lib/projectFileInventory";
 import { forecastCatalogArtifact, materializeCatalogArtifact } from "./src/lib/artifactPackager";
-import { dataPath, runDataDirSelftest } from "./src/lib/dataDir";
+import { dataPath, resolveDataDir, runDataDirSelftest } from "./src/lib/dataDir";
 import { discoverSchemaRegistry, getDomainIndex, runSchemaRegistrySelftest, schemaFilesSignature } from "./src/lib/schemaRegistry";
 import { routeProjectFile, runSchemaRoutingSelftest, validateRoutedFiles } from "./src/lib/schemaRouting";
 import { attributesFor, completeChildren, hoverFor, runLangServiceSelftest } from "./src/lib/langService";
@@ -871,6 +879,163 @@ function recordValidationBaseline(
   }
 }
 const agentKeyStore = createAgentKeyStore({ file: AGENT_KEYS_FILE });
+const CONFIGURATION_JOURNAL_FILE = dataPath('configuration-operations.json');
+const CONFIGURATION_OPERATION_ROUTES: Record<
+  Parameters<ConfigurationOperationOptions['authorize']>[1],
+  { method: 'GET' | 'POST'; path: string }
+> = {
+  request: { method: 'POST', path: '/api/agent/configuration/access/request' },
+  'request-status': { method: 'GET', path: '/api/agent/configuration/access' },
+  read: { method: 'GET', path: '/api/agent/configuration' },
+  preview: { method: 'POST', path: '/api/agent/configuration/preview' },
+  apply: { method: 'POST', path: '/api/agent/configuration/apply' },
+  status: { method: 'GET', path: '/api/agent/configuration/status' },
+};
+const CONFIGURATION_APPROVAL_GUIDANCE_CODES = new Set([
+  'CONFIGURATION_GRANT_REQUIRED',
+  'CONFIGURATION_GRANT_INVALID',
+  'CONFIGURATION_GRANT_EXPIRED',
+  'CONFIGURATION_INSTANCE_MISMATCH',
+  'CONFIGURATION_FIELD_DENIED',
+  'CONFIGURATION_ROOT_DENIED',
+  'CONFIGURATION_ROOT_CHANGED',
+  'CONFIGURATION_AUTHORITY_DENIED',
+]);
+const CONFIGURATION_APPROVAL_WORKFLOW = Object.freeze({
+  requestCapability: 'configuration.access.request@1',
+  requestEndpoint: 'POST /api/agent/configuration/access/request',
+  requestMcpTool: 'request_configuration_access',
+  statusCapability: 'configuration.access.status@1',
+  statusEndpoint: 'GET /api/agent/configuration/access?operationId=<operationId>',
+  statusMcpTool: 'get_configuration_access_status',
+  ownerEndpoint: 'POST /api/agent/keys/configuration-access/decision',
+  ownerSurface: 'Agent Bridge -> Issued Keys -> Configuration Access Requests',
+});
+let cachedConfigurationOperations: ReturnType<typeof createConfigurationOperations> | undefined;
+
+function ensureConfigurationProfileInstance(): ConfigurationGrantInstance {
+  const configDir = path.dirname(configPath());
+  const dataDir = resolveDataDir();
+  for (const dir of [configDir, dataDir]) {
+    inspectConfigurationDirectory(dir, false);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  }
+  return {
+    profileId: configurationProfileIdentity(configDir, dataDir),
+    pid: process.pid,
+    startedAt: SERVER_STARTED_AT,
+  };
+}
+
+function getConfigurationOperations(): ReturnType<typeof createConfigurationOperations> {
+  if (cachedConfigurationOperations) return cachedConfigurationOperations;
+  const instance = ensureConfigurationProfileInstance();
+  const keys = createAgentKeyStore({
+    file: AGENT_KEYS_FILE,
+    configurationInstance: () => ({ ...instance }),
+  });
+  cachedConfigurationOperations = createConfigurationOperations({
+    journalFile: CONFIGURATION_JOURNAL_FILE,
+    keysFile: AGENT_KEYS_FILE,
+    instance,
+    keys,
+    receipts: actionReceiptStore,
+    authorize(keyRow, operation) {
+      const target = CONFIGURATION_OPERATION_ROUTES[operation];
+      const authority = resolveAgentRouteTemplateAuthority(target.method, target.path);
+      return authority.ok
+        && authority.decision.routeKey === `${target.method} ${target.path}`
+        && agentScopeCovers(authority.decision.agentScopes, keyRow.scope)
+        && decideConstrainedAgentRoute(authority.decision, keyRow.capabilityConstraint).allowed;
+    },
+    ownerRootsLocked: projectCheckOwnerProfileEnabled,
+    validateScratch: validateDevScratchStorage,
+    followup(plan) {
+      if (plan.referenceRootChanged) scheduleCanonicalMd(plan.resolved.x4ReferenceRoot, true);
+      reloadSchemaLibrary();
+      startCanonicalReferenceManifest(plan.referenceRootChanged);
+    },
+  });
+  return cachedConfigurationOperations;
+}
+
+function safeConfigurationInstance(): ConfigurationGrantInstance | null {
+  try {
+    return getConfigurationOperations().instance();
+  } catch {
+    return null;
+  }
+}
+
+function configurationActorForRequest(req: express.Request): ConfigurationActor {
+  const actor = (req as express.Request & { __actor?: RequestActor }).__actor;
+  const channelHeader = String(req.headers['x-forge-channel'] || '').trim();
+  const channel: 'api' | 'mcp' = channelHeader === 'mcp' ? 'mcp' : 'api';
+  if (actor?.kind === 'studio') {
+    const rawClientId = String(req.headers['x-client-id'] || req.query?.clientId || '').trim();
+    const id = /^client_[a-z0-9_-]{8,80}$/i.test(rawClientId) ? rawClientId : 'client_studio_owner';
+    return { kind: 'studio', id };
+  }
+  if (actor?.kind === 'agent' && typeof actor.keyId === 'string' && actor.keyId) {
+    return { kind: 'agent', id: actor.keyId, channel };
+  }
+  throw new ConfigurationOperationError('CONFIGURATION_AUTHORITY_DENIED', 403);
+}
+
+function validateConfigurationGetQuery(req: express.Request, extraAllowed: readonly string[] = []): void {
+  const allowed = new Set(['workspaceId', 'clientId', ...extraAllowed]);
+  if (Object.keys(req.query || {}).some(key => !allowed.has(key))) {
+    throw new ConfigurationOperationError('CONFIGURATION_INPUT_INVALID', 400);
+  }
+}
+
+function configurationErrorMessage(code: string): string {
+  switch (code) {
+    case 'CONFIGURATION_GRANT_REQUIRED':
+      return 'This key has no committed owner configuration grant for this profile. Request bounded access first via POST /api/agent/configuration/access/request (or MCP request_configuration_access) and have the Studio owner approve it in Agent Bridge -> Issued Keys.';
+    case 'CONFIGURATION_GRANT_EXPIRED':
+      return 'The owner configuration grant for this key has expired. Request a new bounded access session.';
+    case 'CONFIGURATION_INSTANCE_MISMATCH':
+      return 'The supplied configuration instance does not match this running Forge profile/process.';
+    case 'CONFIGURATION_FIELD_DENIED':
+      return 'One or more requested configuration fields are outside the owner-approved grant for this key.';
+    case 'CONFIGURATION_ROOT_DENIED':
+      return 'One or more effective directory paths fall outside the owner-approved physical root leases for this key.';
+    case 'CONFIGURATION_ROOT_CHANGED':
+      return 'An owner-approved root directory changed physical identity on disk; request a fresh owner grant.';
+    case 'CONFIGURATION_REVISION_STALE':
+      return 'Configuration changed after the supplied revision; read the current configuration and create a fresh preview.';
+    case 'CONFIGURATION_PROPOSAL_MISMATCH':
+      return 'The proposalId, operationId, actor, or running process does not match an active configuration preview.';
+    case 'CONFIGURATION_PROPOSAL_EXPIRED':
+      return 'The configuration preview proposal has expired; create a fresh preview.';
+    case 'CONFIGURATION_OPERATION_CONFLICT':
+      return 'This operationId was already used with different configuration request parameters.';
+    default:
+      return `Configuration operation refused (${code}).`;
+  }
+}
+
+function sendConfigurationError(res: express.Response, error: unknown): express.Response {
+  if (error instanceof ConfigurationOperationError) {
+    const instance = safeConfigurationInstance();
+    return res.status(error.status).json({
+      success: false,
+      code: error.code,
+      error: configurationErrorMessage(error.code),
+      ...(instance ? { instance } : {}),
+      ...(CONFIGURATION_APPROVAL_GUIDANCE_CODES.has(error.code)
+        ? { approvalWorkflow: CONFIGURATION_APPROVAL_WORKFLOW }
+        : {}),
+    });
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return res.status(500).json({
+    success: false,
+    code: 'CONFIGURATION_INTERNAL_ERROR',
+    error: message || 'Configuration operation failed.',
+  });
+}
 // Declared before auth middleware, initialized after DEFAULT_WORKSPACE is defined.
 // eslint-disable-next-line prefer-const
 let workspaceRegistry: WorkspaceRegistry;
@@ -1009,6 +1174,8 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
       || authority.decision.routeKey === 'POST /api/agent/project/ai-navigation'
       || authority.decision.routeKey === 'POST /api/agent/project/md-navigation'
       || authority.decision.routeKey === 'GET /api/agent/project-check-runs/:id'
+      || authority.decision.routeKey.startsWith('GET /api/agent/configuration')
+      || authority.decision.routeKey.startsWith('POST /api/agent/configuration/')
       || (authority.decision.routeKey === 'GET /api/agent/status'
         && (req.query.inspectDeployTarget !== undefined || req.query.inspectDeployEffect !== undefined))
       || authority.decision.routeKey === 'POST /api/agent/history/:id/revert'
@@ -1542,7 +1709,7 @@ app.get("/api/agent/keys", (_req, res) => {
   });
 });
 
-app.post("/api/agent/keys", (req, res) => {
+app.post("/api/agent/keys", async (req, res) => {
   const body = req.body;
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     return res.status(400).json({
@@ -1611,32 +1778,143 @@ app.post("/api/agent/keys", (req, res) => {
   }
   const workspace = resolveWorkspaceAuthority(req, res, true);
   if (!workspace) return;
-  const { token, record } = agentKeyStore.create(
-    label,
-    scope,
-    AGENT_KEY_TTLS[ttlName],
-    workspace.workspaceId,
-    normalizedConstraint.constraint,
-  );
-  const { tokenHash: _hidden, ...safe } = record;
-  // The plaintext token appears in THIS response only — it is never persisted or listed.
-  return res.json({
-    token,
-    record: {
-      ...safe,
-      authorityMode: record.capabilityConstraint ? 'exact' : 'preset',
-      hashPrefix: record.tokenHash.slice(0, 8),
-    },
-  });
+  try {
+    const { token, record } = await forgeSourceCoordinator.run(
+      [canonicalSourceKey(AGENT_KEYS_FILE)],
+      { actor: 'studio', operation: 'POST /api/agent/keys', workspaceId: workspace.workspaceId },
+      () => agentKeyStore.create(
+        label,
+        scope,
+        AGENT_KEY_TTLS[ttlName],
+        workspace.workspaceId,
+        normalizedConstraint.constraint,
+      ),
+    );
+    const { tokenHash: _hidden, ...safe } = record;
+    // The plaintext token appears in THIS response only — it is never persisted or listed.
+    return res.json({
+      token,
+      record: {
+        ...safe,
+        authorityMode: record.capabilityConstraint ? 'exact' : 'preset',
+        hashPrefix: record.tokenHash.slice(0, 8),
+      },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ error: error?.message || 'Could not create agent key.' });
+  }
 });
 
-app.post("/api/agent/keys/revoke", (req, res) => {
+app.post("/api/agent/keys/revoke", async (req, res) => {
   const id = String(req.body?.id || "");
   if (!id) return res.status(400).json({ error: "Missing 'id'." });
-  const done = agentKeyStore.revoke(id);
-  return done
-    ? res.json({ ok: true, id })
-    : res.status(404).json({ error: "No such active key (already revoked or unknown id)." });
+  try {
+    const done = await forgeSourceCoordinator.run(
+      [canonicalSourceKey(AGENT_KEYS_FILE)],
+      { actor: 'studio', operation: 'POST /api/agent/keys/revoke' },
+      () => agentKeyStore.revoke(id),
+    );
+    return done
+      ? res.json({ ok: true, id })
+      : res.status(404).json({ error: "No such active key (already revoked or unknown id)." });
+  } catch (error: any) {
+    return res.status(500).json({ error: error?.message || 'Could not revoke agent key.' });
+  }
+});
+
+app.get('/api/agent/keys/configuration-access', async (req, res) => {
+  if (!requireStudioActor(req, res)) return;
+  try {
+    validateConfigurationGetQuery(req);
+    const actor = configurationActorForRequest(req);
+    return res.set('Cache-Control', 'no-store').json(await getConfigurationOperations().accessRequests(actor));
+  } catch (error) {
+    return sendConfigurationError(res, error);
+  }
+});
+
+app.post('/api/agent/keys/configuration-access/decision', async (req, res) => {
+  if (!requireStudioActor(req, res)) return;
+  try {
+    const actor = configurationActorForRequest(req);
+    const result = await getConfigurationOperations().decideAccess(actor, req.body);
+    if ('receiptId' in result && typeof result.receiptId === 'string') {
+      const recorded = actionReceiptStore.tryRead(result.receiptId);
+      if (recorded.ok) captureActionReceiptProjection(req, recorded.receipt);
+    }
+    if (result.success === false) return res.status(503).json(result);
+    return res.set('Cache-Control', 'no-store').json(result);
+  } catch (error) {
+    return sendConfigurationError(res, error);
+  }
+});
+
+app.post('/api/agent/configuration/access/request', async (req, res) => {
+  try {
+    const actor = configurationActorForRequest(req);
+    return res.set('Cache-Control', 'no-store').json(await getConfigurationOperations().requestAccess(actor, req.body));
+  } catch (error) {
+    return sendConfigurationError(res, error);
+  }
+});
+
+app.get('/api/agent/configuration/access', async (req, res) => {
+  try {
+    validateConfigurationGetQuery(req, ['operationId']);
+    if (Array.isArray(req.query.operationId)) throw new ConfigurationOperationError('CONFIGURATION_OPERATION_ID_INVALID', 400);
+    const actor = configurationActorForRequest(req);
+    return res.set('Cache-Control', 'no-store').json(await getConfigurationOperations().accessStatus(actor, req.query.operationId));
+  } catch (error) {
+    return sendConfigurationError(res, error);
+  }
+});
+
+app.get('/api/agent/configuration', async (req, res) => {
+  try {
+    validateConfigurationGetQuery(req);
+    const actor = configurationActorForRequest(req);
+    return res.set('Cache-Control', 'no-store').json(await getConfigurationOperations().read(actor));
+  } catch (error) {
+    return sendConfigurationError(res, error);
+  }
+});
+
+app.post('/api/agent/configuration/preview', async (req, res) => {
+  try {
+    const actor = configurationActorForRequest(req);
+    return res.set('Cache-Control', 'no-store').json(await getConfigurationOperations().preview(actor, req.body));
+  } catch (error) {
+    return sendConfigurationError(res, error);
+  }
+});
+
+app.post('/api/agent/configuration/apply', async (req, res) => {
+  try {
+    const actor = configurationActorForRequest(req);
+    const result = await getConfigurationOperations().apply(actor, req.body);
+    if (result.receipt) captureActionReceiptProjection(req, result.receipt);
+    if (result.saved === false && result.success === false) {
+      const status = result.code === 'CONFIGURATION_WRITE_FAILED' ? 500 : 409;
+      return res.status(status).set('Cache-Control', 'no-store').json({
+        ...result,
+        error: configurationErrorMessage(result.code),
+      });
+    }
+    return res.set('Cache-Control', 'no-store').json(result);
+  } catch (error) {
+    return sendConfigurationError(res, error);
+  }
+});
+
+app.get('/api/agent/configuration/status', async (req, res) => {
+  try {
+    validateConfigurationGetQuery(req, ['operationId']);
+    if (Array.isArray(req.query.operationId)) throw new ConfigurationOperationError('CONFIGURATION_OPERATION_ID_INVALID', 400);
+    const actor = configurationActorForRequest(req);
+    return res.set('Cache-Control', 'no-store').json(await getConfigurationOperations().status(actor, req.query.operationId));
+  } catch (error) {
+    return sendConfigurationError(res, error);
+  }
 });
 
 app.get('/api/agent/capabilities/effective', (req, res) => {
@@ -5133,30 +5411,46 @@ app.post("/api/schema/config", (req, res) => {
     const { nextConfig, resolved, scratch, schemaComplete, schemaWarning, referenceRootChanged } = plan;
     if (scratch) validateDevScratchStorage();
     writeXsdConfig(nextConfig);
-    if (referenceRootChanged) scheduleCanonicalMd(resolved.x4ReferenceRoot, true);
-    const library = reloadSchemaLibrary();
-    // Only an effective corpus-root change forces a manifest generation.
-    const manifest = startCanonicalReferenceManifest(referenceRootChanged);
-    return res.json({
-      success: true,
-      saved: true,
-      directorySafety: { safe: true, issues: [] },
-      schemaComplete,
-      schemaWarning,
-      config: directorySettingsConfig(nextConfig, resolved),
-      resolved,
-      schema_counts: {
-        events: library.events.length,
-        conditions: library.conditions.length,
-        actions: library.actions.length,
-        control_flow: library.controlFlow.length,
-      },
-      loaded: library.loaded,
-      error: library.error,
-      manifest,
-    });
+    try {
+      if (referenceRootChanged) scheduleCanonicalMd(resolved.x4ReferenceRoot, true);
+      const library = reloadSchemaLibrary();
+      // Only an effective corpus-root change forces a manifest generation.
+      const manifest = startCanonicalReferenceManifest(referenceRootChanged);
+      return res.json({
+        success: true,
+        saved: true,
+        followup: 'complete',
+        directorySafety: { safe: true, issues: [] },
+        schemaComplete,
+        schemaWarning,
+        config: directorySettingsConfig(nextConfig, resolved),
+        resolved,
+        schema_counts: {
+          events: library.events.length,
+          conditions: library.conditions.length,
+          actions: library.actions.length,
+          control_flow: library.controlFlow.length,
+        },
+        loaded: library.loaded,
+        error: library.error,
+        manifest,
+      });
+    } catch (followupError: any) {
+      return res.json({
+        success: false,
+        saved: true,
+        followup: 'failed',
+        code: 'CONFIGURATION_SAVED_FOLLOWUP_FAILED',
+        error: followupError?.message || "Paths saved, but schema or reference cache reload failed.",
+        directorySafety: { safe: true, issues: [] },
+        schemaComplete,
+        schemaWarning,
+        config: directorySettingsConfig(nextConfig, resolved),
+        resolved,
+      });
+    }
   } catch (error) {
-    return res.status(500).json({ error: error.message || "Failed to update schema config." });
+    return res.status(500).json({ saved: false, error: error.message || "Failed to update schema config." });
   }
 });
 
@@ -6090,6 +6384,7 @@ app.get("/api/agent/status", async (req, res) => {
         return { status: read.status, receipt: read.receipt, sourceValidation: read.sourceValidation };
       })(),
       deployFormat: (() => { const r = resolveDeployFormat(undefined); return { format: r.format, source: r.source }; })(),
+      configurationInstance: safeConfigurationInstance(),
       dependencyHealth: buildDependencyHealth(resolved),
       readiness: {
         schemaLoaded: !!schemaLibrary.loaded,

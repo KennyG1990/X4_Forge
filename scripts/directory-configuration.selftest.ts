@@ -22,7 +22,7 @@ type Config = XsdConfig & { deployFormat?: string; preserved?: string };
 interface Scenario {
   name: string; body?: Record<string, unknown> | null; owner?: boolean; scratch?: boolean;
   denied?: boolean; schema?: boolean; config?: Config; effectiveCorpus?: string;
-  failure?: 'read' | 'resolve' | 'storage' | 'write' | 'reload' | 'manifest';
+  failure?: 'read' | 'resolve' | 'storage' | 'write' | 'canonicalMd' | 'reload' | 'manifest';
   status?: number; code?: string; writes?: number;
 }
 const baseConfig: Config = { x4GamePath: '', x4ReferenceRoot: corpus, xsdSchemaPath: path.join(root, 'schema'),
@@ -81,6 +81,7 @@ function run(handlerSource: string, scenario: Scenario) {
       resolved.isolatedScratch ? resolved.x4GamePath : undefined),
     validateDevScratchStorage: () => step('storage'),
     writeXsdConfig(config: Config) { step('write'); saved = structuredClone(config); writes++; },
+    scheduleCanonicalMd() { step('canonicalMd'); },
     reloadSchemaLibrary() { step('reload'); return { events: [], conditions: [], actions: [], controlFlow: [], loaded: true, error: null }; },
     startCanonicalReferenceManifest(changed: boolean) { step('manifest'); return { changed }; },
     directorySettingsConfig(config: Config, resolved: ResolvedXsdConfig) {
@@ -124,9 +125,12 @@ const scenarios: Scenario[] = [
       body: { [field]: value }, status: 409, code: 'DEV_SCRATCH_PATH_LOCKED', writes: 0 }))),
   ...(['zip', '', null, false, 0, {}, []] as unknown[]).map(value => ({ name: `invalid format ${JSON.stringify(value)}`,
     body: { deployFormat: value }, status: 400, code: 'UNKNOWN_DEPLOY_FORMAT', writes: 0 })),
-  ...(['read', 'resolve', 'storage', 'write', 'reload', 'manifest'] as const).map(failure =>
-    ({ name: `failure at ${failure}`, failure, scratch: failure === 'storage', status: 500,
-      writes: ['reload', 'manifest'].includes(failure) ? 1 : 0 })),
+  ...(['read', 'resolve', 'storage', 'write'] as const).map(failure =>
+    ({ name: `failure at ${failure}`, failure, scratch: failure === 'storage', status: 500, writes: 0 })),
+  ...(['canonicalMd', 'reload', 'manifest'] as const).map(failure =>
+    ({ name: `followup failure at ${failure} preserves saved truth`, failure,
+      body: failure === 'canonicalMd' ? { x4ReferenceRoot: path.join(root, 'next-corpus') } : undefined,
+      status: 200, code: 'CONFIGURATION_SAVED_FOLLOWUP_FAILED', writes: 1 })),
 ];
 let passed = 0;
 for (const scenario of scenarios) {

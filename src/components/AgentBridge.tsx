@@ -130,6 +130,27 @@ export default function AgentBridge({
     createdAt: number; expiresAt: number | null; lastUsedAt: number | null;
     useCount: number; revokedAt: number | null; hashPrefix: string; workspaceId?: string;
     capabilityConstraint?: { capabilityIdentities: string[]; allowedEffects: string[] };
+    configurationGrant?: {
+      fields: string[];
+      expiresAt: number;
+      restartPolicy?: 'same-profile';
+      instance: { profileId: string; pid: number; startedAt: string };
+    };
+  }
+  interface ConfigurationAccessRequestRow {
+    requestId: string;
+    keyId: string;
+    operationId: string;
+    state: 'pending' | 'approved' | 'denied';
+    instance: { profileId: string; pid: number; startedAt: string };
+    expiresAt: number;
+    requested: {
+      fields: string[];
+      roots: Record<string, string[]>;
+      durationMs: number;
+      restartPolicy?: 'same-profile';
+    };
+    receiptId?: string;
   }
   interface AgentAuthoritySummary {
     version: string;
@@ -155,6 +176,21 @@ export default function AgentBridge({
   const [selectedCapabilityIdentities, setSelectedCapabilityIdentities] = useState<string[]>([]);
   const [selectedAllowedEffects, setSelectedAllowedEffects] = useState<string[]>([]);
   const [createdKey, setCreatedKey] = useState<{ token: string; label: string; contractOnly: boolean } | null>(null);
+  const [configAccessRequests, setConfigAccessRequests] = useState<ConfigurationAccessRequestRow[]>([]);
+  const [configAccessInstance, setConfigAccessInstance] = useState<{ profileId: string; pid: number; startedAt: string } | null>(null);
+  const [configAccessBusyId, setConfigAccessBusyId] = useState<string>('');
+
+  const loadConfigurationAccessRequests = useCallback(async () => {
+    try {
+      const r = await fetch('/api/agent/keys/configuration-access');
+      if (!r.ok) return;
+      const d = await r.json();
+      setConfigAccessRequests(Array.isArray(d.requests) ? d.requests : []);
+      setConfigAccessInstance(d.instance && typeof d.instance.profileId === 'string' ? d.instance : null);
+    } catch {
+      /* Fail-soft when an isolated test mocks only /api/agent/keys. */
+    }
+  }, []);
 
   const loadAgentKeys = useCallback(async () => {
     try {
@@ -168,10 +204,11 @@ export default function AgentBridge({
       setAgentCapabilityOptions(Array.isArray(d.capabilityOptions) ? d.capabilityOptions : []);
       setAgentEffectOptions(Array.isArray(d.effectOptions) ? d.effectOptions : []);
       setKeysError('');
+      void loadConfigurationAccessRequests();
     } catch (e) {
       setKeysError(`Could not load keys: ${e instanceof Error ? e.message : String(e)}`);
     }
-  }, []);
+  }, [loadConfigurationAccessRequests]);
 
   useEffect(() => {
     if (activeTab === 'keys') void loadAgentKeys();
@@ -358,6 +395,28 @@ export default function AgentBridge({
       setKeysError(e instanceof Error ? e.message : String(e));
     }
   }, [loadAgentKeys]);
+
+  const decideConfigurationAccess = useCallback(async (row: ConfigurationAccessRequestRow, approve: boolean) => {
+    const targetInstance = configAccessInstance || row.instance;
+    setKeysError('');
+    setConfigAccessBusyId(row.requestId);
+    try {
+      const r = await fetch('/api/agent/keys/configuration-access/decision', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requestId: row.requestId, approve, instance: targetInstance }),
+      });
+      const d = await r.json();
+      if (!r.ok || d?.success === false) {
+        throw new Error(d?.error || d?.code || `HTTP ${r.status}`);
+      }
+      await loadAgentKeys();
+    } catch (e) {
+      setKeysError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setConfigAccessBusyId('');
+    }
+  }, [configAccessInstance, loadAgentKeys]);
   const [copiedTextId, setCopiedTextId] = useState<string | null>(null);
 
   // Surgical Console states
@@ -1625,6 +1684,15 @@ export default function AgentBridge({
                             contract-only · {k.capabilityConstraint.capabilityIdentities.length} cap{k.capabilityConstraint.capabilityIdentities.length === 1 ? '' : 's'} · {k.capabilityConstraint.allowedEffects.length} effects
                           </span>
                         )}
+                        {k.configurationGrant && (
+                          <span
+                            data-testid={`agent-key-config-grant-${k.label}`}
+                            className={`px-1.5 rounded border ${Date.now() >= k.configurationGrant.expiresAt ? 'border-slate-600/40 text-slate-500' : 'border-amber-500/40 text-amber-300'}`}
+                            title={`fields: ${k.configurationGrant.fields.join(', ')} · expires ${new Date(k.configurationGrant.expiresAt).toLocaleString()}`}
+                          >
+                            config grant · {k.configurationGrant.fields.length} field{k.configurationGrant.fields.length === 1 ? '' : 's'}{Date.now() >= k.configurationGrant.expiresAt ? ' (expired)' : ''}
+                          </span>
+                        )}
                         <span>
                           {k.revokedAt !== null ? 'REVOKED'
                             : k.expiresAt === null ? 'never expires'
@@ -1649,6 +1717,68 @@ export default function AgentBridge({
                 </div>
               )}
             </div>
+
+            {/* #96 Owner approval queue for bounded configuration access sessions */}
+            {configAccessRequests.length > 0 && (
+              <div className="rounded-lg bg-white/[0.02] border border-amber-500/20 p-3" data-testid="config-access-requests">
+                <div className="font-mono text-[10px] text-amber-300 font-bold mb-2">
+                  CONFIGURATION ACCESS REQUESTS ({configAccessRequests.length})
+                </div>
+                <div className="space-y-2">
+                  {configAccessRequests.map((reqRow) => {
+                    const keyLabel = agentKeys.find((k) => k.id === reqRow.keyId)?.label || reqRow.keyId;
+                    const rootEntries = Object.entries(reqRow.requested.roots || {});
+                    const busy = configAccessBusyId === reqRow.requestId;
+                    return (
+                      <div
+                        key={reqRow.requestId}
+                        data-testid={`config-access-row-${reqRow.operationId}`}
+                        className="rounded border border-white/10 bg-black/30 px-2.5 py-2 font-mono text-[10px] text-slate-300 space-y-1"
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-bold text-white">{keyLabel}</span>
+                          <span className="text-slate-500">{reqRow.operationId}</span>
+                          <span className={`px-1.5 rounded border ${reqRow.state === 'approved' ? 'border-emerald-500/40 text-emerald-300' : reqRow.state === 'denied' ? 'border-red-500/40 text-red-300' : 'border-amber-500/40 text-amber-300'}`}>
+                            {reqRow.state}
+                          </span>
+                          <span className="text-slate-400">
+                            fields: {reqRow.requested.fields.join(', ')} · {Math.round(reqRow.requested.durationMs / 60000)}m
+                            {reqRow.requested.restartPolicy === 'same-profile' ? ' · survives restart' : ' · process-bound'}
+                          </span>
+                          {reqRow.state === 'pending' && (
+                            <div className="ml-auto flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                disabled={busy}
+                                data-testid={`config-access-approve-${reqRow.operationId}`}
+                                onClick={() => void decideConfigurationAccess(reqRow, true)}
+                                className="px-2 py-0.5 rounded border border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-40 cursor-pointer"
+                              >
+                                approve
+                              </button>
+                              <button
+                                type="button"
+                                disabled={busy}
+                                data-testid={`config-access-deny-${reqRow.operationId}`}
+                                onClick={() => void decideConfigurationAccess(reqRow, false)}
+                                className="px-2 py-0.5 rounded border border-red-500/40 text-red-300 hover:bg-red-500/10 disabled:opacity-40 cursor-pointer"
+                              >
+                                deny
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                        {rootEntries.length > 0 && (
+                          <div className="text-[9.5px] text-slate-400 break-all">
+                            {rootEntries.map(([field, roots]) => `${field}: ${roots.join(', ')}`).join(' · ')}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         )}
 

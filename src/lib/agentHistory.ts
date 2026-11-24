@@ -175,9 +175,13 @@ export const LEDGER_ROUTES: Array<{ method: string; path: string; kind: LedgerKi
   { method: 'POST', path: '/api/fs/restore-snapshot', kind: 'snapshot' },
   { method: 'POST', path: '/api/fs/delete-snapshot', kind: 'snapshot' },
   { method: 'POST', path: '/api/schema/config', kind: 'config' },
+  { method: 'POST', path: '/api/agent/configuration/preview', kind: 'config' },
+  { method: 'POST', path: '/api/agent/configuration/apply', kind: 'config' },
   { method: 'POST', path: '/api/agent/external-api/register', kind: 'config' },
   { method: 'POST', path: '/api/agent/keys', kind: 'keys' },
   { method: 'POST', path: '/api/agent/keys/revoke', kind: 'keys' },
+  { method: 'POST', path: '/api/agent/configuration/access/request', kind: 'keys' },
+  { method: 'POST', path: '/api/agent/keys/configuration-access/decision', kind: 'keys' },
   { method: 'POST', path: '/api/ai/keys', kind: 'keys' },
   { method: 'POST', path: '/api/run_command/job', kind: 'command' },
 ];

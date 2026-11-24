@@ -71,6 +71,8 @@ type AuthoredNavigationFixture = (typeof AUTHORED_NAVIGATION_FIXTURES)[number];
 const EXPLICIT_ONLY_MCP_CAPABILITIES = new Set<string>([
   ...AUTHORED_NAVIGATION_FIXTURES.map(fixture => fixture.id),
   'performance.native.read', 'performance.native.collect', 'performance.native.stop',
+  'configuration.access.request', 'configuration.access.status',
+  'configuration.apply', 'configuration.preview', 'configuration.read', 'configuration.status',
 ]);
 const AUTHORED_NAVIGATION_SECRET = 'PRIVATE SOURCE MUST NOT LEAK';
 const AUTHORED_NAVIGATION_REDIRECT_SINK = '/fixture-authored-navigation-redirect';

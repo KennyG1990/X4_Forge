@@ -90,6 +90,12 @@ try {
     assert.deepEqual(Object.keys(view.effective).sort(), ['deployFormat', 'modWorkspacePath']);
     assert.equal(view.effective.deployFormat, 'loose');
     assert.equal(view.saved.deployFormat, '');
+    assert.equal(view.provenance.deployFormat, 'default');
+    assert.equal(view.provenance.modWorkspacePath, 'saved');
+    assert.equal(view.mutability.deployFormat, 'mutable');
+    assert.equal(view.mutability.modWorkspacePath, 'mutable');
+    assert.equal(view.deployFormatDefault, 'loose');
+    assert.equal(view.deployFormatSource, 'default');
     const rows = receipts.listVerified(); assert.equal(rows.length, 1); assert.equal(rows[0].status, 'committed');
     assert(!JSON.stringify(view).includes('preserve-unrelated-log'));
   });

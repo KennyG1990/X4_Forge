@@ -341,7 +341,316 @@ const EXPRESSION_INSPECTION_OUTPUT_FIELDS = {
   }, ['segment', 'start', 'end', 'kind', 'confidence'], false) },
 } satisfies Record<string, ForgeJsonSchema>;
 
+const CONFIGURATION_FIELD_NAMES = [
+  'schemaDir', 'x4ReferenceRoot', 'x4GamePath', 'modWorkspacePath', 'filesystemPath', 'deployFormat',
+] as const;
+const CONFIGURATION_OPERATION_ID_SCHEMA: ForgeJsonSchema = {
+  type: 'string', maxLength: 96,
+  description: 'Caller-owned idempotency identifier (8–96 ASCII letters, digits, dots, underscores, colons, or hyphens).',
+};
+const CONFIGURATION_INSTANCE_SCHEMA = objectOutput({
+  profileId: { type: 'string', maxLength: 128 },
+  pid: { type: 'integer', minimum: 1, maximum: 4294967295 },
+  startedAt: { type: 'string', maxLength: 64 },
+}, ['profileId', 'pid', 'startedAt'], false);
+const CONFIGURATION_PATCH_PROPERTIES: Readonly<Record<string, ForgeJsonSchema>> = {
+  schemaDir: { type: 'string', maxLength: 4096 },
+  x4ReferenceRoot: { type: 'string', maxLength: 4096 },
+  x4GamePath: { type: 'string', maxLength: 4096 },
+  modWorkspacePath: { type: 'string', maxLength: 4096 },
+  filesystemPath: { type: 'string', maxLength: 4096 },
+  deployFormat: { type: 'string', enum: ['loose', 'catalog'] },
+};
+const CONFIGURATION_PATCH_SCHEMA: ForgeJsonSchema = {
+  type: 'object', additionalProperties: false, properties: CONFIGURATION_PATCH_PROPERTIES,
+};
+const CONFIGURATION_SAVED_VALUES_SCHEMA: ForgeJsonSchema = {
+  type: 'object', additionalProperties: false,
+  properties: {
+    ...CONFIGURATION_PATCH_PROPERTIES,
+    deployFormat: { type: 'string', enum: ['', 'loose', 'catalog'] },
+  },
+};
+const CONFIGURATION_ROOT_LIST_SCHEMA: ForgeJsonSchema = {
+  type: 'array', items: { type: 'string', maxLength: 4096 },
+};
+const CONFIGURATION_ROOTS_SCHEMA: ForgeJsonSchema = {
+  type: 'object', additionalProperties: false,
+  properties: {
+    schemaDir: CONFIGURATION_ROOT_LIST_SCHEMA,
+    x4ReferenceRoot: CONFIGURATION_ROOT_LIST_SCHEMA,
+    x4GamePath: CONFIGURATION_ROOT_LIST_SCHEMA,
+    modWorkspacePath: CONFIGURATION_ROOT_LIST_SCHEMA,
+    filesystemPath: CONFIGURATION_ROOT_LIST_SCHEMA,
+  },
+};
+const CONFIGURATION_ACCESS_OUTPUT_SCHEMA = objectOutput({
+  success: { type: 'boolean' },
+  requestId: { type: 'string' },
+  operationId: { type: 'string' },
+  state: { type: 'string', enum: ['pending', 'approved', 'denied'] },
+  instance: CONFIGURATION_INSTANCE_SCHEMA,
+  expiresAt: { type: 'integer' },
+  requested: { type: 'object', additionalProperties: true },
+  receiptId: { type: 'string' },
+}, ['success', 'requestId', 'operationId', 'state', 'instance', 'expiresAt', 'requested']);
+
 export const FORGE_CAPABILITIES = [
+  {
+    id: 'configuration.access.request',
+    version: 1,
+    title: 'Request bounded configuration access',
+    description: 'Submit a profile-bound owner approval request for explicit configuration fields, physical root leases, and session duration. Requires an explicit key grant.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['instance', 'operationId', 'fields', 'roots', 'durationMs'],
+      properties: {
+        instance: CONFIGURATION_INSTANCE_SCHEMA,
+        operationId: CONFIGURATION_OPERATION_ID_SCHEMA,
+        fields: { type: 'array', items: { type: 'string', enum: CONFIGURATION_FIELD_NAMES } },
+        roots: CONFIGURATION_ROOTS_SCHEMA,
+        durationMs: { type: 'integer', minimum: 60000, maximum: 86400000 },
+        restartPolicy: { type: 'string', enum: ['same-profile'] },
+      },
+    },
+    outputSchema: CONFIGURATION_ACCESS_OUTPUT_SCHEMA,
+    context: { workspace: 'optional', profile: 'required' },
+    access: { public: false, studioSession: true, agentScopes: ['read', 'write', 'deploy'] },
+    effects: ['read', 'audit-write', 'audit-retention-delete'],
+    confirmation: 'human-only',
+    apiBindings: [
+      { method: 'POST', path: '/api/agent/configuration/access/request', inputLocation: 'body', role: 'primary' },
+    ],
+    surfaces: {
+      ui: [
+        disconnected('studio-configuration-access-request', 'Agents submit access requests via API or MCP; the Studio owner approves or denies them in Agent Bridge -> Issued Keys.'),
+        disconnected('vscode-extension-configuration-access-request', 'The extension hosts MCP and Studio owner review rather than submitting agent access requests directly.'),
+      ],
+      cli: [],
+      mcp: [connected('request_configuration_access', 'vscode-extension/mcp/x4forge-mcp.cjs::name: "request_configuration_access"')],
+      agentApi: true,
+      builtInHarness: [],
+      externalAgents: [connected('agent-api', "server.ts::app.post('/api/agent/configuration/access/request'")],
+    },
+  },
+  {
+    id: 'configuration.access.status',
+    version: 1,
+    title: 'Read configuration access request status',
+    description: 'Inspect the current pending, approved, or denied status of a caller-owned configuration access request. Requires an explicit key grant.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['operationId'],
+      properties: {
+        operationId: CONFIGURATION_OPERATION_ID_SCHEMA,
+      },
+    },
+    outputSchema: CONFIGURATION_ACCESS_OUTPUT_SCHEMA,
+    context: { workspace: 'optional', profile: 'required' },
+    access: { public: false, studioSession: true, agentScopes: ['read', 'write', 'deploy'] },
+    effects: ['read'],
+    confirmation: 'none',
+    apiBindings: [
+      { method: 'GET', path: '/api/agent/configuration/access', inputLocation: 'query', role: 'primary' },
+    ],
+    surfaces: {
+      ui: [
+        disconnected('studio-configuration-access-status', 'The Studio owner inspects all pending and decided access requests via Agent Bridge -> Issued Keys.'),
+        disconnected('vscode-extension-configuration-access-status', 'The extension delegates configuration access polling to the Forge API and MCP.'),
+      ],
+      cli: [],
+      mcp: [connected('get_configuration_access_status', 'vscode-extension/mcp/x4forge-mcp.cjs::name: "get_configuration_access_status"')],
+      agentApi: true,
+      builtInHarness: [],
+      externalAgents: [connected('agent-api', "server.ts::app.get('/api/agent/configuration/access'")],
+    },
+  },
+  {
+    id: 'configuration.apply',
+    version: 1,
+    title: 'Apply a reviewed configuration proposal',
+    description: 'Atomically persist a revision- and instance-bound configuration proposal, refresh schema/reference caches, and record a durable profile receipt. Requires an explicit key grant and committed owner access.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['instance', 'proposalId', 'operationId'],
+      properties: {
+        instance: CONFIGURATION_INSTANCE_SCHEMA,
+        proposalId: { type: 'string', maxLength: 96 },
+        operationId: CONFIGURATION_OPERATION_ID_SCHEMA,
+      },
+    },
+    outputSchema: objectOutput({
+      success: { type: 'boolean' },
+      saved: { type: ['boolean', 'null'] },
+      code: { type: 'string' },
+      operationId: { type: 'string' },
+      proposalId: { type: 'string' },
+      revision: { type: 'string' },
+      followup: { type: 'string', enum: ['complete', 'failed'] },
+      receiptStatus: { type: 'string' },
+      receipt: { type: 'object', additionalProperties: true },
+      schemaComplete: { type: 'boolean' },
+      schemaWarning: { type: ['string', 'null'] },
+      replayed: { type: 'boolean' },
+    }, ['success', 'saved', 'code', 'operationId', 'proposalId', 'receiptStatus']),
+    context: { workspace: 'optional', profile: 'required' },
+    access: { public: false, studioSession: true, agentScopes: ['write', 'deploy'] },
+    effects: ['filesystem-write'],
+    confirmation: 'preview-required',
+    apiBindings: [
+      { method: 'POST', path: '/api/agent/configuration/apply', inputLocation: 'body', role: 'primary' },
+    ],
+    surfaces: {
+      ui: [
+        disconnected('studio-configuration-agent-apply', 'Web Studio Directory Settings saves through the session-only /api/schema/config compatibility adapter over the shared configuration planner and writer.'),
+        disconnected('vscode-extension-configuration-agent-apply', 'The extension hosts Studio settings and MCP rather than calling agent CAS apply directly.'),
+      ],
+      cli: [],
+      mcp: [connected('apply_configuration_change', 'vscode-extension/mcp/x4forge-mcp.cjs::name: "apply_configuration_change"')],
+      agentApi: true,
+      builtInHarness: [],
+      externalAgents: [connected('agent-api', "server.ts::app.post('/api/agent/configuration/apply'")],
+    },
+  },
+  {
+    id: 'configuration.preview',
+    version: 1,
+    title: 'Preview a scoped configuration change',
+    description: 'Validate a strict six-field directory or default deploy-format patch against the current profile revision, path-role locks, and physical root leases without modifying config.json.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['instance', 'revision', 'operationId', 'patch'],
+      properties: {
+        instance: CONFIGURATION_INSTANCE_SCHEMA,
+        revision: { type: 'string', maxLength: 64 },
+        operationId: CONFIGURATION_OPERATION_ID_SCHEMA,
+        patch: CONFIGURATION_PATCH_SCHEMA,
+      },
+    },
+    outputSchema: objectOutput({
+      success: { type: 'boolean' },
+      proposalId: { type: 'string' },
+      operationId: { type: 'string' },
+      expiresAt: { type: 'integer' },
+      instance: CONFIGURATION_INSTANCE_SCHEMA,
+      revision: { type: 'string' },
+      changes: CONFIGURATION_PATCH_SCHEMA,
+      effective: CONFIGURATION_PATCH_SCHEMA,
+      schemaComplete: { type: 'boolean' },
+      schemaWarning: { type: ['string', 'null'] },
+      restartRequired: { type: 'boolean' },
+      impact: { type: 'string' },
+      replayed: { type: 'boolean' },
+    }, ['success', 'proposalId', 'operationId', 'expiresAt']),
+    context: { workspace: 'optional', profile: 'required' },
+    access: { public: false, studioSession: true, agentScopes: ['write', 'deploy'] },
+    effects: ['read', 'analyze', 'audit-write', 'audit-retention-delete'],
+    confirmation: 'none',
+    apiBindings: [
+      { method: 'POST', path: '/api/agent/configuration/preview', inputLocation: 'body', role: 'primary' },
+    ],
+    surfaces: {
+      ui: [
+        disconnected('studio-configuration-agent-preview', 'Web Studio validates inline in Directory Settings and saves through /api/schema/config.'),
+        disconnected('vscode-extension-configuration-agent-preview', 'The extension hosts Studio settings and MCP rather than calling agent CAS preview directly.'),
+      ],
+      cli: [],
+      mcp: [connected('preview_configuration_change', 'vscode-extension/mcp/x4forge-mcp.cjs::name: "preview_configuration_change"')],
+      agentApi: true,
+      builtInHarness: [],
+      externalAgents: [connected('agent-api', "server.ts::app.post('/api/agent/configuration/preview'")],
+    },
+  },
+  {
+    id: 'configuration.read',
+    version: 1,
+    title: 'Read scoped Forge configuration',
+    description: 'Read allowlisted saved and effective directory settings, deployment format preference, resolver provenance, lock reasons, and current revision for this profile without exposing secrets.',
+    inputSchema: EMPTY_INPUT,
+    outputSchema: objectOutput({
+      success: { type: 'boolean' },
+      instance: CONFIGURATION_INSTANCE_SCHEMA,
+      revision: { type: 'string' },
+      saved: CONFIGURATION_SAVED_VALUES_SCHEMA,
+      effective: CONFIGURATION_PATCH_SCHEMA,
+      locks: { type: 'object', additionalProperties: { type: ['string', 'null'] } },
+      mutability: { type: 'object', additionalProperties: { type: 'string', enum: ['mutable', 'locked'] } },
+      provenance: { type: 'object', additionalProperties: { type: 'string', enum: ['saved', 'default', 'environment', 'launcher'] } },
+      deployFormats: { type: 'array', items: { type: 'string', enum: ['loose', 'catalog'] } },
+      deployFormatDefault: { type: 'string', enum: ['loose'] },
+      deployFormatSource: { type: 'string', enum: ['saved', 'default'] },
+      schemaComplete: { type: 'boolean' },
+      x4ReferenceExists: { type: 'boolean' },
+      grantExpiresAt: { type: 'integer' },
+    }, ['success', 'instance', 'revision', 'saved', 'effective', 'locks', 'mutability', 'provenance', 'deployFormats', 'deployFormatDefault', 'deployFormatSource', 'schemaComplete', 'x4ReferenceExists']),
+    context: { workspace: 'optional', profile: 'required' },
+    access: { public: false, studioSession: true, agentScopes: ['read', 'write', 'deploy'] },
+    effects: ['read'],
+    confirmation: 'none',
+    apiBindings: [
+      { method: 'GET', path: '/api/agent/configuration', inputLocation: 'none', role: 'primary' },
+    ],
+    surfaces: {
+      ui: [
+        disconnected('studio-configuration-agent-read', 'Web Studio Directory Settings reads the session-only /api/schema/config view.'),
+        disconnected('vscode-extension-configuration-agent-read', 'The extension hosts Studio settings and MCP rather than calling the agent configuration read route directly.'),
+      ],
+      cli: [],
+      mcp: [connected('get_configuration', 'vscode-extension/mcp/x4forge-mcp.cjs::name: "get_configuration"')],
+      agentApi: true,
+      builtInHarness: [],
+      externalAgents: [connected('agent-api', "server.ts::app.get('/api/agent/configuration'")],
+    },
+  },
+  {
+    id: 'configuration.status',
+    version: 1,
+    title: 'Read configuration operation status',
+    description: 'Inspect the saved, follow-up, receipt, and recovery-patch status of a caller-owned configuration preview or apply operation.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['operationId'],
+      properties: {
+        operationId: CONFIGURATION_OPERATION_ID_SCHEMA,
+      },
+    },
+    outputSchema: objectOutput({
+      success: { type: 'boolean' },
+      saved: { type: ['boolean', 'null'] },
+      code: { type: 'string' },
+      operationId: { type: 'string' },
+      proposalId: { type: 'string' },
+      revision: { type: 'string' },
+      followup: { type: 'string', enum: ['complete', 'failed'] },
+      receiptStatus: { type: 'string' },
+      receipt: { type: 'object', additionalProperties: true },
+      instance: CONFIGURATION_INSTANCE_SCHEMA,
+      recoveryPatch: CONFIGURATION_PATCH_SCHEMA,
+    }, ['success', 'saved', 'code', 'operationId', 'proposalId', 'receiptStatus', 'instance', 'recoveryPatch']),
+    context: { workspace: 'optional', profile: 'required' },
+    access: { public: false, studioSession: true, agentScopes: ['read', 'write', 'deploy'] },
+    effects: ['read'],
+    confirmation: 'none',
+    apiBindings: [
+      { method: 'GET', path: '/api/agent/configuration/status', inputLocation: 'query', role: 'primary' },
+    ],
+    surfaces: {
+      ui: [
+        disconnected('studio-configuration-agent-status', 'Web Studio inspects configuration changes through Agent Bridge history and Directory Settings.'),
+        disconnected('vscode-extension-configuration-agent-status', 'The extension delegates configuration operation inspection to the Forge API and MCP.'),
+      ],
+      cli: [],
+      mcp: [connected('get_configuration_operation_status', 'vscode-extension/mcp/x4forge-mcp.cjs::name: "get_configuration_operation_status"')],
+      agentApi: true,
+      builtInHarness: [],
+      externalAgents: [connected('agent-api', "server.ts::app.get('/api/agent/configuration/status'")],
+    },
+  },
   {
     id: 'expression.check',
     version: 1,

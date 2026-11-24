@@ -48,6 +48,22 @@ const XML_REFERENCE_MAX_OUTPUT_BYTES = 512 * 1024;
 const AUTHORED_NAVIGATION_TOOLS = new Set(["navigate_ai_script", "navigate_md_script"]);
 const AUTHORED_NAVIGATION_CAPABILITIES = new Set(["project.ai.navigation", "project.md.navigation"]);
 const AUTHORED_NAVIGATION_ROUTES = new Set(["/api/agent/project/ai-navigation", "/api/agent/project/md-navigation"]);
+const CONFIGURATION_TOOLS = new Set([
+  "request_configuration_access",
+  "get_configuration_access_status",
+  "get_configuration",
+  "preview_configuration_change",
+  "apply_configuration_change",
+  "get_configuration_operation_status",
+]);
+const CONFIGURATION_CAPABILITIES = new Set([
+  "configuration.access.request",
+  "configuration.access.status",
+  "configuration.apply",
+  "configuration.preview",
+  "configuration.read",
+  "configuration.status",
+]);
 const AUTHORED_NAVIGATION_MAX_FILES = 512;
 const AUTHORED_NAVIGATION_MAX_FILE_BYTES = 8 * 1024 * 1024;
 const AUTHORED_NAVIGATION_MAX_TOTAL_BYTES = 4 * AUTHORED_NAVIGATION_MAX_FILE_BYTES;
@@ -640,6 +656,187 @@ const TOOLS = [
       return { ...hover, attrs: attrs.attrs };
     },
   },
+  {
+    name: "request_configuration_access",
+    capabilityId: "configuration.access.request",
+    capabilityVersion: 1,
+    description: "Submit a profile-bound owner approval request for explicit Forge configuration fields, physical root leases, and session duration. Requires an explicit key grant.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        instance: {
+          type: "object",
+          properties: {
+            profileId: { type: "string", maxLength: 128 },
+            pid: { type: "integer", minimum: 1, maximum: 4294967295 },
+            startedAt: { type: "string", maxLength: 64 },
+          },
+          required: ["profileId", "pid", "startedAt"],
+          additionalProperties: false,
+        },
+        operationId: { type: "string", maxLength: 96 },
+        fields: {
+          type: "array",
+          items: {
+            type: "string",
+            enum: ["schemaDir", "x4ReferenceRoot", "x4GamePath", "modWorkspacePath", "filesystemPath", "deployFormat"],
+          },
+        },
+        roots: {
+          type: "object",
+          properties: {
+            schemaDir: { type: "array", items: { type: "string", maxLength: 4096 } },
+            x4ReferenceRoot: { type: "array", items: { type: "string", maxLength: 4096 } },
+            x4GamePath: { type: "array", items: { type: "string", maxLength: 4096 } },
+            modWorkspacePath: { type: "array", items: { type: "string", maxLength: 4096 } },
+            filesystemPath: { type: "array", items: { type: "string", maxLength: 4096 } },
+          },
+          additionalProperties: false,
+        },
+        durationMs: { type: "integer", minimum: 60000, maximum: 86400000 },
+        restartPolicy: { type: "string", enum: ["same-profile"] },
+      },
+      required: ["instance", "operationId", "fields", "roots", "durationMs"],
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/configuration/access/request", args),
+      "configuration access request",
+      { success: "boolean", requestId: "string", operationId: "string", state: "string", instance: "object", expiresAt: "number", requested: "object" },
+    ),
+  },
+  {
+    name: "get_configuration_access_status",
+    capabilityId: "configuration.access.status",
+    capabilityVersion: 1,
+    description: "Inspect the current pending, approved, or denied status of a caller-owned configuration access request.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operationId: { type: "string", maxLength: 96 },
+      },
+      required: ["operationId"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams({ operationId: String(args.operationId || "") });
+      return requireResponse(
+        await forge("GET", `/api/agent/configuration/access?${q}`),
+        "configuration access status",
+        { success: "boolean", requestId: "string", operationId: "string", state: "string", instance: "object", expiresAt: "number", requested: "object" },
+      );
+    },
+  },
+  {
+    name: "get_configuration",
+    capabilityId: "configuration.read",
+    capabilityVersion: 1,
+    description: "Read allowlisted saved and effective directory settings, deployment format preference, resolver provenance, lock reasons, and current revision for this profile without exposing secrets.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+    handler: async () => requireResponse(
+      await forge("GET", "/api/agent/configuration"),
+      "configuration",
+      { success: "boolean", instance: "object", revision: "string", saved: "object", effective: "object", locks: "object", mutability: "object", provenance: "object", deployFormats: "array" },
+    ),
+  },
+  {
+    name: "preview_configuration_change",
+    capabilityId: "configuration.preview",
+    capabilityVersion: 1,
+    description: "Validate a strict six-field directory or default deploy-format patch against the current profile revision, path-role locks, and physical root leases without modifying config.json.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        instance: {
+          type: "object",
+          properties: {
+            profileId: { type: "string", maxLength: 128 },
+            pid: { type: "integer", minimum: 1, maximum: 4294967295 },
+            startedAt: { type: "string", maxLength: 64 },
+          },
+          required: ["profileId", "pid", "startedAt"],
+          additionalProperties: false,
+        },
+        revision: { type: "string", maxLength: 64 },
+        operationId: { type: "string", maxLength: 96 },
+        patch: {
+          type: "object",
+          properties: {
+            schemaDir: { type: "string", maxLength: 4096 },
+            x4ReferenceRoot: { type: "string", maxLength: 4096 },
+            x4GamePath: { type: "string", maxLength: 4096 },
+            modWorkspacePath: { type: "string", maxLength: 4096 },
+            filesystemPath: { type: "string", maxLength: 4096 },
+            deployFormat: { type: "string", enum: ["loose", "catalog"] },
+          },
+          additionalProperties: false,
+        },
+      },
+      required: ["instance", "revision", "operationId", "patch"],
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/configuration/preview", args),
+      "configuration preview",
+      { success: "boolean", proposalId: "string", operationId: "string", expiresAt: "number" },
+    ),
+  },
+  {
+    name: "apply_configuration_change",
+    capabilityId: "configuration.apply",
+    capabilityVersion: 1,
+    description: "Atomically persist a revision- and instance-bound configuration proposal, refresh schema/reference caches, and record a durable profile receipt.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        instance: {
+          type: "object",
+          properties: {
+            profileId: { type: "string", maxLength: 128 },
+            pid: { type: "integer", minimum: 1, maximum: 4294967295 },
+            startedAt: { type: "string", maxLength: 64 },
+          },
+          required: ["profileId", "pid", "startedAt"],
+          additionalProperties: false,
+        },
+        proposalId: { type: "string", maxLength: 96 },
+        operationId: { type: "string", maxLength: 96 },
+      },
+      required: ["instance", "proposalId", "operationId"],
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/configuration/apply", args),
+      "configuration apply",
+      { success: "boolean", code: "string", operationId: "string", proposalId: "string", receiptStatus: "string" },
+    ),
+  },
+  {
+    name: "get_configuration_operation_status",
+    capabilityId: "configuration.status",
+    capabilityVersion: 1,
+    description: "Inspect the saved, follow-up, receipt, and recovery-patch status of a caller-owned configuration preview or apply operation.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operationId: { type: "string", maxLength: 96 },
+      },
+      required: ["operationId"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams({ operationId: String(args.operationId || "") });
+      return requireResponse(
+        await forge("GET", `/api/agent/configuration/status?${q}`),
+        "configuration operation status",
+        { success: "boolean", code: "string", operationId: "string", proposalId: "string", receiptStatus: "string", instance: "object", recoveryPatch: "object" },
+      );
+    },
+  },
 ];
 const STATIC_TOOL_NAMES = new Set(TOOLS.map((tool) => tool.name));
 STATIC_TOOL_NAMES.delete("runtime_debugger");
@@ -648,6 +845,7 @@ STATIC_TOOL_NAMES.delete("inspect_expression");
 STATIC_TOOL_NAMES.delete("lookup_text");
 STATIC_TOOL_NAMES.delete("get_xml_references");
 for (const name of AUTHORED_NAVIGATION_TOOLS) STATIC_TOOL_NAMES.delete(name);
+for (const name of CONFIGURATION_TOOLS) STATIC_TOOL_NAMES.delete(name);
 for (const name of PERFORMANCE_LIVE_TOOLS) STATIC_TOOL_NAMES.delete(name);
 for (const name of NATIVE_PERFORMANCE_LIVE_TOOLS) STATIC_TOOL_NAMES.delete(name);
 
@@ -1757,6 +1955,13 @@ function authoredNavigationGrantAllowed(capability, authority) {
     && grant.allowedEffects.includes("read") && grant.allowedEffects.includes("analyze");
 }
 
+function configurationGrantAllowed(capability, authority) {
+  const grant = authority.constraint;
+  return capability.version === 1 && isRecord(grant)
+    && grant.capabilityIdentities.includes(capability.id + "@1")
+    && capability.effects.every((effect) => grant.allowedEffects.includes(effect));
+}
+
 function validateEffectiveAuthority(authority, canonicalContract) {
   if (!isRecord(authority) || !hasExactKeys(authority, [
     "actor", "api_version", "authority_hash", "authority_schema_version", "capability_contract",
@@ -1801,6 +2006,7 @@ function validateEffectiveAuthority(authority, canonicalContract) {
     if (!capability.access.agentScopes.includes(authority.actor.scope)) return false;
     if (NATIVE_PERFORMANCE_CAPABILITIES.has(capability.id)) return nativeGrantAllowed(capability, authority);
     if (AUTHORED_NAVIGATION_CAPABILITIES.has(capability.id)) return authoredNavigationGrantAllowed(capability, authority);
+    if (CONFIGURATION_CAPABILITIES.has(capability.id)) return configurationGrantAllowed(capability, authority);
     if (capability.access.public || constraint === null) return true;
     const identity = `${capability.id}@${capability.version}`;
     return selectedIdentities.has(identity) && capability.effects.every((effect) => allowedEffects.has(effect));
@@ -1909,6 +2115,7 @@ async function availableTools(nativeRequest) {
       const projection = capability?.surfaces?.mcp?.find((candidate) => candidate.id === TOOLS[toolIndex].name);
       if (NATIVE_PERFORMANCE_LIVE_TOOLS.has(TOOLS[toolIndex].name) && (!capability || !nativeGrantAllowed(capability, discovery.authority))) continue;
       if (AUTHORED_NAVIGATION_TOOLS.has(TOOLS[toolIndex].name) && (!capability || !authoredNavigationGrantAllowed(capability, discovery.authority))) continue;
+      if (CONFIGURATION_TOOLS.has(TOOLS[toolIndex].name) && (!capability || !configurationGrantAllowed(capability, discovery.authority))) continue;
       if (projection && projection.status !== "disconnected") supportedNow.add(TOOLS[toolIndex].name);
     }
     stickyLiveToolNames = stickyLiveToolNames === null
@@ -1928,7 +2135,7 @@ async function availableTools(nativeRequest) {
   if (stickyLiveToolNames !== null) {
     return {
       discovery,
-      toolNames: [...stickyLiveToolNames].filter(name => !["check_expression", "inspect_expression", "get_xml_references", "lookup_text"].includes(name) && !AUTHORED_NAVIGATION_TOOLS.has(name) && !PERFORMANCE_LIVE_TOOLS.has(name) && !NATIVE_PERFORMANCE_LIVE_TOOLS.has(name)),
+      toolNames: [...stickyLiveToolNames].filter(name => !["check_expression", "inspect_expression", "get_xml_references", "lookup_text"].includes(name) && !AUTHORED_NAVIGATION_TOOLS.has(name) && !CONFIGURATION_TOOLS.has(name) && !PERFORMANCE_LIVE_TOOLS.has(name) && !NATIVE_PERFORMANCE_LIVE_TOOLS.has(name)),
       effectiveContract: lastValidContract,
       effectiveAuthority: lastValidAuthority,
       contractState: `${discovery.state}-sticky-live`,
@@ -2026,17 +2233,18 @@ async function listTools() {
 }
 
 async function forge(method, apiPath, body, signal, nativeDiscovery = false) {
-  const headers = { "Content-Type": "application/json" };
+  const headers = { "Content-Type": "application/json", "x-forge-channel": "mcp" };
   if (KEY) headers.Authorization = `Bearer ${KEY}`;
   if (WORKSPACE_ID) headers["x-workspace-id"] = WORKSPACE_ID;
   const nativeRoute = nativePerformanceRoute(method, apiPath);
+  const configurationRoute = apiPath.startsWith("/api/agent/configuration");
   const forwardsAuthoredSource = method === "POST" && AUTHORED_NAVIGATION_ROUTES.has(apiPath);
   const res = await fetch(`${BASE}${apiPath}`, {
     method,
     headers,
     ...(signal ? { signal } : {}),
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-    ...(nativeRoute || nativeDiscovery || forwardsAuthoredSource ? { redirect: "error" } : {}),
+    ...(nativeRoute || nativeDiscovery || forwardsAuthoredSource || configurationRoute ? { redirect: "error" } : {}),
   });
   let data = null;
   if (nativeRoute || nativeDiscovery) data = await readNativeJson(res, signal, nativeRoute ? NATIVE_PERFORMANCE_RESPONSE_BYTES : NATIVE_PERFORMANCE_DISCOVERY_BYTES);
@@ -2047,6 +2255,7 @@ async function forge(method, apiPath, body, signal, nativeDiscovery = false) {
     const error = new Error(`Forge API ${apiPath}: ${msg}${res.status === 401 ? " (is X4FORGE_KEY set to a valid agent key?)" : ""}${res.status === 403 ? " (check key scope and its workspace binding)" : ""}${data?.code === 'WORKSPACE_ID_REQUIRED' ? " (set X4FORGE_WORKSPACE_ID to the key-bound workspace)" : ""}`);
     error.status = res.status;
     if (["/api/agent/performance/collection", "/api/agent/performance/profile"].includes(apiPath)) error.performanceResponse = data;
+    if (configurationRoute && isRecord(data)) error.configurationResponse = data;
     throw error;
   }
   requireResponse(data, `Forge API ${apiPath}`);
@@ -2122,13 +2331,16 @@ rl.on("line", async (line) => {
         if (nativeRequest && !nativeRequestOwned(nativeRequest)) return;
         return reply(id, {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-          ...(TOOLS[toolIndex].name === "compile_workspace" && result.success === false || PERFORMANCE_LIVE_TOOLS.has(TOOLS[toolIndex].name) && result.ok === false || NATIVE_PERFORMANCE_LIVE_TOOLS.has(TOOLS[toolIndex].name) && result.ok === false ? { isError: true } : {}),
+          ...(TOOLS[toolIndex].name === "compile_workspace" && result.success === false || CONFIGURATION_TOOLS.has(TOOLS[toolIndex].name) && result.success === false || PERFORMANCE_LIVE_TOOLS.has(TOOLS[toolIndex].name) && result.ok === false || NATIVE_PERFORMANCE_LIVE_TOOLS.has(TOOLS[toolIndex].name) && result.ok === false ? { isError: true } : {}),
         });
       } catch (err) {
         if (nativeRequest) {
           if (!nativeRequestOwned(nativeRequest)) return;
           if (err?.nativeInputInvalid) return replyError(id, -32602, err.message);
           return nativeToolError(id, "NATIVE_PERFORMANCE_RESPONSE_INVALID");
+        }
+        if (CONFIGURATION_TOOLS.has(TOOLS[toolIndex].name) && isRecord(err?.configurationResponse)) {
+          return reply(id, { content: [{ type: "text", text: JSON.stringify(err.configurationResponse, null, 2) }], isError: true });
         }
         return reply(id, { content: [{ type: "text", text: `ERROR: ${err && err.message ? err.message : String(err)}` }], isError: true });
       }

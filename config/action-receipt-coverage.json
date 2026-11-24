@@ -153,6 +153,86 @@
       ]
     },
     {
+      "routeKey": "POST /api/agent/configuration/access/request",
+      "method": "POST",
+      "template": "/api/agent/configuration/access/request",
+      "owner": "configuration.access.request",
+      "resourceClass": "configured-root",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1configuration~1access~1request",
+      "integrationBatch": "W3B0-internal",
+      "history": "visible",
+      "capability": {
+        "kind": "canonical",
+        "id": "configuration.access.request",
+        "version": 1
+      },
+      "semanticClass": "audit-retention",
+      "policy": "separately-governed",
+      "effects": [
+        "read",
+        "audit-write",
+        "audit-retention-delete"
+      ],
+      "authorityScopes": [
+        "global",
+        "profile",
+        "workspace"
+      ]
+    },
+    {
+      "routeKey": "POST /api/agent/configuration/apply",
+      "method": "POST",
+      "template": "/api/agent/configuration/apply",
+      "owner": "configuration.apply",
+      "resourceClass": "configured-root",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1configuration~1apply",
+      "integrationBatch": "W3B1",
+      "history": "visible",
+      "capability": {
+        "kind": "canonical",
+        "id": "configuration.apply",
+        "version": 1
+      },
+      "semanticClass": "durable-local-mutation",
+      "policy": "receipt-required",
+      "effects": [
+        "filesystem-write"
+      ],
+      "authorityScopes": [
+        "global",
+        "profile",
+        "workspace"
+      ]
+    },
+    {
+      "routeKey": "POST /api/agent/configuration/preview",
+      "method": "POST",
+      "template": "/api/agent/configuration/preview",
+      "owner": "configuration.preview",
+      "resourceClass": "configured-root",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1configuration~1preview",
+      "integrationBatch": "W3B0-internal",
+      "history": "visible",
+      "capability": {
+        "kind": "canonical",
+        "id": "configuration.preview",
+        "version": 1
+      },
+      "semanticClass": "audit-retention",
+      "policy": "separately-governed",
+      "effects": [
+        "read",
+        "analyze",
+        "audit-write",
+        "audit-retention-delete"
+      ],
+      "authorityScopes": [
+        "global",
+        "profile",
+        "workspace"
+      ]
+    },
+    {
       "routeKey": "POST /api/agent/critic",
       "method": "POST",
       "template": "/api/agent/critic",
@@ -422,6 +502,29 @@
       "capability": {
         "kind": "reviewed-legacy",
         "id": "POST /api/agent/keys",
+        "reviewRef": "docs/plans/2026-08-02-w3b0-action-receipt-coverage.md#review"
+      },
+      "semanticClass": "session-credential-mutation",
+      "policy": "receipt-required",
+      "effects": [
+        "credential"
+      ],
+      "authorityScopes": [
+        "global"
+      ]
+    },
+    {
+      "routeKey": "POST /api/agent/keys/configuration-access/decision",
+      "method": "POST",
+      "template": "/api/agent/keys/configuration-access/decision",
+      "owner": "agent-api",
+      "resourceClass": "global-session",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1keys~1configuration-access~1decision",
+      "integrationBatch": "W3B1",
+      "history": "visible",
+      "capability": {
+        "kind": "reviewed-legacy",
+        "id": "POST /api/agent/keys/configuration-access/decision",
         "reviewRef": "docs/plans/2026-08-02-w3b0-action-receipt-coverage.md#review"
       },
       "semanticClass": "session-credential-mutation",

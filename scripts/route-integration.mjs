@@ -787,7 +787,8 @@ async function main() {
     ? capabilityContract.capabilities.map(capability => capability?.id)
     : [];
   // Independent semantic inventory: unexpected additions/removals must fail.
-  const expectedCapabilityIds = ['expression.check', 'expression.inspect', 'extensions.conflicts.analyze', 'history.list', 'history.revert',
+  const expectedCapabilityIds = ['configuration.access.request', 'configuration.access.status', 'configuration.apply', 'configuration.preview', 'configuration.read', 'configuration.status',
+    'expression.check', 'expression.inspect', 'extensions.conflicts.analyze', 'history.list', 'history.revert',
     'patch.readiness.analyze', 'performance.collect', 'performance.native.collect', 'performance.native.read', 'performance.native.stop',
     'performance.profile', 'performance.read', 'project.ai.navigation', 'project.md.navigation', 'project.validate', 'project.xml.references', 'readiness.read',
     'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'workspace.compile', 'workspace.compile.result', 'workspace.generate.preview', 'workspace.read'];
@@ -1431,7 +1432,7 @@ async function main() {
     ['write', writeEffective, 'write', ['expression.check', 'expression.inspect', 'extensions.conflicts.analyze', 'history.list', 'project.validate',
       'performance.collect', 'performance.profile', 'performance.read', 'project.xml.references',
       'readiness.read', 'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'workspace.compile', 'workspace.compile.result', 'workspace.read']],
-    ['deploy', deployEffective, 'deploy', expectedCapabilityIds.filter(id => ![
+    ['deploy', deployEffective, 'deploy', expectedCapabilityIds.filter(id => !id.startsWith('configuration.') && ![
       'performance.native.collect', 'performance.native.read', 'performance.native.stop', 'project.ai.navigation', 'project.md.navigation',
     ].includes(id))],
   ]) {
@@ -5968,6 +5969,130 @@ async function main() {
         && lookup.json?.text === (samePath ? 'Original workspace' : 'Route workspace')
         && lookup.json?.source?.representation === (samePath ? 'source' : 'generated'),
       JSON.stringify({ save: saved.status, originalPath, result: lookup.json }));
+  }
+
+  // --- #96 SCOPED CONFIGURATION OPERATIONS (EXPLICIT GRANT + OWNER APPROVAL + CAS) ---
+  {
+    const presetConfigDenied = await req('GET', '/api/agent/configuration', deployKey);
+    ok('preset_deploy_key_denied_configuration_without_explicit_grant',
+      presetConfigDenied.status === 403 && presetConfigDenied.json?.authorityCode === 'CAPABILITY_NOT_GRANTED',
+      JSON.stringify(presetConfigDenied.json || {}));
+
+    const cfgIdentities = [
+      'configuration.access.request@1',
+      'configuration.access.status@1',
+      'configuration.apply@1',
+      'configuration.preview@1',
+      'configuration.read@1',
+      'configuration.status@1',
+    ];
+    const cfgMint = await mkKey('write', {
+      label: 'route-int-config-agent',
+      authorityMode: 'exact',
+      capabilityIdentities: cfgIdentities,
+      allowedEffects: ['read', 'analyze', 'audit-write', 'audit-retention-delete', 'filesystem-write'],
+    });
+    const cfgKey = cfgMint.token;
+    ok('explicit_configuration_key_minted', cfgMint.response.status === 200 && typeof cfgKey === 'string', JSON.stringify(cfgMint.response.json || {}));
+
+    const ungrantedRead = await req('GET', '/api/agent/configuration', cfgKey);
+    const cfgInstance = ungrantedRead.json?.instance;
+    ok('ungranted_configuration_read_returns_instance_and_approval_workflow',
+      ungrantedRead.status === 403
+        && ungrantedRead.json?.code === 'CONFIGURATION_GRANT_REQUIRED'
+        && typeof cfgInstance?.profileId === 'string'
+        && ungrantedRead.json?.approvalWorkflow?.requestEndpoint === 'POST /api/agent/configuration/access/request',
+      JSON.stringify(ungrantedRead.json || {}));
+
+    const accessReq = await req('POST', '/api/agent/configuration/access/request', cfgKey, {
+      instance: cfgInstance,
+      operationId: 'route-int-cfg-access-01',
+      fields: ['deployFormat', 'modWorkspacePath'],
+      roots: { modWorkspacePath: [safeWorkspace] },
+      durationMs: 600_000,
+      restartPolicy: 'same-profile',
+    });
+    capabilityResponses.set('configuration.access.request', accessReq);
+    ok('configuration_access_request_creates_pending_entry',
+      accessReq.status === 200 && accessReq.json?.state === 'pending' && typeof accessReq.json?.requestId === 'string',
+      JSON.stringify(accessReq.json || {}));
+
+    const selfApproveDenied = await req('POST', '/api/agent/keys/configuration-access/decision', cfgKey, {
+      requestId: accessReq.json?.requestId,
+      approve: true,
+      instance: cfgInstance,
+    });
+    ok('configuration_agent_cannot_self_approve', selfApproveDenied.status === 403, JSON.stringify(selfApproveDenied.json || {}));
+
+    const ownerApprove = await req('POST', '/api/agent/keys/configuration-access/decision', SESSION_TOKEN, {
+      requestId: accessReq.json?.requestId,
+      approve: true,
+      instance: cfgInstance,
+    });
+    ok('studio_owner_approves_configuration_access_with_receipt',
+      ownerApprove.status === 200 && ownerApprove.json?.state === 'approved' && typeof ownerApprove.json?.receiptId === 'string',
+      JSON.stringify(ownerApprove.json || {}));
+
+    const accessStatus = await req('GET', '/api/agent/configuration/access?operationId=route-int-cfg-access-01', cfgKey);
+    capabilityResponses.set('configuration.access.status', accessStatus);
+    ok('configuration_access_status_reflects_approved_grant',
+      accessStatus.status === 200 && accessStatus.json?.state === 'approved' && accessStatus.json?.receiptId === ownerApprove.json?.receiptId,
+      JSON.stringify(accessStatus.json || {}));
+
+    const cfgRead = await req('GET', '/api/agent/configuration', cfgKey);
+    capabilityResponses.set('configuration.read', cfgRead);
+    ok('configuration_read_exposes_allowlisted_fields_without_secrets',
+      cfgRead.status === 200
+        && cfgRead.json?.success === true
+        && typeof cfgRead.json?.revision === 'string'
+        && !JSON.stringify(cfgRead.json).includes(SESSION_TOKEN),
+      JSON.stringify(cfgRead.json || {}));
+
+    const previousFormat = cfgRead.json?.effective?.deployFormat || 'loose';
+    const nextFormat = previousFormat === 'catalog' ? 'loose' : 'catalog';
+    const cfgPreview = await req('POST', '/api/agent/configuration/preview', cfgKey, {
+      instance: cfgInstance,
+      revision: cfgRead.json?.revision,
+      operationId: 'route-int-cfg-change-01',
+      patch: { deployFormat: nextFormat },
+    });
+    capabilityResponses.set('configuration.preview', cfgPreview);
+    ok('configuration_preview_stages_revision_bound_proposal',
+      cfgPreview.status === 200 && cfgPreview.json?.success === true && typeof cfgPreview.json?.proposalId === 'string',
+      JSON.stringify(cfgPreview.json || {}));
+
+    const cfgApply = await req('POST', '/api/agent/configuration/apply', cfgKey, {
+      instance: cfgInstance,
+      proposalId: cfgPreview.json?.proposalId,
+      operationId: 'route-int-cfg-change-01',
+    });
+    capabilityResponses.set('configuration.apply', cfgApply);
+    ok('configuration_apply_commits_and_records_receipt',
+      cfgApply.status === 200 && cfgApply.json?.saved === true && cfgApply.json?.receiptStatus === 'committed',
+      JSON.stringify(cfgApply.json || {}));
+
+    const cfgOpStatus = await req('GET', '/api/agent/configuration/status?operationId=route-int-cfg-change-01', cfgKey);
+    capabilityResponses.set('configuration.status', cfgOpStatus);
+    ok('configuration_operation_status_returns_recovery_patch',
+      cfgOpStatus.status === 200 && cfgOpStatus.json?.saved === true && cfgOpStatus.json?.recoveryPatch?.deployFormat === previousFormat,
+      JSON.stringify(cfgOpStatus.json || {}));
+
+    // Restore original format cleanly through a second preview/apply
+    const restoreRead = await req('GET', '/api/agent/configuration', cfgKey);
+    const restorePreview = await req('POST', '/api/agent/configuration/preview', cfgKey, {
+      instance: cfgInstance,
+      revision: restoreRead.json?.revision,
+      operationId: 'route-int-cfg-restore-02',
+      patch: { deployFormat: previousFormat },
+    });
+    const restoreApply = await req('POST', '/api/agent/configuration/apply', cfgKey, {
+      instance: cfgInstance,
+      proposalId: restorePreview.json?.proposalId,
+      operationId: 'route-int-cfg-restore-02',
+    });
+    ok('configuration_restore_returns_to_prior_deploy_format',
+      restoreApply.status === 200 && restoreApply.json?.saved === true,
+      JSON.stringify(restoreApply.json || {}));
   }
 
   const capabilityOutputReport = (capabilityContract?.capabilities || [])

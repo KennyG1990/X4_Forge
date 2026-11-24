@@ -55,6 +55,7 @@ export interface ConfigurationOperationOptions {
   now?: () => number;
   // Dependency seams exercise the actual atomic writer and receipt store in tests.
   file?: string;
+  keysFile?: string;
   writeConfig?: typeof writeXsdConfig;
   coordinate?: typeof forgeSourceCoordinator.run;
 }
@@ -113,6 +114,36 @@ function values(config: XsdConfig, resolved?: ResolvedXsdConfig): Values {
         : (config as XsdConfig & { deployFormat?: string }).deployFormat || ''
       : source[field] || ''])) as Values;
 }
+export type ConfigurationProvenance = 'saved' | 'default' | 'environment' | 'launcher';
+function fieldProvenance(
+  field: ConfigurationGrantField,
+  config: XsdConfig & { deployFormat?: unknown },
+  resolved: ResolvedXsdConfig,
+  locked: boolean,
+): ConfigurationProvenance {
+  if (locked) return 'launcher';
+  if (field === 'deployFormat') return normalizeDeployFormat(config.deployFormat) ? 'saved' : 'default';
+  if (field === 'schemaDir') {
+    const configured = typeof config.xsdSchemaPath === 'string' && config.xsdSchemaPath.trim()
+      ? (path.isAbsolute(config.xsdSchemaPath) ? config.xsdSchemaPath : path.join(resolved.x4GamePath || '', config.xsdSchemaPath))
+      : '';
+    if (resolved.isolatedScratch && configured) return 'saved';
+    if (process.env.X4_XSD_PATH?.trim()) return 'environment';
+    return configured ? 'saved' : 'default';
+  }
+  if (field === 'x4ReferenceRoot') {
+    const configured = typeof config.x4ReferenceRoot === 'string' ? config.x4ReferenceRoot.trim() : '';
+    if (resolved.isolatedScratch && configured) return 'saved';
+    if (process.env.X4_REFERENCE_ROOT?.trim()) return 'environment';
+    return configured ? 'saved' : 'default';
+  }
+  if (field === 'x4GamePath') {
+    if (process.env.X4_GAME_PATH?.trim()) return 'environment';
+    return typeof config.x4GamePath === 'string' && config.x4GamePath.trim() ? 'saved' : 'default';
+  }
+  const raw = config[field];
+  return typeof raw === 'string' && raw.trim() ? 'saved' : 'default';
+}
 
 export function createConfigurationOperations(options: ConfigurationOperationOptions) {
   const now = options.now || Date.now;
@@ -127,8 +158,13 @@ export function createConfigurationOperations(options: ConfigurationOperationOpt
       || hash(inspectConfigurationDirectory(path.dirname(journalFile), true)) !== hash(journalLease)) fail('CONFIGURATION_PROFILE_CHANGED');
   };
   const coordinate = options.coordinate || forgeSourceCoordinator.run;
+  const coordinationKeys = [...new Set([
+    canonicalSourceKey(file),
+    canonicalSourceKey(journalFile),
+    ...(options.keysFile ? [canonicalSourceKey(options.keysFile)] : []),
+  ])];
   const exclusive = <T>(actor: ConfigurationActor, operation: string, run: () => T | Promise<T>) =>
-    coordinate([canonicalSourceKey(file), canonicalSourceKey(journalFile)], { actor: actor.id, operation }, async () => {
+    coordinate(coordinationKeys, { actor: actor.id, operation }, async () => {
       checkStorage(); return run();
     });
   const snapshot = () => {
@@ -375,11 +411,18 @@ export function createConfigurationOperations(options: ConfigurationOperationOpt
         const locks = Object.fromEntries(fields.map(field => [field, field !== 'deployFormat' && options.ownerRootsLocked()
           ? 'PROJECT_CHECK_OWNER_ROOTS_LOCKED' : current.resolved.isolatedScratch && ['x4GamePath', 'modWorkspacePath', 'filesystemPath'].includes(field)
             ? 'DEV_SCRATCH_PATH_LOCKED' : null]));
+        const mutability = Object.fromEntries(fields.map(field => [field, locks[field] ? 'locked' as const : 'mutable' as const]));
         return { success: true, instance: structuredClone(instance), revision: current.revision,
-          saved: pick(saved), effective: pick(current.effective), locks,
-          provenance: Object.fromEntries(fields.map(field => [field, locks[field] ? 'launcher'
-            : saved[field] === current.effective[field] && saved[field] ? 'saved' : 'default-or-environment'])),
-          deployFormats: ['loose', 'catalog'], grantExpiresAt: grant?.expiresAt };
+          saved: pick(saved), effective: pick(current.effective), locks, mutability,
+          provenance: Object.fromEntries(fields.map(field => [
+            field,
+            fieldProvenance(field, current.config, current.resolved, !!locks[field]),
+          ])),
+          deployFormats: ['loose', 'catalog'], deployFormatDefault: 'loose' as const,
+          deployFormatSource: saved.deployFormat ? 'saved' as const : 'default' as const,
+          schemaComplete: !!(current.resolved.mdExists && current.resolved.commonExists),
+          x4ReferenceExists: !!current.resolved.x4ReferenceExists,
+          grantExpiresAt: grant?.expiresAt };
       });
     },
     async preview(actor: ConfigurationActor, input: unknown) {

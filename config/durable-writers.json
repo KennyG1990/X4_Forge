@@ -1,11 +1,11 @@
 {
   "version": 1,
-  "sourceFingerprint": "9090a2becaf3836219e0f70502219542f69d04f2d793e83070967c3ef24a3f28",
+  "sourceFingerprint": "3dba91cb24d8a0ac4c73181239062f177b5a6f2c2b364f466d9481debf1ee63e",
   "policy": "Every raw production filesystem mutation source is count-pinned here. Authoritative files use atomic sibling promotion; stronger tree, archive, append-log, SQLite, retention, ephemeral, and fixture contracts remain explicit exceptions.",
   "writers": [
     {
       "file": "server.ts",
-      "calls": {"writeFileSync": 55, "appendFileSync": 4, "renameSync": 21, "copyFileSync": 4, "mkdirSync": 44, "rmSync": 45, "rmdirSync": 1, "unlinkSync": 6, "chmodSync": 2, "mkdtempSync": 9},
+      "calls": {"writeFileSync": 55, "appendFileSync": 4, "renameSync": 21, "copyFileSync": 4, "mkdirSync": 45, "rmSync": 45, "rmdirSync": 1, "unlinkSync": 6, "chmodSync": 2, "mkdtempSync": 9},
       "categories": ["mixed", "authoritative-atomic", "verified-tree-transaction", "isolated-artifact-stage", "retention-cleanup", "fixture-only"],
       "owners": ["writeWorkspaceFileGuarded and fs/create", "snapshot create/prune/delete/restore", "copyRegularTree and synchronizeRegularTree", "replaceValidatedDeployment and recovery", "compileWorkspaceToFolder scratch cleanup", "replaceReleaseDirectory", "Nexus and Steam release handlers", "embedded route/artifact/workspace API selftests", "route-integration caller-key provider-dispatch marker"],
       "rationale": "The composition root contains guarded atomic source/snapshot writes, verified deployment/release directory transactions including bounded EXDEV quarantine-copy recovery with exact restore, isolated compilation/release materializers, bounded snapshot/artifact retention, and embedded scratch-only route and artifact tamper/restore fixtures including causal provider-dispatch evidence and explicit translation filename import/edit fidelity. Artifact builds alone opt in to bounded stage-promotion retries with physical-generation and exact-byte guards; the added publication fault fixtures remain beneath the existing unique temporary selftest root.",
