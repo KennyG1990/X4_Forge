@@ -58,6 +58,7 @@ const DIAGNOSTIC_READ_TOOLS = [
   'get_forge_health_card',
   'preview_forge_probe',
   'get_live_forge_state',
+  'get_workspace_domain',
 ];
 
 const MD_NAVIGATION_TOOL = 'navigate_md_script';
@@ -117,7 +118,7 @@ const EXPLICIT_ONLY_MCP_CAPABILITIES = new Set<string>([
   'files.delete', 'files.delete.dir', 'files.inventory.read', 'files.list', 'files.read', 'files.restore', 'files.scaffold', 'files.write',
   'history.revert', 'project.md.rename', 'rules.suppression.apply',
   'snapshots.create', 'snapshots.delete', 'snapshots.list', 'snapshots.restore',
-  'workspace.mod.drift', 'workspace.mod.import',
+  'workspace.domain.write', 'workspace.mod.drift', 'workspace.mod.import',
 ]);
 const AUTHORED_NAVIGATION_SECRET = 'PRIVATE SOURCE MUST NOT LEAK';
 const AUTHORED_NAVIGATION_REDIRECT_SINK = '/fixture-authored-navigation-redirect';
@@ -152,7 +153,7 @@ const READ_TOOLS = [
   'suggest_expression_completions', 'get_mod_dependency_graph', 'get_extension_override_map', 'list_patch_targets', 'synthesize_xml_patch', 'get_galaxy_map',
   'check_xml_round_trip', 'suggest_quick_fixes', 'prepare_warning_suppression', 'verify_release_artifact', 'search_workspace_symbols', 'read_action_history_blob',
   'derive_external_api_contract', 'list_external_api_contracts', 'read_extension_file', 'read_patch_base_content', 'complete_xpath_selector', 'get_reference_coverage', 'list_lua_ui_snippets', 'harvest_vanilla_ui_menus',
-  'prepare_bug_report', 'query_forge_knowledge', 'get_forge_health_card', 'preview_forge_probe', 'get_live_forge_state',
+  'prepare_bug_report', 'query_forge_knowledge', 'get_forge_health_card', 'preview_forge_probe', 'get_live_forge_state', 'get_workspace_domain',
 ];
 const WRITE_TOOLS = [
   'validate_mod', 'list_schema_domains', 'get_workspace', 'compile_workspace', 'author_check',

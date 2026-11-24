@@ -106,6 +106,7 @@ const WORKSPACE_FILES_TOOLS = new Set([
   "revert_action_history",
   "get_mod_drift",
   "import_mod_folder",
+  "update_workspace_domain",
 ]);
 const WORKSPACE_FILES_CAPABILITIES = new Set([
   "bulk.transform.apply",
@@ -125,6 +126,7 @@ const WORKSPACE_FILES_CAPABILITIES = new Set([
   "snapshots.delete",
   "snapshots.list",
   "snapshots.restore",
+  "workspace.domain.write",
   "workspace.mod.drift",
   "workspace.mod.import",
 ]);
@@ -184,6 +186,7 @@ const DIAGNOSTIC_READ_LIVE_TOOLS = new Set([
   "get_forge_health_card",
   "preview_forge_probe",
   "get_live_forge_state",
+  "get_workspace_domain",
 ]);
 const PERFORMANCE_PROFILE_HTTP_FAILURES = { PROFILE_DISABLED: 503, PROFILE_BUSY: 409, PROFILE_RATE_LIMITED: 429, PROFILE_DISPOSED: 503, PROFILE_INPUT_INVALID: 400, PROFILE_ABORTED: 408, PROFILE_FAILED: 500, PROFILE_CLEANUP_UNCONFIRMED: 409 };
 const PERFORMANCE_COLLECTION_HTTP_FAILURES = { PERFORMANCE_DISPOSED: 503, PERFORMANCE_COLLECTION_BUSY: 409, PERFORMANCE_COLLECTION_REFUSED: 409, PROJECT_INPUT_INVALID: 400, PERFORMANCE_COLLECTION_FAILED: 500 };
@@ -2988,6 +2991,114 @@ const TOOLS = [
       return payload;
     },
   },
+  {
+    name: "get_workspace_domain",
+    capabilityId: "workspace.domain.read",
+    capabilityVersion: 1,
+    description: "Read one complete, host-path-redacted domain model slice (aiscripts, libraries, md_graph, translations, ui_layout, or xml_patches) from the addressed Studio workspace along with version, CAS workspaceHash, snapshotHash, and compileSettings (bounded at 512 KiB UTF-8 without 50-node truncation).",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["domain"],
+      properties: {
+        domain: {
+          type: "string",
+          enum: ["aiscripts", "libraries", "md_graph", "translations", "ui_layout", "xml_patches"],
+        },
+      },
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams({ domain: String(args.domain) });
+      return requireResponse(
+        await forge("GET", `/api/agent/workspace/domain?${q}`),
+        "workspace domain model read",
+        {
+          ok: "boolean",
+          success: "boolean",
+          workspaceId: "string",
+          version: "number",
+          workspaceHash: "string",
+          snapshotHash: "string",
+          modId: "string",
+          domain: "string",
+          compileSettings: "object",
+          data: "object",
+        },
+      );
+    },
+  },
+  {
+    name: "update_workspace_domain",
+    capabilityId: "workspace.domain.write",
+    capabilityVersion: 1,
+    description: "Validate and preview (apply:false, default) or compare-and-swap commit (apply:true) updates to one isolated Studio workspace domain (aiscripts, libraries, md_graph, translations, ui_layout, or xml_patches) under expectedHead + expectedSnapshotHash guards, preserving sibling compileSettings and uiTheme fields and recording an action receipt plus one-use workspace recovery. Requires an explicit key grant.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["domain", "changes"],
+      properties: {
+        domain: {
+          type: "string",
+          enum: ["aiscripts", "libraries", "md_graph", "translations", "ui_layout", "xml_patches"],
+        },
+        changes: {
+          type: "object",
+          additionalProperties: true,
+        },
+        apply: {
+          type: "boolean",
+          default: false,
+        },
+        operationId: {
+          type: "string",
+          maxLength: 96,
+        },
+        expectedHead: {
+          type: "string",
+          maxLength: 64,
+        },
+        expectedSnapshotHash: {
+          type: "string",
+          maxLength: 64,
+        },
+        expectedVersion: {
+          type: "integer",
+          minimum: 0,
+        },
+        detail: {
+          type: "string",
+          enum: ["compact", "full"],
+        },
+      },
+    },
+    handler: async (args) => {
+      const body = {
+        domain: args.domain,
+        changes: args.changes,
+        ...(args.apply !== undefined ? { apply: args.apply } : {}),
+        ...(args.operationId !== undefined ? { operationId: args.operationId } : {}),
+        ...(args.expectedHead !== undefined ? { expectedHead: args.expectedHead } : {}),
+        ...(args.expectedSnapshotHash !== undefined ? { expectedSnapshotHash: args.expectedSnapshotHash } : {}),
+        ...(args.expectedVersion !== undefined ? { expectedVersion: args.expectedVersion } : {}),
+        ...(args.detail !== undefined ? { detail: args.detail } : {}),
+      };
+      return requireResponse(
+        await forge("POST", "/api/agent/workspace/domain", body),
+        "workspace domain model update",
+        {
+          ok: "boolean",
+          success: "boolean",
+          applied: "boolean",
+          detail: "string",
+          domain: "string",
+          touchedFields: "array",
+          workspaceId: "string",
+          modId: "string",
+          data: "object",
+        },
+      );
+    },
+  },
 ];
 const STATIC_TOOL_NAMES = new Set(TOOLS.map((tool) => tool.name));
 STATIC_TOOL_NAMES.delete("runtime_debugger");
@@ -4420,7 +4531,8 @@ async function forge(method, apiPath, body, signal, nativeDiscovery = false) {
     || apiPath === "/api/agent/history/revert"
     || apiPath.startsWith("/api/agent/mod-folder/")
     || apiPath.startsWith("/api/agent/snapshots/")
-    || apiPath.startsWith("/api/agent/project-rules/suppression/");
+    || apiPath.startsWith("/api/agent/project-rules/suppression/")
+    || apiPath === "/api/agent/workspace/domain";
   const forwardsAuthoredSource = method === "POST" && AUTHORED_NAVIGATION_ROUTES.has(apiPath);
   const res = await fetch(`${BASE}${apiPath}`, {
     method,

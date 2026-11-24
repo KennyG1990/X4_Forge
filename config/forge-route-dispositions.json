@@ -178,6 +178,7 @@
     "src/lib/watcherVerdict.ts",
     "src/lib/workspaceActionReceipt.ts",
     "src/lib/workspaceConflict.ts",
+    "src/lib/workspaceDomainAuthoring.ts",
     "src/lib/workspaceIdentity.ts",
     "src/lib/workspacePolling.ts",
     "src/lib/workspaceQuickFixes.ts",
@@ -2790,6 +2791,18 @@
       "resourceClass": "public",
       "workspaceMode": "optional"
     },
+    "GET /api/agent/workspace/domain": {
+      "disposition": "canonical-capability",
+      "owner": "workspace.domain.read",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "workspace",
+      "workspaceMode": "required"
+    },
     "GET /api/agent/workspace/parked": {
       "disposition": "session-only",
       "owner": "agent-api",
@@ -4247,6 +4260,17 @@
       "resourceClass": "workspace",
       "workspaceMode": "required"
     },
+    "POST /api/agent/workspace/domain": {
+      "disposition": "canonical-capability",
+      "owner": "workspace.domain.write",
+      "registrations": 1,
+      "agentScopes": [
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "workspace",
+      "workspaceMode": "required"
+    },
     "POST /api/agent/workspace/merge": {
       "disposition": "legacy-agent-api",
       "owner": "agent-api",
@@ -4683,6 +4707,8 @@
     "validation.last.read@1": "3aa1dfb1609fef0b75557ab12936f47bb22ecc23808168feda91070d23ea135f",
     "workspace.compile@2": "aaa528d9b0b381b7af954ec78d2ba15212e9e0cc020d4af54eb5223caba9e185",
     "workspace.compile.result@2": "085e4f90f5fd5c0fd9a9decd3b1737f83b1663e63cae354ee443971de183bda0",
+    "workspace.domain.read@1": "e6e16c2d68fef68fb0ee8481bebe00815159f387cf18af20d68e0d47291a01a6",
+    "workspace.domain.write@1": "fdeabf4241e62fd02c82c8a2639d183b4f31d27ad0076ee2f626468f0b3b3619",
     "workspace.generate.preview@1": "76630ed9e34f95a4cc895088e0d3def92d5f3b2bb223d071e1e5a4fc1b4f6add",
     "workspace.mod.drift@1": "71b738bfb4bf4275911c937d958b39ee32e0a81cd7de14a4598fb04ae4b787a5",
     "workspace.mod.import@1": "9b3d03c3cae968638eec281fb758479cce07557dbc99048b8aafde06224307eb",
@@ -4690,8 +4716,8 @@
     "workspace.roundtrip.check@1": "c1a1c89c1eb3f44f8f16e6ca03e9787318eec5065bcf25dd2c3ce3a4b4045185"
   },
   "mcpModuleSignature": {
-    "version": 37,
-    "hash": "0368859a0c948f4390e05a6839b9ef5ddb34a960698ff3e68816073122014540"
+    "version": 38,
+    "hash": "b24c9e33fc578829e328633604356efa33dcdbfd2f18358a142bf39a2e0af3e5"
   },
   "mcpSignatures": {
     "validate_mod": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",
@@ -4786,7 +4812,9 @@
     "query_forge_knowledge": "8e37336447ac7e048badfd95714bf56e61018f70c4bc05e7cd3543280b0aab7e",
     "get_forge_health_card": "65bb749ea9f18f1532ac8616e61cb02b4e6136bf0f6da3395d1f638c22be83ca",
     "preview_forge_probe": "4fd8a4d2babc5403119fecc3cd983ff4504d368c8e0c7ab06306eb98991730f8",
-    "get_live_forge_state": "51afaddf22c9bf9827a10332c993ac02a963b499fbd26dc0e47d6d4505a4d910"
+    "get_live_forge_state": "51afaddf22c9bf9827a10332c993ac02a963b499fbd26dc0e47d6d4505a4d910",
+    "get_workspace_domain": "ac9a7d1006e37a197e5dfd4432919cb8b8743bade92f0adab4e813964e62a8fc",
+    "update_workspace_domain": "da0a5bc309e8785f324e230bd78ac35f4b8c7657327f4e877c79582f491f690f"
   },
   "mcpCapabilityIdentities": {
     "validate_mod": "project.validate@1",
@@ -4881,6 +4909,8 @@
     "query_forge_knowledge": "help.knowledge.read@1",
     "get_forge_health_card": "runtime.health.read@1",
     "preview_forge_probe": "runtime.probe.preview@1",
-    "get_live_forge_state": "runtime.state.read@1"
+    "get_live_forge_state": "runtime.state.read@1",
+    "get_workspace_domain": "workspace.domain.read@1",
+    "update_workspace_domain": "workspace.domain.write@1"
   }
 }

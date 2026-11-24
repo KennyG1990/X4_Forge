@@ -191,6 +191,7 @@ export const LEDGER_ROUTES: Array<{ method: string; path: string; kind: LedgerKi
   { method: 'POST', path: '/api/agent/artifact/build', kind: 'package' },
   { method: 'POST', path: '/api/agent/workspace', kind: 'workspace' },
   { method: 'POST', path: '/api/agent/workspace/merge', kind: 'workspace' },
+  { method: 'POST', path: '/api/agent/workspace/domain', kind: 'workspace' },
   { method: 'POST', path: '/api/agent/workspace/restore-parked', kind: 'workspace' },
   { method: 'POST', path: '/api/agent/mod-folder/sync', kind: 'workspace' },
   { method: 'POST', path: '/api/agent/bulk-transform/apply', kind: 'workspace' },
@@ -520,6 +521,11 @@ export function describeAction(input: {
       const name = body?.workspaceSummary?.name || body?.workspace?.name;
       const label = name ? ` "${name}"` : '';
       return { title: `Imported mod folder${label} into working canvas (${plural(total, 'file')})`, outcome: { status: 'ok' } };
+    }
+    if (input.routePath === '/api/agent/workspace/domain') {
+      const domainLabel = String(body?.domain || request?.domain || 'domain');
+      if (httpFailed) return { title: `Workspace ${domainLabel} update REFUSED — ${cleanReason(body)}`, outcome: { status: 'error', code: body?.code || body?.error } };
+      return { title: `Updated workspace ${domainLabel} domain model`, outcome: { status: 'ok' } };
     }
     if (httpFailed) return { title: `Workspace update REFUSED — ${cleanReason(body)}`, outcome: { status: 'error', code: body?.code } };
     const nodeCount = numberish(request?.workspace?.nodes?.length);

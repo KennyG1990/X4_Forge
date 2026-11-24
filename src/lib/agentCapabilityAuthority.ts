@@ -104,6 +104,7 @@ export const WORKSPACE_FILES_EXPLICIT_GRANT_CAPABILITIES = [
   'snapshots.delete',
   'snapshots.list',
   'snapshots.restore',
+  'workspace.domain.write',
   'workspace.mod.drift',
   'workspace.mod.import',
 ] as const;

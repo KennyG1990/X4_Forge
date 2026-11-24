@@ -351,6 +351,7 @@ async function main() {
     'revert_action_history',
     'get_mod_drift',
     'import_mod_folder',
+    'update_workspace_domain',
   ];
 
   try {
@@ -471,6 +472,8 @@ async function main() {
           'snapshots.delete@1',
           'snapshots.list@1',
           'snapshots.restore@1',
+          'workspace.domain.read@1',
+          'workspace.domain.write@1',
           'workspace.mod.drift@1',
           'workspace.mod.import@1',
           'workspace.read@2',
@@ -1764,6 +1767,114 @@ async function main() {
       assert.equal(stateRes.payload.ok, true);
       assert.equal(typeof stateRes.payload.available, 'boolean');
       assert(!JSON.stringify(stateRes.payload).includes(root), 'get_live_forge_state leaked host root');
+    });
+
+    await check('15_workspace_domain_read_and_cas_domain_authoring_with_undo_over_mcp', async () => {
+      // 1. Standard preset read key can inspect all 6 domains without 50-node truncation or host-path leakage
+      for (const domain of ['aiscripts', 'libraries', 'md_graph', 'translations', 'ui_layout', 'xml_patches'] as const) {
+        const readDom = await presetReadMcp.callTool('get_workspace_domain', { domain });
+        assert.equal(readDom.isError, false, `get_workspace_domain(${domain}): ${JSON.stringify(readDom.payload)}`);
+        assert.equal(readDom.payload.ok, true);
+        assert.equal(readDom.payload.domain, domain);
+        assert.equal(typeof readDom.payload.workspaceHash, 'string');
+        assert.equal(typeof readDom.payload.snapshotHash, 'string');
+        assert(!JSON.stringify(readDom.payload).includes(root), `get_workspace_domain(${domain}) leaked host root`);
+      }
+
+      const libBefore = await fullMcp.callTool('get_workspace_domain', { domain: 'libraries' });
+      assert.equal(libBefore.isError, false, JSON.stringify(libBefore.payload));
+      const beforeWaresCount = (libBefore.payload.data?.wares || []).length;
+
+      // 2. Cross-domain field injection is rejected before mutation
+      const crossBad = await fullMcp.callTool('update_workspace_domain', {
+        domain: 'translations',
+        changes: { wares: [] },
+        apply: false,
+      });
+      assert.equal(crossBad.isError, true);
+      assert.equal(crossBad.payload?.code, 'CAPABILITY_INPUT_INVALID');
+
+      // 3. Dry-run preview (apply: false) runs diagnostics & returns candidate hashes while staying quiet in Action Ledger
+      const wsHistBeforePreview = await fullMcp.callTool('list_action_history', { kind: 'workspace', limit: 30 });
+      const wsCountBeforePreview = (wsHistBeforePreview.payload.rows || []).length;
+
+      const wareCandidate = {
+        id: 'ware_unit35_cell',
+        name: 'Unit 35 Quantum Cell',
+        description: 'Domain MCP test ware',
+        transport: 'container',
+        volume: 4,
+        minPrice: 100,
+        avgPrice: 150,
+        maxPrice: 200,
+        prodTime: 60,
+        prodAmount: 10,
+      };
+      const libPreview = await fullMcp.callTool('update_workspace_domain', {
+        domain: 'libraries',
+        changes: {
+          wares: [wareCandidate],
+          compileEnabled: false,
+        },
+        apply: false,
+      });
+      assert.equal(libPreview.isError, false, JSON.stringify(libPreview.payload));
+      assert.equal(libPreview.payload.applied, false);
+      assert.equal(libPreview.payload.data?.wares?.length, 1);
+      assert(!JSON.stringify(libPreview.payload).includes(root), 'update_workspace_domain preview leaked host root');
+
+      const wsHistAfterPreview = await fullMcp.callTool('list_action_history', { kind: 'workspace', limit: 30 });
+      assert.equal((wsHistAfterPreview.payload.rows || []).length, wsCountBeforePreview, 'Dry-run domain preview must stay quiet in Action Ledger');
+
+      // 4. Stale expectedHead is rejected 409 without mutating workspace
+      const staleCommit = await fullMcp.callTool('update_workspace_domain', {
+        domain: 'libraries',
+        changes: { wares: [wareCandidate] },
+        apply: true,
+        operationId: 'op_unit35_domain_stale_1',
+        expectedHead: '0'.repeat(16),
+        expectedSnapshotHash: libBefore.payload.snapshotHash,
+      });
+      assert.equal(staleCommit.isError, true);
+      assert.equal(staleCommit.payload?.error, 'head_conflict');
+
+      // 5. Valid CAS apply commits isolated domain update while preserving sibling compileSettings, records Action Receipt + revertible ledger row, and reverts cleanly
+      const committed = await fullMcp.callTool('update_workspace_domain', {
+        domain: 'libraries',
+        changes: {
+          wares: [wareCandidate],
+          compileEnabled: false,
+        },
+        apply: true,
+        operationId: 'op_unit35_domain_commit_1',
+        expectedHead: libBefore.payload.workspaceHash,
+        expectedSnapshotHash: libBefore.payload.snapshotHash,
+      });
+      assert.equal(committed.isError, false, JSON.stringify(committed.payload));
+      assert.equal(committed.payload.applied, true);
+      assert.equal(committed.payload.receipt?.status, 'committed');
+      assert.equal(committed.payload.recovery?.kind, 'workspace');
+      assert.equal(committed.payload.data?.wares?.[0]?.id, 'ware_unit35_cell');
+      assert(!JSON.stringify(committed.payload).includes(root), 'update_workspace_domain apply leaked host root');
+
+      const libAfterCommit = await presetReadMcp.callTool('get_workspace_domain', { domain: 'libraries' });
+      assert.equal(libAfterCommit.payload.data?.wares?.length, 1);
+      assert.equal(libAfterCommit.payload.compileSettings?.library, false);
+      assert.equal(libAfterCommit.payload.compileSettings?.md, true);
+
+      const wsHistAfterCommit = await fullMcp.callTool('list_action_history', { kind: 'workspace', limit: 10 });
+      const domainRow = (wsHistAfterCommit.payload.rows || []).find(
+        (r: any) => r.revertible === true && String(r.title || '').includes('libraries domain model'),
+      );
+      assert(domainRow, `Expected revertible libraries domain row in ${JSON.stringify(wsHistAfterCommit.payload.rows)}`);
+
+      const undone = await fullMcp.callTool('revert_action_history', { id: domainRow.id });
+      assert.equal(undone.isError, false, JSON.stringify(undone.payload));
+      assert.equal(undone.payload.ok, true);
+
+      const libAfterUndo = await presetReadMcp.callTool('get_workspace_domain', { domain: 'libraries' });
+      assert.equal((libAfterUndo.payload.data?.wares || []).length, beforeWaresCount);
+      assert.equal(libAfterUndo.payload.compileSettings?.library, true);
     });
   } finally {
     for (const s of mcpSessions) {

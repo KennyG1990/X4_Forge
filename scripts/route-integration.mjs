@@ -823,7 +823,7 @@ async function main() {
     'runtime.debug.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domains.list', 'schema.element.explain',
     'snapshots.create', 'snapshots.delete', 'snapshots.list', 'snapshots.restore',
     'text.lookup', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read',
-    'workspace.compile', 'workspace.compile.result', 'workspace.generate.preview', 'workspace.mod.drift', 'workspace.mod.import', 'workspace.read', 'workspace.roundtrip.check',
+    'workspace.compile', 'workspace.compile.result', 'workspace.domain.read', 'workspace.domain.write', 'workspace.generate.preview', 'workspace.mod.drift', 'workspace.mod.import', 'workspace.read', 'workspace.roundtrip.check',
   ];
   const sameCapabilityIds = (actual, expected) => Array.isArray(actual)
     && JSON.stringify([...actual].sort()) === JSON.stringify([...expected].sort());
@@ -1462,13 +1462,13 @@ async function main() {
     ['read', readEffective, 'read', ['contracts.derive', 'contracts.registry.read', 'diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.file.read', 'extensions.overrides.analyze', 'help.bug.report', 'help.knowledge.read', 'history.list', 'history.raw.read',
       'patch.base.read', 'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.complete', 'patch.xpath.synthesize', 'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.symbols.search', 'project.xml.references', 'readiness.read',
       'reference.coverage.read', 'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest', 'release.artifact.verify', 'rules.suppression.prepare',
-      'runtime.debug.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read', 'workspace.read', 'workspace.roundtrip.check']],
+      'runtime.debug.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read', 'workspace.domain.read', 'workspace.read', 'workspace.roundtrip.check']],
     ['write', writeEffective, 'write', ['contracts.derive', 'contracts.registry.read', 'diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.file.read', 'extensions.overrides.analyze', 'help.bug.report', 'help.knowledge.read', 'history.list', 'history.raw.read', 'patch.base.read', 'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.complete', 'patch.xpath.synthesize', 'project.validate',
       'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.symbols.search', 'project.xml.references',
       'readiness.read', 'reference.coverage.read', 'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest', 'release.artifact.verify', 'rules.suppression.prepare',
-      'runtime.debug.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.read', 'workspace.roundtrip.check']],
+      'runtime.debug.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.domain.read', 'workspace.read', 'workspace.roundtrip.check']],
     ['deploy', deployEffective, 'deploy', expectedCapabilityIds.filter(id => !id.startsWith('configuration.') && !id.startsWith('deploy.') && !id.startsWith('bulk.transform.') && !id.startsWith('files.') && !id.startsWith('snapshots.') && !id.startsWith('release.steam.') && ![
-      'history.revert', 'performance.native.collect', 'performance.native.read', 'performance.native.stop', 'project.ai.navigation', 'project.md.navigation', 'project.md.rename', 'release.nexus.prepare', 'reviews.warning.revoke', 'rules.suppression.apply', 'workspace.mod.drift', 'workspace.mod.import',
+      'history.revert', 'performance.native.collect', 'performance.native.read', 'performance.native.stop', 'project.ai.navigation', 'project.md.navigation', 'project.md.rename', 'release.nexus.prepare', 'reviews.warning.revoke', 'rules.suppression.apply', 'workspace.domain.write', 'workspace.mod.drift', 'workspace.mod.import',
     ].includes(id))],
   ]) {
     ok(`${name}_key_effective_capabilities_are_exact_and_hashed`, response.status === 200 &&
@@ -7482,6 +7482,112 @@ async function main() {
     } finally {
       fs.writeFileSync(debugLogFile, previousDebugLog, 'utf8');
     }
+  }
+
+  // --- #19 P4 SLICE 12: WORKSPACE DOMAIN MODEL READ & CAS AUTHORING ---
+  {
+    const domRead = await req('GET', '/api/agent/workspace/domain?domain=libraries', readKey, undefined, { workspaceId: WORKSPACE_ID, operationId: null });
+    capabilityResponses.set('workspace.domain.read', domRead);
+    const domReadBadDomain = await req('GET', '/api/agent/workspace/domain?domain=bogus', readKey, undefined, { workspaceId: WORKSPACE_ID, operationId: null });
+    const domReadBadQuery = await req('GET', '/api/agent/workspace/domain?domain=libraries&extra=1', readKey, undefined, { workspaceId: WORKSPACE_ID, operationId: null });
+
+    const presetWriteDenied = await req('POST', '/api/agent/workspace/domain', writeKey, {
+      domain: 'translations',
+      changes: { tFiles: [] },
+      apply: false,
+    }, { workspaceId: WORKSPACE_ID, operationId: null });
+
+    const domainWriterMint = await mkKey('deploy', {
+      label: 'slice12-domain-writer',
+      authorityMode: 'exact',
+      capabilityIdentities: ['history.list@2', 'history.revert@2', 'workspace.domain.read@1', 'workspace.domain.write@1'],
+      allowedEffects: ['read', 'audit-write', 'audit-retention-delete', 'workspace-write', 'filesystem-write', 'deploy', 'delete'],
+    });
+    const domainWriterKey = domainWriterMint.token;
+
+    const crossDomainBad = await req('POST', '/api/agent/workspace/domain', domainWriterKey, {
+      domain: 'translations',
+      changes: { wares: [] },
+      apply: false,
+    }, { workspaceId: WORKSPACE_ID, operationId: null });
+
+    const forceBad = await req('POST', '/api/agent/workspace/domain', domainWriterKey, {
+      domain: 'translations',
+      changes: { tFiles: [] },
+      force: true,
+    }, { workspaceId: WORKSPACE_ID, operationId: null });
+
+    const previewRes = await req('POST', '/api/agent/workspace/domain', domainWriterKey, {
+      domain: 'translations',
+      changes: {
+        tFiles: [{
+          languageId: '44',
+          fileName: '0001-l044.xml',
+          pages: [{ id: '99100', title: 'Slice 12', items: [{ id: '1', value: 'Hello Forge Domain' }] }],
+        }],
+      },
+      apply: false,
+    }, { workspaceId: WORKSPACE_ID, operationId: null });
+
+    const staleRes = await req('POST', '/api/agent/workspace/domain', domainWriterKey, {
+      domain: 'translations',
+      changes: {
+        tFiles: [{
+          languageId: '44',
+          fileName: '0001-l044.xml',
+          pages: [{ id: '99100', title: 'Slice 12', items: [{ id: '1', value: 'Hello Forge Domain' }] }],
+        }],
+      },
+      apply: true,
+      operationId: 'op_slice12_domain_stale',
+      expectedHead: '0'.repeat(16),
+      expectedSnapshotHash: domRead.json?.snapshotHash,
+    }, { workspaceId: WORKSPACE_ID, operationId: 'op_slice12_domain_stale' });
+
+    const applyRes = await req('POST', '/api/agent/workspace/domain', domainWriterKey, {
+      domain: 'translations',
+      changes: {
+        tFiles: [{
+          languageId: '44',
+          fileName: '0001-l044.xml',
+          pages: [{ id: '99100', title: 'Slice 12', items: [{ id: '1', value: 'Hello Forge Domain' }] }],
+        }],
+      },
+      apply: true,
+      operationId: 'op_slice12_domain_apply',
+      expectedHead: domRead.json?.workspaceHash,
+      expectedSnapshotHash: domRead.json?.snapshotHash,
+    }, { workspaceId: WORKSPACE_ID, operationId: 'op_slice12_domain_apply' });
+    capabilityResponses.set('workspace.domain.write', applyRes);
+
+    const histAfter = await req('GET', '/api/agent/history?kind=workspace&limit=5', domainWriterKey, undefined, { workspaceId: WORKSPACE_ID, operationId: null });
+    const revertRow = (histAfter.json?.rows || []).find(r => r.revertible === true && String(r.title || '').includes('translations domain model'));
+    const revertRes = revertRow
+      ? await req('POST', '/api/agent/history/revert', domainWriterKey, { id: revertRow.id }, { workspaceId: WORKSPACE_ID, operationId: 'op_slice12_domain_revert' })
+      : { status: 0, json: null };
+    const tFilesAfterUndo = await req('GET', '/api/agent/workspace/domain?domain=translations', readKey, undefined, { workspaceId: WORKSPACE_ID, operationId: null });
+
+    ok('slice12_workspace_domain_read_and_cas_write_routes_isolate_domains_and_undo_cleanly',
+      domRead.status === 200 && domRead.json?.ok === true && domRead.json?.domain === 'libraries' && !JSON.stringify(domRead.json).includes(safeWorkspace)
+        && domReadBadDomain.status === 400 && domReadBadQuery.status === 400
+        && presetWriteDenied.status === 403 && presetWriteDenied.json?.authorityCode === 'CAPABILITY_NOT_GRANTED'
+        && crossDomainBad.status === 400 && forceBad.status === 400
+        && previewRes.status === 200 && previewRes.json?.applied === false && previewRes.json?.data?.tFiles?.length === 1
+        && staleRes.status === 409 && staleRes.json?.error === 'head_conflict'
+        && applyRes.status === 200 && applyRes.json?.applied === true && applyRes.json?.receipt?.status === 'committed' && applyRes.json?.recovery?.kind === 'workspace'
+        && revertRes.status === 200 && revertRes.json?.ok === true
+        && (tFilesAfterUndo.json?.data?.tFiles || []).length === 0,
+      JSON.stringify({
+        domRead: domRead.status,
+        presetWriteDenied: presetWriteDenied.status,
+        crossDomainBad: crossDomainBad.status,
+        forceBad: forceBad.status,
+        preview: previewRes.status,
+        stale: staleRes.status,
+        apply: applyRes.status,
+        revert: revertRes.status,
+        tFilesAfterUndo: tFilesAfterUndo.json?.data?.tFiles?.length,
+      }));
   }
 
   const capabilityOutputReport = (capabilityContract?.capabilities || [])

@@ -243,6 +243,13 @@ import { runTtfmSelftest } from "./src/lib/ttfm";
 import { runLiveCanvasTelemetrySelftest } from "./src/lib/liveCanvasTelemetry";
 import { runBridgeLiveStateSelftest } from "./src/lib/bridgeLiveState";
 import { getBridgeLiveState } from "./src/server/liveBridge";
+import {
+  WORKSPACE_AUTHORING_DOMAINS,
+  WORKSPACE_DOMAIN_MAX_RESPONSE_BYTES,
+  buildWorkspaceDomainMergePatch,
+  isWorkspaceAuthoringDomain,
+  projectWorkspaceDomainData,
+} from "./src/lib/workspaceDomainAuthoring";
 import { parseForgeWatches, runForgeWatchSelftest } from "./src/lib/forgeWatch";
 import { parseForgeState, runForgeStateSelftest } from "./src/lib/forgeState";
 import { buildProbeWorkspace, runForgeProbeSelftest, DEFAULT_PROBE_TOPICS } from "./src/lib/forgeProbe";
@@ -1270,6 +1277,8 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
       || authority.decision.routeKey === 'GET /api/agent/runtime/health-card'
       || authority.decision.routeKey === 'POST /api/agent/runtime/probe-preview'
       || authority.decision.routeKey === 'GET /api/agent/runtime/forge-state'
+      || authority.decision.routeKey === 'GET /api/agent/workspace/domain'
+      || authority.decision.routeKey === 'POST /api/agent/workspace/domain'
       || (authority.decision.routeKey === 'GET /api/agent/status'
         && (req.query.inspectDeployTarget !== undefined || req.query.inspectDeployEffect !== undefined))
       || authority.decision.routeKey === 'POST /api/agent/history/:id/revert'
@@ -1635,6 +1644,7 @@ function ledgerMiddleware(req: express.Request, res: express.Response, next: exp
         (fullPath === '/api/agent/mod-folder/md-rename' && captured?.applied === false)
         || (fullPath === '/api/agent/release/steam/apply-adoption' && captured?.sourceWritePerformed === false)
         || ((fullPath === '/api/agent/files/scaffold' || fullPath === '/api/agent/files/delete-dir') && captured?.applied === false)
+        || (fullPath === '/api/agent/workspace/domain' && captured?.applied === false)
       ) {
         if (res.statusCode < 400) return;
       }
@@ -9439,7 +9449,11 @@ function workspaceReceiptFailureBody(
 
 type ExecuteWorkspaceReceiptMutationOptions = {
   operationId: string;
-  routeKey: 'POST /api/agent/workspace' | 'POST /api/agent/workspace/merge' | 'POST /api/agent/mod-folder/sync';
+  routeKey:
+    | 'POST /api/agent/workspace'
+    | 'POST /api/agent/workspace/merge'
+    | 'POST /api/agent/mod-folder/sync'
+    | 'POST /api/agent/workspace/domain';
   mode: 'replace' | 'merge';
   merge?: boolean;
   expectedVersion?: number;
@@ -15873,6 +15887,225 @@ app.get("/api/agent/runtime/health-card", async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ ok: false, error: errorMessage(error) || 'runtime health-card failed' });
+  }
+});
+
+app.get("/api/agent/workspace/domain", (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const queryError = validateClosedAgentQuery(req.query, ['domain', 'workspaceId', 'clientId'], 'workspace.domain.read');
+    if (queryError) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    }
+    const rawDomain = req.query.domain;
+    if (!isWorkspaceAuthoringDomain(rawDomain)) {
+      return res.status(400).json({
+        ok: false,
+        success: false,
+        code: 'CAPABILITY_INPUT_INVALID',
+        error: `workspace.domain.read requires ?domain= to be one of: ${WORKSPACE_AUTHORING_DOMAINS.join(', ')}.`,
+      });
+    }
+    const record = resolveWorkspaceAuthority(req, res, true);
+    if (!record) return;
+    res.locals.apiSubject = workspaceRecordSubject(record);
+    const sanitized = sanitizeWorkspace(record.workspace);
+    const modId = (() => { try { return effectiveModId(sanitized); } catch { return ''; } })();
+    const payload = {
+      ok: true,
+      success: true,
+      workspaceId: record.workspaceId,
+      version: record.version,
+      workspaceHash: workspaceHash(record),
+      snapshotHash: workspaceRegistry.snapshotHash(record),
+      modId,
+      domain: rawDomain,
+      compileSettings: sanitized.compileSettings ?? {
+        md: true,
+        ui: true,
+        ai: true,
+        library: true,
+        translations: true,
+        patches: true,
+      },
+      data: projectWorkspaceDomainData(sanitized, rawDomain),
+    };
+    const serializedBytes = Buffer.byteLength(JSON.stringify(payload), 'utf8');
+    if (serializedBytes > WORKSPACE_DOMAIN_MAX_RESPONSE_BYTES) {
+      return res.status(413).json({
+        ok: false,
+        success: false,
+        code: 'WORKSPACE_DOMAIN_TOO_LARGE',
+        error: `Serialized ${rawDomain} domain model (${serializedBytes} bytes) exceeds the ${WORKSPACE_DOMAIN_MAX_RESPONSE_BYTES}-byte MCP/Agent response limit.`,
+      });
+    }
+    return res.json(payload);
+  } catch (error) {
+    return res.status(500).json({ ok: false, success: false, error: errorMessage(error) || 'workspace domain read failed' });
+  }
+});
+
+app.post("/api/agent/workspace/domain", (req, res, next) => {
+  if (!isPlainRecord(req.body)) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'workspace.domain.write requires a JSON object body.' });
+  }
+  const extra = unknownObjectKeys(req.body, new Set([
+    'domain', 'changes', 'apply', 'operationId', 'expectedHead', 'expectedSnapshotHash', 'expectedVersion', 'detail',
+  ]));
+  if (extra.length > 0) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: `workspace.domain.write does not accept: ${extra.join(', ')}` });
+  }
+  if (!isWorkspaceAuthoringDomain(req.body.domain)) {
+    return res.status(400).json({
+      ok: false,
+      success: false,
+      code: 'CAPABILITY_INPUT_INVALID',
+      error: `domain must be one of: ${WORKSPACE_AUTHORING_DOMAINS.join(', ')}.`,
+    });
+  }
+  if (!isPlainRecord(req.body.changes) || Object.keys(req.body.changes).length === 0) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'changes must be a non-empty JSON object.' });
+  }
+  if (req.body.apply !== undefined && typeof req.body.apply !== 'boolean') {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'apply must be a boolean.' });
+  }
+  if (req.body.detail !== undefined && req.body.detail !== 'compact' && req.body.detail !== 'full') {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'detail must be "compact" or "full".' });
+  }
+  const hasHead = req.body.expectedHead !== undefined;
+  const hasSnapshot = req.body.expectedSnapshotHash !== undefined;
+  if (hasHead !== hasSnapshot) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'expectedHead and expectedSnapshotHash must be supplied together.' });
+  }
+  if (hasHead && (typeof req.body.expectedHead !== 'string' || !/^[a-f0-9]{16}$/.test(req.body.expectedHead))) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'expectedHead must be a 16-char lowercase hex workspace head.' });
+  }
+  if (hasSnapshot && (typeof req.body.expectedSnapshotHash !== 'string' || !/^(?:[a-f0-9]{16}|[a-f0-9]{64})$/.test(req.body.expectedSnapshotHash))) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'expectedSnapshotHash must be a valid workspace snapshot hash.' });
+  }
+  if (req.body.expectedVersion !== undefined
+    && (typeof req.body.expectedVersion !== 'number' || !Number.isSafeInteger(req.body.expectedVersion) || req.body.expectedVersion < 0)) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'expectedVersion must be a non-negative integer.' });
+  }
+  if (req.body.operationId !== undefined
+    && (typeof req.body.operationId !== 'string' || !ACTION_RECEIPT_OPERATION_ID_RE.test(req.body.operationId))) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'operationId must match caller-owned receipt operation id format.' });
+  }
+  if (req.body.apply === true) {
+    if (typeof req.body.operationId !== 'string') {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'apply:true requires a caller-owned operationId.' });
+    }
+    const headerOpId = req.headers['x-forge-operation-id'];
+    if (Array.isArray(headerOpId) || (typeof headerOpId === 'string' && headerOpId.trim() !== '' && headerOpId !== req.body.operationId)) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'x-forge-operation-id header disagrees with body.operationId.' });
+    }
+    if (!hasHead && req.body.expectedVersion === undefined) {
+      return res.status(400).json({
+        ok: false,
+        success: false,
+        code: 'CAPABILITY_INPUT_INVALID',
+        error: 'apply:true requires expectedHead + expectedSnapshotHash (or expectedVersion) compare-and-swap preconditions.',
+      });
+    }
+    req.headers['x-forge-operation-id'] = req.body.operationId;
+  }
+  return next();
+}, async (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const record = resolveWorkspaceAuthority(req, res, true);
+    if (!record) return;
+    res.locals.apiSubject = workspaceRecordSubject(record);
+    const body = req.body as Record<string, unknown>;
+    const domain = body.domain as typeof WORKSPACE_AUTHORING_DOMAINS[number];
+    const currentSanitized = sanitizeWorkspace(record.workspace);
+    const built = buildWorkspaceDomainMergePatch(currentSanitized, domain, body.changes);
+    if (built.ok === false) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: built.error });
+    }
+    const candidateSanitized = sanitizeWorkspace({ ...currentSanitized, ...built.patch });
+    const modId = (() => { try { return effectiveModId(candidateSanitized); } catch { return ''; } })();
+    const detail: 'compact' | 'full' = body.detail === 'full' ? 'full' : 'compact';
+    if (body.apply !== true) {
+      const diagnostics = computeWorkspaceDiagnostics(candidateSanitized);
+      const previewPayload: Record<string, unknown> = {
+        ok: true,
+        success: true,
+        applied: false,
+        detail,
+        domain,
+        touchedFields: built.touchedFields,
+        workspaceId: record.workspaceId,
+        modId,
+        currentVersion: record.version,
+        currentWorkspaceHash: workspaceHash(record),
+        currentSnapshotHash: workspaceRegistry.snapshotHash(record),
+        candidateWorkspaceHash: workspaceContentHash(candidateSanitized),
+        candidateSnapshotHash: workspaceSnapshotHash(candidateSanitized),
+        diagnosticsSummary: summarizeDiagnostics(diagnostics),
+        diagnostics: diagnostics.slice(0, 100),
+        diagnosticsTruncated: diagnostics.length > 100,
+        data: projectWorkspaceDomainData(candidateSanitized, domain),
+        ...(detail === 'full'
+          ? { workspace: redactWorkspaceHostPathsForAgent(candidateSanitized) }
+          : { workspaceSummary: summarizeWorkspaceForAgent(candidateSanitized) }),
+      };
+      const serializedBytes = Buffer.byteLength(JSON.stringify(previewPayload), 'utf8');
+      if (serializedBytes > WORKSPACE_DOMAIN_MAX_RESPONSE_BYTES) {
+        return res.status(413).json({
+          ok: false,
+          success: false,
+          code: 'WORKSPACE_DOMAIN_TOO_LARGE',
+          error: `Preview response (${serializedBytes} bytes) exceeds the ${WORKSPACE_DOMAIN_MAX_RESPONSE_BYTES}-byte MCP/Agent response limit.`,
+        });
+      }
+      return res.json(previewPayload);
+    }
+    return await executeWorkspaceReceiptMutation(req, res, record, built.patch, {
+      operationId: String(body.operationId),
+      routeKey: 'POST /api/agent/workspace/domain',
+      mode: 'merge',
+      merge: true,
+      expectedHead: body.expectedHead as string | undefined,
+      expectedSnapshotHash: body.expectedSnapshotHash as string | undefined,
+      expectedVersion: body.expectedVersion as number | undefined,
+      dryRun: false,
+      force: false,
+      transformSuccessBody: raw => {
+        const ws = sanitizeWorkspace((raw.workspace as ModWorkspace | undefined) ?? candidateSanitized);
+        const next: Record<string, unknown> = {
+          ok: true,
+          ...raw,
+          detail,
+          domain,
+          touchedFields: built.touchedFields,
+          modId,
+          data: projectWorkspaceDomainData(ws, domain),
+        };
+        if (Array.isArray(next.diagnostics) && next.diagnostics.length > 100) {
+          next.diagnosticsTruncated = true;
+          next.diagnostics = next.diagnostics.slice(0, 100);
+        }
+        if (detail === 'compact') {
+          delete next.workspace;
+          next.workspaceSummary = summarizeWorkspaceForAgent(ws);
+        } else {
+          next.workspace = redactWorkspaceHostPathsForAgent(ws);
+        }
+        return next;
+      },
+    });
+  } catch (error) {
+    const request = req as DeadlineAwareRequest;
+    if (res.writableEnded || res.destroyed || request.__forgeResponseDeadlineExceeded) return;
+    return res.status(500).json({
+      ok: false,
+      success: false,
+      status: 'FAILED',
+      code: 'WORKSPACE_RECEIPT_HANDLER_FAILED',
+      error: errorMessage(error) || 'workspace domain update failed',
+      failedStages: ['workspace_receipt'],
+    });
   }
 });
 

@@ -2506,6 +2506,29 @@
       ]
     },
     {
+      "routeKey": "POST /api/agent/workspace/domain",
+      "method": "POST",
+      "template": "/api/agent/workspace/domain",
+      "owner": "workspace.domain.write",
+      "resourceClass": "workspace",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1workspace~1domain",
+      "integrationBatch": "W3B1",
+      "history": "visible",
+      "capability": {
+        "kind": "canonical",
+        "id": "workspace.domain.write",
+        "version": 1
+      },
+      "semanticClass": "durable-local-mutation",
+      "policy": "receipt-required",
+      "effects": [
+        "workspace-write"
+      ],
+      "authorityScopes": [
+        "workspace"
+      ]
+    },
+    {
       "routeKey": "POST /api/agent/workspace/merge",
       "method": "POST",
       "template": "/api/agent/workspace/merge",
