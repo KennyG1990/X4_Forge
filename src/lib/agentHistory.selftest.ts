@@ -46,8 +46,11 @@ export function runAgentHistorySelftest(): { pass: boolean; checks: Array<{ name
       ledgerRouteKind('POST', '/api/agent/release/nexus/prepare') === 'package' &&
       ledgerRouteKind('POST', '/api/agent/release/nexus/build') === 'package' &&
       ledgerRouteKind('POST', '/api/agent/release/steam/prepare') === 'package' &&
+      ledgerRouteKind('POST', '/api/agent/release/steam/build') === 'package' &&
       ledgerRouteKind('POST', '/api/agent/release/steam/verify') === 'package' &&
+      ledgerRouteKind('POST', '/api/agent/release/steam/check') === 'package' &&
       ledgerRouteKind('POST', '/api/agent/release/steam/adopt') === 'package' &&
+      ledgerRouteKind('POST', '/api/agent/release/steam/apply-adoption') === 'package' &&
       ledgerRouteKind('POST', '/api/agent/release/export/receipt') === 'package');
     ok('GET traffic is never recorded', ledgerRouteKind('GET', '/api/fs/write') === null);
     ok('reference reads are never recorded', ledgerRouteKind('POST', '/api/reference/factions') === null);

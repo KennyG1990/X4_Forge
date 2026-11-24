@@ -70,6 +70,9 @@ const DEPLOY_TOOLS = new Set([
   "get_deploy_operation_status",
   "undo_native_deploy",
   "prepare_nexus_release",
+  "prepare_steam_release",
+  "verify_steam_release",
+  "adopt_steam_workshop_id",
   "revoke_warning_review",
 ]);
 const DEPLOY_CAPABILITIES = new Set([
@@ -78,6 +81,9 @@ const DEPLOY_CAPABILITIES = new Set([
   "deploy.status",
   "deploy.undo",
   "release.nexus.prepare",
+  "release.steam.adopt",
+  "release.steam.prepare",
+  "release.steam.verify",
   "reviews.warning.revoke",
 ]);
 const WORKSPACE_FILES_TOOLS = new Set([
@@ -2060,6 +2066,113 @@ const TOOLS = [
     ),
   },
   {
+    name: "prepare_steam_release",
+    capabilityId: "release.steam.prepare",
+    capabilityVersion: 1,
+    description: "Validate a mod source folder inside Mod Workspace (or the addressed Studio workspace), build a verified Steam CAT/DAT staging folder, validate and stage an optional relative preview image, write a reopen-verified rollback backup ZIP plus its .forge-release.json provenance report, and return redacted relative filenames. Requires an explicit deploy key grant.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", maxLength: 1024 },
+        useAddressedWorkspace: { type: "boolean" },
+        bump: { type: "string", enum: ["none", "patch", "minor"] },
+        previewFile: { type: "string", maxLength: 256 },
+        changeNote: { type: "string", maxLength: 4000 },
+        minorUpdate: { type: "boolean" },
+      },
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/release/steam/build", args),
+      "Steam release preparation",
+      {
+        ok: "boolean",
+        success: "boolean",
+        status: "string",
+        platform: "string",
+        readyForUpload: "boolean",
+        modId: "string",
+        folderName: "string",
+        version: "string",
+        targetFolder: "string",
+        backupFile: "string",
+        backupHash: "string",
+        backupSizeBytes: "number",
+        reportFile: "string",
+        sourceManifestAdoptionAvailable: "boolean",
+        stages: "array",
+      },
+    ),
+  },
+  {
+    name: "verify_steam_release",
+    capabilityId: "release.steam.verify",
+    capabilityVersion: 1,
+    description: "Verify on disk after interactive Egosoft WorkshopTool execution that staged content.xml contains a valid ws_<numeric> Workshop ID, only Workshop-managed manifest attributes changed relative to preparedManifestXml, and every non-manifest staged payload file remains byte-identical, updating <modId>.forge-release.json. Requires an explicit deploy key grant.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        modId: { type: "string", maxLength: 256 },
+      },
+      required: ["modId"],
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/release/steam/check", args),
+      "Steam post-tool verification",
+      {
+        ok: "boolean",
+        success: "boolean",
+        status: "string",
+        platform: "string",
+        modId: "string",
+        workshopId: "string",
+        targetFolder: "string",
+        reportFile: "string",
+        sourceManifestAdoptionRequired: "boolean",
+        sourceManifestAdoptionAvailable: "boolean",
+        stages: "array",
+      },
+    ),
+  },
+  {
+    name: "adopt_steam_workshop_id",
+    capabilityId: "release.steam.adopt",
+    capabilityVersion: 1,
+    description: "Preview (apply: false) or compare-and-swap adopt (apply: true) the post-WorkshopTool verified ws_<numeric> Workshop ID and release version from staged content.xml back into the Mod Workspace source content.xml with physical file-identity guards and automatic rollback on mismatch. Requires an explicit deploy key grant.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        modId: { type: "string", maxLength: 256 },
+        apply: { type: "boolean" },
+        expectedSourceSha256: { type: "string", maxLength: 64 },
+        expectedWorkshopId: { type: "string", maxLength: 64 },
+        expectedBindingHash: { type: "string", maxLength: 64 },
+      },
+      required: ["modId"],
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/release/steam/apply-adoption", args),
+      "Steam Workshop ID adoption",
+      {
+        ok: "boolean",
+        success: "boolean",
+        status: "string",
+        platform: "string",
+        modId: "string",
+        sourceManifestFile: "string",
+        workshopId: "string",
+        version: "string",
+        beforeSha256: "string",
+        afterSha256: "string",
+        bindingHash: "string",
+        sourceWritePerformed: "boolean",
+        stages: "array",
+      },
+    ),
+  },
+  {
     name: "verify_release_artifact",
     capabilityId: "release.artifact.verify",
     capabilityVersion: 1,
@@ -3759,6 +3872,7 @@ async function forge(method, apiPath, body, signal, nativeDiscovery = false) {
   const configurationRoute = apiPath.startsWith("/api/agent/configuration");
   const deployRoute = apiPath.startsWith("/api/agent/deploy-verify/")
     || apiPath === "/api/agent/release/nexus/build"
+    || apiPath.startsWith("/api/agent/release/steam/")
     || apiPath === "/api/agent/warning-reviews/revoke-review";
   const workspaceFilesRoute = apiPath.startsWith("/api/agent/files/")
     || apiPath.startsWith("/api/agent/bulk-transform/")

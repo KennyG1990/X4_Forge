@@ -99,7 +99,7 @@ const EXPLICIT_ONLY_MCP_CAPABILITIES = new Set<string>([
   'configuration.access.request', 'configuration.access.status',
   'configuration.apply', 'configuration.preview', 'configuration.read', 'configuration.status',
   'deploy.apply', 'deploy.preview', 'deploy.status', 'deploy.undo',
-  'release.nexus.prepare', 'reviews.warning.revoke',
+  'release.nexus.prepare', 'release.steam.adopt', 'release.steam.prepare', 'release.steam.verify', 'reviews.warning.revoke',
   'bulk.transform.apply', 'bulk.transform.preview',
   'files.delete', 'files.list', 'files.read', 'files.restore', 'files.write',
   'history.revert', 'project.md.rename', 'rules.suppression.apply',

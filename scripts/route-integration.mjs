@@ -817,7 +817,8 @@ async function main() {
     'patch.diff.simulate', 'patch.readiness.analyze', 'patch.targets.list', 'patch.xpath.synthesize', 'performance.collect', 'performance.native.collect', 'performance.native.read', 'performance.native.stop',
     'performance.profile', 'performance.read', 'project.ai.navigation', 'project.brief.read', 'project.md.navigation', 'project.md.rename', 'project.proof.read', 'project.symbols.search', 'project.validate', 'project.xml.references', 'readiness.read',
     'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest',
-    'release.artifact.verify', 'release.nexus.prepare', 'reviews.warning.revoke', 'rules.suppression.apply', 'rules.suppression.prepare',
+    'release.artifact.verify', 'release.nexus.prepare', 'release.steam.adopt', 'release.steam.prepare', 'release.steam.verify',
+    'reviews.warning.revoke', 'rules.suppression.apply', 'rules.suppression.prepare',
     'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain',
     'snapshots.create', 'snapshots.delete', 'snapshots.list', 'snapshots.restore',
     'text.lookup', 'validation.last.read',
@@ -1465,7 +1466,7 @@ async function main() {
       'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.symbols.search', 'project.xml.references',
       'readiness.read', 'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest', 'release.artifact.verify', 'rules.suppression.prepare',
       'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.read', 'workspace.roundtrip.check']],
-    ['deploy', deployEffective, 'deploy', expectedCapabilityIds.filter(id => !id.startsWith('configuration.') && !id.startsWith('deploy.') && !id.startsWith('bulk.transform.') && !id.startsWith('files.') && !id.startsWith('snapshots.') && ![
+    ['deploy', deployEffective, 'deploy', expectedCapabilityIds.filter(id => !id.startsWith('configuration.') && !id.startsWith('deploy.') && !id.startsWith('bulk.transform.') && !id.startsWith('files.') && !id.startsWith('snapshots.') && !id.startsWith('release.steam.') && ![
       'history.revert', 'performance.native.collect', 'performance.native.read', 'performance.native.stop', 'project.ai.navigation', 'project.md.navigation', 'project.md.rename', 'release.nexus.prepare', 'reviews.warning.revoke', 'rules.suppression.apply', 'workspace.mod.drift', 'workspace.mod.import',
     ].includes(id))],
   ]) {
@@ -7194,6 +7195,69 @@ async function main() {
           && staleDelSnap.status === 409 && staleDelSnap.json?.code === 'SNAPSHOT_CHANGED'
           && deletedSnap.status === 200 && deletedSnap.json?.recovery?.operation === 'delete-file',
         JSON.stringify({ denied: presetSnapDenied.status, create: createdSnap.status, list: listedSnaps.status, restore: restoredSnap.status, staleDel: staleDelSnap.status, del: deletedSnap.status }));
+
+      // --- #19 P4 Slice 8: Steam release build, check, and apply-adoption explicit-grant routes ---
+      const slice8ModId = 'slice8_steam_mod';
+      const slice8ModDir = path.join(safeWorkspace, slice8ModId);
+      fs.mkdirSync(path.join(slice8ModDir, 'md'), { recursive: true });
+      fs.mkdirSync(path.join(slice8ModDir, 'assets'), { recursive: true });
+      fs.writeFileSync(path.join(slice8ModDir, 'content.xml'), `<?xml version="1.0" encoding="utf-8"?>\n<content id="${slice8ModId}" name="Slice 8 Steam Mod" version="100" date="2026-11-24" author="Forge Route Test" description="Slice 8 Steam explicit-grant fixture"/>\n`, 'utf8');
+      fs.writeFileSync(path.join(slice8ModDir, 'md', 'main.xml'), '<?xml version="1.0" encoding="utf-8"?>\n<mdscript name="Slice8Steam"><cues><cue name="Init"><actions/></cue></cues></mdscript>\n', 'utf8');
+      fs.writeFileSync(path.join(slice8ModDir, 'assets', 'payload.txt'), 'slice8 steam payload\n', 'utf8');
+      fs.writeFileSync(path.join(slice8ModDir, 'preview.jpg'), Buffer.from([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x02, 0xd0, 0x05, 0x00, 0x01, 0x01, 0x11, 0x00, 0xff, 0xd9]));
+      try {
+        const presetSteamDenied = await req('POST', '/api/agent/release/steam/build', deployKey, { path: slice8ModId }, { workspaceId: WORKSPACE_ID, operationId: null });
+        const steamMint = await req('POST', '/api/agent/keys', SESSION_TOKEN, {
+          label: 'slice8-steam-explicit',
+          scope: 'deploy',
+          ttl: '1h',
+          authorityMode: 'exact',
+          capabilityIdentities: [
+            'release.steam.adopt@1',
+            'release.steam.prepare@1',
+            'release.steam.verify@1',
+          ],
+          allowedEffects: ['read', 'analyze', 'filesystem-write', 'package', 'delete', 'audit-write', 'audit-retention-delete'],
+        }, { workspaceId: WORKSPACE_ID });
+        const steamKey = steamMint.json?.token || steamMint.json?.key;
+
+        const steamBuilt = await req('POST', '/api/agent/release/steam/build', steamKey, {
+          path: slice8ModId,
+          bump: 'patch',
+          previewFile: 'preview.jpg',
+        }, { workspaceId: WORKSPACE_ID, operationId: null });
+        capabilityResponses.set('release.steam.prepare', steamBuilt);
+
+        const stagedSteamManifest = path.join(safeWorkspace, '.forge-builds', 'releases', 'steam', slice8ModId, 'content.xml');
+        fs.writeFileSync(stagedSteamManifest, fs.readFileSync(stagedSteamManifest, 'utf8').replace(`id="${slice8ModId}"`, 'id="ws_11223344"'), 'utf8');
+
+        const steamChecked = await req('POST', '/api/agent/release/steam/check', steamKey, {
+          modId: slice8ModId,
+        }, { workspaceId: WORKSPACE_ID, operationId: null });
+        capabilityResponses.set('release.steam.verify', steamChecked);
+
+        const steamAdoptPreview = await req('POST', '/api/agent/release/steam/apply-adoption', steamKey, {
+          modId: slice8ModId,
+          apply: false,
+        }, { workspaceId: WORKSPACE_ID, operationId: null });
+        const steamAdopted = await req('POST', '/api/agent/release/steam/apply-adoption', steamKey, {
+          modId: slice8ModId,
+          apply: true,
+          expectedSourceSha256: steamAdoptPreview.json?.beforeSha256,
+          expectedWorkshopId: 'ws_11223344',
+          expectedBindingHash: steamAdoptPreview.json?.bindingHash,
+        }, { workspaceId: WORKSPACE_ID, operationId: null });
+        capabilityResponses.set('release.steam.adopt', steamAdopted);
+
+        ok('steam_explicit_grant_routes_redact_host_paths_and_enforce_cas_adoption',
+          presetSteamDenied.status === 403 && presetSteamDenied.json?.authorityCode === 'CAPABILITY_NOT_GRANTED'
+            && steamBuilt.status === 200 && steamBuilt.json?.ok === true && steamBuilt.json?.targetFolder === slice8ModId && !JSON.stringify(steamBuilt.json).includes(safeWorkspace)
+            && steamChecked.status === 200 && steamChecked.json?.status === 'VERIFIED_AFTER_WORKSHOP_TOOL' && !JSON.stringify(steamChecked.json).includes(safeWorkspace)
+            && steamAdopted.status === 200 && steamAdopted.json?.status === 'VERIFIED_AND_ADOPTED' && !JSON.stringify(steamAdopted.json).includes(safeWorkspace),
+          JSON.stringify({ denied: presetSteamDenied.status, build: steamBuilt.status, check: steamChecked.status, adopt: steamAdopted.status }));
+      } finally {
+        fs.rmSync(slice8ModDir, { recursive: true, force: true });
+      }
     } finally {
       fs.rmSync(slice7ModDir, { recursive: true, force: true });
     }

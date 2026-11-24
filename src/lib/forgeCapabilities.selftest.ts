@@ -51,7 +51,7 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
 
   const validationErrors = validateForgeCapabilityRegistry();
   check('registry invariants', validationErrors.length === 0, validationErrors.join(' | ') || undefined);
-  check('bounded non-native registry', FORGE_CAPABILITIES.filter(capability => !capability.id.startsWith('performance.native.')).length === 70, `count=${FORGE_CAPABILITIES.length}`);
+  check('bounded non-native registry', FORGE_CAPABILITIES.filter(capability => !capability.id.startsWith('performance.native.')).length === 73, `count=${FORGE_CAPABILITIES.length}`);
   const compileResult = findForgeCapability('workspace.compile.result', 2);
   check('retained compile report access is workspace-scoped and read-only',
     compileResult?.context.workspace === 'required'
@@ -505,6 +505,16 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
       confirmation: 'none', effects: ['read', 'analyze'], ledger: null },
     { id: 'deploy.undo', method: 'POST', path: '/api/agent/deploy-verify/undo', alias: 'undo_native_deploy', workspace: 'required',
       confirmation: 'none', effects: ['filesystem-write', 'deploy', 'delete', 'audit-write', 'audit-retention-delete'], ledger: 'revert' },
+    { id: 'release.nexus.prepare', method: 'POST', path: '/api/agent/release/nexus/build', alias: 'prepare_nexus_release', workspace: 'optional',
+      confirmation: 'none', effects: ['filesystem-write', 'package', 'delete', 'audit-write', 'audit-retention-delete'], ledger: 'package' },
+    { id: 'release.steam.adopt', method: 'POST', path: '/api/agent/release/steam/apply-adoption', alias: 'adopt_steam_workshop_id', workspace: 'optional',
+      confirmation: 'none', effects: ['filesystem-write', 'audit-write', 'audit-retention-delete'], ledger: 'package' },
+    { id: 'release.steam.prepare', method: 'POST', path: '/api/agent/release/steam/build', alias: 'prepare_steam_release', workspace: 'optional',
+      confirmation: 'none', effects: ['filesystem-write', 'package', 'delete', 'audit-write', 'audit-retention-delete'], ledger: 'package' },
+    { id: 'release.steam.verify', method: 'POST', path: '/api/agent/release/steam/check', alias: 'verify_steam_release', workspace: 'optional',
+      confirmation: 'none', effects: ['read', 'analyze', 'filesystem-write', 'audit-write', 'audit-retention-delete'], ledger: 'package' },
+    { id: 'reviews.warning.revoke', method: 'POST', path: '/api/agent/warning-reviews/revoke-review', alias: 'revoke_warning_review', workspace: 'optional',
+      confirmation: 'none', effects: ['filesystem-write', 'audit-write', 'audit-retention-delete'], ledger: 'action' },
   ] as const;
   for (const expected of deployCapabilities) {
     const capability = findForgeCapability(expected.id);
@@ -634,7 +644,7 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
   const builtCensus = buildForgeUiActionParityCensus(sha256);
   const builtCensusSecond = buildForgeUiActionParityCensus(sha256);
   const coveredDomains = new Set(FORGE_UI_ACTION_PARITY_CENSUS.map(row => row.domain));
-  check('UI-action parity census covers all 15 domains and all 73 capabilities with deterministic hash',
+  check('UI-action parity census covers all 15 domains and all 76 capabilities with deterministic hash',
     censusErrors.length === 0 &&
       builtCensus.schemaVersion === 'forge.ui-action-parity.v1' &&
       builtCensus.censusHash === builtCensusSecond.censusHash &&
@@ -642,6 +652,7 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
       builtCensus.summary.totalActions === FORGE_UI_ACTION_PARITY_CENSUS.length &&
       builtCensus.summary.available === 16 &&
       builtCensus.summary.approvalRequired === 2 &&
+      builtCensus.summary.missing === 9 &&
       builtCensus.summary.available + builtCensus.summary.approvalRequired + builtCensus.summary.partial + builtCensus.summary.missing === builtCensus.summary.totalActions &&
       builtCensus.summary.openGaps === builtCensus.summary.partial + builtCensus.summary.missing,
     censusErrors.join(' | ') || undefined);
@@ -691,7 +702,7 @@ export function runNativeForgeCapabilitiesSelftest() {
   const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   const keys = (value: object | undefined) => Object.keys(value || {}).sort();
   check('native registry has exactly the three reviewed process telemetry identities',
-    FORGE_CAPABILITIES.length === 73 &&
+    FORGE_CAPABILITIES.length === 76 &&
       equal(FORGE_CAPABILITIES.filter(capability => capability.id.startsWith('performance.native.')).map(capability => capability.id).sort(),
         expected.map(row => row.id).sort()));
   for (const row of expected) {

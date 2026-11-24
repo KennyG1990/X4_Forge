@@ -3868,6 +3868,36 @@
       "resourceClass": "configured-root",
       "workspaceMode": "optional"
     },
+    "POST /api/agent/release/steam/apply-adoption": {
+      "disposition": "canonical-capability",
+      "owner": "release.steam.adopt",
+      "registrations": 1,
+      "agentScopes": [
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "optional"
+    },
+    "POST /api/agent/release/steam/build": {
+      "disposition": "canonical-capability",
+      "owner": "release.steam.prepare",
+      "registrations": 1,
+      "agentScopes": [
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "optional"
+    },
+    "POST /api/agent/release/steam/check": {
+      "disposition": "canonical-capability",
+      "owner": "release.steam.verify",
+      "registrations": 1,
+      "agentScopes": [
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "optional"
+    },
     "POST /api/agent/release/steam/prepare": {
       "disposition": "session-only",
       "owner": "release-center",
@@ -4428,6 +4458,9 @@
     "reference.suggest@1": "fc01662e1f79253fb811f0a4e0925e3d899b99cf80308a36f10fc243e761460e",
     "release.artifact.verify@1": "982cbd370f63feb26041604b120bd942fb5a29f49d93d75bedb2495b033b6194",
     "release.nexus.prepare@1": "923448d633c4515229549a262502c8affada3a5d9e980f80d8f947783f097b21",
+    "release.steam.adopt@1": "d41c2919cefa02ac8208c8ab6fbb5b7071085e0d2b87355956f926e64c1e273e",
+    "release.steam.prepare@1": "221b7527fbfad7427adf36c388fd501e439fafe23eee104c8c6855bacacd7abd",
+    "release.steam.verify@1": "a1ebadb17b4b439c89960028eb048a86f47556704367e3d0c5f7759a900a56fb",
     "reviews.warning.revoke@1": "3d80060fb8113975fffa10d1ef1eadf7f9a2e85ea58fd5c70181db34acd8c775",
     "rules.suppression.apply@1": "6e13f1e54fa0e700a3406dbcaadcbb830915cba87c26997a6015d07cd6e73178",
     "rules.suppression.prepare@1": "a056605dac950c518a149a2b85c4a0ad6824b1ec2a842f4213e3d267fc294a05",
@@ -4450,8 +4483,8 @@
     "workspace.roundtrip.check@1": "c1a1c89c1eb3f44f8f16e6ca03e9787318eec5065bcf25dd2c3ce3a4b4045185"
   },
   "mcpModuleSignature": {
-    "version": 33,
-    "hash": "b6390f152bfe733dc5a8c40650cd063762329504b16eda2787cc862accad178b"
+    "version": 34,
+    "hash": "69d683b58d6136197c09649877340c5d78d22932091c36d85fa5874709a3b293"
   },
   "mcpSignatures": {
     "validate_mod": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",
@@ -4520,6 +4553,9 @@
     "apply_warning_suppression": "9d0fa5a98d5c7dce21f381b0cffc013659535a6c62bd4f77a456be5dad8dc075",
     "revoke_warning_review": "cd9b9030508df0b946fbc1a0fa20811c5727220aa39606c9168843686463293e",
     "prepare_nexus_release": "5921855cfac168fc070bc349de2dc39db783ae2576d318de659990ea50f00416",
+    "prepare_steam_release": "7ac109503bc6125e89e8ba6b1302adc4ece6ee51ced63fc6aed58e38aecc894f",
+    "verify_steam_release": "44f2b9e24b1afd112bc5a45a5f3aad083aa2bfe50b7ba00f4e8a4a07d455eb00",
+    "adopt_steam_workshop_id": "2c8ae8c25fd6501ae9e46a35d3c7bcd5b43f4deb42827f0626967a5d8e5fa824",
     "verify_release_artifact": "0feddbb6318b12db5d04e4e26f521f6b7ea2c6d1500dbc3738cfeb3a7fbfeede",
     "search_workspace_symbols": "2a0f6895b10fbfd577f3b17922b6eea04d59842044bbab3053d0255590b38e6e",
     "rename_md_symbol": "f4fbff68e15a7d764af4753b5c9e1bdde550da62e99853e20398a2a2235af470",
@@ -4596,6 +4632,9 @@
     "apply_warning_suppression": "rules.suppression.apply@1",
     "revoke_warning_review": "reviews.warning.revoke@1",
     "prepare_nexus_release": "release.nexus.prepare@1",
+    "prepare_steam_release": "release.steam.prepare@1",
+    "verify_steam_release": "release.steam.verify@1",
+    "adopt_steam_workshop_id": "release.steam.adopt@1",
     "verify_release_artifact": "release.artifact.verify@1",
     "search_workspace_symbols": "project.symbols.search@1",
     "rename_md_symbol": "project.md.rename@1",

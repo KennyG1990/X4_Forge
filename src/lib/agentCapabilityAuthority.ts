@@ -81,6 +81,9 @@ export const DEPLOY_EXPLICIT_GRANT_CAPABILITIES = [
   'deploy.status',
   'deploy.undo',
   'release.nexus.prepare',
+  'release.steam.adopt',
+  'release.steam.prepare',
+  'release.steam.verify',
   'reviews.warning.revoke',
 ] as const;
 export const WORKSPACE_FILES_EXPLICIT_GRANT_CAPABILITIES = [

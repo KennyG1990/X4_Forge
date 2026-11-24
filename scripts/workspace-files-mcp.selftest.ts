@@ -109,7 +109,6 @@ async function startMcpSession(baseUrl: string, key: string, workspaceId: string
       X4FORGE_URL: baseUrl,
       X4FORGE_KEY: key,
       X4FORGE_WORKSPACE_ID: workspaceId,
-      X4FORGE_CAPABILITY_RETRY_MS: '100',
     },
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
@@ -342,6 +341,9 @@ async function main() {
     'restore_workspace_snapshot',
     'delete_workspace_snapshot',
     'prepare_nexus_release',
+    'prepare_steam_release',
+    'verify_steam_release',
+    'adopt_steam_workshop_id',
     'revoke_warning_review',
     'revert_action_history',
     'get_mod_drift',
@@ -398,60 +400,65 @@ async function main() {
           assert.equal(legacyList.status, 200);
           assert(Array.isArray(legacyList.json));
         }
-      }
-    });
+          if (scope !== 'read') await session.close();
+        }
+      });
 
-    await check('2_read_only_explicit_grant_exposes_only_read_tools_and_blocks_mutations', async () => {
-      const readMint = await httpJson(backend!.baseUrl, 'POST', '/api/agent/keys', STUDIO_TOKEN, {
-        label: 'files-read-only',
-        scope: 'read',
-        ttl: '1h',
-        authorityMode: 'exact',
-        capabilityIdentities: [
-          'bulk.transform.preview@1',
-          'files.list@1',
-          'files.read@1',
-          'workspace.mod.drift@1',
-        ],
-        allowedEffects: ['read', 'analyze'],
-      }, wsHeaders);
-      assert.equal(readMint.status, 200);
-      const readMcp = await openMcp(readMint.json!.token || readMint.json!.key, wsId);
-      const names: string[] = ((await readMcp.request('tools/list')).result?.tools || []).map((t: any) => t.name);
-      assert(names.includes('list_workspace_files'));
-      assert(names.includes('read_workspace_file'));
-      assert(names.includes('get_mod_drift'));
-      assert(names.includes('preview_bulk_transform'));
-      assert(!names.includes('write_workspace_file'));
-      assert(!names.includes('remove_workspace_file'));
-      assert(!names.includes('restore_workspace_file'));
-      assert(!names.includes('revert_action_history'));
-      assert(!names.includes('import_mod_folder'));
-      assert(!names.includes('apply_bulk_transform'));
-    });
+      await check('2_read_only_explicit_grant_exposes_only_read_tools_and_blocks_mutations', async () => {
+        const readMint = await httpJson(backend!.baseUrl, 'POST', '/api/agent/keys', STUDIO_TOKEN, {
+          label: 'files-read-only',
+          scope: 'read',
+          ttl: '1h',
+          authorityMode: 'exact',
+          capabilityIdentities: [
+            'bulk.transform.preview@1',
+            'files.list@1',
+            'files.read@1',
+            'workspace.mod.drift@1',
+          ],
+          allowedEffects: ['read', 'analyze'],
+        }, wsHeaders);
+        assert.equal(readMint.status, 200);
+        const readMcp = await openMcp(readMint.json!.token || readMint.json!.key, wsId);
+        const names: string[] = ((await readMcp.request('tools/list')).result?.tools || []).map((t: any) => t.name);
+        assert(names.includes('list_workspace_files'));
+        assert(names.includes('read_workspace_file'));
+        assert(names.includes('get_mod_drift'));
+        assert(names.includes('preview_bulk_transform'));
+        assert(!names.includes('write_workspace_file'));
+        assert(!names.includes('remove_workspace_file'));
+        assert(!names.includes('restore_workspace_file'));
+        assert(!names.includes('revert_action_history'));
+        assert(!names.includes('import_mod_folder'));
+        assert(!names.includes('apply_bulk_transform'));
+        await readMcp.close();
+      });
 
-    await check('3_files_list_read_write_cas_strict_preflight_and_history_revert_over_mcp', async () => {
-      const fullMint = await httpJson(backend!.baseUrl, 'POST', '/api/agent/keys', STUDIO_TOKEN, {
-        label: 'full-unit25-mcp',
-        scope: 'deploy',
-        ttl: '1h',
-        authorityMode: 'exact',
-        capabilityIdentities: [
-          'bulk.transform.apply@1',
-          'bulk.transform.preview@1',
-          'files.delete@1',
-          'files.list@1',
-          'files.read@1',
-          'files.restore@1',
-          'files.write@2',
-          'history.list@2',
-          'history.raw.read@1',
-          'history.revert@2',
-          'project.md.rename@1',
-          'project.symbols.search@1',
-          'release.artifact.verify@1',
-          'release.nexus.prepare@1',
-          'reviews.warning.revoke@1',
+      await check('3_files_list_read_write_cas_strict_preflight_and_history_revert_over_mcp', async () => {
+        const fullMint = await httpJson(backend!.baseUrl, 'POST', '/api/agent/keys', STUDIO_TOKEN, {
+          label: 'full-unit25-mcp',
+          scope: 'deploy',
+          ttl: '1h',
+          authorityMode: 'exact',
+          capabilityIdentities: [
+            'bulk.transform.apply@1',
+            'bulk.transform.preview@1',
+            'files.delete@1',
+            'files.list@1',
+            'files.read@1',
+            'files.restore@1',
+            'files.write@2',
+            'history.list@2',
+            'history.raw.read@1',
+            'history.revert@2',
+            'project.md.rename@1',
+            'project.symbols.search@1',
+            'release.artifact.verify@1',
+            'release.nexus.prepare@1',
+            'release.steam.adopt@1',
+            'release.steam.prepare@1',
+            'release.steam.verify@1',
+            'reviews.warning.revoke@1',
           'rules.suppression.apply@1',
           'rules.suppression.prepare@1',
           'snapshots.create@1',
@@ -1349,6 +1356,165 @@ async function main() {
       const listedAfterRestore = await fullMcp.callTool('list_workspace_snapshots', { modId });
       assert.equal(listedAfterRestore.payload.total, 1);
       assert.equal(listedAfterRestore.payload.snapshots[0].sha256, snap1Sha);
+    });
+
+    await check('11_steam_release_prepare_verify_and_cas_workshop_id_adoption_over_mcp', async () => {
+      const modId = 'unit31_steam_mod';
+      const modDir = path.join(modsDir, modId);
+      fs.mkdirSync(path.join(modDir, 'md'), { recursive: true });
+      fs.mkdirSync(path.join(modDir, 'assets'), { recursive: true });
+      const initialContentXml = [
+        '<?xml version="1.0" encoding="utf-8"?>',
+        `<content id="${modId}" name="Unit 31 Steam Mod" version="100" date="2026-11-24" author="Forge QA" description="Steam release MCP fixture"/>`,
+      ].join('\n');
+      fs.writeFileSync(path.join(modDir, 'content.xml'), initialContentXml, 'utf8');
+      fs.writeFileSync(path.join(modDir, 'md', 'main.xml'), [
+        '<?xml version="1.0" encoding="utf-8"?>',
+        '<mdscript name="Unit31SteamScript" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">',
+        '  <cues>',
+        '    <cue name="InitCue"><actions/></cue>',
+        '  </cues>',
+        '</mdscript>',
+      ].join('\n'), 'utf8');
+      fs.writeFileSync(path.join(modDir, 'assets', 'payload.txt'), 'steam catalog payload\n', 'utf8');
+      // Minimal valid 1280x720 baseline SOF0 JPEG header accepted by inspectWorkshopPreview
+      const validJpeg1280x720 = Buffer.from([
+        0xff, 0xd8,
+        0xff, 0xc0, 0x00, 0x0b, 0x08, 0x02, 0xd0, 0x05, 0x00, 0x01, 0x01, 0x11, 0x00,
+        0xff, 0xd9,
+      ]);
+      fs.writeFileSync(path.join(modDir, 'preview.jpg'), validJpeg1280x720);
+
+      // Preset deploy key must NOT advertise or execute Steam release tools
+      const presetDeployMint = await httpJson(backend!.baseUrl, 'POST', '/api/agent/keys', STUDIO_TOKEN, {
+        label: 'unit31-preset-deploy',
+        scope: 'deploy',
+        ttl: '1h',
+        authorityMode: 'preset',
+      }, wsHeaders);
+      assert.equal(presetDeployMint.status, 200);
+      const presetDeployMcp = await openMcp(String(presetDeployMint.json!.token || presetDeployMint.json!.key), wsId);
+      const presetDeployTools: string[] = ((await presetDeployMcp.request('tools/list')).result?.tools || []).map((t: any) => t.name);
+      for (const steamTool of ['prepare_steam_release', 'verify_steam_release', 'adopt_steam_workshop_id']) {
+        assert(!presetDeployTools.includes(steamTool), `Preset deploy leaked ${steamTool}`);
+      }
+      await presetDeployMcp.close();
+
+      // Mint explicit deploy grant with Steam release + artifact verify + history read
+      const steamMint = await httpJson(backend!.baseUrl, 'POST', '/api/agent/keys', STUDIO_TOKEN, {
+        label: 'unit31-steam-explicit',
+        scope: 'deploy',
+        ttl: '1h',
+        authorityMode: 'exact',
+        capabilityIdentities: [
+          'history.list@2',
+          'release.artifact.verify@1',
+          'release.steam.adopt@1',
+          'release.steam.prepare@1',
+          'release.steam.verify@1',
+        ],
+        allowedEffects: ['read', 'analyze', 'filesystem-write', 'package', 'delete', 'audit-write', 'audit-retention-delete'],
+      }, wsHeaders);
+      assert.equal(steamMint.status, 200, JSON.stringify(steamMint.json));
+      const steamMcp = await openMcp(String(steamMint.json!.token || steamMint.json!.key), wsId);
+      const steamTools: string[] = ((await steamMcp.request('tools/list')).result?.tools || []).map((t: any) => t.name);
+      for (const steamTool of ['prepare_steam_release', 'verify_steam_release', 'adopt_steam_workshop_id', 'verify_release_artifact']) {
+        assert(steamTools.includes(steamTool), `Missing ${steamTool} in ${JSON.stringify(steamTools)}`);
+      }
+
+      // 1. prepare_steam_release stages CAT/DAT + preview + rollback backup ZIP with zero host-path leakage
+      const prepared = await steamMcp.callTool('prepare_steam_release', {
+        path: modId,
+        bump: 'patch',
+        previewFile: 'preview.jpg',
+        changeNote: 'Initial Steam release from MCP',
+      });
+      assert.equal(prepared.isError, false, JSON.stringify(prepared.payload));
+      assert.equal(prepared.payload.ok, true);
+      assert.equal(prepared.payload.platform, 'steam');
+      assert.equal(prepared.payload.modId, modId);
+      assert.equal(prepared.payload.targetFolder, modId);
+      assert.equal(prepared.payload.sourceManifestAdoptionAvailable, true);
+      assert(!JSON.stringify(prepared.payload).includes(modsDir), 'Steam prepare leaked host modsDir');
+
+      // Verify rollback backup ZIP on disk via verify_release_artifact
+      const backupVerified = await steamMcp.callTool('verify_release_artifact', {
+        platform: 'steam',
+        modId,
+        artifactFile: prepared.payload.backupFile,
+      });
+      assert.equal(backupVerified.isError, false, JSON.stringify(backupVerified.payload));
+      assert.equal(backupVerified.payload.verified, true);
+      assert.equal(backupVerified.payload.sha256, prepared.payload.backupHash);
+
+      // 2. verify_steam_release refuses before WorkshopTool writes ws_<numeric>
+      const verifyBeforeTool = await steamMcp.callTool('verify_steam_release', { modId });
+      assert.equal(verifyBeforeTool.isError, true);
+      assert.equal(verifyBeforeTool.payload?.code, 'STEAM_WORKSHOP_ID_MISSING');
+
+      // Simulate WorkshopTool writing ws_987654321 into staged content.xml + test CAT tamper refusal + restore CAT + verify clean
+      const stagedDir = path.join(modsDir, '.forge-builds', 'releases', 'steam', modId);
+      const stagedContentPath = path.join(stagedDir, 'content.xml');
+      const stagedBeforeTool = fs.readFileSync(stagedContentPath, 'utf8');
+      const stagedAfterTool = stagedBeforeTool.replace(`id="${modId}"`, 'id="ws_987654321"');
+      fs.writeFileSync(stagedContentPath, stagedAfterTool, 'utf8');
+
+      const catPath = path.join(stagedDir, 'ext_01.cat');
+      const pristineCat = fs.readFileSync(catPath);
+      fs.appendFileSync(catPath, Buffer.from('\ntampered'));
+      const tamperedVerify = await steamMcp.callTool('verify_steam_release', { modId });
+      assert.equal(tamperedVerify.isError, true);
+      assert.equal(tamperedVerify.payload?.code, 'STEAM_POST_TOOL_INTEGRITY_FAILED');
+      fs.writeFileSync(catPath, pristineCat);
+
+      const okVerify = await steamMcp.callTool('verify_steam_release', { modId });
+      assert.equal(okVerify.isError, false, JSON.stringify(okVerify.payload));
+      assert.equal(okVerify.payload.status, 'VERIFIED_AFTER_WORKSHOP_TOOL');
+      assert.equal(okVerify.payload.workshopId, 'ws_987654321');
+      assert.equal(okVerify.payload.sourceManifestAdoptionRequired, true);
+      assert(!JSON.stringify(okVerify.payload).includes(modsDir), 'Steam verify leaked host modsDir');
+
+      // 3. adopt_steam_workshop_id preview (quiet in Action Ledger) -> wrong bindingHash refused -> valid CAS apply adopts ws_987654321
+      const pkgHistBeforePreview = await steamMcp.callTool('list_action_history', { kind: 'package', limit: 20 });
+      const pkgCountBeforePreview = (pkgHistBeforePreview.payload.rows || []).length;
+
+      const adoptPreview = await steamMcp.callTool('adopt_steam_workshop_id', {
+        modId,
+        apply: false,
+      });
+      assert.equal(adoptPreview.isError, false, JSON.stringify(adoptPreview.payload));
+      assert.equal(adoptPreview.payload.status, 'READY_TO_ADOPT');
+      assert.equal(adoptPreview.payload.sourceManifestFile, `${modId}/content.xml`);
+      assert.equal(adoptPreview.payload.sourceWritePerformed, false);
+      assert(!JSON.stringify(adoptPreview.payload).includes(modsDir), 'Steam adopt preview leaked host modsDir');
+
+      const pkgHistAfterPreview = await steamMcp.callTool('list_action_history', { kind: 'package', limit: 20 });
+      assert.equal((pkgHistAfterPreview.payload.rows || []).length, pkgCountBeforePreview, 'Dry-run Steam adoption preview must stay quiet in Action Ledger');
+
+      const badBindingAdopt = await steamMcp.callTool('adopt_steam_workshop_id', {
+        modId,
+        apply: true,
+        expectedSourceSha256: adoptPreview.payload.beforeSha256,
+        expectedWorkshopId: 'ws_987654321',
+        expectedBindingHash: '0'.repeat(64),
+      });
+      assert.equal(badBindingAdopt.isError, true);
+      assert.equal(badBindingAdopt.payload?.code, 'STEAM_ADOPTION_PREVIEW_CHANGED');
+      assert.equal(fs.readFileSync(path.join(modDir, 'content.xml'), 'utf8'), initialContentXml);
+
+      const okAdopt = await steamMcp.callTool('adopt_steam_workshop_id', {
+        modId,
+        apply: true,
+        expectedSourceSha256: adoptPreview.payload.beforeSha256,
+        expectedWorkshopId: 'ws_987654321',
+        expectedBindingHash: adoptPreview.payload.bindingHash,
+      });
+      assert.equal(okAdopt.isError, false, JSON.stringify(okAdopt.payload));
+      assert.equal(okAdopt.payload.status, 'VERIFIED_AND_ADOPTED');
+      assert.equal(okAdopt.payload.sourceWritePerformed, true);
+      assert(fs.readFileSync(path.join(modDir, 'content.xml'), 'utf8').includes('id="ws_987654321"'));
+      assert(!JSON.stringify(okAdopt.payload).includes(modsDir), 'Steam adopt apply leaked host modsDir');
+      await steamMcp.close();
     });
   } finally {
     for (const s of mcpSessions) {

@@ -1917,6 +1917,91 @@
       ]
     },
     {
+      "routeKey": "POST /api/agent/release/steam/apply-adoption",
+      "method": "POST",
+      "template": "/api/agent/release/steam/apply-adoption",
+      "owner": "release.steam.adopt",
+      "resourceClass": "configured-root",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1release~1steam~1apply-adoption",
+      "integrationBatch": "W3B2",
+      "history": "visible",
+      "capability": {
+        "kind": "canonical",
+        "id": "release.steam.adopt",
+        "version": 1
+      },
+      "semanticClass": "durable-local-mutation",
+      "policy": "receipt-required",
+      "effects": [
+        "filesystem-write",
+        "audit-write",
+        "audit-retention-delete"
+      ],
+      "authorityScopes": [
+        "global",
+        "profile",
+        "workspace"
+      ]
+    },
+    {
+      "routeKey": "POST /api/agent/release/steam/build",
+      "method": "POST",
+      "template": "/api/agent/release/steam/build",
+      "owner": "release.steam.prepare",
+      "resourceClass": "configured-root",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1release~1steam~1build",
+      "integrationBatch": "W3B2",
+      "history": "visible",
+      "capability": {
+        "kind": "canonical",
+        "id": "release.steam.prepare",
+        "version": 1
+      },
+      "semanticClass": "durable-local-mutation",
+      "policy": "receipt-required",
+      "effects": [
+        "filesystem-write",
+        "package",
+        "delete",
+        "audit-write",
+        "audit-retention-delete"
+      ],
+      "authorityScopes": [
+        "global",
+        "profile",
+        "workspace"
+      ]
+    },
+    {
+      "routeKey": "POST /api/agent/release/steam/check",
+      "method": "POST",
+      "template": "/api/agent/release/steam/check",
+      "owner": "release.steam.verify",
+      "resourceClass": "configured-root",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1release~1steam~1check",
+      "integrationBatch": "W3B2",
+      "history": "visible",
+      "capability": {
+        "kind": "canonical",
+        "id": "release.steam.verify",
+        "version": 1
+      },
+      "semanticClass": "durable-local-mutation",
+      "policy": "receipt-required",
+      "effects": [
+        "read",
+        "analyze",
+        "filesystem-write",
+        "audit-write",
+        "audit-retention-delete"
+      ],
+      "authorityScopes": [
+        "global",
+        "profile",
+        "workspace"
+      ]
+    },
+    {
       "routeKey": "POST /api/agent/release/steam/prepare",
       "method": "POST",
       "template": "/api/agent/release/steam/prepare",
