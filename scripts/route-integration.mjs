@@ -813,12 +813,14 @@ async function main() {
     'deploy.apply', 'deploy.preview', 'deploy.status', 'deploy.undo', 'diagnostics.quick.fixes',
     'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.overrides.analyze',
     'files.delete', 'files.list', 'files.read', 'files.restore', 'files.write',
-    'history.list', 'history.revert',
+    'history.list', 'history.raw.read', 'history.revert',
     'patch.diff.simulate', 'patch.readiness.analyze', 'patch.targets.list', 'patch.xpath.synthesize', 'performance.collect', 'performance.native.collect', 'performance.native.read', 'performance.native.stop',
     'performance.profile', 'performance.read', 'project.ai.navigation', 'project.brief.read', 'project.md.navigation', 'project.md.rename', 'project.proof.read', 'project.symbols.search', 'project.validate', 'project.xml.references', 'readiness.read',
     'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest',
     'release.artifact.verify', 'release.nexus.prepare', 'reviews.warning.revoke', 'rules.suppression.apply', 'rules.suppression.prepare',
-    'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read',
+    'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain',
+    'snapshots.create', 'snapshots.delete', 'snapshots.list', 'snapshots.restore',
+    'text.lookup', 'validation.last.read',
     'workspace.compile', 'workspace.compile.result', 'workspace.generate.preview', 'workspace.mod.drift', 'workspace.mod.import', 'workspace.read', 'workspace.roundtrip.check',
   ];
   const sameCapabilityIds = (actual, expected) => Array.isArray(actual)
@@ -1455,15 +1457,15 @@ async function main() {
     sameCapabilityIds(effectiveIds(studioEffective), expectedCapabilityIds) && effectiveHashIsValid(studioEffective),
   JSON.stringify({ public: publicEffective.json, bogus: bogusEffective.json, studio: { actor: studioEffective.json?.actor, ids: effectiveIds(studioEffective) } }));
   for (const [name, response, scope, expectedIds] of [
-    ['read', readEffective, 'read', ['diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.overrides.analyze', 'history.list',
+    ['read', readEffective, 'read', ['diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.overrides.analyze', 'history.list', 'history.raw.read',
       'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.synthesize', 'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.symbols.search', 'project.xml.references', 'readiness.read',
       'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest', 'release.artifact.verify', 'rules.suppression.prepare',
       'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read', 'workspace.read', 'workspace.roundtrip.check']],
-    ['write', writeEffective, 'write', ['diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.overrides.analyze', 'history.list', 'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.synthesize', 'project.validate',
+    ['write', writeEffective, 'write', ['diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.overrides.analyze', 'history.list', 'history.raw.read', 'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.synthesize', 'project.validate',
       'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.symbols.search', 'project.xml.references',
       'readiness.read', 'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest', 'release.artifact.verify', 'rules.suppression.prepare',
       'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.read', 'workspace.roundtrip.check']],
-    ['deploy', deployEffective, 'deploy', expectedCapabilityIds.filter(id => !id.startsWith('configuration.') && !id.startsWith('deploy.') && !id.startsWith('bulk.transform.') && !id.startsWith('files.') && ![
+    ['deploy', deployEffective, 'deploy', expectedCapabilityIds.filter(id => !id.startsWith('configuration.') && !id.startsWith('deploy.') && !id.startsWith('bulk.transform.') && !id.startsWith('files.') && !id.startsWith('snapshots.') && ![
       'history.revert', 'performance.native.collect', 'performance.native.read', 'performance.native.stop', 'project.ai.navigation', 'project.md.navigation', 'project.md.rename', 'release.nexus.prepare', 'reviews.warning.revoke', 'rules.suppression.apply', 'workspace.mod.drift', 'workspace.mod.import',
     ].includes(id))],
   ]) {
@@ -7109,6 +7111,91 @@ async function main() {
         JSON.stringify({ denied: presetDenied.status, preview: renamePreview.status, stale: renameStale.status, commit: renameCommit.status, body: renameCommit.json }));
     } finally {
       fs.rmSync(slice6ModDir, { recursive: true, force: true });
+    }
+  }
+
+  // --- #19 P4 SLICE 7: HISTORY RAW BLOB READ & COMPACT CAS WORKSPACE SNAPSHOTS ---
+  {
+    const slice7ModId = 'slice7_snapshots_mod';
+    const slice7ModDir = path.join(safeWorkspace, slice7ModId);
+    fs.mkdirSync(slice7ModDir, { recursive: true });
+    try {
+      const histList = await req('GET', '/api/agent/history?kind=edit&limit=20', readKey, undefined, { workspaceId: WORKSPACE_ID, operationId: null });
+      const diffRow = (histList.json?.rows || []).find(r => r.revertible === true || Array.isArray(r.files) && r.files.length > 0);
+      const rawRes = await req(
+        'GET',
+        `/api/agent/history/raw?${new URLSearchParams({ id: String(diffRow?.id || ''), which: 'diff' })}`,
+        readKey,
+        undefined,
+        { workspaceId: WORKSPACE_ID, operationId: null },
+      );
+      capabilityResponses.set('history.raw.read', rawRes);
+      const rawBad = await req('GET', '/api/agent/history/raw?id=abc&which=invalid', readKey, undefined, { workspaceId: WORKSPACE_ID, operationId: null });
+      ok('history_raw_query_route_reads_bounded_blob_and_rejects_invalid_which',
+        rawRes.status === 200
+          && rawRes.json?.ok === true
+          && rawRes.json?.which === 'diff'
+          && typeof rawRes.json?.content === 'string'
+          && rawBad.status === 400 && rawBad.json?.code === 'CAPABILITY_INPUT_INVALID',
+        JSON.stringify({ status: rawRes.status, bad: rawBad.status }));
+
+      const snapMint = await req('POST', '/api/agent/keys', SESSION_TOKEN, {
+        label: 'slice7-snapshots-explicit',
+        scope: 'write',
+        ttl: '1h',
+        authorityMode: 'exact',
+        capabilityIdentities: [
+          'snapshots.create@1',
+          'snapshots.delete@1',
+          'snapshots.list@1',
+          'snapshots.restore@1',
+        ],
+        allowedEffects: ['read', 'workspace-write', 'filesystem-write', 'delete', 'audit-write', 'audit-retention-delete'],
+      }, { workspaceId: WORKSPACE_ID });
+      const snapKey = snapMint.json?.token || snapMint.json?.key;
+
+      const presetSnapDenied = await req('GET', `/api/agent/snapshots/list?modId=${slice7ModId}`, deployKey, undefined, { workspaceId: WORKSPACE_ID, operationId: null });
+      const createdSnap = await req('POST', '/api/agent/snapshots/create', snapKey, {
+        modId: slice7ModId,
+        name: 'Slice 7 Checkpoint',
+      }, { workspaceId: WORKSPACE_ID, operationId: null });
+      capabilityResponses.set('snapshots.create', createdSnap);
+
+      const listedSnaps = await req('GET', `/api/agent/snapshots/list?modId=${slice7ModId}`, snapKey, undefined, { workspaceId: WORKSPACE_ID, operationId: null });
+      capabilityResponses.set('snapshots.list', listedSnaps);
+
+      const wsCurrent = await req('GET', '/api/agent/workspace', SESSION_TOKEN, undefined, { workspaceId: WORKSPACE_ID, operationId: null });
+      const restoredSnap = await req('POST', '/api/agent/snapshots/restore', snapKey, {
+        operationId: 'op_slice7_snapshot_restore_1',
+        modId: slice7ModId,
+        snapshotName: createdSnap.json?.snapshotName,
+        expectedHead: wsCurrent.json?.workspaceHash,
+        expectedSnapshotHash: wsCurrent.json?.snapshotHash,
+      }, { workspaceId: WORKSPACE_ID, operationId: null });
+      capabilityResponses.set('snapshots.restore', restoredSnap);
+
+      const staleDelSnap = await req('POST', '/api/agent/snapshots/delete', snapKey, {
+        modId: slice7ModId,
+        snapshotName: createdSnap.json?.snapshotName,
+        expectedSha256: '0'.repeat(64),
+      }, { workspaceId: WORKSPACE_ID, operationId: null });
+      const deletedSnap = await req('POST', '/api/agent/snapshots/delete', snapKey, {
+        modId: slice7ModId,
+        snapshotName: createdSnap.json?.snapshotName,
+        expectedSha256: createdSnap.json?.sha256,
+      }, { workspaceId: WORKSPACE_ID, operationId: null });
+      capabilityResponses.set('snapshots.delete', deletedSnap);
+
+      ok('snapshots_routes_enforce_explicit_grant_cas_compact_metadata_and_reversible_delete',
+        presetSnapDenied.status === 403 && presetSnapDenied.json?.authorityCode === 'CAPABILITY_NOT_GRANTED'
+          && createdSnap.status === 200 && createdSnap.json?.ok === true && createdSnap.json?.recovery?.operation === 'undo-create'
+          && listedSnaps.status === 200 && listedSnaps.json?.total === 1 && listedSnaps.json?.snapshots?.[0]?.workspace === undefined
+          && restoredSnap.status === 200 && restoredSnap.json?.status === 'SUCCESS' && restoredSnap.json?.detail === 'compact' && restoredSnap.json?.workspace === undefined
+          && staleDelSnap.status === 409 && staleDelSnap.json?.code === 'SNAPSHOT_CHANGED'
+          && deletedSnap.status === 200 && deletedSnap.json?.recovery?.operation === 'delete-file',
+        JSON.stringify({ denied: presetSnapDenied.status, create: createdSnap.status, list: listedSnaps.status, restore: restoredSnap.status, staleDel: staleDelSnap.status, del: deletedSnap.status }));
+    } finally {
+      fs.rmSync(slice7ModDir, { recursive: true, force: true });
     }
   }
 

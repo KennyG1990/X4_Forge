@@ -193,6 +193,9 @@ export const LEDGER_ROUTES: Array<{ method: string; path: string; kind: LedgerKi
   { method: 'POST', path: '/api/fs/snapshot', kind: 'snapshot' },
   { method: 'POST', path: '/api/fs/restore-snapshot', kind: 'snapshot' },
   { method: 'POST', path: '/api/fs/delete-snapshot', kind: 'snapshot' },
+  { method: 'POST', path: '/api/agent/snapshots/create', kind: 'snapshot' },
+  { method: 'POST', path: '/api/agent/snapshots/restore', kind: 'snapshot' },
+  { method: 'POST', path: '/api/agent/snapshots/delete', kind: 'snapshot' },
   { method: 'POST', path: '/api/schema/config', kind: 'config' },
   { method: 'POST', path: '/api/agent/configuration/preview', kind: 'config' },
   { method: 'POST', path: '/api/agent/configuration/apply', kind: 'config' },
@@ -252,7 +255,7 @@ export function revertibility(kind: LedgerKind, outcome: LedgerOutcome, hasBefor
         : 'This deploy has no retained recovery snapshot. Transaction rollback protects a failed deploy but is not later undo.',
     };
   }
-  if (kind === 'workspace' && outcome.status !== 'error' && hasRecovery) return { revertible: true };
+  if ((kind === 'workspace' || kind === 'snapshot') && outcome.status !== 'error' && hasRecovery) return { revertible: true };
   if (kind === 'revert') return { revertible: false, reason: 'A revert is itself a recorded step; revert the newer entry instead.' };
   if (kind === 'import') return { revertible: false, reason: 'The import API returns a candidate workspace. Studio checkpoints the canvas before applying it; use local Undo there.' };
   if (kind === 'package') return { revertible: false, reason: 'Packaging produces a build artifact and changes no source.' };
@@ -724,7 +727,7 @@ const LEGACY_WORKSPACE_RECOVERY_REASON =
  * The stored row remains append-only; only its API/UI projection is normalized.
  */
 export function normalizeHistoryRecoveryTruth(row: LedgerRow): LedgerRow {
-  if (row.kind !== 'workspace' || !row.recoveryId || row.recoveryExpectedSnapshotHash) return row;
+  if ((row.kind !== 'workspace' && row.recoveryKind !== 'workspace') || !row.recoveryId || row.recoveryExpectedSnapshotHash) return row;
   return {
     ...row,
     revertible: false,

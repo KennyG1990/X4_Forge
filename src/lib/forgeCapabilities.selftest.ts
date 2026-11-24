@@ -51,7 +51,7 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
 
   const validationErrors = validateForgeCapabilityRegistry();
   check('registry invariants', validationErrors.length === 0, validationErrors.join(' | ') || undefined);
-  check('bounded non-native registry', FORGE_CAPABILITIES.filter(capability => !capability.id.startsWith('performance.native.')).length === 65, `count=${FORGE_CAPABILITIES.length}`);
+  check('bounded non-native registry', FORGE_CAPABILITIES.filter(capability => !capability.id.startsWith('performance.native.')).length === 70, `count=${FORGE_CAPABILITIES.length}`);
   const compileResult = findForgeCapability('workspace.compile.result', 2);
   check('retained compile report access is workspace-scoped and read-only',
     compileResult?.context.workspace === 'required'
@@ -558,6 +558,18 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
     { id: 'project.md.rename', version: 1, method: 'POST', path: '/api/agent/mod-folder/md-rename', alias: 'rename_md_symbol',
       workspace: 'optional', confirmation: 'none', scopes: ['write', 'deploy'], deniedScope: 'read',
       effects: ['filesystem-write', 'audit-write', 'audit-retention-delete'], ledger: 'edit' },
+    { id: 'snapshots.create', version: 1, method: 'POST', path: '/api/agent/snapshots/create', alias: 'create_workspace_snapshot',
+      workspace: 'required', confirmation: 'none', scopes: ['write', 'deploy'], deniedScope: 'read',
+      effects: ['filesystem-write', 'audit-write', 'audit-retention-delete'], ledger: 'snapshot' },
+    { id: 'snapshots.delete', version: 1, method: 'POST', path: '/api/agent/snapshots/delete', alias: 'delete_workspace_snapshot',
+      workspace: 'optional', confirmation: 'none', scopes: ['write', 'deploy'], deniedScope: 'read',
+      effects: ['filesystem-write', 'delete', 'audit-write', 'audit-retention-delete'], ledger: 'snapshot' },
+    { id: 'snapshots.list', version: 1, method: 'GET', path: '/api/agent/snapshots/list', alias: 'list_workspace_snapshots',
+      workspace: 'optional', confirmation: 'none', scopes: ['read', 'write', 'deploy'], deniedScope: null,
+      effects: ['read'], ledger: null },
+    { id: 'snapshots.restore', version: 1, method: 'POST', path: '/api/agent/snapshots/restore', alias: 'restore_workspace_snapshot',
+      workspace: 'required', confirmation: 'none', scopes: ['write', 'deploy'], deniedScope: 'read',
+      effects: ['workspace-write', 'audit-write', 'audit-retention-delete'], ledger: 'snapshot' },
     { id: 'workspace.mod.drift', version: 1, method: 'GET', path: '/api/agent/mod-folder/drift', alias: 'get_mod_drift',
       workspace: 'optional', confirmation: 'none', scopes: ['read', 'write', 'deploy'], deniedScope: null,
       effects: ['read', 'analyze'], ledger: null },
@@ -595,6 +607,7 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
     { id: 'expression.suggest', method: 'POST', path: '/api/agent/suggest/expression', inputLocation: 'body', alias: 'suggest_expression_completions', mcpStatus: 'connected', workspace: 'optional', effects: ['read', 'analyze'], ledger: null },
     { id: 'extensions.dependencies.analyze', method: 'GET', path: '/api/agent/extensions/dependency-graph', inputLocation: 'none', alias: 'get_mod_dependency_graph', mcpStatus: 'connected', workspace: 'none', effects: ['read', 'analyze'], ledger: null },
     { id: 'extensions.overrides.analyze', method: 'GET', path: '/api/agent/override-map', inputLocation: 'query', alias: 'get_extension_override_map', mcpStatus: 'connected', workspace: 'none', effects: ['read', 'analyze'], ledger: null },
+    { id: 'history.raw.read', method: 'GET', path: '/api/agent/history/raw', inputLocation: 'query', alias: 'read_action_history_blob', mcpStatus: 'connected', workspace: 'required', effects: ['read'], ledger: null },
     { id: 'patch.targets.list', method: 'GET', path: '/api/agent/patch-targets', inputLocation: 'query', alias: 'list_patch_targets', mcpStatus: 'connected', workspace: 'none', effects: ['read'], ledger: null },
     { id: 'patch.xpath.synthesize', method: 'POST', path: '/api/agent/xpath-synth', inputLocation: 'body', alias: 'synthesize_xml_patch', mcpStatus: 'partial', workspace: 'optional', effects: ['read', 'analyze'], ledger: null },
     { id: 'project.symbols.search', method: 'GET', path: '/api/agent/mod-folder/symbols', inputLocation: 'query', alias: 'search_workspace_symbols', mcpStatus: 'connected', workspace: 'optional', effects: ['read', 'analyze'], ledger: null },
@@ -621,13 +634,13 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
   const builtCensus = buildForgeUiActionParityCensus(sha256);
   const builtCensusSecond = buildForgeUiActionParityCensus(sha256);
   const coveredDomains = new Set(FORGE_UI_ACTION_PARITY_CENSUS.map(row => row.domain));
-  check('UI-action parity census covers all 15 domains and all 68 capabilities with deterministic hash',
+  check('UI-action parity census covers all 15 domains and all 73 capabilities with deterministic hash',
     censusErrors.length === 0 &&
       builtCensus.schemaVersion === 'forge.ui-action-parity.v1' &&
       builtCensus.censusHash === builtCensusSecond.censusHash &&
       FORGE_UI_ACTION_PARITY_DOMAINS.every(domain => coveredDomains.has(domain)) &&
       builtCensus.summary.totalActions === FORGE_UI_ACTION_PARITY_CENSUS.length &&
-      builtCensus.summary.available === 15 &&
+      builtCensus.summary.available === 16 &&
       builtCensus.summary.approvalRequired === 2 &&
       builtCensus.summary.available + builtCensus.summary.approvalRequired + builtCensus.summary.partial + builtCensus.summary.missing === builtCensus.summary.totalActions &&
       builtCensus.summary.openGaps === builtCensus.summary.partial + builtCensus.summary.missing,
@@ -678,7 +691,7 @@ export function runNativeForgeCapabilitiesSelftest() {
   const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   const keys = (value: object | undefined) => Object.keys(value || {}).sort();
   check('native registry has exactly the three reviewed process telemetry identities',
-    FORGE_CAPABILITIES.length === 68 &&
+    FORGE_CAPABILITIES.length === 73 &&
       equal(FORGE_CAPABILITIES.filter(capability => capability.id.startsWith('performance.native.')).map(capability => capability.id).sort(),
         expected.map(row => row.id).sort()));
   for (const row of expected) {

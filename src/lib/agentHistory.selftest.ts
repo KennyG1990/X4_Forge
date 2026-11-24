@@ -97,7 +97,12 @@ export function runAgentHistorySelftest(): { pass: boolean; checks: Array<{ name
     // invisible. Mutating routes must default to VISIBLE; only proven read-only stays quiet.
     ok('workspace replacement is recorded', ledgerRouteKind('POST', '/api/agent/workspace') === 'workspace');
     ok('AI generation is recorded', ledgerRouteKind('POST', '/api/agent/generate') === 'generate');
-    ok('snapshot restore is recorded', ledgerRouteKind('POST', '/api/fs/restore-snapshot') === 'snapshot');
+    ok('snapshot restore is recorded',
+      ledgerRouteKind('POST', '/api/fs/restore-snapshot') === 'snapshot' &&
+      ledgerRouteKind('POST', '/api/agent/snapshots/create') === 'snapshot' &&
+      ledgerRouteKind('POST', '/api/agent/snapshots/restore') === 'snapshot' &&
+      ledgerRouteKind('POST', '/api/agent/snapshots/delete') === 'snapshot' &&
+      revertibility('snapshot', { status: 'ok' }, false, true).revertible === true);
     ok('settings changes are recorded', ledgerRouteKind('POST', '/api/schema/config') === 'config');
     ok('key lifecycle is recorded', ledgerRouteKind('POST', '/api/agent/keys/revoke') === 'keys');
     ok('shell jobs are recorded', ledgerRouteKind('POST', '/api/run_command/job') === 'command');

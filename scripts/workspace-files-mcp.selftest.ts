@@ -337,6 +337,10 @@ async function main() {
     'restore_workspace_file',
     'apply_warning_suppression',
     'rename_md_symbol',
+    'list_workspace_snapshots',
+    'create_workspace_snapshot',
+    'restore_workspace_snapshot',
+    'delete_workspace_snapshot',
     'prepare_nexus_release',
     'revoke_warning_review',
     'revert_action_history',
@@ -441,6 +445,7 @@ async function main() {
           'files.restore@1',
           'files.write@2',
           'history.list@2',
+          'history.raw.read@1',
           'history.revert@2',
           'project.md.rename@1',
           'project.symbols.search@1',
@@ -449,6 +454,10 @@ async function main() {
           'reviews.warning.revoke@1',
           'rules.suppression.apply@1',
           'rules.suppression.prepare@1',
+          'snapshots.create@1',
+          'snapshots.delete@1',
+          'snapshots.list@1',
+          'snapshots.restore@1',
           'workspace.mod.drift@1',
           'workspace.mod.import@1',
           'workspace.read@2',
@@ -1216,6 +1225,130 @@ async function main() {
         (r: any) => Array.isArray(r.files) && r.files.includes(`${u29ModId}/md/one.xml`) && r.files.includes(`${u29ModId}/md/two.xml`),
       );
       assert(renameRow, `Expected multi-file rename row in Action Ledger: ${JSON.stringify(editHistory.payload.rows)}`);
+    });
+
+    await check('10_history_raw_blob_and_cas_workspace_snapshots_create_list_restore_delete_undo_over_mcp', async () => {
+      // 1. Preset read MCP exposes read_action_history_blob and reads stored unified diff blob
+      const readList = ((await presetReadMcp.request('tools/list')).result?.tools || []).map((t: any) => t.name);
+      assert(readList.includes('read_action_history_blob'), 'preset read key must advertise read_action_history_blob');
+      assert(!readList.includes('list_workspace_snapshots'), 'preset read key must not advertise explicit-grant snapshot tools');
+
+      const editRows = await presetReadMcp.callTool('list_action_history', { kind: 'edit', limit: 10 });
+      const diffRow = (editRows.payload.rows || []).find((r: any) => Array.isArray(r.files) && r.files.some((f: string) => f.includes('unit29_symbols_mod/md/one.xml')));
+      assert(diffRow, 'Expected unit29 rename row in history');
+
+      const rawDiff = await presetReadMcp.callTool('read_action_history_blob', {
+        id: diffRow.id,
+        which: 'diff',
+      });
+      assert.equal(rawDiff.isError, false, JSON.stringify(rawDiff.payload));
+      assert.equal(rawDiff.payload.ok, true);
+      assert.equal(rawDiff.payload.which, 'diff');
+      assert.equal(rawDiff.payload.contentTruncated, false);
+      assert(String(rawDiff.payload.content).includes('RenamedSharedCue'));
+
+      // 2. create_workspace_snapshot + undo-create on a disposable second snapshot + list_workspace_snapshots
+      const snap1 = await fullMcp.callTool('create_workspace_snapshot', {
+        modId,
+        name: 'Checkpoint Alpha',
+      });
+      assert.equal(snap1.isError, false, JSON.stringify(snap1.payload));
+      assert.equal(snap1.payload.ok, true);
+      assert.equal((snap1.payload as any).workspace, undefined, 'create_workspace_snapshot must not echo full workspace');
+      assert.equal(snap1.payload.recovery?.operation, 'undo-create');
+      const snap1Name = String(snap1.payload.snapshotName);
+      const snap1Sha = String(snap1.payload.sha256);
+
+      const snapTemp = await fullMcp.callTool('create_workspace_snapshot', {
+        modId,
+        name: 'Disposable Snapshot',
+      });
+      assert.equal(snapTemp.isError, false, JSON.stringify(snapTemp.payload));
+      const undoneSnapTemp = await fullMcp.callTool('restore_workspace_file', {
+        recoveryId: snapTemp.payload.recovery.id,
+      });
+      assert.equal(undoneSnapTemp.isError, false, JSON.stringify(undoneSnapTemp.payload));
+      assert.equal(fs.existsSync(path.join(modDir, '.snapshots', snapTemp.payload.snapshotName)), false);
+
+      const listed1 = await fullMcp.callTool('list_workspace_snapshots', { modId });
+      assert.equal(listed1.isError, false, JSON.stringify(listed1.payload));
+      assert.equal(listed1.payload.total, 1);
+      assert.equal(listed1.payload.snapshots[0].snapshotName, snap1Name);
+      assert.equal(listed1.payload.snapshots[0].sha256, snap1Sha);
+      assert.equal(listed1.payload.snapshots[0].workspace, undefined);
+
+      // 3. Mutate addressed workspace description, test stale CAS refusal on restore_workspace_snapshot, then commit restore + one-use revert via revert_action_history
+      const wsBeforeMutate = await httpJson(backend!.baseUrl, 'GET', '/api/agent/workspace', STUDIO_TOKEN, undefined, wsHeaders);
+      const mutatedRes = await httpJson(backend!.baseUrl, 'POST', '/api/agent/workspace/merge', STUDIO_TOKEN, {
+        changes: { description: 'Mutated after Checkpoint Alpha' },
+        expectedHead: wsBeforeMutate.json!.workspaceHash,
+        expectedSnapshotHash: wsBeforeMutate.json!.snapshotHash,
+      }, { ...wsHeaders, 'x-forge-operation-id': 'op_u30_mutate_before_restore' });
+      assert.equal(mutatedRes.status, 200, JSON.stringify(mutatedRes.json));
+      const mutatedHead = String(mutatedRes.json!.workspaceHash);
+      const mutatedSnapHash = String(mutatedRes.json!.snapshotHash);
+
+      const staleRestore = await fullMcp.callTool('restore_workspace_snapshot', {
+        operationId: 'op_u30_stale_restore',
+        modId,
+        snapshotName: snap1Name,
+        expectedHead: '0'.repeat(16),
+        expectedSnapshotHash: mutatedSnapHash,
+      });
+      assert.equal(staleRestore.isError, true);
+      assert.equal(staleRestore.payload?.code, 'WORKSPACE_SNAPSHOT_EXPECTED_HEAD_STALE');
+
+      const okRestore = await fullMcp.callTool('restore_workspace_snapshot', {
+        operationId: 'op_u30_ok_restore',
+        modId,
+        snapshotName: snap1Name,
+        expectedHead: mutatedHead,
+        expectedSnapshotHash: mutatedSnapHash,
+      });
+      assert.equal(okRestore.isError, false, JSON.stringify(okRestore.payload));
+      assert.equal(okRestore.payload.applied, true);
+      assert.equal(okRestore.payload.detail, 'compact');
+      assert.equal(okRestore.payload.workspace, undefined);
+      assert.equal(okRestore.payload.receipt?.status, 'committed');
+      assert.equal(okRestore.payload.recovery?.kind, 'workspace');
+
+      const snapHistory = await fullMcp.callTool('list_action_history', { kind: 'snapshot', limit: 10 });
+      const restoreRow = (snapHistory.payload.rows || []).find((r: any) => r.recoveryId === okRestore.payload.receipt.id);
+      assert(restoreRow && restoreRow.revertible === true, `Expected revertible snapshot restore row: ${JSON.stringify(snapHistory.payload.rows)}`);
+
+      const revertedSnapRestore = await fullMcp.callTool('revert_action_history', { id: restoreRow.id });
+      assert.equal(revertedSnapRestore.isError, false, JSON.stringify(revertedSnapRestore.payload));
+      assert.equal(revertedSnapRestore.payload.workspaceHash, mutatedHead);
+
+      // 4. delete_workspace_snapshot: stale expectedSha256 refused -> valid delete unlinks + returns one-use file recovery -> restore_workspace_file restores exact bytes
+      const staleDelSnap = await fullMcp.callTool('delete_workspace_snapshot', {
+        modId,
+        snapshotName: snap1Name,
+        expectedSha256: '0'.repeat(64),
+      });
+      assert.equal(staleDelSnap.isError, true);
+      assert.equal(staleDelSnap.payload?.code, 'SNAPSHOT_CHANGED');
+      assert.equal(fs.existsSync(path.join(modDir, '.snapshots', snap1Name)), true);
+
+      const okDelSnap = await fullMcp.callTool('delete_workspace_snapshot', {
+        modId,
+        snapshotName: snap1Name,
+        expectedSha256: snap1Sha,
+      });
+      assert.equal(okDelSnap.isError, false, JSON.stringify(okDelSnap.payload));
+      assert.equal(okDelSnap.payload.removed?.sha256, snap1Sha);
+      assert.equal(okDelSnap.payload.recovery?.operation, 'delete-file');
+      assert.equal(fs.existsSync(path.join(modDir, '.snapshots', snap1Name)), false);
+
+      const restoredDeletedSnap = await fullMcp.callTool('restore_workspace_file', {
+        recoveryId: okDelSnap.payload.recovery.id,
+      });
+      assert.equal(restoredDeletedSnap.isError, false, JSON.stringify(restoredDeletedSnap.payload));
+      assert.equal(fs.existsSync(path.join(modDir, '.snapshots', snap1Name)), true);
+
+      const listedAfterRestore = await fullMcp.callTool('list_workspace_snapshots', { modId });
+      assert.equal(listedAfterRestore.payload.total, 1);
+      assert.equal(listedAfterRestore.payload.snapshots[0].sha256, snap1Sha);
     });
   } finally {
     for (const s of mcpSessions) {

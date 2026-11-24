@@ -1237,6 +1237,11 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
       || authority.decision.routeKey === 'POST /api/agent/mod-folder/round-trip'
       || authority.decision.routeKey === 'GET /api/agent/mod-folder/symbols'
       || authority.decision.routeKey === 'POST /api/agent/mod-folder/md-rename'
+      || authority.decision.routeKey === 'GET /api/agent/history/raw'
+      || authority.decision.routeKey === 'GET /api/agent/snapshots/list'
+      || authority.decision.routeKey === 'POST /api/agent/snapshots/create'
+      || authority.decision.routeKey === 'POST /api/agent/snapshots/restore'
+      || authority.decision.routeKey === 'POST /api/agent/snapshots/delete'
       || authority.decision.routeKey === 'POST /api/agent/project-rules/suppression/prepare'
       || authority.decision.routeKey === 'POST /api/agent/project-rules/suppression/apply'
       || authority.decision.routeKey === 'POST /api/agent/quick-fixes'
@@ -1734,9 +1739,9 @@ function sourceOperationKeys(req: express.Request): string[] {
       : resolveModFolder(target, req.path === '/api/agent/mod-folder/md-rename' ? 'workspace' : req.body?.root);
     if (!('error' in folder)) keys.push(folder.physical?.canonicalKey ?? canonicalSourceKey(folder.abs));
   }
-  if (req.path.startsWith('/api/fs/') || req.path.startsWith('/api/agent/files/') || req.path.includes('/history/') || req.path.includes('/project-rules/') || req.path.endsWith('/steam/adopt')) {
+  if (req.path.startsWith('/api/fs/') || req.path.startsWith('/api/agent/files/') || req.path.startsWith('/api/agent/snapshots/') || req.path.includes('/history/') || req.path.includes('/project-rules/') || req.path.endsWith('/steam/adopt')) {
     if (resolved.modWorkspacePath) {
-      let effectiveTarget = target;
+      let effectiveTarget = target ?? req.body?.modId;
       if (!effectiveTarget && (req.path === '/api/fs/restore-file' || req.path === '/api/agent/files/restore') && typeof req.body?.recoveryId === 'string') {
         const found = destructiveRecoveryStore.read(req.body.recoveryId);
         if (found.ok && found.record.kind === 'file') effectiveTarget = found.record.relativePath;
@@ -6311,7 +6316,11 @@ function executeFileRecoveryRestore(
       return res.status(403).json({ ok: false, success: false, code: 'PATH_TRAVERSAL_FORBIDDEN', error: 'Forbidden: Recovery target escapes Mod Workspace root.' });
     }
     const relativeSegments = path.relative(binding.path, targetAbs).split(path.sep).filter(Boolean);
-    if (relativeSegments.length === 0 || relativeSegments.some(segment => !includeFilesystemEntry(segment))) {
+    const isPermittedSnapshotRecovery = relativeSegments.length === 3
+      && includeFilesystemEntry(relativeSegments[0])
+      && relativeSegments[1] === '.snapshots'
+      && /^snapshot_[A-Za-z0-9_:-]+\.json$/.test(relativeSegments[2]);
+    if (relativeSegments.length === 0 || (!isPermittedSnapshotRecovery && relativeSegments.some(segment => !includeFilesystemEntry(segment)))) {
       return res.status(403).json({ ok: false, success: false, code: 'HIDDEN_PATH_FORBIDDEN', error: 'Forbidden: Hidden or development paths cannot be restored.' });
     }
     if (!verifyRealAncestorWithinRoot(targetAbs, binding.path)) {
@@ -7114,37 +7123,86 @@ app.get("/api/agent/history", (req, res) => {
   }
 });
 
+function respondHistoryRawPayload(
+  req: express.Request,
+  res: express.Response,
+  rowId: string,
+  which: string,
+  maxChars?: number,
+) {
+  const record = requestWorkspace(req);
+  const row = agentHistoryStore.find(rowId);
+  if (!row || row.workspaceId !== record.workspaceId) {
+    return res.status(404).json({ ok: false, code: 'HISTORY_ENTRY_NOT_FOUND', error: 'No such history entry in this workspace.' });
+  }
+  const sendBlob = (raw: Buffer) => {
+    const fullText = raw.toString('utf8');
+    if (maxChars !== undefined) {
+      const truncated = fullText.length > maxChars;
+      return res.json({
+        ok: true,
+        workspaceId: record.workspaceId,
+        id: row.id,
+        which,
+        bytes: raw.length,
+        contentLength: fullText.length,
+        contentTruncated: truncated,
+        content: truncated ? fullText.slice(0, maxChars) : fullText,
+      });
+    }
+    return res.json({ ok: true, workspaceId: record.workspaceId, id: row.id, which, bytes: raw.length, content: fullText });
+  };
+  if (which === 'diagnostics' && row.kind === 'deploy' && row.receiptStatus === 'committed' && row.receiptId && row.receiptHash) {
+    const saved = actionReceiptStore.tryRead(row.receiptId);
+    if (!saved.ok || saved.receipt.hash !== row.receiptHash || saved.receipt.status !== 'committed') {
+      return res.status(410).json({ ok: false, code: 'HISTORY_RECEIPT_UNVERIFIED', error: 'The committed deployment receipt could not be verified.' });
+    }
+    if (saved.receipt.authority.scope === 'workspace' && saved.receipt.authority.workspaceId !== record.workspaceId) {
+      return res.status(404).json({ ok: false, code: 'HISTORY_ENTRY_NOT_FOUND', error: 'No such history entry in this workspace.' });
+    }
+    const { report, raw } = readDeployEffect(agentHistoryStore, saved.receipt);
+    if (raw) return sendBlob(raw);
+    if (report.status !== 'legacy') {
+      return res.status(410).json({ ok: false, code: 'HISTORY_BLOB_UNVERIFIED', error: 'The committed deployment file-effects report could not be verified.' });
+    }
+  }
+  const ref = which === 'before' ? row.beforeBlob
+    : which === 'after' ? row.afterBlob
+    : which === 'diagnostics' ? row.diagnosticsBlob
+    : row.diffBlob;
+  if (!ref) return res.status(404).json({ ok: false, code: 'HISTORY_BLOB_MISSING', error: `This entry has no stored "${which}" payload.` });
+  const blob = agentHistoryStore.readBlob(ref);
+  if (!blob) return res.status(410).json({ ok: false, code: 'HISTORY_BLOB_ROTATED', error: 'The stored payload has been rotated out of history.' });
+  return sendBlob(blob);
+}
+
 /** Payload bytes, deliberately behind an explicit action so rows stay small. */
 app.get("/api/agent/history/:id/raw", (req, res) => {
   try {
-    const record = requestWorkspace(req);
-    const row = agentHistoryStore.find(String(req.params.id));
-    if (!row || row.workspaceId !== record.workspaceId) return res.status(404).json({ ok: false, error: 'No such history entry in this workspace.' });
     const which = String(req.query.which || 'diff');
-    if (which === 'diagnostics' && row.kind === 'deploy' && row.receiptStatus === 'committed' && row.receiptId && row.receiptHash) {
-      const saved = actionReceiptStore.tryRead(row.receiptId);
-      if (!saved.ok || saved.receipt.hash !== row.receiptHash || saved.receipt.status !== 'committed') {
-        return res.status(410).json({ ok: false, error: 'The committed deployment receipt could not be verified.' });
-      }
-      if (saved.receipt.authority.scope === 'workspace' && saved.receipt.authority.workspaceId !== record.workspaceId) {
-        return res.status(404).json({ ok: false, error: 'No such history entry in this workspace.' });
-      }
-      const { report, raw } = readDeployEffect(agentHistoryStore, saved.receipt);
-      if (raw) return res.json({ ok: true, workspaceId: record.workspaceId, id: row.id, which, bytes: raw.length, content: raw.toString('utf8') });
-      if (report.status !== 'legacy') {
-        return res.status(410).json({ ok: false, error: 'The committed deployment file-effects report could not be verified.' });
-      }
+    return respondHistoryRawPayload(req, res, String(req.params.id), which);
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: errorMessage(error) || 'Failed to read payload.' });
+  }
+});
+
+app.get("/api/agent/history/raw", (req, res) => {
+  try {
+    const queryObj = isPlainRecord(req.query) ? req.query : {};
+    const extra = unknownObjectKeys(queryObj, new Set(['id', 'which']));
+    if (extra.length > 0) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: `history.raw.read does not accept: ${extra.join(', ')}` });
     }
-    const ref = which === 'before' ? row.beforeBlob
-      : which === 'after' ? row.afterBlob
-      : which === 'diagnostics' ? row.diagnosticsBlob
-      : row.diffBlob;
-    if (!ref) return res.status(404).json({ ok: false, error: `This entry has no stored "${which}" payload.` });
-    const blob = agentHistoryStore.readBlob(ref);
-    if (!blob) return res.status(410).json({ ok: false, error: 'The stored payload has been rotated out of history.' });
-    return res.json({ ok: true, workspaceId: record.workspaceId, id: row.id, which, bytes: blob.length, content: blob.toString('utf8') });
-  } catch (error: any) {
-    return res.status(500).json({ ok: false, error: error?.message || 'Failed to read payload.' });
+    if (typeof queryObj.id !== 'string' || !queryObj.id.trim() || queryObj.id.length > 128 || queryObj.id.includes('\0')) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'history.raw.read id must be a non-empty string up to 128 characters.' });
+    }
+    const validWhich = new Set(['diff', 'before', 'after', 'diagnostics']);
+    if (queryObj.which !== undefined && (typeof queryObj.which !== 'string' || !validWhich.has(queryObj.which))) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'history.raw.read which must be "diff", "before", "after", or "diagnostics".' });
+    }
+    return respondHistoryRawPayload(req, res, queryObj.id.trim(), typeof queryObj.which === 'string' ? queryObj.which : 'diff', 262_144);
+  } catch (error) {
+    return res.status(500).json({ ok: false, code: 'HISTORY_RAW_FAILED', error: errorMessage(error) || 'Failed to read history payload.' });
   }
 });
 
@@ -7777,6 +7835,415 @@ app.post("/api/fs/delete-snapshot", coordinatedSourceOperation((req, res) => {
     return res.json({ success: true });
   } catch (error) {
     return res.status(500).json({ error: error.message || "Failed to delete snapshot." });
+  }
+}));
+
+function resolveAgentSnapshotModDirectory(
+  res: express.Response,
+  modIdInput: unknown,
+  capabilityLabel: string,
+  resolved = resolveXsdConfig(),
+): { modId: string; modDir: string; modWorkspacePath: string } | null {
+  if (typeof modIdInput !== 'string' || !modIdInput.trim() || modIdInput.length > 256 || modIdInput.includes('\0')) {
+    res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: `${capabilityLabel} modId must be a non-empty single-segment mod folder name.` });
+    return null;
+  }
+  const modId = modIdInput.trim();
+  if (modId.includes('/') || modId.includes('\\') || !includeFilesystemEntry(modId)) {
+    res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: `${capabilityLabel} modId must be a direct visible Mod Workspace folder name.` });
+    return null;
+  }
+  if (!resolved.modWorkspacePath) {
+    res.status(400).json({ ok: false, success: false, code: 'ROOT_NOT_CONFIGURED', error: 'No Mod Workspace Folder configured.' });
+    return null;
+  }
+  const modDir = resolvePathInside(resolved.modWorkspacePath, modId);
+  if (!modDir || modDir === path.resolve(resolved.modWorkspacePath)) {
+    res.status(403).json({ ok: false, success: false, code: 'PATH_TRAVERSAL_FORBIDDEN', error: 'Forbidden: modId escapes the Mod Workspace Folder.' });
+    return null;
+  }
+  return { modId, modDir, modWorkspacePath: resolved.modWorkspacePath };
+}
+
+app.get("/api/agent/snapshots/list", (req, res) => {
+  try {
+    const queryObj = isPlainRecord(req.query) ? req.query : {};
+    const extra = unknownObjectKeys(queryObj, new Set(['modId']));
+    if (extra.length > 0) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: `snapshots.list does not accept: ${extra.join(', ')}` });
+    }
+    const target = resolveAgentSnapshotModDirectory(res, queryObj.modId, 'snapshots.list');
+    if (!target) return;
+
+    const modIdFile = path.join(target.modDir, '.studio-mod-id');
+    let currentModUniqueId = '';
+    if (fs.existsSync(modIdFile) && fs.statSync(modIdFile).isFile()) {
+      currentModUniqueId = fs.readFileSync(modIdFile, 'utf8').trim();
+    }
+    const snapDir = path.join(target.modDir, '.snapshots');
+    if (!fs.existsSync(snapDir) || !fs.statSync(snapDir).isDirectory()) {
+      return res.json({ ok: true, success: true, modId: target.modId, total: 0, snapshots: [] });
+    }
+    const entries = fs.readdirSync(snapDir, { withFileTypes: true })
+      .filter(entry => entry.isFile() && !entry.isSymbolicLink() && /^snapshot_[A-Za-z0-9_:-]+\.json$/.test(entry.name))
+      .map(entry => entry.name)
+      .sort((a, b) => b.localeCompare(a));
+
+    const snapshots: Array<{
+      snapshotName: string;
+      name: string;
+      savedAt: string;
+      sha256: string;
+      bytes: number;
+      nodeCount: number;
+      linkCount: number;
+    }> = [];
+
+    for (const fileName of entries) {
+      try {
+        const abs = path.join(snapDir, fileName);
+        const stat = fs.lstatSync(abs);
+        if (stat.isSymbolicLink() || !stat.isFile() || stat.size > RECOVERY_MAX_WORKSPACE_BYTES) continue;
+        const buf = fs.readFileSync(abs);
+        const parsed = JSON.parse(buf.toString('utf8')) as Record<string, unknown>;
+        if (currentModUniqueId && typeof parsed.modId === 'string' && parsed.modId !== currentModUniqueId) continue;
+        const ws = isPlainRecord(parsed.workspace) ? parsed.workspace : parsed;
+        const sha256 = crypto.createHash('sha256').update(buf).digest('hex');
+        const savedAt = typeof parsed.savedAt === 'string' && parsed.savedAt.trim()
+          ? parsed.savedAt.trim()
+          : new Date(stat.mtimeMs).toISOString();
+        const displayName = typeof parsed.name === 'string' && parsed.name.trim()
+          ? parsed.name.trim()
+          : fileName.replace(/^snapshot_/, '').replace(/\.json$/, '');
+        snapshots.push({
+          snapshotName: fileName,
+          name: displayName,
+          savedAt,
+          sha256,
+          bytes: buf.length,
+          nodeCount: Array.isArray(ws.nodes) ? ws.nodes.length : 0,
+          linkCount: Array.isArray(ws.links) ? ws.links.length : 0,
+        });
+      } catch { /* skip malformed snapshot entry */ }
+    }
+
+    return res.json({
+      ok: true,
+      success: true,
+      modId: target.modId,
+      total: snapshots.length,
+      snapshots: snapshots.slice(0, 100),
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, success: false, code: 'SNAPSHOTS_LIST_FAILED', error: errorMessage(error) || 'Failed to list snapshots.' });
+  }
+});
+
+app.post("/api/agent/snapshots/create", (req, res, next) => {
+  if (!isPlainRecord(req.body)) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'snapshots.create requires a JSON object body.' });
+  }
+  const extra = unknownObjectKeys(req.body, new Set(['modId', 'name']));
+  if (extra.length > 0) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: `snapshots.create does not accept: ${extra.join(', ')}` });
+  }
+  if (req.body.name !== undefined && (typeof req.body.name !== 'string' || !req.body.name.trim() || req.body.name.length > 256 || /[\r\n\0]/.test(req.body.name))) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'snapshots.create name must be a single-line string up to 256 characters.' });
+  }
+  return next();
+}, coordinatedSourceOperation((req, res) => {
+  try {
+    const body = req.body as Record<string, unknown>;
+    const record = requestWorkspace(req);
+    const resolved = resolveXsdConfig();
+    const target = resolveAgentSnapshotModDirectory(res, body.modId, 'snapshots.create', resolved);
+    if (!target) return;
+    if (rejectUnsafeDevelopmentWrite(res, resolved, ['modWorkspacePath'])) return;
+
+    const modIdFile = path.join(target.modDir, '.studio-mod-id');
+    let modUniqueId = '';
+    if (fs.existsSync(modIdFile) && fs.statSync(modIdFile).isFile()) {
+      modUniqueId = fs.readFileSync(modIdFile, 'utf8').trim();
+    }
+    if (!modUniqueId) {
+      modUniqueId = `mod_${crypto.randomBytes(8).toString('hex')}`;
+      const wroteId = writeWorkspaceFileGuarded(res, `${target.modId}/.studio-mod-id`, modUniqueId, undefined, resolved);
+      if (!wroteId) return;
+    }
+
+    const nowIso = new Date().toISOString();
+    const baseStamp = nowIso.replace(/[:.]/g, '-');
+    const snapDir = path.join(target.modDir, '.snapshots');
+    let snapshotName = `snapshot_${baseStamp}.json`;
+    if (fs.existsSync(path.join(snapDir, snapshotName))) {
+      snapshotName = `snapshot_${baseStamp}-${crypto.randomBytes(2).toString('hex')}.json`;
+    }
+    const label = typeof body.name === 'string' && body.name.trim() ? body.name.trim() : `Snapshot_${baseStamp}`;
+    const serialized = `${JSON.stringify({
+      savedAt: nowIso,
+      name: label,
+      modId: modUniqueId,
+      workspace: sanitizeWorkspace(record.workspace),
+    }, null, 2)}\n`;
+
+    const wrote = writeWorkspaceFileGuarded(res, `${target.modId}/.snapshots/${snapshotName}`, serialized, undefined, resolved);
+    if (!wrote) return;
+
+    if (fs.existsSync(snapDir)) {
+      const names = fs.readdirSync(snapDir)
+        .filter(n => /^snapshot_[A-Za-z0-9_:-]+\.json$/.test(n))
+        .sort();
+      const MAX_SNAPSHOTS = 30;
+      for (let i = 0; i < names.length - MAX_SNAPSHOTS; i++) {
+        if (names[i] !== snapshotName) {
+          unlinkRegularWorkspaceFile(path.join(snapDir, names[i]));
+        }
+      }
+    }
+
+    const recovery = createUndoCreateFileRecovery(req, target.modWorkspacePath, wrote.absolutePath, wrote.written.sha256);
+    return res.json({
+      ok: true,
+      success: true,
+      modId: target.modId,
+      snapshotName,
+      name: label,
+      savedAt: nowIso,
+      sha256: wrote.written.sha256,
+      bytes: wrote.written.bytes,
+      workspaceHash: workspaceHash(record),
+      snapshotHash: workspaceSnapshotHash(record.workspace),
+      ...(recovery ? { recovery } : {}),
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, success: false, code: 'SNAPSHOT_CREATE_FAILED', error: errorMessage(error) || 'Failed to save snapshot.' });
+  }
+}));
+
+app.post("/api/agent/snapshots/restore", (req, res, next) => {
+  if (!isPlainRecord(req.body)) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'snapshots.restore requires a JSON object body.' });
+  }
+  const extra = unknownObjectKeys(req.body, new Set([
+    'operationId', 'modId', 'snapshotName', 'expectedHead', 'expectedSnapshotHash', 'expectedVersion', 'detail',
+  ]));
+  if (extra.length > 0) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: `snapshots.restore does not accept: ${extra.join(', ')}` });
+  }
+  const { operationId, modId, snapshotName, expectedHead, expectedSnapshotHash, expectedVersion, detail } = req.body;
+  if (typeof operationId !== 'string' || !ACTION_RECEIPT_OPERATION_ID_RE.test(operationId)) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'operationId must match caller-owned receipt operation id format.' });
+  }
+  const headerOpId = req.headers['x-forge-operation-id'];
+  if (Array.isArray(headerOpId) || (typeof headerOpId === 'string' && headerOpId.trim() !== '' && headerOpId !== operationId)) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'x-forge-operation-id header disagrees with body.operationId.' });
+  }
+  if (typeof modId !== 'string' || !modId.trim() || modId.includes('/') || modId.includes('\\') || !includeFilesystemEntry(modId.trim())) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'snapshots.restore modId must be a direct visible Mod Workspace folder name.' });
+  }
+  if (typeof snapshotName !== 'string' || !/^snapshot_[A-Za-z0-9_:-]+\.json$/.test(snapshotName)) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'snapshots.restore snapshotName must be a valid snapshot_<stamp>.json filename.' });
+  }
+  if (typeof expectedHead !== 'string' || !expectedHead.trim() || typeof expectedSnapshotHash !== 'string' || !expectedSnapshotHash.trim()) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'expectedHead and expectedSnapshotHash are required non-empty strings.' });
+  }
+  if (expectedVersion !== undefined && (typeof expectedVersion !== 'number' || !Number.isSafeInteger(expectedVersion) || expectedVersion < 0)) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'expectedVersion must be a non-negative integer.' });
+  }
+  if (detail !== undefined && detail !== 'compact' && detail !== 'full') {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'detail must be "compact" or "full".' });
+  }
+  req.headers['x-forge-operation-id'] = operationId;
+  return next();
+}, coordinatedSourceOperation(async (req, res) => {
+  const deadlineRequest = req as DeadlineAwareRequest;
+  const responseUnavailable = () => res.writableEnded
+    || res.destroyed
+    || deadlineRequest.__forgeResponseDeadlineExceeded === true;
+  const respondFailure = (code: string, replayed = false, receipt?: ActionReceiptProjection) => {
+    if (responseUnavailable()) return;
+    const recovery = workspaceSnapshotRestoreReadyRecovery(receipt);
+    return res.status(workspaceSnapshotRestoreFailureStatus(code)).json({
+      ok: false,
+      success: false,
+      status: 'FAILED',
+      code,
+      error: 'Workspace snapshot restore failed.',
+      failedStages: ['workspace_snapshot_restore_receipt'],
+      replayed,
+      ...(receipt === undefined ? {} : { receipt }),
+      ...(recovery === undefined ? {} : { recovery }),
+    });
+  };
+  if (responseUnavailable()) return;
+  try {
+    const body = req.body as Record<string, unknown>;
+    const record = requestWorkspace(req);
+    const resolved = resolveXsdConfig();
+    if (!resolved.modWorkspacePath) return respondFailure('WORKSPACE_SNAPSHOT_ROOT_INVALID');
+    if (rejectUnsafeDevelopmentWrite(res, resolved, ['modWorkspacePath'], true)) return;
+
+    const actor = decoratedReq(req).__actor;
+    const identity = actor?.kind === 'agent'
+      ? { kind: 'agent' as const, keyId: actor.keyId, version: ACTION_RECEIPT_RUNTIME_VERSION }
+      : {
+        kind: 'studio' as const,
+        clientId: String(decoratedReq(req).__clientId || ''),
+        version: ACTION_RECEIPT_RUNTIME_VERSION,
+      };
+    const result = await executeWorkspaceSnapshotRestoreReceipt({
+      registry: workspaceRegistry,
+      receiptService: workspaceReceiptService,
+      recoveryStore: destructiveRecoveryStore,
+      store: actionReceiptStore,
+      captureProjection: projection => captureActionReceiptProjection(req, projection),
+    }, {
+      root: resolved.modWorkspacePath,
+      workspaceId: record.workspaceId,
+      modId: String(body.modId).trim(),
+      snapshotName: body.snapshotName,
+      expectedHead: body.expectedHead,
+      expectedSnapshotHash: body.expectedSnapshotHash,
+      expectedVersion: body.expectedVersion,
+      operationId: body.operationId,
+      identity,
+      mayProceed: () => !responseUnavailable(),
+    });
+    if (responseUnavailable()) return;
+    if (result.ok === false) return respondFailure(result.code, result.replayed, result.receipt);
+    if (result.receipt.status !== 'committed') {
+      return respondFailure('WORKSPACE_SNAPSHOT_RESTORE_RECEIPT_MISMATCH', result.replayed, result.receipt);
+    }
+    const recovery = workspaceSnapshotRestoreReadyRecovery(result.receipt);
+    const fullDetail = body.detail === 'full';
+    return res.status(200).json({
+      ok: true,
+      success: true,
+      status: 'SUCCESS',
+      applied: result.applied,
+      replayed: result.replayed,
+      workspaceId: result.record.workspaceId,
+      version: result.record.version,
+      workspaceHash: workspaceHash(result.record),
+      snapshotHash: workspaceSnapshotHash(result.record.workspace),
+      ...(fullDetail
+        ? { workspace: result.record.workspace }
+        : { detail: 'compact', workspaceSummary: summarizeWorkspaceForAgent(result.record.workspace) }),
+      receipt: result.receipt,
+      ...(recovery === undefined ? {} : { recovery }),
+    });
+  } catch {
+    return respondFailure('WORKSPACE_SNAPSHOT_RESTORE_RECEIPT_EXECUTION_FAILED');
+  }
+}));
+
+app.post("/api/agent/snapshots/delete", (req, res, next) => {
+  if (!isPlainRecord(req.body)) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'snapshots.delete requires a JSON object body.' });
+  }
+  const extra = unknownObjectKeys(req.body, new Set(['modId', 'snapshotName', 'expectedSha256']));
+  if (extra.length > 0) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: `snapshots.delete does not accept: ${extra.join(', ')}` });
+  }
+  if (typeof req.body.snapshotName !== 'string' || !/^snapshot_[A-Za-z0-9_:-]+\.json$/.test(req.body.snapshotName)) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'snapshots.delete snapshotName must be a valid snapshot_<stamp>.json filename.' });
+  }
+  if (typeof req.body.expectedSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(req.body.expectedSha256)) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'snapshots.delete expectedSha256 must be a 64-character lowercase hex SHA-256 digest.' });
+  }
+  return next();
+}, coordinatedSourceOperation((req, res) => {
+  try {
+    const body = req.body as Record<string, unknown>;
+    const config = resolveXsdConfig();
+    const binding = workspaceRootBinding(config.modWorkspacePath);
+    if (!binding || !config.modWorkspacePath) {
+      return res.status(400).json({ ok: false, success: false, code: 'ROOT_NOT_CONFIGURED', error: 'No Mod Workspace Folder configured.' });
+    }
+    const resolved = { ...config, modWorkspacePath: binding.path };
+    const target = resolveAgentSnapshotModDirectory(res, body.modId, 'snapshots.delete', resolved);
+    if (!target) return;
+    if (rejectUnsafeDevelopmentWrite(res, resolved, ['modWorkspacePath'])) return;
+
+    const snapshotName = String(body.snapshotName);
+    const snapDir = resolvePathInside(binding.path, target.modId, '.snapshots');
+    const snapFile = snapDir ? resolvePathInside(snapDir, snapshotName) : null;
+    if (!snapFile || !verifyRealAncestorWithinRoot(snapFile, binding.path)) {
+      return res.status(403).json({ ok: false, success: false, code: 'PATH_TRAVERSAL_FORBIDDEN', error: 'Forbidden: snapshot path escapes Mod Workspace Folder.' });
+    }
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(snapFile);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | null)?.code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') {
+        return res.status(404).json({ ok: false, success: false, code: 'SNAPSHOT_NOT_FOUND', error: `Snapshot not found: ${target.modId}/.snapshots/${snapshotName}` });
+      }
+      throw err;
+    }
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      return res.status(403).json({ ok: false, success: false, code: 'PATH_TRAVERSAL_FORBIDDEN', error: 'Refused to delete non-regular snapshot path.' });
+    }
+    const realSnap = fs.realpathSync.native(snapFile);
+    if (realSnap === binding.path || !isPathWithin(realSnap, binding.path)) {
+      return res.status(403).json({ ok: false, success: false, code: 'PATH_TRAVERSAL_FORBIDDEN', error: 'Snapshot resolves outside Mod Workspace.' });
+    }
+    if (stat.size > RECOVERY_MAX_WORKSPACE_BYTES) {
+      return res.status(413).json({ ok: false, success: false, code: 'FILE_TOO_LARGE_FOR_RECOVERY', error: 'Snapshot exceeds reversible recovery byte budget.' });
+    }
+
+    const beforeBytes = fs.readFileSync(realSnap);
+    const currentSha256 = crypto.createHash('sha256').update(beforeBytes).digest('hex');
+    const expectedSha256 = String(body.expectedSha256);
+    if (currentSha256 !== expectedSha256) {
+      return res.status(409).json({
+        ok: false,
+        success: false,
+        code: 'SNAPSHOT_CHANGED',
+        error: 'Snapshot file changed since expectedSha256 was read; nothing was deleted.',
+        expectedSha256,
+        currentSha256,
+      });
+    }
+
+    const normalizedRelPath = path.relative(binding.path, realSnap).replace(/\\/g, '/');
+    const addressedWorkspaceId = decoratedReq(req).__workspaceRecord?.workspaceId;
+    const prepared = destructiveRecoveryStore.prepareFileDeletion({
+      workspaceRootId: binding.id,
+      ...(addressedWorkspaceId ? { workspaceId: addressedWorkspaceId } : {}),
+      targetRoot: binding.path,
+      targetPath: realSnap,
+      relativePath: normalizedRelPath,
+      beforeBytes,
+      beforeSha256: currentSha256,
+      summary: `Remove workspace snapshot ${normalizedRelPath}`,
+    });
+    try {
+      unlinkRegularWorkspaceFile(realSnap);
+    } catch (unlinkErr) {
+      destructiveRecoveryStore.abandon(prepared.id);
+      throw unlinkErr;
+    }
+    const finalized = destructiveRecoveryStore.finalizeFileDeletion(prepared.id);
+    return res.json({
+      ok: true,
+      success: true,
+      modId: target.modId,
+      snapshotName,
+      removed: {
+        sha256: currentSha256,
+        bytes: beforeBytes.length,
+      },
+      recovery: {
+        id: finalized.id,
+        kind: 'file',
+        operation: 'delete-file',
+        expectedCurrentHash: finalized.expectedCurrentHash,
+        expiresAt: finalized.expiresAt,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, success: false, code: 'SNAPSHOT_DELETE_FAILED', error: errorMessage(error) || 'Failed to delete snapshot.' });
   }
 }));
 

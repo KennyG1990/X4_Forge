@@ -1205,6 +1205,18 @@
       "resourceClass": "workspace",
       "workspaceMode": "required"
     },
+    "GET /api/agent/history/raw": {
+      "disposition": "canonical-capability",
+      "owner": "history.raw.read",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "workspace",
+      "workspaceMode": "optional"
+    },
     "GET /api/agent/imported-graph-layout-selftest": {
       "disposition": "public-selftest",
       "owner": "runImportedGraphLayoutSelftest",
@@ -2379,6 +2391,18 @@
         "deploy"
       ],
       "resourceClass": "public",
+      "workspaceMode": "optional"
+    },
+    "GET /api/agent/snapshots/list": {
+      "disposition": "canonical-capability",
+      "owner": "snapshots.list",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
       "workspaceMode": "optional"
     },
     "GET /api/agent/status": {
@@ -3914,6 +3938,39 @@
       "resourceClass": "stateless-analysis",
       "workspaceMode": "optional"
     },
+    "POST /api/agent/snapshots/create": {
+      "disposition": "canonical-capability",
+      "owner": "snapshots.create",
+      "registrations": 1,
+      "agentScopes": [
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "optional"
+    },
+    "POST /api/agent/snapshots/delete": {
+      "disposition": "canonical-capability",
+      "owner": "snapshots.delete",
+      "registrations": 1,
+      "agentScopes": [
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "optional"
+    },
+    "POST /api/agent/snapshots/restore": {
+      "disposition": "canonical-capability",
+      "owner": "snapshots.restore",
+      "registrations": 1,
+      "agentScopes": [
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "workspace",
+      "workspaceMode": "optional"
+    },
     "POST /api/agent/suggest/expression": {
       "disposition": "canonical-capability",
       "owner": "expression.suggest",
@@ -4343,6 +4400,7 @@
     "files.restore@1": "96c4e9348f9d92eb1ac92b88e7b2a77bfdfaaa46efee50e0f193d85ded3a8b52",
     "files.write@2": "39ee7550b7a486b45dcee656aa2e447bf97ba3a7eef24519be5622641c0b96d3",
     "history.list@2": "9fc3203d66edd8c3136bd374bfef4394783e1bd8ef8a44834ff7360a93d1fb33",
+    "history.raw.read@1": "d055a37d5b317100dbca52cfd7878e4eeae8c9a4f01f400a7619be95919ee68e",
     "history.revert@2": "e864816f1ef6d4e06389051423687d3b9da310d3b541f91beff8ecafbb4ab0f4",
     "patch.diff.simulate@1": "eb4c3ceab8d75b6c235acbc6820f611216685ac3e55a3cf958c5d493f179348a",
     "patch.readiness.analyze@2": "7baa90f99f4f1a7cc4382caaf009c107388e9de6124d0d2b5bf155769ab91812",
@@ -4377,6 +4435,10 @@
     "runtime.log.diagnose@1": "a5b1ef6f5323695f7ca5a3a47c0bbf103cca4777ef163913528a4838d843d589",
     "schema.domains.list@1": "c2ecae2906cf231eb4384a63ea601c7449f4fc691b629b97bff9fa81e32f21b5",
     "schema.element.explain@1": "066fc8d2153c753a7f498044a0fb2e4a6921f81a2fe1deb6445a02894194286d",
+    "snapshots.create@1": "a9fd9da3a02cf0114d12558c1fd769fb4502ea19b527f6fbfc1711e2b9d2183a",
+    "snapshots.delete@1": "e10e6672c4c685aeed35f0d403fe7382c03a87697fb66373eacf9f63f6b4bb16",
+    "snapshots.list@1": "5738f95e31782262be51c18d53a69950cf5d5fa6173f0863c7e445380f3c1a43",
+    "snapshots.restore@1": "8bab37c9f4669317edc2e4ffd89fdfc2749bcbbdb857fff587f215dd784da7bd",
     "text.lookup@1": "45ecbc5abb71fb1e168c8b172399742251ca28c8b13fa96afb1352e11a8666a6",
     "validation.last.read@1": "3aa1dfb1609fef0b75557ab12936f47bb22ecc23808168feda91070d23ea135f",
     "workspace.compile@2": "aaa528d9b0b381b7af954ec78d2ba15212e9e0cc020d4af54eb5223caba9e185",
@@ -4388,8 +4450,8 @@
     "workspace.roundtrip.check@1": "c1a1c89c1eb3f44f8f16e6ca03e9787318eec5065bcf25dd2c3ce3a4b4045185"
   },
   "mcpModuleSignature": {
-    "version": 32,
-    "hash": "29311a11e7072f3d6a3fcbe0c940a54bfb54aca3f1ba92ba66bf8671b8cb789d"
+    "version": 33,
+    "hash": "b6390f152bfe733dc5a8c40650cd063762329504b16eda2787cc862accad178b"
   },
   "mcpSignatures": {
     "validate_mod": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",
@@ -4460,7 +4522,12 @@
     "prepare_nexus_release": "5921855cfac168fc070bc349de2dc39db783ae2576d318de659990ea50f00416",
     "verify_release_artifact": "0feddbb6318b12db5d04e4e26f521f6b7ea2c6d1500dbc3738cfeb3a7fbfeede",
     "search_workspace_symbols": "2a0f6895b10fbfd577f3b17922b6eea04d59842044bbab3053d0255590b38e6e",
-    "rename_md_symbol": "f4fbff68e15a7d764af4753b5c9e1bdde550da62e99853e20398a2a2235af470"
+    "rename_md_symbol": "f4fbff68e15a7d764af4753b5c9e1bdde550da62e99853e20398a2a2235af470",
+    "read_action_history_blob": "832f7941c4579bb1eab2d5b55060a4b7822b69e3e45afe5c22b6c9a962410b69",
+    "list_workspace_snapshots": "ffe74e9957d3cabe2830c838555a0b58640b7bd1c7b76e88ab55ccd10ba3ea89",
+    "create_workspace_snapshot": "800bae5751785c7539e91f601c74d430f2985a9de8e8e0e5113e99c871d10670",
+    "restore_workspace_snapshot": "0b83c8a8c10193638c1667a3a67f7afd8a92d0134c228ddf2e67ed0a49c50b43",
+    "delete_workspace_snapshot": "290a670ea4bad2e32e8ab76a6eb68123abb8192021e8a85d5c5cef4a2a481ba9"
   },
   "mcpCapabilityIdentities": {
     "validate_mod": "project.validate@1",
@@ -4531,6 +4598,11 @@
     "prepare_nexus_release": "release.nexus.prepare@1",
     "verify_release_artifact": "release.artifact.verify@1",
     "search_workspace_symbols": "project.symbols.search@1",
-    "rename_md_symbol": "project.md.rename@1"
+    "rename_md_symbol": "project.md.rename@1",
+    "read_action_history_blob": "history.raw.read@1",
+    "list_workspace_snapshots": "snapshots.list@1",
+    "create_workspace_snapshot": "snapshots.create@1",
+    "restore_workspace_snapshot": "snapshots.restore@1",
+    "delete_workspace_snapshot": "snapshots.delete@1"
   }
 }

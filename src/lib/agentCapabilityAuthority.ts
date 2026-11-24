@@ -94,6 +94,10 @@ export const WORKSPACE_FILES_EXPLICIT_GRANT_CAPABILITIES = [
   'history.revert',
   'project.md.rename',
   'rules.suppression.apply',
+  'snapshots.create',
+  'snapshots.delete',
+  'snapshots.list',
+  'snapshots.restore',
   'workspace.mod.drift',
   'workspace.mod.import',
 ] as const;

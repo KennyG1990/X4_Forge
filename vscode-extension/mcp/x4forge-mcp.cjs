@@ -90,6 +90,10 @@ const WORKSPACE_FILES_TOOLS = new Set([
   "restore_workspace_file",
   "apply_warning_suppression",
   "rename_md_symbol",
+  "list_workspace_snapshots",
+  "create_workspace_snapshot",
+  "restore_workspace_snapshot",
+  "delete_workspace_snapshot",
   "revert_action_history",
   "get_mod_drift",
   "import_mod_folder",
@@ -105,6 +109,10 @@ const WORKSPACE_FILES_CAPABILITIES = new Set([
   "history.revert",
   "project.md.rename",
   "rules.suppression.apply",
+  "snapshots.create",
+  "snapshots.delete",
+  "snapshots.list",
+  "snapshots.restore",
   "workspace.mod.drift",
   "workspace.mod.import",
 ]);
@@ -150,6 +158,7 @@ const DIAGNOSTIC_READ_LIVE_TOOLS = new Set([
   "prepare_warning_suppression",
   "verify_release_artifact",
   "search_workspace_symbols",
+  "read_action_history_blob",
 ]);
 const PERFORMANCE_PROFILE_HTTP_FAILURES = { PROFILE_DISABLED: 503, PROFILE_BUSY: 409, PROFILE_RATE_LIMITED: 429, PROFILE_DISPOSED: 503, PROFILE_INPUT_INVALID: 400, PROFILE_ABORTED: 408, PROFILE_FAILED: 500, PROFILE_CLEANUP_UNCONFIRMED: 409 };
 const PERFORMANCE_COLLECTION_HTTP_FAILURES = { PERFORMANCE_DISPOSED: 503, PERFORMANCE_COLLECTION_BUSY: 409, PERFORMANCE_COLLECTION_REFUSED: 409, PROJECT_INPUT_INVALID: 400, PERFORMANCE_COLLECTION_FAILED: 500 };
@@ -2169,6 +2178,162 @@ const TOOLS = [
       },
     ),
   },
+  {
+    name: "read_action_history_blob",
+    capabilityId: "history.raw.read",
+    capabilityVersion: 1,
+    description: "Read the content-addressed diff, before-file, after-file, or diagnostics/file-effects payload attached to an Action Ledger entry in the addressed workspace, verifying deployment receipt hashes when applicable and capping output at 256 KiB.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", maxLength: 128 },
+        which: { type: "string", enum: ["diff", "before", "after", "diagnostics"] },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams({ id: String(args.id) });
+      if (args?.which !== undefined) q.set("which", String(args.which));
+      return requireResponse(
+        await forge("GET", `/api/agent/history/raw?${q}`),
+        "action history raw payload",
+        {
+          ok: "boolean",
+          workspaceId: "string",
+          id: "string",
+          which: "string",
+          bytes: "number",
+          contentLength: "number",
+          contentTruncated: "boolean",
+          content: "string",
+        },
+      );
+    },
+  },
+  {
+    name: "list_workspace_snapshots",
+    capabilityId: "snapshots.list",
+    capabilityVersion: 1,
+    description: "List saved workspace snapshots inside <modId>/.snapshots/ under Mod Workspace with SHA-256 digests, byte sizes, and node/link counts without streaming raw multi-megabyte workspace bodies. Requires an explicit key grant.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        modId: { type: "string", maxLength: 256 },
+      },
+      required: ["modId"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams({ modId: String(args.modId) });
+      return requireResponse(
+        await forge("GET", `/api/agent/snapshots/list?${q}`),
+        "workspace snapshots list",
+        {
+          ok: "boolean",
+          success: "boolean",
+          modId: "string",
+          total: "number",
+          snapshots: "array",
+        },
+      );
+    },
+  },
+  {
+    name: "create_workspace_snapshot",
+    capabilityId: "snapshots.create",
+    capabilityVersion: 1,
+    description: "Save a timestamped JSON snapshot of the addressed Studio workspace inside <modId>/.snapshots/ under Mod Workspace, pruning snapshots older than the newest 30 and returning a one-use undo-create recovery receipt without echoing multi-megabyte workspace payloads. Requires an explicit key grant.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        modId: { type: "string", maxLength: 256 },
+        name: { type: "string", maxLength: 256 },
+      },
+      required: ["modId"],
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/snapshots/create", args),
+      "workspace snapshot creation",
+      {
+        ok: "boolean",
+        success: "boolean",
+        modId: "string",
+        snapshotName: "string",
+        name: "string",
+        savedAt: "string",
+        sha256: "string",
+        bytes: "number",
+        workspaceHash: "string",
+        snapshotHash: "string",
+      },
+    ),
+  },
+  {
+    name: "restore_workspace_snapshot",
+    capabilityId: "snapshots.restore",
+    capabilityVersion: 1,
+    description: "Restore a saved snapshot_<stamp>.json inside <modId>/.snapshots/ into the addressed Studio workspace using expectedHead + expectedSnapshotHash compare-and-swap preconditions, persisted action receipts, compact workspace summaries, and one-use workspace undo recovery. Requires an explicit key grant.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operationId: { type: "string", maxLength: 128 },
+        modId: { type: "string", maxLength: 256 },
+        snapshotName: { type: "string", maxLength: 256 },
+        expectedHead: { type: "string", maxLength: 64 },
+        expectedSnapshotHash: { type: "string", maxLength: 64 },
+        expectedVersion: { type: "integer", minimum: 0 },
+        detail: { type: "string", enum: ["compact", "full"] },
+      },
+      required: ["operationId", "modId", "snapshotName", "expectedHead", "expectedSnapshotHash"],
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/snapshots/restore", args),
+      "workspace snapshot restore",
+      {
+        ok: "boolean",
+        success: "boolean",
+        status: "string",
+        applied: "boolean",
+        replayed: "boolean",
+        workspaceId: "string",
+        version: "number",
+        workspaceHash: "string",
+        snapshotHash: "string",
+        receipt: "object",
+      },
+    ),
+  },
+  {
+    name: "delete_workspace_snapshot",
+    capabilityId: "snapshots.delete",
+    capabilityVersion: 1,
+    description: "Remove one named snapshot_<stamp>.json file inside <modId>/.snapshots/ under Mod Workspace when expectedSha256 matches, recording a one-use FileRecoveryRecord before unlinking so the deletion is reversible via restore_workspace_file. Requires an explicit key grant.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        modId: { type: "string", maxLength: 256 },
+        snapshotName: { type: "string", maxLength: 256 },
+        expectedSha256: { type: "string", maxLength: 64 },
+      },
+      required: ["modId", "snapshotName", "expectedSha256"],
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/snapshots/delete", args),
+      "workspace snapshot deletion",
+      {
+        ok: "boolean",
+        success: "boolean",
+        modId: "string",
+        snapshotName: "string",
+        removed: "object",
+        recovery: "object",
+      },
+    ),
+  },
 ];
 const STATIC_TOOL_NAMES = new Set(TOOLS.map((tool) => tool.name));
 STATIC_TOOL_NAMES.delete("runtime_debugger");
@@ -3599,6 +3764,7 @@ async function forge(method, apiPath, body, signal, nativeDiscovery = false) {
     || apiPath.startsWith("/api/agent/bulk-transform/")
     || apiPath === "/api/agent/history/revert"
     || apiPath.startsWith("/api/agent/mod-folder/")
+    || apiPath.startsWith("/api/agent/snapshots/")
     || apiPath.startsWith("/api/agent/project-rules/suppression/");
   const forwardsAuthoredSource = method === "POST" && AUTHORED_NAVIGATION_ROUTES.has(apiPath);
   const res = await fetch(`${BASE}${apiPath}`, {

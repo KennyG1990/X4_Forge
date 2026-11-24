@@ -44,6 +44,7 @@ const DIAGNOSTIC_READ_TOOLS = [
   'prepare_warning_suppression',
   'verify_release_artifact',
   'search_workspace_symbols',
+  'read_action_history_blob',
 ];
 
 const MD_NAVIGATION_TOOL = 'navigate_md_script';
@@ -102,6 +103,7 @@ const EXPLICIT_ONLY_MCP_CAPABILITIES = new Set<string>([
   'bulk.transform.apply', 'bulk.transform.preview',
   'files.delete', 'files.list', 'files.read', 'files.restore', 'files.write',
   'history.revert', 'project.md.rename', 'rules.suppression.apply',
+  'snapshots.create', 'snapshots.delete', 'snapshots.list', 'snapshots.restore',
   'workspace.mod.drift', 'workspace.mod.import',
 ]);
 const AUTHORED_NAVIGATION_SECRET = 'PRIVATE SOURCE MUST NOT LEAK';
@@ -135,7 +137,7 @@ const READ_TOOLS = [
   'list_action_history', 'get_last_validation_verdict', 'get_mod_proof', 'get_agent_brief',
   'get_reference_status', 'search_reference_symbols', 'read_reference_file', 'search_x4_objects', 'simulate_xml_diff', 'diagnose_game_log',
   'suggest_expression_completions', 'get_mod_dependency_graph', 'get_extension_override_map', 'list_patch_targets', 'synthesize_xml_patch', 'get_galaxy_map',
-  'check_xml_round_trip', 'suggest_quick_fixes', 'prepare_warning_suppression', 'verify_release_artifact', 'search_workspace_symbols',
+  'check_xml_round_trip', 'suggest_quick_fixes', 'prepare_warning_suppression', 'verify_release_artifact', 'search_workspace_symbols', 'read_action_history_blob',
 ];
 const WRITE_TOOLS = [
   'validate_mod', 'list_schema_domains', 'get_workspace', 'compile_workspace', 'author_check',
