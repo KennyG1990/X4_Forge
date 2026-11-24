@@ -357,7 +357,7 @@ export function projectApiEnvelope(route: string, body: unknown, subject?: ApiSu
   }
   // Only project surfaces: reference/global endpoints retain their environment semantics.
   const scoped = route.startsWith('/api/agent/project/') || route.startsWith('/api/agent/release/')
-    || /^\/api\/agent\/(?:mod-folder\/import|compile|package(?:\/release)?|artifact\/build|deploy(?:-verify)?|runtime-control(?:\/.*)?|runtime-debugger|debug-watcher\/brief|log-diagnose|diagnostics|readiness|workspaces?(?:\/.*)?|status)$/.test(route);
+    || /^\/api\/agent\/(?:mod-folder\/import|compile|package(?:\/release)?|artifact\/build|deploy(?:-verify(?:\/(?:preview|apply|status|undo))?)?|runtime-control(?:\/.*)?|runtime-debugger|debug-watcher\/brief|log-diagnose|diagnostics|readiness|workspaces?(?:\/.*)?|status)$/.test(route);
   if (!scoped) return body;
   let actual = subject;
   if (isApiObject(body.previewWorkspace) && Array.isArray(body.previewWorkspace.nodes) && Array.isArray(body.previewWorkspace.links)) {
@@ -370,7 +370,8 @@ export function projectApiEnvelope(route: string, body: unknown, subject?: ApiSu
       sourceHash: evidence.sourceHash, sourceHashScope: evidence.hashScope }
     : undefined;
   // Apply can include the canvas workspace for clients. Deploy identity is the artifact validation subject.
-  if (route === '/api/agent/deploy' || route === '/api/agent/deploy-verify') actual ??= validationSubject;
+  if (route === '/api/agent/deploy' || route === '/api/agent/deploy-verify'
+    || route === '/api/agent/deploy-verify/preview' || route === '/api/agent/deploy-verify/apply') actual ??= validationSubject;
   if (!actual && isApiObject(body.workspace) && Array.isArray(body.workspace.nodes) && Array.isArray(body.workspace.links)) {
     actual = workspaceApiSubject(body.workspace);
   }

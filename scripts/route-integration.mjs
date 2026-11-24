@@ -788,6 +788,7 @@ async function main() {
     : [];
   // Independent semantic inventory: unexpected additions/removals must fail.
   const expectedCapabilityIds = ['configuration.access.request', 'configuration.access.status', 'configuration.apply', 'configuration.preview', 'configuration.read', 'configuration.status',
+    'deploy.apply', 'deploy.preview', 'deploy.status', 'deploy.undo',
     'expression.check', 'expression.inspect', 'extensions.conflicts.analyze', 'history.list', 'history.revert',
     'patch.readiness.analyze', 'performance.collect', 'performance.native.collect', 'performance.native.read', 'performance.native.stop',
     'performance.profile', 'performance.read', 'project.ai.navigation', 'project.md.navigation', 'project.validate', 'project.xml.references', 'readiness.read',
@@ -1432,7 +1433,7 @@ async function main() {
     ['write', writeEffective, 'write', ['expression.check', 'expression.inspect', 'extensions.conflicts.analyze', 'history.list', 'project.validate',
       'performance.collect', 'performance.profile', 'performance.read', 'project.xml.references',
       'readiness.read', 'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'workspace.compile', 'workspace.compile.result', 'workspace.read']],
-    ['deploy', deployEffective, 'deploy', expectedCapabilityIds.filter(id => !id.startsWith('configuration.') && ![
+    ['deploy', deployEffective, 'deploy', expectedCapabilityIds.filter(id => !id.startsWith('configuration.') && !id.startsWith('deploy.') && ![
       'performance.native.collect', 'performance.native.read', 'performance.native.stop', 'project.ai.navigation', 'project.md.navigation',
     ].includes(id))],
   ]) {
@@ -6093,6 +6094,132 @@ async function main() {
     ok('configuration_restore_returns_to_prior_deploy_format',
       restoreApply.status === 200 && restoreApply.json?.saved === true,
       JSON.stringify(restoreApply.json || {}));
+  }
+
+  // --- #19 P3 CURATED NATIVE DEPLOY CAPABILITIES (EXPLICIT GRANT + PREVIEW/APPLY/STATUS/UNDO) ---
+  {
+    const presetDeployDenied = await req('POST', '/api/agent/deploy-verify/preview', deployKey, { path: 'route_int_curated_deploy' });
+    ok('preset_deploy_key_denied_curated_deploy_without_explicit_grant',
+      presetDeployDenied.status === 403 && presetDeployDenied.json?.authorityCode === 'CAPABILITY_NOT_GRANTED',
+      JSON.stringify(presetDeployDenied.json || {}));
+
+    const curatedModId = 'route_int_curated_deploy';
+    const curatedModDir = path.join(safeWorkspace, curatedModId);
+    const curatedClientId = 'client_routeint_curated_deploy';
+    fs.mkdirSync(path.join(curatedModDir, 'md'), { recursive: true });
+    fs.writeFileSync(path.join(curatedModDir, 'content.xml'),
+      `<content id="${curatedModId}" name="Route Curated Deploy" author="ForgeQA" version="100" date="2026-11-23"/>\n`);
+    fs.writeFileSync(path.join(curatedModDir, 'md', 'main.xml'),
+      '<mdscript name="RouteCuratedMain"><cues><cue name="Boot"><conditions><event_game_loaded/></conditions><actions><debug_text text="\'ready\'"/></actions></cue></cues></mdscript>\n');
+    try {
+      const createdWs = await req('POST', '/api/agent/workspaces', SESSION_TOKEN, {
+        clientId: curatedClientId,
+        name: curatedModId,
+      }, { clientId: curatedClientId, operationId: 'route-int-curated-ws-create' });
+      const curatedWsId = createdWs.json?.workspaceId;
+      const importedMod = await req('POST', '/api/agent/mod-folder/import', SESSION_TOKEN, {
+        path: curatedModId,
+        root: 'workspace',
+      }, { workspaceId: curatedWsId, clientId: curatedClientId });
+      await req('POST', '/api/agent/workspace', SESSION_TOKEN, {
+        workspace: importedMod.json?.workspace,
+        expectedVersion: createdWs.json?.version,
+        expectedHead: createdWs.json?.workspaceHash,
+        expectedSnapshotHash: createdWs.json?.snapshotHash,
+      }, { workspaceId: curatedWsId, clientId: curatedClientId, operationId: 'route-int-curated-ws-bind' });
+
+      const curatedDeployMintResponse = await req('POST', '/api/agent/keys', SESSION_TOKEN, {
+        label: 'route-int-curated-deploy-agent',
+        scope: 'deploy',
+        ttl: '1h',
+        authorityMode: 'exact',
+        capabilityIdentities: ['deploy.apply@1', 'deploy.preview@1', 'deploy.status@1', 'deploy.undo@1'],
+        allowedEffects: ['read', 'analyze', 'audit-write', 'audit-retention-delete', 'filesystem-write', 'deploy', 'delete'],
+      }, { workspaceId: curatedWsId, clientId: curatedClientId });
+      const curatedDeployKey = curatedDeployMintResponse.json && (curatedDeployMintResponse.json.token || curatedDeployMintResponse.json.key);
+      ok('explicit_curated_deploy_key_minted',
+        curatedDeployMintResponse.status === 200 && typeof curatedDeployKey === 'string',
+        JSON.stringify(curatedDeployMintResponse.json || {}));
+
+      const curatedAddress = { workspaceId: curatedWsId };
+      const deployPreview = await req('POST', '/api/agent/deploy-verify/preview', curatedDeployKey, {
+        path: curatedModId,
+        root: 'workspace',
+        deployFormat: 'loose',
+        detail: 'compact',
+      }, curatedAddress);
+      capabilityResponses.set('deploy.preview', deployPreview);
+      ok('curated_deploy_preview_stages_identities_without_writing',
+        deployPreview.status === 200 && deployPreview.json?.ok === true && deployPreview.json?.dryRun === true
+          && deployPreview.json?.targetFingerprint === 'absent'
+          && !fs.existsSync(path.join(gameRoot, 'extensions', curatedModId)),
+        JSON.stringify(deployPreview.json || {}));
+
+      const deployOpId = 'route-int-curated-deploy-01';
+      const deployApplyMismatch = await req('POST', '/api/agent/deploy-verify/apply', curatedDeployKey, {
+        operationId: deployOpId,
+        path: curatedModId,
+        root: 'workspace',
+        deployFormat: 'loose',
+        detail: 'compact',
+        expectedModId: deployPreview.json?.modId,
+        expectedSourceHash: deployPreview.json?.sourceHash,
+        expectedArtifactHash: deployPreview.json?.artifactHash,
+        expectedBindingHash: deployPreview.json?.bindingHash,
+        expectedTargetFingerprint: deployPreview.json?.targetFingerprint,
+      }, { ...curatedAddress, operationId: 'route-int-mismatched-header-op' });
+      ok('curated_deploy_apply_refuses_mismatched_operation_id_header',
+        deployApplyMismatch.status === 400 && deployApplyMismatch.json?.code === 'DEPLOY_OPERATION_INPUT_INVALID'
+          && !fs.existsSync(path.join(gameRoot, 'extensions', curatedModId)),
+        JSON.stringify(deployApplyMismatch.json || {}));
+
+      const deployApply = await req('POST', '/api/agent/deploy-verify/apply', curatedDeployKey, {
+        operationId: deployOpId,
+        path: curatedModId,
+        root: 'workspace',
+        deployFormat: 'loose',
+        detail: 'compact',
+        expectedModId: deployPreview.json?.modId,
+        expectedSourceHash: deployPreview.json?.sourceHash,
+        expectedArtifactHash: deployPreview.json?.artifactHash,
+        expectedBindingHash: deployPreview.json?.bindingHash,
+        expectedTargetFingerprint: deployPreview.json?.targetFingerprint,
+      }, { ...curatedAddress, operationId: null });
+      capabilityResponses.set('deploy.apply', deployApply);
+      ok('curated_deploy_apply_commits_bytes_and_receipt',
+        deployApply.status === 200 && deployApply.json?.ok === true && deployApply.json?.bytesConfirmed === true
+          && deployApply.json?.deployRecord?.status === 'committed'
+          && typeof deployApply.json?.recovery?.id === 'string'
+          && fs.existsSync(path.join(gameRoot, 'extensions', curatedModId, 'content.xml')),
+        JSON.stringify(deployApply.json || {}));
+
+      const deployStatus = await req(
+        'GET',
+        `/api/agent/deploy-verify/status?deployOperationId=${deployOpId}&inspectDeployTarget=managed&inspectDeployEffect=1`,
+        curatedDeployKey,
+        undefined,
+        curatedAddress,
+      );
+      capabilityResponses.set('deploy.status', deployStatus);
+      ok('curated_deploy_status_reports_managed_outputs_and_effect',
+        deployStatus.status === 200 && deployStatus.json?.ok === true && deployStatus.json?.outcome === 'committed'
+          && deployStatus.json?.managedObservation?.state === 'matches-committed'
+          && deployStatus.json?.effectReport?.status === 'available',
+        JSON.stringify(deployStatus.json || {}));
+
+      const deployUndo = await req('POST', '/api/agent/deploy-verify/undo', curatedDeployKey, {
+        deployOperationId: deployOpId,
+      }, curatedAddress);
+      capabilityResponses.set('deploy.undo', deployUndo);
+      ok('curated_deploy_undo_restores_absent_pre_state_once',
+        deployUndo.status === 200 && deployUndo.json?.ok === true
+          && deployUndo.json?.restoredFingerprint === 'absent'
+          && !fs.existsSync(path.join(gameRoot, 'extensions', curatedModId)),
+        JSON.stringify(deployUndo.json || {}));
+    } finally {
+      fs.rmSync(curatedModDir, { recursive: true, force: true });
+      fs.rmSync(path.join(gameRoot, 'extensions', curatedModId), { recursive: true, force: true });
+    }
   }
 
   const capabilityOutputReport = (capabilityContract?.capabilities || [])

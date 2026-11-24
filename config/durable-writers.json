@@ -5,121 +5,294 @@
   "writers": [
     {
       "file": "server.ts",
-      "calls": {"writeFileSync": 55, "appendFileSync": 4, "renameSync": 21, "copyFileSync": 4, "mkdirSync": 45, "rmSync": 45, "rmdirSync": 1, "unlinkSync": 6, "chmodSync": 2, "mkdtempSync": 9},
-      "categories": ["mixed", "authoritative-atomic", "verified-tree-transaction", "isolated-artifact-stage", "retention-cleanup", "fixture-only"],
-      "owners": ["writeWorkspaceFileGuarded and fs/create", "snapshot create/prune/delete/restore", "copyRegularTree and synchronizeRegularTree", "replaceValidatedDeployment and recovery", "compileWorkspaceToFolder scratch cleanup", "replaceReleaseDirectory", "Nexus and Steam release handlers", "embedded route/artifact/workspace API selftests", "route-integration caller-key provider-dispatch marker"],
+      "calls": {
+        "writeFileSync": 55,
+        "appendFileSync": 4,
+        "renameSync": 21,
+        "copyFileSync": 4,
+        "mkdirSync": 45,
+        "rmSync": 45,
+        "rmdirSync": 1,
+        "unlinkSync": 6,
+        "chmodSync": 2,
+        "mkdtempSync": 9
+      },
+      "categories": [
+        "mixed",
+        "authoritative-atomic",
+        "verified-tree-transaction",
+        "isolated-artifact-stage",
+        "retention-cleanup",
+        "fixture-only"
+      ],
+      "owners": [
+        "writeWorkspaceFileGuarded and fs/create",
+        "snapshot create/prune/delete/restore",
+        "copyRegularTree and synchronizeRegularTree",
+        "replaceValidatedDeployment and recovery",
+        "compileWorkspaceToFolder scratch cleanup",
+        "replaceReleaseDirectory",
+        "Nexus and Steam release handlers",
+        "embedded route/artifact/workspace API selftests",
+        "route-integration caller-key provider-dispatch marker"
+      ],
       "rationale": "The composition root contains guarded atomic source/snapshot writes, verified deployment/release directory transactions including bounded EXDEV quarantine-copy recovery with exact restore, isolated compilation/release materializers, bounded snapshot/artifact retention, and embedded scratch-only route and artifact tamper/restore fixtures including causal provider-dispatch evidence and explicit translation filename import/edit fidelity. Artifact builds alone opt in to bounded stage-promotion retries with physical-generation and exact-byte guards; the added publication fault fixtures remain beneath the existing unique temporary selftest root.",
       "failureContract": "Authoritative files preserve prior bytes; deployment stage and backup stay under manifest-free same-volume transaction containers, with guarded rollback from a verified intact prior copy and empty-only container cleanup; disposal retires a regular transaction copy's manifest before recursive cleanup; same-target orphan sweep requires the recorded PID to be gone; EXDEV recovery verifies the quarantine copy and, on removal or receipt failure, exactly restores the validated deployed post-action target; isolated build and fixture trees use their configured scratch roots; retention deletes only named bounded artifacts; embedded causal dispatch fixtures require non-production plus explicit route-test mode, write fixed-name non-secret evidence only beneath the harness-provided isolated fixture directory, and propagate append failure so the oracle cannot report false success; embedded artifact tamper/restore and publication fixtures stay beneath the existing unique OS temporary selftest root. Only artifact/build opts in to at most four stage-to-target rename calls, with EPERM/EBUSY-only 25/50/100 ms waits and original physical parent/container/stage identities, exact staged bytes and an absent destination required before each attempt. Changed or foreign trees are retained; cleanup and rollback failures remain errors. Successful-promotion backup disposal starts only after exact target/backup verification; disposal failure returns an error with the new target in place and does not authorize rollback from a partially retired backup."
     },
     {
       "file": "src/lib/actionReceipt.selftest.ts",
-      "calls": { "writeFileSync": 8, "renameSync": 1, "mkdirSync": 2, "rmSync": 3, "mkdtempSync": 2, "symlinkSync": 2 },
-      "categories": ["fixture-only"],
-      "owners": ["runActionReceiptSelftest"],
+      "calls": {
+        "writeFileSync": 8,
+        "renameSync": 1,
+        "mkdirSync": 2,
+        "rmSync": 3,
+        "mkdtempSync": 2,
+        "symlinkSync": 2
+      },
+      "categories": [
+        "fixture-only"
+      ],
+      "owners": [
+        "runActionReceiptSelftest"
+      ],
       "rationale": "Creates canonical, corrupt, tampered, unavailable-root, and junction-escape fixtures only beneath unique temporary roots; extra mkdir/symlink calls construct isolated physical-ancestor realpath-EPERM and link-refusal fixtures beneath unique temporary roots. Recovery-reference clock-phase and canonical legacy-read fixtures add an owned child, a target sentinel and a legacy record; the rename stays within that child's recovery root.",
       "failureContract": "Fixture cleanup is best effort; the physical-ancestor realpath-EPERM and link-refusal fixtures never target production data, receipts, history, or configured workspace paths. Recovery-reference policy refusal must preserve receipt inventory and the target sentinel; unused recoveries are abandoned. Child cleanup is explicitly checked, and failure records a failing oracle result while the existing outer fixture owner retries removal."
     },
     {
       "file": "src/lib/actionReceiptStore.ts",
-      "calls": { "writeFileSync": 1, "renameSync": 1, "mkdirSync": 1, "rmSync": 1, "linkSync": 1 },
-      "categories": ["authoritative-atomic"],
-      "owners": ["ActionReceiptStore.ensureRoot", "ActionReceiptStore.atomicWrite"],
+      "calls": {
+        "writeFileSync": 1,
+        "renameSync": 1,
+        "mkdirSync": 1,
+        "rmSync": 1,
+        "linkSync": 1
+      },
+      "categories": [
+        "authoritative-atomic"
+      ],
+      "owners": [
+        "ActionReceiptStore.ensureRoot",
+        "ActionReceiptStore.atomicWrite"
+      ],
       "rationale": "Stores canonical receipt bytes through a sibling temporary file, fsync, and atomic rename under the relocatable receipt root.",
       "failureContract": "Root, ID, symlink/junction, corrupt-byte, and write failures fail closed. Receipt promotion leaves prior bytes untouched on pre-promotion failure and cleans the temporary file. Verified report blobs reuse the guarded writer with exclusive publication and exact bounded readback."
     },
     {
       "file": "src/lib/agentHistory.selftest.ts",
-      "calls": { "appendFileSync": 1, "rmSync": 1, "mkdtempSync": 1, "writeFileSync": 3, "mkdirSync": 1 },
-      "categories": ["fixture-only"],
-      "owners": ["runAgentHistorySelftest"],
+      "calls": {
+        "appendFileSync": 1,
+        "rmSync": 1,
+        "mkdtempSync": 1,
+        "writeFileSync": 3,
+        "mkdirSync": 1
+      },
+      "categories": [
+        "fixture-only"
+      ],
+      "owners": [
+        "runAgentHistorySelftest"
+      ],
       "rationale": "Creates a torn JSONL tail only inside a unique temporary fixture.",
       "failureContract": "Fixture cleanup is best effort and production history is never opened."
     },
     {
       "file": "src/lib/agentHistoryStore.ts",
-      "calls": { "writeFileSync": 1, "appendFileSync": 1, "renameSync": 3, "mkdirSync": 2, "rmSync": 1 },
-      "categories": ["append-ledger", "authoritative-atomic", "retention-cleanup"],
-      "owners": ["AgentHistoryStore.writeBlob", "AgentHistoryStore.append", "AgentHistoryStore.rotateIfNeeded"],
+      "calls": {
+        "writeFileSync": 1,
+        "appendFileSync": 1,
+        "renameSync": 3,
+        "mkdirSync": 2,
+        "rmSync": 1
+      },
+      "categories": [
+        "append-ledger",
+        "authoritative-atomic",
+        "retention-cleanup"
+      ],
+      "owners": [
+        "AgentHistoryStore.writeBlob",
+        "AgentHistoryStore.append",
+        "AgentHistoryStore.rotateIfNeeded"
+      ],
       "rationale": "Content-addressed blobs use write-then-rename while ledger rows are append-only JSONL with bounded rotated segments.",
       "failureContract": "Torn final rows are ignored by the reader; blob hashes never name partial bytes; history failure never fabricates revertibility."
     },
     {
       "file": "src/lib/agentKeys.ts",
-      "calls": { "writeFileSync": 3, "rmSync": 2 },
-      "categories": ["authoritative-atomic", "fixture-only"],
-      "owners": ["createAgentKeyStore", "runAgentKeysSelftest"],
+      "calls": {
+        "writeFileSync": 3,
+        "rmSync": 2
+      },
+      "categories": [
+        "authoritative-atomic",
+        "fixture-only"
+      ],
+      "owners": [
+        "createAgentKeyStore",
+        "runAgentKeysSelftest"
+      ],
       "rationale": "Production key state delegates to restricted atomic JSON; remaining raw writes corrupt and clean only a temporary negative fixture.",
       "failureContract": "Create, revoke, and prune commit or keep prior memory/disk state; audit touch failure rolls memory back without changing authority."
     },
     {
       "file": "src/lib/artifactPackager.ts",
-      "calls": { "copyFileSync": 1, "mkdirSync": 2, "rmSync": 1, "mkdtempSync": 1 },
-      "categories": ["isolated-artifact-stage"],
-      "owners": ["materializeCatalogArtifact", "copyVerified"],
+      "calls": {
+        "copyFileSync": 1,
+        "mkdirSync": 2,
+        "rmSync": 1,
+        "mkdtempSync": 1
+      },
+      "categories": [
+        "isolated-artifact-stage"
+      ],
+      "owners": [
+        "materializeCatalogArtifact",
+        "copyVerified"
+      ],
       "rationale": "Writes only a caller-created empty artifact stage and hash-verifies every copied loose file before promotion elsewhere.",
       "failureContract": "Any copy/hash/catalog error marks the stage failed; callers discard the isolated tree and never promote it."
     },
     {
       "file": "src/lib/artifactPipeline.ts",
-      "calls": { "writeFileSync": 1, "copyFileSync": 1, "mkdirSync": 2 },
-      "categories": ["isolated-artifact-stage"],
-      "owners": ["materializeArtifact"],
+      "calls": {
+        "writeFileSync": 1,
+        "copyFileSync": 1,
+        "mkdirSync": 2
+      },
+      "categories": [
+        "isolated-artifact-stage"
+      ],
+      "owners": [
+        "materializeArtifact"
+      ],
       "rationale": "Materializes a complete plan only into a new or empty stage and reopens every destination for size and SHA verification.",
       "failureContract": "A partial stage returns failure and is never accepted or promoted by deployment/release callers."
     },
     {
       "file": "src/lib/db.ts",
-      "calls": { "mkdirSync": 1, "rmSync": 1, "mkdtempSync": 1 },
-      "categories": ["sqlite-transaction", "fixture-only"],
-      "owners": ["openStudioDb", "dbSelfTest"],
+      "calls": {
+        "mkdirSync": 1,
+        "rmSync": 1,
+        "mkdtempSync": 1
+      },
+      "categories": [
+        "sqlite-transaction",
+        "fixture-only"
+      ],
+      "owners": [
+        "openStudioDb",
+        "dbSelfTest"
+      ],
       "rationale": "Creates the cache directory; database durability is separately inventoried as WAL plus explicit transactions and generation visibility.",
       "failureContract": "Database open/migration failure degrades to the in-memory cache; the selftest root is disposable."
     },
     {
       "file": "src/lib/destructiveRecovery.ts",
-      "calls": { "writeFileSync": 4, "renameSync": 1, "mkdirSync": 5, "rmSync": 6, "mkdtempSync": 3 },
-      "categories": ["verified-tree-transaction", "retention-cleanup", "fixture-only"],
-      "owners": ["DestructiveRecoveryStore", "runDestructiveRecoverySelftest"],
+      "calls": {
+        "writeFileSync": 4,
+        "renameSync": 1,
+        "mkdirSync": 5,
+        "rmSync": 6,
+        "mkdtempSync": 3
+      },
+      "categories": [
+        "verified-tree-transaction",
+        "retention-cleanup",
+        "fixture-only"
+      ],
+      "owners": [
+        "DestructiveRecoveryStore",
+        "runDestructiveRecoverySelftest"
+      ],
       "rationale": "Recovery metadata is atomic JSON; payload trees are exact pre-state copies; raw writes construct corrupt/restore fixtures only.",
       "failureContract": "A receipt is never advertised until payload and record verify; corrupt, expired, oversized, stale, and replayed receipts refuse."
     },
     {
       "file": "src/lib/instanceDiscovery.ts",
-      "calls": { "rmSync": 5, "mkdtempSync": 1 },
-      "categories": ["ephemeral-atomic", "retention-cleanup"],
-      "owners": ["publishInstance", "pruneDeadInstances", "unpublishInstance"],
+      "calls": {
+        "rmSync": 5,
+        "mkdtempSync": 1
+      },
+      "categories": [
+        "ephemeral-atomic",
+        "retention-cleanup"
+      ],
+      "owners": [
+        "publishInstance",
+        "pruneDeadInstances",
+        "unpublishInstance"
+      ],
       "rationale": "Address-only discovery records use restricted atomic writes. The managed supervisor uses the existing cleanup after the owned child exits and its PID is no longer live.",
       "failureContract": "Discovery failure is fail-soft. Shutdown deletes the owned PID record and rechecks the latest pointer before removal or repointing. Survivor enumeration during shutdown leaves other records untouched. Startup pruning recovers after simultaneous process loss."
     },
     {
       "file": "src/lib/pathRoles.ts",
-      "calls": { "writeFileSync": 2, "mkdirSync": 5, "rmSync": 1, "unlinkSync": 1, "mkdtempSync": 1, "symlinkSync": 3 },
-      "categories": ["fixture-only"],
-      "owners": ["runPathRolesSelftest"],
+      "calls": {
+        "writeFileSync": 2,
+        "mkdirSync": 5,
+        "rmSync": 1,
+        "unlinkSync": 1,
+        "mkdtempSync": 1,
+        "symlinkSync": 3
+      },
+      "categories": [
+        "fixture-only"
+      ],
+      "owners": [
+        "runPathRolesSelftest"
+      ],
       "rationale": "Builds temporary fake game, corpus, and Dev scratch path-role fixtures, including junction and marker refusals.",
       "failureContract": "No configured path is read or written and the unique temporary root is removed."
     },
     {
       "file": "src/lib/platformRelease.ts",
-      "calls": { "writeFileSync": 7, "mkdirSync": 1, "rmSync": 1, "mkdtempSync": 1 },
-      "categories": ["fixture-only"],
-      "owners": ["runPlatformReleaseSelftest"],
+      "calls": {
+        "writeFileSync": 7,
+        "mkdirSync": 1,
+        "rmSync": 1,
+        "mkdtempSync": 1
+      },
+      "categories": [
+        "fixture-only"
+      ],
+      "owners": [
+        "runPlatformReleaseSelftest"
+      ],
       "rationale": "Raw writes create bounded manifest, binary, image, and executable-signature fixtures in a temporary root.",
       "failureContract": "Production release preparation is read-only in this module; all fixture bytes are deleted after the oracle."
     },
     {
       "file": "src/lib/projectFileInventory.ts",
-      "calls": { "writeFileSync": 4, "mkdirSync": 3, "rmSync": 1, "mkdtempSync": 1 },
-      "categories": ["fixture-only"],
-      "owners": ["runProjectFileInventorySelftest"],
+      "calls": {
+        "writeFileSync": 4,
+        "mkdirSync": 3,
+        "rmSync": 1,
+        "mkdtempSync": 1
+      },
+      "categories": [
+        "fixture-only"
+      ],
+      "owners": [
+        "runProjectFileInventorySelftest"
+      ],
       "rationale": "Creates a disposable mod-tree fixture to prove hashing and exclusion behavior.",
       "failureContract": "The scanner is read-only in production and cleanup targets only its unique temp root."
     },
     {
       "file": "src/lib/referenceCorpus.ts",
-      "calls": { "writeFileSync": 2, "mkdirSync": 2, "rmSync": 2, "unlinkSync": 1, "symlinkSync": 1 },
-      "categories": ["fixture-only"],
-      "owners": ["runReferenceCorpusSelftest"],
+      "calls": {
+        "writeFileSync": 2,
+        "mkdirSync": 2,
+        "rmSync": 2,
+        "unlinkSync": 1,
+        "symlinkSync": 1
+      },
+      "categories": [
+        "fixture-only"
+      ],
+      "owners": [
+        "runReferenceCorpusSelftest"
+      ],
       "rationale": "Creates and removes a disposable vanilla/DLC reference corpus fixture, including temporary contributor edits and a linked-extension refusal case.",
       "failureContract": "Production corpus indexing is read-only and cache invalidation never mutates the corpus."
     },
@@ -142,209 +315,462 @@
     },
     {
       "file": "src/lib/referenceOverlay.ts",
-      "calls": {"writeFileSync": 2, "mkdirSync": 2, "renameSync": 1, "rmSync": 2, "unlinkSync": 1, "mkdtempSync": 1},
-      "categories": ["fixture-only"],
-      "owners": ["runReferenceOverlaySelftest"],
+      "calls": {
+        "writeFileSync": 2,
+        "mkdirSync": 2,
+        "renameSync": 1,
+        "rmSync": 2,
+        "unlinkSync": 1,
+        "mkdtempSync": 1
+      },
+      "categories": [
+        "fixture-only"
+      ],
+      "owners": [
+        "runReferenceOverlaySelftest"
+      ],
       "rationale": "Builds disposable overlay fixtures. Exercises DLC removal and a same-size manifest replacement with its modification time preserved.",
       "failureContract": "Production overlay resolution is read-only. This fixture writes and renames only within its unique temporary root and removes the root after verification."
     },
     {
       "file": "src/lib/runtimeDebugSession.selftest.ts",
-      "calls": { "writeFileSync": 6, "rmSync": 1, "mkdtempSync": 1 },
-      "categories": ["fixture-only"],
-      "owners": ["runRuntimeDebugSessionSelftest"],
+      "calls": {
+        "writeFileSync": 6,
+        "rmSync": 1,
+        "mkdtempSync": 1
+      },
+      "categories": [
+        "fixture-only"
+      ],
+      "owners": [
+        "runRuntimeDebugSessionSelftest"
+      ],
       "rationale": "Creates bounded cursor/session, corruption, and failed-promotion fixtures only beneath one unique temporary root.",
       "failureContract": "Fixture cleanup is best effort; persisted-session corruption and promotion-failure fixtures never target configured data, workspace, game, mod, or corpus roots."
     },
     {
       "file": "src/lib/runtimeDebugSession.ts",
-      "calls": { "mkdirSync": 1 },
-      "categories": ["authoritative-atomic"],
-      "owners": ["RuntimeDebugSessionStore.ensureRoot", "RuntimeDebugSessionStore.persist"],
+      "calls": {
+        "mkdirSync": 1
+      },
+      "categories": [
+        "authoritative-atomic"
+      ],
+      "owners": [
+        "RuntimeDebugSessionStore.ensureRoot",
+        "RuntimeDebugSessionStore.persist"
+      ],
       "rationale": "Creates validated runtime debug session root segments; persisted bounded session JSON delegates to the shared atomic writer.",
       "failureContract": "Filesystem-root, forbidden-root, non-directory, link, and unavailable-root checks refuse unsafe state roots; atomic promotion preserves prior session bytes on failure."
     },
     {
       "file": "src/lib/schemaRegistry.ts",
-      "calls": { "writeFileSync": 1, "mkdirSync": 1, "rmSync": 1, "mkdtempSync": 1 },
-      "categories": ["fixture-only"],
-      "owners": ["runSchemaRegistrySelftest"],
+      "calls": {
+        "writeFileSync": 1,
+        "mkdirSync": 1,
+        "rmSync": 1,
+        "mkdtempSync": 1
+      },
+      "categories": [
+        "fixture-only"
+      ],
+      "owners": [
+        "runSchemaRegistrySelftest"
+      ],
       "rationale": "Writes only temporary XSD include/import fixtures.",
       "failureContract": "Schema discovery is read-only in production and fixture cleanup is confined to its temp root."
     },
     {
       "file": "src/lib/schemaRouting.ts",
-      "calls": { "writeFileSync": 1, "rmSync": 1, "mkdtempSync": 1 },
-      "categories": ["fixture-only"],
-      "owners": ["runSchemaRoutingSelftest"],
+      "calls": {
+        "writeFileSync": 1,
+        "rmSync": 1,
+        "mkdtempSync": 1
+      },
+      "categories": [
+        "fixture-only"
+      ],
+      "owners": [
+        "runSchemaRoutingSelftest"
+      ],
       "rationale": "Writes only generated XSD routing fixtures in a unique temporary directory.",
       "failureContract": "Production routing reads supplied schemas and never mutates them."
     },
     {
       "file": "src/lib/validationDelta.ts",
-      "calls": { "writeFileSync": 1, "rmSync": 1, "mkdtempSync": 1 },
-      "categories": ["authoritative-atomic", "fixture-only"],
-      "owners": ["ValidationBaselineStore", "runValidationDeltaSelftest"],
+      "calls": {
+        "writeFileSync": 1,
+        "rmSync": 1,
+        "mkdtempSync": 1
+      },
+      "categories": [
+        "authoritative-atomic",
+        "fixture-only"
+      ],
+      "owners": [
+        "ValidationBaselineStore",
+        "runValidationDeltaSelftest"
+      ],
       "rationale": "Production baselines delegate to atomic JSON; the raw write deliberately corrupts a temp fixture.",
       "failureContract": "Corrupt state is unavailable and refuses overwrite; promotion occurs only after explicitly green validation."
     },
     {
       "file": "src/lib/workspaceState.ts",
-      "calls": { "writeFileSync": 5, "renameSync": 1, "mkdirSync": 1, "rmSync": 2, "unlinkSync": 1, "chmodSync": 1, "mkdtempSync": 1 },
-      "categories": ["authoritative-atomic", "retention-cleanup", "fixture-only"],
-      "owners": ["atomicWriteFile", "parkState", "runWorkspaceStateSelftest"],
+      "calls": {
+        "writeFileSync": 5,
+        "renameSync": 1,
+        "mkdirSync": 1,
+        "rmSync": 2,
+        "unlinkSync": 1,
+        "chmodSync": 1,
+        "mkdtempSync": 1
+      },
+      "categories": [
+        "authoritative-atomic",
+        "retention-cleanup",
+        "fixture-only"
+      ],
+      "owners": [
+        "atomicWriteFile",
+        "parkState",
+        "runWorkspaceStateSelftest"
+      ],
       "rationale": "This is the shared sibling-temp atomic authority; extra raw calls exercise corruption/failure and prune old parked states.",
       "failureContract": "Complete bytes and requested restricted mode exist before rename; failure preserves the destination and cleans the unique temp."
     },
     {
       "file": "src/lib/workspaceRegistry.ts",
-      "calls": { "writeFileSync": 1, "mkdirSync": 1, "rmSync": 2, "unlinkSync": 1, "mkdtempSync": 1 },
-      "categories": ["authoritative-atomic", "fixture-only"],
-      "owners": ["WorkspaceRegistry.create rollback", "WorkspaceRegistry.compensateCreate guarded cleanup", "runWorkspaceRegistrySelftest"],
+      "calls": {
+        "writeFileSync": 1,
+        "mkdirSync": 1,
+        "rmSync": 2,
+        "unlinkSync": 1,
+        "mkdtempSync": 1
+      },
+      "categories": [
+        "authoritative-atomic",
+        "fixture-only"
+      ],
+      "owners": [
+        "WorkspaceRegistry.create rollback",
+        "WorkspaceRegistry.compensateCreate guarded cleanup",
+        "runWorkspaceRegistrySelftest"
+      ],
       "rationale": "Registry index and records use the shared atomic writer; create removes an unindexed new record when index promotion fails, while compensateCreate validates paired identity and hashes, promotes removal from the index, and unlinks only a strictly guarded just-created record; remaining raw calls build corruption and migration fixtures in a unique temporary root.",
       "failureContract": "Create rollback removes only the newly written unindexed record when index promotion fails; compensateCreate verifies paired identity, hashes, and regular-file state, promotes the index first, and attempts exact prior-index restoration if record cleanup fails, reporting partial state when restoration cannot be established; fixture mutations never reach configured state."
     },
     {
       "file": "src/lib/x4CatDat.ts",
-      "calls": { "writeFileSync": 7, "renameSync": 2, "mkdirSync": 1, "rmSync": 3, "writeSync": 1, "mkdtempSync": 1 },
-      "categories": ["isolated-artifact-stage", "fixture-only"],
-      "owners": ["writeCatDatCatalogs", "runCatDatSelftest"],
+      "calls": {
+        "writeFileSync": 7,
+        "renameSync": 2,
+        "mkdirSync": 1,
+        "rmSync": 3,
+        "writeSync": 1,
+        "mkdtempSync": 1
+      },
+      "categories": [
+        "isolated-artifact-stage",
+        "fixture-only"
+      ],
+      "owners": [
+        "writeCatDatCatalogs",
+        "runCatDatSelftest"
+      ],
       "rationale": "Catalog volumes are streamed to exclusive temp files inside an isolated artifact stage, then renamed; remaining raw writes are parser fixtures.",
       "failureContract": "Partial CAT/DAT temps are removed; callers verify the complete staged catalogs before any tree promotion."
     },
     {
       "file": "src/lib/x4UiScene.selftest.ts",
-      "calls": { "writeFileSync": 2, "mkdirSync": 2, "rmSync": 1, "mkdtempSync": 1, "symlinkSync": 2 },
-      "categories": ["fixture-only"],
-      "owners": ["B119 configured-census physical reparse containment test"],
+      "calls": {
+        "writeFileSync": 2,
+        "mkdirSync": 2,
+        "rmSync": 1,
+        "mkdtempSync": 1,
+        "symlinkSync": 2
+      },
+      "categories": [
+        "fixture-only"
+      ],
+      "owners": [
+        "B119 configured-census physical reparse containment test"
+      ],
       "rationale": "All files and links are created beneath one unique OS temporary root to prove selected-root link admission and child-reparse escape refusal.",
       "failureContract": "Finally cleanup is bounded to that unique OS temporary root and no configured workspace/corpus/game/mod path is mutated."
     },
     {
       "file": "src/lib/xsdParser.ts",
-      "calls": { "writeFileSync": 5, "mkdirSync": 4, "rmSync": 2 },
-      "categories": ["authoritative-atomic", "fixture-only"],
-      "owners": ["writeXsdConfig", "runSchemaDiscoverySelftest"],
+      "calls": {
+        "writeFileSync": 5,
+        "mkdirSync": 4,
+        "rmSync": 2
+      },
+      "categories": [
+        "authoritative-atomic",
+        "fixture-only"
+      ],
+      "owners": [
+        "writeXsdConfig",
+        "runSchemaDiscoverySelftest"
+      ],
       "rationale": "Production config delegates to atomic replacement; raw calls create valid/corrupt temporary XSD/config fixtures.",
       "failureContract": "A failed settings save preserves prior config bytes; fixture corruption never reaches the normal config root."
     },
     {
       "file": "src/lib/xsdValidate.ts",
-      "calls": { "writeFileSync": 1, "rmSync": 1, "mkdtempSync": 1 },
-      "categories": ["fixture-only"],
-      "owners": ["runXsdSelftest"],
+      "calls": {
+        "writeFileSync": 1,
+        "rmSync": 1,
+        "mkdtempSync": 1
+      },
+      "categories": [
+        "fixture-only"
+      ],
+      "owners": [
+        "runXsdSelftest"
+      ],
       "rationale": "Writes only a temporary schema fixture for validator coverage.",
       "failureContract": "Production schema validation is read-only and cleanup is temp-root confined."
     },
     {
       "file": "src/server/aiKeyStore.ts",
-      "calls": { "writeFileSync": 1, "rmSync": 1, "mkdtempSync": 1 },
-      "categories": ["authoritative-atomic", "fixture-only"],
-      "owners": ["createAiKeyStore", "runAiKeyStoreSelftest"],
+      "calls": {
+        "writeFileSync": 1,
+        "rmSync": 1,
+        "mkdtempSync": 1
+      },
+      "categories": [
+        "authoritative-atomic",
+        "fixture-only"
+      ],
+      "owners": [
+        "createAiKeyStore",
+        "runAiKeyStoreSelftest"
+      ],
       "rationale": "Production credentials use restricted atomic JSON; the raw write creates a corrupt negative fixture only.",
       "failureContract": "Corrupt stores refuse mutation and failed promotion preserves every previous credential."
     },
     {
       "file": "src/server/bulkTransformApplyReceiptAdapter.selftest.ts",
-      "calls": { "rmSync": 1, "mkdtempSync": 1 },
-      "categories": ["fixture-only"],
-      "owners": ["runBulkTransformApplyReceiptAdapterSelftest"],
+      "calls": {
+        "rmSync": 1,
+        "mkdtempSync": 1
+      },
+      "categories": [
+        "fixture-only"
+      ],
+      "owners": [
+        "runBulkTransformApplyReceiptAdapterSelftest"
+      ],
       "rationale": "Creates one unique temporary root for workspace-registry, action-receipt, recovery, and bulk-transform apply receipt adapter fixtures.",
       "failureContract": "Fixture cleanup is best effort; selftest mutations never target configured workspace, registry, receipt, recovery, or production roots."
     },
     {
       "file": "src/server/gameDetectRoutes.ts",
-      "calls": { "mkdirSync": 1 },
-      "categories": ["authoritative-atomic"],
-      "owners": ["harvest-schemas route"],
+      "calls": {
+        "mkdirSync": 1
+      },
+      "categories": [
+        "authoritative-atomic"
+      ],
+      "owners": [
+        "harvest-schemas route"
+      ],
       "rationale": "Creates the bounded harvested-schema root; every schema file is written through atomic sibling promotion.",
       "failureContract": "A failed extraction/write is reported missing and cannot leave a torn schema file."
     },
     {
       "file": "src/server/githubCredentialStore.ts",
-      "calls": { "rmSync": 2, "chmodSync": 1, "mkdtempSync": 1 },
-      "categories": ["authoritative-atomic", "retention-cleanup"],
-      "owners": ["createGithubCredentialStore"],
+      "calls": {
+        "rmSync": 2,
+        "chmodSync": 1,
+        "mkdtempSync": 1
+      },
+      "categories": [
+        "authoritative-atomic",
+        "retention-cleanup"
+      ],
+      "owners": [
+        "createGithubCredentialStore"
+      ],
       "rationale": "Credential values use restricted atomic JSON; raw calls enforce mode and explicitly delete the credential on user request.",
       "failureContract": "Set failure preserves prior credential; delete reports failure and never returns a false configured state."
     },
     {
       "file": "src/server/npcIdentityProbe.ts",
-      "calls": { "writeFileSync": 6, "rmSync": 1, "mkdtempSync": 1 },
-      "categories": ["fixture-only"],
-      "owners": ["runNpcIdentityProbeSelftest"],
+      "calls": {
+        "writeFileSync": 6,
+        "rmSync": 1,
+        "mkdtempSync": 1
+      },
+      "categories": [
+        "fixture-only"
+      ],
+      "owners": [
+        "runNpcIdentityProbeSelftest"
+      ],
       "rationale": "Writes only disposable plain/gzip/corrupt save fixtures for identity correlation.",
       "failureContract": "Production identity probes read user-selected saves only and never mutate them."
     },
     {
       "file": "src/server/runtimeDebuggerAdapter.selftest.ts",
-      "calls": { "writeFileSync": 17, "appendFileSync": 6, "mkdirSync": 1, "rmSync": 1, "mkdtempSync": 1 },
-      "categories": ["fixture-only"],
-      "owners": ["runRuntimeDebuggerAdapterSelftest", "appendLine"],
+      "calls": {
+        "writeFileSync": 17,
+        "appendFileSync": 6,
+        "mkdirSync": 1,
+        "rmSync": 1,
+        "mkdtempSync": 1
+      },
+      "categories": [
+        "fixture-only"
+      ],
+      "owners": [
+        "runRuntimeDebuggerAdapterSelftest",
+        "appendLine"
+      ],
       "rationale": "Creates disposable debug-log and corrupt persisted-session fixtures beneath one unique temporary adapter root and appends bounded log evidence for selection and rotation cases.",
       "failureContract": "Fixture cleanup is best effort; every log and store mutation remains under the unique temporary root and never targets configured game, mod, corpus, workspace, or production roots."
     },
     {
       "file": "src/server/workspaceCreateReceiptAdapter.selftest.ts",
-      "calls": { "rmSync": 1, "mkdtempSync": 1 },
-      "categories": ["fixture-only"],
-      "owners": ["runWorkspaceCreateReceiptAdapterSelftest"],
+      "calls": {
+        "rmSync": 1,
+        "mkdtempSync": 1
+      },
+      "categories": [
+        "fixture-only"
+      ],
+      "owners": [
+        "runWorkspaceCreateReceiptAdapterSelftest"
+      ],
       "rationale": "Creates one unique temporary workspace-registry and action-receipt fixture root for the adapter selftest.",
       "failureContract": "Fixture cleanup is best effort; selftest mutations never target configured workspace, registry, receipt, or production roots."
     },
     {
       "file": "src/server/workspaceSnapshotRestoreReceiptAdapter.selftest.ts",
-      "calls": { "writeFileSync": 3, "mkdirSync": 1, "rmSync": 1, "mkdtempSync": 1 },
-      "categories": ["fixture-only"],
-      "owners": ["runWorkspaceSnapshotRestoreReceiptAdapterSelftest"],
+      "calls": {
+        "writeFileSync": 3,
+        "mkdirSync": 1,
+        "rmSync": 1,
+        "mkdtempSync": 1
+      },
+      "categories": [
+        "fixture-only"
+      ],
+      "owners": [
+        "runWorkspaceSnapshotRestoreReceiptAdapterSelftest"
+      ],
       "rationale": "Creates snapshot-restore source and fault fixtures only beneath one unique OS temporary root and removes that root in the selftest finally block.",
       "failureContract": "The selftest reports failed checks or an unexpected adapter failure; fixture cleanup is attempted in finally, and fixture mutations never target configured workspace, registry, receipt, recovery, or production roots."
     },
     {
       "file": "src/server/x4MergeLawOracleFs.ts",
-      "calls": { "writeFileSync": 2, "renameSync": 1, "mkdirSync": 4, "rmdirSync": 6, "unlinkSync": 3 },
-      "categories": ["verified-tree-transaction", "fixture-only"],
-      "owners": ["validateX4MergeLawOracleExtensionsRoot", "buildX4MergeLawOracleStagingPlan", "inspectX4MergeLawOracleStagingTargets", "stageX4MergeLawOracleFixture", "cleanupX4MergeLawOracleFixture"],
+      "calls": {
+        "writeFileSync": 2,
+        "renameSync": 1,
+        "mkdirSync": 4,
+        "rmdirSync": 6,
+        "unlinkSync": 3
+      },
+      "categories": [
+        "verified-tree-transaction",
+        "fixture-only"
+      ],
+      "owners": [
+        "validateX4MergeLawOracleExtensionsRoot",
+        "buildX4MergeLawOracleStagingPlan",
+        "inspectX4MergeLawOracleStagingTargets",
+        "stageX4MergeLawOracleFixture",
+        "cleanupX4MergeLawOracleFixture"
+      ],
       "rationale": "Validates an explicit physical extensions root and stages an exact signed merge-law fixture through a guarded sibling transaction before promotion and cleanup.",
       "failureContract": "Unsafe, conflicting, foreign, or malformed targets refuse before mutation; write or promotion failures roll back owned state or report guarded residue, and cleanup reports incomplete state after a post-mutation failure without touching unowned files."
     },
     {
       "file": "vscode-extension/src/durableWrite.ts",
-      "calls": { "writeFileSync": 5, "renameSync": 3, "mkdirSync": 1, "rmSync": 5, "mkdtempSync": 1 },
-      "categories": ["extension-workspace-atomic", "fixture-only"],
-      "owners": ["replaceFileSetAtomically", "atomicWriteFile", "runDurableWriteSelftest"],
+      "calls": {
+        "writeFileSync": 5,
+        "renameSync": 3,
+        "mkdirSync": 1,
+        "rmSync": 5,
+        "mkdtempSync": 1
+      },
+      "categories": [
+        "extension-workspace-atomic",
+        "fixture-only"
+      ],
+      "owners": [
+        "replaceFileSetAtomically",
+        "atomicWriteFile",
+        "runDurableWriteSelftest"
+      ],
       "rationale": "This is the extension-host sibling-stage and multi-file rollback authority; raw calls also drive its isolated failure fixture.",
       "failureContract": "All bytes stage first; partial promotion restores every previous file and preserves an unrecoverable backup instead of deleting it."
     },
     {
       "file": "vscode-extension/src/extension.ts",
-      "calls": { "mkdirSync": 3 },
-      "categories": ["extension-workspace-atomic"],
-      "owners": ["spawnSidecar"],
+      "calls": {
+        "mkdirSync": 3
+      },
+      "categories": [
+        "extension-workspace-atomic"
+      ],
+      "owners": [
+        "spawnSidecar"
+      ],
       "rationale": "Creates isolated extension global-storage state/config/data roots before the managed sidecar starts.",
       "failureContract": "Directory creation failure prevents sidecar startup and is surfaced through the extension error path."
     },
     {
       "file": "vscode-extension/src/modFolder.ts",
-      "calls": { "writeFileSync": 8, "mkdirSync": 5, "rmSync": 1, "mkdtempSync": 1 },
-      "categories": ["extension-workspace-atomic", "fixture-only"],
-      "owners": ["writeRecommendations", "writeXmlAssociations", "runModFolderSelftest"],
+      "calls": {
+        "writeFileSync": 8,
+        "mkdirSync": 5,
+        "rmSync": 1,
+        "mkdtempSync": 1
+      },
+      "categories": [
+        "extension-workspace-atomic",
+        "fixture-only"
+      ],
+      "owners": [
+        "writeRecommendations",
+        "writeXmlAssociations",
+        "runModFolderSelftest"
+      ],
       "rationale": "Production JSON files delegate to the extension atomic helper; remaining raw mutations construct merge/corruption fixtures.",
       "failureContract": "Failed promotion preserves existing VS Code settings/recommendations and temporary fixtures never use a real mod."
     },
     {
       "file": "vscode-extension/src/nativeEditorBridge.selftest.ts",
-      "calls": { "writeFileSync": 9, "mkdirSync": 4, "rmSync": 1, "mkdtempSync": 1 },
-      "categories": ["fixture-only"],
-      "owners": ["runNativeEditorBridgeSelftest"],
+      "calls": {
+        "writeFileSync": 9,
+        "mkdirSync": 4,
+        "rmSync": 1,
+        "mkdtempSync": 1
+      },
+      "categories": [
+        "fixture-only"
+      ],
+      "owners": [
+        "runNativeEditorBridgeSelftest"
+      ],
       "rationale": "Creates only disposable release ZIP, tool, command and verified source-navigation fixtures.",
       "failureContract": "No native dialog or user output path is touched and the unique temporary root is removed."
     },
     {
       "file": "vscode-extension/src/nativeEditorBridge.ts",
-      "calls": { "renameSync": 3, "copyFileSync": 1, "rmSync": 3 },
-      "categories": ["verified-release-export"],
-      "owners": ["exportVerifiedReleaseArtifact"],
+      "calls": {
+        "renameSync": 3,
+        "copyFileSync": 1,
+        "rmSync": 3
+      },
+      "categories": [
+        "verified-release-export"
+      ],
+      "owners": [
+        "exportVerifiedReleaseArtifact"
+      ],
       "rationale": "User-selected release ZIP export copies to an exclusive sibling temp, checks receipt hash/size, backs up an existing target, promotes, reopens, and rolls back.",
       "failureContract": "Any mismatch or promotion error reports failure and restores the prior selected output; final success names verified bytes only."
     },
@@ -365,17 +791,39 @@
     },
     {
       "file": "src/server/projectCheckSetup.ts",
-      "calls": { "mkdirSync": 1, "rmSync": 1, "writeSync": 1, "mkdtempSync": 1 },
-      "categories": ["isolated-artifact-stage"],
-      "owners": ["freezeProjectCheckSetup", "openStagedFile"],
+      "calls": {
+        "mkdirSync": 1,
+        "rmSync": 1,
+        "writeSync": 1,
+        "mkdtempSync": 1
+      },
+      "categories": [
+        "isolated-artifact-stage"
+      ],
+      "owners": [
+        "freezeProjectCheckSetup",
+        "openStagedFile"
+      ],
       "rationale": "Stage the exact approved harness and explicitly listed runtime inputs from the same bounded reads that establish their hashes. Use a unique runner-owned directory outside both source roots.",
       "failureContract": "Fail on drift, invalid or linked inputs, missing approved identity, and inventory or byte changes. Dispose only the original scratch root; refuse to remove a replacement directory."
     },
     {
       "file": "src/server/projectCheckStaging.ts",
-      "calls": { "writeFileSync": 1, "renameSync": 1, "mkdirSync": 1, "rmdirSync": 2, "unlinkSync": 2 },
-      "categories": ["isolated-artifact-stage", "retention-cleanup"],
-      "owners": ["createOwnedProjectCheckStage", "retireProjectCheckStageFiles"],
+      "calls": {
+        "writeFileSync": 1,
+        "renameSync": 1,
+        "mkdirSync": 1,
+        "rmdirSync": 2,
+        "unlinkSync": 2
+      },
+      "categories": [
+        "isolated-artifact-stage",
+        "retention-cleanup"
+      ],
+      "owners": [
+        "createOwnedProjectCheckStage",
+        "retireProjectCheckStageFiles"
+      ],
       "rationale": "Existing check snapshot/freezer materializers optionally share one durable-journal lifecycle. Reserve physical parent/created root, conservative bytes/entries and an immutable bounded inventory pin before payloads. Quarantine is named durably before creation and remains tracked through interrupted cleanup.",
       "failureContract": "At most16 roots/1GiB/32768 entries per private registry, including ambiguous/retiring rows; marker at most2MiB. Verify exact scope, creator/root/parent/registry identity, marker SHA/size, complete present planned-file hashes and regular single-link entries before retirement. Live/unknown Jobs or cleanup owners refuse. Rename only the exact owned root into its pre-recorded quarantine; verify again before bounded per-file unlink/empty-directory removal. Foreign, partial, aliased, replaced or unknown bytes are preserved. A process death after rename leaves the quarantine journalled for known-dead-owner takeover. Forget only after both original and quarantine disappear with exact durable acknowledgement. Legacy unowned roots are never prefix-swept; this is not an OS quota or hostile-race security boundary."
     },
@@ -396,33 +844,70 @@
     },
     {
       "file": "src/server/sharedSourceCoordinator.ts",
-      "calls": { "mkdirSync": 1 },
-      "categories": ["sqlite-transaction"],
-      "owners": ["SharedSourceCoordinator"],
+      "calls": {
+        "mkdirSync": 1
+      },
+      "categories": [
+        "sqlite-transaction"
+      ],
+      "owners": [
+        "SharedSourceCoordinator"
+      ],
       "rationale": "Dedicated local per-user SQLite registry serializes cooperating source operations with atomic all-resource claims, bounded queues, exact instance/request ownership and confirmed-dead process recovery. Existing cache DB is not reused. Tests explicitly select disposable registries.",
       "failureContract": "Native-driver, path, schema, corruption or storage failures refuse protected writes and remain diagnosable. Live or unknown owners never expire by age. Exact release failure conservatively retains ownership and reports uncertainty; no rollback is inferred. Editors, older Forge versions and registry tampering are outside the cooperative contract."
     },
     {
       "file": "src/server/xmlReferenceMap.selftest.ts",
-      "calls": {"writeFileSync": 4, "renameSync": 2, "mkdirSync": 3, "rmSync": 1, "unlinkSync": 3, "mkdtempSync": 1, "symlinkSync": 2},
-      "categories": ["fixture-only"],
-      "owners": ["runXmlReferenceMapSelftest"],
+      "calls": {
+        "writeFileSync": 4,
+        "renameSync": 2,
+        "mkdirSync": 3,
+        "rmSync": 1,
+        "unlinkSync": 3,
+        "mkdtempSync": 1,
+        "symlinkSync": 2
+      },
+      "categories": [
+        "fixture-only"
+      ],
+      "owners": [
+        "runXmlReferenceMapSelftest"
+      ],
       "rationale": "Creates contained XML corpus, authored/effective source, malformed-directory and junction-escape fixtures only beneath one unique temporary parent, including external targets inside that same owned parent.",
       "failureContract": "The temporary extensions rename restores in an inner finally. Outer finally clears caches and refuses recursive cleanup unless the created root is directly beneath os.tmpdir with the expected unique prefix. Fixture, containment or cleanup errors add failed checks; no configured corpus, workspace, game, mod, save or production path is mutated."
     },
     {
       "file": "vscode-extension/src/nativePerformanceIpc.selftest.ts",
-      "calls": { "writeFileSync": 2, "mkdirSync": 4, "rmSync": 2, "mkdtempSync": 2 },
-      "categories": ["fixture-only"],
-      "owners": ["runNativePerformanceIpcSelftest", "runNativePerformancePublicReplaySelftest"],
+      "calls": {
+        "writeFileSync": 2,
+        "mkdirSync": 4,
+        "rmSync": 2,
+        "mkdtempSync": 2
+      },
+      "categories": [
+        "fixture-only"
+      ],
+      "owners": [
+        "runNativePerformanceIpcSelftest",
+        "runNativePerformancePublicReplaySelftest"
+      ],
       "rationale": "Creates uniquely owned OS-temporary fixtures for the seven-scenario IPC mode and separately selected real-source public HTTP/MCP replay. Public replay creates native/legacy config, state, data, coordination, mod, schema, scratch-game and discovery directories; current production server owners write only within these private roots. No persistent helper copy or production writer grant is added.",
       "failureContract": "Both modes require exact owner and expected physical tree, terminal and drained owned supervisors, and confirmed absence of receipt-bound workers/backends before recursive removal. Public replay additionally requires terminal, drained and absent owned MCP children, a disposed parent producer/histogram with zero owned/failed timers, and a closed physical single-link file/directory allowlist bounded to 512 entries and 32 MiB. Unknown files, ownership, identity, reparse points, quiescence or cleanup failures fail the oracle and retain scratch. No live profile, standing configuration, mod, game or save is targeted."
     },
     {
       "file": "vscode-extension/src/propertyCorrectionHost.selftest.ts",
-      "calls": { "writeFileSync": 5, "mkdirSync": 1, "rmSync": 1, "mkdtempSync": 1 },
-      "categories": ["fixture-only"],
-      "owners": ["controlled native property correction regression"],
+      "calls": {
+        "writeFileSync": 5,
+        "mkdirSync": 1,
+        "rmSync": 1,
+        "mkdtempSync": 1
+      },
+      "categories": [
+        "fixture-only"
+      ],
+      "owners": [
+        "controlled native property correction regression"
+      ],
       "rationale": "Creates a disposable manifest, authored XML and project rules. Edits only that fixture's manifest to test the stale-input refusal.",
       "failureContract": "The fixture is unique and cleanup requires its resolved parent to match the original temporary root. A fixture or cleanup failure fails the test."
     }
@@ -430,97 +915,181 @@
   "hostStores": [
     {
       "file": "src/App.tsx",
-      "calls": { "localStorageSet": 8 },
-      "categories": ["browser-cache", "browser-preference"],
-      "owners": ["Studio layout/release preferences", "workspace-ID-scoped revision and content cache", "experience confirmations"],
+      "calls": {
+        "localStorageSet": 8
+      },
+      "categories": [
+        "browser-cache",
+        "browser-preference"
+      ],
+      "owners": [
+        "Studio layout/release preferences",
+        "workspace-ID-scoped revision and content cache",
+        "experience confirmations"
+      ],
       "rationale": "Browser storage mirrors server-owned workspace/release state by immutable ID or retains non-authoritative UI preferences and acknowledgements.",
       "failureContract": "Authoritative state remains on the server; preference failures keep current in-memory behavior and never authorize a write."
     },
     {
       "file": "src/components/AIConnectionModal.tsx",
-      "calls": { "localStorageRemove": 1 },
-      "categories": ["browser-cache"],
-      "owners": ["legacy Google OAuth cleanup"],
+      "calls": {
+        "localStorageRemove": 1
+      },
+      "categories": [
+        "browser-cache"
+      ],
+      "owners": [
+        "legacy Google OAuth cleanup"
+      ],
       "rationale": "Removes obsolete browser OAuth identity metadata after the server-owned credential migration.",
       "failureContract": "Removal failure cannot expose a current provider credential because tokens are no longer stored there."
     },
     {
       "file": "src/components/DiagnosticGuidance.tsx",
-      "calls": { "localStorageSet": 1 },
-      "categories": ["browser-preference"],
-      "owners": ["suppression reviewer convenience"],
+      "calls": {
+        "localStorageSet": 1
+      },
+      "categories": [
+        "browser-preference"
+      ],
+      "owners": [
+        "suppression reviewer convenience"
+      ],
       "rationale": "Caches only the last reviewer label; the guarded server route revalidates every suppression authority field.",
       "failureContract": "Failure loses convenience text only and cannot weaken validation or commit a suppression."
     },
     {
       "file": "src/components/Sidebar.tsx",
-      "calls": { "localStorageSet": 1 },
-      "categories": ["browser-preference"],
-      "owners": ["workspace directory display mode"],
+      "calls": {
+        "localStorageSet": 1
+      },
+      "categories": [
+        "browser-preference"
+      ],
+      "owners": [
+        "workspace directory display mode"
+      ],
       "rationale": "Stores a presentation preference with no source, deployment, credential, or authority meaning.",
       "failureContract": "Failure falls back to the default display mode without changing project data."
     },
     {
       "file": "src/components/SourceControl.tsx",
-      "calls": { "localStorageSet": 18, "localStorageRemove": 3 },
-      "categories": ["browser-cache", "browser-preference"],
-      "owners": ["Git UI baseline/history cache", "GitHub repository preference and legacy-token cleanup"],
+      "calls": {
+        "localStorageSet": 18,
+        "localStorageRemove": 3
+      },
+      "categories": [
+        "browser-cache",
+        "browser-preference"
+      ],
+      "owners": [
+        "Git UI baseline/history cache",
+        "GitHub repository preference and legacy-token cleanup"
+      ],
       "rationale": "Caches display history and repository selections; credentials are server-owned and browser PAT remnants are deletion-only.",
       "failureContract": "Browser cache failure cannot perform Git or network mutation and server routes re-check credentials and requested operations."
     },
     {
       "file": "src/components/VirtualizedNodeToolbox.tsx",
-      "calls": { "localStorageSet": 1 },
-      "categories": ["browser-preference"],
-      "owners": ["toolbox view preference"],
+      "calls": {
+        "localStorageSet": 1
+      },
+      "categories": [
+        "browser-preference"
+      ],
+      "owners": [
+        "toolbox view preference"
+      ],
       "rationale": "Stores only virtualized toolbox presentation state.",
       "failureContract": "Failure retains the current session state or restores the default view."
     },
     {
       "file": "src/components/XMLPatchSystem.tsx",
-      "calls": { "localStorageSet": 3 },
-      "categories": ["browser-cache"],
-      "owners": ["custom XML snippet library"],
+      "calls": {
+        "localStorageSet": 3
+      },
+      "categories": [
+        "browser-cache"
+      ],
+      "owners": [
+        "custom XML snippet library"
+      ],
       "rationale": "Stores user-authored snippet convenience data that is not compiled or deployed without a later explicit project action.",
       "failureContract": "Storage exceptions surface through the owning UI path and cannot mutate workspace or deployed files."
     },
     {
       "file": "src/lib/apiHelper.ts",
-      "calls": { "localStorageSet": 3, "localStorageRemove": 3 },
-      "categories": ["browser-preference", "browser-cache"],
-      "owners": ["AI provider/model preferences", "legacy provider-key cleanup"],
+      "calls": {
+        "localStorageSet": 3,
+        "localStorageRemove": 3
+      },
+      "categories": [
+        "browser-preference",
+        "browser-cache"
+      ],
+      "owners": [
+        "AI provider/model preferences",
+        "legacy provider-key cleanup"
+      ],
       "rationale": "Keeps non-secret provider/model choices and deletes legacy browser key values; current credentials are server-owned.",
       "failureContract": "Preference failure uses defaults; key cleanup failure never makes browser keys authoritative or eligible for implicit dispatch."
     },
     {
       "file": "src/lib/modBlueprint.ts",
-      "calls": { "localStorageSet": 1 },
-      "categories": ["browser-cache"],
-      "owners": ["blueprint draft cache"],
+      "calls": {
+        "localStorageSet": 1
+      },
+      "categories": [
+        "browser-cache"
+      ],
+      "owners": [
+        "blueprint draft cache"
+      ],
       "rationale": "Caches an uncommitted blueprint draft for browser continuity.",
       "failureContract": "Failure can lose the draft cache but cannot create, compile, deploy, or publish a mod."
     },
     {
       "file": "src/main.tsx",
-      "calls": { "sessionStorageSet": 3, "sessionStorageRemove": 1 },
-      "categories": ["browser-session"],
-      "owners": ["injected Studio session token handoff", "tab-scoped client and workspace identity"],
+      "calls": {
+        "sessionStorageSet": 3,
+        "sessionStorageRemove": 1
+      },
+      "categories": [
+        "browser-session"
+      ],
+      "owners": [
+        "injected Studio session token handoff",
+        "tab-scoped client and workspace identity"
+      ],
       "rationale": "Keeps the server-injected token and generated client/workspace selection within the current browser tab rather than durable local storage.",
       "failureContract": "Failure leaves API calls unauthorized or forces a fresh server bootstrap; a stale workspace selection is removed only after the server refuses it and is never downgraded into persistent storage."
     },
     {
       "file": "vscode-extension/src/extension.ts",
-      "calls": { "globalStateUpdate": 3 },
-      "categories": ["extension-global-state"],
-      "owners": ["managed-sidecar workspace selection", "two-way-editing telemetry counters"],
+      "calls": {
+        "globalStateUpdate": 3
+      },
+      "categories": [
+        "extension-global-state"
+      ],
+      "owners": [
+        "managed-sidecar workspace selection",
+        "two-way-editing telemetry counters"
+      ],
       "rationale": "Stores the last selected immutable workspace ID for restart bootstrap plus non-authoritative adoption/decline/refusal/conflict counters in IDE-managed global state.",
       "failureContract": "Workspace selection is accepted only after the authenticated backend binds the ID; persistence failure fails that host handoff or falls back to safe bootstrap on restart, while telemetry never changes authorization or source state."
     },
     {
       "file": "vscode-extension/src/propertyCorrectionReceipt.ts",
-      "calls": { "globalStateUpdate": 1 },
-      "categories": ["extension-global-state"],
-      "owners": ["native property correction journal"],
+      "calls": {
+        "globalStateUpdate": 1
+      },
+      "categories": [
+        "extension-global-state"
+      ],
+      "owners": [
+        "native property correction journal"
+      ],
       "rationale": "Stores up to 32 editor-buffer receipts in the extension profile. Contains workspace IDs, mod-relative paths, outcome codes and evidence hashes.",
       "failureContract": "Preparation failure prevents the editor edit. Terminal persistence retries the same verified facts, and unresolved receipts survive pruning. A full unresolved journal refuses further edits."
     }
@@ -528,33 +1097,60 @@
   "browserOutputs": [
     {
       "file": "src/components/AgentBridge.tsx",
-      "calls": { "anchorDownload": 1 },
-      "categories": ["browser-file-output"],
-      "owners": ["workspace manifest JSON download"],
+      "calls": {
+        "anchorDownload": 1
+      },
+      "categories": [
+        "browser-file-output"
+      ],
+      "owners": [
+        "workspace manifest JSON download"
+      ],
       "rationale": "Hands a non-authoritative JSON representation of the current workspace to the browser download manager after an explicit user action.",
       "failureContract": "Download failure cannot mutate the server workspace, compiled artifacts, deployment state, credentials, or game files."
     },
     {
       "file": "src/components/ReleaseCenter.tsx",
-      "calls": { "showSaveFilePicker": 1, "createWritable": 1, "anchorDownload": 1 },
-      "categories": ["browser-file-output", "verified-release-export"],
-      "owners": ["verified Nexus and Steam artifact export"],
+      "calls": {
+        "showSaveFilePicker": 1,
+        "createWritable": 1,
+        "anchorDownload": 1
+      },
+      "categories": [
+        "browser-file-output",
+        "verified-release-export"
+      ],
+      "owners": [
+        "verified Nexus and Steam artifact export"
+      ],
       "rationale": "Exports only server-prepared artifacts whose size and SHA-256 match the release receipt; the File System Access path reopens and reverifies saved bytes while the fallback is explicitly an unreceipted browser handoff.",
       "failureContract": "Picker cancellation or write/hash failure preserves the verified internal artifact and reports no successful export; browser-download fallback states that the final destination cannot be reopened or receipted."
     },
     {
       "file": "src/components/X4UiSourceEditor.tsx",
-      "calls": { "anchorDownload": 1 },
-      "categories": ["browser-file-output"],
-      "owners": ["native UI preview PNG download"],
+      "calls": {
+        "anchorDownload": 1
+      },
+      "categories": [
+        "browser-file-output"
+      ],
+      "owners": [
+        "native UI preview PNG download"
+      ],
       "rationale": "Downloads the native preview PNG through the browser only after an explicit user action; the PNG is a non-authoritative visual output and does not become source or deployment state.",
       "failureContract": "Download failure reports no successful export and cannot mutate Lua source, preview state, deployment/game files, or credentials, and cannot falsely claim in-game verification."
     },
     {
       "file": "src/components/BulkTransformPanel.tsx",
-      "calls": { "anchorDownload": 1 },
-      "categories": ["browser-file-output"],
-      "owners": ["portable bulk transform recipe download"],
+      "calls": {
+        "anchorDownload": 1
+      },
+      "categories": [
+        "browser-file-output"
+      ],
+      "owners": [
+        "portable bulk transform recipe download"
+      ],
       "rationale": "An explicit Save recipe action hands one bounded JSON draft to the browser download manager. The draft contains only path scope, cap, and operations.",
       "failureContract": "A failed download cannot change the workspace, corpus, preview approval, receipts, deployment, or game files."
     }
@@ -562,7 +1158,15 @@
   "database": {
     "file": "src/lib/db.ts",
     "category": "sqlite-transaction",
-    "owners": ["openStudioDb", "bindGamePath", "recordSourceStamps", "cacheObjectIndex", "cacheExtensions", "appendReferenceFiles", "completeReferenceGeneration"],
+    "owners": [
+      "openStudioDb",
+      "bindGamePath",
+      "recordSourceStamps",
+      "cacheObjectIndex",
+      "cacheExtensions",
+      "appendReferenceFiles",
+      "completeReferenceGeneration"
+    ],
     "failureContract": "SQLite WAL owns page durability; migrations, game-root rebinding, multi-row replacements, and their visibility metadata use explicit transactions; long reference scans stay invisible until their generation becomes ready; the database is a disposable cache and falls back to memory.",
     "mutationStatements": 47,
     "transactionCalls": 7,
@@ -574,7 +1178,14 @@
     {
       "file": "src/server/sharedSourceCoordinator.ts",
       "category": "sqlite-transaction",
-      "owners": ["createClaimsTable", "SharedSourceCoordinator.open", "SharedSourceCoordinator.transaction", "SharedSourceCoordinator.claims", "SharedSourceCoordinator.run", "SharedSourceCoordinator.retireStage"],
+      "owners": [
+        "createClaimsTable",
+        "SharedSourceCoordinator.open",
+        "SharedSourceCoordinator.transaction",
+        "SharedSourceCoordinator.claims",
+        "SharedSourceCoordinator.run",
+        "SharedSourceCoordinator.retireStage"
+      ],
       "failureContract": "A dedicated local schema4 registry uses immediate SQLite transactions for all-resource claims, per-command guards and durable private stage reservations. Only recognized empty trigger-free legacy registries without unexpected tables migrate; nonempty or unknown state is preserved and refused. Old cached/direct protocol3 clients and workers refuse after cutover. Guard count1..4/lifetime32 and exact durable drain/known exit retain source ownership. Stages reserve at most16 roots/1GiB/32768 entries across instances before payload creation and pin parent/empty-created-root identity before payload writes. Every pending/ambiguous/retiring row counts. Retirement requires the exact confirmed owner or an absent safely-reclaimed source claim; live/unknown cleanup owners block takeover. Callback or storage failure retains ownership; the row is forgotten only after exact parent identity and root absence. This journal itself performs no recursive deletion and is not an OS filesystem quota. Active owners never expire by age; errors preserve operation and cleanup failures.",
       "mutationStatements": 14,
       "transactionCalls": 16,
@@ -585,7 +1196,9 @@
     {
       "file": "src/server/projectCheckLeaseWorker.py",
       "category": "sqlite-transaction",
-      "owners": ["projectCheckLeaseWorker._transition"],
+      "owners": [
+        "projectCheckLeaseWorker._transition"
+      ],
       "failureContract": "A trusted one-command worker opens the existing schema4 registry and CASes only its exact canonical guard entry while preserving every sibling in a FULL synchronous immediate transaction. Starting requires the unfinished exact claim; already-running workers may persist drain after handler/backend failure. Wrong schema, registry/frame identity, malformed/over-capacity journal or storage mismatch prevents launch. Completed cleanup waits through brief writer contention. Unconfirmed cleanup preserves ownership even when backend output is lost. Stage rows do not authorize worker launch or bypass guard drain.",
       "mutationStatements": 1,
       "transactionCalls": 1,

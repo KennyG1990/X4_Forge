@@ -13,7 +13,6 @@ import { navigateAuthoredMdScriptSnapshot } from "./shared/mdScriptNavigation";
 import fs from "fs";
 import { isUtf8 } from "node:buffer";
 import os from "os";
-import zlib from "zlib";
 import { buildX4UiSourceBundle, addX4UiSourceBundleRegistration, buildX4MenuLuaRuntimeInventory } from './src/lib/x4UiSourceBundle';
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
@@ -75,7 +74,7 @@ import { runAiScriptRoundtripSelftest, parseAiScriptXml } from "./src/lib/aiScri
 import { runLuaMdBindingSelftest } from "./src/lib/luaMdBinding";
 import { runPositionPickerSelftest } from "./src/lib/positionPicker";
 import { debugScan as catDatDebugScan, extractBaseGameFile as catDatExtractBaseGameFile, extractEntries as catDatExtractEntries, findCatDatArchives, parseCat, readEntryBytes, readEntryText, runCatDatSelftest } from "./src/lib/x4CatDat";
-import { buildSchemaIndex, validateXmlAgainstSchema, runXsdValidateSelftest, type SchemaIndex } from "./src/lib/xsdValidate";
+import { validateXmlAgainstSchema, runXsdValidateSelftest, type SchemaIndex } from "./src/lib/xsdValidate";
 import { runReferenceLanguageSelftest } from "./src/lib/referenceLanguage";
 import { isSameOrDescendant, pathsOverlap, resolveDevScratchRoles, runPathRolesSelftest, validateDevScratchStorage, validateDirectoryRoles, validateProtectedWriteTargets, type DirectoryField } from "./src/lib/pathRoles";
 import { parseXMLToWorkspace, setSchemaTemplatesForImport } from "./src/lib/xmlParser";
@@ -306,16 +305,16 @@ import { buildProjectFileInventory, runProjectFileInventorySelftest } from "./sr
 import { forecastCatalogArtifact, materializeCatalogArtifact } from "./src/lib/artifactPackager";
 import { dataPath, resolveDataDir, runDataDirSelftest } from "./src/lib/dataDir";
 import { discoverSchemaRegistry, getDomainIndex, runSchemaRegistrySelftest, schemaFilesSignature } from "./src/lib/schemaRegistry";
-import { routeProjectFile, runSchemaRoutingSelftest, validateRoutedFiles } from "./src/lib/schemaRouting";
+import { routeProjectFile, runSchemaRoutingSelftest } from "./src/lib/schemaRouting";
 import { attributesFor, completeChildren, hoverFor, runLangServiceSelftest } from "./src/lib/langService";
 import { buildAgentsMd, buildNotesMd, runAgentBriefSelftest } from "./src/lib/agentBrief";
 import { analyzePatchReadiness, runPatchReadinessSelftest } from "./src/lib/patchReadiness";
 import { runJobsContentLintSelftest, learnJobsVocabularyMerged, type JobsVocabulary } from "./src/lib/jobsContentLint";
 import { runMigrationLintSelftest } from "./src/lib/migrationLint";
 import { runWaresContentLintSelftest, learnWaresVocabulary, type WaresVocabulary } from "./src/lib/waresContentLint";
-import { runTFileLintSelftest, buildModTextIndex, lintTextReferences, literalEditorTextReference } from "./src/lib/tFileLint";
-import { runFactionsLintSelftest, lintFactionRelations } from "./src/lib/factionsLint";
-import { runGodLintSelftest, lintGodMacros } from "./src/lib/godLint";
+import { runTFileLintSelftest, literalEditorTextReference } from "./src/lib/tFileLint";
+import { runFactionsLintSelftest } from "./src/lib/factionsLint";
+import { runGodLintSelftest } from "./src/lib/godLint";
 import { atomicWriteFile, atomicWriteJson, runWorkspaceStateSelftest } from "./src/lib/workspaceState";
 import { WorkspaceRegistry, runWorkspaceRegistrySelftest, validWorkspaceId, type WorkspaceRecord } from "./src/lib/workspaceRegistry";
 import { runContinuousPollingSelftest } from "./src/lib/continuousPolling.selftest";
@@ -346,7 +345,7 @@ import {
 import { normalizeStudioLayoutPreferences, type StudioLayoutPreferences } from "./src/lib/studioLayout";
 import { normalizeReleasePreferences, type ReleasePreferences } from "./src/lib/releasePreferences";
 import { createAgentProject, createProjectFile, generateAgentProject, packageAgentProject, runProjectOrchestrationSelftest } from "./src/lib/projectOrchestration";
-import { runProjectCrossFileSelftest, validateProjectCrossFile } from "./src/lib/projectCrossFileValidation";
+import { runProjectCrossFileSelftest } from "./src/lib/projectCrossFileValidation";
 import {
   PROJECT_RULES_PATH,
   PROJECT_RULES_MAX_BYTES,
@@ -1074,8 +1073,25 @@ function nativePerformanceRequestActor(req: express.Request, method: 'GET' | 'PO
   return { kind: 'agent', id: 'native_unauthenticated', isCurrent: () => false };
 }
 
+type ForgeDecoratedRequest = express.Request & {
+  __actor?: RequestActor;
+  __workspaceRecord?: WorkspaceRecord;
+  __workspaceId?: string;
+  __clientId?: string;
+  __routeAuthority?: AgentRouteAuthorityDecision;
+  __forgeActionReceipt?: { id: string; hash: string; status: string };
+  __revertOf?: string;
+  __revertOfTitle?: string;
+  __revertFiles?: string[];
+  __useAddressedWorkspace?: boolean;
+};
+
+function decoratedReq(req: express.Request): ForgeDecoratedRequest {
+  return req as ForgeDecoratedRequest;
+}
+
 function requireStudioActor(req: express.Request, res: express.Response): boolean {
-  const actor = (req as any).__actor as RequestActor | undefined;
+  const actor = decoratedReq(req).__actor;
   if (actor?.kind === 'studio') return true;
   res.status(403).json({
     code: 'STUDIO_SESSION_REQUIRED',
@@ -1099,7 +1115,8 @@ function requestedWorkspaceIdentity(req: express.Request): { workspaceId: string
 }
 
 function resolveWorkspaceAuthority(req: express.Request, res: express.Response, required = true): WorkspaceRecord | null {
-  const attached = (req as any).__workspaceRecord as WorkspaceRecord | undefined;
+  const decorated = decoratedReq(req);
+  const attached = decorated.__workspaceRecord;
   if (attached) return attached;
   const identity = requestedWorkspaceIdentity(req);
   if (identity.conflict) {
@@ -1118,7 +1135,7 @@ function resolveWorkspaceAuthority(req: express.Request, res: express.Response, 
     res.status(400).json({ code: 'WORKSPACE_ID_INVALID', error: 'workspaceId is malformed.' });
     return null;
   }
-  const actor = (req as any).__actor as RequestActor | undefined;
+  const actor = decorated.__actor;
   if (actor?.kind === 'studio' && !/^client_[a-z0-9_-]{8,80}$/i.test(identity.clientId)) {
     res.status(400).json({ code: 'CLIENT_ID_REQUIRED', error: 'Studio workspace requests require a tab-scoped clientId.' });
     return null;
@@ -1138,15 +1155,16 @@ function resolveWorkspaceAuthority(req: express.Request, res: express.Response, 
     res.status(found.code === 'WORKSPACE_NOT_FOUND' ? 404 : 400).json({ code: found.code, error: found.error });
     return null;
   }
-  (req as any).__workspaceRecord = found.record;
-  (req as any).__workspaceId = found.record.workspaceId;
-  (req as any).__clientId = identity.clientId || undefined;
+  decorated.__workspaceRecord = found.record;
+  decorated.__workspaceId = found.record.workspaceId;
+  decorated.__clientId = identity.clientId || undefined;
   return found.record;
 }
 
 function authMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const decorated = decoratedReq(req);
   const authority = resolveAgentRouteAuthority(req.method, req.path);
-  if (authority.ok) (req as any).__routeAuthority = authority.decision;
+  if (authority.ok) decorated.__routeAuthority = authority.decision;
   if (req.method === "GET" && PUBLIC_READONLY_GETS.has(req.path)) {
     return next();
   }
@@ -1160,7 +1178,7 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
   if (token === STUDIO_API_TOKEN) {
     // B86: record WHO acted, never WHAT they authenticated with. Only the actor kind and a
     // human label are ever attached; the token itself never leaves this function.
-    (req as any).__actor = {
+    decorated.__actor = {
       kind: 'studio',
       label: 'Studio UI',
       ...(authority.ok ? { authority: authority.decision } : {}),
@@ -1176,6 +1194,9 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
       || authority.decision.routeKey === 'GET /api/agent/project-check-runs/:id'
       || authority.decision.routeKey.startsWith('GET /api/agent/configuration')
       || authority.decision.routeKey.startsWith('POST /api/agent/configuration/')
+      || authority.decision.routeKey === 'GET /api/agent/deploy-verify/status'
+      || authority.decision.routeKey === 'POST /api/agent/deploy-verify/apply'
+      || authority.decision.routeKey === 'POST /api/agent/deploy-verify/undo'
       || (authority.decision.routeKey === 'GET /api/agent/status'
         && (req.query.inspectDeployTarget !== undefined || req.query.inspectDeployEffect !== undefined))
       || authority.decision.routeKey === 'POST /api/agent/history/:id/revert'
@@ -1230,7 +1251,7 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
         policyHash: authority.decision.policyHash,
       });
     }
-    (req as any).__actor = {
+    decorated.__actor = {
       kind: 'agent',
       label: v.label || 'unnamed key',
       keyId: v.id,
@@ -1256,7 +1277,7 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
 
 app.use("/api", authMiddleware);
 function workspaceAuthorityMiddleware(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const authority = (req as any).__routeAuthority as AgentRouteAuthorityDecision | undefined;
+  const authority = decoratedReq(req).__routeAuthority;
   if (authority?.workspaceMode === 'input-first') return next();
   const identity = requestedWorkspaceIdentity(req);
   const required = authority?.workspaceMode === 'required';
@@ -1301,18 +1322,18 @@ type ActionReceiptProjection = { id: string; hash: string; status: string };
 type WorkspaceReceiptRecovery = ReturnType<DestructiveRecoveryStore['createWorkspace']>;
 
 function captureActionReceiptProjection(req: express.Request, projection: ActionReceiptProjection | undefined): void {
-  if (projection !== undefined) (req as any).__forgeActionReceipt = projection;
+  if (projection !== undefined) decoratedReq(req).__forgeActionReceipt = projection;
 }
 
 function requestActionReceiptProjection(req: express.Request): ActionReceiptProjection | undefined {
-  const value = (req as any).__forgeActionReceipt;
+  const value = decoratedReq(req).__forgeActionReceipt;
   if (!value || typeof value !== 'object') return undefined;
   if (typeof value.id !== 'string' || typeof value.hash !== 'string' || typeof value.status !== 'string') return undefined;
   return value as ActionReceiptProjection;
 }
 
 function ledgerActor(req: express.Request): { kind: 'agent' | 'studio'; label: string } {
-  const actor = (req as any).__actor;
+  const actor = decoratedReq(req).__actor;
   return actor && actor.kind ? actor : { kind: 'studio', label: 'Studio UI' };
 }
 
@@ -1612,8 +1633,11 @@ app.use(projectApiInputMiddleware);
 function sourceOperationKeys(req: express.Request): string[] {
   const resolved = resolveXsdConfig();
   const keys: string[] = [];
-  const nativeDeploy = req.path === '/api/agent/deploy' || req.path === '/api/agent/deploy-verify';
-  const addressed = (req as any).__workspaceRecord as WorkspaceRecord | undefined;
+  const nativeDeploy = req.path === '/api/agent/deploy'
+    || req.path === '/api/agent/deploy-verify'
+    || req.path === '/api/agent/deploy-verify/preview'
+    || req.path === '/api/agent/deploy-verify/apply';
+  const addressed = decoratedReq(req).__workspaceRecord;
   const workspace = req.body?.workspace ?? addressed?.workspace;
   const source = workspace?.sourceStamp?.dir;
   if (typeof source === 'string' && source) keys.push(canonicalSourceKey(source));
@@ -1628,10 +1652,13 @@ function sourceOperationKeys(req: express.Request): string[] {
       keys.push(canonicalSourceKey(relative && relative !== '..' ? path.join(resolved.modWorkspacePath, relative) : resolved.modWorkspacePath));
     }
   }
-  if (/\/(deploy(?:-verify)?|artifact\/build|release\/|package\/release)/.test(req.path)) {
+  if (nativeDeploy || /\/(artifact\/build|release\/|package\/release)/.test(req.path)) {
     // Include output roots; an artifact/deployment transaction must never interleave its staging.
     if (resolved.modWorkspacePath) keys.push(canonicalSourceKey(path.join(resolved.modWorkspacePath, '.forge-builds')));
-    if (req.path.includes('/deploy') && resolved.x4GamePath) keys.push(canonicalSourceKey(path.join(resolved.x4GamePath, 'extensions')));
+    if (nativeDeploy && resolved.x4GamePath) keys.push(canonicalSourceKey(path.join(resolved.x4GamePath, 'extensions')));
+  }
+  if (req.path === '/api/agent/deploy-verify/undo' && resolved.x4GamePath) {
+    keys.push(canonicalSourceKey(path.join(resolved.x4GamePath, 'extensions')));
   }
   if (addressed && resolved.x4GamePath && req.route?.path === '/api/agent/history/:id/revert') {
     const row = agentHistoryStore.find(String(req.params.id));
@@ -6282,46 +6309,68 @@ app.post("/api/agent/expressions/inspect", (req, res) => {
   return res.json({ expression, ...traceScriptPropertyExpression(expression, index, { variableTypes: req.body.variableTypes }) });
 });
 
+async function respondDeployOperationStatus(req: express.Request, res: express.Response, record: WorkspaceRecord) {
+  res.set('Cache-Control', 'no-store');
+  const operationId = req.query.deployOperationId;
+  const inspectTarget = req.query.inspectDeployTarget;
+  const observeTarget = inspectTarget === '1' || inspectTarget === 'managed';
+  const inspectEffect = req.query.inspectDeployEffect;
+  if (typeof operationId !== 'string' || !ACTION_RECEIPT_OPERATION_ID_RE.test(operationId)
+    || (inspectTarget !== undefined && !observeTarget)
+    || (inspectEffect !== undefined && inspectEffect !== '1')) {
+    return res.status(400).json({ ok: false, code: 'DEPLOY_OPERATION_INPUT_INVALID' });
+  }
+  try {
+    const principal = deploymentPrincipal(req);
+    if (principal.kind !== 'agent') return res.status(403).json({ ok: false, code: 'DEPLOY_APPROVAL_FORBIDDEN' });
+    const identity = deployReceiptIdentity(principal, { workspaceId: record.workspaceId, operationId });
+    const status = observeTarget
+      ? await observeDeployTarget(identity, principal, record.workspaceId,
+        inspectTarget, () => assertCurrentDeployKey(req, principal, record.workspaceId), () => res.destroyed || res.writableEnded)
+      : readDeployOperationStatus(actionReceiptStore, destructiveRecoveryStore, identity);
+    if (res.destroyed || res.writableEnded) return;
+    if (inspectTarget !== undefined || inspectEffect === '1') assertCurrentDeployKey(req, principal, record.workspaceId);
+    if (!status) return res.status(404).json({
+      ok: false, code: 'DEPLOY_OPERATION_NOT_FOUND', outcome: 'unknown',
+    });
+    return res.json({
+      ok: true, workspaceId: record.workspaceId, ...status,
+      ...(inspectTarget === '1' && !('targetObservation' in status) ? { targetObservation: { targetState: 'unavailable' } } : {}),
+      ...(inspectTarget === 'managed' && !('managedObservation' in status)
+        ? { managedObservation: { scope: 'managed-physical', state: 'unavailable' } } : {}),
+      ...(inspectEffect === '1' ? { effectReport: readDeployEffect(agentHistoryStore, status.receipt).report } : {}),
+    });
+  } catch (error: unknown) {
+    const forbidden = (error as { code?: unknown } | null | undefined)?.code === 'DEPLOY_APPROVAL_FORBIDDEN';
+    return res.status(forbidden ? 403 : 503).json({
+      ok: false, code: forbidden ? 'DEPLOY_APPROVAL_FORBIDDEN' : 'DEPLOY_RECEIPT_UNAVAILABLE',
+    });
+  }
+}
+
+app.get('/api/agent/deploy-verify/status', async (req, res) => {
+  try {
+    const record = requestWorkspace(req);
+    const allowedQuery = new Set(['deployOperationId', 'inspectDeployTarget', 'inspectDeployEffect', 'workspaceId', 'clientId']);
+    if (Object.keys(req.query || {}).some(key => !allowedQuery.has(key))) {
+      res.set('Cache-Control', 'no-store');
+      return res.status(400).json({ ok: false, code: 'DEPLOY_OPERATION_INPUT_INVALID' });
+    }
+    return await respondDeployOperationStatus(req, res, record);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Status lookup failed.';
+    return res.status(500).json({ ok: false, code: 'DEPLOY_RECEIPT_UNAVAILABLE', error: message });
+  }
+});
+
 app.get("/api/agent/status", async (req, res) => {
   try {
     const record = requestWorkspace(req);
     const operationId = req.query.deployOperationId;
     const inspectTarget = req.query.inspectDeployTarget;
-    const observeTarget = inspectTarget === '1' || inspectTarget === 'managed';
     const inspectEffect = req.query.inspectDeployEffect;
     if (operationId !== undefined || inspectTarget !== undefined || inspectEffect !== undefined) {
-      res.set('Cache-Control', 'no-store');
-      if (typeof operationId !== 'string' || !ACTION_RECEIPT_OPERATION_ID_RE.test(operationId)
-        || (inspectTarget !== undefined && !observeTarget)
-        || (inspectEffect !== undefined && inspectEffect !== '1')) {
-        return res.status(400).json({ ok: false, code: 'DEPLOY_OPERATION_INPUT_INVALID' });
-      }
-      try {
-        const principal = deploymentPrincipal(req);
-        if (principal.kind !== 'agent') return res.status(403).json({ ok: false, code: 'DEPLOY_APPROVAL_FORBIDDEN' });
-        const identity = deployReceiptIdentity(principal, { workspaceId: record.workspaceId, operationId });
-        const status = observeTarget
-          ? await observeDeployTarget(identity, principal, record.workspaceId,
-            inspectTarget, () => assertCurrentDeployKey(req, principal, record.workspaceId), () => res.destroyed || res.writableEnded)
-          : readDeployOperationStatus(actionReceiptStore, destructiveRecoveryStore, identity);
-        if (res.destroyed || res.writableEnded) return;
-        if (inspectTarget !== undefined || inspectEffect === '1') assertCurrentDeployKey(req, principal, record.workspaceId);
-        if (!status) return res.status(404).json({
-          ok: false, code: 'DEPLOY_OPERATION_NOT_FOUND', outcome: 'unknown',
-        });
-        return res.json({
-          ok: true, workspaceId: record.workspaceId, ...status,
-          ...(inspectTarget === '1' && !('targetObservation' in status) ? { targetObservation: { targetState: 'unavailable' } } : {}),
-          ...(inspectTarget === 'managed' && !('managedObservation' in status)
-            ? { managedObservation: { scope: 'managed-physical', state: 'unavailable' } } : {}),
-          ...(inspectEffect === '1' ? { effectReport: readDeployEffect(agentHistoryStore, status.receipt).report } : {}),
-        });
-      } catch (error: unknown) {
-        const forbidden = (error as { code?: unknown } | null | undefined)?.code === 'DEPLOY_APPROVAL_FORBIDDEN';
-        return res.status(forbidden ? 403 : 503).json({
-          ok: false, code: forbidden ? 'DEPLOY_APPROVAL_FORBIDDEN' : 'DEPLOY_RECEIPT_UNAVAILABLE',
-        });
-      }
+      return await respondDeployOperationStatus(req, res, record);
     }
     const resolved = resolveXsdConfig();
     const ws = record.workspace as ModWorkspace;
@@ -6585,6 +6634,157 @@ app.get("/api/agent/history/:id/raw", (req, res) => {
   }
 });
 
+function executeDeploymentRecoveryRestore(
+  req: express.Request,
+  res: express.Response,
+  lease: ProjectCheckSourceLease | undefined,
+  recoveryRecord: DeploymentRecoveryRecord,
+  matchedRow?: LedgerRow,
+) {
+  const resolved = resolveXsdConfig();
+  if (!resolved.x4GamePath) return res.status(409).json({ ok: false, code: 'RECOVERY_TARGET_UNAVAILABLE', error: 'X4 Game Installation path is no longer configured.' });
+  const extensionsPath = path.join(resolved.x4GamePath, 'extensions');
+  if (!lease?.ownsResource(canonicalSourceKey(extensionsPath))) {
+    return res.status(409).json({ ok: false, code: 'RECOVERY_TARGET_UNOWNED', error: 'Deployment undo requires the configured extensions root lease. Retry after the target is available.' });
+  }
+  try {
+    const decorated = decoratedReq(req);
+    if (matchedRow) {
+      decorated.__revertOf = matchedRow.id;
+      decorated.__revertOfTitle = matchedRow.title;
+    }
+    decorated.__revertFiles = [recoveryRecord.targetPath];
+    const restored = restoreDeploymentRecovery(
+      recoveryRecord,
+      extensionsPath,
+      recoveryRecord.expectedCurrentHash,
+      destructiveRecoveryStore,
+      () => destructiveRecoveryStore.markUsed(recoveryRecord.id),
+    );
+    return res.json({
+      ok: true,
+      ...(matchedRow ? { revertedTo: matchedRow.id } : {}),
+      recoveryId: recoveryRecord.id,
+      recoveryKind: 'deploy',
+      deployedPath: restored.targetPath,
+      restoredFingerprint: restored.restoredFingerprint,
+      priorExisted: recoveryRecord.priorExisted,
+      ...(restored.remainingBackup ? { cleanupWarning: {
+        code: 'RECOVERY_BACKUP_CLEANUP_FAILED',
+        backupPath: restored.remainingBackup.path,
+        manifestRetired: restored.remainingBackup.manifestRetired,
+        message: restored.remainingBackup.manifestRetired
+          ? 'Undo restored and verified the original files. Forge removed the manifest, but could not remove the remaining transaction files.'
+          : 'Undo restored and verified the original files. A transaction copy remains in the extensions folder and may be detected as a duplicate by X4.',
+      } } : {}),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const stale = /changed after|configured X4 extensions directory changed|no longer exists/i.test(message);
+    return res.status(stale ? 409 : 500).json({
+      ok: false,
+      code: stale ? 'RECOVERY_STALE' : 'RECOVERY_FAILED',
+      error: message,
+    });
+  }
+}
+
+function prepareDeployUndoRoute(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const body = req.body;
+  const allowed = new Set(['deployOperationId', 'recoveryId', 'historyId']);
+  if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(k => !allowed.has(k))) {
+    return res.status(400).json({ ok: false, code: 'DEPLOY_UNDO_INPUT_INVALID', error: 'Provide a JSON object with exactly one of deployOperationId, recoveryId, or historyId.' });
+  }
+  const selectors = ['deployOperationId', 'recoveryId', 'historyId'].filter(k => body[k] !== undefined);
+  if (selectors.length !== 1) {
+    return res.status(400).json({ ok: false, code: 'DEPLOY_UNDO_INPUT_INVALID', error: 'Provide exactly one of deployOperationId, recoveryId, or historyId.' });
+  }
+  const [selector] = selectors;
+  const value = body[selector];
+  const valid = typeof value === 'string' && (
+    selector === 'deployOperationId' ? ACTION_RECEIPT_OPERATION_ID_RE.test(value)
+      : selector === 'recoveryId' ? /^[a-z0-9][a-z0-9_-]{11,80}$/i.test(value)
+      : /^[A-Za-z0-9._-]{1,96}$/.test(value)
+  );
+  if (!valid) {
+    return res.status(400).json({ ok: false, code: 'DEPLOY_UNDO_INPUT_INVALID', error: `Malformed ${selector}.` });
+  }
+  return next();
+}
+
+function handleDeployUndoRoute(req: express.Request, res: express.Response, lease?: ProjectCheckSourceLease) {
+  try {
+    const record = requestWorkspace(req);
+    const principal = deploymentPrincipal(req);
+    if (principal.kind === 'agent') assertCurrentDeployKey(req, principal, record.workspaceId);
+    const body = req.body as { deployOperationId?: string; recoveryId?: string; historyId?: string };
+    let resolvedRecoveryId: string;
+    let matchedRow: LedgerRow | undefined;
+    if (body.deployOperationId !== undefined) {
+      if (principal.kind !== 'agent') {
+        return res.status(403).json({ ok: false, code: 'DEPLOY_APPROVAL_FORBIDDEN', error: 'deployOperationId undo requires the owning deploy agent key.' });
+      }
+      const receipt = readDeployOperationReceipt(actionReceiptStore, deployReceiptIdentity(principal, {
+        workspaceId: record.workspaceId,
+        operationId: body.deployOperationId,
+      }));
+      if (!receipt) {
+        return res.status(404).json({ ok: false, code: 'DEPLOY_OPERATION_NOT_FOUND', error: 'No deployment receipt found for this operation in the addressed workspace.' });
+      }
+      if (receipt.status !== 'committed' || receipt.rollback.mode !== 'recovery' || typeof receipt.rollback.reference !== 'string') {
+        return res.status(409).json({ ok: false, code: 'NOT_REVERTIBLE', error: 'Only a committed deployment with a durable recovery snapshot can be undone.' });
+      }
+      resolvedRecoveryId = receipt.rollback.reference;
+      matchedRow = agentHistoryStore.readAll().find(candidate =>
+        candidate.workspaceId === record.workspaceId && candidate.kind === 'deploy' && candidate.recoveryId === resolvedRecoveryId);
+    } else if (body.historyId !== undefined) {
+      const row = agentHistoryStore.find(String(body.historyId));
+      if (!row || row.workspaceId !== record.workspaceId) {
+        return res.status(404).json({ ok: false, code: 'HISTORY_ENTRY_NOT_FOUND', error: 'No such history entry in this workspace.' });
+      }
+      if (row.kind !== 'deploy') {
+        return res.status(409).json({ ok: false, code: 'NOT_DEPLOY_RECOVERY', error: 'deploy.undo only reverts deployment entries.' });
+      }
+      const rule = revertibility(row.kind, row.outcome, !!row.beforeBlob, !!row.recoveryId);
+      if (!rule.revertible || !row.recoveryId) {
+        return res.status(409).json({ ok: false, code: 'NOT_REVERTIBLE', error: rule.reason || 'Deployment entry has no recovery snapshot.' });
+      }
+      resolvedRecoveryId = row.recoveryId;
+      matchedRow = row;
+    } else {
+      const candidateId = String(body.recoveryId);
+      matchedRow = agentHistoryStore.readAll().find(candidate =>
+        candidate.workspaceId === record.workspaceId && candidate.kind === 'deploy' && candidate.recoveryId === candidateId);
+      if (principal.kind === 'agent') {
+        const ownedReceipt = actionReceiptStore.listVerified().find(receipt =>
+          receipt.status === 'committed' && receipt.metadata?.operation === 'deploy'
+          && receipt.rollback.reference === candidateId
+          && receipt.actor.kind === 'agent' && receipt.actor.id === principal.id
+          && receipt.authority.scope === 'workspace' && receipt.authority.workspaceId === record.workspaceId);
+        if (!ownedReceipt) {
+          return res.status(404).json({ ok: false, code: 'RECOVERY_NOT_FOUND', error: 'No deployment recovery owned by this key and workspace matches recoveryId.' });
+        }
+      } else if (!matchedRow) {
+        return res.status(404).json({ ok: false, code: 'RECOVERY_NOT_FOUND', error: 'No deployment recovery in this workspace matches recoveryId.' });
+      }
+      resolvedRecoveryId = candidateId;
+    }
+    const found = destructiveRecoveryStore.read(resolvedRecoveryId);
+    if (found.ok === false) return res.status(found.code === 'RECOVERY_NOT_FOUND' ? 404 : 409).json({ ok: false, code: found.code, error: found.error });
+    if (found.record.kind !== 'deploy') return res.status(409).json({ ok: false, code: 'NOT_DEPLOY_RECOVERY', error: 'Recovery record is not a deployment snapshot.' });
+    if (found.record.status !== 'ready') return res.status(409).json({ ok: false, code: 'RECOVERY_ALREADY_USED', error: 'This recovery was already used or never reached ready state.' });
+    return executeDeploymentRecoveryRestore(req, res, lease, found.record, matchedRow);
+  } catch (error: unknown) {
+    if ((error as { code?: unknown } | null | undefined)?.code === 'DEPLOY_APPROVAL_FORBIDDEN') {
+      return res.status(403).json({ ok: false, code: 'DEPLOY_APPROVAL_FORBIDDEN' });
+    }
+    const message = error instanceof Error ? error.message : 'Deployment undo failed.';
+    return res.status(500).json({ ok: false, code: 'RECOVERY_FAILED', error: message });
+  }
+}
+
+app.post('/api/agent/deploy-verify/undo', prepareDeployUndoRoute, coordinatedSourceOperation(handleDeployUndoRoute));
+
 app.post("/api/agent/history/:id/revert", coordinatedSourceOperation((req, res, lease) => {
   try {
     let record = requestWorkspace(req);
@@ -6656,48 +6856,7 @@ app.post("/api/agent/history/:id/revert", coordinatedSourceOperation((req, res, 
           snapshotHash: workspaceRegistry.snapshotHash(record),
         });
       }
-      const resolved = resolveXsdConfig();
-      if (!resolved.x4GamePath) return res.status(409).json({ ok: false, code: 'RECOVERY_TARGET_UNAVAILABLE', error: 'X4 Game Installation path is no longer configured.' });
-      const extensionsPath = path.join(resolved.x4GamePath, 'extensions');
-      if (!lease?.ownsResource(canonicalSourceKey(extensionsPath))) {
-        return res.status(409).json({ ok: false, code: 'RECOVERY_TARGET_UNOWNED', error: 'Deployment undo requires the configured extensions root lease. Retry after the target is available.' });
-      }
-      try {
-        (req as any).__revertOf = row.id;
-        (req as any).__revertOfTitle = row.title;
-        const restored = restoreDeploymentRecovery(
-          found.record,
-          extensionsPath,
-          found.record.expectedCurrentHash,
-          destructiveRecoveryStore,
-          () => destructiveRecoveryStore.markUsed(found.record.id),
-        );
-        return res.json({
-          ok: true,
-          revertedTo: row.id,
-          recoveryId: found.record.id,
-          recoveryKind: 'deploy',
-          deployedPath: restored.targetPath,
-          restoredFingerprint: restored.restoredFingerprint,
-          priorExisted: found.record.priorExisted,
-          ...(restored.remainingBackup ? { cleanupWarning: {
-            code: 'RECOVERY_BACKUP_CLEANUP_FAILED',
-            backupPath: restored.remainingBackup.path,
-            manifestRetired: restored.remainingBackup.manifestRetired,
-            message: restored.remainingBackup.manifestRetired
-              ? 'Undo restored and verified the original files. Forge removed the manifest, but could not remove the remaining transaction files.'
-              : 'Undo restored and verified the original files. A transaction copy remains in the extensions folder and may be detected as a duplicate by X4.',
-          } } : {}),
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        const stale = /changed after|configured X4 extensions directory changed|no longer exists/i.test(message);
-        return res.status(stale ? 409 : 500).json({
-          ok: false,
-          code: stale ? 'RECOVERY_STALE' : 'RECOVERY_FAILED',
-          error: message,
-        });
-      }
+      return executeDeploymentRecoveryRestore(req, res, lease, found.record, row);
     }
     const previous = agentHistoryStore.readBlob(row.beforeBlob!);
     if (!previous) {
@@ -16348,7 +16507,116 @@ function deploymentPrincipal(req: express.Request): AcceptancePrincipal {
 // extensions) → bytes confirm (deployed content.xml exists + id matches) → extension-doctor
 // (auto-FAIL on duplicate-id / folder-id-mismatch). Returns a single pass/fail verdict so the
 // agent/UI never skips the doctor. On-demand only (not a hot poll), so full-folder scan is fine.
+function deployAdapterRefusal(res: express.Response, stage: 'config' | 'import', code: string, error: string, status = 400) {
+  return res.status(status).json({
+    ok: false,
+    success: false,
+    stage,
+    code,
+    error,
+    checklist: [{ id: stage, label: stage === 'config' ? 'Paths configured' : 'Mod source read', status: 'fail', detail: error }],
+    deployment: { state: 'not-deployed', writeAttempted: false, fidelityScope: 'none' },
+  });
+}
+
+function prepareDeployPreviewRoute(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const body = req.body;
+  const allowed = new Set([
+    'path', 'root', 'useAddressedWorkspace', 'deployFormat', 'detail', 'autoReimport',
+    'inspectDeployOperationId', 'projectCheckSuiteReceiptId', 'expectedProjectCheckSuiteReceiptHash', 'acceptances',
+  ]);
+  if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(k => !allowed.has(k))
+    || (body.useAddressedWorkspace !== undefined && typeof body.useAddressedWorkspace !== 'boolean')
+    || body.useAddressedWorkspace === false) {
+    return deployAdapterRefusal(res, 'config', 'DEPLOY_INPUT_INVALID', 'Unknown or malformed deployment preview fields.');
+  }
+  const hasPath = body.path !== undefined;
+  const useAddressed = body.useAddressedWorkspace === true;
+  if (hasPath && useAddressed) {
+    return deployAdapterRefusal(res, 'import', 'DEPLOY_TARGET_AMBIGUOUS', 'Choose exactly one deploy target: path or useAddressedWorkspace, not both.');
+  }
+  if (!hasPath && !useAddressed) {
+    return deployAdapterRefusal(res, 'import', 'DEPLOY_TARGET_REQUIRED', 'Deploy preview requires path or useAddressedWorkspace: true.');
+  }
+  if (useAddressed && body.root !== undefined) {
+    return deployAdapterRefusal(res, 'config', 'DEPLOY_INPUT_INVALID', 'root is only valid with path deployments.');
+  }
+  const actor = decoratedReq(req).__actor;
+  if ((useAddressed || body.inspectDeployOperationId !== undefined || actor?.kind === 'agent') && !resolveWorkspaceAuthority(req, res)) {
+    return;
+  }
+  const nextBody: Record<string, unknown> = {
+    ...(req.get('x-forge-channel') === 'mcp' && body.detail === undefined ? { detail: 'compact' } : {}),
+    ...body,
+    dryRun: true,
+  };
+  delete nextBody.useAddressedWorkspace;
+  if (useAddressed) {
+    nextBody.workspace = requestWorkspace(req).workspace;
+    decoratedReq(req).__useAddressedWorkspace = true;
+  }
+  req.body = nextBody;
+  return next();
+}
+
+function prepareDeployApplyRoute(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const body = req.body;
+  const allowed = new Set([
+    'operationId', 'path', 'root', 'useAddressedWorkspace', 'deployFormat', 'detail', 'autoReimport',
+    'expectedModId', 'expectedSourceHash', 'expectedArtifactHash', 'expectedBindingHash', 'expectedTargetFingerprint',
+    'projectCheckSuiteReceiptId', 'expectedProjectCheckSuiteReceiptHash', 'acceptances',
+  ]);
+  if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(k => !allowed.has(k))
+    || (body.useAddressedWorkspace !== undefined && typeof body.useAddressedWorkspace !== 'boolean')
+    || body.useAddressedWorkspace === false) {
+    return deployAdapterRefusal(res, 'config', 'DEPLOY_INPUT_INVALID', 'Unknown or malformed deployment apply fields.');
+  }
+  if (typeof body.operationId !== 'string' || !ACTION_RECEIPT_OPERATION_ID_RE.test(body.operationId)) {
+    return deployAdapterRefusal(res, 'config', 'DEPLOY_OPERATION_INPUT_INVALID', 'operationId must be a valid bounded operation identifier.');
+  }
+  const headerOperationId = req.get('x-forge-operation-id');
+  if (headerOperationId !== undefined && headerOperationId !== body.operationId) {
+    return deployAdapterRefusal(res, 'config', 'DEPLOY_OPERATION_INPUT_INVALID', 'operationId body and x-forge-operation-id header must match.');
+  }
+  for (const requiredField of ['expectedModId', 'expectedSourceHash', 'expectedArtifactHash', 'expectedBindingHash', 'expectedTargetFingerprint']) {
+    if (typeof body[requiredField] !== 'string' || !body[requiredField].trim()) {
+      return deployAdapterRefusal(res, 'config', 'DEPLOY_INPUT_INVALID', `Missing or malformed required preview binding field: ${requiredField}.`);
+    }
+  }
+  const hasPath = body.path !== undefined;
+  const useAddressed = body.useAddressedWorkspace === true;
+  if (hasPath && useAddressed) {
+    return deployAdapterRefusal(res, 'import', 'DEPLOY_TARGET_AMBIGUOUS', 'Choose exactly one deploy target: path or useAddressedWorkspace, not both.');
+  }
+  if (!hasPath && !useAddressed) {
+    return deployAdapterRefusal(res, 'import', 'DEPLOY_TARGET_REQUIRED', 'Deploy apply requires path or useAddressedWorkspace: true.');
+  }
+  if (useAddressed && body.root !== undefined) {
+    return deployAdapterRefusal(res, 'config', 'DEPLOY_INPUT_INVALID', 'root is only valid with path deployments.');
+  }
+  const actor = decoratedReq(req).__actor;
+  if ((useAddressed || actor?.kind === 'agent') && !resolveWorkspaceAuthority(req, res)) {
+    return;
+  }
+  req.headers['x-forge-operation-id'] = body.operationId;
+  const nextBody: Record<string, unknown> = {
+    ...(req.get('x-forge-channel') === 'mcp' && body.detail === undefined ? { detail: 'compact' } : {}),
+    ...body,
+    dryRun: false,
+  };
+  delete nextBody.operationId;
+  delete nextBody.useAddressedWorkspace;
+  if (useAddressed) {
+    nextBody.workspace = requestWorkspace(req).workspace;
+    decoratedReq(req).__useAddressedWorkspace = true;
+  }
+  req.body = nextBody;
+  return next();
+}
+
 app.post("/api/agent/deploy-verify", coordinatedSourceOperation(deployVerifyHandler));
+app.post('/api/agent/deploy-verify/preview', prepareDeployPreviewRoute, coordinatedSourceOperation(deployVerifyHandler));
+app.post('/api/agent/deploy-verify/apply', prepareDeployApplyRoute, coordinatedSourceOperation(deployVerifyHandler));
 
 app.post('/api/agent/project-check-runs', startProjectCheckRun);
 app.get('/api/agent/project-check-runs/:id', getProjectCheckRun);
@@ -17531,21 +17799,32 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     }
     if (!decision.validationAllowsDeploy) {
       const blockingFindings = evidence.findings.filter(finding => decision.unacceptedErrorIds.includes(finding.findingId));
-      const acceptanceRequest = receiptHistoryUnavailable && canonicalReviewSource ? undefined : { method: 'POST', path: '/api/agent/deploy-verify',
-        body: { ...(selectedSource ? { path: reqPath, root: selectedSource.root }
-          : body.path ? { path: body.path } : { workspace: body.workspace }), deployFormat,
+      const curatedApplyRoute = req.path === '/api/agent/deploy-verify/preview' || req.path === '/api/agent/deploy-verify/apply';
+      const acceptanceTarget = selectedSource
+        ? { path: reqPath, root: selectedSource.root }
+        : body.path
+          ? { path: body.path }
+          : curatedApplyRoute && decoratedReq(req).__useAddressedWorkspace === true
+            ? { useAddressedWorkspace: true }
+            : { workspace: body.workspace };
+      const acceptancePath = curatedApplyRoute ? '/api/agent/deploy-verify/apply' : '/api/agent/deploy-verify';
+      const acceptanceRequest = receiptHistoryUnavailable && canonicalReviewSource ? undefined : { method: 'POST', path: acceptancePath,
+        body: { ...acceptanceTarget, deployFormat,
           ...(body.detail !== undefined ? { detail: body.detail } : {}),
           ...(body.autoReimport !== undefined ? { autoReimport: body.autoReimport } : {}),
-          dryRun: false, expectedModId: evidence.modId, expectedSourceHash: evidence.sourceHash,
+          ...(curatedApplyRoute ? {} : { dryRun: false }),
+          expectedModId: evidence.modId, expectedSourceHash: evidence.sourceHash,
           expectedArtifactHash: artifactHash, expectedBindingHash: decision.binding.hash,
           expectedTargetFingerprint: targetFingerprint,
           ...(nativeCheckProof ? { projectCheckSuiteReceiptId: nativeCheckProof.proof.id,
             expectedProjectCheckSuiteReceiptHash: nativeCheckProof.proof.hash } : {}),
           acceptances: [...acceptances, ...blockingFindings.map(finding => ({ findingId: finding.findingId, bindingHash: decision.binding.hash, reason: '' }))] },
-        instruction: 'Supply a nonempty reason for each exact finding before POSTing this body. Deploy permission is required. Stale evidence and safety gates still refuse.' };
+        instruction: curatedApplyRoute
+          ? 'Supply a fresh operationId and a nonempty reason for each exact finding before calling apply_native_deploy or POST /api/agent/deploy-verify/apply. Deploy permission is required. Stale evidence and safety gates still refuse.'
+          : 'Supply a nonempty reason for each exact finding before POSTing this body. Deploy permission is required. Stale evidence and safety gates still refuse.' };
       check('preflight', 'Full validation (schema/cues/lints)', 'fail',
         blockingFindings.map(f => `${f.code || 'mod-finding'} | ${f.filePath || '(project)'}${f.line ? ':' + f.line : ''} | ${f.message} | findingId=${f.findingId}`).join('\n')
-        + (acceptanceRequest ? '\nAcceptance: POST /api/agent/deploy-verify using acceptanceRequest.body with a reason for each finding.'
+        + (acceptanceRequest ? `\nAcceptance: POST ${acceptancePath} using acceptanceRequest.body with a reason for each finding.`
           : '\nReceipt history must be verified before Forge can offer finding acceptance.'));
       return res.json(failWith('preflight', { category: 'mod-findings', code: 'UNACCEPTED_MOD_FINDINGS', blockingFindings,
         acceptanceRequest, validationDelta, preflight: { summary: preflight.summary, findings: blockingFindings } }));

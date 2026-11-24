@@ -33,6 +33,7 @@
     "test:configuration-transport": "tsx scripts/configuration-transport.selftest.ts",
     "test:directory-configuration": "tsx scripts/directory-configuration.selftest.ts",
     "test:mcp-capabilities": "tsx scripts/mcp-capability-selftest.ts",
+    "test:native-deploy-mcp": "tsx scripts/native-deploy-mcp.selftest.ts",
     "test:oracles": "node scripts/oracle-integration.mjs",
     "test:product-copy": "node scripts/product-copy-check.mjs",
     "test:reference-api": "node scripts/reference-api-integration.mjs",

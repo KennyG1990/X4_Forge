@@ -46,7 +46,7 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
 
   const validationErrors = validateForgeCapabilityRegistry();
   check('registry invariants', validationErrors.length === 0, validationErrors.join(' | ') || undefined);
-  check('bounded non-native registry', FORGE_CAPABILITIES.filter(capability => !capability.id.startsWith('performance.native.')).length === 28, `count=${FORGE_CAPABILITIES.length}`);
+  check('bounded non-native registry', FORGE_CAPABILITIES.filter(capability => !capability.id.startsWith('performance.native.')).length === 32, `count=${FORGE_CAPABILITIES.length}`);
   const compileResult = findForgeCapability('workspace.compile.result');
   check('retained compile report access is workspace-scoped and read-only',
     compileResult?.context.workspace === 'required'
@@ -488,6 +488,40 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
     [...malformedErrors, ...malformedSurfaceErrors, ...duplicateErrors].join(' | '),
   );
 
+  const deployCapabilities = [
+    { id: 'deploy.apply', method: 'POST', path: '/api/agent/deploy-verify/apply', alias: 'apply_native_deploy', workspace: 'optional',
+      confirmation: 'preview-required', effects: ['filesystem-write', 'deploy', 'delete', 'audit-write', 'audit-retention-delete'], ledger: 'deploy' },
+    { id: 'deploy.preview', method: 'POST', path: '/api/agent/deploy-verify/preview', alias: 'preview_native_deploy', workspace: 'optional',
+      confirmation: 'none', effects: ['read', 'analyze', 'audit-write', 'audit-retention-delete'], ledger: 'deploy' },
+    { id: 'deploy.status', method: 'GET', path: '/api/agent/deploy-verify/status', alias: 'get_deploy_operation_status', workspace: 'required',
+      confirmation: 'none', effects: ['read', 'analyze'], ledger: null },
+    { id: 'deploy.undo', method: 'POST', path: '/api/agent/deploy-verify/undo', alias: 'undo_native_deploy', workspace: 'required',
+      confirmation: 'none', effects: ['filesystem-write', 'deploy', 'delete', 'audit-write', 'audit-retention-delete'], ledger: 'revert' },
+  ] as const;
+  for (const expected of deployCapabilities) {
+    const capability = findForgeCapability(expected.id);
+    const grant: AgentCapabilityConstraint = {
+      capabilityIdentities: [`${expected.id}@1`],
+      allowedEffects: [...expected.effects],
+    };
+    const deployActor = { kind: 'agent' as const, scope: 'deploy' as const, workspaceId: 'ws_deploy_capability_fixture' };
+    check(`${expected.id} declares explicit-grant deploy-only authority and curated MCP projection`,
+      !!capability && capability.version === 1 &&
+        capability.context.workspace === expected.workspace && capability.context.profile === 'none' &&
+        capability.confirmation === expected.confirmation && !capability.access.public && capability.access.studioSession &&
+        JSON.stringify(capability.access.agentScopes) === JSON.stringify(['deploy']) &&
+        JSON.stringify(capability.effects) === JSON.stringify(expected.effects) &&
+        JSON.stringify(capability.apiBindings) === JSON.stringify([{
+          method: expected.method, path: expected.path, inputLocation: expected.method === 'GET' ? 'query' : 'body', role: 'primary',
+        }]) &&
+        capability.surfaces.mcp.length === 1 && capability.surfaces.mcp[0].id === expected.alias &&
+        capability.surfaces.mcp[0].status === 'connected' &&
+        ledgerRouteKind(expected.method, expected.path) === expected.ledger &&
+        decideEffectiveCapability(capability, deployActor, resolveAgentRouteTemplateAuthority).code === 'CAPABILITY_NOT_GRANTED' &&
+        decideEffectiveCapability(capability, { ...deployActor, scope: 'write', constraint: grant }, resolveAgentRouteTemplateAuthority).code === 'CAPABILITY_SCOPE_DENIED' &&
+        decideEffectiveCapability(capability, { ...deployActor, constraint: grant }, resolveAgentRouteTemplateAuthority).allowed);
+  }
+
   checks.push(...runNativeForgeCapabilitiesSelftest().checks);
   return { pass: checks.every(item => item.pass), checks, contractHash: contract.contractHash };
 }
@@ -509,7 +543,7 @@ export function runNativeForgeCapabilitiesSelftest() {
   const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   const keys = (value: object | undefined) => Object.keys(value || {}).sort();
   check('native registry has exactly the three reviewed process telemetry identities',
-    FORGE_CAPABILITIES.length === 31 &&
+    FORGE_CAPABILITIES.length === 35 &&
       equal(FORGE_CAPABILITIES.filter(capability => capability.id.startsWith('performance.native.')).map(capability => capability.id).sort(),
         expected.map(row => row.id).sort()));
   for (const row of expected) {

@@ -763,6 +763,16 @@
       "resourceClass": "configured-root",
       "workspaceMode": "optional"
     },
+    "GET /api/agent/deploy-verify/status": {
+      "disposition": "canonical-capability",
+      "owner": "deploy.status",
+      "registrations": 1,
+      "agentScopes": [
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "required"
+    },
     "GET /api/agent/destructive-recovery-selftest": {
       "disposition": "public-selftest",
       "owner": "runDestructiveRecoverySelftest",
@@ -3050,6 +3060,36 @@
       "resourceClass": "configured-root",
       "workspaceMode": "optional"
     },
+    "POST /api/agent/deploy-verify/apply": {
+      "disposition": "canonical-capability",
+      "owner": "deploy.apply",
+      "registrations": 1,
+      "agentScopes": [
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "optional"
+    },
+    "POST /api/agent/deploy-verify/preview": {
+      "disposition": "canonical-capability",
+      "owner": "deploy.preview",
+      "registrations": 1,
+      "agentScopes": [
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "optional"
+    },
+    "POST /api/agent/deploy-verify/undo": {
+      "disposition": "canonical-capability",
+      "owner": "deploy.undo",
+      "registrations": 1,
+      "agentScopes": [
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "required"
+    },
     "POST /api/agent/explain": {
       "disposition": "legacy-agent-api",
       "owner": "agent-api",
@@ -3989,6 +4029,10 @@
     "configuration.preview@1": "6538637b45b11b698e3ece15ec0ffb0c160416ce9ea1da695a6ed01f0f457e4e",
     "configuration.read@1": "ac31b04673c8035ee4729c5096a13792433c1fc62cbcbfe36a8067a1c757df4c",
     "configuration.status@1": "7a0ad35da24685fbef6614b87c615e915fb81b8ae2680e01b995def2c4c91795",
+    "deploy.apply@1": "c3031caa15d834a5b0c30e6946c9773d1afb0052d97cb618a55c858f590f6fb3",
+    "deploy.preview@1": "cab52d43361a162fb4aa347be706a919ae2c5b3fefe6b7735585bb8258053f31",
+    "deploy.status@1": "73c102208ddb9f5e5407b8d49208436811e3eef68cd537594e5c4cf5b638bc9f",
+    "deploy.undo@1": "61c623c853ed15fd2db7347809c67d0edabfebf56c6832c9d8ac0e21d05540cd",
     "expression.check@1": "5bedec028862120254402ce60402204db079705db1d6ce27f16834ae77ddea8d",
     "expression.inspect@1": "d9422df0de7b99ace351d90aad971baea0fe35d8fc6798c15a1a304dbd275f29",
     "extensions.conflicts.analyze@1": "5e8005a8422ebbe1039a848332caf8f40076ea7cce693b21df8039aec856697e",
@@ -4016,8 +4060,8 @@
     "workspace.read@2": "962774de4a25e8725a0d90d4982298cc72f100312075b1f6f4ff9de1482752d7"
   },
   "mcpModuleSignature": {
-    "version": 24,
-    "hash": "19d73938c8e20d65bd293614c1142b757c440b3f2fca9a0a8aaefecb1df9bd1c"
+    "version": 25,
+    "hash": "8faa9a0e3f7fedcb835ac9029084cb832e75646379ea3234fb5bddd47e396a3e"
   },
   "mcpSignatures": {
     "validate_mod": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",
@@ -4048,7 +4092,11 @@
     "get_configuration": "19edf5308387d9116d1bea029d6336e1accf1d3cc6898e881848df5ae19e2fef",
     "preview_configuration_change": "3e39c0c90961c371f7cbaf9e81fc84c00971e06e4702215426600a4a8d06a6b0",
     "apply_configuration_change": "5017822d22feb651f3a0506b3761f4a33b82f57c98dbb9fb3f972e3e334f321b",
-    "get_configuration_operation_status": "bbeb81b42bafc168e71bdacebad0dfb092f623aaa5ca09ad1bd82b7d6faf12cb"
+    "get_configuration_operation_status": "bbeb81b42bafc168e71bdacebad0dfb092f623aaa5ca09ad1bd82b7d6faf12cb",
+    "preview_native_deploy": "7e17385a67cd333761c10a08945de1c79c482413e1bfc34b7316df964ee873e8",
+    "apply_native_deploy": "42310d1becb4e6d5d11dff493492dbe753cc99780d62350cd3336ed7de293d8c",
+    "get_deploy_operation_status": "94b7dea2e3f6d3c9525a30a02eb4453dc5ae1d6ab333b0b1ba7f032a49fbd18d",
+    "undo_native_deploy": "ecaf4666abb7c28c965e0d68a839d338032acae44c529424e16fd53f69da9de0"
   },
   "mcpCapabilityIdentities": {
     "validate_mod": "project.validate@1",
@@ -4079,6 +4127,10 @@
     "get_configuration": "configuration.read@1",
     "preview_configuration_change": "configuration.preview@1",
     "apply_configuration_change": "configuration.apply@1",
-    "get_configuration_operation_status": "configuration.status@1"
+    "get_configuration_operation_status": "configuration.status@1",
+    "preview_native_deploy": "deploy.preview@1",
+    "apply_native_deploy": "deploy.apply@1",
+    "get_deploy_operation_status": "deploy.status@1",
+    "undo_native_deploy": "deploy.undo@1"
   }
 }

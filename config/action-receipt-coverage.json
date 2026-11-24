@@ -311,6 +311,90 @@
       ]
     },
     {
+      "routeKey": "POST /api/agent/deploy-verify/apply",
+      "method": "POST",
+      "template": "/api/agent/deploy-verify/apply",
+      "owner": "deploy.apply",
+      "resourceClass": "configured-root",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1deploy-verify~1apply",
+      "integrationBatch": "W3B2",
+      "history": "visible",
+      "capability": {
+        "kind": "canonical",
+        "id": "deploy.apply",
+        "version": 1
+      },
+      "semanticClass": "durable-local-mutation",
+      "policy": "receipt-required",
+      "effects": [
+        "filesystem-write",
+        "deploy",
+        "delete",
+        "audit-write",
+        "audit-retention-delete"
+      ],
+      "authorityScopes": [
+        "global",
+        "profile",
+        "workspace"
+      ]
+    },
+    {
+      "routeKey": "POST /api/agent/deploy-verify/preview",
+      "method": "POST",
+      "template": "/api/agent/deploy-verify/preview",
+      "owner": "deploy.preview",
+      "resourceClass": "configured-root",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1deploy-verify~1preview",
+      "integrationBatch": "W3B0-internal",
+      "history": "visible",
+      "capability": {
+        "kind": "canonical",
+        "id": "deploy.preview",
+        "version": 1
+      },
+      "semanticClass": "audit-retention",
+      "policy": "separately-governed",
+      "effects": [
+        "read",
+        "analyze",
+        "audit-write",
+        "audit-retention-delete"
+      ],
+      "authorityScopes": [
+        "global",
+        "profile",
+        "workspace"
+      ]
+    },
+    {
+      "routeKey": "POST /api/agent/deploy-verify/undo",
+      "method": "POST",
+      "template": "/api/agent/deploy-verify/undo",
+      "owner": "deploy.undo",
+      "resourceClass": "configured-root",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1deploy-verify~1undo",
+      "integrationBatch": "W3B2",
+      "history": "visible",
+      "capability": {
+        "kind": "canonical",
+        "id": "deploy.undo",
+        "version": 1
+      },
+      "semanticClass": "durable-local-mutation",
+      "policy": "receipt-required",
+      "effects": [
+        "filesystem-write",
+        "deploy",
+        "delete",
+        "audit-write",
+        "audit-retention-delete"
+      ],
+      "authorityScopes": [
+        "workspace"
+      ]
+    },
+    {
       "routeKey": "POST /api/agent/explain",
       "method": "POST",
       "template": "/api/agent/explain",

@@ -8,7 +8,7 @@
  *  - This process LISTENS on nothing — stdio only; it is a CLIENT of the Forge sidecar.
  *  - Auth = a scoped, revocable agent key (mint via "X4 Forge: Create Agent Key");
  *    scope enforcement is SERVER-side (read includes reviewed read/analyze POSTs; write adds validate/compile;
- *    deploy tools are deliberately NOT exposed here at all).
+ *    deploy tools require deploy scope PLUS an explicit per-key capability and effect grant).
  *  - No AI-spend path exists through these tools (generate is not exposed; the Forge
  *    additionally requires external agents to bring their own AI keys).
  *  - Config: X4FORGE_URL + X4FORGE_KEY + the key-bound X4FORGE_WORKSPACE_ID.
@@ -63,6 +63,18 @@ const CONFIGURATION_CAPABILITIES = new Set([
   "configuration.preview",
   "configuration.read",
   "configuration.status",
+]);
+const DEPLOY_TOOLS = new Set([
+  "preview_native_deploy",
+  "apply_native_deploy",
+  "get_deploy_operation_status",
+  "undo_native_deploy",
+]);
+const DEPLOY_CAPABILITIES = new Set([
+  "deploy.apply",
+  "deploy.preview",
+  "deploy.status",
+  "deploy.undo",
 ]);
 const AUTHORED_NAVIGATION_MAX_FILES = 512;
 const AUTHORED_NAVIGATION_MAX_FILE_BYTES = 8 * 1024 * 1024;
@@ -837,6 +849,156 @@ const TOOLS = [
       );
     },
   },
+  {
+    name: "preview_native_deploy",
+    capabilityId: "deploy.preview",
+    capabilityVersion: 1,
+    description: "Run the real native deployment planner, full validation stack, finding-review evaluation, and destination file-effect preview (loose or CAT/DAT catalog) without writing staging or installed files. Requires an explicit deploy capability grant.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", maxLength: 4096 },
+        root: { type: "string", enum: ["workspace", "filesystem"] },
+        useAddressedWorkspace: { type: "boolean" },
+        deployFormat: { type: "string", enum: ["loose", "catalog"] },
+        detail: { type: "string", enum: ["compact", "full"] },
+        autoReimport: { type: "boolean" },
+        inspectDeployOperationId: { type: "string", maxLength: 96 },
+        projectCheckSuiteReceiptId: { type: "string", maxLength: 96 },
+        expectedProjectCheckSuiteReceiptHash: { type: "string", maxLength: 64 },
+        acceptances: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              findingId: { type: "string", maxLength: 128 },
+              bindingHash: { type: "string", maxLength: 64 },
+              reason: { type: "string", maxLength: 512 },
+            },
+            required: ["findingId", "bindingHash", "reason"],
+            additionalProperties: false,
+          },
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/deploy-verify/preview", args),
+      "native deploy preview",
+      { ok: "boolean", stage: "string", checklist: "array", deployment: "object" },
+    ),
+  },
+  {
+    name: "apply_native_deploy",
+    capabilityId: "deploy.apply",
+    capabilityVersion: 1,
+    description: "Deploy a preview-bound mod artifact (loose or CAT/DAT catalog) through the shared native deploy transaction, verifying source/artifact/binding/target hashes, recording durable action and recovery receipts, and confirming deployed bytes. Requires an explicit deploy capability grant.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operationId: { type: "string", maxLength: 96 },
+        path: { type: "string", maxLength: 4096 },
+        root: { type: "string", enum: ["workspace", "filesystem"] },
+        useAddressedWorkspace: { type: "boolean" },
+        deployFormat: { type: "string", enum: ["loose", "catalog"] },
+        detail: { type: "string", enum: ["compact", "full"] },
+        autoReimport: { type: "boolean" },
+        expectedModId: { type: "string", maxLength: 256 },
+        expectedSourceHash: { type: "string", maxLength: 64 },
+        expectedArtifactHash: { type: "string", maxLength: 64 },
+        expectedBindingHash: { type: "string", maxLength: 64 },
+        expectedTargetFingerprint: { type: "string", maxLength: 64 },
+        projectCheckSuiteReceiptId: { type: "string", maxLength: 96 },
+        expectedProjectCheckSuiteReceiptHash: { type: "string", maxLength: 64 },
+        acceptances: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              findingId: { type: "string", maxLength: 128 },
+              bindingHash: { type: "string", maxLength: 64 },
+              reason: { type: "string", maxLength: 512 },
+            },
+            required: ["findingId", "bindingHash", "reason"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["operationId", "expectedModId", "expectedSourceHash", "expectedArtifactHash", "expectedBindingHash", "expectedTargetFingerprint"],
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/deploy-verify/apply", args),
+      "native deploy apply",
+      { ok: "boolean", success: "boolean", stage: "string", checklist: "array", deployment: "object" },
+    ),
+  },
+  {
+    name: "get_deploy_operation_status",
+    capabilityId: "deploy.status",
+    capabilityVersion: 1,
+    description: "Inspect the durable deployment receipt, outcome, optional live target/managed-output observation, and committed file-effect report for an addressed agent deployment operation.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        deployOperationId: { type: "string", maxLength: 96 },
+        inspectDeployTarget: { type: "string", enum: ["1", "managed"] },
+        inspectDeployEffect: { type: "string", enum: ["1"] },
+      },
+      required: ["deployOperationId"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams({ deployOperationId: String(args.deployOperationId || "") });
+      if (args.inspectDeployTarget !== undefined) q.set("inspectDeployTarget", String(args.inspectDeployTarget));
+      if (args.inspectDeployEffect !== undefined) q.set("inspectDeployEffect", String(args.inspectDeployEffect));
+      return requireResponse(
+        await forge("GET", `/api/agent/deploy-verify/status?${q}`),
+        "deploy operation status",
+        { ok: "boolean", workspaceId: "string", outcome: "string", receipt: "object" },
+      );
+    },
+  },
+  {
+    name: "undo_native_deploy",
+    capabilityId: "deploy.undo",
+    capabilityVersion: 1,
+    description: "Restore the exact pre-deploy extensions target state once using a CAS-checked deployment recovery record addressed by deployOperationId, recoveryId, or historyId.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        deployOperationId: { type: "string", maxLength: 96 },
+        recoveryId: { type: "string", maxLength: 96 },
+        historyId: { type: "string", maxLength: 96 },
+      },
+      additionalProperties: false,
+      anyOf: [
+        {
+          type: "object",
+          properties: { deployOperationId: { type: "string", maxLength: 96 } },
+          required: ["deployOperationId"],
+          additionalProperties: false,
+        },
+        {
+          type: "object",
+          properties: { recoveryId: { type: "string", maxLength: 96 } },
+          required: ["recoveryId"],
+          additionalProperties: false,
+        },
+        {
+          type: "object",
+          properties: { historyId: { type: "string", maxLength: 96 } },
+          required: ["historyId"],
+          additionalProperties: false,
+        },
+      ],
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/deploy-verify/undo", args),
+      "native deploy undo",
+      { ok: "boolean", recoveryId: "string", recoveryKind: "string", deployedPath: "string", restoredFingerprint: "string", priorExisted: "boolean" },
+    ),
+  },
 ];
 const STATIC_TOOL_NAMES = new Set(TOOLS.map((tool) => tool.name));
 STATIC_TOOL_NAMES.delete("runtime_debugger");
@@ -846,6 +1008,7 @@ STATIC_TOOL_NAMES.delete("lookup_text");
 STATIC_TOOL_NAMES.delete("get_xml_references");
 for (const name of AUTHORED_NAVIGATION_TOOLS) STATIC_TOOL_NAMES.delete(name);
 for (const name of CONFIGURATION_TOOLS) STATIC_TOOL_NAMES.delete(name);
+for (const name of DEPLOY_TOOLS) STATIC_TOOL_NAMES.delete(name);
 for (const name of PERFORMANCE_LIVE_TOOLS) STATIC_TOOL_NAMES.delete(name);
 for (const name of NATIVE_PERFORMANCE_LIVE_TOOLS) STATIC_TOOL_NAMES.delete(name);
 
@@ -1962,6 +2125,13 @@ function configurationGrantAllowed(capability, authority) {
     && capability.effects.every((effect) => grant.allowedEffects.includes(effect));
 }
 
+function deployGrantAllowed(capability, authority) {
+  const grant = authority.constraint;
+  return capability.version === 1 && isRecord(grant)
+    && grant.capabilityIdentities.includes(capability.id + "@1")
+    && capability.effects.every((effect) => grant.allowedEffects.includes(effect));
+}
+
 function validateEffectiveAuthority(authority, canonicalContract) {
   if (!isRecord(authority) || !hasExactKeys(authority, [
     "actor", "api_version", "authority_hash", "authority_schema_version", "capability_contract",
@@ -2007,6 +2177,7 @@ function validateEffectiveAuthority(authority, canonicalContract) {
     if (NATIVE_PERFORMANCE_CAPABILITIES.has(capability.id)) return nativeGrantAllowed(capability, authority);
     if (AUTHORED_NAVIGATION_CAPABILITIES.has(capability.id)) return authoredNavigationGrantAllowed(capability, authority);
     if (CONFIGURATION_CAPABILITIES.has(capability.id)) return configurationGrantAllowed(capability, authority);
+    if (DEPLOY_CAPABILITIES.has(capability.id)) return deployGrantAllowed(capability, authority);
     if (capability.access.public || constraint === null) return true;
     const identity = `${capability.id}@${capability.version}`;
     return selectedIdentities.has(identity) && capability.effects.every((effect) => allowedEffects.has(effect));
@@ -2116,6 +2287,7 @@ async function availableTools(nativeRequest) {
       if (NATIVE_PERFORMANCE_LIVE_TOOLS.has(TOOLS[toolIndex].name) && (!capability || !nativeGrantAllowed(capability, discovery.authority))) continue;
       if (AUTHORED_NAVIGATION_TOOLS.has(TOOLS[toolIndex].name) && (!capability || !authoredNavigationGrantAllowed(capability, discovery.authority))) continue;
       if (CONFIGURATION_TOOLS.has(TOOLS[toolIndex].name) && (!capability || !configurationGrantAllowed(capability, discovery.authority))) continue;
+      if (DEPLOY_TOOLS.has(TOOLS[toolIndex].name) && (!capability || !deployGrantAllowed(capability, discovery.authority))) continue;
       if (projection && projection.status !== "disconnected") supportedNow.add(TOOLS[toolIndex].name);
     }
     stickyLiveToolNames = stickyLiveToolNames === null
@@ -2135,7 +2307,7 @@ async function availableTools(nativeRequest) {
   if (stickyLiveToolNames !== null) {
     return {
       discovery,
-      toolNames: [...stickyLiveToolNames].filter(name => !["check_expression", "inspect_expression", "get_xml_references", "lookup_text"].includes(name) && !AUTHORED_NAVIGATION_TOOLS.has(name) && !CONFIGURATION_TOOLS.has(name) && !PERFORMANCE_LIVE_TOOLS.has(name) && !NATIVE_PERFORMANCE_LIVE_TOOLS.has(name)),
+      toolNames: [...stickyLiveToolNames].filter(name => !["check_expression", "inspect_expression", "get_xml_references", "lookup_text"].includes(name) && !AUTHORED_NAVIGATION_TOOLS.has(name) && !CONFIGURATION_TOOLS.has(name) && !DEPLOY_TOOLS.has(name) && !PERFORMANCE_LIVE_TOOLS.has(name) && !NATIVE_PERFORMANCE_LIVE_TOOLS.has(name)),
       effectiveContract: lastValidContract,
       effectiveAuthority: lastValidAuthority,
       contractState: `${discovery.state}-sticky-live`,
@@ -2238,13 +2410,14 @@ async function forge(method, apiPath, body, signal, nativeDiscovery = false) {
   if (WORKSPACE_ID) headers["x-workspace-id"] = WORKSPACE_ID;
   const nativeRoute = nativePerformanceRoute(method, apiPath);
   const configurationRoute = apiPath.startsWith("/api/agent/configuration");
+  const deployRoute = apiPath.startsWith("/api/agent/deploy-verify/");
   const forwardsAuthoredSource = method === "POST" && AUTHORED_NAVIGATION_ROUTES.has(apiPath);
   const res = await fetch(`${BASE}${apiPath}`, {
     method,
     headers,
     ...(signal ? { signal } : {}),
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-    ...(nativeRoute || nativeDiscovery || forwardsAuthoredSource || configurationRoute ? { redirect: "error" } : {}),
+    ...(nativeRoute || nativeDiscovery || forwardsAuthoredSource || configurationRoute || deployRoute ? { redirect: "error" } : {}),
   });
   let data = null;
   if (nativeRoute || nativeDiscovery) data = await readNativeJson(res, signal, nativeRoute ? NATIVE_PERFORMANCE_RESPONSE_BYTES : NATIVE_PERFORMANCE_DISCOVERY_BYTES);
@@ -2256,6 +2429,7 @@ async function forge(method, apiPath, body, signal, nativeDiscovery = false) {
     error.status = res.status;
     if (["/api/agent/performance/collection", "/api/agent/performance/profile"].includes(apiPath)) error.performanceResponse = data;
     if (configurationRoute && isRecord(data)) error.configurationResponse = data;
+    if (deployRoute && isRecord(data)) error.deployResponse = data;
     throw error;
   }
   requireResponse(data, `Forge API ${apiPath}`);
@@ -2331,7 +2505,7 @@ rl.on("line", async (line) => {
         if (nativeRequest && !nativeRequestOwned(nativeRequest)) return;
         return reply(id, {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-          ...(TOOLS[toolIndex].name === "compile_workspace" && result.success === false || CONFIGURATION_TOOLS.has(TOOLS[toolIndex].name) && result.success === false || PERFORMANCE_LIVE_TOOLS.has(TOOLS[toolIndex].name) && result.ok === false || NATIVE_PERFORMANCE_LIVE_TOOLS.has(TOOLS[toolIndex].name) && result.ok === false ? { isError: true } : {}),
+          ...(TOOLS[toolIndex].name === "compile_workspace" && result.success === false || CONFIGURATION_TOOLS.has(TOOLS[toolIndex].name) && result.success === false || DEPLOY_TOOLS.has(TOOLS[toolIndex].name) && (result.ok === false || result.success === false || result.status === "FAILED") || PERFORMANCE_LIVE_TOOLS.has(TOOLS[toolIndex].name) && result.ok === false || NATIVE_PERFORMANCE_LIVE_TOOLS.has(TOOLS[toolIndex].name) && result.ok === false ? { isError: true } : {}),
         });
       } catch (err) {
         if (nativeRequest) {
@@ -2341,6 +2515,9 @@ rl.on("line", async (line) => {
         }
         if (CONFIGURATION_TOOLS.has(TOOLS[toolIndex].name) && isRecord(err?.configurationResponse)) {
           return reply(id, { content: [{ type: "text", text: JSON.stringify(err.configurationResponse, null, 2) }], isError: true });
+        }
+        if (DEPLOY_TOOLS.has(TOOLS[toolIndex].name) && isRecord(err?.deployResponse)) {
+          return reply(id, { content: [{ type: "text", text: JSON.stringify(err.deployResponse, null, 2) }], isError: true });
         }
         return reply(id, { content: [{ type: "text", text: `ERROR: ${err && err.message ? err.message : String(err)}` }], isError: true });
       }

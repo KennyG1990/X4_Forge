@@ -75,6 +75,12 @@ export const CONFIGURATION_EXPLICIT_GRANT_CAPABILITIES = [
   'configuration.read',
   'configuration.status',
 ] as const;
+export const DEPLOY_EXPLICIT_GRANT_CAPABILITIES = [
+  'deploy.apply',
+  'deploy.preview',
+  'deploy.status',
+  'deploy.undo',
+] as const;
 const EXPLICIT_CAPABILITY_GRANT_IDS = new Set<string>([
   'performance.native.read',
   'performance.native.collect',
@@ -82,6 +88,7 @@ const EXPLICIT_CAPABILITY_GRANT_IDS = new Set<string>([
   'project.ai.navigation',
   'project.md.navigation',
   ...CONFIGURATION_EXPLICIT_GRANT_CAPABILITIES,
+  ...DEPLOY_EXPLICIT_GRANT_CAPABILITIES,
 ]);
 
 /** These capabilities require an explicit key grant, including for legacy presets. */
