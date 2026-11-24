@@ -812,7 +812,7 @@ async function main() {
     'configuration.access.request', 'configuration.access.status', 'configuration.apply', 'configuration.preview', 'configuration.read', 'configuration.status',
     'deploy.apply', 'deploy.preview', 'deploy.status', 'deploy.undo',
     'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.overrides.analyze',
-    'files.list', 'files.read', 'files.write',
+    'files.delete', 'files.list', 'files.read', 'files.restore', 'files.write',
     'history.list', 'history.revert',
     'patch.diff.simulate', 'patch.readiness.analyze', 'patch.targets.list', 'patch.xpath.synthesize', 'performance.collect', 'performance.native.collect', 'performance.native.read', 'performance.native.stop',
     'performance.profile', 'performance.read', 'project.ai.navigation', 'project.brief.read', 'project.md.navigation', 'project.proof.read', 'project.validate', 'project.xml.references', 'readiness.read',
@@ -822,7 +822,7 @@ async function main() {
   ];
   const sameCapabilityIds = (actual, expected) => Array.isArray(actual)
     && JSON.stringify([...actual].sort()) === JSON.stringify([...expected].sort());
-  const expectedCapabilityIdentity = id => `${id}@${['history.list', 'history.revert', 'patch.readiness.analyze', 'workspace.compile', 'workspace.compile.result', 'workspace.read'].includes(id) ? 2 : 1}`;
+  const expectedCapabilityIdentity = id => `${id}@${['files.write', 'history.list', 'history.revert', 'patch.readiness.analyze', 'workspace.compile', 'workspace.compile.result', 'workspace.read'].includes(id) ? 2 : 1}`;
   ok('capability_contract_is_versioned_and_hashed',
     capabilityContract?.schemaVersion === 'forge.capability.v1' &&
     /^[a-f0-9]{64}$/.test(String(capabilityContract?.contractHash || '')) &&
@@ -6376,9 +6376,11 @@ async function main() {
         capabilityIdentities: [
           'bulk.transform.apply@1',
           'bulk.transform.preview@1',
+          'files.delete@1',
           'files.list@1',
           'files.read@1',
-          'files.write@1',
+          'files.restore@1',
+          'files.write@2',
           'history.list@2',
           'history.revert@2',
           'workspace.mod.drift@1',
@@ -6456,6 +6458,156 @@ async function main() {
           && curatedHistoryRevert.json?.ok === true
           && fs.readFileSync(path.join(slice3ModDir, 'md', 'main.xml'), 'utf8') === slice3InitialMd,
         JSON.stringify(curatedHistoryRevert.json || {}));
+
+      // --- #69 (FF-30) + #19: Reversible single-file removal, undo-create & one-use recovery ---
+      const ff30Rel = `${slice3ModId}/md/ff30_candidate.xml`;
+      const ff30Abs = path.join(slice3ModDir, 'md', 'ff30_candidate.xml');
+      const ff30V1 = '<mdscript name="Ff30Candidate"><cues><cue name="V1"/></cues></mdscript>\n';
+      const ff30V2 = '<mdscript name="Ff30Candidate"><cues><cue name="V2"/></cues></mdscript>\r\n';
+      const rootId = filesListRes.json?.workspaceRootId;
+
+      const curatedCreate = await req('POST', '/api/agent/files/write', slice3Key, {
+        path: ff30Rel,
+        content: ff30V1,
+        expectedSha256: null,
+        expectedWorkspaceRootId: rootId,
+      }, { ...slice3Address, operationId: null });
+      const curatedUndoCreate = await req('POST', '/api/agent/files/restore', slice3Key, {
+        recoveryId: curatedCreate.json?.recovery?.id || 'missing',
+        expectedWorkspaceRootId: rootId,
+      }, { ...slice3Address, operationId: null });
+      const curatedUndoReplay = await req('POST', '/api/agent/files/restore', slice3Key, {
+        recoveryId: curatedCreate.json?.recovery?.id || 'missing',
+      }, { ...slice3Address, operationId: null });
+      ok('curated_files_write_null_sha_emits_one_use_undo_create_recovery',
+        curatedCreate.status === 200
+          && curatedCreate.json?.recovery?.operation === 'undo-create'
+          && curatedUndoCreate.status === 200
+          && curatedUndoCreate.json?.action === 'removed-created-file'
+          && !fs.existsSync(ff30Abs)
+          && curatedUndoReplay.status === 409
+          && curatedUndoReplay.json?.code === 'RECOVERY_ALREADY_USED',
+        JSON.stringify({ create: curatedCreate.status, undo: curatedUndoCreate.status, replay: curatedUndoReplay.json }));
+
+      // Full create -> edit -> remove -> restore cycle on curated capabilities + cross-workspace & negative guards
+      const curatedCreate2 = await req('POST', '/api/agent/files/write', slice3Key, {
+        path: ff30Rel,
+        content: ff30V1,
+        expectedSha256: null,
+      }, { ...slice3Address, operationId: null });
+      const curatedEdit2 = await req('POST', '/api/agent/files/write', slice3Key, {
+        path: ff30Rel,
+        content: ff30V2,
+        expectedSha256: curatedCreate2.json?.written?.sha256,
+      }, { ...slice3Address, operationId: null });
+      const staleUndoAfterEdit = await req('POST', '/api/agent/files/restore', slice3Key, {
+        recoveryId: curatedCreate2.json?.recovery?.id || 'missing',
+      }, { ...slice3Address, operationId: null });
+      const badDeleteDir = await req('POST', '/api/agent/files/delete', slice3Key, {
+        path: `${slice3ModId}/md`,
+        expectedSha256: curatedEdit2.json?.written?.sha256,
+      }, { ...slice3Address, operationId: null });
+      const badDeleteHash = await req('POST', '/api/agent/files/delete', slice3Key, {
+        path: ff30Rel,
+        expectedSha256: '0'.repeat(64),
+      }, { ...slice3Address, operationId: null });
+      const badDeleteTraversal = await req('POST', '/api/agent/files/delete', slice3Key, {
+        path: '../ff30_escape.xml',
+        expectedSha256: curatedEdit2.json?.written?.sha256,
+      }, { ...slice3Address, operationId: null });
+      const badDeleteRoot = await req('POST', '/api/agent/files/delete', slice3Key, {
+        path: ff30Rel,
+        expectedSha256: curatedEdit2.json?.written?.sha256,
+        expectedWorkspaceRootId: 'f'.repeat(64),
+      }, { ...slice3Address, operationId: null });
+      ok('curated_files_delete_and_undo_create_refuse_stale_hash_directory_traversal_and_wrong_root',
+        staleUndoAfterEdit.status === 409 && staleUndoAfterEdit.json?.code === 'RECOVERY_STALE'
+          && badDeleteDir.status === 400 && badDeleteDir.json?.code === 'NOT_A_REGULAR_FILE'
+          && badDeleteHash.status === 409 && badDeleteHash.json?.code === 'FILE_CHANGED'
+          && badDeleteTraversal.status === 403 && badDeleteTraversal.json?.code === 'PATH_TRAVERSAL_FORBIDDEN'
+          && badDeleteRoot.status === 409 && badDeleteRoot.json?.code === 'WORKSPACE_ROOT_CHANGED'
+          && fs.readFileSync(ff30Abs, 'utf8') === ff30V2,
+        JSON.stringify({
+          stale: staleUndoAfterEdit.status,
+          dir: badDeleteDir.status,
+          hash: badDeleteHash.status,
+          traversal: badDeleteTraversal.status,
+          root: badDeleteRoot.status,
+        }));
+
+      const filesDeleteRes = await req('POST', '/api/agent/files/delete', slice3Key, {
+        path: ff30Rel,
+        expectedSha256: curatedEdit2.json?.written?.sha256,
+        expectedWorkspaceRootId: rootId,
+      }, { ...slice3Address, operationId: null });
+      capabilityResponses.set('files.delete', filesDeleteRes);
+
+      // Wrong workspace on restore must fail closed with 403 RECOVERY_WORKSPACE_MISMATCH without consuming recovery
+      const otherClientId = 'client_route_slice3_other';
+      const otherWsCreate = await req('POST', '/api/agent/workspaces', SESSION_TOKEN, {
+        clientId: otherClientId,
+        name: 'other_ff30_ws',
+      }, { clientId: otherClientId, operationId: 'create-other-ff30-ws' });
+      const wrongWsRestore = await req('POST', '/api/fs/restore-file', SESSION_TOKEN, {
+        recoveryId: filesDeleteRes.json?.recovery?.id || 'missing',
+      }, { workspaceId: otherWsCreate.json?.workspaceId, clientId: otherClientId, operationId: null });
+
+      const filesRestoreRes = await req('POST', '/api/agent/files/restore', slice3Key, {
+        recoveryId: filesDeleteRes.json?.recovery?.id || 'missing',
+        expectedWorkspaceRootId: rootId,
+      }, { ...slice3Address, operationId: null });
+      capabilityResponses.set('files.restore', filesRestoreRes);
+      const filesRestoreReplay = await req('POST', '/api/agent/files/restore', slice3Key, {
+        recoveryId: filesDeleteRes.json?.recovery?.id || 'missing',
+      }, { ...slice3Address, operationId: null });
+      ok('curated_files_delete_and_restore_preserve_exact_bytes_workspace_isolation_and_one_use_cas',
+        filesDeleteRes.status === 200
+          && filesDeleteRes.json?.ok === true
+          && !JSON.stringify(filesDeleteRes.json).includes(safeWorkspace)
+          && wrongWsRestore.status === 403 && wrongWsRestore.json?.code === 'RECOVERY_WORKSPACE_MISMATCH'
+          && filesRestoreRes.status === 200
+          && filesRestoreRes.json?.action === 'restored'
+          && fs.readFileSync(ff30Abs, 'utf8') === ff30V2
+          && filesRestoreReplay.status === 409 && filesRestoreReplay.json?.code === 'RECOVERY_ALREADY_USED',
+        JSON.stringify({
+          del: filesDeleteRes.status,
+          wrongWs: wrongWsRestore.status,
+          restore: filesRestoreRes.status,
+          replay: filesRestoreReplay.status,
+        }));
+
+      // Legacy deploy-preset parity (#69): existing /api/fs/write client can remove & restore via /api/fs/delete-file + /api/fs/restore-file
+      const slice3PresetDeployMint = await req('POST', '/api/agent/keys', SESSION_TOKEN, {
+        label: 'route-int-slice3-preset-deploy',
+        scope: 'deploy',
+        ttl: '1h',
+      }, { workspaceId: slice3WsId, clientId: slice3ClientId });
+      const slice3PresetDeployKey = slice3PresetDeployMint.json && (slice3PresetDeployMint.json.token || slice3PresetDeployMint.json.key);
+      const crossWsDeployDelete = await req('POST', '/api/fs/delete-file', deployKey, {
+        path: ff30Rel,
+        expectedSha256: curatedEdit2.json?.written?.sha256,
+      }, { ...slice3Address, operationId: null });
+      const legacyDelete = await req('POST', '/api/fs/delete-file', slice3PresetDeployKey, {
+        path: ff30Rel,
+        expectedSha256: curatedEdit2.json?.written?.sha256,
+        expectedWorkspaceRootId: rootId,
+      }, { ...slice3Address, operationId: null });
+      const legacyRestore = await req('POST', '/api/fs/restore-file', slice3PresetDeployKey, {
+        recoveryId: legacyDelete.json?.recovery?.id || 'missing',
+        expectedWorkspaceRootId: rootId,
+      }, { ...slice3Address, operationId: null });
+      // Clean up temporary ff30_candidate.xml so subsequent modImportPreview file counts stay deterministic
+      const cleanupDelete = await req('POST', '/api/fs/delete-file', slice3PresetDeployKey, {
+        path: ff30Rel,
+        expectedSha256: curatedEdit2.json?.written?.sha256,
+      }, { ...slice3Address, operationId: null });
+      ok('legacy_deploy_key_supports_reversible_single_file_delete_and_restore_without_broader_access',
+        crossWsDeployDelete.status === 403
+          && legacyDelete.status === 200
+          && legacyRestore.status === 200
+          && cleanupDelete.status === 200
+          && !fs.existsSync(ff30Abs),
+        JSON.stringify({ crossWs: crossWsDeployDelete.status, del: legacyDelete.status, restore: legacyRestore.status, cleanup: cleanupDelete.status }));
 
       const modDriftRes = await req('GET', `/api/agent/mod-folder/drift?mod=${encodeURIComponent(slice3ModId)}`, slice3Key, undefined, slice3Address);
       capabilityResponses.set('workspace.mod.drift', modDriftRes);

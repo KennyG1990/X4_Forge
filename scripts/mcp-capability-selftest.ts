@@ -94,7 +94,7 @@ const EXPLICIT_ONLY_MCP_CAPABILITIES = new Set<string>([
   'configuration.apply', 'configuration.preview', 'configuration.read', 'configuration.status',
   'deploy.apply', 'deploy.preview', 'deploy.status', 'deploy.undo',
   'bulk.transform.apply', 'bulk.transform.preview',
-  'files.list', 'files.read', 'files.write',
+  'files.delete', 'files.list', 'files.read', 'files.restore', 'files.write',
   'history.revert',
   'workspace.mod.drift', 'workspace.mod.import',
 ]);

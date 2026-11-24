@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceFingerprint": "3dba91cb24d8a0ac4c73181239062f177b5a6f2c2b364f466d9481debf1ee63e",
+  "sourceFingerprint": "86da6654baf9a98dc4805813b44d66656eedee8bd21d7d7044ecbdba3d990f61",
   "policy": "Every raw production filesystem mutation source is count-pinned here. Authoritative files use atomic sibling promotion; stronger tree, archive, append-log, SQLite, retention, ephemeral, and fixture contracts remain explicit exceptions.",
   "writers": [
     {
@@ -13,7 +13,7 @@
         "mkdirSync": 45,
         "rmSync": 45,
         "rmdirSync": 1,
-        "unlinkSync": 6,
+        "unlinkSync": 7,
         "chmodSync": 2,
         "mkdtempSync": 9
       },
@@ -26,7 +26,7 @@
         "fixture-only"
       ],
       "owners": [
-        "writeWorkspaceFileGuarded and fs/create",
+        "writeWorkspaceFileGuarded, removeWorkspaceFileGuarded, executeFileRecoveryRestore, and fs/create",
         "snapshot create/prune/delete/restore",
         "copyRegularTree and synchronizeRegularTree",
         "replaceValidatedDeployment and recovery",

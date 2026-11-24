@@ -13,7 +13,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import crypto from 'crypto';
-import { atomicWriteJson } from './workspaceState';
+import { atomicWriteFile, atomicWriteJson } from './workspaceState';
 
 export const RECOVERY_SCHEMA = 1;
 export const RECOVERY_MAX_ENTRIES = 12;
@@ -22,7 +22,8 @@ export const RECOVERY_MAX_WORKSPACE_BYTES = 32 * 1024 * 1024;
 export const RECOVERY_MAX_DEPLOY_BYTES = 512 * 1024 * 1024;
 export const RECOVERY_DUPLICATE_CONFLICT = 'RECOVERY_DUPLICATE_CONFLICT';
 
-export type RecoveryKind = 'workspace' | 'deploy';
+export type RecoveryKind = 'workspace' | 'deploy' | 'file';
+export type FileRecoveryOperation = 'delete-file' | 'undo-create';
 export type RecoveryStatus = 'preparing' | 'ready' | 'used';
 
 interface RecoveryBase {
@@ -62,7 +63,20 @@ export interface DeploymentRecoveryRecord extends RecoveryBase {
   postcheckEvidence?: { checkedAt: string; hash: string };
 }
 
-export type DestructiveRecoveryRecord = WorkspaceRecoveryRecord | DeploymentRecoveryRecord;
+export interface FileRecoveryRecord extends RecoveryBase {
+  kind: 'file';
+  operation: FileRecoveryOperation;
+  priorExisted: boolean;
+  workspaceRootId: string;
+  workspaceId?: string;
+  targetRoot: string;
+  targetPath: string;
+  relativePath: string;
+  beforeSha256?: string;
+  beforeBytes: number;
+}
+
+export type DestructiveRecoveryRecord = WorkspaceRecoveryRecord | DeploymentRecoveryRecord | FileRecoveryRecord;
 
 export interface RecoveryStoreOptions {
   root: string;
@@ -162,12 +176,32 @@ function isRecord(value: unknown): value is DestructiveRecoveryRecord {
   if (!value || typeof value !== 'object') return false;
   const row = value as Partial<DestructiveRecoveryRecord>;
   if (row.schema !== RECOVERY_SCHEMA || typeof row.id !== 'string' || !validId(row.id)) return false;
-  if (!['workspace', 'deploy'].includes(String(row.kind)) || !['preparing', 'ready', 'used'].includes(String(row.status))) return false;
+  if (!['workspace', 'deploy', 'file'].includes(String(row.kind)) || !['preparing', 'ready', 'used'].includes(String(row.status))) return false;
   if (!row.createdAt || !row.expiresAt || !row.expectedCurrentHash || !row.summary) return false;
   if (row.kind === 'workspace') return row.beforeWorkspace !== undefined && typeof row.beforeHash === 'string' &&
     (row.beforeSnapshotHash === undefined || typeof row.beforeSnapshotHash === 'string') &&
     (row.expectedCurrentSnapshotHash === undefined || typeof row.expectedCurrentSnapshotHash === 'string') &&
     (row.workspaceId === undefined || /^ws_[a-f0-9]{24}$/i.test(row.workspaceId));
+  if (row.kind === 'file') {
+    if ((row.operation !== 'delete-file' && row.operation !== 'undo-create') || typeof row.priorExisted !== 'boolean') return false;
+    if (typeof row.workspaceRootId !== 'string' || !DEPLOY_HASH.test(row.workspaceRootId)) return false;
+    if (row.workspaceId !== undefined && !/^ws_[a-f0-9]{24}$/i.test(row.workspaceId)) return false;
+    if (typeof row.targetRoot !== 'string' || !row.targetRoot
+      || typeof row.targetPath !== 'string' || !row.targetPath
+      || typeof row.relativePath !== 'string' || !row.relativePath) return false;
+    if (!Number.isSafeInteger(row.beforeBytes) || row.beforeBytes < 0) return false;
+    if (row.operation === 'delete-file') {
+      return row.priorExisted === true
+        && typeof row.beforeSha256 === 'string'
+        && DEPLOY_HASH.test(row.beforeSha256)
+        && (row.status === 'preparing' || row.expectedCurrentHash === 'absent');
+    }
+    return row.priorExisted === false
+      && row.beforeBytes === 0
+      && row.beforeSha256 === undefined
+      && row.status !== 'preparing'
+      && DEPLOY_HASH.test(row.expectedCurrentHash);
+  }
   return typeof row.targetRoot === 'string' && typeof row.targetPath === 'string' && typeof row.modId === 'string'
     && typeof row.beforeFingerprint === 'string' && typeof row.beforeBytes === 'number' && typeof row.priorExisted === 'boolean'
     && (row.writeAdmission === undefined || (row.writeAdmission !== null
@@ -452,6 +486,142 @@ export class DestructiveRecoveryStore {
     return record;
   }
 
+  prepareFileDeletion(input: {
+    workspaceRootId: string;
+    workspaceId?: string;
+    targetRoot: string;
+    targetPath: string;
+    relativePath: string;
+    beforeBytes: Buffer;
+    beforeSha256: string;
+    summary: string;
+  }): FileRecoveryRecord {
+    if (!DEPLOY_HASH.test(input.workspaceRootId)) throw new Error('File recovery workspaceRootId is malformed.');
+    if (input.workspaceId !== undefined && !/^ws_[a-f0-9]{24}$/i.test(input.workspaceId)) {
+      throw new Error('File recovery workspaceId is malformed.');
+    }
+    if (!DEPLOY_HASH.test(input.beforeSha256)) throw new Error('File recovery beforeSha256 is malformed.');
+    if (input.beforeBytes.length > this.maxWorkspaceBytes) {
+      throw new Error(`File recovery exceeds ${this.maxWorkspaceBytes} bytes.`);
+    }
+    this.prune();
+    const now = this.now();
+    const record: FileRecoveryRecord = {
+      schema: RECOVERY_SCHEMA,
+      id: this.newId('file'),
+      kind: 'file',
+      operation: 'delete-file',
+      status: 'preparing',
+      createdAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + this.maxAgeMs).toISOString(),
+      summary: input.summary,
+      expectedCurrentHash: 'absent',
+      priorExisted: true,
+      workspaceRootId: input.workspaceRootId,
+      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      targetRoot: path.resolve(input.targetRoot),
+      targetPath: path.resolve(input.targetPath),
+      relativePath: input.relativePath,
+      beforeSha256: input.beforeSha256,
+      beforeBytes: input.beforeBytes.length,
+    };
+    this.write(record);
+    const payloadFile = this.payloadPath(record.id);
+    atomicWriteFile(payloadFile, input.beforeBytes);
+    const readBack = fs.readFileSync(payloadFile);
+    const readBackHash = crypto.createHash('sha256').update(readBack).digest('hex');
+    if (readBack.length !== input.beforeBytes.length || readBackHash !== input.beforeSha256) {
+      this.abandon(record.id);
+      throw new Error('File recovery payload verification failed.');
+    }
+    return record;
+  }
+
+  finalizeFileDeletion(id: string): FileRecoveryRecord {
+    const found = this.read(id);
+    if (found.ok === false) throw new Error(found.error);
+    if (found.record.kind !== 'file' || found.record.operation !== 'delete-file') {
+      throw new Error('Recovery kind mismatch.');
+    }
+    if (found.record.status !== 'preparing') throw new Error('File deletion recovery is not preparing.');
+    const record: FileRecoveryRecord = {
+      ...found.record,
+      status: 'ready',
+      expectedCurrentHash: 'absent',
+    };
+    this.write(record);
+    return record;
+  }
+
+  readFilePayload(id: string): { ok: true; bytes: Buffer } | { ok: false; code: string; error: string } {
+    const found = this.read(id);
+    if (found.ok === false) return found;
+    if (found.record.kind !== 'file' || found.record.operation !== 'delete-file') {
+      return { ok: false, code: 'RECOVERY_CORRUPT', error: 'Recovery record does not carry a deleted-file payload.' };
+    }
+    try {
+      const payloadFile = this.payloadPath(id);
+      if (!fs.existsSync(payloadFile)) {
+        return { ok: false, code: 'RECOVERY_CORRUPT', error: 'File recovery payload is missing.' };
+      }
+      const stat = fs.lstatSync(payloadFile);
+      if (stat.isSymbolicLink() || !stat.isFile()) {
+        return { ok: false, code: 'RECOVERY_CORRUPT', error: 'File recovery payload is not a regular file.' };
+      }
+      this.assertPhysicalContained(payloadFile);
+      const bytes = fs.readFileSync(payloadFile);
+      const hash = crypto.createHash('sha256').update(bytes).digest('hex');
+      if (bytes.length !== found.record.beforeBytes || hash !== found.record.beforeSha256) {
+        return { ok: false, code: 'RECOVERY_CORRUPT', error: 'File recovery payload does not match its recorded pre-state hash.' };
+      }
+      return { ok: true, bytes };
+    } catch (error) {
+      return {
+        ok: false,
+        code: 'RECOVERY_CORRUPT',
+        error: `File recovery payload is unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+  }
+
+  createFileUndoCreate(input: {
+    workspaceRootId: string;
+    workspaceId?: string;
+    targetRoot: string;
+    targetPath: string;
+    relativePath: string;
+    expectedCurrentHash: string;
+    summary: string;
+  }): FileRecoveryRecord {
+    if (!DEPLOY_HASH.test(input.workspaceRootId)) throw new Error('File recovery workspaceRootId is malformed.');
+    if (input.workspaceId !== undefined && !/^ws_[a-f0-9]{24}$/i.test(input.workspaceId)) {
+      throw new Error('File recovery workspaceId is malformed.');
+    }
+    if (!DEPLOY_HASH.test(input.expectedCurrentHash)) throw new Error('File recovery expectedCurrentHash is malformed.');
+    this.prune();
+    const now = this.now();
+    const record: FileRecoveryRecord = {
+      schema: RECOVERY_SCHEMA,
+      id: this.newId('file'),
+      kind: 'file',
+      operation: 'undo-create',
+      status: 'ready',
+      createdAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + this.maxAgeMs).toISOString(),
+      summary: input.summary,
+      expectedCurrentHash: input.expectedCurrentHash,
+      priorExisted: false,
+      workspaceRootId: input.workspaceRootId,
+      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      targetRoot: path.resolve(input.targetRoot),
+      targetPath: path.resolve(input.targetPath),
+      relativePath: input.relativePath,
+      beforeBytes: 0,
+    };
+    this.write(record);
+    return record;
+  }
+
   markUsed(id: string): DestructiveRecoveryRecord {
     const found = this.read(id);
     if (found.ok === false) throw new Error(found.error);
@@ -682,6 +852,46 @@ export function runDestructiveRecoverySelftest(): {
     let invalidRejected = false;
     try { store.payloadPath('../escape'); } catch { invalidRejected = true; }
     ok('invalid_id_rejected', invalidRejected);
+
+    const fileStore = new DestructiveRecoveryStore({ root, maxEntries: 12, maxAgeMs: 5_000, maxWorkspaceBytes: 256, maxDeployBytes: 64, now: () => now });
+    const sampleBytes = Buffer.from('<mdscript name="Probe"/>\r\n', 'utf8');
+    const sampleHash = crypto.createHash('sha256').update(sampleBytes).digest('hex');
+    const preparedFile = fileStore.prepareFileDeletion({
+      workspaceRootId: '1'.repeat(64),
+      workspaceId: 'ws_444444444444444444444444',
+      targetRoot: root,
+      targetPath: path.join(root, 'md', 'probe.xml'),
+      relativePath: 'md/probe.xml',
+      beforeBytes: sampleBytes,
+      beforeSha256: sampleHash,
+      summary: 'Remove md/probe.xml',
+    });
+    const finalizedFile = fileStore.finalizeFileDeletion(preparedFile.id);
+    const readFilePayload = fileStore.readFilePayload(finalizedFile.id);
+    ok('file_deletion_roundtrip_preserves_exact_bytes',
+      finalizedFile.status === 'ready'
+      && finalizedFile.expectedCurrentHash === 'absent'
+      && readFilePayload.ok
+      && Buffer.compare(readFilePayload.bytes, sampleBytes) === 0);
+    const undoCreate = fileStore.createFileUndoCreate({
+      workspaceRootId: '1'.repeat(64),
+      workspaceId: 'ws_444444444444444444444444',
+      targetRoot: root,
+      targetPath: path.join(root, 'md', 'created.xml'),
+      relativePath: 'md/created.xml',
+      expectedCurrentHash: sampleHash,
+      summary: 'Create md/created.xml',
+    });
+    const readUndoCreate = fileStore.read(undoCreate.id);
+    ok('file_undo_create_roundtrip_and_one_use',
+      readUndoCreate.ok
+      && readUndoCreate.record.kind === 'file'
+      && readUndoCreate.record.operation === 'undo-create'
+      && readUndoCreate.record.expectedCurrentHash === sampleHash);
+    fileStore.markUsed(undoCreate.id);
+    let undoReplayRejected = false;
+    try { fileStore.markUsed(undoCreate.id); } catch { undoReplayRejected = true; }
+    ok('file_undo_create_replay_rejected', undoReplayRejected);
   } finally {
     try { fs.rmSync(root, { recursive: true, force: true }); } catch { /* test cleanup */ }
     try { fs.rmSync(deterministicRoot, { recursive: true, force: true }); } catch { /* test cleanup */ }

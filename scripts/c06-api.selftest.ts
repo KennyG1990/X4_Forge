@@ -35,6 +35,15 @@ check('full report can require an exact result ID', () => validateProjectApiBody
 check('valid authored metadata is accepted', () => validateProjectApiBody('/api/agent/project/create', { meta: { id: 'lab', deps: [{ id: 'dep', optional: true }] } }));
 check('malformed writer content cannot coerce', () => assert.throws(() => validateProjectApiBody('/api/fs/write', { path: 'lab/x.lua', content: { text: 'wrong' } })));
 check('writer precondition cannot coerce an array into a hash', () => assert.throws(() => validateProjectApiBody('/api/fs/write', { path: 'lab/x.lua', content: '', expectedSha256: ['a'.repeat(64)] })));
+check('single-file delete requires valid sha256 precondition', () => {
+  validateProjectApiBody('/api/fs/delete-file', { path: 'lab/x.lua', expectedSha256: 'a'.repeat(64), expectedWorkspaceRootId: 'b'.repeat(64) });
+  assert.throws(() => validateProjectApiBody('/api/fs/delete-file', { path: 'lab/x.lua', expectedSha256: null }));
+  assert.throws(() => validateProjectApiBody('/api/fs/delete-file', { path: 'lab/x.lua', expectedSha256: 'a'.repeat(64), unexpected: true }));
+});
+check('single-file restore requires valid recoveryId', () => {
+  validateProjectApiBody('/api/fs/restore-file', { recoveryId: 'file-192abc123456-0123456789abcdef', expectedWorkspaceRootId: 'b'.repeat(64) });
+  assert.throws(() => validateProjectApiBody('/api/fs/restore-file', { recoveryId: '../escape' }));
+});
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-c06-'));
 try {

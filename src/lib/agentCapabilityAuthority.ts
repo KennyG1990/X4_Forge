@@ -84,8 +84,10 @@ export const DEPLOY_EXPLICIT_GRANT_CAPABILITIES = [
 export const WORKSPACE_FILES_EXPLICIT_GRANT_CAPABILITIES = [
   'bulk.transform.apply',
   'bulk.transform.preview',
+  'files.delete',
   'files.list',
   'files.read',
+  'files.restore',
   'files.write',
   'history.revert',
   'workspace.mod.drift',

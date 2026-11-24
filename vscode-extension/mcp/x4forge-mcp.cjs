@@ -82,6 +82,8 @@ const WORKSPACE_FILES_TOOLS = new Set([
   "list_workspace_files",
   "read_workspace_file",
   "write_workspace_file",
+  "remove_workspace_file",
+  "restore_workspace_file",
   "revert_action_history",
   "get_mod_drift",
   "import_mod_folder",
@@ -89,8 +91,10 @@ const WORKSPACE_FILES_TOOLS = new Set([
 const WORKSPACE_FILES_CAPABILITIES = new Set([
   "bulk.transform.apply",
   "bulk.transform.preview",
+  "files.delete",
   "files.list",
   "files.read",
+  "files.restore",
   "files.write",
   "history.revert",
   "workspace.mod.drift",
@@ -1546,8 +1550,8 @@ const TOOLS = [
   {
     name: "write_workspace_file",
     capabilityId: "files.write",
-    capabilityVersion: 1,
-    description: "Atomically create or update one UTF-8 text file (at most 512 KiB) inside the configured Mod Workspace root using mandatory expectedSha256 CAS (64-hex digest or null for new files), default strict XML/scriptproperty preflight before touching disk, and automatic Action Ledger undo capture. Requires an explicit key grant.",
+    capabilityVersion: 2,
+    description: "Atomically create or update one UTF-8 text file (at most 512 KiB) inside the configured Mod Workspace root using mandatory expectedSha256 CAS (64-hex digest or null for new files), default strict XML/scriptproperty preflight before touching disk, automatic Action Ledger undo capture, and a one-use undo-create recovery receipt when expectedSha256 is null. Requires an explicit key grant.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1569,6 +1573,47 @@ const TOOLS = [
       await forge("POST", "/api/agent/files/write", args),
       "workspace file write",
       { ok: "boolean", success: "boolean", path: "string", written: "object", validation: "object" },
+    ),
+  },
+  {
+    name: "remove_workspace_file",
+    capabilityId: "files.delete",
+    capabilityVersion: 1,
+    description: "Atomically remove one regular file inside the configured Mod Workspace root using mandatory expectedSha256 CAS, explicit directory/symlink/traversal/hidden-path refusal, durable pre-delete byte preservation, and a one-use CAS recovery receipt. Requires an explicit key grant.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", maxLength: 1024 },
+        expectedSha256: { type: "string", maxLength: 64 },
+        expectedWorkspaceRootId: { type: "string", maxLength: 64 },
+      },
+      required: ["path", "expectedSha256"],
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/files/delete", args),
+      "workspace file removal",
+      { ok: "boolean", success: "boolean", path: "string", removed: "object", recovery: "object" },
+    ),
+  },
+  {
+    name: "restore_workspace_file",
+    capabilityId: "files.restore",
+    capabilityVersion: 1,
+    description: "Consume one ready single-file recovery receipt (delete-file or undo-create) inside the matching workspace and Mod Workspace root under CAS guards. Restores exact pre-delete bytes when the target path is still absent, or removes an unmodified newly created file. Requires an explicit key grant.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        recoveryId: { type: "string", maxLength: 81 },
+        expectedWorkspaceRootId: { type: "string", maxLength: 64 },
+      },
+      required: ["recoveryId"],
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/files/restore", args),
+      "workspace file recovery",
+      { ok: "boolean", success: "boolean", recoveryId: "string", recoveryKind: "string", operation: "string", action: "string", path: "string" },
     ),
   },
   {

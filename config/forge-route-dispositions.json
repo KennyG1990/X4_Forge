@@ -3252,6 +3252,28 @@
       "resourceClass": "global-session",
       "workspaceMode": "optional"
     },
+    "POST /api/agent/files/delete": {
+      "disposition": "canonical-capability",
+      "owner": "files.delete",
+      "registrations": 1,
+      "agentScopes": [
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "optional"
+    },
+    "POST /api/agent/files/restore": {
+      "disposition": "canonical-capability",
+      "owner": "files.restore",
+      "registrations": 1,
+      "agentScopes": [
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "optional"
+    },
     "POST /api/agent/files/write": {
       "disposition": "canonical-capability",
       "owner": "files.write",
@@ -3947,7 +3969,27 @@
       "resourceClass": "configured-root",
       "workspaceMode": "optional"
     },
+    "POST /api/fs/delete-file": {
+      "disposition": "legacy-agent-api",
+      "owner": "filesystem-service",
+      "registrations": 1,
+      "agentScopes": [
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "optional"
+    },
     "POST /api/fs/delete-snapshot": {
+      "disposition": "legacy-agent-api",
+      "owner": "filesystem-service",
+      "registrations": 1,
+      "agentScopes": [
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "optional"
+    },
+    "POST /api/fs/restore-file": {
       "disposition": "legacy-agent-api",
       "owner": "filesystem-service",
       "registrations": 1,
@@ -4203,9 +4245,11 @@
     "extensions.conflicts.analyze@1": "5e8005a8422ebbe1039a848332caf8f40076ea7cce693b21df8039aec856697e",
     "extensions.dependencies.analyze@1": "a326d0506e79b8e5422f4a68b76038bc7db6884ac6155027213b942a44f41842",
     "extensions.overrides.analyze@1": "2c5d9d41d0903bd5150a3a3c58b4a1559e24ecb7e8817cd3c100c40ccca46df5",
+    "files.delete@1": "fa05daf06095a1883fb86620c0c61d3342bee0e690b32411e047e68356be63e1",
     "files.list@1": "65cb20f5abfb227ac76bfe53212ce8f671d34d730eb70b4515a3ddc9e59eaa59",
     "files.read@1": "229397bc0409d1005344d35c32250e01220b859e53c4b13a54ec222bf1b08853",
-    "files.write@1": "f71f716abb9c02b8679e6821b8e64518ed5fc236e63a6ac9b51de15785962fd6",
+    "files.restore@1": "96c4e9348f9d92eb1ac92b88e7b2a77bfdfaaa46efee50e0f193d85ded3a8b52",
+    "files.write@2": "39ee7550b7a486b45dcee656aa2e447bf97ba3a7eef24519be5622641c0b96d3",
     "history.list@2": "9fc3203d66edd8c3136bd374bfef4394783e1bd8ef8a44834ff7360a93d1fb33",
     "history.revert@2": "e864816f1ef6d4e06389051423687d3b9da310d3b541f91beff8ecafbb4ab0f4",
     "patch.diff.simulate@1": "eb4c3ceab8d75b6c235acbc6820f611216685ac3e55a3cf958c5d493f179348a",
@@ -4244,8 +4288,8 @@
     "workspace.read@2": "962774de4a25e8725a0d90d4982298cc72f100312075b1f6f4ff9de1482752d7"
   },
   "mcpModuleSignature": {
-    "version": 29,
-    "hash": "f1868c1fe9dbf0afc544b6a59d58a1b95fb58e2d6b28613e47109fbc06ededdf"
+    "version": 30,
+    "hash": "b905f886291c5865b330c59e573547e5f4931adefa578ceff93cd082ecea505f"
   },
   "mcpSignatures": {
     "validate_mod": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",
@@ -4296,7 +4340,9 @@
     "apply_bulk_transform": "4e0b643105afa89fa658b3ac87f5fdc96030530c023d1dbe14f8973d48ee984d",
     "list_workspace_files": "136c103f518e61e09e53167c8bde09f879d4b555830b98e89ce249a94f3b7f6e",
     "read_workspace_file": "4e1f6cb25783bfaa48e25d8cc962b93856de40ecb6bf00372437531b16f54a38",
-    "write_workspace_file": "c484864b64874a9f79f8ba9aca499e43e4f021bc87faca2b6a4c18c63b40e21b",
+    "write_workspace_file": "5e1cd2e9341de821d04c76734b283f436c16cb80f0f28050fbe3f107a4a5dad6",
+    "remove_workspace_file": "d84b5bbad55898a4f154459b990a7ed8a20478c05985b445639884e15bacf4b6",
+    "restore_workspace_file": "8596dd1005fe961bb9cd55ae82f4e51067066b4b3845bbe97717033568b2f340",
     "revert_action_history": "203ca8ef62d71f0f525e66c6e264eb68b8d39e39dbeeddf357193b7e6e8fa61a",
     "get_mod_drift": "ad1b4d36c9e5ed894ed98aabac3f318075a2361d708192b3328d3636f32a963d",
     "import_mod_folder": "87ace03a01daed9d54ed38e22f59d52b49e6b3cd5023c9b2392888a4da29b482",
@@ -4356,7 +4402,9 @@
     "apply_bulk_transform": "bulk.transform.apply@1",
     "list_workspace_files": "files.list@1",
     "read_workspace_file": "files.read@1",
-    "write_workspace_file": "files.write@1",
+    "write_workspace_file": "files.write@2",
+    "remove_workspace_file": "files.delete@1",
+    "restore_workspace_file": "files.restore@1",
     "revert_action_history": "history.revert@2",
     "get_mod_drift": "workspace.mod.drift@1",
     "import_mod_folder": "workspace.mod.import@1",

@@ -90,6 +90,8 @@ export const PROJECT_API_FIELDS: Record<string, readonly string[]> = {
   '/api/agent/performance/native/collection': ['expectedBackendInstanceId', 'expectedNativeInstanceId', 'durationMs', 'intervalMs', 'eventLoopDelay'],
   '/api/agent/performance/native/stop': ['expectedBackendInstanceId', 'expectedNativeInstanceId', 'captureId'],
   '/api/fs/write': ['path', 'content', 'expectedSha256', 'strict', 'expectedWorkspaceRootId'],
+  '/api/fs/delete-file': ['path', 'expectedSha256', 'expectedWorkspaceRootId'],
+  '/api/fs/restore-file': ['recoveryId', 'expectedWorkspaceRootId'],
   '/api/fs/create': ['name', 'type'],
   '/api/agent/workspaces/bootstrap': ['clientId', 'workspaceId'],
   '/api/agent/workspace/restore-parked': ['targetWorkspaceId'],
@@ -338,6 +340,15 @@ export function validateProjectApiBody(route: string, value: unknown): void {
     if (value.strict !== undefined && typeof value.strict !== 'boolean') invalid('strict must be boolean.');
     stringField(value, 'expectedWorkspaceRootId', { pattern: /^[a-f0-9]{64}$/ });
     if (value.expectedSha256 !== undefined && value.expectedSha256 !== null && (typeof value.expectedSha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(value.expectedSha256))) invalid('expectedSha256 must be a SHA-256 string or null.');
+  }
+  if (route === '/api/fs/delete-file') {
+    stringField(value, 'path', { required: true, max: 1024, singleLine: true });
+    stringField(value, 'expectedSha256', { required: true, pattern: /^[a-f0-9]{64}$/i });
+    stringField(value, 'expectedWorkspaceRootId', { pattern: /^[a-f0-9]{64}$/ });
+  }
+  if (route === '/api/fs/restore-file') {
+    stringField(value, 'recoveryId', { required: true, max: 81, pattern: /^[a-z0-9][a-z0-9_-]{11,80}$/i });
+    stringField(value, 'expectedWorkspaceRootId', { pattern: /^[a-f0-9]{64}$/ });
   }
   if (route === '/api/fs/create' && (typeof value.name !== 'string' || !value.name.trim() || !['file', 'directory'].includes(value.type))) invalid('create requires name and type file or directory.');
 }

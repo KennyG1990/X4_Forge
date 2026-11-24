@@ -51,7 +51,7 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
 
   const validationErrors = validateForgeCapabilityRegistry();
   check('registry invariants', validationErrors.length === 0, validationErrors.join(' | ') || undefined);
-  check('bounded non-native registry', FORGE_CAPABILITIES.filter(capability => !capability.id.startsWith('performance.native.')).length === 54, `count=${FORGE_CAPABILITIES.length}`);
+  check('bounded non-native registry', FORGE_CAPABILITIES.filter(capability => !capability.id.startsWith('performance.native.')).length === 56, `count=${FORGE_CAPABILITIES.length}`);
   const compileResult = findForgeCapability('workspace.compile.result', 2);
   check('retained compile report access is workspace-scoped and read-only',
     compileResult?.context.workspace === 'required'
@@ -537,13 +537,19 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
     { id: 'bulk.transform.preview', version: 1, method: 'POST', path: '/api/agent/bulk-transform/preview-plan', alias: 'preview_bulk_transform',
       workspace: 'required', confirmation: 'none', scopes: ['read', 'write', 'deploy'], deniedScope: null,
       effects: ['read', 'analyze'], ledger: null },
+    { id: 'files.delete', version: 1, method: 'POST', path: '/api/agent/files/delete', alias: 'remove_workspace_file',
+      workspace: 'optional', confirmation: 'none', scopes: ['write', 'deploy'], deniedScope: 'read',
+      effects: ['filesystem-write', 'delete', 'audit-write', 'audit-retention-delete'], ledger: 'edit' },
     { id: 'files.list', version: 1, method: 'GET', path: '/api/agent/files/list', alias: 'list_workspace_files',
       workspace: 'optional', confirmation: 'none', scopes: ['read', 'write', 'deploy'], deniedScope: null,
       effects: ['read'], ledger: null },
     { id: 'files.read', version: 1, method: 'GET', path: '/api/agent/files/read', alias: 'read_workspace_file',
       workspace: 'optional', confirmation: 'none', scopes: ['read', 'write', 'deploy'], deniedScope: null,
       effects: ['read'], ledger: null },
-    { id: 'files.write', version: 1, method: 'POST', path: '/api/agent/files/write', alias: 'write_workspace_file',
+    { id: 'files.restore', version: 1, method: 'POST', path: '/api/agent/files/restore', alias: 'restore_workspace_file',
+      workspace: 'optional', confirmation: 'none', scopes: ['write', 'deploy'], deniedScope: 'read',
+      effects: ['filesystem-write', 'delete', 'audit-write', 'audit-retention-delete'], ledger: 'revert' },
+    { id: 'files.write', version: 2, method: 'POST', path: '/api/agent/files/write', alias: 'write_workspace_file',
       workspace: 'optional', confirmation: 'none', scopes: ['write', 'deploy'], deniedScope: 'read',
       effects: ['filesystem-write', 'audit-write', 'audit-retention-delete'], ledger: 'edit' },
     { id: 'history.revert', version: 2, method: 'POST', path: '/api/agent/history/revert', alias: 'revert_action_history',
@@ -668,7 +674,7 @@ export function runNativeForgeCapabilitiesSelftest() {
   const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   const keys = (value: object | undefined) => Object.keys(value || {}).sort();
   check('native registry has exactly the three reviewed process telemetry identities',
-    FORGE_CAPABILITIES.length === 57 &&
+    FORGE_CAPABILITIES.length === 59 &&
       equal(FORGE_CAPABILITIES.filter(capability => capability.id.startsWith('performance.native.')).map(capability => capability.id).sort(),
         expected.map(row => row.id).sort()));
   for (const row of expected) {

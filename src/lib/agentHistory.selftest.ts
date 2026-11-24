@@ -415,7 +415,13 @@ export function runAgentHistorySelftest(): { pass: boolean; checks: Array<{ name
     // --- revertibility rules --------------------------------------------------------------------
     ok('a successful edit with a before-blob is revertible', revertibility('edit', { status: 'ok' }, true).revertible === true);
     ok('an edit with no previous content is not revertible', revertibility('edit', { status: 'ok' }, false).revertible === false);
+    ok('a guarded new-file or single-file-delete edit with recovery is revertible', revertibility('edit', { status: 'ok' }, false, true).revertible === true);
     ok('a failed edit is not revertible', revertibility('edit', { status: 'error' }, true).revertible === false);
+    ok('single-file delete routes are recorded as edits and restore routes as reverts',
+      ledgerRouteKind('POST', '/api/fs/delete-file') === 'edit'
+      && ledgerRouteKind('POST', '/api/agent/files/delete') === 'edit'
+      && ledgerRouteKind('POST', '/api/fs/restore-file') === 'revert'
+      && ledgerRouteKind('POST', '/api/agent/files/restore') === 'revert');
     const deployRule = revertibility('deploy', { status: 'ok' }, true);
     ok('deploys without retained recovery are explicitly non-revertible', deployRule.revertible === false);
     ok('deploy reason does not promise a surviving transaction backup',

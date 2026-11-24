@@ -177,7 +177,7 @@ import { buildRemediationCapsules, runAgentLoopSelftest, runRepairLoop, type Loo
 import { assessSourceSync, hashFolderFingerprint, runCompileFidelitySelftest } from "./src/lib/compileFidelity";
 import { workspaceContentHash, workspaceSnapshotHash, runWorkspaceIdentitySelftest } from "./src/lib/workspaceIdentity";
 import { buildWorkspaceConflictPreview, runWorkspaceConflictSelftest } from "./src/lib/workspaceConflict";
-import { DestructiveRecoveryStore, runDestructiveRecoverySelftest, type DeploymentRecoveryRecord } from "./src/lib/destructiveRecovery";
+import { DestructiveRecoveryStore, RECOVERY_MAX_WORKSPACE_BYTES, runDestructiveRecoverySelftest, type DeploymentRecoveryRecord, type FileRecoveryRecord } from "./src/lib/destructiveRecovery";
 import { ActionReceiptStore, ActionReceiptStoreError } from "./src/lib/actionReceiptStore";
 import { evaluateFindingAcceptances, projectFindingReview, recordFindingAcceptances, verifyFindingAcceptanceReceipts, revokeWarningReview, type AcceptanceSubject, type AcceptancePrincipal } from './src/server/findingAcceptance';
 import { parseModFolderImportRequest } from './src/server/modFolderImportRequest';
@@ -1216,7 +1216,13 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
       || authority.decision.routeKey === 'POST /api/agent/deploy-verify/apply'
       || authority.decision.routeKey === 'POST /api/agent/deploy-verify/undo'
       || authority.decision.routeKey === 'POST /api/agent/bulk-transform/execute'
+      || authority.decision.routeKey === 'GET /api/agent/files/list'
+      || authority.decision.routeKey === 'GET /api/agent/files/read'
       || authority.decision.routeKey === 'POST /api/agent/files/write'
+      || authority.decision.routeKey === 'POST /api/agent/files/delete'
+      || authority.decision.routeKey === 'POST /api/agent/files/restore'
+      || authority.decision.routeKey === 'POST /api/fs/delete-file'
+      || authority.decision.routeKey === 'POST /api/fs/restore-file'
       || authority.decision.routeKey === 'POST /api/agent/history/revert'
       || authority.decision.routeKey === 'POST /api/agent/mod-folder/sync'
       || (authority.decision.routeKey === 'GET /api/agent/status'
@@ -1448,21 +1454,35 @@ function ledgerMiddleware(req: express.Request, res: express.Response, next: exp
       if (kind === 'edit') {
         const requested = editRequested;
         if (requested) files.push(requested);
-        const after = (req.body as any)?.content;
-        let afterText = typeof after === 'string' ? after : undefined;
-        if (afterText === undefined && res.statusCode < 400 && editAbsolute && fs.existsSync(editAbsolute) && fs.statSync(editAbsolute).isFile() && fs.statSync(editAbsolute).size <= MAX_DIFFABLE_BYTES) {
-          const buffer = fs.readFileSync(editAbsolute);
-          if (!looksBinary(buffer)) afterText = buffer.toString('utf8');
-        }
-        binary = !!before?.binary || (afterText === undefined && after !== undefined);
-        bytes = { before: before?.bytes, after: afterText !== undefined ? Buffer.byteLength(afterText, 'utf8') : undefined };
-        if (res.statusCode < 400 && !binary && afterText !== undefined) {
-          lines = lineDelta(before?.text ?? '', afterText);
-          if (before?.text !== undefined) {
-            beforeBlob = agentHistoryStore.putBlob(before.text);
-            diffBlob = agentHistoryStore.putBlob(unifiedDiff(before.text, afterText, requested));
+        if (fullPath === '/api/fs/delete-file' || fullPath === '/api/agent/files/delete') {
+          binary = !!before?.binary;
+          const removedBytes = typeof captured?.removed?.bytes === 'number' ? captured.removed.bytes : before?.bytes;
+          bytes = { before: removedBytes, after: res.statusCode < 400 ? 0 : before?.bytes };
+          if (res.statusCode < 400) {
+            fileEffect = { added: 0, overwritten: 0, deleted: 1, preserved: 0, bytes: 0 };
+            if (!binary && before?.text !== undefined) {
+              lines = lineDelta(before.text, '');
+              beforeBlob = agentHistoryStore.putBlob(before.text);
+              diffBlob = agentHistoryStore.putBlob(unifiedDiff(before.text, '', requested));
+            }
           }
-          afterBlob = agentHistoryStore.putBlob(afterText);
+        } else {
+          const after = (req.body as any)?.content;
+          let afterText = typeof after === 'string' ? after : undefined;
+          if (afterText === undefined && res.statusCode < 400 && editAbsolute && fs.existsSync(editAbsolute) && fs.statSync(editAbsolute).isFile() && fs.statSync(editAbsolute).size <= MAX_DIFFABLE_BYTES) {
+            const buffer = fs.readFileSync(editAbsolute);
+            if (!looksBinary(buffer)) afterText = buffer.toString('utf8');
+          }
+          binary = !!before?.binary || (afterText === undefined && after !== undefined);
+          bytes = { before: before?.bytes, after: afterText !== undefined ? Buffer.byteLength(afterText, 'utf8') : undefined };
+          if (res.statusCode < 400 && !binary && afterText !== undefined) {
+            lines = lineDelta(before?.text ?? '', afterText);
+            if (before?.text !== undefined) {
+              beforeBlob = agentHistoryStore.putBlob(before.text);
+              diffBlob = agentHistoryStore.putBlob(unifiedDiff(before.text, afterText, requested));
+            }
+            afterBlob = agentHistoryStore.putBlob(afterText);
+          }
         }
       } else if (kind === 'deploy') {
         const deployed = captured?.deployedPath;
@@ -1569,7 +1589,7 @@ function ledgerMiddleware(req: express.Request, res: express.Response, next: exp
       const recovery = captured?.recovery && typeof captured.recovery.id === 'string'
         ? captured.recovery as {
           id: string;
-          kind?: 'workspace' | 'deploy';
+          kind?: 'workspace' | 'deploy' | 'file';
           expectedCurrentHash?: string;
           expectedCurrentSnapshotHash?: string;
           expiresAt?: string;
@@ -1671,7 +1691,12 @@ function sourceOperationKeys(req: express.Request): string[] {
   }
   if (req.path.startsWith('/api/fs/') || req.path.startsWith('/api/agent/files/') || req.path.includes('/history/') || req.path.includes('/project-rules/') || req.path.endsWith('/steam/adopt')) {
     if (resolved.modWorkspacePath) {
-      const relative = typeof target === 'string' ? target.replace(/\\/g, '/').split('/')[0] : '';
+      let effectiveTarget = target;
+      if (!effectiveTarget && (req.path === '/api/fs/restore-file' || req.path === '/api/agent/files/restore') && typeof req.body?.recoveryId === 'string') {
+        const found = destructiveRecoveryStore.read(req.body.recoveryId);
+        if (found.ok && found.record.kind === 'file') effectiveTarget = found.record.relativePath;
+      }
+      const relative = typeof effectiveTarget === 'string' ? effectiveTarget.replace(/\\/g, '/').split('/')[0] : '';
       keys.push(canonicalSourceKey(relative && relative !== '..' ? path.join(resolved.modWorkspacePath, relative) : resolved.modWorkspacePath));
     }
   }
@@ -6016,6 +6041,368 @@ function writeWorkspaceFileGuarded(
   return { absolutePath: safePath, written: describeWrittenBytes(String(content ?? ''), safePath) };
 }
 
+function unlinkRegularWorkspaceFile(absolutePath: string): void {
+  fs.unlinkSync(absolutePath);
+}
+
+function createUndoCreateFileRecovery(
+  req: express.Request,
+  rootPath: string,
+  absolutePath: string,
+  writtenSha256: string,
+) {
+  const binding = workspaceRootBinding(rootPath);
+  if (!binding || !/^[a-f0-9]{64}$/.test(writtenSha256)) return undefined;
+  const realTarget = fs.realpathSync.native(absolutePath);
+  if (!isPathWithin(realTarget, binding.path)) return undefined;
+  const normalizedRelPath = path.relative(binding.path, realTarget).replace(/\\/g, '/');
+  const addressedWorkspaceId = decoratedReq(req).__workspaceRecord?.workspaceId;
+  const rec = destructiveRecoveryStore.createFileUndoCreate({
+    workspaceRootId: binding.id,
+    ...(addressedWorkspaceId ? { workspaceId: addressedWorkspaceId } : {}),
+    targetRoot: binding.path,
+    targetPath: realTarget,
+    relativePath: normalizedRelPath,
+    expectedCurrentHash: writtenSha256,
+    summary: `Undo creation of ${normalizedRelPath}`,
+  });
+  return {
+    id: rec.id,
+    kind: 'file' as const,
+    operation: 'undo-create' as const,
+    expectedCurrentHash: rec.expectedCurrentHash,
+    expiresAt: rec.expiresAt,
+  };
+}
+
+function removeWorkspaceFileGuarded(
+  req: express.Request,
+  res: express.Response,
+  input: { path: string; expectedSha256: string; expectedWorkspaceRootId?: string },
+) {
+  try {
+    const targetPath = input.path.trim();
+    const config = resolveXsdConfig();
+    const binding = workspaceRootBinding(config.modWorkspacePath);
+    if (input.expectedWorkspaceRootId !== undefined && binding?.id !== input.expectedWorkspaceRootId) {
+      return res.status(409).json({
+        ok: false,
+        success: false,
+        code: 'WORKSPACE_ROOT_CHANGED',
+        error: 'The configured Mod Workspace folder changed or is unavailable. Refresh Project Files.',
+      });
+    }
+    const resolved = binding ? { ...config, modWorkspacePath: binding.path } : config;
+    const rootPath = resolved.modWorkspacePath;
+    if (!rootPath || !binding || !fs.existsSync(rootPath)) {
+      return res.status(400).json({ ok: false, success: false, code: 'ROOT_NOT_CONFIGURED', error: 'No Mod Workspace Folder configured.' });
+    }
+    if (rejectUnsafeDevelopmentWrite(res, resolved, ['modWorkspacePath'])) return;
+
+    const absolute = path.resolve(binding.path, targetPath);
+    if (absolute === binding.path || !isPathWithin(absolute, binding.path)) {
+      return res.status(403).json({ ok: false, success: false, code: 'PATH_TRAVERSAL_FORBIDDEN', error: 'Forbidden: Directory traversal detected.' });
+    }
+    const relativeSegments = path.relative(binding.path, absolute).split(path.sep).filter(Boolean);
+    if (relativeSegments.length === 0 || relativeSegments.some(segment => !includeFilesystemEntry(segment))) {
+      return res.status(403).json({ ok: false, success: false, code: 'HIDDEN_PATH_FORBIDDEN', error: 'Forbidden: Hidden or development paths cannot be removed.' });
+    }
+    if (!verifyRealAncestorWithinRoot(absolute, binding.path)) {
+      return res.status(403).json({ ok: false, success: false, code: 'PATH_TRAVERSAL_FORBIDDEN', error: 'Forbidden: Target escapes the configured Mod Workspace root.' });
+    }
+
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(absolute);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException | null)?.code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') {
+        return res.status(404).json({ ok: false, success: false, code: 'FILE_NOT_FOUND', error: `File not found in Mod Workspace: "${targetPath}".` });
+      }
+      throw error;
+    }
+    if (stat.isSymbolicLink()) {
+      return res.status(403).json({ ok: false, success: false, code: 'PATH_TRAVERSAL_FORBIDDEN', error: 'Forbidden: Symbolic links cannot be removed.' });
+    }
+    if (stat.isDirectory() || !stat.isFile()) {
+      return res.status(400).json({
+        ok: false,
+        success: false,
+        code: 'NOT_A_REGULAR_FILE',
+        error: `Refused to remove "${targetPath}": target is not a regular file. Use /api/fs/delete-dir for explicit directory removal.`,
+      });
+    }
+    const realTarget = fs.realpathSync.native(absolute);
+    if (realTarget === binding.path || !isPathWithin(realTarget, binding.path)) {
+      return res.status(403).json({ ok: false, success: false, code: 'PATH_TRAVERSAL_FORBIDDEN', error: 'Forbidden: Target resolves outside the configured Mod Workspace root.' });
+    }
+    if (stat.size > RECOVERY_MAX_WORKSPACE_BYTES) {
+      return res.status(413).json({
+        ok: false,
+        success: false,
+        code: 'FILE_TOO_LARGE_FOR_RECOVERY',
+        maxBytes: RECOVERY_MAX_WORKSPACE_BYTES,
+        error: `Refused to remove "${targetPath}": file exceeds the ${RECOVERY_MAX_WORKSPACE_BYTES}-byte reversible recovery budget.`,
+      });
+    }
+
+    const beforeBuffer = fs.readFileSync(realTarget);
+    const currentSha256 = crypto.createHash('sha256').update(beforeBuffer).digest('hex');
+    const expectedSha256 = input.expectedSha256.toLowerCase();
+    if (currentSha256 !== expectedSha256) {
+      return res.status(409).json({
+        ok: false,
+        success: false,
+        code: 'FILE_CHANGED',
+        error: `Refused to remove "${targetPath}": its bytes changed since expectedSha256 was read.`,
+        expectedSha256,
+        currentSha256,
+      });
+    }
+
+    const normalizedRelPath = path.relative(binding.path, realTarget).replace(/\\/g, '/');
+    const addressedWorkspaceId = decoratedReq(req).__workspaceRecord?.workspaceId;
+    const prepared = destructiveRecoveryStore.prepareFileDeletion({
+      workspaceRootId: binding.id,
+      ...(addressedWorkspaceId ? { workspaceId: addressedWorkspaceId } : {}),
+      targetRoot: binding.path,
+      targetPath: realTarget,
+      relativePath: normalizedRelPath,
+      beforeBytes: beforeBuffer,
+      beforeSha256: currentSha256,
+      summary: `Remove workspace file ${normalizedRelPath}`,
+    });
+
+    try {
+      unlinkRegularWorkspaceFile(realTarget);
+    } catch (unlinkError) {
+      destructiveRecoveryStore.abandon(prepared.id);
+      throw unlinkError;
+    }
+
+    const finalized = destructiveRecoveryStore.finalizeFileDeletion(prepared.id);
+    return res.json({
+      ok: true,
+      success: true,
+      path: normalizedRelPath,
+      workspaceRootId: binding.id,
+      removed: {
+        path: normalizedRelPath,
+        bytes: beforeBuffer.length,
+        sha256: currentSha256,
+        root: 'workspace',
+      },
+      recovery: {
+        id: finalized.id,
+        kind: 'file',
+        operation: 'delete-file',
+        expectedCurrentHash: finalized.expectedCurrentHash,
+        beforeSha256: currentSha256,
+        beforeBytes: beforeBuffer.length,
+        expiresAt: finalized.expiresAt,
+      },
+    });
+  } catch (error) {
+    delete res.locals.sourceOperation;
+    return res.status(500).json({
+      ok: false,
+      success: false,
+      code: 'WORKSPACE_FILE_DELETE_FAILED',
+      error: errorMessage(error) || 'Workspace file removal failed.',
+    });
+  }
+}
+
+function executeFileRecoveryRestore(
+  req: express.Request,
+  res: express.Response,
+  record: FileRecoveryRecord,
+  options: { expectedWorkspaceRootId?: string; matchedRow?: LedgerRow } = {},
+) {
+  try {
+    if (record.status !== 'ready') {
+      return res.status(409).json({
+        ok: false,
+        success: false,
+        code: 'RECOVERY_ALREADY_USED',
+        error: 'This recovery was already used or never reached ready state.',
+      });
+    }
+    const addressedWorkspaceId = decoratedReq(req).__workspaceRecord?.workspaceId;
+    if ((record.workspaceId ?? undefined) !== (addressedWorkspaceId ?? undefined)) {
+      return res.status(403).json({
+        ok: false,
+        success: false,
+        code: 'RECOVERY_WORKSPACE_MISMATCH',
+        error: 'File recovery belongs to a different workspace.',
+      });
+    }
+    const config = resolveXsdConfig();
+    const binding = workspaceRootBinding(config.modWorkspacePath);
+    if (!binding || !config.modWorkspacePath) {
+      return res.status(400).json({ ok: false, success: false, code: 'ROOT_NOT_CONFIGURED', error: 'No Mod Workspace Folder configured.' });
+    }
+    if (options.expectedWorkspaceRootId !== undefined && binding.id !== options.expectedWorkspaceRootId) {
+      return res.status(409).json({
+        ok: false,
+        success: false,
+        code: 'WORKSPACE_ROOT_CHANGED',
+        error: 'The configured Mod Workspace folder changed or does not match expectedWorkspaceRootId.',
+      });
+    }
+    if (binding.id !== record.workspaceRootId) {
+      return res.status(409).json({
+        ok: false,
+        success: false,
+        code: 'WORKSPACE_ROOT_CHANGED',
+        error: 'File recovery belongs to a different Mod Workspace folder.',
+      });
+    }
+    const resolved = { ...config, modWorkspacePath: binding.path };
+    if (rejectUnsafeDevelopmentWrite(res, resolved, ['modWorkspacePath'])) return;
+
+    const targetAbs = path.resolve(binding.path, record.relativePath);
+    if (targetAbs === binding.path || !isPathWithin(targetAbs, binding.path)) {
+      return res.status(403).json({ ok: false, success: false, code: 'PATH_TRAVERSAL_FORBIDDEN', error: 'Forbidden: Recovery target escapes Mod Workspace root.' });
+    }
+    const relativeSegments = path.relative(binding.path, targetAbs).split(path.sep).filter(Boolean);
+    if (relativeSegments.length === 0 || relativeSegments.some(segment => !includeFilesystemEntry(segment))) {
+      return res.status(403).json({ ok: false, success: false, code: 'HIDDEN_PATH_FORBIDDEN', error: 'Forbidden: Hidden or development paths cannot be restored.' });
+    }
+    if (!verifyRealAncestorWithinRoot(targetAbs, binding.path)) {
+      return res.status(403).json({ ok: false, success: false, code: 'PATH_TRAVERSAL_FORBIDDEN', error: 'Forbidden: Recovery target ancestor escapes Mod Workspace root.' });
+    }
+
+    const matchedRow = options.matchedRow ?? agentHistoryStore.readAll().find(candidate =>
+      candidate.recoveryId === record.id && (candidate.workspaceId ?? undefined) === (addressedWorkspaceId ?? undefined));
+    const decorated = decoratedReq(req);
+    if (matchedRow) {
+      decorated.__revertOf = matchedRow.id;
+      decorated.__revertOfTitle = matchedRow.title;
+    }
+    decorated.__revertFiles = [record.relativePath];
+
+    if (record.operation === 'delete-file') {
+      if (pathHasEntry(targetAbs)) {
+        return res.status(409).json({
+          ok: false,
+          success: false,
+          code: 'RECOVERY_STALE',
+          error: `Recovery refused because "${record.relativePath}" already exists on disk.`,
+          expectedCurrentHash: 'absent',
+        });
+      }
+      const payload = destructiveRecoveryStore.readFilePayload(record.id);
+      if (payload.ok === false) {
+        return res.status(409).json({ ok: false, success: false, code: payload.code, error: payload.error });
+      }
+      atomicWriteFile(targetAbs, payload.bytes);
+      const restoredHash = hashArtifactFile(targetAbs);
+      if (restoredHash !== record.beforeSha256) {
+        try { unlinkRegularWorkspaceFile(targetAbs); } catch { /* best-effort rollback */ }
+        return res.status(500).json({ ok: false, success: false, code: 'RECOVERY_CORRUPT', error: 'Restored file did not match its recorded pre-state hash.' });
+      }
+      try {
+        destructiveRecoveryStore.markUsed(record.id);
+      } catch (consumeError) {
+        try { unlinkRegularWorkspaceFile(targetAbs); } catch { /* best-effort rollback */ }
+        throw new Error(`File recovery receipt failed, so the restore was rolled back: ${errorMessage(consumeError)}`);
+      }
+      return res.json({
+        ok: true,
+        success: true,
+        ...(matchedRow ? { revertedTo: matchedRow.id, file: record.relativePath, bytes: payload.bytes.length } : {}),
+        recoveryId: record.id,
+        recoveryKind: 'file',
+        operation: 'delete-file',
+        action: 'restored',
+        path: record.relativePath,
+        workspaceRootId: binding.id,
+        restored: {
+          path: record.relativePath,
+          bytes: payload.bytes.length,
+          sha256: restoredHash,
+          root: 'workspace',
+        },
+      });
+    }
+
+    let currentStat: fs.Stats;
+    try {
+      currentStat = fs.lstatSync(targetAbs);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException | null)?.code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') {
+        return res.status(409).json({
+          ok: false,
+          success: false,
+          code: 'RECOVERY_STALE',
+          error: `Undo-create refused because "${record.relativePath}" no longer exists.`,
+          expectedCurrentHash: record.expectedCurrentHash,
+        });
+      }
+      throw error;
+    }
+    if (currentStat.isSymbolicLink() || !currentStat.isFile()) {
+      return res.status(409).json({
+        ok: false,
+        success: false,
+        code: 'RECOVERY_STALE',
+        error: `Undo-create refused because "${record.relativePath}" is no longer a regular file.`,
+        expectedCurrentHash: record.expectedCurrentHash,
+      });
+    }
+    const realTarget = fs.realpathSync.native(targetAbs);
+    if (realTarget === binding.path || !isPathWithin(realTarget, binding.path)) {
+      return res.status(403).json({ ok: false, success: false, code: 'PATH_TRAVERSAL_FORBIDDEN', error: 'Forbidden: Recovery target resolves outside Mod Workspace root.' });
+    }
+    const currentBytes = fs.readFileSync(realTarget);
+    const currentHash = crypto.createHash('sha256').update(currentBytes).digest('hex');
+    if (currentHash !== record.expectedCurrentHash) {
+      return res.status(409).json({
+        ok: false,
+        success: false,
+        code: 'RECOVERY_STALE',
+        error: `Undo-create refused because "${record.relativePath}" changed after creation.`,
+        expectedCurrentHash: record.expectedCurrentHash,
+        currentHash,
+      });
+    }
+    unlinkRegularWorkspaceFile(realTarget);
+    try {
+      destructiveRecoveryStore.markUsed(record.id);
+    } catch (consumeError) {
+      try { atomicWriteFile(realTarget, currentBytes); } catch { /* best-effort rollback */ }
+      throw new Error(`Undo-create recovery receipt failed, so the removal was rolled back: ${errorMessage(consumeError)}`);
+    }
+    return res.json({
+      ok: true,
+      success: true,
+      ...(matchedRow ? { revertedTo: matchedRow.id, file: record.relativePath, bytes: 0 } : {}),
+      recoveryId: record.id,
+      recoveryKind: 'file',
+      operation: 'undo-create',
+      action: 'removed-created-file',
+      path: record.relativePath,
+      workspaceRootId: binding.id,
+      removed: {
+        path: record.relativePath,
+        bytes: currentBytes.length,
+        sha256: currentHash,
+        root: 'workspace',
+      },
+    });
+  } catch (error) {
+    delete res.locals.sourceOperation;
+    return res.status(500).json({
+      ok: false,
+      success: false,
+      code: 'RECOVERY_FAILED',
+      error: errorMessage(error) || 'File recovery failed.',
+    });
+  }
+}
+
 app.post("/api/fs/write", coordinatedSourceOperation((req, res) => {
   const attempt: WorkspaceWriteAttempt = { stage: 'preflight' };
   const incoming = req.body?.content ?? '';
@@ -6064,10 +6451,14 @@ app.post("/api/fs/write", coordinatedSourceOperation((req, res) => {
     }
     const result = writeWorkspaceFileGuarded(res, targetPath, incoming, attempt, resolved);
     if (!result) return;
+    const createRecovery = Object.prototype.hasOwnProperty.call(req.body || {}, 'expectedSha256') && req.body.expectedSha256 === null && resolved.modWorkspacePath
+      ? createUndoCreateFileRecovery(req, resolved.modWorkspacePath, result.absolutePath, result.written.sha256)
+      : undefined;
     return res.json({
       success: true,
       ...(binding ? { workspaceRootId: binding.id } : {}),
       written: { ...result.written, root: 'workspace', absolutePath: result.absolutePath },
+      ...(createRecovery ? { recovery: createRecovery } : {}),
       validation,
     });
   } catch (error) {
@@ -6968,6 +7359,9 @@ function handleHistoryRevertById(
           snapshotHash: workspaceRegistry.snapshotHash(record),
         });
       }
+      if (found.record.kind === 'file') {
+        return executeFileRecoveryRestore(req, res, found.record, { matchedRow: row });
+      }
       return executeDeploymentRecoveryRestore(req, res, lease, found.record, row);
     }
     const previous = agentHistoryStore.readBlob(row.beforeBlob!);
@@ -7369,6 +7763,44 @@ app.post("/api/fs/delete-dir", coordinatedSourceOperation((req, res) => {
   } catch (error) {
     return res.status(500).json({ error: error.message || "Failed to delete directory." });
   }
+}));
+
+app.post("/api/fs/delete-file", coordinatedSourceOperation((req, res) => {
+  const body = isPlainRecord(req.body) ? req.body : {};
+  const targetPath = typeof body.path === 'string' ? body.path : '';
+  const expectedSha256 = typeof body.expectedSha256 === 'string' ? body.expectedSha256 : '';
+  const expectedWorkspaceRootId = typeof body.expectedWorkspaceRootId === 'string' ? body.expectedWorkspaceRootId : undefined;
+  return removeWorkspaceFileGuarded(req, res, {
+    path: targetPath,
+    expectedSha256,
+    ...(expectedWorkspaceRootId !== undefined ? { expectedWorkspaceRootId } : {}),
+  });
+}));
+
+app.post("/api/fs/restore-file", coordinatedSourceOperation((req, res) => {
+  const body = isPlainRecord(req.body) ? req.body : {};
+  const recoveryId = typeof body.recoveryId === 'string' ? body.recoveryId : '';
+  const expectedWorkspaceRootId = typeof body.expectedWorkspaceRootId === 'string' ? body.expectedWorkspaceRootId : undefined;
+  const found = destructiveRecoveryStore.read(recoveryId);
+  if (found.ok === false) {
+    return res.status(found.code === 'RECOVERY_NOT_FOUND' ? 404 : 409).json({
+      ok: false,
+      success: false,
+      code: found.code,
+      error: found.error,
+    });
+  }
+  if (found.record.kind !== 'file') {
+    return res.status(409).json({
+      ok: false,
+      success: false,
+      code: 'NOT_FILE_RECOVERY',
+      error: 'Recovery record is not a single-file recovery receipt.',
+    });
+  }
+  return executeFileRecoveryRestore(req, res, found.record, {
+    ...(expectedWorkspaceRootId !== undefined ? { expectedWorkspaceRootId } : {}),
+  });
 }));
 
 app.get("/api/schema/element/:tag", (req, res) => {
@@ -12544,12 +12976,16 @@ app.post("/api/agent/files/write", (req, res, next) => {
     const result = writeWorkspaceFileGuarded(res, targetPath, incoming, attempt, resolved);
     if (!result) return;
     const normalizedRelPath = path.relative(rootPath, absolute).replace(/\\/g, '/');
+    const createRecovery = expected === null
+      ? createUndoCreateFileRecovery(req, rootPath, result.absolutePath, result.written.sha256)
+      : undefined;
     return res.json({
       ok: true,
       success: true,
       path: normalizedRelPath,
       ...(binding ? { workspaceRootId: binding.id } : {}),
       written: { ...result.written, root: 'workspace' },
+      ...(createRecovery ? { recovery: createRecovery } : {}),
       validation,
     });
   } catch (error) {
@@ -12564,6 +13000,97 @@ app.post("/api/agent/files/write", (req, res, next) => {
       failure,
     });
   }
+}));
+
+app.post("/api/agent/files/delete", (req, res, next) => {
+  if (!isPlainRecord(req.body)) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'files.delete requires a JSON object body.' });
+  }
+  const extra = unknownObjectKeys(req.body, new Set(['path', 'expectedSha256', 'expectedWorkspaceRootId']));
+  if (extra.length > 0) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: `files.delete does not accept: ${extra.join(', ')}` });
+  }
+  if (typeof req.body.path !== 'string' || !req.body.path.trim() || req.body.path.includes('\0') || req.body.path.length > 1024 || /[\r\n]/.test(req.body.path)) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'files.delete path must be a non-empty relative path string (max 1024 chars).' });
+  }
+  if (typeof req.body.expectedSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(req.body.expectedSha256)) {
+    return res.status(400).json({
+      ok: false,
+      success: false,
+      code: 'CAPABILITY_INPUT_INVALID',
+      error: 'files.delete requires expectedSha256 as a 64-char lowercase hex sha256 string.',
+    });
+  }
+  if (req.body.expectedWorkspaceRootId !== undefined
+    && (typeof req.body.expectedWorkspaceRootId !== 'string' || !/^[a-f0-9]{64}$/.test(req.body.expectedWorkspaceRootId))) {
+    return res.status(400).json({
+      ok: false,
+      success: false,
+      code: 'CAPABILITY_INPUT_INVALID',
+      error: 'expectedWorkspaceRootId must be a 64-char lowercase hex sha256 string.',
+    });
+  }
+  return next();
+}, coordinatedSourceOperation((req, res) => {
+  const body = req.body as Record<string, unknown>;
+  const expectedWorkspaceRootId = typeof body.expectedWorkspaceRootId === 'string' ? body.expectedWorkspaceRootId : undefined;
+  return removeWorkspaceFileGuarded(req, res, {
+    path: String(body.path),
+    expectedSha256: String(body.expectedSha256),
+    ...(expectedWorkspaceRootId !== undefined ? { expectedWorkspaceRootId } : {}),
+  });
+}));
+
+app.post("/api/agent/files/restore", (req, res, next) => {
+  if (!isPlainRecord(req.body)) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'files.restore requires a JSON object body.' });
+  }
+  const extra = unknownObjectKeys(req.body, new Set(['recoveryId', 'expectedWorkspaceRootId']));
+  if (extra.length > 0) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: `files.restore does not accept: ${extra.join(', ')}` });
+  }
+  if (typeof req.body.recoveryId !== 'string' || !/^[a-z0-9][a-z0-9_-]{11,80}$/i.test(req.body.recoveryId)) {
+    return res.status(400).json({
+      ok: false,
+      success: false,
+      code: 'CAPABILITY_INPUT_INVALID',
+      error: 'files.restore requires recoveryId as a valid recovery receipt identifier.',
+    });
+  }
+  if (req.body.expectedWorkspaceRootId !== undefined
+    && (typeof req.body.expectedWorkspaceRootId !== 'string' || !/^[a-f0-9]{64}$/.test(req.body.expectedWorkspaceRootId))) {
+    return res.status(400).json({
+      ok: false,
+      success: false,
+      code: 'CAPABILITY_INPUT_INVALID',
+      error: 'expectedWorkspaceRootId must be a 64-char lowercase hex sha256 string.',
+    });
+  }
+  return next();
+}, coordinatedSourceOperation((req, res) => {
+  const body = req.body as Record<string, unknown>;
+  const recoveryId = String(body.recoveryId);
+  const expectedWorkspaceRootId = typeof body.expectedWorkspaceRootId === 'string' ? body.expectedWorkspaceRootId : undefined;
+  const found = destructiveRecoveryStore.read(recoveryId);
+  if (found.ok === false) {
+    return res.status(found.code === 'RECOVERY_NOT_FOUND' ? 404 : 409).json({
+      ok: false,
+      success: false,
+      code: found.code,
+      error: found.error,
+    });
+  }
+  if (found.record.kind !== 'file') {
+    return res.status(409).json({
+      ok: false,
+      success: false,
+      code: 'NOT_FILE_RECOVERY',
+      error: 'Recovery record is not a single-file recovery receipt.',
+    });
+  }
+  return executeFileRecoveryRestore(req, res, found.record, {
+    ...(expectedWorkspaceRootId !== undefined ? { expectedWorkspaceRootId } : {}),
+  });
 }));
 
 app.get("/api/agent/mod-folder/drift", (req, res) => {

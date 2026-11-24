@@ -752,6 +752,8 @@ function legacyRoutePolicy(
   if (WORKSPACE_WRITE_ROUTES.has(route.routeKey)) return durableRoutePolicy(['workspace-write']);
   if (FILE_WRITE_ROUTES.has(route.routeKey)) return durableRoutePolicy(['filesystem-write']);
   if (route.routeKey === 'POST /api/fs/delete-dir'
+    || route.routeKey === 'POST /api/fs/delete-file'
+    || route.routeKey === 'POST /api/fs/restore-file'
     || route.routeKey === 'POST /api/fs/delete-snapshot') {
     return durableRoutePolicy(['filesystem-write', 'delete']);
   }

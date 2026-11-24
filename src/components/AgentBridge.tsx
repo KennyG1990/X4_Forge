@@ -1150,7 +1150,9 @@ export default function AgentBridge({
                                 ? 'Restore prior deployment'
                                 : row.recoveryKind === 'workspace'
                                   ? 'Undo forced overwrite'
-                                  : 'Revert to here'}
+                                  : row.recoveryKind === 'file'
+                                    ? (row.beforeBlob ? 'Restore removed file' : 'Undo file creation')
+                                    : 'Revert to here'}
                           </button>
                         ) : (
                           <div className="text-[9.5px] font-mono text-slate-500 italic">{row.revertReason}</div>

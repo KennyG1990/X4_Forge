@@ -78,7 +78,7 @@ export interface LedgerRow {
   fileEffect?: { added: number; overwritten: number; deleted: number; preserved: number; bytes: number };
   /** B110-R14: one-time CAS recovery receipt owned by the bounded recovery store. */
   recoveryId?: string;
-  recoveryKind?: 'workspace' | 'deploy';
+  recoveryKind?: 'workspace' | 'deploy' | 'file';
   recoveryExpectedHash?: string;
   recoveryExpectedSnapshotHash?: string;
   recoveryExpiresAt?: string;
@@ -144,7 +144,11 @@ export const LEDGER_QUIET_ROUTES: string[] = [
 /** Exact-path kind mapping. Anything mutating and unlisted still records, as kind `action`. */
 export const LEDGER_ROUTES: Array<{ method: string; path: string; kind: LedgerKind }> = [
   { method: 'POST', path: '/api/fs/write', kind: 'edit' },
+  { method: 'POST', path: '/api/fs/delete-file', kind: 'edit' },
+  { method: 'POST', path: '/api/fs/restore-file', kind: 'revert' },
   { method: 'POST', path: '/api/agent/files/write', kind: 'edit' },
+  { method: 'POST', path: '/api/agent/files/delete', kind: 'edit' },
+  { method: 'POST', path: '/api/agent/files/restore', kind: 'revert' },
   { method: 'POST', path: '/api/agent/project-rules/suppress', kind: 'edit' },
   { method: 'POST', path: '/api/fs/create', kind: 'edit' },
   { method: 'POST', path: '/api/fs/delete-dir', kind: 'edit' },
@@ -230,7 +234,7 @@ export function ledgerRouteKind(method: string, path: string): LedgerKind | null
 export function revertibility(kind: LedgerKind, outcome: LedgerOutcome, hasBeforeBlob: boolean, hasRecovery: boolean = false): { revertible: boolean; reason?: string } {
   if (kind === 'edit') {
     if (outcome.status === 'error') return { revertible: false, reason: 'The edit failed, so there is nothing to undo.' };
-    if (!hasBeforeBlob) return { revertible: false, reason: 'No previous content was captured (the file did not exist before this write).' };
+    if (!hasBeforeBlob && !hasRecovery) return { revertible: false, reason: 'No previous content was captured (the file did not exist before this write).' };
     return { revertible: true };
   }
   if (kind === 'deploy') {
@@ -397,6 +401,12 @@ export function describeAction(input: {
       return {
         title: `Edit REFUSED — \`${target}\`: ${cleanReason(body)}`,
         outcome: { status: 'error', code: body?.code },
+      };
+    }
+    if (input.routePath === '/api/fs/delete-file' || input.routePath === '/api/agent/files/delete') {
+      return {
+        title: `Removed \`${target}\` — ${humanBytes(input.bytes?.before ?? body?.removed?.bytes ?? 0)} (recoverable)`,
+        outcome: { status: 'ok' },
       };
     }
     if (input.binary) {
@@ -584,11 +594,23 @@ export function describeAction(input: {
   }
 
   if (kind === 'revert') {
+    if (httpFailed && !input.revertOfTitle && (input.routePath === '/api/fs/restore-file' || input.routePath === '/api/agent/files/restore')) {
+      return {
+        title: `File recovery REFUSED — ${cleanReason(body)}`,
+        outcome: { status: 'error', code: body?.code },
+      };
+    }
+    if (!httpFailed && !input.revertOfTitle && body?.action === 'removed-created-file') {
+      return { title: `Undid creation of \`${target}\``, outcome: { status: 'ok' } };
+    }
+    if (!httpFailed && !input.revertOfTitle && body?.action === 'restored') {
+      return { title: `Restored removed \`${target}\` — ${humanBytes(body?.restored?.bytes ?? 0)}`, outcome: { status: 'ok' } };
+    }
     return {
       title: input.revertOfTitle
         ? `Reverted: ${input.revertOfTitle}`
         : `Reverted \`${target}\` to its previous content`,
-      outcome: { status: httpFailed ? 'error' : 'ok' },
+      outcome: { status: httpFailed ? 'error' : 'ok', ...(httpFailed && body?.code ? { code: body.code } : {}) },
     };
   }
 

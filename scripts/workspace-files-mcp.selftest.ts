@@ -303,6 +303,8 @@ async function main() {
     'list_workspace_files',
     'read_workspace_file',
     'write_workspace_file',
+    'remove_workspace_file',
+    'restore_workspace_file',
     'revert_action_history',
     'get_mod_drift',
     'import_mod_folder',
@@ -383,6 +385,8 @@ async function main() {
       assert(names.includes('get_mod_drift'));
       assert(names.includes('preview_bulk_transform'));
       assert(!names.includes('write_workspace_file'));
+      assert(!names.includes('remove_workspace_file'));
+      assert(!names.includes('restore_workspace_file'));
       assert(!names.includes('revert_action_history'));
       assert(!names.includes('import_mod_folder'));
       assert(!names.includes('apply_bulk_transform'));
@@ -397,9 +401,11 @@ async function main() {
         capabilityIdentities: [
           'bulk.transform.apply@1',
           'bulk.transform.preview@1',
+          'files.delete@1',
           'files.list@1',
           'files.read@1',
-          'files.write@1',
+          'files.restore@1',
+          'files.write@2',
           'history.list@2',
           'history.revert@2',
           'workspace.mod.drift@1',
@@ -644,6 +650,187 @@ async function main() {
 
       const historyAfter = await presetReadMcp.callTool('list_action_history', { limit: 50 });
       assert.equal(historyAfter.payload.total, totalBefore, 'quiet read/analyze tools must record zero Action Ledger rows');
+    });
+
+    await check('7_reversible_single_file_remove_restore_and_undo_create_over_mcp_and_write_grant', async () => {
+      // Explicit write-scope key (no deploy scope required!) can create, edit, remove, undo-create, and restore files.
+      const writeMint = await httpJson(backend!.baseUrl, 'POST', '/api/agent/keys', STUDIO_TOKEN, {
+        label: 'files-write-delete-restore',
+        scope: 'write',
+        ttl: '1h',
+        authorityMode: 'exact',
+        capabilityIdentities: [
+          'files.delete@1',
+          'files.list@1',
+          'files.read@1',
+          'files.restore@1',
+          'files.write@2',
+        ],
+        allowedEffects: ['read', 'filesystem-write', 'delete', 'audit-write', 'audit-retention-delete'],
+      }, wsHeaders);
+      assert.equal(writeMint.status, 200, JSON.stringify(writeMint.json));
+      const writeMcp = await openMcp(writeMint.json!.token || writeMint.json!.key, wsId);
+      const writeNames: string[] = ((await writeMcp.request('tools/list')).result?.tools || []).map((t: any) => t.name);
+      assert(writeNames.includes('write_workspace_file'));
+      assert(writeNames.includes('remove_workspace_file'));
+      assert(writeNames.includes('restore_workspace_file'));
+      assert(!writeNames.includes('revert_action_history'), 'write scope must not advertise deploy-only revert_action_history');
+
+      const rootListing = await writeMcp.callTool('list_workspace_files', { root: 'workspace', path: modId });
+      const rootId = String(rootListing.payload.workspaceRootId);
+      const candidateRel = `${modId}/md/temp_candidate.xml`;
+      const candidateAbs = path.join(modDir, 'md', 'temp_candidate.xml');
+      const v1Xml = '<mdscript name="TempCandidate"><cues><cue name="Init"/></cues></mdscript>\n';
+      const v2Xml = '<mdscript name="TempCandidate"><cues><cue name="Edited"/></cues></mdscript>\r\n';
+
+      // 1. Create new file (expectedSha256: null) -> emits undo-create recovery -> undo-create removes it -> replay fails 409
+      const created1 = await writeMcp.callTool('write_workspace_file', {
+        path: candidateRel,
+        content: v1Xml,
+        expectedSha256: null,
+        expectedWorkspaceRootId: rootId,
+      });
+      assert.equal(created1.isError, false, JSON.stringify(created1.payload));
+      assert.equal(created1.payload.recovery?.kind, 'file');
+      assert.equal(created1.payload.recovery?.operation, 'undo-create');
+      assert.equal(created1.payload.recovery?.expectedCurrentHash, created1.payload.written?.sha256);
+      assert.equal(fs.existsSync(candidateAbs), true);
+
+      const undoneCreate = await writeMcp.callTool('restore_workspace_file', {
+        recoveryId: created1.payload.recovery.id,
+        expectedWorkspaceRootId: rootId,
+      });
+      assert.equal(undoneCreate.isError, false, JSON.stringify(undoneCreate.payload));
+      assert.equal(undoneCreate.payload.operation, 'undo-create');
+      assert.equal(undoneCreate.payload.action, 'removed-created-file');
+      assert.equal(fs.existsSync(candidateAbs), false);
+
+      const replayUndoCreate = await writeMcp.callTool('restore_workspace_file', {
+        recoveryId: created1.payload.recovery.id,
+      });
+      assert.equal(replayUndoCreate.isError, true);
+      assert.equal(replayUndoCreate.payload?.code, 'RECOVERY_ALREADY_USED');
+
+      // 2. Re-create + edit -> stale undo-create refused with 409 RECOVERY_STALE while edited bytes survive
+      const created2 = await writeMcp.callTool('write_workspace_file', {
+        path: candidateRel,
+        content: v1Xml,
+        expectedSha256: null,
+        expectedWorkspaceRootId: rootId,
+      });
+      assert.equal(created2.isError, false);
+      const edited2 = await writeMcp.callTool('write_workspace_file', {
+        path: candidateRel,
+        content: v2Xml,
+        expectedSha256: created2.payload.written.sha256,
+        expectedWorkspaceRootId: rootId,
+      });
+      assert.equal(edited2.isError, false, JSON.stringify(edited2.payload));
+      const v2Sha = String(edited2.payload.written.sha256);
+
+      const staleUndoCreate = await writeMcp.callTool('restore_workspace_file', {
+        recoveryId: created2.payload.recovery.id,
+      });
+      assert.equal(staleUndoCreate.isError, true);
+      assert.equal(staleUndoCreate.payload?.code, 'RECOVERY_STALE');
+      assert.equal(fs.readFileSync(candidateAbs, 'utf8'), v2Xml);
+
+      // 3. Negative delete checks: wrong hash, wrong root, directory target, traversal, hidden path
+      const wrongHashDel = await writeMcp.callTool('remove_workspace_file', {
+        path: candidateRel,
+        expectedSha256: '0'.repeat(64),
+      });
+      assert.equal(wrongHashDel.isError, true);
+      assert.equal(wrongHashDel.payload?.code, 'FILE_CHANGED');
+      assert.equal(fs.readFileSync(candidateAbs, 'utf8'), v2Xml);
+
+      const wrongRootDel = await writeMcp.callTool('remove_workspace_file', {
+        path: candidateRel,
+        expectedSha256: v2Sha,
+        expectedWorkspaceRootId: 'f'.repeat(64),
+      });
+      assert.equal(wrongRootDel.isError, true);
+      assert.equal(wrongRootDel.payload?.code, 'WORKSPACE_ROOT_CHANGED');
+
+      const dirDel = await writeMcp.callTool('remove_workspace_file', {
+        path: `${modId}/md`,
+        expectedSha256: v2Sha,
+      });
+      assert.equal(dirDel.isError, true);
+      assert.equal(dirDel.payload?.code, 'NOT_A_REGULAR_FILE');
+      assert.equal(fs.existsSync(path.join(modDir, 'md', 'probe.xml')), true);
+
+      const traversalDel = await writeMcp.callTool('remove_workspace_file', {
+        path: '../outside.xml',
+        expectedSha256: v2Sha,
+      });
+      assert.equal(traversalDel.isError, true);
+      assert.equal(traversalDel.payload?.code, 'PATH_TRAVERSAL_FORBIDDEN');
+
+      const hiddenDel = await writeMcp.callTool('remove_workspace_file', {
+        path: `${modId}/.git/config`,
+        expectedSha256: v2Sha,
+      });
+      assert.equal(hiddenDel.isError, true);
+      assert.equal(hiddenDel.payload?.code, 'HIDDEN_PATH_FORBIDDEN');
+
+      // 4. Remove -> occupied restore refused (409 RECOVERY_STALE) -> clean restore preserves exact CRLF bytes -> replay refused
+      const removed = await writeMcp.callTool('remove_workspace_file', {
+        path: candidateRel,
+        expectedSha256: v2Sha,
+        expectedWorkspaceRootId: rootId,
+      });
+      assert.equal(removed.isError, false, JSON.stringify(removed.payload));
+      assert.equal(removed.payload.recovery?.operation, 'delete-file');
+      assert.equal(removed.payload.recovery?.expectedCurrentHash, 'absent');
+      assert(!JSON.stringify(removed.payload).includes(modsDir), 'remove_workspace_file leaked host modsDir');
+      assert.equal(fs.existsSync(candidateAbs), false);
+      assert.equal(fs.existsSync(path.join(modDir, 'md', 'probe.xml')), true, 'sibling files must remain untouched');
+
+      fs.writeFileSync(candidateAbs, 'occupying-bytes', 'utf8');
+      const occupiedRestore = await writeMcp.callTool('restore_workspace_file', {
+        recoveryId: removed.payload.recovery.id,
+      });
+      assert.equal(occupiedRestore.isError, true);
+      assert.equal(occupiedRestore.payload?.code, 'RECOVERY_STALE');
+      assert.equal(fs.readFileSync(candidateAbs, 'utf8'), 'occupying-bytes');
+      fs.unlinkSync(candidateAbs);
+
+      const restored = await writeMcp.callTool('restore_workspace_file', {
+        recoveryId: removed.payload.recovery.id,
+        expectedWorkspaceRootId: rootId,
+      });
+      assert.equal(restored.isError, false, JSON.stringify(restored.payload));
+      assert.equal(restored.payload.action, 'restored');
+      assert.equal(fs.readFileSync(candidateAbs, 'utf8'), v2Xml);
+
+      const replayRestore = await writeMcp.callTool('restore_workspace_file', {
+        recoveryId: removed.payload.recovery.id,
+      });
+      assert.equal(replayRestore.isError, true);
+      assert.equal(replayRestore.payload?.code, 'RECOVERY_ALREADY_USED');
+      assert.equal(fs.readFileSync(candidateAbs, 'utf8'), v2Xml);
+
+      // 5. Remove again and restore via Action Ledger revert_action_history (one-use CAS)
+      const removedAgain = await writeMcp.callTool('remove_workspace_file', {
+        path: candidateRel,
+        expectedSha256: v2Sha,
+        expectedWorkspaceRootId: rootId,
+      });
+      assert.equal(removedAgain.isError, false);
+      assert.equal(fs.existsSync(candidateAbs), false);
+
+      const editRows = await fullMcp.callTool('list_action_history', { kind: 'edit', limit: 10 });
+      const deleteRow = (editRows.payload.rows || []).find((r: any) => r.recoveryId === removedAgain.payload.recovery.id);
+      assert(deleteRow && deleteRow.revertible === true && deleteRow.recoveryKind === 'file');
+
+      const revertedViaHistory = await fullMcp.callTool('revert_action_history', { id: deleteRow.id });
+      assert.equal(revertedViaHistory.isError, false, JSON.stringify(revertedViaHistory.payload));
+      assert.equal(fs.readFileSync(candidateAbs, 'utf8'), v2Xml);
+
+      const replayViaHistory = await fullMcp.callTool('revert_action_history', { id: deleteRow.id });
+      assert.equal(replayViaHistory.isError, true);
+      assert.equal(replayViaHistory.payload?.code, 'RECOVERY_ALREADY_USED');
     });
   } finally {
     for (const s of mcpSessions) {
