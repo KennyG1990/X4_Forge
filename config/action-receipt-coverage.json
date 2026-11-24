@@ -932,6 +932,32 @@
       ]
     },
     {
+      "routeKey": "POST /api/agent/mod-folder/round-trip",
+      "method": "POST",
+      "template": "/api/agent/mod-folder/round-trip",
+      "owner": "workspace.roundtrip.check",
+      "resourceClass": "configured-root",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1mod-folder~1round-trip",
+      "integrationBatch": "W3B0-internal",
+      "history": "quiet",
+      "capability": {
+        "kind": "canonical",
+        "id": "workspace.roundtrip.check",
+        "version": 1
+      },
+      "semanticClass": "read-analysis-only",
+      "policy": "receipt-exempt",
+      "effects": [
+        "read",
+        "analyze"
+      ],
+      "authorityScopes": [
+        "global",
+        "profile",
+        "workspace"
+      ]
+    },
+    {
       "routeKey": "POST /api/agent/mod-folder/sync",
       "method": "POST",
       "template": "/api/agent/mod-folder/sync",
@@ -1310,6 +1336,59 @@
       ]
     },
     {
+      "routeKey": "POST /api/agent/project-rules/suppression/apply",
+      "method": "POST",
+      "template": "/api/agent/project-rules/suppression/apply",
+      "owner": "rules.suppression.apply",
+      "resourceClass": "configured-root",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1project-rules~1suppression~1apply",
+      "integrationBatch": "W3B1",
+      "history": "visible",
+      "capability": {
+        "kind": "canonical",
+        "id": "rules.suppression.apply",
+        "version": 1
+      },
+      "semanticClass": "durable-local-mutation",
+      "policy": "receipt-required",
+      "effects": [
+        "filesystem-write",
+        "audit-write",
+        "audit-retention-delete"
+      ],
+      "authorityScopes": [
+        "global",
+        "profile",
+        "workspace"
+      ]
+    },
+    {
+      "routeKey": "POST /api/agent/project-rules/suppression/prepare",
+      "method": "POST",
+      "template": "/api/agent/project-rules/suppression/prepare",
+      "owner": "rules.suppression.prepare",
+      "resourceClass": "configured-root",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1project-rules~1suppression~1prepare",
+      "integrationBatch": "W3B0-internal",
+      "history": "quiet",
+      "capability": {
+        "kind": "canonical",
+        "id": "rules.suppression.prepare",
+        "version": 1
+      },
+      "semanticClass": "read-analysis-only",
+      "policy": "receipt-exempt",
+      "effects": [
+        "read",
+        "analyze"
+      ],
+      "authorityScopes": [
+        "global",
+        "profile",
+        "workspace"
+      ]
+    },
+    {
       "routeKey": "POST /api/agent/project/ai-navigation",
       "method": "POST",
       "template": "/api/agent/project/ai-navigation",
@@ -1635,15 +1714,15 @@
       "routeKey": "POST /api/agent/quick-fixes",
       "method": "POST",
       "template": "/api/agent/quick-fixes",
-      "owner": "agent-api",
+      "owner": "diagnostics.quick.fixes",
       "resourceClass": "stateless-analysis",
       "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1quick-fixes",
       "integrationBatch": "W3B0-internal",
       "history": "quiet",
       "capability": {
-        "kind": "reviewed-legacy",
-        "id": "POST /api/agent/quick-fixes",
-        "reviewRef": "docs/plans/2026-08-02-w3b0-action-receipt-coverage.md#review"
+        "kind": "canonical",
+        "id": "diagnostics.quick.fixes",
+        "version": 1
       },
       "semanticClass": "read-analysis-only",
       "policy": "receipt-exempt",
@@ -1722,6 +1801,35 @@
       "policy": "receipt-required",
       "effects": [
         "publish"
+      ],
+      "authorityScopes": [
+        "global",
+        "profile",
+        "workspace"
+      ]
+    },
+    {
+      "routeKey": "POST /api/agent/release/nexus/build",
+      "method": "POST",
+      "template": "/api/agent/release/nexus/build",
+      "owner": "release.nexus.prepare",
+      "resourceClass": "configured-root",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1release~1nexus~1build",
+      "integrationBatch": "W3B2",
+      "history": "visible",
+      "capability": {
+        "kind": "canonical",
+        "id": "release.nexus.prepare",
+        "version": 1
+      },
+      "semanticClass": "durable-local-mutation",
+      "policy": "receipt-required",
+      "effects": [
+        "filesystem-write",
+        "package",
+        "delete",
+        "audit-write",
+        "audit-retention-delete"
       ],
       "authorityScopes": [
         "global",
@@ -2021,6 +2129,33 @@
       "policy": "receipt-required",
       "effects": [
         "filesystem-write"
+      ],
+      "authorityScopes": [
+        "global",
+        "profile",
+        "workspace"
+      ]
+    },
+    {
+      "routeKey": "POST /api/agent/warning-reviews/revoke-review",
+      "method": "POST",
+      "template": "/api/agent/warning-reviews/revoke-review",
+      "owner": "reviews.warning.revoke",
+      "resourceClass": "configured-root",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1warning-reviews~1revoke-review",
+      "integrationBatch": "W3B1",
+      "history": "visible",
+      "capability": {
+        "kind": "canonical",
+        "id": "reviews.warning.revoke",
+        "version": 1
+      },
+      "semanticClass": "durable-local-mutation",
+      "policy": "receipt-required",
+      "effects": [
+        "filesystem-write",
+        "audit-write",
+        "audit-retention-delete"
       ],
       "authorityScopes": [
         "global",

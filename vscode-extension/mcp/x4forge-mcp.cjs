@@ -69,12 +69,16 @@ const DEPLOY_TOOLS = new Set([
   "apply_native_deploy",
   "get_deploy_operation_status",
   "undo_native_deploy",
+  "prepare_nexus_release",
+  "revoke_warning_review",
 ]);
 const DEPLOY_CAPABILITIES = new Set([
   "deploy.apply",
   "deploy.preview",
   "deploy.status",
   "deploy.undo",
+  "release.nexus.prepare",
+  "reviews.warning.revoke",
 ]);
 const WORKSPACE_FILES_TOOLS = new Set([
   "preview_bulk_transform",
@@ -84,6 +88,7 @@ const WORKSPACE_FILES_TOOLS = new Set([
   "write_workspace_file",
   "remove_workspace_file",
   "restore_workspace_file",
+  "apply_warning_suppression",
   "revert_action_history",
   "get_mod_drift",
   "import_mod_folder",
@@ -97,6 +102,7 @@ const WORKSPACE_FILES_CAPABILITIES = new Set([
   "files.restore",
   "files.write",
   "history.revert",
+  "rules.suppression.apply",
   "workspace.mod.drift",
   "workspace.mod.import",
 ]);
@@ -137,6 +143,10 @@ const DIAGNOSTIC_READ_LIVE_TOOLS = new Set([
   "list_patch_targets",
   "synthesize_xml_patch",
   "get_galaxy_map",
+  "check_xml_round_trip",
+  "suggest_quick_fixes",
+  "prepare_warning_suppression",
+  "verify_release_artifact",
 ]);
 const PERFORMANCE_PROFILE_HTTP_FAILURES = { PROFILE_DISABLED: 503, PROFILE_BUSY: 409, PROFILE_RATE_LIMITED: 429, PROFILE_DISPOSED: 503, PROFILE_INPUT_INVALID: 400, PROFILE_ABORTED: 408, PROFILE_FAILED: 500, PROFILE_CLEANUP_UNCONFIRMED: 409 };
 const PERFORMANCE_COLLECTION_HTTP_FAILURES = { PERFORMANCE_DISPOSED: 503, PERFORMANCE_COLLECTION_BUSY: 409, PERFORMANCE_COLLECTION_REFUSED: 409, PROJECT_INPUT_INVALID: 400, PERFORMANCE_COLLECTION_FAILED: 500 };
@@ -1837,6 +1847,244 @@ const TOOLS = [
       );
     },
   },
+  {
+    name: "check_xml_round_trip",
+    capabilityId: "workspace.roundtrip.check",
+    capabilityVersion: 1,
+    description: "Import a mod folder from Mod Workspace or deployed Filesystem in memory, compile its manifest, and verify lossless passthrough preservation, modeled XML byte equivalence, and zero dropped files without mutating disk or workspace state.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", maxLength: 1024 },
+        root: { type: "string", enum: ["workspace", "filesystem"] },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/mod-folder/round-trip", args),
+      "mod folder round-trip check",
+      {
+        ok: "boolean",
+        success: "boolean",
+        path: "string",
+        root: "string",
+        lossless: "boolean",
+        strictLossless: "boolean",
+        inputFileCount: "number",
+        outputFileCount: "number",
+        passthroughVerified: "number",
+        droppedFiles: "array",
+        passthroughMismatch: "array",
+        modeledByteChanged: "array",
+        importReport: "object",
+      },
+    ),
+  },
+  {
+    name: "suggest_quick_fixes",
+    capabilityId: "diagnostics.quick.fixes",
+    capabilityVersion: 1,
+    description: "List deterministic quick-fix and repair descriptors across the addressed Studio workspace graph using the server-owned ScriptProperty union (capped at 200).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "integer", minimum: 1, maximum: 200 },
+      },
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/quick-fixes", args),
+      "workspace quick fixes",
+      { ok: "boolean", total: "number", truncated: "boolean", fixes: "array" },
+    ),
+  },
+  {
+    name: "prepare_warning_suppression",
+    capabilityId: "rules.suppression.prepare",
+    capabilityVersion: 1,
+    description: "Reproduce an exact active full-project warning on a Mod Workspace mod folder (or the addressed Studio workspace) and return the expectedSha256 CAS token, suggested rule metadata defaults, and remediation guidance without mutating disk.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", maxLength: 1024 },
+        useAddressedWorkspace: { type: "boolean" },
+        scope: {
+          type: "object",
+          properties: {
+            code: { type: "string", maxLength: 128 },
+            file: { type: "string", maxLength: 1024 },
+            sourceRef: { type: "string", maxLength: 1024 },
+          },
+          required: ["code"],
+          additionalProperties: false,
+        },
+      },
+      required: ["scope"],
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/project-rules/suppression/prepare", args),
+      "warning suppression preparation",
+      {
+        ok: "boolean",
+        success: "boolean",
+        target: "string",
+        scope: "object",
+        defaults: "object",
+        existingSuppressions: "number",
+        explanation: "object",
+      },
+    ),
+  },
+  {
+    name: "apply_warning_suppression",
+    capabilityId: "rules.suppression.apply",
+    capabilityVersion: 1,
+    description: "Reproduce an exact active warning and CAS-commit a reviewed forge.rules.json v1 suppression rule inside Mod Workspace using expectedSha256 (or null when creating forge.rules.json), capturing an Action Ledger diff and undo-create recovery receipt. Requires an explicit key grant.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", maxLength: 1024 },
+        useAddressedWorkspace: { type: "boolean" },
+        scope: {
+          type: "object",
+          properties: {
+            code: { type: "string", maxLength: 128 },
+            file: { type: "string", maxLength: 1024 },
+            sourceRef: { type: "string", maxLength: 1024 },
+          },
+          required: ["code"],
+          additionalProperties: false,
+        },
+        expectedSha256: {
+          anyOf: [
+            { type: "string", maxLength: 64 },
+            { type: "null" },
+          ],
+        },
+        review: {
+          type: "object",
+          properties: {
+            id: { type: "string", maxLength: 128 },
+            owner: { type: "string", maxLength: 128 },
+            reason: { type: "string", maxLength: 1024 },
+            reviewBy: { type: "string", maxLength: 32 },
+          },
+          required: ["id", "owner", "reason", "reviewBy"],
+          additionalProperties: false,
+        },
+      },
+      required: ["scope", "expectedSha256", "review"],
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/project-rules/suppression/apply", args),
+      "warning suppression commit",
+      {
+        ok: "boolean",
+        success: "boolean",
+        status: "string",
+        target: "string",
+        rule: "object",
+        written: "object",
+        sourceHash: "string",
+      },
+    ),
+  },
+  {
+    name: "revoke_warning_review",
+    capabilityId: "reviews.warning.revoke",
+    capabilityVersion: 1,
+    description: "Record an immutable revocation receipt for a previously accepted deployment warning review belonging to the addressed workspace mod and source scope without modifying source or deployed game files. Requires an explicit deploy key grant.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        receiptId: { type: "string", maxLength: 67 },
+        reviewScopeHash: { type: "string", maxLength: 64 },
+        reason: { type: "string", maxLength: 512 },
+      },
+      required: ["receiptId", "reviewScopeHash", "reason"],
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/warning-reviews/revoke-review", args),
+      "warning review revocation",
+      { ok: "boolean", outcome: "string", scope: "string", receipt: "object", note: "string" },
+    ),
+  },
+  {
+    name: "prepare_nexus_release",
+    capabilityId: "release.nexus.prepare",
+    capabilityVersion: 1,
+    description: "Validate a mod source folder inside Mod Workspace (or the addressed Studio workspace), build a reopen-verified Nexus Mods release ZIP plus its .forge-release.json provenance report, and return redacted relative artifact filenames and SHA-256 receipts. Requires an explicit deploy key grant.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", maxLength: 1024 },
+        useAddressedWorkspace: { type: "boolean" },
+        bump: { type: "string", enum: ["none", "patch", "minor"] },
+      },
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/release/nexus/build", args),
+      "Nexus release preparation",
+      {
+        ok: "boolean",
+        success: "boolean",
+        status: "string",
+        platform: "string",
+        modId: "string",
+        folderName: "string",
+        version: "string",
+        artifactFile: "string",
+        reportFile: "string",
+        sha256: "string",
+        sizeBytes: "number",
+        fileCount: "number",
+        stages: "array",
+      },
+    ),
+  },
+  {
+    name: "verify_release_artifact",
+    capabilityId: "release.artifact.verify",
+    capabilityVersion: 1,
+    description: "Verify on disk that a prepared Nexus Mods ZIP or Steam Workshop backup ZIP inside the release output root matches its recorded .forge-release.json SHA-256, byte size, and source provenance without streaming raw binary bytes over stdio.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        platform: { type: "string", enum: ["nexus", "steam"] },
+        modId: { type: "string", maxLength: 256 },
+        artifactFile: { type: "string", maxLength: 256 },
+      },
+      required: ["platform", "modId", "artifactFile"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams({
+        platform: String(args.platform),
+        modId: String(args.modId),
+        artifactFile: String(args.artifactFile),
+      });
+      return requireResponse(
+        await forge("GET", `/api/agent/release/artifact/status?${q}`),
+        "release artifact verification",
+        {
+          ok: "boolean",
+          success: "boolean",
+          verified: "boolean",
+          platform: "string",
+          modId: "string",
+          artifactFile: "string",
+          reportFile: "string",
+          sha256: "string",
+          sizeBytes: "number",
+        },
+      );
+    },
+  },
 ];
 const STATIC_TOOL_NAMES = new Set(TOOLS.map((tool) => tool.name));
 STATIC_TOOL_NAMES.delete("runtime_debugger");
@@ -2974,7 +3222,7 @@ function deployGrantAllowed(capability, authority) {
 
 function workspaceFilesGrantAllowed(capability, authority) {
   const grant = authority.constraint;
-  const expectedVersion = capability.id === "history.revert" ? 2 : 1;
+  const expectedVersion = capability.id === "history.revert" || capability.id === "files.write" ? 2 : 1;
   return capability.version === expectedVersion && isRecord(grant)
     && grant.capabilityIdentities.includes(`${capability.id}@${expectedVersion}`)
     && capability.effects.every((effect) => grant.allowedEffects.includes(effect));
@@ -3260,11 +3508,14 @@ async function forge(method, apiPath, body, signal, nativeDiscovery = false) {
   if (WORKSPACE_ID) headers["x-workspace-id"] = WORKSPACE_ID;
   const nativeRoute = nativePerformanceRoute(method, apiPath);
   const configurationRoute = apiPath.startsWith("/api/agent/configuration");
-  const deployRoute = apiPath.startsWith("/api/agent/deploy-verify/");
+  const deployRoute = apiPath.startsWith("/api/agent/deploy-verify/")
+    || apiPath === "/api/agent/release/nexus/build"
+    || apiPath === "/api/agent/warning-reviews/revoke-review";
   const workspaceFilesRoute = apiPath.startsWith("/api/agent/files/")
     || apiPath.startsWith("/api/agent/bulk-transform/")
     || apiPath === "/api/agent/history/revert"
-    || apiPath.startsWith("/api/agent/mod-folder/");
+    || apiPath.startsWith("/api/agent/mod-folder/")
+    || apiPath.startsWith("/api/agent/project-rules/suppression/");
   const forwardsAuthoredSource = method === "POST" && AUTHORED_NAVIGATION_ROUTES.has(apiPath);
   const res = await fetch(`${BASE}${apiPath}`, {
     method,

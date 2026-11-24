@@ -305,6 +305,9 @@ async function main() {
     'write_workspace_file',
     'remove_workspace_file',
     'restore_workspace_file',
+    'apply_warning_suppression',
+    'prepare_nexus_release',
+    'revoke_warning_review',
     'revert_action_history',
     'get_mod_drift',
     'import_mod_folder',
@@ -408,9 +411,15 @@ async function main() {
           'files.write@2',
           'history.list@2',
           'history.revert@2',
+          'release.artifact.verify@1',
+          'release.nexus.prepare@1',
+          'reviews.warning.revoke@1',
+          'rules.suppression.apply@1',
+          'rules.suppression.prepare@1',
           'workspace.mod.drift@1',
           'workspace.mod.import@1',
           'workspace.read@2',
+          'workspace.roundtrip.check@1',
         ],
         allowedEffects: [
           'read',
@@ -419,6 +428,7 @@ async function main() {
           'audit-retention-delete',
           'workspace-write',
           'filesystem-write',
+          'package',
           'deploy',
           'delete',
         ],
@@ -831,6 +841,207 @@ async function main() {
       const replayViaHistory = await fullMcp.callTool('revert_action_history', { id: deleteRow.id });
       assert.equal(replayViaHistory.isError, true);
       assert.equal(replayViaHistory.payload?.code, 'RECOVERY_ALREADY_USED');
+    });
+
+    await check('8_round_trip_quick_fixes_warning_suppression_review_revoke_and_nexus_release_over_mcp', async () => {
+      const u28ModId = 'unit28_mcp_mod';
+      const u28ModDir = path.join(modsDir, u28ModId);
+      fs.mkdirSync(path.join(u28ModDir, 'md'), { recursive: true });
+      fs.mkdirSync(path.join(u28ModDir, 'aiscripts'), { recursive: true });
+      fs.writeFileSync(
+        path.join(u28ModDir, 'content.xml'),
+        `<?xml version="1.0" encoding="utf-8"?>\n<content id="${u28ModId}" name="Unit 28 MCP Mod" version="100" author="ForgeQA" date="2026-11-24" save="0" description="Unit 28 MCP verification mod"><text language="44" name="Unit 28 MCP Mod" description="Unit 28 MCP verification mod" author="ForgeQA"/></content>\n`,
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(u28ModDir, 'md', 'main.xml'),
+        '<?xml version="1.0" encoding="utf-8"?>\n<mdscript name="Unit28Main"><cues><cue name="Boot"><conditions><event_game_loaded/></conditions><actions><debug_text text="\'ok\'"/></actions></cue></cues></mdscript>\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(u28ModDir, 'aiscripts', 'legacy.xml'),
+        '<?xml version="1.0" encoding="utf-8"?>\n<aiscript name="Unit28Legacy"><attention min="unknown"><actions><do_if value="$ship.isexceedingmadscore"><debug_text text="\'warn\'"/></do_if></actions></attention></aiscript>\n',
+        'utf8',
+      );
+      const u28Scope = {
+        code: 'migration.deprecated_property',
+        file: 'aiscripts/legacy.xml',
+        sourceRef: '9.00:isexceedingmadscore',
+      };
+
+      // 1. Preset read MCP: check_xml_round_trip & suggest_quick_fixes & prepare_warning_suppression
+      const readList = ((await presetReadMcp.request('tools/list')).result?.tools || []).map((t: any) => t.name);
+      for (const readTool of ['check_xml_round_trip', 'suggest_quick_fixes', 'prepare_warning_suppression', 'verify_release_artifact']) {
+        assert(readList.includes(readTool), `preset read key missing ${readTool}`);
+      }
+
+      const rt = await presetReadMcp.callTool('check_xml_round_trip', { path: u28ModId, root: 'workspace' });
+      assert.equal(rt.isError, false, JSON.stringify(rt.payload));
+      assert.equal(rt.payload.ok, true);
+      assert.equal(rt.payload.lossless, true);
+      assert.equal(rt.payload.importReport?.folder, undefined);
+      assert(!JSON.stringify(rt.payload).includes(modsDir), 'check_xml_round_trip leaked host modsDir');
+
+      const qf = await presetReadMcp.callTool('suggest_quick_fixes', { limit: 20 });
+      assert.equal(qf.isError, false, JSON.stringify(qf.payload));
+      assert.equal(qf.payload.ok, true);
+      assert(Array.isArray(qf.payload.fixes));
+
+      const prep = await presetReadMcp.callTool('prepare_warning_suppression', {
+        path: u28ModId,
+        scope: u28Scope,
+      });
+      assert.equal(prep.isError, false, JSON.stringify(prep.payload));
+      assert.equal(prep.payload.ok, true);
+      assert.equal(prep.payload.expectedSha256, null);
+
+      // 2. Explicit grant apply_warning_suppression: CAS mismatch refused -> null expectedSha256 commits + undo-create recovery
+      const staleSuppress = await fullMcp.callTool('apply_warning_suppression', {
+        path: u28ModId,
+        scope: u28Scope,
+        expectedSha256: 'a'.repeat(64),
+        review: { ...prep.payload.defaults, owner: 'ForgeQA' },
+      });
+      assert.equal(staleSuppress.isError, true);
+      assert.equal(staleSuppress.payload?.code, 'RULES_FILE_CHANGED');
+
+      const appliedSuppress = await fullMcp.callTool('apply_warning_suppression', {
+        path: u28ModId,
+        scope: u28Scope,
+        expectedSha256: null,
+        review: { ...prep.payload.defaults, owner: 'ForgeQA' },
+      });
+      assert.equal(appliedSuppress.isError, false, JSON.stringify(appliedSuppress.payload));
+      assert.equal(appliedSuppress.payload.status, 'VERIFIED');
+      assert.equal(appliedSuppress.payload.recovery?.operation, 'undo-create');
+      assert.equal(fs.existsSync(path.join(u28ModDir, 'forge.rules.json')), true);
+
+      const dupPrep = await presetReadMcp.callTool('prepare_warning_suppression', {
+        path: u28ModId,
+        scope: u28Scope,
+      });
+      assert.equal(dupPrep.isError, true);
+      assert(String(dupPrep.payload).includes('not reproduced') || String(dupPrep.payload).includes('already declares'), JSON.stringify(dupPrep.payload));
+
+      const undoneRules = await fullMcp.callTool('restore_workspace_file', {
+        recoveryId: appliedSuppress.payload.recovery.id,
+      });
+      assert.equal(undoneRules.isError, false, JSON.stringify(undoneRules.payload));
+      assert.equal(fs.existsSync(path.join(u28ModDir, 'forge.rules.json')), false);
+
+      // 3. prepare_nexus_release + verify_release_artifact + tamper detection
+      const nexusBuilt = await fullMcp.callTool('prepare_nexus_release', {
+        path: u28ModId,
+        bump: 'patch',
+      });
+      assert.equal(nexusBuilt.isError, false, JSON.stringify(nexusBuilt.payload));
+      assert.equal(nexusBuilt.payload.status, 'VERIFIED');
+      assert.equal(nexusBuilt.payload.version, '101');
+      assert.equal(typeof nexusBuilt.payload.artifactFile, 'string');
+      assert(!JSON.stringify(nexusBuilt.payload).includes(modsDir), 'prepare_nexus_release leaked host modsDir');
+
+      const verifiedZip = await presetReadMcp.callTool('verify_release_artifact', {
+        platform: 'nexus',
+        modId: u28ModId,
+        artifactFile: nexusBuilt.payload.artifactFile,
+      });
+      assert.equal(verifiedZip.isError, false, JSON.stringify(verifiedZip.payload));
+      assert.equal(verifiedZip.payload.verified, true);
+      assert.equal(verifiedZip.payload.sha256, nexusBuilt.payload.sha256);
+
+      const badTraversalVerify = await presetReadMcp.callTool('verify_release_artifact', {
+        platform: 'nexus',
+        modId: u28ModId,
+        artifactFile: '../escape.zip',
+      });
+      assert.equal(badTraversalVerify.isError, true);
+
+      const zipOnDisk = path.join(modsDir, '.forge-builds', 'releases', 'nexus', nexusBuilt.payload.artifactFile);
+      fs.appendFileSync(zipOnDisk, Buffer.from([0x00]));
+      const tamperedVerify = await presetReadMcp.callTool('verify_release_artifact', {
+        platform: 'nexus',
+        modId: u28ModId,
+        artifactFile: nexusBuilt.payload.artifactFile,
+      });
+      assert.equal(tamperedVerify.isError, true);
+
+      // 4. Import u28ModId into a fresh workspace, accept warning on deploy-verify, and revoke via revoke_warning_review over MCP
+      const u28Client = 'client_u28_revoke';
+      const u28WsCreate = await httpJson(backend!.baseUrl, 'POST', '/api/agent/workspaces', STUDIO_TOKEN, {
+        clientId: u28Client,
+        name: u28ModId,
+      }, { 'x-client-id': u28Client, 'x-forge-operation-id': `create-${u28ModId}` });
+      assert.equal(u28WsCreate.status, 201);
+      const u28WsId = String(u28WsCreate.json!.workspaceId);
+      const u28Headers = { 'x-client-id': u28Client, 'x-workspace-id': u28WsId };
+
+      const u28Imp = await httpJson(backend!.baseUrl, 'POST', '/api/agent/mod-folder/import', STUDIO_TOKEN, {
+        path: u28ModId,
+        root: 'workspace',
+      }, u28Headers);
+      assert.equal(u28Imp.status, 200);
+      const u28SaveWs = await httpJson(backend!.baseUrl, 'POST', '/api/agent/workspace', STUDIO_TOKEN, {
+        workspace: u28Imp.json!.workspace,
+        force: true,
+      }, { ...u28Headers, 'x-forge-operation-id': `save-${u28ModId}` });
+      assert.equal(u28SaveWs.status, 200);
+
+      const dry1 = await httpJson(backend!.baseUrl, 'POST', '/api/agent/deploy-verify', STUDIO_TOKEN, {
+        path: u28ModId,
+        root: 'workspace',
+        dryRun: true,
+      }, u28Headers);
+      const finding = (dry1.json?.validation?.evidence?.findings || []).find((f: any) => f.severity === 'warning');
+      assert(finding, 'expected warning finding in dry1');
+      const acceptances = [{ findingId: finding.findingId, bindingHash: dry1.json!.bindingHash, reason: 'Reviewed deprecated element for MCP revoke test.' }];
+      const dry2 = await httpJson(backend!.baseUrl, 'POST', '/api/agent/deploy-verify', STUDIO_TOKEN, {
+        path: u28ModId,
+        root: 'workspace',
+        dryRun: true,
+        acceptances,
+      }, u28Headers);
+      const depApply = await httpJson(backend!.baseUrl, 'POST', '/api/agent/deploy-verify', STUDIO_TOKEN, {
+        path: u28ModId,
+        root: 'workspace',
+        dryRun: false,
+        acceptances,
+        expectedModId: dry2.json!.modId,
+        expectedSourceHash: dry2.json!.sourceHash,
+        expectedArtifactHash: dry2.json!.artifactHash,
+        expectedBindingHash: dry2.json!.bindingHash,
+        expectedTargetFingerprint: dry2.json!.targetFingerprint,
+      }, u28Headers);
+      assert.equal(depApply.status, 200, JSON.stringify(depApply.json));
+      const acceptanceReceiptId = String(depApply.json!.acceptanceRecords[0].id);
+      const reviewScopeHash = String(dry2.json!.validation.review.warningReviews.scopeHash);
+
+      const u28DeployMint = await httpJson(backend!.baseUrl, 'POST', '/api/agent/keys', STUDIO_TOKEN, {
+        label: 'u28-revoke-mcp',
+        scope: 'deploy',
+        ttl: '1h',
+        authorityMode: 'exact',
+        capabilityIdentities: ['reviews.warning.revoke@1'],
+        allowedEffects: ['filesystem-write', 'audit-write', 'audit-retention-delete'],
+      }, u28Headers);
+      assert.equal(u28DeployMint.status, 200);
+      const u28RevokeMcp = await openMcp(u28DeployMint.json!.token || u28DeployMint.json!.key, u28WsId);
+
+      const badRevoke = await u28RevokeMcp.callTool('revoke_warning_review', {
+        receiptId: acceptanceReceiptId,
+        reviewScopeHash: '0'.repeat(64),
+        reason: 'Wrong scope hash',
+      });
+      assert.equal(badRevoke.isError, true);
+      assert.equal(badRevoke.payload?.code, 'REVIEW_WORKSPACE_MISMATCH');
+
+      const okRevoke = await u28RevokeMcp.callTool('revoke_warning_review', {
+        receiptId: acceptanceReceiptId,
+        reviewScopeHash,
+        reason: 'Revoked warning acceptance over MCP',
+      });
+      assert.equal(okRevoke.isError, false, JSON.stringify(okRevoke.payload));
+      assert.equal(okRevoke.payload.ok, true);
+      assert.equal(okRevoke.payload.outcome, 'warning-review-revoked');
     });
   } finally {
     for (const s of mcpSessions) {

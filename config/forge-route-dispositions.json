@@ -2152,6 +2152,18 @@
       "resourceClass": "stateless-analysis",
       "workspaceMode": "optional"
     },
+    "GET /api/agent/release/artifact/status": {
+      "disposition": "canonical-capability",
+      "owner": "release.artifact.verify",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "optional"
+    },
     "GET /api/agent/request-deadline-selftest": {
       "disposition": "public-selftest",
       "owner": "runRequestDeadlineSelftest",
@@ -3401,6 +3413,18 @@
       "resourceClass": "configured-root",
       "workspaceMode": "optional"
     },
+    "POST /api/agent/mod-folder/round-trip": {
+      "disposition": "canonical-capability",
+      "owner": "workspace.roundtrip.check",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "optional"
+    },
     "POST /api/agent/mod-folder/sync": {
       "disposition": "canonical-capability",
       "owner": "workspace.mod.import",
@@ -3567,6 +3591,29 @@
       "resourceClass": "configured-root",
       "workspaceMode": "optional"
     },
+    "POST /api/agent/project-rules/suppression/apply": {
+      "disposition": "canonical-capability",
+      "owner": "rules.suppression.apply",
+      "registrations": 1,
+      "agentScopes": [
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "optional"
+    },
+    "POST /api/agent/project-rules/suppression/prepare": {
+      "disposition": "canonical-capability",
+      "owner": "rules.suppression.prepare",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "optional"
+    },
     "POST /api/agent/project/ai-navigation": {
       "disposition": "canonical-capability",
       "owner": "project.ai.navigation",
@@ -3703,8 +3750,8 @@
       "workspaceMode": "optional"
     },
     "POST /api/agent/quick-fixes": {
-      "disposition": "legacy-agent-api",
-      "owner": "agent-api",
+      "disposition": "canonical-capability",
+      "owner": "diagnostics.quick.fixes",
       "registrations": 1,
       "agentScopes": [
         "read",
@@ -3741,6 +3788,16 @@
       "owner": "release-center",
       "registrations": 1,
       "agentScopes": [],
+      "resourceClass": "configured-root",
+      "workspaceMode": "optional"
+    },
+    "POST /api/agent/release/nexus/build": {
+      "disposition": "canonical-capability",
+      "owner": "release.nexus.prepare",
+      "registrations": 1,
+      "agentScopes": [
+        "deploy"
+      ],
       "resourceClass": "configured-root",
       "workspaceMode": "optional"
     },
@@ -3860,6 +3917,16 @@
     "POST /api/agent/warning-reviews/revoke": {
       "disposition": "legacy-agent-api",
       "owner": "agent-api",
+      "registrations": 1,
+      "agentScopes": [
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "optional"
+    },
+    "POST /api/agent/warning-reviews/revoke-review": {
+      "disposition": "canonical-capability",
+      "owner": "reviews.warning.revoke",
       "registrations": 1,
       "agentScopes": [
         "deploy"
@@ -4239,6 +4306,7 @@
     "deploy.preview@1": "cab52d43361a162fb4aa347be706a919ae2c5b3fefe6b7735585bb8258053f31",
     "deploy.status@1": "73c102208ddb9f5e5407b8d49208436811e3eef68cd537594e5c4cf5b638bc9f",
     "deploy.undo@1": "61c623c853ed15fd2db7347809c67d0edabfebf56c6832c9d8ac0e21d05540cd",
+    "diagnostics.quick.fixes@1": "06e74c52441407c2c149556c5f677a4ec2cb543a1adfcf8e94582c7625982999",
     "expression.check@1": "5bedec028862120254402ce60402204db079705db1d6ce27f16834ae77ddea8d",
     "expression.inspect@1": "d9422df0de7b99ace351d90aad971baea0fe35d8fc6798c15a1a304dbd275f29",
     "expression.suggest@1": "29019041cfdc937b9c4efd3ee7fc31df73084d07a60003225f28ad0d40172873",
@@ -4274,6 +4342,11 @@
     "reference.objects.search@1": "20b6c432adf4165f59a0edbd7b04df9a5820773ec0a67b49d4607acef9a8a314",
     "reference.status.read@1": "5320a3b3f91fc1d544c9a0b5f4e00e516516865efe15125608521c438038fc1f",
     "reference.suggest@1": "fc01662e1f79253fb811f0a4e0925e3d899b99cf80308a36f10fc243e761460e",
+    "release.artifact.verify@1": "982cbd370f63feb26041604b120bd942fb5a29f49d93d75bedb2495b033b6194",
+    "release.nexus.prepare@1": "923448d633c4515229549a262502c8affada3a5d9e980f80d8f947783f097b21",
+    "reviews.warning.revoke@1": "3d80060fb8113975fffa10d1ef1eadf7f9a2e85ea58fd5c70181db34acd8c775",
+    "rules.suppression.apply@1": "6e13f1e54fa0e700a3406dbcaadcbb830915cba87c26997a6015d07cd6e73178",
+    "rules.suppression.prepare@1": "a056605dac950c518a149a2b85c4a0ad6824b1ec2a842f4213e3d267fc294a05",
     "runtime.debug.read@1": "8d0d15b310655431fa08afdf161575c5873a62261f1e511e9b0ccf9260d84311",
     "runtime.log.diagnose@1": "a5b1ef6f5323695f7ca5a3a47c0bbf103cca4777ef163913528a4838d843d589",
     "schema.domains.list@1": "c2ecae2906cf231eb4384a63ea601c7449f4fc691b629b97bff9fa81e32f21b5",
@@ -4285,11 +4358,12 @@
     "workspace.generate.preview@1": "76630ed9e34f95a4cc895088e0d3def92d5f3b2bb223d071e1e5a4fc1b4f6add",
     "workspace.mod.drift@1": "71b738bfb4bf4275911c937d958b39ee32e0a81cd7de14a4598fb04ae4b787a5",
     "workspace.mod.import@1": "9b3d03c3cae968638eec281fb758479cce07557dbc99048b8aafde06224307eb",
-    "workspace.read@2": "962774de4a25e8725a0d90d4982298cc72f100312075b1f6f4ff9de1482752d7"
+    "workspace.read@2": "962774de4a25e8725a0d90d4982298cc72f100312075b1f6f4ff9de1482752d7",
+    "workspace.roundtrip.check@1": "c1a1c89c1eb3f44f8f16e6ca03e9787318eec5065bcf25dd2c3ce3a4b4045185"
   },
   "mcpModuleSignature": {
-    "version": 30,
-    "hash": "b905f886291c5865b330c59e573547e5f4931adefa578ceff93cd082ecea505f"
+    "version": 31,
+    "hash": "c16d9e2315052cdd743c9b4efbd96a8e16a9b0a1b815213c061e515079f031ab"
   },
   "mcpSignatures": {
     "validate_mod": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",
@@ -4351,7 +4425,14 @@
     "get_extension_override_map": "d6b5e990a9f87bfc700e88b0c0ca0e3c93883a970841fc1ffadb79460a9369e0",
     "list_patch_targets": "04ad91d7d989ddf27bd0b0dcf922862067fa5c61b5711715e0c09f745e2aa225",
     "synthesize_xml_patch": "2a0e6d0507c2ce231b19ce01171774f0b1b67787024071a15822d3911fce1696",
-    "get_galaxy_map": "4a5b266fe78901c2836727d9c7f25255ec0f71cff17bdbbc37f874821b7e66f3"
+    "get_galaxy_map": "4a5b266fe78901c2836727d9c7f25255ec0f71cff17bdbbc37f874821b7e66f3",
+    "check_xml_round_trip": "2af6d5bb7d2f6941b10432ee299a8daf330feeb8d97cefdf070df19381e5bf90",
+    "suggest_quick_fixes": "2ada5fe9f7d0194456d8a03325d1b81568dab75113d2b4f05083aaa6a59e4ae7",
+    "prepare_warning_suppression": "8f0a41be04624c67c224695eece6cc5681a2cd2cd73200c4d010abd1205670c2",
+    "apply_warning_suppression": "9d0fa5a98d5c7dce21f381b0cffc013659535a6c62bd4f77a456be5dad8dc075",
+    "revoke_warning_review": "cd9b9030508df0b946fbc1a0fa20811c5727220aa39606c9168843686463293e",
+    "prepare_nexus_release": "5921855cfac168fc070bc349de2dc39db783ae2576d318de659990ea50f00416",
+    "verify_release_artifact": "0feddbb6318b12db5d04e4e26f521f6b7ea2c6d1500dbc3738cfeb3a7fbfeede"
   },
   "mcpCapabilityIdentities": {
     "validate_mod": "project.validate@1",
@@ -4413,6 +4494,13 @@
     "get_extension_override_map": "extensions.overrides.analyze@1",
     "list_patch_targets": "patch.targets.list@1",
     "synthesize_xml_patch": "patch.xpath.synthesize@1",
-    "get_galaxy_map": "reference.galaxy.read@1"
+    "get_galaxy_map": "reference.galaxy.read@1",
+    "check_xml_round_trip": "workspace.roundtrip.check@1",
+    "suggest_quick_fixes": "diagnostics.quick.fixes@1",
+    "prepare_warning_suppression": "rules.suppression.prepare@1",
+    "apply_warning_suppression": "rules.suppression.apply@1",
+    "revoke_warning_review": "reviews.warning.revoke@1",
+    "prepare_nexus_release": "release.nexus.prepare@1",
+    "verify_release_artifact": "release.artifact.verify@1"
   }
 }

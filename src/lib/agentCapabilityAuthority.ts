@@ -80,6 +80,8 @@ export const DEPLOY_EXPLICIT_GRANT_CAPABILITIES = [
   'deploy.preview',
   'deploy.status',
   'deploy.undo',
+  'release.nexus.prepare',
+  'reviews.warning.revoke',
 ] as const;
 export const WORKSPACE_FILES_EXPLICIT_GRANT_CAPABILITIES = [
   'bulk.transform.apply',
@@ -90,6 +92,7 @@ export const WORKSPACE_FILES_EXPLICIT_GRANT_CAPABILITIES = [
   'files.restore',
   'files.write',
   'history.revert',
+  'rules.suppression.apply',
   'workspace.mod.drift',
   'workspace.mod.import',
 ] as const;

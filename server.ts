@@ -1225,6 +1225,13 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
       || authority.decision.routeKey === 'POST /api/fs/restore-file'
       || authority.decision.routeKey === 'POST /api/agent/history/revert'
       || authority.decision.routeKey === 'POST /api/agent/mod-folder/sync'
+      || authority.decision.routeKey === 'POST /api/agent/mod-folder/round-trip'
+      || authority.decision.routeKey === 'POST /api/agent/project-rules/suppression/prepare'
+      || authority.decision.routeKey === 'POST /api/agent/project-rules/suppression/apply'
+      || authority.decision.routeKey === 'POST /api/agent/quick-fixes'
+      || authority.decision.routeKey === 'POST /api/agent/warning-reviews/revoke-review'
+      || authority.decision.routeKey === 'POST /api/agent/release/nexus/build'
+      || authority.decision.routeKey === 'GET /api/agent/release/artifact/status'
       || (authority.decision.routeKey === 'GET /api/agent/status'
         && (req.query.inspectDeployTarget !== undefined || req.query.inspectDeployEffect !== undefined))
       || authority.decision.routeKey === 'POST /api/agent/history/:id/revert'
@@ -1403,8 +1410,10 @@ function ledgerMiddleware(req: express.Request, res: express.Response, next: exp
   if (kind === 'edit') {
     try {
       const resolvedRoot = resolveXsdConfig().modWorkspacePath;
-      if (fullPath === '/api/agent/project-rules/suppress' && resolvedRoot) {
-        const sourceValue = String((req.body as any)?.workspace?.sourceStamp?.dir || (req.body as any)?.workspace?.sourceFolder || '').trim();
+      if ((fullPath === '/api/agent/project-rules/suppress' || fullPath === '/api/agent/project-rules/suppression/apply') && resolvedRoot) {
+        const sourceValue = fullPath === '/api/agent/project-rules/suppression/apply'
+          ? String((req.body as any)?.path || ledgerWorkspace?.workspace?.sourceStamp?.dir || ledgerWorkspace?.workspace?.sourceFolder || '').trim()
+          : String((req.body as any)?.workspace?.sourceStamp?.dir || (req.body as any)?.workspace?.sourceFolder || '').trim();
         if (sourceValue) {
           const source = path.resolve(path.isAbsolute(sourceValue) ? sourceValue : path.join(resolvedRoot, sourceValue));
           if (source !== path.resolve(resolvedRoot) && isPathWithin(source, resolvedRoot)) {
@@ -10354,87 +10363,132 @@ app.get("/api/agent/round-trip-selftest", (req, res) => {
   }
 });
 
+function evaluateModFolderRoundTrip(absDir: string, redactHostFolder: boolean) {
+  const { workspace, report } = importModFolder(absDir);
+  const { files } = buildWorkspaceFileManifest(workspace);
+  const outPaths = new Set(Object.keys(files).map(p => p.toLowerCase()));
+
+  const inputFiles = walkFilesRelative(absDir);
+  const droppedFiles: string[] = [];
+  const passthroughVerified: string[] = [];
+  const omittedPreserved: string[] = [];
+  const passthroughMismatch: any[] = [];
+  const modeledChanged: string[] = [];
+  const modeledByteChanged: any[] = [];
+  const modeledByteIdentical: string[] = [];
+
+  for (const rel of inputFiles) {
+    const ext = path.extname(rel).toLowerCase();
+    const inputAbs = path.join(absDir, rel);
+    const inputContent = ROUND_TRIP_TEXT_EXTS.has(ext) ? fs.readFileSync(inputAbs, 'utf8') : undefined;
+    const inPassthrough = workspaceSourceFiles(workspace).find(p => p.path.toLowerCase() === rel.toLowerCase());
+    if (inPassthrough) {
+      if (inPassthrough.omitted) {
+        omittedPreserved.push(rel);
+        continue;
+      }
+      const outContent = files[inPassthrough.path] ?? files[rel];
+      if (outContent === undefined) {
+        droppedFiles.push(rel);
+      } else if (outContent === inPassthrough.content) {
+        passthroughVerified.push(rel);
+      } else {
+        passthroughMismatch.push({ path: rel, inLen: inPassthrough.content.length, outLen: outContent.length });
+      }
+      continue;
+    }
+    if (outPaths.has(rel.toLowerCase())) {
+      modeledChanged.push(rel); // present in output but regenerated/modeled
+      if (inputContent !== undefined) {
+        const outKey = Object.keys(files).find(p => p.toLowerCase() === rel.toLowerCase()) || rel;
+        const outContent = files[outKey];
+        if (outContent === inputContent) {
+          modeledByteIdentical.push(rel);
+        } else {
+          modeledByteChanged.push({
+            path: rel,
+            inLen: inputContent.length,
+            outLen: String(outContent ?? '').length
+          });
+        }
+      }
+    } else if (!ROUND_TRIP_TEXT_EXTS.has(ext)) {
+      // binary, intentionally not modeled — report separately, not a "drop"
+      modeledChanged.push(rel + ' (binary, not modeled)');
+    } else {
+      droppedFiles.push(rel);
+    }
+  }
+
+  const lossless = droppedFiles.length === 0 && passthroughMismatch.length === 0;
+  const strictLossless = lossless && modeledByteChanged.length === 0;
+  const safeReport = redactHostFolder
+    ? (() => {
+      const copy = { ...(report as Record<string, unknown>) };
+      delete copy.folder;
+      return copy;
+    })()
+    : report;
+  return {
+    success: true,
+    lossless,
+    strictLossless,
+    inputFileCount: inputFiles.length,
+    outputFileCount: Object.keys(files).length,
+    passthroughVerified: passthroughVerified.length,
+    omittedPreserved: omittedPreserved.length,
+    omittedPreservedFiles: omittedPreserved,
+    passthroughMismatch,
+    modeledOrRegenerated: modeledChanged.length,
+    modeledOrRegeneratedFiles: modeledChanged,
+    modeledByteIdentical,
+    modeledByteChanged,
+    droppedFiles,
+    importReport: safeReport,
+  };
+}
+
 app.post("/api/agent/round-trip-check", (req, res) => {
   try {
     const r = resolveModFolder(req.body?.path, req.body?.root);
     if ('error' in r) return res.status(r.status).json({ error: r.error });
-    const { workspace, report } = importModFolder(r.abs);
-    const { files } = buildWorkspaceFileManifest(workspace);
-    const outPaths = new Set(Object.keys(files).map(p => p.toLowerCase()));
+    return res.json(evaluateModFolderRoundTrip(r.abs, false));
+  } catch (error) {
+    return res.status(500).json({ error: errorMessage(error) || 'round-trip-check failed' });
+  }
+});
 
-    const inputFiles = walkFilesRelative(r.abs);
-    const droppedFiles: string[] = [];
-    const passthroughVerified: string[] = [];
-    const omittedPreserved: string[] = [];
-    const passthroughMismatch: any[] = [];
-    const modeledChanged: string[] = [];
-    const modeledByteChanged: any[] = [];
-    const modeledByteIdentical: string[] = [];
-
-    for (const rel of inputFiles) {
-      const ext = path.extname(rel).toLowerCase();
-      const inputAbs = path.join(r.abs, rel);
-      const inputContent = ROUND_TRIP_TEXT_EXTS.has(ext) ? fs.readFileSync(inputAbs, 'utf8') : undefined;
-      const inPassthrough = workspaceSourceFiles(workspace).find(p => p.path.toLowerCase() === rel.toLowerCase());
-      if (inPassthrough) {
-        if (inPassthrough.omitted) {
-          omittedPreserved.push(rel);
-          continue;
-        }
-        const outContent = files[inPassthrough.path] ?? files[rel];
-        if (outContent === undefined) {
-          droppedFiles.push(rel);
-        } else if (outContent === inPassthrough.content) {
-          passthroughVerified.push(rel);
-        } else {
-          passthroughMismatch.push({ path: rel, inLen: inPassthrough.content.length, outLen: outContent.length });
-        }
-        continue;
-      }
-      if (outPaths.has(rel.toLowerCase())) {
-        modeledChanged.push(rel); // present in output but regenerated/modeled
-        if (inputContent !== undefined) {
-          const outKey = Object.keys(files).find(p => p.toLowerCase() === rel.toLowerCase()) || rel;
-          const outContent = files[outKey];
-          if (outContent === inputContent) {
-            modeledByteIdentical.push(rel);
-          } else {
-            modeledByteChanged.push({
-              path: rel,
-              inLen: inputContent.length,
-              outLen: String(outContent ?? '').length
-            });
-          }
-        }
-      } else if (!ROUND_TRIP_TEXT_EXTS.has(ext)) {
-        // binary, intentionally not modeled — report separately, not a "drop"
-        modeledChanged.push(rel + ' (binary, not modeled)');
-      } else {
-        droppedFiles.push(rel);
-      }
+app.post("/api/agent/mod-folder/round-trip", (req, res) => {
+  try {
+    if (!isPlainRecord(req.body)) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'workspace.roundtrip.check requires a JSON object body.' });
     }
-
-    const lossless = droppedFiles.length === 0 && passthroughMismatch.length === 0;
-    const strictLossless = lossless && modeledByteChanged.length === 0;
+    const extra = unknownObjectKeys(req.body, new Set(['path', 'root']));
+    if (extra.length > 0) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: `workspace.roundtrip.check does not accept: ${extra.join(', ')}` });
+    }
+    if (typeof req.body.path !== 'string' || !req.body.path.trim() || req.body.path.length > 1024 || req.body.path.includes('\0') || path.isAbsolute(req.body.path)) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'workspace.roundtrip.check path must be a non-empty relative mod folder string.' });
+    }
+    if (req.body.root !== undefined && req.body.root !== 'workspace' && req.body.root !== 'filesystem') {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'workspace.roundtrip.check root must be "workspace" or "filesystem".' });
+    }
+    const r = resolveModFolder(req.body.path.trim(), req.body.root as 'workspace' | 'filesystem' | undefined);
+    if ('error' in r) {
+      return res.status(r.status).json({ ok: false, success: false, code: 'MOD_FOLDER_INVALID', error: r.error });
+    }
+    const resolvedCfg = resolveXsdConfig();
+    const resolvedRootLabel = resolvedCfg.modWorkspacePath && isPathWithin(r.abs, resolvedCfg.modWorkspacePath)
+      ? 'workspace'
+      : 'filesystem';
     return res.json({
-      success: true,
-      lossless,
-      strictLossless,
-      inputFileCount: inputFiles.length,
-      outputFileCount: Object.keys(files).length,
-      passthroughVerified: passthroughVerified.length,
-      omittedPreserved: omittedPreserved.length,
-      omittedPreservedFiles: omittedPreserved,
-      passthroughMismatch,
-      modeledOrRegenerated: modeledChanged.length,
-      modeledOrRegeneratedFiles: modeledChanged,
-      modeledByteIdentical,
-      modeledByteChanged,
-      droppedFiles,
-      importReport: report
+      ok: true,
+      path: req.body.path.trim().replace(/\\/g, '/'),
+      root: resolvedRootLabel,
+      ...evaluateModFolderRoundTrip(r.abs, true),
     });
   } catch (error) {
-    return res.status(500).json({ error: error.message || 'round-trip-check failed' });
+    return res.status(500).json({ ok: false, success: false, code: 'ROUND_TRIP_CHECK_FAILED', error: errorMessage(error) || 'round-trip-check failed' });
   }
 });
 
@@ -11994,6 +12048,132 @@ function suppressionPreparation(workspaceInput: unknown, scopeInput: unknown, no
   };
 }
 
+function resolveAgentModWorkspaceSelection(
+  req: express.Request,
+  res: express.Response,
+  body: Record<string, unknown>,
+  capabilityLabel: string,
+): ModWorkspace | null {
+  const hasPath = body.path !== undefined;
+  const useAddressed = body.useAddressedWorkspace === true;
+  if (hasPath === useAddressed) {
+    res.status(400).json({
+      ok: false,
+      success: false,
+      code: 'CAPABILITY_INPUT_INVALID',
+      error: `${capabilityLabel} requires either path or useAddressedWorkspace: true (not both).`,
+    });
+    return null;
+  }
+  if (hasPath) {
+    if (typeof body.path !== 'string' || !body.path.trim() || body.path.length > 1024 || body.path.includes('\0') || path.isAbsolute(body.path)) {
+      res.status(400).json({
+        ok: false,
+        success: false,
+        code: 'CAPABILITY_INPUT_INVALID',
+        error: `${capabilityLabel} path must be a non-empty relative mod folder string inside Mod Workspace.`,
+      });
+      return null;
+    }
+    const folder = resolveModFolder(body.path.trim(), 'workspace');
+    if ('error' in folder) {
+      res.status(folder.status).json({ ok: false, success: false, code: 'MOD_FOLDER_INVALID', error: folder.error });
+      return null;
+    }
+    return importModFolder(folder.abs).workspace;
+  }
+  const addressed = resolveWorkspaceAuthority(req, res, true);
+  if (!addressed) return null;
+  return sanitizeWorkspace(addressed.workspace);
+}
+
+function executeWarningSuppressionCommit(
+  req: express.Request,
+  res: express.Response,
+  workspaceInput: unknown,
+  scopeInput: unknown,
+  expected: unknown,
+  reviewInput: unknown,
+  includeUndoCreateRecovery = false,
+) {
+  const resolved = resolveXsdConfig();
+  if (rejectUnsafeDevelopmentWrite(res, resolved, ['modWorkspacePath'])) return;
+  const prepared = suppressionPreparation(workspaceInput, scopeInput);
+  if ('status' in prepared) {
+    return res.status(prepared.status).json({
+      ok: false,
+      success: false,
+      code: prepared.code,
+      error: prepared.error,
+      ...(prepared.details ? { details: prepared.details } : {}),
+    });
+  }
+  if (expected !== prepared.rules.expectedSha256) {
+    return res.status(409).json({
+      ok: false,
+      success: false,
+      code: 'RULES_FILE_CHANGED',
+      error: 'forge.rules.json changed after the confirmation was prepared. Review the current file and try again.',
+      expectedSha256: expected,
+      currentSha256: prepared.rules.expectedSha256,
+    });
+  }
+  const review = isPlainRecord(reviewInput) ? reviewInput : {};
+  const rule: WarningSuppressionRule = {
+    id: String(review.id || '').trim(),
+    owner: String(review.owner || '').trim(),
+    reason: String(review.reason || '').trim(),
+    reviewBy: String(review.reviewBy || '').trim(),
+    code: prepared.scope.code,
+    ...(prepared.scope.file ? { file: prepared.scope.file } : {}),
+    ...(prepared.scope.sourceRef ? { sourceRef: prepared.scope.sourceRef } : {}),
+  };
+  const candidate = JSON.parse(JSON.stringify(prepared.rules.raw)) as Record<string, unknown>;
+  candidate.version = 1;
+  candidate.suppressions = [...(Array.isArray(candidate.suppressions) ? candidate.suppressions : []), rule];
+  if (!candidate.contracts || typeof candidate.contracts !== 'object' || Array.isArray(candidate.contracts)) {
+    candidate.contracts = { knownChains: [], wireKeys: [], expectedRegisters: [] };
+  }
+  const content = `${JSON.stringify(candidate, null, 2)}\n`;
+  const evaluation = parseProjectRules({ id: 'rules-commit', name: 'rules-commit', files: [{ path: PROJECT_RULES_PATH, kind: 'other', content }] });
+  if (!evaluation.valid) {
+    return res.status(422).json({
+      ok: false,
+      success: false,
+      code: 'INVALID_SUPPRESSION_REVIEW',
+      error: 'The reviewed suppression does not satisfy forge.rules.json v1.',
+      details: evaluation.findings,
+    });
+  }
+  const currentSha256 = fs.existsSync(prepared.target.rulesPath) ? hashArtifactFile(prepared.target.rulesPath) : null;
+  if (currentSha256 !== expected) {
+    return res.status(409).json({
+      ok: false,
+      success: false,
+      code: 'RULES_FILE_CHANGED',
+      error: 'forge.rules.json changed before the write. Nothing was written.',
+      expectedSha256: expected,
+      currentSha256,
+    });
+  }
+  const result = writeWorkspaceFileGuarded(res, prepared.target.relativeRulesPath, content);
+  if (!result) return;
+  const recovery = includeUndoCreateRecovery && expected === null && resolved.modWorkspacePath
+    ? createUndoCreateFileRecovery(req, resolved.modWorkspacePath, prepared.target.rulesPath, result.written.sha256)
+    : undefined;
+  const sourceHash = hashFolderFingerprint(fingerprintModFolder(prepared.target.sourceRoot));
+  return res.json({
+    ok: true,
+    success: true,
+    status: 'VERIFIED',
+    target: prepared.target.relativeRulesPath,
+    rule,
+    written: result.written,
+    sourceHash,
+    ...(recovery ? { recovery } : {}),
+  });
+}
+
 app.post('/api/agent/project-rules/prepare-suppression', (req, res) => {
   try {
     const prepared = suppressionPreparation(req.body?.workspace, req.body?.scope);
@@ -12014,48 +12194,96 @@ app.post('/api/agent/project-rules/prepare-suppression', (req, res) => {
 
 app.post('/api/agent/project-rules/suppress', coordinatedSourceOperation((req, res) => {
   try {
-    const resolved = resolveXsdConfig();
-    if (rejectUnsafeDevelopmentWrite(res, resolved, ['modWorkspacePath'])) return;
     if (!Object.prototype.hasOwnProperty.call(req.body || {}, 'expectedSha256')) {
       return res.status(400).json({ success: false, code: 'EXPECTED_HASH_REQUIRED', error: 'Prepare the suppression first and send its expectedSha256 value.' });
     }
-    const prepared = suppressionPreparation(req.body?.workspace, req.body?.scope);
-    if ('status' in prepared) return res.status(prepared.status).json({ success: false, code: prepared.code, error: prepared.error, ...(prepared.details ? { details: prepared.details } : {}) });
-    const expected = req.body.expectedSha256;
-    if (expected !== prepared.rules.expectedSha256) {
-      return res.status(409).json({ success: false, code: 'RULES_FILE_CHANGED', error: 'forge.rules.json changed after the confirmation was prepared. Review the current file and try again.', expectedSha256: expected, currentSha256: prepared.rules.expectedSha256 });
-    }
-    const review = req.body?.review || {};
-    const rule: WarningSuppressionRule = {
-      id: String(review.id || '').trim(),
-      owner: String(review.owner || '').trim(),
-      reason: String(review.reason || '').trim(),
-      reviewBy: String(review.reviewBy || '').trim(),
-      code: prepared.scope.code,
-      ...(prepared.scope.file ? { file: prepared.scope.file } : {}),
-      ...(prepared.scope.sourceRef ? { sourceRef: prepared.scope.sourceRef } : {}),
-    };
-    const candidate = JSON.parse(JSON.stringify(prepared.rules.raw)) as Record<string, unknown>;
-    candidate.version = 1;
-    candidate.suppressions = [...(Array.isArray(candidate.suppressions) ? candidate.suppressions : []), rule];
-    if (!candidate.contracts || typeof candidate.contracts !== 'object' || Array.isArray(candidate.contracts)) {
-      candidate.contracts = { knownChains: [], wireKeys: [], expectedRegisters: [] };
-    }
-    const content = `${JSON.stringify(candidate, null, 2)}\n`;
-    const evaluation = parseProjectRules({ id: 'rules-commit', name: 'rules-commit', files: [{ path: PROJECT_RULES_PATH, kind: 'other', content }] });
-    if (!evaluation.valid) {
-      return res.status(422).json({ success: false, code: 'INVALID_SUPPRESSION_REVIEW', error: 'The reviewed suppression does not satisfy forge.rules.json v1.', details: evaluation.findings });
-    }
-    const currentSha256 = fs.existsSync(prepared.target.rulesPath) ? hashArtifactFile(prepared.target.rulesPath) : null;
-    if (currentSha256 !== expected) {
-      return res.status(409).json({ success: false, code: 'RULES_FILE_CHANGED', error: 'forge.rules.json changed before the write. Nothing was written.', expectedSha256: expected, currentSha256 });
-    }
-    const result = writeWorkspaceFileGuarded(res, prepared.target.relativeRulesPath, content);
-    if (!result) return;
-    const sourceHash = hashFolderFingerprint(fingerprintModFolder(prepared.target.sourceRoot));
-    return res.json({ success: true, status: 'VERIFIED', target: prepared.target.relativeRulesPath, rule, written: result.written, sourceHash });
+    return executeWarningSuppressionCommit(req, res, req.body?.workspace, req.body?.scope, req.body?.expectedSha256, req.body?.review, false);
   } catch (error) {
     return res.status(500).json({ success: false, code: 'SUPPRESSION_WRITE_FAILED', error: errorMessage(error) || 'Suppression write failed.' });
+  }
+}));
+
+app.post('/api/agent/project-rules/suppression/prepare', (req, res) => {
+  try {
+    if (!isPlainRecord(req.body)) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'rules.suppression.prepare requires a JSON object body.' });
+    }
+    const extra = unknownObjectKeys(req.body, new Set(['path', 'useAddressedWorkspace', 'scope']));
+    if (extra.length > 0) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: `rules.suppression.prepare does not accept: ${extra.join(', ')}` });
+    }
+    if (req.body.useAddressedWorkspace !== undefined && typeof req.body.useAddressedWorkspace !== 'boolean') {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'rules.suppression.prepare useAddressedWorkspace must be boolean.' });
+    }
+    if (!isPlainRecord(req.body.scope)) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'rules.suppression.prepare scope must be a JSON object.' });
+    }
+    const extraScope = unknownObjectKeys(req.body.scope, new Set(['code', 'file', 'sourceRef']));
+    if (extraScope.length > 0) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: `rules.suppression.prepare scope does not accept: ${extraScope.join(', ')}` });
+    }
+    const workspace = resolveAgentModWorkspaceSelection(req, res, req.body, 'rules.suppression.prepare');
+    if (!workspace) return;
+    const prepared = suppressionPreparation(workspace, req.body.scope);
+    if ('status' in prepared) {
+      return res.status(prepared.status).json({
+        ok: false,
+        success: false,
+        code: prepared.code,
+        error: prepared.error,
+        ...(prepared.details ? { details: prepared.details } : {}),
+      });
+    }
+    return res.json({
+      ok: true,
+      success: true,
+      target: prepared.target.relativeRulesPath,
+      scope: prepared.scope,
+      expectedSha256: prepared.rules.expectedSha256,
+      defaults: prepared.defaults,
+      existingSuppressions: prepared.rules.evaluation.config?.suppressions.length || 0,
+      explanation: explainDiagnostic({ severity: 'warning', code: prepared.scope.code, filePath: prepared.scope.file, message: 'Exact warning selected for reviewed suppression.' }),
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, success: false, code: 'SUPPRESSION_PREPARE_FAILED', error: errorMessage(error) || 'Suppression preparation failed.' });
+  }
+});
+
+app.post('/api/agent/project-rules/suppression/apply', (req, res, next) => {
+  if (!isPlainRecord(req.body)) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'rules.suppression.apply requires a JSON object body.' });
+  }
+  const extra = unknownObjectKeys(req.body, new Set(['path', 'useAddressedWorkspace', 'scope', 'expectedSha256', 'review']));
+  if (extra.length > 0) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: `rules.suppression.apply does not accept: ${extra.join(', ')}` });
+  }
+  if (req.body.useAddressedWorkspace !== undefined && typeof req.body.useAddressedWorkspace !== 'boolean') {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'rules.suppression.apply useAddressedWorkspace must be boolean.' });
+  }
+  if (!isPlainRecord(req.body.scope) || unknownObjectKeys(req.body.scope, new Set(['code', 'file', 'sourceRef'])).length > 0) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'rules.suppression.apply scope must be an exact { code, file?, sourceRef? } object.' });
+  }
+  if (!Object.prototype.hasOwnProperty.call(req.body, 'expectedSha256')
+    || (req.body.expectedSha256 !== null && (typeof req.body.expectedSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(req.body.expectedSha256)))) {
+    return res.status(400).json({
+      ok: false,
+      success: false,
+      code: 'CAPABILITY_INPUT_INVALID',
+      error: 'rules.suppression.apply requires expectedSha256 as a 64-char lowercase hex sha256 string or null.',
+    });
+  }
+  if (!isPlainRecord(req.body.review) || unknownObjectKeys(req.body.review, new Set(['id', 'owner', 'reason', 'reviewBy'])).length > 0) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'rules.suppression.apply review must be an exact { id, owner, reason, reviewBy } object.' });
+  }
+  return next();
+}, coordinatedSourceOperation((req, res) => {
+  try {
+    const body = req.body as Record<string, unknown>;
+    const workspace = resolveAgentModWorkspaceSelection(req, res, body, 'rules.suppression.apply');
+    if (!workspace) return;
+    return executeWarningSuppressionCommit(req, res, workspace, body.scope, body.expectedSha256, body.review, true);
+  } catch (error) {
+    return res.status(500).json({ ok: false, success: false, code: 'SUPPRESSION_WRITE_FAILED', error: errorMessage(error) || 'Suppression write failed.' });
   }
 }));
 
@@ -13462,12 +13690,40 @@ app.post("/api/agent/suggest/expression", (req, res) => {
 // client's pure applyQuickFix inside an undo checkpoint.
 app.post("/api/agent/quick-fixes", (req, res) => {
   try {
-    const ws = req.body?.workspace;
-    if (!ws || !Array.isArray(ws.nodes)) return res.status(400).json({ error: "Body must be { workspace: { nodes, links } }." });
+    if (!isPlainRecord(req.body)) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'diagnostics.quick.fixes requires a JSON object body.' });
+    }
+    const extra = unknownObjectKeys(req.body, new Set(['workspace', 'limit']));
+    if (extra.length > 0) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: `diagnostics.quick.fixes does not accept: ${extra.join(', ')}` });
+    }
+    const rawLimit = req.body.limit;
+    if (rawLimit !== undefined && (!Number.isSafeInteger(rawLimit) || Number(rawLimit) < 1 || Number(rawLimit) > 200)) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'diagnostics.quick.fixes limit must be an integer between 1 and 200.' });
+    }
+    let ws: any;
+    if (Object.prototype.hasOwnProperty.call(req.body, 'workspace')) {
+      ws = req.body.workspace;
+      if (!ws || typeof ws !== 'object' || Array.isArray(ws) || !Array.isArray(ws.nodes)) {
+        return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: "Body workspace must be { nodes, links }." });
+      }
+    } else {
+      const record = resolveWorkspaceAuthority(req, res, true);
+      if (!record) return;
+      ws = sanitizeWorkspace(record.workspace);
+    }
     const spIndex = getScriptPropertyIndex();
-    return res.json({ fixes: listQuickFixes(ws, { propertyUnion: spIndex?.union }) });
+    const allFixes = listQuickFixes(ws, { propertyUnion: spIndex?.union });
+    const limit = rawLimit !== undefined ? Number(rawLimit) : 100;
+    const fixes = allFixes.slice(0, limit);
+    return res.json({
+      ok: true,
+      total: allFixes.length,
+      truncated: fixes.length < allFixes.length,
+      fixes,
+    });
   } catch (error) {
-    return res.status(500).json({ error: errorMessage(error) || "quick-fixes failed" });
+    return res.status(500).json({ ok: false, error: errorMessage(error) || "quick-fixes failed" });
   }
 });
 
@@ -18424,8 +18680,7 @@ function getProjectCheckRun(req: express.Request, res: express.Response) {
   } catch (error) { return projectCheckRunError(res, error); }
 }
 
-// Reviews are listed with fresh evidence by deploy-verify dryRun; revocation never deploys.
-app.post('/api/agent/warning-reviews/revoke', (req, res) => {
+function handleWarningReviewRevoke(req: express.Request, res: express.Response, invalidCode: 'ACCEPTANCE_INPUT_INVALID' | 'CAPABILITY_INPUT_INVALID') {
   try {
     const principal = deploymentPrincipal(req);
     const body = req.body;
@@ -18433,7 +18688,7 @@ app.post('/api/agent/warning-reviews/revoke', (req, res) => {
       || Object.keys(body).some(k => !['receiptId', 'reviewScopeHash', 'reason'].includes(k))
       || typeof body.receiptId !== 'string' || !/^ar_[a-f0-9]{64}$/.test(body.receiptId)
       || typeof body.reviewScopeHash !== 'string' || !/^[a-f0-9]{64}$/.test(body.reviewScopeHash)
-      || typeof body.reason !== 'string') return res.status(400).json({ ok: false, code: 'ACCEPTANCE_INPUT_INVALID' });
+      || typeof body.reason !== 'string') return res.status(400).json({ ok: false, code: invalidCode });
     if (principal.kind === 'agent') {
       const addressed = resolveWorkspaceAuthority(req, res);
       if (!addressed) return;
@@ -18454,7 +18709,14 @@ app.post('/api/agent/warning-reviews/revoke', (req, res) => {
     return res.status(error.code === 'DEPLOY_APPROVAL_FORBIDDEN' ? 403 : error.code === 'ACCEPTANCE_INPUT_INVALID' ? 400 : 409)
       .json({ ok: false, code: error.code || 'REVIEW_STORE_UNAVAILABLE', error: error.message });
   }
-});
+}
+
+// Reviews are listed with fresh evidence by deploy-verify dryRun; revocation never deploys.
+app.post('/api/agent/warning-reviews/revoke', (req, res) =>
+  handleWarningReviewRevoke(req, res, 'ACCEPTANCE_INPUT_INVALID'));
+
+app.post('/api/agent/warning-reviews/revoke-review', (req, res) =>
+  handleWarningReviewRevoke(req, res, 'CAPABILITY_INPUT_INVALID'));
 function requestDeployOperation(req: express.Request) {
   const actor = (req as express.Request & { __actor?: RequestActor }).__actor;
   const operationId = req.get('x-forge-operation-id');
@@ -20377,23 +20639,54 @@ function replaceReleaseDirectory(stage: string, target: string, plan: ArtifactPl
   }
 }
 
-function nexusReleaseHandler(req: express.Request, res: express.Response) {
-  if (!req.body || !Object.prototype.hasOwnProperty.call(req.body, 'workspace')) {
-    return sendReleaseFailure(res, 400, 'FAILED', 'WORKSPACE_REQUIRED', 'Body must include the explicit workspace to package.', [releaseStage('source', 'Resolve complete source', 'fail', 'No explicit workspace was supplied.')]);
+function redactReleaseHostStrings(text: string, replacements: ReadonlyArray<readonly [string, string]>): string {
+  let current = text;
+  for (const [needle, replacement] of replacements) {
+    if (!needle) continue;
+    current = current.split(needle).join(replacement);
+    const normalizedNeedle = needle.replace(/\\/g, '/');
+    if (normalizedNeedle !== needle) current = current.split(normalizedNeedle).join(replacement);
   }
-  const bump: ReleaseBump = ['none', 'patch', 'minor'].includes(req.body?.bump) ? req.body.bump : 'none';
+  return current;
+}
+
+function redactReleaseStages(stages: ReleaseStage[], replacements: ReadonlyArray<readonly [string, string]>): ReleaseStage[] {
+  return stages.map(stage => ({
+    ...stage,
+    detail: redactReleaseHostStrings(stage.detail, replacements),
+  }));
+}
+
+function executeNexusReleaseBuild(
+  res: express.Response,
+  workspaceInput: unknown,
+  bump: ReleaseBump,
+  redactHostPaths: boolean,
+) {
   const resolved = resolveXsdConfig();
-  if (!resolved.modWorkspacePath) return sendReleaseFailure(res, 400, 'BLOCKED', 'MOD_WORKSPACE_REQUIRED', 'Configure a Mod Workspace Folder before packaging.', [releaseStage('output', 'Resolve release output root', 'fail', 'No Mod Workspace Folder is configured.')]);
+  if (!resolved.modWorkspacePath) {
+    return sendReleaseFailure(res, 400, 'BLOCKED', 'MOD_WORKSPACE_REQUIRED', 'Configure a Mod Workspace Folder before packaging.', [releaseStage('output', 'Resolve release output root', 'fail', 'No Mod Workspace Folder is configured.')]);
+  }
   if (rejectUnsafeDevelopmentWrite(res, resolved, ['modWorkspacePath'])) return;
-  const prepared = prepareReleaseBuild(req.body.workspace, bump, 'nexus', resolved, subject => { res.locals.apiSubject = subject; });
-  if ('error' in prepared) return sendReleaseFailure(res, prepared.status, 'FAILED', prepared.code, prepared.error, prepared.stages);
+  const baseReplacements: Array<readonly [string, string]> = [
+    [path.resolve(resolved.modWorkspacePath), '<modWorkspace>'],
+    ...(resolved.filesystemPath ? [[path.resolve(resolved.filesystemPath), '<filesystem>'] as const] : []),
+  ];
+  const prepared = prepareReleaseBuild(workspaceInput, bump, 'nexus', resolved, subject => { res.locals.apiSubject = subject; });
+  if ('error' in prepared) {
+    const errText = redactHostPaths ? redactReleaseHostStrings(prepared.error, baseReplacements) : prepared.error;
+    const errStages = redactHostPaths ? redactReleaseStages(prepared.stages, baseReplacements) : prepared.stages;
+    return sendReleaseFailure(res, prepared.status, 'FAILED', prepared.code, errText, errStages);
+  }
   try {
     let releasesDir: string;
     try {
       releasesDir = resolveReleaseOutputRoot(resolved.modWorkspacePath, 'nexus', true);
     } catch (error) {
-      const detail = errorMessage(error) || 'Release output root is unsafe.';
-      return sendReleaseFailure(res, 409, 'FAILED', 'RELEASE_OUTPUT_ROOT_UNSAFE', detail, [...prepared.stages, releaseStage('output', 'Resolve release output root', 'fail', detail)]);
+      const rawDetail = errorMessage(error) || 'Release output root is unsafe.';
+      const detail = redactHostPaths ? redactReleaseHostStrings(rawDetail, baseReplacements) : rawDetail;
+      const baseStages = redactHostPaths ? redactReleaseStages(prepared.stages, baseReplacements) : prepared.stages;
+      return sendReleaseFailure(res, 409, 'FAILED', 'RELEASE_OUTPUT_ROOT_UNSAFE', detail, [...baseStages, releaseStage('output', 'Resolve release output root', 'fail', detail)]);
     }
     const readme = buildPlayerReadme({
       modId: prepared.folderName,
@@ -20404,7 +20697,8 @@ function nexusReleaseHandler(req: express.Request, res: express.Response) {
     });
     const archive = createNexusArchive(prepared.plan, prepared.folderName, readme);
     if (!archive.ok) {
-      return sendReleaseFailure(res, 500, 'FAILED', 'NEXUS_ARCHIVE_FAILED', archive.errors.join('; '), [...prepared.stages, releaseStage('archive', 'Build Nexus ZIP', 'fail', archive.errors.join('; '))]);
+      const baseStages = redactHostPaths ? redactReleaseStages(prepared.stages, baseReplacements) : prepared.stages;
+      return sendReleaseFailure(res, 500, 'FAILED', 'NEXUS_ARCHIVE_FAILED', archive.errors.join('; '), [...baseStages, releaseStage('archive', 'Build Nexus ZIP', 'fail', archive.errors.join('; '))]);
     }
     const zipName = `${prepared.modId}_v${prepared.version.replace(/[^\w.-]+/g, '_')}.zip`;
     const zipPath = path.join(releasesDir, zipName);
@@ -20417,24 +20711,63 @@ function nexusReleaseHandler(req: express.Request, res: express.Response) {
     }));
     if (!reopened.ok) {
       fs.rmSync(zipPath, { force: true });
-      return sendReleaseFailure(res, 500, 'FAILED', 'NEXUS_REOPEN_FAILED', reopened.errors.join('; '), [...prepared.stages, releaseStage('archive', 'Build Nexus ZIP', 'pass', `${archive.entries.length} entries written.`), releaseStage('reopen', 'Reopen and verify ZIP', 'fail', reopened.errors.join('; '))]);
+      const baseStages = redactHostPaths ? redactReleaseStages(prepared.stages, baseReplacements) : prepared.stages;
+      return sendReleaseFailure(res, 500, 'FAILED', 'NEXUS_REOPEN_FAILED', reopened.errors.join('; '), [...baseStages, releaseStage('archive', 'Build Nexus ZIP', 'pass', `${archive.entries.length} entries written.`), releaseStage('reopen', 'Reopen and verify ZIP', 'fail', reopened.errors.join('; '))]);
     }
     const sha256 = crypto.createHash('sha256').update(diskBytes).digest('hex');
-    const stages = [
+    const diskStages = [
       ...prepared.stages,
       releaseStage('archive', 'Build Nexus ZIP', 'pass', `${archive.entries.length} entries written under ${prepared.folderName}/.`),
       releaseStage('reopen', 'Reopen and verify ZIP', 'pass', `CRC-32, uncompressed size, path safety, and SHA-256 verified for ${reopened.entries.length} entries.`),
       releaseStage('output', 'Save verified output', 'pass', zipPath, { sha256, sizeBytes: diskBytes.length }),
     ];
     const reportPath = `${zipPath}.forge-release.json`;
-    atomicWriteJson(reportPath, { platform: 'nexus', status: 'VERIFIED', createdAt: new Date().toISOString(), modId: prepared.modId, modIdScope: 'artifact-folder', validatedSource: prepared.validatedSource, preparedSource: prepared.preparedSource, folderName: prepared.folderName, version: prepared.version, zipPath, sha256, sizeBytes: diskBytes.length, entries: reopened.entries, stages, failedStages: [] });
-    return res.json({ success: true, status: 'VERIFIED', platform: 'nexus', modId: prepared.modId, modIdScope: 'artifact-folder', validatedSource: prepared.validatedSource, preparedSource: prepared.preparedSource, folderName: prepared.folderName, version: prepared.version, zipPath, reportPath, sha256, sizeBytes: diskBytes.length, fileCount: reopened.entries.length, warnings: prepared.warnings, readme, stages, failedStages: [] });
+    atomicWriteJson(reportPath, { platform: 'nexus', status: 'VERIFIED', createdAt: new Date().toISOString(), modId: prepared.modId, modIdScope: 'artifact-folder', validatedSource: prepared.validatedSource, preparedSource: prepared.preparedSource, folderName: prepared.folderName, version: prepared.version, zipPath, sha256, sizeBytes: diskBytes.length, entries: reopened.entries, stages: diskStages, failedStages: [] });
+    if (redactHostPaths) {
+      const replacements: Array<readonly [string, string]> = [
+        [reportPath, path.basename(reportPath)],
+        [zipPath, zipName],
+        ...baseReplacements,
+      ];
+      return res.json({
+        ok: true,
+        success: true,
+        status: 'VERIFIED',
+        platform: 'nexus',
+        modId: prepared.modId,
+        modIdScope: 'artifact-folder',
+        validatedSource: prepared.validatedSource,
+        preparedSource: prepared.preparedSource,
+        folderName: prepared.folderName,
+        version: prepared.version,
+        artifactFile: zipName,
+        reportFile: path.basename(reportPath),
+        sha256,
+        sizeBytes: diskBytes.length,
+        fileCount: reopened.entries.length,
+        warnings: prepared.warnings,
+        readme,
+        stages: redactReleaseStages(diskStages, replacements),
+        failedStages: [],
+      });
+    }
+    return res.json({ success: true, status: 'VERIFIED', platform: 'nexus', modId: prepared.modId, modIdScope: 'artifact-folder', validatedSource: prepared.validatedSource, preparedSource: prepared.preparedSource, folderName: prepared.folderName, version: prepared.version, zipPath, reportPath, sha256, sizeBytes: diskBytes.length, fileCount: reopened.entries.length, warnings: prepared.warnings, readme, stages: diskStages, failedStages: [] });
   } catch (error) {
-    const detail = errorMessage(error) || 'Unknown Nexus packaging failure.';
-    return sendReleaseFailure(res, 500, 'FAILED', 'NEXUS_RELEASE_FAILED', detail, [...prepared.stages, releaseStage('archive', 'Build Nexus ZIP', 'fail', detail)]);
+    const rawDetail = errorMessage(error) || 'Unknown Nexus packaging failure.';
+    const detail = redactHostPaths ? redactReleaseHostStrings(rawDetail, baseReplacements) : rawDetail;
+    const baseStages = redactHostPaths ? redactReleaseStages(prepared.stages, baseReplacements) : prepared.stages;
+    return sendReleaseFailure(res, 500, 'FAILED', 'NEXUS_RELEASE_FAILED', detail, [...baseStages, releaseStage('archive', 'Build Nexus ZIP', 'fail', detail)]);
   } finally {
     prepared.cleanup();
   }
+}
+
+function nexusReleaseHandler(req: express.Request, res: express.Response) {
+  if (!req.body || !Object.prototype.hasOwnProperty.call(req.body, 'workspace')) {
+    return sendReleaseFailure(res, 400, 'FAILED', 'WORKSPACE_REQUIRED', 'Body must include the explicit workspace to package.', [releaseStage('source', 'Resolve complete source', 'fail', 'No explicit workspace was supplied.')]);
+  }
+  const bump: ReleaseBump = ['none', 'patch', 'minor'].includes(req.body?.bump) ? req.body.bump : 'none';
+  return executeNexusReleaseBuild(res, req.body.workspace, bump, false);
 }
 
 function artifactPlanToExpectedEntry(plan: ArtifactPlan, rootFolder: string, archivePath: string, readme: string): Buffer {
@@ -20450,6 +20783,29 @@ function artifactPlanToExpectedEntry(plan: ArtifactPlan, rootFolder: string, arc
 app.post('/api/agent/release/nexus/prepare', coordinatedSourceOperation(nexusReleaseHandler));
 // B9 compatibility alias. It now uses the same explicit, disk-complete, reopen-verified engine.
 app.post('/api/agent/package/release', coordinatedSourceOperation(nexusReleaseHandler));
+
+app.post('/api/agent/release/nexus/build', (req, res, next) => {
+  if (!isPlainRecord(req.body)) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'release.nexus.prepare requires a JSON object body.' });
+  }
+  const extra = unknownObjectKeys(req.body, new Set(['path', 'useAddressedWorkspace', 'bump']));
+  if (extra.length > 0) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: `release.nexus.prepare does not accept: ${extra.join(', ')}` });
+  }
+  if (req.body.useAddressedWorkspace !== undefined && typeof req.body.useAddressedWorkspace !== 'boolean') {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'release.nexus.prepare useAddressedWorkspace must be boolean.' });
+  }
+  if (req.body.bump !== undefined && req.body.bump !== 'none' && req.body.bump !== 'patch' && req.body.bump !== 'minor') {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'release.nexus.prepare bump must be "none", "patch", or "minor".' });
+  }
+  return next();
+}, coordinatedSourceOperation((req, res) => {
+  const body = req.body as Record<string, unknown>;
+  const workspace = resolveAgentModWorkspaceSelection(req, res, body, 'release.nexus.prepare');
+  if (!workspace) return;
+  const bump: ReleaseBump = body.bump === 'patch' || body.bump === 'minor' ? body.bump : 'none';
+  return executeNexusReleaseBuild(res, workspace, bump, true);
+}));
 
 app.post('/api/agent/release/steam/prepare', coordinatedSourceOperation((req, res) => {
   if (!req.body || !Object.prototype.hasOwnProperty.call(req.body, 'workspace')) {
@@ -20647,6 +21003,50 @@ app.post('/api/agent/release/artifact/download', (req, res) => {
     return res.download(verified.artifactPath, path.basename(verified.artifactPath));
   } catch (error) {
     return res.status(409).json({ success: false, code: 'RELEASE_ARTIFACT_VERIFICATION_FAILED', error: errorMessage(error) || 'Could not verify the prepared release artifact.' });
+  }
+});
+
+app.get('/api/agent/release/artifact/status', (req, res) => {
+  const query = req.query as Record<string, unknown>;
+  const extra = unknownObjectKeys(query, new Set(['platform', 'modId', 'artifactFile']));
+  if (extra.length > 0 || Object.values(query).some(v => Array.isArray(v))) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'release.artifact.verify accepts only scalar platform, modId, and artifactFile query parameters.' });
+  }
+  const platform = query.platform === 'steam' ? 'steam' : query.platform === 'nexus' ? 'nexus' : '';
+  const modId = typeof query.modId === 'string' ? query.modId.trim() : '';
+  const artifactFile = typeof query.artifactFile === 'string' ? query.artifactFile.trim() : '';
+  if (!platform || !/^[A-Za-z][\w.-]*$/.test(modId) || !artifactFile || artifactFile.length > 256
+    || artifactFile.includes('\0') || artifactFile.includes('/') || artifactFile.includes('\\')
+    || artifactFile === '.' || artifactFile === '..' || path.extname(artifactFile).toLowerCase() !== '.zip') {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'release.artifact.verify requires platform ("nexus" or "steam"), a safe modId, and a single-segment .zip artifactFile.' });
+  }
+  const resolved = resolveXsdConfig();
+  if (!resolved.modWorkspacePath) {
+    return res.status(400).json({ ok: false, success: false, code: 'MOD_WORKSPACE_REQUIRED', error: 'Configure a Mod Workspace Folder first.' });
+  }
+  try {
+    const releaseRoot = resolveReleaseOutputRoot(resolved.modWorkspacePath, platform, false);
+    const requestedPath = path.join(releaseRoot, artifactFile);
+    const verified = verifyPreparedReleaseArtifact(platform, modId, requestedPath, resolved.modWorkspacePath);
+    res.locals.apiSubject = verified.sourceIdentity;
+    return res.json({
+      ok: true,
+      success: true,
+      verified: true,
+      platform,
+      modId,
+      artifactFile: path.basename(verified.artifactPath),
+      reportFile: path.basename(verified.reportPath),
+      sha256: verified.sha256,
+      sizeBytes: verified.sizeBytes,
+    });
+  } catch (error) {
+    const rawMsg = errorMessage(error) || 'Could not verify the prepared release artifact.';
+    const safeMsg = redactReleaseHostStrings(rawMsg, [
+      [path.resolve(resolved.modWorkspacePath), '<modWorkspace>'],
+      ...(resolved.filesystemPath ? [[path.resolve(resolved.filesystemPath), '<filesystem>'] as const] : []),
+    ]);
+    return res.status(409).json({ ok: false, success: false, verified: false, code: 'RELEASE_ARTIFACT_VERIFICATION_FAILED', error: safeMsg });
   }
 });
 

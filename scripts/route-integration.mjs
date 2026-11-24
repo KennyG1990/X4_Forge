@@ -810,15 +810,16 @@ async function main() {
   const expectedCapabilityIds = [
     'bulk.transform.apply', 'bulk.transform.preview',
     'configuration.access.request', 'configuration.access.status', 'configuration.apply', 'configuration.preview', 'configuration.read', 'configuration.status',
-    'deploy.apply', 'deploy.preview', 'deploy.status', 'deploy.undo',
+    'deploy.apply', 'deploy.preview', 'deploy.status', 'deploy.undo', 'diagnostics.quick.fixes',
     'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.overrides.analyze',
     'files.delete', 'files.list', 'files.read', 'files.restore', 'files.write',
     'history.list', 'history.revert',
     'patch.diff.simulate', 'patch.readiness.analyze', 'patch.targets.list', 'patch.xpath.synthesize', 'performance.collect', 'performance.native.collect', 'performance.native.read', 'performance.native.stop',
     'performance.profile', 'performance.read', 'project.ai.navigation', 'project.brief.read', 'project.md.navigation', 'project.proof.read', 'project.validate', 'project.xml.references', 'readiness.read',
     'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest',
+    'release.artifact.verify', 'release.nexus.prepare', 'reviews.warning.revoke', 'rules.suppression.apply', 'rules.suppression.prepare',
     'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read',
-    'workspace.compile', 'workspace.compile.result', 'workspace.generate.preview', 'workspace.mod.drift', 'workspace.mod.import', 'workspace.read',
+    'workspace.compile', 'workspace.compile.result', 'workspace.generate.preview', 'workspace.mod.drift', 'workspace.mod.import', 'workspace.read', 'workspace.roundtrip.check',
   ];
   const sameCapabilityIds = (actual, expected) => Array.isArray(actual)
     && JSON.stringify([...actual].sort()) === JSON.stringify([...expected].sort());
@@ -1454,16 +1455,16 @@ async function main() {
     sameCapabilityIds(effectiveIds(studioEffective), expectedCapabilityIds) && effectiveHashIsValid(studioEffective),
   JSON.stringify({ public: publicEffective.json, bogus: bogusEffective.json, studio: { actor: studioEffective.json?.actor, ids: effectiveIds(studioEffective) } }));
   for (const [name, response, scope, expectedIds] of [
-    ['read', readEffective, 'read', ['expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.overrides.analyze', 'history.list',
+    ['read', readEffective, 'read', ['diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.overrides.analyze', 'history.list',
       'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.synthesize', 'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.xml.references', 'readiness.read',
-      'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest',
-      'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read', 'workspace.read']],
-    ['write', writeEffective, 'write', ['expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.overrides.analyze', 'history.list', 'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.synthesize', 'project.validate',
+      'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest', 'release.artifact.verify', 'rules.suppression.prepare',
+      'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read', 'workspace.read', 'workspace.roundtrip.check']],
+    ['write', writeEffective, 'write', ['diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.overrides.analyze', 'history.list', 'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.synthesize', 'project.validate',
       'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.xml.references',
-      'readiness.read', 'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest',
-      'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.read']],
+      'readiness.read', 'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest', 'release.artifact.verify', 'rules.suppression.prepare',
+      'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.read', 'workspace.roundtrip.check']],
     ['deploy', deployEffective, 'deploy', expectedCapabilityIds.filter(id => !id.startsWith('configuration.') && !id.startsWith('deploy.') && !id.startsWith('bulk.transform.') && !id.startsWith('files.') && ![
-      'history.revert', 'performance.native.collect', 'performance.native.read', 'performance.native.stop', 'project.ai.navigation', 'project.md.navigation', 'workspace.mod.drift', 'workspace.mod.import',
+      'history.revert', 'performance.native.collect', 'performance.native.read', 'performance.native.stop', 'project.ai.navigation', 'project.md.navigation', 'release.nexus.prepare', 'reviews.warning.revoke', 'rules.suppression.apply', 'workspace.mod.drift', 'workspace.mod.import',
     ].includes(id))],
   ]) {
     ok(`${name}_key_effective_capabilities_are_exact_and_hashed`, response.status === 200 &&
@@ -6795,6 +6796,219 @@ async function main() {
         fs.rmSync(catPath, { force: true });
         fs.rmSync(datPath, { force: true });
       }
+    }
+  }
+
+  // --- #19 P4 SLICE 5: ROUND-TRIP, QUICK-FIXES, WARNING SUPPRESSION, REVIEW REVOKE & NEXUS BUILD/VERIFY ---
+  {
+    const slice5ModId = 'route_slice5_mod';
+    const slice5ModDir = path.join(safeWorkspace, slice5ModId);
+    fs.mkdirSync(path.join(slice5ModDir, 'md'), { recursive: true });
+    fs.mkdirSync(path.join(slice5ModDir, 'aiscripts'), { recursive: true });
+    fs.writeFileSync(
+      path.join(slice5ModDir, 'content.xml'),
+      `<?xml version="1.0" encoding="utf-8"?>\n<content id="${slice5ModId}" name="Route Slice 5 Mod" version="100" author="ForgeQA" date="2026-11-24" save="0" description="Slice 5 route integration mod"><text language="44" name="Route Slice 5 Mod" description="Slice 5 route integration mod" author="ForgeQA"/></content>\n`,
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(slice5ModDir, 'md', 'main.xml'),
+      '<?xml version="1.0" encoding="utf-8"?>\n<mdscript name="RouteSlice5Main"><cues><cue name="Boot"><conditions><event_game_loaded/></conditions><actions><debug_text text="\'ok\'"/></actions></cue></cues></mdscript>\n',
+      'utf8',
+    );
+    fs.writeFileSync(
+      path.join(slice5ModDir, 'aiscripts', 'legacy.xml'),
+      '<?xml version="1.0" encoding="utf-8"?>\n<aiscript name="RouteSlice5Legacy"><attention min="unknown"><actions><do_if value="$ship.isexceedingmadscore"><debug_text text="\'warn\'"/></do_if></actions></attention></aiscript>\n',
+      'utf8',
+    );
+    const slice5Scope = {
+      code: 'migration.deprecated_property',
+      file: 'aiscripts/legacy.xml',
+      sourceRef: '9.00:isexceedingmadscore',
+    };
+    const slice5Client = 'client_route_slice5';
+    try {
+      const slice5WsRes = await req('POST', '/api/agent/workspaces', SESSION_TOKEN, {
+        clientId: slice5Client,
+        name: slice5ModId,
+      }, { clientId: slice5Client });
+      const slice5WsId = slice5WsRes.json?.workspaceId;
+      const slice5Addr = { workspaceId: slice5WsId };
+
+      const slice5Imp = await req('POST', '/api/agent/mod-folder/import', SESSION_TOKEN, {
+        path: slice5ModId,
+        root: 'workspace',
+      }, { clientId: slice5Client, workspaceId: slice5WsId });
+      await req('POST', '/api/agent/workspace', SESSION_TOKEN, {
+        workspace: slice5Imp.json?.workspace,
+        force: true,
+      }, { clientId: slice5Client, workspaceId: slice5WsId });
+
+      const slice5ReadMint = await req('POST', '/api/agent/keys', SESSION_TOKEN, {
+        label: 'route-slice5-preset-read',
+        scope: 'read',
+        ttl: '1h',
+      }, { workspaceId: slice5WsId, clientId: slice5Client });
+      const slice5ReadKey = slice5ReadMint.json && (slice5ReadMint.json.token || slice5ReadMint.json.key);
+
+      const slice5ExplicitMint = await req('POST', '/api/agent/keys', SESSION_TOKEN, {
+        label: 'route-slice5-explicit-deploy',
+        scope: 'deploy',
+        ttl: '1h',
+        authorityMode: 'exact',
+        capabilityIdentities: [
+          'release.artifact.verify@1',
+          'release.nexus.prepare@1',
+          'reviews.warning.revoke@1',
+          'rules.suppression.apply@1',
+          'rules.suppression.prepare@1',
+        ],
+        allowedEffects: [
+          'read', 'analyze', 'filesystem-write', 'package', 'delete', 'audit-write', 'audit-retention-delete',
+        ],
+      }, { workspaceId: slice5WsId, clientId: slice5Client });
+      const slice5ExplicitKey = slice5ExplicitMint.json && (slice5ExplicitMint.json.token || slice5ExplicitMint.json.key);
+
+      const roundTripRes = await req('POST', '/api/agent/mod-folder/round-trip', slice5ReadKey, {
+        path: slice5ModId,
+        root: 'workspace',
+      }, { ...slice5Addr, operationId: null });
+      capabilityResponses.set('workspace.roundtrip.check', roundTripRes);
+      const roundTripBad = await req('POST', '/api/agent/mod-folder/round-trip', slice5ReadKey, {
+        path: slice5ModId,
+        extra: true,
+      }, { ...slice5Addr, operationId: null });
+      ok('curated_round_trip_check_redacts_host_folder_and_rejects_unknown_fields',
+        roundTripRes.status === 200
+          && roundTripRes.json?.ok === true
+          && roundTripRes.json?.lossless === true
+          && roundTripRes.json?.importReport?.folder === undefined
+          && !JSON.stringify(roundTripRes.json).includes(safeWorkspace)
+          && roundTripBad.status === 400 && roundTripBad.json?.code === 'CAPABILITY_INPUT_INVALID',
+        JSON.stringify({ status: roundTripRes.status, bad: roundTripBad.status }));
+
+      const quickFixesRes = await req('POST', '/api/agent/quick-fixes', slice5ReadKey, {
+        limit: 25,
+      }, { ...slice5Addr, operationId: null });
+      capabilityResponses.set('diagnostics.quick.fixes', quickFixesRes);
+      const quickFixesBad = await req('POST', '/api/agent/quick-fixes', slice5ReadKey, {
+        limit: 201,
+      }, { ...slice5Addr, operationId: null });
+      ok('curated_quick_fixes_resolves_addressed_workspace_and_enforces_limit',
+        quickFixesRes.status === 200
+          && quickFixesRes.json?.ok === true
+          && Array.isArray(quickFixesRes.json?.fixes)
+          && quickFixesBad.status === 400 && quickFixesBad.json?.code === 'CAPABILITY_INPUT_INVALID',
+        JSON.stringify({ status: quickFixesRes.status, bad: quickFixesBad.status }));
+
+      const suppPrepRes = await req('POST', '/api/agent/project-rules/suppression/prepare', slice5ReadKey, {
+        useAddressedWorkspace: true,
+        scope: slice5Scope,
+      }, { ...slice5Addr, operationId: null });
+      capabilityResponses.set('rules.suppression.prepare', suppPrepRes);
+      const presetDeniedSuppress = await req('POST', '/api/agent/project-rules/suppression/apply', deployKey, {
+        path: slice5ModId,
+        scope: slice5Scope,
+        expectedSha256: null,
+        review: { ...(suppPrepRes.json?.defaults || {}), owner: 'ForgeQA' },
+      }, { operationId: null });
+      const suppApplyRes = await req('POST', '/api/agent/project-rules/suppression/apply', slice5ExplicitKey, {
+        useAddressedWorkspace: true,
+        scope: slice5Scope,
+        expectedSha256: suppPrepRes.json?.expectedSha256 ?? null,
+        review: { ...(suppPrepRes.json?.defaults || {}), owner: 'ForgeQA' },
+      }, { ...slice5Addr, operationId: null });
+      capabilityResponses.set('rules.suppression.apply', suppApplyRes);
+      ok('curated_suppression_prepare_and_apply_require_explicit_grant_and_write_rules',
+        suppPrepRes.status === 200
+          && suppPrepRes.json?.ok === true
+          && presetDeniedSuppress.status === 403 && presetDeniedSuppress.json?.authorityCode === 'CAPABILITY_NOT_GRANTED'
+          && suppApplyRes.status === 200
+          && suppApplyRes.json?.ok === true
+          && suppApplyRes.json?.status === 'VERIFIED'
+          && fs.existsSync(path.join(slice5ModDir, 'forge.rules.json')),
+        JSON.stringify({ prep: suppPrepRes.status, denied: presetDeniedSuppress.status, apply: suppApplyRes.status, body: suppApplyRes.json }));
+
+      // Remove forge.rules.json so warning remains active for warning-review acceptance + revocation
+      fs.rmSync(path.join(slice5ModDir, 'forge.rules.json'), { force: true });
+      const slice5Reimp = await req('POST', '/api/agent/mod-folder/import', SESSION_TOKEN, {
+        path: slice5ModId,
+        root: 'workspace',
+      }, { clientId: slice5Client, workspaceId: slice5WsId });
+      await req('POST', '/api/agent/workspace', SESSION_TOKEN, {
+        workspace: slice5Reimp.json?.workspace,
+        force: true,
+      }, { clientId: slice5Client, workspaceId: slice5WsId });
+
+      const nexusBuildRes = await req('POST', '/api/agent/release/nexus/build', slice5ExplicitKey, {
+        useAddressedWorkspace: true,
+        bump: 'patch',
+      }, { ...slice5Addr, operationId: null });
+      capabilityResponses.set('release.nexus.prepare', nexusBuildRes);
+      const artifactVerifyRes = await req('GET', `/api/agent/release/artifact/status?platform=nexus&modId=${encodeURIComponent(slice5ModId)}&artifactFile=${encodeURIComponent(nexusBuildRes.json?.artifactFile || 'missing.zip')}`, slice5ReadKey, undefined, slice5Addr);
+      capabilityResponses.set('release.artifact.verify', artifactVerifyRes);
+      const artifactVerifyBad = await req('GET', `/api/agent/release/artifact/status?platform=nexus&modId=${encodeURIComponent(slice5ModId)}&artifactFile=..%2Fescape.zip`, slice5ReadKey, undefined, slice5Addr);
+      ok('curated_nexus_release_build_and_artifact_status_redact_host_paths_and_verify_zip',
+        nexusBuildRes.status === 200
+          && nexusBuildRes.json?.ok === true
+          && nexusBuildRes.json?.status === 'VERIFIED'
+          && !JSON.stringify(nexusBuildRes.json).includes(safeWorkspace)
+          && artifactVerifyRes.status === 200
+          && artifactVerifyRes.json?.verified === true
+          && artifactVerifyRes.json?.sha256 === nexusBuildRes.json?.sha256
+          && artifactVerifyBad.status === 400 && artifactVerifyBad.json?.code === 'CAPABILITY_INPUT_INVALID',
+        JSON.stringify({ build: nexusBuildRes.status, verify: artifactVerifyRes.status, bad: artifactVerifyBad.status, buildBody: nexusBuildRes.json }));
+
+      // Warning review acceptance + curated revocation
+      const s5Dry1 = await req('POST', '/api/agent/deploy-verify', SESSION_TOKEN, {
+        path: slice5ModId,
+        root: 'workspace',
+        dryRun: true,
+      }, { clientId: slice5Client, workspaceId: slice5WsId });
+      const s5Warning = (s5Dry1.json?.validation?.evidence?.findings || []).find(f => f.severity === 'warning');
+      const s5Acceptances = s5Warning
+        ? [{ findingId: s5Warning.findingId, bindingHash: s5Dry1.json?.bindingHash, reason: 'Reviewed warning for slice5 revoke check.' }]
+        : [];
+      const s5Dry2 = await req('POST', '/api/agent/deploy-verify', SESSION_TOKEN, {
+        path: slice5ModId,
+        root: 'workspace',
+        dryRun: true,
+        acceptances: s5Acceptances,
+      }, { clientId: slice5Client, workspaceId: slice5WsId });
+      const s5Deploy = await req('POST', '/api/agent/deploy-verify', SESSION_TOKEN, {
+        path: slice5ModId,
+        root: 'workspace',
+        dryRun: false,
+        acceptances: s5Acceptances,
+        expectedModId: s5Dry2.json?.modId,
+        expectedSourceHash: s5Dry2.json?.sourceHash,
+        expectedArtifactHash: s5Dry2.json?.artifactHash,
+        expectedBindingHash: s5Dry2.json?.bindingHash,
+        expectedTargetFingerprint: s5Dry2.json?.targetFingerprint,
+      }, { clientId: slice5Client, workspaceId: slice5WsId });
+      const s5AccId = s5Deploy.json?.acceptanceRecords?.[0]?.id || 'ar_' + '0'.repeat(64);
+      const s5ScopeHash = s5Dry2.json?.validation?.review?.warningReviews?.scopeHash || '0'.repeat(64);
+      const revokeReviewRes = await req('POST', '/api/agent/warning-reviews/revoke-review', slice5ExplicitKey, {
+        receiptId: s5AccId,
+        reviewScopeHash: s5ScopeHash,
+        reason: 'Revoke slice5 warning acceptance via curated capability',
+      }, { ...slice5Addr, operationId: null });
+      capabilityResponses.set('reviews.warning.revoke', revokeReviewRes);
+      const revokeReviewBad = await req('POST', '/api/agent/warning-reviews/revoke-review', slice5ExplicitKey, {
+        receiptId: s5AccId,
+        reviewScopeHash: s5ScopeHash,
+        reason: 'bad',
+        unexpected: true,
+      }, { ...slice5Addr, operationId: null });
+      ok('curated_warning_review_revoke_records_immutable_revocation_and_rejects_unknown_fields',
+        s5Deploy.status === 200
+          && revokeReviewRes.status === 200
+          && revokeReviewRes.json?.ok === true
+          && revokeReviewRes.json?.outcome === 'warning-review-revoked'
+          && revokeReviewBad.status === 400 && revokeReviewBad.json?.code === 'CAPABILITY_INPUT_INVALID',
+        JSON.stringify({ deploy: s5Deploy.status, revoke: revokeReviewRes.status, bad: revokeReviewBad.status, body: revokeReviewRes.json }));
+    } finally {
+      fs.rmSync(slice5ModDir, { recursive: true, force: true });
+      fs.rmSync(path.join(gameRoot, 'extensions', slice5ModId), { recursive: true, force: true });
     }
   }
 

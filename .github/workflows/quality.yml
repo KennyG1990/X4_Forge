@@ -86,6 +86,9 @@ jobs:
       - name: Prove MCP capability discovery and fail-closed behavior
         run: npm run test:mcp-capabilities
 
+      - name: Prove live native-deploy and workspace-files MCP explicit-grant contracts
+        run: npm run test:native-deploy-mcp && npm run test:workspace-files-mcp
+
       - name: Prove fail-closed E2E flake policy
         run: npm run test:e2e-policy
 

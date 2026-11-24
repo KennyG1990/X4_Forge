@@ -31,11 +31,19 @@ export function runAgentHistorySelftest(): { pass: boolean; checks: Array<{ name
   try {
     // --- route allowlist: mutations in, read-only traffic out ---------------------------
     ok('write route is recorded as an edit', ledgerRouteKind('POST', '/api/fs/write') === 'edit');
-    ok('reviewed suppression write is an edit', ledgerRouteKind('POST', '/api/agent/project-rules/suppress') === 'edit');
-    ok('suppression preparation is read-only and quiet', ledgerRouteKind('POST', '/api/agent/project-rules/prepare-suppression') === null);
+    ok('reviewed suppression write is an edit',
+      ledgerRouteKind('POST', '/api/agent/project-rules/suppress') === 'edit' &&
+      ledgerRouteKind('POST', '/api/agent/project-rules/suppression/apply') === 'edit');
+    ok('suppression preparation and round-trip check are read-only and quiet',
+      ledgerRouteKind('POST', '/api/agent/project-rules/prepare-suppression') === null &&
+      ledgerRouteKind('POST', '/api/agent/project-rules/suppression/prepare') === null &&
+      ledgerRouteKind('POST', '/api/agent/mod-folder/round-trip') === null);
+    ok('warning review revocation adapter is recorded as an action',
+      ledgerRouteKind('POST', '/api/agent/warning-reviews/revoke-review') === 'action');
     ok('deploy route is recorded as a deploy', ledgerRouteKind('POST', '/api/agent/deploy-verify') === 'deploy');
     ok('platform release routes are recorded as package actions',
       ledgerRouteKind('POST', '/api/agent/release/nexus/prepare') === 'package' &&
+      ledgerRouteKind('POST', '/api/agent/release/nexus/build') === 'package' &&
       ledgerRouteKind('POST', '/api/agent/release/steam/prepare') === 'package' &&
       ledgerRouteKind('POST', '/api/agent/release/steam/verify') === 'package' &&
       ledgerRouteKind('POST', '/api/agent/release/steam/adopt') === 'package' &&
