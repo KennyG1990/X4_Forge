@@ -1126,28 +1126,36 @@ export interface LuaEmitCoverage {
   reasons: Array<'dynamic-arguments' | 'prefix-only' | 'source-encoding' | 'ambiguous-callee'>;
 }
 
-function indexedPayloadTarget(variable: LuaAstNode, source: LuaAnalysisSource): { table: string; key: string; candidateOnly: boolean; localTableUses: number } | undefined {
+function indexedPayloadTarget(
+  variable: LuaAstNode,
+  source: LuaAnalysisSource,
+  identToBinding?: ReadonlyMap<LuaAstNode, LuaLocalBinding>,
+): { table: string; key: string; candidateOnly: boolean; binding?: LuaLocalBinding; bindingUses: number } | undefined {
   const table = luaIdentifier(variable.base);
   const index = variable.index;
   const counter = index?.right;
   if (!table || variable.type !== 'IndexExpression' || index?.type !== 'BinaryExpression' || index.operator !== '..') return undefined;
   const candidateOnly = counter?.type === 'Identifier' && counter.isLocal === true;
+  const binding = variable.base?.isLocal === true ? identToBinding?.get(variable.base) : undefined;
   if (!candidateOnly && (counter?.type !== 'MemberExpression' || counter.indexer !== '.' || luaIdentifier(counter.identifier) !== 'n'
-    || luaIdentifier(counter.base) !== table || counter.base?.isLocal !== variable.base?.isLocal)) return undefined;
+    || luaIdentifier(counter.base) !== table || counter.base?.isLocal !== variable.base?.isLocal
+    || (identToBinding && variable.base?.isLocal === true && identToBinding.get(counter.base) !== binding))) return undefined;
   const literal = index.left;
   if (literal?.type !== 'StringLiteral' || typeof literal.value !== 'string'
     || luaStringLiteralTainted(literal, source.substituted) || !/^[A-Za-z][A-Za-z0-9_]*$/.test(literal.value)) return undefined;
-  let localTableUses = 0;
-  walkLuaAst(variable, node => {
-    if (node.isLocal === true && luaIdentifier(node) === table) localTableUses++;
-  });
-  return { table, key: literal.value, candidateOnly, localTableUses };
+  let bindingUses = 0;
+  if (binding) {
+    walkLuaAst(variable, node => {
+      if (node.isLocal === true && identToBinding.get(node) === binding) bindingUses++;
+    });
+  }
+  return { table, key: literal.value, candidateOnly, binding, bindingUses };
 }
 
 interface LuaPayloadPosition { scope?: LuaAstNode; branches: readonly LuaAstNode[]; at: number }
 interface LuaPayloadAssignment extends LuaPayloadPosition {
-  table: string; key: string; local: boolean; candidateOnly: boolean; localTableUses: number; location?: LuaAstNode['loc']; directValueBlock?: LuaAstNode;
-  target: LuaAstNode;
+  table: string; key: string; local: boolean; candidateOnly: boolean; binding?: LuaLocalBinding; bindingUses: number;
+  location?: LuaAstNode['loc']; directValueBlock?: LuaAstNode; target: LuaAstNode;
 }
 interface LuaPayloadEmit extends LuaPayloadPosition {
   identities?: string[]; needsUnaliasedTable?: boolean; directBlock?: LuaAstNode;
@@ -1202,28 +1210,24 @@ function finiteLuaControl(
 }
 
 function unaliasedLuaPayloads(
-  ast: unknown,
-  emitsByTable: ReadonlyMap<string, LuaPayloadEmit[]>,
+  emitsByBinding: ReadonlyMap<LuaLocalBinding, LuaPayloadEmit[]>,
   writes: readonly LuaPayloadAssignment[],
   clears: readonly LuaPayloadAssignment[],
-): Set<string> {
-  const remainingUses = new Map<string, number>();
-  for (const [table, emits] of emitsByTable) {
-    if (emits.length === 1 && emits[0].needsUnaliasedTable) remainingUses.set(table, 2); // Declaration and emit argument.
+): Set<LuaLocalBinding> {
+  const expectedRefs = new Map<LuaLocalBinding, number>();
+  for (const [binding, emits] of emitsByBinding) {
+    if (emits.length === 1 && emits[0].needsUnaliasedTable) expectedRefs.set(binding, 1); // Emit argument (declNode is not in binding.refs).
   }
-  if (!remainingUses.size) return new Set();
+  if (!expectedRefs.size) return new Set();
   for (const edits of [writes, clears]) {
     for (const edit of edits) {
-      const remaining = edit.local ? remainingUses.get(edit.table) : undefined;
-      if (remaining !== undefined) remainingUses.set(edit.table, remaining + edit.localTableUses);
+      const expected = edit.binding ? expectedRefs.get(edit.binding) : undefined;
+      if (expected !== undefined) expectedRefs.set(edit.binding!, expected + edit.bindingUses);
     }
   }
-  walkLuaAst(ast, node => {
-    const name = node.isLocal === true ? luaIdentifier(node) : null;
-    const remaining = name ? remainingUses.get(name) : undefined;
-    if (remaining !== undefined) remainingUses.set(name, remaining - 1);
-  });
-  return new Set([...remainingUses].filter(([, remaining]) => remaining === 0).map(([table]) => table));
+  return new Set(
+    [...expectedRefs].filter(([binding, expected]) => binding.refs.length === expected).map(([binding]) => binding),
+  );
 }
 
 
@@ -2755,7 +2759,7 @@ function parseLuaUiEmits(content: string, file: string): {
   }
   const indexedWrites: LuaPayloadAssignment[] = [];
   const indexedClears: LuaPayloadAssignment[] = [];
-  const payloadEmits = new Map<string, LuaPayloadEmit[]>();
+  const payloadEmits = new Map<LuaLocalBinding, LuaPayloadEmit[]>();
   const protectedBodies = new Map<LuaAstNode, { call: LuaAstNode; caller?: LuaAstNode }>();
   const protectedSends: LuaProtectedPayloadSend[] = [];
   const returnedTableInitializers = new Map<LuaAstNode | undefined, LuaAstNode[]>();
@@ -2822,7 +2826,7 @@ function parseLuaUiEmits(content: string, file: string): {
     }
     if (node.type === 'AssignmentStatement') {
       (node.variables || []).forEach((variable, index) => {
-        const target = indexedPayloadTarget(variable, source);
+        const target = indexedPayloadTarget(variable, source, scopeIndex.identToBinding);
         if (!target) return;
         const value = node.init?.[index];
         const sites = value && value.type !== 'NilLiteral' ? indexedWrites : indexedClears;
@@ -2858,15 +2862,14 @@ function parseLuaUiEmits(content: string, file: string): {
     if (luaIdentifier(emitter) !== 'AddUITriggeredEvent') return;
     const args = forwarded ? node.arguments?.slice(1) : node.arguments;
     const argument = args?.[2];
-    const table = luaIdentifier(argument);
-    const binding = table ? assignments.get(table) : undefined;
+    const varBinding = argument?.isLocal === true ? scopeIndex.identToBinding.get(argument) : undefined;
     let payloadEmit: LuaPayloadEmit | undefined;
-    if (table && argument?.isLocal && binding?.count === 1 && binding.local
-      && binding.init?.type === 'TableConstructorExpression' && !shadowed.has(table) && (!forwarded || args?.length === 3)) {
+    if (varBinding && varBinding.kind === 'local' && varBinding.writes === 1
+      && varBinding.init?.type === 'TableConstructorExpression' && (!forwarded || args?.length === 3)) {
       payloadEmit = { scope, branches, at: node.range![0] };
-      const sites = payloadEmits.get(table) || [];
+      const sites = payloadEmits.get(varBinding) || [];
       sites.push(payloadEmit);
-      payloadEmits.set(table, sites);
+      payloadEmits.set(varBinding, sites);
     }
     if (emitter?.isLocal) return;
     if (forwarded) hasProtectedCalls = true;
@@ -2880,11 +2883,11 @@ function parseLuaUiEmits(content: string, file: string): {
     const { single, list } = resolveEmitControl(args?.[1], node, direct, branches);
     recordEmitResolution(namespace, list, node, single, forwarded, direct, block, args, payloadEmit, argument);
   });
-  const unaliasedPayloads = unaliasedLuaPayloads(ast, payloadEmits, indexedWrites, indexedClears);
+  const unaliasedPayloads = unaliasedLuaPayloads(payloadEmits, indexedWrites, indexedClears);
   const returnedPayloads = indexedWrites.length ? linkReturnedLuaPayloads(ast as LuaAstNode, protectedSends, returnedTableInitializers, source) : undefined;
   const payloadWrites = indexedWrites.map((write): PayloadWriteSite => {
-    const { key, table } = write;
-    const emits = write.local ? payloadEmits.get(table) || [] : [];
+    const { key, table, binding } = write;
+    const emits = binding ? payloadEmits.get(binding) || [] : [];
     const events = new Set<string>();
     const recipientEvents = new Set<string>();
     let recipientUnverified = false;
@@ -2894,10 +2897,10 @@ function parseLuaUiEmits(content: string, file: string): {
         continue;
       }
       const compatible = write.branches.every((branch, index) => branch === emit.branches[index]);
-      const cleared = indexedClears.some(clear => clear.local && clear.scope === write.scope && clear.table === table
+      const cleared = indexedClears.some(clear => clear.binding !== undefined && clear.binding === binding && clear.scope === write.scope
         && clear.key === key && clear.at >= write.at && clear.at < emit.at);
       const hasTableProof = !emit.needsUnaliasedTable || (!canJump && !!emit.directBlock
-        && write.directValueBlock === emit.directBlock && unaliasedPayloads.has(table));
+        && write.directValueBlock === emit.directBlock && !!binding && unaliasedPayloads.has(binding));
       if (emit.identities && write.at <= emit.at && compatible && hasTableProof) {
         for (const identity of emit.identities) {
           recipientEvents.add(identity);
@@ -4975,6 +4978,9 @@ AddUITriggeredEvent("ai_influence", "chat.response", {})`,
     { name: 'local_index_arithmetic_suffix', lua: `${localIndexTable}; p["po" .. (i + 1)] = "order"; ${emit}`, expected: ['payload_missing_writer'], noWrite: true },
     { name: 'local_index_call_suffix', lua: `${localIndexTable}; p["po" .. getIndex(i)] = "order"; ${emit}`, expected: ['payload_missing_writer'], noWrite: true },
     { name: 'local_index_foreign_member_suffix', lua: `${localIndexTable}; local other = { n = i }; p["po" .. other.n] = "order"; ${emit}`, expected: ['payload_missing_writer'], noWrite: true },
+    { name: 'same_file_distinct_functions_same_local_name', lua: `local function sendOther() ${localTable}; p["v" .. p.n] = "buy"; AddUITriggeredEvent("forge_qa", "other", p) end; local function sendOrders() ${localTable}; ${indexedWrite}; pcall(AddUITriggeredEvent, "forge_qa", "player_orders", p) end`, expected: [] },
+    { name: 'same_file_distinct_functions_wrong_event_disproof', lua: `local function sendOther() ${localTable}; ${indexedWrite}; AddUITriggeredEvent("forge_qa", "other", p) end; local function sendOrders() ${localTable}; p["v" .. p.n] = "move"; AddUITriggeredEvent("forge_qa", "player_orders", p) end`, expected: ['payload_missing_writer'] },
+    { name: 'same_file_distinct_functions_alias_escape_stays_unverified', lua: `local function sendOther() ${localTable}; p["v" .. p.n] = "buy"; AddUITriggeredEvent("forge_qa", "other", p) end; local function sendOrders() ${localTable}; local alias = p; Mutate(alias); ${indexedWrite}; pcall(AddUITriggeredEvent, "forge_qa", "player_orders", p) end`, expected: ['payload_writer_unverified'] },
   ];
   for (const test of writerCases) {
     const result = validateProjectCrossFile(indexedEventProject(test.lua, test.screen, test.control));

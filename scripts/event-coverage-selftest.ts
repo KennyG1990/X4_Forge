@@ -919,4 +919,44 @@ end`;
   }
 });
 
+check('same-file-lexical-payload-bindings-avoid-name-shadow-poisoning', () => {
+  const sameFileLua = [
+    'local function sendSpend()',
+    '  local p = { n = 1 }',
+    '  p["v" .. p.n] = "buy"',
+    '  AddUITriggeredEvent("ForgeLab", "spend_request", p)',
+    'end',
+    'local function sendOrders()',
+    '  local p = { n = 1 }',
+    '  p["po" .. p.n] = "dock"',
+    '  pcall(AddUITriggeredEvent, "ForgeLab", "probe", p)',
+    'end',
+  ].join('\n');
+  const validProj = project(sameFileLua);
+  const reader = validProj.files.find(file => file.path === 'md/forge_regression_lab.xml')!;
+  reader.content = reader.content!.replace('</cues>', [
+    '<cue name="Spend"><conditions><event_ui_triggered screen="\'ForgeLab\'" control="\'spend_request\'"/></conditions></cue>',
+    '<cue name="Orders"><conditions><event_ui_triggered screen="\'ForgeLab\'" control="\'probe\'"/></conditions><actions>',
+    '<set_value name="$po" exact="event.param3.{\'$po\' + $si}"/>',
+    '</actions></cue></cues>',
+  ].join('\n'));
+  const validRes = runProjectValidation(validProj);
+  assert.deepEqual(
+    validRes.evidence!.findings.filter(f => f.code?.startsWith('md_lua.payload_')),
+    [],
+  );
+
+  // Reading $v on 'probe' when $v is only written onto sendSpend()'s 'spend_request' table must report missing_writer error
+  const wrongKeyProj: ExtensionProject = {
+    ...validProj,
+    files: validProj.files.map(f => f.path === reader.path
+      ? { ...f, content: f.content!.replace('$po', '$v').replace("'$po'", "'$v'") }
+      : f),
+  };
+  const wrongKeyRes = runProjectValidation(wrongKeyProj);
+  const missing = wrongKeyRes.evidence!.findings.filter(f => f.code === 'md_lua.payload_missing_writer');
+  assert.equal(missing.length, 1);
+  assert.equal(missing[0].severity, 'error');
+});
+
 console.log(JSON.stringify({pass:true,total:checks.length,checks}));
