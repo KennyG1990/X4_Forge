@@ -2256,6 +2256,30 @@
       ]
     },
     {
+      "routeKey": "POST /api/agent/runtime/cue-telemetry",
+      "method": "POST",
+      "template": "/api/agent/runtime/cue-telemetry",
+      "owner": "runtime.cue.telemetry",
+      "resourceClass": "stateless-analysis",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1runtime~1cue-telemetry",
+      "integrationBatch": "W3B0-internal",
+      "history": "quiet",
+      "capability": {
+        "kind": "canonical",
+        "id": "runtime.cue.telemetry",
+        "version": 1
+      },
+      "semanticClass": "read-analysis-only",
+      "policy": "receipt-exempt",
+      "effects": [
+        "read",
+        "analyze"
+      ],
+      "authorityScopes": [
+        "global"
+      ]
+    },
+    {
       "routeKey": "POST /api/agent/runtime/probe-preview",
       "method": "POST",
       "template": "/api/agent/runtime/probe-preview",

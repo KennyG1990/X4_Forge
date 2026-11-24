@@ -63,6 +63,11 @@ const DIAGNOSTIC_READ_TOOLS = [
   'preview_contract_glue',
   'audit_workspace_patches',
   'inspect_schema_domain',
+  'list_reference_manifest_files',
+  'get_live_bridge_state',
+  'get_runtime_control_status',
+  'analyze_cue_telemetry',
+  'get_game_log_status',
 ];
 
 const MD_NAVIGATION_TOOL = 'navigate_md_script';
@@ -159,6 +164,7 @@ const READ_TOOLS = [
   'derive_external_api_contract', 'list_external_api_contracts', 'read_extension_file', 'read_patch_base_content', 'complete_xpath_selector', 'get_reference_coverage', 'list_lua_ui_snippets', 'harvest_vanilla_ui_menus',
   'prepare_bug_report', 'query_forge_knowledge', 'get_forge_health_card', 'preview_forge_probe', 'get_live_forge_state', 'get_workspace_domain',
   'get_ai_spend_status', 'preview_contract_glue', 'audit_workspace_patches', 'inspect_schema_domain',
+  'list_reference_manifest_files', 'get_live_bridge_state', 'get_runtime_control_status', 'analyze_cue_telemetry', 'get_game_log_status',
 ];
 const WRITE_TOOLS = [
   'validate_mod', 'list_schema_domains', 'get_workspace', 'compile_workspace', 'author_check',
@@ -1814,6 +1820,12 @@ try {
       { name: 'audit_workspace_patches', arguments: { mode: 'invalid' } },
       { name: 'inspect_schema_domain', arguments: { refresh: '2' } },
       { name: 'inspect_schema_domain', arguments: { domain: 'd'.repeat(129) } },
+      { name: 'list_reference_manifest_files', arguments: { role: 'bogus' } },
+      { name: 'list_reference_manifest_files', arguments: { q: 'q'.repeat(257) } },
+      { name: 'get_live_bridge_state', arguments: { extra: true } },
+      { name: 'get_runtime_control_status', arguments: { command: 'reloadui' } },
+      { name: 'analyze_cue_telemetry', arguments: { cueNames: [42] } },
+      { name: 'get_game_log_status', arguments: { modId: 'm'.repeat(129) } },
     ]) {
       const denied = await client.request('tools/call', invalid);
       assert.equal(denied.error?.code, -32602, `${invalid.name} malformed input must fail before HTTP`);

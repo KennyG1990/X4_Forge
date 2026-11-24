@@ -191,6 +191,11 @@ const DIAGNOSTIC_READ_LIVE_TOOLS = new Set([
   "preview_contract_glue",
   "audit_workspace_patches",
   "inspect_schema_domain",
+  "list_reference_manifest_files",
+  "get_live_bridge_state",
+  "get_runtime_control_status",
+  "analyze_cue_telemetry",
+  "get_game_log_status",
 ]);
 const PERFORMANCE_PROFILE_HTTP_FAILURES = { PROFILE_DISABLED: 503, PROFILE_BUSY: 409, PROFILE_RATE_LIMITED: 429, PROFILE_DISPOSED: 503, PROFILE_INPUT_INVALID: 400, PROFILE_ABORTED: 408, PROFILE_FAILED: 500, PROFILE_CLEANUP_UNCONFIRMED: 409 };
 const PERFORMANCE_COLLECTION_HTTP_FAILURES = { PERFORMANCE_DISPOSED: 503, PERFORMANCE_COLLECTION_BUSY: 409, PERFORMANCE_COLLECTION_REFUSED: 409, PROJECT_INPUT_INVALID: 400, PERFORMANCE_COLLECTION_FAILED: 500 };
@@ -3251,6 +3256,213 @@ const TOOLS = [
           domains: "array",
         },
       );
+    },
+  },
+  {
+    name: "list_reference_manifest_files",
+    capabilityId: "reference.manifest.list",
+    capabilityVersion: 1,
+    description: "Search and paginate indexed files across the unpacked X4 base-game and official DLC SQLite reference manifest by substring query, extension, source, domain, role, authority, or consumer (up to 500 rows per page) with host filesystem root and database paths redacted.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        q: { type: "string", maxLength: 256 },
+        extension: { type: "string", maxLength: 32 },
+        source: { type: "string", maxLength: 128 },
+        domain: { type: "string", maxLength: 128 },
+        role: {
+          type: "string",
+          enum: ["grammar", "canonical-data", "localization", "executable-example", "asset", "signature", "unsupported"],
+        },
+        authority: {
+          type: "string",
+          enum: ["deterministic", "canonical", "advisory", "existence", "none"],
+        },
+        consumer: { type: "string", maxLength: 128 },
+        limit: { type: "string", maxLength: 8 },
+        offset: { type: "string", maxLength: 12 },
+        refresh: { type: "string", enum: ["0", "1"] },
+        observe: { type: "string", enum: ["0", "1"] },
+      },
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams();
+      for (const key of ["q", "extension", "source", "domain", "role", "authority", "consumer", "limit", "offset", "refresh", "observe"]) {
+        if (args[key] !== undefined) q.set(key, String(args[key]));
+      }
+      return requireResponse(
+        await forge("GET", `/api/agent/reference/manifest?${q}`),
+        "reference manifest file list",
+        {
+          ok: "boolean",
+          ready: "boolean",
+          status: "object",
+          total: "number",
+          limit: "number",
+          offset: "number",
+          files: "array",
+        },
+      );
+    },
+  },
+  {
+    name: "get_live_bridge_state",
+    capabilityId: "runtime.bridge.read",
+    capabilityVersion: 1,
+    description: "Check whether an optional external runtime bridge is reachable and whether in-game bridge_events have arrived within the active play window, without exposing local SQLite paths.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+    },
+    handler: async () => {
+      const payload = requireResponse(
+        await forge("GET", "/api/agent/runtime/bridge-state"),
+        "live bridge state",
+        {
+          ok: "boolean",
+          success: "boolean",
+          bridgeUp: "boolean",
+          gameActive: "boolean",
+          eventsLastHour: "number",
+          errorsLastHour: "number",
+          summary: "string",
+        },
+      );
+      if (payload.lastEventAgoMs !== null && typeof payload.lastEventAgoMs !== "number") {
+        const error = new Error("live bridge state response has invalid lastEventAgoMs field");
+        error.invalidResponse = true;
+        throw error;
+      }
+      if (payload.lastEventKind !== null && typeof payload.lastEventKind !== "string") {
+        const error = new Error("live bridge state response has invalid lastEventKind field");
+        error.invalidResponse = true;
+        throw error;
+      }
+      return payload;
+    },
+  },
+  {
+    name: "get_runtime_control_status",
+    capabilityId: "runtime.control.read",
+    capabilityVersion: 1,
+    description: "Inspect runtime-control enablement, companion helper readiness, current logRead state, supported reload commands (refreshmd, reloadui), and any active reload authorization status for the addressed workspace without queuing commands or exposing host paths.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+    },
+    handler: async () => {
+      const payload = requireResponse(
+        await forge("GET", "/api/agent/runtime/control-status"),
+        "runtime control status",
+        {
+          ok: "boolean",
+          success: "boolean",
+          enabled: "boolean",
+          modId: "string",
+          workspaceId: "string",
+          workspaceHash: "string",
+          helperAvailable: "boolean",
+          supportedCommands: "array",
+          gameVerified: "boolean",
+          note: "string",
+        },
+      );
+      if (payload.sessionId !== null && typeof payload.sessionId !== "string") {
+        const error = new Error("runtime control status response has invalid sessionId field");
+        error.invalidResponse = true;
+        throw error;
+      }
+      if (payload.request !== null && (!payload.request || typeof payload.request !== "object" || Array.isArray(payload.request))) {
+        const error = new Error("runtime control status response has invalid request field");
+        error.invalidResponse = true;
+        throw error;
+      }
+      return payload;
+    },
+  },
+  {
+    name: "analyze_cue_telemetry",
+    capabilityId: "runtime.cue.telemetry",
+    capabilityVersion: 1,
+    description: "Correlate explicit cueNames (up to 500) or the addressed workspace cue nodes against the active X4 debug log tail, returning per-cue fire/error counts, latest FORGE-WATCH values, and live bridge status with host log paths redacted.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        cueNames: {
+          type: "array",
+          items: { type: "string", maxLength: 256 },
+        },
+      },
+    },
+    handler: async (args) => {
+      const payload = requireResponse(
+        await forge("POST", "/api/agent/runtime/cue-telemetry", args),
+        "live cue telemetry",
+        {
+          ok: "boolean",
+          success: "boolean",
+          available: "boolean",
+          live: "boolean",
+          cueCount: "number",
+          cues: "array",
+          watches: "array",
+          bridge: "object",
+        },
+      );
+      if (payload.logUpdatedAt !== null && typeof payload.logUpdatedAt !== "string") {
+        const error = new Error("live cue telemetry response has invalid logUpdatedAt field");
+        error.invalidResponse = true;
+        throw error;
+      }
+      if (payload.totals !== null && (!payload.totals || typeof payload.totals !== "object" || Array.isArray(payload.totals))) {
+        const error = new Error("live cue telemetry response has invalid totals field");
+        error.invalidResponse = true;
+        throw error;
+      }
+      return payload;
+    },
+  },
+  {
+    name: "get_game_log_status",
+    capabilityId: "runtime.gamelog.read",
+    capabilityVersion: 1,
+    description: "Inspect the latest X4 debug log for the target modId or addressed workspace, returning load/activity pipeline states, cue liveness, FORGE-LUAV resident-vs-disk Lua staleness (#7), root-cause diagnosis, and bounded scrubbed issues/tailLines with host paths redacted.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        modId: { type: "string", maxLength: 128 },
+      },
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams();
+      if (args.modId !== undefined) q.set("modId", String(args.modId));
+      const payload = requireResponse(
+        await forge("GET", `/api/agent/runtime/game-log?${q}`),
+        "live X4 game log status",
+        {
+          ok: "boolean",
+          success: "boolean",
+          status: "string",
+          modId: "string",
+          logAvailable: "boolean",
+          logBytes: "number",
+          summary: "string",
+          counts: "object",
+          issues: "array",
+          tailLines: "array",
+        },
+      );
+      if (payload.logUpdatedAt !== null && typeof payload.logUpdatedAt !== "string") {
+        const error = new Error("live X4 game log status response has invalid logUpdatedAt field");
+        error.invalidResponse = true;
+        throw error;
+      }
+      return payload;
     },
   },
 ];

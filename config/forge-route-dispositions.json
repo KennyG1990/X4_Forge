@@ -2263,6 +2263,18 @@
       "resourceClass": "stateless-analysis",
       "workspaceMode": "optional"
     },
+    "GET /api/agent/reference/manifest": {
+      "disposition": "canonical-capability",
+      "owner": "reference.manifest.list",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "stateless-analysis",
+      "workspaceMode": "none"
+    },
     "GET /api/agent/reference/status": {
       "disposition": "canonical-capability",
       "owner": "reference.status.read",
@@ -2359,6 +2371,30 @@
       "resourceClass": "public",
       "workspaceMode": "optional"
     },
+    "GET /api/agent/runtime/bridge-state": {
+      "disposition": "canonical-capability",
+      "owner": "runtime.bridge.read",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "stateless-analysis",
+      "workspaceMode": "none"
+    },
+    "GET /api/agent/runtime/control-status": {
+      "disposition": "canonical-capability",
+      "owner": "runtime.control.read",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "workspace",
+      "workspaceMode": "required"
+    },
     "GET /api/agent/runtime/forge-state": {
       "disposition": "canonical-capability",
       "owner": "runtime.state.read",
@@ -2370,6 +2406,18 @@
       ],
       "resourceClass": "configured-root",
       "workspaceMode": "none"
+    },
+    "GET /api/agent/runtime/game-log": {
+      "disposition": "canonical-capability",
+      "owner": "runtime.gamelog.read",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "stateless-analysis",
+      "workspaceMode": "optional"
     },
     "GET /api/agent/runtime/health-card": {
       "disposition": "canonical-capability",
@@ -4188,6 +4236,18 @@
       "resourceClass": "workspace",
       "workspaceMode": "required"
     },
+    "POST /api/agent/runtime/cue-telemetry": {
+      "disposition": "canonical-capability",
+      "owner": "runtime.cue.telemetry",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "stateless-analysis",
+      "workspaceMode": "optional"
+    },
     "POST /api/agent/runtime/probe-preview": {
       "disposition": "canonical-capability",
       "owner": "runtime.probe.preview",
@@ -4730,6 +4790,7 @@
     "reference.coverage.read@1": "9807a23df4d6c166e214f7726d30e40598316dc87c76fd9c0aca10091d8960be",
     "reference.file.read@1": "99bad92de0468d561ec970602cf96e7390f5baab046a4acc9d5301a3e053b008",
     "reference.galaxy.read@1": "fa6eb49a3b786091ce88ab12575187dcb0002fbe80a3da3d5378a791f0a087e7",
+    "reference.manifest.list@1": "5789be7feafbd5d7a6205475f8b0057374e0a1bd9cc8ec03abb9439a4e4e50bc",
     "reference.objects.search@1": "20b6c432adf4165f59a0edbd7b04df9a5820773ec0a67b49d4607acef9a8a314",
     "reference.status.read@1": "5320a3b3f91fc1d544c9a0b5f4e00e516516865efe15125608521c438038fc1f",
     "reference.suggest@1": "fc01662e1f79253fb811f0a4e0925e3d899b99cf80308a36f10fc243e761460e",
@@ -4741,7 +4802,11 @@
     "reviews.warning.revoke@1": "3d80060fb8113975fffa10d1ef1eadf7f9a2e85ea58fd5c70181db34acd8c775",
     "rules.suppression.apply@1": "6e13f1e54fa0e700a3406dbcaadcbb830915cba87c26997a6015d07cd6e73178",
     "rules.suppression.prepare@1": "a056605dac950c518a149a2b85c4a0ad6824b1ec2a842f4213e3d267fc294a05",
+    "runtime.bridge.read@1": "8851cb6daae5eb1ec1367962b3d0b319843062553d7048869d982c5d04613c33",
+    "runtime.control.read@1": "5e89b1b007ee63f6b3e76dba32975bb80f098834c873b336a295f8786ae6fc7e",
+    "runtime.cue.telemetry@1": "f4cf2aa60f013fe075514f30df92a42edf2f70abc9f7429588db869269a2a87d",
     "runtime.debug.read@1": "8d0d15b310655431fa08afdf161575c5873a62261f1e511e9b0ccf9260d84311",
+    "runtime.gamelog.read@1": "a22734f92f8be120bd2a0e790801ba6112473db726a21b720ff3a3a4e9e03c3a",
     "runtime.health.read@1": "09baaa412b3215b7f0eb354e279876435ccb387950fae6fe8efeb8473522beda",
     "runtime.log.diagnose@1": "a5b1ef6f5323695f7ca5a3a47c0bbf103cca4777ef163913528a4838d843d589",
     "runtime.probe.preview@1": "2a4eb0be1027fd55d83a29a01a638806a56630ec1e5d10ffd3336cda66ddec20",
@@ -4768,8 +4833,8 @@
     "workspace.roundtrip.check@1": "c1a1c89c1eb3f44f8f16e6ca03e9787318eec5065bcf25dd2c3ce3a4b4045185"
   },
   "mcpModuleSignature": {
-    "version": 39,
-    "hash": "485bbfb0e1076d6f67b4793027bd981c79e7882d747430fb56370088ff3224ea"
+    "version": 40,
+    "hash": "fd27d0cc18304d0f4fe9d3afbd828162b93f29f6a22bc9808479a56028d70b80"
   },
   "mcpSignatures": {
     "validate_mod": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",
@@ -4870,7 +4935,12 @@
     "get_ai_spend_status": "15b22bc452ccecbb57aba4eeae42e34536fb8225ea8ec74253270e349e07d1a7",
     "preview_contract_glue": "8c30893d8c51fadf607e7cac703c2c368eb61e4626822d33b05e5d919f26cfbd",
     "audit_workspace_patches": "517a36b6f6cf0b0f39c72ba5871e2587e4d29a69731dd0754cc695464e6c35a2",
-    "inspect_schema_domain": "ce0ad441fc84e11f7427a7e064e5b702bbe7dc6f226877ec4f3bb55b09898d27"
+    "inspect_schema_domain": "ce0ad441fc84e11f7427a7e064e5b702bbe7dc6f226877ec4f3bb55b09898d27",
+    "list_reference_manifest_files": "4aa3f81f476557e2099cbe91d5e1b6570d39fdcd173a40fa296f0a9e47714fa9",
+    "get_live_bridge_state": "c0652d40186f2514fa7e4f5ce3750270ce7d21ef45b6317975ef4cb240d5d97b",
+    "get_runtime_control_status": "99e30ffe4ec682a4a8a6df421f518a6f289a864f4f7be83465ce0a12b0c9fa76",
+    "analyze_cue_telemetry": "c606d214cdf798454e30c45280cab1e95a012b1d894979962072ec604048d8cf",
+    "get_game_log_status": "885dff61e657f7738a57e76b8f98dada3460d78d0b28f48135a7a7a8c692c50d"
   },
   "mcpCapabilityIdentities": {
     "validate_mod": "project.validate@1",
@@ -4971,6 +5041,11 @@
     "get_ai_spend_status": "ai.usage.read@1",
     "preview_contract_glue": "contracts.glue.preview@1",
     "audit_workspace_patches": "patch.audit.read@1",
-    "inspect_schema_domain": "schema.domain.inspect@1"
+    "inspect_schema_domain": "schema.domain.inspect@1",
+    "list_reference_manifest_files": "reference.manifest.list@1",
+    "get_live_bridge_state": "runtime.bridge.read@1",
+    "get_runtime_control_status": "runtime.control.read@1",
+    "analyze_cue_telemetry": "runtime.cue.telemetry@1",
+    "get_game_log_status": "runtime.gamelog.read@1"
   }
 }

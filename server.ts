@@ -135,6 +135,7 @@ import {
   registerReferenceRoutes,
   respondAgentEffectiveReferenceFile,
   respondAgentReferenceCoverage,
+  respondAgentReferenceManifest,
   respondAgentReferenceStatus,
   respondAgentReferenceSuggest,
   respondAgentSimulateDiff,
@@ -1284,6 +1285,11 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
       || authority.decision.routeKey === 'POST /api/agent/external-api/glue-preview'
       || authority.decision.routeKey === 'GET /api/agent/patch/audit'
       || authority.decision.routeKey === 'GET /api/agent/schema/domain'
+      || authority.decision.routeKey === 'GET /api/agent/reference/manifest'
+      || authority.decision.routeKey === 'GET /api/agent/runtime/bridge-state'
+      || authority.decision.routeKey === 'GET /api/agent/runtime/control-status'
+      || authority.decision.routeKey === 'POST /api/agent/runtime/cue-telemetry'
+      || authority.decision.routeKey === 'GET /api/agent/runtime/game-log'
       || (authority.decision.routeKey === 'GET /api/agent/status'
         && (req.query.inspectDeployTarget !== undefined || req.query.inspectDeployEffect !== undefined))
       || authority.decision.routeKey === 'POST /api/agent/history/:id/revert'
@@ -10285,6 +10291,7 @@ app.get("/api/agent/object-index", (req, res) => {
 
 app.get("/api/agent/reference/status", (req, res) => respondAgentReferenceStatus(req, res));
 app.get("/api/agent/reference/coverage", (req, res) => respondAgentReferenceCoverage(req, res));
+app.get("/api/agent/reference/manifest", (req, res) => respondAgentReferenceManifest(req, res));
 app.get("/api/agent/reference/effective-file", (req, res) => respondAgentEffectiveReferenceFile(req, res));
 app.get("/api/agent/reference/suggest", (req, res) => {
   const ws = decoratedReq(req).__workspaceRecord?.workspace as ModWorkspace | undefined;
@@ -15426,31 +15433,44 @@ app.get("/api/agent/mod-drift", (req, res) => {
 // posts ITS OWN cue names and gets back per-cue fire/error counts from the debug-log
 // tail, plus a `live` freshness flag (log written within the last 2 minutes = the game
 // is actively playing). Works for undeployed workspaces too — names come from the graph.
+async function executeLiveCueTelemetry(cueNames: string[]) {
+  const bridge = await getBridgeLiveState(); // cached ~10s; never throws
+  const candidates = findDebugLogCandidates();
+  const logPath = candidates.find(c => { try { return fs.statSync(c).isFile(); } catch { return false; } });
+  if (!logPath) {
+    return {
+      available: false,
+      live: false,
+      reason: "No X4 debuglog found in the known locations.",
+      cues: [] as ReturnType<typeof parseLogTelemetry>['cues'],
+      watches: [] as ReturnType<typeof parseForgeWatches>,
+      bridge,
+    };
+  }
+  const stat = fs.statSync(logPath);
+  const tail = readTail(logPath, 256 * 1024);
+  const telemetry = parseLogTelemetry(tail, cueNames);
+  return {
+    available: true,
+    logPath,
+    logUpdatedAt: stat.mtime.toISOString(),
+    live: (Date.now() - stat.mtimeMs) < 120_000,
+    cues: telemetry.cues,
+    totals: telemetry.totals,
+    // FORGE-WATCH protocol values (slice 3) — latest per name from the tail.
+    watches: parseForgeWatches(tail),
+    // game←→bridge chain freshness (slice 2).
+    bridge,
+  };
+}
+
 app.post("/api/agent/live/cue-telemetry", async (req, res) => {
   try {
     const cueNames = Array.isArray(req.body?.cueNames)
       ? req.body.cueNames.map((n: unknown) => String(n || "").trim()).filter(Boolean).slice(0, 500)
       : [];
     if (!cueNames.length) return res.status(400).json({ error: "Body must be { cueNames: string[] }." });
-    const bridge = await getBridgeLiveState(); // cached ~10s; never throws
-    const candidates = findDebugLogCandidates();
-    const logPath = candidates.find(c => { try { return fs.statSync(c).isFile(); } catch { return false; } });
-    if (!logPath) return res.json({ available: false, live: false, reason: "No X4 debuglog found in the known locations.", cues: [], watches: [], bridge });
-    const stat = fs.statSync(logPath);
-    const tail = readTail(logPath, 256 * 1024);
-    const telemetry = parseLogTelemetry(tail, cueNames);
-    return res.json({
-      available: true,
-      logPath,
-      logUpdatedAt: stat.mtime.toISOString(),
-      live: (Date.now() - stat.mtimeMs) < 120_000,
-      cues: telemetry.cues,
-      totals: telemetry.totals,
-      // FORGE-WATCH protocol values (slice 3) — latest per name from the tail.
-      watches: parseForgeWatches(tail),
-      // game←→bridge chain freshness (slice 2).
-      bridge,
-    });
+    return res.json(await executeLiveCueTelemetry(cueNames));
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) || "live cue-telemetry failed" });
   }
@@ -16394,6 +16414,204 @@ app.get("/api/agent/schema/domain", (req, res) => {
     return res.json(body);
   } catch (error) {
     return res.status(500).json({ ok: false, success: false, error: errorMessage(error) || 'schema domain inspect failed' });
+  }
+});
+
+app.get("/api/agent/runtime/bridge-state", async (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const queryError = validateClosedAgentQuery(req.query, ['workspaceId', 'clientId'], 'runtime.bridge.read');
+    if (queryError) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    }
+    const state = await getBridgeLiveState();
+    return res.json({
+      ok: true,
+      success: true,
+      ...state,
+      summary: scrubBugReportValue(state.summary),
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, success: false, error: errorMessage(error) || 'runtime bridge-state failed' });
+  }
+});
+
+app.get("/api/agent/runtime/control-status", (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const queryError = validateClosedAgentQuery(req.query, ['workspaceId', 'clientId'], 'runtime.control.read');
+    if (queryError) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    }
+    const record = resolveWorkspaceAuthority(req, res, true);
+    if (!record) return;
+    res.locals.apiSubject = workspaceRecordSubject(record);
+    const payload = buildAddressedDebugWatcherBrief(record, [], false) as RuntimeDebuggerAdapterResult['payload'];
+    const subject = {
+      workspaceId: record.workspaceId,
+      head: record.head,
+      modId: effectiveModId(activeBuildWorkspace(record.workspace)),
+      payload,
+    };
+    const result = runtimeControl.status(subject);
+    return res.json({ ok: true, success: true, ...result });
+  } catch (error) {
+    const status = (error as { status?: number })?.status || 507;
+    const code = (error as { code?: string })?.code || 'RUNTIME_CONTROL_FAILED';
+    return res.status(status).json({
+      ok: false,
+      success: false,
+      code,
+      error: errorMessage(error) || 'Runtime control unavailable; no execution proof.',
+    });
+  }
+});
+
+app.post("/api/agent/runtime/cue-telemetry", async (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    if (!isPlainRecord(req.body)) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'runtime.cue.telemetry requires a JSON object body.' });
+    }
+    const extra = unknownObjectKeys(req.body, new Set(['cueNames']));
+    if (extra.length > 0) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: `runtime.cue.telemetry does not accept: ${extra.join(', ')}` });
+    }
+    let cueNames: string[] = [];
+    if (req.body.cueNames !== undefined) {
+      if (!Array.isArray(req.body.cueNames) || req.body.cueNames.length === 0 || req.body.cueNames.length > 500) {
+        return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'cueNames must be a non-empty array of at most 500 cue names.' });
+      }
+      for (let i = 0; i < req.body.cueNames.length; i += 1) {
+        const item = req.body.cueNames[i];
+        if (typeof item !== 'string' || !item.trim() || item.length > 256) {
+          return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: `cueNames[${i}] must be a non-empty string <= 256 characters.` });
+        }
+        cueNames.push(item.trim());
+      }
+    } else {
+      const record = resolveWorkspaceAuthority(req, res, true);
+      if (!record) return;
+      res.locals.apiSubject = workspaceRecordSubject(record);
+      const sanitized = sanitizeWorkspace(record.workspace);
+      cueNames = (sanitized.nodes || [])
+        .filter(n => n.xmlTag === 'cue' || n.type === 'cue')
+        .map(n => String(n.properties?.name || n.label || '').trim())
+        .filter(Boolean)
+        .slice(0, 500);
+    }
+
+    if (cueNames.length === 0) {
+      const bridge = await getBridgeLiveState();
+      return res.json({
+        ok: true,
+        success: true,
+        available: false,
+        live: false,
+        cueCount: 0,
+        logUpdatedAt: null,
+        reason: 'No cue names were supplied or found in the addressed workspace.',
+        cues: [],
+        totals: null,
+        watches: [],
+        bridge: { ...bridge, summary: scrubBugReportValue(bridge.summary) },
+      });
+    }
+
+    const result = await executeLiveCueTelemetry(cueNames);
+    return res.json({
+      ok: true,
+      success: true,
+      available: result.available,
+      live: result.live,
+      cueCount: cueNames.length,
+      logUpdatedAt: 'logUpdatedAt' in result ? (result.logUpdatedAt ?? null) : null,
+      ...('reason' in result && result.reason ? { reason: scrubBugReportValue(result.reason) } : {}),
+      cues: result.cues,
+      totals: 'totals' in result ? (result.totals ?? null) : null,
+      watches: result.watches,
+      bridge: { ...result.bridge, summary: scrubBugReportValue(result.bridge.summary) },
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, success: false, error: errorMessage(error) || 'runtime cue-telemetry failed' });
+  }
+});
+
+function scrubHostPathsDeep<T>(value: T): T {
+  if (typeof value === 'string') return scrubBugReportValue(redactSecrets(value)) as unknown as T;
+  if (Array.isArray(value)) return value.map(item => scrubHostPathsDeep(item)) as unknown as T;
+  if (isPlainRecord(value)) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) out[k] = scrubHostPathsDeep(v);
+    return out as unknown as T;
+  }
+  return value;
+}
+
+app.get("/api/agent/runtime/game-log", (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const queryError = validateClosedAgentQuery(req.query, ['modId', 'workspaceId', 'clientId'], 'runtime.gamelog.read');
+    if (queryError) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    }
+    let explicitModId: string | undefined;
+    if (req.query.modId !== undefined) {
+      if (typeof req.query.modId !== 'string' || !req.query.modId.trim() || req.query.modId.length > 128 || !/^[A-Za-z0-9_.-]+$/.test(req.query.modId.trim())) {
+        return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'modId must be a 1..128 char safe mod identifier.' });
+      }
+      explicitModId = req.query.modId.trim();
+    }
+    let workspaceName: string | undefined;
+    if (!explicitModId && (typeof req.headers['x-workspace-id'] === 'string' || typeof req.query.workspaceId === 'string')) {
+      const record = resolveWorkspaceAuthority(req, res, true);
+      if (!record) return;
+      res.locals.apiSubject = workspaceRecordSubject(record);
+      const ws = activeBuildWorkspace(record.workspace);
+      explicitModId = (() => { try { return effectiveModId(ws); } catch { return undefined; } })();
+      workspaceName = ws.name;
+    }
+
+    const raw = getGameLogStatus(explicitModId, workspaceName);
+    const logAvailable = raw.status !== 'no_log';
+    const rawAny = raw as Record<string, unknown>;
+    const lastDeployRedacted = raw.lastDeploy
+      ? {
+          modId: raw.lastDeploy.modId,
+          ...(raw.lastDeploy.contentId ? { contentId: raw.lastDeploy.contentId } : {}),
+          deployedAt: raw.lastDeploy.deployedAt,
+          deployedFolder: raw.lastDeploy.deployedPath ? path.basename(raw.lastDeploy.deployedPath) : '',
+        }
+      : null;
+    const rawLuaStaleness = rawAny.luaStaleness as Record<string, unknown> | undefined;
+    const redactedLuaStaleness = rawLuaStaleness
+      ? {
+          ...rawLuaStaleness,
+          ...(typeof rawLuaStaleness.summary === 'string' ? { summary: scrubBugReportValue(rawLuaStaleness.summary) } : {}),
+        }
+      : null;
+    return res.json({
+      ok: true,
+      success: true,
+      status: raw.status,
+      modId: raw.modId,
+      logAvailable,
+      logUpdatedAt: typeof rawAny.logUpdatedAt === 'string' ? rawAny.logUpdatedAt : null,
+      logBytes: typeof rawAny.logBytes === 'number' ? rawAny.logBytes : 0,
+      summary: scrubBugReportValue(raw.summary),
+      lastDeploy: lastDeployRedacted,
+      cueLiveness: rawAny.cueLiveness ? scrubHostPathsDeep(rawAny.cueLiveness) : null,
+      modRuntime: rawAny.modRuntime ? scrubHostPathsDeep(rawAny.modRuntime) : null,
+      luaStaleness: redactedLuaStaleness ? scrubHostPathsDeep(redactedLuaStaleness) : null,
+      states: rawAny.states ?? null,
+      loadEvidence: rawAny.loadEvidence ?? null,
+      counts: rawAny.counts ?? { allIssues: 0, activeIssues: 0, activeErrors: 0, activeWarnings: 0 },
+      issues: (Array.isArray(raw.issues) ? raw.issues.slice(0, 50) : []).map(i => scrubHostPathsDeep(i)),
+      diagnosis: rawAny.diagnosis ? scrubHostPathsDeep(rawAny.diagnosis) : null,
+      tailLines: (Array.isArray(raw.tailLines) ? raw.tailLines.slice(-80) : []).map(l => scrubBugReportValue(String(l))),
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, success: false, error: errorMessage(error) || 'runtime game-log status failed' });
   }
 });
 

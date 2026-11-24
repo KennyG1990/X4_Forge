@@ -128,6 +128,7 @@ export const LEDGER_QUIET_ROUTES: string[] = [
   '/api/agent/patch/xpath-complete',
   '/api/agent/log-file-tail',
   '/api/agent/live/cue-telemetry',
+  '/api/agent/runtime/cue-telemetry',
   '/api/agent/quick-fixes',
   '/api/agent/project/validate-crossfile',
   '/api/agent/project/xml-references',

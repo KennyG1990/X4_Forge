@@ -2026,6 +2026,71 @@ async function main() {
       assert.equal(clearedContract.isError, false, JSON.stringify(clearedContract.payload));
       assert.equal(clearedContract.payload.data?.integrationContract, null);
     });
+
+    await check('17_reference_manifest_pagination_and_live_runtime_diagnostics_over_mcp', async () => {
+      const readList = ((await presetReadMcp.request('tools/list')).result?.tools || []).map((t: any) => t.name);
+      for (const expectedTool of [
+        'list_reference_manifest_files',
+        'get_live_bridge_state',
+        'get_runtime_control_status',
+        'analyze_cue_telemetry',
+        'get_game_log_status',
+      ]) {
+        assert(readList.includes(expectedTool), `preset read key must advertise ${expectedTool}`);
+      }
+
+      const ledgerBefore = (await presetReadMcp.callTool('list_action_history', { limit: 100 })).payload.total;
+
+      // 1. list_reference_manifest_files paginates indexed SQLite manifest files while redacting root and database paths
+      const manifestRes = await presetReadMcp.callTool('list_reference_manifest_files', {
+        domain: 'libraries',
+        limit: '5',
+        offset: '0',
+      });
+      assert.equal(manifestRes.isError, false, JSON.stringify(manifestRes.payload));
+      assert.equal(manifestRes.payload.ok, true);
+      assert.equal(manifestRes.payload.ready, true);
+      assert(manifestRes.payload.total >= 2);
+      assert(Array.isArray(manifestRes.payload.files));
+      assert(!JSON.stringify(manifestRes.payload).includes(corpusDir), 'list_reference_manifest_files leaked corpusDir');
+      assert(!JSON.stringify(manifestRes.payload).includes(dataDir), 'list_reference_manifest_files leaked dataDir');
+
+      // 2. get_live_bridge_state returns normalized external runtime /health + bridge_events liveness
+      const bridgeRes = await presetReadMcp.callTool('get_live_bridge_state', {});
+      assert.equal(bridgeRes.isError, false, JSON.stringify(bridgeRes.payload));
+      assert.equal(bridgeRes.payload.ok, true);
+      assert.equal(typeof bridgeRes.payload.bridgeUp, 'boolean');
+      assert.equal(typeof bridgeRes.payload.gameActive, 'boolean');
+      assert(!JSON.stringify(bridgeRes.payload).includes(root), 'get_live_bridge_state leaked host root');
+
+      // 3. get_runtime_control_status reads addressed workspace companion reload status without host paths
+      const ctrlRes = await presetReadMcp.callTool('get_runtime_control_status', {});
+      assert.equal(ctrlRes.isError, false, JSON.stringify(ctrlRes.payload));
+      assert.equal(ctrlRes.payload.ok, true);
+      assert.equal(ctrlRes.payload.workspaceId, wsId);
+      assert.deepEqual(ctrlRes.payload.supportedCommands, ['refreshmd', 'reloadui']);
+      assert(!JSON.stringify(ctrlRes.payload).includes(root), 'get_runtime_control_status leaked host root');
+
+      // 4. analyze_cue_telemetry correlates explicit cueNames and addressed workspace cues quietly with host logPath redacted
+      const cueRes = await presetReadMcp.callTool('analyze_cue_telemetry', { cueNames: ['Init', 'SharedCue'] });
+      assert.equal(cueRes.isError, false, JSON.stringify(cueRes.payload));
+      assert.equal(cueRes.payload.ok, true);
+      assert.equal(cueRes.payload.cueCount, 2);
+      assert.equal((cueRes.payload as any).logPath, undefined, 'analyze_cue_telemetry must redact logPath');
+      assert(!JSON.stringify(cueRes.payload).includes(root), 'analyze_cue_telemetry leaked host root');
+
+      // 5. get_game_log_status classifies live X4 debug log + FORGE-LUAV Lua staleness without selectedLogPath / checkedPaths leaks
+      const gameLogRes = await presetReadMcp.callTool('get_game_log_status', { modId });
+      assert.equal(gameLogRes.isError, false, JSON.stringify(gameLogRes.payload));
+      assert.equal(gameLogRes.payload.ok, true);
+      assert(['no_log', 'stale', 'errors', 'warnings', 'clean'].includes(gameLogRes.payload.status));
+      assert.equal((gameLogRes.payload as any).selectedLogPath, undefined, 'get_game_log_status must redact selectedLogPath');
+      assert.equal((gameLogRes.payload as any).checkedPaths, undefined, 'get_game_log_status must redact checkedPaths');
+      assert(!JSON.stringify(gameLogRes.payload).includes(root), 'get_game_log_status leaked host root');
+
+      const ledgerAfter = (await presetReadMcp.callTool('list_action_history', { limit: 100 })).payload.total;
+      assert.equal(ledgerAfter, ledgerBefore, 'Slice 14 read/analyze MCP calls must stay quiet in Action Ledger');
+    });
   } finally {
     for (const s of mcpSessions) {
       try { await s.close(); } catch { /* ignore */ }

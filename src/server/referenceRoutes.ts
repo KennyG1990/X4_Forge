@@ -179,6 +179,107 @@ export function respondAgentReferenceCoverage(req: Request, res: Response): Resp
   } catch (error) { return sendCorpusError(res, error); }
 }
 
+export function respondAgentReferenceManifest(req: Request, res: Response): Response {
+  res.set('Cache-Control', 'no-store');
+  const queryError = validateReferenceCapabilityQuery(
+    req.query,
+    ['q', 'extension', 'source', 'domain', 'role', 'authority', 'consumer', 'limit', 'offset', 'refresh', 'observe', 'workspaceId', 'clientId'],
+    'reference.manifest.list',
+  );
+  if (queryError) return res.status(400).json({ ok: false, ready: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+  if (req.query.refresh !== undefined && req.query.refresh !== '0' && req.query.refresh !== '1') {
+    return res.status(400).json({ ok: false, ready: false, code: 'CAPABILITY_INPUT_INVALID', error: 'Optional ?refresh= must be 0 or 1.' });
+  }
+  if (req.query.observe !== undefined && req.query.observe !== '0' && req.query.observe !== '1') {
+    return res.status(400).json({ ok: false, ready: false, code: 'CAPABILITY_INPUT_INVALID', error: 'Optional ?observe= must be 0 or 1.' });
+  }
+  for (const strKey of ['q', 'extension', 'source', 'domain', 'role', 'authority', 'consumer'] as const) {
+    const val = req.query[strKey];
+    if (val !== undefined && (typeof val !== 'string' || val.length > 256)) {
+      return res.status(400).json({ ok: false, ready: false, code: 'CAPABILITY_INPUT_INVALID', error: `Optional ?${strKey}= must be a string <= 256 characters.` });
+    }
+  }
+  let parsedLimit = 100;
+  if (req.query.limit !== undefined) {
+    if (typeof req.query.limit !== 'string' || !/^\d+$/.test(req.query.limit)) {
+      return res.status(400).json({ ok: false, ready: false, code: 'CAPABILITY_INPUT_INVALID', error: 'limit must be an integer between 1 and 500.' });
+    }
+    const n = Number.parseInt(req.query.limit, 10);
+    if (!Number.isSafeInteger(n) || n < 1 || n > 500) {
+      return res.status(400).json({ ok: false, ready: false, code: 'CAPABILITY_INPUT_INVALID', error: 'limit must be between 1 and 500.' });
+    }
+    parsedLimit = n;
+  }
+  let parsedOffset = 0;
+  if (req.query.offset !== undefined) {
+    if (typeof req.query.offset !== 'string' || !/^\d+$/.test(req.query.offset)) {
+      return res.status(400).json({ ok: false, ready: false, code: 'CAPABILITY_INPUT_INVALID', error: 'offset must be an integer between 0 and 1000000.' });
+    }
+    const n = Number.parseInt(req.query.offset, 10);
+    if (!Number.isSafeInteger(n) || n < 0 || n > 1_000_000) {
+      return res.status(400).json({ ok: false, ready: false, code: 'CAPABILITY_INPUT_INVALID', error: 'offset must be between 0 and 1000000.' });
+    }
+    parsedOffset = n;
+  }
+
+  try {
+    const observe = req.query.observe === '1';
+    const root = observe ? resolveX4ReferenceRoot() : resolveXsdConfig().x4ReferenceRoot;
+    let status = !observe && req.query.refresh === '1'
+      ? scheduleReferenceManifest(root, true)
+      : getReferenceManifestStatus(root, { openDatabase: !observe });
+    if (!observe && status.state === 'idle') status = scheduleReferenceManifest(root, false);
+    const redactedStatus = redactReferenceManifestForAgent(status);
+    if (observe && !status.current) {
+      const httpStatus = status.state === 'unavailable' || status.state === 'error' ? 503 : 202;
+      return res.status(httpStatus).json({
+        ok: httpStatus === 202,
+        ready: false,
+        ...(httpStatus === 503 ? { code: 'REFERENCE_MANIFEST_UNAVAILABLE', error: status.error || 'Reference manifest is unavailable.' } : {}),
+        status: redactedStatus,
+        total: 0,
+        limit: parsedLimit,
+        offset: parsedOffset,
+        files: [],
+      });
+    }
+    const extensionInput = String(req.query.extension || '').trim().toLowerCase();
+    const result = queryReferenceManifest(root, {
+      q: String(req.query.q || '').trim(),
+      extension: extensionInput ? (extensionInput.startsWith('.') ? extensionInput : `.${extensionInput}`) : undefined,
+      source: String(req.query.source || '').trim().toLowerCase() || undefined,
+      domain: String(req.query.domain || '').trim().toLowerCase() || undefined,
+      role: String(req.query.role || '').trim().toLowerCase() || undefined,
+      authority: String(req.query.authority || '').trim().toLowerCase() || undefined,
+      consumer: String(req.query.consumer || '').trim().toLowerCase() || undefined,
+      limit: parsedLimit,
+      offset: parsedOffset,
+    });
+    if (!result) {
+      const httpStatus = status.state === 'error' || status.state === 'unavailable' ? 503 : 202;
+      return res.status(httpStatus).json({
+        ok: httpStatus === 202,
+        ready: false,
+        ...(httpStatus === 503 ? { code: 'REFERENCE_MANIFEST_UNAVAILABLE', error: status.error || 'Reference manifest is unavailable.' } : {}),
+        status: redactedStatus,
+        total: 0,
+        limit: parsedLimit,
+        offset: parsedOffset,
+        files: [],
+      });
+    }
+    return res.json({
+      ok: true,
+      ready: true,
+      status: redactedStatus,
+      total: result.total,
+      limit: result.limit,
+      offset: result.offset,
+      files: result.files,
+    });
+  } catch (error) { return sendCorpusError(res, error); }
+}
+
 export function respondAgentXPathComplete(req: Request, res: Response): Response {
   try {
     if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
