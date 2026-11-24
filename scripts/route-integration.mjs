@@ -812,7 +812,7 @@ async function main() {
     'configuration.access.request', 'configuration.access.status', 'configuration.apply', 'configuration.preview', 'configuration.read', 'configuration.status',
     'deploy.apply', 'deploy.preview', 'deploy.status', 'deploy.undo', 'diagnostics.quick.fixes',
     'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.overrides.analyze',
-    'files.delete', 'files.list', 'files.read', 'files.restore', 'files.write',
+    'files.delete', 'files.delete.dir', 'files.inventory.read', 'files.list', 'files.read', 'files.restore', 'files.scaffold', 'files.write',
     'history.list', 'history.raw.read', 'history.revert',
     'patch.diff.simulate', 'patch.readiness.analyze', 'patch.targets.list', 'patch.xpath.synthesize', 'performance.collect', 'performance.native.collect', 'performance.native.read', 'performance.native.stop',
     'performance.profile', 'performance.read', 'project.ai.navigation', 'project.brief.read', 'project.md.navigation', 'project.md.rename', 'project.proof.read', 'project.symbols.search', 'project.validate', 'project.xml.references', 'readiness.read',
@@ -826,7 +826,7 @@ async function main() {
   ];
   const sameCapabilityIds = (actual, expected) => Array.isArray(actual)
     && JSON.stringify([...actual].sort()) === JSON.stringify([...expected].sort());
-  const expectedCapabilityIdentity = id => `${id}@${['files.write', 'history.list', 'history.revert', 'patch.readiness.analyze', 'workspace.compile', 'workspace.compile.result', 'workspace.read'].includes(id) ? 2 : 1}`;
+  const expectedCapabilityIdentity = id => `${id}@${['files.restore', 'files.write', 'history.list', 'history.revert', 'patch.readiness.analyze', 'workspace.compile', 'workspace.compile.result', 'workspace.read'].includes(id) ? 2 : 1}`;
   ok('capability_contract_is_versioned_and_hashed',
     capabilityContract?.schemaVersion === 'forge.capability.v1' &&
     /^[a-f0-9]{64}$/.test(String(capabilityContract?.contractHash || '')) &&
@@ -6381,9 +6381,12 @@ async function main() {
           'bulk.transform.apply@1',
           'bulk.transform.preview@1',
           'files.delete@1',
+          'files.delete.dir@1',
+          'files.inventory.read@1',
           'files.list@1',
           'files.read@1',
-          'files.restore@1',
+          'files.restore@2',
+          'files.scaffold@1',
           'files.write@2',
           'history.list@2',
           'history.revert@2',
@@ -6578,6 +6581,95 @@ async function main() {
           wrongWs: wrongWsRestore.status,
           restore: filesRestoreRes.status,
           replay: filesRestoreReplay.status,
+        }));
+
+      // #19 P4 Slice 9: files.inventory.read@1, files.scaffold@1 (undo-create-dir), and files.delete.dir@1 (delete-dir)
+      const invRes = await req('GET', '/api/agent/files/inventory', slice3Key, undefined, { ...slice3Address, operationId: null });
+      capabilityResponses.set('files.inventory.read', invRes);
+      const scaffoldPreviewRes = await req('POST', '/api/agent/files/scaffold', slice3Key, {
+        id: 'route_scaffolded_mod',
+        name: 'Route Scaffolded Mod',
+        starterKind: 'md_cue',
+        apply: false,
+      }, { ...slice3Address, operationId: null });
+      const absentAfterScaffoldPreview = !fs.existsSync(path.join(safeWorkspace, 'route_scaffolded_mod'));
+      const scaffoldApplyRes = await req('POST', '/api/agent/files/scaffold', slice3Key, {
+        id: 'route_scaffolded_mod',
+        name: 'Route Scaffolded Mod',
+        starterKind: 'md_cue',
+        apply: true,
+        expectedWorkspaceRootId: rootId,
+      }, { ...slice3Address, operationId: null });
+      capabilityResponses.set('files.scaffold', scaffoldApplyRes);
+      const existedAfterScaffold = fs.existsSync(path.join(safeWorkspace, 'route_scaffolded_mod', 'md', 'route_scaffolded_mod.xml'));
+      const scaffoldDupRes = await req('POST', '/api/agent/files/scaffold', slice3Key, {
+        id: 'route_scaffolded_mod',
+        apply: true,
+      }, { ...slice3Address, operationId: null });
+      const dirPreviewRes = await req('POST', '/api/agent/files/delete-dir', slice3Key, {
+        path: 'route_scaffolded_mod/md',
+        apply: false,
+      }, { ...slice3Address, operationId: null });
+      const dirStaleRes = await req('POST', '/api/agent/files/delete-dir', slice3Key, {
+        path: 'route_scaffolded_mod/md',
+        apply: true,
+        expectedTreeSha256: '0'.repeat(64),
+      }, { ...slice3Address, operationId: null });
+      const dirDeleteRes = await req('POST', '/api/agent/files/delete-dir', slice3Key, {
+        path: 'route_scaffolded_mod/md',
+        apply: true,
+        expectedTreeSha256: dirPreviewRes.json?.treeSha256,
+        expectedWorkspaceRootId: rootId,
+      }, { ...slice3Address, operationId: null });
+      capabilityResponses.set('files.delete.dir', dirDeleteRes);
+      const absentAfterDirDelete = !fs.existsSync(path.join(safeWorkspace, 'route_scaffolded_mod', 'md'));
+      const dirRestoreRes = await req('POST', '/api/agent/files/restore', slice3Key, {
+        recoveryId: dirDeleteRes.json?.recovery?.id || 'missing',
+        expectedWorkspaceRootId: rootId,
+      }, { ...slice3Address, operationId: null });
+      const existedAfterDirRestore = fs.existsSync(path.join(safeWorkspace, 'route_scaffolded_mod', 'md', 'route_scaffolded_mod.xml'));
+      const scaffoldUndoRes = await req('POST', '/api/agent/files/restore', slice3Key, {
+        recoveryId: scaffoldApplyRes.json?.recovery?.id || 'missing',
+        expectedWorkspaceRootId: rootId,
+      }, { ...slice3Address, operationId: null });
+      const absentAfterScaffoldUndo = !fs.existsSync(path.join(safeWorkspace, 'route_scaffolded_mod'));
+      ok('curated_files_inventory_scaffold_and_delete_dir_enforce_cas_host_redaction_and_reversible_recovery',
+        invRes.status === 200
+          && invRes.json?.ok === true
+          && !JSON.stringify(invRes.json).includes(safeWorkspace)
+          && scaffoldPreviewRes.status === 200
+          && scaffoldPreviewRes.json?.applied === false
+          && absentAfterScaffoldPreview
+          && scaffoldApplyRes.status === 201
+          && scaffoldApplyRes.json?.applied === true
+          && scaffoldApplyRes.json?.recovery?.operation === 'undo-create-dir'
+          && !JSON.stringify(scaffoldApplyRes.json).includes(safeWorkspace)
+          && existedAfterScaffold
+          && scaffoldDupRes.status === 409 && scaffoldDupRes.json?.code === 'MOD_FOLDER_ALREADY_EXISTS'
+          && dirPreviewRes.status === 200 && dirPreviewRes.json?.applied === false
+          && dirStaleRes.status === 409 && dirStaleRes.json?.code === 'DIRECTORY_CHANGED'
+          && dirDeleteRes.status === 200 && dirDeleteRes.json?.recovery?.operation === 'delete-dir'
+          && !JSON.stringify(dirDeleteRes.json).includes(safeWorkspace)
+          && absentAfterDirDelete
+          && dirRestoreRes.status === 200 && dirRestoreRes.json?.action === 'restored-directory'
+          && existedAfterDirRestore
+          && scaffoldUndoRes.status === 200 && scaffoldUndoRes.json?.action === 'removed-created-directory'
+          && absentAfterScaffoldUndo,
+        JSON.stringify({
+          inv: invRes.status,
+          scafPrev: scaffoldPreviewRes.status,
+          scafApply: scaffoldApplyRes.status,
+          scafDup: scaffoldDupRes.status,
+          dirPrev: dirPreviewRes.status,
+          dirStale: dirStaleRes.status,
+          dirDel: dirDeleteRes.status,
+          dirRest: dirRestoreRes.status,
+          scafUndo: scaffoldUndoRes.status,
+          absentAfterScaffoldPreview,
+          existedAfterScaffold,
+          absentAfterDirDelete,
+          existedAfterDirRestore,
+          absentAfterScaffoldUndo,
         }));
 
       // Legacy deploy-preset parity (#69): existing /api/fs/write client can remove & restore via /api/fs/delete-file + /api/fs/restore-file

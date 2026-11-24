@@ -565,6 +565,34 @@
       ]
     },
     {
+      "routeKey": "POST /api/agent/files/delete-dir",
+      "method": "POST",
+      "template": "/api/agent/files/delete-dir",
+      "owner": "files.delete.dir",
+      "resourceClass": "configured-root",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1files~1delete-dir",
+      "integrationBatch": "W3B1",
+      "history": "visible",
+      "capability": {
+        "kind": "canonical",
+        "id": "files.delete.dir",
+        "version": 1
+      },
+      "semanticClass": "durable-local-mutation",
+      "policy": "receipt-required",
+      "effects": [
+        "filesystem-write",
+        "delete",
+        "audit-write",
+        "audit-retention-delete"
+      ],
+      "authorityScopes": [
+        "global",
+        "profile",
+        "workspace"
+      ]
+    },
+    {
       "routeKey": "POST /api/agent/files/restore",
       "method": "POST",
       "template": "/api/agent/files/restore",
@@ -576,13 +604,40 @@
       "capability": {
         "kind": "canonical",
         "id": "files.restore",
-        "version": 1
+        "version": 2
       },
       "semanticClass": "durable-local-mutation",
       "policy": "receipt-required",
       "effects": [
         "filesystem-write",
         "delete",
+        "audit-write",
+        "audit-retention-delete"
+      ],
+      "authorityScopes": [
+        "global",
+        "profile",
+        "workspace"
+      ]
+    },
+    {
+      "routeKey": "POST /api/agent/files/scaffold",
+      "method": "POST",
+      "template": "/api/agent/files/scaffold",
+      "owner": "files.scaffold",
+      "resourceClass": "configured-root",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1files~1scaffold",
+      "integrationBatch": "W3B1",
+      "history": "visible",
+      "capability": {
+        "kind": "canonical",
+        "id": "files.scaffold",
+        "version": 1
+      },
+      "semanticClass": "durable-local-mutation",
+      "policy": "receipt-required",
+      "effects": [
+        "filesystem-write",
         "audit-write",
         "audit-retention-delete"
       ],

@@ -89,10 +89,13 @@ const DEPLOY_CAPABILITIES = new Set([
 const WORKSPACE_FILES_TOOLS = new Set([
   "preview_bulk_transform",
   "apply_bulk_transform",
+  "get_project_file_inventory",
   "list_workspace_files",
   "read_workspace_file",
+  "scaffold_mod_project",
   "write_workspace_file",
   "remove_workspace_file",
+  "remove_workspace_directory",
   "restore_workspace_file",
   "apply_warning_suppression",
   "rename_md_symbol",
@@ -108,9 +111,12 @@ const WORKSPACE_FILES_CAPABILITIES = new Set([
   "bulk.transform.apply",
   "bulk.transform.preview",
   "files.delete",
+  "files.delete.dir",
+  "files.inventory.read",
   "files.list",
   "files.read",
   "files.restore",
+  "files.scaffold",
   "files.write",
   "history.revert",
   "project.md.rename",
@@ -1625,10 +1631,93 @@ const TOOLS = [
     ),
   },
   {
+    name: "get_project_file_inventory",
+    capabilityId: "files.inventory.read",
+    capabilityVersion: 1,
+    description: "Inspect the addressed workspace artifact-plan file inventory (up to 500 entries) reconciled against its Mod Workspace folder, reporting source vs synchronized-generated vs generated-only vs conflict state, sha256 digests, and materialization eligibility without exposing host filesystem paths. Requires an explicit key grant.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        modId: { type: "string", maxLength: 128 },
+      },
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams();
+      if (args?.modId !== undefined) q.set("modId", String(args.modId));
+      return requireResponse(
+        await forge("GET", `/api/agent/files/inventory?${q}`),
+        "project file inventory",
+        { ok: "boolean", sourceAvailable: "boolean", workspaceId: "string", modId: "string", totalEntries: "number", truncated: "boolean", excludedCount: "number", errors: "array", entries: "array" },
+      );
+    },
+  },
+  {
+    name: "scaffold_mod_project",
+    capabilityId: "files.scaffold",
+    capabilityVersion: 1,
+    description: "Preview (apply=false) or atomically materialize (apply=true) a new X4 extension folder under the configured Mod Workspace root with authored content.xml and optional starter Mission Director or AI-Influence contract files, returning a one-use undo-create-dir recovery receipt. Requires an explicit key grant.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", maxLength: 64 },
+        name: { type: "string", maxLength: 512 },
+        version: { type: "string", maxLength: 512 },
+        author: { type: "string", maxLength: 512 },
+        description: { type: "string", maxLength: 512 },
+        deps: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string", maxLength: 80 },
+              version: { type: "string", maxLength: 32 },
+              optional: { type: "boolean" },
+            },
+            required: ["id"],
+            additionalProperties: false,
+          },
+        },
+        starterKind: { type: "string", enum: ["minimal", "md_cue", "ai_influence_starter"] },
+        apply: { type: "boolean" },
+        expectedWorkspaceRootId: { type: "string", maxLength: 64 },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/files/scaffold", args),
+      "scaffold mod project",
+      { ok: "boolean", success: "boolean", applied: "boolean", modId: "string", starterKind: "string", fileCount: "number", files: "array" },
+    ),
+  },
+  {
+    name: "remove_workspace_directory",
+    capabilityId: "files.delete.dir",
+    capabilityVersion: 1,
+    description: "Preview (apply=false) or atomically remove (apply=true with expectedTreeSha256) a regular directory inside the configured Mod Workspace root under tree CAS guards, returning a one-use delete-dir recovery receipt restorable via restore_workspace_file or revert_action_history. Requires an explicit key grant.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", maxLength: 1024 },
+        apply: { type: "boolean" },
+        expectedTreeSha256: { type: "string", maxLength: 64 },
+        expectedWorkspaceRootId: { type: "string", maxLength: 64 },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/files/delete-dir", args),
+      "workspace directory removal",
+      { ok: "boolean", success: "boolean", applied: "boolean", path: "string" },
+    ),
+  },
+  {
     name: "restore_workspace_file",
     capabilityId: "files.restore",
-    capabilityVersion: 1,
-    description: "Consume one ready single-file recovery receipt (delete-file or undo-create) inside the matching workspace and Mod Workspace root under CAS guards. Restores exact pre-delete bytes when the target path is still absent, or removes an unmodified newly created file. Requires an explicit key grant.",
+    capabilityVersion: 2,
+    description: "Consume one ready file or directory recovery receipt (delete-file, undo-create, delete-dir, or undo-create-dir) inside the matching workspace and Mod Workspace root under CAS guards. Restores exact pre-delete bytes or directory trees when absent, or removes an unmodified newly created file or scaffolded mod folder. Requires an explicit key grant.",
     inputSchema: {
       type: "object",
       properties: {
@@ -3584,7 +3673,7 @@ function deployGrantAllowed(capability, authority) {
 
 function workspaceFilesGrantAllowed(capability, authority) {
   const grant = authority.constraint;
-  const expectedVersion = capability.id === "history.revert" || capability.id === "files.write" ? 2 : 1;
+  const expectedVersion = capability.id === "history.revert" || capability.id === "files.write" || capability.id === "files.restore" ? 2 : 1;
   return capability.version === expectedVersion && isRecord(grant)
     && grant.capabilityIdentities.includes(`${capability.id}@${expectedVersion}`)
     && capability.effects.every((effect) => grant.allowedEffects.includes(effect));

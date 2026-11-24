@@ -51,7 +51,7 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
 
   const validationErrors = validateForgeCapabilityRegistry();
   check('registry invariants', validationErrors.length === 0, validationErrors.join(' | ') || undefined);
-  check('bounded non-native registry', FORGE_CAPABILITIES.filter(capability => !capability.id.startsWith('performance.native.')).length === 73, `count=${FORGE_CAPABILITIES.length}`);
+  check('bounded non-native registry', FORGE_CAPABILITIES.filter(capability => !capability.id.startsWith('performance.native.')).length === 76, `count=${FORGE_CAPABILITIES.length}`);
   const compileResult = findForgeCapability('workspace.compile.result', 2);
   check('retained compile report access is workspace-scoped and read-only',
     compileResult?.context.workspace === 'required'
@@ -550,15 +550,24 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
     { id: 'files.delete', version: 1, method: 'POST', path: '/api/agent/files/delete', alias: 'remove_workspace_file',
       workspace: 'optional', confirmation: 'none', scopes: ['write', 'deploy'], deniedScope: 'read',
       effects: ['filesystem-write', 'delete', 'audit-write', 'audit-retention-delete'], ledger: 'edit' },
+    { id: 'files.delete.dir', version: 1, method: 'POST', path: '/api/agent/files/delete-dir', alias: 'remove_workspace_directory',
+      workspace: 'optional', confirmation: 'none', scopes: ['write', 'deploy'], deniedScope: 'read',
+      effects: ['filesystem-write', 'delete', 'audit-write', 'audit-retention-delete'], ledger: 'edit' },
+    { id: 'files.inventory.read', version: 1, method: 'GET', path: '/api/agent/files/inventory', alias: 'get_project_file_inventory',
+      workspace: 'required', confirmation: 'none', scopes: ['read', 'write', 'deploy'], deniedScope: null,
+      effects: ['read', 'analyze'], ledger: null },
     { id: 'files.list', version: 1, method: 'GET', path: '/api/agent/files/list', alias: 'list_workspace_files',
       workspace: 'optional', confirmation: 'none', scopes: ['read', 'write', 'deploy'], deniedScope: null,
       effects: ['read'], ledger: null },
     { id: 'files.read', version: 1, method: 'GET', path: '/api/agent/files/read', alias: 'read_workspace_file',
       workspace: 'optional', confirmation: 'none', scopes: ['read', 'write', 'deploy'], deniedScope: null,
       effects: ['read'], ledger: null },
-    { id: 'files.restore', version: 1, method: 'POST', path: '/api/agent/files/restore', alias: 'restore_workspace_file',
+    { id: 'files.restore', version: 2, method: 'POST', path: '/api/agent/files/restore', alias: 'restore_workspace_file',
       workspace: 'optional', confirmation: 'none', scopes: ['write', 'deploy'], deniedScope: 'read',
       effects: ['filesystem-write', 'delete', 'audit-write', 'audit-retention-delete'], ledger: 'revert' },
+    { id: 'files.scaffold', version: 1, method: 'POST', path: '/api/agent/files/scaffold', alias: 'scaffold_mod_project',
+      workspace: 'optional', confirmation: 'none', scopes: ['write', 'deploy'], deniedScope: 'read',
+      effects: ['filesystem-write', 'audit-write', 'audit-retention-delete'], ledger: 'edit' },
     { id: 'files.write', version: 2, method: 'POST', path: '/api/agent/files/write', alias: 'write_workspace_file',
       workspace: 'optional', confirmation: 'none', scopes: ['write', 'deploy'], deniedScope: 'read',
       effects: ['filesystem-write', 'audit-write', 'audit-retention-delete'], ledger: 'edit' },
@@ -644,13 +653,13 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
   const builtCensus = buildForgeUiActionParityCensus(sha256);
   const builtCensusSecond = buildForgeUiActionParityCensus(sha256);
   const coveredDomains = new Set(FORGE_UI_ACTION_PARITY_CENSUS.map(row => row.domain));
-  check('UI-action parity census covers all 15 domains and all 76 capabilities with deterministic hash',
+  check('UI-action parity census covers all 15 domains and all 79 capabilities with deterministic hash',
     censusErrors.length === 0 &&
       builtCensus.schemaVersion === 'forge.ui-action-parity.v1' &&
       builtCensus.censusHash === builtCensusSecond.censusHash &&
       FORGE_UI_ACTION_PARITY_DOMAINS.every(domain => coveredDomains.has(domain)) &&
       builtCensus.summary.totalActions === FORGE_UI_ACTION_PARITY_CENSUS.length &&
-      builtCensus.summary.available === 16 &&
+      builtCensus.summary.available === 17 &&
       builtCensus.summary.approvalRequired === 2 &&
       builtCensus.summary.missing === 9 &&
       builtCensus.summary.available + builtCensus.summary.approvalRequired + builtCensus.summary.partial + builtCensus.summary.missing === builtCensus.summary.totalActions &&
@@ -702,7 +711,7 @@ export function runNativeForgeCapabilitiesSelftest() {
   const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   const keys = (value: object | undefined) => Object.keys(value || {}).sort();
   check('native registry has exactly the three reviewed process telemetry identities',
-    FORGE_CAPABILITIES.length === 76 &&
+    FORGE_CAPABILITIES.length === 79 &&
       equal(FORGE_CAPABILITIES.filter(capability => capability.id.startsWith('performance.native.')).map(capability => capability.id).sort(),
         expected.map(row => row.id).sort()));
   for (const row of expected) {

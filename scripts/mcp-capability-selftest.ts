@@ -101,7 +101,7 @@ const EXPLICIT_ONLY_MCP_CAPABILITIES = new Set<string>([
   'deploy.apply', 'deploy.preview', 'deploy.status', 'deploy.undo',
   'release.nexus.prepare', 'release.steam.adopt', 'release.steam.prepare', 'release.steam.verify', 'reviews.warning.revoke',
   'bulk.transform.apply', 'bulk.transform.preview',
-  'files.delete', 'files.list', 'files.read', 'files.restore', 'files.write',
+  'files.delete', 'files.delete.dir', 'files.inventory.read', 'files.list', 'files.read', 'files.restore', 'files.scaffold', 'files.write',
   'history.revert', 'project.md.rename', 'rules.suppression.apply',
   'snapshots.create', 'snapshots.delete', 'snapshots.list', 'snapshots.restore',
   'workspace.mod.drift', 'workspace.mod.import',

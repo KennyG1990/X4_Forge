@@ -329,10 +329,13 @@ async function main() {
   const explicitToolNames = [
     'preview_bulk_transform',
     'apply_bulk_transform',
+    'get_project_file_inventory',
     'list_workspace_files',
     'read_workspace_file',
+    'scaffold_mod_project',
     'write_workspace_file',
     'remove_workspace_file',
+    'remove_workspace_directory',
     'restore_workspace_file',
     'apply_warning_suppression',
     'rename_md_symbol',
@@ -444,9 +447,12 @@ async function main() {
             'bulk.transform.apply@1',
             'bulk.transform.preview@1',
             'files.delete@1',
+            'files.delete.dir@1',
+            'files.inventory.read@1',
             'files.list@1',
             'files.read@1',
-            'files.restore@1',
+            'files.restore@2',
+            'files.scaffold@1',
             'files.write@2',
             'history.list@2',
             'history.raw.read@1',
@@ -720,9 +726,11 @@ async function main() {
         authorityMode: 'exact',
         capabilityIdentities: [
           'files.delete@1',
+          'files.delete.dir@1',
           'files.list@1',
           'files.read@1',
-          'files.restore@1',
+          'files.restore@2',
+          'files.scaffold@1',
           'files.write@2',
         ],
         allowedEffects: ['read', 'filesystem-write', 'delete', 'audit-write', 'audit-retention-delete'],
@@ -1515,6 +1523,121 @@ async function main() {
       assert(fs.readFileSync(path.join(modDir, 'content.xml'), 'utf8').includes('id="ws_987654321"'));
       assert(!JSON.stringify(okAdopt.payload).includes(modsDir), 'Steam adopt apply leaked host modsDir');
       await steamMcp.close();
+    });
+
+    await check('12_project_inventory_mod_scaffold_undo_and_cas_directory_delete_restore_over_mcp', async () => {
+      // 1. get_project_file_inventory returns redacted B100 ownership metadata
+      const inv = await fullMcp.callTool('get_project_file_inventory', { modId: 'mcp_files_fixture' });
+      assert.equal(inv.isError, false, JSON.stringify(inv.payload));
+      assert.equal(inv.payload.ok, true);
+      assert.equal(inv.payload.sourceAvailable, true);
+      assert.equal(inv.payload.sourceFolder, 'mcp_files_fixture');
+      assert(Array.isArray(inv.payload.entries) && inv.payload.entries.length >= 2);
+      assert(!JSON.stringify(inv.payload).includes(modsDir), 'get_project_file_inventory leaked host modsDir');
+
+      // 2. scaffold_mod_project preview (quiet in Action Ledger) -> apply -> duplicate refused -> modified undo refused -> restored -> clean undo removes folder
+      const editBeforePreview = await fullMcp.callTool('list_action_history', { kind: 'edit', limit: 30 });
+      const editCountBeforePreview = (editBeforePreview.payload.rows || []).length;
+
+      const scaffoldModId = 'unit32_scaffolded_mod';
+      const scaffoldDir = path.join(modsDir, scaffoldModId);
+      const scafPreview = await fullMcp.callTool('scaffold_mod_project', {
+        id: scaffoldModId,
+        name: 'Unit 32 Scaffolded Mod',
+        starterKind: 'md_cue',
+        apply: false,
+      });
+      assert.equal(scafPreview.isError, false, JSON.stringify(scafPreview.payload));
+      assert.equal(scafPreview.payload.applied, false);
+      assert.equal(scafPreview.payload.fileCount, 2);
+      assert.equal(fs.existsSync(scaffoldDir), false);
+
+      const editAfterPreview = await fullMcp.callTool('list_action_history', { kind: 'edit', limit: 30 });
+      assert.equal((editAfterPreview.payload.rows || []).length, editCountBeforePreview, 'scaffold preview must remain quiet in Action Ledger');
+
+      const scafApply = await fullMcp.callTool('scaffold_mod_project', {
+        id: scaffoldModId,
+        name: 'Unit 32 Scaffolded Mod',
+        starterKind: 'md_cue',
+        deps: [{ id: 'ego_dlc_split', optional: true }],
+        apply: true,
+      });
+      assert.equal(scafApply.isError, false, JSON.stringify(scafApply.payload));
+      assert.equal(scafApply.payload.applied, true);
+      assert.equal(scafApply.payload.recovery?.operation, 'undo-create-dir');
+      assert(!JSON.stringify(scafApply.payload).includes(modsDir), 'scaffold_mod_project leaked host modsDir');
+      assert.equal(fs.existsSync(path.join(scaffoldDir, 'md', `${scaffoldModId}.xml`)), true);
+
+      const scafDup = await fullMcp.callTool('scaffold_mod_project', {
+        id: scaffoldModId,
+        apply: true,
+      });
+      assert.equal(scafDup.isError, true);
+      assert.equal(scafDup.payload?.code, 'MOD_FOLDER_ALREADY_EXISTS');
+
+      // 3. remove_workspace_directory refuses .git-protected folders, previews treeSha256 (quiet), refuses stale treeSha256, deletes & restores nested tree via restore_workspace_file
+      const gitProtectedDir = path.join(modsDir, 'unit32_git_protected');
+      fs.mkdirSync(path.join(gitProtectedDir, '.git'), { recursive: true });
+      fs.writeFileSync(path.join(gitProtectedDir, 'content.xml'), '<content id="unit32_git_protected"/>', 'utf8');
+      fs.writeFileSync(path.join(gitProtectedDir, '.git', 'HEAD'), 'ref: refs/heads/main\n', 'utf8');
+      const protectedDel = await fullMcp.callTool('remove_workspace_directory', {
+        path: 'unit32_git_protected',
+        apply: false,
+      });
+      assert.equal(protectedDel.isError, true);
+      assert.equal(protectedDel.payload?.code, 'DIRECTORY_CONTAINS_PROTECTED_ENTRIES');
+      assert.equal(fs.existsSync(path.join(gitProtectedDir, '.git', 'HEAD')), true);
+
+      const dirPreview = await fullMcp.callTool('remove_workspace_directory', {
+        path: `${scaffoldModId}/md`,
+        apply: false,
+      });
+      assert.equal(dirPreview.isError, false, JSON.stringify(dirPreview.payload));
+      assert.equal(dirPreview.payload.applied, false);
+      assert.equal(dirPreview.payload.fileCount, 1);
+
+      const staleDirDel = await fullMcp.callTool('remove_workspace_directory', {
+        path: `${scaffoldModId}/md`,
+        apply: true,
+        expectedTreeSha256: 'f'.repeat(64),
+      });
+      assert.equal(staleDirDel.isError, true);
+      assert.equal(staleDirDel.payload?.code, 'DIRECTORY_CHANGED');
+      assert.equal(fs.existsSync(path.join(scaffoldDir, 'md', `${scaffoldModId}.xml`)), true);
+
+      const okDirDel = await fullMcp.callTool('remove_workspace_directory', {
+        path: `${scaffoldModId}/md`,
+        apply: true,
+        expectedTreeSha256: dirPreview.payload.treeSha256,
+      });
+      assert.equal(okDirDel.isError, false, JSON.stringify(okDirDel.payload));
+      assert.equal(okDirDel.payload.recovery?.operation, 'delete-dir');
+      assert(!JSON.stringify(okDirDel.payload).includes(modsDir), 'remove_workspace_directory leaked host modsDir');
+      assert.equal(fs.existsSync(path.join(scaffoldDir, 'md')), false);
+
+      // While md/ is deleted, undo-create-dir of scaffoldModId must fail closed with 409 RECOVERY_STALE!
+      const staleScaffoldUndo = await fullMcp.callTool('restore_workspace_file', {
+        recoveryId: scafApply.payload.recovery.id,
+      });
+      assert.equal(staleScaffoldUndo.isError, true);
+      assert.equal(staleScaffoldUndo.payload?.code, 'RECOVERY_STALE');
+      assert.equal(fs.existsSync(path.join(scaffoldDir, 'content.xml')), true);
+
+      // Restore deleted md/ directory via restore_workspace_file -> exact tree matches again -> undo-create-dir succeeds via revert_action_history!
+      const restoredSubdir = await fullMcp.callTool('restore_workspace_file', {
+        recoveryId: okDirDel.payload.recovery.id,
+      });
+      assert.equal(restoredSubdir.isError, false, JSON.stringify(restoredSubdir.payload));
+      assert.equal(restoredSubdir.payload.action, 'restored-directory');
+      assert.equal(fs.existsSync(path.join(scaffoldDir, 'md', `${scaffoldModId}.xml`)), true);
+
+      const editRows = await fullMcp.callTool('list_action_history', { kind: 'edit', limit: 20 });
+      const scaffoldRow = (editRows.payload.rows || []).find((r: any) => r.recoveryId === scafApply.payload.recovery.id);
+      assert(scaffoldRow && scaffoldRow.revertible === true, 'scaffold ledger row must be revertible');
+
+      const undoneScaffold = await fullMcp.callTool('revert_action_history', { id: scaffoldRow.id });
+      assert.equal(undoneScaffold.isError, false, JSON.stringify(undoneScaffold.payload));
+      assert.equal(fs.existsSync(scaffoldDir), false);
     });
   } finally {
     for (const s of mcpSessions) {

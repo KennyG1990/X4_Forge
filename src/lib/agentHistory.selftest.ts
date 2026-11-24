@@ -34,7 +34,9 @@ export function runAgentHistorySelftest(): { pass: boolean; checks: Array<{ name
     ok('reviewed suppression and MD rename writes are edits',
       ledgerRouteKind('POST', '/api/agent/project-rules/suppress') === 'edit' &&
       ledgerRouteKind('POST', '/api/agent/project-rules/suppression/apply') === 'edit' &&
-      ledgerRouteKind('POST', '/api/agent/mod-folder/md-rename') === 'edit');
+      ledgerRouteKind('POST', '/api/agent/mod-folder/md-rename') === 'edit' &&
+      ledgerRouteKind('POST', '/api/agent/files/scaffold') === 'edit' &&
+      ledgerRouteKind('POST', '/api/agent/files/delete-dir') === 'edit');
     ok('suppression preparation and round-trip check are read-only and quiet',
       ledgerRouteKind('POST', '/api/agent/project-rules/prepare-suppression') === null &&
       ledgerRouteKind('POST', '/api/agent/project-rules/suppression/prepare') === null &&

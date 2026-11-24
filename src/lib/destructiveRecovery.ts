@@ -23,7 +23,7 @@ export const RECOVERY_MAX_DEPLOY_BYTES = 512 * 1024 * 1024;
 export const RECOVERY_DUPLICATE_CONFLICT = 'RECOVERY_DUPLICATE_CONFLICT';
 
 export type RecoveryKind = 'workspace' | 'deploy' | 'file';
-export type FileRecoveryOperation = 'delete-file' | 'undo-create';
+export type FileRecoveryOperation = 'delete-file' | 'undo-create' | 'delete-dir' | 'undo-create-dir';
 export type RecoveryStatus = 'preparing' | 'ready' | 'used';
 
 interface RecoveryBase {
@@ -183,14 +183,14 @@ function isRecord(value: unknown): value is DestructiveRecoveryRecord {
     (row.expectedCurrentSnapshotHash === undefined || typeof row.expectedCurrentSnapshotHash === 'string') &&
     (row.workspaceId === undefined || /^ws_[a-f0-9]{24}$/i.test(row.workspaceId));
   if (row.kind === 'file') {
-    if ((row.operation !== 'delete-file' && row.operation !== 'undo-create') || typeof row.priorExisted !== 'boolean') return false;
+    if (!['delete-file', 'undo-create', 'delete-dir', 'undo-create-dir'].includes(String(row.operation)) || typeof row.priorExisted !== 'boolean') return false;
     if (typeof row.workspaceRootId !== 'string' || !DEPLOY_HASH.test(row.workspaceRootId)) return false;
     if (row.workspaceId !== undefined && !/^ws_[a-f0-9]{24}$/i.test(row.workspaceId)) return false;
     if (typeof row.targetRoot !== 'string' || !row.targetRoot
       || typeof row.targetPath !== 'string' || !row.targetPath
       || typeof row.relativePath !== 'string' || !row.relativePath) return false;
     if (!Number.isSafeInteger(row.beforeBytes) || row.beforeBytes < 0) return false;
-    if (row.operation === 'delete-file') {
+    if (row.operation === 'delete-file' || row.operation === 'delete-dir') {
       return row.priorExisted === true
         && typeof row.beforeSha256 === 'string'
         && DEPLOY_HASH.test(row.beforeSha256)
@@ -622,6 +622,105 @@ export class DestructiveRecoveryStore {
     return record;
   }
 
+  prepareDirectoryDeletion(input: {
+    workspaceRootId: string;
+    workspaceId?: string;
+    targetRoot: string;
+    targetPath: string;
+    relativePath: string;
+    beforeTreeSha256: string;
+    beforeBytes: number;
+    summary: string;
+  }): FileRecoveryRecord {
+    if (!DEPLOY_HASH.test(input.workspaceRootId)) throw new Error('Directory recovery workspaceRootId is malformed.');
+    if (input.workspaceId !== undefined && !/^ws_[a-f0-9]{24}$/i.test(input.workspaceId)) {
+      throw new Error('Directory recovery workspaceId is malformed.');
+    }
+    if (!DEPLOY_HASH.test(input.beforeTreeSha256)) throw new Error('Directory recovery beforeTreeSha256 is malformed.');
+    if (!Number.isInteger(input.beforeBytes) || input.beforeBytes < 0 || input.beforeBytes > this.maxWorkspaceBytes) {
+      throw new Error(`Directory recovery exceeds ${this.maxWorkspaceBytes} bytes.`);
+    }
+    this.prune();
+    const now = this.now();
+    const record: FileRecoveryRecord = {
+      schema: RECOVERY_SCHEMA,
+      id: this.newId('file'),
+      kind: 'file',
+      operation: 'delete-dir',
+      status: 'preparing',
+      createdAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + this.maxAgeMs).toISOString(),
+      summary: input.summary,
+      expectedCurrentHash: 'absent',
+      priorExisted: true,
+      workspaceRootId: input.workspaceRootId,
+      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      targetRoot: path.resolve(input.targetRoot),
+      targetPath: path.resolve(input.targetPath),
+      relativePath: input.relativePath,
+      beforeSha256: input.beforeTreeSha256,
+      beforeBytes: input.beforeBytes,
+    };
+    this.write(record);
+    return record;
+  }
+
+  finalizeDirectoryDeletion(id: string): FileRecoveryRecord {
+    const found = this.read(id);
+    if (found.ok === false) throw new Error(found.error);
+    if (found.record.kind !== 'file' || found.record.operation !== 'delete-dir') {
+      throw new Error('Recovery kind mismatch.');
+    }
+    if (found.record.status !== 'preparing') throw new Error('Directory deletion recovery is not preparing.');
+    const record: FileRecoveryRecord = {
+      ...found.record,
+      status: 'ready',
+      expectedCurrentHash: 'absent',
+    };
+    this.write(record);
+    return record;
+  }
+
+  createDirectoryUndoCreate(input: {
+    workspaceRootId: string;
+    workspaceId?: string;
+    targetRoot: string;
+    targetPath: string;
+    relativePath: string;
+    expectedCurrentTreeSha256: string;
+    summary: string;
+  }): FileRecoveryRecord {
+    if (!DEPLOY_HASH.test(input.workspaceRootId)) throw new Error('Directory recovery workspaceRootId is malformed.');
+    if (input.workspaceId !== undefined && !/^ws_[a-f0-9]{24}$/i.test(input.workspaceId)) {
+      throw new Error('Directory recovery workspaceId is malformed.');
+    }
+    if (!DEPLOY_HASH.test(input.expectedCurrentTreeSha256)) {
+      throw new Error('Directory recovery expectedCurrentTreeSha256 is malformed.');
+    }
+    this.prune();
+    const now = this.now();
+    const record: FileRecoveryRecord = {
+      schema: RECOVERY_SCHEMA,
+      id: this.newId('file'),
+      kind: 'file',
+      operation: 'undo-create-dir',
+      status: 'ready',
+      createdAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + this.maxAgeMs).toISOString(),
+      summary: input.summary,
+      expectedCurrentHash: input.expectedCurrentTreeSha256,
+      priorExisted: false,
+      workspaceRootId: input.workspaceRootId,
+      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      targetRoot: path.resolve(input.targetRoot),
+      targetPath: path.resolve(input.targetPath),
+      relativePath: input.relativePath,
+      beforeBytes: 0,
+    };
+    this.write(record);
+    return record;
+  }
+
   markUsed(id: string): DestructiveRecoveryRecord {
     const found = this.read(id);
     if (found.ok === false) throw new Error(found.error);
@@ -892,6 +991,36 @@ export function runDestructiveRecoverySelftest(): {
     let undoReplayRejected = false;
     try { fileStore.markUsed(undoCreate.id); } catch { undoReplayRejected = true; }
     ok('file_undo_create_replay_rejected', undoReplayRejected);
+
+    const preparedDir = fileStore.prepareDirectoryDeletion({
+      workspaceRootId: '1'.repeat(64),
+      workspaceId: 'ws_444444444444444444444444',
+      targetRoot: root,
+      targetPath: path.join(root, 'mod_alpha', 'md'),
+      relativePath: 'mod_alpha/md',
+      beforeTreeSha256: sampleHash,
+      beforeBytes: 128,
+      summary: 'Remove mod_alpha/md',
+    });
+    const finalizedDir = fileStore.finalizeDirectoryDeletion(preparedDir.id);
+    ok('directory_deletion_roundtrip_and_finalize',
+      finalizedDir.status === 'ready'
+      && finalizedDir.operation === 'delete-dir'
+      && finalizedDir.expectedCurrentHash === 'absent'
+      && finalizedDir.beforeSha256 === sampleHash);
+    const undoDir = fileStore.createDirectoryUndoCreate({
+      workspaceRootId: '1'.repeat(64),
+      workspaceId: 'ws_444444444444444444444444',
+      targetRoot: root,
+      targetPath: path.join(root, 'mod_alpha'),
+      relativePath: 'mod_alpha',
+      expectedCurrentTreeSha256: sampleHash,
+      summary: 'Scaffold mod_alpha',
+    });
+    ok('directory_undo_create_roundtrip_and_one_use',
+      undoDir.status === 'ready'
+      && undoDir.operation === 'undo-create-dir'
+      && undoDir.expectedCurrentHash === sampleHash);
   } finally {
     try { fs.rmSync(root, { recursive: true, force: true }); } catch { /* test cleanup */ }
     try { fs.rmSync(deterministicRoot, { recursive: true, force: true }); } catch { /* test cleanup */ }

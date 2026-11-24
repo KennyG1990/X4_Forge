@@ -150,6 +150,8 @@ export const LEDGER_ROUTES: Array<{ method: string; path: string; kind: LedgerKi
   { method: 'POST', path: '/api/fs/restore-file', kind: 'revert' },
   { method: 'POST', path: '/api/agent/files/write', kind: 'edit' },
   { method: 'POST', path: '/api/agent/files/delete', kind: 'edit' },
+  { method: 'POST', path: '/api/agent/files/delete-dir', kind: 'edit' },
+  { method: 'POST', path: '/api/agent/files/scaffold', kind: 'edit' },
   { method: 'POST', path: '/api/agent/files/restore', kind: 'revert' },
   { method: 'POST', path: '/api/agent/project-rules/suppress', kind: 'edit' },
   { method: 'POST', path: '/api/agent/project-rules/suppression/apply', kind: 'edit' },
@@ -418,6 +420,21 @@ export function describeAction(input: {
     if (input.routePath === '/api/fs/delete-file' || input.routePath === '/api/agent/files/delete') {
       return {
         title: `Removed \`${target}\` — ${humanBytes(input.bytes?.before ?? body?.removed?.bytes ?? 0)} (recoverable)`,
+        outcome: { status: 'ok' },
+      };
+    }
+    if (input.routePath === '/api/agent/files/delete-dir') {
+      const dirLabel = shortPath(String(body?.path || request?.path || target));
+      return {
+        title: `Removed directory \`${dirLabel}\` — ${humanBytes(body?.removed?.bytes ?? 0)} (recoverable)`,
+        outcome: { status: 'ok' },
+      };
+    }
+    if (input.routePath === '/api/agent/files/scaffold') {
+      const modLabel = String(body?.modId || request?.id || target);
+      const count = Number(body?.fileCount ?? files.length ?? 0);
+      return {
+        title: `Scaffolded mod \`${modLabel}\` — ${plural(count, 'file')} (recoverable)`,
         outcome: { status: 'ok' },
       };
     }
