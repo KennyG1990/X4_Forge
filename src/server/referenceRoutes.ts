@@ -97,6 +97,235 @@ function sendCorpusError(res: Response, error: unknown, instance?: Omit<Instance
   return res.status(500).json(body);
 }
 
+function validateReferenceCapabilityQuery(
+  query: Request['query'],
+  allowedKeys: readonly string[],
+  capabilityId: string,
+): string | null {
+  const unknown = Object.keys(query).filter(key => !allowedKeys.includes(key));
+  if (unknown.length) return `${capabilityId} does not accept: ${unknown.join(', ')}`;
+  for (const key of Object.keys(query)) {
+    const value = query[key];
+    if (value !== undefined && typeof value !== 'string') {
+      return `${capabilityId} query parameter ${key} must be a single string.`;
+    }
+  }
+  return null;
+}
+
+function stripManifestRoot(manifest: ReferenceManifestStatus): Record<string, unknown> {
+  const copy: Record<string, unknown> = { ...manifest };
+  delete copy.root;
+  return copy;
+}
+
+export function respondAgentEffectiveReferenceFile(req: Request, res: Response): Response {
+  const queryError = validateReferenceCapabilityQuery(
+    req.query,
+    ['path', 'refresh', 'view', 'compact', 'workspaceId', 'clientId'],
+    'reference.file.read',
+  );
+  if (queryError) return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+  const rawPath = typeof req.query.path === 'string' ? req.query.path.trim() : '';
+  if (!rawPath || rawPath.length > 1024) {
+    return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'reference.file.read requires a bounded non-empty ?path= query parameter.' });
+  }
+  if (req.query.refresh !== undefined && req.query.refresh !== '0' && req.query.refresh !== '1') {
+    return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'Optional ?refresh= must be 0 or 1.' });
+  }
+  if (req.query.view !== undefined && req.query.view !== 'script-symbol-origins') {
+    return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'Optional ?view= must be script-symbol-origins.' });
+  }
+  if (req.query.compact !== undefined && req.query.compact !== '0' && req.query.compact !== '1') {
+    return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'Optional ?compact= must be 0 or 1.' });
+  }
+  try {
+    const origins = req.query.view === 'script-symbol-origins';
+    const root = origins ? resolveX4ReferenceRoot() : load(req).root;
+    res.set('Cache-Control', 'no-store');
+    const effective = resolveEffectiveReferenceDocument(root, rawPath, forceRefresh(req), { scriptSymbolOrigins: origins });
+    const stripRoot = <T extends Record<string, unknown>>(payload: T): Omit<T, 'root'> => {
+      const copy: Record<string, unknown> = { ...payload };
+      delete copy.root;
+      return copy as Omit<T, 'root'>;
+    };
+    if (!effective.available || effective.content === undefined) {
+      return res.status(404).json(stripRoot({ error: `Canonical effective file not found: ${rawPath}`, ...effective }));
+    }
+    if (effective.complete !== true) {
+      return res.status(503).json(stripRoot({
+        ...effective,
+        code: 'REFERENCE_EFFECTIVE_INCOMPLETE',
+        error: 'Canonical reference composition is incomplete; inspect the active source findings.',
+      }));
+    }
+    if (origins && !effective.scriptSymbolOrigins?.complete) {
+      return res.status(503).json(stripRoot({
+        ...effective,
+        code: 'REFERENCE_SCRIPT_ORIGINS_INCOMPLETE',
+        error: effective.scriptSymbolOrigins?.detail ?? 'Script symbol origins unavailable.',
+      }));
+    }
+    if (origins && req.query.compact === '1') {
+      return res.json({
+        relativePath: effective.relativePath,
+        available: effective.available,
+        complete: effective.complete,
+        scriptSymbolOrigins: effective.scriptSymbolOrigins,
+      });
+    }
+    return res.json(stripRoot(effective as unknown as Record<string, unknown>));
+  } catch (error) { return sendCorpusError(res, error); }
+}
+
+export function respondAgentSimulateDiff(req: Request, res: Response): Response {
+  try {
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'patch.diff.simulate requires a JSON object body.' });
+    }
+    const body = req.body as Record<string, unknown>;
+    const unknown = Object.keys(body).filter(key => !['path', 'content'].includes(key));
+    if (unknown.length) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: `patch.diff.simulate does not accept: ${unknown.join(', ')}` });
+    }
+    const relativePath = typeof body.path === 'string' ? body.path.trim() : '';
+    const diff = typeof body.content === 'string' ? body.content : '';
+    if (!relativePath || relativePath.length > 1024) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'Invalid request: path is required.' });
+    }
+    if (typeof body.content !== 'string') {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'Invalid request: content must be a string.' });
+    }
+    if (diff.length > 5_000_000) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'Invalid request: content exceeds 5 MB.' });
+    }
+    const corpus = load(req);
+    const effective = resolveEffectiveReferenceDocument(corpus.root, relativePath, false);
+    if (!effective.available || effective.content === undefined) {
+      return res.status(404).json({ error: `Canonical base file not found: ${relativePath}`, effective });
+    }
+    const base = effectiveReferenceMetadata(effective);
+    if (effective.complete !== true) {
+      return res.status(503).json({
+        path: effective.relativePath,
+        base,
+        ok: false,
+        code: 'REFERENCE_EFFECTIVE_INCOMPLETE',
+        error: 'Canonical reference composition is incomplete; diff simulation is unavailable.',
+      });
+    }
+    const simulation = simulateXmlDiff(effective.content, diff);
+    return res.json({
+      path: effective.relativePath,
+      base,
+      ...simulation,
+    });
+  } catch (error) { return sendCorpusError(res, error); }
+}
+
+export function respondAgentReferenceStatus(req: Request, res: Response): Response {
+  res.set('Cache-Control', 'no-store');
+  const queryError = validateReferenceCapabilityQuery(
+    req.query,
+    ['observe', 'refresh', 'workspaceId', 'clientId'],
+    'reference.status.read',
+  );
+  if (queryError) return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+  if (req.query.observe !== undefined && req.query.observe !== '0' && req.query.observe !== '1') {
+    return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'Optional ?observe= must be 0 or 1.' });
+  }
+  if (req.query.refresh !== undefined && req.query.refresh !== '0' && req.query.refresh !== '1') {
+    return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'Optional ?refresh= must be 0 or 1.' });
+  }
+  const observe = req.query.observe === '1';
+  try {
+    if (observe) {
+      const resolved = resolveXsdConfig();
+      const root = assertReferenceRootDirectory(resolved.x4ReferenceRoot);
+      const manifest = getReferenceManifestStatus(root, { openDatabase: false });
+      const corpus = peekReferenceCorpus(root);
+      if (!corpus) {
+        return res.json({
+          available: false,
+          observed: true,
+          state: manifest.state === 'scanning' || manifest.state === 'stale' ? 'scanning' : 'cold',
+          generatedAt: null,
+          manifestGeneration: manifest.current?.generation || null,
+          sourceFiles: 0,
+          counts: null,
+          manifest: stripManifestRoot(manifest),
+        });
+      }
+      return res.json({
+        available: true,
+        observed: true,
+        generatedAt: corpus.generatedAt,
+        manifestGeneration: corpus.manifestGeneration || null,
+        sourceFiles: corpus.sourceFiles.length,
+        counts: { factions: corpus.factions.length, wares: corpus.wares.length, jobs: corpus.jobs.length, aiScripts: corpus.aiScripts.length, sectors: corpus.sectors.length, scriptProperties: corpus.scriptProperties.length },
+        manifest: stripManifestRoot(manifest),
+      });
+    }
+    const corpus = load(req);
+    const manifest = getReferenceManifestStatus(corpus.root);
+    return res.json({
+      available: true,
+      generatedAt: corpus.generatedAt,
+      manifestGeneration: corpus.manifestGeneration || null,
+      sourceFiles: corpus.sourceFiles.length,
+      counts: { factions: corpus.factions.length, wares: corpus.wares.length, jobs: corpus.jobs.length, aiScripts: corpus.aiScripts.length, sectors: corpus.sectors.length, scriptProperties: corpus.scriptProperties.length },
+      manifest: stripManifestRoot(manifest),
+    });
+  } catch (error) { return sendCorpusError(res, error); }
+}
+
+export function respondAgentReferenceSuggest(req: Request, res: Response, workspace?: ModWorkspace | null): Response {
+  try {
+    const queryError = validateReferenceCapabilityQuery(
+      req.query,
+      ['kind', 'q', 'intent', 'limit', 'refresh', 'workspaceId', 'clientId'],
+      'reference.suggest',
+    );
+    if (queryError) return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    const kind = String(req.query.kind || '').trim().toLowerCase() as CanonicalSymbolKind;
+    const allowedKinds = new Set<CanonicalSymbolKind>(['faction', 'ware', 'sector', 'macro', 'job', 'aiscript']);
+    if (!allowedKinds.has(kind)) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'Query ?kind=faction|ware|sector|macro|job|aiscript required.' });
+    }
+    const q = String(req.query.q || '').trim();
+    if (q.length > 256) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'Query ?q= must be at most 256 characters.' });
+    }
+    if (!q && req.query.limit === undefined) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'Query ?q=<text> or an explicit bounded ?limit= is required.' });
+    }
+    const intentInput = String(req.query.intent || 'reference').trim().toLowerCase();
+    if (!['reference', 'new-definition', 'selector'].includes(intentInput)) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'Query ?intent=reference|new-definition|selector required.' });
+    }
+    let parsedLimit = 25;
+    if (req.query.limit !== undefined && String(req.query.limit).trim() !== '') {
+      const candidate = Number(req.query.limit);
+      if (!Number.isInteger(candidate) || candidate < 1 || candidate > 100) {
+        return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'Query ?limit= must be an integer between 1 and 100.' });
+      }
+      parsedLimit = candidate;
+    }
+    if (req.query.refresh !== undefined && req.query.refresh !== '0' && req.query.refresh !== '1') {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'Optional ?refresh= must be 0 or 1.' });
+    }
+    const corpus = load(req);
+    const items = suggestReferences(corpus, {
+      kind,
+      query: q,
+      intent: intentInput as ReferenceSuggestionIntent,
+      limit: parsedLimit,
+      projectSymbols: projectReferenceSymbols(workspace),
+    });
+    return res.json({ generation: corpus.manifestGeneration || corpus.signature, kind, query: q, intent: intentInput, items });
+  } catch (error) { return sendCorpusError(res, error); }
+}
+
 export function registerReferenceRoutes(
   app: Express,
   workspaceProvider?: (req: Request) => ModWorkspace | null | undefined,
@@ -152,12 +381,25 @@ export function registerReferenceRoutes(
 
   app.post('/api/reference/simulate-diff', (req, res) => {
     try {
-      const body = req.body && typeof req.body === 'object' ? req.body as Record<string, unknown> : {};
+      if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+        return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'patch.diff.simulate requires a JSON object body.' });
+      }
+      const body = req.body as Record<string, unknown>;
+      const unknown = Object.keys(body).filter(key => !['path', 'content'].includes(key));
+      if (unknown.length) {
+        return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: `patch.diff.simulate does not accept: ${unknown.join(', ')}` });
+      }
       const relativePath = typeof body.path === 'string' ? body.path.trim() : '';
       const diff = typeof body.content === 'string' ? body.content : '';
-      if (!relativePath) throw new Error('Invalid request: path is required.');
-      if (typeof body.content !== 'string') throw new Error('Invalid request: content must be a string.');
-      if (diff.length > 5_000_000) throw new Error('Invalid request: content exceeds 5 MB.');
+      if (!relativePath || relativePath.length > 1024) {
+        return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'Invalid request: path is required.' });
+      }
+      if (typeof body.content !== 'string') {
+        return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'Invalid request: content must be a string.' });
+      }
+      if (diff.length > 5_000_000) {
+        return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'Invalid request: content exceeds 5 MB.' });
+      }
       const corpus = load(req);
       const effective = resolveEffectiveReferenceDocument(corpus.root, relativePath, forceRefresh(req));
       if (!effective.available || effective.content === undefined) {
@@ -320,21 +562,45 @@ export function registerReferenceRoutes(
 
   app.get('/api/reference/suggest', (req, res) => {
     try {
+      const queryError = validateReferenceCapabilityQuery(
+        req.query,
+        ['kind', 'q', 'intent', 'limit', 'refresh', 'workspaceId', 'clientId'],
+        'reference.suggest',
+      );
+      if (queryError) return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: queryError });
       const kind = String(req.query.kind || '').trim().toLowerCase() as CanonicalSymbolKind;
       const allowedKinds = new Set<CanonicalSymbolKind>(['faction', 'ware', 'sector', 'macro', 'job', 'aiscript']);
-      if (!allowedKinds.has(kind)) return res.status(400).json({ error: 'Query ?kind=faction|ware|sector|macro|job|aiscript required.' });
+      if (!allowedKinds.has(kind)) {
+        return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'Query ?kind=faction|ware|sector|macro|job|aiscript required.' });
+      }
       const q = String(req.query.q || '').trim();
-      if (!q && req.query.limit === undefined) return res.status(400).json({ error: 'Query ?q=<text> or an explicit bounded ?limit= is required.' });
+      if (q.length > 256) {
+        return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'Query ?q= must be at most 256 characters.' });
+      }
+      if (!q && req.query.limit === undefined) {
+        return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'Query ?q=<text> or an explicit bounded ?limit= is required.' });
+      }
       const intentInput = String(req.query.intent || 'reference').trim().toLowerCase();
       if (!['reference', 'new-definition', 'selector'].includes(intentInput)) {
-        return res.status(400).json({ error: 'Query ?intent=reference|new-definition|selector required.' });
+        return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'Query ?intent=reference|new-definition|selector required.' });
+      }
+      let parsedLimit = 25;
+      if (req.query.limit !== undefined && String(req.query.limit).trim() !== '') {
+        const candidate = Number(req.query.limit);
+        if (!Number.isInteger(candidate) || candidate < 1 || candidate > 100) {
+          return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'Query ?limit= must be an integer between 1 and 100.' });
+        }
+        parsedLimit = candidate;
+      }
+      if (req.query.refresh !== undefined && req.query.refresh !== '0' && req.query.refresh !== '1') {
+        return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'Optional ?refresh= must be 0 or 1.' });
       }
       const corpus = load(req);
       const items = suggestReferences(corpus, {
         kind,
         query: q,
         intent: intentInput as ReferenceSuggestionIntent,
-        limit: Number(req.query.limit || 25),
+        limit: parsedLimit,
         projectSymbols: projectReferenceSymbols(workspaceProvider?.(req)),
       });
       return res.json({ generation: corpus.manifestGeneration || corpus.signature, kind, query: q, intent: intentInput, items });

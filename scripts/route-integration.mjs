@@ -805,9 +805,10 @@ async function main() {
   const expectedCapabilityIds = ['configuration.access.request', 'configuration.access.status', 'configuration.apply', 'configuration.preview', 'configuration.read', 'configuration.status',
     'deploy.apply', 'deploy.preview', 'deploy.status', 'deploy.undo',
     'expression.check', 'expression.inspect', 'extensions.conflicts.analyze', 'history.list', 'history.revert',
-    'patch.readiness.analyze', 'performance.collect', 'performance.native.collect', 'performance.native.read', 'performance.native.stop',
+    'patch.diff.simulate', 'patch.readiness.analyze', 'performance.collect', 'performance.native.collect', 'performance.native.read', 'performance.native.stop',
     'performance.profile', 'performance.read', 'project.ai.navigation', 'project.brief.read', 'project.md.navigation', 'project.proof.read', 'project.validate', 'project.xml.references', 'readiness.read',
-    'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.generate.preview', 'workspace.read'];
+    'reference.file.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest',
+    'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.generate.preview', 'workspace.read'];
   const sameCapabilityIds = (actual, expected) => Array.isArray(actual)
     && JSON.stringify([...actual].sort()) === JSON.stringify([...expected].sort());
   const expectedCapabilityIdentity = id => `${id}@${['history.list', 'patch.readiness.analyze', 'workspace.compile', 'workspace.compile.result', 'workspace.read'].includes(id) ? 2 : 1}`;
@@ -1443,11 +1444,13 @@ async function main() {
   JSON.stringify({ public: publicEffective.json, bogus: bogusEffective.json, studio: { actor: studioEffective.json?.actor, ids: effectiveIds(studioEffective) } }));
   for (const [name, response, scope, expectedIds] of [
     ['read', readEffective, 'read', ['expression.check', 'expression.inspect', 'extensions.conflicts.analyze', 'history.list',
-      'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.xml.references', 'readiness.read',
-      'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read', 'workspace.read']],
-    ['write', writeEffective, 'write', ['expression.check', 'expression.inspect', 'extensions.conflicts.analyze', 'history.list', 'project.validate',
+      'patch.diff.simulate', 'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.xml.references', 'readiness.read',
+      'reference.file.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest',
+      'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read', 'workspace.read']],
+    ['write', writeEffective, 'write', ['expression.check', 'expression.inspect', 'extensions.conflicts.analyze', 'history.list', 'patch.diff.simulate', 'project.validate',
       'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.xml.references',
-      'readiness.read', 'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.read']],
+      'readiness.read', 'reference.file.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest',
+      'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.read']],
     ['deploy', deployEffective, 'deploy', expectedCapabilityIds.filter(id => !id.startsWith('configuration.') && !id.startsWith('deploy.') && ![
       'performance.native.collect', 'performance.native.read', 'performance.native.stop', 'project.ai.navigation', 'project.md.navigation',
     ].includes(id))],
@@ -6255,6 +6258,79 @@ async function main() {
       fs.rmSync(curatedModDir, { recursive: true, force: true });
       fs.rmSync(path.join(gameRoot, 'extensions', curatedModId), { recursive: true, force: true });
     }
+  }
+
+  // --- #19 P4 SLICE 2: REFERENCE CORPUS, OBJECT INDEX, XML DIFF SIMULATION & LOG DIAGNOSE CAPABILITIES ---
+  {
+    const refStatusAnon = await req('GET', '/api/agent/reference/status', null);
+    const refStatusRead = await req('GET', '/api/agent/reference/status', readKey);
+    capabilityResponses.set('reference.status.read', refStatusRead);
+    ok('agent_reference_status_requires_auth_and_redacts_host_roots',
+      refStatusAnon.status === 401
+        && refStatusRead.status === 200
+        && refStatusRead.json?.available === true
+        && refStatusRead.json?.root === undefined
+        && refStatusRead.json?.manifest?.root === undefined,
+      JSON.stringify({ anon: refStatusAnon.status, status: refStatusRead.status, body: refStatusRead.json }));
+
+    const refFileRead = await req('GET', '/api/agent/reference/effective-file?path=libraries%2Ffactions.xml', readKey);
+    capabilityResponses.set('reference.file.read', refFileRead);
+    const refFileBadQuery = await req('GET', '/api/agent/reference/effective-file?path=libraries%2Ffactions.xml&unexpected=1', readKey);
+    ok('agent_reference_effective_file_redacts_root_and_rejects_unknown_query',
+      refFileRead.status === 200
+        && refFileRead.json?.available === true
+        && refFileRead.json?.complete === true
+        && refFileRead.json?.root === undefined
+        && typeof refFileRead.json?.content === 'string'
+        && refFileBadQuery.status === 400 && refFileBadQuery.json?.code === 'CAPABILITY_INPUT_INVALID',
+      JSON.stringify({ status: refFileRead.status, bad: refFileBadQuery.status }));
+
+    const refSuggestRead = await req('GET', '/api/agent/reference/suggest?kind=faction&q=route&limit=10', readKey);
+    capabilityResponses.set('reference.suggest', refSuggestRead);
+    const refSuggestBad = await req('GET', '/api/agent/reference/suggest?kind=faction', readKey);
+    ok('agent_reference_suggest_returns_ranked_symbols_and_validates_inputs',
+      refSuggestRead.status === 200
+        && Array.isArray(refSuggestRead.json?.items)
+        && refSuggestRead.json.items.some(item => item.label === 'routefixture')
+        && refSuggestBad.status === 400 && refSuggestBad.json?.code === 'CAPABILITY_INPUT_INVALID',
+      JSON.stringify({ status: refSuggestRead.status, bad: refSuggestBad.status }));
+
+    const objIndexRead = await req('GET', '/api/agent/object-index?q=route&kind=all&limit=25', readKey);
+    capabilityResponses.set('reference.objects.search', objIndexRead);
+    const objIndexBad = await req('GET', '/api/agent/object-index?limit=501', readKey);
+    ok('agent_object_index_returns_bounded_items_and_rejects_oversize_limit',
+      objIndexRead.status === 200
+        && Array.isArray(objIndexRead.json?.items)
+        && objIndexBad.status === 400 && objIndexBad.json?.code === 'CAPABILITY_INPUT_INVALID',
+      JSON.stringify({ status: objIndexRead.status, bad: objIndexBad.status }));
+
+    const simDiffRead = await req('POST', '/api/agent/reference/simulate-diff', readKey, {
+      path: 'libraries/factions.xml',
+      content: '<diff><add sel="/factions"><faction id="simulated_faction" name="Simulated"/></add></diff>',
+    }, { operationId: null });
+    capabilityResponses.set('patch.diff.simulate', simDiffRead);
+    const simDiffBad = await req('POST', '/api/agent/reference/simulate-diff', readKey, {
+      path: 'libraries/factions.xml',
+      content: '<diff/>',
+      unexpected: true,
+    }, { operationId: null });
+    ok('agent_simulate_diff_applies_in_memory_and_rejects_undeclared_fields',
+      simDiffRead.status === 200
+        && simDiffRead.json?.ok === true
+        && simDiffRead.json?.operations?.[0]?.applied === true
+        && simDiffBad.status === 400 && simDiffBad.json?.code === 'CAPABILITY_INPUT_INVALID',
+      JSON.stringify({ status: simDiffRead.status, bad: simDiffBad.status }));
+
+    const logDiagRead = await req('POST', '/api/agent/log-diagnose', readKey, {
+      modId: 'x4_ai_influence',
+      tail: '[=ERROR=] 42.0 [AICHAT][NEG] Viv Otani cannot sign for routefixture while delivering 200 routeware\n',
+    }, { operationId: null });
+    capabilityResponses.set('runtime.log.diagnose', logDiagRead);
+    ok('agent_log_diagnose_read_key_returns_structured_diagnosis',
+      logDiagRead.status === 200
+        && Array.isArray(logDiagRead.json?.modIds)
+        && typeof logDiagRead.json?.diagnosis === 'object',
+      JSON.stringify({ status: logDiagRead.status }));
   }
 
   const capabilityOutputReport = (capabilityContract?.capabilities || [])

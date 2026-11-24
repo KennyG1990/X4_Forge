@@ -120,6 +120,7 @@ export const LEDGER_QUIET_ROUTES: string[] = [
   '/api/agent/round-trip-check',
   '/api/agent/probe/preview',
   '/api/agent/log-diagnose',
+  '/api/agent/reference/simulate-diff',
   '/api/agent/log-file-tail',
   '/api/agent/live/cue-telemetry',
   '/api/agent/quick-fixes',

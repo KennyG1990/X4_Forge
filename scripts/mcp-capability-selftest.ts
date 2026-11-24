@@ -27,6 +27,12 @@ const DIAGNOSTIC_READ_TOOLS = [
   'get_last_validation_verdict',
   'get_mod_proof',
   'get_agent_brief',
+  'get_reference_status',
+  'search_reference_symbols',
+  'read_reference_file',
+  'search_x4_objects',
+  'simulate_xml_diff',
+  'diagnose_game_log',
 ];
 
 const MD_NAVIGATION_TOOL = 'navigate_md_script';
@@ -111,6 +117,7 @@ const READ_TOOLS = [
   'check_expression', 'inspect_expression', 'get_xml_references', ...PERFORMANCE_TOOLS,
   'check_conflicts', 'explain_element',
   'list_action_history', 'get_last_validation_verdict', 'get_mod_proof', 'get_agent_brief',
+  'get_reference_status', 'search_reference_symbols', 'read_reference_file', 'search_x4_objects', 'simulate_xml_diff', 'diagnose_game_log',
 ];
 const WRITE_TOOLS = [
   'validate_mod', 'list_schema_domains', 'get_workspace', 'compile_workspace', 'author_check',
@@ -1191,6 +1198,73 @@ const server = http.createServer(function serveMcpFixture(request, response): vo
     }));
     return;
   }
+  if (request.method === 'GET' && request.url?.startsWith('/api/agent/reference/status?')) {
+    routeCalls.push({ method: request.method, path: request.url, body: null });
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({
+      available: true, generatedAt: '2030-01-01T00:00:00.000Z', manifestGeneration: 'gen_fixture',
+      sourceFiles: 42, counts: { factions: 12, wares: 500 }, manifest: { state: 'ready' },
+    }));
+    return;
+  }
+  if (request.method === 'GET' && request.url?.startsWith('/api/agent/reference/suggest?')) {
+    routeCalls.push({ method: request.method, path: request.url, body: null });
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({
+      generation: 'gen_fixture', kind: 'ware', query: 'energy', intent: 'reference',
+      items: [{ id: 'energycells', label: 'Energy Cells' }],
+    }));
+    return;
+  }
+  if (request.method === 'GET' && request.url?.startsWith('/api/agent/reference/effective-file?')) {
+    routeCalls.push({ method: request.method, path: request.url, body: null });
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({
+      relativePath: 'libraries/factions.xml', available: true, complete: true,
+      content: 'X'.repeat(300_000), sources: [{ origin: 'base' }], findings: [],
+    }));
+    return;
+  }
+  if (request.method === 'GET' && request.url?.startsWith('/api/agent/object-index?')) {
+    routeCalls.push({ method: request.method, path: request.url, body: null });
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({
+      generatedAt: '2030-01-01T00:00:00.000Z', roots: [runtimeHostileHome],
+      scannedFiles: 10, skippedFiles: 0, truncated: false, counts: { ware: 210 },
+      items: Array.from({ length: 210 }, (_, idx) => ({ id: `ware_${idx}`, name: `Ware ${idx}`, kind: 'ware', sourceFile: 'libraries/wares.xml' })),
+    }));
+    return;
+  }
+  if (request.method === 'POST' && request.url === '/api/agent/reference/simulate-diff') {
+    let raw = '';
+    request.setEncoding('utf8');
+    request.on('data', chunk => { raw += chunk; });
+    request.on('end', () => {
+      const body = JSON.parse(raw);
+      routeCalls.push({ method: request.method || '', path: request.url || '', body });
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({
+        path: body.path, base: { complete: true }, ok: true, content: 'M'.repeat(300_000),
+        operations: [{ index: 0, type: 'add', sel: '/factions', matches: 1, applied: true }], findings: [],
+      }));
+    });
+    return;
+  }
+  if (request.method === 'POST' && request.url === '/api/agent/log-diagnose') {
+    let raw = '';
+    request.setEncoding('utf8');
+    request.on('data', chunk => { raw += chunk; });
+    request.on('end', () => {
+      const body = JSON.parse(raw);
+      routeCalls.push({ method: request.method || '', path: request.url || '', body });
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({
+        modIds: [body.modId], diagnosis: { hypotheses: [{ code: 'raw_engine_id_in_player_text' }] },
+        rawEngineIdLeaks: [{ id: 'loanshark', domain: 'faction', phrase: 'for loanshark' }],
+      }));
+    });
+    return;
+  }
   response.writeHead(404, { 'Content-Type': 'application/json' });
   response.end(JSON.stringify({ error: 'not found' }));
 });
@@ -1486,6 +1560,32 @@ try {
     const briefReply = await client.request('tools/call', { name: 'get_agent_brief', arguments: { fromPath: 'compile_fixture' } });
     assert.equal(briefReply.error, undefined);
     assert.match(String(JSON.parse(String(briefReply.result?.content?.[0]?.text || '{}')).agentsMd || ''), /^# Agent instructions/);
+    const refStatusReply = await client.request('tools/call', { name: 'get_reference_status', arguments: { observe: '1' } });
+    assert.equal(refStatusReply.error, undefined);
+    assert.equal(JSON.parse(String(refStatusReply.result?.content?.[0]?.text || '{}')).available, true);
+    const refSuggestReply = await client.request('tools/call', { name: 'search_reference_symbols', arguments: { kind: 'ware', q: 'energy', limit: 10 } });
+    assert.equal(refSuggestReply.error, undefined);
+    assert.equal(JSON.parse(String(refSuggestReply.result?.content?.[0]?.text || '{}')).items?.[0]?.id, 'energycells');
+    const refFileReply = await client.request('tools/call', { name: 'read_reference_file', arguments: { path: 'libraries/factions.xml' } });
+    assert.equal(refFileReply.error, undefined);
+    const refFileResult = JSON.parse(String(refFileReply.result?.content?.[0]?.text || '{}'));
+    assert.equal(refFileResult.content.length, 262144);
+    assert.equal(refFileResult.contentTruncated, true);
+    const objSearchReply = await client.request('tools/call', { name: 'search_x4_objects', arguments: { q: 'ware', kind: 'ware', limit: 150 } });
+    assert.equal(objSearchReply.error, undefined);
+    const objSearchResult = JSON.parse(String(objSearchReply.result?.content?.[0]?.text || '{}'));
+    assert.equal(objSearchResult.roots, undefined);
+    assert.equal(objSearchResult.items.length, 200);
+    assert.equal(objSearchResult.truncated, true);
+    assert.equal(JSON.stringify(objSearchResult).includes(runtimeHostileHome), false);
+    const simDiffReply = await client.request('tools/call', { name: 'simulate_xml_diff', arguments: { path: 'libraries/factions.xml', content: '<diff/>' } });
+    assert.equal(simDiffReply.error, undefined);
+    const simDiffResult = JSON.parse(String(simDiffReply.result?.content?.[0]?.text || '{}'));
+    assert.equal(simDiffResult.content.length, 262144);
+    assert.equal(simDiffResult.contentTruncated, true);
+    const logDiagReply = await client.request('tools/call', { name: 'diagnose_game_log', arguments: { modId: 'compile_fixture', tail: '[=ERROR=] sign for loanshark' } });
+    assert.equal(logDiagReply.error, undefined);
+    assert.equal(JSON.parse(String(logDiagReply.result?.content?.[0]?.text || '{}')).rawEngineIdLeaks?.[0]?.id, 'loanshark');
     assert.deepEqual(routeCalls.map(call => `${call.method} ${call.path}`), [
       'POST /api/agent/project/validate/check',
       'GET /api/agent/workspace',
@@ -1498,6 +1598,12 @@ try {
       'GET /api/agent/validation/last?modId=compile_fixture&checkSource=1',
       'GET /api/agent/proof?fromPath=compile_fixture',
       'GET /api/agent/project/brief?fromPath=compile_fixture',
+      'GET /api/agent/reference/status?observe=1',
+      'GET /api/agent/reference/suggest?kind=ware&q=energy&limit=10',
+      'GET /api/agent/reference/effective-file?path=libraries%2Ffactions.xml',
+      'GET /api/agent/object-index?q=ware&kind=ware&limit=150',
+      'POST /api/agent/reference/simulate-diff',
+      'POST /api/agent/log-diagnose',
     ], 'current-contract execution must use current capability routes');
 
     routeCalls.length = 0;
@@ -1542,6 +1648,13 @@ try {
       { name: 'get_last_validation_verdict', arguments: { checkSource: '2' } },
       { name: 'get_mod_proof', arguments: { write: true } },
       { name: 'get_agent_brief', arguments: {} },
+      { name: 'get_reference_status', arguments: { observe: '2' } },
+      { name: 'search_reference_symbols', arguments: { kind: 'ware' } },
+      { name: 'search_reference_symbols', arguments: { kind: 'unknown', q: 'x' } },
+      { name: 'read_reference_file', arguments: {} },
+      { name: 'search_x4_objects', arguments: { limit: 201 } },
+      { name: 'simulate_xml_diff', arguments: { path: 'libraries/wares.xml' } },
+      { name: 'diagnose_game_log', arguments: { modId: 'x', tail: 't'.repeat(524289) } },
     ]) {
       const denied = await client.request('tools/call', invalid);
       assert.equal(denied.error?.code, -32602, `${invalid.name} malformed input must fail before HTTP`);
@@ -2020,6 +2133,12 @@ try {
       ['get_last_validation_verdict', {}],
       ['get_mod_proof', {}],
       ['get_agent_brief', { fromPath: 'compile_fixture' }],
+      ['get_reference_status', {}],
+      ['search_reference_symbols', { kind: 'ware', q: 'energy' }],
+      ['read_reference_file', { path: 'libraries/factions.xml' }],
+      ['search_x4_objects', {}],
+      ['simulate_xml_diff', { path: 'libraries/factions.xml', content: '<diff/>' }],
+      ['diagnose_game_log', { modId: 'compile_fixture', tail: '' }],
     ] as const) {
       assert.equal((await client.request('tools/call', { name, arguments: args })).error?.code, -32602,
         `${name} must not acquire authority from stale discovery`);

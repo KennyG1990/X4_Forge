@@ -1713,8 +1713,8 @@
       "workspaceMode": "optional"
     },
     "GET /api/agent/object-index": {
-      "disposition": "legacy-agent-api",
-      "owner": "agent-api",
+      "disposition": "canonical-capability",
+      "owner": "reference.objects.search",
       "registrations": 1,
       "agentScopes": [
         "read",
@@ -2066,6 +2066,42 @@
         "deploy"
       ],
       "resourceClass": "public",
+      "workspaceMode": "optional"
+    },
+    "GET /api/agent/reference/effective-file": {
+      "disposition": "canonical-capability",
+      "owner": "reference.file.read",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "stateless-analysis",
+      "workspaceMode": "optional"
+    },
+    "GET /api/agent/reference/status": {
+      "disposition": "canonical-capability",
+      "owner": "reference.status.read",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "stateless-analysis",
+      "workspaceMode": "optional"
+    },
+    "GET /api/agent/reference/suggest": {
+      "disposition": "canonical-capability",
+      "owner": "reference.suggest",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "stateless-analysis",
       "workspaceMode": "optional"
     },
     "GET /api/agent/request-deadline-selftest": {
@@ -3210,8 +3246,8 @@
       "workspaceMode": "optional"
     },
     "POST /api/agent/log-diagnose": {
-      "disposition": "legacy-agent-api",
-      "owner": "agent-api",
+      "disposition": "canonical-capability",
+      "owner": "runtime.log.diagnose",
       "registrations": 1,
       "agentScopes": [
         "read",
@@ -3544,6 +3580,18 @@
     "POST /api/agent/quick-fixes": {
       "disposition": "legacy-agent-api",
       "owner": "agent-api",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "stateless-analysis",
+      "workspaceMode": "optional"
+    },
+    "POST /api/agent/reference/simulate-diff": {
+      "disposition": "canonical-capability",
+      "owner": "patch.diff.simulate",
       "registrations": 1,
       "agentScopes": [
         "read",
@@ -4049,6 +4097,7 @@
     "extensions.conflicts.analyze@1": "5e8005a8422ebbe1039a848332caf8f40076ea7cce693b21df8039aec856697e",
     "history.list@2": "9fc3203d66edd8c3136bd374bfef4394783e1bd8ef8a44834ff7360a93d1fb33",
     "history.revert@1": "2399e2dd2ec3263e0f6f5364ab3be8edf1fe8d065cea40bc736d72ee8c4bcd98",
+    "patch.diff.simulate@1": "eb4c3ceab8d75b6c235acbc6820f611216685ac3e55a3cf958c5d493f179348a",
     "patch.readiness.analyze@2": "7baa90f99f4f1a7cc4382caaf009c107388e9de6124d0d2b5bf155769ab91812",
     "performance.collect@1": "3388a193408ec6e83ad3228705b7b9acaeb488580995c4359a844047871bd9ff",
     "performance.native.collect@1": "8521e03600b98b7ced7b49205f8dfe95b8e018337d6c63e83e9a88596e7792a2",
@@ -4063,7 +4112,12 @@
     "project.validate@1": "34e6c5a213b07038e58d70dca27db474370300e38599f6299b5664a974dedf06",
     "project.xml.references@1": "3ee7a1ad13af453017d9136e0a23218912dc866e6fe4b4b066f8313fd740affe",
     "readiness.read@1": "8a1e349ea4a481e12be506a20cc246957898faed7a9548a523d5a0359195add0",
+    "reference.file.read@1": "99bad92de0468d561ec970602cf96e7390f5baab046a4acc9d5301a3e053b008",
+    "reference.objects.search@1": "20b6c432adf4165f59a0edbd7b04df9a5820773ec0a67b49d4607acef9a8a314",
+    "reference.status.read@1": "5320a3b3f91fc1d544c9a0b5f4e00e516516865efe15125608521c438038fc1f",
+    "reference.suggest@1": "fc01662e1f79253fb811f0a4e0925e3d899b99cf80308a36f10fc243e761460e",
     "runtime.debug.read@1": "8d0d15b310655431fa08afdf161575c5873a62261f1e511e9b0ccf9260d84311",
+    "runtime.log.diagnose@1": "a5b1ef6f5323695f7ca5a3a47c0bbf103cca4777ef163913528a4838d843d589",
     "schema.domains.list@1": "c2ecae2906cf231eb4384a63ea601c7449f4fc691b629b97bff9fa81e32f21b5",
     "schema.element.explain@1": "066fc8d2153c753a7f498044a0fb2e4a6921f81a2fe1deb6445a02894194286d",
     "text.lookup@1": "45ecbc5abb71fb1e168c8b172399742251ca28c8b13fa96afb1352e11a8666a6",
@@ -4074,8 +4128,8 @@
     "workspace.read@2": "962774de4a25e8725a0d90d4982298cc72f100312075b1f6f4ff9de1482752d7"
   },
   "mcpModuleSignature": {
-    "version": 26,
-    "hash": "675bc64d3b15bfc7596ba6e4a19a23cddc0d76228b4c3e41219318db5e8f798f"
+    "version": 27,
+    "hash": "f04ea03dffbb93cb0888c5e15e24ddca7d9793b97c02e1800e3f5f217292fd70"
   },
   "mcpSignatures": {
     "validate_mod": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",
@@ -4115,7 +4169,13 @@
     "get_compile_result": "67bb0582212ca853deaa36d64a96d13457a1c56e6d908d831b1fbf814333ba51",
     "get_last_validation_verdict": "c8533569c433a4105fabe74d3a06253488b15442822950f5376e0e9cfeab5665",
     "get_mod_proof": "10f3ee9db4c3162d36ac8569e0f4600698a61d09cdb256f19e46df98c695f4ee",
-    "get_agent_brief": "dc3cab128e5fe7c0dcd7f60b51543d40e9a5950fa5118d3d224fd5d6fb33c66c"
+    "get_agent_brief": "dc3cab128e5fe7c0dcd7f60b51543d40e9a5950fa5118d3d224fd5d6fb33c66c",
+    "get_reference_status": "4a675afa3e350d217a104e5ce44c4bf6cbce1b086ee24cef2a734ba01dd72015",
+    "search_reference_symbols": "9385c10a414338d6683ad121f94135e7bfff3cb0d9074bb38fc2f7c7185c0f27",
+    "read_reference_file": "d88af17182623166dc8b8bf4745d68bd543a5d99a0bfd45a1b1b8fa4cbf076ec",
+    "search_x4_objects": "96ae8817175cdb87dcade51343af46986198d51a7cb9cb154db215eff50cf9b2",
+    "simulate_xml_diff": "85ebed9ee03ba5d92d86692cf000bba46eb89850a745ebc79b0b345e9fca44fb",
+    "diagnose_game_log": "b898fc37aae1cf97ccffa5210683618bac98407d23d26c48f569297d148f0e71"
   },
   "mcpCapabilityIdentities": {
     "validate_mod": "project.validate@1",
@@ -4155,6 +4215,12 @@
     "get_compile_result": "workspace.compile.result@2",
     "get_last_validation_verdict": "validation.last.read@1",
     "get_mod_proof": "project.proof.read@1",
-    "get_agent_brief": "project.brief.read@1"
+    "get_agent_brief": "project.brief.read@1",
+    "get_reference_status": "reference.status.read@1",
+    "search_reference_symbols": "reference.suggest@1",
+    "read_reference_file": "reference.file.read@1",
+    "search_x4_objects": "reference.objects.search@1",
+    "simulate_xml_diff": "patch.diff.simulate@1",
+    "diagnose_game_log": "runtime.log.diagnose@1"
   }
 }

@@ -127,7 +127,17 @@ import { getAiSchemaIndex, getScriptPropertyIndex, registerValidationAgentRoutes
 import { resolveLiteralReferenceText } from "./src/server/literalTextSources";
 import { offsetAt, type ReferenceLanguageRequest } from "./src/lib/referenceLanguage";
 import { LITERAL_TEXT_MAX_FILE_BYTES, LITERAL_TEXT_MAX_FILES, LITERAL_TEXT_MAX_TOTAL_BYTES, literalTextFilenameLanguage, resolveLiteralText, type LiteralTextLookupRequest } from "./src/lib/literalTextLookup";
-import { getCanonicalReferenceCorpus, getCanonicalReferenceSets, initializeReferenceCorpus, registerReferenceRoutes, startCanonicalReferenceManifest } from "./src/server/referenceRoutes";
+import {
+  getCanonicalReferenceCorpus,
+  getCanonicalReferenceSets,
+  initializeReferenceCorpus,
+  registerReferenceRoutes,
+  respondAgentEffectiveReferenceFile,
+  respondAgentReferenceStatus,
+  respondAgentReferenceSuggest,
+  respondAgentSimulateDiff,
+  startCanonicalReferenceManifest,
+} from "./src/server/referenceRoutes";
 import { createCanonicalMdProviderPreparation, readCanonicalMdCompiledWorkerIdentity } from './src/server/canonicalMdProviderPreparation';
 import type { CanonicalMdConsultation } from './src/server/canonicalMdReferenceContext';
 import { readCanonicalMdProviderGeneration, readCanonicalMdProviderProof } from './src/lib/canonicalMdProviderCatalog';
@@ -8830,12 +8840,31 @@ app.post("/api/agent/log-diagnose", (req, res) => {
  */
 app.get("/api/agent/object-index", (req, res) => {
   try {
+    const queryError = validateCapabilityQueryKeys(
+      req.query,
+      ['q', 'kind', 'limit', 'workspaceId', 'clientId'],
+      'reference.objects.search',
+    );
+    if (queryError) return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    const kind = typeof req.query.kind === "string" && req.query.kind.trim() ? req.query.kind.trim() : "all";
+    const allowedKinds = ['all', 'ship', 'station', 'ware', 'faction', 'sound', 'job', 'aiscript', 'md_element', 'macro'];
+    if (!allowedKinds.includes(kind)) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: `Unsupported object kind: ${kind}` });
+    }
+    let parsedLimit = 500;
+    if (req.query.limit !== undefined && String(req.query.limit).trim() !== '') {
+      const candidate = Number(req.query.limit);
+      if (!Number.isInteger(candidate) || candidate < 1 || candidate > 500) {
+        return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'reference.objects.search limit must be an integer between 1 and 500.' });
+      }
+      parsedLimit = candidate;
+    }
+    const q = typeof req.query.q === "string" ? req.query.q : "";
+    if (q.length > 256) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'reference.objects.search q must be at most 256 characters.' });
+    }
     const index = getObjectIndex();
-    const filtered = filterX4ObjectIndex(index, {
-      q: typeof req.query.q === "string" ? req.query.q : "",
-      kind: typeof req.query.kind === "string" ? req.query.kind : "all",
-      limit: typeof req.query.limit === "string" ? Number(req.query.limit) : 500
-    });
+    const filtered = filterX4ObjectIndex(index, { q, kind, limit: parsedLimit });
     return res.json(filtered);
   } catch (error) {
     return res.status(500).json({
@@ -8843,6 +8872,14 @@ app.get("/api/agent/object-index", (req, res) => {
     });
   }
 });
+
+app.get("/api/agent/reference/status", (req, res) => respondAgentReferenceStatus(req, res));
+app.get("/api/agent/reference/effective-file", (req, res) => respondAgentEffectiveReferenceFile(req, res));
+app.get("/api/agent/reference/suggest", (req, res) => {
+  const ws = decoratedReq(req).__workspaceRecord?.workspace as ModWorkspace | undefined;
+  return respondAgentReferenceSuggest(req, res, ws);
+});
+app.post("/api/agent/reference/simulate-diff", (req, res) => respondAgentSimulateDiff(req, res));
 
 // Real base-game XML file paths that can be the target of a <diff> patch, enumerated
 // from the packed .cat manifests (so the patch editor only offers files that actually

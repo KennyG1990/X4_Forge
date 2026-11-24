@@ -101,6 +101,12 @@ const DIAGNOSTIC_READ_LIVE_TOOLS = new Set([
   "get_last_validation_verdict",
   "get_mod_proof",
   "get_agent_brief",
+  "get_reference_status",
+  "search_reference_symbols",
+  "read_reference_file",
+  "search_x4_objects",
+  "simulate_xml_diff",
+  "diagnose_game_log",
 ]);
 const PERFORMANCE_PROFILE_HTTP_FAILURES = { PROFILE_DISABLED: 503, PROFILE_BUSY: 409, PROFILE_RATE_LIMITED: 429, PROFILE_DISPOSED: 503, PROFILE_INPUT_INVALID: 400, PROFILE_ABORTED: 408, PROFILE_FAILED: 500, PROFILE_CLEANUP_UNCONFIRMED: 409 };
 const PERFORMANCE_COLLECTION_HTTP_FAILURES = { PERFORMANCE_DISPOSED: 503, PERFORMANCE_COLLECTION_BUSY: 409, PERFORMANCE_COLLECTION_REFUSED: 409, PROJECT_INPUT_INVALID: 400, PERFORMANCE_COLLECTION_FAILED: 500 };
@@ -1125,6 +1131,220 @@ const TOOLS = [
         { input: "object", agentsMd: "string", notesMd: "string" },
       );
     },
+  },
+  {
+    name: "get_reference_status",
+    capabilityId: "reference.status.read",
+    capabilityVersion: 1,
+    description: "Read canonical X4 reference corpus availability, counts, generation, and manifest state without exposing host filesystem root paths.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        observe: { type: "string", enum: ["0", "1"] },
+        refresh: { type: "string", enum: ["0", "1"] },
+      },
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams();
+      if (args?.observe !== undefined) q.set("observe", String(args.observe));
+      if (args?.refresh !== undefined) q.set("refresh", String(args.refresh));
+      return requireResponse(
+        await forge("GET", `/api/agent/reference/status?${q}`),
+        "reference status",
+        { available: "boolean", sourceFiles: "number", manifest: "object" },
+      );
+    },
+  },
+  {
+    name: "search_reference_symbols",
+    capabilityId: "reference.suggest",
+    capabilityVersion: 1,
+    description: "Search and rank canonical base+DLC plus addressed-workspace X4 faction, ware, sector, macro, job, or aiscript symbols.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["faction", "ware", "sector", "macro", "job", "aiscript"] },
+        q: { type: "string", maxLength: 256 },
+        intent: { type: "string", enum: ["reference", "new-definition", "selector"] },
+        limit: { type: "integer", minimum: 1, maximum: 100 },
+        refresh: { type: "string", enum: ["0", "1"] },
+      },
+      required: ["kind"],
+      additionalProperties: false,
+      anyOf: [
+        {
+          type: "object",
+          properties: {
+            kind: { type: "string", enum: ["faction", "ware", "sector", "macro", "job", "aiscript"] },
+            q: { type: "string", maxLength: 256 },
+            intent: { type: "string", enum: ["reference", "new-definition", "selector"] },
+            limit: { type: "integer", minimum: 1, maximum: 100 },
+            refresh: { type: "string", enum: ["0", "1"] },
+          },
+          required: ["kind", "q"],
+          additionalProperties: false,
+        },
+        {
+          type: "object",
+          properties: {
+            kind: { type: "string", enum: ["faction", "ware", "sector", "macro", "job", "aiscript"] },
+            q: { type: "string", maxLength: 256 },
+            intent: { type: "string", enum: ["reference", "new-definition", "selector"] },
+            limit: { type: "integer", minimum: 1, maximum: 100 },
+            refresh: { type: "string", enum: ["0", "1"] },
+          },
+          required: ["kind", "limit"],
+          additionalProperties: false,
+        },
+      ],
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams({ kind: String(args?.kind || "") });
+      if (args?.q !== undefined) q.set("q", String(args.q));
+      if (args?.intent !== undefined) q.set("intent", String(args.intent));
+      if (args?.limit !== undefined) q.set("limit", String(args.limit));
+      if (args?.refresh !== undefined) q.set("refresh", String(args.refresh));
+      return requireResponse(
+        await forge("GET", `/api/agent/reference/suggest?${q}`),
+        "reference symbol search",
+        { generation: "string", kind: "string", query: "string", intent: "string", items: "array" },
+      );
+    },
+  },
+  {
+    name: "read_reference_file",
+    capabilityId: "reference.file.read",
+    capabilityVersion: 1,
+    description: "Read a composed canonical base+DLC reference XML document or its script-symbol origins. Projection limit: XML content is capped at 256 KiB.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", maxLength: 1024 },
+        refresh: { type: "string", enum: ["0", "1"] },
+        view: { type: "string", enum: ["script-symbol-origins"] },
+        compact: { type: "string", enum: ["0", "1"] },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams({ path: String(args?.path || "") });
+      if (args?.refresh !== undefined) q.set("refresh", String(args.refresh));
+      if (args?.view !== undefined) q.set("view", String(args.view));
+      if (args?.compact !== undefined) q.set("compact", String(args.compact));
+      const d = requireResponse(
+        await forge("GET", `/api/agent/reference/effective-file?${q}`),
+        "effective reference file",
+        { relativePath: "string", available: "boolean", complete: "boolean" },
+      );
+      const rawContent = typeof d.content === "string" ? d.content : undefined;
+      return {
+        relativePath: d.relativePath,
+        available: d.available,
+        complete: d.complete,
+        ...(rawContent !== undefined ? {
+          content: rawContent.slice(0, 262144),
+          contentLength: rawContent.length,
+          contentTruncated: rawContent.length > 262144,
+        } : {}),
+        ...(Array.isArray(d.sources) ? { sources: d.sources } : {}),
+        ...(Array.isArray(d.findings) ? { findings: d.findings } : {}),
+        ...(isRecord(d.scriptSymbolOrigins) ? { scriptSymbolOrigins: d.scriptSymbolOrigins } : {}),
+      };
+    },
+  },
+  {
+    name: "search_x4_objects",
+    capabilityId: "reference.objects.search",
+    capabilityVersion: 1,
+    description: "Search indexed X4 ships, stations, wares, factions, jobs, sounds, aiscripts, macros, and MD elements. Projection limit: omits host roots and caps items at 200.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        q: { type: "string", maxLength: 256 },
+        kind: { type: "string", enum: ["all", "ship", "station", "ware", "faction", "sound", "job", "aiscript", "md_element", "macro"] },
+        limit: { type: "integer", minimum: 1, maximum: 200 },
+      },
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams();
+      if (args?.q !== undefined) q.set("q", String(args.q));
+      if (args?.kind !== undefined) q.set("kind", String(args.kind));
+      q.set("limit", String(args?.limit !== undefined ? args.limit : 100));
+      const d = requireResponse(
+        await forge("GET", `/api/agent/object-index?${q}`),
+        "object index",
+        { generatedAt: "string", scannedFiles: "number", skippedFiles: "number", truncated: "boolean", counts: "object", items: "array" },
+      );
+      return {
+        generatedAt: d.generatedAt,
+        scannedFiles: d.scannedFiles,
+        skippedFiles: d.skippedFiles,
+        truncated: d.truncated || d.items.length > 200,
+        counts: d.counts,
+        items: d.items.slice(0, 200),
+      };
+    },
+  },
+  {
+    name: "simulate_xml_diff",
+    capabilityId: "patch.diff.simulate",
+    capabilityVersion: 1,
+    description: "Simulate an RFC 5261 <diff> XML patch against a composed canonical base+DLC X4 XML target file without writing disk. Projection limit: input capped at 512 KiB, merged XML capped at 256 KiB.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", maxLength: 1024 },
+        content: { type: "string", maxLength: 524288 },
+      },
+      required: ["path", "content"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const d = requireResponse(
+        await forge("POST", "/api/agent/reference/simulate-diff", {
+          path: String(args?.path || ""),
+          content: String(args?.content || ""),
+        }),
+        "XML diff simulation",
+        { path: "string", base: "object", ok: "boolean", content: "string", operations: "array", findings: "array" },
+      );
+      return {
+        path: d.path,
+        base: d.base,
+        ok: d.ok,
+        content: d.content.slice(0, 262144),
+        contentLength: d.content.length,
+        contentTruncated: d.content.length > 262144,
+        operations: d.operations,
+        findings: d.findings,
+      };
+    },
+  },
+  {
+    name: "diagnose_game_log",
+    capabilityId: "runtime.log.diagnose",
+    capabilityVersion: 1,
+    description: "Run deterministic root-cause classification and #58 raw engine-ID prose leak detection over a pasted X4 log trace (up to 512 KiB) without AI spend.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        modId: { type: "string", maxLength: 256 },
+        tail: { type: "string", maxLength: 524288 },
+      },
+      required: ["modId", "tail"],
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/log-diagnose", {
+        modId: String(args?.modId || ""),
+        tail: String(args?.tail || ""),
+      }),
+      "game log diagnosis",
+      { modIds: "array", diagnosis: "object" },
+    ),
   },
 ];
 const STATIC_TOOL_NAMES = new Set(TOOLS.map((tool) => tool.name));

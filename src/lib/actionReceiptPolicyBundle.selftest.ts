@@ -92,8 +92,8 @@ export function runActionReceiptPolicyBundleSelftest(): ActionReceiptPolicyBundl
   const positive = loadActionReceiptPolicyBundle();
   check(
     'bundled_policy_positive_counts',
-    positive.routeCount === 105 && positive.surfaceCount === 69
-      && positive.inventory.routes.length === 105
+    positive.routeCount === 106 && positive.surfaceCount === 69
+      && positive.inventory.routes.length === 106
       && positive.inventory.surfaces.length === 69,
     `routes=${positive.routeCount} surfaces=${positive.surfaceCount}`,
   );
@@ -181,7 +181,7 @@ export function runActionReceiptPolicyBundleSelftest(): ActionReceiptPolicyBundl
     later !== positive
       && JSON.stringify(later.manifest) === positiveManifestJson
       && JSON.stringify(later.inventory) === positiveInventoryJson
-      && later.routeCount === 105
+      && later.routeCount === 106
       && later.surfaceCount === 69
       && later.manifestSha256 === ACTION_RECEIPT_COVERAGE_REVIEWED_MANIFEST_SHA256,
   );
