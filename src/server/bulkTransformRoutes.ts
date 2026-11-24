@@ -21,7 +21,7 @@ import type { WorkspaceReceiptService } from './workspaceReceiptService';
 import type { WorkspaceRegistry } from '../lib/workspaceRegistry';
 import type { ModWorkspace, PatchBlock } from '../types';
 
-interface BulkTransformRouteOptions {
+export interface BulkTransformRouteOptions {
   workspace: (req: Request) => ModWorkspace;
   workspaceId: (req: Request) => string;
   workspaceHash: (req: Request) => string;
@@ -167,118 +167,143 @@ function safeRecoveryResponse(
   }
 }
 
-export function registerBulkTransformRoutes(app: Express, options: BulkTransformRouteOptions): void {
-  app.post('/api/agent/bulk-transform/preview', (req, res) => {
-    try {
-      const workspace = options.workspace(req);
-      const plan = buildPlan(parseRule(req.body), workspace);
-      return res.status(plan.ok ? 200 : 422).json({
-        ...plan,
-        applied: false,
-        workspaceId: options.workspaceId(req),
-        workspaceHash: options.workspaceHash(req),
-        snapshotHash: options.workspaceSnapshotHash(req),
-      });
-    } catch (error) { return sendError(res, error); }
-  });
+export function executeBulkTransformPreviewRoute(
+  req: Request,
+  res: Response,
+  options: BulkTransformRouteOptions,
+) {
+  try {
+    const workspace = options.workspace(req);
+    const plan = buildPlan(parseRule(req.body), workspace);
+    return res.status(plan.ok ? 200 : 422).json({
+      ...plan,
+      applied: false,
+      workspaceId: options.workspaceId(req),
+      workspaceHash: options.workspaceHash(req),
+      snapshotHash: options.workspaceSnapshotHash(req),
+    });
+  } catch (error) { return sendError(res, error); }
+}
 
-  app.post('/api/agent/bulk-transform/apply', async (req, res) => {
-    const mayProceed = () => options.mayProceed(req, res);
-    const responseAvailable = async () => {
-      if (res.writableEnded || res.destroyed) return false;
-      try { return await mayProceed(); } catch { return false; }
-    };
-    const respondFailure = async (
-      code: string,
-      replayed = false,
-      receipt?: ActionReceiptTransactionProjection,
-    ) => {
-      if (!await responseAvailable()) return;
-      const recovery = safeRecoveryResponse(options, receipt);
-      return res.status(bulkTransformApplyFailureStatus(code)).json({
-        success: false,
-        status: 'FAILED',
-        code,
-        error: 'Bulk transform apply failed.',
-        failedStages: ['bulk_transform_apply_receipt'],
-        replayed,
-        ...(receipt === undefined ? {} : { receipt }),
-        ...(recovery === undefined ? {} : { recovery }),
-      });
-    };
+export async function executeBulkTransformApplyRoute(
+  req: Request,
+  res: Response,
+  options: BulkTransformRouteOptions,
+  responseOptions?: { detail?: 'compact' | 'full' },
+) {
+  const mayProceed = () => options.mayProceed(req, res);
+  const responseAvailable = async () => {
+    if (res.writableEnded || res.destroyed) return false;
+    try { return await mayProceed(); } catch { return false; }
+  };
+  const respondFailure = async (
+    code: string,
+    replayed = false,
+    receipt?: ActionReceiptTransactionProjection,
+  ) => {
+    if (!await responseAvailable()) return;
+    const recovery = safeRecoveryResponse(options, receipt);
+    return res.status(bulkTransformApplyFailureStatus(code)).json({
+      success: false,
+      status: 'FAILED',
+      code,
+      error: 'Bulk transform apply failed.',
+      failedStages: ['bulk_transform_apply_receipt'],
+      replayed,
+      ...(receipt === undefined ? {} : { receipt }),
+      ...(recovery === undefined ? {} : { recovery }),
+    });
+  };
+
+  if (!await responseAvailable()) return;
+
+  let operationId: unknown;
+  try {
+    operationId = options.operationId(req);
+  } catch {
+    return respondFailure('ACTION_RECEIPT_OPERATION_ID_INVALID');
+  }
+  const expectedPlanHash = req.body?.expectedPlanHash;
+  const expectedHead = req.body?.expectedHead;
+  const expectedSnapshotHash = req.body?.expectedSnapshotHash;
+  if (typeof operationId !== 'string' || operationId.trim().length === 0) {
+    return respondFailure('ACTION_RECEIPT_OPERATION_ID_INVALID');
+  }
+  if (typeof expectedPlanHash !== 'string' || expectedPlanHash.trim().length === 0
+    || typeof expectedHead !== 'string' || expectedHead.trim().length === 0
+    || typeof expectedSnapshotHash !== 'string' || expectedSnapshotHash.trim().length === 0) {
+    return respondFailure('BULK_APPLY_RECEIPT_INPUT_INVALID');
+  }
+
+  let rule: BulkTransformRule;
+  try {
+    rule = parseRule(req.body);
+  } catch {
+    return respondFailure('BULK_APPLY_RECEIPT_INPUT_INVALID');
+  }
+
+  try {
+    const result = await executeBulkTransformApplyReceipt({
+      registry: options.registry,
+      receiptService: options.receiptService,
+      recoveryStore: options.recoveryStore,
+      store: options.store,
+      captureProjection: projection => options.captureProjection(req, projection),
+    }, {
+      operationId,
+      workspaceId: options.workspaceId(req),
+      identity: options.identity(req),
+      rule,
+      expectedPlanHash,
+      expectedHead,
+      expectedSnapshotHash,
+      buildPlan,
+      mayProceed,
+    });
 
     if (!await responseAvailable()) return;
-
-    let operationId: unknown;
-    try {
-      operationId = options.operationId(req);
-    } catch {
-      return respondFailure('ACTION_RECEIPT_OPERATION_ID_INVALID');
-    }
-    const expectedPlanHash = req.body?.expectedPlanHash;
-    const expectedHead = req.body?.expectedHead;
-    const expectedSnapshotHash = req.body?.expectedSnapshotHash;
-    if (typeof operationId !== 'string' || operationId.trim().length === 0) {
-      return respondFailure('ACTION_RECEIPT_OPERATION_ID_INVALID');
-    }
-    if (typeof expectedPlanHash !== 'string' || expectedPlanHash.trim().length === 0
-      || typeof expectedHead !== 'string' || expectedHead.trim().length === 0
-      || typeof expectedSnapshotHash !== 'string' || expectedSnapshotHash.trim().length === 0) {
-      return respondFailure('BULK_APPLY_RECEIPT_INPUT_INVALID');
+    if (result.ok === false) return respondFailure(result.code, result.replayed, result.receipt);
+    if (result.receipt.status !== 'committed') {
+      return respondFailure('BULK_APPLY_RECEIPT_MISMATCH', result.replayed, result.receipt);
     }
 
-    let rule: BulkTransformRule;
-    try {
-      rule = parseRule(req.body);
-    } catch {
-      return respondFailure('BULK_APPLY_RECEIPT_INPUT_INVALID');
-    }
+    const recovery = safeRecoveryResponse(options, result.receipt);
+    const detail = responseOptions?.detail;
+    const ws = result.record.workspace;
+    return res.status(200).json({
+      success: true,
+      status: 'SUCCESS',
+      ...(detail !== undefined ? { detail } : {}),
+      applied: result.applied,
+      replayed: result.replayed,
+      message: result.applied ? 'Workspace updated; version bumped.' : 'Workspace already in sync.',
+      workspaceId: result.record.workspaceId,
+      ...(detail === 'compact'
+        ? {
+            workspaceSummary: {
+              name: ws.name,
+              version: ws.version || '1.0.0',
+              nodeCount: Array.isArray(ws.nodes) ? ws.nodes.length : 0,
+              xmlPatchCount: Array.isArray(ws.xmlPatches) ? ws.xmlPatches.length : 0,
+            },
+          }
+        : { workspace: ws }),
+      version: result.record.version,
+      workspaceHash: result.record.head,
+      snapshotHash: options.registry.snapshotHash(result.record),
+      plan: result.plan,
+      added: result.plan.rows.length,
+      matchedFiles: result.plan.matchedFiles,
+      receipt: result.receipt,
+      ...(recovery === undefined ? {} : { recovery }),
+    });
+  } catch {
+    return respondFailure('BULK_APPLY_RECEIPT_EXECUTION_FAILED');
+  }
+}
 
-    try {
-      const result = await executeBulkTransformApplyReceipt({
-        registry: options.registry,
-        receiptService: options.receiptService,
-        recoveryStore: options.recoveryStore,
-        store: options.store,
-        captureProjection: projection => options.captureProjection(req, projection),
-      }, {
-        operationId,
-        workspaceId: options.workspaceId(req),
-        identity: options.identity(req),
-        rule,
-        expectedPlanHash,
-        expectedHead,
-        expectedSnapshotHash,
-        buildPlan,
-        mayProceed,
-      });
+export function registerBulkTransformRoutes(app: Express, options: BulkTransformRouteOptions): void {
+  app.post('/api/agent/bulk-transform/preview', (req, res) => executeBulkTransformPreviewRoute(req, res, options));
 
-      if (!await responseAvailable()) return;
-      if (result.ok === false) return respondFailure(result.code, result.replayed, result.receipt);
-      if (result.receipt.status !== 'committed') {
-        return respondFailure('BULK_APPLY_RECEIPT_MISMATCH', result.replayed, result.receipt);
-      }
-
-      const recovery = safeRecoveryResponse(options, result.receipt);
-      return res.status(200).json({
-        success: true,
-        status: 'SUCCESS',
-        applied: result.applied,
-        replayed: result.replayed,
-        message: result.applied ? 'Workspace updated; version bumped.' : 'Workspace already in sync.',
-        workspaceId: result.record.workspaceId,
-        workspace: result.record.workspace,
-        version: result.record.version,
-        workspaceHash: result.record.head,
-        snapshotHash: options.registry.snapshotHash(result.record),
-        plan: result.plan,
-        added: result.plan.rows.length,
-        matchedFiles: result.plan.matchedFiles,
-        receipt: result.receipt,
-        ...(recovery === undefined ? {} : { recovery }),
-      });
-    } catch {
-      return respondFailure('BULK_APPLY_RECEIPT_EXECUTION_FAILED');
-    }
-  });
+  app.post('/api/agent/bulk-transform/apply', (req, res) => executeBulkTransformApplyRoute(req, res, options));
 }

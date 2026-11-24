@@ -81,6 +81,16 @@ export const DEPLOY_EXPLICIT_GRANT_CAPABILITIES = [
   'deploy.status',
   'deploy.undo',
 ] as const;
+export const WORKSPACE_FILES_EXPLICIT_GRANT_CAPABILITIES = [
+  'bulk.transform.apply',
+  'bulk.transform.preview',
+  'files.list',
+  'files.read',
+  'files.write',
+  'history.revert',
+  'workspace.mod.drift',
+  'workspace.mod.import',
+] as const;
 const EXPLICIT_CAPABILITY_GRANT_IDS = new Set<string>([
   'performance.native.read',
   'performance.native.collect',
@@ -89,6 +99,7 @@ const EXPLICIT_CAPABILITY_GRANT_IDS = new Set<string>([
   'project.md.navigation',
   ...CONFIGURATION_EXPLICIT_GRANT_CAPABILITIES,
   ...DEPLOY_EXPLICIT_GRANT_CAPABILITIES,
+  ...WORKSPACE_FILES_EXPLICIT_GRANT_CAPABILITIES,
 ]);
 
 /** These capabilities require an explicit key grant, including for legacy presets. */

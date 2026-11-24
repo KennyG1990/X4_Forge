@@ -134,6 +134,7 @@ export const LEDGER_QUIET_ROUTES: string[] = [
   '/api/agent/performance/native/stop',
   '/api/agent/project-rules/prepare-suppression',
   '/api/agent/bulk-transform/preview',
+  '/api/agent/bulk-transform/preview-plan',
   '/api/project-check-owner/review',
   '/api/gemini',
   '/api/gemini/analyze',
@@ -143,6 +144,7 @@ export const LEDGER_QUIET_ROUTES: string[] = [
 /** Exact-path kind mapping. Anything mutating and unlisted still records, as kind `action`. */
 export const LEDGER_ROUTES: Array<{ method: string; path: string; kind: LedgerKind }> = [
   { method: 'POST', path: '/api/fs/write', kind: 'edit' },
+  { method: 'POST', path: '/api/agent/files/write', kind: 'edit' },
   { method: 'POST', path: '/api/agent/project-rules/suppress', kind: 'edit' },
   { method: 'POST', path: '/api/fs/create', kind: 'edit' },
   { method: 'POST', path: '/api/fs/delete-dir', kind: 'edit' },
@@ -158,6 +160,7 @@ export const LEDGER_ROUTES: Array<{ method: string; path: string; kind: LedgerKi
   { method: 'POST', path: '/api/agent/deploy-verify/preview', kind: 'deploy' },
   { method: 'POST', path: '/api/agent/deploy-verify/apply', kind: 'deploy' },
   { method: 'POST', path: '/api/agent/deploy-verify/undo', kind: 'revert' },
+  { method: 'POST', path: '/api/agent/history/revert', kind: 'revert' },
   { method: 'POST', path: '/api/agent/deploy', kind: 'deploy' },
   { method: 'POST', path: '/api/agent/package/release', kind: 'package' },
   { method: 'POST', path: '/api/agent/release/nexus/prepare', kind: 'package' },
@@ -171,7 +174,9 @@ export const LEDGER_ROUTES: Array<{ method: string; path: string; kind: LedgerKi
   { method: 'POST', path: '/api/agent/workspace', kind: 'workspace' },
   { method: 'POST', path: '/api/agent/workspace/merge', kind: 'workspace' },
   { method: 'POST', path: '/api/agent/workspace/restore-parked', kind: 'workspace' },
+  { method: 'POST', path: '/api/agent/mod-folder/sync', kind: 'workspace' },
   { method: 'POST', path: '/api/agent/bulk-transform/apply', kind: 'workspace' },
+  { method: 'POST', path: '/api/agent/bulk-transform/execute', kind: 'workspace' },
   { method: 'POST', path: '/api/agent/generate', kind: 'generate' },
   { method: 'POST', path: '/api/agent/generate/preview', kind: 'generate' },
   { method: 'POST', path: '/api/agent/project/generate', kind: 'generate' },
@@ -203,7 +208,7 @@ export function ledgerRouteKind(method: string, path: string): LedgerKind | null
   if (upper === 'GET' || upper === 'HEAD' || upper === 'OPTIONS') return null;
   if (!path.startsWith('/api/')) return null;
   // The ledger's own surface must not record itself (revert is the deliberate exception).
-  if (upper === 'POST' && LEDGER_REVERT_PATTERN.test(path)) return 'revert';
+  if (upper === 'POST' && (path === '/api/agent/history/revert' || LEDGER_REVERT_PATTERN.test(path))) return 'revert';
   if (path.startsWith('/api/agent/history')) return null;
   // The canonical-corpus read API is read-only whatever verb is used against it.
   if (path.startsWith('/api/reference/')) return null;
@@ -461,11 +466,18 @@ export function describeAction(input: {
   }
 
   if (kind === 'workspace') {
-    if (input.routePath === '/api/agent/bulk-transform/apply') {
-      if (httpFailed) return { title: `Bulk transform REFUSED — ${cleanReason(body)}`, outcome: { status: 'error', code: body?.error || body?.code } };
+    if (input.routePath === '/api/agent/bulk-transform/apply' || input.routePath === '/api/agent/bulk-transform/execute') {
+      if (httpFailed) return { title: `Bulk transform REFUSED — ${cleanReason(body)}`, outcome: { status: 'error', code: body?.code || body?.error } };
       const count = numberish(body?.added ?? body?.plan?.matchedFiles);
       const operation = String(body?.plan?.rule?.operation || request?.rule?.operation || 'numeric');
       return { title: `Added ${plural(count, 'validated XML patch')} — canonical ${operation} transform`, outcome: { status: 'ok' } };
+    }
+    if (input.routePath === '/api/agent/mod-folder/sync') {
+      if (httpFailed) return { title: `Mod folder import REFUSED — ${cleanReason(body)}`, outcome: { status: 'error', code: body?.code } };
+      const total = numberish(body?.report?.totalFiles);
+      const name = body?.workspaceSummary?.name || body?.workspace?.name;
+      const label = name ? ` "${name}"` : '';
+      return { title: `Imported mod folder${label} into working canvas (${plural(total, 'file')})`, outcome: { status: 'ok' } };
     }
     if (httpFailed) return { title: `Workspace update REFUSED — ${cleanReason(body)}`, outcome: { status: 'error', code: body?.code } };
     const nodeCount = numberish(request?.workspace?.nodes?.length);

@@ -976,6 +976,30 @@
       "resourceClass": "public",
       "workspaceMode": "optional"
     },
+    "GET /api/agent/files/list": {
+      "disposition": "canonical-capability",
+      "owner": "files.list",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "optional"
+    },
+    "GET /api/agent/files/read": {
+      "disposition": "canonical-capability",
+      "owner": "files.read",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "optional"
+    },
     "GET /api/agent/forge-capabilities-selftest": {
       "disposition": "public-selftest",
       "owner": "runForgeCapabilitiesSelftest",
@@ -1614,6 +1638,18 @@
         "deploy"
       ],
       "resourceClass": "public",
+      "workspaceMode": "optional"
+    },
+    "GET /api/agent/mod-folder/drift": {
+      "disposition": "canonical-capability",
+      "owner": "workspace.mod.drift",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
       "workspaceMode": "optional"
     },
     "GET /api/agent/mod-patterns-selftest": {
@@ -3006,9 +3042,32 @@
       "resourceClass": "workspace",
       "workspaceMode": "required"
     },
+    "POST /api/agent/bulk-transform/execute": {
+      "disposition": "canonical-capability",
+      "owner": "bulk.transform.apply",
+      "registrations": 1,
+      "agentScopes": [
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "workspace",
+      "workspaceMode": "required"
+    },
     "POST /api/agent/bulk-transform/preview": {
       "disposition": "legacy-agent-api",
       "owner": "agent-api",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "workspace",
+      "workspaceMode": "required"
+    },
+    "POST /api/agent/bulk-transform/preview-plan": {
+      "disposition": "canonical-capability",
+      "owner": "bulk.transform.preview",
       "registrations": 1,
       "agentScopes": [
         "read",
@@ -3181,6 +3240,17 @@
       "resourceClass": "global-session",
       "workspaceMode": "optional"
     },
+    "POST /api/agent/files/write": {
+      "disposition": "canonical-capability",
+      "owner": "files.write",
+      "registrations": 1,
+      "agentScopes": [
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "optional"
+    },
     "POST /api/agent/generate": {
       "disposition": "session-only",
       "owner": "agent-api",
@@ -3200,6 +3270,16 @@
       "workspaceMode": "input-first"
     },
     "POST /api/agent/history/:id/revert": {
+      "disposition": "legacy-agent-api",
+      "owner": "agent-api",
+      "registrations": 1,
+      "agentScopes": [
+        "deploy"
+      ],
+      "resourceClass": "workspace",
+      "workspaceMode": "required"
+    },
+    "POST /api/agent/history/revert": {
       "disposition": "canonical-capability",
       "owner": "history.revert",
       "registrations": 1,
@@ -3286,6 +3366,17 @@
       ],
       "resourceClass": "configured-root",
       "workspaceMode": "optional"
+    },
+    "POST /api/agent/mod-folder/sync": {
+      "disposition": "canonical-capability",
+      "owner": "workspace.mod.import",
+      "registrations": 1,
+      "agentScopes": [
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "workspace",
+      "workspaceMode": "required"
     },
     "POST /api/agent/node-diagnostics": {
       "disposition": "legacy-agent-api",
@@ -4082,6 +4173,8 @@
     }
   },
   "capabilitySignatures": {
+    "bulk.transform.apply@1": "9be533d103eede31abbfaa329b56cce2042315d86986146b02d2278dae9437a5",
+    "bulk.transform.preview@1": "ff8310c8c5e198ce4588cbe3211a62a147c0880f4292fa779e9a23d4a472096e",
     "configuration.access.request@1": "ad89a954f21f5814cea5a39ddf7c2cb7c52fcd2270c587a1b81533c31a790f6a",
     "configuration.access.status@1": "2033fab305cf8477e62753217e14efafeba23866d14cb09cfc92951cfee5f333",
     "configuration.apply@1": "b8821352043e1a8bbf54f0603d38f7e5e706001a97cde267419c729c2d4e0654",
@@ -4095,8 +4188,11 @@
     "expression.check@1": "5bedec028862120254402ce60402204db079705db1d6ce27f16834ae77ddea8d",
     "expression.inspect@1": "d9422df0de7b99ace351d90aad971baea0fe35d8fc6798c15a1a304dbd275f29",
     "extensions.conflicts.analyze@1": "5e8005a8422ebbe1039a848332caf8f40076ea7cce693b21df8039aec856697e",
+    "files.list@1": "65cb20f5abfb227ac76bfe53212ce8f671d34d730eb70b4515a3ddc9e59eaa59",
+    "files.read@1": "229397bc0409d1005344d35c32250e01220b859e53c4b13a54ec222bf1b08853",
+    "files.write@1": "f71f716abb9c02b8679e6821b8e64518ed5fc236e63a6ac9b51de15785962fd6",
     "history.list@2": "9fc3203d66edd8c3136bd374bfef4394783e1bd8ef8a44834ff7360a93d1fb33",
-    "history.revert@1": "2399e2dd2ec3263e0f6f5364ab3be8edf1fe8d065cea40bc736d72ee8c4bcd98",
+    "history.revert@2": "e864816f1ef6d4e06389051423687d3b9da310d3b541f91beff8ecafbb4ab0f4",
     "patch.diff.simulate@1": "eb4c3ceab8d75b6c235acbc6820f611216685ac3e55a3cf958c5d493f179348a",
     "patch.readiness.analyze@2": "7baa90f99f4f1a7cc4382caaf009c107388e9de6124d0d2b5bf155769ab91812",
     "performance.collect@1": "3388a193408ec6e83ad3228705b7b9acaeb488580995c4359a844047871bd9ff",
@@ -4125,11 +4221,13 @@
     "workspace.compile@2": "aaa528d9b0b381b7af954ec78d2ba15212e9e0cc020d4af54eb5223caba9e185",
     "workspace.compile.result@2": "085e4f90f5fd5c0fd9a9decd3b1737f83b1663e63cae354ee443971de183bda0",
     "workspace.generate.preview@1": "76630ed9e34f95a4cc895088e0d3def92d5f3b2bb223d071e1e5a4fc1b4f6add",
+    "workspace.mod.drift@1": "71b738bfb4bf4275911c937d958b39ee32e0a81cd7de14a4598fb04ae4b787a5",
+    "workspace.mod.import@1": "9b3d03c3cae968638eec281fb758479cce07557dbc99048b8aafde06224307eb",
     "workspace.read@2": "962774de4a25e8725a0d90d4982298cc72f100312075b1f6f4ff9de1482752d7"
   },
   "mcpModuleSignature": {
-    "version": 27,
-    "hash": "f04ea03dffbb93cb0888c5e15e24ddca7d9793b97c02e1800e3f5f217292fd70"
+    "version": 28,
+    "hash": "60736bb24281f82578c461da31a1a0d3f4b82dd2137c2b965ba25b543bae7342"
   },
   "mcpSignatures": {
     "validate_mod": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",
@@ -4175,7 +4273,15 @@
     "read_reference_file": "d88af17182623166dc8b8bf4745d68bd543a5d99a0bfd45a1b1b8fa4cbf076ec",
     "search_x4_objects": "96ae8817175cdb87dcade51343af46986198d51a7cb9cb154db215eff50cf9b2",
     "simulate_xml_diff": "85ebed9ee03ba5d92d86692cf000bba46eb89850a745ebc79b0b345e9fca44fb",
-    "diagnose_game_log": "b898fc37aae1cf97ccffa5210683618bac98407d23d26c48f569297d148f0e71"
+    "diagnose_game_log": "b898fc37aae1cf97ccffa5210683618bac98407d23d26c48f569297d148f0e71",
+    "preview_bulk_transform": "ba57ab474ab022c645090d0bc8d2bd590f7305fe5f29db8da40cea727d41c6e7",
+    "apply_bulk_transform": "4e0b643105afa89fa658b3ac87f5fdc96030530c023d1dbe14f8973d48ee984d",
+    "list_workspace_files": "136c103f518e61e09e53167c8bde09f879d4b555830b98e89ce249a94f3b7f6e",
+    "read_workspace_file": "4e1f6cb25783bfaa48e25d8cc962b93856de40ecb6bf00372437531b16f54a38",
+    "write_workspace_file": "c484864b64874a9f79f8ba9aca499e43e4f021bc87faca2b6a4c18c63b40e21b",
+    "revert_action_history": "203ca8ef62d71f0f525e66c6e264eb68b8d39e39dbeeddf357193b7e6e8fa61a",
+    "get_mod_drift": "ad1b4d36c9e5ed894ed98aabac3f318075a2361d708192b3328d3636f32a963d",
+    "import_mod_folder": "87ace03a01daed9d54ed38e22f59d52b49e6b3cd5023c9b2392888a4da29b482"
   },
   "mcpCapabilityIdentities": {
     "validate_mod": "project.validate@1",
@@ -4221,6 +4327,14 @@
     "read_reference_file": "reference.file.read@1",
     "search_x4_objects": "reference.objects.search@1",
     "simulate_xml_diff": "patch.diff.simulate@1",
-    "diagnose_game_log": "runtime.log.diagnose@1"
+    "diagnose_game_log": "runtime.log.diagnose@1",
+    "preview_bulk_transform": "bulk.transform.preview@1",
+    "apply_bulk_transform": "bulk.transform.apply@1",
+    "list_workspace_files": "files.list@1",
+    "read_workspace_file": "files.read@1",
+    "write_workspace_file": "files.write@1",
+    "revert_action_history": "history.revert@2",
+    "get_mod_drift": "workspace.mod.drift@1",
+    "import_mod_folder": "workspace.mod.import@1"
   }
 }

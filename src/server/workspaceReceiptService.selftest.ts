@@ -38,7 +38,7 @@ const HASH_A = 'a'.repeat(64);
 const HASH_B = 'b'.repeat(64);
 const HASH_C = 'c'.repeat(64);
 const HASH_D = 'd'.repeat(64);
-const ROUTE_KEY = 'POST /api/agent/history/:id/revert';
+const ROUTE_KEY = 'POST /api/agent/history/revert';
 const WORKSPACE_REPLACE_ROUTE_KEY = 'POST /api/agent/workspace';
 const WORKSPACE_ID = 'ws_111111111111111111111111';
 

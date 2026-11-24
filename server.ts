@@ -145,7 +145,12 @@ import { isMdReferenceCoverageCheck } from './src/lib/mdEffectiveLibraryPurpose'
 import { canonicalMd } from './src/lib/mdCanonicalComparison';
 import { getReferenceLanguageResources } from './src/lib/referenceLanguage';
 import { analyzeXmlReferenceMap, XmlReferenceMapInputError } from './src/server/xmlReferenceMap';
-import { registerBulkTransformRoutes } from "./src/server/bulkTransformRoutes";
+import {
+  executeBulkTransformApplyRoute,
+  executeBulkTransformPreviewRoute,
+  registerBulkTransformRoutes,
+  type BulkTransformRouteOptions,
+} from "./src/server/bulkTransformRoutes";
 import { computeModDrift, fingerprintModFolder, flattenProjectValidation, getProjectValidationCacheStats, getSchemaIndex, loadProjectFromDisk, runProjectValidation, validateProjectCrossFileWithCorpus, type FlatProjectDiagnostic } from "./src/server/projectValidation";
 import { bindDiagnosticSourceFiles, diagnosticSourceFolder } from './src/server/diagnosticSourceNavigation';
 import type { DiagnosticSourceNavigation } from './src/types';
@@ -292,6 +297,7 @@ import {
 import { AgentHistoryStore } from "./src/lib/agentHistoryStore";
 import { runAgentHistorySelftest } from "./src/lib/agentHistory.selftest";
 import { runActionReceiptSelftest } from "./src/lib/actionReceipt.selftest";
+import { workspaceContentReceiptHash, workspaceSnapshotReceiptHash } from "./src/lib/workspaceReceiptHash";
 import { runBugReportSelftest } from "./src/lib/bugReport";
 import { generatedOutputVerdict, normalizeApiFailureBody, runApiFailureEnvelopeSelftest } from "./src/lib/apiFailureEnvelope";
 import { projectApiEnvelope, projectApiSubject, fileApiSubject, workspaceApiSubject, pastedLogApiSubject, releaseReportApiSubject, validateProjectApiBody, validateProjectApiQuery, validateWorkspaceCreateBody, validateWorkspaceMutationBody, type ApiSubject } from './src/server/projectApiContract';
@@ -1209,6 +1215,10 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
       || authority.decision.routeKey === 'GET /api/agent/deploy-verify/status'
       || authority.decision.routeKey === 'POST /api/agent/deploy-verify/apply'
       || authority.decision.routeKey === 'POST /api/agent/deploy-verify/undo'
+      || authority.decision.routeKey === 'POST /api/agent/bulk-transform/execute'
+      || authority.decision.routeKey === 'POST /api/agent/files/write'
+      || authority.decision.routeKey === 'POST /api/agent/history/revert'
+      || authority.decision.routeKey === 'POST /api/agent/mod-folder/sync'
       || (authority.decision.routeKey === 'GET /api/agent/status'
         && (req.query.inspectDeployTarget !== undefined || req.query.inspectDeployEffect !== undefined))
       || authority.decision.routeKey === 'POST /api/agent/history/:id/revert'
@@ -1546,6 +1556,7 @@ function ledgerMiddleware(req: express.Request, res: express.Response, next: exp
           afterSnapshot = latest?.ok ? workspaceRegistry.snapshotHash(latest.record) : '';
         } catch { after = ''; afterSnapshot = ''; }
         if (after && afterSnapshot && after === workspaceHashBefore && afterSnapshot === workspaceSnapshotHashBefore
+          && res.statusCode < 400
           && (receiptProjection === undefined || receiptProjection.status === 'committed')) return;
       }
 
@@ -1654,11 +1665,11 @@ function sourceOperationKeys(req: express.Request): string[] {
   const source = workspace?.sourceStamp?.dir;
   if (typeof source === 'string' && source) keys.push(canonicalSourceKey(source));
   const target = req.body?.fromPath ?? req.body?.path;
-  if (typeof target === 'string' && target && !req.path.startsWith('/api/fs/')) {
+  if (typeof target === 'string' && target && !req.path.startsWith('/api/fs/') && !req.path.startsWith('/api/agent/files/')) {
     const folder = nativeDeploy ? resolveNativeDeployFolder(target, req.body?.root) : resolveModFolder(target, req.body?.root);
     if (!('error' in folder)) keys.push(folder.physical?.canonicalKey ?? canonicalSourceKey(folder.abs));
   }
-  if (req.path.startsWith('/api/fs/') || req.path.includes('/history/') || req.path.includes('/project-rules/') || req.path.endsWith('/steam/adopt')) {
+  if (req.path.startsWith('/api/fs/') || req.path.startsWith('/api/agent/files/') || req.path.includes('/history/') || req.path.includes('/project-rules/') || req.path.endsWith('/steam/adopt')) {
     if (resolved.modWorkspacePath) {
       const relative = typeof target === 'string' ? target.replace(/\\/g, '/').split('/')[0] : '';
       keys.push(canonicalSourceKey(relative && relative !== '..' ? path.join(resolved.modWorkspacePath, relative) : resolved.modWorkspacePath));
@@ -1672,8 +1683,11 @@ function sourceOperationKeys(req: express.Request): string[] {
   if (req.path === '/api/agent/deploy-verify/undo' && resolved.x4GamePath) {
     keys.push(canonicalSourceKey(path.join(resolved.x4GamePath, 'extensions')));
   }
-  if (addressed && resolved.x4GamePath && req.route?.path === '/api/agent/history/:id/revert') {
-    const row = agentHistoryStore.find(String(req.params.id));
+  if (addressed && resolved.x4GamePath && (req.route?.path === '/api/agent/history/:id/revert' || req.path === '/api/agent/history/revert')) {
+    const requestedHistoryId = req.path === '/api/agent/history/revert'
+      ? String(req.body?.id || '')
+      : String(req.params.id || '');
+    const row = requestedHistoryId ? agentHistoryStore.find(requestedHistoryId) : undefined;
     if (row?.workspaceId === addressed.workspaceId && row.recoveryId) {
       const recovery = destructiveRecoveryStore.read(row.recoveryId);
       if (recovery.ok && recovery.record.kind === 'deploy') {
@@ -6849,13 +6863,32 @@ function handleDeployUndoRoute(req: express.Request, res: express.Response, leas
 
 app.post('/api/agent/deploy-verify/undo', prepareDeployUndoRoute, coordinatedSourceOperation(handleDeployUndoRoute));
 
-app.post("/api/agent/history/:id/revert", coordinatedSourceOperation((req, res, lease) => {
+function summarizeWorkspaceForAgent(ws: ModWorkspace) {
+  return {
+    name: ws.name,
+    version: ws.version || '1.0.0',
+    nodeCount: Array.isArray(ws.nodes) ? ws.nodes.length : 0,
+    linkCount: Array.isArray(ws.links) ? ws.links.length : 0,
+    aiScriptCount: Array.isArray(ws.aiScripts) ? ws.aiScripts.length : 0,
+    xmlPatchCount: Array.isArray(ws.xmlPatches) ? ws.xmlPatches.length : 0,
+    passthroughFileCount: Array.isArray(ws.passthroughFiles) ? ws.passthroughFiles.length : 0,
+    uiSourceFileCount: Array.isArray(ws.uiSourceFiles) ? ws.uiSourceFiles.length : 0,
+  };
+}
+
+function handleHistoryRevertById(
+  req: express.Request,
+  res: express.Response,
+  lease: ProjectCheckSourceLease | undefined,
+  rowId: string,
+  detail: 'compact' | 'full' = 'full',
+) {
   try {
     let record = requestWorkspace(req);
     const principal = deploymentPrincipal(req);
     if (principal.kind === 'agent') assertCurrentDeployKey(req, principal, record.workspaceId);
-    const row = agentHistoryStore.find(String(req.params.id));
-    if (!row || row.workspaceId !== record.workspaceId) return res.status(404).json({ ok: false, error: 'No such history entry in this workspace.' });
+    const row = agentHistoryStore.find(rowId);
+    if (!row || row.workspaceId !== record.workspaceId) return res.status(404).json({ ok: false, code: 'HISTORY_ENTRY_NOT_FOUND', error: 'No such history entry in this workspace.' });
     const rule = revertibility(row.kind, row.outcome, !!row.beforeBlob, !!row.recoveryId);
     if (!rule.revertible) {
       return res.status(409).json({ ok: false, code: 'NOT_REVERTIBLE', error: rule.reason });
@@ -6866,8 +6899,6 @@ app.post("/api/agent/history/:id/revert", coordinatedSourceOperation((req, res, 
       if (found.record.status !== 'ready') return res.status(409).json({ ok: false, code: 'RECOVERY_ALREADY_USED', error: 'This recovery was already used or never reached ready state.' });
       if (found.record.kind === 'workspace') {
         if (found.record.workspaceId !== record.workspaceId) return res.status(403).json({ ok: false, code: 'RECOVERY_WORKSPACE_MISMATCH', error: 'Workspace recovery belongs to a different workspace.' });
-        const currentHead = workspaceHash(record);
-        const currentSnapshotHash = workspaceRegistry.snapshotHash(record);
         if (!found.record.beforeSnapshotHash || !found.record.expectedCurrentSnapshotHash) {
           return res.status(409).json({
             ok: false,
@@ -6875,6 +6906,13 @@ app.post("/api/agent/history/:id/revert", coordinatedSourceOperation((req, res, 
             error: 'Workspace recovery predates complete snapshot guards and cannot be replayed safely.',
           });
         }
+        const sanitizedCurrent = sanitizeWorkspace(record.workspace);
+        const currentHead = found.record.expectedCurrentHash.length === 64
+          ? workspaceContentReceiptHash(sanitizedCurrent)
+          : workspaceHash(record);
+        const currentSnapshotHash = found.record.expectedCurrentSnapshotHash.length === 64
+          ? workspaceSnapshotReceiptHash(sanitizedCurrent)
+          : workspaceRegistry.snapshotHash(record);
         if (currentHead !== found.record.expectedCurrentHash || currentSnapshotHash !== found.record.expectedCurrentSnapshotHash) {
           return res.status(409).json({
             ok: false,
@@ -6887,12 +6925,19 @@ app.post("/api/agent/history/:id/revert", coordinatedSourceOperation((req, res, 
           });
         }
         const previousWorkspace = sanitizeWorkspace(found.record.beforeWorkspace);
-        if (workspaceContentHash(previousWorkspace) !== found.record.beforeHash
-          || workspaceSnapshotHash(previousWorkspace) !== found.record.beforeSnapshotHash) {
+        const computedBeforeHash = found.record.beforeHash.length === 64
+          ? workspaceContentReceiptHash(previousWorkspace)
+          : workspaceContentHash(previousWorkspace);
+        const computedBeforeSnapshotHash = found.record.beforeSnapshotHash.length === 64
+          ? workspaceSnapshotReceiptHash(previousWorkspace)
+          : workspaceSnapshotHash(previousWorkspace);
+        if (computedBeforeHash !== found.record.beforeHash
+          || computedBeforeSnapshotHash !== found.record.beforeSnapshotHash) {
           return res.status(409).json({ ok: false, code: 'RECOVERY_CORRUPT', error: 'Workspace recovery payload does not match its recorded pre-state hash.' });
         }
-        (req as any).__revertOf = row.id;
-        (req as any).__revertOfTitle = row.title;
+        const decorated = decoratedReq(req);
+        decorated.__revertOf = row.id;
+        decorated.__revertOfTitle = row.title;
         const replacedWorkspace = record.workspace as ModWorkspace;
         record = workspaceRegistry.commit(record.workspaceId, previousWorkspace, `recovery:${found.record.id}`);
         try {
@@ -6908,13 +6953,16 @@ app.post("/api/agent/history/:id/revert", coordinatedSourceOperation((req, res, 
           }
           throw new Error(`Workspace recovery receipt failed, so the restore was rolled back: ${consumeError instanceof Error ? consumeError.message : String(consumeError)}`);
         }
+        const restoredWs = record.workspace as ModWorkspace;
         return res.json({
           ok: true,
           revertedTo: row.id,
           recoveryId: found.record.id,
           recoveryKind: 'workspace',
           workspaceId: record.workspaceId,
-          workspace: record.workspace,
+          ...(detail === 'compact'
+            ? { detail: 'compact', workspaceSummary: summarizeWorkspaceForAgent(restoredWs) }
+            : { workspace: restoredWs }),
           version: record.version,
           workspaceHash: workspaceHash(record),
           snapshotHash: workspaceRegistry.snapshotHash(record),
@@ -6928,16 +6976,42 @@ app.post("/api/agent/history/:id/revert", coordinatedSourceOperation((req, res, 
     }
     const target = row.files[0];
     // Tell the capture middleware what this revert touched, so the new entry is complete.
-    (req as any).__revertOf = row.id;
-    (req as any).__revertOfTitle = row.title;
-    (req as any).__revertFiles = [target];
+    const decorated = decoratedReq(req);
+    decorated.__revertOf = row.id;
+    decorated.__revertOfTitle = row.title;
+    decorated.__revertFiles = [target];
     // Same guarded write path as /api/fs/write — validation and containment still apply.
     if (!writeWorkspaceFileGuarded(res, target, previous.toString('utf8'))) return;
     return res.json({ ok: true, revertedTo: row.id, file: target, bytes: previous.length });
-  } catch (error: any) {
-    if (error?.code === 'DEPLOY_APPROVAL_FORBIDDEN') return res.status(403).json({ ok: false, code: error.code });
-    return res.status(500).json({ ok: false, error: error?.message || 'Revert failed.' });
+  } catch (error: unknown) {
+    const code = (error as { code?: unknown } | null | undefined)?.code;
+    if (code === 'DEPLOY_APPROVAL_FORBIDDEN') return res.status(403).json({ ok: false, code });
+    return res.status(500).json({ ok: false, error: errorMessage(error) || 'Revert failed.' });
   }
+}
+
+app.post("/api/agent/history/:id/revert", coordinatedSourceOperation((req, res, lease) =>
+  handleHistoryRevertById(req, res, lease, String(req.params.id), 'full')));
+
+app.post("/api/agent/history/revert", (req, res, next) => {
+  const body = req.body;
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'history.revert requires a JSON object body with id.' });
+  }
+  const unknown = Object.keys(body).filter(key => key !== 'id' && key !== 'detail');
+  if (unknown.length > 0) {
+    return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: `history.revert does not accept: ${unknown.join(', ')}` });
+  }
+  if (typeof body.id !== 'string' || !/^[A-Za-z0-9._-]{1,96}$/.test(body.id)) {
+    return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'history.revert id must be a valid history entry identifier.' });
+  }
+  if (body.detail !== undefined && body.detail !== 'compact' && body.detail !== 'full') {
+    return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'history.revert detail must be "compact" or "full".' });
+  }
+  return next();
+}, coordinatedSourceOperation((req, res, lease) => {
+  const detail: 'compact' | 'full' = req.body?.detail === 'full' ? 'full' : 'compact';
+  return handleHistoryRevertById(req, res, lease, String(req.body.id), detail);
 }));
 
 // Server Filesystem create endpoint
@@ -8060,7 +8134,7 @@ function workspaceReceiptFailureBody(
 
 type ExecuteWorkspaceReceiptMutationOptions = {
   operationId: string;
-  routeKey: 'POST /api/agent/workspace' | 'POST /api/agent/workspace/merge';
+  routeKey: 'POST /api/agent/workspace' | 'POST /api/agent/workspace/merge' | 'POST /api/agent/mod-folder/sync';
   mode: 'replace' | 'merge';
   merge?: boolean;
   expectedVersion?: number;
@@ -8072,6 +8146,7 @@ type ExecuteWorkspaceReceiptMutationOptions = {
   preflightFailure?: WorkspaceMutationResult;
   /** Scope/policy refusals still hash a valid proposal; malformed body refusals do not. */
   preflightKind?: 'body' | 'scope';
+  transformSuccessBody?: (body: Record<string, unknown>) => Record<string, unknown>;
 };
 
 /** W3B1a adapter for the two addressed workspace mutation routes only. */
@@ -8470,7 +8545,9 @@ async function executeWorkspaceReceiptMutation(
         receipt: result.receipt,
       });
     }
-    return void res.status(200).json(currentWorkspaceReplayBody(replayed.record, options.mode, result.receipt));
+    const replayRawBody = currentWorkspaceReplayBody(replayed.record, options.mode, result.receipt) as Record<string, unknown>;
+    const replayBody = options.transformSuccessBody ? options.transformSuccessBody(replayRawBody) : replayRawBody;
+    return void res.status(200).json(replayBody);
   }
 
   if (mutationResult === undefined || mutationResult.status >= 400 || mutationResult.body?.success === false) {
@@ -8483,7 +8560,8 @@ async function executeWorkspaceReceiptMutation(
       receipt: result.receipt,
     });
   }
-  const body = { ...(mutationResult.body || {}), receipt: result.receipt };
+  const rawBody = { ...(mutationResult.body || {}), receipt: result.receipt } as Record<string, unknown>;
+  const body = options.transformSuccessBody ? options.transformSuccessBody(rawBody) : rawBody;
   return void res.status(mutationResult.status).json(body);
 }
 
@@ -11879,7 +11957,7 @@ registerReferenceRoutes(app, req => ((req as any).__workspaceRecord as Workspace
     const allowed = request.__actor?.kind === 'studio';
     return { allowed, workspace: allowed ? addressedEditorSource(request, sourceRoot) : undefined };
   });
-registerBulkTransformRoutes(app, {
+const bulkTransformRouteOptions: BulkTransformRouteOptions = {
   workspace: req => requestWorkspace(req).workspace as ModWorkspace,
   workspaceId: req => requestWorkspace(req).workspaceId,
   workspaceHash: req => workspaceHash(requestWorkspace(req)),
@@ -11917,7 +11995,691 @@ registerBulkTransformRoutes(app, {
       return undefined;
     }
   },
+};
+registerBulkTransformRoutes(app, bulkTransformRouteOptions);
+
+const AGENT_FILES_LIST_LIMIT = 500;
+const AGENT_FILE_MAX_BYTES = 524_288;
+const BULK_TRANSFORM_OPERATIONS = new Set(['multiply', 'divide', 'add', 'subtract', 'set', 'clamp']);
+const BULK_TRANSFORM_ROUNDING = new Set(['none', 'nearest', 'floor', 'ceil']);
+const BULK_RULE_KEYS = new Set([
+  'pathPrefix', 'selector', 'operation', 'operand', 'rounding', 'roundingIncrement', 'maxFiles', 'operations',
+]);
+const BULK_OP_KEYS = new Set([
+  'id', 'selector', 'operation', 'operand', 'rounding', 'roundingIncrement',
+]);
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function unknownObjectKeys(record: Record<string, unknown>, allowed: ReadonlySet<string>): string[] {
+  return Object.keys(record).filter(key => !allowed.has(key));
+}
+
+function validateBulkTransformStepFields(
+  step: Record<string, unknown>,
+  label: string,
+): string | null {
+  if (typeof step.selector !== 'string' || !step.selector.trim()) {
+    return `${label}.selector must be a non-empty string.`;
+  }
+  if (typeof step.operation !== 'string' || !BULK_TRANSFORM_OPERATIONS.has(step.operation)) {
+    return `${label}.operation must be one of multiply, divide, add, subtract, set, or clamp.`;
+  }
+  if (step.operation === 'clamp') {
+    if (!Array.isArray(step.operand)
+      || step.operand.length !== 2
+      || typeof step.operand[0] !== 'number'
+      || !Number.isFinite(step.operand[0])
+      || typeof step.operand[1] !== 'number'
+      || !Number.isFinite(step.operand[1])) {
+      return `${label}.operand must be a [min, max] finite number pair when operation is clamp.`;
+    }
+  } else if (typeof step.operand !== 'number' || !Number.isFinite(step.operand)) {
+    return `${label}.operand must be a finite number.`;
+  }
+  if (step.rounding !== undefined && (typeof step.rounding !== 'string' || !BULK_TRANSFORM_ROUNDING.has(step.rounding))) {
+    return `${label}.rounding must be none, nearest, floor, or ceil.`;
+  }
+  if (step.roundingIncrement !== undefined
+    && (typeof step.roundingIncrement !== 'number' || !Number.isFinite(step.roundingIncrement) || step.roundingIncrement <= 0)) {
+    return `${label}.roundingIncrement must be a positive finite number.`;
+  }
+  return null;
+}
+
+function validateBulkTransformRuleInput(rawRule: unknown): string | null {
+  if (!isPlainRecord(rawRule)) return 'rule must be a JSON object.';
+  const extraRule = unknownObjectKeys(rawRule, BULK_RULE_KEYS);
+  if (extraRule.length > 0) return `rule does not accept: ${extraRule.join(', ')}`;
+  if (typeof rawRule.pathPrefix !== 'string' || !rawRule.pathPrefix.trim()) {
+    return 'rule.pathPrefix must be a non-empty vanilla-relative corpus prefix.';
+  }
+  if (typeof rawRule.maxFiles !== 'number' || !Number.isInteger(rawRule.maxFiles) || rawRule.maxFiles < 1) {
+    return 'rule.maxFiles must be a positive integer.';
+  }
+  if (rawRule.operations !== undefined) {
+    if (!Array.isArray(rawRule.operations) || rawRule.operations.length === 0) {
+      return 'rule.operations must be a non-empty array when provided.';
+    }
+    for (let index = 0; index < rawRule.operations.length; index++) {
+      const op = rawRule.operations[index];
+      if (!isPlainRecord(op)) return `rule.operations[${index}] must be a JSON object.`;
+      const extraOp = unknownObjectKeys(op, BULK_OP_KEYS);
+      if (extraOp.length > 0) return `rule.operations[${index}] does not accept: ${extraOp.join(', ')}`;
+      if (op.id !== undefined && (typeof op.id !== 'string' || !op.id.trim())) {
+        return `rule.operations[${index}].id must be a non-empty string when provided.`;
+      }
+      const stepError = validateBulkTransformStepFields(op, `rule.operations[${index}]`);
+      if (stepError) return stepError;
+    }
+    return null;
+  }
+  return validateBulkTransformStepFields(rawRule, 'rule');
+}
+
+function verifyRealAncestorWithinRoot(targetPath: string, realRoot: string): boolean {
+  let cursor = path.resolve(targetPath);
+  while (!fs.existsSync(cursor)) {
+    const parent = path.dirname(cursor);
+    if (parent === cursor) return false;
+    cursor = parent;
+  }
+  const realCursor = fs.realpathSync(cursor);
+  return isPathWithin(realCursor, realRoot);
+}
+
+function redactWorkspaceHostPathsForAgent(ws: ModWorkspace): ModWorkspace {
+  const clone: ModWorkspace = { ...ws };
+  if (typeof clone.sourceFolder === 'string' && path.isAbsolute(clone.sourceFolder)) {
+    clone.sourceFolder = path.basename(clone.sourceFolder);
+  }
+  if (clone.sourceStamp && typeof clone.sourceStamp === 'object') {
+    const stampRecord = clone.sourceStamp as unknown as Record<string, unknown>;
+    if (typeof stampRecord.dir === 'string' && path.isAbsolute(stampRecord.dir)) {
+      clone.sourceStamp = {
+        ...clone.sourceStamp,
+        dir: path.basename(stampRecord.dir),
+      };
+    }
+  }
+  return clone;
+}
+
+app.post("/api/agent/bulk-transform/preview-plan", (req, res) => {
+  if (!isPlainRecord(req.body)) {
+    return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'bulk.transform.preview requires a JSON object body with rule.' });
+  }
+  const extra = unknownObjectKeys(req.body, new Set(['rule']));
+  if (extra.length > 0) {
+    return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: `bulk.transform.preview does not accept: ${extra.join(', ')}` });
+  }
+  const ruleError = validateBulkTransformRuleInput(req.body.rule);
+  if (ruleError) {
+    return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: ruleError });
+  }
+  return executeBulkTransformPreviewRoute(req, res, bulkTransformRouteOptions);
 });
+
+app.post("/api/agent/bulk-transform/execute", (req, res) => {
+  if (!isPlainRecord(req.body)) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'bulk.transform.apply requires a JSON object body.' });
+  }
+  const extra = unknownObjectKeys(req.body, new Set([
+    'operationId', 'rule', 'expectedPlanHash', 'expectedHead', 'expectedSnapshotHash', 'detail',
+  ]));
+  if (extra.length > 0) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: `bulk.transform.apply does not accept: ${extra.join(', ')}` });
+  }
+  const ruleError = validateBulkTransformRuleInput(req.body.rule);
+  if (ruleError) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: ruleError });
+  }
+  const { operationId, expectedPlanHash, expectedHead, expectedSnapshotHash, detail } = req.body;
+  if (typeof operationId !== 'string' || !ACTION_RECEIPT_OPERATION_ID_RE.test(operationId)) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'operationId must match caller-owned receipt operation id format.' });
+  }
+  const headerOpId = req.headers['x-forge-operation-id'];
+  if (Array.isArray(headerOpId) || (typeof headerOpId === 'string' && headerOpId.trim() !== '' && headerOpId !== operationId)) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'x-forge-operation-id header disagrees with body.operationId.' });
+  }
+  if (typeof expectedPlanHash !== 'string' || !expectedPlanHash.trim()
+    || typeof expectedHead !== 'string' || !expectedHead.trim()
+    || typeof expectedSnapshotHash !== 'string' || !expectedSnapshotHash.trim()) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'expectedPlanHash, expectedHead, and expectedSnapshotHash are required non-empty strings.' });
+  }
+  if (detail !== undefined && detail !== 'compact' && detail !== 'full') {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'detail must be "compact" or "full".' });
+  }
+  req.headers['x-forge-operation-id'] = operationId;
+  return executeBulkTransformApplyRoute(req, res, bulkTransformRouteOptions, {
+    detail: detail === 'full' ? 'full' : 'compact',
+  });
+});
+
+app.get("/api/agent/files/list", (req, res) => {
+  try {
+    const query = req.query as Record<string, unknown>;
+    const extra = unknownObjectKeys(query, new Set(['root', 'path']));
+    if (extra.length > 0) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: `files.list does not accept query parameter(s): ${extra.join(', ')}` });
+    }
+    if (query.root !== undefined && typeof query.root !== 'string') {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'files.list root must be a string.' });
+    }
+    if (query.path !== undefined && typeof query.path !== 'string') {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'files.list path must be a string.' });
+    }
+    const rawRoot = String(query.root ?? '').trim().toLowerCase();
+    const mappedRoot = rawRoot === 'deployment' ? 'filesystem' : rawRoot;
+    const selection = parseProjectSourceRoot(mappedRoot);
+    if (selection.error) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: selection.error });
+    }
+    const chosen: ProjectSourceRoot = selection.root || 'workspace';
+    const relativePath = String(query.path ?? '').trim();
+    if (relativePath.includes('\0')) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'files.list path contains NUL bytes.' });
+    }
+    const resolved = resolveXsdConfig();
+    const configuredRoot = configuredProjectRoot(resolved, chosen);
+    if (!configuredRoot || !fs.existsSync(configuredRoot)) {
+      return res.status(400).json({
+        ok: false,
+        code: 'ROOT_NOT_CONFIGURED',
+        root: chosen,
+        error: `No ${chosen === 'workspace' ? 'Mod Workspace' : 'deployed Filesystem'} folder is configured or available.`,
+      });
+    }
+    const binding = chosen === 'workspace' ? workspaceRootBinding(configuredRoot) : undefined;
+    const rootPath = binding?.path ?? configuredRoot;
+    const requestedPath = path.resolve(rootPath, relativePath || '.');
+    if (!isPathWithin(requestedPath, rootPath)) {
+      return res.status(403).json({ ok: false, code: 'PATH_TRAVERSAL_FORBIDDEN', error: 'Forbidden: Directory traversal detected.' });
+    }
+    const relativeSegments = path.relative(rootPath, requestedPath).split(path.sep).filter(Boolean);
+    if (relativeSegments.some(segment => !includeFilesystemEntry(segment))) {
+      return res.status(403).json({ ok: false, code: 'HIDDEN_PATH_FORBIDDEN', error: 'Forbidden: Hidden or development directories are not browsable.' });
+    }
+    if (!fs.existsSync(requestedPath)) {
+      return res.status(404).json({ ok: false, code: 'DIRECTORY_NOT_FOUND', error: 'Directory not found.' });
+    }
+    const realRoot = fs.realpathSync(rootPath);
+    const realRequested = fs.realpathSync(requestedPath);
+    if (!isPathWithin(realRequested, realRoot)) {
+      return res.status(403).json({ ok: false, code: 'PATH_TRAVERSAL_FORBIDDEN', error: 'Forbidden: Directory escapes the configured project root.' });
+    }
+    if (!fs.statSync(realRequested).isDirectory()) {
+      return res.status(400).json({ ok: false, code: 'NOT_A_DIRECTORY', error: 'Requested project path is not a directory.' });
+    }
+    const allItems = inspectShallowDirectory(realRequested, realRoot);
+    const normalizedRelPath = path.relative(realRoot, realRequested).replace(/\\/g, '/');
+    return res.json({
+      ok: true,
+      root: chosen,
+      path: normalizedRelPath === '.' ? '' : normalizedRelPath,
+      ...(binding ? { workspaceRootId: binding.id } : {}),
+      totalItems: allItems.length,
+      truncated: allItems.length > AGENT_FILES_LIST_LIMIT,
+      items: allItems.slice(0, AGENT_FILES_LIST_LIMIT),
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: errorMessage(error) || 'Failed to list project directory.' });
+  }
+});
+
+app.get("/api/agent/files/read", (req, res) => {
+  try {
+    const query = req.query as Record<string, unknown>;
+    const extra = unknownObjectKeys(query, new Set(['path', 'root', 'expectedWorkspaceRootId']));
+    if (extra.length > 0) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: `files.read does not accept query parameter(s): ${extra.join(', ')}` });
+    }
+    if (typeof query.path !== 'string' || !query.path.trim() || query.path.includes('\0')) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'files.read requires a non-empty relative path string.' });
+    }
+    if (query.root !== undefined && typeof query.root !== 'string') {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'files.read root must be a string.' });
+    }
+    const rawRoot = String(query.root ?? '').trim().toLowerCase();
+    const mappedRoot = rawRoot === 'deployment' ? 'filesystem' : rawRoot;
+    const selection = parseProjectSourceRoot(mappedRoot);
+    if (selection.error) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: selection.error });
+    }
+    const chosen: ProjectSourceRoot = selection.root || 'workspace';
+    const expectedRootId = query.expectedWorkspaceRootId;
+    if (expectedRootId !== undefined && (chosen !== 'workspace'
+      || typeof expectedRootId !== 'string' || !/^[a-f0-9]{64}$/.test(expectedRootId))) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'expectedWorkspaceRootId must be a 64-char lowercase hex sha256 with root="workspace".' });
+    }
+    const relativePath = query.path.trim();
+    const resolved = resolveXsdConfig();
+    const configuredRoot = configuredProjectRoot(resolved, chosen);
+    const binding = chosen === 'workspace' ? workspaceRootBinding(configuredRoot) : undefined;
+    if (expectedRootId !== undefined && binding?.id !== expectedRootId) return refuseChangedWorkspaceRoot(res);
+    const rootPath = binding?.path ?? configuredRoot;
+    if (!rootPath || !fs.existsSync(rootPath)) {
+      return res.status(400).json({
+        ok: false,
+        code: 'ROOT_NOT_CONFIGURED',
+        root: chosen,
+        error: `No ${chosen === 'workspace' ? 'Mod Workspace' : 'deployed Filesystem'} folder is configured, so root=${chosen} cannot be read.`,
+      });
+    }
+    const safePath = path.resolve(rootPath, relativePath);
+    if (!isPathWithin(safePath, rootPath)) {
+      return res.status(403).json({ ok: false, code: 'PATH_TRAVERSAL_FORBIDDEN', error: 'Forbidden: Directory traversal detected.' });
+    }
+    const relativeSegments = path.relative(rootPath, safePath).split(path.sep).filter(Boolean);
+    if (relativeSegments.some(segment => !includeFilesystemEntry(segment))) {
+      return res.status(403).json({ ok: false, code: 'HIDDEN_PATH_FORBIDDEN', error: 'Forbidden: Hidden or development paths cannot be read.' });
+    }
+    if (!fs.existsSync(safePath)) {
+      const otherRoot: ProjectSourceRoot = chosen === 'workspace' ? 'filesystem' : 'workspace';
+      const otherPath = configuredProjectRoot(resolved, otherRoot);
+      const otherHasIt = Boolean(otherPath) && (() => {
+        const candidate = path.resolve(otherPath!, relativePath);
+        return isPathWithin(candidate, otherPath!) && fs.existsSync(candidate);
+      })();
+      return res.status(404).json({
+        ok: false,
+        code: 'FILE_NOT_FOUND_IN_ROOT',
+        root: chosen,
+        ...(otherHasIt ? { alsoIn: otherRoot } : {}),
+        error: otherHasIt
+          ? `"${relativePath}" is not in the ${chosen} root, but exists in the ${otherRoot} root. Pass root="${otherRoot}" to read that copy.`
+          : `"${relativePath}" is not in the ${chosen} root.`,
+      });
+    }
+    const realRoot = fs.realpathSync(rootPath);
+    const realSafe = fs.realpathSync(safePath);
+    if (!isPathWithin(realSafe, realRoot)) {
+      return res.status(403).json({ ok: false, code: 'PATH_TRAVERSAL_FORBIDDEN', error: 'Forbidden: Path escapes the configured project root.' });
+    }
+    const stat = fs.statSync(realSafe);
+    if (!stat.isFile()) {
+      return res.status(400).json({ ok: false, code: 'NOT_A_REGULAR_FILE', error: 'Requested path is not a regular file.' });
+    }
+    if (stat.size > AGENT_FILE_MAX_BYTES) {
+      return res.status(413).json({
+        ok: false,
+        code: 'FILE_TOO_LARGE_FOR_AGENT_READ',
+        bytes: stat.size,
+        maxBytes: AGENT_FILE_MAX_BYTES,
+        error: `File exceeds the ${AGENT_FILE_MAX_BYTES}-byte agent read limit.`,
+      });
+    }
+    const buffer = fs.readFileSync(realSafe);
+    if (looksBinary(buffer)) {
+      return res.status(415).json({
+        ok: false,
+        code: 'FILE_BINARY_UNSUPPORTED',
+        bytes: buffer.length,
+        error: 'Binary files are not readable as UTF-8 text through files.read.',
+      });
+    }
+    const normalizedRelPath = path.relative(realRoot, realSafe).replace(/\\/g, '/');
+    return res.json({
+      ok: true,
+      path: normalizedRelPath,
+      root: chosen,
+      ...(binding ? { workspaceRootId: binding.id } : {}),
+      bytes: buffer.length,
+      sha256: crypto.createHash('sha256').update(buffer).digest('hex'),
+      content: buffer.toString('utf8'),
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: errorMessage(error) || 'Failed to read project file.' });
+  }
+});
+
+app.post("/api/agent/files/write", (req, res, next) => {
+  if (!isPlainRecord(req.body)) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'files.write requires a JSON object body.' });
+  }
+  const extra = unknownObjectKeys(req.body, new Set(['path', 'content', 'expectedSha256', 'expectedWorkspaceRootId', 'strict']));
+  if (extra.length > 0) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: `files.write does not accept: ${extra.join(', ')}` });
+  }
+  if (typeof req.body.path !== 'string' || !req.body.path.trim() || req.body.path.includes('\0')) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'files.write path must be a non-empty relative path string.' });
+  }
+  if (typeof req.body.content !== 'string') {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'files.write content must be a UTF-8 string.' });
+  }
+  if (Buffer.byteLength(req.body.content, 'utf8') > AGENT_FILE_MAX_BYTES) {
+    return res.status(413).json({
+      ok: false,
+      success: false,
+      code: 'FILE_TOO_LARGE_FOR_AGENT_WRITE',
+      maxBytes: AGENT_FILE_MAX_BYTES,
+      error: `files.write content exceeds the ${AGENT_FILE_MAX_BYTES}-byte limit.`,
+    });
+  }
+  if (!Object.prototype.hasOwnProperty.call(req.body, 'expectedSha256')
+    || (req.body.expectedSha256 !== null && (typeof req.body.expectedSha256 !== 'string' || !/^[a-f0-9]{64}$/.test(req.body.expectedSha256)))) {
+    return res.status(400).json({
+      ok: false,
+      success: false,
+      code: 'CAPABILITY_INPUT_INVALID',
+      error: 'files.write requires expectedSha256 as a 64-char lowercase hex sha256 string (for updates) or null (for creating a new file).',
+    });
+  }
+  if (req.body.expectedWorkspaceRootId !== undefined
+    && (typeof req.body.expectedWorkspaceRootId !== 'string' || !/^[a-f0-9]{64}$/.test(req.body.expectedWorkspaceRootId))) {
+    return res.status(400).json({
+      ok: false,
+      success: false,
+      code: 'CAPABILITY_INPUT_INVALID',
+      error: 'expectedWorkspaceRootId must be a 64-char lowercase hex sha256 string.',
+    });
+  }
+  if (req.body.strict !== undefined && typeof req.body.strict !== 'boolean') {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'files.write strict must be a boolean.' });
+  }
+  return next();
+}, coordinatedSourceOperation((req, res) => {
+  const attempt: WorkspaceWriteAttempt = { stage: 'preflight' };
+  const body = req.body as Record<string, unknown>;
+  const incoming = String(body.content);
+  try {
+    const targetPath = String(body.path).trim();
+    const config = resolveXsdConfig();
+    const expectedRootId = body.expectedWorkspaceRootId as string | undefined;
+    const binding = workspaceRootBinding(config.modWorkspacePath);
+    if (expectedRootId !== undefined && binding?.id !== expectedRootId) return refuseChangedWorkspaceRoot(res);
+    const resolved = binding ? { ...config, modWorkspacePath: binding.path } : config;
+    const rootPath = resolved.modWorkspacePath;
+    if (!rootPath || !fs.existsSync(rootPath)) {
+      return res.status(400).json({ ok: false, success: false, code: 'ROOT_NOT_CONFIGURED', error: 'No Mod Workspace Folder configured.' });
+    }
+    const absolute = path.resolve(rootPath, targetPath);
+    if (!isPathWithin(absolute, rootPath)) {
+      return res.status(403).json({ ok: false, success: false, code: 'PATH_TRAVERSAL_FORBIDDEN', error: 'Forbidden: Directory traversal detected.' });
+    }
+    const relativeSegments = path.relative(rootPath, absolute).split(path.sep).filter(Boolean);
+    if (relativeSegments.some(segment => !includeFilesystemEntry(segment))) {
+      return res.status(403).json({ ok: false, success: false, code: 'HIDDEN_PATH_FORBIDDEN', error: 'Forbidden: Hidden or development paths cannot be written.' });
+    }
+    const realRoot = fs.realpathSync(rootPath);
+    if (!verifyRealAncestorWithinRoot(absolute, realRoot)) {
+      return res.status(403).json({ ok: false, success: false, code: 'PATH_TRAVERSAL_FORBIDDEN', error: 'Forbidden: Target escapes the configured Mod Workspace root.' });
+    }
+    const exists = fs.existsSync(absolute);
+    const expected = body.expectedSha256 as string | null;
+    if (expected === null && exists) {
+      return res.status(409).json({
+        ok: false,
+        success: false,
+        code: 'FILE_CHANGED',
+        error: `Refused to create "${targetPath}": file already exists in Mod Workspace.`,
+      });
+    }
+    if (typeof expected === 'string') {
+      if (!exists || !fs.statSync(absolute).isFile()) {
+        return res.status(409).json({
+          ok: false,
+          success: false,
+          code: 'FILE_CHANGED',
+          error: `Refused to update "${targetPath}": the expected file no longer exists.`,
+        });
+      }
+      const currentHash = hashArtifactFile(absolute);
+      if (currentHash !== expected) {
+        return res.status(409).json({
+          ok: false,
+          success: false,
+          code: 'FILE_CHANGED',
+          error: `Refused to update "${targetPath}": its bytes changed since expectedSha256 was read.`,
+          expectedSha256: expected,
+          currentSha256: currentHash,
+        });
+      }
+    }
+    const strict = body.strict !== false;
+    const validation = validateIncomingBytes(targetPath, incoming);
+    if (strict && !validation.ok) {
+      return res.status(422).json({
+        ok: false,
+        success: false,
+        code: 'REJECTED_BY_STRICT_VALIDATION',
+        error: `Refused to write "${targetPath}": ${validation.findings.filter(f => f.severity === 'error').length} error(s) in content. Nothing was written.`,
+        validation,
+      });
+    }
+    const result = writeWorkspaceFileGuarded(res, targetPath, incoming, attempt, resolved);
+    if (!result) return;
+    const normalizedRelPath = path.relative(rootPath, absolute).replace(/\\/g, '/');
+    return res.json({
+      ok: true,
+      success: true,
+      path: normalizedRelPath,
+      ...(binding ? { workspaceRootId: binding.id } : {}),
+      written: { ...result.written, root: 'workspace' },
+      validation,
+    });
+  } catch (error) {
+    const failure = workspaceWriteFailure(attempt, incoming, error);
+    console.error('[workspace-file-write]', JSON.stringify(failure));
+    delete res.locals.sourceOperation;
+    return res.status(500).json({
+      ok: false,
+      success: false,
+      code: 'WORKSPACE_FILE_WRITE_FAILED',
+      error: 'Workspace file write failed.',
+      failure,
+    });
+  }
+}));
+
+app.get("/api/agent/mod-folder/drift", (req, res) => {
+  try {
+    const query = req.query as Record<string, unknown>;
+    const extra = unknownObjectKeys(query, new Set(['mod']));
+    if (extra.length > 0) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: `workspace.mod.drift does not accept query parameter(s): ${extra.join(', ')}` });
+    }
+    if (typeof query.mod !== 'string') {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'workspace.mod.drift requires query parameter mod.' });
+    }
+    const mod = query.mod.trim();
+    if (!mod || mod === '.' || mod === '..' || /[\\/\0]/.test(mod)) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'mod must be a single mod folder name without path separators.' });
+    }
+    const report = computeModDrift(mod);
+    if (!report) {
+      return res.json({
+        ok: true,
+        available: false,
+        mod,
+        reason: 'Mod folder is not present in both workspace and deployed filesystem roots.',
+      });
+    }
+    return res.json({
+      ok: true,
+      available: true,
+      mod,
+      ...report,
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: errorMessage(error) || 'mod-folder drift failed.' });
+  }
+});
+
+app.post("/api/agent/mod-folder/sync", (req, res, next) => {
+  if (!isPlainRecord(req.body)) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'workspace.mod.import requires a JSON object body.' });
+  }
+  const extra = unknownObjectKeys(req.body, new Set([
+    'path', 'root', 'apply', 'operationId', 'expectedHead', 'expectedSnapshotHash', 'expectedVersion', 'detail',
+  ]));
+  if (extra.length > 0) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: `workspace.mod.import does not accept: ${extra.join(', ')}` });
+  }
+  const parsed = parseModFolderImportRequest({ path: req.body.path, root: req.body.root });
+  if (parsed.ok === false) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: parsed.error });
+  }
+  if (req.body.apply !== undefined && typeof req.body.apply !== 'boolean') {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'apply must be a boolean.' });
+  }
+  if (req.body.detail !== undefined && req.body.detail !== 'compact' && req.body.detail !== 'full') {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'detail must be "compact" or "full".' });
+  }
+  const hasHead = req.body.expectedHead !== undefined;
+  const hasSnapshot = req.body.expectedSnapshotHash !== undefined;
+  if (hasHead !== hasSnapshot) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'expectedHead and expectedSnapshotHash must be supplied together.' });
+  }
+  if (hasHead && (typeof req.body.expectedHead !== 'string' || !/^[a-f0-9]{16}$/.test(req.body.expectedHead))) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'expectedHead must be a 16-char lowercase hex workspace head.' });
+  }
+  if (hasSnapshot && (typeof req.body.expectedSnapshotHash !== 'string' || !/^(?:[a-f0-9]{16}|[a-f0-9]{64})$/.test(req.body.expectedSnapshotHash))) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'expectedSnapshotHash must be a valid workspace snapshot hash.' });
+  }
+  if (req.body.expectedVersion !== undefined
+    && (typeof req.body.expectedVersion !== 'number' || !Number.isSafeInteger(req.body.expectedVersion) || req.body.expectedVersion < 0)) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'expectedVersion must be a non-negative integer.' });
+  }
+  if (req.body.operationId !== undefined
+    && (typeof req.body.operationId !== 'string' || !ACTION_RECEIPT_OPERATION_ID_RE.test(req.body.operationId))) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'operationId must match caller-owned receipt operation id format.' });
+  }
+  if (req.body.apply === true) {
+    if (typeof req.body.operationId !== 'string') {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'apply:true requires a caller-owned operationId.' });
+    }
+    const headerOpId = req.headers['x-forge-operation-id'];
+    if (Array.isArray(headerOpId) || (typeof headerOpId === 'string' && headerOpId.trim() !== '' && headerOpId !== req.body.operationId)) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'x-forge-operation-id header disagrees with body.operationId.' });
+    }
+    if (!hasHead && req.body.expectedVersion === undefined) {
+      return res.status(400).json({
+        ok: false,
+        success: false,
+        code: 'CAPABILITY_INPUT_INVALID',
+        error: 'apply:true requires expectedHead + expectedSnapshotHash (or expectedVersion) compare-and-swap preconditions.',
+      });
+    }
+    req.headers['x-forge-operation-id'] = req.body.operationId;
+  }
+  return next();
+}, coordinatedSourceOperation(async (req, res) => {
+  try {
+    const body = req.body as Record<string, unknown>;
+    const parsed = parseModFolderImportRequest({ path: body.path, root: body.root });
+    if (parsed.ok === false) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: parsed.error });
+    }
+    const { path: relativePath, root } = parsed.value;
+    const normalizedPath = relativePath.replace(/\\/g, '/');
+    const record = requestWorkspace(req);
+    res.locals.apiSubject = workspaceRecordSubject(record);
+    const resolvedFolder = resolveModFolder(relativePath, root);
+    if ('error' in resolvedFolder) {
+      return res.status(resolvedFolder.status).json({
+        ok: false,
+        success: false,
+        code: resolvedFolder.status === 404 ? 'MOD_FOLDER_NOT_FOUND' : 'CAPABILITY_INPUT_INVALID',
+        error: resolvedFolder.error,
+      });
+    }
+    if (!hasImportManifest(resolvedFolder.abs)) {
+      const entries = (() => { try { return fs.readdirSync(resolvedFolder.abs, { withFileTypes: true }); } catch { return []; } })();
+      const modLikeChildren: string[] = [];
+      let inspected = 0;
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        if (++inspected > 128) break;
+        if (!hasImportManifest(path.join(resolvedFolder.abs, entry.name), true)) continue;
+        modLikeChildren.push(entry.name);
+        if (modLikeChildren.length === 20) break;
+      }
+      const example = modLikeChildren.length ? JSON.stringify({
+        ...(root ? { root } : {}),
+        path: path.posix.join(normalizedPath, modLikeChildren[0]),
+      }) : null;
+      return res.status(400).json({
+        ok: false,
+        success: false,
+        code: 'NOT_A_MOD_FOLDER',
+        path: normalizedPath,
+        ...(root ? { root } : {}),
+        ...(modLikeChildren.length ? { modsFoundInside: modLikeChildren } : {}),
+        error: example
+          ? `"${normalizedPath}" contains mods but has no regular content.xml file. Import a child using ${example}.`
+          : `"${normalizedPath}" has no regular content.xml file. Point this at the X4 extension folder containing its manifest.`,
+      });
+    }
+    const { workspace, report } = importModFolder(resolvedFolder.abs, record.workspace as ModWorkspace);
+    if (report.totalFiles === 0 || !workspace.contentOriginal?.trim()) {
+      return res.status(400).json({
+        ok: false,
+        success: false,
+        code: 'NOT_A_MOD_FOLDER',
+        path: normalizedPath,
+        ...(root ? { root } : {}),
+        error: `"${normalizedPath}" has an empty or unreadable content.xml. Restore the extension manifest and retry.`,
+      });
+    }
+    const sanitized = sanitizeWorkspace(workspace);
+    const modId = effectiveModId(sanitized);
+    const detail: 'compact' | 'full' = body.detail === 'full' ? 'full' : 'compact';
+    if (body.apply !== true) {
+      return res.json({
+        ok: true,
+        success: true,
+        applied: false,
+        detail,
+        workspaceId: record.workspaceId,
+        modId,
+        currentVersion: record.version,
+        currentWorkspaceHash: workspaceHash(record),
+        currentSnapshotHash: workspaceRegistry.snapshotHash(record),
+        candidateWorkspaceHash: workspaceContentHash(sanitized),
+        candidateSnapshotHash: workspaceSnapshotHash(sanitized),
+        report,
+        ...(detail === 'full'
+          ? { workspace: redactWorkspaceHostPathsForAgent(sanitized) }
+          : { workspaceSummary: summarizeWorkspaceForAgent(sanitized) }),
+      });
+    }
+    return await executeWorkspaceReceiptMutation(req, res, record, workspace, {
+      operationId: String(body.operationId),
+      routeKey: 'POST /api/agent/mod-folder/sync',
+      mode: 'replace',
+      expectedHead: body.expectedHead as string | undefined,
+      expectedSnapshotHash: body.expectedSnapshotHash as string | undefined,
+      expectedVersion: body.expectedVersion as number | undefined,
+      dryRun: false,
+      transformSuccessBody: raw => {
+        const ws = sanitizeWorkspace((raw.workspace as ModWorkspace | undefined) ?? sanitized);
+        const next: Record<string, unknown> = {
+          ok: true,
+          ...raw,
+          detail,
+          modId,
+          report,
+        };
+        if (detail === 'compact') {
+          delete next.workspace;
+          next.workspaceSummary = summarizeWorkspaceForAgent(ws);
+        } else {
+          next.workspace = redactWorkspaceHostPathsForAgent(ws);
+        }
+        return next;
+      },
+    });
+  } catch (error: unknown) {
+    const errCode = (error as { code?: unknown } | null | undefined)?.code;
+    if (errCode === 'DEPLOY_INPUT_INVALID') {
+      return res.status(400).json({ ok: false, success: false, code: 'DEPLOY_INPUT_INVALID', error: errorMessage(error) });
+    }
+    return res.status(500).json({ ok: false, success: false, error: errorMessage(error) || 'mod-folder sync failed.' });
+  }
+}));
 
 
 // Drift report for one mod present in BOTH the workspace and deployed roots.

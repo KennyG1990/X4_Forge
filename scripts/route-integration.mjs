@@ -129,8 +129,13 @@ fs.writeFileSync(agentKeysFile, JSON.stringify({
 }));
 const referenceRoot = path.join(tmp, 'reference');
 fs.mkdirSync(path.join(referenceRoot, 'libraries'), { recursive: true });
+fs.mkdirSync(path.join(referenceRoot, 'assets', 'units', 'size_s', 'macros'), { recursive: true });
 fs.writeFileSync(path.join(referenceRoot, 'libraries', 'factions.xml'), '<factions><faction id="routefixture" name="Route Fixture" tags="economic"/></factions>');
 fs.writeFileSync(path.join(referenceRoot, 'libraries', 'wares.xml'), '<wares><ware id="routeware" name="Route Ware" group="test" tags="economy"/></wares>');
+fs.writeFileSync(
+  path.join(referenceRoot, 'assets', 'units', 'size_s', 'macros', 'route_ship_macro.xml'),
+  '<macros><macro name="route_ship_macro" class="ship_s"><properties><hull max="1000"/></properties></macro></macros>',
+);
 fs.writeFileSync(
   path.join(referenceRoot, 'libraries', 'scriptproperties.xml'),
   '<scriptproperties>'
@@ -802,16 +807,22 @@ async function main() {
     ? capabilityContract.capabilities.map(capability => capability?.id)
     : [];
   // Independent semantic inventory: unexpected additions/removals must fail.
-  const expectedCapabilityIds = ['configuration.access.request', 'configuration.access.status', 'configuration.apply', 'configuration.preview', 'configuration.read', 'configuration.status',
+  const expectedCapabilityIds = [
+    'bulk.transform.apply', 'bulk.transform.preview',
+    'configuration.access.request', 'configuration.access.status', 'configuration.apply', 'configuration.preview', 'configuration.read', 'configuration.status',
     'deploy.apply', 'deploy.preview', 'deploy.status', 'deploy.undo',
-    'expression.check', 'expression.inspect', 'extensions.conflicts.analyze', 'history.list', 'history.revert',
+    'expression.check', 'expression.inspect', 'extensions.conflicts.analyze',
+    'files.list', 'files.read', 'files.write',
+    'history.list', 'history.revert',
     'patch.diff.simulate', 'patch.readiness.analyze', 'performance.collect', 'performance.native.collect', 'performance.native.read', 'performance.native.stop',
     'performance.profile', 'performance.read', 'project.ai.navigation', 'project.brief.read', 'project.md.navigation', 'project.proof.read', 'project.validate', 'project.xml.references', 'readiness.read',
     'reference.file.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest',
-    'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.generate.preview', 'workspace.read'];
+    'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read',
+    'workspace.compile', 'workspace.compile.result', 'workspace.generate.preview', 'workspace.mod.drift', 'workspace.mod.import', 'workspace.read',
+  ];
   const sameCapabilityIds = (actual, expected) => Array.isArray(actual)
     && JSON.stringify([...actual].sort()) === JSON.stringify([...expected].sort());
-  const expectedCapabilityIdentity = id => `${id}@${['history.list', 'patch.readiness.analyze', 'workspace.compile', 'workspace.compile.result', 'workspace.read'].includes(id) ? 2 : 1}`;
+  const expectedCapabilityIdentity = id => `${id}@${['history.list', 'history.revert', 'patch.readiness.analyze', 'workspace.compile', 'workspace.compile.result', 'workspace.read'].includes(id) ? 2 : 1}`;
   ok('capability_contract_is_versioned_and_hashed',
     capabilityContract?.schemaVersion === 'forge.capability.v1' &&
     /^[a-f0-9]{64}$/.test(String(capabilityContract?.contractHash || '')) &&
@@ -1451,8 +1462,8 @@ async function main() {
       'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.xml.references',
       'readiness.read', 'reference.file.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest',
       'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.read']],
-    ['deploy', deployEffective, 'deploy', expectedCapabilityIds.filter(id => !id.startsWith('configuration.') && !id.startsWith('deploy.') && ![
-      'performance.native.collect', 'performance.native.read', 'performance.native.stop', 'project.ai.navigation', 'project.md.navigation',
+    ['deploy', deployEffective, 'deploy', expectedCapabilityIds.filter(id => !id.startsWith('configuration.') && !id.startsWith('deploy.') && !id.startsWith('bulk.transform.') && !id.startsWith('files.') && ![
+      'history.revert', 'performance.native.collect', 'performance.native.read', 'performance.native.stop', 'project.ai.navigation', 'project.md.navigation', 'workspace.mod.drift', 'workspace.mod.import',
     ].includes(id))],
   ]) {
     ok(`${name}_key_effective_capabilities_are_exact_and_hashed`, response.status === 200 &&
@@ -6333,6 +6344,198 @@ async function main() {
       JSON.stringify({ status: logDiagRead.status }));
   }
 
+  // --- #19 P4 SLICE 3: EXPLICIT-GRANT SOURCE FILES, REVERT, BULK TRANSFORM & MOD-FOLDER IMPORT/DRIFT ---
+  {
+    const presetFilesDenied = await req('GET', '/api/agent/files/list?root=workspace', deployKey);
+    ok('preset_deploy_key_denied_curated_files_without_explicit_grant',
+      presetFilesDenied.status === 403 && presetFilesDenied.json?.authorityCode === 'CAPABILITY_NOT_GRANTED',
+      JSON.stringify(presetFilesDenied.json || {}));
+
+    const slice3ModId = 'route_int_slice3_mod';
+    const slice3ModDir = path.join(safeWorkspace, slice3ModId);
+    const slice3ClientId = 'client_routeint_slice3';
+    fs.mkdirSync(path.join(slice3ModDir, 'md'), { recursive: true });
+    fs.writeFileSync(path.join(slice3ModDir, 'content.xml'),
+      `<content id="${slice3ModId}" name="Route Slice 3 Mod" author="ForgeQA" version="100" date="2026-11-24"/>\n`);
+    const slice3InitialMd = '<mdscript name="RouteSlice3Main"><cues><cue name="Boot"><conditions><event_game_loaded/></conditions><actions><debug_text text="\'v1\'"/></actions></cue></cues></mdscript>\n';
+    fs.writeFileSync(path.join(slice3ModDir, 'md', 'main.xml'), slice3InitialMd);
+
+    try {
+      const slice3CreateWs = await req('POST', '/api/agent/workspaces', SESSION_TOKEN, {
+        clientId: slice3ClientId,
+        name: slice3ModId,
+      }, { clientId: slice3ClientId });
+      const slice3WsId = slice3CreateWs.json?.workspaceId;
+      const slice3Address = { workspaceId: slice3WsId };
+
+      const slice3Mint = await req('POST', '/api/agent/keys', SESSION_TOKEN, {
+        label: 'route-int-slice3-explicit',
+        scope: 'deploy',
+        ttl: '1h',
+        authorityMode: 'exact',
+        capabilityIdentities: [
+          'bulk.transform.apply@1',
+          'bulk.transform.preview@1',
+          'files.list@1',
+          'files.read@1',
+          'files.write@1',
+          'history.list@2',
+          'history.revert@2',
+          'workspace.mod.drift@1',
+          'workspace.mod.import@1',
+        ],
+        allowedEffects: [
+          'read', 'analyze', 'audit-write', 'audit-retention-delete',
+          'workspace-write', 'filesystem-write', 'deploy', 'delete',
+        ],
+      }, { workspaceId: slice3WsId, clientId: slice3ClientId });
+      const slice3Key = slice3Mint.json && (slice3Mint.json.token || slice3Mint.json.key);
+      ok('explicit_slice3_key_minted',
+        slice3Mint.status === 200 && typeof slice3Key === 'string',
+        JSON.stringify(slice3Mint.json || {}));
+
+      // Ensure reference manifest is ready for bulk-transform preview/apply
+      for (let attempt = 0; attempt < 40; attempt++) {
+        const refReady = await req('GET', '/api/agent/reference/status', SESSION_TOKEN);
+        if (refReady.json?.manifest?.state === 'ready') break;
+        await sleep(50);
+      }
+
+      const filesListRes = await req('GET', `/api/agent/files/list?root=workspace&path=${encodeURIComponent(slice3ModId)}`, slice3Key, undefined, slice3Address);
+      capabilityResponses.set('files.list', filesListRes);
+      ok('curated_files_list_returns_bounded_items_and_root_id',
+        filesListRes.status === 200
+          && filesListRes.json?.ok === true
+          && typeof filesListRes.json?.workspaceRootId === 'string'
+          && !JSON.stringify(filesListRes.json).includes(safeWorkspace),
+        JSON.stringify({ status: filesListRes.status, count: filesListRes.json?.totalItems }));
+
+      const filesReadRes = await req('GET', `/api/agent/files/read?root=workspace&path=${encodeURIComponent(`${slice3ModId}/md/main.xml`)}`, slice3Key, undefined, slice3Address);
+      capabilityResponses.set('files.read', filesReadRes);
+      ok('curated_files_read_redacts_absolute_path_and_returns_sha256',
+        filesReadRes.status === 200
+          && filesReadRes.json?.ok === true
+          && filesReadRes.json?.absolutePath === undefined
+          && typeof filesReadRes.json?.sha256 === 'string',
+        JSON.stringify({ status: filesReadRes.status, bytes: filesReadRes.json?.bytes }));
+
+      const filesWriteStrictRefused = await req('POST', '/api/agent/files/write', slice3Key, {
+        path: `${slice3ModId}/md/main.xml`,
+        content: '<mdscript><cues><cue name="Broken"></cues></mdscript>',
+        expectedSha256: filesReadRes.json?.sha256,
+      }, { ...slice3Address, operationId: null });
+      ok('curated_files_write_default_strict_refuses_malformed_xml_before_write',
+        filesWriteStrictRefused.status === 422
+          && filesWriteStrictRefused.json?.code === 'REJECTED_BY_STRICT_VALIDATION'
+          && fs.readFileSync(path.join(slice3ModDir, 'md', 'main.xml'), 'utf8') === slice3InitialMd,
+        JSON.stringify(filesWriteStrictRefused.json || {}));
+
+      const slice3UpdatedMd = slice3InitialMd.replace("'v1'", "'v2'");
+      const filesWriteRes = await req('POST', '/api/agent/files/write', slice3Key, {
+        path: `${slice3ModId}/md/main.xml`,
+        content: slice3UpdatedMd,
+        expectedSha256: filesReadRes.json?.sha256,
+        expectedWorkspaceRootId: filesListRes.json?.workspaceRootId,
+      }, { ...slice3Address, operationId: null });
+      capabilityResponses.set('files.write', filesWriteRes);
+      ok('curated_files_write_commits_cas_checked_bytes_without_host_path',
+        filesWriteRes.status === 200
+          && filesWriteRes.json?.ok === true
+          && filesWriteRes.json?.written?.absolutePath === undefined
+          && fs.readFileSync(path.join(slice3ModDir, 'md', 'main.xml'), 'utf8') === slice3UpdatedMd,
+        JSON.stringify({ status: filesWriteRes.status, written: filesWriteRes.json?.written }));
+
+      const slice3History = await req('GET', '/api/agent/history?kind=edit&limit=10', slice3Key, undefined, slice3Address);
+      const slice3EditRow = (slice3History.json?.rows || []).find(r => r.revertible === true);
+      const curatedHistoryRevert = await req('POST', '/api/agent/history/revert', slice3Key, {
+        id: slice3EditRow?.id || 'missing',
+      }, { ...slice3Address, operationId: null });
+      capabilityResponses.set('history.revert', curatedHistoryRevert);
+      ok('curated_history_revert_restores_edited_file_bytes',
+        curatedHistoryRevert.status === 200
+          && curatedHistoryRevert.json?.ok === true
+          && fs.readFileSync(path.join(slice3ModDir, 'md', 'main.xml'), 'utf8') === slice3InitialMd,
+        JSON.stringify(curatedHistoryRevert.json || {}));
+
+      const modDriftRes = await req('GET', `/api/agent/mod-folder/drift?mod=${encodeURIComponent(slice3ModId)}`, slice3Key, undefined, slice3Address);
+      capabilityResponses.set('workspace.mod.drift', modDriftRes);
+      ok('curated_mod_drift_returns_structured_availability_envelope',
+        modDriftRes.status === 200
+          && modDriftRes.json?.ok === true
+          && typeof modDriftRes.json?.available === 'boolean'
+          && modDriftRes.json?.mod === slice3ModId,
+        JSON.stringify(modDriftRes.json || {}));
+
+      const modImportPreview = await req('POST', '/api/agent/mod-folder/sync', slice3Key, {
+        path: slice3ModId,
+        root: 'workspace',
+      }, { ...slice3Address, operationId: null });
+      const importOpId = `op_route_slice3_import_${crypto.randomBytes(6).toString('hex')}`;
+      const modImportHeaderMismatch = await req('POST', '/api/agent/mod-folder/sync', slice3Key, {
+        path: slice3ModId,
+        root: 'workspace',
+        apply: true,
+        operationId: importOpId,
+        expectedHead: modImportPreview.json?.currentWorkspaceHash,
+        expectedSnapshotHash: modImportPreview.json?.currentSnapshotHash,
+      }, slice3Address); // auto-injected random x-forge-operation-id header disagrees with body.operationId
+      const modImportApply = await req('POST', '/api/agent/mod-folder/sync', slice3Key, {
+        path: slice3ModId,
+        root: 'workspace',
+        apply: true,
+        operationId: importOpId,
+        expectedHead: modImportPreview.json?.currentWorkspaceHash,
+        expectedSnapshotHash: modImportPreview.json?.currentSnapshotHash,
+      }, { ...slice3Address, operationId: null });
+      capabilityResponses.set('workspace.mod.import', modImportApply);
+      ok('curated_mod_import_commits_compact_workspace_with_receipt_and_rejects_header_mismatch',
+        modImportPreview.status === 200 && modImportPreview.json?.applied === false
+          && modImportHeaderMismatch.status === 400 && modImportHeaderMismatch.json?.code === 'CAPABILITY_INPUT_INVALID'
+          && modImportApply.status === 200
+          && modImportApply.json?.ok === true
+          && modImportApply.json?.applied === true
+          && modImportApply.json?.workspace === undefined
+          && modImportApply.json?.receipt?.status === 'committed',
+        JSON.stringify({ preview: modImportPreview.status, mismatch: modImportHeaderMismatch.status, apply: modImportApply.status, body: modImportApply.json }));
+
+      const bulkRule = {
+        pathPrefix: 'assets/units/size_s/macros',
+        selector: '/macros/macro/properties/hull/@max',
+        operation: 'multiply',
+        operand: 1.5,
+        rounding: 'nearest',
+        roundingIncrement: 100,
+        maxFiles: 25,
+      };
+      const bulkPreview = await req('POST', '/api/agent/bulk-transform/preview-plan', slice3Key, {
+        rule: bulkRule,
+      }, { ...slice3Address, operationId: null });
+      capabilityResponses.set('bulk.transform.preview', bulkPreview);
+      const bulkOpId = `op_route_slice3_bulk_${crypto.randomBytes(6).toString('hex')}`;
+      const bulkApply = await req('POST', '/api/agent/bulk-transform/execute', slice3Key, {
+        operationId: bulkOpId,
+        rule: bulkRule,
+        expectedPlanHash: bulkPreview.json?.planHash,
+        expectedHead: bulkPreview.json?.workspaceHash,
+        expectedSnapshotHash: bulkPreview.json?.snapshotHash,
+      }, { ...slice3Address, operationId: null });
+      capabilityResponses.set('bulk.transform.apply', bulkApply);
+      ok('curated_bulk_transform_preview_and_execute_commit_compact_receipt',
+        bulkPreview.status === 200
+          && bulkPreview.json?.ok === true
+          && bulkPreview.json?.matchedFiles === 1
+          && bulkApply.status === 200
+          && bulkApply.json?.success === true
+          && bulkApply.json?.applied === true
+          && bulkApply.json?.added === 1
+          && bulkApply.json?.workspace === undefined
+          && bulkApply.json?.receipt?.status === 'committed',
+        JSON.stringify({ preview: bulkPreview.status, apply: bulkApply.status, body: bulkApply.json }));
+    } finally {
+      fs.rmSync(slice3ModDir, { recursive: true, force: true });
+    }
+  }
+
   const capabilityOutputReport = (capabilityContract?.capabilities || [])
     .map(capability => assertCapabilityOutput(capability.id, capabilityResponses.get(capability.id)));
   ok('all_canonical_capability_outputs_exercised',
@@ -6490,4 +6693,5 @@ try {
 
 const passed = checks.filter((c) => c.pass).length;
 console.log(`\n[route-integration] ${passed}/${checks.length} ${passed === checks.length ? 'PASS' : 'FAIL'}`);
+await new Promise(resolve => setTimeout(resolve, 75));
 process.exit(passed === checks.length && checks.length > 0 ? 0 : 1);

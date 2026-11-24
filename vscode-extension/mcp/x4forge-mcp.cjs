@@ -76,6 +76,26 @@ const DEPLOY_CAPABILITIES = new Set([
   "deploy.status",
   "deploy.undo",
 ]);
+const WORKSPACE_FILES_TOOLS = new Set([
+  "preview_bulk_transform",
+  "apply_bulk_transform",
+  "list_workspace_files",
+  "read_workspace_file",
+  "write_workspace_file",
+  "revert_action_history",
+  "get_mod_drift",
+  "import_mod_folder",
+]);
+const WORKSPACE_FILES_CAPABILITIES = new Set([
+  "bulk.transform.apply",
+  "bulk.transform.preview",
+  "files.list",
+  "files.read",
+  "files.write",
+  "history.revert",
+  "workspace.mod.drift",
+  "workspace.mod.import",
+]);
 const AUTHORED_NAVIGATION_MAX_FILES = 512;
 const AUTHORED_NAVIGATION_MAX_FILE_BYTES = 8 * 1024 * 1024;
 const AUTHORED_NAVIGATION_MAX_TOTAL_BYTES = 4 * AUTHORED_NAVIGATION_MAX_FILE_BYTES;
@@ -1346,6 +1366,273 @@ const TOOLS = [
       { modIds: "array", diagnosis: "object" },
     ),
   },
+  {
+    name: "preview_bulk_transform",
+    capabilityId: "bulk.transform.preview",
+    capabilityVersion: 1,
+    description: "Build a read-only deterministic bulk XML diff plan across canonical base+DLC corpus files and return matched file counts, sample changes, CAS hashes, and expectedPlanHash without mutating workspace state. Requires an explicit key grant.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        rule: {
+          type: "object",
+          properties: {
+            pathPrefix: { type: "string", maxLength: 512 },
+            selector: { type: "string", maxLength: 512 },
+            operation: { type: "string", enum: ["multiply", "divide", "add", "subtract", "set", "clamp"] },
+            operand: {
+              anyOf: [
+                { type: "number" },
+                { type: "array", items: { type: "number" } },
+              ],
+            },
+            rounding: { type: "string", enum: ["none", "nearest", "floor", "ceil"] },
+            roundingIncrement: { type: "number", minimum: 0.000001 },
+            maxFiles: { type: "integer", minimum: 1, maximum: 5000 },
+            operations: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  id: { type: "string", maxLength: 64 },
+                  selector: { type: "string", maxLength: 512 },
+                  operation: { type: "string", enum: ["multiply", "divide", "add", "subtract", "set", "clamp"] },
+                  operand: {
+                    anyOf: [
+                      { type: "number" },
+                      { type: "array", items: { type: "number" } },
+                    ],
+                  },
+                  rounding: { type: "string", enum: ["none", "nearest", "floor", "ceil"] },
+                  roundingIncrement: { type: "number", minimum: 0.000001 },
+                },
+                required: ["selector", "operation", "operand"],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ["pathPrefix", "maxFiles"],
+          additionalProperties: false,
+        },
+      },
+      required: ["rule"],
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/bulk-transform/preview-plan", { rule: args.rule }),
+      "bulk transform preview",
+      { ok: "boolean", applied: "boolean", planHash: "string", matchedFiles: "number", workspaceId: "string", workspaceHash: "string", snapshotHash: "string" },
+    ),
+  },
+  {
+    name: "apply_bulk_transform",
+    capabilityId: "bulk.transform.apply",
+    capabilityVersion: 1,
+    description: "Commit validated <diff> patches from a previewed deterministic corpus numeric transform into the addressed workspace under expectedPlanHash, expectedHead, and expectedSnapshotHash CAS guards with an action receipt and one-use workspace recovery. Requires an explicit key grant.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        operationId: { type: "string", maxLength: 96 },
+        rule: {
+          type: "object",
+          properties: {
+            pathPrefix: { type: "string", maxLength: 512 },
+            selector: { type: "string", maxLength: 512 },
+            operation: { type: "string", enum: ["multiply", "divide", "add", "subtract", "set", "clamp"] },
+            operand: {
+              anyOf: [
+                { type: "number" },
+                { type: "array", items: { type: "number" } },
+              ],
+            },
+            rounding: { type: "string", enum: ["none", "nearest", "floor", "ceil"] },
+            roundingIncrement: { type: "number", minimum: 0.000001 },
+            maxFiles: { type: "integer", minimum: 1, maximum: 5000 },
+            operations: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  id: { type: "string", maxLength: 64 },
+                  selector: { type: "string", maxLength: 512 },
+                  operation: { type: "string", enum: ["multiply", "divide", "add", "subtract", "set", "clamp"] },
+                  operand: {
+                    anyOf: [
+                      { type: "number" },
+                      { type: "array", items: { type: "number" } },
+                    ],
+                  },
+                  rounding: { type: "string", enum: ["none", "nearest", "floor", "ceil"] },
+                  roundingIncrement: { type: "number", minimum: 0.000001 },
+                },
+                required: ["selector", "operation", "operand"],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ["pathPrefix", "maxFiles"],
+          additionalProperties: false,
+        },
+        expectedPlanHash: { type: "string", maxLength: 128 },
+        expectedHead: { type: "string", maxLength: 64 },
+        expectedSnapshotHash: { type: "string", maxLength: 64 },
+        detail: { type: "string", enum: ["compact", "full"] },
+      },
+      required: ["operationId", "rule", "expectedPlanHash", "expectedHead", "expectedSnapshotHash"],
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/bulk-transform/execute", args),
+      "bulk transform apply",
+      { success: "boolean", applied: "boolean", replayed: "boolean", added: "number", workspaceId: "string", version: "number", workspaceHash: "string", snapshotHash: "string", plan: "object", receipt: "object" },
+    ),
+  },
+  {
+    name: "list_workspace_files",
+    capabilityId: "files.list",
+    capabilityVersion: 1,
+    description: "Inspect one shallow directory (at most 500 visible entries) inside the configured Mod Workspace or deployed Filesystem root without exposing host filesystem paths. Requires an explicit key grant.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        root: { type: "string", enum: ["workspace", "filesystem"] },
+        path: { type: "string", maxLength: 1024 },
+      },
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams();
+      if (args?.root !== undefined) q.set("root", String(args.root));
+      if (args?.path !== undefined) q.set("path", String(args.path));
+      return requireResponse(
+        await forge("GET", `/api/agent/files/list?${q}`),
+        "workspace files list",
+        { ok: "boolean", root: "string", path: "string", totalItems: "number", truncated: "boolean", items: "array" },
+      );
+    },
+  },
+  {
+    name: "read_workspace_file",
+    capabilityId: "files.read",
+    capabilityVersion: 1,
+    description: "Read one bounded regular UTF-8 text file (at most 512 KiB) from the configured Mod Workspace or deployed Filesystem root and return its sha256 digest and optional workspaceRootId without exposing host absolute paths. Requires an explicit key grant.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", maxLength: 1024 },
+        root: { type: "string", enum: ["workspace", "filesystem"] },
+        expectedWorkspaceRootId: { type: "string", maxLength: 64 },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams({ path: String(args?.path || "") });
+      if (args?.root !== undefined) q.set("root", String(args.root));
+      if (args?.expectedWorkspaceRootId !== undefined) q.set("expectedWorkspaceRootId", String(args.expectedWorkspaceRootId));
+      return requireResponse(
+        await forge("GET", `/api/agent/files/read?${q}`),
+        "workspace file read",
+        { ok: "boolean", path: "string", root: "string", bytes: "number", sha256: "string", content: "string" },
+      );
+    },
+  },
+  {
+    name: "write_workspace_file",
+    capabilityId: "files.write",
+    capabilityVersion: 1,
+    description: "Atomically create or update one UTF-8 text file (at most 512 KiB) inside the configured Mod Workspace root using mandatory expectedSha256 CAS (64-hex digest or null for new files), default strict XML/scriptproperty preflight before touching disk, and automatic Action Ledger undo capture. Requires an explicit key grant.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", maxLength: 1024 },
+        content: { type: "string", maxLength: 524288 },
+        expectedSha256: {
+          anyOf: [
+            { type: "string", maxLength: 64 },
+            { type: "null" },
+          ],
+        },
+        expectedWorkspaceRootId: { type: "string", maxLength: 64 },
+        strict: { type: "boolean" },
+      },
+      required: ["path", "content", "expectedSha256"],
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/files/write", args),
+      "workspace file write",
+      { ok: "boolean", success: "boolean", path: "string", written: "object", validation: "object" },
+    ),
+  },
+  {
+    name: "revert_action_history",
+    capabilityId: "history.revert",
+    capabilityVersion: 2,
+    description: "Revert one eligible Action Ledger entry by id in the addressed workspace. Workspace and deploy recovery-receipt rows are one-use and CAS-checked; ordinary before-blob file edit reverts use the guarded Mod Workspace writer. Requires an explicit key grant.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", maxLength: 96 },
+        detail: { type: "string", enum: ["compact", "full"] },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/history/revert", args),
+      "action history revert",
+      { ok: "boolean", revertedTo: "string" },
+    ),
+  },
+  {
+    name: "get_mod_drift",
+    capabilityId: "workspace.mod.drift",
+    capabilityVersion: 1,
+    description: "Compare one mod folder across the configured Mod Workspace and deployed Filesystem roots and return deterministic per-file sync, modified, workspace-only, and deployed-only status. Requires an explicit key grant.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        mod: { type: "string", maxLength: 256 },
+      },
+      required: ["mod"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams({ mod: String(args?.mod || "") });
+      return requireResponse(
+        await forge("GET", `/api/agent/mod-folder/drift?${q}`),
+        "mod folder drift",
+        { ok: "boolean", available: "boolean", mod: "string" },
+      );
+    },
+  },
+  {
+    name: "import_mod_folder",
+    capabilityId: "workspace.mod.import",
+    capabilityVersion: 1,
+    description: "Preview or commit an existing X4 mod folder import from Mod Workspace or deployed Filesystem root into the addressed Studio workspace under CAS guards with an action receipt and one-use workspace recovery. Requires an explicit key grant.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", maxLength: 1024 },
+        root: { type: "string", enum: ["workspace", "filesystem"] },
+        apply: { type: "boolean" },
+        operationId: { type: "string", maxLength: 96 },
+        expectedHead: { type: "string", maxLength: 64 },
+        expectedSnapshotHash: { type: "string", maxLength: 64 },
+        expectedVersion: { type: "integer", minimum: 0 },
+        detail: { type: "string", enum: ["compact", "full"] },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/mod-folder/sync", args),
+      "mod folder import",
+      { ok: "boolean", success: "boolean", applied: "boolean", workspaceId: "string", modId: "string", report: "object" },
+    ),
+  },
 ];
 const STATIC_TOOL_NAMES = new Set(TOOLS.map((tool) => tool.name));
 STATIC_TOOL_NAMES.delete("runtime_debugger");
@@ -1356,6 +1643,7 @@ STATIC_TOOL_NAMES.delete("get_xml_references");
 for (const name of AUTHORED_NAVIGATION_TOOLS) STATIC_TOOL_NAMES.delete(name);
 for (const name of CONFIGURATION_TOOLS) STATIC_TOOL_NAMES.delete(name);
 for (const name of DEPLOY_TOOLS) STATIC_TOOL_NAMES.delete(name);
+for (const name of WORKSPACE_FILES_TOOLS) STATIC_TOOL_NAMES.delete(name);
 for (const name of PERFORMANCE_LIVE_TOOLS) STATIC_TOOL_NAMES.delete(name);
 for (const name of DIAGNOSTIC_READ_LIVE_TOOLS) STATIC_TOOL_NAMES.delete(name);
 for (const name of NATIVE_PERFORMANCE_LIVE_TOOLS) STATIC_TOOL_NAMES.delete(name);
@@ -2480,6 +2768,14 @@ function deployGrantAllowed(capability, authority) {
     && capability.effects.every((effect) => grant.allowedEffects.includes(effect));
 }
 
+function workspaceFilesGrantAllowed(capability, authority) {
+  const grant = authority.constraint;
+  const expectedVersion = capability.id === "history.revert" ? 2 : 1;
+  return capability.version === expectedVersion && isRecord(grant)
+    && grant.capabilityIdentities.includes(`${capability.id}@${expectedVersion}`)
+    && capability.effects.every((effect) => grant.allowedEffects.includes(effect));
+}
+
 function validateEffectiveAuthority(authority, canonicalContract) {
   if (!isRecord(authority) || !hasExactKeys(authority, [
     "actor", "api_version", "authority_hash", "authority_schema_version", "capability_contract",
@@ -2526,6 +2822,7 @@ function validateEffectiveAuthority(authority, canonicalContract) {
     if (AUTHORED_NAVIGATION_CAPABILITIES.has(capability.id)) return authoredNavigationGrantAllowed(capability, authority);
     if (CONFIGURATION_CAPABILITIES.has(capability.id)) return configurationGrantAllowed(capability, authority);
     if (DEPLOY_CAPABILITIES.has(capability.id)) return deployGrantAllowed(capability, authority);
+    if (WORKSPACE_FILES_CAPABILITIES.has(capability.id)) return workspaceFilesGrantAllowed(capability, authority);
     if (capability.access.public || constraint === null) return true;
     const identity = `${capability.id}@${capability.version}`;
     return selectedIdentities.has(identity) && capability.effects.every((effect) => allowedEffects.has(effect));
@@ -2636,6 +2933,7 @@ async function availableTools(nativeRequest) {
       if (AUTHORED_NAVIGATION_TOOLS.has(TOOLS[toolIndex].name) && (!capability || !authoredNavigationGrantAllowed(capability, discovery.authority))) continue;
       if (CONFIGURATION_TOOLS.has(TOOLS[toolIndex].name) && (!capability || !configurationGrantAllowed(capability, discovery.authority))) continue;
       if (DEPLOY_TOOLS.has(TOOLS[toolIndex].name) && (!capability || !deployGrantAllowed(capability, discovery.authority))) continue;
+      if (WORKSPACE_FILES_TOOLS.has(TOOLS[toolIndex].name) && (!capability || !workspaceFilesGrantAllowed(capability, discovery.authority))) continue;
       if (projection && projection.status !== "disconnected") supportedNow.add(TOOLS[toolIndex].name);
     }
     stickyLiveToolNames = stickyLiveToolNames === null
@@ -2655,7 +2953,7 @@ async function availableTools(nativeRequest) {
   if (stickyLiveToolNames !== null) {
     return {
       discovery,
-      toolNames: [...stickyLiveToolNames].filter(name => !["check_expression", "inspect_expression", "get_xml_references", "lookup_text"].includes(name) && !AUTHORED_NAVIGATION_TOOLS.has(name) && !CONFIGURATION_TOOLS.has(name) && !DEPLOY_TOOLS.has(name) && !PERFORMANCE_LIVE_TOOLS.has(name) && !DIAGNOSTIC_READ_LIVE_TOOLS.has(name) && !NATIVE_PERFORMANCE_LIVE_TOOLS.has(name)),
+      toolNames: [...stickyLiveToolNames].filter(name => !["check_expression", "inspect_expression", "get_xml_references", "lookup_text"].includes(name) && !AUTHORED_NAVIGATION_TOOLS.has(name) && !CONFIGURATION_TOOLS.has(name) && !DEPLOY_TOOLS.has(name) && !WORKSPACE_FILES_TOOLS.has(name) && !PERFORMANCE_LIVE_TOOLS.has(name) && !DIAGNOSTIC_READ_LIVE_TOOLS.has(name) && !NATIVE_PERFORMANCE_LIVE_TOOLS.has(name)),
       effectiveContract: lastValidContract,
       effectiveAuthority: lastValidAuthority,
       contractState: `${discovery.state}-sticky-live`,
@@ -2759,13 +3057,17 @@ async function forge(method, apiPath, body, signal, nativeDiscovery = false) {
   const nativeRoute = nativePerformanceRoute(method, apiPath);
   const configurationRoute = apiPath.startsWith("/api/agent/configuration");
   const deployRoute = apiPath.startsWith("/api/agent/deploy-verify/");
+  const workspaceFilesRoute = apiPath.startsWith("/api/agent/files/")
+    || apiPath.startsWith("/api/agent/bulk-transform/")
+    || apiPath === "/api/agent/history/revert"
+    || apiPath.startsWith("/api/agent/mod-folder/");
   const forwardsAuthoredSource = method === "POST" && AUTHORED_NAVIGATION_ROUTES.has(apiPath);
   const res = await fetch(`${BASE}${apiPath}`, {
     method,
     headers,
     ...(signal ? { signal } : {}),
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-    ...(nativeRoute || nativeDiscovery || forwardsAuthoredSource || configurationRoute || deployRoute ? { redirect: "error" } : {}),
+    ...(nativeRoute || nativeDiscovery || forwardsAuthoredSource || configurationRoute || deployRoute || workspaceFilesRoute ? { redirect: "error" } : {}),
   });
   let data = null;
   if (nativeRoute || nativeDiscovery) data = await readNativeJson(res, signal, nativeRoute ? NATIVE_PERFORMANCE_RESPONSE_BYTES : NATIVE_PERFORMANCE_DISCOVERY_BYTES);
@@ -2778,6 +3080,7 @@ async function forge(method, apiPath, body, signal, nativeDiscovery = false) {
     if (["/api/agent/performance/collection", "/api/agent/performance/profile"].includes(apiPath)) error.performanceResponse = data;
     if (configurationRoute && isRecord(data)) error.configurationResponse = data;
     if (deployRoute && isRecord(data)) error.deployResponse = data;
+    if (workspaceFilesRoute && isRecord(data)) error.workspaceFilesResponse = data;
     throw error;
   }
   requireResponse(data, `Forge API ${apiPath}`);
@@ -2853,7 +3156,7 @@ rl.on("line", async (line) => {
         if (nativeRequest && !nativeRequestOwned(nativeRequest)) return;
         return reply(id, {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-          ...(TOOLS[toolIndex].name === "compile_workspace" && result.success === false || CONFIGURATION_TOOLS.has(TOOLS[toolIndex].name) && result.success === false || DEPLOY_TOOLS.has(TOOLS[toolIndex].name) && (result.ok === false || result.success === false || result.status === "FAILED") || PERFORMANCE_LIVE_TOOLS.has(TOOLS[toolIndex].name) && result.ok === false || NATIVE_PERFORMANCE_LIVE_TOOLS.has(TOOLS[toolIndex].name) && result.ok === false ? { isError: true } : {}),
+          ...(TOOLS[toolIndex].name === "compile_workspace" && result.success === false || CONFIGURATION_TOOLS.has(TOOLS[toolIndex].name) && result.success === false || DEPLOY_TOOLS.has(TOOLS[toolIndex].name) && (result.ok === false || result.success === false || result.status === "FAILED") || WORKSPACE_FILES_TOOLS.has(TOOLS[toolIndex].name) && (result.ok === false || result.success === false || result.status === "FAILED") || PERFORMANCE_LIVE_TOOLS.has(TOOLS[toolIndex].name) && result.ok === false || NATIVE_PERFORMANCE_LIVE_TOOLS.has(TOOLS[toolIndex].name) && result.ok === false ? { isError: true } : {}),
         });
       } catch (err) {
         if (nativeRequest) {
@@ -2866,6 +3169,9 @@ rl.on("line", async (line) => {
         }
         if (DEPLOY_TOOLS.has(TOOLS[toolIndex].name) && isRecord(err?.deployResponse)) {
           return reply(id, { content: [{ type: "text", text: JSON.stringify(err.deployResponse, null, 2) }], isError: true });
+        }
+        if (WORKSPACE_FILES_TOOLS.has(TOOLS[toolIndex].name) && isRecord(err?.workspaceFilesResponse)) {
+          return reply(id, { content: [{ type: "text", text: JSON.stringify(err.workspaceFilesResponse, null, 2) }], isError: true });
         }
         return reply(id, { content: [{ type: "text", text: `ERROR: ${err && err.message ? err.message : String(err)}` }], isError: true });
       }

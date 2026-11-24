@@ -87,6 +87,10 @@ const EXPLICIT_ONLY_MCP_CAPABILITIES = new Set<string>([
   'configuration.access.request', 'configuration.access.status',
   'configuration.apply', 'configuration.preview', 'configuration.read', 'configuration.status',
   'deploy.apply', 'deploy.preview', 'deploy.status', 'deploy.undo',
+  'bulk.transform.apply', 'bulk.transform.preview',
+  'files.list', 'files.read', 'files.write',
+  'history.revert',
+  'workspace.mod.drift', 'workspace.mod.import',
 ]);
 const AUTHORED_NAVIGATION_SECRET = 'PRIVATE SOURCE MUST NOT LEAK';
 const AUTHORED_NAVIGATION_REDIRECT_SINK = '/fixture-authored-navigation-redirect';

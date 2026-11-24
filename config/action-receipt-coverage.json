@@ -76,6 +76,29 @@
       ]
     },
     {
+      "routeKey": "POST /api/agent/bulk-transform/execute",
+      "method": "POST",
+      "template": "/api/agent/bulk-transform/execute",
+      "owner": "bulk.transform.apply",
+      "resourceClass": "workspace",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1bulk-transform~1execute",
+      "integrationBatch": "W3B1",
+      "history": "visible",
+      "capability": {
+        "kind": "canonical",
+        "id": "bulk.transform.apply",
+        "version": 1
+      },
+      "semanticClass": "durable-local-mutation",
+      "policy": "receipt-required",
+      "effects": [
+        "workspace-write"
+      ],
+      "authorityScopes": [
+        "workspace"
+      ]
+    },
+    {
       "routeKey": "POST /api/agent/bulk-transform/preview",
       "method": "POST",
       "template": "/api/agent/bulk-transform/preview",
@@ -88,6 +111,30 @@
         "kind": "reviewed-legacy",
         "id": "POST /api/agent/bulk-transform/preview",
         "reviewRef": "docs/plans/2026-08-02-w3b0-action-receipt-coverage.md#review"
+      },
+      "semanticClass": "read-analysis-only",
+      "policy": "receipt-exempt",
+      "effects": [
+        "read",
+        "analyze"
+      ],
+      "authorityScopes": [
+        "workspace"
+      ]
+    },
+    {
+      "routeKey": "POST /api/agent/bulk-transform/preview-plan",
+      "method": "POST",
+      "template": "/api/agent/bulk-transform/preview-plan",
+      "owner": "bulk.transform.preview",
+      "resourceClass": "workspace",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1bulk-transform~1preview-plan",
+      "integrationBatch": "W3B0-internal",
+      "history": "quiet",
+      "capability": {
+        "kind": "canonical",
+        "id": "bulk.transform.preview",
+        "version": 1
       },
       "semanticClass": "read-analysis-only",
       "policy": "receipt-exempt",
@@ -490,6 +537,33 @@
       ]
     },
     {
+      "routeKey": "POST /api/agent/files/write",
+      "method": "POST",
+      "template": "/api/agent/files/write",
+      "owner": "files.write",
+      "resourceClass": "configured-root",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1files~1write",
+      "integrationBatch": "W3B1",
+      "history": "visible",
+      "capability": {
+        "kind": "canonical",
+        "id": "files.write",
+        "version": 1
+      },
+      "semanticClass": "durable-local-mutation",
+      "policy": "receipt-required",
+      "effects": [
+        "filesystem-write",
+        "audit-write",
+        "audit-retention-delete"
+      ],
+      "authorityScopes": [
+        "global",
+        "profile",
+        "workspace"
+      ]
+    },
+    {
       "routeKey": "POST /api/agent/generate",
       "method": "POST",
       "template": "/api/agent/generate",
@@ -550,15 +624,43 @@
       "routeKey": "POST /api/agent/history/:id/revert",
       "method": "POST",
       "template": "/api/agent/history/:id/revert",
-      "owner": "history.revert",
+      "owner": "agent-api",
       "resourceClass": "workspace",
       "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1history~1:id~1revert",
       "integrationBatch": "W3B1",
       "history": "visible",
       "capability": {
+        "kind": "reviewed-legacy",
+        "id": "POST /api/agent/history/:id/revert",
+        "reviewRef": "docs/plans/2026-08-02-w3b0-action-receipt-coverage.md#review"
+      },
+      "semanticClass": "durable-local-mutation",
+      "policy": "receipt-required",
+      "effects": [
+        "workspace-write",
+        "filesystem-write",
+        "deploy",
+        "delete",
+        "audit-write",
+        "audit-retention-delete"
+      ],
+      "authorityScopes": [
+        "workspace"
+      ]
+    },
+    {
+      "routeKey": "POST /api/agent/history/revert",
+      "method": "POST",
+      "template": "/api/agent/history/revert",
+      "owner": "history.revert",
+      "resourceClass": "workspace",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1history~1revert",
+      "integrationBatch": "W3B1",
+      "history": "visible",
+      "capability": {
         "kind": "canonical",
         "id": "history.revert",
-        "version": 1
+        "version": 2
       },
       "semanticClass": "durable-local-mutation",
       "policy": "receipt-required",
@@ -770,6 +872,29 @@
       "authorityScopes": [
         "global",
         "profile",
+        "workspace"
+      ]
+    },
+    {
+      "routeKey": "POST /api/agent/mod-folder/sync",
+      "method": "POST",
+      "template": "/api/agent/mod-folder/sync",
+      "owner": "workspace.mod.import",
+      "resourceClass": "workspace",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1mod-folder~1sync",
+      "integrationBatch": "W3B1",
+      "history": "visible",
+      "capability": {
+        "kind": "canonical",
+        "id": "workspace.mod.import",
+        "version": 1
+      },
+      "semanticClass": "durable-local-mutation",
+      "policy": "receipt-required",
+      "effects": [
+        "workspace-write"
+      ],
+      "authorityScopes": [
         "workspace"
       ]
     },

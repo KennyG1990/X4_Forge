@@ -267,7 +267,10 @@ export function respondAgentReferenceStatus(req: Request, res: Response): Respon
       });
     }
     const corpus = load(req);
-    const manifest = getReferenceManifestStatus(corpus.root);
+    let manifest = req.query.refresh === '1'
+      ? scheduleReferenceManifest(corpus.root, true)
+      : getReferenceManifestStatus(corpus.root);
+    if (manifest.state === 'idle') manifest = scheduleReferenceManifest(corpus.root, false);
     return res.json({
       available: true,
       generatedAt: corpus.generatedAt,
