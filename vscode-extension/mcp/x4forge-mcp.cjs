@@ -95,6 +95,13 @@ const AI_NAVIGATION_EVIDENCE = {
   file: /^aiscripts\/[^/\\:<>"|?*\x00-\x1f\x7f]+\.xml$/i,
 };
 const PERFORMANCE_LIVE_TOOLS = new Set(["get_forge_performance", "start_forge_performance_capture", "profile_forge_backend"]);
+const DIAGNOSTIC_READ_LIVE_TOOLS = new Set([
+  "list_action_history",
+  "get_compile_result",
+  "get_last_validation_verdict",
+  "get_mod_proof",
+  "get_agent_brief",
+]);
 const PERFORMANCE_PROFILE_HTTP_FAILURES = { PROFILE_DISABLED: 503, PROFILE_BUSY: 409, PROFILE_RATE_LIMITED: 429, PROFILE_DISPOSED: 503, PROFILE_INPUT_INVALID: 400, PROFILE_ABORTED: 408, PROFILE_FAILED: 500, PROFILE_CLEANUP_UNCONFIRMED: 409 };
 const PERFORMANCE_COLLECTION_HTTP_FAILURES = { PERFORMANCE_DISPOSED: 503, PERFORMANCE_COLLECTION_BUSY: 409, PERFORMANCE_COLLECTION_REFUSED: 409, PROJECT_INPUT_INVALID: 400, PERFORMANCE_COLLECTION_FAILED: 500 };
 const PERFORMANCE_MAX_OUTPUT_BYTES = 256 * 1024;
@@ -999,6 +1006,126 @@ const TOOLS = [
       { ok: "boolean", recoveryId: "string", recoveryKind: "string", deployedPath: "string", restoredFingerprint: "string", priorExisted: "boolean" },
     ),
   },
+  {
+    name: "list_action_history",
+    capabilityId: "history.list",
+    capabilityVersion: 2,
+    description: "Read the addressed workspace's Agent Action Ledger rows, counts, recovery metadata, and honest ledger-failure counter without mutating state.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        kind: { type: "string", maxLength: 64 },
+        outcome: { type: "string", maxLength: 64 },
+        file: { type: "string", maxLength: 1024 },
+        limit: { type: "integer", minimum: 1, maximum: 1000 },
+      },
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams();
+      if (args?.kind !== undefined) q.set("kind", String(args.kind));
+      if (args?.outcome !== undefined) q.set("outcome", String(args.outcome));
+      if (args?.file !== undefined) q.set("file", String(args.file));
+      if (args?.limit !== undefined) q.set("limit", String(args.limit));
+      return requireResponse(
+        await forge("GET", `/api/agent/history?${q}`),
+        "action history",
+        { ok: "boolean", workspaceId: "string", rows: "array", total: "number", ledgerFailures: "number" },
+      );
+    },
+  },
+  {
+    name: "get_compile_result",
+    capabilityId: "workspace.compile.result",
+    capabilityVersion: 2,
+    description: "Reopen an exact retained validation report from the addressed workspace by ID without recompiling.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", maxLength: 128 },
+      },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams({ id: String(args?.id || "") });
+      return requireResponse(
+        await forge("GET", `/api/agent/compile/result?${q}`),
+        "compile validation report",
+        { modId: "string", success: "boolean", diagnostics: "array", validation: "object" },
+      );
+    },
+  },
+  {
+    name: "get_last_validation_verdict",
+    capabilityId: "validation.last.read",
+    capabilityVersion: 1,
+    description: "Read the durable hash-bound deploy-verify validation receipt for the addressed workspace mod or an explicit modId, including exact source-hash freshness (current vs superseded).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        modId: { type: "string", maxLength: 256 },
+        sourceHash: { type: "string", maxLength: 64 },
+        checkSource: { type: "string", enum: ["0", "1"] },
+      },
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams();
+      if (args?.modId !== undefined) q.set("modId", String(args.modId));
+      if (args?.sourceHash !== undefined) q.set("sourceHash", String(args.sourceHash));
+      if (args?.checkSource !== undefined) q.set("checkSource", String(args.checkSource));
+      return requireResponse(
+        await forge("GET", `/api/agent/validation/last?${q}`),
+        "last validation verdict",
+        { ok: "boolean", modId: "string", canonicalSurface: "string", status: "string", freshness: "object" },
+      );
+    },
+  },
+  {
+    name: "get_mod_proof",
+    capabilityId: "project.proof.read",
+    capabilityVersion: 1,
+    description: "Render the deterministic PROOF.md machine-evidence report for the addressed workspace and an optional guarded mod folder without writing disk.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fromPath: { type: "string", maxLength: 512 },
+      },
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams();
+      if (args?.fromPath !== undefined) q.set("fromPath", String(args.fromPath));
+      return requireResponse(
+        await forge("GET", `/api/agent/proof?${q}`),
+        "mod proof",
+        { ok: "boolean", workspaceId: "string", workspace: "string", markdown: "string" },
+      );
+    },
+  },
+  {
+    name: "get_agent_brief",
+    capabilityId: "project.brief.read",
+    capabilityVersion: 1,
+    description: "Read deterministic AGENTS.md and X4_NOTES.md source text plus mod domain, file-ownership, cue-index, and default MCP tool inventory for a guarded mod folder.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fromPath: { type: "string", maxLength: 512 },
+      },
+      required: ["fromPath"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams({ fromPath: String(args?.fromPath || "") });
+      return requireResponse(
+        await forge("GET", `/api/agent/project/brief?${q}`),
+        "agent brief",
+        { input: "object", agentsMd: "string", notesMd: "string" },
+      );
+    },
+  },
 ];
 const STATIC_TOOL_NAMES = new Set(TOOLS.map((tool) => tool.name));
 STATIC_TOOL_NAMES.delete("runtime_debugger");
@@ -1010,6 +1137,7 @@ for (const name of AUTHORED_NAVIGATION_TOOLS) STATIC_TOOL_NAMES.delete(name);
 for (const name of CONFIGURATION_TOOLS) STATIC_TOOL_NAMES.delete(name);
 for (const name of DEPLOY_TOOLS) STATIC_TOOL_NAMES.delete(name);
 for (const name of PERFORMANCE_LIVE_TOOLS) STATIC_TOOL_NAMES.delete(name);
+for (const name of DIAGNOSTIC_READ_LIVE_TOOLS) STATIC_TOOL_NAMES.delete(name);
 for (const name of NATIVE_PERFORMANCE_LIVE_TOOLS) STATIC_TOOL_NAMES.delete(name);
 
 function stableStringify(value) {
@@ -2307,7 +2435,7 @@ async function availableTools(nativeRequest) {
   if (stickyLiveToolNames !== null) {
     return {
       discovery,
-      toolNames: [...stickyLiveToolNames].filter(name => !["check_expression", "inspect_expression", "get_xml_references", "lookup_text"].includes(name) && !AUTHORED_NAVIGATION_TOOLS.has(name) && !CONFIGURATION_TOOLS.has(name) && !DEPLOY_TOOLS.has(name) && !PERFORMANCE_LIVE_TOOLS.has(name) && !NATIVE_PERFORMANCE_LIVE_TOOLS.has(name)),
+      toolNames: [...stickyLiveToolNames].filter(name => !["check_expression", "inspect_expression", "get_xml_references", "lookup_text"].includes(name) && !AUTHORED_NAVIGATION_TOOLS.has(name) && !CONFIGURATION_TOOLS.has(name) && !DEPLOY_TOOLS.has(name) && !PERFORMANCE_LIVE_TOOLS.has(name) && !DIAGNOSTIC_READ_LIVE_TOOLS.has(name) && !NATIVE_PERFORMANCE_LIVE_TOOLS.has(name)),
       effectiveContract: lastValidContract,
       effectiveAuthority: lastValidAuthority,
       contractState: `${discovery.state}-sticky-live`,

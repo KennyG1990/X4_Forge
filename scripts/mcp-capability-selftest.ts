@@ -21,6 +21,13 @@ import { FORGE_PERFORMANCE_HISTOGRAM_MS } from '../src/lib/forgePerformance';
 import type { NativeBrokerView } from '../src/server/nativePerformanceBroker';
 
 const PERFORMANCE_TOOLS = ['get_forge_performance', 'start_forge_performance_capture', 'profile_forge_backend'];
+const DIAGNOSTIC_READ_TOOLS = [
+  'list_action_history',
+  'get_compile_result',
+  'get_last_validation_verdict',
+  'get_mod_proof',
+  'get_agent_brief',
+];
 
 const MD_NAVIGATION_TOOL = 'navigate_md_script';
 const MD_NAVIGATION_ID = 'project.md.navigation';
@@ -96,12 +103,19 @@ const EXPECTED_TOOLS = [
   'check_conflicts',
   'check_patch_readiness',
   'explain_element',
+  ...DIAGNOSTIC_READ_TOOLS,
 ];
-const LEGACY_TOOLS = EXPECTED_TOOLS.filter(tool => !['runtime_debugger', 'lookup_text', 'check_expression', 'inspect_expression', 'get_xml_references', ...PERFORMANCE_TOOLS].includes(tool));
-const READ_TOOLS = ['list_schema_domains', 'get_workspace', 'readiness', 'runtime_debugger', 'lookup_text', 'check_expression', 'inspect_expression', 'get_xml_references', ...PERFORMANCE_TOOLS, 'check_conflicts', 'explain_element'];
+const LEGACY_TOOLS = EXPECTED_TOOLS.filter(tool => !['runtime_debugger', 'lookup_text', 'check_expression', 'inspect_expression', 'get_xml_references', ...PERFORMANCE_TOOLS, ...DIAGNOSTIC_READ_TOOLS].includes(tool));
+const READ_TOOLS = [
+  'list_schema_domains', 'get_workspace', 'readiness', 'runtime_debugger', 'lookup_text',
+  'check_expression', 'inspect_expression', 'get_xml_references', ...PERFORMANCE_TOOLS,
+  'check_conflicts', 'explain_element',
+  'list_action_history', 'get_last_validation_verdict', 'get_mod_proof', 'get_agent_brief',
+];
 const WRITE_TOOLS = [
   'validate_mod', 'list_schema_domains', 'get_workspace', 'compile_workspace', 'author_check',
   'stage_and_validate', 'readiness', 'runtime_debugger', 'lookup_text', 'check_expression', 'inspect_expression', 'get_xml_references', ...PERFORMANCE_TOOLS, 'check_conflicts', 'explain_element',
+  ...DIAGNOSTIC_READ_TOOLS,
 ];
 const CUSTOM_TOOLS = ['validate_mod', 'list_schema_domains', 'author_check', 'stage_and_validate', 'explain_element'];
 const MCP_KEY = `x4fk_${'a'.repeat(64)}`;
@@ -1134,6 +1148,49 @@ const server = http.createServer(function serveMcpFixture(request, response): vo
     }));
     return;
   }
+  if (request.method === 'GET' && request.url?.startsWith('/api/agent/history?')) {
+    routeCalls.push({ method: request.method, path: request.url, body: null });
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({
+      ok: true, workspaceId: MCP_WORKSPACE_ID, rows: [{ id: 'row_1', kind: 'deploy', title: 'Deployed fixture' }], total: 1, ledgerFailures: 0,
+    }));
+    return;
+  }
+  if (request.method === 'GET' && request.url?.startsWith('/api/agent/compile/result?')) {
+    routeCalls.push({ method: request.method, path: request.url, body: null });
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({
+      modId: 'compile_fixture', success: true, diagnostics: [], validation: { ok: true, summary: {} },
+    }));
+    return;
+  }
+  if (request.method === 'GET' && request.url?.startsWith('/api/agent/validation/last?')) {
+    routeCalls.push({ method: request.method, path: request.url, body: null });
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({
+      ok: true, modId: 'compile_fixture', canonicalSurface: 'POST /api/agent/deploy-verify',
+      status: 'available', receipt: { verdict: 'pass', deployAllowed: true }, freshness: { status: 'current', current: true },
+      banner: 'PASS for source', sourceValidation: null,
+    }));
+    return;
+  }
+  if (request.method === 'GET' && request.url?.startsWith('/api/agent/proof?')) {
+    routeCalls.push({ method: request.method, path: request.url, body: null });
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({
+      ok: true, workspaceId: MCP_WORKSPACE_ID, workspace: 'Fixture workspace', markdown: '# Proof of state — Fixture workspace',
+    }));
+    return;
+  }
+  if (request.method === 'GET' && request.url?.startsWith('/api/agent/project/brief?')) {
+    routeCalls.push({ method: request.method, path: request.url, body: null });
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({
+      input: { modId: 'compile_fixture', files: ['content.xml'], generatedFiles: [], domainsPresent: [], cueNames: [], mcpTools: EXPECTED_TOOLS },
+      agentsMd: '# Agent instructions', notesMd: '# X4 modding grounding notes',
+    }));
+    return;
+  }
   response.writeHead(404, { 'Content-Type': 'application/json' });
   response.end(JSON.stringify({ error: 'not found' }));
 });
@@ -1414,6 +1471,21 @@ try {
     assert.equal(expressionResult.problemCount, 51);
     assert.equal(expressionResult.problems.length, 50);
     assert.deepEqual(routeCalls.at(-1)?.body, expressionArguments);
+    const historyReply = await client.request('tools/call', { name: 'list_action_history', arguments: { kind: 'deploy', limit: 10 } });
+    assert.equal(historyReply.error, undefined);
+    assert.equal(JSON.parse(String(historyReply.result?.content?.[0]?.text || '{}')).total, 1);
+    const compileResultReply = await client.request('tools/call', { name: 'get_compile_result', arguments: { id: 'cvr_fixture_1' } });
+    assert.equal(compileResultReply.error, undefined);
+    assert.equal(JSON.parse(String(compileResultReply.result?.content?.[0]?.text || '{}')).modId, 'compile_fixture');
+    const verdictReply = await client.request('tools/call', { name: 'get_last_validation_verdict', arguments: { modId: 'compile_fixture', checkSource: '1' } });
+    assert.equal(verdictReply.error, undefined);
+    assert.equal(JSON.parse(String(verdictReply.result?.content?.[0]?.text || '{}')).freshness?.status, 'current');
+    const proofReply = await client.request('tools/call', { name: 'get_mod_proof', arguments: { fromPath: 'compile_fixture' } });
+    assert.equal(proofReply.error, undefined);
+    assert.match(String(JSON.parse(String(proofReply.result?.content?.[0]?.text || '{}')).markdown || ''), /^# Proof of state/);
+    const briefReply = await client.request('tools/call', { name: 'get_agent_brief', arguments: { fromPath: 'compile_fixture' } });
+    assert.equal(briefReply.error, undefined);
+    assert.match(String(JSON.parse(String(briefReply.result?.content?.[0]?.text || '{}')).agentsMd || ''), /^# Agent instructions/);
     assert.deepEqual(routeCalls.map(call => `${call.method} ${call.path}`), [
       'POST /api/agent/project/validate/check',
       'GET /api/agent/workspace',
@@ -1421,6 +1493,11 @@ try {
       'GET /api/agent/readiness',
       'GET /api/agent/runtime-debugger?expect=cue_fixture%2Cmarker_fixture',
       'POST /api/agent/expressions/check',
+      'GET /api/agent/history?kind=deploy&limit=10',
+      'GET /api/agent/compile/result?id=cvr_fixture_1',
+      'GET /api/agent/validation/last?modId=compile_fixture&checkSource=1',
+      'GET /api/agent/proof?fromPath=compile_fixture',
+      'GET /api/agent/project/brief?fromPath=compile_fixture',
     ], 'current-contract execution must use current capability routes');
 
     routeCalls.length = 0;
@@ -1457,6 +1534,14 @@ try {
       { name: 'lookup_text', arguments: { ...TEXT_LOOKUP, id: '7' } },
       { name: 'lookup_text', arguments: { ...TEXT_LOOKUP, page: Number.MAX_SAFE_INTEGER + 1 } },
       { name: 'lookup_text', arguments: { ...TEXT_LOOKUP, path: 't/0001-L049.xml' } },
+      { name: 'list_action_history', arguments: { limit: 0 } },
+      { name: 'list_action_history', arguments: { limit: 1001 } },
+      { name: 'list_action_history', arguments: { unknown: true } },
+      { name: 'get_compile_result', arguments: {} },
+      { name: 'get_compile_result', arguments: { id: 42 } },
+      { name: 'get_last_validation_verdict', arguments: { checkSource: '2' } },
+      { name: 'get_mod_proof', arguments: { write: true } },
+      { name: 'get_agent_brief', arguments: {} },
     ]) {
       const denied = await client.request('tools/call', invalid);
       assert.equal(denied.error?.code, -32602, `${invalid.name} malformed input must fail before HTTP`);
@@ -1910,8 +1995,8 @@ try {
   await withMcp(baseUrl, async client => {
     assert.deepEqual((await toolsFor(client)).map(tool => tool.name), EXPECTED_TOOLS);
     mode = 'outage';
-    assert.deepEqual((await toolsFor(client)).map(tool => tool.name), EXPECTED_TOOLS.filter(name => !['lookup_text', 'check_expression', 'inspect_expression', 'get_xml_references', ...PERFORMANCE_TOOLS].includes(name)),
-      'literal text, expression, XML reference and performance tools require current discovery even when other tools retain prior authority');
+    assert.deepEqual((await toolsFor(client)).map(tool => tool.name), EXPECTED_TOOLS.filter(name => !['lookup_text', 'check_expression', 'inspect_expression', 'get_xml_references', ...PERFORMANCE_TOOLS, ...DIAGNOSTIC_READ_TOOLS].includes(name)),
+      'literal text, expression, XML reference, performance and diagnostic read tools require current discovery even when other tools retain prior authority');
     routeCalls.length = 0;
     const staleLookup = await client.request('tools/call', { name: 'lookup_text', arguments: TEXT_LOOKUP });
     assert.equal(staleLookup.error?.code, -32602, 'stale discovery cannot authorize a direct literal text lookup');
@@ -1929,7 +2014,17 @@ try {
       assert.equal((await client.request('tools/call', { name, arguments: {} })).error?.code, -32602,
         `${name} must not acquire authority from stale discovery`);
     }
-    assert.deepEqual(routeCalls, [], 'stale performance tools reached HTTP');
+    for (const [name, args] of [
+      ['list_action_history', {}],
+      ['get_compile_result', { id: 'cvr_fixture_1' }],
+      ['get_last_validation_verdict', {}],
+      ['get_mod_proof', {}],
+      ['get_agent_brief', { fromPath: 'compile_fixture' }],
+    ] as const) {
+      assert.equal((await client.request('tools/call', { name, arguments: args })).error?.code, -32602,
+        `${name} must not acquire authority from stale discovery`);
+    }
+    assert.deepEqual(routeCalls, [], 'stale performance or diagnostic read tools reached HTTP');
     mode = 'live';
     assert.deepEqual((await toolsFor(client)).map(tool => tool.name), EXPECTED_TOOLS,
       'a successful discovery restores the expression tool');

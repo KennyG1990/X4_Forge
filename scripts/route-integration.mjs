@@ -727,8 +727,15 @@ async function main() {
   const firstCompile = await req('POST', '/api/agent/compile', SESSION_TOKEN, {}, {
     headers: { 'x-forge-retain-validation': '1' },
   });
-  const firstCompileResult = await req('GET',
-    '/api/agent/compile/result/' + encodeURIComponent(firstCompile.json?.validationResult?.id || 'missing'), SESSION_TOKEN);
+  const firstCompileResultId = encodeURIComponent(firstCompile.json?.validationResult?.id || 'missing');
+  const firstCompileResult = await req('GET', `/api/agent/compile/result?id=${firstCompileResultId}`, SESSION_TOKEN);
+  const firstCompileLegacyResult = await req('GET', `/api/agent/compile/result/${firstCompileResultId}`, SESSION_TOKEN);
+  const invalidCompileResultQuery = await req('GET', `/api/agent/compile/result?id=${firstCompileResultId}&unexpected=1`, SESSION_TOKEN);
+  ok('compile_result_query_and_legacy_path_agree_and_reject_unknown_query',
+    firstCompileResult.status === 200 && firstCompileLegacyResult.status === 200
+    && firstCompileResult.raw === firstCompileLegacyResult.raw
+    && invalidCompileResultQuery.status === 400 && invalidCompileResultQuery.json?.code === 'CAPABILITY_INPUT_INVALID',
+    `query=${firstCompileResult.status} legacy=${firstCompileLegacyResult.status} bad=${invalidCompileResultQuery.status}`);
   const secondCompile = await req('POST', '/api/agent/compile', SESSION_TOKEN, {}, { workspaceId: SECOND_WORKSPACE_ID, clientId: SECOND_CLIENT_ID });
   ok('workspace_compile_echoes_independent_authority', firstCompile.json?.workspaceId === WORKSPACE_ID && secondCompile.json?.workspaceId === SECOND_WORKSPACE_ID);
   ok('stateful_route_missing_identity_fails_named', (await req('GET', '/api/agent/workspace', SESSION_TOKEN, undefined, { workspaceId: '' })).json?.code === 'WORKSPACE_ID_REQUIRED');
@@ -754,7 +761,7 @@ async function main() {
     && /^[a-f0-9]{64}$/.test(String(parityCensus?.censusHash || ''))
     && Array.isArray(parityCensus?.actions) && parityCensus.actions.length >= 30
     && parityCensus?.summary?.totalActions === parityCensus.actions.length
-    && parityCensus?.summary?.available >= 9
+    && parityCensus?.summary?.available >= 12
     && parityCensus?.summary?.approvalRequired >= 2);
   for (const deployPath of ['/api/agent/deploy', '/api/agent/deploy-verify']) {
     const descriptor = agentSchema.json?.endpoints?.find(endpoint => endpoint.path === deployPath && endpoint.method === 'POST');
@@ -799,11 +806,11 @@ async function main() {
     'deploy.apply', 'deploy.preview', 'deploy.status', 'deploy.undo',
     'expression.check', 'expression.inspect', 'extensions.conflicts.analyze', 'history.list', 'history.revert',
     'patch.readiness.analyze', 'performance.collect', 'performance.native.collect', 'performance.native.read', 'performance.native.stop',
-    'performance.profile', 'performance.read', 'project.ai.navigation', 'project.md.navigation', 'project.validate', 'project.xml.references', 'readiness.read',
-    'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'workspace.compile', 'workspace.compile.result', 'workspace.generate.preview', 'workspace.read'];
+    'performance.profile', 'performance.read', 'project.ai.navigation', 'project.brief.read', 'project.md.navigation', 'project.proof.read', 'project.validate', 'project.xml.references', 'readiness.read',
+    'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.generate.preview', 'workspace.read'];
   const sameCapabilityIds = (actual, expected) => Array.isArray(actual)
     && JSON.stringify([...actual].sort()) === JSON.stringify([...expected].sort());
-  const expectedCapabilityIdentity = id => `${id}@${['patch.readiness.analyze', 'workspace.compile', 'workspace.read'].includes(id) ? 2 : 1}`;
+  const expectedCapabilityIdentity = id => `${id}@${['history.list', 'patch.readiness.analyze', 'workspace.compile', 'workspace.compile.result', 'workspace.read'].includes(id) ? 2 : 1}`;
   ok('capability_contract_is_versioned_and_hashed',
     capabilityContract?.schemaVersion === 'forge.capability.v1' &&
     /^[a-f0-9]{64}$/.test(String(capabilityContract?.contractHash || '')) &&
@@ -1436,11 +1443,11 @@ async function main() {
   JSON.stringify({ public: publicEffective.json, bogus: bogusEffective.json, studio: { actor: studioEffective.json?.actor, ids: effectiveIds(studioEffective) } }));
   for (const [name, response, scope, expectedIds] of [
     ['read', readEffective, 'read', ['expression.check', 'expression.inspect', 'extensions.conflicts.analyze', 'history.list',
-      'performance.collect', 'performance.profile', 'performance.read', 'project.xml.references', 'readiness.read',
-      'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'workspace.read']],
+      'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.xml.references', 'readiness.read',
+      'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read', 'workspace.read']],
     ['write', writeEffective, 'write', ['expression.check', 'expression.inspect', 'extensions.conflicts.analyze', 'history.list', 'project.validate',
-      'performance.collect', 'performance.profile', 'performance.read', 'project.xml.references',
-      'readiness.read', 'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'workspace.compile', 'workspace.compile.result', 'workspace.read']],
+      'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.xml.references',
+      'readiness.read', 'runtime.debug.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.read']],
     ['deploy', deployEffective, 'deploy', expectedCapabilityIds.filter(id => !id.startsWith('configuration.') && !id.startsWith('deploy.') && ![
       'performance.native.collect', 'performance.native.read', 'performance.native.stop', 'project.ai.navigation', 'project.md.navigation',
     ].includes(id))],
@@ -5747,6 +5754,26 @@ async function main() {
       // Re-run deploy-verify dryRun on fixed candidate -> records canonical PASS receipt, current, and surfaces on /api/agent/status.
       const dryPass = await req('POST', '/api/agent/deploy-verify', SESSION_TOKEN, { path: valFixId, autoReimport: true, dryRun: true });
       const lastPass = await req('GET', `/api/agent/validation/last?modId=${valFixId}`, readKey);
+      capabilityResponses.set('validation.last.read', lastPass);
+      const briefRes = await req('GET', `/api/agent/project/brief?fromPath=${valFixId}`, readKey);
+      capabilityResponses.set('project.brief.read', briefRes);
+      const proofRes = await req('GET', `/api/agent/proof?fromPath=${valFixId}`, readKey);
+      capabilityResponses.set('project.proof.read', proofRes);
+      const badBriefQuery = await req('GET', `/api/agent/project/brief?fromPath=${valFixId}&extra=1`, readKey);
+      const badProofQuery = await req('GET', `/api/agent/proof?fromPath=${valFixId}&extra=1`, readKey);
+      const badHistoryQuery = await req('GET', '/api/agent/history?limit=0', readKey);
+      ok('project_brief_and_proof_capabilities_expose_live_mcp_inventory_and_reject_unknown_query',
+        briefRes.status === 200
+        && Array.isArray(briefRes.json?.input?.mcpTools)
+        && ['list_action_history', 'get_compile_result', 'get_last_validation_verdict', 'get_mod_proof', 'get_agent_brief']
+          .every(tool => briefRes.json.input.mcpTools.includes(tool))
+        && typeof briefRes.json?.agentsMd === 'string' && briefRes.json.agentsMd.includes('`get_last_validation_verdict`')
+        && proofRes.status === 200 && proofRes.json?.ok === true && proofRes.json?.workspaceId === WORKSPACE_ID
+        && typeof proofRes.json?.markdown === 'string' && proofRes.json.markdown.includes('# Proof of state')
+        && badBriefQuery.status === 400 && badBriefQuery.json?.code === 'CAPABILITY_INPUT_INVALID'
+        && badProofQuery.status === 400 && badProofQuery.json?.code === 'CAPABILITY_INPUT_INVALID'
+        && badHistoryQuery.status === 400 && badHistoryQuery.json?.code === 'CAPABILITY_INPUT_INVALID',
+        JSON.stringify({ brief: briefRes.status, proof: proofRes.status, mcpCount: briefRes.json?.input?.mcpTools?.length }));
       const statusWithVal = await req('GET', '/api/agent/status', readKey);
       ok('deploy_verify_dry_run_pass_records_current_pass_receipt_and_status_projection',
         dryPass.status === 200

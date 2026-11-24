@@ -51,14 +51,17 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
 
   const validationErrors = validateForgeCapabilityRegistry();
   check('registry invariants', validationErrors.length === 0, validationErrors.join(' | ') || undefined);
-  check('bounded non-native registry', FORGE_CAPABILITIES.filter(capability => !capability.id.startsWith('performance.native.')).length === 32, `count=${FORGE_CAPABILITIES.length}`);
-  const compileResult = findForgeCapability('workspace.compile.result');
+  check('bounded non-native registry', FORGE_CAPABILITIES.filter(capability => !capability.id.startsWith('performance.native.')).length === 35, `count=${FORGE_CAPABILITIES.length}`);
+  const compileResult = findForgeCapability('workspace.compile.result', 2);
   check('retained compile report access is workspace-scoped and read-only',
     compileResult?.context.workspace === 'required'
       && compileResult.effects.length === 1 && compileResult.effects[0] === 'read'
-      && compileResult.access.public === false && compileResult.surfaces.mcp.length === 0
+      && compileResult.access.public === false
+      && compileResult.surfaces.mcp.length === 1 && compileResult.surfaces.mcp[0].id === 'get_compile_result'
+      && compileResult.surfaces.mcp[0].status === 'connected'
       && compileResult.apiBindings.length === 1 && compileResult.apiBindings[0].method === 'GET'
-      && compileResult.apiBindings[0].path === '/api/agent/compile/result/:id');
+      && compileResult.apiBindings[0].path === '/api/agent/compile/result'
+      && compileResult.apiBindings[0].inputLocation === 'query');
 
   const canonical = canonicalCapabilityContractPayload();
   const contract = buildForgeCapabilityContract(sha256);
@@ -531,12 +534,14 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
   const builtCensus = buildForgeUiActionParityCensus(sha256);
   const builtCensusSecond = buildForgeUiActionParityCensus(sha256);
   const coveredDomains = new Set(FORGE_UI_ACTION_PARITY_CENSUS.map(row => row.domain));
-  check('UI-action parity census covers all 15 domains and all 35 capabilities with deterministic hash',
+  check('UI-action parity census covers all 15 domains and all 38 capabilities with deterministic hash',
     censusErrors.length === 0 &&
       builtCensus.schemaVersion === 'forge.ui-action-parity.v1' &&
       builtCensus.censusHash === builtCensusSecond.censusHash &&
       FORGE_UI_ACTION_PARITY_DOMAINS.every(domain => coveredDomains.has(domain)) &&
       builtCensus.summary.totalActions === FORGE_UI_ACTION_PARITY_CENSUS.length &&
+      builtCensus.summary.available === 12 &&
+      builtCensus.summary.approvalRequired === 2 &&
       builtCensus.summary.available + builtCensus.summary.approvalRequired + builtCensus.summary.partial + builtCensus.summary.missing === builtCensus.summary.totalActions &&
       builtCensus.summary.openGaps === builtCensus.summary.partial + builtCensus.summary.missing,
     censusErrors.join(' | ') || undefined);
@@ -586,7 +591,7 @@ export function runNativeForgeCapabilitiesSelftest() {
   const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   const keys = (value: object | undefined) => Object.keys(value || {}).sort();
   check('native registry has exactly the three reviewed process telemetry identities',
-    FORGE_CAPABILITIES.length === 35 &&
+    FORGE_CAPABILITIES.length === 38 &&
       equal(FORGE_CAPABILITIES.filter(capability => capability.id.startsWith('performance.native.')).map(capability => capability.id).sort(),
         expected.map(row => row.id).sort()));
   for (const row of expected) {

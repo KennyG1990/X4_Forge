@@ -608,9 +608,20 @@
       "resourceClass": "public",
       "workspaceMode": "optional"
     },
-    "GET /api/agent/compile/result/:id": {
+    "GET /api/agent/compile/result": {
       "disposition": "canonical-capability",
       "owner": "workspace.compile.result",
+      "registrations": 1,
+      "agentScopes": [
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "workspace",
+      "workspaceMode": "required"
+    },
+    "GET /api/agent/compile/result/:id": {
+      "disposition": "legacy-agent-api",
+      "owner": "agent-api",
       "registrations": 1,
       "agentScopes": [
         "write",
@@ -1938,8 +1949,8 @@
       "workspaceMode": "optional"
     },
     "GET /api/agent/project/brief": {
-      "disposition": "legacy-agent-api",
-      "owner": "agent-api",
+      "disposition": "canonical-capability",
+      "owner": "project.brief.read",
       "registrations": 1,
       "agentScopes": [
         "read",
@@ -1950,8 +1961,8 @@
       "workspaceMode": "optional"
     },
     "GET /api/agent/proof": {
-      "disposition": "legacy-agent-api",
-      "owner": "agent-api",
+      "disposition": "canonical-capability",
+      "owner": "project.proof.read",
       "registrations": 1,
       "agentScopes": [
         "read",
@@ -2370,8 +2381,8 @@
       "workspaceMode": "optional"
     },
     "GET /api/agent/validation/last": {
-      "disposition": "legacy-agent-api",
-      "owner": "agent-api",
+      "disposition": "canonical-capability",
+      "owner": "validation.last.read",
       "registrations": 1,
       "agentScopes": [
         "read",
@@ -4036,7 +4047,7 @@
     "expression.check@1": "5bedec028862120254402ce60402204db079705db1d6ce27f16834ae77ddea8d",
     "expression.inspect@1": "d9422df0de7b99ace351d90aad971baea0fe35d8fc6798c15a1a304dbd275f29",
     "extensions.conflicts.analyze@1": "5e8005a8422ebbe1039a848332caf8f40076ea7cce693b21df8039aec856697e",
-    "history.list@1": "f55787b4089116ac1d375e1da9677fc978b0715aa6f841a70bfcd13870ee962e",
+    "history.list@2": "9fc3203d66edd8c3136bd374bfef4394783e1bd8ef8a44834ff7360a93d1fb33",
     "history.revert@1": "2399e2dd2ec3263e0f6f5364ab3be8edf1fe8d065cea40bc736d72ee8c4bcd98",
     "patch.readiness.analyze@2": "7baa90f99f4f1a7cc4382caaf009c107388e9de6124d0d2b5bf155769ab91812",
     "performance.collect@1": "3388a193408ec6e83ad3228705b7b9acaeb488580995c4359a844047871bd9ff",
@@ -4046,7 +4057,9 @@
     "performance.profile@1": "51831b0f7c83b8180091640aadd4b763740fcd26dd65d8b13961adf624b7510d",
     "performance.read@1": "b8c57d8f5873923817068bb5334e3430c5fee76b8633e0709a79352c386e1bfe",
     "project.ai.navigation@1": "631c233f71218443b677df4e1cb312ae954cff77f61907e0022b76049abdbcf9",
+    "project.brief.read@1": "78d1de2b63bfab9593e38af849104e4f05f52d81064de281360a165db6a256b7",
     "project.md.navigation@1": "75aa7185b135930031c9c8d20b57fb603a2303fed8ee3b785b283eeabb08f927",
+    "project.proof.read@1": "12c552b4f5dff37e75424e900923a654063f7fa115226971224f313e58a41cd3",
     "project.validate@1": "34e6c5a213b07038e58d70dca27db474370300e38599f6299b5664a974dedf06",
     "project.xml.references@1": "3ee7a1ad13af453017d9136e0a23218912dc866e6fe4b4b066f8313fd740affe",
     "readiness.read@1": "8a1e349ea4a481e12be506a20cc246957898faed7a9548a523d5a0359195add0",
@@ -4054,14 +4067,15 @@
     "schema.domains.list@1": "c2ecae2906cf231eb4384a63ea601c7449f4fc691b629b97bff9fa81e32f21b5",
     "schema.element.explain@1": "066fc8d2153c753a7f498044a0fb2e4a6921f81a2fe1deb6445a02894194286d",
     "text.lookup@1": "45ecbc5abb71fb1e168c8b172399742251ca28c8b13fa96afb1352e11a8666a6",
+    "validation.last.read@1": "3aa1dfb1609fef0b75557ab12936f47bb22ecc23808168feda91070d23ea135f",
     "workspace.compile@2": "aaa528d9b0b381b7af954ec78d2ba15212e9e0cc020d4af54eb5223caba9e185",
-    "workspace.compile.result@1": "a69f57c521c7d84b399d8cba1ce035ea974446478402b42d9301da3eca6c0c39",
+    "workspace.compile.result@2": "085e4f90f5fd5c0fd9a9decd3b1737f83b1663e63cae354ee443971de183bda0",
     "workspace.generate.preview@1": "76630ed9e34f95a4cc895088e0d3def92d5f3b2bb223d071e1e5a4fc1b4f6add",
     "workspace.read@2": "962774de4a25e8725a0d90d4982298cc72f100312075b1f6f4ff9de1482752d7"
   },
   "mcpModuleSignature": {
-    "version": 25,
-    "hash": "8faa9a0e3f7fedcb835ac9029084cb832e75646379ea3234fb5bddd47e396a3e"
+    "version": 26,
+    "hash": "675bc64d3b15bfc7596ba6e4a19a23cddc0d76228b4c3e41219318db5e8f798f"
   },
   "mcpSignatures": {
     "validate_mod": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",
@@ -4096,7 +4110,12 @@
     "preview_native_deploy": "7e17385a67cd333761c10a08945de1c79c482413e1bfc34b7316df964ee873e8",
     "apply_native_deploy": "42310d1becb4e6d5d11dff493492dbe753cc99780d62350cd3336ed7de293d8c",
     "get_deploy_operation_status": "94b7dea2e3f6d3c9525a30a02eb4453dc5ae1d6ab333b0b1ba7f032a49fbd18d",
-    "undo_native_deploy": "ecaf4666abb7c28c965e0d68a839d338032acae44c529424e16fd53f69da9de0"
+    "undo_native_deploy": "ecaf4666abb7c28c965e0d68a839d338032acae44c529424e16fd53f69da9de0",
+    "list_action_history": "0b025de7277f91d578fea7f541bb039a920217577188e93856ec3d258dea2c60",
+    "get_compile_result": "67bb0582212ca853deaa36d64a96d13457a1c56e6d908d831b1fbf814333ba51",
+    "get_last_validation_verdict": "c8533569c433a4105fabe74d3a06253488b15442822950f5376e0e9cfeab5665",
+    "get_mod_proof": "10f3ee9db4c3162d36ac8569e0f4600698a61d09cdb256f19e46df98c695f4ee",
+    "get_agent_brief": "dc3cab128e5fe7c0dcd7f60b51543d40e9a5950fa5118d3d224fd5d6fb33c66c"
   },
   "mcpCapabilityIdentities": {
     "validate_mod": "project.validate@1",
@@ -4131,6 +4150,11 @@
     "preview_native_deploy": "deploy.preview@1",
     "apply_native_deploy": "deploy.apply@1",
     "get_deploy_operation_status": "deploy.status@1",
-    "undo_native_deploy": "deploy.undo@1"
+    "undo_native_deploy": "deploy.undo@1",
+    "list_action_history": "history.list@2",
+    "get_compile_result": "workspace.compile.result@2",
+    "get_last_validation_verdict": "validation.last.read@1",
+    "get_mod_proof": "project.proof.read@1",
+    "get_agent_brief": "project.brief.read@1"
   }
 }

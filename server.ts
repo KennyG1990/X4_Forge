@@ -271,6 +271,7 @@ import {
   decideConstrainedAgentRoute,
   isAgentCapabilityDiscoveryRoute,
   normalizeAgentCapabilityConstraint,
+  requiresExplicitCapabilityGrant,
   type AgentCapabilityConstraint,
 } from "./src/lib/agentCapabilityAuthority";
 // B86 — agent action ledger: a skimmable record of what agents actually did.
@@ -6449,9 +6450,40 @@ app.get("/api/agent/status", async (req, res) => {
   }
 });
 
+function validateCapabilityQueryKeys(
+  query: express.Request['query'],
+  allowedKeys: readonly string[],
+  capabilityId: string,
+): string | null {
+  const unknown = Object.keys(query).filter(key => !allowedKeys.includes(key));
+  if (unknown.length) return `${capabilityId} does not accept: ${unknown.join(', ')}`;
+  for (const key of Object.keys(query)) {
+    const value = query[key];
+    if (value !== undefined && typeof value !== 'string') {
+      return `${capabilityId} query parameter ${key} must be a single string.`;
+    }
+  }
+  return null;
+}
+
 app.get("/api/agent/validation/last", (req, res) => {
   try {
     res.set('Cache-Control', 'no-store');
+    const queryError = validateCapabilityQueryKeys(
+      req.query,
+      ['modId', 'sourceHash', 'checkSource', 'workspaceId', 'clientId'],
+      'validation.last.read',
+    );
+    if (queryError) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    }
+    if (req.query.checkSource !== undefined && req.query.checkSource !== '0' && req.query.checkSource !== '1') {
+      return res.status(400).json({
+        ok: false,
+        code: 'CAPABILITY_INPUT_INVALID',
+        error: 'Optional ?checkSource= must be 0 or 1.',
+      });
+    }
     const record = requestWorkspace(req);
     const ws = record.workspace as ModWorkspace;
     const workspaceModId = effectiveModId(activeBuildWorkspace(ws));
@@ -6580,12 +6612,32 @@ app.get("/api/agent/validation/last", (req, res) => {
 
 app.get("/api/agent/history", (req, res) => {
   try {
+    const queryError = validateCapabilityQueryKeys(
+      req.query,
+      ['kind', 'outcome', 'file', 'limit', 'workspaceId', 'clientId'],
+      'history.list',
+    );
+    if (queryError) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    }
+    let parsedLimit = 200;
+    if (req.query.limit !== undefined && String(req.query.limit).trim() !== '') {
+      const candidate = Number(req.query.limit);
+      if (!Number.isInteger(candidate) || candidate < 1 || candidate > 1000) {
+        return res.status(400).json({
+          ok: false,
+          code: 'CAPABILITY_INPUT_INVALID',
+          error: 'history.list limit must be an integer between 1 and 1000.',
+        });
+      }
+      parsedLimit = candidate;
+    }
     const record = requestWorkspace(req);
     const rows = filterRows(agentHistoryStore.readAll().filter(row => row.workspaceId === record.workspaceId), {
       kind: req.query.kind ? String(req.query.kind) : undefined,
       outcome: req.query.outcome ? String(req.query.outcome) : undefined,
       file: req.query.file ? String(req.query.file) : undefined,
-      limit: req.query.limit ? Number(req.query.limit) : 200,
+      limit: parsedLimit,
     }).map(normalizeHistoryRecoveryTruth);
     return res.json({
       ok: true,
@@ -11455,8 +11507,14 @@ app.get("/api/agent/patch-readiness", (req, res) => {
 // writes the files; agents READ them. Deterministic and idempotent by construction.
 app.get("/api/agent/project/brief", (req, res) => {
   try {
+    const queryError = validateCapabilityQueryKeys(
+      req.query,
+      ['fromPath', 'workspaceId', 'clientId'],
+      'project.brief.read',
+    );
+    if (queryError) return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: queryError });
     const fromPath = String(req.query.fromPath || "").trim();
-    if (!fromPath) return res.status(400).json({ error: "Missing fromPath." });
+    if (!fromPath) return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: "Missing fromPath." });
     const resolvedFolder = resolveModFolder(fromPath);
     if ("error" in resolvedFolder) return res.status(resolvedFolder.status).json({ error: resolvedFolder.error });
     const load = loadProjectFromDisk(resolvedFolder.abs);
@@ -11475,9 +11533,16 @@ app.get("/api/agent/project/brief", (req, res) => {
         return routed?.kind === "schema" ? routed.domain : routed?.kind === "tfile" ? "t" : null;
       }).filter((d): d is string => !!d)));
     const cueNames = indexCueReferences(load.project).defined.map(d => d.name);
+    const mcpTools = Array.from(new Set(
+      FORGE_CAPABILITIES
+        .filter(capability => !requiresExplicitCapabilityGrant(capability.id))
+        .flatMap(capability => (capability.surfaces.mcp as readonly { id: string; status: string }[])
+          .filter(projection => projection.status !== 'disconnected')
+          .map(projection => projection.id)),
+    ));
     const input = {
       modId, files, generatedFiles, domainsPresent: domains, cueNames,
-      mcpTools: ["validate_mod", "author_check", "stage_and_validate", "readiness", "list_schema_domains", "get_workspace", "compile_workspace", "explain_element"],
+      mcpTools,
     };
     return res.json({ input, agentsMd: buildAgentsMd(input), notesMd: buildNotesMd(input) });
   } catch (error) {
@@ -11530,6 +11595,12 @@ app.get("/api/agent/readiness", (req, res) => {
 // state — there is no path to author evidence into it.
 app.get("/api/agent/proof", (req, res) => {
   try {
+    const queryError = validateCapabilityQueryKeys(
+      req.query,
+      ['fromPath', 'workspaceId', 'clientId'],
+      'project.proof.read',
+    );
+    if (queryError) return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: queryError });
     const record = requestWorkspace(req);
     const fromPath = String(req.query.fromPath || "").trim();
     const { ws, stages, watcherVerdict } = computeServerReadiness(record);
@@ -11595,7 +11666,7 @@ ${folderBlock}
 _The experience stage flips only on the user's screen. This artifact renders server-computed
 state only._
 `;
-    return res.json({ markdown: md, workspace: ws.name });
+    return res.json({ ok: true, workspaceId: record.workspaceId, markdown: md, workspace: ws.name });
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) || "proof failed" });
   }
@@ -18478,14 +18549,38 @@ app.post("/api/agent/compile", coordinatedSourceOperation((req, res) => {
   }
 }));
 
-app.get("/api/agent/compile/result/:id", (req, res) => {
+function respondCompileValidationResult(req: express.Request, res: express.Response, id: string) {
   const record = requestWorkspace(req);
-  const report = compileValidationReports.read(record.workspaceId, String(req.params.id));
+  const report = compileValidationReports.read(record.workspaceId, id);
   res.setHeader('Cache-Control', 'no-store');
   if (!report) {
     return res.status(404).json({ ok: false, code: 'VALIDATION_RESULT_UNAVAILABLE', error: 'The retained validation report is unavailable in this workspace.' });
   }
   return res.type('application/json').send(report);
+}
+
+app.get("/api/agent/compile/result", (req, res) => {
+  const queryError = validateCapabilityQueryKeys(
+    req.query,
+    ['id', 'workspaceId', 'clientId'],
+    'workspace.compile.result',
+  );
+  if (queryError) {
+    return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+  }
+  const id = typeof req.query.id === 'string' ? req.query.id.trim() : '';
+  if (!id || id.length > 128) {
+    return res.status(400).json({
+      ok: false,
+      code: 'CAPABILITY_INPUT_INVALID',
+      error: 'workspace.compile.result requires a bounded non-empty ?id= query parameter.',
+    });
+  }
+  return respondCompileValidationResult(req, res, id);
+});
+
+app.get("/api/agent/compile/result/:id", (req, res) => {
+  return respondCompileValidationResult(req, res, String(req.params.id));
 });
 
 /**
