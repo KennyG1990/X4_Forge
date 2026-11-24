@@ -51,7 +51,7 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
 
   const validationErrors = validateForgeCapabilityRegistry();
   check('registry invariants', validationErrors.length === 0, validationErrors.join(' | ') || undefined);
-  check('bounded non-native registry', FORGE_CAPABILITIES.filter(capability => !capability.id.startsWith('performance.native.')).length === 48, `count=${FORGE_CAPABILITIES.length}`);
+  check('bounded non-native registry', FORGE_CAPABILITIES.filter(capability => !capability.id.startsWith('performance.native.')).length === 54, `count=${FORGE_CAPABILITIES.length}`);
   const compileResult = findForgeCapability('workspace.compile.result', 2);
   check('retained compile report access is workspace-scoped and read-only',
     compileResult?.context.workspace === 'required'
@@ -582,11 +582,36 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
         decideEffectiveCapability(capability, { ...actor, constraint: grant }, resolveAgentRouteTemplateAuthority).allowed);
   }
 
+  const authoringHelperCapabilities = [
+    { id: 'expression.suggest', method: 'POST', path: '/api/agent/suggest/expression', inputLocation: 'body', alias: 'suggest_expression_completions', mcpStatus: 'connected', workspace: 'optional', effects: ['read', 'analyze'], ledger: null },
+    { id: 'extensions.dependencies.analyze', method: 'GET', path: '/api/agent/extensions/dependency-graph', inputLocation: 'none', alias: 'get_mod_dependency_graph', mcpStatus: 'connected', workspace: 'none', effects: ['read', 'analyze'], ledger: null },
+    { id: 'extensions.overrides.analyze', method: 'GET', path: '/api/agent/override-map', inputLocation: 'query', alias: 'get_extension_override_map', mcpStatus: 'connected', workspace: 'none', effects: ['read', 'analyze'], ledger: null },
+    { id: 'patch.targets.list', method: 'GET', path: '/api/agent/patch-targets', inputLocation: 'query', alias: 'list_patch_targets', mcpStatus: 'connected', workspace: 'none', effects: ['read'], ledger: null },
+    { id: 'patch.xpath.synthesize', method: 'POST', path: '/api/agent/xpath-synth', inputLocation: 'body', alias: 'synthesize_xml_patch', mcpStatus: 'partial', workspace: 'optional', effects: ['read', 'analyze'], ledger: null },
+    { id: 'reference.galaxy.read', method: 'GET', path: '/api/agent/galaxy-map', inputLocation: 'query', alias: 'get_galaxy_map', mcpStatus: 'connected', workspace: 'none', effects: ['read', 'analyze'], ledger: null },
+  ] as const;
+  for (const expected of authoringHelperCapabilities) {
+    const capability = findForgeCapability(expected.id, 1);
+    check(`${expected.id}@1 declares protected read/analyze authoring or ecosystem MCP projection`,
+      !!capability &&
+        capability.context.workspace === expected.workspace && capability.context.profile === 'none' &&
+        capability.confirmation === 'none' && !capability.access.public && capability.access.studioSession &&
+        JSON.stringify(capability.access.agentScopes) === JSON.stringify(['read', 'write', 'deploy']) &&
+        JSON.stringify(capability.effects) === JSON.stringify(expected.effects) &&
+        JSON.stringify(capability.apiBindings) === JSON.stringify([{
+          method: expected.method, path: expected.path, inputLocation: expected.inputLocation, role: 'primary',
+        }]) &&
+        capability.surfaces.mcp.length === 1 && capability.surfaces.mcp[0].id === expected.alias &&
+        capability.surfaces.mcp[0].status === expected.mcpStatus &&
+        ledgerRouteKind(expected.method, expected.path) === expected.ledger &&
+        decideEffectiveCapability(capability, { kind: 'agent', scope: 'read', workspaceId: 'ws_slice4_fixture' }, resolveAgentRouteTemplateAuthority).allowed);
+  }
+
   const censusErrors = validateForgeUiActionParityCensus();
   const builtCensus = buildForgeUiActionParityCensus(sha256);
   const builtCensusSecond = buildForgeUiActionParityCensus(sha256);
   const coveredDomains = new Set(FORGE_UI_ACTION_PARITY_CENSUS.map(row => row.domain));
-  check('UI-action parity census covers all 15 domains and all 51 capabilities with deterministic hash',
+  check('UI-action parity census covers all 15 domains and all 57 capabilities with deterministic hash',
     censusErrors.length === 0 &&
       builtCensus.schemaVersion === 'forge.ui-action-parity.v1' &&
       builtCensus.censusHash === builtCensusSecond.censusHash &&
@@ -643,7 +668,7 @@ export function runNativeForgeCapabilitiesSelftest() {
   const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   const keys = (value: object | undefined) => Object.keys(value || {}).sort();
   check('native registry has exactly the three reviewed process telemetry identities',
-    FORGE_CAPABILITIES.length === 51 &&
+    FORGE_CAPABILITIES.length === 57 &&
       equal(FORGE_CAPABILITIES.filter(capability => capability.id.startsWith('performance.native.')).map(capability => capability.id).sort(),
         expected.map(row => row.id).sort()));
   for (const row of expected) {

@@ -33,6 +33,12 @@ const DIAGNOSTIC_READ_TOOLS = [
   'search_x4_objects',
   'simulate_xml_diff',
   'diagnose_game_log',
+  'suggest_expression_completions',
+  'get_mod_dependency_graph',
+  'get_extension_override_map',
+  'list_patch_targets',
+  'synthesize_xml_patch',
+  'get_galaxy_map',
 ];
 
 const MD_NAVIGATION_TOOL = 'navigate_md_script';
@@ -122,6 +128,7 @@ const READ_TOOLS = [
   'check_conflicts', 'explain_element',
   'list_action_history', 'get_last_validation_verdict', 'get_mod_proof', 'get_agent_brief',
   'get_reference_status', 'search_reference_symbols', 'read_reference_file', 'search_x4_objects', 'simulate_xml_diff', 'diagnose_game_log',
+  'suggest_expression_completions', 'get_mod_dependency_graph', 'get_extension_override_map', 'list_patch_targets', 'synthesize_xml_patch', 'get_galaxy_map',
 ];
 const WRITE_TOOLS = [
   'validate_mod', 'list_schema_domains', 'get_workspace', 'compile_workspace', 'author_check',
@@ -1269,6 +1276,79 @@ const server = http.createServer(function serveMcpFixture(request, response): vo
     });
     return;
   }
+  if (request.method === 'POST' && request.url === '/api/agent/suggest/expression') {
+    let raw = '';
+    request.setEncoding('utf8');
+    request.on('data', chunk => { raw += chunk; });
+    request.on('end', () => {
+      const body = JSON.parse(raw);
+      routeCalls.push({ method: request.method || '', path: request.url || '', body });
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({
+        available: true, total: 2, truncated: false,
+        suggestions: [{ insert: 'owner', label: 'owner', source: 'datatype', resultType: 'faction' }],
+      }));
+    });
+    return;
+  }
+  if (request.method === 'GET' && request.url === '/api/agent/extensions/dependency-graph') {
+    routeCalls.push({ method: request.method, path: request.url, body: null });
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({
+      success: true,
+      nodes: [{ folder: 'compile_fixture', id: 'compile_fixture', enabled: true, resolvedDeps: [], missingRequired: [], missingOptional: [], dependents: [] }],
+      loadOrder: ['compile_fixture'], cycles: [], issues: [],
+      counts: { mods: 1, missingRequired: 0, missingOptional: 0, cycles: 0 },
+    }));
+    return;
+  }
+  if (request.method === 'GET' && request.url?.startsWith('/api/agent/override-map?')) {
+    routeCalls.push({ method: request.method, path: request.url, body: null });
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({
+      success: true, targetFile: 'libraries/jobs.xml', resolution: 'base',
+      loadOrder: ['mod_a', 'mod_b'], entries: [{ node: '/jobs/job[@id="x"]', kind: 'element', contested: true, merged: false, winner: 'mod_b', claims: [] }],
+      counts: { contested: 1, merged: 0, single: 0 },
+    }));
+    return;
+  }
+  if (request.method === 'GET' && request.url?.startsWith('/api/agent/patch-targets?')) {
+    routeCalls.push({ method: request.method, path: request.url, body: null });
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({
+      success: true, total: 1, items: [{ id: 'libraries/wares.xml', name: '' }],
+    }));
+    return;
+  }
+  if (request.method === 'POST' && request.url === '/api/agent/xpath-synth') {
+    let raw = '';
+    request.setEncoding('utf8');
+    request.on('data', chunk => { raw += chunk; });
+    request.on('end', () => {
+      const body = JSON.parse(raw);
+      routeCalls.push({ method: request.method || '', path: request.url || '', body });
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({
+        success: true, targetFile: body.targetFile ?? null, sourceSignature: body.sourceSignature ?? null,
+        diffXml: 'D'.repeat(300_000),
+        ops: Array.from({ length: 205 }, (_, idx) => ({ type: 'replace', sel: `/wares/ware[${idx + 1}]/@transport` })),
+        warnings: [],
+      }));
+    });
+    return;
+  }
+  if (request.method === 'GET' && request.url?.startsWith('/api/agent/galaxy-map?')) {
+    routeCalls.push({ method: request.method, path: request.url, body: null });
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({
+      success: true,
+      counts: { clusters: 1, sectors: 1, placedClusters: 1 },
+      bounds: { minX: 0, maxX: 1000, minZ: 0, maxZ: 1000 },
+      clusters: [{ macro: 'Cluster_01_macro', pos: { x: 0, y: 0, z: 0 }, sectors: [] }],
+      sectors: [{ macro: 'Cluster_01_Sector001_macro', cluster: 'Cluster_01_macro', pos: { x: 0, y: 0, z: 0 } }],
+    }));
+    return;
+  }
   response.writeHead(404, { 'Content-Type': 'application/json' });
   response.end(JSON.stringify({ error: 'not found' }));
 });
@@ -1590,6 +1670,30 @@ try {
     const logDiagReply = await client.request('tools/call', { name: 'diagnose_game_log', arguments: { modId: 'compile_fixture', tail: '[=ERROR=] sign for loanshark' } });
     assert.equal(logDiagReply.error, undefined);
     assert.equal(JSON.parse(String(logDiagReply.result?.content?.[0]?.text || '{}')).rawEngineIdLeaks?.[0]?.id, 'loanshark');
+    const exprSuggestReply = await client.request('tools/call', { name: 'suggest_expression_completions', arguments: { text: '$st.ow', caret: 6, variableTypes: { $st: 'station' }, limit: 20 } });
+    assert.equal(exprSuggestReply.error, undefined);
+    assert.equal(JSON.parse(String(exprSuggestReply.result?.content?.[0]?.text || '{}')).suggestions?.[0]?.insert, 'owner');
+    const depGraphReply = await client.request('tools/call', { name: 'get_mod_dependency_graph', arguments: {} });
+    assert.equal(depGraphReply.error, undefined);
+    const depGraphResult = JSON.parse(String(depGraphReply.result?.content?.[0]?.text || '{}'));
+    assert.equal(depGraphResult.extensionsRoot, undefined);
+    assert.equal(depGraphResult.counts?.mods, 1);
+    const overrideMapReply = await client.request('tools/call', { name: 'get_extension_override_map', arguments: { file: 'libraries/jobs.xml' } });
+    assert.equal(overrideMapReply.error, undefined);
+    assert.equal(JSON.parse(String(overrideMapReply.result?.content?.[0]?.text || '{}')).entries?.[0]?.winner, 'mod_b');
+    const patchTargetsReply = await client.request('tools/call', { name: 'list_patch_targets', arguments: { q: 'wares', limit: 10 } });
+    assert.equal(patchTargetsReply.error, undefined);
+    assert.equal(JSON.parse(String(patchTargetsReply.result?.content?.[0]?.text || '{}')).items?.[0]?.id, 'libraries/wares.xml');
+    const synthPatchReply = await client.request('tools/call', { name: 'synthesize_xml_patch', arguments: { editedXml: '<wares/>', vanillaXml: '<wares/>' } });
+    assert.equal(synthPatchReply.error, undefined);
+    const synthPatchResult = JSON.parse(String(synthPatchReply.result?.content?.[0]?.text || '{}'));
+    assert.equal(synthPatchResult.diffXml.length, 262144);
+    assert.equal(synthPatchResult.diffXmlTruncated, true);
+    assert.equal(synthPatchResult.ops.length, 200);
+    assert.equal(synthPatchResult.opsTruncated, true);
+    const galaxyMapReply = await client.request('tools/call', { name: 'get_galaxy_map', arguments: { q: 'Cluster_01' } });
+    assert.equal(galaxyMapReply.error, undefined);
+    assert.equal(JSON.parse(String(galaxyMapReply.result?.content?.[0]?.text || '{}')).sectors?.[0]?.macro, 'Cluster_01_Sector001_macro');
     assert.deepEqual(routeCalls.map(call => `${call.method} ${call.path}`), [
       'POST /api/agent/project/validate/check',
       'GET /api/agent/workspace',
@@ -1608,6 +1712,12 @@ try {
       'GET /api/agent/object-index?q=ware&kind=ware&limit=150',
       'POST /api/agent/reference/simulate-diff',
       'POST /api/agent/log-diagnose',
+      'POST /api/agent/suggest/expression',
+      'GET /api/agent/extensions/dependency-graph',
+      'GET /api/agent/override-map?file=libraries%2Fjobs.xml',
+      'GET /api/agent/patch-targets?q=wares&limit=10',
+      'POST /api/agent/xpath-synth',
+      'GET /api/agent/galaxy-map?q=Cluster_01',
     ], 'current-contract execution must use current capability routes');
 
     routeCalls.length = 0;
@@ -1659,6 +1769,15 @@ try {
       { name: 'search_x4_objects', arguments: { limit: 201 } },
       { name: 'simulate_xml_diff', arguments: { path: 'libraries/wares.xml' } },
       { name: 'diagnose_game_log', arguments: { modId: 'x', tail: 't'.repeat(524289) } },
+      { name: 'suggest_expression_completions', arguments: {} },
+      { name: 'suggest_expression_completions', arguments: { text: '$x.', limit: 201 } },
+      { name: 'suggest_expression_completions', arguments: { text: '$x.', variableTypes: { $x: 42 } } },
+      { name: 'get_mod_dependency_graph', arguments: { extra: true } },
+      { name: 'get_extension_override_map', arguments: {} },
+      { name: 'list_patch_targets', arguments: { limit: 101 } },
+      { name: 'synthesize_xml_patch', arguments: {} },
+      { name: 'synthesize_xml_patch', arguments: { editedXml: 'x'.repeat(524289) } },
+      { name: 'get_galaxy_map', arguments: { q: 'x'.repeat(257) } },
     ]) {
       const denied = await client.request('tools/call', invalid);
       assert.equal(denied.error?.code, -32602, `${invalid.name} malformed input must fail before HTTP`);

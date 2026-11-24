@@ -204,9 +204,43 @@ async function main() {
   if (fs.existsSync(path.join(repoHarvested, 'md.xsd')) && fs.existsSync(path.join(repoHarvested, 'common.xsd'))) {
     fs.copyFileSync(path.join(repoHarvested, 'md.xsd'), path.join(schemaDir, 'md.xsd'));
     fs.copyFileSync(path.join(repoHarvested, 'common.xsd'), path.join(schemaDir, 'common.xsd'));
+    if (fs.existsSync(path.join(repoHarvested, 'scriptproperties.xml'))) {
+      fs.copyFileSync(path.join(repoHarvested, 'scriptproperties.xml'), path.join(schemaDir, 'scriptproperties.xml'));
+    }
   } else {
     fs.writeFileSync(path.join(schemaDir, 'md.xsd'), '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"/>');
     fs.writeFileSync(path.join(schemaDir, 'common.xsd'), '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"/>');
+  }
+
+  // Seed universe 01.cat/01.dat and two installed extensions for Slice 4 ecosystem & authoring MCP checks.
+  const galXmlBuf = Buffer.from(
+    '<macros><macro name="Xu_Ep2_universe_macro" class="galaxy"><connections><connection name="Cluster_01_connection" ref="clusters"><offset><position x="100" y="0" z="200"/></offset><macro ref="Cluster_01_macro" connection="galaxy"/></connection></connections></macro></macros>',
+    'utf8',
+  );
+  const cluXmlBuf = Buffer.from(
+    '<macros><macro name="Cluster_01_macro" class="cluster"><connections><connection name="Cluster_01_Sector001_connection" ref="sectors"><offset><position x="10" y="0" z="20"/></offset><macro ref="Cluster_01_Sector001_macro" connection="cluster"/></connection></connections></macro></macros>',
+    'utf8',
+  );
+  const waresBaseBuf = Buffer.from('<wares><ware id="energycells" name="Energy Cells" group="energy" transport="energy"/></wares>', 'utf8');
+  fs.writeFileSync(path.join(gameDir, '01.dat'), Buffer.concat([galXmlBuf, cluXmlBuf, waresBaseBuf]));
+  fs.writeFileSync(
+    path.join(gameDir, '01.cat'),
+    `maps/xu_ep2_universe/galaxy.xml ${galXmlBuf.length} 1700000000 00000000000000000000000000000000\nmaps/xu_ep2_universe/clusters.xml ${cluXmlBuf.length} 1700000000 00000000000000000000000000000000\nlibraries/wares.xml ${waresBaseBuf.length} 1700000000 00000000000000000000000000000000\n`,
+    'utf8',
+  );
+  for (const [extFolder, depXml, groupVal] of [
+    ['mod_alpha', '', 'minerals'],
+    ['mod_beta', '<dependency id="mod_alpha" optional="false"/>', 'refined'],
+  ] as const) {
+    fs.mkdirSync(path.join(extensionsDir, extFolder, 'libraries'), { recursive: true });
+    fs.writeFileSync(
+      path.join(extensionsDir, extFolder, 'content.xml'),
+      `<content id="${extFolder}" name="${extFolder}" version="100" enabled="1">${depXml}</content>`,
+    );
+    fs.writeFileSync(
+      path.join(extensionsDir, extFolder, 'libraries', 'wares.xml'),
+      `<diff><replace sel="/wares/ware[@id='energycells']/@group">${groupVal}</replace></diff>`,
+    );
   }
 
   const modId = 'mcp_files_fixture';
@@ -294,6 +328,7 @@ async function main() {
     const wsHeaders = { 'x-client-id': clientId, 'x-workspace-id': wsId };
 
     let fullMcp!: McpSession;
+    let presetReadMcp!: McpSession;
 
     await check('1_preset_keys_advertise_zero_unit25_tools_and_receive_403_on_curated_routes', async () => {
       for (const scope of ['read', 'write', 'deploy'] as const) {
@@ -305,6 +340,7 @@ async function main() {
         assert.equal(minted.status, 200);
         const token = minted.json!.token || minted.json!.key;
         const session = await openMcp(token, wsId);
+        if (scope === 'read') presetReadMcp = session;
         const listed = await session.request('tools/list');
         const names: string[] = (listed.result?.tools || []).map((t: any) => t.name);
         for (const toolName of explicitToolNames) {
@@ -560,6 +596,54 @@ async function main() {
       const revertedBulk = await fullMcp.callTool('revert_action_history', { id: bulkRow.id });
       assert.equal(revertedBulk.isError, false, JSON.stringify(revertedBulk.payload));
       assert.equal(revertedBulk.payload.workspaceHash, preview.payload.workspaceHash);
+    });
+
+    await check('6_authoring_and_ecosystem_helpers_over_preset_read_mcp', async () => {
+      const historyBefore = await presetReadMcp.callTool('list_action_history', { limit: 50 });
+      const totalBefore = historyBefore.payload.total;
+
+      const exprRes = await presetReadMcp.callTool('suggest_expression_completions', {
+        text: '$st.ow',
+        caret: 6,
+        variableTypes: { $st: 'station' },
+        limit: 10,
+      });
+      assert.equal(exprRes.isError, false, JSON.stringify(exprRes.payload));
+      assert.equal(typeof exprRes.payload.available, 'boolean');
+      assert(Array.isArray(exprRes.payload.suggestions));
+      if (exprRes.payload.available) {
+        assert(exprRes.payload.suggestions.some((s: any) => s.insert === 'owner' && s.source === 'datatype'));
+      }
+
+      const depRes = await presetReadMcp.callTool('get_mod_dependency_graph', {});
+      assert.equal(depRes.isError, false, JSON.stringify(depRes.payload));
+      assert.equal(depRes.payload.extensionsRoot, undefined);
+      assert.deepEqual(depRes.payload.loadOrder, ['mod_alpha', 'mod_beta']);
+
+      const ovrRes = await presetReadMcp.callTool('get_extension_override_map', { file: 'libraries/wares.xml' });
+      assert.equal(ovrRes.isError, false, JSON.stringify(ovrRes.payload));
+      assert.equal(ovrRes.payload.entries?.[0]?.contested, true);
+      assert.equal(ovrRes.payload.entries?.[0]?.winner, 'mod_beta');
+
+      const targetsRes = await presetReadMcp.callTool('list_patch_targets', { q: 'wares', limit: 10 });
+      assert.equal(targetsRes.isError, false, JSON.stringify(targetsRes.payload));
+      assert(targetsRes.payload.items.some((item: any) => item.id === 'libraries/wares.xml'));
+
+      const synthRes = await presetReadMcp.callTool('synthesize_xml_patch', {
+        targetFile: 'libraries/wares.xml',
+        editedXml: '<wares><ware id="energycells" name="Energy Cells" group="super_energy" transport="energy"/></wares>',
+      });
+      assert.equal(synthRes.isError, false, JSON.stringify(synthRes.payload));
+      assert.equal(synthRes.payload.success, true);
+      assert(synthRes.payload.diffXml.includes('super_energy'));
+
+      const galRes = await presetReadMcp.callTool('get_galaxy_map', { q: 'Cluster_01' });
+      assert.equal(galRes.isError, false, JSON.stringify(galRes.payload));
+      assert.equal(galRes.payload.counts.clusters, 1);
+      assert.equal(galRes.payload.sectors?.[0]?.pos?.x, 110);
+
+      const historyAfter = await presetReadMcp.callTool('list_action_history', { limit: 50 });
+      assert.equal(historyAfter.payload.total, totalBefore, 'quiet read/analyze tools must record zero Action Ledger rows');
     });
   } finally {
     for (const s of mcpSessions) {

@@ -811,12 +811,12 @@ async function main() {
     'bulk.transform.apply', 'bulk.transform.preview',
     'configuration.access.request', 'configuration.access.status', 'configuration.apply', 'configuration.preview', 'configuration.read', 'configuration.status',
     'deploy.apply', 'deploy.preview', 'deploy.status', 'deploy.undo',
-    'expression.check', 'expression.inspect', 'extensions.conflicts.analyze',
+    'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.overrides.analyze',
     'files.list', 'files.read', 'files.write',
     'history.list', 'history.revert',
-    'patch.diff.simulate', 'patch.readiness.analyze', 'performance.collect', 'performance.native.collect', 'performance.native.read', 'performance.native.stop',
+    'patch.diff.simulate', 'patch.readiness.analyze', 'patch.targets.list', 'patch.xpath.synthesize', 'performance.collect', 'performance.native.collect', 'performance.native.read', 'performance.native.stop',
     'performance.profile', 'performance.read', 'project.ai.navigation', 'project.brief.read', 'project.md.navigation', 'project.proof.read', 'project.validate', 'project.xml.references', 'readiness.read',
-    'reference.file.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest',
+    'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest',
     'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read',
     'workspace.compile', 'workspace.compile.result', 'workspace.generate.preview', 'workspace.mod.drift', 'workspace.mod.import', 'workspace.read',
   ];
@@ -1454,13 +1454,13 @@ async function main() {
     sameCapabilityIds(effectiveIds(studioEffective), expectedCapabilityIds) && effectiveHashIsValid(studioEffective),
   JSON.stringify({ public: publicEffective.json, bogus: bogusEffective.json, studio: { actor: studioEffective.json?.actor, ids: effectiveIds(studioEffective) } }));
   for (const [name, response, scope, expectedIds] of [
-    ['read', readEffective, 'read', ['expression.check', 'expression.inspect', 'extensions.conflicts.analyze', 'history.list',
-      'patch.diff.simulate', 'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.xml.references', 'readiness.read',
-      'reference.file.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest',
+    ['read', readEffective, 'read', ['expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.overrides.analyze', 'history.list',
+      'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.synthesize', 'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.xml.references', 'readiness.read',
+      'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest',
       'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read', 'workspace.read']],
-    ['write', writeEffective, 'write', ['expression.check', 'expression.inspect', 'extensions.conflicts.analyze', 'history.list', 'patch.diff.simulate', 'project.validate',
+    ['write', writeEffective, 'write', ['expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.overrides.analyze', 'history.list', 'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.synthesize', 'project.validate',
       'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.xml.references',
-      'readiness.read', 'reference.file.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest',
+      'readiness.read', 'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest',
       'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.read']],
     ['deploy', deployEffective, 'deploy', expectedCapabilityIds.filter(id => !id.startsWith('configuration.') && !id.startsWith('deploy.') && !id.startsWith('bulk.transform.') && !id.startsWith('files.') && ![
       'history.revert', 'performance.native.collect', 'performance.native.read', 'performance.native.stop', 'project.ai.navigation', 'project.md.navigation', 'workspace.mod.drift', 'workspace.mod.import',
@@ -6533,6 +6533,116 @@ async function main() {
         JSON.stringify({ preview: bulkPreview.status, apply: bulkApply.status, body: bulkApply.json }));
     } finally {
       fs.rmSync(slice3ModDir, { recursive: true, force: true });
+    }
+  }
+
+  // --- #19 P4 SLICE 4: AUTHORING & ECOSYSTEM READ/ANALYZE CAPABILITIES ---
+  {
+    const exprSuggestRes = await req('POST', '/api/agent/suggest/expression', readKey, {
+      text: '$st.',
+      caret: 4,
+      variableTypes: { $st: 'station' },
+      limit: 25,
+    }, { operationId: null });
+    capabilityResponses.set('expression.suggest', exprSuggestRes);
+    const exprSuggestBad = await req('POST', '/api/agent/suggest/expression', readKey, {
+      text: '$st.',
+      unexpected: true,
+    }, { operationId: null });
+    ok('agent_expression_suggest_supports_variable_types_and_rejects_unknown_fields',
+      exprSuggestRes.status === 200
+        && typeof exprSuggestRes.json?.available === 'boolean'
+        && typeof exprSuggestRes.json?.total === 'number'
+        && typeof exprSuggestRes.json?.truncated === 'boolean'
+        && Array.isArray(exprSuggestRes.json?.suggestions)
+        && exprSuggestBad.status === 400 && exprSuggestBad.json?.code === 'CAPABILITY_INPUT_INVALID',
+      JSON.stringify({ status: exprSuggestRes.status, bad: exprSuggestBad.status, body: exprSuggestRes.json }));
+
+    const depGraphAnon = await req('GET', '/api/agent/extensions/dependency-graph', null);
+    const depGraphRes = await req('GET', '/api/agent/extensions/dependency-graph', readKey);
+    capabilityResponses.set('extensions.dependencies.analyze', depGraphRes);
+    const depGraphBad = await req('GET', '/api/agent/extensions/dependency-graph?unexpected=1', readKey);
+    ok('agent_extensions_dependency_graph_requires_auth_and_redacts_extensions_root',
+      depGraphAnon.status === 401
+        && depGraphRes.status === 200
+        && depGraphRes.json?.success === true
+        && depGraphRes.json?.extensionsRoot === undefined
+        && Array.isArray(depGraphRes.json?.nodes)
+        && Array.isArray(depGraphRes.json?.loadOrder)
+        && depGraphBad.status === 400 && depGraphBad.json?.code === 'CAPABILITY_INPUT_INVALID',
+      JSON.stringify({ anon: depGraphAnon.status, status: depGraphRes.status, bad: depGraphBad.status }));
+
+    const overrideMapRes = await req('GET', '/api/agent/override-map?file=libraries%2Ffactions.xml', readKey);
+    capabilityResponses.set('extensions.overrides.analyze', overrideMapRes);
+    const overrideMapBad = await req('GET', '/api/agent/override-map?file=..%2Fsecret.xml', readKey);
+    ok('agent_override_map_returns_target_resolution_and_rejects_traversal',
+      overrideMapRes.status === 200
+        && overrideMapRes.json?.success === true
+        && overrideMapRes.json?.targetFile === 'libraries/factions.xml'
+        && Array.isArray(overrideMapRes.json?.entries)
+        && overrideMapBad.status === 400 && overrideMapBad.json?.code === 'CAPABILITY_INPUT_INVALID',
+      JSON.stringify({ status: overrideMapRes.status, bad: overrideMapBad.status }));
+
+    const patchTargetsRes = await req('GET', '/api/agent/patch-targets?q=factions&limit=10', readKey);
+    capabilityResponses.set('patch.targets.list', patchTargetsRes);
+    const patchTargetsBad = await req('GET', '/api/agent/patch-targets?limit=101', readKey);
+    ok('agent_patch_targets_lists_paths_and_enforces_limit_bounds',
+      patchTargetsRes.status === 200
+        && patchTargetsRes.json?.success === true
+        && Array.isArray(patchTargetsRes.json?.items)
+        && patchTargetsBad.status === 400 && patchTargetsBad.json?.code === 'CAPABILITY_INPUT_INVALID',
+      JSON.stringify({ status: patchTargetsRes.status, bad: patchTargetsBad.status }));
+
+    const xpathSynthRes = await req('POST', '/api/agent/xpath-synth', readKey, {
+      vanillaXml: '<wares><ware id="test_ware" price="100"/></wares>',
+      editedXml: '<wares><ware id="test_ware" price="150"/></wares>',
+      targetFile: 'libraries/wares.xml',
+      sourceSignature: null,
+    }, { operationId: null });
+    capabilityResponses.set('patch.xpath.synthesize', xpathSynthRes);
+    const xpathSynthBad = await req('POST', '/api/agent/xpath-synth', readKey, {
+      editedXml: '<wares/>',
+      unexpected: true,
+    }, { operationId: null });
+    ok('agent_xpath_synth_synthesizes_diff_and_accepts_null_signature',
+      xpathSynthRes.status === 200
+        && xpathSynthRes.json?.success === true
+        && typeof xpathSynthRes.json?.diffXml === 'string'
+        && xpathSynthRes.json.diffXml.includes('150')
+        && Array.isArray(xpathSynthRes.json?.ops)
+        && xpathSynthBad.status === 400 && xpathSynthBad.json?.code === 'CAPABILITY_INPUT_INVALID',
+      JSON.stringify({ status: xpathSynthRes.status, bad: xpathSynthBad.status, body: xpathSynthRes.json }));
+
+    // Seed minimal universe cat/dat if absent so galaxy-map returns 200 for capability output contract check.
+    let seededGalaxyCat = false;
+    const catPath = path.join(gameRoot, '01.cat');
+    const datPath = path.join(gameRoot, '01.dat');
+    if (!fs.existsSync(catPath) && !fs.existsSync(path.join(gameRoot, 'maps', 'xu_ep2_universe', 'galaxy.xml'))) {
+      const galXml = Buffer.from('<macros><macro name=" Xu_Ep2_universe_macro " class="galaxy"><connections><connection name="Cluster_01_connection" ref="clusters"><offset><position x="100" y="0" z="200"/></offset><macro ref="Cluster_01_macro" connection="galaxy"/></connection></connections></macro></macros>', 'utf8');
+      const cluXml = Buffer.from('<macros><macro name="Cluster_01_macro" class="cluster"><connections><connection name="Cluster_01_Sector001_connection" ref="sectors"><offset><position x="10" y="0" z="20"/></offset><macro ref="Cluster_01_Sector001_macro" connection="cluster"/></connection></connections></macro></macros>', 'utf8');
+      const datBuf = Buffer.concat([galXml, cluXml]);
+      const catText = `maps/xu_ep2_universe/galaxy.xml ${galXml.length} 1700000000 00000000000000000000000000000000\nmaps/xu_ep2_universe/clusters.xml ${cluXml.length} 1700000000 00000000000000000000000000000000\n`;
+      fs.writeFileSync(datPath, datBuf);
+      fs.writeFileSync(catPath, catText, 'utf8');
+      seededGalaxyCat = true;
+    }
+    try {
+      const galaxyMapRes = await req('GET', '/api/agent/galaxy-map?q=Cluster_01', readKey);
+      capabilityResponses.set('reference.galaxy.read', galaxyMapRes);
+      const galaxyMapBad = await req('GET', '/api/agent/galaxy-map?unexpected=1', readKey);
+      ok('agent_galaxy_map_returns_filtered_universe_and_rejects_unknown_query',
+        galaxyMapRes.status === 200
+          && galaxyMapRes.json?.success === true
+          && galaxyMapRes.json?.counts?.clusters >= 1
+          && Array.isArray(galaxyMapRes.json?.clusters)
+          && Array.isArray(galaxyMapRes.json?.sectors)
+          && galaxyMapBad.status === 400 && galaxyMapBad.json?.code === 'CAPABILITY_INPUT_INVALID',
+        JSON.stringify({ status: galaxyMapRes.status, bad: galaxyMapBad.status, body: galaxyMapRes.json }));
+    } finally {
+      if (seededGalaxyCat) {
+        fs.rmSync(catPath, { force: true });
+        fs.rmSync(datPath, { force: true });
+      }
     }
   }
 

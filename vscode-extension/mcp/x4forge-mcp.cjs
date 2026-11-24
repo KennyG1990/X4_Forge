@@ -127,6 +127,12 @@ const DIAGNOSTIC_READ_LIVE_TOOLS = new Set([
   "search_x4_objects",
   "simulate_xml_diff",
   "diagnose_game_log",
+  "suggest_expression_completions",
+  "get_mod_dependency_graph",
+  "get_extension_override_map",
+  "list_patch_targets",
+  "synthesize_xml_patch",
+  "get_galaxy_map",
 ]);
 const PERFORMANCE_PROFILE_HTTP_FAILURES = { PROFILE_DISABLED: 503, PROFILE_BUSY: 409, PROFILE_RATE_LIMITED: 429, PROFILE_DISPOSED: 503, PROFILE_INPUT_INVALID: 400, PROFILE_ABORTED: 408, PROFILE_FAILED: 500, PROFILE_CLEANUP_UNCONFIRMED: 409 };
 const PERFORMANCE_COLLECTION_HTTP_FAILURES = { PERFORMANCE_DISPOSED: 503, PERFORMANCE_COLLECTION_BUSY: 409, PERFORMANCE_COLLECTION_REFUSED: 409, PROJECT_INPUT_INVALID: 400, PERFORMANCE_COLLECTION_FAILED: 500 };
@@ -1632,6 +1638,159 @@ const TOOLS = [
       "mod folder import",
       { ok: "boolean", success: "boolean", applied: "boolean", workspaceId: "string", modId: "string", report: "object" },
     ),
+  },
+  {
+    name: "suggest_expression_completions",
+    capabilityId: "expression.suggest",
+    capabilityVersion: 1,
+    description: "Suggest ranked ScriptProperty continuations at a caret position in an unsaved MD or AIScript expression, optionally narrowed by variableTypes hints.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        text: { type: "string", maxLength: 4000 },
+        caret: { type: "integer", minimum: 0, maximum: 4000 },
+        variableTypes: { type: "object", additionalProperties: { type: "string", maxLength: 128 } },
+        limit: { type: "integer", minimum: 1, maximum: 200 },
+      },
+      required: ["text"],
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/suggest/expression", args),
+      "expression completion suggestions",
+      { available: "boolean", total: "number", truncated: "boolean", suggestions: "array" },
+    ),
+  },
+  {
+    name: "get_mod_dependency_graph",
+    capabilityId: "extensions.dependencies.analyze",
+    capabilityVersion: 1,
+    description: "Inspect installed X4 extension manifests, resolved dependency edges, simulated load order, cycles, and missing required or optional dependencies without exposing host filesystem paths.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+    handler: async () => requireResponse(
+      await forge("GET", "/api/agent/extensions/dependency-graph"),
+      "mod dependency graph",
+      { success: "boolean", nodes: "array", loadOrder: "array", cycles: "array", issues: "array", counts: "object" },
+    ),
+  },
+  {
+    name: "get_extension_override_map",
+    capabilityId: "extensions.overrides.analyze",
+    capabilityVersion: 1,
+    description: "Build the per-element and per-attribute override map and simulated load-order winner across enabled third-party X4 extensions for one contested relative XML target file.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        file: { type: "string", maxLength: 1024 },
+      },
+      required: ["file"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams({ file: String(args?.file || "") });
+      return requireResponse(
+        await forge("GET", `/api/agent/override-map?${q}`),
+        "extension override map",
+        { success: "boolean", targetFile: "string", resolution: "string", loadOrder: "array", entries: "array", counts: "object" },
+      );
+    },
+  },
+  {
+    name: "list_patch_targets",
+    capabilityId: "patch.targets.list",
+    capabilityVersion: 1,
+    description: "Search relative X4 base-game and official DLC XML target paths eligible for RFC 5261 <diff> patching.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        q: { type: "string", maxLength: 256 },
+        limit: { type: "integer", minimum: 1, maximum: 100 },
+      },
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams();
+      if (args?.q !== undefined) q.set("q", String(args.q));
+      if (args?.limit !== undefined) q.set("limit", String(args.limit));
+      return requireResponse(
+        await forge("GET", `/api/agent/patch-targets?${q}`),
+        "patch targets list",
+        { success: "boolean", total: "number", items: "array" },
+      );
+    },
+  },
+  {
+    name: "synthesize_xml_patch",
+    capabilityId: "patch.xpath.synthesize",
+    capabilityVersion: 1,
+    description: "Compute minimal id/name-anchored X4 <diff> add, replace, and remove operations turning a vanilla or canonical composed XML document into a modified XML candidate without writing disk.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        editedXml: { type: "string", maxLength: 524288 },
+        vanillaXml: { type: "string", maxLength: 524288 },
+        targetFile: { type: "string", maxLength: 1024 },
+        sourceSignature: {
+          anyOf: [
+            { type: "string", maxLength: 128 },
+            { type: "null" },
+          ],
+        },
+      },
+      required: ["editedXml"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const d = requireResponse(
+        await forge("POST", "/api/agent/xpath-synth", args),
+        "XML patch synthesis",
+        { success: "boolean", diffXml: "string", ops: "array", warnings: "array" },
+      );
+      const maxDiffChars = 262144;
+      const diffXmlLength = d.diffXml.length;
+      const diffXmlTruncated = diffXmlLength > maxDiffChars;
+      const totalOps = d.ops.length;
+      const ops = d.ops.slice(0, 200);
+      return {
+        success: d.success,
+        targetFile: d.targetFile ?? null,
+        sourceSignature: d.sourceSignature ?? null,
+        diffXml: diffXmlTruncated ? d.diffXml.slice(0, maxDiffChars) : d.diffXml,
+        diffXmlLength,
+        diffXmlTruncated,
+        ops,
+        totalOps,
+        opsTruncated: ops.length < totalOps,
+        warnings: d.warnings.slice(0, 100),
+        ...(d.base && typeof d.base === "object" ? { base: d.base } : {}),
+      };
+    },
+  },
+  {
+    name: "get_galaxy_map",
+    capabilityId: "reference.galaxy.read",
+    capabilityVersion: 1,
+    description: "Read merged base-game, DLC, and extension cluster and sector 3D placement coordinates from maps/xu_ep2_universe without exposing host filesystem paths.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        q: { type: "string", maxLength: 256 },
+      },
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams();
+      if (args?.q !== undefined) q.set("q", String(args.q));
+      return requireResponse(
+        await forge("GET", `/api/agent/galaxy-map?${q}`),
+        "galaxy map",
+        { success: "boolean", counts: "object", bounds: "object", clusters: "array", sectors: "array" },
+      );
+    },
   },
 ];
 const STATIC_TOOL_NAMES = new Set(TOOLS.map((tool) => tool.name));

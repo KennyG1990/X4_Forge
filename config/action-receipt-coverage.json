@@ -1903,15 +1903,15 @@
       "routeKey": "POST /api/agent/suggest/expression",
       "method": "POST",
       "template": "/api/agent/suggest/expression",
-      "owner": "agent-api",
+      "owner": "expression.suggest",
       "resourceClass": "stateless-analysis",
       "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1suggest~1expression",
       "integrationBatch": "W3B0-internal",
       "history": "quiet",
       "capability": {
-        "kind": "reviewed-legacy",
-        "id": "POST /api/agent/suggest/expression",
-        "reviewRef": "docs/plans/2026-08-02-w3b0-action-receipt-coverage.md#review"
+        "kind": "canonical",
+        "id": "expression.suggest",
+        "version": 1
       },
       "semanticClass": "read-analysis-only",
       "policy": "receipt-exempt",
@@ -2097,15 +2097,15 @@
       "routeKey": "POST /api/agent/xpath-synth",
       "method": "POST",
       "template": "/api/agent/xpath-synth",
-      "owner": "agent-api",
+      "owner": "patch.xpath.synthesize",
       "resourceClass": "configured-root",
       "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1xpath-synth",
       "integrationBatch": "W3B0-internal",
       "history": "quiet",
       "capability": {
-        "kind": "reviewed-legacy",
-        "id": "POST /api/agent/xpath-synth",
-        "reviewRef": "docs/plans/2026-08-02-w3b0-action-receipt-coverage.md#review"
+        "kind": "canonical",
+        "id": "patch.xpath.synthesize",
+        "version": 1
       },
       "semanticClass": "read-analysis-only",
       "policy": "receipt-exempt",

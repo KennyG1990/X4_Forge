@@ -8990,8 +8990,28 @@ function listBasePatchTargets(): string[] {
 
 app.get("/api/agent/patch-targets", (req, res) => {
   try {
-    const q = (typeof req.query.q === "string" ? req.query.q : "").toLowerCase().trim();
-    const limit = Math.min(Number(req.query.limit) || 25, 100);
+    const queryError = validateCapabilityQueryKeys(
+      req.query,
+      ['q', 'limit', 'workspaceId', 'clientId'],
+      'patch.targets.list',
+    );
+    if (queryError) return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    if (req.query.q !== undefined && typeof req.query.q !== "string") {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'patch.targets.list q must be a string.' });
+    }
+    const rawQ = typeof req.query.q === "string" ? req.query.q : "";
+    if (rawQ.length > 256) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'patch.targets.list q must be at most 256 characters.' });
+    }
+    let limit = 25;
+    if (req.query.limit !== undefined && String(req.query.limit).trim() !== '') {
+      const candidate = Number(req.query.limit);
+      if (!Number.isInteger(candidate) || candidate < 1 || candidate > 100) {
+        return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'patch.targets.list limit must be an integer between 1 and 100.' });
+      }
+      limit = candidate;
+    }
+    const q = rawQ.toLowerCase().trim();
     let paths = listBasePatchTargets();
     if (q) paths = paths.filter(p => p.toLowerCase().includes(q));
     return res.json({ success: true, total: paths.length, items: paths.slice(0, limit).map(p => ({ id: p, name: "" })) });
@@ -10374,6 +10394,21 @@ app.get("/api/agent/extension-doctor", (_req, res) => {
 // #71 — multi-mod project view. Exposes the FULL dependency graph (nodes + resolved
 // load order + cycles + missing/optional-dep issues) across the installed extensions,
 // so the UI can show the mod ecosystem, not just the cycle findings the Doctor folds in.
+function scanInstalledModDependencyGraph(extRoot: string) {
+  const present: ModManifest[] = [];
+  for (const folder of fs.readdirSync(extRoot)) {
+    const absDir = path.join(extRoot, folder);
+    try { if (!fs.statSync(absDir).isDirectory()) continue; } catch { continue; }
+    const contentPath = path.join(absDir, "content.xml");
+    if (!fs.existsSync(contentPath)) continue;
+    try {
+      const man = parseModManifest(folder, fs.readFileSync(contentPath, "utf8"));
+      if (man) present.push(man);
+    } catch { /* skip unreadable extension */ }
+  }
+  return analyzeModDependencies(present);
+}
+
 app.get("/api/agent/mod-dependency-graph", (_req, res) => {
   try {
     const resolved = resolveXsdConfig();
@@ -10381,21 +10416,31 @@ app.get("/api/agent/mod-dependency-graph", (_req, res) => {
     if (!extRoot || !fs.existsSync(extRoot)) {
       return res.status(400).json({ success: false, error: "X4 extensions folder not found. Set the X4 game path in Settings." });
     }
-    const present: ModManifest[] = [];
-    for (const folder of fs.readdirSync(extRoot)) {
-      const absDir = path.join(extRoot, folder);
-      try { if (!fs.statSync(absDir).isDirectory()) continue; } catch { continue; }
-      const contentPath = path.join(absDir, "content.xml");
-      if (!fs.existsSync(contentPath)) continue;
-      try {
-        const man = parseModManifest(folder, fs.readFileSync(contentPath, "utf8"));
-        if (man) present.push(man);
-      } catch { /* skip unreadable extension */ }
-    }
-    const graph = analyzeModDependencies(present);
+    const graph = scanInstalledModDependencyGraph(extRoot);
     return res.json({ success: true, extensionsRoot: extRoot, ...graph });
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message || "mod-dependency-graph scan failed" });
+  }
+});
+
+app.get("/api/agent/extensions/dependency-graph", (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const queryError = validateCapabilityQueryKeys(
+      req.query,
+      ['workspaceId', 'clientId'],
+      'extensions.dependencies.analyze',
+    );
+    if (queryError) return res.status(400).json({ success: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    const resolved = resolveXsdConfig();
+    const extRoot = resolved.x4GamePath ? path.join(resolved.x4GamePath, "extensions") : "";
+    if (!extRoot || !fs.existsSync(extRoot)) {
+      return res.status(400).json({ success: false, error: "X4 extensions folder not found. Set the X4 game path in Settings." });
+    }
+    const graph = scanInstalledModDependencyGraph(extRoot);
+    return res.json({ success: true, ...graph });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: errorMessage(error) || "extensions dependency-graph scan failed" });
   }
 });
 
@@ -10404,9 +10449,18 @@ app.get("/api/agent/mod-dependency-graph", (_req, res) => {
 // shape + its simulated load order); the analysis engine is src/lib/overrideMap.ts.
 app.get("/api/agent/override-map", (req, res) => {
   try {
-    const targetFile = String(req.query.file || "").replace(/\\/g, "/").replace(/^\/+/, "").trim();
-    if (!targetFile || targetFile.includes(":") || targetFile.split("/").includes("..")) {
-      return res.status(400).json({ error: "Provide ?file=<base-relative xml path>, e.g. libraries/jobs.xml" });
+    const queryError = validateCapabilityQueryKeys(
+      req.query,
+      ['file', 'workspaceId', 'clientId'],
+      'extensions.overrides.analyze',
+    );
+    if (queryError) return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    if (typeof req.query.file !== "string") {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: "Provide ?file=<base-relative xml path>, e.g. libraries/jobs.xml" });
+    }
+    const targetFile = req.query.file.replace(/\\/g, "/").replace(/^\/+/, "").trim();
+    if (!targetFile || targetFile.length > 1024 || targetFile.includes(":") || targetFile.split("/").includes("..")) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: "Provide ?file=<base-relative xml path>, e.g. libraries/jobs.xml" });
     }
     const resolved = resolveXsdConfig();
     const extRoot = resolved.x4GamePath ? path.join(resolved.x4GamePath, "extensions") : "";
@@ -11805,8 +11859,21 @@ app.post("/api/agent/project/content-xml", (req, res) => {
 // #64 Phase 1 — real-data galaxy/sector map built from the installed universe files.
 // Read-only; reads base-game maps/xu_ep2_universe/{galaxy,clusters}.xml plus
 // packed DLC/extension galaxy diffs and *_clusters.xml macro files via cat/dat.
-app.get("/api/agent/galaxy-map", (_req, res) => {
+app.get("/api/agent/galaxy-map", (req, res) => {
   try {
+    const queryError = validateCapabilityQueryKeys(
+      req.query,
+      ['q', 'workspaceId', 'clientId'],
+      'reference.galaxy.read',
+    );
+    if (queryError) return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    if (req.query.q !== undefined && typeof req.query.q !== "string") {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'reference.galaxy.read q must be a string.' });
+    }
+    const rawQ = typeof req.query.q === "string" ? req.query.q : "";
+    if (rawQ.length > 256) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'reference.galaxy.read q must be at most 256 characters.' });
+    }
     const resolved = resolveXsdConfig();
     if (!resolved.x4GamePath) return res.status(400).json({ error: "X4 game path not set." });
     const galaxyHit = catDatExtractBaseGameFile(resolved.x4GamePath, "maps/xu_ep2_universe/galaxy.xml");
@@ -11826,7 +11893,32 @@ app.get("/api/agent/galaxy-map", (_req, res) => {
       source: `${path.basename(path.dirname(match.catPath))}/${match.name}`,
     }));
     const map = buildMergedGalaxyMap(galaxyHit.text, clustersHit.text, extensionSources);
-    return res.json({ success: true, counts: map.counts, bounds: map.bounds, clusters: map.clusters, sectors: map.sectors, sources: map.sources });
+    const q = rawQ.trim().toLowerCase();
+    if (!q) {
+      return res.json({ success: true, counts: map.counts, bounds: map.bounds, clusters: map.clusters, sectors: map.sectors, sources: map.sources });
+    }
+    const filteredClusters = map.clusters
+      .map(cluster => {
+        if (cluster.macro.toLowerCase().includes(q)) return cluster;
+        const matchingSectors = cluster.sectors.filter(sector => sector.macro.toLowerCase().includes(q));
+        return matchingSectors.length ? { ...cluster, sectors: matchingSectors } : null;
+      })
+      .filter((cluster): cluster is NonNullable<typeof cluster> => cluster !== null);
+    const filteredSectors = map.sectors.filter(
+      sector => sector.macro.toLowerCase().includes(q) || sector.cluster.toLowerCase().includes(q),
+    );
+    return res.json({
+      success: true,
+      counts: {
+        clusters: filteredClusters.length,
+        sectors: filteredSectors.length,
+        placedClusters: filteredClusters.length,
+      },
+      bounds: map.bounds,
+      clusters: filteredClusters,
+      sectors: filteredSectors,
+      sources: map.sources,
+    });
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) || "galaxy-map failed" });
   }
@@ -12780,12 +12872,59 @@ app.post("/api/agent/probe/preview", (req, res) => {
 // being typed, from the REAL scriptproperties index — the "Gmail completion" for MD.
 app.post("/api/agent/suggest/expression", (req, res) => {
   try {
-    const text = String(req.body?.text ?? "");
-    const caret = Number.isFinite(req.body?.caret) ? Number(req.body.caret) : text.length;
-    if (text.length > 4000) return res.json({ suggestions: [] });
+    res.set('Cache-Control', 'no-store');
+    const body = req.body as Record<string, unknown> | null;
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'expression.suggest requires a JSON object body with text.' });
+    }
+    const allowedKeys = new Set(['text', 'caret', 'variableTypes', 'limit']);
+    const unknown = Object.keys(body).filter(key => !allowedKeys.has(key));
+    if (unknown.length) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: `expression.suggest does not accept: ${unknown.join(', ')}` });
+    }
+    if (typeof body.text !== "string" || body.text.length > 4000) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'expression.suggest requires text (string at most 4000 characters).' });
+    }
+    const text = body.text;
+    let caret = text.length;
+    if (body.caret !== undefined) {
+      if (typeof body.caret !== "number" || !Number.isInteger(body.caret) || body.caret < 0 || body.caret > 4000) {
+        return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'expression.suggest caret must be an integer between 0 and 4000.' });
+      }
+      caret = body.caret;
+    }
+    let limit = 100;
+    if (body.limit !== undefined) {
+      if (typeof body.limit !== "number" || !Number.isInteger(body.limit) || body.limit < 1 || body.limit > 200) {
+        return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'expression.suggest limit must be an integer between 1 and 200.' });
+      }
+      limit = body.limit;
+    }
+    const hints = body.variableTypes;
+    if (hints !== undefined && (!hints || typeof hints !== 'object' || Array.isArray(hints)
+      || Object.keys(hints).length > EXPRESSION_CHECK_MAX_HINTS
+      || Object.entries(hints).some(([key, value]) => !key.trim() || key.length > EXPRESSION_CHECK_HINT_MAX_LENGTH
+        || typeof value !== 'string' || !value.trim() || value.length > EXPRESSION_CHECK_HINT_MAX_LENGTH))) {
+      return res.status(400).json({
+        code: 'CAPABILITY_INPUT_INVALID',
+        error: `variableTypes must map up to ${EXPRESSION_CHECK_MAX_HINTS} names to types, each at most ${EXPRESSION_CHECK_HINT_MAX_LENGTH} characters.`,
+      });
+    }
     const spIndex = getScriptPropertyIndex();
-    if (!spIndex) return res.json({ suggestions: [], available: false });
-    return res.json({ available: true, suggestions: suggestExpression(text, caret, spIndex) });
+    if (!spIndex) return res.json({ available: false, total: 0, truncated: false, suggestions: [] });
+    const allSuggestions = suggestExpression(
+      text,
+      caret,
+      spIndex,
+      hints ? { variableTypes: hints as Record<string, string> } : undefined,
+    );
+    const suggestions = allSuggestions.slice(0, limit);
+    return res.json({
+      available: true,
+      total: allSuggestions.length,
+      truncated: allSuggestions.length > suggestions.length,
+      suggestions,
+    });
   } catch (error) {
     return res.status(500).json({ error: errorMessage(error) || "expression suggest failed" });
   }
@@ -12902,13 +13041,39 @@ app.post("/api/agent/lua-staleness/instrument", (req, res) => {
 // can be supplied inline or resolved from the game data (loose → packed).
 app.post("/api/agent/xpath-synth", (req, res) => {
   try {
-    const editedXml = String(req.body?.editedXml || "");
-    if (!editedXml.trim()) {
-      return res.status(400).json({ error: "Missing editedXml." });
+    res.set('Cache-Control', 'no-store');
+    const body = req.body as Record<string, unknown> | null;
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: "patch.xpath.synthesize requires a JSON object body." });
     }
-    let vanillaXml = typeof req.body?.vanillaXml === "string" ? req.body.vanillaXml : "";
-    const targetFile = String(req.body?.targetFile || "").replace(/\\/g, "/").replace(/^\/+/, "").trim();
-    const sourceSignature = typeof req.body?.sourceSignature === "string" ? req.body.sourceSignature : null;
+    const allowedKeys = new Set(['editedXml', 'vanillaXml', 'targetFile', 'sourceSignature']);
+    const unknown = Object.keys(body).filter(key => !allowedKeys.has(key));
+    if (unknown.length) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: `patch.xpath.synthesize does not accept: ${unknown.join(', ')}` });
+    }
+    if (typeof body.editedXml !== "string" || !body.editedXml.trim()) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: "Missing editedXml." });
+    }
+    if (body.editedXml.length > 2_000_000) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: "editedXml exceeds 2,000,000 character limit." });
+    }
+    if (body.vanillaXml !== undefined && (typeof body.vanillaXml !== "string" || body.vanillaXml.length > 2_000_000)) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: "vanillaXml must be a string of at most 2,000,000 characters." });
+    }
+    if (body.targetFile !== undefined && (typeof body.targetFile !== "string" || body.targetFile.length > 1024)) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: "targetFile must be a string of at most 1024 characters." });
+    }
+    if (body.sourceSignature !== undefined && body.sourceSignature !== null
+      && (typeof body.sourceSignature !== "string" || body.sourceSignature.length > 128)) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: "sourceSignature must be null or a string of at most 128 characters." });
+    }
+    const editedXml = body.editedXml;
+    let vanillaXml = typeof body.vanillaXml === "string" ? body.vanillaXml : "";
+    const targetFile = typeof body.targetFile === "string" ? body.targetFile.replace(/\\/g, "/").replace(/^\/+/, "").trim() : "";
+    if (targetFile && (targetFile.includes(":") || targetFile.split("/").includes(".."))) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: "Invalid targetFile path." });
+    }
+    const sourceSignature = typeof body.sourceSignature === "string" ? body.sourceSignature : null;
     let canonicalBase: ReturnType<typeof effectiveReferenceMetadata> | undefined;
     if (sourceSignature && targetFile) {
       const resolved = resolveXsdConfig();
@@ -12937,9 +13102,6 @@ app.post("/api/agent/xpath-synth", (req, res) => {
       canonicalBase = effectiveReferenceMetadata(effective);
     }
     if (!vanillaXml && targetFile) {
-      if (targetFile.includes(":") || targetFile.split("/").includes("..")) {
-        return res.status(400).json({ error: "Invalid targetFile path." });
-      }
       const resolved = resolveXsdConfig();
       if (resolved.x4GamePath) {
         const loose = path.join(resolved.x4GamePath, targetFile);
@@ -12955,7 +13117,7 @@ app.post("/api/agent/xpath-synth", (req, res) => {
       }
     }
     if (!vanillaXml) {
-      return res.status(400).json({ error: "Provide vanillaXml or a resolvable targetFile." });
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: "Provide vanillaXml or a resolvable targetFile." });
     }
     const result = synthesizePatch(vanillaXml, editedXml);
     return res.json({ success: true, targetFile: targetFile || null, sourceSignature, ...result,

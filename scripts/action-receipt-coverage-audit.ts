@@ -617,7 +617,6 @@ const QUIET_READ_OVERRIDE_ROUTES = new Set([
   'POST /api/agent/project-rules/prepare-suppression',
   'POST /api/agent/project/validate-crossfile',
   'POST /api/agent/round-trip-check',
-  'POST /api/agent/xpath-synth',
   'POST /api/project-check-owner/review',
 ]);
 
