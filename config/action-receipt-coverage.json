@@ -732,6 +732,30 @@
       ]
     },
     {
+      "routeKey": "POST /api/agent/help/bug-report",
+      "method": "POST",
+      "template": "/api/agent/help/bug-report",
+      "owner": "help.bug.report",
+      "resourceClass": "stateless-analysis",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1help~1bug-report",
+      "integrationBatch": "W3B0-internal",
+      "history": "quiet",
+      "capability": {
+        "kind": "canonical",
+        "id": "help.bug.report",
+        "version": 1
+      },
+      "semanticClass": "read-analysis-only",
+      "policy": "receipt-exempt",
+      "effects": [
+        "read",
+        "analyze"
+      ],
+      "authorityScopes": [
+        "global"
+      ]
+    },
+    {
       "routeKey": "POST /api/agent/history/:id/revert",
       "method": "POST",
       "template": "/api/agent/history/:id/revert",
@@ -2205,6 +2229,30 @@
       ],
       "authorityScopes": [
         "workspace"
+      ]
+    },
+    {
+      "routeKey": "POST /api/agent/runtime/probe-preview",
+      "method": "POST",
+      "template": "/api/agent/runtime/probe-preview",
+      "owner": "runtime.probe.preview",
+      "resourceClass": "stateless-analysis",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1runtime~1probe-preview",
+      "integrationBatch": "W3B0-internal",
+      "history": "quiet",
+      "capability": {
+        "kind": "canonical",
+        "id": "runtime.probe.preview",
+        "version": 1
+      },
+      "semanticClass": "read-analysis-only",
+      "policy": "receipt-exempt",
+      "effects": [
+        "read",
+        "analyze"
+      ],
+      "authorityScopes": [
+        "global"
       ]
     },
     {

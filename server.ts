@@ -301,7 +301,8 @@ import { AgentHistoryStore } from "./src/lib/agentHistoryStore";
 import { runAgentHistorySelftest } from "./src/lib/agentHistory.selftest";
 import { runActionReceiptSelftest } from "./src/lib/actionReceipt.selftest";
 import { workspaceContentReceiptHash, workspaceSnapshotReceiptHash } from "./src/lib/workspaceReceiptHash";
-import { runBugReportSelftest } from "./src/lib/bugReport";
+import { BUG_TRACKER_REPO, buildBugReport, redactSecrets, runBugReportSelftest } from "./src/lib/bugReport";
+import { queryForgeKnowledge, scrubBugReportValue, type ForgeKnowledgeSection, type WikiCategory } from "./src/lib/forgeKnowledge";
 import { generatedOutputVerdict, normalizeApiFailureBody, runApiFailureEnvelopeSelftest } from "./src/lib/apiFailureEnvelope";
 import { projectApiEnvelope, projectApiSubject, fileApiSubject, workspaceApiSubject, pastedLogApiSubject, releaseReportApiSubject, validateProjectApiBody, validateProjectApiQuery, validateWorkspaceCreateBody, validateWorkspaceMutationBody, type ApiSubject } from './src/server/projectApiContract';
 import { canonicalSourceKey, canonicalSourcePath, sourceKeyForResolvedPath } from './src/server/resourceCoordinator';
@@ -1264,6 +1265,11 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
       || authority.decision.routeKey === 'GET /api/agent/reference/coverage'
       || authority.decision.routeKey === 'GET /api/agent/ui/lua-snippets'
       || authority.decision.routeKey === 'GET /api/agent/ui/vanilla-harvest'
+      || authority.decision.routeKey === 'GET /api/agent/help/knowledge'
+      || authority.decision.routeKey === 'POST /api/agent/help/bug-report'
+      || authority.decision.routeKey === 'GET /api/agent/runtime/health-card'
+      || authority.decision.routeKey === 'POST /api/agent/runtime/probe-preview'
+      || authority.decision.routeKey === 'GET /api/agent/runtime/forge-state'
       || (authority.decision.routeKey === 'GET /api/agent/status'
         && (req.query.inspectDeployTarget !== undefined || req.query.inspectDeployEffect !== undefined))
       || authority.decision.routeKey === 'POST /api/agent/history/:id/revert'
@@ -15584,6 +15590,289 @@ app.get("/api/agent/expression-suggest-selftest", (_req, res) => {
     return res.json(runExpressionSuggestSelftest(spIndex));
   } catch (error) {
     return res.status(500).json({ pass: false, error: errorMessage(error) || "expression-suggest-selftest failed" });
+  }
+});
+
+app.get("/api/agent/runtime/forge-state", (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const queryError = validateClosedAgentQuery(req.query, ['topic', 'workspaceId', 'clientId'], 'runtime.state.read');
+    if (queryError) return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    const topicFilter = typeof req.query.topic === 'string' ? req.query.topic.trim() : '';
+    if (topicFilter.length > 128 || hasControlChars(topicFilter)) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'Optional ?topic= must be at most 128 printable characters.' });
+    }
+    const candidates = findDebugLogCandidates();
+    const logPath = candidates.find(c => { try { return fs.statSync(c).isFile(); } catch { return false; } });
+    if (!logPath) {
+      return res.json({
+        ok: true,
+        available: false,
+        live: false,
+        logUpdatedAt: null,
+        totalTopics: 0,
+        truncated: false,
+        topics: [],
+        malformed: 0,
+        reason: 'No X4 debuglog found in the known locations.',
+      });
+    }
+    const stat = fs.statSync(logPath);
+    const tail = readTail(logPath, 256 * 1024);
+    const parsed = parseForgeState(tail);
+    const matched = topicFilter
+      ? parsed.topics.filter(entry => entry.topic.toLowerCase() === topicFilter.toLowerCase())
+      : parsed.topics;
+    const topics = matched.slice(0, 100);
+    return res.json({
+      ok: true,
+      available: true,
+      live: (Date.now() - stat.mtimeMs) < 120_000,
+      logUpdatedAt: stat.mtime.toISOString(),
+      totalTopics: matched.length,
+      truncated: matched.length > topics.length,
+      topics,
+      malformed: parsed.malformed,
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: errorMessage(error) || 'forge-state read failed' });
+  }
+});
+
+app.post("/api/agent/runtime/probe-preview", (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const body = req.body as Record<string, unknown> | null;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'runtime.probe.preview requires a JSON object body.' });
+    }
+    const unknown = Object.keys(body).filter(key => key !== 'topics');
+    if (unknown.length) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: `runtime.probe.preview does not accept: ${unknown.join(', ')}` });
+    }
+    let parsedTopics = DEFAULT_PROBE_TOPICS;
+    if (body.topics !== undefined) {
+      if (!Array.isArray(body.topics) || body.topics.length < 1 || body.topics.length > 16) {
+        return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'topics must be an array of 1..16 probe topic objects.' });
+      }
+      const validated: typeof DEFAULT_PROBE_TOPICS = [];
+      for (const rawTopic of body.topics) {
+        if (!rawTopic || typeof rawTopic !== 'object' || Array.isArray(rawTopic)) {
+          return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'Each probe topic must be an object with topic and fields.' });
+        }
+        const topicObj = rawTopic as Record<string, unknown>;
+        const extraTopicKeys = Object.keys(topicObj).filter(k => k !== 'topic' && k !== 'fields');
+        if (extraTopicKeys.length || typeof topicObj.topic !== 'string' || !/^[a-zA-Z_][a-zA-Z0-9_.-]{0,63}$/.test(topicObj.topic)) {
+          return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'Each probe topic requires a safe identifier topic (1..64 chars) and fields.' });
+        }
+        if (!Array.isArray(topicObj.fields) || topicObj.fields.length < 1 || topicObj.fields.length > 24) {
+          return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'Each probe topic requires 1..24 fields.' });
+        }
+        const fields: Array<{ key: string; expression: string }> = [];
+        for (const rawField of topicObj.fields) {
+          if (!rawField || typeof rawField !== 'object' || Array.isArray(rawField)) {
+            return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'Each probe field must be an object with key and expression.' });
+          }
+          const fieldObj = rawField as Record<string, unknown>;
+          const extraFieldKeys = Object.keys(fieldObj).filter(k => k !== 'key' && k !== 'expression');
+          const expr = typeof fieldObj.expression === 'string' ? fieldObj.expression.trim() : '';
+          if (extraFieldKeys.length
+            || typeof fieldObj.key !== 'string'
+            || !/^[a-zA-Z_][a-zA-Z0-9_.-]{0,63}$/.test(fieldObj.key)
+            || !expr || expr.length > 256 || hasControlChars(expr)) {
+            return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'Each probe field requires a safe key (1..64 chars) and printable expression (1..256 chars).' });
+          }
+          fields.push({ key: fieldObj.key, expression: expr });
+        }
+        validated.push({ topic: topicObj.topic, fields });
+      }
+      parsedTopics = validated;
+    }
+    const ws = buildProbeWorkspace(parsedTopics);
+    const md = generateMDXML(ws);
+    const diagnostics = computeWorkspaceDiagnostics(ws);
+    return res.json({
+      ok: true,
+      topicCount: parsedTopics.length,
+      md,
+      diagnosticsSummary: summarizeDiagnostics(diagnostics),
+      readOnly: true,
+      note: 'Preview only. Deploying x4_forge_probe writes into the game extensions folder — that step is write-gated and human-run.',
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: errorMessage(error) || 'probe preview failed' });
+  }
+});
+
+app.get("/api/agent/help/knowledge", (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const queryError = validateClosedAgentQuery(req.query, ['section', 'category', 'q', 'workspaceId', 'clientId'], 'help.knowledge.read');
+    if (queryError) return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    let section: ForgeKnowledgeSection = 'all';
+    if (req.query.section !== undefined) {
+      if (typeof req.query.section !== 'string' || !['all', 'wiki', 'shortcuts', 'onboarding'].includes(req.query.section)) {
+        return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'Optional ?section= must be all, wiki, shortcuts, or onboarding.' });
+      }
+      section = req.query.section as ForgeKnowledgeSection;
+    }
+    let category: WikiCategory | undefined;
+    if (req.query.category !== undefined) {
+      if (typeof req.query.category !== 'string' || !['mdscript', 'aiscript', 'xmlpatch', 'luaui', 'reference'].includes(req.query.category)) {
+        return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'Optional ?category= must be mdscript, aiscript, xmlpatch, luaui, or reference.' });
+      }
+      category = req.query.category as WikiCategory;
+    }
+    let q = '';
+    if (req.query.q !== undefined) {
+      if (typeof req.query.q !== 'string' || req.query.q.length > 256 || hasControlChars(req.query.q)) {
+        return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'Optional ?q= must be a printable string of at most 256 characters.' });
+      }
+      q = req.query.q;
+    }
+    return res.json(queryForgeKnowledge({ section, category, q }));
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: errorMessage(error) || 'help knowledge query failed' });
+  }
+});
+
+app.post("/api/agent/help/bug-report", (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const body = req.body as Record<string, unknown> | null;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'help.bug.report requires a JSON object body.' });
+    }
+    const allowedKeys = new Set(['title', 'description', 'includeContext', 'extraContext']);
+    const unknown = Object.keys(body).filter(key => !allowedKeys.has(key));
+    if (unknown.length) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: `help.bug.report does not accept: ${unknown.join(', ')}` });
+    }
+    const title = typeof body.title === 'string' ? body.title.trim() : '';
+    if (!title || title.length > 256 || hasControlChars(title)) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'help.bug.report requires a printable title of 1..256 characters.' });
+    }
+    if (body.description !== undefined && (typeof body.description !== 'string' || body.description.length > 16_000)) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'description must be a string of at most 16,000 characters.' });
+    }
+    if (body.includeContext !== undefined && typeof body.includeContext !== 'boolean') {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'includeContext must be a boolean when supplied.' });
+    }
+    const extraEntries: Array<[string, string]> = [];
+    if (body.extraContext !== undefined) {
+      if (!body.extraContext || typeof body.extraContext !== 'object' || Array.isArray(body.extraContext)) {
+        return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'extraContext must be a plain string-to-string object.' });
+      }
+      const rawExtra = body.extraContext as Record<string, unknown>;
+      const keys = Object.keys(rawExtra);
+      if (keys.length > 16) {
+        return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'extraContext accepts at most 16 entries.' });
+      }
+      for (const k of keys) {
+        const val = rawExtra[k];
+        if (!k.trim() || k.length > 64 || hasControlChars(k) || typeof val !== 'string' || val.length > 512) {
+          return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'Each extraContext entry requires a printable key (1..64 chars) and string value (<= 512 chars).' });
+        }
+        extraEntries.push([k.trim(), val]);
+      }
+    }
+
+    const record = resolveWorkspaceAuthority(req, res, false);
+    if (res.headersSent) return;
+    if (record) res.locals.apiSubject = workspaceRecordSubject(record);
+
+    const resolved = resolveXsdConfig();
+    const mdIndex = (() => { try { return getSchemaIndex(); } catch { return null; } })();
+    const aiIndex = (() => { try { return getAiSchemaIndex(); } catch { return null; } })();
+    const spIndex = getScriptPropertyIndex();
+    const context: Record<string, string> = {
+      'Forge version': SERVER_EXTENSION_VERSION || 'dev',
+      'Instance mode': PUBLIC_INSTANCE_MODES.has(SERVER_INSTANCE_MODE) ? SERVER_INSTANCE_MODE : 'unknown',
+      'Platform': `${process.platform} (${process.arch})`,
+      'Node': process.version,
+      'Schemas': `md=${mdIndex?.loaded ? mdIndex.elementCount : 'unloaded'}, ai=${aiIndex?.loaded ? aiIndex.elementCount : 'unloaded'}, scriptprops=${spIndex?.loaded ? spIndex.model.parsedProperties : 'unloaded'}`,
+      'Reference corpus': resolved.x4ReferenceExists ? 'configured (present)' : (resolved.x4ReferenceRoot ? 'configured (missing)' : 'unset'),
+    };
+    if (record) {
+      const ws = sanitizeWorkspace(record.workspace);
+      context['Workspace'] = scrubBugReportValue(redactSecrets(`${ws.name} (${ws.nodes.length} nodes / ${ws.links.length} links)`));
+      const modId = (() => { try { return effectiveModId(ws); } catch { return ''; } })();
+      if (modId) {
+        const stored = validationReceiptStore.read(modId);
+        if (stored.status !== 'unavailable' && stored.receipt) {
+          context['Last deploy validation'] = `${stored.receipt.verdict.toUpperCase()} (errors=${stored.receipt.errors}, warnings=${stored.receipt.warnings}, source=${stored.receipt.sourceHash.slice(0, 12)})`;
+        }
+      }
+    }
+    for (const [k, val] of extraEntries) {
+      context[`Note: ${scrubBugReportValue(redactSecrets(k))}`] = scrubBugReportValue(redactSecrets(val));
+    }
+
+    const includeContext = body.includeContext !== false;
+    const sanitizedTitle = scrubBugReportValue(redactSecrets(title));
+    const sanitizedDescription = scrubBugReportValue(redactSecrets(typeof body.description === 'string' ? body.description : ''));
+    const built = buildBugReport({
+      title: sanitizedTitle,
+      description: sanitizedDescription,
+      context,
+      includeContext,
+    });
+    if (!built.ok || !built.issueUrl || built.body === undefined) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: built.error || 'Could not build bug report.' });
+    }
+    return res.json({
+      ok: true,
+      repo: BUG_TRACKER_REPO,
+      issueUrl: built.issueUrl,
+      body: built.body,
+      truncated: Boolean(built.truncated),
+      context: includeContext ? context : {},
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: errorMessage(error) || 'bug report preparation failed' });
+  }
+});
+
+app.get("/api/agent/runtime/health-card", async (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const queryError = validateClosedAgentQuery(req.query, ['workspaceId', 'clientId'], 'runtime.health.read');
+    if (queryError) return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    const record = resolveWorkspaceAuthority(req, res, true);
+    if (!record) return;
+    res.locals.apiSubject = workspaceRecordSubject(record);
+    const resolved = resolveXsdConfig();
+    const mdIndex = (() => { try { return getSchemaIndex(); } catch { return null; } })();
+    const aiIndex = (() => { try { return getAiSchemaIndex(); } catch { return null; } })();
+    const spIndex = getScriptPropertyIndex();
+    const bridge = await getBridgeLiveState();
+    const logPath = findDebugLogCandidates().find(c => { try { return fs.statSync(c).isFile(); } catch { return false; } });
+    const ws = sanitizeWorkspace(record.workspace);
+    const modId = (() => { try { return effectiveModId(ws); } catch { return ''; } })();
+    const drift = modId ? computeModDrift(modId) : null;
+    const tail = logPath ? readTail(logPath, 256 * 1024) : '';
+    const luaFiles = modId ? collectModLuaFiles(modId) : [];
+    const lua = luaFiles.length ? assessLuaStaleness(luaFiles.map(f => ({ path: f.path, source: f.source })), tail) : null;
+    const card = buildHealthCard({
+      gamePath: { path: resolved.x4GamePath ? '(configured)' : '(unset)', exists: !!resolved.x4GamePath && fs.existsSync(resolved.x4GamePath) },
+      stagingPath: { path: resolved.modWorkspacePath ? '(configured)' : '(unset)', exists: !!resolved.modWorkspacePath && fs.existsSync(resolved.modWorkspacePath) },
+      mdSchema: { loaded: !!mdIndex?.loaded, elements: mdIndex?.elementCount || 0 },
+      aiSchema: { loaded: !!aiIndex?.loaded, elements: aiIndex?.elementCount || 0 },
+      scriptProperties: { loaded: !!spIndex?.loaded, properties: spIndex?.model.parsedProperties || 0 },
+      objectIndex: objectIndexCache ? { items: objectIndexCache.index.items.length } : null,
+      bridge: { bridgeUp: bridge.bridgeUp, gameActive: bridge.gameActive, summary: scrubBugReportValue(bridge.summary) },
+      debugLog: logPath ? { found: true, updatedAt: fs.statSync(logPath).mtime.toISOString() } : { found: false },
+      activeModDrift: drift ? { verdict: drift.verdict, summary: scrubBugReportValue(drift.summary) } : null,
+      luaStaleness: lua ? { restartRequired: lua.restartRequired, instrumented: lua.instrumented, summary: scrubBugReportValue(lua.summary) } : null,
+    });
+    return res.json({
+      ok: true,
+      workspaceId: record.workspaceId,
+      activeMod: modId || null,
+      ...card,
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: errorMessage(error) || 'runtime health-card failed' });
   }
 });
 

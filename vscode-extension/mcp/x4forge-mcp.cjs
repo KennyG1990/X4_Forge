@@ -179,6 +179,11 @@ const DIAGNOSTIC_READ_LIVE_TOOLS = new Set([
   "get_reference_coverage",
   "list_lua_ui_snippets",
   "harvest_vanilla_ui_menus",
+  "prepare_bug_report",
+  "query_forge_knowledge",
+  "get_forge_health_card",
+  "preview_forge_probe",
+  "get_live_forge_state",
 ]);
 const PERFORMANCE_PROFILE_HTTP_FAILURES = { PROFILE_DISABLED: 503, PROFILE_BUSY: 409, PROFILE_RATE_LIMITED: 429, PROFILE_DISPOSED: 503, PROFILE_INPUT_INVALID: 400, PROFILE_ABORTED: 408, PROFILE_FAILED: 500, PROFILE_CLEANUP_UNCONFIRMED: 409 };
 const PERFORMANCE_COLLECTION_HTTP_FAILURES = { PERFORMANCE_DISPOSED: 503, PERFORMANCE_COLLECTION_BUSY: 409, PERFORMANCE_COLLECTION_REFUSED: 409, PROJECT_INPUT_INVALID: 400, PERFORMANCE_COLLECTION_FAILED: 500 };
@@ -2796,6 +2801,191 @@ const TOOLS = [
           menus: "array",
         },
       );
+    },
+  },
+  {
+    name: "prepare_bug_report",
+    capabilityId: "help.bug.report",
+    capabilityVersion: 1,
+    description: "Assemble a secret-free, host-path-redacted diagnostic bug report markdown bundle and bounded GitHub new-issue URL for KennyG1990/X4_Forge, automatically attaching Forge version, runtime/schema/reference status, and optional addressed workspace plus last-validation summaries without calling GitHub or writing disk.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string", maxLength: 256 },
+        description: { type: "string", maxLength: 16000 },
+        includeContext: { type: "boolean" },
+        extraContext: {
+          type: "object",
+          additionalProperties: { type: "string", maxLength: 512 },
+        },
+      },
+      required: ["title"],
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/help/bug-report", args),
+      "bug report bundle",
+      {
+        ok: "boolean",
+        repo: "string",
+        issueUrl: "string",
+        body: "string",
+        truncated: "boolean",
+        context: "object",
+      },
+    ),
+  },
+  {
+    name: "query_forge_knowledge",
+    capabilityId: "help.knowledge.read",
+    capabilityVersion: 1,
+    description: "Search and read the single-source-of-truth in-app X4 modding wiki articles (MD, AIScript, XML diff patching, Lua UI, kuertee UIX, validator architecture), Studio keyboard shortcut reference, and starter-template guided onboarding rails.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        section: { type: "string", enum: ["all", "wiki", "shortcuts", "onboarding"] },
+        category: { type: "string", enum: ["mdscript", "aiscript", "xmlpatch", "luaui", "reference"] },
+        q: { type: "string", maxLength: 256 },
+      },
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams();
+      if (args.section !== undefined) q.set("section", String(args.section));
+      if (args.category !== undefined) q.set("category", String(args.category));
+      if (args.q !== undefined) q.set("q", String(args.q));
+      const payload = requireResponse(
+        await forge("GET", `/api/agent/help/knowledge?${q}`),
+        "Forge knowledge query",
+        {
+          ok: "boolean",
+          section: "string",
+          query: "string",
+          counts: "object",
+          wikiTopics: "array",
+          shortcuts: "array",
+          starterGuides: "array",
+        },
+      );
+      if (payload.category !== null && typeof payload.category !== "string") {
+        const error = new Error("Forge knowledge query response has invalid category field");
+        error.invalidResponse = true;
+        throw error;
+      }
+      return payload;
+    },
+  },
+  {
+    name: "get_forge_health_card",
+    capabilityId: "runtime.health.read",
+    capabilityVersion: 1,
+    description: "Evaluate the ten-row X4 Forge environment walkaround card (game installation, staging folder, MD/AI schemas, scriptproperties, object index, optional bridge, debug log, mod drift, and Lua freshness) for the addressed workspace with host filesystem paths redacted.",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    },
+    handler: async () => {
+      const payload = requireResponse(
+        await forge("GET", "/api/agent/runtime/health-card"),
+        "Forge walkaround health card",
+        {
+          ok: "boolean",
+          workspaceId: "string",
+          verdict: "string",
+          summary: "string",
+          rows: "array",
+        },
+      );
+      if (payload.activeMod !== null && typeof payload.activeMod !== "string") {
+        const error = new Error("Forge walkaround health card response has invalid activeMod field");
+        error.invalidResponse = true;
+        throw error;
+      }
+      return payload;
+    },
+  },
+  {
+    name: "preview_forge_probe",
+    capabilityId: "runtime.probe.preview",
+    capabilityVersion: 1,
+    description: "Generate and validate the optional read-only x4_forge_probe Mission Director XML (ADR-F3 FORGE-STATE debug_text snapshots only, zero save or game-state mutation) for default or custom probe topics without touching game directories.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        topics: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              topic: { type: "string", maxLength: 64 },
+              fields: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    key: { type: "string", maxLength: 64 },
+                    expression: { type: "string", maxLength: 256 },
+                  },
+                  required: ["key", "expression"],
+                  additionalProperties: false,
+                },
+              },
+            },
+            required: ["topic", "fields"],
+            additionalProperties: false,
+          },
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/runtime/probe-preview", args),
+      "x4_forge_probe preview",
+      {
+        ok: "boolean",
+        topicCount: "number",
+        md: "string",
+        diagnosticsSummary: "object",
+        readOnly: "boolean",
+        note: "string",
+      },
+    ),
+  },
+  {
+    name: "get_live_forge_state",
+    capabilityId: "runtime.state.read",
+    capabilityVersion: 1,
+    description: "Parse structured FORGE-STATE JSON topic snapshots from the active X4 debug log tail (up to 100 topics, optionally filtered by topic name) with host debuglog filesystem paths redacted.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        topic: { type: "string", maxLength: 128 },
+      },
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams();
+      if (args.topic !== undefined) q.set("topic", String(args.topic));
+      const payload = requireResponse(
+        await forge("GET", `/api/agent/runtime/forge-state?${q}`),
+        "live FORGE-STATE snapshot",
+        {
+          ok: "boolean",
+          available: "boolean",
+          live: "boolean",
+          totalTopics: "number",
+          truncated: "boolean",
+          topics: "array",
+          malformed: "number",
+        },
+      );
+      if (payload.logUpdatedAt !== null && typeof payload.logUpdatedAt !== "string") {
+        const error = new Error("live FORGE-STATE snapshot response has invalid logUpdatedAt field");
+        error.invalidResponse = true;
+        throw error;
+      }
+      return payload;
     },
   },
 ];

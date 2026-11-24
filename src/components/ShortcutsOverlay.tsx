@@ -9,25 +9,9 @@
  */
 
 import { X, Keyboard } from 'lucide-react';
+import { STUDIO_SHORTCUTS } from '../lib/forgeKnowledge';
 
-interface ShortcutRow {
-  keys: string[];
-  what: string;
-  where: string;
-}
-
-// Audited inventory (2026-07-11): App.tsx undo/redo · GlobalSearch.tsx focus ·
-// Canvas.tsx search/comment/quick-add · this overlay's own toggle.
-const SHORTCUTS: ShortcutRow[] = [
-  { keys: ['Ctrl', 'Z'], what: 'Undo last action', where: 'Everywhere' },
-  { keys: ['Ctrl', 'Y'], what: 'Redo (also Ctrl+Shift+Z)', where: 'Everywhere' },
-  { keys: ['Ctrl', 'K'], what: 'Search workspace (also Cmd+K or /)', where: 'Expert' },
-  { keys: ['?'], what: 'Show this shortcuts list', where: 'Everywhere' },
-  { keys: ['Space'], what: 'Quick-add node palette at the cursor', where: 'Canvas' },
-  { keys: ['C'], what: 'Add a Comment Box (groups selected nodes)', where: 'Canvas' },
-  { keys: ['Ctrl', 'F'], what: 'Search nodes by label, tag, or field', where: 'Canvas' },
-  { keys: ['Esc'], what: 'Close dialogs and popups', where: 'Dialogs' },
-];
+const SHORTCUTS = STUDIO_SHORTCUTS;
 
 const Key = ({ k }: { k: string }) => (
   <kbd className="px-1.5 py-0.5 rounded border border-white/20 bg-white/10 text-[10px] font-mono text-slate-200 shadow-[0_1px_0_rgba(255,255,255,0.08)]">

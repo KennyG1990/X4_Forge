@@ -53,6 +53,11 @@ const DIAGNOSTIC_READ_TOOLS = [
   'get_reference_coverage',
   'list_lua_ui_snippets',
   'harvest_vanilla_ui_menus',
+  'prepare_bug_report',
+  'query_forge_knowledge',
+  'get_forge_health_card',
+  'preview_forge_probe',
+  'get_live_forge_state',
 ];
 
 const MD_NAVIGATION_TOOL = 'navigate_md_script';
@@ -147,6 +152,7 @@ const READ_TOOLS = [
   'suggest_expression_completions', 'get_mod_dependency_graph', 'get_extension_override_map', 'list_patch_targets', 'synthesize_xml_patch', 'get_galaxy_map',
   'check_xml_round_trip', 'suggest_quick_fixes', 'prepare_warning_suppression', 'verify_release_artifact', 'search_workspace_symbols', 'read_action_history_blob',
   'derive_external_api_contract', 'list_external_api_contracts', 'read_extension_file', 'read_patch_base_content', 'complete_xpath_selector', 'get_reference_coverage', 'list_lua_ui_snippets', 'harvest_vanilla_ui_menus',
+  'prepare_bug_report', 'query_forge_knowledge', 'get_forge_health_card', 'preview_forge_probe', 'get_live_forge_state',
 ];
 const WRITE_TOOLS = [
   'validate_mod', 'list_schema_domains', 'get_workspace', 'compile_workspace', 'author_check',

@@ -1709,6 +1709,62 @@ async function main() {
       assert(Array.isArray(harvestRes.payload.menus));
       assert(!JSON.stringify(harvestRes.payload).includes(root), 'harvest_vanilla_ui_menus leaked host root');
     });
+
+    await check('14_help_knowledge_sanitized_bug_report_and_runtime_probes_over_mcp', async () => {
+      const wikiRes = await presetReadMcp.callTool('query_forge_knowledge', {
+        section: 'wiki',
+        category: 'luaui',
+        q: 'kuertee',
+      });
+      assert.equal(wikiRes.isError, false, JSON.stringify(wikiRes.payload));
+      assert.equal(wikiRes.payload.ok, true);
+      assert.equal(wikiRes.payload.wikiTopics.length, 1);
+      assert.equal(wikiRes.payload.wikiTopics[0].id, 'luaui_kuertee_compat');
+      assert.equal(wikiRes.payload.shortcuts.length, 0);
+
+      const onboardingRes = await presetReadMcp.callTool('query_forge_knowledge', {
+        section: 'onboarding',
+        q: 'gamestart',
+      });
+      assert.equal(onboardingRes.isError, false, JSON.stringify(onboardingRes.payload));
+      assert(onboardingRes.payload.starterGuides.some((g: any) => g.id === 'custom_gamestart' && g.rail?.tweakHint));
+
+      const bugRes = await presetReadMcp.callTool('prepare_bug_report', {
+        title: 'MCP Bug Bundle Test',
+        description: `Secret x4fk_0123456789abcdef0123456789abcdef at ${root}\\secret.xml`,
+        extraContext: { LocalPath: `${root}\\nested\\file.xml` },
+      });
+      assert.equal(bugRes.isError, false, JSON.stringify(bugRes.payload));
+      assert.equal(bugRes.payload.ok, true);
+      assert(String(bugRes.payload.issueUrl).startsWith('https://github.com/KennyG1990/X4_Forge/issues/new?labels=bug&'));
+      assert(!JSON.stringify(bugRes.payload).includes('x4fk_0123'), 'prepare_bug_report leaked agent key');
+      assert(!JSON.stringify(bugRes.payload).includes(root), 'prepare_bug_report leaked host root');
+      assert(String(bugRes.payload.body).includes('[redacted]'));
+
+      const bugBad = await presetReadMcp.callTool('prepare_bug_report', { title: '   ' });
+      assert.equal(bugBad.isError, true);
+      assert(String(bugBad.payload).includes('printable title'), JSON.stringify(bugBad.payload));
+
+      const healthRes = await presetReadMcp.callTool('get_forge_health_card', {});
+      assert.equal(healthRes.isError, false, JSON.stringify(healthRes.payload));
+      assert.equal(healthRes.payload.ok, true);
+      assert.equal(healthRes.payload.rows.length, 10);
+      assert(!JSON.stringify(healthRes.payload).includes(root), 'get_forge_health_card leaked host root');
+
+      const probeRes = await presetReadMcp.callTool('preview_forge_probe', {
+        topics: [{ topic: 'economy', fields: [{ key: 'money', expression: 'player.money' }] }],
+      });
+      assert.equal(probeRes.isError, false, JSON.stringify(probeRes.payload));
+      assert.equal(probeRes.payload.ok, true);
+      assert.equal(probeRes.payload.readOnly, true);
+      assert(String(probeRes.payload.md).includes('FORGE-STATE economy {'));
+
+      const stateRes = await presetReadMcp.callTool('get_live_forge_state', {});
+      assert.equal(stateRes.isError, false, JSON.stringify(stateRes.payload));
+      assert.equal(stateRes.payload.ok, true);
+      assert.equal(typeof stateRes.payload.available, 'boolean');
+      assert(!JSON.stringify(stateRes.payload).includes(root), 'get_live_forge_state leaked host root');
+    });
   } finally {
     for (const s of mcpSessions) {
       try { await s.close(); } catch { /* ignore */ }

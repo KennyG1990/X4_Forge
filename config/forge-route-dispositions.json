@@ -78,6 +78,7 @@
     "src/lib/fileBridgeTransport.ts",
     "src/lib/forgeCapabilities.selftest.ts",
     "src/lib/forgeCapabilities.ts",
+    "src/lib/forgeKnowledge.ts",
     "src/lib/forgePerformance.ts",
     "src/lib/forgeProbe.ts",
     "src/lib/forgeState.ts",
@@ -1229,6 +1230,18 @@
       "resourceClass": "public",
       "workspaceMode": "optional"
     },
+    "GET /api/agent/help/knowledge": {
+      "disposition": "canonical-capability",
+      "owner": "help.knowledge.read",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "stateless-analysis",
+      "workspaceMode": "none"
+    },
     "GET /api/agent/history": {
       "disposition": "canonical-capability",
       "owner": "history.list",
@@ -2320,6 +2333,30 @@
       ],
       "resourceClass": "public",
       "workspaceMode": "optional"
+    },
+    "GET /api/agent/runtime/forge-state": {
+      "disposition": "canonical-capability",
+      "owner": "runtime.state.read",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "none"
+    },
+    "GET /api/agent/runtime/health-card": {
+      "disposition": "canonical-capability",
+      "owner": "runtime.health.read",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "workspace",
+      "workspaceMode": "required"
     },
     "GET /api/agent/schema": {
       "disposition": "legacy-public",
@@ -3470,6 +3507,18 @@
       "resourceClass": "provider-network",
       "workspaceMode": "input-first"
     },
+    "POST /api/agent/help/bug-report": {
+      "disposition": "canonical-capability",
+      "owner": "help.bug.report",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "stateless-analysis",
+      "workspaceMode": "optional"
+    },
     "POST /api/agent/history/:id/revert": {
       "disposition": "legacy-agent-api",
       "owner": "agent-api",
@@ -4078,6 +4127,18 @@
       "resourceClass": "workspace",
       "workspaceMode": "required"
     },
+    "POST /api/agent/runtime/probe-preview": {
+      "disposition": "canonical-capability",
+      "owner": "runtime.probe.preview",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "stateless-analysis",
+      "workspaceMode": "none"
+    },
     "POST /api/agent/setup/harvest-schemas": {
       "disposition": "session-only",
       "owner": "agent-api",
@@ -4565,6 +4626,8 @@
     "files.restore@2": "8fa3fb946bad0d637ced278cb411481ad54ee81f06e8850654da82b059763d79",
     "files.scaffold@1": "1f8e5baef1c091609e27ebf8c0bd9af0763a3dd5b39772a6152812cceb193f4b",
     "files.write@2": "39ee7550b7a486b45dcee656aa2e447bf97ba3a7eef24519be5622641c0b96d3",
+    "help.bug.report@1": "13a82d64e11e769f5f570ae9277221a55b2428e862d688a3e499be1fb9061b0e",
+    "help.knowledge.read@1": "595fe2b1707695d24d6d4296775fbe31560963608fe5e830654eb6d19df4935e",
     "history.list@2": "9fc3203d66edd8c3136bd374bfef4394783e1bd8ef8a44834ff7360a93d1fb33",
     "history.raw.read@1": "d055a37d5b317100dbca52cfd7878e4eeae8c9a4f01f400a7619be95919ee68e",
     "history.revert@2": "e864816f1ef6d4e06389051423687d3b9da310d3b541f91beff8ecafbb4ab0f4",
@@ -4604,7 +4667,10 @@
     "rules.suppression.apply@1": "6e13f1e54fa0e700a3406dbcaadcbb830915cba87c26997a6015d07cd6e73178",
     "rules.suppression.prepare@1": "a056605dac950c518a149a2b85c4a0ad6824b1ec2a842f4213e3d267fc294a05",
     "runtime.debug.read@1": "8d0d15b310655431fa08afdf161575c5873a62261f1e511e9b0ccf9260d84311",
+    "runtime.health.read@1": "09baaa412b3215b7f0eb354e279876435ccb387950fae6fe8efeb8473522beda",
     "runtime.log.diagnose@1": "a5b1ef6f5323695f7ca5a3a47c0bbf103cca4777ef163913528a4838d843d589",
+    "runtime.probe.preview@1": "2a4eb0be1027fd55d83a29a01a638806a56630ec1e5d10ffd3336cda66ddec20",
+    "runtime.state.read@1": "b4602c8734d30f49e7e7ff26587958d2bace9a9f1c550d49612aea78a4c999f2",
     "schema.domains.list@1": "c2ecae2906cf231eb4384a63ea601c7449f4fc691b629b97bff9fa81e32f21b5",
     "schema.element.explain@1": "066fc8d2153c753a7f498044a0fb2e4a6921f81a2fe1deb6445a02894194286d",
     "snapshots.create@1": "a9fd9da3a02cf0114d12558c1fd769fb4502ea19b527f6fbfc1711e2b9d2183a",
@@ -4624,8 +4690,8 @@
     "workspace.roundtrip.check@1": "c1a1c89c1eb3f44f8f16e6ca03e9787318eec5065bcf25dd2c3ce3a4b4045185"
   },
   "mcpModuleSignature": {
-    "version": 36,
-    "hash": "5edb7ef23f5a2de84dbe7480abab96e276603bcace59ea596af350beba87ecf6"
+    "version": 37,
+    "hash": "0368859a0c948f4390e05a6839b9ef5ddb34a960698ff3e68816073122014540"
   },
   "mcpSignatures": {
     "validate_mod": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",
@@ -4715,7 +4781,12 @@
     "complete_xpath_selector": "eaa18fd19c537bdde30cdbd3e7542209f2431a65f707feb27a507e9c889c244a",
     "get_reference_coverage": "91fbe88553da4c30bddea7d02a2869de56aa9fbdf933ff21be2616fcf759dd8f",
     "list_lua_ui_snippets": "d81ce133bd3ae5d276baeb94fc6c3366171698d2a83066e3cd10f8134dd87d06",
-    "harvest_vanilla_ui_menus": "0d7be639796a030778d4ab28ff382fbd441dc1a06256c39daa2d6e4279d9dfd8"
+    "harvest_vanilla_ui_menus": "0d7be639796a030778d4ab28ff382fbd441dc1a06256c39daa2d6e4279d9dfd8",
+    "prepare_bug_report": "b4a8c6908654b30fe371d13c40697b48205ad334a3fda6876f8da0b315c0ba46",
+    "query_forge_knowledge": "8e37336447ac7e048badfd95714bf56e61018f70c4bc05e7cd3543280b0aab7e",
+    "get_forge_health_card": "65bb749ea9f18f1532ac8616e61cb02b4e6136bf0f6da3395d1f638c22be83ca",
+    "preview_forge_probe": "4fd8a4d2babc5403119fecc3cd983ff4504d368c8e0c7ab06306eb98991730f8",
+    "get_live_forge_state": "51afaddf22c9bf9827a10332c993ac02a963b499fbd26dc0e47d6d4505a4d910"
   },
   "mcpCapabilityIdentities": {
     "validate_mod": "project.validate@1",
@@ -4805,6 +4876,11 @@
     "complete_xpath_selector": "patch.xpath.complete@1",
     "get_reference_coverage": "reference.coverage.read@1",
     "list_lua_ui_snippets": "ui.lua.snippets.read@1",
-    "harvest_vanilla_ui_menus": "ui.vanilla.harvest@1"
+    "harvest_vanilla_ui_menus": "ui.vanilla.harvest@1",
+    "prepare_bug_report": "help.bug.report@1",
+    "query_forge_knowledge": "help.knowledge.read@1",
+    "get_forge_health_card": "runtime.health.read@1",
+    "preview_forge_probe": "runtime.probe.preview@1",
+    "get_live_forge_state": "runtime.state.read@1"
   }
 }

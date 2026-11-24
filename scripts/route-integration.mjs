@@ -814,13 +814,13 @@ async function main() {
     'deploy.apply', 'deploy.preview', 'deploy.status', 'deploy.undo', 'diagnostics.quick.fixes',
     'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.file.read', 'extensions.overrides.analyze',
     'files.delete', 'files.delete.dir', 'files.inventory.read', 'files.list', 'files.read', 'files.restore', 'files.scaffold', 'files.write',
-    'history.list', 'history.raw.read', 'history.revert',
+    'help.bug.report', 'help.knowledge.read', 'history.list', 'history.raw.read', 'history.revert',
     'patch.base.read', 'patch.diff.simulate', 'patch.readiness.analyze', 'patch.targets.list', 'patch.xpath.complete', 'patch.xpath.synthesize', 'performance.collect', 'performance.native.collect', 'performance.native.read', 'performance.native.stop',
     'performance.profile', 'performance.read', 'project.ai.navigation', 'project.brief.read', 'project.md.navigation', 'project.md.rename', 'project.proof.read', 'project.symbols.search', 'project.validate', 'project.xml.references', 'readiness.read',
     'reference.coverage.read', 'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest',
     'release.artifact.verify', 'release.nexus.prepare', 'release.steam.adopt', 'release.steam.prepare', 'release.steam.verify',
     'reviews.warning.revoke', 'rules.suppression.apply', 'rules.suppression.prepare',
-    'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain',
+    'runtime.debug.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domains.list', 'schema.element.explain',
     'snapshots.create', 'snapshots.delete', 'snapshots.list', 'snapshots.restore',
     'text.lookup', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read',
     'workspace.compile', 'workspace.compile.result', 'workspace.generate.preview', 'workspace.mod.drift', 'workspace.mod.import', 'workspace.read', 'workspace.roundtrip.check',
@@ -1459,14 +1459,14 @@ async function main() {
     sameCapabilityIds(effectiveIds(studioEffective), expectedCapabilityIds) && effectiveHashIsValid(studioEffective),
   JSON.stringify({ public: publicEffective.json, bogus: bogusEffective.json, studio: { actor: studioEffective.json?.actor, ids: effectiveIds(studioEffective) } }));
   for (const [name, response, scope, expectedIds] of [
-    ['read', readEffective, 'read', ['contracts.derive', 'contracts.registry.read', 'diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.file.read', 'extensions.overrides.analyze', 'history.list', 'history.raw.read',
+    ['read', readEffective, 'read', ['contracts.derive', 'contracts.registry.read', 'diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.file.read', 'extensions.overrides.analyze', 'help.bug.report', 'help.knowledge.read', 'history.list', 'history.raw.read',
       'patch.base.read', 'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.complete', 'patch.xpath.synthesize', 'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.symbols.search', 'project.xml.references', 'readiness.read',
       'reference.coverage.read', 'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest', 'release.artifact.verify', 'rules.suppression.prepare',
-      'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read', 'workspace.read', 'workspace.roundtrip.check']],
-    ['write', writeEffective, 'write', ['contracts.derive', 'contracts.registry.read', 'diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.file.read', 'extensions.overrides.analyze', 'history.list', 'history.raw.read', 'patch.base.read', 'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.complete', 'patch.xpath.synthesize', 'project.validate',
+      'runtime.debug.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read', 'workspace.read', 'workspace.roundtrip.check']],
+    ['write', writeEffective, 'write', ['contracts.derive', 'contracts.registry.read', 'diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.file.read', 'extensions.overrides.analyze', 'help.bug.report', 'help.knowledge.read', 'history.list', 'history.raw.read', 'patch.base.read', 'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.complete', 'patch.xpath.synthesize', 'project.validate',
       'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.symbols.search', 'project.xml.references',
       'readiness.read', 'reference.coverage.read', 'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest', 'release.artifact.verify', 'rules.suppression.prepare',
-      'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.read', 'workspace.roundtrip.check']],
+      'runtime.debug.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.read', 'workspace.roundtrip.check']],
     ['deploy', deployEffective, 'deploy', expectedCapabilityIds.filter(id => !id.startsWith('configuration.') && !id.startsWith('deploy.') && !id.startsWith('bulk.transform.') && !id.startsWith('files.') && !id.startsWith('snapshots.') && !id.startsWith('release.steam.') && ![
       'history.revert', 'performance.native.collect', 'performance.native.read', 'performance.native.stop', 'project.ai.navigation', 'project.md.navigation', 'project.md.rename', 'release.nexus.prepare', 'reviews.warning.revoke', 'rules.suppression.apply', 'workspace.mod.drift', 'workspace.mod.import',
     ].includes(id))],
@@ -7430,6 +7430,57 @@ async function main() {
         }));
     } finally {
       fs.rmSync(slice10ExtDir, { recursive: true, force: true });
+    }
+  }
+
+  // --- #19 P4 SLICE 11: HELP KNOWLEDGE, SANITIZED BUG REPORT & RUNTIME PROBES ---
+  {
+    const debugLogFile = path.join(gameRoot, 'debuglog.txt');
+    const previousDebugLog = fs.existsSync(debugLogFile) ? fs.readFileSync(debugLogFile, 'utf8') : '';
+    fs.writeFileSync(debugLogFile, `${previousDebugLog}\n[=ERROR=] 12.5 FORGE-STATE player {"credits": 75000, "sector": "Argon Prime"}\n`, 'utf8');
+    try {
+      const knowRes = await req('GET', '/api/agent/help/knowledge?section=wiki&category=luaui&q=kuertee', readKey);
+      capabilityResponses.set('help.knowledge.read', knowRes);
+      const knowBad = await req('GET', '/api/agent/help/knowledge?section=invalid', readKey);
+
+      const bugRes = await req('POST', '/api/agent/help/bug-report', readKey, {
+        title: 'Route Slice 11 Bug Report',
+        description: `Token x4fk_0123456789abcdef0123456789abcdef from ${gameRoot}\\X4.exe`,
+        extraContext: { HostPath: `${safeWorkspace}\\mod` },
+      }, { workspaceId: WORKSPACE_ID, operationId: null });
+      capabilityResponses.set('help.bug.report', bugRes);
+      const bugBad = await req('POST', '/api/agent/help/bug-report', readKey, { title: '' }, { operationId: null });
+
+      const healthRes = await req('GET', '/api/agent/runtime/health-card', readKey, undefined, { workspaceId: WORKSPACE_ID, operationId: null });
+      capabilityResponses.set('runtime.health.read', healthRes);
+      const healthNoWs = await req('GET', '/api/agent/runtime/health-card', SESSION_TOKEN, undefined, { workspaceId: '', operationId: null });
+
+      const probeRes = await req('POST', '/api/agent/runtime/probe-preview', readKey, {
+        topics: [{ topic: 'fleet', fields: [{ key: 'ships', expression: 'player.numships' }] }],
+      }, { operationId: null });
+      capabilityResponses.set('runtime.probe.preview', probeRes);
+      const probeBad = await req('POST', '/api/agent/runtime/probe-preview', readKey, { unexpected: 1 }, { operationId: null });
+
+      const stateRes = await req('GET', '/api/agent/runtime/forge-state?topic=player', readKey);
+      capabilityResponses.set('runtime.state.read', stateRes);
+      const stateBad = await req('GET', '/api/agent/runtime/forge-state?unexpected=1', readKey);
+
+      ok('slice11_help_knowledge_bug_report_and_runtime_probe_routes_redact_secrets_and_host_paths',
+        knowRes.status === 200 && knowRes.json?.ok === true && knowRes.json?.wikiTopics?.length === 1 && knowBad.status === 400
+          && bugRes.status === 200 && bugRes.json?.ok === true && !JSON.stringify(bugRes.json).includes('x4fk_0123') && !JSON.stringify(bugRes.json).includes(gameRoot) && !JSON.stringify(bugRes.json).includes(safeWorkspace) && bugBad.status === 400
+          && healthRes.status === 200 && healthRes.json?.ok === true && healthRes.json?.rows?.length === 10 && !JSON.stringify(healthRes.json).includes(gameRoot) && !JSON.stringify(healthRes.json).includes(safeWorkspace) && healthNoWs.status === 400
+          && probeRes.status === 200 && probeRes.json?.ok === true && probeRes.json?.readOnly === true && String(probeRes.json?.md || '').includes('FORGE-STATE fleet {') && probeBad.status === 400
+          && stateRes.status === 200 && stateRes.json?.ok === true && stateRes.json?.available === true && stateRes.json?.topics?.[0]?.data?.credits === 75000 && !JSON.stringify(stateRes.json).includes(gameRoot) && stateBad.status === 400,
+        JSON.stringify({
+          know: knowRes.status,
+          bug: bugRes.status,
+          health: healthRes.status,
+          healthNoWs: healthNoWs.status,
+          probe: probeRes.status,
+          state: stateRes.status,
+        }));
+    } finally {
+      fs.writeFileSync(debugLogFile, previousDebugLog, 'utf8');
     }
   }
 
