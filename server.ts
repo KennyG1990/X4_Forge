@@ -373,7 +373,12 @@ import {
   type ValidationVerdictReceiptInput,
   type ValidationWarningInput,
 } from "./src/lib/validationDelta";
-import { normalizeStudioLayoutPreferences, type StudioLayoutPreferences } from "./src/lib/studioLayout";
+import {
+  normalizeStudioLayoutPreferences,
+  visibleSidebarTabs,
+  visibleWorkspaceViews,
+  type StudioLayoutPreferences,
+} from "./src/lib/studioLayout";
 import { normalizeReleasePreferences, type ReleasePreferences } from "./src/lib/releasePreferences";
 import { createAgentProject, createProjectFile, generateAgentProject, packageAgentProject, runProjectOrchestrationSelftest } from "./src/lib/projectOrchestration";
 import { runProjectCrossFileSelftest } from "./src/lib/projectCrossFileValidation";
@@ -1290,6 +1295,11 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
       || authority.decision.routeKey === 'GET /api/agent/runtime/control-status'
       || authority.decision.routeKey === 'POST /api/agent/runtime/cue-telemetry'
       || authority.decision.routeKey === 'GET /api/agent/runtime/game-log'
+      || authority.decision.routeKey === 'GET /api/agent/studio/preferences'
+      || authority.decision.routeKey === 'POST /api/agent/workspace/critic'
+      || authority.decision.routeKey === 'POST /api/agent/workspace/explain'
+      || authority.decision.routeKey === 'POST /api/agent/workspace/node-diagnostics'
+      || authority.decision.routeKey === 'POST /api/agent/workspace/simulate'
       || (authority.decision.routeKey === 'GET /api/agent/status'
         && (req.query.inspectDeployTarget !== undefined || req.query.inspectDeployEffect !== undefined))
       || authority.decision.routeKey === 'POST /api/agent/history/:id/revert'
@@ -5591,6 +5601,31 @@ app.post("/api/studio/release-preferences", (req, res) => {
   } catch (error) {
     console.error("[release-preferences] could not persist release preferences:", error);
     return res.status(500).json({ success: false, error: "Could not persist release packaging preferences." });
+  }
+});
+
+app.get("/api/agent/studio/preferences", (req, res) => {
+  try {
+    const queryError = validateClosedAgentQuery(req.query, ['workspaceId', 'clientId'], 'studio.preferences.read');
+    if (queryError) return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    const storedLayout = readStudioLayoutState();
+    const storedRelease = readReleasePreferencesState();
+    const layout = storedLayout ?? normalizeStudioLayoutPreferences(undefined);
+    const releasePreferences = storedRelease ?? normalizeReleasePreferences(undefined);
+    return res.json({
+      ok: true,
+      success: true,
+      persisted: {
+        layout: storedLayout !== null,
+        releasePreferences: storedRelease !== null,
+      },
+      layout,
+      visibleWorkspaceViews: visibleWorkspaceViews(layout),
+      visibleSidebarTabs: visibleSidebarTabs(layout),
+      releasePreferences,
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, success: false, error: errorMessage(error) || 'Failed to read Studio preferences.' });
   }
 });
 
@@ -16960,7 +16995,7 @@ function getNodeSchemaView(): NodeSchemaView {
   try {
     const idx = getSchemaIndex();
     return {
-      loaded: !!idx.loaded,
+      loaded: !!idx.loaded && idx.elements.size > 0,
       has: (t: string) => idx.elements.has(String(t).toLowerCase()),
       requiredAttrs: (t: string) => {
         const spec = idx.elements.get(String(t).toLowerCase());
@@ -17151,6 +17186,277 @@ app.post("/api/agent/critic", (req, res) => {
     res.json({ success: true, ...critiqueWorkspace(nodes || [], links || []) });
   } catch (error) {
     res.status(500).json({ success: false, error: error?.message || "critic failed" });
+  }
+});
+
+const AGENT_GRAPH_MAX_NODES = 2000;
+const AGENT_GRAPH_MAX_LINKS = 4000;
+const AGENT_GRAPH_MAX_SEED_KEYS = 100;
+
+function parseAgentGraphInput(
+  req: express.Request,
+  capabilityId: string,
+  options: { allowLinks: boolean; allowSeed: boolean },
+): {
+  ok: true;
+  mode: 'workspace' | 'inline';
+  workspaceId: string;
+  nodes: ModWorkspace['nodes'];
+  links: ModWorkspace['links'];
+  seed: Record<string, string | number | boolean>;
+} | {
+  ok: false;
+  error: string;
+} {
+  const body = req.body;
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { ok: false, error: `${capabilityId} body must be a JSON object.` };
+  }
+  const raw = body as Record<string, unknown>;
+  const allowed = ['mode', 'nodes', 'workspaceId', 'clientId'];
+  if (options.allowLinks) allowed.push('links');
+  if (options.allowSeed) allowed.push('seed');
+  const unknown = Object.keys(raw).filter(key => !allowed.includes(key));
+  if (unknown.length > 0) {
+    return { ok: false, error: `${capabilityId} does not accept: ${unknown.join(', ')}` };
+  }
+  const modeRaw = raw.mode === undefined ? 'workspace' : raw.mode;
+  if (modeRaw !== 'workspace' && modeRaw !== 'inline') {
+    return { ok: false, error: `${capabilityId} mode must be "workspace" or "inline".` };
+  }
+  let seed: Record<string, string | number | boolean> = {};
+  if (options.allowSeed && raw.seed !== undefined) {
+    if (!raw.seed || typeof raw.seed !== 'object' || Array.isArray(raw.seed)) {
+      return { ok: false, error: `${capabilityId} seed must be an object of scalar string, number, or boolean values.` };
+    }
+    const seedEntries = Object.entries(raw.seed as Record<string, unknown>);
+    if (seedEntries.length > AGENT_GRAPH_MAX_SEED_KEYS) {
+      return { ok: false, error: `${capabilityId} seed accepts at most ${AGENT_GRAPH_MAX_SEED_KEYS} keys.` };
+    }
+    seed = {};
+    for (const [key, val] of seedEntries) {
+      if (!key.trim() || key.length > 128) {
+        return { ok: false, error: `${capabilityId} seed keys must be non-empty strings up to 128 characters.` };
+      }
+      if (typeof val === 'string') {
+        if (val.length > 512) return { ok: false, error: `${capabilityId} seed.${key} string value must be at most 512 characters.` };
+        seed[key] = val;
+      } else if (typeof val === 'number') {
+        if (!Number.isFinite(val)) return { ok: false, error: `${capabilityId} seed.${key} must be a finite number.` };
+        seed[key] = val;
+      } else if (typeof val === 'boolean') {
+        seed[key] = val;
+      } else {
+        return { ok: false, error: `${capabilityId} seed.${key} must be a string, finite number, or boolean.` };
+      }
+    }
+  }
+  const record = requestWorkspace(req);
+  if (modeRaw === 'workspace') {
+    if (raw.nodes !== undefined || raw.links !== undefined) {
+      return { ok: false, error: `${capabilityId} mode="workspace" uses the addressed workspace and does not accept inline nodes or links.` };
+    }
+    return {
+      ok: true,
+      mode: 'workspace',
+      workspaceId: record.workspaceId,
+      nodes: Array.isArray(record.workspace.nodes) ? record.workspace.nodes : [],
+      links: Array.isArray(record.workspace.links) ? record.workspace.links : [],
+      seed,
+    };
+  }
+  if (!Array.isArray(raw.nodes) || raw.nodes.length > AGENT_GRAPH_MAX_NODES) {
+    return { ok: false, error: `${capabilityId} mode="inline" requires a nodes array of at most ${AGENT_GRAPH_MAX_NODES} items.` };
+  }
+  if (!raw.nodes.every(item => !!item && typeof item === 'object' && !Array.isArray(item))) {
+    return { ok: false, error: `${capabilityId} nodes items must be JSON objects.` };
+  }
+  let inlineLinks: unknown[] = [];
+  if (options.allowLinks && raw.links !== undefined) {
+    if (!Array.isArray(raw.links) || raw.links.length > AGENT_GRAPH_MAX_LINKS) {
+      return { ok: false, error: `${capabilityId} links must be an array of at most ${AGENT_GRAPH_MAX_LINKS} items.` };
+    }
+    if (!raw.links.every(item => !!item && typeof item === 'object' && !Array.isArray(item))) {
+      return { ok: false, error: `${capabilityId} links items must be JSON objects.` };
+    }
+    inlineLinks = raw.links;
+  }
+  const sanitized = sanitizeWorkspace({
+    name: record.workspace.name || 'inline_graph',
+    nodes: raw.nodes,
+    links: inlineLinks,
+  });
+  return {
+    ok: true,
+    mode: 'inline',
+    workspaceId: record.workspaceId,
+    nodes: sanitized.nodes,
+    links: sanitized.links,
+    seed,
+  };
+}
+
+app.post("/api/agent/workspace/node-diagnostics", (req, res) => {
+  try {
+    const queryError = validateClosedAgentQuery(req.query, ['workspaceId', 'clientId'], 'workspace.nodes.diagnose');
+    if (queryError) return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    const parsed = parseAgentGraphInput(req, 'workspace.nodes.diagnose', { allowLinks: false, allowSeed: false });
+    if (parsed.ok === false) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: parsed.error });
+    }
+    const schemaView = getNodeSchemaView();
+    const allDiagnostics = validateNodesAgainstSchema(parsed.nodes, schemaView);
+    const diagnostics = allDiagnostics.slice(0, 200);
+    return res.json({
+      ok: true,
+      success: true,
+      mode: parsed.mode,
+      workspaceId: parsed.workspaceId,
+      nodeCount: parsed.nodes.length,
+      schemaLoaded: schemaView.loaded,
+      totalDiagnostics: allDiagnostics.length,
+      truncated: allDiagnostics.length > 200,
+      diagnostics,
+      byNode: summarizeByNode(diagnostics),
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, success: false, error: errorMessage(error) || 'workspace node-diagnostics failed' });
+  }
+});
+
+app.post("/api/agent/workspace/simulate", (req, res) => {
+  try {
+    const queryError = validateClosedAgentQuery(req.query, ['workspaceId', 'clientId'], 'workspace.graph.simulate');
+    if (queryError) return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    const parsed = parseAgentGraphInput(req, 'workspace.graph.simulate', { allowLinks: true, allowSeed: true });
+    if (parsed.ok === false) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: parsed.error });
+    }
+    const sim = simulateWorkspace(parsed.nodes, parsed.links, parsed.seed);
+    const trace = sim.trace.slice(0, 300);
+    const findings = sim.findings.slice(0, 200);
+    const finalState = sim.finalState.slice(0, 200);
+    return res.json({
+      ok: true,
+      success: true,
+      mode: parsed.mode,
+      workspaceId: parsed.workspaceId,
+      truncated: sim.trace.length > 300 || sim.findings.length > 200 || sim.finalState.length > 200,
+      totalTraceSteps: sim.trace.length,
+      totalFindings: sim.findings.length,
+      trace,
+      findings,
+      finalState,
+      limitations: sim.limitations,
+      coverage: sim.coverage,
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, success: false, error: errorMessage(error) || 'workspace simulate failed' });
+  }
+});
+
+app.post("/api/agent/workspace/critic", (req, res) => {
+  try {
+    const queryError = validateClosedAgentQuery(req.query, ['workspaceId', 'clientId'], 'workspace.graph.critic');
+    if (queryError) return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    const parsed = parseAgentGraphInput(req, 'workspace.graph.critic', { allowLinks: true, allowSeed: false });
+    if (parsed.ok === false) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: parsed.error });
+    }
+    const result = critiqueWorkspace(parsed.nodes, parsed.links);
+    const findings = result.findings.slice(0, 200);
+    return res.json({
+      ok: true,
+      success: true,
+      mode: parsed.mode,
+      workspaceId: parsed.workspaceId,
+      totalFindings: result.findings.length,
+      truncated: result.findings.length > 200,
+      summary: result.summary,
+      findings,
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, success: false, error: errorMessage(error) || 'workspace critic failed' });
+  }
+});
+
+app.post("/api/agent/workspace/explain", (req, res) => {
+  try {
+    const queryError = validateClosedAgentQuery(req.query, ['workspaceId', 'clientId'], 'workspace.graph.explain');
+    if (queryError) return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    const body = req.body;
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'workspace.graph.explain body must be a JSON object.' });
+    }
+    const raw = body as Record<string, unknown>;
+    const allowed = ['mode', 'nodes', 'links', 'diagnostic', 'workspaceId', 'clientId'];
+    const unknown = Object.keys(raw).filter(key => !allowed.includes(key));
+    if (unknown.length > 0) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: `workspace.graph.explain does not accept: ${unknown.join(', ')}` });
+    }
+    const modeRaw = raw.mode === undefined ? (raw.diagnostic !== undefined ? 'diagnostic' : 'workspace') : raw.mode;
+    if (modeRaw !== 'workspace' && modeRaw !== 'inline' && modeRaw !== 'diagnostic') {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'workspace.graph.explain mode must be "workspace", "inline", or "diagnostic".' });
+    }
+    if (modeRaw === 'diagnostic') {
+      if (raw.nodes !== undefined || raw.links !== undefined || !raw.diagnostic || typeof raw.diagnostic !== 'object' || Array.isArray(raw.diagnostic)) {
+        return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'workspace.graph.explain mode="diagnostic" requires a diagnostic object and forbids inline nodes or links.' });
+      }
+      const diag = raw.diagnostic as Record<string, unknown>;
+      const diagUnknown = Object.keys(diag).filter(key => !['code', 'severity', 'message', 'category', 'domain'].includes(key));
+      if (diagUnknown.length > 0) {
+        return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: `diagnostic does not accept: ${diagUnknown.join(', ')}` });
+      }
+      if (!['error', 'warning', 'info'].includes(String(diag.severity || '')) || typeof diag.message !== 'string' || !diag.message.trim() || diag.message.length > 4096) {
+        return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'diagnostic requires severity ("error"|"warning"|"info") and non-empty message (<= 4096 chars).' });
+      }
+      for (const optKey of ['code', 'category', 'domain'] as const) {
+        if (diag[optKey] !== undefined && (typeof diag[optKey] !== 'string' || String(diag[optKey]).length > 256)) {
+          return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: `diagnostic.${optKey} must be a string up to 256 characters.` });
+        }
+      }
+      const record = requestWorkspace(req);
+      return res.json({
+        ok: true,
+        success: true,
+        mode: 'diagnostic',
+        workspaceId: record.workspaceId,
+        explanation: explainDiagnostic({
+          severity: diag.severity as 'error' | 'warning' | 'info',
+          message: diag.message,
+          ...(typeof diag.code === 'string' ? { code: diag.code } : {}),
+          ...(typeof diag.category === 'string' ? { category: diag.category } : {}),
+          ...(typeof diag.domain === 'string' ? { domain: diag.domain } : {}),
+        }),
+      });
+    }
+    if (raw.diagnostic !== undefined) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'diagnostic is only allowed when mode="diagnostic".' });
+    }
+    const { diagnostic: _unusedDiag, ...graphBody } = raw;
+    req.body = graphBody;
+    const parsed = parseAgentGraphInput(req, 'workspace.graph.explain', { allowLinks: true, allowSeed: false });
+    if (parsed.ok === false) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: parsed.error });
+    }
+    const explained = explainWorkspace(parsed.nodes, parsed.links);
+    const flowSteps = explained.flowSteps.slice(0, 300);
+    const entityRegistry = explained.entityRegistry.slice(0, 200);
+    return res.json({
+      ok: true,
+      success: true,
+      mode: parsed.mode,
+      workspaceId: parsed.workspaceId,
+      truncated: explained.flowSteps.length > 300 || explained.entityRegistry.length > 200,
+      summary: explained.summary,
+      triggerCondition: explained.triggerCondition,
+      flowSteps,
+      entityRegistry,
+      tacticalInsights: explained.tacticalInsights,
+      coverage: explained.coverage,
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, success: false, error: errorMessage(error) || 'workspace explain failed' });
   }
 });
 

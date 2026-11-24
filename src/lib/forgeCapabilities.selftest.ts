@@ -53,7 +53,7 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
 
   const validationErrors = validateForgeCapabilityRegistry();
   check('registry invariants', validationErrors.length === 0, validationErrors.join(' | ') || undefined);
-  check('bounded non-native registry', FORGE_CAPABILITIES.filter(capability => !capability.id.startsWith('performance.native.')).length === 100, `count=${FORGE_CAPABILITIES.length}`);
+  check('bounded non-native registry', FORGE_CAPABILITIES.filter(capability => !capability.id.startsWith('performance.native.')).length === 105, `count=${FORGE_CAPABILITIES.length}`);
   const knowledgeSelftest = runForgeKnowledgeSelftest();
   check('forgeKnowledge shared wiki/shortcuts/onboarding selftest', knowledgeSelftest.pass, knowledgeSelftest.checks.filter(c => !c.pass).map(c => c.name).join(', ') || undefined);
   const domainAuthoringSelftest = runWorkspaceDomainAuthoringSelftest();
@@ -675,7 +675,7 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
       builtCensus.summary.totalActions === FORGE_UI_ACTION_PARITY_CENSUS.length &&
       builtCensus.summary.available === 23 &&
       builtCensus.summary.approvalRequired === 2 &&
-      builtCensus.summary.missing === 7 &&
+      builtCensus.summary.missing === 6 &&
       builtCensus.summary.available + builtCensus.summary.approvalRequired + builtCensus.summary.partial + builtCensus.summary.missing === builtCensus.summary.totalActions &&
       builtCensus.summary.openGaps === builtCensus.summary.partial + builtCensus.summary.missing,
     censusErrors.join(' | ') || undefined);
@@ -725,7 +725,7 @@ export function runNativeForgeCapabilitiesSelftest() {
   const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   const keys = (value: object | undefined) => Object.keys(value || {}).sort();
   check('native registry has exactly the three reviewed process telemetry identities',
-    FORGE_CAPABILITIES.length === 103 &&
+    FORGE_CAPABILITIES.length === 108 &&
       equal(FORGE_CAPABILITIES.filter(capability => capability.id.startsWith('performance.native.')).map(capability => capability.id).sort(),
         expected.map(row => row.id).sort()));
   for (const row of expected) {

@@ -2091,6 +2091,152 @@ async function main() {
       const ledgerAfter = (await presetReadMcp.callTool('list_action_history', { limit: 100 })).payload.total;
       assert.equal(ledgerAfter, ledgerBefore, 'Slice 14 read/analyze MCP calls must stay quiet in Action Ledger');
     });
+
+    await check('18_studio_preferences_and_deterministic_md_graph_analysis_over_mcp', async () => {
+      const readList = ((await presetReadMcp.request('tools/list')).result?.tools || []).map((t: any) => t.name);
+      for (const expectedTool of [
+        'get_studio_preferences',
+        'critique_md_graph',
+        'explain_md_graph',
+        'simulate_md_graph',
+        'diagnose_workspace_nodes',
+      ]) {
+        assert(readList.includes(expectedTool), `preset read key must advertise ${expectedTool}`);
+      }
+
+      const ledgerBefore = (await presetReadMcp.callTool('list_action_history', { limit: 100 })).payload.total;
+
+      // 1. get_studio_preferences reads normalized Studio layout, visible rails, and release preferences with zero host paths
+      const prefsRes = await presetReadMcp.callTool('get_studio_preferences', {});
+      assert.equal(prefsRes.isError, false, JSON.stringify(prefsRes.payload));
+      assert.equal(prefsRes.payload.ok, true);
+      assert.equal(prefsRes.payload.layout?.version, 1);
+      assert.equal(prefsRes.payload.releasePreferences?.mode, 'guided');
+      assert(Array.isArray(prefsRes.payload.visibleWorkspaceViews) && prefsRes.payload.visibleWorkspaceViews.includes('blueprint'));
+      assert(Array.isArray(prefsRes.payload.visibleSidebarTabs) && prefsRes.payload.visibleSidebarTabs.includes('script'));
+      assert(!JSON.stringify(prefsRes.payload).includes(root), 'get_studio_preferences leaked host root');
+
+      // 2. diagnose_workspace_nodes catches unknown_element and missing_required_attr on inline MD nodes and checks addressed workspace
+      const wsDiagRes = await presetReadMcp.callTool('diagnose_workspace_nodes', {});
+      assert.equal(wsDiagRes.isError, false, JSON.stringify(wsDiagRes.payload));
+      assert.equal(wsDiagRes.payload.ok, true);
+      assert.equal(wsDiagRes.payload.mode, 'workspace');
+      assert.equal(wsDiagRes.payload.workspaceId, wsId);
+
+      const emptyXsdDiagRes = await presetReadMcp.callTool('diagnose_workspace_nodes', {
+        mode: 'inline',
+        nodes: [
+          { id: 'c1', type: 'cue', xmlTag: 'cue', label: 'Cue1', properties: { name: 'Cue1' } },
+          { id: 'sv_ok', type: 'action', xmlTag: 'set_value', label: 'SetVal', properties: { name: '$x', exact: '1' } },
+        ],
+      });
+      assert.equal(emptyXsdDiagRes.isError, false, JSON.stringify(emptyXsdDiagRes.payload));
+      if (!fs.existsSync(path.join(repoHarvested, 'md.xsd'))) {
+        assert.equal(emptyXsdDiagRes.payload.schemaLoaded, false, 'empty placeholder md.xsd must not report schemaLoaded=true');
+        assert.equal(emptyXsdDiagRes.payload.totalDiagnostics, 0);
+      }
+
+      const mdXsdPath = path.join(schemaDir, 'md.xsd');
+      const prevMdXsd = fs.readFileSync(mdXsdPath, 'utf8');
+      try {
+        if (!fs.existsSync(path.join(repoHarvested, 'md.xsd'))) {
+          const minimalMdXsd = [
+            '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">',
+            '  <xs:element name="set_value">',
+            '    <xs:complexType>',
+            '      <xs:attribute name="name" type="xs:string" use="required"/>',
+            '      <xs:attribute name="exact" type="xs:string"/>',
+            '    </xs:complexType>',
+            '  </xs:element>',
+            '</xs:schema>',
+          ].join('\n');
+          fs.writeFileSync(mdXsdPath, minimalMdXsd, 'utf8');
+          const bumpedTime = new Date(Date.now() + 5000);
+          fs.utimesSync(mdXsdPath, bumpedTime, bumpedTime);
+        }
+        const inlineDiagRes = await presetReadMcp.callTool('diagnose_workspace_nodes', {
+          mode: 'inline',
+          nodes: [
+            { id: 'c1', type: 'cue', xmlTag: 'cue', label: 'Cue1', properties: { name: 'Cue1' } },
+            { id: 'bad_el', type: 'action', xmlTag: 'not_a_real_md_tag_xyz', label: 'Bad', properties: {} },
+            { id: 'bad_attr', type: 'action', xmlTag: 'set_value', label: 'SetVal', properties: {} },
+          ],
+        });
+        assert.equal(inlineDiagRes.isError, false, JSON.stringify(inlineDiagRes.payload));
+        assert.equal(inlineDiagRes.payload.mode, 'inline');
+        assert.equal(inlineDiagRes.payload.schemaLoaded, true);
+        assert(inlineDiagRes.payload.diagnostics.some((d: any) => d.nodeId === 'bad_el' && d.code === 'unknown_element'));
+        assert(inlineDiagRes.payload.diagnostics.some((d: any) => d.nodeId === 'bad_attr' && d.code === 'missing_required_attr'));
+      } finally {
+        fs.writeFileSync(mdXsdPath, prevMdXsd, 'utf8');
+        const restoredTime = new Date(Date.now() + 10000);
+        fs.utimesSync(mdXsdPath, restoredTime, restoredTime);
+      }
+
+      const mixedBadDiag = await presetReadMcp.callTool('diagnose_workspace_nodes', {
+        mode: 'workspace',
+        nodes: [],
+      });
+      assert.equal(mixedBadDiag.isError, true, 'mode=workspace must reject inline nodes');
+
+      // 3. simulate_md_graph evaluates Kleene true/false/unknown logic with scalar seed variables
+      const simRes = await presetReadMcp.callTool('simulate_md_graph', {
+        mode: 'inline',
+        seed: { $threat: 2 },
+        nodes: [
+          { id: 'cue_gate', type: 'cue', xmlTag: 'cue', label: 'GateCue', properties: { name: 'GateCue' } },
+          { id: 'cond_gate', type: 'condition', xmlTag: 'check_value', label: 'ThreatCheck', properties: { value: '$threat ge 10' } },
+          { id: 'cue_child', type: 'cue', xmlTag: 'cue', label: 'ChildCue', properties: { name: 'ChildCue' } },
+        ],
+        links: [
+          { id: 'l_cond', sourceNodeId: 'cue_gate', sourcePortId: 'out_cond', targetNodeId: 'cond_gate', targetPortId: 'in_cond' },
+          { id: 'l_sub', sourceNodeId: 'cue_gate', sourcePortId: 'out_sub', targetNodeId: 'cue_child', targetPortId: 'in_flow' },
+        ],
+      });
+      assert.equal(simRes.isError, false, JSON.stringify(simRes.payload));
+      assert.equal(simRes.payload.ok, true);
+      assert(simRes.payload.findings.some((f: any) => f.kind === 'never_satisfiable_cue' && f.nodeId === 'cue_gate'));
+      assert(simRes.payload.findings.some((f: any) => f.kind === 'unreachable_subcue' && f.nodeId === 'cue_child'));
+
+      // 4. critique_md_graph runs deterministic MD lints without false positives
+      const criticRes = await presetReadMcp.callTool('critique_md_graph', {
+        mode: 'inline',
+        nodes: [
+          { id: 'cue_bare', type: 'cue', xmlTag: 'cue', label: 'BareCue', properties: { name: 'BareCue' } },
+          { id: 'act_1', type: 'action', xmlTag: 'set_value', label: 'SetX', properties: { name: '$x', exact: '1' } },
+        ],
+        links: [
+          { id: 'l_act', sourceNodeId: 'cue_bare', sourcePortId: 'out_act', targetNodeId: 'act_1', targetPortId: 'in_act' },
+        ],
+      });
+      assert.equal(criticRes.isError, false, JSON.stringify(criticRes.payload));
+      assert.equal(criticRes.payload.ok, true);
+      assert.equal(typeof criticRes.payload.totalFindings, 'number');
+      assert(Array.isArray(criticRes.payload.findings));
+
+      // 5. explain_md_graph supports both deterministic cue-flow summaries and single-diagnostic explanations
+      const explainWsRes = await presetReadMcp.callTool('explain_md_graph', { mode: 'workspace' });
+      assert.equal(explainWsRes.isError, false, JSON.stringify(explainWsRes.payload));
+      assert.equal(explainWsRes.payload.mode, 'workspace');
+      assert.equal(typeof explainWsRes.payload.summary, 'string');
+      assert(Array.isArray(explainWsRes.payload.flowSteps));
+
+      const explainDiagRes = await presetReadMcp.callTool('explain_md_graph', {
+        mode: 'diagnostic',
+        diagnostic: {
+          code: 'lua.raw_engine_id_in_player_text',
+          severity: 'warning',
+          message: 'Raw faction ID in player-visible Lua string.',
+        },
+      });
+      assert.equal(explainDiagRes.isError, false, JSON.stringify(explainDiagRes.payload));
+      assert.equal(explainDiagRes.payload.mode, 'diagnostic');
+      assert.equal(typeof explainDiagRes.payload.explanation?.why, 'string');
+      assert.equal(typeof explainDiagRes.payload.explanation?.next, 'string');
+
+      const ledgerAfter = (await presetReadMcp.callTool('list_action_history', { limit: 100 })).payload.total;
+      assert.equal(ledgerAfter, ledgerBefore, 'Slice 15 read/analyze MCP calls must stay quiet in Action Ledger');
+    });
   } finally {
     for (const s of mcpSessions) {
       try { await s.close(); } catch { /* ignore */ }

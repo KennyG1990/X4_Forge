@@ -196,6 +196,11 @@ const DIAGNOSTIC_READ_LIVE_TOOLS = new Set([
   "get_runtime_control_status",
   "analyze_cue_telemetry",
   "get_game_log_status",
+  "get_studio_preferences",
+  "critique_md_graph",
+  "explain_md_graph",
+  "simulate_md_graph",
+  "diagnose_workspace_nodes",
 ]);
 const PERFORMANCE_PROFILE_HTTP_FAILURES = { PROFILE_DISABLED: 503, PROFILE_BUSY: 409, PROFILE_RATE_LIMITED: 429, PROFILE_DISPOSED: 503, PROFILE_INPUT_INVALID: 400, PROFILE_ABORTED: 408, PROFILE_FAILED: 500, PROFILE_CLEANUP_UNCONFIRMED: 409 };
 const PERFORMANCE_COLLECTION_HTTP_FAILURES = { PERFORMANCE_DISPOSED: 503, PERFORMANCE_COLLECTION_BUSY: 409, PERFORMANCE_COLLECTION_REFUSED: 409, PROJECT_INPUT_INVALID: 400, PERFORMANCE_COLLECTION_FAILED: 500 };
@@ -3464,6 +3469,177 @@ const TOOLS = [
       }
       return payload;
     },
+  },
+  {
+    name: "get_studio_preferences",
+    capabilityId: "studio.preferences.read",
+    capabilityVersion: 1,
+    description: "Read normalized Studio dock layout preferences, derived visible workspace views and sidebar tabs, release packaging mode preferences, and persistence state without exposing host filesystem paths or secrets.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+    },
+    handler: async () => requireResponse(
+      await forge("GET", "/api/agent/studio/preferences"),
+      "Studio preferences",
+      {
+        ok: "boolean",
+        success: "boolean",
+        persisted: "object",
+        layout: "object",
+        visibleWorkspaceViews: "array",
+        visibleSidebarTabs: "array",
+        releasePreferences: "object",
+      },
+    ),
+  },
+  {
+    name: "critique_md_graph",
+    capabilityId: "workspace.graph.critic",
+    capabilityVersion: 1,
+    description: "Run false-positive-free deterministic Mission Director graph lints (ref_mismatch, oneway_no_restore, unguarded_high_risk, instantiate_reload, game_loaded_no_refresh, illegal_instantiate, no_event_condition) over the addressed workspace (mode=\"workspace\", default) or bounded inline nodes and links (mode=\"inline\"), capping returned findings at 200.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        mode: { type: "string", enum: ["workspace", "inline"] },
+        nodes: { type: "array", items: { type: "object", additionalProperties: true } },
+        links: { type: "array", items: { type: "object", additionalProperties: true } },
+      },
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/workspace/critic", args),
+      "MD graph critic",
+      {
+        ok: "boolean",
+        success: "boolean",
+        mode: "string",
+        workspaceId: "string",
+        totalFindings: "number",
+        truncated: "boolean",
+        summary: "object",
+        findings: "array",
+      },
+    ),
+  },
+  {
+    name: "explain_md_graph",
+    capabilityId: "workspace.graph.explain",
+    capabilityVersion: 1,
+    description: "Produce a deterministic plain-English Mission Director trigger, flow-step, entity-registry, and tactical-insight summary over the addressed workspace (mode=\"workspace\", default) or bounded inline nodes/links (mode=\"inline\"), or return deterministic remediation guidance for one diagnostic (mode=\"diagnostic\").",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        mode: { type: "string", enum: ["workspace", "inline", "diagnostic"] },
+        nodes: { type: "array", items: { type: "object", additionalProperties: true } },
+        links: { type: "array", items: { type: "object", additionalProperties: true } },
+        diagnostic: {
+          type: "object",
+          additionalProperties: false,
+          required: ["severity", "message"],
+          properties: {
+            code: { type: "string", maxLength: 256 },
+            severity: { type: "string", enum: ["error", "warning", "info"] },
+            message: { type: "string", maxLength: 4096 },
+            category: { type: "string", maxLength: 256 },
+            domain: { type: "string", maxLength: 256 },
+          },
+        },
+      },
+    },
+    handler: async (args) => {
+      const payload = requireResponse(
+        await forge("POST", "/api/agent/workspace/explain", args),
+        "MD graph or diagnostic explanation",
+        {
+          ok: "boolean",
+          success: "boolean",
+          mode: "string",
+          workspaceId: "string",
+        },
+      );
+      if (payload.mode === "diagnostic") {
+        if (!payload.explanation || typeof payload.explanation !== "object" || Array.isArray(payload.explanation)) {
+          const error = new Error("MD diagnostic explanation response is missing explanation:object");
+          error.invalidResponse = true;
+          throw error;
+        }
+      } else if (typeof payload.summary !== "string" || !Array.isArray(payload.flowSteps)) {
+        const error = new Error("MD graph explanation response is missing summary or flowSteps");
+        error.invalidResponse = true;
+        throw error;
+      }
+      return payload;
+    },
+  },
+  {
+    name: "simulate_md_graph",
+    capabilityId: "workspace.graph.simulate",
+    capabilityVersion: 1,
+    description: "Evaluate Mission Director cue triggers, branch guards, and set_value effects deterministically using Kleene true/false/unknown logic over the addressed workspace (mode=\"workspace\", default) or bounded inline nodes/links (mode=\"inline\") with optional scalar seed variables (up to 100 keys), reporting unreachable cues, dead branches, final variable states, and bounded trace steps without AI guesswork.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        mode: { type: "string", enum: ["workspace", "inline"] },
+        seed: {
+          type: "object",
+          additionalProperties: { type: ["string", "number", "boolean"] },
+        },
+        nodes: { type: "array", items: { type: "object", additionalProperties: true } },
+        links: { type: "array", items: { type: "object", additionalProperties: true } },
+      },
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/workspace/simulate", args),
+      "MD graph Kleene simulation",
+      {
+        ok: "boolean",
+        success: "boolean",
+        mode: "string",
+        workspaceId: "string",
+        truncated: "boolean",
+        totalTraceSteps: "number",
+        totalFindings: "number",
+        trace: "array",
+        findings: "array",
+        finalState: "array",
+        limitations: "array",
+        coverage: "object",
+      },
+    ),
+  },
+  {
+    name: "diagnose_workspace_nodes",
+    capabilityId: "workspace.nodes.diagnose",
+    capabilityVersion: 1,
+    description: "Check Mission Director graph nodes in the addressed workspace (mode=\"workspace\", default) or bounded inline nodes (mode=\"inline\", up to 2000) against active md.xsd/common.xsd definitions for unknown elements and missing required attributes, returning bounded per-node badge rollups.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        mode: { type: "string", enum: ["workspace", "inline"] },
+        nodes: { type: "array", items: { type: "object", additionalProperties: true } },
+      },
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/workspace/node-diagnostics", args),
+      "workspace MD node schema diagnostics",
+      {
+        ok: "boolean",
+        success: "boolean",
+        mode: "string",
+        workspaceId: "string",
+        nodeCount: "number",
+        schemaLoaded: "boolean",
+        totalDiagnostics: "number",
+        truncated: "boolean",
+        diagnostics: "array",
+        byNode: "object",
+      },
+    ),
   },
 ];
 const STATIC_TOOL_NAMES = new Set(TOOLS.map((tool) => tool.name));

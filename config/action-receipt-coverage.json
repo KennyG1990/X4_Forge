@@ -2554,6 +2554,30 @@
       ]
     },
     {
+      "routeKey": "POST /api/agent/workspace/critic",
+      "method": "POST",
+      "template": "/api/agent/workspace/critic",
+      "owner": "workspace.graph.critic",
+      "resourceClass": "workspace",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1workspace~1critic",
+      "integrationBatch": "W3B0-internal",
+      "history": "quiet",
+      "capability": {
+        "kind": "canonical",
+        "id": "workspace.graph.critic",
+        "version": 1
+      },
+      "semanticClass": "read-analysis-only",
+      "policy": "receipt-exempt",
+      "effects": [
+        "read",
+        "analyze"
+      ],
+      "authorityScopes": [
+        "workspace"
+      ]
+    },
+    {
       "routeKey": "POST /api/agent/workspace/domain",
       "method": "POST",
       "template": "/api/agent/workspace/domain",
@@ -2571,6 +2595,30 @@
       "policy": "receipt-required",
       "effects": [
         "workspace-write"
+      ],
+      "authorityScopes": [
+        "workspace"
+      ]
+    },
+    {
+      "routeKey": "POST /api/agent/workspace/explain",
+      "method": "POST",
+      "template": "/api/agent/workspace/explain",
+      "owner": "workspace.graph.explain",
+      "resourceClass": "workspace",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1workspace~1explain",
+      "integrationBatch": "W3B0-internal",
+      "history": "quiet",
+      "capability": {
+        "kind": "canonical",
+        "id": "workspace.graph.explain",
+        "version": 1
+      },
+      "semanticClass": "read-analysis-only",
+      "policy": "receipt-exempt",
+      "effects": [
+        "read",
+        "analyze"
       ],
       "authorityScopes": [
         "workspace"
@@ -2600,6 +2648,30 @@
       ]
     },
     {
+      "routeKey": "POST /api/agent/workspace/node-diagnostics",
+      "method": "POST",
+      "template": "/api/agent/workspace/node-diagnostics",
+      "owner": "workspace.nodes.diagnose",
+      "resourceClass": "workspace",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1workspace~1node-diagnostics",
+      "integrationBatch": "W3B0-internal",
+      "history": "quiet",
+      "capability": {
+        "kind": "canonical",
+        "id": "workspace.nodes.diagnose",
+        "version": 1
+      },
+      "semanticClass": "read-analysis-only",
+      "policy": "receipt-exempt",
+      "effects": [
+        "read",
+        "analyze"
+      ],
+      "authorityScopes": [
+        "workspace"
+      ]
+    },
+    {
       "routeKey": "POST /api/agent/workspace/restore-parked",
       "method": "POST",
       "template": "/api/agent/workspace/restore-parked",
@@ -2620,6 +2692,30 @@
         "analyze",
         "audit-write",
         "audit-retention-delete"
+      ],
+      "authorityScopes": [
+        "workspace"
+      ]
+    },
+    {
+      "routeKey": "POST /api/agent/workspace/simulate",
+      "method": "POST",
+      "template": "/api/agent/workspace/simulate",
+      "owner": "workspace.graph.simulate",
+      "resourceClass": "workspace",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1workspace~1simulate",
+      "integrationBatch": "W3B0-internal",
+      "history": "quiet",
+      "capability": {
+        "kind": "canonical",
+        "id": "workspace.graph.simulate",
+        "version": 1
+      },
+      "semanticClass": "read-analysis-only",
+      "policy": "receipt-exempt",
+      "effects": [
+        "read",
+        "analyze"
       ],
       "authorityScopes": [
         "workspace"

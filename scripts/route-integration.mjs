@@ -822,9 +822,9 @@ async function main() {
     'release.artifact.verify', 'release.nexus.prepare', 'release.steam.adopt', 'release.steam.prepare', 'release.steam.verify',
     'reviews.warning.revoke', 'rules.suppression.apply', 'rules.suppression.prepare',
     'runtime.bridge.read', 'runtime.control.read', 'runtime.cue.telemetry', 'runtime.debug.read', 'runtime.gamelog.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domain.inspect', 'schema.domains.list', 'schema.element.explain',
-    'snapshots.create', 'snapshots.delete', 'snapshots.list', 'snapshots.restore',
+    'snapshots.create', 'snapshots.delete', 'snapshots.list', 'snapshots.restore', 'studio.preferences.read',
     'text.lookup', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read',
-    'workspace.compile', 'workspace.compile.result', 'workspace.domain.read', 'workspace.domain.write', 'workspace.generate.preview', 'workspace.mod.drift', 'workspace.mod.import', 'workspace.read', 'workspace.roundtrip.check',
+    'workspace.compile', 'workspace.compile.result', 'workspace.domain.read', 'workspace.domain.write', 'workspace.generate.preview', 'workspace.graph.critic', 'workspace.graph.explain', 'workspace.graph.simulate', 'workspace.mod.drift', 'workspace.mod.import', 'workspace.nodes.diagnose', 'workspace.read', 'workspace.roundtrip.check',
   ];
   const sameCapabilityIds = (actual, expected) => Array.isArray(actual)
     && JSON.stringify([...actual].sort()) === JSON.stringify([...expected].sort());
@@ -1463,11 +1463,11 @@ async function main() {
     ['read', readEffective, 'read', ['ai.usage.read', 'contracts.derive', 'contracts.glue.preview', 'contracts.registry.read', 'diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.file.read', 'extensions.overrides.analyze', 'help.bug.report', 'help.knowledge.read', 'history.list', 'history.raw.read',
       'patch.audit.read', 'patch.base.read', 'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.complete', 'patch.xpath.synthesize', 'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.symbols.search', 'project.xml.references', 'readiness.read',
       'reference.coverage.read', 'reference.file.read', 'reference.galaxy.read', 'reference.manifest.list', 'reference.objects.search', 'reference.status.read', 'reference.suggest', 'release.artifact.verify', 'rules.suppression.prepare',
-      'runtime.bridge.read', 'runtime.control.read', 'runtime.cue.telemetry', 'runtime.debug.read', 'runtime.gamelog.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domain.inspect', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read', 'workspace.domain.read', 'workspace.read', 'workspace.roundtrip.check']],
+      'runtime.bridge.read', 'runtime.control.read', 'runtime.cue.telemetry', 'runtime.debug.read', 'runtime.gamelog.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domain.inspect', 'schema.domains.list', 'schema.element.explain', 'studio.preferences.read', 'text.lookup', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read', 'workspace.domain.read', 'workspace.graph.critic', 'workspace.graph.explain', 'workspace.graph.simulate', 'workspace.nodes.diagnose', 'workspace.read', 'workspace.roundtrip.check']],
     ['write', writeEffective, 'write', ['ai.usage.read', 'contracts.derive', 'contracts.glue.preview', 'contracts.registry.read', 'diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.file.read', 'extensions.overrides.analyze', 'help.bug.report', 'help.knowledge.read', 'history.list', 'history.raw.read', 'patch.audit.read', 'patch.base.read', 'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.complete', 'patch.xpath.synthesize', 'project.validate',
       'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.symbols.search', 'project.xml.references',
       'readiness.read', 'reference.coverage.read', 'reference.file.read', 'reference.galaxy.read', 'reference.manifest.list', 'reference.objects.search', 'reference.status.read', 'reference.suggest', 'release.artifact.verify', 'rules.suppression.prepare',
-      'runtime.bridge.read', 'runtime.control.read', 'runtime.cue.telemetry', 'runtime.debug.read', 'runtime.gamelog.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domain.inspect', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.domain.read', 'workspace.read', 'workspace.roundtrip.check']],
+      'runtime.bridge.read', 'runtime.control.read', 'runtime.cue.telemetry', 'runtime.debug.read', 'runtime.gamelog.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domain.inspect', 'schema.domains.list', 'schema.element.explain', 'studio.preferences.read', 'text.lookup', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.domain.read', 'workspace.graph.critic', 'workspace.graph.explain', 'workspace.graph.simulate', 'workspace.nodes.diagnose', 'workspace.read', 'workspace.roundtrip.check']],
     ['deploy', deployEffective, 'deploy', expectedCapabilityIds.filter(id => !id.startsWith('configuration.') && !id.startsWith('deploy.') && !id.startsWith('bulk.transform.') && !id.startsWith('files.') && !id.startsWith('snapshots.') && !id.startsWith('release.steam.') && ![
       'history.revert', 'performance.native.collect', 'performance.native.read', 'performance.native.stop', 'project.ai.navigation', 'project.md.navigation', 'project.md.rename', 'release.nexus.prepare', 'reviews.warning.revoke', 'rules.suppression.apply', 'workspace.domain.write', 'workspace.mod.drift', 'workspace.mod.import',
     ].includes(id))],
@@ -7680,6 +7680,67 @@ async function main() {
         ctrlStatus: ctrlStatusRes.status,
         cueTelemetry: cueTelemetryRes.status,
         gameLog: gameLogRes.status,
+      }));
+  }
+
+  {
+    const studioPrefsRes = await req('GET', '/api/agent/studio/preferences', readKey, undefined, { workspaceId: WORKSPACE_ID, operationId: null });
+    capabilityResponses.set('studio.preferences.read', studioPrefsRes);
+    const studioPrefsBadQuery = await req('GET', '/api/agent/studio/preferences?extra=1', readKey, undefined, { workspaceId: WORKSPACE_ID, operationId: null });
+    const studioRawDenied = await req('GET', '/api/studio/layout', readKey, undefined, { workspaceId: WORKSPACE_ID, operationId: null });
+
+    const nodeDiagWsRes = await req('POST', '/api/agent/workspace/node-diagnostics', readKey, {}, { workspaceId: WORKSPACE_ID, operationId: null });
+    capabilityResponses.set('workspace.nodes.diagnose', nodeDiagWsRes);
+    const nodeDiagBadMix = await req('POST', '/api/agent/workspace/node-diagnostics', readKey, { mode: 'workspace', nodes: [] }, { workspaceId: WORKSPACE_ID, operationId: null });
+
+    const simInlineRes = await req('POST', '/api/agent/workspace/simulate', readKey, {
+      mode: 'inline',
+      seed: { $threat: 2 },
+      nodes: [
+        { id: 'c1', type: 'cue', xmlTag: 'cue', label: 'Gate', properties: { name: 'Gate' } },
+        { id: 'k1', type: 'condition', xmlTag: 'check_value', label: 'Chk', properties: { value: '$threat ge 10' } },
+      ],
+      links: [{ id: 'l1', sourceNodeId: 'c1', sourcePortId: 'out_cond', targetNodeId: 'k1', targetPortId: 'in_cond' }],
+    }, { workspaceId: WORKSPACE_ID, operationId: null });
+    capabilityResponses.set('workspace.graph.simulate', simInlineRes);
+    const simBadSeed = await req('POST', '/api/agent/workspace/simulate', readKey, { mode: 'workspace', seed: { $bad: { nested: 1 } } }, { workspaceId: WORKSPACE_ID, operationId: null });
+
+    const criticWsRes = await req('POST', '/api/agent/workspace/critic', readKey, {}, { workspaceId: WORKSPACE_ID, operationId: null });
+    capabilityResponses.set('workspace.graph.critic', criticWsRes);
+    const criticBadExtra = await req('POST', '/api/agent/workspace/critic', readKey, { extra: true }, { workspaceId: WORKSPACE_ID, operationId: null });
+
+    const explainWsRes = await req('POST', '/api/agent/workspace/explain', readKey, {}, { workspaceId: WORKSPACE_ID, operationId: null });
+    capabilityResponses.set('workspace.graph.explain', explainWsRes);
+    const explainDiagRes = await req('POST', '/api/agent/workspace/explain', readKey, {
+      mode: 'diagnostic',
+      diagnostic: { code: 'md_lua.conversation_menu_without_deferred_redraw', severity: 'warning', message: 'Conversation menu opened without deferred redraw.' },
+    }, { workspaceId: WORKSPACE_ID, operationId: null });
+    const explainBadDiag = await req('POST', '/api/agent/workspace/explain', readKey, {
+      mode: 'diagnostic',
+      diagnostic: { severity: 'fatal', message: 'bad' },
+    }, { workspaceId: WORKSPACE_ID, operationId: null });
+
+    ok('slice15_studio_preferences_and_deterministic_md_graph_routes_preserve_session_boundary',
+      studioPrefsRes.status === 200 && studioPrefsRes.json?.ok === true && studioPrefsRes.json?.layout?.version === 1
+        && studioPrefsRes.json?.releasePreferences?.mode === 'guided' && !JSON.stringify(studioPrefsRes.json).includes(tmp)
+        && studioPrefsBadQuery.status === 400
+        && studioRawDenied.status === 403 && studioRawDenied.json?.authorityCode === 'STUDIO_SESSION_REQUIRED'
+        && nodeDiagWsRes.status === 200 && nodeDiagWsRes.json?.ok === true && nodeDiagBadMix.status === 400
+        && simInlineRes.status === 200 && simInlineRes.json?.ok === true
+        && Array.isArray(simInlineRes.json?.findings) && simInlineRes.json.findings.some(f => f.kind === 'never_satisfiable_cue')
+        && simBadSeed.status === 400
+        && criticWsRes.status === 200 && criticWsRes.json?.ok === true && criticBadExtra.status === 400
+        && explainWsRes.status === 200 && explainWsRes.json?.mode === 'workspace' && typeof explainWsRes.json?.summary === 'string'
+        && explainDiagRes.status === 200 && explainDiagRes.json?.mode === 'diagnostic' && typeof explainDiagRes.json?.explanation?.why === 'string'
+        && explainBadDiag.status === 400,
+      JSON.stringify({
+        studioPrefs: studioPrefsRes.status,
+        studioRawDenied: studioRawDenied.status,
+        nodeDiagWs: nodeDiagWsRes.status,
+        simInline: simInlineRes.status,
+        criticWs: criticWsRes.status,
+        explainWs: explainWsRes.status,
+        explainDiag: explainDiagRes.status,
       }));
   }
 

@@ -68,6 +68,11 @@ const DIAGNOSTIC_READ_TOOLS = [
   'get_runtime_control_status',
   'analyze_cue_telemetry',
   'get_game_log_status',
+  'get_studio_preferences',
+  'critique_md_graph',
+  'explain_md_graph',
+  'simulate_md_graph',
+  'diagnose_workspace_nodes',
 ];
 
 const MD_NAVIGATION_TOOL = 'navigate_md_script';
@@ -165,6 +170,7 @@ const READ_TOOLS = [
   'prepare_bug_report', 'query_forge_knowledge', 'get_forge_health_card', 'preview_forge_probe', 'get_live_forge_state', 'get_workspace_domain',
   'get_ai_spend_status', 'preview_contract_glue', 'audit_workspace_patches', 'inspect_schema_domain',
   'list_reference_manifest_files', 'get_live_bridge_state', 'get_runtime_control_status', 'analyze_cue_telemetry', 'get_game_log_status',
+  'get_studio_preferences', 'critique_md_graph', 'explain_md_graph', 'simulate_md_graph', 'diagnose_workspace_nodes',
 ];
 const WRITE_TOOLS = [
   'validate_mod', 'list_schema_domains', 'get_workspace', 'compile_workspace', 'author_check',
@@ -1826,6 +1832,11 @@ try {
       { name: 'get_runtime_control_status', arguments: { command: 'reloadui' } },
       { name: 'analyze_cue_telemetry', arguments: { cueNames: [42] } },
       { name: 'get_game_log_status', arguments: { modId: 'm'.repeat(129) } },
+      { name: 'get_studio_preferences', arguments: { extra: true } },
+      { name: 'critique_md_graph', arguments: { mode: 'bogus' } },
+      { name: 'explain_md_graph', arguments: { diagnostic: { severity: 'fatal', message: 'bad' } } },
+      { name: 'simulate_md_graph', arguments: { seed: { $x: [] } } },
+      { name: 'diagnose_workspace_nodes', arguments: { links: [] } },
     ]) {
       const denied = await client.request('tools/call', invalid);
       assert.equal(denied.error?.code, -32602, `${invalid.name} malformed input must fail before HTTP`);

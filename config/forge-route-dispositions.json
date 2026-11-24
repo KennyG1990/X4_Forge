@@ -2611,6 +2611,18 @@
       "resourceClass": "workspace",
       "workspaceMode": "required"
     },
+    "GET /api/agent/studio/preferences": {
+      "disposition": "canonical-capability",
+      "owner": "studio.preferences.read",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "stateless-analysis",
+      "workspaceMode": "none"
+    },
     "GET /api/agent/tfile-lint-selftest": {
       "disposition": "public-selftest",
       "owner": "runTFileLintSelftest",
@@ -4368,11 +4380,35 @@
       "resourceClass": "workspace",
       "workspaceMode": "required"
     },
+    "POST /api/agent/workspace/critic": {
+      "disposition": "canonical-capability",
+      "owner": "workspace.graph.critic",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "workspace",
+      "workspaceMode": "required"
+    },
     "POST /api/agent/workspace/domain": {
       "disposition": "canonical-capability",
       "owner": "workspace.domain.write",
       "registrations": 1,
       "agentScopes": [
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "workspace",
+      "workspaceMode": "required"
+    },
+    "POST /api/agent/workspace/explain": {
+      "disposition": "canonical-capability",
+      "owner": "workspace.graph.explain",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
         "write",
         "deploy"
       ],
@@ -4390,12 +4426,36 @@
       "resourceClass": "workspace",
       "workspaceMode": "required"
     },
+    "POST /api/agent/workspace/node-diagnostics": {
+      "disposition": "canonical-capability",
+      "owner": "workspace.nodes.diagnose",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "workspace",
+      "workspaceMode": "required"
+    },
     "POST /api/agent/workspace/restore-parked": {
       "disposition": "session-only",
       "owner": "agent-api",
       "registrations": 1,
       "agentScopes": [],
       "resourceClass": "cross-workspace-session",
+      "workspaceMode": "required"
+    },
+    "POST /api/agent/workspace/simulate": {
+      "disposition": "canonical-capability",
+      "owner": "workspace.graph.simulate",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "workspace",
       "workspaceMode": "required"
     },
     "POST /api/agent/workspaces": {
@@ -4818,6 +4878,7 @@
     "snapshots.delete@1": "e10e6672c4c685aeed35f0d403fe7382c03a87697fb66373eacf9f63f6b4bb16",
     "snapshots.list@1": "5738f95e31782262be51c18d53a69950cf5d5fa6173f0863c7e445380f3c1a43",
     "snapshots.restore@1": "8bab37c9f4669317edc2e4ffd89fdfc2749bcbbdb857fff587f215dd784da7bd",
+    "studio.preferences.read@1": "77bf715bfc382e2129df8ebbcd35fc0f8788fbdc1b1eaf713b375ed631499597",
     "text.lookup@1": "45ecbc5abb71fb1e168c8b172399742251ca28c8b13fa96afb1352e11a8666a6",
     "ui.lua.snippets.read@1": "48aa138ac3bbd645e55ad99c7a399b4bb315e3c3342319807d2aacf146b53719",
     "ui.vanilla.harvest@1": "4f160c77d03cae999c38be1f27afdb9c6e60b78f4ea80b6af6dec3569558fc71",
@@ -4827,14 +4888,18 @@
     "workspace.domain.read@2": "0d0410ceaf06fc06a9ff9d0afa346618391f3bfd9379555acf39692566c1436a",
     "workspace.domain.write@2": "0ff312384621c351c2aa8d8fc9e54f870f088aef70d12be171c7736712673c75",
     "workspace.generate.preview@1": "76630ed9e34f95a4cc895088e0d3def92d5f3b2bb223d071e1e5a4fc1b4f6add",
+    "workspace.graph.critic@1": "786bcd2d01c4451a9004007ed025bf5fe87e858d83c48281183029ed91bf70d4",
+    "workspace.graph.explain@1": "b6b29903b9c43ea579cf77cbd587ce3fec02e1bf6e43005e76424468a139a0c6",
+    "workspace.graph.simulate@1": "392abb4ce299830adcf984909bcd39f07d31787a31f732a3fc357b1fef316ac6",
     "workspace.mod.drift@1": "71b738bfb4bf4275911c937d958b39ee32e0a81cd7de14a4598fb04ae4b787a5",
     "workspace.mod.import@1": "9b3d03c3cae968638eec281fb758479cce07557dbc99048b8aafde06224307eb",
+    "workspace.nodes.diagnose@1": "e0b21cd6526bf9a7ffa831616a87cfe5544bcff6fbb24dc04d2fcd651597f2a0",
     "workspace.read@2": "962774de4a25e8725a0d90d4982298cc72f100312075b1f6f4ff9de1482752d7",
     "workspace.roundtrip.check@1": "c1a1c89c1eb3f44f8f16e6ca03e9787318eec5065bcf25dd2c3ce3a4b4045185"
   },
   "mcpModuleSignature": {
-    "version": 40,
-    "hash": "fd27d0cc18304d0f4fe9d3afbd828162b93f29f6a22bc9808479a56028d70b80"
+    "version": 41,
+    "hash": "3abfde7d6c065016857ea71730918038fd91669f6f9e3ee2fef952bc12476d78"
   },
   "mcpSignatures": {
     "validate_mod": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",
@@ -4940,7 +5005,12 @@
     "get_live_bridge_state": "c0652d40186f2514fa7e4f5ce3750270ce7d21ef45b6317975ef4cb240d5d97b",
     "get_runtime_control_status": "99e30ffe4ec682a4a8a6df421f518a6f289a864f4f7be83465ce0a12b0c9fa76",
     "analyze_cue_telemetry": "c606d214cdf798454e30c45280cab1e95a012b1d894979962072ec604048d8cf",
-    "get_game_log_status": "885dff61e657f7738a57e76b8f98dada3460d78d0b28f48135a7a7a8c692c50d"
+    "get_game_log_status": "885dff61e657f7738a57e76b8f98dada3460d78d0b28f48135a7a7a8c692c50d",
+    "get_studio_preferences": "ff7532dcec8e1d55ec216710cb7cc553c8dab4c7ab0814e13d0355bed64b03e9",
+    "critique_md_graph": "562d4f2c6355f9b2c0534f0e5cfdc04cffdcda43b26fe0c7baba4754246ef77c",
+    "explain_md_graph": "01a794f053ac3692ef762ae2742b583165ec93c888a1cd816c6c2155f4c9debb",
+    "simulate_md_graph": "1f90a23daa5a4e6bb5f18786b305337a7f3abe1f700a9a153c8355f666f1fc38",
+    "diagnose_workspace_nodes": "119df8048e19a213bfbd59f5068de6c8dff5d6e0788974fea36bdaa50232490a"
   },
   "mcpCapabilityIdentities": {
     "validate_mod": "project.validate@1",
@@ -5046,6 +5116,11 @@
     "get_live_bridge_state": "runtime.bridge.read@1",
     "get_runtime_control_status": "runtime.control.read@1",
     "analyze_cue_telemetry": "runtime.cue.telemetry@1",
-    "get_game_log_status": "runtime.gamelog.read@1"
+    "get_game_log_status": "runtime.gamelog.read@1",
+    "get_studio_preferences": "studio.preferences.read@1",
+    "critique_md_graph": "workspace.graph.critic@1",
+    "explain_md_graph": "workspace.graph.explain@1",
+    "simulate_md_graph": "workspace.graph.simulate@1",
+    "diagnose_workspace_nodes": "workspace.nodes.diagnose@1"
   }
 }
