@@ -808,26 +808,27 @@ async function main() {
     : [];
   // Independent semantic inventory: unexpected additions/removals must fail.
   const expectedCapabilityIds = [
+    'ai.usage.read',
     'bulk.transform.apply', 'bulk.transform.preview',
     'configuration.access.request', 'configuration.access.status', 'configuration.apply', 'configuration.preview', 'configuration.read', 'configuration.status',
-    'contracts.derive', 'contracts.registry.read',
+    'contracts.derive', 'contracts.glue.preview', 'contracts.registry.read',
     'deploy.apply', 'deploy.preview', 'deploy.status', 'deploy.undo', 'diagnostics.quick.fixes',
     'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.file.read', 'extensions.overrides.analyze',
     'files.delete', 'files.delete.dir', 'files.inventory.read', 'files.list', 'files.read', 'files.restore', 'files.scaffold', 'files.write',
     'help.bug.report', 'help.knowledge.read', 'history.list', 'history.raw.read', 'history.revert',
-    'patch.base.read', 'patch.diff.simulate', 'patch.readiness.analyze', 'patch.targets.list', 'patch.xpath.complete', 'patch.xpath.synthesize', 'performance.collect', 'performance.native.collect', 'performance.native.read', 'performance.native.stop',
+    'patch.audit.read', 'patch.base.read', 'patch.diff.simulate', 'patch.readiness.analyze', 'patch.targets.list', 'patch.xpath.complete', 'patch.xpath.synthesize', 'performance.collect', 'performance.native.collect', 'performance.native.read', 'performance.native.stop',
     'performance.profile', 'performance.read', 'project.ai.navigation', 'project.brief.read', 'project.md.navigation', 'project.md.rename', 'project.proof.read', 'project.symbols.search', 'project.validate', 'project.xml.references', 'readiness.read',
     'reference.coverage.read', 'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest',
     'release.artifact.verify', 'release.nexus.prepare', 'release.steam.adopt', 'release.steam.prepare', 'release.steam.verify',
     'reviews.warning.revoke', 'rules.suppression.apply', 'rules.suppression.prepare',
-    'runtime.debug.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domains.list', 'schema.element.explain',
+    'runtime.debug.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domain.inspect', 'schema.domains.list', 'schema.element.explain',
     'snapshots.create', 'snapshots.delete', 'snapshots.list', 'snapshots.restore',
     'text.lookup', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read',
     'workspace.compile', 'workspace.compile.result', 'workspace.domain.read', 'workspace.domain.write', 'workspace.generate.preview', 'workspace.mod.drift', 'workspace.mod.import', 'workspace.read', 'workspace.roundtrip.check',
   ];
   const sameCapabilityIds = (actual, expected) => Array.isArray(actual)
     && JSON.stringify([...actual].sort()) === JSON.stringify([...expected].sort());
-  const expectedCapabilityIdentity = id => `${id}@${['files.restore', 'files.write', 'history.list', 'history.revert', 'patch.readiness.analyze', 'workspace.compile', 'workspace.compile.result', 'workspace.read'].includes(id) ? 2 : 1}`;
+  const expectedCapabilityIdentity = id => `${id}@${['files.restore', 'files.write', 'history.list', 'history.revert', 'patch.readiness.analyze', 'workspace.compile', 'workspace.compile.result', 'workspace.domain.read', 'workspace.domain.write', 'workspace.read'].includes(id) ? 2 : 1}`;
   ok('capability_contract_is_versioned_and_hashed',
     capabilityContract?.schemaVersion === 'forge.capability.v1' &&
     /^[a-f0-9]{64}$/.test(String(capabilityContract?.contractHash || '')) &&
@@ -1459,14 +1460,14 @@ async function main() {
     sameCapabilityIds(effectiveIds(studioEffective), expectedCapabilityIds) && effectiveHashIsValid(studioEffective),
   JSON.stringify({ public: publicEffective.json, bogus: bogusEffective.json, studio: { actor: studioEffective.json?.actor, ids: effectiveIds(studioEffective) } }));
   for (const [name, response, scope, expectedIds] of [
-    ['read', readEffective, 'read', ['contracts.derive', 'contracts.registry.read', 'diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.file.read', 'extensions.overrides.analyze', 'help.bug.report', 'help.knowledge.read', 'history.list', 'history.raw.read',
-      'patch.base.read', 'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.complete', 'patch.xpath.synthesize', 'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.symbols.search', 'project.xml.references', 'readiness.read',
+    ['read', readEffective, 'read', ['ai.usage.read', 'contracts.derive', 'contracts.glue.preview', 'contracts.registry.read', 'diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.file.read', 'extensions.overrides.analyze', 'help.bug.report', 'help.knowledge.read', 'history.list', 'history.raw.read',
+      'patch.audit.read', 'patch.base.read', 'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.complete', 'patch.xpath.synthesize', 'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.symbols.search', 'project.xml.references', 'readiness.read',
       'reference.coverage.read', 'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest', 'release.artifact.verify', 'rules.suppression.prepare',
-      'runtime.debug.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read', 'workspace.domain.read', 'workspace.read', 'workspace.roundtrip.check']],
-    ['write', writeEffective, 'write', ['contracts.derive', 'contracts.registry.read', 'diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.file.read', 'extensions.overrides.analyze', 'help.bug.report', 'help.knowledge.read', 'history.list', 'history.raw.read', 'patch.base.read', 'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.complete', 'patch.xpath.synthesize', 'project.validate',
+      'runtime.debug.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domain.inspect', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read', 'workspace.domain.read', 'workspace.read', 'workspace.roundtrip.check']],
+    ['write', writeEffective, 'write', ['ai.usage.read', 'contracts.derive', 'contracts.glue.preview', 'contracts.registry.read', 'diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.file.read', 'extensions.overrides.analyze', 'help.bug.report', 'help.knowledge.read', 'history.list', 'history.raw.read', 'patch.audit.read', 'patch.base.read', 'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.complete', 'patch.xpath.synthesize', 'project.validate',
       'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.symbols.search', 'project.xml.references',
       'readiness.read', 'reference.coverage.read', 'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest', 'release.artifact.verify', 'rules.suppression.prepare',
-      'runtime.debug.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.domain.read', 'workspace.read', 'workspace.roundtrip.check']],
+      'runtime.debug.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domain.inspect', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.domain.read', 'workspace.read', 'workspace.roundtrip.check']],
     ['deploy', deployEffective, 'deploy', expectedCapabilityIds.filter(id => !id.startsWith('configuration.') && !id.startsWith('deploy.') && !id.startsWith('bulk.transform.') && !id.startsWith('files.') && !id.startsWith('snapshots.') && !id.startsWith('release.steam.') && ![
       'history.revert', 'performance.native.collect', 'performance.native.read', 'performance.native.stop', 'project.ai.navigation', 'project.md.navigation', 'project.md.rename', 'release.nexus.prepare', 'reviews.warning.revoke', 'rules.suppression.apply', 'workspace.domain.write', 'workspace.mod.drift', 'workspace.mod.import',
     ].includes(id))],
@@ -7500,7 +7501,7 @@ async function main() {
     const domainWriterMint = await mkKey('deploy', {
       label: 'slice12-domain-writer',
       authorityMode: 'exact',
-      capabilityIdentities: ['history.list@2', 'history.revert@2', 'workspace.domain.read@1', 'workspace.domain.write@1'],
+      capabilityIdentities: ['history.list@2', 'history.revert@2', 'workspace.domain.read@2', 'workspace.domain.write@2'],
       allowedEffects: ['read', 'audit-write', 'audit-retention-delete', 'workspace-write', 'filesystem-write', 'deploy', 'delete'],
     });
     const domainWriterKey = domainWriterMint.token;
@@ -7587,6 +7588,52 @@ async function main() {
         apply: applyRes.status,
         revert: revertRes.status,
         tFilesAfterUndo: tFilesAfterUndo.json?.data?.tFiles?.length,
+      }));
+  }
+
+  {
+    const aiUsageRes = await req('GET', '/api/agent/ai/usage', readKey, undefined, { workspaceId: WORKSPACE_ID, operationId: null });
+    capabilityResponses.set('ai.usage.read', aiUsageRes);
+    const aiUsageBadQuery = await req('GET', '/api/agent/ai/usage?extra=1', readKey, undefined, { workspaceId: WORKSPACE_ID, operationId: null });
+
+    const glueSampleRes = await req('POST', '/api/agent/external-api/glue-preview', readKey, { mode: 'sample' }, { workspaceId: WORKSPACE_ID, operationId: null });
+    capabilityResponses.set('contracts.glue.preview', glueSampleRes);
+    const glueWsRes = await req('POST', '/api/agent/external-api/glue-preview', readKey, { mode: 'workspace' }, { workspaceId: WORKSPACE_ID, operationId: null });
+    const glueBadBody = await req('POST', '/api/agent/external-api/glue-preview', readKey, { mode: 'inline' }, { workspaceId: WORKSPACE_ID, operationId: null });
+    const glueBadExtra = await req('POST', '/api/agent/external-api/glue-preview', readKey, { mode: 'sample', unexpected: true }, { workspaceId: WORKSPACE_ID, operationId: null });
+
+    const patchSelftestRes = await req('GET', '/api/agent/patch/audit?mode=selftest', readKey, undefined, { workspaceId: WORKSPACE_ID, operationId: null });
+    const patchWsRes = await req('GET', '/api/agent/patch/audit?mode=workspace', readKey, undefined, { workspaceId: WORKSPACE_ID, operationId: null });
+    capabilityResponses.set('patch.audit.read', patchWsRes);
+    const patchBadMode = await req('GET', '/api/agent/patch/audit?mode=bogus', readKey, undefined, { workspaceId: WORKSPACE_ID, operationId: null });
+
+    const schemaInspectRes = await req('GET', '/api/agent/schema/domain?refresh=1&limit=10', readKey, undefined, { workspaceId: WORKSPACE_ID, operationId: null });
+    capabilityResponses.set('schema.domain.inspect', schemaInspectRes);
+    const schemaMissingRes = await req('GET', '/api/agent/schema/domain?domain=missing_domain_xyz', readKey, undefined, { workspaceId: WORKSPACE_ID, operationId: null });
+    const schemaBadLimit = await req('GET', '/api/agent/schema/domain?limit=501', readKey, undefined, { workspaceId: WORKSPACE_ID, operationId: null });
+
+    const contractDomRead = await req('GET', '/api/agent/workspace/domain?domain=integration_contract', readKey, undefined, { workspaceId: WORKSPACE_ID, operationId: null });
+
+    ok('slice13_contract_glue_patch_audit_schema_domain_and_ai_usage_routes_redact_host_paths',
+      aiUsageRes.status === 200 && aiUsageRes.json?.ok === true && typeof aiUsageRes.json?.meterAvailable === 'boolean' && aiUsageBadQuery.status === 400
+        && glueSampleRes.status === 200 && glueSampleRes.json?.available === true && glueSampleRes.json?.errorCount === 0 && String(glueSampleRes.json?.lua || '').includes('myai.get_status')
+        && glueWsRes.status === 200 && typeof glueWsRes.json?.available === 'boolean'
+        && glueBadBody.status === 400 && glueBadExtra.status === 400
+        && patchSelftestRes.status === 200 && patchSelftestRes.json?.pass === true && patchSelftestRes.json?.summary?.resolved === 1
+        && patchWsRes.status === 200 && patchWsRes.json?.ok === true && !JSON.stringify(patchWsRes.json).includes(safeWorkspace) && patchBadMode.status === 400
+        && schemaInspectRes.status === 200 && schemaInspectRes.json?.ok === true && !JSON.stringify(schemaInspectRes.json).includes(tmp)
+        && schemaMissingRes.status === 404 && schemaMissingRes.json?.code === 'SCHEMA_DOMAIN_NOT_FOUND' && !JSON.stringify(schemaMissingRes.json).includes(tmp)
+        && schemaBadLimit.status === 400
+        && contractDomRead.status === 200 && contractDomRead.json?.domain === 'integration_contract',
+      JSON.stringify({
+        aiUsage: aiUsageRes.status,
+        glueSample: glueSampleRes.status,
+        glueWs: glueWsRes.status,
+        patchSelftest: patchSelftestRes.status,
+        patchWs: patchWsRes.status,
+        schemaInspect: schemaInspectRes.status,
+        schemaMissing: schemaMissingRes.status,
+        contractDomRead: contractDomRead.status,
       }));
   }
 

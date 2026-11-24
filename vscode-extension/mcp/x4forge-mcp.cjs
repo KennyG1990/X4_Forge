@@ -187,6 +187,10 @@ const DIAGNOSTIC_READ_LIVE_TOOLS = new Set([
   "preview_forge_probe",
   "get_live_forge_state",
   "get_workspace_domain",
+  "get_ai_spend_status",
+  "preview_contract_glue",
+  "audit_workspace_patches",
+  "inspect_schema_domain",
 ]);
 const PERFORMANCE_PROFILE_HTTP_FAILURES = { PROFILE_DISABLED: 503, PROFILE_BUSY: 409, PROFILE_RATE_LIMITED: 429, PROFILE_DISPOSED: 503, PROFILE_INPUT_INVALID: 400, PROFILE_ABORTED: 408, PROFILE_FAILED: 500, PROFILE_CLEANUP_UNCONFIRMED: 409 };
 const PERFORMANCE_COLLECTION_HTTP_FAILURES = { PERFORMANCE_DISPOSED: 503, PERFORMANCE_COLLECTION_BUSY: 409, PERFORMANCE_COLLECTION_REFUSED: 409, PROJECT_INPUT_INVALID: 400, PERFORMANCE_COLLECTION_FAILED: 500 };
@@ -2994,8 +2998,8 @@ const TOOLS = [
   {
     name: "get_workspace_domain",
     capabilityId: "workspace.domain.read",
-    capabilityVersion: 1,
-    description: "Read one complete, host-path-redacted domain model slice (aiscripts, libraries, md_graph, translations, ui_layout, or xml_patches) from the addressed Studio workspace along with version, CAS workspaceHash, snapshotHash, and compileSettings (bounded at 512 KiB UTF-8 without 50-node truncation).",
+    capabilityVersion: 2,
+    description: "Read one complete, host-path-redacted domain model slice (aiscripts, integration_contract, libraries, md_graph, translations, ui_layout, or xml_patches) from the addressed Studio workspace along with version, CAS workspaceHash, snapshotHash, and compileSettings (bounded at 512 KiB UTF-8 without 50-node truncation).",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -3003,7 +3007,7 @@ const TOOLS = [
       properties: {
         domain: {
           type: "string",
-          enum: ["aiscripts", "libraries", "md_graph", "translations", "ui_layout", "xml_patches"],
+          enum: ["aiscripts", "integration_contract", "libraries", "md_graph", "translations", "ui_layout", "xml_patches"],
         },
       },
     },
@@ -3030,8 +3034,8 @@ const TOOLS = [
   {
     name: "update_workspace_domain",
     capabilityId: "workspace.domain.write",
-    capabilityVersion: 1,
-    description: "Validate and preview (apply:false, default) or compare-and-swap commit (apply:true) updates to one isolated Studio workspace domain (aiscripts, libraries, md_graph, translations, ui_layout, or xml_patches) under expectedHead + expectedSnapshotHash guards, preserving sibling compileSettings and uiTheme fields and recording an action receipt plus one-use workspace recovery. Requires an explicit key grant.",
+    capabilityVersion: 2,
+    description: "Validate and preview (apply:false, default) or compare-and-swap commit (apply:true) updates to one isolated Studio workspace domain (aiscripts, integration_contract, libraries, md_graph, translations, ui_layout, or xml_patches) under expectedHead + expectedSnapshotHash guards, preserving sibling compileSettings and uiTheme fields and recording an action receipt plus one-use workspace recovery. Requires an explicit key grant.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -3039,7 +3043,7 @@ const TOOLS = [
       properties: {
         domain: {
           type: "string",
-          enum: ["aiscripts", "libraries", "md_graph", "translations", "ui_layout", "xml_patches"],
+          enum: ["aiscripts", "integration_contract", "libraries", "md_graph", "translations", "ui_layout", "xml_patches"],
         },
         changes: {
           type: "object",
@@ -3095,6 +3099,156 @@ const TOOLS = [
           workspaceId: "string",
           modId: "string",
           data: "object",
+        },
+      );
+    },
+  },
+  {
+    name: "get_ai_spend_status",
+    capabilityId: "ai.usage.read",
+    capabilityVersion: 1,
+    description: "Read daily AI provider call counts, refused-call counts, estimated USD spend, daily call/USD safety caps, and meter availability without exposing API keys, prompts, or host paths.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+    },
+    handler: async () => requireResponse(
+      await forge("GET", "/api/agent/ai/usage"),
+      "AI spend meter status",
+      {
+        ok: "boolean",
+        success: "boolean",
+        day: "string",
+        cap: "number",
+        usdCap: "number",
+        calls: "object",
+        refused: "object",
+        usd: "object",
+        totalToday: "number",
+        totalUsdToday: "number",
+        meterAvailable: "boolean",
+      },
+    ),
+  },
+  {
+    name: "preview_contract_glue",
+    capabilityId: "contracts.glue.preview",
+    capabilityVersion: 1,
+    description: "Validate an inline IntegrationContract, the addressed workspace integrationContract, or the canonical Lever-2 sample contract, and generate deterministic X4 HTTP/UI-event/file-bridge Lua glue plus companion Mission Director script without mutating workspace or disk state.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        mode: {
+          type: "string",
+          enum: ["inline", "workspace", "sample"],
+        },
+        contract: {
+          type: "object",
+          additionalProperties: true,
+        },
+        scriptPrefix: {
+          type: "string",
+          maxLength: 64,
+        },
+      },
+    },
+    handler: async (args) => {
+      const payload = requireResponse(
+        await forge("POST", "/api/agent/external-api/glue-preview", args),
+        "contract glue preview",
+        {
+          ok: "boolean",
+          success: "boolean",
+          mode: "string",
+          available: "boolean",
+          findings: "array",
+          errorCount: "number",
+          warningCount: "number",
+          lua: "string",
+          mdScript: "string",
+        },
+      );
+      if (payload.contract !== null && (!payload.contract || typeof payload.contract !== "object" || Array.isArray(payload.contract))) {
+        const error = new Error("contract glue preview response has invalid contract field");
+        error.invalidResponse = true;
+        throw error;
+      }
+      return payload;
+    },
+  },
+  {
+    name: "audit_workspace_patches",
+    capabilityId: "patch.audit.read",
+    capabilityVersion: 1,
+    description: "Run deterministic target-resolution and root-element sanity diagnostics over the addressed workspace xmlPatches (mode=\"workspace\", default, bounded at 200 diagnostics with zero host paths) or run the 3-patch self-audit fixture (mode=\"selftest\").",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        mode: {
+          type: "string",
+          enum: ["workspace", "selftest"],
+        },
+      },
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams();
+      if (args.mode !== undefined) q.set("mode", String(args.mode));
+      return requireResponse(
+        await forge("GET", `/api/agent/patch/audit?${q}`),
+        "workspace patch audit",
+        {
+          ok: "boolean",
+          success: "boolean",
+          mode: "string",
+          totalPatches: "number",
+          activePatches: "number",
+          truncated: "boolean",
+          summary: "object",
+          diagnostics: "array",
+        },
+      );
+    },
+  },
+  {
+    name: "inspect_schema_domain",
+    capabilityId: "schema.domain.inspect",
+    capabilityVersion: 1,
+    description: "Discover active X4 XSD schema domains with optional cache refresh and optional per-domain element-index drill-down (bounded up to 500 elements) while redacting all host filesystem paths to file basenames.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        domain: {
+          type: "string",
+          maxLength: 128,
+        },
+        refresh: {
+          type: "string",
+          enum: ["0", "1"],
+        },
+        limit: {
+          type: "string",
+          maxLength: 8,
+        },
+      },
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams();
+      if (args.domain !== undefined) q.set("domain", String(args.domain));
+      if (args.refresh !== undefined) q.set("refresh", String(args.refresh));
+      if (args.limit !== undefined) q.set("limit", String(args.limit));
+      return requireResponse(
+        await forge("GET", `/api/agent/schema/domain?${q}`),
+        "schema domain inspection",
+        {
+          ok: "boolean",
+          success: "boolean",
+          rootCount: "number",
+          domainCount: "number",
+          domains: "array",
         },
       );
     },
@@ -4236,7 +4390,7 @@ function deployGrantAllowed(capability, authority) {
 
 function workspaceFilesGrantAllowed(capability, authority) {
   const grant = authority.constraint;
-  const expectedVersion = capability.id === "history.revert" || capability.id === "files.write" || capability.id === "files.restore" ? 2 : 1;
+  const expectedVersion = capability.id === "history.revert" || capability.id === "files.write" || capability.id === "files.restore" || capability.id === "workspace.domain.write" ? 2 : 1;
   return capability.version === expectedVersion && isRecord(grant)
     && grant.capabilityIdentities.includes(`${capability.id}@${expectedVersion}`)
     && capability.effects.every((effect) => grant.allowedEffects.includes(effect));

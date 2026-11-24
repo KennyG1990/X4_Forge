@@ -407,6 +407,18 @@
       "resourceClass": "public",
       "workspaceMode": "optional"
     },
+    "GET /api/agent/ai/usage": {
+      "disposition": "canonical-capability",
+      "owner": "ai.usage.read",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "stateless-analysis",
+      "workspaceMode": "none"
+    },
     "GET /api/agent/aiscript-lint-selftest": {
       "disposition": "public-selftest",
       "owner": "agent-api",
@@ -1953,6 +1965,18 @@
       "resourceClass": "stateless-analysis",
       "workspaceMode": "optional"
     },
+    "GET /api/agent/patch/audit": {
+      "disposition": "canonical-capability",
+      "owner": "patch.audit.read",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "stateless-analysis",
+      "workspaceMode": "optional"
+    },
     "GET /api/agent/patch/base-content": {
       "disposition": "canonical-capability",
       "owner": "patch.base.read",
@@ -2418,6 +2442,18 @@
       ],
       "resourceClass": "public",
       "workspaceMode": "optional"
+    },
+    "GET /api/agent/schema/domain": {
+      "disposition": "canonical-capability",
+      "owner": "schema.domain.inspect",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "stateless-analysis",
+      "workspaceMode": "none"
     },
     "GET /api/agent/scriptproperties-selftest": {
       "disposition": "public-selftest",
@@ -3430,6 +3466,18 @@
     "POST /api/agent/expressions/inspect": {
       "disposition": "canonical-capability",
       "owner": "expression.inspect",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "stateless-analysis",
+      "workspaceMode": "optional"
+    },
+    "POST /api/agent/external-api/glue-preview": {
+      "disposition": "canonical-capability",
+      "owner": "contracts.glue.preview",
       "registrations": 1,
       "agentScopes": [
         "read",
@@ -4620,6 +4668,7 @@
     }
   },
   "capabilitySignatures": {
+    "ai.usage.read@1": "5d283f48af253022c336340df78870ac1de6049888a399576862cd051003a70c",
     "bulk.transform.apply@1": "9be533d103eede31abbfaa329b56cce2042315d86986146b02d2278dae9437a5",
     "bulk.transform.preview@1": "ff8310c8c5e198ce4588cbe3211a62a147c0880f4292fa779e9a23d4a472096e",
     "configuration.access.request@1": "ad89a954f21f5814cea5a39ddf7c2cb7c52fcd2270c587a1b81533c31a790f6a",
@@ -4629,6 +4678,7 @@
     "configuration.read@1": "ac31b04673c8035ee4729c5096a13792433c1fc62cbcbfe36a8067a1c757df4c",
     "configuration.status@1": "7a0ad35da24685fbef6614b87c615e915fb81b8ae2680e01b995def2c4c91795",
     "contracts.derive@1": "3fd77f84956c53f1aaa96bb62e1b7fdf8caa8ec71c5bc20a4c28f43a264d53f0",
+    "contracts.glue.preview@1": "5d982897b3282fafa4546ff6a2f571d7469a3c7d64e742a08651984e1dcd2530",
     "contracts.registry.read@1": "1795388187a2efed2c6d134140a4206f23afeafab5716c7e0434cc36426bf931",
     "deploy.apply@1": "c3031caa15d834a5b0c30e6946c9773d1afb0052d97cb618a55c858f590f6fb3",
     "deploy.preview@1": "cab52d43361a162fb4aa347be706a919ae2c5b3fefe6b7735585bb8258053f31",
@@ -4655,6 +4705,7 @@
     "history.list@2": "9fc3203d66edd8c3136bd374bfef4394783e1bd8ef8a44834ff7360a93d1fb33",
     "history.raw.read@1": "d055a37d5b317100dbca52cfd7878e4eeae8c9a4f01f400a7619be95919ee68e",
     "history.revert@2": "e864816f1ef6d4e06389051423687d3b9da310d3b541f91beff8ecafbb4ab0f4",
+    "patch.audit.read@1": "3d092b459fb9fd091d571b8f220a8dd00cf7b5aaf8d42f47f737fdce4f523637",
     "patch.base.read@1": "7ee587780dcdf034d892f17c6304b5b3483e397b6cba658cf21c711ae6fb9c0e",
     "patch.diff.simulate@1": "eb4c3ceab8d75b6c235acbc6820f611216685ac3e55a3cf958c5d493f179348a",
     "patch.readiness.analyze@2": "7baa90f99f4f1a7cc4382caaf009c107388e9de6124d0d2b5bf155769ab91812",
@@ -4695,6 +4746,7 @@
     "runtime.log.diagnose@1": "a5b1ef6f5323695f7ca5a3a47c0bbf103cca4777ef163913528a4838d843d589",
     "runtime.probe.preview@1": "2a4eb0be1027fd55d83a29a01a638806a56630ec1e5d10ffd3336cda66ddec20",
     "runtime.state.read@1": "b4602c8734d30f49e7e7ff26587958d2bace9a9f1c550d49612aea78a4c999f2",
+    "schema.domain.inspect@1": "92b2c14ad2397d96e0ec8e48f6c6175059386f729d89053194e54df53010b72a",
     "schema.domains.list@1": "c2ecae2906cf231eb4384a63ea601c7449f4fc691b629b97bff9fa81e32f21b5",
     "schema.element.explain@1": "066fc8d2153c753a7f498044a0fb2e4a6921f81a2fe1deb6445a02894194286d",
     "snapshots.create@1": "a9fd9da3a02cf0114d12558c1fd769fb4502ea19b527f6fbfc1711e2b9d2183a",
@@ -4707,8 +4759,8 @@
     "validation.last.read@1": "3aa1dfb1609fef0b75557ab12936f47bb22ecc23808168feda91070d23ea135f",
     "workspace.compile@2": "aaa528d9b0b381b7af954ec78d2ba15212e9e0cc020d4af54eb5223caba9e185",
     "workspace.compile.result@2": "085e4f90f5fd5c0fd9a9decd3b1737f83b1663e63cae354ee443971de183bda0",
-    "workspace.domain.read@1": "e6e16c2d68fef68fb0ee8481bebe00815159f387cf18af20d68e0d47291a01a6",
-    "workspace.domain.write@1": "fdeabf4241e62fd02c82c8a2639d183b4f31d27ad0076ee2f626468f0b3b3619",
+    "workspace.domain.read@2": "0d0410ceaf06fc06a9ff9d0afa346618391f3bfd9379555acf39692566c1436a",
+    "workspace.domain.write@2": "0ff312384621c351c2aa8d8fc9e54f870f088aef70d12be171c7736712673c75",
     "workspace.generate.preview@1": "76630ed9e34f95a4cc895088e0d3def92d5f3b2bb223d071e1e5a4fc1b4f6add",
     "workspace.mod.drift@1": "71b738bfb4bf4275911c937d958b39ee32e0a81cd7de14a4598fb04ae4b787a5",
     "workspace.mod.import@1": "9b3d03c3cae968638eec281fb758479cce07557dbc99048b8aafde06224307eb",
@@ -4716,8 +4768,8 @@
     "workspace.roundtrip.check@1": "c1a1c89c1eb3f44f8f16e6ca03e9787318eec5065bcf25dd2c3ce3a4b4045185"
   },
   "mcpModuleSignature": {
-    "version": 38,
-    "hash": "b24c9e33fc578829e328633604356efa33dcdbfd2f18358a142bf39a2e0af3e5"
+    "version": 39,
+    "hash": "485bbfb0e1076d6f67b4793027bd981c79e7882d747430fb56370088ff3224ea"
   },
   "mcpSignatures": {
     "validate_mod": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",
@@ -4813,8 +4865,12 @@
     "get_forge_health_card": "65bb749ea9f18f1532ac8616e61cb02b4e6136bf0f6da3395d1f638c22be83ca",
     "preview_forge_probe": "4fd8a4d2babc5403119fecc3cd983ff4504d368c8e0c7ab06306eb98991730f8",
     "get_live_forge_state": "51afaddf22c9bf9827a10332c993ac02a963b499fbd26dc0e47d6d4505a4d910",
-    "get_workspace_domain": "ac9a7d1006e37a197e5dfd4432919cb8b8743bade92f0adab4e813964e62a8fc",
-    "update_workspace_domain": "da0a5bc309e8785f324e230bd78ac35f4b8c7657327f4e877c79582f491f690f"
+    "get_workspace_domain": "56ceca9735ffaef6e395850f8502a9813e611819efbe922cdaf391a6a68f3490",
+    "update_workspace_domain": "9260b5c034a4dea26a4404a2e8384b0bb332168933f8f2b95bf81f5be27505e1",
+    "get_ai_spend_status": "15b22bc452ccecbb57aba4eeae42e34536fb8225ea8ec74253270e349e07d1a7",
+    "preview_contract_glue": "8c30893d8c51fadf607e7cac703c2c368eb61e4626822d33b05e5d919f26cfbd",
+    "audit_workspace_patches": "517a36b6f6cf0b0f39c72ba5871e2587e4d29a69731dd0754cc695464e6c35a2",
+    "inspect_schema_domain": "ce0ad441fc84e11f7427a7e064e5b702bbe7dc6f226877ec4f3bb55b09898d27"
   },
   "mcpCapabilityIdentities": {
     "validate_mod": "project.validate@1",
@@ -4910,7 +4966,11 @@
     "get_forge_health_card": "runtime.health.read@1",
     "preview_forge_probe": "runtime.probe.preview@1",
     "get_live_forge_state": "runtime.state.read@1",
-    "get_workspace_domain": "workspace.domain.read@1",
-    "update_workspace_domain": "workspace.domain.write@1"
+    "get_workspace_domain": "workspace.domain.read@2",
+    "update_workspace_domain": "workspace.domain.write@2",
+    "get_ai_spend_status": "ai.usage.read@1",
+    "preview_contract_glue": "contracts.glue.preview@1",
+    "audit_workspace_patches": "patch.audit.read@1",
+    "inspect_schema_domain": "schema.domain.inspect@1"
   }
 }

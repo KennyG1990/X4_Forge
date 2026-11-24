@@ -59,6 +59,10 @@ const DIAGNOSTIC_READ_TOOLS = [
   'preview_forge_probe',
   'get_live_forge_state',
   'get_workspace_domain',
+  'get_ai_spend_status',
+  'preview_contract_glue',
+  'audit_workspace_patches',
+  'inspect_schema_domain',
 ];
 
 const MD_NAVIGATION_TOOL = 'navigate_md_script';
@@ -154,6 +158,7 @@ const READ_TOOLS = [
   'check_xml_round_trip', 'suggest_quick_fixes', 'prepare_warning_suppression', 'verify_release_artifact', 'search_workspace_symbols', 'read_action_history_blob',
   'derive_external_api_contract', 'list_external_api_contracts', 'read_extension_file', 'read_patch_base_content', 'complete_xpath_selector', 'get_reference_coverage', 'list_lua_ui_snippets', 'harvest_vanilla_ui_menus',
   'prepare_bug_report', 'query_forge_knowledge', 'get_forge_health_card', 'preview_forge_probe', 'get_live_forge_state', 'get_workspace_domain',
+  'get_ai_spend_status', 'preview_contract_glue', 'audit_workspace_patches', 'inspect_schema_domain',
 ];
 const WRITE_TOOLS = [
   'validate_mod', 'list_schema_domains', 'get_workspace', 'compile_workspace', 'author_check',
@@ -1803,6 +1808,12 @@ try {
       { name: 'synthesize_xml_patch', arguments: {} },
       { name: 'synthesize_xml_patch', arguments: { editedXml: 'x'.repeat(524289) } },
       { name: 'get_galaxy_map', arguments: { q: 'x'.repeat(257) } },
+      { name: 'get_ai_spend_status', arguments: { extra: true } },
+      { name: 'preview_contract_glue', arguments: { mode: 'unknown' } },
+      { name: 'preview_contract_glue', arguments: { scriptPrefix: 'p'.repeat(65) } },
+      { name: 'audit_workspace_patches', arguments: { mode: 'invalid' } },
+      { name: 'inspect_schema_domain', arguments: { refresh: '2' } },
+      { name: 'inspect_schema_domain', arguments: { domain: 'd'.repeat(129) } },
     ]) {
       const denied = await client.request('tools/call', invalid);
       assert.equal(denied.error?.code, -32602, `${invalid.name} malformed input must fail before HTTP`);

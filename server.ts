@@ -249,6 +249,7 @@ import {
   buildWorkspaceDomainMergePatch,
   isWorkspaceAuthoringDomain,
   projectWorkspaceDomainData,
+  validateIntegrationContractInput,
 } from "./src/lib/workspaceDomainAuthoring";
 import { parseForgeWatches, runForgeWatchSelftest } from "./src/lib/forgeWatch";
 import { parseForgeState, runForgeStateSelftest } from "./src/lib/forgeState";
@@ -1279,6 +1280,10 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
       || authority.decision.routeKey === 'GET /api/agent/runtime/forge-state'
       || authority.decision.routeKey === 'GET /api/agent/workspace/domain'
       || authority.decision.routeKey === 'POST /api/agent/workspace/domain'
+      || authority.decision.routeKey === 'GET /api/agent/ai/usage'
+      || authority.decision.routeKey === 'POST /api/agent/external-api/glue-preview'
+      || authority.decision.routeKey === 'GET /api/agent/patch/audit'
+      || authority.decision.routeKey === 'GET /api/agent/schema/domain'
       || (authority.decision.routeKey === 'GET /api/agent/status'
         && (req.query.inspectDeployTarget !== undefined || req.query.inspectDeployEffect !== undefined))
       || authority.decision.routeKey === 'POST /api/agent/history/:id/revert'
@@ -4770,17 +4775,25 @@ Analyze this trace and return the structured issues diagnostics and suggestions.
 // B46/B74 multi-schema registry — prefer the canonical unpacked reference-root libraries,
 // falling back to the legacy schema/game paths, with per-domain include chains;
 // ?domain=<name> lazily builds that one domain's element index.
+function resolveActiveSchemaRegistry(refresh: boolean) {
+  const resolved = resolveXsdConfig();
+  const referenceLibraries = path.join(resolved.x4ReferenceRoot, "libraries");
+  const useReferenceSchemas = fs.existsSync(referenceLibraries);
+  const schemaDir = useReferenceSchemas ? referenceLibraries : resolved.schemaDir || "";
+  const registry = discoverSchemaRegistry(
+    schemaDir,
+    useReferenceSchemas ? undefined : resolved.x4GamePath || undefined,
+    { refresh, ...(useReferenceSchemas ? { signature: schemaFilesSignature(referenceLibraries) } : {}) },
+  );
+  if (useReferenceSchemas && registry.domains.length === 0 && (resolved.schemaDir || resolved.x4GamePath)) {
+    return discoverSchemaRegistry(resolved.schemaDir || "", resolved.x4GamePath || undefined, { refresh });
+  }
+  return registry;
+}
+
 app.get("/api/agent/schema-registry", (req, res) => {
   try {
-    const resolved = resolveXsdConfig();
-    const referenceLibraries = path.join(resolved.x4ReferenceRoot, "libraries");
-    const useReferenceSchemas = fs.existsSync(referenceLibraries);
-    const schemaDir = useReferenceSchemas ? referenceLibraries : resolved.schemaDir || "";
-    const registry = discoverSchemaRegistry(
-      schemaDir,
-      useReferenceSchemas ? undefined : resolved.x4GamePath || undefined,
-      { refresh: req.query.refresh === "1", ...(useReferenceSchemas ? { signature: schemaFilesSignature(referenceLibraries) } : {}) },
-    );
+    const registry = resolveActiveSchemaRegistry(req.query.refresh === "1");
     const wanted = typeof req.query.domain === "string" ? req.query.domain.toLowerCase() : "";
     const body: Record<string, unknown> = {
       roots: registry.roots,
@@ -16106,6 +16119,281 @@ app.post("/api/agent/workspace/domain", (req, res, next) => {
       error: errorMessage(error) || 'workspace domain update failed',
       failedStages: ['workspace_receipt'],
     });
+  }
+});
+
+const LEVER2_SAMPLE_CONTRACT: IntegrationContract = {
+  namespace: "myai",
+  baseUrl: "http://127.0.0.1:8713",
+  endpoints: [
+    { id: "get_status", method: "GET", path: "/v1/status", response: [{ name: "ok", type: "boolean" }] },
+    { id: "send_prompt", method: "POST", path: "/v1/prompt", request: [{ name: "text", type: "string", required: true }], response: [{ name: "reply", type: "string" }] },
+    {
+      id: "file_prompt",
+      kind: "file_bridge",
+      request: [{ name: "text", type: "string", required: true }],
+      response: [{ name: "reply", type: "string" }],
+      fileBridge: { directory: "x4_forge_bridge", requestFile: "prompt_request.json", responseFile: "prompt_response.json", pollInterval: "0.5s", timeout: "8s" },
+    },
+  ],
+};
+
+app.get("/api/agent/ai/usage", (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const queryError = validateClosedAgentQuery(req.query, ['workspaceId', 'clientId'], 'ai.usage.read');
+    if (queryError) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    }
+    return res.json({ ok: true, success: true, ...aiSpendMeter.snapshot() });
+  } catch (error) {
+    return res.status(500).json({ ok: false, success: false, error: errorMessage(error) || 'ai usage readout failed' });
+  }
+});
+
+app.post("/api/agent/external-api/glue-preview", (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    if (!isPlainRecord(req.body)) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'contracts.glue.preview requires a JSON object body.' });
+    }
+    const extra = unknownObjectKeys(req.body, new Set(['mode', 'contract', 'scriptPrefix']));
+    if (extra.length > 0) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: `contracts.glue.preview does not accept: ${extra.join(', ')}` });
+    }
+    const rawMode = req.body.mode;
+    if (rawMode !== undefined && rawMode !== 'inline' && rawMode !== 'workspace' && rawMode !== 'sample') {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'mode must be "inline", "workspace", or "sample".' });
+    }
+    const mode: 'inline' | 'workspace' | 'sample' = (rawMode === 'inline' || rawMode === 'workspace' || rawMode === 'sample')
+      ? rawMode
+      : req.body.contract !== undefined
+        ? 'inline'
+        : 'sample';
+    if (mode !== 'inline' && req.body.contract !== undefined) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'contract is only accepted when mode is "inline".' });
+    }
+    if (mode === 'inline' && req.body.contract === undefined) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'mode "inline" requires a contract object.' });
+    }
+    if (req.body.scriptPrefix !== undefined) {
+      if (typeof req.body.scriptPrefix !== 'string' || req.body.scriptPrefix.length < 1 || req.body.scriptPrefix.length > 64 || !/^[A-Za-z][A-Za-z0-9_]*$/.test(req.body.scriptPrefix)) {
+        return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'scriptPrefix must be a 1..64 char identifier matching /^[A-Za-z][A-Za-z0-9_]*$/.' });
+      }
+    }
+
+    let contract: IntegrationContract | null = null;
+    if (mode === 'sample') {
+      contract = LEVER2_SAMPLE_CONTRACT;
+    } else if (mode === 'inline') {
+      const parsed = validateIntegrationContractInput(req.body.contract);
+      if (parsed.ok === false) {
+        return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: parsed.error });
+      }
+      contract = parsed.contract;
+    } else {
+      const record = resolveWorkspaceAuthority(req, res, true);
+      if (!record) return;
+      res.locals.apiSubject = workspaceRecordSubject(record);
+      const sanitized = sanitizeWorkspace(record.workspace);
+      contract = sanitized.integrationContract ?? null;
+    }
+
+    if (!contract) {
+      return res.json({
+        ok: true,
+        success: true,
+        mode,
+        available: false,
+        contract: null,
+        findings: [],
+        errorCount: 0,
+        warningCount: 0,
+        lua: '',
+        mdScript: '',
+      });
+    }
+
+    const findings = validateContract(contract);
+    const errorCount = findings.filter(f => f.severity === 'error').length;
+    const warningCount = findings.filter(f => f.severity === 'warning').length;
+    const defaultPrefix = mode === 'sample' ? 'mymod_http' : `${contract.namespace || 'mymod'}_http`;
+    const scriptPrefix = typeof req.body.scriptPrefix === 'string' ? req.body.scriptPrefix : defaultPrefix;
+    const lua = errorCount === 0 ? generateHttpGlueLua(contract) : '';
+    const mdScript = errorCount === 0 ? generateContractMdScript(contract, scriptPrefix) : '';
+    return res.json({
+      ok: true,
+      success: true,
+      mode,
+      available: true,
+      contract,
+      findings,
+      errorCount,
+      warningCount,
+      lua,
+      mdScript,
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, success: false, error: errorMessage(error) || 'contract glue preview failed' });
+  }
+});
+
+app.get("/api/agent/patch/audit", (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const queryError = validateClosedAgentQuery(req.query, ['mode', 'workspaceId', 'clientId'], 'patch.audit.read');
+    if (queryError) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    }
+    const rawMode = req.query.mode;
+    if (rawMode !== undefined && rawMode !== 'workspace' && rawMode !== 'selftest') {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'mode must be "workspace" or "selftest".' });
+    }
+    const mode: 'workspace' | 'selftest' = rawMode === 'selftest' ? 'selftest' : 'workspace';
+    const summarizePatchAudit = (diags: ServerDiagnostic[]) => ({
+      resolved: diags.filter(d => d.code === 'patch.target_resolved').length,
+      unresolved: diags.filter(d => d.code === 'patch.target_unresolved').length,
+      rootMismatch: diags.filter(d => d.code === 'patch.selector_root_mismatch').length,
+      errors: diags.filter(d => d.severity === 'error').length,
+      warnings: diags.filter(d => d.severity === 'warning').length,
+      infos: diags.filter(d => d.severity === 'info').length,
+    });
+
+    if (mode === 'selftest') {
+      const fixtureWs = {
+        xmlPatches: [
+          { id: 'p_ok', targetFile: 'libraries/wares.xml', sel: '/wares', action: 'add', content: '<ware id="x"/>', includeInBuild: true },
+          { id: 'p_missing', targetFile: 'libraries/does_not_exist.xml', sel: '/foo', action: 'add', content: '<x/>', includeInBuild: true },
+          { id: 'p_rootmismatch', targetFile: 'libraries/wares.xml', sel: '/jobs/job', action: 'add', content: '<job/>', includeInBuild: true },
+        ],
+      };
+      const fixtureResolver: PatchBaseResolver = (targetFile) => targetFile === 'libraries/wares.xml'
+        ? { content: '<wares/>', source: 'loose', sourcePath: '<patch-audit-fixture>' }
+        : null;
+      const diagnostics = runPatchDiagnostics(fixtureWs, fixtureResolver);
+      const checks = [
+        { name: 'known_target_resolves', pass: diagnostics.some(d => d.code === 'patch.target_resolved' && d.severity === 'info') },
+        { name: 'missing_target_warns', pass: diagnostics.some(d => d.code === 'patch.target_unresolved' && d.severity === 'warning') },
+        { name: 'selector_root_mismatch_warns', pass: diagnostics.some(d => d.code === 'patch.selector_root_mismatch' && d.severity === 'warning') },
+      ];
+      return res.json({
+        ok: true,
+        success: true,
+        mode: 'selftest',
+        pass: checks.every(c => c.pass),
+        checks,
+        totalPatches: 3,
+        activePatches: 3,
+        truncated: false,
+        summary: summarizePatchAudit(diagnostics),
+        diagnostics,
+      });
+    }
+
+    const record = resolveWorkspaceAuthority(req, res, true);
+    if (!record) return;
+    res.locals.apiSubject = workspaceRecordSubject(record);
+    const sanitized = sanitizeWorkspace(record.workspace);
+    const modId = (() => { try { return effectiveModId(sanitized); } catch { return ''; } })();
+    const allPatches = Array.isArray(sanitized.xmlPatches) ? sanitized.xmlPatches : [];
+    const activePatches = allPatches.filter(p => p.includeInBuild !== false).length;
+    const diagnostics = runPatchDiagnostics(sanitized, resolvePatchBaseContent);
+    return res.json({
+      ok: true,
+      success: true,
+      mode: 'workspace',
+      workspaceId: record.workspaceId,
+      modId,
+      totalPatches: allPatches.length,
+      activePatches,
+      truncated: diagnostics.length > 200,
+      summary: summarizePatchAudit(diagnostics),
+      diagnostics: diagnostics.slice(0, 200),
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, success: false, error: errorMessage(error) || 'patch audit failed' });
+  }
+});
+
+app.get("/api/agent/schema/domain", (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const queryError = validateClosedAgentQuery(req.query, ['domain', 'refresh', 'limit', 'workspaceId', 'clientId'], 'schema.domain.inspect');
+    if (queryError) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    }
+    if (req.query.refresh !== undefined && req.query.refresh !== '0' && req.query.refresh !== '1') {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'refresh must be "0" or "1".' });
+    }
+    let limit = 200;
+    if (req.query.limit !== undefined) {
+      if (typeof req.query.limit !== 'string' || !/^\d+$/.test(req.query.limit)) {
+        return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'limit must be an integer between 1 and 500.' });
+      }
+      const parsedLimit = Number.parseInt(req.query.limit, 10);
+      if (!Number.isSafeInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > 500) {
+        return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'limit must be between 1 and 500.' });
+      }
+      limit = parsedLimit;
+    }
+    let wanted = '';
+    if (req.query.domain !== undefined) {
+      if (typeof req.query.domain !== 'string' || req.query.domain.trim() === '' || req.query.domain.length > 128 || !/^[a-z0-9_.-]+$/i.test(req.query.domain.trim())) {
+        return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'domain must be a 1..128 char schema domain identifier.' });
+      }
+      wanted = req.query.domain.trim().toLowerCase();
+    }
+
+    const registry = resolveActiveSchemaRegistry(req.query.refresh === '1');
+    const redactedDomains = registry.domains.map(d => ({
+      domain: d.domain,
+      file: path.basename(d.path),
+      sizeBytes: d.sizeBytes,
+      includes: d.includes.map(p => path.basename(p)),
+      missingIncludes: d.missingIncludes.map(p => path.basename(p)),
+      shadowedCount: typeof d.shadowedCopies === 'number' ? d.shadowedCopies : Array.isArray(d.shadowedCopies) ? (d.shadowedCopies as unknown[]).length : 0,
+    }));
+    const body: Record<string, unknown> = {
+      ok: true,
+      success: true,
+      rootCount: registry.roots.length,
+      domainCount: registry.domains.length,
+      domains: redactedDomains,
+    };
+    if (wanted) {
+      const info = registry.domains.find(d => d.domain === wanted);
+      if (!info) {
+        return res.status(404).json({
+          ok: false,
+          success: false,
+          code: 'SCHEMA_DOMAIN_NOT_FOUND',
+          error: `Unknown schema domain: ${wanted}`,
+          rootCount: registry.roots.length,
+          domainCount: registry.domains.length,
+          domains: redactedDomains,
+        });
+      }
+      const index = getDomainIndex(info);
+      const allEntries = Array.from(index.elements.entries());
+      body.domainIndex = {
+        domain: info.domain,
+        loaded: index.loaded,
+        elementCount: index.elementCount,
+        sourceFiles: index.sourceFiles.map(f => path.basename(f)),
+        totalElements: allEntries.length,
+        truncated: allEntries.length > limit,
+        elements: allEntries.slice(0, limit).map(([tag, spec]) => ({
+          tag,
+          resolved: spec.resolved,
+          requiredAttributes: Array.from(spec.attributes.entries()).filter(([, a]) => a.required).map(([k]) => k),
+          attributeCount: spec.attributes.size,
+          childCount: spec.children.size,
+        })),
+      };
+    }
+    return res.json(body);
+  } catch (error) {
+    return res.status(500).json({ ok: false, success: false, error: errorMessage(error) || 'schema domain inspect failed' });
   }
 });
 

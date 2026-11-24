@@ -472,8 +472,8 @@ async function main() {
           'snapshots.delete@1',
           'snapshots.list@1',
           'snapshots.restore@1',
-          'workspace.domain.read@1',
-          'workspace.domain.write@1',
+          'workspace.domain.read@2',
+          'workspace.domain.write@2',
           'workspace.mod.drift@1',
           'workspace.mod.import@1',
           'workspace.read@2',
@@ -1770,8 +1770,8 @@ async function main() {
     });
 
     await check('15_workspace_domain_read_and_cas_domain_authoring_with_undo_over_mcp', async () => {
-      // 1. Standard preset read key can inspect all 6 domains without 50-node truncation or host-path leakage
-      for (const domain of ['aiscripts', 'libraries', 'md_graph', 'translations', 'ui_layout', 'xml_patches'] as const) {
+      // 1. Standard preset read key can inspect all 7 domains without 50-node truncation or host-path leakage
+      for (const domain of ['aiscripts', 'integration_contract', 'libraries', 'md_graph', 'translations', 'ui_layout', 'xml_patches'] as const) {
         const readDom = await presetReadMcp.callTool('get_workspace_domain', { domain });
         assert.equal(readDom.isError, false, `get_workspace_domain(${domain}): ${JSON.stringify(readDom.payload)}`);
         assert.equal(readDom.payload.ok, true);
@@ -1875,6 +1875,156 @@ async function main() {
       const libAfterUndo = await presetReadMcp.callTool('get_workspace_domain', { domain: 'libraries' });
       assert.equal((libAfterUndo.payload.data?.wares || []).length, beforeWaresCount);
       assert.equal(libAfterUndo.payload.compileSettings?.library, true);
+    });
+
+    await check('16_integration_contract_domain_glue_preview_patch_audit_schema_domain_and_ai_usage_over_mcp', async () => {
+      const readList = ((await presetReadMcp.request('tools/list')).result?.tools || []).map((t: any) => t.name);
+      for (const expectedTool of ['get_ai_spend_status', 'preview_contract_glue', 'audit_workspace_patches', 'inspect_schema_domain']) {
+        assert(readList.includes(expectedTool), `preset read key must advertise ${expectedTool}`);
+      }
+
+      const ledgerBefore = (await presetReadMcp.callTool('list_action_history', { limit: 100 })).payload.total;
+
+      // 1. get_ai_spend_status returns daily spend meter snapshot without key/prompt/path leaks
+      const aiUsage = await presetReadMcp.callTool('get_ai_spend_status', {});
+      assert.equal(aiUsage.isError, false, JSON.stringify(aiUsage.payload));
+      assert.equal(aiUsage.payload.ok, true);
+      assert.match(String(aiUsage.payload.day), /^\d{4}-\d{2}-\d{2}$/);
+      assert.equal(typeof aiUsage.payload.cap, 'number');
+      assert.equal(typeof aiUsage.payload.usdCap, 'number');
+      assert.equal(typeof aiUsage.payload.meterAvailable, 'boolean');
+      assert(!JSON.stringify(aiUsage.payload).includes(root), 'get_ai_spend_status leaked host root');
+
+      // 2. inspect_schema_domain supports refresh + per-domain element index while redacting host paths
+      const schemaList = await presetReadMcp.callTool('inspect_schema_domain', { refresh: '1' });
+      assert.equal(schemaList.isError, false, JSON.stringify(schemaList.payload));
+      assert.equal(schemaList.payload.ok, true);
+      assert(schemaList.payload.domainCount >= 1);
+      assert(!JSON.stringify(schemaList.payload).includes(root), 'inspect_schema_domain leaked host root');
+      assert(!JSON.stringify(schemaList.payload).includes(schemaDir), 'inspect_schema_domain leaked schemaDir');
+
+      const mdDomain = await presetReadMcp.callTool('inspect_schema_domain', { domain: 'md', limit: '5' });
+      assert.equal(mdDomain.isError, false, JSON.stringify(mdDomain.payload));
+      assert.equal(mdDomain.payload.domainIndex?.domain, 'md');
+      assert(Array.isArray(mdDomain.payload.domainIndex?.elements));
+      assert(mdDomain.payload.domainIndex.elements.length <= 5);
+      assert(!JSON.stringify(mdDomain.payload).includes(schemaDir), 'inspect_schema_domain(domain=md) leaked schemaDir');
+
+      const missingDomain = await presetReadMcp.callTool('inspect_schema_domain', { domain: 'does_not_exist_domain' });
+      assert.equal(missingDomain.isError, true);
+      assert.match(String(missingDomain.payload), /Unknown schema domain: does_not_exist_domain/);
+      assert(!String(missingDomain.payload).includes(schemaDir), 'inspect_schema_domain(404) leaked schemaDir');
+
+      // 3. audit_workspace_patches supports selftest and addressed workspace modes without host paths
+      const patchSelftest = await presetReadMcp.callTool('audit_workspace_patches', { mode: 'selftest' });
+      assert.equal(patchSelftest.isError, false, JSON.stringify(patchSelftest.payload));
+      assert.equal(patchSelftest.payload.pass, true);
+      assert.equal(patchSelftest.payload.summary?.resolved, 1);
+      assert.equal(patchSelftest.payload.summary?.unresolved, 1);
+      assert.equal(patchSelftest.payload.summary?.rootMismatch, 1);
+
+      const patchWsEmpty = await presetReadMcp.callTool('audit_workspace_patches', { mode: 'workspace' });
+      assert.equal(patchWsEmpty.isError, false, JSON.stringify(patchWsEmpty.payload));
+      assert.equal(patchWsEmpty.payload.mode, 'workspace');
+      assert(!JSON.stringify(patchWsEmpty.payload).includes(root), 'audit_workspace_patches leaked host root');
+
+      // 4. preview_contract_glue sample + inline + empty workspace before authoring
+      const sampleGlue = await presetReadMcp.callTool('preview_contract_glue', { mode: 'sample' });
+      assert.equal(sampleGlue.isError, false, JSON.stringify(sampleGlue.payload));
+      assert.equal(sampleGlue.payload.available, true);
+      assert.equal(sampleGlue.payload.errorCount, 0);
+      assert(String(sampleGlue.payload.lua).includes('myai.get_status'));
+      assert(String(sampleGlue.payload.mdScript).includes('mymod_http'));
+
+      const wsGlueBefore = await presetReadMcp.callTool('preview_contract_glue', { mode: 'workspace' });
+      assert.equal(wsGlueBefore.isError, false, JSON.stringify(wsGlueBefore.payload));
+      assert.equal(wsGlueBefore.payload.available, false);
+      assert.equal(wsGlueBefore.payload.contract, null);
+
+      const ledgerAfterReads = (await presetReadMcp.callTool('list_action_history', { limit: 100 })).payload.total;
+      assert.equal(ledgerAfterReads, ledgerBefore, 'read/analyze Slice 13 MCP calls must stay quiet in Action Ledger');
+
+      // 5. Invalid integration_contract is rejected before mutation; valid CAS authoring + workspace glue preview + null clearing succeed
+      const contractBefore = await fullMcp.callTool('get_workspace_domain', { domain: 'integration_contract' });
+      assert.equal(contractBefore.isError, false, JSON.stringify(contractBefore.payload));
+      assert.equal(contractBefore.payload.data?.integrationContract, null);
+
+      const badContract = await fullMcp.callTool('update_workspace_domain', {
+        domain: 'integration_contract',
+        changes: {
+          integrationContract: {
+            namespace: 'Bad-Namespace',
+            baseUrl: 'ftp://invalid',
+            endpoints: [],
+          },
+        },
+        apply: false,
+      });
+      assert.equal(badContract.isError, true);
+      assert.equal(badContract.payload?.code, 'CAPABILITY_INPUT_INVALID');
+
+      const validContract = {
+        namespace: 'unit36bridge',
+        baseUrl: 'http://127.0.0.1:8799',
+        endpoints: [
+          {
+            id: 'ping',
+            method: 'GET',
+            path: '/v1/ping',
+            response: [{ name: 'ok', type: 'boolean', required: true }],
+          },
+          {
+            id: 'dispatch_job',
+            kind: 'file_bridge',
+            request: [{ name: 'prompt', type: 'string', required: true }],
+            response: [{ name: 'reply', type: 'string' }],
+            fileBridge: {
+              directory: 'x4_unit36_bridge',
+              requestFile: 'job_req.json',
+              responseFile: 'job_res.json',
+              pollInterval: '1s',
+              timeout: '10s',
+            },
+          },
+        ],
+      };
+
+      const committedContract = await fullMcp.callTool('update_workspace_domain', {
+        domain: 'integration_contract',
+        changes: {
+          integrationContract: validContract,
+          customLua: '-- unit36 custom lua hook\n',
+        },
+        apply: true,
+        operationId: 'op_unit36_contract_commit_1',
+        expectedHead: contractBefore.payload.workspaceHash,
+        expectedSnapshotHash: contractBefore.payload.snapshotHash,
+      });
+      assert.equal(committedContract.isError, false, JSON.stringify(committedContract.payload));
+      assert.equal(committedContract.payload.applied, true);
+      assert.equal(committedContract.payload.data?.integrationContract?.namespace, 'unit36bridge');
+
+      const wsGlueAfter = await presetReadMcp.callTool('preview_contract_glue', {
+        mode: 'workspace',
+        scriptPrefix: 'unit36_bridge_md',
+      });
+      assert.equal(wsGlueAfter.isError, false, JSON.stringify(wsGlueAfter.payload));
+      assert.equal(wsGlueAfter.payload.available, true);
+      assert.equal(wsGlueAfter.payload.errorCount, 0);
+      assert(String(wsGlueAfter.payload.lua).includes('unit36bridge.ping'));
+      assert(String(wsGlueAfter.payload.mdScript).includes('unit36_bridge_md'));
+
+      const contractMid = await presetReadMcp.callTool('get_workspace_domain', { domain: 'integration_contract' });
+      const clearedContract = await fullMcp.callTool('update_workspace_domain', {
+        domain: 'integration_contract',
+        changes: { integrationContract: null, customLua: '' },
+        apply: true,
+        operationId: 'op_unit36_contract_clear_1',
+        expectedHead: contractMid.payload.workspaceHash,
+        expectedSnapshotHash: contractMid.payload.snapshotHash,
+      });
+      assert.equal(clearedContract.isError, false, JSON.stringify(clearedContract.payload));
+      assert.equal(clearedContract.payload.data?.integrationContract, null);
     });
   } finally {
     for (const s of mcpSessions) {

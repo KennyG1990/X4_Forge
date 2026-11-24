@@ -122,6 +122,7 @@ export const LEDGER_QUIET_ROUTES: string[] = [
   '/api/agent/probe/preview',
   '/api/agent/runtime/probe-preview',
   '/api/agent/help/bug-report',
+  '/api/agent/external-api/glue-preview',
   '/api/agent/log-diagnose',
   '/api/agent/reference/simulate-diff',
   '/api/agent/patch/xpath-complete',

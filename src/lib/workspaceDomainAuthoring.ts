@@ -2,16 +2,25 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  *
- * #19 P4 Slice 12 — Pure domain-isolated projection and strict input validation
- * for addressed Studio workspace domain readback (`workspace.domain.read@1`) and
- * explicit-grant CAS domain authoring (`workspace.domain.write@1`).
+ * #19 P4 Slices 12 & 13 — Pure domain-isolated projection and strict input validation
+ * for addressed Studio workspace domain readback (`workspace.domain.read@2`) and
+ * explicit-grant CAS domain authoring (`workspace.domain.write@2`).
  */
 
 import type { ModWorkspace } from '../types';
 import { sanitizeWorkspace } from '../types';
+import {
+  validateContract,
+  type ContractEndpoint,
+  type ContractField,
+  type ContractFieldType,
+  type ContractMethod,
+  type IntegrationContract,
+} from './contractGlue';
 
 export const WORKSPACE_AUTHORING_DOMAINS = [
   'aiscripts',
+  'integration_contract',
   'libraries',
   'md_graph',
   'translations',
@@ -23,7 +32,7 @@ export type WorkspaceAuthoringDomain = (typeof WORKSPACE_AUTHORING_DOMAINS)[numb
 
 export const WORKSPACE_DOMAIN_MAX_RESPONSE_BYTES = 512 * 1024;
 
-const DOMAIN_COMPILE_KEY: Record<WorkspaceAuthoringDomain, keyof NonNullable<ModWorkspace['compileSettings']>> = {
+const DOMAIN_COMPILE_KEY: Partial<Record<WorkspaceAuthoringDomain, keyof NonNullable<ModWorkspace['compileSettings']>>> = {
   aiscripts: 'ai',
   libraries: 'library',
   md_graph: 'md',
@@ -34,6 +43,7 @@ const DOMAIN_COMPILE_KEY: Record<WorkspaceAuthoringDomain, keyof NonNullable<Mod
 
 const DOMAIN_ALLOWED_CHANGE_KEYS: Record<WorkspaceAuthoringDomain, ReadonlySet<string>> = {
   aiscripts: new Set(['aiScripts', 'compileEnabled']),
+  integration_contract: new Set(['integrationContract', 'customLua']),
   libraries: new Set([
     'name',
     'version',
@@ -77,6 +87,12 @@ const VALID_AI_COMMANDS = new Set([
   'find_objects',
   'custom_xml',
 ]);
+const VALID_CONTRACT_FIELD_TYPES = new Set<ContractFieldType>(['string', 'number', 'boolean', 'object', 'array']);
+const VALID_CONTRACT_METHODS = new Set<ContractMethod>(['GET', 'POST', 'PUT', 'DELETE', 'PATCH']);
+const ALLOWED_CONTRACT_KEYS = new Set(['namespace', 'baseUrl', 'httpClientExpr', 'jsonLibExpr', 'endpoints']);
+const ALLOWED_ENDPOINT_KEYS = new Set(['id', 'kind', 'method', 'path', 'description', 'request', 'response', 'fileBridge']);
+const ALLOWED_FIELD_KEYS = new Set(['name', 'type', 'required', 'description']);
+const ALLOWED_FILE_BRIDGE_KEYS = new Set(['directory', 'requestFile', 'responseFile', 'pollInterval', 'timeout']);
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -126,6 +142,11 @@ export function projectWorkspaceDomainData(
       return {
         aiScripts: sanitized.aiScripts || [],
       };
+    case 'integration_contract':
+      return {
+        integrationContract: sanitized.integrationContract ?? null,
+        customLua: sanitized.customLua ?? '',
+      };
     case 'libraries':
       return {
         name: sanitized.name,
@@ -166,6 +187,160 @@ export function projectWorkspaceDomainData(
         xmlPatches: sanitized.xmlPatches || [],
       };
   }
+}
+
+function parseContractFields(rawList: unknown, label: string): { ok: true; fields: ContractField[] } | { ok: false; error: string } {
+  if (!Array.isArray(rawList) || rawList.length > 128) {
+    return { ok: false, error: `${label} must be an array of at most 128 fields.` };
+  }
+  const fields: ContractField[] = [];
+  for (let i = 0; i < rawList.length; i += 1) {
+    const item = rawList[i];
+    if (!isPlainRecord(item)) return { ok: false, error: `${label}[${i}] must be an object.` };
+    const extra = Object.keys(item).filter(k => !ALLOWED_FIELD_KEYS.has(k));
+    if (extra.length > 0) return { ok: false, error: `${label}[${i}] has unknown field(s): ${extra.join(', ')}.` };
+    if (typeof item.name !== 'string' || !item.name.trim() || item.name.length > 128) {
+      return { ok: false, error: `${label}[${i}].name must be a non-empty bounded string.` };
+    }
+    if (!VALID_CONTRACT_FIELD_TYPES.has(item.type as ContractFieldType)) {
+      return { ok: false, error: `${label}[${i}].type must be string, number, boolean, object, or array.` };
+    }
+    if (item.required !== undefined && typeof item.required !== 'boolean') {
+      return { ok: false, error: `${label}[${i}].required must be boolean.` };
+    }
+    if (item.description !== undefined && (typeof item.description !== 'string' || item.description.length > 1024)) {
+      return { ok: false, error: `${label}[${i}].description must be a bounded string.` };
+    }
+    fields.push({
+      name: item.name,
+      type: item.type as ContractFieldType,
+      ...(typeof item.required === 'boolean' ? { required: item.required } : {}),
+      ...(typeof item.description === 'string' ? { description: item.description } : {}),
+    });
+  }
+  return { ok: true, fields };
+}
+
+export function validateIntegrationContractInput(
+  raw: unknown,
+): { ok: true; contract: IntegrationContract } | { ok: false; error: string } {
+  if (!isPlainRecord(raw)) {
+    return { ok: false, error: 'integrationContract must be a JSON object.' };
+  }
+  const unknownKeys = Object.keys(raw).filter(k => !ALLOWED_CONTRACT_KEYS.has(k));
+  if (unknownKeys.length > 0) {
+    return { ok: false, error: `integrationContract has unknown field(s): ${unknownKeys.join(', ')}.` };
+  }
+  if (typeof raw.namespace !== 'string' || raw.namespace.length > 128) {
+    return { ok: false, error: 'integrationContract.namespace must be a bounded string.' };
+  }
+  if (raw.baseUrl !== undefined && (typeof raw.baseUrl !== 'string' || raw.baseUrl.length > 512)) {
+    return { ok: false, error: 'integrationContract.baseUrl must be a bounded string.' };
+  }
+  for (const exprKey of ['httpClientExpr', 'jsonLibExpr'] as const) {
+    if (raw[exprKey] !== undefined && (typeof raw[exprKey] !== 'string' || String(raw[exprKey]).length > 512)) {
+      return { ok: false, error: `integrationContract.${exprKey} must be a bounded string.` };
+    }
+  }
+  if (!Array.isArray(raw.endpoints) || raw.endpoints.length === 0 || raw.endpoints.length > 128) {
+    return { ok: false, error: 'integrationContract.endpoints must be a non-empty array of at most 128 endpoints.' };
+  }
+
+  const endpoints: ContractEndpoint[] = [];
+  for (let i = 0; i < raw.endpoints.length; i += 1) {
+    const ep = raw.endpoints[i];
+    if (!isPlainRecord(ep)) return { ok: false, error: `integrationContract.endpoints[${i}] must be an object.` };
+    const extraEp = Object.keys(ep).filter(k => !ALLOWED_ENDPOINT_KEYS.has(k));
+    if (extraEp.length > 0) {
+      return { ok: false, error: `integrationContract.endpoints[${i}] has unknown field(s): ${extraEp.join(', ')}.` };
+    }
+    if (typeof ep.id !== 'string' || !ep.id.trim() || ep.id.length > 128) {
+      return { ok: false, error: `integrationContract.endpoints[${i}].id must be a non-empty bounded string.` };
+    }
+    if (ep.kind !== undefined && ep.kind !== 'http' && ep.kind !== 'ui_event' && ep.kind !== 'file_bridge') {
+      return { ok: false, error: `integrationContract.endpoints[${i}].kind must be http, ui_event, or file_bridge.` };
+    }
+    if (ep.method !== undefined && !VALID_CONTRACT_METHODS.has(ep.method as ContractMethod)) {
+      return { ok: false, error: `integrationContract.endpoints[${i}].method must be GET, POST, PUT, DELETE, or PATCH.` };
+    }
+    if (ep.path !== undefined && (typeof ep.path !== 'string' || ep.path.length > 512)) {
+      return { ok: false, error: `integrationContract.endpoints[${i}].path must be a bounded string.` };
+    }
+    if (ep.description !== undefined && (typeof ep.description !== 'string' || ep.description.length > 2048)) {
+      return { ok: false, error: `integrationContract.endpoints[${i}].description must be a bounded string.` };
+    }
+    let requestFields: ContractField[] | undefined;
+    if (ep.request !== undefined) {
+      const parsedReq = parseContractFields(ep.request, `integrationContract.endpoints[${i}].request`);
+      if (parsedReq.ok === false) return parsedReq;
+      requestFields = parsedReq.fields;
+    }
+    let responseFields: ContractField[] | undefined;
+    if (ep.response !== undefined) {
+      const parsedRes = parseContractFields(ep.response, `integrationContract.endpoints[${i}].response`);
+      if (parsedRes.ok === false) return parsedRes;
+      responseFields = parsedRes.fields;
+    }
+    let fileBridge: ContractEndpoint['fileBridge'];
+    if (ep.fileBridge !== undefined) {
+      if (!isPlainRecord(ep.fileBridge)) {
+        return { ok: false, error: `integrationContract.endpoints[${i}].fileBridge must be an object.` };
+      }
+      const extraFb = Object.keys(ep.fileBridge).filter(k => !ALLOWED_FILE_BRIDGE_KEYS.has(k));
+      if (extraFb.length > 0) {
+        return { ok: false, error: `integrationContract.endpoints[${i}].fileBridge has unknown field(s): ${extraFb.join(', ')}.` };
+      }
+      for (const fbKey of ['directory', 'requestFile', 'responseFile', 'pollInterval', 'timeout'] as const) {
+        if (ep.fileBridge[fbKey] !== undefined && (typeof ep.fileBridge[fbKey] !== 'string' || String(ep.fileBridge[fbKey]).length > 256)) {
+          return { ok: false, error: `integrationContract.endpoints[${i}].fileBridge.${fbKey} must be a bounded string.` };
+        }
+      }
+      fileBridge = {
+        ...(ep.fileBridge.directory !== undefined ? { directory: String(ep.fileBridge.directory) } : {}),
+        ...(ep.fileBridge.requestFile !== undefined ? { requestFile: String(ep.fileBridge.requestFile) } : {}),
+        ...(ep.fileBridge.responseFile !== undefined ? { responseFile: String(ep.fileBridge.responseFile) } : {}),
+        ...(ep.fileBridge.pollInterval !== undefined ? { pollInterval: String(ep.fileBridge.pollInterval) } : {}),
+        ...(ep.fileBridge.timeout !== undefined ? { timeout: String(ep.fileBridge.timeout) } : {}),
+      };
+    }
+    endpoints.push({
+      id: ep.id,
+      ...(ep.kind === 'http' || ep.kind === 'ui_event' || ep.kind === 'file_bridge' ? { kind: ep.kind } : {}),
+      ...(ep.method !== undefined ? { method: ep.method as ContractMethod } : {}),
+      ...(typeof ep.path === 'string' ? { path: ep.path } : {}),
+      ...(typeof ep.description === 'string' ? { description: ep.description } : {}),
+      ...(requestFields !== undefined ? { request: requestFields } : {}),
+      ...(responseFields !== undefined ? { response: responseFields } : {}),
+      ...(fileBridge !== undefined ? { fileBridge } : {}),
+    });
+  }
+
+  const contract: IntegrationContract = {
+    namespace: raw.namespace,
+    baseUrl: typeof raw.baseUrl === 'string' ? raw.baseUrl : '',
+    ...(typeof raw.httpClientExpr === 'string' && raw.httpClientExpr ? { httpClientExpr: raw.httpClientExpr } : {}),
+    ...(typeof raw.jsonLibExpr === 'string' && raw.jsonLibExpr ? { jsonLibExpr: raw.jsonLibExpr } : {}),
+    endpoints,
+  };
+  return { ok: true, contract };
+}
+
+function validateIntegrationContractDomainFields(changes: Record<string, unknown>): string | null {
+  if (changes.integrationContract !== undefined && changes.integrationContract !== null) {
+    const parsed = validateIntegrationContractInput(changes.integrationContract);
+    if (parsed.ok === false) return parsed.error;
+    const findings = validateContract(parsed.contract);
+    const firstError = findings.find(f => f.severity === 'error');
+    if (firstError) {
+      return `Invalid integrationContract: ${firstError.message}`;
+    }
+  }
+  if (changes.customLua !== undefined && changes.customLua !== null) {
+    if (typeof changes.customLua !== 'string' || changes.customLua.length > 512 * 1024 || changes.customLua.includes('\0')) {
+      return 'changes.customLua must be null or a UTF-8 string of at most 524288 characters.';
+    }
+  }
+  return null;
 }
 
 function validateAiScriptsArray(value: unknown): string | null {
@@ -519,15 +694,17 @@ export function buildWorkspaceDomainMergePatch(
   const domainError =
     domain === 'aiscripts'
       ? (rawChanges.aiScripts !== undefined ? validateAiScriptsArray(rawChanges.aiScripts) : null)
-      : domain === 'libraries'
-        ? validateLibrariesFields(rawChanges)
-        : domain === 'md_graph'
-          ? validateMdGraphFields(rawChanges)
-          : domain === 'translations'
-            ? validateTranslationsFields(rawChanges)
-            : domain === 'ui_layout'
-              ? validateUiLayoutFields(rawChanges)
-              : validateXmlPatchesFields(rawChanges);
+      : domain === 'integration_contract'
+        ? validateIntegrationContractDomainFields(rawChanges)
+        : domain === 'libraries'
+          ? validateLibrariesFields(rawChanges)
+          : domain === 'md_graph'
+            ? validateMdGraphFields(rawChanges)
+            : domain === 'translations'
+              ? validateTranslationsFields(rawChanges)
+              : domain === 'ui_layout'
+                ? validateUiLayoutFields(rawChanges)
+                : validateXmlPatchesFields(rawChanges);
   if (domainError) return { ok: false, error: domainError };
 
   const patch: Record<string, unknown> = {};
@@ -540,16 +717,21 @@ export function buildWorkspaceDomainMergePatch(
         ...(rawChanges.uiTheme as Record<string, unknown>),
       };
       touchedFields.push('uiTheme');
-    } else if (domain === 'ui_layout' && key === 'customLua' && rawChanges.customLua === null) {
+    } else if ((domain === 'ui_layout' || domain === 'integration_contract') && key === 'customLua' && rawChanges.customLua === null) {
       patch.customLua = '';
       touchedFields.push('customLua');
+    } else if (domain === 'integration_contract' && key === 'integrationContract' && rawChanges.integrationContract !== null) {
+      const parsed = validateIntegrationContractInput(rawChanges.integrationContract);
+      if (parsed.ok === false) return parsed;
+      patch.integrationContract = parsed.contract;
+      touchedFields.push('integrationContract');
     } else {
       patch[key] = rawChanges[key];
       touchedFields.push(key);
     }
   }
-  if (rawChanges.compileEnabled !== undefined) {
-    const compileKey = DOMAIN_COMPILE_KEY[domain];
+  const compileKey = DOMAIN_COMPILE_KEY[domain];
+  if (rawChanges.compileEnabled !== undefined && compileKey !== undefined) {
     patch.compileSettings = {
       md: currentSanitized.compileSettings?.md ?? true,
       ui: currentSanitized.compileSettings?.ui ?? true,
@@ -584,7 +766,7 @@ export function runWorkspaceDomainAuthoringSelftest(): { ok: boolean; passed: nu
     compileSettings: { md: true, ui: true, ai: true, library: true, translations: true, patches: true },
   });
 
-  check('recognizes_six_domains', WORKSPACE_AUTHORING_DOMAINS.every(d => isWorkspaceAuthoringDomain(d)) && !isWorkspaceAuthoringDomain('unknown'));
+  check('recognizes_seven_domains', WORKSPACE_AUTHORING_DOMAINS.every(d => isWorkspaceAuthoringDomain(d)) && !isWorkspaceAuthoringDomain('unknown'));
 
   const crossDomain = buildWorkspaceDomainMergePatch(base, 'translations', { wares: [] });
   check('rejects_cross_domain_field_injection', crossDomain.ok === false && crossDomain.error.includes('wares'));
@@ -622,6 +804,42 @@ export function runWorkspaceDomainAuthoringSelftest(): { ok: boolean; passed: nu
     uiPatch.ok === true &&
       (uiPatch.patch.uiTheme as Record<string, unknown> | undefined)?.opacity === 0.75 &&
       typeof (uiPatch.patch.uiTheme as Record<string, unknown> | undefined)?.backgroundColor === 'string',
+  );
+
+  const validContractPatch = buildWorkspaceDomainMergePatch(base, 'integration_contract', {
+    integrationContract: {
+      namespace: 'myai',
+      baseUrl: 'http://127.0.0.1:8713',
+      endpoints: [
+        { id: 'get_status', method: 'GET', path: '/v1/status', response: [{ name: 'ok', type: 'boolean' }] },
+      ],
+    },
+  });
+  const invalidContractPatch = buildWorkspaceDomainMergePatch(base, 'integration_contract', {
+    integrationContract: {
+      namespace: 'INVALID-NS',
+      baseUrl: 'http://127.0.0.1:8713',
+      endpoints: [{ id: 'get_status', method: 'GET', path: '/v1/status' }],
+    },
+  });
+  check(
+    'validates_and_clears_integration_contract',
+    validContractPatch.ok === true &&
+      invalidContractPatch.ok === false &&
+      invalidContractPatch.error.includes('Invalid integrationContract'),
+  );
+
+  const withContract = sanitizeWorkspace({ ...base, ...(validContractPatch.ok ? validContractPatch.patch : {}) });
+  const clearContractPatch = buildWorkspaceDomainMergePatch(withContract, 'integration_contract', {
+    integrationContract: null,
+  });
+  const afterClear = sanitizeWorkspace({ ...withContract, ...(clearContractPatch.ok ? clearContractPatch.patch : {}) });
+  check(
+    'clears_integration_contract_when_null',
+    withContract.integrationContract?.namespace === 'myai' &&
+      clearContractPatch.ok === true &&
+      afterClear.integrationContract === undefined &&
+      projectWorkspaceDomainData(afterClear, 'integration_contract').integrationContract === null,
   );
 
   const merged = sanitizeWorkspace({ ...base, ...(aiPatch.ok ? aiPatch.patch : {}) });
