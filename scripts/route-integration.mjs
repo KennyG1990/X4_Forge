@@ -810,18 +810,19 @@ async function main() {
   const expectedCapabilityIds = [
     'bulk.transform.apply', 'bulk.transform.preview',
     'configuration.access.request', 'configuration.access.status', 'configuration.apply', 'configuration.preview', 'configuration.read', 'configuration.status',
+    'contracts.derive', 'contracts.registry.read',
     'deploy.apply', 'deploy.preview', 'deploy.status', 'deploy.undo', 'diagnostics.quick.fixes',
-    'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.overrides.analyze',
+    'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.file.read', 'extensions.overrides.analyze',
     'files.delete', 'files.delete.dir', 'files.inventory.read', 'files.list', 'files.read', 'files.restore', 'files.scaffold', 'files.write',
     'history.list', 'history.raw.read', 'history.revert',
-    'patch.diff.simulate', 'patch.readiness.analyze', 'patch.targets.list', 'patch.xpath.synthesize', 'performance.collect', 'performance.native.collect', 'performance.native.read', 'performance.native.stop',
+    'patch.base.read', 'patch.diff.simulate', 'patch.readiness.analyze', 'patch.targets.list', 'patch.xpath.complete', 'patch.xpath.synthesize', 'performance.collect', 'performance.native.collect', 'performance.native.read', 'performance.native.stop',
     'performance.profile', 'performance.read', 'project.ai.navigation', 'project.brief.read', 'project.md.navigation', 'project.md.rename', 'project.proof.read', 'project.symbols.search', 'project.validate', 'project.xml.references', 'readiness.read',
-    'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest',
+    'reference.coverage.read', 'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest',
     'release.artifact.verify', 'release.nexus.prepare', 'release.steam.adopt', 'release.steam.prepare', 'release.steam.verify',
     'reviews.warning.revoke', 'rules.suppression.apply', 'rules.suppression.prepare',
     'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain',
     'snapshots.create', 'snapshots.delete', 'snapshots.list', 'snapshots.restore',
-    'text.lookup', 'validation.last.read',
+    'text.lookup', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read',
     'workspace.compile', 'workspace.compile.result', 'workspace.generate.preview', 'workspace.mod.drift', 'workspace.mod.import', 'workspace.read', 'workspace.roundtrip.check',
   ];
   const sameCapabilityIds = (actual, expected) => Array.isArray(actual)
@@ -1458,14 +1459,14 @@ async function main() {
     sameCapabilityIds(effectiveIds(studioEffective), expectedCapabilityIds) && effectiveHashIsValid(studioEffective),
   JSON.stringify({ public: publicEffective.json, bogus: bogusEffective.json, studio: { actor: studioEffective.json?.actor, ids: effectiveIds(studioEffective) } }));
   for (const [name, response, scope, expectedIds] of [
-    ['read', readEffective, 'read', ['diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.overrides.analyze', 'history.list', 'history.raw.read',
-      'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.synthesize', 'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.symbols.search', 'project.xml.references', 'readiness.read',
-      'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest', 'release.artifact.verify', 'rules.suppression.prepare',
-      'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read', 'workspace.read', 'workspace.roundtrip.check']],
-    ['write', writeEffective, 'write', ['diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.overrides.analyze', 'history.list', 'history.raw.read', 'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.synthesize', 'project.validate',
+    ['read', readEffective, 'read', ['contracts.derive', 'contracts.registry.read', 'diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.file.read', 'extensions.overrides.analyze', 'history.list', 'history.raw.read',
+      'patch.base.read', 'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.complete', 'patch.xpath.synthesize', 'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.symbols.search', 'project.xml.references', 'readiness.read',
+      'reference.coverage.read', 'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest', 'release.artifact.verify', 'rules.suppression.prepare',
+      'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read', 'workspace.read', 'workspace.roundtrip.check']],
+    ['write', writeEffective, 'write', ['contracts.derive', 'contracts.registry.read', 'diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.file.read', 'extensions.overrides.analyze', 'history.list', 'history.raw.read', 'patch.base.read', 'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.complete', 'patch.xpath.synthesize', 'project.validate',
       'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.symbols.search', 'project.xml.references',
-      'readiness.read', 'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest', 'release.artifact.verify', 'rules.suppression.prepare',
-      'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.read', 'workspace.roundtrip.check']],
+      'readiness.read', 'reference.coverage.read', 'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest', 'release.artifact.verify', 'rules.suppression.prepare',
+      'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.read', 'workspace.roundtrip.check']],
     ['deploy', deployEffective, 'deploy', expectedCapabilityIds.filter(id => !id.startsWith('configuration.') && !id.startsWith('deploy.') && !id.startsWith('bulk.transform.') && !id.startsWith('files.') && !id.startsWith('snapshots.') && !id.startsWith('release.steam.') && ![
       'history.revert', 'performance.native.collect', 'performance.native.read', 'performance.native.stop', 'project.ai.navigation', 'project.md.navigation', 'project.md.rename', 'release.nexus.prepare', 'reviews.warning.revoke', 'rules.suppression.apply', 'workspace.mod.drift', 'workspace.mod.import',
     ].includes(id))],
@@ -7352,6 +7353,83 @@ async function main() {
       }
     } finally {
       fs.rmSync(slice7ModDir, { recursive: true, force: true });
+    }
+  }
+
+  // --- #19 P4 SLICE 10: CONTRACTS, EXTENSION FILE READ, PATCH BASE/XPATH COMPLETE, COVERAGE & UI LUA ---
+  {
+    const slice10ExtId = 'slice10_ext_fixture';
+    const slice10ExtDir = path.join(gameRoot, 'extensions', slice10ExtId);
+    fs.mkdirSync(path.join(slice10ExtDir, 'md'), { recursive: true });
+    fs.mkdirSync(path.join(slice10ExtDir, 'libraries'), { recursive: true });
+    fs.writeFileSync(path.join(slice10ExtDir, 'content.xml'), `<content id="${slice10ExtId}" name="Slice 10 Ext" version="100" enabled="1"/>\n`, 'utf8');
+    fs.writeFileSync(path.join(slice10ExtDir, 'md', 'api.xml'), '<mdscript name="Slice10Api"><cues><cue name="Register_Mod"/></cues></mdscript>\n', 'utf8');
+    fs.writeFileSync(path.join(slice10ExtDir, 'libraries', 'slice10_base.xml'), '<wares><ware id="slice10_ware" name="Slice 10 Ware"/></wares>\n', 'utf8');
+    try {
+      const regRes = await req('GET', '/api/agent/external-api/registry?full=0', readKey);
+      capabilityResponses.set('contracts.registry.read', regRes);
+      const regBad = await req('GET', '/api/agent/external-api/registry?full=invalid', readKey);
+
+      const deriveRes = await req('GET', `/api/agent/external-api/derive-draft?ext=${slice10ExtId}`, readKey);
+      capabilityResponses.set('contracts.derive', deriveRes);
+      const deriveMissing = await req('GET', '/api/agent/external-api/derive-draft?ext=missing_slice10_ext', readKey);
+
+      const extFileRes = await req('GET', `/api/agent/extensions/file?path=${encodeURIComponent(`${slice10ExtId}/md/api.xml`)}`, readKey);
+      capabilityResponses.set('extensions.file.read', extFileRes);
+      const extFileBad = await req('GET', `/api/agent/extensions/file?path=${encodeURIComponent(`${slice10ExtId}/../../escape.xml`)}`, readKey);
+
+      const patchBaseRes = await req('GET', '/api/agent/patch/base-content?targetFile=libraries%2Fslice10_base.xml', readKey);
+      capabilityResponses.set('patch.base.read', patchBaseRes);
+      const patchBaseBad = await req('GET', '/api/agent/patch/base-content?targetFile=..%2Fescape.xml', readKey);
+
+      const xpathRes = await req('POST', '/api/agent/patch/xpath-complete', readKey, {
+        path: 'libraries/factions.xml',
+        selector: '/factions/',
+        cursor: 10,
+        limit: 20,
+      }, { operationId: null });
+      capabilityResponses.set('patch.xpath.complete', xpathRes);
+      const xpathBad = await req('POST', '/api/agent/patch/xpath-complete', readKey, {
+        path: 'libraries/factions.xml',
+        selector: '/factions/',
+        cursor: 10,
+        unexpected: true,
+      }, { operationId: null });
+
+      const covRes = await req('GET', '/api/agent/reference/coverage', readKey);
+      capabilityResponses.set('reference.coverage.read', covRes);
+      const covBad = await req('GET', '/api/agent/reference/coverage?unexpected=1', readKey);
+
+      const snipRes = await req('GET', '/api/agent/ui/lua-snippets', readKey);
+      capabilityResponses.set('ui.lua.snippets.read', snipRes);
+
+      const harvestRes = await req('GET', '/api/agent/ui/vanilla-harvest?limit=5', readKey);
+      capabilityResponses.set('ui.vanilla.harvest', harvestRes);
+      const harvestBad = await req('GET', '/api/agent/ui/vanilla-harvest?limit=99', readKey);
+
+      ok('slice10_authoring_patch_extension_and_coverage_routes_redact_host_paths_and_validate_inputs',
+        regRes.status === 200 && regRes.json?.ok === true && regBad.status === 400
+          && deriveRes.status === 200 && ['extensions', 'filesystem'].includes(deriveRes.json?.sourceKind) && !JSON.stringify(deriveRes.json).includes(gameRoot)
+          && deriveMissing.status === 404 && !JSON.stringify(deriveMissing.json).includes(gameRoot)
+          && extFileRes.status === 200 && extFileRes.json?.source === 'loose' && !JSON.stringify(extFileRes.json).includes(gameRoot) && extFileBad.status === 400
+          && patchBaseRes.status === 200 && patchBaseRes.json?.sourceKind === 'extension-loose' && !JSON.stringify(patchBaseRes.json).includes(gameRoot) && patchBaseBad.status === 400
+          && xpathRes.status === 200 && xpathRes.json?.ok === true && Array.isArray(xpathRes.json?.items) && xpathBad.status === 400
+          && (covRes.status === 200 || covRes.status === 202) && covRes.json?.ok === true && !JSON.stringify(covRes.json).includes(safeWorkspace) && !JSON.stringify(covRes.json).includes(referenceRoot) && covBad.status === 400
+          && snipRes.status === 200 && snipRes.json?.ok === true && Array.isArray(snipRes.json?.snippets)
+          && harvestRes.status === 200 && harvestRes.json?.ok === true && harvestBad.status === 400,
+        JSON.stringify({
+          reg: regRes.status,
+          derive: deriveRes.status,
+          deriveSource: deriveRes.json?.sourceKind,
+          extFile: extFileRes.status,
+          patchBase: patchBaseRes.status,
+          xpath: xpathRes.status,
+          cov: covRes.status,
+          snip: snipRes.status,
+          harvest: harvestRes.status,
+        }));
+    } finally {
+      fs.rmSync(slice10ExtDir, { recursive: true, force: true });
     }
   }
 

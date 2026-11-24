@@ -929,6 +929,18 @@
       "resourceClass": "configured-root",
       "workspaceMode": "optional"
     },
+    "GET /api/agent/extensions/file": {
+      "disposition": "canonical-capability",
+      "owner": "extensions.file.read",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "none"
+    },
     "GET /api/agent/external-api-registry": {
       "disposition": "legacy-public",
       "owner": "agent-api",
@@ -964,6 +976,30 @@
       ],
       "resourceClass": "stateless-analysis",
       "workspaceMode": "optional"
+    },
+    "GET /api/agent/external-api/derive-draft": {
+      "disposition": "canonical-capability",
+      "owner": "contracts.derive",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "none"
+    },
+    "GET /api/agent/external-api/registry": {
+      "disposition": "canonical-capability",
+      "owner": "contracts.registry.read",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "stateless-analysis",
+      "workspaceMode": "none"
     },
     "GET /api/agent/factions-lint-selftest": {
       "disposition": "public-selftest",
@@ -1903,6 +1939,18 @@
       "resourceClass": "stateless-analysis",
       "workspaceMode": "optional"
     },
+    "GET /api/agent/patch/base-content": {
+      "disposition": "canonical-capability",
+      "owner": "patch.base.read",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "none"
+    },
     "GET /api/agent/path-roles-selftest": {
       "disposition": "public-selftest",
       "owner": "runPathRolesSelftest",
@@ -2152,6 +2200,18 @@
       ],
       "resourceClass": "public",
       "workspaceMode": "optional"
+    },
+    "GET /api/agent/reference/coverage": {
+      "disposition": "canonical-capability",
+      "owner": "reference.coverage.read",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "none"
     },
     "GET /api/agent/reference/effective-file": {
       "disposition": "canonical-capability",
@@ -2512,6 +2572,30 @@
       ],
       "resourceClass": "public",
       "workspaceMode": "optional"
+    },
+    "GET /api/agent/ui/lua-snippets": {
+      "disposition": "canonical-capability",
+      "owner": "ui.lua.snippets.read",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "stateless-analysis",
+      "workspaceMode": "none"
+    },
+    "GET /api/agent/ui/vanilla-harvest": {
+      "disposition": "canonical-capability",
+      "owner": "ui.vanilla.harvest",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "none"
     },
     "GET /api/agent/validation-delta-selftest": {
       "disposition": "public-selftest",
@@ -3582,6 +3666,18 @@
       "resourceClass": "configured-root",
       "workspaceMode": "optional"
     },
+    "POST /api/agent/patch/xpath-complete": {
+      "disposition": "canonical-capability",
+      "owner": "patch.xpath.complete",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "none"
+    },
     "POST /api/agent/performance/collection": {
       "disposition": "canonical-capability",
       "owner": "performance.collect",
@@ -4447,6 +4543,8 @@
     "configuration.preview@1": "6538637b45b11b698e3ece15ec0ffb0c160416ce9ea1da695a6ed01f0f457e4e",
     "configuration.read@1": "ac31b04673c8035ee4729c5096a13792433c1fc62cbcbfe36a8067a1c757df4c",
     "configuration.status@1": "7a0ad35da24685fbef6614b87c615e915fb81b8ae2680e01b995def2c4c91795",
+    "contracts.derive@1": "3fd77f84956c53f1aaa96bb62e1b7fdf8caa8ec71c5bc20a4c28f43a264d53f0",
+    "contracts.registry.read@1": "1795388187a2efed2c6d134140a4206f23afeafab5716c7e0434cc36426bf931",
     "deploy.apply@1": "c3031caa15d834a5b0c30e6946c9773d1afb0052d97cb618a55c858f590f6fb3",
     "deploy.preview@1": "cab52d43361a162fb4aa347be706a919ae2c5b3fefe6b7735585bb8258053f31",
     "deploy.status@1": "73c102208ddb9f5e5407b8d49208436811e3eef68cd537594e5c4cf5b638bc9f",
@@ -4457,6 +4555,7 @@
     "expression.suggest@1": "29019041cfdc937b9c4efd3ee7fc31df73084d07a60003225f28ad0d40172873",
     "extensions.conflicts.analyze@1": "5e8005a8422ebbe1039a848332caf8f40076ea7cce693b21df8039aec856697e",
     "extensions.dependencies.analyze@1": "a326d0506e79b8e5422f4a68b76038bc7db6884ac6155027213b942a44f41842",
+    "extensions.file.read@1": "fd00f8be0223cca09bf394a993d866ac2c28f7e801811a65518da55aff7f6bb6",
     "extensions.overrides.analyze@1": "2c5d9d41d0903bd5150a3a3c58b4a1559e24ecb7e8817cd3c100c40ccca46df5",
     "files.delete@1": "fa05daf06095a1883fb86620c0c61d3342bee0e690b32411e047e68356be63e1",
     "files.delete.dir@1": "26835c772fda25bd2f8614c1d48f90be5b0020e9451daeeffc178c1abbe72d26",
@@ -4469,9 +4568,11 @@
     "history.list@2": "9fc3203d66edd8c3136bd374bfef4394783e1bd8ef8a44834ff7360a93d1fb33",
     "history.raw.read@1": "d055a37d5b317100dbca52cfd7878e4eeae8c9a4f01f400a7619be95919ee68e",
     "history.revert@2": "e864816f1ef6d4e06389051423687d3b9da310d3b541f91beff8ecafbb4ab0f4",
+    "patch.base.read@1": "7ee587780dcdf034d892f17c6304b5b3483e397b6cba658cf21c711ae6fb9c0e",
     "patch.diff.simulate@1": "eb4c3ceab8d75b6c235acbc6820f611216685ac3e55a3cf958c5d493f179348a",
     "patch.readiness.analyze@2": "7baa90f99f4f1a7cc4382caaf009c107388e9de6124d0d2b5bf155769ab91812",
     "patch.targets.list@1": "4c944468c3d56dfc397b173f6a45eb8bcc9fb76be12be5071498aaa9a723ba65",
+    "patch.xpath.complete@1": "888f087f23f772b0e2eaca81652e7a175a4341c47ef9b7ae2109312f6e6a4c99",
     "patch.xpath.synthesize@1": "fd3c1abee3d75c66992dbf905b78cbe1de6e303dd72a31bea3749d5f7f0f5d43",
     "performance.collect@1": "3388a193408ec6e83ad3228705b7b9acaeb488580995c4359a844047871bd9ff",
     "performance.native.collect@1": "8521e03600b98b7ced7b49205f8dfe95b8e018337d6c63e83e9a88596e7792a2",
@@ -4488,6 +4589,7 @@
     "project.validate@1": "34e6c5a213b07038e58d70dca27db474370300e38599f6299b5664a974dedf06",
     "project.xml.references@1": "3ee7a1ad13af453017d9136e0a23218912dc866e6fe4b4b066f8313fd740affe",
     "readiness.read@1": "8a1e349ea4a481e12be506a20cc246957898faed7a9548a523d5a0359195add0",
+    "reference.coverage.read@1": "9807a23df4d6c166e214f7726d30e40598316dc87c76fd9c0aca10091d8960be",
     "reference.file.read@1": "99bad92de0468d561ec970602cf96e7390f5baab046a4acc9d5301a3e053b008",
     "reference.galaxy.read@1": "fa6eb49a3b786091ce88ab12575187dcb0002fbe80a3da3d5378a791f0a087e7",
     "reference.objects.search@1": "20b6c432adf4165f59a0edbd7b04df9a5820773ec0a67b49d4607acef9a8a314",
@@ -4510,6 +4612,8 @@
     "snapshots.list@1": "5738f95e31782262be51c18d53a69950cf5d5fa6173f0863c7e445380f3c1a43",
     "snapshots.restore@1": "8bab37c9f4669317edc2e4ffd89fdfc2749bcbbdb857fff587f215dd784da7bd",
     "text.lookup@1": "45ecbc5abb71fb1e168c8b172399742251ca28c8b13fa96afb1352e11a8666a6",
+    "ui.lua.snippets.read@1": "48aa138ac3bbd645e55ad99c7a399b4bb315e3c3342319807d2aacf146b53719",
+    "ui.vanilla.harvest@1": "4f160c77d03cae999c38be1f27afdb9c6e60b78f4ea80b6af6dec3569558fc71",
     "validation.last.read@1": "3aa1dfb1609fef0b75557ab12936f47bb22ecc23808168feda91070d23ea135f",
     "workspace.compile@2": "aaa528d9b0b381b7af954ec78d2ba15212e9e0cc020d4af54eb5223caba9e185",
     "workspace.compile.result@2": "085e4f90f5fd5c0fd9a9decd3b1737f83b1663e63cae354ee443971de183bda0",
@@ -4520,8 +4624,8 @@
     "workspace.roundtrip.check@1": "c1a1c89c1eb3f44f8f16e6ca03e9787318eec5065bcf25dd2c3ce3a4b4045185"
   },
   "mcpModuleSignature": {
-    "version": 35,
-    "hash": "f57c09105a400fc6c9e2c6c58b979e627de6c9d47272238b58f2cab5dcc4d1cc"
+    "version": 36,
+    "hash": "5edb7ef23f5a2de84dbe7480abab96e276603bcace59ea596af350beba87ecf6"
   },
   "mcpSignatures": {
     "validate_mod": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",
@@ -4603,7 +4707,15 @@
     "list_workspace_snapshots": "ffe74e9957d3cabe2830c838555a0b58640b7bd1c7b76e88ab55ccd10ba3ea89",
     "create_workspace_snapshot": "800bae5751785c7539e91f601c74d430f2985a9de8e8e0e5113e99c871d10670",
     "restore_workspace_snapshot": "0b83c8a8c10193638c1667a3a67f7afd8a92d0134c228ddf2e67ed0a49c50b43",
-    "delete_workspace_snapshot": "290a670ea4bad2e32e8ab76a6eb68123abb8192021e8a85d5c5cef4a2a481ba9"
+    "delete_workspace_snapshot": "290a670ea4bad2e32e8ab76a6eb68123abb8192021e8a85d5c5cef4a2a481ba9",
+    "derive_external_api_contract": "a5b7db826ced1ac912c442179efc808b525d830642c45103bc469419754273e2",
+    "list_external_api_contracts": "3d9a17fb191e3a2a6bd2b037b9f9e2efc8d24a2bdd8286121b121f333b4f717c",
+    "read_extension_file": "dd3d0eb2f6915f9934799cfabd94badabd8dce4f3ad95233a65a64a81ea3707f",
+    "read_patch_base_content": "a3b31d50497760ea45821fcd4431ac95542d7c011e322a0e0848c0f73e3134e2",
+    "complete_xpath_selector": "eaa18fd19c537bdde30cdbd3e7542209f2431a65f707feb27a507e9c889c244a",
+    "get_reference_coverage": "91fbe88553da4c30bddea7d02a2869de56aa9fbdf933ff21be2616fcf759dd8f",
+    "list_lua_ui_snippets": "d81ce133bd3ae5d276baeb94fc6c3366171698d2a83066e3cd10f8134dd87d06",
+    "harvest_vanilla_ui_menus": "0d7be639796a030778d4ab28ff382fbd441dc1a06256c39daa2d6e4279d9dfd8"
   },
   "mcpCapabilityIdentities": {
     "validate_mod": "project.validate@1",
@@ -4685,6 +4797,14 @@
     "list_workspace_snapshots": "snapshots.list@1",
     "create_workspace_snapshot": "snapshots.create@1",
     "restore_workspace_snapshot": "snapshots.restore@1",
-    "delete_workspace_snapshot": "snapshots.delete@1"
+    "delete_workspace_snapshot": "snapshots.delete@1",
+    "derive_external_api_contract": "contracts.derive@1",
+    "list_external_api_contracts": "contracts.registry.read@1",
+    "read_extension_file": "extensions.file.read@1",
+    "read_patch_base_content": "patch.base.read@1",
+    "complete_xpath_selector": "patch.xpath.complete@1",
+    "get_reference_coverage": "reference.coverage.read@1",
+    "list_lua_ui_snippets": "ui.lua.snippets.read@1",
+    "harvest_vanilla_ui_menus": "ui.vanilla.harvest@1"
   }
 }

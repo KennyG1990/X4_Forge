@@ -1639,6 +1639,76 @@ async function main() {
       assert.equal(undoneScaffold.isError, false, JSON.stringify(undoneScaffold.payload));
       assert.equal(fs.existsSync(scaffoldDir), false);
     });
+
+    await check('13_contracts_patch_base_xpath_extension_file_and_reference_coverage_over_mcp', async () => {
+      const regRes = await presetReadMcp.callTool('list_external_api_contracts', { full: '0' });
+      assert.equal(regRes.isError, false, JSON.stringify(regRes.payload));
+      assert.equal(regRes.payload.ok, true);
+      assert(Array.isArray(regRes.payload.apis));
+      assert(!JSON.stringify(regRes.payload).includes(root), 'list_external_api_contracts leaked host root');
+
+      const deriveRes = await presetReadMcp.callTool('derive_external_api_contract', { ext: 'mod_alpha' });
+      assert.equal(deriveRes.isError, false, JSON.stringify(deriveRes.payload));
+      assert.equal(deriveRes.payload.ok, true);
+      assert.equal(deriveRes.payload.extensionFolder, 'mod_alpha');
+      assert.equal(deriveRes.payload.sourceKind, 'extensions');
+      assert(!JSON.stringify(deriveRes.payload).includes(root), 'derive_external_api_contract leaked host root');
+
+      const deriveMissing = await presetReadMcp.callTool('derive_external_api_contract', { ext: 'nonexistent_ext_xyz' });
+      assert.equal(deriveMissing.isError, true);
+      assert(String(deriveMissing.payload).includes('was not found under configured roots'), JSON.stringify(deriveMissing.payload));
+      assert(!JSON.stringify(deriveMissing.payload).includes(root), 'derive_external_api_contract 404 leaked host root');
+
+      const extFileRes = await presetReadMcp.callTool('read_extension_file', { path: 'mod_alpha/md/installed_missions.xml' });
+      assert.equal(extFileRes.isError, false, JSON.stringify(extFileRes.payload));
+      assert.equal(extFileRes.payload.ok, true);
+      assert.equal(extFileRes.payload.source, 'loose');
+      assert(String(extFileRes.payload.content || '').includes('InstalledMissions'));
+      assert(!JSON.stringify(extFileRes.payload).includes(root), 'read_extension_file leaked host root');
+
+      const extTraversal = await presetReadMcp.callTool('read_extension_file', { path: 'mod_alpha/../../X4.exe' });
+      assert.equal(extTraversal.isError, true);
+      assert(String(extTraversal.payload).includes('extensions.file.read requires'), JSON.stringify(extTraversal.payload));
+
+      // Packedbase fallback via 01.cat/01.dat on maps/xu_ep2_universe/galaxy.xml and extension-loose on libraries/wares.xml
+      const patchBasePacked = await presetReadMcp.callTool('read_patch_base_content', { targetFile: 'maps/xu_ep2_universe/galaxy.xml' });
+      assert.equal(patchBasePacked.isError, false, JSON.stringify(patchBasePacked.payload));
+      assert.equal(patchBasePacked.payload.ok, true);
+      assert.equal(patchBasePacked.payload.source, 'packed');
+      assert.equal(patchBasePacked.payload.sourceKind, 'packed');
+      assert.equal(patchBasePacked.payload.archive, '01.cat');
+      assert(!JSON.stringify(patchBasePacked.payload).includes(root), 'read_patch_base_content leaked host root');
+
+      const xpathRes = await presetReadMcp.callTool('complete_xpath_selector', {
+        path: 'libraries/wares.xml',
+        selector: '/wares/',
+        cursor: 7,
+        limit: 20,
+      });
+      assert.equal(xpathRes.isError, false, JSON.stringify(xpathRes.payload));
+      assert.equal(xpathRes.payload.ok, true);
+      assert.equal(xpathRes.payload.path, 'libraries/wares.xml');
+      assert(Array.isArray(xpathRes.payload.items) && xpathRes.payload.items.length > 0);
+      assert(!JSON.stringify(xpathRes.payload).includes(root), 'complete_xpath_selector leaked host root');
+
+      const covRes = await presetReadMcp.callTool('get_reference_coverage', {});
+      assert.equal(covRes.isError, false, JSON.stringify(covRes.payload));
+      assert.equal(covRes.payload.ok, true);
+      assert.equal(covRes.payload.ready, true);
+      assert(covRes.payload.coverage && typeof covRes.payload.coverage === 'object');
+      assert(!JSON.stringify(covRes.payload).includes(root), 'get_reference_coverage leaked host root');
+
+      const snippetsRes = await presetReadMcp.callTool('list_lua_ui_snippets', {});
+      assert.equal(snippetsRes.isError, false, JSON.stringify(snippetsRes.payload));
+      assert.equal(snippetsRes.payload.ok, true);
+      assert(Array.isArray(snippetsRes.payload.snippets) && snippetsRes.payload.total >= 1);
+
+      const harvestRes = await presetReadMcp.callTool('harvest_vanilla_ui_menus', { limit: '10' });
+      assert.equal(harvestRes.isError, false, JSON.stringify(harvestRes.payload));
+      assert.equal(harvestRes.payload.ok, true);
+      assert(Array.isArray(harvestRes.payload.menus));
+      assert(!JSON.stringify(harvestRes.payload).includes(root), 'harvest_vanilla_ui_menus leaked host root');
+    });
   } finally {
     for (const s of mcpSessions) {
       try { await s.close(); } catch { /* ignore */ }

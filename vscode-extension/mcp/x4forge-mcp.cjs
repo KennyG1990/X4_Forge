@@ -171,6 +171,14 @@ const DIAGNOSTIC_READ_LIVE_TOOLS = new Set([
   "verify_release_artifact",
   "search_workspace_symbols",
   "read_action_history_blob",
+  "derive_external_api_contract",
+  "list_external_api_contracts",
+  "read_extension_file",
+  "read_patch_base_content",
+  "complete_xpath_selector",
+  "get_reference_coverage",
+  "list_lua_ui_snippets",
+  "harvest_vanilla_ui_menus",
 ]);
 const PERFORMANCE_PROFILE_HTTP_FAILURES = { PROFILE_DISABLED: 503, PROFILE_BUSY: 409, PROFILE_RATE_LIMITED: 429, PROFILE_DISPOSED: 503, PROFILE_INPUT_INVALID: 400, PROFILE_ABORTED: 408, PROFILE_FAILED: 500, PROFILE_CLEANUP_UNCONFIRMED: 409 };
 const PERFORMANCE_COLLECTION_HTTP_FAILURES = { PERFORMANCE_DISPOSED: 503, PERFORMANCE_COLLECTION_BUSY: 409, PERFORMANCE_COLLECTION_REFUSED: 409, PROJECT_INPUT_INVALID: 400, PERFORMANCE_COLLECTION_FAILED: 500 };
@@ -2535,6 +2543,260 @@ const TOOLS = [
         recovery: "object",
       },
     ),
+  },
+  {
+    name: "derive_external_api_contract",
+    capabilityId: "contracts.derive",
+    capabilityVersion: 1,
+    description: "Scan loose .xml/.lua files and packed .cat/.dat archives of a single extension folder under configured Filesystem, Game extensions/, or Mod Workspace roots, synthesize a draft external API contract definition, validate it against the Forge API-registry schema, and return redacted provenance without mutating disk.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ext: { type: "string", maxLength: 128 },
+      },
+      required: ["ext"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams({ ext: String(args.ext) });
+      return requireResponse(
+        await forge("GET", `/api/agent/external-api/derive-draft?${q}`),
+        "external API contract derivation",
+        {
+          ok: "boolean",
+          success: "boolean",
+          extensionFolder: "string",
+          sourceKind: "string",
+          filesScanned: "number",
+          packedFilesScanned: "number",
+          definition: "object",
+          notes: "array",
+          validates: "boolean",
+          validationErrors: "array",
+        },
+      );
+    },
+  },
+  {
+    name: "list_external_api_contracts",
+    capabilityId: "contracts.registry.read",
+    capabilityVersion: 1,
+    description: "Read the merged active external-API contract registry (built-in, data-dir, configured folder, and Studio runtime registrations) with optional full symbol payloads or single-extension filtering.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        full: { type: "string", enum: ["0", "1"] },
+        extensionId: { type: "string", maxLength: 128 },
+      },
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams();
+      if (args.full !== undefined) q.set("full", String(args.full));
+      if (args.extensionId !== undefined) q.set("extensionId", String(args.extensionId));
+      return requireResponse(
+        await forge("GET", `/api/agent/external-api/registry?${q}`),
+        "external API contract registry",
+        {
+          ok: "boolean",
+          success: "boolean",
+          count: "number",
+          totalApis: "number",
+          full: "boolean",
+          apis: "array",
+          sources: "object",
+        },
+      );
+    },
+  },
+  {
+    name: "read_extension_file",
+    capabilityId: "extensions.file.read",
+    capabilityVersion: 1,
+    description: "Read one relative file (<extensionFolder>/<relativeFile>) from the configured X4 game extensions/ directory across both loose regular files and packed .cat/.dat archives, bounding returned UTF-8 content at 512 KiB and redacting host filesystem paths.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", maxLength: 1024 },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams({ path: String(args.path) });
+      return requireResponse(
+        await forge("GET", `/api/agent/extensions/file?${q}`),
+        "installed extension file read",
+        {
+          ok: "boolean",
+          success: "boolean",
+          path: "string",
+          name: "string",
+          source: "string",
+          bytes: "number",
+          contentLength: "number",
+          contentTruncated: "boolean",
+          sha256: "string",
+          content: "string",
+        },
+      );
+    },
+  },
+  {
+    name: "read_patch_base_content",
+    capabilityId: "patch.base.read",
+    capabilityVersion: 1,
+    description: "Resolve and read an XML patch target file across Mod Workspace, loose game files, loose installed extensions, or packed base-game .cat/.dat archives, bounding UTF-8 output at 512 KiB and redacting host filesystem paths.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        targetFile: { type: "string", maxLength: 1024 },
+      },
+      required: ["targetFile"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams({ targetFile: String(args.targetFile) });
+      return requireResponse(
+        await forge("GET", `/api/agent/patch/base-content?${q}`),
+        "patch base content read",
+        {
+          ok: "boolean",
+          success: "boolean",
+          targetFile: "string",
+          source: "string",
+          sourceKind: "string",
+          bytes: "number",
+          contentLength: "number",
+          contentTruncated: "boolean",
+          sha256: "string",
+          content: "string",
+        },
+      );
+    },
+  },
+  {
+    name: "complete_xpath_selector",
+    capabilityId: "patch.xpath.complete",
+    capabilityVersion: 1,
+    description: "Compute ranked XPath element, attribute, and predicate selector completions at a cursor offset against a composed canonical base+DLC XML target document without mutating disk.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", maxLength: 1024 },
+        selector: { type: "string", maxLength: 16384 },
+        cursor: { type: "integer", minimum: 0 },
+        limit: { type: "integer", minimum: 1, maximum: 100 },
+        refresh: { type: "boolean" },
+      },
+      required: ["path", "selector", "cursor"],
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/patch/xpath-complete", args),
+      "XPath selector completion",
+      {
+        ok: "boolean",
+        path: "string",
+        available: "boolean",
+        complete: "boolean",
+        signature: "string",
+        sources: "array",
+        findings: "array",
+        incompleteFindings: "array",
+        total: "number",
+        items: "array",
+      },
+    ),
+  },
+  {
+    name: "get_reference_coverage",
+    capabilityId: "reference.coverage.read",
+    capabilityVersion: 1,
+    description: "Read or schedule the SQLite reference-manifest coverage summary across canonical X4 domains, sources, and authority roles with host filesystem paths redacted.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        refresh: { type: "string", enum: ["0", "1"] },
+      },
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams();
+      if (args.refresh !== undefined) q.set("refresh", String(args.refresh));
+      const payload = requireResponse(
+        await forge("GET", `/api/agent/reference/coverage?${q}`),
+        "reference manifest coverage",
+        {
+          ok: "boolean",
+          ready: "boolean",
+          status: "object",
+        },
+      );
+      if (payload.coverage !== null && (!payload.coverage || typeof payload.coverage !== "object" || Array.isArray(payload.coverage))) {
+        const error = new Error("reference manifest coverage response has invalid coverage field");
+        error.invalidResponse = true;
+        throw error;
+      }
+      return payload;
+    },
+  },
+  {
+    name: "list_lua_ui_snippets",
+    capabilityId: "ui.lua.snippets.read",
+    capabilityVersion: 1,
+    description: "Read the curated library of X4 UI Lua patterns (menus, widgets, event bridges, tables) with optional keyword filtering and built-in Lua snippet validation evidence.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        q: { type: "string", maxLength: 128 },
+      },
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams();
+      if (args.q !== undefined) q.set("q", String(args.q));
+      return requireResponse(
+        await forge("GET", `/api/agent/ui/lua-snippets?${q}`),
+        "X4 UI Lua snippets",
+        {
+          ok: "boolean",
+          success: "boolean",
+          total: "number",
+          count: "number",
+          snippets: "array",
+          selftest: "object",
+        },
+      );
+    },
+  },
+  {
+    name: "harvest_vanilla_ui_menus",
+    capabilityId: "ui.vanilla.harvest",
+    capabilityVersion: 1,
+    description: "Scan packed base-game .cat/.dat archives for menu-bearing vanilla X4 UI Lua files, profile each against the standalone-menu contract, and return universal schema evidence without exposing host filesystem paths.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        limit: { type: "string", maxLength: 4 },
+      },
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams();
+      if (args.limit !== undefined) q.set("limit", String(args.limit));
+      return requireResponse(
+        await forge("GET", `/api/agent/ui/vanilla-harvest?${q}`),
+        "vanilla UI menu harvest",
+        {
+          ok: "boolean",
+          scanned: "number",
+          menusProfiled: "number",
+          evidence: "array",
+          menus: "array",
+        },
+      );
+    },
   },
 ];
 const STATIC_TOOL_NAMES = new Set(TOOLS.map((tool) => tool.name));

@@ -1223,6 +1223,30 @@
       ]
     },
     {
+      "routeKey": "POST /api/agent/patch/xpath-complete",
+      "method": "POST",
+      "template": "/api/agent/patch/xpath-complete",
+      "owner": "patch.xpath.complete",
+      "resourceClass": "configured-root",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1patch~1xpath-complete",
+      "integrationBatch": "W3B0-internal",
+      "history": "quiet",
+      "capability": {
+        "kind": "canonical",
+        "id": "patch.xpath.complete",
+        "version": 1
+      },
+      "semanticClass": "read-analysis-only",
+      "policy": "receipt-exempt",
+      "effects": [
+        "read",
+        "analyze"
+      ],
+      "authorityScopes": [
+        "global"
+      ]
+    },
+    {
       "routeKey": "POST /api/agent/performance/collection",
       "method": "POST",
       "template": "/api/agent/performance/collection",

@@ -119,6 +119,137 @@ function stripManifestRoot(manifest: ReferenceManifestStatus): Record<string, un
   return copy;
 }
 
+function redactReferenceManifestForAgent(manifest: ReferenceManifestStatus): Record<string, unknown> {
+  const copy: Record<string, unknown> = { ...manifest };
+  delete copy.root;
+  delete copy.database;
+  if (manifest.current && typeof manifest.current === 'object') {
+    const currentCopy: Record<string, unknown> = { ...manifest.current };
+    delete currentCopy.root;
+    copy.current = currentCopy;
+  }
+  return copy;
+}
+
+export function respondAgentReferenceCoverage(req: Request, res: Response): Response {
+  res.set('Cache-Control', 'no-store');
+  const queryError = validateReferenceCapabilityQuery(
+    req.query,
+    ['refresh', 'workspaceId', 'clientId'],
+    'reference.coverage.read',
+  );
+  if (queryError) return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+  if (req.query.refresh !== undefined && req.query.refresh !== '0' && req.query.refresh !== '1') {
+    return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'Optional ?refresh= must be 0 or 1.' });
+  }
+  try {
+    const resolved = resolveXsdConfig();
+    let status = req.query.refresh === '1'
+      ? scheduleReferenceManifest(resolved.x4ReferenceRoot, true)
+      : getReferenceManifestStatus(resolved.x4ReferenceRoot);
+    if (status.state === 'idle') status = scheduleReferenceManifest(resolved.x4ReferenceRoot, false);
+    const redactedStatus = redactReferenceManifestForAgent(status);
+    const coverage = getReferenceCoverage(resolved.x4ReferenceRoot);
+    if (!coverage) {
+      if (status.state === 'error' || status.state === 'unavailable') {
+        return res.status(503).json({
+          ok: false,
+          ready: false,
+          code: 'REFERENCE_COVERAGE_UNAVAILABLE',
+          error: status.error || 'Reference manifest coverage is unavailable.',
+          status: redactedStatus,
+          coverage: null,
+        });
+      }
+      return res.status(202).json({
+        ok: true,
+        ready: false,
+        status: redactedStatus,
+        coverage: null,
+      });
+    }
+    const redactedCoverage: Record<string, unknown> = { ...coverage };
+    delete redactedCoverage.root;
+    return res.json({
+      ok: true,
+      ready: true,
+      status: redactedStatus,
+      coverage: redactedCoverage,
+    });
+  } catch (error) { return sendCorpusError(res, error); }
+}
+
+export function respondAgentXPathComplete(req: Request, res: Response): Response {
+  try {
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'patch.xpath.complete requires a JSON object body.' });
+    }
+    const body = req.body as Record<string, unknown>;
+    const unknown = Object.keys(body).filter(key => !['path', 'selector', 'cursor', 'limit', 'refresh'].includes(key));
+    if (unknown.length) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: `patch.xpath.complete does not accept: ${unknown.join(', ')}` });
+    }
+    const relativePath = typeof body.path === 'string' ? body.path.trim() : '';
+    if (!relativePath || relativePath.length > 1024) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'patch.xpath.complete requires a non-empty string path (<= 1024 chars).' });
+    }
+    if (typeof body.selector !== 'string') {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'patch.xpath.complete requires a string selector.' });
+    }
+    const selector = body.selector;
+    if (selector.length > 16_384) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'patch.xpath.complete selector exceeds 16 KB.' });
+    }
+    if (typeof body.cursor !== 'number' || !Number.isInteger(body.cursor) || body.cursor < 0 || body.cursor > selector.length) {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'patch.xpath.complete cursor must be an integer within selector bounds.' });
+    }
+    let parsedLimit = 50;
+    if (body.limit !== undefined) {
+      if (typeof body.limit !== 'number' || !Number.isInteger(body.limit) || body.limit < 1 || body.limit > 100) {
+        return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'patch.xpath.complete limit must be an integer between 1 and 100.' });
+      }
+      parsedLimit = body.limit;
+    }
+    if (body.refresh !== undefined && typeof body.refresh !== 'boolean') {
+      return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'patch.xpath.complete refresh must be a boolean when supplied.' });
+    }
+    const refresh = body.refresh === true;
+    const resolved = resolveXsdConfig();
+    const corpus = getReferenceCorpus(resolved.x4ReferenceRoot, refresh);
+    const effective = resolveEffectiveReferenceDocument(corpus.root, relativePath, refresh);
+    const metadata = effectiveReferenceMetadata(effective);
+    if (!effective.available || effective.content === undefined) {
+      return res.status(404).json({ code: 'REFERENCE_FILE_NOT_FOUND', error: `Canonical effective file not found: ${relativePath}`, ...metadata });
+    }
+    if (effective.complete !== true) {
+      return res.status(503).json({
+        ok: false,
+        path: effective.relativePath,
+        ...metadata,
+        code: 'REFERENCE_EFFECTIVE_INCOMPLETE',
+        error: 'Canonical reference composition is incomplete; XPath completion is unavailable.',
+        total: 0,
+        items: [],
+      });
+    }
+    const items = completeXPath({
+      targetPath: effective.relativePath,
+      content: effective.content,
+      selector,
+      cursor: body.cursor,
+      corpus,
+      limit: parsedLimit,
+    });
+    return res.json({
+      ok: true,
+      path: effective.relativePath,
+      ...metadata,
+      total: items.length,
+      items,
+    });
+  } catch (error) { return sendCorpusError(res, error); }
+}
+
 export function respondAgentEffectiveReferenceFile(req: Request, res: Response): Response {
   const queryError = validateReferenceCapabilityQuery(
     req.query,

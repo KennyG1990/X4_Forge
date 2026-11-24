@@ -134,9 +134,11 @@ import {
   initializeReferenceCorpus,
   registerReferenceRoutes,
   respondAgentEffectiveReferenceFile,
+  respondAgentReferenceCoverage,
   respondAgentReferenceStatus,
   respondAgentReferenceSuggest,
   respondAgentSimulateDiff,
+  respondAgentXPathComplete,
   startCanonicalReferenceManifest,
 } from "./src/server/referenceRoutes";
 import { createCanonicalMdProviderPreparation, readCanonicalMdCompiledWorkerIdentity } from './src/server/canonicalMdProviderPreparation';
@@ -1254,6 +1256,14 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
       || authority.decision.routeKey === 'POST /api/agent/release/steam/check'
       || authority.decision.routeKey === 'POST /api/agent/release/steam/apply-adoption'
       || authority.decision.routeKey === 'GET /api/agent/release/artifact/status'
+      || authority.decision.routeKey === 'GET /api/agent/external-api/registry'
+      || authority.decision.routeKey === 'GET /api/agent/external-api/derive-draft'
+      || authority.decision.routeKey === 'GET /api/agent/extensions/file'
+      || authority.decision.routeKey === 'GET /api/agent/patch/base-content'
+      || authority.decision.routeKey === 'POST /api/agent/patch/xpath-complete'
+      || authority.decision.routeKey === 'GET /api/agent/reference/coverage'
+      || authority.decision.routeKey === 'GET /api/agent/ui/lua-snippets'
+      || authority.decision.routeKey === 'GET /api/agent/ui/vanilla-harvest'
       || (authority.decision.routeKey === 'GET /api/agent/status'
         && (req.query.inspectDeployTarget !== undefined || req.query.inspectDeployEffect !== undefined))
       || authority.decision.routeKey === 'POST /api/agent/history/:id/revert'
@@ -5900,6 +5910,198 @@ app.get("/api/patch/base-content", (req, res) => {
   }
 });
 
+function validateClosedAgentQuery(
+  query: express.Request['query'],
+  allowedKeys: readonly string[],
+  capabilityId: string,
+): string | null {
+  const unknown = Object.keys(query).filter(key => !allowedKeys.includes(key));
+  if (unknown.length) return `${capabilityId} does not accept: ${unknown.join(', ')}`;
+  for (const key of Object.keys(query)) {
+    const value = query[key];
+    if (value !== undefined && typeof value !== 'string') {
+      return `${capabilityId} query parameter ${key} must be a single string.`;
+    }
+  }
+  return null;
+}
+
+const AGENT_READ_CONTENT_MAX_BYTES = 512 * 1024;
+const AGENT_READ_SOURCE_MAX_BYTES = 8 * 1024 * 1024;
+
+function truncateAgentUtf8Content(fullText: string, maxBytes = AGENT_READ_CONTENT_MAX_BYTES): {
+  bytes: number;
+  contentLength: number;
+  contentTruncated: boolean;
+  sha256: string;
+  content: string;
+} {
+  const buf = Buffer.from(fullText, 'utf8');
+  const sha256 = crypto.createHash('sha256').update(buf).digest('hex');
+  if (buf.length <= maxBytes) {
+    return {
+      bytes: buf.length,
+      contentLength: fullText.length,
+      contentTruncated: false,
+      sha256,
+      content: fullText,
+    };
+  }
+  let end = maxBytes;
+  while (end > 0 && (buf[end] & 0xc0) === 0x80) end -= 1;
+  const content = buf.subarray(0, end).toString('utf8');
+  return {
+    bytes: buf.length,
+    contentLength: content.length,
+    contentTruncated: true,
+    sha256,
+    content,
+  };
+}
+
+function isSafeContainedRegularFile(candidatePath: string, rootDir: string): boolean {
+  try {
+    if (!isPathWithin(candidatePath, rootDir) || !fs.existsSync(candidatePath)) return false;
+    const lstat = fs.lstatSync(candidatePath);
+    if (lstat.isSymbolicLink() || !lstat.isFile()) return false;
+    const realRoot = fs.realpathSync(rootDir);
+    const realCandidate = fs.realpathSync(candidatePath);
+    return isPathWithin(realCandidate, realRoot);
+  } catch {
+    return false;
+  }
+}
+
+function isSafeContainedDirectory(candidateDir: string, rootDir: string): boolean {
+  try {
+    if (!isPathWithin(candidateDir, rootDir) || !fs.existsSync(candidateDir)) return false;
+    const lstat = fs.lstatSync(candidateDir);
+    if (lstat.isSymbolicLink() || !lstat.isDirectory()) return false;
+    const realRoot = fs.realpathSync(rootDir);
+    const realCandidate = fs.realpathSync(candidateDir);
+    return realCandidate === realRoot || isPathWithin(realCandidate, realRoot);
+  } catch {
+    return false;
+  }
+}
+
+function hasControlChars(text: string): boolean {
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    if (code < 32 || code === 127) return true;
+  }
+  return false;
+}
+
+function normalizeRelativeSubpath(rawInput: string): string | null {
+  const raw = rawInput.trim().replace(/\\/g, '/').replace(/^\.\//, '');
+  if (!raw || raw.length > 1024 || raw.startsWith('/') || /^[A-Za-z]:/.test(raw) || hasControlChars(raw)) {
+    return null;
+  }
+  const segments = raw.split('/');
+  if (segments.some(seg => !seg || seg === '.' || seg === '..')) return null;
+  return segments.join('/');
+}
+
+app.get("/api/agent/patch/base-content", (req, res) => {
+  try {
+    const queryError = validateClosedAgentQuery(req.query, ['targetFile', 'workspaceId', 'clientId'], 'patch.base.read');
+    if (queryError) return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    const targetFile = normalizeRelativeSubpath(typeof req.query.targetFile === 'string' ? req.query.targetFile : '');
+    if (!targetFile) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'patch.base.read requires a safe relative ?targetFile= path.' });
+    }
+    const resolved = resolveXsdConfig();
+    const candidates: Array<{
+      filePath: string;
+      rootDir: string;
+      sourceKind: 'workspace' | 'game-loose' | 'extension-loose';
+      extensionFolder?: string;
+    }> = [];
+    if (resolved.modWorkspacePath && fs.existsSync(resolved.modWorkspacePath)) {
+      candidates.push({
+        filePath: path.join(resolved.modWorkspacePath, ...targetFile.split('/')),
+        rootDir: resolved.modWorkspacePath,
+        sourceKind: 'workspace',
+      });
+    }
+    if (resolved.x4GamePath && fs.existsSync(resolved.x4GamePath)) {
+      candidates.push({
+        filePath: path.join(resolved.x4GamePath, ...targetFile.split('/')),
+        rootDir: resolved.x4GamePath,
+        sourceKind: 'game-loose',
+      });
+      const extPath = path.join(resolved.x4GamePath, 'extensions');
+      if (isSafeContainedDirectory(extPath, resolved.x4GamePath)) {
+        try {
+          const extensions = fs.readdirSync(extPath).sort();
+          for (const ext of extensions) {
+            const extDir = path.join(extPath, ext);
+            if (!isSafeContainedDirectory(extDir, extPath)) continue;
+            candidates.push({
+              filePath: path.join(extDir, ...targetFile.split('/')),
+              rootDir: extDir,
+              sourceKind: 'extension-loose',
+              extensionFolder: ext,
+            });
+          }
+        } catch {
+          // Ignore unreadable extension listing
+        }
+      }
+    }
+    for (const candidate of candidates) {
+      if (!isSafeContainedRegularFile(candidate.filePath, candidate.rootDir)) continue;
+      const stat = fs.statSync(candidate.filePath);
+      if (stat.size > AGENT_READ_SOURCE_MAX_BYTES) {
+        return res.status(413).json({
+          ok: false,
+          success: false,
+          code: 'PATCH_BASE_TOO_LARGE',
+          error: `Target base file exceeds ${AGENT_READ_SOURCE_MAX_BYTES} bytes.`,
+        });
+      }
+      const text = fs.readFileSync(candidate.filePath, 'utf8');
+      return res.json({
+        ok: true,
+        success: true,
+        targetFile,
+        source: 'loose',
+        sourceKind: candidate.sourceKind,
+        ...(candidate.extensionFolder ? { extensionFolder: candidate.extensionFolder } : {}),
+        ...truncateAgentUtf8Content(text),
+      });
+    }
+    if (resolved.x4GamePath) {
+      try {
+        const packed = catDatExtractBaseGameFile(resolved.x4GamePath, targetFile);
+        if (packed) {
+          return res.json({
+            ok: true,
+            success: true,
+            targetFile,
+            source: 'packed',
+            sourceKind: 'packed',
+            archive: path.basename(packed.catPath),
+            note: 'Extracted from packed base-game .cat/.dat archives. DLC additions are not merged into this preview.',
+            ...truncateAgentUtf8Content(packed.text),
+          });
+        }
+      } catch {
+        // Fall through to 404
+      }
+    }
+    return res.status(404).json({
+      ok: false,
+      success: false,
+      code: 'PATCH_BASE_NOT_FOUND',
+      error: `File '${targetFile}' not found in loose files or packed game archives (.cat/.dat).`,
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, success: false, error: errorMessage(error) || 'Failed to read target base file.' });
+  }
+});
+
 // Server Filesystem write endpoint
 /**
  * B86: THE single guarded workspace-write path. Extracted so that `/api/fs/write` and the
@@ -10049,12 +10251,14 @@ app.get("/api/agent/object-index", (req, res) => {
 });
 
 app.get("/api/agent/reference/status", (req, res) => respondAgentReferenceStatus(req, res));
+app.get("/api/agent/reference/coverage", (req, res) => respondAgentReferenceCoverage(req, res));
 app.get("/api/agent/reference/effective-file", (req, res) => respondAgentEffectiveReferenceFile(req, res));
 app.get("/api/agent/reference/suggest", (req, res) => {
   const ws = decoratedReq(req).__workspaceRecord?.workspace as ModWorkspace | undefined;
   return respondAgentReferenceSuggest(req, res, ws);
 });
 app.post("/api/agent/reference/simulate-diff", (req, res) => respondAgentSimulateDiff(req, res));
+app.post("/api/agent/patch/xpath-complete", (req, res) => respondAgentXPathComplete(req, res));
 
 // Real base-game XML file paths that can be the target of a <diff> patch, enumerated
 // from the packed .cat manifests (so the patch editor only offers files that actually
@@ -12309,6 +12513,147 @@ app.get("/api/agent/external-api/derive", (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ success: false, error: errorMessage(error) || "external-api derive failed" });
+  }
+});
+
+app.get("/api/agent/external-api/registry", (req, res) => {
+  try {
+    const queryError = validateClosedAgentQuery(req.query, ['full', 'extensionId', 'workspaceId', 'clientId'], 'contracts.registry.read');
+    if (queryError) return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    if (req.query.full !== undefined && req.query.full !== '0' && req.query.full !== '1') {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'Optional ?full= must be 0 or 1.' });
+    }
+    const rawExtId = typeof req.query.extensionId === 'string' ? req.query.extensionId.trim() : '';
+    if (rawExtId.length > 128) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'Optional ?extensionId= must be at most 128 characters.' });
+    }
+    const registry = getActiveRegistry();
+    const filtered = rawExtId
+      ? registry.filter(entry => entry.extensionId.toLowerCase() === rawExtId.toLowerCase())
+      : registry;
+    const isFull = req.query.full === '1';
+    const apis = isFull
+      ? filtered
+      : filtered.map(e => ({
+          extensionId: e.extensionId,
+          name: e.name,
+          origin: (e as ApiDefinition).origin || 'builtin',
+          dependsOn: e.dependsOn,
+          components: e.components.map(c => ({ id: c.id, title: c.title, symbols: c.symbols.length })),
+        }));
+    return res.json({
+      ok: true,
+      success: true,
+      count: apis.length,
+      totalApis: registry.length,
+      full: isFull,
+      apis,
+      sources: apiRegistrySources,
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, success: false, error: errorMessage(error) || 'external-api registry read failed' });
+  }
+});
+
+app.get("/api/agent/external-api/derive-draft", (req, res) => {
+  try {
+    const queryError = validateClosedAgentQuery(req.query, ['ext', 'workspaceId', 'clientId'], 'contracts.derive');
+    if (queryError) return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    const ext = typeof req.query.ext === 'string' ? req.query.ext.trim() : '';
+    if (!ext || ext.length > 128 || ext === '.' || ext === '..' || !/^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$/.test(ext)) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'contracts.derive requires ?ext=<single_extension_folder_name>.' });
+    }
+    const resolved = resolveXsdConfig();
+    const rootsToSearch: Array<{ rootDir: string; sourceKind: 'filesystem' | 'extensions' | 'workspace' }> = [];
+    if (resolved.filesystemPath) rootsToSearch.push({ rootDir: resolved.filesystemPath, sourceKind: 'filesystem' });
+    if (resolved.x4GamePath) rootsToSearch.push({ rootDir: path.join(resolved.x4GamePath, 'extensions'), sourceKind: 'extensions' });
+    if (resolved.modWorkspacePath) rootsToSearch.push({ rootDir: resolved.modWorkspacePath, sourceKind: 'workspace' });
+
+    let foundRoot: { extRoot: string; sourceKind: 'filesystem' | 'extensions' | 'workspace' } | null = null;
+    for (const candidate of rootsToSearch) {
+      const extDir = path.join(candidate.rootDir, ext);
+      if (isSafeContainedDirectory(extDir, candidate.rootDir)) {
+        foundRoot = { extRoot: extDir, sourceKind: candidate.sourceKind };
+        break;
+      }
+    }
+    if (!foundRoot) {
+      return res.status(404).json({
+        ok: false,
+        success: false,
+        code: 'EXTENSION_NOT_FOUND',
+        error: `Extension "${ext}" was not found under configured roots.`,
+      });
+    }
+    const files: { path: string; content: string }[] = [];
+    const MAX_FILES = 400;
+    const MAX_BYTES = 2_000_000;
+    let bytes = 0;
+    const walk = (dir: string, rel: string) => {
+      if (files.length >= MAX_FILES || bytes >= MAX_BYTES) return;
+      let ents: fs.Dirent[] = [];
+      try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      for (const d of ents) {
+        if (files.length >= MAX_FILES || bytes >= MAX_BYTES) break;
+        const abs = path.join(dir, d.name);
+        const r = rel ? `${rel}/${d.name}` : d.name;
+        if (d.isDirectory()) {
+          if (isSafeContainedDirectory(abs, foundRoot.extRoot)) walk(abs, r);
+          continue;
+        }
+        if (!/\.(xml|lua)$/i.test(d.name)) continue;
+        if (!isSafeContainedRegularFile(abs, foundRoot.extRoot)) continue;
+        try {
+          const sz = fs.statSync(abs).size;
+          if (sz > 500_000) continue;
+          const content = fs.readFileSync(abs, 'utf8');
+          bytes += content.length;
+          files.push({ path: r, content });
+        } catch {
+          // Skip unreadable file
+        }
+      }
+    };
+    walk(foundRoot.extRoot, '');
+    let packedFiles = 0;
+    try {
+      for (const archive of findCatDatArchives([foundRoot.extRoot], true).filter(a => path.dirname(a.catPath).toLowerCase() === foundRoot.extRoot.toLowerCase())) {
+        if (bytes >= MAX_BYTES || files.length >= MAX_FILES) break;
+        let entries: ReturnType<typeof parseCat> = [];
+        try { entries = parseCat(archive.catPath); } catch { continue; }
+        for (const entry of entries) {
+          if (bytes >= MAX_BYTES || files.length >= MAX_FILES) break;
+          if (!/\.(xml|lua)$/i.test(entry.name)) continue;
+          try {
+            const content = readEntryText(archive.datPath, entry);
+            if (!content || content.length > 500_000) continue;
+            bytes += content.length;
+            packedFiles += 1;
+            files.push({ path: entry.name.replace(/\\/g, '/'), content });
+          } catch {
+            // Skip unreadable archive entry
+          }
+        }
+      }
+    } catch {
+      // No packed archives
+    }
+    const { definition, notes } = deriveApiDefinition(ext, files);
+    const validation = validateApiDefinition(definition, 'derived');
+    return res.json({
+      ok: true,
+      success: true,
+      extensionFolder: ext,
+      sourceKind: foundRoot.sourceKind,
+      filesScanned: files.length,
+      packedFilesScanned: packedFiles,
+      definition,
+      notes,
+      validates: validation.ok,
+      validationErrors: validation.errors,
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, success: false, error: errorMessage(error) || 'external-api derive-draft failed' });
   }
 });
 
@@ -15790,6 +16135,79 @@ app.get("/api/agent/lua-snippets", (_req, res) => {
   }
 });
 
+app.get("/api/agent/ui/lua-snippets", (req, res) => {
+  try {
+    const queryError = validateClosedAgentQuery(req.query, ['q', 'workspaceId', 'clientId'], 'ui.lua.snippets.read');
+    if (queryError) return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    const needle = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : '';
+    if (needle.length > 128) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'Optional ?q= must be at most 128 characters.' });
+    }
+    const snippets = needle
+      ? LUA_SNIPPETS.filter(snippet => JSON.stringify(snippet).toLowerCase().includes(needle))
+      : LUA_SNIPPETS;
+    return res.json({
+      ok: true,
+      success: true,
+      total: LUA_SNIPPETS.length,
+      count: snippets.length,
+      snippets,
+      selftest: runLuaSnippetSelftest(),
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, success: false, error: errorMessage(error) || 'lua-snippets failed' });
+  }
+});
+
+app.get("/api/agent/ui/vanilla-harvest", (req, res) => {
+  try {
+    const queryError = validateClosedAgentQuery(req.query, ['limit', 'workspaceId', 'clientId'], 'ui.vanilla.harvest');
+    if (queryError) return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    let limit = 24;
+    if (req.query.limit !== undefined && String(req.query.limit).trim() !== '') {
+      const parsed = Number(req.query.limit);
+      if (!Number.isInteger(parsed) || parsed < 1 || parsed > 60) {
+        return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'Optional ?limit= must be an integer between 1 and 60.' });
+      }
+      limit = parsed;
+    }
+    const resolved = resolveXsdConfig();
+    if (!resolved.x4GamePath) {
+      return res.status(400).json({ ok: false, code: 'GAME_PATH_UNCONFIGURED', error: 'X4 game path not configured.' });
+    }
+    const isMenuLua = (n: string) => /^ui\/.*\.lua$/i.test(n) &&
+      /(menu|chatwindow|widget_fullscreen|optionsmenu|interactmenu|gameoptions)/i.test(n);
+    const corpus: { name: string; profile: ReturnType<typeof profileMenuLua> }[] = [];
+    let scanned = 0;
+    for (const arc of findCatDatArchives([resolved.x4GamePath], true)) {
+      let entries: ReturnType<typeof parseCat> = [];
+      try { entries = parseCat(arc.catPath); } catch { continue; }
+      for (const e of entries) {
+        if (corpus.length >= limit) break;
+        const name = e.name.replace(/\\/g, '/');
+        if (!isMenuLua(name) || !(e.size > 0 && e.size < 512 * 1024)) continue;
+        let text = '';
+        try { text = readEntryText(arc.datPath, e); } catch { continue; }
+        if (!text) continue;
+        scanned += 1;
+        const profile = profileMenuLua(text);
+        if (profile.isMenuLike) corpus.push({ name, profile });
+      }
+      if (corpus.length >= limit) break;
+    }
+    const evidence = deriveSchemaEvidence(corpus);
+    return res.json({
+      ok: true,
+      scanned,
+      menusProfiled: corpus.length,
+      evidence,
+      menus: corpus.map(c => ({ name: c.name, ...c.profile })),
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: errorMessage(error) || 'vanilla-ui-harvest failed' });
+  }
+});
+
 app.get("/api/agent/lua-static-selftest", (_req, res) => {
   try {
     res.json(runLuaStaticAnalysisSelftest());
@@ -16012,6 +16430,67 @@ app.get("/api/agent/extension-file", (req, res) => {
     return res.status(404).json({ error: "File not found." });
   } catch (error) {
     return res.status(500).json({ error: error.message || "extension-file read failed" });
+  }
+});
+
+app.get("/api/agent/extensions/file", (req, res) => {
+  try {
+    const queryError = validateClosedAgentQuery(req.query, ['path', 'workspaceId', 'clientId'], 'extensions.file.read');
+    if (queryError) return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    const rel = normalizeRelativeSubpath(typeof req.query.path === 'string' ? req.query.path : '');
+    const parts = rel ? rel.split('/') : [];
+    if (!rel || parts.length < 2) {
+      return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'extensions.file.read requires ?path=<extensionFolder>/<relativeFile>.' });
+    }
+    const resolved = resolveXsdConfig();
+    const extRoot = resolved.x4GamePath ? path.join(resolved.x4GamePath, 'extensions') : '';
+    if (!extRoot) {
+      return res.status(400).json({ ok: false, success: false, code: 'GAME_PATH_UNCONFIGURED', error: 'X4 game path not configured.' });
+    }
+    const abs = path.join(extRoot, ...parts);
+    if (isPathWithin(abs, extRoot) && fs.existsSync(abs)) {
+      if (!isSafeContainedRegularFile(abs, extRoot)) {
+        return res.status(403).json({ ok: false, success: false, code: 'EXTENSION_FILE_FORBIDDEN', error: 'Target is not a contained regular file inside extensions/.' });
+      }
+      const stat = fs.statSync(abs);
+      if (stat.size > AGENT_READ_SOURCE_MAX_BYTES) {
+        return res.status(413).json({ ok: false, success: false, code: 'EXTENSION_FILE_TOO_LARGE', error: `Extension file exceeds ${AGENT_READ_SOURCE_MAX_BYTES} bytes.` });
+      }
+      const content = fs.readFileSync(abs, 'utf8');
+      return res.json({
+        ok: true,
+        success: true,
+        path: rel,
+        name: path.basename(rel),
+        source: 'loose',
+        ...truncateAgentUtf8Content(content),
+      });
+    }
+    const folder = parts[0];
+    const entryRel = parts.slice(1).join('/').toLowerCase();
+    const extDir = path.join(extRoot, folder);
+    if (!isSafeContainedDirectory(extDir, extRoot)) {
+      return res.status(404).json({ ok: false, success: false, code: 'EXTENSION_FILE_NOT_FOUND', error: 'File not found.' });
+    }
+    for (const archive of findCatDatArchives([extDir], true).filter(a => path.dirname(a.catPath).toLowerCase() === extDir.toLowerCase())) {
+      let entries: ReturnType<typeof parseCat> = [];
+      try { entries = parseCat(archive.catPath); } catch { continue; }
+      const entry = entries.find(e => e.name.replace(/\\/g, '/').toLowerCase() === entryRel);
+      if (!entry || entry.size <= 0 || entry.size > AGENT_READ_SOURCE_MAX_BYTES) continue;
+      const content = readEntryText(archive.datPath, entry);
+      return res.json({
+        ok: true,
+        success: true,
+        path: rel,
+        name: path.basename(entry.name),
+        source: 'packed',
+        archive: path.basename(archive.catPath),
+        ...truncateAgentUtf8Content(content),
+      });
+    }
+    return res.status(404).json({ ok: false, success: false, code: 'EXTENSION_FILE_NOT_FOUND', error: 'File not found.' });
+  } catch (error) {
+    return res.status(500).json({ ok: false, success: false, error: errorMessage(error) || 'extension-file read failed' });
   }
 });
 
