@@ -4,6 +4,7 @@ import {
   buildRuntimeCoverage,
   buildRuntimeOwnershipIndex,
   deduplicateRuntimeIncidents,
+  detectRawEngineIdsInProse,
   evaluateExpectedRuntimeSteps,
   isAuthoredRuntimeDiagnostic,
   mapRuntimeCandidateToSource,
@@ -454,6 +455,69 @@ export function runRuntimeDebuggerSelftest(): RuntimeDebuggerSelftestResult {
     const blankCoverage = buildRuntimeCoverage([]);
     check('empty_candidate_set_has_honest_full_coverage', blankCoverage.candidates === 0 && blankCoverage.recognizedOrExplicitUnknownRatio === 1 && blankCoverage.dispositionSum === 0);
     check('dedup_samples_are_bounded', deduplicateRuntimeIncidents(analysis.candidates, 99).every(incident => incident.samples.length <= 4));
+
+    const proseVocab = {
+      factions: [
+        { id: 'civilian', name: 'Civilian' },
+        { id: 'loanshark', name: 'Loanshark' },
+        { id: 'scaleplate', name: 'Scale Plate Pact' },
+        { id: 'player', name: 'Player' },
+      ],
+      wares: [
+        { id: 'hullparts', name: 'Hull Parts' },
+        { id: 'water', name: 'Water' },
+        { id: 'credits', name: 'Credits' },
+      ],
+    };
+    const proseOwnership = buildRuntimeOwnershipIndex({
+      active: {
+        workspaceId: 'ws-prose',
+        displayName: 'ProseMod',
+        contentId: 'x4_prose_mod',
+        deployedFolder: 'x4_prose_mod',
+        manifest: {
+          'ui/aic_negsign.lua': [
+            'local function log(m) DebugError("[PROSE][NEG] " .. m) end',
+            'local function signer(who, sess)',
+            '  return who .. " cannot sign for " .. (sess.fname or sess.fac) .. " - only their representative can"',
+            'end',
+          ].join('\n'),
+          'md/pay.xml': [
+            '<mdscript name="Pay"><cues><cue name="Done"><actions>',
+            '  <write_to_logbook category="general" title="\'Paid\'" text="\'Brokered deal with \' + $f.id + \' for 200 \' + $w.id"/>',
+            '</actions></cue></cues></mdscript>',
+          ].join('\n'),
+        },
+      },
+      otherExtensions: [other],
+    });
+    const proseAnalysis = analyzeRuntimeDebugger({
+      logText: [
+        '[=ERROR=] 50.0 [PROSE][NEG] Viv Otani cannot sign for civilian - only their representative can; they keep no council.',
+        '51.0 Brokered deal with loanshark for 200 hullparts',
+        '[=ERROR=] 52.0 [PROSE][NEG] faction-name engine names: civilian=Civilian, loanshark=Loanshark',
+        '[=ERROR=] 53.0 [PROSE][NEG] Viv Otani cannot sign for Civilian - only their representative can.',
+        '[=ERROR=] 54.0 [PROSE][NEG] Scanning for civilian ships carrying water and 500 credits for the player.',
+      ].join('\n'),
+      ownership: proseOwnership,
+      referenceVocabulary: proseVocab,
+    });
+    const proseLeaks = proseAnalysis.candidates.filter(c => c.kind === 'raw_engine_id_in_player_text');
+    check(
+      'raw_engine_id_in_prose_detects_faction_and_ware_and_maps_lua_and_md_lines',
+      proseLeaks.length === 2
+        && proseLeaks[0].isEngineFailure === false
+        && proseLeaks[0].rawEngineIdLeaks?.[0]?.id === 'civilian'
+        && proseLeaks[0].attribution.disposition === 'confirmed_active'
+        && proseLeaks[0].mapping.file === 'ui/aic_negsign.lua'
+        && proseLeaks[0].mapping.line === 3
+        && proseLeaks[1].rawEngineIdLeaks?.some(l => l.id === 'loanshark' && l.domain === 'faction') === true
+        && proseLeaks[1].rawEngineIdLeaks?.some(l => l.id === 'hullparts' && l.domain === 'ware') === true
+        && proseLeaks[1].mapping.file === 'md/pay.xml'
+        && proseLeaks[1].mapping.line === 2
+        && detectRawEngineIdsInProse('Scanning for civilian ships carrying water and 500 credits for the player.', proseVocab).length === 0,
+      proseLeaks,
+    );
   } catch (error) {
     check('selftest_unexpected_exception', false, error instanceof Error ? error.message : String(error));
   }

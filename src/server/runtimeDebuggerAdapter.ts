@@ -32,6 +32,7 @@ import {
   type RuntimeManifestFile,
   type RuntimeOwnershipIndex,
   type RuntimeExtensionInput,
+  type RuntimeReferenceVocabulary,
   type RuntimeSourceMapping,
   type RuntimeExplanation,
 } from "../lib/runtimeDebugger";
@@ -65,7 +66,7 @@ import type { WorkspaceRecord } from "../lib/workspaceRegistry";
 
 export const RUNTIME_DEBUGGER_ADAPTER_SCHEMA_VERSION = 1 as const;
 export const RUNTIME_DEBUGGER_COVERAGE_TARGET = 0.99 as const;
-export const RUNTIME_DEBUGGER_ANALYZER_POLICY_VERSION = 7 as const;
+export const RUNTIME_DEBUGGER_ANALYZER_POLICY_VERSION = 8 as const;
 
 const INTERNAL_DEPLOY_KEY = "__forge_runtime_deploy_metadata__";
 const INTERNAL_EXPECTED_PREFIX = "__forge_runtime_expected__:";
@@ -126,6 +127,8 @@ export interface RuntimeDebuggerAdapterOptions {
   profileForLog?: (logPath: string) => string;
   /** Optional seam for tests or an existing installed-extension inventory owner. */
   installedInventory?: () => RuntimeInstalledExtensionInventory;
+  /** Optional canonical faction/ware vocabulary for player-text prose scanning (#58). */
+  referenceVocabulary?: () => RuntimeReferenceVocabulary | undefined;
   inventoryTtlMs?: number;
 }
 
@@ -138,6 +141,7 @@ export interface RuntimeDebuggerBriefInput {
   /** Tests may supply a bounded inventory directly. */
   otherExtensions?: RuntimeExtensionInput[];
   inventoryComplete?: boolean;
+  referenceVocabulary?: RuntimeReferenceVocabulary;
 }
 
 export type RuntimeDebuggerVerdictState =
@@ -655,7 +659,7 @@ function positiveExecutionEvidence(candidate: RuntimeAnalyzedCandidate, active: 
   if (candidate.attribution?.disposition !== "confirmed_active") return false;
   if (candidate.isEngineFailure) return false;
   const text = String(candidate.raw || "").toLowerCase();
-  if (candidate.kind !== "authored_diagnostic") return false;
+  if (candidate.kind !== "authored_diagnostic" && candidate.kind !== "raw_engine_id_in_player_text") return false;
   if (!/\[=error=\]/i.test(text)) return false;
   if (/(?:file\s*i\/?o|fileio|signature|failed to verify|loading extension|load(?:ed|ing)? file|could not open file)/i.test(text)) return false;
   const exactIds = [...(active.contentIds || []), ...(active.deployedFolders || [])]
@@ -720,7 +724,7 @@ function analyzeCandidates(
   inventoryComplete: boolean,
 ): RuntimeAnalyzedCandidate[] {
   return parsed.map(candidate => {
-    const normalizedCandidate: RuntimeCandidateIncident = isGovernedAuthoredMarker(candidate)
+    const normalizedCandidate: RuntimeCandidateIncident = candidate.kind !== "raw_engine_id_in_player_text" && isGovernedAuthoredMarker(candidate)
       ? { ...candidate, kind: "authored_diagnostic", recognized: true, explicitUnknown: false, isEngineFailure: false }
       : candidate;
     const initialAttribution = attributeRuntimeCandidate(ownership, normalizedCandidate);
@@ -865,6 +869,7 @@ function runtimeIncidentPriority(incident: Pick<ReconstructedIncident, "attribut
   if (incident.isEngineFailure && incident.attribution.disposition === "ambiguous") return 350;
   if (incident.isEngineFailure && incident.attribution.disposition === "unknown") return 300;
   if (incident.isEngineFailure && incident.attribution.disposition === "excluded_other_mod") return 50;
+  if (incident.classification === "raw_engine_id_in_player_text" && incident.attribution.disposition === "confirmed_active") return 250;
   if (incident.classification === "authored_diagnostic" || incident.severity === "info") return 200;
   if (incident.attribution.disposition === "confirmed_active") return 150;
   return 100;
@@ -1218,6 +1223,7 @@ export class RuntimeDebuggerAdapter {
   private readonly logCandidates: () => readonly string[];
   private readonly profileForLog: (logPath: string) => string;
   private readonly installedInventory: () => RuntimeInstalledExtensionInventory;
+  private readonly referenceVocabulary?: () => RuntimeReferenceVocabulary | undefined;
   private readonly inventoryTtlMs: number;
   private inventoryCache?: InventoryCache;
 
@@ -1231,6 +1237,7 @@ export class RuntimeDebuggerAdapter {
     this.logCandidates = options.logCandidates || (() => []);
     this.profileForLog = options.profileForLog || deriveProfileId;
     this.installedInventory = options.installedInventory || defaultInventory;
+    this.referenceVocabulary = options.referenceVocabulary;
     this.inventoryTtlMs = Math.max(1_000, Math.floor(options.inventoryTtlMs ?? DEFAULT_INVENTORY_TTL_MS));
   }
 
@@ -1548,6 +1555,8 @@ export class RuntimeDebuggerAdapter {
       }
     }
     const keyCache = new Map<string, string>();
+    const resolvedVocabulary = input.referenceVocabulary
+      ?? (() => { try { return this.referenceVocabulary?.(); } catch { return undefined; } })();
     let analyzedBatch: RuntimeAnalyzedCandidate[] = [];
     let ingestedLines: RuntimeDebugLine[] = [];
     let ingestFailure: RuntimeDebugSessionFailure | undefined;
@@ -1567,7 +1576,7 @@ export class RuntimeDebuggerAdapter {
         // evidence is projected elsewhere, and truncated rows cannot extend an exact traceback.
         const isolatedLines = new Set(lines.filter(line => line.truncated).map(line => line.lineNumber));
         const parsed = parseRuntimeCandidateBatch(lifecycle.map(({ line, event }) => event ? '' : line.text).join("\n"),
-          { startLine: lines[0].lineNumber }, isolatedLines);
+          { startLine: lines[0].lineNumber, ...(resolvedVocabulary ? { referenceVocabulary: resolvedVocabulary } : {}) }, isolatedLines);
         const open = canDefer && lines.find(line => line.lineNumber === parsed.openUiFaultStartLine);
         const last = lines[lines.length - 1];
         const deferFromLine = open && last.lineNumber - open.lineNumber < RUNTIME_DEBUG_MAX_PENDING_NORMALIZATION_LINES

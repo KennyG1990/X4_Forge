@@ -11,6 +11,7 @@
  */
 
 import { isX4FileSignatureNotice } from './logTelemetry';
+import { detectRawEngineIdsInProse, type RuntimeReferenceVocabulary } from './runtimeDebugger';
 
 export type LuaRuntimeSeverity = 'error' | 'warning' | 'info';
 
@@ -37,7 +38,7 @@ export interface LuaRuntimeFrame {
 
 export interface LuaRuntimeIssue {
   severity: LuaRuntimeSeverity;
-  code: 'lua.runtime_error' | 'lua.restricted_call' | 'lua.signature_warning' | 'lua.stack_frame';
+  code: 'lua.runtime_error' | 'lua.restricted_call' | 'lua.signature_warning' | 'lua.stack_frame' | 'lua.raw_engine_id_in_player_text';
   lineNo: number;
   raw: string;
   message: string;
@@ -258,7 +259,53 @@ function runtimeIssueFromLine(raw: string, lineNo: number, symbols: LuaRuntimeSy
   return null;
 }
 
-export function analyzeLuaRuntimeLog(logText: string, files: LuaRuntimeFile[] = []): LuaRuntimeLogResult {
+function matchRawEngineIdLuaSource(
+  raw: string,
+  leaks: ReturnType<typeof detectRawEngineIdsInProse>,
+  files: LuaRuntimeFile[],
+): { rel: string; line: number } | undefined {
+  if (!files.length || !leaks.length) return undefined;
+  const compact = raw.replace(/^\s*\[[^\]]+\]\s*/, '').replace(/^\s*\d+(?:\.\d+)?\s+/, '').trim();
+  const body = compact.replace(/^(?:\s*\[[A-Za-z][A-Za-z0-9_-]{2,}\]\s*)+/, '').trim();
+  const anchors: string[][] = [];
+  for (const leak of leaks) {
+    const left = (body.slice(0, leak.offset).match(/[A-Za-z][A-Za-z0-9_-]{1,}/g) || []).map(w => w.toLowerCase());
+    const right = (body.slice(leak.offset + leak.id.length).match(/[A-Za-z][A-Za-z0-9_-]{1,}/g) || []).map(w => w.toLowerCase());
+    for (let len = Math.min(4, left.length); len >= 2; len--) anchors.push(left.slice(-len));
+    for (let len = Math.min(4, right.length); len >= 2; len--) anchors.push(right.slice(0, len));
+  }
+  if (!anchors.length) return undefined;
+  let best: { rel: string; line: number; score: number } | undefined;
+  for (const file of files) {
+    if (!file?.rel) continue;
+    const sourceLines = (file.text || '').split(/\r?\n/);
+    for (let idx = 0; idx < sourceLines.length; idx++) {
+      const srcLine = sourceLines[idx];
+      if (/^\s*--/.test(srcLine) || !srcLine.includes('..')) continue;
+      const tokens = (srcLine.match(/[A-Za-z][A-Za-z0-9_-]{1,}/g) || []).map(w => w.toLowerCase());
+      let score = 0;
+      for (const seq of anchors) {
+        if (tokens.length < seq.length) continue;
+        for (let pos = 0; pos <= tokens.length - seq.length; pos++) {
+          if (seq.every((w, off) => tokens[pos + off] === w)) {
+            score = Math.max(score, seq.length);
+            break;
+          }
+        }
+      }
+      if (score >= 2 && (!best || score > best.score)) {
+        best = { rel: file.rel, line: idx + 1, score };
+      }
+    }
+  }
+  return best ? { rel: best.rel, line: best.line } : undefined;
+}
+
+export function analyzeLuaRuntimeLog(
+  logText: string,
+  files: LuaRuntimeFile[] = [],
+  referenceVocabulary?: RuntimeReferenceVocabulary,
+): LuaRuntimeLogResult {
   const text = typeof logText === 'string' ? logText : '';
   const lines = text.split(/\r?\n/);
   const symbols = extractLuaRuntimeSymbols(files);
@@ -274,7 +321,27 @@ export function analyzeLuaRuntimeLog(logText: string, files: LuaRuntimeFile[] = 
     if (frame) frames.push(frame);
 
     const issue = runtimeIssueFromLine(raw, i + 1, symbols, knownFiles, lines, i);
-    if (issue) issues.push(issue);
+    if (issue) {
+      issues.push(issue);
+      continue;
+    }
+    if (referenceVocabulary) {
+      const leaks = detectRawEngineIdsInProse(raw, referenceVocabulary);
+      if (leaks.length > 0) {
+        const matchedSource = matchRawEngineIdLuaSource(raw, leaks, files);
+        const summary = leaks.map(l => `${l.domain} "${l.id}"${l.displayName ? ` (${l.displayName})` : ''}`).join(', ');
+        issues.push({
+          severity: 'warning',
+          code: 'lua.raw_engine_id_in_player_text',
+          lineNo: i + 1,
+          raw,
+          message: `Raw canonical engine ID in prose (${summary}): ${raw.trim()}`,
+          ...(matchedSource ? { file: matchedSource.rel, line: matchedSource.line, matchedRel: matchedSource.rel } : {}),
+          eventNames: correlatedEventNames(raw, symbols),
+          frames: [],
+        });
+      }
+    }
   }
 
   const matched = new Set<string>();
@@ -352,6 +419,37 @@ export function runLuaRuntimeLogSelftest() {
   ok('correlates_events_in_log_line', runtime?.eventNames.includes('ai_influence.chat') === true && runtime.eventNames.includes('ai_influence.chat.response') === true, runtime?.eventNames.join(','));
   ok('empty_log_safe', analyzeLuaRuntimeLog('', files).totals.issues === 0);
   ok('no_false_suffix_match', analyzeLuaRuntimeLog('ui/ai_influence_chat.lua.bak:42: broken', files).totals.matchedFiles === 0);
+  const leakFiles: LuaRuntimeFile[] = [
+    ...files,
+    {
+      rel: 'ui/aic_negsign.lua',
+      text: [
+        'local M = {}',
+        'function M.SignerLine(who, sess)',
+        '  return who .. " cannot sign for " .. (sess.fname or sess.fac) .. " - only their representative can"',
+        'end',
+        'return M',
+      ].join('\n'),
+      source: 'workspace',
+    },
+  ];
+  const vocab = {
+    factions: [{ id: 'civilian', name: 'Civilian' }, { id: 'loanshark', name: 'Loanshark' }],
+    wares: [{ id: 'hullparts', name: 'Hull Parts' }],
+  };
+  const proseLog = [
+    '[=ERROR=] 42.0 [AICHAT][NEG] Viv Otani cannot sign for civilian - only their representative can',
+    '[=ERROR=] 43.0 [AICHAT][UIX] faction-name engine names: civilian=Civilian, loanshark=Loanshark',
+    '[=ERROR=] 44.0 [AICHAT][NEG] Viv Otani cannot sign for Civilian - only their representative can',
+  ].join('\n');
+  const proseResult = analyzeLuaRuntimeLog(proseLog, leakFiles, vocab);
+  const proseIssue = proseResult.issues.find(i => i.code === 'lua.raw_engine_id_in_player_text');
+  ok('detects_raw_engine_id_in_prose_and_maps_lua_line',
+    proseResult.issues.length === 1
+    && proseIssue?.severity === 'warning'
+    && proseIssue.matchedRel === 'ui/aic_negsign.lua'
+    && proseIssue.line === 3,
+    JSON.stringify(proseResult.issues));
 
   const passed = checks.filter(check => check.pass).length;
   return { allPassed: passed === checks.length, pass: passed === checks.length, passed, total: checks.length, checks };

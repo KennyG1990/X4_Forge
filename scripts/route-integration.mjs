@@ -5976,6 +5976,40 @@ async function main() {
     sameCapabilityIds(capabilityOutputReport.map(row => row.id), expectedCapabilityIds) && capabilityResponses.size === expectedCapabilityIds.length && capabilityOutputReport.every(row => row.statusAccepted === true && row.errors.length === 0),
     JSON.stringify(capabilityOutputReport));
 
+  // --- #58 RAW ENGINE IDS IN PLAYER-VISIBLE TEXT (STATIC + RUNTIME) ---
+  {
+    const rawIdValidate = await req('POST', '/api/agent/project/validate', SESSION_TOKEN, {
+      detail: 'full',
+      project: {
+        id: 'rawid_route_fixture',
+        name: 'Raw ID Route Fixture',
+        files: [
+          { path: 'content.xml', content: '<content id="rawid_route_fixture" name="Raw ID Route Fixture" version="100" date="2026-11-23"/>' },
+          { path: 'ui/negsign.lua', content: 'local function f(who, sess) return who .. " cannot sign for " .. (sess.fname or sess.fac) end\nreturn f\n' },
+          { path: 'md/main.xml', content: '<mdscript name="Main"><cues><cue name="C"><conditions><event_game_loaded/></conditions><actions><write_to_logbook category="general" title="\'Paid\'" text="\'Paid by \' + $ship.owner.id"/></actions></cue></cues></mdscript>' },
+        ],
+      },
+    });
+    const rawIdFlat = Array.isArray(rawIdValidate.json?.flat) ? rawIdValidate.json.flat : [];
+    ok('project_validate_flags_raw_engine_id_in_lua_and_md_player_text',
+      rawIdValidate.status === 200
+        && rawIdFlat.some(d => d.code === 'lua.raw_engine_id_in_player_text' && d.severity === 'warning' && d.filePath === 'ui/negsign.lua')
+        && rawIdFlat.some(d => d.code === 'md_pitfall.raw_engine_id_in_player_text' && d.severity === 'warning' && d.filePath === 'md/main.xml'),
+      JSON.stringify({ status: rawIdValidate.status, codes: rawIdFlat.map(d => d.code) }));
+
+    const rawIdDiagnose = await req('POST', '/api/agent/log-diagnose', SESSION_TOKEN, {
+      modId: 'x4_ai_influence',
+      tail: '[=ERROR=] 42.0 [AICHAT][NEG] Viv Otani cannot sign for routefixture while delivering 200 routeware\n',
+    });
+    const rawIdLeaks = Array.isArray(rawIdDiagnose.json?.rawEngineIdLeaks) ? rawIdDiagnose.json.rawEngineIdLeaks : [];
+    ok('log_diagnose_flags_raw_canonical_engine_ids_in_prose',
+      rawIdDiagnose.status === 200
+        && rawIdDiagnose.json?.diagnosis?.hypotheses?.some(h => h.code === 'raw_engine_id_in_player_text') === true
+        && rawIdLeaks.some(l => l.id === 'routefixture' && l.domain === 'faction')
+        && rawIdLeaks.some(l => l.id === 'routeware' && l.domain === 'ware'),
+      JSON.stringify({ status: rawIdDiagnose.status, hypotheses: rawIdDiagnose.json?.diagnosis?.hypotheses, leaks: rawIdLeaks }));
+  }
+
   // --- PRODUCTION SURFACE ---------------------------------------------------------------------
   // The API-honesty guard shipped GREEN on every dev assertion and was BROKEN in production: the
   // SPA catch-all `app.get("*")` is a ROUTE layer that matches everything, and it only exists in

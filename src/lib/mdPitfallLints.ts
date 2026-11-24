@@ -53,6 +53,7 @@ export interface MdPitfallFinding {
     | 'md_pitfall.numeric_time_value' | 'md_pitfall.no_event_condition' | 'md_pitfall.illegal_instantiate'
     | 'md_pitfall.variable_read_after_removal' | 'md_pitfall.variable_read_when_absent'
     | 'md_pitfall.variable_read_before_initialization'
+    | 'md_pitfall.raw_engine_id_in_player_text'
     | MdExpressionFinding['code'];
   severity: 'error' | 'warning';
   cue?: string;
@@ -1709,7 +1710,74 @@ export function lintMdPitfalls(xml: string, opts: { propertyUnion?: Set<string>;
     }
   }
 
+  // ---- 5. raw engine IDs (.id / owner.id / macro.id / faction.id) in player-visible text ----
+  out.push(...lintMdRawEngineIdInPlayerText(element, opts.filePath));
+
   return out;
+}
+
+const MD_RAW_ID_EXPR_RE = /\.(?:owner\.|trueowner\.|macro\.|faction\.)?id\b(?!code)/;
+const MD_PLAYER_TEXT_SINKS = new Set(['write_to_logbook', 'show_notification', 'show_help', 'write_incoming_message']);
+const MD_PLAYER_TEXT_ATTRS = ['text', 'title', 'custom', 'source'] as const;
+
+function maskMdQuotedLiterals(expr: string): string {
+  return expr.replace(/'(?:\\.|[^'])*'|"(?:\\.|[^"])*"/g, match => ' '.repeat(match.length));
+}
+
+function lintMdRawEngineIdInPlayerText(root: Element, filePath?: string): MdPitfallFinding[] {
+  const findings: MdPitfallFinding[] = [];
+  const assignments = new Map<string, string[]>();
+  const allElements = Array.from(root.getElementsByTagName('*'));
+  for (const el of allElements) {
+    if (el.namespaceURI || el.tagName !== 'set_value') continue;
+    const varName = el.getAttribute('name')?.trim() || '';
+    if (!/^\$[A-Za-z_]\w*$/.test(varName)) continue;
+    const exact = el.getAttribute('exact') || '';
+    const list = assignments.get(varName) || [];
+    list.push(exact);
+    assignments.set(varName, list);
+  }
+  const idOnlyVars = new Set<string>();
+  for (const [varName, exprs] of assignments) {
+    if (exprs.length > 0 && exprs.every(expr => {
+      const unquoted = maskMdQuotedLiterals(expr);
+      return MD_RAW_ID_EXPR_RE.test(unquoted) && !/\.(?:knownname|name)\b/.test(unquoted);
+    })) {
+      idOnlyVars.add(varName);
+    }
+  }
+
+  for (const el of allElements) {
+    if (el.namespaceURI || !MD_PLAYER_TEXT_SINKS.has(el.tagName)) continue;
+    for (const attrName of MD_PLAYER_TEXT_ATTRS) {
+      const attr = el.getAttributeNode(attrName);
+      if (!attr || !attr.value) continue;
+      const unquoted = maskMdQuotedLiterals(attr.value);
+      const directMatch = MD_RAW_ID_EXPR_RE.exec(unquoted);
+      let leakedToken = directMatch ? directMatch[0] : undefined;
+      if (!leakedToken && idOnlyVars.size > 0) {
+        for (const varName of idOnlyVars) {
+          const escaped = varName.replace(/\$/g, '\\$');
+          if (new RegExp(`${escaped}(?![\\w.])`).test(unquoted)) {
+            leakedToken = varName;
+            break;
+          }
+        }
+      }
+      if (!leakedToken) continue;
+      findings.push({
+        code: 'md_pitfall.raw_engine_id_in_player_text',
+        severity: 'warning',
+        filePath,
+        cue: enclosingNamedCue(el),
+        line: attr.lineNumber ?? el.lineNumber,
+        column: attr.columnNumber ?? el.columnNumber,
+        sourceRef: `${el.tagName}/@${attrName}`,
+        detail: `<${el.tagName}> ${attrName}="${attr.value.slice(0, 120)}" interpolates raw engine ID "${leakedToken}" into player-visible text. Use .knownname or .name (or .idcode for ship hull codes) instead of exposing internal engine IDs.${filePath ? ` (${filePath})` : ''}`,
+      });
+    }
+  }
+  return findings;
 }
 
 /* ------------------------------------------------------------------ *
@@ -2506,6 +2574,29 @@ export function runMdPitfallSelftest(): {
     !lint(realProp).some(f => f.code === 'md_pitfall.param3_table_barekey'), lint(realProp));
   ok('param3 lint skipped without a property union (never guesses)',
     lintMdPitfalls(bareKey, {}).every(f => f.code !== 'md_pitfall.param3_table_barekey'));
+
+  // --- 5. raw_engine_id_in_player_text (#58) ---
+  const rawMdIdXml = `<mdscript name="RawIdProbe"><cues><cue name="Notify">
+    <actions>
+      <set_value name="$who" exact="$ship.owner.id"/>
+      <write_to_logbook category="general" title="'Paid'" text="'Paid by ' + $ship.owner.id + ' today'"/>
+      <show_notification text="'Lost to ' + faction.{$f}.id"/>
+      <write_incoming_message title="'Alert'" text="'Attacked by ' + $who" source="'Fleet'"/>
+      <show_help custom="'Macro: ' + $ship.macro.id"/>
+    </actions></cue></cues></mdscript>`;
+  const rawMdFindings = lintMdPitfalls(rawMdIdXml, { filePath: 'md/rawid.xml' })
+    .filter(f => f.code === 'md_pitfall.raw_engine_id_in_player_text');
+  ok('flags raw .id and single-purpose id $vars in MD logbook/notification/help/incoming_message (#58)',
+    rawMdFindings.length === 4 && rawMdFindings.every(f => f.severity === 'warning' && f.cue === 'Notify'), rawMdFindings);
+  const cleanMdIdXml = `<mdscript name="RawIdClean"><cues><cue name="Notify">
+    <actions>
+      <set_value name="$label" exact="$ship.owner.id"/>
+      <set_value name="$label" exact="$ship.owner.knownname"/>
+      <write_to_logbook category="general" title="'Paid'" text="'Paid by ' + $ship.owner.knownname + ' (' + $ship.idcode + ') — see object.id docs'"/>
+      <show_notification text="'Saved ' + $label"/>
+    </actions></cue></cues></mdscript>`;
+  ok('knownname, idcode, literal string .id text, and mixed-assignment $vars do not false-positive (#58)',
+    !lintMdPitfalls(cleanMdIdXml, { filePath: 'md/cleanid.xml' }).some(f => f.code === 'md_pitfall.raw_engine_id_in_player_text'));
 
   // --- degradation ---
   ok('non-mdscript degrades to []', lint('<aiscript name="x"/>').length === 0);

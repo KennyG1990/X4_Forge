@@ -763,6 +763,40 @@ export function runRuntimeDebuggerAdapterSelftest(): {
     const adapterReasons = adapterBoundaries.ok ? adapterBoundaries.snapshot.segments.map(segment => segment.reason) : [];
     check("adapter_profile_and_path_changes_remain_bounded", adapterReasons.includes("profile-change") && adapterReasons.includes("selected-path-change") && adapterReasons.includes("truncation"), adapterReasons);
 
+    const proseAdapter = new RuntimeDebuggerAdapter({
+      root: path.join(root, "prose-store"),
+      preferredLogPath: selectedPath,
+      profileForLog: () => "profile-prose",
+      installedInventory: () => ({ complete: true, scannedAt: new Date(now).toISOString(), extensions: [otherExtensionFixture()] }),
+      referenceVocabulary: () => ({
+        factions: [{ id: "civilian", name: "Civilian" }, { id: "loanshark", name: "Loanshark" }],
+        wares: [{ id: "hullparts", name: "Hull Parts" }],
+      }),
+      now: () => now,
+    });
+    const proseManifest = {
+      ...manifestFixture(),
+      "ui/aic_negsign.lua": "local function f(who, sess)\n  return who .. \" cannot sign for \" .. (sess.fname or sess.fac) .. \" - only their representative can\"\nend\n",
+    };
+    const proseDeploy = { ...DEPLOY_INFO, workspaceId: "ws_runtime_prose" };
+    const proseRec = { ...record, workspaceId: "ws_runtime_prose" };
+    proseAdapter.recordSuccessfulDeploy("ws_runtime_prose", proseDeploy);
+    appendLine(selectedPath, `${authoredMarkerLine("59.0")}\n[=ERROR=] 60.0 [AICHAT][NEG] Viv Otani cannot sign for civilian - only their representative can`);
+    const proseBrief = proseAdapter.buildBrief({ record: proseRec, manifest: proseManifest, deployInfo: proseDeploy, expectedSteps: [] });
+    const proseIncident = proseBrief.payload.incidents.find(i => i.classification === "raw_engine_id_in_player_text");
+    check(
+      "adapter_surfaces_raw_engine_id_in_player_text_as_warning_with_mapped_source_line",
+      Boolean(proseIncident)
+        && proseIncident?.severity === "warning"
+        && proseIncident?.isEngineFailure === false
+        && proseIncident?.attribution.disposition === "confirmed_active"
+        && proseIncident?.mapping.file === "ui/aic_negsign.lua"
+        && proseIncident?.mapping.line === 2
+        && proseBrief.payload.verdict.state === "loaded_clean"
+        && proseBrief.status === "clean",
+      { status: proseBrief.status, verdict: proseBrief.payload.verdict, incident: proseIncident },
+    );
+
     runBoundedStoreChecks(root, checks);
   } catch (error) {
     check("adapter_selftest_execution", false, error instanceof Error ? error.stack || error.message : String(error));

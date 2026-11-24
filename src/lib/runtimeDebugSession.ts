@@ -615,6 +615,7 @@ function incidentRetentionPriority(incident: Pick<RuntimeDebugIncident, "attribu
   if (engineFailure && disposition === "ambiguous") return 350;
   if (engineFailure && disposition === "unknown") return 300;
   if (engineFailure && disposition === "excluded_other_mod") return 50;
+  if (incident.classification === "raw_engine_id_in_player_text" && disposition === "confirmed_active") return 250;
   if (incident.classification === "authored_diagnostic" || incident.severity === "info") return 200;
   if (disposition === "confirmed_active") return 150;
   return 100;

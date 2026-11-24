@@ -235,7 +235,14 @@ import { RuntimeDebuggerAdapter, expectedInputFromLegacy, runtimeDeployLogBounda
 import { readGameLogLoadEvidence, type GameLogDeployBoundary } from "./src/server/gameLogLoadEvidence";
 import { installedLuaBootCoverage } from "./src/server/installedLuaBootCoverage";
 import { installedRuntimeContentId } from "./src/server/installedExtensionRootFiles";
-import { isAuthoredRuntimeDiagnostic, parseRuntimeCandidates, taggedLuaFaultFolder, type RuntimeCandidateIncident } from "./src/lib/runtimeDebugger";
+import {
+  analyzeRuntimeDebugger,
+  detectRawEngineIdsInProse,
+  isAuthoredRuntimeDiagnostic,
+  parseRuntimeCandidates,
+  taggedLuaFaultFolder,
+  type RuntimeCandidateIncident,
+} from "./src/lib/runtimeDebugger";
 import { runRuntimeDebuggerAdapterSelftest } from "./src/server/runtimeDebuggerAdapter.selftest";
 import {
   createAgentKeyStore,
@@ -2311,11 +2318,12 @@ function analyzeGameLog(tail: string, modIds: string[], grouped?: {
 }
 
 interface LogHypothesis {
-  code: 'djfhe_require' | 'truncated_or_malformed' | 'signal_library' | 'duplicate_addon' | 'code_never_ran';
+  code: 'djfhe_require' | 'truncated_or_malformed' | 'signal_library' | 'duplicate_addon' | 'code_never_ran' | 'raw_engine_id_in_player_text';
   confidence: 'high' | 'medium';
   evidence: string;
   explanation: string;
   suggestion: string;
+  sourceRef?: { file?: string; line?: number };
 }
 
 type DebugTimelineKind = "deploy" | "file_load" | "marker" | "cue" | "issue" | "runtime_fault";
@@ -2380,6 +2388,25 @@ function deriveLogDiagnosis(tail: string, modIds: string[], activeIssues: { seve
     hyp.push({ code: 'code_never_ran', confidence: 'medium', evidence: 'mod files appear in the log, but no mod-authored marker line does',
       explanation: 'X4 read the mod files but no mod code (script/Lua marker) ran — a trigger likely never fired.',
       suggestion: 'If you reloaded with refreshmd, a cue gated on <event_game_loaded> will NOT fire — use a conditionless cue, or load a save. Confirm your [MARKER] DebugError lines appear once it runs.' });
+  }
+  const corpus = getCanonicalReferenceCorpus();
+  if (corpus && (corpus.factions.length > 0 || corpus.wares.length > 0)) {
+    const vocab = { factions: corpus.factions, wares: corpus.wares };
+    for (let i = 0; i < lines.length; i++) {
+      const leaks = detectRawEngineIdsInProse(lines[i], vocab);
+      if (!leaks.length) continue;
+      const first = leaks[0];
+      const ref = mapLogLineToSourceRef(lines[i]);
+      hyp.push({
+        code: 'raw_engine_id_in_player_text',
+        confidence: 'high',
+        evidence: lines[i].trim().slice(0, 200),
+        explanation: `Raw canonical ${first.domain} ID "${first.id}"${first.displayName ? ` (${first.displayName})` : ''} appears in prose.`,
+        suggestion: 'Resolve localized display names via GetFactionData(id, "name") / GetWareData(id, "name") in Lua or .knownname / .name in MD instead of concatenating raw engine IDs.',
+        ...(ref?.file ? { sourceRef: { file: ref.file, line: ref.line } } : {}),
+      });
+      break;
+    }
   }
   return { filesLoaded, markersSeen, hypotheses: hyp };
 }
@@ -3592,6 +3619,10 @@ const runtimeDebuggerAdapter = new RuntimeDebuggerAdapter({
   ].filter((value): value is string => typeof value === "string" && value.trim().length > 0),
   preferredLogPath: runtimeDebuggerRoots.x4LogPath,
   logCandidates: findDebugLogCandidates,
+  referenceVocabulary: () => {
+    const corpus = getCanonicalReferenceCorpus();
+    return corpus ? { factions: corpus.factions, wares: corpus.wares } : undefined;
+  },
 });
 console.log(`[state] workspace registry ready: ${workspaceRegistry.list().length} record(s), default ${workspaceRegistry.defaultWorkspaceId}`);
 
@@ -8228,7 +8259,58 @@ app.post("/api/agent/log-diagnose", (req, res) => {
     const modIds = Array.from(new Set([toSafeModId(rawMod), rawMod.toLowerCase().trim(), toSafeModId(rawMod).replace(/_mod$/, "")].filter(s => s && s.length >= 3)));
     const { issues } = analyzeGameLog(tail, modIds);
     const activeIssues = issues.filter(i => i.matchesActiveMod);
-    return res.json({ modIds, diagnosis: deriveLogDiagnosis(tail, modIds, activeIssues) });
+    const diagnosis = deriveLogDiagnosis(tail, modIds, activeIssues);
+    const corpus = getCanonicalReferenceCorpus();
+    let rawEngineIdLeaks: Array<{
+      logLine: number;
+      id: string;
+      domain: 'faction' | 'ware';
+      displayName?: string;
+      phrase: string;
+      file?: string;
+      line?: number;
+      disposition?: string;
+    }> = [];
+    if (corpus && (corpus.factions.length > 0 || corpus.wares.length > 0)) {
+      const matchedRecord = workspaceRegistry.list().map(s => {
+        const found = workspaceRegistry.lookup(s.workspaceId);
+        return found.ok ? found.record : undefined;
+      }).find(rec => {
+        if (!rec) return false;
+        const ws = activeBuildWorkspace(rec.workspace);
+        const candidates = [effectiveModId(ws), toSafeModId(ws.name), ws.contentId || ''].map(v => v.toLowerCase());
+        return modIds.some(m => candidates.includes(m));
+      });
+      const manifest = matchedRecord ? buildWorkspaceFileManifest(sanitizeWorkspace(matchedRecord.workspace)).files : {};
+      const analyzed = analyzeRuntimeDebugger({
+        logText: String(tail || ''),
+        active: {
+          workspaceId: matchedRecord?.workspaceId || modIds[0] || rawMod,
+          contentId: modIds[0] || rawMod,
+          deployedFolder: modIds[0] || rawMod,
+          manifest,
+        },
+        referenceVocabulary: { factions: corpus.factions, wares: corpus.wares },
+      });
+      rawEngineIdLeaks = analyzed.candidates
+        .filter(c => c.kind === 'raw_engine_id_in_player_text')
+        .flatMap(c => (c.rawEngineIdLeaks || []).map(leak => ({
+          logLine: c.startLine,
+          id: leak.id,
+          domain: leak.domain,
+          ...(leak.displayName ? { displayName: leak.displayName } : {}),
+          phrase: leak.phrase,
+          ...(c.mapping.file ? { file: c.mapping.file } : {}),
+          ...(c.mapping.line ? { line: c.mapping.line } : {}),
+          disposition: c.attribution.disposition,
+        })));
+      const firstMapped = rawEngineIdLeaks.find(item => item.file && item.line);
+      const hyp = diagnosis.hypotheses.find(h => h.code === 'raw_engine_id_in_player_text');
+      if (hyp && firstMapped && !hyp.sourceRef) {
+        hyp.sourceRef = { file: firstMapped.file, line: firstMapped.line };
+      }
+    }
+    return res.json({ modIds, diagnosis, ...(rawEngineIdLeaks.length ? { rawEngineIdLeaks } : {}) });
   } catch (error) {
     return res.status(500).json({ error: error?.message || "log-diagnose failed" });
   }

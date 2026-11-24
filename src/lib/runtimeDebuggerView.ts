@@ -254,6 +254,7 @@ function isExplicitEngineFailure(incident: RuntimeDebuggerIncident): boolean {
   if (incident.isEngineFailure === false) return false;
   const classification = optionalText(incident.classification, RUNTIME_DEBUGGER_VIEW_LIMITS.maxKeyChars)?.toLowerCase();
   const nonFailureClassification = classification === 'authored_diagnostic'
+    || classification === 'raw_engine_id_in_player_text'
     || classification === 'file_io'
     || classification === 'file_load'
     || classification === 'load';

@@ -30,7 +30,26 @@ export type RuntimeCandidateKind =
   | 'ui_reload_fault'
   | 'file_io'
   | 'authored_diagnostic'
+  | 'raw_engine_id_in_player_text'
   | 'unknown';
+
+export interface RuntimeReferenceEntry {
+  id: string;
+  name?: string;
+}
+
+export interface RuntimeReferenceVocabulary {
+  factions?: Iterable<string | RuntimeReferenceEntry>;
+  wares?: Iterable<string | RuntimeReferenceEntry>;
+}
+
+export interface RuntimeRawEngineIdLeak {
+  id: string;
+  domain: 'faction' | 'ware';
+  displayName?: string;
+  phrase: string;
+  offset: number;
+}
 
 export interface RuntimeManifestFile {
   path: string;
@@ -202,6 +221,7 @@ export interface RuntimeCandidateIncident {
   engineSignature?: string;
   /** Positioned tagged Lua faults require exact installed-folder attribution. */
   physicalLuaSource?: true;
+  rawEngineIdLeaks?: RuntimeRawEngineIdLeak[];
   source: RuntimeCandidateSource;
   evidence: RuntimeCandidateEvidence[];
 }
@@ -328,6 +348,7 @@ export interface RuntimeDebuggerAnalysisInput {
   otherExtensions?: RuntimeExtensionInput[];
   expectedSteps?: RuntimeExpectedStep[];
   currentSegment?: RuntimeCurrentSegmentEvidence;
+  referenceVocabulary?: RuntimeReferenceVocabulary;
   sampleLimit?: number;
 }
 
@@ -876,9 +897,118 @@ function hasSourceLikeContext(text: string): boolean {
   return Boolean(extractExtensionPath(text) || extractFileReferences(text).length || /\b(?:md\s*script|mdscript|aiscript|ai[\s_-]*script|stack traceback|module|require)\b/i.test(text) || FILE_IO_RE.test(text) || isAuthoredDiagnostic(text));
 }
 
-function isCandidateStart(line: RuntimeLogLine): boolean {
+interface CompiledRuntimeVocabulary {
+  factions: Map<string, string | undefined>;
+  wares: Map<string, string | undefined>;
+}
+
+const compiledVocabCache = new WeakMap<object, CompiledRuntimeVocabulary>();
+
+const SKIP_PLAIN_ENGLISH_IDS = new Set([
+  'player', 'credits', 'crew', 'water', 'ice', 'ore', 'meat', 'wheat',
+  'silicon', 'helium', 'hydrogen', 'methane', 'graphene', 'spices',
+  'stimulants', 'plankton', 'condensate',
+]);
+
+const CONTEXTUAL_FACTION_IDS = new Set([
+  'alliance', 'civilian', 'court', 'criminal', 'ministry', 'outlaw',
+  'pioneers', 'scavenger', 'smuggler', 'split', 'trinity', 'visitor',
+]);
+
+const FACTION_SLOT_PREFIX_RE = /\b(?:sign\s+for|for|with|of|by|to|from|against|between|versus|vs\.?|envoy\s+of|representative\s+of|leadership\s+of|ships?\s+of|stations?\s+of|territory\s+of|paid\s+to|owed\s+by|lent\s+by)\s+$/i;
+const ATTRIBUTIVE_NOUN_SUFFIX_RE = /^\s+(?:ships?|vessels?|stations?|traffic|pilots?|crews?|targets?|intent|activity|records?|fleets?|docks?|population|courts?|sectors?|space|laws?|rules?)\b/i;
+const PROSE_NEIGHBOR_LEFT_RE = /(?:[A-Za-z]{2,}|\d+)\s+$/;
+const PROSE_NEIGHBOR_RIGHT_RE = /^\s+[A-Za-z]{2,}/;
+
+function compileRuntimeVocabulary(vocabulary?: RuntimeReferenceVocabulary): CompiledRuntimeVocabulary | null {
+  if (!vocabulary || typeof vocabulary !== 'object') return null;
+  const cached = compiledVocabCache.get(vocabulary as object);
+  if (cached) return cached;
+  const factions = new Map<string, string | undefined>();
+  const wares = new Map<string, string | undefined>();
+  for (const item of vocabulary.factions || []) {
+    const rawId = typeof item === 'string' ? item : item?.id;
+    if (!rawId) continue;
+    const id = rawId.startsWith('faction.') ? rawId.slice(8) : rawId;
+    if (!/^[a-z][a-z0-9_]*$/.test(id) || SKIP_PLAIN_ENGLISH_IDS.has(id)) continue;
+    const displayName = typeof item === 'object' && item?.name ? item.name : undefined;
+    if (!factions.has(id) || displayName) factions.set(id, displayName);
+  }
+  for (const item of vocabulary.wares || []) {
+    const id = typeof item === 'string' ? item : item?.id;
+    if (!id || !/^[a-z][a-z0-9_]*$/.test(id) || SKIP_PLAIN_ENGLISH_IDS.has(id)) continue;
+    const displayName = typeof item === 'object' && item?.name ? item.name : undefined;
+    if (!wares.has(id) || displayName) wares.set(id, displayName);
+  }
+  const compiled: CompiledRuntimeVocabulary = { factions, wares };
+  if (factions.size || wares.size) compiledVocabCache.set(vocabulary as object, compiled);
+  return factions.size || wares.size ? compiled : null;
+}
+
+/**
+ * Scan a runtime/game-log line for bare lowercase canonical faction or ware IDs used as words in prose.
+ * Excludes FileIO/signature notices, stack frames, engine fault headers, capitalized display names,
+ * quoted literals, key=value pairs, paths, and attributive English uses ("for civilian ships").
+ */
+export function detectRawEngineIdsInProse(text: string, vocabulary?: RuntimeReferenceVocabulary): RuntimeRawEngineIdLeak[] {
+  const compiled = compileRuntimeVocabulary(vocabulary);
+  if (!compiled) return [];
+  const raw = String(text ?? '');
+  if (!raw.trim() || isX4FileSignatureNotice(raw) || FILE_IO_RE.test(raw)) return [];
+  if (/^\s*(?:stack traceback:|\[C\]\s*:|at\s+|in function\b|\[string\s+)/i.test(raw)) return [];
+  if (isUiWidgetFault(raw) || isUiReload(raw)) return [];
+  const compact = compactMessage(raw);
+  const body = compact.replace(/^(?:\s*\[[A-Za-z][A-Za-z0-9_-]{2,}\]\s*)+/, '').trim();
+  if (!body || /^(?:extensions[\\/]|\S+\.(?:lua|xml|xpl)[:(]\d+|error in (?:md|ai)\b)/i.test(body)) return [];
+
+  const leaks: RuntimeRawEngineIdLeak[] = [];
+  const seen = new Set<string>();
+  const tokenRe = /[A-Za-z0-9_./\\'"=:-]+/g;
+  let match: RegExpExecArray | null;
+  while ((match = tokenRe.exec(body)) !== null) {
+    const token = match[0];
+    // Allow trailing sentence punctuation `:` only when stripped; reject key=value, paths, quotes, or uppercase.
+    const clean = token.replace(/:+$/, '');
+    if (!clean || clean.length < 3 || !/^[a-z][a-z0-9_]*$/.test(clean)) continue;
+    if (token.includes(':') && clean !== token && /^\S/.test(body.slice(match.index + token.length))) {
+      // e.g. `brief:civilian:1` stays a single token above; `civilian: something` has space after `:` and is allowed.
+    }
+    if (SKIP_PLAIN_ENGLISH_IDS.has(clean)) continue;
+    const isFaction = compiled.factions.has(clean);
+    const isWare = !isFaction && compiled.wares.has(clean);
+    if (!isFaction && !isWare) continue;
+
+    const before = body.slice(0, match.index);
+    const after = body.slice(match.index + clean.length);
+    if (CONTEXTUAL_FACTION_IDS.has(clean)) {
+      if (!FACTION_SLOT_PREFIX_RE.test(before)) continue;
+      if (ATTRIBUTIVE_NOUN_SUFFIX_RE.test(after)) continue;
+    } else {
+      if (!PROSE_NEIGHBOR_LEFT_RE.test(before) && !PROSE_NEIGHBOR_RIGHT_RE.test(after)) continue;
+    }
+
+    const key = `${isFaction ? 'faction' : 'ware'}:${clean}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const phraseStart = Math.max(0, match.index - 28);
+    const phraseEnd = Math.min(body.length, match.index + clean.length + 28);
+    const phrase = body.slice(phraseStart, phraseEnd).trim();
+    leaks.push({
+      id: clean,
+      domain: isFaction ? 'faction' : 'ware',
+      displayName: isFaction ? compiled.factions.get(clean) : compiled.wares.get(clean),
+      phrase,
+      offset: match.index,
+    });
+    if (leaks.length >= MAX_EVIDENCE) break;
+  }
+  return leaks;
+}
+
+function isCandidateStart(line: RuntimeLogLine, vocabulary?: RuntimeReferenceVocabulary): boolean {
   const text = line.text;
-  return FAILURE_RE.test(text) || hasSourceLikeContext(text) || isUiWidgetFault(text) || isUiReload(text);
+  return FAILURE_RE.test(text) || hasSourceLikeContext(text) || isUiWidgetFault(text) || isUiReload(text)
+    || (vocabulary !== undefined && detectRawEngineIdsInProse(text, vocabulary).length > 0);
 }
 
 function isContinuation(line: RuntimeLogLine): boolean {
@@ -958,7 +1088,7 @@ function hashRuntimeText(value: string): string {
   return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
-function parseCandidate(lines: RuntimeLogLine[]): RuntimeCandidateIncident {
+function parseCandidate(lines: RuntimeLogLine[], vocabulary?: RuntimeReferenceVocabulary): RuntimeCandidateIncident {
   const fullLines = lines.map(line => line.text);
   const fullRaw = fullLines.join('\n');
   const rawLines = fullLines.map(line => clipText(line, RUNTIME_DEBUGGER_LIMITS.maxLineChars));
@@ -980,9 +1110,15 @@ function parseCandidate(lines: RuntimeLogLine[]): RuntimeCandidateIncident {
         : tagged && isAuthoredTaggedPayload(tagged) ? undefined : engineSignature(fullRaw);
   const authored = isAuthoredDiagnostic(fullRaw);
   const fileIo = FILE_IO_RE.test(fullRaw);
-  const classification = uiFault ? { kind: 'ui_reload_fault' as const, isEngineFailure: true }
+  const baseClassification = uiFault ? { kind: 'ui_reload_fault' as const, isEngineFailure: true }
     : signatureNotice ? { kind: 'file_io' as const, isEngineFailure: false }
       : candidateKind(source, fullRaw, signature, authored, fileIo);
+  const rawEngineIdLeaks = !uiFault && !signatureNotice && !baseClassification.isEngineFailure && vocabulary
+    ? detectRawEngineIdsInProse(fullLines[0] || fullRaw, vocabulary)
+    : [];
+  const classification = rawEngineIdLeaks.length > 0
+    ? { kind: 'raw_engine_id_in_player_text' as const, isEngineFailure: false }
+    : baseClassification;
   const recognized = classification.kind !== 'unknown';
   const timestamps = lines.map(line => line.timestamp).filter(Boolean) as string[];
   const evidence: RuntimeCandidateEvidence[] = [];
@@ -1004,6 +1140,13 @@ function parseCandidate(lines: RuntimeLogLine[]): RuntimeCandidateIncident {
   if (source.stackFrames.length) addEvidence('stack frames', String(source.stackFrames.length));
   if (signature) addEvidence('engine rule', signature, 'exact');
   if (fileIo) addEvidence('FileIO/load evidence', compactMessage(fullRaw));
+  for (const leak of rawEngineIdLeaks) {
+    addEvidence(
+      'raw engine id in player text',
+      `${leak.domain}:${leak.id}${leak.displayName ? ` (${leak.displayName})` : ''} in "${leak.phrase}"`,
+      'exact',
+    );
+  }
   if (authored) addEvidence('authored diagnostic marker', 'bracketed [=ERROR=] diagnostic');
   if (!recognized) addEvidence('unsupported candidate failure', compactMessage(fullRaw));
   const idInput = `${lines[0].lineNumber}:${lines[lines.length - 1].lineNumber}:${classification.kind}:${fullRaw}`;
@@ -1024,6 +1167,7 @@ function parseCandidate(lines: RuntimeLogLine[]): RuntimeCandidateIncident {
     isEngineFailure: classification.isEngineFailure,
     ...(signature ? { engineSignature: signature } : {}),
     ...(taggedLua?.signature ? { physicalLuaSource: true as const } : {}),
+    ...(rawEngineIdLeaks.length ? { rawEngineIdLeaks } : {}),
     source,
     evidence,
   };
@@ -1034,6 +1178,8 @@ export interface RuntimeParseOptions {
   startLine?: number;
   /** Backward-compatible synonym for `startLine`. */
   baseLine?: number;
+  /** Optional canonical faction/ware reference vocabulary for player-text prose scanning (#58). */
+  referenceVocabulary?: RuntimeReferenceVocabulary;
 }
 
 /** Parse failure-like log lines into bounded multiline candidates. */
@@ -1045,11 +1191,12 @@ export function parseRuntimeCandidates(logText: string, options?: RuntimeParseOp
 export function parseRuntimeCandidateBatch(logText: string, options?: RuntimeParseOptions, isolatedLines?: ReadonlySet<number>) {
   const requestedBaseLine = options?.startLine ?? options?.baseLine ?? 1;
   const baseLine = Number.isFinite(requestedBaseLine) ? Math.max(1, Math.floor(requestedBaseLine)) : 1;
+  const vocabulary = options?.referenceVocabulary;
   const lines = String(logText ?? '').split(/\r?\n/).map((line, index) => parseLogLine(line, index + baseLine));
   const candidates: RuntimeCandidateIncident[] = [];
   let openUiFaultStartLine: number | undefined;
   for (let index = 0; index < lines.length; index++) {
-    if (!isCandidateStart(lines[index]) || !lines[index].text.trim()) continue;
+    if (!isCandidateStart(lines[index], vocabulary) || !lines[index].text.trim()) continue;
     const group = [lines[index]];
     const widget = isUiWidgetFault(lines[index].text);
     const orphanReload = isUiReload(lines[index].text);
@@ -1072,7 +1219,7 @@ export function parseRuntimeCandidateBatch(logText: string, options?: RuntimePar
     if (widget && !isolated && !closedByReload && cursor === lines.length && group.length < RUNTIME_GROUP_LINE_LIMIT) {
       openUiFaultStartLine = lines[index].lineNumber;
     }
-    candidates.push(parseCandidate(group));
+    candidates.push(parseCandidate(group, vocabulary));
     index = cursor - 1;
   }
   return { candidates, openUiFaultStartLine };
@@ -1166,7 +1313,12 @@ export function attributeRuntimeCandidate(index: RuntimeOwnershipIndex, candidat
       evidence: [] };
   }
   const authoredEmitters = findAuthoredEmitterLocations(index, candidate);
-  if (authoredEmitters.length) return attributeAuthoredEmitter(index, authoredEmitters);
+  if (authoredEmitters.length) {
+    if (candidate.kind === 'raw_engine_id_in_player_text' && new Set(authoredEmitters.map(loc => loc.ownerId)).size === 1) {
+      return attributeAuthoredEmitter(index, [authoredEmitters[0]]);
+    }
+    return attributeAuthoredEmitter(index, authoredEmitters);
+  }
 
   const exact = index.owners.map(owner => {
     if (!physicalFolderRequired) return { owner, evidence: exactOwnerEvidence(owner, candidate) };
@@ -1277,7 +1429,101 @@ function authoredEmitterLocationLabel(location: RuntimeAuthoredEmitterLocation):
   return `${location.file}:${location.line}`;
 }
 
+function findPlayerTextLeakLocations(index: RuntimeOwnershipIndex, candidate: RuntimeCandidateIncident): RuntimeAuthoredEmitterLocation[] {
+  const leaks = candidate.rawEngineIdLeaks || [];
+  if (!leaks.length) return [];
+  const firstLine = candidate.lines[0] || candidate.raw.split(/\r?\n/, 1)[0] || '';
+  const compact = compactMessage(firstLine);
+  const tags = uniquePreservingOrder(compact.match(AUTHORED_TAG_TOKEN_RE) || []);
+  const body = compact.replace(/^(?:\s*\[[A-Za-z][A-Za-z0-9_-]{2,}\]\s*)+/, '').trim();
+
+  const leftGroups: string[][] = [];
+  const rightGroups: string[][] = [];
+  for (const leak of leaks) {
+    const leftWords = (body.slice(0, leak.offset).match(/[A-Za-z][A-Za-z0-9_-]{1,}/g) || []).map(w => w.toLowerCase());
+    const rightWords = (body.slice(leak.offset + leak.id.length).match(/[A-Za-z][A-Za-z0-9_-]{1,}/g) || []).map(w => w.toLowerCase());
+    for (let len = Math.min(6, leftWords.length); len >= 2; len--) leftGroups.push(leftWords.slice(-len));
+    for (let len = Math.min(10, rightWords.length); len >= 2; len--) rightGroups.push(rightWords.slice(0, len));
+  }
+  if (!leftGroups.length && !rightGroups.length) return [];
+
+  const lineTokens = (line: string) => (line.match(/[A-Za-z][A-Za-z0-9_-]{1,}/g) || []).map(w => w.toLowerCase());
+  const hasSeq = (haystack: string[], seq: string[]): boolean => {
+    if (seq.length < 2 || haystack.length < seq.length) return false;
+    for (let i = 0; i <= haystack.length - seq.length; i++) {
+      if (seq.every((w, off) => haystack[i + off] === w)) return true;
+    }
+    return false;
+  };
+
+  type Scored = { loc: RuntimeAuthoredEmitterLocation; score: number };
+  const scored: Scored[] = [];
+  const directFolder = normalizeIdentity(candidate.source.extensionFolder || '');
+  for (const owner of index.owners) {
+    if (directFolder && !owner.deployedFolders.some(folder => normalizeIdentity(folder) === directFolder || owner.contentIds.some(id => normalizeIdentity(id) === directFolder))) {
+      continue;
+    }
+    for (const manifest of owner.manifest) {
+      const isLua = /\.(?:lua|xpl)$/i.test(manifest.path);
+      const isXml = /\.xml$/i.test(manifest.path) && !/(^|\/)content\.xml$/i.test(manifest.path);
+      if (!isLua && !isXml) continue;
+      const sourceLines = manifest.text.split(/\r?\n/);
+      const tagSources = tags.length === 0
+        ? []
+        : sourceLines
+          .map((source, lineIndex) => ({ source, line: lineIndex + 1 }))
+          .filter(item => tags.every(tag => item.source.toLowerCase().includes(tag.toLowerCase())))
+          .slice(0, MAX_AUTHORED_EMITTER_SUPPORT)
+          .map(item => ({ file: manifest.path, line: item.line, source: clipText(item.source.trim(), RUNTIME_DEBUGGER_LIMITS.maxLineChars) }));
+      const tagBonus = tags.length > 0 && tagSources.length > 0 ? 4 : 0;
+
+      for (let lineIndex = 0; lineIndex < sourceLines.length; lineIndex++) {
+        const sourceLine = sourceLines[lineIndex];
+        if (isLua && /^\s*--/.test(sourceLine)) continue;
+        if (isXml && /^\s*<!--/.test(sourceLine)) continue;
+        if (isLua && !sourceLine.includes('..') && !AUTHORED_EMITTER_CALL_RE.test(sourceLine) && !/\bDebugError\s*\(/.test(sourceLine)) continue;
+        if (isXml && !sourceLine.includes('+') && !/<(?:debug_text|write_to_logbook|show_notification|show_help|write_incoming_message)\b/i.test(sourceLine)) continue;
+        const tokens = lineTokens(sourceLine);
+        let bestLeft = 0;
+        let bestRight = 0;
+        for (const seq of leftGroups) {
+          if (hasSeq(tokens, seq)) bestLeft = Math.max(bestLeft, seq.length);
+        }
+        for (const seq of rightGroups) {
+          if (hasSeq(tokens, seq)) bestRight = Math.max(bestRight, seq.length);
+        }
+        const matchScore = bestLeft + bestRight;
+        if (matchScore < 2) continue;
+        scored.push({
+          score: matchScore + tagBonus,
+          loc: {
+            ownerId: owner.ownerId,
+            workspaceId: owner.workspaceId,
+            file: manifest.path,
+            line: lineIndex + 1,
+            source: clipText(sourceLine.trim(), RUNTIME_DEBUGGER_LIMITS.maxLineChars),
+            supportingEvidence: tagSources.filter(item => item.line !== lineIndex + 1),
+          },
+        });
+      }
+    }
+  }
+  if (!scored.length) return [];
+  const bestScore = Math.max(...scored.map(item => item.score));
+  const best = scored.filter(item => item.score === bestScore).map(item => item.loc);
+  const deduped: RuntimeAuthoredEmitterLocation[] = [];
+  for (const loc of best) {
+    if (!deduped.some(existing => existing.ownerId === loc.ownerId && existing.file === loc.file && existing.line === loc.line)) {
+      deduped.push(loc);
+    }
+  }
+  return deduped
+    .sort((left, right) => left.workspaceId.localeCompare(right.workspaceId) || left.file.localeCompare(right.file) || left.line - right.line)
+    .slice(0, MAX_AUTHORED_EMITTERS);
+}
+
 function findAuthoredEmitterLocations(index: RuntimeOwnershipIndex, candidate: RuntimeCandidateIncident): RuntimeAuthoredEmitterLocation[] {
+  if (candidate.kind === 'raw_engine_id_in_player_text') return findPlayerTextLeakLocations(index, candidate);
   if (candidate.kind !== 'authored_diagnostic') return [];
   const { tags, words } = authoredDiagnosticParts(candidate);
   if (words.length < 2) return [];
@@ -1470,7 +1716,8 @@ export function mapRuntimeCandidateToSource(index: RuntimeOwnershipIndex, candid
     return { kind: 'unmapped', reason: 'No exact owned Lua frame location was established for this UI fault.' };
   }
   const authoredEmitter = candidate.attribution?.authoredEmitter;
-  if (candidate.kind === 'authored_diagnostic' && authoredEmitter) {
+  const isEmitterMappedKind = candidate.kind === 'authored_diagnostic' || candidate.kind === 'raw_engine_id_in_player_text';
+  if (isEmitterMappedKind && authoredEmitter) {
     return mapRuntimeFileLineToNode(index, {
       file: authoredEmitter.file,
       line: authoredEmitter.line,
@@ -1479,14 +1726,14 @@ export function mapRuntimeCandidateToSource(index: RuntimeOwnershipIndex, candid
     });
   }
   const authoredEmitterCandidates = candidate.attribution?.authoredEmitterCandidates;
-  if (candidate.kind === 'authored_diagnostic' && authoredEmitterCandidates?.length) {
+  if (isEmitterMappedKind && authoredEmitterCandidates?.length) {
     return {
       kind: 'unmapped',
       candidateLocations: authoredEmitterCandidates,
       reason: 'multiple authored emitters matched; exact source navigation is withheld until ownership is unambiguous',
     };
   }
-  if (candidate.kind === 'authored_diagnostic' && !candidate.source.file) {
+  if (isEmitterMappedKind && !candidate.source.file) {
     return { kind: 'unmapped', reason: 'no exact authored emitter was resolved from the owner manifests' };
   }
   const file = inferFileFromIdentity(index, candidate);
@@ -1510,7 +1757,25 @@ export function explainRuntimeCandidate(candidate: RuntimeCandidateIncident, att
   let impact: string;
   let nextAction: string;
   let evidenceLabel: string;
-  if (candidate.kind === 'authored_diagnostic') {
+  if (candidate.kind === 'raw_engine_id_in_player_text') {
+    const authoredEmitter = attribution?.authoredEmitter;
+    const authoredEmitterCandidates = attribution?.authoredEmitterCandidates || [];
+    const leakSummary = (candidate.rawEngineIdLeaks || [])
+      .map(leak => `${leak.domain} "${leak.id}"${leak.displayName ? ` (${leak.displayName})` : ''}`)
+      .join(', ');
+    cause = `Player-visible or mod-logged prose contains bare canonical X4 engine ID(s)${leakSummary ? `: ${leakSummary}` : ''}.`;
+    impact = 'Players see raw internal faction or ware identifiers instead of localized display names in UI panels, notifications, comms, or logbook entries.';
+    nextAction = authoredEmitter
+      ? `Inspect ${authoredEmitterLocationLabel(authoredEmitter)} and resolve the localized display name via GetFactionData(id, "name") / GetWareData(id, "name") in Lua or .knownname / .name in MD.`
+      : authoredEmitterCandidates.length
+        ? `Inspect the matching prose builders (${authoredEmitterCandidates.map(authoredEmitterLocationLabel).join(', ')}) and replace raw IDs with localized display-name lookups.`
+        : candidate.source.file
+          ? `Inspect ${candidate.source.file}${candidate.source.line ? `:${candidate.source.line}` : ''} and replace raw IDs with localized display-name lookups.`
+          : 'Inspect the prose builder that emitted this line and replace raw IDs with localized display-name lookups.';
+    evidenceLabel = authoredEmitter
+      ? `raw engine ID prose emitter at ${authoredEmitterLocationLabel(authoredEmitter)}`
+      : 'raw engine ID in prose';
+  } else if (candidate.kind === 'authored_diagnostic') {
     const authoredEmitter = attribution?.authoredEmitter;
     const authoredEmitterCandidates = attribution?.authoredEmitterCandidates || [];
     cause = 'The mod emitted authored telemetry/activity; no engine fault is indicated by this line.';
@@ -1689,7 +1954,7 @@ export function analyzeRuntimeDebugger(input: RuntimeDebuggerAnalysisInput): Run
     active: input.activeWorkspace || input.active || {},
     otherExtensions: input.otherExtensions || [],
   });
-  const parsed = parseRuntimeCandidates(input.logText);
+  const parsed = parseRuntimeCandidates(input.logText, input.referenceVocabulary ? { referenceVocabulary: input.referenceVocabulary } : undefined);
   const candidates = parsed.map(candidate => {
     const attribution = attributeRuntimeCandidate(ownership, candidate);
     const mapping = mapRuntimeCandidateToSource(ownership, { ...candidate, attribution });

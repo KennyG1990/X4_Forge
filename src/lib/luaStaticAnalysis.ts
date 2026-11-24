@@ -1116,7 +1116,273 @@ export const X4_STANDALONE_MENU_SCHEMA = {
   ],
 } as const;
 
-export function analyzeLuaFiles(files: LuaFileInput[], manifestOnly: readonly LuaManifestScopeInput[] = []): LuaStaticAnalysisResult {
+export interface LuaStaticAnalysisOptions {
+  /**
+   * Event -> field -> boolean (`true` when every `<raise_lua_event>` for that event
+   * writes `field=` exclusively from `.name`/`.knownname`; `false` when any writer does not).
+   */
+  mdEventFieldDisplayProof?: ReadonlyMap<string, ReadonlyMap<string, boolean>>;
+}
+
+/**
+ * Derive deterministic cross-file display-name proofs from MD `<raise_lua_event>` `@param`
+ * builders (`'key=' + $obj.knownname` / `'|key=' + $obj.owner.name`). Any non-name writer
+ * for `(event, key)` invalidates the proof so changing `.name` to `.id` immediately flags.
+ */
+export function collectMdEventFieldDisplayProof(mdContents: Iterable<string>): Map<string, Map<string, boolean>> {
+  const out = new Map<string, Map<string, boolean>>();
+  const raiseRe = /<raise_lua_event\b[^>]*\bname\s*=\s*"([^"]+)"[^>]*\bparam\s*=\s*"([^"]+)"/g;
+  const fieldRe = /(?:^|\||['"])([A-Za-z_]\w*)=\s*['"]\s*\+\s*([^+|'"]+)/g;
+  for (const rawXml of mdContents) {
+    if (!rawXml || !rawXml.includes('<raise_lua_event')) continue;
+    const xml = rawXml.replace(/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>/g, ' ');
+    raiseRe.lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = raiseRe.exec(xml)) !== null) {
+      const eventName = match[1].trim().replace(/^['"]|['"]$/g, '');
+      if (!eventName || eventName.includes('$') || eventName.includes('+') || eventName.includes('{')) continue;
+      const param = match[2];
+      let fields = out.get(eventName);
+      if (!fields) {
+        fields = new Map<string, boolean>();
+        out.set(eventName, fields);
+      }
+      fieldRe.lastIndex = 0;
+      let fieldMatch: RegExpExecArray | null;
+      while ((fieldMatch = fieldRe.exec(param)) !== null) {
+        const key = fieldMatch[1];
+        const expr = fieldMatch[2].trim();
+        const isDisplayName = /\.(?:knownname|name)\b/.test(expr) && !/\.id\b(?!code)/.test(expr);
+        const previous = fields.get(key);
+        fields.set(key, previous === undefined ? isDisplayName : (previous && isDisplayName));
+      }
+    }
+  }
+  return out;
+}
+
+const RAW_ID_FALLBACK_ID = String.raw`(?:(?:[A-Za-z_]\w*\.)*(?:fac|facid|fid|enemy|owner|faction|realm|on|g|real_facid|faction_id|secOwner|ware|wareid|ware_id|wid|macro|macroid|macro_id)|(?:[A-Za-z_]\w*\.)+o|(?<![\w.])id)`;
+const RAW_ID_SINK_ID = String.raw`(?:(?:[A-Za-z_]\w*\.)*(?:fac|facid|fid|enemy|owner|faction|realm|on|g|target|real_facid|faction_id|secOwner|wareid|ware_id|wid|macroid|macro_id)|(?:[A-Za-z_]\w*\.)+o)`;
+const RAW_ID_NAME_FIELD = String.raw`(?:fname|name|ename|oname|tname|sname|nm|faction_name|code_name|facname|on|wname|ware_name|warename|mname|macro_name|macroname)`;
+const RAW_ID_NAME_OR_ID_RE = new RegExp(String.raw`\.` + RAW_ID_NAME_FIELD + String.raw`\)?\s+or\s+(?:tostring\()?\s*` + RAW_ID_FALLBACK_ID + String.raw`\b(?!\s*[([.])`);
+const RAW_ID_SINK_PREFIX = String.raw`(?:\bmessage\s*=|\bnotify\(|\bshowNotification\(|createText\(|createButton\(|\btitle\s*=|\bnote\s*=|setText\(|mouseOverText\s*=|\btext\s*=|\bsay\(|\bbody\s*=|\bsender\s*=|AddLogbookEntry\()`;
+const RAW_ID_SINK_OR_ID_RE = new RegExp(RAW_ID_SINK_PREFIX + String.raw`.*?\.\w+\)?\s+or\s+(?:tostring\()?\s*` + RAW_ID_SINK_ID + String.raw`\b(?!\s*[([.])`);
+const RAW_ID_STRICT = String.raw`(?:fac|facid|fid|faction|faction_id|real_facid|enemy|secOwner|wareid|ware_id|macroid|macro_id)`;
+const RAW_ID_SINK_CONCAT_RE = new RegExp(RAW_ID_SINK_PREFIX + String.raw`[^|~\n]*?\.\.\s*(?:tostring\()?\s*(?:[A-Za-z_]\w*\.)?` + RAW_ID_STRICT + String.raw`\s*\)?\s*(?:\.\.|\)|,|\}|$)`);
+const RAW_ID_REF = String.raw`(?:tostring\(\s*(?:[A-Za-z_]\w*\.)*(?:` + RAW_ID_STRICT.slice(3, -1) + String.raw`|on\s+or\s+(?:[A-Za-z_]\w*\.)*o)\b(?:\s+or\s+[^()]*?)?\s*\)|(?<![\w(.])(?:[A-Za-z_]\w*\.)*` + RAW_ID_STRICT + String.raw`(?![\w([.]))`;
+const RAW_ID_PROSE_LEFT = String.raw`"[^"]*[A-Za-z(, ]"`;
+const RAW_ID_PROSE_RIGHT = String.raw`"[ ),.;!?A-Za-z][^"]*"`;
+const RAW_ID_PROSE_CONCAT_RE = new RegExp(RAW_ID_PROSE_LEFT + String.raw`\s*\.\.\s*` + RAW_ID_REF + '|' + RAW_ID_REF + String.raw`\s*\.\.\s*` + RAW_ID_PROSE_RIGHT);
+const RAW_ID_DISPLAY_SINK_RE = new RegExp(RAW_ID_SINK_PREFIX + String.raw`|\[#[\w.]+\s*\+\s*1\]\s*=\s*"`);
+const RAW_ID_LOG_CALL_RE = /\b(?:log|logf|dlog|dbg|errOnce|slog|print)\s*\(|DebugError\s*\(/;
+const RAW_ID_FUNC_DEF_RE = /^(\s*)(?:local\s+)?function\s+([\w.:]+)\s*\(/;
+const RAW_ID_TAINT_RHS_RE = new RegExp(String.raw`^\s*(?:tostring\(\s*)?\(?(?:[^=]*?\s+or\s+)?\(?(?:[A-Za-z_]\w*\.)*` + RAW_ID_STRICT + String.raw`\s*\)?(?:\s+or\s+"[^"]*")?\s*\)?\s*$`);
+const RAW_ID_CONT_END_RE = /(?:\.\.|\bor|\band|=|,|\(|\{)\s*$/;
+const RAW_ID_CONT_NEXT_RE = /^\s*(?:\.\.|or\b|and\b|\))/;
+
+function luaLineWithoutComment(line: string): string {
+  let quote: string | null = null;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quote) {
+      if (ch === '\\') { i++; continue; }
+      if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === '-' && line[i + 1] === '-') {
+      return line.slice(0, i);
+    }
+  }
+  return line;
+}
+
+function luaCodeWithoutStrings(code: string): string {
+  const out: string[] = [];
+  let quote: string | null = null;
+  for (let i = 0; i < code.length; i++) {
+    const ch = code[i];
+    if (quote) {
+      if (ch === '\\') { i++; continue; }
+      if (ch === quote) { quote = null; out.push(ch); }
+    } else {
+      if (ch === '"' || ch === "'") quote = ch;
+      out.push(ch);
+    }
+  }
+  return out.join('');
+}
+
+function luaOpenBracketDepth(code: string): number {
+  const stripped = luaCodeWithoutStrings(code);
+  let depth = 0;
+  for (let i = 0; i < stripped.length; i++) {
+    const ch = stripped[i];
+    if (ch === '(' || ch === '{') depth++;
+    else if (ch === ')' || ch === '}') depth--;
+  }
+  return depth;
+}
+
+function joinLuaStatements(src: string): Array<{ line: number; code: string; optedOut: boolean }> {
+  const cleaned = src.replace(/--\[(=*)\[[\s\S]*?\]\1\]/g, match => match.replace(/[^\r\n]/g, ' '));
+  const lines = cleaned.replace(/\r\n/g, '\n').split('\n');
+  const out: Array<{ line: number; code: string; optedOut: boolean }> = [];
+  let i = 0;
+  while (i < lines.length) {
+    const raw = lines[i];
+    if (raw.trim().startsWith('--')) { i++; continue; }
+    let code = luaLineWithoutComment(raw);
+    let j = i;
+    let optedOut = /rawid-ok\s*:/.test(raw);
+    while (j + 1 < lines.length && j - i < 5) {
+      const nextCode = luaLineWithoutComment(lines[j + 1]);
+      if (!nextCode.trim() || lines[j + 1].trim().startsWith('--')) break;
+      if (!(luaOpenBracketDepth(code) > 0 || RAW_ID_CONT_END_RE.test(luaCodeWithoutStrings(code)) || RAW_ID_CONT_NEXT_RE.test(nextCode))) break;
+      j++;
+      code += ' ' + nextCode.trim();
+      optedOut = optedOut || /rawid-ok\s*:/.test(lines[j]);
+    }
+    out.push({ line: i + 1, code, optedOut });
+    i = j + 1;
+  }
+  return out;
+}
+
+function carriesTaintedIdIntoWords(stmt: string, tainted: ReadonlySet<string>): boolean {
+  if (!tainted.size) return false;
+  const unwrapped = stmt.replace(/\btostring\(\s*([^()]*?)\s*\)/g, '($1)');
+  for (const name of tainted) {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp(RAW_ID_PROSE_LEFT + String.raw`\s*\.\.\s*\(?\s*` + escaped + String.raw`\b(?!\s*[.([])`).test(unwrapped)
+      || new RegExp(String.raw`(?<![\w.])(?<!\w\()(?<!\w\( )` + escaped + String.raw`\s*\)?\s*\.\.\s*` + RAW_ID_PROSE_RIGHT).test(unwrapped)
+      || new RegExp(String.raw`\b(?:text|title|message|body|note|sender)\s*=\s*\(?\s*` + escaped + String.raw`\s*\)?\s*[,}]`).test(unwrapped)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function scanGroupRawEngineIdInPlayerText(
+  group: readonly LuaFileInput[],
+  gameGlobalFiles: ReadonlySet<LuaFileInput>,
+  findings: LuaStaticFinding[],
+  mdEventFieldDisplayProof?: ReadonlyMap<string, ReadonlyMap<string, boolean>>,
+): void {
+  const eligible = group.filter(file => gameGlobalFiles.has(file));
+  if (!eligible.length) return;
+
+  const prepared = eligible.map(file => {
+    let text = file.text;
+    if (mdEventFieldDisplayProof?.size) {
+      const codeOnly = stripLuaComments(text);
+      const registeredEvents = [...codeOnly.matchAll(/\bRegisterEvent\s*\(\s*["']([^"']+)["']/g)].map(m => m[1]);
+      if (registeredEvents.length > 0) {
+        const candidateKeys = new Set<string>();
+        for (const ev of registeredEvents) {
+          const map = mdEventFieldDisplayProof.get(ev);
+          if (map) for (const [k, ok] of map) if (ok) candidateKeys.add(k);
+        }
+        for (const key of candidateKeys) {
+          const conflicted = registeredEvents.some(ev => mdEventFieldDisplayProof.get(ev)?.get(key) === false);
+          if (!conflicted) {
+            const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            text = text.replace(new RegExp(`\\bp\\.${escapedKey}\\b`, 'g'), `p.${key}_md_display_name`);
+          }
+        }
+      }
+    }
+    return { file, statements: joinLuaStatements(text) };
+  });
+
+  const globalTaintedFns = new Set<string>();
+  const localTaintedFns = new Map<LuaFileInput, Set<string>>();
+  for (const { file, statements } of prepared) {
+    let currentFn: { full: string; short: string } | null = null;
+    for (const { code, optedOut } of statements) {
+      const fnMatch = RAW_ID_FUNC_DEF_RE.exec(code);
+      if (fnMatch) {
+        const full = fnMatch[2];
+        currentFn = { full, short: full.split(/[.:]/).pop() || full };
+      }
+      if (currentFn && !optedOut && /\breturn\b/.test(code) && !RAW_ID_LOG_CALL_RE.test(code) && RAW_ID_PROSE_CONCAT_RE.test(code)) {
+        if (currentFn.full.includes('.') || currentFn.full.includes(':')) globalTaintedFns.add(currentFn.short);
+        else {
+          const set = localTaintedFns.get(file) || new Set<string>();
+          set.add(currentFn.short);
+          localTaintedFns.set(file, set);
+        }
+      }
+    }
+  }
+
+  for (const { file, statements } of prepared) {
+    const helperNames = [...new Set([...globalTaintedFns, ...(localTaintedFns.get(file) || [])])].sort();
+    const taintedCallRe = helperNames.length
+      ? new RegExp(String.raw`(?<![\w])(?:[A-Za-z_]\w*[.:])*(?:` + helperNames.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + String.raw`)\s*\(`)
+      : null;
+    let taintedLocals = new Set<string>();
+    for (const { line, code, optedOut } of statements) {
+      if (RAW_ID_FUNC_DEF_RE.test(code)) taintedLocals = new Set<string>();
+      if (optedOut || !code.trim()) continue;
+      const directAssign = /^\s*(?:local\s+)?([A-Za-z_]\w*)\s*=(?!=)\s*(.+)$/.exec(code);
+      const inlineBranchAssign = /\bthen\s+([A-Za-z_]\w*)\s*=(?!=)\s*(.+?)\s+end\s*$/.exec(code);
+      for (const [isBranch, match] of [[false, directAssign], [true, inlineBranchAssign]] as const) {
+        if (!match) continue;
+        const [, varName, rhs] = match;
+        if (RAW_ID_TAINT_RHS_RE.test(rhs) || RAW_ID_PROSE_CONCAT_RE.test(rhs)
+          || (taintedCallRe && taintedCallRe.test(rhs)) || carriesTaintedIdIntoWords(rhs, taintedLocals)) {
+          taintedLocals.add(varName);
+        } else if (taintedLocals.has(varName) && !isBranch) {
+          taintedLocals.delete(varName);
+        }
+      }
+      if (RAW_ID_LOG_CALL_RE.test(code)) continue;
+
+      let reason: string | null = null;
+      let matchSnippet: string | undefined;
+      const mA = RAW_ID_NAME_OR_ID_RE.exec(code);
+      const mB = !mA ? RAW_ID_SINK_OR_ID_RE.exec(code) : null;
+      const mC = !mA && !mB ? RAW_ID_SINK_CONCAT_RE.exec(code) : null;
+      if (mA) {
+        reason = `display-name fallback "${mA[0].trim()}" falls back to a raw engine ID when the display name is missing`;
+        matchSnippet = mA[0].trim();
+      } else if (mB) {
+        reason = `player-visible sink falls back to a raw engine ID ("${mB[0].trim().slice(0, 80)}")`;
+        matchSnippet = mB[0].trim().slice(0, 64);
+      } else if (mC) {
+        reason = `player-visible sink concatenates a raw engine ID directly ("${mC[0].trim().slice(0, 80)}")`;
+        matchSnippet = mC[0].trim().slice(0, 64);
+      } else if (RAW_ID_DISPLAY_SINK_RE.test(code)) {
+        const mD = RAW_ID_PROSE_CONCAT_RE.exec(code);
+        if (mD) {
+          reason = `player-visible prose concatenates a raw engine ID ("${mD[0].trim().slice(0, 80)}")`;
+          matchSnippet = mD[0].trim().slice(0, 64);
+        } else if ((taintedCallRe && taintedCallRe.test(code)) || carriesTaintedIdIntoWords(code, taintedLocals)) {
+          reason = 'player-visible text embeds a local variable or helper return carrying a raw engine ID';
+        }
+      }
+      if (!reason) continue;
+      findings.push({
+        layer: 'x4',
+        severity: 'warning',
+        code: 'lua.raw_engine_id_in_player_text',
+        rel: file.rel,
+        line,
+        column: 1,
+        symbol: matchSnippet,
+        message: `${file.rel}:${line}: ${reason}. Resolve the localized display name via GetFactionData(id, "name"), GetWareData(id, "name"), GetMacroData(id, "name"), or a display-name helper instead of exposing raw engine IDs to the player.`,
+        source: file.source,
+        sourcePath: file.sourcePath,
+      });
+    }
+  }
+}
+
+export function analyzeLuaFiles(
+  files: LuaFileInput[],
+  manifestOnly: readonly LuaManifestScopeInput[] = [],
+  options?: LuaStaticAnalysisOptions,
+): LuaStaticAnalysisResult {
   const normalizedFiles = files.map(normalizeLuaFile);
   const parsed = new Map<LuaFileInput, ParsedLuaFacts>();
   for (const file of normalizedFiles) {
@@ -1318,7 +1584,7 @@ export function analyzeLuaFiles(files: LuaFileInput[], manifestOnly: readonly Lu
         }
       }
     }
-
+    scanGroupRawEngineIdInPlayerText(group, gameGlobalFiles, findings, options?.mdEventFieldDisplayProof);
   }
 
   return {
@@ -1943,7 +2209,65 @@ export function runLuaStaticAnalysisSelftest(): { pass: boolean; checks: { name:
       && [missingManifestTarget, invalidManifestOnly].every(result => result.runtimeScope.stages[2].status === 'unavailable'
         && result.findings.some(finding => finding.code === SCOPE_UNVERIFIED && finding.rel === 'ui.xml' && finding.sourcePath === 'manifest-only:ui.xml')) },
     { name: 'runtime_evidence_limit_is_explicit', pass: runtimeCase(`local x = Helper${'.a'.repeat(80)}`).runtimeScope.truncated
-      && runtimeCase(`local x = Helper${'.a'.repeat(80)}`).runtimeScope.gaps.some(gap => /limit|truncated/.test(gap.reason)) }
+      && runtimeCase(`local x = Helper${'.a'.repeat(80)}`).runtimeScope.gaps.some(gap => /limit|truncated/.test(gap.reason)) },
+    { name: 'raw_engine_id_in_player_text_catches_faction_ware_macro_leaks_and_taint', pass: (() => {
+      const leakProbes = [
+        'local function fname(sess) return tostring((type(sess) == "table" and (sess.fname or sess.fac)) or "them") end',
+        'local m = { message = "[Diplomacy] The " .. tostring((A._strat[fac] or {}).name or fac) .. " leadership ACCEPTS" }',
+        'local t = { title = "REQUEST - " .. tostring(p.fname or p.fac or "") .. ": warships" }',
+        'table.insert(menu.history, { text = "[Opening negotiations with " .. tostring(ctx.target or fac) .. ".]" })',
+        'notify("[Loan] " .. x.fac .. " lent you nothing.")',
+        'local c = { title = tostring(o.faction_name or o.faction or "Faction") .. " Contract" }',
+        'local b = { body = "He went down with his ship: " .. tostring(r.fac) .. "." }',
+        'local s = { text = (p.nm and tostring(p.nm))\n  or ("A " .. tostring(p.on or p.o) .. " agent") .. " is at large" }',
+        'local row = { ware = c.wname or c.ware, wareId = c.ware }',
+        'notify("Deliver 200 " .. wareid .. " immediately.")',
+        'r[1]:createText("Hull: " .. macroid)',
+        'local who = fac\nr[1]:createText("Signed by " .. who)',
+      ];
+      const helperFiles = [
+        focusedFile('ui/helper.lua', 'M = {}\nfunction M.RivalLine(r) return " (" .. tostring(r.fac) .. "), " end\n', 'rawid-helper'),
+        focusedFile('ui/view.lua', 'local x = { body = M.RivalLine(r) }\n', 'rawid-helper'),
+      ];
+      const helperRes = analyzeLuaFiles(helperFiles);
+      return leakProbes.every((probe, idx) =>
+        analyzeLuaFiles([focusedFile(`ui/probe_${idx}.lua`, probe, `rawid-${idx}`)]).findings
+          .some(f => f.code === 'lua.raw_engine_id_in_player_text' && f.severity === 'warning' && f.layer === 'x4'))
+        && helperRes.findings.some(f => f.code === 'lua.raw_engine_id_in_player_text' && f.rel === 'ui/view.lua');
+    })() },
+    { name: 'raw_engine_id_in_player_text_respects_logs_comments_helpers_optouts_and_md_proof', pass: (() => {
+      const cleanLua = [
+        'log("council " .. fac .. " offered " .. tostring(sess.fname or sess.fac))',
+        'DebugError("[DIAG] " .. tostring(sess.fname or sess.fac))',
+        '-- comment: tostring(sess.fname or sess.fac)',
+        'local s = "a -- b " .. facName(sess.fname, sess.fac)',
+        'local n = { note = "[sim: " .. fac .. "]" } -- rawid-ok: debug command echo',
+        'local key = "brief:" .. fac .. ":" .. d',
+        'if who == fac .. " envoy" then who = "" end',
+        'notify("[Contracts] " .. GetFactionData(fac, "name") .. " cannot fund it")',
+        'local function nm(id) return (A.FactionName and A.FactionName(id)) or tostring(id) end',
+        'local t = { title = "RIVAL - " .. nm(r.fac) }',
+      ].join('\n');
+      const aidLua = [
+        'RegisterEvent("AIChat.aid_call", function(_, params) end)',
+        'RegisterEvent("AIChat.aid_outcome", function(_, params) end)',
+        'AddUITriggeredEvent("ai_influence", "comms_incoming", {',
+        '  title = "DISTRESS - " .. tostring(p.fac or "") .. ": " .. tostring(p.victim or ""),',
+        '})',
+      ].join('\n');
+      const mdNameProof = collectMdEventFieldDisplayProof([
+        `<mdscript name="Aid"><cues><cue name="C"><actions><raise_lua_event name="'AIChat.aid_call'" param="'victim=' + $v.knownname + '|fac=' + $v.owner.name"/></actions></cue></cues></mdscript>`,
+      ]);
+      const mdIdLapsed = collectMdEventFieldDisplayProof([
+        `<mdscript name="Aid"><cues><cue name="C"><actions><raise_lua_event name="'AIChat.aid_call'" param="'victim=' + $v.knownname + '|fac=' + $v.owner.id"/></actions></cue></cues></mdscript>`,
+      ]);
+      const cleanRes = analyzeLuaFiles([focusedFile('ui/ok.lua', cleanLua, 'rawid-clean')]);
+      const provenRes = analyzeLuaFiles([focusedFile('ui/aic_aid.lua', aidLua, 'rawid-md-ok')], [], { mdEventFieldDisplayProof: mdNameProof });
+      const lapsedRes = analyzeLuaFiles([focusedFile('ui/aic_aid.lua', aidLua, 'rawid-md-bad')], [], { mdEventFieldDisplayProof: mdIdLapsed });
+      return !cleanRes.findings.some(f => f.code === 'lua.raw_engine_id_in_player_text')
+        && !provenRes.findings.some(f => f.code === 'lua.raw_engine_id_in_player_text')
+        && lapsedRes.findings.some(f => f.code === 'lua.raw_engine_id_in_player_text' && f.line === 3);
+    })() }
   ];
   checks.push(...scopeChecks);
   return { pass: checks.every(c => c.pass), checks };

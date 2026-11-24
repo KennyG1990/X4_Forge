@@ -59,7 +59,7 @@ import { lintFactionRelations, type FactionLintFinding } from "../lib/factionsLi
 import { lintGodMacros, type GodLintFinding } from "../lib/godLint";
 import { lintReferenceLiterals, type ReferenceLiteralFinding } from "../lib/referenceLint";
 import { buildProjectSymbols, type ProjectVariableSymbol } from "../lib/projectSymbols";
-import { analyzeLuaFiles, type LuaStaticAnalysisResult } from "../lib/luaStaticAnalysis";
+import { analyzeLuaFiles, collectMdEventFieldDisplayProof, type LuaStaticAnalysisResult } from "../lib/luaStaticAnalysis";
 import { buildX4MenuLuaRuntimeInventory, registeredX4MenuLuaPaths } from '../lib/x4UiSourceBundle';
 import {
   applyProjectRuleSuppressions,
@@ -514,6 +514,16 @@ export function runProjectValidation(
   const luaSources = project.files.filter(file => /\.lua$/i.test(file.path) && typeof file.content === "string");
   const uiManifests = project.files.filter(file => file.path.replace(/\\/g, '/').toLowerCase() === 'ui.xml');
   const uiManifest = uiManifests[0];
+  const mdRaiseSources = luaSources.length > 0
+    ? project.files.filter(file => typeof file.content === 'string' && (file.kind === 'md' || classifyPath(file.path) === 'md') && file.content.includes('<raise_lua_event'))
+    : [];
+  const mdEventFieldDisplayProof = mdRaiseSources.length > 0
+    ? collectMdEventFieldDisplayProof(mdRaiseSources.map(file => file.content as string))
+    : undefined;
+  const mdDisplayProofSignature = mdEventFieldDisplayProof?.size
+    ? [...mdEventFieldDisplayProof.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([ev, fields]) => [ev, [...fields.entries()].sort((a, b) => a[0].localeCompare(b[0]))])
+    : null;
   const analyzeProjectLua = () => {
     const luaFiles = luaSources.map(file => {
       const rel = file.path.replace(/\\/g, "/");
@@ -533,14 +543,15 @@ export function runProjectValidation(
     const manifestOnly = !luaFiles.length && uiManifest ? [{
       rel: uiManifest.path, source: 'loose' as const, sourcePath: uiManifest.path, extension,
     }] : [];
-    return analyzeLuaFiles(luaFiles.map(file => ({ ...file, extension })), manifestOnly);
+    return analyzeLuaFiles(luaFiles.map(file => ({ ...file, extension })), manifestOnly, { mdEventFieldDisplayProof });
   };
   const luaInputs = [...luaSources, ...uiManifests];
-  const luaInputBytes = 2 * luaInputs.reduce((total, file) => total + file.path.length + (file.content?.length ?? 0), project.id.length);
+  const mdProofBytes = mdDisplayProofSignature ? 2 * JSON.stringify(mdDisplayProofSignature).length : 0;
+  const luaInputBytes = 2 * luaInputs.reduce((total, file) => total + file.path.length + (file.content?.length ?? 0), project.id.length) + mdProofBytes;
   // Inventory and reporting consume ordered inputs. Keep absent and duplicate manifests
-  // distinct, and bind the raw paths so cache hits preserve diagnostic provenance.
+  // distinct, and bind the raw paths plus MD event display-name proofs so cache hits stay exact.
   const lua = opts.incremental !== false && luaInputs.length > 0 && luaInputBytes <= LUA_FACT_BUDGET
-    ? projectLuaFacts.get(JSON.stringify([project.id, luaSources.map(fileIdentity), uiManifests.map(fileIdentity)]),
+    ? projectLuaFacts.get(JSON.stringify([project.id, luaSources.map(fileIdentity), uiManifests.map(fileIdentity), mdDisplayProofSignature]),
       analyzeProjectLua, luaInputBytes)
     : analyzeProjectLua();
   const luaErrors = lua.findings.filter(finding => finding.severity === "error").length;
@@ -2052,6 +2063,24 @@ export function runProjectValidationSelftest(): { pass: boolean; checks: { name:
       && JSON.stringify(aiBad.aiscript) === JSON.stringify(aiBadFull.aiscript)
       && JSON.stringify(aiFixed.summary.aiRunScript) === JSON.stringify(aiFixedFull.summary.aiRunScript)
       && JSON.stringify(aiBad.evidence?.findings) === JSON.stringify(aiBadFull.evidence?.findings) });
+  const rawIdBridgeProject = (facExpr: string): ExtensionProject => ({
+    id: 'rawid-bridge-selftest',
+    name: 'RawId bridge selftest',
+    files: [
+      { path: 'content.xml', kind: classifyPath('content.xml'), content: contentXml },
+      { path: 'md/aid.xml', kind: 'md', content: `<mdscript name="Aid"><cues><cue name="Call"><actions><raise_lua_event name="'Aid.call'" param="'fac=' + ${facExpr}"/></actions></cue></cues></mdscript>` },
+      { path: 'ui/aid.lua', kind: classifyPath('ui/aid.lua'), content: 'RegisterEvent("Aid.call", function() end)\nlocal t = { title = "DISTRESS - " .. tostring(p.fac or "") }\n' },
+    ],
+  });
+  const rawIdProven = runProjectValidation(rawIdBridgeProject('$ship.owner.name'));
+  const rawIdLapsed = runProjectValidation(rawIdBridgeProject('$ship.owner.id'));
+  const rawIdLapsedFull = runProjectValidation(rawIdBridgeProject('$ship.owner.id'), { incremental: false });
+  checks.push({
+    name: 'md_display_name_proof_invalidates_cached_lua_player_text_findings_when_md_changes',
+    pass: !flattenProjectValidation(rawIdProven).some(f => f.code === 'lua.raw_engine_id_in_player_text')
+      && flattenProjectValidation(rawIdLapsed).some(f => f.code === 'lua.raw_engine_id_in_player_text' && f.filePath === 'ui/aid.lua')
+      && JSON.stringify(rawIdLapsed.lua.findings) === JSON.stringify(rawIdLapsedFull.lua.findings),
+  });
   return { pass: checks.every(check => check.pass), checks };
 }
 

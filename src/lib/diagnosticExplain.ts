@@ -116,6 +116,16 @@ const GUIDANCE: Array<{ matches: (code: string) => boolean; value: Guidance }> =
     },
   },
   {
+    matches: code => code === 'lua.raw_engine_id_in_player_text' || code === 'md_pitfall.raw_engine_id_in_player_text',
+    value: {
+      title: 'Raw engine ID reaches player-visible text',
+      why: 'A player-facing UI element, notification, comm message, or logbook string concatenates or falls back to a raw faction, ware, or macro engine ID.',
+      impact: 'Players see internal engine identifiers (such as "civilian", "loanshark", or "hullparts") instead of localized display names when a cached name is missing or an .id property is interpolated.',
+      next: 'In Lua, resolve display names via GetFactionData(id, "name"), GetWareData(id, "name"), GetMacroData(id, "name"), or a display-name helper; in MD, use .knownname or .name (or .idcode for ship hull codes).',
+      basis: 'Lua and Mission Director player-text sink and display-fallback static analysis',
+    },
+  },
+  {
     matches: code => code === 'md_lua.conversation_menu_without_deferred_redraw',
     value: {
       title: 'Conversation-triggered UI menu lacks a deferred redraw',
@@ -296,6 +306,14 @@ export function runDiagnosticExplainSelftest() {
     convRedraw.title === 'Conversation-triggered UI menu lacks a deferred redraw'
     && /deferred redraw/i.test(convRedraw.next)
     && convRedraw.ruleProvenance.kind === 'unmatched', convRedraw);
+  const rawLuaId = make('lua.raw_engine_id_in_player_text', 'warning');
+  const rawMdId = make('md_pitfall.raw_engine_id_in_player_text', 'warning');
+  check('raw engine id in player text guidance covers Lua and MD codes',
+    rawLuaId.title === 'Raw engine ID reaches player-visible text'
+    && rawMdId.title === 'Raw engine ID reaches player-visible text'
+    && /GetFactionData/.test(rawLuaId.next)
+    && /\.knownname/.test(rawMdId.next)
+    && rawLuaId.ruleProvenance.kind === 'unmatched', { rawLuaId, rawMdId });
   const truncatedUi = make('x4-ui.truncated-evidence', 'info');
   check('truncated Lua UI evidence explains the limit and a revalidation path',
     truncatedUi.title === 'Lua UI verification is incomplete'
