@@ -79,9 +79,18 @@ const KIND_META: Record<ProjectFileKind, { label: string; icon: React.ComponentT
 interface ProjectInspectorProps {
   workspace: ModWorkspace;
   schemaConfigVersion?: number;
+  onOpenValidator?: () => void;
+  onOpenDeployWizard?: () => void;
+  onOpenReleaseCenter?: () => void;
 }
 
-export default function ProjectInspector({ workspace, schemaConfigVersion = 0 }: ProjectInspectorProps) {
+export default function ProjectInspector({
+  workspace,
+  schemaConfigVersion = 0,
+  onOpenValidator,
+  onOpenDeployWizard,
+  onOpenReleaseCenter,
+}: ProjectInspectorProps) {
   const [view, setView] = useState<'overview' | 'xml-references'>('overview');
   const project = useMemo(() => projectFromWorkspace(workspace), [workspace]);
   const structure = useMemo(() => validateProjectStructure(project), [project]);
@@ -119,11 +128,44 @@ export default function ProjectInspector({ workspace, schemaConfigVersion = 0 }:
   }
 
   return (
-    <div data-testid="project-inspector" className="h-full overflow-auto bg-[#0b0d12] text-slate-200 p-4 space-y-4">
-      <div className="flex items-center gap-2">
-        <FolderTree className="w-5 h-5 text-cyan-400" />
-        <h2 className="text-sm font-bold font-mono uppercase tracking-wider text-cyan-300">Extension Project</h2>
-        <span className="text-[11px] text-slate-500 font-mono">{project.name} · {project.files.length} files</span>
+    <div data-testid="project-inspector" className="h-full overflow-auto bg-[#0b0e14] text-slate-200 p-4 space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 pb-1">
+        <div className="flex items-center gap-2">
+          <FolderTree className="w-4 h-4 text-sky-400" />
+          <h2 className="text-sm font-semibold tracking-tight text-slate-100">Extension Project</h2>
+          <span className="text-[11px] text-slate-400 font-mono">{project.name} · {project.files.length} files</span>
+        </div>
+        {(onOpenValidator || onOpenDeployWizard || onOpenReleaseCenter) && (
+          <div className="flex items-center gap-1.5">
+            {onOpenValidator && (
+              <button
+                type="button"
+                onClick={onOpenValidator}
+                className="h-7 px-2.5 rounded-md border border-slate-700/80 bg-[#11161f] hover:border-sky-500/40 text-[11px] font-medium text-slate-300 hover:text-white cursor-pointer transition-colors"
+              >
+                Validator
+              </button>
+            )}
+            {onOpenReleaseCenter && (
+              <button
+                type="button"
+                onClick={onOpenReleaseCenter}
+                className="h-7 px-2.5 rounded-md border border-slate-700/80 bg-[#11161f] hover:border-emerald-500/40 text-[11px] font-medium text-slate-300 hover:text-emerald-200 cursor-pointer transition-colors"
+              >
+                Release Center
+              </button>
+            )}
+            {onOpenDeployWizard && (
+              <button
+                type="button"
+                onClick={onOpenDeployWizard}
+                className="h-7 px-2.5 rounded-md border border-sky-500/45 bg-sky-500/15 hover:bg-sky-500/25 text-[11px] font-semibold text-sky-100 cursor-pointer transition-colors"
+              >
+                Validate &amp; Deploy
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       <div role="tablist" aria-label="Project views" className="flex gap-2 border-b border-white/10 pb-2">

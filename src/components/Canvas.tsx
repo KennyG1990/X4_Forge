@@ -173,6 +173,7 @@ function Canvas({
   filesystemPath = '',
 }: CanvasProps) {
   const [zoom, setZoom] = useState<number>(1);
+  const [minimapCollapsed, setMinimapCollapsed] = useState<boolean>(false);
   const mdScriptOptions = useMemo(() => [...new Set(
     (workspace.nodes || [])
       .map(node => String((node.properties as any)?.mdFileStem || '').trim())
@@ -1656,59 +1657,33 @@ function Canvas({
         <div className="flex min-h-0 w-fit max-w-full flex-col items-end gap-1.5">
           <div
             data-testid="canvas-toolbar"
-            className="pointer-events-auto flex w-fit max-w-full shrink-0 flex-wrap items-center gap-1.5 rounded-lg border border-cyan-500/20 bg-[#0f131a]/95 p-2 shadow-2xl glass-effect"
+            className="pointer-events-auto flex w-fit max-w-full shrink-0 flex-wrap items-center gap-1.5 rounded-lg border border-slate-700/80 bg-[#11161f]/95 px-2 py-1.5 shadow-xl backdrop-blur-md"
           >
-            <button
-              onClick={() => setZoom(prev => Math.min(prev + 0.1, 1.4))}
-              title="Zoom In (Scroll Up)"
-              className="p-1.5 rounded hover:bg-white/5 text-slate-400 hover:text-cyan-400 transition-all cursor-pointer"
-            >
-              <ZoomIn className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => setZoom(prev => Math.max(prev - 0.1, 0.6))}
-              title="Zoom Out (Scroll Down)"
-              className="p-1.5 rounded hover:bg-white/5 text-slate-400 hover:text-cyan-400 transition-all cursor-pointer"
-            >
-              <ZoomOut className="w-4 h-4" />
-            </button>
-
-            {/* AAA Feature 2: Stepped logic Flow Simulator */}
-            <button
-              onClick={() => triggerLogicSimulator()}
-              className={`p-1.5 px-2.5 rounded border text-[11px] font-mono font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-                simActive
-                  ? 'bg-red-500/10 border-red-500/40 text-red-400'
-                  : 'bg-emerald-950/20 hover:bg-emerald-900/30 border-emerald-500/20 text-emerald-400 hover:text-white'
-              }`}
-              title={simActive ? "Halt Visual Stimulation Flow" : "Boot Interactive XML Step Testing Simulator"}
-            >
-              {simActive ? (
-                <>
-                  <Square className="w-3.5 h-3.5 fill-red-400 shrink-0" />
-                  STOP SIM
-                </>
-              ) : (
-                <>
-                  <Play className="w-3.5 h-3.5 fill-emerald-400 shrink-0" />
-                  PLAY SIMULATION
-                </>
-              )}
-            </button>
-
-            <button
-              onClick={() => setIsConsoleDockOpen(prev => !prev)}
-              title="Toggle Simulation Terminal dock"
-              className={`p-1.5 rounded hover:bg-white/5 transition-all relative cursor-pointer ${isConsoleDockOpen ? 'text-amber-400' : 'text-slate-400'}`}
-            >
-              <TerminalIcon className="w-4 h-4" />
-              {simLogs.length > 0 && (
-                <span className="absolute -top-1.5 -right-1 px-1 py-0.5 rounded-full bg-amber-500 text-[8px] leading-none font-bold text-black border border-black">
-                  {simLogs.length}
-                </span>
-              )}
-            </button>
-
+            {/* View / Zoom Cluster */}
+            <div className="forge-toolbar-cluster">
+              <button
+                onClick={() => setZoom(prev => Math.max(prev - 0.1, 0.6))}
+                title="Zoom Out (Scroll Down)"
+                className="forge-toolbar-btn"
+              >
+                <ZoomOut className="w-3.5 h-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setZoom(1)}
+                title="Reset zoom to 100%"
+                className="px-1.5 h-6 text-[10px] font-mono text-slate-300 hover:text-sky-300 cursor-pointer"
+              >
+                {Math.round(zoom * 100)}%
+              </button>
+              <button
+                onClick={() => setZoom(prev => Math.min(prev + 0.1, 1.4))}
+                title="Zoom In (Scroll Up)"
+                className="forge-toolbar-btn"
+              >
+                <ZoomIn className="w-3.5 h-3.5" />
+              </button>
+            </div>
 
             {mdScriptOptions.length > 1 && onActiveMdScriptChange && (
               <select
@@ -1717,7 +1692,7 @@ function Canvas({
                 onChange={(event) => onActiveMdScriptChange(event.target.value || null)}
                 title="Show the complete graph or isolate one modeled Mission Director script"
                 aria-label="Mission Director file filter"
-                className="h-7 max-w-[min(190px,100%)] rounded border border-cyan-500/25 bg-[#0a0e14] px-2 text-[10px] font-mono font-bold text-cyan-200 outline-none hover:border-cyan-400/50 focus:border-cyan-400"
+                className="h-7 max-w-[min(190px,100%)] rounded-md border border-slate-700/80 bg-[#0c1017] px-2 text-[10.5px] font-mono font-medium text-sky-200 outline-none hover:border-sky-500/45 focus:border-sky-400"
               >
                 <option value="">ALL MODELED MD ({mdScriptOptions.length})</option>
                 {mdScriptOptions.map(script => (
@@ -1727,7 +1702,7 @@ function Canvas({
             )}
             {sourceDirectory && (
               <span
-                className={`max-w-full break-words text-[10px] font-mono ${outsideGraph.length ? 'text-amber-300' : 'text-slate-400'}`}
+                className={`max-w-full break-words text-[10px] font-mono px-1 ${outsideGraph.length ? 'text-amber-300' : 'text-slate-400'}`}
                 title={outsideGraph.length ? 'Source files outside the graph: ' + outsideGraph.join(', ') : 'Top-level XML files in the imported source folder’s md directory'}
                 data-testid="canvas-md-source-inventory"
               >
@@ -1737,39 +1712,91 @@ function Canvas({
               </span>
             )}
 
-            {/* Comment Box Group (icon-only — compact) */}
-            <button
-              onClick={addCommentBox}
-              title="Group selected nodes inside a Comment Box (Shortcut: C)"
-              className="p-1.5 rounded bg-purple-950/20 hover:bg-purple-900/30 border border-purple-500/20 text-purple-400 hover:text-white transition-all flex items-center cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5" />
-            </button>
+            {/* Authoring Cluster: Group Comment + Find */}
+            <div className="forge-toolbar-cluster">
+              <button
+                onClick={addCommentBox}
+                title="Group selected nodes inside a Comment Box (Shortcut: C)"
+                className="forge-toolbar-btn text-violet-300 hover:text-violet-200"
+              >
+                <Plus className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => setSearchOpen(prev => !prev)}
+                title="Search All Nodes by label, tag, or field properties (Shortcut: Ctrl+F)"
+                className={`forge-toolbar-btn ${searchOpen ? 'text-sky-300 bg-sky-500/15' : ''}`}
+              >
+                <Search className="w-3.5 h-3.5" />
+                <span>FIND</span>
+              </button>
+            </div>
 
-            {/* Find in Blueprints Search Bar toggle */}
-            <button
-              onClick={() => setSearchOpen(prev => !prev)}
-              title="Search All Nodes by label, tag, or field properties (Shortcut: Ctrl+F)"
-              className={`p-1.5 px-2.5 rounded border text-[11px] font-mono font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-                searchOpen
-                  ? 'bg-cyan-500/10 border-cyan-500/40 text-cyan-400'
-                  : 'bg-slate-900 hover:bg-slate-800 border-white/10 text-slate-300'
-              }`}
-            >
-              <Search className="w-3.5 h-3.5 font-bold" />
-              FIND
-            </button>
+            {/* Runtime & Simulation Cluster */}
+            <div className="forge-toolbar-cluster">
+              <button
+                onClick={() => triggerLogicSimulator()}
+                className={`forge-toolbar-btn font-mono font-semibold ${
+                  simActive
+                    ? 'bg-rose-500/15 text-rose-300'
+                    : 'text-emerald-300 hover:bg-emerald-500/15'
+                }`}
+                title={simActive ? "Halt Visual Simulation Flow" : "Boot Interactive XML Step Testing Simulator"}
+              >
+                {simActive ? (
+                  <>
+                    <Square className="w-3 h-3 fill-rose-400 shrink-0" />
+                    STOP SIM
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-3 h-3 fill-emerald-400 shrink-0" />
+                    PLAY SIMULATION
+                  </>
+                )}
+              </button>
 
-            {/* Compile / Diagnostic checks badge */}
+              <button
+                onClick={() => setIsConsoleDockOpen(prev => !prev)}
+                title="Toggle Simulation Output panel"
+                className={`forge-toolbar-btn relative ${isConsoleDockOpen ? 'text-amber-300 bg-amber-500/10' : ''}`}
+              >
+                <TerminalIcon className="w-3.5 h-3.5" />
+                {simLogs.length > 0 && (
+                  <span className="px-1 py-0.5 rounded-full bg-amber-500/20 text-[9px] leading-none font-mono font-semibold text-amber-300">
+                    {simLogs.length}
+                  </span>
+                )}
+              </button>
+
+              <button
+                onClick={() => setLiveMode(prev => !prev)}
+                data-testid="canvas-live-toggle"
+                title={liveMode
+                  ? `LIVE game telemetry ON — ${liveStatus ? (liveStatus.error ? `telemetry unavailable: ${liveStatus.error}` : liveStatus.available ? (liveStatus.live ? 'debug log is ACTIVE (game writing now)' : `log found, last update ${liveStatus.updatedAt || 'unknown'}`) : 'no X4 debug log found') : liveCueNames.length ? 'connecting…' : 'no named cue nodes to watch'}. ${liveStatus?.bridge ? liveStatus.bridge.summary + ' ' : ''}Firing cues get green ▶ badges, erroring cues red ✗ — straight from the running game.`
+                  : 'LIVE — light up cue nodes from the running game\'s debug log (Play-In-Editor mode)'}
+                className={`forge-toolbar-btn font-mono font-semibold ${
+                  liveMode
+                    ? (liveStatus?.live
+                      ? 'bg-emerald-500/15 text-emerald-300'
+                      : 'bg-amber-500/15 text-amber-300')
+                    : ''
+                }`}
+              >
+                <Activity className={`w-3.5 h-3.5 ${liveMode ? 'animate-pulse' : ''}`} />
+                <span className="text-[10px]">LIVE</span>
+              </button>
+            </div>
+
+            {/* Validation & Layout Tools Cluster */}
             <button
               onClick={() => setDiagnosticPanelOpen(prev => !prev)}
               data-testid="package-status-badge"
-              className={`p-1.5 px-2.5 rounded text-[11px] font-mono font-bold flex items-center gap-1.5 transition-all border cursor-pointer ${
+              className={`h-7 px-2.5 rounded-md text-[11px] font-mono font-semibold flex items-center gap-1.5 transition-colors border cursor-pointer ${
                 packageStatus.tone === 'red'
-                  ? 'bg-red-500/10 border-red-500/20 text-red-400 hover:bg-red-500/15'
+                  ? 'bg-rose-500/10 border-rose-500/30 text-rose-300 hover:bg-rose-500/15'
                   : packageStatus.tone === 'amber'
-                  ? 'bg-amber-500/10 border-amber-500/20 text-amber-400 hover:bg-amber-500/15'
-                  : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/15'
+                  ? 'bg-amber-500/10 border-amber-500/30 text-amber-300 hover:bg-amber-500/15'
+                  : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/15'
               }`}
               title={diagnosticSource === 'project'
                 ? 'Continuous full-project validation status. Open for corpus, schema, package, and graph details.'
@@ -1778,7 +1805,7 @@ function Canvas({
                   : 'Package compiler is unavailable; showing local MD validation only.'}
             >
               {packageStatus.tone === 'red' ? (
-                <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
               ) : packageStatus.tone === 'amber' ? (
                 <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
               ) : (
@@ -1787,31 +1814,13 @@ function Canvas({
               <span>VALIDATION: {packageStatus.label}</span>
             </button>
 
-
-            <button
-              onClick={() => setLiveMode(prev => !prev)}
-              data-testid="canvas-live-toggle"
-              title={liveMode
-                ? `LIVE game telemetry ON — ${liveStatus ? (liveStatus.error ? `telemetry unavailable: ${liveStatus.error}` : liveStatus.available ? (liveStatus.live ? 'debug log is ACTIVE (game writing now)' : `log found, last update ${liveStatus.updatedAt || 'unknown'}`) : 'no X4 debug log found') : liveCueNames.length ? 'connecting…' : 'no named cue nodes to watch'}. ${liveStatus?.bridge ? liveStatus.bridge.summary + ' ' : ''}Firing cues get green ▶ badges, erroring cues red ✗ — straight from the running game.`
-                : 'LIVE — light up cue nodes from the running game\'s debug log (Play-In-Editor mode)'}
-              className={`p-1.5 rounded flex items-center gap-1 transition-all border cursor-pointer ${
-                liveMode
-                  ? (liveStatus?.live
-                    ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-400'
-                    : 'bg-amber-500/10 border-amber-500/35 text-amber-400')
-                  : 'bg-slate-900 border-white/10 text-slate-350 hover:bg-slate-800'
-              }`}
-            >
-              <Activity className={`w-3.5 h-3.5 ${liveMode ? 'animate-pulse' : ''}`} />
-              <span className="text-[8px] font-mono font-bold tracking-wider">LIVE</span>
-            </button>
             <button
               ref={graphToolsButton}
               type="button"
               aria-expanded={graphToolsOpen}
               aria-controls={graphToolsOpen ? graphToolsId : undefined}
               onClick={() => setGraphToolsOpen(open => !open)}
-              className="flex items-center gap-1.5 whitespace-nowrap rounded border border-white/10 bg-slate-900 px-2.5 py-1.5 font-mono text-[11px] font-bold text-slate-200 hover:border-cyan-500/40 hover:text-cyan-300 focus-visible:outline-2 focus-visible:outline-cyan-400"
+              className="flex h-7 items-center gap-1.5 whitespace-nowrap rounded-md border border-slate-700/80 bg-[#0c1017] px-2.5 text-[11px] font-medium text-slate-200 hover:border-sky-500/45 hover:text-sky-200 focus-visible:outline-2 focus-visible:outline-sky-400 cursor-pointer transition-colors"
             >
               <SlidersHorizontal aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
               Graph tools
@@ -2579,26 +2588,26 @@ function Canvas({
         </div>
       )}
 
-      {/* AAA Feature 4: Sliding Script Simulator Logs HUD Terminal overlay */}
+      {/* Simulation Output Console overlay */}
       {isConsoleDockOpen && (
-        <div className="absolute bottom-4 right-4 z-40 w-96 bg-[#080b0f] border border-[#f59e0b]/30 rounded-xl shadow-2xl flex flex-col font-mono text-[10px] text-amber-200/90 animate-terminal-line h-60 max-h-80 overflow-hidden">
+        <div className="absolute bottom-3 right-3 z-40 w-96 bg-[#0c1017]/98 border border-slate-700/80 rounded-lg shadow-2xl flex flex-col font-mono text-[10px] text-slate-200 h-60 max-h-80 overflow-hidden">
           
           {/* Header Panel */}
-          <div className="bg-[#10151c] border-b border-[#f59e0b]/15 p-2.5 flex items-center justify-between shrink-0">
+          <div className="bg-[#131822] border-b border-slate-800 px-3 py-2 flex items-center justify-between shrink-0">
             <div className="flex items-center gap-1.5">
-              <TerminalIcon className="w-3.5 h-3.5 text-[#f59e0b] animate-pulse" />
-              <span className="font-bold text-slate-200">TACTICAL LOG MONITOR</span>
+              <TerminalIcon className="w-3.5 h-3.5 text-amber-400" />
+              <span className="font-semibold font-sans text-[11px] text-slate-100">Simulation Console</span>
             </div>
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setSimLogs([])}
-                className="hover:text-white text-slate-500 text-[9px] px-1.5 py-0.5 bg-black/40 rounded hover:bg-black/60 border border-white/5 transition-colors cursor-pointer"
+                className="hover:text-white text-slate-400 text-[9.5px] px-1.5 py-0.5 bg-[#0a0d13] rounded hover:bg-white/5 border border-slate-800 transition-colors cursor-pointer"
               >
                 CLEAR LOGS
               </button>
               <button
                 onClick={() => setIsConsoleDockOpen(false)}
-                className="hover:bg-white/5 p-1 rounded text-slate-400 hover:text-white"
+                className="hover:bg-white/5 p-1 rounded text-slate-400 hover:text-white cursor-pointer"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
@@ -2606,21 +2615,21 @@ function Canvas({
           </div>
 
           {/* Lines scrolling window */}
-          <div className="flex-1 overflow-y-auto p-3 space-y-1.5 custom-scrollbar bg-[#05070a] select-text">
+          <div className="flex-1 overflow-y-auto p-3 space-y-1.5 custom-scrollbar bg-[#090c12] select-text">
             {simLogs.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-slate-500 italic py-10 font-sans text-center px-4 leading-normal">
-                <Globe className="w-7 h-7 text-slate-700 mb-2 animate-spin-slow" />
-                No simulation log metrics reported. Click 'PLAY SIMULATION' above or right click an event cue trigger to compile and test sequence.
+              <div className="h-full flex flex-col items-center justify-center text-slate-500 py-8 font-sans text-center px-4 leading-relaxed text-[11px]">
+                <TerminalIcon className="w-5 h-5 text-slate-600 mb-2" />
+                No simulation steps recorded yet. Click <span className="text-slate-300 font-medium">PLAY SIMULATION</span> in the canvas toolbar to step through active cues.
               </div>
             ) : (
               simLogs.map((log) => {
-                let colorClass = 'text-amber-200/80';
-                if (log.type === 'success') colorClass = 'text-emerald-400 font-bold';
-                else if (log.type === 'warn') colorClass = 'text-red-400 font-bold';
-                else if (log.type === 'action') colorClass = 'text-cyan-400';
+                let colorClass = 'text-slate-300';
+                if (log.type === 'success') colorClass = 'text-emerald-400 font-semibold';
+                else if (log.type === 'warn') colorClass = 'text-rose-400 font-semibold';
+                else if (log.type === 'action') colorClass = 'text-sky-300';
 
                 return (
-                  <div key={log.id} className="leading-relaxed border-b border-white/[0.02] pb-1 flex items-start gap-1.5 text-left animate-terminal-line">
+                  <div key={log.id} className="leading-relaxed border-b border-white/[0.03] pb-1 flex items-start gap-1.5 text-left">
                     <span className="text-slate-500 select-none font-sans mt-0.5">{log.time}</span>
                     <span className={colorClass}>{log.text}</span>
                   </div>
@@ -2632,49 +2641,63 @@ function Canvas({
         </div>
       )}
 
-      {/* AAA Feature 5: Floating Mini Radar Layout Minimap card */}
-      <div className="absolute bottom-4 left-4 z-40 bg-[#0c1017]/95 border border-cyan-500/25 p-2 rounded-xl shadow-2xl glass-effect flex flex-col gap-1 select-none">
-        <span className="text-[9px] text-slate-400 font-bold uppercase tracking-widest flex items-center gap-1 border-b border-white/5 pb-1 font-mono">
-          <Compass className="w-3 h-3 text-cyan-400 animate-spin-slow" />
-          RADAR MINIMAP
-        </span>
-        <div className="relative w-36 h-24 bg-[#05070a] rounded-lg border border-white/5 overflow-hidden">
-          {minimapNodes.map(node => {
-            // Transform coordinates down to scale perfectly within radar dimension boundaries (144px width, 96px height)
-            const nodeX = rangeX > 1 ? ((node.x - minX) / rangeX) * 120 + 8 : 10;
-            const nodeY = rangeY > 1 ? ((node.y - minY) / rangeY) * 80 + 8 : 10;
-            
-            let colorDot = 'bg-cyan-500';
-            if (node.type === 'cue') colorDot = 'bg-purple-500 ring-2 ring-purple-500/40';
-            else if (node.type === 'event') colorDot = 'bg-amber-500';
-            else if (node.type === 'action') colorDot = 'bg-emerald-500';
-
-            const isCurrentSelected = selectedNode?.id === node.id;
-
-            return (
-              <div
-                key={`mini_${node.id}`}
-                style={{ left: nodeX, top: nodeY }}
-                className={`absolute w-1.5 h-1.5 rounded-full transition-transform ${colorDot} ${
-                  isCurrentSelected ? 'scale-150 ring-2 ring-white animate-pulse' : ''
-                }`}
-                title={node.label}
-              />
-            );
-          })}
-
-          {/* Drawing pan offset aspect range box inside minimap */}
-          <div 
-            className="absolute border border-cyan-500/30 bg-cyan-500/5 rounded pointer-events-none"
-            style={{
-              left: Math.max(0, Math.min(100, -panOffset.x / 14)),
-              top: Math.max(0, Math.min(60, -panOffset.y / 14)),
-              width: Math.max(30, 110 / zoom),
-              height: Math.max(20, 70 / zoom)
-            }}
-          />
+      {/* Collapsible Graph Minimap */}
+      <div
+        data-testid="canvas-minimap"
+        className="absolute bottom-3 left-3 z-30 bg-[#11161f]/95 border border-slate-700/80 px-2 py-1.5 rounded-lg shadow-xl backdrop-blur-md flex flex-col gap-1.5 select-none"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-[10px] text-slate-300 font-medium flex items-center gap-1.5">
+            <Compass className="w-3 h-3 text-sky-400" />
+            Minimap
+            <span className="text-[9.5px] font-mono text-slate-500">({minimapNodes.length})</span>
+          </span>
+          <button
+            type="button"
+            onClick={() => setMinimapCollapsed(prev => !prev)}
+            aria-label={minimapCollapsed ? 'Expand minimap' : 'Collapse minimap'}
+            className="px-1 py-0.5 rounded text-[9.5px] font-mono text-slate-400 hover:text-white hover:bg-white/5 cursor-pointer"
+          >
+            {minimapCollapsed ? 'Show' : 'Hide'}
+          </button>
         </div>
-        <p className="text-[8px] text-slate-500 font-sans text-center mt-0.5">Double click canvas to Spawn node</p>
+        {!minimapCollapsed && (
+          <div className="relative w-36 h-24 bg-[#080b10] rounded border border-slate-800 overflow-hidden">
+            {minimapNodes.map(node => {
+              const nodeX = rangeX > 1 ? ((node.x - minX) / rangeX) * 120 + 8 : 10;
+              const nodeY = rangeY > 1 ? ((node.y - minY) / rangeY) * 80 + 8 : 10;
+
+              let colorDot = 'bg-sky-400';
+              if (node.type === 'cue') colorDot = 'bg-purple-400 ring-1 ring-purple-400/40';
+              else if (node.type === 'event') colorDot = 'bg-amber-400';
+              else if (node.type === 'action') colorDot = 'bg-emerald-400';
+
+              const isCurrentSelected = selectedNode?.id === node.id;
+
+              return (
+                <div
+                  key={`mini_${node.id}`}
+                  style={{ left: nodeX, top: nodeY }}
+                  className={`absolute w-1.5 h-1.5 rounded-full transition-transform ${colorDot} ${
+                    isCurrentSelected ? 'scale-150 ring-2 ring-white' : ''
+                  }`}
+                  title={node.label}
+                />
+              );
+            })}
+
+            {/* Pan viewport indicator */}
+            <div
+              className="absolute border border-sky-400/35 bg-sky-400/5 rounded pointer-events-none"
+              style={{
+                left: Math.max(0, Math.min(100, -panOffset.x / 14)),
+                top: Math.max(0, Math.min(60, -panOffset.y / 14)),
+                width: Math.max(30, 110 / zoom),
+                height: Math.max(20, 70 / zoom)
+              }}
+            />
+          </div>
+        )}
       </div>
 
       {/* AAA Feature 6: Find in Blueprints Floating Search HUD Panel */}

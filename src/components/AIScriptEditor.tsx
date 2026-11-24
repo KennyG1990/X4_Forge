@@ -299,12 +299,12 @@ export default function AIScriptEditor({ workspace, setWorkspace }: AIScriptEdit
   };
 
   return (
-    <div id="ai_script_editor_view" className="flex-1 bg-[#0a0c10] flex flex-col h-full overflow-hidden text-slate-300">
-      {/* Simulation HUD Controls bar */}
-      <div className="bg-[#161920]/90 border-b border-white/10 p-3 flex items-center justify-between font-mono text-xs">
+    <div id="ai_script_editor_view" className="flex-1 bg-[#0b0e14] flex flex-col h-full overflow-hidden text-slate-200">
+      {/* Compact AI Scripts Workbench Header */}
+      <div className="h-9 bg-[#131822] border-b border-slate-800/90 px-3 flex items-center justify-between text-xs shrink-0">
         <div className="flex items-center gap-2">
-          <Cpu className="w-4 h-4 text-amber-500 animate-pulse" />
-          <span className="font-semibold text-slate-200 uppercase tracking-tight">AIScripts Behavior-Tree Engine</span>
+          <Cpu className="w-4 h-4 text-amber-400" />
+          <span className="font-semibold text-slate-100 tracking-tight">AI Behavior Scripts</span>
         </div>
         
         {/* Scripts selectors */}

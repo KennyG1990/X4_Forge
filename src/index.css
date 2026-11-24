@@ -1,5 +1,20 @@
 @import "tailwindcss";
 
+:root {
+  --forge-bg-app: #0b0e14;
+  --forge-bg-stage: #090c11;
+  --forge-bg-panel: #11161f;
+  --forge-bg-elevated: #161d29;
+  --forge-bg-input: #0a0d13;
+  --forge-border: rgba(148, 163, 184, 0.14);
+  --forge-border-subtle: rgba(148, 163, 184, 0.08);
+  --forge-accent: #38bdf8;
+  --forge-accent-muted: rgba(56, 189, 248, 0.14);
+  --forge-text-primary: #e2e8f0;
+  --forge-text-secondary: #94a3b8;
+  --forge-text-muted: #64748b;
+}
+
 html,
 body,
 #root {
@@ -7,47 +22,62 @@ body,
   max-width: 100%;
   height: 100%;
   overflow: hidden;
+  background-color: var(--forge-bg-app);
+  color: var(--forge-text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 @utility studio-actions-popover {
-  @apply absolute right-0 top-9 z-[10000] max-h-[calc(100dvh-3rem)] w-64 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-lg border border-cyan-500/25 bg-[#0b0e14]/98 p-1.5 shadow-2xl;
+  @apply absolute right-0 top-9 z-[10000] max-h-[calc(100dvh-3rem)] w-64 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-lg border border-slate-700/70 bg-[#11161f]/98 p-1.5 shadow-2xl backdrop-blur-md;
+}
+
+.studio-menu-section-label {
+  padding: 5px 8px 3px;
+  font: 600 10px/1.2 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--forge-text-muted);
+  letter-spacing: 0.03em;
+  user-select: none;
 }
 
 .studio-menu-item {
   width: 100%;
-  min-height: 32px;
+  min-height: 30px;
   display: flex;
   align-items: center;
   gap: 8px;
   border-radius: 6px;
-  padding: 6px 8px;
-  color: rgb(203 213 225);
-  font: 700 10px/1.2 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  padding: 5px 8px;
+  color: rgb(226 232 240);
+  font: 500 11.5px/1.25 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  letter-spacing: 0.005em;
   text-align: left;
   cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
 }
 
 .studio-menu-item:hover,
 .studio-menu-item:focus-visible,
 .studio-menu-item[aria-pressed='true'] {
-  background: rgba(255, 255, 255, 0.06);
-  color: white;
+  background: rgba(56, 189, 248, 0.1);
+  color: #ffffff;
+  outline: none;
 }
 
 .settings-select {
   width: 100%;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 5px;
-  background: #0f1115;
-  color: rgb(203 213 225);
-  padding: 6px 7px;
+  border: 1px solid var(--forge-border);
+  border-radius: 6px;
+  background: var(--forge-bg-input);
+  color: rgb(226 232 240);
+  padding: 6px 8px;
+  font-size: 11.5px;
   outline: none;
+  transition: border-color 120ms ease;
 }
 
 .settings-select:focus {
-  border-color: rgba(6, 182, 212, 0.65);
+  border-color: rgba(56, 189, 248, 0.65);
 }
 
 .settings-button {
@@ -56,19 +86,68 @@ body,
   align-items: center;
   justify-content: center;
   gap: 5px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 5px;
-  background: rgba(255, 255, 255, 0.025);
-  color: rgb(203 213 225);
-  padding: 5px 8px;
-  font: 700 9px/1.2 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  text-transform: uppercase;
+  border: 1px solid var(--forge-border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  color: rgb(226 232 240);
+  padding: 4px 9px;
+  font: 600 11px/1.2 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease, color 120ms ease;
 }
 
 .settings-button:hover {
-  border-color: rgba(6, 182, 212, 0.45);
-  color: rgb(103 232 249);
+  border-color: rgba(56, 189, 248, 0.45);
+  background: rgba(56, 189, 248, 0.08);
+  color: rgb(186 230 253);
+}
+
+/* Unified IDE Toolbar Cluster & Segmented Switch Primitives */
+.forge-toolbar-cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 7px;
+  background: rgba(15, 20, 29, 0.92);
+  border: 1px solid var(--forge-border);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
+}
+
+.forge-toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 5px;
+  font: 500 11px/1 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #cbd5e1;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.forge-toolbar-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.07);
+  color: #ffffff;
+}
+
+.forge-toolbar-btn[aria-pressed='true'],
+.forge-toolbar-btn-active {
+  background: rgba(56, 189, 248, 0.16);
+  color: #7dd3fc;
+}
+
+.forge-kbd {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(15, 23, 42, 0.7);
+  color: #94a3b8;
+  font: 600 9.5px/1.2 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 @keyframes flowPulse {
@@ -79,22 +158,23 @@ body,
 
 .animate-wire-flow {
   stroke-dasharray: 6, 6;
-  animation: flowPulse 0.5s linear infinite;
+  animation: flowPulse 0.65s linear infinite;
 }
 
+/* Calm IDE node highlight during active simulation (replaces heavy neon strobe) */
 @keyframes nodeGlow {
   0%, 100% {
-    box-shadow: 0 0 8px rgba(6, 182, 212, 0.4), inset 0 0 2px rgba(6, 182, 212, 0.2);
-    border-color: rgba(6, 182, 212, 0.4);
+    box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.45), 0 4px 14px rgba(14, 165, 233, 0.18);
+    border-color: rgba(56, 189, 248, 0.55);
   }
   50% {
-    box-shadow: 0 0 25px rgba(6, 182, 212, 0.95), inset 0 0 10px rgba(6, 182, 212, 0.5);
-    border-color: rgba(6, 182, 212, 0.95);
+    box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.8), 0 6px 18px rgba(14, 165, 233, 0.3);
+    border-color: rgba(56, 189, 248, 0.9);
   }
 }
 
 .animate-node-glow-active {
-  animation: nodeGlow 1.2s ease-in-out infinite;
+  animation: nodeGlow 1.6s ease-in-out infinite;
 }
 
 @keyframes terminalFade {
@@ -113,36 +193,36 @@ body,
 }
 
 .custom-scrollbar::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
+  width: 5px;
+  height: 5px;
 }
 .custom-scrollbar::-webkit-scrollbar-track {
-  background: rgba(0,0,0,0.1);
+  background: rgba(0, 0, 0, 0.08);
 }
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(255,255,255,0.15);
-  border-radius: 2px;
+  background: rgba(148, 163, 184, 0.2);
+  border-radius: 3px;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: rgba(255,255,255,0.3);
+  background: rgba(148, 163, 184, 0.36);
 }
 
-/* App-wide dark scrollbar theme — dark gutter, near-invisible thumb that brightens on hover. */
+/* App-wide dark scrollbar theme */
 *::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 9px;
+  height: 9px;
 }
 *::-webkit-scrollbar-track {
-  background: rgba(0,0,0,0.3);
+  background: rgba(0, 0, 0, 0.22);
 }
 *::-webkit-scrollbar-thumb {
-  background: rgba(255,255,255,0.07);
+  background: rgba(148, 163, 184, 0.14);
   border: 2px solid transparent;
   background-clip: padding-box;
   border-radius: 6px;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: rgba(255,255,255,0.18);
+  background: rgba(148, 163, 184, 0.28);
   background-clip: padding-box;
 }
 *::-webkit-scrollbar-corner {
@@ -150,29 +230,26 @@ body,
 }
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255,255,255,0.12) transparent;
+  scrollbar-color: rgba(148, 163, 184, 0.2) transparent;
 }
 
-/* Code viewer scrollbar: dark gutter, near-invisible thumb. The colored error/warning
-   ticks are overlaid in JSX so the gutter doubles as an error map (Antigravity-style). */
 .code-scroll::-webkit-scrollbar {
-  width: 12px;
-  height: 10px;
+  width: 11px;
+  height: 9px;
 }
 .code-scroll::-webkit-scrollbar-track {
-  background: rgba(0,0,0,0.35);
+  background: rgba(0, 0, 0, 0.32);
 }
 .code-scroll::-webkit-scrollbar-thumb {
-  background: rgba(255,255,255,0.05);
-  border: 3px solid transparent;
+  background: rgba(148, 163, 184, 0.12);
+  border: 2px solid transparent;
   background-clip: padding-box;
   border-radius: 6px;
 }
 .code-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(255,255,255,0.18);
+  background: rgba(148, 163, 184, 0.28);
   background-clip: padding-box;
 }
 .code-scroll::-webkit-scrollbar-corner {
   background: transparent;
 }
-

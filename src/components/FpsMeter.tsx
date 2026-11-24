@@ -2,27 +2,20 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  *
- * A tiny always-on performance overlay (50th pass, Phase 2; H4 supplement 2026-06-16).
- *
- * IMPORTANT — what this is and is NOT (H4): the FPS number is a *cadence* indicator,
- * sampled from requestAnimationFrame deltas (mainly main-thread paint cadence). A green
- * 60 means the rAF loop is keeping up; it does NOT prove "no perf problems" — it can miss
- * off-loop cost (network round-trips, React commit/layout thrash) and brief main-thread
- * stalls that the ~2×/sec average smooths over.
- *
- * To stop a green number from hiding jank, this overlay ALSO observes main-thread
- * `longtask` entries (>50ms blocks) via PerformanceObserver where supported, and surfaces
- * the worst recent longtask as a ⚠ badge. So: FPS = cadence; ⚠ = a real main-thread stall
- * the FPS average would otherwise paper over.
- *
- * Pointer-events-none so it never intercepts clicks; high z-index so it stays visible.
+ * Frame cadence & longtask (>50ms main-thread stall) telemetry indicator.
+ * Supports docked rendering inside the IDE status bar (default, eliminating bottom-left
+ * Canvas minimap collisions) as well as standalone floating overlay rendering.
  */
 import React, { useEffect, useRef, useState } from 'react';
 import { isWebviewPerformanceCollecting, recordWebviewFrame, recordWebviewLongTask, setWebviewPerformanceSupport } from '../lib/webviewPerformance';
 
-const LONGTASK_WINDOW_MS = 2000; // how long a longtask stays flagged
+const LONGTASK_WINDOW_MS = 2000;
 
-export default function FpsMeter() {
+interface FpsMeterProps {
+  variant?: 'docked' | 'floating';
+}
+
+export default function FpsMeter({ variant = 'docked' }: FpsMeterProps) {
   const [fps, setFps] = useState<number>(0);
   const [longtaskMs, setLongtaskMs] = useState<number>(0);
   const frames = useRef(0);
@@ -57,13 +50,16 @@ export default function FpsMeter() {
             if (typeof heap === 'number' && Number.isFinite(heap) && heap >= 0) jsHeapUsedBytes = heap;
           } catch { /* optional Chromium estimate, never process RSS */ }
           const visible = frameWindowVisible && visibility() === 'visible';
-          recordWebviewFrame({ fps: visible ? frames.current * 1000 / elapsed : null,
-            frameIntervalMs: visible ? elapsed / frames.current : null, jsHeapUsedBytes, visibility: visibility() });
+          recordWebviewFrame({
+            fps: visible ? frames.current * 1000 / elapsed : null,
+            frameIntervalMs: visible ? elapsed / frames.current : null,
+            jsHeapUsedBytes,
+            visibility: visibility(),
+          });
         }
         frameWindowVisible = visibility() === 'visible';
         frames.current = 0;
         last.current = now;
-        // Expire the longtask flag once its window has passed.
         if (worstLongtask.current > 0 && now - lastLongtaskAt.current > LONGTASK_WINDOW_MS) {
           worstLongtask.current = 0;
           setLongtaskMs(0);
@@ -73,12 +69,10 @@ export default function FpsMeter() {
     };
     raf.current = requestAnimationFrame(tick);
 
-    // PerformanceObserver longtask supplement — not all engines support 'longtask'
-    // (Chromium does), so guard and degrade gracefully to the FPS-only overlay.
     let observer: PerformanceObserver | null = null;
     try {
       if (typeof PerformanceObserver !== 'undefined'
-          && (PerformanceObserver as any).supportedEntryTypes?.includes('longtask')) {
+          && (PerformanceObserver as unknown as { supportedEntryTypes?: string[] }).supportedEntryTypes?.includes('longtask')) {
         observer = new PerformanceObserver(list => {
           if (disposed) return;
           let worst = 0;
@@ -96,7 +90,7 @@ export default function FpsMeter() {
         setWebviewPerformanceSupport({ longTasks: 'supported' });
       }
     } catch {
-      /* longtask observation unsupported — FPS-only overlay */
+      /* longtask observation unsupported — FPS-only indicator */
     }
 
     return () => {
@@ -108,42 +102,57 @@ export default function FpsMeter() {
     };
   }, []);
 
-  // green ≥ 55, amber 30–54, red < 30
-  const color = fps >= 55 ? '#10b981' : fps >= 30 ? '#f59e0b' : '#ef4444';
-  // longtask severity: amber 50–199ms, red ≥ 200ms
-  const ltColor = longtaskMs >= 200 ? '#ef4444' : '#f59e0b';
+  const color = fps >= 55 ? '#34d399' : fps >= 30 ? '#fbbf24' : '#f87171';
+  const ltColor = longtaskMs >= 200 ? '#f87171' : '#fbbf24';
+  const tooltip = 'FPS = rAF-sampled paint cadence (60 ≈ smooth). Cadence indicator, not a full profiler. ⚠ flags a recent main-thread longtask (>50ms stall).';
+
+  if (variant === 'docked') {
+    return (
+      <div
+        data-testid="fps-meter"
+        title={tooltip}
+        className="inline-flex items-center gap-2 px-2 py-0.5 font-mono text-[10.5px] font-semibold select-none shrink-0"
+        style={{ color }}
+      >
+        <span className="inline-flex items-center gap-1">
+          <span aria-hidden="true" className="text-[8px]">●</span>
+          <span>{fps} FPS</span>
+        </span>
+        {longtaskMs > 0 && (
+          <span style={{ color: ltColor }} data-testid="fps-longtask">
+            ⚠ {longtaskMs}ms
+          </span>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div
       style={{
         position: 'fixed',
         left: 10,
-        bottom: 10,
+        bottom: 34,
         zIndex: 9999,
         pointerEvents: 'none',
-        fontFamily: 'monospace',
-        fontSize: 12,
-        fontWeight: 700,
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+        fontSize: 11,
+        fontWeight: 600,
         lineHeight: 1,
-        padding: '5px 9px',
-        borderRadius: 8,
-        background: 'rgba(8,11,15,0.82)',
-        border: `1px solid ${color}55`,
+        padding: '4px 8px',
+        borderRadius: 6,
+        background: 'rgba(11, 14, 20, 0.88)',
+        border: `1px solid ${color}44`,
         color,
-        letterSpacing: '0.04em',
-        boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
         userSelect: 'none',
         display: 'flex',
         alignItems: 'center',
         gap: 8,
       }}
-      title={
-        'FPS = rAF-sampled paint cadence (60 ≈ smooth). It is a cadence indicator, not a full profiler — '
-        + 'it can miss network/off-loop cost. ⚠ flags a recent main-thread longtask (>50ms stall) the FPS average would hide.'
-      }
+      title={tooltip}
       data-testid="fps-meter"
     >
-      <span><span style={{ marginRight: 6 }}>●</span>{fps} FPS</span>
+      <span><span style={{ marginRight: 5 }}>●</span>{fps} FPS</span>
       {longtaskMs > 0 && (
         <span style={{ color: ltColor }} data-testid="fps-longtask">⚠ {longtaskMs}ms</span>
       )}

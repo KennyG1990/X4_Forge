@@ -5,11 +5,13 @@ import { prepareDeployReview, type DeployReviewData } from './lib/deployClient';
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Undo2, Redo2, Keyboard, PanelLeftOpen } from 'lucide-react';
+import { Undo2, Redo2, Keyboard, PanelLeftOpen, Rocket } from 'lucide-react';
 import BugReportModal from './components/BugReportModal';
 import Sidebar from './components/Sidebar';
-import FpsMeter from './components/FpsMeter';
 import HealthCardOverlay from './components/HealthCardOverlay';
+import ContextualInspector from './components/ContextualInspector';
+import BottomWorkbenchDock, { type BottomDockTab } from './components/BottomWorkbenchDock';
+import WorkbenchStatusBar from './components/WorkbenchStatusBar';
 import DialogHost, { confirmDialog, promptDialog, toast } from './lib/uiDialogs';
 import SyncModal from './components/SyncModal';
 import WorkspaceConflictDialog, { type WorkspaceConflictDetail } from './components/WorkspaceConflictDialog';
@@ -2521,6 +2523,59 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
 
   const mdErrorCount = mdDiagnostics.filter(d => d.severity === 'error').length;
   const mdWarningCount = mdDiagnostics.filter(d => d.severity === 'warning').length;
+  const totalDiagnosticErrors = effectiveDiagnostics.filter(d => d.severity === 'error').length;
+  const totalDiagnosticWarnings = effectiveDiagnostics.filter(d => d.severity === 'warning').length;
+
+  // Unified IDE Workbench Dock States (Right Contextual Inspector + Bottom Panel)
+  const [rightInspectorPinned, setRightInspectorPinned] = useState<boolean>(false);
+  const [rightInspectorDismissedKey, setRightInspectorDismissedKey] = useState<string>('');
+  const [bottomDockOpen, setBottomDockOpen] = useState<boolean>(false);
+  const [bottomDockTab, setBottomDockTab] = useState<BottomDockTab>('problems');
+
+  const activeSelectionKey = selectedNode
+    ? `node:${selectedNode.id}`
+    : selectedWidget
+      ? `widget:${selectedWidget.id}`
+      : '';
+  const isRightInspectorOpen = experienceMode === 'expert' && (
+    rightInspectorPinned || (activeSelectionKey !== '' && activeSelectionKey !== rightInspectorDismissedKey)
+  );
+
+  const toggleRightInspector = React.useCallback(() => {
+    if (isRightInspectorOpen) {
+      setRightInspectorPinned(false);
+      if (activeSelectionKey) setRightInspectorDismissedKey(activeSelectionKey);
+    } else {
+      setRightInspectorDismissedKey('');
+      setRightInspectorPinned(true);
+    }
+  }, [activeSelectionKey, isRightInspectorOpen]);
+
+  const toggleBottomDock = React.useCallback((tab?: BottomDockTab) => {
+    if (tab) {
+      if (bottomDockOpen && bottomDockTab === tab) setBottomDockOpen(false);
+      else {
+        setBottomDockTab(tab);
+        setBottomDockOpen(true);
+      }
+    } else {
+      setBottomDockOpen(open => !open);
+    }
+  }, [bottomDockOpen, bottomDockTab]);
+
+  useEffect(() => {
+    const onWorkbenchShortcut = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || event.altKey) return;
+      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'j') {
+        if (experienceMode !== 'expert') return;
+        event.preventDefault();
+        setBottomDockOpen(open => !open);
+      }
+    };
+    window.addEventListener('keydown', onWorkbenchShortcut);
+    return () => window.removeEventListener('keydown', onWorkbenchShortcut);
+  }, [experienceMode]);
+
   // First diagnostic that points at a node, so the indicators can jump straight to it.
   const firstFlaggedNodeId =
     mdDiagnostics.find(d => d.severity === 'error' && d.nodeId)?.nodeId ||
@@ -2535,46 +2590,46 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
   }, [firstFlaggedNodeId]);
 
   return (
-    <div className="w-full h-screen max-w-full overflow-hidden flex flex-col bg-[#0F1115] text-slate-300 font-sans">
-      <FpsMeter />
+    <div className="w-full h-screen max-w-full overflow-hidden flex flex-col bg-[#0b0e14] text-slate-200 font-sans">
       <HealthCardOverlay
         toolDock={layoutPreferences.toolDock}
         workspaceDock={layoutPreferences.workspaceDock}
+        rightInspectorOpen={isRightInspectorOpen}
       />
       <DialogHost />
-      {/* Upper Technical Header */}
-      <header data-testid="studio-header" className="h-11 min-w-0 max-w-full border-b border-white/10 bg-[#161920] px-2 flex items-center gap-2 shrink-0 font-mono">
+      {/* Upper Workbench Command Header */}
+      <header data-testid="studio-header" className="h-10 min-w-0 max-w-full border-b border-slate-800/90 bg-[#131822] px-2.5 flex items-center gap-2 shrink-0">
         
         {/* Workspace Brand and Logo */}
         <div className="flex items-center gap-2 min-w-0 shrink">
           <div className="flex items-center gap-2 min-w-0">
-            {/* X4 Forge mark: anvil + spark on a cyan→violet plate */}
-            <svg viewBox="0 0 24 24" className="w-6 h-6 shrink-0" aria-label="X4 Forge logo">
+            {/* X4 Forge mark: anvil + spark on a sky→indigo plate */}
+            <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0" aria-label="X4 Forge logo">
               <defs>
                 <linearGradient id="x4forgeGrad" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0" stopColor="#06b6d4" />
-                  <stop offset="1" stopColor="#7c3aed" />
+                  <stop offset="0" stopColor="#0ea5e9" />
+                  <stop offset="1" stopColor="#6366f1" />
                 </linearGradient>
               </defs>
               <rect x="0.5" y="0.5" width="23" height="23" rx="5.5" fill="url(#x4forgeGrad)" />
               <path d="M5 9h14v3h-5v2.2l3.2 2.8H6.8L10 14.2V12H5z" fill="#ffffff" />
               <path d="M17.6 3.1l.7 1.6 1.6.7-1.6.7-.7 1.6-.7-1.6-1.6-.7 1.6-.7z" fill="#fbbf24" />
             </svg>
-            <span className="font-semibold text-white tracking-tight shrink-0 select-none text-[11px] sm:text-sm">
-              X4 FORGE <span className="text-cyan-400/90 font-normal" title={__APP_BUILD__}>v{__APP_VERSION__}</span>
+            <span className="font-semibold text-slate-100 tracking-tight shrink-0 select-none text-xs sm:text-[13px]">
+              X4 Forge <span className="text-sky-400/90 font-mono text-[11px] font-normal" title={__APP_BUILD__}>v{__APP_VERSION__}</span>
             </span>
             {workspace.sourceFolder && (
               <span
-                className="hidden min-[1900px]:inline-flex items-center gap-1 ml-2 px-2 py-0.5 rounded bg-white/5 border border-white/10 text-[11px] text-slate-300 max-w-[360px] shrink min-w-0"
+                className="hidden min-[1900px]:inline-flex items-center gap-1 ml-1.5 px-2 py-0.5 rounded bg-slate-800/70 border border-slate-700/70 text-[11px] text-slate-300 max-w-[340px] shrink min-w-0"
                 title={'Open project folder: ' + workspace.sourceFolder}
               >
-                <span className="text-cyan-400/80 font-medium shrink-0">Open:</span>
+                <span className="text-sky-400 font-medium shrink-0">Folder:</span>
                 <span className="truncate font-mono">{workspace.sourceFolder}</span>
               </span>
             )}
           </div>
 
-          {/* Full cross-domain search belongs to Expert; Beginner keeps one task path. */}
+          {/* Full cross-domain Omni-Search & Command Palette in Expert mode */}
           {experienceMode === 'expert' && (
             <GlobalSearch
               workspace={workspace}
@@ -2584,57 +2639,65 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
               setActiveSidebarTab={setActiveSidebarTab}
               setSelectedNode={setSelectedNode}
               setSelectedWidget={setSelectedWidget}
+              setFocusNodeRequest={setFocusNodeRequest}
+              onRunGlobalCommand={(commandId) => {
+                if (commandId === 'deploy') void handleCompileModProject();
+                else if (commandId === 'toggle-bottom-dock') toggleBottomDock();
+                else if (commandId === 'toggle-right-inspector') toggleRightInspector();
+                else if (commandId === 'settings') setIsDirSettingsOpen(true);
+                else if (commandId === 'sync-mod') setIsSyncModalOpen(true);
+                else if (commandId === 'agent-api') setIsAgentBridgeOpen(open => !open);
+                else if (commandId === 'shortcuts') setIsShortcutsOpen(true);
+              }}
             />
           )}
         </div>
 
-        {/* Workspace navigation is rendered by WorkspaceNavigationBar below the compact header. */}
-        {/* Preset & Project management utilities */}
-        <div className="ml-auto flex items-center gap-1 min-w-0 shrink-0">
-          {/* History Undo/Redo Group */}
-          <div className="flex items-center gap-1 bg-black/45 border border-white/10 p-1 rounded-md">
+        {/* Right Header Controls: Undo/Redo, Workspace Switcher, Primary Deliver CTA, Actions */}
+        <div className="ml-auto flex items-center gap-1.5 min-w-0 shrink-0">
+          {/* History Undo/Redo + Shortcuts Group */}
+          <div className="flex items-center gap-0.5 bg-[#0c1017] border border-slate-800 p-0.5 rounded-md">
             <button
               onClick={handleUndo}
               data-global-action="undo"
               disabled={pastStates.length === 0}
-              className={`p-1 px-2 rounded font-mono text-[11px] flex items-center gap-1 transition-all ${
+              className={`h-6 px-1.5 rounded text-[11px] flex items-center gap-1 transition-colors ${
                 pastStates.length > 0
-                  ? 'text-cyan-400 hover:bg-cyan-500/10 cursor-pointer'
+                  ? 'text-slate-200 hover:text-sky-300 hover:bg-sky-500/10 cursor-pointer'
                   : 'text-slate-600 cursor-not-allowed'
               }`}
               title="Undo last action (Ctrl+Z)"
             >
               <Undo2 className="w-3.5 h-3.5" />
-              <span className="text-[9px] hidden min-[2150px]:inline">({pastStates.length})</span>
+              <span className="font-mono text-[9.5px] hidden min-[2150px]:inline">({pastStates.length})</span>
             </button>
             <button
               onClick={handleRedo}
               data-global-action="redo"
               disabled={futureStates.length === 0}
-              className={`p-1 px-2 rounded font-mono text-[11px] flex items-center gap-1 transition-all ${
+              className={`h-6 px-1.5 rounded text-[11px] flex items-center gap-1 transition-colors ${
                 futureStates.length > 0
-                  ? 'text-cyan-400 hover:bg-cyan-500/10 cursor-pointer'
+                  ? 'text-slate-200 hover:text-sky-300 hover:bg-sky-500/10 cursor-pointer'
                   : 'text-slate-600 cursor-not-allowed'
               }`}
               title="Redo action (Ctrl+Y)"
             >
               <Redo2 className="w-3.5 h-3.5" />
-              <span className="text-[9px] hidden min-[2150px]:inline">({futureStates.length})</span>
+              <span className="font-mono text-[9.5px] hidden min-[2150px]:inline">({futureStates.length})</span>
             </button>
-            {/* B13: discoverable entry to the shortcuts list (also bound to "?") */}
             <button
               onClick={() => setIsShortcutsOpen(true)}
               data-global-action="shortcuts"
               data-testid="shortcuts-open-btn"
-              className="p-1 px-2 rounded font-mono text-[11px] text-slate-400 hover:text-cyan-400 hover:bg-cyan-500/10 cursor-pointer transition-all"
+              className="h-6 px-1.5 rounded text-[11px] text-slate-400 hover:text-sky-300 hover:bg-sky-500/10 cursor-pointer transition-colors"
               title="Keyboard shortcuts (?)"
             >
               <Keyboard className="w-3.5 h-3.5" />
             </button>
           </div>
 
-          <div data-global-action="workspace-switcher" className="flex items-center gap-1.5 bg-black/35 rounded border border-white/10 p-1 min-w-0">
-            <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider px-1 hidden min-[2150px]:inline">Workspace:</span>
+          <div data-global-action="workspace-switcher" className="flex items-center gap-1 bg-[#0c1017] rounded-md border border-slate-800 px-1.5 h-7 min-w-0">
+            <span className="text-[10.5px] text-slate-400 font-medium hidden min-[2150px]:inline">Workspace:</span>
             <select
               value="__current"
               data-testid="workspace-switcher"
@@ -2654,28 +2717,24 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
                   if (ok) await restoreParkedWorkspace(targetWorkspaceId);
                   return;
                 }
-                // B13 guard (2026-07-09): a preset pick REPLACES the whole canvas — twice
-                // this shipped silently (once via browser form-restoration on reload).
-                // Explicit confirm, always. (B2s3: the replaced state is parked, recoverable.)
                 const ok = await confirmDialog(
                   `Replace the current canvas ("${workspace.name || 'Untitled'}") with a preset? The current graph is overwritten (Undo can restore it).`,
                   { okLabel: 'Replace canvas', cancelLabel: 'Keep my canvas' },
                 );
                 if (ok) handleLoadPreset(pick as 'escort' | 'mission' | 'blank');
               }}
-              className="bg-[#0F1115] border border-white/10 p-1 rounded text-[10px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500 cursor-pointer max-w-[130px] min-[2150px]:max-w-none truncate"
+              className="bg-transparent border-none text-[11px] font-medium text-slate-200 focus:outline-none cursor-pointer max-w-[124px] min-[2150px]:max-w-none truncate"
             >
-              {/* H6: show the actually-loaded workspace, not a stale "Blank Workspace" label */}
-              <option value="__current">{workspace.name || 'Current Workspace'} · {currentWorkspaceId.slice(-6)}</option>
-              <option value="__new">＋ New independent workspace…</option>
+              <option value="__current" className="bg-[#11161f]">{workspace.name || 'Current Workspace'} · {currentWorkspaceId.slice(-6)}</option>
+              <option value="__new" className="bg-[#11161f]">＋ New independent workspace…</option>
               {parkedList.filter(p => p.workspaceId !== currentWorkspaceId).length > 0 && (
-                <optgroup label="Other workspaces">
+                <optgroup label="Other workspaces" className="bg-[#11161f]">
                   {parkedList.filter(p => p.workspaceId !== currentWorkspaceId).map(p => (
                     <option key={p.workspaceId} value={`workspace:${p.workspaceId}`}>{p.name} · {p.workspaceId.slice(-6)} ({p.contentSummary ?? `${p.nodeCount} nodes`})</option>
                   ))}
                 </optgroup>
               )}
-              <optgroup label="Presets">
+              <optgroup label="Presets" className="bg-[#11161f]">
                 <option value="blank">Blank Workspace</option>
                 <option value="escort">Elite Fighter Wing Escort</option>
                 <option value="mission">Argon Sector Bounty System</option>
@@ -2683,14 +2742,28 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
             </select>
           </div>
 
-          {/* B29: the conflict card / diverged badge moved OUT of the header into the fixed
-              sync-status layer below — a header slot gets clipped on narrow windows, and the
-              conflict UI must be visible exactly when a conflict blocks sync. */}
+          {experienceMode === 'expert' && (
+            <button
+              type="button"
+              data-testid="header-deploy-btn"
+              onClick={() => void handleCompileModProject()}
+              disabled={compileStatus === 'compiling'}
+              className="hidden xl:inline-flex h-7 items-center gap-1.5 rounded-md border border-sky-500/45 bg-sky-500/15 hover:bg-sky-500/25 px-2.5 text-[11.5px] font-semibold text-sky-100 transition-colors cursor-pointer disabled:opacity-50"
+              title="Open Compile & Deploy Wizard — preview files, validate, and deploy"
+            >
+              <Rocket className="w-3.5 h-3.5 text-sky-300" />
+              <span>Validate &amp; Deploy</span>
+            </button>
+          )}
+
           <StudioActionsMenu
             expert={experienceMode === 'expert'}
             ai={aiEnabled ? { provider: activeAIProvider, model: activeAIModel, reasoning: activeReasoning } : null}
             agentOpen={isAgentBridgeOpen}
             nativeFiles={<NativeProjectFiles key={currentWorkspaceId} workspaceId={currentWorkspaceId} workspace={workspace} />}
+            onOpenReleaseCenter={() => setActiveSidebarTab('playtest')}
+            onToggleBottomDock={() => toggleBottomDock()}
+            onToggleRightInspector={toggleRightInspector}
             actions={{
               'sync-mod': () => setIsSyncModalOpen(true),
               'ai-settings': () => setIsAIConfigOpen(true),
@@ -2724,9 +2797,9 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
         onNavigate={navigateReadiness}
         onConfirmExperience={confirmCurrentExperience}
         trailing={(
-          <div data-testid="experience-mode-switch" data-global-action="experience-mode" className="flex items-center gap-1 rounded-md border border-white/10 bg-black/45 p-1">
-            <button data-testid="mode-beginner" aria-pressed={experienceMode === 'beginner'} onClick={() => changeExperienceMode('beginner')} className={`rounded px-2 py-1 text-[9px] font-mono font-bold uppercase ${experienceMode === 'beginner' ? 'bg-cyan-600/25 text-cyan-300' : 'text-slate-500 hover:text-white'}`}>Beginner</button>
-            <button data-testid="mode-expert" aria-pressed={experienceMode === 'expert'} onClick={() => changeExperienceMode('expert')} className={`rounded px-2 py-1 text-[9px] font-mono font-bold uppercase ${experienceMode === 'expert' ? 'bg-amber-600/25 text-amber-300' : 'text-slate-500 hover:text-white'}`}>Expert</button>
+          <div data-testid="experience-mode-switch" data-global-action="experience-mode" className="flex items-center gap-0.5 rounded-md border border-slate-800 bg-[#0a0d13] p-0.5">
+            <button data-testid="mode-beginner" aria-pressed={experienceMode === 'beginner'} onClick={() => changeExperienceMode('beginner')} className={`rounded px-2 py-0.5 text-[10.5px] font-medium cursor-pointer transition-colors ${experienceMode === 'beginner' ? 'bg-sky-500/20 text-sky-200' : 'text-slate-400 hover:text-white'}`}>Beginner</button>
+            <button data-testid="mode-expert" aria-pressed={experienceMode === 'expert'} onClick={() => changeExperienceMode('expert')} className={`rounded px-2 py-0.5 text-[10.5px] font-medium cursor-pointer transition-colors ${experienceMode === 'expert' ? 'bg-sky-500/20 text-sky-200' : 'text-slate-400 hover:text-white'}`}>Expert</button>
           </div>
         )}
       />
@@ -2952,7 +3025,13 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
               setWorkspace={setWorkspace}
             />
           ) : workspaceView === 'project' ? (
-            <ProjectInspector workspace={workspace} schemaConfigVersion={schemaConfigVersion} />
+            <ProjectInspector
+              workspace={workspace}
+              schemaConfigVersion={schemaConfigVersion}
+              onOpenValidator={() => setActiveSidebarTab('diagnostics')}
+              onOpenDeployWizard={() => void handleCompileModProject()}
+              onOpenReleaseCenter={() => setActiveSidebarTab('playtest')}
+            />
           ) : workspaceView === 'galaxy' ? (
             <GalaxyMapView />
           ) : (
@@ -2987,7 +3066,47 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
             />
           )}
 
+          {experienceMode === 'expert' && (
+            <BottomWorkbenchDock
+              isOpen={bottomDockOpen}
+              activeTab={bottomDockTab}
+              onTabChange={setBottomDockTab}
+              onClose={() => setBottomDockOpen(false)}
+              workspace={workspace}
+              diagnostics={effectiveDiagnostics}
+              diagnosticSource={diagnosticSource}
+              readinessStages={readinessStages}
+              onOpenDeployWizard={() => void handleCompileModProject()}
+              onSelectNode={(node) => setSelectedNode(node)}
+              onFocusNode={(nodeId) => setFocusNodeRequest({ nodeId, timestamp: Date.now() })}
+              onNavigateWorkspace={setWorkspaceView}
+              onNavigateSidebar={setActiveSidebarTab}
+            />
+          )}
+
         </main>
+
+        {/* Dedicated Right-Hand Contextual Inspector (Properties, Connections, XML) */}
+        {experienceMode === 'expert' && (
+          <ContextualInspector
+            isOpen={isRightInspectorOpen}
+            onClose={() => {
+              setRightInspectorPinned(false);
+              if (activeSelectionKey) setRightInspectorDismissedKey(activeSelectionKey);
+            }}
+            selectedNode={selectedNode}
+            setSelectedNode={setSelectedNode}
+            selectedWidget={selectedWidget}
+            setSelectedWidget={setSelectedWidget}
+            workspace={workspace}
+            setWorkspace={setWorkspace}
+            saveCheckpoint={saveCheckpoint}
+            diagnostics={effectiveDiagnostics}
+            workspaceView={workspaceView}
+            setWorkspaceView={setWorkspaceView}
+            setFocusNodeRequest={setFocusNodeRequest}
+          />
+        )}
 
       </div>
 
@@ -3006,6 +3125,24 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
           mdWarningCount={mdWarningCount}
         />
       )}
+
+      <WorkbenchStatusBar
+        modName={workspace.name}
+        modVersion={workspace.version}
+        workspaceView={workspaceView}
+        experienceMode={experienceMode}
+        errorCount={totalDiagnosticErrors}
+        warningCount={totalDiagnosticWarnings}
+        diagnosticSource={diagnosticSource}
+        bottomDockOpen={bottomDockOpen}
+        onToggleBottomDock={toggleBottomDock}
+        rightInspectorOpen={isRightInspectorOpen}
+        onToggleRightInspector={toggleRightInspector}
+        agentBridgeOpen={isAgentBridgeOpen}
+        pendingAgentUpdate={Boolean(pendingAgentWorkspace?.workspaceId === selectedWorkspaceId())}
+        onToggleAgentBridge={() => setIsAgentBridgeOpen(open => !open)}
+        onOpenDeployWizard={() => void handleCompileModProject()}
+      />
 
       {/* Embedded Intelligent AI Guide Drawer chatbot */}
       {experienceMode === 'expert' && aiEnabled && isAiFloatingVisible && (

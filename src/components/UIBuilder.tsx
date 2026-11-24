@@ -341,127 +341,143 @@ export default function UIBuilder({
   };
 
   return (
-    <div className="flex-1 bg-[#0a0c10] flex flex-col h-full overflow-hidden text-slate-300">
-      {/* Simulation Controls HUD bar */}
-      <div className="bg-[#161920]/90 border-b border-white/10 p-3 flex items-center justify-between font-mono text-xs">
-        <div className="flex items-center gap-2">
-          <Palette className="w-4 h-4 text-cyan-400" />
-          <span className="font-semibold text-slate-200">X4 CUSTOM COCKPIT INTERFACE AND LUA CONSOLE</span>
+    <div className="flex-1 bg-[#0b0e14] flex flex-col h-full overflow-hidden text-slate-200">
+      {/* Compact UI & Lua Workbench Header */}
+      <div className="h-9 bg-[#131822] border-b border-slate-800/90 px-3 flex items-center justify-between gap-3 shrink-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <Palette className="w-4 h-4 text-sky-400 shrink-0" />
+          <span className="font-semibold text-xs text-slate-100 truncate">HUD &amp; Lua UI Workbench</span>
         </div>
-        
-        {/* Preset selections and Tab switches */}
-        <div className="flex items-center gap-3">
-          <div className="flex items-center bg-black/45 border border-white/10 p-0.5 rounded-md">
+
+        {/* Mode Subtabs + Canvas Theme Presets */}
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="flex items-center bg-[#0c1017] border border-slate-800 p-0.5 rounded-md">
             <button
               onClick={() => setActiveUiSubTab('source')}
-              className={`px-3 py-1 rounded text-[10px] uppercase font-bold transition-all cursor-pointer ${
-                activeUiSubTab === 'source' ? 'bg-cyan-500/15 text-cyan-400 font-extrabold' : 'text-slate-500 hover:text-slate-300'
+              className={`px-2.5 py-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer ${
+                activeUiSubTab === 'source' ? 'bg-sky-500/20 text-sky-200 font-semibold' : 'text-slate-400 hover:text-slate-200'
               }`}
             >
               X4 Source Preview
             </button>
             <button
               onClick={() => setActiveUiSubTab('canvas')}
-              className={`px-3 py-1 rounded text-[10px] uppercase font-bold transition-all cursor-pointer ${
-                activeUiSubTab === 'canvas' ? 'bg-cyan-500/15 text-cyan-400 font-extrabold' : 'text-slate-500 hover:text-slate-300'
+              className={`px-2.5 py-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer ${
+                activeUiSubTab === 'canvas' ? 'bg-sky-500/20 text-sky-200 font-semibold' : 'text-slate-400 hover:text-slate-200'
               }`}
             >
               Legacy pixel designer
             </button>
             <button
               onClick={() => setActiveUiSubTab('lua')}
-              className={`px-3 py-1 rounded text-[10px] uppercase font-bold transition-all cursor-pointer ${
-                activeUiSubTab === 'lua' ? 'bg-cyan-500/15 text-cyan-400 font-extrabold' : 'text-slate-500 hover:text-slate-300'
+              className={`px-2.5 py-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer ${
+                activeUiSubTab === 'lua' ? 'bg-sky-500/20 text-sky-200 font-semibold' : 'text-slate-400 hover:text-slate-200'
               }`}
             >
               LUA Script Event Manager
             </button>
           </div>
 
-          <div className="h-4 w-px bg-white/10" />
-
           {activeUiSubTab === 'canvas' && (
-            <div className="flex items-center gap-1.5">
-              {THEME_PRESETS.map(preset => (
-                <button
-                  key={preset.id}
-                  onClick={() => applyThemePreset(preset.id)}
-                  className={`px-3 py-1 rounded text-[10px] uppercase font-bold border transition-all cursor-pointer ${
-                    activePresetTheme === preset.id
-                      ? 'border-cyan-500 bg-cyan-600/15 text-cyan-400'
-                      : 'border-transparent bg-black/40 text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  {preset.label}
-                </button>
-              ))}
-            </div>
+            <>
+              <div className="h-4 w-px bg-slate-800" />
+              <div className="flex items-center gap-1">
+                {THEME_PRESETS.map(preset => (
+                  <button
+                    key={preset.id}
+                    onClick={() => applyThemePreset(preset.id)}
+                    className={`px-2 py-0.5 rounded text-[10px] font-medium border transition-colors cursor-pointer ${
+                      activePresetTheme === preset.id
+                        ? 'border-sky-500/45 bg-sky-500/15 text-sky-300'
+                        : 'border-slate-800 bg-[#0c1017] text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            </>
           )}
         </div>
       </div>
 
-      <div className="border-b border-white/10 bg-[#10131a] p-2 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2 font-mono text-[10px]">
-        <div data-testid="ui-game-verification-status" className={`rounded border p-2 ${externalVerification.status === 'verified' ? 'border-emerald-500/35 bg-emerald-950/15' : 'border-amber-500/25 bg-amber-950/15'}`}>
-          <div className="text-[9px] uppercase font-bold tracking-wider text-slate-500">External game verification</div>
-          <div className={`font-bold ${externalVerification.status === 'verified' ? 'text-emerald-300' : 'text-amber-300'}`}>{externalVerification.label}</div>
-          <div className="mt-1 text-slate-500">{externalVerification.detail}</div>
-          {externalVerification.status !== 'verified' && (
-            <button
-              type="button"
-              data-testid="ui-game-verification-confirm"
-              disabled={!canInvokeExternalConfirmation}
-              onClick={canInvokeExternalConfirmation ? onConfirmX4UiVerification : undefined}
-              className="mt-2 rounded border border-cyan-500/30 px-2 py-1 text-[9px] font-bold uppercase text-cyan-300 enabled:hover:bg-cyan-500/10 disabled:cursor-not-allowed disabled:border-white/10 disabled:text-slate-600"
-            >
-              {canInvokeExternalConfirmation ? 'Confirm X4 UI in game' : 'Confirm after exact clean deploy'}
-            </button>
-          )}
+      {/* Compact 4-card UI Verification & Static Lint Strip */}
+      <div className="border-b border-slate-800/80 bg-[#0e1219] px-2.5 py-1.5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-1.5 font-mono text-[10px] shrink-0">
+        <div data-testid="ui-game-verification-status" className={`rounded-md border px-2 py-1.5 ${externalVerification.status === 'verified' ? 'border-emerald-500/30 bg-emerald-950/15' : 'border-amber-500/25 bg-amber-950/10'}`}>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[9px] font-sans font-semibold text-slate-400">External game verification</span>
+            <span className={`font-semibold truncate ${externalVerification.status === 'verified' ? 'text-emerald-300' : 'text-amber-300'}`}>{externalVerification.label}</span>
+          </div>
+          <div className="mt-0.5 flex items-center justify-between gap-2">
+            <span className="text-[9.5px] text-slate-500 truncate" title={externalVerification.detail}>{externalVerification.detail}</span>
+            {externalVerification.status !== 'verified' && (
+              <button
+                type="button"
+                data-testid="ui-game-verification-confirm"
+                disabled={!canInvokeExternalConfirmation}
+                onClick={canInvokeExternalConfirmation ? onConfirmX4UiVerification : undefined}
+                className="shrink-0 rounded border border-sky-500/35 px-1.5 py-0.5 text-[9px] font-semibold text-sky-300 enabled:hover:bg-sky-500/15 disabled:cursor-not-allowed disabled:border-slate-800 disabled:text-slate-600"
+              >
+                {canInvokeExternalConfirmation ? 'Confirm X4 UI in game' : 'Confirm after exact clean deploy'}
+              </button>
+            )}
+          </div>
         </div>
 
-        <div data-testid="ui-generated-lint-status" className="rounded border border-white/10 bg-black/20 p-2 min-w-0">
-          <div className="flex items-start justify-between gap-2">
-            <span className="text-[9px] uppercase font-bold tracking-wider text-slate-500">Generated Lua static status</span>
-            <span className={`font-bold text-right ${uiLintStatusClass(generatedLuaSummary, true)}`}>
+        <div data-testid="ui-generated-lint-status" className="rounded-md border border-slate-800 bg-[#0b0e14]/80 px-2 py-1.5 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[9px] font-sans font-semibold text-slate-400">Generated Lua static status</span>
+            <span className={`font-semibold text-right ${uiLintStatusClass(generatedLuaSummary, true)}`}>
               {uiLintStatusText(generatedLuaSummary, true)}
             </span>
           </div>
-          <div className="mt-1 break-all text-slate-500">{generatedUiPath}</div>
-          <div className="text-slate-500">{uiLintAxisText(generatedLuaSummary, true)}</div>
-          <div className="mt-1 space-y-1 break-words whitespace-pre-wrap">
-            {generatedLuaFindings.slice(0, 3).map((fd, idx) => (
-              <div key={`generated-${idx}`} className={fd.severity === 'error' ? 'text-red-300' : fd.severity === 'warning' ? 'text-amber-300' : 'text-slate-400'}>
-                {generatedUiPath}{fd.line ? `:${fd.line}` : ''} {fd.code ? `${fd.code} ` : ''}{fd.message}
-              </div>
-            ))}
+          <div className="mt-0.5 flex items-center justify-between gap-2 text-[9.5px] text-slate-500">
+            <span className="truncate" title={generatedUiPath}>{generatedUiPath}</span>
+            <span className="shrink-0">{uiLintAxisText(generatedLuaSummary, true)}</span>
           </div>
+          {generatedLuaFindings.length > 0 && (
+            <div className="mt-1 max-h-14 overflow-y-auto custom-scrollbar pr-1 space-y-0.5 break-words whitespace-pre-wrap text-[9.5px] leading-snug">
+              {generatedLuaFindings.slice(0, 3).map((fd, idx) => (
+                <div key={`generated-${idx}`} className={fd.severity === 'error' ? 'text-red-300' : fd.severity === 'warning' ? 'text-amber-300' : 'text-slate-400'}>
+                  {generatedUiPath}{fd.line ? `:${fd.line}` : ''} {fd.code ? `${fd.code} ` : ''}{fd.message}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
-        <div data-testid="ui-custom-lint-status" className="rounded border border-white/10 bg-black/20 p-2 min-w-0">
-          <div className="flex items-start justify-between gap-2">
-            <span className="text-[9px] uppercase font-bold tracking-wider text-slate-500">Custom Lua static status</span>
-            <span className={`font-bold text-right ${uiLintStatusClass(customLuaSummary, customLuaAnalyzed)}`}>
+        <div data-testid="ui-custom-lint-status" className="rounded-md border border-slate-800 bg-[#0b0e14]/80 px-2 py-1.5 min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[9px] font-sans font-semibold text-slate-400">Custom Lua static status</span>
+            <span className={`font-semibold text-right ${uiLintStatusClass(customLuaSummary, customLuaAnalyzed)}`}>
               {uiLintStatusText(customLuaSummary, customLuaAnalyzed)}
             </span>
           </div>
-          <div className="mt-1 break-all text-slate-500">{customUiPath}</div>
-          <div className="text-slate-500">{uiLintAxisText(customLuaSummary, customLuaAnalyzed)}</div>
-          <div className="mt-1 space-y-1 break-words whitespace-pre-wrap">
-            {customLuaFindings.slice(0, 3).map((fd, idx) => (
-              <div key={`custom-${idx}`} className={fd.severity === 'error' ? 'text-red-300' : fd.severity === 'warning' ? 'text-amber-300' : 'text-slate-400'}>
-                {customUiPath}{fd.line ? `:${fd.line}` : ''} {fd.code ? `${fd.code} ` : ''}{fd.message}
-              </div>
-            ))}
+          <div className="mt-0.5 flex items-center justify-between gap-2 text-[9.5px] text-slate-500">
+            <span className="truncate" title={customUiPath}>{customUiPath}</span>
+            <span className="shrink-0">{uiLintAxisText(customLuaSummary, customLuaAnalyzed)}</span>
           </div>
+          {customLuaFindings.length > 0 && (
+            <div className="mt-1 max-h-14 overflow-y-auto custom-scrollbar pr-1 space-y-0.5 break-words whitespace-pre-wrap text-[9.5px] leading-snug">
+              {customLuaFindings.slice(0, 3).map((fd, idx) => (
+                <div key={`custom-${idx}`} className={fd.severity === 'error' ? 'text-red-300' : fd.severity === 'warning' ? 'text-amber-300' : 'text-slate-400'}>
+                  {customUiPath}{fd.line ? `:${fd.line}` : ''} {fd.code ? `${fd.code} ` : ''}{fd.message}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
-        <div data-testid="ui-geometry-status" className="rounded border border-white/10 bg-black/20 p-2 min-w-0" title="Pixel geometry summary for the design map only; not an X4 renderer.">
-          <div className="text-[9px] uppercase font-bold tracking-wider text-slate-500">Geometry design map</div>
-          <div className={`font-bold ${widgetErrors > 0 ? 'text-red-400' : widgetWarns > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
-            {widgetErrors > 0 || widgetWarns > 0
-              ? `${widgetErrors} geometry errors · ${widgetWarns} warnings`
-              : 'No geometry issues detected'}
+        <div data-testid="ui-geometry-status" className="rounded-md border border-slate-800 bg-[#0b0e14]/80 px-2 py-1.5 min-w-0" title="Pixel geometry summary for the design map only; not an X4 renderer.">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[9px] font-sans font-semibold text-slate-400">Geometry design map</span>
+            <span className={`font-semibold ${widgetErrors > 0 ? 'text-red-400' : widgetWarns > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
+              {widgetErrors > 0 || widgetWarns > 0
+                ? `${widgetErrors} geometry errors · ${widgetWarns} warnings`
+                : 'No geometry issues detected'}
+            </span>
           </div>
-          <div className="mt-1 text-slate-500">
+          <div className="mt-0.5 text-[9.5px] text-slate-500">
             {(workspace.uiWidgets || []).length > 0 ? `Legacy pixel map ${derivedGrid.rows}×${derivedGrid.cols}` : 'No widgets in design map'}
           </div>
           {widgetFindings.slice(0, 2).map((fd, idx) => (

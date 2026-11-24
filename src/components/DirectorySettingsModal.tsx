@@ -203,6 +203,7 @@ export default function DirectorySettingsModal({
   const [coverageRefresh, setCoverageRefresh] = useState(0);
   const [directoryIssues, setDirectoryIssues] = useState<DirectoryPathIssue[]>([]);
   const [detection, setDetection] = useState<{ state: 'idle' | 'scanning' | 'found' | 'notfound' | 'error'; source?: string; message?: string }>({ state: 'idle' });
+  const [activeCategory, setActiveCategory] = useState<'all' | 'paths' | 'workbench' | 'packaging' | 'ai' | 'community'>('all');
 
   const detectGameInstall = React.useCallback(async (overwrite = false) => {
     setDetection({ state: 'scanning' });
@@ -396,31 +397,73 @@ export default function DirectorySettingsModal({
     });
   };
 
+  const showSection = (section: 'paths' | 'workbench' | 'packaging' | 'ai' | 'community') =>
+    activeCategory === 'all' || activeCategory === section;
+
+  const categories: Array<{ id: typeof activeCategory; label: string; icon: React.ReactNode }> = [
+    { id: 'all', label: 'All Settings', icon: <SettingsIcon className="w-3.5 h-3.5" /> },
+    { id: 'paths', label: 'Paths & Corpus', icon: <Database className="w-3.5 h-3.5" /> },
+    { id: 'workbench', label: 'Workbench & Layout', icon: <PanelLeft className="w-3.5 h-3.5" /> },
+    { id: 'packaging', label: 'Release Packaging', icon: <PackageCheck className="w-3.5 h-3.5" /> },
+    { id: 'ai', label: 'AI Assistant', icon: <Sparkles className="w-3.5 h-3.5" /> },
+    { id: 'community', label: 'Community', icon: <Users className="w-3.5 h-3.5" /> },
+  ];
+
   return (
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
-        className="w-[min(760px,calc(100vw-24px))] max-h-[90vh] overflow-y-auto bg-[#0c0f16] border border-cyan-500/30 rounded-xl shadow-2xl"
+        className="w-[min(920px,calc(100vw-24px))] max-h-[88vh] flex flex-col bg-[#0c1017] border border-slate-700/80 rounded-xl shadow-2xl overflow-hidden"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-white/10 bg-[#141b25] rounded-t-xl">
-          <div className="flex items-center gap-2">
-            <SettingsIcon className="w-4 h-4 text-cyan-400" />
+        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-[#131822] shrink-0">
+          <div className="flex items-center gap-2.5">
+            <SettingsIcon className="w-4 h-4 text-sky-400" />
             <div>
-              <span className="font-bold text-white text-sm block">Studio Settings</span>
-              <span className="text-[10px] text-slate-400">Layout, navigation, directories, corpus, and AI</span>
+              <span className="font-semibold text-slate-100 text-sm block">Studio Settings</span>
+              <span className="text-[10.5px] text-slate-400">Workbench layout, X4 game &amp; unpacked corpus paths, release packaging, and AI</span>
             </div>
           </div>
-          <button onClick={onClose} aria-label="Close settings" className="p-1.5 rounded hover:bg-white/5 text-slate-400 hover:text-white transition-all cursor-pointer">
+          <button onClick={onClose} aria-label="Close settings" className="p-1.5 rounded hover:bg-white/5 text-slate-400 hover:text-white transition-colors cursor-pointer">
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="p-4 space-y-3">
-          <DirectoryRow
+        {/* Two-Pane Settings Body */}
+        <div className="flex flex-1 min-h-0 overflow-hidden flex-col md:flex-row">
+          {/* Left Category Sidebar */}
+          <nav
+            aria-label="Settings categories"
+            className="flex md:flex-col gap-1 overflow-x-auto md:overflow-y-auto md:w-48 shrink-0 border-b md:border-b-0 md:border-r border-slate-800/90 bg-[#0f141d] p-2"
+          >
+            {categories.map(cat => {
+              const selected = activeCategory === cat.id;
+              return (
+                <button
+                  key={cat.id}
+                  type="button"
+                  data-testid={`settings-category-${cat.id}`}
+                  aria-pressed={selected}
+                  onClick={() => setActiveCategory(cat.id)}
+                  className={`flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left text-[11.5px] font-medium whitespace-nowrap transition-colors cursor-pointer ${
+                    selected
+                      ? 'bg-sky-500/15 text-sky-200 border border-sky-500/30 font-semibold'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04] border border-transparent'
+                  }`}
+                >
+                  <span className={selected ? 'text-sky-300' : 'text-slate-500'}>{cat.icon}</span>
+                  <span>{cat.label}</span>
+                </button>
+              );
+            })}
+          </nav>
+
+          {/* Right Settings Scroll Area */}
+          <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4 space-y-3">
+          {showSection('workbench') && <DirectoryRow
             icon={<PanelLeft className="w-4 h-4" />}
             title="Navigation & Layout"
             tooltip="Customize the Studio shell without deleting any feature. Hidden destinations remain listed here, collapsed bars always keep a restore handle, and Reset Layout returns the complete default inventory."
@@ -457,9 +500,9 @@ export default function DirectorySettingsModal({
               <span className="text-[9px] text-slate-500">Drag tabs on the bars, or use these keyboard-accessible arrow controls. At least one destination always remains visible.</span>
               <button type="button" data-testid="reset-studio-layout" onClick={() => setLayoutPreferences({ ...DEFAULT_STUDIO_LAYOUT, workspaceOrder: [...DEFAULT_STUDIO_LAYOUT.workspaceOrder], toolOrder: [...DEFAULT_STUDIO_LAYOUT.toolOrder] })} className="settings-button shrink-0"><RotateCcw className="w-3 h-3" /> Reset layout</button>
             </div>
-          </DirectoryRow>
+          </DirectoryRow>}
 
-          <DirectoryRow
+          {showSection('packaging') && <DirectoryRow
             icon={<PackageCheck className="w-4 h-4" />}
             title="Release Packaging Mode"
             tooltip="Guided mode explains and displays every required stage. Express mode collapses successful detail only; it never skips validation, confirmation, output selection, or Steam's interactive upload."
@@ -489,9 +532,10 @@ export default function DirectorySettingsModal({
               hides passed-stage explanations. Failures stay expanded; validation, output selection, Steam
               authentication, legal prompts, and final verification remain mandatory. Express never auto-uploads.
             </p>
-          </DirectoryRow>
+          </DirectoryRow>}
 
           {/* 1. Mod Workspace folder */}
+          {showSection('paths') && <>
           <DirectoryRow
             icon={<HardDrive className="w-4 h-4" />}
             title="Mod Workspace Folder"
@@ -690,8 +734,9 @@ export default function DirectorySettingsModal({
               </div>
             )}
           </DirectoryRow>}
+          </>}
 
-          <DirectoryRow
+          {showSection('community') && <DirectoryRow
             icon={<Users className="w-4 h-4" />}
             title="Community & Support"
             tooltip="Meet other X4 Forge users, ask questions about Forge, share your mods, and discuss mod-authoring workflows."
@@ -715,13 +760,14 @@ export default function DirectorySettingsModal({
               </div>
               <div className="mt-1 text-[9px] text-slate-500">Community-run support for X4 Forge users; not affiliated with or endorsed by Egosoft. Forge never opens or joins the server automatically.</div>
             </div>
-          </DirectoryRow>
+          </DirectoryRow>}
 
           {/* AI Assistant — opt-in tiers (off by default). Applied immediately (client-side). */}
-          <DirectoryRow
+          {showSection('ai') && <DirectoryRow
             icon={<Sparkles className="w-4 h-4" />}
             title="AI Assistant (optional)"
             tooltip="Off by default. Controls how much AI assistance Forge offers. Determinism — validation, diagnostics, compile, the object browser, selftests — always works fully regardless of this setting. Your choice is saved on this device and applied immediately."
+            testId="ai-assistant-settings"
           >
             <div className="grid grid-cols-2 gap-1.5">
               {AI_TIERS.map(t => {
@@ -759,9 +805,12 @@ export default function DirectorySettingsModal({
               <Sparkles className="w-3 h-3" />
               Configure AI engine — provider, model &amp; API key
             </button>
-          </DirectoryRow>
+          </DirectoryRow>}
+          </div>
+        </div>
 
-          {/* Status + Save */}
+        {/* Sticky Footer: Status + Save */}
+        <div className="shrink-0 border-t border-slate-800 bg-[#11161f] px-4 py-2.5 space-y-2">
           {status.msg && (
             <div
               className={`p-2 rounded text-[10px] font-mono leading-relaxed border ${
@@ -776,8 +825,8 @@ export default function DirectorySettingsModal({
             </div>
           )}
 
-          <div className="flex items-center justify-between pt-1">
-            <span className="text-[9px] text-slate-500 font-sans">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-[10px] text-slate-400 font-sans">
               {directorySettingsLocked ? 'Project Check approval locks directory paths for this session.' : isolatedScratch
                 ? 'Reference and schema paths are saved in Forge Dev settings.'
                 : 'All directory paths are saved securely on the server config.'}
@@ -785,7 +834,7 @@ export default function DirectorySettingsModal({
             <button
               onClick={() => saveServerPaths()}
               disabled={!resolved || directorySettingsLocked || status.type === 'saving'}
-              className="px-4 py-1.5 bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-black rounded text-[11px] font-mono font-bold uppercase flex items-center gap-1.5 cursor-pointer shrink-0"
+              className="px-4 py-1.5 bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-slate-950 rounded-md text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer shrink-0 transition-colors"
             >
               <Save className="w-3.5 h-3.5" />
               {status.type === 'saving' ? 'Saving…' : 'Save Paths'}

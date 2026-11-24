@@ -833,49 +833,49 @@ export default function AgentBridge({
   if (!isOpen) return null;
 
   return (
-    <div data-testid="agent-bridge" className="fixed inset-y-0 right-0 w-[480px] bg-[#0c0f16] border-l border-cyan-500/30 z-50 flex flex-col shadow-2xl font-mono text-xs text-slate-300">
+    <div data-testid="agent-bridge" className="fixed inset-y-0 right-0 w-[min(500px,100vw)] bg-[#0c1017] border-l border-slate-700/80 z-50 flex flex-col shadow-2xl font-mono text-xs text-slate-300">
       
       {/* Header Panel */}
-      <div className="bg-[#141b25] border-b border-white/10 p-4 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="p-1 px-1.5 bg-cyan-700/30 border border-cyan-500/40 rounded text-cyan-400">
-            <Cpu className="w-4 h-4 animate-pulse" />
+      <div className="bg-[#131822] border-b border-slate-800 px-4 py-3 flex items-center justify-between">
+        <div className="flex items-center gap-2.5">
+          <div className="p-1.5 bg-sky-500/15 border border-sky-500/30 rounded-md text-sky-400">
+            <Cpu className="w-4 h-4" />
           </div>
           <div>
-            <span className="font-bold text-white text-sm tracking-tight block">AI Agent API Bridge</span>
-            <span className="text-[10px] text-slate-400">Integrate external Codex, Claude, and Antigravity agents</span>
+            <span className="font-semibold font-sans text-slate-100 text-sm tracking-tight block">AI Agent API Bridge</span>
+            <span className="text-[10.5px] font-sans text-slate-400">Workspace sync, scoped agent keys, action history, and runtime API</span>
           </div>
         </div>
         <button 
           onClick={onClose}
           aria-label="Close Agent API Bridge"
-          className="p-1.5 rounded hover:bg-white/5 text-slate-400 hover:text-white transition-all cursor-pointer"
+          className="p-1.5 rounded hover:bg-white/5 text-slate-400 hover:text-white transition-colors cursor-pointer"
         >
           <X className="w-4 h-4" />
         </button>
       </div>
 
       {/* Synchronisation Status Banner */}
-      <div className="px-4 py-2 border-b border-white/5 bg-[#090b10] flex items-center justify-between text-[11px]">
+      <div className="px-4 py-2 border-b border-slate-800/80 bg-[#0e1219] flex items-center justify-between text-[11px]">
         <div className="flex items-center gap-1.5">
-          <div className={`w-2 h-2 rounded-full ${displayedServerHealth === 'connected' ? 'bg-emerald-500 animate-ping' : displayedServerHealth === 'offline' ? 'bg-red-500' : displayedServerHealth === 'checking' ? 'bg-amber-400 animate-pulse' : 'bg-slate-500'}`} />
-          <span data-testid="agent-bridge-sync-status" className="text-slate-400">
+          <div className={`w-2 h-2 rounded-full ${displayedServerHealth === 'connected' ? 'bg-emerald-400' : displayedServerHealth === 'offline' ? 'bg-rose-500' : displayedServerHealth === 'checking' ? 'bg-amber-400 animate-pulse' : 'bg-slate-500'}`} />
+          <span data-testid="agent-bridge-sync-status" className="text-slate-300">
             External updates: {displayedServerHealth === 'connected' ? 'Connected' : displayedServerHealth === 'offline' ? 'Offline' : displayedServerHealth === 'checking' ? 'Checking' : 'Paused'}
           </span>
-          <span className="text-[9px] text-slate-500">| ver: v{localVersion} (srv: v{serverVersion})</span>
+          <span className="text-[9.5px] text-slate-500">| ver: v{localVersion} (srv: v{serverVersion})</span>
         </div>
         <div className="flex items-center gap-2">
-          <span className="text-[9px] text-slate-500">Last: {lastSyncedTime}</span>
+          <span className="text-[9.5px] text-slate-500">Last: {lastSyncedTime}</span>
           <button 
             onClick={() => {
               const next = !pollingEnabled;
               if (next) setServerHealth('checking');
               onPollingEnabledChange(next);
             }}
-            className="p-1 text-slate-400 hover:text-white transition-all"
+            className="p-1 text-slate-400 hover:text-white transition-colors cursor-pointer"
             title={pollingEnabled ? "Pause external workspace updates (local edits still save)" : "Resume external workspace updates"}
           >
-            <RefreshCw className={`w-3 h-3 ${pollingEnabled ? 'animate-spin-slow text-cyan-400' : ''}`} />
+            <RefreshCw className={`w-3 h-3 ${pollingEnabled ? 'text-sky-400' : ''}`} />
           </button>
         </div>
       </div>

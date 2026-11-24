@@ -40,7 +40,6 @@ import {
 } from '../types';
 import DirectoryExplorer from './DirectoryExplorer';
 import DiagnosticsHub from './DiagnosticsHub';
-import PropertiesInspector from './PropertiesInspector';
 import { toContentVersion } from '../lib/modCompiler';
 import DiagnosticsCenter from './DiagnosticsCenter';
 import SnapshotManager from './SnapshotManager';
@@ -54,7 +53,6 @@ import { MOD_PATTERNS, stampPatternIntoWorkspace } from '../lib/modPatterns';
 import type { ArchitectStepView } from './BlueprintPanel';
 import VirtualizedNodeToolbox from './VirtualizedNodeToolbox';
 import type { DiagnosticsScope } from './DiagnosticsCenter';
-import { applyNodePropertyChange, isNodeSelectionFailure } from '../lib/nodeSelectionDocument';
 import {
   SIDEBAR_NAV_ITEMS,
   visibleSidebarTabs,
@@ -184,6 +182,20 @@ const TOOL_TITLES: Record<SidebarTab, string> = {
   reference: 'Local Object Browser',
 };
 
+const TOOL_GROUPS: Record<SidebarTab, 'author' | 'project' | 'quality' | 'ref'> = {
+  script: 'author',
+  cues: 'author',
+  ui: 'author',
+  templates: 'author',
+  config: 'project',
+  filesystem: 'project',
+  git: 'project',
+  diagnostics: 'quality',
+  playtest: 'quality',
+  reference: 'ref',
+  ai: 'ref',
+};
+
 function ToolRail({ activeTab, aiEnabled, layoutPreferences, onSelect, onMove, onCollapse, onOpenSettings }: {
   activeTab: SidebarTab;
   aiEnabled: boolean;
@@ -197,49 +209,57 @@ function ToolRail({ activeTab, aiEnabled, layoutPreferences, onSelect, onMove, o
   const visible = visibleSidebarTabs(layoutPreferences, aiEnabled);
   const right = layoutPreferences.toolDock === 'right';
   return (
-    <nav aria-label="Forge tools" data-testid="tool-rail" className={`w-[48px] bg-[#0a0c10] ${right ? 'border-l' : 'border-r'} border-white/5 flex flex-col items-center py-2 gap-1 shrink-0 overflow-y-auto custom-scrollbar`}>
-      {visible.map(id => {
+    <nav aria-label="Forge tools" data-testid="tool-rail" className={`w-[52px] bg-[#0c1017] ${right ? 'border-l' : 'border-r'} border-slate-800/80 flex flex-col items-center py-2 gap-0.5 shrink-0 overflow-y-auto custom-scrollbar`}>
+      {visible.map((id, index) => {
         const item = SIDEBAR_NAV_ITEMS.find(candidate => candidate.id === id)!;
         const Icon = TOOL_ICONS[id];
         const active = activeTab === id;
+        const prevId = index > 0 ? visible[index - 1] : null;
+        const showDivider = prevId !== null && TOOL_GROUPS[prevId] !== TOOL_GROUPS[id];
         return (
-          <button
-            key={id}
-            id={`tab_${id}`}
-            data-sidebar-tab={id}
-            type="button"
-            draggable
-            onDragStart={() => setDragged(id)}
-            onDragEnd={() => setDragged(null)}
-            onDragOver={event => event.preventDefault()}
-            onDrop={event => {
-              event.preventDefault();
-              if (dragged && dragged !== id) {
-                const rect = event.currentTarget.getBoundingClientRect();
-                const remaining = layoutPreferences.toolOrder.filter(item => item !== dragged);
-                const targetIndex = remaining.indexOf(id);
-                onMove(dragged, targetIndex + (event.clientY > rect.top + rect.height / 2 ? 1 : 0));
-              }
-              setDragged(null);
-            }}
-            onClick={() => onSelect(id)}
-            aria-label={item.label.toUpperCase()}
-            aria-current={active ? 'page' : undefined}
-            className={`w-9 h-9 rounded-md flex flex-col items-center justify-center transition-colors cursor-pointer ${active
-              ? `${id === 'ai' ? 'text-amber-300 bg-amber-950/30 border-amber-500' : id === 'cues' ? 'text-purple-300 bg-purple-950/30 border-purple-500' : 'text-cyan-300 bg-cyan-950/25 border-cyan-500'} ${right ? 'border-r-2' : 'border-l-2'} font-bold`
-              : 'text-slate-500 hover:text-slate-200 hover:bg-white/5'}`}
-            title={`${TOOL_TITLES[id]} — drag to reorder`}
-          >
-            <Icon className="w-3.5 h-3.5 shrink-0" />
-            {layoutPreferences.density === 'comfortable' && <span className="text-[6.5px] font-mono uppercase font-bold mt-0.5 truncate w-full text-center">{item.label}</span>}
-          </button>
+          <React.Fragment key={id}>
+            {showDivider && <div aria-hidden="true" className="w-6 border-t border-slate-800/90 my-1 shrink-0" />}
+            <button
+              id={`tab_${id}`}
+              data-sidebar-tab={id}
+              type="button"
+              draggable
+              onDragStart={() => setDragged(id)}
+              onDragEnd={() => setDragged(null)}
+              onDragOver={event => event.preventDefault()}
+              onDrop={event => {
+                event.preventDefault();
+                if (dragged && dragged !== id) {
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  const remaining = layoutPreferences.toolOrder.filter(candidate => candidate !== dragged);
+                  const targetIndex = remaining.indexOf(id);
+                  onMove(dragged, targetIndex + (event.clientY > rect.top + rect.height / 2 ? 1 : 0));
+                }
+                setDragged(null);
+              }}
+              onClick={() => onSelect(id)}
+              aria-label={item.label.toUpperCase()}
+              aria-current={active ? 'page' : undefined}
+              className={`w-11 min-h-[38px] py-1 px-0.5 rounded-md flex flex-col items-center justify-center transition-colors cursor-pointer ${active
+                ? `${id === 'ai' ? 'text-amber-300 bg-amber-500/12 border-amber-400' : id === 'cues' ? 'text-purple-300 bg-purple-500/12 border-purple-400' : 'text-sky-300 bg-sky-500/14 border-sky-400'} ${right ? 'border-r-2' : 'border-l-2'} font-semibold`
+                : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.05]'}`}
+              title={`${TOOL_TITLES[id]} — drag to reorder`}
+            >
+              <Icon className="w-4 h-4 shrink-0" />
+              {layoutPreferences.density === 'comfortable' && (
+                <span className="text-[8.5px] font-sans font-medium mt-0.5 truncate w-full text-center leading-tight">
+                  {item.label}
+                </span>
+              )}
+            </button>
+          </React.Fragment>
         );
       })}
       <div className="mt-auto flex flex-col gap-1 pt-2">
-        <button type="button" onClick={onOpenSettings} data-testid="studio-settings-tool" className="w-8 h-8 grid place-items-center rounded text-slate-500 hover:text-cyan-300 hover:bg-white/5" title="Studio Settings — organize workspace and tool tabs">
+        <button type="button" onClick={onOpenSettings} data-testid="studio-settings-tool" className="w-8 h-8 grid place-items-center rounded text-slate-400 hover:text-sky-300 hover:bg-white/5 cursor-pointer" title="Studio Settings — organize workspace and tool tabs">
           <Settings className="w-3.5 h-3.5" />
         </button>
-        <button type="button" onClick={onCollapse} data-testid="tool-rail-collapse" className="w-8 h-8 grid place-items-center rounded text-slate-500 hover:text-cyan-300 hover:bg-white/5" title="Hide tool rail">
+        <button type="button" onClick={onCollapse} data-testid="tool-rail-collapse" className="w-8 h-8 grid place-items-center rounded text-slate-400 hover:text-sky-300 hover:bg-white/5 cursor-pointer" title="Hide tool rail">
           {right ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronLeft className="w-3.5 h-3.5" />}
         </button>
       </div>
@@ -347,7 +367,6 @@ export default function Sidebar({
   }>({});
   const [schemaMessage, setSchemaMessage] = useState<string>('');
   const [schemaMessageType, setSchemaMessageType] = useState<'success' | 'error'>('success');
-  const [propertyEditError, setPropertyEditError] = useState<string>('');
 
   const compileSettings = workspace.compileSettings || {
     md: true,
@@ -366,53 +385,6 @@ export default function Sidebar({
         [key]: !compileSettings[key]
       }
     }));
-  };
-
-  const handleSendCuePackageToAIGuide = () => {
-    if (!selectedNode) return;
-
-    // 1. Gather linked nodes
-    const links = workspace.links || [];
-    const connectedNodeIds = new Set<string>();
-    links.forEach(l => {
-      if (l.sourceNodeId === selectedNode.id) connectedNodeIds.add(l.targetNodeId);
-      if (l.targetNodeId === selectedNode.id) connectedNodeIds.add(l.sourceNodeId);
-    });
-
-    const dependencies = (workspace.nodes || []).filter(n => connectedNodeIds.has(n.id));
-
-    // 2. Format highly detailed prompt context message
-    let serializedContext = `### SELECTED ELEMENT NODE\n- Label: "${selectedNode.label}"\n- XML Tag: <${selectedNode.xmlTag}>\n`;
-    if (Object.keys(selectedNode.properties || {}).length > 0) {
-      serializedContext += `  Properties:\n`;
-      Object.entries(selectedNode.properties).forEach(([k, v]) => {
-        serializedContext += `    - ${k}: ${JSON.stringify(v)}\n`;
-      });
-    }
-    if (selectedNode.comment) {
-      serializedContext += `  Comment Annotation: "${selectedNode.comment}"\n`;
-    }
-
-    if (dependencies.length > 0) {
-      serializedContext += `\n### DEPENDENCIES & CONNECTING NODES\n`;
-      dependencies.forEach(dep => {
-        serializedContext += `- Relation Connection: <${dep.xmlTag}> Tag, labeled "${dep.label}"\n`;
-        if (Object.keys(dep.properties || {}).length > 0) {
-          serializedContext += `  Properties:\n`;
-          Object.entries(dep.properties).forEach(([k, v]) => {
-            serializedContext += `    - ${k}: ${JSON.stringify(v)}\n`;
-          });
-        }
-      });
-    }
-
-    // 3. Dispatch global open-ai-chat event
-    const promptMessage = `I would like to edit my mission cue sequence. Here is the active selected node and its dependency graph context:\n\n${serializedContext}\n\nPlease analyze this cue structure, offer feedback on Egosoft engine compliance, and guide me on how to enhance this sequence or introduce custom conditions & action events!`;
-
-    const event = new CustomEvent('open-ai-chat', {
-      detail: { prompt: promptMessage }
-    });
-    window.dispatchEvent(event);
   };
 
   const allTemplates = React.useMemo(() => {
@@ -464,57 +436,12 @@ export default function Sidebar({
     loadSchemaConfig();
   }, [loadSchemaConfig, schemaConfigVersion]);
 
-  // Property editor change handling
-  const handlePropChange = (key: string, value: unknown) => {
-    if (selectedNode) {
-      const applied = applyNodePropertyChange(workspace, selectedNode.id, key, value);
-      if (isNodeSelectionFailure(applied)) {
-        setPropertyEditError(applied.message);
-        return;
-      }
-      setPropertyEditError('');
-      setWorkspace(applied.workspace);
-      setSelectedNode(applied.workspace.nodes.find(node => node.id === selectedNode.id) || null);
-    } else if (selectedWidget) {
-      setWorkspace(prev => ({
-        ...prev,
-        uiWidgets: prev.uiWidgets.map(w => 
-          w.id === selectedWidget.id 
-            ? { ...w, properties: { ...w.properties, [key]: value } }
-            : w
-        )
-      }));
-      // Update selected widget state to sync preview
-      setSelectedWidget(prev => prev ? { ...prev, properties: { ...prev.properties, [key]: value } } : null);
-    }
-  };
-
-  const handleLabelChange = (newLabel: string) => {
-    if (selectedNode) {
-      setWorkspace(prev => ({
-        ...prev,
-        nodes: prev.nodes.map(n => 
-          n.id === selectedNode.id ? { ...n, label: newLabel } : n
-        )
-      }));
-      setSelectedNode(prev => prev ? { ...prev, label: newLabel } : null);
-    } else if (selectedWidget) {
-      setWorkspace(prev => ({
-        ...prev,
-        uiWidgets: prev.uiWidgets.map(w => 
-          w.id === selectedWidget.id ? { ...w, label: newLabel } : w
-        )
-      }));
-      setSelectedWidget(prev => prev ? { ...prev, label: newLabel } : null);
-    }
-  };
-
   return (
     <div
       id="side_panel"
       style={{ width }}
       data-tool-dock={layoutPreferences.toolDock}
-      className={`${layoutPreferences.toolDock === 'right' ? 'border-l flex-row-reverse order-2' : 'border-r order-0'} border-white/5 bg-[#12141a] flex h-full text-slate-300 min-w-0 max-w-[70vw]`}
+      className={`${layoutPreferences.toolDock === 'right' ? 'border-l flex-row-reverse order-2' : 'border-r order-0'} border-slate-800/80 bg-[#11161f] flex h-full text-slate-300 min-w-0 max-w-[70vw]`}
     >
       {/* Config-driven tool rail. Hidden tools remain recoverable in Settings. */}
       {layoutPreferences.toolRailCollapsed ? (
@@ -542,70 +469,103 @@ export default function Sidebar({
       )}
 
       {/* Right Content Column */}
-      <div className="flex-1 flex flex-col min-w-0 h-full bg-[#12141a]">
+      <div className="flex-1 flex flex-col min-w-0 h-full bg-[#11161f]">
         
         {/* Sleek Tab Header */}
-        <div className="px-3.5 py-3 border-b border-white/5 bg-[#161920]/30 shrink-0 flex items-center justify-between font-mono">
-          <div>
-            <div className="text-[11px] font-bold text-slate-105 uppercase tracking-wider flex items-center gap-1.5 leading-none">
-              {activeTab === 'script' && <Layers className="w-3.5 h-3.5 text-cyan-400" />}
-              {activeTab === 'cues' && <Compass className="w-3.5 h-3.5 text-purple-400" />}
-              {activeTab === 'ui' && <Layout className="w-3.5 h-3.5 text-cyan-400" />}
-              {activeTab === 'config' && <Tags className="w-3.5 h-3.5 text-cyan-400" />}
-              {activeTab === 'filesystem' && <FolderGit2 className="w-3.5 h-3.5 text-cyan-400" />}
-              {activeTab === 'git' && <GitBranch className="w-3.5 h-3.5 text-cyan-400" />}
-              {activeTab === 'templates' && <Library className="w-3.5 h-3.5 text-cyan-400" />}
-              {activeTab === 'ai' && <Sparkles className="w-3.5 h-3.5 text-amber-400" />}
-              {activeTab === 'playtest' && <Terminal className="w-3.5 h-3.5 text-emerald-400" />}
-              {activeTab === 'diagnostics' && <Activity className="w-3.5 h-3.5 text-cyan-405" />}
-              {activeTab === 'reference' && <Database className="w-3.5 h-3.5 text-amber-400" />}
+        <div className="h-9 px-3 border-b border-slate-800/80 bg-[#151b26] shrink-0 flex items-center justify-between">
+          <div className="min-w-0">
+            <div className="text-xs font-semibold text-slate-100 flex items-center gap-1.5 leading-none truncate">
+              {activeTab === 'script' && <Layers className="w-3.5 h-3.5 text-sky-400 shrink-0" />}
+              {activeTab === 'cues' && <Compass className="w-3.5 h-3.5 text-purple-400 shrink-0" />}
+              {activeTab === 'ui' && <Layout className="w-3.5 h-3.5 text-sky-400 shrink-0" />}
+              {activeTab === 'config' && <Tags className="w-3.5 h-3.5 text-sky-400 shrink-0" />}
+              {activeTab === 'filesystem' && <FolderGit2 className="w-3.5 h-3.5 text-sky-400 shrink-0" />}
+              {activeTab === 'git' && <GitBranch className="w-3.5 h-3.5 text-sky-400 shrink-0" />}
+              {activeTab === 'templates' && <Library className="w-3.5 h-3.5 text-sky-400 shrink-0" />}
+              {activeTab === 'ai' && <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />}
+              {activeTab === 'playtest' && <Terminal className="w-3.5 h-3.5 text-emerald-400 shrink-0" />}
+              {activeTab === 'diagnostics' && <Activity className="w-3.5 h-3.5 text-sky-400 shrink-0" />}
+              {activeTab === 'reference' && <Database className="w-3.5 h-3.5 text-amber-400 shrink-0" />}
 
               {activeTab === 'script' && 'Node Toolbox'}
               {activeTab === 'cues' && 'Cue Hierarchy'}
               {activeTab === 'ui' && 'UI Widgets'}
-              {activeTab === 'config' && 'Mod Config'}
-              {activeTab === 'filesystem' && 'Filesystem'}
+              {activeTab === 'config' && 'Mod Manifest & Build'}
+              {activeTab === 'filesystem' && 'Project Files'}
               {activeTab === 'git' && 'Source Control'}
-              {activeTab === 'templates' && 'Blueprints'}
+              {activeTab === 'templates' && 'Reusable Blueprints'}
               {activeTab === 'ai' && 'AI Co-pilot'}
               {activeTab === 'playtest' && 'Playtest Workspace'}
               {activeTab === 'diagnostics' && 'Diagnostics'}
               {activeTab === 'reference' && 'Object Browser'}
             </div>
-            <div className="text-[9px] text-slate-500 font-sans mt-0.5 leading-none">
-              {activeTab === 'script' && 'Create visual logic nodes'}
-              {activeTab === 'cues' && 'Navigate Mission Director cues'}
-              {activeTab === 'ui' && 'HUD widgets & Lua overlays'}
-              {activeTab === 'config' && 'Edit extension settings'}
-              {activeTab === 'filesystem' && 'Workspace loose files list'}
-              {activeTab === 'git' && 'Staged changes & remotes'}
-              {activeTab === 'templates' && 'Manage reusable subgraphs'}
-              {activeTab === 'ai' && 'AI-assisted logic & templates'}
-              {activeTab === 'playtest' && 'Directory sync, manual syncer, and log parser'}
-              {activeTab === 'diagnostics' && 'Continuous project, script, package & install checks'}
-              {activeTab === 'reference' && 'Browse local ships, wares, factions, and code references'}
-            </div>
           </div>
 
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 shrink-0">
+          {activeTab === 'git' && (
+            <button
+              type="button"
+              onClick={() => setActiveTab('config')}
+              className="px-2 py-0.5 rounded text-[10px] font-medium bg-slate-800/80 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white cursor-pointer transition-colors"
+              title="Open Mod Manifest & Disk Snapshots"
+            >
+              Snapshots
+            </button>
+          )}
+          {activeTab === 'config' && (
+            <button
+              type="button"
+              onClick={() => setActiveTab('git')}
+              className="px-2 py-0.5 rounded text-[10px] font-medium bg-slate-800/80 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white cursor-pointer transition-colors"
+              title="Open Source Control & GitHub Sync"
+            >
+              Source Control
+            </button>
+          )}
           {activeTab === 'ai' && (
             <button
               onClick={() => setIsAiFloatingVisible(!isAiFloatingVisible)}
-              className={`px-2 py-1 rounded text-[9.5px] font-mono font-bold uppercase transition-all duration-150 border cursor-pointer ${
+              className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors border cursor-pointer ${
                 isAiFloatingVisible 
-                  ? 'bg-amber-500/10 hover:bg-amber-500/20 border-amber-500/30 text-amber-400' 
-                  : 'bg-slate-800 hover:bg-slate-700 border-white/10 text-slate-400 hover:text-slate-200'
+                  ? 'bg-amber-500/12 hover:bg-amber-500/20 border-amber-500/30 text-amber-300' 
+                  : 'bg-slate-800/80 hover:bg-slate-700 border-slate-700 text-slate-300'
               }`}
               title={isAiFloatingVisible ? "Hide floating AI guide panel" : "Show floating AI guide panel"}
             >
               {isAiFloatingVisible ? "Hide Float ✕" : "Show Float ⎋"}
             </button>
           )}
-          <button type="button" data-testid="side-panel-collapse" onClick={onTogglePanel} className="w-7 h-7 grid place-items-center rounded text-slate-500 hover:text-cyan-300 hover:bg-white/5" title="Hide side panel">
+          <button type="button" data-testid="side-panel-collapse" onClick={onTogglePanel} className="w-6 h-6 grid place-items-center rounded text-slate-400 hover:text-sky-300 hover:bg-white/5 cursor-pointer" title="Hide side panel">
             <PanelLeftClose className="w-3.5 h-3.5" />
           </button>
           </div>
         </div>
+
+        {/* Contextual Editor Domain Hint when opening an editor-specific palette on another domain */}
+        {(activeTab === 'script' || activeTab === 'cues' || activeTab === 'templates') && workspaceView !== 'blueprint' && setWorkspaceView && (
+          <div className="mx-2.5 mt-2 rounded-md border border-sky-500/25 bg-sky-500/10 px-2.5 py-1.5 flex items-center justify-between gap-2 text-[11px] text-sky-200 shrink-0">
+            <span className="truncate">Mission Director palette</span>
+            <button
+              type="button"
+              onClick={() => setWorkspaceView('blueprint')}
+              className="shrink-0 rounded bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/35 px-2 py-0.5 text-[10.5px] font-semibold text-sky-100 cursor-pointer"
+            >
+              Open MD Scripts
+            </button>
+          </div>
+        )}
+        {activeTab === 'ui' && workspaceView !== 'ui-designer' && setWorkspaceView && (
+          <div className="mx-2.5 mt-2 rounded-md border border-sky-500/25 bg-sky-500/10 px-2.5 py-1.5 flex items-center justify-between gap-2 text-[11px] text-sky-200 shrink-0">
+            <span className="truncate">HUD &amp; UI widget palette</span>
+            <button
+              type="button"
+              onClick={() => setWorkspaceView('ui-designer')}
+              className="shrink-0 rounded bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/35 px-2 py-0.5 text-[10.5px] font-semibold text-sky-100 cursor-pointer"
+            >
+              Open HUD &amp; Lua UI
+            </button>
+          </div>
+        )}
 
         {/* Main Content Pane */}
         <div className={`flex-1 min-w-0 min-h-0 ${activeTab === 'diagnostics'
@@ -918,7 +878,7 @@ export default function Sidebar({
                   <div className="p-2 rounded bg-emerald-500/5 border border-emerald-500/20 text-[10px] space-y-1">
                     <div className="flex items-center justify-between text-slate-400 font-bold uppercase text-[9px]">
                        <span>Workspace Path</span>
-                       <span className="text-emerald-400 flex items-center gap-0.5 font-bold uppercase text-[8px] animate-pulse">● Configured</span>
+                       <span className="text-emerald-400 flex items-center gap-1 font-semibold text-[9px]">● Configured</span>
                     </div>
                     <div className="text-white break-all flex items-center gap-1 text-[10px]">
                       <Folder className="w-3.5 h-3.5 text-yellow-400 shrink-0" />
@@ -926,11 +886,11 @@ export default function Sidebar({
                     </div>
                   </div>
 
-                  {/* Candy Store mapping Mode Choice: Candy vs Candy Store */}
+                  {/* Staging Directory Layout Choice */}
                   <div>
                     <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider flex items-center gap-1">
                       <HardDrive className="w-3 h-3 text-cyan-400" />
-                      Staging Directory Type
+                      Staging Directory Layout
                     </label>
                     <select
                       value={workspaceDirMode}
@@ -941,8 +901,8 @@ export default function Sidebar({
                       }}
                       className="w-full bg-[#0F1115] border border-white/10 p-1.5 rounded text-[10px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500 cursor-pointer"
                     >
-                      <option value="store">Generic Extensions Folder ("Candy Store")</option>
-                      <option value="candy">Direct Mod Folder ("Candy Itself")</option>
+                      <option value="store">Extensions Parent Folder (extensions/&lt;mod_id&gt;/)</option>
+                      <option value="candy">Direct Mod Folder (content.xml at root)</option>
                     </select>
                     <p className="text-[9px] text-slate-500 leading-normal mt-1 italic">
                       {workspaceDirMode === 'store' 
@@ -1104,8 +1064,8 @@ export default function Sidebar({
 
             {/* Part 1: CREATE REUSABLE BLUEPRINT */}
             <div className="space-y-3 bg-black/40 p-3 rounded border border-white/5 font-mono text-[11px]">
-              <span className="text-cyan-400 uppercase font-bold text-[9px] tracking-wider block">
-                CREATE BLUEPRINT BLUEPRINT
+              <span className="text-sky-400 uppercase font-bold text-[9.5px] tracking-wider block">
+                Create Reusable Blueprint
               </span>
               
               <div>
@@ -1408,32 +1368,11 @@ export default function Sidebar({
             onCancel={onAiCancel}
           />
         )}
-
-        {/* COMPONENT INSPECTOR OR PROPERTY VIEWER PANEL (B5: extracted to PropertiesInspector.tsx) */}
-        <PropertiesInspector
-          selectedNode={selectedNode}
-          selectedWidget={selectedWidget}
-          workspace={workspace}
-          setWorkspace={setWorkspace}
-          setSelectedNode={setSelectedNode}
-          setSelectedWidget={setSelectedWidget}
-          saveCheckpoint={saveCheckpoint}
-          handleLabelChange={handleLabelChange}
-          handlePropChange={handlePropChange}
-          handleSendCuePackageToAIGuide={handleSendCuePackageToAIGuide}
-          diagnostics={diagnostics}
-          setWorkspaceView={setWorkspaceView}
-        />
-        {propertyEditError && (
-          <div className="mx-3 mb-3 rounded border border-amber-500/40 bg-amber-950/30 px-3 py-2 text-[11px] leading-relaxed text-amber-200" role="status">
-            {propertyEditError}
-          </div>
-        )}
-              </div>
+        </div>
 
       {/* Footer System Credits */}
-      <div className="p-3 border-t border-white/5 bg-black/45 text-center text-[10px] font-mono text-slate-500">
-        Engine Context: Egosoft MD 4.5
+      <div className="px-3 py-1.5 border-t border-slate-800/80 bg-[#0d1118] text-center text-[10px] font-mono text-slate-500 shrink-0">
+        Egosoft MD 4.5 · Selection opens Right Inspector
       </div>
     </div> {/* Close Right Content Column */}
   </div>
