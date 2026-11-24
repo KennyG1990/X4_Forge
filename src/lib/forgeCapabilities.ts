@@ -2181,3 +2181,1488 @@ export function validateForgeCapabilityRegistry(
   });
   return errors;
 }
+
+// ---------------------------------------------------------------------------
+// #19 P2 — Authoritative Semantic UI-Action Parity Census (forge.ui-action-parity.v1)
+// ---------------------------------------------------------------------------
+
+export const FORGE_UI_ACTION_PARITY_SCHEMA_VERSION = 'forge.ui-action-parity.v1' as const;
+
+export const FORGE_UI_ACTION_PARITY_DOMAINS = [
+  'approved-project-checks',
+  'canvas-and-domain-editors',
+  'compile-package-export',
+  'credentials-and-consent',
+  'directory-settings',
+  'extension-and-backend-lifecycle',
+  'help-and-navigation',
+  'native-deploy-and-recovery',
+  'preferences-and-layout',
+  'reference-search-completion',
+  'release-center',
+  'runtime-and-performance',
+  'source-files-and-undo',
+  'validation-and-diagnostics',
+  'workspace-selection',
+] as const;
+
+export type ForgeUiActionParityDomain = (typeof FORGE_UI_ACTION_PARITY_DOMAINS)[number];
+
+export const FORGE_UI_ACTION_PARITY_STATUSES = [
+  'available',
+  'approval-required',
+  'partial',
+  'missing',
+] as const;
+
+export type ForgeUiActionParityStatus = (typeof FORGE_UI_ACTION_PARITY_STATUSES)[number];
+
+export interface ForgeUiActionApprovalWorkflowV1 {
+  readonly requestCapabilityIdentity: string;
+  readonly statusCapabilityIdentity: string;
+  readonly applyCapabilityIdentities: readonly string[];
+  readonly receiptCapabilityIdentity: string;
+  readonly ownerDecisionRoutes: readonly string[];
+}
+
+export interface ForgeUiActionInventoryCoverageV1 {
+  readonly extensionCommands?: readonly string[];
+  readonly extensionSettings?: readonly string[];
+  readonly globalActions?: readonly string[];
+  readonly workspaceViews?: readonly string[];
+  readonly sidebarTools?: readonly string[];
+}
+
+export interface ForgeUiActionParityRowV1 {
+  readonly id: string;
+  readonly domain: ForgeUiActionParityDomain;
+  readonly title: string;
+  readonly status: ForgeUiActionParityStatus;
+  /** `repo-relative path::literal token` anchors across web Studio and/or VS Code/Antigravity host. */
+  readonly uiAnchors: readonly string[];
+  readonly capabilityIdentities: readonly string[];
+  readonly apiRoutes: readonly string[];
+  readonly mcpTools: readonly string[];
+  readonly nativeIdeProvider?: boolean;
+  readonly coverage?: ForgeUiActionInventoryCoverageV1;
+  readonly approvalWorkflow?: ForgeUiActionApprovalWorkflowV1;
+  readonly ownerIssue?: string;
+  readonly missingBehavior?: string;
+}
+
+export interface ForgeUiActionParitySummaryV1 {
+  readonly totalActions: number;
+  readonly available: number;
+  readonly approvalRequired: number;
+  readonly partial: number;
+  readonly missing: number;
+  readonly openGaps: number;
+}
+
+export interface ForgeUiActionParityCensusV1 {
+  readonly schemaVersion: typeof FORGE_UI_ACTION_PARITY_SCHEMA_VERSION;
+  readonly censusHash: string;
+  readonly summary: ForgeUiActionParitySummaryV1;
+  readonly actions: readonly ForgeUiActionParityRowV1[];
+}
+
+const CONFIGURATION_APPROVAL_WORKFLOW: ForgeUiActionApprovalWorkflowV1 = {
+  requestCapabilityIdentity: 'configuration.access.request@1',
+  statusCapabilityIdentity: 'configuration.access.status@1',
+  applyCapabilityIdentities: ['configuration.preview@1', 'configuration.apply@1'],
+  receiptCapabilityIdentity: 'configuration.status@1',
+  ownerDecisionRoutes: [
+    'GET /api/agent/keys/configuration-access',
+    'POST /api/agent/keys/configuration-access/decision',
+  ],
+};
+
+export const FORGE_UI_ACTION_PARITY_CENSUS: readonly ForgeUiActionParityRowV1[] = [
+  {
+    id: 'ai.copilot.generate_and_chat',
+    domain: 'canvas-and-domain-editors',
+    title: 'Generate, preview, and apply AI Co-pilot / Architect workspace proposals',
+    status: 'partial',
+    uiAnchors: [
+      'src/components/AIHelper.tsx::AIHelper',
+      'src/components/BlueprintPanel.tsx::BlueprintPanel',
+    ],
+    capabilityIdentities: ['workspace.generate.preview@1'],
+    apiRoutes: [
+      'POST /api/agent/generate/preview',
+      'POST /api/agent/project/generate',
+      'GET /api/ai/usage',
+    ],
+    mcpTools: [],
+    coverage: { sidebarTools: ['ai'] },
+    ownerIssue: '#19',
+    missingBehavior: 'workspace.generate.preview@1 has no MCP tool projection and direct POST /api/agent/generate remains Studio-session-only.',
+  },
+  {
+    id: 'checks.project_owner.enroll',
+    domain: 'approved-project-checks',
+    title: 'Review and enroll owner-approved project-registered checks (A15)',
+    status: 'missing',
+    uiAnchors: [
+      'server.ts::/api/project-check-owner/review',
+      'server.ts::/api/project-check-owner/confirm',
+    ],
+    capabilityIdentities: [],
+    apiRoutes: [
+      'POST /api/project-check-owner/review',
+      'POST /api/project-check-owner/confirm',
+    ],
+    mcpTools: [],
+    ownerIssue: '#61',
+    missingBehavior: 'Project-check owner enrollment is Studio-session-only with no agent request/status/continuation workflow or MCP projection.',
+  },
+  {
+    id: 'checks.project_runs.execute',
+    domain: 'approved-project-checks',
+    title: 'Execute and poll already-enrolled project-check suite runs',
+    status: 'partial',
+    uiAnchors: [
+      'server.ts::/api/agent/project-check-runs',
+      'src/components/DeployValidationSummary.tsx::DeployValidationSummary',
+    ],
+    capabilityIdentities: [],
+    apiRoutes: [
+      'POST /api/agent/project-check-runs',
+      'GET /api/agent/project-check-runs/:id',
+    ],
+    mcpTools: [],
+    ownerIssue: '#61',
+    missingBehavior: 'Agent HTTP endpoints start and poll enrolled project-check runs, but neither canonical capability descriptors nor MCP tools are projected yet.',
+  },
+  {
+    id: 'compile.workspace.build',
+    domain: 'compile-package-export',
+    title: 'Compile and package workspace artifacts (loose or catalog)',
+    status: 'partial',
+    uiAnchors: [
+      'src/components/CompileConfirmationModal.tsx::CompileConfirmationModal',
+      'src/App.tsx::/api/agent/compile',
+    ],
+    capabilityIdentities: ['workspace.compile@2', 'workspace.compile.result@1'],
+    apiRoutes: [
+      'POST /api/agent/compile',
+      'GET /api/agent/compile/result/:id',
+      'POST /api/agent/artifact/build',
+      'POST /api/agent/package',
+      'POST /api/agent/project/package',
+    ],
+    mcpTools: ['compile_workspace'],
+    ownerIssue: '#19',
+    missingBehavior: 'MCP compile_workspace omits inline workspace/fileOverrides, returns file names without file contents, caps diagnostics at 100, and workspace.compile.result@1 has no MCP projection.',
+  },
+  {
+    id: 'credentials.agent_keys.manage',
+    domain: 'credentials-and-consent',
+    title: 'Mint, inspect, revoke, and approve scoped Agent API keys and MCP config',
+    status: 'missing',
+    uiAnchors: [
+      'src/components/AgentBridge.tsx::AgentBridge',
+      'vscode-extension/src/extension.ts::x4forge.createAgentKey',
+      'vscode-extension/src/extension.ts::x4forge.copyMcpConfig',
+    ],
+    capabilityIdentities: [],
+    apiRoutes: [
+      'GET /api/agent/keys',
+      'POST /api/agent/keys',
+      'POST /api/agent/keys/revoke',
+      'GET /api/agent/keys/configuration-access',
+      'POST /api/agent/keys/configuration-access/decision',
+    ],
+    mcpTools: [],
+    coverage: {
+      extensionCommands: ['x4forge.createAgentKey', 'x4forge.copyMcpConfig'],
+      globalActions: ['agent-api'],
+    },
+    ownerIssue: '#19',
+    missingBehavior: 'Credential minting, revocation, and owner grant decisions are Studio-session/IDE-owner-only; agents can inspect their own effective contract via GET /api/agent/capabilities/effective but cannot self-mint or impersonate owner approval.',
+  },
+  {
+    id: 'credentials.ai_provider.configure',
+    domain: 'credentials-and-consent',
+    title: 'Configure AI provider credentials, active model, and reasoning tier',
+    status: 'missing',
+    uiAnchors: [
+      'src/components/AIConnectionModal.tsx::AIConnectionModal',
+      'vscode-extension/src/extension.ts::/api/ai/keys/status',
+    ],
+    capabilityIdentities: [],
+    apiRoutes: [
+      'GET /api/ai/keys/status',
+      'POST /api/ai/keys',
+    ],
+    mcpTools: [],
+    coverage: { globalActions: ['ai-settings'] },
+    ownerIssue: '#19',
+    missingBehavior: 'AI provider key storage and status routes are Studio-session-only with no scoped agent or MCP consent workflow.',
+  },
+  {
+    id: 'credentials.github_sync.manage',
+    domain: 'credentials-and-consent',
+    title: 'Authenticate GitHub device/PAT credentials and push/pull mod repositories',
+    status: 'missing',
+    uiAnchors: [
+      'src/components/SourceControl.tsx::SourceControl',
+      'src/components/SourceControl.tsx::/api/github/push',
+    ],
+    capabilityIdentities: [],
+    apiRoutes: [
+      'GET /api/github/credential',
+      'POST /api/github/credential',
+      'DELETE /api/github/credential',
+      'POST /api/github/device/start',
+      'POST /api/github/device/poll',
+      'POST /api/github/commits',
+      'POST /api/github/create',
+      'POST /api/github/load',
+      'POST /api/github/push',
+    ],
+    mcpTools: [],
+    ownerIssue: '#19',
+    missingBehavior: 'All GitHub credential and repository sync endpoints inside Forge are Studio-session-only with no scoped agent or MCP projection.',
+  },
+  {
+    id: 'deploy.format.default.configure',
+    domain: 'native-deploy-and-recovery',
+    title: 'Read, preview, and persist default deployment format (loose vs catalog)',
+    status: 'approval-required',
+    uiAnchors: [
+      'src/components/CompileConfirmationModal.tsx::chooseDeployFormat',
+      'src/components/DirectorySettingsModal.tsx::DirectorySettingsModal',
+    ],
+    capabilityIdentities: [
+      'configuration.access.request@1',
+      'configuration.access.status@1',
+      'configuration.read@1',
+      'configuration.preview@1',
+      'configuration.apply@1',
+      'configuration.status@1',
+    ],
+    apiRoutes: [
+      'POST /api/agent/configuration/access/request',
+      'GET /api/agent/configuration/access',
+      'GET /api/agent/configuration',
+      'POST /api/agent/configuration/preview',
+      'POST /api/agent/configuration/apply',
+      'GET /api/agent/configuration/status',
+      'POST /api/schema/config',
+    ],
+    mcpTools: [
+      'request_configuration_access',
+      'get_configuration_access_status',
+      'get_configuration',
+      'preview_configuration_change',
+      'apply_configuration_change',
+      'get_configuration_operation_status',
+    ],
+    approvalWorkflow: CONFIGURATION_APPROVAL_WORKFLOW,
+    ownerIssue: '#96',
+  },
+  {
+    id: 'deploy.native.apply',
+    domain: 'native-deploy-and-recovery',
+    title: 'Execute preview-bound native deployment (loose or catalog) with CAS verification',
+    status: 'available',
+    uiAnchors: [
+      'src/components/CompileConfirmationModal.tsx::CompileConfirmationModal',
+      'src/components/DeployFileChanges.tsx::DeployFileChanges',
+    ],
+    capabilityIdentities: ['deploy.apply@1'],
+    apiRoutes: [
+      'POST /api/agent/deploy-verify/apply',
+      'POST /api/agent/deploy-verify',
+      'POST /api/agent/deploy',
+    ],
+    mcpTools: ['apply_native_deploy'],
+    ownerIssue: '#19',
+  },
+  {
+    id: 'deploy.native.preview',
+    domain: 'native-deploy-and-recovery',
+    title: 'Preview native deployment bytes, validation verdict, and per-request deployFormat override',
+    status: 'available',
+    uiAnchors: [
+      'src/components/CompileConfirmationModal.tsx::CompileConfirmationModal',
+      'src/components/DeployValidationSummary.tsx::DeployValidationSummary',
+    ],
+    capabilityIdentities: ['deploy.preview@1'],
+    apiRoutes: [
+      'POST /api/agent/deploy-verify/preview',
+      'POST /api/agent/deploy-verify',
+    ],
+    mcpTools: ['preview_native_deploy'],
+    ownerIssue: '#19',
+  },
+  {
+    id: 'deploy.native.status',
+    domain: 'native-deploy-and-recovery',
+    title: 'Inspect native deployment receipt, target/managed physical state, and file-effect report',
+    status: 'available',
+    uiAnchors: [
+      'src/components/DeployValidationSummary.tsx::DeployValidationSummary',
+      'src/components/PlaytestWorkspace.tsx::/api/agent/deploy-verify',
+    ],
+    capabilityIdentities: ['deploy.status@1'],
+    apiRoutes: [
+      'GET /api/agent/deploy-verify/status',
+      'GET /api/agent/status',
+    ],
+    mcpTools: ['get_deploy_operation_status'],
+    ownerIssue: '#19',
+  },
+  {
+    id: 'deploy.native.undo',
+    domain: 'native-deploy-and-recovery',
+    title: 'Undo a committed native deployment from its one-use CAS recovery snapshot',
+    status: 'available',
+    uiAnchors: [
+      'src/components/SourceControl.tsx::SourceControl',
+      'src/components/AgentBridge.tsx::/api/agent/history/',
+    ],
+    capabilityIdentities: ['deploy.undo@1'],
+    apiRoutes: [
+      'POST /api/agent/deploy-verify/undo',
+      'POST /api/agent/history/:id/revert',
+    ],
+    mcpTools: ['undo_native_deploy'],
+    ownerIssue: '#19',
+  },
+  {
+    id: 'diagnostics.conflicts.check',
+    domain: 'validation-and-diagnostics',
+    title: 'Check installed extension duplicate IDs, load-order, and override conflicts',
+    status: 'partial',
+    uiAnchors: [
+      'src/components/PackageModDoctor.tsx::PackageModDoctor',
+      'vscode-extension/src/extension.ts::x4forge.checkModConflicts',
+    ],
+    capabilityIdentities: ['extensions.conflicts.analyze@1'],
+    apiRoutes: [
+      'GET /api/agent/extension-doctor',
+      'GET /api/agent/override-map',
+      'GET /api/agent/extension-file',
+    ],
+    mcpTools: ['check_conflicts'],
+    coverage: { extensionCommands: ['x4forge.checkModConflicts'] },
+    ownerIssue: '#19',
+    missingBehavior: 'MCP check_conflicts summarizes up to 50 findings, and override-map / extension-file reads have no canonical capability or MCP projection yet.',
+  },
+  {
+    id: 'diagnostics.patch_readiness.check',
+    domain: 'validation-and-diagnostics',
+    title: 'Analyze XML diff patch selectors against base-game and DLC targets',
+    status: 'partial',
+    uiAnchors: [
+      'src/components/XMLPatchSystem.tsx::XMLPatchSystem',
+      'src/components/DiagnosticsHub.tsx::DiagnosticsHub',
+    ],
+    capabilityIdentities: ['patch.readiness.analyze@2'],
+    apiRoutes: [
+      'GET /api/agent/patch-readiness',
+      'GET /api/agent/patch-audit',
+      'POST /api/reference/simulate-diff',
+    ],
+    mcpTools: ['check_patch_readiness'],
+    ownerIssue: '#19',
+    missingBehavior: 'MCP check_patch_readiness returns only broken/removed findings capped at 50, and diff simulation (POST /api/reference/simulate-diff) has no MCP projection.',
+  },
+  {
+    id: 'diagnostics.project.validate',
+    domain: 'validation-and-diagnostics',
+    title: 'Validate project files, inspect remediation guidance, and manage warning suppressions',
+    status: 'partial',
+    uiAnchors: [
+      'src/components/DiagnosticsCenter.tsx::DiagnosticsCenter',
+      'src/components/DiagnosticGuidance.tsx::DiagnosticGuidance',
+      'vscode-extension/src/extension.ts::/api/agent/project/validate/check',
+    ],
+    capabilityIdentities: ['project.validate@1'],
+    apiRoutes: [
+      'POST /api/agent/project/validate/check',
+      'POST /api/agent/project/validate',
+      'GET /api/agent/validation/last',
+      'POST /api/agent/quick-fixes',
+      'POST /api/agent/project-rules/prepare-suppression',
+      'POST /api/agent/project-rules/suppress',
+      'POST /api/agent/warning-reviews/revoke',
+    ],
+    mcpTools: ['validate_mod', 'author_check', 'stage_and_validate'],
+    coverage: { sidebarTools: ['diagnostics'] },
+    ownerIssue: '#19',
+    missingBehavior: 'MCP validation aliases cap findings/capsules at 50-100, while GET /api/agent/validation/last (#138), quick-fixes, and forge.rules.json warning-suppression mutations lack MCP projections.',
+  },
+  {
+    id: 'diagnostics.proof_and_brief.generate',
+    domain: 'validation-and-diagnostics',
+    title: 'Generate mod proof report and refresh deterministic agent brief',
+    status: 'partial',
+    uiAnchors: [
+      'vscode-extension/src/extension.ts::x4forge.generateProof',
+      'vscode-extension/src/extension.ts::x4forge.refreshAgentBrief',
+    ],
+    capabilityIdentities: [],
+    apiRoutes: [
+      'GET /api/agent/proof',
+      'GET /api/agent/project/brief',
+    ],
+    mcpTools: [],
+    coverage: {
+      extensionCommands: ['x4forge.generateProof', 'x4forge.refreshAgentBrief'],
+    },
+    ownerIssue: '#19',
+    missingBehavior: 'GET /api/agent/proof and GET /api/agent/project/brief are reachable by scoped agent keys over HTTP, but neither is registered in FORGE_CAPABILITIES or projected over MCP.',
+  },
+  {
+    id: 'diagnostics.readiness.inspect',
+    domain: 'validation-and-diagnostics',
+    title: 'Inspect five-stage workspace package/deploy readiness ladder',
+    status: 'available',
+    uiAnchors: [
+      'src/components/ReadinessLadder.tsx::ReadinessLadder',
+      'vscode-extension/src/extension.ts::/api/agent/schema',
+    ],
+    capabilityIdentities: ['readiness.read@1'],
+    apiRoutes: ['GET /api/agent/readiness'],
+    mcpTools: ['readiness'],
+  },
+  {
+    id: 'editors.aiscripts.author',
+    domain: 'canvas-and-domain-editors',
+    title: 'Author AI behavior scripts and parameters in the AI Scripts domain editor',
+    status: 'partial',
+    uiAnchors: [
+      'src/components/AIScriptEditor.tsx::AIScriptEditor',
+      'src/components/WorkspaceNavigationBar.tsx::aiscripts',
+    ],
+    capabilityIdentities: ['workspace.read@2'],
+    apiRoutes: [
+      'GET /api/agent/workspace',
+      'POST /api/agent/workspace',
+      'POST /api/agent/workspace/merge',
+    ],
+    mcpTools: ['get_workspace'],
+    coverage: { workspaceViews: ['aiscripts'] },
+    ownerIssue: '#19',
+    missingBehavior: 'Scoped agent HTTP routes read/replace/merge aiScripts on the saved workspace, but MCP get_workspace summarizes at 50 nodes and MCP has no workspace/AIScript mutation tool.',
+  },
+  {
+    id: 'editors.contracts.author',
+    domain: 'canvas-and-domain-editors',
+    title: 'Author external Lua/MD integration contracts and register external APIs',
+    status: 'partial',
+    uiAnchors: [
+      'src/components/ContractEditor.tsx::ContractEditor',
+      'src/components/WorkspaceNavigationBar.tsx::contracts',
+    ],
+    capabilityIdentities: ['workspace.read@2'],
+    apiRoutes: [
+      'GET /api/agent/external-api-registry',
+      'GET /api/agent/external-api/derive',
+      'GET /api/agent/contract-glue-sample',
+      'POST /api/agent/external-api/register',
+      'POST /api/agent/workspace',
+    ],
+    mcpTools: ['get_workspace'],
+    coverage: { workspaceViews: ['contracts'] },
+    ownerIssue: '#31',
+    missingBehavior: 'POST /api/agent/external-api/register is Studio-session-only (#31) and contract derivation/editing has no canonical capability or MCP projection.',
+  },
+  {
+    id: 'editors.libraries.author',
+    domain: 'canvas-and-domain-editors',
+    title: 'Author wares, jobs, and mod metadata in Wares & Jobs / Mod Meta editors',
+    status: 'partial',
+    uiAnchors: [
+      'src/components/LibraryConfigurator.tsx::LibraryConfigurator',
+      'src/components/Sidebar.tsx::toContentVersion',
+    ],
+    capabilityIdentities: ['workspace.read@2'],
+    apiRoutes: [
+      'GET /api/agent/workspace',
+      'POST /api/agent/workspace',
+      'POST /api/agent/workspace/merge',
+      'POST /api/agent/project/content-xml',
+    ],
+    mcpTools: ['get_workspace'],
+    coverage: {
+      workspaceViews: ['libraries'],
+      sidebarTools: ['config'],
+    },
+    ownerIssue: '#19',
+    missingBehavior: 'Agent HTTP routes mutate wares, jobs, and content.xml metadata, but no canonical capability or MCP tool mutates library/metadata models.',
+  },
+  {
+    id: 'editors.md_canvas.author',
+    domain: 'canvas-and-domain-editors',
+    title: 'Author Mission Director cue graphs, node properties, templates, and undo/redo',
+    status: 'partial',
+    uiAnchors: [
+      'src/components/Canvas.tsx::Canvas',
+      'src/components/CueViewer.tsx::CueViewer',
+      'src/components/PropertiesInspector.tsx::PropertiesInspector',
+    ],
+    capabilityIdentities: ['workspace.read@2'],
+    apiRoutes: [
+      'GET /api/agent/workspace',
+      'POST /api/agent/workspace',
+      'POST /api/agent/workspace/merge',
+      'POST /api/agent/node-diagnostics',
+    ],
+    mcpTools: ['get_workspace'],
+    coverage: {
+      globalActions: ['undo', 'redo'],
+      workspaceViews: ['blueprint'],
+      sidebarTools: ['script', 'cues', 'templates'],
+    },
+    ownerIssue: '#19',
+    missingBehavior: 'Canvas undo/redo is browser-memory local (durable undo uses Agent History / snapshots), MCP get_workspace truncates at 50 nodes, and workspace graph writes have no MCP tool.',
+  },
+  {
+    id: 'editors.translations.author',
+    domain: 'canvas-and-domain-editors',
+    title: 'Author localized t-file pages and text entries',
+    status: 'partial',
+    uiAnchors: [
+      'src/components/TFileEditor.tsx::TFileEditor',
+      'src/components/WorkspaceNavigationBar.tsx::translation',
+    ],
+    capabilityIdentities: ['text.lookup@1', 'workspace.read@2'],
+    apiRoutes: [
+      'POST /api/agent/text/lookup',
+      'POST /api/agent/workspace',
+      'POST /api/agent/workspace/merge',
+    ],
+    mcpTools: ['lookup_text', 'get_workspace'],
+    coverage: { workspaceViews: ['translation'] },
+    ownerIssue: '#19',
+    missingBehavior: 'Text lookup is available on API and MCP (lookup_text), while authoring tFiles requires HTTP workspace/fs writes with no MCP mutation tool.',
+  },
+  {
+    id: 'editors.ui_lua.author',
+    domain: 'canvas-and-domain-editors',
+    title: 'Author HUD & Lua UI widgets and X4 UI Lua/XML source files',
+    status: 'partial',
+    uiAnchors: [
+      'src/components/UIBuilder.tsx::UIBuilder',
+      'src/components/X4UiSourceEditor.tsx::X4UiSourceEditor',
+    ],
+    capabilityIdentities: ['workspace.read@2'],
+    apiRoutes: [
+      'GET /api/agent/lua-snippets',
+      'GET /api/agent/vanilla-ui-harvest',
+      'POST /api/agent/workspace',
+      'POST /api/fs/write',
+    ],
+    mcpTools: ['get_workspace'],
+    coverage: {
+      workspaceViews: ['ui-designer'],
+      sidebarTools: ['ui'],
+    },
+    ownerIssue: '#19',
+    missingBehavior: 'HTTP routes expose Lua snippets, vanilla UI harvest, and workspace/fs writes, but no canonical capability or MCP tool projects UI widget or Lua source authoring.',
+  },
+  {
+    id: 'editors.xml_patches.author',
+    domain: 'canvas-and-domain-editors',
+    title: 'Author RFC 5261 XML diff blocks and synthesize XPath selectors',
+    status: 'partial',
+    uiAnchors: [
+      'src/components/XMLPatchSystem.tsx::XMLPatchSystem',
+      'src/components/XPathInput.tsx::XPathInput',
+    ],
+    capabilityIdentities: ['patch.readiness.analyze@2', 'workspace.read@2'],
+    apiRoutes: [
+      'GET /api/agent/patch-targets',
+      'GET /api/patch/base-content',
+      'POST /api/agent/xpath-synth',
+      'POST /api/reference/xpath-complete',
+      'POST /api/agent/workspace',
+    ],
+    mcpTools: ['check_patch_readiness', 'get_workspace'],
+    coverage: { workspaceViews: ['xmlpatch'] },
+    ownerIssue: '#19',
+    missingBehavior: 'XPath synthesis, XPath completion, base-content inspection, and xmlPatches mutations are HTTP-only without canonical capability descriptors or MCP tools.',
+  },
+  {
+    id: 'extension.ide_capabilities.inspect',
+    domain: 'extension-and-backend-lifecycle',
+    title: 'Inspect IDE semantic capabilities, companion XML extensions, and schema status',
+    status: 'partial',
+    uiAnchors: [
+      'vscode-extension/src/extension.ts::x4forge.showCapabilities',
+      'vscode-extension/src/capabilities.ts::detectIdeCapabilities',
+    ],
+    capabilityIdentities: ['schema.domains.list@1'],
+    apiRoutes: [
+      'GET /api/agent/schema-registry',
+      'GET /api/agent/schema',
+      'GET /api/agent/capabilities/effective',
+    ],
+    mcpTools: ['list_schema_domains'],
+    coverage: { extensionCommands: ['x4forge.showCapabilities'] },
+    ownerIssue: '#19',
+    missingBehavior: 'MCP list_schema_domains omits domain/refresh parameters, and companion IDE extension state (detectIdeCapabilities) is local to the extension host without an API/MCP readback.',
+  },
+  {
+    id: 'extension.sidecar.lifecycle',
+    domain: 'extension-and-backend-lifecycle',
+    title: 'Open Studio webview and start, stop, or inspect the managed local backend sidecar',
+    status: 'missing',
+    uiAnchors: [
+      'vscode-extension/src/extension.ts::x4forge.openStudio',
+      'vscode-extension/src/extension.ts::x4forge.startSidecar',
+      'vscode-extension/src/extension.ts::x4forge.stopSidecar',
+      'vscode-extension/src/extension.ts::x4forge.showLogs',
+    ],
+    capabilityIdentities: [],
+    apiRoutes: [],
+    mcpTools: [],
+    coverage: {
+      extensionCommands: [
+        'x4forge.openStudio',
+        'x4forge.startSidecar',
+        'x4forge.stopSidecar',
+        'x4forge.showLogs',
+      ],
+    },
+    ownerIssue: '#53',
+    missingBehavior: 'Backend sidecar start/stop/log inspection and opening the Studio panel are VS Code/Antigravity host commands with no headless agent or MCP lifecycle bootstrap (#53).',
+  },
+  {
+    id: 'files.bulk_transform.execute',
+    domain: 'source-files-and-undo',
+    title: 'Preview and apply deterministic multi-file corpus transforms',
+    status: 'partial',
+    uiAnchors: [
+      'src/components/BulkTransformPanel.tsx::BulkTransformPanel',
+      'src/components/BulkTransformPanel.tsx::/api/agent/bulk-transform/apply',
+    ],
+    capabilityIdentities: [],
+    apiRoutes: [
+      'POST /api/agent/bulk-transform/preview',
+      'POST /api/agent/bulk-transform/apply',
+    ],
+    mcpTools: [],
+    ownerIssue: '#19',
+    missingBehavior: 'Bulk transform preview and CAS/receipt-backed apply exist on the scoped Agent HTTP API, but neither is registered in FORGE_CAPABILITIES or projected on MCP.',
+  },
+  {
+    id: 'files.history_and_snapshots.manage',
+    domain: 'source-files-and-undo',
+    title: 'Inspect Agent Action Ledger history, revert file/workspace actions, and manage snapshots',
+    status: 'partial',
+    uiAnchors: [
+      'src/components/SourceControl.tsx::SourceControl',
+      'src/components/SnapshotManager.tsx::SnapshotManager',
+    ],
+    capabilityIdentities: ['history.list@1', 'history.revert@1', 'deploy.undo@1'],
+    apiRoutes: [
+      'GET /api/agent/history',
+      'GET /api/agent/history/:id/raw',
+      'POST /api/agent/history/:id/revert',
+      'GET /api/fs/snapshots',
+      'POST /api/fs/snapshot',
+      'POST /api/fs/restore-snapshot',
+      'POST /api/fs/delete-snapshot',
+    ],
+    mcpTools: ['undo_native_deploy'],
+    coverage: { sidebarTools: ['git'] },
+    ownerIssue: '#19',
+    missingBehavior: 'Deployment undo is available over MCP (undo_native_deploy), but general ledger listing/revert (history.list@1, history.revert@1) and filesystem snapshot CRUD have no MCP tools.',
+  },
+  {
+    id: 'files.project_sources.manage',
+    domain: 'source-files-and-undo',
+    title: 'List, read, create, edit, and delete mod project files on disk',
+    status: 'partial',
+    uiAnchors: [
+      'src/components/DirectoryExplorer.tsx::/api/fs/write',
+      'src/components/NativeProjectFiles.tsx::NativeProjectFiles',
+    ],
+    capabilityIdentities: [],
+    apiRoutes: [
+      'POST /api/agent/project/files',
+      'POST /api/agent/project/create',
+      'POST /api/agent/project/file/create',
+      'GET /api/fs/list',
+      'GET /api/fs/read',
+      'POST /api/fs/create',
+      'POST /api/fs/write',
+      'POST /api/fs/delete-dir',
+    ],
+    mcpTools: [],
+    coverage: {
+      globalActions: ['native-project-files'],
+      workspaceViews: ['project'],
+      sidebarTools: ['filesystem'],
+    },
+    ownerIssue: '#19',
+    missingBehavior: 'Scoped Agent HTTP endpoints list, read, create, write, and delete workspace files with CAS/receipts, but none are registered in FORGE_CAPABILITIES or projected on MCP.',
+  },
+  {
+    id: 'help.bug_report.prepare',
+    domain: 'help-and-navigation',
+    title: 'Assemble sanitized diagnostic bug report and open GitHub issue draft',
+    status: 'missing',
+    uiAnchors: [
+      'src/components/BugReportModal.tsx::BugReportModal',
+      'src/components/StudioActionsMenu.tsx::report-bug',
+    ],
+    capabilityIdentities: [],
+    apiRoutes: [],
+    mcpTools: [],
+    coverage: { globalActions: ['report-bug'] },
+    ownerIssue: '#19',
+    missingBehavior: 'BugReportModal assembles browser-side state and opens a GitHub URL directly without a server/MCP bug-bundle operation.',
+  },
+  {
+    id: 'help.onboarding_and_shortcuts.view',
+    domain: 'help-and-navigation',
+    title: 'Browse X4 modding wiki, keyboard shortcuts, and guided onboarding rails',
+    status: 'missing',
+    uiAnchors: [
+      'src/components/WikiBrowser.tsx::WikiBrowser',
+      'src/components/ShortcutsOverlay.tsx::ShortcutsOverlay',
+      'src/components/GuidedRail.tsx::GuidedRail',
+      'src/components/StarterCard.tsx::StarterCard',
+    ],
+    capabilityIdentities: [],
+    apiRoutes: [],
+    mcpTools: [],
+    coverage: {
+      globalActions: ['shortcuts'],
+      workspaceViews: ['wiki'],
+    },
+    ownerIssue: '#19',
+    missingBehavior: 'In-app X4 Wiki topics, keyboard shortcut reference, and onboarding guides live only in frontend bundles without a read-only API/MCP knowledge query.',
+  },
+  {
+    id: 'navigation.ai_scripts.resolve',
+    domain: 'help-and-navigation',
+    title: 'Resolve authored AI script definitions, references, and call targets',
+    status: 'available',
+    uiAnchors: [
+      'vscode-extension/src/extension.ts::registerDefinitionProvider',
+      'src/components/AIScriptEditor.tsx::AIScriptEditor',
+    ],
+    capabilityIdentities: ['project.ai.navigation@1'],
+    apiRoutes: ['POST /api/agent/project/ai-navigation'],
+    mcpTools: ['navigate_ai_script'],
+    nativeIdeProvider: true,
+  },
+  {
+    id: 'navigation.md_scripts.resolve',
+    domain: 'help-and-navigation',
+    title: 'Resolve authored Mission Director cue/library definitions and references',
+    status: 'available',
+    uiAnchors: [
+      'vscode-extension/src/extension.ts::registerDefinitionProvider',
+      'src/components/CueViewer.tsx::CueViewer',
+    ],
+    capabilityIdentities: ['project.md.navigation@1'],
+    apiRoutes: ['POST /api/agent/project/md-navigation'],
+    mcpTools: ['navigate_md_script'],
+    nativeIdeProvider: true,
+  },
+  {
+    id: 'navigation.symbols.rename_and_workspace_search',
+    domain: 'help-and-navigation',
+    title: 'Rename Mission Director symbols and jump to Workspace Symbols across mod/DLC/base catalogs',
+    status: 'partial',
+    uiAnchors: [
+      'vscode-extension/src/mdRenameHost.ts::x4forge.renameMdSymbol',
+      'vscode-extension/src/workspaceScriptSymbolsHost.ts::registerWorkspaceSymbolProvider',
+    ],
+    capabilityIdentities: [],
+    apiRoutes: [],
+    mcpTools: [],
+    nativeIdeProvider: true,
+    coverage: { extensionCommands: ['x4forge.renameMdSymbol'] },
+    ownerIssue: '#130',
+    missingBehavior: 'MD symbol rename and multi-source Workspace Symbol search run as native VS Code/Antigravity language providers without backend API or MCP projections (#130/#19).',
+  },
+  {
+    id: 'preferences.extension_host.configure',
+    domain: 'preferences-and-layout',
+    title: 'Configure VS Code / Antigravity extension host settings (attachUrl, stateDir, hover languages, two-way editing)',
+    status: 'missing',
+    uiAnchors: [
+      'vscode-extension/package.json::x4forge.attachUrl',
+      'vscode-extension/src/extension.ts::twoWayEditing',
+    ],
+    capabilityIdentities: [],
+    apiRoutes: [],
+    mcpTools: [],
+    coverage: {
+      extensionSettings: [
+        'x4forge.attachUrl',
+        'x4forge.autoOpen',
+        'x4forge.debug',
+        'x4forge.forgeRoot',
+        'x4forge.nodePath',
+        'x4forge.stateDir',
+        'x4forge.textHoverAlternateLanguage',
+        'x4forge.textHoverLanguage',
+        'x4forge.twoWayEditing',
+        'x4forge.writeXmlAssociations',
+      ],
+    },
+    ownerIssue: '#19',
+    missingBehavior: 'Extension-contributed VS Code workspace/user settings are managed only through the IDE configuration store with no Forge API or MCP settings projection.',
+  },
+  {
+    id: 'preferences.studio_layout.configure',
+    domain: 'preferences-and-layout',
+    title: 'Configure Studio dock layout, visible tool/workspace rails, experience mode, and release preferences',
+    status: 'missing',
+    uiAnchors: [
+      'src/App.tsx::/api/studio/layout',
+      'src/App.tsx::/api/studio/release-preferences',
+    ],
+    capabilityIdentities: [],
+    apiRoutes: [
+      'GET /api/studio/layout',
+      'POST /api/studio/layout',
+      'GET /api/studio/release-preferences',
+      'POST /api/studio/release-preferences',
+    ],
+    mcpTools: [],
+    coverage: { globalActions: ['experience-mode'] },
+    ownerIssue: '#19',
+    missingBehavior: 'Studio layout, experience-mode, and release-preference endpoints are Studio-session-only with no agent API scope or MCP projection.',
+  },
+  {
+    id: 'reference.corpus.browse_and_search',
+    domain: 'reference-search-completion',
+    title: 'Search and browse unpacked/cat-dat X4 objects, wares, factions, jobs, sectors, galaxy map, and mod dependencies',
+    status: 'partial',
+    uiAnchors: [
+      'src/components/ObjectBrowser.tsx::ObjectBrowser',
+      'src/components/GalaxyMapView.tsx::GalaxyMapView',
+      'src/components/ModDependencyView.tsx::ModDependencyView',
+      'src/components/GlobalSearch.tsx::GlobalSearch',
+    ],
+    capabilityIdentities: [],
+    apiRoutes: [
+      'GET /api/agent/object-index',
+      'GET /api/agent/galaxy-map',
+      'GET /api/agent/mod-dependency-graph',
+      'GET /api/reference/status',
+      'GET /api/reference/manifest',
+      'GET /api/reference/search',
+      'GET /api/reference/file',
+      'GET /api/reference/effective-file',
+      'GET /api/reference/wares',
+      'GET /api/reference/factions',
+      'GET /api/reference/jobs',
+      'GET /api/reference/sectors',
+      'GET /api/reference/aiscripts',
+      'GET /api/reference/scriptproperties',
+    ],
+    mcpTools: [],
+    coverage: {
+      workspaceViews: ['galaxy'],
+      sidebarTools: ['reference'],
+    },
+    ownerIssue: '#19',
+    missingBehavior: 'Public and agent-scoped HTTP endpoints serve object index, galaxy map, mod dependency graph, and reference corpus searches/files, but none are registered in FORGE_CAPABILITIES or projected on MCP.',
+  },
+  {
+    id: 'reference.element.explain',
+    domain: 'reference-search-completion',
+    title: 'Explain X4 XML elements, required attributes, hover docs, and context completions',
+    status: 'available',
+    uiAnchors: [
+      'src/components/PropertiesInspector.tsx::PropertiesInspector',
+      'vscode-extension/src/extension.ts::/api/agent/lang/',
+    ],
+    capabilityIdentities: ['schema.element.explain@1'],
+    apiRoutes: [
+      'GET /api/agent/lang/element-explain',
+      'GET /api/agent/lang/attrs',
+      'GET /api/agent/lang/complete',
+      'GET /api/agent/lang/hover',
+      'POST /api/reference/complete',
+      'POST /api/reference/hover',
+    ],
+    mcpTools: ['explain_element'],
+    nativeIdeProvider: true,
+  },
+  {
+    id: 'reference.expression.check',
+    domain: 'reference-search-completion',
+    title: 'Validate X4 script expressions with unsaved context hints and completions',
+    status: 'partial',
+    uiAnchors: [
+      'src/components/ExpressionInput.tsx::ExpressionInput',
+      'vscode-extension/src/extension.ts::/api/agent/lang/',
+    ],
+    capabilityIdentities: ['expression.check@1'],
+    apiRoutes: [
+      'POST /api/agent/expressions/check',
+      'POST /api/agent/check-expression',
+      'POST /api/agent/suggest/expression',
+    ],
+    mcpTools: ['check_expression'],
+    ownerIssue: '#79',
+    missingBehavior: 'MCP check_expression caps returned problems at 50, and expression completion suggestions (POST /api/agent/suggest/expression) have no MCP tool (#79).',
+  },
+  {
+    id: 'reference.expression.inspect',
+    domain: 'reference-search-completion',
+    title: 'Inspect step-by-step X4 ScriptProperty chain types and receiver provenance',
+    status: 'available',
+    uiAnchors: [
+      'src/components/ExpressionInput.tsx::ExpressionInput',
+      'vscode-extension/src/extension.ts::/api/agent/lang/',
+    ],
+    capabilityIdentities: ['expression.inspect@1'],
+    apiRoutes: [
+      'POST /api/agent/expressions/inspect',
+      'GET /api/agent/type-probe',
+    ],
+    mcpTools: ['inspect_expression'],
+  },
+  {
+    id: 'reference.text.lookup',
+    domain: 'reference-search-completion',
+    title: 'Resolve `{page,id}` localized text entries across mod and base-game language tables',
+    status: 'available',
+    uiAnchors: [
+      'src/components/TFileEditor.tsx::TFileEditor',
+      'vscode-extension/src/extension.ts::/api/reference/',
+    ],
+    capabilityIdentities: ['text.lookup@1'],
+    apiRoutes: ['POST /api/agent/text/lookup'],
+    mcpTools: ['lookup_text'],
+  },
+  {
+    id: 'reference.xml_map.inspect',
+    domain: 'reference-search-completion',
+    title: 'Traverse incoming and outgoing XML macro/component/ware file references',
+    status: 'partial',
+    uiAnchors: [
+      'src/components/XmlReferenceView.tsx::/api/agent/project/xml-references',
+      'vscode-extension/src/extension.ts::/api/agent/schema',
+    ],
+    capabilityIdentities: ['project.xml.references@1'],
+    apiRoutes: ['POST /api/agent/project/xml-references'],
+    mcpTools: ['get_xml_references'],
+    ownerIssue: '#100',
+    missingBehavior: 'MCP get_xml_references omits source preview/paths, caps graph size (60 nodes / 120 edges / depth 2), and #11 additive DLC collection merge semantics remain incomplete (#100).',
+  },
+  {
+    id: 'release.nexus.prepare_and_download',
+    domain: 'release-center',
+    title: 'Prepare Nexus Mods release ZIP archive and download verified release artifacts',
+    status: 'partial',
+    uiAnchors: [
+      'src/components/ReleaseCenter.tsx::ReleaseCenter',
+      'src/components/ReleaseCenter.tsx::/api/agent/release/artifact/download',
+    ],
+    capabilityIdentities: [],
+    apiRoutes: [
+      'POST /api/agent/release/nexus/prepare',
+      'POST /api/agent/release/artifact/download',
+      'POST /api/agent/package/release',
+    ],
+    mcpTools: [],
+    ownerIssue: '#19',
+    missingBehavior: 'Nexus release preparation and artifact download work for deploy-scoped agent keys over HTTP, but are not registered in FORGE_CAPABILITIES or projected over MCP, and POST /api/agent/release/export/receipt is Studio-session-only.',
+  },
+  {
+    id: 'release.steam.prepare_verify_adopt',
+    domain: 'release-center',
+    title: 'Prepare Steam Workshop staging folder, verify WorkshopTool output, adopt workshopId, and record export receipts',
+    status: 'missing',
+    uiAnchors: [
+      'src/components/ReleaseCenter.tsx::/api/agent/release/steam/verify',
+      'src/components/ReleaseCenter.tsx::/api/agent/release/steam/adopt',
+      'src/components/ReleaseCenter.tsx::/api/agent/release/export/receipt',
+    ],
+    capabilityIdentities: [],
+    apiRoutes: [
+      'POST /api/agent/release/steam/prepare',
+      'POST /api/agent/release/steam/verify',
+      'POST /api/agent/release/steam/adopt',
+      'POST /api/agent/release/export/receipt',
+    ],
+    mcpTools: [],
+    ownerIssue: '#19',
+    missingBehavior: 'All Steam Workshop release routes and export-receipt recording require the Studio session token with zero agent key or MCP access.',
+  },
+  {
+    id: 'runtime.debugger.inspect',
+    domain: 'runtime-and-performance',
+    title: 'Read attributed live X4 runtime debugger incidents, session state, and expectation verdicts',
+    status: 'available',
+    uiAnchors: [
+      'src/components/PlaytestWorkspace.tsx::PlaytestWorkspace',
+      'src/components/HealthCardOverlay.tsx::HealthCardOverlay',
+    ],
+    capabilityIdentities: ['runtime.debug.read@1'],
+    apiRoutes: ['GET /api/agent/runtime-debugger'],
+    mcpTools: ['runtime_debugger'],
+    coverage: { sidebarTools: ['playtest'] },
+  },
+  {
+    id: 'runtime.logs_and_probes.diagnose',
+    domain: 'runtime-and-performance',
+    title: 'Diagnose X4 debug logs, tail logs, preview probes/reloads, and correlate NPC/save telemetry',
+    status: 'partial',
+    uiAnchors: [
+      'src/components/PlaytestWorkspace.tsx::/api/agent/log-diagnose',
+      'src/components/PlaytestWorkspace.tsx::/api/agent/game-log/status',
+    ],
+    capabilityIdentities: [],
+    apiRoutes: [
+      'GET /api/agent/game-log/status',
+      'GET /api/agent/debug-watcher/brief',
+      'GET /api/agent/health-card',
+      'GET /api/agent/live/bridge-state',
+      'GET /api/agent/live/forge-state',
+      'GET /api/agent/runtime-control',
+      'POST /api/agent/log-diagnose',
+      'POST /api/agent/log-file-tail',
+      'POST /api/agent/live/cue-telemetry',
+      'POST /api/agent/lua-staleness/instrument',
+      'POST /api/agent/npc-identity-probe/parse-log',
+      'POST /api/agent/npc-identity-probe/parse-save',
+      'POST /api/agent/npc-identity-probe/correlate',
+      'POST /api/agent/probe/preview',
+      'POST /api/agent/runtime-control/preview',
+      'POST /api/agent/runtime-control/reload',
+    ],
+    mcpTools: [],
+    ownerIssue: '#19',
+    missingBehavior: 'Log diagnosis, log tailing, live telemetry, Lua staleness instrumentation, NPC probes, and runtime reload routes are HTTP-only without canonical capability descriptors or MCP tools.',
+  },
+  {
+    id: 'runtime.performance.monitor_and_profile',
+    domain: 'runtime-and-performance',
+    title: 'Collect, read, stop, and profile backend and native extension-host performance telemetry',
+    status: 'partial',
+    uiAnchors: [
+      'src/components/PerformancePanel.tsx::PerformancePanel',
+      'src/components/PerformancePanel.tsx::/api/agent/performance/native',
+    ],
+    capabilityIdentities: [
+      'performance.collect@1',
+      'performance.native.collect@1',
+      'performance.native.read@1',
+      'performance.native.stop@1',
+      'performance.profile@1',
+      'performance.read@1',
+    ],
+    apiRoutes: [
+      'GET /api/agent/performance',
+      'POST /api/agent/performance/collection',
+      'POST /api/agent/performance/profile',
+      'GET /api/agent/performance/native',
+      'POST /api/agent/performance/native/collection',
+      'POST /api/agent/performance/native/stop',
+    ],
+    mcpTools: [
+      'get_forge_performance',
+      'start_forge_performance_capture',
+      'profile_forge_backend',
+      'get_forge_native_performance',
+      'start_forge_native_performance_capture',
+      'stop_forge_native_performance_capture',
+    ],
+    ownerIssue: '#109',
+    missingBehavior: 'Backend and native performance tools are projected across API and MCP with bounded summaries, while installed-host qualification and equal-workload overhead proof remain open (#103/#109).',
+  },
+  {
+    id: 'settings.directories.configure',
+    domain: 'directory-settings',
+    title: 'Read, preview, and apply Studio directory settings (schemaDir, x4ReferenceRoot, x4GamePath, modWorkspacePath, filesystemPath)',
+    status: 'approval-required',
+    uiAnchors: [
+      'src/components/DirectorySettingsModal.tsx::DirectorySettingsModal',
+      'src/components/FirstRunWizard.tsx::FirstRunWizard',
+    ],
+    capabilityIdentities: [
+      'configuration.access.request@1',
+      'configuration.access.status@1',
+      'configuration.read@1',
+      'configuration.preview@1',
+      'configuration.apply@1',
+      'configuration.status@1',
+    ],
+    apiRoutes: [
+      'POST /api/agent/configuration/access/request',
+      'GET /api/agent/configuration/access',
+      'GET /api/agent/configuration',
+      'POST /api/agent/configuration/preview',
+      'POST /api/agent/configuration/apply',
+      'GET /api/agent/configuration/status',
+      'GET /api/schema/config',
+      'POST /api/schema/config',
+    ],
+    mcpTools: [
+      'request_configuration_access',
+      'get_configuration_access_status',
+      'get_configuration',
+      'preview_configuration_change',
+      'apply_configuration_change',
+      'get_configuration_operation_status',
+    ],
+    coverage: { globalActions: ['settings'] },
+    approvalWorkflow: CONFIGURATION_APPROVAL_WORKFLOW,
+    ownerIssue: '#96',
+  },
+  {
+    id: 'settings.first_run.detect_and_harvest',
+    domain: 'directory-settings',
+    title: 'Auto-detect X4 installation paths, harvest XSD schemas from game archives, and check reference coverage',
+    status: 'partial',
+    uiAnchors: [
+      'src/components/FirstRunWizard.tsx::/api/agent/setup/harvest-schemas',
+      'src/components/DirectorySettingsModal.tsx::/api/agent/detect-game',
+    ],
+    capabilityIdentities: [],
+    apiRoutes: [
+      'GET /api/agent/detect-game',
+      'GET /api/reference/coverage',
+      'POST /api/agent/setup/harvest-schemas',
+    ],
+    mcpTools: [],
+    ownerIssue: '#75',
+    missingBehavior: 'GET /api/agent/detect-game and GET /api/reference/coverage have no MCP tools, POST /api/agent/setup/harvest-schemas is Studio-session-only, and x4LogPath editing has no configuration API (#75/#19).',
+  },
+  {
+    id: 'workspace.mod_folder.import_and_sync',
+    domain: 'workspace-selection',
+    title: 'Open or import an existing mod folder into the active workspace with round-trip safety checks',
+    status: 'partial',
+    uiAnchors: [
+      'src/components/SyncModal.tsx::/api/agent/mod-folder/import',
+      'vscode-extension/src/extension.ts::x4forge.openModFolder',
+    ],
+    capabilityIdentities: [],
+    apiRoutes: [
+      'POST /api/agent/mod-folder/import',
+      'POST /api/agent/round-trip-check',
+      'GET /api/agent/mod-drift',
+    ],
+    mcpTools: [],
+    coverage: {
+      extensionCommands: ['x4forge.openModFolder'],
+      globalActions: ['sync-mod'],
+    },
+    ownerIssue: '#19',
+    missingBehavior: 'Mod-folder import, round-trip checks, and mod-drift inspection exist on the Agent HTTP API, but none are registered in FORGE_CAPABILITIES or projected over MCP, and import requires a separate workspace save call to bind the addressed workspace.',
+  },
+  {
+    id: 'workspace.selection.switch_create_reset',
+    domain: 'workspace-selection',
+    title: 'List, switch, create, bootstrap, resolve conflicts, restore parked drafts, or reset Studio workspaces',
+    status: 'partial',
+    uiAnchors: [
+      'src/App.tsx::/api/agent/workspaces',
+      'src/App.tsx::/api/agent/workspace/restore-parked',
+      'src/components/WorkspaceConflictDialog.tsx::WorkspaceConflictDialog',
+    ],
+    capabilityIdentities: ['workspace.read@2'],
+    apiRoutes: [
+      'GET /api/agent/workspaces',
+      'POST /api/agent/workspaces/bootstrap',
+      'POST /api/agent/workspaces',
+      'GET /api/agent/workspace',
+      'POST /api/agent/workspace',
+      'GET /api/agent/workspace/parked',
+      'POST /api/agent/workspace/restore-parked',
+    ],
+    mcpTools: ['get_workspace'],
+    coverage: {
+      globalActions: ['workspace-switcher', 'reset-workspace'],
+    },
+    ownerIssue: '#19',
+    missingBehavior: 'Agent keys are workspace-bound by design (ADR-F5), POST /api/agent/workspaces and parked-draft recovery are Studio-session-only, and MCP has no workspace creation/reset/conflict-resolution projection.',
+  },
+];
+
+export interface ForgeUiActionParityValidationExpectations {
+  readonly extensionCommands?: readonly string[];
+  readonly extensionSettings?: readonly string[];
+  readonly globalActions?: readonly string[];
+  readonly workspaceViews?: readonly string[];
+  readonly sidebarTools?: readonly string[];
+  readonly routeDispositions?: Readonly<Record<string, string>>;
+  readonly liveMcpTools?: ReadonlySet<string>;
+}
+
+export function summarizeForgeUiActionParityCensus(
+  actions: readonly ForgeUiActionParityRowV1[] = FORGE_UI_ACTION_PARITY_CENSUS,
+): ForgeUiActionParitySummaryV1 {
+  let available = 0;
+  let approvalRequired = 0;
+  let partial = 0;
+  let missing = 0;
+  for (const row of actions) {
+    if (row.status === 'available') available += 1;
+    else if (row.status === 'approval-required') approvalRequired += 1;
+    else if (row.status === 'partial') partial += 1;
+    else if (row.status === 'missing') missing += 1;
+  }
+  return {
+    totalActions: actions.length,
+    available,
+    approvalRequired,
+    partial,
+    missing,
+    openGaps: partial + missing,
+  };
+}
+
+export function canonicalUiActionParityCensusPayload(
+  actions: readonly ForgeUiActionParityRowV1[] = FORGE_UI_ACTION_PARITY_CENSUS,
+): string {
+  return stableStringify({
+    schemaVersion: FORGE_UI_ACTION_PARITY_SCHEMA_VERSION,
+    summary: summarizeForgeUiActionParityCensus(actions),
+    actions,
+  });
+}
+
+export function buildForgeUiActionParityCensus(
+  hashSha256: (canonicalPayload: string) => string,
+  actions: readonly ForgeUiActionParityRowV1[] = FORGE_UI_ACTION_PARITY_CENSUS,
+): ForgeUiActionParityCensusV1 {
+  return {
+    schemaVersion: FORGE_UI_ACTION_PARITY_SCHEMA_VERSION,
+    censusHash: hashSha256(canonicalUiActionParityCensusPayload(actions)),
+    summary: summarizeForgeUiActionParityCensus(actions),
+    actions,
+  };
+}
+
+export function validateForgeUiActionParityCensus(
+  actions: readonly ForgeUiActionParityRowV1[] = FORGE_UI_ACTION_PARITY_CENSUS,
+  capabilities: readonly ForgeCapabilityDescriptorV1[] = FORGE_CAPABILITIES,
+  expectations?: ForgeUiActionParityValidationExpectations,
+): string[] {
+  const errors: string[] = [];
+  const capabilityMap = new Map<string, ForgeCapabilityDescriptorV1>();
+  for (const capability of capabilities) {
+    capabilityMap.set(`${capability.id}@${capability.version}`, capability);
+  }
+  const domainSet = new Set<string>(FORGE_UI_ACTION_PARITY_DOMAINS);
+  const statusSet = new Set<string>(FORGE_UI_ACTION_PARITY_STATUSES);
+  const seenIds = new Set<string>();
+  const sortedIds = actions.map(action => action.id).sort();
+  const referencedCapabilities = new Set<string>();
+
+  const coveredExtensionCommands = new Set<string>();
+  const coveredExtensionSettings = new Set<string>();
+  const coveredGlobalActions = new Set<string>();
+  const coveredWorkspaceViews = new Set<string>();
+  const coveredSidebarTools = new Set<string>();
+
+  actions.forEach((row, index) => {
+    const label = `census/${row.id || `<index-${index}>`}`;
+    if (!/^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/.test(row.id)) {
+      errors.push(`${label}: id must be a lower-case dotted semantic action identifier.`);
+    }
+    if (seenIds.has(row.id)) errors.push(`${label}: duplicate census action id.`);
+    seenIds.add(row.id);
+    if (sortedIds[index] !== row.id) {
+      errors.push(`${label}: census rows must remain sorted by id.`);
+    }
+    if (!domainSet.has(row.domain)) errors.push(`${label}: unknown domain ${String(row.domain)}.`);
+    if (!statusSet.has(row.status)) errors.push(`${label}: invalid status ${String(row.status)}.`);
+    if (!row.title?.trim()) errors.push(`${label}: title is required.`);
+    if (!Array.isArray(row.uiAnchors) || row.uiAnchors.length === 0) {
+      errors.push(`${label}: at least one file::token uiAnchor is required.`);
+    } else {
+      const seenAnchors = new Set<string>();
+      for (const anchor of row.uiAnchors) {
+        if (!anchor?.includes('::')) errors.push(`${label}: malformed uiAnchor ${String(anchor)}.`);
+        if (seenAnchors.has(anchor)) errors.push(`${label}: duplicate uiAnchor ${anchor}.`);
+        seenAnchors.add(anchor);
+      }
+    }
+    if (row.ownerIssue !== undefined && !/^#\d+$/.test(row.ownerIssue)) {
+      errors.push(`${label}: ownerIssue must match #<number> (got ${String(row.ownerIssue)}).`);
+    }
+
+    const rowCapabilities: ForgeCapabilityDescriptorV1[] = [];
+    const seenCapIds = new Set<string>();
+    for (const capIdentity of row.capabilityIdentities) {
+      if (seenCapIds.has(capIdentity)) errors.push(`${label}: duplicate capabilityIdentity ${capIdentity}.`);
+      seenCapIds.add(capIdentity);
+      const found = capabilityMap.get(capIdentity);
+      if (!found) errors.push(`${label}: unknown capabilityIdentity ${capIdentity}.`);
+      else {
+        rowCapabilities.push(found);
+        referencedCapabilities.add(capIdentity);
+      }
+    }
+
+    const seenRoutes = new Set<string>();
+    for (const route of row.apiRoutes) {
+      if (!/^(?:GET|POST|PUT|PATCH|DELETE) \/api\/[^\s?#]+$/.test(route)) {
+        errors.push(`${label}: malformed apiRoute ${String(route)}.`);
+      }
+      if (seenRoutes.has(route)) errors.push(`${label}: duplicate apiRoute ${route}.`);
+      seenRoutes.add(route);
+      if (expectations?.routeDispositions && !Object.hasOwn(expectations.routeDispositions, route)) {
+        errors.push(`${label}: apiRoute does not exist in route dispositions: ${route}`);
+      }
+    }
+
+    const declaredMcpByCap = new Map<string, ForgeSurfaceProjectionStatus>();
+    for (const cap of rowCapabilities) {
+      for (const mcp of cap.surfaces.mcp) {
+        if (mcp.status !== 'disconnected') declaredMcpByCap.set(mcp.id, mcp.status);
+      }
+    }
+    const seenMcp = new Set<string>();
+    for (const tool of row.mcpTools) {
+      if (seenMcp.has(tool)) errors.push(`${label}: duplicate mcpTool ${tool}.`);
+      seenMcp.add(tool);
+      if (!declaredMcpByCap.has(tool)) {
+        errors.push(`${label}: mcpTool ${tool} is not an active MCP projection of the row's capabilityIdentities.`);
+      }
+      if (expectations?.liveMcpTools && !expectations.liveMcpTools.has(tool)) {
+        errors.push(`${label}: mcpTool ${tool} is absent from live MCP TOOLS.`);
+      }
+    }
+
+    if (row.status === 'available') {
+      if (rowCapabilities.length === 0 || row.mcpTools.length === 0) {
+        errors.push(`${label}: available status requires at least one capabilityIdentity and one connected mcpTool.`);
+      }
+      for (const cap of rowCapabilities) {
+        if (cap.access.agentScopes.length === 0) {
+          errors.push(`${label}: available capability ${cap.id}@${cap.version} has no agentScopes.`);
+        }
+        if (cap.id.startsWith('configuration.')) {
+          errors.push(`${label}: session-grant capability ${cap.id}@${cap.version} must use approval-required, not available.`);
+        }
+        if (!cap.surfaces.mcp.some(mcp => mcp.status === 'connected' && row.mcpTools.includes(mcp.id))) {
+          errors.push(`${label}: available capability ${cap.id}@${cap.version} lacks a connected MCP projection in mcpTools.`);
+        }
+      }
+      if (row.missingBehavior !== undefined) {
+        errors.push(`${label}: available row must not carry missingBehavior.`);
+      }
+      if (row.approvalWorkflow !== undefined) {
+        errors.push(`${label}: available row must not carry approvalWorkflow.`);
+      }
+    } else if (row.status === 'approval-required') {
+      if (!row.approvalWorkflow) {
+        errors.push(`${label}: approval-required status requires an approvalWorkflow with request, status, apply, and receipt capabilities.`);
+      } else {
+        const wf = row.approvalWorkflow;
+        const requiredIdentities = [
+          wf.requestCapabilityIdentity,
+          wf.statusCapabilityIdentity,
+          ...wf.applyCapabilityIdentities,
+          wf.receiptCapabilityIdentity,
+        ];
+        if (wf.applyCapabilityIdentities.length === 0) {
+          errors.push(`${label}: approvalWorkflow requires at least one applyCapabilityIdentity.`);
+        }
+        if (wf.ownerDecisionRoutes.length === 0) {
+          errors.push(`${label}: approvalWorkflow requires at least one ownerDecisionRoute.`);
+        }
+        for (const ownerRoute of wf.ownerDecisionRoutes) {
+          if (expectations?.routeDispositions && !Object.hasOwn(expectations.routeDispositions, ownerRoute)) {
+            errors.push(`${label}: approvalWorkflow ownerDecisionRoute does not exist: ${ownerRoute}`);
+          }
+        }
+        for (const reqId of requiredIdentities) {
+          if (!row.capabilityIdentities.includes(reqId)) {
+            errors.push(`${label}: approvalWorkflow capability ${reqId} must also appear in row.capabilityIdentities.`);
+          }
+          const cap = capabilityMap.get(reqId);
+          if (!cap) {
+            errors.push(`${label}: approvalWorkflow references unknown capability ${reqId}.`);
+          } else {
+            if (cap.access.agentScopes.length === 0) {
+              errors.push(`${label}: approvalWorkflow capability ${reqId} must allow agentScopes.`);
+            }
+            if (!cap.surfaces.mcp.some(mcp => mcp.status === 'connected' && row.mcpTools.includes(mcp.id))) {
+              errors.push(`${label}: approvalWorkflow capability ${reqId} requires a connected MCP tool in row.mcpTools.`);
+            }
+          }
+        }
+      }
+      if (row.missingBehavior !== undefined) {
+        errors.push(`${label}: approval-required row with complete workflow must not carry missingBehavior.`);
+      }
+    } else if (row.status === 'partial') {
+      if (!row.ownerIssue) errors.push(`${label}: partial row requires an ownerIssue (#<number>).`);
+      if (!row.missingBehavior?.trim()) errors.push(`${label}: partial row requires a non-empty missingBehavior.`);
+      if (row.approvalWorkflow !== undefined) errors.push(`${label}: partial row must not claim a complete approvalWorkflow.`);
+      const hasAgentCapability = rowCapabilities.some(cap => cap.access.agentScopes.length > 0);
+      const hasAgentRoute = row.apiRoutes.some(route => {
+        if (!expectations?.routeDispositions) return true;
+        const disposition = expectations.routeDispositions[route];
+        return Boolean(disposition && disposition !== 'session-only' && disposition !== 'ui-internal');
+      });
+      if (!hasAgentCapability && !hasAgentRoute && !row.nativeIdeProvider) {
+        errors.push(`${label}: partial status requires at least one agent-accessible capability, non-session-only API route, or nativeIdeProvider.`);
+      }
+    } else if (row.status === 'missing') {
+      if (!row.ownerIssue) errors.push(`${label}: missing row requires an ownerIssue (#<number>).`);
+      if (!row.missingBehavior?.trim()) errors.push(`${label}: missing row requires a non-empty missingBehavior.`);
+      if (row.capabilityIdentities.length > 0 || row.mcpTools.length > 0) {
+        errors.push(`${label}: missing row must not claim capabilityIdentities or mcpTools.`);
+      }
+      if (row.approvalWorkflow !== undefined) {
+        errors.push(`${label}: missing row must not carry approvalWorkflow.`);
+      }
+      if (expectations?.routeDispositions) {
+        for (const route of row.apiRoutes) {
+          const disposition = expectations.routeDispositions[route];
+          if (disposition && disposition !== 'session-only' && disposition !== 'ui-internal') {
+            errors.push(`${label}: missing row references agent-accessible route ${route} (${disposition}); classify as partial instead.`);
+          }
+        }
+      }
+    }
+
+    for (const cmd of row.coverage?.extensionCommands || []) coveredExtensionCommands.add(cmd);
+    for (const setting of row.coverage?.extensionSettings || []) coveredExtensionSettings.add(setting);
+    for (const action of row.coverage?.globalActions || []) coveredGlobalActions.add(action);
+    for (const view of row.coverage?.workspaceViews || []) coveredWorkspaceViews.add(view);
+    for (const tool of row.coverage?.sidebarTools || []) coveredSidebarTools.add(tool);
+  });
+
+  for (const capability of capabilities) {
+    const identity = `${capability.id}@${capability.version}`;
+    if (!referencedCapabilities.has(identity)) {
+      errors.push(`census coverage gap: canonical capability ${identity} is not mapped by any UI-action parity row.`);
+    }
+  }
+
+  const checkInventoryParity = (
+    kind: string,
+    expected: readonly string[] | undefined,
+    actual: ReadonlySet<string>,
+  ): void => {
+    if (!expected) return;
+    const expectedSet = new Set(expected);
+    for (const item of expectedSet) {
+      if (!actual.has(item)) errors.push(`census coverage gap: unclassified ${kind} "${item}".`);
+    }
+    for (const item of actual) {
+      if (!expectedSet.has(item)) errors.push(`census coverage drift: unknown ${kind} "${item}" is not present in source inventory.`);
+    }
+  };
+
+  checkInventoryParity('extension command', expectations?.extensionCommands, coveredExtensionCommands);
+  checkInventoryParity('extension setting', expectations?.extensionSettings, coveredExtensionSettings);
+  checkInventoryParity('Studio global action', expectations?.globalActions, coveredGlobalActions);
+  checkInventoryParity('Studio workspace view', expectations?.workspaceViews, coveredWorkspaceViews);
+  checkInventoryParity('Studio sidebar tool', expectations?.sidebarTools, coveredSidebarTools);
+
+  return errors;
+}

@@ -748,6 +748,14 @@ async function main() {
     && JSON.stringify(deployStatus.query?.inspectDeployEffect?.enum) === '["1"]'
     && deployStatus.query.inspectDeployEffect.requires === 'deployOperationId'
     && deployStatus.query.inspectDeployEffect.responseField === 'effectReport');
+  const parityCensus = agentSchema.json?.ui_action_parity_census;
+  ok('ui_action_parity_census_discoverable', agentSchema.status === 200
+    && parityCensus?.schemaVersion === 'forge.ui-action-parity.v1'
+    && /^[a-f0-9]{64}$/.test(String(parityCensus?.censusHash || ''))
+    && Array.isArray(parityCensus?.actions) && parityCensus.actions.length >= 30
+    && parityCensus?.summary?.totalActions === parityCensus.actions.length
+    && parityCensus?.summary?.available >= 9
+    && parityCensus?.summary?.approvalRequired >= 2);
   for (const deployPath of ['/api/agent/deploy', '/api/agent/deploy-verify']) {
     const descriptor = agentSchema.json?.endpoints?.find(endpoint => endpoint.path === deployPath && endpoint.method === 'POST');
     ok(`deploy_identity_contract_discoverable_${deployPath.split('/').pop()}`, descriptor

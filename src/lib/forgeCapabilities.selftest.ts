@@ -9,14 +9,19 @@ import { decideEffectiveCapability, type AgentCapabilityConstraint } from './age
 import { LEDGER_QUIET_ROUTES, ledgerRouteKind } from './agentHistory';
 import {
   FORGE_CAPABILITIES,
+  FORGE_UI_ACTION_PARITY_CENSUS,
+  FORGE_UI_ACTION_PARITY_DOMAINS,
   applyForgeCapabilityFixedBody,
   buildForgeCapabilityContract,
+  buildForgeUiActionParityCensus,
   canonicalCapabilityContractPayload,
   findForgeCapability,
   isForgeCapabilityContractV1,
   verifyForgeCapabilityContract,
   validateForgeCapabilityRegistry,
+  validateForgeUiActionParityCensus,
   type ForgeCapabilityDescriptorV1,
+  type ForgeUiActionParityRowV1,
 } from './forgeCapabilities';
 
 interface CapabilityCheck {
@@ -521,6 +526,44 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
         decideEffectiveCapability(capability, { ...deployActor, scope: 'write', constraint: grant }, resolveAgentRouteTemplateAuthority).code === 'CAPABILITY_SCOPE_DENIED' &&
         decideEffectiveCapability(capability, { ...deployActor, constraint: grant }, resolveAgentRouteTemplateAuthority).allowed);
   }
+
+  const censusErrors = validateForgeUiActionParityCensus();
+  const builtCensus = buildForgeUiActionParityCensus(sha256);
+  const builtCensusSecond = buildForgeUiActionParityCensus(sha256);
+  const coveredDomains = new Set(FORGE_UI_ACTION_PARITY_CENSUS.map(row => row.domain));
+  check('UI-action parity census covers all 15 domains and all 35 capabilities with deterministic hash',
+    censusErrors.length === 0 &&
+      builtCensus.schemaVersion === 'forge.ui-action-parity.v1' &&
+      builtCensus.censusHash === builtCensusSecond.censusHash &&
+      FORGE_UI_ACTION_PARITY_DOMAINS.every(domain => coveredDomains.has(domain)) &&
+      builtCensus.summary.totalActions === FORGE_UI_ACTION_PARITY_CENSUS.length &&
+      builtCensus.summary.available + builtCensus.summary.approvalRequired + builtCensus.summary.partial + builtCensus.summary.missing === builtCensus.summary.totalActions &&
+      builtCensus.summary.openGaps === builtCensus.summary.partial + builtCensus.summary.missing,
+    censusErrors.join(' | ') || undefined);
+  const falseAvailableRow: ForgeUiActionParityRowV1 = {
+    ...FORGE_UI_ACTION_PARITY_CENSUS.find(row => row.id === 'compile.workspace.build')!,
+    status: 'available',
+    missingBehavior: undefined,
+  };
+  const incompleteApprovalRow: ForgeUiActionParityRowV1 = {
+    ...FORGE_UI_ACTION_PARITY_CENSUS.find(row => row.id === 'checks.project_owner.enroll')!,
+    status: 'approval-required',
+    missingBehavior: undefined,
+  };
+  const missingOwnerRow: ForgeUiActionParityRowV1 = {
+    ...FORGE_UI_ACTION_PARITY_CENSUS.find(row => row.id === 'release.steam.prepare_verify_adopt')!,
+    ownerIssue: undefined,
+  };
+  check('UI-action parity validator rejects false available, blanket approval-required, and ownerless gaps',
+    validateForgeUiActionParityCensus(
+      FORGE_UI_ACTION_PARITY_CENSUS.map(row => row.id === falseAvailableRow.id ? falseAvailableRow : row),
+    ).some(error => error.includes('lacks a connected MCP projection')) &&
+      validateForgeUiActionParityCensus(
+        FORGE_UI_ACTION_PARITY_CENSUS.map(row => row.id === incompleteApprovalRow.id ? incompleteApprovalRow : row),
+      ).some(error => error.includes('requires an approvalWorkflow')) &&
+      validateForgeUiActionParityCensus(
+        FORGE_UI_ACTION_PARITY_CENSUS.map(row => row.id === missingOwnerRow.id ? missingOwnerRow : row),
+      ).some(error => error.includes('requires an ownerIssue')));
 
   checks.push(...runNativeForgeCapabilitiesSelftest().checks);
   return { pass: checks.every(item => item.pass), checks, contractHash: contract.contractHash };

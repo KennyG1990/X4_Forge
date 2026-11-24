@@ -6,9 +6,13 @@
 
 import crypto from 'crypto';
 import {
+  FORGE_UI_ACTION_PARITY_DOMAINS,
+  FORGE_UI_ACTION_PARITY_STATUSES,
   buildForgeCapabilityContract,
+  buildForgeUiActionParityCensus,
   findForgeCapability,
   validateForgeCapabilityRegistry,
+  validateForgeUiActionParityCensus,
 } from '../src/lib/forgeCapabilities';
 
 function sha256(value: string): string {
@@ -16,14 +20,15 @@ function sha256(value: string): string {
 }
 
 function usage(): void {
-  console.log('Usage: npm run capabilities -- [--json] [capability.id[@version]]');
-  console.log('Lists the canonical Forge capability contract. This command is read-only.');
+  console.log('Usage: npm run capabilities -- [--json] [--census] [capability.id[@version] | domain | status | action.id]');
+  console.log('Lists the canonical Forge capability contract or (#19 P2) UI-action parity census. This command is read-only.');
 }
 
 const args = process.argv.slice(2);
 const json = args.includes('--json');
+const censusMode = args.includes('--census');
 const help = args.includes('--help') || args.includes('-h');
-const unknownFlags = args.filter(arg => arg.startsWith('-') && !['--json', '--help', '-h'].includes(arg));
+const unknownFlags = args.filter(arg => arg.startsWith('-') && !['--json', '--census', '--help', '-h'].includes(arg));
 const ids = args.filter(arg => !arg.startsWith('-'));
 
 if (help) {
@@ -41,6 +46,53 @@ const errors = validateForgeCapabilityRegistry();
 if (errors.length) {
   console.error(`Forge capability registry is invalid:\n${errors.map(error => `- ${error}`).join('\n')}`);
   process.exit(1);
+}
+
+if (censusMode) {
+  const censusErrors = validateForgeUiActionParityCensus();
+  if (censusErrors.length) {
+    console.error(`Forge UI-action parity census is invalid:\n${censusErrors.map(error => `- ${error}`).join('\n')}`);
+    process.exit(1);
+  }
+  const fullCensus = buildForgeUiActionParityCensus(sha256);
+  const filter = ids[0];
+  const filteredActions = filter
+    ? fullCensus.actions.filter(row => row.id === filter || row.domain === filter || row.status === filter)
+    : fullCensus.actions;
+  if (filter && filteredActions.length === 0) {
+    console.error(
+      `Unknown UI-action parity filter "${filter}". Pass an action id, domain (${FORGE_UI_ACTION_PARITY_DOMAINS.join(', ')}), or status (${FORGE_UI_ACTION_PARITY_STATUSES.join(', ')}).`,
+    );
+    process.exit(2);
+  }
+  if (json) {
+    console.log(JSON.stringify(filter
+      ? {
+          schemaVersion: fullCensus.schemaVersion,
+          censusHash: fullCensus.censusHash,
+          filter,
+          matchedCount: filteredActions.length,
+          actions: filteredActions,
+        }
+      : fullCensus, null, 2));
+    process.exit(0);
+  }
+  console.log(`Forge UI-action parity census ${fullCensus.schemaVersion}`);
+  console.log(`SHA-256 ${fullCensus.censusHash}`);
+  console.log(
+    `Summary: total=${fullCensus.summary.totalActions}, available=${fullCensus.summary.available}, approval-required=${fullCensus.summary.approvalRequired}, partial=${fullCensus.summary.partial}, missing=${fullCensus.summary.missing}, openGaps=${fullCensus.summary.openGaps}`,
+  );
+  for (const row of filteredActions) {
+    console.log(`\n${row.id} [${row.status}] (${row.domain}) — ${row.title}`);
+    console.log(`  capabilities: ${row.capabilityIdentities.join(', ') || 'none'}; MCP: ${row.mcpTools.join(', ') || 'none'}`);
+    console.log(`  API routes: ${row.apiRoutes.join(', ') || 'none'}`);
+    if (row.missingBehavior) {
+      console.log(`  gap (${row.ownerIssue || 'unowned'}): ${row.missingBehavior}`);
+    } else if (row.ownerIssue) {
+      console.log(`  owner: ${row.ownerIssue}`);
+    }
+  }
+  process.exit(0);
 }
 
 const contract = buildForgeCapabilityContract(sha256);

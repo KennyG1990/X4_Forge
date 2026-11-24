@@ -34,12 +34,21 @@ import {
 import { LEDGER_QUIET_ROUTES, LEDGER_REVERT_PATTERN, LEDGER_ROUTES, type LedgerKind } from '../src/lib/agentHistory';
 import {
   FORGE_CAPABILITIES,
+  FORGE_UI_ACTION_PARITY_CENSUS,
   buildForgeCapabilityContract,
+  buildForgeUiActionParityCensus,
   validateForgeCapabilityRegistry,
+  validateForgeUiActionParityCensus,
   type ForgeCapabilityApiBinding,
   type ForgeCapabilityDescriptorV1,
   type ForgeSurfaceProjection,
+  type ForgeUiActionParityRowV1,
 } from '../src/lib/forgeCapabilities';
+import {
+  GLOBAL_ACTION_IDS,
+  SIDEBAR_NAV_ITEMS,
+  WORKSPACE_NAV_ITEMS,
+} from '../src/lib/studioLayout';
 
 const ROOT = process.cwd();
 const MANIFEST_PATH = path.join(ROOT, 'config', 'forge-route-dispositions.json');
@@ -6544,7 +6553,15 @@ function projectionAnchorErrors(capability: ForgeCapabilityDescriptorV1, surface
   return [`${capability.id}: ${surface}/${projection.id} typed semantic anchor is missing from ${relative}: ${token}${detail}`];
 }
 
-function audit(manifestOverride?: RouteDispositionManifest): { errors: string[]; routeCount: number; dynamicRegistrarCount: number; contractHash: string; mcpCount: number } {
+function audit(manifestOverride?: RouteDispositionManifest): {
+  errors: string[];
+  routeCount: number;
+  dynamicRegistrarCount: number;
+  contractHash: string;
+  mcpCount: number;
+  censusCount: number;
+  censusHash: string;
+} {
   const errors = validateForgeCapabilityRegistry().map(error => `registry: ${error}`);
   const inventory = inventoryRoutes();
   const serverText = fs.readFileSync(path.join(ROOT, 'server.ts'), 'utf8');
@@ -9035,13 +9052,117 @@ function audit(manifestOverride?: RouteDispositionManifest): { errors: string[];
   if (!/^\s*run:\s*npm run test:capabilities\s*$/m.test(qualityWorkflow)) errors.push('GitHub quality workflow omits test:capabilities');
   if (!/^\s*run:\s*npm run test:mcp-capabilities\s*$/m.test(qualityWorkflow)) errors.push('GitHub quality workflow omits test:mcp-capabilities');
 
+  // #19 P2/P4 — UI-action parity census & regression gate.
+  const extensionManifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'vscode-extension', 'package.json'), 'utf8')) as {
+    contributes?: {
+      commands?: Array<{ command?: string }>;
+      configuration?: { properties?: Record<string, unknown> };
+    };
+  };
+  const extensionCommands = (extensionManifest.contributes?.commands || [])
+    .map(entry => String(entry.command || '').trim())
+    .filter(Boolean);
+  const extensionSettings = Object.keys(extensionManifest.contributes?.configuration?.properties || {});
+  const routeDispositionMap: Record<string, string> = Object.fromEntries(
+    Object.entries(manifest.routes || {}).map(([key, entry]) => [key, entry.disposition]),
+  );
+  const censusExpectations = {
+    extensionCommands,
+    extensionSettings,
+    globalActions: [...GLOBAL_ACTION_IDS],
+    workspaceViews: WORKSPACE_NAV_ITEMS.map(item => item.id),
+    sidebarTools: SIDEBAR_NAV_ITEMS.map(item => item.id),
+    routeDispositions: routeDispositionMap,
+    liveMcpTools: mappingNames,
+  };
+  errors.push(...validateForgeUiActionParityCensus(FORGE_UI_ACTION_PARITY_CENSUS, FORGE_CAPABILITIES, censusExpectations));
+
+  const verifyCensusAnchors = (rows: readonly ForgeUiActionParityRowV1[]): string[] => {
+    const anchorErrors: string[] = [];
+    const rootPrefix = `${path.resolve(ROOT)}${path.sep}`.toLowerCase();
+    for (const row of rows) {
+      for (const route of row.apiRoutes) {
+        if (!routeFacts.has(route)) {
+          anchorErrors.push(`census/${row.id}: apiRoute is absent from live Express route inventory: ${route}`);
+        }
+      }
+      for (const anchor of row.uiAnchors) {
+        const [relative, ...tokenParts] = String(anchor || '').split('::');
+        const token = tokenParts.join('::');
+        if (!relative || !token) {
+          anchorErrors.push(`census/${row.id}: malformed uiAnchor ${anchor}`);
+          continue;
+        }
+        const absolute = path.resolve(ROOT, relative);
+        if (!absolute.toLowerCase().startsWith(rootPrefix)) {
+          anchorErrors.push(`census/${row.id}: uiAnchor escapes repository: ${relative}`);
+          continue;
+        }
+        if (!(relative.startsWith('src/') || relative.startsWith('vscode-extension/') || relative === 'server.ts')) {
+          anchorErrors.push(`census/${row.id}: uiAnchor outside UI/extension/server boundary: ${relative}`);
+          continue;
+        }
+        if (!fs.existsSync(absolute) || !fs.statSync(absolute).isFile()) {
+          anchorErrors.push(`census/${row.id}: uiAnchor file missing: ${relative}`);
+          continue;
+        }
+        const text = fs.readFileSync(absolute, 'utf8');
+        if (!text.includes(token)) {
+          anchorErrors.push(`census/${row.id}: uiAnchor token not found in ${relative}: ${token}`);
+        }
+      }
+    }
+    return anchorErrors;
+  };
+  errors.push(...verifyCensusAnchors(FORGE_UI_ACTION_PARITY_CENSUS));
+
+  // Synthetic negative probes for the UI-action parity regression gate.
+  const unclassifiedCommandProbe = validateForgeUiActionParityCensus(
+    FORGE_UI_ACTION_PARITY_CENSUS,
+    FORGE_CAPABILITIES,
+    { ...censusExpectations, extensionCommands: [...extensionCommands, 'x4forge.__unclassifiedProbeCommand'] },
+  );
+  if (!unclassifiedCommandProbe.includes('census coverage gap: unclassified extension command "x4forge.__unclassifiedProbeCommand".')) {
+    errors.push('UI-action parity selftest failed to reject an unclassified extension command');
+  }
+  const unclassifiedGlobalActionProbe = validateForgeUiActionParityCensus(
+    FORGE_UI_ACTION_PARITY_CENSUS,
+    FORGE_CAPABILITIES,
+    { ...censusExpectations, globalActions: [...GLOBAL_ACTION_IDS, '__unclassified-global-action'] },
+  );
+  if (!unclassifiedGlobalActionProbe.includes('census coverage gap: unclassified Studio global action "__unclassified-global-action".')) {
+    errors.push('UI-action parity selftest failed to reject an unclassified Studio global action');
+  }
+  const sessionOnlyFalsePartialProbe = validateForgeUiActionParityCensus(
+    FORGE_UI_ACTION_PARITY_CENSUS.map(row => row.id === 'release.steam.prepare_verify_adopt'
+      ? { ...row, status: 'partial' as const }
+      : row),
+    FORGE_CAPABILITIES,
+    censusExpectations,
+  );
+  if (!sessionOnlyFalsePartialProbe.some(err => err.includes('partial status requires at least one agent-accessible capability, non-session-only API route'))) {
+    errors.push('UI-action parity selftest failed to reject claiming session-only routes as partial agent support');
+  }
+  const brokenAnchorProbe = verifyCensusAnchors([
+    {
+      ...FORGE_UI_ACTION_PARITY_CENSUS[0],
+      uiAnchors: ['src/App.tsx::__nonexistent_census_anchor_token__'],
+    },
+  ]);
+  if (!brokenAnchorProbe.some(err => err.includes('uiAnchor token not found'))) {
+    errors.push('UI-action parity selftest failed to reject a missing uiAnchor token');
+  }
+
   const contract = buildForgeCapabilityContract(sha256);
+  const parityCensus = buildForgeUiActionParityCensus(sha256);
   return {
     errors,
     routeCount: routeFacts.size,
     dynamicRegistrarCount: dynamicFacts.size,
     contractHash: contract.contractHash,
     mcpCount: mappings.length,
+    censusCount: parityCensus.summary.totalActions,
+    censusHash: parityCensus.censusHash,
   };
 }
 
@@ -9521,7 +9642,8 @@ if (process.argv.includes('--json')) {
   console.error(`Capability contract audit FAILED (${result.errors.length}):`);
   for (const error of result.errors) console.error(`- ${error}`);
 } else {
-  console.log(`Capability contract audit PASS: ${FORGE_CAPABILITIES.length} capabilities, ${result.routeCount} disposed literal routes, ${result.dynamicRegistrarCount} reviewed dynamic registrar(s), ${result.mcpCount} MCP aliases.`);
+  console.log(`Capability contract audit PASS: ${FORGE_CAPABILITIES.length} capabilities, ${result.routeCount} disposed literal routes, ${result.dynamicRegistrarCount} reviewed dynamic registrar(s), ${result.mcpCount} MCP aliases, ${result.censusCount} UI-action parity rows.`);
   console.log(`Contract SHA-256: ${result.contractHash}`);
+  console.log(`UI-action parity SHA-256: ${result.censusHash}`);
 }
 process.exit(result.errors.length ? 1 : 0);

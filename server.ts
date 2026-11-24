@@ -321,6 +321,7 @@ import { runContinuousPollingSelftest } from "./src/lib/continuousPolling.selfte
 import {
   applyForgeCapabilityFixedBody,
   buildForgeCapabilityContract,
+  buildForgeUiActionParityCensus,
   EXPRESSION_CHECK_HINT_MAX_LENGTH,
   EXPRESSION_CHECK_MAX_HINTS,
   EXPRESSION_CHECK_MAX_LENGTH,
@@ -4680,6 +4681,7 @@ app.get("/api/agent/schema", (req, res) => {
     api_version: "2026-07-30.agent.v4",
     description: "X4 Forge external agent contract. Use this to inspect supported workspace domains, valid values, compile outputs, and protected API routes before modifying the studio.",
     capability_contract: buildForgeCapabilityContract(value => crypto.createHash('sha256').update(value, 'utf8').digest('hex')),
+    ui_action_parity_census: buildForgeUiActionParityCensus(value => crypto.createHash('sha256').update(value, 'utf8').digest('hex')),
     auth: {
       read_only_schema_is_public: true,
       protected_routes: "Mutation and workspace routes require Authorization: Bearer <token>; explicitly allowlisted read-only reference/diagnostic GETs are public on localhost.",
