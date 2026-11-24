@@ -89,6 +89,7 @@ const WORKSPACE_FILES_TOOLS = new Set([
   "remove_workspace_file",
   "restore_workspace_file",
   "apply_warning_suppression",
+  "rename_md_symbol",
   "revert_action_history",
   "get_mod_drift",
   "import_mod_folder",
@@ -102,6 +103,7 @@ const WORKSPACE_FILES_CAPABILITIES = new Set([
   "files.restore",
   "files.write",
   "history.revert",
+  "project.md.rename",
   "rules.suppression.apply",
   "workspace.mod.drift",
   "workspace.mod.import",
@@ -147,6 +149,7 @@ const DIAGNOSTIC_READ_LIVE_TOOLS = new Set([
   "suggest_quick_fixes",
   "prepare_warning_suppression",
   "verify_release_artifact",
+  "search_workspace_symbols",
 ]);
 const PERFORMANCE_PROFILE_HTTP_FAILURES = { PROFILE_DISABLED: 503, PROFILE_BUSY: 409, PROFILE_RATE_LIMITED: 429, PROFILE_DISPOSED: 503, PROFILE_INPUT_INVALID: 400, PROFILE_ABORTED: 408, PROFILE_FAILED: 500, PROFILE_CLEANUP_UNCONFIRMED: 409 };
 const PERFORMANCE_COLLECTION_HTTP_FAILURES = { PERFORMANCE_DISPOSED: 503, PERFORMANCE_COLLECTION_BUSY: 409, PERFORMANCE_COLLECTION_REFUSED: 409, PROJECT_INPUT_INVALID: 400, PERFORMANCE_COLLECTION_FAILED: 500 };
@@ -2084,6 +2087,87 @@ const TOOLS = [
         },
       );
     },
+  },
+  {
+    name: "search_workspace_symbols",
+    capabilityId: "project.symbols.search",
+    capabilityVersion: 1,
+    description: "Search Mission Director scripts, cues, and libraries plus AIScripts and interrupt-handler libraries across an authored Mod Workspace mod folder (or the addressed Studio workspace), unpacked base-game and official DLC reference catalogs, and loose installed extensions without exposing host filesystem paths.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        q: { type: "string", maxLength: 256 },
+        path: { type: "string", maxLength: 1024 },
+        includeReference: { type: "boolean" },
+        includeInstalled: { type: "boolean" },
+        kind: { type: "string", enum: ["script", "cue", "library", "interrupt-handler"] },
+        limit: { type: "integer", minimum: 1, maximum: 200 },
+      },
+      required: ["q"],
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams({ q: String(args.q) });
+      if (args?.path !== undefined) q.set("path", String(args.path));
+      if (args?.includeReference !== undefined) q.set("includeReference", String(args.includeReference));
+      if (args?.includeInstalled !== undefined) q.set("includeInstalled", String(args.includeInstalled));
+      if (args?.kind !== undefined) q.set("kind", String(args.kind));
+      if (args?.limit !== undefined) q.set("limit", String(args.limit));
+      return requireResponse(
+        await forge("GET", `/api/agent/mod-folder/symbols?${q}`),
+        "workspace symbol search",
+        {
+          ok: "boolean",
+          success: "boolean",
+          query: "string",
+          total: "number",
+          truncated: "boolean",
+          referenceIncluded: "boolean",
+          installedIncluded: "boolean",
+          countsByScope: "object",
+          symbols: "array",
+        },
+      );
+    },
+  },
+  {
+    name: "rename_md_symbol",
+    capabilityId: "project.md.rename",
+    capabilityVersion: 1,
+    description: "Plan or compare-and-swap commit an exact Mission Director cue or library symbol rename across all physical md/*.xml files in a Mod Workspace mod folder (or the addressed Studio workspace), refusing unsafe captures, opaque $which operands, unmodeled property expressions, casefolded collisions, and stale file SHA-256 digests. Requires an explicit key grant.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", maxLength: 1024 },
+        useAddressedWorkspace: { type: "boolean" },
+        file: { type: "string", maxLength: 1024 },
+        offset: { type: "integer", minimum: 0, maximum: 8388608 },
+        newName: { type: "string", maxLength: 128 },
+        apply: { type: "boolean" },
+        expectedSha256ByFile: {
+          type: "object",
+          additionalProperties: { type: "string", maxLength: 64 },
+        },
+      },
+      required: ["file", "offset", "newName"],
+      additionalProperties: false,
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/mod-folder/md-rename", args),
+      "Mission Director symbol rename",
+      {
+        ok: "boolean",
+        success: "boolean",
+        applied: "boolean",
+        modId: "string",
+        symbolFile: "string",
+        newName: "string",
+        editCount: "number",
+        touchedFiles: "array",
+        expectedSha256ByFile: "object",
+        edits: "array",
+      },
+    ),
   },
 ];
 const STATIC_TOOL_NAMES = new Set(TOOLS.map((tool) => tool.name));

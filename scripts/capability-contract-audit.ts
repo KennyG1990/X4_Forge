@@ -54,7 +54,7 @@ const ROOT = process.cwd();
 const MANIFEST_PATH = path.join(ROOT, 'config', 'forge-route-dispositions.json');
 const CANDIDATE_PATH = path.join(ROOT, 'test-results', 'forge-route-dispositions.candidate.json');
 const MCP_MODULE_PATH = path.join(ROOT, 'vscode-extension', 'mcp', 'x4forge-mcp.cjs');
-const MCP_MODULE_AUDIT_VERSION = 31;
+const MCP_MODULE_AUDIT_VERSION = 32;
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'all']);
 
 type RouteDisposition =
@@ -8974,7 +8974,7 @@ function audit(manifestOverride?: RouteDispositionManifest): {
     truthyTerminationProbes.some(probe => probe.mappings[0]?.calls.length)) {
     errors.push('MCP TOOLS guard failed top-level/escape/handler/indirect-transport/full-truthiness probes');
   }
-  if (mappings.length !== 67) errors.push(`MCP tool inventory changed: expected 67 mappings, found ${mappings.length}`);
+  if (mappings.length !== 69) errors.push(`MCP tool inventory changed: expected 69 mappings, found ${mappings.length}`);
   const mappingNames = new Set<string>();
   for (const mapping of mappings) {
     if (mappingNames.has(mapping.name)) errors.push(`duplicate MCP tool name: ${mapping.name}`);

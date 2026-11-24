@@ -51,7 +51,7 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
 
   const validationErrors = validateForgeCapabilityRegistry();
   check('registry invariants', validationErrors.length === 0, validationErrors.join(' | ') || undefined);
-  check('bounded non-native registry', FORGE_CAPABILITIES.filter(capability => !capability.id.startsWith('performance.native.')).length === 63, `count=${FORGE_CAPABILITIES.length}`);
+  check('bounded non-native registry', FORGE_CAPABILITIES.filter(capability => !capability.id.startsWith('performance.native.')).length === 65, `count=${FORGE_CAPABILITIES.length}`);
   const compileResult = findForgeCapability('workspace.compile.result', 2);
   check('retained compile report access is workspace-scoped and read-only',
     compileResult?.context.workspace === 'required'
@@ -555,6 +555,9 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
     { id: 'history.revert', version: 2, method: 'POST', path: '/api/agent/history/revert', alias: 'revert_action_history',
       workspace: 'required', confirmation: 'none', scopes: ['deploy'], deniedScope: 'write',
       effects: ['workspace-write', 'filesystem-write', 'deploy', 'delete', 'audit-write', 'audit-retention-delete'], ledger: 'revert' },
+    { id: 'project.md.rename', version: 1, method: 'POST', path: '/api/agent/mod-folder/md-rename', alias: 'rename_md_symbol',
+      workspace: 'optional', confirmation: 'none', scopes: ['write', 'deploy'], deniedScope: 'read',
+      effects: ['filesystem-write', 'audit-write', 'audit-retention-delete'], ledger: 'edit' },
     { id: 'workspace.mod.drift', version: 1, method: 'GET', path: '/api/agent/mod-folder/drift', alias: 'get_mod_drift',
       workspace: 'optional', confirmation: 'none', scopes: ['read', 'write', 'deploy'], deniedScope: null,
       effects: ['read', 'analyze'], ledger: null },
@@ -594,6 +597,7 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
     { id: 'extensions.overrides.analyze', method: 'GET', path: '/api/agent/override-map', inputLocation: 'query', alias: 'get_extension_override_map', mcpStatus: 'connected', workspace: 'none', effects: ['read', 'analyze'], ledger: null },
     { id: 'patch.targets.list', method: 'GET', path: '/api/agent/patch-targets', inputLocation: 'query', alias: 'list_patch_targets', mcpStatus: 'connected', workspace: 'none', effects: ['read'], ledger: null },
     { id: 'patch.xpath.synthesize', method: 'POST', path: '/api/agent/xpath-synth', inputLocation: 'body', alias: 'synthesize_xml_patch', mcpStatus: 'partial', workspace: 'optional', effects: ['read', 'analyze'], ledger: null },
+    { id: 'project.symbols.search', method: 'GET', path: '/api/agent/mod-folder/symbols', inputLocation: 'query', alias: 'search_workspace_symbols', mcpStatus: 'connected', workspace: 'optional', effects: ['read', 'analyze'], ledger: null },
     { id: 'reference.galaxy.read', method: 'GET', path: '/api/agent/galaxy-map', inputLocation: 'query', alias: 'get_galaxy_map', mcpStatus: 'connected', workspace: 'none', effects: ['read', 'analyze'], ledger: null },
   ] as const;
   for (const expected of authoringHelperCapabilities) {
@@ -617,13 +621,13 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
   const builtCensus = buildForgeUiActionParityCensus(sha256);
   const builtCensusSecond = buildForgeUiActionParityCensus(sha256);
   const coveredDomains = new Set(FORGE_UI_ACTION_PARITY_CENSUS.map(row => row.domain));
-  check('UI-action parity census covers all 15 domains and all 66 capabilities with deterministic hash',
+  check('UI-action parity census covers all 15 domains and all 68 capabilities with deterministic hash',
     censusErrors.length === 0 &&
       builtCensus.schemaVersion === 'forge.ui-action-parity.v1' &&
       builtCensus.censusHash === builtCensusSecond.censusHash &&
       FORGE_UI_ACTION_PARITY_DOMAINS.every(domain => coveredDomains.has(domain)) &&
       builtCensus.summary.totalActions === FORGE_UI_ACTION_PARITY_CENSUS.length &&
-      builtCensus.summary.available === 14 &&
+      builtCensus.summary.available === 15 &&
       builtCensus.summary.approvalRequired === 2 &&
       builtCensus.summary.available + builtCensus.summary.approvalRequired + builtCensus.summary.partial + builtCensus.summary.missing === builtCensus.summary.totalActions &&
       builtCensus.summary.openGaps === builtCensus.summary.partial + builtCensus.summary.missing,
@@ -674,7 +678,7 @@ export function runNativeForgeCapabilitiesSelftest() {
   const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   const keys = (value: object | undefined) => Object.keys(value || {}).sort();
   check('native registry has exactly the three reviewed process telemetry identities',
-    FORGE_CAPABILITIES.length === 66 &&
+    FORGE_CAPABILITIES.length === 68 &&
       equal(FORGE_CAPABILITIES.filter(capability => capability.id.startsWith('performance.native.')).map(capability => capability.id).sort(),
         expected.map(row => row.id).sort()));
   for (const row of expected) {

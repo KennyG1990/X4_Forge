@@ -153,6 +153,7 @@ export const LEDGER_ROUTES: Array<{ method: string; path: string; kind: LedgerKi
   { method: 'POST', path: '/api/agent/files/restore', kind: 'revert' },
   { method: 'POST', path: '/api/agent/project-rules/suppress', kind: 'edit' },
   { method: 'POST', path: '/api/agent/project-rules/suppression/apply', kind: 'edit' },
+  { method: 'POST', path: '/api/agent/mod-folder/md-rename', kind: 'edit' },
   { method: 'POST', path: '/api/agent/warning-reviews/revoke-review', kind: 'action' },
   { method: 'POST', path: '/api/fs/create', kind: 'edit' },
   { method: 'POST', path: '/api/fs/delete-dir', kind: 'edit' },

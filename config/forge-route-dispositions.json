@@ -266,6 +266,7 @@
     "src/server/workspaceReceiptService.ts",
     "src/server/workspaceSnapshotRestoreReceiptAdapter.ts",
     "src/server/workspaceSnapshotSource.ts",
+    "src/server/workspaceSymbolService.ts",
     "src/server/x4UiIntegration.selftest.ts",
     "src/server/xmlReferenceMap.ts",
     "src/types.ts",
@@ -1655,6 +1656,18 @@
     "GET /api/agent/mod-folder/drift": {
       "disposition": "canonical-capability",
       "owner": "workspace.mod.drift",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "optional"
+    },
+    "GET /api/agent/mod-folder/symbols": {
+      "disposition": "canonical-capability",
+      "owner": "project.symbols.search",
       "registrations": 1,
       "agentScopes": [
         "read",
@@ -3413,6 +3426,17 @@
       "resourceClass": "configured-root",
       "workspaceMode": "optional"
     },
+    "POST /api/agent/mod-folder/md-rename": {
+      "disposition": "canonical-capability",
+      "owner": "project.md.rename",
+      "registrations": 1,
+      "agentScopes": [
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "optional"
+    },
     "POST /api/agent/mod-folder/round-trip": {
       "disposition": "canonical-capability",
       "owner": "workspace.roundtrip.check",
@@ -4333,7 +4357,9 @@
     "project.ai.navigation@1": "631c233f71218443b677df4e1cb312ae954cff77f61907e0022b76049abdbcf9",
     "project.brief.read@1": "78d1de2b63bfab9593e38af849104e4f05f52d81064de281360a165db6a256b7",
     "project.md.navigation@1": "75aa7185b135930031c9c8d20b57fb603a2303fed8ee3b785b283eeabb08f927",
+    "project.md.rename@1": "a05b541826420e8752666a3ed56c03fd6048e4c231752fc8040f4b37355073bc",
     "project.proof.read@1": "12c552b4f5dff37e75424e900923a654063f7fa115226971224f313e58a41cd3",
+    "project.symbols.search@1": "f915acc73b974a34420f8ad6accdddfc5a324ce23f87a1b346292ddc5b85863b",
     "project.validate@1": "34e6c5a213b07038e58d70dca27db474370300e38599f6299b5664a974dedf06",
     "project.xml.references@1": "3ee7a1ad13af453017d9136e0a23218912dc866e6fe4b4b066f8313fd740affe",
     "readiness.read@1": "8a1e349ea4a481e12be506a20cc246957898faed7a9548a523d5a0359195add0",
@@ -4362,8 +4388,8 @@
     "workspace.roundtrip.check@1": "c1a1c89c1eb3f44f8f16e6ca03e9787318eec5065bcf25dd2c3ce3a4b4045185"
   },
   "mcpModuleSignature": {
-    "version": 31,
-    "hash": "c16d9e2315052cdd743c9b4efbd96a8e16a9b0a1b815213c061e515079f031ab"
+    "version": 32,
+    "hash": "29311a11e7072f3d6a3fcbe0c940a54bfb54aca3f1ba92ba66bf8671b8cb789d"
   },
   "mcpSignatures": {
     "validate_mod": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",
@@ -4432,7 +4458,9 @@
     "apply_warning_suppression": "9d0fa5a98d5c7dce21f381b0cffc013659535a6c62bd4f77a456be5dad8dc075",
     "revoke_warning_review": "cd9b9030508df0b946fbc1a0fa20811c5727220aa39606c9168843686463293e",
     "prepare_nexus_release": "5921855cfac168fc070bc349de2dc39db783ae2576d318de659990ea50f00416",
-    "verify_release_artifact": "0feddbb6318b12db5d04e4e26f521f6b7ea2c6d1500dbc3738cfeb3a7fbfeede"
+    "verify_release_artifact": "0feddbb6318b12db5d04e4e26f521f6b7ea2c6d1500dbc3738cfeb3a7fbfeede",
+    "search_workspace_symbols": "2a0f6895b10fbfd577f3b17922b6eea04d59842044bbab3053d0255590b38e6e",
+    "rename_md_symbol": "f4fbff68e15a7d764af4753b5c9e1bdde550da62e99853e20398a2a2235af470"
   },
   "mcpCapabilityIdentities": {
     "validate_mod": "project.validate@1",
@@ -4501,6 +4529,8 @@
     "apply_warning_suppression": "rules.suppression.apply@1",
     "revoke_warning_review": "reviews.warning.revoke@1",
     "prepare_nexus_release": "release.nexus.prepare@1",
-    "verify_release_artifact": "release.artifact.verify@1"
+    "verify_release_artifact": "release.artifact.verify@1",
+    "search_workspace_symbols": "project.symbols.search@1",
+    "rename_md_symbol": "project.md.rename@1"
   }
 }

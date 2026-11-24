@@ -118,6 +118,7 @@ import { runUiCompilerSelftest } from "./src/lib/uiCompilerSelftest";
 import { analyzeOverrides, runOverrideMapSelftest, simulateLoadOrder } from "./src/lib/overrideMap";
 import { analyzeModDependencies, runModDependencyGraphSelftest, parseModManifest, type ModManifest } from "./src/lib/modDependencyGraph";
 import { buildMergedGalaxyMap, runGalaxyMapSelftest, type GalaxyMapSource } from "./src/lib/galaxyMap";
+import { WorkspaceSymbolService, executeModFolderMdRename } from "./src/server/workspaceSymbolService";
 import { effectiveReferenceMetadata, resolveEffectiveReferenceDocument } from "./src/lib/referenceOverlay";
 import { classifyPath, indexCueReferences, runExtensionProjectSelftest, buildContentXml, type ExtensionProject } from "./src/lib/extensionProject";
 import { selectWorkspaceValidationFiles, type WorkspaceValidationInputs } from './src/lib/workspaceValidationInputs';
@@ -1102,6 +1103,14 @@ type ForgeDecoratedRequest = express.Request & {
   __revertOfTitle?: string;
   __revertFiles?: string[];
   __useAddressedWorkspace?: boolean;
+  __mdRenameLedger?: {
+    files: string[];
+    lines: { added: number; removed: number };
+    bytes: { before: number; after: number };
+    beforeText?: string;
+    afterText?: string;
+    diffText?: string;
+  };
 };
 
 function decoratedReq(req: express.Request): ForgeDecoratedRequest {
@@ -1226,6 +1235,8 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
       || authority.decision.routeKey === 'POST /api/agent/history/revert'
       || authority.decision.routeKey === 'POST /api/agent/mod-folder/sync'
       || authority.decision.routeKey === 'POST /api/agent/mod-folder/round-trip'
+      || authority.decision.routeKey === 'GET /api/agent/mod-folder/symbols'
+      || authority.decision.routeKey === 'POST /api/agent/mod-folder/md-rename'
       || authority.decision.routeKey === 'POST /api/agent/project-rules/suppression/prepare'
       || authority.decision.routeKey === 'POST /api/agent/project-rules/suppression/apply'
       || authority.decision.routeKey === 'POST /api/agent/quick-fixes'
@@ -1461,36 +1472,57 @@ function ledgerMiddleware(req: express.Request, res: express.Response, next: exp
       let fileEffect: { added: number; overwritten: number; deleted: number; preserved: number; bytes: number } | undefined;
 
       if (kind === 'edit') {
-        const requested = editRequested;
-        if (requested) files.push(requested);
-        if (fullPath === '/api/fs/delete-file' || fullPath === '/api/agent/files/delete') {
-          binary = !!before?.binary;
-          const removedBytes = typeof captured?.removed?.bytes === 'number' ? captured.removed.bytes : before?.bytes;
-          bytes = { before: removedBytes, after: res.statusCode < 400 ? 0 : before?.bytes };
+        const mdRenameLedger = fullPath === '/api/agent/mod-folder/md-rename'
+          ? decoratedReq(req).__mdRenameLedger
+          : undefined;
+        if (mdRenameLedger) {
+          for (const rel of mdRenameLedger.files) files.push(rel);
+          bytes = mdRenameLedger.bytes;
           if (res.statusCode < 400) {
-            fileEffect = { added: 0, overwritten: 0, deleted: 1, preserved: 0, bytes: 0 };
-            if (!binary && before?.text !== undefined) {
-              lines = lineDelta(before.text, '');
-              beforeBlob = agentHistoryStore.putBlob(before.text);
-              diffBlob = agentHistoryStore.putBlob(unifiedDiff(before.text, '', requested));
-            }
+            lines = mdRenameLedger.lines;
+            fileEffect = {
+              added: 0,
+              overwritten: mdRenameLedger.files.length,
+              deleted: 0,
+              preserved: 0,
+              bytes: mdRenameLedger.bytes.after,
+            };
+            if (mdRenameLedger.beforeText !== undefined) beforeBlob = agentHistoryStore.putBlob(mdRenameLedger.beforeText);
+            if (mdRenameLedger.afterText !== undefined) afterBlob = agentHistoryStore.putBlob(mdRenameLedger.afterText);
+            if (mdRenameLedger.diffText !== undefined) diffBlob = agentHistoryStore.putBlob(mdRenameLedger.diffText);
           }
         } else {
-          const after = (req.body as any)?.content;
-          let afterText = typeof after === 'string' ? after : undefined;
-          if (afterText === undefined && res.statusCode < 400 && editAbsolute && fs.existsSync(editAbsolute) && fs.statSync(editAbsolute).isFile() && fs.statSync(editAbsolute).size <= MAX_DIFFABLE_BYTES) {
-            const buffer = fs.readFileSync(editAbsolute);
-            if (!looksBinary(buffer)) afterText = buffer.toString('utf8');
-          }
-          binary = !!before?.binary || (afterText === undefined && after !== undefined);
-          bytes = { before: before?.bytes, after: afterText !== undefined ? Buffer.byteLength(afterText, 'utf8') : undefined };
-          if (res.statusCode < 400 && !binary && afterText !== undefined) {
-            lines = lineDelta(before?.text ?? '', afterText);
-            if (before?.text !== undefined) {
-              beforeBlob = agentHistoryStore.putBlob(before.text);
-              diffBlob = agentHistoryStore.putBlob(unifiedDiff(before.text, afterText, requested));
+          const requested = editRequested;
+          if (requested) files.push(requested);
+          if (fullPath === '/api/fs/delete-file' || fullPath === '/api/agent/files/delete') {
+            binary = !!before?.binary;
+            const removedBytes = typeof captured?.removed?.bytes === 'number' ? captured.removed.bytes : before?.bytes;
+            bytes = { before: removedBytes, after: res.statusCode < 400 ? 0 : before?.bytes };
+            if (res.statusCode < 400) {
+              fileEffect = { added: 0, overwritten: 0, deleted: 1, preserved: 0, bytes: 0 };
+              if (!binary && before?.text !== undefined) {
+                lines = lineDelta(before.text, '');
+                beforeBlob = agentHistoryStore.putBlob(before.text);
+                diffBlob = agentHistoryStore.putBlob(unifiedDiff(before.text, '', requested));
+              }
             }
-            afterBlob = agentHistoryStore.putBlob(afterText);
+          } else {
+            const after = (req.body as any)?.content;
+            let afterText = typeof after === 'string' ? after : undefined;
+            if (afterText === undefined && res.statusCode < 400 && editAbsolute && fs.existsSync(editAbsolute) && fs.statSync(editAbsolute).isFile() && fs.statSync(editAbsolute).size <= MAX_DIFFABLE_BYTES) {
+              const buffer = fs.readFileSync(editAbsolute);
+              if (!looksBinary(buffer)) afterText = buffer.toString('utf8');
+            }
+            binary = !!before?.binary || (afterText === undefined && after !== undefined);
+            bytes = { before: before?.bytes, after: afterText !== undefined ? Buffer.byteLength(afterText, 'utf8') : undefined };
+            if (res.statusCode < 400 && !binary && afterText !== undefined) {
+              lines = lineDelta(before?.text ?? '', afterText);
+              if (before?.text !== undefined) {
+                beforeBlob = agentHistoryStore.putBlob(before.text);
+                diffBlob = agentHistoryStore.putBlob(unifiedDiff(before.text, afterText, requested));
+              }
+              afterBlob = agentHistoryStore.putBlob(afterText);
+            }
           }
         }
       } else if (kind === 'deploy') {
@@ -1571,6 +1603,8 @@ function ledgerMiddleware(req: express.Request, res: express.Response, next: exp
           if (matched.length) touchedNodes = matched.slice(0, 50).map(n => ({ id: String(n.id), label: String(n.label || n.id) }));
         }
       } catch { touchedNodes = undefined; }
+
+      if (fullPath === '/api/agent/mod-folder/md-rename' && captured?.applied === false && res.statusCode < 400) return;
 
       const receiptProjection = requestActionReceiptProjection(req);
       // A committed workspace sync that changed nothing is not an action worth a row. Failed,
@@ -1695,7 +1729,9 @@ function sourceOperationKeys(req: express.Request): string[] {
   if (typeof source === 'string' && source) keys.push(canonicalSourceKey(source));
   const target = req.body?.fromPath ?? req.body?.path;
   if (typeof target === 'string' && target && !req.path.startsWith('/api/fs/') && !req.path.startsWith('/api/agent/files/')) {
-    const folder = nativeDeploy ? resolveNativeDeployFolder(target, req.body?.root) : resolveModFolder(target, req.body?.root);
+    const folder = nativeDeploy
+      ? resolveNativeDeployFolder(target, req.body?.root)
+      : resolveModFolder(target, req.path === '/api/agent/mod-folder/md-rename' ? 'workspace' : req.body?.root);
     if (!('error' in folder)) keys.push(folder.physical?.canonicalKey ?? canonicalSourceKey(folder.abs));
   }
   if (req.path.startsWith('/api/fs/') || req.path.startsWith('/api/agent/files/') || req.path.includes('/history/') || req.path.includes('/project-rules/') || req.path.endsWith('/steam/adopt')) {
@@ -10491,6 +10527,343 @@ app.post("/api/agent/mod-folder/round-trip", (req, res) => {
     return res.status(500).json({ ok: false, success: false, code: 'ROUND_TRIP_CHECK_FAILED', error: errorMessage(error) || 'round-trip-check failed' });
   }
 });
+
+const workspaceSymbolService = new WorkspaceSymbolService();
+
+function resolvePhysicalModWorkspaceDirectory(
+  req: express.Request,
+  res: express.Response,
+  body: Record<string, unknown>,
+  capabilityLabel: string,
+): { absDir: string; relModPath: string; modId: string } | null {
+  const resolvedCfg = resolveXsdConfig();
+  if (!resolvedCfg.modWorkspacePath) {
+    res.status(400).json({ ok: false, success: false, code: 'ROOT_NOT_CONFIGURED', error: 'No Mod Workspace Folder configured.' });
+    return null;
+  }
+  const hasPath = body.path !== undefined;
+  const useAddressed = body.useAddressedWorkspace === true;
+  if (hasPath === useAddressed) {
+    res.status(400).json({
+      ok: false,
+      success: false,
+      code: 'CAPABILITY_INPUT_INVALID',
+      error: `${capabilityLabel} requires either path or useAddressedWorkspace: true (not both).`,
+    });
+    return null;
+  }
+  let absDir = '';
+  let fallbackModId = '';
+  if (hasPath) {
+    if (typeof body.path !== 'string' || !body.path.trim() || body.path.length > 1024 || body.path.includes('\0') || path.isAbsolute(body.path)) {
+      res.status(400).json({
+        ok: false,
+        success: false,
+        code: 'CAPABILITY_INPUT_INVALID',
+        error: `${capabilityLabel} path must be a non-empty relative mod folder string inside Mod Workspace.`,
+      });
+      return null;
+    }
+    const folder = resolveModFolder(body.path.trim(), 'workspace');
+    if ('error' in folder) {
+      res.status(folder.status).json({ ok: false, success: false, code: 'MOD_FOLDER_INVALID', error: folder.error });
+      return null;
+    }
+    absDir = folder.abs;
+    fallbackModId = path.basename(absDir);
+  } else {
+    const addressed = resolveWorkspaceAuthority(req, res, true);
+    if (!addressed) return null;
+    const rawSource = String(addressed.workspace?.sourceStamp?.dir || addressed.workspace?.sourceFolder || '').trim();
+    if (!rawSource) {
+      res.status(409).json({
+        ok: false,
+        success: false,
+        code: 'MOD_SOURCE_REQUIRED',
+        error: 'The addressed workspace is not backed by an imported Mod Workspace folder; pass a relative path inside Mod Workspace.',
+      });
+      return null;
+    }
+    const candidate = path.isAbsolute(rawSource)
+      ? path.resolve(rawSource)
+      : path.resolve(resolvedCfg.modWorkspacePath, rawSource);
+    absDir = candidate;
+    fallbackModId = String(addressed.workspace?.modId || path.basename(absDir)).trim() || path.basename(absDir);
+  }
+  const rootResolved = path.resolve(resolvedCfg.modWorkspacePath);
+  if (absDir === rootResolved || !isPathWithin(absDir, rootResolved)) {
+    res.status(403).json({
+      ok: false,
+      success: false,
+      code: 'PATH_TRAVERSAL_FORBIDDEN',
+      error: 'Target mod folder must reside inside the configured Mod Workspace Folder.',
+    });
+    return null;
+  }
+  let modId = fallbackModId;
+  try {
+    const contentPath = path.join(absDir, 'content.xml');
+    if (fs.existsSync(contentPath) && fs.statSync(contentPath).isFile()) {
+      const manifestId = readContentManifestIdentity(fs.readFileSync(contentPath, 'utf8'))?.modId;
+      if (manifestId) modId = manifestId;
+    }
+  } catch { /* fallbackModId preserved */ }
+  const relModPath = path.relative(rootResolved, absDir).replace(/\\/g, '/');
+  return { absDir, relModPath, modId };
+}
+
+app.get("/api/agent/mod-folder/symbols", (req, res) => {
+  try {
+    const queryObj = isPlainRecord(req.query) ? req.query : {};
+    const extra = unknownObjectKeys(queryObj, new Set(['q', 'path', 'includeReference', 'includeInstalled', 'kind', 'limit']));
+    if (extra.length > 0) {
+      return res.status(400).json({
+        ok: false,
+        success: false,
+        code: 'CAPABILITY_INPUT_INVALID',
+        error: `project.symbols.search does not accept: ${extra.join(', ')}`,
+      });
+    }
+    if (typeof queryObj.q !== 'string' || !queryObj.q.trim() || queryObj.q.length > 256 || queryObj.q.includes('\0')) {
+      return res.status(400).json({
+        ok: false,
+        success: false,
+        code: 'CAPABILITY_INPUT_INVALID',
+        error: 'project.symbols.search q must be a non-empty string up to 256 characters.',
+      });
+    }
+    if (queryObj.includeReference !== undefined && queryObj.includeReference !== 'true' && queryObj.includeReference !== 'false') {
+      return res.status(400).json({
+        ok: false,
+        success: false,
+        code: 'CAPABILITY_INPUT_INVALID',
+        error: 'project.symbols.search includeReference must be "true" or "false".',
+      });
+    }
+    if (queryObj.includeInstalled !== undefined && queryObj.includeInstalled !== 'true' && queryObj.includeInstalled !== 'false') {
+      return res.status(400).json({
+        ok: false,
+        success: false,
+        code: 'CAPABILITY_INPUT_INVALID',
+        error: 'project.symbols.search includeInstalled must be "true" or "false".',
+      });
+    }
+    const validKinds = new Set(['script', 'cue', 'library', 'interrupt-handler']);
+    if (queryObj.kind !== undefined && (typeof queryObj.kind !== 'string' || !validKinds.has(queryObj.kind))) {
+      return res.status(400).json({
+        ok: false,
+        success: false,
+        code: 'CAPABILITY_INPUT_INVALID',
+        error: 'project.symbols.search kind must be "script", "cue", "library", or "interrupt-handler".',
+      });
+    }
+    let limit = 50;
+    if (queryObj.limit !== undefined) {
+      if (typeof queryObj.limit !== 'string' || !/^\d+$/.test(queryObj.limit)) {
+        return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'project.symbols.search limit must be an integer between 1 and 200.' });
+      }
+      const parsedLimit = Number(queryObj.limit);
+      if (!Number.isSafeInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > 200) {
+        return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'project.symbols.search limit must be between 1 and 200.' });
+      }
+      limit = parsedLimit;
+    }
+
+    const resolvedCfg = resolveXsdConfig();
+    let modDir: string | null = null;
+    let modId = 'workspace';
+    let inlineScriptFiles: Array<{ path: string; content: string }> | undefined;
+
+    if (queryObj.path !== undefined) {
+      if (typeof queryObj.path !== 'string' || !queryObj.path.trim() || queryObj.path.length > 1024 || queryObj.path.includes('\0') || path.isAbsolute(queryObj.path)) {
+        return res.status(400).json({
+          ok: false,
+          success: false,
+          code: 'CAPABILITY_INPUT_INVALID',
+          error: 'project.symbols.search path must be a non-empty relative mod folder string inside Mod Workspace.',
+        });
+      }
+      const folder = resolveModFolder(queryObj.path.trim(), 'workspace');
+      if ('error' in folder) {
+        return res.status(folder.status).json({ ok: false, success: false, code: 'MOD_FOLDER_INVALID', error: folder.error });
+      }
+      modDir = folder.abs;
+      modId = path.basename(folder.abs);
+      try {
+        const contentPath = path.join(folder.abs, 'content.xml');
+        if (fs.existsSync(contentPath) && fs.statSync(contentPath).isFile()) {
+          modId = readContentManifestIdentity(fs.readFileSync(contentPath, 'utf8'))?.modId || modId;
+        }
+      } catch { /* keep basename */ }
+    } else {
+      const addressed = decoratedReq(req).__workspaceRecord;
+      if (addressed?.workspace) {
+        modId = String(addressed.workspace.modId || 'workspace').trim() || 'workspace';
+        const rawSource = String(addressed.workspace.sourceStamp?.dir || addressed.workspace.sourceFolder || '').trim();
+        if (rawSource && resolvedCfg.modWorkspacePath) {
+          const candidate = path.isAbsolute(rawSource)
+            ? path.resolve(rawSource)
+            : path.resolve(resolvedCfg.modWorkspacePath, rawSource);
+          const rootResolved = path.resolve(resolvedCfg.modWorkspacePath);
+          if (candidate !== rootResolved && isPathWithin(candidate, rootResolved) && fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
+            modDir = candidate;
+          }
+        }
+        if (!modDir) {
+          const manifest = buildWorkspaceFileManifest(addressed.workspace);
+          inlineScriptFiles = Object.entries(manifest.files)
+            .filter(([rel]) => /^(md|aiscripts)\/[^/]+\.xml$/i.test(rel))
+            .map(([rel, content]) => ({ path: rel, content }));
+        }
+      }
+    }
+
+    const result = workspaceSymbolService.search({
+      query: queryObj.q.trim(),
+      modId,
+      modDir,
+      inlineScriptFiles,
+      referenceRoot: resolvedCfg.x4ReferenceRoot || null,
+      extensionsRoot: resolvedCfg.x4GamePath ? path.join(resolvedCfg.x4GamePath, 'extensions') : null,
+      includeReference: queryObj.includeReference !== 'false',
+      includeInstalled: queryObj.includeInstalled !== 'false',
+      kind: queryObj.kind as 'script' | 'cue' | 'library' | 'interrupt-handler' | undefined,
+      limit,
+    });
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({
+      ok: false,
+      success: false,
+      code: 'WORKSPACE_SYMBOLS_FAILED',
+      error: errorMessage(error) || 'Workspace symbol search failed.',
+    });
+  }
+});
+
+app.post("/api/agent/mod-folder/md-rename", (req, res, next) => {
+  if (!isPlainRecord(req.body)) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'project.md.rename requires a JSON object body.' });
+  }
+  const extra = unknownObjectKeys(req.body, new Set([
+    'path', 'useAddressedWorkspace', 'file', 'offset', 'newName', 'apply', 'expectedSha256ByFile',
+  ]));
+  if (extra.length > 0) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: `project.md.rename does not accept: ${extra.join(', ')}` });
+  }
+  if (req.body.useAddressedWorkspace !== undefined && typeof req.body.useAddressedWorkspace !== 'boolean') {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'project.md.rename useAddressedWorkspace must be boolean.' });
+  }
+  if (req.body.apply !== undefined && typeof req.body.apply !== 'boolean') {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'project.md.rename apply must be boolean.' });
+  }
+  if (typeof req.body.file !== 'string' || !req.body.file.trim() || req.body.file.length > 1024) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'project.md.rename file must be a non-empty md/<name>.xml string.' });
+  }
+  if (typeof req.body.offset !== 'number' || !Number.isSafeInteger(req.body.offset) || req.body.offset < 0 || req.body.offset > 8_388_608) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'project.md.rename offset must be an integer between 0 and 8388608.' });
+  }
+  if (typeof req.body.newName !== 'string' || !req.body.newName.trim() || req.body.newName.length > 128) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'project.md.rename newName must be a non-empty string up to 128 characters.' });
+  }
+  if (req.body.expectedSha256ByFile !== undefined && !isPlainRecord(req.body.expectedSha256ByFile)) {
+    return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'project.md.rename expectedSha256ByFile must be a plain object mapping relative MD paths to sha256 digests.' });
+  }
+  return next();
+}, coordinatedSourceOperation((req, res) => {
+  try {
+    const body = req.body as Record<string, unknown>;
+    const selection = resolvePhysicalModWorkspaceDirectory(req, res, body, 'project.md.rename');
+    if (!selection) return;
+    const apply = body.apply === true;
+    const resolvedCfg = resolveXsdConfig();
+    if (apply && rejectUnsafeDevelopmentWrite(res, resolvedCfg, ['modWorkspacePath'])) return;
+
+    const requestedRelFile = `${selection.relModPath}/${String(body.file).trim().replace(/\\/g, '/')}`;
+    decoratedReq(req).__mdRenameLedger = {
+      files: [requestedRelFile],
+      lines: { added: 0, removed: 0 },
+      bytes: { before: 0, after: 0 },
+    };
+
+    const result = executeModFolderMdRename({
+      modDir: selection.absDir,
+      modId: selection.modId,
+      file: String(body.file),
+      offset: Number(body.offset),
+      newName: String(body.newName),
+      apply,
+      expectedSha256ByFile: body.expectedSha256ByFile as Record<string, string> | undefined,
+      commitFiles(commits) {
+        const appliedPrior: Array<{ absPath: string; beforeText: string }> = [];
+        const writtenByFile: Record<string, { sha256: string; bytes: number }> = {};
+        let totalAdded = 0;
+        let totalRemoved = 0;
+        let totalBeforeBytes = 0;
+        let totalAfterBytes = 0;
+        const ledgerFiles: string[] = [];
+        const diffChunks: string[] = [];
+
+        try {
+          for (const commit of commits) {
+            const workspaceRelPath = `${selection.relModPath}/${commit.relModPath}`.replace(/\\/g, '/');
+            const wrote = writeWorkspaceFileGuarded(res, workspaceRelPath, commit.afterText, undefined, resolvedCfg);
+            if (!wrote) {
+              for (const prev of appliedPrior.reverse()) {
+                atomicWriteFile(prev.absPath, prev.beforeText);
+              }
+              return { ok: false, status: 500, code: 'MD_RENAME_WRITE_FAILED', error: `Failed writing ${commit.relModPath}.` };
+            }
+            appliedPrior.push({ absPath: wrote.absolutePath, beforeText: commit.beforeText });
+            writtenByFile[commit.relModPath] = { sha256: wrote.written.sha256, bytes: wrote.written.bytes };
+            const delta = lineDelta(commit.beforeText, commit.afterText);
+            totalAdded += delta.added;
+            totalRemoved += delta.removed;
+            totalBeforeBytes += Buffer.byteLength(commit.beforeText, 'utf8');
+            totalAfterBytes += wrote.written.bytes;
+            ledgerFiles.push(workspaceRelPath);
+            diffChunks.push(unifiedDiff(commit.beforeText, commit.afterText, workspaceRelPath));
+          }
+        } catch (err) {
+          for (const prev of appliedPrior.reverse()) {
+            try { atomicWriteFile(prev.absPath, prev.beforeText); } catch { /* rollback best-effort */ }
+          }
+          throw err;
+        }
+
+        workspaceSymbolService.clearCaches();
+        decoratedReq(req).__mdRenameLedger = {
+          files: ledgerFiles,
+          lines: { added: totalAdded, removed: totalRemoved },
+          bytes: { before: totalBeforeBytes, after: totalAfterBytes },
+          ...(commits.length === 1 ? { beforeText: commits[0].beforeText, afterText: commits[0].afterText } : {}),
+          diffText: diffChunks.join('\n'),
+        };
+        return { ok: true, writtenByFile };
+      },
+    });
+
+    if (res.headersSent) return;
+    if (result.ok === false) {
+      return res.status(result.status).json({
+        ok: false,
+        success: false,
+        code: result.code,
+        error: result.error,
+        ...(result.details !== undefined ? { details: result.details } : {}),
+      });
+    }
+    return res.json(result);
+  } catch (error) {
+    if (res.headersSent) return;
+    return res.status(500).json({
+      ok: false,
+      success: false,
+      code: 'MD_RENAME_FAILED',
+      error: errorMessage(error) || 'Mission Director rename failed.',
+    });
+  }
+}));
 
 function* readInstalledExtensionManifests(extRoot: string) {
   for (const folder of fs.readdirSync(extRoot)) {

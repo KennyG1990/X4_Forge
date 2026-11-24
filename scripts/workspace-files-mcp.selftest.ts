@@ -4,6 +4,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { runWorkspaceSymbolServiceSelftest } from '../src/server/workspaceSymbolService';
 
 const REPO_ROOT = process.cwd();
 const MCP_SCRIPT = path.join(REPO_ROOT, 'vscode-extension', 'mcp', 'x4forge-mcp.cjs');
@@ -192,9 +193,27 @@ async function main() {
   }
   fs.writeFileSync(path.join(gameDir, 'X4.exe'), 'fixture');
   fs.mkdirSync(path.join(corpusDir, 'libraries'), { recursive: true });
+  fs.mkdirSync(path.join(corpusDir, 'md'), { recursive: true });
+  fs.mkdirSync(path.join(corpusDir, 'extensions', 'ego_dlc_split', 'md'), { recursive: true });
   fs.mkdirSync(path.join(corpusDir, 'assets', 'units', 'size_s', 'macros'), { recursive: true });
   fs.writeFileSync(path.join(corpusDir, 'libraries', 'factions.xml'), '<factions><faction id="argon" name="Argon"/></factions>');
   fs.writeFileSync(path.join(corpusDir, 'libraries', 'wares.xml'), '<wares><ware id="energycells" name="Energy Cells" group="energy"/></wares>');
+  fs.writeFileSync(
+    path.join(corpusDir, 'md', 'base_missions.xml'),
+    '<?xml version="1.0" encoding="utf-8"?>\n<mdscript name="BaseMissions"><cues><cue name="SharedCue"/><cue name="BaseOnlyCue"/></cues></mdscript>\n',
+  );
+  fs.writeFileSync(
+    path.join(corpusDir, 'md', 'shared_override.xml'),
+    '<?xml version="1.0" encoding="utf-8"?>\n<mdscript name="SharedOverride"><cues><cue name="OverrideCue"/></cues></mdscript>\n',
+  );
+  fs.writeFileSync(
+    path.join(corpusDir, 'extensions', 'ego_dlc_split', 'md', 'dlc_missions.xml'),
+    '<?xml version="1.0" encoding="utf-8"?>\n<mdscript name="DlcMissions"><cues><cue name="SharedCue"/><cue name="DlcOnlyCue"/></cues></mdscript>\n',
+  );
+  fs.writeFileSync(
+    path.join(corpusDir, 'extensions', 'ego_dlc_split', 'md', 'shared_override.xml'),
+    '<?xml version="1.0" encoding="utf-8"?>\n<mdscript name="SharedOverride"><cues><cue name="OverrideCue"/></cues></mdscript>\n',
+  );
   fs.writeFileSync(
     path.join(corpusDir, 'assets', 'units', 'size_s', 'macros', 'ship_arg_s_scout_01_a_macro.xml'),
     '<?xml version="1.0" encoding="utf-8"?>\n<macros>\n  <macro name="ship_arg_s_scout_01_a_macro" class="ship_s">\n    <properties>\n      <hull max="2000" />\n    </properties>\n  </macro>\n</macros>\n',
@@ -241,6 +260,17 @@ async function main() {
       path.join(extensionsDir, extFolder, 'libraries', 'wares.xml'),
       `<diff><replace sel="/wares/ware[@id='energycells']/@group">${groupVal}</replace></diff>`,
     );
+    if (extFolder === 'mod_alpha') {
+      fs.mkdirSync(path.join(extensionsDir, extFolder, 'md'), { recursive: true });
+      fs.writeFileSync(
+        path.join(extensionsDir, extFolder, 'md', 'installed_missions.xml'),
+        '<?xml version="1.0" encoding="utf-8"?>\n<mdscript name="InstalledMissions"><cues><cue name="SharedCue"/><cue name="InstalledOnlyCue"/></cues></mdscript>\n',
+      );
+      fs.writeFileSync(
+        path.join(extensionsDir, extFolder, 'md', 'shared_override.xml'),
+        '<?xml version="1.0" encoding="utf-8"?>\n<mdscript name="SharedOverride"><cues><cue name="OverrideCue"/></cues></mdscript>\n',
+      );
+    }
   }
 
   const modId = 'mcp_files_fixture';
@@ -306,6 +336,7 @@ async function main() {
     'remove_workspace_file',
     'restore_workspace_file',
     'apply_warning_suppression',
+    'rename_md_symbol',
     'prepare_nexus_release',
     'revoke_warning_review',
     'revert_action_history',
@@ -411,6 +442,8 @@ async function main() {
           'files.write@2',
           'history.list@2',
           'history.revert@2',
+          'project.md.rename@1',
+          'project.symbols.search@1',
           'release.artifact.verify@1',
           'release.nexus.prepare@1',
           'reviews.warning.revoke@1',
@@ -1042,6 +1075,147 @@ async function main() {
       assert.equal(okRevoke.isError, false, JSON.stringify(okRevoke.payload));
       assert.equal(okRevoke.payload.ok, true);
       assert.equal(okRevoke.payload.outcome, 'warning-review-revoked');
+    });
+
+    await check('9_multi_source_workspace_symbols_and_cas_md_symbol_rename_over_mcp', async () => {
+      const unitSelf = runWorkspaceSymbolServiceSelftest();
+      assert.equal(unitSelf.pass, true, JSON.stringify(unitSelf));
+      assert.equal(unitSelf.total, 6);
+
+      const u29ModId = 'unit29_symbols_mod';
+      const u29ModDir = path.join(modsDir, u29ModId);
+      fs.mkdirSync(path.join(u29ModDir, 'md'), { recursive: true });
+      fs.mkdirSync(path.join(u29ModDir, 'aiscripts'), { recursive: true });
+      fs.writeFileSync(
+        path.join(u29ModDir, 'content.xml'),
+        `<?xml version="1.0" encoding="utf-8"?>\n<content id="${u29ModId}" name="Unit 29 Symbols Mod" version="100" author="ForgeQA" date="2026-11-24" save="0"/>\n`,
+        'utf8',
+      );
+      const mdOneText = '<?xml version="1.0" encoding="utf-8"?>\n<mdscript name="Unit29One">\n  <cues>\n    <cue name="SharedCue">\n      <conditions><event_cue_signalled/></conditions>\n      <actions><signal_cue cue="SharedCue"/></actions>\n    </cue>\n    <library name="LocalHelper"/>\n  </cues>\n</mdscript>\n';
+      const mdTwoText = '<?xml version="1.0" encoding="utf-8"?>\n<mdscript name="Unit29Two">\n  <cues>\n    <cue name="CallerCue">\n      <conditions><event_cue_signalled/></conditions>\n      <actions><signal_cue cue="md.Unit29One.Sh&#97;redCue"/></actions>\n    </cue>\n  </cues>\n</mdscript>\n';
+      fs.writeFileSync(path.join(u29ModDir, 'md', 'one.xml'), mdOneText, 'utf8');
+      fs.writeFileSync(path.join(u29ModDir, 'md', 'two.xml'), mdTwoText, 'utf8');
+      fs.writeFileSync(
+        path.join(u29ModDir, 'md', 'shared_override.xml'),
+        '<?xml version="1.0" encoding="utf-8"?>\n<mdscript name="SharedOverride"><cues><cue name="OverrideCue"/></cues></mdscript>\n',
+        'utf8',
+      );
+      fs.writeFileSync(
+        path.join(u29ModDir, 'aiscripts', 'patrol.xml'),
+        '<?xml version="1.0" encoding="utf-8"?>\n<aiscript name="unit29.patrol"><interrupts><library><actions name="SharedCueInterrupt"/></library></interrupts><attention min="unknown"><actions/></attention></aiscript>\n',
+        'utf8',
+      );
+
+      // 1. Multi-source search_workspace_symbols over preset read MCP (authored > base > DLC > installed on same qualifiedName, zero ledger rows, zero host paths)
+      const readList = ((await presetReadMcp.request('tools/list')).result?.tools || []).map((t: any) => t.name);
+      assert(readList.includes('search_workspace_symbols'), 'preset read key must advertise search_workspace_symbols');
+      assert(!readList.includes('rename_md_symbol'), 'preset read key must NOT advertise rename_md_symbol');
+
+      const ledgerBefore = (await presetReadMcp.callTool('list_action_history', { limit: 100 })).payload.total;
+      const symRes = await presetReadMcp.callTool('search_workspace_symbols', {
+        q: 'OverrideCue',
+        path: u29ModId,
+        includeReference: true,
+        includeInstalled: true,
+        limit: 20,
+      });
+      assert.equal(symRes.isError, false, JSON.stringify(symRes.payload));
+      assert.equal(symRes.payload.ok, true);
+      assert.equal(symRes.payload.referenceIncluded, true);
+      assert.equal(symRes.payload.installedIncluded, true);
+      assert(!JSON.stringify(symRes.payload).includes(modsDir), 'search_workspace_symbols leaked host modsDir');
+      assert(!JSON.stringify(symRes.payload).includes(corpusDir), 'search_workspace_symbols leaked host corpusDir');
+      assert(!JSON.stringify(symRes.payload).includes(extensionsDir), 'search_workspace_symbols leaked host extensionsDir');
+      const exactShared = (symRes.payload.symbols || []).filter((s: any) => s.qualifiedName === 'md.SharedOverride.OverrideCue');
+      assert.deepEqual(
+        exactShared.map((s: any) => s.sourceScope),
+        ['authored', 'base', 'dlc', 'installed'],
+        `Expected authored > base > dlc > installed ordering on matching qualifiedName, got: ${JSON.stringify(exactShared)}`,
+      );
+
+      // Qualified query disambiguates DLC script owner
+      const dlcQualified = await presetReadMcp.callTool('search_workspace_symbols', {
+        q: 'md.DlcMissions.SharedCue',
+        path: u29ModId,
+      });
+      assert.equal(dlcQualified.isError, false);
+      assert.equal(dlcQualified.payload.total, 1);
+      assert.equal(dlcQualified.payload.symbols[0].sourceScope, 'dlc');
+
+      // 2. Dry-run preview via rename_md_symbol (explicit grant): plans cross-file edits (including &#97; entity span) without mutating disk or Action Ledger
+      const targetOffset = mdOneText.indexOf('name="SharedCue"') + 'name="Shared'.length - 1;
+      const preview = await fullMcp.callTool('rename_md_symbol', {
+        path: u29ModId,
+        file: 'md/one.xml',
+        offset: targetOffset,
+        newName: 'RenamedSharedCue',
+        apply: false,
+      });
+      assert.equal(preview.isError, false, JSON.stringify(preview.payload));
+      assert.equal(preview.payload.applied, false);
+      assert.equal(preview.payload.editCount, 3);
+      assert.deepEqual(preview.payload.touchedFiles, ['md/one.xml', 'md/two.xml']);
+      assert.equal(fs.readFileSync(path.join(u29ModDir, 'md', 'one.xml'), 'utf8'), mdOneText);
+      assert.equal(fs.readFileSync(path.join(u29ModDir, 'md', 'two.xml'), 'utf8'), mdTwoText);
+      const ledgerAfterPreview = (await presetReadMcp.callTool('list_action_history', { limit: 100 })).payload.total;
+      assert.equal(ledgerAfterPreview, ledgerBefore, 'dry-run rename preview must not record an Action Ledger row');
+
+      // 3. Refusal on casefolded collision (LocalHelper) and CAS conflict on stale expectedSha256ByFile
+      const collision = await fullMcp.callTool('rename_md_symbol', {
+        path: u29ModId,
+        file: 'md/one.xml',
+        offset: targetOffset,
+        newName: 'localhelper',
+        apply: false,
+      });
+      assert.equal(collision.isError, true);
+      assert.equal(collision.payload?.code, 'MD_RENAME_REFUSED');
+
+      const staleApply = await fullMcp.callTool('rename_md_symbol', {
+        path: u29ModId,
+        file: 'md/one.xml',
+        offset: targetOffset,
+        newName: 'RenamedSharedCue',
+        apply: true,
+        expectedSha256ByFile: {
+          'md/one.xml': '0'.repeat(64),
+          'md/two.xml': preview.payload.expectedSha256ByFile['md/two.xml'],
+        },
+      });
+      assert.equal(staleApply.isError, true);
+      assert.equal(staleApply.payload?.code, 'MD_RENAME_CONFLICT');
+      assert.equal(fs.readFileSync(path.join(u29ModDir, 'md', 'one.xml'), 'utf8'), mdOneText);
+
+      // 4. Valid CAS commit updates both MD files atomically, records Action Ledger diff, and refreshes symbol cache
+      const committed = await fullMcp.callTool('rename_md_symbol', {
+        path: u29ModId,
+        file: 'md/one.xml',
+        offset: targetOffset,
+        newName: 'RenamedSharedCue',
+        apply: true,
+        expectedSha256ByFile: preview.payload.expectedSha256ByFile,
+      });
+      assert.equal(committed.isError, false, JSON.stringify(committed.payload));
+      assert.equal(committed.payload.applied, true);
+      assert.equal(committed.payload.editCount, 3);
+      assert(fs.readFileSync(path.join(u29ModDir, 'md', 'one.xml'), 'utf8').includes('name="RenamedSharedCue"'));
+      assert(fs.readFileSync(path.join(u29ModDir, 'md', 'two.xml'), 'utf8').includes('cue="md.Unit29One.RenamedSharedCue"'));
+
+      const postRenameSym = await presetReadMcp.callTool('search_workspace_symbols', {
+        q: 'RenamedSharedCue',
+        path: u29ModId,
+        includeReference: false,
+        includeInstalled: false,
+      });
+      assert.equal(postRenameSym.isError, false);
+      assert.equal(postRenameSym.payload.total, 1);
+      assert.equal(postRenameSym.payload.symbols[0].qualifiedName, 'md.Unit29One.RenamedSharedCue');
+
+      const editHistory = await fullMcp.callTool('list_action_history', { kind: 'edit', limit: 10 });
+      const renameRow = (editHistory.payload.rows || []).find(
+        (r: any) => Array.isArray(r.files) && r.files.includes(`${u29ModId}/md/one.xml`) && r.files.includes(`${u29ModId}/md/two.xml`),
+      );
+      assert(renameRow, `Expected multi-file rename row in Action Ledger: ${JSON.stringify(editHistory.payload.rows)}`);
     });
   } finally {
     for (const s of mcpSessions) {

@@ -92,6 +92,7 @@ export const WORKSPACE_FILES_EXPLICIT_GRANT_CAPABILITIES = [
   'files.restore',
   'files.write',
   'history.revert',
+  'project.md.rename',
   'rules.suppression.apply',
   'workspace.mod.drift',
   'workspace.mod.import',

@@ -815,7 +815,7 @@ async function main() {
     'files.delete', 'files.list', 'files.read', 'files.restore', 'files.write',
     'history.list', 'history.revert',
     'patch.diff.simulate', 'patch.readiness.analyze', 'patch.targets.list', 'patch.xpath.synthesize', 'performance.collect', 'performance.native.collect', 'performance.native.read', 'performance.native.stop',
-    'performance.profile', 'performance.read', 'project.ai.navigation', 'project.brief.read', 'project.md.navigation', 'project.proof.read', 'project.validate', 'project.xml.references', 'readiness.read',
+    'performance.profile', 'performance.read', 'project.ai.navigation', 'project.brief.read', 'project.md.navigation', 'project.md.rename', 'project.proof.read', 'project.symbols.search', 'project.validate', 'project.xml.references', 'readiness.read',
     'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest',
     'release.artifact.verify', 'release.nexus.prepare', 'reviews.warning.revoke', 'rules.suppression.apply', 'rules.suppression.prepare',
     'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read',
@@ -1456,15 +1456,15 @@ async function main() {
   JSON.stringify({ public: publicEffective.json, bogus: bogusEffective.json, studio: { actor: studioEffective.json?.actor, ids: effectiveIds(studioEffective) } }));
   for (const [name, response, scope, expectedIds] of [
     ['read', readEffective, 'read', ['diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.overrides.analyze', 'history.list',
-      'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.synthesize', 'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.xml.references', 'readiness.read',
+      'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.synthesize', 'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.symbols.search', 'project.xml.references', 'readiness.read',
       'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest', 'release.artifact.verify', 'rules.suppression.prepare',
       'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read', 'workspace.read', 'workspace.roundtrip.check']],
     ['write', writeEffective, 'write', ['diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.overrides.analyze', 'history.list', 'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.synthesize', 'project.validate',
-      'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.xml.references',
+      'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.symbols.search', 'project.xml.references',
       'readiness.read', 'reference.file.read', 'reference.galaxy.read', 'reference.objects.search', 'reference.status.read', 'reference.suggest', 'release.artifact.verify', 'rules.suppression.prepare',
       'runtime.debug.read', 'runtime.log.diagnose', 'schema.domains.list', 'schema.element.explain', 'text.lookup', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.read', 'workspace.roundtrip.check']],
     ['deploy', deployEffective, 'deploy', expectedCapabilityIds.filter(id => !id.startsWith('configuration.') && !id.startsWith('deploy.') && !id.startsWith('bulk.transform.') && !id.startsWith('files.') && ![
-      'history.revert', 'performance.native.collect', 'performance.native.read', 'performance.native.stop', 'project.ai.navigation', 'project.md.navigation', 'release.nexus.prepare', 'reviews.warning.revoke', 'rules.suppression.apply', 'workspace.mod.drift', 'workspace.mod.import',
+      'history.revert', 'performance.native.collect', 'performance.native.read', 'performance.native.stop', 'project.ai.navigation', 'project.md.navigation', 'project.md.rename', 'release.nexus.prepare', 'reviews.warning.revoke', 'rules.suppression.apply', 'workspace.mod.drift', 'workspace.mod.import',
     ].includes(id))],
   ]) {
     ok(`${name}_key_effective_capabilities_are_exact_and_hashed`, response.status === 200 &&
@@ -7009,6 +7009,106 @@ async function main() {
     } finally {
       fs.rmSync(slice5ModDir, { recursive: true, force: true });
       fs.rmSync(path.join(gameRoot, 'extensions', slice5ModId), { recursive: true, force: true });
+    }
+  }
+
+  // --- #130 / #19 P4 SLICE 6: MULTI-SOURCE WORKSPACE SYMBOLS & CAS MD SYMBOL RENAME ---
+  {
+    const slice6ModId = 'slice6_symbols_rename_mod';
+    const slice6ModDir = path.join(safeWorkspace, slice6ModId);
+    fs.mkdirSync(path.join(slice6ModDir, 'md'), { recursive: true });
+    fs.writeFileSync(
+      path.join(slice6ModDir, 'content.xml'),
+      `<?xml version="1.0" encoding="utf-8"?>\n<content id="${slice6ModId}" name="Slice 6 Mod" version="100" author="ForgeQA" date="2026-11-24" save="0"/>\n`,
+      'utf8',
+    );
+    const s6One = '<mdscript name="Slice6One"><cues><cue name="TargetCue"><conditions><event_cue_signalled/></conditions><actions><signal_cue cue="TargetCue"/></actions></cue></cues></mdscript>\n';
+    const s6Two = '<mdscript name="Slice6Two"><cues><cue name="CallerCue"><conditions><event_cue_signalled/></conditions><actions><signal_cue cue="md.Slice6One.TargetCue"/></actions></cue></cues></mdscript>\n';
+    fs.writeFileSync(path.join(slice6ModDir, 'md', 'one.xml'), s6One, 'utf8');
+    fs.writeFileSync(path.join(slice6ModDir, 'md', 'two.xml'), s6Two, 'utf8');
+    try {
+      const symRes = await req(
+        'GET',
+        `/api/agent/mod-folder/symbols?${new URLSearchParams({ q: 'TargetCue', path: slice6ModId })}`,
+        readKey,
+        undefined,
+        { workspaceId: WORKSPACE_ID, operationId: null },
+      );
+      capabilityResponses.set('project.symbols.search', symRes);
+      const symBad = await req(
+        'GET',
+        '/api/agent/mod-folder/symbols?q=TargetCue&unexpected=1',
+        readKey,
+        undefined,
+        { workspaceId: WORKSPACE_ID, operationId: null },
+      );
+      ok('workspace_symbols_route_searches_mod_without_host_path_disclosure_and_rejects_unknown_query',
+        symRes.status === 200
+          && symRes.json?.ok === true
+          && symRes.json?.symbols?.[0]?.qualifiedName === 'md.Slice6One.TargetCue'
+          && !JSON.stringify(symRes.json).includes(safeWorkspace)
+          && symBad.status === 400 && symBad.json?.code === 'CAPABILITY_INPUT_INVALID',
+        JSON.stringify({ status: symRes.status, bad: symBad.status, body: symRes.json }));
+
+      const renameMint = await req('POST', '/api/agent/keys', SESSION_TOKEN, {
+        label: 'slice6-md-rename-explicit',
+        scope: 'write',
+        ttl: '1h',
+        authorityMode: 'exact',
+        capabilityIdentities: ['project.md.rename@1'],
+        allowedEffects: ['filesystem-write', 'audit-write', 'audit-retention-delete'],
+      }, { workspaceId: WORKSPACE_ID });
+      const renameKey = renameMint.json?.token || renameMint.json?.key;
+
+      // Preset deploy key without explicit grant is denied
+      const presetDenied = await req('POST', '/api/agent/mod-folder/md-rename', deployKey, {
+        path: slice6ModId,
+        file: 'md/one.xml',
+        offset: s6One.indexOf('name="TargetCue"') + 'name="Target'.length - 1,
+        newName: 'RenamedTargetCue',
+      }, { workspaceId: WORKSPACE_ID, operationId: null });
+
+      const caretOffset = s6One.indexOf('name="TargetCue"') + 'name="Target'.length - 1;
+      const renamePreview = await req('POST', '/api/agent/mod-folder/md-rename', renameKey, {
+        path: slice6ModId,
+        file: 'md/one.xml',
+        offset: caretOffset,
+        newName: 'RenamedTargetCue',
+        apply: false,
+      }, { workspaceId: WORKSPACE_ID, operationId: null });
+
+      const renameStale = await req('POST', '/api/agent/mod-folder/md-rename', renameKey, {
+        path: slice6ModId,
+        file: 'md/one.xml',
+        offset: caretOffset,
+        newName: 'RenamedTargetCue',
+        apply: true,
+        expectedSha256ByFile: {
+          'md/one.xml': '0'.repeat(64),
+          'md/two.xml': renamePreview.json?.expectedSha256ByFile?.['md/two.xml'] || '0'.repeat(64),
+        },
+      }, { workspaceId: WORKSPACE_ID, operationId: null });
+
+      const renameCommit = await req('POST', '/api/agent/mod-folder/md-rename', renameKey, {
+        path: slice6ModId,
+        file: 'md/one.xml',
+        offset: caretOffset,
+        newName: 'RenamedTargetCue',
+        apply: true,
+        expectedSha256ByFile: renamePreview.json?.expectedSha256ByFile,
+      }, { workspaceId: WORKSPACE_ID, operationId: null });
+      capabilityResponses.set('project.md.rename', renameCommit);
+
+      ok('md_rename_route_enforces_explicit_grant_cas_and_commits_exact_cross_file_edits',
+        presetDenied.status === 403 && presetDenied.json?.authorityCode === 'CAPABILITY_NOT_GRANTED'
+          && renamePreview.status === 200 && renamePreview.json?.applied === false && renamePreview.json?.editCount === 3
+          && renameStale.status === 409 && renameStale.json?.code === 'MD_RENAME_CONFLICT'
+          && renameCommit.status === 200 && renameCommit.json?.applied === true
+          && fs.readFileSync(path.join(slice6ModDir, 'md', 'one.xml'), 'utf8').includes('name="RenamedTargetCue"')
+          && fs.readFileSync(path.join(slice6ModDir, 'md', 'two.xml'), 'utf8').includes('cue="md.Slice6One.RenamedTargetCue"'),
+        JSON.stringify({ denied: presetDenied.status, preview: renamePreview.status, stale: renameStale.status, commit: renameCommit.status, body: renameCommit.json }));
+    } finally {
+      fs.rmSync(slice6ModDir, { recursive: true, force: true });
     }
   }
 

@@ -932,6 +932,33 @@
       ]
     },
     {
+      "routeKey": "POST /api/agent/mod-folder/md-rename",
+      "method": "POST",
+      "template": "/api/agent/mod-folder/md-rename",
+      "owner": "project.md.rename",
+      "resourceClass": "configured-root",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1mod-folder~1md-rename",
+      "integrationBatch": "W3B1",
+      "history": "visible",
+      "capability": {
+        "kind": "canonical",
+        "id": "project.md.rename",
+        "version": 1
+      },
+      "semanticClass": "durable-local-mutation",
+      "policy": "receipt-required",
+      "effects": [
+        "filesystem-write",
+        "audit-write",
+        "audit-retention-delete"
+      ],
+      "authorityScopes": [
+        "global",
+        "profile",
+        "workspace"
+      ]
+    },
+    {
       "routeKey": "POST /api/agent/mod-folder/round-trip",
       "method": "POST",
       "template": "/api/agent/mod-folder/round-trip",
