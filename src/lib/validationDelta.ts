@@ -294,6 +294,241 @@ export class ValidationBaselineStore {
   }
 }
 
+export const VALIDATION_RECEIPT_SCHEMA = 'forge.validation-receipt.v1' as const;
+export const VALIDATION_RECEIPT_STORE_SCHEMA = 1 as const;
+
+export type ValidationReceiptSurface = 'deploy-verify' | 'project-validate';
+
+export interface ValidationVerdictReceipt {
+  schemaVersion: typeof VALIDATION_RECEIPT_SCHEMA;
+  receiptHash: string;
+  surface: ValidationReceiptSurface;
+  canonicalForDeploy: boolean;
+  modId: string;
+  verdict: 'pass' | 'fail';
+  deployAllowed: boolean | null;
+  outcome: string;
+  sourceHash: string;
+  diskSourceHash: string | null;
+  artifactPlanHash: string | null;
+  artifactHash: string | null;
+  bindingHash: string | null;
+  forgeVersion: string;
+  validatedAt: string;
+  errors: number;
+  warnings: number;
+  acceptedWarnings: number;
+  unreviewedWarnings: number;
+  coverageGaps: number;
+  unavailableChecks: number;
+}
+
+export interface ValidationVerdictReceiptInput {
+  surface: ValidationReceiptSurface;
+  modId: string;
+  verdict: 'pass' | 'fail';
+  deployAllowed: boolean | null;
+  outcome: string;
+  sourceHash: string;
+  diskSourceHash?: string | null;
+  artifactPlanHash?: string | null;
+  artifactHash?: string | null;
+  bindingHash?: string | null;
+  forgeVersion: string;
+  validatedAt?: string;
+  errors: number;
+  warnings: number;
+  acceptedWarnings?: number;
+  unreviewedWarnings: number;
+  coverageGaps: number;
+  unavailableChecks?: number;
+}
+
+interface ValidationModReceiptSlots {
+  deployVerify?: ValidationVerdictReceipt;
+  projectValidate?: ValidationVerdictReceipt;
+}
+
+interface ValidationReceiptStoreDocument {
+  schemaVersion: typeof VALIDATION_RECEIPT_STORE_SCHEMA;
+  mods: Record<string, ValidationModReceiptSlots>;
+}
+
+export type ValidationReceiptRead =
+  | { status: 'missing'; receipt: null; sourceValidation: ValidationVerdictReceipt | null }
+  | { status: 'available'; receipt: ValidationVerdictReceipt; sourceValidation: ValidationVerdictReceipt | null }
+  | { status: 'unavailable'; reason: string };
+
+function computeValidationReceiptHash(body: Omit<ValidationVerdictReceipt, 'receiptHash'>): string {
+  return sha256(JSON.stringify([
+    body.schemaVersion,
+    body.surface,
+    body.canonicalForDeploy,
+    body.modId,
+    body.verdict,
+    body.deployAllowed,
+    body.outcome,
+    body.sourceHash,
+    body.diskSourceHash,
+    body.artifactPlanHash,
+    body.artifactHash,
+    body.bindingHash,
+    body.forgeVersion,
+    body.validatedAt,
+    body.errors,
+    body.warnings,
+    body.acceptedWarnings,
+    body.unreviewedWarnings,
+    body.coverageGaps,
+    body.unavailableChecks,
+  ]));
+}
+
+export function createValidationVerdictReceipt(input: ValidationVerdictReceiptInput): ValidationVerdictReceipt {
+  const modId = normalizeModId(input.modId);
+  if (!modId) throw new Error('Validation receipt requires a modId.');
+  if (!/^[a-f0-9]{64}$/i.test(input.sourceHash)) throw new Error('Validation receipt requires a 64-hex sourceHash.');
+  const canonicalForDeploy = input.surface === 'deploy-verify';
+  const validatedAt = input.validatedAt || new Date().toISOString();
+  if (!Number.isFinite(Date.parse(validatedAt))) throw new Error('Validation receipt requires a valid ISO timestamp.');
+  const nonNegInt = (n: number) => (Number.isInteger(n) && n >= 0 ? n : 0);
+  const body: Omit<ValidationVerdictReceipt, 'receiptHash'> = {
+    schemaVersion: VALIDATION_RECEIPT_SCHEMA,
+    surface: input.surface,
+    canonicalForDeploy,
+    modId,
+    verdict: input.verdict === 'pass' ? 'pass' : 'fail',
+    deployAllowed: canonicalForDeploy ? Boolean(input.deployAllowed) : null,
+    outcome: boundedText(input.outcome || (input.verdict === 'pass' ? 'clean' : 'failed'), 96),
+    sourceHash: input.sourceHash.toLowerCase(),
+    diskSourceHash: input.diskSourceHash ? String(input.diskSourceHash).toLowerCase() : null,
+    artifactPlanHash: input.artifactPlanHash ? String(input.artifactPlanHash).toLowerCase() : null,
+    artifactHash: input.artifactHash ? String(input.artifactHash).toLowerCase() : null,
+    bindingHash: input.bindingHash ? String(input.bindingHash).toLowerCase() : null,
+    forgeVersion: boundedText(input.forgeVersion || 'unknown', 48),
+    validatedAt,
+    errors: nonNegInt(input.errors),
+    warnings: nonNegInt(input.warnings),
+    acceptedWarnings: nonNegInt(input.acceptedWarnings ?? 0),
+    unreviewedWarnings: nonNegInt(input.unreviewedWarnings),
+    coverageGaps: nonNegInt(input.coverageGaps),
+    unavailableChecks: nonNegInt(input.unavailableChecks ?? 0),
+  };
+  return {
+    ...body,
+    receiptHash: computeValidationReceiptHash(body),
+  };
+}
+
+export function formatValidationVerdictBanner(
+  receipt: ValidationVerdictReceipt,
+  freshness?: { status: 'current' | 'superseded' | 'unknown'; currentSourceHash?: string | null },
+): string {
+  const shortHash = receipt.sourceHash.slice(0, 12);
+  const base = `Forge validation: ${receipt.verdict.toUpperCase()} for source ${shortHash}, Forge ${receipt.forgeVersion}, at ${receipt.validatedAt}`;
+  if (freshness?.status === 'superseded') {
+    const cur = freshness.currentSourceHash ? freshness.currentSourceHash.slice(0, 12) : 'changed';
+    return `${base} [SUPERSEDED by working source ${cur}]`;
+  }
+  return base;
+}
+
+function isValidReceipt(value: unknown, expectedKey: string, expectedSurface: ValidationReceiptSurface): value is ValidationVerdictReceipt {
+  if (!value || typeof value !== 'object') return false;
+  const r = value as Record<string, unknown>;
+  if (r.schemaVersion !== VALIDATION_RECEIPT_SCHEMA || r.surface !== expectedSurface) return false;
+  if (r.canonicalForDeploy !== (expectedSurface === 'deploy-verify')) return false;
+  if (r.modId !== expectedKey || (r.verdict !== 'pass' && r.verdict !== 'fail')) return false;
+  if (expectedSurface === 'deploy-verify' ? typeof r.deployAllowed !== 'boolean' : r.deployAllowed !== null) return false;
+  if (typeof r.outcome !== 'string' || !r.outcome || r.outcome.length > 96) return false;
+  if (typeof r.sourceHash !== 'string' || !/^[a-f0-9]{64}$/.test(r.sourceHash)) return false;
+  for (const nullableHash of ['diskSourceHash', 'artifactPlanHash', 'artifactHash', 'bindingHash'] as const) {
+    const h = r[nullableHash];
+    if (h !== null && (typeof h !== 'string' || !/^[a-f0-9]{64}$/.test(h))) return false;
+  }
+  if (typeof r.forgeVersion !== 'string' || !r.forgeVersion || r.forgeVersion.length > 48) return false;
+  if (typeof r.validatedAt !== 'string' || !Number.isFinite(Date.parse(r.validatedAt))) return false;
+  for (const numField of ['errors', 'warnings', 'acceptedWarnings', 'unreviewedWarnings', 'coverageGaps', 'unavailableChecks'] as const) {
+    const n = r[numField];
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < 0) return false;
+  }
+  if (typeof r.receiptHash !== 'string' || !/^[a-f0-9]{64}$/.test(r.receiptHash)) return false;
+  const { receiptHash, ...rest } = r as unknown as ValidationVerdictReceipt;
+  return computeValidationReceiptHash(rest) === receiptHash;
+}
+
+function parseReceiptStoreDocument(file: string): { ok: true; document: ValidationReceiptStoreDocument } | { ok: false; reason: string } {
+  if (!fs.existsSync(file)) return { ok: true, document: { schemaVersion: VALIDATION_RECEIPT_STORE_SCHEMA, mods: {} } };
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
+    if (parsed?.schemaVersion !== VALIDATION_RECEIPT_STORE_SCHEMA || !parsed.mods || typeof parsed.mods !== 'object' || Array.isArray(parsed.mods)) {
+      return { ok: false, reason: `Validation receipt store has an unsupported or malformed schema: ${file}` };
+    }
+    const entries = Object.entries(parsed.mods as Record<string, unknown>);
+    if (entries.length > VALIDATION_BASELINE_MAX_MODS) {
+      return { ok: false, reason: `Validation receipt store exceeds maximum mod count: ${file}` };
+    }
+    for (const [key, slotVal] of entries) {
+      if (key !== normalizeModId(key) || !slotVal || typeof slotVal !== 'object' || Array.isArray(slotVal)) {
+        return { ok: false, reason: `Validation receipt store failed integrity checks: ${file}` };
+      }
+      const slot = slotVal as Record<string, unknown>;
+      for (const k of Object.keys(slot)) {
+        if (k !== 'deployVerify' && k !== 'projectValidate') {
+          return { ok: false, reason: `Validation receipt store has unexpected slot "${k}": ${file}` };
+        }
+      }
+      if (slot.deployVerify !== undefined && !isValidReceipt(slot.deployVerify, key, 'deploy-verify')) {
+        return { ok: false, reason: `Validation receipt store failed deployVerify integrity check for "${key}": ${file}` };
+      }
+      if (slot.projectValidate !== undefined && !isValidReceipt(slot.projectValidate, key, 'project-validate')) {
+        return { ok: false, reason: `Validation receipt store failed projectValidate integrity check for "${key}": ${file}` };
+      }
+    }
+    return { ok: true, document: parsed as unknown as ValidationReceiptStoreDocument };
+  } catch {
+    return { ok: false, reason: `Validation receipt store could not be read: ${file}` };
+  }
+}
+
+export class ValidationReceiptStore {
+  constructor(private readonly file: string) {}
+
+  read(modIdInput: string): ValidationReceiptRead {
+    const parsed = parseReceiptStoreDocument(this.file);
+    if ('reason' in parsed) return { status: 'unavailable', reason: parsed.reason };
+    const key = normalizeModId(modIdInput);
+    const slot = key ? parsed.document.mods[key] : undefined;
+    const receipt = slot?.deployVerify ?? null;
+    const sourceValidation = slot?.projectValidate ?? null;
+    return receipt
+      ? { status: 'available', receipt, sourceValidation }
+      : { status: 'missing', receipt: null, sourceValidation };
+  }
+
+  record(receipt: ValidationVerdictReceipt): void {
+    const parsed = parseReceiptStoreDocument(this.file);
+    if ('reason' in parsed) throw new Error(`${parsed.reason} No validation receipt was recorded.`);
+    const key = normalizeModId(receipt.modId);
+    if (!isValidReceipt(receipt, key, receipt.surface)) {
+      throw new Error(`Validation receipt failed integrity verification for "${key}".`);
+    }
+    const existing = parsed.document.mods[key];
+    if (!existing && Object.keys(parsed.document.mods).length >= VALIDATION_BASELINE_MAX_MODS) {
+      throw new Error(`Validation receipt store already contains ${VALIDATION_BASELINE_MAX_MODS} mods. No receipt was recorded.`);
+    }
+    const nextSlot: ValidationModReceiptSlots = {
+      ...(existing || {}),
+      ...(receipt.surface === 'deploy-verify' ? { deployVerify: receipt } : { projectValidate: receipt }),
+    };
+    const next: ValidationReceiptStoreDocument = {
+      schemaVersion: VALIDATION_RECEIPT_STORE_SCHEMA,
+      mods: { ...parsed.document.mods, [key]: nextSlot },
+    };
+    atomicWriteJson(this.file, next);
+  }
+}
+
 export function runValidationDeltaSelftest() {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'x4forge-validation-delta-'));
   try {
@@ -354,6 +589,71 @@ export function runValidationDeltaSelftest() {
       { name: 'excessive legacy excerpt collisions cannot report a partial comparison',
         pass: bounded.status === 'unavailable' && !!bounded.baseline.reason
           && !bounded.newWarnings.length && !bounded.resolvedWarnings.length },
+    );
+    const receiptStore = new ValidationReceiptStore(path.join(tempRoot, 'receipts.json'));
+    const sourceReceipt = createValidationVerdictReceipt({
+      surface: 'project-validate',
+      modId: 'Example_Mod',
+      verdict: 'pass',
+      deployAllowed: true,
+      outcome: 'clean',
+      sourceHash: hashA,
+      forgeVersion: '0.0.94',
+      validatedAt: '2026-11-23T19:00:00.000Z',
+      errors: 0,
+      warnings: 2,
+      unreviewedWarnings: 2,
+      coverageGaps: 5,
+      unavailableChecks: 1,
+    });
+    receiptStore.record(sourceReceipt);
+    const afterSourceOnly = receiptStore.read('example_mod');
+    const deployReceipt = createValidationVerdictReceipt({
+      surface: 'deploy-verify',
+      modId: 'Example_Mod',
+      verdict: 'pass',
+      deployAllowed: true,
+      outcome: 'accepted-findings',
+      sourceHash: hashA,
+      artifactPlanHash: 'b'.repeat(64),
+      artifactHash: 'c'.repeat(64),
+      bindingHash: 'd'.repeat(64),
+      forgeVersion: '0.0.94',
+      validatedAt: '2026-11-23T19:05:00.000Z',
+      errors: 0,
+      warnings: 2,
+      acceptedWarnings: 2,
+      unreviewedWarnings: 0,
+      coverageGaps: 3,
+      unavailableChecks: 0,
+    });
+    receiptStore.record(deployReceipt);
+    const afterDeploy = receiptStore.read('EXAMPLE_MOD');
+    const corruptReceiptStore = new ValidationReceiptStore(storeFile);
+    const corruptReceiptRead = corruptReceiptStore.read('example_mod');
+    let corruptReceiptWriteRejected = false;
+    try { corruptReceiptStore.record(deployReceipt); } catch { corruptReceiptWriteRejected = true; }
+    let tamperedWriteRejected = false;
+    try { receiptStore.record({ ...deployReceipt, errors: 99 }); } catch { tamperedWriteRejected = true; }
+    const bannerCurrent = formatValidationVerdictBanner(deployReceipt, { status: 'current', currentSourceHash: hashA });
+    const bannerSuperseded = formatValidationVerdictBanner(deployReceipt, { status: 'superseded', currentSourceHash: 'e'.repeat(64) });
+    checks.push(
+      { name: 'project-validate receipt stays isolated from canonical deploy-verify slot',
+        pass: sourceReceipt.canonicalForDeploy === false && sourceReceipt.deployAllowed === null
+          && afterSourceOnly.status === 'missing' && afterSourceOnly.receipt === null
+          && afterSourceOnly.sourceValidation?.receiptHash === sourceReceipt.receiptHash },
+      { name: 'deploy-verify receipt populates canonical slot without erasing sourceValidation',
+        pass: afterDeploy.status === 'available'
+          && afterDeploy.receipt.receiptHash === deployReceipt.receiptHash
+          && afterDeploy.receipt.canonicalForDeploy === true
+          && afterDeploy.receipt.deployAllowed === true
+          && afterDeploy.sourceValidation?.receiptHash === sourceReceipt.receiptHash },
+      { name: 'corrupt or tampered validation receipt store fails closed',
+        pass: corruptReceiptRead.status === 'unavailable' && corruptReceiptWriteRejected && tamperedWriteRejected },
+      { name: 'validation receipt banner formats current and superseded states cleanly',
+        pass: bannerCurrent.includes(`PASS for source ${hashA.slice(0, 12)}, Forge 0.0.94`)
+          && !bannerCurrent.includes('SUPERSEDED')
+          && bannerSuperseded.includes('[SUPERSEDED by working source eeeeeeeeeeee]') },
     );
     return { pass: checks.every(check => check.pass), checks };
   } finally {

@@ -137,7 +137,7 @@ import { createNativePerformanceBroker, type NativeBrokerActor, type NativeBroke
 import { createNativePerformanceRetirementNotice, type NativePerformanceEndpoint } from './shared/nativePerformanceChannel';
 import { isNativeInstanceId } from './shared/nativePerformanceProtocol';
 import { performance as nativeBrokerClock } from 'node:perf_hooks';
-import { captureDeploymentSnapshot, DeploymentSnapshotStorageError, type DeploymentSnapshot } from './src/server/deploymentSnapshot';
+import { captureDeploymentSnapshot, computeDeployCandidateIdentity, DeploymentSnapshotStorageError, type DeploymentSnapshot } from './src/server/deploymentSnapshot';
 import { previewLuaRegistrationChange } from './src/server/deployLuaRegistration';
 import { PROJECT_CHECKS_MAX_BYTES, PROJECT_CHECKS_PATH } from './src/server/projectCheckProposal';
 import { projectCheckApprovalCoordinationKey } from './src/server/projectCheckApproval';
@@ -316,11 +316,16 @@ import {
 import { runForgeCapabilitiesSelftest } from "./src/lib/forgeCapabilities.selftest";
 import {
   ValidationBaselineStore,
+  ValidationReceiptStore,
   compareValidationWarnings,
   createValidationBaselineSnapshot,
+  createValidationVerdictReceipt,
+  formatValidationVerdictBanner,
   runValidationDeltaSelftest,
   validationProjectContentHash,
   type ValidationDeltaResult,
+  type ValidationVerdictReceipt,
+  type ValidationVerdictReceiptInput,
   type ValidationWarningInput,
 } from "./src/lib/validationDelta";
 import { normalizeStudioLayoutPreferences, type StudioLayoutPreferences } from "./src/lib/studioLayout";
@@ -786,6 +791,52 @@ if (TIMEOUT_DRILL_DELAY_MS > 0) PUBLIC_READONLY_GETS.add('/agent/timeout-drill')
 // keeps full, unscoped power and is the ONLY credential that can manage keys.
 const AGENT_KEYS_FILE = dataPath("agent-keys.json"); // B53: survives extension updates via X4_DATA_DIR
 const validationBaselineStore = new ValidationBaselineStore(dataPath("validation-baselines.json"));
+const validationReceiptStore = new ValidationReceiptStore(dataPath("validation-receipts.json"));
+
+const PROJECT_VALIDATE_AUTHORITY = Object.freeze({
+  role: 'source-static-only' as const,
+  canonicalDeploySurface: 'POST /api/agent/deploy-verify' as const,
+  supersededForDeployGate: true as const,
+  omitsDeployStages: Object.freeze([
+    'artifact-plan-non-menu-lua-and-xml',
+    'workspace-compile-and-patch-synthesis',
+    'emitted-xml-wellformed-gate',
+    'target-version-staleness',
+    'finding-acceptance-and-deploy-policy',
+  ]),
+});
+const PROJECT_VALIDATE_ROLE_HEADER = 'source-static-only; canonical-deploy="POST /api/agent/deploy-verify"';
+
+let cachedForgePackageVersion: string | undefined;
+function resolveForgeReceiptVersion(): string {
+  if (SERVER_EXTENSION_VERSION && /^\d{1,8}\.\d{1,8}\.\d{1,8}$/.test(SERVER_EXTENSION_VERSION)) {
+    return SERVER_EXTENSION_VERSION;
+  }
+  if (!cachedForgePackageVersion) {
+    try {
+      const extPkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'vscode-extension', 'package.json'), 'utf8')) as { version?: unknown };
+      if (typeof extPkg.version === 'string' && /^\d{1,8}\.\d{1,8}\.\d{1,8}$/.test(extPkg.version.trim())) {
+        cachedForgePackageVersion = extPkg.version.trim();
+      }
+    } catch { /* Standalone CWD without vscode-extension falls back below. */ }
+    cachedForgePackageVersion ??= ACTION_RECEIPT_RUNTIME_VERSION;
+  }
+  return cachedForgePackageVersion;
+}
+
+function recordValidationReceiptBestEffort(input: ValidationVerdictReceiptInput): ValidationVerdictReceipt | undefined {
+  if (!input.modId || !/^[a-f0-9]{64}$/i.test(input.sourceHash)) return undefined;
+  let receipt: ValidationVerdictReceipt;
+  try {
+    receipt = createValidationVerdictReceipt(input);
+  } catch {
+    return undefined;
+  }
+  try {
+    validationReceiptStore.record(receipt);
+  } catch { /* Corrupt receipt store stays fail-closed on GET /api/agent/validation/last without 500ing validation. */ }
+  return receipt;
+}
 
 function validationDeltaFor(
   modId: string,
@@ -6000,6 +6051,13 @@ app.get("/api/agent/status", async (req, res) => {
         schemaDir: resolved.schemaDir || null,
       },
       lastDeploy: deployInfoForWorkspace(record),
+      lastValidation: (() => {
+        const modId = effectiveModId(activeBuildWorkspace(ws));
+        if (!modId) return null;
+        const read = validationReceiptStore.read(modId);
+        if (read.status === 'unavailable') return { status: 'unavailable' as const, reason: read.reason };
+        return { status: read.status, receipt: read.receipt, sourceValidation: read.sourceValidation };
+      })(),
       deployFormat: (() => { const r = resolveDeployFormat(undefined); return { format: r.format, source: r.source }; })(),
       dependencyHealth: buildDependencyHealth(resolved),
       readiness: {
@@ -6011,6 +6069,135 @@ app.get("/api/agent/status", async (req, res) => {
     });
   } catch (error: any) {
     return res.status(500).json({ ok: false, error: error?.message || 'status failed' });
+  }
+});
+
+app.get("/api/agent/validation/last", (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const record = requestWorkspace(req);
+    const ws = record.workspace as ModWorkspace;
+    const workspaceModId = effectiveModId(activeBuildWorkspace(ws));
+    const requestedModId = typeof req.query.modId === 'string' && req.query.modId.trim()
+      ? req.query.modId.trim()
+      : workspaceModId;
+    if (!requestedModId) {
+      return res.status(400).json({
+        ok: false,
+        code: 'VALIDATION_MOD_ID_REQUIRED',
+        error: 'Provide ?modId=<id> or select a workspace with a declared mod ID.',
+      });
+    }
+    const querySourceHash = typeof req.query.sourceHash === 'string' ? req.query.sourceHash.trim().toLowerCase() : '';
+    if (querySourceHash && !/^[a-f0-9]{64}$/.test(querySourceHash)) {
+      return res.status(400).json({
+        ok: false,
+        modId: requestedModId.toLowerCase(),
+        code: 'VALIDATION_SOURCE_HASH_INVALID',
+        error: 'Optional ?sourceHash= must be a 64-character lowercase/uppercase SHA-256 hex digest.',
+      });
+    }
+    const stored = validationReceiptStore.read(requestedModId);
+    if (stored.status === 'unavailable') {
+      return res.status(503).json({
+        ok: false,
+        modId: requestedModId.toLowerCase(),
+        code: 'VALIDATION_RECEIPT_UNAVAILABLE',
+        error: stored.reason,
+      });
+    }
+
+    let freshness: {
+      status: 'current' | 'superseded' | 'unknown';
+      current: boolean | null;
+      matchesCurrentSource: boolean | null;
+      currentSourceHash: string | null;
+      currentArtifactPlanHash: string | null;
+      basis: 'caller-source-hash' | 'disk-deploy-candidate' | 'none';
+      detail: string;
+    } = {
+      status: 'unknown',
+      current: null,
+      matchesCurrentSource: null,
+      currentSourceHash: null,
+      currentArtifactPlanHash: null,
+      basis: 'none',
+      detail: stored.receipt
+        ? 'No working source directory or ?sourceHash= was available to compare against the receipt.'
+        : 'No canonical deploy-verify validation receipt has been recorded for this mod yet.',
+    };
+
+    if (stored.receipt) {
+      if (querySourceHash) {
+        const matches = stored.receipt.sourceHash === querySourceHash || stored.receipt.diskSourceHash === querySourceHash;
+        freshness = {
+          status: matches ? 'current' : 'superseded',
+          current: matches,
+          matchesCurrentSource: matches,
+          currentSourceHash: querySourceHash,
+          currentArtifactPlanHash: null,
+          basis: 'caller-source-hash',
+          detail: matches
+            ? 'Receipt matches the caller-supplied sourceHash.'
+            : 'Receipt differs from the caller-supplied sourceHash; re-run POST /api/agent/deploy-verify (dryRun: true).',
+        };
+      } else if (req.query.checkSource !== '0') {
+        const wsStampDir = (ws as { sourceStamp?: { dir?: unknown } } | undefined)?.sourceStamp?.dir;
+        const stampedDir = workspaceModId.toLowerCase() === requestedModId.toLowerCase()
+          && typeof wsStampDir === 'string'
+          ? wsStampDir
+          : '';
+        let candidateDir = stampedDir && fs.existsSync(stampedDir) ? stampedDir : '';
+        if (!candidateDir) {
+          const resolvedFolder = resolveModFolder(requestedModId);
+          if (!('error' in resolvedFolder)) candidateDir = resolvedFolder.abs;
+        }
+        if (candidateDir) {
+          const candidate = computeDeployCandidateIdentity(candidateDir, resolveDeployFormat(undefined).format);
+          if ('sourceHash' in candidate) {
+            const matches = stored.receipt.diskSourceHash
+              ? stored.receipt.diskSourceHash === candidate.artifactPlanHash
+              : (stored.receipt.sourceHash === candidate.sourceHash
+                && (!stored.receipt.artifactPlanHash || stored.receipt.artifactPlanHash === candidate.artifactPlanHash));
+            const effectiveCurrentHash = stored.receipt.diskSourceHash ? candidate.artifactPlanHash : candidate.sourceHash;
+            freshness = {
+              status: matches ? 'current' : 'superseded',
+              current: matches,
+              matchesCurrentSource: matches,
+              currentSourceHash: effectiveCurrentHash,
+              currentArtifactPlanHash: candidate.artifactPlanHash,
+              basis: 'disk-deploy-candidate',
+              detail: matches
+                ? 'Receipt matches the current deploy-candidate bytes in the working mod folder.'
+                : 'Working mod folder bytes changed since this receipt was recorded; re-run POST /api/agent/deploy-verify (dryRun: true).',
+            };
+          } else {
+            freshness = {
+              status: 'unknown',
+              current: null,
+              matchesCurrentSource: null,
+              currentSourceHash: null,
+              currentArtifactPlanHash: null,
+              basis: 'disk-deploy-candidate',
+              detail: `Working mod folder could not be hashed cleanly: ${candidate.reason}`,
+            };
+          }
+        }
+      }
+    }
+
+    return res.json({
+      ok: true,
+      modId: requestedModId.toLowerCase(),
+      canonicalSurface: 'POST /api/agent/deploy-verify',
+      status: stored.status,
+      receipt: stored.receipt,
+      freshness,
+      banner: stored.receipt ? formatValidationVerdictBanner(stored.receipt, freshness) : null,
+      sourceValidation: stored.sourceValidation,
+    });
+  } catch (error: unknown) {
+    return res.status(500).json({ ok: false, error: errorMessage(error) || 'validation receipt lookup failed' });
   }
 });
 
@@ -10342,6 +10529,31 @@ function validateProjectRequest(req: express.Request, res: express.Response, lea
       proof && [proof.artifactHash, proof.suite.id, proof.suite.hash, proof.checks.map(check => check.receiptHash).sort()],
       ...(canonicalMd ? [canonicalMd] : []),
     ])).digest('hex');
+    const modWarningCount = findings.filter(f => f.category === 'mod-finding' && f.severity === 'warning').length;
+    const modErrorCount = findings.filter(f => f.category === 'mod-finding' && f.severity === 'error').length;
+    const sourceValidationReceipt = !canonical && identity.modId && identity.sourceHash
+      ? recordValidationReceiptBestEffort({
+          surface: 'project-validate',
+          modId: identity.modId,
+          verdict: result.ok && modErrorCount === 0 && modWarningCount === 0 && coverage.complete ? 'pass' : 'fail',
+          deployAllowed: null,
+          outcome: !result.ok || modErrorCount > 0 ? 'blocked-mod-findings'
+            : modWarningCount > 0 ? 'warnings-present'
+            : !coverage.complete ? 'incomplete-checks'
+            : 'validation-clean',
+          sourceHash: identity.sourceHash,
+          artifactPlanHash: source.mode === 'fromPath' ? (source.artifactHash ?? null) : null,
+          forgeVersion: resolveForgeReceiptVersion(),
+          errors: Math.max(modErrorCount, evidence.modErrorCount),
+          warnings: modWarningCount,
+          unreviewedWarnings: modWarningCount,
+          coverageGaps: coverage.gaps.length,
+          unavailableChecks: evidence.checkUnavailableCount,
+        })
+      : undefined;
+    if (!canonical) {
+      res.set('X-Forge-Validation-Role', PROJECT_VALIDATE_ROLE_HEADER);
+    }
     const compact = () => {
       // The existing ledger bounds and redacts its sample independently of the wire projection.
       res.locals.validationHistory = { flat };
@@ -10354,6 +10566,8 @@ function validateProjectRequest(req: express.Request, res: express.Response, lea
         verdict: drift.verdict, newerSide: drift.newerSide, summary: drift.summary };
       return {
         ok: result.ok, ...identity, resultId, detail: 'summary', summary: result.summary, counts,
+        ...(!canonical ? { authority: PROJECT_VALIDATE_AUTHORITY } : {}),
+        ...(sourceValidationReceipt ? { validationReceipt: sourceValidationReceipt } : {}),
         evidence: { ...evidenceScalars, coverage: { complete: coverage.complete,
           ...(proof ? { projectVerification: { status: proof.status, suite: proof.suite, artifactHash: proof.artifactHash,
             forgeComplete: proof.forgeComplete, checkCount: proof.checks.length, resolvedGapCount: proof.resolvedGaps.length } } : {}),
@@ -10385,7 +10599,13 @@ function validateProjectRequest(req: express.Request, res: express.Response, lea
     return res.status(baselineError !== undefined ? 409 : 200).json({
       ...(full ? { ...result, ...identity, flat, capsules: buildRemediationCapsules(flat), source, validationDelta,
         ...(correctionWorkspace && result.scriptProperties.correctionAuthority ? { correctionWorkspace } : {}),
-        ...(drift ? { drift } : {}), ...(canonical ? {} : { detail: 'full', resultId }) } : compact()),
+        ...(drift ? { drift } : {}),
+        ...(canonical ? {} : {
+          detail: 'full',
+          resultId,
+          authority: PROJECT_VALIDATE_AUTHORITY,
+          ...(sourceValidationReceipt ? { validationReceipt: sourceValidationReceipt } : {}),
+        }) } : compact()),
       ...(baselinePromotion ? { baselinePromotion } : {}),
       ...(baselineError !== undefined ? { ok: false, code: 'VALIDATION_BASELINE_RECORD_FAILED',
         error: full ? baselineError : baselineError.slice(0, 512) } : {}),
@@ -16679,8 +16899,31 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
           if (!wf.ok) emittedMalformed.push({ file: rel, errors: wf.errors.slice(0, 3) });
         }
         if (emittedMalformed.length > 0) {
+          const snapEv = buildValidationEvidence({ id: modId, name: modId, files: snapshot.files }, []);
+          const malformedReceipt = snapEv.modId && snapEv.sourceHash
+            ? recordValidationReceiptBestEffort({
+                surface: 'deploy-verify',
+                modId: snapEv.modId,
+                verdict: 'fail',
+                deployAllowed: false,
+                outcome: 'wellformed-failed',
+                sourceHash: snapEv.sourceHash,
+                diskSourceHash: diskIdentity,
+                artifactPlanHash: snapshot.manifest.hash,
+                artifactHash,
+                forgeVersion: resolveForgeReceiptVersion(),
+                errors: emittedMalformed.length,
+                warnings: 0,
+                unreviewedWarnings: 0,
+                coverageGaps: snapshot.skipped.length,
+              })
+            : undefined;
           check('wellformed', 'XML well-formed', 'fail', 'EMITTED files malformed (corrupted passthrough?): ' + emittedMalformed.map(m => m.file).join(', '));
-          return res.json(failWith('wellformed', { modId: ws?.name || reqPath, malformed: emittedMalformed }));
+          return res.json(failWith('wellformed', {
+            modId: ws?.name || reqPath,
+            malformed: emittedMalformed,
+            ...(malformedReceipt ? { validationReceipt: malformedReceipt } : {}),
+          }));
         }
         if (!checklist.some(c => c.id === 'wellformed')) {
           check('wellformed', 'XML well-formed', 'pass', `${emittedXmlCount} emitted XML file(s) parse cleanly`);
@@ -16708,8 +16951,31 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       });
       validationStagesMs.readiness = performance.now() - readinessStartedAt;
       if (compileErrors.length > 0) {
+        const snapEv = buildValidationEvidence({ id: modId, name: modId, files: snapshot.files }, []);
+        const compileReceipt = snapEv.modId && snapEv.sourceHash
+          ? recordValidationReceiptBestEffort({
+              surface: 'deploy-verify',
+              modId: snapEv.modId,
+              verdict: 'fail',
+              deployAllowed: false,
+              outcome: 'compile-failed',
+              sourceHash: snapEv.sourceHash,
+              diskSourceHash: diskIdentity,
+              artifactPlanHash: snapshot.manifest.hash,
+              artifactHash,
+              forgeVersion: resolveForgeReceiptVersion(),
+              errors: compileErrors.length,
+              warnings: diagnostics.filter(d => d.severity === 'warning').length,
+              unreviewedWarnings: diagnostics.filter(d => d.severity === 'warning').length,
+              coverageGaps: snapshot.skipped.length,
+            })
+          : undefined;
         check('compile', 'Compile diagnostics', 'fail', compileErrors.slice(0, 3).map((d: any) => d.message).join(' | '));
-        return res.json(failWith('compile', { modId, compileErrors: compileErrors.slice(0, 10) }));
+        return res.json(failWith('compile', {
+          modId,
+          compileErrors: compileErrors.slice(0, 10),
+          ...(compileReceipt ? { validationReceipt: compileReceipt } : {}),
+        }));
       }
       check('compile', 'Compile diagnostics', 'pass', `0 compile gate errors across doctor/patch (${diagnostics.length} findings; artifact Lua and schema run in preflight)`);
 
@@ -16863,6 +17129,29 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       check('preflight', 'Installed extension identity', 'fail', installedConflict.error);
       return res.status(409).json(failWith('preflight', installedConflict));
     }
+    const buildDeployValidationReceipt = (activeDecision: typeof decision) => recordValidationReceiptBestEffort({
+      surface: 'deploy-verify',
+      modId: manifestId,
+      verdict: activeDecision.validationAllowsDeploy ? 'pass' : 'fail',
+      deployAllowed: activeDecision.validationAllowsDeploy,
+      outcome: activeDecision.outcome,
+      sourceHash: evidence.sourceHash,
+      diskSourceHash: diskIdentity,
+      artifactPlanHash: snapshot!.manifest.hash,
+      artifactHash,
+      bindingHash: activeDecision.binding.hash,
+      forgeVersion: resolveForgeReceiptVersion(),
+      errors: activeDecision.counts.unacceptedErrors + activeDecision.counts.acceptedErrors,
+      warnings: activeDecision.counts.acceptedWarnings + activeDecision.counts.unacceptedWarnings,
+      acceptedWarnings: activeDecision.counts.acceptedWarnings,
+      unreviewedWarnings: activeDecision.counts.unacceptedWarnings,
+      coverageGaps: evidence.coverage.gaps.length,
+      unavailableChecks: activeDecision.counts.unavailableChecks,
+    });
+    const deployValidationReceipt = buildDeployValidationReceipt(decision);
+    if (deployValidationReceipt) {
+      responseIdentity = { ...responseIdentity, validationReceipt: deployValidationReceipt };
+    }
     if (!decision.validationAllowsDeploy) {
       const blockingFindings = evidence.findings.filter(finding => decision.unacceptedErrorIds.includes(finding.findingId));
       const acceptanceRequest = receiptHistoryUnavailable && canonicalReviewSource ? undefined : { method: 'POST', path: '/api/agent/deploy-verify',
@@ -16974,6 +17263,10 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     const { receipts: approvalRecords, decision: recordedDecision } = recordFindingAcceptances(actionReceiptStore, subject, acceptances, principal);
     responseIdentity.validation = { outcome: decision.outcome, clean: decision.validationClean, ...validationScope, evidence, lua: luaValidation,
       review: projectFindingReview(recordedDecision, principal, approvalRecords) };
+    const refreshedValidationReceipt = buildDeployValidationReceipt(recordedDecision);
+    if (refreshedValidationReceipt) {
+      responseIdentity.validationReceipt = refreshedValidationReceipt;
+    }
     const assertWriteAuthority = (skipSourceRecheck = false) => {
       if (resolved.isolatedScratch) validateDevScratchStorage();
       if (!skipSourceRecheck) assertCurrentSource();

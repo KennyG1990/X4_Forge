@@ -2314,6 +2314,18 @@
       "resourceClass": "public",
       "workspaceMode": "optional"
     },
+    "GET /api/agent/validation/last": {
+      "disposition": "legacy-agent-api",
+      "owner": "agent-api",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "workspace",
+      "workspaceMode": "required"
+    },
     "GET /api/agent/vanilla-ui-harvest": {
       "disposition": "legacy-public",
       "owner": "agent-api",

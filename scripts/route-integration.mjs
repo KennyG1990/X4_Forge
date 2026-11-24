@@ -5656,6 +5656,126 @@ async function main() {
     await req('POST', '/api/schema/config', SESSION_TOKEN, deployedRolesConfig);
   }
 
+  // --- #138: Canonical validation surface authority, hash-bound validationReceipt, and GET /api/agent/validation/last ---
+  {
+    const valFixId = 'val_receipt_fixture';
+    const valFixDir = path.join(safeWorkspace, valFixId);
+    fs.mkdirSync(path.join(valFixDir, 'md'), { recursive: true });
+    fs.writeFileSync(path.join(valFixDir, 'content.xml'), `<?xml version="1.0"?><content id="${valFixId}" name="Validation Receipt Fixture" version="100" author="Forge QA"/>`);
+    fs.writeFileSync(path.join(valFixDir, 'md', 'main.xml'),
+      '<?xml version="1.0"?><mdscript name="ValReceiptMain"><cues><cue name="Probe" instantiate="true"><conditions><event_game_started/></conditions><actions><set_value name="$s" exact="if @$cship.pilot.seed? then 1 else 0"/></actions></cue></cues></mdscript>');
+    await req('POST', '/api/schema/config', SESSION_TOKEN, { ...deployedRolesConfig, modWorkspacePath: safeWorkspace, filesystemPath: safeWorkspace });
+    try {
+      const pvRawRes = await fetch(`${BASE}/api/agent/project/validate`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${SESSION_TOKEN}`, 'Content-Type': 'application/json', 'x-workspace-id': WORKSPACE_ID, 'x-client-id': CLIENT_ID },
+        body: JSON.stringify({ fromPath: valFixId, detail: 'full' }),
+      });
+      const pvRoleHeader = pvRawRes.headers.get('x-forge-validation-role') || '';
+      const pvJson = await pvRawRes.json();
+      const pvNullSafe = (pvJson?.flat || []).filter(f => f.code === 'expression-null-safe-exists');
+      ok('project_validate_declares_source_static_authority_and_reports_null_safe_exists',
+        pvRawRes.status === 200
+        && pvRoleHeader.includes('source-static-only')
+        && pvRoleHeader.includes('POST /api/agent/deploy-verify')
+        && pvJson?.authority?.role === 'source-static-only'
+        && pvJson?.authority?.supersededForDeployGate === true
+        && pvJson?.authority?.canonicalDeploySurface === 'POST /api/agent/deploy-verify'
+        && pvJson?.validationReceipt?.surface === 'project-validate'
+        && pvJson?.validationReceipt?.canonicalForDeploy === false
+        && pvJson?.validationReceipt?.deployAllowed === null
+        && pvNullSafe.length === 1,
+        `status=${pvRawRes.status} roleHeader=${pvRoleHeader} nullSafe=${pvNullSafe.length}`);
+
+      const lastAfterPvOnly = await req('GET', `/api/agent/validation/last?modId=${valFixId}`, readKey);
+      ok('validation_last_keeps_project_validate_isolated_from_canonical_deploy_slot',
+        lastAfterPvOnly.status === 200
+        && lastAfterPvOnly.json?.status === 'missing'
+        && lastAfterPvOnly.json?.receipt === null
+        && lastAfterPvOnly.json?.sourceValidation?.surface === 'project-validate'
+        && lastAfterPvOnly.json?.sourceValidation?.canonicalForDeploy === false,
+        `status=${lastAfterPvOnly.status} slotStatus=${lastAfterPvOnly.json?.status}`);
+
+      // Import into workspace and run deploy-verify dryRun on broken candidate -> records canonical FAIL receipt.
+      const valImp = await req('POST', '/api/agent/mod-folder/import', SESSION_TOKEN, { root: 'workspace', path: valFixId });
+      await req('POST', '/api/agent/workspace', SESSION_TOKEN, {
+        workspace: valImp.json?.workspace,
+        expectedVersion: (await req('GET', '/api/agent/workspace', SESSION_TOKEN)).json?.version,
+      });
+      const dryFail = await req('POST', '/api/agent/deploy-verify', SESSION_TOKEN, { path: valFixId, autoReimport: true, dryRun: true });
+      const lastFail = await req('GET', `/api/agent/validation/last?modId=${valFixId}`, readKey);
+      ok('deploy_verify_dry_run_refusal_records_current_canonical_fail_receipt',
+        dryFail.status === 200
+        && dryFail.json?.ok === false
+        && dryFail.json?.code === 'UNACCEPTED_MOD_FINDINGS'
+        && dryFail.json?.validationReceipt?.surface === 'deploy-verify'
+        && dryFail.json?.validationReceipt?.canonicalForDeploy === true
+        && dryFail.json?.validationReceipt?.verdict === 'fail'
+        && dryFail.json?.validationReceipt?.deployAllowed === false
+        && dryFail.json?.validationReceipt?.errors >= 1
+        && lastFail.status === 200
+        && lastFail.json?.status === 'available'
+        && lastFail.json?.receipt?.receiptHash === dryFail.json?.validationReceipt?.receiptHash
+        && lastFail.json?.freshness?.status === 'current'
+        && lastFail.json?.freshness?.current === true
+        && typeof lastFail.json?.banner === 'string' && lastFail.json.banner.includes('FAIL for source '),
+        `dryCode=${dryFail.json?.code} lastFresh=${lastFail.json?.freshness?.status}`);
+
+      // Edit source file on disk -> receipt immediately becomes SUPERSEDED by exact candidate sourceHash without timestamp heuristics.
+      fs.writeFileSync(path.join(valFixDir, 'md', 'main.xml'),
+        '<?xml version="1.0"?><mdscript name="ValReceiptMain"><cues><cue name="Probe" instantiate="true"><conditions><event_game_started/></conditions><actions><set_value name="$cship" exact="player.ship"/><set_value name="$s" exact="if $cship? and $cship then 1 else 0"/></actions></cue></cues></mdscript>');
+      const lastSuperseded = await req('GET', `/api/agent/validation/last?modId=${valFixId}`, readKey);
+      ok('validation_last_marks_receipt_superseded_when_working_bytes_change',
+        lastSuperseded.status === 200
+        && lastSuperseded.json?.freshness?.status === 'superseded'
+        && lastSuperseded.json?.freshness?.current === false
+        && lastSuperseded.json?.freshness?.matchesCurrentSource === false
+        && typeof lastSuperseded.json?.banner === 'string'
+        && lastSuperseded.json.banner.includes('[SUPERSEDED by working source '),
+        `fresh=${lastSuperseded.json?.freshness?.status} banner=${lastSuperseded.json?.banner}`);
+
+      // Re-run deploy-verify dryRun on fixed candidate -> records canonical PASS receipt, current, and surfaces on /api/agent/status.
+      const dryPass = await req('POST', '/api/agent/deploy-verify', SESSION_TOKEN, { path: valFixId, autoReimport: true, dryRun: true });
+      const lastPass = await req('GET', `/api/agent/validation/last?modId=${valFixId}`, readKey);
+      const statusWithVal = await req('GET', '/api/agent/status', readKey);
+      ok('deploy_verify_dry_run_pass_records_current_pass_receipt_and_status_projection',
+        dryPass.status === 200
+        && dryPass.json?.ok === true
+        && dryPass.json?.validationReceipt?.verdict === 'pass'
+        && dryPass.json?.validationReceipt?.deployAllowed === true
+        && dryPass.json?.validationReceipt?.errors === 0
+        && lastPass.status === 200
+        && lastPass.json?.receipt?.verdict === 'pass'
+        && lastPass.json?.receipt?.receiptHash === dryPass.json?.validationReceipt?.receiptHash
+        && lastPass.json?.freshness?.status === 'current'
+        && lastPass.json?.freshness?.current === true
+        && typeof lastPass.json?.banner === 'string' && lastPass.json.banner.includes('PASS for source ')
+        && statusWithVal.json?.lastValidation?.receipt?.receiptHash === dryPass.json?.validationReceipt?.receiptHash,
+        `dryOk=${dryPass.json?.ok} fresh=${lastPass.json?.freshness?.status}`);
+
+      const badHashQuery = await req('GET', `/api/agent/validation/last?modId=${valFixId}&sourceHash=not-a-sha256`, readKey);
+      const callerMismatchQuery = await req('GET', `/api/agent/validation/last?modId=${valFixId}&sourceHash=${'f'.repeat(64)}`, readKey);
+      ok('validation_last_validates_caller_source_hash_parameter',
+        badHashQuery.status === 400 && badHashQuery.json?.code === 'VALIDATION_SOURCE_HASH_INVALID'
+        && callerMismatchQuery.status === 200 && callerMismatchQuery.json?.freshness?.status === 'superseded'
+        && callerMismatchQuery.json?.freshness?.basis === 'caller-source-hash',
+        `bad=${badHashQuery.status} mismatch=${callerMismatchQuery.json?.freshness?.status}`);
+
+      // Corrupt validation-receipts.json -> fails closed with 503 VALIDATION_RECEIPT_UNAVAILABLE, then restore.
+      const receiptStorePath = path.join(dataDir, 'validation-receipts.json');
+      const savedReceiptBytes = fs.readFileSync(receiptStorePath);
+      fs.writeFileSync(receiptStorePath, '{corrupted', 'utf8');
+      const lastCorrupt = await req('GET', `/api/agent/validation/last?modId=${valFixId}`, readKey);
+      fs.writeFileSync(receiptStorePath, savedReceiptBytes);
+      ok('validation_last_fails_closed_on_corrupt_receipt_store',
+        lastCorrupt.status === 503 && lastCorrupt.json?.code === 'VALIDATION_RECEIPT_UNAVAILABLE',
+        `status=${lastCorrupt.status} code=${lastCorrupt.json?.code}`);
+    } finally {
+      fs.rmSync(valFixDir, { recursive: true, force: true });
+      await req('POST', '/api/schema/config', SESSION_TOKEN, deployedRolesConfig);
+    }
+  }
+
   // --- fs/write path containment and positive safe-root write ---
   const safeFilesystemConfig = await req('POST', '/api/schema/config', SESSION_TOKEN, { ...deployedRolesConfig, filesystemPath: safeWorkspace });
   ok('optional_safe_filesystem_root_saved', safeFilesystemConfig.status === 200, `status=${safeFilesystemConfig.status}`);

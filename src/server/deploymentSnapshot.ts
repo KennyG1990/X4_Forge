@@ -2,8 +2,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { artifactPlanIdentity, materializeArtifact, readVerifiedArtifactFile, verifyMaterializedArtifact, type ArtifactEntry, type ArtifactPlan } from '../lib/artifactPipeline';
+import { artifactPlanIdentity, buildArtifactPlan, materializeArtifact, readVerifiedArtifactFile, verifyMaterializedArtifact, type ArtifactEntry, type ArtifactPlan } from '../lib/artifactPipeline';
 import { classifyPath, type ProjectFile } from '../lib/extensionProject';
+import { validationSubjectSourceHash } from '../../shared/projectValidationInput';
 import { PROJECT_RULES_MAX_BYTES, PROJECT_RULES_PATH } from '../lib/projectRules';
 import { decodeValidationSourceText, VALIDATION_TEXT_ENCODING_UNAVAILABLE } from '../lib/validationEvidence';
 import { decodeProjectCheckManifest, PROJECT_CHECKS_MAX_BYTES, PROJECT_CHECKS_PATH } from './projectCheckProposal';
@@ -186,3 +187,53 @@ export function captureDeploymentSnapshot(plan: ArtifactPlan, format: 'loose' | 
 }
 
 export type DeploymentSnapshot = ReturnType<typeof captureDeploymentSnapshot>;
+
+/**
+ * Zero-copy deploy-candidate hash probe (#138): computes the exact `sourceHash` and
+ * `artifactPlanHash` that `captureDeploymentSnapshot` produces for a pure disk source folder,
+ * without materializing temporary files on disk.
+ */
+export function computeDeployCandidateIdentity(
+  sourceRoot: string,
+  format: 'loose' | 'catalog' = 'loose',
+): { ok: true; sourceHash: string; artifactPlanHash: string } | { ok: false; reason: string } {
+  const plan = buildArtifactPlan({ sourceRoot });
+  if (!plan.ok) return { ok: false, reason: plan.errors.join('; ') || 'Artifact plan unavailable.' };
+  const files: ProjectFile[] = [];
+  let textBytes = 0;
+  try {
+    for (const entry of plan.entries) {
+      if (entry.path.toLowerCase() === PROJECT_CHECKS_PATH) {
+        const content = entry.size <= PROJECT_CHECKS_MAX_BYTES
+          ? decodeProjectCheckManifest(readVerifiedArtifactFile(path.join(sourceRoot, ...entry.path.split('/')), entry, PROJECT_CHECKS_MAX_BYTES))
+          : undefined;
+        files.push({ path: entry.path, kind: 'other', content });
+        continue;
+      }
+      const isRules = entry.path.toLowerCase() === PROJECT_RULES_PATH;
+      if (isRules && entry.size > PROJECT_RULES_MAX_BYTES) {
+        return { ok: false, reason: `forge.rules.json exceeds ${PROJECT_RULES_MAX_BYTES} bytes.` };
+      }
+      if (!/\.(xml|lua)$/i.test(entry.path) && !isRules) continue;
+      if (entry.size > MAX_TEXT_BYTES || files.length >= MAX_TEXT_FILES || textBytes + entry.size > MAX_TOTAL_TEXT_BYTES) {
+        if (isRules) return { ok: false, reason: `${PROJECT_RULES_PATH} could not be validated.` };
+        continue;
+      }
+      const bytes = readVerifiedArtifactFile(path.join(sourceRoot, ...entry.path.split('/')), entry, isRules ? PROJECT_RULES_MAX_BYTES : MAX_TEXT_BYTES);
+      const content = decodeValidationSourceText(bytes);
+      if (content === undefined) {
+        if (isRules) return { ok: false, reason: `${PROJECT_RULES_PATH} could not be decoded as UTF-8.` };
+        continue;
+      }
+      files.push({ path: entry.path, kind: classifyPath(entry.path), content });
+      textBytes += bytes.length;
+    }
+    return {
+      ok: true,
+      sourceHash: validationSubjectSourceHash(files),
+      artifactPlanHash: artifactPlanIdentity(plan, format),
+    };
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+  }
+}
