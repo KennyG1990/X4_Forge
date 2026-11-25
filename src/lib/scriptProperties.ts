@@ -25,7 +25,7 @@
  * XML parsing: xmldom (nested structure), per the house rule — regex only for flat files.
  */
 
-import { DOMParser } from '@xmldom/xmldom';
+import { DOMParser, type Element } from '@xmldom/xmldom';
 import { parseMdScriptRoot } from './cueLineage';
 import { parseExpressionChains } from './expressionAst';
 import { createSourcePositionLocator, createXmlNodePositionLocator } from './xmlSourceSpans';
@@ -336,6 +336,7 @@ export function suggestProperties(segment: string, candidates: Iterable<string>,
 }
 
 const PROSE_XML_ATTRIBUTES = new Set(['comment', 'result', 'description']);
+const NON_EXPRESSION_DECLARATION_NAME_ELEMENTS = new Set(['mdscript', 'aiscript', 'cue', 'library', 'param', 'order']);
 const MD_STRING_MARKERS = /('|&apos;|&#(?:0*39|x0*27);)|\\|&#(?:0*92|x0*5[cC]);/g;
 const blankXmlSpan = (source: string) => source.replace(/[^\r\n]/g, ' ');
 
@@ -367,18 +368,23 @@ function maskMdAttributeStrings(value: string): string {
 
 type XmlAttributeSpan = { element: string; name: string; start: number; end: number; value: string };
 
-/** Hide opaque markup, prose attributes and MD strings at their original source widths. */
+/** Hide opaque markup, prose/declaration attributes and MD strings at their original source widths. */
 export function maskNonExpressionSpans(xml: string, onAttribute?: (attribute: XmlAttributeSpan) => void): string {
   const source = maskXmlOpaqueMarkup(String(xml || ''));
   const parts: string[] = [];
   let cursor = 0;
   for (const { start, token, complete } of scanXmlTagTokens(source)) {
-    const element = onAttribute && complete ? /^<([A-Za-z_][\w.:-]*)\b/.exec(token)?.[1] : undefined;
+    const tagElement = /^<([A-Za-z_][\w.:-]*)\b/.exec(token)?.[1];
+    const lowerElement = tagElement?.toLowerCase();
+    const element = onAttribute && complete ? tagElement : undefined;
     const attributes: XmlAttributeSpan[] | undefined = element ? [] : undefined;
     for (const match of token.matchAll(/\s+([A-Za-z_][\w.:-]*)\s*=\s*(["'])([\s\S]*?)\2/g)) {
       const [, name, quote, value] = match;
+      const lowerName = name.toLowerCase();
+      const isDeclarationIdentifier = (lowerName === 'name' && lowerElement !== undefined && NON_EXPRESSION_DECLARATION_NAME_ELEMENTS.has(lowerElement))
+        || (lowerName === 'id' && lowerElement === 'order');
       const end = start + match.index + match[0].length;
-      if (PROSE_XML_ATTRIBUTES.has(name.toLowerCase())) {
+      if (PROSE_XML_ATTRIBUTES.has(lowerName) || isDeclarationIdentifier) {
         const attributeStart = start + match.index;
         parts.push(source.slice(cursor, attributeStart), blankXmlSpan(match[0]));
       } else {
@@ -748,40 +754,205 @@ type ScriptPropertyOptions = {
   correctionAttribute?: (element: string, attribute: string) => boolean;
 };
 type PropertyPosition = Pick<ScriptPropertyFinding, 'line' | 'column'>;
-type PropertyReadSpan = { start: number; end: number };
+interface IsClassGuardSpan {
+  start: number;
+  end: number;
+  receiverChainLower: string;
+  targetDatatype: string;
+}
 
-const NPC_TARGET_GUARD = 'player.target.isclass.npc';
 const POSITIVE_GUARD_ATTRIBUTES = new Set(['value', 'chance', 'weight', 'comment']);
+const CONTROL_FLOW_ANCESTOR_TAGS = new Set(['do_if', 'do_elseif', 'do_else', 'do_all', 'do_for_each', 'do_while']);
+const ACTIONS_OWNER_TAGS = new Set(['cue', 'library', 'attention', 'aiscript']);
+const POSITIVE_ISCLASS_GUARD_RE = /^@?([A-Za-z_$][\w$.]*)\.isclass\.([A-Za-z_]\w*)$/;
 
-function npcGuardReadSpans(xml: string): PropertyReadSpan[] {
-  if (!xml.includes(NPC_TARGET_GUARD)) return [];
-  const root = parseMdScriptRoot(xml);
-  if (!root || root.namespaceURI) return [];
+function parseScriptDocumentRoot(xml: string): Element | null {
+  const mdRoot = parseMdScriptRoot(xml);
+  if (mdRoot && !mdRoot.namespaceURI) return mdRoot;
+  let malformed = false;
+  try {
+    const root = new DOMParser({ onError: () => { malformed = true; } })
+      .parseFromString(xml.replace(/^\uFEFF/, ''), 'text/xml').documentElement;
+    return !malformed && root && !root.namespaceURI && root.nodeName === 'aiscript' ? root : null;
+  } catch {
+    return null;
+  }
+}
 
-  const spans: PropertyReadSpan[] = [];
+function collectDeclaredMdCueNames(root: Element | null): ReadonlySet<string> {
+  if (!root || root.nodeName !== 'mdscript') return new Set();
+  const names = new Set<string>();
+  for (const cue of Array.from(root.getElementsByTagName('cue'))) {
+    if (cue.namespaceURI) continue;
+    const rawName = cue.getAttribute('name')?.trim();
+    if (rawName && /^[A-Za-z_]\w*$/.test(rawName)) names.add(rawName);
+  }
+  return names;
+}
+
+function datatypeRootAncestor(model: ScriptPropertyModel, datatype: string): string | undefined {
+  let current: string | undefined = datatype.toLowerCase();
+  const seen = new Set<string>();
+  let last: string | undefined;
+  while (current && !seen.has(current)) {
+    const entry = model.datatypes.get(current);
+    if (!entry) break;
+    seen.add(current);
+    last = entry.name;
+    current = entry.parent;
+  }
+  return last;
+}
+
+function sharesDatatypeRoot(model: ScriptPropertyModel, left: string, right: string): boolean {
+  const leftRoot = datatypeRootAncestor(model, left);
+  const rightRoot = datatypeRootAncestor(model, right);
+  return Boolean(leftRoot && leftRoot === rightRoot);
+}
+
+function hasValidActionsAncestor(branch: Element): boolean {
+  let cursor = branch.parentElement;
+  while (cursor) {
+    if (cursor.namespaceURI) return false;
+    if (cursor.tagName === 'actions') {
+      const owner = cursor.parentElement;
+      return Boolean(owner && !owner.namespaceURI && ACTIONS_OWNER_TAGS.has(owner.tagName));
+    }
+    if (!CONTROL_FLOW_ANCESTOR_TAGS.has(cursor.tagName)) return false;
+    cursor = cursor.parentElement;
+  }
+  return false;
+}
+
+function parsePositiveIsClassClause(clause: string, index: ScriptPropertyIndex): { receiverChainLower: string; targetDatatype: string } | null {
+  let trimmed = clause.trim();
+  while (trimmed.startsWith('(') && trimmed.endsWith(')')) {
+    let depth = 0;
+    let balanced = true;
+    for (let i = 0; i < trimmed.length; i++) {
+      const ch = trimmed[i];
+      if (ch === '(') depth++;
+      else if (ch === ')') {
+        depth--;
+        if (depth === 0 && i < trimmed.length - 1) {
+          balanced = false;
+          break;
+        }
+      }
+    }
+    if (!balanced || depth !== 0) break;
+    trimmed = trimmed.slice(1, -1).trim();
+  }
+  const match = POSITIVE_ISCLASS_GUARD_RE.exec(trimmed);
+  if (!match) return null;
+  const targetDatatype = match[2].toLowerCase();
+  const targetEntry = index.model.datatypes.get(targetDatatype);
+  if (!targetEntry || targetEntry.pseudo) return null;
+  return { receiverChainLower: match[1].toLowerCase(), targetDatatype };
+}
+
+function collectXmlIsClassGuardSpans(xml: string, root: Element | null, index: ScriptPropertyIndex): IsClassGuardSpan[] {
+  if (!root || !xml.includes('.isclass.')) return [];
+  const spans: IsClassGuardSpan[] = [];
   const locate = createXmlNodePositionLocator(xml);
-  for (const branch of Array.from(root.getElementsByTagName('do_if'))) {
-    const actions = branch.parentElement;
-    const owner = actions?.parentElement;
-    if (branch.namespaceURI || actions?.tagName !== 'actions' || actions.namespaceURI
-      || (owner?.tagName !== 'cue' && owner?.tagName !== 'library') || owner.namespaceURI
-      || branch.getAttribute('value')?.trim() !== NPC_TARGET_GUARD
+  const pushAttributeSpan = (attrNode: ReturnType<Element['getAttributeNode']>, guard: { receiverChainLower: string; targetDatatype: string }) => {
+    if (!attrNode) return;
+    const quote = locate.offset(attrNode);
+    if (quote === undefined) return;
+    const delimiter = xml[quote];
+    if (delimiter !== '"' && delimiter !== "'") return;
+    const end = xml.indexOf(delimiter, quote + 1);
+    if (end > quote) {
+      spans.push({ start: quote + 1, end, ...guard });
+    }
+  };
+
+  const branches = [
+    ...Array.from(root.getElementsByTagName('do_if')),
+    ...Array.from(root.getElementsByTagName('do_elseif')),
+  ];
+  for (const branch of branches) {
+    if (branch.namespaceURI || !hasValidActionsAncestor(branch)
       || Array.from(branch.attributes).some(attribute => !POSITIVE_GUARD_ATTRIBUTES.has(attribute.name))) continue;
+    const guard = parsePositiveIsClassClause(branch.getAttribute('value') ?? '', index);
+    if (!guard) continue;
+    const rootVarLower = guard.receiverChainLower.startsWith('$') ? guard.receiverChainLower.split('.')[0] : undefined;
 
     for (const child of Array.from(branch.children)) {
-      if (child.namespaceURI || child.children.length) break;
-      const read = child.tagName === 'debug_text' ? child.getAttributeNode('text')
-        : child.tagName === 'set_value' && /^\$[A-Za-z_]\w*$/.test(child.getAttribute('name') ?? '')
-          && !child.hasAttribute('operation') ? child.getAttributeNode('exact') : null;
-      // The next action could change the selected target. Do not carry the guard across it.
-      if (!read) break;
-      const quote = locate.offset(read);
-      if (quote === undefined) continue;
-      const delimiter = xml[quote];
-      if (delimiter !== '"' && delimiter !== "'") continue;
-      const end = xml.indexOf(delimiter, quote + 1);
-      if (end > quote) spans.push({ start: quote + 1, end });
+      if (child.namespaceURI) break;
+      if (child.tagName === 'debug_text' && child.children.length === 0) {
+        pushAttributeSpan(child.getAttributeNode('text'), guard);
+        continue;
+      }
+      if (child.tagName === 'set_value' && child.children.length === 0
+        && /^\$[A-Za-z_]\w*$/.test(child.getAttribute('name') ?? '')
+        && !child.hasAttribute('operation')) {
+        pushAttributeSpan(child.getAttributeNode('exact'), guard);
+        if (rootVarLower && child.getAttribute('name')?.trim().toLowerCase() === rootVarLower) break;
+        continue;
+      }
+      if (child.tagName === 'substitute_text' && /^\$[A-Za-z_]\w*$/.test(child.getAttribute('text') ?? '')) {
+        const children = Array.from(child.children);
+        if (children.some(grand => grand.namespaceURI || grand.tagName !== 'replace' || grand.children.length > 0)) break;
+        pushAttributeSpan(child.getAttributeNode('source'), guard);
+        for (const rep of children) {
+          pushAttributeSpan(rep.getAttributeNode('string'), guard);
+          pushAttributeSpan(rep.getAttributeNode('with'), guard);
+        }
+        if (rootVarLower && child.getAttribute('text')?.trim().toLowerCase() === rootVarLower) break;
+        continue;
+      }
+      // Any other action could mutate state or suspend execution; stop narrowing.
+      break;
     }
+  }
+  return spans.sort((a, b) => a.start - b.start || a.end - b.end);
+}
+
+function splitTopLevelKeywordOperator(maskedExpr: string, keyword: 'and' | 'or'): { start: number; end: number; text: string }[] {
+  const parts: { start: number; end: number; text: string }[] = [];
+  let paren = 0;
+  let bracket = 0;
+  let brace = 0;
+  let partStart = 0;
+  const len = maskedExpr.length;
+  const kwLen = keyword.length;
+  const isIdentOrDot = (ch: string | undefined) => Boolean(ch && /[A-Za-z0-9_$.]/.test(ch));
+  for (let i = 0; i < len; i++) {
+    const ch = maskedExpr[i];
+    if (ch === '(') paren++;
+    else if (ch === ')') paren = Math.max(0, paren - 1);
+    else if (ch === '[') bracket++;
+    else if (ch === ']') bracket = Math.max(0, bracket - 1);
+    else if (ch === '{') brace++;
+    else if (ch === '}') brace = Math.max(0, brace - 1);
+    else if (paren === 0 && bracket === 0 && brace === 0
+      && maskedExpr.slice(i, i + kwLen).toLowerCase() === keyword
+      && !isIdentOrDot(maskedExpr[i - 1])
+      && !isIdentOrDot(maskedExpr[i + kwLen])) {
+      parts.push({ start: partStart, end: i, text: maskedExpr.slice(partStart, i) });
+      i += kwLen - 1;
+      partStart = i + 1;
+    }
+  }
+  parts.push({ start: partStart, end: len, text: maskedExpr.slice(partStart, len) });
+  return parts;
+}
+
+function collectConjunctionIsClassGuards(maskedExpr: string, baseOffset: number, index: ScriptPropertyIndex): IsClassGuardSpan[] {
+  if (!maskedExpr.includes('.isclass.')) return [];
+  if (splitTopLevelKeywordOperator(maskedExpr, 'or').length > 1) return [];
+  const conjuncts = splitTopLevelKeywordOperator(maskedExpr, 'and');
+  if (conjuncts.length < 2) return [];
+  const spans: IsClassGuardSpan[] = [];
+  for (let i = 0; i < conjuncts.length - 1; i++) {
+    const guard = parsePositiveIsClassClause(conjuncts[i].text, index);
+    if (!guard) continue;
+    spans.push({
+      start: baseOffset + conjuncts[i + 1].start,
+      end: baseOffset + maskedExpr.length,
+      ...guard,
+    });
   }
   return spans;
 }
@@ -915,29 +1086,43 @@ export function traceScriptPropertyExpression(
  */
 export function lintScriptPropertyChains(xml: string, index: ScriptPropertyIndex, opts?: ScriptPropertyOptions): ScriptPropertyFinding[] {
   if (!index.loaded) return [];
-  const guardedReads = index.model.datatypes.has('npc') ? npcGuardReadSpans(xml) : [];
+  const hasIsClass = xml.includes('.isclass.');
+  const needsCueRootCheck = /\b[A-Z]\w*\./.test(xml) && xml.includes('<cue');
+  const scriptRoot = (hasIsClass || needsCueRootCheck) ? parseScriptDocumentRoot(xml) : null;
+  const declaredCueNames = needsCueRootCheck ? collectDeclaredMdCueNames(scriptRoot) : undefined;
+  const guardedReads = hasIsClass ? collectXmlIsClassGuardSpans(xml, scriptRoot, index) : [];
   const correctionSpans: { start: number; end: number }[] = [];
+  const isClassAttrSpans: { start: number; end: number }[] = [];
   const accepts = opts?.correctionAttribute;
-  const masked = maskNonExpressionSpans(xml, accepts && (attribute => {
-    if (!attribute.value.includes('&') && accepts(attribute.element, attribute.name)) {
+  const needAttrCallback = Boolean(accepts || hasIsClass);
+  const masked = maskNonExpressionSpans(xml, needAttrCallback ? (attribute => {
+    if (accepts && !attribute.value.includes('&') && accepts(attribute.element, attribute.name)) {
       correctionSpans.push({ start: attribute.start, end: attribute.end });
     }
-  }));
-  return lintPropertyChains(xml, masked, index, opts, guardedReads, correctionSpans);
+    if (hasIsClass && attribute.value.includes('.isclass.')) {
+      isClassAttrSpans.push({ start: attribute.start, end: attribute.end });
+    }
+  }) : undefined);
+  for (const attr of isClassAttrSpans) {
+    guardedReads.push(...collectConjunctionIsClassGuards(masked.slice(attr.start, attr.end), attr.start, index));
+  }
+  if (guardedReads.length > 1) guardedReads.sort((a, b) => a.start - b.start || a.end - b.end);
+  return lintPropertyChains(xml, masked, index, opts, guardedReads, correctionSpans, declaredCueNames);
 }
 
 export function lintScriptPropertyExpression(expression: string, index: ScriptPropertyIndex, opts?: ScriptPropertyOptions): ScriptPropertyFinding[] {
   if (!index.loaded) return [];
   const masked = expression.replace(/'(?:\\[\s\S]|[^'\\])*'|"(?:\\[\s\S]|[^"\\])*"/g,
     literal => literal.replace(/[^\r\n]/g, ' '));
-  return lintPropertyChains(expression, masked, index, opts);
+  const conjunctionGuards = collectConjunctionIsClassGuards(masked, 0, index);
+  return lintPropertyChains(expression, masked, index, opts, conjunctionGuards);
 }
 
 function lintPropertyChains(source: string, masked: string, index: ScriptPropertyIndex, opts?: ScriptPropertyOptions,
-  guardedReads: PropertyReadSpan[] = [], correctionSpans: { start: number; end: number }[] = [],
+  guardedReads: IsClassGuardSpan[] = [], correctionSpans: { start: number; end: number }[] = [],
+  declaredCueNames?: ReadonlySet<string>,
 ): ScriptPropertyFinding[] {
   const out: ScriptPropertyFinding[] = [];
-  let guardIndex = 0;
   let attributeIndex = 0;
   const locate = createSourcePositionLocator(source);
   const headCache = new Map<string, PropertyHeadLookup>();
@@ -946,12 +1131,12 @@ function lintPropertyChains(source: string, masked: string, index: ScriptPropert
     const correctionSpan = correctionSpans[attributeIndex];
     const rootRaw = parsed.root.raw;
     const rootLower = rootRaw.toLowerCase();
-    while (guardIndex < guardedReads.length && guardedReads[guardIndex].end <= parsed.start) guardIndex++;
-    const guardRead = guardedReads[guardIndex];
-    const guardedTarget = guardRead && parsed.start >= guardRead.start && parsed.end <= guardRead.end
-      && rootRaw === 'player' && parsed.segments[0].raw === 'target';
+    const activeGuards = guardedReads.length
+      ? guardedReads.filter(guard => parsed.start >= guard.start && parsed.end <= guard.end)
+      : [];
     const isVar = rootRaw.startsWith('$');
-    const keywordEntry = !isVar ? index.model.keywords.get(rootLower) : undefined;
+    const isDeclaredLocalCue = !isVar && rootRaw !== rootLower && Boolean(declaredCueNames?.has(rootRaw));
+    const keywordEntry = (!isVar && !isDeclaredLocalCue) ? index.model.keywords.get(rootLower) : undefined;
     let states: PathState[];
     let firstSegment = 0;
     let findingRoot: string | undefined;
@@ -959,6 +1144,10 @@ function lintPropertyChains(source: string, masked: string, index: ScriptPropert
     if (isVar || UNTYPED_ROOTS.has(rootLower)) {
       states = variablePathContexts(rootRaw, index, opts)
         .map(context => ({ kind: 'context' as const, context }));
+    } else if (isDeclaredLocalCue) {
+      if (!index.model.datatypes.has('cue')) continue;
+      states = [{ kind: 'context', context: { kind: 'datatype', name: 'cue' } }];
+      findingRoot = rootRaw;
     } else if (!keywordEntry) {
       continue; // unknown bare identifier roots are not property chains we understand
     } else if (keywordEntry.dynamic) {
@@ -981,7 +1170,7 @@ function lintPropertyChains(source: string, masked: string, index: ScriptPropert
 
     let chain = rootRaw + parsed.segments.slice(0, firstSegment).map(segment => `.${segment.raw}`).join('');
     let stopQuietly = false;
-    let narrowedTarget = false;
+    let narrowedGuard: { datatype: string; atSegmentIndex: number } | undefined;
     for (let segmentIndex = firstSegment; segmentIndex < parsed.segments.length; segmentIndex++) {
       const segment = parsed.segments[segmentIndex];
       chain += `.${segment.raw}`;
@@ -1022,16 +1211,39 @@ function lintPropertyChains(source: string, masked: string, index: ScriptPropert
           pushFinding(out, buildSubselectorFinding(locate(pending.anchor.at), pending.anchor.chainAt, pending.anchor.head, index, opts));
         } else {
           const onlyState = states.length === 1 ? states[0] : undefined;
+          const guardedRootVar = isVar && segmentIndex === 0
+            ? activeGuards.find(guard => guard.receiverChainLower === rootLower)
+            : undefined;
+          const narrowedImmediate = narrowedGuard && segmentIndex === narrowedGuard.atSegmentIndex + 1
+            ? narrowedGuard.datatype
+            : undefined;
           const declared = findingRoot && onlyState?.kind === 'context' && onlyState.context.kind === 'datatype'
             ? onlyState.context.name : undefined;
-          const hint = isVar && segmentIndex === 0 ? knownVariableDatatype(rootRaw, index, opts) : undefined;
-          const typeContext: ScriptPropertyFinding['typeContext'] = declared
-            ? { datatype: declared, confidence: narrowedTarget && segmentIndex === 1 ? 'guarded' : 'declared' }
-            : hint ? { datatype: hint, confidence: 'hint' as const } : undefined;
-          const candidates = candidateHeads(index, states);
+          const rootHint = isVar ? knownVariableDatatype(rootRaw, index, opts) : undefined;
+          const hint = rootHint === undefined
+            ? undefined
+            : segmentIndex === 0
+              ? rootHint
+              : (() => {
+                const prefix = rootRaw + parsed.segments.slice(0, segmentIndex).map(part => `.${part.raw}`).join('');
+                const traced = traceScriptPropertyExpression(prefix, index, { variableTypes: { [rootRaw]: rootHint } });
+                return traced.status === 'resolved' && traced.resultType && index.model.datatypes.has(traced.resultType)
+                  ? traced.resultType
+                  : undefined;
+              })();
+          const typeContext: ScriptPropertyFinding['typeContext'] = narrowedImmediate
+            ? { datatype: narrowedImmediate, confidence: 'guarded' }
+            : guardedRootVar
+              ? { datatype: guardedRootVar.targetDatatype, confidence: 'guarded' }
+              : declared
+                ? { datatype: declared, confidence: 'declared' }
+                : hint ? { datatype: hint, confidence: 'hint' as const } : undefined;
+          const candidates = guardedRootVar
+            ? candidateHeads(index, [{ kind: 'context', context: { kind: 'datatype', name: guardedRootVar.targetDatatype } }])
+            : candidateHeads(index, states);
           const finding = buildFinding(locate(segment.start), chain, segment.raw, findingRoot, candidates, opts, typeContext);
           if (correctionSpan && correctionSpan.start <= parsed.start && parsed.end <= correctionSpan.end
-            && typeContext?.confidence === 'declared' && firstSegment === 0 && !narrowedTarget
+            && typeContext?.confidence === 'declared' && firstSegment === 0 && !narrowedGuard
             && segmentIndex === parsed.segments.length - 1
             && parsed.segments.every(part => part.kind === 'property' && !part.optional)
             && source.slice(parsed.start, parsed.end) === parsed.raw
@@ -1044,11 +1256,15 @@ function lintPropertyChains(source: string, masked: string, index: ScriptPropert
         stopQuietly = true;
         break;
       }
-      const next = nextStates.length === 1 ? nextStates[0] : undefined;
-      if (guardedTarget && segmentIndex === 0 && next?.kind === 'context'
-        && next.context.kind === 'datatype' && next.context.name === 'object') {
-        narrowedTarget = true;
-        states = [{ kind: 'context', context: { kind: 'datatype', name: 'npc' } }];
+      const matchingGuard = activeGuards.length
+        ? activeGuards.find(guard => guard.receiverChainLower === chain.toLowerCase())
+        : undefined;
+      if (matchingGuard && nextStates.some(state =>
+        state.kind === 'context'
+        && state.context.kind === 'datatype'
+        && sharesDatatypeRoot(index.model, state.context.name, matchingGuard.targetDatatype))) {
+        narrowedGuard = { datatype: matchingGuard.targetDatatype, atSegmentIndex: segmentIndex };
+        states = [{ kind: 'context', context: { kind: 'datatype', name: matchingGuard.targetDatatype } }];
       } else {
         states = nextStates;
       }
@@ -1607,6 +1823,110 @@ export function runScriptPropertiesSelftest(): {
   const replaced = lintScriptPropertyChains('<do_if value="$known.replacement"/>', fallback, fallbackOpts);
   ok('path-head lookup is rebuilt after a model-only receiver changes',
     beforeChange.length === 0 && removed.length === 1 && removed[0].segment === 'first' && replaced.length === 0);
+
+  // --- Unit 60 (#80): generalized isclass branch/conjunction narrowing, multi-segment hints, declaration masking & local cue roots ---
+  const doElseIfShipXml = mdActions(
+    '<do_if value="player.target.isclass.npc"><debug_text text="player.target.npctemplate"/></do_if>'
+    + '<do_elseif value="player.target.isclass.ship"><debug_text text="player.target.cargo.free.all"/><debug_text text="player.target.cargoo"/></do_elseif>',
+  );
+  const doElseIfShipFindings = lintScriptPropertyChains(doElseIfShipXml, idx);
+  ok('do_elseif isclass guard narrows compatible receiver and tags guarded typo',
+    doElseIfShipFindings.length === 1
+    && doElseIfShipFindings[0].segment === 'cargoo'
+    && doElseIfShipFindings[0].typeContext?.datatype === 'ship'
+    && doElseIfShipFindings[0].typeContext?.confidence === 'guarded'
+    && doElseIfShipFindings[0].suggestions.includes('cargo'),
+    doElseIfShipFindings);
+
+  const highwayIdx = buildScriptPropertyIndex(SCRIPT_PROPERTIES_FIXTURE.replace(
+    '</scriptproperties>',
+    '<datatype name="zone" type="component"><property name="sector" type="component"/></datatype>'
+    + '<datatype name="highway" type="zone"><property name="destination" type="zone"/></datatype>'
+    + '<datatype name="room" type="component"/>'
+    + '<datatype name="dockingbay" type="room"><property name="dockstate" type="string"/></datatype>'
+    + '<datatype name="cue"><property name="state" type="string"/></datatype>'
+    + '<keyword name="gamestart"><property name="seed" type="integer"/></keyword>'
+    + '<property-unused/>'
+    + '</scriptproperties>',
+  ).replace('<property name="name" result="component name" type="string" />', '<property name="name" result="component name" type="string" /><property name="zone" type="zone" /><property name="parent" type="component" /><property name="assignedcontrolled" type="controllable" />'));
+
+  const substituteGuardXml = mdActions(
+    '<do_if value="$killed.sector"><set_value name="$loc" exact="$killed.sector.name"/></do_if>'
+    + '<do_elseif value="$killed.zone.isclass.highway">'
+    + '<substitute_text text="$loc" source="{1016,4}"><replace string="\'$CLUSTER$\'" with="$killed.zone.destination.sector.name"/></substitute_text>'
+    + '<set_value name="$killed" exact="$killed.zone.destination"/>'
+    + '<debug_text text="$killed.zone.destination"/>'
+    + '</do_elseif>',
+  );
+  const substituteFindings = lintScriptPropertyChains(substituteGuardXml, highwayIdx);
+  ok('do_elseif zone.isclass.highway narrows substitute_text/replace and stops after root-variable overwrite',
+    substituteFindings.length === 1
+    && substituteFindings[0].chain === '$killed.zone.destination'
+    && substituteFindings[0].segment === 'destination',
+    substituteFindings);
+
+  const conjunctionXml = mdActions(
+    '<do_if value="$NPC.assignedcontrolled.parent.isclass.dockingbay and $NPC.assignedcontrolled.parent.dockstate == \'default\'"/>'
+    + '<do_if value="$NPC.assignedcontrolled.parent.isclass.dockingbay and $NPC.assignedcontrolled.parent.dockstat == \'default\'"/>'
+    + '<do_if value="$NPC.assignedcontrolled.parent.isclass.dockingbay or $NPC.assignedcontrolled.parent.dockstate == \'default\'"/>'
+    + '<do_if value="not $NPC.assignedcontrolled.parent.isclass.dockingbay and $NPC.assignedcontrolled.parent.dockstate == \'default\'"/>',
+  );
+  const conjunctionFindings = lintScriptPropertyChains(conjunctionXml, highwayIdx);
+  ok('same-expression positive and-conjunction narrows subsequent conjuncts while rejecting or/not',
+    conjunctionFindings.length === 3
+    && conjunctionFindings[0].segment === 'dockstat'
+    && conjunctionFindings[0].typeContext?.datatype === 'dockingbay'
+    && conjunctionFindings[0].typeContext?.confidence === 'guarded'
+    && conjunctionFindings[1].segment === 'dockstate'
+    && conjunctionFindings[1].typeContext?.datatype === 'component'
+    && conjunctionFindings[1].typeContext?.confidence === 'hint'
+    && conjunctionFindings[2].segment === 'dockstate'
+    && conjunctionFindings[2].typeContext?.datatype === 'component'
+    && conjunctionFindings[2].typeContext?.confidence === 'hint',
+    conjunctionFindings);
+
+  const aiScriptGuardXml = '<aiscript name="player.interaction.budget"><order id="player.interaction"/><attention min="unknown"><actions>'
+    + '<do_if value="player.target.isclass.ship"><debug_text text="player.target.cargo.free.all"/><debug_text text="player.target.cargoo"/></do_if>'
+    + '</actions></attention></aiscript>';
+  const aiScriptFindings = lintScriptPropertyChains(aiScriptGuardXml, idx);
+  ok('aiscript masks declaration name/id attributes and narrows positive isclass guards',
+    aiScriptFindings.length === 1
+    && aiScriptFindings[0].segment === 'cargoo'
+    && aiScriptFindings[0].typeContext?.datatype === 'ship'
+    && aiScriptFindings[0].typeContext?.confidence === 'guarded',
+    aiScriptFindings);
+
+  const gamestartCueXml = '<mdscript name="x4ep1_pirates"><cues><cue name="Gamestart"><actions>'
+    + '<do_if value="Gamestart.state == \'complete\'"><debug_text text="Gamestart.stat"/></do_if>'
+    + '<debug_text text="gamestart.seed"/>'
+    + '<debug_text text="gamestart.state"/>'
+    + '</actions></cue></cues></mdscript>';
+  const gamestartCueFindings = lintScriptPropertyChains(gamestartCueXml, highwayIdx);
+  ok('mixed-case local cue root resolves as cue without masking lowercase keyword checks',
+    gamestartCueFindings.length === 2
+    && gamestartCueFindings[0].chain === 'Gamestart.stat'
+    && gamestartCueFindings[0].typeContext?.datatype === 'cue'
+    && gamestartCueFindings[0].typeContext?.confidence === 'declared'
+    && gamestartCueFindings[1].chain === 'gamestart.state'
+    && gamestartCueFindings[1].root === 'gamestart',
+    gamestartCueFindings);
+
+  const multiSegHint = lintScriptPropertyExpression('$s.boardingoperation.attacker', idx, { variableTypes: { $s: 'ship' } });
+  const multiSegCargoHint = lintScriptPropertyExpression('$s.cargo.fre', idx, { variableTypes: { $s: 'ship' } });
+  ok('multi-segment hinted variable chains retain hint provenance on downstream segments',
+    multiSegHint.length === 1
+    && multiSegHint[0].typeContext?.datatype === 'operation'
+    && multiSegHint[0].typeContext?.confidence === 'hint'
+    && multiSegCargoHint.length === 1
+    && multiSegCargoHint[0].typeContext?.datatype === 'containercargolist'
+    && multiSegCargoHint[0].typeContext?.confidence === 'hint'
+    && multiSegCargoHint[0].suggestions.includes('free'),
+    { multiSegHint, multiSegCargoHint });
+
+  const incompatibleGuard = lintScriptPropertyChains(mdActions('<do_if value="faction.argon.isclass.npc"><debug_text text="faction.argon.npctemplate"/></do_if>'), idx);
+  ok('incompatible non-component receiver family refuses bogus isclass narrowing',
+    incompatibleGuard.some(f => f.segment === 'npctemplate' && f.typeContext?.datatype === 'faction' && f.typeContext?.confidence === 'declared'),
+    incompatibleGuard);
 
   const passed = checks.filter(c => c.pass).length;
   const allPassed = passed === checks.length;
