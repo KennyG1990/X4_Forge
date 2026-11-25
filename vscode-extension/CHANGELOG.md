@@ -3,6 +3,13 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
+## 0.0.97 — 2026-11-25
+
+- Correlate workspace file-write failures with a request ID and stage breakdown, verify disk state via readback before offering a manual retry, and recover cleanly without blind rewrites when intended bytes have already landed.
+- Track Mission Director initial-state variable availability across value-returning run_actions libraries, create_order and create_trade_order result names, post-block signal_cue actions, and positive null-suppressed branch guards to eliminate false uninitialized-read coverage gaps.
+- Jump directly to Mission Director call parameter declarations on run_actions and cue ref arguments and to authored cue declarations inside Mission Director expressions, including unsaved sibling edits.
+- Provide specific deterministic remediation guidance across every shipped Mission Director pitfall, library and AI script call-parameter check, expression syntax rule, Lua and X4 UI table constraint, and extension manifest diagnostic, and prevent idle driver-lease polls from causing extra UI re-renders.
+
 ## 0.0.96 — 2026-11-25
 
 - Prune stale backend discovery entries automatically on IDE startup, expose live host identity on schema and reference probes, refuse isolated lab or release hosts on default discovery, and cold-start an owned supervised local backend automatically from headless CLI or MCP sessions when the IDE is closed.
