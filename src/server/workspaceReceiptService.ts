@@ -43,6 +43,7 @@ import {
   type ActionReceiptRollbackCallback,
   type ActionReceiptTransactionCode,
   type ActionReceiptTransactionContext,
+  type ActionReceiptTransactionKernelTimingsMs,
   type ActionReceiptTransactionProjection,
   type ActionReceiptTransactionResult,
   type ActionReceiptTransactionStore,
@@ -96,6 +97,19 @@ export type WorkspaceReceiptMayMutate = (
   context: ActionReceiptTransactionContext,
 ) => boolean | { ok?: boolean } | Promise<boolean | { ok?: boolean }>;
 
+export interface WorkspaceReceiptTransactionTimingsMs {
+  policyAndCandidateMs: number;
+  queueWaitMs: number;
+  replayLookupMs: number;
+  recoveryPrepareMs: number;
+  receiptPrepareMs: number;
+  mayMutateMs: number;
+  mutateMs: number;
+  postconditionMs: number;
+  receiptCommitMs: number;
+  serviceTotalMs: number;
+}
+
 /**
  * Logical, hash-only transaction description supplied by a later route/domain adapter.
  * `operationId` remains caller-owned and is intentionally not inferred by this service.
@@ -117,6 +131,8 @@ export interface WorkspaceReceiptTransactionDescription {
   mayMutate?: WorkspaceReceiptMayMutate;
   /** Same logical key serializes the complete transaction, including rollback/finalization. */
   serializationKey: unknown;
+  /** Optional fail-soft stage timing observer; never alters receipt payloads, hashes, or result keys. */
+  onTimings?: (timings: WorkspaceReceiptTransactionTimingsMs) => void;
 }
 
 export interface WorkspaceReceiptServiceSuccess {
@@ -403,147 +419,213 @@ export class WorkspaceReceiptService {
   }
 
   async execute(description: WorkspaceReceiptTransactionDescription): Promise<WorkspaceReceiptServiceResult> {
-    if (!isOperationId(description.operationId)) return failure('ACTION_RECEIPT_OPERATION_ID_INVALID');
+    const monotonicNowMs = (): number => (typeof globalThis.performance?.now === 'function' ? globalThis.performance.now() : Date.now());
+    const roundDurationMs = (elapsedMs: number): number => (!Number.isFinite(elapsedMs) || elapsedMs <= 0 ? 0 : Math.round(elapsedMs * 100) / 100);
+    const serviceStartedAt = monotonicNowMs();
+    let policyAndCandidateMs = 0;
+    let queueWaitMs = 0;
+    let replayLookupMs = 0;
+    let recoveryPrepareMs = 0;
+    let receiptPrepareMs = 0;
+    let mayMutateMs = 0;
+    let mutateMs = 0;
+    let postconditionMs = 0;
+    let receiptCommitMs = 0;
+    let enteredQueue = false;
 
-    const queueKey = serializationKeyHash(description.serializationKey);
-    if (queueKey === undefined) return failure('ACTION_RECEIPT_SERIALIZATION_KEY_INVALID');
-
-    let identity: ReturnType<typeof mapRuntimeReceiptIdentity>;
     try {
-      identity = mapRuntimeReceiptIdentity(description.identity);
-    } catch (error) {
-      const code = errorCode(error);
-      return failure(code !== undefined && SAFE_RUNTIME_CODE_RE.test(code)
-        ? code as ActionReceiptRuntimeErrorCode
-        : 'ACTION_RECEIPT_RUNTIME_IDENTITY_INVALID');
-    }
+      if (!isOperationId(description.operationId)) return failure('ACTION_RECEIPT_OPERATION_ID_INVALID');
 
-    const loaded = this.getPolicyBundle();
-    if (loaded.bundle === undefined) return failure(loaded.code ?? 'ACTION_RECEIPT_POLICY_BUNDLE_UNAVAILABLE');
+      const queueKey = serializationKeyHash(description.serializationKey);
+      if (queueKey === undefined) return failure('ACTION_RECEIPT_SERIALIZATION_KEY_INVALID');
 
-    const authority = description.authority.scope === 'global'
-      ? {
-          scope: 'global' as const,
-          operationId: description.operationId,
-          requestScope: description.authority.requestScope,
-          resources: [...description.authority.resources],
-        }
-      : description.authority.scope === 'profile'
-        ? {
-            scope: 'profile' as const,
-            operationId: description.operationId,
-            profileId: description.authority.profileId,
-            requestScope: description.authority.requestScope,
-            resources: [...description.authority.resources],
-          }
-        : {
-            scope: 'workspace' as const,
-            operationId: description.operationId,
-            workspaceId: description.authority.workspaceId,
-            requestScope: description.authority.requestScope,
-            resources: [...description.authority.resources],
-          };
-
-    let resolved: ActionReceiptCoverageResolverResult;
-    try {
-      resolved = resolveActionReceiptPolicy(loaded.bundle.manifest, {
-        inventory: loaded.bundle.inventory as unknown as DiscoveredActionReceiptCoverageInventory,
-        routeKey: description.routeKey,
-        actor: identity.actor,
-        client: identity.client,
-        authority,
-        declaredEffects: [...description.declaredEffects],
-        input: { requestHash: description.requestHash, beforeHash: description.beforeHash },
-        validation: description.validation,
-        rollback: description.rollback,
-        ...(description.metadata === undefined ? {} : { metadata: description.metadata }),
-      });
-    } catch {
-      return failure('ACTION_RECEIPT_COVERAGE_MANIFEST_INVALID');
-    }
-
-    if (resolved.policy !== 'receipt-required') return policyResultFailure(resolved);
-
-    let preparedFacts: PreparedFacts;
-    try {
-      const originalReviewRef = 'legacyRoute' in resolved.prepareInput.capability
-        ? resolved.prepareInput.capability.reviewRef
-        : undefined;
-      const recoveryInput = originalReviewRef === undefined || REVIEW_REF_RE.test(originalReviewRef)
-        ? resolved
-        : {
-            ...resolved,
-            prepareInput: {
-              ...resolved.prepareInput,
-              capability: {
-                ...resolved.prepareInput.capability,
-                reviewRef: `review_${hashBoundedReceiptFacts({
-                  kind: 'review-ref',
-                  value: originalReviewRef,
-                })}`,
-              },
-            },
-          };
-      const bound = bindDeterministicRecoveryReference(recoveryInput);
-      if (bound.policy !== 'receipt-required') return policyResultFailure(bound);
-      const candidate = createPreparedActionReceipt(bound.prepareInput);
-      preparedFacts = { candidate, prepareInput: prepareInputFromCandidate(candidate) };
-    } catch (error) {
-      const code = errorCode(error);
-      return failure(code !== undefined && SAFE_RUNTIME_CODE_RE.test(code)
-        ? code
-        : 'ACTION_RECEIPT_PREPARE_INVALID');
-    }
-
-    const callbacks = description.callbacks;
-    if (!isRecord(callbacks)
-      || typeof callbacks.mutate !== 'function'
-      || typeof callbacks.postcondition !== 'function'
-      || !isRecord(description.store)
-      || typeof description.store.prepareWithDisposition !== 'function'
-      || typeof description.store.transition !== 'function') {
-      return failure('ACTION_RECEIPT_TRANSACTION_INVALID');
-    }
-
-    return this.withSerializationKey(queueKey, async () => {
-      const existing = await readExisting(description.store, preparedFacts.candidate.id);
-      if (existing.kind === 'error') return failure(existing.code);
-      if (existing.kind === 'present') {
-        if (!sameReplayFacts(existing.receipt, preparedFacts.candidate)) {
-          return failure('ACTION_RECEIPT_DUPLICATE_CONFLICT');
-        }
-        return this.replayResult(existing.receipt);
-      }
-
-      const guardedMutate: ActionReceiptMutation = async context => {
-        if (description.mayMutate !== undefined) {
-          let decision: unknown;
-          try {
-            decision = await description.mayMutate(context);
-          } catch {
-            return { ok: false, changed: false };
-          }
-          if (!guardAllowed(decision)) return { ok: false, changed: false };
-        }
-        return callbacks.mutate(context);
-      };
-
+      let identity: ReturnType<typeof mapRuntimeReceiptIdentity>;
       try {
-        const result = await runActionReceiptTransaction({
-          policy: 'receipt-required',
-          prepareInput: preparedFacts.prepareInput,
-          store: description.store,
-          mutate: guardedMutate,
-          postcondition: callbacks.postcondition,
-          ...(callbacks.rollback === undefined ? {} : { rollback: callbacks.rollback }),
-          ...(callbacks.prepareRecovery === undefined ? {} : { prepareRecovery: callbacks.prepareRecovery }),
-          ...(description.now === undefined ? {} : { now: description.now }),
-        });
-        return kernelResult(result);
+        identity = mapRuntimeReceiptIdentity(description.identity);
       } catch (error) {
-        return failure(safeErrorCode(error, 'ACTION_RECEIPT_TRANSACTION_INVALID'));
+        const code = errorCode(error);
+        return failure(code !== undefined && SAFE_RUNTIME_CODE_RE.test(code)
+          ? code as ActionReceiptRuntimeErrorCode
+          : 'ACTION_RECEIPT_RUNTIME_IDENTITY_INVALID');
       }
-    });
+
+      const loaded = this.getPolicyBundle();
+      if (loaded.bundle === undefined) return failure(loaded.code ?? 'ACTION_RECEIPT_POLICY_BUNDLE_UNAVAILABLE');
+
+      const authority = description.authority.scope === 'global'
+        ? {
+            scope: 'global' as const,
+            operationId: description.operationId,
+            requestScope: description.authority.requestScope,
+            resources: [...description.authority.resources],
+          }
+        : description.authority.scope === 'profile'
+          ? {
+              scope: 'profile' as const,
+              operationId: description.operationId,
+              profileId: description.authority.profileId,
+              requestScope: description.authority.requestScope,
+              resources: [...description.authority.resources],
+            }
+          : {
+              scope: 'workspace' as const,
+              operationId: description.operationId,
+              workspaceId: description.authority.workspaceId,
+              requestScope: description.authority.requestScope,
+              resources: [...description.authority.resources],
+            };
+
+      let resolved: ActionReceiptCoverageResolverResult;
+      try {
+        resolved = resolveActionReceiptPolicy(loaded.bundle.manifest, {
+          inventory: loaded.bundle.inventory as unknown as DiscoveredActionReceiptCoverageInventory,
+          routeKey: description.routeKey,
+          actor: identity.actor,
+          client: identity.client,
+          authority,
+          declaredEffects: [...description.declaredEffects],
+          input: { requestHash: description.requestHash, beforeHash: description.beforeHash },
+          validation: description.validation,
+          rollback: description.rollback,
+          ...(description.metadata === undefined ? {} : { metadata: description.metadata }),
+        });
+      } catch {
+        return failure('ACTION_RECEIPT_COVERAGE_MANIFEST_INVALID');
+      }
+
+      if (resolved.policy !== 'receipt-required') return policyResultFailure(resolved);
+
+      let preparedFacts: PreparedFacts;
+      try {
+        const originalReviewRef = 'legacyRoute' in resolved.prepareInput.capability
+          ? resolved.prepareInput.capability.reviewRef
+          : undefined;
+        const recoveryInput = originalReviewRef === undefined || REVIEW_REF_RE.test(originalReviewRef)
+          ? resolved
+          : {
+              ...resolved,
+              prepareInput: {
+                ...resolved.prepareInput,
+                capability: {
+                  ...resolved.prepareInput.capability,
+                  reviewRef: `review_${hashBoundedReceiptFacts({
+                    kind: 'review-ref',
+                    value: originalReviewRef,
+                  })}`,
+                },
+              },
+            };
+        const bound = bindDeterministicRecoveryReference(recoveryInput);
+        if (bound.policy !== 'receipt-required') return policyResultFailure(bound);
+        const candidate = createPreparedActionReceipt(bound.prepareInput);
+        preparedFacts = { candidate, prepareInput: prepareInputFromCandidate(candidate) };
+      } catch (error) {
+        const code = errorCode(error);
+        return failure(code !== undefined && SAFE_RUNTIME_CODE_RE.test(code)
+          ? code
+          : 'ACTION_RECEIPT_PREPARE_INVALID');
+      }
+
+      const callbacks = description.callbacks;
+      if (!isRecord(callbacks)
+        || typeof callbacks.mutate !== 'function'
+        || typeof callbacks.postcondition !== 'function'
+        || !isRecord(description.store)
+        || typeof description.store.prepareWithDisposition !== 'function'
+        || typeof description.store.transition !== 'function') {
+        return failure('ACTION_RECEIPT_TRANSACTION_INVALID');
+      }
+
+      const queueRequestedAt = monotonicNowMs();
+      policyAndCandidateMs = roundDurationMs(queueRequestedAt - serviceStartedAt);
+      enteredQueue = true;
+
+      return await this.withSerializationKey(queueKey, async () => {
+        const queueEnteredAt = monotonicNowMs();
+        queueWaitMs = roundDurationMs(queueEnteredAt - queueRequestedAt);
+
+        const existingStartedAt = monotonicNowMs();
+        const existing = await readExisting(description.store, preparedFacts.candidate.id);
+        replayLookupMs = roundDurationMs(monotonicNowMs() - existingStartedAt);
+        if (existing.kind === 'error') return failure(existing.code);
+        if (existing.kind === 'present') {
+          if (!sameReplayFacts(existing.receipt, preparedFacts.candidate)) {
+            return failure('ACTION_RECEIPT_DUPLICATE_CONFLICT');
+          }
+          return this.replayResult(existing.receipt);
+        }
+
+        let domainMutateRan = false;
+        let domainMutateMs = 0;
+        const guardedMutate: ActionReceiptMutation = async context => {
+          if (description.mayMutate !== undefined) {
+            const mayMutateStartedAt = monotonicNowMs();
+            let decision: unknown;
+            try {
+              decision = await description.mayMutate(context);
+            } catch {
+              mayMutateMs = roundDurationMs(monotonicNowMs() - mayMutateStartedAt);
+              return { ok: false, changed: false };
+            }
+            mayMutateMs = roundDurationMs(monotonicNowMs() - mayMutateStartedAt);
+            if (!guardAllowed(decision)) return { ok: false, changed: false };
+          }
+          domainMutateRan = true;
+          const domainStartedAt = monotonicNowMs();
+          try {
+            return await callbacks.mutate(context);
+          } finally {
+            domainMutateMs = roundDurationMs(monotonicNowMs() - domainStartedAt);
+          }
+        };
+
+        try {
+          const result = await runActionReceiptTransaction({
+            policy: 'receipt-required',
+            prepareInput: preparedFacts.prepareInput,
+            store: description.store,
+            mutate: guardedMutate,
+            postcondition: callbacks.postcondition,
+            ...(callbacks.rollback === undefined ? {} : { rollback: callbacks.rollback }),
+            ...(callbacks.prepareRecovery === undefined ? {} : { prepareRecovery: callbacks.prepareRecovery }),
+            ...(description.now === undefined ? {} : { now: description.now }),
+            onTimings: (kernelTimings: ActionReceiptTransactionKernelTimingsMs) => {
+              replayLookupMs = roundDurationMs(replayLookupMs + kernelTimings.readExistingMs);
+              recoveryPrepareMs = kernelTimings.recoveryPrepareMs;
+              receiptPrepareMs = kernelTimings.receiptPrepareMs;
+              mutateMs = domainMutateRan ? domainMutateMs : 0;
+              postconditionMs = kernelTimings.postconditionMs;
+              receiptCommitMs = kernelTimings.receiptCommitMs;
+            },
+          });
+          return kernelResult(result);
+        } catch (error) {
+          return failure(safeErrorCode(error, 'ACTION_RECEIPT_TRANSACTION_INVALID'));
+        }
+      });
+    } finally {
+      if (!enteredQueue) {
+        policyAndCandidateMs = roundDurationMs(monotonicNowMs() - serviceStartedAt);
+      }
+      if (typeof description?.onTimings === 'function') {
+        try {
+          description.onTimings({
+            policyAndCandidateMs,
+            queueWaitMs,
+            replayLookupMs,
+            recoveryPrepareMs,
+            receiptPrepareMs,
+            mayMutateMs,
+            mutateMs,
+            postconditionMs,
+            receiptCommitMs,
+            serviceTotalMs: roundDurationMs(monotonicNowMs() - serviceStartedAt),
+          });
+        } catch {
+          // Timing hooks are strictly observational and fail-soft.
+        }
+      }
+    }
   }
 }
 

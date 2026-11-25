@@ -32,6 +32,7 @@ import {
   type WorkspaceReceiptAuthorityInput,
   type WorkspaceReceiptServiceResult,
   type WorkspaceReceiptTransactionDescription,
+  type WorkspaceReceiptTransactionTimingsMs,
 } from './workspaceReceiptService';
 
 const HASH_A = 'a'.repeat(64);
@@ -141,6 +142,7 @@ function fixture(
     serializationKey?: string;
     callbacks?: Partial<WorkspaceReceiptTransactionDescription['callbacks']>;
     mayMutate?: WorkspaceReceiptTransactionDescription['mayMutate'];
+    onTimings?: WorkspaceReceiptTransactionDescription['onTimings'];
   } = {},
 ): WorkspaceReceiptTransactionDescription {
   const beforeHash = options.beforeHash ?? HASH_B;
@@ -180,6 +182,7 @@ function fixture(
     callbacks,
     now: () => Date.parse('2026-08-03T00:10:00.000Z'),
     ...(options.mayMutate === undefined ? {} : { mayMutate: options.mayMutate }),
+    ...(options.onTimings === undefined ? {} : { onTimings: options.onTimings }),
     serializationKey: options.serializationKey ?? 'workspace-w3b1a',
   };
 }
@@ -613,6 +616,126 @@ export async function runWorkspaceReceiptServiceSelftest(): Promise<WorkspaceRec
       && !resultShape.includes('resources')
       && !resultShape.includes('metadata')
       && (success.receipt === undefined || Object.keys(success.receipt).sort().join(',') === 'hash,id,status'));
+
+    // #137: deterministic stage-attributed timings + pre-admission vs post-admission client timeout replay.
+    const postAdmissionStore = new MemoryReceiptStore();
+    let postAdmissionMutations = 0;
+    let postAdmissionTimingsFirst: WorkspaceReceiptTransactionTimingsMs | undefined;
+    let postAdmissionTimingsReplay: WorkspaceReceiptTransactionTimingsMs | undefined;
+    let signalAdmitted!: () => void;
+    let releaseAdmitted!: () => void;
+    const admittedEntered = new Promise<boolean>(resolve => { signalAdmitted = () => resolve(true); });
+    const admittedHold = new Promise<void>(resolve => { releaseAdmitted = resolve; });
+    const postAdmissionFirstPromise = service.execute(fixture(postAdmissionStore, 'w3b1a-137-post-admission', {
+      serializationKey: 'workspace-137-post',
+      onTimings: timings => { postAdmissionTimingsFirst = timings; },
+      callbacks: {
+        prepareRecovery: async () => { await delay(5); return true; },
+        mutate: async () => {
+          postAdmissionMutations += 1;
+          signalAdmitted();
+          await admittedHold;
+        },
+        postcondition: async ({ receipt }) => {
+          await delay(4);
+          return afterFor(receipt, 'applied');
+        },
+      },
+    }));
+    const admittedObserved = await withTimeout(admittedEntered);
+    const postAdmissionReplayPromise = service.execute(fixture(postAdmissionStore, 'w3b1a-137-post-admission', {
+      serializationKey: 'workspace-137-post',
+      onTimings: timings => { postAdmissionTimingsReplay = timings; },
+      callbacks: {
+        mutate: async () => { postAdmissionMutations += 1; },
+      },
+    }));
+    await delay(12);
+    releaseAdmitted();
+    const [postAdmissionFirst, postAdmissionReplay] = await Promise.all([
+      postAdmissionFirstPromise,
+      postAdmissionReplayPromise,
+    ]);
+    const postAdmissionConflict = await service.execute(fixture(postAdmissionStore, 'w3b1a-137-post-admission', {
+      serializationKey: 'workspace-137-post',
+      requestHash: HASH_D,
+    }));
+    ok('post_admission_timeout_replay_records_stage_timings_and_single_mutation',
+      admittedObserved === true
+      && postAdmissionFirst.ok
+      && !postAdmissionFirst.replayed
+      && postAdmissionReplay.ok
+      && postAdmissionReplay.replayed
+      && sameProjection(postAdmissionFirst, postAdmissionReplay)
+      && postAdmissionMutations === 1
+      && postAdmissionConflict.ok === false
+      && postAdmissionConflict.code === 'ACTION_RECEIPT_DUPLICATE_CONFLICT'
+      && postAdmissionTimingsFirst !== undefined
+      && postAdmissionTimingsFirst.recoveryPrepareMs > 0
+      && postAdmissionTimingsFirst.mutateMs > 0
+      && postAdmissionTimingsFirst.postconditionMs > 0
+      && postAdmissionTimingsFirst.serviceTotalMs >= postAdmissionTimingsFirst.mutateMs
+      && postAdmissionTimingsReplay !== undefined
+      && postAdmissionTimingsReplay.queueWaitMs > 0
+      && postAdmissionTimingsReplay.mutateMs === 0
+      && postAdmissionTimingsReplay.recoveryPrepareMs === 0);
+
+    const preAdmissionStore = new MemoryReceiptStore();
+    let preAdmissionMutations = 0;
+    let preAdmissionPostconditions = 0;
+    let preAdmissionTimingsFirst: WorkspaceReceiptTransactionTimingsMs | undefined;
+    let preAdmissionTimingsReplay: WorkspaceReceiptTransactionTimingsMs | undefined;
+    let signalMayMutate!: () => void;
+    let releaseMayMutate!: () => void;
+    const mayMutateEntered = new Promise<boolean>(resolve => { signalMayMutate = () => resolve(true); });
+    const mayMutateHold = new Promise<void>(resolve => { releaseMayMutate = resolve; });
+    const preAdmissionFirstPromise = service.execute(fixture(preAdmissionStore, 'w3b1a-137-pre-admission', {
+      serializationKey: 'workspace-137-pre',
+      onTimings: timings => { preAdmissionTimingsFirst = timings; },
+      mayMutate: async () => {
+        signalMayMutate();
+        await mayMutateHold;
+        return false;
+      },
+      callbacks: {
+        mutate: async () => { preAdmissionMutations += 1; },
+        postcondition: async ({ receipt }) => {
+          preAdmissionPostconditions += 1;
+          return afterFor(receipt, 'applied');
+        },
+      },
+    }));
+    const mayMutateObserved = await withTimeout(mayMutateEntered);
+    const preAdmissionReplayPromise = service.execute(fixture(preAdmissionStore, 'w3b1a-137-pre-admission', {
+      serializationKey: 'workspace-137-pre',
+      onTimings: timings => { preAdmissionTimingsReplay = timings; },
+      callbacks: {
+        mutate: async () => { preAdmissionMutations += 1; },
+      },
+    }));
+    await delay(12);
+    releaseMayMutate();
+    const [preAdmissionFirst, preAdmissionReplay] = await Promise.all([
+      preAdmissionFirstPromise,
+      preAdmissionReplayPromise,
+    ]);
+    ok('pre_admission_timeout_refuses_mutation_and_replays_failed_receipt',
+      mayMutateObserved === true
+      && preAdmissionFirst.ok === false
+      && preAdmissionFirst.code === 'ACTION_RECEIPT_MUTATION_FAILED'
+      && preAdmissionFirst.receipt?.status === 'failed'
+      && preAdmissionReplay.ok === false
+      && preAdmissionReplay.code === 'ACTION_RECEIPT_REPLAY'
+      && preAdmissionReplay.replayed
+      && sameProjection(preAdmissionFirst, preAdmissionReplay)
+      && preAdmissionMutations === 0
+      && preAdmissionPostconditions === 0
+      && preAdmissionTimingsFirst !== undefined
+      && preAdmissionTimingsFirst.mayMutateMs > 0
+      && preAdmissionTimingsFirst.mutateMs === 0
+      && preAdmissionTimingsReplay !== undefined
+      && preAdmissionTimingsReplay.queueWaitMs > 0
+      && preAdmissionTimingsReplay.mutateMs === 0);
   } catch (error) {
     ok('selftest_unexpected_exception', false, error instanceof Error ? error.message : String(error));
   }

@@ -155,15 +155,27 @@ export type ActionReceiptRecoveryPreparation = (
   context: ActionReceiptTransactionContext,
 ) => MaybePromise<void | true | false | { ok?: true | false }>;
 
+export interface ActionReceiptTransactionKernelTimingsMs {
+  readExistingMs: number;
+  recoveryPrepareMs: number;
+  receiptPrepareMs: number;
+  mutateMs: number;
+  postconditionMs: number;
+  receiptCommitMs: number;
+  kernelTotalMs: number;
+}
+
 export interface ActionReceiptTransactionCallbacks {
   store: ActionReceiptTransactionStore;
   mutate: ActionReceiptMutation;
   postcondition: ActionReceiptPostcondition;
   rollback?: ActionReceiptRollbackCallback;
-  /** Optional when the adapter has already durably prepared the W3A rollback reference. */
+  /** Optional pre-mutation recovery preparation hook. */
   prepareRecovery?: ActionReceiptRecoveryPreparation;
   /** Injectable lifecycle clock; timestamps are lifecycle facts, never operation identity input. */
   now?: () => number | string;
+  /** Optional fail-soft stage timing observer; never alters receipt payloads or hashes. */
+  onTimings?: (timings: ActionReceiptTransactionKernelTimingsMs) => void;
 }
 
 type ReceiptRequiredPolicy = Extract<ActionReceiptCoverageResolverResult, { policy: 'receipt-required' }>;
@@ -584,6 +596,15 @@ function normalizeRequest(
   return { ...requestOrPolicy, ...callbacks } as ActionReceiptTransactionRequest;
 }
 
+function monotonicNowMs(): number {
+  return typeof globalThis.performance?.now === 'function' ? globalThis.performance.now() : Date.now();
+}
+
+function roundDurationMs(elapsedMs: number): number {
+  if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) return 0;
+  return Math.round(elapsedMs * 100) / 100;
+}
+
 /**
  * Execute one receipt-required action. The overload accepting policy plus callbacks is a convenience
  * for the later bundled-extension backend adapter; both forms share this one discriminated kernel
@@ -608,120 +629,175 @@ export async function runActionReceiptTransaction(
     return { ok: false, code: 'ACTION_RECEIPT_TRANSACTION_INVALID' };
   }
   const executable = required as ReceiptRequiredPolicy & ActionReceiptTransactionCallbacks;
+  const kernelStartedAt = monotonicNowMs();
+  let readExistingMs = 0;
+  let recoveryPrepareMs = 0;
+  let receiptPrepareMs = 0;
+  let mutateMs = 0;
+  let postconditionMs = 0;
+  let receiptCommitMs = 0;
 
-  if (!operationIdIsValid(executable.prepareInput)) {
-    return { ok: false, code: 'ACTION_RECEIPT_OPERATION_ID_INVALID' };
-  }
-
-  let candidate: ActionReceipt;
   try {
-    // This validates the complete W3A prepare contract before any store or callback side effect.
-    // The candidate is never returned and its generated id depends on the caller operation id,
-    // actor, client, capability, and authority scope—not time or request-body serialization.
-    candidate = createPreparedActionReceipt(executable.prepareInput);
-  } catch {
-    return { ok: false, code: 'ACTION_RECEIPT_PREPARE_INVALID' };
-  }
-
-  let existing: ActionReceipt | undefined;
-  try {
-    existing = await readReceipt(executable.store, candidate.id);
-  } catch (error) {
-    return failure(transitionFailureCode(error));
-  }
-  if (existing !== undefined) {
-    if (existing.authorityHash !== candidate.authorityHash) return failure('ACTION_RECEIPT_DUPLICATE_CONFLICT');
-    return replayResult(existing);
-  }
-
-  if (executable.store.prepareWithDisposition === undefined) {
-    return { ok: false, code: 'ACTION_RECEIPT_PREPARE_DISPOSITION_UNAVAILABLE' };
-  }
-
-  if (candidate.rollback.required) {
-    if (executable.rollback === undefined) {
-      return { ok: false, code: 'ACTION_RECEIPT_RECOVERY_FAILED' };
+    if (!operationIdIsValid(executable.prepareInput)) {
+      return { ok: false, code: 'ACTION_RECEIPT_OPERATION_ID_INVALID' };
     }
-    const prepareRecovery = executable.prepareRecovery ?? executable.rollback.prepare;
-    if (prepareRecovery !== undefined) {
-      try {
-        const result = await prepareRecovery({ receipt: candidate });
-        if (callbackReportedFailure(result)) throw new CallbackFailure();
-      } catch {
-        // The hook runs before store prepare, so a failed recovery never leaves a receipt that
-        // falsely claims rollback.status=prepared. If omitted, the adapter owns the durable
-        // recovery reference already named by the candidate.
+
+    let candidate: ActionReceipt;
+    try {
+      // This validates the complete W3A prepare contract before any store or callback side effect.
+      // The candidate is never returned and its generated id depends on the caller operation id,
+      // actor, client, capability, and authority scope—not time or request-body serialization.
+      candidate = createPreparedActionReceipt(executable.prepareInput);
+    } catch {
+      return { ok: false, code: 'ACTION_RECEIPT_PREPARE_INVALID' };
+    }
+
+    let existing: ActionReceipt | undefined;
+    const readExistingStartedAt = monotonicNowMs();
+    try {
+      existing = await readReceipt(executable.store, candidate.id);
+    } catch (error) {
+      return failure(transitionFailureCode(error));
+    } finally {
+      readExistingMs = roundDurationMs(monotonicNowMs() - readExistingStartedAt);
+    }
+    if (existing !== undefined) {
+      if (existing.authorityHash !== candidate.authorityHash) return failure('ACTION_RECEIPT_DUPLICATE_CONFLICT');
+      return replayResult(existing);
+    }
+
+    if (executable.store.prepareWithDisposition === undefined) {
+      return { ok: false, code: 'ACTION_RECEIPT_PREPARE_DISPOSITION_UNAVAILABLE' };
+    }
+
+    if (candidate.rollback.required) {
+      if (executable.rollback === undefined) {
         return { ok: false, code: 'ACTION_RECEIPT_RECOVERY_FAILED' };
+      }
+      const prepareRecovery = executable.prepareRecovery ?? executable.rollback.prepare;
+      if (prepareRecovery !== undefined) {
+        const recoveryStartedAt = monotonicNowMs();
+        try {
+          const result = await prepareRecovery({ receipt: candidate });
+          if (callbackReportedFailure(result)) throw new CallbackFailure();
+        } catch {
+          // The hook runs before store prepare, so a failed recovery never leaves a receipt that
+          // falsely claims rollback.status=prepared. If omitted, the adapter owns the durable
+          // recovery reference already named by the candidate.
+          return { ok: false, code: 'ACTION_RECEIPT_RECOVERY_FAILED' };
+        } finally {
+          recoveryPrepareMs = roundDurationMs(monotonicNowMs() - recoveryStartedAt);
+        }
+      }
+    }
+
+    let prepared: ActionReceipt;
+    let created: boolean;
+    const receiptPrepareStartedAt = monotonicNowMs();
+    try {
+      const stored = unwrapPrepareDisposition(await executable.store.prepareWithDisposition(executable.prepareInput));
+      prepared = stored.receipt;
+      created = stored.created;
+    } catch (error) {
+      const code = stableStoreCode(error, 'ACTION_RECEIPT_PREPARE_FAILED');
+      return failure(code === 'RECEIPT_DUPLICATE_CONFLICT' ? 'ACTION_RECEIPT_DUPLICATE_CONFLICT' : code);
+    } finally {
+      receiptPrepareMs = roundDurationMs(monotonicNowMs() - receiptPrepareStartedAt);
+    }
+    if (prepared.id !== candidate.id || prepared.authorityHash !== candidate.authorityHash) {
+      return failure('ACTION_RECEIPT_DUPLICATE_CONFLICT');
+    }
+    if (!created || prepared.status !== 'prepared') return replayResult(prepared);
+
+    let mutationFailureValue: unknown;
+    const mutateStartedAt = monotonicNowMs();
+    try {
+      const result = await executable.mutate({ receipt: prepared });
+      mutationFailureValue = result;
+      if (callbackReportedFailure(result)) throw new CallbackFailure(extractAfter(result), extractPartialAfter(result));
+    } catch (error) {
+      mutateMs = roundDurationMs(monotonicNowMs() - mutateStartedAt);
+      const knownNoChange = mutationFailureKnownNoChange(mutationFailureValue) || mutationFailureKnownNoChange(error);
+      const observedAfter = extractPartialAfter(error) ?? extractPartialAfter(mutationFailureValue);
+      const finalizeStartedAt = monotonicNowMs();
+      try {
+        if (prepared.rollback.required && !knownNoChange) {
+          return await reconcileAfterFailure(executable, prepared, MUTATION_RECOVERY_PLAN, observedAfter);
+        }
+        const failed = await recordFailed(executable, prepared, 'ACTION_RECEIPT_MUTATION_FAILED');
+        return failure('ACTION_RECEIPT_MUTATION_FAILED', failed);
+      } finally {
+        receiptCommitMs = roundDurationMs(monotonicNowMs() - finalizeStartedAt);
+      }
+    }
+    mutateMs = roundDurationMs(monotonicNowMs() - mutateStartedAt);
+
+    let after: ActionReceiptAfter;
+    const postconditionStartedAt = monotonicNowMs();
+    try {
+      const result = await executable.postcondition({ receipt: prepared, phase: 'postcondition' });
+      if (callbackReportedFailure(result)) throw new CallbackFailure(extractAfter(result), extractPartialAfter(result));
+      const resolved = extractAfter(result);
+      if (resolved === undefined) throw new CallbackFailure();
+      after = resolved;
+      if (after.outcome === 'partial') throw new CallbackFailure(after, after);
+    } catch (error) {
+      postconditionMs = roundDurationMs(monotonicNowMs() - postconditionStartedAt);
+      const finalizeStartedAt = monotonicNowMs();
+      try {
+        return await reconcileAfterFailure(
+          executable,
+          prepared,
+          FINALIZATION_RECOVERY_PLAN,
+          extractPartialAfter(error),
+        );
+      } finally {
+        receiptCommitMs = roundDurationMs(monotonicNowMs() - finalizeStartedAt);
+      }
+    }
+    postconditionMs = roundDurationMs(monotonicNowMs() - postconditionStartedAt);
+
+    let commitAt: string;
+    const commitStartedAt = monotonicNowMs();
+    try {
+      try {
+        commitAt = lifecycleAt(prepared.times.preparedAt, executable.now);
+      } catch {
+        return await reconcileAfterFailure(executable, prepared, FINALIZATION_RECOVERY_PLAN, after);
+      }
+      const committed = await attemptTransition(executable.store, prepared.id, {
+        to: 'committed',
+        at: commitAt,
+        validation: passedValidation(prepared),
+        rollbackStatus: rollbackStatusFor(prepared, 'available'),
+        after,
+      });
+      if (committed.callError !== undefined) {
+        if (committed.reconciledExact && committed.receipt?.status === 'committed') return success(committed.receipt);
+        return await reconcileAfterFailure(executable, prepared, FINALIZATION_RECOVERY_PLAN, committed.receipt?.after ?? after);
+      }
+      if (committed.receipt?.status !== 'committed') {
+        return await reconcileAfterFailure(executable, prepared, FINALIZATION_RECOVERY_PLAN, after);
+      }
+      return success(committed.receipt);
+    } finally {
+      receiptCommitMs = roundDurationMs(monotonicNowMs() - commitStartedAt);
+    }
+  } finally {
+    if (typeof executable.onTimings === 'function') {
+      try {
+        executable.onTimings({
+          readExistingMs,
+          recoveryPrepareMs,
+          receiptPrepareMs,
+          mutateMs,
+          postconditionMs,
+          receiptCommitMs,
+          kernelTotalMs: roundDurationMs(monotonicNowMs() - kernelStartedAt),
+        });
+      } catch {
+        // Timing hooks are strictly observational and fail-soft.
       }
     }
   }
-
-  let prepared: ActionReceipt;
-  let created: boolean;
-  try {
-    const stored = unwrapPrepareDisposition(await executable.store.prepareWithDisposition(executable.prepareInput));
-    prepared = stored.receipt;
-    created = stored.created;
-  } catch (error) {
-    const code = stableStoreCode(error, 'ACTION_RECEIPT_PREPARE_FAILED');
-    return failure(code === 'RECEIPT_DUPLICATE_CONFLICT' ? 'ACTION_RECEIPT_DUPLICATE_CONFLICT' : code);
-  }
-  if (prepared.id !== candidate.id || prepared.authorityHash !== candidate.authorityHash) {
-    return failure('ACTION_RECEIPT_DUPLICATE_CONFLICT');
-  }
-  if (!created || prepared.status !== 'prepared') return replayResult(prepared);
-
-  let mutationFailureValue: unknown;
-  try {
-    const result = await executable.mutate({ receipt: prepared });
-    mutationFailureValue = result;
-    if (callbackReportedFailure(result)) throw new CallbackFailure(extractAfter(result), extractPartialAfter(result));
-  } catch (error) {
-    const knownNoChange = mutationFailureKnownNoChange(mutationFailureValue) || mutationFailureKnownNoChange(error);
-    const observedAfter = extractPartialAfter(error) ?? extractPartialAfter(mutationFailureValue);
-    if (prepared.rollback.required && !knownNoChange) {
-      return reconcileAfterFailure(executable, prepared, MUTATION_RECOVERY_PLAN, observedAfter);
-    }
-    const failed = await recordFailed(executable, prepared, 'ACTION_RECEIPT_MUTATION_FAILED');
-    return failure('ACTION_RECEIPT_MUTATION_FAILED', failed);
-  }
-
-  let after: ActionReceiptAfter;
-  try {
-    const result = await executable.postcondition({ receipt: prepared, phase: 'postcondition' });
-    if (callbackReportedFailure(result)) throw new CallbackFailure(extractAfter(result), extractPartialAfter(result));
-    const resolved = extractAfter(result);
-    if (resolved === undefined) throw new CallbackFailure();
-    after = resolved;
-    if (after.outcome === 'partial') throw new CallbackFailure(after, after);
-  } catch (error) {
-    return reconcileAfterFailure(
-      executable,
-      prepared,
-      FINALIZATION_RECOVERY_PLAN,
-      extractPartialAfter(error),
-    );
-  }
-
-  let commitAt: string;
-  try {
-    commitAt = lifecycleAt(prepared.times.preparedAt, executable.now);
-  } catch {
-    return reconcileAfterFailure(executable, prepared, FINALIZATION_RECOVERY_PLAN, after);
-  }
-  const committed = await attemptTransition(executable.store, prepared.id, {
-    to: 'committed',
-    at: commitAt,
-    validation: passedValidation(prepared),
-    rollbackStatus: rollbackStatusFor(prepared, 'available'),
-    after,
-  });
-  if (committed.callError !== undefined) {
-    if (committed.reconciledExact && committed.receipt?.status === 'committed') return success(committed.receipt);
-    return reconcileAfterFailure(executable, prepared, FINALIZATION_RECOVERY_PLAN, committed.receipt?.after ?? after);
-  }
-  if (committed.receipt?.status !== 'committed') {
-    return reconcileAfterFailure(executable, prepared, FINALIZATION_RECOVERY_PLAN, after);
-  }
-  return success(committed.receipt);
 }

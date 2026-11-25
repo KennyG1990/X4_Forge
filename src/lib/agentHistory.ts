@@ -42,6 +42,23 @@ export interface LedgerOutcome {
   stage?: string;
 }
 
+export interface WorkspaceStageTimingsMs {
+  adapterPrepareMs: number;
+  policyAndCandidateMs: number;
+  queueWaitMs: number;
+  replayLookupMs: number;
+  recoveryPrepareMs: number;
+  receiptPrepareMs: number;
+  mayMutateMs: number;
+  diagnosticsMs: number;
+  registryPersistMs: number;
+  mutateMs: number;
+  postconditionMs: number;
+  receiptCommitMs: number;
+  responseBuildMs: number;
+  totalMs: number;
+}
+
 export interface LedgerRow {
   id: string;
   ts: string;
@@ -55,6 +72,8 @@ export interface LedgerRow {
   files: string[];
   outcome: LedgerOutcome;
   durationMs: number;
+  /** #137: deterministic wall-clock stage breakdown for guarded workspace receipt transactions. */
+  stageTimingsMs?: WorkspaceStageTimingsMs;
   bytes?: { before?: number; after?: number };
   lines?: { added: number; removed: number };
   beforeBlob?: string;

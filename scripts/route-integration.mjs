@@ -8005,6 +8005,167 @@ async function main() {
       JSON.stringify({ status: rawIdDiagnose.status, hypotheses: rawIdDiagnose.json?.diagnosis?.hypotheses, leaks: rawIdLeaks }));
   }
 
+  // --- #137 STAGE-ATTRIBUTED WORKSPACE REPLACEMENT TELEMETRY & REPLAY ---
+  {
+    const expectedTimingKeys = [
+      'adapterPrepareMs',
+      'diagnosticsMs',
+      'mayMutateMs',
+      'mutateMs',
+      'policyAndCandidateMs',
+      'postconditionMs',
+      'queueWaitMs',
+      'receiptCommitMs',
+      'receiptPrepareMs',
+      'recoveryPrepareMs',
+      'registryPersistMs',
+      'replayLookupMs',
+      'responseBuildMs',
+      'totalMs',
+    ];
+    const validStageTimings = (timings) => Boolean(
+      timings
+      && typeof timings === 'object'
+      && Object.keys(timings).sort().join(',') === expectedTimingKeys.join(',')
+      && expectedTimingKeys.every(key => typeof timings[key] === 'number' && Number.isFinite(timings[key]) && timings[key] >= 0),
+    );
+
+    const welcomeWs = {
+      name: 'Welcome_137_Fixture',
+      version: '1.0.0',
+      author: 'Forge QA',
+      description: 'Welcome baseline for #137 stage attribution',
+      nodes: [{
+        id: 'cue_welcome_137',
+        type: 'cue',
+        label: 'Welcome Cue',
+        xmlTag: 'cue',
+        x: 80,
+        y: 80,
+        properties: { name: 'WelcomeCue137', namespace: 'this', instantiate: 'false' },
+      }],
+      links: [],
+      uiWidgets: [],
+      uiTheme: { backgroundColor: '#000000', borderColor: '#ffffff', accentColor: '#00ffff', opacity: 1, showIcons: true },
+    };
+    const created137 = await req('POST', '/api/agent/workspaces', SESSION_TOKEN, {
+      workspace: welcomeWs,
+      name: 'Welcome_137_Fixture',
+      clientId: CLIENT_ID,
+    });
+    const ws137Id = created137.json?.workspaceId;
+    const before137 = await req('GET', '/api/agent/workspace', SESSION_TOKEN, undefined, { workspaceId: ws137Id, operationId: null });
+    const b116ResumeWorkspace = {
+      ...before137.json?.workspace,
+      name: 'B116_Resume_Adoption',
+      description: 'Guarded replacement target for #137 stage attribution and timeout replay',
+      nodes: [
+        ...(before137.json?.workspace?.nodes || []),
+        {
+          id: 'action_reward_137',
+          type: 'action',
+          label: 'Reward Notice',
+          xmlTag: 'show_help',
+          x: 340,
+          y: 80,
+          properties: { text: "'B116 Resume Adoption'", duration: 2 },
+        },
+      ],
+      links: [{
+        id: 'link_welcome_reward_137',
+        sourceNodeId: 'cue_welcome_137',
+        sourcePortId: 'out_act',
+        targetNodeId: 'action_reward_137',
+        targetPortId: 'in_act',
+      }],
+    };
+    const op137 = `forge_op_137_b116_${process.pid}_${Date.now().toString(36)}`;
+    const replace137 = await req('POST', '/api/agent/workspace', SESSION_TOKEN, {
+      workspace: b116ResumeWorkspace,
+      expectedHead: before137.json?.workspaceHash,
+      expectedSnapshotHash: before137.json?.snapshotHash,
+    }, { workspaceId: ws137Id, operationId: op137 });
+    const headerTimings137 = (() => {
+      try { return JSON.parse(replace137.headers?.['x-forge-workspace-stage-timings'] || 'null'); } catch { return null; }
+    })();
+    const after137 = await req('GET', '/api/agent/workspace', SESSION_TOKEN, undefined, { workspaceId: ws137Id, operationId: null });
+    const history137 = await req('GET', '/api/agent/history?kind=workspace&limit=5', SESSION_TOKEN, undefined, { workspaceId: ws137Id, operationId: null });
+    const ledgerRow137 = Array.isArray(history137.json?.rows)
+      ? history137.json.rows.find(row => row.receiptId === replace137.json?.receipt?.id)
+      : null;
+
+    ok('workspace_replace_records_complete_stage_timings_header_and_ledger',
+      created137.status === 201
+        && replace137.status === 200
+        && replace137.json?.success === true
+        && replace137.json?.applied === true
+        && replace137.json?.replayed !== true
+        && replace137.json?.workspaceHash === after137.json?.workspaceHash
+        && replace137.json?.snapshotHash === after137.json?.snapshotHash
+        && replace137.json?.recovery?.id === replace137.json?.receipt?.id
+        && validStageTimings(replace137.json?.stageTimingsMs)
+        && JSON.stringify(headerTimings137) === JSON.stringify(replace137.json?.stageTimingsMs)
+        && JSON.stringify(ledgerRow137?.stageTimingsMs) === JSON.stringify(replace137.json?.stageTimingsMs)
+        && replace137.json.stageTimingsMs.totalMs >= replace137.json.stageTimingsMs.mutateMs,
+      JSON.stringify({
+        status: replace137.status,
+        stageTimingsMs: replace137.json?.stageTimingsMs,
+        headerMatch: JSON.stringify(headerTimings137) === JSON.stringify(replace137.json?.stageTimingsMs),
+        ledgerMatch: JSON.stringify(ledgerRow137?.stageTimingsMs) === JSON.stringify(replace137.json?.stageTimingsMs),
+      }));
+
+    const replay137 = await req('POST', '/api/agent/workspace', SESSION_TOKEN, {
+      workspace: b116ResumeWorkspace,
+      expectedHead: before137.json?.workspaceHash,
+      expectedSnapshotHash: before137.json?.snapshotHash,
+    }, { workspaceId: ws137Id, operationId: op137 });
+    const afterReplay137 = await req('GET', '/api/agent/workspace', SESSION_TOKEN, undefined, { workspaceId: ws137Id, operationId: null });
+
+    ok('workspace_replace_timeout_replay_reuses_receipt_with_zero_mutation_stage_time',
+      replay137.status === 200
+        && replay137.json?.success === true
+        && replay137.json?.replayed === true
+        && replay137.json?.applied === false
+        && replay137.json?.version === replace137.json?.version
+        && afterReplay137.json?.version === replace137.json?.version
+        && replay137.json?.workspaceHash === replace137.json?.workspaceHash
+        && replay137.json?.snapshotHash === replace137.json?.snapshotHash
+        && JSON.stringify(replay137.json?.receipt) === JSON.stringify(replace137.json?.receipt)
+        && replay137.json?.recovery?.id === replace137.json?.receipt?.id
+        && validStageTimings(replay137.json?.stageTimingsMs)
+        && replay137.json.stageTimingsMs.mutateMs === 0
+        && replay137.json.stageTimingsMs.diagnosticsMs === 0
+        && replay137.json.stageTimingsMs.registryPersistMs === 0
+        && replay137.json.stageTimingsMs.recoveryPrepareMs === 0,
+      JSON.stringify({
+        status: replay137.status,
+        replayed: replay137.json?.replayed,
+        applied: replay137.json?.applied,
+        stageTimingsMs: replay137.json?.stageTimingsMs,
+      }));
+
+    const conflict137 = await req('POST', '/api/agent/workspace', SESSION_TOKEN, {
+      workspace: { ...b116ResumeWorkspace, description: 'Changed payload under identical caller operation ID' },
+      expectedHead: before137.json?.workspaceHash,
+      expectedSnapshotHash: before137.json?.snapshotHash,
+    }, { workspaceId: ws137Id, operationId: op137 });
+    const afterConflict137 = await req('GET', '/api/agent/workspace', SESSION_TOKEN, undefined, { workspaceId: ws137Id, operationId: null });
+
+    ok('workspace_replace_same_operation_changed_payload_refuses_409_with_stage_timings',
+      conflict137.status === 409
+        && conflict137.json?.code === 'ACTION_RECEIPT_DUPLICATE_CONFLICT'
+        && validStageTimings(conflict137.json?.stageTimingsMs)
+        && conflict137.json.stageTimingsMs.mutateMs === 0
+        && afterConflict137.json?.version === replace137.json?.version
+        && afterConflict137.json?.workspaceHash === replace137.json?.workspaceHash
+        && afterConflict137.json?.snapshotHash === replace137.json?.snapshotHash,
+      JSON.stringify({
+        status: conflict137.status,
+        code: conflict137.json?.code,
+        stageTimingsMs: conflict137.json?.stageTimingsMs,
+      }));
+  }
+
   // --- PRODUCTION SURFACE ---------------------------------------------------------------------
   // The API-honesty guard shipped GREEN on every dev assertion and was BROKEN in production: the
   // SPA catch-all `app.get("*")` is a ROUTE layer that matches everything, and it only exists in

@@ -205,6 +205,7 @@ import {
   WorkspaceReceiptService,
   type WorkspaceReceiptServiceResult,
   type WorkspaceReceiptTransactionDescription,
+  type WorkspaceReceiptTransactionTimingsMs,
 } from "./src/server/workspaceReceiptService";
 import { executeWorkspaceCreateReceipt } from "./src/server/workspaceCreateReceiptAdapter";
 import { executeWorkspaceSnapshotRestoreReceipt } from "./src/server/workspaceSnapshotRestoreReceiptAdapter";
@@ -308,6 +309,7 @@ import {
 import {
   ledgerRouteKind, describeAction, lineDelta, unifiedDiff, looksBinary, filterRows, revertibility,
   compactDiagnostics, normalizeHistoryRecoveryTruth, MAX_DIFFABLE_BYTES, type LedgerRow, type LedgerKind,
+  type WorkspaceStageTimingsMs,
 } from "./src/lib/agentHistory";
 import { AgentHistoryStore } from "./src/lib/agentHistoryStore";
 import { runAgentHistorySelftest } from "./src/lib/agentHistory.selftest";
@@ -1164,6 +1166,7 @@ type ForgeDecoratedRequest = express.Request & {
   __revertOfTitle?: string;
   __revertFiles?: string[];
   __useAddressedWorkspace?: boolean;
+  __workspaceStageTimingsMs?: WorkspaceStageTimingsMs;
   __mdRenameLedger?: {
     files: string[];
     lines: { added: number; removed: number };
@@ -1809,6 +1812,7 @@ function ledgerMiddleware(req: express.Request, res: express.Response, next: exp
         files,
         outcome: described.outcome,
         durationMs: Date.now() - startedAt,
+        ...(decoratedReq(req).__workspaceStageTimingsMs ? { stageTimingsMs: decoratedReq(req).__workspaceStageTimingsMs } : {}),
         ...(bytes && (bytes.before !== undefined || bytes.after !== undefined) ? { bytes } : {}),
         ...(lines ? { lines } : {}),
         ...(beforeBlob ? { beforeBlob } : {}),
@@ -9333,6 +9337,15 @@ function summarizeDiagnostics(diags: any[]) {
   };
 }
 
+function workspaceMonotonicNowMs(): number {
+  return typeof globalThis.performance?.now === 'function' ? globalThis.performance.now() : Date.now();
+}
+
+function roundWorkspaceDurationMs(elapsedMs: number): number {
+  if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) return 0;
+  return Math.round(elapsedMs * 100) / 100;
+}
+
 /**
  * Shared mutation handler with optimistic concurrency + dry-run.
  * @param incoming   either a full workspace or (when merge) a partial set of top-level fields
@@ -9343,6 +9356,10 @@ type WorkspaceMutationResult = {
   body: any;
   changed?: boolean;
   recovery?: WorkspaceReceiptRecovery;
+  internalTimingsMs?: {
+    diagnosticsMs: number;
+    registryPersistMs: number;
+  };
 };
 
 function applyWorkspaceMutation(
@@ -9359,6 +9376,13 @@ function applyWorkspaceMutation(
     receiptRecovery?: WorkspaceReceiptRecovery;
     /** W3B1a supplies the one sanitized target used to derive receipt and recovery hashes. */
     receiptPreparedWorkspace?: ModWorkspace;
+    /** Reused sanitized pre-state when the immutable record has not changed since prepare. */
+    receiptPreparedBeforeWorkspace?: ModWorkspace;
+    /** Precomputed JSON equality when both pre-state and target workspaces are unchanged. */
+    receiptIsDifferent?: boolean;
+    /** Precomputed 16-hex target content/snapshot heads from prepareRecovery. */
+    receiptExpectedCurrentHash?: string;
+    receiptExpectedCurrentSnapshotHash?: string;
   },
   registry: WorkspaceRegistry = workspaceRegistry,
   recoveryStore: DestructiveRecoveryStore = destructiveRecoveryStore,
@@ -9366,7 +9390,7 @@ function applyWorkspaceMutation(
   if (!incoming || typeof incoming !== 'object') {
     return { status: 400, body: { error: "Missing or invalid workspace payload." } };
   }
-  const currentWorkspace = sanitizeWorkspace(record.workspace);
+  const currentWorkspace = opts.receiptPreparedBeforeWorkspace ?? sanitizeWorkspace(record.workspace);
   const currentVersion = record.version;
   const currentHead = workspaceHash(record);
   const currentSnapshotHash = registry.snapshotHash(record);
@@ -9460,12 +9484,15 @@ function applyWorkspaceMutation(
   }
   const merged = opts.merge ? { ...currentWorkspace, ...incoming } : incoming;
   const nextWorkspace = opts.receiptPreparedWorkspace ?? sanitizeWorkspace(merged);
+  const diagnosticsStartedAt = workspaceMonotonicNowMs();
   const diagnostics = computeWorkspaceDiagnostics(nextWorkspace);
+  const diagnosticsMs = roundWorkspaceDurationMs(workspaceMonotonicNowMs() - diagnosticsStartedAt);
 
   if (opts.dryRun) {
     return {
       status: 200,
       changed: false,
+      internalTimingsMs: { diagnosticsMs, registryPersistMs: 0 },
       body: {
         success: true, dryRun: true, applied: false,
         workspaceId: record.workspaceId,
@@ -9477,12 +9504,13 @@ function applyWorkspaceMutation(
     };
   }
 
-  const isDifferent = JSON.stringify(nextWorkspace) !== JSON.stringify(currentWorkspace);
+  const isDifferent = opts.receiptIsDifferent ?? (JSON.stringify(nextWorkspace) !== JSON.stringify(currentWorkspace));
   let recovery: ReturnType<DestructiveRecoveryStore['createWorkspace']> | undefined;
+  let registryPersistMs = 0;
   if (isDifferent) {
     if (opts.receiptRecovery !== undefined) {
-      const expectedCurrentHash = workspaceContentHash(nextWorkspace);
-      const expectedCurrentSnapshotHash = workspaceSnapshotHash(nextWorkspace);
+      const expectedCurrentHash = opts.receiptExpectedCurrentHash ?? workspaceContentHash(nextWorkspace);
+      const expectedCurrentSnapshotHash = opts.receiptExpectedCurrentSnapshotHash ?? workspaceSnapshotHash(nextWorkspace);
       if (opts.receiptRecovery.kind !== 'workspace'
         || opts.receiptRecovery.status !== 'ready'
         || opts.receiptRecovery.workspaceId !== record.workspaceId
@@ -9493,6 +9521,7 @@ function applyWorkspaceMutation(
         return {
           status: 507,
           changed: false,
+          internalTimingsMs: { diagnosticsMs, registryPersistMs: 0 },
           body: {
             success: false,
             code: 'RECEIPT_RECOVERY_MISMATCH',
@@ -9518,6 +9547,7 @@ function applyWorkspaceMutation(
       } catch (error) {
         return {
           status: 507,
+          internalTimingsMs: { diagnosticsMs, registryPersistMs: 0 },
           body: {
             success: false,
             code: 'RECOVERY_PREPARE_FAILED',
@@ -9531,11 +9561,14 @@ function applyWorkspaceMutation(
     }
     // B2s3/ADR-F5: all real writes go through the immutable registry commit chokepoint;
     // workspace selection remains tab-local and is never changed by a mutation.
+    const persistStartedAt = workspaceMonotonicNowMs();
     record = registry.commit(record.workspaceId, nextWorkspace, opts.force ? 'api:forced' : (isLegacyWrite ? 'api:legacy-first-contact' : 'api:cas'));
+    registryPersistMs = roundWorkspaceDurationMs(workspaceMonotonicNowMs() - persistStartedAt);
   }
   return {
     status: 200,
     changed: isDifferent,
+    internalTimingsMs: { diagnosticsMs, registryPersistMs },
     ...(recovery ? { recovery } : {}),
     body: {
       success: true, applied: isDifferent,
@@ -9730,6 +9763,7 @@ async function executeWorkspaceReceiptMutation(
   incoming: unknown,
   options: ExecuteWorkspaceReceiptMutationOptions,
 ): Promise<void> {
+  const mutationStartedAt = workspaceMonotonicNowMs();
   const latestAtPrepare = workspaceRegistry.lookup(record.workspaceId);
   if (latestAtPrepare.ok === false) {
     return void res.status(404).json({ code: latestAtPrepare.code, error: latestAtPrepare.error });
@@ -9865,6 +9899,10 @@ async function executeWorkspaceReceiptMutation(
   }
 
   const receiptRecoveryRequired = isDifferent && !options.dryRun && preparationFailure === undefined;
+  const nextContentHead = receiptRecoveryRequired ? workspaceContentHash(nextWorkspace) : '';
+  const nextSnapshotHead = receiptRecoveryRequired ? workspaceSnapshotHash(nextWorkspace) : '';
+  const adapterPrepareMs = roundWorkspaceDurationMs(workspaceMonotonicNowMs() - mutationStartedAt);
+  let serviceTimings: WorkspaceReceiptTransactionTimingsMs | undefined;
   let recoveryPrepared: WorkspaceReceiptRecovery | undefined;
   let mutationRecord: WorkspaceRecord | undefined;
   let mutationResult: WorkspaceMutationResult | undefined = preparationFailure;
@@ -9907,6 +9945,9 @@ async function executeWorkspaceReceiptMutation(
     },
     store: actionReceiptStore,
     serializationKey: `workspace:${preparedRecord.workspaceId}`,
+    onTimings: timings => {
+      serviceTimings = timings;
+    },
     mayMutate: async ({ receipt }) => {
       const deadlineRequest = req as DeadlineAwareRequest;
       if (res.writableEnded || res.destroyed || deadlineRequest.__forgeResponseDeadlineExceeded) {
@@ -9940,24 +9981,28 @@ async function executeWorkspaceReceiptMutation(
         return false;
       }
       let currentResources: ReturnType<typeof workspaceReceiptResources>;
-      try {
-        currentResources = workspaceReceiptResources(latest.record.workspaceId, sanitizeWorkspace(latest.record.workspace));
-      } catch {
-        mutationResult = {
-          status: 409,
-          changed: false,
-          body: {
-            success: false,
-            code: 'WORKSPACE_STATE_UNAVAILABLE',
-            error: 'Workspace receipt mutation refused because the addressed workspace state could not be re-read.',
-            workspaceId: preparedRecord.workspaceId,
-            currentHead: workspaceHash(latest.record),
-            currentSnapshotHash: workspaceRegistry.snapshotHash(latest.record),
-            currentVersion: latest.record.version,
-          },
-        };
-        abandonedRecovery(receiptRecoveryRequired ? receipt.id : undefined);
-        return false;
+      if (latest.record === preparedRecord) {
+        currentResources = beforeResources;
+      } else {
+        try {
+          currentResources = workspaceReceiptResources(latest.record.workspaceId, sanitizeWorkspace(latest.record.workspace));
+        } catch {
+          mutationResult = {
+            status: 409,
+            changed: false,
+            body: {
+              success: false,
+              code: 'WORKSPACE_STATE_UNAVAILABLE',
+              error: 'Workspace receipt mutation refused because the addressed workspace state could not be re-read.',
+              workspaceId: preparedRecord.workspaceId,
+              currentHead: workspaceHash(latest.record),
+              currentSnapshotHash: workspaceRegistry.snapshotHash(latest.record),
+              currentVersion: latest.record.version,
+            },
+          };
+          abandonedRecovery(receiptRecoveryRequired ? receipt.id : undefined);
+          return false;
+        }
       }
       if (!sameWorkspaceReceiptResources(currentResources, receipt.authority.resources)) {
         mutationResult = {
@@ -9988,8 +10033,8 @@ async function executeWorkspaceReceiptMutation(
             beforeWorkspace,
             beforeHash: workspaceHash(preparedRecord),
             beforeSnapshotHash: workspaceRegistry.snapshotHash(preparedRecord),
-            expectedCurrentHash: workspaceContentHash(nextWorkspace),
-            expectedCurrentSnapshotHash: workspaceSnapshotHash(nextWorkspace),
+            expectedCurrentHash: nextContentHead,
+            expectedCurrentSnapshotHash: nextSnapshotHead,
             summary: 'Workspace receipt recovery',
           });
           return true;
@@ -10009,6 +10054,7 @@ async function executeWorkspaceReceiptMutation(
           abandonedRecovery(receiptRecoveryRequired ? receipt.id : undefined);
           return { ok: false, changed: false };
         }
+        const samePreparedTarget = target.record === preparedRecord;
         // The adapter already computed the complete sanitized target above. Reuse it as a
         // full replacement so sanitizeWorkspace cannot generate a second set of defaults
         // (ids/timestamps) during the domain write, especially for merge payloads.
@@ -10021,6 +10067,14 @@ async function executeWorkspaceReceiptMutation(
           force: options.force,
           receiptRecovery: recoveryPrepared,
           receiptPreparedWorkspace: nextWorkspace,
+          ...(samePreparedTarget ? {
+            receiptPreparedBeforeWorkspace: beforeWorkspace,
+            receiptIsDifferent: isDifferent,
+          } : {}),
+          ...(receiptRecoveryRequired ? {
+            receiptExpectedCurrentHash: nextContentHead,
+            receiptExpectedCurrentSnapshotHash: nextSnapshotHead,
+          } : {}),
         });
         mutationResult = domain;
         if (domain.status >= 400 || domain.body?.success === false) {
@@ -10053,12 +10107,14 @@ async function executeWorkspaceReceiptMutation(
           const found = destructiveRecoveryStore.read(receipt.id);
           return found.ok && found.record.kind === 'workspace' ? found.record : undefined;
         })();
+        const expectedRecoveryHash = receiptRecoveryRequired ? nextContentHead : workspaceContentHash(nextWorkspace);
+        const expectedRecoverySnapshotHash = receiptRecoveryRequired ? nextSnapshotHead : workspaceSnapshotHash(nextWorkspace);
         if (recovery === undefined || recovery.status !== 'ready'
           || recovery.workspaceId !== preparedRecord.workspaceId
           || recovery.beforeHash !== workspaceHash(preparedRecord)
           || recovery.beforeSnapshotHash !== workspaceRegistry.snapshotHash(preparedRecord)
-          || recovery.expectedCurrentHash !== workspaceContentHash(nextWorkspace)
-          || recovery.expectedCurrentSnapshotHash !== workspaceSnapshotHash(nextWorkspace)) {
+          || recovery.expectedCurrentHash !== expectedRecoveryHash
+          || recovery.expectedCurrentSnapshotHash !== expectedRecoverySnapshotHash) {
           return { ok: false, partialAfter: workspacePartialAfter(receipt.authority.resources, currentWorkspace, 'workspace_recovery_unavailable') };
         }
         // Re-read immediately before the compensating commit. A later writer that changed
@@ -10096,19 +10152,45 @@ async function executeWorkspaceReceiptMutation(
     abandonedRecovery(recoveryPrepared?.id);
     throw new Error('Workspace receipt transaction failed.');
   }
+  const responseBuildStartedAt = workspaceMonotonicNowMs();
   captureActionReceiptProjection(req, result.receipt);
   const subjectRecord = workspaceRegistry.lookup(record.workspaceId);
   if (subjectRecord.ok) res.locals.apiSubject = workspaceRecordSubject(subjectRecord.record);
+  const finalizeStageTimings = (): WorkspaceStageTimingsMs => {
+    const now = workspaceMonotonicNowMs();
+    const timings: WorkspaceStageTimingsMs = {
+      adapterPrepareMs,
+      policyAndCandidateMs: serviceTimings?.policyAndCandidateMs ?? 0,
+      queueWaitMs: serviceTimings?.queueWaitMs ?? 0,
+      replayLookupMs: serviceTimings?.replayLookupMs ?? 0,
+      recoveryPrepareMs: serviceTimings?.recoveryPrepareMs ?? 0,
+      receiptPrepareMs: serviceTimings?.receiptPrepareMs ?? 0,
+      mayMutateMs: serviceTimings?.mayMutateMs ?? 0,
+      diagnosticsMs: result.replayed ? 0 : (mutationResult?.internalTimingsMs?.diagnosticsMs ?? 0),
+      registryPersistMs: result.replayed ? 0 : (mutationResult?.internalTimingsMs?.registryPersistMs ?? 0),
+      mutateMs: serviceTimings?.mutateMs ?? 0,
+      postconditionMs: serviceTimings?.postconditionMs ?? 0,
+      receiptCommitMs: serviceTimings?.receiptCommitMs ?? 0,
+      responseBuildMs: roundWorkspaceDurationMs(now - responseBuildStartedAt),
+      totalMs: roundWorkspaceDurationMs(now - mutationStartedAt),
+    };
+    decoratedReq(req).__workspaceStageTimingsMs = timings;
+    res.setHeader('X-Forge-Workspace-Stage-Timings', JSON.stringify(timings));
+    return timings;
+  };
   if (!result.ok) {
     if (!result.receipt) abandonedRecovery(recoveryPrepared?.id);
     else if (result.receipt.status === 'failed') abandonedRecovery(recoveryPrepared?.id);
     const failure = workspaceReceiptFailureBody(result, mutationResult);
-    return void res.status(failure.status).json(failure.body);
+    const stageTimingsMs = finalizeStageTimings();
+    const failureBody = options.transformSuccessBody ? failure.body : { ...failure.body, stageTimingsMs };
+    return void res.status(failure.status).json(failureBody);
   }
 
   if (result.replayed) {
     const replayed = workspaceRegistry.lookup(preparedRecord.workspaceId);
     if (replayed.ok === false) {
+      const stageTimingsMs = finalizeStageTimings();
       return void res.status(500).json({
         success: false,
         status: 'FAILED',
@@ -10116,14 +10198,19 @@ async function executeWorkspaceReceiptMutation(
         error: 'The committed workspace receipt replay could not read the addressed workspace.',
         failedStages: ['workspace_replay'],
         receipt: result.receipt,
+        ...(options.transformSuccessBody ? {} : { stageTimingsMs }),
       });
     }
     const replayRawBody = currentWorkspaceReplayBody(replayed.record, options.mode, result.receipt) as Record<string, unknown>;
-    const replayBody = options.transformSuccessBody ? options.transformSuccessBody(replayRawBody) : replayRawBody;
+    const stageTimingsMs = finalizeStageTimings();
+    const replayBody = options.transformSuccessBody
+      ? options.transformSuccessBody(replayRawBody)
+      : { ...replayRawBody, stageTimingsMs };
     return void res.status(200).json(replayBody);
   }
 
   if (mutationResult === undefined || mutationResult.status >= 400 || mutationResult.body?.success === false) {
+    const stageTimingsMs = finalizeStageTimings();
     return void res.status(500).json({
       success: false,
       status: 'FAILED',
@@ -10131,10 +10218,14 @@ async function executeWorkspaceReceiptMutation(
       error: 'The committed workspace receipt had no truthful mutation response.',
       failedStages: ['workspace_response'],
       receipt: result.receipt,
+      ...(options.transformSuccessBody ? {} : { stageTimingsMs }),
     });
   }
   const rawBody = { ...(mutationResult.body || {}), receipt: result.receipt } as Record<string, unknown>;
-  const body = options.transformSuccessBody ? options.transformSuccessBody(rawBody) : rawBody;
+  const stageTimingsMs = finalizeStageTimings();
+  const body = options.transformSuccessBody
+    ? options.transformSuccessBody(rawBody)
+    : { ...rawBody, stageTimingsMs };
   return void res.status(mutationResult.status).json(body);
 }
 
