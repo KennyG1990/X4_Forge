@@ -5,7 +5,8 @@ import { prepareDeployReview, type DeployReviewData } from './lib/deployClient';
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Undo2, Redo2, Keyboard, PanelLeftOpen, Rocket } from 'lucide-react';
+import { Undo2, Redo2, Keyboard, PanelLeftOpen, Rocket, Lock } from 'lucide-react';
+import type { PublicDriverLeaseStatus } from './lib/driverLease';
 import BugReportModal from './components/BugReportModal';
 import Sidebar from './components/Sidebar';
 import HealthCardOverlay from './components/HealthCardOverlay';
@@ -2237,6 +2238,68 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
       if (Array.isArray(data?.parked)) setParkedList(data.parked);
     } catch { /* switcher just shows presets when the list is unavailable */ }
   };
+
+  // #49: TTL-bounded driver session lease coordination across Studio UI, Agent API, and MCP.
+  const [driverLease, setDriverLease] = useState<PublicDriverLeaseStatus | null>(null);
+  const [driverLeaseBusy, setDriverLeaseBusy] = useState(false);
+  const refreshDriverLease = async () => {
+    try {
+      const res = await fetch('/api/agent/lease');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data?.driverLease && typeof data.driverLease.held === 'boolean') {
+        setDriverLease(data.driverLease as PublicDriverLeaseStatus);
+      }
+    } catch { /* background coordination poll fails softly */ }
+  };
+  const manageStudioDriverLease = async (
+    payload: { action: 'acquire' | 'renew' | 'release'; driver?: string; purpose?: string; ttlMs?: number; force?: boolean },
+  ) => {
+    setDriverLeaseBusy(true);
+    try {
+      const res = await fetch('/api/agent/lease', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json().catch(() => null);
+      if (data?.driverLease && typeof data.driverLease.held === 'boolean') {
+        setDriverLease(data.driverLease as PublicDriverLeaseStatus);
+      }
+      if (!res.ok) {
+        toast(data?.error || `Driver lease ${payload.action} failed (${res.status}).`, 'error');
+        return;
+      }
+      if (payload.action === 'acquire') {
+        toast('UI Driver Lease active (5 min). External agent writes and deploys will pause with HTTP 409.', 'success');
+      } else if (payload.action === 'renew') {
+        toast('Extended UI Driver Lease by 5 minutes.', 'success');
+      } else if (payload.action === 'release') {
+        toast(payload.force ? 'Force-released active driver lease.' : 'Released UI Driver Lease.', 'info');
+      }
+    } catch (error) {
+      toast(`Driver lease ${payload.action} failed: ${error instanceof Error ? error.message : String(error)}`, 'error');
+    } finally {
+      setDriverLeaseBusy(false);
+    }
+  };
+  useEffect(() => {
+    void refreshDriverLease();
+    const intervalMs = driverLease?.held ? 5_000 : 10_000;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== 'hidden') void refreshDriverLease();
+    }, intervalMs);
+    const onFocusOrVisible = () => {
+      if (document.visibilityState !== 'hidden') void refreshDriverLease();
+    };
+    window.addEventListener('focus', onFocusOrVisible);
+    document.addEventListener('visibilitychange', onFocusOrVisible);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', onFocusOrVisible);
+      document.removeEventListener('visibilitychange', onFocusOrVisible);
+    };
+  }, [driverLease?.held]);
   // Ready before interaction: on boot, and whenever a switch/load may have parked
   // something (workspace name change). onFocus refresh stays as a liveness bonus.
   useEffect(() => { refreshParkedList(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [workspace.name]);
@@ -2764,6 +2827,15 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
             onOpenReleaseCenter={() => setActiveSidebarTab('playtest')}
             onToggleBottomDock={() => toggleBottomDock()}
             onToggleRightInspector={toggleRightInspector}
+            driverLeaseHeldByUi={Boolean(driverLease?.held && driverLease.heldByCaller)}
+            driverLeaseBusy={driverLeaseBusy}
+            onToggleUiDriverLease={() => {
+              if (driverLease?.held && driverLease.heldByCaller) {
+                void manageStudioDriverLease({ action: 'release' });
+              } else {
+                void manageStudioDriverLease({ action: 'acquire', driver: 'studio-ui', purpose: 'Interactive Studio editing', ttlMs: 300_000 });
+              }
+            }}
             actions={{
               'sync-mod': () => setIsSyncModalOpen(true),
               'ai-settings': () => setIsAIConfigOpen(true),
@@ -2803,6 +2875,61 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
           </div>
         )}
       />
+
+      {driverLease?.held && (
+        <div
+          data-testid="studio-driver-lease-banner"
+          data-lease-owner={driverLease.heldByCaller ? 'studio' : 'agent'}
+          className={`flex shrink-0 items-center justify-between gap-3 border-b px-3 py-1.5 text-[11.5px] ${
+            driverLease.heldByCaller
+              ? 'border-emerald-500/35 bg-emerald-950/40 text-emerald-100'
+              : 'border-amber-500/45 bg-amber-950/45 text-amber-100'
+          }`}
+        >
+          <div className="flex min-w-0 items-center gap-2">
+            <Lock className={`h-3.5 w-3.5 shrink-0 ${driverLease.heldByCaller ? 'text-emerald-300' : 'text-amber-300'}`} />
+            <span className="truncate" data-testid="studio-driver-lease-summary">
+              {driverLease.heldByCaller
+                ? `UI Driver Lease active — external agent writes and deploys return 409 (${Math.max(1, Math.ceil(driverLease.remainingMs / 1000))}s remaining)`
+                : `Forge is currently in use by ${driverLease.driver}${driverLease.actorLabel && driverLease.actorLabel !== driverLease.driver ? ` (${driverLease.actorLabel})` : ''}${driverLease.purpose ? ` — ${driverLease.purpose}` : ''} (${Math.max(1, Math.ceil(driverLease.remainingMs / 1000))}s remaining)`}
+            </span>
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
+            {driverLease.heldByCaller ? (
+              <>
+                <button
+                  type="button"
+                  data-testid="driver-lease-renew-btn"
+                  disabled={driverLeaseBusy}
+                  onClick={() => void manageStudioDriverLease({ action: 'renew', ttlMs: 300_000 })}
+                  className="rounded border border-emerald-400/40 bg-emerald-500/15 px-2 py-0.5 text-[11px] font-medium text-emerald-100 hover:bg-emerald-500/25 cursor-pointer disabled:opacity-50"
+                >
+                  Extend 5m
+                </button>
+                <button
+                  type="button"
+                  data-testid="driver-lease-release-btn"
+                  disabled={driverLeaseBusy}
+                  onClick={() => void manageStudioDriverLease({ action: 'release' })}
+                  className="rounded border border-slate-600/70 bg-slate-900/70 px-2 py-0.5 text-[11px] font-medium text-slate-200 hover:text-white cursor-pointer disabled:opacity-50"
+                >
+                  Release Lease
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                data-testid="driver-lease-force-release-btn"
+                disabled={driverLeaseBusy}
+                onClick={() => void manageStudioDriverLease({ action: 'release', force: true })}
+                className="rounded border border-amber-400/50 bg-amber-500/20 px-2 py-0.5 text-[11px] font-semibold text-amber-100 hover:bg-amber-500/30 cursor-pointer disabled:opacity-50"
+              >
+                Force Release (Owner)
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* B29: viewport-anchored sync-status layer — can NEVER be clipped by header overflow.
           Persistent until resolved (unlike the transient toast stack), so it lives in its own

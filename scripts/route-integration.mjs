@@ -822,6 +822,7 @@ async function main() {
     'release.artifact.verify', 'release.nexus.prepare', 'release.steam.adopt', 'release.steam.prepare', 'release.steam.verify',
     'reviews.warning.revoke', 'rules.suppression.apply', 'rules.suppression.prepare',
     'runtime.bridge.read', 'runtime.control.read', 'runtime.cue.telemetry', 'runtime.debug.read', 'runtime.gamelog.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domain.inspect', 'schema.domains.list', 'schema.element.explain',
+    'session.lease.manage', 'session.lease.read',
     'snapshots.create', 'snapshots.delete', 'snapshots.list', 'snapshots.restore', 'studio.preferences.read',
     'text.lookup', 'ui.lua.preview', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read',
     'workspace.compile', 'workspace.compile.result', 'workspace.domain.read', 'workspace.domain.write', 'workspace.generate.preview', 'workspace.graph.critic', 'workspace.graph.explain', 'workspace.graph.simulate', 'workspace.mod.drift', 'workspace.mod.import', 'workspace.nodes.diagnose', 'workspace.read', 'workspace.roundtrip.check',
@@ -1463,11 +1464,11 @@ async function main() {
     ['read', readEffective, 'read', ['ai.usage.read', 'contracts.derive', 'contracts.glue.preview', 'contracts.registry.read', 'diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.file.read', 'extensions.overrides.analyze', 'help.bug.report', 'help.knowledge.read', 'history.list', 'history.raw.read',
       'patch.audit.read', 'patch.base.read', 'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.complete', 'patch.xpath.synthesize', 'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.symbols.search', 'project.xml.references', 'readiness.read',
       'reference.aiscripts.read', 'reference.coverage.read', 'reference.file.read', 'reference.galaxy.read', 'reference.manifest.list', 'reference.objects.search', 'reference.override.orders.read', 'reference.status.read', 'reference.suggest', 'release.artifact.verify', 'rules.suppression.prepare',
-      'runtime.bridge.read', 'runtime.control.read', 'runtime.cue.telemetry', 'runtime.debug.read', 'runtime.gamelog.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domain.inspect', 'schema.domains.list', 'schema.element.explain', 'studio.preferences.read', 'text.lookup', 'ui.lua.preview', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read', 'workspace.domain.read', 'workspace.graph.critic', 'workspace.graph.explain', 'workspace.graph.simulate', 'workspace.nodes.diagnose', 'workspace.read', 'workspace.roundtrip.check']],
+      'runtime.bridge.read', 'runtime.control.read', 'runtime.cue.telemetry', 'runtime.debug.read', 'runtime.gamelog.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domain.inspect', 'schema.domains.list', 'schema.element.explain', 'session.lease.read', 'studio.preferences.read', 'text.lookup', 'ui.lua.preview', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read', 'workspace.domain.read', 'workspace.graph.critic', 'workspace.graph.explain', 'workspace.graph.simulate', 'workspace.nodes.diagnose', 'workspace.read', 'workspace.roundtrip.check']],
     ['write', writeEffective, 'write', ['ai.usage.read', 'contracts.derive', 'contracts.glue.preview', 'contracts.registry.read', 'diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.file.read', 'extensions.overrides.analyze', 'help.bug.report', 'help.knowledge.read', 'history.list', 'history.raw.read', 'patch.audit.read', 'patch.base.read', 'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.complete', 'patch.xpath.synthesize', 'project.validate',
       'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.symbols.search', 'project.xml.references',
       'readiness.read', 'reference.aiscripts.read', 'reference.coverage.read', 'reference.file.read', 'reference.galaxy.read', 'reference.manifest.list', 'reference.objects.search', 'reference.override.orders.read', 'reference.status.read', 'reference.suggest', 'release.artifact.verify', 'rules.suppression.prepare',
-      'runtime.bridge.read', 'runtime.control.read', 'runtime.cue.telemetry', 'runtime.debug.read', 'runtime.gamelog.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domain.inspect', 'schema.domains.list', 'schema.element.explain', 'studio.preferences.read', 'text.lookup', 'ui.lua.preview', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.domain.read', 'workspace.graph.critic', 'workspace.graph.explain', 'workspace.graph.simulate', 'workspace.nodes.diagnose', 'workspace.read', 'workspace.roundtrip.check']],
+      'runtime.bridge.read', 'runtime.control.read', 'runtime.cue.telemetry', 'runtime.debug.read', 'runtime.gamelog.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domain.inspect', 'schema.domains.list', 'schema.element.explain', 'session.lease.manage', 'session.lease.read', 'studio.preferences.read', 'text.lookup', 'ui.lua.preview', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.domain.read', 'workspace.graph.critic', 'workspace.graph.explain', 'workspace.graph.simulate', 'workspace.nodes.diagnose', 'workspace.read', 'workspace.roundtrip.check']],
     ['deploy', deployEffective, 'deploy', expectedCapabilityIds.filter(id => !id.startsWith('configuration.') && !id.startsWith('deploy.') && !id.startsWith('bulk.transform.') && !id.startsWith('files.') && !id.startsWith('snapshots.') && !id.startsWith('release.steam.') && ![
       'history.revert', 'performance.native.collect', 'performance.native.read', 'performance.native.stop', 'project.ai.navigation', 'project.md.navigation', 'project.md.rename', 'release.nexus.prepare', 'reviews.warning.revoke', 'rules.suppression.apply', 'workspace.domain.write', 'workspace.mod.drift', 'workspace.mod.import',
     ].includes(id))],
@@ -7815,6 +7816,111 @@ async function main() {
         criticWs: criticWsRes.status,
         explainWs: explainWsRes.status,
         explainDiag: explainDiagRes.status,
+      }));
+
+    // #49: TTL-bounded driver session lease coordination across Agent API, status, and Studio owner override.
+    const leaseReadIdle = await req('GET', '/api/agent/lease', readKey, undefined, { workspaceId: WORKSPACE_ID, operationId: null });
+    capabilityResponses.set('session.lease.read', leaseReadIdle);
+    const readKeyDeniedManage = await req('POST', '/api/agent/lease', readKey, { action: 'acquire', driver: 'read-agent' }, { workspaceId: WORKSPACE_ID, operationId: null });
+    const leaseAcquireWrite = await req('POST', '/api/agent/lease', writeKey, {
+      action: 'acquire',
+      driver: 'codex-ui',
+      purpose: 'Multi-step modal walkthrough',
+      ttlMs: 60_000,
+    }, { workspaceId: WORKSPACE_ID, operationId: null });
+    capabilityResponses.set('session.lease.manage', leaseAcquireWrite);
+    const statusDuringLease = await req('GET', '/api/agent/status', readKey, undefined, { workspaceId: WORKSPACE_ID, operationId: null });
+    const deployKeyConflictAcquire = await req('POST', '/api/agent/lease', deployKey, {
+      action: 'acquire',
+      driver: 'deploy-bot',
+    }, { workspaceId: WORKSPACE_ID, operationId: null });
+    const deployKeyForceDenied = await req('POST', '/api/agent/lease', deployKey, {
+      action: 'release',
+      force: true,
+    }, { workspaceId: WORKSPACE_ID, operationId: null });
+    const currentWsBeforeBlockedWrite = await req('GET', '/api/agent/workspace', SESSION_TOKEN);
+    const blockedStudioWorkspaceWrite = await req('POST', '/api/agent/workspace', SESSION_TOKEN, {
+      workspace: currentWsBeforeBlockedWrite.json?.workspace,
+      expectedHead: currentWsBeforeBlockedWrite.json?.workspaceHash,
+      expectedSnapshotHash: currentWsBeforeBlockedWrite.json?.snapshotHash,
+    });
+    const allowedStudioWorkspaceDryRun = await req('POST', '/api/agent/workspace', SESSION_TOKEN, {
+      workspace: currentWsBeforeBlockedWrite.json?.workspace,
+      expectedHead: currentWsBeforeBlockedWrite.json?.workspaceHash,
+      expectedSnapshotHash: currentWsBeforeBlockedWrite.json?.snapshotHash,
+      dryRun: true,
+    });
+    const blockedDeployFsWrite = await req('POST', '/api/fs/write', deployKey, {
+      path: 'lease_probe/blocked.txt',
+      content: 'blocked',
+    });
+    const leaseProbeModId = 'lease_probe_mod';
+    const leaseProbeModDir = path.join(safeWorkspace, leaseProbeModId);
+    fs.mkdirSync(path.join(leaseProbeModDir, 'md'), { recursive: true });
+    fs.writeFileSync(path.join(leaseProbeModDir, 'content.xml'), '<?xml version="1.0" encoding="utf-8"?><content id="lease_probe_mod" name="Lease Probe Mod" version="100" author="Forge QA" date="2026-11-25" save="0"/>');
+    fs.writeFileSync(path.join(leaseProbeModDir, 'md', 'main.xml'), '<?xml version="1.0" encoding="utf-8"?><mdscript name="LeaseProbeMain"><cues><cue name="LeaseProbeCue"><conditions><event_game_loaded/></conditions><actions><set_value name="$ok" exact="1"/></actions></cue></cues></mdscript>');
+    let allowedDryRunDeploy;
+    let blockedApplyDeploy;
+    try {
+      allowedDryRunDeploy = await req('POST', '/api/agent/deploy-verify', deployKey, {
+        path: leaseProbeModId,
+        root: 'workspace',
+        dryRun: true,
+        detail: 'compact',
+      });
+      blockedApplyDeploy = await req('POST', '/api/agent/deploy-verify', deployKey, {
+        path: leaseProbeModId,
+        root: 'workspace',
+        dryRun: false,
+        detail: 'compact',
+      });
+    } finally {
+      fs.rmSync(leaseProbeModDir, { recursive: true, force: true });
+    }
+    const forcedStudioWorkspaceDrycheck = await req('POST', '/api/agent/workspace', SESSION_TOKEN, {
+      workspace: currentWsBeforeBlockedWrite.json?.workspace,
+      expectedHead: currentWsBeforeBlockedWrite.json?.workspaceHash,
+      expectedSnapshotHash: currentWsBeforeBlockedWrite.json?.snapshotHash,
+    }, { headers: { 'x-forge-lease-force': '1' } });
+    const studioForceRelease = await req('POST', '/api/agent/lease', SESSION_TOKEN, {
+      action: 'release',
+      force: true,
+    }, { operationId: null });
+    const leaseAfterForceRelease = await req('GET', '/api/agent/lease', readKey, undefined, { workspaceId: WORKSPACE_ID, operationId: null });
+
+    ok('driver_session_lease_blocks_competing_mutations_and_supports_studio_owner_override',
+      leaseReadIdle.status === 200 && leaseReadIdle.json?.driverLease?.held === false
+        && readKeyDeniedManage.status === 403
+        && leaseAcquireWrite.status === 200 && leaseAcquireWrite.json?.acquired === true
+        && leaseAcquireWrite.json?.driverLease?.held === true
+        && leaseAcquireWrite.json?.driverLease?.driver === 'codex-ui'
+        && statusDuringLease.status === 200 && statusDuringLease.json?.driverLease?.held === true
+        && statusDuringLease.json?.driverLease?.heldByCaller === false
+        && deployKeyConflictAcquire.status === 409 && deployKeyConflictAcquire.json?.code === 'DRIVER_LEASE_HELD'
+        && deployKeyForceDenied.status === 403 && deployKeyForceDenied.json?.code === 'DRIVER_LEASE_FORCE_STUDIO_ONLY'
+        && blockedStudioWorkspaceWrite.status === 409 && blockedStudioWorkspaceWrite.json?.code === 'DRIVER_LEASE_HELD'
+        && allowedStudioWorkspaceDryRun.status === 200
+        && blockedDeployFsWrite.status === 409 && blockedDeployFsWrite.json?.code === 'DRIVER_LEASE_HELD'
+        && allowedDryRunDeploy.json?.code !== 'DRIVER_LEASE_HELD'
+        && blockedApplyDeploy.status === 409 && blockedApplyDeploy.json?.code === 'DRIVER_LEASE_HELD'
+        && forcedStudioWorkspaceDrycheck.status === 200
+        && studioForceRelease.status === 200 && studioForceRelease.json?.forced === true
+        && leaseAfterForceRelease.status === 200 && leaseAfterForceRelease.json?.driverLease?.held === false,
+      JSON.stringify({
+        idle: leaseReadIdle.status,
+        readDenied: readKeyDeniedManage.status,
+        acquire: leaseAcquireWrite.status,
+        statusHeld: statusDuringLease.json?.driverLease,
+        conflict: deployKeyConflictAcquire.status,
+        agentForce: deployKeyForceDenied.status,
+        blockedWs: blockedStudioWorkspaceWrite.status,
+        dryRunWs: allowedStudioWorkspaceDryRun.status,
+        blockedFs: blockedDeployFsWrite.status,
+        dryRunDeployCode: allowedDryRunDeploy.json?.code,
+        blockedDeploy: blockedApplyDeploy.status,
+        forcedStudioWs: forcedStudioWorkspaceDrycheck.status,
+        forceRelease: studioForceRelease.status,
+        afterRelease: leaseAfterForceRelease.json?.driverLease?.held,
       }));
   }
 

@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { Bug, Cpu, FolderGit2, Menu, PackageCheck, PanelBottom, PanelRight, Settings, Sparkles, Trash } from 'lucide-react';
+import { Bug, Cpu, FolderGit2, Lock, Menu, PackageCheck, PanelBottom, PanelRight, Settings, Sparkles, Trash, Unlock } from 'lucide-react';
 import type { GLOBAL_ACTION_IDS } from '../lib/studioLayout';
 
 export type StudioMenuAction = Extract<(typeof GLOBAL_ACTION_IDS)[number],
@@ -15,6 +15,9 @@ interface StudioActionsMenuProps {
   onOpenReleaseCenter?: () => void;
   onToggleBottomDock?: () => void;
   onToggleRightInspector?: () => void;
+  driverLeaseHeldByUi?: boolean;
+  driverLeaseBusy?: boolean;
+  onToggleUiDriverLease?: () => void;
 }
 
 export default function StudioActionsMenu({
@@ -26,6 +29,9 @@ export default function StudioActionsMenu({
   onOpenReleaseCenter,
   onToggleBottomDock,
   onToggleRightInspector,
+  driverLeaseHeldByUi,
+  driverLeaseBusy,
+  onToggleUiDriverLease,
 }: StudioActionsMenuProps) {
   const [open, setOpen] = useState(false);
   const menuId = useId();
@@ -171,6 +177,23 @@ export default function StudioActionsMenu({
                   <Cpu aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-sky-400" />
                   Agent API
                 </button>
+                {onToggleUiDriverLease && (
+                  <button
+                    type="button"
+                    data-testid="driver-lease-menu-btn"
+                    disabled={driverLeaseBusy}
+                    title="Hold a TTL-bounded Studio UI driver lease so concurrent external agents receive HTTP 409 instead of mutating or deploying mid-edit"
+                    onClick={() => runExtra(onToggleUiDriverLease)}
+                    className="studio-menu-item disabled:opacity-50"
+                  >
+                    {driverLeaseHeldByUi ? (
+                      <Unlock aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+                    ) : (
+                      <Lock aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-amber-300" />
+                    )}
+                    <span>{driverLeaseHeldByUi ? 'Release UI Driver Lease' : 'Take UI Driver Lease'}</span>
+                  </button>
+                )}
               </>
             )}
 

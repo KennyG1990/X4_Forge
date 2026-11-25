@@ -204,6 +204,8 @@ const DIAGNOSTIC_READ_LIVE_TOOLS = new Set([
   "diagnose_workspace_nodes",
   "list_override_order_issuers",
   "list_reference_aiscripts",
+  "get_driver_lease",
+  "manage_driver_lease",
 ]);
 const PERFORMANCE_PROFILE_HTTP_FAILURES = { PROFILE_DISABLED: 503, PROFILE_BUSY: 409, PROFILE_RATE_LIMITED: 429, PROFILE_DISPOSED: 503, PROFILE_INPUT_INVALID: 400, PROFILE_ABORTED: 408, PROFILE_FAILED: 500, PROFILE_CLEANUP_UNCONFIRMED: 409 };
 const PERFORMANCE_COLLECTION_HTTP_FAILURES = { PERFORMANCE_DISPOSED: 503, PERFORMANCE_COLLECTION_BUSY: 409, PERFORMANCE_COLLECTION_REFUSED: 409, PROJECT_INPUT_INVALID: 400, PERFORMANCE_COLLECTION_FAILED: 500 };
@@ -3643,6 +3645,56 @@ const TOOLS = [
     ),
   },
   {
+    name: "get_driver_lease",
+    capabilityId: "session.lease.read",
+    capabilityVersion: 1,
+    description: "Read the current TTL-bounded driver session lease status (held, heldByCaller, driver, leaseId, actorKind, actorLabel, purpose, expiresAt, remainingMs) so Studio UI, Agent API, and MCP drivers can inspect who owns interactive or multi-step Forge execution before mutating.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {},
+    },
+    handler: async () => requireResponse(
+      await forge("GET", "/api/agent/lease"),
+      "driver session lease",
+      {
+        ok: "boolean",
+        success: "boolean",
+        driverLease: "object",
+      },
+    ),
+  },
+  {
+    name: "manage_driver_lease",
+    capabilityId: "session.lease.manage",
+    capabilityVersion: 1,
+    description: "Acquire, renew, or release an opt-in TTL-bounded driver session lease (5s..60m, default 5m) on the shared Forge sidecar so concurrent mutating or deploy calls from other principals fail closed with HTTP 409 DRIVER_LEASE_HELD instead of colliding mid-run.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["action"],
+      properties: {
+        action: { type: "string", enum: ["acquire", "renew", "release"] },
+        driver: { type: "string", maxLength: 64 },
+        purpose: { type: "string", maxLength: 240 },
+        client: { type: "string", maxLength: 128 },
+        ttlMs: { type: "integer", minimum: 5000, maximum: 3600000 },
+        leaseId: { type: "string", maxLength: 32 },
+        force: { type: "boolean" },
+      },
+    },
+    handler: async (args) => requireResponse(
+      await forge("POST", "/api/agent/lease", args),
+      "driver session lease management",
+      {
+        ok: "boolean",
+        success: "boolean",
+        action: "string",
+        driverLease: "object",
+      },
+    ),
+  },
+  {
     name: "critique_md_graph",
     capabilityId: "workspace.graph.critic",
     capabilityVersion: 1,
@@ -5224,13 +5276,14 @@ async function forge(method, apiPath, body, signal, nativeDiscovery = false) {
     || apiPath.startsWith("/api/agent/snapshots/")
     || apiPath.startsWith("/api/agent/project-rules/suppression/")
     || apiPath === "/api/agent/workspace/domain";
+  const sessionLeaseRoute = apiPath === "/api/agent/lease";
   const forwardsAuthoredSource = method === "POST" && AUTHORED_NAVIGATION_ROUTES.has(apiPath);
   const res = await fetch(`${BASE}${apiPath}`, {
     method,
     headers,
     ...(signal ? { signal } : {}),
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-    ...(nativeRoute || nativeDiscovery || forwardsAuthoredSource || configurationRoute || deployRoute || workspaceFilesRoute ? { redirect: "error" } : {}),
+    ...(nativeRoute || nativeDiscovery || forwardsAuthoredSource || configurationRoute || deployRoute || workspaceFilesRoute || sessionLeaseRoute ? { redirect: "error" } : {}),
   });
   let data = null;
   if (nativeRoute || nativeDiscovery) data = await readNativeJson(res, signal, nativeRoute ? NATIVE_PERFORMANCE_RESPONSE_BYTES : NATIVE_PERFORMANCE_DISCOVERY_BYTES);
@@ -5244,6 +5297,7 @@ async function forge(method, apiPath, body, signal, nativeDiscovery = false) {
     if (configurationRoute && isRecord(data)) error.configurationResponse = data;
     if (deployRoute && isRecord(data)) error.deployResponse = data;
     if (workspaceFilesRoute && isRecord(data)) error.workspaceFilesResponse = data;
+    if (sessionLeaseRoute && isRecord(data)) error.sessionLeaseResponse = data;
     throw error;
   }
   requireResponse(data, `Forge API ${apiPath}`);
@@ -5335,6 +5389,9 @@ rl.on("line", async (line) => {
         }
         if (WORKSPACE_FILES_TOOLS.has(TOOLS[toolIndex].name) && isRecord(err?.workspaceFilesResponse)) {
           return reply(id, { content: [{ type: "text", text: JSON.stringify(err.workspaceFilesResponse, null, 2) }], isError: true });
+        }
+        if ((TOOLS[toolIndex].name === "get_driver_lease" || TOOLS[toolIndex].name === "manage_driver_lease") && isRecord(err?.sessionLeaseResponse)) {
+          return reply(id, { content: [{ type: "text", text: JSON.stringify(err.sessionLeaseResponse, null, 2) }], isError: true });
         }
         return reply(id, { content: [{ type: "text", text: `ERROR: ${err && err.message ? err.message : String(err)}` }], isError: true });
       }

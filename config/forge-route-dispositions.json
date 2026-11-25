@@ -69,6 +69,7 @@
     "src/lib/destructiveRecovery.ts",
     "src/lib/diagnosticExplain.ts",
     "src/lib/diffSimulator.ts",
+    "src/lib/driverLease.ts",
     "src/lib/experienceMode.ts",
     "src/lib/expressionAst.ts",
     "src/lib/expressionSuggest.ts",
@@ -1435,6 +1436,18 @@
       ],
       "resourceClass": "public",
       "workspaceMode": "optional"
+    },
+    "GET /api/agent/lease": {
+      "disposition": "canonical-capability",
+      "owner": "session.lease.read",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "workspace",
+      "workspaceMode": "required"
     },
     "GET /api/agent/live-canvas-selftest": {
       "disposition": "public-selftest",
@@ -3717,6 +3730,17 @@
       "resourceClass": "global-session",
       "workspaceMode": "optional"
     },
+    "POST /api/agent/lease": {
+      "disposition": "canonical-capability",
+      "owner": "session.lease.manage",
+      "registrations": 1,
+      "agentScopes": [
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "workspace",
+      "workspaceMode": "required"
+    },
     "POST /api/agent/live/cue-telemetry": {
       "disposition": "legacy-agent-api",
       "owner": "agent-api",
@@ -4921,6 +4945,8 @@
     "schema.domain.inspect@1": "92b2c14ad2397d96e0ec8e48f6c6175059386f729d89053194e54df53010b72a",
     "schema.domains.list@1": "c2ecae2906cf231eb4384a63ea601c7449f4fc691b629b97bff9fa81e32f21b5",
     "schema.element.explain@1": "066fc8d2153c753a7f498044a0fb2e4a6921f81a2fe1deb6445a02894194286d",
+    "session.lease.manage@1": "a48714d782d9e0b52ff9ea3d9c86af06290272bcd7c08a3acf32652efddace63",
+    "session.lease.read@1": "e705c7065266ed731195ce98d9e70b0c7cb7970fb453e629f46555c41a4405ff",
     "snapshots.create@1": "a9fd9da3a02cf0114d12558c1fd769fb4502ea19b527f6fbfc1711e2b9d2183a",
     "snapshots.delete@1": "e10e6672c4c685aeed35f0d403fe7382c03a87697fb66373eacf9f63f6b4bb16",
     "snapshots.list@1": "5738f95e31782262be51c18d53a69950cf5d5fa6173f0863c7e445380f3c1a43",
@@ -4946,8 +4972,8 @@
     "workspace.roundtrip.check@1": "c1a1c89c1eb3f44f8f16e6ca03e9787318eec5065bcf25dd2c3ce3a4b4045185"
   },
   "mcpModuleSignature": {
-    "version": 45,
-    "hash": "fbc696401dd69984314cc4e79c3f6a465dfd770016f95fba28fd242802d964eb"
+    "version": 46,
+    "hash": "9470327ec7573c324cf345eea97f3dfb9bedae68c6272cd4db52a0a8ec9269ed"
   },
   "mcpSignatures": {
     "validate_mod": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",
@@ -5058,6 +5084,8 @@
     "analyze_cue_telemetry": "c606d214cdf798454e30c45280cab1e95a012b1d894979962072ec604048d8cf",
     "get_game_log_status": "885dff61e657f7738a57e76b8f98dada3460d78d0b28f48135a7a7a8c692c50d",
     "get_studio_preferences": "ff7532dcec8e1d55ec216710cb7cc553c8dab4c7ab0814e13d0355bed64b03e9",
+    "get_driver_lease": "3711ff36bc917c254ed006756796f8cbe329ff907a461a1721634bb0f7baaf4b",
+    "manage_driver_lease": "aaae4b345e6232ccd8a3a889be6974ecf7073c82320c9162098856c181d7fb31",
     "critique_md_graph": "562d4f2c6355f9b2c0534f0e5cfdc04cffdcda43b26fe0c7baba4754246ef77c",
     "explain_md_graph": "01a794f053ac3692ef762ae2742b583165ec93c888a1cd816c6c2155f4c9debb",
     "simulate_md_graph": "1f90a23daa5a4e6bb5f18786b305337a7f3abe1f700a9a153c8355f666f1fc38",
@@ -5172,6 +5200,8 @@
     "analyze_cue_telemetry": "runtime.cue.telemetry@1",
     "get_game_log_status": "runtime.gamelog.read@1",
     "get_studio_preferences": "studio.preferences.read@1",
+    "get_driver_lease": "session.lease.read@1",
+    "manage_driver_lease": "session.lease.manage@1",
     "critique_md_graph": "workspace.graph.critic@1",
     "explain_md_graph": "workspace.graph.explain@1",
     "simulate_md_graph": "workspace.graph.simulate@1",

@@ -9,6 +9,7 @@ import { decideEffectiveCapability, type AgentCapabilityConstraint } from './age
 import { LEDGER_QUIET_ROUTES, ledgerRouteKind } from './agentHistory';
 import { runForgeKnowledgeSelftest } from './forgeKnowledge';
 import { runWorkspaceDomainAuthoringSelftest } from './workspaceDomainAuthoring';
+import { runDriverLeaseSelftest } from './driverLease';
 import {
   FORGE_CAPABILITIES,
   FORGE_UI_ACTION_PARITY_CENSUS,
@@ -53,7 +54,9 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
 
   const validationErrors = validateForgeCapabilityRegistry();
   check('registry invariants', validationErrors.length === 0, validationErrors.join(' | ') || undefined);
-  check('bounded non-native registry', FORGE_CAPABILITIES.filter(capability => !capability.id.startsWith('performance.native.')).length === 108, `count=${FORGE_CAPABILITIES.length}`);
+  check('bounded non-native registry', FORGE_CAPABILITIES.filter(capability => !capability.id.startsWith('performance.native.')).length === 110, `count=${FORGE_CAPABILITIES.length}`);
+  const driverLeaseSelftest = runDriverLeaseSelftest();
+  check('driverLease TTL, CAS, and owner override selftest', driverLeaseSelftest.passed === 16, `passed=${driverLeaseSelftest.passed}`);
   const knowledgeSelftest = runForgeKnowledgeSelftest();
   check('forgeKnowledge shared wiki/shortcuts/onboarding selftest', knowledgeSelftest.pass, knowledgeSelftest.checks.filter(c => !c.pass).map(c => c.name).join(', ') || undefined);
   const domainAuthoringSelftest = runWorkspaceDomainAuthoringSelftest();
@@ -675,7 +678,7 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
       builtCensus.censusHash === builtCensusSecond.censusHash &&
       FORGE_UI_ACTION_PARITY_DOMAINS.every(domain => coveredDomains.has(domain)) &&
       builtCensus.summary.totalActions === FORGE_UI_ACTION_PARITY_CENSUS.length &&
-      builtCensus.summary.available === 23 &&
+      builtCensus.summary.available === 24 &&
       builtCensus.summary.approvalRequired === 2 &&
       builtCensus.summary.missing === 6 &&
       builtCensus.summary.available + builtCensus.summary.approvalRequired + builtCensus.summary.partial + builtCensus.summary.missing === builtCensus.summary.totalActions &&
@@ -727,7 +730,7 @@ export function runNativeForgeCapabilitiesSelftest() {
   const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   const keys = (value: object | undefined) => Object.keys(value || {}).sort();
   check('native registry has exactly the three reviewed process telemetry identities',
-    FORGE_CAPABILITIES.length === 111 &&
+    FORGE_CAPABILITIES.length === 113 &&
       equal(FORGE_CAPABILITIES.filter(capability => capability.id.startsWith('performance.native.')).map(capability => capability.id).sort(),
         expected.map(row => row.id).sort()));
   for (const row of expected) {

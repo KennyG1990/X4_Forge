@@ -319,6 +319,7 @@ import { generatedOutputVerdict, normalizeApiFailureBody, runApiFailureEnvelopeS
 import { projectApiEnvelope, projectApiSubject, fileApiSubject, workspaceApiSubject, pastedLogApiSubject, releaseReportApiSubject, validateProjectApiBody, validateProjectApiQuery, validateWorkspaceCreateBody, validateWorkspaceMutationBody, type ApiSubject } from './src/server/projectApiContract';
 import { canonicalSourceKey, canonicalSourcePath, sourceKeyForResolvedPath } from './src/server/resourceCoordinator';
 import { forgeSourceCoordinator, processLiveness, type ProjectCheckSourceLease, type ProjectCheckStageLease } from './src/server/sharedSourceCoordinator';
+import { DriverLeaseStore, type DriverLeaseActor } from './src/lib/driverLease';
 import {
   CLIENT_API_DEADLINE_MS,
   CLIENT_LONG_API_DEADLINE_MS,
@@ -1342,6 +1343,8 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
       || authority.decision.routeKey === 'POST /api/agent/runtime/cue-telemetry'
       || authority.decision.routeKey === 'GET /api/agent/runtime/game-log'
       || authority.decision.routeKey === 'GET /api/agent/studio/preferences'
+      || authority.decision.routeKey === 'GET /api/agent/lease'
+      || authority.decision.routeKey === 'POST /api/agent/lease'
       || authority.decision.routeKey === 'POST /api/agent/workspace/critic'
       || authority.decision.routeKey === 'POST /api/agent/workspace/explain'
       || authority.decision.routeKey === 'POST /api/agent/workspace/node-diagnostics'
@@ -1466,6 +1469,52 @@ const projectCheckOwnerEnrollment = new ProjectCheckOwnerEnrollment(actionReceip
 const deployValidatorHash = deploymentImplementationHash(serverEntry, canonicalMdCompiledWorker);
 const deployStudioActorId = `studio:${crypto.randomUUID()}`;
 const workspaceReceiptService = new WorkspaceReceiptService();
+const driverLeaseStore = new DriverLeaseStore();
+
+function driverLeaseActorForRequest(req: express.Request): DriverLeaseActor {
+  const actor = decoratedReq(req).__actor;
+  const record = decoratedReq(req).__workspaceRecord as WorkspaceRecord | undefined;
+  const ws = record?.workspace as ModWorkspace | undefined;
+  const modId = ws ? (effectiveModId(activeBuildWorkspace(ws)) || null) : null;
+  if (!actor || actor.kind === 'studio') {
+    return {
+      principalId: 'studio',
+      actorKind: 'studio',
+      actorLabel: actor?.label || 'Studio UI',
+      defaultDriver: 'studio-ui',
+      workspaceId: record?.workspaceId ?? null,
+      modId,
+    };
+  }
+  return {
+    principalId: `agent:${actor.keyId || actor.label}`,
+    actorKind: 'agent',
+    actorLabel: actor.label || 'Agent Key',
+    defaultDriver: req.get('x-forge-channel') === 'mcp' ? 'agent-mcp' : 'agent-api',
+    workspaceId: record?.workspaceId ?? actor.workspaceId ?? null,
+    modId,
+  };
+}
+
+function driverLeaseForceRequested(req: express.Request): boolean {
+  const forceHeader = req.get('x-forge-lease-force');
+  return forceHeader === '1' || forceHeader === 'true';
+}
+
+function enforceDriverLeaseForMutation(req: express.Request, res: express.Response): boolean {
+  const decision = driverLeaseStore.checkMutation(driverLeaseActorForRequest(req), {
+    forceOverride: driverLeaseForceRequested(req),
+  });
+  if (decision.allowed !== false) return true;
+  res.status(decision.status).json({
+    ok: false,
+    success: false,
+    code: decision.code,
+    error: decision.error,
+    driverLease: decision.driverLease,
+  });
+  return false;
+}
 
 type ActionReceiptProjection = { id: string; hash: string; status: string };
 type WorkspaceReceiptRecovery = ReturnType<DestructiveRecoveryStore['createWorkspace']>;
@@ -5736,6 +5785,36 @@ app.get("/api/agent/studio/preferences", (req, res) => {
   }
 });
 
+app.get("/api/agent/lease", (req, res) => {
+  try {
+    const queryError = validateClosedAgentQuery(req.query, ['workspaceId', 'clientId'], 'session.lease.read');
+    if (queryError) return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    res.set('Cache-Control', 'no-store');
+    const actor = driverLeaseActorForRequest(req);
+    return res.json({
+      ok: true,
+      success: true,
+      driverLease: driverLeaseStore.status(actor.principalId),
+    });
+  } catch (error) {
+    return res.status(500).json({ ok: false, success: false, error: errorMessage(error) || 'Failed to read driver session lease.' });
+  }
+});
+
+app.post("/api/agent/lease", (req, res) => {
+  try {
+    const queryError = validateClosedAgentQuery(req.query, ['workspaceId', 'clientId'], 'session.lease.manage');
+    if (queryError) return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+    res.set('Cache-Control', 'no-store');
+    const record = requestWorkspace(req);
+    res.locals.apiSubject = workspaceRecordSubject(record);
+    const result = driverLeaseStore.manage(driverLeaseActorForRequest(req), req.body);
+    return res.status(result.status).json(result.body);
+  } catch (error) {
+    return res.status(500).json({ ok: false, success: false, error: errorMessage(error) || 'Failed to manage driver session lease.' });
+  }
+});
+
 app.post("/api/schema/config", (req, res) => {
   if (!requireStudioActor(req, res)) return;
   try {
@@ -6989,6 +7068,7 @@ app.post("/api/fs/write", coordinatedSourceOperation((req, res) => {
   const attempt: WorkspaceWriteAttempt = { stage: 'preflight' };
   const incoming = req.body?.content ?? '';
   try {
+    if (!enforceDriverLeaseForMutation(req, res)) return;
     const targetPath = String(req.body?.path || '').trim();
     const config = resolveXsdConfig();
     const expectedRootId = req.body?.expectedWorkspaceRootId;
@@ -7416,6 +7496,7 @@ app.get("/api/agent/status", async (req, res) => {
       },
       sourceSync,
       sourceCoordination: forgeSourceCoordinator.status(sourceDir ? [canonicalSourceKey(sourceDir)] : [], record.workspaceId),
+      driverLease: driverLeaseStore.status(driverLeaseActorForRequest(req).principalId),
       environment: { scope: 'server-process', pid: process.pid, mode: process.env.X4_FORGE_MODE || 'standalone' },
       roots: {
         modWorkspacePath: resolved.modWorkspacePath || null,
@@ -7817,6 +7898,7 @@ function handleDeployUndoRoute(req: express.Request, res: express.Response, leas
     const record = requestWorkspace(req);
     const principal = deploymentPrincipal(req);
     if (principal.kind === 'agent') assertCurrentDeployKey(req, principal, record.workspaceId);
+    if (!enforceDriverLeaseForMutation(req, res)) return;
     const body = req.body as { deployOperationId?: string; recoveryId?: string; historyId?: string };
     let resolvedRecoveryId: string;
     let matchedRow: LedgerRow | undefined;
@@ -7909,6 +7991,7 @@ function handleHistoryRevertById(
     let record = requestWorkspace(req);
     const principal = deploymentPrincipal(req);
     if (principal.kind === 'agent') assertCurrentDeployKey(req, principal, record.workspaceId);
+    if (!enforceDriverLeaseForMutation(req, res)) return;
     const row = agentHistoryStore.find(rowId);
     if (!row || row.workspaceId !== record.workspaceId) return res.status(404).json({ ok: false, code: 'HISTORY_ENTRY_NOT_FOUND', error: 'No such history entry in this workspace.' });
     const rule = revertibility(row.kind, row.outcome, !!row.beforeBlob, !!row.recoveryId);
@@ -8046,6 +8129,7 @@ app.post("/api/fs/create", coordinatedSourceOperation((req, res) => {
     if (!name) {
       return res.status(400).json({ error: "Missing name parameter." });
     }
+    if (!enforceDriverLeaseForMutation(req, res)) return;
     const cleanName = name.replace(/[^a-zA-Z0-9_.-]/g, '_');
     const resolved = resolveXsdConfig();
     const rootPath = resolved.modWorkspacePath;
@@ -8581,6 +8665,7 @@ app.post("/api/agent/snapshots/restore", (req, res, next) => {
   if (detail !== undefined && detail !== 'compact' && detail !== 'full') {
     return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'detail must be "compact" or "full".' });
   }
+  if (!enforceDriverLeaseForMutation(req, res)) return;
   req.headers['x-forge-operation-id'] = operationId;
   return next();
 }, coordinatedSourceOperation(async (req, res) => {
@@ -8786,6 +8871,7 @@ app.post("/api/fs/delete-dir", coordinatedSourceOperation((req, res) => {
   try {
     const relativePath = String(req.body?.path || '').trim();
     if (!relativePath) return res.status(400).json({ error: "Missing path parameter." });
+    if (!enforceDriverLeaseForMutation(req, res)) return;
     const normalized = path.normalize(relativePath);
     if (path.isAbsolute(normalized) || normalized.startsWith('..') || normalized === '' || normalized === '.') {
       return res.status(400).json({ error: "Invalid path." });
@@ -8810,6 +8896,7 @@ app.post("/api/fs/delete-dir", coordinatedSourceOperation((req, res) => {
 }));
 
 app.post("/api/fs/delete-file", coordinatedSourceOperation((req, res) => {
+  if (!enforceDriverLeaseForMutation(req, res)) return;
   const body = isPlainRecord(req.body) ? req.body : {};
   const targetPath = typeof body.path === 'string' ? body.path : '';
   const expectedSha256 = typeof body.expectedSha256 === 'string' ? body.expectedSha256 : '';
@@ -8822,6 +8909,7 @@ app.post("/api/fs/delete-file", coordinatedSourceOperation((req, res) => {
 }));
 
 app.post("/api/fs/restore-file", coordinatedSourceOperation((req, res) => {
+  if (!enforceDriverLeaseForMutation(req, res)) return;
   const body = isPlainRecord(req.body) ? req.body : {};
   const recoveryId = typeof body.recoveryId === 'string' ? body.recoveryId : '';
   const expectedWorkspaceRootId = typeof body.expectedWorkspaceRootId === 'string' ? body.expectedWorkspaceRootId : undefined;
@@ -10087,6 +10175,25 @@ app.post("/api/agent/workspace", async (req, res) => {
       };
       preflightKind = 'scope';
     }
+    if (preflightFailure === undefined && dryRun !== true) {
+      const leaseDecision = driverLeaseStore.checkMutation(driverLeaseActorForRequest(req), {
+        forceOverride: driverLeaseForceRequested(req),
+      });
+      if (leaseDecision.allowed === false) {
+        preflightFailure = {
+          status: leaseDecision.status,
+          changed: false,
+          body: {
+            ok: false,
+            success: false,
+            code: leaseDecision.code,
+            error: leaseDecision.error,
+            driverLease: leaseDecision.driverLease,
+          },
+        };
+        preflightKind = 'scope';
+      }
+    }
     return await executeWorkspaceReceiptMutation(req, res, record, workspace, {
       operationId,
       routeKey: 'POST /api/agent/workspace',
@@ -10154,6 +10261,25 @@ app.post("/api/agent/workspace/merge", async (req, res) => {
         },
       };
       preflightKind = 'scope';
+    }
+    if (preflightFailure === undefined && dryRun !== true) {
+      const leaseDecision = driverLeaseStore.checkMutation(driverLeaseActorForRequest(req), {
+        forceOverride: driverLeaseForceRequested(req),
+      });
+      if (leaseDecision.allowed === false) {
+        preflightFailure = {
+          status: leaseDecision.status,
+          changed: false,
+          body: {
+            ok: false,
+            success: false,
+            code: leaseDecision.code,
+            error: leaseDecision.error,
+            driverLease: leaseDecision.driverLease,
+          },
+        };
+        preflightKind = 'scope';
+      }
     }
     return await executeWorkspaceReceiptMutation(req, res, record, changes, {
       operationId,
@@ -14426,6 +14552,7 @@ app.post("/api/agent/bulk-transform/execute", (req, res) => {
   if (detail !== undefined && detail !== 'compact' && detail !== 'full') {
     return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: 'detail must be "compact" or "full".' });
   }
+  if (!enforceDriverLeaseForMutation(req, res)) return;
   req.headers['x-forge-operation-id'] = operationId;
   return executeBulkTransformApplyRoute(req, res, bulkTransformRouteOptions, {
     detail: detail === 'full' ? 'full' : 'compact',
@@ -14655,6 +14782,7 @@ app.post("/api/agent/files/write", (req, res, next) => {
   }
   return next();
 }, coordinatedSourceOperation((req, res) => {
+  if (!enforceDriverLeaseForMutation(req, res)) return;
   const attempt: WorkspaceWriteAttempt = { stage: 'preflight' };
   const body = req.body as Record<string, unknown>;
   const incoming = String(body.content);
@@ -14782,6 +14910,7 @@ app.post("/api/agent/files/delete", (req, res, next) => {
   }
   return next();
 }, coordinatedSourceOperation((req, res) => {
+  if (!enforceDriverLeaseForMutation(req, res)) return;
   const body = req.body as Record<string, unknown>;
   const expectedWorkspaceRootId = typeof body.expectedWorkspaceRootId === 'string' ? body.expectedWorkspaceRootId : undefined;
   return removeWorkspaceFileGuarded(req, res, {
@@ -14818,6 +14947,7 @@ app.post("/api/agent/files/restore", (req, res, next) => {
   }
   return next();
 }, coordinatedSourceOperation((req, res) => {
+  if (!enforceDriverLeaseForMutation(req, res)) return;
   const body = req.body as Record<string, unknown>;
   const recoveryId = String(body.recoveryId);
   const expectedWorkspaceRootId = typeof body.expectedWorkspaceRootId === 'string' ? body.expectedWorkspaceRootId : undefined;
@@ -14976,6 +15106,7 @@ app.post("/api/agent/files/scaffold", (req, res, next) => {
     const modId = String(body.id).trim();
     const starterKind = (body.starterKind as 'minimal' | 'md_cue' | 'ai_influence_starter' | undefined) ?? 'minimal';
     const apply = body.apply !== false;
+    if (apply && !enforceDriverLeaseForMutation(req, res)) return;
     const config = resolveXsdConfig();
     const binding = workspaceRootBinding(config.modWorkspacePath);
     const expectedRootId = body.expectedWorkspaceRootId as string | undefined;
@@ -15185,6 +15316,7 @@ app.post("/api/agent/files/delete-dir", (req, res, next) => {
     const body = req.body as Record<string, unknown>;
     const targetPath = String(body.path).trim();
     const apply = body.apply !== false;
+    if (apply && !enforceDriverLeaseForMutation(req, res)) return;
     const config = resolveXsdConfig();
     const binding = workspaceRootBinding(config.modWorkspacePath);
     const expectedRootId = body.expectedWorkspaceRootId as string | undefined;
@@ -15447,6 +15579,7 @@ app.post("/api/agent/mod-folder/sync", (req, res, next) => {
 }, coordinatedSourceOperation(async (req, res) => {
   try {
     const body = req.body as Record<string, unknown>;
+    if (body.apply === true && !enforceDriverLeaseForMutation(req, res)) return;
     const parsed = parseModFolderImportRequest({ path: body.path, root: body.root });
     if (parsed.ok === false) {
       return res.status(400).json({ ok: false, success: false, code: 'CAPABILITY_INPUT_INVALID', error: parsed.error });
@@ -16194,6 +16327,7 @@ app.post("/api/agent/workspace/domain", (req, res, next) => {
     if (!record) return;
     res.locals.apiSubject = workspaceRecordSubject(record);
     const body = req.body as Record<string, unknown>;
+    if (body.apply === true && !enforceDriverLeaseForMutation(req, res)) return;
     const domain = body.domain as typeof WORKSPACE_AUTHORING_DOMAINS[number];
     const currentSanitized = sanitizeWorkspace(record.workspace);
     const built = buildWorkspaceDomainMergePatch(currentSanitized, domain, body.changes);
@@ -22517,6 +22651,19 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     const acceptances = body.acceptances ?? [];
     if (!Array.isArray(acceptances) || acceptances.length > 127) {
       return res.status(400).json(failWith('config', { code: 'ACCEPTANCE_INPUT_INVALID', error: 'acceptances must contain at most 127 exact findings.' }));
+    }
+    if (body.dryRun !== true) {
+      const leaseDecision = driverLeaseStore.checkMutation(driverLeaseActorForRequest(req), {
+        forceOverride: driverLeaseForceRequested(req),
+      });
+      if (leaseDecision.allowed === false) {
+        check('preflight', 'Full validation (schema/cues/lints)', 'fail', leaseDecision.error);
+        return res.status(leaseDecision.status).json(failWith('preflight', {
+          code: leaseDecision.code,
+          error: leaseDecision.error,
+          driverLease: leaseDecision.driverLease,
+        }));
+      }
     }
     const operation = requestDeployOperation(req);
     const recorded = operation && readDeployOperationReceipt(actionReceiptStore, operation);

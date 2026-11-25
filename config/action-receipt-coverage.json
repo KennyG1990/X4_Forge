@@ -906,6 +906,31 @@
       ]
     },
     {
+      "routeKey": "POST /api/agent/lease",
+      "method": "POST",
+      "template": "/api/agent/lease",
+      "owner": "session.lease.manage",
+      "resourceClass": "workspace",
+      "sourceRef": "config/forge-route-dispositions.json#/routes/POST ~1api~1agent~1lease",
+      "integrationBatch": "W3B0-internal",
+      "history": "visible",
+      "capability": {
+        "kind": "canonical",
+        "id": "session.lease.manage",
+        "version": 1
+      },
+      "semanticClass": "audit-retention",
+      "policy": "separately-governed",
+      "effects": [
+        "read",
+        "audit-write",
+        "audit-retention-delete"
+      ],
+      "authorityScopes": [
+        "workspace"
+      ]
+    },
+    {
       "routeKey": "POST /api/agent/live/cue-telemetry",
       "method": "POST",
       "template": "/api/agent/live/cue-telemetry",

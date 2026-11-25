@@ -72,6 +72,8 @@ const DIAGNOSTIC_READ_TOOLS = [
   'analyze_cue_telemetry',
   'get_game_log_status',
   'get_studio_preferences',
+  'get_driver_lease',
+  'manage_driver_lease',
   'critique_md_graph',
   'explain_md_graph',
   'simulate_md_graph',
@@ -173,7 +175,7 @@ const READ_TOOLS = [
   'prepare_bug_report', 'query_forge_knowledge', 'get_forge_health_card', 'preview_forge_probe', 'get_live_forge_state', 'get_workspace_domain',
   'get_ai_spend_status', 'preview_contract_glue', 'audit_workspace_patches', 'inspect_schema_domain',
   'list_reference_manifest_files', 'get_live_bridge_state', 'get_runtime_control_status', 'analyze_cue_telemetry', 'get_game_log_status',
-  'get_studio_preferences', 'critique_md_graph', 'explain_md_graph', 'simulate_md_graph', 'diagnose_workspace_nodes',
+  'get_studio_preferences', 'get_driver_lease', 'critique_md_graph', 'explain_md_graph', 'simulate_md_graph', 'diagnose_workspace_nodes',
 ];
 const WRITE_TOOLS = [
   'validate_mod', 'list_schema_domains', 'get_workspace', 'compile_workspace', 'author_check',
@@ -1394,6 +1396,51 @@ const server = http.createServer(function serveMcpFixture(request, response): vo
     }));
     return;
   }
+  if (request.method === 'GET' && request.url === '/api/agent/lease') {
+    routeCalls.push({ method: request.method, path: request.url, body: null });
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify({
+      ok: true,
+      success: true,
+      driverLease: { held: false, heldByCaller: false, driver: null, leaseId: null, remainingMs: 0 },
+    }));
+    return;
+  }
+  if (request.method === 'POST' && request.url === '/api/agent/lease') {
+    let raw = '';
+    request.setEncoding('utf8');
+    request.on('data', chunk => { raw += chunk; });
+    request.on('end', () => {
+      const body = JSON.parse(raw);
+      routeCalls.push({ method: request.method || '', path: request.url || '', body });
+      if (body.driver === 'conflict-fixture') {
+        response.writeHead(409, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({
+          ok: false,
+          success: false,
+          code: 'DRIVER_LEASE_HELD',
+          error: 'Forge is currently in use by studio-ui.',
+          driverLease: { held: true, heldByCaller: false, driver: 'studio-ui', leaseId: 'dl_111111111111111111111111', remainingMs: 240000 },
+        }));
+        return;
+      }
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({
+        ok: true,
+        success: true,
+        action: body.action,
+        acquired: body.action === 'acquire',
+        driverLease: {
+          held: body.action !== 'release',
+          heldByCaller: body.action !== 'release',
+          driver: body.driver || 'agent-mcp',
+          leaseId: body.action !== 'release' ? 'dl_222222222222222222222222' : null,
+          remainingMs: body.action !== 'release' ? (body.ttlMs || 300000) : 0,
+        },
+      }));
+    });
+    return;
+  }
   response.writeHead(404, { 'Content-Type': 'application/json' });
   response.end(JSON.stringify({ error: 'not found' }));
 });
@@ -1739,6 +1786,15 @@ try {
     const galaxyMapReply = await client.request('tools/call', { name: 'get_galaxy_map', arguments: { q: 'Cluster_01' } });
     assert.equal(galaxyMapReply.error, undefined);
     assert.equal(JSON.parse(String(galaxyMapReply.result?.content?.[0]?.text || '{}')).sectors?.[0]?.macro, 'Cluster_01_Sector001_macro');
+    const getLeaseReply = await client.request('tools/call', { name: 'get_driver_lease', arguments: {} });
+    assert.equal(getLeaseReply.error, undefined);
+    assert.equal(JSON.parse(String(getLeaseReply.result?.content?.[0]?.text || '{}')).driverLease?.held, false);
+    const acquireLeaseReply = await client.request('tools/call', { name: 'manage_driver_lease', arguments: { action: 'acquire', driver: 'codex-ui', ttlMs: 60000 } });
+    assert.equal(acquireLeaseReply.error, undefined);
+    assert.equal(JSON.parse(String(acquireLeaseReply.result?.content?.[0]?.text || '{}')).driverLease?.driver, 'codex-ui');
+    const conflictLeaseReply = await client.request('tools/call', { name: 'manage_driver_lease', arguments: { action: 'acquire', driver: 'conflict-fixture' } });
+    assert.equal(conflictLeaseReply.result?.isError, true);
+    assert.equal(JSON.parse(String(conflictLeaseReply.result?.content?.[0]?.text || '{}')).code, 'DRIVER_LEASE_HELD');
     assert.deepEqual(routeCalls.map(call => `${call.method} ${call.path}`), [
       'POST /api/agent/project/validate/check',
       'GET /api/agent/workspace',
@@ -1763,6 +1819,9 @@ try {
       'GET /api/agent/patch-targets?q=wares&limit=10',
       'POST /api/agent/xpath-synth',
       'GET /api/agent/galaxy-map?q=Cluster_01',
+      'GET /api/agent/lease',
+      'POST /api/agent/lease',
+      'POST /api/agent/lease',
     ], 'current-contract execution must use current capability routes');
 
     routeCalls.length = 0;
@@ -1836,6 +1895,10 @@ try {
       { name: 'analyze_cue_telemetry', arguments: { cueNames: [42] } },
       { name: 'get_game_log_status', arguments: { modId: 'm'.repeat(129) } },
       { name: 'get_studio_preferences', arguments: { extra: true } },
+      { name: 'get_driver_lease', arguments: { extra: true } },
+      { name: 'manage_driver_lease', arguments: {} },
+      { name: 'manage_driver_lease', arguments: { action: 'acquire', ttlMs: 1000 } },
+      { name: 'manage_driver_lease', arguments: { action: 'acquire', unknown: true } },
       { name: 'critique_md_graph', arguments: { mode: 'bogus' } },
       { name: 'explain_md_graph', arguments: { diagnostic: { severity: 'fatal', message: 'bad' } } },
       { name: 'simulate_md_graph', arguments: { seed: { $x: [] } } },
