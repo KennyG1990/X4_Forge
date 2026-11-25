@@ -64,7 +64,13 @@
     "viewsWelcome": [
       {
         "view": "x4forge.launcher",
-        "contents": "Author, validate, package, and deploy X4: Foundations mods in one local workspace.\n\n[Open Studio](command:x4forge.openStudio)\n\nThe Studio connects a visual Mission Director graph with native X4-aware XML editing, deterministic diagnostics, and guarded package and deploy workflows. Configure your X4 installation and reference/schema data in Studio Settings.\n\n[Open Mod Folder](command:x4forge.openModFolder)\n[Create Agent Key](command:x4forge.createAgentKey)\n[Show Backend Logs](command:x4forge.showLogs)\n[Start Local Backend](command:x4forge.startSidecar)\n[Stop Local Backend](command:x4forge.stopSidecar)"
+        "contents": "Author, validate, package, and deploy X4: Foundations mods in one local workspace.\n\n[Open Studio](command:x4forge.openStudio)\n\nThe Studio connects a visual Mission Director graph with native X4-aware XML editing, deterministic diagnostics, and guarded package and deploy workflows. Configure your X4 installation and reference/schema data in Studio Settings.\n\n[Open Mod Folder](command:x4forge.openModFolder)\n[Manage Native MCP](command:x4forge.manageMcpRegistration)\n[Create Agent Key](command:x4forge.createAgentKey)\n[Show Backend Logs](command:x4forge.showLogs)\n[Start Local Backend](command:x4forge.startSidecar)\n[Stop Local Backend](command:x4forge.stopSidecar)"
+      }
+    ],
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "x4forge.mcp",
+        "label": "X4 Forge Studio"
       }
     ],
     "commands": [
@@ -99,6 +105,10 @@
       {
         "command": "x4forge.openModFolder",
         "title": "X4 Forge: Open Mod Folder in Workspace"
+      },
+      {
+        "command": "x4forge.manageMcpRegistration",
+        "title": "X4 Forge: Manage Native MCP Registration"
       },
       {
         "command": "x4forge.copyMcpConfig",

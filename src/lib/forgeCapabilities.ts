@@ -5941,6 +5941,7 @@ export const FORGE_UI_ACTION_PARITY_CENSUS: readonly ForgeUiActionParityRowV1[] 
     uiAnchors: [
       'src/components/AgentBridge.tsx::AgentBridge',
       'vscode-extension/src/extension.ts::x4forge.createAgentKey',
+      'vscode-extension/src/extension.ts::x4forge.manageMcpRegistration',
       'vscode-extension/src/extension.ts::x4forge.copyMcpConfig',
     ],
     capabilityIdentities: [],
@@ -5953,7 +5954,7 @@ export const FORGE_UI_ACTION_PARITY_CENSUS: readonly ForgeUiActionParityRowV1[] 
     ],
     mcpTools: [],
     coverage: {
-      extensionCommands: ['x4forge.createAgentKey', 'x4forge.copyMcpConfig'],
+      extensionCommands: ['x4forge.createAgentKey', 'x4forge.manageMcpRegistration', 'x4forge.copyMcpConfig'],
       globalActions: ['agent-api'],
     },
     ownerIssue: '#19',

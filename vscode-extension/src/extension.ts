@@ -78,6 +78,19 @@ import {
   workspaceAuthorityHeaders,
   workspaceAuthorityResponseAcceptable,
 } from "./workspaceAuthorityHeaders";
+import {
+  MCP_METADATA_STORAGE_KEY,
+  MCP_PROVIDER_ID,
+  MCP_SECRET_STORAGE_KEY,
+  buildManualMcpConfigFallback,
+  computeIdeWorkspaceSignature,
+  createMcpRegistrationLifecycle,
+  detectHostMcpProviderApi,
+  redactMcpSecrets,
+  type McpAllowedScope,
+  type McpAllowedTtl,
+  type McpRegistrationMetadataV1,
+} from "./mcpRegistrationLifecycle";
 
 interface BackendHandle {
   baseUrl: string;
@@ -99,6 +112,7 @@ interface BackendHandle {
 let backend: BackendHandle | null = null;
 let propertyCorrection: ReturnType<typeof registerPropertyCorrection> | undefined;
 let nativePerformanceHost: ReturnType<typeof createNativePerformanceHost> | undefined;
+let mcpRegistration: ReturnType<typeof createMcpRegistrationLifecycle> | undefined;
 const nativeBridges = new WeakMap<ChildProcess, ReturnType<ReturnType<typeof createNativePerformanceHost>["attach"]>>();
 type NativeFinish = (outcome?: ForgePerformanceOutcome) => void;
 
@@ -278,6 +292,7 @@ async function bindBackendWorkspace(
   assertBackendStartCurrent(generation, handle.child);
   handle.workspaceId = workspaceId;
   log(`workspace authority bound: ${workspaceId}`);
+  void mcpRegistration?.handleWorkspaceAuthorityChange(workspaceId);
 }
 
 function requestManagedSidecarStop(child: ChildProcess): void {
@@ -586,10 +601,21 @@ function showBackendError(message: string): void {
 }
 
 function currentIdeCapabilities() {
+  const mcpStatus = mcpRegistration?.getStatus();
   return detectIdeCapabilities({
     installedExtensionIds: vscode.extensions.all.map(extension => extension.id),
     xmlAssociationsEnabled: cfg().writeXmlAssociations,
     backendState: backend ? (backend.owned ? 'managed' : 'attached') : 'stopped',
+    mcpRegistration: mcpStatus
+      ? {
+          hostSupported: mcpStatus.hostSupported,
+          state: mcpStatus.state,
+          scope: mcpStatus.scope,
+          boundWorkspaceId: mcpStatus.boundWorkspaceId,
+          keyId: mcpStatus.keyId,
+          lastErrorCode: mcpStatus.lastErrorCode,
+        }
+      : { hostSupported: detectHostMcpProviderApi(vscode).supported, state: 'disabled' },
   });
 }
 
@@ -1140,6 +1166,7 @@ async function handleStudioMessage(context: vscode.ExtensionContext, value: unkn
       handle.workspaceId = workspaceId;
       await context.globalState.update('x4forge.workspaceId', workspaceId);
       log(`workspace authority selected by Studio tab: ${workspaceId}`);
+      void mcpRegistration?.handleWorkspaceAuthorityChange(workspaceId);
     } catch (error) {
       log(`workspace authority change failed closed: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -1479,6 +1506,100 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.workspace.registerFileSystemProvider("x4forge-node", nativeNodeProvider, { isCaseSensitive: true, isReadonly: false }),
     );
 
+    const hostMcpApi = detectHostMcpProviderApi(vscode);
+    const mcpChangeEmitter = new vscode.EventEmitter<void>();
+    context.subscriptions.push(mcpChangeEmitter);
+    const shimPath = vscode.Uri.joinPath(context.extensionUri, "mcp", "x4forge-mcp.cjs").fsPath;
+    const extVersion = String(context.extension?.packageJSON?.version || "0.0.0");
+    mcpRegistration = createMcpRegistrationLifecycle({
+      hostSupported: hostMcpApi.supported,
+      shimPath,
+      extensionVersion: extVersion,
+      getNodeCommand: () => cfg().nodePath || "node",
+      getIdeWorkspaceSignature: () =>
+        computeIdeWorkspaceSignature((vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath)),
+      metadataStore: {
+        readMetadata: () => context.globalState.get<McpRegistrationMetadataV1>(MCP_METADATA_STORAGE_KEY),
+        writeMetadata: async (next) => {
+          await context.globalState.update(MCP_METADATA_STORAGE_KEY, next);
+        },
+      },
+      secretVault: {
+        readSecret: async () => await context.secrets.get(MCP_SECRET_STORAGE_KEY),
+        saveSecret: async (token) => {
+          await context.secrets.store(MCP_SECRET_STORAGE_KEY, token);
+        },
+        removeSecret: async () => {
+          await context.secrets.delete(MCP_SECRET_STORAGE_KEY);
+        },
+      },
+      sidecar: {
+        peekSidecar: () => backend
+          ? {
+              owned: backend.owned,
+              baseUrl: backend.baseUrl,
+              sessionToken: backend.token,
+              workspaceId: backend.workspaceId,
+              clientId: backend.clientId,
+            }
+          : null,
+        ensureSidecar: async () => {
+          const handle = await ensureBackend(context);
+          return {
+            owned: handle.owned,
+            baseUrl: handle.baseUrl,
+            sessionToken: handle.token,
+            workspaceId: handle.workspaceId,
+            clientId: handle.clientId,
+          };
+        },
+        fetchJson: async (url, init) => {
+          const res = await fetch(url, {
+            method: init?.method || "GET",
+            headers: init?.headers,
+            body: init?.body,
+            redirect: "error",
+            signal: AbortSignal.timeout(5_000),
+          });
+          let body: unknown = null;
+          try { body = await res.json(); } catch { /* non-JSON body */ }
+          return { ok: res.ok, status: res.status, body };
+        },
+        createOperationId: () => createActionOperationId(extensionStrongRandomBytes),
+      },
+      log: line => log(redactMcpSecrets(line)),
+      onDidChangeDefinitions: () => mcpChangeEmitter.fire(),
+    });
+    if (hostMcpApi.supported && hostMcpApi.registerProvider && hostMcpApi.createStdioDefinition) {
+      const makeDef = hostMcpApi.createStdioDefinition;
+      context.subscriptions.push(
+        hostMcpApi.registerProvider(MCP_PROVIDER_ID, {
+          onDidChangeMcpServerDefinitions: mcpChangeEmitter.event,
+          provideMcpServerDefinitions: () =>
+            (mcpRegistration?.provideDefinitions() || []).map(descriptor => makeDef(descriptor)),
+          resolveMcpServerDefinition: async () => {
+            if (!mcpRegistration) return undefined;
+            const resolved = await mcpRegistration.resolveDefinition();
+            if (!resolved.ok || !resolved.definition) {
+              log(`MCP lazy resolution refused (${resolved.code || "REFUSED"}): ${redactMcpSecrets(resolved.message)}`);
+              void vscode.window.showWarningMessage(
+                `X4 Forge MCP: ${redactMcpSecrets(resolved.message)}`,
+                "Manage Native MCP",
+              ).then(pick => pick === "Manage Native MCP" && vscode.commands.executeCommand("x4forge.manageMcpRegistration"));
+              return undefined;
+            }
+            return makeDef(resolved.definition);
+          },
+        }),
+      );
+    }
+    context.subscriptions.push(
+      vscode.workspace.onDidChangeWorkspaceFolders(() => {
+        void mcpRegistration?.handleWorkspaceAuthorityChange(backend?.workspaceId ?? null);
+      }),
+    );
+    void mcpRegistration.rehydrateOnActivate();
+
     log(`extension activated (host: ${vscode.env.appName} ${vscode.version})`);
     for (const line of formatIdeCapabilityReport(currentIdeCapabilities())) log(`capability: ${line}`);
 
@@ -1699,6 +1820,7 @@ export function activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
       diagCollection,
       vscode.commands.registerCommand("x4forge.openModFolder", () => openModFolder(context)),
+      vscode.commands.registerCommand("x4forge.manageMcpRegistration", () => manageMcpRegistration(context)),
       vscode.commands.registerCommand("x4forge.copyMcpConfig", () => copyMcpConfig(context)),
       vscode.commands.registerCommand("x4forge.refreshAgentBrief", () => refreshAgentBrief(context)),
       vscode.commands.registerCommand("x4forge.generateProof", () => generateProof(context)),
@@ -2303,38 +2425,166 @@ function registerLangProviders(context: vscode.ExtensionContext): void {
 }
 
 // ---------------------------------------------------------------------------
-// B56s4 — MCP config for IDE-resident coding agents. We COPY a ready-to-paste config;
-// we never write into another tool's configuration files (their config is theirs).
+// B56s4 + #31 (Kimi R21) — Native opt-in MCP lifecycle + non-secret manual fallback.
+// We never write into another tool's external configuration files; native mode uses
+// the IDE's McpServerDefinitionProvider + context.secrets, and manual mode copies a
+// secret-free placeholder snippet only on explicit user action.
 // ---------------------------------------------------------------------------
 
 async function copyMcpConfig(context: vscode.ExtensionContext): Promise<void> {
   const finish = beginNativeOperation('native.command');
   let outcome: ForgePerformanceOutcome = 'ok';
   try {
-    const handle = await ensureBackend(context);
+    let handle: BackendHandle | null = backend;
+    if (!handle) {
+      try {
+        handle = await ensureBackend(context);
+      } catch {
+        handle = null;
+      }
+    }
     const shimPath = vscode.Uri.joinPath(context.extensionUri, "mcp", "x4forge-mcp.cjs").fsPath;
-    const config = {
-      mcpServers: {
-        x4forge: {
-          command: "node",
-          args: [shimPath],
-          env: {
-            X4FORGE_URL: handle.baseUrl,
-            X4FORGE_KEY: "<paste an agent key here — run 'X4 Forge: Create Agent Key' (write scope recommended)>",
-            X4FORGE_WORKSPACE_ID: handle.workspaceId || '<workspace id>',
-          },
-        },
-      },
-    };
-    await vscode.env.clipboard.writeText(JSON.stringify(config, null, 2));
-    log(`MCP config copied (shim: ${shimPath}, url: ${handle.baseUrl})`);
+    const jsonText = buildManualMcpConfigFallback({
+      shimPath,
+      baseUrl: handle?.baseUrl || cfg().attachUrl || "http://127.0.0.1:3000",
+      workspaceId: handle?.workspaceId || mcpRegistration?.getStatus().boundWorkspaceId || null,
+      nodeCommand: cfg().nodePath || "node",
+    });
+    await vscode.env.clipboard.writeText(jsonText);
+    log(`MCP manual fallback config copied (shim: ${shimPath}, url: ${handle?.baseUrl || "lazy"})`);
     void vscode.window.showInformationMessage(
-      "X4 Forge: MCP server config copied to clipboard. Paste it into your agent's MCP settings, then replace the X4FORGE_KEY placeholder with a real agent key (X4 Forge: Create Agent Key).",
+      "X4 Forge: placeholder MCP server config copied to clipboard (no live key included). Paste it into your agent's MCP settings, then replace the X4FORGE_KEY placeholder with a real agent key (X4 Forge: Create Agent Key).",
       "Create Agent Key",
     ).then((pick) => pick === "Create Agent Key" && vscode.commands.executeCommand("x4forge.createAgentKey"));
   } catch (err) {
     outcome = 'error';
-    showBackendError(`Copy MCP config failed: ${err instanceof Error ? err.message : String(err)}`);
+    showBackendError(`Copy MCP config failed: ${redactMcpSecrets(err instanceof Error ? err.message : String(err))}`);
+  } finally {
+    finish(outcome);
+  }
+}
+
+async function manageMcpRegistration(context: vscode.ExtensionContext): Promise<void> {
+  const finish = beginNativeOperation('native.command');
+  let outcome: ForgePerformanceOutcome = 'ok';
+  try {
+    if (!mcpRegistration) throw new Error("MCP registration controller is not initialized.");
+    const status = mcpRegistration.getStatus();
+    type ActionKind = 'enable-write' | 'enable-read' | 'disable' | 'retry-revoke' | 'manual-fallback';
+    interface PickItem extends vscode.QuickPickItem {
+      action: ActionKind;
+      scope?: McpAllowedScope;
+    }
+    const items: PickItem[] = [];
+    if (status.hostSupported) {
+      if (status.state === 'revocation-pending') {
+        items.push({
+          label: "Retry Pending Key Revocation",
+          description: `key ${status.keyId || "(pending)"}`,
+          detail: "Confirm revocation of the previous owned key before enabling a new registration.",
+          action: 'retry-revoke',
+        });
+      } else {
+        items.push(
+          {
+            label: status.state === 'enabled' && status.scope === 'write'
+              ? "Re-enable / Rotate Native MCP (write scope)"
+              : "Enable Native MCP (write scope — recommended)",
+            description: "guarded authoring / compile / validate — no deploy or spend",
+            detail: "Stores key in context.secrets only; resolves sidecar and workspace-bound key lazily.",
+            action: 'enable-write',
+            scope: 'write',
+          },
+          {
+            label: status.state === 'enabled' && status.scope === 'read'
+              ? "Re-enable / Rotate Native MCP (read scope)"
+              : "Enable Native MCP (read scope)",
+            description: "inspection and deterministic analysis only",
+            detail: "Stores key in context.secrets only; resolves sidecar and workspace-bound key lazily.",
+            action: 'enable-read',
+            scope: 'read',
+          },
+        );
+      }
+      if (status.state === 'enabled' || status.state === 'revocation-pending') {
+        items.push({
+          label: "Disable Native MCP & Revoke Owned Key",
+          description: status.keyId ? `revokes ${status.keyId}` : "clears opt-in state",
+          detail: "Stops advertising the MCP server and revokes the exact owned key on the Forge sidecar.",
+          action: 'disable',
+        });
+      }
+    } else if (status.state === 'revocation-pending') {
+      items.push({
+        label: "Retry Pending Key Revocation",
+        description: `key ${status.keyId || "(pending)"}`,
+        detail: "Host lacks native MCP provider API, but an owned key still awaits revocation confirmation.",
+        action: 'retry-revoke',
+      });
+    }
+    items.push({
+      label: "Copy Manual MCP Config (Placeholder Fallback)",
+      description: status.hostSupported ? "optional manual setup" : "unsupported host fallback",
+      detail: "Copies non-secret JSON snippet to clipboard without touching external MCP config files.",
+      action: 'manual-fallback',
+    });
+
+    const stateDetail = !status.hostSupported
+      ? `unsupported host API (state: ${status.state})`
+      : `${status.state}${status.state === 'enabled' ? ` · ${status.scope} · ${status.boundWorkspaceId || 'lazy workspace'}` : status.keyId ? ` · ${status.keyId}` : ''}`;
+    const choice = await vscode.window.showQuickPick(items, {
+      title: `X4 Forge Native MCP Registration — ${stateDetail}`,
+      placeHolder: "Choose an opt-in Native MCP action",
+    });
+    if (!choice) {
+      outcome = 'cancelled';
+      return;
+    }
+    if (choice.action === 'manual-fallback') {
+      await copyMcpConfig(context);
+      return;
+    }
+    if (choice.action === 'retry-revoke') {
+      const res = await mcpRegistration.retryPendingRevocation();
+      if (res.ok) void vscode.window.showInformationMessage(`X4 Forge: ${redactMcpSecrets(res.message)}`);
+      else void vscode.window.showWarningMessage(`X4 Forge: ${redactMcpSecrets(res.message)}`);
+      return;
+    }
+    if (choice.action === 'disable') {
+      const res = await mcpRegistration.disable();
+      if (res.ok) void vscode.window.showInformationMessage(`X4 Forge: ${redactMcpSecrets(res.message)}`);
+      else void vscode.window.showWarningMessage(`X4 Forge: ${redactMcpSecrets(res.message)}`);
+      return;
+    }
+    const ttlChoice = await vscode.window.showQuickPick<vscode.QuickPickItem & { ttl: McpAllowedTtl }>(
+      [
+        { label: "7d", description: "expires in 7 days (recommended)", ttl: "7d" },
+        { label: "24h", description: "expires in 24 hours", ttl: "24h" },
+        { label: "30d", description: "expires in 30 days", ttl: "30d" },
+        { label: "1h", description: "expires in 1 hour", ttl: "1h" },
+      ],
+      { title: "Select Native MCP Key Lifetime", placeHolder: "Workspace-bound key lifetime" },
+    );
+    if (!ttlChoice) {
+      outcome = 'cancelled';
+      return;
+    }
+    const res = await mcpRegistration.enable({ scope: choice.scope || 'write', ttl: ttlChoice.ttl });
+    if (res.ok) {
+      void vscode.window.showInformationMessage(`X4 Forge: ${redactMcpSecrets(res.message)}`);
+    } else if (res.code === 'UNSUPPORTED_HOST_API') {
+      void vscode.window.showWarningMessage(
+        `X4 Forge: ${redactMcpSecrets(res.message)}`,
+        "Copy Manual MCP Config",
+      ).then(pick => {
+        if (pick === "Copy Manual MCP Config") void copyMcpConfig(context);
+      });
+    } else {
+      void vscode.window.showWarningMessage(`X4 Forge: ${redactMcpSecrets(res.message)}`);
+    }
+  } catch (err) {
+    outcome = 'error';
+    showBackendError(`Manage Native MCP failed: ${redactMcpSecrets(err instanceof Error ? err.message : String(err))}`);
   } finally {
     finish(outcome);
   }

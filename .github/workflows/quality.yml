@@ -107,6 +107,9 @@ jobs:
       - name: Build extension controller and supervisor
         run: npm run build --prefix vscode-extension
 
+      - name: Prove native MCP opt-in registration lifecycle and secret isolation
+        run: npm run test:extension-mcp-lifecycle && npm run test:extension-capabilities
+
       - name: Stage packaged application
         run: npm run stage-app --prefix vscode-extension
 

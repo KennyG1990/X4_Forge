@@ -24,6 +24,7 @@ const CHANGELOG_ENTRY = /^extension\/changelog\.md$/i;
 const NATIVE_SQLITE = /^extension\/app\/node_modules\/better-sqlite3\/(?:build\/Release\/better_sqlite3\.node|prebuilds\/[^/]+\/better_sqlite3\.node)$/i;
 const INTENTIONAL_GITHUB_REF_LINK_RE = /\[(?:([\w.-]+\/[\w.-]+))?#(\d+)\]\(https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/(?:issues|pull)\/(\d+)\)/g;
 const AMBIGUOUS_HASH_NUMBER_RE = /(?:[\w.-]+\/[\w.-]+)?(?<!\\)#(\d+)\b/g;
+const EMBEDDED_AGENT_KEY_RE = /\bx4fk_[0-9a-f]{64}\b/i;
 
 const crcTable = Array.from({ length: 256 }, (_, index) => {
   let value = index;
@@ -199,6 +200,13 @@ function extractEntry(bytes, entry) {
   return output;
 }
 
+export function findForbiddenEmbeddedSecret(entryName, bytes) {
+  if (/^extension\/app\/node_modules(?:\/|$)/i.test(entryName)) return null;
+  const text = Buffer.isBuffer(bytes) ? bytes.toString('utf8') : String(bytes || '');
+  const match = text.match(EMBEDDED_AGENT_KEY_RE);
+  return match ? 'embedded x4fk_ agent key' : null;
+}
+
 export function inspectVsixBytes(bytes, options = {}) {
   const entries = readVsixEntries(bytes);
   const result = inspectEntryMetadata(entries, bytes.length);
@@ -209,6 +217,8 @@ export function inspectVsixBytes(bytes, options = {}) {
     const content = extractEntry(bytes, entry);
     const embeddedRoot = findForbiddenEmbeddedMachinePath(entry.name, content, machinePathPolicy);
     if (embeddedRoot) result.errors.push(`${entry.name}: embedded build-machine path ${embeddedRoot}`);
+    const embeddedSecret = findForbiddenEmbeddedSecret(entry.name, content);
+    if (embeddedSecret) result.errors.push(`${entry.name}: ${embeddedSecret}`);
     if (CHANGELOG_ENTRY.test(entry.name)) {
       const changelogCheck = inspectPackagedChangelog(content, options.expectedChangelog);
       result.errors.push(...changelogCheck.errors);
@@ -270,7 +280,11 @@ function runSelftest() {
     ).pass === false;
   if (changelogHygienePass) passed++;
   console.log(`${changelogHygienePass ? 'PASS' : 'FAIL'} changelog_false_link_and_vsce_rewrite_rejected_while_explicit_links_pass`);
-  const total = cases.length + 3;
+  const embeddedSecretPass = findForbiddenEmbeddedSecret('extension/out/extension.js', Buffer.from(`const k = "x4fk_${'a'.repeat(64)}";`)) === 'embedded x4fk_ agent key'
+    && findForbiddenEmbeddedSecret('extension/out/extension.js', Buffer.from('const placeholder = "<paste an agent key here>";')) === null;
+  if (embeddedSecretPass) passed++;
+  console.log(`${embeddedSecretPass ? 'PASS' : 'FAIL'} embedded_agent_key_token_rejected_in_packaged_bytes`);
+  const total = cases.length + 4;
   console.log(`[vsix-inspector selftest] ${passed}/${total} ${passed === total ? 'PASS' : 'FAIL'}`);
   return passed === total;
 }

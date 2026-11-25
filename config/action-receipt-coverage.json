@@ -4662,7 +4662,7 @@
     {
       "id": "host-store:vscode-extension/src/extension.ts",
       "kind": "host-store",
-      "owner": "managed-sidecar workspace selection | two-way-editing telemetry counters",
+      "owner": "managed-sidecar workspace selection | two-way-editing telemetry counters | opt-in native MCP registration state and secret vault",
       "sourceRef": "config/durable-writers.json#/hostStores/10",
       "integrationBatch": "W3B1",
       "semanticClass": "session-credential-mutation",

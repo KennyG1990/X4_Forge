@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceFingerprint": "8ab984878d555b270660cf5e2a3e43e3ab817e25299e03c0f7503e639a156f9c",
+  "sourceFingerprint": "0350c67b6812482b04a227277fc50b1e09e339e2b0b4e80e49ce38c223765052",
   "policy": "Every raw production filesystem mutation source is count-pinned here. Authoritative files use atomic sibling promotion; stronger tree, archive, append-log, SQLite, retention, ephemeral, and fixture contracts remain explicit exceptions.",
   "writers": [
     {
@@ -1067,17 +1067,20 @@
     {
       "file": "vscode-extension/src/extension.ts",
       "calls": {
-        "globalStateUpdate": 3
+        "globalStateUpdate": 4,
+        "secretDelete": 1,
+        "secretStore": 1
       },
       "categories": [
         "extension-global-state"
       ],
       "owners": [
         "managed-sidecar workspace selection",
-        "two-way-editing telemetry counters"
+        "two-way-editing telemetry counters",
+        "opt-in native MCP registration state and secret vault"
       ],
-      "rationale": "Stores the last selected immutable workspace ID for restart bootstrap plus non-authoritative adoption/decline/refusal/conflict counters in IDE-managed global state.",
-      "failureContract": "Workspace selection is accepted only after the authenticated backend binds the ID; persistence failure fails that host handoff or falls back to safe bootstrap on restart, while telemetry never changes authorization or source state."
+      "rationale": "Stores the last selected immutable workspace ID for restart bootstrap, non-secret opt-in native MCP registration state (disabled/enabled/revocation-pending) in IDE global state, and the workspace-bound MCP bearer token exclusively in context.secrets, plus non-authoritative adoption/decline/refusal/conflict counters.",
+      "failureContract": "Workspace selection is accepted only after the authenticated backend binds the ID; MCP secret-store failure immediately revokes the minted token on the sidecar (or enters revocation-pending if offline) and never persists secret material in global state; telemetry never changes authorization or source state."
     },
     {
       "file": "vscode-extension/src/propertyCorrectionReceipt.ts",
