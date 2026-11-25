@@ -141,6 +141,7 @@ export default function GlobalSearch({
       { id: 'cmd_deploy', category: 'command', title: 'Compile & Deploy Wizard…', subtitle: 'Workbench Action · Preview & deploy mod', originalData: { action: 'deploy' } },
       { id: 'cmd_bottom_dock', category: 'command', title: 'Toggle Bottom Panel (Problems / Runtime / XML)', subtitle: 'Workbench Action · Ctrl+J', originalData: { action: 'toggle-bottom-dock' } },
       { id: 'cmd_right_inspector', category: 'command', title: 'Toggle Right Contextual Inspector', subtitle: 'Workbench Action · Selection properties & lineage', originalData: { action: 'toggle-right-inspector' } },
+      { id: 'cmd_compact_grid', category: 'command', title: 'Toggle Canvas Compact Grid View', subtitle: 'Node Graph · 16px snap grid & condensed node cards', originalData: { view: 'blueprint', action: 'toggle-compact-grid' } },
       { id: 'cmd_settings', category: 'command', title: 'Open Studio Settings', subtitle: 'Workbench Action · Paths, Corpus, Layout & AI', originalData: { action: 'settings' } },
       { id: 'cmd_sync', category: 'command', title: 'Sync / Import Mod Project…', subtitle: 'Workbench Action · Load folder or XML', originalData: { action: 'sync-mod' } },
       { id: 'cmd_release', category: 'command', title: 'Open Release Center (Nexus & Steam)', subtitle: 'Tool · Playtest & Release', originalData: { sidebar: 'playtest' } },
@@ -414,7 +415,11 @@ export default function GlobalSearch({
       const cmd = item.originalData as { view?: WorkspaceView; sidebar?: SidebarTab; action?: string };
       if (cmd.view) setWorkspaceView(cmd.view);
       if (cmd.sidebar) setActiveSidebarTab(cmd.sidebar);
-      if (cmd.action) onRunGlobalCommand?.(cmd.action);
+      if (cmd.action === 'toggle-compact-grid') {
+        window.setTimeout(() => window.dispatchEvent(new CustomEvent('x4forge:toggle-compact-grid')), 0);
+      } else if (cmd.action) {
+        onRunGlobalCommand?.(cmd.action);
+      }
     }
   };
 

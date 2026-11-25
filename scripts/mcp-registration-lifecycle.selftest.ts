@@ -20,6 +20,15 @@ import {
   detectIdeCapabilities,
   formatIdeCapabilityReport,
 } from '../vscode-extension/src/capabilities';
+import { FORGE_CAPABILITIES, type ForgeCapabilityDescriptorV1 } from '../src/lib/forgeCapabilities';
+import { requiresExplicitCapabilityGrant } from '../src/lib/agentCapabilityAuthority';
+
+function expectedPresetMcpTools(scope: 'read' | 'write'): string[] {
+  return (FORGE_CAPABILITIES as readonly ForgeCapabilityDescriptorV1[])
+    .filter(cap => !requiresExplicitCapabilityGrant(cap.id) && (cap.access.public || cap.access.agentScopes.includes(scope)))
+    .flatMap(cap => cap.surfaces.mcp.filter(m => m.status !== 'disconnected').map(m => m.id))
+    .sort();
+}
 
 const REPO_ROOT = process.cwd();
 const MCP_SHIM_PATH = path.join(REPO_ROOT, 'vscode-extension', 'mcp', 'x4forge-mcp.cjs');
@@ -459,11 +468,12 @@ async function main() {
       assert(firstKeyId && firstKeyId.startsWith('key_'));
 
       // Boot real bundled x4forge-mcp.cjs using resolved definition env and verify list/call parity & narrowing
+      const expectedWriteTools = expectedPresetMcpTools('write');
       const mcp = await startMcpFromDefinition(resolved.definition.env);
       try {
         const listed = await mcp.request('tools/list');
         const names: string[] = (listed.result?.tools || []).map((t: any) => t.name);
-        assert.equal(names.length, 69, `expected 69 write-preset MCP tools, got ${names.length}`);
+        assert.deepEqual([...names].sort(), expectedWriteTools, `write-preset MCP tools must match effective capabilities (${expectedWriteTools.length})`);
         assert(names.includes('get_workspace'));
         assert(names.includes('compile_workspace'));
         assert(!names.includes('preview_native_deploy'), 'native MCP write preset must never grant deploy tools');
@@ -532,11 +542,12 @@ async function main() {
       const ws2Token = secretSlot!;
       assert(ws2KeyId && ws2KeyId !== ws1KeyId);
 
-      // Verify read-scope narrowing (64 tools, compile_workspace excluded)
+      // Verify read-scope narrowing (exact read effective tools, compile_workspace excluded)
+      const expectedReadTools = expectedPresetMcpTools('read');
       const readMcp = await startMcpFromDefinition(resolvedWs2.definition!.env);
       try {
         const readNames: string[] = ((await readMcp.request('tools/list')).result?.tools || []).map((t: any) => t.name);
-        assert.equal(readNames.length, 64);
+        assert.deepEqual([...readNames].sort(), expectedReadTools, `read-preset MCP tools must match effective capabilities (${expectedReadTools.length})`);
         assert(!readNames.includes('compile_workspace'));
       } finally {
         await readMcp.close();

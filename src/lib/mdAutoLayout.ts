@@ -16,9 +16,14 @@
 import type { MDNode, MDLink } from '../types';
 
 export const LAYOUT = { COL_W: 320, ROW_H: 230, X0: 80, Y0: 80, NODE_W: 240, NODE_H: 200 };
+export const COMPACT_LAYOUT = { COL_W: 256, ROW_H: 144, X0: 64, Y0: 64, NODE_W: 192, NODE_H: 112 };
 
-export function computeAutoLayout(nodes: MDNode[], links: MDLink[]): Map<string, { x: number; y: number }> {
-  const { COL_W, ROW_H, X0, Y0 } = LAYOUT;
+export function computeAutoLayout(
+  nodes: MDNode[],
+  links: MDLink[],
+  options?: { compact?: boolean },
+): Map<string, { x: number; y: number }> {
+  const { COL_W, ROW_H, X0, Y0 } = options?.compact ? COMPACT_LAYOUT : LAYOUT;
   const pos = new Map<string, { x: number; y: number }>();
   const nodeById = new Map(nodes.map((n) => [n.id, n]));
   const placeable = nodes.filter((n) => n.type !== 'comment');
@@ -129,6 +134,16 @@ export function runAutoLayoutSelftest() {
   // deterministic: same input ⇒ same output
   const pos2 = computeAutoLayout(nodes, links);
   ok('deterministic', ids.every((id) => pos2.get(id)!.x === P(id).x && pos2.get(id)!.y === P(id).y));
+
+  // compact grid layout (#8): tighter 16px-aligned lattice with zero overlap at 192×112
+  const compactPos = computeAutoLayout(nodes, links, { compact: true });
+  let compactOverlap = false;
+  for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
+    const a = compactPos.get(ids[i])!, b = compactPos.get(ids[j])!;
+    if (Math.abs(a.x - b.x) < COMPACT_LAYOUT.NODE_W && Math.abs(a.y - b.y) < COMPACT_LAYOUT.NODE_H) compactOverlap = true;
+  }
+  ok('compact_no_overlap', !compactOverlap && compactPos.get('ev')!.x < P('ev').x);
+  ok('compact_grid_aligned_16px', ids.every((id) => compactPos.get(id)!.x % 16 === 0 && compactPos.get(id)!.y % 16 === 0));
 
   const passed = checks.filter((c) => c.pass).length;
   return { allPassed: passed === checks.length, passed, total: checks.length, checks };

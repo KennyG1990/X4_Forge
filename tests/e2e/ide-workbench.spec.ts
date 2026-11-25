@@ -83,6 +83,29 @@ test('Unified IDE Workbench provides right contextual inspector, bottom dock, co
   await page.getByTestId('right-inspector-toggle').click();
   await expect(inspector).toBeVisible();
 
+  // 2b. Compact Grid View toggle (#8) switches #grid-canvas to 16px compact grid, condenses node cards (w-60 -> w-48), and restores cleanly without mutating workspace
+  const firstNodeCard = page.getByTestId(`canvas-node-${firstNodeId}`);
+  await expect(page.getByTestId('grid-canvas')).toHaveAttribute('data-compact-grid', 'false');
+  await expect(firstNodeCard.getByTestId('canvas-node-props-preview')).toBeVisible();
+  await page.getByRole('button', { name: 'Graph tools', exact: true }).click();
+  await page.getByTestId('canvas-compact-grid-toggle').click();
+  await expect(page.getByTestId('grid-canvas')).toHaveAttribute('data-compact-grid', 'true');
+  await expect(firstNodeCard).toHaveAttribute('data-compact-node', 'true');
+  await expect(firstNodeCard.getByTestId('canvas-node-props-preview')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Graph tools', exact: true }).click();
+  await page.getByTitle('Reset Graph Zoom').click();
+  await expect(firstNodeCard).toHaveCSS('width', '192px');
+  const compactBox = await firstNodeCard.boundingBox();
+  await page.screenshot({ path: screenshotTarget(testInfo, '01b-compact-grid-view.png'), fullPage: true });
+  await page.getByRole('button', { name: 'Graph tools', exact: true }).click();
+  await page.getByTestId('canvas-compact-grid-toggle').click();
+  await expect(page.getByTestId('grid-canvas')).toHaveAttribute('data-compact-grid', 'false');
+  await expect(firstNodeCard.getByTestId('canvas-node-props-preview')).toBeVisible();
+  await expect(firstNodeCard).toHaveCSS('width', '240px');
+  const standardBox = await firstNodeCard.boundingBox();
+  expect(compactBox!.width).toBeLessThan(standardBox!.width);
+  expect(compactBox!.height).toBeLessThan(standardBox!.height);
+
   // 3. Bottom Workbench Dock toggles via Ctrl+J and switches between Problems, Runtime, and XML
   await expect(page.getByTestId('bottom-workbench-dock')).toHaveCount(0);
   await page.keyboard.press('Control+j');

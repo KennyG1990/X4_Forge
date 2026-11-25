@@ -37,6 +37,7 @@ import {
   Repeat,
   Activity,
   SlidersHorizontal,
+  LayoutGrid,
 } from 'lucide-react';
 import { mapTelemetryToNodes, type LiveNodeBadge } from '../lib/liveCanvasTelemetry';
 import { MDNode, MDLink, ModWorkspace, Port, NODE_TEMPLATES, validateModWorkspace, generateMDXML, type PackageDiagnostic } from '../types';
@@ -62,6 +63,7 @@ import { fetchPollingJson, pollingResourceKey } from '../lib/continuousPolling';
 import { useContinuousPolling } from '../lib/useContinuousPolling';
 
 type Pt = { x: number; y: number };
+let sessionCompactGridView = false;
 
 interface LiveCueTelemetryResponse {
   available?: boolean;
@@ -174,6 +176,19 @@ function Canvas({
 }: CanvasProps) {
   const [zoom, setZoom] = useState<number>(1);
   const [minimapCollapsed, setMinimapCollapsed] = useState<boolean>(false);
+  const [compactGridView, setCompactGridView] = useState<boolean>(() => sessionCompactGridView);
+  const toggleCompactGridView = React.useCallback(() => {
+    setCompactGridView(prev => {
+      const next = !prev;
+      sessionCompactGridView = next;
+      return next;
+    });
+  }, []);
+  useEffect(() => {
+    const onToggle = () => toggleCompactGridView();
+    window.addEventListener('x4forge:toggle-compact-grid', onToggle);
+    return () => window.removeEventListener('x4forge:toggle-compact-grid', onToggle);
+  }, [toggleCompactGridView]);
   const mdScriptOptions = useMemo(() => [...new Set(
     (workspace.nodes || [])
       .map(node => String((node.properties as any)?.mdFileStem || '').trim())
@@ -482,8 +497,9 @@ function Canvas({
     const y = e.clientY - rect.top;
 
     // Accounts mathematically for scrolling panning constraints and zoom metrics
-    const gridX = Math.round((x - panOffset.x) / zoom / 10) * 10;
-    const gridY = Math.round((y - panOffset.y) / zoom / 10) * 10;
+    const gridStep = compactGridView ? 16 : 10;
+    const gridX = Math.round((x - panOffset.x) / zoom / gridStep) * gridStep;
+    const gridY = Math.round((y - panOffset.y) / zoom / gridStep) * gridStep;
 
     setContextMenu({ x, y, gridX, gridY });
     setSearchQuery('');
@@ -515,8 +531,9 @@ function Canvas({
           const dx = (e.clientX - dragStartPos.current.x) / zoom;
           const dy = (e.clientY - dragStartPos.current.y) / zoom;
           
-          const virtualDx = Math.round(dx / 10) * 10;
-          const virtualDy = Math.round(dy / 10) * 10;
+          const gridStep = compactGridView ? 16 : 10;
+          const virtualDx = compactGridView ? Math.round((dragStart.x + dx) / gridStep) * gridStep - dragStart.x : Math.round(dx / 10) * 10;
+          const virtualDy = compactGridView ? Math.round((dragStart.y + dy) / gridStep) * gridStep - dragStart.y : Math.round(dy / 10) * 10;
           
           const targetNode = workspace.nodes.find(n => n.id === draggedNodeId);
           
@@ -615,7 +632,7 @@ function Canvas({
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [draggedNodeId, panning, saveCheckpoint, resizingComment, zoom, panOffset, linking, workspace.nodes, draggingWaypoint, selectedNodeIds, setWorkspace]);
+  }, [draggedNodeId, panning, saveCheckpoint, resizingComment, zoom, panOffset, linking, workspace.nodes, draggingWaypoint, selectedNodeIds, setWorkspace, compactGridView]);
 
   // Handle intuitive smooth zoom-to-cursor via mouse scroll wheel
   useEffect(() => {
@@ -736,26 +753,28 @@ function Canvas({
     const node = nodeById.get(nodeId);
     if (!node) return { x: 0, y: 0 };
 
-    const width = 240;
+    const width = compactGridView ? 192 : 240;
     const baseIndexInPorts = node.inputs.findIndex(p => p.id === portId);
     const baseIndexOutPorts = node.outputs.findIndex(p => p.id === portId);
     
     let xOffset = 0;
-    let yOffset = 50; 
+    let yOffset = compactGridView ? 32 : 50;
+    const rowPitch = compactGridView ? 20 : 26;
+    const rowCenter = compactGridView ? 10 : 14;
 
     if (baseIndexInPorts !== -1) {
       xOffset = 0;
-      yOffset += 26 * baseIndexInPorts + 14;
+      yOffset += rowPitch * baseIndexInPorts + rowCenter;
     } else if (baseIndexOutPorts !== -1) {
       xOffset = width;
-      yOffset += 26 * baseIndexOutPorts + 14;
+      yOffset += (compactGridView ? node.inputs.length * rowPitch : 0) + rowPitch * baseIndexOutPorts + rowCenter;
     }
 
     return {
       x: node.x + xOffset,
       y: node.y + yOffset
     };
-  }, [nodeById]);
+  }, [nodeById, compactGridView]);
 
   // Viewport tracking for optimization
   const [viewportSize, setViewportSize] = useState<{ width: number; height: number }>({ width: 1200, height: 800 });
@@ -891,7 +910,7 @@ function Canvas({
   // mdAutoLayout.computeAutoLayout (covered by runAutoLayoutSelftest); comment frames stay put.
   const autoAlignGraph = () => {
     saveCheckpoint();
-    const pos = computeAutoLayout(workspace.nodes, workspace.links);
+    const pos = computeAutoLayout(workspace.nodes, workspace.links, { compact: compactGridView });
     setWorkspace(prev => ({
       ...prev,
       nodes: prev.nodes.map(n => {
@@ -1839,12 +1858,14 @@ function Canvas({
                 { label: 'Reset zoom to 100%', title: 'Reset Graph Zoom', Icon: RefreshCw, run: () => { setZoom(1); setPanOffset({ x: 0, y: 0 }); } },
                 { label: 'Tidy graph', title: 'Tidy graph — auto-align node layout', Icon: Sparkles, run: autoAlignGraph },
                 { label: 'Dependency trace', title: 'Deps trace — toggle dependency analyzer panel', Icon: Filter, run: () => setDepPanelOpen(open => !open), pressed: depPanelOpen },
+                { label: 'Compact grid view', title: 'Compact grid view — dense 16px snap grid and condensed node cards', Icon: LayoutGrid, run: toggleCompactGridView, pressed: compactGridView, testId: 'canvas-compact-grid-toggle' },
                 { label: 'Clear all wires', title: 'Clear all wires/links', Icon: Trash2, run: clearLinks, destructive: true },
-              ].map(({ label, title, Icon, run, pressed, destructive }) => (
+              ].map(({ label, title, Icon, run, pressed, destructive, testId }) => (
                 <button
                   type="button"
                   key={label}
                   title={title}
+                  data-testid={testId}
                   aria-pressed={pressed}
                   className="studio-menu-item"
                   onClick={() => {
@@ -1852,8 +1873,9 @@ function Canvas({
                     run();
                   }}
                 >
-                  <Icon aria-hidden="true" className={`h-3.5 w-3.5 shrink-0 ${destructive ? 'text-red-300' : ''}`} />
-                  {label}
+                  <Icon aria-hidden="true" className={`h-3.5 w-3.5 shrink-0 ${destructive ? 'text-red-300' : pressed ? 'text-cyan-300' : ''}`} />
+                  <span className="flex-1 text-left">{label}</span>
+                  {pressed && <span className="text-[9px] font-mono uppercase text-cyan-300">ON</span>}
                 </button>
               ))}
             </div>
@@ -1918,6 +1940,7 @@ function Canvas({
       <div
         id="grid-canvas"
         data-testid="grid-canvas"
+        data-compact-grid={compactGridView ? 'true' : 'false'}
         ref={canvasRef}
         onMouseDown={handleCanvasMouseDown}
         onDoubleClick={handleCanvasDoubleClick}
@@ -1925,8 +1948,10 @@ function Canvas({
         onDrop={handleCanvasDrop}
         className="flex-1 w-full h-full relative cursor-grab active:cursor-grabbing outline-none"
         style={{
-          backgroundImage: 'radial-gradient(circle, rgba(6, 182, 212, 0.15) 1px, transparent 1px)',
-          backgroundSize: '24px 24px',
+          backgroundImage: compactGridView
+            ? 'linear-gradient(to right, rgba(6, 182, 212, 0.09) 1px, transparent 1px), linear-gradient(to bottom, rgba(6, 182, 212, 0.09) 1px, transparent 1px)'
+            : 'radial-gradient(circle, rgba(6, 182, 212, 0.15) 1px, transparent 1px)',
+          backgroundSize: compactGridView ? '16px 16px' : '24px 24px',
           backgroundPosition: `${panOffset.x}px ${panOffset.y}px`
         }}
       >
@@ -2200,7 +2225,7 @@ function Canvas({
                 <div 
                   style={{ 
                     position: 'absolute',
-                    left: node.x + 248, // Adjacent to the w-60 (240px) visual node card
+                    left: node.x + (compactGridView ? 200 : 248), // Adjacent to the w-48 (192px) or w-60 (240px) visual node card
                     top: node.y,
                     width: '190px',
                   }}
@@ -2267,12 +2292,12 @@ function Canvas({
                       data-testid={`canvas-node-${node.id}`}
                       onMouseDown={(e) => handleNodeMouseDown(node.id, e)}
                       style={{ left: node.x, top: node.y }}
-                      className={`absolute w-60 h-24 rounded-lg border flex flex-col justify-between font-mono text-[11px] p-2.5 select-none shadow-2xl transition-all duration-150 ${borderClasses} ${
+                      className={`absolute ${compactGridView ? 'w-48 h-20' : 'w-60 h-24'} rounded-lg border flex flex-col justify-between font-mono text-[11px] p-2.5 select-none shadow-2xl transition-all duration-150 ${borderClasses} ${
                         isSelected ? 'ring-2 ring-cyan-500/70 border-cyan-500/50 scale-[1.015] z-10' : 'hover:border-white/20'
                       } ${isGlowActive ? 'animate-node-glow-active border-cyan-400 z-30 scale-[1.03]' : ''}`}
                     >
                       <div className="flex-1 flex items-center justify-center text-center">
-                        <span className="font-bold text-[12px] truncate w-48 text-slate-100">
+                        <span className={`font-bold text-[12px] truncate ${compactGridView ? 'w-36' : 'w-48'} text-slate-100`}>
                           {node.label}
                         </span>
                       </div>
@@ -2291,10 +2316,11 @@ function Canvas({
                     data-node-id={node.id}
                     data-node-type={node.type}
                     data-node-label={node.label}
+                    data-compact-node={compactGridView ? 'true' : 'false'}
                     data-testid={`canvas-node-${node.id}`}
                     onMouseDown={(e) => handleNodeMouseDown(node.id, e)}
                     style={{ left: node.x, top: node.y }}
-                    className={`absolute w-60 rounded-lg border flex flex-col font-mono text-[11px] shadow-2xl transition-all duration-150 ${borderClasses} ${
+                    className={`absolute ${compactGridView ? 'w-48' : 'w-60'} rounded-lg border flex flex-col font-mono text-[11px] shadow-2xl transition-all duration-150 ${borderClasses} ${
                       isSelected ? 'ring-2 ring-cyan-500/70 border-cyan-500/50 scale-[1.015]' : 'hover:border-white/20'
                     } ${isGlowActive ? 'animate-node-glow-active border-cyan-400 z-30 scale-[1.03]' : ''} ${
                       nodeDiag ? (nodeDiag.severity === 'error'
@@ -2349,7 +2375,7 @@ function Canvas({
                     }`} />
 
                     {/* Visual node title & close handle button */}
-                    <div className="p-2 flex items-center justify-between border-b border-white/[0.04] cursor-grab active:cursor-grabbing bg-white/[0.01]">
+                    <div className={`${compactGridView ? 'px-2 py-1.5' : 'p-2'} flex items-center justify-between border-b border-white/[0.04] cursor-grab active:cursor-grabbing bg-white/[0.01]`}>
                       <div className="flex items-center gap-1.5 truncate">
                         {simActive && isGlowActive && (
                           <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping inline-block shrink-0" />
@@ -2365,7 +2391,7 @@ function Canvas({
                                 : <GitBranch className="w-3.5 h-3.5 text-indigo-300 shrink-0" />)
                             : <Play className="w-3.5 h-3.5 text-emerald-400 fill-emerald-400/20 shrink-0" />
                         )}
-                        <span className="font-semibold text-[11px] tracking-tight truncate w-32 text-slate-100">{node.label}</span>
+                        <span className={`font-semibold text-[11px] tracking-tight truncate ${compactGridView ? 'w-24' : 'w-32'} text-slate-100`}>{node.label}</span>
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
                         {/* Sticky Note Toggle Icon */}
@@ -2413,23 +2439,25 @@ function Canvas({
                       </div>
                     </div>
 
-                    {/* Properties Inspector Preview */}
-                    <div className="p-2 bg-[#090b0f] text-slate-400 space-y-1 select-none border-b border-white/[0.04] font-mono text-[9px] rounded-md m-1.5">
-                      {Object.entries(node.properties).slice(0, 3).map(([key, val]) => (
-                        <div key={key} className="flex justify-between leading-normal">
-                          <span className="text-slate-500 text-[9px] uppercase font-bold tracking-wider">{key}:</span>
-                          <span className="text-slate-300 truncate max-w-[130px] text-right font-medium" title={String(val)}>
-                            {String(val)}
-                          </span>
-                        </div>
-                      ))}
-                      {Object.keys(node.properties).length === 0 && (
-                        <div className="text-slate-650 italic text-[9px] text-center">No properties configured</div>
-                      )}
-                    </div>
+                    {/* Properties Inspector Preview (collapsed in Compact Grid View #8) */}
+                    {!compactGridView && (
+                      <div data-testid="canvas-node-props-preview" className="p-2 bg-[#090b0f] text-slate-400 space-y-1 select-none border-b border-white/[0.04] font-mono text-[9px] rounded-md m-1.5">
+                        {Object.entries(node.properties).slice(0, 3).map(([key, val]) => (
+                          <div key={key} className="flex justify-between leading-normal">
+                            <span className="text-slate-500 text-[9px] uppercase font-bold tracking-wider">{key}:</span>
+                            <span className="text-slate-300 truncate max-w-[130px] text-right font-medium" title={String(val)}>
+                              {String(val)}
+                            </span>
+                          </div>
+                        ))}
+                        {Object.keys(node.properties).length === 0 && (
+                          <div className="text-slate-650 italic text-[9px] text-center">No properties configured</div>
+                        )}
+                      </div>
+                    )}
 
                     {/* Ports list row layouts */}
-                    <div className="p-2 space-y-1.5 bg-black/10 rounded-b-lg">
+                    <div className={`${compactGridView ? 'px-2 py-1.5 space-y-1' : 'p-2 space-y-1.5'} bg-black/10 rounded-b-lg`}>
                       {/* Event Inputs/Condition locks list */}
                       {(node.inputs || []).map((port) => (
                         <div key={port.id} className="flex items-center gap-2">
