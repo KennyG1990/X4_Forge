@@ -232,6 +232,99 @@ export function respondAgentOverrideOrderIssuers(req: Request, res: Response): R
   } catch (error) { return sendCorpusError(res, error); }
 }
 
+export function respondAgentReferenceAiScripts(req: Request, res: Response): Response {
+  res.set('Cache-Control', 'no-store');
+  const queryError = validateReferenceCapabilityQuery(
+    req.query,
+    ['q', 'category', 'source', 'orderOnly', 'limit', 'offset', 'refresh', 'workspaceId', 'clientId'],
+    'reference.aiscripts.read',
+  );
+  if (queryError) return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+  if (req.query.refresh !== undefined && req.query.refresh !== '0' && req.query.refresh !== '1') {
+    return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'Optional ?refresh= must be 0 or 1.' });
+  }
+  if (req.query.orderOnly !== undefined && req.query.orderOnly !== '0' && req.query.orderOnly !== '1') {
+    return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'Optional ?orderOnly= must be 0 or 1.' });
+  }
+  const qRaw = req.query.q !== undefined ? String(req.query.q).trim() : '';
+  if (qRaw.length > 256) {
+    return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'Optional ?q= must be at most 256 characters.' });
+  }
+  const categoryRaw = req.query.category !== undefined ? String(req.query.category).trim() : '';
+  if (categoryRaw.length > 64) {
+    return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'Optional ?category= must be at most 64 characters.' });
+  }
+  const sourceRaw = req.query.source !== undefined ? String(req.query.source).trim() : '';
+  if (sourceRaw.length > 64) {
+    return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'Optional ?source= must be at most 64 characters.' });
+  }
+  let parsedLimit = 200;
+  if (req.query.limit !== undefined) {
+    if (typeof req.query.limit !== 'string' || !/^\d+$/.test(req.query.limit)) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'limit must be an integer between 1 and 500.' });
+    }
+    const n = Number.parseInt(req.query.limit, 10);
+    if (!Number.isSafeInteger(n) || n < 1 || n > 500) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'limit must be an integer between 1 and 500.' });
+    }
+    parsedLimit = n;
+  }
+  let parsedOffset = 0;
+  if (req.query.offset !== undefined) {
+    if (typeof req.query.offset !== 'string' || !/^\d+$/.test(req.query.offset)) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'offset must be an integer between 0 and 10000.' });
+    }
+    const n = Number.parseInt(req.query.offset, 10);
+    if (!Number.isSafeInteger(n) || n < 0 || n > 10_000) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'offset must be an integer between 0 and 10000.' });
+    }
+    parsedOffset = n;
+  }
+  try {
+    const corpus = load(req);
+    const byCategory: Record<string, number> = {};
+    let orderCount = 0;
+    for (const item of corpus.aiScripts) {
+      if (item.order) {
+        orderCount++;
+        const cat = (item.order.category || 'uncategorized').trim().toLowerCase() || 'uncategorized';
+        byCategory[cat] = (byCategory[cat] || 0) + 1;
+      }
+    }
+    const orderOnly = req.query.orderOnly === '1';
+    const qNeedle = qRaw.toLowerCase();
+    const catNeedle = categoryRaw.toLowerCase();
+    const srcNeedle = sourceRaw.toLowerCase();
+    const filtered = corpus.aiScripts.filter(item => {
+      if (orderOnly && !item.order) return false;
+      if (catNeedle) {
+        const itemCat = (item.order?.category || '').trim().toLowerCase();
+        if (itemCat !== catNeedle) return false;
+      }
+      if (srcNeedle && item.source.toLowerCase() !== srcNeedle) return false;
+      if (qNeedle) {
+        const paramNames = item.order ? item.order.params.map(p => p.name || '').join(' ') : '';
+        const hay = `${item.id} ${item.name} ${item.source} ${item.path} ${item.order?.id || ''} ${item.order?.category || ''} ${paramNames}`.toLowerCase();
+        if (!hay.includes(qNeedle)) return false;
+      }
+      return true;
+    });
+    const sliced = filtered.slice(parsedOffset, parsedOffset + parsedLimit);
+    return res.json({
+      ok: true,
+      generation: corpus.manifestGeneration || corpus.signature,
+      total: corpus.aiScripts.length,
+      orderCount,
+      filteredTotal: filtered.length,
+      limit: parsedLimit,
+      offset: parsedOffset,
+      truncated: parsedOffset + sliced.length < filtered.length,
+      byCategory,
+      items: sliced,
+    });
+  } catch (error) { return sendCorpusError(res, error); }
+}
+
 export function respondAgentReferenceManifest(req: Request, res: Response): Response {
   res.set('Cache-Control', 'no-store');
   const queryError = validateReferenceCapabilityQuery(

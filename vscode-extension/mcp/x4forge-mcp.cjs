@@ -203,6 +203,7 @@ const DIAGNOSTIC_READ_LIVE_TOOLS = new Set([
   "simulate_md_graph",
   "diagnose_workspace_nodes",
   "list_override_order_issuers",
+  "list_reference_aiscripts",
 ]);
 const PERFORMANCE_PROFILE_HTTP_FAILURES = { PROFILE_DISABLED: 503, PROFILE_BUSY: 409, PROFILE_RATE_LIMITED: 429, PROFILE_DISPOSED: 503, PROFILE_INPUT_INVALID: 400, PROFILE_ABORTED: 408, PROFILE_FAILED: 500, PROFILE_CLEANUP_UNCONFIRMED: 409 };
 const PERFORMANCE_COLLECTION_HTTP_FAILURES = { PERFORMANCE_DISPOSED: 503, PERFORMANCE_COLLECTION_BUSY: 409, PERFORMANCE_COLLECTION_REFUSED: 409, PROJECT_INPUT_INVALID: 400, PERFORMANCE_COLLECTION_FAILED: 500 };
@@ -2797,6 +2798,47 @@ const TOOLS = [
           total: "number",
           filteredTotal: "number",
           byOrderId: "object",
+          items: "array",
+        },
+      );
+    },
+  },
+  {
+    name: "list_reference_aiscripts",
+    capabilityId: "reference.aiscripts.read",
+    capabilityVersion: 1,
+    description: "Enumerate canonical base-game and official-DLC aiscripts/*.xml records with their authored <order id category infinite> headers and parameter schemas, filterable by query, order category, source, or orderOnly without exposing host filesystem paths.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        q: { type: "string", maxLength: 256 },
+        category: { type: "string", maxLength: 64 },
+        source: { type: "string", maxLength: 64 },
+        orderOnly: { type: "string", enum: ["0", "1"] },
+        limit: { type: "string", maxLength: 8 },
+        offset: { type: "string", maxLength: 12 },
+        refresh: { type: "string", enum: ["0", "1"] },
+      },
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams();
+      for (const key of ["q", "category", "source", "orderOnly", "limit", "offset", "refresh"]) {
+        if (args[key] !== undefined) q.set(key, String(args[key]));
+      }
+      return requireResponse(
+        await forge("GET", `/api/agent/reference/aiscripts?${q}`),
+        "reference AI scripts and orders",
+        {
+          ok: "boolean",
+          generation: "string",
+          total: "number",
+          orderCount: "number",
+          filteredTotal: "number",
+          limit: "number",
+          offset: "number",
+          truncated: "boolean",
+          byCategory: "object",
           items: "array",
         },
       );

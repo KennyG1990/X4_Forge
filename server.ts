@@ -136,6 +136,7 @@ import {
   registerReferenceRoutes,
   respondAgentEffectiveReferenceFile,
   respondAgentOverrideOrderIssuers,
+  respondAgentReferenceAiScripts,
   respondAgentReferenceCoverage,
   respondAgentReferenceManifest,
   respondAgentReferenceStatus,
@@ -1278,6 +1279,7 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
       || authority.decision.routeKey === 'GET /api/agent/extensions/file'
       || authority.decision.routeKey === 'GET /api/agent/patch/base-content'
       || authority.decision.routeKey === 'POST /api/agent/patch/xpath-complete'
+      || authority.decision.routeKey === 'GET /api/agent/reference/aiscripts'
       || authority.decision.routeKey === 'GET /api/agent/reference/coverage'
       || authority.decision.routeKey === 'GET /api/agent/reference/override-orders'
       || authority.decision.routeKey === 'GET /api/agent/ui/lua-snippets'
@@ -10382,6 +10384,7 @@ app.get("/api/agent/object-index", (req, res) => {
 });
 
 app.get("/api/agent/reference/status", (req, res) => respondAgentReferenceStatus(req, res));
+app.get("/api/agent/reference/aiscripts", (req, res) => respondAgentReferenceAiScripts(req, res));
 app.get("/api/agent/reference/coverage", (req, res) => respondAgentReferenceCoverage(req, res));
 app.get("/api/agent/reference/override-orders", (req, res) => respondAgentOverrideOrderIssuers(req, res));
 app.get("/api/agent/reference/manifest", (req, res) => respondAgentReferenceManifest(req, res));

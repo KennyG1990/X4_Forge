@@ -192,11 +192,20 @@ async function main() {
   }
   fs.writeFileSync(path.join(gameDir, 'X4.exe'), 'fixture');
   fs.mkdirSync(path.join(corpusDir, 'libraries'), { recursive: true });
+  fs.mkdirSync(path.join(corpusDir, 'aiscripts'), { recursive: true });
   fs.mkdirSync(path.join(corpusDir, 'md'), { recursive: true });
   fs.mkdirSync(path.join(corpusDir, 'extensions', 'ego_dlc_split', 'md'), { recursive: true });
   fs.mkdirSync(path.join(corpusDir, 'assets', 'units', 'size_s', 'macros'), { recursive: true });
   fs.writeFileSync(path.join(corpusDir, 'libraries', 'factions.xml'), '<factions><faction id="argon" name="Argon"/></factions>');
   fs.writeFileSync(path.join(corpusDir, 'libraries', 'wares.xml'), '<wares><ware id="energycells" name="Energy Cells" group="energy"/></wares>');
+  fs.writeFileSync(
+    path.join(corpusDir, 'aiscripts', 'order.fight.attack.object.xml'),
+    '<?xml version="1.0" encoding="utf-8"?>\n<aiscript name="order.fight.attack.object"><order id="Attack" category="combat" infinite="false"><params><param name="primarytarget" type="object"/></params></order><attention min="unknown"><actions/></attention></aiscript>\n',
+  );
+  fs.writeFileSync(
+    path.join(corpusDir, 'aiscripts', 'lib.helper.xml'),
+    '<?xml version="1.0" encoding="utf-8"?>\n<aiscript name="lib.helper"><attention min="unknown"><actions/></attention></aiscript>\n',
+  );
   fs.writeFileSync(
     path.join(corpusDir, 'md', 'base_missions.xml'),
     '<?xml version="1.0" encoding="utf-8"?>\n<mdscript name="BaseMissions"><cues><cue name="SharedCue"/><cue name="BaseOnlyCue"/></cues></mdscript>\n',
@@ -1700,6 +1709,18 @@ async function main() {
       assert.equal(covRes.payload.ready, true);
       assert(covRes.payload.coverage && typeof covRes.payload.coverage === 'object');
       assert(!JSON.stringify(covRes.payload).includes(root), 'get_reference_coverage leaked host root');
+
+      const aiOrdersRes = await presetReadMcp.callTool('list_reference_aiscripts', {
+        orderOnly: '1',
+        category: 'combat',
+      });
+      assert.equal(aiOrdersRes.isError, false, JSON.stringify(aiOrdersRes.payload));
+      assert.equal(aiOrdersRes.payload.ok, true);
+      assert.equal(aiOrdersRes.payload.total, 2);
+      assert.equal(aiOrdersRes.payload.orderCount, 1);
+      assert.equal(aiOrdersRes.payload.filteredTotal, 1);
+      assert.equal(aiOrdersRes.payload.items?.[0]?.order?.id, 'Attack');
+      assert(!JSON.stringify(aiOrdersRes.payload).includes(root), 'list_reference_aiscripts leaked host root');
 
       const snippetsRes = await presetReadMcp.callTool('list_lua_ui_snippets', {});
       assert.equal(snippetsRes.isError, false, JSON.stringify(snippetsRes.payload));
