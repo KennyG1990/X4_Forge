@@ -437,13 +437,36 @@ function extractGuaranteedExistenceVars(rawExpr: string): string[] {
   return collect(rawExpr, found) ? [...found] : [];
 }
 
+const UNCONDITIONAL_NAME_INITIALIZER_TAGS = new Set([
+  'create_order',
+  'create_trade_order',
+  'create_position',
+  'transform_position',
+  'create_orientation',
+  'create_list',
+]);
+
 function findGuaranteedLocalOutputs(action: Element): string[] {
   if (action.hasAttribute('chance')) return [];
-  if (action.tagName === 'create_order' || action.tagName === 'create_trade_order') {
+  const tag = action.tagName;
+  if (UNCONDITIONAL_NAME_INITIALIZER_TAGS.has(tag)) {
     const target = LOCAL_VARIABLE.exec(action.getAttribute('name')?.trim() || '')?.[1];
     return target ? [target] : [];
   }
-  if (!/^find_/.test(action.tagName)) return [];
+  if (tag === 'create_group' || tag === 'add_to_group') {
+    const target = LOCAL_VARIABLE.exec(action.getAttribute('groupname')?.trim() || '')?.[1];
+    return target ? [target] : [];
+  }
+  if (tag === 'get_threat_score') {
+    const target = LOCAL_VARIABLE.exec(action.getAttribute('result')?.trim() || '')?.[1];
+    return target ? [target] : [];
+  }
+  if (tag === 'substitute_text') {
+    if (!(action.getAttribute('source') ?? '').trim()) return [];
+    const target = LOCAL_VARIABLE.exec(action.getAttribute('text')?.trim() || '')?.[1];
+    return target ? [target] : [];
+  }
+  if (!/^find_/.test(tag)) return [];
   const out = new Set<string>();
   const groupTarget = LOCAL_VARIABLE.exec(action.getAttribute('groupname')?.trim() || '')?.[1];
   if (groupTarget) out.add(groupTarget);
@@ -3127,6 +3150,56 @@ export function runMdPitfallSelftest(): {
     && atGuardGaps.filter(g => g.reason.includes('$areaHoldOrder')).length === 1
     && ['$typedOrder', '$eqNull', '$orAt'].every(v => atGuardGaps.some(g => g.reason.includes(v))),
     { atGuardGaps });
+
+  const unit61Schema = { loaded: true, sourceFiles: [], elementCount: 0, elements: new Map<string, unknown>([
+    ...unit56Schema.elements,
+    ['substitute_text', { resolved: true, openAttributes: false, attributes: new Map([['text', { type: 'lvalueexpression' }], ['source', { type: 'expression' }]]) }],
+    ['replace', { resolved: true, openAttributes: false, attributes: new Map([['string', { type: 'expression' }], ['with', { type: 'expression' }]]) }],
+    ['create_position', { resolved: true, openAttributes: false, attributes: new Map([['name', { type: 'lvaluename' }]]) }],
+    ['transform_position', { resolved: true, openAttributes: false, attributes: new Map([['name', { type: 'lvaluename' }], ['refposition', { type: 'expression' }], ['refrotation', { type: 'expression' }]]) }],
+    ['create_orientation', { resolved: true, openAttributes: false, attributes: new Map([['name', { type: 'lvaluename' }]]) }],
+    ['position', { resolved: true, openAttributes: false, attributes: new Map() }],
+    ['create_list', { resolved: true, openAttributes: false, attributes: new Map([['name', { type: 'lvaluename' }]]) }],
+    ['create_group', { resolved: true, openAttributes: false, attributes: new Map([['groupname', { type: 'lvalueexpression' }]]) }],
+    ['add_to_group', { resolved: true, openAttributes: false, attributes: new Map([['groupname', { type: 'groupname' }]]) }],
+    ['get_threat_score', { resolved: true, openAttributes: false, attributes: new Map([['result', { type: 'lvaluename' }], ['class', { type: 'classlookup' }]]) }],
+    ['create_ship', { resolved: true, openAttributes: false, attributes: new Map([['name', { type: 'lvaluename' }]]) }],
+  ]) } as unknown as SchemaIndex;
+  const xsdInitXml = '<mdscript name="XsdInits"><cues>'
+    + '<library name="SettleOutcome" purpose="run_actions"><params><param name="cur"/></params><actions>'
+    + '<set_value name="$inPlaceOk" exact="\'seed\'"/>'
+    + '<substitute_text text="$inPlaceOk"><replace string="\'a\'" with="\'b\'"/></substitute_text>'
+    + '<debug_text text="$inPlaceOk"/>'
+    + '<substitute_text text="$subFromSource" source="$cur"><replace string="\'a\'" with="\'b\'"/></substitute_text>'
+    + '<debug_text text="$subFromSource"/>'
+    + '<substitute_text text="$inPlaceMissing"><replace string="\'a\'" with="\'b\'"/></substitute_text>'
+    + '<debug_text text="$inPlaceMissing"/>'
+    + '</actions></library>'
+    + '<cue name="ValueAndGroups" instantiate="true"><conditions><event_game_started/></conditions><actions>'
+    + '<create_position name="$pos"/><debug_text text="$pos"/>'
+    + '<transform_position name="$tpos" refposition="$pos" refrotation="rotation.zero"><position/></transform_position><debug_text text="$tpos"/>'
+    + '<create_orientation name="$rot"><position/></create_orientation><debug_text text="$rot"/>'
+    + '<create_list name="$lst"/><debug_text text="$lst"/>'
+    + '<create_group groupname="$grp1"/><debug_text text="$grp1"/>'
+    + '<add_to_group groupname="$grp2"/><debug_text text="$grp2"/>'
+    + '<get_threat_score class="class.ship_s" result="$threat"/><debug_text text="$threat"/>'
+    + '<create_position name="$chancePos" chance="50"/><debug_text text="$chancePos"/>'
+    + '<create_ship name="$fallibleShip"/><debug_text text="$fallibleShip"/>'
+    + '<substitute_text text="$foreignSub" source="\'x\'"><ext:hook xmlns:ext="urn:test"/></substitute_text><debug_text text="$foreignSub"/>'
+    + '</actions></cue></cues></mdscript>';
+  const xsdInitBuilt = buildMdVariableAvailabilityContext([{ path: 'md/xsdinits.xml', content: xsdInitXml }], unit61Schema);
+  const xsdInitGaps: ValidationCoverageGap[] = [];
+  lintMdPitfalls(xsdInitXml, { filePath: 'md/xsdinits.xml', variableAvailability: xsdInitBuilt.context, initialStateGaps: xsdInitGaps });
+  const xsdInitNoSchema = buildMdVariableAvailabilityContext([{ path: 'md/xsdinits.xml', content: xsdInitXml }], null);
+  const xsdInitNoSchemaGaps: ValidationCoverageGap[] = [];
+  lintMdPitfalls(xsdInitXml, { filePath: 'md/xsdinits.xml', variableAvailability: xsdInitNoSchema.context, initialStateGaps: xsdInitNoSchemaGaps });
+  ok('unconditional XSD value, list, group, threat_score, and sourced substitute_text initializers establish local variables while keeping in-place/chance/fallible/no-schema conservative',
+    xsdInitGaps.length === 4
+    && !['$inPlaceOk', '$subFromSource', '$pos', '$tpos', '$rot', '$lst', '$grp1', '$grp2', '$threat'].some(v => xsdInitGaps.some(g => g.reason.includes(v)))
+    && ['$inPlaceMissing', '$chancePos', '$fallibleShip', '$foreignSub'].every(v => xsdInitGaps.some(g => g.reason.includes(v)))
+    && xsdInitNoSchemaGaps.some(g => g.reason.includes('$pos'))
+    && xsdInitNoSchemaGaps.some(g => g.reason.includes('$subFromSource')),
+    { xsdInitGaps, xsdInitNoSchemaGaps });
   const triggerRules = (cues: string) => lintMdPitfalls(`<mdscript name="Trigger"><cues>\n${cues}\n</cues></mdscript>`,
     { filePath: 'md/trigger.xml' }).filter(f => f.code === 'md_pitfall.no_event_condition' || f.code === 'md_pitfall.illegal_instantiate');
   const triggerCue = (attributes = '', body = '<check_value value="true"/>') =>
