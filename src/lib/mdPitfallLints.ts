@@ -1174,6 +1174,72 @@ function staticCueNames(root: Element): Set<string> {
   return cues;
 }
 
+const TIME_ACTION_TIMEOUT_TAGS = new Set([
+  'show_notification',
+  'show_interactive_notification',
+  'set_requested_job_ship_timeout',
+]);
+const NON_MUTATING_TIME_TRACE_TAGS = new Set([
+  'debug_text',
+  'write_to_logbook',
+  'speak',
+  'show_help',
+  'show_notification',
+  'show_interactive_notification',
+  'set_requested_job_ship_timeout',
+  'play_cutscene',
+  'append_to_list',
+  'remove_from_list',
+]);
+const TIME_TRACE_LVALUE_ATTRS = ['name', 'result', 'groupname', 'list', 'table', 'valuename', 'counter'] as const;
+const QUEUE_INDEX_READ = /^([A-Za-z_]\w*\.\$[A-Za-z_]\w*)\.\{[^{}]+\}$/;
+
+function parseMdTableLiteralEntries(exact: string): Map<string, string> | null {
+  const trimmed = exact.trim();
+  if (!/^table\[[\s\S]*\]$/.test(trimmed)) return null;
+  const inner = trimmed.slice(6, -1);
+  const entries = new Map<string, string>();
+  if (!inner.trim()) return entries;
+  let quote = '';
+  let paren = 0;
+  let bracket = 0;
+  let brace = 0;
+  let start = 0;
+  const segments: string[] = [];
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (quote) {
+      if (ch === '\\') { i++; continue; }
+      if (ch === quote) {
+        if (inner[i + 1] === quote) { i++; continue; }
+        quote = '';
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"') { quote = ch; continue; }
+    if (ch === '(') paren++;
+    else if (ch === ')') { if (--paren < 0) return null; }
+    else if (ch === '[') bracket++;
+    else if (ch === ']') { if (--bracket < 0) return null; }
+    else if (ch === '{') brace++;
+    else if (ch === '}') { if (--brace < 0) return null; }
+    else if (ch === ',' && paren === 0 && bracket === 0 && brace === 0) {
+      segments.push(inner.slice(start, i));
+      start = i + 1;
+    }
+  }
+  if (quote || paren !== 0 || bracket !== 0 || brace !== 0) return null;
+  segments.push(inner.slice(start));
+  for (const seg of segments) {
+    const piece = seg.trim();
+    if (!piece) continue;
+    const match = /^(\$[A-Za-z_]\w*)\s*=\s*([\s\S]+)$/.exec(piece);
+    if (!match) return null;
+    entries.set(match[1], match[2].trim());
+  }
+  return entries;
+}
+
 function comparedEventParameter(value: string): string | undefined {
   let parameter: string | undefined;
   for (const term of value.trim().split(/\s+or\s+/)) {
@@ -1184,7 +1250,13 @@ function comparedEventParameter(value: string): string | undefined {
   return parameter;
 }
 
-function trackAssignment(action: Element, facts: Map<string, NumericFact>, tables: Set<string>, cues: Set<string>): void {
+function trackAssignment(
+  action: Element,
+  facts: Map<string, NumericFact>,
+  tables: Set<string>,
+  cues: Set<string>,
+  queueFields?: ReadonlyMap<string, ReadonlyMap<string, NumericFact>>,
+): void {
   const name = action.getAttribute('name')?.trim() ?? '';
   const storage = STORAGE.exec(name);
   if (!storage || (storage[1] && !tables.has(storage[1]) && !cues.has(storage[1]))) {
@@ -1195,6 +1267,16 @@ function trackAssignment(action: Element, facts: Map<string, NumericFact>, table
   const [, qualifier, field] = storage;
   const exact = action.getAttribute('exact')?.trim() ?? '';
   const source = UNITLESS_NUMBER.test(exact) ? { line: action.lineNumber } : facts.get(exact);
+  const tableLiteral = !qualifier ? parseMdTableLiteralEntries(exact) : null;
+  const resolvedTableEntries = new Map<string, NumericFact>();
+  if (tableLiteral) {
+    for (const [entryKey, rhs] of tableLiteral) {
+      const rhsFact = UNITLESS_NUMBER.test(rhs) ? { line: action.lineNumber } : facts.get(rhs);
+      if (rhsFact) resolvedTableEntries.set(entryKey, rhsFact);
+    }
+  }
+  const queueMatch = !qualifier && queueFields ? QUEUE_INDEX_READ.exec(exact) : null;
+  const resolvedQueueFields = queueMatch ? queueFields?.get(queueMatch[1]) : undefined;
   // Qualified writes can alias another table or the current cue's namespace.
   // Resolve the RHS first, then forget possibly affected facts.
   for (const key of facts.keys()) {
@@ -1205,7 +1287,16 @@ function trackAssignment(action: Element, facts: Map<string, NumericFact>, table
   const operation = action.getAttribute('operation');
   if (action.hasAttribute('chance') || (operation && operation !== 'set')
     || action.hasAttribute('min') || action.hasAttribute('max')) return;
-  if (!qualifier && /^table\[\s*\]$/.test(exact)) tables.add(field);
+  if (!qualifier && tableLiteral !== null) {
+    tables.add(field);
+    for (const [entryKey, rhsFact] of resolvedTableEntries) facts.set(`${field}.${entryKey}`, rhsFact);
+    return;
+  }
+  if (!qualifier && resolvedQueueFields) {
+    tables.add(field);
+    for (const [entryKey, qFact] of resolvedQueueFields) facts.set(`${field}.${entryKey}`, qFact);
+    return;
+  }
   if (source) facts.set(name, source);
 }
 
@@ -1213,57 +1304,519 @@ function monitoredTimeout(action: Element): Attr | null {
   return action.getAttribute('targetmonitor') === 'true' ? action.getAttributeNode('timeout') : null;
 }
 
-/** Follow definite numeric values only within a single MD action region. */
-function lintMdCutsceneTimeouts(root: Element, filePath?: string): MdPitfallFinding[] {
-  const cutscenes = root.getElementsByTagName('play_cutscene');
-  if (!cutscenes.length) return [];
+function enclosingStaticRootCueName(node: Element | null, root: Element, cues: Set<string>): string | undefined {
+  for (let cur = node; cur && cur !== root; cur = cur.parentElement) {
+    if (isStaticRootCue(cur, root)) {
+      const name = cur.getAttribute('name') || '';
+      return cues.has(name) ? name : undefined;
+    }
+  }
+  return undefined;
+}
+
+function collectMutatedFieldNames(subtree: Element): { wildcard: boolean; fields: Set<string> } {
+  const fields = new Set<string>();
+  let wildcard = false;
+  for (const el of Array.from(subtree.getElementsByTagName('*'))) {
+    if (el.namespaceURI) continue;
+    const tag = el.tagName;
+    if (tag === 'cue' || tag === 'library' || tag === 'param' || tag === 'input_param' || tag === 'raise_lua_event') continue;
+    if (tag === 'run_actions' || tag === 'include_actions') { wildcard = true; continue; }
+    for (const attrName of TIME_TRACE_LVALUE_ATTRS) {
+      if (attrName === 'name' && NON_MUTATING_TIME_TRACE_TAGS.has(tag)) continue;
+      const raw = el.getAttribute(attrName)?.trim();
+      if (!raw) continue;
+      if (raw.includes('{')) { wildcard = true; continue; }
+      const m = /(\$[A-Za-z_]\w*)$/.exec(raw);
+      if (m) fields.add(m[1]);
+    }
+  }
+  return { wildcard, fields };
+}
+
+function collectCrossCueNumericInvariants(
+  root: Element,
+  cues: Set<string>,
+): {
+  cueFields: Map<string, NumericFact>;
+  cueQueueFields: Map<string, Map<string, NumericFact>>;
+} {
+  const empty = { cueFields: new Map<string, NumericFact>(), cueQueueFields: new Map<string, Map<string, NumericFact>>() };
+  if (!cues.size || root.getElementsByTagName('include_actions').length > 0) return empty;
+
+  const taintedCueAll = new Set<string>();
+  const taintedCueFields = new Set<string>();
+  const taintedQueues = new Set<string>();
+  const globalNonNumericSubFields = new Set<string>();
+
+  const taintCueTarget = (raw: string, owningRootCue: string | undefined, allowQueueOps = false, tag = '', el?: Element) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+    const dynCue = /^([A-Za-z_]\w*)\.\{/.exec(trimmed);
+    if (dynCue && cues.has(dynCue[1])) {
+      taintedCueAll.add(dynCue[1]);
+      return;
+    }
+    if (owningRootCue && /^(?:this|namespace)\.\{/.test(trimmed)) {
+      taintedCueAll.add(owningRootCue);
+      return;
+    }
+    const qElemField = /^([A-Za-z_]\w*\.\$[A-Za-z_]\w*)\.\{[^{}]+\}\.(\$[A-Za-z_]\w*)$/.exec(trimmed);
+    if (qElemField) {
+      taintedQueues.add(qElemField[1]);
+      globalNonNumericSubFields.add(qElemField[2]);
+      return;
+    }
+    const qElem = /^([A-Za-z_]\w*\.\$[A-Za-z_]\w*)\.\{[^{}]+\}$/.exec(trimmed);
+    if (qElem) {
+      if (!(allowQueueOps && tag === 'remove_value')) taintedQueues.add(qElem[1]);
+      return;
+    }
+    const storage = STORAGE.exec(trimmed);
+    if (!storage) {
+      if (trimmed.includes('{')) {
+        const tail = /\.(\$[A-Za-z_]\w*)$/.exec(trimmed);
+        if (tail) globalNonNumericSubFields.add(tail[1]);
+      }
+      return;
+    }
+    const [, qual, field] = storage;
+    const resolvedCue = qual && cues.has(qual)
+      ? qual
+      : (!qual || qual === 'this' || qual === 'namespace') && owningRootCue
+        ? owningRootCue
+        : undefined;
+    if (!resolvedCue) return;
+    const key = `${resolvedCue}.${field}`;
+    taintedCueFields.add(key);
+    if (allowQueueOps) {
+      const isInitEmptyList = tag === 'set_value' && el
+        && !el.hasAttribute('chance') && !el.hasAttribute('min') && !el.hasAttribute('max')
+        && (!el.getAttribute('operation') || el.getAttribute('operation') === 'set')
+        && /^\[\s*\]$/.test(el.getAttribute('exact')?.trim() ?? '');
+      const isQueueOp = isInitEmptyList
+        || (tag === 'append_to_list' && !qual?.startsWith('$') && Boolean(qual && cues.has(qual)))
+        || tag === 'remove_from_list'
+        || tag === 'remove_value'
+        || tag === 'clear_list';
+      if (!isQueueOp) taintedQueues.add(key);
+    } else {
+      taintedQueues.add(key);
+    }
+  };
+
+  for (const el of Array.from(root.getElementsByTagName('*'))) {
+    if (el.namespaceURI) continue;
+    const tag = el.tagName;
+    if (tag === 'mdscript' || tag === 'cues' || tag === 'cue' || tag === 'library'
+      || tag === 'conditions' || tag === 'actions' || tag === 'delay' || tag === 'timing'
+      || tag === 'params' || tag === 'input_param' || tag === 'raise_lua_event') continue;
+    const owningCue = enclosingStaticRootCueName(el, root, cues);
+    if (tag === 'param' && owningCue && el.parentElement?.tagName === 'params' && el.parentElement.parentElement?.getAttribute('name') === owningCue) {
+      const pName = el.getAttribute('name')?.trim();
+      if (pName) {
+        taintedCueFields.add(`${owningCue}.$${pName}`);
+        taintedQueues.add(`${owningCue}.$${pName}`);
+      }
+      continue;
+    }
+    const inStaticRootActions = (() => {
+      for (let p = el.parentElement; p && p !== root; p = p.parentElement) {
+        if (p.tagName === 'patch' || p.tagName === 'library') return false;
+        if (p.tagName === 'cue' && !isStaticRootCue(p, root)) return false;
+        if (p.tagName === 'actions' && isStaticRootCue(p.parentElement, root)) return true;
+      }
+      return false;
+    })();
+    if (tag === 'set_value') {
+      const target = el.getAttribute('name')?.trim() ?? '';
+      const st = STORAGE.exec(target);
+      const exact = el.getAttribute('exact')?.trim() ?? '';
+      if (!inStaticRootActions) {
+        taintCueTarget(target, owningCue, false, tag, el);
+        if (st?.[1]?.startsWith('$')) globalNonNumericSubFields.add(st[2]);
+      } else if (! (/^\[\s*\]$/.test(exact) && !el.hasAttribute('chance') && !el.hasAttribute('min') && !el.hasAttribute('max') && (!el.getAttribute('operation') || el.getAttribute('operation') === 'set'))) {
+        // Any non-`[]` set_value to Cue.$queue cannot be a list queue.
+        if (st) {
+          const resolvedCue = st[1] && cues.has(st[1]) ? st[1] : (!st[1] && owningCue ? owningCue : undefined);
+          if (resolvedCue) taintedQueues.add(`${resolvedCue}.${st[2]}`);
+        } else {
+          taintCueTarget(target, owningCue, false, tag, el);
+        }
+      }
+      continue;
+    }
+    if (tag === 'append_to_list' || tag === 'remove_from_list' || tag === 'remove_value') {
+      const target = el.getAttribute('name')?.trim() ?? '';
+      taintCueTarget(target, owningCue, inStaticRootActions, tag, el);
+      continue;
+    }
+    if (tag === 'clear_list') {
+      const target = el.getAttribute('list')?.trim() ?? '';
+      taintCueTarget(target, owningCue, inStaticRootActions, tag, el);
+      continue;
+    }
+    for (const attrName of TIME_TRACE_LVALUE_ATTRS) {
+      if (attrName === 'name' && NON_MUTATING_TIME_TRACE_TAGS.has(tag)) continue;
+      const raw = el.getAttribute(attrName);
+      if (raw) taintCueTarget(raw, owningCue, false, tag, el);
+    }
+  }
+
+  const runPass = (seedCueFields: ReadonlyMap<string, NumericFact>) => {
+    const fieldWriters = new Map<string, NumericFact[]>();
+    const passTaintedFields = new Set(taintedCueFields);
+    const queueAppends = new Map<string, Array<Map<string, NumericFact>>>();
+    const passTaintedQueues = new Set(taintedQueues);
+    const passNonNumericSubFields = new Set(globalNonNumericSubFields);
+
+    const walkCollect = (
+      block: Element,
+      facts: Map<string, NumericFact>,
+      tables: Set<string>,
+      owningCue: string,
+      depth: number,
+    ) => {
+      if (depth >= 128) return;
+      for (let child = block.firstChild; child; child = child.nextSibling) {
+        if (child.nodeType !== 1) continue;
+        const action = child as Element;
+        const tag = action.tagName;
+        if (tag === 'set_value') {
+          const rawName = action.getAttribute('name')?.trim() ?? '';
+          const storage = STORAGE.exec(rawName);
+          const exact = action.getAttribute('exact')?.trim() ?? '';
+          const preSource = UNITLESS_NUMBER.test(exact) ? { line: action.lineNumber } : facts.get(exact);
+          const operation = action.getAttribute('operation');
+          const plainSet = !action.hasAttribute('chance') && (!operation || operation === 'set')
+            && !action.hasAttribute('min') && !action.hasAttribute('max');
+          if (storage) {
+            const [, qual, field] = storage;
+            const targetCue = qual && cues.has(qual) ? qual : (!qual ? owningCue : undefined);
+            if (targetCue) {
+              const cueKey = `${targetCue}.${field}`;
+              if (plainSet && preSource) {
+                const list = fieldWriters.get(cueKey) ?? [];
+                list.push(preSource);
+                fieldWriters.set(cueKey, list);
+              } else {
+                passTaintedFields.add(cueKey);
+              }
+            }
+            if (qual?.startsWith('$') && (!plainSet || !preSource)) {
+              passNonNumericSubFields.add(field);
+            }
+          }
+          trackAssignment(action, facts, tables, cues);
+          continue;
+        }
+        if (tag === 'append_to_list') {
+          const listName = action.getAttribute('name')?.trim() ?? '';
+          const listStorage = STORAGE.exec(listName);
+          if (listStorage && listStorage[1] && cues.has(listStorage[1]) && !taintedCueAll.has(listStorage[1])) {
+            const qKey = `${listStorage[1]}.${listStorage[2]}`;
+            const itemExpr = action.getAttribute('exact')?.trim() ?? '';
+            const inlineTable = parseMdTableLiteralEntries(itemExpr);
+            if (inlineTable !== null) {
+              const itemFacts = new Map<string, NumericFact>();
+              for (const [k, rhs] of inlineTable) {
+                const f = UNITLESS_NUMBER.test(rhs) ? { line: action.lineNumber } : facts.get(rhs);
+                if (f) itemFacts.set(k, f);
+              }
+              const list = queueAppends.get(qKey) ?? [];
+              list.push(itemFacts);
+              queueAppends.set(qKey, list);
+            } else if (/^\$[A-Za-z_]\w*$/.test(itemExpr) && tables.has(itemExpr)) {
+              const itemFacts = new Map<string, NumericFact>();
+              const prefix = `${itemExpr}.`;
+              for (const [k, f] of facts) {
+                if (k.startsWith(prefix)) itemFacts.set(k.slice(prefix.length), f);
+              }
+              const list = queueAppends.get(qKey) ?? [];
+              list.push(itemFacts);
+              queueAppends.set(qKey, list);
+            } else {
+              passTaintedQueues.add(qKey);
+            }
+          }
+          continue;
+        }
+        if (NON_MUTATING_TIME_TRACE_TAGS.has(tag)) continue;
+        if (CONDITIONAL_ACTIONS.has(tag)) {
+          const inside = new Map(facts);
+          const parameter = comparedEventParameter(action.getAttribute('value') ?? '');
+          if (parameter) inside.set(parameter, { inferred: true });
+          walkCollect(action, inside, new Set(tables), owningCue, depth + 1);
+          const mutated = collectMutatedFieldNames(action);
+          facts.clear();
+          tables.clear();
+          if (!mutated.wildcard) {
+            for (const [k, v] of seedCueFields) {
+              const dot = k.indexOf('.');
+              const sub = dot >= 0 ? k.slice(dot + 1) : k;
+              if (!mutated.fields.has(sub)) facts.set(k, v);
+            }
+          }
+          continue;
+        }
+        if (tag === 'do_for_each' || tag === 'do_all' || tag === 'do_while') {
+          walkCollect(action, new Map(seedCueFields), new Set(), owningCue, depth + 1);
+        }
+        facts.clear();
+        tables.clear();
+      }
+    };
+
+    for (const actions of Array.from(root.getElementsByTagName('actions'))) {
+      if (!isStaticRootCue(actions.parentElement, root)) continue;
+      const cueName = actions.parentElement?.getAttribute('name') || '';
+      if (!cues.has(cueName)) continue;
+      walkCollect(actions, new Map(seedCueFields), new Set(), cueName, 0);
+    }
+
+    const nextCueFields = new Map<string, NumericFact>();
+    for (const [key, writers] of fieldWriters) {
+      const cueName = key.slice(0, key.indexOf('.'));
+      if (taintedCueAll.has(cueName) || passTaintedFields.has(key) || !writers.length) continue;
+      const inferred = writers.some(w => Boolean(w.inferred));
+      const firstLine = writers.find(w => typeof w.line === 'number')?.line;
+      nextCueFields.set(key, inferred ? { inferred: true } : { line: firstLine });
+    }
+
+    const nextQueueFields = new Map<string, Map<string, NumericFact>>();
+    for (const [qKey, appends] of queueAppends) {
+      const cueName = qKey.slice(0, qKey.indexOf('.'));
+      if (taintedCueAll.has(cueName) || passTaintedQueues.has(qKey) || !appends.length) continue;
+      const common = new Map<string, NumericFact>();
+      const [first, ...rest] = appends;
+      for (const [subField, firstFact] of first) {
+        if (passNonNumericSubFields.has(subField)) continue;
+        if (!rest.every(m => m.has(subField))) continue;
+        const allFacts = [firstFact, ...rest.map(m => m.get(subField)!)];
+        const inferred = allFacts.some(f => Boolean(f.inferred));
+        const firstLine = allFacts.find(f => typeof f.line === 'number')?.line;
+        common.set(subField, inferred ? { inferred: true } : { line: firstLine });
+      }
+      if (common.size > 0) nextQueueFields.set(qKey, common);
+    }
+
+    return { cueFields: nextCueFields, cueQueueFields: nextQueueFields };
+  };
+
+  const pass1 = runPass(new Map());
+  return runPass(pass1.cueFields);
+}
+
+/** Follow definite numeric values across MD timing attributes and unambiguous static root cues. */
+function lintMdTimeValues(root: Element, filePath?: string): MdPitfallFinding[] {
+  let hasAnyTimingSite = false;
+  let hasVariableTimingExpr = false;
+  for (const el of Array.from(root.getElementsByTagName('*'))) {
+    if (el.namespaceURI) continue;
+    const tag = el.tagName;
+    if (tag === 'cue') {
+      for (const attr of ['checktime', 'checkinterval']) {
+        const val = el.getAttribute(attr);
+        if (val !== null) {
+          hasAnyTimingSite = true;
+          if (val.includes('$')) hasVariableTimingExpr = true;
+        }
+      }
+    } else if (tag === 'delay') {
+      for (const attr of ['exact', 'min', 'max']) {
+        const val = el.getAttribute(attr);
+        if (val !== null) {
+          hasAnyTimingSite = true;
+          if (val.includes('$')) hasVariableTimingExpr = true;
+        }
+      }
+    } else if (tag === 'play_cutscene') {
+      const timeout = monitoredTimeout(el);
+      if (timeout) {
+        hasAnyTimingSite = true;
+        if (timeout.value.includes('$')) hasVariableTimingExpr = true;
+      }
+    } else if (TIME_ACTION_TIMEOUT_TAGS.has(tag)) {
+      const val = el.getAttribute('timeout');
+      if (val !== null) {
+        hasAnyTimingSite = true;
+        if (val.includes('$')) hasVariableTimingExpr = true;
+      }
+    }
+  }
+  if (!hasAnyTimingSite) return [];
+
   const findings: MdPitfallFinding[] = [];
-  const cues = staticCueNames(root);
-  function report(attribute: Attr, fact: NumericFact = {}): void {
+  const seen = new Set<string>();
+  const cues = hasVariableTimingExpr ? staticCueNames(root) : new Set<string>();
+  const invariants = hasVariableTimingExpr
+    ? collectCrossCueNumericInvariants(root, cues)
+    : { cueFields: new Map<string, NumericFact>(), cueQueueFields: new Map<string, Map<string, NumericFact>>() };
+
+  function report(owner: Element, attribute: Attr, fact: NumericFact = {}): void {
+    const tagName = owner.tagName;
+    const attrName = attribute.name;
+    const key = `${attribute.lineNumber ?? 0}:${attribute.columnNumber ?? 0}:${tagName}/@${attrName}`;
+    if (seen.has(key)) return;
+    seen.add(key);
     const expression = attribute.value.trim();
     const provenance = fact.line ? ` (source line ${fact.line})` : '';
+    const isBlockingCutscene = tagName === 'play_cutscene' && !fact.inferred;
     findings.push({
-      code: 'md_pitfall.numeric_time_value', severity: fact.inferred ? 'warning' : 'error',
-      filePath, line: attribute.lineNumber, column: attribute.columnNumber, sourceRef: 'play_cutscene/@timeout',
+      code: 'md_pitfall.numeric_time_value',
+      severity: isBlockingCutscene ? 'error' : 'warning',
+      filePath,
+      line: attribute.lineNumber,
+      column: attribute.columnNumber,
+      sourceRef: `${tagName}/@${attrName}`,
       detail: fact.inferred
-        ? `<play_cutscene> timeout="${expression}" receives an event value compared with unitless numbers. Verify its type and convert it if it represents seconds.`
-        : `<play_cutscene> timeout="${expression}" receives a unitless number${provenance}. X4 expects a time value. If this value represents seconds, use "(${expression})s".`,
+        ? `<${tagName}> ${attrName}="${expression}" receives an event value compared with unitless numbers. Verify its type and convert it if it represents seconds.`
+        : `<${tagName}> ${attrName}="${expression}" receives a unitless number${provenance}. X4 expects a time value. If this value represents seconds, use "(${expression})s".`,
     });
   }
-  for (const cutscene of Array.from(cutscenes)) {
-    const timeout = monitoredTimeout(cutscene);
-    if (timeout && UNITLESS_NUMBER.test(timeout.value.trim())) report(timeout);
+
+  function checkTimingAttr(
+    owner: Element,
+    attrName: string,
+    facts: ReadonlyMap<string, NumericFact>,
+    allowLiteral: boolean,
+  ): void {
+    const attr = owner.getAttributeNode(attrName);
+    if (!attr) return;
+    const expr = attr.value.trim();
+    if (!expr) return;
+    if (allowLiteral && UNITLESS_NUMBER.test(expr)) {
+      report(owner, attr);
+      return;
+    }
+    const fact = facts.get(expr);
+    if (fact) report(owner, attr, fact);
   }
-  function walk(block: Element, facts: Map<string, NumericFact>, tables: Set<string>, visibleCues: Set<string>, depth: number): void {
+
+  function walk(
+    block: Element,
+    facts: Map<string, NumericFact>,
+    tables: Set<string>,
+    visibleCues: Set<string>,
+    seedFacts: ReadonlyMap<string, NumericFact>,
+    queueFields: ReadonlyMap<string, ReadonlyMap<string, NumericFact>>,
+    depth: number,
+  ): void {
     if (depth >= 128) return;
     for (let child = block.firstChild; child; child = child.nextSibling) {
       if (child.nodeType !== 1) continue;
       const action = child as Element;
+      if (action.namespaceURI) continue;
       const tag = action.tagName;
       if (tag === 'set_value') {
-        trackAssignment(action, facts, tables, visibleCues);
+        trackAssignment(action, facts, tables, visibleCues, queueFields);
         continue;
       }
       if (tag === 'play_cutscene') {
         const timeout = monitoredTimeout(action);
-        const fact = timeout && facts.get(timeout.value.trim());
-        if (timeout && fact) report(timeout, fact);
+        if (timeout) {
+          const expr = timeout.value.trim();
+          if (UNITLESS_NUMBER.test(expr)) report(action, timeout);
+          else {
+            const fact = facts.get(expr);
+            if (fact) report(action, timeout, fact);
+          }
+        }
+        continue;
       }
+      if (TIME_ACTION_TIMEOUT_TAGS.has(tag)) {
+        checkTimingAttr(action, 'timeout', facts, true);
+        continue;
+      }
+      if (NON_MUTATING_TIME_TRACE_TAGS.has(tag)) continue;
       if (CONDITIONAL_ACTIONS.has(tag)) {
         const inside = new Map(facts);
         const parameter = comparedEventParameter(action.getAttribute('value') ?? '');
         if (parameter) inside.set(parameter, { inferred: true });
-        walk(action, inside, new Set(tables), visibleCues, depth + 1);
+        walk(action, inside, new Set(tables), visibleCues, seedFacts, queueFields, depth + 1);
+        const mutated = collectMutatedFieldNames(action);
+        facts.clear();
+        tables.clear();
+        if (!mutated.wildcard) {
+          for (const [k, v] of seedFacts) {
+            const dot = k.indexOf('.');
+            const sub = dot >= 0 ? k.slice(dot + 1) : k;
+            if (!mutated.fields.has(sub)) facts.set(k, v);
+          }
+        }
+        continue;
+      }
+      if (tag === 'do_for_each') {
+        const inside = new Map(seedFacts);
+        const insideTables = new Set<string>();
+        const iterVar = action.getAttribute('name')?.trim() ?? '';
+        const valVar = action.getAttribute('valuename')?.trim() ?? '';
+        const inExpr = action.getAttribute('in')?.trim() ?? '';
+        const qMap = !valVar && /^\$[A-Za-z_]\w*$/.test(iterVar) ? queueFields.get(inExpr) : undefined;
+        if (qMap) {
+          insideTables.add(iterVar);
+          for (const [subField, qFact] of qMap) inside.set(`${iterVar}.${subField}`, qFact);
+        }
+        walk(action, inside, insideTables, visibleCues, seedFacts, queueFields, depth + 1);
+        facts.clear();
+        tables.clear();
+        continue;
+      }
+      if (tag === 'do_all' || tag === 'do_while') {
+        walk(action, new Map(seedFacts), new Set(), visibleCues, seedFacts, queueFields, depth + 1);
       }
       facts.clear();
       tables.clear();
     }
   }
+
   const noNamedCues = new Set<string>();
-  for (const actions of Array.from(root.getElementsByTagName('actions'))) {
-    const visibleCues = isStaticRootCue(actions.parentElement, root) ? cues : noNamedCues;
-    walk(actions, new Map(), new Set(), visibleCues, 0);
+  const emptySeed = new Map<string, NumericFact>();
+  const emptyQueues = new Map<string, Map<string, NumericFact>>();
+
+  for (const node of Array.from(root.getElementsByTagName('*'))) {
+    if (node.namespaceURI || (node.tagName !== 'cue' && node.tagName !== 'library')) continue;
+    const staticRoot = isStaticRootCue(node, root);
+    const visibleCues = staticRoot ? cues : noNamedCues;
+    const seedFacts = staticRoot ? invariants.cueFields : emptySeed;
+    const queueFields = staticRoot ? invariants.cueQueueFields : emptyQueues;
+
+    if (node.tagName === 'cue') {
+      checkTimingAttr(node, 'checktime', seedFacts, true);
+      checkTimingAttr(node, 'checkinterval', seedFacts, true);
+    }
+
+    let currentFacts = new Map(seedFacts);
+    let currentTables = new Set<string>();
+    for (let child = node.firstChild; child; child = child.nextSibling) {
+      if (child.nodeType !== 1) continue;
+      const section = child as Element;
+      if (section.namespaceURI) continue;
+      if (section.tagName === 'delay') {
+        checkTimingAttr(section, 'exact', currentFacts, false);
+        checkTimingAttr(section, 'min', currentFacts, false);
+        checkTimingAttr(section, 'max', currentFacts, false);
+        currentFacts = new Map(seedFacts);
+        currentTables = new Set<string>();
+      } else if (section.tagName === 'actions') {
+        walk(section, currentFacts, currentTables, visibleCues, seedFacts, queueFields, 0);
+      }
+    }
   }
+
+  for (const patch of Array.from(root.getElementsByTagName('patch'))) {
+    if (patch.namespaceURI) continue;
+    for (const el of Array.from(patch.getElementsByTagName('*'))) {
+      if (el.namespaceURI) continue;
+      if (el.tagName === 'play_cutscene') {
+        const timeout = monitoredTimeout(el);
+        if (timeout && UNITLESS_NUMBER.test(timeout.value.trim())) report(el, timeout);
+      } else if (TIME_ACTION_TIMEOUT_TAGS.has(el.tagName)) {
+        checkTimingAttr(el, 'timeout', emptySeed, true);
+      }
+    }
+  }
+
   return findings;
 }
 
@@ -1546,7 +2099,7 @@ export function lintMdPitfalls(xml: string, opts: { propertyUnion?: Set<string>;
   }
   // The original cue-tree lints stop when their parser sees a leading BOM outside the root.
   if (leadingBom) return out;
-  out.push(...lintMdCutsceneTimeouts(element, opts.filePath));
+  out.push(...lintMdTimeValues(element, opts.filePath));
 
   for (const cue of Array.from(element.getElementsByTagName('*'))) {
     if (cue.namespaceURI || (cue.tagName !== 'cue' && cue.tagName !== 'library')
@@ -2522,6 +3075,87 @@ export function runMdPitfallSelftest(): {
     `<cue name="State"/><cue name="Parent"><cues><cue name="State"/></cues></cue><cue name="Probe"><actions>${namedTimeout}</actions></cue>`,
     `<cue name="State"/><cue name="state"/><cue name="Probe"><actions>${namedTimeout}</actions></cue>`,
   ].every(cues => !lint(`<mdscript><cues>${cues}</cues></mdscript>`).some(finding => finding.code === timeoutCode)));
+  const crossCuePump = lint([
+    '<mdscript name="CrossCueTime"><cues>',
+    '  <cue name="State"/>',
+    '  <cue name="UiSet"><actions>',
+    '    <set_value name="State.$wait" exact="240"/>',
+    '  </actions></cue>',
+    '  <cue name="Call_pump"><actions>',
+    '    <do_if value="not State.$ready?"><return/></do_if>',
+    '    <debug_text text="\'pumping\'"/>',
+    '    <set_value name="$entry" exact="table[$wait = State.$wait, $label = \'call\']"/>',
+    '    <play_cutscene targetmonitor="true" timeout="$entry.$wait"/>',
+    '  </actions></cue>',
+    '</cues></mdscript>',
+  ].join('\n')).filter(finding => finding.code === timeoutCode);
+  ok('cross-cue State.$wait and inline table[...] propagate provenance across guard and debug_text (#72)',
+    crossCuePump.length === 1 && crossCuePump[0].severity === 'error'
+      && crossCuePump[0].line === 10 && crossCuePump[0].sourceRef === 'play_cutscene/@timeout'
+      && crossCuePump[0].detail.includes('source line 4') && crossCuePump[0].detail.includes('($entry.$wait)s'),
+    crossCuePump);
+  const crossCueQueue = lint([
+    '<mdscript name="CrossCueQueue"><cues>',
+    '  <cue name="State"><actions><set_value name="$queue" exact="[]"/></actions></cue>',
+    '  <cue name="Enqueue"><actions>',
+    '    <set_value name="State.$wait" exact="180"/>',
+    '    <append_to_list name="State.$queue" exact="table[$wait = State.$wait, $who = \'npc\']"/>',
+    '  </actions></cue>',
+    '  <cue name="PumpIndex"><actions>',
+    '    <set_value name="$entry" exact="State.$queue.{1}"/>',
+    '    <remove_from_list name="State.$queue" exact="$entry"/>',
+    '    <play_cutscene targetmonitor="true" timeout="$entry.$wait"/>',
+    '  </actions></cue>',
+    '  <cue name="PumpLoop"><actions>',
+    '    <do_for_each name="$item" in="State.$queue">',
+    '      <play_cutscene targetmonitor="true" timeout="$item.$wait"/>',
+    '    </do_for_each>',
+    '  </actions></cue>',
+    '</cues></mdscript>',
+  ].join('\n')).filter(finding => finding.code === timeoutCode);
+  ok('cross-cue State.$queue list-of-tables propagates through indexed pop and do_for_each (#72)',
+    crossCueQueue.length === 2
+      && crossCueQueue.every(f => f.severity === 'error' && f.detail.includes('source line 4'))
+      && crossCueQueue[0].line === 10 && crossCueQueue[1].line === 14,
+    crossCueQueue);
+  ok('cross-cue provenance suppresses when tainted by non-numeric write, bare State alias, include_actions, or mixed queue (#72)', [
+    '<cue name="State"/><cue name="A"><actions><set_value name="State.$wait" exact="240"/></actions></cue><cue name="B"><actions><set_value name="State.$wait" exact="240s"/></actions></cue><cue name="C"><actions><play_cutscene targetmonitor="true" timeout="State.$wait"/></actions></cue>',
+    '<cue name="State"><actions><set_value name="$wait" exact="240s"/></actions></cue><cue name="A"><actions><set_value name="State.$wait" exact="240"/></actions></cue><cue name="C"><actions><play_cutscene targetmonitor="true" timeout="State.$wait"/></actions></cue>',
+    '<cue name="State"/><cue name="A"><actions><set_value name="State.$wait" exact="240"/><include_actions ref="Ext"/></actions></cue><cue name="C"><actions><play_cutscene targetmonitor="true" timeout="State.$wait"/></actions></cue>',
+    '<cue name="State"/><cue name="A"><actions><append_to_list name="State.$q" exact="table[$wait = 240]"/><append_to_list name="State.$q" exact="table[$wait = 240s]"/></actions></cue><cue name="C"><actions><set_value name="$e" exact="State.$q.{1}"/><play_cutscene targetmonitor="true" timeout="$e.$wait"/></actions></cue>',
+    '<cue name="State"/><cue name="A"><actions><set_value name="$item" exact="table[$wait = 240]"/><append_to_list name="State.$q" exact="$item"/><set_value name="$item.$wait" exact="240s"/></actions></cue><cue name="C"><actions><set_value name="$e" exact="State.$q.{1}"/><play_cutscene targetmonitor="true" timeout="$e.$wait"/></actions></cue>',
+  ].every(cues => !lint(`<mdscript><cues>${cues}</cues></mdscript>`).some(finding => finding.code === timeoutCode)));
+  const broaderTiming = lint([
+    '<mdscript name="BroaderTiming"><cues>',
+    '  <cue name="State"><actions><set_value name="State.$poll" exact="30"/></actions></cue>',
+    '  <cue name="BadCueAttrs" checktime="15" checkinterval="State.$poll" onfail="cancel">',
+    '    <conditions><check_value value="true"/></conditions>',
+    '    <actions>',
+    '      <set_value name="$d" exact="10"/>',
+    '      <show_notification text="\'hi\'" timeout="5"/>',
+    '      <show_interactive_notification text="\'hi\'" timeout="$d"/>',
+    '      <set_requested_job_ship_timeout ship="$ship" timeout="60"/>',
+    '      <show_help custom="\'ok\'" timeout="true"/>',
+    '    </actions>',
+    '    <delay exact="$d" min="State.$poll" max="20s"/>',
+    '    <actions><debug_text text="\'after\'"/></actions>',
+    '  </cue>',
+    '  <cue name="VanillaDelayLiteral" checkinterval="25s"><conditions><check_value value="true"/></conditions><delay exact="0.5"/><actions/></cue>',
+    '</cues></mdscript>',
+  ].join('\n')).filter(finding => finding.code === timeoutCode);
+  ok('broader MD timing attributes warn on unitless numbers/provenance while keeping show_help@timeout and literal delay clean (#72)',
+    broaderTiming.length === 7
+      && broaderTiming.every(f => f.severity === 'warning')
+      && broaderTiming.map(f => f.sourceRef).join(',') === [
+        'cue/@checktime',
+        'cue/@checkinterval',
+        'show_notification/@timeout',
+        'show_interactive_notification/@timeout',
+        'set_requested_job_ship_timeout/@timeout',
+        'delay/@exact',
+        'delay/@min',
+      ].join(','),
+    broaderTiming);
   const destructionScript = (conditions: string) => '<mdscript name="DestroyFixture"><cues><cue name="Watcher"><conditions>'
     + conditions + '</conditions></cue></cues></mdscript>';
   const destroyedRows = (source: string) => lintMdPitfalls(source, { filePath: 'md/destroy.xml' })

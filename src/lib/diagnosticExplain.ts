@@ -159,6 +159,16 @@ const GUIDANCE: Array<{ matches: (code: string) => boolean; value: Guidance }> =
     },
   },
   {
+    matches: code => code === 'md_pitfall.numeric_time_value',
+    value: {
+      title: 'Unitless number passed to a Mission Director time attribute',
+      why: 'The timing attribute (such as play_cutscene/@timeout, cue/@checktime, cue/@checkinterval, delay/@exact, or show_notification/@timeout) receives a plain number or a variable/table field whose proven assignments are unitless numbers.',
+      impact: 'X4 evaluates unitless numbers as numeric/float values rather than time values (for example logging "Evaluated value \'240LF\' is not of type time" on monitored play_cutscene timeouts).',
+      next: 'Convert numeric expressions to time values such as "(value)s" or "1s * value", or store a time literal (such as "240s" or "500ms") at the assignment site.',
+      basis: 'X4 9.00 Mission Director time-attribute and cross-cue provenance analysis',
+    },
+  },
+  {
     matches: code => code === 'md_pitfall.order_cancelled_override_suspension' || code === 'order_cancelled_override_suspension',
     value: {
       title: 'Order-cancelled listener does not distinguish temporary override suspension',
@@ -475,6 +485,14 @@ export function runDiagnosticExplainSelftest() {
       && formatHumanDiagnosticSourceRef('md.reference:["md/a.xml",4,"signal_cue/@cue"]') === 'signal_cue/@cue'
       && formatHumanDiagnosticSourceRef('md.reference_unpositioned:["md/a.xml",1]') === undefined
       && formatHumanDiagnosticSourceRef('faction@bogus') === 'faction@bogus',
+  );
+  const numericTimeExplain = make('md_pitfall.numeric_time_value', 'error');
+  check(
+    'md_pitfall.numeric_time_value receives specific time-conversion guidance (#72)',
+    numericTimeExplain.title === 'Unitless number passed to a Mission Director time attribute'
+      && /\(value\)s/.test(numericTimeExplain.next)
+      && /type time/i.test(numericTimeExplain.impact),
+    numericTimeExplain,
   );
   const passed = checks.filter(item => item.pass).length;
   return { allPassed: passed === checks.length, pass: passed === checks.length, passed, total: checks.length, checks };
