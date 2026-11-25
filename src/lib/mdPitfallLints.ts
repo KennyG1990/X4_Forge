@@ -196,7 +196,9 @@ function hasXmlAttribute(element: ElementLike, name: string): boolean {
 const UNITLESS_NUMBER = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)f?$/i;
 const STORAGE = /^(?:([A-Za-z_]\w*|\$[A-Za-z_]\w*)\.)?(\$[A-Za-z_]\w*)$/;
 const CONDITIONAL_ACTIONS = new Set(['do_if', 'do_elseif', 'do_else']);
-const OPAQUE_OR_INLINE_ACTIONS = new Set(['opaque_effect', 'include_actions', 'signal_cue', 'signal_cue_instantly', 'reset_cue', 'cancel_cue']);
+// <signal_cue> dispatches only after the current cue actions complete (md.xsd:4282),
+// whereas <signal_cue_instantly>, <reset_cue>, <cancel_cue>, and <include_actions> act inline.
+const OPAQUE_OR_INLINE_ACTIONS = new Set(['opaque_effect', 'include_actions', 'signal_cue_instantly', 'reset_cue', 'cancel_cue']);
 
 interface NumericFact {
   line?: number;
@@ -255,6 +257,7 @@ interface MdAvailabilityAction {
   destinations: readonly MdAvailabilityDestination[];
   opaque: boolean;
   knownDeclaration?: boolean;
+  guaranteedOutputs?: readonly string[];
   unknownVariables: readonly string[];
   selfOrderingUnknown?: string;
 }
@@ -361,7 +364,7 @@ function isSubMemberDestination(raw: string): boolean {
 function extractGuaranteedExistenceVars(rawExpr: string): string[] {
   const collect = (raw: string, out: Set<string>): boolean => {
     let expr = raw.trim();
-    if (!expr || !expr.includes('?')) return true;
+    if (!expr || (!expr.includes('?') && !expr.includes('@'))) return true;
     while (expr.startsWith('(') && expr.endsWith(')')) {
       let depth = 0;
       let quote = '';
@@ -417,12 +420,13 @@ function extractGuaranteedExistenceVars(rawExpr: string): string[] {
     }
     parts.push(expr.slice(start).trim());
     for (const part of parts) {
-      const direct = /^(?:namespace\.)?(\$[A-Za-z_]\w*)\?$/.exec(part);
-      if (direct) {
-        out.add(direct[1]);
+      const direct = /^(?:(?:namespace\.)?(\$[A-Za-z_]\w*)\?|@(?:namespace\.)?(\$[A-Za-z_]\w*)(?:\.[A-Za-z_]\w*)*)$/.exec(part);
+      const guarded = direct?.[1] ?? direct?.[2];
+      if (guarded) {
+        out.add(guarded);
         continue;
       }
-      if (part.startsWith('(') && part.endsWith(')') && part.includes('?')) {
+      if (part.startsWith('(') && part.endsWith(')') && (part.includes('?') || part.includes('@'))) {
         const nested = new Set<string>();
         if (collect(part, nested)) for (const v of nested) out.add(v);
       }
@@ -434,7 +438,12 @@ function extractGuaranteedExistenceVars(rawExpr: string): string[] {
 }
 
 function findGuaranteedLocalOutputs(action: Element): string[] {
-  if (!/^find_/.test(action.tagName) || action.hasAttribute('chance')) return [];
+  if (action.hasAttribute('chance')) return [];
+  if (action.tagName === 'create_order' || action.tagName === 'create_trade_order') {
+    const target = LOCAL_VARIABLE.exec(action.getAttribute('name')?.trim() || '')?.[1];
+    return target ? [target] : [];
+  }
+  if (!/^find_/.test(action.tagName)) return [];
   const out = new Set<string>();
   const groupTarget = LOCAL_VARIABLE.exec(action.getAttribute('groupname')?.trim() || '')?.[1];
   if (groupTarget) out.add(groupTarget);
@@ -447,6 +456,44 @@ function findGuaranteedLocalOutputs(action: Element): string[] {
     }
   }
   return [...out];
+}
+
+function containsValuelessReturnOrInlineAction(subtree: Element): boolean {
+  for (const node of [subtree, ...Array.from(subtree.getElementsByTagName('*'))]) {
+    if (node.namespaceURI || OPAQUE_OR_INLINE_ACTIONS.has(node.tagName)) return true;
+    if (node.tagName === 'return' && !node.getAttribute('value')?.trim()) return true;
+  }
+  return false;
+}
+
+function doesLibraryGuaranteeReturnValue(container: Element, depth = 0): boolean {
+  if (depth >= MAX_VARIABLE_BRANCH_DEPTH) return false;
+  const children = Array.from(container.children);
+  for (let i = 0; i < children.length; i++) {
+    const child = children[i];
+    if (child.namespaceURI || OPAQUE_OR_INLINE_ACTIONS.has(child.tagName)) return false;
+    if (child.tagName === 'return') {
+      if (!child.getAttribute('value')?.trim()) return false;
+      if (!child.hasAttribute('chance')) return true;
+      continue;
+    }
+    if (child.tagName === 'do_if') {
+      let after = i + 1;
+      while (['do_elseif', 'do_else'].includes(children[after]?.tagName)) after++;
+      const arms = children.slice(i, after);
+      i = after - 1;
+      if (arms.some(arm => containsValuelessReturnOrInlineAction(arm))) return false;
+      const lastArm = arms[arms.length - 1];
+      const unconditionalElse = lastArm?.tagName === 'do_else' && !lastArm.namespaceURI
+        && !arms.some(arm => arm.hasAttribute('chance'));
+      if (unconditionalElse && arms.every(arm => doesLibraryGuaranteeReturnValue(arm, depth + 1))) {
+        return true;
+      }
+      continue;
+    }
+    if (containsValuelessReturnOrInlineAction(child)) return false;
+  }
+  return false;
 }
 
 /** Build possible-writer authority, not an assertion that entry state is empty. */
@@ -558,6 +605,33 @@ export function buildMdVariableAvailabilityContext(
     if (declarations.has(cue.direct) || ambiguous.has(cue.direct)) { declarations.delete(cue.direct); ambiguous.add(cue.direct); }
     else declarations.set(cue.direct, cue);
   }
+  const hasOmissions = Boolean(omissions.paths.length || omissions.additionalCount);
+  const valueReturningLibraries = new Set<string>();
+  if (!hasOmissions && !limited) {
+    for (const [scriptName, group] of scripts) {
+      if (group.length !== 1) continue;
+      const docRoot = group[0].root;
+      const namedCallables = new Map<string, Element[]>();
+      for (const node of Array.from(docRoot.getElementsByTagName('*'))) {
+        if (node.namespaceURI || (node.tagName !== 'cue' && node.tagName !== 'library')) continue;
+        const n = node.getAttribute('name')?.trim();
+        if (!n) continue;
+        const list = namedCallables.get(n) ?? [];
+        list.push(node);
+        namedCallables.set(n, list);
+      }
+      for (const [libName, defs] of namedCallables) {
+        if (defs.length !== 1) continue;
+        const lib = defs[0];
+        if (lib.tagName !== 'library' || lib.getAttribute('purpose') !== 'run_actions') continue;
+        if (Array.from(lib.children).some(c => !c.namespaceURI && c.tagName === 'delay')) continue;
+        const actionBlocks = Array.from(lib.children).filter(c => !c.namespaceURI && c.tagName === 'actions');
+        if (actionBlocks.length === 1 && doesLibraryGuaranteeReturnValue(actionBlocks[0])) {
+          valueReturningLibraries.add(directId(scriptName, libName));
+        }
+      }
+    }
+  }
   const destination = (raw: string, cue: Cue | undefined): MdAvailabilityDestination => {
     const value = raw.trim();
     const local = LOCAL_VARIABLE.exec(value);
@@ -645,8 +719,20 @@ export function buildMdVariableAvailabilityContext(
         gap(file.file, spec ? 'unsupported_effect' : 'unknown_effect', element);
       }
       const unknownVariables = destinations.filter(target => target.initializes && !target.target && target.variable).map(target => target.variable!);
+      let guaranteedOutputs: string[] | undefined;
+      if (spec && element.tagName === 'run_actions' && !element.hasAttribute('chance')) {
+        const refMatch = /^(?:md\.([A-Za-z_]\w*)\.)?([A-Za-z_]\w*)$/.exec(element.getAttribute('ref')?.trim() ?? '');
+        const resultVar = LOCAL_VARIABLE.exec(element.getAttribute('result')?.trim() || '')?.[1];
+        if (refMatch && resultVar) {
+          const targetScript = refMatch[1] ?? file.root.getAttribute('name') ?? '';
+          if (targetScript && valueReturningLibraries.has(directId(targetScript, refMatch[2]))) {
+            guaranteedOutputs = [resultVar];
+          }
+        }
+      }
       const action: MdAvailabilityAction = { order, destinations, unknownVariables,
         ...(spec && !OPAQUE_OR_INLINE_ACTIONS.has(element.tagName) ? { knownDeclaration: true } : {}),
+        ...(guaranteedOutputs ? { guaranteedOutputs } : {}),
         opaque: unsupported || destinations.some(target => target.initializes && !target.variable) };
       const operation = element.getAttribute('operation');
       const target = destinations.find(value => value.initializes && value.target === cue?.namespace && value.variable);
@@ -879,7 +965,9 @@ function lintLocalVariableReads(root: Element, source: string, filePath?: string
             flow.facts.delete(dest.variable);
           }
         }
-        for (const variable of findGuaranteedLocalOutputs(action)) flow.facts.set(variable, { kind: 'present' });
+        for (const variable of [...(fact.guaranteedOutputs ?? []), ...findGuaranteedLocalOutputs(action)]) {
+          flow.facts.set(variable, { kind: 'present' });
+        }
         flow.potential = false;
         return;
       }
@@ -2942,6 +3030,103 @@ export function runMdPitfallSelftest(): {
     && ['$Single', '$Appended', '$ChanceList', '$ForeignList'].every(v => findGaps.some(g => g.reason.includes(v)))
     && findNoSchemaGaps.some(g => g.reason.includes('$List')),
     { findGaps, findNoSchemaGaps });
+
+  const unit56Schema = { loaded: true, sourceFiles: [], elementCount: 0, elements: new Map<string, unknown>([
+    ...initialSchema.elements,
+    ['run_actions', { resolved: true, openAttributes: false, attributes: new Map([['result', { type: 'lvaluename' }]]) }],
+    ['create_order', { resolved: true, openAttributes: false, attributes: new Map([['name', { type: 'lvaluename' }]]) }],
+    ['create_trade_order', { resolved: true, openAttributes: false, attributes: new Map([['name', { type: 'lvaluename' }]]) }],
+    ['signal_cue', { resolved: true, openAttributes: false, attributes: new Map() }],
+    ['signal_cue_instantly', { resolved: true, openAttributes: false, attributes: new Map() }],
+    ['reset_cue', { resolved: true, openAttributes: false, attributes: new Map() }],
+    ['cancel_cue', { resolved: true, openAttributes: false, attributes: new Map() }],
+    ['include_actions', { resolved: true, openAttributes: false, attributes: new Map() }],
+    ['do_for_each', { resolved: true, openAttributes: false, attributes: new Map([['name', { type: 'lvaluename' }]]) }],
+  ]) } as unknown as SchemaIndex;
+  const helperXml = '<mdscript name="Helper"><cues>'
+    + '<library name="DirectVal" purpose="run_actions"><actions><return value="42"/></actions></library>'
+    + '<library name="BranchVal" purpose="run_actions"><params><param name="flag"/></params><actions>'
+    + '<do_if value="$flag"><return value="1"/></do_if><do_elseif value="$flag == 0"><return value="2"/></do_elseif><do_else><return value="3"/></do_else>'
+    + '</actions></library>'
+    + '<library name="Fallthrough" purpose="run_actions"><actions><do_if value="true"><return value="1"/></do_if></actions></library>'
+    + '<library name="VoidReturn" purpose="run_actions"><actions><do_if value="true"><return/></do_if><do_else><return value="1"/></do_else></actions></library>'
+    + '<library name="DelayedLib" purpose="run_actions"><delay exact="1s"/><actions><return value="1"/></actions></library>'
+    + '<library name="DupLib" purpose="run_actions"><actions><return value="1"/></actions></library>'
+    + '<library name="DupLib" purpose="run_actions"><actions><return value="2"/></actions></library>'
+    + '</cues></mdscript>';
+  const callerXml = '<mdscript name="Caller"><cues>'
+    + '<library name="LocalVal" purpose="run_actions"><actions><set_value name="$Tmp" exact="5"/><return value="$Tmp"/></actions></library>'
+    + '<cue name="Main" instantiate="true"><conditions><event_game_started/></conditions><actions>'
+    + '<run_actions ref="LocalVal" result="$LocRes"/><debug_text text="$LocRes"/>'
+    + '<run_actions ref="md.Helper.DirectVal" result="$ExtRes"/><debug_text text="$ExtRes"/>'
+    + '<run_actions ref="md.Helper.BranchVal" result="$BrRes"><param name="flag" value="1"/></run_actions><debug_text text="$BrRes"/>'
+    + '<create_order object="player.ship" id="\'Wait\'" name="$Ord"/><debug_text text="$Ord"/>'
+    + '<create_trade_order object="player.ship" name="$TradeOrd"/><debug_text text="$TradeOrd"/>'
+    + '<run_actions ref="md.Helper.Fallthrough" result="$FallBad"/><debug_text text="$FallBad"/>'
+    + '<run_actions ref="md.Helper.VoidReturn" result="$VoidBad"/><debug_text text="$VoidBad"/>'
+    + '<run_actions ref="md.Helper.DelayedLib" result="$DelayBad"/><debug_text text="$DelayBad"/>'
+    + '<run_actions ref="md.Helper.DupLib" result="$DupBad"/><debug_text text="$DupBad"/>'
+    + '<run_actions ref="LocalVal" result="$ChanceRun" chance="50"/><debug_text text="$ChanceRun"/>'
+    + '<create_order object="player.ship" id="\'Wait\'" name="$ChanceOrd" chance="50"/><debug_text text="$ChanceOrd"/>'
+    + '</actions></cue></cues></mdscript>';
+  const runOrderBuilt = buildMdVariableAvailabilityContext(
+    [{ path: 'md/helper.xml', content: helperXml }, { path: 'md/caller.xml', content: callerXml }],
+    unit56Schema,
+  );
+  const runOrderGaps: ValidationCoverageGap[] = [];
+  lintMdPitfalls(callerXml, { filePath: 'md/caller.xml', variableAvailability: runOrderBuilt.context, initialStateGaps: runOrderGaps });
+  const omittedBuilt = buildMdVariableAvailabilityContext(
+    [{ path: 'md/helper.xml', content: helperXml }, { path: 'md/caller.xml', content: callerXml }],
+    unit56Schema,
+    { paths: ['md/missing.xml'], additionalCount: 0 },
+  );
+  const omittedGaps: ValidationCoverageGap[] = [];
+  lintMdPitfalls(callerXml, { filePath: 'md/caller.xml', variableAvailability: omittedBuilt.context, initialStateGaps: omittedGaps });
+  const noSchemaRunOrder = buildMdVariableAvailabilityContext([{ path: 'md/caller.xml', content: callerXml }], null);
+  const noSchemaRunGaps: ValidationCoverageGap[] = [];
+  lintMdPitfalls(callerXml, { filePath: 'md/caller.xml', variableAvailability: noSchemaRunOrder.context, initialStateGaps: noSchemaRunGaps });
+  ok('value-returning run_actions and create_order/create_trade_order initialize outputs only when unambiguous, unconditional, and schema-resolved',
+    runOrderGaps.length === 6
+    && !['$LocRes', '$ExtRes', '$BrRes', '$Ord', '$TradeOrd'].some(v => runOrderGaps.some(g => g.reason.includes(v)))
+    && ['$FallBad', '$VoidBad', '$DelayBad', '$DupBad', '$ChanceRun', '$ChanceOrd'].every(v => runOrderGaps.some(g => g.reason.includes(v)))
+    && omittedGaps.some(g => g.reason.includes('$LocRes')) && omittedGaps.some(g => g.reason.includes('$ExtRes'))
+    && noSchemaRunGaps.some(g => g.reason.includes('$LocRes')) && noSchemaRunGaps.some(g => g.reason.includes('$Ord')),
+    { runOrderGaps, omittedGaps, noSchemaRunGaps });
+
+  const signalXml = '<mdscript name="SigFlow"><cues><cue name="Sig" instantiate="true"><conditions><event_game_started/></conditions><actions>'
+    + '<set_value name="$Keep" exact="1"/><signal_cue cue="Other"/><debug_text text="$Keep"/>'
+    + '<do_for_each name="$item" in="[]"><signal_cue cue="Other"/><debug_text text="$Keep"/><debug_text text="$item"/></do_for_each><debug_text text="$Keep"/>'
+    + '<set_value name="$DropInst" exact="1"/><signal_cue_instantly cue="Other"/><debug_text text="$DropInst"/>'
+    + '<set_value name="$DropReset" exact="1"/><reset_cue cue="this"/><debug_text text="$DropReset"/>'
+    + '<set_value name="$DropCancel" exact="1"/><cancel_cue cue="this"/><debug_text text="$DropCancel"/>'
+    + '<set_value name="$DropInc" exact="1"/><include_actions ref="Other"/><debug_text text="$DropInc"/>'
+    + '</actions></cue></cues></mdscript>';
+  const signalBuilt = buildMdVariableAvailabilityContext([{ path: 'md/sig.xml', content: signalXml }], unit56Schema);
+  const signalGaps: ValidationCoverageGap[] = [];
+  lintMdPitfalls(signalXml, { filePath: 'md/sig.xml', variableAvailability: signalBuilt.context, initialStateGaps: signalGaps });
+  ok('post-block signal_cue preserves present local flow across actions and loops while inline cue actions clear',
+    signalGaps.length === 4
+    && !signalGaps.some(g => g.reason.includes('$Keep') || g.reason.includes('$item'))
+    && ['$DropInst', '$DropReset', '$DropCancel', '$DropInc'].every(v => signalGaps.some(g => g.reason.includes(v))),
+    { signalGaps });
+
+  const atGuardXml = '<mdscript name="AtFlow"><cues><cue name="AtCue" instantiate="true"><conditions><event_game_started/></conditions><actions>'
+    + '<do_if value="@$areaHoldOrder.exists"><set_value name="$typedOrder" exact="$areaHoldOrder"/></do_if>'
+    + '<do_elseif value="not @$typedOrder.exists and @$mhOrd.exists"><set_value name="$picked" exact="$mhOrd"/><debug_text text="$typedOrder"/></do_elseif>'
+    + '<do_else><debug_text text="$areaHoldOrder"/></do_else>'
+    + '<do_if value="(@$bareAt and @namespace.$nsAt.pilot.exists)"><debug_text text="$bareAt"/><debug_text text="$nsAt"/></do_if>'
+    + '<do_if value="@$eqNull == null"><debug_text text="$eqNull"/></do_if>'
+    + '<do_if value="@$orAt.exists or $Flag"><debug_text text="$orAt"/></do_if>'
+    + '</actions></cue></cues></mdscript>';
+  const atGuardBuilt = buildMdVariableAvailabilityContext([{ path: 'md/atguard.xml', content: atGuardXml }], unit56Schema);
+  const atGuardGaps: ValidationCoverageGap[] = [];
+  lintMdPitfalls(atGuardXml, { filePath: 'md/atguard.xml', variableAvailability: atGuardBuilt.context, initialStateGaps: atGuardGaps });
+  ok('positive null-suppressed truthiness conjuncts guard branch reads without crediting negated, comparison, or, or else paths',
+    atGuardGaps.length === 4
+    && !['$mhOrd', '$bareAt', '$nsAt'].some(v => atGuardGaps.some(g => g.reason.includes(v)))
+    && atGuardGaps.filter(g => g.reason.includes('$areaHoldOrder')).length === 1
+    && ['$typedOrder', '$eqNull', '$orAt'].every(v => atGuardGaps.some(g => g.reason.includes(v))),
+    { atGuardGaps });
   const triggerRules = (cues: string) => lintMdPitfalls(`<mdscript name="Trigger"><cues>\n${cues}\n</cues></mdscript>`,
     { filePath: 'md/trigger.xml' }).filter(f => f.code === 'md_pitfall.no_event_condition' || f.code === 'md_pitfall.illegal_instantiate');
   const triggerCue = (attributes = '', body = '<check_value value="true"/>') =>
