@@ -2396,6 +2396,7 @@ function Canvas({
                       <div className="flex items-center gap-1 shrink-0">
                         {/* Sticky Note Toggle Icon */}
                         <button
+                          onMouseDown={(e) => e.stopPropagation()}
                           onClick={async (e) => {
                             e.stopPropagation();
                             const existingComment = node.comment || '';
@@ -2422,6 +2423,7 @@ function Canvas({
                         </button>
                         {node.type === 'event' && (
                           <button
+                            onMouseDown={(e) => e.stopPropagation()}
                             onClick={(e) => { e.stopPropagation(); triggerLogicSimulator(node.id); }}
                             title="Simulate Event from this step specifically"
                             className="p-1 rounded hover:bg-emerald-500/20 text-emerald-400 transition-all cursor-pointer"
@@ -2430,6 +2432,7 @@ function Canvas({
                           </button>
                         )}
                         <button
+                          onMouseDown={(e) => e.stopPropagation()}
                           onClick={(e) => deleteNode(node.id, e)}
                           title="Delete Node"
                           className="p-1 rounded hover:bg-red-500/20 text-slate-400 hover:text-red-400 transition-all cursor-pointer"
@@ -2441,7 +2444,7 @@ function Canvas({
 
                     {/* Properties Inspector Preview (collapsed in Compact Grid View #8) */}
                     {!compactGridView && (
-                      <div data-testid="canvas-node-props-preview" className="p-2 bg-[#090b0f] text-slate-400 space-y-1 select-none border-b border-white/[0.04] font-mono text-[9px] rounded-md m-1.5">
+                      <div data-testid="canvas-props-preview" className="p-2 bg-[#090b0f] text-slate-400 space-y-1 select-none border-b border-white/[0.04] font-mono text-[9px] rounded-md m-1.5">
                         {Object.entries(node.properties).slice(0, 3).map(([key, val]) => (
                           <div key={key} className="flex justify-between leading-normal">
                             <span className="text-slate-500 text-[9px] uppercase font-bold tracking-wider">{key}:</span>

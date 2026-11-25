@@ -1372,7 +1372,7 @@ export default function Sidebar({
 
       {/* Footer System Credits */}
       <div className="px-3 py-1.5 border-t border-slate-800/80 bg-[#0d1118] text-center text-[10px] font-mono text-slate-500 shrink-0">
-        Egosoft MD 4.5 · Selection opens Right Inspector
+        Engine Context: Egosoft MD 4.5
       </div>
     </div> {/* Close Right Content Column */}
   </div>

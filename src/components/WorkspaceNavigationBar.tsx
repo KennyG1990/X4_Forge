@@ -141,7 +141,7 @@ export default function WorkspaceNavigationBar({
                   onClick={() => onNavigate(id)}
                   aria-label={item.label}
                   className={`h-[26px] shrink-0 rounded-md border px-2 inline-flex items-center gap-1.5 text-[11.5px] font-medium transition-colors cursor-pointer ${severityClass}`}
-                  title={`${item.label} — drag to reorder`}
+                  title={item.label}
                 >
                   <GripVertical className="hidden sm:block w-2.5 h-2.5 opacity-30" aria-hidden="true" />
                   <Icon className="w-3.5 h-3.5 shrink-0" />

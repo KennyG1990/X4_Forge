@@ -86,12 +86,12 @@ test('Unified IDE Workbench provides right contextual inspector, bottom dock, co
   // 2b. Compact Grid View toggle (#8) switches #grid-canvas to 16px compact grid, condenses node cards (w-60 -> w-48), and restores cleanly without mutating workspace
   const firstNodeCard = page.getByTestId(`canvas-node-${firstNodeId}`);
   await expect(page.getByTestId('grid-canvas')).toHaveAttribute('data-compact-grid', 'false');
-  await expect(firstNodeCard.getByTestId('canvas-node-props-preview')).toBeVisible();
+  await expect(firstNodeCard.getByTestId('canvas-props-preview')).toBeVisible();
   await page.getByRole('button', { name: 'Graph tools', exact: true }).click();
   await page.getByTestId('canvas-compact-grid-toggle').click();
   await expect(page.getByTestId('grid-canvas')).toHaveAttribute('data-compact-grid', 'true');
   await expect(firstNodeCard).toHaveAttribute('data-compact-node', 'true');
-  await expect(firstNodeCard.getByTestId('canvas-node-props-preview')).toHaveCount(0);
+  await expect(firstNodeCard.getByTestId('canvas-props-preview')).toHaveCount(0);
   await page.getByRole('button', { name: 'Graph tools', exact: true }).click();
   await page.getByTitle('Reset Graph Zoom').click();
   await expect(firstNodeCard).toHaveCSS('width', '192px');
@@ -100,7 +100,7 @@ test('Unified IDE Workbench provides right contextual inspector, bottom dock, co
   await page.getByRole('button', { name: 'Graph tools', exact: true }).click();
   await page.getByTestId('canvas-compact-grid-toggle').click();
   await expect(page.getByTestId('grid-canvas')).toHaveAttribute('data-compact-grid', 'false');
-  await expect(firstNodeCard.getByTestId('canvas-node-props-preview')).toBeVisible();
+  await expect(firstNodeCard.getByTestId('canvas-props-preview')).toBeVisible();
   await expect(firstNodeCard).toHaveCSS('width', '240px');
   const standardBox = await firstNodeCard.boundingBox();
   expect(compactBox!.width).toBeLessThan(standardBox!.width);

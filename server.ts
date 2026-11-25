@@ -877,13 +877,53 @@ function resolveForgeReceiptVersion(): string {
   return cachedForgePackageVersion;
 }
 
-function recordValidationReceiptBestEffort(input: ValidationVerdictReceiptInput): ValidationVerdictReceipt | undefined {
+const PROJECT_VALIDATE_RECEIPT_CACHE_MAX = 256;
+const projectValidateReceiptCache = new Map<string, ValidationVerdictReceipt>();
+
+function recordValidationReceiptBestEffort(
+  input: ValidationVerdictReceiptInput,
+  cacheIdentity?: string,
+): ValidationVerdictReceipt | undefined {
   if (!input.modId || !/^[a-f0-9]{64}$/i.test(input.sourceHash)) return undefined;
-  let receipt: ValidationVerdictReceipt;
-  try {
-    receipt = createValidationVerdictReceipt(input);
-  } catch {
-    return undefined;
+  let cacheKey: string | undefined;
+  let receipt: ValidationVerdictReceipt | undefined;
+  if (input.surface === 'project-validate' && !input.validatedAt) {
+    cacheKey = JSON.stringify([
+      cacheIdentity ?? '',
+      input.modId.trim().toLowerCase(),
+      input.verdict,
+      input.outcome ?? '',
+      input.sourceHash.toLowerCase(),
+      input.diskSourceHash ? String(input.diskSourceHash).toLowerCase() : null,
+      input.artifactPlanHash ? String(input.artifactPlanHash).toLowerCase() : null,
+      input.forgeVersion,
+      input.errors,
+      input.warnings,
+      input.acceptedWarnings ?? 0,
+      input.unreviewedWarnings,
+      input.coverageGaps,
+      input.unavailableChecks ?? 0,
+    ]);
+    const cached = projectValidateReceiptCache.get(cacheKey);
+    if (cached) {
+      projectValidateReceiptCache.delete(cacheKey);
+      projectValidateReceiptCache.set(cacheKey, cached);
+      receipt = cached;
+    }
+  }
+  if (!receipt) {
+    try {
+      receipt = createValidationVerdictReceipt(input);
+    } catch {
+      return undefined;
+    }
+    if (cacheKey) {
+      if (projectValidateReceiptCache.size >= PROJECT_VALIDATE_RECEIPT_CACHE_MAX) {
+        const oldestKey = projectValidateReceiptCache.keys().next().value;
+        if (oldestKey !== undefined) projectValidateReceiptCache.delete(oldestKey);
+      }
+      projectValidateReceiptCache.set(cacheKey, receipt);
+    }
   }
   try {
     validationReceiptStore.record(receipt);
@@ -13268,7 +13308,7 @@ function validateProjectRequest(req: express.Request, res: express.Response, lea
           unreviewedWarnings: modWarningCount,
           coverageGaps: coverage.gaps.length,
           unavailableChecks: evidence.checkUnavailableCount,
-        })
+        }, resultId)
       : undefined;
     if (!canonical) {
       res.set('X-Forge-Validation-Role', PROJECT_VALIDATE_ROLE_HEADER);
