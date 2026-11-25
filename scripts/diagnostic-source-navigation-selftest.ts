@@ -146,6 +146,9 @@ const bindMd = (workspace = modeledWorkspace) => bindDiagnosticSourceFiles('fixt
 const selectedNode = (binding: ReturnType<ReturnType<typeof bindMd>>) =>
   binding?.status === 'ready' ? binding.nodeId : undefined;
 assert.equal(selectedNode(bindMd()(mdFinding)), 'b-action');
+assert.equal(selectedNode(bindMd()({ ...mdFinding, code: 'REF_UNKNOWN_WARE' })), 'b-action');
+assert.equal(selectedNode(bindMd()({ ...mdFinding, code: 'XSD_UNKNOWN_ATTRIBUTE' })), 'b-action');
+assert.equal(bindMd()({ ...mdFinding, code: 'post-apply.XSD_UNKNOWN_ATTRIBUTE' }), undefined);
 assert.equal(selectedNode(bindMd()({ ...mdFinding, filePath: a })), 'a-action');
 assert.equal(selectedNode(bindMd()({ ...mdFinding, ...mdLocation(mdContent.indexOf('absent')) })), undefined);
 assert.equal(selectedNode(bindMd({ ...modeledWorkspace, nodes: [...modeledWorkspace.nodes, bAction] })(mdFinding)), undefined);

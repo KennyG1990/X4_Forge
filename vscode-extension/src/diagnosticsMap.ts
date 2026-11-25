@@ -27,6 +27,8 @@ export interface MappedDiagnostic {
   severity: "error" | "warning" | "info";
   message: string;
   code?: string;
+  /** Exact machine-readable sourceRef preserved even when primary message omits internal JSON noise. */
+  sourceRef?: string;
 }
 
 export interface MappedResult {
@@ -37,6 +39,41 @@ export interface MappedResult {
 }
 
 const norm = (p: string) => p.replace(/\\/g, "/").replace(/^\/+/, "").toLowerCase();
+
+/**
+ * Convert internal serialized occurrence keys (`md.reference:[...]`, `md.declaration:[...]`)
+ * into concise authored role/cue labels for narrow IDE Problems rows while leaving ordinary
+ * authored `sourceRef` strings (`faction@bogus`, `$ship.pilot.bogus`) verbatim.
+ */
+export function formatDiagnosticSourceRef(sourceRef?: string): string | undefined {
+  if (!sourceRef) return undefined;
+  if (sourceRef.startsWith("md.reference_unpositioned:")) {
+    return undefined;
+  }
+  if (sourceRef.startsWith("md.reference:")) {
+    try {
+      const parsed: unknown = JSON.parse(sourceRef.slice("md.reference:".length));
+      if (Array.isArray(parsed) && typeof parsed[2] === "string" && parsed[2].trim()) {
+        return parsed[2].trim();
+      }
+      return undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  if (sourceRef.startsWith("md.declaration:")) {
+    try {
+      const parsed: unknown = JSON.parse(sourceRef.slice("md.declaration:".length));
+      if (Array.isArray(parsed) && typeof parsed[2] === "string" && parsed[2].trim()) {
+        return `cue@${parsed[2].trim()}`;
+      }
+      return undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return sourceRef;
+}
 
 /**
  * Map flat findings onto the mod's loaded files. `loadedFiles` comes from the validate
@@ -58,13 +95,15 @@ export function mapFlatFindings(flat: FlatFinding[], loadedFiles: string[]): Map
     const column = f.column ?? 0;
     const positioned = matchedPath && f.line !== undefined && Number.isSafeInteger(line) && line > 0
       && Number.isSafeInteger(column) && column > 0;
+    const displayRef = formatDiagnosticSourceRef(f.sourceRef);
     const entry: MappedDiagnostic = {
       relPath: anchor,
       line: Number.isFinite(line) ? Math.max(0, Math.floor(line) - 1) : 0,
       ...(positioned ? { column: column - 1 } : {}),
       severity: f.severity === "error" || f.severity === "warning" ? f.severity : "info",
-      message: f.sourceRef ? `${f.message} (${f.sourceRef})` : f.message,
+      message: displayRef ? `${f.message} (${displayRef})` : f.message,
       ...(f.code ? { code: f.code } : {}),
+      ...(f.sourceRef ? { sourceRef: f.sourceRef } : {}),
     };
     const list = byFile.get(anchor) || [];
     list.push(entry);
@@ -182,6 +221,54 @@ export function runDiagnosticsMapSelftest() {
   ], ["content.xml", file]);
   ok("unknown_files_and_invalid_positions_do_not_acquire_columns",
     [...invalid.byFile.values()].flat().every(finding => finding.column === undefined));
+
+  const mdOccurrenceRefs = mapFlatFindings([
+    {
+      severity: "error",
+      code: "project.unresolved_cue_ref",
+      filePath: "md/story.xml",
+      line: 14,
+      column: 21,
+      message: 'Cue reference "md.Missing.Target" resolves to nothing in this project.',
+      sourceRef: 'md.reference:["md/story.xml",7,"signal_cue/@cue","project.unresolved_cue_ref","md.Missing.Target"]',
+    },
+    {
+      severity: "error",
+      code: "project.unresolved_cue_ref",
+      filePath: "md/story.xml",
+      line: 18,
+      column: 21,
+      message: 'Cue reference "md.Missing.Target" resolves to nothing in this project.',
+      sourceRef: 'md.reference:["md/story.xml",8,"cancel_cue/@cue"]',
+    },
+    {
+      severity: "error",
+      code: "project.unresolved_cue_ref",
+      filePath: "md/story.xml",
+      message: 'Cue reference "md.Unpositioned.Target" resolves to nothing in this project.',
+      sourceRef: 'md.reference_unpositioned:["md/story.xml",2]',
+    },
+    {
+      severity: "error",
+      code: "md.cue_duplicate_name",
+      filePath: "md/story.xml",
+      line: 25,
+      column: 12,
+      message: 'Duplicate cue name "DupCue".',
+      sourceRef: 'md.declaration:["md/story.xml",3,"DupCue"]',
+    },
+  ], loaded).byFile.get("md/story.xml")!;
+  ok(
+    "md_reference_occurrence_json_omitted_from_primary_message_while_role_and_raw_sourceRef_preserved",
+    mdOccurrenceRefs.length === 4
+      && mdOccurrenceRefs[0].message === 'Cue reference "md.Missing.Target" resolves to nothing in this project. (signal_cue/@cue)'
+      && mdOccurrenceRefs[0].sourceRef?.startsWith('md.reference:["md/story.xml",7,') === true
+      && mdOccurrenceRefs[1].message === 'Cue reference "md.Missing.Target" resolves to nothing in this project. (cancel_cue/@cue)'
+      && mdOccurrenceRefs[2].message === 'Cue reference "md.Unpositioned.Target" resolves to nothing in this project.'
+      && mdOccurrenceRefs[2].sourceRef === 'md.reference_unpositioned:["md/story.xml",2]'
+      && mdOccurrenceRefs[3].message === 'Duplicate cue name "DupCue". (cue@DupCue)'
+      && !mdOccurrenceRefs.some(row => row.message.includes("md.reference") || row.message.includes("md.declaration")),
+  );
 
   const passed = checks.filter(c => c.pass).length;
   return { allPassed: passed === checks.length, passed, total: checks.length, checks };

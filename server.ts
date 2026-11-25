@@ -93,7 +93,7 @@ import { computeActionCensus, runActionCensusSelftest } from "./src/lib/actionCe
 import { createSpendMeter, estimateCallUsd, parseSpendCap, runAiSpendMeterSelftest } from "./src/lib/aiSpendMeter";
 import { runModPatternsSelftest } from "./src/lib/modPatterns";
 import { runExplainSelftest, explainWorkspace } from "./src/lib/mdExplain";
-import { explainDiagnostic, runDiagnosticExplainSelftest } from "./src/lib/diagnosticExplain";
+import { explainDiagnostic, formatHumanDiagnosticSourceRef, runDiagnosticExplainSelftest } from "./src/lib/diagnosticExplain";
 import { runX4RulePacksSelftest } from "./src/lib/x4RulePacks.selftest";
 import { runCriticSelftest, critiqueWorkspace } from "./src/lib/mdCritic";
 import { runXmlWellformedSelftest, checkXmlWellformed } from "./src/lib/xmlWellformed";
@@ -9258,26 +9258,29 @@ function runFullWorkspaceValidation(
       sourceRef: finding.sourceRef,
     })),
     ...runPatchDiagnostics(ws),
-    ...flattenProjectValidation(validation).map((finding): ServerDiagnostic => ({
-      severity: finding.severity,
-      category: diagnosticCategory(finding.code || "project.validation"),
-      code: finding.code || "project.validation",
-      domain: finding.filePath ? classifyPath(finding.filePath) : "project",
-      filePath: finding.filePath || "project",
-      line: finding.line,
-      column: finding.column,
-      target: finding.target,
-      sourceNavigation: bindSource?.(finding),
-      message: finding.message,
-      sourceRef: finding.sourceRef ? { kind: "project", label: finding.sourceRef } : undefined,
-      ...(finding.severity === 'warning' && finding.code && (finding.filePath || finding.sourceRef) ? {
-        suppressionScope: {
-          code: finding.code,
-          ...(finding.filePath ? { file: finding.filePath.replace(/\\/g, '/') } : {}),
-          ...(finding.sourceRef ? { sourceRef: finding.sourceRef } : {}),
-        },
-      } : {}),
-    })),
+    ...flattenProjectValidation(validation).map((finding): ServerDiagnostic => {
+      const humanSourceLabel = formatHumanDiagnosticSourceRef(finding.sourceRef);
+      return {
+        severity: finding.severity,
+        category: diagnosticCategory(finding.code || "project.validation"),
+        code: finding.code || "project.validation",
+        domain: finding.filePath ? classifyPath(finding.filePath) : "project",
+        filePath: finding.filePath || "project",
+        line: finding.line,
+        column: finding.column,
+        target: finding.target,
+        sourceNavigation: bindSource?.(finding),
+        message: finding.message,
+        sourceRef: humanSourceLabel ? { kind: "project", label: humanSourceLabel } : undefined,
+        ...(finding.severity === 'warning' && finding.code && (finding.filePath || finding.sourceRef) ? {
+          suppressionScope: {
+            code: finding.code,
+            ...(finding.filePath ? { file: finding.filePath.replace(/\\/g, '/') } : {}),
+            ...(finding.sourceRef ? { sourceRef: finding.sourceRef } : {}),
+          },
+        } : {}),
+      };
+    }),
   ];
   const seen = new Set<string>();
   const diagnostics = combined.filter((d) => {

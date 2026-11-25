@@ -9,6 +9,7 @@ import type { DiagnosticSourceNavigation, ModWorkspace } from '../types';
 
 const rawReferenceCodes = new Set([
   'reference.unknown_faction', 'reference.unknown_ware', 'reference.unknown_macro', 'reference.unknown_sector',
+  'REF_UNKNOWN_FACTION', 'REF_UNKNOWN_WARE', 'REF_UNKNOWN_MACRO', 'REF_UNKNOWN_SECTOR',
 ]);
 const orderParameterCodes = new Set([
   'aiscript.order_param_missing_type', 'aiscript.order_param_illegal_type', 'aiscript.order_param_missing_text',
@@ -86,9 +87,10 @@ export function bindDiagnosticSourceFiles(
   return ({ code, filePath, line, column }: LocatableFinding): DiagnosticSourceNavigation | undefined => {
     if (!code || !filePath) return;
     const rawReference = rawReferenceCodes.has(code);
+    const schemaFinding = code.startsWith('XSD_');
     const orderParameter = orderParameterCodes.has(code);
     const initialState = code === MD_INITIAL_STATE_COVERAGE_CHECK;
-    if (!rawReference && !orderParameter && !initialState) return;
+    if (!rawReference && !schemaFinding && !orderParameter && !initialState) return;
     const file = selected.get(filePath.toLowerCase());
     if (!sourceFolder || file?.path !== filePath || typeof file.content !== 'string' || !disk.has(filePath)
       || (initialState && file.kind !== 'md')) {
@@ -98,10 +100,10 @@ export function bindDiagnosticSourceFiles(
       return { status: 'unavailable', reason: 'source-mismatch' };
     }
     const content = file.content;
-    // Raw references and initial-state evidence count the leading BOM; the
-    // editor does not. DOM coordinates also require the editor's line endings.
+    // Raw references, XSD schema findings, and initial-state evidence count the
+    // leading BOM; the editor does not. DOM coordinates also require the editor's line endings.
     const authoredLine = line ?? 0;
-    const includesBom = rawReference || initialState;
+    const includesBom = rawReference || schemaFinding || initialState;
     const authoredColumn = (column ?? 0) - Number(includesBom && authoredLine === 1 && content.startsWith('\uFEFF'));
     const domPosition = orderParameter || initialState;
     if (domPosition && !standardXmlLines.has(filePath)) {
@@ -118,7 +120,7 @@ export function bindDiagnosticSourceFiles(
       hashes.set(filePath, sha256);
     }
     let nodeId: string | undefined;
-    if (rawReference && workspace && file.kind === 'md' && column !== undefined) {
+    if ((rawReference || schemaFinding) && workspace && file.kind === 'md' && column !== undefined) {
       if (!importedNodes.has(filePath)) importedNodes.set(filePath, importedNodeResolver(workspace, filePath, content));
       nodeId = importedNodes.get(filePath)?.(authoredLine, column);
     }

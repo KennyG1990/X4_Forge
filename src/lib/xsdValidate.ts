@@ -20,6 +20,7 @@ import os from 'os';
 import path from 'path';
 import { XMLParser } from 'fast-xml-parser';
 import { MAX_PROJECT_XML_DEPTH, SAFE_XML_ENTITY_OPTIONS } from './xmlInputLimits';
+import { createSourcePositionLocator } from './xmlSourceSpans';
 
 export interface XsdDiagnostic {
   severity: 'error' | 'warning' | 'info';
@@ -27,6 +28,7 @@ export interface XsdDiagnostic {
   filePath?: string;
   message: string;
   line?: number;
+  column?: number;
   sourceRef?: string;
   code?: string;
 }
@@ -928,68 +930,86 @@ export function contentParticleState(spec: ElementSpec, children: string[]): Par
   return cursor.state();
 }
 
+interface RawTagAttr {
+  name: string;
+  value: string;
+  line: number;
+  column: number;
+  valueOffset: number;
+  valueLine: number;
+  valueColumn: number;
+}
+
 interface RawTag {
   name: string;
-  attrs: { name: string; value: string }[];
+  attrs: RawTagAttr[];
   line: number;
+  column: number;
   selfClosing: boolean;
 }
 
-/** Lightweight scanner: yields each opening/self-closing tag with line numbers. */
-function scanTags(xml: string): RawTag[] {
+/** Lightweight scanner: yields each opening/self-closing tag with exact 1-based line and column positions. */
+function scanTags(xml: string, locate = createSourcePositionLocator(xml)): RawTag[] {
   const tags: RawTag[] = [];
   // Mask out comment / CDATA / PI spans so their contents are not scanned as real
   // tags (e.g. a doc comment mentioning "<do_if>" must not be flagged as an element
-  // missing its "value" attribute). Replace non-newline chars with spaces to keep
-  // byte offsets and line numbers identical to the source.
+  // missing its "value" attribute). Preserve both \r and \n so offsets and lines
+  // stay identical across LF, CRLF, and lone-CR files.
   const masked = xml.replace(
     /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>/g,
-    (s) => s.replace(/[^\n]/g, ' '),
+    (s) => s.replace(/[^\r\n]/g, ' '),
   );
   // match opening or self-closing tags, skip closing tags, comments, PIs, declarations
   const re = /<([a-zA-Z_][\w.-]*)((?:\s+[\w.\-:]+\s*=\s*(?:"[^"]*"|'[^']*'))*)\s*(\/?)>/g;
   let m: RegExpExecArray | null;
-  let line = 1;
-  let last = 0;
   while ((m = re.exec(masked)) !== null) {
-    for (let index = last; index < m.index; index++) if (masked.charCodeAt(index) === 10) line++;
     const name = m[1];
+    const tagPos = locate(m.index + 1);
     const attrStr = m[2] || '';
-    const attrs: { name: string; value: string }[] = [];
-    const attrRe = /([\w.\-:]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+    const attrBaseOffset = m.index + 1 + name.length;
+    const attrs: RawTagAttr[] = [];
+    const attrRe = /([\w.\-:]+)(\s*=\s*)(?:"([^"]*)"|'([^']*)')/g;
     let a: RegExpExecArray | null;
     while ((a = attrRe.exec(attrStr)) !== null) {
-      attrs.push({ name: a[1], value: a[2] !== undefined ? a[2] : (a[3] || '') });
+      const attrOffset = attrBaseOffset + a.index;
+      const attrPos = locate(attrOffset);
+      const valueOffset = attrOffset + a[1].length + a[2].length + 1;
+      const valuePos = locate(valueOffset);
+      attrs.push({
+        name: a[1],
+        value: a[3] !== undefined ? a[3] : (a[4] || ''),
+        line: attrPos.line,
+        column: attrPos.column,
+        valueOffset,
+        valueLine: valuePos.line,
+        valueColumn: valuePos.column,
+      });
     }
-    tags.push({ name, attrs, line, selfClosing: m[3] === '/' });
-    for (let index = m.index; index < re.lastIndex; index++) if (masked.charCodeAt(index) === 10) line++;
-    last = re.lastIndex;
+    tags.push({ name, attrs, line: tagPos.line, column: tagPos.column, selfClosing: m[3] === '/' });
   }
   return tags;
 }
 
-interface TagEvent { name: string; close: boolean; selfClosing: boolean; line: number }
+interface TagEvent { name: string; close: boolean; selfClosing: boolean; line: number; column: number }
 
-function scanTagEvents(xml: string): TagEvent[] {
+function scanTagEvents(xml: string, locate = createSourcePositionLocator(xml)): TagEvent[] {
   const masked = String(xml || '').replace(
     /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>/g,
-    (s) => s.replace(/[^\n]/g, ' '),
+    (s) => s.replace(/[^\r\n]/g, ' '),
   );
   const events: TagEvent[] = [];
   const re = /<(\/)?([A-Za-z_][\w.:-]*)(?:(?:"[^"]*"|'[^']*'|[^'"<>])*)?(\/?)>/g;
   let match: RegExpExecArray | null;
-  let line = 1;
-  let last = 0;
   while ((match = re.exec(masked)) !== null) {
-    for (let i = last; i < match.index; i++) if (masked.charCodeAt(i) === 10) line++;
+    const nameOffset = match.index + 1 + (match[1] ? match[1].length : 0);
+    const pos = locate(nameOffset);
     events.push({
       name: match[2].toLowerCase(),
       close: !!match[1],
       selfClosing: !match[1] && /\/\s*>$/.test(match[0]),
-      line,
+      line: pos.line,
+      column: pos.column,
     });
-    for (let i = match.index; i < re.lastIndex; i++) if (masked.charCodeAt(i) === 10) line++;
-    last = re.lastIndex;
   }
   return events;
 }
@@ -1083,7 +1103,8 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
   const strict = opts.strictStructure === true;
   const citation = schemaCitation(index);
 
-  const scannedTags = scanTags(xml);
+  const locate = createSourcePositionLocator(xml);
+  const scannedTags = scanTags(xml, locate);
   const tagScanCompleted = performance.now();
   for (const tag of scannedTags) {
     const lname = tag.name.toLowerCase();
@@ -1101,6 +1122,7 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
           domain,
           filePath,
           line: tag.line,
+          column: tag.column,
           sourceRef: `${tag.name}`,
           code: 'XSD_UNKNOWN_ELEMENT',
           message: `Element <${tag.name}> is not declared by ${citation}.`
@@ -1124,7 +1146,8 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
             severity: strict ? 'error' : 'warning',
             domain,
             filePath,
-            line: tag.line,
+            line: attr.line,
+            column: attr.column,
             sourceRef: `${tag.name}@${attr.name}`,
             code: 'XSD_UNKNOWN_ATTRIBUTE',
             message: `<${tag.name}> has attribute "${attr.name}" which is not declared for this element in ${citation}.`
@@ -1141,7 +1164,8 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
             severity: 'error',
             domain,
             filePath,
-            line: tag.line,
+            line: attr.valueLine,
+            column: attr.valueColumn,
             sourceRef: `${tag.name}@${attr.name}`,
             code: 'XSD_ENUM_VIOLATION',
             message: `<${tag.name}> attribute "${attr.name}"="${attr.value}" violates its enumeration in ${citation}. Allowed: ${aspec.enumValues.slice(0, 12).join(', ')}${aspec.enumValues.length > 12 ? ', …' : ''}.`
@@ -1151,7 +1175,7 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
 
       if (aspec.fixedValue !== undefined && attr.value !== aspec.fixedValue) {
         out.push({
-          severity: 'error', domain, filePath, line: tag.line,
+          severity: 'error', domain, filePath, line: attr.valueLine, column: attr.valueColumn,
           sourceRef: `${tag.name}@${attr.name}`, code: 'XSD_FIXED_VIOLATION',
           message: `<${tag.name}> attribute "${attr.name}" must equal fixed schema value "${aspec.fixedValue}" in ${citation}.`,
         });
@@ -1162,7 +1186,7 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
           try {
             if (!new RegExp(`^(?:${pattern})$`).test(attr.value)) {
               out.push({
-                severity: 'error', domain, filePath, line: tag.line,
+                severity: 'error', domain, filePath, line: attr.valueLine, column: attr.valueColumn,
                 sourceRef: `${tag.name}@${attr.name}`, code: 'XSD_PATTERN_VIOLATION',
                 message: `<${tag.name}> attribute "${attr.name}"="${attr.value}" violates pattern /${pattern}/ from ${citation}.`,
               });
@@ -1178,7 +1202,8 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
           severity: 'warning',
           domain,
           filePath,
-          line: tag.line,
+          line: attr.valueLine,
+          column: attr.valueColumn,
           sourceRef: `${tag.name}@${attr.name}`,
           code: 'XSD_TIME_FORMAT',
           message: `<${tag.name}> attribute "${attr.name}"="${attr.value}" looks like a time but has no unit. X4 rejects bare numbers for time values at runtime — use "${attr.value}s" (or ms/min/h).`
@@ -1190,8 +1215,9 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
       // schema type is often an expression union.
       if (opts.references?.factions?.size && attr.value && /^faction\.\w+$/i.test(attr.value)) {
         if (!opts.references.factions.has(attr.value.toLowerCase())) {
+          const factionIdPos = locate(attr.valueOffset + 'faction.'.length);
           out.push({
-            severity: 'warning', domain, filePath, line: tag.line,
+            severity: 'warning', domain, filePath, line: factionIdPos.line, column: factionIdPos.column,
             sourceRef: `${tag.name}@${attr.name}`, code: 'REF_UNKNOWN_FACTION',
             message: `<${tag.name}> ${attr.name}="${attr.value}" is not a known faction in the configured canonical X4 corpus.${referenceSuggestion(attr.value, opts.references.factions)}`
           });
@@ -1205,8 +1231,9 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
       if (wareExpression && opts.references?.wares?.size) {
         const wareId = wareExpression[1].toLowerCase();
         if (!opts.references.wares.has(wareId)) {
+          const wareIdPos = locate(attr.valueOffset + 'ware.'.length);
           out.push({
-            severity: 'warning', domain, filePath, line: tag.line,
+            severity: 'warning', domain, filePath, line: wareIdPos.line, column: wareIdPos.column,
             sourceRef: `${tag.name}@${attr.name}`, code: 'REF_UNKNOWN_WARE',
             message: `<${tag.name}> ${attr.name}="${attr.value}" names unknown ware id "${wareId}" in the configured canonical X4 corpus.${referenceSuggestion(wareId, opts.references.wares)}`,
           });
@@ -1220,19 +1247,19 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
         const lv = attr.value.toLowerCase();
         if ((t === 'macroname' || t === 'macro') && refs.macros && refs.macros.size && !refs.macros.has(lv)) {
           out.push({
-            severity: 'warning', domain, filePath, line: tag.line,
+            severity: 'warning', domain, filePath, line: attr.valueLine, column: attr.valueColumn,
             sourceRef: `${tag.name}@${attr.name}`, code: 'REF_UNKNOWN_MACRO',
             message: `<${tag.name}> ${attr.name}="${attr.value}" is not a known macro in the configured canonical X4 corpus (${refs.macros.size} macros).${referenceSuggestion(attr.value, refs.macros)}`
           });
         } else if ((t === 'warename' || t === 'ware') && refs.wares && refs.wares.size && !refs.wares.has(lv)) {
           out.push({
-            severity: 'warning', domain, filePath, line: tag.line,
+            severity: 'warning', domain, filePath, line: attr.valueLine, column: attr.valueColumn,
             sourceRef: `${tag.name}@${attr.name}`, code: 'REF_UNKNOWN_WARE',
             message: `<${tag.name}> ${attr.name}="${attr.value}" is not a known ware id in the configured canonical X4 corpus (${refs.wares.size} wares).${referenceSuggestion(attr.value, refs.wares)}`
           });
         } else if ((t === 'sector' || t === 'sectorname') && refs.sectors && refs.sectors.size && !refs.sectors.has(lv)) {
           out.push({
-            severity: 'warning', domain, filePath, line: tag.line,
+            severity: 'warning', domain, filePath, line: attr.valueLine, column: attr.valueColumn,
             sourceRef: `${tag.name}@${attr.name}`, code: 'REF_UNKNOWN_SECTOR',
             message: `<${tag.name}> ${attr.name}="${attr.value}" is not a known sector macro in the configured canonical X4 corpus (${refs.sectors.size} sectors).${referenceSuggestion(attr.value, refs.sectors)}`
           });
@@ -1253,6 +1280,7 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
           domain,
           filePath,
           line: tag.line,
+          column: tag.column,
           sourceRef: `${tag.name}@${aname}`,
           code: 'XSD_MISSING_REQUIRED',
           message: isEventCondition
@@ -1269,30 +1297,31 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
     interface Frame {
       name: string;
       line: number;
-      children: Array<{ name: string; line: number }>;
+      column: number;
+      children: Array<{ name: string; line: number; column: number }>;
       particleBroken: boolean;
       particle: ContentParticleCursor | null;
     }
     const stack: Frame[] = [];
-    const closeFrame = (frame: Frame, line: number) => {
+    const closeFrame = (frame: Frame, line: number, column: number) => {
       const spec = index.elements.get(frame.name);
       if (!spec?.resolved || !spec.particles.length || frame.particleBroken) return;
       const state = frame.particle?.state() || contentParticleState(spec, frame.children.map(child => child.name));
       if (state.viable && !state.complete) {
         out.push({
-          severity: 'error', domain, filePath, line,
+          severity: 'error', domain, filePath, line, column,
           sourceRef: frame.name, code: 'XSD_CHILD_CARDINALITY',
           message: `<${frame.name}> ends before its required child content is complete per the ordered particle in ${citation}. Legal next children: ${[...state.next].sort().join(', ') || '(none)'}.`,
         });
       }
     };
-    for (const event of scanTagEvents(xml)) {
+    for (const event of scanTagEvents(xml, locate)) {
       if (event.close) {
         for (let i = stack.length - 1; i >= 0; i--) {
           if (stack[i].name === event.name) {
             const frame = stack[i];
             stack.length = i;
-            closeFrame(frame, event.line);
+            closeFrame(frame, event.line, event.column);
             break;
           }
         }
@@ -1303,12 +1332,12 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
         const parentName = parentFrame.name;
         const parent = index.elements.get(parentName);
         const beforeState = parentFrame.particle?.state() || null;
-        parentFrame.children.push({ name: event.name, line: event.line });
+        parentFrame.children.push({ name: event.name, line: event.line, column: event.column });
         const afterState = parentFrame.particle?.advance(event.name) || null;
         if (parent?.resolved && !parent.openChildren && !parent.children.has(event.name)) {
           parentFrame.particleBroken = true;
           out.push({
-            severity: 'error', domain, filePath, line: event.line,
+            severity: 'error', domain, filePath, line: event.line, column: event.column,
             sourceRef: `${parentName}>${event.name}`, code: 'XSD_ILLEGAL_CHILD',
             message: `<${event.name}> is not a legal direct child of <${parentName}> per ${citation}. Allowed direct children: ${[...parent.children].sort().slice(0, 30).join(', ')}${parent.children.size > 30 ? ', …' : ''}.`,
           });
@@ -1319,7 +1348,7 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
             const count = parentFrame.children.filter(child => child.name === event.name).length;
             const exceedsMax = childSpec?.maxOccurs !== null && childSpec?.maxOccurs !== undefined && count > childSpec.maxOccurs;
             out.push({
-              severity: 'error', domain, filePath, line: event.line,
+              severity: 'error', domain, filePath, line: event.line, column: event.column,
               sourceRef: `${parentName}>${event.name}`,
               code: exceedsMax ? 'XSD_CHILD_CARDINALITY' : 'XSD_CHILD_ORDER',
               message: exceedsMax
@@ -1333,11 +1362,12 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
       const frame: Frame = {
         name: event.name,
         line: event.line,
+        column: event.column,
         children: [],
         particleBroken: false,
         particle: frameSpec?.particles.length ? new ContentParticleCursor(frameSpec) : null,
       };
-      if (event.selfClosing) closeFrame(frame, event.line);
+      if (event.selfClosing) closeFrame(frame, event.line, event.column);
       else stack.push(frame);
     }
   }
@@ -1400,6 +1430,24 @@ export function runXsdValidateSelftest() {
     ok('sequence_order_violation_is_error', wrongOrder.some(d => d.code === 'XSD_CHILD_ORDER' && d.severity === 'error'), wrongOrder);
     const tooMany = validateXmlAgainstSchema('<root mode="a"><child/><child/><child/></root>', index, { strictStructure: true, reportUnknownElements: true });
     ok('particle_max_occurs_is_error', tooMany.some(d => d.code === 'XSD_CHILD_CARDINALITY' && d.severity === 'error'), tooMany);
+    const multilineMixed = '\uFEFF<!-- pad\r\nline2 -->\r<root\r\n  mode="z"\r  bogus="1"\n  exact="ware.energycellz"><unknown_tag/></root>';
+    const mixedFindings = validateXmlAgainstSchema(multilineMixed, index, {
+      strictStructure: true,
+      reportUnknownElements: true,
+      references: { wares: new Set(['energycells']) },
+    });
+    const enumHit = mixedFindings.find(d => d.code === 'XSD_ENUM_VIOLATION');
+    const attrHit = mixedFindings.find(d => d.code === 'XSD_UNKNOWN_ATTRIBUTE');
+    const wareHit = mixedFindings.find(d => d.code === 'REF_UNKNOWN_WARE');
+    const elemHit = mixedFindings.find(d => d.code === 'XSD_UNKNOWN_ELEMENT');
+    ok(
+      'multiline_and_lone_cr_xsd_and_ref_positions_exact',
+      enumHit?.line === 4 && enumHit?.column === 9
+        && attrHit?.line === 5 && attrHit?.column === 3
+        && wareHit?.line === 6 && wareHit?.column === 15
+        && elemHit?.line === 6 && elemHit?.column === 29,
+      mixedFindings,
+    );
   } finally {
     try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ }
   }

@@ -64,6 +64,39 @@ type Guidance = Omit<DiagnosticExplanation, 'code' | 'deterministic' | 'ruleProv
 
 const AMBIGUOUS_RULE_REFUSAL = 'Multiple governed X4 rules matched this diagnostic; no governed guidance was selected.';
 
+/**
+ * Convert internal serialized MD occurrence keys (`md.reference:[...]`, `md.declaration:[...]`)
+ * into concise authored role/cue labels for UI cards while leaving ordinary `sourceRef` strings
+ * verbatim. Suppression scopes must keep using the raw `sourceRef`.
+ */
+export function formatHumanDiagnosticSourceRef(sourceRef?: string): string | undefined {
+  if (!sourceRef) return undefined;
+  if (sourceRef.startsWith('md.reference_unpositioned:')) return undefined;
+  if (sourceRef.startsWith('md.reference:')) {
+    try {
+      const parsed: unknown = JSON.parse(sourceRef.slice('md.reference:'.length));
+      if (Array.isArray(parsed) && typeof parsed[2] === 'string' && parsed[2].trim()) {
+        return parsed[2].trim();
+      }
+      return undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  if (sourceRef.startsWith('md.declaration:')) {
+    try {
+      const parsed: unknown = JSON.parse(sourceRef.slice('md.declaration:'.length));
+      if (Array.isArray(parsed) && typeof parsed[2] === 'string' && parsed[2].trim()) {
+        return `cue@${parsed[2].trim()}`;
+      }
+      return undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return sourceRef;
+}
+
 const GUIDANCE: Array<{ matches: (code: string) => boolean; value: Guidance }> = [
   {
     matches: code => code.startsWith('rules.'),
@@ -106,7 +139,7 @@ const GUIDANCE: Array<{ matches: (code: string) => boolean; value: Guidance }> =
     },
   },
   {
-    matches: code => /^(reference\.|jobs\.|wares\.|factions\.|god\.)/.test(code),
+    matches: code => /^(reference\.|REF_UNKNOWN_|jobs\.|wares\.|factions\.|god\.)/.test(code),
     value: {
       title: 'Referenced game object is unresolved',
       why: 'The identifier was not found in the loaded vanilla/DLC reference corpus for this domain.',
@@ -166,7 +199,7 @@ const GUIDANCE: Array<{ matches: (code: string) => boolean; value: Guidance }> =
     },
   },
   {
-    matches: code => /^(cue\.|crossfile\.|project\.cue)/.test(code),
+    matches: code => /^(cue\.|crossfile\.|project\.cue|project\.unresolved_cue_ref$|md\.cue_)/.test(code),
     value: {
       title: 'Cross-file cue relationship is broken',
       why: 'A cue definition, signal, reset, cancel, or reference does not resolve consistently across the project.',
@@ -196,7 +229,7 @@ const GUIDANCE: Array<{ matches: (code: string) => boolean; value: Guidance }> =
     },
   },
   {
-    matches: code => code.startsWith('tfile.'),
+    matches: code => code.startsWith('tfile.') || code.startsWith('TFILE_'),
     value: {
       title: 'Text reference or translation is incomplete',
       why: 'A page/id reference is missing or the language files do not cover the same text keys.',
@@ -431,6 +464,17 @@ export function runDiagnosticExplainSelftest() {
     'rule provenance is deterministic',
     JSON.stringify(deterministicA.ruleProvenance) === JSON.stringify(deterministicB.ruleProvenance),
     deterministicA.ruleProvenance,
+  );
+  check(
+    'uppercase REF_UNKNOWN, TFILE, and MD cue codes receive rule-specific guidance instead of generic fallback (#33, #66)',
+    make('REF_UNKNOWN_WARE').title === 'Referenced game object is unresolved'
+      && make('REF_UNKNOWN_FACTION').title === 'Referenced game object is unresolved'
+      && make('TFILE_PAGE_ID').title === 'Text reference or translation is incomplete'
+      && make('project.unresolved_cue_ref', 'error').title === 'Cross-file cue relationship is broken'
+      && make('md.cue_duplicate_name', 'error').title === 'Cross-file cue relationship is broken'
+      && formatHumanDiagnosticSourceRef('md.reference:["md/a.xml",4,"signal_cue/@cue"]') === 'signal_cue/@cue'
+      && formatHumanDiagnosticSourceRef('md.reference_unpositioned:["md/a.xml",1]') === undefined
+      && formatHumanDiagnosticSourceRef('faction@bogus') === 'faction@bogus',
   );
   const passed = checks.filter(item => item.pass).length;
   return { allPassed: passed === checks.length, pass: passed === checks.length, passed, total: checks.length, checks };

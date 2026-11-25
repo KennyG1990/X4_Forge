@@ -1217,7 +1217,8 @@ function flattenProjectValidationRaw(result: ProjectValidationResult): FlatProje
       ...(f.payloadWriterScope ? { payloadWriterScope: f.payloadWriterScope } : {}) });
   }
   for (const d of result.schema.findings) {
-    out.push({ severity: d.severity, code: d.code, filePath: d.filePath, sourceRef: d.sourceRef, line: d.line, message: d.message });
+    out.push({ severity: d.severity, code: d.code, filePath: d.filePath, sourceRef: d.sourceRef, line: d.line,
+      ...(d.column !== undefined ? { column: d.column } : {}), message: d.message });
   }
   for (const f of result.aiscript.findings) {
     out.push({ severity: f.severity, code: f.code, filePath: f.filePath, line: f.line, column: f.column,
@@ -1272,7 +1273,8 @@ function flattenProjectValidationRaw(result: ProjectValidationResult): FlatProje
       out.push({ severity: finding.severity, code: finding.code, filePath: file.path, sourceRef: finding.selector, line: finding.line, message: finding.message });
     }
     for (const finding of file.postApplyFindings) {
-      out.push({ severity: finding.severity, code: `post-apply.${finding.code}`, filePath: file.path, sourceRef: finding.sourceRef, line: finding.line, message: `Post-apply: ${finding.message}` });
+      out.push({ severity: finding.severity, code: `post-apply.${finding.code}`, filePath: file.path, sourceRef: finding.sourceRef, line: finding.line,
+        ...(finding.column !== undefined ? { column: finding.column } : {}), message: `Post-apply: ${finding.message}` });
     }
   }
   for (const finding of result.rules.findings) {
