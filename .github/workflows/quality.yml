@@ -119,8 +119,8 @@ jobs:
       - name: Probe staged packaged sidecar
         run: npm run probe-app --prefix vscode-extension
 
-      - name: Prove VSIX inspector rejection policy
-        run: npm run inspect-package --prefix vscode-extension -- --selftest
+      - name: Prove changelog false-link hygiene and VSIX inspector rejection policy
+        run: node vscode-extension/scripts/gen-changelog.mjs --selftest && npm run inspect-package --prefix vscode-extension -- --selftest
 
       - name: Package VSIX without publishing
         run: npm run package --prefix vscode-extension -- --out x4-forge-studio-ci.vsix

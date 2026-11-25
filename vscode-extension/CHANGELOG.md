@@ -592,10 +592,10 @@ The latest changes, newest first. (This page is generated automatically — see
 - Add galaxy mapself-test endpoint
 - Expose mod dependency graph selftest
 - Resolve patch preview truncation and add line count tracking
-- Add deterministic spawn offset picker UI and testsAdds deterministic spawn offset picker UI and library. Updates roadmap to mark #63 DONE. Adds Playwright tests.
+- Add deterministic spawn offset picker UI and testsAdds deterministic spawn offset picker UI and library. Updates roadmap to mark \#63 DONE. Adds Playwright tests.
 - Add cue binding UI and security‑aware fetch in main
 - Add wares/jobs parser for editable mod round-tripping
-- Update roadmap: park #36/#37, mark #38 done, adjust #39/#40 status
+- Update roadmap: park \#36/\#37, mark \#38 done, adjust \#39/\#40 status
 - Add interaction utilities and self-test endpoint
 - Resolve station and ship macro display names
 - Complete live validation of architect loop, confirming intent-gating and model-capability dependencies

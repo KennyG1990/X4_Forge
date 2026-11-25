@@ -56,12 +56,65 @@ function sortReleases(releases) {
     .sort(compareVersionsDesc);
 }
 
+const INTENTIONAL_GITHUB_REF_LINK_RE = /\[(?:([\w.-]+\/[\w.-]+))?#(\d+)\]\(https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/(?:issues|pull)\/(\d+)\)/g;
+const AMBIGUOUS_HASH_NUMBER_RE = /(?:[\w.-]+\/[\w.-]+)?(?<!\\)#(\d+)\b/g;
+
+/** Mask explicit `[#NN](https://github.com/owner/repo/issues/NN)` links with equal-length spaces. */
+export function maskIntentionalGitHubIssueLinks(text) {
+  return String(text || "").replace(
+    INTENTIONAL_GITHUB_REF_LINK_RE,
+    (match, labelRepo, labelNum, urlRepo, urlNum) => {
+      if (labelNum !== urlNum) return match;
+      if (labelRepo && labelRepo.toLowerCase() !== urlRepo.toLowerCase()) return match;
+      return " ".repeat(match.length);
+    },
+  );
+}
+
+/** Return bare unescaped `#NN` / `owner/repo#NN` tokens that VSCE or GFM would auto-link. */
+export function findAmbiguousHashReferences(text) {
+  const masked = maskIntentionalGitHubIssueLinks(text);
+  const hits = [];
+  for (const match of masked.matchAll(AMBIGUOUS_HASH_NUMBER_RE)) {
+    hits.push(match[0]);
+  }
+  return hits;
+}
+
+/** Escape bare `#NN` -> `\#NN` while preserving intentional explicit GitHub Markdown links. */
+export function escapeAmbiguousHashNumbers(text) {
+  const source = String(text || "");
+  const masked = maskIntentionalGitHubIssueLinks(source);
+  let out = "";
+  let cursor = 0;
+  for (const match of masked.matchAll(AMBIGUOUS_HASH_NUMBER_RE)) {
+    const start = match.index;
+    const rawToken = source.slice(start, start + match[0].length);
+    const hashAt = rawToken.lastIndexOf("#");
+    out += source.slice(cursor, start) + rawToken.slice(0, hashAt) + "\\" + rawToken.slice(hashAt);
+    cursor = start + match[0].length;
+  }
+  out += source.slice(cursor);
+  return out;
+}
+
+function assertNoAmbiguousHashReferences(line, contextLabel) {
+  const ambiguous = findAmbiguousHashReferences(line);
+  if (ambiguous.length > 0) {
+    throw new Error(
+      `Ambiguous bare issue/roadmap number (${ambiguous.join(", ")}) in ${contextLabel}; `
+      + "use an explicit GitHub link [#NN](https://github.com/KennyG1990/X4_Forge/issues/NN) or escape non-issue numbers as \\#NN.",
+    );
+  }
+}
+
 /** Turn a conventional-commit subject into something a non-engineer can read. */
 export function humanizeSubject(subject) {
   let s = String(subject || "").trim();
   s = s.replace(/^[a-z]+(\([^)]*\))?:\s*/i, ""); // drop "feat(scope): " / "chore: "
   s = s.replace(/\bB\d+[a-z]?\b/g, "").replace(/\s{2,}/g, " ").trim(); // drop internal ticket codes
   s = s.replace(/^[—–-]\s*/, "").trim();
+  s = escapeAmbiguousHashNumbers(s);
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : "Maintenance and fixes.";
 }
 
@@ -78,7 +131,10 @@ export function buildChangelog(releases) {
     lines.push(`## ${r.version}${r.date ? ` — ${r.date}` : ""}`);
     lines.push("");
     const changes = r.changes && r.changes.length ? r.changes : ["(no recorded changes)"];
-    for (const c of changes) lines.push(`- ${c}`);
+    for (const c of changes) {
+      assertNoAmbiguousHashReferences(c, `changelog version ${r.version}`);
+      lines.push(`- ${c}`);
+    }
     lines.push("");
   }
   return `${lines.join("\n").replace(/\r\n?/g, "\n").replace(/\n+$/g, "")}\n`;
@@ -104,11 +160,14 @@ function readChangelogSections(markdown) {
   return { header, sections };
 }
 
-/** Shallow Git cannot reconstruct earlier release ranges. Keep the sections recorded at HEAD. */
+/** Shallow Git cannot reconstruct earlier release ranges. Keep the sections recorded at HEAD, escaping bare historical `#NN` tokens (#40). */
 function preserveShallowChangelog(generated, committed) {
   const { header, sections } = readChangelogSections(generated);
   for (const section of readChangelogSections(committed).sections.values()) {
-    sections.set(section.version, section);
+    sections.set(section.version, {
+      ...section,
+      markdown: escapeAmbiguousHashNumbers(section.markdown),
+    });
   }
   const body = sortReleases([...sections.values()]).map((section) => section.markdown).join("\n\n");
   return header + body + "\n";
@@ -147,7 +206,12 @@ function readReleaseNotesDocument() {
 /** Curated note arrays are content authority; underscore-prefixed metadata is not note content. */
 function loadCuratedNotes(raw = readReleaseNotesDocument()) {
   const out = {};
-  for (const [k, v] of Object.entries(raw)) if (!k.startsWith("_") && Array.isArray(v)) out[k] = v;
+  for (const [k, v] of Object.entries(raw)) {
+    if (!k.startsWith("_") && Array.isArray(v)) {
+      for (const bullet of v) assertNoAmbiguousHashReferences(bullet, `release-notes.json[${k}]`);
+      out[k] = v;
+    }
+  }
   return out;
 }
 
@@ -437,6 +501,57 @@ function selftest() {
     }
     ok(`shallow_changelog_rejects_${name}_history`, rejected);
   }
+
+  // #40: escape ambiguous bare historical/subject #NN references while preserving intentional GitHub issue links
+  ok(
+    "humanize_escapes_bare_hash_numbers_and_keeps_intentional_links",
+    humanizeSubject("chore: update roadmap: park #36/#37, mark #38 done (#63)")
+      === "Update roadmap: park \\#36/\\#37, mark \\#38 done (\\#63)"
+      && humanizeSubject("fix: resolve [#40](https://github.com/KennyG1990/X4_Forge/issues/40) and #99")
+        === "Resolve [#40](https://github.com/KennyG1990/X4_Forge/issues/40) and \\#99",
+  );
+  const explicitLinkChangelog = buildChangelog([
+    {
+      version: "0.0.94",
+      date: "2026-11-24",
+      changes: [
+        "Preserve intentional [#40](https://github.com/KennyG1990/X4_Forge/issues/40) links and escaped \\#63 roadmap numbers.",
+      ],
+    },
+  ]);
+  ok(
+    "build_changelog_preserves_intentional_github_links_and_escaped_numbers",
+    explicitLinkChangelog.includes("[#40](https://github.com/KennyG1990/X4_Forge/issues/40)")
+      && explicitLinkChangelog.includes("\\#63")
+      && findAmbiguousHashReferences(explicitLinkChangelog).length === 0,
+  );
+  let bareNumberRejected = false;
+  try {
+    buildChangelog([{ version: "0.0.94", date: "2026-11-24", changes: ["Updates roadmap to mark #63 DONE."] }]);
+  } catch (error) {
+    bareNumberRejected = /Ambiguous bare issue\/roadmap number \(#63\)/.test(error.message);
+  }
+  ok("build_changelog_rejects_unescaped_bare_number", bareNumberRejected);
+  let mismatchedLinkRejected = false;
+  try {
+    buildChangelog([{
+      version: "0.0.94",
+      date: "2026-11-24",
+      changes: ["Mismatched [#40](https://github.com/KennyG1990/X4_Forge/issues/41) link."],
+    }]);
+  } catch (error) {
+    mismatchedLinkRejected = /Ambiguous bare issue\/roadmap number \(#40\)/.test(error.message);
+  }
+  ok("build_changelog_rejects_mismatched_issue_link_target", mismatchedLinkRejected);
+  const shallowWithBareHistorical = preserveShallowChangelog(
+    explicitLinkChangelog,
+    "# What's New in X4 Forge Studio\n\nThe latest changes, newest first.\n\n## 0.0.1 — 2026-07-08\n\n- Update roadmap: park #36/#37, mark #38 done\n",
+  );
+  ok(
+    "shallow_changelog_escapes_historical_bare_numbers",
+    shallowWithBareHistorical.includes("park \\#36/\\#37, mark \\#38 done")
+      && findAmbiguousHashReferences(shallowWithBareHistorical).length === 0,
+  );
 
   const passed = checks.filter((c) => c.pass).length;
   const allPassed = passed === checks.length;

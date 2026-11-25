@@ -3,8 +3,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import zlib from 'node:zlib';
 
+const EXT_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const MAX_ARCHIVE_BYTES = 100 * 1024 * 1024;
 const MAX_UNPACKED_BYTES = 250 * 1024 * 1024;
 const MAX_ENTRY_BYTES = 100 * 1024 * 1024;
@@ -18,7 +20,10 @@ const REQUIRED = [
   'extension/app/dist/server.cjs',
   'extension/app/dist/canonical-md-worker.cjs',
 ];
+const CHANGELOG_ENTRY = /^extension\/changelog\.md$/i;
 const NATIVE_SQLITE = /^extension\/app\/node_modules\/better-sqlite3\/(?:build\/Release\/better_sqlite3\.node|prebuilds\/[^/]+\/better_sqlite3\.node)$/i;
+const INTENTIONAL_GITHUB_REF_LINK_RE = /\[(?:([\w.-]+\/[\w.-]+))?#(\d+)\]\(https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/(?:issues|pull)\/(\d+)\)/g;
+const AMBIGUOUS_HASH_NUMBER_RE = /(?:[\w.-]+\/[\w.-]+)?(?<!\\)#(\d+)\b/g;
 
 const crcTable = Array.from({ length: 256 }, (_, index) => {
   let value = index;
@@ -137,8 +142,43 @@ export function inspectEntryMetadata(entries, archiveSize) {
     if (!entry) errors.push(`${required}: required entry missing`);
     else if (entry.uncompressedSize <= 0) errors.push(`${required}: required entry is empty`);
   }
+  if (!entries.some(entry => CHANGELOG_ENTRY.test(entry.name) && entry.uncompressedSize > 0)) {
+    errors.push('extension/changelog.md: required entry missing or empty');
+  }
   if (!entries.some(entry => NATIVE_SQLITE.test(entry.name) && entry.uncompressedSize > 0)) errors.push('better-sqlite3 native binding is missing or empty');
   return { pass: errors.length === 0, errors, entryCount: entries.length, unpackedBytes };
+}
+
+export function inspectPackagedChangelog(changelogInput, expectedSourceInput) {
+  const text = (Buffer.isBuffer(changelogInput) ? changelogInput.toString('utf8') : String(changelogInput || '')).replace(/\r\n?/g, '\n');
+  const errors = [];
+  if (!text.startsWith("# What's New in X4 Forge Studio\n")) {
+    errors.push('extension/changelog.md: missing generated Forge changelog header');
+  }
+  const masked = text.replace(
+    INTENTIONAL_GITHUB_REF_LINK_RE,
+    (match, labelRepo, labelNum, urlRepo, urlNum) => {
+      if (labelNum !== urlNum) return match;
+      if (labelRepo && labelRepo.toLowerCase() !== urlRepo.toLowerCase()) return match;
+      return ' '.repeat(match.length);
+    },
+  );
+  const ambiguous = [...masked.matchAll(AMBIGUOUS_HASH_NUMBER_RE)].map(match => match[0]);
+  if (ambiguous.length > 0) {
+    errors.push(`extension/changelog.md: unescaped bare #NN reference(s): ${ambiguous.slice(0, 8).join(', ')}`);
+  }
+  for (const line of text.split('\n')) {
+    if (/\broadmap\b/i.test(line) && /\[#\d+\]\(https?:\/\//i.test(line)) {
+      errors.push(`extension/changelog.md: historical roadmap number rewritten into false issue link: ${line.trim()}`);
+    }
+  }
+  if (expectedSourceInput !== undefined && expectedSourceInput !== null) {
+    const expected = (Buffer.isBuffer(expectedSourceInput) ? expectedSourceInput.toString('utf8') : String(expectedSourceInput)).replace(/\r\n?/g, '\n');
+    if (text !== expected) {
+      errors.push('extension/changelog.md: packaged changelog diverges from source CHANGELOG.md (unexpected VSCE link/content rewrite)');
+    }
+  }
+  return { pass: errors.length === 0, errors };
 }
 
 function extractEntry(bytes, entry) {
@@ -159,7 +199,7 @@ function extractEntry(bytes, entry) {
   return output;
 }
 
-export function inspectVsixBytes(bytes) {
+export function inspectVsixBytes(bytes, options = {}) {
   const entries = readVsixEntries(bytes);
   const result = inspectEntryMetadata(entries, bytes.length);
   if (!result.pass) return result;
@@ -169,6 +209,10 @@ export function inspectVsixBytes(bytes) {
     const content = extractEntry(bytes, entry);
     const embeddedRoot = findForbiddenEmbeddedMachinePath(entry.name, content, machinePathPolicy);
     if (embeddedRoot) result.errors.push(`${entry.name}: embedded build-machine path ${embeddedRoot}`);
+    if (CHANGELOG_ENTRY.test(entry.name)) {
+      const changelogCheck = inspectPackagedChangelog(content, options.expectedChangelog);
+      result.errors.push(...changelogCheck.errors);
+    }
   }
   result.pass = result.errors.length === 0;
   return result;
@@ -176,9 +220,14 @@ export function inspectVsixBytes(bytes) {
 
 function runSelftest() {
   const entry = (name, uncompressedSize = 1) => ({ name, uncompressedSize, compressedSize: uncompressedSize });
-  const valid = [...REQUIRED.map(name => entry(name)), entry('extension/app/node_modules/better-sqlite3/build/Release/better_sqlite3.node')];
+  const valid = [
+    ...REQUIRED.map(name => entry(name)),
+    entry('extension/changelog.md'),
+    entry('extension/app/node_modules/better-sqlite3/build/Release/better_sqlite3.node'),
+  ];
   const cases = [
     ['valid_minimum_accepts', valid, true],
+    ['missing_changelog_rejects', valid.filter(item => item.name !== 'extension/changelog.md'), false],
     ['missing_supervisor_rejects', valid.filter(item => item.name !== 'extension/out/sidecar-supervisor.js'), false],
     ['missing_server_rejects', valid.filter(item => item.name !== 'extension/app/dist/server.cjs'), false],
     ['missing_canonical_md_worker_rejects', valid.filter(item => item.name !== 'extension/app/dist/canonical-md-worker.cjs'), false],
@@ -209,7 +258,19 @@ function runSelftest() {
     && findForbiddenEmbeddedMachinePath('extension/app/node_modules/vendor/index.js', Buffer.from('D:\\a\\X4_Forge\\secret.txt'), scopedPolicy) === 'D:\\a\\X4_Forge';
   if (scopedPass) passed++;
   console.log(`${scopedPass ? 'PASS' : 'FAIL'} vendor_home_allowed_but_first_party_home_and_workspace_rejected`);
-  const total = cases.length + 2;
+  const cleanChangelog = "# What's New in X4 Forge Studio\n\n## 0.0.94 — 2026-11-24\n\n- Fixed [#40](https://github.com/KennyG1990/X4_Forge/issues/40) and escaped \\#63.\n";
+  const vsceRewrittenFalseLink = "# What's New in X4 Forge Studio\n\n## 0.0.1 — 2026-07-08\n\n- Updates roadmap to mark [#63](https://github.com/KennyG1990/X4_Forge/issues/63) DONE.\n";
+  const bareSlashResidue = "# What's New in X4 Forge Studio\n\n## 0.0.1 — 2026-07-08\n\n- Update: park [#36](https://github.com/KennyG1990/X4_Forge/issues/36)/#37\n";
+  const changelogHygienePass = inspectPackagedChangelog(cleanChangelog, cleanChangelog).pass === true
+    && inspectPackagedChangelog(vsceRewrittenFalseLink).pass === false
+    && inspectPackagedChangelog(bareSlashResidue).pass === false
+    && inspectPackagedChangelog(
+      "# What's New in X4 Forge Studio\n\n## 0.0.94 — 2026-11-24\n\n- Fixed [#40](https://github.com/KennyG1990/X4_Forge/issues/40).\n",
+      "# What's New in X4 Forge Studio\n\n## 0.0.94 — 2026-11-24\n\n- Fixed #40.\n",
+    ).pass === false;
+  if (changelogHygienePass) passed++;
+  console.log(`${changelogHygienePass ? 'PASS' : 'FAIL'} changelog_false_link_and_vsce_rewrite_rejected_while_explicit_links_pass`);
+  const total = cases.length + 3;
   console.log(`[vsix-inspector selftest] ${passed}/${total} ${passed === total ? 'PASS' : 'FAIL'}`);
   return passed === total;
 }
@@ -232,7 +293,9 @@ if (!input) {
 try {
   const file = path.resolve(input);
   const bytes = fs.readFileSync(file);
-  const result = inspectVsixBytes(bytes);
+  const sourceChangelogPath = path.join(EXT_ROOT, 'CHANGELOG.md');
+  const expectedChangelog = fs.existsSync(sourceChangelogPath) ? fs.readFileSync(sourceChangelogPath, 'utf8') : undefined;
+  const result = inspectVsixBytes(bytes, { expectedChangelog });
   if (!result.pass) {
     for (const error of result.errors) {
       console.error(`FAIL ${error}`);
