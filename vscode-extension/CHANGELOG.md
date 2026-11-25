@@ -3,6 +3,12 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
+## 0.0.98 — 2026-11-25
+
+- Attribute workspace replacement and merge calls across fourteen persistence, diagnostics, recovery, and receipt stages in response headers, JSON payloads, and Action Ledger rows while skipping redundant workspace hash recomputation.
+- Narrow X4 script property checks across positive isclass guards in do_if, do_elseif, and top-level and expressions in Mission Director and AI scripts, preserve variable datatype hints across multi-segment chains, ignore declaration name and id attributes on script headers, and resolve mixed-case local cue names cleanly.
+- Track Mission Director variable initialization across unconditional XSD position, orientation, list, group, threat-score, and sourced substitute_text actions in cues and run_actions libraries, and eliminate stale-preview unmount races in deployment review.
+
 ## 0.0.97 — 2026-11-25
 
 - Correlate workspace file-write failures with a request ID and stage breakdown, verify disk state via readback before offering a manual retry, and recover cleanly without blind rewrites when intended bytes have already landed.
