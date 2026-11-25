@@ -2,6 +2,7 @@
 **
 !out/extension.js
 !out/sidecar-supervisor.js
+!out/mcp-bootstrap.js
 !app/package.json
 !app/package-lock.json
 !app/dist/**

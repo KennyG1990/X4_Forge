@@ -4165,6 +4165,15 @@ async function main() {
   ok('discovery_carries_no_session_token', !Object.prototype.hasOwnProperty.call(discRec, 'token'));
   ok('discovery_is_outside_mod_and_game_roots',
     !discRec.cwd || (!discLatest.includes('extensions') && !discLatest.includes('X4 Foundations')), discLatest);
+  const anonSchema = await req('GET', '/api/agent/schema', null);
+  ok('schema_exposes_public_instance_identity',
+    anonSchema.status === 200
+      && anonSchema.json?.instance?.pid === discRec.pid
+      && anonSchema.json?.instance?.port === PORT
+      && anonSchema.json?.instance?.startedAt === discRec.startedAt
+      && typeof anonSchema.json?.instance?.mode === 'string'
+      && !Object.prototype.hasOwnProperty.call(anonSchema.json?.instance || {}, 'token'),
+    JSON.stringify(anonSchema.json?.instance));
 
   // #2 a caller must be able to tell "wrong verb" from "no such route".
   const wrongVerb = await req('GET', '/api/agent/deploy-verify', SESSION_TOKEN);

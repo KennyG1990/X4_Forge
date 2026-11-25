@@ -1042,11 +1042,12 @@ function webviewHtml(webview: vscode.Webview, forgeUrl: string, mode: string, fr
 </head>
 <body>
   <iframe id="forge-frame" src="${forgeUrl}/" allow="clipboard-read; clipboard-write"></iframe>
-  <div class="badge">X4 Forge Studio — ${mode}</div>
+  <div class="badge" id="forge-badge">X4 Forge Studio — ${mode}</div>
   <div id="backend-notice" role="status" hidden></div>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const frame = document.getElementById('forge-frame');
+    const badge = document.getElementById('forge-badge');
     const notice = document.getElementById('backend-notice');
     const frameId = ${JSON.stringify(frameId)};
     const forgeOrigin = ${JSON.stringify(forgeOrigin)};
@@ -1060,6 +1061,7 @@ function webviewHtml(webview: vscode.Webview, forgeUrl: string, mode: string, fr
       const data = event.data;
       if (data?.source === 'x4forge-native-host' && data.type === 'backend-offline') {
         if (event.source === frame.contentWindow || data.frameId !== frameId) return;
+        if (badge) badge.textContent = 'X4 Forge Studio — backend stopped';
         notice.textContent = data.message;
         notice.hidden = false;
         return;
@@ -1558,6 +1560,14 @@ export function activate(context: vscode.ExtensionContext): void {
   const finish = beginNativeOperation('native.activate');
   let outcome: ForgePerformanceOutcome = 'ok';
   try {
+    void import("../../src/lib/instanceDiscovery.js")
+      .then(({ allowsDiscoveryForMode, pruneDeadInstances }) => {
+        if (allowsDiscoveryForMode(process.env.X4_FORGE_MODE)) {
+          const pruned = pruneDeadInstances();
+          if (pruned > 0) log(`pruned ${pruned} stale discovery record(s) on activation`);
+        }
+      })
+      .catch(() => { /* best-effort activation discovery cleanup */ });
     statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 50);
     nativeDiffProvider = new NativeDiffContentProvider();
     nativeNodeProvider = new NativeNodeFileSystemProvider();
@@ -2530,8 +2540,13 @@ async function copyMcpConfig(context: vscode.ExtensionContext): Promise<void> {
       }
     }
     const shimPath = vscode.Uri.joinPath(context.extensionUri, "mcp", "x4forge-mcp.cjs").fsPath;
+    const bootstrapPath = vscode.Uri.joinPath(context.extensionUri, "out", "mcp-bootstrap.js").fsPath;
+    const configuredForgeRoot = cfg().forgeRoot.trim();
     const jsonText = buildManualMcpConfigFallback({
       shimPath,
+      bootstrapPath,
+      storageDir: context.globalStorageUri.fsPath,
+      ...(configuredForgeRoot ? { forgeRoot: configuredForgeRoot } : {}),
       baseUrl: handle?.baseUrl || cfg().attachUrl || "http://127.0.0.1:3000",
       workspaceId: handle?.workspaceId || mcpRegistration?.getStatus().boundWorkspaceId || null,
       nodeCommand: cfg().nodePath || "node",

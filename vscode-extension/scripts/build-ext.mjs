@@ -38,4 +38,14 @@ await build({
   outfile: "out/sidecar-supervisor.js",
 });
 
-console.log("[build-ext] OK — extension.js + sidecar-supervisor.js written from a fresh out/");
+await build({
+  entryPoints: ["src/mcpBootstrap.ts"],
+  bundle: true,
+  platform: "node",
+  format: "cjs",
+  target: "node18",
+  sourcemap: true,
+  outfile: "out/mcp-bootstrap.js",
+});
+
+console.log("[build-ext] OK — extension.js + sidecar-supervisor.js + mcp-bootstrap.js written from a fresh out/");

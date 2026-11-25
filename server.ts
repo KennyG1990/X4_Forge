@@ -4999,6 +4999,7 @@ app.get("/api/agent/schema", (req, res) => {
   const resolvedConfig = resolveXsdConfig();
   return res.json({
     api_version: "2026-07-30.agent.v4",
+    instance: publicForgeIdentity(),
     description: "X4 Forge external agent contract. Use this to inspect supported workspace domains, valid values, compile outputs, and protected API routes before modifying the studio.",
     capability_contract: CACHED_FORGE_CAPABILITY_CONTRACT,
     ui_action_parity_census: CACHED_FORGE_UI_ACTION_PARITY_CENSUS,

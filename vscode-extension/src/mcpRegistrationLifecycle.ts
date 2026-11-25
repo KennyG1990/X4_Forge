@@ -335,20 +335,32 @@ export function isValidEffectiveAuthorityPayload(body: unknown, expectedWorkspac
 
 export function buildManualMcpConfigFallback(options: {
   shimPath: string;
+  bootstrapPath?: string;
+  storageDir?: string;
+  forgeRoot?: string;
   baseUrl?: string;
   workspaceId?: string | null;
   nodeCommand?: string;
   existingConfigJson?: string;
 }): string {
+  const useBootstrap = typeof options.bootstrapPath === "string" && options.bootstrapPath.trim().length > 0;
   const forgeServer = {
     command: options.nodeCommand || "node",
-    args: [options.shimPath],
+    args: [useBootstrap ? options.bootstrapPath!.trim() : options.shimPath],
     env: {
-      X4FORGE_URL: (options.baseUrl || "http://127.0.0.1:3000").replace(/\/+$/, ""),
+      X4FORGE_URL: useBootstrap
+        ? "auto"
+        : (options.baseUrl || "http://127.0.0.1:3000").replace(/\/+$/, ""),
       X4FORGE_KEY: MCP_MANUAL_KEY_PLACEHOLDER,
       X4FORGE_WORKSPACE_ID: options.workspaceId && WORKSPACE_ID_RE.test(options.workspaceId)
         ? options.workspaceId
         : "<workspace id>",
+      ...(useBootstrap && typeof options.storageDir === "string" && options.storageDir.trim().length > 0
+        ? { X4FORGE_STORAGE_DIR: options.storageDir.trim() }
+        : {}),
+      ...(useBootstrap && typeof options.forgeRoot === "string" && options.forgeRoot.trim().length > 0
+        ? { X4FORGE_FORGE_ROOT: options.forgeRoot.trim() }
+        : {}),
     },
   };
   let root: Record<string, unknown> = {};
