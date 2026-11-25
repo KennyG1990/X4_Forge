@@ -3,6 +3,12 @@
 The latest changes, newest first. (This page is generated automatically — see
 `release-notes.json` to edit the wording.)
 
+## 0.0.95 — 2026-11-25
+
+- Choose a dedicated temporary deploy-snapshot folder in Studio Settings or through explicit-grant configuration tools when staging large mods across drives, with automatic scratch cleanup before deploy responses return.
+- Coordinate shared Studio and agent work with an optional time-bounded Driver Session Lease from Studio Actions, the Agent API, or MCP, keeping read-only checks and dry-run previews open while protecting active workspaces from conflicting writes.
+- Read cleaner native IDE Problems entries without raw occurrence JSON clutter, jump to exact line and column anchors on multiline XSD schema and unknown-reference diagnostics across LF, CRLF, lone-CR, and UTF-8 BOM files, and view rule-specific guidance across reference, text-file, and Mission Director cue checks.
+
 ## 0.0.94 — 2026-11-25
 
 - Work in a unified IDE layout with a collapsible right Contextual Inspector for selected nodes and widgets, a bottom panel (Ctrl+J) for Problems, Runtime, and live compiled Mission Director XML, a bottom status bar, and a two-pane Studio Settings dialog.
