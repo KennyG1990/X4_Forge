@@ -7,7 +7,7 @@ import { atomicWriteFile, type AtomicWriteOptions } from './workspaceState';
 import { expandIncludeChain } from './schemaRegistry';
 import { schemaLibraryToTemplates, SchemaAttribute, SchemaCategory, SchemaElement, SchemaLibrary } from './schemaTypes';
 import { MAX_PROJECT_XML_DEPTH, SAFE_XML_ENTITY_OPTIONS } from './xmlInputLimits';
-import { resolveDevScratchRoles } from './pathRoles';
+import { defaultSnapshotTempPath, resolveDevScratchRoles } from './pathRoles';
 
 type AnyNode = Record<string, any>;
 
@@ -34,6 +34,8 @@ export interface XsdConfig {
   schemaFiles?: string[];
   modWorkspacePath?: string;
   filesystemPath?: string;
+  /** Optional Forge-owned directory for temporary deployment snapshots (#96 / #123). */
+  snapshotTempPath?: string;
   /** optional user-configured X4 debug log path (debuglog.txt) */
   x4LogPath?: string;
 }
@@ -52,6 +54,9 @@ export interface ResolvedXsdConfig extends XsdConfig {
   x4ReferenceExists: boolean;
   modWorkspacePath?: string;
   filesystemPath?: string;
+  snapshotTempPath: string;
+  configuredSnapshotTempPath?: string;
+  snapshotTempSource: 'saved' | 'default' | 'launcher';
 }
 
 /** User-requested default; override with X4_REFERENCE_ROOT or config.x4ReferenceRoot. */
@@ -367,6 +372,16 @@ export function resolveXsdConfig(config = readXsdConfig()): ResolvedXsdConfig {
   const mdXsdPath = discover('md.xsd') || path.join(schemaDir, 'md.xsd');
   const commonXsdPath = discover('common.xsd') || path.join(schemaDir, 'common.xsd');
   const aiscriptsXsdPath = discover('aiscripts.xsd') || undefined;
+  const ownerRootsLocked = process.env.X4_FORGE_PROJECT_CHECK_OWNER_POLICY !== undefined;
+  const configuredSnapshotTempPath = ownerRootsLocked
+    ? ''
+    : (typeof config.snapshotTempPath === 'string' ? config.snapshotTempPath.trim() : '');
+  const snapshotTempPath = configuredSnapshotTempPath
+    ? path.resolve(configuredSnapshotTempPath)
+    : defaultSnapshotTempPath();
+  const snapshotTempSource: 'saved' | 'default' | 'launcher' = ownerRootsLocked
+    ? 'launcher'
+    : (configuredSnapshotTempPath ? 'saved' : 'default');
 
   return {
     ...config,
@@ -384,6 +399,9 @@ export function resolveXsdConfig(config = readXsdConfig()): ResolvedXsdConfig {
     mdExists: fs.existsSync(mdXsdPath),
     commonExists: fs.existsSync(commonXsdPath),
     aiscriptsExists: !!aiscriptsXsdPath && fs.existsSync(aiscriptsXsdPath),
+    snapshotTempPath,
+    configuredSnapshotTempPath: configuredSnapshotTempPath || undefined,
+    snapshotTempSource,
   };
 }
 

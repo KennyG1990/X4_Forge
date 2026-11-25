@@ -61,7 +61,7 @@ interface CorpusScanStatus {
 }
 
 interface DirectoryPathIssue {
-  field: 'x4GamePath' | 'modWorkspacePath' | 'filesystemPath';
+  field: 'x4GamePath' | 'modWorkspacePath' | 'filesystemPath' | 'snapshotTempPath';
   code: string;
   message: string;
 }
@@ -188,6 +188,8 @@ export default function DirectorySettingsModal({
   const [referenceRoot, setReferenceRoot] = useState('');
   const [workspaceInput, setWorkspaceInput] = useState('');
   const [filesystemInput, setFilesystemInput] = useState('');
+  const [snapshotTempInput, setSnapshotTempInput] = useState('');
+  const [savedSnapshotTemp, setSavedSnapshotTemp] = useState('');
   const [resolved, setResolved] = useState<any>(null);
   const [directorySettingsLocked, setDirectorySettingsLocked] = useState(false);
   const isolatedScratch = resolved?.isolatedScratch === true;
@@ -245,6 +247,9 @@ export default function DirectorySettingsModal({
         setReferenceRoot((settingsLocked ? res.resolved?.x4ReferenceRoot : res.config?.x4ReferenceRoot) || res.resolved?.x4ReferenceRoot || '');
         setWorkspaceInput(paths?.modWorkspacePath || res.resolved?.modWorkspacePath || '');
         setFilesystemInput(paths?.filesystemPath || res.resolved?.filesystemPath || '');
+        const loadedSnapshotTemp = settingsLocked ? '' : (res.config?.snapshotTempPath || '');
+        setSnapshotTempInput(loadedSnapshotTemp);
+        setSavedSnapshotTemp(loadedSnapshotTemp);
         setResolved(res.resolved || null);
         setDirectoryIssues(res.directorySafety?.issues || []);
         setDirectorySettingsLocked(settingsLocked);
@@ -289,6 +294,7 @@ export default function DirectorySettingsModal({
     // schemaDirOverride: harvest sets schemaPath via setState (async), so it passes the new
     // dir directly rather than waiting a render for state to settle.
     const schemaDir = (schemaDirOverride ?? schemaPath).trim();
+    const trimmedSnapshotTemp = snapshotTempInput.trim();
     setStatus({ type: 'saving', msg: '' });
     try {
       const response = await fetch('/api/schema/config', {
@@ -297,6 +303,7 @@ export default function DirectorySettingsModal({
         body: JSON.stringify({
           schemaDir,
           x4ReferenceRoot: referenceRoot.trim(),
+          ...(trimmedSnapshotTemp !== '' || savedSnapshotTemp !== '' ? { snapshotTempPath: trimmedSnapshotTemp } : {}),
           ...(isolatedScratch ? {} : {
             x4GamePath: gamePath.trim(),
             modWorkspacePath: workspaceInput.trim(),
@@ -316,6 +323,7 @@ export default function DirectorySettingsModal({
         // Paths always save now (schema no longer gates the save). Reflect that honestly:
         // green when the schema also loaded, amber "saved, schema pending" when it didn't.
         setResolved(res.resolved || null);
+        setSavedSnapshotTemp(trimmedSnapshotTemp);
         setDirectoryIssues(res.directorySafety?.issues || []);
         setModWorkspacePath(workspaceInput.trim());
         setFilesystemPath(filesystemInput.trim());
@@ -571,6 +579,53 @@ export default function DirectorySettingsModal({
             />
             <p className="text-[9.5px] leading-relaxed text-slate-500">{isolatedScratch ? 'Browse scratch extensions here. The Forge Dev launcher controls this path.' : 'Browse/import installed mods here. Develop in Mod Workspace; update the live game only through validated Deploy.'}</p>
             {issuesFor('filesystemPath').map(issue => <div key={issue.code} className="text-[10px] font-mono text-red-300 flex items-start gap-1"><AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />{issue.message}</div>)}
+          </DirectoryRow>
+
+          {/* 1c. Optional temporary deploy-snapshot folder (#96 / #123) */}
+          <DirectoryRow
+            icon={<HardDrive className="w-4 h-4" />}
+            title="Temporary Deploy Snapshot Folder (optional)"
+            tooltip="Optional dedicated folder where Forge stages and verifies temporary snapshots during native Deploy preview and apply. Leave empty to use the process temporary directory (TEMP/TMP). Choose a folder on a larger drive if your system temp drive runs low on space."
+            testId="snapshot-temp-settings"
+          >
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                data-testid="snapshot-temp-input"
+                value={snapshotTempInput}
+                readOnly={directorySettingsLocked}
+                onChange={e => { setSnapshotTempInput(e.target.value); setDirectoryIssues(current => current.filter(issue => issue.field !== 'snapshotTempPath')); }}
+                placeholder="Optional: e.g. D:\ForgeTemp\DeploySnapshots (leave blank for system TEMP)"
+                className="flex-1 min-w-0 px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500"
+              />
+              {!directorySettingsLocked && snapshotTempInput.trim() && (
+                <button
+                  type="button"
+                  data-testid="snapshot-temp-clear"
+                  onClick={() => { setSnapshotTempInput(''); setDirectoryIssues(current => current.filter(issue => issue.field !== 'snapshotTempPath')); }}
+                  className="settings-button shrink-0"
+                  title="Clear optional setting and return to the process-temp default on Save"
+                >
+                  Clear to Default
+                </button>
+              )}
+            </div>
+            {resolved?.snapshotTempPath && (
+              <div data-testid="snapshot-temp-effective" className="flex flex-wrap items-center gap-2 text-[9.5px] font-mono text-slate-400">
+                <span>Effective: <span className="text-slate-200">{resolved.snapshotTempPath}</span></span>
+                <span className="px-1.5 py-0.5 rounded border border-cyan-500/25 bg-cyan-500/10 text-cyan-300 uppercase">
+                  {directorySettingsLocked || resolved.snapshotTempSource === 'launcher'
+                    ? 'launcher'
+                    : resolved.snapshotTempSource === 'saved'
+                      ? 'saved'
+                      : 'process-temp default'}
+                </span>
+              </div>
+            )}
+            <p className="text-[9.5px] leading-relaxed text-slate-500">
+              Saving this setting never moves projects or deploys files. Forge retires only its own temporary snapshot folders and refuses stale, aliased, or inaccessible roots without falling back to another drive.
+            </p>
+            {issuesFor('snapshotTempPath').map(issue => <div key={issue.code} className="text-[10px] font-mono text-red-300 flex items-start gap-1"><AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />{issue.message}</div>)}
           </DirectoryRow>
 
           {/* 2. X4 Game installation (server path) */}

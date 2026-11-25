@@ -190,9 +190,17 @@ async function main() {
   const mods2 = path.join(allowedRoot, 'mods2');
   const browse1 = path.join(allowedRoot, 'browse1');
   const browse2 = path.join(allowedRoot, 'browse2');
+  const snap1 = path.join(allowedRoot, 'snap1');
+  const crossVolCandidateParent = process.platform === 'win32' && fs.existsSync('G:\\Forge-QA\\temp')
+    ? fs.realpathSync.native('G:\\Forge-QA\\temp')
+    : null;
+  const crossVolFixtureRoot = crossVolCandidateParent && path.parse(crossVolCandidateParent).root.toLowerCase() !== path.parse(parent).root.toLowerCase()
+    ? fs.mkdtempSync(path.join(crossVolCandidateParent, 'forge-96-xvol-'))
+    : null;
+  const snapDedicated = crossVolFixtureRoot ? path.join(crossVolFixtureRoot, 'deploy-snapshots') : path.join(allowedRoot, 'snap2');
 
   for (const d of [configDir, dataDir, stateDir, coordDir, discoveryDir, allowedRoot, deniedRoot,
-    path.join(game1, 'extensions'), path.join(game2, 'extensions'), corpus1, corpus2, schema1, schemaIncomplete, mods1, mods2, browse1, browse2]) {
+    path.join(game1, 'extensions'), path.join(game2, 'extensions'), corpus1, corpus2, schema1, schemaIncomplete, mods1, mods2, browse1, browse2, snap1, snapDedicated]) {
     fs.mkdirSync(d, { recursive: true });
   }
   fs.writeFileSync(path.join(game1, 'X4.exe'), 'fixture');
@@ -255,12 +263,12 @@ async function main() {
     const presetDeployToken: string = presetMint.json.token;
 
     const configCapabilities = [
-      'configuration.access.request@1',
+      'configuration.access.request@2',
       'configuration.access.status@1',
       'configuration.apply@1',
-      'configuration.preview@1',
-      'configuration.read@1',
-      'configuration.status@1',
+      'configuration.preview@2',
+      'configuration.read@2',
+      'configuration.status@2',
     ];
     const configMint = await httpJson(backend1.baseUrl, 'POST', '/api/agent/keys', studioToken, {
       label: 'scoped-config-agent',
@@ -345,13 +353,14 @@ async function main() {
       const reqArgs = {
         instance: instance1,
         operationId: 'mcp-access-req-0001',
-        fields: ['schemaDir', 'x4ReferenceRoot', 'x4GamePath', 'modWorkspacePath', 'filesystemPath', 'deployFormat'],
+        fields: ['schemaDir', 'x4ReferenceRoot', 'x4GamePath', 'modWorkspacePath', 'filesystemPath', 'snapshotTempPath', 'deployFormat'],
         roots: {
           schemaDir: [allowedRoot],
           x4ReferenceRoot: [allowedRoot],
           x4GamePath: [allowedRoot],
           modWorkspacePath: [allowedRoot],
           filesystemPath: [allowedRoot],
+          snapshotTempPath: [allowedRoot, parent, ...(crossVolFixtureRoot ? [crossVolFixtureRoot] : [])],
         },
         durationMs: 600_000,
         restartPolicy: 'same-profile',
@@ -602,6 +611,170 @@ async function main() {
       assert(!fs.existsSync(path.join(game1, 'extensions', 'cfg_test_mod')), 'Refused stale deploy must not write target');
     });
 
+    await check('dedicated snapshotTempPath isolates preview/apply scratch, binds preview->apply identity, refuses stale/aliased/out-of-grant roots, and supports explicit clear', async () => {
+      const siblingFile = path.join(snapDedicated, 'keep-sibling.txt');
+      fs.writeFileSync(siblingFile, 'preserve-me', 'utf8');
+
+      const read0 = await mcpConfig!.callTool('get_configuration');
+      assert.equal(read0.payload.saved.snapshotTempPath, '');
+      assert.equal(read0.payload.effective.snapshotTempPath, parent);
+      assert.equal(read0.payload.provenance.snapshotTempPath, 'default');
+      assert.equal(read0.payload.snapshotTempSource, 'default');
+
+      const setSnapPrev = await mcpConfig!.callTool('preview_configuration_change', {
+        instance: instance1,
+        revision: read0.payload.revision,
+        operationId: 'cfg-set-snap-dedicated-01',
+        patch: { snapshotTempPath: snapDedicated },
+      });
+      assert.equal(setSnapPrev.isError, false, JSON.stringify(setSnapPrev.payload));
+      assert.equal(setSnapPrev.payload.effective.snapshotTempPath, snapDedicated);
+      const setSnapApp = await mcpConfig!.callTool('apply_configuration_change', {
+        instance: instance1,
+        proposalId: setSnapPrev.payload.proposalId,
+        operationId: 'cfg-set-snap-dedicated-01',
+      });
+      assert.equal(setSnapApp.isError, false, JSON.stringify(setSnapApp.payload));
+      assert(!fs.existsSync(path.join(game1, 'extensions', 'cfg_test_mod')), 'Saving snapshotTempPath must not deploy mod');
+
+      const readSaved = await mcpConfig!.callTool('get_configuration');
+      assert.equal(readSaved.payload.saved.snapshotTempPath, snapDedicated);
+      assert.equal(readSaved.payload.effective.snapshotTempPath, snapDedicated);
+      assert.equal(readSaved.payload.provenance.snapshotTempPath, 'saved');
+      assert.equal(readSaved.payload.snapshotTempSource, 'saved');
+
+      // Preview + Apply on dedicated (cross-volume on Windows dev host) temporary snapshot root
+      const snapPreview = await httpJson(backend1!.baseUrl, 'POST', '/api/agent/deploy-verify', presetDeployToken, {
+        path: 'cfg_test_mod', root: 'workspace', dryRun: true,
+      }, { 'x-workspace-id': workspaceId });
+      assert.equal(snapPreview.status, 200, JSON.stringify(snapPreview.json));
+      assert.deepEqual(fs.readdirSync(snapDedicated), ['keep-sibling.txt'], 'Preview retired only owned snapshot dir');
+
+      const snapApply = await httpJson(backend1!.baseUrl, 'POST', '/api/agent/deploy-verify', presetDeployToken, {
+        path: 'cfg_test_mod',
+        root: 'workspace',
+        dryRun: false,
+        expectedModId: snapPreview.json.modId,
+        expectedSourceHash: snapPreview.json.sourceHash,
+        expectedArtifactHash: snapPreview.json.artifactHash,
+        expectedBindingHash: snapPreview.json.bindingHash,
+        expectedTargetFingerprint: snapPreview.json.targetFingerprint,
+        acceptances: (snapPreview.json.acceptanceRequest?.body?.acceptances || []).map((a: any) => ({
+          ...a,
+          reason: 'Fixture warning reviewed for snapshotTempPath test',
+        })),
+      }, { 'x-workspace-id': workspaceId, 'x-forge-operation-id': 'deploy-with-dedicated-snap-01' });
+      assert.equal(snapApply.status, 200, JSON.stringify(snapApply.json));
+      assert.equal(snapApply.json.ok, true, JSON.stringify(snapApply.json));
+      assert(fs.existsSync(path.join(game1, 'extensions', 'cfg_test_mod', 'content.xml')), 'Mod deployed to game1');
+      assert.deepEqual(fs.readdirSync(snapDedicated), ['keep-sibling.txt'], 'Apply retired only owned snapshot dir');
+      assert.equal(fs.readFileSync(siblingFile, 'utf8'), 'preserve-me');
+
+      // Changing snapshotTempPath after preview invalidates bindingHash before target writes
+      const previewBeforeRootSwitch = await httpJson(backend1!.baseUrl, 'POST', '/api/agent/deploy-verify', presetDeployToken, {
+        path: 'cfg_test_mod', root: 'workspace', dryRun: true,
+      }, { 'x-workspace-id': workspaceId });
+      assert.equal(previewBeforeRootSwitch.status, 200);
+
+      const switchPrev = await mcpConfig!.callTool('preview_configuration_change', {
+        instance: instance1,
+        revision: readSaved.payload.revision,
+        operationId: 'cfg-switch-snap1-02',
+        patch: { snapshotTempPath: snap1 },
+      });
+      const switchApp = await mcpConfig!.callTool('apply_configuration_change', {
+        instance: instance1,
+        proposalId: switchPrev.payload.proposalId,
+        operationId: 'cfg-switch-snap1-02',
+      });
+      assert.equal(switchApp.isError, false);
+
+      const mismatchApply = await httpJson(backend1!.baseUrl, 'POST', '/api/agent/deploy-verify', presetDeployToken, {
+        path: 'cfg_test_mod',
+        root: 'workspace',
+        dryRun: false,
+        expectedModId: previewBeforeRootSwitch.json.modId,
+        expectedSourceHash: previewBeforeRootSwitch.json.sourceHash,
+        expectedArtifactHash: previewBeforeRootSwitch.json.artifactHash,
+        expectedBindingHash: previewBeforeRootSwitch.json.bindingHash,
+        expectedTargetFingerprint: previewBeforeRootSwitch.json.targetFingerprint,
+      }, { 'x-workspace-id': workspaceId, 'x-forge-operation-id': 'deploy-mismatch-snap-switch-02' });
+      assert.equal(mismatchApply.status, 409, JSON.stringify(mismatchApply.json));
+      assert.equal(mismatchApply.json.code, 'DEPLOY_IDENTITY_MISMATCH');
+      assert(mismatchApply.json.identityMismatch?.mismatched?.includes('expectedBindingHash'));
+
+      // Stale (deleted) and aliased (junction) configured snapshotTempPath refuse before writes without drive fallback
+      fs.rmSync(snap1, { recursive: true, force: true });
+      const staleRootDeploy = await httpJson(backend1!.baseUrl, 'POST', '/api/agent/deploy-verify', presetDeployToken, {
+        path: 'cfg_test_mod', root: 'workspace', dryRun: true,
+      }, { 'x-workspace-id': workspaceId });
+      assert.equal(staleRootDeploy.status, 409, JSON.stringify(staleRootDeploy.json));
+      assert.equal(staleRootDeploy.json.code, 'DEPLOY_SNAPSHOT_ROOT_STALE');
+
+      fs.symlinkSync(snapDedicated, snap1, process.platform === 'win32' ? 'junction' : 'dir');
+      const aliasedRootDeploy = await httpJson(backend1!.baseUrl, 'POST', '/api/agent/deploy-verify', presetDeployToken, {
+        path: 'cfg_test_mod', root: 'workspace', dryRun: true,
+      }, { 'x-workspace-id': workspaceId });
+      assert.equal(aliasedRootDeploy.status, 409, JSON.stringify(aliasedRootDeploy.json));
+      assert.equal(aliasedRootDeploy.json.code, 'DEPLOY_SNAPSHOT_ROOT_ALIASED');
+      fs.rmSync(snap1, { recursive: true, force: true });
+      fs.mkdirSync(snap1, { recursive: true });
+
+      // Narrow grant that excludes process-temp root refuses out-of-grant root AND refuses raw clear to ungranted process-temp
+      const narrowMint = await httpJson(backend1!.baseUrl, 'POST', '/api/agent/keys', studioToken, {
+        label: 'narrow-snap-only-agent',
+        scope: 'write',
+        ttl: '1h',
+        authorityMode: 'exact',
+        capabilityIdentities: configCapabilities,
+        allowedEffects: ['read', 'analyze', 'audit-write', 'audit-retention-delete', 'filesystem-write'],
+      }, wsHeaders);
+      assert.equal(narrowMint.status, 200);
+      const narrowToken: string = narrowMint.json.token;
+      const narrowReq = await httpJson(backend1!.baseUrl, 'POST', '/api/agent/configuration/access/request', narrowToken, {
+        instance: instance1,
+        operationId: 'narrow-snap-access-01',
+        fields: ['snapshotTempPath'],
+        roots: { snapshotTempPath: [snap1] },
+        durationMs: 600_000,
+      }, { 'x-workspace-id': workspaceId });
+      assert.equal(narrowReq.status, 200);
+      const narrowApprove = await httpJson(backend1!.baseUrl, 'POST', '/api/agent/keys/configuration-access/decision', studioToken, {
+        requestId: narrowReq.json.requestId, approve: true, instance: instance1,
+      }, clientHeaders);
+      assert.equal(narrowApprove.status, 200);
+      const narrowRead = await httpJson(backend1!.baseUrl, 'GET', '/api/agent/configuration', narrowToken, undefined, { 'x-workspace-id': workspaceId });
+      assert.equal(narrowRead.status, 200);
+      const narrowDeniedClear = await httpJson(backend1!.baseUrl, 'POST', '/api/agent/configuration/preview', narrowToken, {
+        instance: instance1,
+        revision: narrowRead.json.revision,
+        operationId: 'narrow-clear-denied-01',
+        patch: { snapshotTempPath: '' },
+      }, { 'x-workspace-id': workspaceId });
+      assert.equal(narrowDeniedClear.status, 403);
+      assert.equal(narrowDeniedClear.json.code, 'CONFIGURATION_ROOT_DENIED');
+
+      // Explicit clear back to process-temp default by an authorized principal
+      const clearPrev = await mcpConfig!.callTool('preview_configuration_change', {
+        instance: instance1,
+        revision: narrowRead.json.revision,
+        operationId: 'cfg-clear-snap-default-03',
+        patch: { snapshotTempPath: '' },
+      });
+      assert.equal(clearPrev.isError, false, JSON.stringify(clearPrev.payload));
+      const clearApp = await mcpConfig!.callTool('apply_configuration_change', {
+        instance: instance1,
+        proposalId: clearPrev.payload.proposalId,
+        operationId: 'cfg-clear-snap-default-03',
+      });
+      assert.equal(clearApp.isError, false, JSON.stringify(clearApp.payload));
+      const readCleared = await mcpConfig!.callTool('get_configuration');
+      assert.equal(readCleared.payload.saved.snapshotTempPath, '');
+      assert.equal(readCleared.payload.effective.snapshotTempPath, parent);
+      assert.equal(readCleared.payload.provenance.snapshotTempPath, 'default');
+      assert.equal(readCleared.payload.snapshotTempSource, 'default');
+    });
+
     await check('persisted settings and same-profile grant survive isolated backend restart while this-process grant and pre-restart proposal expire', async () => {
       const preRestartRead = await mcpConfig!.callTool('get_configuration');
       const preRestartProposal = await mcpConfig!.callTool('preview_configuration_change', {
@@ -700,13 +873,15 @@ async function main() {
     await backend2?.stop();
     await scratchBackend?.stop();
     fs.rmSync(root, { recursive: true, force: true });
+    if (crossVolFixtureRoot) fs.rmSync(crossVolFixtureRoot, { recursive: true, force: true });
   }
 
   console.log(JSON.stringify({
     status: checks.every(c => c.pass) ? 'PASS' : 'FAIL',
     passed: checks.filter(c => c.pass).length,
     total: checks.length,
-    fixtureRetired: !fs.existsSync(root),
+    fixtureRetired: !fs.existsSync(root) && (!crossVolFixtureRoot || !fs.existsSync(crossVolFixtureRoot)),
+    crossVolumeExercised: Boolean(crossVolFixtureRoot),
     checks,
   }, null, 2));
   if (checks.some(c => !c.pass)) process.exitCode = 1;

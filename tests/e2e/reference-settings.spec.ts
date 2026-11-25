@@ -320,3 +320,88 @@ test('Directory Settings shows owner profile paths without offering a path save'
   await expect(page.getByRole('button', { name: 'Save Paths' })).toBeDisabled();
   await page.screenshot({ path: 'test-results/directory-settings-owner-profile.png', fullPage: true });
 });
+
+test('Directory Settings configures, displays provenance for, and clears Temporary Deploy Snapshot Folder', async ({ page }) => {
+  const game = 'G:\\SteamLibrary\\steamapps\\common\\X4 Foundations';
+  const safe = 'C:\\Users\\example\\Documents\\X4ForgeMods';
+  const defaultTemp = 'C:\\Users\\example\\AppData\\Local\\Temp';
+  const customTemp = 'D:\\ForgeTemp\\DeploySnapshots';
+  let currentConfig: Record<string, string> = {
+    x4GamePath: game,
+    modWorkspacePath: safe,
+    filesystemPath: `${game}\\extensions`,
+    x4ReferenceRoot: unpackedRoot,
+  };
+  const postedBodies: Array<Record<string, unknown>> = [];
+
+  const currentResolved = () => ({
+    x4GamePath: game,
+    modWorkspacePath: safe,
+    filesystemPath: `${game}\\extensions`,
+    x4ReferenceRoot: unpackedRoot,
+    x4ReferenceExists: true,
+    mdExists: true,
+    commonExists: true,
+    snapshotTempPath: currentConfig.snapshotTempPath || defaultTemp,
+    configuredSnapshotTempPath: currentConfig.snapshotTempPath || undefined,
+    snapshotTempSource: currentConfig.snapshotTempPath ? 'saved' : 'default',
+  });
+
+  await page.route('**/api/schema/config', route => {
+    if (route.request().method() === 'POST') {
+      const body = route.request().postDataJSON() as Record<string, string>;
+      postedBodies.push(body);
+      if (Object.hasOwn(body, 'snapshotTempPath')) {
+        currentConfig = { ...currentConfig, snapshotTempPath: body.snapshotTempPath };
+      }
+      return route.fulfill({
+        json: {
+          saved: true,
+          schemaComplete: true,
+          config: currentConfig,
+          resolved: currentResolved(),
+          directorySafety: { safe: true, issues: [] },
+          schema_counts: { events: 10, conditions: 10, actions: 10 },
+        },
+      });
+    }
+    return route.fulfill({
+      json: {
+        loaded: true,
+        config: currentConfig,
+        resolved: currentResolved(),
+        directorySafety: { safe: true, issues: [] },
+        schema_counts: { events: 10, conditions: 10, actions: 10 },
+      },
+    });
+  });
+  await page.route('**/api/reference/coverage', route =>
+    route.fulfill({ status: 200, json: { status: { state: 'ready' }, coverage: { generation: 'snap_gen_01', totalFiles: 12, totalBytes: 1024, byRole: [], byConsumer: [] } } }));
+
+  await page.goto('/');
+  await openStudioAction(page, 'settings');
+
+  const row = page.getByTestId('snapshot-temp-settings');
+  const input = page.getByTestId('snapshot-temp-input');
+  const effective = page.getByTestId('snapshot-temp-effective');
+  await expect(row).toBeVisible();
+  await expect(input).toHaveValue('');
+  await expect(effective).toContainText(defaultTemp);
+  await expect(effective).toContainText('process-temp default');
+  await expect(page.getByTestId('snapshot-temp-clear')).toHaveCount(0);
+
+  await input.fill(customTemp);
+  await expect(page.getByTestId('snapshot-temp-clear')).toBeVisible();
+  await page.getByRole('button', { name: 'Save Paths' }).click();
+  await expect(page.getByText(/Saved\. Schema library reloaded/)).toBeVisible();
+  expect(postedBodies[0]?.snapshotTempPath).toBe(customTemp);
+  await expect(effective).toContainText(customTemp);
+  await expect(effective).toContainText('saved');
+
+  await page.getByTestId('snapshot-temp-clear').click();
+  await expect(input).toHaveValue('');
+  await page.getByRole('button', { name: 'Save Paths' }).click();
+  expect(postedBodies[1]?.snapshotTempPath).toBe('');
+  await expect(effective).toContainText(defaultTemp);
+  await expect(effective).toContainText('process-temp default');
+});

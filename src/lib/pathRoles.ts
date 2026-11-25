@@ -10,11 +10,17 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-export type DirectoryField = 'x4GamePath' | 'modWorkspacePath' | 'filesystemPath';
+export type DirectoryField = 'x4GamePath' | 'modWorkspacePath' | 'filesystemPath' | 'snapshotTempPath';
 
 export interface DirectoryPathIssue {
   field: DirectoryField;
-  code: 'GAME_NOT_FOUND' | 'GAME_MARKER_MISSING' | 'PROTECTED_ROOT_OVERLAP';
+  code:
+    | 'GAME_NOT_FOUND'
+    | 'GAME_MARKER_MISSING'
+    | 'PROTECTED_ROOT_OVERLAP'
+    | 'SNAPSHOT_TEMP_NOT_FOUND'
+    | 'SNAPSHOT_TEMP_NOT_PHYSICAL'
+    | 'SNAPSHOT_TEMP_ROLE_OVERLAP';
   message: string;
   path: string;
   protectedPath?: string;
@@ -25,6 +31,154 @@ export interface DirectoryRoleInput {
   x4ReferenceRoot?: string;
   modWorkspacePath?: string;
   filesystemPath?: string;
+  snapshotTempPath?: string;
+  configuredSnapshotTempPath?: string;
+}
+
+export function defaultSnapshotTempPath(): string {
+  try {
+    return fs.realpathSync.native(os.tmpdir());
+  } catch {
+    return canonicalDirectoryPath(os.tmpdir());
+  }
+}
+
+function hasPathControlCharacters(value: string): boolean {
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code < 32 || code === 127) return true;
+  }
+  return false;
+}
+
+export function inspectSnapshotTempDirectory(rawPath: string):
+  | { valid: true; canonicalPath: string; device: string; inode: string }
+  | { valid: false; canonicalPath: string; issue: DirectoryPathIssue } {
+  const trimmed = String(rawPath || '').trim();
+  if (!trimmed || trimmed.length > 4096 || hasPathControlCharacters(trimmed)
+    || !path.isAbsolute(trimmed) || /^(?:\\\\|\/\/)/.test(trimmed)) {
+    return {
+      valid: false,
+      canonicalPath: trimmed,
+      issue: {
+        field: 'snapshotTempPath',
+        code: 'SNAPSHOT_TEMP_NOT_PHYSICAL',
+        path: trimmed,
+        message: `Temporary Deploy Snapshot Folder must be an absolute local directory: "${trimmed}".`,
+      },
+    };
+  }
+  const absolute = path.resolve(trimmed);
+  if (absolute === path.parse(absolute).root) {
+    return {
+      valid: false,
+      canonicalPath: absolute,
+      issue: {
+        field: 'snapshotTempPath',
+        code: 'SNAPSHOT_TEMP_NOT_PHYSICAL',
+        path: absolute,
+        message: `Temporary Deploy Snapshot Folder must be a dedicated folder, not a bare drive root: "${absolute}".`,
+      },
+    };
+  }
+  let cursor = absolute;
+  let leafStat: fs.BigIntStats | undefined;
+  for (let depth = 0; ; depth++) {
+    if (depth >= 128) {
+      return {
+        valid: false,
+        canonicalPath: absolute,
+        issue: {
+          field: 'snapshotTempPath',
+          code: 'SNAPSHOT_TEMP_NOT_PHYSICAL',
+          path: absolute,
+          message: `Temporary Deploy Snapshot Folder ancestry exceeds its bound: "${absolute}".`,
+        },
+      };
+    }
+    let info: fs.BigIntStats | undefined;
+    try {
+      info = fs.lstatSync(cursor, { bigint: true, throwIfNoEntry: false });
+    } catch {
+      return {
+        valid: false,
+        canonicalPath: absolute,
+        issue: {
+          field: 'snapshotTempPath',
+          code: 'SNAPSHOT_TEMP_NOT_PHYSICAL',
+          path: absolute,
+          message: `Temporary Deploy Snapshot Folder could not be inspected at "${absolute}".`,
+        },
+      };
+    }
+    if (info) {
+      let real = '';
+      try { real = fs.realpathSync.native(cursor); } catch { real = ''; }
+      if (!info.isDirectory() || info.isSymbolicLink() || !real || path.relative(cursor, real)) {
+        return {
+          valid: false,
+          canonicalPath: absolute,
+          issue: {
+            field: 'snapshotTempPath',
+            code: 'SNAPSHOT_TEMP_NOT_PHYSICAL',
+            path: absolute,
+            message: `Temporary Deploy Snapshot Folder must be a physical non-aliased directory: "${absolute}".`,
+          },
+        };
+      }
+      if (cursor === absolute) {
+        if (info.ino <= 0n) {
+          return {
+            valid: false,
+            canonicalPath: absolute,
+            issue: {
+              field: 'snapshotTempPath',
+              code: 'SNAPSHOT_TEMP_NOT_PHYSICAL',
+              path: absolute,
+              message: `Temporary Deploy Snapshot Folder identity is unavailable at "${absolute}".`,
+            },
+          };
+        }
+        leafStat = info;
+      }
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) break;
+    cursor = parent;
+  }
+  if (!leafStat) {
+    return {
+      valid: false,
+      canonicalPath: absolute,
+      issue: {
+        field: 'snapshotTempPath',
+        code: 'SNAPSHOT_TEMP_NOT_FOUND',
+        path: absolute,
+        message: `Temporary Deploy Snapshot Folder not found at "${absolute}". Create this folder first or clear the setting to use Forge's process-temp default.`,
+      },
+    };
+  }
+  try {
+    fs.accessSync(absolute, fs.constants.R_OK | fs.constants.W_OK);
+    fs.readdirSync(absolute);
+  } catch {
+    return {
+      valid: false,
+      canonicalPath: absolute,
+      issue: {
+        field: 'snapshotTempPath',
+        code: 'SNAPSHOT_TEMP_NOT_PHYSICAL',
+        path: absolute,
+        message: `Temporary Deploy Snapshot Folder is not readable and writable at "${absolute}".`,
+      },
+    };
+  }
+  return {
+    valid: true,
+    canonicalPath: absolute,
+    device: leafStat.dev.toString(),
+    inode: leafStat.ino.toString(),
+  };
 }
 
 function existingAncestorRealpath(absolutePath: string): string {
@@ -216,6 +370,51 @@ export function validateDirectoryRoles(input: DirectoryRoleInput, scratchGamePat
       break;
     }
   }
+
+  const configuredTemp = Object.hasOwn(input, 'configuredSnapshotTempPath')
+    ? String(input.configuredSnapshotTempPath || '').trim()
+    : String(input.snapshotTempPath || '').trim();
+  if (configuredTemp) {
+    let tempFailed = false;
+    for (const protectedRoot of protectedRoots) {
+      if (!pathsOverlap(configuredTemp, protectedRoot.path)) continue;
+      const canonical = canonicalDirectoryPath(configuredTemp);
+      const protectedCanonical = canonicalDirectoryPath(protectedRoot.path);
+      issues.push({
+        field: 'snapshotTempPath',
+        code: 'PROTECTED_ROOT_OVERLAP',
+        path: canonical,
+        protectedPath: protectedCanonical,
+        message: `Temporary Deploy Snapshot Folder must be isolated from protected roots. "${canonical}" overlaps the ${protectedRoot.label} at "${protectedCanonical}".`,
+      });
+      tempFailed = true;
+      break;
+    }
+    if (!tempFailed) {
+      const otherRoles: Array<{ label: string; value: string }> = [
+        { label: 'Mod Workspace Folder', value: String(input.modWorkspacePath || '').trim() },
+        { label: 'Filesystem Folder', value: String(input.filesystemPath || '').trim() },
+      ];
+      for (const other of otherRoles) {
+        if (!other.value || !pathsOverlap(configuredTemp, other.value)) continue;
+        const canonical = canonicalDirectoryPath(configuredTemp);
+        const otherCanonical = canonicalDirectoryPath(other.value);
+        issues.push({
+          field: 'snapshotTempPath',
+          code: 'SNAPSHOT_TEMP_ROLE_OVERLAP',
+          path: canonical,
+          protectedPath: otherCanonical,
+          message: `Temporary Deploy Snapshot Folder must stay separate from ${other.label}. "${canonical}" overlaps "${otherCanonical}". Choose a dedicated folder so source, install, and temporary staging stay independently addressed.`,
+        });
+        tempFailed = true;
+        break;
+      }
+    }
+    if (!tempFailed) {
+      const inspected = inspectSnapshotTempDirectory(configuredTemp);
+      if (inspected.valid === false) issues.push(inspected.issue);
+    }
+  }
   return issues;
 }
 
@@ -282,6 +481,35 @@ export function runPathRolesSelftest() {
     ok('junction_to_game_rejected', validateDirectoryRoles({ x4GamePath: game, modWorkspacePath: linkedGame }).some(i => i.field === 'modWorkspacePath'));
     ok('junction_to_game_filesystem_write_rejected', validateProtectedWriteTargets({ x4GamePath: game, filesystemPath: linkedGame }, ['filesystemPath']).some(i => i.field === 'filesystemPath'));
     ok('empty_optional_paths_accepted', validateDirectoryRoles({}).length === 0);
+
+    const dedicatedSnap = path.join(tmp, 'X4ForgeSnapshots');
+    fs.mkdirSync(dedicatedSnap, { recursive: true });
+    ok('dedicated_snapshot_temp_accepted', validateDirectoryRoles({
+      x4GamePath: game, x4ReferenceRoot: corpus, modWorkspacePath: safe, filesystemPath: live, snapshotTempPath: dedicatedSnap,
+    }).length === 0);
+    ok('missing_snapshot_temp_rejected', validateDirectoryRoles({
+      snapshotTempPath: path.join(tmp, 'missing-snap'),
+    }).some(i => i.field === 'snapshotTempPath' && i.code === 'SNAPSHOT_TEMP_NOT_FOUND'));
+    const linkedSnap = path.join(tmp, 'linked-snap');
+    fs.symlinkSync(dedicatedSnap, linkedSnap, 'junction');
+    ok('aliased_snapshot_temp_rejected', validateDirectoryRoles({
+      snapshotTempPath: linkedSnap,
+    }).some(i => i.field === 'snapshotTempPath' && i.code === 'SNAPSHOT_TEMP_NOT_PHYSICAL'));
+    ok('drive_root_snapshot_temp_rejected', validateDirectoryRoles({
+      snapshotTempPath: path.parse(tmp).root,
+    }).some(i => i.field === 'snapshotTempPath' && i.code === 'SNAPSHOT_TEMP_NOT_PHYSICAL'));
+    ok('game_overlap_snapshot_temp_rejected', validateDirectoryRoles({
+      x4GamePath: game, snapshotTempPath: path.join(game, 'snap'),
+    }).some(i => i.field === 'snapshotTempPath' && i.code === 'PROTECTED_ROOT_OVERLAP'));
+    ok('corpus_overlap_snapshot_temp_rejected', validateDirectoryRoles({
+      x4ReferenceRoot: corpus, snapshotTempPath: corpus,
+    }).some(i => i.field === 'snapshotTempPath' && i.code === 'PROTECTED_ROOT_OVERLAP'));
+    ok('workspace_overlap_snapshot_temp_rejected', validateDirectoryRoles({
+      modWorkspacePath: safe, snapshotTempPath: path.join(safe, 'tmp'),
+    }).some(i => i.field === 'snapshotTempPath' && i.code === 'SNAPSHOT_TEMP_ROLE_OVERLAP'));
+    ok('unconfigured_resolved_default_snapshot_temp_does_not_overlap_fixture', validateDirectoryRoles({
+      x4GamePath: game, modWorkspacePath: safe, snapshotTempPath: defaultSnapshotTempPath(), configuredSnapshotTempPath: undefined,
+    }).length === 0);
 
     const dev = path.join(tmp, 'dev');
     const scratch = path.join(dev, 'scratch-game');

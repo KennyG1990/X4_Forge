@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "sourceFingerprint": "0350c67b6812482b04a227277fc50b1e09e339e2b0b4e80e49ce38c223765052",
+  "sourceFingerprint": "2161db26e17fece661fb10c726cdbfe593a806d2d2773f65225500cf8506134d",
   "policy": "Every raw production filesystem mutation source is count-pinned here. Authoritative files use atomic sibling promotion; stronger tree, archive, append-log, SQLite, retention, ephemeral, and fixture contracts remain explicit exceptions.",
   "writers": [
     {
@@ -229,11 +229,11 @@
       "file": "src/lib/pathRoles.ts",
       "calls": {
         "writeFileSync": 2,
-        "mkdirSync": 5,
+        "mkdirSync": 6,
         "rmSync": 1,
         "unlinkSync": 1,
         "mkdtempSync": 1,
-        "symlinkSync": 3
+        "symlinkSync": 4
       },
       "categories": [
         "fixture-only"

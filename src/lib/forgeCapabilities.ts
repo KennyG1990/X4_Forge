@@ -342,7 +342,7 @@ const EXPRESSION_INSPECTION_OUTPUT_FIELDS = {
 } satisfies Record<string, ForgeJsonSchema>;
 
 const CONFIGURATION_FIELD_NAMES = [
-  'schemaDir', 'x4ReferenceRoot', 'x4GamePath', 'modWorkspacePath', 'filesystemPath', 'deployFormat',
+  'schemaDir', 'x4ReferenceRoot', 'x4GamePath', 'modWorkspacePath', 'filesystemPath', 'snapshotTempPath', 'deployFormat',
 ] as const;
 const CONFIGURATION_OPERATION_ID_SCHEMA: ForgeJsonSchema = {
   type: 'string', maxLength: 96,
@@ -359,6 +359,7 @@ const CONFIGURATION_PATCH_PROPERTIES: Readonly<Record<string, ForgeJsonSchema>> 
   x4GamePath: { type: 'string', maxLength: 4096 },
   modWorkspacePath: { type: 'string', maxLength: 4096 },
   filesystemPath: { type: 'string', maxLength: 4096 },
+  snapshotTempPath: { type: 'string', maxLength: 4096 },
   deployFormat: { type: 'string', enum: ['loose', 'catalog'] },
 };
 const CONFIGURATION_PATCH_SCHEMA: ForgeJsonSchema = {
@@ -382,6 +383,7 @@ const CONFIGURATION_ROOTS_SCHEMA: ForgeJsonSchema = {
     x4GamePath: CONFIGURATION_ROOT_LIST_SCHEMA,
     modWorkspacePath: CONFIGURATION_ROOT_LIST_SCHEMA,
     filesystemPath: CONFIGURATION_ROOT_LIST_SCHEMA,
+    snapshotTempPath: CONFIGURATION_ROOT_LIST_SCHEMA,
   },
 };
 const CONFIGURATION_ACCESS_OUTPUT_SCHEMA = objectOutput({
@@ -594,7 +596,7 @@ export const FORGE_CAPABILITIES = [
   },
   {
     id: 'configuration.access.request',
-    version: 1,
+    version: 2,
     title: 'Request bounded configuration access',
     description: 'Submit a profile-bound owner approval request for explicit configuration fields, physical root leases, and session duration. Requires an explicit key grant.',
     inputSchema: {
@@ -713,9 +715,9 @@ export const FORGE_CAPABILITIES = [
   },
   {
     id: 'configuration.preview',
-    version: 1,
+    version: 2,
     title: 'Preview a scoped configuration change',
-    description: 'Validate a strict six-field directory or default deploy-format patch against the current profile revision, path-role locks, and physical root leases without modifying config.json.',
+    description: 'Validate a strict seven-field directory, temporary deploy-snapshot root, or default deploy-format patch against the current profile revision, path-role locks, and physical root leases without modifying config.json.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -763,9 +765,9 @@ export const FORGE_CAPABILITIES = [
   },
   {
     id: 'configuration.read',
-    version: 1,
+    version: 2,
     title: 'Read scoped Forge configuration',
-    description: 'Read allowlisted saved and effective directory settings, deployment format preference, resolver provenance, lock reasons, and current revision for this profile without exposing secrets.',
+    description: 'Read allowlisted saved and effective directory settings, temporary deploy-snapshot root, deployment format preference, resolver provenance, lock reasons, and current revision for this profile without exposing secrets.',
     inputSchema: EMPTY_INPUT,
     outputSchema: objectOutput({
       success: { type: 'boolean' },
@@ -779,10 +781,11 @@ export const FORGE_CAPABILITIES = [
       deployFormats: { type: 'array', items: { type: 'string', enum: ['loose', 'catalog'] } },
       deployFormatDefault: { type: 'string', enum: ['loose'] },
       deployFormatSource: { type: 'string', enum: ['saved', 'default'] },
+      snapshotTempSource: { type: 'string', enum: ['saved', 'default', 'launcher'] },
       schemaComplete: { type: 'boolean' },
       x4ReferenceExists: { type: 'boolean' },
       grantExpiresAt: { type: 'integer' },
-    }, ['success', 'instance', 'revision', 'saved', 'effective', 'locks', 'mutability', 'provenance', 'deployFormats', 'deployFormatDefault', 'deployFormatSource', 'schemaComplete', 'x4ReferenceExists']),
+    }, ['success', 'instance', 'revision', 'saved', 'effective', 'locks', 'mutability', 'provenance', 'deployFormats', 'deployFormatDefault', 'deployFormatSource', 'snapshotTempSource', 'schemaComplete', 'x4ReferenceExists']),
     context: { workspace: 'optional', profile: 'required' },
     access: { public: false, studioSession: true, agentScopes: ['read', 'write', 'deploy'] },
     effects: ['read'],
@@ -804,7 +807,7 @@ export const FORGE_CAPABILITIES = [
   },
   {
     id: 'configuration.status',
-    version: 1,
+    version: 2,
     title: 'Read configuration operation status',
     description: 'Inspect the saved, follow-up, receipt, and recovery-patch status of a caller-owned configuration preview or apply operation.',
     inputSchema: {
@@ -5965,10 +5968,10 @@ export interface ForgeUiActionParityCensusV1 {
 }
 
 const CONFIGURATION_APPROVAL_WORKFLOW: ForgeUiActionApprovalWorkflowV1 = {
-  requestCapabilityIdentity: 'configuration.access.request@1',
+  requestCapabilityIdentity: 'configuration.access.request@2',
   statusCapabilityIdentity: 'configuration.access.status@1',
-  applyCapabilityIdentities: ['configuration.preview@1', 'configuration.apply@1'],
-  receiptCapabilityIdentity: 'configuration.status@1',
+  applyCapabilityIdentities: ['configuration.preview@2', 'configuration.apply@1'],
+  receiptCapabilityIdentity: 'configuration.status@2',
   ownerDecisionRoutes: [
     'GET /api/agent/keys/configuration-access',
     'POST /api/agent/keys/configuration-access/decision',
@@ -6136,12 +6139,12 @@ export const FORGE_UI_ACTION_PARITY_CENSUS: readonly ForgeUiActionParityRowV1[] 
       'src/components/DirectorySettingsModal.tsx::DirectorySettingsModal',
     ],
     capabilityIdentities: [
-      'configuration.access.request@1',
+      'configuration.access.request@2',
       'configuration.access.status@1',
-      'configuration.read@1',
-      'configuration.preview@1',
+      'configuration.read@2',
+      'configuration.preview@2',
       'configuration.apply@1',
-      'configuration.status@1',
+      'configuration.status@2',
     ],
     apiRoutes: [
       'POST /api/agent/configuration/access/request',
@@ -7214,19 +7217,19 @@ export const FORGE_UI_ACTION_PARITY_CENSUS: readonly ForgeUiActionParityRowV1[] 
   {
     id: 'settings.directories.configure',
     domain: 'directory-settings',
-    title: 'Read, preview, and apply Studio directory settings (schemaDir, x4ReferenceRoot, x4GamePath, modWorkspacePath, filesystemPath)',
+    title: 'Read, preview, and apply Studio directory settings (schemaDir, x4ReferenceRoot, x4GamePath, modWorkspacePath, filesystemPath, snapshotTempPath)',
     status: 'approval-required',
     uiAnchors: [
       'src/components/DirectorySettingsModal.tsx::DirectorySettingsModal',
       'src/components/FirstRunWizard.tsx::FirstRunWizard',
     ],
     capabilityIdentities: [
-      'configuration.access.request@1',
+      'configuration.access.request@2',
       'configuration.access.status@1',
-      'configuration.read@1',
-      'configuration.preview@1',
+      'configuration.read@2',
+      'configuration.preview@2',
       'configuration.apply@1',
-      'configuration.status@1',
+      'configuration.status@2',
     ],
     apiRoutes: [
       'POST /api/agent/configuration/access/request',

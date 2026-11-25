@@ -211,7 +211,7 @@
       "capability": {
         "kind": "canonical",
         "id": "configuration.access.request",
-        "version": 1
+        "version": 2
       },
       "semanticClass": "audit-retention",
       "policy": "separately-governed",
@@ -263,7 +263,7 @@
       "capability": {
         "kind": "canonical",
         "id": "configuration.preview",
-        "version": 1
+        "version": 2
       },
       "semanticClass": "audit-retention",
       "policy": "separately-governed",

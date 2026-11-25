@@ -20,6 +20,8 @@ export interface AcceptanceSubject {
   targetHash: string;
   /** Native path deploy may bind an explicitly selected configured root and source directory. */
   sourceSelectionHash?: string;
+  /** Physical identity and provenance of the reviewed temporary deploy-snapshot root (#96 / #123). */
+  snapshotRootHash?: string;
   /** Prior verified deployment receipt used by the informational version check. */
   versionBaselineReceiptHash?: string;
   /** Exact deployment attempt proof; remembered warning evidence uses the stable validator hash. */
@@ -123,6 +125,8 @@ export function acceptanceBinding(subject: AcceptanceSubject) {
     refuse('ACCEPTANCE_SUBJECT_INVALID', 'Invalid server review context.');
   if (subject.sourceSelectionHash !== undefined && (typeof subject.sourceSelectionHash !== 'string' || !sha.test(subject.sourceSelectionHash)))
     refuse('ACCEPTANCE_SUBJECT_INVALID', 'Invalid resolved deploy source selection.');
+  if (subject.snapshotRootHash !== undefined && (typeof subject.snapshotRootHash !== 'string' || !sha.test(subject.snapshotRootHash)))
+    refuse('ACCEPTANCE_SUBJECT_INVALID', 'Invalid resolved deploy snapshot root.');
   if (subject.versionBaselineReceiptHash !== undefined
     && (typeof subject.versionBaselineReceiptHash !== 'string' || !sha.test(subject.versionBaselineReceiptHash)))
     refuse('ACCEPTANCE_SUBJECT_INVALID', 'Invalid prior deployment receipt hash.');
@@ -136,6 +140,7 @@ export function acceptanceBinding(subject: AcceptanceSubject) {
     findings: evidence.findings.map(f => [f.findingId, f.category, f.severity]).sort(),
     coverage: { complete: evidence.coverage.complete, gaps: evidence.coverage.gaps.map(gap => JSON.stringify(gap)).sort() },
     ...(subject.sourceSelectionHash ? { sourceSelectionHash: subject.sourceSelectionHash } : {}),
+    ...(subject.snapshotRootHash ? { snapshotRootHash: subject.snapshotRootHash } : {}),
     ...(subject.versionBaselineReceiptHash ? { versionBaselineReceiptHash: subject.versionBaselineReceiptHash } : {}),
     ...(subject.projectCheckProof ? { projectCheckProof: subject.projectCheckProof } : {}),
     ...(subject.warningReviews ? { reviewScopeHash: subject.warningReviews.scopeHash,

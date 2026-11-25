@@ -16,7 +16,7 @@ const rootInfo = fs.statSync(root, { bigint: true });
 const configDir = path.join(root, 'profile');
 const dataDir = path.join(root, 'data');
 const allowed = path.join(root, 'allowed');
-for (const dir of [configDir, dataDir, allowed, 'corpus', 'schema', 'mods', 'browse', 'game'].map(dir => path.isAbsolute(dir) ? dir : path.join(allowed, dir))) fs.mkdirSync(dir, { recursive: true });
+for (const dir of [configDir, dataDir, allowed, 'corpus', 'schema', 'mods', 'browse', 'game', 'snap'].map(dir => path.isAbsolute(dir) ? dir : path.join(allowed, dir))) fs.mkdirSync(dir, { recursive: true });
 fs.writeFileSync(path.join(allowed, 'game', 'X4.exe'), 'synthetic marker; never executable');
 const previousConfigEnv = process.env.X4_CONFIG_DIR;
 const previousReferenceEnv = process.env.X4_REFERENCE_ROOT;
@@ -54,8 +54,8 @@ const configFile = path.join(configDir, 'config.json');
 writeXsdConfig({ x4ReferenceRoot: path.join(allowed, 'corpus'), xsdSchemaPath: path.join(allowed, 'schema'),
   x4GamePath: path.join(allowed, 'game'), modWorkspacePath: path.join(allowed, 'mods'), filesystemPath: path.join(allowed, 'browse'),
   x4LogPath: 'preserve-unrelated-log' });
-const accessBody = { instance, operationId: 'access-session-0001', fields: ['deployFormat', 'modWorkspacePath'],
-  roots: { modWorkspacePath: [allowed] }, durationMs: 600_000, restartPolicy: 'same-profile' };
+const accessBody = { instance, operationId: 'access-session-0001', fields: ['deployFormat', 'modWorkspacePath', 'snapshotTempPath'],
+  roots: { modWorkspacePath: [allowed], snapshotTempPath: [allowed, parent] }, durationMs: 600_000, restartPolicy: 'same-profile' };
 let requestId = '';
 async function preview(operationId: string, change: Record<string, string>) {
   const view = await service.read(actor);
@@ -87,13 +87,18 @@ try {
     assert.equal(result.success, true);
     assert.equal((await service.accessStatus(actor, accessBody.operationId)).state, 'approved');
     const view = await service.read(actor);
-    assert.deepEqual(Object.keys(view.effective).sort(), ['deployFormat', 'modWorkspacePath']);
+    assert.deepEqual(Object.keys(view.effective).sort(), ['deployFormat', 'modWorkspacePath', 'snapshotTempPath']);
     assert.equal(view.effective.deployFormat, 'loose');
     assert.equal(view.saved.deployFormat, '');
+    assert.equal(view.saved.snapshotTempPath, '');
+    assert.equal(view.effective.snapshotTempPath, parent);
     assert.equal(view.provenance.deployFormat, 'default');
     assert.equal(view.provenance.modWorkspacePath, 'saved');
+    assert.equal(view.provenance.snapshotTempPath, 'default');
+    assert.equal(view.snapshotTempSource, 'default');
     assert.equal(view.mutability.deployFormat, 'mutable');
     assert.equal(view.mutability.modWorkspacePath, 'mutable');
+    assert.equal(view.mutability.snapshotTempPath, 'mutable');
     assert.equal(view.deployFormatDefault, 'loose');
     assert.equal(view.deployFormatSource, 'default');
     const rows = receipts.listVerified(); assert.equal(rows.length, 1); assert.equal(rows[0].status, 'committed');
@@ -128,10 +133,24 @@ try {
     await rejects(() => preview('negative-lock-0001', { modWorkspacePath: path.join(allowed, 'new-mods') }), 'PROJECT_CHECK_OWNER_ROOTS_LOCKED');
     locked = false;
     await rejects(() => preview('negative-path-0001', { modWorkspacePath: 'relative' }), 'CONFIGURATION_PATH_NOT_ABSOLUTE');
-    const prepared = await preview('positive-root-0001', { modWorkspacePath: path.join(allowed, 'new-mods') });
+    const prepared = await preview('positive-root-0001', { modWorkspacePath: path.join(allowed, 'new-mods'), snapshotTempPath: path.join(allowed, 'snap') });
     const result = await service.apply(actor, { instance, proposalId: prepared.proposalId, operationId: prepared.operationId });
-    assert.equal(result.saved, true); assert.equal((await service.read(actor)).effective.modWorkspacePath, path.join(allowed, 'new-mods'));
+    assert.equal(result.saved, true);
+    const savedSnapView = await service.read(actor);
+    assert.equal(savedSnapView.effective.modWorkspacePath, path.join(allowed, 'new-mods'));
+    assert.equal(savedSnapView.effective.snapshotTempPath, path.join(allowed, 'snap'));
+    assert.equal(savedSnapView.saved.snapshotTempPath, path.join(allowed, 'snap'));
+    assert.equal(savedSnapView.provenance.snapshotTempPath, 'saved');
+    assert.equal(savedSnapView.snapshotTempSource, 'saved');
     assert(!fs.existsSync(path.join(allowed, 'new-mods')), 'Saving does not create/migrate a project.');
+    const clearPrepared = await preview('positive-clear-snap-0001', { snapshotTempPath: '' });
+    const clearResult = await service.apply(actor, { instance, proposalId: clearPrepared.proposalId, operationId: clearPrepared.operationId });
+    assert.equal(clearResult.saved, true);
+    const clearedSnapView = await service.read(actor);
+    assert.equal(clearedSnapView.saved.snapshotTempPath, '');
+    assert.equal(clearedSnapView.effective.snapshotTempPath, parent);
+    assert.equal(clearedSnapView.provenance.snapshotTempPath, 'default');
+    assert.equal(clearedSnapView.snapshotTempSource, 'default');
   });
   await check('saved settings remain saved when cache follow-up fails', async () => {
     followupFails = true;

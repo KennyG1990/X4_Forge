@@ -30,10 +30,14 @@ const baseConfig: Config = { x4GamePath: '', x4ReferenceRoot: corpus, xsdSchemaP
   schemaFiles: ['old.xsd'], deployFormat: 'loose', preserved: 'unrelated-value' };
 function resolve(config: XsdConfig, scenario: Scenario): ResolvedXsdConfig {
   const schemaDir = config.xsdSchemaPath || path.join(root, 'harvested');
+  const configuredSnapshotTempPath = scenario.owner ? '' : String(config.snapshotTempPath || '').trim();
   return { ...config, ...(scenario.scratch ? { ...pins, isolatedScratch: true as const } : {}),
     schemaDir, mdXsdPath: path.join(schemaDir, 'md.xsd'), commonXsdPath: path.join(schemaDir, 'common.xsd'),
     mdExists: !!scenario.schema, commonExists: !!scenario.schema,
-    x4ReferenceRoot: scenario.effectiveCorpus || config.x4ReferenceRoot || corpus, x4ReferenceExists: false };
+    x4ReferenceRoot: scenario.effectiveCorpus || config.x4ReferenceRoot || corpus, x4ReferenceExists: false,
+    snapshotTempPath: configuredSnapshotTempPath ? path.resolve(configuredSnapshotTempPath) : os.tmpdir(),
+    configuredSnapshotTempPath: configuredSnapshotTempPath || undefined,
+    snapshotTempSource: scenario.owner ? 'launcher' : (configuredSnapshotTempPath ? 'saved' : 'default') };
 }
 function callback(source: string): string {
   const file = ts.createSourceFile('server.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
@@ -105,7 +109,11 @@ const scenarios: Scenario[] = [
   { name: 'catalog only preserves schema path', body: { deployFormat: ' CATALOG ' } },
   { name: 'loose format', body: { deployFormat: 'loose' }, schema: true },
   { name: 'paths save with incomplete schema', body: { schemaDir: ' next-schema ', filesystemPath: ' next-browse ' } },
-  { name: 'explicit clears', body: { schemaDir: '', x4GamePath: '', x4ReferenceRoot: '', modWorkspacePath: '', filesystemPath: '' } },
+  { name: 'explicit clears', body: { schemaDir: '', x4GamePath: '', x4ReferenceRoot: '', modWorkspacePath: '', filesystemPath: '', snapshotTempPath: '' } },
+  { name: 'snapshot tempprotected corpus overlap', body: { snapshotTempPath: path.join(corpus, 'bad-snap') }, status: 400, code: 'PROTECTED_ROOT_OVERLAP', writes: 0 },
+  { name: 'snapshot temp workspace overlap', body: { snapshotTempPath: path.join(mods, 'bad-snap') }, status: 400, code: 'SNAPSHOT_TEMP_ROLE_OVERLAP', writes: 0 },
+  { name: 'snapshot temp missing folder refused before write', body: { snapshotTempPath: path.join(root, 'missing-snap') }, status: 400, code: 'SNAPSHOT_TEMP_NOT_FOUND', writes: 0 },
+  { name: 'owner locks snapshotTempPath', owner: true, body: { snapshotTempPath: '' }, status: 409, code: 'PROJECT_CHECK_OWNER_ROOTS_LOCKED', writes: 0 },
   { name: 'legacy null false number coercions', body: { schemaDir: null, modWorkspacePath: false, filesystemPath: 42 } },
   { name: 'unknown fields are ignored', body: { x4LogPath: 'new-log', surprise: 'ignored' } },
   { name: 'saved effective corpus changes', body: { x4ReferenceRoot: path.join(root, 'next-corpus') } },

@@ -828,7 +828,7 @@ async function main() {
   ];
   const sameCapabilityIds = (actual, expected) => Array.isArray(actual)
     && JSON.stringify([...actual].sort()) === JSON.stringify([...expected].sort());
-  const expectedCapabilityIdentity = id => `${id}@${['files.restore', 'files.write', 'history.list', 'history.revert', 'patch.readiness.analyze', 'workspace.compile', 'workspace.compile.result', 'workspace.domain.read', 'workspace.domain.write', 'workspace.read'].includes(id) ? 2 : 1}`;
+  const expectedCapabilityIdentity = id => `${id}@${['configuration.access.request', 'configuration.preview', 'configuration.read', 'configuration.status', 'files.restore', 'files.write', 'history.list', 'history.revert', 'patch.readiness.analyze', 'workspace.compile', 'workspace.compile.result', 'workspace.domain.read', 'workspace.domain.write', 'workspace.read'].includes(id) ? 2 : 1}`;
   ok('capability_contract_is_versioned_and_hashed',
     capabilityContract?.schemaVersion === 'forge.capability.v1' &&
     /^[a-f0-9]{64}$/.test(String(capabilityContract?.contractHash || '')) &&
@@ -6035,12 +6035,12 @@ async function main() {
       JSON.stringify(presetConfigDenied.json || {}));
 
     const cfgIdentities = [
-      'configuration.access.request@1',
+      'configuration.access.request@2',
       'configuration.access.status@1',
       'configuration.apply@1',
-      'configuration.preview@1',
-      'configuration.read@1',
-      'configuration.status@1',
+      'configuration.preview@2',
+      'configuration.read@2',
+      'configuration.status@2',
     ];
     const cfgMint = await mkKey('write', {
       label: 'route-int-config-agent',
@@ -7417,6 +7417,10 @@ async function main() {
         aiScriptsAnon.status === 401
           && aiScriptsRes.status === 200
           && aiScriptsRes.json?.ok === true
+          && typeof aiScriptsRes.json?.generation === 'string'
+          && aiScriptsRes.json.generation.length > 0
+          && aiScriptsRes.json.generation.length <= 128
+          && !aiScriptsRes.json.generation.includes('\n')
           && typeof aiScriptsRes.json?.total === 'number'
           && typeof aiScriptsRes.json?.orderCount === 'number'
           && Array.isArray(aiScriptsRes.json?.items)

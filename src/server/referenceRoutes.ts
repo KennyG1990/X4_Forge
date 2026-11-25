@@ -1,5 +1,6 @@
 /** Read-only canonical X4 unpacked-reference routes and validation service. */
 
+import { createHash } from 'node:crypto';
 import fs from 'fs';
 import path from 'path';
 import type { Express, Request, Response } from 'express';
@@ -312,7 +313,7 @@ export function respondAgentReferenceAiScripts(req: Request, res: Response): Res
     const sliced = filtered.slice(parsedOffset, parsedOffset + parsedLimit);
     return res.json({
       ok: true,
-      generation: corpus.manifestGeneration || corpus.signature,
+      generation: corpus.manifestGeneration || createHash('sha256').update(corpus.signature).digest('hex'),
       total: corpus.aiScripts.length,
       orderCount,
       filteredTotal: filtered.length,

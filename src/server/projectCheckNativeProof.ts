@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import type { ActionReceiptStore } from '../lib/actionReceiptStore';
 import { canonicalDirectoryPath, isSameOrDescendant, pathsOverlap } from '../lib/pathRoles';
+import { readXsdConfig } from '../lib/xsdParser';
 import { atomicWriteJson } from '../lib/workspaceState';
 import type { DeploymentSnapshot } from './deploymentSnapshot';
 import { ProjectCheckApprovalLedger } from './projectCheckApproval';
@@ -75,7 +76,8 @@ function assertDevScope(input: NativeProofScope, file: string, payloadRoot?: str
   const state = process.env.X4_STATE_DIR;
   const config = process.env.X4_CONFIG_DIR;
   const cache = process.env.X4_STUDIO_CACHE_DIR;
-  const scratch = os.tmpdir();
+  const configuredScratch = projectCheckOwnerProfileEnabled() ? '' : String(readXsdConfig().snapshotTempPath || '').trim();
+  const scratch = configuredScratch || os.tmpdir();
   const game = path.dirname(path.dirname(input.targetRoot));
   const roles = [input.sourceRoot, game, path.dirname(input.stagingRoot), input.store.root, coordination, state, config, cache, scratch];
   const paths = [...roles, input.workspaceRoot, input.addressedSourceRoot, input.targetRoot, path.dirname(input.targetRoot), input.stagingRoot,

@@ -32,7 +32,7 @@ export function planDirectoryConfigurationChange(
   ownerRootsLocked: boolean,
   readers: ConfigurationReaders = { readConfig: readXsdConfig, resolveConfig: resolveXsdConfig },
 ): DirectoryConfigurationPlan {
-  if (ownerRootsLocked && ['schemaDir', 'x4GamePath', 'modWorkspacePath', 'filesystemPath', 'x4ReferenceRoot']
+  if (ownerRootsLocked && ['schemaDir', 'x4GamePath', 'modWorkspacePath', 'filesystemPath', 'x4ReferenceRoot', 'snapshotTempPath']
     .some(field => body && Object.hasOwn(body, field))) {
     return { ok: false, status: 409, body: { success: false, code: 'PROJECT_CHECK_OWNER_ROOTS_LOCKED',
       error: 'Stop the isolated Dev host before changing its owner approval directory roles.' } };
@@ -43,6 +43,7 @@ export function planDirectoryConfigurationChange(
   const modWorkspacePath = body?.modWorkspacePath !== undefined ? String(body.modWorkspacePath || '').trim() : undefined;
   const filesystemPath = body?.filesystemPath !== undefined ? String(body.filesystemPath || '').trim() : undefined;
   const referenceRoot = body?.x4ReferenceRoot !== undefined ? String(body.x4ReferenceRoot || '').trim() : undefined;
+  const snapshotTempPath = body?.snapshotTempPath !== undefined ? String(body.snapshotTempPath || '').trim() : undefined;
   let deployFormat: DeployFormat | undefined;
   if (body?.deployFormat !== undefined) {
     const normalized = normalizeDeployFormat(body.deployFormat);
@@ -70,6 +71,7 @@ export function planDirectoryConfigurationChange(
     ...(!scratch && modWorkspacePath !== undefined ? { modWorkspacePath } : {}),
     ...(!scratch && filesystemPath !== undefined ? { filesystemPath } : {}),
     ...(referenceRoot !== undefined ? { x4ReferenceRoot: referenceRoot } : {}),
+    ...(snapshotTempPath !== undefined ? { snapshotTempPath } : {}),
     ...(deployFormat !== undefined ? { deployFormat } : {}),
     ...(schemaDir !== undefined ? { xsdSchemaPath: schemaDir } : {}),
     schemaFiles: ['md.xsd', 'common.xsd'],

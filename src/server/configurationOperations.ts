@@ -95,7 +95,7 @@ function strictFile(file: string, limit = CONFIGURATION_JOURNAL_MAX_BYTES): stri
   return raw;
 }
 function patch(value: unknown): Values {
-  if (!object(value) || !Object.keys(value).length || Object.keys(value).length > 6) return fail('CONFIGURATION_PATCH_INVALID', 400);
+  if (!object(value) || !Object.keys(value).length || Object.keys(value).length > CONFIGURATION_GRANT_FIELDS.length) return fail('CONFIGURATION_PATCH_INVALID', 400);
   const result: Values = {};
   for (const [field, item] of Object.entries(value)) {
     if (!(CONFIGURATION_GRANT_FIELDS as readonly string[]).includes(field) || typeof item !== 'string'
@@ -296,7 +296,7 @@ export function createConfigurationOperations(options: ConfigurationOperationOpt
     exact(body, ['instance', 'operationId', 'fields', 'roots', 'durationMs', 'restartPolicy'],
       ['instance', 'operationId', 'fields', 'roots', 'durationMs']);
     if (!sameInstance(body.instance, expectedInstance)) fail('CONFIGURATION_INSTANCE_MISMATCH');
-    if (!Array.isArray(body.fields) || !body.fields.length || body.fields.length > 6
+    if (!Array.isArray(body.fields) || !body.fields.length || body.fields.length > CONFIGURATION_GRANT_FIELDS.length
       || !body.fields.every(field => typeof field === 'string' && (CONFIGURATION_GRANT_FIELDS as readonly string[]).includes(field))
       || new Set(body.fields).size !== body.fields.length || !object(body.roots)
       || !Number.isSafeInteger(body.durationMs) || Number(body.durationMs) < 60_000 || Number(body.durationMs) > 86_400_000
@@ -420,6 +420,7 @@ export function createConfigurationOperations(options: ConfigurationOperationOpt
           ])),
           deployFormats: ['loose', 'catalog'], deployFormatDefault: 'loose' as const,
           deployFormatSource: saved.deployFormat ? 'saved' as const : 'default' as const,
+          snapshotTempSource: fieldProvenance('snapshotTempPath', current.config, current.resolved, !!locks.snapshotTempPath),
           schemaComplete: !!(current.resolved.mdExists && current.resolved.commonExists),
           x4ReferenceExists: !!current.resolved.x4ReferenceExists,
           grantExpiresAt: grant?.expiresAt };

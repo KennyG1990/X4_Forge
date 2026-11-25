@@ -567,5 +567,81 @@ try {
     corpusSecond[0][1] !== corpusFirst.find(([f]) => f === path.resolve(corpusLarge))?.[1]);
   assert.throws(() => deploymentCorpusFiles([corpusDir])); assertions++;
 
+  // #96 / #123: dedicated temporary deploy-snapshot directory isolation, sibling preservation,
+  // configured-root ENOSPC reporting without drive fallback, and pre-write root refusals.
+  const customSnapRoot = path.join(root, 'custom-snapshot-temp');
+  fs.mkdirSync(customSnapRoot, { recursive: true });
+  const siblingSentinel = path.join(customSnapRoot, 'unowned-sibling.txt');
+  fs.writeFileSync(siblingSentinel, 'keep-unowned-sibling', 'utf8');
+  const cleanPlan = buildArtifactPlan({
+    sourceRoot: '',
+    memoryOnly: true,
+    generatedFiles: {
+      'content.xml': '<content id="custom_snap_mod" name="Custom Snap Mod" version="100" date="2026-11-25"/>',
+      'md/Probe.xml': '<mdscript name="Probe"><cues/></mdscript>',
+    },
+  });
+  const defaultBeforeCustom = snapshotMembers();
+  const customSnap = captureDeploymentSnapshot(cleanPlan, 'loose', undefined, { configuredTempPath: customSnapRoot });
+  try {
+    check('configured snapshot temp root materializes inside configured directory',
+      customSnap.tempRoot.path === customSnapRoot
+      && customSnap.tempRoot.provenance === 'saved'
+      && path.dirname(path.dirname(customSnap.payloadRoot)) === customSnapRoot);
+    assert.deepEqual(snapshotMembers(), defaultBeforeCustom, 'default os.tmpdir() untouched when custom root configured'); assertions++;
+    check('configured snapshot temp root has exactly sibling + 1 owned stage while active',
+      fs.readdirSync(customSnapRoot).length === 2);
+  } finally {
+    customSnap.dispose();
+  }
+  assert.deepEqual(fs.readdirSync(customSnapRoot), ['unowned-sibling.txt'], 'dispose retires only owned snapshot dir'); assertions++;
+  assert.equal(fs.readFileSync(siblingSentinel, 'utf8'), 'keep-unowned-sibling'); assertions++;
+
+  // Low-space inside configured snapshot root reports that exact root without falling back to os.tmpdir().
+  fs.copyFileSync = (_from, to) => { throw scratchFailure('ENOSPC', String(to)); };
+  const diskSnapPlan = buildArtifactPlan({
+    sourceRoot: source,
+    rules: { exclude: ['excluded.lua', 'huge.lua', 'forge.rules.json'] },
+  });
+  try {
+    assert.throws(
+      () => captureDeploymentSnapshot(diskSnapPlan, 'loose', undefined, { configuredTempPath: customSnapRoot }),
+      (error: unknown) => {
+        const refusal = error as { code?: string; message?: string; storage?: { errno?: string; directory?: string } };
+        return refusal.code === 'DEPLOY_SNAPSHOT_NO_SPACE'
+          && refusal.storage?.errno === 'ENOSPC'
+          && refusal.storage.directory === customSnapRoot
+          && Boolean(refusal.message?.includes(customSnapRoot));
+      },
+    ); assertions++;
+    assert.deepEqual(snapshotMembers(), defaultBeforeCustom, 'ENOSPC on configured root never falls back to os.tmpdir()'); assertions++;
+    assert.deepEqual(fs.readdirSync(customSnapRoot), ['unowned-sibling.txt'], 'partial snapshot cleaned from configured root'); assertions++;
+  } finally {
+    fs.copyFileSync = copy;
+  }
+
+  // Missing/stale, aliased, drive-root, and workspace-overlapping roots refuse before writes.
+  assert.throws(
+    () => captureDeploymentSnapshot(cleanPlan, 'loose', undefined, { configuredTempPath: path.join(root, 'missing-snap-root') }),
+    { code: 'DEPLOY_SNAPSHOT_ROOT_STALE' },
+  ); assertions++;
+  const aliasedSnapRoot = path.join(root, 'aliased-snap-root');
+  fs.symlinkSync(customSnapRoot, aliasedSnapRoot, process.platform === 'win32' ? 'junction' : 'dir');
+  assert.throws(
+    () => captureDeploymentSnapshot(cleanPlan, 'loose', undefined, { configuredTempPath: aliasedSnapRoot }),
+    { code: 'DEPLOY_SNAPSHOT_ROOT_ALIASED' },
+  ); assertions++;
+  assert.throws(
+    () => captureDeploymentSnapshot(cleanPlan, 'loose', undefined, { configuredTempPath: path.parse(root).root }),
+    { code: 'DEPLOY_SNAPSHOT_ROOT_INVALID' },
+  ); assertions++;
+  assert.throws(
+    () => captureDeploymentSnapshot(cleanPlan, 'loose', undefined, {
+      configuredTempPath: customSnapRoot,
+      roleContext: { modWorkspacePath: customSnapRoot },
+    }),
+    { code: 'DEPLOY_SNAPSHOT_ROOT_INVALID' },
+  ); assertions++;
+
   console.log(JSON.stringify({ pass: true, assertions }));
 } finally { fs.rmSync(root, { recursive: true, force: true }); }

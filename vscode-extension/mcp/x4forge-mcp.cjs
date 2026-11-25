@@ -781,7 +781,7 @@ const TOOLS = [
   {
     name: "request_configuration_access",
     capabilityId: "configuration.access.request",
-    capabilityVersion: 1,
+    capabilityVersion: 2,
     description: "Submit a profile-bound owner approval request for explicit Forge configuration fields, physical root leases, and session duration. Requires an explicit key grant.",
     inputSchema: {
       type: "object",
@@ -801,7 +801,7 @@ const TOOLS = [
           type: "array",
           items: {
             type: "string",
-            enum: ["schemaDir", "x4ReferenceRoot", "x4GamePath", "modWorkspacePath", "filesystemPath", "deployFormat"],
+            enum: ["schemaDir", "x4ReferenceRoot", "x4GamePath", "modWorkspacePath", "filesystemPath", "snapshotTempPath", "deployFormat"],
           },
         },
         roots: {
@@ -812,6 +812,7 @@ const TOOLS = [
             x4GamePath: { type: "array", items: { type: "string", maxLength: 4096 } },
             modWorkspacePath: { type: "array", items: { type: "string", maxLength: 4096 } },
             filesystemPath: { type: "array", items: { type: "string", maxLength: 4096 } },
+            snapshotTempPath: { type: "array", items: { type: "string", maxLength: 4096 } },
           },
           additionalProperties: false,
         },
@@ -852,8 +853,8 @@ const TOOLS = [
   {
     name: "get_configuration",
     capabilityId: "configuration.read",
-    capabilityVersion: 1,
-    description: "Read allowlisted saved and effective directory settings, deployment format preference, resolver provenance, lock reasons, and current revision for this profile without exposing secrets.",
+    capabilityVersion: 2,
+    description: "Read allowlisted saved and effective directory settings, temporary deploy-snapshot root, deployment format preference, resolver provenance, lock reasons, and current revision for this profile without exposing secrets.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -868,8 +869,8 @@ const TOOLS = [
   {
     name: "preview_configuration_change",
     capabilityId: "configuration.preview",
-    capabilityVersion: 1,
-    description: "Validate a strict six-field directory or default deploy-format patch against the current profile revision, path-role locks, and physical root leases without modifying config.json.",
+    capabilityVersion: 2,
+    description: "Validate a strict seven-field directory, temporary deploy-snapshot root, or default deploy-format patch against the current profile revision, path-role locks, and physical root leases without modifying config.json.",
     inputSchema: {
       type: "object",
       properties: {
@@ -893,6 +894,7 @@ const TOOLS = [
             x4GamePath: { type: "string", maxLength: 4096 },
             modWorkspacePath: { type: "string", maxLength: 4096 },
             filesystemPath: { type: "string", maxLength: 4096 },
+            snapshotTempPath: { type: "string", maxLength: 4096 },
             deployFormat: { type: "string", enum: ["loose", "catalog"] },
           },
           additionalProperties: false,
@@ -940,7 +942,7 @@ const TOOLS = [
   {
     name: "get_configuration_operation_status",
     capabilityId: "configuration.status",
-    capabilityVersion: 1,
+    capabilityVersion: 2,
     description: "Inspect the saved, follow-up, receipt, and recovery-patch status of a caller-owned configuration preview or apply operation.",
     inputSchema: {
       type: "object",
@@ -4910,8 +4912,9 @@ function authoredNavigationGrantAllowed(capability, authority) {
 
 function configurationGrantAllowed(capability, authority) {
   const grant = authority.constraint;
-  return capability.version === 1 && isRecord(grant)
-    && grant.capabilityIdentities.includes(capability.id + "@1")
+  const expectedVersion = capability.id === "configuration.access.status" || capability.id === "configuration.apply" ? 1 : 2;
+  return capability.version === expectedVersion && isRecord(grant)
+    && grant.capabilityIdentities.includes(`${capability.id}@${expectedVersion}`)
     && capability.effects.every((effect) => grant.allowedEffects.includes(effect));
 }
 

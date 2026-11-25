@@ -7,7 +7,7 @@ import { isCanonicalSameOrDescendant } from './pathRoles';
 import { normalizeDeployFormat } from './deployFormat';
 
 export const CONFIGURATION_GRANT_FIELDS = [
-  'schemaDir', 'x4ReferenceRoot', 'x4GamePath', 'modWorkspacePath', 'filesystemPath', 'deployFormat',
+  'schemaDir', 'x4ReferenceRoot', 'x4GamePath', 'modWorkspacePath', 'filesystemPath', 'snapshotTempPath', 'deployFormat',
 ] as const;
 export type ConfigurationGrantField = typeof CONFIGURATION_GRANT_FIELDS[number];
 type PathField = Exclude<ConfigurationGrantField, 'deployFormat'>;
@@ -94,7 +94,7 @@ export function isConfigurationGrant(value: unknown): value is ConfigurationGran
     || value.version !== 1 || !isConfigurationGrantInstance(value.instance)
     || !integer(value.notBefore) || !integer(value.expiresAt)
     || value.expiresAt <= value.notBefore || value.expiresAt - value.notBefore > CONFIGURATION_GRANT_MAX_MS
-    || !Array.isArray(value.fields) || value.fields.length < 1 || value.fields.length > 6
+    || !Array.isArray(value.fields) || value.fields.length < 1 || value.fields.length > CONFIGURATION_GRANT_FIELDS.length
     || !value.fields.every(field => typeof field === 'string' && fieldSet.has(field))
     || new Set(value.fields).size !== value.fields.length
     || JSON.stringify([...value.fields].sort()) !== JSON.stringify(value.fields)
@@ -137,7 +137,7 @@ export function createConfigurationGrant(
     || !integer(request.expiresAt) || request.expiresAt <= context.now
     || request.expiresAt - context.now > CONFIGURATION_GRANT_MAX_MS
     || (context.keyExpiresAt !== null && request.expiresAt > context.keyExpiresAt)
-    || !Array.isArray(request.fields) || request.fields.length < 1 || request.fields.length > 6
+    || !Array.isArray(request.fields) || request.fields.length < 1 || request.fields.length > CONFIGURATION_GRANT_FIELDS.length
     || !request.fields.every(field => typeof field === 'string' && fieldSet.has(field))
     || new Set(request.fields).size !== request.fields.length || !record(request.roots)) {
     throw new Error('Configuration grant request, instance or lifetime is invalid.');
@@ -185,7 +185,7 @@ export function evaluateConfigurationGrantRestrictions(
   if (!(grant.restartPolicy === 'same-profile' ? grant.instance.profileId === input.instance.profileId
     : sameInstance(grant.instance, input.instance))) return deny('CONFIGURATION_INSTANCE_MISMATCH');
   if (input.now < grant.notBefore || input.now >= grant.expiresAt) return deny('CONFIGURATION_GRANT_EXPIRED');
-  if (!Array.isArray(input.fields) || !input.fields.length || input.fields.length > 6
+  if (!Array.isArray(input.fields) || !input.fields.length || input.fields.length > CONFIGURATION_GRANT_FIELDS.length
     || new Set(input.fields).size !== input.fields.length || !record(input.effectiveValues)) return deny('CONFIGURATION_GRANT_INVALID');
   for (const field of input.fields) {
     if (!grant.fields.includes(field as ConfigurationGrantField)) return deny('CONFIGURATION_FIELD_DENIED', field);

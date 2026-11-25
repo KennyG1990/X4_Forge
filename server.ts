@@ -77,7 +77,7 @@ import { runPositionPickerSelftest } from "./src/lib/positionPicker";
 import { debugScan as catDatDebugScan, extractBaseGameFile as catDatExtractBaseGameFile, extractEntries as catDatExtractEntries, findCatDatArchives, parseCat, readEntryBytes, readEntryText, runCatDatSelftest } from "./src/lib/x4CatDat";
 import { validateXmlAgainstSchema, runXsdValidateSelftest, type SchemaIndex } from "./src/lib/xsdValidate";
 import { runReferenceLanguageSelftest } from "./src/lib/referenceLanguage";
-import { isSameOrDescendant, pathsOverlap, resolveDevScratchRoles, runPathRolesSelftest, validateDevScratchStorage, validateDirectoryRoles, validateProtectedWriteTargets, type DirectoryField } from "./src/lib/pathRoles";
+import { defaultSnapshotTempPath, isSameOrDescendant, pathsOverlap, resolveDevScratchRoles, runPathRolesSelftest, validateDevScratchStorage, validateDirectoryRoles, validateProtectedWriteTargets, type DirectoryField } from "./src/lib/pathRoles";
 import { parseXMLToWorkspace, setSchemaTemplatesForImport } from "./src/lib/xmlParser";
 import { reconcileImportedGraph } from './src/lib/importedIdentity';
 import type { SchemaLibrary } from "./src/lib/schemaTypes";
@@ -166,7 +166,7 @@ import { createNativePerformanceBroker, type NativeBrokerActor, type NativeBroke
 import { createNativePerformanceRetirementNotice, type NativePerformanceEndpoint } from './shared/nativePerformanceChannel';
 import { isNativeInstanceId } from './shared/nativePerformanceProtocol';
 import { performance as nativeBrokerClock } from 'node:perf_hooks';
-import { captureDeploymentSnapshot, computeDeployCandidateIdentity, DeploymentSnapshotStorageError, type DeploymentSnapshot } from './src/server/deploymentSnapshot';
+import { captureDeploymentSnapshot, computeDeployCandidateIdentity, DeploymentSnapshotRootError, DeploymentSnapshotStorageError, type DeploymentSnapshot } from './src/server/deploymentSnapshot';
 import { previewLuaRegistrationChange } from './src/server/deployLuaRegistration';
 import { PROJECT_CHECKS_MAX_BYTES, PROJECT_CHECKS_PATH } from './src/server/projectCheckProposal';
 import { projectCheckApprovalCoordinationKey } from './src/server/projectCheckApproval';
@@ -980,7 +980,7 @@ const CONFIGURATION_APPROVAL_GUIDANCE_CODES = new Set([
   'CONFIGURATION_AUTHORITY_DENIED',
 ]);
 const CONFIGURATION_APPROVAL_WORKFLOW = Object.freeze({
-  requestCapability: 'configuration.access.request@1',
+  requestCapability: 'configuration.access.request@2',
   requestEndpoint: 'POST /api/agent/configuration/access/request',
   requestMcpTool: 'request_configuration_access',
   statusCapability: 'configuration.access.status@1',
@@ -5559,6 +5559,8 @@ function directoryRoleIssues(resolved: ResolvedXsdConfig) {
     x4ReferenceRoot: resolved.x4ReferenceRoot,
     modWorkspacePath: resolved.modWorkspacePath,
     filesystemPath: resolved.filesystemPath,
+    snapshotTempPath: resolved.snapshotTempPath,
+    configuredSnapshotTempPath: resolved.configuredSnapshotTempPath,
   }, resolved.isolatedScratch ? resolved.x4GamePath : undefined);
 }
 
@@ -5650,6 +5652,12 @@ app.get("/api/schema/config", (req, res) => {
       workspaceRoot: workspaceRootBinding(resolved.modWorkspacePath),
       ...(projectCheckOwnerProfileEnabled() ? { directorySettingsLocked: true } : {}),
       deployFormat: { format: effectiveFormat.format, source: effectiveFormat.source, options: [...DEPLOY_FORMATS] },
+      snapshotTemp: {
+        effectivePath: resolved.snapshotTempPath,
+        configuredPath: resolved.configuredSnapshotTempPath || '',
+        source: projectCheckOwnerProfileEnabled() ? 'launcher' : resolved.snapshotTempSource,
+        defaultPath: defaultSnapshotTempPath(),
+      },
       directorySafety: {
         safe: issues.length === 0,
         issues,
@@ -20218,7 +20226,7 @@ function runCompileArtifactSelftest() {
     });
     const patchManifest = buildWorkspaceFileManifest(patchOnly).files;
     const beforeGuardTarget = path.join(root, 'guarded-extensions');
-    const frozen = captureDeploymentSnapshot(deploymentPlan(patchOnly, 'catalog').plan, 'catalog');
+    const frozen = captureDeploymentSnapshot(deploymentPlan(patchOnly, 'catalog').plan, 'catalog', undefined, { configuredTempPath: null });
     try {
       let guardFailure = '';
       try {
@@ -22397,6 +22405,15 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
   let snapshot: DeploymentSnapshot | undefined;
   let projectCheckStaging: Readonly<ProjectCheckStageContext> | undefined;
   let nativeCheckProof: ReturnType<typeof openNativeProjectCheckProof> | undefined;
+  const retireDeployRequestScratch = () => {
+    try { nativeCheckProof?.dispose(); } catch (error) { console.warn('Project check proof cleanup failed', error); }
+    try { snapshot?.dispose(); } catch (error) { console.warn('Deployment snapshot cleanup failed', error); }
+  };
+  const originalDeployResJson = res.json;
+  res.json = function (this: express.Response, body?: unknown) {
+    retireDeployRequestScratch();
+    return originalDeployResJson.call(this, body);
+  };
   let deployReceipt: ActionReceipt | undefined;
   let effectReport: { status: 'available'; hash: string } | { status: 'unavailable' } | undefined;
   const recordFailedDeploy = (rolledBack: boolean, targetConflict = false) => {
@@ -22700,6 +22717,14 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     try {
       snapshot = captureDeploymentSnapshot(sourcePlan, deployFormat, projectCheckStaging);
     } catch (error) {
+      if (error instanceof DeploymentSnapshotRootError) {
+        check('snapshot', 'Deployment snapshot', 'fail', error.message);
+        return res.status(409).json(failWith('snapshot', {
+          code: error.code,
+          error: error.message,
+          snapshotRoot: error.snapshotRoot,
+        }));
+      }
       if (!(error instanceof DeploymentSnapshotStorageError)) throw error;
       check('snapshot', 'Deployment snapshot', 'fail', error.message);
       return res.status(507).json(failWith('snapshot', { code: error.code, error: error.message, storage: error.storage }));
@@ -22722,11 +22747,18 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       ? { path: generatedCustomLua.path, text: generatedCustomLua.content } : undefined;
     const emittedXmlCount = Object.keys(files).filter(k => /\.xml$/i.test(k)).length;
     const hasXmlPatches = Array.isArray(ws?.xmlPatches) && ws.xmlPatches.some((p: any) => p?.includeInBuild !== false);
+    const snapshotRootHash = trustHash([
+      snapshot.tempRoot.path,
+      snapshot.tempRoot.device,
+      snapshot.tempRoot.inode,
+      snapshot.tempRoot.provenance,
+    ]);
     const configSignature = trustHash([
       x4GamePath,
       modWorkspacePath || '',
       resolved.x4ReferenceRoot || '',
       resolved.filesystemPath || '',
+      snapshotRootHash,
       (resolved as { x4Version?: string }).x4Version || '',
     ]);
     const wsDoctorHash = deployWorkspaceDoctorModelHash(
@@ -23146,6 +23178,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     const subject: AcceptanceSubject = { evidence, artifactHash, validatorHash: nativeCheckProof
       ? trustHash([deployValidatorHash, nativeCheckProof.proof.reviewBasisHash]) : deployValidatorHash, corpusHash,
       targetHash: targetHashFor(deployFormat),
+      snapshotRootHash,
       ...(versionChangesPerRelease && previousBuild ? { versionBaselineReceiptHash: previousBuild.hash } : {}),
       ...(selectedSource ? { sourceSelectionHash: trustHash([selectedSource.root, selectedSource.canonicalKey]) } : {}) };
     if (nativeCheckProof) subject.projectCheckProof = { id: nativeCheckProof.proof.id, hash: nativeCheckProof.proof.hash };
@@ -23787,8 +23820,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
       deployment: deploymentFidelity(),
       error: error?.message || 'deploy-verify failed', ...(rollback ? { rollback } : {}), timings: timings() });
   } finally {
-    try { nativeCheckProof?.dispose(); } catch (error) { console.warn('Project check proof cleanup failed', error); }
-    try { snapshot?.dispose(); } catch (error) { console.warn('Deployment snapshot cleanup failed', error); }
+    retireDeployRequestScratch();
   }
 }
 
