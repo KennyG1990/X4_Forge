@@ -20,6 +20,7 @@ import { ModWorkspace, sanitizeWorkspace, TranslationItem, TranslationPage, TFil
 import { parseXMLToWorkspace } from '../lib/xmlParser';
 import { chooseDialog, promptDialog } from '../lib/uiDialogs';
 import { canonicalMd } from '../lib/mdCanonicalComparison';
+import { reconcileFailedWorkspaceWrite, type WorkspaceReadbackSnapshot } from '../lib/workspaceWriteRecovery';
 import { generateMDXML } from '../types';
 
 export interface FSItem {
@@ -63,13 +64,50 @@ const workspaceFilePath = (root: string, relative: string) =>
   `${normalizedDiskPath(root).replace(/\/+$/, '')}/${normalizedDiskPath(relative)}`;
 const isSha256 = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 
+async function readWorkspaceSnapshotForRecovery(path: string): Promise<WorkspaceReadbackSnapshot> {
+  const response = await fetch(`/api/fs/read?root=workspace&path=${encodeURIComponent(path)}`);
+  if (response.status === 404) {
+    const errBody = await response.json().catch(() => ({})) as { code?: string };
+    if (errBody.code === 'FILE_NOT_FOUND_IN_ROOT') return { state: 'absent' };
+    return { state: 'unavailable' };
+  }
+  if (!response.ok) return { state: 'unavailable' };
+  const data = await response.json().catch(() => ({})) as FileReadResponse;
+  if (
+    data.root !== 'workspace'
+    || typeof data.absolutePath !== 'string'
+    || normalizedDiskPath(data.absolutePath) !== normalizedDiskPath(path)
+    || !isSha256(data.sha256)
+  ) {
+    return { state: 'unavailable' };
+  }
+  return {
+    state: 'file',
+    sha256: data.sha256,
+    ...(typeof data.content === 'string' ? { content: data.content } : {}),
+  };
+}
+
 async function writeFile(path: string, content: string, expectedSha256: string | null): Promise<string> {
   const response = await fetch('/api/fs/write', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path, content, expectedSha256, strict: true }),
   });
-  if (!response.ok) throw new Error(await responseErrorMessage(response, 'Failed to write file on server.'));
+  if (!response.ok) {
+    const errBody = await response.json().catch((): ErrorResponse => ({}));
+    const reconciled = await reconcileFailedWorkspaceWrite({
+      status: response.status,
+      body: errBody,
+      headerRequestId: response.headers.get('X-Forge-Write-Request-Id'),
+      fallbackMessage: 'Failed to write file on server.',
+      intendedContent: content,
+      expectedPreviousSha256: expectedSha256,
+      readback: response.status >= 500 ? () => readWorkspaceSnapshotForRecovery(path) : undefined,
+    });
+    if (reconciled.kind === 'landed-verified') return reconciled.sha256;
+    throw new Error(reconciled.message);
+  }
   const reply = await response.json() as { success?: boolean; written?: {
     root?: string; absolutePath?: string; sha256?: string; byteExact?: boolean;
   } };

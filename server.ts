@@ -7128,6 +7128,7 @@ app.post("/api/fs/write", coordinatedSourceOperation((req, res) => {
     const failure = workspaceWriteFailure(attempt, incoming, error);
     console.error('[workspace-file-write]', JSON.stringify(failure));
     delete res.locals.sourceOperation;
+    res.setHeader('X-Forge-Write-Request-Id', failure.requestId);
     return res.status(500).json({
       success: false,
       code: 'WORKSPACE_FILE_WRITE_FAILED',
@@ -14874,11 +14875,14 @@ app.post("/api/agent/files/write", (req, res, next) => {
     const failure = workspaceWriteFailure(attempt, incoming, error);
     console.error('[workspace-file-write]', JSON.stringify(failure));
     delete res.locals.sourceOperation;
+    res.setHeader('X-Forge-Write-Request-Id', failure.requestId);
     return res.status(500).json({
       ok: false,
       success: false,
       code: 'WORKSPACE_FILE_WRITE_FAILED',
-      error: 'Workspace file write failed.',
+      error: `Workspace write failed during ${failure.stage}. Inspect the workspace file before deciding whether to retry.`,
+      failedStages: [failure.stage],
+      writeFailure: failure,
       failure,
     });
   }

@@ -10,6 +10,7 @@ import { LEDGER_QUIET_ROUTES, ledgerRouteKind } from './agentHistory';
 import { runForgeKnowledgeSelftest } from './forgeKnowledge';
 import { runWorkspaceDomainAuthoringSelftest } from './workspaceDomainAuthoring';
 import { runDriverLeaseSelftest } from './driverLease';
+import { runWorkspaceWriteRecoverySelftest } from './workspaceWriteRecovery';
 import {
   FORGE_CAPABILITIES,
   FORGE_UI_ACTION_PARITY_CENSUS,
@@ -710,6 +711,7 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
       ).some(error => error.includes('requires an ownerIssue')));
 
   checks.push(...runNativeForgeCapabilitiesSelftest().checks);
+  checks.push(...runWorkspaceWriteRecoverySelftest().checks);
   return { pass: checks.every(item => item.pass), checks, contractHash: contract.contractHash };
 }
 

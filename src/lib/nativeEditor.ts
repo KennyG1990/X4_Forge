@@ -1,4 +1,10 @@
 import type { ModWorkspace } from '../types';
+import {
+  extractWorkspaceWriteFailure,
+  formatWorkspaceWriteErrorMessage,
+  reconcileFailedWorkspaceWrite,
+  type WorkspaceReadbackSnapshot,
+} from './workspaceWriteRecovery';
 
 export interface NativeEditorOpenRequest {
   source: 'x4forge-studio';
@@ -377,11 +383,12 @@ export async function openOrMaterializeInNativeEditor(
     const materializeFile = async (relativePath: string, fileContent: string) => {
       requireSameSelection();
       unconfirmedPath = relativePath;
+      const targetRelPath = `${inventory.sourceFolder}/${relativePath}`;
       const writeResponse = await fetch('/api/fs/write', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          path: `${inventory.sourceFolder}/${relativePath}`,
+          path: targetRelPath,
           content: fileContent,
           strict: true,
           expectedSha256: null,
@@ -390,18 +397,77 @@ export async function openOrMaterializeInNativeEditor(
       });
       // Read the acknowledgement even after a selection change. The prior write
       // may have committed and its result must survive cancellation of the next step.
-      const reply = await writeResponse.json() as {
+      const reply = await writeResponse.json().catch(() => ({})) as {
         success?: boolean;
         error?: string;
         code?: string;
         workspaceRootId?: string;
         written?: { root?: string; byteExact?: boolean };
+        writeFailure?: unknown;
       };
       if (!writeResponse.ok) {
+        const headerRequestId = writeResponse.headers?.get?.('X-Forge-Write-Request-Id') ?? null;
         if (reply.code === 'FILE_CHANGED' || reply.code === 'REJECTED_BY_STRICT_VALIDATION' || reply.code === 'WORKSPACE_ROOT_CHANGED') {
           unconfirmedPath = undefined;
+          throw new Error(formatWorkspaceWriteErrorMessage(reply, `HTTP ${writeResponse.status}`, {
+            status: writeResponse.status,
+            headerRequestId,
+          }));
         }
-        throw new Error(reply.error || `HTTP ${writeResponse.status}`);
+        const telemetry = extractWorkspaceWriteFailure(reply, headerRequestId);
+        if (telemetry?.outcome === 'target-absent' || telemetry?.outcome === 'before-bytes-observed') {
+          unconfirmedPath = undefined;
+          throw new Error(formatWorkspaceWriteErrorMessage(reply, `HTTP ${writeResponse.status}`, {
+            status: writeResponse.status,
+            headerRequestId,
+          }));
+        }
+        if (writeResponse.status >= 500) {
+          const reconciled = await reconcileFailedWorkspaceWrite({
+            status: writeResponse.status,
+            body: reply,
+            headerRequestId,
+            fallbackMessage: `HTTP ${writeResponse.status}`,
+            intendedContent: fileContent,
+            expectedPreviousSha256: null,
+            expectedWorkspaceRootId,
+            readback: async (): Promise<WorkspaceReadbackSnapshot> => {
+              const readRes = await fetch(
+                `/api/fs/read?root=workspace&path=${encodeURIComponent(targetRelPath)}&expectedWorkspaceRootId=${encodeURIComponent(expectedWorkspaceRootId)}`,
+              );
+              if (readRes.status === 404) {
+                const errJson = await readRes.json().catch(() => ({})) as { code?: string };
+                return errJson.code === 'FILE_NOT_FOUND_IN_ROOT' ? { state: 'absent' } : { state: 'unavailable' };
+              }
+              if (!readRes.ok) return { state: 'unavailable' };
+              const readJson = await readRes.json().catch(() => ({})) as {
+                root?: string;
+                sha256?: string;
+                content?: string;
+                workspaceRootId?: string;
+              };
+              if (readJson.root !== 'workspace' || typeof readJson.sha256 !== 'string') return { state: 'unavailable' };
+              return {
+                state: 'file',
+                sha256: readJson.sha256,
+                content: readJson.content,
+                workspaceRootId: readJson.workspaceRootId,
+              };
+            },
+          });
+          if (reconciled.kind === 'landed-verified') {
+            unconfirmedPath = undefined;
+            return;
+          }
+          if (reconciled.kind === 'unchanged-verified') {
+            unconfirmedPath = undefined;
+          }
+          throw new Error(reconciled.message);
+        }
+        throw new Error(formatWorkspaceWriteErrorMessage(reply, `HTTP ${writeResponse.status}`, {
+          status: writeResponse.status,
+          headerRequestId,
+        }));
       }
       if (reply.success !== true || reply.workspaceRootId !== expectedWorkspaceRootId
         || reply.written?.root !== 'workspace' || reply.written.byteExact !== true) {

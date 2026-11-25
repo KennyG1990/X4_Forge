@@ -376,7 +376,7 @@ async function req(method, urlPath, token, body, options = {}) {
     const res = await fetch(BASE + urlPath, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
     const raw = await res.text();
     let json = null; try { json = JSON.parse(raw); } catch { /* non-json */ }
-    return { status: res.status, json, raw };
+    return { status: res.status, json, raw, headers: Object.fromEntries(res.headers.entries()) };
   } catch (e) {
     return { status: 0, json: null, error: String(e) };
   }
@@ -5132,12 +5132,44 @@ async function main() {
   const writeFailure = refusedWrite.json?.writeFailure;
   ok('workspace_write_io_failure_reports_sanitized_phase_and_observation',
     refusedWrite.status === 500 && refusedWrite.json?.code === 'WORKSPACE_FILE_WRITE_FAILED'
-      && /^[a-f0-9-]{36}$/.test(writeFailure?.requestId) && writeFailure?.stage === 'replace'
+      && /^[a-f0-9-]{36}$/.test(writeFailure?.requestId)
+      && refusedWrite.headers?.['x-forge-write-request-id'] === writeFailure?.requestId
+      && writeFailure?.stage === 'replace'
       && ['unknown', 'target-absent'].includes(writeFailure?.outcome)
       && writeFailure?.requestedSha256 === crypto.createHash('sha256').update('private attempted write').digest('hex')
       && !refusedWrite.json?.sourceOperation && !JSON.stringify(refusedWrite.json).includes('probe.lua')
       && !JSON.stringify(refusedWrite.json).includes('private attempted write')
       && fs.readFileSync(path.join(safeWorkspace, 'ui/probe.lua'), 'utf8') === luaBody);
+
+  // #68 (FF-29): /api/agent/files/write parity, X-Forge-Write-Request-Id header, readback-before-retry, and explicit recovery
+  const handoffBefore = 'batch 103 handoff '.repeat(494) + '##########'; // 8,902 bytes
+  const handoffBeforeSha = crypto.createHash('sha256').update(handoffBefore, 'utf8').digest('hex');
+  const handoffSeed = await req('POST', '/api/agent/files/write', SESSION_TOKEN, {
+    path: 'SESSION-HANDOFF.md', content: handoffBefore, expectedSha256: null, strict: false,
+  });
+  ok('handoff_seed_write_commits_8902_bytes',
+    handoffSeed.status === 200 && handoffSeed.json?.written?.bytes === 8902 && handoffSeed.json?.written?.sha256 === handoffBeforeSha);
+  const handoffAttempted = 'batch 104 handoff '.repeat(568) + '#######'; // 10,231 bytes
+  const handoffAttemptedSha = crypto.createHash('sha256').update(handoffAttempted, 'utf8').digest('hex');
+  const agentRefusedWrite = await req('POST', '/api/agent/files/write', SESSION_TOKEN, {
+    path: 'SESSION-HANDOFF.md/child.md', content: handoffAttempted, expectedSha256: null, strict: false,
+  });
+  const agentWriteFailure = agentRefusedWrite.json?.writeFailure;
+  const handoffReadback = await req('GET', `/api/fs/read?root=workspace&path=${encodeURIComponent('SESSION-HANDOFF.md')}`, SESSION_TOKEN);
+  const handoffRecovered = await req('POST', '/api/agent/files/write', SESSION_TOKEN, {
+    path: 'SESSION-HANDOFF.md', content: handoffAttempted, expectedSha256: handoffReadback.json?.sha256, strict: false,
+  });
+  ok('agent_files_write_io_failure_correlates_request_id_preserves_prior_bytes_and_recovers_after_readback',
+    agentRefusedWrite.status === 500
+      && agentRefusedWrite.json?.code === 'WORKSPACE_FILE_WRITE_FAILED'
+      && Array.isArray(agentRefusedWrite.json?.failedStages) && agentRefusedWrite.json.failedStages[0] === 'replace'
+      && /^[a-f0-9-]{36}$/.test(agentWriteFailure?.requestId)
+      && agentRefusedWrite.headers?.['x-forge-write-request-id'] === agentWriteFailure?.requestId
+      && agentWriteFailure?.requestedSha256 === handoffAttemptedSha
+      && !JSON.stringify(agentRefusedWrite.json).includes('SESSION-HANDOFF.md')
+      && !JSON.stringify(agentRefusedWrite.json).includes('batch 104 handoff')
+      && handoffReadback.status === 200 && handoffReadback.json?.bytes === 8902 && handoffReadback.json?.sha256 === handoffBeforeSha
+      && handoffRecovered.status === 200 && handoffRecovered.json?.written?.bytes === 10231 && handoffRecovered.json?.written?.sha256 === handoffAttemptedSha);
 
   // --- B86: agent action ledger ----------------------------------------------------------
   // The load-bearing property is that payloads are never inlined: a ~295 KB write must produce
