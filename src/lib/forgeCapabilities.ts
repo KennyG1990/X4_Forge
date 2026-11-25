@@ -6499,11 +6499,12 @@ export const FORGE_UI_ACTION_PARITY_CENSUS: readonly ForgeUiActionParityRowV1[] 
   {
     id: 'extension.sidecar.lifecycle',
     domain: 'extension-and-backend-lifecycle',
-    title: 'Open Studio webview and start, stop, or inspect the managed local backend sidecar',
+    title: 'Open Studio webview and start, restart, stop, or inspect the managed local backend sidecar',
     status: 'missing',
     uiAnchors: [
       'vscode-extension/src/extension.ts::x4forge.openStudio',
       'vscode-extension/src/extension.ts::x4forge.startSidecar',
+      'vscode-extension/src/extension.ts::x4forge.restartSidecar',
       'vscode-extension/src/extension.ts::x4forge.stopSidecar',
       'vscode-extension/src/extension.ts::x4forge.showLogs',
     ],
@@ -6514,12 +6515,13 @@ export const FORGE_UI_ACTION_PARITY_CENSUS: readonly ForgeUiActionParityRowV1[] 
       extensionCommands: [
         'x4forge.openStudio',
         'x4forge.startSidecar',
+        'x4forge.restartSidecar',
         'x4forge.stopSidecar',
         'x4forge.showLogs',
       ],
     },
     ownerIssue: '#53',
-    missingBehavior: 'Backend sidecar start/stop/log inspection and opening the Studio panel are VS Code/Antigravity host commands with no headless agent or MCP lifecycle bootstrap (#53).',
+    missingBehavior: 'Backend sidecar start/restart/stop/log inspection and opening the Studio panel are VS Code/Antigravity host commands with no headless agent or MCP lifecycle bootstrap (#53).',
   },
   {
     id: 'files.bulk_transform.execute',

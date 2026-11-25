@@ -91,6 +91,7 @@ import {
   type McpAllowedTtl,
   type McpRegistrationMetadataV1,
 } from "./mcpRegistrationLifecycle";
+import { createDevReloadWatcher, type DevReloadWatcher } from "./devReloadTrigger";
 
 interface BackendHandle {
   baseUrl: string;
@@ -113,6 +114,7 @@ let backend: BackendHandle | null = null;
 let propertyCorrection: ReturnType<typeof registerPropertyCorrection> | undefined;
 let nativePerformanceHost: ReturnType<typeof createNativePerformanceHost> | undefined;
 let mcpRegistration: ReturnType<typeof createMcpRegistrationLifecycle> | undefined;
+let devReloadWatcher: DevReloadWatcher | undefined;
 const nativeBridges = new WeakMap<ChildProcess, ReturnType<ReturnType<typeof createNativePerformanceHost>["attach"]>>();
 type NativeFinish = (outcome?: ForgePerformanceOutcome) => void;
 
@@ -1440,6 +1442,66 @@ async function startLocalBackend(context: vscode.ExtensionContext): Promise<void
   }
 }
 
+async function restartLocalBackend(
+  context: vscode.ExtensionContext,
+  options: { reason: string; interactive: boolean },
+): Promise<void> {
+  const finish = beginNativeOperation(options.interactive ? 'native.command' : 'native.backend.restart');
+  let outcome: ForgePerformanceOutcome = 'ok';
+  if (backend && !backend.owned) {
+    if (options.interactive) {
+      void vscode.window.showInformationMessage(
+        "X4 Forge: attached to an externally-run Forge — the extension will not stop or restart it.",
+      );
+    } else {
+      log(`[dev-reload] skipped reload trigger (${options.reason}): attached to an externally-run Forge`);
+    }
+    finish(outcome);
+    return;
+  }
+  if (!options.interactive && !backend?.owned && !startingChild) {
+    log(`[dev-reload] skipped reload trigger (${options.reason}): no owned sidecar is running`);
+    finish(outcome);
+    return;
+  }
+
+  restartTimestamps = [];
+  const saved = context.globalState.get<string>('x4forge.workspaceId') ?? '';
+  stopOwnedSidecar(options.reason);
+  const generation = backendStopGeneration;
+  try {
+    const runEnsure = () => ensureBackend(context, saved);
+    const handle = options.interactive
+      ? await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: "X4 Forge: restarting local backend…" },
+          runEnsure,
+        )
+      : await runEnsure();
+    assertBackendStartCurrent(generation, handle.child);
+    log(`local backend restarted at ${handle.baseUrl} (${options.reason})`);
+    if (handle.debugPort && !handle.workspaceId) {
+      if (options.interactive) {
+        void vscode.window.showInformationMessage("X4 Forge: local backend restarted and is waiting for the debugger.");
+      }
+      return;
+    }
+    if (options.interactive) {
+      void vscode.window.showInformationMessage("X4 Forge: local backend restarted.");
+    } else {
+      void vscode.window.setStatusBarMessage(`X4 Forge: live backend reloaded on :${handle.port}`, 5000);
+    }
+  } catch (error) {
+    outcome = generation !== backendStopGeneration ? 'superseded' : 'error';
+    if (generation === backendStopGeneration) {
+      showBackendError(
+        `Could not restart local backend: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  } finally {
+    finish(outcome);
+  }
+}
+
 async function openStudio(context: vscode.ExtensionContext): Promise<void> {
   const finish = beginNativeOperation('native.panel.open');
   let outcome: ForgePerformanceOutcome = 'ok';
@@ -1620,6 +1682,9 @@ export function activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
       vscode.commands.registerCommand("x4forge.openStudio", () => openStudio(context)),
       vscode.commands.registerCommand("x4forge.startSidecar", () => startLocalBackend(context)),
+      vscode.commands.registerCommand("x4forge.restartSidecar", () =>
+        restartLocalBackend(context, { reason: "restart command", interactive: true }),
+      ),
       vscode.commands.registerCommand("x4forge.showLogs", () => {
         const finishCommand = beginNativeOperation('native.command');
         let commandOutcome: ForgePerformanceOutcome = 'ok';
@@ -1646,6 +1711,27 @@ export function activate(context: vscode.ExtensionContext): void {
           throw error;
         } finally {
           finishCommand(commandOutcome);
+        }
+      }),
+    );
+
+    devReloadWatcher?.dispose();
+    devReloadWatcher = createDevReloadWatcher({
+      getForgeRoot: () => cfg().forgeRoot,
+      onReloadRequested: async (signal) => {
+        log(`[dev-reload] reload signal ${signal.reloadId}${signal.head ? ` (${signal.head})` : ""}: ${signal.reason}`);
+        await restartLocalBackend(context, {
+          reason: `dev reload ${signal.reloadId}`,
+          interactive: false,
+        });
+      },
+      log: (msg) => log(`[dev-reload] ${msg}`),
+    });
+    context.subscriptions.push(
+      { dispose: () => devReloadWatcher?.dispose() },
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (event.affectsConfiguration("x4forge.forgeRoot")) {
+          devReloadWatcher?.refreshConfiguration();
         }
       }),
     );
@@ -3433,6 +3519,8 @@ async function checkModConflicts(context: vscode.ExtensionContext): Promise<void
 }
 
 export function deactivate(): void {
+  devReloadWatcher?.dispose();
+  devReloadWatcher = undefined;
   try {
     const result = nativePerformanceHost?.dispose();
     if (result?.ok && !result.status.collectionActive && !result.status.collectionCleanupUnconfirmed && !result.status.ownedTimerCount
