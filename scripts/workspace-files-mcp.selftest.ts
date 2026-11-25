@@ -1706,6 +1706,28 @@ async function main() {
       assert.equal(snippetsRes.payload.ok, true);
       assert(Array.isArray(snippetsRes.payload.snippets) && snippetsRes.payload.total >= 1);
 
+      const uiPreviewRes = await presetReadMcp.callTool('preview_x4_ui_lua', {
+        mode: 'inline',
+        path: 'ui/addons/dogfood/tab_orders.lua',
+        content: [
+          'local M = {}',
+          'function M.renderTab(frame, headerTitle)',
+          '  local tbl = frame:addTable(2, { width = 480, reserveScrollBar = false, scaling = false })',
+          '  local row = tbl:addRow(false, { scaling = false })',
+          '  row[1]:createText(headerTitle, { height = 20, scaling = false })',
+          '  row[2]:createText("Ready", { height = 20, scaling = false })',
+          'end',
+          'return M',
+        ].join('\n'),
+        fixture: { samples: { headerTitle: 'Chain of Command' } },
+      });
+      assert.equal(uiPreviewRes.isError, false, JSON.stringify(uiPreviewRes.payload));
+      assert.equal(uiPreviewRes.payload.ok, true);
+      assert.equal(uiPreviewRes.payload.schema, 'forge.x4-ui-preview.v1');
+      assert.equal(uiPreviewRes.payload.previewHarness, 'shared-frame-parameter');
+      assert.equal(uiPreviewRes.payload.layout?.tableCount, 1);
+      assert(!JSON.stringify(uiPreviewRes.payload).includes(root), 'preview_x4_ui_lua leaked host root');
+
       const harvestRes = await presetReadMcp.callTool('harvest_vanilla_ui_menus', { limit: '10' });
       assert.equal(harvestRes.isError, false, JSON.stringify(harvestRes.payload));
       assert.equal(harvestRes.payload.ok, true);

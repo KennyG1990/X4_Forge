@@ -14,6 +14,7 @@ import fs from "fs";
 import { isUtf8 } from "node:buffer";
 import os from "os";
 import { buildX4UiSourceBundle, addX4UiSourceBundleRegistration, buildX4MenuLuaRuntimeInventory } from './src/lib/x4UiSourceBundle';
+import { previewX4UiLua, type X4UiHeadlessFixtureInput } from './src/server/x4UiHeadlessPreview';
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import { configPath, createEmptySchemaLibrary, getDefaultGamePath, loadSchemaLibrary, readXsdConfig, resolveX4ReferenceRoot, resolveXsdConfig, runSchemaDiscoverySelftest, writeXsdConfig, type ResolvedXsdConfig, type XsdConfig } from "./src/lib/xsdParser";
@@ -1280,6 +1281,7 @@ function authMiddleware(req: express.Request, res: express.Response, next: expre
       || authority.decision.routeKey === 'GET /api/agent/reference/coverage'
       || authority.decision.routeKey === 'GET /api/agent/reference/override-orders'
       || authority.decision.routeKey === 'GET /api/agent/ui/lua-snippets'
+      || authority.decision.routeKey === 'POST /api/agent/ui/preview'
       || authority.decision.routeKey === 'GET /api/agent/ui/vanilla-harvest'
       || authority.decision.routeKey === 'GET /api/agent/help/knowledge'
       || authority.decision.routeKey === 'POST /api/agent/help/bug-report'
@@ -17595,6 +17597,189 @@ app.get("/api/agent/ui/vanilla-harvest", (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ ok: false, error: errorMessage(error) || 'vanilla-ui-harvest failed' });
+  }
+});
+
+app.post("/api/agent/ui/preview", async (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    if (!isPlainRecord(req.body)) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'ui.lua.preview requires a JSON object body.' });
+    }
+    const extra = unknownObjectKeys(req.body, new Set(['mode', 'path', 'content', 'target', 'fixture']));
+    if (extra.length > 0) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: `ui.lua.preview does not accept: ${extra.join(', ')}` });
+    }
+
+    const rawMode = req.body.mode;
+    if (rawMode !== undefined && rawMode !== 'inline' && rawMode !== 'workspace') {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'mode must be "inline" or "workspace".' });
+    }
+    const mode: 'inline' | 'workspace' = rawMode === 'inline' || rawMode === 'workspace'
+      ? rawMode
+      : req.body.content !== undefined
+        ? 'inline'
+        : 'workspace';
+
+    if (mode === 'workspace' && req.body.content !== undefined) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'content is only accepted when mode is "inline".' });
+    }
+    if (mode === 'inline' && typeof req.body.content !== 'string') {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'mode "inline" requires a string content field.' });
+    }
+    if (mode === 'inline' && typeof req.body.content === 'string' && Buffer.byteLength(req.body.content, 'utf8') > 1024 * 1024) {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'content must be at most 1048576 UTF-8 bytes.' });
+    }
+
+    let logicalPath = 'ui/inline_preview.lua';
+    if (req.body.path !== undefined) {
+      if (typeof req.body.path !== 'string' || !req.body.path.trim() || req.body.path.length > 260 || req.body.path.includes('\0')) {
+        return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'path must be a 1..260 character relative path string.' });
+      }
+      const normalized = req.body.path.trim().replace(/\\/g, '/');
+      if (normalized.startsWith('/') || normalized.includes(':') || normalized.split('/').some(seg => seg === '..' || seg === '.')) {
+        return res.status(403).json({ ok: false, code: 'PATH_TRAVERSAL_FORBIDDEN', error: 'path must be a normalized relative workspace path without traversal segments.' });
+      }
+      logicalPath = normalized;
+    } else if (mode === 'workspace') {
+      return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'mode "workspace" requires a relative path.' });
+    }
+
+    let target: string | undefined;
+    if (req.body.target !== undefined) {
+      if (typeof req.body.target !== 'string' || !req.body.target.trim() || req.body.target.length > 160) {
+        return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'target must be a 1..160 character string.' });
+      }
+      target = req.body.target.trim();
+    }
+
+    let fixture: X4UiHeadlessFixtureInput | undefined;
+    if (req.body.fixture !== undefined) {
+      if (!isPlainRecord(req.body.fixture)) {
+        return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'fixture must be a JSON object.' });
+      }
+      const fixtureExtra = unknownObjectKeys(req.body.fixture, new Set(['samples', 'loops', 'drawable', 'uiScale', 'frameParameter']));
+      if (fixtureExtra.length > 0) {
+        return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: `fixture does not accept: ${fixtureExtra.join(', ')}` });
+      }
+      let samples: Record<string, string | number | boolean> | undefined;
+      if (req.body.fixture.samples !== undefined) {
+        if (!isPlainRecord(req.body.fixture.samples)) {
+          return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'fixture.samples must be an object mapping expression names to scalar values.' });
+        }
+        samples = {};
+        for (const [k, v] of Object.entries(req.body.fixture.samples)) {
+          if (typeof v !== 'string' && typeof v !== 'number' && typeof v !== 'boolean') {
+            return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: `fixture.samples["${k}"] must be a string, finite number, or boolean.` });
+          }
+          if (typeof v === 'number' && !Number.isFinite(v)) {
+            return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: `fixture.samples["${k}"] must be finite.` });
+          }
+          samples[k] = v;
+        }
+      }
+      let loops: Record<string, number> | undefined;
+      if (req.body.fixture.loops !== undefined) {
+        if (!isPlainRecord(req.body.fixture.loops)) {
+          return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'fixture.loops must be an object mapping loop keys to integers 0..64.' });
+        }
+        loops = {};
+        for (const [k, v] of Object.entries(req.body.fixture.loops)) {
+          if (typeof v !== 'number' || !Number.isSafeInteger(v) || v < 0 || v > 64) {
+            return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: `fixture.loops["${k}"] must be an integer between 0 and 64.` });
+          }
+          loops[k] = v;
+        }
+      }
+      let drawable: { width?: number; height?: number } | undefined;
+      if (req.body.fixture.drawable !== undefined) {
+        if (!isPlainRecord(req.body.fixture.drawable)) {
+          return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'fixture.drawable must be an object.' });
+        }
+        const drawExtra = unknownObjectKeys(req.body.fixture.drawable, new Set(['width', 'height']));
+        if (drawExtra.length > 0) {
+          return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: `fixture.drawable does not accept: ${drawExtra.join(', ')}` });
+        }
+        const w = req.body.fixture.drawable.width;
+        const h = req.body.fixture.drawable.height;
+        if (w !== undefined && (typeof w !== 'number' || !Number.isFinite(w) || w < 64 || w > 7680)) {
+          return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'fixture.drawable.width must be between 64 and 7680.' });
+        }
+        if (h !== undefined && (typeof h !== 'number' || !Number.isFinite(h) || h < 64 || h > 4320)) {
+          return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'fixture.drawable.height must be between 64 and 4320.' });
+        }
+        drawable = {
+          ...(typeof w === 'number' ? { width: w } : {}),
+          ...(typeof h === 'number' ? { height: h } : {}),
+        };
+      }
+      let uiScale: number | undefined;
+      if (req.body.fixture.uiScale !== undefined) {
+        const s = req.body.fixture.uiScale;
+        if (typeof s !== 'number' || !Number.isFinite(s) || s < 0.25 || s > 4) {
+          return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'fixture.uiScale must be between 0.25 and 4.' });
+        }
+        uiScale = s;
+      }
+      let frameParameter: string | undefined;
+      if (req.body.fixture.frameParameter !== undefined) {
+        const fp = req.body.fixture.frameParameter;
+        if (typeof fp !== 'string' || !fp.trim() || fp.length > 64) {
+          return res.status(400).json({ ok: false, code: 'CAPABILITY_INPUT_INVALID', error: 'fixture.frameParameter must be a 1..64 character string.' });
+        }
+        frameParameter = fp.trim();
+      }
+      fixture = {
+        ...(samples ? { samples } : {}),
+        ...(loops ? { loops } : {}),
+        ...(drawable ? { drawable } : {}),
+        ...(uiScale !== undefined ? { uiScale } : {}),
+        ...(frameParameter ? { frameParameter } : {}),
+      };
+    }
+
+    let luaContent = '';
+    if (mode === 'inline') {
+      luaContent = String(req.body.content);
+    } else {
+      const record = resolveWorkspaceAuthority(req, res, true);
+      if (!record) return;
+      res.locals.apiSubject = workspaceRecordSubject(record);
+      const sourceFiles = workspaceSourceFiles(record.workspace);
+      const matched = sourceFiles.find(file => file.path.replace(/\\/g, '/') === logicalPath && typeof file.content === 'string' && !file.omitted);
+      if (matched && typeof matched.content === 'string') {
+        luaContent = matched.content;
+      } else {
+        const resolvedCfg = resolveXsdConfig();
+        const modWsRoot = configuredProjectRoot(resolvedCfg, 'workspace');
+        const sourceFolder = typeof record.workspace.sourceFolder === 'string' ? record.workspace.sourceFolder.trim() : '';
+        if (modWsRoot && sourceFolder) {
+          const modRoot = path.resolve(modWsRoot, sourceFolder);
+          const candidateFile = path.resolve(modRoot, ...logicalPath.split('/'));
+          if (isPathWithin(modRoot, modWsRoot) && isPathWithin(candidateFile, modRoot) && fs.existsSync(candidateFile)) {
+            const st = fs.statSync(candidateFile);
+            if (st.isFile() && st.size <= 1024 * 1024) {
+              luaContent = fs.readFileSync(candidateFile, 'utf8');
+            }
+          }
+        }
+        if (!luaContent && !(matched && matched.content === '')) {
+          return res.status(404).json({ ok: false, code: 'WORKSPACE_FILE_NOT_FOUND', error: `Workspace Lua file "${logicalPath}" was not found.` });
+        }
+      }
+    }
+
+    const resolved = resolveXsdConfig();
+    const preview = await previewX4UiLua({
+      logicalPath,
+      content: luaContent,
+      target,
+      fixture,
+      referenceRoot: resolved.x4ReferenceRoot || null,
+    });
+    return res.json(preview);
+  } catch (error) {
+    return res.status(500).json({ ok: false, error: errorMessage(error) || 'ui-preview failed' });
   }
 });
 

@@ -179,6 +179,7 @@ const DIAGNOSTIC_READ_LIVE_TOOLS = new Set([
   "read_patch_base_content",
   "complete_xpath_selector",
   "get_reference_coverage",
+  "preview_x4_ui_lua",
   "list_lua_ui_snippets",
   "harvest_vanilla_ui_menus",
   "prepare_bug_report",
@@ -2797,6 +2798,71 @@ const TOOLS = [
           filteredTotal: "number",
           byOrderId: "object",
           items: "array",
+        },
+      );
+    },
+  },
+  {
+    name: "preview_x4_ui_lua",
+    capabilityId: "ui.lua.preview",
+    capabilityVersion: 1,
+    description: "Run deterministic headless X4 UI CallModel linting, layout program projection, and Zekton scene geometry analysis (clipped or truncated text, sibling bounding-box overlaps, column/row/table limits, and shared-frame helper expansion) on an inline Lua buffer or addressed workspace Lua file with optional runtime fixture sample and loop bindings.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        mode: { type: "string", enum: ["inline", "workspace"] },
+        path: { type: "string", maxLength: 260 },
+        content: { type: "string", maxLength: 1048576 },
+        target: { type: "string", maxLength: 160 },
+        fixture: {
+          type: "object",
+          properties: {
+            samples: {
+              type: "object",
+              additionalProperties: { type: ["string", "number", "boolean"] },
+            },
+            loops: {
+              type: "object",
+              additionalProperties: { type: "integer", minimum: 0, maximum: 64 },
+            },
+            drawable: {
+              type: "object",
+              properties: {
+                width: { type: "number", minimum: 64, maximum: 7680 },
+                height: { type: "number", minimum: 64, maximum: 4320 },
+              },
+              additionalProperties: false,
+            },
+            uiScale: { type: "number", minimum: 0.25, maximum: 4 },
+            frameParameter: { type: "string", maxLength: 64 },
+          },
+          additionalProperties: false,
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const body = {};
+      if (args.mode !== undefined) body.mode = args.mode;
+      if (args.path !== undefined) body.path = args.path;
+      if (args.content !== undefined) body.content = args.content;
+      if (args.target !== undefined) body.target = args.target;
+      if (args.fixture !== undefined) body.fixture = args.fixture;
+      return requireResponse(
+        await forge("POST", "/api/agent/ui/preview", body),
+        "X4 UI Lua preview",
+        {
+          ok: "boolean",
+          schema: "string",
+          gameTruth: "string",
+          path: "string",
+          bytes: "number",
+          corpus: "object",
+          profile: "object",
+          lint: "object",
+          targets: "array",
+          previewHarness: "string",
+          layout: "object",
         },
       );
     },

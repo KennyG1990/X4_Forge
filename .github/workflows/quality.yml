@@ -108,7 +108,7 @@ jobs:
         run: npm run build --prefix vscode-extension
 
       - name: Prove native MCP opt-in registration lifecycle and secret isolation
-        run: npm run test:extension-mcp-lifecycle && npm run test:extension-capabilities && npm run test:extension-dev-reload
+        run: npm run test:extension-mcp-lifecycle && npm run test:extension-capabilities && npm run test:extension-dev-reload && npm run test:ui-preview
 
       - name: Stage packaged application
         run: npm run stage-app --prefix vscode-extension

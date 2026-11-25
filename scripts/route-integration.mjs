@@ -823,7 +823,7 @@ async function main() {
     'reviews.warning.revoke', 'rules.suppression.apply', 'rules.suppression.prepare',
     'runtime.bridge.read', 'runtime.control.read', 'runtime.cue.telemetry', 'runtime.debug.read', 'runtime.gamelog.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domain.inspect', 'schema.domains.list', 'schema.element.explain',
     'snapshots.create', 'snapshots.delete', 'snapshots.list', 'snapshots.restore', 'studio.preferences.read',
-    'text.lookup', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read',
+    'text.lookup', 'ui.lua.preview', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read',
     'workspace.compile', 'workspace.compile.result', 'workspace.domain.read', 'workspace.domain.write', 'workspace.generate.preview', 'workspace.graph.critic', 'workspace.graph.explain', 'workspace.graph.simulate', 'workspace.mod.drift', 'workspace.mod.import', 'workspace.nodes.diagnose', 'workspace.read', 'workspace.roundtrip.check',
   ];
   const sameCapabilityIds = (actual, expected) => Array.isArray(actual)
@@ -1463,11 +1463,11 @@ async function main() {
     ['read', readEffective, 'read', ['ai.usage.read', 'contracts.derive', 'contracts.glue.preview', 'contracts.registry.read', 'diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.file.read', 'extensions.overrides.analyze', 'help.bug.report', 'help.knowledge.read', 'history.list', 'history.raw.read',
       'patch.audit.read', 'patch.base.read', 'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.complete', 'patch.xpath.synthesize', 'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.symbols.search', 'project.xml.references', 'readiness.read',
       'reference.coverage.read', 'reference.file.read', 'reference.galaxy.read', 'reference.manifest.list', 'reference.objects.search', 'reference.override.orders.read', 'reference.status.read', 'reference.suggest', 'release.artifact.verify', 'rules.suppression.prepare',
-      'runtime.bridge.read', 'runtime.control.read', 'runtime.cue.telemetry', 'runtime.debug.read', 'runtime.gamelog.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domain.inspect', 'schema.domains.list', 'schema.element.explain', 'studio.preferences.read', 'text.lookup', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read', 'workspace.domain.read', 'workspace.graph.critic', 'workspace.graph.explain', 'workspace.graph.simulate', 'workspace.nodes.diagnose', 'workspace.read', 'workspace.roundtrip.check']],
+      'runtime.bridge.read', 'runtime.control.read', 'runtime.cue.telemetry', 'runtime.debug.read', 'runtime.gamelog.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domain.inspect', 'schema.domains.list', 'schema.element.explain', 'studio.preferences.read', 'text.lookup', 'ui.lua.preview', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read', 'workspace.domain.read', 'workspace.graph.critic', 'workspace.graph.explain', 'workspace.graph.simulate', 'workspace.nodes.diagnose', 'workspace.read', 'workspace.roundtrip.check']],
     ['write', writeEffective, 'write', ['ai.usage.read', 'contracts.derive', 'contracts.glue.preview', 'contracts.registry.read', 'diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.file.read', 'extensions.overrides.analyze', 'help.bug.report', 'help.knowledge.read', 'history.list', 'history.raw.read', 'patch.audit.read', 'patch.base.read', 'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.complete', 'patch.xpath.synthesize', 'project.validate',
       'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.symbols.search', 'project.xml.references',
       'readiness.read', 'reference.coverage.read', 'reference.file.read', 'reference.galaxy.read', 'reference.manifest.list', 'reference.objects.search', 'reference.override.orders.read', 'reference.status.read', 'reference.suggest', 'release.artifact.verify', 'rules.suppression.prepare',
-      'runtime.bridge.read', 'runtime.control.read', 'runtime.cue.telemetry', 'runtime.debug.read', 'runtime.gamelog.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domain.inspect', 'schema.domains.list', 'schema.element.explain', 'studio.preferences.read', 'text.lookup', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.domain.read', 'workspace.graph.critic', 'workspace.graph.explain', 'workspace.graph.simulate', 'workspace.nodes.diagnose', 'workspace.read', 'workspace.roundtrip.check']],
+      'runtime.bridge.read', 'runtime.control.read', 'runtime.cue.telemetry', 'runtime.debug.read', 'runtime.gamelog.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domain.inspect', 'schema.domains.list', 'schema.element.explain', 'studio.preferences.read', 'text.lookup', 'ui.lua.preview', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.domain.read', 'workspace.graph.critic', 'workspace.graph.explain', 'workspace.graph.simulate', 'workspace.nodes.diagnose', 'workspace.read', 'workspace.roundtrip.check']],
     ['deploy', deployEffective, 'deploy', expectedCapabilityIds.filter(id => !id.startsWith('configuration.') && !id.startsWith('deploy.') && !id.startsWith('bulk.transform.') && !id.startsWith('files.') && !id.startsWith('snapshots.') && !id.startsWith('release.steam.') && ![
       'history.revert', 'performance.native.collect', 'performance.native.read', 'performance.native.stop', 'project.ai.navigation', 'project.md.navigation', 'project.md.rename', 'release.nexus.prepare', 'reviews.warning.revoke', 'rules.suppression.apply', 'workspace.domain.write', 'workspace.mod.drift', 'workspace.mod.import',
     ].includes(id))],
@@ -7409,6 +7409,49 @@ async function main() {
 
       const snipRes = await req('GET', '/api/agent/ui/lua-snippets', readKey);
       capabilityResponses.set('ui.lua.snippets.read', snipRes);
+
+      const uiPreviewInlineRes = await req('POST', '/api/agent/ui/preview', deployKey, {
+        mode: 'inline',
+        path: 'ui/addons/dogfood/tab_orders.lua',
+        content: [
+          'local M = {}',
+          'function M.renderTab(frame, headerTitle)',
+          '  local tbl = frame:addTable(2, { width = 480, reserveScrollBar = false, scaling = false })',
+          '  local row = tbl:addRow(false, { scaling = false })',
+          '  row[1]:createText(headerTitle, { height = 20, scaling = false })',
+          '  row[2]:createText("Ready", { height = 20, scaling = false })',
+          'end',
+          'return M',
+        ].join('\n'),
+        fixture: { samples: { headerTitle: 'Chain of Command' } },
+      }, { operationId: null });
+      capabilityResponses.set('ui.lua.preview', uiPreviewInlineRes);
+      ok('ui.lua.preview deploy-scope shared-frame tab preview (#59 FF-20)',
+        uiPreviewInlineRes.status === 200
+          && uiPreviewInlineRes.json?.ok === true
+          && uiPreviewInlineRes.json?.schema === 'forge.x4-ui-preview.v1'
+          && uiPreviewInlineRes.json?.previewHarness === 'shared-frame-parameter'
+          && uiPreviewInlineRes.json?.layout?.tableCount === 1
+          && uiPreviewInlineRes.json?.layout?.tables?.[0]?.line === 3
+          && uiPreviewInlineRes.json?.layout?.appliedSamples === 1,
+        JSON.stringify({ status: uiPreviewInlineRes.status, harness: uiPreviewInlineRes.json?.previewHarness, tables: uiPreviewInlineRes.json?.layout?.tableCount }));
+
+      const uiPreviewExtraField = await req('POST', '/api/agent/ui/preview', readKey, {
+        mode: 'inline',
+        content: 'local x = 1',
+        unknownField: true,
+      }, { operationId: null });
+      ok('ui.lua.preview rejects unknown body fields with CAPABILITY_INPUT_INVALID',
+        uiPreviewExtraField.status === 400 && uiPreviewExtraField.json?.code === 'CAPABILITY_INPUT_INVALID',
+        JSON.stringify(uiPreviewExtraField.json));
+
+      const uiPreviewTraversal = await req('POST', '/api/agent/ui/preview', readKey, {
+        mode: 'workspace',
+        path: '../outside.lua',
+      }, { operationId: null });
+      ok('ui.lua.preview rejects path traversal',
+        uiPreviewTraversal.status === 403 && uiPreviewTraversal.json?.code === 'PATH_TRAVERSAL_FORBIDDEN',
+        JSON.stringify(uiPreviewTraversal.json));
 
       const harvestRes = await req('GET', '/api/agent/ui/vanilla-harvest?limit=5', readKey);
       capabilityResponses.set('ui.vanilla.harvest', harvestRes);

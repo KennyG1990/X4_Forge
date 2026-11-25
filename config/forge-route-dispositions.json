@@ -197,9 +197,17 @@
     "src/lib/x4RulePackTypes.ts",
     "src/lib/x4UiAnalysisCache.ts",
     "src/lib/x4UiCallModel.ts",
+    "src/lib/x4UiCorpusAssets.ts",
+    "src/lib/x4UiFontMetrics.ts",
     "src/lib/x4UiGameVerification.ts",
+    "src/lib/x4UiLayoutKernel.ts",
+    "src/lib/x4UiLayoutProgram.ts",
     "src/lib/x4UiLint.ts",
+    "src/lib/x4UiPreviewPipeline.ts",
+    "src/lib/x4UiScene.ts",
     "src/lib/x4UiSourceBundle.ts",
+    "src/lib/x4UiTextLayout.ts",
+    "src/lib/x4UiWorkspaceSource.ts",
     "src/lib/xmlInputLimits.ts",
     "src/lib/xmlLite.ts",
     "src/lib/xmlParser.ts",
@@ -269,6 +277,7 @@
     "src/server/workspaceSnapshotRestoreReceiptAdapter.ts",
     "src/server/workspaceSnapshotSource.ts",
     "src/server/workspaceSymbolService.ts",
+    "src/server/x4UiHeadlessPreview.ts",
     "src/server/x4UiIntegration.selftest.ts",
     "src/server/xmlReferenceMap.ts",
     "src/types.ts",
@@ -4361,6 +4370,18 @@
       "resourceClass": "workspace",
       "workspaceMode": "required"
     },
+    "POST /api/agent/ui/preview": {
+      "disposition": "canonical-capability",
+      "owner": "ui.lua.preview",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "stateless-analysis",
+      "workspaceMode": "optional"
+    },
     "POST /api/agent/warning-reviews/revoke": {
       "disposition": "legacy-agent-api",
       "owner": "agent-api",
@@ -4893,6 +4914,7 @@
     "snapshots.restore@1": "8bab37c9f4669317edc2e4ffd89fdfc2749bcbbdb857fff587f215dd784da7bd",
     "studio.preferences.read@1": "77bf715bfc382e2129df8ebbcd35fc0f8788fbdc1b1eaf713b375ed631499597",
     "text.lookup@1": "45ecbc5abb71fb1e168c8b172399742251ca28c8b13fa96afb1352e11a8666a6",
+    "ui.lua.preview@1": "eab35c3f2ef469a37dee7a4cad28da19d2e43e3625edf7299f2036180cbdf328",
     "ui.lua.snippets.read@1": "48aa138ac3bbd645e55ad99c7a399b4bb315e3c3342319807d2aacf146b53719",
     "ui.vanilla.harvest@1": "4f160c77d03cae999c38be1f27afdb9c6e60b78f4ea80b6af6dec3569558fc71",
     "validation.last.read@1": "3aa1dfb1609fef0b75557ab12936f47bb22ecc23808168feda91070d23ea135f",
@@ -4911,8 +4933,8 @@
     "workspace.roundtrip.check@1": "c1a1c89c1eb3f44f8f16e6ca03e9787318eec5065bcf25dd2c3ce3a4b4045185"
   },
   "mcpModuleSignature": {
-    "version": 42,
-    "hash": "088dcbe521eb2809bae787e523aa74d403ee6a7a32ad54bdd0960d446554c554"
+    "version": 43,
+    "hash": "d27abc1af8c43b0c171fe0d8f33269d9912bb6d0ab594099b848ef8ad6637144"
   },
   "mcpSignatures": {
     "validate_mod": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",
@@ -5002,6 +5024,7 @@
     "complete_xpath_selector": "eaa18fd19c537bdde30cdbd3e7542209f2431a65f707feb27a507e9c889c244a",
     "get_reference_coverage": "91fbe88553da4c30bddea7d02a2869de56aa9fbdf933ff21be2616fcf759dd8f",
     "list_override_order_issuers": "69c873892b6d551fcd52f4c69a2d96bdc064ca3aab1f30f415ae0c66277526c9",
+    "preview_x4_ui_lua": "1031e3371cff92bc81d047457f8105b860604e60e7e6002babfb90c08f7643a3",
     "list_lua_ui_snippets": "d81ce133bd3ae5d276baeb94fc6c3366171698d2a83066e3cd10f8134dd87d06",
     "harvest_vanilla_ui_menus": "0d7be639796a030778d4ab28ff382fbd441dc1a06256c39daa2d6e4279d9dfd8",
     "prepare_bug_report": "b4a8c6908654b30fe371d13c40697b48205ad334a3fda6876f8da0b315c0ba46",
@@ -5114,6 +5137,7 @@
     "complete_xpath_selector": "patch.xpath.complete@1",
     "get_reference_coverage": "reference.coverage.read@1",
     "list_override_order_issuers": "reference.override.orders.read@1",
+    "preview_x4_ui_lua": "ui.lua.preview@1",
     "list_lua_ui_snippets": "ui.lua.snippets.read@1",
     "harvest_vanilla_ui_menus": "ui.vanilla.harvest@1",
     "prepare_bug_report": "help.bug.report@1",
