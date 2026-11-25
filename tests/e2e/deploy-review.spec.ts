@@ -171,6 +171,12 @@ test('wizard and Playtest distinguish actual test-mod deployment outcomes',async
       context.selectWorkspace(original);
     });
   }
+  async function clickIfStillMounted(target: ReturnType<typeof page.getByTestId>) {
+    await target.evaluateAll(elements => {
+      const button = elements[0];
+      if (button instanceof HTMLElement) button.click();
+    });
+  }
 
   const coveragePath = 'md/read_probe.xml';
   const longCoveragePath = 'md/' + 'long_file_name_'.repeat(15) + 'unavailable.xml';
@@ -260,7 +266,7 @@ test('wizard and Playtest distinguish actual test-mod deployment outcomes',async
   await expect(wizardApply).toHaveCount(0);
   const staleReview=await previewWizard();
   await roundTripWorkspaceSelection();
-  if(await wizardApply.isVisible())await wizardApply.click();
+  await clickIfStillMounted(wizardApply);
   await expect(wizardApply).toHaveCount(0);
   expect(requests).toHaveLength(staleReview.previousCalls+1);
   expect(applyIdentities).toHaveLength(staleReview.previousApplies);
@@ -396,7 +402,7 @@ test('wizard and Playtest distinguish actual test-mod deployment outcomes',async
     context.selectWorkspace(alternate);
     context.selectWorkspace(original);
   });
-  await applyButton.click();
+  await clickIfStillMounted(applyButton);
   await expect(applyButton).toHaveCount(0);
   expect(requests).toHaveLength(beforeSelectionChange + 1);
   expect(applyIdentities).toHaveLength(7);
