@@ -1,4 +1,9 @@
 {
+  "0.0.96": [
+    "Prune stale backend discovery entries automatically on IDE startup, expose live host identity on schema and reference probes, refuse isolated lab or release hosts on default discovery, and cold-start an owned supervised local backend automatically from headless CLI or MCP sessions when the IDE is closed.",
+    "Check Lua GetMacroData calls through the same scope-aware Lua parser used for faction and ware lookups so plain macro. identifier strings, table keys, comments, long-bracket text, and shadowed helpers never trigger false unknown-macro warnings while real typos point to the exact line and column.",
+    "Catch Mission Director numeric time mistakes across cues and table queues when a plain number flows into monitored cutscene timeouts, cue check intervals or check times, delays, or notification and job-ship timeouts, with dedicated time-conversion guidance in Diagnostics."
+  ],
   "0.0.95": [
     "Choose a dedicated temporary deploy-snapshot folder in Studio Settings or through explicit-grant configuration tools when staging large mods across drives, with automatic scratch cleanup before deploy responses return.",
     "Coordinate shared Studio and agent work with an optional time-bounded Driver Session Lease from Studio Actions, the Agent API, or MCP, keeping read-only checks and dry-run previews open while protecting active workspaces from conflicting writes.",
