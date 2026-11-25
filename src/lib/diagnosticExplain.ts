@@ -97,6 +97,92 @@ export function formatHumanDiagnosticSourceRef(sourceRef?: string): string | und
   return sourceRef;
 }
 
+const X4_UI_LAYOUT_RULE_CODES = new Set([
+  'x4-ui.add-table-column-limit',
+  'x4-ui.table-width-minimum',
+  'x4-ui.column-index',
+  'x4-ui.width-after-first-row',
+  'x4-ui.reserve-scrollbar-no-variable-column',
+  'x4-ui.column-percentage-total',
+  'x4-ui.colspan-overrun',
+  'x4-ui.font-scale',
+  'x4-ui.rendered-non-ascii',
+  'x4-ui.button-text-complex-property',
+  'x4-ui.row-height-budget',
+  'x4-ui.table-height-budget',
+  'x4-ui.editbox-height-minimum',
+]);
+
+const X4_UI_LIFECYCLE_RULE_CODES = new Set([
+  'x4-ui.inline-display',
+  'x4-ui.same-layer-inline-open',
+]);
+
+const MD_LISTENER_PITFALL_CODES = new Set([
+  'md_pitfall.ui_listener_one_shot',
+  'md_pitfall.offer_accepted_keyword_cue',
+  'md_pitfall.destroyed_event_source_required',
+]);
+
+const MD_LOOKUP_PITFALL_CODES = new Set([
+  'md_pitfall.param3_table_barekey',
+  'md_pitfall.products_existence',
+]);
+
+const MD_ACTION_CONTEXT_CODES = new Set([
+  'md_pitfall.cancel_conversation_actor_or_template',
+  'md_pitfall.return_context',
+  'md.return_context',
+]);
+
+const MD_LIBRARY_PARAM_CODES = new Set([
+  'md.run_actions_param_required',
+  'md.run_actions_param_undeclared',
+  'md.cue_library_param_required',
+  'md.cue_library_param_undeclared',
+]);
+
+const MD_CALLABLE_PURPOSE_CODES = new Set([
+  'md.run_actions_nonlibrary',
+  'md.include_actions_run_library',
+  'md.signal_library',
+  'md.reference_context',
+]);
+
+const EXPRESSION_RULE_CODES = new Set([
+  'md.unmatched_else',
+  'expression-null-safe-exists',
+  'expression-format-specifier',
+  'format-arguments-missing',
+  'expression-text-reference',
+]);
+
+const LUA_SYNTAX_AND_GLOBAL_CODES = new Set([
+  'lua.syntax_error',
+  'lua.syntax',
+  'lua.undefined_global',
+  'lua.global_before_definition',
+  'lua.globals-order',
+]);
+
+const LUA_RUNTIME_HAZARD_CODES = new Set([
+  'lua.fictional_ui_api',
+  'lua.helper_cached_at_load',
+  'lua.restricted_online_call',
+  'lua.broad_package_path',
+  'lua.djfhe_internal_require',
+  'lua.menu_never_opened',
+  'lua.registrations',
+  'lua.runtime_scope_unverified',
+]);
+
+const MANIFEST_AND_STRUCTURE_CODES = new Set([
+  'dep.duplicate',
+  'dep.missing_content_xml',
+  'dep.self',
+  'project.structure',
+]);
+
 const GUIDANCE: Array<{ matches: (code: string) => boolean; value: Guidance }> = [
   {
     matches: code => code.startsWith('rules.'),
@@ -109,7 +195,7 @@ const GUIDANCE: Array<{ matches: (code: string) => boolean; value: Guidance }> =
     },
   },
   {
-    matches: code => /^(xsd\.|schema\.)/.test(code),
+    matches: code => /^(xsd\.|schema\.)/.test(code) || code === 'md.xsd',
     value: {
       title: 'Game schema rejected this structure',
       why: 'The XML element, attribute, value, or placement does not satisfy the routed X4 game schema (XSD).',
@@ -209,6 +295,116 @@ const GUIDANCE: Array<{ matches: (code: string) => boolean; value: Guidance }> =
     },
   },
   {
+    matches: code => code === 'x4-ui.verification-gap' || code === 'x4-ui.analysis-unavailable',
+    value: {
+      title: 'Lua UI static analysis is partial or unavailable',
+      why: 'Dynamic table parameters, helper indirection, or unavailable Lua UI inputs prevented complete static proof for this file.',
+      impact: 'Forge withholds unverified UI layout claims rather than guessing; unseen dynamic UI paths could still fail in X4.',
+      next: 'Inspect the reported Lua UI gap or preview the menu with representative sample bindings, and verify dynamic branches in X4.',
+      basis: 'bounded X4 Lua UI verification-gap analysis',
+    },
+  },
+  {
+    matches: code => X4_UI_LAYOUT_RULE_CODES.has(code),
+    value: {
+      title: 'X4 Lua UI table or widget constraint violated',
+      why: 'A Lua UI table, column width, colspan, font scale, editbox/row height, or rendered string violates calibrated X4 widget engine limits.',
+      impact: 'X4 CWidgetController can reject the entire frame, clip or overlap widgets, or close an active conversation menu when rendering.',
+      next: 'Adjust the flagged addTable column count, width percentages, colspan, or height budget at the cited Lua line and verify in UI preview.',
+      basis: 'calibrated X4 9.00 CWidgetController and Helper.lua static rules',
+    },
+  },
+  {
+    matches: code => X4_UI_LIFECYCLE_RULE_CODES.has(code),
+    value: {
+      title: 'X4 Lua UI frame display or menu-layer hazard',
+      why: 'The menu triggers frame:display() inline inside an onClick callback or opens a second menu on the same UI layer synchronously.',
+      impact: 'Inline display updates can lag by one click or paint over a newly opened same-layer menu in X4.',
+      next: 'Defer frame display updates outside the immediate click handler or target a distinct UI layer when chaining OpenMenu calls.',
+      basis: 'X4 9.00 UI frame lifecycle and menu-layer analysis',
+    },
+  },
+  {
+    matches: code => code === 'md_pitfall.variable_read_before_initialization' || code === 'md.variable_initial_state',
+    value: {
+      title: 'Mission Director variable may be read before initialization',
+      why: 'A strict local variable read occurs without a proven prior assignment across the cue namespace, library parameters, or control-flow branches.',
+      impact: 'Reading an unset MD variable logs a runtime script error and evaluates to null unless populated earlier or restored from saved cue state.',
+      next: 'Initialize the variable before the read on all preceding paths, or guard optional reads with $var? or null-suppressed @$var.',
+      basis: 'Mission Director cue-namespace and intra-block variable availability analysis',
+    },
+  },
+  {
+    matches: code => code === 'md_pitfall.variable_read_after_removal' || code === 'md_pitfall.variable_read_when_absent',
+    value: {
+      title: 'Mission Director variable is read while proven absent',
+      why: 'A strict local variable read occurs after <remove_value> or inside a negated $var? / <do_else> branch that proves the variable is unset.',
+      impact: 'X4 logs an undefined-variable error at runtime and evaluates the read to null.',
+      next: 'Assign a new value before reading the variable, or replace the strict read with a guarded or fallback expression.',
+      basis: 'Mission Director intra-cue removal and existence-branch flow analysis',
+    },
+  },
+  {
+    matches: code => code === 'md_pitfall.no_event_condition' || code === 'md_pitfall.illegal_instantiate',
+    value: {
+      title: 'Mission Director cue trigger or instantiation mode is invalid',
+      why: 'The cue uses non-event <check_*> conditions without an event, checkinterval, or valid one-shot onfail mode, or combines instantiate="true" with one-shot onfail.',
+      impact: 'X4 rejects invalid check-only root cues at load ("Found non-event condition ..., event condition required!") or refuses illegal instantiation.',
+      next: 'Add an <event_*> condition or checkinterval for repeating/instantiated cues, or use onfail="cancel" / onfail="complete" without instantiate on one-shot gate cues.',
+      basis: 'X4 9.00 Mission Director cue trigger and instantiation rules',
+    },
+  },
+  {
+    matches: code => MD_LISTENER_PITFALL_CODES.has(code),
+    value: {
+      title: 'Mission Director event listener will fail or stop firing in X4',
+      why: 'The listener omits instantiate="true"/reset on a root UI listener, passes cue="this|parent|static" to <event_offer_accepted>, or omits a target source on <event_object_destroyed>.',
+      impact: 'The cue either fires only once and completes forever, never registers in-game, or fails X4 load validation.',
+      next: 'Follow the finding remediation: add instantiate="true" for recurring UI listeners, bind $OfferCue / <event_object_signalled> for offer acceptance, or specify object=/group= on destroyed listeners.',
+      basis: 'X4 9.00 Mission Director listener failure-corpus rules',
+    },
+  },
+  {
+    matches: code => MD_LOOKUP_PITFALL_CODES.has(code),
+    value: {
+      title: 'Mission Director property or table lookup evaluates unexpectedly',
+      why: 'The expression accesses a bare property key on an event.param3 Lua table ($d.key instead of $d.$key) or tests $Station.products? existence instead of .count gt 0.',
+      impact: 'Unrecognized bare property lookups evaluate to null/false and skip branches silently, while $Station.products? is true even on empty product lists.',
+      next: 'Use $table.$key for Lua-supplied table keys and check $Station.products.count gt 0 when testing whether a station has products.',
+      basis: 'X4 9.00 Mission Director table-key and pseudo-property semantics',
+    },
+  },
+  {
+    matches: code => MD_ACTION_CONTEXT_CODES.has(code),
+    value: {
+      title: 'Mission Director action is invalid in this runtime context',
+      why: '<cancel_conversation> omits both actor and template, or <return> is used outside a <library purpose="run_actions"> context.',
+      impact: 'X4 logs a load/runtime error or ignores the invalid return statement.',
+      next: 'Supply actor or template on <cancel_conversation>, and use <return> only inside <library purpose="run_actions"> blocks.',
+      basis: 'X4 9.00 Mission Director action-context validation',
+    },
+  },
+  {
+    matches: code => MD_LIBRARY_PARAM_CODES.has(code),
+    value: {
+      title: 'Mission Director library call arguments do not match declaration',
+      why: 'A <run_actions> or <cue ref="..."> call omits a required <param> without a default value or passes a parameter name not declared by the target <library>.',
+      impact: 'Missing required parameters leave library inputs unset, while undeclared parameter names are ignored and never bind inside the callee.',
+      next: 'Align the caller <param name="..."/> list with the target <library><params> declaration.',
+      basis: 'Mission Director library signature and call-argument cross-file check',
+    },
+  },
+  {
+    matches: code => MD_CALLABLE_PURPOSE_CODES.has(code),
+    value: {
+      title: 'Mission Director callable target has incompatible kind or purpose',
+      why: 'An MD call or cue action targets a <library> where a <cue> is required, targets a <cue> from <run_actions>, or mismatches <library purpose="run_actions|include_actions">.',
+      impact: 'X4 rejects the call at load or fails to execute the target block.',
+      next: 'Match <signal_cue*>/<reset_cue>/<cancel_cue> to <cue> declarations, <run_actions> to purpose="run_actions" libraries, and <include_actions> to purpose="include_actions" libraries.',
+      basis: 'X4 9.00 Mission Director callable kind and library-purpose contract',
+    },
+  },
+  {
     matches: code => /^(cue\.|crossfile\.|project\.cue|project\.unresolved_cue_ref$|md\.cue_)/.test(code),
     value: {
       title: 'Cross-file cue relationship is broken',
@@ -229,6 +425,26 @@ const GUIDANCE: Array<{ matches: (code: string) => boolean; value: Guidance }> =
     },
   },
   {
+    matches: code => code === 'aiscript.run_script_param_required' || code === 'aiscript.run_script_param_undeclared',
+    value: {
+      title: 'AI script run_script call arguments do not match target params',
+      why: 'A literal <run_script> call passes an undeclared <param name="..."/> or omits a parameter that has no default in the resolved project-local <aiscript><params> declaration.',
+      impact: 'Undeclared argument names never bind in the callee, and omitted required inputs can leave the called AI script without expected state.',
+      next: 'Jump to the target AI script <params> block and align the <run_script> <param> names and required values.',
+      basis: 'project-local AI script signature and literal run_script argument lint',
+    },
+  },
+  {
+    matches: code => code === 'aiscript.label_duplicate' || code === 'aiscript.resume_label_unresolved',
+    value: {
+      title: 'AI script label or resume target is invalid',
+      why: 'An AI script declares duplicate <label name="..."/> targets in the same attention block or <resume label="..."/> names a label missing from that scope.',
+      impact: 'X4 cannot resolve the intended execution jump reliably within the attention block.',
+      next: 'Keep <label> names unique per attention block and ensure every <resume label="..."/> points to a label declared in the same scope.',
+      basis: 'X4 AI script attention-scope label and resume lint',
+    },
+  },
+  {
     matches: code => /^(aiscript\.|order_param\.)/.test(code),
     value: {
       title: 'AI-script order contract is inconsistent',
@@ -236,6 +452,46 @@ const GUIDANCE: Array<{ matches: (code: string) => boolean; value: Guidance }> =
       impact: 'The order can receive the wrong value, fail to start, or behave differently from its UI declaration.',
       next: 'Align the parameter name, datatype, and reader with the canonical order and AI-script definitions.',
       basis: 'AI Script XSD and order-parameter cross-file lint',
+    },
+  },
+  {
+    matches: code => EXPRESSION_RULE_CODES.has(code),
+    value: {
+      title: 'Script expression syntax, null-guard, or text-format hazard',
+      why: 'An MD/AI script expression contains an unmatched else, combines null-suppression @ with ? (such as not @$x.y?), mismatches %s/%1 format arguments, or uses a malformed {page, id} text reference.',
+      impact: 'X4 rejects malformed expressions or evaluates null-safe existence checks counterintuitively at runtime.',
+      next: 'Rewrite not @$x.y? as explicit chained checks (for example not @$x or $x.y?), pair every else with if ... then, and align format specifiers and {page, id} syntax.',
+      basis: 'X4 Mission Director and AI expression AST lint',
+    },
+  },
+  {
+    matches: code => LUA_SYNTAX_AND_GLOBAL_CODES.has(code),
+    value: {
+      title: 'Lua UI syntax error or undeclared global symbol',
+      why: 'The Lua file failed LuaJIT 2.1 parsing, references a global absent from X4 and standard Lua allowlists, or reads a file-level global before its definition.',
+      impact: 'Syntax errors prevent X4 from loading the Lua file at all; undeclared or out-of-order globals raise nil-value runtime faults when executed.',
+      next: 'Fix the Lua syntax error, declare file-scoped helpers/variables as local before first use, or spell the exact X4 UI engine global.',
+      basis: 'LuaJIT AST syntax and X4 9.00 UI environment global scope analysis',
+    },
+  },
+  {
+    matches: code => LUA_RUNTIME_HAZARD_CODES.has(code),
+    value: {
+      title: 'Lua UI runtime lifecycle, API, or module-loading hazard',
+      why: 'The Lua file calls a non-existent or online-restricted UI API, caches Helper state too early at load time, mutates package.path broadly, or declares a menu that is never opened.',
+      impact: 'The UI addon can fail during /reloadui or game boot, break sibling mods via shared package paths, or sit unreachable in-game.',
+      next: 'Read Helper/Menus state inside menu lifecycle callbacks rather than file load, use supported X4 UI APIs, and keep require/registration scopes bounded.',
+      basis: 'X4 9.00 UI Lua runtime lifecycle and packaging static analysis',
+    },
+  },
+  {
+    matches: code => MANIFEST_AND_STRUCTURE_CODES.has(code),
+    value: {
+      title: 'Extension manifest or project folder structure issue',
+      why: 'content.xml is missing, declares a self-dependency or duplicate <dependency>, or the mod folder layout violates X4 extension structure rules.',
+      impact: 'X4 may refuse to discover the extension, fail dependency ordering, or ignore misplaced files.',
+      next: 'Ensure root content.xml exists with unique external <dependency> entries and place mod scripts under standard X4 subdirectories (md/, aiscripts/, ui/, libraries/, t/).',
+      basis: 'X4 extension manifest and folder-structure validation',
     },
   },
   {
@@ -493,6 +749,52 @@ export function runDiagnosticExplainSelftest() {
       && /\(value\)s/.test(numericTimeExplain.next)
       && /type time/i.test(numericTimeExplain.impact),
     numericTimeExplain,
+  );
+  const allRegisteredFamilyCodes = [
+    ...X4_UI_LAYOUT_RULE_CODES,
+    ...X4_UI_LIFECYCLE_RULE_CODES,
+    'x4-ui.verification-gap',
+    'x4-ui.analysis-unavailable',
+    'md_pitfall.variable_read_before_initialization',
+    'md.variable_initial_state',
+    'md_pitfall.variable_read_after_removal',
+    'md_pitfall.variable_read_when_absent',
+    'md_pitfall.no_event_condition',
+    'md_pitfall.illegal_instantiate',
+    ...MD_LISTENER_PITFALL_CODES,
+    ...MD_LOOKUP_PITFALL_CODES,
+    ...MD_ACTION_CONTEXT_CODES,
+    ...MD_LIBRARY_PARAM_CODES,
+    ...MD_CALLABLE_PURPOSE_CODES,
+    'aiscript.run_script_param_required',
+    'aiscript.run_script_param_undeclared',
+    'aiscript.label_duplicate',
+    'aiscript.resume_label_unresolved',
+    ...EXPRESSION_RULE_CODES,
+    ...LUA_SYNTAX_AND_GLOBAL_CODES,
+    ...LUA_RUNTIME_HAZARD_CODES,
+    ...MANIFEST_AND_STRUCTURE_CODES,
+    'md.xsd',
+  ];
+  const uncoveredCodes = allRegisteredFamilyCodes.filter(code => make(code).title === 'Project validator finding');
+  check(
+    'every shipped MD pitfall, MD/AI call & label, expression AST, Lua/X4-UI, and manifest rule has specific guidance',
+    uncoveredCodes.length === 0
+      && make('md.run_actions_param_required').title === 'Mission Director library call arguments do not match declaration'
+      && make('md.cue_library_param_undeclared').title === 'Mission Director library call arguments do not match declaration'
+      && make('aiscript.run_script_param_undeclared').title === 'AI script run_script call arguments do not match target params'
+      && make('aiscript.resume_label_unresolved', 'error').title === 'AI script label or resume target is invalid'
+      && make('aiscript.order_param_missing_type').title === 'AI-script order contract is inconsistent'
+      && make('md_pitfall.variable_read_before_initialization').title === 'Mission Director variable may be read before initialization'
+      && make('expression-null-safe-exists').title === 'Script expression syntax, null-guard, or text-format hazard'
+      && make('lua.undefined_global', 'info').title === 'Lua UI syntax error or undeclared global symbol'
+      && make('x4-ui.add-table-column-limit', 'error').title === 'X4 Lua UI table or widget constraint violated',
+    { uncoveredCodes },
+  );
+  check(
+    'unregistered future codes in exact-matched namespaces still fail closed to generic guidance',
+    ['x4-ui.future-rule', 'lua.future_rule', 'md_pitfall.future_rule', 'dep.future_rule', 'future.unregistered']
+      .every(code => make(code).title === 'Project validator finding'),
   );
   const passed = checks.filter(item => item.pass).length;
   return { allPassed: passed === checks.length, pass: passed === checks.length, passed, total: checks.length, checks };
