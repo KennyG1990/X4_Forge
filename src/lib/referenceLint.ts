@@ -75,7 +75,7 @@ interface LuaReferenceNode {
   variables?: LuaReferenceNode[];
 }
 
-type LuaLiteralConsumer = 'GetFactionData' | 'GetComponentData' | 'GetWareData';
+type LuaLiteralConsumer = 'GetFactionData' | 'GetComponentData' | 'GetWareData' | 'GetMacroData';
 
 function globalLuaName(node: LuaReferenceNode | undefined): string | undefined {
   return node?.type === 'Identifier' && node.isLocal === false ? node.name : undefined;
@@ -92,21 +92,22 @@ function globalLuaWrite(node: LuaReferenceNode | undefined): unknown {
   return globalLuaName(node);
 }
 
-function luaConsumedReferenceLiterals(content: string): Array<{ kind: 'faction' | 'ware'; id: string; offset: number }> {
-  if (!content.includes('GetFactionData') && !content.includes('GetComponentData') && !content.includes('GetWareData')) return [];
-  const hits: Array<{ consumer: LuaLiteralConsumer; kind: 'faction' | 'ware'; id: string; offset: number }> = [];
+function luaConsumedReferenceLiterals(content: string): Array<{ kind: 'faction' | 'ware' | 'macro'; id: string; offset: number }> {
+  if (!content.includes('GetFactionData') && !content.includes('GetComponentData') && !content.includes('GetWareData') && !content.includes('GetMacroData')) return [];
+  const hits: Array<{ consumer: LuaLiteralConsumer; kind: 'faction' | 'ware' | 'macro'; id: string; offset: number }> = [];
   const rebound = new Set<LuaLiteralConsumer>();
   let changedEnvironment = false;
   const markWrite = (name: unknown) => {
     if (name === '_ENV') changedEnvironment = true;
-    if (name === 'GetFactionData' || name === 'GetComponentData' || name === 'GetWareData') rebound.add(name);
+    if (name === 'GetFactionData' || name === 'GetComponentData' || name === 'GetWareData' || name === 'GetMacroData') rebound.add(name);
   };
   const record = (consumer: LuaLiteralConsumer, node: LuaReferenceNode | undefined) => {
     if (node?.type !== 'StringLiteral' || typeof node.value !== 'string' || !node.range || !node.raw
       || !/^[A-Za-z_][\w.-]*$/.test(node.value)) return;
     const opening = node.raw.match(/^(?:\[=*\[(?:\r\n|\n\r|\r|\n)?|["'])/);
-    if (opening) hits.push({ consumer, kind: consumer === 'GetWareData' ? 'ware' : 'faction',
-      id: node.value, offset: node.range[0] + opening[0].length });
+    const kind: 'faction' | 'ware' | 'macro' =
+      consumer === 'GetWareData' ? 'ware' : consumer === 'GetMacroData' ? 'macro' : 'faction';
+    if (opening) hits.push({ consumer, kind, id: node.value, offset: node.range[0] + opening[0].length });
   };
   const returnsOwner = (node: LuaReferenceNode | undefined) => node?.type === 'CallExpression'
     && globalLuaName(node.base) === 'GetComponentData' && node.arguments?.[1]?.value === 'owner';
@@ -125,7 +126,7 @@ function luaConsumedReferenceLiterals(content: string): Array<{ kind: 'faction' 
           markWrite(globalLuaWrite(node.identifier));
         } else if (node.type === 'CallExpression' || node.type === 'StringCallExpression') {
           const callee = globalLuaName(node.base);
-          if (callee === 'GetFactionData' || callee === 'GetWareData') record(callee, node.arguments?.[0] ?? node.argument);
+          if (callee === 'GetFactionData' || callee === 'GetWareData' || callee === 'GetMacroData') record(callee, node.arguments?.[0] ?? node.argument);
           if (callee === 'rawset' && isGlobalEnvironment(node.arguments?.[0])) markWrite(node.arguments?.[1]?.value);
         } else if (node.type === 'BinaryExpression' && (node.operator === '==' || node.operator === '~=')) {
           if (returnsOwner(node.left)) record('GetComponentData', node.right);
@@ -176,21 +177,20 @@ export function lintReferenceLiterals(
   if (!isLua) {
     scan('faction', references.factions, /(?<![\w$.\]])faction\.([A-Za-z_][\w-]*)\b/gd);
     scan('ware', references.wares, /(?<![\w$.\]])ware\.([A-Za-z_][\w-]*)\b/gd);
+    scan('macro', references.macros, /(?<![\w$.\]])macro\.([A-Za-z_][\w-]*)\b/gd);
   }
-  scan('macro', references.macros, /(?<![\w$.\]])macro\.([A-Za-z_][\w-]*)\b/gd);
 
   if (isLua) {
     // Corpus-proven literal APIs. Variable first arguments are intentionally skipped.
-    if (references.factions?.size || references.wares?.size) {
+    if (references.factions?.size || references.wares?.size || references.macros?.size) {
       const hits = luaConsumedReferenceLiterals(content);
-      // Preserve the existing ware-before-faction diagnostic ordering while
-      // sharing one lexical parse for both consumer families.
-      for (const kind of ['ware', 'faction'] as const) {
-        const catalog = kind === 'ware' ? references.wares : references.factions;
+      // Preserve the existing ware -> faction -> macro diagnostic ordering while
+      // sharing one lexical parse for all three consumer families.
+      for (const kind of ['ware', 'faction', 'macro'] as const) {
+        const catalog = kind === 'ware' ? references.wares : kind === 'macro' ? references.macros : references.factions;
         if (catalog?.size) for (const hit of hits) if (hit.kind === kind) add(kind, catalog, hit.id, hit.offset);
       }
     }
-    scan('macro', references.macros, /\bGetMacroData\s*\(\s*(["'])([^"']+)\1\s*,/gd, 2);
   } else {
     // Schema validation remains primary; these explicit attributes keep checks armed on
     // schema-less installs and for diff payloads whose domain schema is wrapper-only.
@@ -306,8 +306,26 @@ export function runReferenceLiteralLintSelftest() {
       lintReferenceLiterals('GetWareData("notaware", "name")', { wares: refs.wares }, { kind: 'lua' }).some(finding => finding.id === 'notaware')
       && lintReferenceLiterals('ware.notaware', { wares: refs.wares }, { kind: 'md' }).some(finding => finding.id === 'notaware') },
     { name: 'mixed Lua consumer diagnostics preserve legacy family ordering', pass:
-      lintReferenceLiterals('GetFactionData("badfaction", "name")\nGetWareData("badware", "name")', refs, { kind: 'lua' })
-        .map(finding => `${finding.kind}:${finding.id}`).join(',') === 'ware:badware,faction:badfaction' },
+      lintReferenceLiterals('GetMacroData("badmacro", "name")\nGetFactionData("badfaction", "name")\nGetWareData("badware", "name")', refs, { kind: 'lua' })
+        .map(finding => `${finding.kind}:${finding.id}`).join(',') === 'ware:badware,faction:badfaction,macro:badmacro' },
+    { name: 'Lua macro.* identifier strings, long-bracket quotes, shadows, and member calls are clear', pass:
+      lintReferenceLiterals([
+        'local tag = "macro.service"',
+        'local registry = { ["macro.rivals"] = true }',
+        'local quoted = [=[GetMacroData("fakemacro", "name")]=]',
+        '-- GetMacroData("commentedmacro", "name")',
+        'do local GetMacroData = function() end; GetMacroData("shadowmacro", "name") end',
+        'object.GetMacroData("membermacro", "name")',
+        'local known = GetMacroData("ship_arg_l_destroyer_01_a_macro", "name")',
+      ].join('\n'), refs, { kind: 'lua' }).filter(f => f.kind === 'macro').length === 0 },
+    { name: 'direct unknown GetMacroData retains exact BOM/CRLF/long-bracket coordinates', pass:
+      lintReferenceLiterals('\uFEFFlocal icon = "🚀"\r\nGetMacroData("\\110otamacro", "name")\rlocal m = GetMacroData([=[\r\nlongmacro]=], "name")\nlocal s = GetMacroData[=[\r\nstringcallmacro]=]\n', refs, { kind: 'lua' })
+        .filter(f => f.kind === 'macro').map(f => `${f.id}:${f.line}:${f.column}`).join(',') === 'notamacro:2:15,longmacro:4:1,stringcallmacro:6:1' },
+    { name: 'GetMacroData rebinding disables only macro and preserves ware/faction checks', pass:
+      ['GetMacroData = function() end', 'function GetMacroData() end', '_ENV["GetMacroData"] = function() end', 'rawset(_G, "GetMacroData", function() end)'].every(write => {
+        const res = lintReferenceLiterals(`${write}\nGetMacroData("fakemacro", "name")\nGetWareData("badware", "name")`, refs, { kind: 'lua' });
+        return !res.some(f => f.kind === 'macro') && res.some(f => f.kind === 'ware' && f.id === 'badware');
+      }) },
   ];
   const passed = checks.filter(c => c.pass).length;
   return { allPassed: passed === checks.length, pass: passed === checks.length, passed, total: checks.length, checks };

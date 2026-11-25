@@ -81,4 +81,25 @@ check('project validator accepts a canonical direct ware id', wareProjectCases[2
 check('project and flat diagnostics preserve ware findings and positions', wareProjectCases.every(result =>
   JSON.stringify(result.findings.map(finding => [finding.code, finding.line, finding.column]))
     === JSON.stringify(result.flat.map(finding => [finding.code, finding.line, finding.column]))));
+const macroProjectCases = [
+  'local tag = "macro.service"\nlocal reg = { ["macro.rivals"] = true }\nlocal quoted = [=[GetMacroData("fakemacro", "name")]=]',
+  'local name = GetMacroData("notamacro", "name")',
+  'local name = GetMacroData("known_macro", "name")',
+].map(content => {
+  const project: ExtensionProject = { id: 'forge_macro64', name: 'Macro reference regression', files: [
+    { path: 'content.xml', kind: 'content', content: '<content id="forge_macro64" name="Macro reference regression" version="100"/>' },
+    { path: 'ui.xml', kind: 'ui', content: '<addon name="forge_macro64"><environment type="menus"><dependency name="ego_detailmonitor"/><file name="ui/macro64.lua"/></environment></addon>' },
+    { path: 'ui/macro64.lua', kind: 'lua', content },
+  ] };
+  const result = runProjectValidation(project, { references: refs });
+  return { findings: result.references.findings.filter(finding => finding.code === 'reference.unknown_macro'),
+    flat: flattenProjectValidation(result).filter(finding => finding.code === 'reference.unknown_macro') };
+});
+check('project validator clears Lua macro.* string and long-bracket lookalikes', macroProjectCases[0].findings.length === 0);
+check('project validator preserves genuine direct GetMacroData typo and coordinates', macroProjectCases[1].findings.length === 1
+  && macroProjectCases[1].findings[0].id === 'notamacro' && macroProjectCases[1].findings[0].line === 1 && macroProjectCases[1].findings[0].column === 28);
+check('project validator accepts a canonical direct macro id', macroProjectCases[2].findings.length === 0);
+check('project and flat diagnostics preserve macro findings and positions', macroProjectCases.every(result =>
+  JSON.stringify(result.findings.map(finding => [finding.code, finding.line, finding.column]))
+    === JSON.stringify(result.flat.map(finding => [finding.code, finding.line, finding.column]))));
 console.log(JSON.stringify({ assertions, pass: true, corpus }));
