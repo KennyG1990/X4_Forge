@@ -36,8 +36,10 @@ interface X4ObjectIndexResponse {
 
 export default function ObjectBrowser() {
   const [refSearch, setRefSearch] = useState<string>('');
-  const [refType, setRefType] = useState<'ship' | 'station' | 'ware' | 'faction' | 'sound' | 'job' | 'aiscript' | 'md_element' | 'macro'>('ship');
+  const [refType, setRefType] = useState<'ship' | 'station' | 'ware' | 'faction' | 'sound' | 'job' | 'aiscript' | 'md_element' | 'macro' | 'override_order'>('ship');
   const [objectIndex, setObjectIndex] = useState<X4ObjectIndexResponse | null>(null);
+  const [overrideOrderItems, setOverrideOrderItems] = useState<Array<{ scriptKind: string; scriptId: string; source: string; path: string; line: number; orderId: string; targetObject: string | null; immediate: boolean; override: string }>>([]);
+  const [overrideOrderTotal, setOverrideOrderTotal] = useState<number>(0);
   const [objectIndexLoading, setObjectIndexLoading] = useState<boolean>(false);
   const [objectIndexError, setObjectIndexError] = useState<string>('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -49,6 +51,28 @@ export default function ObjectBrowser() {
   };
 
   const loadObjectIndex = async () => {
+    if (refType === 'override_order') {
+      setObjectIndexLoading(true);
+      setObjectIndexError('');
+      try {
+        const params = new URLSearchParams();
+        if (refSearch.trim()) params.set('q', refSearch.trim());
+        const response = await fetch(`/api/agent/reference/override-orders?${params.toString()}`);
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || 'Failed to load canonical X4 override-order issuers.');
+        }
+        setOverrideOrderItems(Array.isArray(data.items) ? data.items : []);
+        setOverrideOrderTotal(typeof data.total === 'number' ? data.total : 0);
+      } catch (err: any) {
+        setObjectIndexError(err?.message || 'Failed to load canonical X4 override-order issuers.');
+        setOverrideOrderItems([]);
+      } finally {
+        setObjectIndexLoading(false);
+      }
+      return;
+    }
+
     // QoL panel cache: serve the last result for this query instantly (no
     // spinner flash on remount), then refresh in the background.
     const cacheKey = refType + '|' + refSearch;
@@ -100,10 +124,20 @@ export default function ObjectBrowser() {
     { value: 'job', label: 'Jobs', count: objectIndex?.counts?.job ?? 0 },
     { value: 'aiscript', label: 'AI Scripts', count: objectIndex?.counts?.aiscript ?? 0 },
     { value: 'md_element', label: 'MD Elements', count: objectIndex?.counts?.md_element ?? 0 },
-  ], [objectIndex]);
+    { value: 'override_order', label: 'Override Orders (FF-28)', count: overrideOrderTotal },
+  ], [objectIndex, overrideOrderTotal]);
 
   const filteredReferences = useMemo(() => {
     let list: Array<{ id: string; name: string; desc?: string; sourceFile?: string }> = [];
+
+    if (refType === 'override_order') {
+      return overrideOrderItems.map(item => ({
+        id: `${item.path}:${item.line}`,
+        name: `${item.orderId} (${item.scriptKind}: ${item.scriptId})`,
+        desc: `override=${item.override}${item.immediate ? ' · immediate' : ''}${item.targetObject ? ` · object=${item.targetObject}` : ''} · ${item.source}`,
+        sourceFile: `${item.path}:${item.line}`,
+      }));
+    }
 
     if (objectIndex?.items?.length) {
       list = objectIndex.items.map(item => ({
@@ -156,7 +190,7 @@ export default function ObjectBrowser() {
       item.name.toLowerCase().includes(refSearch.toLowerCase()) ||
       (item.desc && item.desc.toLowerCase().includes(refSearch.toLowerCase()))
     );
-  }, [refType, refSearch, objectIndex]);
+  }, [refType, refSearch, objectIndex, overrideOrderItems]);
 
   return (
     <div className="flex flex-col h-full space-y-3">

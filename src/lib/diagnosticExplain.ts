@@ -126,6 +126,16 @@ const GUIDANCE: Array<{ matches: (code: string) => boolean; value: Guidance }> =
     },
   },
   {
+    matches: code => code === 'md_pitfall.order_cancelled_override_suspension' || code === 'order_cancelled_override_suspension',
+    value: {
+      title: 'Order-cancelled listener does not distinguish temporary override suspension',
+      why: 'In X4, starting an override order (such as Attack or Flee in aiscripts/interrupt.attacked.xml with override="true") suspends the ship\'s current order rather than deleting it, yet still raises <event_object_order_cancelled> for the suspended order.',
+      impact: 'Handlers that treat <event_object_order_cancelled> as permanent removal can prematurely abort mission/tracking state or re-queue a duplicate <create_order> while the original suspended order is still queued to resume.',
+      next: 'Guard permanent-removal handlers with <check_value value="not event.param.exists"/> (vanilla md/factionsubgoal_recon.xml), check not $Ship.orders.indexof.{$Order}, or branch on @$Order.exists and @$Ship.order.isoverride when tracking suspended orders.',
+      basis: 'X4 9.00 override-order suspension and Mission Director cancellation-handler analysis',
+    },
+  },
+  {
     matches: code => code === 'md_lua.conversation_menu_without_deferred_redraw',
     value: {
       title: 'Conversation-triggered UI menu lacks a deferred redraw',
@@ -314,6 +324,14 @@ export function runDiagnosticExplainSelftest() {
     && /GetFactionData/.test(rawLuaId.next)
     && /\.knownname/.test(rawMdId.next)
     && rawLuaId.ruleProvenance.kind === 'unmatched', { rawLuaId, rawMdId });
+  const overridePitfall = make('md_pitfall.order_cancelled_override_suspension', 'info');
+  const overrideCritic = make('order_cancelled_override_suspension', 'info');
+  check('override order suspension guidance covers MD pitfall and Canvas critic codes (#67)',
+    overridePitfall.title === 'Order-cancelled listener does not distinguish temporary override suspension'
+    && overrideCritic.title === overridePitfall.title
+    && /event\.param\.exists/.test(overridePitfall.next)
+    && /\.isoverride/.test(overridePitfall.next)
+    && overridePitfall.ruleProvenance.kind === 'unmatched', { overridePitfall, overrideCritic });
   const truncatedUi = make('x4-ui.truncated-evidence', 'info');
   check('truncated Lua UI evidence explains the limit and a revalidation path',
     truncatedUi.title === 'Lua UI verification is incomplete'

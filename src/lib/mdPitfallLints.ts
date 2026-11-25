@@ -54,8 +54,9 @@ export interface MdPitfallFinding {
     | 'md_pitfall.variable_read_after_removal' | 'md_pitfall.variable_read_when_absent'
     | 'md_pitfall.variable_read_before_initialization'
     | 'md_pitfall.raw_engine_id_in_player_text'
+    | 'md_pitfall.order_cancelled_override_suspension'
     | MdExpressionFinding['code'];
-  severity: 'error' | 'warning';
+  severity: 'error' | 'warning' | 'info';
   cue?: string;
   filePath?: string;
   line?: number;
@@ -1713,7 +1714,88 @@ export function lintMdPitfalls(xml: string, opts: { propertyUnion?: Set<string>;
   // ---- 5. raw engine IDs (.id / owner.id / macro.id / faction.id) in player-visible text ----
   out.push(...lintMdRawEngineIdInPlayerText(element, opts.filePath));
 
+  // ---- 6. FF-28 (#67): <event_object_order_cancelled> without override-suspension guard ----
+  out.push(...lintMdOrderCancelledOverrideSuspension(element, opts.filePath));
+
   return out;
+}
+
+const MD_ORDER_OVERRIDE_GUARD_RE = /\.isoverride\b|(?:event\.param|\$[A-Za-z_]\w*)\.exists\b|\.orders\.(?:indexof|count)\b/;
+
+function walkOwnCueSubtree(node: Element, visit: (el: Element) => void): void {
+  if (node.namespaceURI) return;
+  visit(node);
+  for (let child = node.firstChild; child; child = child.nextSibling) {
+    if (child.nodeType !== 1) continue;
+    const el = child as Element;
+    if (el.namespaceURI || el.tagName === 'cues') continue;
+    walkOwnCueSubtree(el, visit);
+  }
+}
+
+function directDomChild(parent: Element, tagName: string): Element | undefined {
+  for (let child = parent.firstChild; child; child = child.nextSibling) {
+    if (child.nodeType === 1 && !(child as Element).namespaceURI && (child as Element).tagName === tagName) {
+      return child as Element;
+    }
+  }
+  return undefined;
+}
+
+function lintMdOrderCancelledOverrideSuspension(root: Element, filePath?: string): MdPitfallFinding[] {
+  const findings: MdPitfallFinding[] = [];
+  const cues = Array.from(root.getElementsByTagName('cue'));
+  for (const cue of cues) {
+    if (cue.namespaceURI || cue.hasAttribute('ref')) continue;
+    const conditions = directDomChild(cue, 'conditions');
+    if (!conditions) continue;
+    const cancelledEvents = Array.from(conditions.getElementsByTagName('event_object_order_cancelled'))
+      .filter(ev => !ev.namespaceURI);
+    if (cancelledEvents.length === 0) continue;
+
+    const actions = directDomChild(cue, 'actions');
+    let hasOverrideGuard = false;
+    let requeuesOrder = false;
+    const inspectNode = (el: Element) => {
+      if (el.tagName === 'create_order') requeuesOrder = true;
+      for (let i = 0; i < el.attributes.length; i++) {
+        const attr = el.attributes[i];
+        if (!attr.value || attr.name === 'comment') continue;
+        if (MD_ORDER_OVERRIDE_GUARD_RE.test(maskMdQuotedLiterals(attr.value))) {
+          hasOverrideGuard = true;
+        }
+      }
+    };
+    walkOwnCueSubtree(conditions, inspectNode);
+    if (actions) walkOwnCueSubtree(actions, inspectNode);
+    if (hasOverrideGuard) continue;
+
+    for (const ev of cancelledEvents) {
+      let pairedWithFinished = false;
+      for (let parent = ev.parentElement; parent && parent !== conditions; parent = parent.parentElement) {
+        if (!parent.namespaceURI && parent.tagName === 'check_any') {
+          if (Array.from(parent.getElementsByTagName('event_object_order_finished')).some(fin => !fin.namespaceURI)) {
+            pairedWithFinished = true;
+            break;
+          }
+        }
+      }
+      if (pairedWithFinished) continue;
+
+      const cueName = enclosingNamedCue(ev);
+      findings.push({
+        code: 'md_pitfall.order_cancelled_override_suspension',
+        severity: 'info',
+        filePath,
+        cue: cueName,
+        line: ev.lineNumber,
+        column: ev.columnNumber,
+        sourceRef: 'event_object_order_cancelled',
+        detail: `Cue "${cueName || '(unnamed)'}" listens for <event_object_order_cancelled> without guarding against temporary override suspension: in X4 9.00, override orders (e.g. aiscripts/interrupt.attacked.xml Attack/Flee with override="true") suspend rather than delete the running order and still fire <event_object_order_cancelled>${requeuesOrder ? ' — re-issuing <create_order> here can queue a duplicate order while the suspended order is still waiting to resume' : ''}. Guard permanent-removal handlers with <check_value value="not event.param.exists"/> (vanilla md/factionsubgoal_recon.xml), not $Ship.orders.indexof.{$Order}, or branch on @$Order.exists and @$Ship.order.isoverride.${filePath ? ` (${filePath})` : ''}`,
+      });
+    }
+  }
+  return findings;
 }
 
 const MD_RAW_ID_EXPR_RE = /\.(?:owner\.|trueowner\.|macro\.|faction\.)?id\b(?!code)/;
@@ -2597,6 +2679,60 @@ export function runMdPitfallSelftest(): {
     </actions></cue></cues></mdscript>`;
   ok('knownname, idcode, literal string .id text, and mixed-assignment $vars do not false-positive (#58)',
     !lintMdPitfalls(cleanMdIdXml, { filePath: 'md/cleanid.xml' }).some(f => f.code === 'md_pitfall.raw_engine_id_in_player_text'));
+
+  // --- 6. order_cancelled_override_suspension (#67 / FF-28) ---
+  const overrideCode = 'md_pitfall.order_cancelled_override_suspension';
+  const unguardedCancelRequeue = `<mdscript name="OrderCancelProbe"><cues>
+    <cue name="RequeueOnCancel" instantiate="true" namespace="this">
+      <conditions><event_object_order_cancelled object="$Ship"/></conditions>
+      <actions>
+        <debug_text text="'check event.param.exists'" comment="not event.param.exists"/>
+        <create_order object="$Ship" id="'MoveGeneric'"/>
+      </actions>
+      <cues>
+        <cue name="ChildWithUnrelatedExists"><actions><do_if value="$Other.exists"/></actions></cue>
+      </cues>
+    </cue>
+  </cues></mdscript>`;
+  const overrideHits = lintMdPitfalls(unguardedCancelRequeue, { filePath: 'md/orders.xml' })
+    .filter(f => f.code === overrideCode);
+  ok('flags unguarded event_object_order_cancelled as advisory info and notes create_order duplicate risk (#67)',
+    overrideHits.length === 1
+      && overrideHits[0].severity === 'info'
+      && overrideHits[0].cue === 'RequeueOnCancel'
+      && overrideHits[0].line === 3
+      && overrideHits[0].detail.includes('duplicate order')
+      && overrideHits[0].detail.includes('not event.param.exists'),
+    overrideHits);
+  const guardedCancelVariants = `<mdscript name="OrderCancelClean"><cues>
+    <cue name="VanillaReconGuard" instantiate="true">
+      <conditions><event_object_order_cancelled object="$Ship"/><check_value value="not event.param.exists"/></conditions>
+      <actions><create_order object="$Ship" id="'Patrol'"/></actions>
+    </cue>
+    <cue name="DogfoodOverrideGuard" instantiate="true">
+      <conditions><event_object_order_cancelled object="$Ship"/></conditions>
+      <actions><do_if value="@$Order.exists and @$Ship.order.isoverride"><return/></do_if></actions>
+    </cue>
+    <cue name="VanillaIndexGuard" instantiate="true">
+      <conditions><event_object_order_cancelled object="$Ship"/><check_value value="not $Ship.orders.indexof.{$Order}"/></conditions>
+      <actions><debug_text text="'removed'"/></actions>
+    </cue>
+    <cue name="VanillaCountGuard" instantiate="true">
+      <conditions><event_object_order_cancelled object="$Ship"/><check_value value="$Ship.orders.count == 0"/></conditions>
+      <actions><debug_text text="'empty'"/></actions>
+    </cue>
+    <cue name="PairedEndedCheckAny" instantiate="true">
+      <conditions>
+        <check_any>
+          <event_object_order_finished object="$Ship"/>
+          <event_object_order_cancelled object="$Ship"/>
+        </check_any>
+      </conditions>
+      <actions><debug_text text="'ended'"/></actions>
+    </cue>
+  </cues></mdscript>`;
+  ok('suppresses order_cancelled_override_suspension on event.param.exists, .isoverride, .orders.indexof/count, and paired check_any (#67)',
+    !lintMdPitfalls(guardedCancelVariants, { filePath: 'md/orders_clean.xml' }).some(f => f.code === overrideCode));
 
   // --- degradation ---
   ok('non-mdscript degrades to []', lint('<aiscript name="x"/>').length === 0);

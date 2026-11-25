@@ -90,6 +90,23 @@ export const WIKI_TOPICS: WikiTopic[] = [
     egosoftUrl: 'https://wiki.egosoft.com/X4%20Foundations%20Wiki/Modding/MD%20Script%20Elements/event_object_changed_sector',
   },
   {
+    id: 'mdscript_order_override_suspension',
+    title: 'Order Cancellation vs. Override Suspension (event_object_order_cancelled)',
+    category: 'mdscript',
+    summary: 'Prevent duplicate order re-queuing and premature teardown when combat or police overrides suspend a ship order.',
+    content: "In X4 9.00, starting an override order on a ship — most commonly `<create_order ... immediate=\"true\" override=\"true\">` inside `aiscripts/interrupt.attacked.xml` (`'Attack'` / `'Flee'`), `aiscripts/lib.respond.inspected.xml`, `aiscripts/lib.respond.foundlockbox.xml`, `aiscripts/lib.respond.foundabandonedship.xml`, or `md/conversations.xml` — **suspends** the currently running order rather than deleting it. Once the override finishes, the suspended order automatically resumes.\n\n### The Trap (`FF-28` / `#67`)\nEven though the interrupted order still exists in `$Ship.orders` and will resume on its own, X4 raises `<event_object_order_cancelled>` at the moment the override takes control. A cue that treats every `<event_object_order_cancelled>` as permanent cancellation will either:\n- Re-issue a second `<create_order>` while the original order is still suspended in the queue (causing duplicate orders), or\n- Prematurely tear down mission/tracking state while the ship is merely defending itself or fleeing.\n\n### Proven Guards\n1. **Permanent removal only (Egosoft vanilla idiom in `md/factionsubgoal_recon.xml`):** Check `<check_value value=\"not event.param.exists\" />` (or `not $Ship.orders.indexof.{$Order}`).\n2. **Track live override suspension explicitly:** Branch on `<do_if value=\"@$Order.exists and @$Ship.order.isoverride\">` to pause watchers until `<event_object_order_ready>` / order resumption.\n3. **Inspect all vanilla override issuers:** Browse **Override Orders** in the Object Browser or call MCP `list_override_order_issuers` (`GET /api/agent/reference/override-orders`).",
+    codeTemplate: `<cue name="On_Tracked_Order_Removed" instantiate="true" namespace="this">
+  <conditions>
+    <event_object_order_cancelled object="$TrackedShip" />
+    <!-- Ignore temporary suspension when an override="true" order (Attack/Flee/Police) interrupts -->
+    <check_value value="not event.param.exists" />
+  </conditions>
+  <actions>
+    <debug_text text="'Order permanently removed on ' + $TrackedShip.knownname" />
+  </actions>
+</cue>`,
+  },
+  {
     id: 'aiscript_basics',
     title: 'AIScript & Pilot Behaviors Overview',
     category: 'aiscript',
@@ -350,6 +367,10 @@ export function runForgeKnowledgeSelftest(): {
   ok('wiki category + substring filter narrows to kuertee topic',
     luaOnly.wikiTopics.length === 1 && luaOnly.wikiTopics[0].id === 'luaui_kuertee_compat'
       && luaOnly.shortcuts.length === 0 && luaOnly.starterGuides.length === 0);
+
+  const overrideWiki = queryForgeKnowledge({ section: 'wiki', category: 'mdscript', q: 'event_object_order_cancelled' });
+  ok('wiki covers FF-28 override suspension on event_object_order_cancelled (#67)',
+    overrideWiki.wikiTopics.some(t => t.id === 'mdscript_order_override_suspension' && t.content.includes('not event.param.exists')));
 
   const shortcutsOnly = queryForgeKnowledge({ section: 'shortcuts', q: 'comment' });
   ok('shortcuts filter finds Canvas Comment Box binding',

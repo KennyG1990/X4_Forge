@@ -53,12 +53,38 @@ export interface JobReference {
   path: string;
 }
 
+export interface OverrideOrderCallSite {
+  line: number;
+  orderId: string;
+  rawOrderExpr: string;
+  targetObject: string | null;
+  immediate: boolean;
+  override: string;
+}
+
+export interface OverrideOrderIssuerReference extends OverrideOrderCallSite {
+  scriptKind: 'aiscript' | 'md';
+  scriptId: string;
+  source: ReferenceSource;
+  path: string;
+}
+
+export interface OverrideOrderIndexResult {
+  generation: string;
+  scannedAiScripts: number;
+  scannedMdScripts: number;
+  total: number;
+  byOrderId: Record<string, number>;
+  items: OverrideOrderIssuerReference[];
+}
+
 export interface AIScriptReference {
   id: string;
   name: string;
   source: ReferenceSource;
   path: string;
   order: AIScriptOrderReference | null;
+  overrideOrders?: OverrideOrderCallSite[];
 }
 
 export interface AIScriptOrderReference {
@@ -435,16 +461,52 @@ export function readAIScriptOrderId(content: string): string | null {
   return orders.length === 1 ? orders[0].getAttribute('id') : null;
 }
 
+function extractOverrideOrderCallSites(doc: any): OverrideOrderCallSite[] {
+  const out: OverrideOrderCallSite[] = [];
+  const nodes = doc?.getElementsByTagName?.('create_order');
+  if (!nodes) return out;
+  for (let i = 0; i < nodes.length; i++) {
+    const el = nodes[i];
+    if (el?.namespaceURI) continue;
+    const overrideVal = attrs(el, 'override').trim();
+    if (!overrideVal || /^(false|0)$/i.test(overrideVal)) continue;
+    const rawOrderExpr = attrs(el, 'id').trim();
+    const unquoted = rawOrderExpr.match(/^'([^']*)'$/)?.[1] ?? rawOrderExpr;
+    const targetObject = attrs(el, 'object').trim() || null;
+    const immediate = /^(true|1)$/i.test(attrs(el, 'immediate').trim());
+    out.push({
+      line: typeof el.lineNumber === 'number' && el.lineNumber > 0 ? el.lineNumber : 1,
+      orderId: unquoted || '(dynamic)',
+      rawOrderExpr: rawOrderExpr || '(unset)',
+      targetObject,
+      immediate,
+      override: overrideVal,
+    });
+  }
+  return out;
+}
+
 function parseAIScripts(files: ReferenceFile[]): AIScriptReference[] {
   const found = new Map<string, AIScriptReference>();
   for (const file of files.filter(f => f.kind === 'aiscript')) {
-    const doc = parseXml(fs.readFileSync(file.absolute, 'utf8'));
+    const raw = fs.readFileSync(file.absolute, 'utf8');
+    const doc = parseXml(raw);
     if (!doc) continue;
     const root = doc.documentElement;
     if (String(root?.tagName || '').toLowerCase() !== 'aiscript') continue;
     const id = attrs(root, 'name').trim().toLowerCase();
     if (!id || found.has(id)) continue;
-    found.set(id, { id, name: labelFromId(id), source: file.source, path: file.relative, order: parseAIScriptOrder(root) });
+    const overrideOrders = /\bcreate_order\b/.test(raw) && /\boverride\s*=/.test(raw)
+      ? extractOverrideOrderCallSites(doc)
+      : [];
+    found.set(id, {
+      id,
+      name: labelFromId(id),
+      source: file.source,
+      path: file.relative,
+      order: parseAIScriptOrder(root),
+      ...(overrideOrders.length > 0 ? { overrideOrders } : {}),
+    });
   }
   return [...found.values()].sort((a, b) => a.id.localeCompare(b.id));
 }
@@ -626,7 +688,165 @@ export function peekReferenceCorpus(rootInput: string): ReferenceCorpus | null {
   return null;
 }
 
-export function clearReferenceCorpusCache(): void { cache = null; }
+let overrideOrderCache: {
+  root: string;
+  signature: string;
+  result: OverrideOrderIndexResult;
+  checkedAt: number;
+} | null = null;
+
+export function clearReferenceCorpusCache(): void {
+  cache = null;
+  overrideOrderCache = null;
+}
+
+function discoverOfficialMdFiles(root: string): Array<{ absolute: string; relative: string; source: ReferenceSource; stamp: fs.Stats }> {
+  const manifest = listReferenceManifestFiles(root, { domain: 'md', extension: '.xml' }, 20_000);
+  if (manifest?.files.length) {
+    const fromManifest = manifest.files
+      .map(record => {
+        if (record.source !== 'base' && !/^ego_dlc_/i.test(record.source)) return null;
+        const inner = record.path.toLowerCase().startsWith('extensions/')
+          ? record.path.split('/').slice(2).join('/').toLowerCase()
+          : record.path.toLowerCase();
+        if (!inner.startsWith('md/') || !inner.endsWith('.xml')) return null;
+        const absolute = path.join(root, ...record.path.split('/'));
+        const stamp = referenceFileStat(absolute);
+        if (!stamp) return null;
+        return { absolute, relative: record.path, source: record.source as ReferenceSource, stamp };
+      })
+      .filter((row): row is NonNullable<typeof row> => Boolean(row))
+      .sort((a, b) => (Number(a.source !== 'base') - Number(b.source !== 'base')) || a.source.localeCompare(b.source) || a.relative.localeCompare(b.relative));
+    if (fromManifest.length) return fromManifest;
+  }
+
+  const out: Array<{ absolute: string; relative: string; source: ReferenceSource; stamp: fs.Stats }> = [];
+  const seen = new Set<string>();
+  const collectDir = (baseDir: string, source: ReferenceSource) => {
+    const mdDir = path.join(baseDir, 'md');
+    if (!isDirectory(mdDir)) return;
+    const found: string[] = [];
+    walkXml(mdDir, found);
+    found.sort((a, b) => a.localeCompare(b));
+    for (const file of found) {
+      const key = file.toLowerCase();
+      if (seen.has(key)) continue;
+      const stamp = referenceFileStat(file);
+      if (!stamp) continue;
+      seen.add(key);
+      out.push({ absolute: file, relative: forward(path.relative(root, file)), source, stamp });
+    }
+  };
+  collectDir(root, 'base');
+  const extRoot = path.join(root, 'extensions');
+  let extensions: fs.Dirent[] = [];
+  try { extensions = fs.readdirSync(extRoot, { withFileTypes: true }); } catch { /* no DLC folder */ }
+  for (const ext of extensions.filter(e => e.isDirectory() && /^ego_dlc_/i.test(e.name)).sort((a, b) => a.name.localeCompare(b.name))) {
+    collectDir(path.join(extRoot, ext.name), ext.name.toLowerCase() as ReferenceSource);
+  }
+  return out;
+}
+
+/**
+ * Enumerate every `<create_order ... override="...">` (`override !== 'false'`) across canonical
+ * base + official-DLC `aiscripts/` and `md/` without perturbing `corpus.sourceFiles` startup scope.
+ */
+export function listOverrideOrderIssuers(rootInput: string, force = false): OverrideOrderIndexResult {
+  const corpus = getReferenceCorpus(rootInput, force);
+  const now = Date.now();
+  if (
+    !force
+    && overrideOrderCache
+    && overrideOrderCache.root.toLowerCase() === corpus.root.toLowerCase()
+    && now - overrideOrderCache.checkedAt < REFERENCE_SIGNATURE_CHECK_MS
+  ) {
+    return overrideOrderCache.result;
+  }
+  const mdFiles = discoverOfficialMdFiles(corpus.root);
+  const mdSig = mdFiles
+    .map(({ relative, stamp }) => `${relative.toLowerCase()}|${stamp.size}|${Math.floor(stamp.mtimeMs)}|${Math.floor(stamp.ctimeMs)}`)
+    .join('\n');
+  const combinedSignature = createHash('sha256').update(`${corpus.signature}\n--md--\n${mdSig}`).digest('hex');
+  if (
+    !force
+    && overrideOrderCache
+    && overrideOrderCache.root.toLowerCase() === corpus.root.toLowerCase()
+    && overrideOrderCache.signature === combinedSignature
+  ) {
+    overrideOrderCache.checkedAt = Date.now();
+    return overrideOrderCache.result;
+  }
+
+  const items: OverrideOrderIssuerReference[] = [];
+  // Also scan DLC <diff> patches under aiscripts/ in addition to canonical first-definition aiScripts.
+  const aiDiscovery = discoverReferenceFiles(corpus.root);
+  const aiFiles = aiDiscovery.files.filter(f => f.kind === 'aiscript');
+  for (const file of aiFiles) {
+    const raw = fs.readFileSync(file.absolute, 'utf8');
+    if (!/\bcreate_order\b/.test(raw) || !/\boverride\s*=/.test(raw)) continue;
+    const doc = parseXml(raw);
+    if (!doc) continue;
+    const rootTag = String(doc.documentElement?.tagName || '').toLowerCase();
+    if (rootTag !== 'aiscript' && rootTag !== 'diff') continue;
+    const scriptId = (attrs(doc.documentElement, 'name').trim() || path.basename(file.relative, '.xml')).toLowerCase();
+    for (const site of extractOverrideOrderCallSites(doc)) {
+      items.push({
+        scriptKind: 'aiscript',
+        scriptId,
+        source: file.source,
+        path: file.relative,
+        ...site,
+      });
+    }
+  }
+
+  for (const file of mdFiles) {
+    const raw = fs.readFileSync(file.absolute, 'utf8');
+    if (!/\bcreate_order\b/.test(raw) || !/\boverride\s*=/.test(raw)) continue;
+    const doc = parseXml(raw);
+    if (!doc) continue;
+    const rootTag = String(doc.documentElement?.tagName || '').toLowerCase();
+    if (rootTag !== 'mdscript' && rootTag !== 'diff') continue;
+    const scriptId = attrs(doc.documentElement, 'name').trim() || path.basename(file.relative, '.xml');
+    for (const site of extractOverrideOrderCallSites(doc)) {
+      items.push({
+        scriptKind: 'md',
+        scriptId,
+        source: file.source,
+        path: file.relative,
+        ...site,
+      });
+    }
+  }
+
+  items.sort((a, b) =>
+    (Number(a.source !== 'base') - Number(b.source !== 'base'))
+    || a.source.localeCompare(b.source)
+    || a.path.localeCompare(b.path)
+    || (a.line - b.line),
+  );
+
+  const byOrderId: Record<string, number> = {};
+  for (const item of items) {
+    byOrderId[item.orderId] = (byOrderId[item.orderId] || 0) + 1;
+  }
+
+  const result: OverrideOrderIndexResult = {
+    generation: corpus.manifestGeneration || combinedSignature,
+    scannedAiScripts: aiFiles.length,
+    scannedMdScripts: mdFiles.length,
+    total: items.length,
+    byOrderId,
+    items,
+  };
+  overrideOrderCache = {
+    root: corpus.root,
+    signature: combinedSignature,
+    result,
+    checkedAt: Date.now(),
+  };
+  return result;
+}
 
 export function getReferenceCorpus(rootInput: string, force = false): ReferenceCorpus {
   const root = assertReferenceRootDirectory(rootInput);
@@ -794,6 +1014,14 @@ export function runReferenceCorpusSelftest(): {
       </order>
     </aiscript>`);
     write('aiscripts/subroutine.xml', '<aiscript name="subroutine"><!-- <order id="Comment"/> --><actions><order id="Nested"/></actions></aiscript>');
+    write('aiscripts/z.interrupt.attacked.xml', `<aiscript name="z.interrupt.attacked"><actions>
+      <!-- <create_order object="event.object" id="'Decoy'" override="true"/> -->
+      <create_order object="event.object" id="'Attack'" immediate="true" override="true"/>
+      <create_order object="event.object" id="'Patrol'" override="false"/>
+    </actions></aiscript>`);
+    write('md/conversations.xml', `<mdscript name="Conversations"><cues><cue name="OnFlee"><actions>
+      <create_order object="$Ship" id="'Flee'" immediate="true" override="true"/>
+    </actions></cue></cues></mdscript>`);
     write('libraries/scriptproperties.xml', '<scriptproperties><datatype name="faction" type="dbdata"><property name="id" result="ID" type="string"/><property name="name" result="Name" type="string"/></datatype></scriptproperties>');
     write('index/macros.xml', '\uFEFF<?xml version="1.0" encoding="utf-8"?><index><entry name="ship_test_macro" value="assets/ship_test"/></index>');
     write('maps/test/sectors.xml', '<macros><macro name="Cluster_Test_Sector001_macro" class="sector"><properties><identification name="{1,3}"/></properties></macro></macros>');
@@ -838,6 +1066,16 @@ export function runReferenceCorpusSelftest(): {
     ]));
     ok('comments and nested nodes are not AI order headers', first.aiScripts.find(script => script.id === 'subroutine')?.order === null);
     ok('normalized symbol index built', first.symbols.some(symbol => symbol.kind === 'ware' && symbol.id === 'energycells' && symbol.selector === "/wares/ware[@id='energycells']"));
+    const overrideIndex = listOverrideOrderIssuers(tmp);
+    ok('override order issuers index aiscript and md call sites without counting md toward corpus.sourceFiles (#67)',
+      overrideIndex.total === 2
+        && overrideIndex.scannedMdScripts === 1
+        && overrideIndex.byOrderId.Attack === 1
+        && overrideIndex.byOrderId.Flee === 1
+        && overrideIndex.items.some(i => i.scriptKind === 'aiscript' && i.scriptId === 'z.interrupt.attacked' && i.orderId === 'Attack' && i.immediate === true)
+        && overrideIndex.items.some(i => i.scriptKind === 'md' && i.scriptId === 'Conversations' && i.orderId === 'Flee' && i.targetObject === '$Ship')
+        && !first.sourceFiles.some(p => p.startsWith('md/')),
+      JSON.stringify(overrideIndex));
     ok('macro catalog indexed', first.references.macros.has('ship_test_macro'));
     ok('faction datatype exposes id', first.scriptProperties.find(p => p.kind === 'datatype' && p.name === 'faction')?.properties.some(p => p.name === 'id' && p.type === 'string') === true);
     write('extensions/ego_dlc_test/libraries/factions.xml', '<diff><add sel="/factions"><faction id="dlcfaction" name="DLC" tags="economic"/></add></diff>');

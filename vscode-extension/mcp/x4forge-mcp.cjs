@@ -201,6 +201,7 @@ const DIAGNOSTIC_READ_LIVE_TOOLS = new Set([
   "explain_md_graph",
   "simulate_md_graph",
   "diagnose_workspace_nodes",
+  "list_override_order_issuers",
 ]);
 const PERFORMANCE_PROFILE_HTTP_FAILURES = { PROFILE_DISABLED: 503, PROFILE_BUSY: 409, PROFILE_RATE_LIMITED: 429, PROFILE_DISPOSED: 503, PROFILE_INPUT_INVALID: 400, PROFILE_ABORTED: 408, PROFILE_FAILED: 500, PROFILE_CLEANUP_UNCONFIRMED: 409 };
 const PERFORMANCE_COLLECTION_HTTP_FAILURES = { PERFORMANCE_DISPOSED: 503, PERFORMANCE_COLLECTION_BUSY: 409, PERFORMANCE_COLLECTION_REFUSED: 409, PROJECT_INPUT_INVALID: 400, PERFORMANCE_COLLECTION_FAILED: 500 };
@@ -2761,6 +2762,43 @@ const TOOLS = [
         throw error;
       }
       return payload;
+    },
+  },
+  {
+    name: "list_override_order_issuers",
+    capabilityId: "reference.override.orders.read",
+    capabilityVersion: 1,
+    description: "List canonical base and official-DLC aiscripts/ and md/ <create_order> call sites where override='true' suspends a running ship order (causing <event_object_order_cancelled> to fire before automatic resumption) with host filesystem paths redacted.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        scriptKind: { type: "string", enum: ["all", "aiscript", "md"] },
+        orderId: { type: "string", maxLength: 128 },
+        q: { type: "string", maxLength: 256 },
+        refresh: { type: "string", enum: ["0", "1"] },
+      },
+      additionalProperties: false,
+    },
+    handler: async (args) => {
+      const q = new URLSearchParams();
+      if (args.scriptKind !== undefined) q.set("scriptKind", String(args.scriptKind));
+      if (args.orderId !== undefined) q.set("orderId", String(args.orderId));
+      if (args.q !== undefined) q.set("q", String(args.q));
+      if (args.refresh !== undefined) q.set("refresh", String(args.refresh));
+      return requireResponse(
+        await forge("GET", `/api/agent/reference/override-orders?${q}`),
+        "override order issuers",
+        {
+          ok: "boolean",
+          generation: "string",
+          scannedAiScripts: "number",
+          scannedMdScripts: "number",
+          total: "number",
+          filteredTotal: "number",
+          byOrderId: "object",
+          items: "array",
+        },
+      );
     },
   },
   {

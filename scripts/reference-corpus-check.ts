@@ -1,8 +1,9 @@
-import { getReferenceCorpus } from '../src/lib/referenceCorpus';
+import { getReferenceCorpus, listOverrideOrderIssuers } from '../src/lib/referenceCorpus';
 import { suggestReferences } from '../src/lib/referenceSuggestions';
 
 const root = process.env.X4_REFERENCE_ROOT || './data/x4-unpacked';
 const corpus = getReferenceCorpus(root, true);
+const overrideOrders = listOverrideOrderIssuers(root, true);
 const macroSourceFiles = corpus.sourceFiles.filter((file) => file.toLowerCase().endsWith('index/macros.xml'));
 const requiredFactions = ['fallensplit', 'kaori', 'holyorderfanatic', 'loanshark', 'trinity'];
 const checks = [
@@ -16,6 +17,7 @@ const checks = [
   { name: 'canonical jobs indexed', pass: corpus.jobs.length > 1000 && corpus.references.jobs.has('dummy_job'), detail: String(corpus.jobs.length) },
   { name: 'canonical AI scripts indexed', pass: corpus.aiScripts.length > 100 && corpus.references.aiScripts.has('boarding.pod'), detail: String(corpus.aiScripts.length) },
   { name: 'ware prefix suggestion', pass: suggestReferences(corpus, { kind: 'ware', query: 'energyc', limit: 10 })[0]?.label === 'energycells', detail: suggestReferences(corpus, { kind: 'ware', query: 'energyc', limit: 3 }).map(item => item.label).join(', ') },
+  { name: 'override order issuers indexed across aiscripts and md (#67)', pass: overrideOrders.total >= 14 && overrideOrders.items.some(i => i.scriptKind === 'aiscript' && i.scriptId === 'interrupt.attacked' && i.orderId === 'Attack') && overrideOrders.items.some(i => i.scriptKind === 'aiscript' && i.scriptId === 'interrupt.attacked' && i.orderId === 'Flee') && overrideOrders.items.some(i => i.scriptKind === 'md' && i.path === 'md/conversations.xml' && i.orderId === 'Attack'), detail: `total=${overrideOrders.total}` },
 ];
 
 for (const check of checks) console.log(`${check.pass ? 'PASS' : 'FAIL'} ${check.name}${check.detail ? ` (${check.detail})` : ''}`);

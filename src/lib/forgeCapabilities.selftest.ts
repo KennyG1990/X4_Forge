@@ -53,7 +53,7 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
 
   const validationErrors = validateForgeCapabilityRegistry();
   check('registry invariants', validationErrors.length === 0, validationErrors.join(' | ') || undefined);
-  check('bounded non-native registry', FORGE_CAPABILITIES.filter(capability => !capability.id.startsWith('performance.native.')).length === 105, `count=${FORGE_CAPABILITIES.length}`);
+  check('bounded non-native registry', FORGE_CAPABILITIES.filter(capability => !capability.id.startsWith('performance.native.')).length === 106, `count=${FORGE_CAPABILITIES.length}`);
   const knowledgeSelftest = runForgeKnowledgeSelftest();
   check('forgeKnowledge shared wiki/shortcuts/onboarding selftest', knowledgeSelftest.pass, knowledgeSelftest.checks.filter(c => !c.pass).map(c => c.name).join(', ') || undefined);
   const domainAuthoringSelftest = runWorkspaceDomainAuthoringSelftest();
@@ -643,6 +643,7 @@ export async function runForgeCapabilitiesSelftest(): Promise<{ pass: boolean; c
     { id: 'project.symbols.search', method: 'GET', path: '/api/agent/mod-folder/symbols', inputLocation: 'query', alias: 'search_workspace_symbols', mcpStatus: 'connected', workspace: 'optional', effects: ['read', 'analyze'], ledger: null },
     { id: 'reference.coverage.read', method: 'GET', path: '/api/agent/reference/coverage', inputLocation: 'query', alias: 'get_reference_coverage', mcpStatus: 'connected', workspace: 'none', effects: ['read', 'analyze'], ledger: null },
     { id: 'reference.galaxy.read', method: 'GET', path: '/api/agent/galaxy-map', inputLocation: 'query', alias: 'get_galaxy_map', mcpStatus: 'connected', workspace: 'none', effects: ['read', 'analyze'], ledger: null },
+    { id: 'reference.override.orders.read', method: 'GET', path: '/api/agent/reference/override-orders', inputLocation: 'query', alias: 'list_override_order_issuers', mcpStatus: 'connected', workspace: 'none', effects: ['read', 'analyze'], ledger: null },
     { id: 'ui.lua.snippets.read', method: 'GET', path: '/api/agent/ui/lua-snippets', inputLocation: 'query', alias: 'list_lua_ui_snippets', mcpStatus: 'connected', workspace: 'none', effects: ['read'], ledger: null },
     { id: 'ui.vanilla.harvest', method: 'GET', path: '/api/agent/ui/vanilla-harvest', inputLocation: 'query', alias: 'harvest_vanilla_ui_menus', mcpStatus: 'connected', workspace: 'none', effects: ['read', 'analyze'], ledger: null },
   ] as const;
@@ -725,7 +726,7 @@ export function runNativeForgeCapabilitiesSelftest() {
   const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   const keys = (value: object | undefined) => Object.keys(value || {}).sort();
   check('native registry has exactly the three reviewed process telemetry identities',
-    FORGE_CAPABILITIES.length === 108 &&
+    FORGE_CAPABILITIES.length === 109 &&
       equal(FORGE_CAPABILITIES.filter(capability => capability.id.startsWith('performance.native.')).map(capability => capability.id).sort(),
         expected.map(row => row.id).sort()));
   for (const row of expected) {

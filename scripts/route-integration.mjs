@@ -818,7 +818,7 @@ async function main() {
     'help.bug.report', 'help.knowledge.read', 'history.list', 'history.raw.read', 'history.revert',
     'patch.audit.read', 'patch.base.read', 'patch.diff.simulate', 'patch.readiness.analyze', 'patch.targets.list', 'patch.xpath.complete', 'patch.xpath.synthesize', 'performance.collect', 'performance.native.collect', 'performance.native.read', 'performance.native.stop',
     'performance.profile', 'performance.read', 'project.ai.navigation', 'project.brief.read', 'project.md.navigation', 'project.md.rename', 'project.proof.read', 'project.symbols.search', 'project.validate', 'project.xml.references', 'readiness.read',
-    'reference.coverage.read', 'reference.file.read', 'reference.galaxy.read', 'reference.manifest.list', 'reference.objects.search', 'reference.status.read', 'reference.suggest',
+    'reference.coverage.read', 'reference.file.read', 'reference.galaxy.read', 'reference.manifest.list', 'reference.objects.search', 'reference.override.orders.read', 'reference.status.read', 'reference.suggest',
     'release.artifact.verify', 'release.nexus.prepare', 'release.steam.adopt', 'release.steam.prepare', 'release.steam.verify',
     'reviews.warning.revoke', 'rules.suppression.apply', 'rules.suppression.prepare',
     'runtime.bridge.read', 'runtime.control.read', 'runtime.cue.telemetry', 'runtime.debug.read', 'runtime.gamelog.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domain.inspect', 'schema.domains.list', 'schema.element.explain',
@@ -1462,11 +1462,11 @@ async function main() {
   for (const [name, response, scope, expectedIds] of [
     ['read', readEffective, 'read', ['ai.usage.read', 'contracts.derive', 'contracts.glue.preview', 'contracts.registry.read', 'diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.file.read', 'extensions.overrides.analyze', 'help.bug.report', 'help.knowledge.read', 'history.list', 'history.raw.read',
       'patch.audit.read', 'patch.base.read', 'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.complete', 'patch.xpath.synthesize', 'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.symbols.search', 'project.xml.references', 'readiness.read',
-      'reference.coverage.read', 'reference.file.read', 'reference.galaxy.read', 'reference.manifest.list', 'reference.objects.search', 'reference.status.read', 'reference.suggest', 'release.artifact.verify', 'rules.suppression.prepare',
+      'reference.coverage.read', 'reference.file.read', 'reference.galaxy.read', 'reference.manifest.list', 'reference.objects.search', 'reference.override.orders.read', 'reference.status.read', 'reference.suggest', 'release.artifact.verify', 'rules.suppression.prepare',
       'runtime.bridge.read', 'runtime.control.read', 'runtime.cue.telemetry', 'runtime.debug.read', 'runtime.gamelog.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domain.inspect', 'schema.domains.list', 'schema.element.explain', 'studio.preferences.read', 'text.lookup', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read', 'workspace.domain.read', 'workspace.graph.critic', 'workspace.graph.explain', 'workspace.graph.simulate', 'workspace.nodes.diagnose', 'workspace.read', 'workspace.roundtrip.check']],
     ['write', writeEffective, 'write', ['ai.usage.read', 'contracts.derive', 'contracts.glue.preview', 'contracts.registry.read', 'diagnostics.quick.fixes', 'expression.check', 'expression.inspect', 'expression.suggest', 'extensions.conflicts.analyze', 'extensions.dependencies.analyze', 'extensions.file.read', 'extensions.overrides.analyze', 'help.bug.report', 'help.knowledge.read', 'history.list', 'history.raw.read', 'patch.audit.read', 'patch.base.read', 'patch.diff.simulate', 'patch.targets.list', 'patch.xpath.complete', 'patch.xpath.synthesize', 'project.validate',
       'performance.collect', 'performance.profile', 'performance.read', 'project.brief.read', 'project.proof.read', 'project.symbols.search', 'project.xml.references',
-      'readiness.read', 'reference.coverage.read', 'reference.file.read', 'reference.galaxy.read', 'reference.manifest.list', 'reference.objects.search', 'reference.status.read', 'reference.suggest', 'release.artifact.verify', 'rules.suppression.prepare',
+      'readiness.read', 'reference.coverage.read', 'reference.file.read', 'reference.galaxy.read', 'reference.manifest.list', 'reference.objects.search', 'reference.override.orders.read', 'reference.status.read', 'reference.suggest', 'release.artifact.verify', 'rules.suppression.prepare',
       'runtime.bridge.read', 'runtime.control.read', 'runtime.cue.telemetry', 'runtime.debug.read', 'runtime.gamelog.read', 'runtime.health.read', 'runtime.log.diagnose', 'runtime.probe.preview', 'runtime.state.read', 'schema.domain.inspect', 'schema.domains.list', 'schema.element.explain', 'studio.preferences.read', 'text.lookup', 'ui.lua.snippets.read', 'ui.vanilla.harvest', 'validation.last.read', 'workspace.compile', 'workspace.compile.result', 'workspace.domain.read', 'workspace.graph.critic', 'workspace.graph.explain', 'workspace.graph.simulate', 'workspace.nodes.diagnose', 'workspace.read', 'workspace.roundtrip.check']],
     ['deploy', deployEffective, 'deploy', expectedCapabilityIds.filter(id => !id.startsWith('configuration.') && !id.startsWith('deploy.') && !id.startsWith('bulk.transform.') && !id.startsWith('files.') && !id.startsWith('snapshots.') && !id.startsWith('release.steam.') && ![
       'history.revert', 'performance.native.collect', 'performance.native.read', 'performance.native.stop', 'project.ai.navigation', 'project.md.navigation', 'project.md.rename', 'release.nexus.prepare', 'reviews.warning.revoke', 'rules.suppression.apply', 'workspace.domain.write', 'workspace.mod.drift', 'workspace.mod.import',
@@ -7401,6 +7401,12 @@ async function main() {
       capabilityResponses.set('reference.coverage.read', covRes);
       const covBad = await req('GET', '/api/agent/reference/coverage?unexpected=1', readKey);
 
+      const overrideOrdersAnon = await req('GET', '/api/agent/reference/override-orders', null);
+      const overrideOrdersRes = await req('GET', '/api/agent/reference/override-orders', readKey);
+      capabilityResponses.set('reference.override.orders.read', overrideOrdersRes);
+      const overrideOrdersBad = await req('GET', '/api/agent/reference/override-orders?scriptKind=bogus', readKey);
+      const overrideOrdersExtra = await req('GET', '/api/agent/reference/override-orders?unexpected=1', readKey);
+
       const snipRes = await req('GET', '/api/agent/ui/lua-snippets', readKey);
       capabilityResponses.set('ui.lua.snippets.read', snipRes);
 
@@ -7416,6 +7422,7 @@ async function main() {
           && patchBaseRes.status === 200 && patchBaseRes.json?.sourceKind === 'extension-loose' && !JSON.stringify(patchBaseRes.json).includes(gameRoot) && patchBaseBad.status === 400
           && xpathRes.status === 200 && xpathRes.json?.ok === true && Array.isArray(xpathRes.json?.items) && xpathBad.status === 400
           && (covRes.status === 200 || covRes.status === 202) && covRes.json?.ok === true && !JSON.stringify(covRes.json).includes(safeWorkspace) && !JSON.stringify(covRes.json).includes(referenceRoot) && covBad.status === 400
+          && overrideOrdersAnon.status === 401 && overrideOrdersRes.status === 200 && overrideOrdersRes.json?.ok === true && Array.isArray(overrideOrdersRes.json?.items) && !JSON.stringify(overrideOrdersRes.json).includes(referenceRoot) && overrideOrdersBad.status === 400 && overrideOrdersExtra.status === 400
           && snipRes.status === 200 && snipRes.json?.ok === true && Array.isArray(snipRes.json?.snippets)
           && harvestRes.status === 200 && harvestRes.json?.ok === true && harvestBad.status === 400,
         JSON.stringify({

@@ -31,7 +31,15 @@ import { triggerNodesOf, actionChainOf } from './mdExplain';
 import { analyzeMdCueTrigger, graphConditionKind } from './cueLineage';
 
 export type CriticSeverity = 'info' | 'warning' | 'error';
-export type CriticCode = 'ref_mismatch' | 'oneway_no_restore' | 'unguarded_high_risk' | 'instantiate_reload' | 'game_loaded_no_refresh' | 'illegal_instantiate' | 'no_event_condition';
+export type CriticCode =
+  | 'ref_mismatch'
+  | 'oneway_no_restore'
+  | 'unguarded_high_risk'
+  | 'instantiate_reload'
+  | 'game_loaded_no_refresh'
+  | 'illegal_instantiate'
+  | 'no_event_condition'
+  | 'order_cancelled_override_suspension';
 
 export interface CriticFinding {
   severity: CriticSeverity;
@@ -55,6 +63,48 @@ const FREQUENT_EVENTS = new Set<string>([
 ]);
 
 const GUARD_CONDITION_TAGS = new Set<string>(['check_value', 'custom_condition']);
+const ORDER_OVERRIDE_GUARD_RE = /\.isoverride\b|(?:event\.param|\$[A-Za-z_]\w*)\.exists\b|\.orders\.(?:indexof|count)\b/;
+
+function maskCriticDecoys(raw: string): string {
+  return raw
+    .replace(/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>/g, ' ')
+    .replace(/'(?:\\.|[^'])*'|"(?:\\.|[^"])*"/g, ' ');
+}
+
+function nodeHasOrderOverrideGuard(node: MDNode): boolean {
+  const props = node?.properties || {};
+  for (const [k, v] of Object.entries(props)) {
+    if (k === 'comment' || v == null) continue;
+    const text = String(v);
+    if (k === 'rawXml' || k === '__rawChildrenXml') {
+      const noComments = text.replace(/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>/g, ' ');
+      const attrRe = /\b([a-zA-Z_][\w-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+      let m: RegExpExecArray | null;
+      while ((m = attrRe.exec(noComments)) !== null) {
+        if (m[1].toLowerCase() === 'comment') continue;
+        const val = (m[2] ?? m[3] ?? '').replace(/'(?:\\.|[^'])*'|"(?:\\.|[^"])*"/g, ' ');
+        if (ORDER_OVERRIDE_GUARD_RE.test(val)) return true;
+      }
+      continue;
+    }
+    if (ORDER_OVERRIDE_GUARD_RE.test(maskCriticDecoys(text))) return true;
+  }
+  return false;
+}
+
+function triggerIsUnpairedOrderCancelled(node: MDNode): boolean {
+  if (node.xmlTag === 'event_object_order_cancelled') return true;
+  if (node.xmlTag === 'custom_condition' || node.xmlTag === 'check_all' || node.xmlTag === 'check_any') {
+    const raw = String(node.properties?.rawXml || node.properties?.__rawChildrenXml || '')
+      .replace(/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>/g, ' ');
+    if (!/<\s*event_object_order_cancelled\b/.test(raw)) return false;
+    if ((node.xmlTag === 'check_any' || /<\s*check_any\b/.test(raw)) && /<\s*event_object_order_finished\b/.test(raw)) {
+      return false;
+    }
+    return true;
+  }
+  return false;
+}
 
 /** The primary object reference of a node's top-level `object` attribute, or null. */
 function primaryObjectRef(node: MDNode): string | null {
@@ -165,6 +215,26 @@ export function critiqueWorkspace(nodes: MDNode[], links: MDLink[]): CriticResul
         severity: 'warning', code: 'game_loaded_no_refresh', cueId: cue.id, cueName, nodeId: cue.id,
         message: `Cue "${cueName}" bootstraps a driver (UI event / library / sub-cue loop) but is gated on <${loadTrigger.xmlTag}>, which does NOT fire on \`refreshmd\`. It stays dead through hot-reloads until a full save reload. For dev-testable bootstrap use a conditionless cue (fires on load AND refreshmd); keep <${loadTrigger.xmlTag}> only if this is purely save-restore.`,
       });
+    }
+
+    // --- (h) order_cancelled_override_suspension (#67 / FF-28) — advisory info ---
+    const cancelledTrigger = triggers.find(triggerIsUnpairedOrderCancelled);
+    if (cancelledTrigger && cue.xmlTag !== 'custom_xml_cue') {
+      const hasOverrideGuard = triggers.some(nodeHasOrderOverrideGuard) || actions.some(nodeHasOrderOverrideGuard);
+      if (!hasOverrideGuard) {
+        const requeuesOrder = actions.some((a) =>
+          a.xmlTag === 'create_order'
+          || (a.xmlTag === 'custom_xml' && /<\s*create_order\b/.test(String(a.properties?.rawXml || '').replace(/<!--[\s\S]*?-->/g, ' '))),
+        );
+        findings.push({
+          severity: 'info',
+          code: 'order_cancelled_override_suspension',
+          cueId: cue.id,
+          cueName,
+          nodeId: cancelledTrigger.id,
+          message: `Cue "${cueName}" triggers on <event_object_order_cancelled> without guarding against temporary override suspension: in X4 9.00, override orders (e.g. interrupt.attacked Attack/Flee with override="true") suspend rather than delete the running order and still fire <event_object_order_cancelled>${requeuesOrder ? ' — <create_order> in this cue can queue a duplicate order while the suspended order is waiting to resume' : ''}. Guard permanent-removal logic with \`not event.param.exists\` or check \`@$Order.exists and @$Ship.order.isoverride\`.`,
+        });
+      }
     }
   }
 
@@ -367,6 +437,42 @@ export function runCriticSelftest() {
     [L('q1', 'c7', 'out_cond', 'e7', 'in_cond'), L('q2', 'c7', 'out_act', 'cs4', 'in_act')]
   );
   ok('infrequent_not_flagged', !has(infreq, 'unguarded_high_risk'), infreq.findings);
+
+  // ---- (h) order_cancelled_override_suspension (#67 / FF-28) ----
+  const unguardedCancel = critiqueWorkspace(
+    [N('co1', 'cue', 'cue', { name: 'RequeueCancel', instantiate: 'true' }),
+     N('eo1', 'event', 'event_object_order_cancelled', { object: '$Ship' }),
+     N('ao1', 'action', 'create_order', { object: '$Ship', id: "'MoveGeneric'" })],
+    [L('lo1', 'co1', 'out_cond', 'eo1', 'in_cond'), L('lo2', 'co1', 'out_act', 'ao1', 'in_act')]
+  );
+  ok('order_cancelled_override_suspension_fires_info',
+    unguardedCancel.findings.some((f) =>
+      f.code === 'order_cancelled_override_suspension'
+      && f.severity === 'info'
+      && f.nodeId === 'eo1'
+      && f.message.includes('duplicate order')),
+    unguardedCancel.findings);
+  const guardedCancelCond = critiqueWorkspace(
+    [N('co2', 'cue', 'cue', { name: 'GuardedCancelCond', instantiate: 'true' }),
+     N('eo2', 'event', 'event_object_order_cancelled', { object: '$Ship' }),
+     N('go2', 'condition', 'check_value', { value: 'not event.param.exists' }),
+     N('ao2', 'action', 'create_order', { object: '$Ship', id: "'MoveGeneric'" })],
+    [L('lo3', 'co2', 'out_cond', 'eo2', 'in_cond'), L('lo4', 'co2', 'out_cond', 'go2', 'in_cond'), L('lo5', 'co2', 'out_act', 'ao2', 'in_act')]
+  );
+  ok('order_cancelled_override_suppressed_by_param_exists', !has(guardedCancelCond, 'order_cancelled_override_suspension'), guardedCancelCond.findings);
+  const guardedCancelAction = critiqueWorkspace(
+    [N('co3', 'cue', 'cue', { name: 'GuardedCancelAct', instantiate: 'true' }),
+     N('eo3', 'event', 'event_object_order_cancelled', { object: '$Ship' }),
+     N('go3', 'action', 'do_if', { value: '@$Order.exists and @$Ship.order.isoverride' })],
+    [L('lo6', 'co3', 'out_cond', 'eo3', 'in_cond'), L('lo7', 'co3', 'out_act', 'go3', 'in_act')]
+  );
+  ok('order_cancelled_override_suppressed_by_isoverride', !has(guardedCancelAction, 'order_cancelled_override_suspension'), guardedCancelAction.findings);
+  const pairedCheckAnyCancel = critiqueWorkspace(
+    [N('co4', 'cue', 'cue', { name: 'PairedCheckAny', instantiate: 'true' }),
+     N('eo4', 'condition', 'check_any', { __rawChildrenXml: '<event_object_order_finished object="$Ship"/><event_object_order_cancelled object="$Ship"/>' })],
+    [L('lo8', 'co4', 'out_cond', 'eo4', 'in_cond')]
+  );
+  ok('order_cancelled_override_suppressed_when_paired_with_finished', !has(pairedCheckAnyCancel, 'order_cancelled_override_suspension'), pairedCheckAnyCancel.findings);
 
   // ---- clean cue produces no findings ----
   const clean = critiqueWorkspace(

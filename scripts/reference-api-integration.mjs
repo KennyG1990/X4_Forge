@@ -540,6 +540,23 @@ try {
   check('project validation detects dead diff selector', diffLayer?.findings?.some((finding) => finding.code === 'DIFF_SELECTOR_ZERO'), JSON.stringify(diffLayer || null));
   check('project validation XSD-checks post-apply document', diffLayer?.postApplyFindings?.some((finding) => finding.severity === 'error' && /ILLEGAL|UNKNOWN/.test(finding.code)), JSON.stringify(diffLayer?.postApplyFindings || null));
   check('post-apply validation subtracts vanilla baseline findings', !diffLayer?.postApplyFindings?.some((finding) => /test_ship_arg_m_uimax_test_macro/.test(finding.message || '')), JSON.stringify(diffLayer?.postApplyFindings || null));
+
+  const overrideAnon = await request('/api/agent/reference/override-orders');
+  const overrideBad = await request('/api/agent/reference/override-orders?scriptKind=bogus', { token: readToken });
+  const overrideAllRes = await request('/api/agent/reference/override-orders', { token: readToken });
+  const overrideAll = await overrideAllRes.json();
+  const overrideAttackRes = await request('/api/agent/reference/override-orders?scriptKind=aiscript&orderId=Attack', { token: readToken });
+  const overrideAttack = await overrideAttackRes.json();
+  check('override-order issuers endpoint enforces auth, input contract, and host-path redaction (#67)',
+    overrideAnon.status === 401
+      && overrideBad.status === 400
+      && overrideAllRes.status === 200
+      && overrideAll.ok === true
+      && overrideAll.total >= 14
+      && !JSON.stringify(overrideAll).includes(root)
+      && overrideAttackRes.status === 200
+      && overrideAttack.items?.some((item) => item.scriptId === 'interrupt.attacked' && item.orderId === 'Attack'),
+    JSON.stringify({ anon: overrideAnon.status, bad: overrideBad.status, total: overrideAll?.total, attackCount: overrideAttack?.filteredTotal }));
 } catch (error) {
   check('harness completed without exception', false, error instanceof Error ? error.message : String(error));
 } finally {

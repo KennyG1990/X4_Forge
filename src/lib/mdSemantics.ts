@@ -161,6 +161,13 @@ const REGISTRY: Record<string, ElementSemantics> = {
     tag: 'event_object_destroyed', kind: 'event', title: 'Object Destroyed', reads: ['object.lifecycle'], writes: [], risk: 'safe',
     describe: (p) => `Triggers when ${attr(p, 'object', 'the object')} is destroyed.`,
   },
+  event_object_order_cancelled: {
+    tag: 'event_object_order_cancelled', kind: 'event', title: 'Object Order Cancelled', reads: ['object.orders'], writes: [], risk: 'safe',
+    describe: (p) =>
+      `Triggers when an order on ${attr(p, 'object', attr(p, 'group', 'the object'))} is cancelled` +
+      (String(p?.immediate) === 'true' ? ' (immediate).' : '.'),
+    note: 'X4 9.00 engine behavior: also fires when an override order (e.g. aiscripts/interrupt.attacked.xml Attack/Flee with override="true") temporarily SUSPENDS the running order — the suspended order stays in $ship.orders and resumes automatically when the override ends. Guard permanent-removal handlers with `not event.param.exists` (vanilla md/factionsubgoal_recon.xml) or distinguish live suspension via `@$order.exists and @$ship.order.isoverride`.',
+  },
   check_value: {
     tag: 'check_value', kind: 'condition', title: 'Check Value', reads: ['expression'], writes: [], risk: 'safe',
     describe: (p) => `Passes only when the expression "${attr(p, 'value', '(unset)')}" is true.`,
@@ -266,8 +273,11 @@ const REGISTRY: Record<string, ElementSemantics> = {
   },
   create_order: {
     tag: 'create_order', kind: 'action', title: 'Create Order', reads: [], writes: ['object.orders'], risk: 'state_mutation',
-    describe: (p) => `Gives ${attr(p, 'object', 'the ship')} the '${attr(p, 'id', '(unset)')}' order${p?.default ? ' as its default behaviour' : ''}. Parameters ride in child <param> elements.`,
-    note: 'The fleet-actuation primitive: commands an EXISTING ship (proven shape: DeadAir order.move.recon).',
+    describe: (p) => {
+      const ov = p?.override !== undefined && String(p.override).trim() !== '' && !/^(false|0)$/i.test(String(p.override).trim());
+      return `Gives ${attr(p, 'object', 'the ship')} the '${attr(p, 'id', '(unset)')}' order${p?.default ? ' as its default behaviour' : ''}${ov ? ' as an override (suspending the running order)' : ''}. Parameters ride in child <param> elements.`;
+    },
+    note: 'The fleet-actuation primitive: commands an EXISTING ship (proven shape: DeadAir order.move.recon). When override="true" (e.g. aiscripts/interrupt.attacked.xml Attack/Flee), X4 suspends rather than deletes the running order so it resumes afterward, yet still raises <event_object_order_cancelled> for the suspended order — guard cancellation listeners with `not event.param.exists` or `.isoverride`.',
   },
   add_player_choice: {
     tag: 'add_player_choice', kind: 'action', title: 'Add Player Choice', reads: [], writes: ['ui.conversation'], risk: 'safe',
@@ -807,6 +817,22 @@ export function runSemanticsSelftest() {
   ok('shieldlevel_flagged_notInSchema', semanticsForNode(node('set_object_shieldlevel', {})).notInSchema === true);
   ok('remove_object_flagged_notInSchema', semanticsForNode(node('remove_object', {})).notInSchema === true);
   ok('real_element_not_flagged', semanticsForNode(node('reward_player', {})).notInSchema === false);
+
+  // --- #67 (FF-28): event_object_order_cancelled & create_order override="true" suspension semantics ---
+  const cancelledSem = semanticsForNode(node('event_object_order_cancelled', { object: '$Ship', immediate: 'true' }, 'event'));
+  ok('order_cancelled_curated_with_override_note',
+    cancelledSem.curated === true
+    && cancelledSem.notInSchema === false
+    && cancelledSem.reads.includes('object.orders')
+    && /Triggers when an order on \$Ship is cancelled \(immediate\)\./.test(cancelledSem.description)
+    && /not event\.param\.exists/.test(cancelledSem.note || '')
+    && /\.isoverride/.test(cancelledSem.note || ''), cancelledSem);
+  const overrideOrderSem = semanticsForNode(node('create_order', { object: 'event.object', id: "'Attack'", override: 'true' }));
+  ok('create_order_override_describes_suspension',
+    /as an override \(suspending the running order\)/.test(overrideOrderSem.description)
+    && /event_object_order_cancelled/.test(overrideOrderSem.note || '')
+    && !/as an override/.test(describeNode(node('create_order', { object: '$Ship', id: "'Patrol'", override: 'false' }))),
+    overrideOrderSem);
 
   // --- every registry entry is well-formed (no throwing describe, required fields) ---
   let wellFormed = true;

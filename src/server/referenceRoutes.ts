@@ -7,6 +7,7 @@ import { resolveX4ReferenceRoot, resolveXsdConfig } from '../lib/xsdParser';
 import {
   assertReferenceRootDirectory,
   getReferenceCorpus,
+  listOverrideOrderIssuers,
   peekReferenceCorpus,
   resolveReferenceFile,
   runReferenceCorpusSelftest,
@@ -175,6 +176,58 @@ export function respondAgentReferenceCoverage(req: Request, res: Response): Resp
       ready: true,
       status: redactedStatus,
       coverage: redactedCoverage,
+    });
+  } catch (error) { return sendCorpusError(res, error); }
+}
+
+export function respondAgentOverrideOrderIssuers(req: Request, res: Response): Response {
+  res.set('Cache-Control', 'no-store');
+  const queryError = validateReferenceCapabilityQuery(
+    req.query,
+    ['scriptKind', 'orderId', 'q', 'refresh', 'workspaceId', 'clientId'],
+    'reference.override.orders.read',
+  );
+  if (queryError) return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: queryError });
+  if (req.query.refresh !== undefined && req.query.refresh !== '0' && req.query.refresh !== '1') {
+    return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'Optional ?refresh= must be 0 or 1.' });
+  }
+  const scriptKindRaw = req.query.scriptKind !== undefined ? String(req.query.scriptKind).trim().toLowerCase() : 'all';
+  if (!['all', 'aiscript', 'md'].includes(scriptKindRaw)) {
+    return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'Optional ?scriptKind= must be all, aiscript, or md.' });
+  }
+  const orderIdRaw = req.query.orderId !== undefined ? String(req.query.orderId).trim() : '';
+  if (orderIdRaw.length > 128) {
+    return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'Optional ?orderId= must be at most 128 characters.' });
+  }
+  const qRaw = req.query.q !== undefined ? String(req.query.q).trim() : '';
+  if (qRaw.length > 256) {
+    return res.status(400).json({ code: 'CAPABILITY_INPUT_INVALID', error: 'Optional ?q= must be at most 256 characters.' });
+  }
+  try {
+    const resolved = resolveXsdConfig();
+    const index = listOverrideOrderIssuers(resolved.x4ReferenceRoot, forceRefresh(req));
+    const orderNeedle = orderIdRaw.replace(/^'(.*)'$/, '$1').toLowerCase();
+    const qNeedle = qRaw.toLowerCase();
+    const filtered = index.items.filter(item => {
+      if (scriptKindRaw !== 'all' && item.scriptKind !== scriptKindRaw) return false;
+      if (orderNeedle && item.orderId.toLowerCase() !== orderNeedle && item.rawOrderExpr.toLowerCase() !== orderIdRaw.toLowerCase()) {
+        return false;
+      }
+      if (qNeedle) {
+        const hay = `${item.scriptKind} ${item.scriptId} ${item.path} ${item.orderId} ${item.rawOrderExpr} ${item.targetObject || ''} ${item.source}`.toLowerCase();
+        if (!hay.includes(qNeedle)) return false;
+      }
+      return true;
+    });
+    return res.json({
+      ok: true,
+      generation: index.generation,
+      scannedAiScripts: index.scannedAiScripts,
+      scannedMdScripts: index.scannedMdScripts,
+      total: index.total,
+      filteredTotal: filtered.length,
+      byOrderId: index.byOrderId,
+      items: filtered,
     });
   } catch (error) { return sendCorpusError(res, error); }
 }

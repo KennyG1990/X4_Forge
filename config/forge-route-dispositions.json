@@ -2275,6 +2275,18 @@
       "resourceClass": "stateless-analysis",
       "workspaceMode": "none"
     },
+    "GET /api/agent/reference/override-orders": {
+      "disposition": "canonical-capability",
+      "owner": "reference.override.orders.read",
+      "registrations": 1,
+      "agentScopes": [
+        "read",
+        "write",
+        "deploy"
+      ],
+      "resourceClass": "configured-root",
+      "workspaceMode": "none"
+    },
     "GET /api/agent/reference/status": {
       "disposition": "canonical-capability",
       "owner": "reference.status.read",
@@ -4852,6 +4864,7 @@
     "reference.galaxy.read@1": "fa6eb49a3b786091ce88ab12575187dcb0002fbe80a3da3d5378a791f0a087e7",
     "reference.manifest.list@1": "5789be7feafbd5d7a6205475f8b0057374e0a1bd9cc8ec03abb9439a4e4e50bc",
     "reference.objects.search@1": "20b6c432adf4165f59a0edbd7b04df9a5820773ec0a67b49d4607acef9a8a314",
+    "reference.override.orders.read@1": "4748c9a7b416b50c621dbecd5f045bd58e3eb4cc34976762f3c247ffa67e97e0",
     "reference.status.read@1": "5320a3b3f91fc1d544c9a0b5f4e00e516516865efe15125608521c438038fc1f",
     "reference.suggest@1": "fc01662e1f79253fb811f0a4e0925e3d899b99cf80308a36f10fc243e761460e",
     "release.artifact.verify@1": "982cbd370f63feb26041604b120bd942fb5a29f49d93d75bedb2495b033b6194",
@@ -4898,8 +4911,8 @@
     "workspace.roundtrip.check@1": "c1a1c89c1eb3f44f8f16e6ca03e9787318eec5065bcf25dd2c3ce3a4b4045185"
   },
   "mcpModuleSignature": {
-    "version": 41,
-    "hash": "3abfde7d6c065016857ea71730918038fd91669f6f9e3ee2fef952bc12476d78"
+    "version": 42,
+    "hash": "088dcbe521eb2809bae787e523aa74d403ee6a7a32ad54bdd0960d446554c554"
   },
   "mcpSignatures": {
     "validate_mod": "536c11b1ddbd5575f54ee832e887149947ae5b302a0fa873c04113d474b64448",
@@ -4988,6 +5001,7 @@
     "read_patch_base_content": "a3b31d50497760ea45821fcd4431ac95542d7c011e322a0e0848c0f73e3134e2",
     "complete_xpath_selector": "eaa18fd19c537bdde30cdbd3e7542209f2431a65f707feb27a507e9c889c244a",
     "get_reference_coverage": "91fbe88553da4c30bddea7d02a2869de56aa9fbdf933ff21be2616fcf759dd8f",
+    "list_override_order_issuers": "69c873892b6d551fcd52f4c69a2d96bdc064ca3aab1f30f415ae0c66277526c9",
     "list_lua_ui_snippets": "d81ce133bd3ae5d276baeb94fc6c3366171698d2a83066e3cd10f8134dd87d06",
     "harvest_vanilla_ui_menus": "0d7be639796a030778d4ab28ff382fbd441dc1a06256c39daa2d6e4279d9dfd8",
     "prepare_bug_report": "b4a8c6908654b30fe371d13c40697b48205ad334a3fda6876f8da0b315c0ba46",
@@ -5099,6 +5113,7 @@
     "read_patch_base_content": "patch.base.read@1",
     "complete_xpath_selector": "patch.xpath.complete@1",
     "get_reference_coverage": "reference.coverage.read@1",
+    "list_override_order_issuers": "reference.override.orders.read@1",
     "list_lua_ui_snippets": "ui.lua.snippets.read@1",
     "harvest_vanilla_ui_menus": "ui.vanilla.harvest@1",
     "prepare_bug_report": "help.bug.report@1",
