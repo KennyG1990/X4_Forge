@@ -9,32 +9,58 @@ import {configureProfileProxyCancellation} from './src/lib/profileProxyCancellat
 // API server port in split-dev mode (Vite serves the UI on 3000 and proxies /api here).
 const API_PORT = process.env.API_PORT || '3001';
 
-// App version, computed at BUILD TIME and baked into the bundle as compile-time constants
-// (__APP_VERSION__ / __APP_BUILD__). The DISPLAYED patch number is the git commit count, so
-// the header version moves with every commit — a user who updates the extension (installs a
-// bundle built from a newer commit) sees a higher number. major.minor come from package.json
-// (bump those manually at real milestones). The shipped app has no .git, but that's fine: the
-// value is frozen into the bundle at build time, exactly when .git IS present. Falls back to
-// the plain package.json version if git is unavailable.
+// Canonical product version and build provenance, computed at BUILD TIME and baked into the
+// client bundle (__APP_VERSION__ / __APP_BUILD__).
+// - __APP_VERSION__ comes from vscode-extension/package.json (single source of truth across
+//   Open VSX, UI header, validation receipts, discovery records, and bug reports).
+// - __APP_BUILD__ carries full-history commit provenance ("build <count> · <sha> · <date>")
+//   when built from an unshallow Git checkout, or "shallow-checkout · <sha> · <date>" if
+//   built in a shallow clone (which stage-app.mjs and inspect-vsix.mjs refuse to package).
+const RELEASE_METADATA_PATHS = new Set([
+  'vscode-extension/package.json',
+  'vscode-extension/release-notes.json',
+  'vscode-extension/CHANGELOG.md',
+  'BACKLOG.md',
+  'ROADMAP.md',
+  'SESSION-HANDOFF.md',
+]);
+
 const {APP_VERSION, APP_BUILD} = (() => {
   const pkgVersion = (() => {
-    try {
-      return String(JSON.parse(fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf8')).version || '0.0.0');
-    } catch {
-      return '0.0.0';
+    for (const rel of ['vscode-extension/package.json', 'package.json']) {
+      try {
+        const v = String(JSON.parse(fs.readFileSync(path.resolve(__dirname, rel), 'utf8')).version || '').trim();
+        if (/^\d+\.\d+\.\d+$/.test(v)) return v;
+      } catch {
+        // Fall through to root package.json.
+      }
     }
+    return '0.0.0';
   })();
   const git = (cmd: string) =>
     execSync(cmd, {cwd: __dirname, stdio: ['ignore', 'pipe', 'ignore']}).toString().trim();
   try {
-    const count = git('git rev-list --count HEAD');
+    const isShallow = git('git rev-parse --is-shallow-repository') === 'true';
     const sha = git('git rev-parse --short HEAD');
     const date = git('git show -s --format=%cs HEAD'); // commit date, YYYY-MM-DD
-    const dirty = git('git status --porcelain').length > 0;
-    const [major = '1', minor = '0'] = pkgVersion.split('.');
+    const trackedDirtyLines = git('git status --porcelain --untracked-files=no')
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .filter(line => {
+        const rel = line.slice(3).trim().replace(/\\/g, '/').replace(/^"|"$/g, '');
+        return !RELEASE_METADATA_PATHS.has(rel);
+      });
+    const dirty = trackedDirtyLines.length > 0;
+    if (isShallow) {
+      return {
+        APP_VERSION: pkgVersion,
+        APP_BUILD: `shallow-checkout · ${sha} · ${date}${dirty ? ' · uncommitted' : ''}`,
+      };
+    }
+    const count = git('git rev-list --count HEAD');
     return {
-      APP_VERSION: `${major}.${minor}.${count}`,
-      APP_BUILD: `commit ${sha} · ${date}${dirty ? ' · uncommitted build' : ''}`,
+      APP_VERSION: pkgVersion,
+      APP_BUILD: `build ${count} · ${sha} · ${date}${dirty ? ' · uncommitted' : ''}`,
     };
   } catch {
     return {APP_VERSION: pkgVersion, APP_BUILD: `v${pkgVersion}`};

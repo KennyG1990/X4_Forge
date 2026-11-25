@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-// Compile-time constants injected by vite.config.ts define{}. __APP_VERSION__ is
-// major.minor.<git-commit-count>; __APP_BUILD__ is the short SHA + commit date (tooltip).
+// Compile-time constants injected by vite.config.ts define{}. __APP_VERSION__ is the
+// canonical extension version (vscode-extension/package.json); __APP_BUILD__ is "build <N> · <sha> · <date>".
 declare const __APP_VERSION__: string;
 declare const __APP_BUILD__: string;

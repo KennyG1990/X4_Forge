@@ -504,9 +504,17 @@ keys (`x-custom-api-key`); server keys are app-UI-origin-only.
 DELEGATED git to the agent (2026-07-19): the agent COMMITS AND PUSHES directly with `git` (the KLIO /
 Antigravity computer-use commit flow is RETIRED — "get rid of the klio policy"), using a comprehensive
 message and asserting `origin/<branch>` == `HEAD` after every push (banked detached-HEAD hazard). Run
-`npm run precommit:check` first. **Publish-before-commit** holds ONLY for USER-FACING releases (bump →
-changelog → stage → build → package → probe → `ovsx publish` → commit, so store version == committed
-version); headless/internal changes (security/perf/infra/tests) have no publish step and just commit.
+`npm run precommit:check` first. **Unified Version Standard (Ken's order, 2026-11-25):**
+`vscode-extension/package.json` `.version` is the **single canonical product version** across Open VSX,
+the Studio UI header (`v{__APP_VERSION__}`), bug reports, validation receipts, and discovery records,
+with `__APP_BUILD__` carrying `build <full-commit-count> · <sha> · <date>` from an **unshallow** Git
+checkout (`git rev-parse --is-shallow-repository` MUST be `false` — never cut builds from `--depth N`
+shallow clones; `stage-app.mjs` and `inspect-vsix.mjs` fail closed on shallow provenance or client-bundle
+version mismatch). **Publish-before-commit** holds ONLY for USER-FACING releases (`bump
+vscode-extension/package.json` + `release-notes.json` → repo-root `npm run build` → `changelog` →
+`stage-app` → `audit` → `probe-app` → `ext build` → `package` → `inspect-package` → `ovsx publish` →
+`commit`, so store version == UI header version == committed version); headless/internal changes
+(security/perf/infra/tests) have no publish step and just commit.
 Read-only inspection is always fine. Release-track unpark (B8/B23) stays Ken-gated. (The old "ALL mutating
 git is Ken's via Antigravity, per-operation only" line is superseded for the commit+push step; this session
 is HOST-NATIVE, so the stale-mount commit-corruption hazard does not apply.)

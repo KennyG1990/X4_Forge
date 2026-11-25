@@ -37,6 +37,49 @@ const APP = path.join(EXT_ROOT, "app");
 const APP_WORK = ".forge-stage-app";
 const LOCK_DIR = path.join(EXT_ROOT, "runtime-locks");
 const RUNTIME_LIMITS = Object.freeze({ entries: 10_000, bytes: 128 * 1024 * 1024 });
+const CLIENT_BUNDLE_IDENTITY_RE = /["']App version["']\s*:\s*["']([^"']+)["']\s*,\s*["']?Build["']?\s*:\s*["']([^"']+)["']/;
+const FULL_HISTORY_BUILD_RE = /^build (\d+) · ([0-9a-f]{7,40}) · (\d{4}-\d{2}-\d{2})(?: · uncommitted)?$/;
+const MIN_FULL_HISTORY_COMMIT_COUNT = 800;
+
+export function inspectClientBundleVersion(jsPayloads, expectedVersion) {
+  const normalizedExpected = String(expectedVersion || "").trim();
+  if (!/^\d+\.\d+\.\d+$/.test(normalizedExpected)) {
+    throw new Error(`[stage-app] vscode-extension/package.json has invalid semver version "${normalizedExpected}".`);
+  }
+  let matched = null;
+  for (const payload of jsPayloads) {
+    const text = Buffer.isBuffer(payload) ? payload.toString("utf8") : String(payload || "");
+    const m = CLIENT_BUNDLE_IDENTITY_RE.exec(text);
+    if (m) {
+      matched = { appVersion: m[1], appBuild: m[2] };
+      break;
+    }
+  }
+  if (!matched) {
+    throw new Error('[stage-app] dist/assets/ client bundle is missing embedded "App version" / "Build" metadata. Run "npm run build" in the repo root.');
+  }
+  if (matched.appVersion !== normalizedExpected) {
+    throw new Error(
+      `[stage-app] Client bundle version mismatch: vscode-extension/package.json is "${normalizedExpected}", ` +
+      `but dist/assets/ baked "${matched.appVersion}". Re-run "npm run build" in the repo root after bumping vscode-extension/package.json.`,
+    );
+  }
+  if (matched.appBuild.startsWith("shallow-checkout")) {
+    throw new Error(
+      `[stage-app] Refusing to stage client bundle built from a shallow Git checkout ("${matched.appBuild}"). ` +
+      'Run "git fetch --unshallow" and rebuild.',
+    );
+  }
+  const buildMatch = FULL_HISTORY_BUILD_RE.exec(matched.appBuild);
+  const buildCount = buildMatch ? Number(buildMatch[1]) : NaN;
+  if (!buildMatch || !Number.isFinite(buildCount) || buildCount < MIN_FULL_HISTORY_COMMIT_COUNT) {
+    throw new Error(
+      `[stage-app] Refusing to stage client bundle with incomplete or non-canonical Git build provenance ("${matched.appBuild}"). ` +
+      'Ensure full Git history is present and run "npm run build" in the repo root.',
+    );
+  }
+  return { appVersion: matched.appVersion, appBuild: matched.appBuild, buildCount };
+}
 
 function parseArguments(args) {
   if (args.length === 0) return {};
@@ -428,7 +471,29 @@ function runtimeSelftest() {
     replaceStagedApp(app, prepare);
     assert.equal(fs.readFileSync(sentinel, "utf8"), "candidate");
     assert.equal(fs.existsSync(work), false);
-    console.log("[stage-app selftest] PASS: npm runtime/locks/arguments/Dev exact-copy/alias/link/drift/staged app preparation/rollback/cleanup");
+    const validBundle = 'const ctx={"App version":"0.0.99",Build:"build 866 · f39a326 · 2026-11-25",Platform:"Win32"};';
+    assert.deepEqual(inspectClientBundleVersion([validBundle], "0.0.99"), {
+      appVersion: "0.0.99",
+      appBuild: "build 866 · f39a326 · 2026-11-25",
+      buildCount: 866,
+    });
+    assert.throws(
+      () => inspectClientBundleVersion(['const ctx={"App version":"0.0.98",Build:"build 866 · f39a326 · 2026-11-25"};'], "0.0.99"),
+      /Client bundle version mismatch/,
+    );
+    assert.throws(
+      () => inspectClientBundleVersion(['const ctx={"App version":"1.0.20",Build:"commit ea9f169 · 2026-11-23"};'], "0.0.99"),
+      /Client bundle version mismatch/,
+    );
+    assert.throws(
+      () => inspectClientBundleVersion(['const ctx={"App version":"0.0.99",Build:"shallow-checkout · f39a326 · 2026-11-25"};'], "0.0.99"),
+      /shallow Git checkout/,
+    );
+    assert.throws(
+      () => inspectClientBundleVersion(['const ctx={"App version":"0.0.99",Build:"build 20 · f39a326 · 2026-11-25"};'], "0.0.99"),
+      /incomplete or non-canonical Git build provenance/,
+    );
+    console.log("[stage-app selftest] PASS: npm runtime/locks/arguments/Dev exact-copy/alias/link/drift/staged app preparation/rollback/cleanup/version-gate");
   } finally {
     assert.equal(path.dirname(fixture), fs.realpathSync(os.tmpdir()));
     assert.equal(fs.lstatSync(fixture).isSymbolicLink(), false);
@@ -518,6 +583,12 @@ if (unexpectedEntries.length > 0) {
   process.exit(1);
 }
 // Validate the chosen input before touching a previously staged product.
+const extensionVersion = String(JSON.parse(fs.readFileSync(path.join(EXT_ROOT, "package.json"), "utf8")).version || "").trim();
+const clientBundlePayloads = fs.readdirSync(assetsDir)
+  .filter(name => name.endsWith(".js") && !name.endsWith(".map"))
+  .map(name => fs.readFileSync(path.join(assetsDir, name), "utf8"));
+const verifiedBundleIdentity = inspectClientBundleVersion(clientBundlePayloads, extensionVersion);
+console.log(`[stage-app] verified client bundle v${verifiedBundleIdentity.appVersion} (${verifiedBundleIdentity.appBuild})`);
 const manifest = runtimeManifest(process.platform);
 const deps = manifest.dependencies;
 const work = path.join(EXT_ROOT, APP_WORK);

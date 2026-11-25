@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { expect, test, type Page } from './request-transport';
 import { openStudioAction } from './studio-actions';
 import { buildHealthCard } from '../../src/lib/healthCard';
@@ -62,6 +64,13 @@ test('lossless registries keep every destination and utility recoverable', async
   });
   await bootExpert(page);
   const initialHash = await liveWorkspaceHash(page);
+
+  const expectedExtVersion = String(
+    JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'vscode-extension/package.json'), 'utf8')).version,
+  ).trim();
+  const headerVersionBadge = page.getByTestId('studio-header').locator('span[title]').first();
+  await expect(headerVersionBadge).toHaveText(`v${expectedExtVersion}`);
+  await expect(headerVersionBadge).toHaveAttribute('title', /^build \d{3,} · [0-9a-f]{7,} · \d{4}-\d{2}-\d{2}(?: · uncommitted)?$/);
 
   await expect(page.locator('[data-workspace-view]')).toHaveCount(WORKSPACE_NAV_ITEMS.length);
   for (const item of WORKSPACE_NAV_ITEMS) {

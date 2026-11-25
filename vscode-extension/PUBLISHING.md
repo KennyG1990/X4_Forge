@@ -34,9 +34,18 @@ step 2** even if only extension code changed.
 
 ## Preconditions (verify, don't assume)
 ```bash
-git -C <REPO> status --short          # must be empty
-git -C <REPO> rev-parse HEAD origin/main   # two identical SHAs
+git -C <REPO> status --short                       # must be empty
+git -C <REPO> rev-parse HEAD origin/main           # two identical SHAs
+git -C <REPO> rev-parse --is-shallow-repository    # MUST print false (if true: run git fetch --unshallow)
 ```
+
+> **Unified Version Standard (Ken's order, 2026-11-25):** `vscode-extension/package.json` `.version`
+> (e.g. `0.0.99`) is the **single canonical product version** across Open VSX, the Studio UI header
+> (`v{__APP_VERSION__}`), bug reports, validation receipts, and `~/.x4forge/latest.json`. Hovering the
+> header version shows `__APP_BUILD__` (`build <full-commit-count> · <sha> · <YYYY-MM-DD>`). Never build
+> or package from a shallow Git checkout (`--depth N`); both `stage-app.mjs` and `inspect-vsix.mjs` fail
+> closed if the client bundle's baked `"App version"` diverges from `vscode-extension/package.json` or if
+> full Git commit history is missing.
 
 ## Gates — all four must pass before you bump anything
 ```bash
@@ -65,16 +74,18 @@ the TOP of `vscode-extension/release-notes.json`, in plain language aimed at mod
 can now DO), not commit-speak. Missing entry ⇒ the changelog falls back to a humanized commit
 subject, which reads badly on the store.
 
-**3. Build and package**, from `<REPO>/vscode-extension`:
+**3. Build and package**, from `<REPO>/vscode-extension` (**MUST** re-run root `npm run build` AFTER bumping `vscode-extension/package.json` so `__APP_VERSION__` bakes the new version):
 ```bash
-cd <REPO> && npm run build                     # ✱ REQUIRED FIRST — produces dist/
+cd <REPO> && npm run build                     # ✱ REQUIRED AFTER BUMP — bakes new version into dist/
 cd <REPO>/vscode-extension
 npm run changelog     # [gen-changelog] wrote CHANGELOG.md — 29 version(s), newest 0.0.31
-npm run stage-app     # installs the reviewed platform runtime lock
+npm run stage-app     # verifies client bundle version == package.json & installs reviewed runtime lock
 npm audit --prefix app --omit=dev --audit-level=high   # audit the exact staged runtime lock
+npm run probe-app     # [staged-app-probe] PASS
 npm run build         # [build-ext] OK — out/extension.js written from a fresh out/
 npx --yes @vscode/vsce package --allow-missing-repository
                       # DONE Packaged: …/x4-forge-studio-0.0.31.vsix (2098 files, 16.99 MB)
+npm run inspect-package -- x4-forge-studio-<version>.vsix   # [vsix-inspector] PASS (enforces version parity + non-shallow provenance)
 ```
 In a shallow checkout, `npm run changelog` keeps historical release sections from the
 committed `CHANGELOG.md` at `HEAD` and adds newly discovered versions. If that historical file

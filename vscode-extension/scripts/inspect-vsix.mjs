@@ -26,6 +26,10 @@ const NATIVE_SQLITE = /^extension\/app\/node_modules\/better-sqlite3\/(?:build\/
 const INTENTIONAL_GITHUB_REF_LINK_RE = /\[(?:([\w.-]+\/[\w.-]+))?#(\d+)\]\(https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/(?:issues|pull)\/(\d+)\)/g;
 const AMBIGUOUS_HASH_NUMBER_RE = /(?:[\w.-]+\/[\w.-]+)?(?<!\\)#(\d+)\b/g;
 const EMBEDDED_AGENT_KEY_RE = /\bx4fk_[0-9a-f]{64}\b/i;
+const CLIENT_ASSET_JS_ENTRY = /^extension\/app\/dist\/assets\/[^/]+\.js$/i;
+const CLIENT_BUNDLE_IDENTITY_RE = /["']App version["']\s*:\s*["']([^"']+)["']\s*,\s*["']?Build["']?\s*:\s*["']([^"']+)["']/;
+const RELEASE_FULL_HISTORY_BUILD_RE = /^build (\d+) · ([0-9a-f]{7,40}) · (\d{4}-\d{2}-\d{2})$/;
+const MIN_FULL_HISTORY_COMMIT_COUNT = 800;
 
 const crcTable = Array.from({ length: 256 }, (_, index) => {
   let value = index;
@@ -208,11 +212,60 @@ export function findForbiddenEmbeddedSecret(entryName, bytes) {
   return match ? 'embedded x4fk_ agent key' : null;
 }
 
+export function inspectPackagedVersionIdentity(extensionPkgInput, clientAssetEntries) {
+  const errors = [];
+  let expectedVersion = '';
+  try {
+    const pkgText = Buffer.isBuffer(extensionPkgInput) ? extensionPkgInput.toString('utf8') : String(extensionPkgInput || '');
+    const pkg = JSON.parse(pkgText);
+    expectedVersion = String(pkg?.version || '').trim();
+  } catch {
+    errors.push('extension/package.json: invalid JSON');
+    return { pass: false, errors };
+  }
+  if (!/^\d+\.\d+\.\d+$/.test(expectedVersion)) {
+    errors.push(`extension/package.json: invalid semver version "${expectedVersion}"`);
+    return { pass: false, errors };
+  }
+  let matched = null;
+  for (const item of clientAssetEntries || []) {
+    const text = Buffer.isBuffer(item.content) ? item.content.toString('utf8') : String(item.content || '');
+    const m = CLIENT_BUNDLE_IDENTITY_RE.exec(text);
+    if (m) {
+      matched = { entryName: item.name, appVersion: m[1], appBuild: m[2] };
+      break;
+    }
+  }
+  if (!matched) {
+    errors.push('extension/app/dist/assets/*.js: missing packaged client bundle or embedded App version/Build metadata');
+    return { pass: false, errors };
+  }
+  if (matched.appVersion !== expectedVersion) {
+    errors.push(
+      `${matched.entryName}: client bundle version "${matched.appVersion}" does not match extension/package.json "${expectedVersion}" (re-run repo "npm run build" after bumping vscode-extension/package.json)`,
+    );
+  }
+  if (matched.appBuild.includes('uncommitted')) {
+    errors.push(`${matched.entryName}: client bundle was built from uncommitted source ("${matched.appBuild}")`);
+  } else if (matched.appBuild.startsWith('shallow-checkout')) {
+    errors.push(`${matched.entryName}: client bundle was built from a shallow Git checkout ("${matched.appBuild}")`);
+  } else {
+    const bm = RELEASE_FULL_HISTORY_BUILD_RE.exec(matched.appBuild);
+    const count = bm ? Number(bm[1]) : NaN;
+    if (!bm || !Number.isFinite(count) || count < MIN_FULL_HISTORY_COMMIT_COUNT) {
+      errors.push(`${matched.entryName}: client bundle has invalid or shallow Git build provenance ("${matched.appBuild}")`);
+    }
+  }
+  return { pass: errors.length === 0, errors };
+}
+
 export function inspectVsixBytes(bytes, options = {}) {
   const entries = readVsixEntries(bytes);
   const result = inspectEntryMetadata(entries, bytes.length);
   if (!result.pass) return result;
   const machinePathPolicy = buildMachinePathPolicy();
+  let extensionPkgContent = null;
+  const clientAssets = [];
   for (const entry of entries) {
     if (entry.name.endsWith('/')) continue;
     const content = extractEntry(bytes, entry);
@@ -220,11 +273,19 @@ export function inspectVsixBytes(bytes, options = {}) {
     if (embeddedRoot) result.errors.push(`${entry.name}: embedded build-machine path ${embeddedRoot}`);
     const embeddedSecret = findForbiddenEmbeddedSecret(entry.name, content);
     if (embeddedSecret) result.errors.push(`${entry.name}: ${embeddedSecret}`);
+    if (entry.name === 'extension/package.json') {
+      extensionPkgContent = content;
+    }
+    if (CLIENT_ASSET_JS_ENTRY.test(entry.name)) {
+      clientAssets.push({ name: entry.name, content });
+    }
     if (CHANGELOG_ENTRY.test(entry.name)) {
       const changelogCheck = inspectPackagedChangelog(content, options.expectedChangelog);
       result.errors.push(...changelogCheck.errors);
     }
   }
+  const versionCheck = inspectPackagedVersionIdentity(extensionPkgContent, clientAssets);
+  result.errors.push(...versionCheck.errors);
   result.pass = result.errors.length === 0;
   return result;
 }
@@ -286,7 +347,28 @@ function runSelftest() {
     && findForbiddenEmbeddedSecret('extension/out/extension.js', Buffer.from('const placeholder = "<paste an agent key here>";')) === null;
   if (embeddedSecretPass) passed++;
   console.log(`${embeddedSecretPass ? 'PASS' : 'FAIL'} embedded_agent_key_token_rejected_in_packaged_bytes`);
-  const total = cases.length + 4;
+  const pkg99 = JSON.stringify({ name: 'x4-forge-studio', version: '0.0.99' });
+  const versionIdentityPass = inspectPackagedVersionIdentity(pkg99, [
+    { name: 'extension/app/dist/assets/index-test.js', content: 'const c={"App version":"0.0.99",Build:"build 866 · f39a326 · 2026-11-25"};' },
+  ]).pass === true
+    && inspectPackagedVersionIdentity(pkg99, [
+      { name: 'extension/app/dist/assets/index-test.js', content: 'const c={"App version":"1.0.20",Build:"commit ea9f169 · 2026-11-23"};' },
+    ]).pass === false
+    && inspectPackagedVersionIdentity(pkg99, [
+      { name: 'extension/app/dist/assets/index-test.js', content: 'const c={"App version":"0.0.98",Build:"build 866 · f39a326 · 2026-11-25"};' },
+    ]).pass === false
+    && inspectPackagedVersionIdentity(pkg99, [
+      { name: 'extension/app/dist/assets/index-test.js', content: 'const c={"App version":"0.0.99",Build:"shallow-checkout · f39a326 · 2026-11-25"};' },
+    ]).pass === false
+    && inspectPackagedVersionIdentity(pkg99, [
+      { name: 'extension/app/dist/assets/index-test.js', content: 'const c={"App version":"0.0.99",Build:"build 88 · f39a326 · 2026-11-25"};' },
+    ]).pass === false
+    && inspectPackagedVersionIdentity(pkg99, [
+      { name: 'extension/app/dist/assets/index-test.js', content: 'const c={"App version":"0.0.99",Build:"build 866 · f39a326 · 2026-11-25 · uncommitted"};' },
+    ]).pass === false;
+  if (versionIdentityPass) passed++;
+  console.log(`${versionIdentityPass ? 'PASS' : 'FAIL'} client_bundle_version_parity_and_unshallow_provenance_enforced`);
+  const total = cases.length + 5;
   console.log(`[vsix-inspector selftest] ${passed}/${total} ${passed === total ? 'PASS' : 'FAIL'}`);
   return passed === total;
 }
