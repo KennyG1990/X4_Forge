@@ -120,7 +120,6 @@ async function startMcpSession(baseUrl: string, key: string, workspaceId: string
       X4FORGE_URL: baseUrl,
       X4FORGE_KEY: key,
       X4FORGE_WORKSPACE_ID: workspaceId,
-      X4FORGE_CAPABILITY_RETRY_MS: '100',
     },
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
@@ -319,14 +318,18 @@ async function main() {
         assert.equal(minted.status, 200);
         const token = minted.json.token || minted.json.key;
         const session = await openMcp(token, ws1);
-        const listed = await session.request('tools/list');
-        const names: string[] = (listed.result?.tools || []).map((t: any) => t.name);
-        for (const deployTool of deployToolNames) {
-          assert(!names.includes(deployTool), `preset ${scope} key unexpectedly advertised ${deployTool}`);
+        try {
+          const listed = await session.request('tools/list');
+          const names: string[] = (listed.result?.tools || []).map((t: any) => t.name);
+          for (const deployTool of deployToolNames) {
+            assert(!names.includes(deployTool), `preset ${scope} key unexpectedly advertised ${deployTool}`);
+          }
+          const deniedCall = await session.callTool('preview_native_deploy', { path: modId });
+          assert.equal(deniedCall.isError, true);
+          assert.equal(deniedCall.raw.error?.code, -32602);
+        } finally {
+          await session.close();
         }
-        const deniedCall = await session.callTool('preview_native_deploy', { path: modId });
-        assert.equal(deniedCall.isError, true);
-        assert.equal(deniedCall.raw.error?.code, -32602);
         if (scope === 'deploy') {
           const directCurated = await httpJson(backend!.baseUrl, 'POST', '/api/agent/deploy-verify/preview', token, {
             path: modId,
@@ -356,11 +359,15 @@ async function main() {
       }, ws1Headers);
       assert.equal(previewOnlyMint.status, 200);
       const previewOnlyMcp = await openMcp(previewOnlyMint.json.token || previewOnlyMint.json.key, ws1);
-      const previewListed = (await previewOnlyMcp.request('tools/list')).result?.tools?.map((t: any) => t.name) || [];
-      assert(previewListed.includes('preview_native_deploy'));
-      assert(previewListed.includes('get_deploy_operation_status'));
-      assert(!previewListed.includes('apply_native_deploy'));
-      assert(!previewListed.includes('undo_native_deploy'));
+      try {
+        const previewListed = (await previewOnlyMcp.request('tools/list')).result?.tools?.map((t: any) => t.name) || [];
+        assert(previewListed.includes('preview_native_deploy'));
+        assert(previewListed.includes('get_deploy_operation_status'));
+        assert(!previewListed.includes('apply_native_deploy'));
+        assert(!previewListed.includes('undo_native_deploy'));
+      } finally {
+        await previewOnlyMcp.close();
+      }
 
       const fullMint = await httpJson(backend!.baseUrl, 'POST', '/api/agent/keys', STUDIO_TOKEN, {
         label: 'full-curated-deploy',
@@ -624,32 +631,35 @@ async function main() {
       }, ws2Headers);
       assert.equal(foreignMint.status, 200);
       const foreignMcp = await openMcp(foreignMint.json.token || foreignMint.json.key, ws2);
+      try {
+        // Foreign workspace cannot inspect or undo ws1's loose deployment
+        const foreignStatus = await foreignMcp.callTool('get_deploy_operation_status', {
+          deployOperationId: looseOpId,
+        });
+        assert.equal(foreignStatus.isError, true);
+        assert.equal(foreignStatus.payload.code, 'DEPLOY_OPERATION_NOT_FOUND');
 
-      // Foreign workspace cannot inspect or undo ws1's loose deployment
-      const foreignStatus = await foreignMcp.callTool('get_deploy_operation_status', {
-        deployOperationId: looseOpId,
-      });
-      assert.equal(foreignStatus.isError, true);
-      assert.equal(foreignStatus.payload.code, 'DEPLOY_OPERATION_NOT_FOUND');
+        const looseStatus = await deployMcp.callTool('get_deploy_operation_status', {
+          deployOperationId: looseOpId,
+        });
+        const looseRecoveryId = looseStatus.payload.receipt?.rollback?.reference;
+        assert(typeof looseRecoveryId === 'string');
 
-      const looseStatus = await deployMcp.callTool('get_deploy_operation_status', {
-        deployOperationId: looseOpId,
-      });
-      const looseRecoveryId = looseStatus.payload.receipt?.rollback?.reference;
-      assert(typeof looseRecoveryId === 'string');
+        const foreignUndoByOp = await foreignMcp.callTool('undo_native_deploy', {
+          deployOperationId: looseOpId,
+        });
+        assert.equal(foreignUndoByOp.isError, true);
+        assert.equal(foreignUndoByOp.payload.code, 'DEPLOY_OPERATION_NOT_FOUND');
 
-      const foreignUndoByOp = await foreignMcp.callTool('undo_native_deploy', {
-        deployOperationId: looseOpId,
-      });
-      assert.equal(foreignUndoByOp.isError, true);
-      assert.equal(foreignUndoByOp.payload.code, 'DEPLOY_OPERATION_NOT_FOUND');
-
-      const foreignUndoByRec = await foreignMcp.callTool('undo_native_deploy', {
-        recoveryId: looseRecoveryId,
-      });
-      assert.equal(foreignUndoByRec.isError, true);
-      assert.equal(foreignUndoByRec.payload.code, 'RECOVERY_NOT_FOUND');
-      assert(fs.existsSync(path.join(extensionsDir, modId, 'md', 'probe.xml')));
+        const foreignUndoByRec = await foreignMcp.callTool('undo_native_deploy', {
+          recoveryId: looseRecoveryId,
+        });
+        assert.equal(foreignUndoByRec.isError, true);
+        assert.equal(foreignUndoByRec.payload.code, 'RECOVERY_NOT_FOUND');
+        assert(fs.existsSync(path.join(extensionsDir, modId, 'md', 'probe.xml')));
+      } finally {
+        await foreignMcp.close();
+      }
 
       // Undo ws1's loose deployment cleanly with its owner before revoking key
       const ownerUndoLoose = await deployMcp.callTool('undo_native_deploy', {

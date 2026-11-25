@@ -107,7 +107,6 @@ async function startMcpSession(baseUrl: string, key: string, workspaceId: string
       X4FORGE_URL: baseUrl,
       X4FORGE_KEY: key,
       X4FORGE_WORKSPACE_ID: workspaceId,
-      X4FORGE_CAPABILITY_RETRY_MS: '100',
     },
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
@@ -292,12 +291,22 @@ async function main() {
       assert.equal(denied.json.authorityCode, 'CAPABILITY_NOT_GRANTED');
 
       mcpPreset = await startMcpSession(backend1!.baseUrl, presetDeployToken, workspaceId);
-      const presetTools = (await mcpPreset.request('tools/list')).result.tools.map((t: any) => t.name);
-      assert(!presetTools.some((name: string) => name.includes('configuration')), `Preset MCP leaked config tools: ${presetTools.join(',')}`);
+      try {
+        const presetTools = (await mcpPreset.request('tools/list')).result.tools.map((t: any) => t.name);
+        assert(!presetTools.some((name: string) => name.includes('configuration')), `Preset MCP leaked config tools: ${presetTools.join(',')}`);
+      } finally {
+        await mcpPreset.close();
+        mcpPreset = undefined;
+      }
 
       mcpStudio = await startMcpSession(backend1!.baseUrl, studioToken, workspaceId);
-      const studioTools = (await mcpStudio.request('tools/list')).result.tools.map((t: any) => t.name);
-      assert.deepEqual(studioTools, [], 'Studio token must never activate MCP tools');
+      try {
+        const studioTools = (await mcpStudio.request('tools/list')).result.tools.map((t: any) => t.name);
+        assert.deepEqual(studioTools, [], 'Studio token must never activate MCP tools');
+      } finally {
+        await mcpStudio.close();
+        mcpStudio = undefined;
+      }
     });
 
     mcpConfig = await startMcpSession(backend1.baseUrl, configAgentToken, workspaceId);

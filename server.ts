@@ -2106,20 +2106,67 @@ app.get('/api/agent/configuration/status', async (req, res) => {
   }
 });
 
+const EFFECTIVE_SELECTION_CACHE_LIMIT = 64;
+const EFFECTIVE_AUTHORITY_CACHE_LIMIT = 128;
+const effectiveSelectionCache = new Map<string, {
+  capabilityContract: ReturnType<typeof buildForgeCapabilityContract>;
+  exclusions: ReturnType<typeof buildEffectiveCapabilitySelection>['exclusions'];
+}>();
+const effectiveAuthorityBodyCache = new Map<string, string>();
+
 app.get('/api/agent/capabilities/effective', (req, res) => {
-  const actor = (req as any).__actor as RequestActor | undefined;
+  const decorated = decoratedReq(req);
+  const actor = decorated.__actor;
   if (!actor) return res.status(401).json({ code: 'AUTHENTICATED_ACTOR_REQUIRED', error: 'Effective capability discovery requires authentication.' });
-  const selection = buildEffectiveCapabilitySelection(
-    {
-      kind: actor.kind,
-      scope: actor.scope,
-      workspaceId: actor.workspaceId || (req as any).__workspaceId,
-      constraint: actor.capabilityConstraint,
-    },
-    resolveAgentRouteTemplateAuthority,
-  );
+  const effectiveWorkspaceId = actor.workspaceId || decorated.__workspaceId || undefined;
+  const constraint = actor.capabilityConstraint || null;
+  const responseCacheKey = JSON.stringify([
+    AGENT_AUTHORITY_POLICY_HASH,
+    actor.kind,
+    actor.label,
+    actor.keyId ?? null,
+    actor.scope ?? null,
+    effectiveWorkspaceId ?? null,
+    constraint,
+  ]);
+  const cachedBody = effectiveAuthorityBodyCache.get(responseCacheKey);
+  if (cachedBody !== undefined) {
+    effectiveAuthorityBodyCache.delete(responseCacheKey);
+    effectiveAuthorityBodyCache.set(responseCacheKey, cachedBody);
+    return res.type('application/json').send(cachedBody);
+  }
+  const selectionCacheKey = JSON.stringify([
+    AGENT_AUTHORITY_POLICY_HASH,
+    actor.kind,
+    actor.scope ?? null,
+    Boolean(effectiveWorkspaceId),
+    constraint,
+  ]);
+  let cachedSelection = effectiveSelectionCache.get(selectionCacheKey);
   const sha256 = (value: string) => crypto.createHash('sha256').update(value, 'utf8').digest('hex');
-  const capabilityContract = buildForgeCapabilityContract(sha256, selection.capabilities);
+  if (!cachedSelection) {
+    const selection = buildEffectiveCapabilitySelection(
+      {
+        kind: actor.kind,
+        scope: actor.scope,
+        workspaceId: effectiveWorkspaceId,
+        constraint: actor.capabilityConstraint,
+      },
+      resolveAgentRouteTemplateAuthority,
+    );
+    cachedSelection = {
+      capabilityContract: buildForgeCapabilityContract(sha256, selection.capabilities),
+      exclusions: selection.exclusions,
+    };
+    if (effectiveSelectionCache.size >= EFFECTIVE_SELECTION_CACHE_LIMIT) {
+      const oldestKey = effectiveSelectionCache.keys().next().value;
+      if (oldestKey !== undefined) effectiveSelectionCache.delete(oldestKey);
+    }
+    effectiveSelectionCache.set(selectionCacheKey, cachedSelection);
+  } else {
+    effectiveSelectionCache.delete(selectionCacheKey);
+    effectiveSelectionCache.set(selectionCacheKey, cachedSelection);
+  }
   const authority = {
     api_version: AGENT_CAPABILITY_AUTHORITY_API_VERSION,
     authority_schema_version: AGENT_CAPABILITY_AUTHORITY_SCHEMA_VERSION,
@@ -2128,17 +2175,23 @@ app.get('/api/agent/capabilities/effective', (req, res) => {
       label: actor.label,
       ...(actor.keyId ? { keyId: actor.keyId } : {}),
       ...(actor.scope ? { scope: actor.scope } : {}),
-      ...(actor.workspaceId || (req as any).__workspaceId ? { workspaceId: actor.workspaceId || (req as any).__workspaceId } : {}),
+      ...(effectiveWorkspaceId ? { workspaceId: effectiveWorkspaceId } : {}),
     },
     route_policy: { version: AGENT_AUTHORITY_POLICY_VERSION, hash: AGENT_AUTHORITY_POLICY_HASH },
-    constraint: actor.capabilityConstraint || null,
-    capability_contract: capabilityContract,
-    exclusions: selection.exclusions,
+    constraint,
+    capability_contract: cachedSelection.capabilityContract,
+    exclusions: cachedSelection.exclusions,
   };
-  return res.json({
+  const serialized = JSON.stringify({
     ...authority,
     authority_hash: sha256(stableStringify(authority)),
   });
+  if (effectiveAuthorityBodyCache.size >= EFFECTIVE_AUTHORITY_CACHE_LIMIT) {
+    const oldestKey = effectiveAuthorityBodyCache.keys().next().value;
+    if (oldestKey !== undefined) effectiveAuthorityBodyCache.delete(oldestKey);
+  }
+  effectiveAuthorityBodyCache.set(responseCacheKey, serialized);
+  return res.type('application/json').send(serialized);
 });
 
 type CompiledFileManifest = Record<string, string>;
