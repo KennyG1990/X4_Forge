@@ -1,4 +1,13 @@
 {
+  "0.0.94": [
+    "Work in a unified IDE layout with a collapsible right Contextual Inspector for selected nodes and widgets, a bottom panel (Ctrl+J) for Problems, Runtime, and live compiled Mission Director XML, a bottom status bar, and a two-pane Studio Settings dialog.",
+    "Toggle Compact Grid View on the Mission Director graph from Graph tools or the > command palette to switch to 16-pixel blueprint snapping and condensed node cards.",
+    "Register X4 Forge Studio as an opt-in native MCP server with X4 Forge: Manage Native MCP Registration (storing agent keys in OS SecretStorage), and restart or hot-reload the local backend in place with X4 Forge: Restart Local Backend.",
+    "Preview and geometry-check X4 Lua UI menus headlessly against unpacked X4 9.00 Zekton font and color assets, including local helper calls and shared-hub tab modules, from the CLI, Agent API, or MCP.",
+    "Query canonical X4 AI script order headers and override-order issuers, search workspace and game symbols, rename authored Mission Director symbols, manage snapshots and reversible file or folder deletes, and stage Nexus or long-path Steam Workshop releases through the Agent API and MCP.",
+    "Catch conversation-started Lua menus that skip a deferred onUpdate redraw, advisory override-order cancellation handlers, and raw faction, ware, ship, or sector IDs in player-visible Lua, Mission Director, and log prose.",
+    "Deploy large mods up to 52% faster with hash-bound validation receipts, lexical Lua event registration and payload tracking, and broader Mission Director variable initial-state tracking across branches, loops, libraries, and find actions."
+  ],
   "0.0.93": [
     "Validate Lua UI events sent through protected calls (pcall) and follow indexed payload tables returned from same-file helper builders.",
     "Keep cross-file Lua payload coverage explanations consistent regardless of file order, while keeping wrapped or dynamic emitters explicitly flagged for review.",
