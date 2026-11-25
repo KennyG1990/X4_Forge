@@ -2242,19 +2242,24 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
   // #49: TTL-bounded driver session lease coordination across Studio UI, Agent API, and MCP.
   const [driverLease, setDriverLease] = useState<PublicDriverLeaseStatus | null>(null);
   const [driverLeaseBusy, setDriverLeaseBusy] = useState(false);
+  const driverLeaseEpochRef = useRef(0);
   const refreshDriverLease = async () => {
+    const epoch = driverLeaseEpochRef.current;
     try {
       const res = await fetch('/api/agent/lease');
-      if (!res.ok) return;
+      if (!res.ok || epoch !== driverLeaseEpochRef.current) return;
       const data = await res.json();
+      if (epoch !== driverLeaseEpochRef.current) return;
       if (data?.driverLease && typeof data.driverLease.held === 'boolean') {
-        setDriverLease(data.driverLease as PublicDriverLeaseStatus);
+        const next = data.driverLease as PublicDriverLeaseStatus;
+        setDriverLease(prev => (!next.held && !prev?.held ? prev : next));
       }
     } catch { /* background coordination poll fails softly */ }
   };
   const manageStudioDriverLease = async (
     payload: { action: 'acquire' | 'renew' | 'release'; driver?: string; purpose?: string; ttlMs?: number; force?: boolean },
   ) => {
+    driverLeaseEpochRef.current += 1;
     setDriverLeaseBusy(true);
     try {
       const res = await fetch('/api/agent/lease', {
@@ -2263,8 +2268,10 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
         body: JSON.stringify(payload),
       });
       const data = await res.json().catch(() => null);
+      driverLeaseEpochRef.current += 1;
       if (data?.driverLease && typeof data.driverLease.held === 'boolean') {
-        setDriverLease(data.driverLease as PublicDriverLeaseStatus);
+        const next = data.driverLease as PublicDriverLeaseStatus;
+        setDriverLease(next.held ? next : null);
       }
       if (!res.ok) {
         toast(data?.error || `Driver lease ${payload.action} failed (${res.status}).`, 'error');
