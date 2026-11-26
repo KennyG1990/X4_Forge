@@ -206,6 +206,8 @@ export interface ProjectValidationReferences {
   wares?: Set<string>;
   factions?: Set<string>;
   sectors?: Set<string>;
+  aiScripts?: Set<string>;
+  orders?: Set<string>;
 }
 
 type ProjectAiscriptFinding = AiscriptLintFinding & { filePath?: string };
@@ -318,13 +320,16 @@ export function isDedicatedScriptFile(
 
 /** Copy canonical sets and admit definitions owned by this project. Never mutate shared cache sets. */
 function referencesForProject(project: ExtensionProject, base?: ProjectValidationReferences): ProjectValidationReferences | undefined {
-  const available = !!(base?.macros?.size || base?.wares?.size || base?.factions?.size || base?.sectors?.size);
+  const available = !!(base?.macros?.size || base?.wares?.size || base?.factions?.size || base?.sectors?.size
+    || base?.aiScripts?.size || base?.orders?.size);
   if (!available) return undefined; // canonical corpus unavailable: do not validate against project-only partial sets
   const references: ProjectValidationReferences = {
     macros: new Set(base?.macros || []),
     wares: new Set(base?.wares || []),
     factions: new Set(base?.factions || []),
     sectors: new Set(base?.sectors || []),
+    aiScripts: new Set([...(base?.aiScripts || [])].map(s => s.toLowerCase())),
+    orders: new Set([...(base?.orders || [])].map(o => o.toLowerCase())),
   };
   for (const file of project.files) {
     if (typeof file.content !== 'string') continue;
@@ -333,6 +338,14 @@ function referencesForProject(project: ExtensionProject, base?: ProjectValidatio
     for (const m of file.content.matchAll(/<ware\b[^>]*\bid\s*=\s*["']([^"']+)["']/gi)) references.wares!.add(m[1].toLowerCase());
     for (const m of file.content.matchAll(/<faction\b[^>]*\bid\s*=\s*["']([^"']+)["']/gi)) {
       const id = m[1].toLowerCase(); references.factions!.add(id); references.factions!.add(`faction.${id}`);
+    }
+    if (references.aiScripts!.size > 0) {
+      for (const m of file.content.matchAll(/<aiscript\b[^>]*\bname\s*=\s*["']([^"']+)["']/gi)) references.aiScripts!.add(m[1].toLowerCase());
+      const aiRel = /(?:^|\/)aiscripts\/([^/]+)\.xml$/i.exec(file.path.replace(/\\/g, '/'));
+      if (aiRel) references.aiScripts!.add(aiRel[1].toLowerCase());
+    }
+    if (references.orders!.size > 0) {
+      for (const m of file.content.matchAll(/<order\b[^>]*\bid\s*=\s*["']([^"']+)["']/gi)) references.orders!.add(m[1].toLowerCase());
     }
   }
   return references;
@@ -690,8 +703,12 @@ export function runProjectValidation(
             const localGaps: ValidationCoverageGap[] = [];
             let postApplyFindings: XsdDiagnostic[] = [];
             let mdFacts: MdEffectiveLibraryInput | undefined;
-            const simulation = simulateXmlDiff(canonicalContent, authoredContent, script
-              ? { attributeProvenance: true, ...(scriptKind === 'md' ? { elementProvenance: true } : {}) } : undefined);
+            const needsPostApplyXml = Boolean(effectiveIndex?.loaded)
+              || Boolean(schemaRegistryRef && routeProjectFile(relativePath, canonicalContent) !== null);
+            const simulation = simulateXmlDiff(canonicalContent, authoredContent, {
+              ...(script ? { attributeProvenance: true, ...(scriptKind === 'md' ? { elementProvenance: true } : {}) } : {}),
+              skipSerialize: !needsPostApplyXml,
+            });
             if (simulation.ok) {
               if (scriptKind === 'md') {
                 mdFacts = diffMdLibraryPurposeFacts(relativePath, simulation.elementProvenance);
@@ -759,12 +776,14 @@ export function runProjectValidation(
                 }
                 return [];
               };
-              const diagnosticKey = (finding: XsdDiagnostic) => [
-                finding.severity, finding.domain, finding.code, finding.sourceRef, finding.message,
-              ].join('|');
-              const baseline = new Set(validateEffective(canonicalContent).map(diagnosticKey));
-              postApplyFindings = validateEffective(simulation.content)
-                .filter(finding => !baseline.has(diagnosticKey(finding)));
+              if (needsPostApplyXml) {
+                const diagnosticKey = (finding: XsdDiagnostic) => [
+                  finding.severity, finding.domain, finding.code, finding.sourceRef, finding.message,
+                ].join('|');
+                const baseline = new Set(validateEffective(canonicalContent).map(diagnosticKey));
+                postApplyFindings = validateEffective(simulation.content)
+                  .filter(finding => !baseline.has(diagnosticKey(finding)));
+              }
             } else if (script) {
               localGaps.push({ check: 'diff.expressions', filePath: relativePath,
                 reason: 'Patch simulation failed; effective expression values were not checked.' });
@@ -952,15 +971,33 @@ export function runProjectValidation(
     : (validationFacts.get(JSON.stringify(['md-variable-context', variableDependency]), buildVariableContext, variableInputBytes) as ReturnType<typeof buildMdVariableAvailabilityContext>);
   const initialStateGaps: ValidationCoverageGap[] = [...variableAvailability.inputGaps];
   const pitfallFindings: MdPitfallFinding[] = [...diffExpressionFindings, ...diffMdRuntimeFindings];
+  const projectWrittenVariables = (() => {
+    if (skippedMd.size > 0) return undefined;
+    const set = new Set<string>();
+    for (const vf of variableFiles) {
+      if (typeof vf.content !== 'string') continue;
+      for (const m of vf.content.matchAll(/\b(?:name|result|groupname|valuename|counter|destination)\s*=\s*["']([^"']+)["']/gi)) {
+        for (const vm of m[1].matchAll(/\$[A-Za-z_]\w*/g)) set.add(vm[0].toLowerCase());
+      }
+      for (const pm of vf.content.matchAll(/<param\b[^>]*\bname\s*=\s*["']([A-Za-z_]\w*)["']/gi)) {
+        set.add(`$${pm[1].toLowerCase()}`);
+      }
+    }
+    return set;
+  })();
+  const writtenVarsSignature = projectWrittenVariables
+    ? crypto.createHash('sha256').update(JSON.stringify([...projectWrittenVariables].sort())).digest('hex')
+    : null;
   for (const f of project.files) {
     if (typeof f.content !== "string") continue;
     const pathKind = classifyPath(f.path);
     if (f.kind === "md" || pathKind === "md") {
-      const md = fact('pitfalls', f, [propertyGeneration, variableDependency], () => {
+      const md = fact('pitfalls', f, [propertyGeneration, variableDependency, writtenVarsSignature], () => {
         const gaps: ValidationCoverageGap[] = [];
         const findings = lintMdPitfalls(f.content!, {
           propertyUnion: spIndex?.union, propertyIndex: spIndex || undefined, filePath: f.path,
           variableAvailability: variableAvailability.context, initialStateGaps: gaps,
+          projectWrittenVariables,
         });
         return { findings, gaps };
       });
@@ -973,6 +1010,40 @@ export function runProjectValidation(
       const expressions = fact('script-expressions', f, resourceGeneration(index),
         () => lintScriptExpressions(f.content!, index, f.path));
       for (const finding of expressions) pitfallFindings.push(finding);
+    }
+  }
+
+  // Advisory unknown-script check for md.<Script>.<Cue> when the official canonical MD catalog
+  // is loaded, no MD files were skipped, and content.xml declares no external third-party mod dependencies.
+  const rootManifestFile = project.files.find(f => typeof f.content === 'string' && f.path.replace(/\\/g, '/').toLowerCase() === 'content.xml');
+  if (rootManifestFile?.content && opts.canonicalMd && skippedMd.size === 0 && mdReferenceRoot) {
+    const hasThirdPartyDep = [...rootManifestFile.content.matchAll(/<dependency\b[^>]*\bid\s*=\s*["']([^"']+)["']/gi)]
+      .some(m => !/^ego_dlc_/i.test(m[1].trim()));
+    if (!hasThirdPartyDep) {
+      const readyCat = opts.canonicalMd.read(mdReferenceRoot);
+      if (readyCat) {
+        const knownProjectMdNames = new Set<string>();
+        for (const vf of variableFiles) {
+          if (typeof vf.content !== 'string') continue;
+          const hm = /<mdscript\b[^>]*\bname\s*=\s*["']([^"']+)["']/i.exec(vf.content);
+          if (hm) knownProjectMdNames.add(hm[1].trim().toLowerCase());
+        }
+        for (const ref of cueIndex.references) {
+          const qm = /^md\.([A-Za-z_]\w*)\.([A-Za-z_]\w*)$/.exec(ref.ref.trim());
+          if (!qm) continue;
+          const scriptKey = qm[1].toLowerCase();
+          if (knownProjectMdNames.has(scriptKey) || readyCat.providers.has(scriptKey)) continue;
+          pitfallFindings.push({
+            code: 'md.unknown_script_reference',
+            severity: 'warning',
+            filePath: ref.file,
+            line: ref.line,
+            column: ref.column,
+            sourceRef: ref.sourceRef || ref.ref,
+            detail: `Mission Director reference "${ref.ref}" names script "${qm[1]}", which does not exist in this project or the canonical X4 corpus (and content.xml declares no external mod dependency).`,
+          });
+        }
+      }
     }
   }
 

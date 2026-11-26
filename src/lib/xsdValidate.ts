@@ -831,11 +831,29 @@ function epsilonClosure(nfa: ParticleNfa, input: Iterable<number>): Set<number> 
 interface ParticleDfaState {
   active: Set<number>;
   transitions: Map<string, ParticleDfaState>;
+  summary?: ParticleState;
 }
 interface ParticleDfa {
   nfa: ParticleNfa;
   start: ParticleDfaState;
   states: Map<string, ParticleDfaState>;
+}
+
+function summarizeDfaState(dfa: ParticleDfa, state: ParticleDfaState): ParticleState {
+  if (state.summary) return state.summary;
+  const next = new Set<string>();
+  const viable = state.active.size > 0;
+  const complete = viable && state.active.has(dfa.nfa.accept);
+  let wildcard = false;
+  for (const current of state.active) {
+    for (const token of dfa.nfa.states[current].transitions.keys()) {
+      if (token === '*') wildcard = true;
+      else next.add(token);
+    }
+  }
+  const summary: ParticleState = { viable, complete, next, wildcard };
+  state.summary = summary;
+  return summary;
 }
 
 const particleDfaCache = new WeakMap<ParticleNfa, ParticleDfa>();
@@ -903,21 +921,20 @@ export class ContentParticleCursor {
       next: new Set(this.fallback.children),
       wildcard: this.fallback.openChildren,
     };
+    if (this.variants.length === 1) {
+      return summarizeDfaState(this.variants[0].dfa, this.variants[0].state);
+    }
     const next = new Set<string>();
     let viable = false;
     let complete = false;
     let wildcard = false;
     for (const variant of this.variants) {
-      const active = variant.state.active;
-      if (!active.size) continue;
+      const s = summarizeDfaState(variant.dfa, variant.state);
+      if (!s.viable) continue;
       viable = true;
-      if (active.has(variant.dfa.nfa.accept)) complete = true;
-      for (const current of active) {
-        for (const token of variant.dfa.nfa.states[current].transitions.keys()) {
-          if (token === '*') wildcard = true;
-          else next.add(token);
-        }
-      }
+      if (s.complete) complete = true;
+      if (s.wildcard) wildcard = true;
+      for (const token of s.next) next.add(token);
     }
     return { viable, complete, next, wildcard };
   }
@@ -1181,6 +1198,46 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
         });
       }
 
+      // Built-in XSD scalar primitive validation on non-expression literals.
+      if (attr.value && !/[{[$]/.test(attr.value)) {
+        const directType = (aspec.type || '').toLowerCase();
+        const baseType = (aspec.baseType || '').toLowerCase();
+        if ((directType === 'xs:boolean' || directType === 'boolean' || baseType === 'xs:boolean')
+          && directType !== 'booleanexpression' && directType !== 'expression') {
+          if (!/^(?:true|false|1|0)$/i.test(attr.value.trim())) {
+            out.push({
+              severity: 'error', domain, filePath, line: tag.line,
+              sourceRef: `${tag.name}@${attr.name}`, code: 'XSD_TYPE_VIOLATION',
+              message: `<${tag.name}> attribute "${attr.name}"="${attr.value}" violates boolean type in ${citation}. Allowed: true, false, 1, 0.`,
+            });
+          }
+        } else if (directType === 'xs:integer' || baseType === 'xs:integer') {
+          if (!/^[+-]?\d+$/.test(attr.value.trim())) {
+            out.push({
+              severity: 'error', domain, filePath, line: tag.line,
+              sourceRef: `${tag.name}@${attr.name}`, code: 'XSD_TYPE_VIOLATION',
+              message: `<${tag.name}> attribute "${attr.name}"="${attr.value}" violates xs:integer in ${citation}.`,
+            });
+          }
+        } else if (directType === 'xs:nonnegativeinteger' || baseType === 'xs:nonnegativeinteger') {
+          if (!/^\+?\d+$/.test(attr.value.trim())) {
+            out.push({
+              severity: 'error', domain, filePath, line: tag.line,
+              sourceRef: `${tag.name}@${attr.name}`, code: 'XSD_TYPE_VIOLATION',
+              message: `<${tag.name}> attribute "${attr.name}"="${attr.value}" violates xs:nonNegativeInteger in ${citation}.`,
+            });
+          }
+        } else if (directType === 'xs:positiveinteger' || baseType === 'xs:positiveinteger') {
+          if (!/^\+?[1-9]\d*$/.test(attr.value.trim())) {
+            out.push({
+              severity: 'error', domain, filePath, line: tag.line,
+              sourceRef: `${tag.name}@${attr.name}`, code: 'XSD_TYPE_VIOLATION',
+              message: `<${tag.name}> attribute "${attr.name}"="${attr.value}" violates xs:positiveInteger in ${citation}.`,
+            });
+          }
+        }
+      }
+
       if (opts.checkPatterns === true && aspec.patterns?.length && attr.value && !/[{[$]/.test(attr.value)) {
         for (const pattern of aspec.patterns) {
           try {
@@ -1370,6 +1427,50 @@ export function validateXmlAgainstSchema(xml: string, index: SchemaIndex, opts: 
       if (event.selfClosing) closeFrame(frame, event.line, event.column);
       else stack.push(frame);
     }
+
+    // Script schemas (md.xsd, aiscripts.xsd) allow character data nowhere inside script elements.
+    if (domain === 'mission_director' || domain === 'ai_scripts' || domain === 'md' || domain === 'aiscripts') {
+      const maskedText = String(xml || '').replace(
+        /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>/g,
+        (s) => s.replace(/[^\n]/g, ' '),
+      );
+      const tagTokenRe = /<(\/)?([A-Za-z_][\w.:-]*)(?:(?:"[^"]*"|'[^']*'|[^'"<>])*)?(\/?)>/g;
+      const openElements: string[] = [];
+      let cursor = 0;
+      let curLine = 1;
+      let tm: RegExpExecArray | null;
+      while ((tm = tagTokenRe.exec(maskedText)) !== null) {
+        const between = maskedText.slice(cursor, tm.index);
+        const parentTag = openElements.at(-1);
+        if (parentTag && parentTag !== 'add' && parentTag !== 'replace' && /\S/.test(between)) {
+          const leadingOffset = between.search(/\S/);
+          let textLine = curLine;
+          for (let k = 0; k < leadingOffset; k++) if (between.charCodeAt(k) === 10) textLine++;
+          const snippet = between.trim().slice(0, 48);
+          out.push({
+            severity: 'warning',
+            domain,
+            filePath,
+            line: textLine,
+            sourceRef: parentTag,
+            code: 'XSD_TEXT_NOT_ALLOWED',
+            message: `Element <${parentTag}> does not allow character text in ${citation} (found "${snippet}").`,
+          });
+        }
+        for (let i = cursor; i < tagTokenRe.lastIndex; i++) if (maskedText.charCodeAt(i) === 10) curLine++;
+        cursor = tagTokenRe.lastIndex;
+        const tName = tm[2].toLowerCase();
+        const isClose = !!tm[1];
+        const isSelf = !isClose && /\/\s*>$/.test(tm[0]);
+        if (isClose) {
+          for (let i = openElements.length - 1; i >= 0; i--) {
+            if (openElements[i] === tName) { openElements.length = i; break; }
+          }
+        } else if (!isSelf) {
+          openElements.push(tName);
+        }
+      }
+    }
   }
 
 
@@ -1399,7 +1500,7 @@ export function runXsdValidateSelftest() {
     fs.writeFileSync(file, `<?xml version="1.0"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">
       <xs:simpleType name="modeBase"><xs:restriction base="xs:string"><xs:enumeration value="a"/><xs:enumeration value="b"/><xs:pattern value="[ab]"/></xs:restriction></xs:simpleType>
       <xs:simpleType name="mode"><xs:restriction base="modeBase"/></xs:simpleType>
-      <xs:element name="root"><xs:complexType><xs:sequence><xs:element ref="child" minOccurs="0" maxOccurs="2"/><xs:element ref="tail" minOccurs="0"/></xs:sequence><xs:attribute name="mode" type="mode" use="required" default="a"/><xs:attribute name="exact" type="xs:string"/></xs:complexType></xs:element>
+      <xs:element name="root"><xs:complexType><xs:sequence><xs:element ref="child" minOccurs="0" maxOccurs="2"/><xs:element ref="tail" minOccurs="0"/></xs:sequence><xs:attribute name="mode" type="mode" use="required" default="a"/><xs:attribute name="exact" type="xs:string"/><xs:attribute name="flag" type="xs:boolean"/></xs:complexType></xs:element>
       <xs:element name="child"><xs:complexType><xs:choice><xs:element ref="leaf"/><xs:any minOccurs="0"/></xs:choice></xs:complexType></xs:element>
       <xs:element name="leaf"><xs:complexType/></xs:element>
       <xs:element name="tail"><xs:complexType/></xs:element>
@@ -1448,6 +1549,10 @@ export function runXsdValidateSelftest() {
         && elemHit?.line === 6 && elemHit?.column === 29,
       mixedFindings,
     );
+    const badBool = validateXmlAgainstSchema('<root mode="a" flag="maybe"/>', index, { strictStructure: true });
+    ok('boolean_primitive_type_violation_is_error', badBool.some(d => d.code === 'XSD_TYPE_VIOLATION' && d.severity === 'error'), badBool);
+    const strayText = validateXmlAgainstSchema('<root mode="a">stray text<child/></root>', index, { strictStructure: true, domain: 'md' });
+    ok('stray_text_in_script_element_warns', strayText.some(d => d.code === 'XSD_TEXT_NOT_ALLOWED' && d.severity === 'warning'), strayText);
   } finally {
     try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ }
   }

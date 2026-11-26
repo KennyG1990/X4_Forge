@@ -6,6 +6,7 @@ import {
 import { readAiScriptCallDocument } from "./aiScriptNavigation";
 import { readMdDefinitionDocument } from "./langNav";
 import "./aiScriptNavigation.selftest";
+import { runX4IdeFeaturesSelftest } from "./x4IdeFeatures.selftest";
 
 const provider = `<mdscript name="LibraryScript"><cues>
   <library name="Task" purpose="run_actions"><params>
@@ -129,3 +130,7 @@ const foldedAiParam = aiCall('<param name="TARGET" value="1"/><param name="tar|g
 assert.deepEqual(aiQuery(foldedAiParam, "completion")?.unsupplied.map(parameter => parameter.name), ["budget"]);
 assert.equal(aiQuery(foldedAiParam, "definition"), undefined);
 console.log("AI call help, completion and parameter location checks passed");
+
+const ideFeaturesRes = runX4IdeFeaturesSelftest();
+assert.equal(ideFeaturesRes.allPassed, true, `x4IdeFeatures selftest failed: ${JSON.stringify(ideFeaturesRes.checks.filter(c => !c.pass))}`);
+console.log(`x4IdeFeatures checks passed (${ideFeaturesRes.passed}/${ideFeaturesRes.total})`);

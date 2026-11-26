@@ -14,7 +14,7 @@ export const MD_UNMATCHED_ELSE = {
 
 export interface MdExpressionFinding {
   code: typeof MD_UNMATCHED_ELSE.code | 'expression-format-specifier' | 'format-arguments-missing'
-    | 'expression-null-safe-exists' | 'expression-text-reference';
+    | 'expression-null-safe-exists' | 'expression-text-reference' | 'expression-syntax';
   severity: 'error' | 'warning';
   offset: number;
   segment: string;
@@ -200,6 +200,122 @@ export function lintMdExpressionRules(expression: string): MdExpressionFinding[]
   return findings.sort((a, b) => a.offset - b.offset);
 }
 
+/**
+ * Deterministic syntax check for complete script expressions (trailing dots,
+ * unclosed single-quoted strings, unbalanced brackets/braces/parens, and
+ * consecutive binary-only operators like `+ *`). Kept separate from
+ * `lintMdExpressionRules` so partial-input editor tolerances stay untouched.
+ */
+export function lintCompleteScriptExpressionSyntax(expression: string): MdExpressionFinding[] {
+  const findings: MdExpressionFinding[] = [];
+  if (!expression || !expression.trim()) return findings;
+
+  const groupStack: Array<{ opener: string; closer: string; offset: number }> = [];
+  let inSingleQuote = false;
+  let quoteStart = 0;
+  let prevSignificantChar = '';
+  let prevSignificantOffset = -1;
+
+  for (let i = 0; i < expression.length; i++) {
+    const ch = expression[i];
+    if (inSingleQuote) {
+      if (ch === '\\') { i++; continue; }
+      if (ch === "'") {
+        inSingleQuote = false;
+        prevSignificantChar = "'";
+        prevSignificantOffset = i;
+      }
+      continue;
+    }
+    if (ch === "'") {
+      inSingleQuote = true;
+      quoteStart = i;
+      continue;
+    }
+    if (/\s/.test(ch)) continue;
+
+    if (ch === '(' || ch === '[' || ch === '{') {
+      groupStack.push({ opener: ch, closer: ch === '(' ? ')' : ch === '[' ? ']' : '}', offset: i });
+      prevSignificantChar = ch;
+      prevSignificantOffset = i;
+      continue;
+    }
+    if (ch === ')' || ch === ']' || ch === '}') {
+      const top = groupStack.pop();
+      if (!top || top.closer !== ch) {
+        findings.push({
+          code: 'expression-syntax',
+          severity: 'error',
+          offset: i,
+          segment: ch,
+          message: `Unmatched '${ch}' in X4 expression.`,
+        });
+        return findings;
+      }
+      prevSignificantChar = ch;
+      prevSignificantOffset = i;
+      continue;
+    }
+
+    if (ch === '.') {
+      let j = i + 1;
+      while (j < expression.length && /\s/.test(expression[j])) j++;
+      const next = j < expression.length ? expression[j] : '';
+      const isPairedDecimal = prevSignificantOffset === i - 1 && /\d/.test(prevSignificantChar) && j === i + 1 && /\d/.test(next);
+      const isLeadingDecimal = j === i + 1 && /\d/.test(next)
+        && (prevSignificantChar === '' || !/[\p{L}\p{N}_$\])}'"]/u.test(prevSignificantChar));
+      const validFollow = isPairedDecimal || isLeadingDecimal || /[$\p{L}_[{]/u.test(next);
+      if (!validFollow) {
+        findings.push({
+          code: 'expression-syntax',
+          severity: 'error',
+          offset: i,
+          segment: '.',
+          message: "Property name, '$variable', '{selector}', or '[arguments]' expected after '.'.",
+        });
+      }
+      prevSignificantChar = ch;
+      prevSignificantOffset = i;
+      continue;
+    }
+
+    if ((ch === '*' || ch === '/' || ch === '%')
+      && (prevSignificantChar === '' || '+-*/%([,='.includes(prevSignificantChar))) {
+      findings.push({
+        code: 'expression-syntax',
+        severity: 'error',
+        offset: i,
+        segment: ch,
+        message: `Unexpected binary operator '${ch}' without a preceding operand.`,
+      });
+    }
+
+    prevSignificantChar = ch;
+    prevSignificantOffset = i;
+  }
+
+  if (inSingleQuote) {
+    findings.push({
+      code: 'expression-syntax',
+      severity: 'error',
+      offset: quoteStart,
+      segment: "'",
+      message: 'Unterminated single-quoted string literal in X4 expression.',
+    });
+  } else if (groupStack.length > 0) {
+    const unclosed = groupStack[groupStack.length - 1];
+    findings.push({
+      code: 'expression-syntax',
+      severity: 'error',
+      offset: unclosed.offset,
+      segment: unclosed.opener,
+      message: `Unclosed '${unclosed.opener}' in X4 expression (expected '${unclosed.closer}').`,
+    });
+  }
+
+  return findings;
+}
+
 /** Resolve literal results of MD inline-if expressions without evaluating predicates. */
 export function collectMdStringResults(expression: string): { values: string[]; unresolved: boolean } {
   const unknown = { values: [], unresolved: true };
@@ -365,6 +481,11 @@ export function runExpressionAstSelftest() {
   ok('deep_keys_bound_inner_work_without_losing_the_outer_or_sibling',
     bounded.length === MAX_SELECTOR_ANALYSIS_DEPTH + 2 && bounded[0].end === deep.indexOf(' and ')
       && bounded.at(-1)?.raw === 'event.object');
+  ok('syntax_lint_catches_consecutive_operators_and_unclosed_delimiters',
+    lintCompleteScriptExpressionSyntax('player.age + * 2').some(f => f.code === 'expression-syntax')
+      && lintCompleteScriptExpressionSyntax('($x + 1').some(f => f.code === 'expression-syntax'));
+  ok('syntax_lint_accepts_leading_decimal_floats_and_valid_expressions',
+    lintCompleteScriptExpressionSyntax('.3f + 1.5s - ($x * 2)').length === 0);
   const passed = checks.filter(check => check.pass).length;
   return { pass: passed === checks.length, allPassed: passed === checks.length, passed, total: checks.length, checks };
 }

@@ -38,6 +38,7 @@ import {
   isAiScriptCallCandidate, mdCallScriptHeader, readMdCallHelpRequest, resolveMdCallHelp, type AiScriptCallHelp, type MdCallHelpMode,
 } from "./langCallHelp";
 import { isScriptExpressionRole, type ScriptAttributeType } from "../../shared/scriptExpressionRole";
+import { registerX4IdeFeaturesHost } from "./x4IdeFeaturesHost";
 import {
   MAX_MD_DEFINITION_SOURCE, readMdDefinitionDocument, resolveMdDefinition, resolveMdReferences,
   type MdDefinitionDocument,
@@ -1924,6 +1925,7 @@ export function activate(context: vscode.ExtensionContext): void {
     );
     registerLangProviders(context);
     registerNavProviders(context);
+    registerX4IdeFeaturesHost(context, modRootFor);
     registerWorkspaceScriptSymbols(context, modRootFor, LIVE_FILE_LIMIT, () => beginNativeOperation("native.provider.read"), () => {
       const handle = backend;
       if (!handle?.owned || !handle.token) return undefined;

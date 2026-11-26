@@ -151,6 +151,7 @@ const MD_CALLABLE_PURPOSE_CODES = new Set([
 
 const EXPRESSION_RULE_CODES = new Set([
   'md.unmatched_else',
+  'expression-syntax',
   'expression-null-safe-exists',
   'expression-format-specifier',
   'format-arguments-missing',
@@ -195,7 +196,7 @@ const GUIDANCE: Array<{ matches: (code: string) => boolean; value: Guidance }> =
     },
   },
   {
-    matches: code => /^(xsd\.|schema\.)/.test(code) || code === 'md.xsd',
+    matches: code => /^(xsd\.|schema\.)/.test(code) || code === 'md.xsd' || code === 'LIBRARY_SCHEMA_UNKNOWN',
     value: {
       title: 'Game schema rejected this structure',
       why: 'The XML element, attribute, value, or placement does not satisfy the routed X4 game schema (XSD).',
@@ -325,7 +326,7 @@ const GUIDANCE: Array<{ matches: (code: string) => boolean; value: Guidance }> =
     },
   },
   {
-    matches: code => code === 'md_pitfall.variable_read_before_initialization' || code === 'md.variable_initial_state',
+    matches: code => code === 'md_pitfall.variable_read_before_initialization' || code === 'md.variable_initial_state' || code === 'md_pitfall.variable_never_set',
     value: {
       title: 'Mission Director variable may be read before initialization',
       why: 'A strict local variable read occurs without a proven prior assignment across the cue namespace, library parameters, or control-flow branches.',
@@ -405,7 +406,7 @@ const GUIDANCE: Array<{ matches: (code: string) => boolean; value: Guidance }> =
     },
   },
   {
-    matches: code => /^(cue\.|crossfile\.|project\.cue|project\.unresolved_cue_ref$|md\.cue_)/.test(code),
+    matches: code => /^(cue\.|crossfile\.|project\.cue|project\.unresolved_cue_ref$|md\.cue_|md\.unknown_script_reference$)/.test(code),
     value: {
       title: 'Cross-file cue relationship is broken',
       why: 'A cue definition, signal, reset, cancel, or reference does not resolve consistently across the project.',

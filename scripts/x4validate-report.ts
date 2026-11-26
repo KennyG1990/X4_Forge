@@ -3,11 +3,11 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { ValidationEvidence, ValidationEvidenceFinding } from '../src/lib/validationEvidence';
 
-export const validationSeverity = { info: 0, warning: 1, error: 2 } as const;
+export const validationSeverity = { hint: 0, info: 0, warning: 1, error: 2 } as const;
 export type ValidationSeverity = keyof typeof validationSeverity;
 export type ValidationReportFormat = 'text' | 'json' | 'sarif' | 'github';
 
-const CLI_LIMITATIONS = ['Game-object reference checks require the Forge backend.'];
+const DEFAULT_CLI_LIMITATIONS = ['Game-object reference checks require the Forge backend.'];
 const SARIF_SCHEMA = 'https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json';
 
 function relativeFile(base: string, file: string): string | undefined {
@@ -52,15 +52,16 @@ export function renderValidationReport(
   validationOk: boolean,
   passed: boolean,
   failOn: ValidationSeverity,
+  cliLimitations: readonly string[] = DEFAULT_CLI_LIMITATIONS,
 ): string {
   const findings = evidence.findings;
   const counts = { error: 0, warning: 0, info: 0 };
   for (const finding of findings) counts[finding.severity]++;
-  const summary = `X4 Forge validation ${passed ? 'PASS' : 'FAIL'} | validator=${validationOk ? 'ok' : 'errors'} | errors=${counts.error} warnings=${counts.warning} info=${counts.info} | coverage=${evidence.coverage.complete ? 'complete' : 'incomplete'} | CLI limits=${CLI_LIMITATIONS.length} | fail-on=${failOn}`;
+  const summary = `X4 Forge validation ${passed ? 'PASS' : 'FAIL'} | validator=${validationOk ? 'ok' : 'errors'} | errors=${counts.error} warnings=${counts.warning} info=${counts.info} | coverage=${evidence.coverage.complete ? 'complete' : 'incomplete'} | CLI limits=${cliLimitations.length} | fail-on=${failOn}`;
   const verdict = {
     passed, validationOk, failOn, counts, summary,
     modId: evidence.modId, sourceHash: evidence.sourceHash, sourceHashScope: evidence.hashScope,
-    outcome: evidence.outcome, coverage: evidence.coverage, limitations: CLI_LIMITATIONS,
+    outcome: evidence.outcome, coverage: evidence.coverage, limitations: cliLimitations,
   };
   if (format === 'text') return summary;
   if (format === 'json') return stringifyValidationJson({ ...verdict, findings });

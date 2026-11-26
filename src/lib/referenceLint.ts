@@ -7,12 +7,15 @@ export interface ReferenceLiteralSets {
   wares?: Set<string>;
   macros?: Set<string>;
   sectors?: Set<string>;
+  aiScripts?: Set<string>;
+  orders?: Set<string>;
 }
 
 export interface ReferenceLiteralFinding {
-  code: 'reference.unknown_faction' | 'reference.unknown_ware' | 'reference.unknown_macro' | 'reference.unknown_sector';
+  code: 'reference.unknown_faction' | 'reference.unknown_ware' | 'reference.unknown_macro' | 'reference.unknown_sector'
+    | 'reference.unknown_aiscript' | 'reference.unknown_order';
   severity: 'warning';
-  kind: 'faction' | 'ware' | 'macro' | 'sector';
+  kind: 'faction' | 'ware' | 'macro' | 'sector' | 'aiscript' | 'order';
   id: string;
   filePath?: string;
   line: number;
@@ -143,7 +146,8 @@ export function lintReferenceLiterals(
   references: ReferenceLiteralSets,
   opts: { filePath?: string; kind?: string } = {},
 ): ReferenceLiteralFinding[] {
-  if (!content || (!references.factions?.size && !references.wares?.size && !references.macros?.size && !references.sectors?.size)) return [];
+  if (!content || (!references.factions?.size && !references.wares?.size && !references.macros?.size
+    && !references.sectors?.size && !references.aiScripts?.size && !references.orders?.size)) return [];
   const isLua = opts.kind === 'lua' || /\.lua$/i.test(opts.filePath || '');
   const masked = maskComments(content, isLua);
   const locate = createSourcePositionLocator(content);
@@ -197,6 +201,14 @@ export function lintReferenceLiterals(
     scan('ware', references.wares, /\bware\s*=\s*(["'])([A-Za-z_][\w-]*)\1/gd, 2);
     scan('macro', references.macros, /\bmacro\s*=\s*(["'])([A-Za-z_][\w-]*_macro)\1/gd, 2);
     scan('sector', references.sectors || references.macros, /\bsector\s*=\s*(["'])([A-Za-z_][\w-]*_macro)\1/gd, 2);
+    if (references.aiScripts?.size) {
+      scan('aiscript', references.aiScripts, /<(?:run_script|run_interrupt_script|start_script)\b[^>]*?\bname\s*=\s*"'([A-Za-z_][\w.-]*)'"/gd, 1);
+      scan('aiscript', references.aiScripts, /<(?:run_script|run_interrupt_script|start_script)\b[^>]*?\bname\s*=\s*'&apos;([A-Za-z_][\w.-]*)&apos;'/gd, 1);
+    }
+    if (references.orders?.size) {
+      scan('order', references.orders, /<create_order\b[^>]*?\bid\s*=\s*"'([A-Za-z_][\w.-]*)'"/gd, 1);
+      scan('order', references.orders, /<create_order\b[^>]*?\bid\s*=\s*'&apos;([A-Za-z_][\w.-]*)&apos;'/gd, 1);
+    }
 
     // B94 (phantom ids in list literals) was ATTEMPTED here and REVERTED 2026-07-26 — see BACKLOG.
     // The "a list containing a known faction proves a faction position" heuristic FAILED its bar:
@@ -326,6 +338,14 @@ export function runReferenceLiteralLintSelftest() {
         const res = lintReferenceLiterals(`${write}\nGetMacroData("fakemacro", "name")\nGetWareData("badware", "name")`, refs, { kind: 'lua' });
         return !res.some(f => f.kind === 'macro') && res.some(f => f.kind === 'ware' && f.id === 'badware');
       }) },
+    { name: 'aiscript and order literal calls checked against catalog', pass: (() => {
+      const callHits = lintReferenceLiterals(
+        `<run_script name="'move.no_such_script_xyz'"/><create_order id="'NoSuchOrderXYZ'" object="this.ship"/>`,
+        { aiScripts: new Set(['move.generic']), orders: new Set(['patrol']) },
+      );
+      return callHits.some(f => f.kind === 'aiscript' && f.id === 'move.no_such_script_xyz')
+        && callHits.some(f => f.kind === 'order' && f.id === 'nosuchorderxyz');
+    })() },
   ];
   const passed = checks.filter(c => c.pass).length;
   return { allPassed: passed === checks.length, pass: passed === checks.length, passed, total: checks.length, checks };

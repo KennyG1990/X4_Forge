@@ -98,6 +98,35 @@ export function lintFactionRelations(input: LintFactionsInput): FactionsLintResu
     }
   }
 
+  // Also inspect <relation> payloads inside <diff> (<add>/<replace>) where no enclosing <faction> exists.
+  const allRelations = doc.getElementsByTagName("relation");
+  for (let rIdx = 0; rIdx < allRelations.length && relations < MAX_RELATIONS; rIdx++) {
+    const relEl = allRelations[rIdx];
+    let hasFactionAncestor = false;
+    let diffSel = "";
+    for (let p = relEl.parentNode as Element | null; p && p.nodeType === 1; p = p.parentNode as Element | null) {
+      const tn = (p.tagName || p.nodeName || "").toLowerCase();
+      if (tn === "faction") { hasFactionAncestor = true; break; }
+      if (!diffSel && (tn === "add" || tn === "replace")) diffSel = p.getAttribute("sel") || "";
+    }
+    if (hasFactionAncestor) continue;
+    relations++;
+    const selFaction = /faction\[\s*@id\s*=\s*['"]([^'"]+)['"]\s*\]/i.exec(diffSel)?.[1] || "(diff)";
+    const target = relEl.getAttribute("faction") || "";
+    const raw = relEl.getAttribute("relation");
+    if (raw !== null && raw !== "") {
+      const v = Number(raw);
+      if (!Number.isFinite(v) || v < -1 || v > 1) {
+        add(selFaction, target, "relation_out_of_range",
+          `Relation value "${raw}" (faction ${selFaction} → ${target || "?"}) is outside the legal range −1 to 1 — the game clamps or ignores out-of-range relations.`, raw);
+      }
+    }
+    if (known && target && !known.has(target.toLowerCase()) && !known.has(target.toLowerCase().replace(/^faction\./, ""))) {
+      add(selFaction, target, "unknown_relation_faction",
+        `Faction ${selFaction} declares a relation to "${target}", which is not a known faction — check the id, or make sure the faction that defines it is present.`);
+    }
+  }
+
   return { findings, summary: { relations, findings: findings.length, byKind } };
 }
 
@@ -146,6 +175,10 @@ export function runFactionsLintSelftest() {
   ok("empty_safe", lintFactionRelations({ factionsXml: "", knownFactions: known }).findings.length === 0);
   ok("malformed_safe", lintFactionRelations({ factionsXml: "<factions><faction id=", knownFactions: known }).summary.relations >= 0);
   ok("non_numeric_value_flagged", lintFactionRelations({ factionsXml: `<factions><faction id="a"><relations><relation faction="argon" relation="hostile"/></relations></faction></factions>`, knownFactions: known }).summary.byKind.relation_out_of_range === 1);
+  ok("diff_patch_relation_inspected", lintFactionRelations({
+    factionsXml: `<diff><add sel="/factions/faction[@id='argon']/relations"><relation faction="nonexistent_xyz" relation="5.0"/></add></diff>`,
+    knownFactions: known,
+  }).findings.length === 2);
 
   const passed = checks.filter(c => c.pass).length;
   return { allPassed: passed === checks.length, passed, total: checks.length, checks };

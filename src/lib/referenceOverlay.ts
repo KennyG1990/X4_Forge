@@ -100,6 +100,18 @@ export function getReferenceOverlayCacheStats(): { entries: number; bytes: numbe
   return { entries: cache.size, bytes: cacheBytes, maxBytes: MAX_CACHE_BYTES };
 }
 
+export function seedReferenceOverlayCache(entries: ReadonlyArray<[string, EffectiveReferenceDocument]>): void {
+  for (const [key, value] of entries) {
+    if (typeof key === 'string' && value && typeof value.signature === 'string') {
+      storeCached(key, value);
+    }
+  }
+}
+
+export function exportReferenceOverlayCache(): Array<[string, EffectiveReferenceDocument]> {
+  return [...cache.entries()];
+}
+
 function normalizeRelative(relativeInput: string): string {
   const raw = String(relativeInput || '').replace(/\\/g, '/').replace(/^\.\//, '');
   if (!raw || path.posix.isAbsolute(raw) || /^[A-Za-z]:/.test(raw)) throw new Error('Invalid request: a vanilla-relative path is required.');

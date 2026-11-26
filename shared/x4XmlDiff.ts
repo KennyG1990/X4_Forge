@@ -67,6 +67,7 @@ export interface DiffSimulationResult {
 export interface DiffSimulationOptions {
   attributeProvenance?: boolean;
   elementProvenance?: boolean | { maxElements?: number; maxSourceChars?: number; nameRanges?: boolean };
+  skipSerialize?: boolean;
 }
 
 export interface DiffSourcePoint { operation: number; line?: number; column?: number; reason?: string }
@@ -794,6 +795,7 @@ function applyParsedDiffOperations(
   elementSource?: ElementSourceContext,
   elementOptions?: DiffSimulationOptions['elementProvenance'],
   baseDocument?: RootedXmlDocument,
+  skipSerialize = false,
 ): DiffSimulationResult {
   const parsed: ReturnType<typeof parseDocument> = baseDocument ? { document: baseDocument } : parseDocument(baseXml);
   if (!parsed.document) {
@@ -893,7 +895,7 @@ function applyParsedDiffOperations(
   const ok = !findings.some(finding => finding.severity === 'error');
   const result: DiffSimulationResult = {
     ok,
-    content: serializer.serializeToString(document),
+    content: skipSerialize ? '' : serializer.serializeToString(document),
     operations: outcomes,
     findings,
   };
@@ -937,7 +939,7 @@ export function simulateXmlDiff(baseXml: string, diffXml: string, options: DiffS
       ...(options.elementProvenance ? { elementProvenance: unavailableElementProvenance('Patch XML operations could not be parsed for element context.') } : {}),
     };
   }
-  const applied = applyParsedDiffOperations(baseXml, parsed.operations, parsed.provenance, parsed.elementSource, options.elementProvenance);
+  const applied = applyParsedDiffOperations(baseXml, parsed.operations, parsed.provenance, parsed.elementSource, options.elementProvenance, undefined, options.skipSerialize === true);
   return { ...applied, findings: [...parsed.findings, ...applied.findings] };
 }
 

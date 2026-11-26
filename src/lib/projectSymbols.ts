@@ -56,6 +56,8 @@ function inferredExpressionType(expression: string, index: ScriptPropertyIndex, 
   if (/^(?:true|false)$/i.test(value)) return index.model.datatypes.has('boolean') ? 'boolean' : null;
   if (/^-?\d+(?:\.\d+)?[f]?$/i.test(value)) return index.model.datatypes.has('number') ? 'number' : index.model.datatypes.has('integer') ? 'integer' : null;
   if (/^'[^']*'$/.test(value)) return index.model.datatypes.has('string') ? 'string' : null;
+  if (/^table\s*\[[\s\S]*\]$/.test(value)) return index.model.datatypes.has('table') ? 'table' : null;
+  if (/^\[[\s\S]*\]$/.test(value)) return index.model.datatypes.has('list') ? 'list' : null;
   const direct = variableTypes[value] || variableTypes[value.toLowerCase()];
   if (direct) return direct;
   const chains = parseExpressionChains(value);
@@ -92,16 +94,26 @@ export function buildProjectSymbols(
       const name = normalizedVariable(attrs.get('name') || '');
       if (!name) continue;
       const exact = attrs.get('exact') || attrs.get('value') || attrs.get('default');
+      if (tag === 'param') {
+        const declaredType = (attrs.get('type') || '').trim().toLowerCase();
+        if (declaredType && available.has(declaredType)) {
+          symbols.set(name, declaredType);
+          confidenceByName.set(name.toLowerCase(), 'schema');
+          variables.push({ name, type: declaredType, filePath: file.path, line: tagLine, sourceTag: tag, confidence: 'schema' });
+          continue;
+        }
+      }
       if ((tag === 'set_value' || tag === 'add_value' || tag === 'param') && exact) {
         pending.push({ name, expression: exact, line: tagLine, tag });
         continue;
       }
       if (/^(?:find|create|get|select)_/.test(tag)) {
-        const type = tagDatatype(tag, available);
+        const isMultiple = /^(?:true|1)$/i.test((attrs.get('multiple') || '').trim());
+        const type = isMultiple && available.has('list') ? 'list' : tagDatatype(tag, available);
         if (type) {
           symbols.set(name, type);
-          confidenceByName.set(name.toLowerCase(), 'name');
-          variables.push({ name, type, filePath: file.path, line: tagLine, sourceTag: tag, confidence: 'name' });
+          confidenceByName.set(name.toLowerCase(), isMultiple ? 'schema' : 'name');
+          variables.push({ name, type, filePath: file.path, line: tagLine, sourceTag: tag, confidence: isMultiple ? 'schema' : 'name' });
         }
       }
     }

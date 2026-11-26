@@ -37,7 +37,7 @@
  */
 
 import { DOMParser, normalizeLineEndings, type Attr, type Document, type Element } from '@xmldom/xmldom';
-import { lintMdExpressionRules, type MdExpressionFinding } from './expressionAst';
+import { lintCompleteScriptExpressionSyntax, lintMdExpressionRules, type MdExpressionFinding } from './expressionAst';
 import { isScriptExpressionRole } from '../../shared/scriptExpressionRole';
 import { analyzeMdCueTrigger, classifyCueRef, mdConditionKind } from './cueLineage';
 import { maskNonExpressionSpans, type ScriptPropertyIndex } from './scriptProperties';
@@ -53,6 +53,8 @@ export interface MdPitfallFinding {
     | 'md_pitfall.numeric_time_value' | 'md_pitfall.no_event_condition' | 'md_pitfall.illegal_instantiate'
     | 'md_pitfall.variable_read_after_removal' | 'md_pitfall.variable_read_when_absent'
     | 'md_pitfall.variable_read_before_initialization'
+    | 'md_pitfall.variable_never_set'
+    | 'md.unknown_script_reference'
     | 'md_pitfall.raw_engine_id_in_player_text'
     | 'md_pitfall.order_cancelled_override_suspension'
     | MdExpressionFinding['code'];
@@ -83,10 +85,15 @@ export function lintScriptExpressionValue(input: {
   value: string;
   schema: SchemaIndex | null;
   filePath?: string;
+  checkSyntax?: boolean;
   locate: (offset: number) => { line?: number; column?: number } | undefined;
 }): MdPitfallFinding[] {
   if (!isScriptExpressionAttribute(input.elementName, input.attributeName, input.schema)) return [];
-  return lintMdExpressionRules(input.value).flatMap(finding => {
+  const rawFindings = [
+    ...lintMdExpressionRules(input.value),
+    ...(input.checkSyntax ? lintCompleteScriptExpressionSyntax(input.value) : []),
+  ];
+  return rawFindings.flatMap(finding => {
     const position = input.locate(finding.offset);
     // An unavailable lexical mapping cannot manufacture an authored position.
     if (!position) return [];
@@ -128,7 +135,7 @@ function expressionLocation(source: string, lines: number[], attr: Attr, offset:
 
 /** Validate expression-valued attributes in script files and their XML diff payloads. */
 export function lintScriptExpressions(xml: string, schema: SchemaIndex | null, filePath?: string): MdPitfallFinding[] {
-  if (!/\belse\b|[%{]|&#/.test(xml) && !(xml.includes('@') && xml.includes('?'))) return [];
+  if (!xml || !xml.includes('=')) return [];
   const source = normalizeLineEndings(xml.replace(/^\uFEFF/, ''));
   let invalid = false;
   let doc;
@@ -147,6 +154,7 @@ export function lintScriptExpressions(xml: string, schema: SchemaIndex | null, f
       const attr = element.attributes[i];
       findings.push(...lintScriptExpressionValue({
         elementName: element.nodeName, attributeName: attr.name, value: attr.value, schema, filePath,
+        checkSyntax: true,
         locate: offset => {
           lines ??= [0, ...Array.from(source.matchAll(/\n/g), match => match.index + 1)];
           return expressionLocation(source, lines, attr, offset);
@@ -2181,7 +2189,8 @@ export function lintEffectiveMdDestroyedEvents(filePath: string, trace: DiffElem
  * so with no union supplied we skip the lint entirely rather than guess).
  */
 export function lintMdPitfalls(xml: string, opts: { propertyUnion?: Set<string>; propertyIndex?: ScriptPropertyIndex; filePath?: string;
-  variableAvailability?: MdVariableAvailabilityContext; initialStateGaps?: ValidationCoverageGap[] } = {}): MdPitfallFinding[] {
+  variableAvailability?: MdVariableAvailabilityContext; initialStateGaps?: ValidationCoverageGap[];
+  projectWrittenVariables?: ReadonlySet<string> } = {}): MdPitfallFinding[] {
   const out: MdPitfallFinding[] = [];
   if (!xml || typeof xml !== 'string' || !/<mdscript\b/i.test(xml)) return out;
   const masked = maskNonExpressionSpans(xml);
@@ -2201,8 +2210,46 @@ export function lintMdPitfalls(xml: string, opts: { propertyUnion?: Set<string>;
   // Non-MD and malformed XML produce no semantic finding here; structural/wellformedness validation owns those diagnostics.
   if (!element || element.nodeName !== 'mdscript' || parseError) return out;
   const root = element as unknown as ElementLike;
-  if (hasVariableFlow || availability) out.push(...lintLocalVariableReads(element, normalizeLineEndings(source), opts.filePath,
+  const normalizedSource = normalizeLineEndings(source);
+  if (hasVariableFlow || availability) out.push(...lintLocalVariableReads(element, normalizedSource, opts.filePath,
     leadingBom, availability, opts.variableAvailability, opts.initialStateGaps));
+  if (opts.projectWrittenVariables) {
+    const alreadyReported = new Set(out.map(f => `${f.line ?? 0}:${f.column ?? 0}`));
+    let linesCache: number[] | undefined;
+    for (const cueEl of Array.from(element.getElementsByTagName('cue'))) {
+      if (cueEl.namespaceURI || cueEl.parentElement?.tagName !== 'cues' || cueEl.parentElement.parentElement !== element) continue;
+      if (cueEl.getAttribute('namespace') !== 'this' || cueEl.hasAttribute('ref')) continue;
+      if (cueEl.getElementsByTagName('include_actions').length > 0 || cueEl.getElementsByTagName('patch').length > 0) continue;
+      const cueName = cueEl.getAttribute('name') || undefined;
+      const actionsEl = Array.from(cueEl.children).find(ch => !ch.namespaceURI && ch.tagName === 'actions');
+      if (!actionsEl) continue;
+      for (const actionEl of Array.from(actionsEl.getElementsByTagName('*'))) {
+        if (actionEl.namespaceURI) continue;
+        const readAttr = actionEl.tagName === 'set_value' ? actionEl.getAttributeNode('exact')
+          : actionEl.tagName === 'debug_text' && !actionEl.hasAttribute('chance') ? actionEl.getAttributeNode('text') : null;
+        if (!readAttr) continue;
+        for (const { variable, offset } of strictLocalReads(readAttr.value)) {
+          if (opts.projectWrittenVariables.has(variable.toLowerCase())) continue;
+          linesCache ??= [0, ...Array.from(normalizedSource.matchAll(/\n/g), m => m.index + 1)];
+          const pos = expressionLocation(normalizedSource, linesCache, readAttr, offset);
+          const col = leadingBom && pos.line === 1 && pos.column ? pos.column + 1 : pos.column;
+          const posKey = `${pos.line ?? 0}:${col ?? 0}`;
+          if (alreadyReported.has(posKey)) continue;
+          alreadyReported.add(posKey);
+          out.push({
+            code: 'md_pitfall.variable_never_set',
+            severity: 'warning',
+            filePath: opts.filePath,
+            cue: cueName,
+            sourceRef: `${actionEl.tagName}/@${readAttr.name}`,
+            line: pos.line,
+            column: col,
+            detail: `Variable ${variable} is read in cue "${cueName || '(unnamed)'}" (namespace="this") but is never set anywhere in the project.`,
+          });
+        }
+      }
+    }
+  }
   for (const { event, cue } of unsourcedDestroyedEvents(element)) {
     const column = leadingBom && event.lineNumber === 1 && event.columnNumber ? event.columnNumber + 1 : event.columnNumber;
     out.push({ code: DESTROYED_EVENT_SOURCE_CODE, severity: 'error', filePath: opts.filePath, cue,

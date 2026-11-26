@@ -4,6 +4,7 @@ import { readAiScriptCallDocument, type AiScriptNavigationDocument } from "./aiS
 import { buildMdLibraryIndex, mdLibraryAcceptsArguments, parseMdScriptRoot, resolveMdLibraryReference } from "../../shared/mdDeclarationResolution";
 import { MAX_PROJECT_XML_DEPTH, scanXmlTagTokens } from "../../shared/xmlMarkup";
 import { MAX_MD_DEFINITION_SOURCE, readMdDefinitionDocument, type MdDefinitionDocument } from "./langNav";
+export { computeFormatSignatureHelp as provideFormatSignatureHelp } from "./x4IdeFeatures";
 
 interface TagPosition { tag: string; start: number; }
 interface AttributeSpan { start: number; end: number; }

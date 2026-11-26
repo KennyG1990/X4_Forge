@@ -33,6 +33,8 @@ export interface SchemaRoute {
   /** 'diff' = the file is a <diff> patch document; index is merged diff+domain */
   wrapper: 'plain' | 'diff';
   rootElement: string | null;
+  /** Set when a niche libraries/*.xml file explicitly names its governing .xsd on the root element. */
+  explicitSchemaLocation?: string;
 }
 
 export interface RoutedFileResult {
@@ -111,7 +113,27 @@ export function routeProjectFile(filePath: string, xml: string): SchemaRoute | n
 
   const libMatch = /(^|\/)libraries\/([^/]+\.xml)$/.exec(p);
   if (libMatch) {
-    if (!(libMatch[2] in LIBRARY_BASENAME_DOMAINS)) return null; // niche domains stay unrouted
+    if (libMatch[2] === 'scriptproperties.xml') return null;
+    if (!(libMatch[2] in LIBRARY_BASENAME_DOMAINS)) {
+      if (wrapper === 'plain') {
+        const head = String(xml || '').slice(0, 16384).replace(/<!--[\s\S]*?-->/g, '');
+        const rootTagMatch = /<(?!\?|!)[A-Za-z_][\w.:-]*((?:"[^"]*"|'[^']*'|[^'"<>])*)>/.exec(head);
+        const locMatch = rootTagMatch && /\b(?:xsi:)?noNamespaceSchemaLocation\s*=\s*["']([^"']+)["']/i.exec(rootTagMatch[1]);
+        if (locMatch) {
+          const schemaFile = locMatch[1].trim().replace(/\\/g, '/').split('/').pop()?.toLowerCase() || '';
+          if (schemaFile.endsWith('.xsd') && schemaFile.length > 4) {
+            return {
+              kind: 'schema',
+              domain: schemaFile.slice(0, -4),
+              wrapper: 'plain',
+              rootElement: root,
+              explicitSchemaLocation: schemaFile,
+            };
+          }
+        }
+      }
+      return null; // niche domains without explicit root schema stay unrouted
+    }
     const domain = LIBRARY_BASENAME_DOMAINS[libMatch[2]];
     if (domain) return { kind: 'schema', domain, wrapper, rootElement: root };
     // No content schema exists (wares/jobs) — validate the <diff> wrapper only.
@@ -244,6 +266,23 @@ export function validateRoutedFiles(
 
     const index = buildRouteIndex(route, byDomain);
     if (!index) {
+      if (route.explicitSchemaLocation && registry && registry.domains.length > 0) {
+        results.push({
+          path: f.path,
+          route,
+          domainAvailable: true,
+          severityCapped: false,
+          findings: [{
+            severity: 'warning',
+            domain: route.domain || 'libraries',
+            filePath: f.path,
+            line: 1,
+            code: 'LIBRARY_SCHEMA_UNKNOWN',
+            message: `Library file declares schema "${route.explicitSchemaLocation}", which was not found in the configured game libraries.`,
+          }],
+        });
+        continue;
+      }
       results.push({ path: f.path, route, domainAvailable: false, severityCapped: false, findings: [] });
       continue;
     }
@@ -252,9 +291,8 @@ export function validateRoutedFiles(
     const raw = validateXmlAgainstSchema(f.content, index, {
       filePath: f.path,
       domain: domainKey,
-      // Unknown-element reporting needs the FULL domain vocabulary to be reliable; routed
-      // domains get attribute/enum/required checks only until reference-set work (phase 3).
-      reportUnknownElements: false,
+      // Unknown-element reporting is enabled when the file explicitly names its own XSD on the root element.
+      reportUnknownElements: Boolean(route.explicitSchemaLocation),
       references: opts.references,
       strictStructure: opts.strictStructure,
     });
@@ -339,6 +377,19 @@ export function runSchemaRoutingSelftest() {
 
     const missing = validateRoutedFiles([{ path: 'libraries/gamestarts.xml', content: '<gamestarts/>' }], registry);
     ok('missing_domain_degrades_silent', missing[0]?.domainAvailable === false && missing[0]?.findings.length === 0);
+
+    const explicitHit = validateRoutedFiles([{
+      path: 'libraries/custom_factions.xml',
+      content: '<factions xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="factions.xsd"><bogus_child/></factions>',
+    }], registry, { provenDomains: new Set(['factions']) });
+    ok('explicit_xsi_schema_location_routes_and_checks_unknown_elements',
+      explicitHit[0]?.route.domain === 'factions' && explicitHit[0]?.findings.some(f => f.code === 'XSD_UNKNOWN_ELEMENT'));
+
+    const explicitMissing = validateRoutedFiles([{
+      path: 'libraries/unlocks.xml',
+      content: '<unlocks xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="nonexistent_xyz.xsd"/>',
+    }], registry);
+    ok('explicit_unknown_schema_location_warns', explicitMissing[0]?.findings.some(f => f.code === 'LIBRARY_SCHEMA_UNKNOWN'));
 
     const noRegistry = validateRoutedFiles([{ path: 'libraries/factions.xml', content: '<factions/>' }], null);
     ok('no_registry_degrades_silent', noRegistry.length === 1 && noRegistry[0].domainAvailable === false && noRegistry[0].findings.length === 0);

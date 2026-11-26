@@ -183,7 +183,7 @@ export function runLangNavSelftest() {
 }
 
 // Headless runner: `npx tsx vscode-extension/src/langNav.ts`
-if (typeof require !== "undefined" && require.main === module) {
+if (typeof process !== "undefined" && /(?:^|[\\/])langNav\.[cm]?[jt]s$/i.test(process.argv[1] || "")) {
   const r = runLangNavSelftest();
   console.log(`langNav selftest: ${r.passed}/${r.total} allPassed=${r.allPassed}`);
   for (const c of r.checks) if (!c.pass) console.log("FAIL", c.name, c.detail || "");
