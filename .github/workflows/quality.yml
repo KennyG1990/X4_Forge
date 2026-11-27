@@ -121,6 +121,9 @@ jobs:
       - name: Prove Rust Slice 2 LSP 3.17 and MCP 2024-11-05 oracles
         run: npm run test:rust-slice2
 
+      - name: Prove Rust Slice 3A axum + rusqlite sidecar and MCP-to-serve oracles
+        run: npm run test:rust-slice3
+
       - name: Run isolated route integration
         run: npm run test:routes
 

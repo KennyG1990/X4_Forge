@@ -77,7 +77,8 @@
     "build:rust": "cargo build --manifest-path rust/Cargo.toml --release",
     "test:rust": "cargo test --manifest-path rust/Cargo.toml --release",
     "test:rust-slice1": "tsx scripts/rust-slice1-oracle.selftest.ts",
-    "test:rust-slice2": "tsx scripts/rust-slice2-oracle.selftest.ts"
+    "test:rust-slice2": "tsx scripts/rust-slice2-oracle.selftest.ts",
+    "test:rust-slice3": "tsx scripts/rust-slice3-oracle.selftest.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

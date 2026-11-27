@@ -7,6 +7,7 @@ members = [
     "crates/x4-validate",
     "crates/x4-lsp",
     "crates/x4-mcp",
+    "crates/x4-serve",
     "bins/x4forge",
 ]
 
@@ -16,8 +17,10 @@ license = "Apache-2.0"
 version = "0.1.0"
 
 [workspace.dependencies]
+axum = "0.8"
 base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
+getrandom = "0.2"
 hex = "0.4"
 lsp-types = "0.95"
 md-5 = "0.10"
@@ -26,9 +29,11 @@ quick-xml = "0.37"
 rayon = "1"
 regex = "1"
 roxmltree = "0.20"
+rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time", "io-util"] }
 url = "2"
 
 [profile.release]

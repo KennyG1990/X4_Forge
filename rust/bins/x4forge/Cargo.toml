@@ -17,5 +17,6 @@ x4-catdat = { path = "../../crates/x4-catdat" }
 x4-corpus = { path = "../../crates/x4-corpus" }
 x4-lsp = { path = "../../crates/x4-lsp" }
 x4-mcp = { path = "../../crates/x4-mcp" }
+x4-serve = { path = "../../crates/x4-serve" }
 x4-tree = { path = "../../crates/x4-tree" }
 x4-validate = { path = "../../crates/x4-validate" }

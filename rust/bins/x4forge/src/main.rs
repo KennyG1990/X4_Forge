@@ -9,6 +9,7 @@ use x4_catdat::{
 use x4_corpus::load_or_build_corpus;
 use x4_lsp::{run_stdio_lsp, LspOptions};
 use x4_mcp::{run_stdio_mcp, McpMode, McpOptions};
+use x4_serve::{run_serve, ServeOptions};
 use x4_tree::{hash_tree, HashTreeOptions};
 use x4_validate::{
     render_report, validate_mod, ReportFormat, SeverityGate, ValidateOptions,
@@ -17,7 +18,7 @@ use x4_validate::{
 #[derive(Parser)]
 #[command(
     name = "x4forge",
-    about = "X4 Forge high-speed Rust engine (CLI, LSP 3.17, and MCP 2024-11-05)"
+    about = "X4 Forge high-speed Rust engine (CLI, LSP 3.17, MCP 2024-11-05, and Axum Sidecar)"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -113,6 +114,35 @@ enum Commands {
         workspace_id: Option<String>,
         #[arg(long = "discovery-dir")]
         discovery_dir: Option<PathBuf>,
+    },
+    /// Run the axum + rusqlite loopback HTTP sidecar (Slice 3A).
+    Serve {
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        #[arg(long, default_value_t = 3000)]
+        port: u16,
+        #[arg(long = "data-dir")]
+        data_dir: Option<PathBuf>,
+        #[arg(long = "static-dir")]
+        static_dir: Option<PathBuf>,
+        #[arg(long)]
+        unpacked: Option<PathBuf>,
+        #[arg(long)]
+        cache: Option<PathBuf>,
+        #[arg(long)]
+        token: Option<String>,
+        #[arg(long, default_value = "default")]
+        mode: String,
+        #[arg(long, default_value = "0.0.98")]
+        version: String,
+        #[arg(long = "discovery-dir")]
+        discovery_dir: Option<PathBuf>,
+        #[arg(long = "no-discovery")]
+        no_discovery: bool,
+        #[arg(long = "ready-json")]
+        ready_json: bool,
+        #[arg(long)]
+        upstream: Option<String>,
     },
 }
 
@@ -315,5 +345,35 @@ fn run(cli: Cli) -> Result<i32, (i32, String)> {
             })
             .map_err(|e| (2, e))
         }
+        Commands::Serve {
+            host,
+            port,
+            data_dir,
+            static_dir,
+            unpacked,
+            cache,
+            token,
+            mode,
+            version,
+            discovery_dir,
+            no_discovery,
+            ready_json,
+            upstream,
+        } => run_serve(ServeOptions {
+            host,
+            port,
+            data_dir: data_dir.unwrap_or_else(|| PathBuf::from("data")),
+            static_dir,
+            unpacked_root: unpacked,
+            corpus_cache: cache,
+            studio_token: token,
+            mode,
+            version,
+            discovery_dir,
+            no_discovery,
+            ready_json,
+            upstream_url: upstream,
+        })
+        .map_err(|e| (2, e)),
     }
 }
