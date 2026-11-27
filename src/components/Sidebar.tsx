@@ -152,6 +152,7 @@ interface SidebarProps {
   onDiagnosticsScopeChange: (scope: DiagnosticsScope) => void;
   onSuppressionCommitted?: (sourceHash: string) => void;
   onSelectSnapshot?: (snapWS: ModWorkspace | null) => void;
+  drawerOpen?: boolean;
 }
 
 const TOOL_ICONS: Record<SidebarTab, React.ComponentType<{ className?: string }>> = {
@@ -209,7 +210,7 @@ function ToolRail({ activeTab, aiEnabled, layoutPreferences, onSelect, onMove, o
   const visible = visibleSidebarTabs(layoutPreferences, aiEnabled);
   const right = layoutPreferences.toolDock === 'right';
   return (
-    <nav aria-label="Forge tools" data-testid="tool-rail" className={`w-[52px] bg-[#0c1017] ${right ? 'border-l' : 'border-r'} border-slate-800/80 flex flex-col items-center py-2 gap-0.5 shrink-0 overflow-y-auto custom-scrollbar`}>
+    <nav aria-label="Forge tools" data-testid="tool-rail" className={`w-[52px] bg-[#0d1016] ${right ? 'border-l' : 'border-r'} border-white/[0.06] flex flex-col items-center py-2 gap-0.5 shrink-0 overflow-y-auto custom-scrollbar`}>
       {visible.map((id, index) => {
         const item = SIDEBAR_NAV_ITEMS.find(candidate => candidate.id === id)!;
         const Icon = TOOL_ICONS[id];
@@ -218,7 +219,7 @@ function ToolRail({ activeTab, aiEnabled, layoutPreferences, onSelect, onMove, o
         const showDivider = prevId !== null && TOOL_GROUPS[prevId] !== TOOL_GROUPS[id];
         return (
           <React.Fragment key={id}>
-            {showDivider && <div aria-hidden="true" className="w-6 border-t border-slate-800/90 my-1 shrink-0" />}
+            {showDivider && <div aria-hidden="true" className="w-6 border-t border-white/[0.06] my-1 shrink-0" />}
             <button
               id={`tab_${id}`}
               data-sidebar-tab={id}
@@ -241,13 +242,13 @@ function ToolRail({ activeTab, aiEnabled, layoutPreferences, onSelect, onMove, o
               aria-label={item.label.toUpperCase()}
               aria-current={active ? 'page' : undefined}
               className={`w-11 min-h-[38px] py-1 px-0.5 rounded-md flex flex-col items-center justify-center transition-colors cursor-pointer ${active
-                ? `${id === 'ai' ? 'text-amber-300 bg-amber-500/12 border-amber-400' : id === 'cues' ? 'text-purple-300 bg-purple-500/12 border-purple-400' : 'text-sky-300 bg-sky-500/14 border-sky-400'} ${right ? 'border-r-2' : 'border-l-2'} font-semibold`
-                : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.05]'}`}
+                ? `${id === 'ai' ? 'text-amber-300 bg-amber-500/12 border-amber-400' : id === 'cues' ? 'text-purple-300 bg-purple-500/12 border-purple-400' : 'text-blue-300 bg-blue-500/14 border-blue-400'} ${right ? 'border-r-2' : 'border-l-2'} font-semibold`
+                : 'text-[#94a3b8] hover:text-[#eef2f7] hover:bg-white/[0.05]'}`}
               title={`${TOOL_TITLES[id]} — drag to reorder`}
             >
               <Icon className="w-4 h-4 shrink-0" />
               {layoutPreferences.density === 'comfortable' && (
-                <span className="text-[8.5px] font-sans font-medium mt-0.5 truncate w-full text-center leading-tight">
+                <span className="text-[11px] font-sans font-medium mt-0.5 truncate w-full text-center leading-tight">
                   {item.label}
                 </span>
               )}
@@ -338,7 +339,8 @@ export default function Sidebar({
   onDiagnosticsScopeChange,
   validationDelta,
   onSuppressionCommitted,
-  onSelectSnapshot
+  onSelectSnapshot,
+  drawerOpen = true,
 }: SidebarProps) {
   const [nodeFilter, setNodeFilter] = useState<'all' | 'cue' | 'event' | 'condition' | 'action'>('all');
   const [schemaDir, setSchemaDir] = useState<string>('');
@@ -439,18 +441,19 @@ export default function Sidebar({
   return (
     <div
       id="side_panel"
-      style={{ width }}
+      style={{ width: drawerOpen ? width : (layoutPreferences.toolRailCollapsed ? 24 : 52) }}
       data-tool-dock={layoutPreferences.toolDock}
-      className={`${layoutPreferences.toolDock === 'right' ? 'border-l flex-row-reverse order-2' : 'border-r order-0'} border-slate-800/80 bg-[#11161f] flex h-full text-slate-300 min-w-0 max-w-[70vw]`}
+      data-drawer-open={drawerOpen ? 'true' : 'false'}
+      className={`${layoutPreferences.toolDock === 'right' ? 'border-l flex-row-reverse order-2' : 'border-r order-0'} border-white/[0.08] bg-[#11141a] flex h-full text-slate-300 min-w-0 max-w-[70vw] shrink-0`}
     >
       {/* Config-driven tool rail. Hidden tools remain recoverable in Settings. */}
       {layoutPreferences.toolRailCollapsed ? (
-        <div className={`${layoutPreferences.toolDock === 'right' ? 'border-l' : 'border-r'} border-white/5 bg-[#0a0c10] w-6 shrink-0 flex flex-col items-center pt-2`}>
+        <div className={`${layoutPreferences.toolDock === 'right' ? 'border-l' : 'border-r'} border-white/[0.06] bg-[#0d1016] w-6 shrink-0 flex flex-col items-center pt-2`}>
           <button
             type="button"
             onClick={onToggleToolRail}
             data-testid="tool-rail-restore"
-            className="w-5 h-8 grid place-items-center text-cyan-400 hover:bg-cyan-500/10 rounded"
+            className="w-5 h-8 grid place-items-center text-blue-300 hover:bg-blue-500/10 rounded"
             title="Show tool rail"
           >
             {layoutPreferences.toolDock === 'right' ? <ChevronLeft className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
@@ -469,35 +472,38 @@ export default function Sidebar({
       )}
 
       {/* Right Content Column */}
-      <div className="flex-1 flex flex-col min-w-0 h-full bg-[#11161f]">
+      {drawerOpen && (
+      <div className="flex-1 flex flex-col min-w-0 h-full bg-[#11141a]">
         
         {/* Sleek Tab Header */}
-        <div className="h-9 px-3 border-b border-slate-800/80 bg-[#151b26] shrink-0 flex items-center justify-between">
-          <div className="min-w-0">
-            <div className="text-xs font-semibold text-slate-100 flex items-center gap-1.5 leading-none truncate">
-              {activeTab === 'script' && <Layers className="w-3.5 h-3.5 text-sky-400 shrink-0" />}
+        <div className="h-9 px-3 border-b border-white/[0.08] bg-[#141820] shrink-0 flex items-center justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="text-xs font-semibold text-[#eef2f7] flex items-center gap-1.5 leading-tight min-w-0">
+              {activeTab === 'script' && <Layers className="w-3.5 h-3.5 text-blue-400 shrink-0" />}
               {activeTab === 'cues' && <Compass className="w-3.5 h-3.5 text-purple-400 shrink-0" />}
-              {activeTab === 'ui' && <Layout className="w-3.5 h-3.5 text-sky-400 shrink-0" />}
-              {activeTab === 'config' && <Tags className="w-3.5 h-3.5 text-sky-400 shrink-0" />}
-              {activeTab === 'filesystem' && <FolderGit2 className="w-3.5 h-3.5 text-sky-400 shrink-0" />}
-              {activeTab === 'git' && <GitBranch className="w-3.5 h-3.5 text-sky-400 shrink-0" />}
-              {activeTab === 'templates' && <Library className="w-3.5 h-3.5 text-sky-400 shrink-0" />}
+              {activeTab === 'ui' && <Layout className="w-3.5 h-3.5 text-blue-400 shrink-0" />}
+              {activeTab === 'config' && <Tags className="w-3.5 h-3.5 text-blue-400 shrink-0" />}
+              {activeTab === 'filesystem' && <FolderGit2 className="w-3.5 h-3.5 text-blue-400 shrink-0" />}
+              {activeTab === 'git' && <GitBranch className="w-3.5 h-3.5 text-blue-400 shrink-0" />}
+              {activeTab === 'templates' && <Library className="w-3.5 h-3.5 text-blue-400 shrink-0" />}
               {activeTab === 'ai' && <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />}
               {activeTab === 'playtest' && <Terminal className="w-3.5 h-3.5 text-emerald-400 shrink-0" />}
-              {activeTab === 'diagnostics' && <Activity className="w-3.5 h-3.5 text-sky-400 shrink-0" />}
+              {activeTab === 'diagnostics' && <Activity className="w-3.5 h-3.5 text-blue-400 shrink-0" />}
               {activeTab === 'reference' && <Database className="w-3.5 h-3.5 text-amber-400 shrink-0" />}
 
-              {activeTab === 'script' && 'Node Toolbox'}
-              {activeTab === 'cues' && 'Cue Hierarchy'}
-              {activeTab === 'ui' && 'UI Widgets'}
-              {activeTab === 'config' && 'Mod Manifest & Build'}
-              {activeTab === 'filesystem' && 'Project Files'}
-              {activeTab === 'git' && 'Source Control'}
-              {activeTab === 'templates' && 'Reusable Blueprints'}
-              {activeTab === 'ai' && 'AI Co-pilot'}
-              {activeTab === 'playtest' && 'Playtest Workspace'}
-              {activeTab === 'diagnostics' && 'Diagnostics'}
-              {activeTab === 'reference' && 'Object Browser'}
+              <span className="min-w-0 truncate">
+                {activeTab === 'script' && 'Node Toolbox'}
+                {activeTab === 'cues' && 'Cue Hierarchy'}
+                {activeTab === 'ui' && 'UI Widgets'}
+                {activeTab === 'config' && 'Mod Manifest'}
+                {activeTab === 'filesystem' && 'Project Files'}
+                {activeTab === 'git' && 'Source Control'}
+                {activeTab === 'templates' && 'Reusable Blueprints'}
+                {activeTab === 'ai' && 'AI Co-pilot'}
+                {activeTab === 'playtest' && 'Playtest Workspace'}
+                {activeTab === 'diagnostics' && 'Diagnostics'}
+                {activeTab === 'reference' && 'Object Browser'}
+              </span>
             </div>
           </div>
 
@@ -506,20 +512,20 @@ export default function Sidebar({
             <button
               type="button"
               onClick={() => setActiveTab('config')}
-              className="px-2 py-0.5 rounded text-[10px] font-medium bg-slate-800/80 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white cursor-pointer transition-colors"
+              className="px-2 py-0.5 rounded text-[11px] font-medium bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 text-slate-300 hover:text-white cursor-pointer transition-colors"
               title="Open Mod Manifest & Disk Snapshots"
             >
-              Snapshots
+              Manifest
             </button>
           )}
           {activeTab === 'config' && (
             <button
               type="button"
               onClick={() => setActiveTab('git')}
-              className="px-2 py-0.5 rounded text-[10px] font-medium bg-slate-800/80 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white cursor-pointer transition-colors"
+              className="px-2 py-0.5 rounded text-[11px] font-medium bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 text-slate-300 hover:text-white cursor-pointer transition-colors"
               title="Open Source Control & GitHub Sync"
             >
-              Source Control
+              Git
             </button>
           )}
           {activeTab === 'ai' && (
@@ -1371,10 +1377,11 @@ export default function Sidebar({
         </div>
 
       {/* Footer System Credits */}
-      <div className="px-3 py-1.5 border-t border-slate-800/80 bg-[#0d1118] text-center text-[10px] font-mono text-slate-500 shrink-0">
+      <div className="px-3 py-1.5 border-t border-white/[0.06] bg-[#0c0e12] text-center text-[11px] font-mono text-slate-500 shrink-0">
         Engine Context: Egosoft MD 4.5
       </div>
-    </div> {/* Close Right Content Column */}
+    </div>
+      )}
   </div>
   );
 }

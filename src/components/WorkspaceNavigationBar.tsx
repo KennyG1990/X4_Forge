@@ -7,7 +7,6 @@ import {
   FolderGit2,
   GitFork,
   Globe,
-  GripVertical,
   Layout,
   Map as MapIcon,
   Package,
@@ -55,6 +54,7 @@ interface WorkspaceNavigationBarProps {
   onToggleCollapsed: () => void;
   mdErrorCount: number;
   mdWarningCount: number;
+  trailing?: React.ReactNode;
 }
 
 export default function WorkspaceNavigationBar({
@@ -65,6 +65,7 @@ export default function WorkspaceNavigationBar({
   onToggleCollapsed,
   mdErrorCount,
   mdWarningCount,
+  trailing,
 }: WorkspaceNavigationBarProps) {
   const [dragged, setDragged] = React.useState<WorkspaceView | null>(null);
   const visible = visibleWorkspaceViews(layout);
@@ -73,18 +74,20 @@ export default function WorkspaceNavigationBar({
   if (layout.workspaceBarCollapsed) {
     return (
       <div
-        data-testid="workspace-bar-collapsed"
-        className={`shrink-0 flex justify-center bg-[#10151e] ${isBottom ? 'border-t' : 'border-b'} border-slate-800/80`}
+        className={`shrink-0 h-8 px-2 flex items-center justify-between gap-2 bg-[#0e1117] ${isBottom ? 'border-t' : 'border-b'} border-white/[0.08]`}
       >
-        <button
-          type="button"
-          onClick={onToggleCollapsed}
-          className="h-5 px-3 inline-flex items-center gap-1 text-[10.5px] font-medium text-sky-400 hover:bg-sky-500/10 cursor-pointer"
-          title="Show workspace navigation"
-        >
-          {isBottom ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-          Workspaces
-        </button>
+        <div data-testid="workspace-bar-collapsed" className="flex items-center">
+          <button
+            type="button"
+            onClick={onToggleCollapsed}
+            className="h-6 px-2.5 rounded inline-flex items-center gap-1 text-[11px] font-medium text-blue-300 hover:bg-blue-500/12 cursor-pointer"
+            title="Show workspace navigation"
+          >
+            {isBottom ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+            Workspaces
+          </button>
+        </div>
+        {trailing && <div className="shrink-0 flex items-center">{trailing}</div>}
       </div>
     );
   }
@@ -95,9 +98,9 @@ export default function WorkspaceNavigationBar({
       data-testid="workspace-navigation"
       data-dock={layout.workspaceDock}
       aria-label="Forge workspaces"
-      className={`shrink-0 min-w-0 bg-[#11161f] ${isBottom ? 'border-t' : 'border-b'} border-slate-800/80`}
+      className={`shrink-0 min-w-0 bg-[#0e1117] ${isBottom ? 'border-t' : 'border-b'} border-white/[0.08]`}
     >
-      <div className="h-[34px] min-w-0 flex items-center gap-1 px-2">
+      <div className="h-[34px] min-w-0 flex items-center gap-1.5 px-2.5">
         <div className="flex-1 min-w-0 flex items-center gap-0.5 overflow-x-auto custom-scrollbar">
           {visible.map((id, index) => {
             const item = WORKSPACE_NAV_ITEMS.find(candidate => candidate.id === id)!;
@@ -108,17 +111,21 @@ export default function WorkspaceNavigationBar({
             const showGroupSeparator = prevId !== null && VIEW_GROUPS[prevId] !== VIEW_GROUPS[id];
 
             const severityClass = isMd && mdErrorCount > 0
-              ? active ? 'bg-rose-500/15 text-rose-200 border-rose-500/45' : 'text-rose-300 border-rose-500/20 hover:bg-rose-500/10'
+              ? active
+                ? 'bg-rose-500/12 text-rose-200 border-b-2 border-b-rose-400 border-t-transparent border-x-transparent rounded-t-md rounded-b-none'
+                : 'text-rose-300 border-transparent hover:bg-rose-500/10 rounded-md'
               : isMd && mdWarningCount > 0
-                ? active ? 'bg-amber-500/15 text-amber-200 border-amber-500/40' : 'text-amber-300 border-amber-500/15 hover:bg-amber-500/10'
+                ? active
+                  ? 'bg-amber-500/12 text-amber-200 border-b-2 border-b-amber-400 border-t-transparent border-x-transparent rounded-t-md rounded-b-none'
+                  : 'text-amber-300 border-transparent hover:bg-amber-500/10 rounded-md'
                 : active
-                  ? 'bg-sky-500/15 text-sky-200 border-sky-500/45 shadow-xs'
-                  : 'text-slate-400 border-transparent hover:text-slate-100 hover:bg-white/[0.05]';
+                  ? 'bg-white/[0.05] text-[#eef2f7] border-b-2 border-b-blue-400 border-t-transparent border-x-transparent rounded-t-md rounded-b-none'
+                  : 'text-[#94a3b8] border-transparent hover:text-[#eef2f7] hover:bg-white/[0.04] rounded-md';
 
             return (
               <React.Fragment key={id}>
                 {showGroupSeparator && (
-                  <span aria-hidden="true" className="hidden xl:block h-4 w-px bg-slate-800 mx-1 shrink-0" />
+                  <span aria-hidden="true" className="hidden xl:block h-3.5 w-px bg-white/[0.08] mx-1 shrink-0" />
                 )}
                 <button
                   type="button"
@@ -140,12 +147,11 @@ export default function WorkspaceNavigationBar({
                   }}
                   onClick={() => onNavigate(id)}
                   aria-label={item.label}
-                  className={`h-[26px] shrink-0 rounded-md border px-2 inline-flex items-center gap-1.5 text-[11.5px] font-medium transition-colors cursor-pointer ${severityClass}`}
-                  title={item.label}
+                  className={`h-[28px] shrink-0 border px-2 inline-flex items-center gap-1.5 text-[11.5px] font-medium transition-colors cursor-pointer ${severityClass}`}
+                  title={`${item.label} (drag to reorder)`}
                 >
-                  <GripVertical className="hidden sm:block w-2.5 h-2.5 opacity-30" aria-hidden="true" />
                   <Icon className="w-3.5 h-3.5 shrink-0" />
-                  <span className={`${layout.density === 'compact' ? 'hidden xl:inline text-[11px]' : 'hidden lg:inline text-[11.5px]'}`}>
+                  <span className={`${layout.density === 'compact' ? 'hidden xl:inline text-[11.5px]' : 'hidden lg:inline text-[11.5px]'}`}>
                     {item.label}
                   </span>
                   {isMd && (mdErrorCount > 0 || mdWarningCount > 0) && (
@@ -156,10 +162,11 @@ export default function WorkspaceNavigationBar({
             );
           })}
         </div>
+        {trailing && <div className="shrink-0 flex items-center">{trailing}</div>}
         <button
           type="button"
           onClick={onToggleCollapsed}
-          className="h-6 w-6 shrink-0 grid place-items-center rounded text-slate-500 hover:text-sky-300 hover:bg-white/5 cursor-pointer"
+          className="h-6 w-6 shrink-0 grid place-items-center rounded text-slate-400 hover:text-blue-300 hover:bg-white/5 cursor-pointer"
           title="Hide workspace navigation"
           data-testid="workspace-nav-collapse"
         >

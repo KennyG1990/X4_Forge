@@ -438,6 +438,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
   // B57s4: evidence deep links — ?panel=<sidebar tab> lands directly on that panel, so
   // agent walkthroughs, PROOF.md, and IDE surfaces can link straight to evidence. Unknown
   // values fall through to the default (never a crash path).
+  const [sidebarDrawerOpen, setSidebarDrawerOpen] = useState<boolean>(true);
   const [activeSidebarTab, setActiveSidebarTab] = useState<SidebarTab>(() => {
     try {
       const requested = new URLSearchParams(window.location.search).get('panel');
@@ -446,6 +447,18 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
     } catch { /* URL parsing must never break boot */ }
     return 'script';
   });
+
+  const openSidebarTab = React.useCallback((tab: SidebarTab) => {
+    setActiveSidebarTab(tab);
+    setSidebarDrawerOpen(true);
+  }, []);
+
+  const navigateWorkspace = React.useCallback((view: WorkspaceView) => {
+    const item = WORKSPACE_NAV_ITEMS.find(candidate => candidate.id === view)!;
+    setWorkspaceView(view);
+    setActiveSidebarTab(item.sidebarTab);
+    setSidebarDrawerOpen(view === 'blueprint' || view === 'ui-designer' || view === 'galaxy');
+  }, []);
 
   const persistStudioLayout = React.useCallback((layout: StudioLayoutPreferences) => {
     try { localStorage.setItem(STUDIO_LAYOUT_KEY, JSON.stringify(layout)); } catch { /* server state remains authoritative */ }
@@ -697,16 +710,16 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
     }
     if (owner === 'canvas') {
       setWorkspaceView('blueprint');
-      setActiveSidebarTab('script');
+      openSidebarTab('script');
       return;
     }
     if (owner === 'diagnostics') {
       setDiagnosticsScope('package');
-      setActiveSidebarTab('diagnostics');
+      openSidebarTab('diagnostics');
       return;
     }
-    setActiveSidebarTab('playtest');
-  }, [experienceMode]);
+    openSidebarTab('playtest');
+  }, [experienceMode, openSidebarTab]);
 
   const confirmCurrentExperience = React.useCallback(() => {
     const deploy = readinessWatcher.lastDeploy;
@@ -1250,7 +1263,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
       if (!aiEnabled) return;
       const customEvent = e as CustomEvent<{ prompt: string }>;
       if (customEvent.detail && customEvent.detail.prompt) {
-        setActiveSidebarTab('ai');
+        openSidebarTab('ai');
         handleSendChatMode(customEvent.detail.prompt);
       }
     };
@@ -1258,7 +1271,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
     return () => {
       window.removeEventListener('open-ai-chat', handleOpenChatEvent);
     };
-  }, [aiEnabled, workspace, handleSendChatMode]);
+  }, [aiEnabled, workspace, handleSendChatMode, openSidebarTab]);
 
   // Diagnostics click-to-navigate: Mod Doctor findings dispatch 'navigate-to-source'
   // with the diagnostic's sourceRef; jump to the owning editor surface (and, for MD
@@ -2652,15 +2665,49 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
     mdDiagnostics.find(d => d.severity === 'warning' && d.nodeId)?.nodeId;
   const jumpToFlaggedNode = React.useCallback(() => {
     setWorkspaceView('blueprint');
-    setActiveSidebarTab('script');
+    openSidebarTab('script');
     if (firstFlaggedNodeId) {
       // let the blueprint view mount/lay out before centering on the node
       setTimeout(() => window.dispatchEvent(new CustomEvent('forge-focus-node', { detail: { nodeId: firstFlaggedNodeId } })), 80);
     }
-  }, [firstFlaggedNodeId]);
+  }, [firstFlaggedNodeId, openSidebarTab]);
+
+  const experienceModeSwitch = (
+    <div data-testid="experience-mode-switch" data-global-action="experience-mode" className="flex items-center gap-0.5 rounded-md border border-white/[0.08] bg-[#0a0c10] p-0.5 shrink-0">
+      <button
+        type="button"
+        data-testid="mode-beginner"
+        aria-pressed={experienceMode === 'beginner'}
+        onClick={() => changeExperienceMode('beginner')}
+        className={`rounded px-2 py-0.5 text-[11px] font-medium cursor-pointer transition-colors ${experienceMode === 'beginner' ? 'bg-blue-500/20 text-blue-200' : 'text-slate-400 hover:text-white'}`}
+      >
+        Beginner
+      </button>
+      <button
+        type="button"
+        data-testid="mode-expert"
+        aria-pressed={experienceMode === 'expert'}
+        onClick={() => changeExperienceMode('expert')}
+        className={`rounded px-2 py-0.5 text-[11px] font-medium cursor-pointer transition-colors ${experienceMode === 'expert' ? 'bg-blue-500/20 text-blue-200' : 'text-slate-400 hover:text-white'}`}
+      >
+        Expert
+      </button>
+    </div>
+  );
+
+  const readinessCluster = (
+    <ReadinessLadder
+      stages={readinessStages}
+      onNavigate={navigateReadiness}
+      onConfirmExperience={confirmCurrentExperience}
+      popoverDirection={experienceMode === 'expert' && layoutPreferences.workspaceDock === 'bottom' ? 'up' : 'down'}
+      showLabels={experienceMode === 'beginner'}
+      trailing={experienceModeSwitch}
+    />
+  );
 
   return (
-    <div className="w-full h-screen max-w-full overflow-hidden flex flex-col bg-[#0b0e14] text-slate-200 font-sans">
+    <div className="w-full h-screen max-w-full overflow-hidden flex flex-col bg-[#0c0e12] text-[#eef2f7] font-sans">
       <HealthCardOverlay
         toolDock={layoutPreferences.toolDock}
         workspaceDock={layoutPreferences.workspaceDock}
@@ -2668,11 +2715,11 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
       />
       <DialogHost />
       {/* Upper Workbench Command Header */}
-      <header data-testid="studio-header" className="h-10 min-w-0 max-w-full border-b border-slate-800/90 bg-[#131822] px-2.5 flex items-center gap-2 shrink-0">
+      <header data-testid="studio-header" className="h-10 min-w-0 max-w-full border-b border-white/[0.08] bg-[#11141a] px-2.5 flex items-center gap-2 shrink-0">
         
         {/* Workspace Brand and Logo */}
-        <div className="flex items-center gap-2 min-w-0 shrink">
-          <div className="flex items-center gap-2 min-w-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="flex items-center gap-2 shrink-0">
             {/* X4 Forge mark: anvil + spark on a sky→indigo plate */}
             <svg viewBox="0 0 24 24" className="w-5 h-5 shrink-0" aria-label="X4 Forge logo">
               <defs>
@@ -2685,17 +2732,17 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
               <path d="M5 9h14v3h-5v2.2l3.2 2.8H6.8L10 14.2V12H5z" fill="#ffffff" />
               <path d="M17.6 3.1l.7 1.6 1.6.7-1.6.7-.7 1.6-.7-1.6-1.6-.7 1.6-.7z" fill="#fbbf24" />
             </svg>
-            <span className="font-semibold text-slate-100 tracking-tight shrink-0 select-none text-xs sm:text-[13px]">
-              X4 Forge <span className="text-sky-400/90 font-mono text-[11px] font-normal" title={__APP_BUILD__}>v{__APP_VERSION__}</span>
+            <span className="font-semibold text-[#eef2f7] tracking-tight shrink-0 select-none text-[13px] whitespace-nowrap">
+              X4 Forge <span className="text-blue-400 font-mono text-[11px] font-normal" title={__APP_BUILD__}>v{__APP_VERSION__}</span>
             </span>
             {workspace.sourceFolder && (
-              <span
-                className="hidden min-[1900px]:inline-flex items-center gap-1 ml-1.5 px-2 py-0.5 rounded bg-slate-800/70 border border-slate-700/70 text-[11px] text-slate-300 max-w-[340px] shrink min-w-0"
+              <div
+                className="hidden min-[1900px]:inline-flex items-center gap-1 ml-1.5 px-2 py-0.5 rounded bg-[#171b23] border border-white/[0.08] text-[11px] text-slate-300 max-w-[340px] shrink min-w-0"
                 title={'Open project folder: ' + workspace.sourceFolder}
               >
-                <span className="text-sky-400 font-medium shrink-0">Folder:</span>
+                <span className="text-blue-400 font-medium shrink-0">Folder:</span>
                 <span className="truncate font-mono">{workspace.sourceFolder}</span>
-              </span>
+              </div>
             )}
           </div>
 
@@ -2706,7 +2753,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
               modalOpen={isSyncModalOpen || isAIConfigOpen || isShortcutsOpen || isDirSettingsOpen || isBugReportOpen || isCompileModalOpen}
               workspaceView={workspaceView}
               setWorkspaceView={setWorkspaceView}
-              setActiveSidebarTab={setActiveSidebarTab}
+              setActiveSidebarTab={openSidebarTab}
               setSelectedNode={setSelectedNode}
               setSelectedWidget={setSelectedWidget}
               setFocusNodeRequest={setFocusNodeRequest}
@@ -2818,20 +2865,22 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
               data-testid="header-deploy-btn"
               onClick={() => void handleCompileModProject()}
               disabled={compileStatus === 'compiling'}
-              className="hidden xl:inline-flex h-7 items-center gap-1.5 rounded-md border border-sky-500/45 bg-sky-500/15 hover:bg-sky-500/25 px-2.5 text-[11.5px] font-semibold text-sky-100 transition-colors cursor-pointer disabled:opacity-50"
+              className="hidden xl:inline-flex h-7 items-center gap-1.5 rounded-md border border-blue-500/45 bg-blue-500/18 hover:bg-blue-500/28 px-2.5 text-[11.5px] font-semibold text-blue-100 transition-colors cursor-pointer disabled:opacity-50"
               title="Open Compile & Deploy Wizard — preview files, validate, and deploy"
             >
-              <Rocket className="w-3.5 h-3.5 text-sky-300" />
+              <Rocket className="w-3.5 h-3.5 text-blue-300" />
               <span>Validate &amp; Deploy</span>
             </button>
           )}
+
+          {experienceMode === 'beginner' && readinessCluster}
 
           <StudioActionsMenu
             expert={experienceMode === 'expert'}
             ai={aiEnabled ? { provider: activeAIProvider, model: activeAIModel, reasoning: activeReasoning } : null}
             agentOpen={isAgentBridgeOpen}
             nativeFiles={<NativeProjectFiles key={currentWorkspaceId} workspaceId={currentWorkspaceId} workspace={workspace} />}
-            onOpenReleaseCenter={() => setActiveSidebarTab('playtest')}
+            onOpenReleaseCenter={() => openSidebarTab('playtest')}
             onToggleBottomDock={() => toggleBottomDock()}
             onToggleRightInspector={toggleRightInspector}
             driverLeaseHeldByUi={Boolean(driverLease?.held && driverLease.heldByCaller)}
@@ -2860,28 +2909,16 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
           layout={layoutPreferences}
           activeView={workspaceView}
           onNavigate={(view) => {
-            const item = WORKSPACE_NAV_ITEMS.find(candidate => candidate.id === view)!;
             if (view === 'blueprint' && firstFlaggedNodeId) jumpToFlaggedNode();
-            else { setWorkspaceView(view); setActiveSidebarTab(item.sidebarTab); }
+            else navigateWorkspace(view);
           }}
           onMove={(view, target) => updateLayoutPreferences(previous => ({ ...previous, workspaceOrder: moveOrderedItem(previous.workspaceOrder, view, target) }))}
           onToggleCollapsed={() => updateLayoutPreferences(previous => ({ ...previous, workspaceBarCollapsed: !previous.workspaceBarCollapsed }))}
           mdErrorCount={mdErrorCount}
           mdWarningCount={mdWarningCount}
+          trailing={readinessCluster}
         />
       )}
-
-      <ReadinessLadder
-        stages={readinessStages}
-        onNavigate={navigateReadiness}
-        onConfirmExperience={confirmCurrentExperience}
-        trailing={(
-          <div data-testid="experience-mode-switch" data-global-action="experience-mode" className="flex items-center gap-0.5 rounded-md border border-slate-800 bg-[#0a0d13] p-0.5">
-            <button data-testid="mode-beginner" aria-pressed={experienceMode === 'beginner'} onClick={() => changeExperienceMode('beginner')} className={`rounded px-2 py-0.5 text-[10.5px] font-medium cursor-pointer transition-colors ${experienceMode === 'beginner' ? 'bg-sky-500/20 text-sky-200' : 'text-slate-400 hover:text-white'}`}>Beginner</button>
-            <button data-testid="mode-expert" aria-pressed={experienceMode === 'expert'} onClick={() => changeExperienceMode('expert')} className={`rounded px-2 py-0.5 text-[10.5px] font-medium cursor-pointer transition-colors ${experienceMode === 'expert' ? 'bg-sky-500/20 text-sky-200' : 'text-slate-400 hover:text-white'}`}>Expert</button>
-          </div>
-        )}
-      />
 
       {driverLease?.held && (
         <div
@@ -2982,9 +3019,10 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
         ) : experienceMode === 'expert' ? (
         <Sidebar
           width={leftSidebarWidth}
+          drawerOpen={sidebarDrawerOpen}
           aiEnabled={aiEnabled}
           activeTab={activeSidebarTab}
-          setActiveTab={setActiveSidebarTab}
+          setActiveTab={openSidebarTab}
           layoutPreferences={layoutPreferences}
           releasePreferences={releasePreferences}
           onMoveTool={(tool, target) => updateLayoutPreferences(previous => ({ ...previous, toolOrder: moveOrderedItem(previous.toolOrder, tool, target) }))}
@@ -3162,9 +3200,9 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
             <ProjectInspector
               workspace={workspace}
               schemaConfigVersion={schemaConfigVersion}
-              onOpenValidator={() => setActiveSidebarTab('diagnostics')}
+              onOpenValidator={() => openSidebarTab('diagnostics')}
               onOpenDeployWizard={() => void handleCompileModProject()}
-              onOpenReleaseCenter={() => setActiveSidebarTab('playtest')}
+              onOpenReleaseCenter={() => openSidebarTab('playtest')}
             />
           ) : workspaceView === 'galaxy' ? (
             <GalaxyMapView />
@@ -3214,7 +3252,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
               onSelectNode={(node) => setSelectedNode(node)}
               onFocusNode={(nodeId) => setFocusNodeRequest({ nodeId, timestamp: Date.now() })}
               onNavigateWorkspace={setWorkspaceView}
-              onNavigateSidebar={setActiveSidebarTab}
+              onNavigateSidebar={openSidebarTab}
             />
           )}
 
@@ -3249,14 +3287,14 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
           layout={layoutPreferences}
           activeView={workspaceView}
           onNavigate={(view) => {
-            const item = WORKSPACE_NAV_ITEMS.find(candidate => candidate.id === view)!;
             if (view === 'blueprint' && firstFlaggedNodeId) jumpToFlaggedNode();
-            else { setWorkspaceView(view); setActiveSidebarTab(item.sidebarTab); }
+            else navigateWorkspace(view);
           }}
           onMove={(view, target) => updateLayoutPreferences(previous => ({ ...previous, workspaceOrder: moveOrderedItem(previous.workspaceOrder, view, target) }))}
           onToggleCollapsed={() => updateLayoutPreferences(previous => ({ ...previous, workspaceBarCollapsed: !previous.workspaceBarCollapsed }))}
           mdErrorCount={mdErrorCount}
           mdWarningCount={mdWarningCount}
+          trailing={readinessCluster}
         />
       )}
 

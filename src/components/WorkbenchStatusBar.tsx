@@ -15,7 +15,6 @@ import {
   Cpu,
   PanelBottom,
   PanelRight,
-  Rocket,
 } from 'lucide-react';
 import { toSafeModId } from '../lib/modCompiler';
 import type { ExperienceMode, WorkspaceView } from '../lib/experienceMode';
@@ -37,7 +36,7 @@ interface WorkbenchStatusBarProps {
   agentBridgeOpen: boolean;
   pendingAgentUpdate: boolean;
   onToggleAgentBridge: () => void;
-  onOpenDeployWizard: () => void;
+  onOpenDeployWizard?: () => void;
 }
 
 const VIEW_LABELS: Record<WorkspaceView, string> = {
@@ -68,30 +67,29 @@ export default function WorkbenchStatusBar({
   agentBridgeOpen,
   pendingAgentUpdate,
   onToggleAgentBridge,
-  onOpenDeployWizard,
 }: WorkbenchStatusBarProps) {
   const modId = toSafeModId(modName || 'untitled_mod');
 
   return (
     <footer
       data-testid="workbench-status-bar"
-      className="h-[26px] shrink-0 border-t border-slate-800/90 bg-[#0d1118] px-2.5 flex items-center justify-between gap-2 text-[11px] text-slate-400 select-none z-30"
+      className="h-[26px] shrink-0 border-t border-white/[0.08] bg-[#0c0e12] px-2.5 flex items-center justify-between gap-2 text-[11px] text-[#94a3b8] select-none z-30"
     >
-      {/* Left Cluster: Mod Identity + Problems + Quick Deploy */}
+      {/* Left Cluster: Mod Identity + Problems */}
       <div className="flex items-center gap-2 min-w-0">
-        <span className="inline-flex items-center gap-1.5 font-mono text-[10.5px] text-slate-300 truncate max-w-[220px]" title={`Mod ID: ${modId} · Version ${modVersion}`}>
-          <span className="w-1.5 h-1.5 rounded-full bg-sky-400 shrink-0" />
+        <span className="inline-flex items-center gap-1.5 font-mono text-[11px] text-slate-300 truncate max-w-[220px]" title={`Mod ID: ${modId} · Version ${modVersion}`}>
+          <span className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" />
           <span className="truncate">{modId}</span>
           <span className="text-slate-500">v{modVersion || '1.0.0'}</span>
         </span>
 
-        <span className="h-3 w-px bg-slate-800 shrink-0" />
+        <span className="h-3 w-px bg-white/[0.08] shrink-0" />
 
         <button
           type="button"
           data-testid="status-problems-toggle"
           onClick={() => onToggleBottomDock('problems')}
-          className={`h-5 px-1.5 rounded inline-flex items-center gap-1.5 font-mono text-[10.5px] cursor-pointer transition-colors ${
+          className={`h-5 px-1.5 rounded inline-flex items-center gap-1.5 font-mono text-[11px] cursor-pointer transition-colors ${
             errorCount > 0
               ? 'text-rose-300 hover:bg-rose-500/15'
               : warningCount > 0
@@ -106,36 +104,26 @@ export default function WorkbenchStatusBar({
             <AlertTriangle className="w-3 h-3" />
           )}
           <span>{errorCount}E · {warningCount}W</span>
-          {diagnosticSource === 'checking' && <span className="text-sky-400 text-[9.5px]">checking…</span>}
-        </button>
-
-        <button
-          type="button"
-          onClick={onOpenDeployWizard}
-          className="hidden md:inline-flex h-5 px-1.5 rounded items-center gap-1 text-[10.5px] text-slate-300 hover:text-sky-300 hover:bg-sky-500/10 cursor-pointer transition-colors"
-          title="Open Compile & Deploy Wizard"
-        >
-          <Rocket className="w-3 h-3 text-sky-400" />
-          <span>Deliver</span>
+          {diagnosticSource === 'checking' && <span className="text-blue-300 text-[11px]">checking…</span>}
         </button>
       </div>
 
       {/* Right Cluster: Active Surface + Dock Toggles + Agent Sync + Docked FPS */}
       <div className="flex items-center gap-1.5 shrink-0">
-        <span className="hidden lg:inline text-[10.5px] text-slate-500">
+        <span className="hidden lg:inline text-[11px] text-slate-500">
           {VIEW_LABELS[workspaceView]}
         </span>
 
         {experienceMode === 'expert' && (
           <>
-            <span className="hidden lg:inline h-3 w-px bg-slate-800" />
+            <span className="hidden lg:inline h-3 w-px bg-white/[0.08]" />
             <button
               type="button"
               data-testid="bottom-dock-toggle"
               aria-pressed={bottomDockOpen}
               onClick={() => onToggleBottomDock()}
-              className={`h-5 px-1.5 rounded inline-flex items-center gap-1 text-[10.5px] cursor-pointer transition-colors ${
-                bottomDockOpen ? 'bg-sky-500/15 text-sky-300' : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+              className={`h-5 px-1.5 rounded inline-flex items-center gap-1 text-[11px] cursor-pointer transition-colors ${
+                bottomDockOpen ? 'bg-blue-500/15 text-blue-300' : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
               }`}
               title="Toggle bottom output/problems panel (Ctrl+J)"
             >
@@ -148,8 +136,8 @@ export default function WorkbenchStatusBar({
               data-testid="right-inspector-toggle"
               aria-pressed={rightInspectorOpen}
               onClick={onToggleRightInspector}
-              className={`h-5 px-1.5 rounded inline-flex items-center gap-1 text-[10.5px] cursor-pointer transition-colors ${
-                rightInspectorOpen ? 'bg-sky-500/15 text-sky-300' : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+              className={`h-5 px-1.5 rounded inline-flex items-center gap-1 text-[11px] cursor-pointer transition-colors ${
+                rightInspectorOpen ? 'bg-blue-500/15 text-blue-300' : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
               }`}
               title="Toggle right Contextual Inspector"
             >
@@ -161,11 +149,11 @@ export default function WorkbenchStatusBar({
               type="button"
               onClick={onToggleAgentBridge}
               aria-pressed={agentBridgeOpen}
-              className={`hidden sm:inline-flex h-5 px-1.5 rounded items-center gap-1 text-[10.5px] cursor-pointer transition-colors ${
+              className={`hidden sm:inline-flex h-5 px-1.5 rounded items-center gap-1 text-[11px] cursor-pointer transition-colors ${
                 pendingAgentUpdate
                   ? 'bg-amber-500/20 text-amber-300'
                   : agentBridgeOpen
-                    ? 'bg-sky-500/15 text-sky-300'
+                    ? 'bg-blue-500/15 text-blue-300'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
               }`}
               title="Open Agent API & MCP Bridge"
@@ -176,7 +164,7 @@ export default function WorkbenchStatusBar({
           </>
         )}
 
-        <span className="h-3 w-px bg-slate-800" />
+        <span className="h-3 w-px bg-white/[0.08]" />
         <FpsMeter variant="docked" />
       </div>
     </footer>

@@ -469,7 +469,7 @@ export default function GlobalSearch({
   return (
     <div
       ref={containerRef}
-      className="relative w-8 shrink-0 select-none lg:w-64 xl:w-80 min-[2150px]:w-96"
+      className="relative w-8 shrink-0 select-none lg:w-44 xl:w-52 2xl:w-72 min-[2150px]:w-96"
       onBlur={event => {
         if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) setIsOpen(false);
       }}
@@ -490,7 +490,7 @@ export default function GlobalSearch({
         aria-keyshortcuts="Control+K Meta+K /"
         title="Search workspace or run > command (Ctrl+K, Ctrl+Shift+P, or /)"
         onClick={() => (isOpen ? setIsOpen(false) : openSearch())}
-        className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-700/70 bg-[#0d1118] text-slate-300 hover:border-sky-500/45 hover:text-white focus-visible:outline-2 focus-visible:outline-sky-400 lg:hidden cursor-pointer"
+        className="flex h-7 w-7 items-center justify-center rounded-md border border-white/[0.08] bg-[#0a0c10] text-slate-300 hover:border-blue-500/45 hover:text-white focus-visible:outline-2 focus-visible:outline-blue-400 lg:hidden cursor-pointer"
       >
         <Search aria-hidden="true" className="h-3.5 w-3.5" />
       </button>
@@ -499,7 +499,7 @@ export default function GlobalSearch({
         data-testid="workspace-search-panel"
         className={`fixed left-2 top-11 z-50 w-[min(420px,calc(100vw-1rem))] lg:static lg:block lg:w-full ${isOpen ? 'block' : 'hidden'}`}
       >
-        <div className="relative flex items-center h-7 bg-[#090c11] border border-slate-700/70 hover:border-sky-500/45 focus-within:border-sky-400 rounded-md px-2.5 transition-colors">
+        <div className="relative flex items-center h-7 bg-[#0a0c10] border border-white/[0.08] hover:border-white/16 focus-within:border-blue-400 rounded-md px-2.5 transition-colors">
           {isCommandMode ? (
             <Command className="w-3.5 h-3.5 text-sky-400 shrink-0" />
           ) : (

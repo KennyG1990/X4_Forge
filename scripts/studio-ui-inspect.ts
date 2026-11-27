@@ -460,15 +460,15 @@ export function buildExtensionWebviewHtml(forgeUrl: string, modeLabel: string, f
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="${csp}">
   <style>
-    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #0b0e14; }
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #0c0e12; }
     iframe { border: 0; width: 100%; height: 100%; display: block; }
-    .badge { position: fixed; right: 6px; bottom: 4px; font: 10px sans-serif; color: #556; pointer-events: none; }
+    .badge { position: fixed; right: 10px; top: 38px; z-index: 2; padding: 3px 8px; border-radius: 5px; background: rgba(17, 20, 26, 0.92); border: 1px solid rgba(255, 255, 255, 0.12); font: 11px system-ui, sans-serif; color: #cbd5e1; pointer-events: none; }
     #backend-notice { position: fixed; top: 0; left: 0; right: 0; z-index: 1; padding: 8px; color: #fff; background: #452912; font: 13px sans-serif; }
   </style>
 </head>
 <body>
   <iframe id="forge-frame" src="${forgeUrl}/" allow="clipboard-read; clipboard-write"></iframe>
-  <div class="badge" id="forge-badge">X4 Forge Studio — ${modeLabel}</div>
+  <div class="badge" id="forge-badge" hidden>X4 Forge Studio — ${modeLabel}</div>
   <div id="backend-notice" role="status" hidden></div>
   <script nonce="${nonce}">
     const __inspectHostState = {
@@ -502,7 +502,10 @@ export function buildExtensionWebviewHtml(forgeUrl: string, modeLabel: string, f
       const data = event.data;
       if (data?.source === 'x4forge-native-host' && data.type === 'backend-offline') {
         if (event.source === frame.contentWindow || data.frameId !== frameId) return;
-        if (badge) badge.textContent = 'X4 Forge Studio — backend stopped';
+        if (badge) {
+          badge.textContent = 'X4 Forge Studio — backend stopped';
+          badge.hidden = false;
+        }
         notice.textContent = data.message;
         notice.hidden = false;
         return;
@@ -1570,21 +1573,34 @@ async function runFullSelftest(): Promise<void> {
       ]),
       {
         onShellReady: async (page) => {
+          const beforeOffline = await page.evaluate(() => {
+            const notice = document.getElementById('backend-notice') as HTMLElement | null;
+            const badge = document.getElementById('forge-badge') as HTMLElement | null;
+            return {
+              noticeHidden: notice?.hidden ?? false,
+              badgeHidden: badge?.hidden ?? false,
+            };
+          });
+          assert.equal(beforeOffline.noticeHidden, true, 'Expected #backend-notice hidden while backend is healthy');
+          assert.equal(beforeOffline.badgeHidden, true, 'Expected #forge-badge hidden while backend is healthy (zero status-bar overlap)');
+
           await page.evaluate(() => {
             const host = (window as unknown as { __x4InspectHost: { simulateBackendOffline: (m: string) => void } }).__x4InspectHost;
             host.simulateBackendOffline('Simulated offline test');
           });
           const state = await page.evaluate(() => {
             const notice = document.getElementById('backend-notice') as HTMLElement | null;
-            const badge = document.getElementById('forge-badge');
+            const badge = document.getElementById('forge-badge') as HTMLElement | null;
             return {
               hidden: notice?.hidden ?? true,
               text: notice?.textContent ?? '',
+              badgeHidden: badge?.hidden ?? true,
               badge: badge?.textContent ?? '',
             };
           });
           assert.equal(state.hidden, false, 'Expected #backend-notice to un-hide on backend-offline message');
           assert.equal(state.text, 'Simulated offline test');
+          assert.equal(state.badgeHidden, false, 'Expected #forge-badge to become visible on backend-offline message');
           assert.equal(state.badge, 'X4 Forge Studio — backend stopped');
           offlineBannerVerified = true;
         },

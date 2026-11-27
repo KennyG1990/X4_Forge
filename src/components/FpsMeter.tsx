@@ -111,11 +111,11 @@ export default function FpsMeter({ variant = 'docked' }: FpsMeterProps) {
       <div
         data-testid="fps-meter"
         title={tooltip}
-        className="inline-flex items-center gap-2 px-2 py-0.5 font-mono text-[10.5px] font-semibold select-none shrink-0"
+        className="inline-flex items-center gap-2 px-2 py-0.5 font-mono text-[11px] font-medium select-none shrink-0"
         style={{ color }}
       >
-        <span className="inline-flex items-center gap-1">
-          <span aria-hidden="true" className="text-[8px]">●</span>
+        <span className="inline-flex items-center gap-1.5">
+          <span aria-hidden="true" className="text-[9px]">●</span>
           <span>{fps} FPS</span>
         </span>
         {longtaskMs > 0 && (

@@ -130,14 +130,14 @@ export default function NativeProjectFiles({ workspace, workspaceId }: { workspa
   };
 
   return (
-    <div data-testid="native-project-files" className="flex items-center gap-1 rounded border border-cyan-500/20 bg-black/30 px-1.5 py-1 min-w-0">
-      <File className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+    <div data-testid="native-project-files" className="flex items-center gap-1 rounded-md border border-white/[0.08] bg-[#0a0c10] h-7 px-1.5 min-w-0">
+      <File className="w-3.5 h-3.5 text-blue-400 shrink-0" />
       <select
         aria-label="Project Files"
         value={entry?.path || ''}
         onChange={(event) => { setSelected(event.target.value); setMessage(''); }}
         title={message || `${inventory?.entries.length || 0} packaged project files`}
-        className="min-w-0 flex-1 max-w-[260px] min-[1200px]:min-w-[150px] bg-[#0f131b] border border-white/10 rounded px-2 py-1 text-[10px] font-mono text-slate-200 focus:outline-none focus:border-cyan-500"
+        className="min-w-0 flex-1 max-w-[155px] 2xl:max-w-[230px] min-[1200px]:min-w-[115px] bg-[#11141a] border border-white/[0.08] rounded px-1.5 py-0.5 text-[11px] font-mono text-slate-200 focus:outline-none focus:border-blue-400"
       >
         {!inventory?.entries.length && <option value="">{loading ? 'Scanning project files…' : 'No project files'}</option>}
         {inventory?.entries.map(file => (
