@@ -78,7 +78,10 @@
     "test:rust": "cargo test --manifest-path rust/Cargo.toml --release",
     "test:rust-slice1": "tsx scripts/rust-slice1-oracle.selftest.ts",
     "test:rust-slice2": "tsx scripts/rust-slice2-oracle.selftest.ts",
-    "test:rust-slice3": "tsx scripts/rust-slice3-oracle.selftest.ts"
+    "test:rust-slice3": "tsx scripts/rust-slice3-oracle.selftest.ts",
+    "inspect:ui": "tsx scripts/studio-ui-inspect.ts",
+    "test:ui-inspect": "tsx scripts/studio-ui-inspect.ts --selftest",
+    "test:ui-inspect:unit": "tsx scripts/studio-ui-inspect.ts --selftest-unit"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
