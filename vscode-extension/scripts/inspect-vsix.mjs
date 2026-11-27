@@ -20,6 +20,7 @@ const REQUIRED = [
   'extension/app/dist/index.html',
   'extension/app/dist/server.cjs',
   'extension/app/dist/canonical-md-worker.cjs',
+  'extension/app/dist/x4validate.cjs',
 ];
 const CHANGELOG_ENTRY = /^extension\/changelog\.md$/i;
 const NATIVE_SQLITE = /^extension\/app\/node_modules\/better-sqlite3\/(?:build\/Release\/better_sqlite3\.node|prebuilds\/[^/]+\/better_sqlite3\.node)$/i;
@@ -305,6 +306,8 @@ function runSelftest() {
     ['missing_server_rejects', valid.filter(item => item.name !== 'extension/app/dist/server.cjs'), false],
     ['missing_canonical_md_worker_rejects', valid.filter(item => item.name !== 'extension/app/dist/canonical-md-worker.cjs'), false],
     ['empty_canonical_md_worker_rejects', valid.map(item => item.name === 'extension/app/dist/canonical-md-worker.cjs' ? entry(item.name, 0) : item), false],
+    ['missing_x4validate_cli_rejects', valid.filter(item => item.name !== 'extension/app/dist/x4validate.cjs'), false],
+    ['empty_x4validate_cli_rejects', valid.map(item => item.name === 'extension/app/dist/x4validate.cjs' ? entry(item.name, 0) : item), false],
     ['empty_required_rejects', valid.map(item => item.name === 'extension/out/extension.js' ? entry(item.name, 0) : item), false],
     ['secret_rejects', [...valid, entry('extension/app/.env')], false],
     ['sourcemap_rejects', [...valid, entry('extension/out/extension.js.map')], false],

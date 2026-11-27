@@ -541,7 +541,7 @@ if (canonical(fs.realpathSync(EXT_ROOT)) !== canonical(EXT_ROOT)) throw new Erro
 if (options.refreshRuntimeLocks) { refreshRuntimeLocks(); process.exit(0); }
 
 const repoDist = path.join(REPO_ROOT, "dist");
-const allowedRootFiles = ["index.html", "favicon.svg", "server.cjs", "canonical-md-worker.cjs"];
+const allowedRootFiles = ["index.html", "favicon.svg", "server.cjs", "canonical-md-worker.cjs", "x4validate.cjs"];
 for (const name of allowedRootFiles) {
   const file = path.join(repoDist, name);
   const stat = fs.lstatSync(file, { throwIfNoEntry: false });
