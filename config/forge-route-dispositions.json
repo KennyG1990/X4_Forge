@@ -270,6 +270,7 @@
     "src/server/runtimeControl.ts",
     "src/server/runtimeDebuggerAdapter.selftest.ts",
     "src/server/runtimeDebuggerAdapter.ts",
+    "src/server/rustAccelerator.ts",
     "src/server/selftestRegistry.ts",
     "src/server/sharedSourceCoordinator.ts",
     "src/server/validationRoutes.ts",

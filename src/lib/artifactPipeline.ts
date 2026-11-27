@@ -12,6 +12,13 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import {
+  isRustForced,
+  RUST_TREE_MIN_BYTES,
+  RUST_TREE_MIN_ENTRIES,
+  tryRustHashTree,
+  type RustTreeEntry,
+} from '../server/rustAccelerator';
 
 export type ArtifactDisposition = 'generated' | 'source-copy';
 
@@ -446,6 +453,16 @@ function planArtifact(options: BuildArtifactPlanOptions, diskEntries?: ArtifactE
     generated.set(key, entry);
   }
 
+  interface PendingSourceFile {
+    safe: string;
+    absolutePath: string;
+    stat: fs.Stats;
+    overlay: ArtifactEntry | undefined;
+    inspectText: boolean;
+  }
+  const pendingSourceFiles: PendingSourceFile[] = [];
+  let pendingBytes = 0;
+
   const walk = (absoluteDir: string, relativeDir: string): void => {
     let children: fs.Dirent[];
     try {
@@ -505,33 +522,62 @@ function planArtifact(options: BuildArtifactPlanOptions, diskEntries?: ArtifactE
         && ROUND_TRIP_TEXT_EXTS.has(path.extname(safe).toLowerCase());
       if (overlay && !diskEntries && !inspectText) continue;
       occupied.set(key, safe);
-      try {
-        const text = inspectText ? hashArtifactTextSource(absolutePath, stat.size) : undefined;
-        const sha256 = text?.sha256 ?? hashArtifactFileBytes(absolutePath, 'sha256', { sizeHint: stat.size });
-        if (overlay && text?.utf8 === false && sha256 !== overlay.sha256) {
-          sourceEncodingConflicts.push(safe);
-          errors.push(`Workspace output would replace undecodable source ${safe}. Reimport to preserve the original bytes or save a UTF-8 repair on disk before retrying.`);
-          continue;
-        }
-        const entry: ArtifactEntry = {
-          path: safe,
-          disposition: 'source-copy',
-          reason: 'source file not claimed by a compiler output',
-          size: stat.size,
-          sha256,
-          mtimeMs: stat.mtimeMs,
-          sourcePath: absolutePath,
-          catalogLoose: Boolean(findCatalogLoose(safe)),
-        };
-        if (!overlay) entries.push(entry);
-        diskEntries?.push(entry);
-      } catch (error) {
-        errors.push(`Could not hash source artifact ${safe}: ${error instanceof Error ? error.message : String(error)}`);
-      }
+      pendingSourceFiles.push({ safe, absolutePath, stat, overlay, inspectText });
+      pendingBytes += stat.size;
     }
   };
 
   if (!options.memoryOnly && (errors.length === 0 || fs.existsSync(sourceRoot))) walk(sourceRoot, '');
+
+  const useRustBatch = pendingSourceFiles.length > 0 && (
+    isRustForced()
+    || pendingBytes >= RUST_TREE_MIN_BYTES
+    || pendingSourceFiles.length >= RUST_TREE_MIN_ENTRIES
+  );
+  const rustTree = useRustBatch
+    ? tryRustHashTree(sourceRoot, {
+        checkUtf8: pendingSourceFiles.some(item => item.inspectText),
+        excludeDirs: ['.git', 'node_modules', '.snapshots', '.forge-backups', '.forge', '.forge-builds', '.hg', '.svn'],
+      })
+    : null;
+  const rustByRel = rustTree
+    ? new Map<string, RustTreeEntry>(rustTree.entries.filter(e => e.kind === 'file').map(e => [e.path, e]))
+    : null;
+
+  for (const { safe, absolutePath, stat, overlay, inspectText } of pendingSourceFiles) {
+    try {
+      const fast = rustByRel?.get(safe);
+      let sha256: string;
+      let utf8: boolean | undefined;
+      if (fast && fast.sha256 && fast.size === stat.size && (!inspectText || typeof fast.utf8 === 'boolean')) {
+        sha256 = fast.sha256;
+        utf8 = inspectText ? fast.utf8 : undefined;
+      } else {
+        const text = inspectText ? hashArtifactTextSource(absolutePath, stat.size) : undefined;
+        sha256 = text?.sha256 ?? hashArtifactFileBytes(absolutePath, 'sha256', { sizeHint: stat.size });
+        utf8 = text?.utf8;
+      }
+      if (overlay && utf8 === false && sha256 !== overlay.sha256) {
+        sourceEncodingConflicts.push(safe);
+        errors.push(`Workspace output would replace undecodable source ${safe}. Reimport to preserve the original bytes or save a UTF-8 repair on disk before retrying.`);
+        continue;
+      }
+      const entry: ArtifactEntry = {
+        path: safe,
+        disposition: 'source-copy',
+        reason: 'source file not claimed by a compiler output',
+        size: stat.size,
+        sha256,
+        mtimeMs: stat.mtimeMs,
+        sourcePath: absolutePath,
+        catalogLoose: Boolean(findCatalogLoose(safe)),
+      };
+      if (!overlay) entries.push(entry);
+      diskEntries?.push(entry);
+    } catch (error) {
+      errors.push(`Could not hash source artifact ${safe}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   entries.push(...generated.values());
   entries.sort((left, right) => left.path.localeCompare(right.path));
   excluded.sort((left, right) => left.path.localeCompare(right.path));
@@ -636,6 +682,7 @@ export function verifyMaterializedArtifact(plan: ArtifactPlan, targetRootInput: 
   const targetRoot = path.resolve(targetRootInput);
   const errors: string[] = [];
   const actual = new Map<string, string>();
+
   const walk = (absoluteDir: string, relativeDir: string): void => {
     for (const child of fs.readdirSync(absoluteDir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
       const relativePath = relativeDir ? `${relativeDir}/${child.name}` : child.name;

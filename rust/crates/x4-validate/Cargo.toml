@@ -1,0 +1,16 @@
+[package]
+name = "x4-validate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+hex.workspace = true
+quick-xml.workspace = true
+rayon.workspace = true
+regex.workspace = true
+roxmltree.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+x4-corpus = { path = "../x4-corpus" }

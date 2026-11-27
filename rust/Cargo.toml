@@ -1,0 +1,34 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/x4-tree",
+    "crates/x4-catdat",
+    "crates/x4-corpus",
+    "crates/x4-validate",
+    "bins/x4forge",
+]
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0"
+version = "0.1.0"
+
+[workspace.dependencies]
+base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
+hex = "0.4"
+md-5 = "0.10"
+memmap2 = "0.9"
+quick-xml = "0.37"
+rayon = "1"
+regex = "1"
+roxmltree = "0.20"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

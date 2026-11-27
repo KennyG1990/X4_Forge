@@ -1,4 +1,6 @@
 # Exclude documentation and assets to allow code-only AST extraction
+rust/target/
+rust/Cargo.lock
 *.md
 *.MD
 docs/

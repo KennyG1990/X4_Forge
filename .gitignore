@@ -52,6 +52,9 @@ tests/e2e/handoff-gap-analysis.spec.ts
 # (.graphifyignore stays tracked; the AGENTS/CLAUDE/GEMINI.md instruction files do too.)
 graphify-out/
 
+# Strict Rust build artifacts
+rust/target/
+
 # Raw installed-host profiler and Chromium trace payloads are retained locally;
 # only their sanitized summaries and screenshots belong in version control.
 vscode-extension/evidence/**/raw/

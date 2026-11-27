@@ -49,6 +49,20 @@ jobs:
       - name: Reject high-severity extension dependency vulnerabilities
         run: npm audit --prefix vscode-extension --audit-level=high
 
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "rust -> target"
+
+      - name: Build Rust x4forge binary
+        run: npm run build:rust
+
+      - name: Run Rust unit tests
+        run: npm run test:rust
+
       - name: Typecheck
         run: npm run typecheck
 
@@ -100,6 +114,9 @@ jobs:
 
       - name: Build production bundle
         run: npm run build
+
+      - name: Prove Rust Slice 1 parity and validator oracles
+        run: npm run test:rust-slice1
 
       - name: Run isolated route integration
         run: npm run test:routes

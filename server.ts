@@ -337,6 +337,7 @@ import {
 import { parseParentLivenessContract, runParentLivenessSelftest, watchParentIpc } from "./src/lib/parentLiveness";
 import { runLatestValueWriteQueueSelftest } from "./src/lib/latestValueWriteQueue";
 import { artifactPlanIdentity, buildArtifactPlan, buildArtifactPlanWithDiskIdentity, createArtifactPathMatcher, hashArtifactFile, materializeArtifact, ROUND_TRIP_TEXT_EXTS, sameArtifactStamp, verifyMaterializedArtifact, type ArtifactPlan } from "./src/lib/artifactPipeline";
+import { shouldUseRustForDirectory, tryRustHashTree } from "./src/server/rustAccelerator";
 import { buildProjectFileInventory, runProjectFileInventorySelftest } from "./src/lib/projectFileInventory";
 import { forecastCatalogArtifact, materializeCatalogArtifact } from "./src/lib/artifactPackager";
 import { dataPath, resolveDataDir, runDataDirSelftest } from "./src/lib/dataDir";
@@ -18992,7 +18993,51 @@ function inspectRegularTree(rootPath: string, observed?: Map<string, fs.BigIntSt
   return entries.sort((a, b) => a.path.localeCompare(b.path));
 }
 
+function tryRustRegularTreeSummary(rootPath: string): {
+  fingerprint: string;
+  bytes: number;
+  expected: Array<{ path: string; size: number; sha256: string }>;
+  byExactPath: Map<string, { size: number; sha256: string }>;
+  byLowerPath?: Map<string, { size: number; sha256: string }>;
+} | null {
+  if (!shouldUseRustForDirectory(rootPath)) return null;
+  const rustTree = tryRustHashTree(rootPath, { allowMissing: true });
+  if (!rustTree || !rustTree.entries.every(entry => entry.kind !== 'file' || typeof entry.sha256 === 'string')) {
+    return null;
+  }
+  const sorted = [...rustTree.entries].sort((a, b) => a.path.localeCompare(b.path));
+  const digest = crypto.createHash('sha256');
+  const expected: Array<{ path: string; size: number; sha256: string }> = [];
+  const byExactPath = new Map<string, { size: number; sha256: string }>();
+  const byLowerPath = process.platform === 'win32' ? new Map<string, { size: number; sha256: string }>() : undefined;
+  let bytes = 0;
+
+  for (const entry of sorted) {
+    const normalizedPath = entry.path.replace(/\\/g, '/');
+    digest.update(entry.kind === 'directory' ? 'D\0' : 'F\0');
+    digest.update(normalizedPath);
+    digest.update('\0');
+    if (entry.kind === 'file') {
+      const sha256 = entry.sha256!;
+      bytes += entry.size;
+      digest.update(String(entry.size));
+      digest.update('\0');
+      digest.update(sha256);
+      digest.update('\0');
+      expected.push({ path: entry.path, size: entry.size, sha256 });
+      const info = { size: entry.size, sha256 };
+      byExactPath.set(normalizedPath, info);
+      byLowerPath?.set(normalizedPath.toLowerCase(), info);
+    }
+  }
+  return { fingerprint: digest.digest('hex'), bytes, expected, byExactPath, byLowerPath };
+}
+
 function regularTreeFingerprintAndBytes(rootPath: string, observationRoot?: fs.BigIntStats): { fingerprint: string; bytes: number } {
+  if (!observationRoot) {
+    const fast = tryRustRegularTreeSummary(rootPath);
+    if (fast) return { fingerprint: fast.fingerprint, bytes: fast.bytes };
+  }
   const observed = observationRoot ? new Map([[rootPath, observationRoot]]) : undefined;
   const digest = crypto.createHash('sha256');
   let remaining = DEPLOY_TARGET_OBSERVATION_MAX_BYTES;
@@ -19581,6 +19626,8 @@ function regularTreeExpectedAndFingerprint(rootPath: string): {
   expected: Array<{ path: string; size: number; sha256: string }>;
   fingerprint: string;
 } {
+  const fast = tryRustRegularTreeSummary(rootPath);
+  if (fast) return { expected: fast.expected, fingerprint: fast.fingerprint };
   const digest = crypto.createHash('sha256');
   const expected: Array<{ path: string; size: number; sha256: string }> = [];
   for (const entry of inspectRegularTree(rootPath)) {
@@ -19608,6 +19655,21 @@ function verifyExpectedFilesAndFingerprint(
   expectedFingerprint?: string,
   fingerprintMismatchMessage = 'Deployed artifact fingerprint verification failed.',
 ): string {
+  const fast = tryRustRegularTreeSummary(targetRoot);
+  if (fast) {
+    for (const entry of expected) {
+      const normalizedPath = entry.path.replace(/\\/g, '/');
+      const observed = fast.byExactPath.get(normalizedPath) ?? fast.byLowerPath?.get(normalizedPath.toLowerCase());
+      if (!observed) throw new Error(`Deployed artifact is missing ${entry.path}`);
+      if (observed.size !== entry.size || observed.sha256 !== entry.sha256) {
+        throw new Error(`Deployed artifact verification failed for ${entry.path}`);
+      }
+    }
+    if (expectedFingerprint !== undefined && fast.fingerprint !== expectedFingerprint) {
+      throw new Error(fingerprintMismatchMessage);
+    }
+    return fast.fingerprint;
+  }
   const digest = crypto.createHash('sha256');
   const byExactPath = new Map<string, { size: number; sha256: string }>();
   const byLowerPath = process.platform === 'win32' ? new Map<string, { size: number; sha256: string }>() : undefined;
