@@ -1,0 +1,16 @@
+[package]
+name = "x4-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+base64.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+url.workspace = true
+x4-catdat = { path = "../x4-catdat" }
+x4-corpus = { path = "../x4-corpus" }
+x4-lsp = { path = "../x4-lsp" }
+x4-tree = { path = "../x4-tree" }
+x4-validate = { path = "../x4-validate" }

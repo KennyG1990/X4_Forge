@@ -118,6 +118,9 @@ jobs:
       - name: Prove Rust Slice 1 parity and validator oracles
         run: npm run test:rust-slice1
 
+      - name: Prove Rust Slice 2 LSP 3.17 and MCP 2024-11-05 oracles
+        run: npm run test:rust-slice2
+
       - name: Run isolated route integration
         run: npm run test:routes
 

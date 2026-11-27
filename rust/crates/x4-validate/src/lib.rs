@@ -12,7 +12,7 @@ use crate::scripts::{
     analyze_script_file, check_content_xml_deps, cross_check_scripts, ScriptFileSummary,
 };
 use crate::xml_wellformed::{parse_xml, LineIndex};
-use crate::xsd::{levenshtein, validate_xml_with_xsd, XsdRegistry};
+use crate::xsd::{damerau_levenshtein, validate_xml_with_xsd, XsdRegistry};
 use rayon::prelude::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -137,6 +137,20 @@ pub struct LoadedFile {
     pub size: u64,
     pub sha256: String,
     pub text: String,
+}
+
+impl LoadedFile {
+    pub fn from_text(rel_path: String, abs_path: PathBuf, text: String) -> Self {
+        let size = text.len() as u64;
+        let sha256 = hex::encode(Sha256::digest(text.as_bytes()));
+        Self {
+            rel_path,
+            abs_path,
+            size,
+            sha256,
+            text,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -295,8 +309,36 @@ pub fn validate_mod(mod_root: &Path, opts: &ValidateOptions) -> Result<Validatio
         ));
     }
 
+    let default_mod_name = canon_mod
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("mod");
+
+    Ok(validate_loaded_files(
+        default_mod_name,
+        &loaded,
+        skipped,
+        &corpus,
+        &xsd_reg,
+        &opts.extension_roots,
+        fixed_count,
+        opts.fail_on,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn validate_loaded_files(
+    default_mod_name: &str,
+    loaded: &[LoadedFile],
+    skipped: Vec<String>,
+    corpus: &CorpusIndex,
+    xsd_reg: &XsdRegistry,
+    extension_roots: &[PathBuf],
+    fixed_count: usize,
+    fail_on: Option<SeverityGate>,
+) -> ValidationReport {
     let mut source_hasher = Sha256::new();
-    for lf in &loaded {
+    for lf in loaded {
         source_hasher.update(lf.rel_path.as_bytes());
         source_hasher.update(b"\0");
         source_hasher.update(lf.sha256.as_bytes());
@@ -329,8 +371,8 @@ pub fn validate_mod(mod_root: &Path, opts: &ValidateOptions) -> Result<Validatio
                             clean,
                             &line_idx,
                             &doc,
-                            &xsd_reg,
-                            &corpus,
+                            xsd_reg,
+                            corpus,
                             &mut diags,
                         );
                         validate_script_expressions(
@@ -338,13 +380,13 @@ pub fn validate_mod(mod_root: &Path, opts: &ValidateOptions) -> Result<Validatio
                             clean,
                             &line_idx,
                             &doc,
-                            &corpus,
+                            corpus,
                             &mut diags,
                         );
                         let script =
-                            analyze_script_file(&lf.rel_path, clean, &line_idx, &doc, &corpus);
+                            analyze_script_file(&lf.rel_path, clean, &line_idx, &doc, corpus);
                         let content =
-                            analyze_content_xml(&lf.rel_path, clean, &line_idx, &doc, &corpus);
+                            analyze_content_xml(&lf.rel_path, clean, &line_idx, &doc, corpus);
                         PerFileOut::Xml {
                             diags,
                             script,
@@ -357,7 +399,7 @@ pub fn validate_mod(mod_root: &Path, opts: &ValidateOptions) -> Result<Validatio
                     }
                 }
             } else if lower.ends_with(".lua") {
-                PerFileOut::Lua(analyze_lua_file(&lf.rel_path, &lf.text, &corpus))
+                PerFileOut::Lua(analyze_lua_file(&lf.rel_path, &lf.text, corpus))
             } else {
                 PerFileOut::Other(Vec::new())
             }
@@ -395,13 +437,9 @@ pub fn validate_mod(mod_root: &Path, opts: &ValidateOptions) -> Result<Validatio
     }
 
     // Cross-file checks
-    let mod_id = match check_content_xml_deps(&loaded, &mut diagnostics) {
+    let mod_id = match check_content_xml_deps(loaded, &mut diagnostics) {
         Some(id) if !id.is_empty() => id,
-        Some(_) => canon_mod
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("mod")
-            .to_string(),
+        Some(_) => default_mod_name.to_string(),
         None => {
             diagnostics.push(Diagnostic {
                 severity: Severity::Error,
@@ -414,15 +452,11 @@ pub fn validate_mod(mod_root: &Path, opts: &ValidateOptions) -> Result<Validatio
                 source_ref: None,
                 suggestions: Vec::new(),
             });
-            canon_mod
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or("mod")
-                .to_string()
+            default_mod_name.to_string()
         }
     };
 
-    cross_check_scripts(&script_summaries, &corpus, &mut diagnostics);
+    cross_check_scripts(&script_summaries, corpus, &mut diagnostics);
     cross_check_content(&content_summaries, &lua_text_refs, &mut diagnostics);
     let md_raises: Vec<(String, String, u32, u32)> = script_summaries
         .iter()
@@ -431,7 +465,7 @@ pub fn validate_mod(mod_root: &Path, opts: &ValidateOptions) -> Result<Validatio
     cross_check_md_lua(&md_raises, &lua_registers, &mut diagnostics);
 
     // Extension overlay directory checks (if --extensions provided)
-    for ext_root in &opts.extension_roots {
+    for ext_root in extension_roots {
         if !ext_root.is_dir() {
             diagnostics.push(Diagnostic {
                 severity: Severity::Warning,
@@ -451,7 +485,7 @@ pub fn validate_mod(mod_root: &Path, opts: &ValidateOptions) -> Result<Validatio
     }
 
     // Apply forge.rules.json v1 policy & warning suppressions
-    let (diagnostics, suppressed_count) = apply_forge_rules(&loaded, diagnostics);
+    let (diagnostics, suppressed_count) = apply_forge_rules(loaded, diagnostics);
 
     let mut counts = ValidationCounts {
         error: 0,
@@ -465,20 +499,20 @@ pub fn validate_mod(mod_root: &Path, opts: &ValidateOptions) -> Result<Validatio
             Severity::Info => counts.info += 1,
         }
     }
-    let gate = opts.fail_on.unwrap_or(SeverityGate::Error);
+    let gate = fail_on.unwrap_or(SeverityGate::Error);
     let validation_ok = counts.error == 0;
     let passed = validation_ok
         && !diagnostics
             .iter()
             .any(|d| d.severity.rank() >= gate.rank());
 
-    Ok(ValidationReport {
+    ValidationReport {
         passed,
         validation_ok,
         fail_on: gate.as_str().to_string(),
         mod_id,
         source_hash,
-        loaded_files: loaded.into_iter().map(|l| l.rel_path).collect(),
+        loaded_files: loaded.iter().map(|l| l.rel_path.clone()).collect(),
         skipped_files: skipped,
         corpus_loaded: !corpus.factions.is_empty() || !corpus.md_providers.is_empty(),
         schemas_loaded: xsd_reg.schemas.len(),
@@ -486,10 +520,44 @@ pub fn validate_mod(mod_root: &Path, opts: &ValidateOptions) -> Result<Validatio
         suppressed_count,
         counts,
         findings: diagnostics,
-    })
+    }
 }
 
-fn resolve_corpus_and_schemas(opts: &ValidateOptions) -> Result<(CorpusIndex, XsdRegistry), String> {
+/// Validates a single unsaved/standalone X4 XML or Lua document without requiring root `content.xml`.
+pub fn validate_single_document(
+    rel_path: &str,
+    text: &str,
+    corpus: &CorpusIndex,
+    xsd_reg: &XsdRegistry,
+) -> Vec<Diagnostic> {
+    let lower = rel_path.replace('\\', "/").to_ascii_lowercase();
+    let mut diags = Vec::new();
+    if lower.ends_with(".xml") {
+        let line_idx = LineIndex::new(text);
+        let clean = line_idx.strip_bom(text);
+        match parse_xml(rel_path, clean) {
+            Ok(doc) => {
+                validate_xml_with_xsd(rel_path, clean, &line_idx, &doc, xsd_reg, corpus, &mut diags);
+                validate_script_expressions(rel_path, clean, &line_idx, &doc, corpus, &mut diags);
+                let mut script = analyze_script_file(rel_path, clean, &line_idx, &doc, corpus);
+                let mut content = analyze_content_xml(rel_path, clean, &line_idx, &doc, corpus);
+                diags.append(&mut script.diagnostics);
+                diags.append(&mut content.diagnostics);
+                cross_check_scripts(&[script], corpus, &mut diags);
+            }
+            Err(xml_err) => {
+                diags.push(xml_err);
+            }
+        }
+    } else if lower.ends_with(".lua") {
+        let mut lsum = analyze_lua_file(rel_path, text, corpus);
+        diags.append(&mut lsum.diagnostics);
+    }
+    sort_diagnostics(&mut diags);
+    diags
+}
+
+pub fn resolve_corpus_and_schemas(opts: &ValidateOptions) -> Result<(CorpusIndex, XsdRegistry), String> {
     let effective_unpacked = opts
         .unpacked_root
         .clone()
@@ -810,7 +878,10 @@ pub fn apply_preferred_fixes(mod_root: &Path, registry: &XsdRegistry) -> Result<
             let mut best: Vec<(usize, &String)> = known
                 .iter()
                 .filter_map(|cand| {
-                    let d = levenshtein(&tag.to_ascii_lowercase(), &cand.to_ascii_lowercase());
+                    let d = damerau_levenshtein(
+                        &tag.to_ascii_lowercase(),
+                        &cand.to_ascii_lowercase(),
+                    );
                     (d > 0 && d <= 2).then_some((d, cand))
                 })
                 .collect();

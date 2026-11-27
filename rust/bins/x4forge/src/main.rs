@@ -7,13 +7,18 @@ use x4_catdat::{
     MAX_CAT_ENTRIES, MAX_CAT_MANIFEST_BYTES,
 };
 use x4_corpus::load_or_build_corpus;
+use x4_lsp::{run_stdio_lsp, LspOptions};
+use x4_mcp::{run_stdio_mcp, McpMode, McpOptions};
 use x4_tree::{hash_tree, HashTreeOptions};
 use x4_validate::{
     render_report, validate_mod, ReportFormat, SeverityGate, ValidateOptions,
 };
 
 #[derive(Parser)]
-#[command(name = "x4forge", about = "X4 Forge Slice 1 high-speed Rust engine")]
+#[command(
+    name = "x4forge",
+    about = "X4 Forge high-speed Rust engine (CLI, LSP 3.17, and MCP 2024-11-05)"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -84,6 +89,30 @@ enum Commands {
         format: Option<String>,
         #[arg(long = "fail-on")]
         fail_on: Option<String>,
+    },
+    /// Run the LSP 3.17 language server over stdio (Content-Length JSON-RPC 2.0).
+    Lsp {
+        #[arg(long)]
+        unpacked: Option<PathBuf>,
+        #[arg(long)]
+        cache: Option<PathBuf>,
+    },
+    /// Run the MCP 2024-11-05 server over stdio (newline-delimited JSON-RPC 2.0).
+    Mcp {
+        #[arg(long, default_value = "auto")]
+        mode: String,
+        #[arg(long)]
+        unpacked: Option<PathBuf>,
+        #[arg(long)]
+        cache: Option<PathBuf>,
+        #[arg(long)]
+        url: Option<String>,
+        #[arg(long)]
+        key: Option<String>,
+        #[arg(long = "workspace-id")]
+        workspace_id: Option<String>,
+        #[arg(long = "discovery-dir")]
+        discovery_dir: Option<PathBuf>,
     },
 }
 
@@ -259,6 +288,32 @@ fn run(cli: Cli) -> Result<i32, (i32, String)> {
 
             println!("{}", render_report(&report, fmt, json));
             Ok(if report.passed { 0 } else { 1 })
+        }
+        Commands::Lsp { unpacked, cache } => run_stdio_lsp(LspOptions {
+            unpacked_root: unpacked,
+            corpus_cache: cache,
+        })
+        .map_err(|e| (2, e)),
+        Commands::Mcp {
+            mode,
+            unpacked,
+            cache,
+            url,
+            key,
+            workspace_id,
+            discovery_dir,
+        } => {
+            let parsed_mode = McpMode::parse(&mode).map_err(|e| (2, e))?;
+            run_stdio_mcp(McpOptions {
+                mode: parsed_mode,
+                unpacked_root: unpacked,
+                corpus_cache: cache,
+                url,
+                api_key: key,
+                workspace_id,
+                discovery_dir,
+            })
+            .map_err(|e| (2, e))
         }
     }
 }

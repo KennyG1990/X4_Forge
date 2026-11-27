@@ -1314,11 +1314,45 @@ pub fn levenshtein(a: &str, b: &str) -> usize {
     prev[b_chars.len()]
 }
 
+/// Optimal String Alignment (Damerau-Levenshtein) distance where adjacent
+/// character transpositions count as edit distance 1.
+pub fn damerau_levenshtein(a: &str, b: &str) -> usize {
+    let a_chars: Vec<char> = a.chars().collect();
+    let b_chars: Vec<char> = b.chars().collect();
+    if a_chars.is_empty() {
+        return b_chars.len();
+    }
+    if b_chars.is_empty() {
+        return a_chars.len();
+    }
+    let mut prev2 = vec![0usize; b_chars.len() + 1];
+    let mut prev1: Vec<usize> = (0..=b_chars.len()).collect();
+    let mut curr = vec![0usize; b_chars.len() + 1];
+    for i in 1..=a_chars.len() {
+        curr[0] = i;
+        for j in 1..=b_chars.len() {
+            let cost = usize::from(a_chars[i - 1] != b_chars[j - 1]);
+            let mut val = (prev1[j] + 1).min(curr[j - 1] + 1).min(prev1[j - 1] + cost);
+            if i > 1
+                && j > 1
+                && a_chars[i - 1] == b_chars[j - 2]
+                && a_chars[i - 2] == b_chars[j - 1]
+            {
+                val = val.min(prev2[j - 2] + 1);
+            }
+            curr[j] = val;
+        }
+        std::mem::swap(&mut prev2, &mut prev1);
+        std::mem::swap(&mut prev1, &mut curr);
+    }
+    prev1[b_chars.len()]
+}
+
 pub fn suggest_nearest(needle: &str, haystack: &BTreeSet<String>) -> Vec<String> {
     let mut scored: Vec<(usize, &String)> = haystack
         .iter()
         .filter_map(|cand| {
-            let d = levenshtein(&needle.to_ascii_lowercase(), &cand.to_ascii_lowercase());
+            let d = damerau_levenshtein(&needle.to_ascii_lowercase(), &cand.to_ascii_lowercase());
             (d <= 3).then_some((d, cand))
         })
         .collect();
