@@ -4,9 +4,10 @@
  */
 
 import React, { useState, useMemo, useRef } from 'react';
-import { Terminal, CheckCircle, AlertTriangle, Sparkles, Boxes, RefreshCw, FileCode, X, Layers, Crown, Copy, ShieldCheck } from 'lucide-react';
+import { Terminal, CheckCircle, AlertTriangle, Sparkles, Boxes, RefreshCw, FileCode, X, Layers, Crown, Copy, ShieldCheck, BadgeAlert } from 'lucide-react';
 import { ModWorkspace, PackageDiagnostic, generateMDXML } from '../types';
 import { critiqueWorkspace } from '../lib/mdCritic';
+import { scanLibraryConflictsWithDisk, type ConflictWarning } from '../lib/libraryConflicts';
 import DiagnosticGuidance from './DiagnosticGuidance';
 import { resolveCueToNodeId } from '../lib/liveLogNav';
 import { openInNativeEditor } from '../lib/nativeEditor';
@@ -189,6 +190,24 @@ export default function PackageModDoctor({
     setFindingFilter('all');
     setFindingPage(0);
   };
+
+  // Workspace Wares & Jobs conflicts (moved from LibraryConfigurator inline drawer to Diagnostics -> Mod Conflicts)
+  const [libConflicts, setLibConflicts] = useState<ConflictWarning[]>([]);
+  const [libScanning, setLibScanning] = useState(false);
+  const workspaceRef = useRef(workspace);
+  workspaceRef.current = workspace;
+  const runLibraryConflictScan = React.useCallback(async () => {
+    setLibScanning(true);
+    try {
+      setLibConflicts(await scanLibraryConflictsWithDisk(workspaceRef.current));
+    } finally {
+      setLibScanning(false);
+    }
+  }, []);
+  React.useEffect(() => {
+    if (!showInstall) return;
+    void runLibraryConflictScan();
+  }, [showInstall, workspace.wares, workspace.jobs, workspace.xmlPatches, runLibraryConflictScan]);
 
   // Extension Doctor — cross-mod conflict scan over the whole installed extensions/ folder.
   const [extScan, setExtScan] = useState<ExtensionScanResult | null>(null);
@@ -383,24 +402,24 @@ export default function PackageModDoctor({
   };
 
   return (
-    <div className="flex flex-col h-full min-h-0 overflow-y-auto bg-[#080a0e] p-3 space-y-3 shrink-0 font-mono text-xs scrollbar-thin">
+    <div className="flex flex-col h-full min-h-0 overflow-y-auto bg-[#0c0e12] p-3 space-y-3 shrink-0 font-sans text-xs scrollbar-thin">
       {showPackage && (<>
       {/* Header Info Card */}
-      <div className="bg-[#12141a]/90 border border-white/5 rounded-lg p-3 space-y-2.5">
-        <div className="flex items-center justify-between border-b border-white/5 pb-2">
-          <div className="flex items-center gap-1.5 text-slate-300 font-semibold tracking-tight text-[11px]">
-            <Terminal className="w-4 h-4 text-cyan-400 animate-pulse" />
+      <div className="bg-[#11141a] border border-white/[0.08] rounded-lg p-3 space-y-2.5">
+        <div className="flex items-center justify-between border-b border-white/[0.08] pb-2">
+          <div className="flex items-center gap-1.5 text-slate-200 font-semibold tracking-tight text-[11px] font-mono">
+            <Terminal className="w-4 h-4 text-blue-400" />
             FULL-PROJECT VALIDATION
           </div>
-          <span data-testid="validation-inputs-label" className="text-[9px] font-bold text-slate-400 bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/20">
+          <span data-testid="validation-inputs-label" className="text-[11px] font-mono font-medium text-slate-300 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/25">
             {validationLabel}
           </span>
         </div>
         {inputs?.diskSource === 'unavailable' && (
-          <p className="text-[10px] text-amber-300">The linked disk folder was unavailable for this check.</p>
+          <p className="text-[11px] text-amber-300">The linked disk folder was unavailable for this check.</p>
         )}
         {inputs && (inputs.differentDiskFileCount > 0 || inputs.resultId) && (
-          <details className="text-[10px] text-amber-200">
+          <details className="text-[11px] text-amber-200">
             <summary className="cursor-pointer">
               {inputs.differentDiskFileCount > 0
                 ? `${inputs.overrideFiles ? 'Workspace or override content' : 'Workspace content'} checked in ${inputs.differentDiskFileCount} ${inputs.differentDiskFileCount === 1 ? 'file that differs' : 'files that differ'} on disk`
@@ -408,7 +427,7 @@ export default function PackageModDoctor({
             </summary>
             {inputs.differentDiskFileCount > 0 && (
               <ul className="mt-1 list-disc space-y-0.5 pl-4 text-slate-300">
-                {inputs.differentDiskPaths.map(file => <li key={file} className="break-all">{file}</li>)}
+                {inputs.differentDiskPaths.map(file => <li key={file} className="break-all font-mono">{file}</li>)}
                 {inputs.differentDiskFileCount > inputs.differentDiskPaths.length && (
                   <li>{inputs.differentDiskFileCount - inputs.differentDiskPaths.length} more</li>
                 )}
@@ -416,13 +435,13 @@ export default function PackageModDoctor({
             )}
             {inputs.resultId && (
               <p className="mt-1 text-slate-300">
-                Result ID <code data-testid="validation-result-id" className="select-all break-all">{inputs.resultId}</code>
+                Result ID <code data-testid="validation-result-id" className="select-all break-all font-mono">{inputs.resultId}</code>
               </p>
             )}
           </details>
         )}
 
-        <div className="grid grid-cols-2 gap-2 text-[10px] font-bold">
+        <div className="grid grid-cols-2 gap-2 text-[11px] font-semibold">
           <button
             type="button"
             onClick={() => {
@@ -431,12 +450,12 @@ export default function PackageModDoctor({
             }}
             disabled={!firstGraphError}
             title={checking ? 'Waiting for current validation' : firstGraphError ? 'Jump to the first error with a canvas node' : 'No node-located errors'}
-            className="flex items-center gap-2 text-slate-200 bg-red-500/10 p-2 rounded border border-red-500/20 text-left enabled:hover:bg-red-500/20 enabled:cursor-pointer transition-colors disabled:opacity-100"
+            className="flex items-center gap-2 text-slate-200 bg-red-500/10 p-2 rounded border border-red-500/25 text-left enabled:hover:bg-red-500/20 enabled:cursor-pointer transition-colors disabled:opacity-100"
           >
-            <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse block shrink-0" />
+            <span className="w-2 h-2 rounded-full bg-red-500 block shrink-0" />
             <span>{checking ? 'Checking errors…' : `${errors.length} Errors`}</span>
           </button>
-          <div className="flex items-center gap-2 text-slate-200 bg-amber-500/10 p-2 rounded border border-amber-500/20">
+          <div className="flex items-center gap-2 text-slate-200 bg-amber-500/10 p-2 rounded border border-amber-500/25">
             <span className="w-2 h-2 rounded-full bg-amber-500 block shrink-0" />
             <span>{checking ? 'Checking warnings…' : `${warnings.length} Warnings`}</span>
           </div>
@@ -444,17 +463,17 @@ export default function PackageModDoctor({
 
         <div
           data-testid="validation-delta-card"
-          className={`rounded border p-2 text-[9.5px] leading-relaxed ${
+          className={`rounded border p-2.5 text-[11px] leading-relaxed ${
             validationDelta?.status === 'compared'
               ? validationDelta.counts.new > 0
                 ? 'border-amber-500/25 bg-amber-500/5 text-amber-200'
-                : 'border-emerald-500/20 bg-emerald-500/5 text-emerald-200'
+                : 'border-emerald-500/25 bg-emerald-500/5 text-emerald-200'
               : validationDelta?.status === 'unavailable'
                 ? 'border-red-500/25 bg-red-500/5 text-red-200'
-                : 'border-slate-500/20 bg-slate-500/5 text-slate-300'
+                : 'border-white/[0.08] bg-[#0a0c10] text-slate-300'
           }`}
         >
-          <div className="font-bold uppercase tracking-wide">Since last green</div>
+          <div className="font-semibold">Since last green</div>
           {diagnosticSource === 'checking' ? (
             <div className="mt-0.5 text-slate-400">Comparison pending…</div>
           ) : validationDelta?.status === 'compared' ? (
@@ -476,7 +495,7 @@ export default function PackageModDoctor({
               findingSearch.current?.scrollIntoView({ block: 'center' });
               findingSearch.current?.focus({ preventScroll: true });
             }}
-            className="w-full rounded border border-white/15 px-3 py-2 text-left font-sans text-xs text-cyan-300 hover:border-cyan-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+            className="w-full rounded border border-white/[0.08] bg-[#0a0c10] px-3 py-2 text-left text-xs text-blue-300 hover:border-blue-500/45 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-400 cursor-pointer"
           >
             Find diagnostics
           </button>
@@ -484,16 +503,16 @@ export default function PackageModDoctor({
 
       </div>
 
-      <details data-testid="diagnostic-tools" className="shrink-0 rounded-lg border border-white/10 bg-[#12141a]/90">
+      <details data-testid="diagnostic-tools" className="shrink-0 rounded-lg border border-white/[0.08] bg-[#11141a]">
         <summary
           aria-label="Diagnostic tools"
-          className="cursor-pointer rounded-lg px-3 py-2 text-[11px] font-semibold text-slate-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+          className="cursor-pointer rounded-lg px-3 py-2.5 text-[11px] font-semibold text-slate-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-400"
         >
           Diagnostic tools
           <span
             role="status"
             data-testid="diagnostic-tools-status"
-            className={stResults && !stAllPass ? 'mt-1 block text-[9.5px] font-normal text-red-300' : 'mt-1 block text-[9.5px] font-normal text-slate-400'}
+            className={stResults && !stAllPass ? 'mt-1 block text-[11px] font-normal text-red-300' : 'mt-1 block text-[11px] font-normal text-slate-400'}
           >
             Local critic: {critic.findings.length} {critic.findings.length === 1 ? 'finding' : 'findings'}
             {' · '}
@@ -505,35 +524,33 @@ export default function PackageModDoctor({
             {aiEnabled && diagnostics.length > 0 ? ' · AI help available' : ''}
           </span>
         </summary>
-        <div className="space-y-3 p-2">
+        <div className="space-y-3 p-2.5">
 
         {aiEnabled && diagnostics.length > 0 && (
           <button
             onClick={sendDiagnosticsToAI}
-            className="w-full flex items-center justify-center gap-2 text-xs font-semibold text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 px-3 py-2 rounded-md border border-cyan-500/30 cursor-pointer uppercase transition-all"
+            className="w-full flex items-center justify-center gap-2 text-xs font-semibold text-blue-200 bg-blue-500/15 hover:bg-blue-500/25 px-3 py-2 rounded-md border border-blue-500/35 cursor-pointer transition-colors"
             title="Ask AI Copilot for fixes"
           >
-            <Sparkles className="w-3.5 h-3.5 text-cyan-300" />
+            <Sparkles className="w-3.5 h-3.5 text-blue-300" />
             Ask AI Assistant For Fixes
           </button>
         )}
-      {/* DETERMINISTIC CRITIC (Phase 3) — rule-based, no AI. Every finding is justified
-          from the graph + semantics registry; equivalent refs are never flagged. */}
-      <div className="bg-[#12141a]/90 border border-white/5 rounded-lg p-3 space-y-2 shrink-0">
-        <div className="flex items-center justify-between border-b border-white/5 pb-2">
-          <div className="flex items-center gap-1.5 text-slate-300 font-semibold tracking-tight text-[11px]">
-            <ShieldCheck className="w-4 h-4 text-sky-400" />
+      <div className="bg-[#0a0c10] border border-white/[0.08] rounded-lg p-3 space-y-2 shrink-0">
+        <div className="flex items-center justify-between border-b border-white/[0.08] pb-2">
+          <div className="flex items-center gap-1.5 text-slate-200 font-semibold tracking-tight text-[11px]">
+            <ShieldCheck className="w-4 h-4 text-blue-400" />
             DETERMINISTIC CRITIC
           </div>
-          <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300 text-[8px] font-mono font-bold uppercase border border-emerald-500/20">No AI</span>
+          <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300 text-[11px] font-mono font-medium border border-emerald-500/25">No AI</span>
         </div>
         {critic.findings.length === 0 ? (
-          <p className="text-[9.5px] text-slate-500 font-sans">No deterministic findings — no ref mismatches, unbalanced one-way writes, or unguarded high-risk actions on frequent triggers.</p>
+          <p className="text-[11px] text-slate-400 leading-normal">No deterministic findings — no ref mismatches, unbalanced one-way writes, or unguarded high-risk actions on frequent triggers.</p>
         ) : (
           <div className="space-y-1.5">
             {critic.findings.map((f, i) => (
-              <div key={i} className={`text-[9.5px] font-sans leading-snug px-2 py-1.5 rounded border ${criticSeverityStyle(f.severity)}`}>
-                <span className="font-mono font-bold uppercase text-[7.5px] mr-1.5 opacity-80">{f.code.replace(/_/g, ' ')}</span>
+              <div key={i} className={`text-[11px] leading-snug px-2.5 py-1.5 rounded border ${criticSeverityStyle(f.severity)}`}>
+                <span className="font-mono font-semibold mr-1.5">{f.code.replace(/_/g, ' ')}</span>
                 {f.message}
               </div>
             ))}
@@ -541,28 +558,25 @@ export default function PackageModDoctor({
         )}
       </div>
 
-      {/* STUDIO SELFTEST DASHBOARD — one button for every oracle endpoint.
-          The selftests are the studio's strongest trust asset; this surfaces
-          them in the UI instead of leaving them as agent-only GETs. */}
-      <div className="bg-[#12141a]/90 border border-white/5 rounded-lg p-3 space-y-2.5 shrink-0">
-        <div className="flex items-center justify-between border-b border-white/5 pb-2">
-          <div className="flex items-center gap-1.5 text-slate-300 font-semibold tracking-tight text-[11px]">
+      <div className="bg-[#0a0c10] border border-white/[0.08] rounded-lg p-3 space-y-2.5 shrink-0">
+        <div className="flex items-center justify-between border-b border-white/[0.08] pb-2">
+          <div className="flex items-center gap-1.5 text-slate-200 font-semibold tracking-tight text-[11px]">
             <CheckCircle className="w-4 h-4 text-emerald-400" />
             STUDIO SELFTESTS
           </div>
           {stResults && (
-            <span className={`text-[9px] font-bold px-2 py-0.5 rounded border ${stAllPass ? 'text-emerald-300 bg-emerald-500/10 border-emerald-500/25' : 'text-red-300 bg-red-500/10 border-red-500/25'}`}>
+            <span className={`text-[11px] font-mono font-semibold px-2 py-0.5 rounded border ${stAllPass ? 'text-emerald-300 bg-emerald-500/10 border-emerald-500/25' : 'text-red-300 bg-red-500/10 border-red-500/25'}`}>
               {stResults.filter(r => r.pass).length}/{stResults.length} PASS
             </span>
           )}
         </div>
-        <p className="text-[9.5px] text-slate-400 font-sans leading-normal">
+        <p className="text-[11px] text-slate-400 leading-normal">
           Runs every built-in oracle: generators, validators, round-trip, archives, patches, contracts, lineage, telemetry, fixes.
         </p>
         <button
           onClick={runAllSelftests}
           disabled={stRunning}
-          className="w-full flex items-center justify-center gap-2 text-xs font-semibold text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 px-3 py-2 rounded-md border border-emerald-500/30 cursor-pointer uppercase transition-all disabled:opacity-50"
+          className="w-full flex items-center justify-center gap-2 text-xs font-semibold text-emerald-200 bg-emerald-500/15 hover:bg-emerald-500/25 px-3 py-2 rounded-md border border-emerald-500/35 cursor-pointer transition-colors disabled:opacity-50"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${stRunning ? 'animate-spin' : ''}`} />
           {stRunning ? `Running… (${stProgress})` : 'Run All Selftests'}
@@ -570,10 +584,10 @@ export default function PackageModDoctor({
         {stResults && (
           <div className="grid grid-cols-2 gap-1">
             {stResults.map(r => (
-              <div key={r.name} title={r.detail || ''} className={`flex items-center gap-1 text-[8.5px] font-mono px-1.5 py-0.5 rounded border ${r.pass ? 'text-emerald-300 bg-emerald-500/5 border-emerald-500/15' : 'text-red-300 bg-red-500/10 border-red-500/30 font-bold'}`}>
+              <div key={r.name} title={r.detail || ''} className={`flex items-center gap-1 text-[11px] font-mono px-1.5 py-0.5 rounded border ${r.pass ? 'text-emerald-300 bg-emerald-500/5 border-emerald-500/20' : 'text-red-300 bg-red-500/10 border-red-500/30 font-semibold'}`}>
                 <span>{r.pass ? '✓' : '✗'}</span>
                 <span className="truncate">{r.name}</span>
-                {r.score && <span className="ml-auto text-slate-500">{r.score}</span>}
+                {r.score && <span className="ml-auto text-slate-400">{r.score}</span>}
               </div>
             ))}
           </div>
@@ -585,52 +599,107 @@ export default function PackageModDoctor({
 
       </>)}
 
+      {showInstall && (<>
+      {/* Workspace Wares & Jobs Conflicts (single-owner consolidation from LibraryConfigurator) */}
+      <div data-testid="diagnostics-library-conflicts" className="bg-[#11141a] border border-white/[0.08] rounded-lg p-3 space-y-2.5 shrink-0">
+        <div className="flex items-center justify-between border-b border-white/[0.08] pb-2">
+          <div className="flex items-center gap-1.5 text-slate-200 font-semibold tracking-tight text-[11px]">
+            <BadgeAlert className="w-4 h-4 text-amber-400" />
+            Wares &amp; Jobs Conflicts
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className={`text-[11px] font-mono px-2 py-0.5 rounded border ${
+              libConflicts.some(c => c.severity === 'error')
+                ? 'text-red-300 bg-red-500/10 border-red-500/25'
+                : libConflicts.length > 0
+                  ? 'text-amber-300 bg-amber-500/10 border-amber-500/25'
+                  : 'text-emerald-300 bg-emerald-500/10 border-emerald-500/25'
+            }`}>
+              {libConflicts.length > 0 ? `${libConflicts.length} issues` : 'Clean'}
+            </span>
+            <button
+              type="button"
+              onClick={() => void runLibraryConflictScan()}
+              disabled={libScanning}
+              className="px-2 py-0.5 rounded border border-white/[0.08] bg-[#171b23] text-[11px] text-slate-300 hover:text-white cursor-pointer disabled:opacity-50"
+            >
+              {libScanning ? 'Scanning…' : 'Scan'}
+            </button>
+          </div>
+        </div>
+        {libConflicts.length === 0 ? (
+          <div className="text-[11px] text-emerald-300/90 flex items-center gap-2 bg-emerald-500/5 p-2.5 rounded border border-emerald-500/20">
+            <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>No collisions across workspace wares, jobs, XML patches, or local library XMLs.</span>
+          </div>
+        ) : (
+          <div className="space-y-1.5 max-h-60 overflow-y-auto scrollbar-thin pr-1">
+            {libConflicts.map(w => (
+              <div
+                key={w.id}
+                className={`p-2 rounded border text-[11px] leading-snug space-y-1 ${
+                  w.severity === 'error'
+                    ? 'bg-red-500/5 border-red-500/25 text-red-200'
+                    : 'bg-amber-500/5 border-amber-500/25 text-amber-200'
+                }`}
+              >
+                <div className="font-semibold flex items-center justify-between gap-2">
+                  <span className="truncate">{w.title}</span>
+                  <span className="font-mono text-[11px] text-slate-400 shrink-0">{w.category.replace('_', ' ')}</span>
+                </div>
+                <p className="text-slate-300">{w.message}</p>
+                <div className="font-mono text-[11px] text-slate-400 truncate" title={w.location}>{w.location}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       {/* INSTALL DIAGNOSTICS — cross-mod conflicts (was "Extension Doctor") */}
-      {showInstall && (
-      <div className="bg-[#12141a]/90 border border-white/5 rounded-lg p-3 space-y-2.5 shrink-0">
-        <div className="flex items-center justify-between border-b border-white/5 pb-2">
-          <div className="flex items-center gap-1.5 text-slate-300 font-semibold tracking-tight text-[11px]">
-            <Boxes className="w-4 h-4 text-cyan-400" />
-            INSTALL DIAGNOSTICS
+      <div className="bg-[#11141a] border border-white/[0.08] rounded-lg p-3 space-y-2.5 shrink-0">
+        <div className="flex items-center justify-between border-b border-white/[0.08] pb-2">
+          <div className="flex items-center gap-1.5 text-slate-200 font-semibold tracking-tight text-[11px]">
+            <Boxes className="w-4 h-4 text-blue-400" />
+            Installed Extensions
           </div>
           {extScan && (
-            <span className="text-[9px] font-bold text-slate-400 bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/20">
+            <span className="text-[11px] font-mono font-semibold text-slate-300 bg-blue-500/10 px-2 py-0.5 rounded border border-blue-500/25">
               {extScan.extensionsScanned} MODS
             </span>
           )}
         </div>
-        <p className="text-[9.5px] text-slate-400 font-sans leading-normal">
-          Scans every installed extension for missing dependencies, duplicate ids, and cross-mod file/patch conflicts.
+        <p className="text-[11px] text-slate-400 leading-normal">
+          Scans every installed extension for missing dependencies, duplicate IDs, and cross-mod file/patch conflicts.
         </p>
         <button
           onClick={runExtensionScan}
           disabled={extScanning}
-          className="w-full flex items-center justify-center gap-2 text-xs font-semibold text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 px-3 py-2 rounded-md border border-cyan-500/30 cursor-pointer uppercase transition-all disabled:opacity-50"
+          className="w-full flex items-center justify-center gap-2 text-xs font-semibold text-blue-200 bg-blue-500/15 hover:bg-blue-500/25 px-3 py-2 rounded-md border border-blue-500/35 cursor-pointer transition-colors disabled:opacity-50"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${extScanning ? 'animate-spin' : ''}`} />
           {extScanning ? 'Scanning Extensions...' : 'Scan Installed Extensions'}
         </button>
 
         {extError && (
-          <div className="text-red-300 text-[10px] bg-red-500/5 border border-red-500/20 rounded p-2 font-sans">{extError}</div>
+          <div className="text-red-300 text-[11px] bg-red-500/10 border border-red-500/25 rounded p-2">{extError}</div>
         )}
 
         {extScan && (
           <>
-            <div className="grid grid-cols-3 gap-2 text-[10px] font-bold">
-              <div className="flex items-center gap-1.5 text-slate-200 bg-red-500/10 p-1.5 rounded border border-red-500/20">
+            <div className="grid grid-cols-3 gap-2 text-[11px] font-semibold">
+              <div className="flex items-center gap-1.5 text-slate-200 bg-red-500/10 p-1.5 rounded border border-red-500/25">
                 <span className="w-2 h-2 rounded-full bg-red-500 block shrink-0" /> {extScan.counts?.error ?? 0} Err
               </div>
-              <div className="flex items-center gap-1.5 text-slate-200 bg-amber-500/10 p-1.5 rounded border border-amber-500/20">
+              <div className="flex items-center gap-1.5 text-slate-200 bg-amber-500/10 p-1.5 rounded border border-amber-500/25">
                 <span className="w-2 h-2 rounded-full bg-amber-500 block shrink-0" /> {extScan.counts?.warning ?? 0} Warn
               </div>
-              <div className="flex items-center gap-1.5 text-slate-200 bg-blue-500/10 p-1.5 rounded border border-blue-500/20">
+              <div className="flex items-center gap-1.5 text-slate-200 bg-blue-500/10 p-1.5 rounded border border-blue-500/25">
                 <span className="w-2 h-2 rounded-full bg-blue-500 block shrink-0" /> {extScan.counts?.info ?? 0} Info
               </div>
             </div>
-            <div className="space-y-2.5 font-sans max-h-[52vh] overflow-y-auto scrollbar-thin pr-1 select-text">
+            <div className="space-y-2.5 max-h-[52vh] overflow-y-auto scrollbar-thin pr-1 select-text">
               {(!extScan.findings || extScan.findings.length === 0) ? (
-                <div className="text-emerald-400/90 text-[10px] flex items-center gap-2 bg-emerald-500/5 p-3 rounded-lg border border-emerald-500/10 font-medium">
+                <div className="text-emerald-300 text-[11px] flex items-center gap-2 bg-emerald-500/5 p-3 rounded-lg border border-emerald-500/20 font-medium">
                   <CheckCircle className="w-5 h-5 text-emerald-400 shrink-0" />
                   No cross-mod conflicts across {extScan.enabledCount} enabled extensions.
                 </div>
@@ -639,12 +708,12 @@ export default function PackageModDoctor({
                   <AlertTriangle className="w-4 h-4 shrink-0 mt-1" />
                   <div className="space-y-2 min-w-0 flex-1">
                     <div className="flex items-start gap-2">
-                      <span className="font-mono font-bold tracking-tight text-white uppercase block text-[9px] leading-tight break-all flex-1">
+                      <span className="font-mono font-semibold text-white block text-[11px] leading-tight break-all flex-1">
                         [{f.severity}] {f.code}
                       </span>
                       <button
                         onClick={() => copyExtensionFinding(f)}
-                        className="select-none flex items-center gap-1 font-mono text-[9px] text-slate-300 bg-black/30 hover:bg-white/10 px-1.5 py-1 rounded border border-white/10 cursor-pointer transition-all shrink-0"
+                        className="select-none flex items-center gap-1 font-mono text-[11px] text-slate-300 bg-[#0a0c10] hover:bg-white/10 px-1.5 py-1 rounded border border-white/[0.08] cursor-pointer transition-colors shrink-0"
                         title="Copy finding text"
                       >
                         <Copy className="w-3 h-3" />
@@ -652,7 +721,7 @@ export default function PackageModDoctor({
                       </button>
                     </div>
                     {f.filePath && (
-                      <span className="font-mono text-[10px] text-slate-200 block bg-black/35 px-2 py-1 rounded border border-white/5 break-all">{f.filePath}</span>
+                      <span className="font-mono text-[11px] text-slate-200 block bg-[#0a0c10] px-2 py-1 rounded border border-white/[0.08] break-all">{f.filePath}</span>
                     )}
                     <p className="text-slate-200 leading-relaxed whitespace-pre-wrap break-words">{f.message}</p>
                     {Array.isArray(f.openTargets) && f.openTargets.length > 0 && (
@@ -663,7 +732,7 @@ export default function PackageModDoctor({
                             onClick={() => openExtensionFile(t.path)}
                             disabled={extFileLoading !== null}
                             title={t.path}
-                            className="select-none flex items-center gap-1 font-mono text-[10px] text-cyan-200 bg-cyan-500/10 hover:bg-cyan-500/20 px-2 py-1 rounded border border-cyan-500/25 cursor-pointer transition-all disabled:opacity-50 max-w-full"
+                            className="select-none flex items-center gap-1 font-mono text-[11px] text-blue-200 bg-blue-500/10 hover:bg-blue-500/20 px-2 py-1 rounded border border-blue-500/25 cursor-pointer transition-colors disabled:opacity-50 max-w-full"
                           >
                             <FileCode className={`w-3 h-3 shrink-0 ${extFileLoading === t.path ? 'animate-pulse' : ''}`} />
                             <span className="break-all text-left">{t.label || t.path}</span>
@@ -676,10 +745,10 @@ export default function PackageModDoctor({
                         onClick={() => openOverrideMap(f.filePath)}
                         disabled={ovLoading !== null}
                         title={`Per-element override map for ${f.filePath}: who rewrites what, who wins`}
-                        className="select-none flex items-center gap-1 font-mono text-[10px] text-fuchsia-300 bg-fuchsia-500/10 hover:bg-fuchsia-500/20 px-2 py-1 rounded border border-fuchsia-500/25 cursor-pointer transition-all disabled:opacity-50 mt-1"
+                        className="select-none flex items-center gap-1 font-mono text-[11px] text-fuchsia-300 bg-fuchsia-500/10 hover:bg-fuchsia-500/20 px-2 py-1 rounded border border-fuchsia-500/25 cursor-pointer transition-colors disabled:opacity-50 mt-1"
                       >
-                        <Layers className={`w-2.5 h-2.5 shrink-0 ${ovLoading === f.filePath ? 'animate-pulse' : ''}`} />
-                        OVERRIDE MAP
+                        <Layers className={`w-3 h-3 shrink-0 ${ovLoading === f.filePath ? 'animate-pulse' : ''}`} />
+                        Override Map
                       </button>
                     )}
                   </div>
@@ -687,15 +756,15 @@ export default function PackageModDoctor({
               ))}
             </div>
             {extFileError && (
-              <div className="text-red-300 text-[10px] bg-red-500/5 border border-red-500/20 rounded p-2 font-sans">{extFileError}</div>
+              <div className="text-red-300 text-[11px] bg-red-500/10 border border-red-500/25 rounded p-2">{extFileError}</div>
             )}
             {ovError && (
-              <div className="text-red-300 text-[10px] bg-red-500/5 border border-red-500/20 rounded p-2 font-sans">{ovError}</div>
+              <div className="text-red-300 text-[11px] bg-red-500/10 border border-red-500/25 rounded p-2">{ovError}</div>
             )}
           </>
         )}
       </div>
-      )}
+      </>)}
 
       {/* Read-only extension file viewer modal */}
       {extFile && (
@@ -704,24 +773,24 @@ export default function PackageModDoctor({
           onClick={() => setExtFile(null)}
         >
           <div
-            className="bg-[#0d0f14] border border-cyan-500/25 rounded-lg shadow-2xl w-full max-w-3xl max-h-[80vh] flex flex-col min-h-0"
+            className="bg-[#11141a] border border-blue-500/25 rounded-lg shadow-2xl w-full max-w-3xl max-h-[80vh] flex flex-col min-h-0"
             onClick={e => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-white/10 shrink-0">
+            <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-white/[0.08] shrink-0">
               <div className="flex items-center gap-2 min-w-0">
-                <FileCode className="w-4 h-4 text-cyan-400 shrink-0" />
+                <FileCode className="w-4 h-4 text-blue-400 shrink-0" />
                 <span className="font-mono text-[11px] text-slate-200 font-semibold truncate" title={extFile.path}>{extFile.path}</span>
-                <span className="text-[8px] font-bold text-slate-400 bg-cyan-500/10 px-1.5 py-0.5 rounded border border-cyan-500/20 shrink-0 uppercase">Read-only</span>
+                <span className="text-[11px] font-medium text-slate-300 bg-blue-500/10 px-1.5 py-0.5 rounded border border-blue-500/20 shrink-0">Read-only</span>
               </div>
               <button
                 onClick={() => setExtFile(null)}
-                className="text-slate-400 hover:text-white p-1 rounded hover:bg-white/10 transition-all shrink-0 cursor-pointer"
+                className="text-slate-400 hover:text-white p-1 rounded hover:bg-white/10 transition-colors shrink-0 cursor-pointer"
                 title="Close"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <pre className="flex-1 overflow-auto scrollbar-thin font-mono text-[10.5px] leading-relaxed text-slate-300 p-4 whitespace-pre min-h-0 select-text">
+            <pre className="flex-1 overflow-auto scrollbar-thin font-mono text-[11px] leading-relaxed text-slate-300 p-4 whitespace-pre min-h-0 select-text">
               {extFile.content}
             </pre>
           </div>
@@ -735,71 +804,69 @@ export default function PackageModDoctor({
           onClick={() => setOvMap(null)}
         >
           <div
-            className="bg-[#0d0f14] border border-fuchsia-500/25 rounded-lg shadow-2xl w-full max-w-3xl max-h-[80vh] flex flex-col min-h-0"
+            className="bg-[#11141a] border border-fuchsia-500/25 rounded-lg shadow-2xl w-full max-w-3xl max-h-[80vh] flex flex-col min-h-0"
             onClick={e => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-white/10 shrink-0">
+            <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-white/[0.08] shrink-0">
               <div className="flex items-center gap-2 min-w-0">
                 <Layers className="w-4 h-4 text-fuchsia-400 shrink-0" />
                 <span className="font-mono text-[11px] text-slate-200 font-semibold truncate" title={ovMap.targetFile}>{ovMap.targetFile}</span>
                 <span
-                  className={`text-[8px] font-bold px-1.5 py-0.5 rounded border shrink-0 uppercase ${ovMap.resolution === 'base' ? 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20' : 'text-amber-300 bg-amber-500/10 border-amber-500/25'}`}
-                  title={ovMap.resolution === 'base' ? 'Node identity resolved against the real vanilla file (loose or packed .cat/.dat)' : 'Vanilla content unavailable — entries grouped by selector string only (T4.1 VFS will sharpen this)'}
+                  className={`text-[11px] font-medium px-1.5 py-0.5 rounded border shrink-0 ${ovMap.resolution === 'base' ? 'text-emerald-300 bg-emerald-500/10 border-emerald-500/25' : 'text-amber-300 bg-amber-500/10 border-amber-500/25'}`}
+                  title={ovMap.resolution === 'base' ? 'Node identity resolved against the real vanilla file (loose or packed .cat/.dat)' : 'Vanilla content unavailable — entries grouped by selector string only'}
                 >
-                  {ovMap.resolution === 'base' ? 'BASE-RESOLVED' : 'SELECTOR-STRING'}
+                  {ovMap.resolution === 'base' ? 'Base-Resolved' : 'Selector-String'}
                 </span>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
-                {/* B13b2: jump straight into Diff→Patch pre-targeted at this file — the
-                    natural next move after seeing who rewrites what. */}
                 <button
                   data-testid="override-map-to-diffpatch"
                   onClick={() => {
                     window.dispatchEvent(new CustomEvent('xmlpatch-pretarget', { detail: { targetFile: ovMap.targetFile } }));
                     setOvMap(null);
                   }}
-                  className="px-2 py-1 rounded bg-fuchsia-600/30 border border-fuchsia-400/30 hover:bg-fuchsia-600/50 text-fuchsia-100 text-[9px] font-mono font-bold cursor-pointer"
+                  className="px-2.5 py-1 rounded bg-fuchsia-600/30 border border-fuchsia-400/35 hover:bg-fuchsia-600/50 text-fuchsia-100 text-[11px] font-mono font-semibold cursor-pointer"
                   title="Open the XML Patching workbench with Diff→Patch pre-targeted at this file."
                 >
                   DIFF→PATCH
                 </button>
                 <button
                   onClick={() => setOvMap(null)}
-                  className="text-slate-400 hover:text-white p-1 rounded hover:bg-white/10 transition-all shrink-0 cursor-pointer"
+                  className="text-slate-400 hover:text-white p-1 rounded hover:bg-white/10 transition-colors shrink-0 cursor-pointer"
                   title="Close"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
             </div>
-            <div className="px-4 py-2 border-b border-white/5 shrink-0 font-mono text-[9px] text-slate-400 flex flex-wrap items-center gap-1">
+            <div className="px-4 py-2 border-b border-white/[0.08] shrink-0 font-mono text-[11px] text-slate-400 flex flex-wrap items-center gap-1">
               LOAD ORDER:
               {(ovMap.loadOrder || []).map((m: string, i: number) => (
                 <React.Fragment key={m}>
-                  {i > 0 && <span className="text-slate-600">→</span>}
-                  <span className="text-slate-300 bg-black/35 px-1 py-0.5 rounded border border-white/5">{m}</span>
+                  {i > 0 && <span className="text-slate-500">→</span>}
+                  <span className="text-slate-200 bg-[#0a0c10] px-1.5 py-0.5 rounded border border-white/[0.08]">{m}</span>
                 </React.Fragment>
               ))}
-              <span className="ml-auto text-slate-500">
+              <span className="ml-auto text-slate-400">
                 {ovMap.counts?.contested ?? 0} contested · {ovMap.counts?.merged ?? 0} merged · {ovMap.counts?.single ?? 0} single
               </span>
             </div>
-            <div className="flex-1 overflow-auto scrollbar-thin p-3 space-y-2 min-h-0 font-sans">
+            <div className="flex-1 overflow-auto scrollbar-thin p-3 space-y-2 min-h-0">
               {(ovMap.entries || []).length === 0 ? (
-                <div className="text-slate-400 text-[10px] p-3">No overriding claims found for this file.</div>
+                <div className="text-slate-400 text-[11px] p-3">No overriding claims found for this file.</div>
               ) : (ovMap.entries || []).map((e, i) => (
                 <div
                   key={i}
-                  className={`p-2.5 rounded-lg border text-[10px] space-y-1.5 ${e.contested ? 'bg-red-500/5 border-red-500/20' : e.merged ? 'bg-emerald-500/5 border-emerald-500/15' : 'bg-white/[0.02] border-white/5'}`}
+                  className={`p-2.5 rounded-lg border text-[11px] space-y-1.5 ${e.contested ? 'bg-red-500/5 border-red-500/25' : e.merged ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-[#0a0c10] border-white/[0.08]'}`}
                 >
                   <div className="flex items-center gap-2 min-w-0">
-                    <span className="font-mono text-[10px] text-slate-200 font-semibold truncate" title={e.node}>{e.node}</span>
-                    <span className="text-[7.5px] font-bold uppercase text-slate-400 bg-black/35 px-1 py-0.5 rounded border border-white/5 shrink-0">{e.kind}</span>
+                    <span className="font-mono text-slate-200 font-semibold truncate" title={e.node}>{e.node}</span>
+                    <span className="text-[11px] font-medium text-slate-300 bg-[#171b23] px-1.5 py-0.5 rounded border border-white/[0.08] shrink-0">{e.kind}</span>
                     {e.contested && (
-                      <span className="text-[7.5px] font-bold uppercase text-red-300 bg-red-500/10 px-1 py-0.5 rounded border border-red-500/25 shrink-0" title="2+ mods, at least one replace/remove/full-file — load order decides">CONTESTED</span>
+                      <span className="text-[11px] font-semibold text-red-300 bg-red-500/10 px-1.5 py-0.5 rounded border border-red-500/25 shrink-0" title="2+ mods, at least one replace/remove/full-file — load order decides">Contested</span>
                     )}
                     {e.merged && (
-                      <span className="text-[7.5px] font-bold uppercase text-emerald-300 bg-emerald-500/10 px-1 py-0.5 rounded border border-emerald-500/20 shrink-0" title="add+add — X4 merges appends, low risk">MERGED</span>
+                      <span className="text-[11px] font-semibold text-emerald-300 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/25 shrink-0" title="add+add — X4 merges appends, low risk">Merged</span>
                     )}
                   </div>
                   <div className="flex flex-wrap items-center gap-1">
@@ -807,13 +874,13 @@ export default function PackageModDoctor({
                       <span
                         key={j}
                         title={c.sel}
-                        className={`font-mono text-[8.5px] px-1.5 py-0.5 rounded border ${c.folder === e.winner ? 'text-fuchsia-200 bg-fuchsia-500/15 border-fuchsia-500/30' : 'text-slate-300 bg-black/35 border-white/10'}`}
+                        className={`font-mono text-[11px] px-1.5 py-0.5 rounded border ${c.folder === e.winner ? 'text-fuchsia-200 bg-fuchsia-500/15 border-fuchsia-500/35' : 'text-slate-300 bg-[#171b23] border-white/[0.08]'}`}
                       >
                         {c.folder}:{c.op}
                       </span>
                     ))}
-                    <span className="flex items-center gap-1 font-mono text-[8.5px] text-fuchsia-300 ml-auto shrink-0" title="Loaded last — this mod's change survives">
-                      <Crown className="w-2.5 h-2.5" /> {e.winner}
+                    <span className="flex items-center gap-1 font-mono text-[11px] text-fuchsia-300 ml-auto shrink-0" title="Loaded last — this mod's change survives">
+                      <Crown className="w-3 h-3" /> {e.winner}
                     </span>
                   </div>
                 </div>
@@ -830,20 +897,20 @@ export default function PackageModDoctor({
           diagnosticSource === 'checking' ? (
             <p role="status" className="p-3 text-xs text-slate-300">Checking project…</p>
           ) : diagnosticSource === 'local' ? (
-            <div className="text-amber-300/90 text-[10.5px] leading-normal flex flex-col items-center justify-center text-center gap-2 bg-amber-500/5 p-4 rounded-lg border border-amber-500/20 font-sans font-medium h-32">
-              <AlertTriangle className="w-7 h-7 text-amber-400 shrink-0 mb-1" />
-              <span className="font-mono font-bold uppercase text-[9px] text-amber-300 tracking-wider">Schema Check Offline</span>
-              <span>The game-schema validation didn't run (backend reloading). This is <b>not</b> a clean-schema confirmation — only local heuristics ran. It re-checks automatically.</span>
+            <div className="text-amber-300 text-[11px] leading-normal flex flex-col items-center justify-center text-center gap-2 bg-amber-500/5 p-4 rounded-lg border border-amber-500/25 font-medium">
+              <AlertTriangle className="w-6 h-6 text-amber-400 shrink-0" />
+              <span className="font-mono font-semibold text-amber-200">Schema Check Offline</span>
+              <span>The game-schema validation didn&apos;t run (backend reloading). This is <b>not</b> a clean-schema confirmation — only local heuristics ran. It re-checks automatically.</span>
             </div>
           ) : (
-            <div className="text-emerald-400/90 text-[10.5px] leading-normal flex flex-col items-center justify-center text-center gap-2 bg-emerald-500/5 p-4 rounded-lg border border-emerald-500/10 font-sans font-medium h-32">
-              <CheckCircle className="w-7 h-7 text-emerald-400 shrink-0 mb-1" />
-              <span className="font-mono font-bold uppercase text-[9px] text-emerald-300 tracking-wider">Mod Status Clean</span>
+            <div className="text-emerald-300 text-[11px] leading-normal flex flex-col items-center justify-center text-center gap-2 bg-emerald-500/5 p-4 rounded-lg border border-emerald-500/20 font-medium">
+              <CheckCircle className="w-6 h-6 text-emerald-400 shrink-0" />
+              <span className="font-mono font-semibold text-emerald-200">Mod Status Clean</span>
               <span>The current mod passes the available X4 schemas, corpus references, script-property, and cross-file checks.</span>
             </div>
           )
         ) : (
-          <div className="space-y-3 font-sans" data-testid="diagnostic-findings">
+          <div className="space-y-3" data-testid="diagnostic-findings">
             <div role="group" aria-label="Diagnostic filters" className="flex flex-wrap gap-2">
               <input
                 ref={findingSearch}
@@ -852,13 +919,13 @@ export default function PackageModDoctor({
                 placeholder="Search findings"
                 value={findingQuery}
                 onChange={event => { setFindingQuery(event.target.value); setFindingPage(0); }}
-                className="min-w-0 flex-1 rounded border border-white/15 bg-slate-950 px-2 py-1.5 text-xs text-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+                className="min-w-0 flex-1 rounded border border-white/[0.08] bg-[#11141a] px-2.5 py-1.5 text-xs text-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-400"
               />
               <select
                 aria-label="Filter diagnostics"
                 value={findingFilter}
                 onChange={event => { setFindingFilter(event.target.value as FindingFilter); setFindingPage(0); }}
-                className="rounded border border-white/15 bg-slate-950 px-2 py-1.5 text-xs text-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+                className="rounded border border-white/[0.08] bg-[#11141a] px-2 py-1.5 text-xs text-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-400"
               >
                 <option value="all">All findings</option>
                 <option value="error">Errors</option>
@@ -875,7 +942,7 @@ export default function PackageModDoctor({
                 {matches.length !== diagnostics.length && ` · ${diagnostics.length} total`}
               </p>
               {(findingFilter !== 'all' || findingQuery) && (
-                <button type="button" onClick={clearFindingFilters} className="rounded px-1 py-1 text-cyan-300 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400">
+                <button type="button" onClick={clearFindingFilters} className="rounded px-1 py-1 text-blue-300 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-400 cursor-pointer">
                   Clear filters
                 </button>
               )}
@@ -887,7 +954,7 @@ export default function PackageModDoctor({
                   aria-label="Previous findings"
                   disabled={currentFindingPage === 0}
                   onClick={() => setFindingPage(currentFindingPage - 1)}
-                  className="rounded border border-white/15 px-2 py-1 enabled:hover:border-cyan-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 disabled:opacity-40"
+                  className="rounded border border-white/[0.08] px-2 py-1 enabled:hover:border-blue-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-400 disabled:opacity-40 cursor-pointer"
                 >
                   Previous
                 </button>
@@ -897,7 +964,7 @@ export default function PackageModDoctor({
                   aria-label="Next findings"
                   disabled={currentFindingPage === lastFindingPage}
                   onClick={() => setFindingPage(currentFindingPage + 1)}
-                  className="rounded border border-white/15 px-2 py-1 enabled:hover:border-cyan-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400 disabled:opacity-40"
+                  className="rounded border border-white/[0.08] px-2 py-1 enabled:hover:border-blue-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-400 disabled:opacity-40 cursor-pointer"
                 >
                   Next
                 </button>
@@ -905,11 +972,11 @@ export default function PackageModDoctor({
             )}
             {[...findingsByFile].map(([file, rows]) => (
               <div key={file ?? ''} className="space-y-2">
-                <h3 title={file} className="truncate px-1 font-mono text-[10px] text-slate-300">{file || 'Project'}</h3>
+                <h3 title={file} className="truncate px-1 font-mono text-[11px] text-slate-300">{file || 'Project'}</h3>
                 {rows.map(({ finding: diag, key }) => {
                   const itemStyle = diag.severity === 'error'
-                    ? 'bg-red-500/5 text-red-350 border-red-500/20'
-                    : (diag.severity === 'warning' ? 'bg-amber-500/5 text-amber-300 border-amber-500/25' : 'bg-blue-500/5 text-blue-300 border-blue-500/20');
+                    ? 'bg-red-500/5 text-red-200 border-red-500/25'
+                    : (diag.severity === 'warning' ? 'bg-amber-500/5 text-amber-200 border-amber-500/25' : 'bg-blue-500/5 text-blue-200 border-blue-500/25');
                   const source = diag.sourceRef;
                   const sourceLabel = source && `Source: ${[source.kind, source.label, source.id].filter(Boolean).join(' / ')}`;
                   const graph = checking ? undefined : graphSourceForFinding(diag, workspace);
@@ -922,21 +989,21 @@ export default function PackageModDoctor({
                     <div
                       key={key}
                       data-testid="diagnostic-finding"
-                      className={`p-2.5 rounded-lg border text-[10.5px] leading-relaxed flex items-start gap-2 ${itemStyle}`}
+                      className={`p-2.5 rounded-lg border text-[11px] leading-relaxed flex items-start gap-2 ${itemStyle}`}
                     >
-                      <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-500" />
-                      <div className="min-w-0 space-y-1">
-                        <span className="font-mono font-bold tracking-tight text-white uppercase block text-[8px] leading-none mb-1">
+                      <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-400" />
+                      <div className="min-w-0 space-y-1 flex-1">
+                        <span className="font-mono font-semibold text-white block text-[11px] leading-snug">
                           [{diag.coverageGap ? 'Coverage gap' : diag.severity}] {diag.domain ? `${diag.domain.toUpperCase()} / ` : ''}{diag.code || diag.category.toUpperCase()}
                           {diag.line !== undefined && ` · line ${diag.line}`}
                           {diag.line !== undefined && diag.column !== undefined && `:${diag.column}`}
                         </span>
-                        <p className="text-slate-300 leading-normal [overflow-wrap:anywhere]">{diag.message}</p>
+                        <p className="text-slate-200 leading-normal [overflow-wrap:anywhere]">{diag.message}</p>
                         {jump ? (
                           <button
                             type="button"
                             onClick={() => window.dispatchEvent(new CustomEvent('navigate-to-source', { detail: jump }))}
-                            className="mt-1 block rounded px-1 py-0.5 text-left font-mono text-[9px] text-cyan-300 [overflow-wrap:anywhere] hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+                            className="mt-1 block rounded px-1 py-0.5 text-left font-mono text-[11px] text-blue-300 [overflow-wrap:anywhere] hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-400 cursor-pointer"
                           >
                             {diag.sourceNavigation?.status === 'ready' && diag.sourceNavigation.nodeId
                               ? 'Go to canvas node' : sourceLabel ?? 'Go to canvas node'}
@@ -948,12 +1015,12 @@ export default function PackageModDoctor({
                               const sent = openInNativeEditor(native.path, native, native.sourceFolder, native.sha256);
                               setSourceMessage({ key, text: sent ? 'Native editor request sent.' : 'Open Forge in Antigravity to jump to this source.' });
                             }}
-                            className="mt-1 block rounded px-1 py-0.5 text-left font-mono text-[9px] text-cyan-300 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-400"
+                            className="mt-1 block rounded px-1 py-0.5 text-left font-mono text-[11px] text-blue-300 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-400 cursor-pointer"
                           >
                             Open source at line {native.line + 1}
                           </button>
                         ) : sourceLabel && (
-                          <span className="mt-1 block font-mono text-[9px] text-slate-300 [overflow-wrap:anywhere]">{sourceLabel}</span>
+                          <span className="mt-1 block font-mono text-[11px] text-slate-300 [overflow-wrap:anywhere]">{sourceLabel}</span>
                         )}
                         {sourceMessage?.key === key && !checking && <p role="status">{sourceMessage.text}</p>}
                         {!jump && diagnosticSource === 'project' && diag.sourceNavigation?.status === 'unavailable'

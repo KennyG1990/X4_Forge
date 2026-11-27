@@ -3,8 +3,7 @@ import DeployValidationSummary from './DeployValidationSummary';
 import DeployFileChanges from './DeployFileChanges';
 import React, { useState } from 'react';
 import type { ModWorkspace } from '../types';
-import ReleaseCenter from './ReleaseCenter';
-import { DEFAULT_RELEASE_PREFERENCES, type ReleasePreferences } from '../lib/releasePreferences';
+import { getAIHeaders, handleApiResponse } from '../lib/apiHelper';
 import { fetchPollingJson } from '../lib/continuousPolling';
 import { useContinuousPolling } from '../lib/useContinuousPolling';
 import {
@@ -12,15 +11,16 @@ import {
   type RuntimeDebuggerPayload,
 } from '../lib/runtimeDebuggerView';
 import { openInNativeEditor } from '../lib/nativeEditor';
-import { 
-  Folder, 
-  Terminal, 
-  Upload, 
-  Sparkles, 
-  CheckCircle, 
-  RefreshCw, 
-  Wrench, 
-  Cpu
+import {
+  Folder,
+  Terminal,
+  Upload,
+  Sparkles,
+  CheckCircle,
+  RefreshCw,
+  Wrench,
+  Cpu,
+  PackageCheck,
 } from 'lucide-react';
 
 interface LogIssue {
@@ -221,7 +221,7 @@ function RuntimeDebuggerPanel({
     return (
       <article
         key={`${row.key}-${index}`}
-        className={`space-y-1.5 rounded border p-1.5 text-[9px] leading-tight ${rowTone} ${actionable ? 'cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/80 focus-visible:ring-offset-1 focus-visible:ring-offset-slate-950' : ''}`}
+        className={`space-y-1.5 rounded-md border p-2 text-[11px] leading-snug ${rowTone} ${actionable ? 'cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/80 focus-visible:ring-offset-1 focus-visible:ring-offset-[#0c0e12]' : ''}`}
         data-testid={`runtime-incident-${index}`}
         data-navigation-kind={navigationTarget?.kind}
         {...(actionable ? {
@@ -242,7 +242,7 @@ function RuntimeDebuggerPanel({
       >
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <div className={`font-mono font-bold ${row.severity === 'error' ? 'text-red-300' : row.severity === 'info' ? 'text-cyan-300' : 'text-amber-300'}`}>
+            <div className={`font-mono font-semibold ${row.severity === 'error' ? 'text-red-300' : row.severity === 'info' ? 'text-cyan-300' : 'text-amber-300'}`}>
               {row.severity === 'error' ? 'ERROR' : row.severity === 'warning' ? 'WARNING' : 'ACTIVITY'} · {row.dispositionLabel}
             </div>
             <div className="break-words font-mono text-slate-200" title={row.key}>{primaryMessage}</div>
@@ -255,7 +255,7 @@ function RuntimeDebuggerPanel({
 
         <div className="flex flex-wrap items-center gap-1 font-mono">
           <span className="truncate text-cyan-200" title={row.mapping.reason}>{sourceLabel}</span>
-          {navigationTarget && <span className="ml-auto rounded border border-cyan-500/40 bg-cyan-500/10 px-1 py-0.5 text-cyan-200">{navigationTarget.actionLabel} ↗</span>}
+          {navigationTarget && <span className="ml-auto rounded border border-cyan-500/40 bg-cyan-500/10 px-1.5 py-0.5 text-cyan-200">{navigationTarget.actionLabel} ↗</span>}
         </div>
 
         {row.unresolved && (
@@ -264,26 +264,26 @@ function RuntimeDebuggerPanel({
           </div>
         )}
 
-        <details className="rounded border border-white/10 bg-black/20 p-1 font-mono" data-testid={`runtime-incident-details-${index}`}>
-          <summary className="cursor-pointer text-slate-500">incident details · cause, attribution, evidence</summary>
+        <details className="rounded border border-white/[0.08] bg-[#0a0c10] p-1.5 font-mono text-[11px]" data-testid={`runtime-incident-details-${index}`}>
+          <summary className="cursor-pointer text-slate-400">incident details · cause, attribution, evidence</summary>
           <div className="mt-1 space-y-1 text-slate-300">
-            <div><span className="text-slate-500">SUMMARY · </span>{row.summary}</div>
-            <div><span className="text-slate-500">CAUSE · </span>{row.cause}</div>
-            <div><span className="text-slate-500">IMPACT · </span>{row.impact}</div>
-            <div><span className="text-slate-500">NEXT ACTION · </span>{row.nextAction}</div>
-            <div><span className="text-slate-500">ATTRIBUTION · </span>{row.attributionReason}</div>
-            <div className="rounded border border-white/10 bg-black/20 p-1">
-              <div className="text-slate-500">EVIDENCE · {row.evidenceLabel}</div>
+            <div><span className="text-slate-400">SUMMARY · </span>{row.summary}</div>
+            <div><span className="text-slate-400">CAUSE · </span>{row.cause}</div>
+            <div><span className="text-slate-400">IMPACT · </span>{row.impact}</div>
+            <div><span className="text-slate-400">NEXT ACTION · </span>{row.nextAction}</div>
+            <div><span className="text-slate-400">ATTRIBUTION · </span>{row.attributionReason}</div>
+            <div className="rounded border border-white/[0.08] bg-[#0c0e12] p-1.5">
+              <div className="text-slate-400">EVIDENCE · {row.evidenceLabel}</div>
               {row.evidence.map((evidence, evidenceIndex) => <div key={`${evidence}-${evidenceIndex}`} className="truncate" title={evidence}>· {evidence}</div>)}
             </div>
-            <div className="rounded border border-white/10 bg-black/20 p-1">
-              <div className="text-slate-500">SOURCE MAPPING · {row.mapping.mappingLabel}</div>
+            <div className="rounded border border-white/[0.08] bg-[#0c0e12] p-1.5">
+              <div className="text-slate-400">SOURCE MAPPING · {row.mapping.mappingLabel}</div>
               <div title={row.mapping.reason}>{row.mapping.locationLabel}</div>
-              <div className="text-slate-500">{row.mapping.reason}</div>
+              <div className="text-slate-400">{row.mapping.reason}</div>
             </div>
             {row.samples.length > 0 && (
-              <div className="rounded border border-white/10 bg-black/20 p-1">
-                <div className="text-slate-500">SAMPLES · {row.samples.length}</div>
+              <div className="rounded border border-white/[0.08] bg-[#0c0e12] p-1.5">
+                <div className="text-slate-400">SAMPLES · {row.samples.length}</div>
                 {row.samples.map((sample, sampleIndex) => (
                   <pre key={`${sample.lineLabel}-${sampleIndex}`} className="mt-1 whitespace-pre-wrap break-words text-slate-300">{sample.lineLabel}: {sample.text}</pre>
                 ))}
@@ -296,64 +296,64 @@ function RuntimeDebuggerPanel({
   };
 
   return (
-    <div className="mt-2 space-y-2 rounded border border-cyan-500/25 bg-cyan-500/5 p-2" data-testid="runtime-debugger-panel">
+    <div className="mt-2 space-y-2.5 rounded-md border border-cyan-500/25 bg-[#0e131b] p-2.5 text-[11px]" data-testid="runtime-debugger-panel">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="truncate text-[9px] font-mono uppercase tracking-wider text-cyan-200" title={view.authority.displayName}>
+          <div className="truncate text-[11px] font-medium text-cyan-200" title={view.authority.displayName}>
             Runtime Debugger · {view.authority.displayName}
           </div>
-          <div className="mt-0.5 text-[10px] leading-tight text-slate-200" data-testid="runtime-debugger-status">
+          <div className="mt-0.5 text-[11px] leading-snug text-slate-200" data-testid="runtime-debugger-status">
             {statusSummary}
           </div>
-          <div className="mt-1 flex flex-wrap gap-x-2 gap-y-0.5 text-[9px] font-mono text-slate-400">
+          <div className="mt-1 flex flex-wrap gap-x-2.5 gap-y-0.5 text-[11px] font-mono text-slate-400">
             <span>{confirmedIssueOccurrences} confirmed issue{confirmedIssueOccurrences === 1 ? '' : 's'}</span>
             <span>{unresolvedIssueOccurrences} unresolved</span>
             <span>{activityOccurrences} activity</span>
             <span>{view.hiddenOtherModCount} unrelated hidden</span>
           </div>
         </div>
-        <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[9px] font-mono font-bold ${sessionTone}`}>
+        <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[11px] font-mono font-semibold ${sessionTone}`}>
           {view.session.stateLabel}
         </span>
       </div>
 
       {nativeEditorMessage && (
-        <div className="rounded border border-amber-500/30 bg-amber-500/5 p-1.5 text-[9px] font-mono text-amber-200" aria-live="polite" data-testid="runtime-debugger-native-editor-status">
+        <div className="rounded border border-amber-500/30 bg-amber-500/5 p-2 text-[11px] font-mono text-amber-200" aria-live="polite" data-testid="runtime-debugger-native-editor-status">
           {nativeEditorMessage}
         </div>
       )}
 
       <div className="space-y-1.5" data-testid="runtime-debugger-incidents">
-        <div className="flex items-center justify-between gap-2 text-[9px] font-mono uppercase tracking-wider text-slate-500">
-          <span>Confirmed errors & unresolved issues</span>
-          <span>{confirmedEngineErrorEntries.length} confirmed · {unresolvedIssueEntries.length} unresolved{view.omittedIncidentCount > 0 ? ` · +${view.omittedIncidentCount} bounded` : ''}</span>
+        <div className="flex items-center justify-between gap-2 text-[11px] font-medium text-slate-400">
+          <span>Confirmed errors &amp; unresolved issues</span>
+          <span className="font-mono">{confirmedEngineErrorEntries.length} confirmed · {unresolvedIssueEntries.length} unresolved{view.omittedIncidentCount > 0 ? ` · +${view.omittedIncidentCount} bounded` : ''}</span>
         </div>
         <div className="space-y-1.5" data-testid="runtime-debugger-active-issues">
           {issueEntries.length === 0 ? (
-            <div className="rounded border border-white/10 bg-black/20 p-1.5 text-[9px] font-mono leading-tight text-slate-400">
+            <div className="rounded border border-white/[0.08] bg-[#0a0c10] p-2 text-[11px] leading-snug text-slate-400">
               {view.noCandidateMessage || 'No active-mod errors or warnings are shown; absence is not clean proof.'}
             </div>
           ) : issueEntries.map(renderIncidentRow)}
         </div>
       </div>
 
-      <details className="rounded border border-white/10 bg-black/20 p-1.5 text-[9px] font-mono text-slate-300" data-testid="runtime-debugger-expected-steps">
+      <details className="rounded border border-white/[0.08] bg-[#0a0c10] p-2 text-[11px] font-mono text-slate-300" data-testid="runtime-debugger-expected-steps">
         <summary className="cursor-pointer">
           Expected flow / cue health · {observedExpectedSteps} observed · {missingExpectedSteps} missing · {unavailableExpectedSteps} unavailable
         </summary>
         {view.expectedSteps.length === 0 ? (
-          <div className="mt-1 text-slate-500">No declared expected steps.</div>
+          <div className="mt-1 text-slate-400">No declared expected steps.</div>
         ) : (
-          <div className="mt-1 grid grid-cols-1 gap-1">
+          <div className="mt-1.5 grid grid-cols-1 gap-1">
             {view.expectedSteps.map(step => (
-              <div key={step.id} className={`flex items-start gap-1.5 rounded border p-1 ${step.truth === 'observed' ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-200' : step.truth === 'missing' ? 'border-amber-500/30 bg-amber-500/5 text-amber-200' : 'border-slate-500/30 bg-slate-500/5 text-slate-300'}`}>
+              <div key={step.id} className={`flex items-start gap-1.5 rounded border p-1.5 ${step.truth === 'observed' ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-200' : step.truth === 'missing' ? 'border-amber-500/30 bg-amber-500/5 text-amber-200' : 'border-slate-500/30 bg-slate-500/5 text-slate-300'}`}>
                 <span className="w-3 shrink-0 text-center">{step.truth === 'observed' ? '✓' : step.truth === 'missing' ? '!' : '—'}</span>
                 <span className="min-w-0 flex-1">
                   <span className="font-bold">{step.truthLabel}</span> <span className="break-words">{step.label}</span>
                   {step.evidence.length > 0 && (
-                    <details className="mt-0.5 rounded border border-white/10 bg-black/20 p-1">
-                      <summary className="cursor-pointer text-slate-500">step evidence</summary>
-                      <div className="mt-0.5 truncate text-slate-400" title={step.evidence.join(' · ')}>{step.evidence.join(' · ')}</div>
+                    <details className="mt-1 rounded border border-white/[0.08] bg-[#0c0e12] p-1">
+                      <summary className="cursor-pointer text-slate-400">step evidence</summary>
+                      <div className="mt-0.5 truncate text-slate-300" title={step.evidence.join(' · ')}>{step.evidence.join(' · ')}</div>
                     </details>
                   )}
                 </span>
@@ -364,8 +364,8 @@ function RuntimeDebuggerPanel({
       </details>
 
       {activityEntries.length > 0 && (
-        <details className="rounded border border-cyan-500/20 bg-cyan-500/5 p-1.5" data-testid="runtime-debugger-activity">
-          <summary className="cursor-pointer text-[9px] font-mono text-cyan-200">
+        <details className="rounded border border-cyan-500/20 bg-cyan-500/5 p-2 text-[11px]" data-testid="runtime-debugger-activity">
+          <summary className="cursor-pointer font-mono text-cyan-200">
             Activity / runtime evidence · {activityOccurrences} event{activityOccurrences === 1 ? '' : 's'} · {activityEntries.length} group{activityEntries.length === 1 ? '' : 's'}
           </summary>
           <div className="mt-1.5 space-y-1.5">{activityEntries.map(renderIncidentRow)}</div>
@@ -373,18 +373,18 @@ function RuntimeDebuggerPanel({
       )}
 
       {(brief || (timeline && timeline.length > 0) || (expectedChain && expectedChain.length > 0) || artifact) && (
-        <details className="rounded border border-white/10 bg-black/20 p-1.5 text-[9px] font-mono text-slate-300" data-testid="runtime-debugger-advanced">
+        <details className="rounded border border-white/[0.08] bg-[#0a0c10] p-2 text-[11px] font-mono text-slate-300" data-testid="runtime-debugger-advanced">
           <summary className="cursor-pointer text-cyan-200">Advanced watcher details</summary>
-          {brief && <div className="mt-1 leading-tight">{brief}</div>}
+          {brief && <div className="mt-1 leading-snug">{brief}</div>}
           {expectedChain && expectedChain.length > 0 && (
             <div className="mt-1 flex flex-wrap gap-1">
-              {expectedChain.map(step => <span key={step.step} className={`rounded border px-1 py-0.5 ${step.seen ? 'border-emerald-500/30 text-emerald-300' : 'border-amber-500/30 text-amber-300'}`}>{step.seen ? '✓' : '·'} {step.step}</span>)}
+              {expectedChain.map(step => <span key={step.step} className={`rounded border px-1.5 py-0.5 ${step.seen ? 'border-emerald-500/30 text-emerald-300' : 'border-amber-500/30 text-amber-300'}`}>{step.seen ? '✓' : '·'} {step.step}</span>)}
             </div>
           )}
           {timeline && timeline.length > 0 && (
             <div className="mt-1 space-y-1">
               {timeline.slice(-8).map((item, index) => (
-                <div key={`${item.lineNumber}-${index}`} className="grid grid-cols-[70px_1fr] gap-2 leading-tight">
+                <div key={`${item.lineNumber}-${index}`} className="grid grid-cols-[78px_1fr] gap-2 leading-snug">
                   <span className={item.severity === 'error' ? 'text-red-300' : item.severity === 'warning' ? 'text-amber-300' : 'text-cyan-300'}>{item.kind}{item.lineNumber ? `:${item.lineNumber}` : ''}</span>
                   <span className="truncate" title={item.evidence}>{item.evidence}</span>
                 </div>
@@ -392,16 +392,16 @@ function RuntimeDebuggerPanel({
             </div>
           )}
           {artifact && (
-            <details className="mt-1 rounded border border-white/10 bg-black/20 p-1">
+            <details className="mt-1 rounded border border-white/[0.08] bg-[#0c0e12] p-1.5">
               <summary className="cursor-pointer text-cyan-300">copyable agent artifact</summary>
-              <pre className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap text-[9px] leading-tight text-slate-300">{artifact}</pre>
+              <pre className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap text-[11px] leading-snug text-slate-300">{artifact}</pre>
             </details>
           )}
         </details>
       )}
 
-      <details className="rounded border border-white/10 bg-black/20 p-1.5 text-[9px] font-mono text-slate-300" data-testid="runtime-debugger-session-detail">
-        <summary className="cursor-pointer text-slate-300">Session & workspace details · {view.session.stateLabel}</summary>
+      <details className="rounded border border-white/[0.08] bg-[#0a0c10] p-2 text-[11px] font-mono text-slate-300" data-testid="runtime-debugger-session-detail">
+        <summary className="cursor-pointer text-slate-300">Session &amp; workspace details · {view.session.stateLabel}</summary>
         <div className="mt-1 grid grid-cols-2 gap-x-2 gap-y-1">
           <span className="col-span-2 truncate" title={view.authority.workspaceId}>workspace authority: {view.authority.workspaceId}</span>
           {view.authority.contentId && <span className="truncate" title={view.authority.contentId}>content: {view.authority.contentId}</span>}
@@ -416,10 +416,10 @@ function RuntimeDebuggerPanel({
         </div>
         <div className="mt-1 text-slate-300">SESSION EVIDENCE · {view.session.detail}</div>
         {view.session.resetReason && <div className="mt-0.5 text-amber-300">reset: {view.session.resetReason}</div>}
-        {view.noCandidateMessage && <div className="mt-1 rounded border border-amber-500/25 bg-amber-500/5 p-1 text-amber-200">{view.noCandidateMessage}</div>}
+        {view.noCandidateMessage && <div className="mt-1 rounded border border-amber-500/25 bg-amber-500/5 p-1.5 text-amber-200">{view.noCandidateMessage}</div>}
       </details>
 
-      <details className={`rounded border p-1.5 text-[9px] font-mono ${coverageTone}`} data-testid="runtime-debugger-coverage">
+      <details className={`rounded border p-2 text-[11px] font-mono ${coverageTone}`} data-testid="runtime-debugger-coverage">
         <summary className="cursor-pointer">Coverage · {view.coverage.statusLabel} · {view.coverage.targetLabel}</summary>
         <div className="mt-1 space-y-1 text-slate-200">
           <div>{view.coverage.arithmeticLabel}</div>
@@ -432,19 +432,11 @@ function RuntimeDebuggerPanel({
 
 interface PlaytestWorkspaceProps {
   workspace: ModWorkspace;
+  setWorkspace?: React.Dispatch<React.SetStateAction<ModWorkspace>>;
+  saveCheckpoint?: (customTarget?: ModWorkspace) => void;
   activeModId: string;
   modWorkspacePath: string;
-  logInput: string;
-  setLogInput: (text: string) => void;
-  diagnosingLogs: boolean;
-  logAnalysis: LogAnalysisResult | null;
-  diagnosticError: string | null;
-  successfulFixApplied: string | null;
-  handleTriggerLogAnalysis: () => Promise<void>;
-  insertDemoX4Log: () => void;
-  handleLogFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
-  handleApplyAutoFix: (fix: any) => void;
-  releasePreferences?: ReleasePreferences;
+  onOpenReleaseCenter?: () => void;
 }
 
 type PlaytestDeployResult = DeployReviewData & {
@@ -458,20 +450,88 @@ type PlaytestDeployResult = DeployReviewData & {
 
 export default function PlaytestWorkspace({
   workspace,
+  setWorkspace,
+  saveCheckpoint,
   activeModId,
   modWorkspacePath,
-  logInput,
-  setLogInput,
-  diagnosingLogs,
-  logAnalysis,
-  diagnosticError,
-  successfulFixApplied,
-  handleTriggerLogAnalysis,
-  insertDemoX4Log,
-  handleLogFileChange,
-  handleApplyAutoFix,
-  releasePreferences = DEFAULT_RELEASE_PREFERENCES,
+  onOpenReleaseCenter,
 }: PlaytestWorkspaceProps) {
+  const [logInput, setLogInput] = useState<string>('');
+  const [diagnosingLogs, setDiagnosingLogs] = useState<boolean>(false);
+  const [logAnalysis, setLogAnalysis] = useState<LogAnalysisResult | null>(null);
+  const [diagnosticError, setDiagnosticError] = useState<string | null>(null);
+  const [successfulFixApplied, setSuccessfulFixApplied] = useState<string | null>(null);
+
+  const handleTriggerLogAnalysis = async () => {
+    if (!logInput.trim()) return;
+    setDiagnosingLogs(true);
+    setDiagnosticError(null);
+    try {
+      const response = await fetch('/api/gemini/analyze-log', {
+        method: 'POST',
+        headers: getAIHeaders(),
+        body: JSON.stringify({ workspace, logs: logInput }),
+      });
+      const data = await handleApiResponse(response, 'Log parsing request rejected.');
+      setLogAnalysis(data.analysis);
+    } catch (err: any) {
+      console.error(err);
+      setDiagnosticError(err?.message || 'Failed to analyze X4 script logs.');
+    } finally {
+      setDiagnosingLogs(false);
+    }
+  };
+
+  const handleApplyAutoFix = (fix: LogIssue['autoFix']) => {
+    if (!fix || !setWorkspace || !saveCheckpoint) return;
+    if (fix.type === 'update_node_property' && fix.nodeId && fix.propertyKey) {
+      saveCheckpoint();
+      setWorkspace(prev => ({
+        ...prev,
+        nodes: prev.nodes.map(n =>
+          n.id === fix.nodeId
+            ? { ...n, properties: { ...n.properties, [fix.propertyKey]: fix.propertyValue } }
+            : n,
+        ),
+      }));
+      setSuccessfulFixApplied(`Successfully repaired property '${fix.propertyKey}' to '${fix.propertyValue}'!`);
+      setTimeout(() => setSuccessfulFixApplied(null), 4000);
+      if (logAnalysis) {
+        setLogAnalysis(prev => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            issues: prev.issues.filter(issue => issue.autoFix?.nodeId !== fix.nodeId || issue.autoFix?.propertyKey !== fix.propertyKey),
+          };
+        });
+      }
+    }
+  };
+
+  const insertDemoX4Log = () => {
+    const demoText = `### ====================================================================
+### SAMPLE / DEMO LOG — this is EXAMPLE text to show the parser format.
+### It is NOT from your game and contains NO real errors about your mod.
+### Use "Browse debug.log" or the auto-watcher to see your actual X4 log.
+### ====================================================================
+[General] 0000.00: ==========================================
+[General] 0000.00: X4: Foundations vX.XX (000000)
+[General] 0000.00: Command Line: -debug all -logfile uidata.log -reloaddirector
+[General] 0000.00: ==========================================
+[MD Engine] Error: Parsing XML file extensions\\Demo_Sample_Mod\\md\\demo_sample_mod.xml
+*** Context:md.Demo_Sample_Cue: cue has active state but 'instantiate' attribute is currently 'false'. Re-instantiation will fail on game reloads!
+[MD Engine] Warning: Property 'faction' has unrecognized faction code 'DEMO_FACTION' in cue 'Demo_Sample_Cue'. X4 standard code is 'argon'.`;
+    setLogInput(demoText);
+  };
+
+  const handleLogFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = evt => setLogInput((evt.target?.result as string) || '');
+    reader.readAsText(file);
+  };
+
   const [gameLogStatus, setGameLogStatus] = useState<GameLogStatus | null>(null);
   const [gameLogLoading, setGameLogLoading] = useState<boolean>(false);
   const [gameLogError, setGameLogError] = useState<string>('');
@@ -656,13 +716,13 @@ export default function PlaytestWorkspace({
         : 'border-white/10 bg-slate-900/35 text-slate-300';
 
   return (
-    <div className="p-4 space-y-5 font-sans select-text">
+    <div className="p-3 space-y-4 font-sans select-text bg-[#0c0e12]">
       
-      {/* Deployment and release preparation */}
-      <div className="bg-black/55 border border-white/10 p-4 rounded-xl space-y-4">
-        <div className="flex items-start justify-between">
+      {/* Deployment & Vanilla UI verification */}
+      <div className="bg-[#11141a] border border-white/[0.08] p-3.5 rounded-lg space-y-3.5">
+        <div className="flex items-start justify-between gap-2">
           <div className="space-y-1">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-white font-mono flex items-center gap-2">
+            <h3 className="text-xs font-semibold text-[#eef2f7] flex items-center gap-2">
               <Folder className="w-4 h-4 text-emerald-400" />
               X4 Deployment
             </h3>
@@ -672,25 +732,25 @@ export default function PlaytestWorkspace({
           </div>
           
           {modWorkspacePath ? (
-            <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-mono text-[9px] font-bold flex items-center gap-1 shrink-0">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-              WORKSPACE SET
+            <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-mono text-[11px] font-medium flex items-center gap-1.5 shrink-0">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+              Workspace Set
             </span>
           ) : (
-            <span className="px-2 py-0.5 rounded bg-red-500/10 text-slate-400 border border-white/10 font-mono text-[9px] font-bold flex items-center gap-1 shrink-0">
-              WORKSPACE UNSET
+            <span className="px-2 py-0.5 rounded bg-white/[0.04] text-slate-400 border border-white/[0.08] font-mono text-[11px] font-medium flex items-center gap-1 shrink-0">
+              Workspace Unset
             </span>
           )}
         </div>
 
         {modWorkspacePath ? (
           <div className="space-y-3">
-            <div className="p-2.5 bg-[#0a0c10] border border-white/5 rounded-md font-mono text-[10px] text-slate-300 break-all">
+            <div className="p-2 bg-[#0a0c10] border border-white/[0.08] rounded-md font-mono text-[11px] text-slate-300 break-all">
               Mod Workspace · {modWorkspacePath}
             </div>
-            <p className="text-[10px] text-slate-400">Deploy keeps a build copy under .forge-builds/loose in the Mod Workspace.</p>
+            <p className="text-[11px] text-slate-400">Deploy keeps a build copy under .forge-builds/loose in the Mod Workspace.</p>
 
-            <div className="pt-2 border-t border-white/5 space-y-1.5">
+            <div className="pt-2.5 border-t border-white/[0.08] space-y-2">
               <div className="flex items-center gap-2">
                 <input
                   type="text"
@@ -700,22 +760,22 @@ export default function PlaytestWorkspace({
                   aria-label="Mod folder relative to Mod Workspace, or blank for current canvas"
                   placeholder="Workspace folder or blank for canvas"
                   data-testid="verify-path-input"
-                  className="min-w-0 flex-1 px-2 py-1 bg-[#08090d] border border-white/10 text-slate-200 rounded font-mono text-[10px] focus:outline-none focus:border-cyan-500"
+                  className="min-w-0 flex-1 px-2.5 py-1.5 bg-[#0a0c10] border border-white/[0.08] text-slate-200 rounded font-mono text-[11px] focus:outline-none focus:border-blue-500"
                 />
                 <button
                   type="button"
                   onClick={() => void requestDeploy('preview')}
                   disabled={deployPhase !== null || !workspaceId}
                   data-testid="deploy-verify-btn"
-                  className="px-3 py-1 bg-cyan-500 hover:bg-cyan-600 disabled:opacity-40 font-sans text-black font-bold text-[10px] rounded transition-all whitespace-nowrap"
+                  className="px-3 py-1.5 bg-blue-500 hover:bg-blue-400 disabled:opacity-40 font-sans text-white font-semibold text-[11px] rounded transition-colors whitespace-nowrap cursor-pointer"
                 >
                   {deployPhase === 'preview' ? 'Previewing…' : 'Preview deployment'}
                 </button>
               </div>
-              <p className="break-all text-[10px] text-slate-300">Source · {sourcePath ? `Mod Workspace / ${sourcePath}` : `Current canvas / ${workspace.name}`}</p>
-              {deployPhase === 'apply' && <p role="status" className="text-[10px] text-slate-300">Deploying and verifying…</p>}
+              <p className="break-all text-[11px] text-slate-300">Source · {sourcePath ? `Mod Workspace / ${sourcePath}` : `Current canvas / ${workspace.name}`}</p>
+              {deployPhase === 'apply' && <p role="status" className="text-[11px] text-slate-300">Deploying and verifying…</p>}
               {verifyResult && (
-                <div data-testid="verify-result" className="rounded border border-slate-600 bg-slate-900/50 p-2 text-[10px] font-mono leading-relaxed">
+                <div data-testid="verify-result" className="rounded border border-white/[0.08] bg-[#0a0c10] p-2.5 text-[11px] font-mono leading-relaxed">
                   <DeployValidationSummary result={verifyResult} />
                   {reviewedDeploy && (
                     <div className="mt-2 space-y-1.5 rounded border border-cyan-500/25 p-2">
@@ -725,7 +785,7 @@ export default function PlaytestWorkspace({
                         type="button"
                         onClick={() => void requestDeploy('apply')}
                         data-testid="deploy-apply-btn"
-                        className="px-3 py-1 bg-cyan-500 hover:bg-cyan-600 font-sans text-black font-bold text-[10px] rounded"
+                        className="px-3 py-1.5 bg-cyan-500 hover:bg-cyan-400 font-sans text-slate-950 font-semibold text-[11px] rounded cursor-pointer"
                       >
                         Deploy + Verify
                       </button>
@@ -738,7 +798,7 @@ export default function PlaytestWorkspace({
                           <span className={
                             c.status === 'pass' ? 'text-emerald-400' :
                             c.status === 'warn' ? 'text-amber-400' :
-                            c.status === 'fail' ? 'text-red-400' : 'text-slate-600'
+                            c.status === 'fail' ? 'text-red-400' : 'text-slate-500'
                           }>
                             {c.status === 'pass' ? '●' : c.status === 'warn' ? '▲' : c.status === 'fail' ? '✗' : '○'}
                           </span>
@@ -758,18 +818,18 @@ export default function PlaytestWorkspace({
             </div>
 
             {/* Vanilla-UI reference: validate our UI schema against REAL game menus harvested from the .cat/.dat. */}
-            <div className="pt-2 border-t border-white/5 space-y-1.5">
+            <div className="pt-2.5 border-t border-white/[0.08] space-y-1.5">
               <button
                 onClick={harvestVanillaUi}
                 disabled={harvesting}
                 data-testid="vanilla-ui-harvest-btn"
-                className="w-full px-3 py-1 bg-violet-500 hover:bg-violet-600 disabled:opacity-40 font-sans text-black font-bold text-[10px] rounded transition-all"
+                className="w-full px-3 py-1.5 bg-violet-500/20 hover:bg-violet-500/30 border border-violet-500/40 disabled:opacity-40 font-sans text-violet-100 font-semibold text-[11px] rounded transition-colors cursor-pointer"
               >
                 {harvesting ? 'Harvesting…' : 'Harvest Vanilla UI Reference'}
               </button>
               {harvestResult && !harvestResult.error && (
-                <div data-testid="vanilla-ui-result" className="rounded border border-violet-500/40 bg-violet-500/5 p-1.5 text-[9px] font-mono leading-tight text-violet-100">
-                  <div className="font-bold">✓ {harvestResult.menusProfiled} vanilla menus profiled (scanned {harvestResult.scanned})</div>
+                <div data-testid="vanilla-ui-result" className="rounded border border-violet-500/35 bg-violet-500/10 p-2 text-[11px] font-mono leading-snug text-violet-100">
+                  <div className="font-semibold">✓ {harvestResult.menusProfiled} vanilla menus profiled (scanned {harvestResult.scanned})</div>
                   {(harvestResult.evidence || []).map((ev: any) => (
                     <div key={ev.element} className={ev.universal ? 'text-emerald-300' : 'text-amber-300'}>
                       {ev.element}: {ev.presentIn}/{ev.total} {ev.universal ? '· universal' : '· NOT universal'}
@@ -778,35 +838,55 @@ export default function PlaytestWorkspace({
                 </div>
               )}
               {harvestResult?.error && (
-                <div className="rounded border border-red-500/40 bg-red-500/5 p-1.5 text-[9px] font-mono text-red-200">{harvestResult.error}</div>
+                <div className="rounded border border-red-500/40 bg-red-500/10 p-2 text-[11px] font-mono text-red-200">{harvestResult.error}</div>
               )}
             </div>
           </div>
         ) : (
-          <div className="space-y-3">
-            <p className="text-[10px] text-slate-500 leading-relaxed italic">
+          <div className="space-y-2">
+            <p className="text-[11px] text-slate-400 leading-relaxed">
               Set the Mod Workspace Folder in Settings to preview deployments.
             </p>
           </div>
         )}
 
-        {/* Release preparation must remain discoverable even when the deploy/staging folder is
-            unconfigured. Its own staged response explains the exact source/output failure. */}
-        <ReleaseCenter workspace={workspace} preferences={releasePreferences} />
+        {/* Single-owner Release Center handoff -> Project -> Release */}
+        <div
+          data-testid="playtest-release-handoff"
+          className="pt-2.5 border-t border-white/[0.08] flex items-center justify-between gap-2 text-[11px]"
+        >
+          <div className="min-w-0">
+            <div className="font-semibold text-slate-200 flex items-center gap-1.5">
+              <PackageCheck className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+              <span>Release Center</span>
+            </div>
+            <div className="text-slate-400 truncate">Package verified Nexus ZIP or Steam Workshop archives in Project → Release.</div>
+          </div>
+          {onOpenReleaseCenter && (
+            <button
+              type="button"
+              data-testid="playtest-open-release-btn"
+              onClick={onOpenReleaseCenter}
+              className="shrink-0 px-2.5 py-1.5 rounded-md border border-blue-500/40 bg-blue-500/15 hover:bg-blue-500/25 text-[11px] font-medium text-blue-100 cursor-pointer transition-colors"
+            >
+              Open Release →
+            </button>
+          )}
+        </div>
 
       </div>
 
       {/* ERROR LOADER & DEBUG FILE INPUT TRIGGER */}
-      <div className="bg-black/55 border border-white/10 p-4 rounded-xl space-y-4">
+      <div className="bg-[#11141a] border border-white/[0.08] p-3.5 rounded-lg space-y-3.5">
         <div className="space-y-1">
-          <h3 className="text-xs font-bold uppercase tracking-wider text-white font-mono flex items-center justify-between">
+          <h3 className="text-xs font-semibold text-[#eef2f7] flex items-center justify-between">
             <span className="flex items-center gap-2">
               <Terminal className="w-4 h-4 text-cyan-400" />
               Game Debug Log Watcher
             </span>
-            <button 
+            <button
               onClick={insertDemoX4Log}
-              className="text-[9px] bg-cyan-900/40 hover:bg-cyan-900/75 border border-cyan-500/20 px-2 py-0.5 rounded text-cyan-400 font-bold transition-all shrink-0 cursor-pointer font-sans"
+              className="text-[11px] bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.08] px-2 py-0.5 rounded text-cyan-300 font-medium transition-colors shrink-0 cursor-pointer"
             >
               Load Demo Log
             </button>
@@ -828,24 +908,24 @@ export default function PlaytestWorkspace({
         <div data-testid="playtest-game-log-status" className={`rounded-lg border p-3 space-y-2 ${gameLogTone}`}>
           <div className="flex items-center justify-between gap-3">
             <div className="space-y-0.5 min-w-0">
-              <div className="font-mono text-[9px] uppercase font-black tracking-wider text-white" title="Reflects only this mod's entries in the X4 debug log — not whether the mod is deployed, loaded in-game, or schema-valid.">
+              <div className="font-mono text-[11px] font-semibold text-white" title="Reflects only this mod's entries in the X4 debug log — not whether the mod is deployed, loaded in-game, or schema-valid.">
                 Active-Mod Log Status: {gameLogError ? 'UNAVAILABLE' : gameLogStatus ? (GAME_LOG_STATUS_LABELS[gameLogStatus.status] || gameLogStatus.status) : 'CHECKING'}
               </div>
-              <p className="text-[10px] leading-relaxed text-slate-300">
+              <p className="text-[11px] leading-relaxed text-slate-300">
                 {gameLogError || gameLogStatus?.summary || 'Reading recent debuglog.txt output...'}
               </p>
             </div>
             <button
               onClick={refreshGameLogStatus}
               disabled={gameLogLoading}
-              className="px-2 py-1 bg-black/30 border border-white/10 rounded font-mono text-[9px] text-slate-200 hover:text-white disabled:opacity-50 flex items-center gap-1 shrink-0 cursor-pointer"
+              className="px-2 py-1 bg-[#0a0c10] border border-white/[0.08] rounded font-mono text-[11px] text-slate-200 hover:text-white disabled:opacity-50 flex items-center gap-1 shrink-0 cursor-pointer"
             >
               <RefreshCw className={`w-3 h-3 ${gameLogLoading ? 'animate-spin' : ''}`} />
-              REFRESH
+              Refresh
             </button>
           </div>
 
-          <div className="grid grid-cols-2 gap-2 text-[9px] font-mono text-slate-400">
+          <div className="grid grid-cols-2 gap-2 text-[11px] font-mono text-slate-400">
             <span className="truncate" title={activeModId}>MOD: {activeModId}</span>
             <span className="truncate" title={gameLogStatus?.selectedLogPath || ''}>
               LOG: {gameLogStatus?.selectedLogPath || 'not found'}
@@ -854,19 +934,16 @@ export default function PlaytestWorkspace({
             {gameLogStatus?.counts && <span>ACTIVE ISSUES: {gameLogStatus.counts.activeIssues}</span>}
           </div>
 
-          {/* CUE STATUS — RED for the mod's own cues that are THROWING ERRORS in the live log (tied
-              to the cue by name), GREEN for cues seen firing cleanly. Cue silence is NOT flagged —
-              a healthy mod that emits no debug markers logs nothing, so absence ≠ fault. */}
           {gameLogStatus?.cueLiveness && gameLogStatus.cueLiveness.totalCues > 0 && (
             <div className="mt-1 space-y-1" data-testid="cue-liveness">
-              <div className="flex items-center gap-2 text-[9px] font-mono">
-                <span className="text-slate-500">CUE STATUS</span>
+              <div className="flex items-center gap-2 text-[11px] font-mono">
+                <span className="text-slate-400">CUE STATUS</span>
                 {gameLogStatus.cueLiveness.erroringCount > 0 ? (
                   <span className="text-red-300">✗ {gameLogStatus.cueLiveness.erroringCount} cue(s) failing</span>
                 ) : gameLogStatus.cueLiveness.firingCount > 0 ? (
                   <span className="text-emerald-300">✓ {gameLogStatus.cueLiveness.firingCount} firing cleanly</span>
                 ) : (
-                  <span className="text-slate-500">no cue activity in tail</span>
+                  <span className="text-slate-400">no cue activity in tail</span>
                 )}
               </div>
               {gameLogStatus.cueLiveness.erroring && gameLogStatus.cueLiveness.erroring.length > 0 && (
@@ -877,7 +954,7 @@ export default function PlaytestWorkspace({
                       type="button"
                       onClick={() => window.dispatchEvent(new CustomEvent('navigate-to-source', { detail: { kind: 'cue', id: c.name } }))}
                       title={`${c.errors} error(s) in the log — click to jump to this cue on the canvas`}
-                      className="rounded px-1 py-0.5 text-[9px] font-mono border border-red-500/50 bg-red-500/15 text-red-300 cursor-pointer hover:bg-red-500/30 hover:border-red-400 transition-colors"
+                      className="rounded px-1.5 py-0.5 text-[11px] font-mono border border-red-500/50 bg-red-500/15 text-red-300 cursor-pointer hover:bg-red-500/30 hover:border-red-400 transition-colors"
                     >
                       {c.name} ✗{c.errors} ↗
                     </button>
@@ -890,7 +967,7 @@ export default function PlaytestWorkspace({
                     <span
                       key={c.name}
                       title={`${c.hits} fires`}
-                      className="rounded px-1 py-0.5 text-[9px] font-mono border border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+                      className="rounded px-1.5 py-0.5 text-[11px] font-mono border border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
                     >
                       {c.name} ✓{c.hits}
                     </span>
@@ -900,13 +977,10 @@ export default function PlaytestWorkspace({
             </div>
           )}
 
-          {/* RUNTIME ERRORS — genuine engine/Lua faults (e.g. GetComponentData: Invalid argument got cdata)
-              logged right next to the mod's own DebugError marker. These name no cue, so the cue panel can't
-              catch them; proximity to the mod's marker attributes them. RED = the mod is throwing in-game. */}
           {gameLogStatus?.modRuntime && gameLogStatus.modRuntime.errorCount > 0 && (
             <div className="mt-1 space-y-1" data-testid="mod-runtime-errors">
-              <div className="flex items-center gap-2 text-[9px] font-mono">
-                <span className="text-slate-500">RUNTIME</span>
+              <div className="flex items-center gap-2 text-[11px] font-mono">
+                <span className="text-slate-400">RUNTIME</span>
                 <span className="text-red-300">
                   ✗ {gameLogStatus.modRuntime.errorCount} engine error(s) next to mod marker
                   {gameLogStatus.modMarkers && gameLogStatus.modMarkers.length > 0 ? ` [${gameLogStatus.modMarkers.join('/')}]` : ''}
@@ -914,7 +988,7 @@ export default function PlaytestWorkspace({
               </div>
               <div className="space-y-1">
                 {gameLogStatus.modRuntime.samples.slice(0, 4).map((s, i) => (
-                  <pre key={i} className="whitespace-pre-wrap rounded border border-red-500/50 bg-red-500/15 p-1.5 text-[9px] leading-tight text-red-200 font-mono">
+                  <pre key={i} className="whitespace-pre-wrap rounded border border-red-500/50 bg-red-500/15 p-1.5 text-[11px] leading-snug text-red-200 font-mono">
                     {s}
                   </pre>
                 ))}
@@ -925,23 +999,21 @@ export default function PlaytestWorkspace({
           {gameLogStatus?.issues && gameLogStatus.issues.length > 0 && (
             <div className="space-y-1 max-h-28 overflow-y-auto scrollbar-thin">
               {gameLogStatus.issues.slice(-3).map((issue, index) => (
-                <pre key={`${issue.lineNumber}-${index}`} className="whitespace-pre-wrap rounded bg-black/35 border border-white/5 p-1.5 text-[9px] leading-tight text-slate-300 font-mono">
+                <pre key={`${issue.lineNumber}-${index}`} className="whitespace-pre-wrap rounded bg-[#0a0c10] border border-white/[0.08] p-1.5 text-[11px] leading-snug text-slate-300 font-mono">
                   [{issue.severity}] {issue.text}
                 </pre>
               ))}
             </div>
           )}
 
-          {/* A2 — deterministic root-cause layer (named hypotheses, NOT AI). In the
-              legacy fallback, pasted-trace results take precedence over live hypotheses. */}
           {(() => {
             const diag = pastedDiagnosis || gameLogStatus?.diagnosis;
             if (!diag) return null;
             return (
               <div className="mt-1 space-y-1.5" data-testid="log-diagnosis">
-                <div className="flex items-center gap-2 text-[9px] font-mono">
-                  <span className="text-slate-500">ROOT-CAUSE {pastedDiagnosis ? '(pasted)' : '(live)'}</span>
-                  <span className={diag.filesLoaded ? 'text-cyan-300' : 'text-slate-500'}>
+                <div className="flex items-center gap-2 text-[11px] font-mono">
+                  <span className="text-slate-400">ROOT-CAUSE {pastedDiagnosis ? '(pasted)' : '(live)'}</span>
+                  <span className={diag.filesLoaded ? 'text-cyan-300' : 'text-slate-400'}>
                     files {diag.filesLoaded ? 'loaded' : '—'}
                   </span>
                   <span className={diag.markersSeen ? 'text-emerald-300' : 'text-amber-300'}>
@@ -949,11 +1021,11 @@ export default function PlaytestWorkspace({
                   </span>
                 </div>
                 {diag.hypotheses.length === 0 ? (
-                  <div className="text-[9px] font-mono text-slate-500">No root-cause hypotheses for this mod.</div>
+                  <div className="text-[11px] font-mono text-slate-400">No root-cause hypotheses for this mod.</div>
                 ) : (
                   diag.hypotheses.map((h, i) => (
-                    <div key={`${h.code}-${i}`} className="rounded border border-amber-500/30 bg-amber-500/5 p-1.5 text-[9px] font-mono leading-tight">
-                      <div className="text-amber-300">{h.code} <span className="text-slate-500">· {h.confidence}</span></div>
+                    <div key={`${h.code}-${i}`} className="rounded border border-amber-500/30 bg-amber-500/5 p-2 text-[11px] font-mono leading-snug">
+                      <div className="text-amber-300">{h.code} <span className="text-slate-400">· {h.confidence}</span></div>
                       <div className="text-slate-300 mt-0.5">{h.explanation}</div>
                       <div className="text-cyan-300/90 mt-0.5">→ {h.suggestion}</div>
                     </div>
@@ -963,22 +1035,19 @@ export default function PlaytestWorkspace({
             );
           })()}
 
-          {/* Agent-facing watcher brief — the same deterministic endpoint external agents can call
-              headlessly. This is intentionally compact: sequence/proof first, raw log last. */}
           {debugBrief && !debugBrief.error && !debugBrief.runtimeDebugger && (
             <div className="mt-2 space-y-2 rounded border border-cyan-500/20 bg-cyan-500/5 p-2" data-testid="debug-watcher-brief">
-              <div className="flex items-center justify-between gap-2">
-                <div className="text-[9px] font-mono uppercase tracking-wider text-cyan-200">Agent Debug Brief</div>
-                <div className={debugBrief.sinceDeploy?.changedSinceDeploy ? 'text-[9px] font-mono text-emerald-300' : 'text-[9px] font-mono text-amber-300'}>
+              <div className="flex items-center justify-between gap-2 text-[11px] font-mono">
+                <div className="font-semibold text-cyan-200">Agent Debug Brief</div>
+                <div className={debugBrief.sinceDeploy?.changedSinceDeploy ? 'text-emerald-300' : 'text-amber-300'}>
                   {debugBrief.sinceDeploy?.changedSinceDeploy ? 'fresh since deploy' : 'stale / no deploy proof'}
                 </div>
               </div>
-              {/* B19s2: the server's one verdict — same field the guided rail renders. */}
               {debugBrief.verdict && (
                 <div
                   data-testid="watcher-verdict"
                   title={debugBrief.verdict.detail}
-                  className={`rounded border px-1.5 py-1 text-[9px] font-mono leading-tight ${
+                  className={`rounded border px-2 py-1 text-[11px] font-mono leading-snug ${
                     debugBrief.verdict.state === 'loaded_clean' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
                     : debugBrief.verdict.state === 'loaded_with_errors' ? 'border-red-500/40 bg-red-500/10 text-red-300'
                     : 'border-amber-500/30 bg-amber-500/5 text-amber-300'
@@ -988,18 +1057,18 @@ export default function PlaytestWorkspace({
                 </div>
               )}
               {debugBrief.sinceDeploy?.summary && (
-                <div className="text-[9px] font-mono text-slate-300 leading-tight">{debugBrief.sinceDeploy.summary}</div>
+                <div className="text-[11px] font-mono text-slate-300 leading-snug">{debugBrief.sinceDeploy.summary}</div>
               )}
 
               {debugBrief.expectedChain && debugBrief.expectedChain.length > 0 && (
                 <div className="space-y-1">
-                  <div className="text-[9px] font-mono text-slate-500">EXPECTED CHAIN</div>
+                  <div className="text-[11px] font-mono text-slate-400">EXPECTED CHAIN</div>
                   <div className="flex flex-wrap gap-1">
                     {debugBrief.expectedChain.map((step) => (
                       <span
                         key={step.step}
                         title={step.evidence || (step.seen ? 'seen in current log tail' : 'not seen in current log tail')}
-                        className={`rounded border px-1 py-0.5 text-[9px] font-mono ${step.seen ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-amber-500/30 bg-amber-500/10 text-amber-300'}`}
+                        className={`rounded border px-1.5 py-0.5 text-[11px] font-mono ${step.seen ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-amber-500/30 bg-amber-500/10 text-amber-300'}`}
                       >
                         {step.seen ? '✓' : '·'} {step.step}
                       </span>
@@ -1010,10 +1079,10 @@ export default function PlaytestWorkspace({
 
               {debugBrief.timeline && debugBrief.timeline.length > 0 && (
                 <div className="space-y-1">
-                  <div className="text-[9px] font-mono text-slate-500">RECENT HIGH-SIGNAL TIMELINE</div>
+                  <div className="text-[11px] font-mono text-slate-400">RECENT HIGH-SIGNAL TIMELINE</div>
                   <div className="max-h-24 space-y-1 overflow-y-auto scrollbar-thin">
                     {debugBrief.timeline.slice(-8).map((item, index) => (
-                      <div key={`${item.lineNumber}-${index}`} className="grid grid-cols-[70px_1fr] gap-2 text-[9px] font-mono leading-tight">
+                      <div key={`${item.lineNumber}-${index}`} className="grid grid-cols-[78px_1fr] gap-2 text-[11px] font-mono leading-snug">
                         <span className={item.severity === 'error' ? 'text-red-300' : item.severity === 'warning' ? 'text-amber-300' : 'text-cyan-300'}>
                           {item.kind}{item.lineNumber ? `:${item.lineNumber}` : ''}
                         </span>
@@ -1025,33 +1094,30 @@ export default function PlaytestWorkspace({
               )}
 
               {debugBrief.artifact && (
-                <details className="rounded border border-white/10 bg-black/20 p-1.5">
-                  <summary className="cursor-pointer text-[9px] font-mono text-cyan-300">copyable agent artifact</summary>
-                  <pre className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap text-[9px] leading-tight text-slate-300">{debugBrief.artifact}</pre>
+                <details className="rounded border border-white/[0.08] bg-[#0a0c10] p-1.5 text-[11px]">
+                  <summary className="cursor-pointer font-mono text-cyan-300">copyable agent artifact</summary>
+                  <pre className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap leading-snug text-slate-300">{debugBrief.artifact}</pre>
                 </details>
               )}
             </div>
           )}
           {debugBrief?.error && (
-            <div className="mt-2 rounded border border-red-500/30 bg-red-500/10 p-2 text-[9px] font-mono text-red-200">
+            <div className="mt-2 rounded border border-red-500/30 bg-red-500/10 p-2 text-[11px] font-mono text-red-200">
               Debug watcher brief failed: {debugBrief.error}
             </div>
           )}
         </div>
         )}
 
-          {/* B24s1 (ADR-F3): read-only game-state Inspector. Renders whatever FORGE-STATE
-              topics arrive in the debuglog tail — works with hand-authored probe cues today,
-              the B24s2 probe extension later. READ-ONLY by ADR constraint: no write path. */}
-          <div className="mt-2 space-y-2 rounded border border-violet-500/20 bg-violet-500/5 p-2" data-testid="forge-state-inspector">
-            <div className="flex items-center justify-between gap-2">
-              <div className="text-[9px] font-mono uppercase tracking-wider text-violet-200">Inspector — FORGE-STATE</div>
-              <div className={`text-[9px] font-mono ${forgeState?.live ? 'text-emerald-300' : 'text-slate-500'}`}>
+          <div className="mt-2 space-y-2 rounded border border-violet-500/20 bg-violet-500/5 p-2.5 text-[11px]" data-testid="forge-state-inspector">
+            <div className="flex items-center justify-between gap-2 font-mono">
+              <div className="font-semibold text-violet-200">Inspector — FORGE-STATE</div>
+              <div className={forgeState?.live ? 'text-emerald-300' : 'text-slate-400'}>
                 {forgeState?.live ? 'log live' : forgeState?.available ? 'log stale' : 'no log'}
               </div>
             </div>
             {(!forgeState || !forgeState.available || !forgeState.topics?.length) ? (
-              <div className="text-[9px] font-mono text-slate-500 leading-tight">
+              <div className="font-mono text-slate-400 leading-snug">
                 {forgeState?.error
                   ? `Inspector read failed: ${forgeState.error}`
                   : 'No FORGE-STATE topics in the current log tail. Emit one from any cue: '}
@@ -1062,21 +1128,19 @@ export default function PlaytestWorkspace({
             ) : (
               <div className="space-y-1 max-h-40 overflow-y-auto scrollbar-thin">
                 {forgeState.topics.map((t) => (
-                  <details key={t.topic} className="rounded border border-white/10 bg-black/20 p-1.5" data-testid={`forge-state-topic-${t.topic}`}>
-                    <summary className="cursor-pointer text-[9px] font-mono text-violet-300">
-                      {t.topic} <span className="text-slate-500">· line {t.lineNo} · {Object.keys((t.data as Record<string, unknown>) || {}).length} field(s)</span>
+                  <details key={t.topic} className="rounded border border-white/[0.08] bg-[#0a0c10] p-1.5" data-testid={`forge-state-topic-${t.topic}`}>
+                    <summary className="cursor-pointer font-mono text-violet-300">
+                      {t.topic} <span className="text-slate-400">· line {t.lineNo} · {Object.keys((t.data as Record<string, unknown>) || {}).length} field(s)</span>
                     </summary>
-                    <pre className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap text-[9px] leading-tight text-slate-300 select-text">{JSON.stringify(t.data, null, 2)}</pre>
+                    <pre className="mt-1 max-h-24 overflow-y-auto whitespace-pre-wrap leading-snug text-slate-300 select-text">{JSON.stringify(t.data, null, 2)}</pre>
                   </details>
                 ))}
                 {(forgeState.malformed ?? 0) > 0 && (
-                  <div className="text-[9px] font-mono text-amber-300">{forgeState.malformed} malformed FORGE-STATE line(s) ignored (bad JSON).</div>
+                  <div className="font-mono text-amber-300">{forgeState.malformed} malformed FORGE-STATE line(s) ignored (bad JSON).</div>
                 )}
               </div>
             )}
           </div>
-
-          {/* (NPC Identity Probe panel removed 2026-07-09 — one-off research rig, not product surface.) */}
 
         {/* LOG TEXTAREA BUFFER */}
         <div className="space-y-2">
@@ -1084,7 +1148,7 @@ export default function PlaytestWorkspace({
             value={logInput}
             onChange={(e) => setLogInput(e.target.value)}
             placeholder="Paste X4 Foundations debug trace here (e.g. cue failures, properties missing in extensions...)"
-            className="w-full h-32 p-2 bg-[#08090d] border border-white/10 text-emerald-400 rounded-md font-mono text-[10px] focus:outline-none focus:border-cyan-500 select-text leading-tight leading-relaxed"
+            className="w-full h-28 p-2.5 bg-[#0a0c10] border border-white/[0.08] text-emerald-300 rounded-md font-mono text-[11px] focus:outline-none focus:border-blue-500 select-text leading-relaxed"
           />
 
           <div className="flex items-center gap-2">
@@ -1093,25 +1157,24 @@ export default function PlaytestWorkspace({
               onClick={diagnosePastedTrace}
               disabled={diagnosingPasted || !logInput.trim()}
               data-testid="diagnose-trace-btn"
-              className="px-2 py-1 bg-cyan-600/20 border border-cyan-500/40 hover:bg-cyan-600/30 disabled:opacity-40 disabled:cursor-not-allowed text-[10px] font-mono text-cyan-200 rounded transition-all"
+              className="px-2.5 py-1 bg-cyan-600/20 border border-cyan-500/40 hover:bg-cyan-600/30 disabled:opacity-40 disabled:cursor-not-allowed text-[11px] font-mono text-cyan-200 rounded transition-colors cursor-pointer"
             >
               {diagnosingPasted ? 'Diagnosing…' : 'Diagnose trace (deterministic)'}
             </button>
             {pastedDiagnosis && (
-              <button type="button" onClick={() => setPastedDiagnosis(null)} className="text-[9px] font-mono text-slate-500 hover:text-slate-300">clear</button>
+              <button type="button" onClick={() => setPastedDiagnosis(null)} className="text-[11px] font-mono text-slate-400 hover:text-slate-200 cursor-pointer">clear</button>
             )}
           </div>
 
           <div className="flex items-center justify-between gap-3">
-            {/* File Upload Watcher Input */}
-            <label className="px-2 py-1 bg-slate-900 border border-white/10 hover:border-white/20 hover:bg-slate-800 text-[10px] font-mono text-slate-300 rounded cursor-pointer transition-all flex items-center gap-1.5">
-              <Upload className="w-3 h-3 text-cyan-400" />
+            <label className="px-2.5 py-1 bg-[#171b23] border border-white/[0.08] hover:border-white/20 text-[11px] font-mono text-slate-200 rounded cursor-pointer transition-colors flex items-center gap-1.5">
+              <Upload className="w-3.5 h-3.5 text-cyan-400" />
               <span>Browse debug.log</span>
-              <input 
-                type="file" 
-                accept=".log,.txt" 
-                className="hidden" 
-                onChange={handleLogFileChange} 
+              <input
+                type="file"
+                accept=".log,.txt"
+                className="hidden"
+                onChange={handleLogFileChange}
               />
             </label>
 
@@ -1119,27 +1182,27 @@ export default function PlaytestWorkspace({
               <button
                 onClick={handleTriggerLogAnalysis}
                 disabled={diagnosingLogs}
-                className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white font-mono font-bold text-[10px] rounded transition-all flex items-center gap-1 disabled:opacity-50 cursor-pointer"
+                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white font-medium text-[11px] rounded transition-colors flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
               >
                 <Sparkles className={`w-3.5 h-3.5 ${diagnosingLogs ? 'animate-spin' : ''}`} />
-                AI DIAGNOSE TRACES
+                AI Diagnose Traces
               </button>
             )}
           </div>
         </div>
 
         {debugBrief?.runtimeDebugger && pastedDiagnosis && (
-          <div className="mt-1 space-y-1.5 rounded border border-amber-500/30 bg-amber-500/5 p-2 text-[9px] font-mono" data-testid="pasted-log-diagnosis">
+          <div className="mt-1 space-y-1.5 rounded border border-amber-500/30 bg-amber-500/5 p-2 text-[11px] font-mono" data-testid="pasted-log-diagnosis">
             <div className="flex items-center gap-2">
-              <span className="text-slate-500">ROOT-CAUSE (pasted)</span>
-              <span className={pastedDiagnosis.filesLoaded ? 'text-cyan-300' : 'text-slate-500'}>files {pastedDiagnosis.filesLoaded ? 'loaded' : '—'}</span>
+              <span className="text-slate-400">ROOT-CAUSE (pasted)</span>
+              <span className={pastedDiagnosis.filesLoaded ? 'text-cyan-300' : 'text-slate-400'}>files {pastedDiagnosis.filesLoaded ? 'loaded' : '—'}</span>
               <span className={pastedDiagnosis.markersSeen ? 'text-emerald-300' : 'text-amber-300'}>markers {pastedDiagnosis.markersSeen ? 'seen' : 'not seen'}</span>
             </div>
             {pastedDiagnosis.hypotheses.length === 0 ? (
-              <div className="text-slate-500">No root-cause hypotheses for this trace.</div>
+              <div className="text-slate-400">No root-cause hypotheses for this trace.</div>
             ) : pastedDiagnosis.hypotheses.map((hypothesis, index) => (
-              <div key={`${hypothesis.code}-${index}`} className="rounded border border-amber-500/20 bg-black/15 p-1.5 leading-tight">
-                <div className="text-amber-300">{hypothesis.code} <span className="text-slate-500">· {hypothesis.confidence}</span></div>
+              <div key={`${hypothesis.code}-${index}`} className="rounded border border-amber-500/20 bg-[#0a0c10] p-2 leading-snug">
+                <div className="text-amber-300">{hypothesis.code} <span className="text-slate-400">· {hypothesis.confidence}</span></div>
                 <div className="mt-0.5 text-slate-300">{hypothesis.explanation}</div>
                 <div className="mt-0.5 text-cyan-300/90">→ {hypothesis.suggestion}</div>
               </div>
@@ -1147,41 +1210,38 @@ export default function PlaytestWorkspace({
           </div>
         )}
 
-        {/* ERROR/SUCCESS STATUS ON ANALYSIS INGESTION */}
         {successfulFixApplied && (
-          <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 font-bold rounded-lg leading-relaxed flex items-center gap-2 text-[11px] animate-bounce">
+          <div className="p-3 bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 font-medium rounded-lg leading-relaxed flex items-center gap-2 text-[11px]">
             <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
             <span>{successfulFixApplied}</span>
           </div>
         )}
 
         {diagnosticError && (
-          <div className="p-3 bg-red-500/5 border border-red-500/20 text-red-300 rounded-lg shrink-0">
-            <span className="font-bold tracking-tight text-red-400 uppercase text-[9px] block">Error Reading Logs</span>
-            <p className="text-[11px] text-slate-400 font-sans mt-0.5">{diagnosticError}</p>
+          <div className="p-3 bg-red-500/10 border border-red-500/25 text-red-300 rounded-lg shrink-0 text-[11px]">
+            <span className="font-semibold text-red-400 block">Error Reading Logs</span>
+            <p className="text-slate-300 mt-0.5">{diagnosticError}</p>
           </div>
         )}
       </div>
 
-      {/* DIAGNOSING ACTION IN PROCESS SCREEN */}
       {diagnosingLogs && (
-        <div className="flex flex-col items-center justify-center p-8 bg-black/35 rounded-xl border border-white/5 space-y-3">
-          <RefreshCw className="w-6 h-6 text-cyan-400 animate-spin" />
-          <div className="text-center animate-pulse">
-            <span className="font-mono text-[10px] uppercase font-bold text-slate-200 tracking-wider">Compiling Trace Solutions...</span>
-            <p className="text-[9px] uppercase font-mono text-slate-600 mt-0.5">Gemini searching for modding code bugs...</p>
+        <div className="flex flex-col items-center justify-center p-6 bg-[#11141a] rounded-lg border border-white/[0.08] space-y-2.5 text-[11px]">
+          <RefreshCw className="w-5 h-5 text-cyan-400 animate-spin" />
+          <div className="text-center">
+            <span className="font-semibold text-slate-200">Compiling Trace Solutions…</span>
+            <p className="text-slate-400 mt-0.5">Searching debug trace for scripting faults…</p>
           </div>
         </div>
       )}
 
-      {/* RESULTS FROM TRACE ANALYSIS */}
       {logAnalysis && !diagnosingLogs && (
-        <div className="space-y-3.5 animate-fade-in">
-          <div className="px-1 border-l-2 border-cyan-500 space-y-1 text-left">
-            <h4 className="text-[11px] font-bold text-white uppercase tracking-wider font-mono">
+        <div className="space-y-3 animate-fade-in">
+          <div className="px-2 border-l-2 border-blue-500 space-y-1 text-left">
+            <h4 className="text-xs font-semibold text-[#eef2f7]">
               AI Playtest Diagnosis
             </h4>
-            <p className="text-[10px] text-slate-400 leading-normal">
+            <p className="text-[11px] text-slate-400 leading-normal">
               {logAnalysis.summaryOfGameMDReload}
             </p>
           </div>
@@ -1191,66 +1251,57 @@ export default function PlaytestWorkspace({
               {logAnalysis.issues.map((issue) => {
                 const isErr = issue.severity === 'error';
                 return (
-                  <div 
-                    key={issue.id} 
-                    className={`p-3.5 rounded-xl border leading-relaxed space-y-3 relative overflow-hidden text-left ${
-                      isErr 
-                        ? 'bg-red-500/[0.02] border-red-500/15' 
-                        : 'bg-yellow-500/[0.01] border-yellow-500/15'
+                  <div
+                    key={issue.id}
+                    className={`p-3 rounded-lg border leading-relaxed space-y-2.5 text-left text-[11px] ${
+                      isErr
+                        ? 'bg-red-500/5 border-red-500/25'
+                        : 'bg-amber-500/5 border-amber-500/25'
                     }`}
                   >
-                    {/* Severity badge */}
-                    <div className="flex items-center justify-between text-[10px]">
-                      <span className={`font-mono uppercase font-black text-[9px] px-1.5 py-0.5 rounded border ${
-                        isErr 
-                          ? 'bg-red-500/10 text-red-400 border-red-500/20' 
-                          : 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20'
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={`font-mono font-semibold px-1.5 py-0.5 rounded border ${
+                        isErr
+                          ? 'bg-red-500/10 text-red-300 border-red-500/25'
+                          : 'bg-amber-500/10 text-amber-300 border-amber-500/25'
                       }`}>
                         [{issue.severity}] {issue.title}
                       </span>
-                      
                       {issue.affectedNodeId && (
-                        <span className="text-[9px] bg-slate-900 border border-white/5 px-1.5 py-0.5 rounded text-slate-400 font-mono">
+                        <span className="bg-[#0a0c10] border border-white/[0.08] px-1.5 py-0.5 rounded text-slate-300 font-mono">
                           Node matched
                         </span>
                       )}
                     </div>
 
-                    {/* Log segment explanation */}
                     <div className="space-y-1">
-                      <span className="text-[9px] uppercase font-bold text-slate-500 font-mono">Trace Match</span>
-                      <pre className="p-1 px-1.5 bg-black/45 border border-white/[0.04] text-[9.5px] font-mono text-slate-400 rounded overflow-x-auto whitespace-pre-wrap leading-tight leading-relaxed font-bold">
+                      <span className="font-semibold text-slate-400 block">Trace Match</span>
+                      <pre className="p-2 bg-[#0a0c10] border border-white/[0.08] font-mono text-slate-300 rounded overflow-x-auto whitespace-pre-wrap leading-relaxed">
                         {issue.errorLogSnippet}
                       </pre>
                     </div>
 
-                    {/* Explanation of why failed */}
-                    <div className="space-y-1 text-[11.5px]">
-                      <span className="text-[9px] uppercase font-bold text-slate-500 font-mono text-left block">Why context fails</span>
-                      <p className="text-slate-300 font-medium font-sans leading-relaxed text-left">
-                        {issue.explanation}
-                      </p>
+                    <div className="space-y-1">
+                      <span className="font-semibold text-slate-400 block">Why Context Fails</span>
+                      <p className="text-slate-200 leading-relaxed">{issue.explanation}</p>
                     </div>
 
-                    {/* Effect in game */}
-                    <div className="p-2 bg-black/25 rounded border border-white/[0.03] space-y-0.5 text-[10.5px]">
-                      <span className="text-[9px] uppercase font-bold text-slate-400 font-mono block text-left">Ingame Impact</span>
-                      <p className="text-slate-400 font-sans text-left">{issue.impact}</p>
+                    <div className="p-2 bg-[#0a0c10] rounded border border-white/[0.08] space-y-0.5">
+                      <span className="font-semibold text-slate-400 block">In-Game Impact</span>
+                      <p className="text-slate-300">{issue.impact}</p>
                     </div>
 
-                    {/* Suggested repair action */}
-                    <div className="space-y-1 text-[10.5px]">
-                      <span className="text-[9px] uppercase font-bold text-slate-500 font-mono text-left block">Playbook repair advice</span>
-                      <p className="text-slate-300 font-sans leading-relaxed text-left">{issue.suggestedAction}</p>
+                    <div className="space-y-1">
+                      <span className="font-semibold text-slate-400 block">Repair Advice</span>
+                      <p className="text-slate-200 leading-relaxed">{issue.suggestedAction}</p>
                     </div>
 
-                    {/* 1-Click AutoFix Action Button! */}
                     {issue.autoFix && (
                       <button
                         onClick={() => handleApplyAutoFix(issue.autoFix)}
-                        className="mt-1.5 w-full py-2 bg-emerald-500 hover:bg-emerald-400 hover:border-emerald-300 border border-emerald-600 text-black font-mono font-bold text-[10.5px] uppercase rounded-lg shadow-[0_4px_12px_rgba(16,185,129,0.15)] transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                        className="mt-1 w-full py-2 bg-emerald-500 hover:bg-emerald-400 border border-emerald-400 text-slate-950 font-semibold text-[11px] rounded-md transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
                       >
-                        <Wrench className="w-3.5 h-3.5 text-black" />
+                        <Wrench className="w-3.5 h-3.5" />
                         Apply AI 1-Click Repair
                       </button>
                     )}
@@ -1259,9 +1310,9 @@ export default function PlaytestWorkspace({
               })}
             </div>
           ) : (
-            <div className="p-4 text-center text-slate-500 bg-black/20 rounded border border-white/5 italic flex flex-col items-center justify-center gap-2">
-              <CheckCircle className="w-6 h-6 text-emerald-500" />
-              <span className="font-sans text-[11px] text-slate-400 leading-normal font-medium">
+            <div className="p-4 text-center text-slate-400 bg-[#11141a] rounded border border-white/[0.08] flex flex-col items-center justify-center gap-2 text-[11px]">
+              <CheckCircle className="w-5 h-5 text-emerald-400" />
+              <span className="leading-normal font-medium text-slate-300">
                 All traces passed! Clear game state compilation achieved. Re-run or trace when logs contain director warning cues.
               </span>
             </div>
@@ -1270,19 +1321,19 @@ export default function PlaytestWorkspace({
       )}
 
       {/* INSTRUCTIONS ON HOT RELOADING DIRECTOR ON USER MACHINE */}
-      <div className="bg-[#121620]/45 border border-cyan-500/10 p-3.5 rounded-xl space-y-2 text-left">
-        <h5 className="text-[10px] uppercase font-bold font-mono tracking-wider text-cyan-400 flex items-center gap-1.5">
+      <div className="bg-[#11141a] border border-white/[0.08] p-3.5 rounded-lg space-y-2 text-left">
+        <h5 className="text-[11px] font-semibold text-cyan-300 flex items-center gap-1.5">
           <Cpu className="w-3.5 h-3.5" />
           Egosoft Live Hot-Reload Guide
         </h5>
-        <div className="text-[10px] text-slate-400 leading-relaxed font-sans font-medium space-y-2">
+        <div className="text-[11px] text-slate-400 leading-relaxed space-y-2">
           <p>
-            1. Launch X4: Foundations with properties: <code className="text-cyan-400 font-mono font-bold select-all bg-black/45 px-1 py-0.5 rounded">-debug scripts -logfile debuglog.txt</code>
+            1. Launch X4: Foundations with properties: <code className="text-cyan-300 font-mono select-all bg-[#0a0c10] px-1.5 py-0.5 rounded">-debug scripts -logfile debuglog.txt</code>
           </p>
           <p>
-            2. Refresh/save compiled files, then fire this reload signal in your game's active developer terminal input:
+            2. Refresh/save compiled files, then fire this reload signal in your game&apos;s active developer terminal input:
           </p>
-          <div className="p-1 px-2 bg-slate-900/80 border border-white/5 rounded font-mono text-[9.5px] font-bold text-center block text-white select-all">
+          <div className="p-1.5 px-2 bg-[#0a0c10] border border-white/[0.08] rounded font-mono text-[11px] font-semibold text-center block text-slate-100 select-all">
             refreshmd
           </div>
         </div>

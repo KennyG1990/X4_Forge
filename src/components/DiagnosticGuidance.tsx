@@ -104,10 +104,10 @@ export default function DiagnosticGuidance({ diagnostic, workspace, onSuppressio
           type="button"
           data-testid={`diagnostic-why-${diagnostic.code || 'finding'}`}
           onClick={() => setExpanded(value => !value)}
-          className="flex items-center gap-1 rounded border border-sky-500/25 bg-sky-500/10 px-1.5 py-1 font-mono text-[8px] font-bold uppercase text-sky-200 hover:bg-sky-500/20 cursor-pointer"
+          className="flex items-center gap-1 rounded border border-blue-500/30 bg-blue-500/10 px-2 py-1 font-sans text-[11px] font-medium text-blue-200 hover:bg-blue-500/20 cursor-pointer"
           aria-expanded={expanded}
         >
-          <HelpCircle className="h-3 w-3" /> Why?
+          <HelpCircle className="h-3.5 w-3.5" /> Why?
         </button>
         {scope && (
           <button
@@ -115,41 +115,41 @@ export default function DiagnosticGuidance({ diagnostic, workspace, onSuppressio
             data-testid={`diagnostic-suppress-${diagnostic.code || 'warning'}`}
             onClick={prepare}
             disabled={preparing}
-            className="flex items-center gap-1 rounded border border-amber-500/25 bg-amber-500/10 px-1.5 py-1 font-mono text-[8px] font-bold uppercase text-amber-200 hover:bg-amber-500/20 cursor-pointer disabled:opacity-50"
+            className="flex items-center gap-1 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 font-sans text-[11px] font-medium text-amber-200 hover:bg-amber-500/20 cursor-pointer disabled:opacity-50"
             title="Add a reviewed exact warning suppression to this mod's root forge.rules.json"
           >
-            {preparing ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShieldOff className="h-3 w-3" />}
+            {preparing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldOff className="h-3.5 w-3.5" />}
             Suppress warning
           </button>
         )}
       </div>
 
       {expanded && (
-        <div data-testid="diagnostic-why-panel" className="mt-2 space-y-1.5 rounded border border-sky-500/20 bg-black/35 p-2 text-[9.5px] leading-normal text-slate-300">
-          <p className="font-mono text-[9px] font-bold uppercase text-sky-200">{explanation.title}</p>
-          <p><b className="text-slate-200">Why:</b> {explanation.why}</p>
-          <p><b className="text-slate-200">Impact:</b> {explanation.impact}</p>
-          <p><b className="text-slate-200">Next:</b> {explanation.next}</p>
+        <div data-testid="diagnostic-why-panel" className="mt-2 space-y-1.5 rounded-md border border-white/[0.08] bg-[#0a0c10] p-2.5 text-[11px] leading-relaxed text-slate-300">
+          <p className="font-semibold text-blue-200">{explanation.title}</p>
+          <p><b className="text-slate-100">Why:</b> {explanation.why}</p>
+          <p><b className="text-slate-100">Impact:</b> {explanation.impact}</p>
+          <p><b className="text-slate-100">Next:</b> {explanation.next}</p>
           {matchedProvenance && (
-            <div data-testid="diagnostic-rule-provenance" className="space-y-0.5 rounded border border-emerald-500/20 bg-emerald-500/5 p-1.5 font-mono text-[8px] text-emerald-100">
-              <div><span className="text-emerald-300/70">Rule ID/version:</span> {matchedProvenance.ruleId} / {matchedProvenance.ruleVersion}</div>
-              <div><span className="text-emerald-300/70">Evidence grade:</span> {matchedProvenance.evidence.grade}</div>
-              <div><span className="text-emerald-300/70">Applicability:</span> {matchedProvenance.applicability}</div>
-              <div><span className="text-emerald-300/70">Pack ID/version:</span> {matchedProvenance.packId} / {matchedProvenance.packVersion}</div>
-              <div className="break-all"><span className="text-emerald-300/70">Pack SHA-256:</span> {matchedProvenance.packSha256}</div>
-              <div><span className="text-emerald-300/70">Evidence basis:</span> {matchedProvenance.evidence.basis}</div>
-              <div className="break-all"><span className="text-emerald-300/70">Evidence digest:</span> {matchedProvenance.evidence.digestSha256}</div>
-              <div><span className="text-emerald-300/70">Game scope:</span> {formatGameVersionScope(matchedProvenance.scope)}</div>
+            <div data-testid="diagnostic-rule-provenance" className="space-y-0.5 rounded border border-emerald-500/25 bg-emerald-500/5 p-2 font-mono text-[11px] text-emerald-100">
+              <div><span className="text-emerald-300/80">Rule ID/version:</span> {matchedProvenance.ruleId} / {matchedProvenance.ruleVersion}</div>
+              <div><span className="text-emerald-300/80">Evidence grade:</span> {matchedProvenance.evidence.grade}</div>
+              <div><span className="text-emerald-300/80">Applicability:</span> {matchedProvenance.applicability}</div>
+              <div><span className="text-emerald-300/80">Pack ID/version:</span> {matchedProvenance.packId} / {matchedProvenance.packVersion}</div>
+              <div className="break-all"><span className="text-emerald-300/80">Pack SHA-256:</span> {matchedProvenance.packSha256}</div>
+              <div><span className="text-emerald-300/80">Evidence basis:</span> {matchedProvenance.evidence.basis}</div>
+              <div className="break-all"><span className="text-emerald-300/80">Evidence digest:</span> {matchedProvenance.evidence.digestSha256}</div>
+              <div><span className="text-emerald-300/80">Game scope:</span> {formatGameVersionScope(matchedProvenance.scope)}</div>
             </div>
           )}
           {ambiguousProvenance && (
-            <div data-testid="diagnostic-rule-provenance" className="space-y-0.5 rounded border border-amber-500/20 bg-amber-500/5 p-1.5 font-mono text-[8px] text-amber-100">
-              <div><span className="text-amber-300/70">Governed rule selection:</span> refused</div>
-              <div><span className="text-amber-300/70">Refusal:</span> {ambiguousProvenance.refusal}</div>
-              <div><span className="text-amber-300/70">Candidate IDs:</span> {ambiguousProvenance.candidates.map(candidate => `${candidate.packId}/${candidate.ruleId}@${candidate.ruleVersion}`).join(', ') || 'none reported'}</div>
+            <div data-testid="diagnostic-rule-provenance" className="space-y-0.5 rounded border border-amber-500/25 bg-amber-500/5 p-2 font-mono text-[11px] text-amber-100">
+              <div><span className="text-amber-300/80">Governed rule selection:</span> refused</div>
+              <div><span className="text-amber-300/80">Refusal:</span> {ambiguousProvenance.refusal}</div>
+              <div><span className="text-amber-300/80">Candidate IDs:</span> {ambiguousProvenance.candidates.map(candidate => `${candidate.packId}/${candidate.ruleId}@${candidate.ruleVersion}`).join(', ') || 'none reported'}</div>
             </div>
           )}
-          <p className="font-mono text-[8px] text-slate-500">Basis: {explanation.basis} · deterministic, no AI</p>
+          <p className="font-mono text-[11px] text-slate-400">Basis: {explanation.basis} · deterministic, no AI</p>
         </div>
       )}
 
@@ -159,43 +159,43 @@ export default function DiagnosticGuidance({ diagnostic, workspace, onSuppressio
             data-testid="suppression-review-dialog"
             onSubmit={commit}
             onClick={event => event.stopPropagation()}
-            className="w-full max-w-xl space-y-3 rounded-lg border border-amber-500/30 bg-[#0d0f14] p-4 shadow-2xl"
+            className="w-full max-w-xl space-y-3 rounded-lg border border-amber-500/35 bg-[#11141a] p-4 shadow-2xl text-[11px]"
           >
-            <div className="flex items-start justify-between gap-3 border-b border-white/10 pb-3">
+            <div className="flex items-start justify-between gap-3 border-b border-white/[0.08] pb-3">
               <div>
-                <h3 className="font-mono text-sm font-bold uppercase text-amber-200">Review exact warning suppression</h3>
-                <p className="mt-1 text-[10px] leading-normal text-slate-400">This acknowledges one warning; it does not fix source code. The validator will keep all errors visible.</p>
+                <h3 className="text-sm font-semibold text-amber-200">Review exact warning suppression</h3>
+                <p className="mt-1 text-[11px] leading-normal text-slate-400">This acknowledges one warning; it does not fix source code. The validator will keep all errors visible.</p>
               </div>
               <button type="button" onClick={() => setPrepared(null)} disabled={committing} className="text-slate-400 hover:text-white cursor-pointer disabled:opacity-50" title="Cancel"><X className="h-4 w-4" /></button>
             </div>
 
             {prepared.success && prepared.scope && (
               <>
-                <div className="space-y-1 rounded border border-white/10 bg-black/30 p-2 font-mono text-[9px] text-slate-300">
-                  <div><span className="text-slate-500">Target:</span> {prepared.target}</div>
-                  <div><span className="text-slate-500">Code:</span> {prepared.scope.code}</div>
-                  {prepared.scope.file && <div><span className="text-slate-500">File:</span> {prepared.scope.file}</div>}
-                  {prepared.scope.sourceRef && <div className="break-all"><span className="text-slate-500">Source:</span> {prepared.scope.sourceRef}</div>}
-                  <div><span className="text-slate-500">Existing suppressions:</span> {prepared.existingSuppressions || 0}</div>
+                <div className="space-y-1 rounded border border-white/[0.08] bg-[#0a0c10] p-2.5 font-mono text-[11px] text-slate-300">
+                  <div><span className="text-slate-400">Target:</span> {prepared.target}</div>
+                  <div><span className="text-slate-400">Code:</span> {prepared.scope.code}</div>
+                  {prepared.scope.file && <div><span className="text-slate-400">File:</span> {prepared.scope.file}</div>}
+                  {prepared.scope.sourceRef && <div className="break-all"><span className="text-slate-400">Source:</span> {prepared.scope.sourceRef}</div>}
+                  <div><span className="text-slate-400">Existing suppressions:</span> {prepared.existingSuppressions || 0}</div>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="space-y-1 text-[9px] font-bold uppercase text-slate-400">Rule ID
-                    <input data-testid="suppression-rule-id" required value={review.id} onChange={event => setReview(value => ({ ...value, id: event.target.value }))} className="w-full rounded border border-white/10 bg-black/40 px-2 py-1.5 font-mono text-[10px] normal-case text-slate-200 outline-none focus:border-amber-500/50" />
+                <div className="grid grid-cols-2 gap-2.5">
+                  <label className="space-y-1 text-[11px] font-medium text-slate-300">Rule ID
+                    <input data-testid="suppression-rule-id" required value={review.id} onChange={event => setReview(value => ({ ...value, id: event.target.value }))} className="w-full rounded border border-white/[0.08] bg-[#0a0c10] px-2.5 py-1.5 font-mono text-[11px] text-slate-200 outline-none focus:border-amber-500/50" />
                   </label>
-                  <label className="space-y-1 text-[9px] font-bold uppercase text-slate-400">Owner
-                    <input data-testid="suppression-owner" required value={review.owner} onChange={event => setReview(value => ({ ...value, owner: event.target.value }))} className="w-full rounded border border-white/10 bg-black/40 px-2 py-1.5 font-mono text-[10px] normal-case text-slate-200 outline-none focus:border-amber-500/50" placeholder="Maintainer name" />
+                  <label className="space-y-1 text-[11px] font-medium text-slate-300">Owner
+                    <input data-testid="suppression-owner" required value={review.owner} onChange={event => setReview(value => ({ ...value, owner: event.target.value }))} className="w-full rounded border border-white/[0.08] bg-[#0a0c10] px-2.5 py-1.5 font-mono text-[11px] text-slate-200 outline-none focus:border-amber-500/50" placeholder="Maintainer name" />
                   </label>
                 </div>
-                <label className="block space-y-1 text-[9px] font-bold uppercase text-slate-400">Reason
-                  <textarea data-testid="suppression-reason" required minLength={8} value={review.reason} onChange={event => setReview(value => ({ ...value, reason: event.target.value }))} className="min-h-16 w-full resize-y rounded border border-white/10 bg-black/40 px-2 py-1.5 font-sans text-[10px] normal-case text-slate-200 outline-none focus:border-amber-500/50" />
+                <label className="block space-y-1 text-[11px] font-medium text-slate-300">Reason
+                  <textarea data-testid="suppression-reason" required minLength={8} value={review.reason} onChange={event => setReview(value => ({ ...value, reason: event.target.value }))} className="min-h-16 w-full resize-y rounded border border-white/[0.08] bg-[#0a0c10] px-2.5 py-1.5 font-sans text-[11px] text-slate-200 outline-none focus:border-amber-500/50" />
                 </label>
-                <label className="block space-y-1 text-[9px] font-bold uppercase text-slate-400">Review by
-                  <input data-testid="suppression-review-by" type="date" required value={review.reviewBy} onChange={event => setReview(value => ({ ...value, reviewBy: event.target.value }))} className="rounded border border-white/10 bg-black/40 px-2 py-1.5 font-mono text-[10px] normal-case text-slate-200 outline-none focus:border-amber-500/50" />
+                <label className="block space-y-1 text-[11px] font-medium text-slate-300">Review by
+                  <input data-testid="suppression-review-by" type="date" required value={review.reviewBy} onChange={event => setReview(value => ({ ...value, reviewBy: event.target.value }))} className="rounded border border-white/[0.08] bg-[#0a0c10] px-2.5 py-1.5 font-mono text-[11px] text-slate-200 outline-none focus:border-amber-500/50" />
                 </label>
               </>
             )}
 
-            {dialogError && <div data-testid="suppression-error" className="rounded border border-red-500/25 bg-red-500/10 p-2 text-[10px] text-red-200">{dialogError}</div>}
+            {dialogError && <div data-testid="suppression-error" className="rounded border border-red-500/25 bg-red-500/10 p-2 text-[11px] text-red-200">{dialogError}</div>}
 
             <div className="flex items-center justify-end gap-2 border-t border-white/10 pt-3">
               <button type="button" onClick={() => setPrepared(null)} disabled={committing} className="rounded border border-white/10 px-3 py-1.5 text-[9px] font-bold uppercase text-slate-300 hover:bg-white/5 cursor-pointer disabled:opacity-50">Cancel</button>

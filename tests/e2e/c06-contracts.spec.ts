@@ -475,7 +475,8 @@ test('C06b addressed workspace, diagnostic and release contracts use truthful id
     const health = page.getByTestId('health-card');
     await health.waitFor({ state: 'visible', timeout: 1500 }).catch(() => undefined);
     if (await health.isVisible()) await page.getByTestId('health-card-dismiss').click();
-    await page.locator('[data-sidebar-tab="playtest"]').click();
+    await page.locator('[data-workspace-view="project"]').click();
+    await page.locator('#project-tab-release').click();
     await expect(page.getByTestId('release-center')).toBeVisible();
     await page.getByTestId('package-nexus-btn').click();
     await expect(page.getByTestId('nexus-release-guide')).toBeVisible();

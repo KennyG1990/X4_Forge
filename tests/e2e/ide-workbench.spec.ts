@@ -106,16 +106,17 @@ test('Unified IDE Workbench provides right contextual inspector, bottom dock, co
   expect(compactBox!.width).toBeLessThan(standardBox!.width);
   expect(compactBox!.height).toBeLessThan(standardBox!.height);
 
-  // 3. Bottom Workbench Dock toggles via Ctrl+J and switches between Problems, Runtime, and XML
+  // 3. Bottom Workbench Dock toggles via Ctrl+J and switches between Problems, Runtime Log, and Compiled XML
   await expect(page.getByTestId('bottom-workbench-dock')).toHaveCount(0);
   await page.keyboard.press('Control+j');
   const bottomDock = page.getByTestId('bottom-workbench-dock');
   await expect(bottomDock).toBeVisible();
-  await bottomDock.getByRole('button', { name: /Runtime & Deliver/ }).click();
-  await expect(bottomDock.getByText('Graph')).toBeVisible();
-  await bottomDock.getByRole('button', { name: /Compiled MD XML/ }).click();
+  await bottomDock.getByRole('button', { name: /Runtime Log/ }).click();
+  await expect(bottomDock.getByTestId('bottom-dock-runtime-status')).toBeVisible();
+  await expect(bottomDock.locator('[data-testid^="readiness-stage-"]')).toHaveCount(0);
+  await bottomDock.getByRole('button', { name: /Compiled XML/ }).click();
   await expect(bottomDock.locator('pre')).toContainText('<mdscript');
-  await bottomDock.getByRole('button', { name: /Problems & Critic/ }).click();
+  await bottomDock.getByRole('button', { name: /^Problems/ }).click();
 
   // 4. Omni-Search Command Palette ('>' prefix) executes commands without workspace mutation
   const searchInput = page.getByTestId('workspace-search-panel').locator('input');

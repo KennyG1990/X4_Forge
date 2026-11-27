@@ -410,6 +410,10 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
   }, [loadSchemaLibrary]);
 
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>('blueprint');
+  const [projectTabRequest, setProjectTabRequest] = useState<{ tab: 'overview' | 'xml-references' | 'release'; nonce: number }>({
+    tab: 'overview',
+    nonce: 0,
+  });
   const [layoutPreferences, setLayoutPreferences] = useState<StudioLayoutPreferences>(() =>
     parseStudioLayoutPreferences(localStorage.getItem(STUDIO_LAYOUT_KEY))
   );
@@ -459,6 +463,11 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
     setActiveSidebarTab(item.sidebarTab);
     setSidebarDrawerOpen(view === 'blueprint' || view === 'ui-designer' || view === 'galaxy');
   }, []);
+
+  const openReleaseCenter = React.useCallback(() => {
+    setProjectTabRequest(prev => ({ tab: 'release', nonce: prev.nonce + 1 }));
+    navigateWorkspace('project');
+  }, [navigateWorkspace]);
 
   const persistStudioLayout = React.useCallback((layout: StudioLayoutPreferences) => {
     try { localStorage.setItem(STUDIO_LAYOUT_KEY, JSON.stringify(layout)); } catch { /* server state remains authoritative */ }
@@ -2880,7 +2889,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
             ai={aiEnabled ? { provider: activeAIProvider, model: activeAIModel, reasoning: activeReasoning } : null}
             agentOpen={isAgentBridgeOpen}
             nativeFiles={<NativeProjectFiles key={currentWorkspaceId} workspaceId={currentWorkspaceId} workspace={workspace} />}
-            onOpenReleaseCenter={() => openSidebarTab('playtest')}
+            onOpenReleaseCenter={openReleaseCenter}
             onToggleBottomDock={() => toggleBottomDock()}
             onToggleRightInspector={toggleRightInspector}
             driverLeaseHeldByUi={Boolean(driverLease?.held && driverLease.heldByCaller)}
@@ -3024,7 +3033,6 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
           activeTab={activeSidebarTab}
           setActiveTab={openSidebarTab}
           layoutPreferences={layoutPreferences}
-          releasePreferences={releasePreferences}
           onMoveTool={(tool, target) => updateLayoutPreferences(previous => ({ ...previous, toolOrder: moveOrderedItem(previous.toolOrder, tool, target) }))}
           onToggleToolRail={() => updateLayoutPreferences(previous => ({ ...previous, toolRailCollapsed: !previous.toolRailCollapsed }))}
           onTogglePanel={() => updateLayoutPreferences(previous => ({ ...previous, sidePanelCollapsed: true }))}
@@ -3096,6 +3104,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
           validationDelta={validationDelta}
           diagnosticsScope={diagnosticsScope}
           onDiagnosticsScopeChange={setDiagnosticsScope}
+          onOpenReleaseCenter={openReleaseCenter}
           onSuppressionCommitted={(sourceHash) => {
             setWorkspace(previous => previous.sourceStamp
               ? { ...previous, sourceStamp: { ...previous.sourceStamp, hash: sourceHash, at: new Date().toISOString() } }
@@ -3179,6 +3188,10 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
               workspace={workspace}
               setWorkspace={setWorkspace}
               saveCheckpoint={saveCheckpoint}
+              onOpenConflicts={() => {
+                setDiagnosticsScope('install');
+                openSidebarTab('diagnostics');
+              }}
             />
           ) : workspaceView === 'translation' ? (
             <TFileEditor
@@ -3200,9 +3213,12 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
             <ProjectInspector
               workspace={workspace}
               schemaConfigVersion={schemaConfigVersion}
+              releasePreferences={releasePreferences}
+              initialTab={projectTabRequest.tab}
+              tabRequestNonce={projectTabRequest.nonce}
               onOpenValidator={() => openSidebarTab('diagnostics')}
               onOpenDeployWizard={() => void handleCompileModProject()}
-              onOpenReleaseCenter={() => openSidebarTab('playtest')}
+              onOpenReleaseCenter={openReleaseCenter}
             />
           ) : workspaceView === 'galaxy' ? (
             <GalaxyMapView />
@@ -3253,6 +3269,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
               onFocusNode={(nodeId) => setFocusNodeRequest({ nodeId, timestamp: Date.now() })}
               onNavigateWorkspace={setWorkspaceView}
               onNavigateSidebar={openSidebarTab}
+              onOpenReleaseCenter={openReleaseCenter}
             />
           )}
 

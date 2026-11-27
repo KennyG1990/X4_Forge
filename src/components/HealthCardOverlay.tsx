@@ -48,12 +48,12 @@ const HealthCardOverlay: React.FC<HealthCardOverlayProps> = ({ toolDock, workspa
   return (
     <div
       data-testid="health-card"
-      className={`fixed ${verticalSafeArea} ${horizontalSafeArea} z-[90] rounded-lg border shadow-2xl bg-[#11161f]/98 backdrop-blur p-3 text-[11px] ${
+      className={`fixed ${verticalSafeArea} ${horizontalSafeArea} z-[90] rounded-lg border shadow-2xl bg-[#11141a]/98 backdrop-blur p-3 text-[11px] ${
         card.verdict === 'blocked' ? 'border-rose-500/40' : 'border-amber-500/35'
       }`}
     >
-      <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-        <span className={`font-semibold text-[11.5px] flex items-center gap-1.5 ${card.verdict === 'blocked' ? 'text-rose-300' : 'text-amber-300'}`}>
+      <div className="flex items-center justify-between pb-2 border-b border-white/[0.08]">
+        <span className={`font-semibold text-xs flex items-center gap-1.5 ${card.verdict === 'blocked' ? 'text-rose-300' : 'text-amber-300'}`}>
           <ClipboardCheck className="w-3.5 h-3.5" /> Startup walkaround
         </span>
         <button data-testid="health-card-dismiss" onClick={() => setDismissed(true)} className="p-1 rounded hover:bg-white/5 text-slate-400 hover:text-white cursor-pointer">
@@ -67,7 +67,7 @@ const HealthCardOverlay: React.FC<HealthCardOverlayProps> = ({ toolDock, workspa
             <span className={
               r.status === 'pass' ? 'text-emerald-400' :
               r.status === 'warn' ? 'text-amber-400' :
-              r.status === 'fail' ? 'text-rose-400' : 'text-slate-600'
+              r.status === 'fail' ? 'text-rose-400' : 'text-slate-500'
             }>
               {r.status === 'pass' ? '●' : r.status === 'warn' ? '▲' : r.status === 'fail' ? '✗' : '?'}
             </span>

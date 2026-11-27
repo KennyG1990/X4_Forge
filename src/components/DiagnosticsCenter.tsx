@@ -13,16 +13,6 @@ import type { ValidationDeltaResult } from '../lib/validationDelta';
 import type { WorkspaceValidationInputs } from '../lib/workspaceValidationInputs';
 import PerformancePanel from './PerformancePanel';
 
-/**
- * H7 — unified Diagnostics hub. One coherent home for the previously scattered
- * "MD Scanner" + "Mod Doctor" surfaces, organized by SCOPE rather than by tool
- * name:
- *   - Scripts  → Mission Director logic scan (was "MD Scanner")
- *   - Package  → this mod's build readiness + deterministic critic + selftests
- *   - Install  → cross-mod conflicts across the installed extensions (was the
- *                "Extension Doctor")
- * Editor-scope diagnostics (live per-node schema checks) live on the canvas.
- */
 interface DiagnosticsCenterProps {
   workspace: ModWorkspace;
   setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
@@ -45,18 +35,14 @@ interface DiagnosticsCenterProps {
 export type DiagnosticsScope = 'scripts' | 'package' | 'install' | 'performance';
 
 const SCOPES: { id: DiagnosticsScope; label: string; icon: typeof Brain; activeClass: string }[] = [
-  { id: 'scripts', label: 'Scripts', icon: Brain, activeClass: 'bg-amber-500/10 text-amber-400 border-amber-500/40' },
-  { id: 'package', label: 'Validation', icon: PackageCheck, activeClass: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/40' },
-  { id: 'install', label: 'Install', icon: Boxes, activeClass: 'bg-fuchsia-500/10 text-fuchsia-400 border-fuchsia-500/40' },
-  { id: 'performance', label: 'Performance', icon: Activity, activeClass: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/40' },
+  { id: 'package', label: 'Validation', icon: PackageCheck, activeClass: 'bg-blue-500/15 text-blue-200 border-blue-500/35' },
+  { id: 'install', label: 'Mod Conflicts', icon: Boxes, activeClass: 'bg-blue-500/15 text-blue-200 border-blue-500/35' },
+  { id: 'scripts', label: 'Scripts', icon: Brain, activeClass: 'bg-blue-500/15 text-blue-200 border-blue-500/35' },
+  { id: 'performance', label: 'Performance', icon: Activity, activeClass: 'bg-blue-500/15 text-blue-200 border-blue-500/35' },
 ];
 
 export default function DiagnosticsCenter({
   workspace,
-  setWorkspace,
-  saveCheckpoint,
-  modWorkspacePath,
-  setWorkspaceView,
   diagnostics,
   diagnosticSource,
   validationInputs,
@@ -69,9 +55,9 @@ export default function DiagnosticsCenter({
 }: DiagnosticsCenterProps) {
 
   return (
-    <div className="flex flex-col h-full min-h-0 bg-[#080a0e]">
+    <div className="flex flex-col h-full min-h-0 bg-[#0c0e12]">
       {/* Scope selector */}
-      <div className="flex min-w-0 overflow-x-auto border-b border-white/5 bg-black/45 items-center gap-1.5 px-2 py-1.5 shrink-0 font-mono">
+      <div className="flex min-w-0 overflow-x-auto border-b border-white/[0.08] bg-[#11141a] items-center gap-1 px-2 py-1.5 shrink-0 font-sans">
         {SCOPES.map(s => {
           const Icon = s.icon;
           const active = scope === s.id;
@@ -82,8 +68,8 @@ export default function DiagnosticsCenter({
               aria-pressed={active}
               onClick={() => onScopeChange(s.id)}
               title={`${s.label} Diagnostics`}
-              className={`shrink-0 px-2.5 py-1 rounded text-[9.5px] font-bold uppercase transition-all flex items-center gap-1.5 cursor-pointer border ${
-                active ? s.activeClass : 'text-slate-400 hover:text-slate-200 border-transparent'
+              className={`shrink-0 px-2 py-1 rounded text-[11px] font-medium transition-colors flex items-center gap-1.5 cursor-pointer border ${
+                active ? s.activeClass : 'text-slate-400 hover:text-slate-200 hover:bg-white/5 border-transparent'
               }`}
             >
               <Icon className="w-3.5 h-3.5" />
@@ -91,7 +77,6 @@ export default function DiagnosticsCenter({
             </button>
           );
         })}
-        <span className="ml-auto text-[8px] text-slate-500 uppercase tracking-wider pr-1">Editor checks → canvas</span>
       </div>
 
       {/* Scope viewport */}
@@ -100,11 +85,6 @@ export default function DiagnosticsCenter({
         {scope === 'scripts' && (
           <DiagnosticsHub
             workspace={workspace}
-            setWorkspace={setWorkspace}
-            saveCheckpoint={saveCheckpoint}
-            modWorkspacePath={modWorkspacePath}
-            setWorkspaceView={setWorkspaceView}
-            forceTab="analyzer"
             aiEnabled={aiEnabled}
           />
         )}
@@ -119,15 +99,15 @@ export default function DiagnosticsCenter({
               return (
                 <button
                   onClick={onOpenCues}
-                  className={`mx-3 mt-3 shrink-0 flex items-center justify-between gap-2 rounded-lg border p-2.5 font-mono text-[10px] cursor-pointer transition-all hover:bg-white/5 ${
-                    errs > 0 ? 'border-red-500/25 bg-red-500/5 text-red-300'
-                      : warns > 0 ? 'border-amber-500/25 bg-amber-500/5 text-amber-300'
-                        : 'border-emerald-500/20 bg-emerald-500/5 text-emerald-300'
+                  className={`mx-3 mt-3 shrink-0 flex items-center justify-between gap-2 rounded-lg border p-2.5 font-sans text-[11px] cursor-pointer transition-colors hover:bg-white/5 ${
+                    errs > 0 ? 'border-red-500/30 bg-red-500/5 text-red-300'
+                      : warns > 0 ? 'border-amber-500/30 bg-amber-500/5 text-amber-300'
+                        : 'border-emerald-500/25 bg-emerald-500/5 text-emerald-300'
                   }`}
                   title="Open the cue tree (navigate, diagnose, bind live game log)"
                 >
-                  <span className="font-bold uppercase tracking-wide">Cue health</span>
-                  <span>{errs > 0 || warns > 0 ? `${errs} error(s) · ${warns} warning(s)` : 'clean'} → Cues tab</span>
+                  <span className="font-semibold">Cue health</span>
+                  <span className="font-mono">{errs > 0 || warns > 0 ? `${errs} error(s) · ${warns} warning(s)` : 'clean'} → Cues tab</span>
                 </button>
               );
             })()}

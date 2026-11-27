@@ -32,6 +32,8 @@ import {
 } from '../lib/externalApiRegistry';
 import ModDependencyView from './ModDependencyView';
 import XmlReferenceView from './XmlReferenceView';
+import ReleaseCenter from './ReleaseCenter';
+import { DEFAULT_RELEASE_PREFERENCES, type ReleasePreferences } from '../lib/releasePreferences';
 
 interface ApiRegistrySources {
   builtin: number; dataDir: number; folder: number; endpoint: number;
@@ -76,9 +78,15 @@ const KIND_META: Record<ProjectFileKind, { label: string; icon: React.ComponentT
   other: { label: 'Other', icon: FileText },
 };
 
+type ProjectTab = 'overview' | 'xml-references' | 'release';
+const PROJECT_TABS: readonly ProjectTab[] = ['overview', 'xml-references', 'release'];
+
 interface ProjectInspectorProps {
   workspace: ModWorkspace;
   schemaConfigVersion?: number;
+  releasePreferences?: ReleasePreferences;
+  initialTab?: ProjectTab;
+  tabRequestNonce?: number;
   onOpenValidator?: () => void;
   onOpenDeployWizard?: () => void;
   onOpenReleaseCenter?: () => void;
@@ -87,11 +95,17 @@ interface ProjectInspectorProps {
 export default function ProjectInspector({
   workspace,
   schemaConfigVersion = 0,
+  releasePreferences = DEFAULT_RELEASE_PREFERENCES,
+  initialTab = 'overview',
+  tabRequestNonce = 0,
   onOpenValidator,
   onOpenDeployWizard,
   onOpenReleaseCenter,
 }: ProjectInspectorProps) {
-  const [view, setView] = useState<'overview' | 'xml-references'>('overview');
+  const [view, setView] = useState<ProjectTab>(initialTab);
+  useEffect(() => {
+    if (tabRequestNonce > 0) setView(initialTab);
+  }, [initialTab, tabRequestNonce]);
   const project = useMemo(() => projectFromWorkspace(workspace), [workspace]);
   const structure = useMemo(() => validateProjectStructure(project), [project]);
   const cueIndex = useMemo(() => indexCueReferences(project), [project]);
@@ -128,38 +142,39 @@ export default function ProjectInspector({
   }
 
   return (
-    <div data-testid="project-inspector" className="h-full overflow-auto bg-[#0b0e14] text-slate-200 p-4 space-y-4">
+    <div data-testid="project-inspector" className="h-full overflow-auto bg-[#0c0e12] text-[#eef2f7] p-4 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2 pb-1">
         <div className="flex items-center gap-2">
-          <FolderTree className="w-4 h-4 text-sky-400" />
-          <h2 className="text-sm font-semibold tracking-tight text-slate-100">Extension Project</h2>
+          <FolderTree className="w-4 h-4 text-blue-400" />
+          <h2 className="text-sm font-semibold tracking-tight text-[#eef2f7]">Extension Project</h2>
           <span className="text-[11px] text-slate-400 font-mono">{project.name} · {project.files.length} files</span>
         </div>
-        {(onOpenValidator || onOpenDeployWizard || onOpenReleaseCenter) && (
+        {(onOpenValidator || onOpenDeployWizard || onOpenReleaseCenter || view !== 'release') && (
           <div className="flex items-center gap-1.5">
             {onOpenValidator && (
               <button
                 type="button"
                 onClick={onOpenValidator}
-                className="h-7 px-2.5 rounded-md border border-slate-700/80 bg-[#11161f] hover:border-sky-500/40 text-[11px] font-medium text-slate-300 hover:text-white cursor-pointer transition-colors"
+                className="h-7 px-2.5 rounded-md border border-white/[0.08] bg-[#11141a] hover:border-blue-500/40 text-[11px] font-medium text-slate-200 hover:text-white cursor-pointer transition-colors"
               >
                 Validator
               </button>
             )}
-            {onOpenReleaseCenter && (
-              <button
-                type="button"
-                onClick={onOpenReleaseCenter}
-                className="h-7 px-2.5 rounded-md border border-slate-700/80 bg-[#11161f] hover:border-emerald-500/40 text-[11px] font-medium text-slate-300 hover:text-emerald-200 cursor-pointer transition-colors"
-              >
-                Release Center
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => {
+                setView('release');
+                onOpenReleaseCenter?.();
+              }}
+              className="h-7 px-2.5 rounded-md border border-white/[0.08] bg-[#11141a] hover:border-emerald-500/40 text-[11px] font-medium text-slate-200 hover:text-emerald-200 cursor-pointer transition-colors"
+            >
+              Release Center
+            </button>
             {onOpenDeployWizard && (
               <button
                 type="button"
                 onClick={onOpenDeployWizard}
-                className="h-7 px-2.5 rounded-md border border-sky-500/45 bg-sky-500/15 hover:bg-sky-500/25 text-[11px] font-semibold text-sky-100 cursor-pointer transition-colors"
+                className="h-7 px-2.5 rounded-md border border-blue-500/45 bg-blue-500/20 hover:bg-blue-500/30 text-[11px] font-semibold text-blue-100 cursor-pointer transition-colors"
               >
                 Validate &amp; Deploy
               </button>
@@ -168,24 +183,34 @@ export default function ProjectInspector({
         )}
       </div>
 
-      <div role="tablist" aria-label="Project views" className="flex gap-2 border-b border-white/10 pb-2">
-        {(['overview', 'xml-references'] as const).map(tab => <button key={tab} type="button" role="tab"
+      <div role="tablist" aria-label="Project views" className="flex gap-2 border-b border-white/[0.08] pb-2">
+        {PROJECT_TABS.map(tab => <button key={tab} type="button" role="tab"
           id={`project-tab-${tab}`} aria-controls={`project-panel-${tab}`} aria-selected={view === tab}
           tabIndex={view === tab ? 0 : -1}
           onKeyDown={event => {
             if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
             event.preventDefault();
-            const next = event.key === 'Home' ? 'overview' : event.key === 'End' ? 'xml-references'
-              : tab === 'overview' ? 'xml-references' : 'overview';
+            const idx = PROJECT_TABS.indexOf(tab);
+            const next = event.key === 'Home'
+              ? PROJECT_TABS[0]
+              : event.key === 'End'
+                ? PROJECT_TABS[PROJECT_TABS.length - 1]
+                : event.key === 'ArrowRight'
+                  ? PROJECT_TABS[(idx + 1) % PROJECT_TABS.length]
+                  : PROJECT_TABS[(idx - 1 + PROJECT_TABS.length) % PROJECT_TABS.length];
             setView(next);
             event.currentTarget.parentElement?.querySelector<HTMLButtonElement>(`#project-tab-${next}`)?.focus();
           }}
-          onClick={() => setView(tab)} className={`rounded border px-3 py-1.5 text-xs ${view === tab
-            ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200' : 'border-white/10 text-slate-400 hover:text-white'}`}>
-          {tab === 'overview' ? 'Overview' : 'XML References'}
+          onClick={() => setView(tab)} className={`rounded-md border px-3 py-1.5 text-xs font-medium cursor-pointer transition-colors ${view === tab
+            ? 'border-blue-500/45 bg-blue-500/15 text-blue-200' : 'border-white/[0.08] bg-[#11141a] text-slate-400 hover:text-white'}`}>
+          {tab === 'overview' ? 'Overview' : tab === 'xml-references' ? 'XML References' : 'Release'}
         </button>)}
       </div>
-      {view === 'xml-references' ? <div role="tabpanel" id="project-panel-xml-references" aria-labelledby="project-tab-xml-references">
+      {view === 'release' ? (
+        <div role="tabpanel" id="project-panel-release" aria-labelledby="project-tab-release" className="max-w-3xl">
+          <ReleaseCenter workspace={workspace} preferences={releasePreferences} />
+        </div>
+      ) : view === 'xml-references' ? <div role="tabpanel" id="project-panel-xml-references" aria-labelledby="project-tab-xml-references">
         <XmlReferenceView workspace={workspace} schemaConfigVersion={schemaConfigVersion} />
       </div> : <div role="tabpanel" id="project-panel-overview" aria-labelledby="project-tab-overview" className="space-y-4">
       {/* status banner */}

@@ -20,6 +20,9 @@ async function openReleaseCenter(page: Page, preferences: ReleasePreferences = D
   await health.waitFor({ state: 'visible', timeout: 1_500 }).catch(() => undefined);
   if (await health.isVisible()) await page.getByTestId('health-card-dismiss').click();
   await page.locator('[data-sidebar-tab="playtest"]').click();
+  await expect(page.getByTestId('release-center')).toHaveCount(0);
+  await page.locator('[data-workspace-view="project"]').click();
+  await page.locator('#project-tab-release').click();
   await expect(page.getByTestId('release-center')).toBeVisible();
 }
 

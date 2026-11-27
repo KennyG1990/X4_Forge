@@ -17,12 +17,14 @@ import { ModWorkspace } from '../types';
 import ObjectIndexPicker, { type IndexItem } from './ObjectIndexPicker';
 import { toast } from '../lib/uiDialogs';
 import { openOrMaterializeInNativeEditor } from '../lib/nativeEditor';
+import { scanLibraryConflictsWithDisk, type ConflictWarning } from '../lib/libraryConflicts';
 
 interface LibraryConfiguratorProps {
   workspace: ModWorkspace;
   setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
   /** B13: push an undo checkpoint before destructive edits (deletes) so Ctrl+Z works here too. */
   saveCheckpoint?: () => void;
+  onOpenConflicts?: () => void;
 }
 
 export interface WareDef {
@@ -54,23 +56,14 @@ export interface JobDef {
   rebuildOnDestroy: boolean;
 }
 
-export interface ConflictWarning {
-  id: string;
-  severity: 'error' | 'warning' | 'info';
-  category: 'id_collision' | 'overlap' | 'validation' | 'pricing';
-  title: string;
-  message: string;
-  affectedIds: string[];
-  location: string;
-}
+export type { ConflictWarning };
 
-export default function LibraryConfigurator({ workspace, setWorkspace, saveCheckpoint }: LibraryConfiguratorProps) {
+export default function LibraryConfigurator({ workspace, setWorkspace, saveCheckpoint, onOpenConflicts }: LibraryConfiguratorProps) {
   const [activeSubTab, setActiveSubTab] = useState<'wares' | 'jobs'>('wares');
   const [activeItemIndex, setActiveItemIndex] = useState<number>(0);
   const [isPatchMode, setIsPatchMode] = useState<boolean>(true);
   const [warnings, setWarnings] = useState<ConflictWarning[]>([]);
   const [isScanning, setIsScanning] = useState<boolean>(false);
-  const [warningsExpanded, setWarningsExpanded] = useState<boolean>(true);
   // Inline "new item id" entry (replaces a blocking window.prompt). null = not adding.
   const [addingId, setAddingId] = useState<string | null>(null);
   const [addingCollision, setAddingCollision] = useState<IndexItem | null>(null);
@@ -84,330 +77,12 @@ export default function LibraryConfigurator({ workspace, setWorkspace, saveCheck
 
   const scanProjectFilesForConflicts = async () => {
     setIsScanning(true);
-    const foundWarnings: ConflictWarning[] = [];
-    
-    // 1. Collect all custom registries in workspace + defaults
-    const registryWares = wares;
-    const registryJobs = jobs;
-
-    const wareDefsMap = new Map<string, Array<{ id: string; name?: string; source: string; details?: string }>>();
-    const jobDefsMap = new Map<string, Array<{ id: string; name?: string; source: string; details?: any }>>();
-
-    // Populate active workspace registry
-    registryWares.forEach(w => {
-      const list = wareDefsMap.get(w.id) || [];
-      list.push({ id: w.id, name: w.name, source: 'Workspace Registry' });
-      wareDefsMap.set(w.id, list);
-
-      // P6: NaN/blank numeric fields evade every comparison guard below (NaN >= NaN is
-      // false), so they'd ship as attr="NaN". Catch them explicitly.
-      const nanFields = (['volume', 'minPrice', 'avgPrice', 'maxPrice', 'prodTime', 'prodAmount'] as const)
-        .filter(k => !Number.isFinite(Number((w as any)[k])));
-      if (nanFields.length > 0) {
-        foundWarnings.push({
-          id: `nan_ware_${w.id}`,
-          severity: 'error',
-          category: 'validation',
-          title: 'Non-numeric ware field',
-          message: `Ware '${w.id}' has non-numeric ${nanFields.join(', ')} — X4 rejects "NaN". Enter a number.`,
-          affectedIds: [w.id],
-          location: 'Workspace Registry'
-        });
-      }
-
-      // Pricing rules validation
-      if (w.minPrice >= w.maxPrice) {
-        foundWarnings.push({
-          id: `price_floor_${w.id}`,
-          severity: 'error',
-          category: 'pricing',
-          title: 'Invalid pricing range',
-          message: `Min price (${w.minPrice} cr) is greater/equal to Max price (${w.maxPrice} cr) for '${w.id}'. X4 engine rejects unstable boundaries.`,
-          affectedIds: [w.id],
-          location: 'Workspace Registry'
-        });
-      }
-      if (w.avgPrice < w.minPrice || w.avgPrice > w.maxPrice) {
-        foundWarnings.push({
-          id: `price_avg_${w.id}`,
-          severity: 'warning',
-          category: 'pricing',
-          title: 'Average price anomalous',
-          message: `Average price (${w.avgPrice} cr) must reside between Min floor and Max ceiling.`,
-          affectedIds: [w.id],
-          location: 'Workspace Registry'
-        });
-      }
-    });
-
-    registryJobs.forEach(j => {
-      const list = jobDefsMap.get(j.id) || [];
-      list.push({ id: j.id, name: j.name, source: 'Workspace Registry', details: j });
-      jobDefsMap.set(j.id, list);
-
-      // P6: NaN/blank quotas evade the comparison guards below.
-      const nanJobFields = (['galaxyQuota', 'sectorQuota'] as const)
-        .filter(k => !Number.isFinite(Number((j as any)[k])));
-      if (nanJobFields.length > 0) {
-        foundWarnings.push({
-          id: `nan_job_${j.id}`,
-          severity: 'error',
-          category: 'validation',
-          title: 'Non-numeric job quota',
-          message: `Job '${j.id}' has non-numeric ${nanJobFields.join(', ')} — enter a number.`,
-          affectedIds: [j.id],
-          location: 'Workspace Registry'
-        });
-      }
-
-      // Validation warnings
-      if (j.galaxyQuota <= 0) {
-        foundWarnings.push({
-          id: `quota_gal_${j.id}`,
-          severity: 'error',
-          category: 'validation',
-          title: 'Zero quota limit',
-          message: `Galaxy quota for job '${j.id}' is 0. No ships under this design will ever spawn.`,
-          affectedIds: [j.id],
-          location: 'Workspace Registry'
-        });
-      }
-      if (j.sectorQuota > j.galaxyQuota) {
-        foundWarnings.push({
-          id: `quota_sec_${j.id}`,
-          severity: 'warning',
-          category: 'validation',
-          title: 'Sector quota exceeds Galaxy',
-          message: `Sector quota limit (${j.sectorQuota}) is greater than Galaxy quota (${j.galaxyQuota}). Spawn volumes will be capped by galaxy volume.`,
-          affectedIds: [j.id],
-          location: 'Workspace Registry'
-        });
-      }
-    });
-
-    // 2. Scan xmlPatches built-in or custom blocks
-    const patches = workspace.xmlPatches || [];
-    patches.forEach(p => {
-      const xmlContent = p.content || '';
-      
-      // Regex match wares
-      const wareRegex = /<ware\s+id=["']([^"']+)["']/g;
-      let wareMatch;
-      while ((wareMatch = wareRegex.exec(xmlContent)) !== null) {
-        const wareId = wareMatch[1];
-        const nameMatch = xmlContent.match(/name=["']([^"']+)["']/);
-        const wareName = nameMatch ? nameMatch[1] : undefined;
-        const patchSource = `XML Patch Block: "${p.note || p.id}"`;
-        
-        const list = wareDefsMap.get(wareId) || [];
-        list.push({ id: wareId, name: wareName, source: patchSource });
-        wareDefsMap.set(wareId, list);
-      }
-
-      // Regex match jobs
-      const jobRegex = /<job\s+id=["']([^"']+)["']/g;
-      let jobMatch;
-      while ((jobMatch = jobRegex.exec(xmlContent)) !== null) {
-        const jobId = jobMatch[1];
-        const nameMatch = xmlContent.match(/name=["']([^"']+)["']/);
-        const jobName = nameMatch ? nameMatch[1] : undefined;
-        const patchSource = `XML Patch Block: "${p.note || p.id}"`;
-        
-        const factionMatch = xmlContent.match(/faction=["']([^"']+)["']/);
-        const tagMatch = xmlContent.match(/tags=["']([^"']+)["']/);
-        const scriptMatch = xmlContent.match(/script=["']([^"']+)["']/);
-        
-        const dummyJob = {
-          faction: factionMatch ? factionMatch[1] : '',
-          shipClass: tagMatch ? tagMatch[1] : '',
-          taskScript: scriptMatch ? scriptMatch[1] : ''
-        };
-
-        const list = jobDefsMap.get(jobId) || [];
-        list.push({ id: jobId, name: jobName, source: patchSource, details: dummyJob });
-        jobDefsMap.set(jobId, list);
-      }
-    });
-
-    // 3. Scan physical XML files on disk under /libraries/ directories
     try {
-      const listRes = await fetch('/api/fs/list');
-      if (listRes.ok) {
-        const tree = await listRes.json();
-        
-        const flattenFiles = (nodes: any[]): any[] => {
-          let results: any[] = [];
-          if (!nodes || !Array.isArray(nodes)) return results;
-          nodes.forEach(n => {
-            if (n.kind === 'file') {
-              results.push(n);
-            } else if (n.kind === 'directory' && n.children) {
-              results = [...results, ...flattenFiles(n.children)];
-            }
-          });
-          return results;
-        };
-        
-        const allFiles = flattenFiles(tree);
-        const xmlFiles = allFiles.filter(f => f.name && f.name.endsWith('.xml') && f.path && f.path.includes('/libraries/'));
-        
-        for (const file of xmlFiles) {
-          try {
-            const readRes = await fetch(`/api/fs/read?root=filesystem&path=${encodeURIComponent(file.path)}`);
-            if (readRes.ok) {
-              const data = await readRes.json();
-              const fileContent = data.content || '';
-              const relativePath = file.path.split('/workspace/').pop() || file.path;
-              
-              // Wares matching
-              const wareRegex = /<ware\s+id=["']([^"']+)["']/g;
-              let fileWareMatch;
-              while ((fileWareMatch = wareRegex.exec(fileContent)) !== null) {
-                const wareId = fileWareMatch[1];
-                const subBlock = fileContent.substring(fileWareMatch.index, fileWareMatch.index + 250);
-                const nameMatch = subBlock.match(/name=["']([^"']+)["']/);
-                const wareName = nameMatch ? nameMatch[1] : undefined;
-                
-                const list = wareDefsMap.get(wareId) || [];
-                list.push({ id: wareId, name: wareName, source: `Local Disk: ${relativePath}` });
-                wareDefsMap.set(wareId, list);
-              }
-
-              // Jobs matching
-              const jobRegex = /<job\s+id=["']([^"']+)["']/g;
-              let fileJobMatch;
-              while ((fileJobMatch = jobRegex.exec(fileContent)) !== null) {
-                const jobId = fileJobMatch[1];
-                const subBlock = fileContent.substring(fileJobMatch.index, fileJobMatch.index + 400);
-                const nameMatch = subBlock.match(/name=["']([^"']+)["']/);
-                const jobName = nameMatch ? nameMatch[1] : undefined;
-                
-                const factionMatch = subBlock.match(/faction=["']([^"']+)["']/);
-                const tagsMatch = subBlock.match(/tags=["']([^"']+)["']/);
-                const scriptMatch = subBlock.match(/script=["']([^"']+)["']/);
-                
-                const dummyJob = {
-                  faction: factionMatch ? factionMatch[1] : '',
-                  shipClass: tagsMatch ? tagsMatch[1] : '',
-                  taskScript: scriptMatch ? scriptMatch[1] : ''
-                };
-
-                const list = jobDefsMap.get(jobId) || [];
-                list.push({ id: jobId, name: jobName, source: `Local Disk: ${relativePath}`, details: dummyJob });
-                jobDefsMap.set(jobId, list);
-              }
-            }
-          } catch (fileErr) {
-            console.error("Local file conflict check read failed for:", file.path, fileErr);
-          }
-        }
-      }
-    } catch (fsErr) {
-      console.warn("FS scanning issue, falling back to memory arrays:", fsErr);
+      const foundWarnings = await scanLibraryConflictsWithDisk(workspace);
+      setWarnings(foundWarnings);
+    } finally {
+      setIsScanning(false);
     }
-
-    // 4. Duplicate ID collision evaluation
-    wareDefsMap.forEach((sources, wareId) => {
-      if (sources.length > 1) {
-        const distinctSources = Array.from(new Set(sources.map(s => s.source)));
-        if (distinctSources.length > 1) {
-          foundWarnings.push({
-            id: `conflict_ware_${wareId}`,
-            severity: 'error',
-            category: 'id_collision',
-            title: `Ware ID Conflict: '${wareId}'`,
-            message: `The precise Ware ID is defined across overlapping resources: ${distinctSources.join(' AND ')}. Will cause silent overwritten errors.`,
-            affectedIds: [wareId],
-            location: distinctSources.join(' vs ')
-          });
-        } else {
-          // P12: same-source duplicate (e.g. two wares with the same id in this workspace) —
-          // previously unflagged; X4 silently keeps only one definition.
-          foundWarnings.push({
-            id: `dup_ware_${wareId}`,
-            severity: 'error',
-            category: 'id_collision',
-            title: `Duplicate Ware ID: '${wareId}'`,
-            message: `Ware ID '${wareId}' is defined ${sources.length} times in ${distinctSources[0]}. X4 keeps only one — give each ware a unique id.`,
-            affectedIds: [wareId],
-            location: distinctSources[0]
-          });
-        }
-      }
-    });
-
-    jobDefsMap.forEach((sources, jobId) => {
-      if (sources.length > 1) {
-        const distinctSources = Array.from(new Set(sources.map(s => s.source)));
-        if (distinctSources.length > 1) {
-          foundWarnings.push({
-            id: `conflict_job_${jobId}`,
-            severity: 'error',
-            category: 'id_collision',
-            title: `Job ID Conflict: '${jobId}'`,
-            message: `This Pilot Squad Job ID is declared in multiple file locations: ${distinctSources.join(' AND ')}. Engine parses only one.`,
-            affectedIds: [jobId],
-            location: distinctSources.join(' vs ')
-          });
-        } else {
-          // P12: same-source duplicate job id — previously unflagged.
-          foundWarnings.push({
-            id: `dup_job_${jobId}`,
-            severity: 'error',
-            category: 'id_collision',
-            title: `Duplicate Job ID: '${jobId}'`,
-            message: `Job ID '${jobId}' is defined ${sources.length} times in ${distinctSources[0]}. X4 keeps only one — give each job a unique id.`,
-            affectedIds: [jobId],
-            location: distinctSources[0]
-          });
-        }
-      }
-    });
-
-    // 5. Overlapping Jobs diagnostics (same faction, class tag, task behaviors)
-    const allJobsList: Array<{ id: string; name?: string; source: string; details: any }> = [];
-    jobDefsMap.forEach((sources, jobId) => {
-      sources.forEach(s => {
-        if (s.details) {
-          allJobsList.push({ id: jobId, name: s.name, source: s.source, details: s.details });
-        }
-      });
-    });
-
-    for (let i = 0; i < allJobsList.length; i++) {
-      for (let j = i + 1; j < allJobsList.length; j++) {
-        const jobA = allJobsList[i];
-        const jobB = allJobsList[j];
-        
-        if (jobA.id === jobB.id) continue;
-
-        const fA = String(jobA.details.faction || '').trim().toLowerCase();
-        const fB = String(jobB.details.faction || '').trim().toLowerCase();
-        const sClassA = String(jobA.details.shipClass || '').trim().toLowerCase();
-        const sClassB = String(jobB.details.shipClass || '').trim().toLowerCase();
-        const scriptA = String(jobA.details.taskScript || '').trim().toLowerCase();
-        const scriptB = String(jobB.details.taskScript || '').trim().toLowerCase();
-
-        const factionOverlap = fA && fB && (fA === fB || fA.includes(fB) || fB.includes(fA));
-        const classOverlap = sClassA && sClassB && (sClassA === sClassB || sClassA.includes(sClassB) || sClassB.includes(sClassA));
-        const scriptOverlap = scriptA && scriptB && (scriptA === scriptB || scriptA.includes(scriptB) || scriptB.includes(scriptA));
-
-        if (factionOverlap && classOverlap && scriptOverlap) {
-          foundWarnings.push({
-            id: `overlap_job_${jobA.id}_${jobB.id}`,
-            severity: 'warning',
-            category: 'overlap',
-            title: `Overlapping NPC Flight Roles`,
-            message: `Job '${jobA.id}' (${jobA.source}) and Job '${jobB.id}' (${jobB.source}) share faction parameters (${jobA.details.faction}) and script logic (${jobA.details.taskScript}). Can saturate local patrol quota boundaries.`,
-            affectedIds: [jobA.id, jobB.id],
-            location: `${jobA.source} VS ${jobB.source}`
-          });
-        }
-      }
-    }
-
-    setWarnings(foundWarnings);
-    setIsScanning(false);
   };
 
   React.useEffect(() => {
@@ -837,79 +512,52 @@ export default function LibraryConfigurator({ workspace, setWorkspace, saveCheck
             )}
           </div>
 
-          {/* Warnings / Diagnostics panel */}
-          <div className="border-t border-white/10 shrink-0 bg-black/45 hover:bg-black/60 transition-colors select-none text-xs font-mono">
-            <button
-              onClick={() => setWarningsExpanded(!warningsExpanded)}
-              className="w-full p-3 font-bold uppercase tracking-wider flex items-center justify-between cursor-pointer text-slate-300 hover:text-white"
-            >
-              <div className="flex items-center gap-1.5">
-                <BadgeAlert className={`w-4 h-4 ${
+          {/* Compact single-owner conflict status footer (detailed issues live in Diagnostics -> Mod Conflicts) */}
+          <div
+            data-testid="library-conflicts-handoff"
+            className="border-t border-white/[0.08] shrink-0 bg-[#11141a] px-3 py-2 flex items-center justify-between gap-2 text-[11px]"
+          >
+            <div className="flex items-center gap-1.5 min-w-0">
+              <BadgeAlert className={`w-4 h-4 shrink-0 ${
+                warnings.filter(w => w.severity === 'error').length > 0
+                  ? 'text-red-400'
+                  : warnings.length > 0
+                    ? 'text-amber-400'
+                    : 'text-emerald-400'
+              }`} />
+              {warnings.length > 0 ? (
+                <span className={`px-1.5 py-0.5 rounded font-medium ${
                   warnings.filter(w => w.severity === 'error').length > 0
-                    ? 'text-red-400 animate-pulse'
-                    : warnings.length > 0
-                      ? 'text-amber-400'
-                      : 'text-emerald-400'
-                }`} />
-                <span>Conflict Diagnostics</span>
-                {warnings.length > 0 ? (
-                  <span className={`text-[10px] px-1.5 py-0.2 rounded font-bold ${
-                    warnings.filter(w => w.severity === 'error').length > 0
-                      ? 'bg-red-500/10 text-red-400'
-                      : 'bg-amber-500/10 text-amber-400'
-                  }`}>
-                    {warnings.length} issues
-                  </span>
-                ) : (
-                  <span className="text-[9.5px] text-emerald-400 font-extrabold">Clean</span>
-                )}
-              </div>
-              <span className="text-slate-500 text-[10px]">{warningsExpanded ? '▼' : '▲'}</span>
-            </button>
-
-            {warningsExpanded && (
-              <div className="max-h-60 overflow-y-auto p-2.5 border-t border-white/5 space-y-2 bg-[#0c0d12]/90 w-full">
-                <div className="flex items-center justify-between pb-1.5 mb-1 border-b border-white/5">
-                  <span className="text-[9.5px] text-slate-500">Cross-File Intersections:</span>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); scanProjectFilesForConflicts(); }}
-                    className={`text-[9.5px] text-cyan-400 hover:text-white font-bold inline-flex items-center gap-1 cursor-pointer ${isScanning ? 'animate-spin' : ''}`}
-                  >
-                    🔄 Re-Scan
-                  </button>
-                </div>
-                
-                {warnings.length === 0 ? (
-                  <div className="text-[10px] text-slate-500 py-3 text-center">
-                    No conflicts identified in active XML definitions or mod files!
-                  </div>
-                ) : (
-                  warnings.map(w => (
-                    <div
-                      key={w.id}
-                      className={`p-2 rounded border text-[10px] leading-relaxed flex flex-col gap-1 ${
-                        w.severity === 'error'
-                          ? 'bg-red-500/5 hover:bg-red-500/10 border-red-500/20 text-red-300'
-                          : 'bg-amber-500/5 hover:bg-amber-500/10 border-amber-500/20 text-amber-300'
-                      }`}
-                    >
-                      <div className="font-bold flex items-center justify-between">
-                        <span className="truncate pr-1">{w.title}</span>
-                        <span className={`text-[8.5px] uppercase font-bold p-0.5 px-0.8 rounded ${
-                          w.severity === 'error' ? 'bg-red-500/20 text-red-400' : 'bg-amber-500/20 text-amber-400'
-                        }`}>
-                          {w.category.replace('_', ' ')}
-                        </span>
-                      </div>
-                      <p className="text-[9.5px] text-slate-400">{w.message}</p>
-                      <div className="text-[8.5px] text-slate-600 truncate mt-0.5" title={w.location}>
-                        📍 Context: {w.location}
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            )}
+                    ? 'bg-red-500/15 text-red-300'
+                    : 'bg-amber-500/15 text-amber-300'
+                }`}>
+                  {warnings.length} conflict{warnings.length === 1 ? '' : 's'}
+                </span>
+              ) : (
+                <span className="text-emerald-400 font-medium">No conflicts</span>
+              )}
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => void scanProjectFilesForConflicts()}
+                disabled={isScanning}
+                className="px-2 py-1 rounded border border-white/[0.08] bg-[#171b23] hover:text-white text-slate-300 text-[11px] cursor-pointer disabled:opacity-50"
+                title="Re-scan Wares & Jobs for collisions"
+              >
+                {isScanning ? 'Scanning…' : 'Scan'}
+              </button>
+              {onOpenConflicts && (
+                <button
+                  type="button"
+                  data-testid="library-open-conflicts-btn"
+                  onClick={onOpenConflicts}
+                  className="px-2 py-1 rounded border border-blue-500/35 bg-blue-500/15 hover:bg-blue-500/25 text-blue-200 text-[11px] font-medium cursor-pointer"
+                >
+                  Diagnostics →
+                </button>
+              )}
+            </div>
           </div>
         </div>
 

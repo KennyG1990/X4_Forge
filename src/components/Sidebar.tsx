@@ -39,8 +39,8 @@ import {
   PackageDiagnostic
 } from '../types';
 import DirectoryExplorer from './DirectoryExplorer';
-import DiagnosticsHub from './DiagnosticsHub';
-import { toContentVersion } from '../lib/modCompiler';
+import PlaytestWorkspace from './PlaytestWorkspace';
+import { toContentVersion, toSafeModId } from '../lib/modCompiler';
 import DiagnosticsCenter from './DiagnosticsCenter';
 import SnapshotManager from './SnapshotManager';
 import SourceControl from './SourceControl';
@@ -59,7 +59,6 @@ import {
   type SidebarTab,
   type StudioLayoutPreferences,
 } from '../lib/studioLayout';
-import type { ReleasePreferences } from '../lib/releasePreferences';
 import type { ValidationDeltaResult } from '../lib/validationDelta';
 import type { WorkspaceValidationInputs } from '../lib/workspaceValidationInputs';
 
@@ -86,7 +85,6 @@ interface SidebarProps {
   activeTab: SidebarTab;
   setActiveTab: (tab: SidebarTab) => void;
   layoutPreferences: StudioLayoutPreferences;
-  releasePreferences: ReleasePreferences;
   onMoveTool: (tool: SidebarTab, target: SidebarTab | number) => void;
   onToggleToolRail: () => void;
   onTogglePanel: () => void;
@@ -152,6 +150,7 @@ interface SidebarProps {
   onDiagnosticsScopeChange: (scope: DiagnosticsScope) => void;
   onSuppressionCommitted?: (sourceHash: string) => void;
   onSelectSnapshot?: (snapWS: ModWorkspace | null) => void;
+  onOpenReleaseCenter?: () => void;
   drawerOpen?: boolean;
 }
 
@@ -286,7 +285,6 @@ export default function Sidebar({
   activeTab,
   setActiveTab,
   layoutPreferences,
-  releasePreferences,
   onMoveTool,
   onToggleToolRail,
   onTogglePanel,
@@ -340,6 +338,7 @@ export default function Sidebar({
   validationDelta,
   onSuppressionCommitted,
   onSelectSnapshot,
+  onOpenReleaseCenter,
   drawerOpen = true,
 }: SidebarProps) {
   const [nodeFilter, setNodeFilter] = useState<'all' | 'cue' | 'event' | 'condition' | 'action'>('all');
@@ -576,7 +575,7 @@ export default function Sidebar({
         {/* Main Content Pane */}
         <div className={`flex-1 min-w-0 min-h-0 ${activeTab === 'diagnostics'
           ? 'p-0 overflow-hidden'
-          : `overflow-y-auto ${activeTab === 'filesystem' || activeTab === 'git' || activeTab === 'cues' || activeTab === 'ai' ? 'p-0' : 'p-3 space-y-3'}`}`}>
+          : `overflow-y-auto ${activeTab === 'filesystem' || activeTab === 'git' || activeTab === 'cues' || activeTab === 'ai' || activeTab === 'playtest' ? 'p-0' : 'p-3 space-y-3'}`}`}>
         {activeTab === 'cues' && (
           <CueViewer
             workspace={workspace}
@@ -616,14 +615,13 @@ export default function Sidebar({
 
         {activeTab === 'playtest' && (
           <ErrorBoundary label="Playtest Workspace">
-            <DiagnosticsHub
+            <PlaytestWorkspace
               workspace={workspace}
               setWorkspace={setWorkspace}
               saveCheckpoint={saveCheckpoint}
+              activeModId={toSafeModId(workspace.name)}
               modWorkspacePath={modWorkspacePath}
-              setWorkspaceView={setWorkspaceView}
-              forceTab="playtest"
-              releasePreferences={releasePreferences}
+              onOpenReleaseCenter={onOpenReleaseCenter}
             />
           </ErrorBoundary>
         )}
