@@ -489,6 +489,18 @@ export function runProjectValidation(
     const key = JSON.stringify([stage, fileIdentity(file), dependency]);
     return validationFacts.get(key, compute, 2 * (file.content?.length || 0)) as T;
   };
+  const canonicalMdReadCache = new Map<string, ReturnType<CanonicalMdValidationOptions['read']>>();
+  const canonicalMd: CanonicalMdValidationOptions | undefined = opts.canonicalMd
+    ? {
+        ...opts.canonicalMd,
+        read(root: string) {
+          if (canonicalMdReadCache.has(root)) return canonicalMdReadCache.get(root);
+          const loaded = opts.canonicalMd!.read(root);
+          canonicalMdReadCache.set(root, loaded);
+          return loaded;
+        },
+      }
+    : undefined;
   const coverageGaps: ValidationCoverageGap[] = [];
   const parsedRules = parseProjectRules(project);
   const projectChecks = inspectProjectCheckProposal(project.files);
@@ -834,7 +846,7 @@ export function runProjectValidation(
   }
 
   const referencesAnalysis = validateCrossFileWithMdContext(project, {
-    hasMdDiffs, mdReferenceRoot, canonicalMd: opts.canonicalMd,
+    hasMdDiffs, mdReferenceRoot, canonicalMd,
     readDiffFacts(_file, relativePath) {
       if (!effectiveMdContextInspected.has(relativePath)) {
         coverageGaps.push({ check: EFFECTIVE_MD_RETURN_CHECK, filePath: relativePath,
@@ -1016,23 +1028,28 @@ export function runProjectValidation(
   // Advisory unknown-script check for md.<Script>.<Cue> when the official canonical MD catalog
   // is loaded, no MD files were skipped, and content.xml declares no external third-party mod dependencies.
   const rootManifestFile = project.files.find(f => typeof f.content === 'string' && f.path.replace(/\\/g, '/').toLowerCase() === 'content.xml');
-  if (rootManifestFile?.content && opts.canonicalMd && skippedMd.size === 0 && mdReferenceRoot) {
+  const hasSkippedMdInventory = Boolean(canonicalMd?.skippedFiles?.some(file => isAuthoredMdInventoryPath(authoredMdSourceKey(file.path), file.directory)));
+  const mdReferenceContextIncomplete = referencesAnalysis.coverageGaps.some(gap => gap.check === 'md.reference_context');
+  if (rootManifestFile?.content && canonicalMd && !hasSkippedMdInventory && !mdReferenceContextIncomplete && mdReferenceRoot) {
     const hasThirdPartyDep = [...rootManifestFile.content.matchAll(/<dependency\b[^>]*\bid\s*=\s*["']([^"']+)["']/gi)]
       .some(m => !/^ego_dlc_/i.test(m[1].trim()));
     if (!hasThirdPartyDep) {
-      const readyCat = opts.canonicalMd.read(mdReferenceRoot);
+      const knownProjectMdNames = new Set<string>();
+      for (const vf of variableFiles) {
+        if (typeof vf.content !== 'string') continue;
+        const hm = /<mdscript\b[^>]*\bname\s*=\s*["']([^"']+)["']/i.exec(vf.content);
+        if (hm) knownProjectMdNames.add(hm[1].trim().toLowerCase());
+      }
+      const externalQualifiedRefs = cueIndex.references.flatMap(ref => {
+        const qm = /^md\.([A-Za-z_]\w*)\.([A-Za-z_]\w*)$/.exec(ref.ref.trim());
+        if (!qm) return [];
+        const scriptKey = qm[1].toLowerCase();
+        return knownProjectMdNames.has(scriptKey) ? [] : [{ ref, scriptName: qm[1], scriptKey }];
+      });
+      const readyCat = externalQualifiedRefs.length > 0 ? canonicalMd.read(mdReferenceRoot) : undefined;
       if (readyCat) {
-        const knownProjectMdNames = new Set<string>();
-        for (const vf of variableFiles) {
-          if (typeof vf.content !== 'string') continue;
-          const hm = /<mdscript\b[^>]*\bname\s*=\s*["']([^"']+)["']/i.exec(vf.content);
-          if (hm) knownProjectMdNames.add(hm[1].trim().toLowerCase());
-        }
-        for (const ref of cueIndex.references) {
-          const qm = /^md\.([A-Za-z_]\w*)\.([A-Za-z_]\w*)$/.exec(ref.ref.trim());
-          if (!qm) continue;
-          const scriptKey = qm[1].toLowerCase();
-          if (knownProjectMdNames.has(scriptKey) || readyCat.providers.has(scriptKey)) continue;
+        for (const { ref, scriptName, scriptKey } of externalQualifiedRefs) {
+          if (readyCat.providers.has(scriptKey)) continue;
           pitfallFindings.push({
             code: 'md.unknown_script_reference',
             severity: 'warning',
@@ -1040,7 +1057,7 @@ export function runProjectValidation(
             line: ref.line,
             column: ref.column,
             sourceRef: ref.sourceRef || ref.ref,
-            detail: `Mission Director reference "${ref.ref}" names script "${qm[1]}", which does not exist in this project or the canonical X4 corpus (and content.xml declares no external mod dependency).`,
+            detail: `Mission Director reference "${ref.ref}" names script "${scriptName}", which does not exist in this project or the canonical X4 corpus (and content.xml declares no external mod dependency).`,
           });
         }
       }
