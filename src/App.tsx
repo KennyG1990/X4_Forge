@@ -3516,6 +3516,8 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
               selectedNode={selectedNode}
               setSelectedNode={setSelectedNode}
               setWorkspace={setWorkspace}
+              workspace={workspace}
+              onOpenBlueprint={() => setWorkspaceView('blueprint')}
             />
           ) : workspaceView === 'contracts' ? (
             <ContractEditor
