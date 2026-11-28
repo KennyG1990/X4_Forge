@@ -213,16 +213,19 @@ export default function SyncModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, modWorkspacePath, filesystemPath]);
 
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       event.preventDefault();
-      onClose();
+      onCloseRef.current();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
+  }, [isOpen]);
 
   // Discovery is a navigation aid, not the authority for a manually entered path.
   // In particular, partial input and paths typed while a scan is pending must survive.

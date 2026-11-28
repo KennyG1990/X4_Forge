@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Cpu,
   Terminal,
@@ -425,14 +425,15 @@ export default function AgentBridge({
     { text: "AgentRuntime initialized. Surgical executor ready.", type: 'info' }
   ]);
 
+  const workspaceRef = useRef(workspace);
+  workspaceRef.current = workspace;
+
   // Surgical workspace manipulation APIs
   const updateNodeProperty = useCallback((nodeIdOrName: string, key: string, value: AgentRuntimeValue): boolean => {
-    let success = false;
+    const exists = workspaceRef.current.nodes.some(n => n.id === nodeIdOrName || n.properties.name === nodeIdOrName);
+    if (!exists) return false;
     setWorkspace(prev => {
-      const exists = prev.nodes.some(n => n.id === nodeIdOrName || n.properties.name === nodeIdOrName);
-      if (!exists) return prev;
-      
-      success = true;
+      if (!prev.nodes.some(n => n.id === nodeIdOrName || n.properties.name === nodeIdOrName)) return prev;
       return {
         ...prev,
         nodes: prev.nodes.map(n => {
@@ -454,16 +455,14 @@ export default function AgentBridge({
         })
       };
     });
-    return success;
+    return true;
   }, [setWorkspace]);
 
   const updateWidget = useCallback((widgetIdOrLabel: string, key: string, value: AgentRuntimeValue): boolean => {
-    let success = false;
+    const exists = workspaceRef.current.uiWidgets.some(w => w.id === widgetIdOrLabel || w.label === widgetIdOrLabel);
+    if (!exists) return false;
     setWorkspace(prev => {
-      const exists = prev.uiWidgets.some(w => w.id === widgetIdOrLabel || w.label === widgetIdOrLabel);
-      if (!exists) return prev;
-
-      success = true;
+      if (!prev.uiWidgets.some(w => w.id === widgetIdOrLabel || w.label === widgetIdOrLabel)) return prev;
       return {
         ...prev,
         uiWidgets: prev.uiWidgets.map(w => {
@@ -485,7 +484,7 @@ export default function AgentBridge({
         })
       };
     });
-    return success;
+    return true;
   }, [setWorkspace]);
 
   const addNode = useCallback((xmlTagOrType: string, x?: number, y?: number, properties?: AgentRuntimeProperties): boolean => {
@@ -816,16 +815,19 @@ export default function AgentBridge({
     return () => controller.abort();
   }, [isOpen]);
 
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       event.preventDefault();
-      onClose();
+      onCloseRef.current();
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
+  }, [isOpen]);
 
   const workspaceJsonPreview = useMemo(
     () => (isOpen && activeTab === 'status' ? JSON.stringify(workspace, null, 2) : ''),

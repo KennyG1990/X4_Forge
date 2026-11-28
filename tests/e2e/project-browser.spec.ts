@@ -436,16 +436,35 @@ test('Load Mod Project visibly decomposes a complex multi-script project without
       const runtime = (window as unknown as {
         AgentRuntime?: { updateNodeProperty: (id: string, key: string, value: string) => boolean };
       }).AgentRuntime;
-      if (!runtime?.updateNodeProperty(cueId, 'label', 'Init (local edit)')) {
-        throw new Error(`Could not mutate node ${cueId} via AgentRuntime`);
+      if (!runtime?.updateNodeProperty(cueId, 'comment', 'Unit 84 sticky note')) {
+        throw new Error(`Could not mutate node ${cueId} comment via AgentRuntime`);
+      }
+      if (!runtime?.updateNodeProperty(cueId, 'color', 'rgba(168, 85, 247, 0.04)')) {
+        throw new Error(`Could not mutate node ${cueId} color via AgentRuntime`);
       }
     }, alphaCue.id);
     await expect.poll(async () => page.evaluate((cueId) => {
       const runtime = (window as unknown as {
-        AgentRuntime?: { getCurrentWorkspace: () => { nodes: Array<{ id: string; label?: string }> } };
+        AgentRuntime?: { getCurrentWorkspace: () => { nodes: Array<{ id: string; comment?: string; color?: string }> } };
       }).AgentRuntime;
-      return runtime?.getCurrentWorkspace().nodes.find(node => node.id === cueId)?.label || '';
-    }, alphaCue.id)).toBe('Init (local edit)');
+      const node = runtime?.getCurrentWorkspace().nodes.find(entry => entry.id === cueId);
+      return `${node?.comment || ''}|${node?.color || ''}`;
+    }, alphaCue.id)).toBe('Unit 84 sticky note|rgba(168, 85, 247, 0.04)');
+    await expect.poll(async () => {
+      const persisted = await readServerWorkspace();
+      const node = (persisted.nodes as Array<{ id: string; comment?: string; color?: string }>).find(entry => entry.id === alphaCue.id);
+      return `${node?.comment || ''}|${node?.color || ''}`;
+    }, { timeout: 15_000 }).toBe('Unit 84 sticky note|rgba(168, 85, 247, 0.04)');
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    if (await startupWalkaround.isVisible().catch(() => false)) await page.getByTestId('health-card-dismiss').click();
+    await expect.poll(async () => page.evaluate((cueId) => {
+      const runtime = (window as unknown as {
+        AgentRuntime?: { getCurrentWorkspace: () => { nodes: Array<{ id: string; comment?: string; color?: string }> } };
+      }).AgentRuntime;
+      const node = runtime?.getCurrentWorkspace().nodes.find(entry => entry.id === cueId);
+      return `${node?.comment || ''}|${node?.color || ''}`;
+    }, alphaCue.id), { timeout: 15_000 }).toBe('Unit 84 sticky note|rgba(168, 85, 247, 0.04)');
+    await expect(sourceInventory).toHaveText('Source MD: 2 files', { timeout: 15_000 });
     fs.writeFileSync(path.join(mod, 'md', 'late_added.xml'), lossyMd('LateAdded', 'LateChild'), 'utf8');
     await expect(sourceInventory).toHaveText('Source MD: 3 files · 1 outside graph', { timeout: 20_000 });
     await expect(sourceInventory).toHaveAttribute('title', 'Source files outside the graph: late_added.xml');

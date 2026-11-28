@@ -1,4 +1,4 @@
-import { useEffect, useId, type ReactNode } from 'react';
+import { useEffect, useId, useRef, type ReactNode } from 'react';
 import { X } from 'lucide-react';
 
 export interface ModalShellProps {
@@ -52,17 +52,19 @@ export default function ModalShell({
 }: ModalShellProps) {
   const titleId = useId();
   const subtitleId = useId();
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     if (!dismissible || !closeOnEscape) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       event.preventDefault();
-      onClose();
+      onCloseRef.current();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [dismissible, closeOnEscape, onClose]);
+  }, [dismissible, closeOnEscape]);
 
   return (
     <div

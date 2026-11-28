@@ -1048,6 +1048,71 @@ export function runWorkspaceRegistrySelftest(): {
     catch (err) { nonSchemaRefused = String(err).includes('corrupt or unsupported; refusing fallback.'); }
     ok('tampered_non_schema_field_still_refused', tamperedRefused && nonSchemaRefused);
 
+    const metaRoot = path.join(root, 'node-comment-color');
+    const metaBase = sanitizeWorkspace({
+      ...legacy,
+      name: 'Node_Annotation_Preserve',
+      nodes: [
+        {
+          id: 'cue_meta',
+          type: 'cue',
+          xmlTag: 'cue',
+          label: 'Annotated Cue',
+          x: 120,
+          y: 120,
+          comment: 'Sticky note survives save',
+          color: 'rgba(168, 85, 247, 0.04)',
+          properties: { name: 'Annotated_Cue' },
+          inputs: [],
+          outputs: [],
+          includeInBuild: true,
+        },
+      ],
+    } as unknown as ModWorkspace);
+    const metaRegistry = new WorkspaceRegistry({
+      root: metaRoot,
+      defaultWorkspace: metaBase,
+      now: () => now + 400,
+      randomHex,
+    });
+    const metaRebooted = new WorkspaceRegistry({
+      root: metaRoot,
+      defaultWorkspace: legacy,
+      now: () => now + 500,
+      randomHex,
+    });
+    const metaLoaded = metaRebooted.lookup(metaRegistry.defaultWorkspaceId);
+    ok(
+      'node_comment_and_color_survive_persistence',
+      metaLoaded.ok
+      && metaLoaded.record.workspace.nodes[0]?.comment === 'Sticky note survives save'
+      && metaLoaded.record.workspace.nodes[0]?.color === 'rgba(168, 85, 247, 0.04)'
+      && metaLoaded.record.head === contentHead(metaBase),
+    );
+    const dirtyMetaWs = sanitizeWorkspace({
+      ...metaBase,
+      nodes: [
+        {
+          ...metaBase.nodes[0],
+          comment: '',
+          color: null as unknown as string,
+        },
+        {
+          ...metaBase.nodes[0],
+          id: 'cue_meta_2',
+          comment: 123 as unknown as string,
+          color: '',
+        },
+      ],
+    } as unknown as ModWorkspace);
+    ok(
+      'empty_node_comment_and_non_string_color_sanitized',
+      !('comment' in dirtyMetaWs.nodes[0])
+      && !('color' in dirtyMetaWs.nodes[0])
+      && !('comment' in dirtyMetaWs.nodes[1])
+      && !('color' in dirtyMetaWs.nodes[1]),
+    );
+
     let capRejected = false;
     try { registry.create({ ...legacy, name: 'Third' } as ModWorkspace, 'selftest'); registry.create({ ...legacy, name: 'Fourth' } as ModWorkspace, 'selftest'); } catch { capRejected = true; }
     ok('record_cap_rejected', capRejected && registry.list().length === 3);

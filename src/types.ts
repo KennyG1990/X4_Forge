@@ -2158,6 +2158,8 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
       y: typeof node.y === 'number' ? node.y : 100,
       ...(Number.isFinite(node.width) && node.width > 0 ? { width: node.width } : {}),
       ...(Number.isFinite(node.height) && node.height > 0 ? { height: node.height } : {}),
+      ...(typeof node.comment === 'string' && node.comment.length > 0 ? { comment: node.comment } : {}),
+      ...(typeof node.color === 'string' && node.color.length > 0 ? { color: node.color } : {}),
       properties: node.properties || (template ? { ...template.properties } : {}),
       // propertiesSchema is derived from the node's xmlTag (it's presentation, not user data),
       // so always re-hydrate it from the current template when one exists. This lets template
