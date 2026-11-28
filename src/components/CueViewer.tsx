@@ -341,8 +341,13 @@ export default function CueViewer({
     const isExpanded = expandedPaths[node.id] ?? true;
     const isActive = selectedNode?.id === node.id;
     const isChecked = activeVisibleSet.has(node.id);
-    const initialState = node.node.properties?.state || 'active';
-    const isInstantiated = node.node.properties?.instantiate === 'true';
+    const props = node.node.properties || {};
+    const initialState = props.state || 'active';
+    const isInstantiated = props.instantiate === 'true';
+    const isLibrary = props.isLibrary === 'true' || props.isLibrary === true;
+    const libPurpose = String(props.libPurpose || props.purpose || '').trim();
+    const patchVerMatch = String(props.cueTailXml || props.rawXml || '').match(/sinceversion\s*=\s*["'](\d+)["']/i);
+    const patchVer = String(props.patchSinceVersion || '').trim() || (patchVerMatch ? patchVerMatch[1] : '');
 
     // health + live state for THIS cue
     const cueFindings = findingsByCueId.get(node.id) || [];
@@ -350,29 +355,29 @@ export default function CueViewer({
     const hasWarn = !hasError && cueFindings.length > 0;
     const tele = node.name ? cueTele.get(node.name) : undefined;
     const liveTint = tele
-      ? (tele.errors > 0 ? 'border-l-2 border-red-500 bg-red-500/5' : 'border-l-2 border-emerald-500 bg-emerald-500/5')
+      ? (tele.errors > 0 ? 'border-l-2 border-rose-500 bg-rose-500/5' : 'border-l-2 border-emerald-500 bg-emerald-500/5')
       : '';
 
     return (
       <div key={node.id} style={{ paddingLeft: `${depth * 6}px` }}>
         <div
-          className={`group flex items-center gap-1 py-0.5 px-1.5 rounded text-left transition-all font-mono text-[10.5px] border border-transparent select-none my-0.5 ${liveTint} ${
+          className={`group flex items-center gap-1 py-1 px-1.5 rounded text-left transition-colors font-mono text-[11px] border border-transparent select-none my-0.5 ${liveTint} ${
             isActive
-              ? 'bg-purple-950/30 text-purple-300 border-purple-500/25 font-bold'
-              : 'text-slate-200 hover:text-white hover:bg-white/[0.02]'
+              ? 'bg-[#171b23] text-[#eef2f7] border-[#3b82f6]/50 font-semibold'
+              : 'text-[#cbd5e1] hover:text-white hover:bg-[#171b23]/60'
           }`}
         >
           <span className="shrink-0">
             {isParent ? (
               <button
                 onClick={() => toggleFolder(node.id)}
-                className="p-0.5 rounded hover:bg-white/10 text-slate-500 hover:text-slate-350 cursor-pointer"
+                className="p-0.5 rounded hover:bg-white/10 text-[#a0aab8] hover:text-white cursor-pointer"
               >
-                {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
               </button>
             ) : (
               <div className="w-4 h-4 flex items-center justify-center">
-                <span className="w-1 h-1 rounded-full bg-slate-650" />
+                <span className="w-1 h-1 rounded-full bg-[#687385]" />
               </div>
             )}
           </span>
@@ -381,40 +386,59 @@ export default function CueViewer({
             onClick={(e) => handleToggleCueVisibility(node, e)}
             className={`p-0.5 rounded shrink-0 transition-colors cursor-pointer ${
               isChecked
-                ? 'text-cyan-400 hover:text-cyan-200 hover:bg-cyan-500/10'
-                : 'text-slate-600 hover:text-slate-400 hover:bg-white/5'
+                ? 'text-[#60a5fa] hover:text-[#93c5fd] hover:bg-[#3b82f6]/10'
+                : 'text-[#687385] hover:text-[#a0aab8] hover:bg-white/5'
             }`}
             title={isChecked ? 'Hide cue and descendants from canvas' : 'Show cue and descendants on canvas'}
           >
             {isChecked ? <Eye className="w-3.5 h-3.5 shrink-0" /> : <EyeOff className="w-3.5 h-3.5 shrink-0" />}
           </button>
 
-          <GitCommit className={`w-3.5 h-3.5 shrink-0 ${isChecked ? 'text-purple-400' : 'text-slate-650'}`} />
+          <GitCommit className={`w-3.5 h-3.5 shrink-0 ${isChecked ? 'text-purple-400' : 'text-[#687385]'}`} />
 
           <button
             onClick={() => handleFocusCue(node.node)}
             className="flex-1 text-left truncate cursor-pointer pl-0.5 min-w-0"
             title={`Focus cue & dependencies: ${node.name}`}
           >
-            <span className={`truncate font-semibold ${isChecked ? '' : 'text-slate-500 line-through decoration-slate-700'}`}>{node.name}</span>
-            <span className="block text-[8px] text-slate-500 font-mono scale-95 origin-left truncate leading-tight">
-              {initialState} {isInstantiated && '• dynamic'}
-              {tele && <span className={tele.errors > 0 ? 'text-red-400' : 'text-emerald-400'}> • live ×{tele.hits}{tele.errors > 0 ? ` (${tele.errors} err)` : ''}</span>}
+            <span className={`truncate font-semibold block ${isChecked ? '' : 'text-[#687385] line-through decoration-[#262c36]'}`}>{node.name}</span>
+            <span className="block text-[11px] text-[#687385] font-mono truncate leading-tight">
+              {initialState}{isInstantiated ? ' · inst' : ''}
+              {tele && <span className={tele.errors > 0 ? ' text-rose-400' : ' text-emerald-400'}> · live ×{tele.hits}{tele.errors > 0 ? ` (${tele.errors} err)` : ''}</span>}
             </span>
           </button>
+
+          {isLibrary && (
+            <span
+              data-testid="cue-viewer-library-badge"
+              className="shrink-0 rounded border border-purple-500/35 bg-purple-500/10 px-1.5 py-0.5 text-[11px] font-mono text-purple-200"
+              title={`<library${libPurpose ? ` purpose="${libPurpose}"` : ''}>`}
+            >
+              {libPurpose || 'lib'}
+            </span>
+          )}
+          {patchVer && (
+            <span
+              data-testid="cue-viewer-patch-badge"
+              className="shrink-0 rounded border border-amber-500/35 bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-mono text-amber-200"
+              title={`<patch sinceversion="${patchVer}">`}
+            >
+              p{patchVer}
+            </span>
+          )}
 
           {(hasError || hasWarn) && (
             <span
               className="shrink-0 cursor-help"
               title={cueFindings.map(f => `[${f.severity}] ${f.message}`).join('\n')}
             >
-              <AlertTriangle className={`w-3 h-3 ${hasError ? 'text-red-400' : 'text-amber-400'}`} />
+              <AlertTriangle className={`w-3.5 h-3.5 ${hasError ? 'text-rose-400' : 'text-amber-400'}`} />
             </span>
           )}
         </div>
 
         {isParent && isExpanded && (
-          <div className="border-l border-white/5 ml-2 my-0.5 space-y-0.5">
+          <div className="border-l border-[#262c36] ml-2 my-0.5 space-y-0.5">
             {node.children.map(child => renderCueNode(child, depth + 1))}
           </div>
         )}
@@ -423,21 +447,21 @@ export default function CueViewer({
   };
 
   return (
-    <div className="flex flex-col h-full bg-transparent text-[#e0e0e0] overflow-hidden select-none font-sans">
-      <div className="p-3 border-b border-white/5 shrink-0 space-y-2 bg-transparent">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1 bg-black/20 p-0.5 rounded border border-white/5">
+    <div className="flex flex-col h-full bg-[#0c0e12] text-[#eef2f7] overflow-hidden select-none font-sans">
+      <div className="p-3 border-b border-[#262c36] shrink-0 space-y-2 bg-[#11141a]">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1 bg-[#0a0c10] p-0.5 rounded border border-[#262c36]">
             <button
               onClick={handleSelectAll}
-              className="p-1 px-1.5 rounded hover:bg-white/5 text-cyan-400 hover:text-cyan-200 transition-all text-[9px] font-mono font-bold cursor-pointer"
+              className="px-2 py-1 rounded hover:bg-[#171b23] text-[#60a5fa] hover:text-[#93c5fd] transition-colors text-[11px] font-mono font-semibold cursor-pointer"
               title="Show all cues and elements"
             >
               SHOW ALL
             </button>
-            <span className="text-white/10 text-[9px] font-mono px-0.5">|</span>
+            <span className="text-[#262c36] text-[11px] font-mono px-0.5">|</span>
             <button
               onClick={handleClearAll}
-              className="p-1 px-1.5 rounded hover:bg-white/5 text-slate-400 hover:text-red-400 transition-all text-[9px] font-mono font-bold cursor-pointer"
+              className="px-2 py-1 rounded hover:bg-[#171b23] text-[#a0aab8] hover:text-rose-300 transition-colors text-[11px] font-mono font-semibold cursor-pointer"
               title="Hide all cues from canvas"
             >
               CLEAR ALL
@@ -447,17 +471,17 @@ export default function CueViewer({
             {(errorCount > 0 || warnCount > 0) && (
               <button
                 onClick={() => setShowFindings(v => !v)}
-                className={`text-[9px] px-1.5 py-0.5 rounded border font-bold font-mono cursor-pointer ${
+                className={`text-[11px] px-2 py-0.5 rounded border font-semibold font-mono cursor-pointer ${
                   errorCount > 0
-                    ? 'bg-red-950/40 text-red-300 border-red-500/25'
-                    : 'bg-amber-950/40 text-amber-300 border-amber-500/25'
+                    ? 'bg-rose-500/12 text-rose-300 border-rose-500/35'
+                    : 'bg-amber-500/12 text-amber-300 border-amber-500/35'
                 }`}
                 title="Structural lineage findings — click to expand"
               >
                 {errorCount > 0 ? `${errorCount} ⛔` : ''}{errorCount > 0 && warnCount > 0 ? ' ' : ''}{warnCount > 0 ? `${warnCount} ⚠` : ''}
               </button>
             )}
-            <div className="text-[9px] bg-cyan-950/40 text-cyan-400 px-1.5 py-0.5 rounded border border-cyan-500/20 font-bold font-mono">
+            <div className="text-[11px] bg-[#171b23] text-[#93c5fd] px-2 py-0.5 rounded border border-[#262c36] font-semibold font-mono">
               {visibleCueIds === null ? `${allCues.length} Cues` : `${visibleCueIds.length}/${allCues.length} Visible`}
             </div>
           </div>
@@ -469,8 +493,8 @@ export default function CueViewer({
               <button
                 key={i}
                 onClick={() => handleJumpToNode(f.cueId || (f as any).nodeId)}
-                className={`w-full text-left text-[9px] font-sans leading-snug p-1.5 rounded border cursor-pointer hover:bg-white/5 ${
-                  f.severity === 'error' ? 'bg-red-500/5 border-red-500/20 text-red-300' : 'bg-amber-500/5 border-amber-500/25 text-amber-300'
+                className={`w-full text-left text-[11px] font-sans leading-snug p-2 rounded border cursor-pointer hover:bg-[#171b23] ${
+                  f.severity === 'error' ? 'bg-rose-500/10 border-rose-500/30 text-rose-200' : 'bg-amber-500/10 border-amber-500/30 text-amber-200'
                 }`}
                 title="Jump to the offending cue/node"
               >
@@ -481,20 +505,20 @@ export default function CueViewer({
         )}
 
         <div className="relative">
-          <Search className="absolute left-2.5 top-2.5 w-3 h-3 text-slate-500" />
+          <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-[#687385]" />
           <input
             type="text"
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
             placeholder="Search Cues..."
-            className="w-full pl-7 pr-2 py-1.5 rounded bg-black/40 border border-white/5 text-[10.5px] text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition-colors font-mono"
+            className="w-full pl-8 pr-2.5 py-1.5 rounded bg-[#0a0c10] border border-[#262c36] text-[11px] text-[#eef2f7] placeholder-[#687385] focus:outline-none focus:border-[#3b82f6] transition-colors font-mono"
           />
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-2 custom-scrollbar bg-transparent scrollbar-thin">
+      <div className="flex-1 overflow-y-auto p-2 custom-scrollbar bg-[#0c0e12] scrollbar-thin">
         {filteredTree.length === 0 ? (
-          <div className="text-center py-8 text-[10px] font-mono text-slate-500 leading-normal">
+          <div className="text-center py-8 text-[11px] font-mono text-[#687385] leading-normal">
             {allCues.length === 0
               ? 'No script cues identified in active blueprint.'
               : 'No cues matched query criteria'}
@@ -507,42 +531,42 @@ export default function CueViewer({
       </div>
 
       {/* Live game-log binding + Live Fix cards (the app's ONE log consumer UI besides Playtest) */}
-      <div className="p-2 border-t border-white/5 bg-[#17191e]/50 shrink-0 space-y-1.5">
+      <div className="p-2.5 border-t border-[#262c36] bg-[#11141a] shrink-0 space-y-2">
         <div className="flex items-center gap-3 flex-wrap">
           <button
             onClick={() => setLiveMode(v => !v)}
             data-testid="cue-live-toggle"
             title="Watch the live X4 debuglog — the same feed the Playtest watcher uses — and light up cues in real time"
-            className={`flex items-center gap-1 text-[9px] font-bold uppercase cursor-pointer ${liveMode ? 'text-emerald-300' : 'text-slate-400 hover:text-emerald-300'}`}
+            className={`flex items-center gap-1.5 text-[11px] font-semibold uppercase cursor-pointer ${liveMode ? 'text-emerald-300' : 'text-[#a0aab8] hover:text-emerald-300'}`}
           >
-            <Radio className={`w-3 h-3 ${liveMode ? 'animate-pulse' : ''}`} />{liveMode ? 'Live: ON' : 'Bind live game log'}
+            <Radio className={`w-3.5 h-3.5 ${liveMode ? 'animate-pulse' : ''}`} />{liveMode ? 'Live: ON' : 'Bind live game log'}
           </button>
           <button
             onClick={() => setShowLog(v => !v)}
-            className="flex items-center gap-1 text-[9px] font-bold uppercase text-violet-300 hover:text-violet-200 cursor-pointer"
+            className="flex items-center gap-1.5 text-[11px] font-semibold uppercase text-[#a0aab8] hover:text-[#93c5fd] cursor-pointer"
           >
-            <Activity className="w-3 h-3" />{showLog ? 'Hide' : 'Import'} offline log{!liveMode && pastedTele.size > 0 ? ` (${pastedTele.size} lit)` : ''}
+            <Activity className="w-3.5 h-3.5" />{showLog ? 'Hide' : 'Import'} offline log{!liveMode && pastedTele.size > 0 ? ` (${pastedTele.size} lit)` : ''}
           </button>
         </div>
         {liveMode && (
-          <div data-testid="cue-live-status" className="text-[8.5px] font-mono text-slate-500 truncate" title={liveStatus}>
+          <div data-testid="cue-live-status" className="text-[11px] font-mono text-[#a0aab8] truncate" title={liveStatus}>
             {liveStatus || 'connecting to debuglog feed…'}
           </div>
         )}
         {liveMode && liveFixes.length > 0 && (
           <div className="space-y-1.5">
-            <div className="text-[8.5px] font-bold uppercase text-red-300 tracking-wider">
+            <div className="text-[11px] font-semibold uppercase text-rose-300 tracking-wide">
               Live fixes — {liveFixes.length} attributed error{liveFixes.length > 1 ? 's' : ''}
             </div>
             {liveFixes.slice(0, 6).map(fix => (
-              <div key={fix.id} className="rounded border border-red-500/20 bg-red-500/5 p-1.5 space-y-1">
+              <div key={fix.id} className="rounded border border-rose-500/25 bg-rose-500/5 p-2 space-y-1">
                 <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className="text-[7.5px] font-bold uppercase text-red-300 bg-red-500/10 border border-red-500/25 rounded px-1 py-0.5">{fix.fixKind.replace('_', ' ')}</span>
-                  {fix.cueName && <span className="text-[8px] font-mono text-slate-400">{fix.cueName}</span>}
+                  <span className="text-[11px] font-semibold uppercase text-rose-300 bg-rose-500/12 border border-rose-500/30 rounded px-1.5 py-0.5">{fix.fixKind.replace('_', ' ')}</span>
+                  {fix.cueName && <span className="text-[11px] font-mono text-[#a0aab8]">{fix.cueName}</span>}
                   {fix.sourceRef && (
                     <button
                       onClick={() => handleJumpToNode(fix.sourceRef!.id)}
-                      className="text-[8px] font-bold text-cyan-300 hover:text-cyan-200 uppercase cursor-pointer"
+                      className="text-[11px] font-semibold text-[#60a5fa] hover:text-[#93c5fd] uppercase cursor-pointer"
                     >
                       Jump →
                     </button>
@@ -550,50 +574,50 @@ export default function CueViewer({
                   {fix.autoApplicable && setWorkspace && (
                     <button
                       onClick={() => handleApplyFix(fix)}
-                      className="text-[8px] font-bold text-emerald-300 hover:text-emerald-200 uppercase ml-auto cursor-pointer"
+                      className="text-[11px] font-semibold text-emerald-300 hover:text-emerald-200 uppercase ml-auto cursor-pointer"
                     >
                       Apply fix
                     </button>
                   )}
                 </div>
-                <div className="text-[8.5px] text-slate-300 font-sans leading-snug">{fix.suggestion}</div>
-                <div className="text-[8px] text-slate-500 font-mono truncate" title={fix.logLine}>{fix.logLine}</div>
+                <div className="text-[11px] text-[#eef2f7] font-sans leading-snug">{fix.suggestion}</div>
+                <div className="text-[11px] text-[#687385] font-mono truncate" title={fix.logLine}>{fix.logLine}</div>
               </div>
             ))}
             <div className="flex items-center gap-2">
               <button
                 onClick={handleDeployForRefresh}
-                className="text-[8.5px] font-bold uppercase text-fuchsia-300 hover:text-fuchsia-200 cursor-pointer"
+                className="text-[11px] font-semibold uppercase text-[#93c5fd] hover:text-[#bfdbfe] cursor-pointer"
               >
                 Deploy for /refreshmd
               </button>
-              {fixMsg && <span className="text-[8px] font-sans text-slate-400 leading-snug">{fixMsg}</span>}
+              {fixMsg && <span className="text-[11px] font-sans text-[#a0aab8] leading-snug">{fixMsg}</span>}
             </div>
           </div>
         )}
         {liveMode && liveFixes.length === 0 && fixMsg && (
-          <div className="text-[8px] font-sans text-slate-400">{fixMsg}</div>
+          <div className="text-[11px] font-sans text-[#a0aab8]">{fixMsg}</div>
         )}
         {showLog && (
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             <textarea
               value={logText}
               onChange={e => setLogText(e.target.value)}
               spellCheck={false}
               placeholder={'Paste X4 debug-log text. Lines naming a cue (or [MDStudio] cue=<Name>) light it up; errors turn it red.'}
-              className="w-full h-20 p-2 rounded bg-black/60 border border-white/10 text-slate-300 font-mono text-[10px] leading-snug outline-none resize-y"
+              className="w-full h-20 p-2 rounded bg-[#0a0c10] border border-[#262c36] text-[#eef2f7] placeholder-[#687385] font-mono text-[11px] leading-snug focus:outline-none focus:border-[#3b82f6] resize-y"
             />
-            <div className="flex items-center gap-2">
-              <label className="text-[9px] text-cyan-400 hover:text-cyan-300 cursor-pointer flex items-center gap-1">
-                <FileText className="w-3 h-3" />Load .log file
+            <div className="flex items-center gap-3">
+              <label className="text-[11px] text-[#60a5fa] hover:text-[#93c5fd] cursor-pointer flex items-center gap-1">
+                <FileText className="w-3.5 h-3.5" />Load .log file
                 <input type="file" accept=".log,.txt" className="hidden" onChange={e => { const fl = e.target.files?.[0]; if (fl) { const rd = new FileReader(); rd.onload = () => setLogText(String(rd.result || '')); rd.readAsText(fl); } }} />
               </label>
-              {logText && <button onClick={() => setLogText('')} className="text-[9px] text-slate-500 hover:text-red-400 cursor-pointer">clear</button>}
+              {logText && <button onClick={() => setLogText('')} className="text-[11px] text-[#a0aab8] hover:text-rose-300 cursor-pointer">clear</button>}
             </div>
           </div>
         )}
         {!liveMode && !showLog && (
-          <span className="block truncate font-mono text-[8.5px] text-slate-500">👁 Toggle eye to filter · click name to pan · ⚠ hover for findings</span>
+          <span className="block truncate font-mono text-[11px] text-[#687385]">👁 Toggle eye to filter · click name to pan · ⚠ hover for findings</span>
         )}
       </div>
     </div>

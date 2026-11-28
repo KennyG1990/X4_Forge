@@ -97,8 +97,8 @@ const GuidedRail: React.FC<GuidedRailProps> = ({ title, guide, getWorkspace, onC
     <button
       data-testid={`rail-step-${n}`}
       onClick={() => setStep(n)}
-      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold transition-colors cursor-pointer ${
-        step === n ? 'bg-cyan-600/40 text-cyan-100 border border-cyan-400/50' : 'bg-white/5 text-slate-400 border border-white/10 hover:border-cyan-500/30'
+      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold transition-colors cursor-pointer ${
+        step === n ? 'bg-[#3b82f6]/20 text-[#93c5fd] border border-[#3b82f6]/45' : 'bg-[#171b23] text-[#a0aab8] border border-[#262c36] hover:border-[#3b82f6]/35 hover:text-[#eef2f7]'
       }`}
     >
       {icon} {label}
@@ -110,40 +110,40 @@ const GuidedRail: React.FC<GuidedRailProps> = ({ title, guide, getWorkspace, onC
     // pass; the rail is the newcomer's active guide and dismissible, so it wins while open.
     // Stays below modals (z-50).
     <div data-testid="guided-rail" className="absolute bottom-4 left-1/2 -translate-x-1/2 z-[45] w-[560px] max-w-[92%]">
-      <div className="bg-[#0f131a]/97 border border-cyan-500/25 rounded-xl shadow-2xl glass-effect p-3.5">
+      <div className="bg-[#0c0e12]/97 border border-[#262c36] rounded-xl shadow-2xl p-3.5">
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">
             {stepChip(1, <Wrench size={11} />, '1 · Make it yours')}
             {stepChip(2, <Rocket size={11} />, '2 · Put it in the game')}
             {stepChip(3, <Gamepad2 size={11} />, '3 · See it')}
           </div>
-          <button data-testid="rail-close" onClick={onClose} className="text-slate-500 hover:text-slate-300 cursor-pointer" aria-label="Dismiss guide">
+          <button data-testid="rail-close" onClick={onClose} className="text-[#687385] hover:text-[#eef2f7] cursor-pointer" aria-label="Dismiss guide">
             <X size={14} />
           </button>
         </div>
 
         {step === 1 && (
-          <div className="text-[11px] text-slate-300 leading-relaxed" data-testid="rail-tweak">
-            <span className="text-cyan-300 font-semibold">{title}</span> is a working mod already.{' '}
+          <div className="text-[11px] text-[#a0aab8] leading-relaxed" data-testid="rail-tweak">
+            <span className="text-[#93c5fd] font-semibold">{title}</span> is a working mod already.{' '}
             {guide?.tweakHint || 'Click any node and change a property to make it yours.'}{' '}
-            <button data-testid="rail-next" onClick={() => setStep(2)} className="text-cyan-300 underline underline-offset-2 hover:text-cyan-200 cursor-pointer font-semibold">
+            <button data-testid="rail-next" onClick={() => setStep(2)} className="text-[#60a5fa] underline underline-offset-2 hover:text-[#93c5fd] cursor-pointer font-semibold">
               Done tweaking → deploy it
             </button>
           </div>
         )}
 
         {step === 2 && (
-          <div className="text-[11px] text-slate-300 leading-relaxed">
+          <div className="text-[11px] text-[#a0aab8] leading-relaxed">
             {deploy.phase === 'idle' && (
               <>
                 One click validates, compiles, and installs the mod into your game folder.{' '}
-                <button data-testid="rail-deploy" onClick={runDeploy} className="ml-1 px-3 py-1 rounded bg-cyan-600 hover:bg-cyan-500 text-white font-semibold cursor-pointer">
+                <button data-testid="rail-deploy" onClick={runDeploy} className="ml-1 px-3 py-1 rounded bg-[#3b82f6] hover:bg-[#2563eb] text-white font-semibold cursor-pointer">
                   Deploy to X4
                 </button>
               </>
             )}
             {deploy.phase === 'running' && (
-              <span className="inline-flex items-center gap-1.5 text-cyan-300"><Loader2 size={12} className="animate-spin" /> Validating and deploying…</span>
+              <span className="inline-flex items-center gap-1.5 text-[#93c5fd]"><Loader2 size={12} className="animate-spin" /> Validating and deploying…</span>
             )}
             {deploy.phase === 'ok' && (
               <span className="inline-flex items-center gap-1.5 text-emerald-300"><CheckCircle2 size={12} /> {deploy.detail}</span>
@@ -154,16 +154,16 @@ const GuidedRail: React.FC<GuidedRailProps> = ({ title, guide, getWorkspace, onC
               // distinguish failure from warning; the amber palette stays reserved for warnings.
               <span className="inline-flex items-start gap-1.5 text-rose-300">
                 <AlertTriangle size={12} className="mt-0.5 shrink-0" /> {deploy.detail} — fix the highlighted issue and deploy again.
-                <button onClick={runDeploy} className="text-cyan-300 underline underline-offset-2 cursor-pointer shrink-0">Retry</button>
+                <button onClick={runDeploy} className="text-[#60a5fa] underline underline-offset-2 cursor-pointer shrink-0">Retry</button>
               </span>
             )}
           </div>
         )}
 
         {step === 3 && (
-          <div className="text-[11px] text-slate-300 leading-relaxed" data-testid="rail-game">
+          <div className="text-[11px] text-[#a0aab8] leading-relaxed" data-testid="rail-game">
             <div className="flex items-start gap-1.5">
-              <Gamepad2 size={12} className="mt-0.5 shrink-0 text-cyan-300" />
+              <Gamepad2 size={12} className="mt-0.5 shrink-0 text-[#60a5fa]" />
               <span>{watcher}</span>
             </div>
           </div>

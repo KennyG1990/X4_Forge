@@ -12,9 +12,9 @@ import React from 'react';
 export type StarterTone = 'cyan' | 'emerald' | 'amber';
 
 const TONES: Record<StarterTone, { border: string; text: string; hoverText: string }> = {
-  cyan:    { border: 'border-white/10 bg-white/[0.02] hover:border-cyan-500/40 hover:bg-cyan-500/5',          text: 'text-cyan-300',    hoverText: 'group-hover:text-cyan-200' },
-  emerald: { border: 'border-emerald-500/15 bg-emerald-500/[0.03] hover:border-emerald-500/40 hover:bg-emerald-500/10', text: 'text-emerald-300', hoverText: 'group-hover:text-emerald-200' },
-  amber:   { border: 'border-amber-500/15 bg-amber-500/[0.03] hover:border-amber-500/40 hover:bg-amber-500/10',          text: 'text-amber-300',   hoverText: 'group-hover:text-amber-200' },
+  cyan:    { border: 'border-[#262c36] bg-[#11141a] hover:border-[#3b82f6]/50 hover:bg-[#171b23]',           text: 'text-[#93c5fd]',   hoverText: 'group-hover:text-[#bfdbfe]' },
+  emerald: { border: 'border-emerald-500/20 bg-[#11141a] hover:border-emerald-500/50 hover:bg-emerald-500/10', text: 'text-emerald-300', hoverText: 'group-hover:text-emerald-200' },
+  amber:   { border: 'border-amber-500/20 bg-[#11141a] hover:border-amber-500/50 hover:bg-amber-500/10',       text: 'text-amber-300',   hoverText: 'group-hover:text-amber-200' },
 };
 
 export interface StarterCardProps {
@@ -39,8 +39,8 @@ const StarterCard: React.FC<StarterCardProps> = ({ testid, title, blurb, tone, o
       className={`text-left p-2.5 rounded-lg border transition-colors group cursor-pointer ${t.border}`}
     >
       <div className={`font-semibold text-xs ${t.text} ${t.hoverText}`}>{title}</div>
-      <div className="text-slate-500 text-[10px] mt-0.5 leading-snug">{blurb}</div>
-      {footnote && <div className="text-slate-600 text-[9px] mt-0.5 italic truncate">{footnote}</div>}
+      <div className="text-[#a0aab8] text-[11px] mt-0.5 leading-snug">{blurb}</div>
+      {footnote && <div className="text-[#687385] text-[11px] mt-0.5 italic truncate">{footnote}</div>}
     </button>
   );
 };

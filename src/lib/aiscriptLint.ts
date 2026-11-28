@@ -29,7 +29,7 @@ import type { ValidationSourceLocation } from './validationEvidence';
 /** orderparamlookup from aiscripts.xsd (unpacked 9.00) — curated fallback set. */
 export const ORDER_PARAM_TYPES = new Set([
   'internal', 'bool', 'number', 'length', 'time', 'money', 'object', 'space',
-  'position', 'ware', 'trade', 'build', 'formationshape',
+  'position', 'ware', 'trade', 'build', 'formationshape', 'list', 'macro', 'sector',
 ]);
 
 export interface AiscriptLintFinding {

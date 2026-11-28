@@ -3,870 +3,1716 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Trash,
-  Plus,
-  Compass,
-  Settings,
-  Sparkles,
-  Cpu,
+  ArrowDown,
+  ArrowUp,
   Bot,
-  ExternalLink
+  Check,
+  Code2,
+  Copy,
+  Cpu,
+  ExternalLink,
+  FileDiff,
+  GitBranch,
+  Plus,
+  ShieldAlert,
+  ShieldCheck,
+  Sliders,
+  Trash2,
 } from 'lucide-react';
-import { ModWorkspace } from '../types';
-import { promptDialog, toast } from '../lib/uiDialogs';
+import {
+  AI_ATTENTION_LEVELS,
+  AI_ORDER_CATEGORIES,
+  AI_ORDER_PARAM_TYPES,
+  normalizeAiAttentionLevel,
+  type AIAction,
+  type AIBehaviorScript,
+  type AIInterruptHandler,
+  type AIParam,
+  type AIScriptDiffOp,
+  type AIScriptPatchBlock,
+  type AiAttentionTier,
+  type ModWorkspace,
+} from '../types';
+import { lintAiscript } from '../lib/aiscriptLint';
+import { compileScriptToXML } from '../lib/modCompiler';
 import { openOrMaterializeInNativeEditor } from '../lib/nativeEditor';
+import { promptDialog, toast } from '../lib/uiDialogs';
+import { EmptyState, PanelHeader, StatusPill } from './ui';
+
+export type { AIAction, AIBehaviorScript, AIParam } from '../types';
 
 interface AIScriptEditorProps {
   workspace: ModWorkspace;
   setWorkspace: React.Dispatch<React.SetStateAction<ModWorkspace>>;
 }
 
-export interface AIParam {
-  name: string;
-  type: 'object' | 'number' | 'boolean' | 'ware' | 'faction';
-  defaultValue: string;
-  comment: string;
-}
+type WorkbenchTab = 'order' | 'actions' | 'interrupts' | 'diff' | 'xml';
 
-export interface AIAction {
-  id: string;
-  command: 'move_to' | 'flee' | 'shoot' | 'dock_at' | 'wait' | 'find_objects' | 'custom_xml';
-  label: string;
-  properties: Record<string, any>;
-}
+const ATTENTION_DESCRIPTIONS: Record<AiAttentionTier, string> = {
+  unknown: 'OOS fallback — runs regardless of player proximity',
+  ingalaxy: 'Galaxy-wide minimum LOD',
+  incluster: 'Cluster visible LOD',
+  sectorvisible: 'Sector visible on map',
+  insector: 'Player in same sector (standard patrol/combat)',
+  adjacentzone: 'Adjacent zone to player',
+  visible: 'Object visible to player camera',
+  inzone: 'Same zone as player',
+  nearby: 'High-frequency close proximity',
+  adjacentroom: 'Station interior adjacent room',
+  inroom: 'Same station room as player',
+};
 
-export interface AIBehaviorScript {
-  id: string;
-  name: string;
-  description: string;
-  command: string;
-  attentionLevel: 'high' | 'low';
-  params: AIParam[];
-  interrupts: { id: string; event: string; action: string }[];
-  actions: AIAction[];
-}
+const VANILLA_INTERRUPT_REFS = [
+  'AttackHandler',
+  'SectorChangeHandler',
+  'MissileLockHandler',
+  'ScannedHandler',
+  'InspectedHandler',
+  'ResupplyHandler',
+  'TideHandler',
+] as const;
 
-const defaultAIScripts: AIBehaviorScript[] = [
+export const DEFAULT_AI_SCRIPTS: AIBehaviorScript[] = [
   {
-    id: 'ai_hunter_escort',
-    name: 'hunter.escort.behavior',
-    description: 'Advanced aggressive patrol behavior that guards friendly transports and engages target intruders.',
-    command: 'command.escort',
-    attentionLevel: 'high' as const,
+    id: 'ai_order_patrol_sector',
+    name: 'order.forge.patrol.sector',
+    description: 'Player/NPC sector patrol <order> script with X4 9.00 insector LOD, AttackHandler ref, save migration <patch>, and <label>/<resume> loop.',
+    command: 'combat',
+    attentionLevel: 'insector',
+    version: 2,
+    priority: 5,
+    order: {
+      id: 'ForgeSectorPatrol',
+      name: '{1041, 391}',
+      description: '{1041, 392}',
+      category: 'combat',
+      infinite: true,
+      allowInLoop: false,
+      requiresXml: '<match shiptype="shiptype.lasertower" negate="true" />\n<match class="class.spacesuit" negate="true" />',
+      locationObject: '$space',
+      locationCondition: '$space.exists',
+    },
     params: [
-      { name: 'target', type: 'object', defaultValue: 'this.ship.commander', comment: 'Leader ship to closely escort' },
-      { name: 'flee_shield_percent', type: 'number', defaultValue: '25', comment: 'Shield threshold below which ship flees' },
-      { name: 'aggression', type: 'number', defaultValue: '0.8', comment: 'Fighter engagement speed scaler' }
-    ] as AIParam[],
+      { name: 'space', type: 'sector', text: '{1041, 10007}', defaultValue: 'this.sector', required: true, comment: 'Target patrol sector' },
+      { name: 'pursuetargets', type: 'bool', text: '{1041, 10091}', defaultValue: 'false', advanced: true, comment: 'Pursue fleeing hostiles' },
+      { name: 'timeout', type: 'time', text: '{1041, 10034}', defaultValue: '15min', advanced: true, comment: 'Patrol duration limit', inputParams: [{ name: 'min', value: '0s' }, { name: 'max', value: '10h' }] },
+    ],
     interrupts: [
-      { id: 'int_1', event: 'event.object_attacked', action: 'flee' },
-      { id: 'int_2', event: 'event.object_shield_low', action: 'dock_at_safety' }
+      { id: 'int_p1', ref: 'AttackHandler' },
+      {
+        id: 'int_p2',
+        event: 'event_object_hull_damaged',
+        conditionsXml: '<event_object_hull_damaged object="this.ship" />',
+        action: 'flee',
+        actionsXml: '<run_interrupt_script name="\'move.flee\'" />',
+        consume: false,
+      },
+    ],
+    patches: [
+      { id: 'pat_p1', sinceVersion: 2, early: false, comment: 'Initialize v2 sector scan state', actionsXml: '<set_value name="$lastscan" exact="0s" />' },
     ],
     actions: [
-      { id: 'act_1', command: 'move_to', label: 'Match formation distance', properties: { destination: '$target', speed: '90', precision: '100m' } },
-      { id: 'act_2', command: 'find_objects', label: 'Scan for sector hostilities', properties: { class: 'ship', faction: 'faction.xenon', range: '15km' } },
-      { id: 'act_3', command: 'shoot', label: 'Interdict intruders', properties: { target: '$enemy', weapon: 'primary' } },
-      { id: 'act_4', command: 'wait', label: 'Resume station keeping cycle', properties: { min: '5s', max: '15s' } }
-    ] as AIAction[]
+      { id: 'act_p1', command: 'label', label: 'Entry label', properties: { name: 'start' } },
+      { id: 'act_p2', command: 'find_objects', label: 'Find hostile ships in sector', properties: { result: '$enemies', class: 'ship', space: '$space' } },
+      { id: 'act_p3', command: 'move_to', label: 'Patrol sector center', properties: { object: 'this.ship', destination: '$space', flightbehaviour: 'flightbehaviour.generic', forceposition: 'false', finishonapproach: 'true', timeout: '20s' } },
+      { id: 'act_p4', command: 'shoot', label: 'Engage nearest hostile', properties: { object: 'this.ship', target: '@$enemies.{1}', weaponmode: 'weaponmode.attackenemies' } },
+      { id: 'act_p5', command: 'wait', label: 'Cycle delay', properties: { exact: '5s' } },
+      { id: 'act_p6', command: 'resume', label: 'Return to start label', properties: { label: 'start' } },
+    ],
   },
   {
-    id: 'ai_miner_trade',
-    name: 'miner.auto.harvest',
-    description: 'Finds ore deposits in the faction sectors, mines asteroid nodes, and docks to trade with higher yields.',
-    command: 'command.mine',
-    attentionLevel: 'low' as const,
+    id: 'ai_order_mine_auto',
+    name: 'order.forge.mine.auto',
+    description: 'Resource harvesting <order> script using visible attention tier, order.dock delegation, and <label>/<resume>.',
+    command: 'mining',
+    attentionLevel: 'visible',
+    version: 1,
+    order: {
+      id: 'ForgeAutoMine',
+      name: '{1041, 411}',
+      description: '{1041, 412}',
+      category: 'mining',
+      infinite: true,
+      allowInLoop: false,
+      locationObject: '$sector',
+      locationCondition: '$sector.exists',
+    },
     params: [
-      { name: 'resourceware', type: 'ware', defaultValue: 'ware.ore', comment: 'Mining mineral focus material' },
-      { name: 'max_gate_range', type: 'number', defaultValue: '3', comment: 'Safety jump radius' }
-    ] as AIParam[],
+      { name: 'sector', type: 'sector', text: '{1041, 10007}', defaultValue: 'this.sector', required: true, comment: 'Harvest sector' },
+      { name: 'ware', type: 'ware', text: '{1041, 10144}', defaultValue: 'ware.ore', required: true, comment: 'Mineral ware' },
+    ],
     interrupts: [
-      { id: 'int_3', event: 'event.object_hull_damaged', action: 'flee' }
+      { id: 'int_m1', ref: 'TideHandler' },
     ],
     actions: [
-      { id: 'act_5', command: 'find_objects', label: 'Detect rich asteroid nodes', properties: { class: 'asteroid', resource: '$resourceware', range: '50km' } },
-      { id: 'act_6', command: 'move_to', label: 'Approach resources cluster', properties: { destination: '$asteroid', speed: '50', precision: '10m' } },
-      { id: 'act_7', command: 'wait', label: 'Initiate laser excavation beams', properties: { exact: '30s' } },
-      { id: 'act_8', command: 'dock_at', label: 'Unload cargo at refinery station', properties: { station: 'faction.player.hq', trade: 'true' } }
-    ] as AIAction[]
-  }
+      { id: 'act_m1', command: 'label', label: 'Mining loop start', properties: { name: 'start' } },
+      { id: 'act_m2', command: 'find_objects', label: 'Locate asteroids', properties: { result: '$asteroids', class: 'asteroid', space: '$sector' } },
+      { id: 'act_m3', command: 'move_to', label: 'Approach asteroid cluster', properties: { object: 'this.ship', destination: '@$asteroids.{1}', flightbehaviour: 'flightbehaviour.mining', forceposition: 'false', finishonapproach: 'true', timeout: '30s' } },
+      { id: 'act_m4', command: 'wait', label: 'Harvest cycle', properties: { exact: '15s' } },
+      { id: 'act_m5', command: 'dock_at', label: 'Dock at refinery via order.dock', properties: { destination: 'this.ship.commander' } },
+      { id: 'act_m6', command: 'resume', label: 'Restart mining cycle', properties: { label: 'start' } },
+    ],
+  },
+  {
+    id: 'ai_diff_flee_tune',
+    name: 'move.flee',
+    description: 'Non-destructive RFC 5261 <diff> patch targeting vanilla aiscripts/move.flee.xml instead of shadowing the base script.',
+    command: 'patch',
+    attentionLevel: 'unknown',
+    mode: 'diff',
+    namespaced: true,
+    params: [],
+    interrupts: [],
+    actions: [],
+    diffOps: [
+      {
+        id: 'diff_op_1',
+        op: 'add',
+        sel: '//aiscript/init',
+        pos: 'append',
+        content: '<debug_text text="\'Forge flee patch active\'" chance="0" />',
+      },
+    ],
+  },
+];
+
+const ACTION_PALETTE: Array<{ command: AIAction['command']; label: string }> = [
+  { command: 'label', label: '<label>' },
+  { command: 'resume', label: '<resume>' },
+  { command: 'move_to', label: '<move_to>' },
+  { command: 'run_script', label: '<run_script>' },
+  { command: 'shoot', label: '<shoot_at>' },
+  { command: 'find_objects', label: '<find_object>' },
+  { command: 'wait', label: '<wait>' },
+  { command: 'dock_at', label: 'order.dock' },
+  { command: 'flee', label: 'move.flee' },
+  { command: 'custom_xml', label: 'Custom XML' },
 ];
 
 export default function AIScriptEditor({ workspace, setWorkspace }: AIScriptEditorProps) {
   const scripts = useMemo(() => workspace.aiScripts || [], [workspace.aiScripts]);
 
-  // Setup selected state, prioritizing first custom script, or null
   const [selectedScriptId, setSelectedScriptId] = useState<string | null>(() => {
-    if (scripts.length > 0) {
-      return scripts[0].id;
-    }
-    return null;
+    if (scripts.length > 0) return scripts[0].id;
+    return DEFAULT_AI_SCRIPTS[0].id;
   });
+  const [activeTab, setActiveTab] = useState<WorkbenchTab>('order');
+  const [copiedXml, setCopiedXml] = useState(false);
 
-  const isPreset = selectedScriptId !== null && (selectedScriptId === 'ai_hunter_escort' || selectedScriptId === 'ai_miner_trade');
+  const presetMatch = DEFAULT_AI_SCRIPTS.find(s => s.id === selectedScriptId);
+  const modMatch = scripts.find(s => s.id === selectedScriptId);
+  const isPreset = Boolean(presetMatch && !modMatch);
+  const activeScript = modMatch || presetMatch || null;
 
-  const activeScript = selectedScriptId
-    ? (isPreset
-        ? defaultAIScripts.find(s => s.id === selectedScriptId)
-        : scripts.find(s => s.id === selectedScriptId))
-    : null;
-
-  // Keep selected ID valid if the activeScript is deleted or invalidated
   useEffect(() => {
     if (selectedScriptId) {
-      const exists = isPreset
-        ? defaultAIScripts.some(s => s.id === selectedScriptId)
-        : scripts.some(s => s.id === selectedScriptId);
+      const exists = Boolean(modMatch || presetMatch);
       if (!exists) {
-        if (scripts.length > 0) {
-          setSelectedScriptId(scripts[0].id);
-        } else {
-          setSelectedScriptId(null);
-        }
+        setSelectedScriptId(scripts[0]?.id || DEFAULT_AI_SCRIPTS[0].id);
       }
     }
-  }, [scripts, selectedScriptId, isPreset]);
+  }, [scripts, selectedScriptId, modMatch, presetMatch]);
 
-  const saveScriptsState = (newScripts: any[]) => {
+  useEffect(() => {
+    if (!activeScript) return;
+    if (activeScript.mode === 'diff' && activeTab !== 'diff' && activeTab !== 'xml') {
+      setActiveTab('diff');
+    } else if (activeScript.mode !== 'diff' && activeTab === 'diff') {
+      setActiveTab('order');
+    }
+  }, [activeScript, activeTab]);
+
+  const compiledXml = useMemo(
+    () => (activeScript ? compileScriptToXML(activeScript) : ''),
+    [activeScript]
+  );
+
+  const lintFindings = useMemo(
+    () => (activeScript && activeScript.mode !== 'diff' ? lintAiscript(compiledXml) : []),
+    [activeScript, compiledXml]
+  );
+  const lintErrors = lintFindings.filter(f => f.severity === 'error');
+  const lintWarnings = lintFindings.filter(f => f.severity === 'warning');
+
+  const declaredLabels = useMemo(
+    () =>
+      (activeScript?.actions || [])
+        .filter(a => a.command === 'label')
+        .map(a => String(a.properties?.name || '').trim())
+        .filter(Boolean),
+    [activeScript]
+  );
+
+  const saveScriptsState = (newScripts: AIBehaviorScript[]) => {
     setWorkspace(prev => ({
       ...prev,
-      aiScripts: newScripts
+      aiScripts: newScripts,
     }));
   };
 
-  const handleUpdateScriptProp = (key: string, value: any) => {
-    if (isPreset) return;
-    const updated = scripts.map(s => {
-      if (s.id === selectedScriptId) {
-        return { ...s, [key]: value };
-      }
-      return s;
-    });
-    saveScriptsState(updated);
+  const updateActiveScript = (updater: (script: AIBehaviorScript) => AIBehaviorScript) => {
+    if (!activeScript || isPreset) return;
+    saveScriptsState(scripts.map(s => (s.id === activeScript.id ? updater(s) : s)));
   };
 
-  // AIScript Action manipulation
-  const handleAddAction = (command: AIAction['command']) => {
-    if (isPreset) return;
-    let defaults: Record<string, any> = {};
-    let label = '';
-    switch (command) {
-      case 'move_to':
-        defaults = { destination: '$target', speed: '100', precision: '50m' };
-        label = 'Flight path transit task';
-        break;
-      case 'flee':
-        defaults = { method: 'boost', duration: '20s' };
-        label = 'Emergency retreat maneuver';
-        break;
-      case 'shoot':
-        defaults = { target: '$enemy', weapon: 'all_weapons' };
-        label = 'Engage hostile elements';
-        break;
-      case 'dock_at':
-        defaults = { station: '$nearest_station', trade: 'false' };
-        label = 'Docking transit alignment';
-        break;
-      case 'wait':
-        defaults = { exact: '10s' };
-        label = 'Hold alignment position';
-        break;
-      case 'find_objects':
-        defaults = { class: 'ship', range: '10km' };
-        label = 'Sensors scanner survey';
-        break;
-      case 'custom_xml':
-        defaults = { rawXml: '<!-- Enter custom Egosoft scripting nodes here -->\n        <write_to_logbook text="\'AI script custom output...\'" />' };
-        label = 'Generic instruction insert';
-        break;
-    }
-
-    const nAct: AIAction = {
-      id: `ai_act_${Date.now()}`,
-      command,
-      label,
-      properties: defaults
-    };
-
-    const updated = scripts.map(s => {
-      if (s.id === selectedScriptId) {
-        return { ...s, actions: [...s.actions, nAct] };
-      }
-      return s;
-    });
-    saveScriptsState(updated);
-  };
-
-  const handleUpdateActionProp = (actionId: string, propKey: string, value: any) => {
-    if (isPreset) return;
-    const updated = scripts.map(s => {
-      if (s.id === selectedScriptId) {
-        return {
-          ...s,
-          actions: s.actions.map(act => 
-            act.id === actionId 
-              ? { ...act, properties: { ...act.properties, [propKey]: value } }
-              : act
-          )
-        };
-      }
-      return s;
-    });
-    saveScriptsState(updated);
-  };
-
-  const handleUpdateActionLabel = (actionId: string, label: string) => {
-    if (isPreset) return;
-    const updated = scripts.map(s => {
-      if (s.id === selectedScriptId) {
-        return {
-          ...s,
-          actions: s.actions.map(act => 
-            act.id === actionId ? { ...act, label } : act
-          )
-        };
-      }
-      return s;
-    });
-    saveScriptsState(updated);
-  };
-
-  const handleDeleteAction = (actionId: string) => {
-    if (isPreset) return;
-    const updated = scripts.map(s => {
-      if (s.id === selectedScriptId) {
-        return {
-          ...s,
-          actions: s.actions.filter(act => act.id !== actionId)
-        };
-      }
-      return s;
-    });
-    saveScriptsState(updated);
+  const handleInstantiateTemplate = (preset: AIBehaviorScript) => {
+    const cloned: AIBehaviorScript = structuredClone(preset);
+    const exists = scripts.some(s => s.name === cloned.name);
+    cloned.id = `ai_script_${Date.now()}`;
+    cloned.name = exists && cloned.mode !== 'diff' ? `${cloned.name}.custom` : cloned.name;
+    saveScriptsState([...scripts, cloned]);
+    setSelectedScriptId(cloned.id);
+    toast(`Cloned "${cloned.name}" into workspace aiScripts.`, 'success');
   };
 
   const handleCreateNewScript = async () => {
-    const name = await promptDialog("Enter Name for new Behavior AIScript (e.g., trader.escort.patrol):", "trader.auto.haul");
+    const name = await promptDialog(
+      'Enter script file name under aiscripts/ (e.g., order.forge.escort):',
+      'order.forge.escort'
+    );
     if (!name) return;
-    
-    const nScript = {
-      id: `ai_script_${Date.now()}`,
-      name,
-      description: 'Custom NPC behavior script for pilot task management.',
-      command: 'command.trade',
-      attentionLevel: 'high' as const,
-      params: [
-        { name: 'range', type: 'number' as const, defaultValue: '5', comment: 'Maximum gate jump range' }
-      ],
-      interrupts: [],
-      actions: [
-        { id: 'init_act_1', command: 'find_objects' as const, label: 'Search for high margin transactions', properties: { class: 'station', range: '5' } }
-      ]
-    };
-    
-    saveScriptsState([...scripts, nScript]);
-    setSelectedScriptId(nScript.id);
-  };
 
-  const handleInstantiateTemplate = (preset: typeof defaultAIScripts[0]) => {
-    // Check if script name already exists in the workspace
-    const exists = scripts.some(s => s.name === preset.name);
-    const newName = exists ? `${preset.name.replace('.behavior', '')}_custom.behavior` : preset.name;
-    
-    const nScript = {
-      ...preset,
+    const newScript: AIBehaviorScript = {
       id: `ai_script_${Date.now()}`,
-      name: newName,
+      name: name.trim(),
+      description: 'X4 9.00 order/behavior script',
+      command: 'combat',
+      attentionLevel: 'insector',
+      version: 1,
+      mode: 'aiscript',
+      order: {
+        id: name.trim().replace(/[^a-zA-Z0-9]+/g, '_'),
+        name: `'{1041, 391}'`,
+        description: `'{1041, 392}'`,
+        category: 'combat',
+        infinite: true,
+        allowInLoop: false,
+      },
+      params: [
+        { name: 'target', type: 'object', text: '{1041, 10027}', defaultValue: 'null', required: false, comment: 'Target object' },
+      ],
+      interrupts: [{ id: `int_${Date.now()}`, ref: 'AttackHandler' }],
+      patches: [],
+      actions: [
+        { id: `act_${Date.now()}_0`, command: 'label', label: 'Start label', properties: { name: 'start' } },
+        { id: `act_${Date.now()}_1`, command: 'wait', label: 'Idle cycle', properties: { exact: '5s' } },
+        { id: `act_${Date.now()}_2`, command: 'resume', label: 'Loop start', properties: { label: 'start' } },
+      ],
+      includeInBuild: true,
     };
-    
-    saveScriptsState([...scripts, nScript]);
-    setSelectedScriptId(nScript.id);
+
+    saveScriptsState([...scripts, newScript]);
+    setSelectedScriptId(newScript.id);
+    setActiveTab('order');
   };
 
   const handleDeleteScript = () => {
-    if (isPreset) {
-      alert("Cannot delete standard reference presets. They are built-in templates.");
-      return;
-    }
-    const filtered = scripts.filter(s => s.id !== selectedScriptId);
+    if (!activeScript || isPreset) return;
+    const filtered = scripts.filter(s => s.id !== activeScript.id);
     saveScriptsState(filtered);
-    if (filtered.length > 0) {
-      setSelectedScriptId(filtered[0].id);
-    } else {
-      setSelectedScriptId(null);
-    }
+    setSelectedScriptId(filtered[0]?.id || DEFAULT_AI_SCRIPTS[0].id);
   };
 
+  const handleAddParam = () => {
+    updateActiveScript(script => ({
+      ...script,
+      params: [
+        ...(script.params || []),
+        {
+          name: `param_${(script.params || []).length + 1}`,
+          type: script.order?.id ? 'number' : 'object',
+          text: script.order?.id ? `'{1041, 10064}'` : undefined,
+          defaultValue: '0',
+          comment: 'Order parameter',
+        },
+      ],
+    }));
+  };
+
+  const handleAddAction = (command: AIAction['command']) => {
+    let defaults: Record<string, any> = {};
+    let label = '';
+    switch (command) {
+      case 'label':
+        defaults = { name: declaredLabels.includes('start') ? `step_${Date.now() % 1000}` : 'start' };
+        label = 'Flow label anchor';
+        break;
+      case 'resume':
+        defaults = { label: declaredLabels[0] || 'start' };
+        label = 'Resume at label';
+        break;
+      case 'run_script':
+        defaults = { name: "'move.generic'", result: '', paramsXml: '' };
+        label = 'Delegate sub-script';
+        break;
+      case 'move_to':
+        defaults = { object: 'this.ship', destination: '$target', flightbehaviour: 'flightbehaviour.generic', forceposition: 'false', finishonapproach: 'true', timeout: '10s' };
+        label = 'Flight path movement';
+        break;
+      case 'flee':
+        defaults = {};
+        label = 'Run vanilla move.flee';
+        break;
+      case 'shoot':
+        defaults = { object: 'this.ship', target: '$enemy', weaponmode: 'weaponmode.attackenemies' };
+        label = 'Engage target';
+        break;
+      case 'dock_at':
+        defaults = { destination: '$station' };
+        label = 'Delegate to order.dock';
+        break;
+      case 'wait':
+        defaults = { exact: '10s' };
+        label = 'Wait duration';
+        break;
+      case 'find_objects':
+        defaults = { result: '$targets', class: 'ship', space: 'this.sector' };
+        label = 'Scan objects in space';
+        break;
+      case 'custom_xml':
+        defaults = { rawXml: '<debug_text text="\'AI script step\'" chance="0" />' };
+        label = 'Custom aiscripts.xsd XML';
+        break;
+    }
+
+    const nextAct: AIAction = {
+      id: `ai_act_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      command,
+      label,
+      properties: defaults,
+    };
+
+    updateActiveScript(script => ({
+      ...script,
+      actions: [...(script.actions || []), nextAct],
+    }));
+  };
+
+  const handleMoveAction = (index: number, delta: -1 | 1) => {
+    updateActiveScript(script => {
+      const list = [...(script.actions || [])];
+      const targetIdx = index + delta;
+      if (targetIdx < 0 || targetIdx >= list.length) return script;
+      const [moved] = list.splice(index, 1);
+      list.splice(targetIdx, 0, moved);
+      return { ...script, actions: list };
+    });
+  };
+
+  const handleAddInterruptRef = (refName: string) => {
+    updateActiveScript(script => ({
+      ...script,
+      interrupts: [
+        ...(script.interrupts || []),
+        { id: `int_${Date.now()}`, ref: refName },
+      ],
+    }));
+  };
+
+  const handleAddInlineInterrupt = () => {
+    updateActiveScript(script => ({
+      ...script,
+      interrupts: [
+        ...(script.interrupts || []),
+        {
+          id: `int_${Date.now()}`,
+          event: 'event_object_attacked',
+          conditionsXml: '<event_object_attacked object="this.ship" />',
+          action: 'flee',
+          actionsXml: '<run_interrupt_script name="\'move.flee\'" />',
+          consume: true,
+        },
+      ],
+    }));
+  };
+
+  const handleAddPatch = () => {
+    updateActiveScript(script => {
+      const nextVersion = Math.max(1, (script.patches || []).reduce((m, p) => Math.max(m, p.sinceVersion), script.version || 1));
+      const nextPatch: AIScriptPatchBlock = {
+        id: `patch_${Date.now()}`,
+        sinceVersion: nextVersion,
+        early: false,
+        comment: `Save migration since v${nextVersion}`,
+        actionsXml: '<set_value name="$migrated" exact="true" />',
+      };
+      return {
+        ...script,
+        patches: [...(script.patches || []), nextPatch],
+      };
+    });
+  };
+
+  const handleAddDiffOp = () => {
+    updateActiveScript(script => {
+      const nextOp: AIScriptDiffOp = {
+        id: `diff_${Date.now()}`,
+        op: 'replace',
+        sel: '//aiscript/attention/actions/wait',
+        content: '<wait exact="2s" />',
+      };
+      return {
+        ...script,
+        diffOps: [...(script.diffOps || []), nextOp],
+      };
+    });
+  };
+
+  const currentAttention = activeScript ? normalizeAiAttentionLevel(activeScript.attentionLevel) : 'unknown';
+
+  const inputClass =
+    'w-full rounded border border-[#262c36] bg-[#0a0c10] px-2.5 py-1.5 text-[11px] text-[#eef2f7] focus:outline-none focus:border-[#3b82f6] disabled:opacity-50 disabled:cursor-not-allowed';
+
   return (
-    <div id="ai_script_editor_view" className="flex-1 bg-[#0b0e14] flex flex-col h-full overflow-hidden text-slate-200">
-      {/* Compact AI Scripts Workbench Header */}
-      <div className="h-9 bg-[#131822] border-b border-slate-800/90 px-3 flex items-center justify-between text-xs shrink-0">
-        <div className="flex items-center gap-2">
-          <Cpu className="w-4 h-4 text-amber-400" />
-          <span className="font-semibold text-slate-100 tracking-tight">AI Behavior Scripts</span>
-        </div>
-        
-        {/* Scripts selectors */}
-        <div className="flex items-center gap-2">
-          {activeScript && !isPreset && (
+    <div id="ai_script_editor_view" className="flex-1 bg-[#0c0e12] flex flex-col h-full overflow-hidden text-[#eef2f7]">
+      <PanelHeader
+        icon={<Cpu className="w-4 h-4 text-[#60a5fa]" />}
+        title="AI Scripts"
+        subtitle="aiscripts.xsd · common.xsd attentionlookup · RFC 5261 diff"
+        actions={
+          <div className="flex items-center gap-2 flex-wrap">
+            {activeScript && (
+              <StatusPill
+                tone={lintErrors.length > 0 ? 'error' : lintWarnings.length > 0 ? 'warning' : 'success'}
+                className="text-[11px]"
+              >
+                <span data-testid="ai-script-lint-badge" className="inline-flex items-center gap-1">
+                  {lintErrors.length > 0 || lintWarnings.length > 0 ? (
+                    <ShieldAlert className="w-3.5 h-3.5" />
+                  ) : (
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                  )}
+                  {lintErrors.length > 0
+                    ? `${lintErrors.length} error${lintErrors.length === 1 ? '' : 's'}`
+                    : lintWarnings.length > 0
+                      ? `${lintWarnings.length} warning${lintWarnings.length === 1 ? '' : 's'}`
+                      : 'XSD & Lint Clean'}
+                </span>
+              </StatusPill>
+            )}
+
+            {activeScript && !isPreset && (
+              <div className="inline-flex rounded border border-[#262c36] bg-[#0a0c10] p-0.5 text-[11px]">
+                <button
+                  type="button"
+                  data-testid="ai-mode-aiscript"
+                  onClick={() => updateActiveScript(s => ({ ...s, mode: 'aiscript' }))}
+                  className={`px-2 py-1 rounded transition-colors cursor-pointer ${
+                    activeScript.mode !== 'diff'
+                      ? 'bg-[#3b82f6]/20 text-[#93c5fd] font-medium'
+                      : 'text-[#a0aab8] hover:text-[#eef2f7]'
+                  }`}
+                >
+                  Full Script
+                </button>
+                <button
+                  type="button"
+                  data-testid="ai-mode-diff"
+                  onClick={() =>
+                    updateActiveScript(s => ({
+                      ...s,
+                      mode: 'diff',
+                      namespaced: true,
+                      diffOps: s.diffOps?.length
+                        ? s.diffOps
+                        : [{ id: `diff_${Date.now()}`, op: 'add', sel: '//aiscript/init', pos: 'append', content: '<debug_text text="\'patch\'" chance="0" />' }],
+                    }))
+                  }
+                  className={`px-2 py-1 rounded transition-colors cursor-pointer ${
+                    activeScript.mode === 'diff'
+                      ? 'bg-[#3b82f6]/20 text-[#93c5fd] font-medium'
+                      : 'text-[#a0aab8] hover:text-[#eef2f7]'
+                  }`}
+                >
+                  RFC 5261 Diff
+                </button>
+              </div>
+            )}
+
+            {activeScript && !isPreset && (
+              <button
+                type="button"
+                onClick={async () => {
+                  const fileName = activeScript.name.endsWith('.xml') ? activeScript.name : `${activeScript.name}.xml`;
+                  const result = await openOrMaterializeInNativeEditor(workspace, `aiscripts/${fileName}`);
+                  toast(result.message, result.ok ? 'success' : 'error');
+                }}
+                className="px-2.5 py-1 rounded border border-[#262c36] bg-[#171b23] hover:border-[#3b82f6]/60 text-[11px] font-medium text-[#eef2f7] cursor-pointer inline-flex items-center gap-1"
+                title="Open as a real file tab in the IDE"
+              >
+                <ExternalLink className="w-3.5 h-3.5 text-[#60a5fa]" />
+                Open File
+              </button>
+            )}
+
             <button
               type="button"
-              onClick={async () => {
-                const result = await openOrMaterializeInNativeEditor(workspace, `aiscripts/${activeScript.name}.xml`);
-                toast(result.message, result.ok ? 'success' : 'error');
-              }}
-              className="px-2.5 py-1 rounded bg-cyan-500/10 border border-cyan-500/25 hover:bg-cyan-500/20 text-cyan-300 font-bold uppercase text-[10px] cursor-pointer transition-all flex items-center gap-1"
-              title={`Open aiscripts/${activeScript.name}.xml as a real Antigravity file tab`}
+              onClick={handleCreateNewScript}
+              data-testid="ai-new-script-btn"
+              className="px-2.5 py-1 rounded bg-[#3b82f6]/20 border border-[#3b82f6]/45 hover:bg-[#3b82f6]/30 text-[#93c5fd] font-medium text-[11px] cursor-pointer inline-flex items-center gap-1"
             >
-              <ExternalLink className="w-3 h-3" />
-              Open in Antigravity
+              <Plus className="w-3.5 h-3.5" />
+              New Script
             </button>
-          )}
-          <button
-            onClick={handleCreateNewScript}
-            className="px-2.5 py-1 rounded bg-amber-500/10 border border-amber-500/25 hover:bg-amber-500/20 text-amber-400 font-bold uppercase text-[10px] cursor-pointer transition-all flex items-center gap-1"
-          >
-            <Plus className="w-3 h-3" />
-            New Script
-          </button>
-          
-          <div className="flex items-center gap-1.5 bg-black/45 border border-white/10 p-0.5 rounded-md">
-            <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider px-1">Selected:</span>
-            <select
-              value={selectedScriptId || ''}
-              onChange={(e) => setSelectedScriptId(e.target.value || null)}
-              className="bg-[#0F1115] border border-transparent p-1 px-2 rounded text-[10px] font-mono text-slate-300 focus:outline-none focus:border-amber-500 cursor-pointer"
-            >
-              {scripts.length > 0 && (
-                <optgroup label="Active Mod Scripts" className="text-slate-400 text-[10px]">
-                  {scripts.map((s) => (
-                    <option key={s.id} value={s.id}>{s.name}</option>
-                  ))}
-                </optgroup>
-              )}
-              <optgroup label="Reference Templates" className="text-slate-500 text-[10px]">
-                {defaultAIScripts.map((s) => (
-                  <option key={s.id} value={s.id}>{s.name} (Template)</option>
-                ))}
-              </optgroup>
-            </select>
-            {!isPreset && (
+
+            {activeScript && !isPreset && (
               <button
+                type="button"
                 onClick={handleDeleteScript}
-                className="p-1 text-red-400 hover:bg-red-500/10 rounded transition-all cursor-pointer"
-                title="Delete active behavior script"
+                className="p-1.5 rounded border border-[#262c36] text-rose-400 hover:bg-rose-500/10 cursor-pointer"
+                title="Delete selected AI script"
               >
-                <Trash className="w-3.5 h-3.5" />
+                <Trash2 className="w-3.5 h-3.5" />
               </button>
             )}
           </div>
-        </div>
-      </div>
+        }
+      />
 
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left Side Hierarchy Tree */}
-        <div className="w-64 border-r border-white/10 flex flex-col bg-[#0e1017]/80 shrink-0 overflow-hidden font-mono text-[11px]">
-          <div className="p-3 border-b border-white/10 shrink-0 flex items-center justify-between bg-black/15 select-none text-[10px]">
-            <span className="text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1">
-              <Bot className="w-3.5 h-3.5 text-amber-500 animate-pulse" />
-              behavior scripts
-            </span>
-          </div>
-          <div className="flex-1 overflow-y-auto p-2.5 space-y-4 scrollbar-thin">
-            {/* Active Mod Scripts list */}
+      <div className="flex-1 flex min-h-0 overflow-hidden">
+        {/* Left Navigation List */}
+        <aside className="w-60 border-r border-[#262c36] bg-[#0e1117] flex flex-col shrink-0 overflow-hidden text-[11px]">
+          <div className="flex-1 overflow-y-auto p-2.5 space-y-4">
             <div className="space-y-1">
-              <div className="text-[9px] text-slate-500 font-bold uppercase tracking-wider px-2 py-1 select-none flex items-center justify-between">
-                <span>Active Mod Scripts</span>
-                <span className="text-[8px] bg-slate-800 text-slate-400 px-1 rounded-sm">{scripts.length} files</span>
+              <div className="px-2 py-1 flex items-center justify-between text-[11px] font-semibold text-[#a0aab8]">
+                <span>Workspace Scripts</span>
+                <span className="text-[11px] font-mono text-[#687385]">{scripts.length}</span>
               </div>
               {scripts.length === 0 ? (
-                <div className="text-[9.5px]/relaxed text-slate-500 italic px-2 py-3 border border-dashed border-white/5 rounded-md text-center m-1 select-none">
-                  No active custom behaviors.<br/>
-                  <span className="text-[8.5px] not-italic text-slate-600 block mt-1">Instantiate a template below, or click "+ New Script"</span>
+                <div className="px-2.5 py-3 rounded border border-dashed border-[#262c36] text-[11px] text-[#687385] leading-relaxed">
+                  No custom AI scripts yet. Clone an X4 9.00 starter below or click New Script.
                 </div>
               ) : (
-                scripts.map((s) => {
-                  const isSelected = selectedScriptId === s.id;
+                scripts.map(s => {
+                  const selected = selectedScriptId === s.id;
+                  const tier = s.mode === 'diff' ? 'diff' : normalizeAiAttentionLevel(s.attentionLevel);
                   return (
-                    <div key={s.id} className="space-y-1">
-                      <button
-                        onClick={() => setSelectedScriptId(s.id)}
-                        className={`w-full text-left py-1.5 px-2 rounded font-mono transition-all flex items-center justify-between cursor-pointer select-none group/btn ${
-                          isSelected
-                            ? 'bg-amber-500/15 text-amber-400 font-bold border-l-2 border-amber-500 pl-1.5'
-                            : 'text-slate-400 hover:bg-white/5 hover:text-white'
-                        }`}
-                      >
-                        <span className="truncate">📜 {s.name || 'unnamed'}</span>
-                        {!isSelected && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              const filtered = scripts.filter(x => x.id !== s.id);
-                              saveScriptsState(filtered);
-                              if (filtered.length > 0) {
-                                setSelectedScriptId(filtered[0].id);
-                              } else {
-                                setSelectedScriptId(null);
-                              }
-                            }}
-                            className="hidden group-hover/btn:block p-1 text-red-500 hover:bg-red-500/10 rounded transition-all cursor-pointer"
-                            title="Delete Behavior Script"
-                          >
-                            <Trash className="w-3 h-3" />
-                          </button>
-                        )}
-                      </button>
-                      {/* Param hierarchy when selected */}
-                      {isSelected && s.params && s.params.length > 0 && (
-                        <div className="pl-3.5 border-l border-amber-500/25 space-y-1.5 pb-2 text-[9.5px]">
-                          <div className="space-y-0.5">
-                            <span className="text-slate-600 block uppercase font-bold text-[8px] tracking-wide select-none">📋 params</span>
-                            <div className="pl-2 space-y-0.5 border-l border-white/[0.02]">
-                              {s.params.map((p: any) => (
-                                <div key={p.name} className="text-slate-400 font-medium truncate flex items-center gap-1">
-                                  <span className="text-amber-500">$</span>
-                                  <span className="truncate">{p.name}</span>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                    <button
+                      type="button"
+                      key={s.id}
+                      onClick={() => setSelectedScriptId(s.id)}
+                      className={`w-full text-left px-2.5 py-2 rounded border transition-colors cursor-pointer ${
+                        selected
+                          ? 'bg-[#171b23] border-[#3b82f6]/50 text-[#eef2f7]'
+                          : 'bg-transparent border-transparent text-[#a0aab8] hover:bg-[#171b23]/60 hover:text-[#eef2f7]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-1.5">
+                        <span className="truncate font-mono text-[11px] font-medium">{s.name || 'unnamed'}</span>
+                        <span className="shrink-0 rounded bg-[#0a0c10] border border-[#262c36] px-1.5 py-0.5 text-[11px] font-mono text-[#93c5fd]">
+                          {s.mode === 'diff' ? 'diff' : s.order?.id ? 'order' : 'script'}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 text-[11px] text-[#687385] font-mono truncate">
+                        {s.mode === 'diff' ? `${s.diffOps?.length ?? 0} diff ops` : `${tier} · v${s.version ?? 1}`}
+                      </div>
+                    </button>
                   );
                 })
               )}
             </div>
 
-            {/* Split border line */}
-            <div className="border-t border-white/5 my-3"></div>
-
-            {/* Built-in Reference Templates list */}
-            <div className="space-y-1">
-              <div className="text-[9px] text-slate-500 font-bold uppercase tracking-wider px-2 py-1 select-none flex items-center justify-between">
-                <span>Reference Templates</span>
-                <span className="text-[8px] bg-slate-800 text-slate-400 px-1 rounded-sm">{defaultAIScripts.length} presets</span>
-              </div>
-              {defaultAIScripts.map((s) => {
-                const isSelected = selectedScriptId === s.id;
+            <div className="border-t border-[#262c36] pt-3 space-y-1">
+              <div className="px-2 py-1 text-[11px] font-semibold text-[#a0aab8]">X4 9.00 Starters</div>
+              {DEFAULT_AI_SCRIPTS.map(preset => {
+                const selected = isPreset && selectedScriptId === preset.id;
                 return (
-                  <div key={s.id} className="space-y-1">
+                  <div
+                    key={preset.id}
+                    className={`rounded border transition-colors flex items-center justify-between gap-1 px-2 py-1.5 ${
+                      selected
+                        ? 'bg-[#171b23] border-[#3b82f6]/45 text-[#eef2f7]'
+                        : 'border-transparent text-[#a0aab8] hover:bg-[#171b23]/60'
+                    }`}
+                  >
                     <button
-                      onClick={() => setSelectedScriptId(s.id)}
-                      className={`w-full text-left py-1.5 px-2 rounded font-mono transition-all flex items-center justify-between cursor-pointer select-none group/preset ${
-                        isSelected
-                          ? 'bg-amber-500/10 text-amber-500/90 font-bold border-l border-amber-500/40 pl-1.5'
-                          : 'text-slate-400 hover:bg-white/5 hover:text-white'
-                      }`}
+                      type="button"
+                      onClick={() => setSelectedScriptId(preset.id)}
+                      className="flex-1 text-left min-w-0 cursor-pointer"
                     >
-                      <span className="truncate flex items-center gap-1 text-[10.5px]">
-                        <Bot className="w-3.5 h-3.5 opacity-60" />
-                        {s.name}
-                      </span>
-                      {/* span, not button: a <button> may not nest inside a <button> (invalid HTML / React hydration warning) */}
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleInstantiateTemplate(s);
-                        }}
-                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); handleInstantiateTemplate(s); } }}
-                        className="p-1 text-amber-400 opacity-0 group-hover/preset:opacity-100 hover:bg-amber-500/10 rounded transition-all cursor-pointer text-[9px] font-bold inline-flex"
-                        title="Instantiate template into mod project"
-                      >
-                        <Plus className="w-3 h-3" />
-                      </span>
+                      <div className="truncate font-mono text-[11px] font-medium">{preset.name}</div>
+                      <div className="text-[11px] text-[#687385] font-mono truncate">
+                        {preset.mode === 'diff' ? 'RFC 5261 diff' : `${preset.attentionLevel} · ${preset.order?.category || 'script'}`}
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      data-testid={`ai-clone-preset-${preset.id}`}
+                      onClick={() => handleInstantiateTemplate(preset)}
+                      className="shrink-0 p-1 rounded border border-[#262c36] bg-[#0a0c10] text-[#60a5fa] hover:border-[#3b82f6]/60 cursor-pointer"
+                      title="Clone starter into active mod"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 );
               })}
             </div>
           </div>
-        </div>
+        </aside>
 
+        {/* Main Workbench */}
         {!activeScript ? (
-          <div className="flex-1 flex flex-col items-center justify-center p-8 bg-black/5 text-center font-mono select-none">
-            <Bot className="w-12 h-12 text-slate-700 mb-3 stroke-[1.5]" />
-            <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest">NO ACTIVE AI SCRIPT</h3>
-            <p className="text-[10px] text-slate-500 max-w-sm mt-1 leading-relaxed font-sans">
-              Select an AI behavior template from the sidebar hierarchy or click "New Script" to create one!
-            </p>
+          <div className="flex-1 flex items-center justify-center p-6">
+            <EmptyState
+              icon={<Bot className="w-6 h-6" />}
+              title="No AI script selected"
+              description="Clone an X4 9.00 reference starter from the left rail or click New Script."
+            >
+              <button
+                type="button"
+                onClick={handleCreateNewScript}
+                className="px-3 py-1.5 rounded bg-[#3b82f6] text-white text-[11px] font-medium cursor-pointer"
+              >
+                New AI Script
+              </button>
+            </EmptyState>
           </div>
         ) : (
-          <>
-            {/* Left pane: parameters & description editor */}
-            <div className="w-72 border-r border-[#1a1c23] p-4 space-y-4 overflow-y-auto bg-[#0a0c10]/35 flex-shrink-0">
-              {isPreset && (
-                <div id="ai-preset-warning-banner" className="bg-amber-500/10 border border-amber-500/25 p-3 rounded-lg text-[10.5px]/relaxed text-amber-400 font-mono">
-                  <div className="flex items-center gap-1.5 font-bold uppercase tracking-wide mb-1 text-amber-500">
-                    <Sparkles className="w-4 h-4 text-amber-500 animate-pulse" />
-                    <span>Template Reference</span>
-                  </div>
-                  This template is read-only. Click the button below to clone/instantiate it as an active script of your mod.
+          <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+            {isPreset && (
+              <div
+                id="ai-preset-warning-banner"
+                className="px-4 py-2 bg-[#171b23] border-b border-[#262c36] flex items-center justify-between gap-3 text-[11px] shrink-0"
+              >
+                <span className="text-[#a0aab8]">
+                  Viewing read-only X4 9.00 starter <code className="text-[#eef2f7]">{activeScript.name}</code>. Clone it into your mod to edit parameters, handlers, and actions.
+                </span>
+                <button
+                  type="button"
+                  data-testid="ai-instantiate-banner-btn"
+                  onClick={() => handleInstantiateTemplate(activeScript)}
+                  className="shrink-0 px-3 py-1 rounded bg-[#3b82f6] hover:bg-[#2563eb] text-white font-medium cursor-pointer inline-flex items-center gap-1"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Clone to Mod
+                </button>
+              </div>
+            )}
+
+            {/* Workbench Subtabs */}
+            <div className="px-4 py-2 border-b border-[#262c36] bg-[#11141a] flex items-center gap-1.5 shrink-0">
+              {activeScript.mode !== 'diff' ? (
+                <>
                   <button
-                    onClick={() => handleInstantiateTemplate(activeScript)}
-                    className="w-full mt-2.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-black font-bold uppercase rounded text-[9.5px] cursor-pointer transition-all flex items-center justify-center gap-1 shadow-md"
+                    type="button"
+                    data-testid="ai-tab-order"
+                    onClick={() => setActiveTab('order')}
+                    className={`px-3 py-1 rounded text-[11px] font-medium inline-flex items-center gap-1.5 cursor-pointer ${
+                      activeTab === 'order' ? 'bg-[#3b82f6]/20 text-[#93c5fd] border border-[#3b82f6]/40' : 'text-[#a0aab8] hover:text-[#eef2f7]'
+                    }`}
                   >
-                    <Plus className="w-3.5 h-3.5" />
-                    Instantiate to Mod
+                    <Sliders className="w-3.5 h-3.5" />
+                    Order &amp; Params ({activeScript.params.length})
                   </button>
+                  <button
+                    type="button"
+                    data-testid="ai-tab-actions"
+                    onClick={() => setActiveTab('actions')}
+                    className={`px-3 py-1 rounded text-[11px] font-medium inline-flex items-center gap-1.5 cursor-pointer ${
+                      activeTab === 'actions' ? 'bg-[#3b82f6]/20 text-[#93c5fd] border border-[#3b82f6]/40' : 'text-[#a0aab8] hover:text-[#eef2f7]'
+                    }`}
+                  >
+                    <GitBranch className="w-3.5 h-3.5" />
+                    Attention &amp; Actions ({activeScript.actions.length})
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="ai-tab-interrupts"
+                    onClick={() => setActiveTab('interrupts')}
+                    className={`px-3 py-1 rounded text-[11px] font-medium inline-flex items-center gap-1.5 cursor-pointer ${
+                      activeTab === 'interrupts' ? 'bg-[#3b82f6]/20 text-[#93c5fd] border border-[#3b82f6]/40' : 'text-[#a0aab8] hover:text-[#eef2f7]'
+                    }`}
+                  >
+                    Interrupts &amp; Patches ({(activeScript.interrupts?.length ?? 0) + (activeScript.patches?.length ?? 0)})
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  data-testid="ai-tab-diff"
+                  onClick={() => setActiveTab('diff')}
+                  className={`px-3 py-1 rounded text-[11px] font-medium inline-flex items-center gap-1.5 cursor-pointer ${
+                    activeTab === 'diff' ? 'bg-[#3b82f6]/20 text-[#93c5fd] border border-[#3b82f6]/40' : 'text-[#a0aab8] hover:text-[#eef2f7]'
+                  }`}
+                >
+                  <FileDiff className="w-3.5 h-3.5" />
+                  Diff Operations ({activeScript.diffOps?.length ?? 0})
+                </button>
+              )}
+
+              <button
+                type="button"
+                data-testid="ai-tab-xml"
+                onClick={() => setActiveTab('xml')}
+                className={`px-3 py-1 rounded text-[11px] font-medium inline-flex items-center gap-1.5 cursor-pointer ml-auto ${
+                  activeTab === 'xml' ? 'bg-[#3b82f6]/20 text-[#93c5fd] border border-[#3b82f6]/40' : 'text-[#a0aab8] hover:text-[#eef2f7]'
+                }`}
+              >
+                <Code2 className="w-3.5 h-3.5" />
+                XML Preview
+              </button>
+            </div>
+
+            {/* Tab Content */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {activeTab === 'order' && activeScript.mode !== 'diff' && (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {/* Left: Script + Order Definition */}
+                  <div className="space-y-4">
+                    <section className="rounded-lg border border-[#262c36] bg-[#11141a] p-4 space-y-3">
+                      <h3 className="text-xs font-semibold text-[#eef2f7]">AIScript Metadata</h3>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div className="col-span-2">
+                          <label className="block text-[11px] text-[#a0aab8] mb-1">Script Name (<code className="font-mono text-[#eef2f7]">&lt;aiscript name&gt;</code>)</label>
+                          <input
+                            type="text"
+                            disabled={isPreset}
+                            value={activeScript.name}
+                            onChange={e => updateActiveScript(s => ({ ...s, name: e.target.value }))}
+                            className={`${inputClass} font-mono`}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] text-[#a0aab8] mb-1">Version</label>
+                          <input
+                            type="number"
+                            min={0}
+                            disabled={isPreset}
+                            value={activeScript.version ?? 1}
+                            onChange={e => updateActiveScript(s => ({ ...s, version: Math.max(0, Number(e.target.value) || 0) }))}
+                            className={`${inputClass} font-mono`}
+                          />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div className="col-span-2">
+                          <label className="block text-[11px] text-[#a0aab8] mb-1">Description</label>
+                          <input
+                            type="text"
+                            disabled={isPreset}
+                            value={activeScript.description}
+                            onChange={e => updateActiveScript(s => ({ ...s, description: e.target.value }))}
+                            className={inputClass}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] text-[#a0aab8] mb-1">Priority</label>
+                          <input
+                            type="number"
+                            min={0}
+                            disabled={isPreset}
+                            value={activeScript.priority ?? 0}
+                            onChange={e => updateActiveScript(s => ({ ...s, priority: Math.max(0, Number(e.target.value) || 0) }))}
+                            className={`${inputClass} font-mono`}
+                          />
+                        </div>
+                      </div>
+                    </section>
+
+                    <section className="rounded-lg border border-[#262c36] bg-[#11141a] p-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h3 className="text-xs font-semibold text-[#eef2f7]">Player / NPC Order Definition (<code className="font-mono text-[#93c5fd]">&lt;order&gt;</code>)</h3>
+                          <p className="text-[11px] text-[#687385]">Enables <code className="font-mono text-[#a0aab8]">orderparamlookup</code> types and ship order queue visibility.</p>
+                        </div>
+                        <label className="inline-flex items-center gap-1.5 text-[11px] text-[#eef2f7] cursor-pointer">
+                          <input
+                            type="checkbox"
+                            disabled={isPreset}
+                            data-testid="ai-order-enabled"
+                            checked={Boolean(activeScript.order?.id)}
+                            onChange={e =>
+                              updateActiveScript(s => ({
+                                ...s,
+                                order: e.target.checked
+                                  ? {
+                                      id: s.name.replace(/[^a-zA-Z0-9]+/g, '_') || 'CustomOrder',
+                                      name: '{1041, 391}',
+                                      description: '{1041, 392}',
+                                      category: 'combat',
+                                      infinite: true,
+                                      allowInLoop: false,
+                                    }
+                                  : undefined,
+                              }))
+                            }
+                            className="accent-[#3b82f6]"
+                          />
+                          Declare <code className="font-mono text-[#93c5fd]">&lt;order&gt;</code>
+                        </label>
+                      </div>
+
+                      {activeScript.order && (
+                        <div className="space-y-2.5 pt-1 border-t border-[#262c36]">
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="block text-[11px] text-[#a0aab8] mb-1">Order ID</label>
+                              <input
+                                type="text"
+                                disabled={isPreset}
+                                value={activeScript.order.id}
+                                onChange={e => updateActiveScript(s => ({ ...s, order: { ...s.order!, id: e.target.value } }))}
+                                className={`${inputClass} font-mono`}
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[11px] text-[#a0aab8] mb-1">Category</label>
+                              <select
+                                disabled={isPreset}
+                                value={activeScript.order.category || 'combat'}
+                                onChange={e => updateActiveScript(s => ({ ...s, order: { ...s.order!, category: e.target.value as any } }))}
+                                className={`${inputClass} font-mono`}
+                              >
+                                {AI_ORDER_CATEGORIES.map(cat => (
+                                  <option key={cat} value={cat}>{cat}</option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="block text-[11px] text-[#a0aab8] mb-1">UI Name (<code className="font-mono text-[#eef2f7]">&#123;page, id&#125;</code>)</label>
+                              <input
+                                type="text"
+                                disabled={isPreset}
+                                value={activeScript.order.name || ''}
+                                onChange={e => updateActiveScript(s => ({ ...s, order: { ...s.order!, name: e.target.value } }))}
+                                className={`${inputClass} font-mono`}
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[11px] text-[#a0aab8] mb-1">Location Object</label>
+                              <input
+                                type="text"
+                                disabled={isPreset}
+                                placeholder="$space"
+                                value={activeScript.order.locationObject || ''}
+                                onChange={e => updateActiveScript(s => ({ ...s, order: { ...s.order!, locationObject: e.target.value } }))}
+                                className={`${inputClass} font-mono`}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] text-[#a0aab8]">
+                            <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                disabled={isPreset}
+                                checked={Boolean(activeScript.order.infinite)}
+                                onChange={e => updateActiveScript(s => ({ ...s, order: { ...s.order!, infinite: e.target.checked } }))}
+                                className="accent-[#3b82f6]"
+                              />
+                              <code className="font-mono text-[#eef2f7]">infinite="true"</code>
+                            </label>
+                            <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                disabled={isPreset}
+                                checked={activeScript.order.allowInLoop === false}
+                                onChange={e => updateActiveScript(s => ({ ...s, order: { ...s.order!, allowInLoop: !e.target.checked } }))}
+                                className="accent-[#3b82f6]"
+                              />
+                              <code className="font-mono text-[#eef2f7]">allowinloop="false"</code>
+                            </label>
+                            <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                disabled={isPreset}
+                                checked={Boolean(activeScript.order.canPlayerCancel)}
+                                onChange={e => updateActiveScript(s => ({ ...s, order: { ...s.order!, canPlayerCancel: e.target.checked } }))}
+                                className="accent-[#3b82f6]"
+                              />
+                              <code className="font-mono text-[#eef2f7]">canplayercancel</code>
+                            </label>
+                          </div>
+
+                          <div>
+                            <label className="block text-[11px] text-[#a0aab8] mb-1"><code className="font-mono text-[#eef2f7]">&lt;requires&gt;</code> ship filters</label>
+                            <textarea
+                              disabled={isPreset}
+                              rows={2}
+                              value={activeScript.order.requiresXml || ''}
+                              onChange={e => updateActiveScript(s => ({ ...s, order: { ...s.order!, requiresXml: e.target.value } }))}
+                              className={`${inputClass} font-mono`}
+                              placeholder='<match class="class.spacesuit" negate="true" />'
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </section>
+                  </div>
+
+                  {/* Right: Script / Order Parameters */}
+                  <section className="rounded-lg border border-[#262c36] bg-[#11141a] p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="text-xs font-semibold text-[#eef2f7]">Parameters (<code className="font-mono text-[#93c5fd]">&lt;params&gt;</code>)</h3>
+                        <p className="text-[11px] text-[#687385]">
+                          {activeScript.order?.id
+                            ? 'Uses 16 aiscripts.xsd orderparamlookup types. Non-internal params require a text label.'
+                            : 'Bare aiscript params emit name/default/comment only (enable <order> above for UI types).'}
+                        </p>
+                      </div>
+                      {!isPreset && (
+                        <button
+                          type="button"
+                          data-testid="ai-add-param"
+                          onClick={handleAddParam}
+                          className="px-2.5 py-1 rounded border border-[#262c36] bg-[#171b23] hover:border-[#3b82f6]/60 text-[11px] text-[#93c5fd] inline-flex items-center gap-1 cursor-pointer"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          Add Param
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="space-y-2.5">
+                      {activeScript.params.map((param, idx) => (
+                        <div key={`${param.name}_${idx}`} className="rounded border border-[#262c36] bg-[#0a0c10] p-3 space-y-2">
+                          <div className="grid grid-cols-12 gap-2 items-center">
+                            <div className="col-span-5">
+                              <label className="block text-[11px] text-[#687385] mb-0.5">Name</label>
+                              <input
+                                type="text"
+                                disabled={isPreset}
+                                value={param.name}
+                                onChange={e =>
+                                  updateActiveScript(s => ({
+                                    ...s,
+                                    params: s.params.map((p, i) => (i === idx ? { ...p, name: e.target.value } : p)),
+                                  }))
+                                }
+                                className={`${inputClass} font-mono`}
+                              />
+                            </div>
+                            <div className="col-span-5">
+                              <label className="block text-[11px] text-[#687385] mb-0.5">Order Type</label>
+                              <select
+                                disabled={isPreset || !activeScript.order?.id}
+                                value={param.type === 'boolean' ? 'bool' : param.type === 'faction' ? 'internal' : param.type}
+                                onChange={e =>
+                                  updateActiveScript(s => ({
+                                    ...s,
+                                    params: s.params.map((p, i) => (i === idx ? { ...p, type: e.target.value as AIParam['type'] } : p)),
+                                  }))
+                                }
+                                className={`${inputClass} font-mono`}
+                              >
+                                {AI_ORDER_PARAM_TYPES.map(t => (
+                                  <option key={t} value={t}>{t}</option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="col-span-2 flex justify-end pt-4">
+                              {!isPreset && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    updateActiveScript(s => ({
+                                      ...s,
+                                      params: s.params.filter((_, i) => i !== idx),
+                                    }))
+                                  }
+                                  className="p-1.5 rounded text-[#687385] hover:text-rose-400 cursor-pointer"
+                                  title="Delete parameter"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="block text-[11px] text-[#687385] mb-0.5">Default Expression</label>
+                              <input
+                                type="text"
+                                disabled={isPreset}
+                                value={param.defaultValue}
+                                onChange={e =>
+                                  updateActiveScript(s => ({
+                                    ...s,
+                                    params: s.params.map((p, i) => (i === idx ? { ...p, defaultValue: e.target.value } : p)),
+                                  }))
+                                }
+                                className={`${inputClass} font-mono`}
+                              />
+                            </div>
+                            {activeScript.order?.id && (
+                              <div>
+                                <label className="block text-[11px] text-[#687385] mb-0.5">Text Label (<code className="font-mono text-[#a0aab8]">text=""</code>)</label>
+                                <input
+                                  type="text"
+                                  disabled={isPreset}
+                                  data-testid={`ai-param-text-${idx}`}
+                                  value={param.text ?? ''}
+                                  onChange={e =>
+                                    updateActiveScript(s => ({
+                                      ...s,
+                                      params: s.params.map((p, i) => (i === idx ? { ...p, text: e.target.value } : p)),
+                                    }))
+                                  }
+                                  placeholder="{1041, 10064}"
+                                  className={`${inputClass} font-mono`}
+                                />
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
                 </div>
               )}
 
-              <div>
-                <h3 className="text-xs font-mono font-bold text-amber-400 border-b border-white/10 pb-1.5 uppercase tracking-wider mb-2 flex items-center gap-1">
-                  <Settings className="w-3.5 h-3.5" />
-                  Behavior Metadata
-                </h3>
-                <div className="space-y-3 bg-black/20 p-3 rounded border border-white/5 font-mono text-[11px]">
-                  <div>
-                    <label className="text-slate-400 block mb-1 uppercase text-[10px] tracking-wider font-semibold">Script ID / Name</label>
-                    <input
-                      type="text"
-                      disabled={isPreset}
-                      value={activeScript.name}
-                      onChange={e => handleUpdateScriptProp('name', e.target.value)}
-                      className="w-full p-2 rounded bg-black/50 border border-white/10 text-white focus:outline-none focus:border-amber-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-slate-400 block mb-1 uppercase text-[10px] tracking-wider font-semibold">Pilot Ship Command Tag</label>
-                    <select
-                      value={activeScript.command}
-                      disabled={isPreset}
-                      onChange={e => handleUpdateScriptProp('command', e.target.value)}
-                      className="w-full p-2 rounded bg-[#0F1115] border border-white/10 text-white focus:outline-none focus:border-amber-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
-                    >
-                      <option value="command.move">command.move (Standard Transit)</option>
-                      <option value="command.escort">command.escort (Fighter Defend/Escort)</option>
-                      <option value="command.mine">command.mine (Asteroid Mineral Excavation)</option>
-                      <option value="command.trade">command.trade (Ware Logistic Haulage)</option>
-                      <option value="command.patrol">command.patrol (System Sector Recon)</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="text-slate-400 block mb-1 uppercase text-[10px] tracking-wider font-semibold">Ship View Attention level</label>
-                    <div className="grid grid-cols-2 gap-1.5 mt-1 text-[10px]">
-                      <button
-                        onClick={() => !isPreset && handleUpdateScriptProp('attentionLevel', 'high')}
-                        className={`py-1 rounded font-bold uppercase border transition-all cursor-pointer ${
-                          activeScript.attentionLevel === 'high' 
-                            ? 'border-amber-500 bg-amber-500/15 text-amber-400' 
-                            : 'border-white/5 bg-transparent text-slate-400 hover:text-slate-300'
-                        } ${isPreset ? 'opacity-50 cursor-not-allowed' : ''}`}
+              {activeTab === 'actions' && activeScript.mode !== 'diff' && (
+                <div className="space-y-4">
+                  {/* Real X4 9.00 common.xsd attentionlookup bar */}
+                  <section className="rounded-lg border border-[#262c36] bg-[#11141a] p-4 space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h3 className="text-xs font-semibold text-[#eef2f7]">Attention Tier (<code className="font-mono text-[#93c5fd]">&lt;attention min="..."&gt;</code>)</h3>
+                        <p className="text-[11px] text-[#a0aab8]">
+                          {ATTENTION_DESCRIPTIONS[currentAttention]}
+                        </p>
+                      </div>
+                      <select
+                        disabled={isPreset}
+                        data-testid="ai-attention-select"
+                        value={currentAttention}
+                        onChange={e => updateActiveScript(s => ({ ...s, attentionLevel: e.target.value as AiAttentionTier }))}
+                        className="rounded border border-[#262c36] bg-[#0a0c10] px-3 py-1.5 font-mono text-[11px] text-[#eef2f7] focus:outline-none focus:border-[#3b82f6]"
                       >
-                        High Attention (In-Sector)
-                      </button>
-                      <button
-                        onClick={() => !isPreset && handleUpdateScriptProp('attentionLevel', 'low')}
-                        className={`py-1 rounded font-bold uppercase border transition-all cursor-pointer ${
-                          activeScript.attentionLevel === 'low' 
-                            ? 'border-amber-500 bg-amber-500/15 text-amber-400' 
-                            : 'border-white/5 bg-transparent text-slate-400 hover:text-slate-300'
-                        } ${isPreset ? 'opacity-50 cursor-not-allowed' : ''}`}
-                      >
-                        Low Attention (OOS)
-                      </button>
+                        {AI_ATTENTION_LEVELS.map(tier => (
+                          <option key={tier} value={tier}>{tier}</option>
+                        ))}
+                      </select>
                     </div>
-                  </div>
+                  </section>
 
-                  <div>
-                    <label className="text-slate-400 block mb-1 uppercase text-[10px] tracking-wider font-semibold">Behavior Description</label>
-                    <textarea
-                      disabled={isPreset}
-                      value={activeScript.description}
-                      onChange={e => handleUpdateScriptProp('description', e.target.value)}
-                      className="w-full p-2 h-14 rounded bg-black/50 border border-white/10 text-white focus:outline-none focus:border-amber-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors resize-none font-sans"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <h3 className="text-xs font-mono font-bold text-amber-400 border-b border-white/10 pb-1.5 uppercase tracking-wider mb-2 flex items-center gap-1">
-                  <Sparkles className="w-3.5 h-3.5" />
-                  Pilot Params & Variables
-                </h3>
-                <div className="space-y-3 bg-black/20 p-3 rounded border border-white/5 font-mono text-[11px]">
-                  {activeScript.params.map((param, pid) => (
-                    <div key={pid} className="p-2 border border-white/5 bg-black/30 rounded-md space-y-1">
-                      <div className="flex items-center justify-between text-[10px]">
-                        <span className="text-amber-500 font-bold">${param.name}</span>
-                        <span className="text-slate-500 text-[9px] uppercase border border-slate-700 px-1 rounded">{param.type}</span>
-                      </div>
-                      <div className="text-[10px] text-slate-400 leading-snug">
-                        <span className="text-slate-500">Default:</span> {param.defaultValue}
-                      </div>
-                      <div className="text-[9.5px] italic text-slate-500">
-                        "{param.comment}"
-                      </div>
+                  {/* Action Additions Toolbar */}
+                  {!isPreset && (
+                    <div className="rounded-lg border border-[#262c36] bg-[#11141a] p-3 flex flex-wrap items-center gap-1.5">
+                      <span className="text-[11px] text-[#a0aab8] mr-1">Add action:</span>
+                      {ACTION_PALETTE.map(item => (
+                        <button
+                          key={item.command}
+                          type="button"
+                          data-testid={`ai-add-action-${item.command}`}
+                          onClick={() => handleAddAction(item.command)}
+                          className="px-2.5 py-1 rounded border border-[#262c36] bg-[#0a0c10] hover:border-[#3b82f6]/60 hover:text-[#93c5fd] font-mono text-[11px] text-[#eef2f7] cursor-pointer"
+                        >
+                          + {item.label}
+                        </button>
+                      ))}
                     </div>
-                  ))}
-                  <div className="text-[10px] text-slate-500 italic text-center p-2 border border-dashed border-white/10 rounded font-sans leading-relaxed">
-                    Params enable the game GUI to configure NPC pilots easily. (Use "Add Script Target Configs").
-                  </div>
-                </div>
-              </div>
-            </div>
+                  )}
 
-            {/* Center pane: Visual Task Pipeline / Action queue */}
-            <div className="flex-1 p-4 flex flex-col border-r border-white/10 overflow-hidden bg-[#0c0e14]/50">
-              <h3 className="text-xs font-mono font-bold text-amber-400 border-b border-white/10 pb-1.5 uppercase tracking-wider mb-2 shrink-0 flex items-center justify-between">
-                <span className="flex items-center gap-1">
-                  <Compass className="w-3.5 h-3.5 animate-spin-slow" />
-                  Behavior Task Action Pipeline
-                </span>
-                <span className="text-[9px] bg-amber-500/10 text-amber-400 border border-amber-500/20 px-1 rounded font-bold uppercase font-mono">
-                  Loop Sequential
-                </span>
-              </h3>
-
-              <div className="flex-1 overflow-y-auto space-y-2 pr-1.5 py-1">
-                {activeScript.actions.length === 0 ? (
-                  <div className="text-center py-20 text-[11px] font-mono text-slate-500 whitespace-pre">
-                    No active actions.<br />Click right buttons to inject tasks!
-                  </div>
-                ) : (
-                  activeScript.actions.map((act, index) => (
-                    <div
-                      key={act.id}
-                      className="bg-[#1c1f26]/85 border border-white/5 hover:border-amber-500/40 p-3 rounded-lg flex flex-col space-y-2 transition-all shadow-md group relative"
-                    >
-                      <div className="flex items-start justify-between">
-                        <div className="flex items-center gap-1.5">
-                          <span className="w-5 h-5 rounded-full bg-amber-500/10 border border-amber-500/20 flex items-center justify-center font-mono text-[9px] font-bold text-amber-400 shrink-0">
-                            {index + 1}
-                          </span>
-                          <div>
-                            {/* Interactive edit title */}
+                  {/* Sequential Action Cards */}
+                  <div className="space-y-2.5">
+                    {activeScript.actions.map((act, idx) => (
+                      <div key={act.id} className="rounded-lg border border-[#262c36] bg-[#11141a] p-3 space-y-2.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                            <span className="w-6 h-6 rounded bg-[#0a0c10] border border-[#262c36] flex items-center justify-center font-mono text-[11px] text-[#93c5fd] shrink-0">
+                              {idx + 1}
+                            </span>
                             <input
                               type="text"
                               disabled={isPreset}
                               value={act.label}
-                              onChange={(e) => handleUpdateActionLabel(act.id, e.target.value)}
-                              className="font-semibold text-slate-200 text-xs bg-transparent border-b border-transparent hover:border-white/20 focus:border-amber-500 focus:outline-none disabled:opacity-75 disabled:cursor-default transition-all py-0.5"
+                              onChange={e =>
+                                updateActiveScript(s => ({
+                                  ...s,
+                                  actions: s.actions.map(a => (a.id === act.id ? { ...a, label: e.target.value } : a)),
+                                }))
+                              }
+                              className="flex-1 bg-transparent border-b border-transparent focus:border-[#3b82f6] text-xs font-medium text-[#eef2f7] focus:outline-none py-0.5"
                             />
-                            <div className="text-[9px] font-mono text-slate-500 uppercase mt-0.5 font-bold tracking-wider">
-                              Egosoft Tag: &lt;{act.command === 'custom_xml' ? 'custom' : act.command}&gt;
-                            </div>
+                            <span className="shrink-0 font-mono text-[11px] text-[#687385] bg-[#0a0c10] border border-[#262c36] px-2 py-0.5 rounded">
+                              &lt;{act.command === 'dock_at' ? 'run_script order.dock' : act.command === 'flee' ? 'run_script move.flee' : act.command === 'shoot' ? 'shoot_at' : act.command === 'find_objects' ? 'find_object' : act.command}&gt;
+                            </span>
                           </div>
+                          {!isPreset && (
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button type="button" onClick={() => handleMoveAction(idx, -1)} className="p-1 text-[#a0aab8] hover:text-white cursor-pointer" title="Move up">
+                                <ArrowUp className="w-3.5 h-3.5" />
+                              </button>
+                              <button type="button" onClick={() => handleMoveAction(idx, 1)} className="p-1 text-[#a0aab8] hover:text-white cursor-pointer" title="Move down">
+                                <ArrowDown className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => updateActiveScript(s => ({ ...s, actions: s.actions.filter(a => a.id !== act.id) }))}
+                                className="p-1 text-[#687385] hover:text-rose-400 cursor-pointer"
+                                title="Delete action"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )}
                         </div>
 
-                        {!isPreset && (
-                          <button
-                            onClick={() => handleDeleteAction(act.id)}
-                            className="p-1 rounded text-slate-500 hover:text-red-400 hover:bg-black/35 opacity-40 group-hover:opacity-100 transition-all cursor-pointer"
-                            title="Remove AI task node"
-                          >
-                            <Trash className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
-
-                      {/* Node inputs fields */}
-                      <div className="ml-6 grid grid-cols-1 gap-1.5 bg-black/25 p-2 rounded border border-white/5 font-mono text-[10px]">
-                        {act.command === 'move_to' && (
-                          <>
-                            <div className="flex items-center justify-between gap-1">
-                              <span className="text-slate-400 capitalize">Destination:</span>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pl-8">
+                          {act.command === 'label' && (
+                            <div>
+                              <label className="block text-[11px] text-[#687385] mb-0.5">Label Name</label>
                               <input
                                 type="text"
                                 disabled={isPreset}
-                                value={act.properties.destination || ''}
-                                onChange={(e) => handleUpdateActionProp(act.id, 'destination', e.target.value)}
-                                className="bg-black/45 border border-white/10 rounded px-1.5 py-0.5 text-amber-400 text-right font-bold w-1/2 disabled:opacity-50"
+                                value={act.properties.name || ''}
+                                onChange={e =>
+                                  updateActiveScript(s => ({
+                                    ...s,
+                                    actions: s.actions.map(a => (a.id === act.id ? { ...a, properties: { ...a.properties, name: e.target.value } } : a)),
+                                  }))
+                                }
+                                className={`${inputClass} font-mono`}
                               />
                             </div>
-                            <div className="flex items-center justify-between gap-1">
-                              <span className="text-slate-400 capitalize">Throttle Speed (%):</span>
+                          )}
+
+                          {act.command === 'resume' && (
+                            <div>
+                              <label className="block text-[11px] text-[#687385] mb-0.5">Target Label</label>
                               <input
                                 type="text"
                                 disabled={isPreset}
-                                value={act.properties.speed || ''}
-                                onChange={(e) => handleUpdateActionProp(act.id, 'speed', e.target.value)}
-                                className="bg-black/45 border border-white/10 rounded px-1.5 py-0.5 text-white text-right w-1/3 disabled:opacity-50"
+                                list={`labels_${act.id}`}
+                                value={act.properties.label || ''}
+                                onChange={e =>
+                                  updateActiveScript(s => ({
+                                    ...s,
+                                    actions: s.actions.map(a => (a.id === act.id ? { ...a, properties: { ...a.properties, label: e.target.value } } : a)),
+                                  }))
+                                }
+                                className={`${inputClass} font-mono`}
+                              />
+                              <datalist id={`labels_${act.id}`}>
+                                {declaredLabels.map(lbl => (
+                                  <option key={lbl} value={lbl} />
+                                ))}
+                              </datalist>
+                            </div>
+                          )}
+
+                          {act.command === 'run_script' && (
+                            <>
+                              <div>
+                                <label className="block text-[11px] text-[#687385] mb-0.5">Script Name Expr</label>
+                                <input
+                                  type="text"
+                                  disabled={isPreset}
+                                  value={act.properties.name || ''}
+                                  onChange={e =>
+                                    updateActiveScript(s => ({
+                                      ...s,
+                                      actions: s.actions.map(a => (a.id === act.id ? { ...a, properties: { ...a.properties, name: e.target.value } } : a)),
+                                    }))
+                                  }
+                                  className={`${inputClass} font-mono`}
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[11px] text-[#687385] mb-0.5">Result Var (optional)</label>
+                                <input
+                                  type="text"
+                                  disabled={isPreset}
+                                  value={act.properties.result || ''}
+                                  onChange={e =>
+                                    updateActiveScript(s => ({
+                                      ...s,
+                                      actions: s.actions.map(a => (a.id === act.id ? { ...a, properties: { ...a.properties, result: e.target.value } } : a)),
+                                    }))
+                                  }
+                                  className={`${inputClass} font-mono`}
+                                />
+                              </div>
+                            </>
+                          )}
+
+                          {act.command === 'move_to' && (
+                            <>
+                              <div>
+                                <label className="block text-[11px] text-[#687385] mb-0.5">Destination</label>
+                                <input
+                                  type="text"
+                                  disabled={isPreset}
+                                  value={act.properties.destination || ''}
+                                  onChange={e =>
+                                    updateActiveScript(s => ({
+                                      ...s,
+                                      actions: s.actions.map(a => (a.id === act.id ? { ...a, properties: { ...a.properties, destination: e.target.value } } : a)),
+                                    }))
+                                  }
+                                  className={`${inputClass} font-mono`}
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[11px] text-[#687385] mb-0.5">Flight Behaviour</label>
+                                <input
+                                  type="text"
+                                  disabled={isPreset}
+                                  value={act.properties.flightbehaviour || ''}
+                                  placeholder="flightbehaviour.generic"
+                                  onChange={e =>
+                                    updateActiveScript(s => ({
+                                      ...s,
+                                      actions: s.actions.map(a => (a.id === act.id ? { ...a, properties: { ...a.properties, flightbehaviour: e.target.value } } : a)),
+                                    }))
+                                  }
+                                  className={`${inputClass} font-mono`}
+                                />
+                              </div>
+                            </>
+                          )}
+
+                          {act.command === 'shoot' && (
+                            <>
+                              <div>
+                                <label className="block text-[11px] text-[#687385] mb-0.5">Target</label>
+                                <input
+                                  type="text"
+                                  disabled={isPreset}
+                                  value={act.properties.target || ''}
+                                  onChange={e =>
+                                    updateActiveScript(s => ({
+                                      ...s,
+                                      actions: s.actions.map(a => (a.id === act.id ? { ...a, properties: { ...a.properties, target: e.target.value } } : a)),
+                                    }))
+                                  }
+                                  className={`${inputClass} font-mono`}
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[11px] text-[#687385] mb-0.5">Weapon Mode</label>
+                                <select
+                                  disabled={isPreset}
+                                  value={act.properties.weaponmode || 'weaponmode.attackenemies'}
+                                  onChange={e =>
+                                    updateActiveScript(s => ({
+                                      ...s,
+                                      actions: s.actions.map(a => (a.id === act.id ? { ...a, properties: { ...a.properties, weaponmode: e.target.value } } : a)),
+                                    }))
+                                  }
+                                  className={`${inputClass} font-mono`}
+                                >
+                                  <option value="weaponmode.any">weaponmode.any</option>
+                                  <option value="weaponmode.attackenemies">weaponmode.attackenemies</option>
+                                  <option value="weaponmode.attackcapital">weaponmode.attackcapital</option>
+                                  <option value="weaponmode.attackfighters">weaponmode.attackfighters</option>
+                                </select>
+                              </div>
+                            </>
+                          )}
+
+                          {act.command === 'dock_at' && (
+                            <div>
+                              <label className="block text-[11px] text-[#687385] mb-0.5">Dock Destination (<code className="font-mono text-[#a0aab8]">order.dock</code>)</label>
+                              <input
+                                type="text"
+                                disabled={isPreset}
+                                value={act.properties.destination ?? act.properties.station ?? ''}
+                                onChange={e =>
+                                  updateActiveScript(s => ({
+                                    ...s,
+                                    actions: s.actions.map(a => (a.id === act.id ? { ...a, properties: { ...a.properties, destination: e.target.value } } : a)),
+                                  }))
+                                }
+                                className={`${inputClass} font-mono`}
                               />
                             </div>
-                          </>
-                        )}
+                          )}
 
-                        {act.command === 'wait' && (
-                          <>
-                            <div className="flex items-center justify-between gap-1">
-                              <span className="text-slate-400 capitalize">Duration exact:</span>
+                          {act.command === 'wait' && (
+                            <div>
+                              <label className="block text-[11px] text-[#687385] mb-0.5">Exact Duration (<code className="font-mono text-[#a0aab8]">exact</code>)</label>
                               <input
                                 type="text"
                                 disabled={isPreset}
                                 value={act.properties.exact || ''}
-                                onChange={(e) => handleUpdateActionProp(act.id, 'exact', e.target.value)}
-                                className="bg-black/45 border border-white/10 rounded px-1.5 py-0.5 text-emerald-400 text-right w-1/3 disabled:opacity-50"
-                                placeholder="e.g. 10s"
+                                placeholder="e.g. 5s"
+                                onChange={e =>
+                                  updateActiveScript(s => ({
+                                    ...s,
+                                    actions: s.actions.map(a => (a.id === act.id ? { ...a, properties: { ...a.properties, exact: e.target.value } } : a)),
+                                  }))
+                                }
+                                className={`${inputClass} font-mono`}
                               />
                             </div>
-                            <div className="flex items-center justify-between gap-1 text-[9px] text-slate-500 italic leading-none py-0.5">
-                              <span>OR Randomize limits:</span>
-                              <div className="flex gap-1 justify-end w-1/2 font-sans">
+                          )}
+
+                          {act.command === 'find_objects' && (
+                            <>
+                              <div>
+                                <label className="block text-[11px] text-[#687385] mb-0.5">Class (<code className="font-mono text-[#a0aab8]">class.*</code>)</label>
+                                <select
+                                  disabled={isPreset}
+                                  value={act.properties.class || 'ship'}
+                                  onChange={e =>
+                                    updateActiveScript(s => ({
+                                      ...s,
+                                      actions: s.actions.map(a => (a.id === act.id ? { ...a, properties: { ...a.properties, class: e.target.value } } : a)),
+                                    }))
+                                  }
+                                  className={`${inputClass} font-mono`}
+                                >
+                                  <option value="ship">ship</option>
+                                  <option value="asteroid">asteroid</option>
+                                  <option value="station">station</option>
+                                  <option value="wreck">wreck</option>
+                                </select>
+                              </div>
+                              <div>
+                                <label className="block text-[11px] text-[#687385] mb-0.5">Space (<code className="font-mono text-[#a0aab8]">this.sector</code>)</label>
                                 <input
                                   type="text"
                                   disabled={isPreset}
-                                  value={act.properties.min || ''}
-                                  onChange={(e) => handleUpdateActionProp(act.id, 'min', e.target.value)}
-                                  className="bg-black/45 border border-white/10 rounded w-10 text-center text-white text-[8px] font-mono disabled:opacity-50"
-                                  placeholder="min"
+                                  value={act.properties.space || 'this.sector'}
+                                  onChange={e =>
+                                    updateActiveScript(s => ({
+                                      ...s,
+                                      actions: s.actions.map(a => (a.id === act.id ? { ...a, properties: { ...a.properties, space: e.target.value } } : a)),
+                                    }))
+                                  }
+                                  className={`${inputClass} font-mono`}
                                 />
-                                <span className="text-slate-600">-</span>
+                              </div>
+                            </>
+                          )}
+
+                          {act.command === 'custom_xml' && (
+                            <div className="md:col-span-2">
+                              <textarea
+                                disabled={isPreset}
+                                rows={3}
+                                value={act.properties.rawXml || ''}
+                                onChange={e =>
+                                  updateActiveScript(s => ({
+                                    ...s,
+                                    actions: s.actions.map(a => (a.id === act.id ? { ...a, properties: { ...a.properties, rawXml: e.target.value } } : a)),
+                                  }))
+                                }
+                                className={`${inputClass} font-mono`}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'interrupts' && activeScript.mode !== 'diff' && (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {/* Global Interrupt Handlers */}
+                  <section className="rounded-lg border border-[#262c36] bg-[#11141a] p-4 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h3 className="text-xs font-semibold text-[#eef2f7]">Global Interrupts (<code className="font-mono text-[#93c5fd]">&lt;interrupts&gt;</code>)</h3>
+                        <p className="text-[11px] text-[#687385]">Reference vanilla library handlers or author inline <code className="font-mono text-[#a0aab8]">&lt;conditions&gt;</code> + non-blocking <code className="font-mono text-[#a0aab8]">&lt;actions&gt;</code>.</p>
+                      </div>
+                      {!isPreset && (
+                        <button
+                          type="button"
+                          onClick={handleAddInlineInterrupt}
+                          className="px-2.5 py-1 rounded border border-[#262c36] bg-[#171b23] text-[11px] text-[#93c5fd] hover:border-[#3b82f6]/60 cursor-pointer"
+                        >
+                          + Inline Handler
+                        </button>
+                      )}
+                    </div>
+
+                    {!isPreset && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {VANILLA_INTERRUPT_REFS.map(refName => (
+                          <button
+                            key={refName}
+                            type="button"
+                            onClick={() => handleAddInterruptRef(refName)}
+                            className="px-2 py-0.5 rounded border border-[#262c36] bg-[#0a0c10] hover:border-[#3b82f6]/60 font-mono text-[11px] text-[#a0aab8] hover:text-[#eef2f7] cursor-pointer"
+                          >
+                            + ref="{refName}"
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="space-y-2">
+                      {(activeScript.interrupts || []).map((handler: AIInterruptHandler, idx) => (
+                        <div key={handler.id} className="rounded border border-[#262c36] bg-[#0a0c10] p-3 space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-mono text-[11px] font-semibold text-[#93c5fd]">
+                              {handler.ref ? `<handler ref="${handler.ref}" />` : `<handler> (${handler.event || 'inline'})`}
+                            </span>
+                            {!isPreset && (
+                              <button
+                                type="button"
+                                onClick={() => updateActiveScript(s => ({ ...s, interrupts: s.interrupts.filter((_, i) => i !== idx) }))}
+                                className="p-1 text-[#687385] hover:text-rose-400 cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                          {!handler.ref && (
+                            <div className="space-y-2">
+                              <div>
+                                <label className="block text-[11px] text-[#687385] mb-0.5">Conditions XML</label>
                                 <input
                                   type="text"
                                   disabled={isPreset}
-                                  value={act.properties.max || ''}
-                                  onChange={(e) => handleUpdateActionProp(act.id, 'max', e.target.value)}
-                                  className="bg-black/45 border border-white/10 rounded w-10 text-center text-white text-[8px] font-mono disabled:opacity-50"
-                                  placeholder="max"
+                                  value={handler.conditionsXml || ''}
+                                  onChange={e =>
+                                    updateActiveScript(s => ({
+                                      ...s,
+                                      interrupts: s.interrupts.map((h, i) => (i === idx ? { ...h, conditionsXml: e.target.value } : h)),
+                                    }))
+                                  }
+                                  className={`${inputClass} font-mono`}
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[11px] text-[#687385] mb-0.5">Actions XML (non-blocking)</label>
+                                <input
+                                  type="text"
+                                  disabled={isPreset}
+                                  value={handler.actionsXml || ''}
+                                  onChange={e =>
+                                    updateActiveScript(s => ({
+                                      ...s,
+                                      interrupts: s.interrupts.map((h, i) => (i === idx ? { ...h, actionsXml: e.target.value } : h)),
+                                    }))
+                                  }
+                                  className={`${inputClass} font-mono`}
                                 />
                               </div>
                             </div>
-                          </>
-                        )}
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </section>
 
-                        {act.command === 'shoot' && (
-                          <>
-                            <div className="flex items-center justify-between gap-1">
-                              <span className="text-slate-400 capitalize">Target Combatant:</span>
+                  {/* Save-Game Migration Patches + Init/Abort */}
+                  <section className="rounded-lg border border-[#262c36] bg-[#11141a] p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="text-xs font-semibold text-[#eef2f7]">Save Migration <code className="font-mono text-[#93c5fd]">&lt;patch sinceversion&gt;</code></h3>
+                        <p className="text-[11px] text-[#687385]">Runs non-blocking repair actions when saves load an older script version.</p>
+                      </div>
+                      {!isPreset && (
+                        <button
+                          type="button"
+                          data-testid="ai-add-patch"
+                          onClick={handleAddPatch}
+                          className="px-2.5 py-1 rounded border border-[#262c36] bg-[#171b23] text-[11px] text-[#93c5fd] hover:border-[#3b82f6]/60 cursor-pointer"
+                        >
+                          + Add Patch
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="space-y-2">
+                      {(activeScript.patches || []).map((patch, idx) => (
+                        <div key={patch.id} className="rounded border border-[#262c36] bg-[#0a0c10] p-3 space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[11px] text-[#a0aab8]">sinceversion=</span>
                               <input
-                                type="text"
+                                type="number"
+                                min={1}
                                 disabled={isPreset}
-                                value={act.properties.target || ''}
-                                onChange={(e) => handleUpdateActionProp(act.id, 'target', e.target.value)}
-                                className="bg-black/45 border border-white/10 rounded px-1.5 py-0.5 text-red-400 text-right font-bold w-1/2 disabled:opacity-50"
+                                value={patch.sinceVersion}
+                                onChange={e =>
+                                  updateActiveScript(s => ({
+                                    ...s,
+                                    patches: (s.patches || []).map((p, i) =>
+                                      i === idx ? { ...p, sinceVersion: Math.max(1, Number(e.target.value) || 1) } : p
+                                    ),
+                                  }))
+                                }
+                                className="w-16 rounded border border-[#262c36] bg-[#11141a] px-2 py-0.5 font-mono text-[11px] text-[#eef2f7]"
                               />
+                              <label className="inline-flex items-center gap-1 text-[11px] text-[#a0aab8] cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  disabled={isPreset}
+                                  checked={Boolean(patch.early)}
+                                  onChange={e =>
+                                    updateActiveScript(s => ({
+                                      ...s,
+                                      patches: (s.patches || []).map((p, i) => (i === idx ? { ...p, early: e.target.checked } : p)),
+                                    }))
+                                  }
+                                  className="accent-[#3b82f6]"
+                                />
+                                early
+                              </label>
                             </div>
-                            <div className="flex items-center justify-between gap-1">
-                              <span className="text-slate-400 capitalize">Weapons Array:</span>
-                              <select
-                                value={act.properties.weapon || 'all_weapons'}
-                                disabled={isPreset}
-                                onChange={(e) => handleUpdateActionProp(act.id, 'weapon', e.target.value)}
-                                className="bg-black/45 border border-white/10 rounded text-[9.5px] cursor-pointer text-white max-w-1/2 focus:outline-none disabled:opacity-50"
+                            {!isPreset && (
+                              <button
+                                type="button"
+                                onClick={() => updateActiveScript(s => ({ ...s, patches: (s.patches || []).filter((_, i) => i !== idx) }))}
+                                className="p-1 text-[#687385] hover:text-rose-400 cursor-pointer"
                               >
-                                <option value="all_weapons">All Guns & Turrets</option>
-                                <option value="primary">Primary Flight Lasers</option>
-                                <option value="turrets">Flak/Missile Turrets Only</option>
-                              </select>
-                            </div>
-                          </>
-                        )}
-
-                        {act.command === 'find_objects' && (
-                          <>
-                            <div className="flex items-center justify-between gap-1">
-                              <span className="text-slate-400 capitalize">Search Class:</span>
-                              <select
-                                value={act.properties.class || 'ship'}
-                                disabled={isPreset}
-                                onChange={(e) => handleUpdateActionProp(act.id, 'class', e.target.value)}
-                                className="bg-black/45 border border-white/10 rounded text-amber-400 text-right text-[10px] pr-1 focus:outline-none disabled:opacity-50"
-                              >
-                                <option value="ship">Ships & Squadrons</option>
-                                <option value="asteroid">Mining Asteroids</option>
-                                <option value="station">Factories & Trade hqs</option>
-                                <option value="wreck">Salvageable Ship Wrecks</option>
-                              </select>
-                            </div>
-                            <div className="flex items-center justify-between gap-1">
-                              <span className="text-slate-400 capitalize">Scan Distance range:</span>
-                              <input
-                                type="text"
-                                disabled={isPreset}
-                                value={act.properties.range || ''}
-                                onChange={(e) => handleUpdateActionProp(act.id, 'range', e.target.value)}
-                                className="bg-black/45 border border-white/10 rounded px-1.5 py-0.5 text-white text-right w-1/3 disabled:opacity-50"
-                              />
-                            </div>
-                          </>
-                        )}
-
-                        {act.command === 'dock_at' && (
-                          <>
-                            <div className="flex items-center justify-between gap-1">
-                              <span className="text-slate-400 capitalize">Dock Object:</span>
-                              <input
-                                type="text"
-                                disabled={isPreset}
-                                value={act.properties.station || ''}
-                                onChange={(e) => handleUpdateActionProp(act.id, 'station', e.target.value)}
-                                className="bg-black/45 border border-white/10 rounded px-1.5 py-0.5 text-cyan-400 text-right w-1/2 disabled:opacity-50"
-                              />
-                            </div>
-                          </>
-                        )}
-
-                        {act.command === 'custom_xml' && (
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
                           <textarea
                             disabled={isPreset}
-                            value={act.properties.rawXml || ''}
-                            onChange={(e) => handleUpdateActionProp(act.id, 'rawXml', e.target.value)}
-                            rows={3}
-                            className="w-full bg-black/60 font-mono text-[9.5px] p-1.5 border border-white/10 focus:border-amber-500 rounded text-slate-300 resize-none disabled:opacity-50"
+                            rows={2}
+                            value={patch.actionsXml}
+                            onChange={e =>
+                              updateActiveScript(s => ({
+                                ...s,
+                                patches: (s.patches || []).map((p, i) => (i === idx ? { ...p, actionsXml: e.target.value } : p)),
+                              }))
+                            }
+                            className={`${inputClass} font-mono`}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                </div>
+              )}
+
+              {activeTab === 'diff' && activeScript.mode === 'diff' && (
+                <section className="rounded-lg border border-[#262c36] bg-[#11141a] p-4 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <h3 className="text-xs font-semibold text-[#eef2f7]">RFC 5261 <code className="font-mono text-[#93c5fd]">&lt;diff&gt;</code> Operations (<code className="font-mono text-[#a0aab8]">aiscripts/{activeScript.name}.xml</code>)</h3>
+                      <p className="text-[11px] text-[#687385]">Patch vanilla scripts by XPath without replacing the whole script.</p>
+                    </div>
+                    {!isPreset && (
+                      <button
+                        type="button"
+                        data-testid="ai-add-diff-op"
+                        onClick={handleAddDiffOp}
+                        className="px-2.5 py-1 rounded border border-[#262c36] bg-[#171b23] text-[11px] text-[#93c5fd] hover:border-[#3b82f6]/60 cursor-pointer"
+                      >
+                        + Add Diff Op
+                      </button>
+                    )}
+                  </div>
+                  <div className="space-y-2.5">
+                    {(activeScript.diffOps || []).map((op, idx) => (
+                      <div key={op.id} className="rounded border border-[#262c36] bg-[#0a0c10] p-3 space-y-2">
+                        <div className="grid grid-cols-12 gap-2 items-center">
+                          <select
+                            disabled={isPreset}
+                            value={op.op}
+                            onChange={e =>
+                              updateActiveScript(s => ({
+                                ...s,
+                                diffOps: (s.diffOps || []).map((d, i) => (i === idx ? { ...d, op: e.target.value as AIScriptDiffOp['op'] } : d)),
+                              }))
+                            }
+                            className={`col-span-2 ${inputClass} font-mono`}
+                          >
+                            <option value="add">add</option>
+                            <option value="replace">replace</option>
+                            <option value="remove">remove</option>
+                          </select>
+                          <input
+                            type="text"
+                            disabled={isPreset}
+                            value={op.sel}
+                            onChange={e =>
+                              updateActiveScript(s => ({
+                                ...s,
+                                diffOps: (s.diffOps || []).map((d, i) => (i === idx ? { ...d, sel: e.target.value } : d)),
+                              }))
+                            }
+                            placeholder="//aiscript/attention/actions"
+                            className={`col-span-9 ${inputClass} font-mono`}
+                          />
+                          {!isPreset && (
+                            <button
+                              type="button"
+                              onClick={() => updateActiveScript(s => ({ ...s, diffOps: (s.diffOps || []).filter((_, i) => i !== idx) }))}
+                              className="col-span-1 p-1 text-[#687385] hover:text-rose-400 cursor-pointer justify-self-end"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                        {op.op !== 'remove' && (
+                          <textarea
+                            disabled={isPreset}
+                            rows={2}
+                            value={op.content || ''}
+                            onChange={e =>
+                              updateActiveScript(s => ({
+                                ...s,
+                                diffOps: (s.diffOps || []).map((d, i) => (i === idx ? { ...d, content: e.target.value } : d)),
+                              }))
+                            }
+                            className={`${inputClass} font-mono`}
                           />
                         )}
                       </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {activeTab === 'xml' && (
+                <section className="rounded-lg border border-[#262c36] bg-[#11141a] p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-semibold text-[#eef2f7]">
+                      Compiled XML (<code className="font-mono text-[#a0aab8]">aiscripts/{activeScript.name.endsWith('.xml') ? activeScript.name : `${activeScript.name}.xml`}</code>)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(compiledXml);
+                        setCopiedXml(true);
+                        setTimeout(() => setCopiedXml(false), 1800);
+                      }}
+                      className="px-2.5 py-1 rounded border border-[#262c36] bg-[#0a0c10] text-[11px] text-[#eef2f7] inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      {copiedXml ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                      {copiedXml ? 'Copied' : 'Copy XML'}
+                    </button>
+                  </div>
+
+                  {lintFindings.length > 0 && (
+                    <div className="space-y-1.5" data-testid="ai-lint-findings-list">
+                      {lintFindings.map((finding, i) => (
+                        <div
+                          key={`${finding.code}_${i}`}
+                          className={`rounded border px-3 py-2 text-[11px] ${
+                            finding.severity === 'error'
+                              ? 'border-rose-500/40 bg-rose-950/25 text-rose-200'
+                              : 'border-amber-500/40 bg-amber-950/25 text-amber-200'
+                          }`}
+                        >
+                          <span className="font-mono font-semibold mr-2">{finding.code}</span>
+                          <span>{finding.detail}</span>
+                        </div>
+                      ))}
                     </div>
-                  ))
-                )}
-              </div>
+                  )}
 
-              {/* Action additions toolbox */}
-              <div className={`mt-2 shrink-0 py-2 border-t border-white/10 ${isPreset ? 'opacity-40 cursor-not-allowed pointer-events-none' : ''}`}>
-                <label className="text-slate-400 block mb-1.5 uppercase font-bold font-mono text-[9.5px] tracking-wider select-none">
-                  ➕ Add AI behavior instruction node
-                </label>
-                <div className="grid grid-cols-3 gap-1 text-[9.5px] font-mono">
-                  <button
-                    onClick={() => !isPreset && handleAddAction('move_to')}
-                    className="py-1 px-1.5 text-center truncate bg-amber-500/10 border border-amber-500/20 hover:border-amber-500 hover:text-white rounded transition-all cursor-pointer select-none"
+                  <pre
+                    data-testid="ai-xml-preview"
+                    className="rounded border border-[#262c36] bg-[#090b0f] p-3 font-mono text-[11px] leading-relaxed text-[#cbd5e1] overflow-x-auto whitespace-pre"
                   >
-                    航 Fly (Move To)
-                  </button>
-                  <button
-                    onClick={() => !isPreset && handleAddAction('wait')}
-                    className="py-1 px-1.5 text-center truncate bg-amber-500/10 border border-amber-500/20 hover:border-amber-500 hover:text-white rounded transition-all cursor-pointer select-none"
-                  >
-                    ⏱ Wait (Delay)
-                  </button>
-                  <button
-                    onClick={() => !isPreset && handleAddAction('shoot')}
-                    className="py-1 px-1.5 text-center truncate bg-amber-500/10 border border-amber-500/20 hover:border-amber-500 hover:text-white rounded transition-all cursor-pointer select-none"
-                  >
-                    ⚔ Shoot (Offensive)
-                  </button>
-                  <button
-                    onClick={() => !isPreset && handleAddAction('find_objects')}
-                    className="py-1 px-1.5 text-center truncate bg-amber-500/10 border border-amber-500/20 hover:border-amber-500 hover:text-white rounded transition-all cursor-pointer select-none"
-                  >
-                    🛰 Search Objects
-                  </button>
-                  <button
-                    onClick={() => !isPreset && handleAddAction('dock_at')}
-                    className="py-1 px-1.5 text-center truncate bg-amber-500/10 border border-amber-500/20 hover:border-amber-500 hover:text-white rounded transition-all cursor-pointer select-none"
-                  >
-                    ⛽ Dock At
-                  </button>
-                  <button
-                    onClick={() => !isPreset && handleAddAction('custom_xml')}
-                    className="py-1 px-1.5 text-center truncate bg-amber-500/10 border border-amber-500/20 hover:border-amber-500 hover:text-white rounded transition-all cursor-pointer select-none"
-                  >
-                    ⚒ Custom Tag
-                  </button>
-                </div>
-              </div>
+                    {compiledXml}
+                  </pre>
+                </section>
+              )}
             </div>
-
-          </>
+          </div>
         )}
       </div>
     </div>

@@ -19,7 +19,6 @@ import {
   Search,
   Plus,
   Compass,
-  Zap,
   Globe,
   AlertTriangle,
   CheckCircle2,
@@ -33,12 +32,12 @@ import {
   AlignEndHorizontal,
   AlignHorizontalDistributeCenter,
   AlignVerticalDistributeCenter,
-  GitBranch,
-  Repeat,
   Activity,
   SlidersHorizontal,
   LayoutGrid,
+  ListTree,
 } from 'lucide-react';
+import CanvasNodeCard from './canvas/CanvasNodeCard';
 import { mapTelemetryToNodes, type LiveNodeBadge } from '../lib/liveCanvasTelemetry';
 import { MDNode, MDLink, ModWorkspace, Port, NODE_TEMPLATES, validateModWorkspace, generateMDXML, type PackageDiagnostic } from '../types';
 import { canvasCueOwners } from '../lib/mdFileIdentity';
@@ -126,6 +125,7 @@ interface CanvasProps {
   /** When set, only show cues from this MD script (file stem); null = all scripts. */
   activeMdScript?: string | null;
   onActiveMdScriptChange?: (script: string | null) => void;
+  onOpenCueTree?: () => void;
   packageDiagnostics?: PackageDiagnostic[];
   diagnosticSource?: DiagnosticSource;
   modWorkspacePath?: string;
@@ -169,6 +169,7 @@ function Canvas({
   setSelectedNodeIds,
   activeMdScript = null,
   onActiveMdScriptChange,
+  onOpenCueTree,
   packageDiagnostics = [],
   diagnosticSource = 'checking',
   modWorkspacePath = '',
@@ -708,6 +709,34 @@ function Canvas({
     toast(`Deleted "${label}" — Ctrl+Z to undo.`);
   };
 
+  const handleEditComment = async (node: MDNode, mode: 'prompt' | 'sticky') => {
+    const promptMsg = mode === 'sticky'
+      ? `Edit Sticky Note Annotation for "${node.label}":`
+      : `Attach Yellow Sticky Note to "${node.label}" script step:`;
+    const text = await promptDialog(promptMsg, node.comment || '');
+    if (text !== null) {
+      saveCheckpoint();
+      setWorkspace(prev => ({
+        ...prev,
+        nodes: prev.nodes.map(n => n.id === node.id ? { ...n, comment: text } : n),
+      }));
+      if (selectedNode && selectedNode.id === node.id) {
+        setSelectedNode({ ...selectedNode, comment: text });
+      }
+    }
+  };
+
+  const handleDeleteComment = (node: MDNode) => {
+    saveCheckpoint();
+    setWorkspace(prev => ({
+      ...prev,
+      nodes: prev.nodes.map(n => n.id === node.id ? { ...n, comment: '' } : n),
+    }));
+    if (selectedNode && selectedNode.id === node.id) {
+      setSelectedNode({ ...selectedNode, comment: '' });
+    }
+  };
+
   const clearLinks = () => {
     saveCheckpoint();
     setWorkspace(prev => ({ ...prev, links: [] }));
@@ -1166,6 +1195,41 @@ function Canvas({
       setPulsingLinks([]);
     }, delayCounter);
   };
+
+  const canvasCardHandlersRef = useRef({
+    handleNodeMouseDown,
+    handlePortClick,
+    deleteNode,
+    triggerLogicSimulator,
+    handleEditComment,
+    handleDeleteComment,
+  });
+  canvasCardHandlersRef.current = {
+    handleNodeMouseDown,
+    handlePortClick,
+    deleteNode,
+    triggerLogicSimulator,
+    handleEditComment,
+    handleDeleteComment,
+  };
+  const stableCardMouseDown = React.useCallback((nodeId: string, e: React.MouseEvent) => {
+    canvasCardHandlersRef.current.handleNodeMouseDown(nodeId, e);
+  }, []);
+  const stableCardPortClick = React.useCallback((nodeId: string, port: Port, e: React.MouseEvent) => {
+    canvasCardHandlersRef.current.handlePortClick(nodeId, port, e);
+  }, []);
+  const stableCardDeleteNode = React.useCallback((nodeId: string, e: React.MouseEvent) => {
+    canvasCardHandlersRef.current.deleteNode(nodeId, e);
+  }, []);
+  const stableCardTriggerSim = React.useCallback((nodeId: string) => {
+    canvasCardHandlersRef.current.triggerLogicSimulator(nodeId);
+  }, []);
+  const stableCardEditComment = React.useCallback((node: MDNode, mode: 'prompt' | 'sticky') => {
+    void canvasCardHandlersRef.current.handleEditComment(node, mode);
+  }, []);
+  const stableCardDeleteComment = React.useCallback((node: MDNode) => {
+    canvasCardHandlersRef.current.handleDeleteComment(node);
+  }, []);
 
   // Focus and Center Viewport camera onto a specific Selected Node, smoothly centering details pane
   const focusNode = React.useCallback((node: MDNode) => {
@@ -1676,8 +1740,20 @@ function Canvas({
         <div className="flex min-h-0 w-fit max-w-full flex-col items-end gap-1.5">
           <div
             data-testid="canvas-toolbar"
-            className="pointer-events-auto flex w-fit max-w-full shrink-0 flex-wrap items-center gap-1.5 rounded-lg border border-slate-700/80 bg-[#11161f]/95 px-2 py-1.5 shadow-xl backdrop-blur-md"
+            className="pointer-events-auto flex w-fit max-w-full shrink-0 flex-wrap items-center gap-1.5 rounded-lg border border-[#262c36] bg-[#11141a]/95 px-2 py-1.5 shadow-lg"
           >
+            {onOpenCueTree && (
+              <button
+                type="button"
+                data-testid="canvas-cue-tree-toggle"
+                onClick={onOpenCueTree}
+                title="Open Cue Tree explorer in sidebar"
+                className="flex h-7 items-center gap-1.5 whitespace-nowrap rounded-md border border-[#262c36] bg-[#0a0c10] px-2.5 text-[11px] font-medium text-[#eef2f7] hover:border-[#3b82f6]/60 hover:text-[#93c5fd] cursor-pointer transition-colors"
+              >
+                <ListTree className="h-3.5 w-3.5 shrink-0 text-[#60a5fa]" />
+                Cue Tree
+              </button>
+            )}
             {/* View / Zoom Cluster */}
             <div className="forge-toolbar-cluster">
               <button
@@ -1885,9 +1961,9 @@ function Canvas({
 
       {/* Selective node ALIGNMENT toolbar — appears when 2+ nodes are selected (UE5-style). */}
       {(selectedNodeIds?.length || 0) >= 2 && (
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-0.5 bg-[#0c0e14]/95 border border-cyan-500/25 rounded-lg px-1.5 py-1 shadow-2xl backdrop-blur-sm animate-fade-in">
-          <span className="text-[8px] font-mono uppercase tracking-wider text-cyan-400/80 px-1.5 select-none">align {selectedNodeIds.length}</span>
-          <span className="h-4 w-px bg-white/10 mx-0.5" />
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 flex items-center gap-0.5 bg-[#0c0e12]/95 border border-[#262c36] rounded-lg px-2 py-1 shadow-2xl backdrop-blur-sm animate-fade-in">
+          <span className="text-[11px] font-mono uppercase tracking-wider text-[#93c5fd] px-1.5 select-none">align {selectedNodeIds.length}</span>
+          <span className="h-4 w-px bg-[#262c36] mx-0.5" />
           {([
             { mode: 'left', Icon: AlignStartVertical, title: 'Align left edges' },
             { mode: 'hcenter', Icon: AlignCenterVertical, title: 'Align horizontal centers' },
@@ -1900,17 +1976,17 @@ function Canvas({
               key={mode}
               onClick={() => applyAlignment(mode as AlignMode)}
               title={title}
-              className="p-1.5 rounded hover:bg-cyan-500/15 text-slate-400 hover:text-cyan-300 transition-all cursor-pointer"
+              className="p-1.5 rounded hover:bg-[#171b23] text-[#a0aab8] hover:text-[#eef2f7] transition-colors cursor-pointer"
             >
               <Icon className="w-3.5 h-3.5" />
             </button>
           ))}
-          <span className="h-4 w-px bg-white/10 mx-0.5" />
+          <span className="h-4 w-px bg-[#262c36] mx-0.5" />
           <button
             onClick={() => applyAlignment('distribute-h')}
             disabled={selectedNodeIds.length < 3}
             title="Distribute horizontally (needs 3+)"
-            className="p-1.5 rounded hover:bg-cyan-500/15 text-slate-400 hover:text-cyan-300 transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+            className="p-1.5 rounded hover:bg-[#171b23] text-[#a0aab8] hover:text-[#eef2f7] transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
           >
             <AlignHorizontalDistributeCenter className="w-3.5 h-3.5" />
           </button>
@@ -1918,7 +1994,7 @@ function Canvas({
             onClick={() => applyAlignment('distribute-v')}
             disabled={selectedNodeIds.length < 3}
             title="Distribute vertically (needs 3+)"
-            className="p-1.5 rounded hover:bg-cyan-500/15 text-slate-400 hover:text-cyan-300 transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+            className="p-1.5 rounded hover:bg-[#171b23] text-[#a0aab8] hover:text-[#eef2f7] transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
           >
             <AlignVerticalDistributeCenter className="w-3.5 h-3.5" />
           </button>
@@ -1948,9 +2024,10 @@ function Canvas({
         onDrop={handleCanvasDrop}
         className="flex-1 w-full h-full relative cursor-grab active:cursor-grabbing outline-none"
         style={{
+          backgroundColor: '#0a0c10',
           backgroundImage: compactGridView
-            ? 'linear-gradient(to right, rgba(6, 182, 212, 0.09) 1px, transparent 1px), linear-gradient(to bottom, rgba(6, 182, 212, 0.09) 1px, transparent 1px)'
-            : 'radial-gradient(circle, rgba(6, 182, 212, 0.15) 1px, transparent 1px)',
+            ? 'linear-gradient(to right, rgba(59, 130, 246, 0.08) 1px, transparent 1px), linear-gradient(to bottom, rgba(59, 130, 246, 0.08) 1px, transparent 1px)'
+            : 'radial-gradient(circle, rgba(148, 163, 184, 0.14) 1px, transparent 1px)',
           backgroundSize: compactGridView ? '16px 16px' : '24px 24px',
           backgroundPosition: `${panOffset.x}px ${panOffset.y}px`
         }}
@@ -1967,11 +2044,11 @@ function Canvas({
           <svg className="absolute top-0 left-0 w-[5000px] h-[5000px] pointer-events-none overflow-visible">
             <defs>
               <linearGradient id="wire-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                <stop offset="0%" stopColor="#06b6d4" stopOpacity="0.85" />
+                <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.85" />
                 <stop offset="100%" stopColor="#10b981" stopOpacity="0.85" />
               </linearGradient>
               <linearGradient id="glow-wave" x1="0%" y1="0%" x2="100%" y2="0%">
-                <stop offset="0%" stopColor="#22d3ee" />
+                <stop offset="0%" stopColor="#60a5fa" />
                 <stop offset="50%" stopColor="#f59e0b" />
                 <stop offset="100%" stopColor="#10b981" />
               </linearGradient>
@@ -2206,298 +2283,25 @@ function Canvas({
               const isGlowActive = activeNodes.includes(node.id);
               const nodeDiag = nodeDiagMap[node.id];
 
-              let borderClasses = 'border-cyan-500/20 bg-[#0c1017]/95 backdrop-blur-sm';
-
-              if (node.type === 'cue') {
-                borderClasses = 'border-purple-500/20 bg-[#0f1118]/95 backdrop-blur-sm';
-              } else if (node.type === 'event') {
-                borderClasses = 'border-amber-500/20 bg-[#121114]/95 backdrop-blur-sm';
-              } else if (node.type === 'condition') {
-                borderClasses = 'border-cyan-500/20 bg-[#0c1017]/95 backdrop-blur-sm';
-              } else if (node.type === 'action') {
-                borderClasses = 'border-emerald-500/20 bg-[#0c1310]/95 backdrop-blur-sm';
-              }
-
-              const isLowDetail = zoom < 0.45;
-
-              // Shared Yellow Sticky Annotation render fragment helper
-              const stickyAnnotation = node.comment && (
-                <div 
-                  style={{ 
-                    position: 'absolute',
-                    left: node.x + (compactGridView ? 200 : 248), // Adjacent to the w-48 (192px) or w-60 (240px) visual node card
-                    top: node.y,
-                    width: '190px',
-                  }}
-                  onMouseDown={(e) => {
-                    e.stopPropagation();
-                  }}
-                  className="bg-amber-400/[0.12] hover:bg-amber-400/[0.22] border border-amber-400/40 text-amber-200 p-2.5 rounded-lg shadow-2xl font-sans text-[10px] leading-relaxed z-20 transition-all flex flex-col gap-1.5 backdrop-blur-md cursor-default text-left select-text"
-                >
-                  <div className="flex items-center justify-between border-b border-amber-400/20 pb-1 mb-0.5 select-none font-bold uppercase tracking-wider text-[8px] text-amber-400 font-mono">
-                    <span className="flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse" />
-                      Sticky Note
-                    </span>
-                    <div className="flex items-center gap-1">
-                      <button
-                        onClick={async (e) => {
-                          e.stopPropagation();
-                          const text = await promptDialog(`Edit Sticky Note Annotation for "${node.label}":`, node.comment);
-                          if (text !== null) {
-                            saveCheckpoint();
-                            setWorkspace(prev => ({
-                              ...prev,
-                              nodes: prev.nodes.map(n => n.id === node.id ? { ...n, comment: text } : n)
-                            }));
-                            if (selectedNode && selectedNode.id === node.id) {
-                              setSelectedNode({ ...selectedNode, comment: text });
-                            }
-                          }
-                        }}
-                        className="text-[8.5px] text-yellow-300 hover:text-white"
-                      >
-                        Edit
-                      </button>
-                      <span className="text-amber-400/30 font-sans select-none">•</span>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          saveCheckpoint();
-                          setWorkspace(prev => ({
-                            ...prev,
-                            nodes: prev.nodes.map(n => n.id === node.id ? { ...n, comment: '' } : n)
-                          }));
-                          if (selectedNode && selectedNode.id === node.id) {
-                            setSelectedNode({ ...selectedNode, comment: '' });
-                          }
-                        }}
-                        className="text-red-400 hover:text-red-200"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                  <p className="whitespace-pre-wrap leading-relaxed italic text-slate-300 select-text font-serif text-[10px]">{node.comment}</p>
-                </div>
-              );
-
-              if (isLowDetail) {
-                return (
-                  <React.Fragment key={node.id}>
-                    <div
-                      data-node-id={node.id}
-                      data-node-type={node.type}
-                      data-node-label={node.label}
-                      data-testid={`canvas-node-${node.id}`}
-                      onMouseDown={(e) => handleNodeMouseDown(node.id, e)}
-                      style={{ left: node.x, top: node.y }}
-                      className={`absolute ${compactGridView ? 'w-48 h-20' : 'w-60 h-24'} rounded-lg border flex flex-col justify-between font-mono text-[11px] p-2.5 select-none shadow-2xl transition-all duration-150 ${borderClasses} ${
-                        isSelected ? 'ring-2 ring-cyan-500/70 border-cyan-500/50 scale-[1.015] z-10' : 'hover:border-white/20'
-                      } ${isGlowActive ? 'animate-node-glow-active border-cyan-400 z-30 scale-[1.03]' : ''}`}
-                    >
-                      <div className="flex-1 flex items-center justify-center text-center">
-                        <span className={`font-bold text-[12px] truncate ${compactGridView ? 'w-36' : 'w-48'} text-slate-100`}>
-                          {node.label}
-                        </span>
-                      </div>
-                      <div className="text-[8px] text-slate-500 text-center uppercase tracking-wider font-bold border-t border-white/[0.04] pt-1">
-                        {node.type.toUpperCase()}: &lt;{node.xmlTag}&gt;
-                      </div>
-                    </div>
-                    {stickyAnnotation}
-                  </React.Fragment>
-                );
-              }
-
               return (
-                <React.Fragment key={node.id}>
-                  <div
-                    data-node-id={node.id}
-                    data-node-type={node.type}
-                    data-node-label={node.label}
-                    data-compact-node={compactGridView ? 'true' : 'false'}
-                    data-testid={`canvas-node-${node.id}`}
-                    onMouseDown={(e) => handleNodeMouseDown(node.id, e)}
-                    style={{ left: node.x, top: node.y }}
-                    className={`absolute ${compactGridView ? 'w-48' : 'w-60'} rounded-lg border flex flex-col font-mono text-[11px] shadow-2xl transition-all duration-150 ${borderClasses} ${
-                      isSelected ? 'ring-2 ring-cyan-500/70 border-cyan-500/50 scale-[1.015]' : 'hover:border-white/20'
-                    } ${isGlowActive ? 'animate-node-glow-active border-cyan-400 z-30 scale-[1.03]' : ''} ${
-                      nodeDiag ? (nodeDiag.severity === 'error'
-                        ? 'ring-2 ring-red-500/90 !border-red-500/70 shadow-[0_0_22px_rgba(239,68,68,0.55)] z-20'
-                        : 'ring-2 ring-amber-400/90 !border-amber-400/70 shadow-[0_0_18px_rgba(251,191,36,0.45)] z-20') : ''
-                    }`}
-                  >
-                    {/* LIVE game telemetry badge (top-LEFT corner; diagnostics own top-right):
-                        green ▶ = cue observed firing in the running game's log, red ✗ = erroring. */}
-                    {liveBadges[node.id] && (
-                      <div
-                        title={liveBadges[node.id].state === 'erroring'
-                          ? `${liveBadges[node.id].cueName}: ${liveBadges[node.id].errors} error(s) in the game log (line ~${liveBadges[node.id].lastLineNo}), ${liveBadges[node.id].hits} hit(s)`
-                          : `${liveBadges[node.id].cueName}: fired ${liveBadges[node.id].hits}× in the game log (line ~${liveBadges[node.id].lastLineNo})`}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        className={`absolute -top-2.5 -left-2.5 z-40 flex items-center gap-0.5 px-1.5 py-1 rounded-full text-[8.5px] font-bold font-mono shadow-lg cursor-help select-none ${
-                          liveBadges[node.id].state === 'erroring'
-                            ? 'bg-red-500 text-white animate-pulse'
-                            : 'bg-emerald-500 text-black'
-                        }`}
-                      >
-                        {liveBadges[node.id].state === 'erroring' ? `✗ ${liveBadges[node.id].errors}` : `▶ ${liveBadges[node.id].hits}`}
-                      </div>
-                    )}
-
-                    {/* In-your-face schema diagnostic badge — floats on the node corner. */}
-                    {nodeDiag && (
-                      <div
-                        title={nodeDiag.messages.join('\n')}
-                        onMouseDown={(e) => e.stopPropagation()}
-                        className={`absolute -top-2.5 -right-2.5 z-40 flex items-center gap-0.5 px-1.5 py-1 rounded-full text-[8.5px] font-bold font-mono uppercase shadow-lg cursor-help select-none ${
-                          nodeDiag.severity === 'error' ? 'bg-red-500 text-white animate-pulse' : 'bg-amber-400 text-black'
-                        }`}
-                      >
-                        <AlertTriangle className="w-3 h-3" />
-                        {nodeDiag.messages.length > 1 ? nodeDiag.messages.length : ''}
-                      </div>
-                    )}
-
-                    {/* Top-accent Gradient Line. Control-flow (if/loop) nodes get their own
-                        indigo accent so a decision/loop never looks like a plain action. */}
-                    <div className={`h-[3px] rounded-t-lg w-full bg-gradient-to-r ${
-                      isContainerTag(node.xmlTag)
-                        ? 'from-indigo-500 to-violet-500'
-                        : node.type === 'cue'
-                        ? 'from-purple-500 to-fuchsia-500'
-                        : node.type === 'event'
-                        ? 'from-amber-500 to-orange-500'
-                        : node.type === 'condition'
-                        ? 'from-cyan-500 to-blue-500'
-                        : 'from-emerald-500 to-teal-500'
-                    }`} />
-
-                    {/* Visual node title & close handle button */}
-                    <div className={`${compactGridView ? 'px-2 py-1.5' : 'p-2'} flex items-center justify-between border-b border-white/[0.04] cursor-grab active:cursor-grabbing bg-white/[0.01]`}>
-                      <div className="flex items-center gap-1.5 truncate">
-                        {simActive && isGlowActive && (
-                          <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping inline-block shrink-0" />
-                        )}
-                        {node.type === 'cue' && <Compass className="w-3.5 h-3.5 text-purple-400 shrink-0" />}
-                        {node.type === 'event' && <Zap className="w-3.5 h-3.5 text-amber-400 fill-amber-400/20 shrink-0" />}
-                        {node.type === 'condition' && <Filter className="w-3.5 h-3.5 text-cyan-400 shrink-0" />}
-                        {/* Control-flow gets a branch/loop glyph (indigo); plain actions keep the Play glyph. */}
-                        {node.type === 'action' && (
-                          isContainerTag(node.xmlTag)
-                            ? ((node.xmlTag === 'do_while' || node.xmlTag === 'do_for_each')
-                                ? <Repeat className="w-3.5 h-3.5 text-indigo-300 shrink-0" />
-                                : <GitBranch className="w-3.5 h-3.5 text-indigo-300 shrink-0" />)
-                            : <Play className="w-3.5 h-3.5 text-emerald-400 fill-emerald-400/20 shrink-0" />
-                        )}
-                        <span className={`font-semibold text-[11px] tracking-tight truncate ${compactGridView ? 'w-24' : 'w-32'} text-slate-100`}>{node.label}</span>
-                      </div>
-                      <div className="flex items-center gap-1 shrink-0">
-                        {/* Sticky Note Toggle Icon */}
-                        <button
-                          onMouseDown={(e) => e.stopPropagation()}
-                          onClick={async (e) => {
-                            e.stopPropagation();
-                            const existingComment = node.comment || '';
-                            const text = await promptDialog(`Attach Yellow Sticky Note to "${node.label}" script step:`, existingComment);
-                            if (text !== null) {
-                              saveCheckpoint();
-                              setWorkspace(prev => ({
-                                ...prev,
-                                nodes: prev.nodes.map(n => n.id === node.id ? { ...n, comment: text } : n)
-                              }));
-                              if (selectedNode && selectedNode.id === node.id) {
-                                setSelectedNode({ ...selectedNode, comment: text });
-                              }
-                            }
-                          }}
-                          title="Attach sticky-note annotation"
-                          className={`p-1 rounded transition-colors duration-100 cursor-pointer ${
-                            node.comment 
-                              ? 'bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30' 
-                              : 'hover:bg-yellow-400/10 text-slate-400 hover:text-yellow-400'
-                          }`}
-                        >
-                          <MessageSquare className="w-3.5 h-3.5" />
-                        </button>
-                        {node.type === 'event' && (
-                          <button
-                            onMouseDown={(e) => e.stopPropagation()}
-                            onClick={(e) => { e.stopPropagation(); triggerLogicSimulator(node.id); }}
-                            title="Simulate Event from this step specifically"
-                            className="p-1 rounded hover:bg-emerald-500/20 text-emerald-400 transition-all cursor-pointer"
-                          >
-                            <Zap className="w-3.5 h-3.5 fill-emerald-400/20" />
-                          </button>
-                        )}
-                        <button
-                          onMouseDown={(e) => e.stopPropagation()}
-                          onClick={(e) => deleteNode(node.id, e)}
-                          title="Delete Node"
-                          className="p-1 rounded hover:bg-red-500/20 text-slate-400 hover:text-red-400 transition-all cursor-pointer"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Properties Inspector Preview (collapsed in Compact Grid View #8) */}
-                    {!compactGridView && (
-                      <div data-testid="canvas-props-preview" className="p-2 bg-[#090b0f] text-slate-400 space-y-1 select-none border-b border-white/[0.04] font-mono text-[9px] rounded-md m-1.5">
-                        {Object.entries(node.properties).slice(0, 3).map(([key, val]) => (
-                          <div key={key} className="flex justify-between leading-normal">
-                            <span className="text-slate-500 text-[9px] uppercase font-bold tracking-wider">{key}:</span>
-                            <span className="text-slate-300 truncate max-w-[130px] text-right font-medium" title={String(val)}>
-                              {String(val)}
-                            </span>
-                          </div>
-                        ))}
-                        {Object.keys(node.properties).length === 0 && (
-                          <div className="text-slate-650 italic text-[9px] text-center">No properties configured</div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Ports list row layouts */}
-                    <div className={`${compactGridView ? 'px-2 py-1.5 space-y-1' : 'p-2 space-y-1.5'} bg-black/10 rounded-b-lg`}>
-                      {/* Event Inputs/Condition locks list */}
-                      {(node.inputs || []).map((port) => (
-                        <div key={port.id} className="flex items-center gap-2">
-                           <button
-                           onClick={(e) => handlePortClick(node.id, port, e)}
-                            data-testid={`canvas-port-${node.id}-${port.id}`}
-                            className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center transition-all cursor-pointer ${
-                              linking?.nodeId === node.id && linking?.portId === port.id 
-                                ? 'bg-cyan-400 border-white ring-2 ring-cyan-500' 
-                                : 'bg-[#10b981]/15 hover:bg-[#10b981]/50 border-[#10b981]/40'
-                            }`}
-                            title={`Connector terminal: ${port.name}`}
-                          />
-                          <span className="text-[9.5px] text-slate-450 uppercase font-bold tracking-wider">{port.name}</span>
-                        </div>
-                      ))}
-
-                      {/* Command outputs target lists */}
-                      {(node.outputs || []).map((port) => (
-                        <div key={port.id} className="flex items-center justify-end gap-2 text-right w-full">
-                          <span className="text-[9.5px] text-slate-450 uppercase font-bold tracking-wider">{port.name}</span>
-                          <button
-                            onClick={(e) => handlePortClick(node.id, port, e)}
-                            data-testid={`canvas-port-${node.id}-${port.id}`}
-                            className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center transition-all cursor-pointer ${
-                              linking?.nodeId === node.id && linking?.portId === port.id 
-                                ? 'bg-cyan-400 border-white ring-2 ring-cyan-500' 
-                                : 'bg-cyan-500/15 hover:bg-cyan-500/50 border-cyan-500/40'
-                            }`}
-                            title={`Connector terminal: ${port.name}`}
-                          />
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                  {stickyAnnotation}
-                </React.Fragment>
+                <CanvasNodeCard
+                  key={node.id}
+                  node={node}
+                  compactGridView={compactGridView}
+                  zoom={zoom}
+                  isSelected={isSelected}
+                  isGlowActive={isGlowActive}
+                  simActive={simActive}
+                  nodeDiag={nodeDiag}
+                  liveBadge={liveBadges[node.id]}
+                  linking={linking}
+                  onMouseDown={stableCardMouseDown}
+                  onPortClick={stableCardPortClick}
+                  onDeleteNode={stableCardDeleteNode}
+                  onTriggerSimulator={stableCardTriggerSim}
+                  onEditComment={stableCardEditComment}
+                  onDeleteComment={stableCardDeleteComment}
+                />
               );
             })}
         </div>
@@ -2507,17 +2311,17 @@ function Canvas({
       {contextMenu && (
         <div
           data-testid="canvas-quick-spawn"
-          className="absolute z-50 w-72 bg-[#121620]/95 border border-cyan-500/30 rounded-xl shadow-2xl p-3 select-none flex flex-col gap-2 font-mono text-xs glass-effect text-slate-300 animate-terminal-line max-h-96"
+          className="absolute z-50 w-72 bg-[#11141a]/97 border border-[#262c36] rounded-xl shadow-2xl p-3 select-none flex flex-col gap-2 font-mono text-xs text-[#eef2f7] animate-terminal-line max-h-96"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
-          <div className="flex items-center justify-between border-b border-white/5 pb-1.5 bg-[#171d2b]/60 -m-3 p-3 rounded-t-xl mb-1 shrink-0">
-            <span className="font-bold text-white uppercase text-[10px] tracking-wider flex items-center gap-1">
-              <Plus className="w-3.5 h-3.5 text-cyan-400" />
+          <div className="flex items-center justify-between border-b border-[#262c36] pb-2 bg-[#171b23] -m-3 p-3 rounded-t-xl mb-1 shrink-0">
+            <span className="font-semibold text-[#eef2f7] uppercase text-[11px] tracking-wider flex items-center gap-1.5">
+              <Plus className="w-3.5 h-3.5 text-[#60a5fa]" />
               CREATE NODE HERE
             </span>
             <button
               onClick={() => setContextMenu(null)}
-              className="p-1 rounded hover:bg-white/5 text-slate-400 hover:text-white"
+              className="p-1 rounded hover:bg-[#262c36] text-[#a0aab8] hover:text-[#eef2f7] cursor-pointer"
             >
               <X className="w-3.5 h-3.5" />
             </button>
@@ -2525,14 +2329,14 @@ function Canvas({
 
           {/* Search box search query filters node blueprints instantly */}
           <div className="relative shrink-0 pt-1">
-            <Search className="absolute left-2.5 top-3.5 w-3.5 h-3.5 text-slate-500" />
+            <Search className="absolute left-2.5 top-3.5 w-3.5 h-3.5 text-[#687385]" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               autoFocus
               placeholder="Search egosoft logic parameters..."
-              className="w-full bg-[#07090e] border border-white/10 rounded-lg px-2.5 py-1.5 pl-8 text-xs font-mono text-white focus:outline-none focus:border-cyan-500"
+              className="w-full bg-[#0a0c10] border border-[#262c36] rounded-lg px-2.5 py-1.5 pl-8 text-[11px] font-mono text-[#eef2f7] placeholder-[#687385] focus:outline-none focus:border-[#3b82f6]"
             />
           </div>
 
@@ -2542,10 +2346,10 @@ function Canvas({
               type="button"
               onClick={() => setShowAdvancedPalette(v => !v)}
               title="Toggle between the curated starter blocks and the full game vocabulary"
-              className="shrink-0 w-full flex items-center justify-between text-[9px] font-mono px-2 py-1 rounded border border-white/5 bg-white/[0.02] text-slate-400 hover:text-cyan-300 hover:border-cyan-500/30 transition-colors cursor-pointer"
+              className="shrink-0 w-full flex items-center justify-between text-[11px] font-mono px-2.5 py-1 rounded border border-[#262c36] bg-[#171b23] text-[#a0aab8] hover:text-[#eef2f7] hover:border-[#3b82f6]/45 transition-colors cursor-pointer"
             >
               <span>{showAdvancedPalette ? 'All game elements' : 'Starter blocks'}</span>
-              <span className="text-cyan-400/80">{showAdvancedPalette ? '↩ Show starters' : `Advanced · ${allTemplates.length} ▸`}</span>
+              <span className="text-[#93c5fd]">{showAdvancedPalette ? '↩ Show starters' : `Advanced · ${allTemplates.length} ▸`}</span>
             </button>
           )}
 
@@ -2560,24 +2364,24 @@ function Canvas({
             if (comps.length === 0) return null;
             return (
               <div className="mt-0">
-                <div className="text-[8.5px] font-bold text-violet-300/80 uppercase tracking-wider px-1 pb-1">Patterns</div>
+                <div className="text-[11px] font-semibold text-violet-300 uppercase tracking-wider px-1 pb-1">Patterns</div>
                 <div className="space-y-1">
                   {comps.map(c => (
                     <button
                       key={c.id}
                       onClick={() => handleSpawnComposite(c)}
                       data-testid={`canvas-pattern-${c.id}`}
-                      className="w-full text-left p-1.5 rounded hover:bg-violet-500/10 flex items-center justify-between text-[11px] group transition-colors cursor-pointer border border-violet-500/15"
+                      className="w-full text-left p-2 rounded hover:bg-violet-500/12 flex items-center justify-between text-[11px] group transition-colors cursor-pointer border border-violet-500/20 bg-[#0c0e12]"
                     >
                       <div className="flex flex-col truncate pr-1">
-                        <span className="text-white font-bold group-hover:text-violet-300 transition-colors truncate">{c.title}</span>
-                        <span className="text-[9px] text-slate-500 font-sans truncate">{c.blurb}</span>
+                        <span className="text-[#eef2f7] font-semibold group-hover:text-violet-200 transition-colors truncate">{c.title}</span>
+                        <span className="text-[11px] text-[#a0aab8] font-sans truncate">{c.blurb}</span>
                       </div>
-                      <span className="text-[8px] font-bold p-0.5 px-1 truncate rounded scale-90 bg-violet-500/10 text-violet-300 border border-violet-500/25">PATTERN</span>
+                      <span className="text-[11px] font-semibold px-1.5 py-0.5 shrink-0 rounded bg-violet-500/15 text-violet-300 border border-violet-500/25">PATTERN</span>
                     </button>
                   ))}
                 </div>
-                <div className="border-t border-white/5 mt-1.5" />
+                <div className="border-t border-[#262c36] mt-1.5" />
               </div>
             );
           })()}
@@ -2586,34 +2390,34 @@ function Canvas({
           <div className="space-y-1">
             {filteredTemplates.length > 0 ? (
               filteredTemplates.map((item, idx) => {
-                let badgeStyle = 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/25';
-                if (item.type === 'cue') badgeStyle = 'bg-purple-500/10 text-purple-400 border border-purple-500/25';
-                else if (item.type === 'event') badgeStyle = 'bg-amber-500/10 text-amber-400 border border-amber-500/25';
-                else if (item.type === 'action') badgeStyle = 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/25';
+                let badgeStyle = 'bg-[#3b82f6]/12 text-[#93c5fd] border border-[#3b82f6]/30';
+                if (item.type === 'cue') badgeStyle = 'bg-purple-500/12 text-purple-300 border border-purple-500/30';
+                else if (item.type === 'event') badgeStyle = 'bg-amber-500/12 text-amber-300 border border-amber-500/30';
+                else if (item.type === 'action') badgeStyle = 'bg-emerald-500/12 text-emerald-300 border border-emerald-500/30';
 
                 return (
                   <button
                     key={`${item.xmlTag}_${idx}`}
                     onClick={() => handleQuickSpawn(item)}
                     data-testid={`canvas-palette-${item.xmlTag}`}
-                    className="w-full text-left p-1.5 rounded hover:bg-cyan-500/10 flex items-center justify-between text-[11px] group transition-colors cursor-pointer"
+                    className="w-full text-left p-2 rounded hover:bg-[#171b23] flex items-center justify-between text-[11px] group transition-colors cursor-pointer"
                   >
                     <div className="flex flex-col truncate pr-1">
-                      <span className="text-white font-bold group-hover:text-cyan-400 transition-colors truncate">{item.label}</span>
-                      <span className="text-[9px] text-slate-500 font-sans truncate">&lt;{item.xmlTag}&gt;</span>
+                      <span className="text-[#eef2f7] font-semibold group-hover:text-[#93c5fd] transition-colors truncate">{item.label}</span>
+                      <span className="text-[11px] text-[#687385] font-mono truncate">&lt;{item.xmlTag}&gt;</span>
                     </div>
-                    <span className={`text-[8px] font-bold p-0.5 px-1 truncate rounded scale-90 ${badgeStyle}`}>
+                    <span className={`text-[11px] font-semibold px-1.5 py-0.5 shrink-0 rounded ${badgeStyle}`}>
                       {item.type.toUpperCase()}
                     </span>
                   </button>
                 );
               })
             ) : (
-              <span className="text-slate-500 text-[10px] text-center block py-4 bg-black/10 rounded-lg">No matching script node found</span>
+              <span className="text-[#687385] text-[11px] text-center block py-4 bg-[#0a0c10] rounded-lg">No matching script node found</span>
             )}
           </div>
           </div>
-          <div className="text-[9px] text-slate-500 border-t border-white/5 pt-1.5 text-center leading-normal">
+          <div className="text-[11px] text-[#687385] border-t border-[#262c36] pt-1.5 text-center leading-normal">
             Coords: x:{contextMenu.gridX} y:{contextMenu.gridY}
           </div>
         </div>
@@ -2621,24 +2425,24 @@ function Canvas({
 
       {/* Simulation Output Console overlay */}
       {isConsoleDockOpen && (
-        <div className="absolute bottom-3 right-3 z-40 w-96 bg-[#0c1017]/98 border border-slate-700/80 rounded-lg shadow-2xl flex flex-col font-mono text-[10px] text-slate-200 h-60 max-h-80 overflow-hidden">
+        <div className="absolute bottom-3 right-3 z-40 w-96 bg-[#0c0e12]/98 border border-[#262c36] rounded-lg shadow-2xl flex flex-col font-mono text-[11px] text-[#eef2f7] h-60 max-h-80 overflow-hidden">
           
           {/* Header Panel */}
-          <div className="bg-[#131822] border-b border-slate-800 px-3 py-2 flex items-center justify-between shrink-0">
+          <div className="bg-[#11141a] border-b border-[#262c36] px-3 py-2 flex items-center justify-between shrink-0">
             <div className="flex items-center gap-1.5">
               <TerminalIcon className="w-3.5 h-3.5 text-amber-400" />
-              <span className="font-semibold font-sans text-[11px] text-slate-100">Simulation Console</span>
+              <span className="font-semibold font-sans text-[11px] text-[#eef2f7]">Simulation Console</span>
             </div>
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setSimLogs([])}
-                className="hover:text-white text-slate-400 text-[9.5px] px-1.5 py-0.5 bg-[#0a0d13] rounded hover:bg-white/5 border border-slate-800 transition-colors cursor-pointer"
+                className="hover:text-[#eef2f7] text-[#a0aab8] text-[11px] px-2 py-0.5 bg-[#0a0c10] rounded hover:bg-[#171b23] border border-[#262c36] transition-colors cursor-pointer"
               >
                 CLEAR LOGS
               </button>
               <button
                 onClick={() => setIsConsoleDockOpen(false)}
-                className="hover:bg-white/5 p-1 rounded text-slate-400 hover:text-white cursor-pointer"
+                className="hover:bg-[#171b23] p-1 rounded text-[#a0aab8] hover:text-[#eef2f7] cursor-pointer"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
@@ -2646,22 +2450,22 @@ function Canvas({
           </div>
 
           {/* Lines scrolling window */}
-          <div className="flex-1 overflow-y-auto p-3 space-y-1.5 custom-scrollbar bg-[#090c12] select-text">
+          <div className="flex-1 overflow-y-auto p-3 space-y-1.5 custom-scrollbar bg-[#0a0c10] select-text">
             {simLogs.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-slate-500 py-8 font-sans text-center px-4 leading-relaxed text-[11px]">
-                <TerminalIcon className="w-5 h-5 text-slate-600 mb-2" />
-                No simulation steps recorded yet. Click <span className="text-slate-300 font-medium">PLAY SIMULATION</span> in the canvas toolbar to step through active cues.
+              <div className="h-full flex flex-col items-center justify-center text-[#687385] py-8 font-sans text-center px-4 leading-relaxed text-[11px]">
+                <TerminalIcon className="w-5 h-5 text-[#687385] mb-2" />
+                No simulation steps recorded yet. Click <span className="text-[#eef2f7] font-medium">PLAY SIMULATION</span> in the canvas toolbar to step through active cues.
               </div>
             ) : (
               simLogs.map((log) => {
-                let colorClass = 'text-slate-300';
-                if (log.type === 'success') colorClass = 'text-emerald-400 font-semibold';
-                else if (log.type === 'warn') colorClass = 'text-rose-400 font-semibold';
-                else if (log.type === 'action') colorClass = 'text-sky-300';
+                let colorClass = 'text-[#eef2f7]';
+                if (log.type === 'success') colorClass = 'text-emerald-300 font-semibold';
+                else if (log.type === 'warn') colorClass = 'text-rose-300 font-semibold';
+                else if (log.type === 'action') colorClass = 'text-[#93c5fd]';
 
                 return (
-                  <div key={log.id} className="leading-relaxed border-b border-white/[0.03] pb-1 flex items-start gap-1.5 text-left">
-                    <span className="text-slate-500 select-none font-sans mt-0.5">{log.time}</span>
+                  <div key={log.id} className="leading-relaxed border-b border-[#262c36]/50 pb-1 flex items-start gap-1.5 text-left">
+                    <span className="text-[#687385] select-none font-sans mt-0.5">{log.time}</span>
                     <span className={colorClass}>{log.text}</span>
                   </div>
                 );
@@ -2675,25 +2479,25 @@ function Canvas({
       {/* Collapsible Graph Minimap */}
       <div
         data-testid="canvas-minimap"
-        className="absolute bottom-3 left-3 z-30 bg-[#11161f]/95 border border-slate-700/80 px-2 py-1.5 rounded-lg shadow-xl backdrop-blur-md flex flex-col gap-1.5 select-none"
+        className="absolute bottom-3 left-3 z-30 bg-[#11141a]/95 border border-[#262c36] px-2.5 py-2 rounded-lg shadow-xl backdrop-blur-md flex flex-col gap-1.5 select-none"
       >
         <div className="flex items-center justify-between gap-3">
-          <span className="text-[10px] text-slate-300 font-medium flex items-center gap-1.5">
-            <Compass className="w-3 h-3 text-sky-400" />
+          <span className="text-[11px] text-[#eef2f7] font-medium flex items-center gap-1.5">
+            <Compass className="w-3.5 h-3.5 text-[#60a5fa]" />
             Minimap
-            <span className="text-[9.5px] font-mono text-slate-500">({minimapNodes.length})</span>
+            <span className="text-[11px] font-mono text-[#687385]">({minimapNodes.length})</span>
           </span>
           <button
             type="button"
             onClick={() => setMinimapCollapsed(prev => !prev)}
             aria-label={minimapCollapsed ? 'Expand minimap' : 'Collapse minimap'}
-            className="px-1 py-0.5 rounded text-[9.5px] font-mono text-slate-400 hover:text-white hover:bg-white/5 cursor-pointer"
+            className="px-1.5 py-0.5 rounded text-[11px] font-mono text-[#a0aab8] hover:text-[#eef2f7] hover:bg-[#171b23] cursor-pointer"
           >
             {minimapCollapsed ? 'Show' : 'Hide'}
           </button>
         </div>
         {!minimapCollapsed && (
-          <div className="relative w-36 h-24 bg-[#080b10] rounded border border-slate-800 overflow-hidden">
+          <div className="relative w-36 h-24 bg-[#0a0c10] rounded border border-[#262c36] overflow-hidden">
             {minimapNodes.map(node => {
               const nodeX = rangeX > 1 ? ((node.x - minX) / rangeX) * 120 + 8 : 10;
               const nodeY = rangeY > 1 ? ((node.y - minY) / rangeY) * 80 + 8 : 10;
@@ -2733,28 +2537,28 @@ function Canvas({
 
       {/* AAA Feature 6: Find in Blueprints Floating Search HUD Panel */}
       {searchOpen && (
-        <div className="absolute top-20 left-4 z-50 w-80 bg-[#0c111a]/95 border border-cyan-500/30 rounded-xl shadow-2xl p-4 flex flex-col gap-3 font-mono text-xs text-slate-300 animate-terminal-line max-h-96">
-          <div className="flex items-center justify-between border-b border-white/5 pb-2">
-            <span className="font-bold text-slate-100 flex items-center gap-1.5 uppercase text-[10px] tracking-wider">
-              <Search className="w-3.5 h-3.5 text-cyan-400" />
+        <div className="absolute top-20 left-4 z-50 w-80 bg-[#0c0e12]/97 border border-[#262c36] rounded-xl shadow-2xl p-4 flex flex-col gap-3 font-mono text-xs text-[#eef2f7] animate-terminal-line max-h-96">
+          <div className="flex items-center justify-between border-b border-[#262c36] pb-2">
+            <span className="font-semibold text-[#eef2f7] flex items-center gap-1.5 uppercase text-[11px] tracking-wider">
+              <Search className="w-3.5 h-3.5 text-[#60a5fa]" />
               Find in Blueprints
             </span>
             <button
               onClick={() => setSearchOpen(false)}
-              className="p-1 rounded hover:bg-white/5 text-slate-400 hover:text-white cursor-pointer"
+              className="p-1 rounded hover:bg-[#171b23] text-[#a0aab8] hover:text-[#eef2f7] cursor-pointer"
             >
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
 
           <div className="relative">
-            <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-slate-500" />
+            <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-[#687385]" />
             <input
               type="text"
               value={searchNodesQuery}
               onChange={(e) => setSearchNodesQuery(e.target.value)}
               placeholder="Search labels, tags, property keys..."
-              className="w-full bg-[#05070a] border border-white/10 rounded-lg px-2.5 py-1.5 pl-8 text-xs font-mono text-white focus:outline-none focus:border-cyan-500"
+              className="w-full bg-[#0a0c10] border border-[#262c36] rounded-lg px-2.5 py-1.5 pl-8 text-[11px] font-mono text-[#eef2f7] placeholder-[#687385] focus:outline-none focus:border-[#3b82f6]"
               autoFocus
             />
           </div>
@@ -2772,33 +2576,33 @@ function Canvas({
               });
 
               if (!searchNodesQuery) {
-                return <span className="text-[10px] text-slate-500 italic block text-center py-4">Type a query to scan graph elements...</span>;
+                return <span className="text-[11px] text-[#687385] italic block text-center py-4">Type a query to scan graph elements...</span>;
               }
 
               if (matches.length === 0) {
-                return <span className="text-[10px] text-slate-500 block text-center py-4 bg-black/10 rounded-lg">No nodes fit the query matches</span>;
+                return <span className="text-[11px] text-[#687385] block text-center py-4 bg-[#0a0c10] rounded-lg">No nodes fit the query matches</span>;
               }
 
               return matches.map(node => {
-                let nodeAccentColor = 'text-cyan-400';
-                if (node.type === 'cue') nodeAccentColor = 'text-purple-400';
-                else if (node.type === 'event') nodeAccentColor = 'text-amber-400';
-                else if (node.type === 'action') nodeAccentColor = 'text-emerald-400';
+                let nodeAccentColor = 'text-[#93c5fd]';
+                if (node.type === 'cue') nodeAccentColor = 'text-purple-300';
+                else if (node.type === 'event') nodeAccentColor = 'text-amber-300';
+                else if (node.type === 'action') nodeAccentColor = 'text-emerald-300';
 
                 return (
                   <button
                     key={`search_res_${node.id}`}
                     onClick={() => focusNode(node)}
-                    className="w-full text-left p-2 rounded bg-white/[0.02] hover:bg-cyan-500/10 border border-white/[0.03] hover:border-cyan-500/20 flex flex-col gap-1 transition-all cursor-pointer"
+                    className="w-full text-left p-2 rounded bg-[#11141a] hover:bg-[#171b23] border border-[#262c36] hover:border-[#3b82f6]/45 flex flex-col gap-1 transition-colors cursor-pointer"
                   >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-slate-200 truncate">{node.label}</span>
-                      <span className={`text-[8px] font-semibold truncate ${nodeAccentColor}`}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-[#eef2f7] truncate">{node.label}</span>
+                      <span className={`text-[11px] font-semibold shrink-0 ${nodeAccentColor}`}>
                         &lt;{node.xmlTag}&gt;
                       </span>
                     </div>
                     {Object.keys(node.properties).length > 0 && (
-                      <div className="text-[9px] text-slate-500 font-sans truncate">
+                      <div className="text-[11px] text-[#a0aab8] font-sans truncate">
                         Properties: {Object.entries(node.properties).map(([k, v]) => `${k}="${v}"`).join(', ')}
                       </div>
                     )}
@@ -2807,21 +2611,21 @@ function Canvas({
               });
             })()}
           </div>
-          <span className="text-[9px] text-slate-500 italic leading-snug">Click any matched node to pan-teleport camera directly onto it.</span>
+          <span className="text-[11px] text-[#687385] italic leading-snug">Click any matched node to pan-teleport camera directly onto it.</span>
         </div>
       )}
 
       {/* AAA Feature 7: Compiler Diagnostics Warnings Overlay Panel */}
       {diagnosticPanelOpen && (
-        <div className="absolute top-20 right-4 z-50 w-80 bg-[#0c111a]/95 border border-cyan-500/30 rounded-xl shadow-2xl p-4 flex flex-col gap-3 font-mono text-xs text-slate-300 animate-terminal-line max-h-96 w-[320px]">
-          <div className="flex items-center justify-between border-b border-white/5 pb-2">
-            <span className="font-bold text-slate-100 flex items-center gap-1.5 uppercase text-[10px] tracking-wider">
+        <div className="absolute top-20 right-4 z-50 bg-[#0c0e12]/97 border border-[#262c36] rounded-xl shadow-2xl p-4 flex flex-col gap-3 font-mono text-xs text-[#eef2f7] animate-terminal-line max-h-96 w-[320px]">
+          <div className="flex items-center justify-between border-b border-[#262c36] pb-2">
+            <span className="font-semibold text-[#eef2f7] flex items-center gap-1.5 uppercase text-[11px] tracking-wider">
               <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
               Editor Diagnostics
             </span>
             <button
               onClick={() => setDiagnosticPanelOpen(false)}
-              className="p-1 rounded hover:bg-white/5 text-slate-400 hover:text-white cursor-pointer"
+              className="p-1 rounded hover:bg-[#171b23] text-[#a0aab8] hover:text-[#eef2f7] cursor-pointer"
             >
               <X className="w-3.5 h-3.5" />
             </button>
@@ -2829,18 +2633,18 @@ function Canvas({
 
           <div className="flex-1 overflow-y-auto space-y-2 custom-scrollbar pr-1 max-h-64">
             {allDiagnostics.length === 0 ? (
-              <div className="flex flex-col items-center justify-center text-center py-6 bg-emerald-500/5 rounded-lg border border-emerald-500/20 text-emerald-400">
-                <CheckCircle2 className="w-6 h-6 mb-1.5 animate-pulse" />
-                <span className="font-bold uppercase text-[10px]">ALL CHECKS CLEAR</span>
-                <span className="text-[9px] text-slate-400 mt-0.5">0 errors, 0 logic warnings</span>
+              <div className="flex flex-col items-center justify-center text-center py-6 bg-emerald-500/5 rounded-lg border border-emerald-500/20 text-emerald-300">
+                <CheckCircle2 className="w-6 h-6 mb-1.5" />
+                <span className="font-semibold uppercase text-[11px]">ALL CHECKS CLEAR</span>
+                <span className="text-[11px] text-[#a0aab8] mt-0.5">0 errors, 0 logic warnings</span>
               </div>
             ) : (
               allDiagnostics.map((diag) => {
-                let boxStyle = 'bg-amber-500/5 border-amber-500/20 text-amber-300';
+                let boxStyle = 'bg-amber-500/5 border-amber-500/25 text-amber-200';
                 let iconColor = 'text-amber-400';
                 if (diag.type === 'error') {
-                  boxStyle = 'bg-red-500/5 border-red-500/20 text-red-300';
-                  iconColor = 'text-red-400';
+                  boxStyle = 'bg-rose-500/5 border-rose-500/25 text-rose-200';
+                  iconColor = 'text-rose-400';
                 }
 
                 const targetNode = diag.nodeId ? workspace.nodes.find(n => n.id === diag.nodeId) : undefined;
@@ -2848,7 +2652,7 @@ function Canvas({
                 return (
                   <div
                     key={diag.id}
-                    className={`p-2 rounded border flex flex-col gap-1.5 leading-relaxed text-left text-[10px] ${boxStyle}`}
+                    className={`p-2.5 rounded border flex flex-col gap-1.5 leading-relaxed text-left text-[11px] ${boxStyle}`}
                   >
                     <div className="flex items-start gap-1.5">
                       <AlertTriangle className={`w-3.5 h-3.5 ${iconColor} shrink-0 mt-0.5`} />
@@ -2857,7 +2661,7 @@ function Canvas({
                     {targetNode && (
                       <button
                         onClick={() => focusNode(targetNode)}
-                        className="text-[9px] self-end px-2 py-0.5 bg-white/5 hover:border-cyan-500/30 rounded border border-white/10 text-cyan-400 hover:text-cyan-300 flex items-center gap-1 transition-all cursor-pointer"
+                        className="text-[11px] self-end px-2 py-0.5 bg-[#171b23] hover:border-[#3b82f6]/45 rounded border border-[#262c36] text-[#93c5fd] hover:text-[#eef2f7] flex items-center gap-1 transition-colors cursor-pointer"
                       >
                         PAN TO TERMINAL
                       </button>
@@ -2867,7 +2671,7 @@ function Canvas({
               })
             )}
           </div>
-          <span className="text-[9px] text-slate-500 text-center leading-snug">Package compiler/Mod Doctor findings plus local graph connectivity checks. PACKAGE: OFFLINE is never treated as a green build.</span>
+          <span className="text-[11px] text-[#687385] text-center leading-snug">Package compiler/Mod Doctor findings plus local graph connectivity checks. PACKAGE: OFFLINE is never treated as a green build.</span>
         </div>
       )}
 

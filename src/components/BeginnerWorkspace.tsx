@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { CheckCircle2, Circle, ExternalLink, Gamepad2, Lightbulb, PackageCheck, Pencil, ShieldCheck } from 'lucide-react';
 import type { MDNode, ModWorkspace, UIWidget } from '../types';
 import type { ReadinessStage, ReadinessStatus } from '../lib/readiness';
 import { BEGINNER_STEPS, combinedValidationStatus, workspaceHasBeginnerContent, type BeginnerStep } from '../lib/experienceMode';
+import { applyNodePropertyChange, isNodeSelectionFailure } from '../lib/nodeSelectionDocument';
 import PropertiesInspector from './PropertiesInspector';
 
 interface BeginnerWorkspaceProps {
@@ -56,20 +57,32 @@ export default function BeginnerWorkspace(props: BeginnerWorkspaceProps) {
     if (id === 'confirm') return byId('experience').status;
     return null;
   };
+  const [propertyEditError, setPropertyEditError] = useState('');
   const handlePropChange = (key: string, value: unknown) => {
     if (selectedNode) {
-      setWorkspace(current => ({ ...current, nodes: current.nodes.map(node => node.id === selectedNode.id ? { ...node, properties: { ...node.properties, [key]: value } } : node) }));
-      setSelectedNode(current => current ? { ...current, properties: { ...current.properties, [key]: value } } : null);
+      const applied = applyNodePropertyChange(workspace, selectedNode.id, key, value);
+      if (isNodeSelectionFailure(applied)) {
+        setPropertyEditError(applied.message);
+        return;
+      }
+      setPropertyEditError('');
+      saveCheckpoint();
+      setWorkspace(applied.workspace);
+      setSelectedNode(applied.workspace.nodes.find(node => node.id === selectedNode.id) || null);
     } else if (selectedWidget) {
+      setPropertyEditError('');
+      saveCheckpoint();
       setWorkspace(current => ({ ...current, uiWidgets: current.uiWidgets.map(widget => widget.id === selectedWidget.id ? { ...widget, properties: { ...widget.properties, [key]: value } } : widget) }));
       setSelectedWidget(current => current ? { ...current, properties: { ...current.properties, [key]: value } } : null);
     }
   };
   const handleLabelChange = (label: string) => {
     if (selectedNode) {
+      saveCheckpoint();
       setWorkspace(current => ({ ...current, nodes: current.nodes.map(node => node.id === selectedNode.id ? { ...node, label } : node) }));
       setSelectedNode(current => current ? { ...current, label } : null);
     } else if (selectedWidget) {
+      saveCheckpoint();
       setWorkspace(current => ({ ...current, uiWidgets: current.uiWidgets.map(widget => widget.id === selectedWidget.id ? { ...widget, label } : widget) }));
       setSelectedWidget(current => current ? { ...current, label } : null);
     }
@@ -86,56 +99,67 @@ export default function BeginnerWorkspace(props: BeginnerWorkspaceProps) {
   );
 
   return (
-    <aside data-testid="beginner-workspace" style={{ width }} className="shrink-0 h-full overflow-y-auto bg-[#11141a] border-r border-white/10 p-3">
+    <aside data-testid="beginner-workspace" style={{ width }} className="shrink-0 h-full overflow-y-auto bg-[#0c0e12] border-r border-[#262c36] p-3 text-[#eef2f7]">
       <div className="mb-3">
-        <div className="text-[10px] font-mono uppercase tracking-[0.18em] text-cyan-400">Beginner workspace</div>
-        <div className="mt-1 text-xs text-slate-400">One path from idea to proven game result.</div>
+        <div className="text-[11px] font-mono uppercase tracking-[0.16em] text-[#60a5fa]">Beginner workspace</div>
+        <div className="mt-1 text-xs text-[#a0aab8]">One path from idea to proven game result.</div>
       </div>
 
-      <nav aria-label="Beginner workflow" className="space-y-1" data-testid="beginner-steps">
+      <nav aria-label="Beginner workflow" className="space-y-1.5" data-testid="beginner-steps">
         {BEGINNER_STEPS.map((item, index) => {
           const status = stepStatus(item.id);
           return (
-            <button key={item.id} data-testid={`beginner-step-${item.id}`} data-status={status || 'neutral'} onClick={() => onStepChange(item.id)} className={`w-full rounded border px-3 py-2 text-left transition-colors ${step === item.id ? 'border-cyan-500/50 bg-cyan-500/12 text-white' : 'border-white/10 bg-white/[0.025] text-slate-300 hover:border-white/20'}`}>
+            <button key={item.id} data-testid={`beginner-step-${item.id}`} data-status={status || 'neutral'} onClick={() => onStepChange(item.id)} className={`w-full rounded border px-3 py-2 text-left transition-colors cursor-pointer ${step === item.id ? 'border-[#3b82f6]/60 bg-[#3b82f6]/12 text-[#eef2f7]' : 'border-[#262c36] bg-[#11141a] text-[#a0aab8] hover:border-[#3b4454] hover:text-[#eef2f7]'}`}>
               <span className="flex items-center gap-2 text-xs font-semibold">
-                <span className="text-[10px] font-mono text-slate-500">{index + 1}</span>
-                <span className="text-cyan-400">{icons[item.id]}</span>
+                <span className="text-[11px] font-mono text-[#687385]">{index + 1}</span>
+                <span className="text-[#60a5fa]">{icons[item.id]}</span>
                 {item.label}
-                {status && <span className={`ml-auto rounded border px-1.5 py-0.5 text-[8px] font-mono uppercase ${statusClasses[status]}`}>{status}</span>}
+                {status && <span className={`ml-auto rounded border px-1.5 py-0.5 text-[11px] font-mono uppercase ${statusClasses[status]}`}>{status}</span>}
               </span>
             </button>
           );
         })}
       </nav>
 
-      <section className="mt-4 border-t border-white/10 pt-4" data-testid={`beginner-panel-${step}`}>
-        <h2 className="text-sm font-semibold text-white">{BEGINNER_STEPS.find(item => item.id === step)?.label}</h2>
-        <p className="mt-1 text-[11px] leading-relaxed text-slate-400">{BEGINNER_STEPS.find(item => item.id === step)?.description}</p>
+      <section className="mt-4 border-t border-[#262c36] pt-4" data-testid={`beginner-panel-${step}`}>
+        <h2 className="text-sm font-semibold text-[#eef2f7]">{BEGINNER_STEPS.find(item => item.id === step)?.label}</h2>
+        <p className="mt-1 text-[11px] leading-relaxed text-[#a0aab8]">{BEGINNER_STEPS.find(item => item.id === step)?.description}</p>
 
         {step === 'idea' && (
-          <div className="mt-3 rounded border border-cyan-500/20 bg-cyan-500/[0.06] p-3 text-[11px] text-slate-300">
+          <div className="mt-3 rounded border border-[#3b82f6]/30 bg-[#11141a] p-3 text-[11px] text-[#a0aab8]">
             {workspaceHasBeginnerContent(workspace)
-              ? <>You are working on <strong className="text-white">{workspace.name}</strong>. Use Reset/New in the header to choose a different starting idea.</>
+              ? <>You are working on <strong className="text-[#eef2f7]">{workspace.name}</strong>. Use Reset/New in the header to choose a different starting idea.</>
               : <>Choose a template in the editor. It creates editable content and starts the guided rail.</>}
           </div>
         )}
 
         {step === 'customize' && (selectedNode || selectedWidget ? (
-          <PropertiesInspector
-            selectedNode={selectedNode}
-            selectedWidget={selectedWidget}
-            workspace={workspace}
-            setWorkspace={setWorkspace}
-            setSelectedNode={setSelectedNode}
-            setSelectedWidget={setSelectedWidget}
-            saveCheckpoint={saveCheckpoint}
-            handleLabelChange={handleLabelChange}
-            handlePropChange={handlePropChange}
-            handleSendCuePackageToAIGuide={() => undefined}
-            showAdvancedActions={false}
-          />
+          <>
+            {propertyEditError && (
+              <div
+                data-testid="beginner-property-error"
+                role="alert"
+                className="mt-3 mb-2 rounded border border-rose-500/35 bg-rose-500/10 p-2 text-[11px] text-rose-200"
+              >
+                {propertyEditError}
+              </div>
+            )}
+            <PropertiesInspector
+              selectedNode={selectedNode}
+              selectedWidget={selectedWidget}
+              workspace={workspace}
+              setWorkspace={setWorkspace}
+              setSelectedNode={setSelectedNode}
+              setSelectedWidget={setSelectedWidget}
+              saveCheckpoint={saveCheckpoint}
+              handleLabelChange={handleLabelChange}
+              handlePropChange={handlePropChange}
+              handleSendCuePackageToAIGuide={() => undefined}
+              showAdvancedActions={false}
+            />
+          </>
         ) : (
-          <div className="mt-3 rounded border border-white/10 bg-black/20 p-3 text-[11px] text-slate-400">Select a node or widget in the editor to customize its details. Patch, translation, AI, ware, and job workspaces edit directly in the center.</div>
+          <div className="mt-3 rounded border border-[#262c36] bg-[#11141a] p-3 text-[11px] text-[#a0aab8]">Select a node or widget in the editor to customize its details. Patch, translation, AI, ware, and job workspaces edit directly in the center.</div>
         ))}
 
         {step === 'validate' && <div className="mt-3 space-y-2">{evidenceCard(byId('graph'))}{evidenceCard(byId('package'))}</div>}

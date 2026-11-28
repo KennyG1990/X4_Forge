@@ -24,7 +24,7 @@ interface ExpressionInputProps {
   chainCompletion?: boolean;
 }
 
-const INPUT_CLASS = 'w-full p-1.5 rounded bg-black/60 border border-white/10 text-white focus:outline-none focus:border-cyan-500';
+const INPUT_CLASS = 'w-full p-1.5 rounded bg-[#0a0c10] border border-[#262c36] text-[11px] text-[#eef2f7] placeholder-[#687385] focus:outline-none focus:border-[#3b82f6]';
 
 const ExpressionInput: React.FC<ExpressionInputProps> = ({ value, onChange, placeholder, className, localSuggestions, chainCompletion = true }) => {
   const [items, setItems] = useState<LocalSuggestion[]>([]);
@@ -108,19 +108,19 @@ const ExpressionInput: React.FC<ExpressionInputProps> = ({ value, onChange, plac
       {open && items.length > 0 && (
         <div
           data-testid="expression-suggestions"
-          className="absolute left-0 right-0 top-full mt-0.5 z-50 max-h-56 overflow-y-auto rounded border border-cyan-500/30 bg-[#0a0d14] shadow-2xl"
+          className="absolute left-0 right-0 top-full mt-0.5 z-50 max-h-56 overflow-y-auto rounded border border-[#262c36] bg-[#11141a] shadow-2xl"
         >
           {items.map((s, i) => (
             <button
               key={s.insert + i}
               type="button"
               onMouseDown={e => { e.preventDefault(); accept(s); }}
-              className={`w-full text-left px-2 py-1 font-mono text-[10px] flex flex-col gap-0.5 ${
-                i === active ? 'bg-cyan-500/15 text-cyan-200' : 'text-slate-300 hover:bg-white/5'
+              className={`w-full text-left px-2.5 py-1.5 font-mono text-[11px] flex flex-col gap-0.5 ${
+                i === active ? 'bg-[#3b82f6]/18 text-[#93c5fd]' : 'text-[#eef2f7] hover:bg-[#171b23]'
               }`}
             >
-              <span className="font-bold">{s.label}</span>
-              {s.detail && <span className="text-[9px] text-slate-500 leading-tight truncate">{s.detail}</span>}
+              <span className="font-semibold">{s.label}</span>
+              {s.detail && <span className="text-[11px] text-[#687385] leading-tight truncate">{s.detail}</span>}
             </button>
           ))}
         </div>

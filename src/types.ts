@@ -100,18 +100,136 @@ export interface TFile {
   includeInBuild?: boolean;
 }
 
+export const AI_ATTENTION_LEVELS = [
+  'unknown',
+  'ingalaxy',
+  'incluster',
+  'sectorvisible',
+  'insector',
+  'adjacentzone',
+  'visible',
+  'inzone',
+  'nearby',
+  'adjacentroom',
+  'inroom',
+] as const;
+
+export type AiAttentionTier = (typeof AI_ATTENTION_LEVELS)[number];
+
+export const AI_ORDER_CATEGORIES = [
+  'internal',
+  'navigation',
+  'combat',
+  'trade',
+  'mining',
+  'coordination',
+  'salvage',
+] as const;
+
+export type AiOrderCategory = (typeof AI_ORDER_CATEGORIES)[number];
+
+export const AI_ORDER_PARAM_TYPES = [
+  'internal',
+  'bool',
+  'number',
+  'length',
+  'time',
+  'money',
+  'object',
+  'space',
+  'position',
+  'ware',
+  'trade',
+  'build',
+  'formationshape',
+  'list',
+  'macro',
+  'sector',
+] as const;
+
+export type AiOrderParamType = (typeof AI_ORDER_PARAM_TYPES)[number];
+
+const AI_ATTENTION_SET = new Set<string>(AI_ATTENTION_LEVELS);
+
+/** Normalize legacy 'high'/'low' values and preserve real X4 9.00 common.xsd attentionlookup tiers. */
+export function normalizeAiAttentionLevel(level?: string): AiAttentionTier {
+  const raw = String(level || '').trim().toLowerCase();
+  if (raw === 'high') return 'visible';
+  if (raw === 'low') return 'unknown';
+  if (AI_ATTENTION_SET.has(raw)) return raw as AiAttentionTier;
+  return 'unknown';
+}
+
+export interface AIParamInputParam {
+  name: string;
+  value: string;
+}
+
 export interface AIParam {
   name: string;
-  type: 'object' | 'number' | 'boolean' | 'ware' | 'faction';
+  type: AiOrderParamType | 'boolean' | 'faction';
   defaultValue: string;
   comment: string;
+  text?: string;
+  required?: boolean;
+  advanced?: boolean;
+  inputParams?: AIParamInputParam[];
 }
 
 export interface AIAction {
   id: string;
-  command: 'move_to' | 'flee' | 'shoot' | 'dock_at' | 'wait' | 'find_objects' | 'custom_xml';
+  command:
+    | 'label'
+    | 'resume'
+    | 'move_to'
+    | 'run_script'
+    | 'shoot'
+    | 'dock_at'
+    | 'flee'
+    | 'wait'
+    | 'find_objects'
+    | 'custom_xml';
   label: string;
   properties: Record<string, any>;
+}
+
+export interface AIInterruptHandler {
+  id: string;
+  ref?: string;
+  event?: string;
+  conditionsXml?: string;
+  action?: string;
+  actionsXml?: string;
+  consume?: boolean;
+}
+
+export interface AIScriptOrderConfig {
+  id: string;
+  name?: string;
+  description?: string;
+  category?: AiOrderCategory;
+  infinite?: boolean;
+  allowInLoop?: boolean;
+  canPlayerCancel?: boolean;
+  requiresXml?: string;
+  locationObject?: string;
+  locationCondition?: string;
+}
+
+export interface AIScriptPatchBlock {
+  id: string;
+  sinceVersion: number;
+  early?: boolean;
+  comment?: string;
+  actionsXml: string;
+}
+
+export interface AIScriptDiffOp {
+  id: string;
+  op: 'add' | 'replace' | 'remove';
+  sel: string;
+  pos?: 'before' | 'after' | 'prepend' | 'append';
+  content?: string;
 }
 
 export interface ChatMessage {
@@ -130,10 +248,18 @@ export interface AIBehaviorScript {
   name: string;
   description: string;
   command: string;
-  attentionLevel: 'high' | 'low';
+  attentionLevel: AiAttentionTier | 'high' | 'low';
+  mode?: 'aiscript' | 'diff';
+  version?: number;
+  priority?: number;
+  order?: AIScriptOrderConfig;
   params: AIParam[];
-  interrupts: Array<{ id: string; event: string; action: string }>;
+  interrupts: AIInterruptHandler[];
   actions: AIAction[];
+  patches?: AIScriptPatchBlock[];
+  initXml?: string;
+  onAbortXml?: string;
+  diffOps?: AIScriptDiffOp[];
   includeInBuild?: boolean;
   /**
    * #65 — provenance flag. When true, `name` is already FINAL (e.g. an imported
@@ -371,19 +497,29 @@ export const NODE_TEMPLATES: Omit<MDNode, 'id' | 'x' | 'y'>[] = [
       delayExact: '',
       delayMin: '',
       delayMax: '',
+      version: '',
       isLibrary: 'false',
-      libParamsXml: ''
+      libPurpose: '',
+      libParamsXml: '',
+      patchSinceVersion: '',
+      patchState: '',
+      patchActionsXml: ''
     },
     propertiesSchema: [
       { key: 'name', label: 'Cue ID / Name', type: 'text', placeholder: 'e.g. MyCue_Start' },
       { key: 'instantiate', label: 'Instantiate', type: 'select', options: ['true', 'false'], description: 'Creates a dynamic copy of this cue each time context occurs' },
       { key: 'namespace', label: 'Namespace', type: 'select', options: ['this', 'player', 'cue'] },
       { key: 'state', label: 'Initial State', type: 'select', options: ['active', 'inactive', 'waiting'] },
+      { key: 'version', label: 'Cue Version', type: 'text', placeholder: 'e.g. 2', description: 'Non-negative cue version used by X4 save migration (<patch sinceversion>).' },
       { key: 'delayExact', label: 'Delay (exact)', type: 'text', placeholder: 'e.g. 1s', description: 'Wait this long between trigger and actions. X4 time, e.g. 5s, 1min. Use this OR min+max.' },
       { key: 'delayMin', label: 'Delay (min)', type: 'text', placeholder: 'e.g. 3s', description: 'Random delay lower bound (pairs with Delay max).' },
       { key: 'delayMax', label: 'Delay (max)', type: 'text', placeholder: 'e.g. 8s', description: 'Random delay upper bound (pairs with Delay min).' },
-      { key: 'isLibrary', label: 'Is Library', type: 'select', options: ['false', 'true'], description: 'Emit as <library> (a reusable subroutine called by signal_cue) instead of <cue>.' },
-      { key: 'libParamsXml', label: 'Library Params (raw XML)', type: 'text', placeholder: '<params><param name="x" default="0"/></params>', description: 'Only used when Is Library = true. The <params> block, kept verbatim.' }
+      { key: 'isLibrary', label: 'Is Library', type: 'select', options: ['false', 'true'], description: 'Emit as <library> (a reusable subroutine called by signal_cue or run_actions) instead of <cue>.' },
+      { key: 'libPurpose', label: 'Library Purpose', type: 'select', options: ['', 'cue_ref', 'include_actions', 'run_actions'], description: 'md.xsd library purpose: run_actions (temp vars + <return>), include_actions (inline), or cue_ref (<cue ref>).' },
+      { key: 'libParamsXml', label: 'Library Params (raw XML)', type: 'text', placeholder: '<params><param name="x" default="0"/></params>', description: 'Only used when Is Library = true. The <params> block, kept verbatim.' },
+      { key: 'patchSinceVersion', label: 'Patch Since Version', type: 'text', placeholder: 'e.g. 2', description: 'Positive integer for <patch sinceversion="N"> save-game migration block inside this cue.' },
+      { key: 'patchState', label: 'Patch Target State', type: 'select', options: ['', 'complete', 'waiting', 'active', 'cancelled'], description: 'md.xsd state attribute on <patch> (defaults to complete when omitted).' },
+      { key: 'patchActionsXml', label: 'Patch Actions (XML)', type: 'textarea', placeholder: '<set_value name="$migrated" exact="true" />', description: 'Actions executed inside <patch sinceversion="N"> when loading an older save.' }
     ],
     inputs: [
       { id: 'in_flow', name: 'Trigger Parent', type: 'parent' }
@@ -903,6 +1039,7 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
       'name', 'instantiate', 'namespace', 'state', 'mdScript', 'mdFileStem', 'isLibrary',
       'libPurpose', 'purpose', 'libParamsXml', 'libDocXml', 'cueHeaderXml', 'cueTailXml',
       'hasConditionsElement', 'hasActionsElement', 'delayExact', 'delayMin', 'delayMax',
+      'patchSinceVersion', 'patchState', 'patchActionsXml',
     ]);
     const extraCueAttrs = Object.entries(cue.properties || {})
       .filter(([key, value]) => !cueInternal.has(key) && !key.startsWith('__') && value !== undefined && value !== null && String(value) !== '')
@@ -1113,6 +1250,24 @@ export function generateMDXML(originalWorkspace: ModWorkspace, selectedCueIds?: 
 
       actLinks.forEach(firstLink => emitChain(firstLink.targetNodeId, indentDouble));
       xml += `${indentPlus}</actions>\n`;
+    }
+
+    const patchSinceVersionRaw = String(cue.properties.patchSinceVersion || '').trim();
+    const existingTailRaw = String(cue.properties.cueTailXml || '');
+    if (
+      /^[1-9]\d*$/.test(patchSinceVersionRaw)
+      && !new RegExp(`sinceversion\\s*=\\s*["']${patchSinceVersionRaw}["']`, 'i').test(existingTailRaw)
+    ) {
+      const patchStateVal = String(cue.properties.patchState || '').trim();
+      const patchStateAttr = patchStateVal ? ` state="${escapeXMLAttribute(patchStateVal)}"` : '';
+      const rawPatchActions = String(cue.properties.patchActionsXml || '').trim();
+      if (rawPatchActions) {
+        xml += `${indentPlus}<patch sinceversion="${patchSinceVersionRaw}"${patchStateAttr}>\n`;
+        xml += `${reindentRawXmlBlock(rawPatchActions, indentDouble)}\n`;
+        xml += `${indentPlus}</patch>\n`;
+      } else {
+        xml += `${indentPlus}<patch sinceversion="${patchSinceVersionRaw}"${patchStateAttr} />\n`;
+      }
     }
 
     if (cue.properties.cueTailXml) {
@@ -2042,6 +2197,7 @@ export function sanitizeWorkspace(ws: any): ModWorkspace {
     })),
     aiScripts: (Array.isArray(ws.aiScripts) ? ws.aiScripts : []).map((as: any) => ({
       ...as,
+      ...(as?.mode === 'diff' ? { namespaced: true } : {}),
       includeInBuild: typeof as.includeInBuild === 'boolean' ? as.includeInBuild : true
     })),
     wares: (Array.isArray(ws.wares) ? ws.wares : []).map((w: any) => ({

@@ -3163,6 +3163,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
               setSelectedNodeIds={setSelectedNodeIds}
               activeMdScript={activeMdScript}
               onActiveMdScriptChange={handleActiveMdScriptChange}
+              onOpenCueTree={() => openSidebarTab('cues')}
               packageDiagnostics={effectiveDiagnostics}
               diagnosticSource={diagnosticSource}
               modWorkspacePath={modWorkspacePath}

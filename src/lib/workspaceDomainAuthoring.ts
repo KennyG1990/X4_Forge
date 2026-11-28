@@ -8,7 +8,12 @@
  */
 
 import type { ModWorkspace } from '../types';
-import { sanitizeWorkspace } from '../types';
+import {
+  AI_ATTENTION_LEVELS,
+  AI_ORDER_CATEGORIES,
+  AI_ORDER_PARAM_TYPES,
+  sanitizeWorkspace,
+} from '../types';
 import {
   validateContract,
   type ContractEndpoint,
@@ -77,9 +82,14 @@ const VALID_WIDGET_TYPES = new Set([
 const VALID_PATCH_ACTIONS = new Set(['add', 'replace', 'remove']);
 const VALID_PATCH_POS = new Set(['before', 'after', 'prepend', 'append']);
 const VALID_NODE_TYPES = new Set(['cue', 'event', 'condition', 'action', 'variable', 'comment']);
-const VALID_AI_PARAM_TYPES = new Set(['object', 'number', 'boolean', 'ware', 'faction']);
+const VALID_AI_ATTENTION_LEVELS = new Set<string>([...AI_ATTENTION_LEVELS, 'high', 'low']);
+const VALID_AI_ORDER_CATEGORIES = new Set<string>(AI_ORDER_CATEGORIES);
+const VALID_AI_PARAM_TYPES = new Set<string>([...AI_ORDER_PARAM_TYPES, 'boolean', 'faction']);
 const VALID_AI_COMMANDS = new Set([
+  'label',
+  'resume',
   'move_to',
+  'run_script',
   'flee',
   'shoot',
   'dock_at',
@@ -358,8 +368,25 @@ function validateAiScriptsArray(value: unknown): string | null {
     if (item.command !== undefined && (typeof item.command !== 'string' || item.command.length > 256)) {
       return `aiScripts[${i}].command must be a bounded string.`;
     }
-    if (item.attentionLevel !== 'high' && item.attentionLevel !== 'low') {
-      return `aiScripts[${i}].attentionLevel must be "high" or "low".`;
+    if (!VALID_AI_ATTENTION_LEVELS.has(String(item.attentionLevel || ''))) {
+      return `aiScripts[${i}].attentionLevel must be a valid attentionlookup tier (or legacy high/low).`;
+    }
+    if (item.mode !== undefined && item.mode !== 'aiscript' && item.mode !== 'diff') {
+      return `aiScripts[${i}].mode must be "aiscript" or "diff".`;
+    }
+    if (item.version !== undefined && (!Number.isInteger(item.version) || Number(item.version) < 0 || Number(item.version) > 10000)) {
+      return `aiScripts[${i}].version must be a bounded non-negative integer.`;
+    }
+    if (item.priority !== undefined && (!Number.isInteger(item.priority) || Number(item.priority) < 0 || Number(item.priority) > 10000)) {
+      return `aiScripts[${i}].priority must be a bounded non-negative integer.`;
+    }
+    if (item.order !== undefined) {
+      if (!isPlainRecord(item.order) || !isSafeStemOrId(String(item.order.id || ''), 128)) {
+        return `aiScripts[${i}].order requires a valid id.`;
+      }
+      if (item.order.category !== undefined && !VALID_AI_ORDER_CATEGORIES.has(String(item.order.category))) {
+        return `aiScripts[${i}].order.category must be a valid aiscripts.xsd order category.`;
+      }
     }
     if (!Array.isArray(item.params) || item.params.length > 128) return `aiScripts[${i}].params must be a bounded array.`;
     for (let p = 0; p < item.params.length; p += 1) {
@@ -375,6 +402,34 @@ function validateAiScriptsArray(value: unknown): string | null {
       if (!isPlainRecord(act) || typeof act.id !== 'string' || !act.id.trim() || !VALID_AI_COMMANDS.has(String(act.command))) {
         return `aiScripts[${i}].actions[${a}] requires a valid id and command.`;
       }
+    }
+    if (item.patches !== undefined) {
+      if (!Array.isArray(item.patches) || item.patches.length > 128) {
+        return `aiScripts[${i}].patches must be a bounded array.`;
+      }
+      for (let pi = 0; pi < item.patches.length; pi += 1) {
+        const patch = item.patches[pi];
+        if (!isPlainRecord(patch) || !Number.isInteger(patch.sinceVersion) || Number(patch.sinceVersion) < 1) {
+          return `aiScripts[${i}].patches[${pi}].sinceVersion must be a positive integer.`;
+        }
+      }
+    }
+    if (item.diffOps !== undefined) {
+      if (!Array.isArray(item.diffOps) || item.diffOps.length > 128) {
+        return `aiScripts[${i}].diffOps must be a bounded array.`;
+      }
+      for (let di = 0; di < item.diffOps.length; di += 1) {
+        const diffOp = item.diffOps[di];
+        if (!isPlainRecord(diffOp) || !VALID_PATCH_ACTIONS.has(String(diffOp.op)) || typeof diffOp.sel !== 'string' || !diffOp.sel.trim()) {
+          return `aiScripts[${i}].diffOps[${di}] requires a valid op and sel.`;
+        }
+      }
+    }
+    if (item.initXml !== undefined && (typeof item.initXml !== 'string' || item.initXml.length > 65536)) {
+      return `aiScripts[${i}].initXml must be a bounded string.`;
+    }
+    if (item.onAbortXml !== undefined && (typeof item.onAbortXml !== 'string' || item.onAbortXml.length > 65536)) {
+      return `aiScripts[${i}].onAbortXml must be a bounded string.`;
     }
     if (item.includeInBuild !== undefined && typeof item.includeInBuild !== 'boolean') {
       return `aiScripts[${i}].includeInBuild must be boolean.`;
@@ -782,8 +837,16 @@ export function runWorkspaceDomainAuthoringSelftest(): { ok: boolean; passed: nu
   const aiPatch = buildWorkspaceDomainMergePatch(base, 'aiscripts', {
     aiScripts: [{
       id: 'ai_1', name: 'patrol.fast', description: 'Patrol', command: 'command.patrol',
-      attentionLevel: 'low', params: [{ name: 'range', type: 'number', defaultValue: '10', comment: '' }],
-      interrupts: [], actions: [{ id: 'a1', command: 'wait', label: 'Wait', properties: { exact: '5s' } }],
+      attentionLevel: 'insector', version: 2,
+      order: { id: 'PatrolFast', category: 'combat', infinite: true },
+      params: [{ name: 'range', type: 'sector', defaultValue: 'null', text: '{1041, 10007}', comment: '' }],
+      interrupts: [{ id: 'i1', ref: 'AttackHandler' }],
+      patches: [{ id: 'p1', sinceVersion: 2, actionsXml: '<set_value name="$v2" exact="true" />' }],
+      actions: [
+        { id: 'a0', command: 'label', label: 'Start', properties: { name: 'start' } },
+        { id: 'a1', command: 'wait', label: 'Wait', properties: { exact: '5s' } },
+        { id: 'a2', command: 'resume', label: 'Loop', properties: { label: 'start' } },
+      ],
     }],
     compileEnabled: false,
   });
@@ -794,6 +857,13 @@ export function runWorkspaceDomainAuthoringSelftest(): { ok: boolean; passed: nu
       (aiPatch.patch.compileSettings as Record<string, unknown> | undefined)?.md === true &&
       (aiPatch.patch.compileSettings as Record<string, unknown> | undefined)?.translations === true,
   );
+  const badAiAttention = buildWorkspaceDomainMergePatch(base, 'aiscripts', {
+    aiScripts: [{
+      id: 'ai_bad', name: 'bad.script', description: '', command: '',
+      attentionLevel: 'invalid_tier', params: [], interrupts: [], actions: [],
+    }],
+  });
+  check('rejects_invalid_ai_attention_tier', badAiAttention.ok === false && badAiAttention.error.includes('attentionLevel'));
 
   const uiPatch = buildWorkspaceDomainMergePatch(base, 'ui_layout', {
     uiTheme: { opacity: 0.75 },

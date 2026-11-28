@@ -7,6 +7,8 @@ import {
   ModWorkspace,
   PackageDiagnostic,
   AIBehaviorScript,
+  AI_ORDER_PARAM_TYPES,
+  normalizeAiAttentionLevel,
   JobDef,
   PatchBlock,
   TFile,
@@ -143,74 +145,286 @@ export const namespaceAiScriptName = (name: string, modId: string, alreadyNamesp
   return `${prefix}${n}`;
 };
 
+const AI_ORDER_PARAM_TYPE_SET = new Set<string>(AI_ORDER_PARAM_TYPES);
+
+const normalizeOrderParamType = (rawType?: string): string => {
+  const lower = String(rawType || '').trim().toLowerCase();
+  if (lower === 'boolean') return 'bool';
+  if (lower === 'faction') return 'internal';
+  if (AI_ORDER_PARAM_TYPE_SET.has(lower)) return lower;
+  return 'internal';
+};
+
+const indentAiBlock = (raw: string, indent: string): string =>
+  String(raw || '')
+    .replace(/\r\n/g, '\n')
+    .trim()
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => `${indent}${line}`)
+    .join('\n');
+
+const formatAiScriptExpr = (raw?: string, fallback = "'move.generic'"): string => {
+  const v = String(raw || '').trim();
+  if (!v) return fallback;
+  if ((v.startsWith("'") && v.endsWith("'")) || v.startsWith('$') || v.includes('[')) return v;
+  return `'${v}'`;
+};
+
+const normalizeLegacyInterruptEvent = (event?: string): string => {
+  const raw = String(event || '').trim();
+  if (!raw) return `<event_object_attacked object="this.ship" />`;
+  if (raw.startsWith('<')) return raw;
+  const lower = raw.toLowerCase();
+  if (lower.includes('attacked')) return `<event_object_attacked object="this.ship" />`;
+  if (lower.includes('shield')) return `<event_object_shield_damaged object="this.ship" />`;
+  if (lower.includes('hull')) return `<event_object_hull_damaged object="this.ship" />`;
+  if (lower.includes('sector')) return `<event_object_changed_sector object="this.ship" />`;
+  return `<event_object_signalled object="this.ship" param="'${escapeXmlAttr(raw)}'" />`;
+};
+
+const normalizeLegacyInterruptAction = (action?: string): string => {
+  const raw = String(action || '').trim();
+  if (raw === 'flee') return `<run_interrupt_script name="'move.flee'" />`;
+  if (raw === 'dock_at_safety') return `<run_interrupt_script name="'order.dock'" />`;
+  if (raw === 'abort') return `<abort_called_scripts resume="start" />`;
+  return `<write_to_logbook text="'Interrupt handler triggered'" />`;
+};
+
+const normalizeWeaponModeAttr = (rawWeaponMode?: string): string => {
+  const mode = String(rawWeaponMode || '').trim();
+  if (!mode) return '';
+  if (mode.startsWith('weaponmode.') || mode.startsWith('$')) return mode;
+  if (mode === 'all_weapons' || mode === 'primary' || mode === 'turrets') return 'weaponmode.attackenemies';
+  return '';
+};
+
 export const compileScriptToXML = (script: AIBehaviorScript): string => {
+  if (script.mode === 'diff') {
+    let diffXml = `<?xml version="1.0" encoding="utf-8"?>\n`;
+    diffXml += `<diff xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="diff.xsd">\n`;
+    for (const op of script.diffOps || []) {
+      const sel = escapeXmlAttr(op.sel || '');
+      if (!sel) continue;
+      if (op.op === 'remove') {
+        diffXml += `  <remove sel="${sel}" />\n`;
+        continue;
+      }
+      const tag = op.op === 'replace' ? 'replace' : 'add';
+      const posAttr = tag === 'add' && op.pos ? ` pos="${escapeXmlAttr(op.pos)}"` : '';
+      const body = indentAiBlock(op.content || '', '    ');
+      if (body) {
+        diffXml += `  <${tag} sel="${sel}"${posAttr}>\n${body}\n  </${tag}>\n`;
+      } else {
+        diffXml += `  <${tag} sel="${sel}"${posAttr} />\n`;
+      }
+    }
+    diffXml += `</diff>`;
+    return diffXml;
+  }
+
+  const versionAttr = typeof script.version === 'number' && Number.isInteger(script.version) && script.version >= 0
+    ? ` version="${script.version}"`
+    : '';
+  const priorityAttr = typeof script.priority === 'number' && Number.isInteger(script.priority) && script.priority >= 0
+    ? ` priority="${script.priority}"`
+    : '';
+
   let xml = `<?xml version="1.0" encoding="utf-8"?>\n`;
-  xml += `<aiscript name="${escapeXmlAttr(script.name)}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="aiscripts.xsd">\n`;
+  xml += `<aiscript name="${escapeXmlAttr(script.name)}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="aiscripts.xsd"${priorityAttr}${versionAttr}>\n`;
   xml += `  <!-- X4 Foundations Autopilot & Task Script Behavior -->\n`;
   xml += `  <!-- Generated visually using X4 Forge Behaviors Suite -->\n`;
-  xml += `  <params>\n`;
-  (script.params || []).forEach((p) => {
-    xml += `    <param name="${escapeXmlAttr(p.name)}" type="${escapeXmlAttr(p.type)}" default="${escapeXmlAttr(p.defaultValue)}" comment="${escapeXmlAttr(p.comment)}" />\n`;
-  });
-  xml += `  </params>\n`;
+
+  const hasOrder = Boolean(script.order && String(script.order.id || '').trim());
+  if (hasOrder && script.order) {
+    const order = script.order;
+    const orderAttrs = [
+      `id="${escapeXmlAttr(order.id.trim())}"`,
+      order.name ? `name="${escapeXmlAttr(order.name)}"` : '',
+      order.description ? `description="${escapeXmlAttr(order.description)}"` : '',
+      order.category ? `category="${escapeXmlAttr(order.category)}"` : '',
+      order.infinite === true ? `infinite="true"` : '',
+      order.allowInLoop === false ? `allowinloop="false"` : '',
+      order.canPlayerCancel === true ? `canplayercancel="true"` : '',
+    ].filter(Boolean).join(' ');
+    xml += `  <order ${orderAttrs}>\n`;
+    xml += `    <params>\n`;
+    (script.params || []).forEach((p) => {
+      const pType = normalizeOrderParamType(p.type);
+      const pAttrs = [
+        `name="${escapeXmlAttr(p.name)}"`,
+        `type="${escapeXmlAttr(pType)}"`,
+        p.text && p.text.trim() ? `text="${escapeXmlAttr(p.text.trim())}"` : '',
+        p.defaultValue !== undefined && p.defaultValue !== '' ? `default="${escapeXmlAttr(p.defaultValue)}"` : '',
+        p.required !== undefined ? `required="${p.required ? 'true' : 'false'}"` : '',
+        p.advanced === true ? `advanced="true"` : '',
+        p.comment ? `comment="${escapeXmlAttr(p.comment)}"` : '',
+      ].filter(Boolean).join(' ');
+      const inputs = (p.inputParams || []).filter(ip => ip && ip.name);
+      if (inputs.length > 0) {
+        xml += `      <param ${pAttrs}>\n`;
+        inputs.forEach(ip => {
+          xml += `        <input_param name="${escapeXmlAttr(ip.name)}"${ip.value !== undefined && ip.value !== '' ? ` value="${escapeXmlAttr(ip.value)}"` : ''} />\n`;
+        });
+        xml += `      </param>\n`;
+      } else {
+        xml += `      <param ${pAttrs} />\n`;
+      }
+    });
+    xml += `    </params>\n`;
+    const requiresBody = indentAiBlock(order.requiresXml || '', '      ');
+    if (requiresBody) {
+      xml += `    <requires>\n${requiresBody}\n    </requires>\n`;
+    }
+    if (order.locationObject && order.locationObject.trim()) {
+      const condAttr = order.locationCondition?.trim()
+        ? ` condition="${escapeXmlAttr(order.locationCondition.trim())}"`
+        : '';
+      xml += `    <location object="${escapeXmlAttr(order.locationObject.trim())}"${condAttr} />\n`;
+    }
+    xml += `  </order>\n`;
+  } else {
+    xml += `  <params>\n`;
+    (script.params || []).forEach((p) => {
+      const pAttrs = [
+        `name="${escapeXmlAttr(p.name)}"`,
+        p.defaultValue !== undefined && p.defaultValue !== '' ? `default="${escapeXmlAttr(p.defaultValue)}"` : '',
+        p.comment ? `comment="${escapeXmlAttr(p.comment)}"` : '',
+      ].filter(Boolean).join(' ');
+      xml += `    <param ${pAttrs} />\n`;
+    });
+    xml += `  </params>\n`;
+  }
 
   if (script.interrupts && script.interrupts.length > 0) {
     xml += `  <interrupts>\n`;
     script.interrupts.forEach((int) => {
-      xml += `    <handler event="${escapeXmlAttr(int.event)}">\n`;
-      xml += `      <actions>\n`;
-      if (int.action === 'flee') {
-        xml += `        <run_script name="'move.flee'" />\n`;
-      } else if (int.action === 'dock_at_safety') {
-        xml += `        <run_script name="'move.dockat'" />\n`;
-      } else {
-        xml += `        <write_to_logbook text="'Interrupt event fired: ${escapeXmlAttr(int.event)}'" />\n`;
+      const consumeAttr = int.consume === false ? ` consume="false"` : '';
+      if (int.ref && int.ref.trim()) {
+        xml += `    <handler ref="${escapeXmlAttr(int.ref.trim())}"${consumeAttr} />\n`;
+        return;
       }
-      xml += `      </actions>\n`;
+      const condBody = indentAiBlock(int.conditionsXml || normalizeLegacyInterruptEvent(int.event), '        ');
+      const actBody = indentAiBlock(int.actionsXml || normalizeLegacyInterruptAction(int.action), '        ');
+      xml += `    <handler${consumeAttr}>\n`;
+      xml += `      <conditions>\n${condBody}\n      </conditions>\n`;
+      xml += `      <actions>\n${actBody}\n      </actions>\n`;
       xml += `    </handler>\n`;
     });
     xml += `  </interrupts>\n`;
   }
 
-  xml += `  <attention min="${escapeXmlAttr(script.attentionLevel || 'low')}">\n`;
+  const initBody = indentAiBlock(script.initXml || '', '    ');
+  if (initBody) {
+    xml += `  <init>\n${initBody}\n  </init>\n`;
+  }
+
+  for (const patch of script.patches || []) {
+    if (!Number.isInteger(patch.sinceVersion) || patch.sinceVersion < 1) continue;
+    const earlyAttr = patch.early ? ` early="true"` : '';
+    const commentAttr = patch.comment ? ` comment="${escapeXmlAttr(patch.comment)}"` : '';
+    const patchBody = indentAiBlock(patch.actionsXml || '', '    ');
+    if (patchBody) {
+      xml += `  <patch sinceversion="${patch.sinceVersion}"${earlyAttr}${commentAttr}>\n${patchBody}\n  </patch>\n`;
+    } else {
+      xml += `  <patch sinceversion="${patch.sinceVersion}"${earlyAttr}${commentAttr} />\n`;
+    }
+  }
+
+  const normalizedAttention = normalizeAiAttentionLevel(script.attentionLevel);
+  const hasExplicitStartLabel = (script.actions || []).some(
+    act => act.command === 'label' && String(act.properties?.name || '').trim() === 'start'
+  );
+
+  xml += `  <attention min="${escapeXmlAttr(normalizedAttention)}">\n`;
   xml += `    <actions>\n`;
-  xml += `      <label name="start" />\n`;
+  if (!hasExplicitStartLabel) {
+    xml += `      <label name="start" />\n`;
+  }
 
   (script.actions || []).forEach((act) => {
-    xml += `      <!-- Action: ${escapeXmlText(act.label)} -->\n`;
+    xml += `      <!-- Action: ${escapeXmlText(act.label || act.command)} -->\n`;
     switch (act.command) {
-      case 'move_to':
-        xml += `      <move_to object="this.ship" destination="${escapeXmlAttr(act.properties.destination || '$target')}" forceposition="false" finishonfound="true">\n`;
-        xml += `        <interrupt_after_time time="10s" />\n`;
+      case 'label':
+        xml += `      <label name="${escapeXmlAttr(act.properties.name || 'loop')}" />\n`;
+        break;
+      case 'resume':
+        xml += `      <resume label="${escapeXmlAttr(act.properties.label || 'start')}" />\n`;
+        break;
+      case 'run_script': {
+        const targetScript = formatAiScriptExpr(act.properties.name, "'move.generic'");
+        const resultAttr = act.properties.result ? ` result="${escapeXmlAttr(act.properties.result)}"` : '';
+        const paramsBody = indentAiBlock(act.properties.paramsXml || '', '        ');
+        if (paramsBody) {
+          xml += `      <run_script name="${escapeXmlAttr(targetScript)}"${resultAttr}>\n${paramsBody}\n      </run_script>\n`;
+        } else {
+          xml += `      <run_script name="${escapeXmlAttr(targetScript)}"${resultAttr} />\n`;
+        }
+        break;
+      }
+      case 'move_to': {
+        const objAttr = escapeXmlAttr(act.properties.object || 'this.ship');
+        const destAttr = escapeXmlAttr(act.properties.destination || '$target');
+        const flightAttr = act.properties.flightbehaviour
+          ? ` flightbehaviour="${escapeXmlAttr(act.properties.flightbehaviour)}"`
+          : '';
+        const forcePos = act.properties.forceposition === 'true' ? 'true' : 'false';
+        const finishApproach = act.properties.finishonapproach === 'true' ? 'true' : 'false';
+        const timeout = escapeXmlAttr(act.properties.timeout || '10s');
+        xml += `      <move_to object="${objAttr}" destination="${destAttr}"${flightAttr} forceposition="${forcePos}" finishonapproach="${finishApproach}">\n`;
+        xml += `        <interrupt_after_time time="${timeout}" />\n`;
         xml += `      </move_to>\n`;
         break;
+      }
       case 'flee':
         xml += `      <run_script name="'move.flee'" />\n`;
         break;
-      case 'shoot':
-        xml += `      <shoot_at object="this.ship" target="${escapeXmlAttr(act.properties.target || '$enemy')}" turretmode="attackhostile" />\n`;
+      case 'shoot': {
+        const objAttr = escapeXmlAttr(act.properties.object || 'this.ship');
+        const targetAttr = escapeXmlAttr(act.properties.target || '$enemy');
+        const wm = normalizeWeaponModeAttr(act.properties.weaponmode || act.properties.weapon);
+        const wmAttr = wm ? ` weaponmode="${escapeXmlAttr(wm)}"` : '';
+        xml += `      <shoot_at object="${objAttr}" target="${targetAttr}"${wmAttr} />\n`;
         break;
-      case 'dock_at':
-        xml += `      <dock_at object="this.ship" station="${escapeXmlAttr(act.properties.station || '$station')}" />\n`;
+      }
+      case 'dock_at': {
+        const destVal = escapeXmlAttr(act.properties.destination || act.properties.station || '$station');
+        xml += `      <run_script name="'order.dock'">\n`;
+        xml += `        <param name="destination" value="${destVal}" />\n`;
+        xml += `      </run_script>\n`;
         break;
-      case 'wait':
+      }
+      case 'wait': {
+        const resumeAttr = act.properties.resume === 'true' ? ` resume="true"` : '';
         if (act.properties.exact) {
-          xml += `      <wait exact="${escapeXmlAttr(act.properties.exact)}" />\n`;
+          xml += `      <wait exact="${escapeXmlAttr(act.properties.exact)}"${resumeAttr} />\n`;
         } else {
-          xml += `      <wait min="${escapeXmlAttr(act.properties.min || '2s')}" max="${escapeXmlAttr(act.properties.max || '10s')}" />\n`;
+          xml += `      <wait min="${escapeXmlAttr(act.properties.min || '2s')}" max="${escapeXmlAttr(act.properties.max || '10s')}"${resumeAttr} />\n`;
         }
         break;
-      case 'find_objects':
-        xml += `      <find_object name="$targets" class="class.${escapeXmlAttr(act.properties.class || 'ship')}" space="player.sector" multiple="true" />\n`;
+      }
+      case 'find_objects': {
+        const resultVar = escapeXmlAttr(act.properties.result || '$targets');
+        const cls = escapeXmlAttr(String(act.properties.class || 'ship').replace(/^class\./, ''));
+        const spaceAttr = escapeXmlAttr(act.properties.space || 'this.sector');
+        xml += `      <find_object name="${resultVar}" class="class.${cls}" space="${spaceAttr}" multiple="true" />\n`;
         break;
-      case 'custom_xml':
-        xml += `      ${act.properties.rawXml || '<!-- custom nodes -->'}\n`;
+      }
+      case 'custom_xml': {
+        const body = indentAiBlock(act.properties.rawXml || '<!-- custom nodes -->', '      ');
+        xml += `${body || '      <!-- custom nodes -->'}\n`;
         break;
+      }
     }
   });
 
   xml += `    </actions>\n`;
   xml += `  </attention>\n`;
+  const onAbortBody = indentAiBlock(script.onAbortXml || '', '    ');
+  if (onAbortBody) {
+    xml += `  <on_abort>\n${onAbortBody}\n  </on_abort>\n`;
+  }
   xml += `</aiscript>`;
   return xml;
 };
