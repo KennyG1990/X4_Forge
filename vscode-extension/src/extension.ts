@@ -1450,7 +1450,7 @@ async function startLocalBackend(context: vscode.ExtensionContext): Promise<void
 
 async function restartLocalBackend(
   context: vscode.ExtensionContext,
-  options: { reason: string; interactive: boolean },
+  options: { reason: string; interactive: boolean; recoverIfStopped?: boolean },
 ): Promise<void> {
   const finish = beginNativeOperation(options.interactive ? 'native.command' : 'native.backend.restart');
   let outcome: ForgePerformanceOutcome = 'ok';
@@ -1465,7 +1465,7 @@ async function restartLocalBackend(
     finish(outcome);
     return;
   }
-  if (!options.interactive && !backend?.owned && !startingChild) {
+  if (!options.interactive && !options.recoverIfStopped && !backend?.owned && !startingChild) {
     log(`[dev-reload] skipped reload trigger (${options.reason}): no owned sidecar is running`);
     finish(outcome);
     return;
@@ -1737,6 +1737,7 @@ export function activate(context: vscode.ExtensionContext): void {
         await restartLocalBackend(context, {
           reason: `dev reload ${signal.reloadId}`,
           interactive: false,
+          recoverIfStopped: signal.recoverIfStopped,
         });
       },
       log: (msg) => log(`[dev-reload] ${msg}`),

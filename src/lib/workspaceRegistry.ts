@@ -20,7 +20,12 @@ import {
   summarizeWorkspaceContent,
   type PersistedWorkspaceState,
 } from './workspaceState';
-import { workspaceContentHash, workspaceSnapshotHash } from './workspaceIdentity';
+import {
+  canonicalWorkspaceContentPayload,
+  stableStringify,
+  workspaceContentHash,
+  workspaceSnapshotHash,
+} from './workspaceIdentity';
 
 const REGISTRY_SCHEMA = 1;
 const INDEX_FILE = 'workspace-registry.json';
@@ -148,15 +153,57 @@ function sameRegistryIndex(left: WorkspaceRegistryIndex, right: WorkspaceRegistr
     left.migratedAt === right.migratedAt && JSON.stringify(left.workspaceIds) === JSON.stringify(right.workspaceIds);
 }
 
-function validRecord(value: unknown, expectedId?: string): value is WorkspaceRecord {
-  if (!value || typeof value !== 'object') return false;
+function stripNodeTemplateSchema(workspace: ModWorkspace): Record<string, unknown> | null {
+  const payload = canonicalWorkspaceContentPayload(workspace);
+  if (!payload) return null;
+  if (Array.isArray(payload.nodes)) {
+    payload.nodes = payload.nodes.map((node) => {
+      if (!node || typeof node !== 'object') return node;
+      const copy = { ...(node as Record<string, unknown>) };
+      delete copy.propertiesSchema;
+      return copy;
+    });
+  }
+  return payload;
+}
+
+function isTemplateSchemaUpgradeOnly(rawWorkspace: ModWorkspace, sanitizedWorkspace: ModWorkspace): boolean {
+  if (!Array.isArray(rawWorkspace.nodes) || !Array.isArray(sanitizedWorkspace.nodes)) return false;
+  if (rawWorkspace.nodes.length !== sanitizedWorkspace.nodes.length) return false;
+  return stableStringify(stripNodeTemplateSchema(rawWorkspace)) === stableStringify(stripNodeTemplateSchema(sanitizedWorkspace));
+}
+
+type PersistedRecordStatus = 'valid' | 'template-schema-upgrade' | 'invalid';
+
+function classifyPersistedRecord(value: unknown, expectedId?: string): PersistedRecordStatus {
+  if (!value || typeof value !== 'object') return 'invalid';
   const row = value as Partial<WorkspaceRecord>;
-  return row.schema === REGISTRY_SCHEMA && validWorkspaceId(String(row.workspaceId || '')) &&
-    (!expectedId || row.workspaceId === expectedId) && !!row.workspace && typeof row.workspace === 'object' &&
-    typeof (row.workspace as any).name === 'string' && Array.isArray((row.workspace as any).nodes) &&
-    typeof row.head === 'string' && row.head === contentHead(row.workspace) &&
-    Number.isFinite(row.version) && typeof row.savedAt === 'string' && typeof row.origin === 'string' &&
-    typeof row.createdAt === 'string';
+  if (
+    row.schema !== REGISTRY_SCHEMA
+    || !validWorkspaceId(String(row.workspaceId || ''))
+    || (expectedId && row.workspaceId !== expectedId)
+    || !row.workspace
+    || typeof row.workspace !== 'object'
+    || typeof (row.workspace as Record<string, unknown>).name !== 'string'
+    || !Array.isArray((row.workspace as Record<string, unknown>).nodes)
+    || !validWorkspaceHash(row.head)
+    || !Number.isFinite(row.version)
+    || typeof row.savedAt !== 'string'
+    || typeof row.origin !== 'string'
+    || typeof row.createdAt !== 'string'
+  ) {
+    return 'invalid';
+  }
+  const ws = row.workspace as ModWorkspace;
+  if (row.head === contentHead(ws)) return 'valid';
+  if (row.head === workspaceContentHash(ws) && isTemplateSchemaUpgradeOnly(ws, sanitizeWorkspace(ws))) {
+    return 'template-schema-upgrade';
+  }
+  return 'invalid';
+}
+
+function validRecord(value: unknown, expectedId?: string): value is WorkspaceRecord {
+  return classifyPersistedRecord(value, expectedId) === 'valid';
 }
 
 function validIndex(value: unknown): value is WorkspaceRegistryIndex {
@@ -230,12 +277,28 @@ export class WorkspaceRegistry {
         let record: unknown;
         try { record = JSON.parse(fs.readFileSync(this.recordPath(id), 'utf8')); }
         catch (error) { throw new Error(`Workspace record ${id} is unreadable; refusing fallback: ${error instanceof Error ? error.message : String(error)}`); }
-        if (!validRecord(record, id)) throw new Error(`Workspace record ${id} is corrupt or unsupported; refusing fallback.`);
-        const normalizedRecord: WorkspaceRecord = {
-          ...record,
-          workspace: canonicalWorkspaceForRecord(record.workspace, id),
-        };
-        this.assertWorkspaceSize(normalizedRecord.workspace);
+        const classification = classifyPersistedRecord(record, id);
+        if (classification === 'invalid') throw new Error(`Workspace record ${id} is corrupt or unsupported; refusing fallback.`);
+        const typedRecord = record as WorkspaceRecord;
+        let normalizedRecord: WorkspaceRecord;
+        if (classification === 'template-schema-upgrade') {
+          const sanitizedWorkspace = sanitizeWorkspace(canonicalWorkspaceForRecord(typedRecord.workspace, id));
+          const migratedHead = contentHead(sanitizedWorkspace);
+          normalizedRecord = {
+            ...typedRecord,
+            workspace: sanitizedWorkspace,
+            head: migratedHead,
+          };
+          this.assertWorkspaceSize(normalizedRecord.workspace);
+          this.persistRecord(normalizedRecord);
+          console.log(`[state] migrated workspace ${id} template propertiesSchema head ${typedRecord.head} -> ${migratedHead}`);
+        } else {
+          normalizedRecord = {
+            ...typedRecord,
+            workspace: canonicalWorkspaceForRecord(typedRecord.workspace, id),
+          };
+          this.assertWorkspaceSize(normalizedRecord.workspace);
+        }
         this.records.set(id, normalizedRecord);
         this.snapshotHeads.set(id, snapshotHead(normalizedRecord.workspace));
         this.persistedAtBoot.add(id);
@@ -868,6 +931,122 @@ export function runWorkspaceRegistrySelftest(): {
       !fs.existsSync(targetRecordPath));
     const replayCompensation = compensationRegistry.compensateCreate(createdForCompensation.workspaceId, expectedCompensationHead, expectedCompensationSnapshotHash);
     ok('compensation_replay_refused', replayCompensation.ok === false && replayCompensation.code === 'WORKSPACE_NOT_FOUND');
+
+    const upgradeRoot = path.join(root, 'template-upgrade');
+    const upgradeId = 'ws_111111111111111111111111';
+    const upgradedBase = sanitizeWorkspace({
+      ...legacy,
+      id: `workspace_${upgradeId.slice(3)}`,
+      name: 'Upgrade_Fixture',
+      nodes: [
+        {
+          id: 'cue_0',
+          type: 'cue',
+          xmlTag: 'cue',
+          label: 'Mission Cue',
+          x: 100,
+          y: 100,
+          properties: { name: 'Preserved_Cue_Name' },
+          inputs: [],
+          outputs: [],
+          includeInBuild: true,
+        },
+      ],
+    } as unknown as ModWorkspace);
+    const oldSchemaWorkspace = cloneWorkspace(upgradedBase);
+    oldSchemaWorkspace.nodes[0].propertiesSchema = [{ key: 'name', label: 'Legacy Label', type: 'text' }];
+    const oldSchemaRawHead = workspaceContentHash(oldSchemaWorkspace);
+    atomicWriteJson(path.join(upgradeRoot, INDEX_FILE), {
+      schema: REGISTRY_SCHEMA,
+      defaultWorkspaceId: upgradeId,
+      workspaceIds: [upgradeId],
+      migratedAt: '2026-11-22T00:00:00Z',
+    });
+    atomicWriteJson(path.join(upgradeRoot, RECORD_DIR, `${upgradeId}.json`), {
+      schema: REGISTRY_SCHEMA,
+      workspaceId: upgradeId,
+      workspace: oldSchemaWorkspace,
+      head: oldSchemaRawHead,
+      version: 1,
+      createdAt: '2026-11-22T00:00:00Z',
+      savedAt: '2026-11-25T00:00:00Z',
+      origin: 'api:cas',
+    });
+    const migratedRegistry = new WorkspaceRegistry({
+      root: upgradeRoot,
+      defaultWorkspace: legacy,
+      now: () => now + 200,
+      randomHex,
+    });
+    const upgradedLookup = migratedRegistry.lookup(upgradeId);
+    const expectedUpgradedHead = contentHead(sanitizeWorkspace(oldSchemaWorkspace));
+    const reloadedUpgradeRegistry = new WorkspaceRegistry({
+      root: upgradeRoot,
+      defaultWorkspace: legacy,
+      now: () => now + 300,
+      randomHex,
+    });
+    const reloadedLookup = reloadedUpgradeRegistry.lookup(upgradeId);
+    ok(
+      'template_schema_upgrade_migrates_cleanly',
+      upgradedLookup.ok
+      && upgradedLookup.record.head === expectedUpgradedHead
+      && upgradedLookup.record.head !== oldSchemaRawHead
+      && upgradedLookup.record.workspace.nodes[0]?.properties?.name === 'Preserved_Cue_Name'
+      && reloadedLookup.ok
+      && reloadedLookup.record.head === expectedUpgradedHead,
+    );
+
+    const tamperedRoot = path.join(root, 'template-tampered');
+    const tamperedId = 'ws_222222222222222222222222';
+    atomicWriteJson(path.join(tamperedRoot, INDEX_FILE), {
+      schema: REGISTRY_SCHEMA,
+      defaultWorkspaceId: tamperedId,
+      workspaceIds: [tamperedId],
+      migratedAt: '2026-11-22T00:00:00Z',
+    });
+    atomicWriteJson(path.join(tamperedRoot, RECORD_DIR, `${tamperedId}.json`), {
+      schema: REGISTRY_SCHEMA,
+      workspaceId: tamperedId,
+      workspace: {
+        ...oldSchemaWorkspace,
+        nodes: [{ ...oldSchemaWorkspace.nodes[0], properties: { name: 'Tampered_Cue' } }],
+      },
+      head: oldSchemaRawHead,
+      version: 1,
+      createdAt: '2026-11-22T00:00:00Z',
+      savedAt: '2026-11-25T00:00:00Z',
+      origin: 'api:cas',
+    });
+    let tamperedRefused = false;
+    try { new WorkspaceRegistry({ root: tamperedRoot, defaultWorkspace: legacy, randomHex }); }
+    catch (err) { tamperedRefused = String(err).includes('corrupt or unsupported; refusing fallback.'); }
+
+    const nonSchemaRoot = path.join(root, 'template-non-schema-mismatch');
+    const nonSchemaWorkspace = {
+      ...oldSchemaWorkspace,
+      nodes: [{ ...oldSchemaWorkspace.nodes[0], x: 'bad' }],
+    } as unknown as ModWorkspace;
+    atomicWriteJson(path.join(nonSchemaRoot, INDEX_FILE), {
+      schema: REGISTRY_SCHEMA,
+      defaultWorkspaceId: tamperedId,
+      workspaceIds: [tamperedId],
+      migratedAt: '2026-11-22T00:00:00Z',
+    });
+    atomicWriteJson(path.join(nonSchemaRoot, RECORD_DIR, `${tamperedId}.json`), {
+      schema: REGISTRY_SCHEMA,
+      workspaceId: tamperedId,
+      workspace: nonSchemaWorkspace,
+      head: workspaceContentHash(nonSchemaWorkspace),
+      version: 1,
+      createdAt: '2026-11-22T00:00:00Z',
+      savedAt: '2026-11-25T00:00:00Z',
+      origin: 'api:cas',
+    });
+    let nonSchemaRefused = false;
+    try { new WorkspaceRegistry({ root: nonSchemaRoot, defaultWorkspace: legacy, randomHex }); }
+    catch (err) { nonSchemaRefused = String(err).includes('corrupt or unsupported; refusing fallback.'); }
+    ok('tampered_non_schema_field_still_refused', tamperedRefused && nonSchemaRefused);
 
     let capRejected = false;
     try { registry.create({ ...legacy, name: 'Third' } as ModWorkspace, 'selftest'); registry.create({ ...legacy, name: 'Fourth' } as ModWorkspace, 'selftest'); } catch { capRejected = true; }

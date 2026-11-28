@@ -30,7 +30,7 @@ async function main(): Promise<void> {
   try {
     // 1. Empty forgeRoot -> inactive (zero watcher in packaged production mode)
     {
-      let forgeRoot = "";
+      const forgeRoot = "";
       const received: DevReloadSignal[] = [];
       const watcher = createDevReloadWatcher({
         getForgeRoot: () => forgeRoot,
@@ -173,6 +173,18 @@ async function main(): Promise<void> {
 
     // 5. Negative paths: malformed JSON, array, blank, oversized, and non-directory forgeRoot
     {
+      const withRecovery = parseDevReloadSignal(
+        JSON.stringify({ reloadId: "r-recover", recoverIfStopped: true }),
+        "/tmp/.forge-dev-reload",
+      );
+      assert.equal(withRecovery?.recoverIfStopped, true);
+      const withoutRecovery = parseDevReloadSignal(
+        JSON.stringify({ reloadId: "r-normal" }),
+        "/tmp/.forge-dev-reload",
+      );
+      assert.equal(withoutRecovery?.recoverIfStopped, false);
+      const plainSignal = parseDevReloadSignal("plain-nonce", "/tmp/.forge-dev-reload");
+      assert.equal(plainSignal?.recoverIfStopped, false);
       assert.equal(parseDevReloadSignal("", "/tmp/.forge-dev-reload"), null);
       assert.equal(parseDevReloadSignal("   ", "/tmp/.forge-dev-reload"), null);
       assert.equal(parseDevReloadSignal("{broken", "/tmp/.forge-dev-reload"), null);
@@ -225,6 +237,7 @@ async function main(): Promise<void> {
       assert.equal(cmd.title, "X4 Forge: Restart Local Backend");
       const welcome = pkg.contributes?.viewsWelcome?.[0]?.contents || "";
       assert.ok(welcome.includes("(command:x4forge.restartSidecar)"), "viewsWelcome must expose Restart Local Backend");
+      assert.ok(!welcome.includes("**"), "viewsWelcome must not contain unrendered markdown ** emphasis");
       console.log("[6/6] extension manifest restart command contract: PASS");
       passed++;
     }

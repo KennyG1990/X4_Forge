@@ -22,7 +22,7 @@ Ken's standing instruction: give honest, direct technical feedback; criticize fl
 
 1. **SESSION-START BRIEF (NOTION-FIRST).** Before work, read the Notion **Live Session Handoff & Active Queue** (`4254618e-d15b-817b-8d91-e00b7ffa5466`), **X4 Forge Studio — Project Hub** (`3ad4618e-d15b-8140-8777-e434a7f4a888`), and **Forge QA Field Log** (`4124618e-d15b-8131-bdd5-ff6aabefbd6d`) via `notion-mcp-server`, and search Notion (`API-post-search`) before non-trivial tasks to verify whether a problem or decision is already recorded. State in one block: WHICH project this session owns, the **eyeball queue** (every `PARTIAL` item gated on a Ken check, each with a click-by-click script), and the **commit question** (whether `HEAD` is clean and pushed).
    **SESSION-CLOSE MIRROR:** At every commit point or degradation call, update the Notion **Live Session Handoff & Active Queue** (`4254618e-d15b-817b-8d91-e00b7ffa5466`) in place via `notion-mcp-server`. Never write a local handoff file.
-2. **MACHINE-STATE ASK.** Before validation-heavy or E2E work when live surfaces may contend: check machine state and never assume. Never touch a running `X4.exe` session or live user canvas without explicit authorization.
+2. **MACHINE-STATE ASK.** Before validation-heavy or E2E work when live surfaces may contend: check machine state and never assume. Never touch a running `X4.exe` session or live user canvas without explicit authorization. Isolated `FORGE DEVELOPMENT` (`G:\Forge-QA\development-ide\`) stays permitted while `X4.exe` or live work is active; only full 38-spec `test:e2e`, VSIX publish, and game installs wait on `X4.exe`.
 3. **DEGRADATION CALL.** When a session runs long and agent errors cluster (2+ mistakes in a stretch or repeated tool freezes), state plainly: "we're in degradation territory — commit point now, fresh session for the next unit."
 4. **COMMIT CADENCE.** End every `VERIFIED` close with `commit point: <close title>`. Uncommitted work is blast radius.
 5. **CANON LAG.** When Ken changes a standing rule, update Notion (`Decision Log` `7e84e4f0-0d2f-45e9-87ef-6fa31b33e975` + `Project Hub` `3ad4618e-d15b-8140-8777-e434a7f4a888`) and, if bootstrapper pointers change, sync `CLAUDE.md` / `AGENTS.md` / `GEMINI.md` IN THE SAME TASK.
@@ -102,7 +102,7 @@ Run every declared and coupled validation method across applicable layers:
 3. Integration / cross-layer contracts (`npm run test:routes`, capability/receipt/writer audits)
 4. Negative-path, rejection, rollback, timeout, and no-false-success checks
 5. Real runtime, service, database, or host-process checks
-6. Native UI rendering and interaction (`npm run test:e2e`, rendered Chromium / extension host)
+6. Native UI rendering and interaction (`npm run test:e2e`, rendered Chromium / live `FORGE DEVELOPMENT` extension host; headless Playwright and `inspect:ui` do NOT substitute for live `FORGE DEVELOPMENT` IDE host validation)
 7. Packaged / installed VSIX verification (`stage-app`, `probe-app`, `inspect-vsix`, installed IDE)
 8. In-game X4 execution/experience verification where game behavior is claimed
 
@@ -125,6 +125,10 @@ Update `Forge QA Field Log` (`4124618e-d15b-8131-bdd5-ff6aabefbd6d`) and `Live S
   - `npm run test:oracles` (`node scripts/oracle-sweep.mjs`) · `npm run test:routes` (run with `X4_XSD_PATH` and `X4_REFERENCE_ROOT` unset)
   - `npm run test:e2e` (ephemeral ports `3100`/`3101` + isolated state dir; pass `X4_REFERENCE_ROOT`; `workers=1` serial; verify ephemeral tree cleanup)
   - `npm run precommit:check` · `npm run build` · `npm run validate:mod -- "<folder>"`
+- **Live `FORGE DEVELOPMENT` IDE Gate (Ken, 2026-11-28):**
+  - Keep `G:\Forge-QA\development-ide\` (`FORGE DEVELOPMENT` side-by-side with `X4CodeSense`) active during UI/extension work: **agents operate it autonomously and headlessly without Ken at the computer**, launching via `pwsh -NoProfile -File G:\Forge-QA\development-ide\Launch-FORGE-DEVELOPMENT.ps1 -HoldOpen` (under background daemon execution) or `-Restart -HoldOpen` on crash/wedge recovery. When Ken is at the computer and runs `Launch-FORGE-DEVELOPMENT.cmd` on interactive `WinSta0\Default`, it cleanly hands over from any headless `development-ide\profile` process to a visible GUI window while leaving live Antigravity and `X4.exe` untouched.
+  - After building edits, run `pwsh -NoProfile -File G:\Forge-QA\development-ide\Reload-FORGE-DEVELOPMENT.ps1` (signals `recoverIfStopped: true` across `.forge-dev-reload` and fails closed `exit 1` unless live sidecar recovers and `Probe-FORGE-DEVELOPMENT.ps1 -Json` returns `ok: true`; use `-SyncOnly` only during pre-commit packaging prep) and capture `Probe-FORGE-DEVELOPMENT.ps1 -Json` (`ok: true`, `ideRunning`, `sidecarRunning`, `uiMatchesDist`, `distMatchesHead`, `extensionSynced`, `x4CodeSenseInstalled`).
+  - **Honesty boundary:** Headless Playwright and `inspect:ui` do NOT satisfy the installed-IDE gate. Without a green `Probe-FORGE-DEVELOPMENT.ps1` receipt + live verification inside `FORGE DEVELOPMENT`, any UI, webview, or extension unit may claim at most `PARTIAL`, never `VERIFIED`.
 - **Memory & CPU admission (Ken, 2026-11-12):** Fixed free-RAM and CPU-percentage launch floors are retired; keep tests serial (`workers=1`), heap-bounded, and isolated from live `~/.x4forge` (`3000`/`3001`) and `X4.exe`.
 - **Spending / network / deletion policy:** AI spend meter + daily cap live at `callMultiProviderAI`; any new spend, network, or deletion surface requires a verified meter, limit, and failure behavior. External agents bring their own AI keys (`x-custom-api-key`).
 - **Git & Unified Version Standard (Ken, 2026-07-19 & 2026-11-25):**

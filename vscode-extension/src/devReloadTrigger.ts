@@ -13,6 +13,7 @@ export interface DevReloadSignal {
   requestedAt: string | null;
   reason: string;
   head: string | null;
+  recoverIfStopped: boolean;
   sentinelPath: string;
 }
 
@@ -72,7 +73,8 @@ export function parseDevReloadSignal(raw: string, sentinelPath: string): DevRelo
       const head = typeof rawHead === "string" && /^[a-f0-9]{7,40}$/i.test(rawHead.trim())
         ? rawHead.trim()
         : null;
-      return { reloadId, fingerprint, requestedAt, reason, head, sentinelPath };
+      const recoverIfStopped = parsed.recoverIfStopped === true;
+      return { reloadId, fingerprint, requestedAt, reason, head, recoverIfStopped, sentinelPath };
     } catch {
       return null;
     }
@@ -85,6 +87,7 @@ export function parseDevReloadSignal(raw: string, sentinelPath: string): DevRelo
     requestedAt: null,
     reason: "forgeRoot live-reload sentinel",
     head: null,
+    recoverIfStopped: false,
     sentinelPath,
   };
 }
