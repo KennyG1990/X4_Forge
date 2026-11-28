@@ -54,6 +54,8 @@ export interface BuildReadinessInput {
   diagnosticSource: 'checking' | 'project' | 'local';
   watcher: ReadinessWatcherEvidence;
   confirmation?: ExperienceConfirmation | null;
+  differentDiskFileCount?: number;
+  diskSourceDrifted?: boolean;
 }
 
 export const EXPERIENCE_CONFIRMATIONS_KEY = 'x4_forge_experience_confirmations';
@@ -99,29 +101,38 @@ function diagnosticStage(
   label: string,
   diagnostics: PackageDiagnostic[],
   owner: ReadinessOwner,
+  differentDiskFileCount = 0,
+  diskSourceDrifted = false,
 ): ReadinessStage {
   const errors = countSeverity(diagnostics, 'error');
   const warnings = countSeverity(diagnostics, 'warning');
   const coverageGaps = id === 'package' ? diagnostics.filter(item => item.coverageGap === true).length : 0;
+  const driftNote = id === 'package'
+    ? differentDiskFileCount > 0
+      ? ` Snapshot differs from disk in ${differentDiskFileCount} file(s) — reload from disk to validate current files.`
+      : diskSourceDrifted
+        ? ' Workspace snapshot is behind disk — reload from disk to validate current files.'
+        : ''
+    : '';
   if (errors > 0) return {
     id, label: id === 'graph' ? 'Graph invalid' : 'Project validation failed',
     shortLabel: id === 'graph' ? 'Graph' : 'Validation', status: 'fail', owner,
     summary: `${errors} error${errors === 1 ? '' : 's'}`,
-    evidence: `${errors} blocking error(s), ${warnings} warning(s) in current workspace evidence.`,
+    evidence: `${errors} blocking error(s), ${warnings} warning(s) in current workspace evidence.${driftNote}`,
   };
   if (coverageGaps > 0) return {
     id, label: 'Project checks incomplete', shortLabel: 'Validation', status: 'warning', owner,
     summary: 'Coverage incomplete',
-    evidence: `${coverageGaps} validation ${coverageGaps === 1 ? 'check is' : 'checks are'} incomplete.${warnings ? ` ${warnings} warning(s) need review.` : ''}`,
+    evidence: `${coverageGaps} validation ${coverageGaps === 1 ? 'check is' : 'checks are'} incomplete.${warnings ? ` ${warnings} warning(s) need review.` : ''}${driftNote}`,
   };
   if (warnings > 0) return {
     id, label, shortLabel: id === 'graph' ? 'Graph' : 'Validation', status: 'warning', owner,
     summary: `Valid · ${warnings} warning${warnings === 1 ? '' : 's'}`,
-    evidence: `No blocking errors; ${warnings} warning(s) need review.`,
+    evidence: `No blocking errors; ${warnings} warning(s) need review.${driftNote}`,
   };
   return {
     id, label, shortLabel: id === 'graph' ? 'Graph' : 'Validation', status: 'pass', owner,
-    summary: 'Valid', evidence: 'Current workspace has zero blocking errors or warnings.',
+    summary: 'Valid', evidence: `Current workspace has zero blocking errors or warnings.${driftNote}`,
   };
 }
 
@@ -134,7 +145,14 @@ export function buildReadinessStages(input: BuildReadinessInput): ReadinessStage
   } else if (input.diagnosticSource === 'local') {
     pkg = { id: 'package', label: 'Project valid', shortLabel: 'Validation', status: 'unavailable', owner: 'diagnostics', summary: 'Validator offline', evidence: 'Only local graph heuristics ran; schema, corpus, and cross-file validity are not proven.' };
   } else {
-    pkg = diagnosticStage('package', 'Project valid', input.packageDiagnostics, 'diagnostics');
+    pkg = diagnosticStage(
+      'package',
+      'Project valid',
+      input.packageDiagnostics,
+      'diagnostics',
+      input.differentDiskFileCount || 0,
+      Boolean(input.diskSourceDrifted),
+    );
   }
 
   const deploy = input.watcher.lastDeploy;
@@ -241,6 +259,8 @@ export function runReadinessSelftest() {
   ok('old_confirmation_invalidated', stage({ confirmation: { workspaceName: 'W', workspaceHash: 'old', deployedAt: deploy.deployedAt!, confirmedAt: '2026-07-14T12:05:00.000Z' } }, 'experience').status === 'pending');
   ok('corrupt_confirmation_store_fails_soft', Object.keys(parseExperienceConfirmations('{broken')).length === 0);
   ok('confirmation_store_filters_bad_rows', Object.keys(parseExperienceConfirmations(JSON.stringify({ good: { workspaceName: 'W', workspaceHash: 'h', deployedAt: 'd', confirmedAt: 'c' }, bad: { workspaceName: 2 } }))).join(',') === 'good');
+  ok('disk_diff_note_surfaces_on_package_evidence', stage({ packageDiagnostics: [diag('error')], differentDiskFileCount: 3 }, 'package').evidence.includes('Snapshot differs from disk in 3 file(s)'));
+  ok('disk_drift_note_surfaces_when_count_zero', stage({ packageDiagnostics: [diag('error')], diskSourceDrifted: true }, 'package').evidence.includes('Workspace snapshot is behind disk'));
 
   const passed = checks.filter(check => check.pass).length;
   return { allPassed: passed === checks.length, passed, total: checks.length, checks };

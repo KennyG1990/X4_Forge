@@ -5,7 +5,7 @@ import { prepareDeployReview, type DeployReviewData } from './lib/deployClient';
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Undo2, Redo2, Keyboard, PanelLeftOpen, Rocket, Lock } from 'lucide-react';
+import { Undo2, Redo2, Keyboard, PanelLeftOpen, Rocket, Lock, RefreshCw, X } from 'lucide-react';
 import type { PublicDriverLeaseStatus } from './lib/driverLease';
 import BugReportModal from './components/BugReportModal';
 import Sidebar from './components/Sidebar';
@@ -69,7 +69,13 @@ import type { WorkspaceValidationInputs } from './lib/workspaceValidationInputs'
 import type { CompileValidationCapture } from './server/compileValidationReports';
 import ReadinessLadder from './components/ReadinessLadder';
 import BeginnerWorkspace from './components/BeginnerWorkspace';
-import { toSafeModId } from './lib/modCompiler';
+import { toContentVersion, toSafeModId } from './lib/modCompiler';
+import {
+  classifyLocalEditState,
+  decideDiskSyncAction,
+  type SourceReimportTarget,
+  type WorkspaceSourceSyncStatus,
+} from './lib/workspaceSourceSync';
 import {
   EXPERIENCE_MODE_KEY,
   beginnerEditorForWorkspace,
@@ -569,6 +575,12 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
   const currentDiagnosticInput = diagnosticInput?.workspace === workspace && diagnosticInput.revision === diagnosticRevision
     ? diagnosticInput : null;
   const diagnosticSource = currentDiagnosticInput?.source ?? 'checking';
+  const [sourceSync, setSourceSync] = useState<WorkspaceSourceSyncStatus | null>(null);
+  const [diskSyncBusy, setDiskSyncBusy] = useState(false);
+  const [dismissedDiskHash, setDismissedDiskHash] = useState<string | null>(null);
+  const diskReloadInFlightRef = useRef(false);
+  const lastFailedAutoReloadHashRef = useRef<string | null>(null);
+  const lastFocusSyncAtRef = useRef(0);
   const [readinessWatcher, setReadinessWatcher] = useState<ReadinessWatcherEvidence>({ phase: 'loading' });
   const [experienceConfirmations, setExperienceConfirmations] = useState<Record<string, ExperienceConfirmation>>(
     () => parseExperienceConfirmations(localStorage.getItem(EXPERIENCE_CONFIRMATIONS_KEY))
@@ -686,7 +698,9 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
     diagnosticSource,
     watcher: readinessWatcher,
     confirmation: experienceConfirmations[workspace.name] || null,
-  }), [workspace.name, readinessWorkspaceHash, graphDiagnostics, effectiveDiagnostics, diagnosticSource, readinessWatcher, experienceConfirmations]);
+    differentDiskFileCount: currentDiagnosticInput?.inputs?.differentDiskFileCount,
+    diskSourceDrifted: Boolean(sourceSync?.known && sourceSync.inSync === false),
+  }), [workspace.name, readinessWorkspaceHash, graphDiagnostics, effectiveDiagnostics, diagnosticSource, readinessWatcher, experienceConfirmations, currentDiagnosticInput?.inputs?.differentDiskFileCount, sourceSync]);
 
   const x4UiVerification = React.useMemo<X4UiGameVerificationDecision>(() => {
     const statusFor = (id: ReadinessStageId) => readinessStages.find(stage => stage.id === id)?.status || 'pending';
@@ -1928,6 +1942,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
           lastServerHashRef.current = convergence.workspaceHash;
           lastServerSnapshotHashRef.current = convergence.snapshotHash;
         }
+        void checkSourceSyncNow();
         setCompileStatus('success');
         setCompileMessage(`Deployment target: ${deployData.deployedPath || deployData.stagingPath || 'not supplied'}.`);
       } else {
@@ -2197,6 +2212,232 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
   });
 
   // B1: adopt the server workspace explicitly (badge click) — the user's choice, never silent.
+  const sourceStampDir = workspace.sourceStamp?.dir || '';
+  useEffect(() => {
+    setSourceSync(null);
+    setDismissedDiskHash(null);
+    lastFailedAutoReloadHashRef.current = null;
+  }, [currentWorkspaceId, sourceStampDir]);
+
+  const checkSourceSyncNow = React.useCallback(async () => {
+    if (!sourceStampDir) return;
+    const scopeWorkspaceId = selectedWorkspaceId();
+    try {
+      const response = await fetch('/api/agent/status');
+      if (!response.ok) return;
+      const data = await response.json();
+      if (data?.workspace?.workspaceId && scopeWorkspaceId && data.workspace.workspaceId !== scopeWorkspaceId) return;
+      if (data?.sourceSync && typeof data.sourceSync.known === 'boolean') {
+        setSourceSync(data.sourceSync as WorkspaceSourceSyncStatus);
+      }
+    } catch { /* background status poll fails softly */ }
+  }, [sourceStampDir]);
+
+  useContinuousPolling<{ workspace?: { workspaceId?: string }; sourceSync?: WorkspaceSourceSyncStatus }>({
+    enabled: Boolean(sourceStampDir),
+    resourceKey: `source-sync:${currentWorkspaceId || 'unbound'}:${sourceStampDir}`,
+    contract: 'GET /api/agent/status',
+    intervalMs: 6000,
+    run: signal => fetchPollingJson('/api/agent/status', undefined, signal),
+    onResult: data => {
+      const scopeWorkspaceId = selectedWorkspaceId();
+      if (data?.workspace?.workspaceId && scopeWorkspaceId && data.workspace.workspaceId !== scopeWorkspaceId) return;
+      if (data?.sourceSync && typeof data.sourceSync.known === 'boolean') {
+        setSourceSync(data.sourceSync);
+      }
+    },
+    onError: () => undefined,
+  });
+
+  useEffect(() => {
+    if (!sourceStampDir) return;
+    const onFocusOrVisible = () => {
+      if (document.visibilityState === 'hidden') return;
+      const now = Date.now();
+      if (now - lastFocusSyncAtRef.current < 2000) return;
+      lastFocusSyncAtRef.current = now;
+      void checkSourceSyncNow();
+    };
+    window.addEventListener('focus', onFocusOrVisible);
+    document.addEventListener('visibilitychange', onFocusOrVisible);
+    return () => {
+      window.removeEventListener('focus', onFocusOrVisible);
+      document.removeEventListener('visibilitychange', onFocusOrVisible);
+    };
+  }, [sourceStampDir, checkSourceSyncNow]);
+
+  const reloadWorkspaceFromDisk = React.useCallback(async (
+    target: SourceReimportTarget,
+    mode: 'auto' | 'manual',
+    expectedDiskHash?: string,
+  ): Promise<boolean> => {
+    if (diskReloadInFlightRef.current) return false;
+    diskReloadInFlightRef.current = true;
+    setDiskSyncBusy(true);
+    const scopeWorkspaceId = selectedWorkspaceId();
+    const startRevision = workspaceRevisionRef.current;
+    const startAuthorityEpoch = syncAuthorityEpochRef.current;
+    const failAuto = () => {
+      if (mode === 'auto' && expectedDiskHash) {
+        lastFailedAutoReloadHashRef.current = expectedDiskHash;
+      }
+    };
+    try {
+      let expectedHead = lastServerHashRef.current;
+      let expectedSnapshotHash = lastServerSnapshotHashRef.current;
+      if (!expectedHead || !expectedSnapshotHash) {
+        const wsResponse = await fetch('/api/agent/workspace');
+        const wsData = await wsResponse.json().catch(() => null);
+        if (!wsResponse.ok || !wsData?.workspace || wsData.workspaceId !== scopeWorkspaceId) {
+          throw new Error(wsData?.error || `Workspace authority check failed (${wsResponse.status}).`);
+        }
+        const serverNormalized = sanitizeWorkspace(wsData.workspace);
+        const serverHash = workspaceContentHash(serverNormalized);
+        const serverSnapshotHash = workspaceSnapshotHash(serverNormalized);
+        if (serverHash !== wsData.workspaceHash || serverSnapshotHash !== wsData.snapshotHash) {
+          throw new Error('Workspace authority response failed paired-hash validation.');
+        }
+        if (mode === 'auto') {
+          const localNormalized = sanitizeWorkspace(workspaceRef.current);
+          if (serverHash !== workspaceContentHash(localNormalized) || serverSnapshotHash !== workspaceSnapshotHash(localNormalized)) {
+            failAuto();
+            return false;
+          }
+        }
+        lastServerHashRef.current = serverHash;
+        lastServerSnapshotHashRef.current = serverSnapshotHash;
+        expectedHead = serverHash;
+        expectedSnapshotHash = serverSnapshotHash;
+      }
+
+      const importRes = await fetch('/api/agent/mod-folder/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ root: target.root, path: target.path }),
+      });
+      const importData = await importRes.json().catch(() => null);
+      if (!importRes.ok || !importData?.success || !importData?.workspace) {
+        throw new Error(importData?.error || `Disk import failed (${importRes.status}).`);
+      }
+      if (selectedWorkspaceId() !== scopeWorkspaceId || syncAuthorityEpochRef.current !== startAuthorityEpoch) {
+        return false;
+      }
+      if (mode === 'auto') {
+        if (
+          localWorkspaceDirtyRef.current
+          || queuedWorkspaceSyncsRef.current > 0
+          || syncConflictRef.current
+          || workspaceRevisionRef.current !== startRevision
+          || classifyLocalEditState(workspaceRef.current) !== 'clean'
+        ) {
+          failAuto();
+          return false;
+        }
+      }
+
+      syncAuthorityEpochRef.current += 1;
+      const commitRes = await fetch('/api/agent/workspace', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workspace: importData.workspace,
+          expectedHead,
+          expectedSnapshotHash,
+        }),
+      });
+      const commitData = await commitRes.json().catch(() => null);
+      if (selectedWorkspaceId() !== scopeWorkspaceId) return false;
+      if (!commitRes.ok || !commitData?.success) {
+        throw new Error(commitData?.error || `Disk sync commit failed (${commitRes.status}).`);
+      }
+      const normalized = sanitizeWorkspace(importData.workspace);
+      if (
+        commitData.workspaceId !== scopeWorkspaceId
+        || !Number.isSafeInteger(commitData.version)
+        || commitData.version < 1
+        || commitData.workspaceHash !== workspaceContentHash(normalized)
+        || commitData.snapshotHash !== workspaceSnapshotHash(normalized)
+      ) {
+        throw new Error('Disk sync response failed workspace authority or paired-hash validation.');
+      }
+
+      saveCheckpoint(workspaceRef.current);
+      workspaceRef.current = normalized;
+      workspaceRevisionRef.current += 1;
+      setRawWorkspace(normalized);
+      localWorkspaceDirtyRef.current = false;
+      setLocalVersion(commitData.version);
+      persistScopedWorkspaceSnapshot(normalized, commitData.version, commitData.snapshotHash, scopeWorkspaceId);
+      lastServerHashRef.current = commitData.workspaceHash;
+      lastServerSnapshotHashRef.current = commitData.snapshotHash;
+      syncMissesRef.current = 0;
+      setSyncDiverged(false);
+      setSyncConflict(false);
+      setDismissedDiskHash(null);
+      lastFailedAutoReloadHashRef.current = null;
+      const retainedPending = pendingAgentWorkspaceRef.current;
+      if (retainedPending && retainedPending.workspaceId === scopeWorkspaceId) {
+        clearPendingAgentWorkspace(retainedPending);
+      }
+      setDiagnosticRevision(value => value + 1);
+      setSourceSync(prev => {
+        const stampedHash = normalized.sourceStamp?.hash || prev?.currentHash || prev?.stampedHash;
+        return {
+          known: true,
+          inSync: true,
+          detail: `Canvas matches ${normalized.sourceStamp?.dir || target.path}.`,
+          ...(stampedHash ? { stampedHash, currentHash: stampedHash } : {}),
+          diskMeta: {
+            id: normalized.contentId || undefined,
+            name: normalized.name || undefined,
+            version: normalized.version || undefined,
+            author: normalized.author || undefined,
+            description: normalized.description || undefined,
+          },
+          diskFileCounts: prev?.diskFileCounts,
+          localEditState: 'clean',
+          canAutoSync: true,
+          versionDrifted: false,
+          reimportTarget: target,
+        };
+      });
+      const verLabel = normalized.version ? `content.xml v${toContentVersion(normalized.version)}` : 'disk';
+      toast(
+        mode === 'auto'
+          ? `Synced "${normalized.name || 'Mod'}" from disk (${verLabel}).`
+          : `Reloaded "${normalized.name || 'Mod'}" from disk. Undo restores your previous canvas.`,
+        'success',
+      );
+      return true;
+    } catch (error) {
+      failAuto();
+      if (mode === 'manual') {
+        toast(`Could not reload from disk: ${error instanceof Error ? error.message : String(error)}`, 'error');
+      }
+      return false;
+    } finally {
+      diskReloadInFlightRef.current = false;
+      setDiskSyncBusy(false);
+    }
+  }, [clearPendingAgentWorkspace, persistScopedWorkspaceSnapshot, saveCheckpoint]);
+
+  const diskSyncDecision = React.useMemo(() => decideDiskSyncAction({
+    sourceSync,
+    workspace,
+    hasUnsavedLocalDirty: localWorkspaceDirtyRef.current,
+    queuedSyncs: queuedWorkspaceSyncsRef.current,
+    syncConflict,
+    inFlightReload: diskSyncBusy || diskReloadInFlightRef.current,
+    dismissedDiskHash,
+    lastFailedAutoReloadHash: lastFailedAutoReloadHashRef.current,
+  }), [sourceSync, workspace, syncConflict, diskSyncBusy, dismissedDiskHash]);
+
+  useEffect(() => {
+    if (diskSyncDecision === 'auto-reload' && sourceSync?.reimportTarget) {
+      void reloadWorkspaceFromDisk(sourceSync.reimportTarget, 'auto', sourceSync.currentHash);
+    }
+  }, [diskSyncDecision, sourceSync, reloadWorkspaceFromDisk]);
+
   const adoptServerWorkspace = async (expected?: FullWorkspacePollingResponse): Promise<boolean> => {
     syncAuthorityEpochRef.current += 1;
     setSyncConflictBusy('server');
@@ -3111,6 +3352,13 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
               : previous);
             setDiagnosticRevision(value => value + 1);
           }}
+          sourceSync={sourceSync}
+          diskSyncBusy={diskSyncBusy}
+          onReloadFromDisk={() => {
+            if (sourceSync?.reimportTarget) {
+              void reloadWorkspaceFromDisk(sourceSync.reimportTarget, 'manual', sourceSync.currentHash);
+            }
+          }}
         />
         ) : (
           <BeginnerWorkspace
@@ -3146,6 +3394,58 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
 
         {/* Center: Canvas editor viewport (Based on active workspace mode) */}
         <main data-testid="studio-workspace" className="order-0 min-w-0 flex-1 flex flex-col h-full overflow-hidden border-r border-white/10 bg-[#0a0c10]">
+          {diskSyncDecision === 'prompt-banner' && sourceSync && (
+            <div
+              data-testid="disk-source-drift-banner"
+              className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-500/30 bg-[#17130d] px-3 py-1.5 text-[11px] text-amber-100 shrink-0"
+            >
+              <div className="flex flex-wrap items-center gap-2 min-w-0">
+                <span className="font-semibold text-amber-200">Disk source changed externally</span>
+                {sourceSync.versionDrifted && sourceSync.diskMeta?.version && (
+                  <span className="font-mono text-amber-300/90">
+                    content.xml {sourceSync.diskMeta.version} on disk vs {workspace.version || '1.0.0'} in workspace
+                  </span>
+                )}
+                <span className="rounded border border-amber-400/30 bg-amber-500/10 px-1.5 py-0.5 text-[11px] text-amber-200">
+                  {!sourceSync.reimportTarget
+                    ? 'Source folder unavailable'
+                    : sourceSync.localEditState === 'local-edits'
+                      ? 'Local edits present'
+                      : sourceSync.localEditState === 'legacy-stamp'
+                        ? 'Legacy snapshot — reload once to enable live sync'
+                        : 'Pending reload'}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {sourceSync.reimportTarget && (
+                  <button
+                    type="button"
+                    data-testid="disk-source-reload-btn"
+                    disabled={diskSyncBusy}
+                    onClick={() => {
+                      if (sourceSync.reimportTarget) {
+                        void reloadWorkspaceFromDisk(sourceSync.reimportTarget, 'manual', sourceSync.currentHash);
+                      }
+                    }}
+                    className="inline-flex items-center gap-1 rounded border border-amber-400/45 bg-amber-500/20 px-2 py-0.5 text-[11px] font-medium text-amber-100 hover:bg-amber-500/30 cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw className={`h-3 w-3 ${diskSyncBusy ? 'animate-spin' : ''}`} />
+                    {diskSyncBusy ? 'Reloading…' : 'Reload from disk'}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  data-testid="disk-source-dismiss-btn"
+                  disabled={diskSyncBusy}
+                  onClick={() => setDismissedDiskHash(sourceSync.currentHash || '__dismissed__')}
+                  className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/5 px-2 py-0.5 text-[11px] text-slate-300 hover:text-white cursor-pointer disabled:opacity-50"
+                >
+                  <X className="h-3 w-3" />
+                  Keep local draft
+                </button>
+              </div>
+            </div>
+          )}
           
           {workspaceView === 'blueprint' ? (
             <Canvas
@@ -3410,6 +3710,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
           setSelectedNodeIds([]);
           setActiveMdScript(null);
           nativeSelectionOpenKeyRef.current = '';
+          void checkSourceSyncNow();
         }}
       />
 

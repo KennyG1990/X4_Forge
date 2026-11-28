@@ -40,6 +40,7 @@ export interface WorkspaceSourceStamp {
   dir: string;
   hash: string;
   at: string; // ISO timestamp of the import
+  importedWorkspaceHash?: string;
 }
 
 /** Order-independent stable hash over folder file fingerprints (path + content hash,

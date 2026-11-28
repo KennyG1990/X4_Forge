@@ -30,6 +30,9 @@ interface DiagnosticsCenterProps {
   scope: DiagnosticsScope;
   onScopeChange: (scope: DiagnosticsScope) => void;
   onSuppressionCommitted?: (sourceHash: string) => void;
+  onReloadFromDisk?: () => void;
+  diskSyncBusy?: boolean;
+  canReloadFromDisk?: boolean;
 }
 
 export type DiagnosticsScope = 'scripts' | 'package' | 'install' | 'performance';
@@ -52,6 +55,9 @@ export default function DiagnosticsCenter({
   scope,
   onScopeChange,
   onSuppressionCommitted,
+  onReloadFromDisk,
+  diskSyncBusy = false,
+  canReloadFromDisk = false,
 }: DiagnosticsCenterProps) {
 
   return (
@@ -121,6 +127,9 @@ export default function DiagnosticsCenter({
                 focus="package"
                 aiEnabled={aiEnabled}
                 onSuppressionCommitted={onSuppressionCommitted}
+                onReloadFromDisk={onReloadFromDisk}
+                diskSyncBusy={diskSyncBusy}
+                canReloadFromDisk={canReloadFromDisk}
               />
             </div>
           </div>

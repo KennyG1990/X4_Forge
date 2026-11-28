@@ -123,6 +123,15 @@ import { WorkspaceSymbolService, executeModFolderMdRename } from "./src/server/w
 import { effectiveReferenceMetadata, resolveEffectiveReferenceDocument } from "./src/lib/referenceOverlay";
 import { classifyPath, indexCueReferences, runExtensionProjectSelftest, buildContentXml, type ExtensionProject } from "./src/lib/extensionProject";
 import { selectWorkspaceValidationFiles, type WorkspaceValidationInputs } from './src/lib/workspaceValidationInputs';
+import {
+  classifyDiskFileCounts,
+  classifyLocalEditState,
+  isContentVersionDrifted,
+  workspaceImportSubstanceHash,
+  type DiskContentMeta,
+  type SourceReimportTarget,
+  type WorkspaceSourceSyncStatus,
+} from './src/lib/workspaceSourceSync';
 import { createCompileValidationReports } from './src/server/compileValidationReports';
 import { buildDependencyHealth } from './src/server/dependencyHealth';
 import { getAiSchemaIndex, getScriptPropertyIndex, registerValidationAgentRoutes } from "./src/server/validationRoutes";
@@ -7463,23 +7472,71 @@ app.get("/api/agent/status", async (req, res) => {
     const ws = record.workspace as ModWorkspace;
     res.locals.apiSubject = { modId: effectiveModId(activeBuildWorkspace(ws)), sourceHash: record.head, sourceHashScope: 'workspace-head' };
     const sourceDir = typeof (ws as any)?.sourceStamp?.dir === 'string' ? (ws as any).sourceStamp.dir : '';
+    const stampedHash = typeof (ws as any)?.sourceStamp?.hash === 'string' ? String((ws as any).sourceStamp.hash) : '';
+    const localEditState = sourceDir ? classifyLocalEditState(ws) : undefined;
+    const reimportTarget = sourceDir ? resolveReimportTargetForDir(sourceDir, resolved) : null;
 
     // Is the canvas stale relative to the folder it was imported from? This is the exact question
     // deploy answers with a hard block, so the caller should be able to ask it BEFORE deploying.
-    let sourceSync: { known: boolean; inSync?: boolean; detail: string } = { known: false, detail: 'This workspace was not imported from a folder, so there is nothing to compare.' };
+    let sourceSync: WorkspaceSourceSyncStatus = { known: false, detail: 'This workspace was not imported from a folder, so there is nothing to compare.' };
     if (sourceDir) {
       try {
         if (!fs.existsSync(sourceDir)) {
-          sourceSync = { known: true, inSync: false, detail: `The imported source folder no longer exists: ${sourceDir}` };
+          sourceSync = {
+            known: true,
+            inSync: false,
+            detail: `The imported source folder no longer exists: ${sourceDir}`,
+            ...(stampedHash ? { stampedHash } : {}),
+            localEditState,
+            canAutoSync: false,
+            reimportTarget: null,
+          };
         } else {
-          const current = hashFolderFingerprint(fingerprintModFolder(sourceDir));
-          const stamped = String((ws as any).sourceStamp?.hash || '');
-          sourceSync = current === stamped
-            ? { known: true, inSync: true, detail: `Canvas matches ${sourceDir}.` }
+          const entries = fingerprintModFolder(sourceDir);
+          const current = hashFolderFingerprint(entries);
+          const diskFileCounts = classifyDiskFileCounts(entries.map(entry => entry.path));
+          let diskMeta: DiskContentMeta | null = null;
+          try {
+            const manifestPath = path.join(sourceDir, 'content.xml');
+            if (fs.existsSync(manifestPath)) {
+              const rawManifest = decodeValidationSourceText(fs.readFileSync(manifestPath));
+              if (rawManifest) {
+                const parsedMeta = parseContentMeta(rawManifest);
+                if (parsedMeta && Object.values(parsedMeta).some(v => typeof v === 'string' && v.length > 0)) {
+                  diskMeta = parsedMeta;
+                }
+              }
+            }
+          } catch { /* leave diskMeta null if unreadable */ }
+          const canAutoSync = localEditState === 'clean' && Boolean(reimportTarget);
+          const versionDrifted = isContentVersionDrifted(diskMeta?.version, ws?.version);
+          const targetPayload = reimportTarget ?? { root: 'workspace', path: path.basename(sourceDir) };
+          sourceSync = current === stampedHash
+            ? {
+                known: true,
+                inSync: true,
+                detail: `Canvas matches ${sourceDir}.`,
+                ...(stampedHash ? { stampedHash } : {}),
+                currentHash: current,
+                diskMeta,
+                diskFileCounts,
+                localEditState,
+                canAutoSync,
+                versionDrifted,
+                reimportTarget,
+              }
             : {
                 known: true,
                 inSync: false,
-                detail: `The folder changed after this canvas imported it. Re-import with POST /api/agent/mod-folder/import {"root":"workspace","path":"${path.basename(sourceDir)}"} and deploy the returned workspace, or call deploy-verify with {"autoReimport": true}.`,
+                detail: `The folder changed after this canvas imported it. Re-import with POST /api/agent/mod-folder/import ${JSON.stringify(targetPayload)} and deploy the returned workspace, or call deploy-verify with {"autoReimport": true}.`,
+                ...(stampedHash ? { stampedHash } : {}),
+                currentHash: current,
+                diskMeta,
+                diskFileCounts,
+                localEditState,
+                canAutoSync,
+                versionDrifted,
+                reimportTarget,
               };
         }
       } catch (error: any) {
@@ -7498,6 +7555,7 @@ app.get("/api/agent/status", async (req, res) => {
         id: ws?.id,
         version: record.version,
         contentHash: workspaceHash(record),
+        snapshotHash: workspaceRegistry.snapshotHash(record),
         nodes: (ws?.nodes || []).length,
         sourceFolder: sourceDir || undefined,
       },
@@ -11358,6 +11416,7 @@ function importModFolderWithIndex(absDir: string, previous?: ModWorkspace, sourc
       dir: absDir,
       hash: hashFolderFingerprint(fingerprintModFolder(absDir)),
       at: new Date().toISOString(),
+      importedWorkspaceHash: workspaceImportSubstanceHash(ws),
     };
   } catch { /* stamping is best-effort; a missing stamp only disables the gate */ }
 
@@ -11441,6 +11500,28 @@ function resolveNativeDeployFolder(reqPath: string, requestedRoot?: unknown): Re
   if ('error' in folder) return folder;
   if (!root || !folder.physical) return { error: 'Could not resolve the explicit deployment source.', status: 400 };
   return { ...folder, selection: { root, ...folder.physical, folder: folder.abs } };
+}
+
+function resolveReimportTargetForDir(absDir: string, resolved: ReturnType<typeof resolveXsdConfig>): SourceReimportTarget | null {
+  if (!absDir) return null;
+  let physicalDir: string;
+  try { physicalDir = fs.realpathSync.native(absDir); }
+  catch { return null; }
+  const candidates: Array<{ root: 'workspace' | 'filesystem'; base?: string }> = [
+    { root: 'workspace', base: resolved.modWorkspacePath },
+    { root: 'filesystem', base: resolved.filesystemPath },
+  ];
+  for (const candidate of candidates) {
+    if (!candidate.base) continue;
+    try {
+      const physicalBase = fs.realpathSync.native(path.resolve(candidate.base));
+      const rel = path.relative(physicalBase, physicalDir);
+      if (rel && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)) {
+        return { root: candidate.root, path: rel.replace(/\\/g, '/') };
+      }
+    } catch { /* unreadable configured root — check next root */ }
+  }
+  return null;
 }
 
 function hasImportManifest(folder: string, probeText = false): boolean {
@@ -22944,6 +23025,7 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
               dir: stampedDir,
               hash: hashFolderFingerprint(fingerprintModFolder(stampedDir)),
               at: new Date().toISOString(),
+              importedWorkspaceHash: workspaceImportSubstanceHash(ws as any),
             };
             check('source-sync', 'Canvas in sync with source folder', 'warn',
               `Was stale; re-imported ${path.basename(stampedDir)} from disk on request (autoReimport) and continued with the fresh copy.`);
@@ -23961,7 +24043,12 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     if (ok && sourceStamp?.dir) {
       try {
         if (fs.existsSync(sourceStamp.dir)) {
-          (ws as any).sourceStamp = { dir: sourceStamp.dir, hash: hashFolderFingerprint(fingerprintModFolder(sourceStamp.dir)), at: new Date().toISOString() };
+          (ws as any).sourceStamp = {
+            dir: sourceStamp.dir,
+            hash: hashFolderFingerprint(fingerprintModFolder(sourceStamp.dir)),
+            at: new Date().toISOString(),
+            importedWorkspaceHash: workspaceImportSubstanceHash(ws),
+          };
         }
       } catch { /* convergence is best-effort; the gate stays safe either way */ }
     }

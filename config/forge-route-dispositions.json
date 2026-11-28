@@ -185,6 +185,7 @@
     "src/lib/workspaceQuickFixes.ts",
     "src/lib/workspaceReceiptHash.ts",
     "src/lib/workspaceRegistry.ts",
+    "src/lib/workspaceSourceSync.ts",
     "src/lib/workspaceState.ts",
     "src/lib/workspaceValidationInputs.ts",
     "src/lib/workspaceWriteRecovery.ts",

@@ -26,6 +26,9 @@ interface PackageModDoctorProps {
    *  'all' (default) = both, for standalone use. */
   focus?: 'package' | 'install' | 'all';
   onSuppressionCommitted?: (sourceHash: string) => void;
+  onReloadFromDisk?: () => void;
+  diskSyncBusy?: boolean;
+  canReloadFromDisk?: boolean;
 }
 
 interface ExtensionOpenTarget {
@@ -128,6 +131,9 @@ export default function PackageModDoctor({
   aiEnabled = false,
   focus = 'all',
   onSuppressionCommitted,
+  onReloadFromDisk,
+  diskSyncBusy = false,
+  canReloadFromDisk = false,
 }: PackageModDoctorProps) {
   const showPackage = focus !== 'install';
   const showInstall = focus !== 'package';
@@ -426,12 +432,26 @@ export default function PackageModDoctor({
                 : 'Validation result ID'}
             </summary>
             {inputs.differentDiskFileCount > 0 && (
-              <ul className="mt-1 list-disc space-y-0.5 pl-4 text-slate-300">
-                {inputs.differentDiskPaths.map(file => <li key={file} className="break-all font-mono">{file}</li>)}
-                {inputs.differentDiskFileCount > inputs.differentDiskPaths.length && (
-                  <li>{inputs.differentDiskFileCount - inputs.differentDiskPaths.length} more</li>
+              <>
+                <ul className="mt-1 list-disc space-y-0.5 pl-4 text-slate-300">
+                  {inputs.differentDiskPaths.map(file => <li key={file} className="break-all font-mono">{file}</li>)}
+                  {inputs.differentDiskFileCount > inputs.differentDiskPaths.length && (
+                    <li>{inputs.differentDiskFileCount - inputs.differentDiskPaths.length} more</li>
+                  )}
+                </ul>
+                {onReloadFromDisk && canReloadFromDisk && (
+                  <button
+                    type="button"
+                    data-testid="validation-reload-from-disk-btn"
+                    disabled={diskSyncBusy}
+                    onClick={onReloadFromDisk}
+                    className="mt-1.5 inline-flex items-center gap-1.5 rounded border border-amber-400/40 bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-100 hover:bg-amber-500/25 cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw className={`h-3 w-3 ${diskSyncBusy ? 'animate-spin' : ''}`} />
+                    {diskSyncBusy ? 'Reloading…' : 'Reload from disk'}
+                  </button>
                 )}
-              </ul>
+              </>
             )}
             {inputs.resultId && (
               <p className="mt-1 text-slate-300">

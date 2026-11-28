@@ -61,6 +61,7 @@ import {
 } from '../lib/studioLayout';
 import type { ValidationDeltaResult } from '../lib/validationDelta';
 import type { WorkspaceValidationInputs } from '../lib/workspaceValidationInputs';
+import type { WorkspaceSourceSyncStatus } from '../lib/workspaceSourceSync';
 
 interface SidebarProps {
   width?: number;
@@ -152,6 +153,9 @@ interface SidebarProps {
   onSelectSnapshot?: (snapWS: ModWorkspace | null) => void;
   onOpenReleaseCenter?: () => void;
   drawerOpen?: boolean;
+  sourceSync?: WorkspaceSourceSyncStatus | null;
+  diskSyncBusy?: boolean;
+  onReloadFromDisk?: () => void;
 }
 
 const TOOL_ICONS: Record<SidebarTab, React.ComponentType<{ className?: string }>> = {
@@ -340,6 +344,9 @@ export default function Sidebar({
   onSelectSnapshot,
   onOpenReleaseCenter,
   drawerOpen = true,
+  sourceSync = null,
+  diskSyncBusy = false,
+  onReloadFromDisk,
 }: SidebarProps) {
   const [nodeFilter, setNodeFilter] = useState<'all' | 'cue' | 'event' | 'condition' | 'action'>('all');
   const [schemaDir, setSchemaDir] = useState<string>('');
@@ -643,6 +650,9 @@ export default function Sidebar({
               onOpenCues={() => setActiveTab('cues')}
               aiEnabled={aiEnabled}
               onSuppressionCommitted={onSuppressionCommitted}
+              onReloadFromDisk={onReloadFromDisk}
+              diskSyncBusy={diskSyncBusy}
+              canReloadFromDisk={Boolean(sourceSync?.reimportTarget)}
             />
           </ErrorBoundary>
         )}
@@ -765,10 +775,36 @@ export default function Sidebar({
                 />
                 {/* Audit #1: live X4-version preview — semver ("1.0.0") and X4 integers ("100")
                     are both accepted; this shows exactly what content.xml will carry. */}
-                <p className="text-[9px] text-slate-500 mt-1 font-mono" data-testid="x4-version-preview">
+                <p className="text-[11px] text-slate-400 mt-1 font-mono" data-testid="x4-version-preview">
                   → content.xml version: <span className="text-cyan-300">{toContentVersion(workspace.version)}</span>
                   {' '}(shown in-game as v{(parseInt(toContentVersion(workspace.version), 10) / 100).toFixed(2)})
                 </p>
+                {sourceSync?.known && sourceSync.diskMeta?.version && sourceSync.versionDrifted && (
+                  <div
+                    data-testid="disk-version-drift-notice"
+                    className="mt-1.5 rounded border border-amber-500/35 bg-amber-500/10 px-2 py-1.5 font-sans text-[11px] text-amber-200 space-y-1"
+                  >
+                    <div>
+                      On disk <span className="font-mono">content.xml</span>: <span className="font-mono font-semibold text-amber-100">{sourceSync.diskMeta.version}</span> (v{(parseInt(toContentVersion(sourceSync.diskMeta.version), 10) / 100).toFixed(2)}) — workspace snapshot differs
+                    </div>
+                    {onReloadFromDisk && sourceSync.reimportTarget && (
+                      <button
+                        type="button"
+                        data-testid="manifest-reload-from-disk-btn"
+                        disabled={diskSyncBusy}
+                        onClick={onReloadFromDisk}
+                        className="rounded border border-amber-400/45 bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-100 hover:bg-amber-500/25 cursor-pointer disabled:opacity-50"
+                      >
+                        {diskSyncBusy ? 'Reloading…' : 'Reload from disk'}
+                      </button>
+                    )}
+                  </div>
+                )}
+                {sourceSync?.known && sourceSync.inSync === true && sourceSync.diskMeta?.version && !sourceSync.versionDrifted && (
+                  <p data-testid="disk-version-synced-badge" className="mt-1 font-sans text-[11px] text-emerald-300/90">
+                    Synced with disk content.xml
+                  </p>
+                )}
               </div>
 
               <div>
