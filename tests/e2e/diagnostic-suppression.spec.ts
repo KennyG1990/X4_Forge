@@ -235,9 +235,9 @@ test('Diagnostics summary waits for current validation and skips unresolvable no
     const fresh = page.getByRole('button', { name: '2 Errors', exact: true });
     await expect(fresh).toBeEnabled();
     const target = page.getByTestId('canvas-node-msg');
-    await expect(target).not.toHaveClass(/ring-cyan-500/);
+    await expect(target).not.toHaveClass(/ring-\[#3b82f6\]/);
     await fresh.press('Enter');
-    await expect(target).toHaveClass(/ring-cyan-500/);
+    await expect(target).toHaveClass(/ring-\[#3b82f6\]/);
   } finally {
     completeRecheck();
   }
@@ -357,7 +357,7 @@ test('Diagnostics Center sends the source-bound native position from project val
     await expect(graphFinding.getByRole('button', { name: 'Open source at line', exact: false })).toHaveCount(0);
     await graphFinding.getByRole('button', { name: 'Go to canvas node' }).press('Enter');
     await expect(scriptFilter).toHaveValue('bravo');
-    await expect(target).toHaveClass(/ring-cyan-500/);
+    await expect(target).toHaveClass(/ring-\[#3b82f6\]/);
     // Wait through the deferred file-fit so an immediately centered, then hidden node cannot pass.
     const centered = await target.evaluate(node => new Promise<boolean>(resolve =>
       requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -523,9 +523,9 @@ test('Diagnostics Center renders deterministic Why guidance and the reviewed sup
   await expect(rows).toHaveCount(1);
   await expect(secondMatch.getByTestId('diagnostic-why-panel')).toHaveCount(0);
   const target = page.getByTestId('canvas-node-msg');
-  await expect(target).not.toHaveClass(/ring-cyan-500/);
+  await expect(target).not.toHaveClass(/ring-\[#3b82f6\]/);
   await secondMatch.getByRole('button', { name: 'Source: node / Show Help / msg' }).press('Enter');
-  await expect(target).toHaveClass(/ring-cyan-500/);
+  await expect(target).toHaveClass(/ring-\[#3b82f6\]/);
   await search.fill('no matching fixture name');
   await expect(list.getByRole('status')).toHaveText('No matching diagnostics · 668 total');
   await expect(rows).toHaveCount(0);

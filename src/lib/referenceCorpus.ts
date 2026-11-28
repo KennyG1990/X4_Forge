@@ -53,6 +53,12 @@ export interface JobReference {
   path: string;
 }
 
+export interface TextPageReference {
+  id: string;
+  source: ReferenceSource;
+  path: string;
+}
+
 export interface OverrideOrderCallSite {
   line: number;
   orderId: string;
@@ -144,6 +150,7 @@ export interface ReferenceCorpus {
   jobs: JobReference[];
   aiScripts: AIScriptReference[];
   sectors: SectorReference[];
+  textPages?: TextPageReference[];
   symbols: CanonicalSymbol[];
   scriptProperties: ScriptPropertyReference[];
   /** Exact ordered bytes consumed by the property parser; absent on older/manual corpus values. */
@@ -155,6 +162,7 @@ export interface ReferenceCorpus {
     sectors: Set<string>;
     jobs: Set<string>;
     aiScripts: Set<string>;
+    textPages?: Set<string>;
   };
 }
 
@@ -632,9 +640,21 @@ function parsePropertyReferences(files: ReferenceFile[]): {
 
 function buildCorpus(root: string, files: ReferenceFile[], signature: string, manifestGeneration?: string): ReferenceCorpus {
   const loc: LocalizationMap = new Map();
+  const textPageMap = new Map<string, TextPageReference>();
   for (const file of files.filter(f => f.kind === 'localization')) {
-    try { parseLocalizationXml(fs.readFileSync(file.absolute, 'utf8'), loc); } catch { /* one bad language file cannot erase IDs */ }
+    try {
+      const raw = fs.readFileSync(file.absolute, 'utf8');
+      parseLocalizationXml(raw, loc);
+      const unmasked = raw.replace(/<!--[\s\S]*?-->/g, ' ');
+      for (const pageMatch of unmasked.matchAll(/<page\b[^>]*\bid\s*=\s*["'](\d+)["']/gi)) {
+        const numericId = String(Number(pageMatch[1]));
+        if (!textPageMap.has(numericId)) {
+          textPageMap.set(numericId, { id: numericId, source: file.source, path: file.relative });
+        }
+      }
+    } catch { /* one bad language file cannot erase IDs */ }
   }
+  const textPages = [...textPageMap.values()].sort((a, b) => Number(a.id) - Number(b.id) || a.id.localeCompare(b.id));
   const factions = parseFactions(files, loc);
   const wares = parseWares(files, loc);
   const jobs = parseJobs(files, loc);
@@ -662,6 +682,7 @@ function buildCorpus(root: string, files: ReferenceFile[], signature: string, ma
     jobs,
     aiScripts,
     sectors,
+    textPages,
     symbols,
     scriptProperties: scriptProperties.properties,
     scriptPropertySourceInputs: scriptProperties.sourceInputs,
@@ -672,6 +693,7 @@ function buildCorpus(root: string, files: ReferenceFile[], signature: string, ma
       sectors: new Set(sectors.map(s => s.id)),
       jobs: new Set(jobs.map(job => job.id)),
       aiScripts: new Set(aiScripts.map(script => script.id)),
+      textPages: new Set(textPages.map(page => page.id)),
     },
   };
 }
@@ -1055,6 +1077,9 @@ export function runReferenceCorpusSelftest(): {
     ok('base faction + derived category', first.factions.find(f => f.id === 'argon')?.isreal === true && first.factions.find(f => f.id === 'ownerless')?.category === 'system');
     ok('localized ware + sector', first.wares[0]?.name === 'Energy Cells' && first.sectors[0]?.name === 'Test Sector');
     ok('job IDs indexed with provenance', first.jobs[0]?.id === 'argon_patrol' && first.jobs[0]?.source === 'base');
+    ok('text page IDs indexed with provenance',
+      first.textPages?.some(page => page.id === '1' && page.source === 'base' && page.path === 't/0001-l044.xml') === true
+        && first.references.textPages?.has('1') === true);
     ok('AI script names indexed', first.aiScripts[0]?.id === 'order.patrol' && first.references.aiScripts.has('order.patrol'));
     const patrol = first.aiScripts[0]?.order;
     ok('AI order retains authored ID, category and infinite flag', patrol?.id === 'Patrol' && patrol.category === 'Navigation' && patrol.infinite === true);

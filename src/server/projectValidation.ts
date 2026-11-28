@@ -76,6 +76,12 @@ import { getAiOrderParamTypes, getAiSchemaIndex, getScriptPropertyIndex, scriptP
 import { buildValidationEvidence, decodeValidationSourceText, VALIDATION_TEXT_ENCODING_UNAVAILABLE, type SkippedValidationFile, type PayloadWriterScope, type ValidationCoverageGap, type ValidationEvidence, type ValidationSourceLocation } from '../lib/validationEvidence';
 import { createBoundedAnalysisCache } from '../lib/x4UiAnalysisCache';
 import { X4_CORE_RULE_PACK_EXPECTED_SHA256, resolveCoreX4DiagnosticRule } from '../lib/x4RulePacks';
+import {
+  evaluateAdditiveOnlyGuard,
+  type AdditiveGuardReport,
+  type VanillaAdditiveIndex,
+} from '../lib/additiveGuard';
+import { loadVanillaAdditiveIndex } from './vanillaAdditiveIndex';
 
 // Resource services replace their owned immutable indexes on a new generation. Weak keys do
 // not retain old corpora. File facts additionally bind exact source and project reference sets.
@@ -251,6 +257,7 @@ export interface ProjectValidationResult {
     diffErrors: number;
     diffWarnings: number;
     rulesErrors: number;
+    additiveErrors: number;
     rawWarnings: number;
     suppressedWarnings: number;
     activeWarnings: number;
@@ -306,6 +313,8 @@ export interface ProjectValidationResult {
       postApplyFindings: XsdDiagnostic[];
     }>;
   };
+  /** Project-level additive-only vanilla protection guard & diff hooks report (#142). */
+  additiveGuard: AdditiveGuardReport;
 }
 
 /** Dedicated MD/AI schema validators own plain script documents, not <diff> patches. */
@@ -473,7 +482,8 @@ export function runProjectValidation(
     scriptPropertyIndex?: ScriptPropertyIndex | null;
     /** Native preview uses the loaded vocabulary. Exact recheck also works after the last finding. */
     scriptPropertyAuthority?: 'offer' | 'verify';
-    incremental?: boolean; canonicalMd?: CanonicalMdValidationOptions } = {},
+    incremental?: boolean; canonicalMd?: CanonicalMdValidationOptions;
+    additiveOnly?: boolean; vanillaAdditiveIndex?: VanillaAdditiveIndex } = {},
 ): ProjectValidationResult {
   const fileKeys = new Map<ProjectFile, string>();
   const fileIdentity = (file: ProjectFile): string => {
@@ -1144,10 +1154,31 @@ export function runProjectValidation(
     payloadReads: crossFile.mdLua.payload.reads,
     payloadWrites: crossFile.mdLua.payload.writes,
   });
+  const additiveEnforced = opts.additiveOnly === true || (parsedRules.valid && parsedRules.config?.additiveOnly === true);
+  let additiveVanillaIndex = opts.vanillaAdditiveIndex;
+  if (!additiveVanillaIndex) {
+    const resolvedRoot = mdReferenceRoot ?? (() => {
+      try { return resolveXsdConfig().x4ReferenceRoot; } catch { return ''; }
+    })();
+    const catalog = resolvedRoot && canonicalMd
+      ? canonicalMd.read(resolvedRoot)
+      : undefined;
+    additiveVanillaIndex = loadVanillaAdditiveIndex(resolvedRoot, {
+      canonicalMdCatalog: catalog,
+      allowSyncMdCatalog: additiveEnforced || !canonicalMd,
+    });
+  }
+  const additiveGuard = evaluateAdditiveOnlyGuard({
+    project,
+    enforced: additiveEnforced,
+    vanillaIndex: additiveVanillaIndex,
+  });
+  const additiveErrors = additiveGuard.findings.length;
+  coverageGaps.push(...additiveGuard.coverageGaps);
   const result: ProjectValidationResult = {
     ok: structuralErrors === 0 && cueIndex.unresolved.length === 0 && crossFile.ok
       && schemaErrors === 0 && aiscriptErrors === 0 && mdPitfallErrors === 0 && diffErrors === 0 && rules.valid
-      && luaErrors === 0 && projectChecks?.status !== 'invalid',
+      && additiveErrors === 0 && luaErrors === 0 && projectChecks?.status !== 'invalid',
     summary: {
       files: project.files.length,
       luaFiles: lua.filesScanned,
@@ -1183,6 +1214,7 @@ export function runProjectValidation(
       diffErrors,
       diffWarnings,
       rulesErrors: rules.findings.length,
+      additiveErrors,
       rawWarnings: 0,
       suppressedWarnings: 0,
       activeWarnings: 0,
@@ -1211,6 +1243,7 @@ export function runProjectValidation(
     godMacros: { findings: godFindings },
     references: { available: !!references, findings: referenceFindings },
     rules,
+    additiveGuard,
     ...(projectChecks ? { projectChecks } : {}),
     diffSimulation: { files: diffSimulation },
   };
@@ -1367,6 +1400,16 @@ function flattenProjectValidationRaw(result: ProjectValidationResult): FlatProje
   }
   for (const finding of result.rules.findings) {
     out.push({ severity: finding.severity, code: finding.code, filePath: finding.filePath, sourceRef: finding.sourceRef, message: finding.message });
+  }
+  for (const finding of result.additiveGuard.findings) {
+    out.push({
+      severity: finding.severity,
+      code: finding.code,
+      filePath: finding.filePath,
+      sourceRef: finding.sourceRef,
+      line: finding.line,
+      message: finding.message,
+    });
   }
   if (result.projectChecks?.status === 'invalid') {
     out.push({ severity: 'error', code: 'project-checks.invalid', filePath: PROJECT_CHECKS_PATH, message: result.projectChecks.error });
@@ -2170,6 +2213,50 @@ export function runProjectValidationSelftest(): { pass: boolean; checks: { name:
     pass: !flattenProjectValidation(rawIdProven).some(f => f.code === 'lua.raw_engine_id_in_player_text')
       && flattenProjectValidation(rawIdLapsed).some(f => f.code === 'lua.raw_engine_id_in_player_text' && f.filePath === 'ui/aid.lua')
       && JSON.stringify(rawIdLapsed.lua.findings) === JSON.stringify(rawIdLapsedFull.lua.findings),
+  });
+  const additiveVanillaFixture: VanillaAdditiveIndex = {
+    filesAvailable: true,
+    files: new Map([['md/setup.xml', { path: 'md/setup.xml', sources: ['base'] }]]),
+    aiScriptsAvailable: true,
+    aiScripts: new Map(),
+    mdScriptsAvailable: true,
+    mdScripts: new Map([['setup', { name: 'Setup', path: 'md/setup.xml', source: 'base' }]]),
+    pageIdsAvailable: true,
+    pageIds: new Map([['1001', { id: '1001', path: 't/0001-l044.xml', source: 'base' }]]),
+  };
+  const futureReview = new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
+  const additiveProject: ExtensionProject = {
+    id: 'additive-selftest',
+    name: 'additive-selftest',
+    files: [
+      { path: 'content.xml', kind: 'content', content: contentXml },
+      {
+        path: 'forge.rules.json',
+        kind: 'other',
+        content: JSON.stringify({
+          version: 1,
+          additiveOnly: true,
+          suppressions: [{
+            id: 'attempt-suppress-additive',
+            owner: 'qa',
+            reason: 'Verify additive errors cannot be suppressed.',
+            reviewBy: futureReview,
+            code: 'additive.diff_replace_forbidden',
+            file: 'md/setup.xml',
+          }],
+        }),
+      },
+      { path: 'md/setup.xml', kind: 'md', content: '<diff>\n  <replace sel="/mdscript/cues/cue/@name">X</replace>\n</diff>' },
+    ],
+  };
+  const additiveResult = runProjectValidation(additiveProject, { vanillaAdditiveIndex: additiveVanillaFixture });
+  const additiveFlat = flattenProjectValidation(additiveResult);
+  checks.push({
+    name: 'additive_only_guard_enforced_from_rules_and_unsuppressible',
+    pass: !additiveResult.ok
+      && additiveResult.summary.additiveErrors === 1
+      && additiveResult.additiveGuard.enabled === true
+      && additiveFlat.some(f => f.code === 'additive.diff_replace_forbidden' && f.severity === 'error' && f.filePath === 'md/setup.xml'),
   });
   return { pass: checks.every(check => check.pass), checks };
 }

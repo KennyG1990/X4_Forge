@@ -282,12 +282,13 @@ function printUsage() {
     "x4validate — deterministic X4 mod validation (X4 Forge engine, no UI).",
     "",
     "Usage:  npm run validate:mod -- \"<mod folder>\" [--json]",
-    "        npm run validate:mod -- [--unpacked \"<dir>\"] [--game \"<dir>\"] [--fix] \"<mod folder>\" --format text|json|sarif|github [--fail-on error|warning|info|hint]",
+    "        npm run validate:mod -- [--unpacked \"<dir>\"] [--game \"<dir>\"] [--additive-only] [--fix] \"<mod folder>\" --format text|json|sarif|github [--fail-on error|warning|info|hint]",
     "",
     "Runs: structure, cue references (cross-file + canonical corpus), MD<->Lua event wiring,",
     "XSD validation (md.xsd + aiscripts.xsd + schema-named libraries), aiscript/order lint,",
     "scriptproperty chain lint, jobs/wares/factions/t-file content lints, game-object",
-    "reference checks, and exact root forge.rules.json v1 contracts/suppressions.",
+    "reference checks, additive-only vanilla protection guard (--additive-only or",
+    "forge.rules.json additiveOnly:true), and exact root forge.rules.json v1 contracts/suppressions.",
     "",
     "Exit codes: 0 passed | 1 failed validation gate | 2 usage/load failure",
   ].join("\n"));
@@ -306,6 +307,7 @@ function main(): number {
       game: { type: "string" },
       extensions: { type: "string", multiple: true },
       fix: { type: "boolean" },
+      "additive-only": { type: "boolean" },
     },
   });
   if (values.help) { printUsage(); return 0; }
@@ -353,6 +355,7 @@ function main(): number {
   } catch { /* rebuild overlay cache on corrupt payload */ }
 
   const result = runProjectValidation(load.project, {
+    additiveOnly: Boolean(values["additive-only"]),
     references: cliCorpus.references,
     jobsVocabulary: cliCorpus.jobsVocabulary,
     waresVocabulary: cliCorpus.waresVocabulary,
@@ -417,6 +420,8 @@ function printHumanReport(target: string, id: string, skipped: number, result: P
   console.log(`  reference warnings:         ${s.referenceWarnings} (corpus: ${hasReferences ? "loaded" : "UNAVAILABLE"})`);
   console.log(`  active/raw warnings:        ${s.activeWarnings}/${s.rawWarnings} (${s.suppressedWarnings} suppressed by reviewed project rules)`);
   console.log(`  project-rules errors:       ${s.rulesErrors} (forge.rules.json: ${result.rules.present ? (result.rules.valid ? `v${result.rules.version} valid` : "INVALID") : "not present"})`);
+  const ag = result.additiveGuard;
+  console.log(`  additive-only guard:        ${ag.enabled ? "enforced" : "advisory"} · ${s.additiveErrors} blocking error(s) · ${ag.hooks.length} diff hook(s)${ag.enabled ? "" : ag.advisoryViolationsCount > 0 ? ` · ${ag.advisoryViolationsCount} advisory violation(s)` : ""}`);
   if (!hasReferences) {
     console.log("  note: pass --unpacked <folder> or set X4_REFERENCE_ROOT to enable game-object reference checks.");
   }
@@ -432,6 +437,16 @@ function printHumanReport(target: string, id: string, skipped: number, result: P
     for (const l of lines) console.log("  " + logText(l));
   } else {
     console.log(mdCoverageGaps.length ? "\nNo findings from completed checks." : "\nNo findings.");
+  }
+
+  if (ag.hooks.length) {
+    console.log(`\nVanilla diff hooks (${ag.hooks.length}):`);
+    for (const hook of ag.hooks) {
+      const targetLabel = hook.vanillaTarget || hook.filePath;
+      const sourceNote = hook.vanillaSources.length ? ` [${hook.vanillaSources.join(",")}]` : "";
+      const selNote = hook.sel || "(missing sel)";
+      console.log(`  ${logText(`${hook.filePath} -> ${targetLabel}${sourceNote} [${hook.op}${hook.attrType ? ` type=${hook.attrType}` : ""}] ${selNote}`)}`);
+    }
   }
 
   if (mdCoverageGaps.length) {

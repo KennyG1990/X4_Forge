@@ -9232,6 +9232,7 @@ type FullWorkspaceValidation = {
 function diagnosticCategory(code: string): string {
   if (/^(xsd\.|schema\.|project\.|rules\.)/.test(code)) return "syntax";
   if (/^(reference\.|scriptproperty\.|tfile\.|jobs\.|wares\.|factions\.|god\.)/.test(code)) return "references";
+  if (/^additive\./.test(code)) return "egosoft";
   return "egosoft";
 }
 
@@ -13637,6 +13638,13 @@ function validateProjectRequest(req: express.Request, res: express.Response, lea
         verdict: drift.verdict, newerSide: drift.newerSide, summary: drift.summary };
       return {
         ok: result.ok, ...identity, resultId, detail: 'summary', summary: result.summary, counts,
+        additiveGuard: {
+          enabled: result.additiveGuard.enabled,
+          available: result.additiveGuard.available,
+          advisoryViolationsCount: result.additiveGuard.advisoryViolationsCount,
+          hooksCount: result.additiveGuard.hooks.length,
+          summary: result.additiveGuard.summary,
+        },
         ...(!canonical ? { authority: PROJECT_VALIDATE_AUTHORITY } : {}),
         ...(sourceValidationReceipt ? { validationReceipt: sourceValidationReceipt } : {}),
         evidence: { ...evidenceScalars, coverage: { complete: coverage.complete,
@@ -23579,11 +23587,11 @@ function deployVerifyHandler(req: express.Request, res: express.Response, lease?
     const aiRunScript = preflight.summary.aiRunScript;
     const validationScope = aiRunScript ? { aiRunScript } : {};
     responseIdentity = { ...responseIdentity, modId: manifestId, contentId: manifestId, modVersion: evidence.modVersion, modDate: build?.modDate ?? null,
-      sourceHash: evidence.sourceHash, artifactHash, validation: { ...validationScope, evidence, lua: luaValidation } };
+      sourceHash: evidence.sourceHash, artifactHash, validation: { ...validationScope, evidence, lua: luaValidation, additiveGuard: preflight.additiveGuard } };
     const decision = evaluateFindingAcceptances(subject, acceptances, principal);
     responseIdentity = { ...responseIdentity, modId: manifestId, modVersion: evidence.modVersion, sourceHash: evidence.sourceHash,
         artifactHash, bindingHash: decision.binding.hash, targetFingerprint, validation: { outcome: decision.outcome,
-        clean: decision.validationClean, ...validationScope, evidence, lua: luaValidation, review: projectFindingReview(decision, principal) }, binding: decision.binding };
+        clean: decision.validationClean, ...validationScope, evidence, lua: luaValidation, additiveGuard: preflight.additiveGuard, review: projectFindingReview(decision, principal) }, binding: decision.binding };
     if (body.dryRun !== true) {
       const expectedIdentity = {
         expectedModId: evidence.modId,
@@ -24289,6 +24297,7 @@ app.post("/api/agent/compile", coordinatedSourceOperation((req, res) => {
         inputs: full.inputs,
         ok: full.validation.ok,
         summary: full.validation.summary,
+        additiveGuard: full.validation.additiveGuard,
         availability: {
           mdSchema: full.validation.schema.mdAvailable,
           aiScriptSchema: full.validation.schema.aiscriptAvailable,

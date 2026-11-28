@@ -66,6 +66,7 @@ import type { ArchitectStepView } from './components/BlueprintPanel';
 import type { DiagnosticsScope } from './components/DiagnosticsCenter';
 import type { ValidationDeltaResult } from './lib/validationDelta';
 import type { WorkspaceValidationInputs } from './lib/workspaceValidationInputs';
+import type { AdditiveGuardReport } from './lib/additiveGuard';
 import type { CompileValidationCapture } from './server/compileValidationReports';
 import ReadinessLadder from './components/ReadinessLadder';
 import BeginnerWorkspace from './components/BeginnerWorkspace';
@@ -571,6 +572,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
     workspace: ModWorkspace; revision: number; source: 'project' | 'local'; inputs?: WorkspaceValidationInputs;
   } | null>(null);
   const [validationDelta, setValidationDelta] = useState<ValidationDeltaResult | null>(null);
+  const [projectAdditiveGuard, setProjectAdditiveGuard] = useState<AdditiveGuardReport | null>(null);
   const [diagnosticRevision, setDiagnosticRevision] = useState(0);
   const currentDiagnosticInput = diagnosticInput?.workspace === workspace && diagnosticInput.revision === diagnosticRevision
     ? diagnosticInput : null;
@@ -624,13 +626,14 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
           body: JSON.stringify({ workspace }),
           signal: controller.signal,
         });
-        const data = await handleApiResponse<{ diagnostics?: PackageDiagnostic[]; validation?: { scope?: string; inputs?: WorkspaceValidationInputs }; validationDelta?: ValidationDeltaResult; validationResult?: CompileValidationCapture }>(response, 'Full project validation failed.');
+        const data = await handleApiResponse<{ diagnostics?: PackageDiagnostic[]; validation?: { scope?: string; inputs?: WorkspaceValidationInputs; additiveGuard?: AdditiveGuardReport }; validationDelta?: ValidationDeltaResult; validationResult?: CompileValidationCapture }>(response, 'Full project validation failed.');
         if (data.validation?.scope !== 'full-project') {
           throw new Error('The connected Forge backend does not expose full-project live validation. Restart or update the backend.');
         }
         if (!cancelled) {
           setDiagnostics(data.diagnostics || []);
           setValidationDelta(data.validationDelta || null);
+          setProjectAdditiveGuard(data.validation.additiveGuard || null);
           const inputs = data.validation.inputs;
           const resultId = data.validationResult?.status === 'retained' ? data.validationResult.id : undefined;
           setDiagnosticInput({ workspace, revision: diagnosticRevision, source: 'project',
@@ -643,6 +646,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
         if (!cancelled) {
           setDiagnostics(localReports);
           setValidationDelta(null);
+          setProjectAdditiveGuard(null);
           setDiagnosticInput({ workspace, revision: diagnosticRevision, source: 'local' });
         }
       }
@@ -3521,6 +3525,8 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
           ) : workspaceView === 'project' ? (
             <ProjectInspector
               workspace={workspace}
+              setWorkspace={setWorkspace}
+              additiveGuard={projectAdditiveGuard}
               schemaConfigVersion={schemaConfigVersion}
               releasePreferences={releasePreferences}
               initialTab={projectTabRequest.tab}

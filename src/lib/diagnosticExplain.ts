@@ -516,6 +516,86 @@ const GUIDANCE: Array<{ matches: (code: string) => boolean; value: Guidance }> =
     },
   },
   {
+    matches: code => code === 'additive.shadowed_vanilla_file',
+    value: {
+      title: 'Full XML file shadows a vanilla X4 file',
+      why: 'In additiveOnly mode, shipping a non-<diff> XML file at the same relative path under aiscripts/, md/, libraries/, index/, or maps/ replaces the entire vanilla file instead of composing cleanly.',
+      impact: 'Shadowing vanilla breaks compatibility with other mods and drops upstream Egosoft bugfixes across game updates.',
+      next: 'Convert the file into an RFC 5261 <diff> patch with structural <add> operations anchored cleanly via sel XPath.',
+      basis: 'additive-only vanilla file index check',
+    },
+  },
+  {
+    matches: code => code === 'additive.diff_replace_forbidden',
+    value: {
+      title: 'XML <diff> uses <replace> on a vanilla target',
+      why: 'In additiveOnly mode, <replace> mutations overwrite vanilla nodes or attributes in place.',
+      impact: 'Multiple mods replacing the same vanilla node conflict, and game updates touching that node fail or silently regress.',
+      next: 'Replace destructive <replace> operations with structural <add> extensions or custom-named companion scripts/entries.',
+      basis: 'additive-only diff operation guard',
+    },
+  },
+  {
+    matches: code => code === 'additive.diff_remove_forbidden',
+    value: {
+      title: 'XML <diff> uses <remove> on a vanilla target',
+      why: 'In additiveOnly mode, <remove> deletes existing vanilla nodes from base or official DLC XML.',
+      impact: 'Deleting vanilla nodes can break downstream vanilla scripts, jobs, wares, or companion mods expecting those elements.',
+      next: 'Remove the <remove> operation and isolate mod-specific behavior inside additive <add> hooks.',
+      basis: 'additive-only diff operation guard',
+    },
+  },
+  {
+    matches: code => code === 'additive.diff_attribute_add_forbidden',
+    value: {
+      title: 'XML <diff> mutates an attribute on a vanilla node',
+      why: 'In additiveOnly mode, <add type="@..."> and selectors ending in /@attr modify attributes on existing vanilla elements just like an in-place overwrite.',
+      impact: 'Attribute rewrites collide with other extensions and mask vanilla attribute defaults across game patches.',
+      next: 'Avoid attribute-mutation adds on vanilla elements; append child elements with structural <add> or introduce a separate mod-owned entry.',
+      basis: 'additive-only diff attribute guard',
+    },
+  },
+  {
+    matches: code => code === 'additive.reused_vanilla_aiscript_name',
+    value: {
+      title: 'AI script reuses a vanilla aiscript name',
+      why: 'A non-<diff> file under aiscripts/ declares <aiscript name="..."> matching a base-game or official DLC script.',
+      impact: 'Duplicate script names overwrite or collide with vanilla order and script execution.',
+      next: 'Rename the custom script with a mod-specific prefix, or hook the vanilla script cleanly via an additive <diff><add> patch.',
+      basis: 'additive-only vanilla aiscript name index',
+    },
+  },
+  {
+    matches: code => code === 'additive.reused_vanilla_mdscript_name',
+    value: {
+      title: 'Mission Director script reuses a vanilla mdscript name',
+      why: 'A non-<diff> file under md/ declares <mdscript name="..."> matching a base-game or official DLC Mission Director script.',
+      impact: 'Duplicate MD script names hijack or collide with canonical base/DLC cue hierarchies.',
+      next: 'Rename the custom <mdscript> with a unique mod identifier, or extend the vanilla MD file cleanly with <diff><add>.',
+      basis: 'additive-only vanilla mdscript name index',
+    },
+  },
+  {
+    matches: code => code === 'additive.reused_vanilla_page_id',
+    value: {
+      title: 'Localization file reuses a vanilla text page ID',
+      why: 'A t/*.xml file defines <page id="..."> matching a numeric page ID owned by base-game or official DLC text files.',
+      impact: 'Reusing vanilla localization page IDs risks overwriting vanilla UI strings and colliding with game updates.',
+      next: 'Allocate a dedicated custom <page id="..."> outside vanilla page ranges and update references accordingly.',
+      basis: 'additive-only vanilla localization page index',
+    },
+  },
+  {
+    matches: code => code.startsWith('additive.'),
+    value: {
+      title: 'Additive-only vanilla guard violation',
+      why: 'The project enforces additiveOnly in forge.rules.json (or --additive-only), forbidding files that shadow vanilla XML, destructive <replace>/<remove>/<add type="@..."> <diff> mutations on vanilla nodes, reused vanilla aiscript/mdscript names, or reused vanilla t-file page IDs.',
+      impact: 'Overwriting vanilla logic or page IDs creates fragile save/mod conflicts and breaks cleanly across X4 game updates.',
+      next: 'Convert shadowed files into structural <diff><add> patches, avoid <replace>/<remove>/attribute <add> on vanilla nodes, give custom scripts unique names, and allocate unused mod-specific <page id="..."> ranges.',
+      basis: 'project additive-only vanilla protection guard',
+    },
+  },
+  {
     matches: code => code.startsWith('validation.'),
     value: {
       title: 'A required validation layer was unavailable',

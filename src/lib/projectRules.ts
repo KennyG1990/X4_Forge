@@ -53,6 +53,7 @@ export interface ExpectedRegisterRule {
 export interface ProjectRulesV1 {
   version: 1;
   versionPolicy?: 'per-deploy' | 'per-release';
+  additiveOnly?: boolean;
   suppressions: WarningSuppressionRule[];
   contracts: {
     knownChains: KnownChainRule[];
@@ -110,7 +111,7 @@ export interface ProjectRulesEvaluation {
   activeWarnings: number;
 }
 
-const ROOT_KEYS = new Set(['$schema', 'version', 'versionPolicy', 'suppressions', 'contracts']);
+const ROOT_KEYS = new Set(['$schema', 'version', 'versionPolicy', 'additiveOnly', 'suppressions', 'contracts']);
 const CONTRACT_KEYS = new Set(['knownChains', 'wireKeys', 'expectedRegisters']);
 const REVIEWED_KEYS = ['id', 'owner', 'reason', 'reviewBy'] as const;
 const ID_RE = /^[a-z][a-z0-9._-]{2,63}$/;
@@ -204,6 +205,10 @@ function parseProjectRulesValue(value: unknown, now: Date): { config?: ProjectRu
   if (value.versionPolicy !== undefined && !versionPolicy) {
     findings.push(error('rules.invalid_value', 'versionPolicy must be "per-deploy" or "per-release".', 'versionPolicy'));
   }
+  const additiveOnly = typeof value.additiveOnly === 'boolean' ? value.additiveOnly : undefined;
+  if (value.additiveOnly !== undefined && typeof value.additiveOnly !== 'boolean') {
+    findings.push(error('rules.invalid_value', 'additiveOnly must be a boolean.', 'additiveOnly'));
+  }
 
   const ids = new Set<string>();
   const claimId = (id: string, at: string) => {
@@ -285,7 +290,9 @@ function parseProjectRulesValue(value: unknown, now: Date): { config?: ProjectRu
   }
 
   const config: ProjectRulesV1 = {
-    version: 1, ...(versionPolicy ? { versionPolicy } : {}),
+    version: 1,
+    ...(versionPolicy ? { versionPolicy } : {}),
+    ...(additiveOnly !== undefined ? { additiveOnly } : {}),
     suppressions, contracts: { knownChains, wireKeys, expectedRegisters },
   };
   return findings.length ? { findings } : { config, findings };
@@ -298,7 +305,7 @@ export function parseProjectRules(project: ExtensionProject, opts: { now?: Date 
     return { present: true, valid: false, findings: [error('rules.duplicate_file', 'Project contains more than one root forge.rules.json (case-insensitive).')], matches: [], unmatched: [], suppressed: [], rawWarnings: 0, activeWarnings: 0 };
   }
   const raw = files[0].content || '';
-  if (Buffer.byteLength(raw, 'utf8') > PROJECT_RULES_MAX_BYTES) {
+  if (new TextEncoder().encode(raw).length > PROJECT_RULES_MAX_BYTES) {
     return { present: true, valid: false, findings: [error('rules.file_too_large', `forge.rules.json exceeds ${PROJECT_RULES_MAX_BYTES} bytes.`)], matches: [], unmatched: [], suppressed: [], rawWarnings: 0, activeWarnings: 0 };
   }
   let value: unknown;
@@ -409,6 +416,16 @@ export function runProjectRulesSelftest(): { allPassed: boolean; pass: boolean; 
     const result = versionRules(value);
     return !result.valid && !result.config && result.findings.some(finding =>
       finding.code === 'rules.invalid_value' && finding.sourceRef === 'versionPolicy');
+  }));
+  const additiveRules = (additiveOnly: unknown) => parseProjectRules(projectWithRules({ version: 1, additiveOnly }), { now });
+  check('explicit additiveOnly booleans parse cleanly while omitted stays undefined',
+    parsed.config?.additiveOnly === undefined
+    && additiveRules(true).config?.additiveOnly === true
+    && additiveRules(false).config?.additiveOnly === false);
+  check('non-boolean additiveOnly values fail closed', ['yes', 1, null, {}].every(value => {
+    const result = additiveRules(value);
+    return !result.valid && !result.config && result.findings.some(finding =>
+      finding.code === 'rules.invalid_value' && finding.sourceRef === 'additiveOnly');
   }));
   const evaluated = evaluateProjectRuleContracts(parsed, {
     registered: [{ event: 'mod.chat.', file: 'ui/main.lua', prefix: true }],

@@ -13,8 +13,15 @@ import { workspaceSourceFiles } from '../types';
  */
 
 import { useEffect, useMemo, useState } from 'react';
-import { FolderTree, FileCode, FileText, Box, Link2, AlertTriangle, CheckCircle2, Plug } from 'lucide-react';
+import { FolderTree, FileCode, FileText, Box, Link2, AlertTriangle, CheckCircle2, Plug, Shield } from 'lucide-react';
 import { ModWorkspace, generateMDXML } from '../types';
+import {
+  inspectWorkspaceDiffHooks,
+  toggleAdditiveOnlyInRulesJson,
+  type AdditiveGuardReport,
+  type VanillaDiffHook,
+} from '../lib/additiveGuard';
+import { parseProjectRules } from '../lib/projectRules';
 import {
   classifyPath,
   validateProjectStructure,
@@ -83,6 +90,8 @@ const PROJECT_TABS: readonly ProjectTab[] = ['overview', 'xml-references', 'rele
 
 interface ProjectInspectorProps {
   workspace: ModWorkspace;
+  setWorkspace?: (ws: ModWorkspace) => void;
+  additiveGuard?: AdditiveGuardReport | null;
   schemaConfigVersion?: number;
   releasePreferences?: ReleasePreferences;
   initialTab?: ProjectTab;
@@ -94,6 +103,8 @@ interface ProjectInspectorProps {
 
 export default function ProjectInspector({
   workspace,
+  setWorkspace,
+  additiveGuard = null,
   schemaConfigVersion = 0,
   releasePreferences = DEFAULT_RELEASE_PREFERENCES,
   initialTab = 'overview',
@@ -103,12 +114,63 @@ export default function ProjectInspector({
   onOpenReleaseCenter,
 }: ProjectInspectorProps) {
   const [view, setView] = useState<ProjectTab>(initialTab);
+  const [additiveToggleError, setAdditiveToggleError] = useState<string | null>(null);
   useEffect(() => {
     if (tabRequestNonce > 0) setView(initialTab);
   }, [initialTab, tabRequestNonce]);
   const project = useMemo(() => projectFromWorkspace(workspace), [workspace]);
   const structure = useMemo(() => validateProjectStructure(project), [project]);
   const cueIndex = useMemo(() => indexCueReferences(project), [project]);
+
+  const rulesFile = useMemo(
+    () => workspaceSourceFiles(workspace).find(
+      item => item.path.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase() === 'forge.rules.json',
+    ),
+    [workspace],
+  );
+  const parsedRules = useMemo(
+    () => parseProjectRules({
+      id: project.id,
+      name: project.name,
+      files: rulesFile && typeof rulesFile.content === 'string'
+        ? [{ path: 'forge.rules.json', kind: 'other', content: rulesFile.content }]
+        : [],
+    }),
+    [project.id, project.name, rulesFile],
+  );
+  const additiveEnabled = parsedRules.valid && parsedRules.config?.additiveOnly !== undefined
+    ? parsedRules.config.additiveOnly
+    : Boolean(additiveGuard?.enabled);
+  const diffHooks = useMemo<VanillaDiffHook[]>(
+    () => additiveGuard?.hooks ?? inspectWorkspaceDiffHooks(project.files),
+    [additiveGuard, project.files],
+  );
+  const handleToggleAdditiveOnly = () => {
+    if (!setWorkspace) return;
+    if (rulesFile?.omitted && typeof rulesFile.content !== 'string') {
+      setAdditiveToggleError('forge.rules.json is omitted due to size; edit it externally.');
+      return;
+    }
+    const next = toggleAdditiveOnlyInRulesJson(rulesFile?.content, !additiveEnabled);
+    if ('error' in next) {
+      setAdditiveToggleError(next.error);
+      return;
+    }
+    setAdditiveToggleError(null);
+    const existing = Array.isArray(workspace.passthroughFiles) ? workspace.passthroughFiles : [];
+    const nextPassthrough = existing.filter(
+      item => item.path.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase() !== 'forge.rules.json',
+    );
+    nextPassthrough.push({
+      path: 'forge.rules.json',
+      content: next.content,
+      bytes: new TextEncoder().encode(next.content).length,
+    });
+    setWorkspace({
+      ...workspace,
+      passthroughFiles: nextPassthrough,
+    });
+  };
 
   // The dynamically-loaded API defs live on the server; fetch the merged registry
   // so the client validates against the same set (built-ins + dropped-in defs).
@@ -228,6 +290,97 @@ export default function ProjectInspector({
             : `${structuralErrors.length} structural error(s), ${cueIndex.unresolved.length} unresolved cross-file cue reference(s).`}
         </span>
       </div>
+
+      {/* #142 — Project additive-only vanilla protection guard & diff hooks report */}
+      <section data-testid="project-additive-guard" className="rounded-lg border border-[#262c36] bg-[#11141a] p-3.5 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Shield className="w-4 h-4 text-[#93c5fd]" />
+            <h3 className="text-xs font-semibold text-[#eef2f7]">Additive-Only Guard &amp; Vanilla Diff Hooks</h3>
+            <span
+              data-testid="project-additive-guard-status"
+              className={`rounded border px-2 py-0.5 text-[11px] font-medium ${
+                additiveEnabled
+                  ? 'border-emerald-500/35 bg-emerald-950/20 text-emerald-300'
+                  : 'border-[#262c36] bg-[#0a0c10] text-[#a0aab8]'
+              }`}
+            >
+              {additiveEnabled ? 'Enforced (additiveOnly: true)' : 'Advisory only'}
+            </span>
+          </div>
+          {setWorkspace && (
+            <button
+              type="button"
+              data-testid="project-additive-only-toggle"
+              onClick={handleToggleAdditiveOnly}
+              className="rounded-md border border-[#3b82f6]/40 bg-[#3b82f6]/15 hover:bg-[#3b82f6]/25 px-2.5 py-1 text-[11px] font-medium text-[#93c5fd] cursor-pointer transition-colors"
+            >
+              {additiveEnabled ? 'Disable additiveOnly in forge.rules.json' : 'Enable additiveOnly in forge.rules.json'}
+            </button>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3 font-mono text-[11px] text-[#a0aab8]">
+          <span>Diff hooks: <strong className="text-[#eef2f7]">{diffHooks.length}</strong></span>
+          {additiveGuard && (
+            <>
+              <span>Shadowed vanilla files: <strong className="text-[#eef2f7]">{additiveGuard.summary.vanillaFilesShadowed}</strong></span>
+              <span>Destructive diffs: <strong className="text-[#eef2f7]">{additiveGuard.summary.destructiveDiffOps}</strong></span>
+              <span>Reused scripts/pages: <strong className="text-[#eef2f7]">{additiveGuard.summary.reusedAiScriptNames + additiveGuard.summary.reusedMdScriptNames + additiveGuard.summary.reusedPageIds}</strong></span>
+            </>
+          )}
+          {workspace.sourceStamp?.dir && (
+            <span className="font-sans text-[#687385]">
+              Disk-backed workspace: deploy/export to persist <code className="text-[#a0aab8]">forge.rules.json</code> changes on disk.
+            </span>
+          )}
+        </div>
+
+        {additiveToggleError && (
+          <div className="rounded border border-rose-500/35 bg-rose-950/20 px-2.5 py-1.5 text-[11px] text-rose-300">
+            {additiveToggleError}
+          </div>
+        )}
+
+        <div data-testid="project-vanilla-hooks-report" className="rounded-md border border-[#262c36] bg-[#0a0c10] p-2.5">
+          {diffHooks.length === 0 ? (
+            <div className="text-[11px] text-[#687385]">No XML &lt;diff&gt; patch hooks declared in this project.</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-[11px] font-mono">
+                <thead>
+                  <tr className="border-b border-[#262c36] text-[#687385]">
+                    <th className="py-1 pr-3 font-medium">File</th>
+                    <th className="py-1 pr-3 font-medium">Op</th>
+                    <th className="py-1 pr-3 font-medium">Vanilla Target</th>
+                    <th className="py-1 font-medium">Selector (sel)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[#262c36]/60">
+                  {diffHooks.map((hook, idx) => (
+                    <tr key={`${hook.filePath}-${hook.line ?? idx}-${idx}`}>
+                      <td className="py-1.5 pr-3 text-[#eef2f7] whitespace-nowrap">{hook.filePath}{hook.line ? `:${hook.line}` : ''}</td>
+                      <td className="py-1.5 pr-3 whitespace-nowrap">
+                        <span className={`rounded px-1.5 py-0.5 text-[11px] ${hook.additive ? 'bg-emerald-500/15 text-emerald-300' : 'bg-rose-500/15 text-rose-300'}`}>
+                          {hook.op}{hook.attrType ? ` (${hook.attrType})` : ''}
+                        </span>
+                      </td>
+                      <td className="py-1.5 pr-3 text-[#a0aab8] whitespace-nowrap">
+                        {hook.isVanillaTarget
+                          ? `${hook.vanillaTarget}${hook.vanillaSources.length ? ` (${hook.vanillaSources.join(', ')})` : ''}`
+                          : additiveGuard?.available === false
+                            ? `${hook.vanillaTarget} (corpus unverified)`
+                            : `${hook.vanillaTarget} (non-vanilla)`}
+                      </td>
+                      <td className="py-1.5 text-[#a0aab8] break-all">{hook.sel || '(missing sel)'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </section>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* file tree */}
