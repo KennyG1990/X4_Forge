@@ -86,27 +86,27 @@ export default function BlueprintPanel({
     <button
       type="button"
       onClick={() => setView(id)}
-      className={`flex-1 py-1.5 text-[9px] font-mono font-bold uppercase tracking-wide flex items-center justify-center gap-1 transition-all cursor-pointer ${
-        view === id ? 'text-[#df9825] bg-[#df9825]/5 border-b-2 border-[#df9825]' : 'text-slate-400 border-b-2 border-transparent hover:text-slate-200'
+      className={`flex-1 py-2 text-[11px] font-medium flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+        view === id ? 'text-[#93c5fd] bg-[#3b82f6]/10 border-b-2 border-[#3b82f6]' : 'text-[#a0aab8] border-b-2 border-transparent hover:text-[#eef2f7]'
       }`}
     >
-      <Icon className="w-3 h-3" /> {label}
+      <Icon className="w-3.5 h-3.5" /> {label}
     </button>
   );
 
   return (
-    <div className="flex flex-col h-full min-h-0 font-sans text-slate-300">
+    <div data-testid="architect-blueprint-panel" className="flex flex-col h-full min-h-0 font-sans bg-[#0c0e12] text-[#eef2f7]">
       {/* Intent + progress */}
-      <div className="p-3 border-b border-white/5 bg-black/30 shrink-0 space-y-1.5">
-        <div className="text-[8.5px] font-mono font-bold uppercase tracking-wider text-slate-500">Blueprint — Goal (editable)</div>
+      <div className="p-3 border-b border-[#262c36] bg-[#11141a] shrink-0 space-y-1.5">
+        <div className="text-[11px] font-medium text-[#a0aab8]">Blueprint — Goal (editable)</div>
         <input
           value={bp.intent}
           onChange={e => update({ ...bp, intent: e.target.value })}
           placeholder="Describe the mod's goal…"
-          className="w-full bg-[#0F1115] border border-white/10 rounded px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-[#df9825] font-sans"
+          className="w-full bg-[#0a0c10] border border-[#262c36] rounded px-2.5 py-1.5 text-[11px] text-[#eef2f7] placeholder-[#687385] focus:outline-none focus:border-[#3b82f6] font-sans"
         />
-        <div className="flex items-center gap-2 text-[9px] font-mono text-slate-500">
-          <span className="text-emerald-400 font-bold">{prog.done}/{prog.total}</span> tasks verified done
+        <div className="flex items-center gap-2 text-[11px] font-mono text-[#a0aab8]">
+          <span className="text-emerald-400 font-semibold">{prog.done}/{prog.total}</span> tasks verified done
         </div>
       </div>
 
@@ -115,57 +115,57 @@ export default function BlueprintPanel({
           referee (vetTaskProposal) decides accept/revise/reject; a task reaches done only when
           its check passes. */}
       {onRunStep && (
-        <div className="p-3 border-b border-white/5 bg-[#0d0f13] shrink-0 space-y-2">
+        <div className="p-3 border-b border-[#262c36] bg-[#11141a] shrink-0 space-y-2">
           <button
             type="button"
             onClick={onRunStep}
             disabled={running || !canRun}
             title={!canRun ? (runDisabledReason || 'Unavailable') : 'Draft the next task with the model, then verify it deterministically'}
-            className={`w-full flex items-center justify-center gap-1.5 py-1.5 rounded text-[10px] font-mono font-bold uppercase tracking-wider transition-all ${
-              running || !canRun ? 'bg-slate-800 text-slate-500 border border-white/10 cursor-not-allowed' : 'bg-cyan-500 hover:bg-cyan-400 text-black cursor-pointer'
+            className={`w-full flex items-center justify-center gap-1.5 py-1.5 rounded text-[11px] font-semibold transition-colors ${
+              running || !canRun ? 'bg-[#171b23] text-[#687385] border border-[#262c36] cursor-not-allowed' : 'bg-[#3b82f6] hover:bg-[#2563eb] text-white cursor-pointer'
             }`}
           >
-            {running ? <><Loader2 className="w-3 h-3 animate-spin" /> Working…</> : <><Play className="w-3 h-3" /> Run Architect step</>}
+            {running ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Working…</> : <><Play className="w-3.5 h-3.5" /> Run Architect step</>}
           </button>
           {!canRun && runDisabledReason && (
-            <div className="text-[9px] text-amber-300/80 font-sans leading-snug">{runDisabledReason}</div>
+            <div className="text-[11px] text-amber-300 font-sans leading-snug">{runDisabledReason}</div>
           )}
 
           {step && (
-            <div className={`rounded border p-2 space-y-1.5 ${
+            <div className={`rounded border p-2.5 space-y-1.5 ${
               step.decision === 'accept' ? 'border-emerald-500/30 bg-emerald-500/[0.06]'
-                : step.decision === 'reject' || step.decision === 'error' ? 'border-red-500/30 bg-red-500/[0.06]'
+                : step.decision === 'reject' || step.decision === 'error' ? 'border-rose-500/30 bg-rose-500/[0.06]'
                   : 'border-amber-500/30 bg-amber-500/[0.06]'
             }`}>
-              <div className="flex items-center gap-1.5 text-[9px] font-mono font-bold uppercase tracking-wider">
-                {step.decision === 'accept' ? <Check className="w-3 h-3 text-emerald-400" />
-                  : step.decision === 'reject' ? <X className="w-3 h-3 text-red-400" />
-                    : <AlertTriangle className={`w-3 h-3 ${step.decision === 'error' ? 'text-red-400' : 'text-amber-400'}`} />}
-                <span className={step.decision === 'accept' ? 'text-emerald-300' : step.decision === 'reject' ? 'text-red-300' : step.decision === 'error' ? 'text-red-300' : 'text-amber-300'}>
+              <div className="flex items-center gap-1.5 text-[11px] font-semibold">
+                {step.decision === 'accept' ? <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  : step.decision === 'reject' ? <X className="w-3.5 h-3.5 text-rose-400" />
+                    : <AlertTriangle className={`w-3.5 h-3.5 ${step.decision === 'error' ? 'text-rose-400' : 'text-amber-400'}`} />}
+                <span className={step.decision === 'accept' ? 'text-emerald-300' : step.decision === 'reject' || step.decision === 'error' ? 'text-rose-300' : 'text-amber-300'}>
                   {step.decision === 'accept' ? 'Proposal verified' : step.decision === 'reject' ? 'Rejected' : step.decision === 'error' ? 'Step failed' : 'Sent back for revision'}
                 </span>
               </div>
-              {step.taskTitle && <div className="text-[10px] text-slate-300 font-sans">Task: <span className="text-slate-200">{step.taskTitle}</span></div>}
+              {step.taskTitle && <div className="text-[11px] text-[#cbd5e1] font-sans">Task: <span className="text-[#eef2f7]">{step.taskTitle}</span></div>}
               {step.verdicts && (
-                <div className="flex gap-2 text-[9px] font-mono">
-                  <span className="text-slate-500">SCHEMA <span className={verdictColor(step.verdicts.schema)}>{step.verdicts.schema.toUpperCase()}</span></span>
-                  <span className="text-slate-500">GRAPH <span className={verdictColor(step.verdicts.graph)}>{step.verdicts.graph.toUpperCase()}</span></span>
-                  <span className="text-slate-500">INTENT <span className={verdictColor(step.verdicts.intent)}>{step.verdicts.intent.toUpperCase()}</span></span>
+                <div className="flex flex-wrap gap-2 text-[11px] font-mono">
+                  <span className="text-[#a0aab8]">Schema <span className={verdictColor(step.verdicts.schema)}>{step.verdicts.schema}</span></span>
+                  <span className="text-[#a0aab8]">Graph <span className={verdictColor(step.verdicts.graph)}>{step.verdicts.graph}</span></span>
+                  <span className="text-[#a0aab8]">Intent <span className={verdictColor(step.verdicts.intent)}>{step.verdicts.intent}</span></span>
                 </div>
               )}
-              <div className="text-[9.5px] text-slate-400 font-sans leading-snug">{step.reason}</div>
+              <div className="text-[11px] text-[#a0aab8] font-sans leading-snug">{step.reason}</div>
               {step.decision === 'accept' && onConfirmStep && (
                 <div className="grid grid-cols-2 gap-1.5 pt-0.5">
-                  <button type="button" onClick={onConfirmStep} className="py-1 rounded bg-emerald-500 hover:bg-emerald-400 text-black text-[9px] font-mono font-bold uppercase tracking-wider cursor-pointer flex items-center justify-center gap-1">
-                    <Check className="w-3 h-3" /> Confirm & apply
+                  <button type="button" onClick={onConfirmStep} className="py-1 rounded bg-emerald-500 hover:bg-emerald-400 text-black text-[11px] font-semibold cursor-pointer flex items-center justify-center gap-1">
+                    <Check className="w-3.5 h-3.5" /> Confirm & apply
                   </button>
-                  <button type="button" onClick={onDeclineStep} className="py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-white/10 text-[9px] font-mono font-bold uppercase tracking-wider cursor-pointer flex items-center justify-center gap-1">
-                    <X className="w-3 h-3 text-red-400" /> Decline
+                  <button type="button" onClick={onDeclineStep} className="py-1 rounded bg-[#171b23] hover:bg-[#262c36] text-[#cbd5e1] border border-[#262c36] text-[11px] font-semibold cursor-pointer flex items-center justify-center gap-1">
+                    <X className="w-3.5 h-3.5 text-rose-400" /> Decline
                   </button>
                 </div>
               )}
               {step.decision !== 'accept' && (
-                <div className="text-[9px] font-mono text-slate-500">{step.decision === 'reject' ? 'Logged to lessons — won\'t be re-proposed.' : 'Nothing applied. Run again to retry.'}</div>
+                <div className="text-[11px] font-mono text-[#a0aab8]">{step.decision === 'reject' ? 'Logged to lessons — won\'t be re-proposed.' : 'Nothing applied. Run again to retry.'}</div>
               )}
             </div>
           )}
@@ -173,7 +173,7 @@ export default function BlueprintPanel({
       )}
 
       {/* Sub-view tabs */}
-      <div className="flex border-b border-white/5 bg-black/40 shrink-0">
+      <div className="flex border-b border-[#262c36] bg-[#11141a] shrink-0">
         <Tab id="plan" label="Plan" icon={ClipboardList} />
         <Tab id="tasks" label="Tasks" icon={ListChecks} />
         <Tab id="scratch" label="Scratchpad" icon={NotebookPen} />
@@ -184,22 +184,22 @@ export default function BlueprintPanel({
           <>
             {evaluated.requirements.length > 0 && (
               <div className="space-y-1">
-                <div className="text-[8.5px] font-mono font-bold uppercase tracking-wider text-slate-500">Requirements</div>
+                <div className="text-[11px] font-medium text-[#a0aab8]">Requirements</div>
                 {evaluated.requirements.map((r, i) => (
-                  <div key={i} className="text-[10.5px] text-slate-300 flex items-start gap-1.5"><span className="text-slate-600">•</span>{r}</div>
+                  <div key={i} className="text-[11px] text-[#cbd5e1] flex items-start gap-1.5"><span className="text-[#687385]">•</span>{r}</div>
                 ))}
               </div>
             )}
-            <div className="text-[8.5px] font-mono font-bold uppercase tracking-wider text-slate-500 pt-1">Implementation plan</div>
+            <div className="text-[11px] font-medium text-[#a0aab8] pt-1">Implementation plan</div>
             {evaluated.implementationPlan.length === 0 ? (
-              <div className="text-[10px] text-slate-500 italic">No plan yet.</div>
+              <div className="text-[11px] text-[#687385] italic">No plan yet.</div>
             ) : evaluated.implementationPlan.map((s, i) => (
-              <div key={s.id} className="bg-[#12141a]/60 border border-white/5 rounded p-2 space-y-0.5">
-                <div className="text-[10.5px] text-slate-200 font-medium flex items-start gap-1.5">
-                  <span className="text-[#df9825] font-mono font-bold">{i + 1}.</span> {s.step}
+              <div key={s.id} className="bg-[#11141a] border border-[#262c36] rounded p-2.5 space-y-1">
+                <div className="text-xs text-[#eef2f7] font-medium flex items-start gap-1.5">
+                  <span className="text-[#60a5fa] font-mono font-semibold">{i + 1}.</span> {s.step}
                 </div>
-                {s.rationale && <div className="text-[9.5px] text-slate-500 pl-4">{s.rationale}</div>}
-                {s.doneCheck && <div className="text-[9px] font-mono text-cyan-400/80 pl-4">✓ check: {s.doneCheck}</div>}
+                {s.rationale && <div className="text-[11px] text-[#a0aab8] pl-4">{s.rationale}</div>}
+                {s.doneCheck && <div className="text-[11px] font-mono text-[#60a5fa] pl-4">✓ check: {s.doneCheck}</div>}
               </div>
             ))}
           </>
@@ -207,18 +207,18 @@ export default function BlueprintPanel({
 
         {view === 'tasks' && (
           evaluated.tasks.length === 0 ? (
-            <div className="text-[10px] text-slate-500 italic">No tasks yet.</div>
+            <div className="text-[11px] text-[#687385] italic">No tasks yet.</div>
           ) : evaluated.tasks.map(t => (
-            <div key={t.id} className="bg-[#12141a]/60 border border-white/5 rounded p-2 flex items-start justify-between gap-2">
+            <div key={t.id} className="bg-[#11141a] border border-[#262c36] rounded p-2.5 flex items-start justify-between gap-2">
               <div className="space-y-0.5 min-w-0">
-                <div className="text-[10.5px] text-slate-200 font-medium">{t.title}</div>
+                <div className="text-xs text-[#eef2f7] font-medium">{t.title}</div>
                 {t.doneCheck && (
-                  <div className={`text-[9px] font-mono flex items-center gap-1 ${t.checkPassed ? 'text-emerald-400' : 'text-slate-500'}`}>
-                    {t.checkPassed && <Check className="w-2.5 h-2.5" />} check: {t.doneCheck}{t.checkPassed ? ' (passed)' : ''}
+                  <div className={`text-[11px] font-mono flex items-center gap-1 ${t.checkPassed ? 'text-emerald-400' : 'text-[#a0aab8]'}`}>
+                    {t.checkPassed && <Check className="w-3 h-3" />} check: {t.doneCheck}{t.checkPassed ? ' (passed)' : ''}
                   </div>
                 )}
               </div>
-              <span className={`shrink-0 px-1.5 py-0.5 rounded border text-[8px] font-mono font-bold uppercase ${statusStyle[t.status] || statusStyle.pending}`}>
+              <span className={`shrink-0 px-1.5 py-0.5 rounded border text-[11px] font-mono font-medium ${statusStyle[t.status] || statusStyle.pending}`}>
                 {t.status.replace('_', ' ')}
               </span>
             </div>
@@ -233,9 +233,9 @@ export default function BlueprintPanel({
                 onChange={e => setNoteDraft(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') addNote(); }}
                 placeholder="Add a note to the scratchpad…"
-                className="flex-1 bg-[#0F1115] border border-white/10 rounded px-2 py-1 text-[10px] text-slate-200 focus:outline-none focus:border-[#df9825] font-sans"
+                className="flex-1 bg-[#0a0c10] border border-[#262c36] rounded px-2.5 py-1.5 text-[11px] text-[#eef2f7] placeholder-[#687385] focus:outline-none focus:border-[#3b82f6] font-sans"
               />
-              <button type="button" onClick={addNote} className="px-2 py-1 bg-[#df9825]/15 hover:bg-[#df9825]/25 border border-[#df9825]/30 text-[#df9825] rounded text-[9px] font-mono font-bold uppercase cursor-pointer">Add</button>
+              <button type="button" onClick={addNote} className="px-2.5 py-1.5 bg-[#3b82f6]/15 hover:bg-[#3b82f6]/25 border border-[#3b82f6]/35 text-[#93c5fd] rounded text-[11px] font-semibold cursor-pointer">Add</button>
             </div>
             {([
               ['Decisions', evaluated.scratchpad.decisions],
@@ -244,12 +244,12 @@ export default function BlueprintPanel({
               ['Open questions', evaluated.scratchpad.openQuestions],
             ] as [string, string[]][]).map(([label, items]) => (
               <div key={label} className="space-y-1">
-                <div className="text-[8.5px] font-mono font-bold uppercase tracking-wider text-slate-500">{label}</div>
+                <div className="text-[11px] font-medium text-[#a0aab8]">{label}</div>
                 {items.length === 0 ? (
-                  <div className="text-[9.5px] text-slate-600 italic">—</div>
+                  <div className="text-[11px] text-[#687385] italic">—</div>
                 ) : items.map((it, i) => (
-                  <div key={i} className={`text-[10px] flex items-start gap-1.5 ${label.startsWith('Rejected') ? 'text-red-300/80' : 'text-slate-300'}`}>
-                    <span className="text-slate-600">•</span>{it}
+                  <div key={i} className={`text-[11px] flex items-start gap-1.5 ${label.startsWith('Rejected') ? 'text-rose-300' : 'text-[#cbd5e1]'}`}>
+                    <span className="text-[#687385]">•</span>{it}
                   </div>
                 ))}
               </div>
@@ -258,7 +258,7 @@ export default function BlueprintPanel({
         )}
       </div>
 
-      <div className="px-3 py-1.5 border-t border-white/5 text-[8.5px] font-mono text-slate-600 shrink-0">
+      <div className="px-3 py-2 border-t border-[#262c36] bg-[#11141a] text-[11px] font-mono text-[#687385] shrink-0">
         Architect blueprint — a task is "done" only when its deterministic check passes.
       </div>
     </div>

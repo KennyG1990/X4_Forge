@@ -219,12 +219,12 @@ export default function AIHelper({
         <div 
           onMouseDown={handleDragStart}
           onTouchStart={handleDragStart}
-          className="bg-[#df9825]/10 border-b border-[#df9825]/20 p-3.5 flex items-center justify-between shrink-0 cursor-grab active:cursor-grabbing select-none"
+          className="bg-[#11141a] border-b border-[#262c36] px-3.5 py-2.5 flex items-center justify-between shrink-0 cursor-grab active:cursor-grabbing select-none"
           title="Drag from header to move guide window"
         >
-          <div className="flex items-center gap-1.5 font-bold text-[#df9825] pointer-events-none">
-            <Sparkles className="w-4 h-4" />
-            <span>FORGE AI ASSISTANT</span>
+          <div className="flex items-center gap-2 font-semibold text-xs text-[#eef2f7] pointer-events-none">
+            <Sparkles className="w-4 h-4 text-[#60a5fa]" />
+            <span>Forge AI Assistant</span>
           </div>
           <button 
             type="button"
@@ -232,69 +232,69 @@ export default function AIHelper({
               e.stopPropagation();
               setIsOpen(false);
             }}
-            className="p-1 rounded hover:bg-white/5 text-slate-400 hover:text-white transition-all cursor-pointer drag-handle-only animate-none"
+            className="p-1 rounded hover:bg-[#171b23] text-[#a0aab8] hover:text-[#eef2f7] transition-colors cursor-pointer drag-handle-only animate-none"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
       ) : (
         <div 
-          className="bg-[#df9825]/5 border-b border-white/5 p-3 flex items-center justify-between shrink-0 select-none"
+          className="bg-[#11141a] border-b border-[#262c36] px-3 py-2.5 flex items-center justify-between shrink-0 select-none"
         >
-          <div className="flex items-center gap-1.5 font-bold text-[#df9825] pointer-events-none">
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>FORGE AI ASSISTANT</span>
+          <div className="flex items-center gap-2 font-semibold text-xs text-[#eef2f7] pointer-events-none">
+            <Sparkles className="w-3.5 h-3.5 text-[#60a5fa]" />
+            <span>Forge AI Assistant</span>
           </div>
         </div>
       )}
 
       {/* Mode Selector Tabs */}
-      <div className="flex border-b border-white/5 bg-black/35 font-mono text-[9px] shrink-0">
+      <div className="flex border-b border-[#262c36] bg-[#11141a] font-sans text-[11px] shrink-0">
         <button
           type="button"
           onClick={() => setActiveMode('chat')}
-          className={`flex-1 py-1.5 text-center border-r border-white/5 font-semibold transition-all cursor-pointer ${
-            activeMode === 'chat' ? 'text-[#df9825] bg-[#df9825]/5 font-bold' : 'text-slate-400 hover:bg-white/5'
+          className={`flex-1 py-2 text-center border-r border-[#262c36] transition-colors cursor-pointer ${
+            activeMode === 'chat' ? 'text-[#93c5fd] bg-[#3b82f6]/10 border-b-2 border-[#3b82f6] font-semibold' : 'text-[#a0aab8] hover:text-[#eef2f7] hover:bg-[#171b23] font-medium'
           }`}
         >
-          CHAT
+          Chat
         </button>
         {canBuild && (
           <button
             type="button"
             onClick={() => setActiveMode('builder')}
-            className={`flex-1 py-1.5 text-center font-semibold transition-all cursor-pointer flex items-center justify-center gap-1 ${
-              activeMode === 'builder' ? 'text-emerald-400 bg-emerald-500/5 font-bold' : 'text-slate-450 hover:bg-white/5'
+            className={`flex-1 py-2 text-center transition-colors cursor-pointer flex items-center justify-center gap-1 ${
+              activeMode === 'builder' ? 'text-emerald-300 bg-emerald-500/10 border-b-2 border-emerald-400 font-semibold' : 'text-[#a0aab8] hover:text-[#eef2f7] hover:bg-[#171b23] font-medium'
             }`}
           >
-            BUILDER
+            Builder
           </button>
         )}
         {canArchitect && (
           <button
             type="button"
             onClick={() => setActiveMode('architect')}
-            className={`flex-1 py-1.5 text-center border-l border-white/5 font-semibold transition-all cursor-pointer ${
-              activeMode === 'architect' ? 'text-cyan-400 bg-cyan-500/5 font-bold' : 'text-slate-450 hover:bg-white/5'
+            className={`flex-1 py-2 text-center border-l border-[#262c36] transition-colors cursor-pointer ${
+              activeMode === 'architect' ? 'text-[#93c5fd] bg-[#3b82f6]/10 border-b-2 border-[#3b82f6] font-semibold' : 'text-[#a0aab8] hover:text-[#eef2f7] hover:bg-[#171b23] font-medium'
             }`}
           >
-            ARCHITECT
+            Architect
           </button>
         )}
       </div>
       {/* A4.3 — explain tier: a calm note that this is a read-only on-ramp (no canvas changes). */}
       {!canBuild && (
-        <div className="shrink-0 px-3.5 py-2 bg-cyan-500/[0.05] border-b border-cyan-500/15 text-[10px] text-cyan-300/80 font-sans leading-relaxed flex items-start gap-1.5">
-          <ShieldCheck className="w-3 h-3 mt-0.5 shrink-0 text-cyan-400/70" />
+        <div className="shrink-0 px-3.5 py-2 bg-[#3b82f6]/10 border-b border-[#3b82f6]/25 text-[11px] text-[#93c5fd] font-sans leading-relaxed flex items-start gap-1.5">
+          <ShieldCheck className="w-3.5 h-3.5 mt-0.5 shrink-0 text-[#60a5fa]" />
           <span>Explain mode — read-only. The assistant answers questions and explains errors but never changes your canvas. Switch to <b>Assist</b> or <b>Co-build</b> in Settings to let it propose edits.</span>
         </div>
       )}
 
       {/* A4.8 — calm, upfront key-setup nudge (no recurring popups; just a static banner while no key is set). */}
       {!hasProviderKey(getActiveProvider()) && (
-        <div className="shrink-0 px-3.5 py-2 bg-amber-500/[0.06] border-b border-amber-500/20 text-[10px] text-amber-300/90 font-sans leading-relaxed flex items-start gap-1.5">
-          <Sparkles className="w-3 h-3 mt-0.5 shrink-0 text-amber-400/80" />
-          <span>No AI key set for <b className="uppercase">{getActiveProvider()}</b>. Open <b>Settings → AI Assistant → Configure AI engine</b> to add a provider key — requests won't run until then.</span>
+        <div className="shrink-0 px-3.5 py-2 bg-amber-500/10 border-b border-amber-500/25 text-[11px] text-amber-300 font-sans leading-relaxed flex items-start gap-1.5">
+          <Sparkles className="w-3.5 h-3.5 mt-0.5 shrink-0 text-amber-400" />
+          <span>No AI key set for <b>{getActiveProvider()}</b>. Open <b>Settings → AI Assistant → Configure AI engine</b> to add a provider key — requests won't run until then.</span>
         </div>
       )}
 
@@ -314,36 +314,36 @@ export default function AIHelper({
       ) : (
       <>
       {/* Prompt/Chat response viewarea */}
-      <div className="flex-1 p-3.5 overflow-y-auto space-y-3.5 bg-black/45 flex flex-col min-h-0">
+      <div className="flex-1 p-3.5 overflow-y-auto space-y-3.5 bg-[#0c0e12] flex flex-col min-h-0">
 
         {chatHistory.map((item, idx) => (
           <div key={idx} className="flex flex-col gap-1.5 w-full">
             <div 
-              className={`max-w-[90%] p-3 rounded-lg leading-relaxed text-[11.5px] font-sans relative group ${
+              className={`max-w-[90%] p-3 rounded-lg leading-relaxed text-xs font-sans relative group ${
                 item.role === 'user' 
-                  ? 'bg-[#df9825]/10 text-slate-200 border border-[#df9825]/20 self-end ml-auto' 
-                  : 'bg-slate-900/60 text-slate-300 border border-white/5 self-start mr-auto'
+                  ? 'bg-[#3b82f6]/12 text-[#eef2f7] border border-[#3b82f6]/30 self-end ml-auto' 
+                  : 'bg-[#11141a] text-[#cbd5e1] border border-[#262c36] self-start mr-auto'
               }`}
             >
               {/* Message Identity Icon row */}
-              <div className="flex items-center justify-between font-mono text-[9px] text-[#df9825]/85 uppercase tracking-wide mb-1 opacity-80 select-none gap-4">
+              <div className="flex items-center justify-between font-mono text-[11px] text-[#a0aab8] mb-1 select-none gap-4">
                 <span>{item.role === 'user' ? 'Mod Creator' : 'MD Copilot'}</span>
                 
                 {item.role === 'assistant' && (
                   <button
                     type="button"
                     onClick={() => handleCopyText(item.text, `chat_msg_${idx}`)}
-                    className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-white/5 text-slate-400 hover:text-white transition-all cursor-pointer flex items-center gap-1 h-4"
+                    className="opacity-0 group-hover:opacity-100 px-1.5 py-0.5 rounded hover:bg-[#171b23] text-[#a0aab8] hover:text-[#eef2f7] transition-opacity cursor-pointer flex items-center gap-1"
                     title="Copy message response"
                   >
-                    <span className="text-[8px] font-mono leading-none">COPY</span>
-                    {copiedId === `chat_msg_${idx}` ? <Check className="w-2.5 h-2.5 text-emerald-400" /> : <Copy className="w-2.5 h-2.5" />}
+                    <span className="text-[11px] font-mono leading-none">Copy</span>
+                    {copiedId === `chat_msg_${idx}` ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
                   </button>
                 )}
               </div>
               
               {/* Text render block */}
-              <span className="whitespace-pre-line font-medium leading-relaxed font-sans select-text">{item.text}</span>
+              <span className="whitespace-pre-line font-normal leading-relaxed font-sans select-text">{item.text}</span>
             </div>
 
             {/* A4.2 — Review panel: diff + deterministic verdicts BEFORE apply. */}
@@ -354,29 +354,29 @@ export default function AIHelper({
               const vClass: Record<VerdictStatus, string> = {
                 pass: 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10',
                 warn: 'text-amber-300 border-amber-500/30 bg-amber-500/10',
-                fail: 'text-red-300 border-red-500/30 bg-red-500/10',
-                'not-checked': 'text-slate-400 border-white/10 bg-white/5',
+                fail: 'text-rose-300 border-rose-500/30 bg-rose-500/10',
+                'not-checked': 'text-[#a0aab8] border-[#262c36] bg-[#171b23]',
               };
-              const vLabel: Record<VerdictStatus, string> = { pass: 'PASS', warn: 'WARN', fail: 'FAIL', 'not-checked': 'N/A' };
+              const vLabel: Record<VerdictStatus, string> = { pass: 'Pass', warn: 'Warn', fail: 'Fail', 'not-checked': 'N/A' };
               const Badge = ({ name, v }: { name: string; v: { status: VerdictStatus; errors: number; warnings: number } }) => (
-                <span className={`px-1.5 py-0.5 rounded border text-[8.5px] font-mono font-bold uppercase tracking-wide ${vClass[v.status]}`}
+                <span className={`px-2 py-0.5 rounded border text-[11px] font-mono font-medium ${vClass[v.status]}`}
                   title={v.status === 'not-checked' ? 'Not machine-verified' : `${v.errors} error(s), ${v.warnings} warning(s)`}>
                   {name}: {vLabel[v.status]}
                 </span>
               );
               return (
-              <div className="max-w-[90%] self-start mr-auto bg-[#0a1018] border border-white/10 rounded-lg p-3.5 space-y-3 font-sans animate-fade-in shadow-lg">
-                <div className="flex items-center gap-1.5 text-slate-200 font-mono text-[10px] font-bold uppercase tracking-wider">
-                  <Cpu className="w-3.5 h-3.5 text-cyan-400" />
+              <div className="max-w-[90%] self-start mr-auto bg-[#11141a] border border-[#262c36] rounded-lg p-3.5 space-y-3 font-sans">
+                <div className="flex items-center gap-1.5 text-[#eef2f7] font-semibold text-xs">
+                  <Cpu className="w-3.5 h-3.5 text-[#60a5fa]" />
                   <span>Proposed changes — review before applying</span>
                 </div>
 
                 {/* Diff summary */}
-                <div className="bg-black/40 border border-white/5 rounded p-2.5 font-mono text-[10px] flex items-center gap-3">
-                  <span className="text-emerald-400 font-bold">+{review.diff.added.length} added</span>
-                  <span className="text-red-400 font-bold">−{review.diff.removed.length} removed</span>
-                  <span className="text-amber-400 font-bold">~{review.diff.changed.length} changed</span>
-                  <span className="ml-auto text-slate-500">{review.nodeCounts.base}→{review.nodeCounts.proposed} nodes</span>
+                <div className="bg-[#0a0c10] border border-[#262c36] rounded p-2.5 font-mono text-[11px] flex flex-wrap items-center gap-3">
+                  <span className="text-emerald-400 font-semibold">+{review.diff.added.length} added</span>
+                  <span className="text-rose-400 font-semibold">−{review.diff.removed.length} removed</span>
+                  <span className="text-amber-400 font-semibold">~{review.diff.changed.length} changed</span>
+                  <span className="ml-auto text-[#a0aab8]">{review.nodeCounts.base}→{review.nodeCounts.proposed} nodes</span>
                 </div>
 
                 {/* Three deterministic verdicts */}
@@ -388,14 +388,14 @@ export default function AIHelper({
 
                 {/* Intent requirement checklist (A4.9) — what the request asked vs what the output satisfies */}
                 {review.intentResults && review.intentResults.length > 0 && (
-                  <div className="bg-black/30 border border-white/5 rounded p-2 space-y-1">
-                    <div className="text-[8.5px] font-mono font-bold uppercase tracking-wider text-slate-500">Requirements checked</div>
+                  <div className="bg-[#0a0c10] border border-[#262c36] rounded p-2.5 space-y-1">
+                    <div className="text-[11px] font-medium text-[#a0aab8]">Requirements checked</div>
                     {review.intentResults.map(r => (
-                      <div key={r.id} className="flex items-start gap-1.5 text-[10px] leading-snug">
-                        <span className={`shrink-0 font-bold ${r.status === 'pass' ? 'text-emerald-400' : r.status === 'fail' ? 'text-red-400' : 'text-slate-500'}`}>
+                      <div key={r.id} className="flex items-start gap-1.5 text-[11px] leading-snug">
+                        <span className={`shrink-0 font-bold ${r.status === 'pass' ? 'text-emerald-400' : r.status === 'fail' ? 'text-rose-400' : 'text-[#687385]'}`}>
                           {r.status === 'pass' ? '✓' : r.status === 'fail' ? '✗' : '—'}
                         </span>
-                        <span className={r.status === 'fail' ? 'text-red-300' : 'text-slate-300'}>
+                        <span className={r.status === 'fail' ? 'text-rose-300' : 'text-[#cbd5e1]'}>
                           {r.label}{r.status === 'not-verified' ? ' (not machine-verified)' : ''}
                         </span>
                       </div>
@@ -405,16 +405,16 @@ export default function AIHelper({
 
                 {/* Unknown / likely-hallucinated tags */}
                 {review.unknownTags.length > 0 && (
-                  <div className="text-[9.5px] text-red-300 bg-red-500/5 border border-red-500/20 rounded p-2 leading-relaxed flex items-start gap-1.5">
-                    <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
+                  <div className="text-[11px] text-rose-300 bg-rose-500/10 border border-rose-500/25 rounded p-2.5 leading-relaxed flex items-start gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
                     <span>Unrecognized tag(s): {review.unknownTags.map(u => u.xmlTag).join(', ')} — not in the X4 schema (likely invented). Blocked from apply.</span>
                   </div>
                 )}
 
-                <p className="text-[9.5px] text-slate-500 leading-relaxed">
+                <p className="text-[11px] text-[#a0aab8] leading-relaxed">
                   Staged only — nothing changes until you apply. {intentChecked
-                    ? <>Requirements above are machine-checked against the output (rows marked <span className="text-slate-400">—</span> aren't verifiable). A green Schema/Graph means valid XML — the <span className="text-slate-400">Intent</span> result is what tells you it matches your request.</>
-                    : <><span className="text-slate-400">Intent</span> is not machine-verified here: a green Schema/Graph proves the XML is valid, not that it does what you asked.</>}
+                    ? <>Requirements above are machine-checked against the output (rows marked <span className="text-[#eef2f7]">—</span> aren't verifiable). A green Schema/Graph means valid XML — the <span className="text-[#eef2f7]">Intent</span> result is what tells you it matches your request.</>
+                    : <><span className="text-[#eef2f7]">Intent</span> is not machine-verified here: a green Schema/Graph proves the XML is valid, not that it does what you asked.</>}
                 </p>
 
                 <div className="grid grid-cols-2 gap-2 pt-1">
@@ -428,23 +428,23 @@ export default function AIHelper({
                           : intentFail ? 'Valid XML, but it does NOT satisfy all your requirements. Apply only if you intend to finish it yourself (reversible via Undo).'
                             : 'Apply to the canvas (reversible via Undo)'
                     }
-                    className={`py-1.5 text-center text-[10px] font-bold rounded font-mono uppercase tracking-wider flex items-center justify-center gap-1 transition-all ${
+                    className={`py-1.5 text-center text-[11px] font-semibold rounded flex items-center justify-center gap-1 transition-colors ${
                       !canBuild || !review.applySafe
-                        ? 'bg-slate-800 text-slate-500 border border-white/10 cursor-not-allowed'
+                        ? 'bg-[#171b23] text-[#687385] border border-[#262c36] cursor-not-allowed'
                         : intentFail
                           ? 'bg-amber-500 hover:bg-amber-400 text-black cursor-pointer'
                           : 'bg-emerald-500 hover:bg-emerald-400 text-black cursor-pointer'
                     }`}
                   >
-                    {!canBuild || !review.applySafe ? <ShieldCheck className="w-3" /> : intentFail ? <AlertTriangle className="w-3" /> : <Check className="w-3" />}
+                    {!canBuild || !review.applySafe ? <ShieldCheck className="w-3.5 h-3.5" /> : intentFail ? <AlertTriangle className="w-3.5 h-3.5" /> : <Check className="w-3.5 h-3.5" />}
                     {!canBuild ? 'Read-only (Explain tier)' : !review.applySafe ? 'Review before applying' : intentFail ? 'Apply anyway — intent incomplete' : 'Confirm & Apply'}
                   </button>
                   <button
                     type="button"
                     onClick={() => handleDeclineAction(idx)}
-                    className="py-1.5 text-center text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 border border-white/10 rounded font-bold font-mono uppercase tracking-wider flex items-center justify-center gap-1 cursor-pointer transition-all"
+                    className="py-1.5 text-center text-[11px] bg-[#171b23] hover:bg-[#262c36] text-[#cbd5e1] border border-[#262c36] rounded font-semibold flex items-center justify-center gap-1 cursor-pointer transition-colors"
                   >
-                    <X className="w-3 text-red-400" />
+                    <X className="w-3.5 h-3.5 text-rose-400" />
                     Decline
                   </button>
                 </div>
@@ -455,10 +455,10 @@ export default function AIHelper({
         ))}
 
         {loading && (
-          <div className="self-start bg-[#0a0d14] border border-white/5 p-3 rounded-lg text-slate-400 max-w-[88%] space-y-2">
+          <div className="self-start bg-[#11141a] border border-[#262c36] p-3 rounded-lg text-[#a0aab8] max-w-[88%] space-y-2">
             <div className="flex items-center gap-2.5">
-              <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#df9825] shrink-0" />
-              <span className="text-[10px] font-mono leading-relaxed">
+              <RefreshCw className="w-3.5 h-3.5 animate-spin text-[#60a5fa] shrink-0" />
+              <span className="text-[11px] font-mono leading-relaxed">
                 {activeMode === 'builder'
                   ? 'Drafting → wiring → HUD → verifying → requirements… (several model passes, ~30–60s)'
                   : 'Working…'}
@@ -468,7 +468,7 @@ export default function AIHelper({
               <button
                 type="button"
                 onClick={onCancel}
-                className="px-2 py-0.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-300 rounded text-[9px] font-mono font-bold uppercase cursor-pointer"
+                className="px-2 py-0.5 bg-rose-500/12 hover:bg-rose-500/20 border border-rose-500/30 text-rose-300 rounded text-[11px] font-medium cursor-pointer"
               >
                 Cancel
               </button>
@@ -477,7 +477,7 @@ export default function AIHelper({
         )}
 
         {errorText && (
-          <div className="p-2.5 bg-red-500/10 text-red-300 border border-red-500/15 rounded text-[10px] leading-relaxed font-sans">
+          <div className="p-2.5 bg-rose-500/10 text-rose-300 border border-rose-500/25 rounded text-[11px] leading-relaxed font-sans">
             {errorText}
           </div>
         )}
@@ -485,18 +485,18 @@ export default function AIHelper({
 
       {/* Suggestions drawer panel (only shows when user chat is fresh) */}
       {chatHistory.length === 1 && (
-        <div className="border-t border-white/5 bg-[#080a10] p-3.5 space-y-2 shrink-0">
-          <span className="text-slate-400 uppercase text-[9px] font-bold tracking-widest block mb-1">RECOMMENDED QUICK PROMPTS:</span>
+        <div className="border-t border-[#262c36] bg-[#11141a] p-3.5 space-y-2 shrink-0">
+          <span className="text-[#a0aab8] text-[11px] font-medium block mb-1">Quick prompts</span>
           <div className="space-y-1.5">
             {currentSuggestions.map((s, i) => (
               <button
                 key={i}
                 type="button"
                 onClick={() => handleSend(s.prompt)}
-                className="w-full text-left p-2 rounded bg-black/40 border border-white/[0.04] hover:bg-[#df9825]/10 hover:border-[#df9825]/30 group transition-all text-[11px] font-sans text-slate-300 cursor-pointer"
+                className="w-full text-left p-2 rounded bg-[#0a0c10] border border-[#262c36] hover:bg-[#171b23] hover:border-[#3b82f6]/45 group transition-colors text-[11px] font-sans text-[#cbd5e1] cursor-pointer"
               >
-                <div className="text-slate-200 font-bold flex items-center gap-1 group-hover:text-[#df9825]">
-                  <ChevronRight className="w-3 h-3 shrink-0" />
+                <div className="text-[#eef2f7] font-semibold flex items-center gap-1 group-hover:text-[#93c5fd]">
+                  <ChevronRight className="w-3.5 h-3.5 shrink-0" />
                   {s.title}
                 </div>
               </button>
@@ -508,13 +508,13 @@ export default function AIHelper({
       {/* User Chat Inputs form */}
       <form 
         onSubmit={(e) => { e.preventDefault(); handleSend(inputText); }}
-        className="border-t border-white/5 bg-black/60 p-2.5 flex gap-2 shrink-0"
+        className="border-t border-[#262c36] bg-[#11141a] p-2.5 flex gap-2 shrink-0"
       >
         <input
           type="text"
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
-          className="flex-1 bg-black/85 border border-white/10 rounded-lg p-2 focus:outline-none focus:border-[#df9825] text-white text-[11px] font-sans"
+          className="flex-1 bg-[#0a0c10] border border-[#262c36] rounded-lg px-2.5 py-2 focus:outline-none focus:border-[#3b82f6] text-[#eef2f7] placeholder-[#687385] text-[11px] font-sans"
           placeholder={activeMode === 'builder' 
             ? "Describe visual mod flow to auto-configure..."
             : "Ask for custom cues or script parameters..."
@@ -523,7 +523,7 @@ export default function AIHelper({
         <button
           type="submit"
           disabled={loading || !inputText.trim()}
-          className="p-2.5 rounded-lg bg-[#df9825] hover:bg-[#df9825]/90 text-black font-semibold uppercase font-mono disabled:opacity-50 transition-all flex items-center justify-center cursor-pointer"
+          className="px-3 py-2 rounded-lg bg-[#3b82f6] hover:bg-[#2563eb] text-white font-semibold disabled:opacity-50 transition-colors flex items-center justify-center cursor-pointer"
         >
           <Send className="w-3.5 h-3.5" />
         </button>
@@ -535,7 +535,7 @@ export default function AIHelper({
 
   if (mode === 'sidebar') {
     return (
-      <div className="w-full h-full flex flex-col bg-transparent overflow-hidden font-mono text-xs text-slate-300">
+      <div data-testid="ai-helper-panel" className="w-full h-full flex flex-col bg-[#0c0e12] overflow-hidden font-sans text-xs text-[#eef2f7]">
         {innerContent}
       </div>
     );
@@ -550,7 +550,7 @@ export default function AIHelper({
       }}
     >
       {isOpen ? (
-        <div className="w-[390px] h-[540px] bg-[#0c0f16] border border-[#df9825]/40 rounded-xl shadow-2xl flex flex-col overflow-hidden font-mono text-xs text-slate-300">
+        <div data-testid="ai-helper-panel" className="w-[390px] h-[540px] bg-[#0c0e12] border border-[#262c36] rounded-xl shadow-2xl flex flex-col overflow-hidden font-sans text-xs text-[#eef2f7]">
           {innerContent}
         </div>
       ) : (
@@ -567,11 +567,11 @@ export default function AIHelper({
             }
             setIsOpen(true);
           }}
-          className="flex items-center gap-2 px-4.5 py-3 rounded-full bg-[#df9825]/90 hover:bg-[#df9825] text-black font-mono text-xs font-bold shadow-2xl transition-all duration-150 transform hover:scale-105 active:scale-95 cursor-grab active:cursor-grabbing select-none"
+          className="flex items-center gap-2 px-4 py-2.5 rounded-full bg-[#3b82f6] hover:bg-[#2563eb] text-white font-sans text-xs font-semibold shadow-2xl transition-all duration-150 cursor-grab active:cursor-grabbing select-none"
           title="Drag anywhere; click to open AI Guide"
         >
-          <Bot className="w-4.5 h-4.5 pointer-events-none" />
-          <span className="pointer-events-none">FORGE AI</span>
+          <Bot className="w-4 h-4 pointer-events-none" />
+          <span className="pointer-events-none">Forge AI</span>
         </button>
       )}
     </div>

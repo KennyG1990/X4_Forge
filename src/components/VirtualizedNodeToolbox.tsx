@@ -10,7 +10,7 @@ import {
 
 const FAVORITES_KEY = 'x4_forge_node_toolbox_favorites';
 const RECENTS_KEY = 'x4_forge_node_toolbox_recents';
-const ROW_HEIGHT = 58;
+const ROW_HEIGHT = 60;
 const VIEWPORT_HEIGHT = 208;
 const OVERSCAN = 2;
 
@@ -29,11 +29,19 @@ function persistPreference(key: string, value: string[]) {
 }
 
 function badgeColors(type: NodeTemplate['type']): string {
-  if (type === 'cue') return 'bg-purple-500/10 text-purple-400 border-purple-500/20';
-  if (type === 'event') return 'bg-amber-500/10 text-amber-400 border-amber-500/30';
-  if (type === 'condition') return 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20';
-  if (type === 'action') return 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
-  return 'bg-blue-500/10 text-blue-400 border-blue-500/20';
+  if (type === 'cue') return 'bg-purple-500/12 text-purple-300 border-purple-500/25';
+  if (type === 'event') return 'bg-amber-500/12 text-amber-300 border-amber-500/30';
+  if (type === 'condition') return 'bg-sky-500/12 text-sky-300 border-sky-500/25';
+  if (type === 'action') return 'bg-emerald-500/12 text-emerald-300 border-emerald-500/25';
+  return 'bg-[#3b82f6]/12 text-[#93c5fd] border-[#3b82f6]/30';
+}
+
+function shortTypeLabel(type: NodeTemplate['type']): string {
+  if (type === 'cue') return 'Cue';
+  if (type === 'event') return 'Evnt';
+  if (type === 'condition') return 'Cond';
+  if (type === 'action') return 'Act';
+  return type.slice(0, 1).toUpperCase() + type.slice(1, 4);
 }
 
 export default function VirtualizedNodeToolbox({ templates, nodeType, onAddNode }: VirtualizedNodeToolboxProps) {
@@ -78,38 +86,38 @@ export default function VirtualizedNodeToolbox({ templates, nodeType, onAddNode 
   };
 
   return (
-    <div className="space-y-1.5" data-testid="node-toolbox">
+    <div className="space-y-2" data-testid="node-toolbox">
       <div className="relative">
-        <Search className="absolute left-2 top-2 w-3.5 h-3.5 text-slate-500" />
+        <Search className="absolute left-2.5 top-2.5 w-3.5 h-3.5 text-[#687385]" />
         <input
           data-testid="node-toolbox-search"
           value={query}
           onChange={event => setQuery(event.target.value)}
           placeholder="Search by intent or XML tag…"
-          className="w-full rounded border border-white/10 bg-black/25 py-1.5 pl-7 pr-2 text-[10px] text-slate-200 outline-none focus:border-cyan-500/50"
+          className="w-full rounded border border-[#262c36] bg-[#0a0c10] py-1.5 pl-8 pr-2.5 text-[11px] text-[#eef2f7] placeholder-[#687385] outline-none focus:border-[#3b82f6]"
         />
       </div>
-      <div className="flex items-center justify-between gap-2 text-[9px] font-mono">
+      <div className="flex items-center justify-between gap-2 text-[11px]">
         <button
           type="button"
           data-testid="node-toolbox-mode"
           onClick={() => setMode(current => current === 'curated' ? 'all' : 'curated')}
-          className="rounded border border-cyan-500/20 bg-cyan-500/5 px-2 py-1 text-cyan-300 hover:border-cyan-400/50 cursor-pointer"
+          className="rounded border border-[#3b82f6]/35 bg-[#3b82f6]/12 px-2 py-1 font-medium text-[#93c5fd] hover:bg-[#3b82f6]/20 cursor-pointer"
           title="Curated shows measured common standalone nodes; All keeps the complete schema vocabulary available."
         >
-          {mode === 'curated' ? 'CURATED · SHOW ALL' : 'ALL · SHOW CURATED'}
+          {mode === 'curated' ? 'Curated · Show all' : 'All · Show curated'}
         </button>
-        <span data-testid="node-toolbox-count" className="text-slate-500">{entries.length} results</span>
+        <span data-testid="node-toolbox-count" className="font-mono text-[#a0aab8]">{entries.length} results</span>
       </div>
       <div
         ref={viewportRef}
         data-testid="node-toolbox-viewport"
-        className="relative overflow-y-auto pr-1 custom-scrollbar border-y border-white/5"
+        className="relative overflow-y-auto pr-1 custom-scrollbar border-y border-[#262c36]"
         style={{ height: VIEWPORT_HEIGHT }}
         onScroll={event => setScrollTop(event.currentTarget.scrollTop)}
       >
         {entries.length === 0 ? (
-          <div data-testid="node-toolbox-empty" className="flex h-full items-center justify-center px-3 text-center text-[10px] text-slate-500">
+          <div data-testid="node-toolbox-empty" className="flex h-full items-center justify-center px-3 text-center text-[11px] text-[#a0aab8]">
             No nodes match this filter. Clear the search or switch to All.
           </div>
         ) : (
@@ -122,7 +130,7 @@ export default function VirtualizedNodeToolbox({ templates, nodeType, onAddNode 
                   key={template.xmlTag}
                   data-testid="node-toolbox-row"
                   data-node-tag={template.xmlTag}
-                  className="absolute left-0 right-0 flex items-stretch gap-1 rounded border border-white/5 bg-black/20 hover:border-cyan-500/40"
+                  className="absolute left-0 right-0 flex items-stretch gap-1 rounded border border-[#262c36] bg-[#11141a] hover:border-[#3b82f6]/50 hover:bg-[#171b23]"
                   style={{ top: index * ROW_HEIGHT + 2, height: ROW_HEIGHT - 4 }}
                 >
                   <button
@@ -131,12 +139,12 @@ export default function VirtualizedNodeToolbox({ templates, nodeType, onAddNode 
                     onClick={() => addNode(template)}
                     className="min-w-0 flex-1 cursor-pointer px-2 text-left group"
                   >
-                    <span className="block truncate text-xs font-semibold leading-none text-slate-200 group-hover:text-white">{template.label}</span>
-                    <span className="mt-1 block truncate text-[9.5px] font-mono text-slate-500">&lt;{template.xmlTag}&gt;</span>
+                    <span className="block truncate text-xs font-semibold leading-snug text-[#eef2f7] group-hover:text-white">{template.label}</span>
+                    <span className="mt-1 block truncate text-[11px] font-mono leading-none text-[#687385]">&lt;{template.xmlTag}&gt;</span>
                   </button>
-                  <div className="flex shrink-0 items-center gap-1 pr-1">
-                    <span className={`rounded border px-1 py-0.5 text-[8.5px] font-mono leading-none ${badgeColors(template.type)}`}>
-                      {template.type.substring(0, 4).toUpperCase()}
+                  <div className="flex shrink-0 items-center gap-1 pr-1.5">
+                    <span className={`rounded border px-1.5 py-0.5 text-[11px] font-mono leading-none ${badgeColors(template.type)}`}>
+                      {shortTypeLabel(template.type)}
                     </span>
                     <button
                       type="button"
@@ -144,9 +152,9 @@ export default function VirtualizedNodeToolbox({ templates, nodeType, onAddNode 
                       aria-label={`${entry.favorite ? 'Remove' : 'Add'} ${template.label} ${entry.favorite ? 'from' : 'to'} favorites`}
                       aria-pressed={entry.favorite}
                       onClick={() => toggleFavorite(template.xmlTag)}
-                      className={`rounded p-1 cursor-pointer ${entry.favorite ? 'text-amber-300' : 'text-slate-600 hover:text-amber-300'}`}
+                      className={`rounded p-1 cursor-pointer ${entry.favorite ? 'text-amber-300' : 'text-[#687385] hover:text-amber-300'}`}
                     >
-                      <Star className="h-3 w-3" fill={entry.favorite ? 'currentColor' : 'none'} />
+                      <Star className="h-3.5 w-3.5" fill={entry.favorite ? 'currentColor' : 'none'} />
                     </button>
                   </div>
                 </div>

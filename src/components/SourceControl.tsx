@@ -1160,7 +1160,7 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
           const xT = paddingLeft + t * trackWidth;
           paths.push({
             d: `M ${xT} ${yCurrent} L ${xT} ${(i + 1) * rowHeight + 22}`,
-            color: t === 0 ? '#06b6d4' : (t === 1 ? '#f97316' : '#ec4899')
+            color: t === 0 ? '#3b82f6' : (t === 1 ? '#f97316' : '#ec4899')
           });
         }
       });
@@ -1194,17 +1194,17 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
   }, [localHistory]);
 
   return (
-    <div className="flex flex-col h-full bg-transparent select-none text-slate-300 font-sans" id="source_control_system">
+    <div className="flex flex-col h-full bg-[#0c0e12] select-none text-[#eef2f7] font-sans" id="source_control_system">
       
       {/* Tab Nav Controls */}
-      <div className="flex border-b border-white/5 bg-transparent">
+      <div className="flex border-b border-[#262c36] bg-[#11141a]">
         <button
           onClick={() => setActiveTab2('sourceControl')}
           title="Diff between the current workspace and the loaded baseline snapshot, regenerated from your nodes/layout. This is a compiled diff, not git working-tree status."
-          className={`flex-1 py-2 text-[9.5px] font-mono font-bold tracking-tight uppercase border-b-2 flex items-center justify-center gap-1 cursor-pointer ${
+          className={`flex-1 py-2 text-[11px] font-medium border-b-2 flex items-center justify-center gap-1 cursor-pointer transition-colors ${
             activeTab === 'sourceControl'
-              ? 'border-cyan-500 text-white bg-cyan-600/5'
-              : 'border-transparent text-slate-400 hover:text-slate-200'
+              ? 'border-[#3b82f6] text-[#eef2f7] bg-[#171b23]'
+              : 'border-transparent text-[#a0aab8] hover:text-[#eef2f7]'
           }`}
         >
           <GitCommit className="w-3.5 h-3.5" />
@@ -1212,10 +1212,10 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
         </button>
         <button
           onClick={() => setActiveTab2('remotes')}
-          className={`flex-1 py-2 text-[9.5px] font-mono font-bold tracking-tight uppercase border-b-2 flex items-center justify-center gap-1 cursor-pointer ${
+          className={`flex-1 py-2 text-[11px] font-medium border-b-2 flex items-center justify-center gap-1 cursor-pointer transition-colors ${
             activeTab === 'remotes'
-              ? 'border-violet-500 text-white bg-violet-600/5'
-              : 'border-transparent text-slate-400 hover:text-slate-200'
+              ? 'border-[#3b82f6] text-[#eef2f7] bg-[#171b23]'
+              : 'border-transparent text-[#a0aab8] hover:text-[#eef2f7]'
           }`}
         >
           <Github className="w-3.5 h-3.5 text-violet-400" />
@@ -1223,71 +1223,71 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
         </button>
         <button
           onClick={() => setActiveTab2('graph')}
-          className={`flex-1 py-2 text-[9.5px] font-mono font-bold tracking-tight uppercase border-b-2 flex items-center justify-center gap-1 cursor-pointer ${
+          className={`flex-1 py-2 text-[11px] font-medium border-b-2 flex items-center justify-center gap-1 cursor-pointer transition-colors ${
             activeTab === 'graph'
-              ? 'border-cyan-500 text-white bg-cyan-600/5'
-              : 'border-transparent text-slate-400 hover:text-slate-200'
+              ? 'border-[#3b82f6] text-[#eef2f7] bg-[#171b23]'
+              : 'border-transparent text-[#a0aab8] hover:text-[#eef2f7]'
           }`}
         >
-          <GitBranch className="w-3.5 h-3.5 text-cyan-400" />
+          <GitBranch className="w-3.5 h-3.5 text-[#60a5fa]" />
           Graph Log
         </button>
 
         <button
           onClick={() => setShowConfig(!showConfig)}
-          className={`px-3 border-l border-white/5 hover:text-white flex items-center justify-center cursor-pointer ${
-            isGitHubConnected ? 'text-emerald-400' : 'text-slate-500'
+          className={`px-3 border-l border-[#262c36] hover:text-[#eef2f7] flex items-center justify-center cursor-pointer ${
+            isGitHubConnected ? 'text-emerald-400' : 'text-[#a0aab8]'
           }`}
           title="GitHub Peer Settings"
         >
-          <Settings className="w-3.5 h-3.5 text-slate-400 hover:text-white" />
+          <Settings className="w-3.5 h-3.5 text-[#a0aab8] hover:text-[#eef2f7]" />
         </button>
       </div>
 
       {/* GitHub Config Modal/Slide Pane */}
       {showConfig && (
-        <div className="p-3 bg-[#0c1017] border-b border-white/10 space-y-3 font-mono text-[10px]">
+        <div className="p-3 bg-[#11141a] border-b border-[#262c36] space-y-3 font-mono text-[11px]">
           <div className="flex items-center justify-between">
-            <span className="font-bold text-cyan-400 flex items-center gap-1">
+            <span className="font-semibold text-[#93c5fd] flex items-center gap-1.5">
               <Github className="w-3.5 h-3.5" />
-              PEER REPOSITORY SETUP
+              Peer Repository Setup
             </span>
-            <button onClick={() => setShowConfig(false)} className="text-slate-400 hover:text-white cursor-pointer">
+            <button onClick={() => setShowConfig(false)} className="text-[#a0aab8] hover:text-[#eef2f7] cursor-pointer">
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
 
           <div className="space-y-2">
             <div>
-              <label className="text-slate-500 block mb-0.5 uppercase text-[9px]">GitHub Personal Access Token (PAT)</label>
+              <label className="text-[#a0aab8] block mb-1 text-[11px]">GitHub Personal Access Token (PAT)</label>
               <input 
                 type="password"
                 value={gitPat}
                 onChange={e => setGitPat(e.target.value)}
                 placeholder="ghp_xxxxxxxxxxxxxxxxxxx"
-                className="w-full p-1.5 bg-black/60 border border-white/10 rounded focus:outline-none focus:border-cyan-500 text-white font-mono"
+                className="w-full p-1.5 bg-[#0a0c10] border border-[#262c36] rounded focus:outline-none focus:border-[#3b82f6] text-[#eef2f7] placeholder-[#687385] font-mono text-[11px]"
               />
             </div>
 
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="text-slate-500 block mb-0.5 uppercase text-[9px]">Owner / Nick</label>
+                <label className="text-[#a0aab8] block mb-1 text-[11px]">Owner / Nick</label>
                 <input 
                   type="text"
                   value={gitOwner}
                   onChange={e => setGitOwner(e.target.value)}
                   placeholder="e.g. KennyG1990"
-                  className="w-full p-1.5 bg-black/60 border border-white/10 rounded focus:outline-none focus:border-cyan-500 text-white font-mono"
+                  className="w-full p-1.5 bg-[#0a0c10] border border-[#262c36] rounded focus:outline-none focus:border-[#3b82f6] text-[#eef2f7] placeholder-[#687385] font-mono text-[11px]"
                 />
               </div>
               <div>
-                <label className="text-slate-500 block mb-0.5 uppercase text-[9px]">Repository Name</label>
+                <label className="text-[#a0aab8] block mb-1 text-[11px]">Repository Name</label>
                 <input 
                   type="text"
                   value={gitRepo}
                   onChange={e => setGitRepo(e.target.value)}
                   placeholder="e.g. elite-escort-mod"
-                  className="w-full p-1.5 bg-black/60 border border-white/10 rounded focus:outline-none focus:border-cyan-500 text-white font-mono"
+                  className="w-full p-1.5 bg-[#0a0c10] border border-[#262c36] rounded focus:outline-none focus:border-[#3b82f6] text-[#eef2f7] placeholder-[#687385] font-mono text-[11px]"
                 />
               </div>
             </div>
@@ -1296,16 +1296,16 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
               {isGitHubConnected ? (
                 <button
                   onClick={handleDisconnectGitHub}
-                  className="px-2 py-1 bg-red-600/25 border border-red-500/30 hover:bg-red-600 hover:text-white text-red-300 font-bold transition-all rounded cursor-pointer"
+                  className="px-2.5 py-1 bg-rose-500/15 border border-rose-500/35 hover:bg-rose-500/25 text-rose-300 font-semibold transition-colors rounded cursor-pointer text-[11px]"
                 >
-                  DISCONNECT
+                  Disconnect
                 </button>
               ) : (
                 <button
                   onClick={handleConnectGitHub}
-                  className="px-2.5 py-1 bg-cyan-600/20 border border-cyan-500/40 hover:bg-cyan-500 hover:text-black text-cyan-300 font-bold transition-all rounded cursor-pointer uppercase"
+                  className="px-2.5 py-1 bg-[#3b82f6]/15 border border-[#3b82f6]/35 hover:bg-[#3b82f6] hover:text-white text-[#93c5fd] font-semibold transition-colors rounded cursor-pointer text-[11px]"
                 >
-                  LINK PEER REMOTE
+                  Link Peer Remote
                 </button>
               )}
             </div>
@@ -1315,9 +1315,9 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
 
       {/* Synchronizer Status Msg */}
       {syncStatusMsg && (
-        <div className="px-3 py-1 bg-cyan-500/5 border-b border-cyan-500/10 text-[9px] font-mono text-cyan-300 uppercase flex items-center justify-between">
+        <div className="px-3 py-1.5 bg-[#3b82f6]/10 border-b border-[#3b82f6]/25 text-[11px] font-mono text-[#93c5fd] flex items-center justify-between">
           <span className="truncate">{syncStatusMsg}</span>
-          <button onClick={() => setSyncStatusMsg('')} className="hover:text-white cursor-pointer ml-1">×</button>
+          <button onClick={() => setSyncStatusMsg('')} className="hover:text-[#eef2f7] cursor-pointer ml-1">×</button>
         </div>
       )}
 
@@ -1327,40 +1327,40 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
           
           {/* Active changes lists */}
           <div className="space-y-2">
-            <div className="flex items-center justify-between text-slate-400 font-sans font-bold uppercase text-[9.5px] tracking-wider border-b border-white/5 pb-1">
+            <div className="flex items-center justify-between text-[#cbd5e1] font-sans font-semibold text-xs border-b border-[#262c36] pb-1.5">
               <span className="flex items-center gap-1" title="Files whose compiled XML differs from the loaded baseline snapshot — not git's working tree.">
-                <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+                <ChevronDown className="w-3.5 h-3.5 text-[#a0aab8]" />
                 Working Changeset
               </span>
-              <span className="bg-slate-800 text-slate-300 px-1.5 py-0.2 rounded font-mono text-[8px]">{workingChanges.length} Files</span>
+              <span className="bg-[#171b23] border border-[#262c36] text-[#cbd5e1] px-2 py-0.5 rounded font-mono text-[11px]">{workingChanges.length} Files</span>
             </div>
 
             {workingChanges.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-6 text-center text-slate-550 border border-dashed border-white/5 rounded-lg bg-black/10">
-                <Check className="w-6 h-6 text-emerald-500/40 mb-1" />
-                <p className="text-[10px] font-mono font-bold text-slate-400">NO DIFF VS BASELINE</p>
-                <p className="text-[9px] text-slate-500 leading-normal mt-0.5">Compiled XML matches the loaded baseline. Edit nodes or layout menus to draft commit diffs.</p>
+              <div className="flex flex-col items-center justify-center py-6 px-3 text-center text-[#a0aab8] border border-dashed border-[#262c36] rounded-lg bg-[#11141a]">
+                <Check className="w-6 h-6 text-emerald-400/70 mb-1.5" />
+                <p className="text-[11px] font-semibold text-[#eef2f7]">No diff vs baseline</p>
+                <p className="text-[11px] text-[#a0aab8] leading-normal mt-1">Compiled XML matches the loaded baseline. Edit nodes or layout menus to draft commit diffs.</p>
               </div>
             ) : (
-              <div className="space-y-1 font-mono text-[10.5px]">
+              <div className="space-y-1.5 font-mono text-[11px]">
                 {workingChanges.map(change => (
                   <div 
                     key={change.path}
-                    className="flex items-center justify-between p-2 rounded bg-black/20 hover:bg-white/[0.02] border border-white/5 group transition-all"
+                    className="flex items-center justify-between p-2 rounded bg-[#11141a] hover:bg-[#171b23] border border-[#262c36] group transition-colors"
                   >
                     <div className="flex items-center gap-1.5 min-w-0">
-                      <FileText className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                      <FileText className="w-3.5 h-3.5 text-[#60a5fa] shrink-0" />
                       <div className="truncate">
-                        <span className="text-slate-200 block font-sans truncate">{change.label}</span>
-                        <span className="text-[8.5px] text-slate-500 italic block">{change.path}</span>
+                        <span className="text-[#eef2f7] block font-sans truncate">{change.label}</span>
+                        <span className="text-[11px] text-[#a0aab8] block truncate">{change.path}</span>
                       </div>
                     </div>
                     
                     {/* Diff lines counts */}
-                    <div className="flex items-center gap-2">
-                      <div className="text-[8.5px] flex items-center gap-1 font-mono">
-                        <span className="text-emerald-400 font-bold">+{change.diffCount.additions}</span>
-                        <span className="text-red-400 font-bold">-{change.diffCount.deletions}</span>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <div className="text-[11px] flex items-center gap-1 font-mono">
+                        <span className="text-emerald-400 font-semibold">+{change.diffCount.additions}</span>
+                        <span className="text-rose-400 font-semibold">-{change.diffCount.deletions}</span>
                       </div>
                       <button 
                         onClick={() => {
@@ -1385,10 +1385,10 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
                           setInspectionFile(change.path);
                           setIsDiffModalOpen(true);
                         }}
-                        className="opacity-0 group-hover:opacity-100 p-1 bg-cyan-500/10 hover:bg-cyan-500 text-cyan-400 hover:text-black transition-all rounded cursor-pointer"
+                        className="opacity-0 group-hover:opacity-100 p-1 bg-[#3b82f6]/15 hover:bg-[#3b82f6] text-[#93c5fd] hover:text-white transition-all rounded cursor-pointer"
                         title="Audits code difference"
                       >
-                        <Eye className="w-3 h-3" />
+                        <Eye className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   </div>
@@ -1398,56 +1398,57 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
           </div>
 
           {/* Staging actions and Commit Input */}
-          <div className="p-3 bg-black/30 border border-white/5 rounded-lg space-y-3">
-            <label className="text-[9px] font-mono font-bold uppercase text-slate-400 block tracking-wider">Commit drafting desk</label>
-            
-            <div className="relative">
-              <textarea
-                value={commitMessage}
-                onChange={e => setCommitMessage(e.target.value)}
-                placeholder="Message (Ctrl+Enter to commit...)"
-                rows={2}
-                disabled={generatingMessage}
-                className="w-full bg-[#07090d] border border-white/10 rounded-md p-2 text-[10.5px] font-mono text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500 resize-none max-h-16 disabled:opacity-50"
-                onKeyDown={e => {
-                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                    e.preventDefault();
-                    handlePerformCommit();
-                  }
-                }}
-              />
+          <div className="p-3 bg-[#11141a] border border-[#262c36] rounded-lg space-y-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <label className="text-[11px] font-medium text-[#cbd5e1] block">Commit drafting desk</label>
               <button
                 onClick={handleGenerateCommitMessageAI}
                 disabled={generatingMessage || workingChanges.length === 0}
-                className="absolute right-2 bottom-2 p-1.5 rounded-md bg-cyan-600/10 hover:bg-cyan-500 border border-cyan-500/20 hover:border-transparent text-cyan-400 hover:text-black transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center"
+                className="px-2 py-0.5 rounded bg-[#3b82f6]/15 hover:bg-[#3b82f6]/25 border border-[#3b82f6]/35 text-[#93c5fd] transition-colors cursor-pointer disabled:opacity-35 disabled:cursor-not-allowed flex items-center gap-1 text-[11px] font-medium"
                 title="AI Generate ✨ Commit Message"
               >
-                <Sparkles className="w-3.5 h-3.5" />
+                <Sparkles className="w-3 h-3" />
+                AI draft
               </button>
             </div>
+            
+            <textarea
+              value={commitMessage}
+              onChange={e => setCommitMessage(e.target.value)}
+              placeholder="Message (Ctrl+Enter to commit...)"
+              rows={2}
+              disabled={generatingMessage}
+              className="w-full bg-[#0a0c10] border border-[#262c36] rounded-md p-2 text-[11px] font-mono text-[#eef2f7] placeholder-[#687385] focus:outline-none focus:border-[#3b82f6] resize-none max-h-16 disabled:opacity-50"
+              onKeyDown={e => {
+                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                  e.preventDefault();
+                  handlePerformCommit();
+                }
+              }}
+            />
 
             {commitMessageError && (
-              <p className="text-[9px] text-red-400 font-mono italic">{commitMessageError}</p>
+              <p className="text-[11px] text-rose-400 font-mono">{commitMessageError}</p>
             )}
 
             {/* AI diff summary (auto-attached on commit, or generate now) */}
             <div className="space-y-1">
-              <div className="flex items-center justify-between">
-                <span className="text-[9px] font-mono font-bold uppercase text-slate-450 tracking-wider">
-                  Diff summary {diffSummary ? '' : <span className="text-slate-500 normal-case font-normal">(auto on commit)</span>}
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] font-medium text-[#cbd5e1]">
+                  Diff summary {diffSummary ? '' : <span className="text-[#a0aab8] font-normal">(auto on commit)</span>}
                 </span>
                 <button
                   onClick={handleGenerateDiffSummary}
                   disabled={generatingSummary || workingChanges.length === 0}
-                  className="px-1.5 py-0.5 rounded bg-cyan-500/10 hover:bg-cyan-500/25 text-cyan-300 disabled:opacity-30 transition-all cursor-pointer flex items-center gap-1 text-[9px] border border-cyan-500/20 font-mono uppercase"
+                  className="px-2 py-0.5 rounded bg-[#3b82f6]/15 hover:bg-[#3b82f6]/25 text-[#93c5fd] disabled:opacity-35 transition-colors cursor-pointer flex items-center gap-1 text-[11px] border border-[#3b82f6]/35 font-medium"
                   title="Generate a plain-English summary of the staged changes using the configured AI"
                 >
-                  {generatingSummary ? <RefreshCw className="w-2.5 h-2.5 animate-spin" /> : <Sparkles className="w-2.5 h-2.5" />}
+                  {generatingSummary ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
                   Generate
                 </button>
               </div>
               {diffSummary && (
-                <p className="text-[10px] text-slate-300 leading-relaxed bg-black/30 border border-white/5 rounded p-2 font-sans">
+                <p className="text-[11px] text-[#cbd5e1] leading-relaxed bg-[#0a0c10] border border-[#262c36] rounded p-2 font-sans">
                   {diffSummary}
                 </p>
               )}
@@ -1457,7 +1458,7 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
               <button
                 onClick={handlePerformCommit}
                 disabled={workingChanges.length === 0}
-                className="flex-1 py-1 bg-cyan-500 hover:bg-cyan-400 disabled:bg-slate-800 disabled:text-slate-500 text-black font-mono font-bold text-[10.5px] rounded transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed uppercase"
+                className="flex-1 py-1 bg-[#3b82f6] hover:bg-[#2563eb] disabled:bg-[#171b23] disabled:text-[#687385] disabled:border disabled:border-[#262c36] text-white font-semibold text-[11px] rounded transition-colors flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
               >
                 <Check className="w-3.5 h-3.5" />
                 Commit files
@@ -1466,7 +1467,7 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
               <button
                 onClick={handlePushGitWorkspace}
                 disabled={!isGitHubConnected || syncLoading}
-                className="px-3 bg-[#0e121a] hover:bg-[#161c29] border border-white/10 disabled:opacity-35 text-slate-300 hover:text-white rounded transition-all cursor-pointer flex items-center justify-center"
+                className="px-3 bg-[#0a0c10] hover:bg-[#171b23] border border-[#262c36] disabled:opacity-35 text-[#cbd5e1] hover:text-[#eef2f7] rounded transition-colors cursor-pointer flex items-center justify-center"
                 title="Saves commit logs to peer repository"
               >
                 {syncLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <ArrowUp className="w-3.5 h-3.5" />}
@@ -1476,13 +1477,13 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
 
           {/* Connected GitHub Overview footer inside pending tab */}
           {isGitHubConnected && (
-            <div className="p-2.5 rounded bg-emerald-500/5 border border-emerald-500/10 space-y-1.5 font-mono text-[9px]">
-              <div className="flex items-center justify-between text-slate-400">
-                <span className="flex items-center gap-1 font-bold uppercase text-[8px] text-emerald-400 animate-pulse">● Linked with Remote</span>
-                <span>Active path: {activeBranch}</span>
+            <div className="p-2.5 rounded bg-emerald-500/8 border border-emerald-500/25 space-y-1.5 font-mono text-[11px]">
+              <div className="flex items-center justify-between text-[#a0aab8]">
+                <span className="flex items-center gap-1.5 font-semibold text-emerald-400">● Linked with Remote</span>
+                <span>Branch: {activeBranch}</span>
               </div>
-              <div className="text-white truncate flex items-center gap-1">
-                <Github className="w-3 h-3 text-cyan-400 shrink-0" />
+              <div className="text-[#eef2f7] truncate flex items-center gap-1.5">
+                <Github className="w-3.5 h-3.5 text-[#60a5fa] shrink-0" />
                 {gitOwner}/{gitRepo}
               </div>
             </div>
@@ -1496,39 +1497,39 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
 
           {/* One-click GitHub sign-in (OAuth Device Flow) */}
           {!isGitHubConnected && (
-            <div className="bg-gradient-to-b from-[#111622] to-[#0c1017] p-3 rounded-lg border border-cyan-500/25 space-y-2.5">
-              <div className="text-white font-bold text-xs uppercase tracking-wide flex items-center gap-1.5">
-                <Github className="w-4 h-4 text-cyan-400" />
+            <div className="bg-[#11141a] p-3 rounded-lg border border-[#3b82f6]/30 space-y-2.5">
+              <div className="text-[#eef2f7] font-semibold text-xs flex items-center gap-1.5">
+                <Github className="w-4 h-4 text-[#60a5fa]" />
                 Connect with GitHub
               </div>
               {deviceFlow ? (
                 <div className="space-y-2 text-center">
-                  <p className="text-[10px] text-slate-400 leading-relaxed">In the GitHub tab that just opened, enter this code:</p>
-                  <div className="text-xl font-mono font-bold tracking-[0.3em] text-cyan-300 bg-black/40 border border-cyan-500/30 rounded py-2 select-all">
+                  <p className="text-[11px] text-[#a0aab8] leading-relaxed font-sans">In the GitHub tab that just opened, enter this code:</p>
+                  <div className="text-xl font-mono font-bold tracking-[0.3em] text-[#93c5fd] bg-[#0a0c10] border border-[#3b82f6]/35 rounded py-2 select-all">
                     {deviceFlow.userCode}
                   </div>
                   <div className="flex items-center justify-center gap-3">
-                    <a href={deviceFlow.verificationUri} target="_blank" rel="noopener noreferrer" className="text-[10px] text-cyan-400 underline">Open github.com/login/device</a>
-                    <button onClick={cancelDeviceFlow} className="text-[10px] text-slate-400 hover:text-white cursor-pointer">Cancel</button>
+                    <a href={deviceFlow.verificationUri} target="_blank" rel="noopener noreferrer" className="text-[11px] text-[#60a5fa] underline">Open github.com/login/device</a>
+                    <button onClick={cancelDeviceFlow} className="text-[11px] text-[#a0aab8] hover:text-[#eef2f7] cursor-pointer">Cancel</button>
                   </div>
-                  <p className="text-[9px] text-emerald-400 animate-pulse flex items-center justify-center gap-1">
-                    <RefreshCw className="w-3 h-3 animate-spin" /> Waiting for you to authorize…
+                  <p className="text-[11px] text-emerald-400 animate-pulse flex items-center justify-center gap-1">
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Waiting for you to authorize…
                   </p>
                 </div>
               ) : (
                 <>
-                  <p className="text-[10px] text-slate-400 leading-relaxed">
+                  <p className="text-[11px] text-[#a0aab8] leading-relaxed font-sans">
                     One-click sign-in through your browser — no token copy-paste. Opens GitHub, you approve, and you're connected.
                   </p>
                   <button
                     onClick={handleConnectWithGitHub}
                     disabled={isConnecting}
-                    className="w-full py-2 bg-cyan-600 hover:bg-cyan-400 hover:text-black text-slate-900 font-bold text-xs rounded transition-all cursor-pointer uppercase flex items-center justify-center gap-1.5 disabled:opacity-40"
+                    className="w-full py-2 bg-[#3b82f6] hover:bg-[#2563eb] text-white font-semibold text-xs rounded transition-colors cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-40"
                   >
                     {isConnecting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Github className="w-3.5 h-3.5" />}
                     Connect with GitHub
                   </button>
-                  <div className="text-center text-[9px] text-slate-600 uppercase tracking-wider">— or enter a token manually below —</div>
+                  <div className="text-center text-[11px] text-[#687385] font-sans">— or enter a token manually below —</div>
                 </>
               )}
             </div>
@@ -1536,57 +1537,57 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
 
           {/* GitHub Credentials Section inline if not connected, or general summary if connected */}
           {!isGitHubConnected ? (
-            <div className="bg-slate-900/40 p-3 rounded-lg border border-dashed border-white/10 space-y-3">
-              <div className="text-white font-mono font-semibold text-xs tracking-wide uppercase flex items-center gap-1.5 border-b border-white/5 pb-1.5">
-                <Github className="w-4 h-4 text-slate-400" />
+            <div className="bg-[#11141a] p-3 rounded-lg border border-dashed border-[#262c36] space-y-3">
+              <div className="text-[#eef2f7] font-sans font-semibold text-xs flex items-center gap-1.5 border-b border-[#262c36] pb-1.5">
+                <Github className="w-4 h-4 text-[#a0aab8]" />
                 Configure Remote GitHub Peer
               </div>
-              <div className="space-y-2">
+              <div className="space-y-2 font-sans">
                 <div>
-                  <label className="text-slate-400 text-[10px] uppercase block mb-1 tracking-wider">Personal Access Token (PAT)</label>
+                  <label className="text-[#a0aab8] text-[11px] block mb-1">Personal Access Token (PAT)</label>
                   <input
                     type="password"
                     value={gitPat}
                     onChange={e => setGitPat(e.target.value)}
                     placeholder="ghp_xxxxxxxxxxxxxxxxxxxxxx"
-                    className="w-full p-2 rounded bg-black/60 border border-white/10 text-white focus:outline-none focus:border-cyan-500 text-xs text-slate-200"
+                    className="w-full p-2 rounded bg-[#0a0c10] border border-[#262c36] text-[#eef2f7] placeholder-[#687385] focus:outline-none focus:border-[#3b82f6] text-xs font-mono"
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="text-slate-400 text-[10px] uppercase block mb-1 tracking-wider">Owner</label>
+                    <label className="text-[#a0aab8] text-[11px] block mb-1">Owner</label>
                     <input
                       type="text"
                       value={gitOwner}
                       onChange={e => setGitOwner(e.target.value)}
                       placeholder="e.g. KennyG1990"
-                      className="w-full p-2 bg-black/60 border border-white/10 rounded focus:outline-none focus:border-cyan-500 text-xs text-slate-200"
+                      className="w-full p-2 bg-[#0a0c10] border border-[#262c36] rounded focus:outline-none focus:border-[#3b82f6] text-xs text-[#eef2f7] placeholder-[#687385] font-mono"
                     />
                   </div>
                   <div>
-                    <label className="text-slate-400 text-[10px] uppercase block mb-1 tracking-wider">Repository</label>
+                    <label className="text-[#a0aab8] text-[11px] block mb-1">Repository</label>
                     <input
                       type="text"
                       value={gitRepo}
                       onChange={e => setGitRepo(e.target.value)}
                       placeholder="e.g. x4-elite-escort"
-                      className="w-full p-2 bg-black/60 border border-white/10 rounded focus:outline-none focus:border-cyan-500 text-xs text-slate-200"
+                      className="w-full p-2 bg-[#0a0c10] border border-[#262c36] rounded focus:outline-none focus:border-[#3b82f6] text-xs text-[#eef2f7] placeholder-[#687385] font-mono"
                     />
                   </div>
                 </div>
                 <div>
-                  <label className="text-slate-400 text-[10px] uppercase block mb-1 tracking-wider">Branch</label>
+                  <label className="text-[#a0aab8] text-[11px] block mb-1">Branch</label>
                   <input
                     type="text"
                     value={activeBranch}
                     onChange={e => setActiveBranch(e.target.value)}
                     placeholder="main"
-                    className="w-full p-2 bg-black/60 border border-white/10 rounded focus:outline-none focus:border-cyan-505 text-xs text-slate-200"
+                    className="w-full p-2 bg-[#0a0c10] border border-[#262c36] rounded focus:outline-none focus:border-[#3b82f6] text-xs text-[#eef2f7] placeholder-[#687385] font-mono"
                   />
                 </div>
                 <button
                   onClick={handleConnectGitHub}
-                  className="w-full mt-1.5 py-1.5 bg-cyan-600 hover:bg-cyan-505 hover:text-black text-slate-900 font-mono font-bold text-xs rounded transition-all cursor-pointer uppercase flex items-center justify-center gap-1"
+                  className="w-full mt-1.5 py-1.5 bg-[#3b82f6] hover:bg-[#2563eb] text-white font-semibold text-xs rounded transition-colors cursor-pointer flex items-center justify-center gap-1.5"
                 >
                   <Check className="w-3.5 h-3.5" />
                   Link GitHub Repo
@@ -1594,46 +1595,46 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
               </div>
             </div>
           ) : (
-            <div className="bg-[#111622] p-3 rounded-lg border border-emerald-500/10 space-y-2 animate-fade-in">
-              <div className="flex items-center justify-between border-b border-white/5 pb-1.5">
-                <span className="text-emerald-400 font-bold uppercase text-[10px] flex items-center gap-1 tracking-wider">
-                  <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse inline-block" />
+            <div className="bg-[#11141a] p-3 rounded-lg border border-emerald-500/25 space-y-2">
+              <div className="flex items-center justify-between border-b border-[#262c36] pb-1.5">
+                <span className="text-emerald-400 font-semibold text-[11px] flex items-center gap-1.5">
+                  <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse inline-block" />
                   Connected Peer
                 </span>
                 <button
                   onClick={handleDisconnectGitHub}
-                  className="px-2 py-0.5 text-[9px] text-red-300 hover:text-red-205 bg-red-950/20 hover:bg-red-900/30 border border-red-900/30 rounded cursor-pointer font-bold"
+                  className="px-2 py-0.5 text-[11px] text-rose-300 hover:text-rose-200 bg-rose-500/12 hover:bg-rose-500/25 border border-rose-500/30 rounded cursor-pointer font-semibold"
                 >
-                  DISCONNECT
+                  Disconnect
                 </button>
               </div>
-              <div className="space-y-1 text-[10.5px]">
-                <div className="flex justify-between">
-                  <span className="text-slate-500 font-semibold text-[9.5px]">Repository:</span>
-                  <span className="text-white font-medium font-sans truncate max-w-[150px]">{gitOwner}/{gitRepo}</span>
+              <div className="space-y-1 text-[11px]">
+                <div className="flex justify-between gap-2">
+                  <span className="text-[#a0aab8] font-medium">Repository:</span>
+                  <span className="text-[#eef2f7] font-medium font-sans truncate max-w-[150px]">{gitOwner}/{gitRepo}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500 font-semibold text-[9.5px]">Branch:</span>
-                  <span className="text-cyan-400 italic">"{activeBranch}"</span>
+                <div className="flex justify-between gap-2">
+                  <span className="text-[#a0aab8] font-medium">Branch:</span>
+                  <span className="text-[#93c5fd] font-mono">"{activeBranch}"</span>
                 </div>
               </div>
             </div>
           )}
 
           {/* Create a brand-new repo from the active mod */}
-          <div className="bg-black/20 p-3 rounded-lg border border-emerald-500/15 space-y-2">
-            <h3 className="text-emerald-400 font-bold uppercase text-[10.5px] tracking-wider flex items-center gap-1.5 border-b border-white/5 pb-1.5">
+          <div className="bg-[#11141a] p-3 rounded-lg border border-emerald-500/25 space-y-2 font-sans">
+            <h3 className="text-emerald-400 font-semibold text-xs flex items-center gap-1.5 border-b border-[#262c36] pb-1.5">
               <Plus className="w-3.5 h-3.5 text-emerald-400" />
-              CREATE REPO FROM THIS MOD
+              Create Repo from This Mod
             </h3>
-            <p className="text-[10px] text-slate-400 leading-normal">
+            <p className="text-[11px] text-[#a0aab8] leading-normal">
               Publishes "{workspace.name || 'this mod'}" as a new GitHub repository (named{' '}
               <span className="text-emerald-300 font-mono">{toRepoName(workspace.name)}</span>) and pushes its initial files. Requires a connected GitHub account.
             </p>
             <button
               onClick={handleCreateRepoFromMod}
               disabled={creatingRepo || !isGitHubConnected}
-              className="w-full py-1.5 bg-emerald-600/20 hover:bg-emerald-600 border border-emerald-500/30 hover:border-transparent text-emerald-300 hover:text-black font-bold uppercase rounded transition-all cursor-pointer disabled:opacity-30 flex items-center justify-center gap-1.5"
+              className="w-full py-1.5 bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/35 text-emerald-300 text-[11px] font-semibold rounded transition-colors cursor-pointer disabled:opacity-35 flex items-center justify-center gap-1.5"
               title={isGitHubConnected ? 'Create and publish a new GitHub repository for this mod' : 'Connect GitHub in settings first'}
             >
               {creatingRepo ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Github className="w-3.5 h-3.5" />}
@@ -1642,130 +1643,130 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
           </div>
 
           {/* Loader Panel (LOAD) */}
-          <div className="bg-black/20 p-3 rounded-lg border border-cyan-500/15 space-y-3">
-            <h3 className="text-cyan-400 font-bold uppercase text-[10.5px] tracking-wider flex items-center gap-1.5 border-b border-white/5 pb-1.5">
-              <ChevronRight className="w-3.5 h-3.5 text-cyan-400" />
-              LOAD SCRIPT FROM GITHUB
+          <div className="bg-[#11141a] p-3 rounded-lg border border-[#262c36] space-y-3 font-sans">
+            <h3 className="text-[#eef2f7] font-semibold text-xs flex items-center gap-1.5 border-b border-[#262c36] pb-1.5">
+              <ChevronRight className="w-3.5 h-3.5 text-[#60a5fa]" />
+              Load Script from GitHub
             </h3>
-            <p className="text-[10px] text-slate-400 leading-normal">
-              Download a workspace state json or Egosoft game XML script directly from the remote repository to load it into the workspace graph.
+            <p className="text-[11px] text-[#a0aab8] leading-normal">
+              Download a workspace state JSON or Egosoft game XML script directly from the remote repository to load it into the workspace graph.
             </p>
             <div className="space-y-2">
               <div>
-                <label className="text-slate-505 text-[10px] block mb-1">Target File to Load</label>
+                <label className="text-[#a0aab8] text-[11px] block mb-1">Target File to Load</label>
                 <input
                   type="text"
                   value={filePathToLoad}
                   onChange={e => setFilePathToLoad(e.target.value)}
                   placeholder="e.g. ais_workspace.json"
-                  className="w-full p-2 rounded bg-black/60 border border-white/10 text-white text-[11px] focus:outline-none focus:border-cyan-500 font-mono"
+                  className="w-full p-2 rounded bg-[#0a0c10] border border-[#262c36] text-[#eef2f7] placeholder-[#687385] text-[11px] focus:outline-none focus:border-[#3b82f6] font-mono"
                 />
               </div>
               <button
                 disabled={isProcessing || !isGitHubConnected}
                 onClick={handleGitHubLoad}
-                className="w-full py-1.5 bg-cyan-600/20 hover:bg-cyan-600 border border-cyan-500/30 hover:border-transparent text-cyan-300 hover:text-black font-bold uppercase rounded transition-all cursor-pointer disabled:opacity-20 flex items-center justify-center gap-1"
+                className="w-full py-1.5 bg-[#3b82f6]/15 hover:bg-[#3b82f6]/25 border border-[#3b82f6]/35 text-[#93c5fd] text-[11px] font-semibold rounded transition-colors cursor-pointer disabled:opacity-35 flex items-center justify-center gap-1.5"
               >
                 {isProcessing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
-                Fetch & Load remote file
+                Fetch &amp; Load remote file
               </button>
             </div>
           </div>
 
           {/* MULTI SNAPSHOT SOURCE SYNCHRONIZER (PUSH) */}
-          <div className="bg-[#0e121a] p-3 rounded-lg border border-violet-500/15 space-y-3 animate-fade-in">
-            <h3 className="text-violet-400 font-bold uppercase text-[10.5px] tracking-wider flex items-center gap-1.5 border-b border-white/5 pb-1.5">
+          <div className="bg-[#11141a] p-3 rounded-lg border border-[#262c36] space-y-3 font-sans">
+            <h3 className="text-[#eef2f7] font-semibold text-xs flex items-center gap-1.5 border-b border-[#262c36] pb-1.5">
               <ChevronRight className="w-3.5 h-3.5 text-violet-400" />
-              Sync & Push Pack targets
+              Sync &amp; Push Pack targets
             </h3>
-            <p className="text-[10px] text-slate-400 leading-normal">
+            <p className="text-[11px] text-[#a0aab8] leading-normal">
               Package your visual flowchart designs and compiled Egosoft script codes back into a bundle and push to the remote repository recursively.
             </p>
 
             {/* Remote vs local diff overview (auto-scans when this tab opens while connected) */}
             <div className="space-y-1.5">
-              <div className="flex items-center justify-between border-b border-white/5 pb-1">
-                <span className="text-[9.5px] text-slate-400 uppercase tracking-wider flex items-center gap-1 font-bold">
+              <div className="flex items-center justify-between border-b border-[#262c36] pb-1">
+                <span className="text-[11px] text-[#cbd5e1] flex items-center gap-1.5 font-medium">
                   <GitCompare className="w-3.5 h-3.5 text-violet-400" />
                   Remote vs Local
                 </span>
                 <button
                   onClick={handleScanRemoteDiff}
                   disabled={isDiffLoading || !isGitHubConnected}
-                  className="px-1.5 py-0.5 rounded bg-violet-500/10 hover:bg-violet-500/25 text-violet-300 disabled:opacity-30 transition-all cursor-pointer flex items-center gap-1 text-[9px] border border-violet-500/20"
+                  className="px-2 py-0.5 rounded bg-violet-500/12 hover:bg-violet-500/25 text-violet-300 disabled:opacity-35 transition-colors cursor-pointer flex items-center gap-1 text-[11px] border border-violet-500/25"
                   title="Compare the active workspace against the remote repository"
                 >
-                  <RefreshCw className={`w-2.5 h-2.5 ${isDiffLoading ? 'animate-spin' : ''}`} />
+                  <RefreshCw className={`w-3 h-3 ${isDiffLoading ? 'animate-spin' : ''}`} />
                   Rescan
                 </button>
               </div>
-              <div className="bg-black/40 p-2 max-h-28 overflow-y-auto rounded border border-white/5 space-y-1 font-mono text-[10px]">
+              <div className="bg-[#0a0c10] p-2 max-h-28 overflow-y-auto rounded border border-[#262c36] space-y-1 font-mono text-[11px]">
                 {isDiffLoading ? (
-                  <div className="text-slate-400 text-center py-3 animate-pulse">Comparing with remote…</div>
+                  <div className="text-[#a0aab8] text-center py-3 animate-pulse">Comparing with remote…</div>
                 ) : diffItems.length === 0 ? (
-                  <div className="text-slate-500 text-center py-3 leading-normal">
+                  <div className="text-[#687385] text-center py-3 leading-normal font-sans">
                     {isGitHubConnected ? 'Auto-compares when opened; or press Rescan.' : 'Connect a repo to compare.'}
                   </div>
                 ) : (
                   diffItems.map((item, idx) => (
                     <div
                       key={idx}
-                      className={`flex items-start gap-1 ${item.type === 'add' ? 'text-emerald-400' : item.type === 'remove' ? 'text-red-400' : 'text-amber-400'}`}
+                      className={`flex items-start gap-1.5 ${item.type === 'add' ? 'text-emerald-400' : item.type === 'remove' ? 'text-rose-400' : 'text-amber-400'}`}
                     >
                       <span className="font-bold font-sans shrink-0">{item.type === 'add' ? '+' : item.type === 'remove' ? '-' : '~'}</span>
-                      <span className="text-slate-300">{item.text}</span>
+                      <span className="text-[#cbd5e1]">{item.text}</span>
                     </div>
                   ))
                 )}
               </div>
             </div>
 
-            <div className="space-y-2 font-mono text-[10px] bg-black/30 p-2 rounded border border-white/5">
-              <div className="flex items-center justify-between">
-                <span className="text-slate-400">ais_workspace.json (Visual graph layout JSON)</span>
+            <div className="space-y-2 font-mono text-[11px] bg-[#0a0c10] p-2.5 rounded border border-[#262c36]">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[#cbd5e1] truncate">ais_workspace.json (Visual graph layout)</span>
                 <input
                   type="checkbox"
                   checked={pushSelectedFiles.workspace}
                   onChange={e => setPushSelectedFiles(prev => ({ ...prev, workspace: e.target.checked }))}
-                  className="accent-violet-550 cursor-pointer h-3.5 w-3.5"
+                  className="accent-[#3b82f6] cursor-pointer h-3.5 w-3.5 shrink-0"
                 />
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-slate-400">md/{workspace.name || 'ais_mod'}.xml (Egosoft MD cues script)</span>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[#cbd5e1] truncate">md/{workspace.name || 'ais_mod'}.xml (Egosoft MD cues)</span>
                 <input
                   type="checkbox"
                   checked={pushSelectedFiles.md_xml}
                   onChange={e => setPushSelectedFiles(prev => ({ ...prev, md_xml: e.target.checked }))}
-                  className="accent-violet-550 cursor-pointer h-3.5 w-3.5"
+                  className="accent-[#3b82f6] cursor-pointer h-3.5 w-3.5 shrink-0"
                 />
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-slate-400">ui/ais_ui_layout.xml (HUD menu lua config)</span>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[#cbd5e1] truncate">ui/ais_ui_layout.xml (HUD menu config)</span>
                 <input
                   type="checkbox"
                   checked={pushSelectedFiles.ui_xml}
                   onChange={e => setPushSelectedFiles(prev => ({ ...prev, ui_xml: e.target.checked }))}
-                  className="accent-violet-550 cursor-pointer h-3.5 w-3.5"
+                  className="accent-[#3b82f6] cursor-pointer h-3.5 w-3.5 shrink-0"
                 />
               </div>
-              <div className="flex items-center justify-between">
-                <span className="text-slate-400">README.md (Mod documentation log)</span>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[#cbd5e1] truncate">README.md (Mod documentation log)</span>
                 <input
                   type="checkbox"
                   checked={pushSelectedFiles.readme}
                   onChange={e => setPushSelectedFiles(prev => ({ ...prev, readme: e.target.checked }))}
-                  className="accent-violet-550 cursor-pointer h-3.5 w-3.5"
+                  className="accent-[#3b82f6] cursor-pointer h-3.5 w-3.5 shrink-0"
                 />
               </div>
             </div>
 
             <div className="space-y-2">
               <div>
-                <label className="text-slate-500 text-[10px] block mb-1">Staging commit context message</label>
+                <label className="text-[#a0aab8] text-[11px] block mb-1">Staging commit context message</label>
                 <input
                   type="text"
                   placeholder="feat: customize active mission logical flows"
-                  className="w-full p-1.5 rounded bg-black/60 border border-white/10 text-white text-[11px] focus:outline-none focus:border-violet-500 font-mono placeholder-slate-650"
+                  className="w-full p-1.5 rounded bg-[#0a0c10] border border-[#262c36] text-[#eef2f7] text-[11px] focus:outline-none focus:border-[#3b82f6] font-mono placeholder-[#687385]"
                   onKeyDown={e => {
                     if (e.key === 'Enter') {
                       handleGithubPushMulti((e.target as HTMLInputElement).value);
@@ -1776,10 +1777,10 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
               <button
                 disabled={isProcessing || !isGitHubConnected}
                 onClick={() => handleGithubPushMulti()}
-                className="w-full py-1.5 bg-violet-600/20 hover:bg-violet-600 border border-violet-500/30 hover:border-transparent text-violet-300 hover:text-black font-bold uppercase rounded transition-all cursor-pointer disabled:opacity-20 flex items-center justify-center gap-1.5"
+                className="w-full py-1.5 bg-[#3b82f6] hover:bg-[#2563eb] text-white text-[11px] font-semibold rounded transition-colors cursor-pointer disabled:opacity-35 flex items-center justify-center gap-1.5"
               >
                 {isProcessing ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <ArrowUp className="w-3.5 h-3.5" />}
-                Sync & Push Updates
+                Sync &amp; Push Updates
               </button>
             </div>
           </div>
@@ -1787,15 +1788,15 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
           {/* Live Terminal Activity Log Console */}
           {terminalLogs.length > 0 && (
             <div className="space-y-1.5 font-mono">
-              <div className="text-[9.5px] text-slate-400 uppercase tracking-wider flex items-center gap-1 md:gap-1.5 pb-0.5 border-b border-white/5">
-                <Terminal className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
+              <div className="text-[11px] text-[#cbd5e1] font-sans font-medium flex items-center gap-1.5 pb-1 border-b border-[#262c36]">
+                <Terminal className="w-3.5 h-3.5 text-[#60a5fa] animate-pulse" />
                 Live Synchronization Activity Logs
               </div>
-              <div className="w-full max-h-36 overflow-y-auto bg-black p-2 rounded text-[10px] leading-relaxed text-slate-400 space-y-1 h-32 font-mono">
+              <div className="w-full max-h-36 overflow-y-auto bg-[#0a0c10] border border-[#262c36] p-2 rounded text-[11px] leading-relaxed text-[#a0aab8] space-y-1 h-32 font-mono">
                 {terminalLogs.map((log, idx) => {
                   let cls = '';
-                  if (log.includes('❌')) cls = 'text-red-400 font-bold';
-                  if (log.includes('🎉') || log.includes('SUCCESS')) cls = 'text-emerald-400 font-bold';
+                  if (log.includes('❌')) cls = 'text-rose-400 font-semibold';
+                  if (log.includes('🎉') || log.includes('SUCCESS')) cls = 'text-emerald-400 font-semibold';
                   if (log.includes('[COMMITTED]')) cls = 'text-purple-400';
                   return (
                     <div key={idx} className={cls}>
@@ -1808,9 +1809,9 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
           )}
 
           {/* Technical footer card info panel */}
-          <div className="p-2 border border-slate-800 rounded bg-[#10141e]/50 flex items-center justify-between text-[9px] text-slate-500 font-mono">
-            <span className="flex items-center gap-1">
-              <Info className="w-3 h-3 text-cyan-400 animate-pulse" />
+          <div className="p-2 border border-[#262c36] rounded bg-[#11141a] flex items-center justify-between text-[11px] text-[#a0aab8] font-mono">
+            <span className="flex items-center gap-1.5">
+              <Info className="w-3.5 h-3.5 text-[#60a5fa]" />
               Secure Proxy Connected
             </span>
             <span>API v3</span>
@@ -1821,21 +1822,21 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
 
       {/* GRAPH TAB VIEW */}
       {activeTab === 'graph' && (
-        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+        <div className="flex-1 flex flex-col min-h-0 overflow-hidden bg-[#0c0e12]">
           
           {/* Action Row */}
-          <div className="p-2 border-b border-white/5 bg-[#0d1117] flex items-center justify-end text-[9px] font-mono text-slate-400 shrink-0 select-none">
-            <div className="flex items-center gap-2">
-              <button onClick={handleFetchRemoteCommits} className="hover:text-cyan-400 flex items-center gap-0.5" title="Reload commit history from the remote repo">
-                <ArrowDown className="w-3 h-3" />
+          <div className="p-2 border-b border-[#262c36] bg-[#11141a] flex items-center justify-end text-[11px] font-mono text-[#a0aab8] shrink-0 select-none">
+            <div className="flex items-center gap-3">
+              <button onClick={handleFetchRemoteCommits} className="hover:text-[#93c5fd] flex items-center gap-1 cursor-pointer" title="Reload commit history from the remote repo">
+                <ArrowDown className="w-3.5 h-3.5" />
                 Pull
               </button>
-              <button onClick={handlePushGitWorkspace} className="hover:text-cyan-400 flex items-center gap-0.5" title="Push staging logs">
-                <ArrowUp className="w-3 h-3" />
+              <button onClick={handlePushGitWorkspace} className="hover:text-[#93c5fd] flex items-center gap-1 cursor-pointer" title="Push staging logs">
+                <ArrowUp className="w-3.5 h-3.5" />
                 Push
               </button>
-              <button onClick={handleFetchRemoteCommits} className="hover:text-cyan-400 flex items-center gap-0.5" title="Refresh commit history">
-                <RefreshCw className="w-2.5 h-2.5" />
+              <button onClick={handleFetchRemoteCommits} className="hover:text-[#93c5fd] flex items-center gap-1 cursor-pointer" title="Refresh commit history">
+                <RefreshCw className="w-3 h-3" />
                 Fetch
               </button>
             </div>
@@ -1868,7 +1869,7 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
             {/* Commit Log row items list */}
             <div className="relative z-10">
               {localHistory.length === 0 && (
-                <div className="p-6 text-center text-[10px] text-slate-500 leading-relaxed font-sans">
+                <div className="p-6 text-center text-[11px] text-[#687385] leading-relaxed font-sans">
                   {isGitHubConnected
                     ? 'No commits on this branch yet — push your mod to populate the history.'
                     : 'Connect a GitHub repo in the Remotes tab to view its commit history here.'}
@@ -1877,7 +1878,7 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
               {localHistory.map((commit) => {
                 const nodeX = 14 + commit.track * 14;
                 const nodeY = 22;
-                const strokeColor = commit.track === 0 ? '#06b6d4' : (commit.track === 1 ? '#f97316' : '#ec4899');
+                const strokeColor = commit.track === 0 ? '#3b82f6' : (commit.track === 1 ? '#f97316' : '#ec4899');
                 
                 return (
                   <div 
@@ -1891,10 +1892,10 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
                       }
                       setIsDiffModalOpen(true);
                     }}
-                    className="h-11 flex items-center hover:bg-white/5 border-b border-white/5 pl-16 pr-3 cursor-pointer group transition-all"
+                    className="h-12 flex items-center hover:bg-[#171b23] border-b border-[#262c36] pl-16 pr-3 cursor-pointer group transition-colors"
                   >
                     {/* Little relative node overlay precisely aligned within track coordinates */}
-                    <div className="absolute left-0 w-16 h-11 pointer-events-none">
+                    <div className="absolute left-0 w-16 h-12 pointer-events-none">
                       <svg className="w-full h-full">
                         <circle 
                           cx={nodeX} 
@@ -1912,36 +1913,36 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
                     </div>
 
                     {/* Commit specs */}
-                    <div className="min-w-0 flex-1 pl-1 text-[10px] font-sans">
+                    <div className="min-w-0 flex-1 pl-1 text-[11px] font-sans">
                       <div className="flex items-center gap-1.5">
-                        <span className="text-slate-100 font-medium truncate group-hover:text-cyan-400 transition-colors block leading-tight">
+                        <span className="text-[#eef2f7] font-medium truncate group-hover:text-[#93c5fd] transition-colors block leading-tight">
                           {commit.message}
                         </span>
                         
                         {/* Branch badging capsules */}
                         {commit.sha === 'df8a12c' && (
-                          <span className="px-1 text-[7.5px] font-mono leading-none bg-cyan-950 border border-cyan-800 text-cyan-400 rounded shrink-0 font-bold">
+                          <span className="px-1.5 py-0.5 text-[11px] font-mono leading-none bg-[#3b82f6]/15 border border-[#3b82f6]/35 text-[#93c5fd] rounded shrink-0 font-semibold">
                             main
                           </span>
                         )}
                         {commit.sha === 'cf017fa' && (
-                          <span className="px-1 text-[7.5px] font-mono leading-none bg-orange-950 border border-orange-800 text-orange-400 rounded shrink-0 font-bold">
+                          <span className="px-1.5 py-0.5 text-[11px] font-mono leading-none bg-orange-950 border border-orange-800 text-orange-300 rounded shrink-0 font-semibold">
                             feature-wiki
                           </span>
                         )}
                         {commit.sha === '10fb2a0' && (
-                          <span className="px-1 text-[7.5px] font-mono leading-none bg-pink-950 border border-pink-800 text-pink-400 rounded shrink-0 font-bold">
+                          <span className="px-1.5 py-0.5 text-[11px] font-mono leading-none bg-pink-950 border border-pink-800 text-pink-300 rounded shrink-0 font-semibold">
                             feature-hybrid
                           </span>
                         )}
                       </div>
 
-                      <div className="flex items-center gap-1.5 text-[8.5px] text-slate-500 font-mono mt-0.5 leading-none">
-                        <span className="text-slate-400 truncate max-w-[80px]">{commit.author}</span>
+                      <div className="flex items-center gap-1.5 text-[11px] text-[#a0aab8] font-mono mt-0.5 leading-none">
+                        <span className="text-[#cbd5e1] truncate max-w-[80px]">{commit.author}</span>
                         <span>•</span>
                         <span>{commit.timestamp}</span>
                         <span>•</span>
-                        <span className="text-cyan-500">{commit.sha}</span>
+                        <span className="text-[#60a5fa]">{commit.sha}</span>
                       </div>
                     </div>
                   </div>
@@ -1952,13 +1953,13 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
           </div>
 
           {/* Active branch footer status strip */}
-          <div className="p-1 px-2.5 border-t border-white/5 bg-[#080a0f] flex items-center justify-between text-[9px] font-mono text-slate-500 shrink-0">
+          <div className="px-2.5 py-1.5 border-t border-[#262c36] bg-[#11141a] flex items-center justify-between text-[11px] font-mono text-[#a0aab8] shrink-0">
             <div className="flex items-center gap-1.5">
-              <GitBranch className="w-3 h-3 text-cyan-400" />
-              <span className="text-slate-300 font-bold uppercase">main</span>
+              <GitBranch className="w-3.5 h-3.5 text-[#60a5fa]" />
+              <span className="text-[#eef2f7] font-semibold">main</span>
             </div>
             <div className="flex items-center gap-2">
-              <span className="flex items-center gap-1">
+              <span className="flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                 Linked
               </span>
@@ -1971,19 +1972,19 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
       {/* CODE DIFFERENCES POPUP MODAL (100% compliant with dynamic split-views) */}
       {isDiffModalOpen && selectedCommit && (
         <div className="fixed inset-0 bg-black/75 z-50 flex items-center justify-center p-4 backdrop-blur-sm select-text">
-          <div className="w-full max-w-4xl h-[70vh] bg-[#0c1017] border border-slate-800 rounded-lg shadow-2xl flex flex-col overflow-hidden font-sans">
+          <div className="w-full max-w-4xl h-[70vh] bg-[#11141a] border border-[#262c36] rounded-lg shadow-2xl flex flex-col overflow-hidden font-sans">
             
             {/* Modal Header bar */}
-            <div className="p-3.5 bg-[#0d121c] border-b border-white/5 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="p-1 px-1.5 rounded bg-slate-900 border border-white/10 font-mono text-[9.5px] text-cyan-400">{selectedCommit.sha}</span>
+            <div className="p-3.5 bg-[#11141a] border-b border-[#262c36] flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <span className="px-2 py-1 rounded bg-[#0a0c10] border border-[#262c36] font-mono text-[11px] text-[#93c5fd]">{selectedCommit.sha}</span>
                 <div className="text-xs">
-                  <h3 className="font-bold text-white font-mono leading-tight">{selectedCommit.message}</h3>
-                  <p className="text-[10px] text-slate-400 font-mono leading-normal mt-0.5">
-                    Committed by <span className="text-cyan-300">{selectedCommit.author}</span> ({selectedCommit.email}) • {selectedCommit.timestamp}
+                  <h3 className="font-semibold text-[#eef2f7] font-mono leading-tight">{selectedCommit.message}</h3>
+                  <p className="text-[11px] text-[#a0aab8] font-mono leading-normal mt-0.5">
+                    Committed by <span className="text-[#93c5fd]">{selectedCommit.author}</span> ({selectedCommit.email}) • {selectedCommit.timestamp}
                   </p>
                   {selectedCommit.summary && (
-                    <p className="text-[10px] text-slate-300 leading-relaxed mt-1 max-w-2xl font-sans border-l-2 border-cyan-500/40 pl-2">
+                    <p className="text-[11px] text-[#cbd5e1] leading-relaxed mt-1 max-w-2xl font-sans border-l-2 border-[#3b82f6]/50 pl-2">
                       {selectedCommit.summary}
                     </p>
                   )}
@@ -1991,7 +1992,7 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
               </div>
               <button 
                 onClick={() => setIsDiffModalOpen(false)}
-                className="p-1 bg-slate-900 border border-white/5 hover:border-white/20 text-slate-400 hover:text-white rounded cursor-pointer"
+                className="p-1.5 bg-[#0a0c10] border border-[#262c36] hover:border-[#3b82f6]/50 text-[#a0aab8] hover:text-[#eef2f7] rounded cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -2001,11 +2002,11 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
             <div className="flex-1 flex min-h-0 overflow-hidden">
               
               {/* Files list left tab column */}
-              <div className="w-56 border-r border-white/5 bg-[#0a0c10] p-2 space-y-1 overflow-y-auto select-none">
-                <h4 className="text-[9px] font-mono font-bold text-slate-500 uppercase tracking-wider p-1">Commit changeset Files</h4>
+              <div className="w-56 border-r border-[#262c36] bg-[#0a0c10] p-2 space-y-1 overflow-y-auto select-none">
+                <h4 className="text-[11px] font-medium text-[#a0aab8] p-1">Commit changeset files</h4>
                 
                 {(!selectedCommit.filesChanged || selectedCommit.filesChanged.length === 0) ? (
-                  <div className="p-2 text-[9.5px] text-slate-500 italic leading-relaxed">
+                  <div className="p-2 text-[11px] text-[#687385] italic leading-relaxed">
                     No actual files affected (metadata alignment commit or synthetic commit log placeholder check).
                   </div>
                 ) : (
@@ -2013,13 +2014,13 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
                     <button
                       key={f.path}
                       onClick={() => setInspectionFile(f.path)}
-                      className={`w-full text-left p-2 rounded text-[10.5px] font-mono flex items-center gap-1.5 transition-all cursor-pointer ${
+                      className={`w-full text-left p-2 rounded text-[11px] font-mono flex items-center gap-1.5 transition-colors cursor-pointer ${
                         inspectionFile === f.path 
-                          ? 'bg-cyan-600/15 border border-cyan-500/20 text-white' 
-                          : 'hover:bg-white/5 border border-transparent text-slate-400'
+                          ? 'bg-[#3b82f6]/15 border border-[#3b82f6]/35 text-[#eef2f7]' 
+                          : 'hover:bg-[#171b23] border border-transparent text-[#a0aab8]'
                       }`}
                     >
-                      <FileText className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                      <FileText className="w-3.5 h-3.5 text-[#60a5fa] shrink-0" />
                       <span className="truncate">{f.path}</span>
                     </button>
                   ))
@@ -2027,34 +2028,34 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
               </div>
 
               {/* Code viewer split panel right */}
-              <div className="flex-1 bg-[#07090d] overflow-y-auto p-4 min-w-0">
+              <div className="flex-1 bg-[#0c0e12] overflow-y-auto p-4 min-w-0">
                 {(() => {
                   const activeFileObj = selectedCommit.filesChanged?.find(f => f.path === inspectionFile);
                   if (!activeFileObj) {
                     return (
-                      <div className="h-full flex flex-col items-center justify-center text-center p-6 text-slate-500">
-                        <Terminal className="w-8 h-8 text-slate-700 mb-2" />
-                        <h4 className="font-mono text-xs font-bold text-slate-400">SELECT CHANGED FILE</h4>
-                        <p className="text-[10px] text-slate-500 mt-1 max-w-xs leading-normal">Pick a file from the repository changes checklist to audit the line-by-line diff of that commit.</p>
+                      <div className="h-full flex flex-col items-center justify-center text-center p-6 text-[#687385]">
+                        <Terminal className="w-8 h-8 text-[#262c36] mb-2" />
+                        <h4 className="font-mono text-xs font-semibold text-[#a0aab8]">Select Changed File</h4>
+                        <p className="text-[11px] text-[#687385] mt-1 max-w-xs leading-normal">Pick a file from the repository changes checklist to audit the line-by-line diff of that commit.</p>
                       </div>
                     );
                   }
 
                   return (
                     <div className="space-y-1 font-mono text-[11px] leading-relaxed select-text pr-2">
-                      <div className="p-2 border border-slate-800/60 rounded bg-slate-900/50 mb-3 text-[10px] flex items-center justify-between text-slate-400">
-                        <span>Auditing details for: <code className="text-cyan-400">{inspectionFile}</code></span>
-                        <span className="text-slate-500 italic font-medium uppercase">Unified Diff view</span>
+                      <div className="p-2.5 border border-[#262c36] rounded bg-[#11141a] mb-3 text-[11px] flex items-center justify-between text-[#a0aab8]">
+                        <span>Auditing details for: <code className="text-[#93c5fd]">{inspectionFile}</code></span>
+                        <span className="text-[#a0aab8] font-medium">Unified diff view</span>
                       </div>
 
                       {activeFileObj.diffLines.map((line, idx) => {
-                        let lineBg = 'hover:bg-white/5 text-slate-350';
+                        let lineBg = 'hover:bg-[#171b23] text-[#cbd5e1]';
                         let prefix = ' ';
                         if (line.type === 'addition') {
-                          lineBg = 'bg-emerald-500/10 hover:bg-emerald-500/15 text-emerald-300';
+                          lineBg = 'bg-emerald-500/12 hover:bg-emerald-500/18 text-emerald-300';
                           prefix = '+';
                         } else if (line.type === 'deletion') {
-                          lineBg = 'bg-red-500/10 hover:bg-red-500/15 text-red-300 line-through';
+                          lineBg = 'bg-rose-500/12 hover:bg-rose-500/18 text-rose-300 line-through';
                           prefix = '-';
                         }
 
@@ -2063,8 +2064,8 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
                             key={idx} 
                             className={`flex min-w-full p-0.5 rounded px-2 whitespace-pre-wrap break-all ${lineBg}`}
                           >
-                            <span className="w-6 text-slate-600 block shrink-0 select-none text-right pr-2 text-[10px]">{idx + 1}</span>
-                            <span className="w-4 text-slate-500 block shrink-0 select-none font-bold text-[10px]">{prefix}</span>
+                            <span className="w-6 text-[#687385] block shrink-0 select-none text-right pr-2 text-[11px]">{idx + 1}</span>
+                            <span className="w-4 text-[#a0aab8] block shrink-0 select-none font-bold text-[11px]">{prefix}</span>
                             <span className="flex-1 font-mono">{line.value}</span>
                           </div>
                         );
@@ -2077,8 +2078,8 @@ This mod is generated with \`${workspace.nodes.length}\` logic gates and \`${wor
             </div>
 
             {/* PopFooter status strip */}
-            <div className="p-2 px-3 bg-[#0a0c10] border-t border-slate-800 flex items-center justify-between text-[10px] font-mono text-slate-500">
-              <span>Branch context: <code className="text-slate-400">{selectedCommit.branch}</code></span>
+            <div className="px-3 py-2 bg-[#11141a] border-t border-[#262c36] flex items-center justify-between text-[11px] font-mono text-[#a0aab8]">
+              <span>Branch context: <code className="text-[#cbd5e1]">{selectedCommit.branch}</code></span>
               <span>SHA-256: <code>{selectedCommit.sha === 'PENDING' ? 'Uncommitted Workspace Diffs' : `e3f4a3028fb08c${selectedCommit.sha}`}</code></span>
             </div>
 

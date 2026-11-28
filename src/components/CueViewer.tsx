@@ -537,13 +537,13 @@ export default function CueViewer({
             onClick={() => setLiveMode(v => !v)}
             data-testid="cue-live-toggle"
             title="Watch the live X4 debuglog — the same feed the Playtest watcher uses — and light up cues in real time"
-            className={`flex items-center gap-1.5 text-[11px] font-semibold uppercase cursor-pointer ${liveMode ? 'text-emerald-300' : 'text-[#a0aab8] hover:text-emerald-300'}`}
+            className={`flex items-center gap-1.5 text-[11px] font-medium cursor-pointer ${liveMode ? 'text-emerald-300' : 'text-[#a0aab8] hover:text-emerald-300'}`}
           >
-            <Radio className={`w-3.5 h-3.5 ${liveMode ? 'animate-pulse' : ''}`} />{liveMode ? 'Live: ON' : 'Bind live game log'}
+            <Radio className={`w-3.5 h-3.5 ${liveMode ? 'animate-pulse' : ''}`} />{liveMode ? 'Live: On' : 'Bind live game log'}
           </button>
           <button
             onClick={() => setShowLog(v => !v)}
-            className="flex items-center gap-1.5 text-[11px] font-semibold uppercase text-[#a0aab8] hover:text-[#93c5fd] cursor-pointer"
+            className="flex items-center gap-1.5 text-[11px] font-medium text-[#a0aab8] hover:text-[#93c5fd] cursor-pointer"
           >
             <Activity className="w-3.5 h-3.5" />{showLog ? 'Hide' : 'Import'} offline log{!liveMode && pastedTele.size > 0 ? ` (${pastedTele.size} lit)` : ''}
           </button>
@@ -555,18 +555,18 @@ export default function CueViewer({
         )}
         {liveMode && liveFixes.length > 0 && (
           <div className="space-y-1.5">
-            <div className="text-[11px] font-semibold uppercase text-rose-300 tracking-wide">
+            <div className="text-[11px] font-semibold text-rose-300">
               Live fixes — {liveFixes.length} attributed error{liveFixes.length > 1 ? 's' : ''}
             </div>
             {liveFixes.slice(0, 6).map(fix => (
               <div key={fix.id} className="rounded border border-rose-500/25 bg-rose-500/5 p-2 space-y-1">
                 <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className="text-[11px] font-semibold uppercase text-rose-300 bg-rose-500/12 border border-rose-500/30 rounded px-1.5 py-0.5">{fix.fixKind.replace('_', ' ')}</span>
+                  <span className="text-[11px] font-medium text-rose-300 bg-rose-500/12 border border-rose-500/30 rounded px-1.5 py-0.5">{fix.fixKind.replace('_', ' ')}</span>
                   {fix.cueName && <span className="text-[11px] font-mono text-[#a0aab8]">{fix.cueName}</span>}
                   {fix.sourceRef && (
                     <button
                       onClick={() => handleJumpToNode(fix.sourceRef!.id)}
-                      className="text-[11px] font-semibold text-[#60a5fa] hover:text-[#93c5fd] uppercase cursor-pointer"
+                      className="text-[11px] font-medium text-[#60a5fa] hover:text-[#93c5fd] cursor-pointer"
                     >
                       Jump →
                     </button>
@@ -574,7 +574,7 @@ export default function CueViewer({
                   {fix.autoApplicable && setWorkspace && (
                     <button
                       onClick={() => handleApplyFix(fix)}
-                      className="text-[11px] font-semibold text-emerald-300 hover:text-emerald-200 uppercase ml-auto cursor-pointer"
+                      className="text-[11px] font-medium text-emerald-300 hover:text-emerald-200 ml-auto cursor-pointer"
                     >
                       Apply fix
                     </button>
@@ -587,7 +587,7 @@ export default function CueViewer({
             <div className="flex items-center gap-2">
               <button
                 onClick={handleDeployForRefresh}
-                className="text-[11px] font-semibold uppercase text-[#93c5fd] hover:text-[#bfdbfe] cursor-pointer"
+                className="text-[11px] font-medium text-[#93c5fd] hover:text-[#bfdbfe] cursor-pointer"
               >
                 Deploy for /refreshmd
               </button>

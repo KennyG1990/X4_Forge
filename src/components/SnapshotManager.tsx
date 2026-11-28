@@ -328,19 +328,19 @@ export default function SnapshotManager({
   }, [workspace, selectedSnapshot]);
 
   return (
-    <div className="border-t border-white/10 pt-4 space-y-4 font-mono text-xs">
+    <div data-testid="snapshot-manager" className="border-t border-[#262c36] pt-4 space-y-3 font-mono text-xs text-[#eef2f7]">
       <div className="flex items-center justify-between">
-        <h3 className="text-xs font-bold text-cyan-400 uppercase tracking-wider flex items-center gap-1.5">
-          <GitCommit className="w-4 h-4" />
+        <h3 className="text-xs font-semibold text-[#eef2f7] flex items-center gap-1.5">
+          <GitCommit className="w-4 h-4 text-[#60a5fa]" />
           Workspace Snapshots
         </h3>
         
         {snapshots.length > 0 && (
           <button 
             onClick={handleClearAll}
-            className="text-[9px] text-red-400/80 hover:text-red-300 flex items-center gap-1 transition-colors cursor-pointer"
+            className="text-[11px] text-rose-400 hover:text-rose-300 flex items-center gap-1 transition-colors cursor-pointer"
           >
-            <Trash2 className="w-3 h-3" />
+            <Trash2 className="w-3.5 h-3.5" />
             Wipe
           </button>
         )}
@@ -348,10 +348,10 @@ export default function SnapshotManager({
 
       {/* Snapshot operations feedback */}
       {showFeedback && (
-        <div className={`p-2 rounded font-bold text-[10px] text-center transition-all ${
+        <div className={`p-2 rounded font-semibold text-[11px] text-center transition-all ${
           showFeedback === 'saved' 
-            ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400' 
-            : 'bg-cyan-500/10 border border-cyan-500/30 text-cyan-400'
+            ? 'bg-emerald-500/12 border border-emerald-500/30 text-emerald-300' 
+            : 'bg-[#3b82f6]/12 border border-[#3b82f6]/35 text-[#93c5fd]'
         }`}>
           {showFeedback === 'saved' ? "✓ Snapshot captured successfully!" : "✓ Workspace rolled back to old instance version!"}
         </div>
@@ -364,7 +364,7 @@ export default function SnapshotManager({
           value={newSnapshotName}
           onChange={e => setNewSnapshotName(e.target.value)}
           placeholder="New milestone name..."
-          className="flex-1 p-1 px-2 rounded bg-black/50 border border-white/10 text-white focus:outline-none focus:border-cyan-500 transition-colors text-[10px]"
+          className="flex-1 px-2.5 py-1.5 rounded bg-[#0a0c10] border border-[#262c36] text-[#eef2f7] placeholder-[#687385] focus:outline-none focus:border-[#3b82f6] transition-colors text-[11px]"
           onKeyDown={e => {
             if (e.key === 'Enter') {
               handleCreateSnapshot();
@@ -373,7 +373,7 @@ export default function SnapshotManager({
         />
         <button
           onClick={() => handleCreateSnapshot()}
-          className="p-1 px-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded text-[10px] font-bold flex items-center gap-1 cursor-pointer shrink-0"
+          className="px-2.5 py-1.5 bg-[#3b82f6] hover:bg-[#2563eb] text-white rounded text-[11px] font-semibold flex items-center gap-1 cursor-pointer shrink-0 transition-colors"
           title="Take manual milestone snapshot"
         >
           <Plus className="w-3.5 h-3.5" />
@@ -382,19 +382,19 @@ export default function SnapshotManager({
       </div>
 
       {snapshots.length === 0 ? (
-        <div className="p-4 rounded-lg bg-black/20 border border-white/5 border-dashed text-center text-slate-500 italic text-[10px]">
+        <div className="p-4 rounded-lg bg-[#11141a] border border-[#262c36] border-dashed text-center text-[#687385] italic text-[11px]">
           No checkpoints saved for mod "{workspace.name}". Capture snapshots above to prevent version derailments.
         </div>
       ) : (
         <div className="space-y-2">
           {/* Sub tabs: Milestones List vs active Snapshot XML Diff */}
-          <div className="flex border-b border-white/10 text-[9px] font-bold uppercase tracking-wider">
+          <div className="flex border-b border-[#262c36] text-[11px] font-medium">
             <button
               onClick={() => setActiveTab('saves')}
-              className={`flex-1 py-1 text-center border-b-2 transition-all ${
+              className={`flex-1 py-1.5 text-center border-b-2 transition-colors cursor-pointer ${
                 activeTab === 'saves' 
-                  ? 'border-cyan-500 text-white bg-white/5' 
-                  : 'border-transparent text-slate-500 hover:text-slate-300'
+                  ? 'border-[#3b82f6] text-[#eef2f7] bg-[#171b23]' 
+                  : 'border-transparent text-[#a0aab8] hover:text-[#eef2f7]'
               }`}
             >
               Checkpoints ({snapshots.length})
@@ -406,10 +406,10 @@ export default function SnapshotManager({
                 }
                 setActiveTab('diff');
               }}
-              className={`flex-1 py-1 text-center border-b-2 transition-all flex items-center justify-center gap-1 ${
+              className={`flex-1 py-1.5 text-center border-b-2 transition-colors flex items-center justify-center gap-1 cursor-pointer ${
                 activeTab === 'diff' 
-                  ? 'border-cyan-500 text-white bg-white/5' 
-                  : 'border-transparent text-slate-500 hover:text-slate-300'
+                  ? 'border-[#3b82f6] text-[#eef2f7] bg-[#171b23]' 
+                  : 'border-transparent text-[#a0aab8] hover:text-[#eef2f7]'
               }`}
             >
               <FileDiff className="w-3.5 h-3.5" />
@@ -418,7 +418,7 @@ export default function SnapshotManager({
           </div>
 
           {activeTab === 'saves' ? (
-            <div className="max-h-56 overflow-y-auto custom-scrollbar space-y-1 p-0.5">
+            <div className="max-h-56 overflow-y-auto custom-scrollbar space-y-1.5 p-0.5">
               {snapshots.map(snap => {
                 const isSelected = selectedSnapshotId === snap.id;
                 const nodeCount = snap.workspace.nodes.length;
@@ -431,19 +431,19 @@ export default function SnapshotManager({
                       setSelectedSnapshotId(snap.id);
                       setActiveTab('diff'); // Switch to view diff on select!
                     }}
-                    className={`p-2 rounded border transition-all cursor-pointer text-[10px] flex items-center justify-between gap-2 ${
+                    className={`p-2 rounded border transition-colors cursor-pointer text-[11px] flex items-center justify-between gap-2 ${
                       isSelected 
-                        ? 'bg-cyan-500/10 border-cyan-500/40 text-white' 
-                        : 'bg-black/30 border-white/5 text-slate-400 hover:border-white/10 hover:bg-black/45'
+                        ? 'bg-[#3b82f6]/12 border-[#3b82f6]/45 text-[#eef2f7]' 
+                        : 'bg-[#11141a] border-[#262c36] text-[#cbd5e1] hover:border-[#3b82f6]/35 hover:bg-[#171b23]'
                     }`}
                   >
                     <div className="min-w-0 flex-1 space-y-0.5">
                       <div className="flex items-center gap-1.5 min-w-0">
-                        <span className="font-bold text-white truncate text-[10.5px]">{snap.name}</span>
+                        <span className="font-semibold text-[#eef2f7] truncate text-xs">{snap.name}</span>
                       </div>
-                      <div className="flex items-center gap-2 text-[8px] text-slate-500">
-                        <span className="flex items-center gap-0.5">
-                          <Calendar className="w-2.5 h-2.5" />
+                      <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-[#a0aab8]">
+                        <span className="flex items-center gap-1">
+                          <Calendar className="w-3 h-3" />
                           {snap.timestamp}
                         </span>
                         <span>•</span>
@@ -463,18 +463,18 @@ export default function SnapshotManager({
                           e.stopPropagation();
                           handleRestoreSnapshot(snap);
                         }}
-                        className="px-1.5 py-0.5 bg-cyan-900/45 hover:bg-cyan-600 border border-cyan-500/30 text-cyan-300 hover:text-white rounded text-[8.5px] font-bold flex items-center gap-0.5 transition-all"
+                        className="px-2 py-1 bg-[#3b82f6]/15 hover:bg-[#3b82f6]/25 border border-[#3b82f6]/35 text-[#93c5fd] rounded text-[11px] font-medium flex items-center gap-1 transition-colors cursor-pointer"
                         title="Rollback active workspace to this version index"
                       >
-                        <RotateCcw className="w-2.5 h-2.5" />
+                        <RotateCcw className="w-3 h-3" />
                         Restore
                       </button>
                       <button
                         onClick={(e) => handleDeleteSnapshot(snap.id, e)}
-                        className="p-1 hover:bg-red-500/20 text-slate-500 hover:text-red-400 rounded transition-colors"
+                        className="p-1 hover:bg-rose-500/20 text-[#a0aab8] hover:text-rose-300 rounded transition-colors cursor-pointer"
                         title="Delete checkpoint"
                       >
-                        <Trash2 className="w-3 h-3" />
+                        <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   </div>
@@ -485,17 +485,17 @@ export default function SnapshotManager({
             // XML DIFF SCREEN
             <div className="space-y-2">
               {!selectedSnapshot ? (
-                <div className="p-4 text-center text-slate-500 italic text-[10px]">
+                <div className="p-4 text-center text-[#687385] italic text-[11px]">
                   Select a checkpoint from the list to compute file-level diff diagnostics.
                 </div>
               ) : (
                 <div className="space-y-2">
-                  <div className="flex items-center justify-between text-[10px]">
-                    <span className="text-slate-500">Comparing active workspace vs:</span>
+                  <div className="flex items-center justify-between gap-2 text-[11px]">
+                    <span className="text-[#a0aab8]">Comparing active vs:</span>
                     <select
                       value={selectedSnapshotId || ''}
                       onChange={e => setSelectedSnapshotId(e.target.value)}
-                      className="bg-black border border-white/10 text-white rounded p-1 font-mono text-[9px] max-w-[200px]"
+                      className="bg-[#0a0c10] border border-[#262c36] text-[#eef2f7] rounded px-2 py-1 font-mono text-[11px] max-w-[180px] focus:outline-none focus:border-[#3b82f6]"
                     >
                       {snapshots.map(s => (
                         <option key={s.id} value={s.id}>{s.name} ({s.timestamp.slice(0, 8)})</option>
@@ -505,42 +505,42 @@ export default function SnapshotManager({
 
                   {/* Summary of Delta changes */}
                   {diffData && (
-                    <div className="grid grid-cols-2 gap-1 p-2 bg-black/40 border border-white/5 rounded text-[8px] leading-normal font-sans">
+                    <div className="grid grid-cols-2 gap-2 p-2.5 bg-[#11141a] border border-[#262c36] rounded text-[11px] leading-normal font-sans">
                       <div className="space-y-1">
-                        <div className="text-slate-400 font-bold uppercase tracking-wide">Flowchart Deltas</div>
+                        <div className="text-[#cbd5e1] font-semibold">Flowchart Deltas</div>
                         <div className="flex items-center gap-2">
-                          <span className="text-slate-500">Nodes:</span>
-                          <span className={diffData.stats.nodesDelta > 0 ? 'text-emerald-400' : diffData.stats.nodesDelta < 0 ? 'text-red-400' : 'text-slate-300'}>
+                          <span className="text-[#a0aab8]">Nodes:</span>
+                          <span className={diffData.stats.nodesDelta > 0 ? 'text-emerald-400' : diffData.stats.nodesDelta < 0 ? 'text-rose-400' : 'text-[#cbd5e1]'}>
                             {diffData.stats.nodesDelta > 0 ? `+${diffData.stats.nodesDelta}` : diffData.stats.nodesDelta}
                           </span>
                         </div>
                         <div className="flex items-center gap-2">
-                          <span className="text-slate-500">Widgets:</span>
-                          <span className={diffData.stats.widgetsDelta > 0 ? 'text-emerald-400' : diffData.stats.widgetsDelta < 0 ? 'text-red-400' : 'text-slate-300'}>
+                          <span className="text-[#a0aab8]">Widgets:</span>
+                          <span className={diffData.stats.widgetsDelta > 0 ? 'text-emerald-400' : diffData.stats.widgetsDelta < 0 ? 'text-rose-400' : 'text-[#cbd5e1]'}>
                             {diffData.stats.widgetsDelta > 0 ? `+${diffData.stats.widgetsDelta}` : diffData.stats.widgetsDelta}
                           </span>
                         </div>
                         <div className="flex items-center gap-2">
-                          <span className="text-slate-500">XML Patches:</span>
-                          <span className={diffData.stats.patchesDelta > 0 ? 'text-emerald-400' : diffData.stats.patchesDelta < 0 ? 'text-red-400' : 'text-slate-300'}>
+                          <span className="text-[#a0aab8]">XML Patches:</span>
+                          <span className={diffData.stats.patchesDelta > 0 ? 'text-emerald-400' : diffData.stats.patchesDelta < 0 ? 'text-rose-400' : 'text-[#cbd5e1]'}>
                             {diffData.stats.patchesDelta > 0 ? `+${diffData.stats.patchesDelta}` : diffData.stats.patchesDelta}
                           </span>
                         </div>
                       </div>
 
-                      <div className="space-y-1 border-l border-white/10 pl-2">
-                        <div className="text-slate-400 font-bold uppercase tracking-wide">XML Line Changes</div>
+                      <div className="space-y-1 border-l border-[#262c36] pl-2.5">
+                        <div className="text-[#cbd5e1] font-semibold">XML Line Changes</div>
                         <div className="flex items-center gap-1.5 text-emerald-400">
-                          <span className="bg-emerald-500/15 p-0.5 rounded px-1">+{diffData.stats.additions} lines added</span>
+                          <span className="bg-emerald-500/15 px-1.5 py-0.5 rounded">+{diffData.stats.additions} added</span>
                         </div>
-                        <div className="flex items-center gap-1.5 text-red-400">
-                          <span className="bg-red-500/15 p-0.5 rounded px-1">-{diffData.stats.deletions} lines deleted</span>
+                        <div className="flex items-center gap-1.5 text-rose-400">
+                          <span className="bg-rose-500/15 px-1.5 py-0.5 rounded">-{diffData.stats.deletions} deleted</span>
                         </div>
                         <button
                           onClick={() => handleRestoreSnapshot(selectedSnapshot)}
-                          className="w-full mt-1.5 p-1 bg-cyan-900 border border-cyan-600/30 text-white rounded text-[8px] font-bold hover:bg-cyan-600 transition-colors cursor-pointer flex items-center justify-center gap-1 uppercase"
+                          className="w-full mt-1.5 px-2 py-1 bg-[#3b82f6]/15 hover:bg-[#3b82f6]/25 border border-[#3b82f6]/35 text-[#93c5fd] rounded text-[11px] font-semibold transition-colors cursor-pointer flex items-center justify-center gap-1"
                         >
-                          <RotateCcw className="w-2 h-2" />
+                          <RotateCcw className="w-3 h-3" />
                           Rollback workspace
                         </button>
                       </div>
@@ -549,29 +549,29 @@ export default function SnapshotManager({
 
                   {/* Micro XML code Diff viewer */}
                   <div className="space-y-1">
-                    <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wider flex items-center gap-1">
-                      <Code2 className="w-3 h-3 text-cyan-400" />
+                    <span className="text-[11px] text-[#a0aab8] font-semibold flex items-center gap-1.5">
+                      <Code2 className="w-3.5 h-3.5 text-[#60a5fa]" />
                       Lines Comparison (md/{modId}.xml)
                     </span>
                     
-                    <div className="border border-white/10 rounded overflow-hidden max-h-60 bg-[#080a0f] text-[9.5px]">
-                      <div className="overflow-auto custom-scrollbar h-52 font-mono scroll-smooth select-text leading-tight p-2 space-y-0.5">
+                    <div className="border border-[#262c36] rounded overflow-hidden max-h-60 bg-[#0a0c10] text-[11px]">
+                      <div className="overflow-auto custom-scrollbar h-52 font-mono scroll-smooth select-text leading-snug p-2 space-y-0.5">
                         {diffData && diffData.lines.map((line) => {
-                          let lineClass = 'text-slate-400/85';
+                          let lineClass = 'text-[#a0aab8]';
                           let prefix = ' ';
                           if (line.type === 'addition') {
-                            lineClass = 'bg-emerald-500/10 text-emerald-400 font-bold border-l-2 border-emerald-500 pl-0.5';
+                            lineClass = 'bg-emerald-500/12 text-emerald-300 font-semibold border-l-2 border-emerald-500 pl-1';
                             prefix = '+';
                           } else if (line.type === 'deletion') {
-                            lineClass = 'bg-red-500/10 text-red-400 font-bold border-l-2 border-red-500 pl-0.5 line-through';
+                            lineClass = 'bg-rose-500/12 text-rose-300 font-semibold border-l-2 border-rose-500 pl-1 line-through';
                             prefix = '-';
                           }
                           
                           return (
                             <div key={line.num} className={`flex ${lineClass} whitespace-pre`}>
-                              <span className="opacity-25 w-8 select-none text-right pr-2 shrink-0">{line.num}</span>
-                              <span className="opacity-45 select-none w-3 shrink-0">{prefix}</span>
-                              <span className="flex-1 break-all select-all font-semibold font-mono">{line.value}</span>
+                              <span className="opacity-35 w-8 select-none text-right pr-2 shrink-0">{line.num}</span>
+                              <span className="opacity-55 select-none w-3 shrink-0">{prefix}</span>
+                              <span className="flex-1 break-all select-all font-mono">{line.value}</span>
                             </div>
                           );
                         })}
