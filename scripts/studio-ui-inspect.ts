@@ -992,6 +992,10 @@ async function collectFrameSnapshot(frame: Frame, selectorFilter: string | null)
         if (isClipping && clipContainerId === 'root') {
           clipContainerId = `c${pid}`;
         }
+        if (p.getAttribute('data-pannable-surface') === 'true') {
+          insideScrollableX = true;
+          insideScrollableY = true;
+        }
         if ((ox === 'auto' || ox === 'scroll') && p.scrollWidth > p.clientWidth + 2) {
           insideScrollableX = true;
         }
@@ -1580,6 +1584,42 @@ export function runUnitSelftest(): void {
   assert.equal(broken.clippedText.length, 1);
   assert.equal(broken.overlappingInteractive.length, 1);
   assert.equal(broken.totalDefects, 5);
+
+  const pannableExempt = analyzeGeometryDefects({
+    viewport: { width: 1280, height: 800 },
+    docScrollWidth: 1280,
+    docScrollHeight: 800,
+    elements: [
+      makeEl({
+        index: 1,
+        domId: 20,
+        text: 'PannableNodeControl',
+        insideScrollableX: true,
+        insideScrollableY: true,
+        rect: { x: 1281, y: 236, left: 1281, top: 236, right: 1305, bottom: 258, width: 24, height: 22 },
+      }),
+    ],
+  });
+  assert.equal(pannableExempt.offscreenControls.length, 0);
+  assert.equal(pannableExempt.totalDefects, 0);
+
+  const fixedChromeFlagged = analyzeGeometryDefects({
+    viewport: { width: 1280, height: 800 },
+    docScrollWidth: 1280,
+    docScrollHeight: 800,
+    elements: [
+      makeEl({
+        index: 1,
+        domId: 21,
+        text: 'FixedChromeControl',
+        insideScrollableX: false,
+        insideScrollableY: false,
+        rect: { x: 1281, y: 236, left: 1281, top: 236, right: 1305, bottom: 258, width: 24, height: 22 },
+      }),
+    ],
+  });
+  assert.equal(fixedChromeFlagged.offscreenControls.length, 1);
+  assert.equal(fixedChromeFlagged.totalDefects, 1);
 
   console.log('ui-inspect-unit PASS | extension.ts shell parity & geometry analyzer verified');
 }

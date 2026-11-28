@@ -137,7 +137,7 @@ export default function NativeProjectFiles({ workspace, workspaceId }: { workspa
         value={entry?.path || ''}
         onChange={(event) => { setSelected(event.target.value); setMessage(''); }}
         title={message || `${inventory?.entries.length || 0} packaged project files`}
-        className="min-w-0 flex-1 max-w-[155px] 2xl:max-w-[230px] min-[1200px]:min-w-[115px] bg-[#11141a] border border-white/[0.08] rounded px-1.5 py-0.5 text-[11px] font-mono text-slate-200 focus:outline-none focus:border-blue-400"
+        className="min-w-0 flex-1 max-w-[155px] 2xl:max-w-[230px] min-[1200px]:min-w-[115px] bg-[#11141a] border border-white/[0.08] rounded pl-1.5 pr-5 py-0.5 text-[11px] font-mono text-slate-200 focus:outline-none focus:border-blue-400"
       >
         {!inventory?.entries.length && <option value="">{loading ? 'Scanning project files…' : 'No project files'}</option>}
         {inventory?.entries.map(file => (

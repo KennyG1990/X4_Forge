@@ -100,7 +100,7 @@ export default function WorkspaceNavigationBar({
       aria-label="Forge workspaces"
       className={`shrink-0 min-w-0 bg-[#0e1117] ${isBottom ? 'border-t' : 'border-b'} border-white/[0.08]`}
     >
-      <div className="h-[34px] min-w-0 flex items-center gap-1.5 px-2.5">
+      <div className="h-[34px] min-w-0 flex items-center gap-1 min-[1400px]:gap-1.5 px-2 min-[1400px]:px-2.5">
         <div className="flex-1 min-w-0 flex items-center gap-0.5 overflow-x-auto custom-scrollbar">
           {visible.map((id, index) => {
             const item = WORKSPACE_NAV_ITEMS.find(candidate => candidate.id === id)!;
@@ -125,7 +125,7 @@ export default function WorkspaceNavigationBar({
             return (
               <React.Fragment key={id}>
                 {showGroupSeparator && (
-                  <span aria-hidden="true" className="hidden xl:block h-3.5 w-px bg-white/[0.08] mx-1 shrink-0" />
+                  <span aria-hidden="true" className="hidden min-[1400px]:block h-3.5 w-px bg-white/[0.08] mx-1 shrink-0" />
                 )}
                 <button
                   type="button"
@@ -147,11 +147,11 @@ export default function WorkspaceNavigationBar({
                   }}
                   onClick={() => onNavigate(id)}
                   aria-label={item.label}
-                  className={`h-[28px] shrink-0 border px-2 inline-flex items-center gap-1.5 text-[11.5px] font-medium transition-colors cursor-pointer ${severityClass}`}
+                  className={`h-[28px] shrink-0 border px-1.5 min-[1400px]:px-2 inline-flex items-center gap-1 min-[1400px]:gap-1.5 text-[11px] min-[1400px]:text-[11.5px] font-medium transition-colors cursor-pointer ${severityClass}`}
                   title={item.label}
                 >
-                  <Icon className="w-3.5 h-3.5 shrink-0" />
-                  <span className={`${layout.density === 'compact' ? 'hidden xl:inline text-[11.5px]' : 'hidden lg:inline text-[11.5px]'}`}>
+                  <Icon className="w-3 h-3 min-[1400px]:w-3.5 min-[1400px]:h-3.5 shrink-0" />
+                  <span className={layout.density === 'compact' ? 'hidden xl:inline' : 'hidden lg:inline'}>
                     {item.label}
                   </span>
                   {isMd && (mdErrorCount > 0 || mdWarningCount > 0) && (

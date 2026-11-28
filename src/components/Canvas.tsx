@@ -2033,6 +2033,7 @@ function Canvas({
         }}
       >
         <div
+          data-pannable-surface="true"
           className="absolute origin-top-left flex"
           style={{
             transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoom})`,

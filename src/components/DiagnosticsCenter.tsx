@@ -63,7 +63,7 @@ export default function DiagnosticsCenter({
   return (
     <div className="flex flex-col h-full min-h-0 bg-[#0c0e12]">
       {/* Scope selector */}
-      <div className="flex min-w-0 overflow-x-auto border-b border-white/[0.08] bg-[#11141a] items-center gap-1 px-2 py-1.5 shrink-0 font-sans">
+      <div className="grid grid-cols-2 border-b border-white/[0.08] bg-[#11141a] gap-1 px-2 py-1.5 shrink-0 font-sans">
         {SCOPES.map(s => {
           const Icon = s.icon;
           const active = scope === s.id;
@@ -74,12 +74,12 @@ export default function DiagnosticsCenter({
               aria-pressed={active}
               onClick={() => onScopeChange(s.id)}
               title={`${s.label} Diagnostics`}
-              className={`shrink-0 px-2 py-1 rounded text-[11px] font-medium transition-colors flex items-center gap-1.5 cursor-pointer border ${
+              className={`min-w-0 px-2 py-1 rounded text-[11px] font-medium transition-colors flex items-center gap-1.5 cursor-pointer border ${
                 active ? s.activeClass : 'text-slate-400 hover:text-slate-200 hover:bg-white/5 border-transparent'
               }`}
             >
-              <Icon className="w-3.5 h-3.5" />
-              {s.label}
+              <Icon className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">{s.label}</span>
             </button>
           );
         })}

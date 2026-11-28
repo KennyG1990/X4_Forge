@@ -517,7 +517,7 @@ export default function GlobalSearch({
             onKeyDown={handleKeyDown}
             aria-label="Search workspace"
             placeholder="Search mod or type > for commands…"
-            className="min-w-0 flex-1 bg-transparent border-none text-[11.5px] font-sans text-slate-100 placeholder-slate-500 focus:outline-none pl-1.5"
+            className="min-w-0 flex-1 bg-transparent border-none text-[11.5px] font-sans text-slate-100 placeholder-slate-500 focus:outline-none pl-1.5 pr-1.5"
           />
 
           {query ? (
@@ -533,7 +533,7 @@ export default function GlobalSearch({
               <X className="w-3 h-3" />
             </button>
           ) : (
-            <div className="hidden sm:flex items-center gap-1 select-none">
+            <div className="hidden sm:flex shrink-0 items-center gap-1 select-none">
               <button
                 type="button"
                 tabIndex={-1}
