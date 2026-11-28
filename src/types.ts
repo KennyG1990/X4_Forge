@@ -270,11 +270,23 @@ export interface AIBehaviorScript {
   namespaced?: boolean;
 }
 
+export type WareTransport = 'container' | 'liquid' | 'solid' | 'energy' | 'inventory' | 'equipment' | 'ship';
+
+export interface WareProductionDef {
+  method: string;
+  name?: string;
+  time: number;
+  amount: number;
+  primaryWares?: Array<{ ware: string; amount: number | string }>;
+}
+
 export interface WareDef {
   id: string;
   name: string;
   description: string;
-  transport: 'container' | 'liquid' | 'solid' | 'energy';
+  factoryName?: string;
+  group?: string;
+  transport: WareTransport;
   tags?: string;
   volume: number;
   minPrice: number;
@@ -285,7 +297,23 @@ export interface WareDef {
   productionMethod?: string;
   productionName?: string;
   primaryWares?: Array<{ ware: string; amount: number | string }>;
+  additionalProductions?: WareProductionDef[];
+  componentRef?: string;
   includeInBuild?: boolean;
+}
+
+export type JobShipSize = 'ship_xs' | 'ship_s' | 'ship_m' | 'ship_l' | 'ship_xl';
+
+export interface JobOrderParamDef {
+  name: string;
+  value: string;
+}
+
+export interface JobSubordinateDef {
+  job: string;
+  assignment?: string;
+  group?: number;
+  rebuild?: boolean;
 }
 
 export interface JobDef {
@@ -298,6 +326,18 @@ export interface JobDef {
   sectorQuota: number;
   taskScript: string;
   rebuildOnDestroy: boolean;
+  startActive?: boolean;
+  commandeerable?: boolean;
+  orderId?: string;
+  orderParams?: JobOrderParamDef[];
+  basket?: string;
+  categoryTags?: string;
+  shipSize?: JobShipSize;
+  locationClass?: 'galaxy' | 'cluster' | 'sector' | 'zone';
+  locationMacro?: string;
+  locationFaction?: string;
+  buildAtShipyard?: boolean;
+  subordinates?: JobSubordinateDef[];
   includeInBuild?: boolean;
 }
 

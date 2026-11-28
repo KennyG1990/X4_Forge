@@ -321,74 +321,74 @@ export default function BulkTransformPanel({ workspace, readWorkspaceBinding, se
   const hullValueReady = hullDraft.operand.trim() !== '' && Number.isFinite(Number(hullDraft.operand));
 
   return (
-    <div className="flex-1 min-h-0 flex gap-4 p-4 bg-[#0a0c10] overflow-hidden">
-      <section className="w-[390px] shrink-0 rounded-lg border border-white/10 bg-[#10131a] p-4 overflow-y-auto custom-scrollbar">
-        <div className="flex items-center gap-2 text-cyan-300 font-mono text-xs font-bold uppercase"><ShieldCheck className="w-4 h-4" /> {guidedHull ? 'Edit maximum hull' : 'Canonical Bulk Transform'}</div>
+    <div className="flex-1 min-h-0 flex gap-3 p-3 bg-[#0c0e12] overflow-hidden">
+      <section className="w-[344px] xl:w-[388px] shrink-0 rounded-lg border border-[#262c36] bg-[#11141a] p-3.5 overflow-y-auto custom-scrollbar">
+        <div className="flex items-center gap-2 text-blue-300 text-xs font-semibold"><ShieldCheck className="w-4 h-4" /> {guidedHull ? 'Edit maximum hull' : 'Canonical Bulk Transform'}</div>
         {guidedHull ? <>
-          <div className="mt-3 break-all font-mono text-xs text-slate-200">{guidedHull.macroName}</div>
-          <div className="mt-1 break-all font-mono text-[9px] text-slate-500">{guidedHull.targetFile} · {guidedHull.sourceLabel}</div>
-          <label className="mt-4 block text-xs text-slate-300">
-            Maximum hull <span className="text-slate-500">(current {guidedHull.currentValue})</span>
+          <div className="mt-3 break-all font-mono text-xs text-[#eef2f7]">{guidedHull.macroName}</div>
+          <div className="mt-1 break-all font-mono text-[11px] text-[#687385]">{guidedHull.targetFile} · {guidedHull.sourceLabel}</div>
+          <label className="mt-4 block text-xs text-[#eef2f7]">
+            Maximum hull <span className="text-[#687385]">(current {guidedHull.currentValue})</span>
             <input type="number" step="any" disabled={busy !== null} value={hullDraft.operand}
               onChange={event => updateOperation(hullDraft.id, { operand: event.target.value })}
-              className="mt-1 block w-full rounded border border-white/10 bg-[#090b10] px-2 py-2 font-mono text-sm text-slate-200" />
+              className="mt-1 block w-full rounded-md border border-[#262c36] bg-[#090b0f] px-2.5 py-2 font-mono text-sm text-[#eef2f7]" />
           </label>
         </> : <fieldset disabled={busy === 'recipe'} className="min-w-0">
-        <p className="mt-2 text-[10px] leading-relaxed text-slate-500">Build numeric X4 diff patches from the effective base + DLC corpus. Preview is mandatory; vanilla and game folders remain read-only.</p>
+        <p className="mt-2 text-[11px] leading-relaxed text-[#a0aab8]">Build numeric X4 diff patches from the effective base + DLC corpus. Preview is mandatory; vanilla and game folders remain read-only.</p>
         <div className="mt-3 flex gap-2">
-          <button type="button" onClick={saveRecipe} disabled={busy !== null} className="rounded border border-white/15 px-3 py-1.5 text-[10px] text-slate-200 hover:bg-white/5 disabled:opacity-40">Save recipe</button>
-          <button type="button" onClick={() => recipeInput.current?.click()} disabled={busy !== null} className="rounded border border-white/15 px-3 py-1.5 text-[10px] text-slate-200 hover:bg-white/5 disabled:opacity-40">Open recipe</button>
+          <button type="button" onClick={saveRecipe} disabled={busy !== null} className="rounded border border-[#262c36] bg-[#171b23] px-3 py-1.5 text-[11px] text-[#eef2f7] hover:border-blue-500/40 disabled:opacity-40 cursor-pointer">Save recipe</button>
+          <button type="button" onClick={() => recipeInput.current?.click()} disabled={busy !== null} className="rounded border border-[#262c36] bg-[#171b23] px-3 py-1.5 text-[11px] text-[#eef2f7] hover:border-blue-500/40 disabled:opacity-40 cursor-pointer">Open recipe</button>
           <input ref={recipeInput} type="file" accept=".json,application/json" data-testid="bulk-recipe-file" onChange={openRecipe} hidden />
         </div>
-        <label className="block mt-5 text-[9px] uppercase font-mono font-bold text-slate-500">Corpus path scope</label>
-        <input data-testid="bulk-path-prefix" value={pathPrefix} onChange={event => { setPathPrefix(event.target.value); setPreview(null); }} className="mt-1 w-full rounded border border-white/10 bg-black/40 px-2 py-2 font-mono text-[11px] text-slate-200 focus:border-cyan-500 focus:outline-none" />
-        <div className="mt-1 min-h-4 truncate font-mono text-[8.5px] text-slate-600" title={samplePath}>{busy === 'sample' ? 'Finding a canonical sample…' : samplePath ? `sample: ${samplePath}` : 'No canonical XML sample found under this scope.'}</div>
+        <label className="block mt-4 text-[11px] font-medium text-[#a0aab8]">Corpus path scope</label>
+        <input data-testid="bulk-path-prefix" value={pathPrefix} onChange={event => { setPathPrefix(event.target.value); setPreview(null); }} className="mt-1 w-full rounded-md border border-[#262c36] bg-[#090b0f] px-2.5 py-2 font-mono text-xs text-[#eef2f7] focus:border-blue-500 focus:outline-none" />
+        <div className="mt-1 min-h-4 truncate font-mono text-[11px] text-[#687385]" title={samplePath}>{busy === 'sample' ? 'Finding a canonical sample…' : samplePath ? `sample: ${samplePath}` : 'No canonical XML sample found under this scope.'}</div>
 
         <div className="mt-4 flex items-center justify-between">
-          <span className="text-[9px] uppercase font-mono font-bold text-slate-500">Numeric operations ({operations.length}/{MAX_OPERATIONS})</span>
-          <button data-testid="bulk-add-operation" onClick={() => addOperation()} disabled={operations.length >= MAX_OPERATIONS} className="flex items-center gap-1 rounded border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 font-mono text-[8px] font-bold uppercase text-cyan-300 disabled:opacity-35"><Plus className="h-3 w-3" /> Add field</button>
+          <span className="text-[11px] font-medium text-[#a0aab8]">Numeric operations ({operations.length}/{MAX_OPERATIONS})</span>
+          <button data-testid="bulk-add-operation" onClick={() => addOperation()} disabled={operations.length >= MAX_OPERATIONS} className="flex items-center gap-1 rounded border border-blue-500/35 bg-blue-500/15 px-2.5 py-1 text-[11px] font-medium text-blue-200 disabled:opacity-35 cursor-pointer"><Plus className="h-3 w-3" /> Add field</button>
         </div>
         <div className="mt-2 space-y-3">
-          {operations.map((draft, index) => <div key={draft.id} data-testid={`bulk-operation-row-${index}`} className="rounded border border-white/10 bg-black/25 p-2.5">
-            <div className="mb-2 flex items-center justify-between font-mono text-[8px] font-bold uppercase text-slate-500">
+          {operations.map((draft, index) => <div key={draft.id} data-testid={`bulk-operation-row-${index}`} className="rounded-md border border-[#262c36] bg-[#090b0f] p-2.5">
+            <div className="mb-2 flex items-center justify-between text-[11px] font-medium text-[#a0aab8]">
               <span>Field {index + 1}</span>
               <div className="flex gap-1">
-                <button title="Duplicate operation" onClick={() => addOperation(draft)} disabled={operations.length >= MAX_OPERATIONS} className="rounded p-1 text-slate-500 hover:bg-white/5 hover:text-cyan-300 disabled:opacity-30"><Copy className="h-3 w-3" /></button>
-                <button title="Remove operation" onClick={() => removeOperation(draft.id)} disabled={operations.length === 1} className="rounded p-1 text-slate-500 hover:bg-white/5 hover:text-red-300 disabled:opacity-30"><Trash2 className="h-3 w-3" /></button>
+                <button title="Duplicate operation" onClick={() => addOperation(draft)} disabled={operations.length >= MAX_OPERATIONS} className="rounded p-1 text-[#687385] hover:bg-white/5 hover:text-blue-300 disabled:opacity-30 cursor-pointer"><Copy className="h-3.5 w-3.5" /></button>
+                <button title="Remove operation" onClick={() => removeOperation(draft.id)} disabled={operations.length === 1} className="rounded p-1 text-[#687385] hover:bg-white/5 hover:text-rose-300 disabled:opacity-30 cursor-pointer"><Trash2 className="h-3.5 w-3.5" /></button>
               </div>
             </div>
-            {samplePath ? <XPathInput testId={index === 0 ? 'bulk-selector' : `bulk-selector-${index}`} targetPath={samplePath} value={draft.selector} onChange={value => updateOperation(draft.id, { selector: value })} className="w-full rounded border border-white/10 bg-black/40 px-2 py-2 font-mono text-[10px] text-emerald-300 focus:border-cyan-500 focus:outline-none" />
-              : <input data-testid={index === 0 ? 'bulk-selector' : `bulk-selector-${index}`} value={draft.selector} onChange={event => updateOperation(draft.id, { selector: event.target.value })} className="w-full rounded border border-white/10 bg-black/40 px-2 py-2 font-mono text-[10px] text-emerald-300 focus:border-cyan-500 focus:outline-none" />}
+            {samplePath ? <XPathInput testId={index === 0 ? 'bulk-selector' : `bulk-selector-${index}`} targetPath={samplePath} value={draft.selector} onChange={value => updateOperation(draft.id, { selector: value })} className="w-full rounded border border-[#262c36] bg-[#11141a] px-2.5 py-1.5 font-mono text-[11px] text-emerald-300 focus:border-blue-500 focus:outline-none" />
+              : <input data-testid={index === 0 ? 'bulk-selector' : `bulk-selector-${index}`} value={draft.selector} onChange={event => updateOperation(draft.id, { selector: event.target.value })} className="w-full rounded border border-[#262c36] bg-[#11141a] px-2.5 py-1.5 font-mono text-[11px] text-emerald-300 focus:border-blue-500 focus:outline-none" />}
             <div className="mt-2 grid grid-cols-2 gap-2">
-              <select data-testid={index === 0 ? 'bulk-operation' : `bulk-operation-${index}`} value={draft.operation} onChange={event => updateOperation(draft.id, { operation: event.target.value as BulkTransformOperation })} className="rounded border border-white/10 bg-[#090b10] px-2 py-1.5 text-[10px] text-slate-200">
+              <select data-testid={index === 0 ? 'bulk-operation' : `bulk-operation-${index}`} value={draft.operation} onChange={event => updateOperation(draft.id, { operation: event.target.value as BulkTransformOperation })} className="rounded border border-[#262c36] bg-[#11141a] px-2 py-1.5 text-[11px] text-[#eef2f7]">
                 <option value="multiply">Multiply</option><option value="add">Add</option><option value="set">Set</option><option value="round">Round value</option><option value="min">Minimum</option><option value="max">Maximum</option><option value="clamp">Clamp</option>
               </select>
-              <input aria-label={`Field ${index + 1} operand`} type="number" step="any" disabled={draft.operation === 'round'} value={draft.operand} onChange={event => updateOperation(draft.id, { operand: event.target.value })} className="rounded border border-white/10 bg-[#090b10] px-2 py-1.5 text-[10px] text-slate-200 disabled:opacity-40" />
-              {draft.operation === 'clamp' && <input aria-label={`Field ${index + 1} maximum`} type="number" step="any" value={draft.upperOperand} onChange={event => updateOperation(draft.id, { upperOperand: event.target.value })} className="rounded border border-white/10 bg-[#090b10] px-2 py-1.5 text-[10px] text-slate-200" />}
-              <select data-testid={index === 0 ? 'bulk-rounding' : `bulk-rounding-${index}`} aria-label={`Field ${index + 1} rounding`} value={draft.rounding} onChange={event => updateOperation(draft.id, { rounding: event.target.value as OperationDraft['rounding'] })} className="rounded border border-white/10 bg-[#090b10] px-2 py-1.5 text-[10px] text-slate-200"><option value="none">No rounding</option><option value="round">Nearest</option><option value="floor">Floor</option><option value="ceil">Ceiling</option></select>
-              <input data-testid={index === 0 ? 'bulk-rounding-increment' : `bulk-rounding-increment-${index}`} aria-label={`Field ${index + 1} rounding increment`} type="number" min="0" step="any" value={draft.roundingIncrement} onChange={event => updateOperation(draft.id, { roundingIncrement: event.target.value })} className="rounded border border-white/10 bg-[#090b10] px-2 py-1.5 text-[10px] text-slate-200" title="Round to this quantum, e.g. 100 or 1000. Use 1 for whole units." />
+              <input aria-label={`Field ${index + 1} operand`} type="number" step="any" disabled={draft.operation === 'round'} value={draft.operand} onChange={event => updateOperation(draft.id, { operand: event.target.value })} className="rounded border border-[#262c36] bg-[#11141a] px-2 py-1.5 text-[11px] text-[#eef2f7] disabled:opacity-40" />
+              {draft.operation === 'clamp' && <input aria-label={`Field ${index + 1} maximum`} type="number" step="any" value={draft.upperOperand} onChange={event => updateOperation(draft.id, { upperOperand: event.target.value })} className="rounded border border-[#262c36] bg-[#11141a] px-2 py-1.5 text-[11px] text-[#eef2f7]" />}
+              <select data-testid={index === 0 ? 'bulk-rounding' : `bulk-rounding-${index}`} aria-label={`Field ${index + 1} rounding`} value={draft.rounding} onChange={event => updateOperation(draft.id, { rounding: event.target.value as OperationDraft['rounding'] })} className="rounded border border-[#262c36] bg-[#11141a] px-2 py-1.5 text-[11px] text-[#eef2f7]"><option value="none">No rounding</option><option value="round">Nearest</option><option value="floor">Floor</option><option value="ceil">Ceiling</option></select>
+              <input data-testid={index === 0 ? 'bulk-rounding-increment' : `bulk-rounding-increment-${index}`} aria-label={`Field ${index + 1} rounding increment`} type="number" min="0" step="any" value={draft.roundingIncrement} onChange={event => updateOperation(draft.id, { roundingIncrement: event.target.value })} className="rounded border border-[#262c36] bg-[#11141a] px-2 py-1.5 text-[11px] text-[#eef2f7]" title="Round to this quantum, e.g. 100 or 1000. Use 1 for whole units." />
             </div>
           </div>)}
         </div>
 
-        <label className="mt-4 block text-[9px] uppercase font-mono font-bold text-slate-500">Safety cap
-          <input type="number" min={1} max={500} value={maxFiles} onChange={event => { setMaxFiles(Number(event.target.value)); setPreview(null); }} className="mt-1 block w-full rounded border border-white/10 bg-[#090b10] px-2 py-2 text-[11px] text-slate-200" />
+        <label className="mt-4 block text-[11px] font-medium text-[#a0aab8]">Safety cap
+          <input type="number" min={1} max={500} value={maxFiles} onChange={event => { setMaxFiles(Number(event.target.value)); setPreview(null); }} className="mt-1 block w-full rounded-md border border-[#262c36] bg-[#090b0f] px-2.5 py-1.5 text-xs text-[#eef2f7]" />
         </label>
         </fieldset>}
-        <button onClick={runPreview} disabled={busy !== null || Boolean(guidedHull && !hullValueReady)} className="mt-5 flex w-full items-center justify-center gap-2 rounded border border-cyan-500/40 bg-cyan-500/10 py-2.5 font-mono text-[10px] font-bold uppercase text-cyan-300 hover:bg-cyan-500/20 disabled:opacity-40">{busy === 'preview' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />} Preview against corpus</button>
-        <div className="mt-3 rounded border border-amber-500/20 bg-amber-500/5 p-2 text-[9px] leading-relaxed text-amber-200/70">Apply changes workspace patch state only. Compile and Deploy remain separate validated operations.</div>
+        <button onClick={runPreview} disabled={busy !== null || Boolean(guidedHull && !hullValueReady)} className="mt-4 flex w-full items-center justify-center gap-2 rounded-md border border-blue-500/40 bg-blue-500/15 py-2.5 text-xs font-semibold text-blue-200 hover:bg-blue-500/25 disabled:opacity-40 cursor-pointer">{busy === 'preview' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />} Preview against corpus</button>
+        <div className="mt-3 rounded border border-amber-500/25 bg-amber-500/10 p-2.5 text-[11px] leading-relaxed text-amber-200/80">Apply changes workspace patch state only. Compile and Deploy remain separate validated operations.</div>
       </section>
 
-      <section className="min-w-0 flex-1 rounded-lg border border-white/10 bg-[#0e1117] flex flex-col overflow-hidden">
-        <header className="border-b border-white/10 p-3 flex items-center justify-between">
-          <div><div className="font-mono text-[10px] font-bold uppercase text-slate-300">Mandatory dry-run</div><div className="mt-1 text-[9px] text-slate-600">file · effective source · canonical old → proposed new · simulation</div></div>
-          {preview && <div className={`rounded border px-3 py-1.5 font-mono text-[9px] ${preview.ok ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-red-500/30 bg-red-500/10 text-red-300'}`}>{preview.ok ? `${preview.matchedFiles} VALIDATED` : 'BLOCKED — ZERO WRITES'}</div>}
+      <section className="min-w-0 flex-1 rounded-lg border border-[#262c36] bg-[#11141a] flex flex-col overflow-hidden">
+        <header className="border-b border-[#262c36] bg-[#141820] px-3.5 py-2.5 flex items-center justify-between gap-2">
+          <div className="min-w-0"><div className="text-xs font-semibold text-[#eef2f7]">Mandatory dry-run</div><div className="mt-0.5 text-[11px] text-[#687385] truncate">file · effective source · canonical old → proposed new · simulation</div></div>
+          {preview && <div className={`rounded border px-3 py-1 text-[11px] font-semibold shrink-0 ${preview.ok ? 'border-emerald-500/35 bg-emerald-500/15 text-emerald-300' : 'border-rose-500/35 bg-rose-500/15 text-rose-300'}`}>{preview.ok ? `${preview.matchedFiles} VALIDATED` : 'BLOCKED — ZERO WRITES'}</div>}
         </header>
-        {error && <div className="m-3 flex gap-2 rounded border border-red-500/30 bg-red-500/10 p-3 text-[10px] text-red-300"><AlertTriangle className="w-4 h-4 shrink-0" />{error}</div>}
-        {!preview ? <div className="flex-1 grid place-items-center text-center text-slate-600"><div><Play className="mx-auto mb-3 h-8 w-8 opacity-30" /><div className="font-mono text-xs">Preview before applying</div><div className="mt-1 text-[9px]">No workspace or game files are written during preview.</div></div></div> : <>
-          <div className="grid grid-cols-4 gap-2 border-b border-white/5 p-3 text-center font-mono text-[9px]"><div><b className="block text-lg text-slate-200">{preview.candidateCount}</b><span className="text-slate-600">candidates</span></div><div><b className="block text-lg text-emerald-300">{preview.matchedFiles}</b><span className="text-slate-600">matched</span></div><div><b className="block text-lg text-slate-400">{preview.skippedFiles}</b><span className="text-slate-600">no match</span></div><div><b className={`block text-lg ${preview.droppedCount ? 'text-red-300' : 'text-slate-400'}`}>{preview.droppedCount}</b><span className="text-slate-600">over cap</span></div></div>
-          {preview.findings.length > 0 && <div className="max-h-24 overflow-y-auto border-b border-white/5 p-2 font-mono text-[9px]">{preview.findings.map((finding, index) => <div key={`${finding.code}-${index}`} className={finding.severity === 'error' ? 'text-red-300' : 'text-amber-300'}>{finding.code}: {finding.path ? `${finding.path} — ` : ''}{finding.message}</div>)}</div>}
-          <div className="grid grid-cols-[minmax(260px,1fr)_150px_110px_90px] border-b border-white/10 bg-black/20 px-3 py-2 font-mono text-[8px] font-bold uppercase text-slate-600"><span>Canonical file</span><span>Effective source</span><span>Value</span><span>Simulation</span></div>
+        {error && <div className="m-3 flex gap-2 rounded border border-rose-500/35 bg-rose-500/10 p-3 text-xs text-rose-300"><AlertTriangle className="w-4 h-4 shrink-0" />{error}</div>}
+        {!preview ? <div className="flex-1 grid place-items-center text-center text-[#687385]"><div><Play className="mx-auto mb-3 h-8 w-8 opacity-40" /><div className="text-sm font-medium text-[#a0aab8]">Preview before applying</div><div className="mt-1 text-xs">No workspace or game files are written during preview.</div></div></div> : <>
+          <div className="grid grid-cols-4 gap-2 border-b border-[#262c36] p-3 text-center text-[11px]"><div><b className="block text-lg text-[#eef2f7]">{preview.candidateCount}</b><span className="text-[#687385]">candidates</span></div><div><b className="block text-lg text-emerald-300">{preview.matchedFiles}</b><span className="text-[#687385]">matched</span></div><div><b className="block text-lg text-[#a0aab8]">{preview.skippedFiles}</b><span className="text-[#687385]">no match</span></div><div><b className={`block text-lg ${preview.droppedCount ? 'text-rose-300' : 'text-[#a0aab8]'}`}>{preview.droppedCount}</b><span className="text-[#687385]">over cap</span></div></div>
+          {preview.findings.length > 0 && <div className="max-h-24 overflow-y-auto border-b border-[#262c36] p-2.5 font-mono text-[11px]">{preview.findings.map((finding, index) => <div key={`${finding.code}-${index}`} className={finding.severity === 'error' ? 'text-rose-300' : 'text-amber-300'}>{finding.code}: {finding.path ? `${finding.path} — ` : ''}{finding.message}</div>)}</div>}
+          <div className="grid grid-cols-[minmax(180px,1fr)_130px_110px_80px] border-b border-[#262c36] bg-[#090b0f] px-3 py-2 text-[11px] font-semibold text-[#a0aab8]"><span>Canonical file</span><span>Effective source</span><span>Value</span><span>Simulation</span></div>
           <div className="relative flex-1 overflow-y-auto custom-scrollbar" onScroll={event => setScrollTop(event.currentTarget.scrollTop)}>
             <div style={{ height: visibleRows.total * ROW_HEIGHT, position: 'relative' }}>
               {visibleRows.rows.map((row, offset) => {
@@ -398,25 +398,25 @@ export default function BulkTransformPanel({ workspace, readWorkspaceBinding, se
                 const value = status === 'matched'
                   ? row.changes && row.changes.length > 1
                     ? <span className="text-emerald-300">{row.changes.length} fields</span>
-                    : <><span className="text-slate-500">{row.oldValue}</span> <span className="text-slate-700">→</span> <span className="text-emerald-300">{row.newValue}</span></>
-                  : <span className={status === 'error' ? 'text-red-300' : 'text-slate-600'}>{status === 'skipped' ? `${row.matchCount || 0} matches` : 'inspect error'}</span>;
+                    : <><span className="text-[#687385]">{row.oldValue}</span> <span className="text-[#687385]">→</span> <span className="text-emerald-300">{row.newValue}</span></>
+                  : <span className={status === 'error' ? 'text-rose-300' : 'text-[#687385]'}>{status === 'skipped' ? `${row.matchCount || 0} matches` : 'inspect error'}</span>;
                 const resultLabel = status === 'matched' ? (row.simulationOk ? 'PASS' : 'FAIL') : status === 'skipped' ? 'SKIP' : 'ERROR';
-                const resultClass = status === 'matched' && row.simulationOk ? 'text-emerald-400' : status === 'skipped' ? 'text-slate-500' : 'text-red-400';
-                return <button type="button" onClick={() => setExpandedTarget(current => current === row.targetFile ? null : row.targetFile)} key={row.targetFile} title={findingTitle || 'Click to inspect every field change'} style={{ position: 'absolute', top: (visibleRows.start + offset) * ROW_HEIGHT, height: ROW_HEIGHT, left: 0, right: 0 }} className="grid grid-cols-[minmax(260px,1fr)_150px_110px_90px] items-center border-b border-white/5 px-3 text-left font-mono text-[9px] hover:bg-white/[0.02]"><span className="truncate text-slate-300" title={row.targetFile}>{row.targetFile}</span><span className="truncate text-cyan-400/70" title={sourceLabel}>{sourceLabel}</span><span>{value}</span><span className={resultClass}>{resultLabel}</span></button>;
+                const resultClass = status === 'matched' && row.simulationOk ? 'text-emerald-400' : status === 'skipped' ? 'text-[#a0aab8]' : 'text-rose-400';
+                return <button type="button" onClick={() => setExpandedTarget(current => current === row.targetFile ? null : row.targetFile)} key={row.targetFile} title={findingTitle || 'Click to inspect every field change'} style={{ position: 'absolute', top: (visibleRows.start + offset) * ROW_HEIGHT, height: ROW_HEIGHT, left: 0, right: 0 }} className="grid grid-cols-[minmax(180px,1fr)_130px_110px_80px] items-center border-b border-white/[0.06] px-3 text-left font-mono text-[11px] hover:bg-white/[0.03]"><span className="truncate text-[#eef2f7]" title={row.targetFile}>{row.targetFile}</span><span className="truncate text-blue-300" title={sourceLabel}>{sourceLabel}</span><span className="truncate">{value}</span><span className={resultClass}>{resultLabel}</span></button>;
               })}
             </div>
           </div>
           {expandedTarget && (() => {
             const row = (preview.files || []).find(file => file.targetFile === expandedTarget);
             if (!row?.changes?.length) return null;
-            return <div className="max-h-36 overflow-y-auto border-t border-cyan-500/15 bg-cyan-500/[0.03] p-3 font-mono text-[9px]">
-              <div className="mb-2 truncate font-bold text-cyan-300" title={row.targetFile}>{row.targetFile} · combined atomic preview</div>
-              {row.changes.map(change => <div key={change.operationId} className="grid grid-cols-[minmax(240px,1fr)_160px] gap-3 border-t border-white/5 py-1"><span className="truncate text-slate-400" title={change.selector}>{change.selector}</span><span><span className="text-slate-500">{change.oldValue}</span> <span className="text-slate-700">→</span> <span className="text-emerald-300">{change.newValue}</span></span></div>)}
+            return <div className="max-h-36 overflow-y-auto border-t border-blue-500/25 bg-blue-500/[0.05] p-3 font-mono text-[11px]">
+              <div className="mb-2 truncate font-bold text-blue-300" title={row.targetFile}>{row.targetFile} · combined atomic preview</div>
+              {row.changes.map(change => <div key={change.operationId} className="grid grid-cols-[minmax(180px,1fr)_140px] gap-3 border-t border-white/[0.06] py-1"><span className="truncate text-[#a0aab8]" title={change.selector}>{change.selector}</span><span><span className="text-[#687385]">{change.oldValue}</span> <span className="text-[#687385]">→</span> <span className="text-emerald-300">{change.newValue}</span></span></div>)}
             </div>;
           })()}
-          <footer className="border-t border-white/10 p-3 flex items-center justify-between">
-            <span className="font-mono text-[8.5px] text-slate-600">plan {preview.planHash?.slice(0, 12)} · conflicts {preview.conflicts.length}</span>
-            <button onClick={apply} disabled={!preview.ok || busy !== null} className="flex items-center gap-2 rounded border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 font-mono text-[10px] font-bold uppercase text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-35">
+          <footer className="border-t border-[#262c36] bg-[#141820] px-3.5 py-2.5 flex items-center justify-between gap-2">
+            <span className="font-mono text-[11px] text-[#687385]">plan {preview.planHash?.slice(0, 12)} · conflicts {preview.conflicts.length}</span>
+            <button onClick={apply} disabled={!preview.ok || busy !== null} className="flex items-center gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/15 px-4 py-2 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/25 disabled:opacity-35 cursor-pointer">
               {busy === 'apply' ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
               {guidedHull ? 'Apply hull change to workspace' : preview.rows.length === preview.matchedFiles
                 ? `Add ${preview.matchedFiles} validated patches to workspace` : `Add ${preview.rows.length} validated field patches to workspace`}

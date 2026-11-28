@@ -80,19 +80,19 @@ export default function XPathInput({ targetPath, value, onChange, placeholder, c
       />
       {loading && <Loader2 className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 animate-spin text-emerald-400" />}
       {open && items.length > 0 && (
-        <div className="absolute z-[70] left-0 right-0 mt-1 max-h-52 overflow-y-auto rounded border border-emerald-500/30 bg-[#0b0e14] shadow-2xl">
+        <div className="absolute z-[70] left-0 right-0 mt-1 max-h-52 overflow-y-auto rounded-md border border-[#262c36] bg-[#11141a] shadow-2xl">
           {items.map((item, index) => (
             <button
               key={`${item.kind}:${item.label}:${index}`}
               type="button"
               onMouseEnter={() => setActiveIndex(index)}
               onMouseDown={event => { event.preventDefault(); apply(item); }}
-              className={`block w-full text-left px-2 py-1.5 border-b border-white/5 last:border-0 ${index === activeIndex ? 'bg-emerald-500/10' : 'hover:bg-white/5'}`}
+              className={`block w-full text-left px-2.5 py-1.5 border-b border-white/[0.06] last:border-0 ${index === activeIndex ? 'bg-blue-500/15' : 'hover:bg-white/[0.04]'}`}
             >
-              <span className="flex items-center justify-between gap-2 text-[10px] font-mono text-emerald-300">
-                <span className="truncate">{item.label}</span><span className="text-[8px] uppercase text-slate-600">{item.kind}</span>
+              <span className="flex items-center justify-between gap-2 text-[11px] font-mono text-emerald-300">
+                <span className="truncate">{item.label}</span><span className="text-[11px] uppercase text-[#687385] shrink-0">{item.kind}</span>
               </span>
-              {item.detail && <span className="block truncate text-[8.5px] text-slate-500">{item.detail}</span>}
+              {item.detail && <span className="block truncate text-[11px] text-[#a0aab8]">{item.detail}</span>}
             </button>
           ))}
         </div>

@@ -962,21 +962,21 @@ export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceB
   };
 
   return (
-    <div id="xml_patch_workbench_view" className="flex-1 bg-[#0a0c10] flex flex-col h-full overflow-hidden text-slate-300">
-      {/* Simulation HUD Controls bar */}
-      <div className="bg-[#161920]/90 border-b border-white/10 p-2 flex flex-wrap items-center gap-2 justify-between font-mono text-xs">
+    <div id="xml_patch_workbench_view" className="flex-1 bg-[#0c0e12] flex flex-col h-full overflow-hidden text-[#eef2f7]">
+      {/* Concept A Header Bar */}
+      <div className="bg-[#141820] border-b border-[#262c36] px-3 py-2 flex flex-wrap items-center gap-2 justify-between text-xs shrink-0">
         <div className="flex items-center gap-2 min-w-0">
-          <GitFork className="w-4 h-4 text-emerald-400" />
-          <span className="font-semibold text-slate-200 uppercase tracking-tight">XML DIFF INTERACTIVE WORKBENCH</span>
-          <div className="ml-3 flex rounded border border-white/10 bg-black/30 p-0.5">
-            <button onClick={() => setAuthoringMode('single')} className={`rounded px-2.5 py-1 text-[8.5px] font-bold uppercase ${authoringMode === 'single' ? 'bg-emerald-500/15 text-emerald-300' : 'text-slate-500 hover:text-slate-300'}`}>Single patch</button>
-            <button onClick={() => setAuthoringMode('bulk')} className={`rounded px-2.5 py-1 text-[8.5px] font-bold uppercase ${authoringMode === 'bulk' ? 'bg-cyan-500/15 text-cyan-300' : 'text-slate-500 hover:text-slate-300'}`}>Bulk transform</button>
+          <GitFork className="w-4 h-4 text-emerald-400 shrink-0" />
+          <span className="font-semibold text-[#eef2f7] truncate">XML Diff Workbench</span>
+          <div className="ml-2 flex rounded border border-[#262c36] bg-[#090b0f] p-0.5 shrink-0">
+            <button onClick={() => setAuthoringMode('single')} className={`rounded px-2.5 py-1 text-[11px] font-medium cursor-pointer ${authoringMode === 'single' ? 'bg-emerald-500/20 text-emerald-200 font-semibold' : 'text-[#a0aab8] hover:text-white'}`}>Single patch</button>
+            <button onClick={() => setAuthoringMode('bulk')} className={`rounded px-2.5 py-1 text-[11px] font-medium cursor-pointer ${authoringMode === 'bulk' ? 'bg-blue-500/20 text-blue-200 font-semibold' : 'text-[#a0aab8] hover:text-white'}`}>Bulk transform</button>
           </div>
         </div>
         
         {/* Target file selectors */}
-        {authoringMode === 'single' && <div className="flex flex-1 min-w-[260px] justify-end items-center gap-2 font-mono text-[11px]">
-          <span className="text-slate-500 uppercase font-bold text-[9.5px]">Target File:</span>
+        {authoringMode === 'single' && <div className="flex flex-1 min-w-[260px] justify-end items-center gap-2 text-xs">
+          <span className="text-[#a0aab8] font-medium text-[11px] shrink-0">Target:</span>
           <div className="w-[min(320px,55vw)] min-w-0">
             <ObjectIndexPicker
               endpoint="/api/agent/patch-targets"
@@ -987,14 +987,14 @@ export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceB
             />
           </div>
           {effectiveSources.length > 0 && (
-            <span className="max-w-56 truncate text-[8.5px] text-emerald-500/80" title={effectiveSources.map(source => `${source.source} (${source.mode})`).join(' → ')}>
+            <span className="max-w-52 truncate text-[11px] font-mono text-emerald-400" title={effectiveSources.map(source => `${source.source} (${source.mode})`).join(' → ')}>
               effective: {effectiveSources.map(source => source.source).join(' + ')}
             </span>
           )}
           {hullTarget && <button type="button" onClick={() => { setTargetFile(hullTarget.targetFile); setAuthoringMode(hullTarget); }}
-            className="shrink-0 rounded border border-cyan-500/30 bg-cyan-500/10 px-2 py-1 text-[9px] font-bold text-cyan-300 hover:bg-cyan-500/20">Edit max hull</button>}
+            className="shrink-0 rounded border border-blue-500/35 bg-blue-500/15 px-2.5 py-1 text-[11px] font-medium text-blue-200 hover:bg-blue-500/25 cursor-pointer">Edit max hull</button>}
           {pretargetSelector && (
-            <span className="max-w-72 truncate rounded border border-amber-500/25 bg-amber-500/5 px-2 py-1 text-[8.5px] text-amber-300" title={pretargetSelector}>
+            <span className="max-w-72 truncate rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-200" title={pretargetSelector}>
               Patch existing: {pretargetSelector}
             </span>
           )}
@@ -1002,15 +1002,15 @@ export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceB
       </div>
 
       {authoringMode === 'single' && (
-        <div data-testid="xmlpatch-compact-tabs" className="min-[1500px]:hidden h-9 shrink-0 min-w-0 overflow-x-auto custom-scrollbar border-b border-white/10 bg-[#0d1016] p-1 flex items-center gap-1 font-mono">
+        <div data-testid="xmlpatch-compact-tabs" className="min-[1500px]:hidden h-10 shrink-0 min-w-0 overflow-x-auto custom-scrollbar border-b border-[#262c36] bg-[#11141a] px-2 flex items-center gap-1.5">
           <div className="flex-1 flex items-center justify-center gap-1 min-w-max">
             {(['tree', 'blocks', 'preview'] as const).map(pane => (
-              <button key={pane} type="button" data-compact-pane={pane} onClick={() => setCompactPane(pane)} className={`h-7 px-3 rounded text-[9px] font-bold uppercase ${compactPane === pane ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30' : 'text-slate-500 border border-transparent hover:text-white'}`}>
+              <button key={pane} type="button" data-compact-pane={pane} onClick={() => setCompactPane(pane)} className={`h-7 px-3 rounded text-[11px] font-medium cursor-pointer ${compactPane === pane ? 'bg-blue-500/20 text-blue-200 border border-blue-500/35 font-semibold' : 'text-[#a0aab8] border border-transparent hover:text-white'}`}>
                 {pane === 'tree' ? 'Patch Tree' : pane === 'blocks' ? 'Patch Blocks' : 'Preview & Diff'}
               </button>
             ))}
           </div>
-          <div className="flex items-center gap-1 min-w-max border-l border-white/10 pl-1">
+          <div className="flex items-center gap-1 min-w-max border-l border-[#262c36] pl-2">
             {([
               ['patch', 'Patch XML'],
               ['preview', 'Applied Preview'],
@@ -1020,7 +1020,7 @@ export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceB
                 key={tab}
                 type="button"
                 onClick={() => { setRightPanelTab(tab); setCompactPane('preview'); }}
-                className={`h-7 px-2 rounded text-[8.5px] font-bold uppercase ${rightPanelTab === tab && compactPane === 'preview' ? 'bg-fuchsia-500/15 text-fuchsia-300 border border-fuchsia-500/30' : 'text-slate-500 border border-transparent hover:text-white'}`}
+                className={`h-7 px-2.5 rounded text-[11px] font-medium cursor-pointer ${rightPanelTab === tab && compactPane === 'preview' ? 'bg-fuchsia-500/20 text-fuchsia-200 border border-fuchsia-500/35 font-semibold' : 'text-[#a0aab8] border border-transparent hover:text-white'}`}
               >
                 {label}
               </button>
@@ -1036,35 +1036,35 @@ export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceB
       ) : (
       <div className="flex-1 flex min-w-0 overflow-hidden">
         {/* Left Side: Recipes and template insertions */}
-        <div data-xmlpatch-pane="tree" className={`${compactPane === 'tree' ? 'flex' : 'hidden'} min-[1500px]:flex w-full min-[1500px]:w-80 border-r border-white/10 p-3.5 flex-col h-full bg-[#0d0f14]/80 overflow-y-auto space-y-4`}>
+        <div data-xmlpatch-pane="tree" className={`${compactPane === 'tree' ? 'flex' : 'hidden'} min-[1500px]:flex w-full min-[1500px]:w-80 border-r border-[#262c36] p-3.5 flex-col h-full bg-[#11141a] overflow-y-auto space-y-4`}>
           {/* Tab switcher */}
-          <div className="flex border-b border-white/10 mb-2 shrink-0">
+          <div className="flex border-b border-[#262c36] mb-1 shrink-0">
             <button
               onClick={() => setSidebarTab('tree')}
-              className={`flex-1 pb-2 text-center text-xs font-mono font-bold tracking-wider uppercase transition-colors border-b-2 cursor-pointer ${
+              className={`flex-1 pb-2 text-center text-xs font-semibold transition-colors border-b-2 cursor-pointer ${
                 sidebarTab === 'tree'
-                  ? 'border-emerald-500 text-emerald-400 font-extrabold'
-                  : 'border-transparent text-slate-500 hover:text-slate-300'
+                  ? 'border-emerald-400 text-emerald-300'
+                  : 'border-transparent text-[#a0aab8] hover:text-white'
               }`}
             >
               Tree
             </button>
             <button
               onClick={() => setSidebarTab('recipes')}
-              className={`flex-1 pb-2 text-center text-xs font-mono font-bold tracking-wider uppercase transition-colors border-b-2 cursor-pointer ${
+              className={`flex-1 pb-2 text-center text-xs font-semibold transition-colors border-b-2 cursor-pointer ${
                 sidebarTab === 'recipes'
-                  ? 'border-emerald-500 text-emerald-400 font-extrabold'
-                  : 'border-transparent text-slate-500 hover:text-slate-300'
+                  ? 'border-emerald-400 text-emerald-300'
+                  : 'border-transparent text-[#a0aab8] hover:text-white'
               }`}
             >
               Recipes
             </button>
             <button
               onClick={() => setSidebarTab('boilerplates')}
-              className={`flex-1 pb-2 text-center text-xs font-mono font-bold tracking-wider uppercase transition-colors border-b-2 cursor-pointer ${
+              className={`flex-1 pb-2 text-center text-xs font-semibold transition-colors border-b-2 cursor-pointer ${
                 sidebarTab === 'boilerplates'
-                  ? 'border-emerald-500 text-emerald-400 font-extrabold'
-                  : 'border-transparent text-slate-305 hover:text-white'
+                  ? 'border-emerald-400 text-emerald-300'
+                  : 'border-transparent text-[#a0aab8] hover:text-white'
               }`}
             >
               Boilerplates
@@ -1072,62 +1072,59 @@ export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceB
           </div>
 
           {sidebarTab === 'tree' ? (
-            <div className="space-y-4 animate-fadeIn flex-1 flex flex-col overflow-hidden">
+            <div className="space-y-4 flex-1 flex flex-col overflow-hidden">
               <div>
-                <h3 className="text-xs font-mono font-bold text-emerald-400 border-b border-white/10 pb-1.5 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                  📁 xml patches tree
+                <h3 className="text-xs font-semibold text-emerald-300 border-b border-[#262c36] pb-1.5 mb-2 flex items-center gap-1.5">
+                  XML Patches Tree
                 </h3>
-                <p className="text-[10px] text-slate-500 mb-3 leading-relaxed font-mono">
-                  Observability hierarchy of all defined XML patch instructions created in the current mod.
+                <p className="text-[11px] text-[#687385] mb-3 leading-relaxed">
+                  Hierarchy of all defined XML diff patch instructions in this mod.
                 </p>
 
-                <div className="space-y-4 font-mono text-[11px] max-h-[460px] overflow-y-auto custom-scrollbar pr-1">
+                <div className="space-y-3 font-mono text-[11px] max-h-[460px] overflow-y-auto custom-scrollbar pr-1">
                   {patchBlocks.length === 0 ? (
-                    <div className="text-[10px] text-slate-500 italic p-4 text-center border border-white/5 bg-black/10 rounded">
-                      No XML patches registered in the current existing mod session. Use the central Workbench to define your first diff operation node!
+                    <div className="text-xs text-[#687385] p-4 text-center border border-[#262c36] bg-[#090b0f] rounded">
+                      No XML patches registered yet. Use the Patch Blocks workbench to add a diff operation.
                     </div>
                   ) : (
                     Array.from(new Set(patchBlocks.map(p => p.targetFile || targetFile))).map(tFile => {
                       const filePatches = patchBlocks.filter(p => (p.targetFile || targetFile) === tFile);
                       return (
                         <div key={tFile} className="space-y-1.5">
-                          {/* File Header Node */}
                           <button
                             onClick={() => setTargetFile(tFile)}
-                            className={`w-full p-1.5 px-2 rounded font-bold text-left flex items-center gap-1.5 transition-colors border ${
-                              targetFile === tFile ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-black/20 text-slate-300 border-transparent hover:bg-white/5'
+                            className={`w-full p-2 rounded font-semibold text-left flex items-center gap-1.5 transition-colors border cursor-pointer ${
+                              targetFile === tFile ? 'bg-emerald-500/15 text-emerald-200 border-emerald-500/30' : 'bg-[#090b0f] text-[#a0aab8] border-[#262c36] hover:text-white'
                             }`}
                           >
-                            <span>📄</span>
                             <span className="truncate flex-1">{tFile}</span>
-                            <span className="text-[9px] bg-black/40 px-1.5 rounded text-slate-400 font-bold">{filePatches.length}</span>
+                            <span className="text-[11px] bg-[#171b23] px-1.5 rounded text-[#eef2f7]">{filePatches.length}</span>
                           </button>
 
-                          {/* Patches list inside file */}
-                          <div className="pl-3.5 border-l border-white/5 space-y-1.5">
+                          <div className="pl-3 border-l border-[#262c36] space-y-1">
                             {filePatches.map(patch => (
                               <div
                                 key={patch.id}
-                                className="p-1 px-1.5 rounded bg-black/15 hover:bg-white/[0.02] border border-transparent hover:border-white/5 flex items-start justify-between gap-1 group/pnode"
+                                className="p-1.5 rounded bg-[#090b0f] border border-[#262c36] hover:border-blue-500/35 flex items-start justify-between gap-1 group/pnode"
                               >
                                 <button
                                   onClick={() => {
                                     setTargetFile(tFile);
                                   }}
-                                  className="flex-1 text-left cursor-pointer truncate"
+                                  className="flex-1 min-w-0 text-left cursor-pointer"
                                 >
-                                  <div className="flex items-center gap-1">
-                                    <span className={`text-[8px] uppercase font-bold px-1 rounded ${
-                                      patch.action === 'add' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
-                                      patch.action === 'replace' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' :
-                                      'bg-rose-500/10 text-rose-400 border border-rose-500/20'
+                                  <div className="flex items-center gap-1.5">
+                                    <span className={`text-[11px] uppercase font-semibold px-1.5 rounded shrink-0 ${
+                                      patch.action === 'add' ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/25' :
+                                      patch.action === 'replace' ? 'bg-amber-500/15 text-amber-300 border border-amber-500/25' :
+                                      'bg-rose-500/15 text-rose-300 border border-rose-500/25'
                                     }`}>
                                       {patch.action}
                                     </span>
-                                    <span className="truncate text-slate-350 font-semibold max-w-[130px]" title={patch.sel}>{patch.sel}</span>
+                                    <span className="truncate text-[#eef2f7] font-medium" title={patch.sel}>{patch.sel}</span>
                                   </div>
                                   {patch.note && (
-                                    <span className="text-[9px] text-slate-505 block truncate max-w-[160px]">{patch.note}</span>
+                                    <span className="text-[11px] text-[#687385] block truncate mt-0.5">{patch.note}</span>
                                   )}
                                 </button>
 
@@ -1137,10 +1134,10 @@ export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceB
                                     const updated = patchBlocks.filter(p => p.id !== patch.id);
                                     savePatches(updated);
                                   }}
-                                  className="p-1 text-slate-600 hover:text-rose-400 cursor-pointer opacity-0 group-hover/pnode:opacity-100 transition-opacity ml-1"
+                                  className="p-1 text-[#687385] hover:text-rose-300 cursor-pointer ml-1 shrink-0"
                                   title="Delete patch specification element"
                                 >
-                                  <Trash className="w-3 h-3" />
+                                  <Trash className="w-3.5 h-3.5" />
                                 </button>
                               </div>
                             ))}
@@ -1153,141 +1150,141 @@ export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceB
               </div>
             </div>
           ) : sidebarTab === 'recipes' ? (
-            <div className="space-y-4 animate-fadeIn">
+            <div className="space-y-4">
               <div>
-                <h3 className="text-xs font-mono font-bold text-emerald-400 border-b border-white/10 pb-1.5 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                <h3 className="text-xs font-semibold text-emerald-300 border-b border-[#262c36] pb-1.5 mb-2 flex items-center gap-1.5">
                   <Sparkles className="w-3.5 h-3.5" />
-                  DIFF RECIPES LIBRARY
+                  Diff Recipes Library
                 </h3>
-                <p className="text-[10.5px] text-slate-500 mb-3 leading-relaxed font-mono">
-                  Inject standard patch layouts for ship components, audio soundscapes, or statistics overrides instantly.
+                <p className="text-[11px] text-[#a0aab8] mb-3 leading-relaxed">
+                  Inject standard patch layouts for ship components, audio soundscapes, or statistics overrides.
                 </p>
 
-                <div className="space-y-1.5">
+                <div className="space-y-2">
                   <button
                     onClick={() => handleLoadRecipe('carrier_hangar')}
-                    className="w-full text-left p-2.5 rounded bg-[#1c1f26] border border-white/5 hover:border-emerald-500 transition-all flex flex-col justify-start items-start gap-1 cursor-pointer"
+                    className="w-full text-left p-2.5 rounded bg-[#171b23] border border-[#262c36] hover:border-emerald-500/40 transition-colors flex flex-col gap-1 cursor-pointer"
                   >
-                    <div className="text-xs font-bold text-slate-200">Expand Carrier Hangar Bay</div>
-                    <div className="text-[9px] text-slate-500 font-mono">Target: libraries/ship_macros.xml</div>
+                    <div className="text-xs font-semibold text-[#eef2f7]">Expand Carrier Hangar Bay</div>
+                    <div className="text-[11px] text-[#687385] font-mono">libraries/ship_macros.xml</div>
                   </button>
                   
                   <button
                     onClick={() => handleLoadRecipe('combat_music')}
-                    className="w-full text-left p-2.5 rounded bg-[#1c1f26] border border-white/5 hover:border-emerald-500 transition-all flex flex-col justify-start items-start gap-1 cursor-pointer"
+                    className="w-full text-left p-2.5 rounded bg-[#171b23] border border-[#262c36] hover:border-emerald-500/40 transition-colors flex flex-col gap-1 cursor-pointer"
                   >
-                    <div className="text-xs font-bold text-slate-200">Custom Battle Tracks playlist</div>
-                    <div className="text-[9px] text-slate-500 font-mono">Target: libraries/sound_library.xml</div>
+                    <div className="text-xs font-semibold text-[#eef2f7]">Custom Battle Tracks playlist</div>
+                    <div className="text-[11px] text-[#687385] font-mono">libraries/sound_library.xml</div>
                   </button>
 
                   <button
                     onClick={() => handleLoadRecipe('shield_stats')}
-                    className="w-full text-left p-2.5 rounded bg-[#1c1f26] border border-white/5 hover:border-emerald-500 transition-all flex flex-col justify-start items-start gap-1 cursor-pointer"
+                    className="w-full text-left p-2.5 rounded bg-[#171b23] border border-[#262c36] hover:border-emerald-500/40 transition-colors flex flex-col gap-1 cursor-pointer"
                   >
-                    <div className="text-xs font-bold text-slate-200 font-sans">Shield Generation Multipliers</div>
-                    <div className="text-[9px] text-slate-500 font-mono">Target: xml parameters database</div>
+                    <div className="text-xs font-semibold text-[#eef2f7]">Shield Generation Multipliers</div>
+                    <div className="text-[11px] text-[#687385] font-mono">libraries/ship_macros.xml</div>
                   </button>
                 </div>
               </div>
 
               <div>
-                <h3 className="text-xs font-mono font-bold text-slate-400 border-b border-white/10 pb-1.5 uppercase tracking-wider mb-2 flex items-center gap-1">
+                <h3 className="text-xs font-semibold text-[#a0aab8] border-b border-[#262c36] pb-1.5 mb-2 flex items-center gap-1.5">
                   <HelpCircle className="w-3.5 h-3.5 text-emerald-400" />
                   What are XML Diffs?
                 </h3>
-                <div className="bg-black/20 p-3 rounded border border-white/5 text-[10.5px] leading-relaxed text-slate-400 font-mono space-y-2">
+                <div className="bg-[#090b0f] p-3 rounded border border-[#262c36] text-[11px] leading-relaxed text-[#a0aab8] space-y-1.5">
                   <p>
-                    In X4: Foundations, files can be patched safely rather than entirely overwritten. This allows multiple mods to edit the same files independently!
+                    In X4: Foundations, files are patched cleanly using RFC 5261 diffs so multiple mods can modify the same XML file safely.
                   </p>
                   <p>
-                    - <span className="text-emerald-400 font-bold">&lt;add&gt;</span> appends nodes into the selector parent.<br />
-                    - <span className="text-emerald-400 font-bold">&lt;replace&gt;</span> replaces existing nodes / attributes.<br />
-                    - <span className="text-emerald-400 font-bold">&lt;remove&gt;</span> drops attributes/elements completely.
+                    • <span className="text-emerald-300 font-mono">&lt;add&gt;</span> appends nodes inside the selector.<br />
+                    • <span className="text-emerald-300 font-mono">&lt;replace&gt;</span> replaces attributes or elements.<br />
+                    • <span className="text-emerald-300 font-mono">&lt;remove&gt;</span> deletes matched elements.
                   </p>
                 </div>
               </div>
             </div>
           ) : (
-            <div className="space-y-4 animate-fadeIn flex-1 flex flex-col overflow-hidden">
+            <div className="space-y-4 flex-1 flex flex-col overflow-hidden">
               <div className="flex flex-col gap-2 shrink-0">
                 <div className="flex items-center justify-between">
-                  <h3 className="text-xs font-mono font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <h3 className="text-xs font-semibold text-emerald-300 flex items-center gap-1.5">
                     <Bookmark className="w-3.5 h-3.5 text-emerald-400" />
-                    BOILERPLATES & SNIPPETS
+                    Boilerplates &amp; Snippets
                   </h3>
                   
                   <button
                     onClick={() => setIsCreatingCustomBP(!isCreatingCustomBP)}
-                    className="text-[10px] bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 font-mono p-1 px-2 rounded border border-emerald-500/25 transition-all flex items-center gap-1 cursor-pointer"
+                    className="text-[11px] bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-200 px-2.5 py-1 rounded border border-emerald-500/30 transition-colors flex items-center gap-1 cursor-pointer font-medium"
                   >
                     <PlusCircle className="w-3 h-3" />
                     {isCreatingCustomBP ? 'Cancel' : 'New'}
                   </button>
                 </div>
                 
-                {/* Search filter input */}
                 <div className="relative">
-                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500" />
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#687385]" />
                   <input
                     type="text"
                     placeholder="Search snippets..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full bg-black/40 border border-white/10 text-xs text-slate-300 rounded p-1.5 pl-8 focus:outline-none focus:border-emerald-500/50"
+                    className="w-full bg-[#090b0f] border border-[#262c36] text-xs text-[#eef2f7] rounded p-1.5 pl-8 focus:outline-none focus:border-blue-500"
                   />
                 </div>
               </div>
 
               {isCreatingCustomBP ? (
-                <form onSubmit={handleCreateCustomBoilerplate} className="bg-black/35 border border-white/5 rounded p-3 space-y-2.5 shrink-0 select-none">
-                  <div className="text-[11px] font-mono font-bold text-emerald-400 uppercase border-b border-white/10 pb-1">Create Custom Boilerplate</div>
+                <form onSubmit={handleCreateCustomBoilerplate} className="bg-[#090b0f] border border-[#262c36] rounded p-3 space-y-2.5 shrink-0 select-none">
+                  <div className="text-xs font-semibold text-emerald-300 border-b border-[#262c36] pb-1">Create Custom Boilerplate</div>
                   
                   <div className="flex flex-col gap-1">
-                    <label className="text-[9.5px] text-slate-500 font-mono uppercase">Snippet Name</label>
+                    <label className="text-[11px] text-[#a0aab8]">Snippet Name</label>
                     <input
                       type="text"
                       required
                       placeholder="e.g. Inflow Engine Thrust"
                       value={newBPName}
                       onChange={(e) => setNewBPName(e.target.value)}
-                      className="bg-[#14161d] border border-white/10 text-xs text-slate-200 rounded p-1.5 focus:outline-none focus:border-emerald-500"
+                      className="bg-[#11141a] border border-[#262c36] text-xs text-[#eef2f7] rounded p-1.5 focus:outline-none focus:border-blue-500"
                     />
                   </div>
 
                   <div className="flex flex-col gap-1">
-                    <label className="text-[9.5px] text-slate-500 font-mono uppercase">Description</label>
+                    <label className="text-[11px] text-[#a0aab8]">Description</label>
                     <input
                       type="text"
                       placeholder="Brief summary of what this code does"
                       value={newBPDescription}
                       onChange={(e) => setNewBPDescription(e.target.value)}
-                      className="bg-[#14161d] border border-white/10 text-xs text-slate-200 rounded p-1.5 focus:outline-none focus:border-emerald-500"
+                      className="bg-[#11141a] border border-[#262c36] text-xs text-[#eef2f7] rounded p-1.5 focus:outline-none focus:border-blue-500"
                     />
                   </div>
 
                   <div className="grid grid-cols-2 gap-2">
                     <div className="flex flex-col gap-1">
-                      <label className="text-[9.5px] text-slate-500 font-mono uppercase">Target File</label>
+                      <label className="text-[11px] text-[#a0aab8]">Target File</label>
                       <select
                         value={newBPRelativePath}
                         onChange={(e) => setNewBPRelativePath(e.target.value)}
-                        className="bg-[#14161d] border border-white/10 text-[10px] text-slate-300 rounded p-1 p-y-1.5 focus:outline-none cursor-pointer"
+                        className="bg-[#11141a] border border-[#262c36] text-[11px] text-[#eef2f7] rounded p-1.5 focus:outline-none cursor-pointer"
                       >
                         <option value="libraries/wares.xml">wares.xml</option>
+                        <option value="libraries/baskets.xml">baskets.xml</option>
                         <option value="libraries/jobs.xml">jobs.xml</option>
+                        <option value="libraries/god.xml">god.xml</option>
                         <option value="libraries/ship_macros.xml">ship_macros.xml</option>
                         <option value="libraries/factions.xml">factions.xml</option>
                         <option value="libraries/sound_library.xml">sound_library.xml</option>
-                        <option value="libraries/mission_director.xml">mission_director.xml</option>
                       </select>
                     </div>
 
                     <div className="flex flex-col gap-1">
-                      <label className="text-[9.5px] text-slate-500 font-mono uppercase">Action Type</label>
+                      <label className="text-[11px] text-[#a0aab8]">Action Type</label>
                       <select
                         value={newBPAction}
                         onChange={(e) => setNewBPAction(e.target.value as any)}
-                        className="bg-[#14161d] border border-white/10 text-[10px] text-slate-300 rounded p-1 p-y-1.5 focus:outline-none cursor-pointer"
+                        className="bg-[#11141a] border border-[#262c36] text-[11px] text-[#eef2f7] rounded p-1.5 focus:outline-none cursor-pointer"
                       >
                         <option value="add">add node</option>
                         <option value="replace">replace attr/node</option>
@@ -1297,38 +1294,37 @@ export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceB
                   </div>
 
                   <div className="flex flex-col gap-1">
-                    <label className="text-[9.5px] text-slate-500 font-mono uppercase">XPath Selector / Node Target</label>
+                    <label className="text-[11px] text-[#a0aab8]">XPath Selector / Node Target</label>
                     <XPathInput
                       targetPath={newBPRelativePath}
                       placeholder="e.g. /wares"
                       value={newBPSel}
                       onChange={setNewBPSel}
-                      className="bg-[#14161d] border border-white/10 text-xs font-mono text-slate-200 rounded p-1.5 focus:outline-none focus:border-emerald-500"
+                      className="bg-[#11141a] border border-[#262c36] text-xs font-mono text-[#eef2f7] rounded p-1.5 focus:outline-none focus:border-blue-500"
                     />
                   </div>
 
                   <div className="flex flex-col gap-1">
-                    <label className="text-[9.5px] text-slate-500 font-mono uppercase">Code Content</label>
+                    <label className="text-[11px] text-[#a0aab8]">Code Content</label>
                     <textarea
                       placeholder="XML definition content..."
                       value={newBPContent}
                       onChange={(e) => setNewBPContent(e.target.value)}
                       rows={4}
-                      className="bg-[#14161d] border border-white/10 text-xs font-mono text-slate-200 rounded p-1.5 focus:outline-none focus:border-emerald-500"
+                      className="bg-[#11141a] border border-[#262c36] text-xs font-mono text-[#eef2f7] rounded p-1.5 focus:outline-none focus:border-blue-500"
                     />
                   </div>
 
                   <button
                     type="submit"
-                    className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-mono text-xs p-2 rounded font-bold transition-colors cursor-pointer"
+                    className="w-full bg-emerald-600 hover:bg-emerald-500 text-white text-xs p-2 rounded font-semibold transition-colors cursor-pointer"
                   >
                     Save Boilerplate Snippet
                   </button>
                 </form>
               ) : null}
 
-              {/* Snippets list Container */}
-              <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+              <div className="flex-1 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
                 {[...customSnippets, ...BUILTIN_BOILERPLATES]
                   .filter(bp => {
                     const query = searchQuery.toLowerCase().trim();
@@ -1345,56 +1341,56 @@ export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceB
                     return (
                       <div
                         key={bp.id}
-                        className="bg-[#1c1f26]/80 hover:bg-[#1c1f26] border border-white/5 hover:border-emerald-500/30 p-2.5 rounded-lg flex flex-col gap-1.5 shadow transition-all group/bp relative"
+                        className="bg-[#171b23] border border-[#262c36] hover:border-emerald-500/40 p-2.5 rounded-lg flex flex-col gap-1.5 transition-colors group/bp relative"
                       >
                         <div className="flex items-start justify-between gap-1">
-                          <div className="flex flex-col">
-                            <div className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
-                              <FileText className="w-3 h-3 text-slate-400" />
-                              {bp.name}
-                              {isCustom && <span className="text-[8px] uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1 rounded">user</span>}
+                          <div className="flex flex-col min-w-0">
+                            <div className="text-xs font-semibold text-[#eef2f7] flex items-center gap-1.5">
+                              <FileText className="w-3.5 h-3.5 text-[#a0aab8] shrink-0" />
+                              <span className="truncate">{bp.name}</span>
+                              {isCustom && <span className="text-[11px] bg-emerald-500/15 text-emerald-300 border border-emerald-500/25 px-1.5 rounded">user</span>}
                             </div>
-                            <div className="text-[10px] text-slate-450 leading-normal mt-0.5">{bp.description}</div>
+                            <div className="text-[11px] text-[#a0aab8] leading-normal mt-0.5">{bp.description}</div>
                           </div>
 
-                          <div className="flex items-center gap-1 shrink-0 opacity-40 group-hover/bp:opacity-100 transition-opacity">
+                          <div className="flex items-center gap-1 shrink-0">
                             <button
                               onClick={(e) => handleCopyToClipboardAndNotify(bp, e)}
-                              className="p-1 rounded bg-[#0F1115] hover:bg-black/40 text-slate-400 hover:text-cyan-400 border border-white/5 cursor-pointer flex items-center justify-center transition-colors"
+                              className="p-1 rounded bg-[#090b0f] text-[#a0aab8] hover:text-blue-300 border border-[#262c36] cursor-pointer flex items-center justify-center transition-colors"
                               title="Copy code to clipboard"
                             >
-                              {copiedSnippetId === bp.id ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                              {copiedSnippetId === bp.id ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                             </button>
                             
                             {isCustom && (
                               <button
                                 onClick={(e) => handleDeleteCustomSnippet(bp.id, e)}
-                                className="p-1 rounded bg-[#0F1115] hover:bg-black/40 text-slate-400 hover:text-red-400 border border-white/5 cursor-pointer flex items-center justify-center transition-colors"
+                                className="p-1 rounded bg-[#090b0f] text-[#a0aab8] hover:text-rose-300 border border-[#262c36] cursor-pointer flex items-center justify-center transition-colors"
                                 title="Delete custom snippet"
                               >
-                                <Trash className="w-3 h-3" />
+                                <Trash className="w-3.5 h-3.5" />
                               </button>
                             )}
                           </div>
                         </div>
 
-                        <div className="flex flex-wrap items-center gap-1.5 font-mono text-[9px] text-slate-500">
-                          <span className="bg-[#0F1115] px-1.5 py-0.5 rounded text-[8.5px] text-slate-400 truncate max-w-[130px]" title={bp.targetFile}>
+                        <div className="flex flex-wrap items-center gap-1.5 font-mono text-[11px] text-[#687385]">
+                          <span className="bg-[#090b0f] px-1.5 py-0.5 rounded text-[#a0aab8] truncate max-w-[140px]" title={bp.targetFile}>
                             {bp.targetFile}
                           </span>
-                          <span className="bg-[#0F1115] px-1.5 py-0.5 rounded text-[8.5px] text-emerald-400">
+                          <span className="bg-[#090b0f] px-1.5 py-0.5 rounded text-emerald-300">
                             sel: {bp.sel.substring(0, 16)}{bp.sel.length > 16 ? '...' : ''}
                           </span>
-                          <span className="bg-[#0F1115] px-1.5 py-0.5 rounded text-[8.5px] text-purple-400">
+                          <span className="bg-[#090b0f] px-1.5 py-0.5 rounded text-fuchsia-300">
                             act: {bp.action}
                           </span>
                         </div>
 
                         <button
                           onClick={() => handleApplyBoilerplate(bp)}
-                          className="w-full text-center py-1 mt-1 font-mono text-[9px] font-bold text-emerald-400 hover:text-white bg-emerald-500/5 hover:bg-emerald-600 rounded border border-emerald-500/10 hover:border-emerald-500/25 transition-all cursor-pointer flex items-center justify-center gap-1"
+                          className="w-full text-center py-1.5 mt-1 text-[11px] font-semibold text-emerald-200 hover:text-white bg-emerald-500/15 hover:bg-emerald-500/25 rounded border border-emerald-500/30 transition-colors cursor-pointer flex items-center justify-center gap-1"
                         >
-                          <Plus className="w-2.5 h-2.5" />
+                          <Plus className="w-3 h-3" />
                           Apply template to queue
                         </button>
                       </div>
@@ -1410,7 +1406,7 @@ export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceB
                     bp.content.toLowerCase().includes(query)
                   );
                 }).length === 0 && (
-                  <div className="text-center py-8 text-slate-500 font-mono text-xs border border-white/5 rounded bg-black/10">
+                  <div className="text-center py-8 text-[#687385] text-xs border border-[#262c36] rounded bg-[#090b0f]">
                     No snippets found matching your query.
                   </div>
                 )}
@@ -1420,70 +1416,70 @@ export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceB
         </div>
 
         {/* Center: Interactive Diff Blocks constructor */}
-        <div data-xmlpatch-pane="blocks" className={`${compactPane === 'blocks' ? 'flex' : 'hidden'} min-[1500px]:flex min-w-0 flex-1 flex-col border-r border-[#df9825]/10 overflow-hidden p-3 min-[1500px]:p-4`}>
-          <div className="flex items-center justify-between pb-2 border-b border-white/10 mb-3 shrink-0">
-            <h2 className="text-xs font-mono font-bold text-slate-200 tracking-wider uppercase flex items-center gap-1.5">
+        <div data-xmlpatch-pane="blocks" className={`${compactPane === 'blocks' ? 'flex' : 'hidden'} min-[1500px]:flex min-w-0 flex-1 flex-col border-r border-[#262c36] overflow-hidden p-3 min-[1500px]:p-4`}>
+          <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-[#262c36] mb-3 shrink-0">
+            <h2 className="text-xs font-semibold text-[#eef2f7] flex items-center gap-1.5">
               <Sliders className="w-4 h-4 text-emerald-400" />
               Active Patch Blocks Queue
             </h2>
             
-            <div className="flex gap-1">
+            <div className="flex flex-wrap gap-1.5">
               <button
                 onClick={() => handleAddPatchBlock('add')}
-                className="px-2 py-1 bg-emerald-500/10 hover:bg-emerald-500/25 border border-emerald-500/35 rounded text-[10px] font-mono text-emerald-400 hover:text-white cursor-pointer"
+                className="px-2.5 py-1 bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/35 rounded text-[11px] font-medium text-emerald-200 cursor-pointer"
               >
-                ➕ Add Block
+                + Add Block
               </button>
               <button
                 onClick={() => handleAddPatchBlock('replace')}
-                className="px-2 py-1 bg-emerald-500/10 hover:bg-emerald-500/25 border border-emerald-500/35 rounded text-[10px] font-mono text-emerald-400 hover:text-white cursor-pointer"
+                className="px-2.5 py-1 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/35 rounded text-[11px] font-medium text-amber-200 cursor-pointer"
               >
-                🔁 Replace Block
+                Replace Block
               </button>
               <button
                 onClick={() => handleAddPatchBlock('remove')}
-                className="px-2 py-1 bg-[#ef4444]/10 hover:bg-[#ef4444]/25 border border-[#ef4444]/35 rounded text-[10px] font-mono text-red-400 hover:text-white cursor-pointer"
+                className="px-2.5 py-1 bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/35 rounded text-[11px] font-medium text-rose-200 cursor-pointer"
               >
-                ➖ Remove Block
+                Remove Block
               </button>
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto space-y-3 pr-1 py-1">
+          <div className="flex-1 overflow-y-auto space-y-3 pr-1 py-1 custom-scrollbar">
             {filteredBlocks.length === 0 ? (
-              <div className="text-center py-24 text-[11px] font-mono text-slate-500 whitespace-pre">
-                No patch blocks for this file.<br />Click right header actions to build custom patches!
+              <div className="text-center py-24 text-xs text-[#687385]">
+                No patch blocks for this file. Click a header action to add a custom patch.
               </div>
             ) : (
               filteredBlocks.map((b, bidx) => (
                 <div
                   key={b.id}
-                  className="bg-[#1c1f26]/90 border border-white/5 hover:border-emerald-500/30 p-3.5 rounded-lg flex flex-col gap-2.5 shadow-md relative group"
+                  className="bg-[#11141a] border border-[#262c36] hover:border-emerald-500/35 p-3.5 rounded-lg flex flex-col gap-2.5 relative group"
                 >
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] bg-emerald-500/10 border border-emerald-500/30 px-1.5 py-0.5 text-emerald-400 font-bold uppercase rounded font-mono">
-                        Block #{bidx + 1}: {b.action.toUpperCase()}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0 flex-1">
+                      <span className="text-[11px] bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-emerald-300 font-semibold uppercase rounded font-mono shrink-0">
+                        #{bidx + 1} {b.action}
                       </span>
                       <input
                         type="text"
                         value={b.note}
                         onChange={(e) => handleUpdatePatchBlock(b.id, 'note', e.target.value)}
-                        className="font-bold text-xs text-slate-200 bg-transparent border-b border-transparent hover:border-white/20 focus:border-emerald-500 focus:outline-none transition-all py-0.5 font-sans"
+                        className="flex-1 min-w-0 font-semibold text-xs text-[#eef2f7] bg-transparent border-b border-transparent hover:border-[#262c36] focus:border-blue-500 focus:outline-none transition-colors py-0.5"
                         placeholder="Patch item description note..."
                       />
                     </div>
-                    <div className="flex items-center gap-1 opacity-40 group-hover:opacity-100 transition-all">
+                    <div className="flex items-center gap-1 shrink-0">
                       <button
                         onClick={() => handleSaveBlockAsBoilerplate(b)}
-                        className="text-slate-500 hover:text-emerald-400 p-1 rounded hover:bg-black/25 transition-all cursor-pointer"
+                        className="text-[#687385] hover:text-emerald-300 p-1 rounded hover:bg-[#171b23] transition-colors cursor-pointer"
                         title="Save this block to Boilerplates library"
                       >
                         <Bookmark className="w-3.5 h-3.5" />
                       </button>
                       <button
                         onClick={() => handleDeletePatchBlock(b.id)}
-                        className="text-slate-500 hover:text-red-400 p-1 rounded hover:bg-black/25 transition-all cursor-pointer"
+                        className="text-[#687385] hover:text-rose-300 p-1 rounded hover:bg-[#171b23] transition-colors cursor-pointer"
                       >
                         <Trash className="w-3.5 h-3.5" />
                       </button>
@@ -1491,35 +1487,31 @@ export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceB
                   </div>
 
                   {/* Target Node XPath selector */}
-                  <div className="space-y-1 font-mono text-[10.5px]">
-                    <div className="flex items-center gap-1">
-                      <span className="text-slate-400 uppercase font-bold text-[9px] w-24">Sel (XPath):</span>
-                      <XPathInput
-                        targetPath={targetFile}
-                        value={b.sel}
-                        onChange={value => handleUpdatePatchBlock(b.id, 'sel', value)}
-                        className="bg-black/50 border border-white/10 rounded px-2 py-1 text-slate-200 flex-1 h-7 focus:outline-none focus:border-emerald-500 text-[10px] font-mono font-bold"
-                        placeholder="e.g. /wares/ware[@id='ore']"
-                      />
-                    </div>
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 text-[11px]">
+                    <span className="text-[#a0aab8] font-medium w-24 shrink-0">Sel (XPath):</span>
+                    <XPathInput
+                      targetPath={targetFile}
+                      value={b.sel}
+                      onChange={value => handleUpdatePatchBlock(b.id, 'sel', value)}
+                      className="bg-[#090b0f] border border-[#262c36] rounded px-2.5 py-1.5 text-[#eef2f7] w-full focus:outline-none focus:border-blue-500 text-xs font-mono"
+                      placeholder="e.g. /wares/ware[@id='ore']"
+                    />
                   </div>
 
                   {/* Position selector for 'add' action */}
                   {b.action === 'add' && (
-                    <div className="space-y-1 font-mono text-[10.5px]">
-                      <div className="flex items-center gap-1">
-                        <span className="text-slate-400 uppercase font-bold text-[9px] w-24">Position (pos):</span>
-                        <select
-                          value={b.pos || 'append'}
-                          onChange={(e) => handleUpdatePatchBlock(b.id, 'pos', e.target.value)}
-                          className="bg-black/50 border border-white/10 rounded px-2 py-1 text-slate-200 flex-1 h-7 focus:outline-none focus:border-emerald-500 text-[10px] font-mono cursor-pointer"
-                        >
-                          <option value="append">append (Default - add as last child)</option>
-                          <option value="prepend">prepend (add as first child)</option>
-                          <option value="before">before (insert before target node)</option>
-                          <option value="after">after (insert after target node)</option>
-                        </select>
-                      </div>
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 text-[11px]">
+                      <span className="text-[#a0aab8] font-medium w-24 shrink-0">Position (pos):</span>
+                      <select
+                        value={b.pos || 'append'}
+                        onChange={(e) => handleUpdatePatchBlock(b.id, 'pos', e.target.value)}
+                        className="bg-[#090b0f] border border-[#262c36] rounded px-2.5 py-1.5 text-[#eef2f7] flex-1 focus:outline-none focus:border-blue-500 text-xs font-mono cursor-pointer"
+                      >
+                        <option value="append">append (Default - add as last child)</option>
+                        <option value="prepend">prepend (add as first child)</option>
+                        <option value="before">before (insert before target node)</option>
+                        <option value="after">after (insert after target node)</option>
+                      </select>
                     </div>
                   )}
 
@@ -1528,22 +1520,22 @@ export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceB
                     const val = validateBlockXPath(b);
                     const err = applyPatchesResult.errors[b.id];
                     return (
-                      <div className="ml-24 text-[9.5px] font-mono flex flex-col gap-0.5 mt-0.5">
+                      <div className="sm:ml-24 text-[11px] font-mono flex flex-col gap-0.5">
                         {val.status === 'success' && (
-                          <span className="text-emerald-400 font-bold">{val.message}</span>
+                          <span className="text-emerald-300 font-semibold">{val.message}</span>
                         )}
                         {val.status === 'warn' && (
-                          <span className="text-amber-400 font-semibold">{val.message}</span>
+                          <span className="text-amber-300 font-medium">{val.message}</span>
                         )}
                         {val.status === 'error' && (
-                          <span className="text-rose-400 font-bold">{val.message}</span>
+                          <span className="text-rose-300 font-semibold">{val.message}</span>
                         )}
                         {val.status === 'no_file' && (
-                          <span className="text-slate-500">{val.message}</span>
+                          <span className="text-[#687385]">{val.message}</span>
                         )}
                         {err && (
-                          <span className="text-rose-500 font-bold bg-rose-950/20 border border-rose-900/30 px-2 py-0.5 rounded mt-1">
-                            ⚠️ Applied error: {err}
+                          <span className="text-rose-300 font-semibold bg-rose-500/10 border border-rose-500/25 px-2 py-1 rounded mt-1">
+                            Applied error: {err}
                           </span>
                         )}
                       </div>
@@ -1552,13 +1544,13 @@ export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceB
 
                   {/* Code editor block for Add or Replace content */}
                   {b.action !== 'remove' && (
-                    <div className="ml-24 space-y-1 font-mono text-[10.5px]">
-                      <span className="text-slate-500 uppercase font-bold text-[8.5px] block">Patch Content:</span>
+                    <div className="sm:ml-24 space-y-1 text-[11px]">
+                      <span className="text-[#a0aab8] font-medium block">Patch Content:</span>
                       <textarea
                         value={b.content}
                         onChange={(e) => handleUpdatePatchBlock(b.id, 'content', e.target.value)}
                         rows={3}
-                        className="w-full bg-black/60 font-mono text-[9.5px] p-2 border border-white/5 focus:border-emerald-500 rounded text-slate-300 resize-none h-14"
+                        className="w-full bg-[#090b0f] font-mono text-xs p-2.5 border border-[#262c36] focus:border-blue-500 rounded text-[#eef2f7] resize-y"
                         placeholder="<ware id='id' ... />"
                       />
                     </div>
@@ -1570,24 +1562,24 @@ export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceB
         </div>
 
         {/* Right side code preview area */}
-        <div data-xmlpatch-pane="preview" className={`${compactPane === 'preview' ? 'flex' : 'hidden'} min-[1500px]:flex w-full min-[1500px]:w-[450px] bg-[#0c0e14] border-l border-white/10 p-3 min-[1500px]:p-4 flex-col overflow-hidden`}>
-          <div className="flex items-center justify-between border-b border-white/10 pb-2 mb-3 shrink-0 font-mono text-xs gap-2">
-            <div className="hidden min-[1500px]:flex items-center gap-1 bg-[#0F1115] border border-white/10 p-0.5 rounded shrink-0">
+        <div data-xmlpatch-pane="preview" className={`${compactPane === 'preview' ? 'flex' : 'hidden'} min-[1500px]:flex w-full min-[1500px]:w-[450px] min-w-0 bg-[#11141a] border-l border-[#262c36] p-3 min-[1500px]:p-4 flex-col overflow-hidden`}>
+          <div className="flex items-center justify-between border-b border-[#262c36] pb-2 mb-3 shrink-0 text-xs gap-2">
+            <div className="hidden min-[1500px]:flex items-center gap-1 bg-[#090b0f] border border-[#262c36] p-0.5 rounded shrink-0">
               <button
                 onClick={() => setRightPanelTab('patch')}
-                className={`px-2.5 py-1 text-[9.5px] font-mono font-bold uppercase rounded ${rightPanelTab === 'patch' ? 'bg-emerald-500 text-black' : 'text-slate-400 hover:text-slate-200'} cursor-pointer transition-all`}
+                className={`px-2.5 py-1 text-[11px] font-semibold rounded ${rightPanelTab === 'patch' ? 'bg-emerald-500 text-black' : 'text-[#a0aab8] hover:text-white'} cursor-pointer transition-colors`}
               >
                 Patch XML
               </button>
               <button
                 onClick={() => setRightPanelTab('preview')}
-                className={`px-2.5 py-1 text-[9.5px] font-mono font-bold uppercase rounded ${rightPanelTab === 'preview' ? 'bg-emerald-500 text-black' : 'text-slate-400 hover:text-slate-200'} cursor-pointer transition-all`}
+                className={`px-2.5 py-1 text-[11px] font-semibold rounded ${rightPanelTab === 'preview' ? 'bg-emerald-500 text-black' : 'text-[#a0aab8] hover:text-white'} cursor-pointer transition-colors`}
               >
                 Applied Preview
               </button>
               <button
                 onClick={() => setRightPanelTab('difftool')}
-                className={`px-2.5 py-1 text-[9.5px] font-mono font-bold uppercase rounded ${rightPanelTab === 'difftool' ? 'bg-fuchsia-500 text-black' : 'text-slate-400 hover:text-slate-200'} cursor-pointer transition-all`}
+                className={`px-2.5 py-1 text-[11px] font-semibold rounded ${rightPanelTab === 'difftool' ? 'bg-fuchsia-500 text-black' : 'text-[#a0aab8] hover:text-white'} cursor-pointer transition-colors`}
               >
                 Diff→Patch
               </button>
@@ -1595,7 +1587,7 @@ export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceB
             
             <button
               onClick={copyToClipboard}
-              className="px-2.5 py-0.5 rounded bg-black/45 hover:bg-black/80 font-bold uppercase text-[9.5px] border border-white/10 text-slate-300 hover:text-emerald-400 cursor-pointer flex items-center gap-1"
+              className="px-2.5 py-1 rounded bg-[#171b23] hover:text-white font-medium text-[11px] border border-[#262c36] text-[#a0aab8] cursor-pointer flex items-center gap-1 shrink-0"
             >
               Copy Diff
             </button>
@@ -1605,65 +1597,65 @@ export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceB
             <div className="flex-1 flex flex-col gap-2 min-h-0">
               <div className="flex flex-col gap-2 shrink-0">
                 <div className="min-w-0">
-                  <div className="text-[9px] uppercase tracking-wide text-slate-500 font-bold truncate">
+                  <div className="text-[11px] text-[#a0aab8] font-medium truncate">
                     Three-pane merge: base file {'->'} edited candidate {'->'} generated patch
                   </div>
-                  <div className="flex items-center gap-2 text-[9px] font-mono uppercase mt-1">
-                    <span className="rounded border border-white/10 bg-black/35 px-1.5 py-0.5 text-slate-400">
+                  <div className="flex items-center gap-2 text-[11px] font-mono mt-1">
+                    <span className="rounded border border-[#262c36] bg-[#090b0f] px-2 py-0.5 text-[#a0aab8]">
                       {dtChangedLineCount} line delta(s)
                     </span>
-                    <span className={`rounded border px-1.5 py-0.5 ${dtResult ? 'border-fuchsia-500/30 bg-fuchsia-500/10 text-fuchsia-300' : 'border-white/10 bg-black/35 text-slate-500'}`}>
+                    <span className={`rounded border px-2 py-0.5 ${dtResult ? 'border-fuchsia-500/35 bg-fuchsia-500/15 text-fuchsia-200' : 'border-[#262c36] bg-[#090b0f] text-[#687385]'}`}>
                       {dtResult ? `${dtResult.ops.length} op(s)` : 'not synthesized'}
                     </span>
                   </div>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
                   <button
                     onClick={openNativeDiff}
                     disabled={!baseFileContent}
                     title="Open the effective vanilla file and edited candidate in Antigravity's native diff viewer"
-                    className="px-2.5 py-1.5 rounded bg-cyan-500/10 hover:bg-cyan-500/20 font-bold uppercase text-[9.5px] border border-cyan-500/25 text-cyan-300 cursor-pointer transition-all disabled:opacity-50 flex items-center gap-1"
+                    className="px-2.5 py-1.5 rounded bg-blue-500/15 hover:bg-blue-500/25 font-medium text-[11px] border border-blue-500/35 text-blue-200 cursor-pointer transition-colors disabled:opacity-50 flex items-center gap-1"
                   >
-                    <GitCompare className="w-3 h-3" /> Native Diff
+                    <GitCompare className="w-3.5 h-3.5" /> Native Diff
                   </button>
                   <button
                     onClick={runDiffToPatch}
                     disabled={dtBusy || !baseFileContent}
-                    className="px-2.5 py-1.5 rounded bg-fuchsia-500/15 hover:bg-fuchsia-500/25 font-bold uppercase text-[9.5px] border border-fuchsia-500/30 text-fuchsia-300 cursor-pointer transition-all disabled:opacity-50"
+                    className="px-2.5 py-1.5 rounded bg-fuchsia-500/15 hover:bg-fuchsia-500/25 font-medium text-[11px] border border-fuchsia-500/35 text-fuchsia-200 cursor-pointer transition-colors disabled:opacity-50"
                   >
                     {dtBusy ? 'Synthesizing...' : 'Synthesize Patch'}
                   </button>
                   <button
                     onClick={resetEditedCandidate}
                     disabled={!baseFileContent}
-                    className="px-2.5 py-1.5 rounded bg-black/45 hover:bg-black/80 font-bold uppercase text-[9.5px] border border-white/10 text-slate-300 cursor-pointer transition-all disabled:opacity-50"
+                    className="px-2.5 py-1.5 rounded bg-[#171b23] hover:text-white font-medium text-[11px] border border-[#262c36] text-[#a0aab8] cursor-pointer transition-colors disabled:opacity-50"
                   >
                     Reset
                   </button>
                   <button
                     onClick={adoptSynthesizedOps}
                     disabled={!dtResult?.ops.length}
-                    className="px-2.5 py-1.5 rounded bg-emerald-500/15 hover:bg-emerald-500/25 font-bold uppercase text-[9.5px] border border-emerald-500/30 text-emerald-300 cursor-pointer transition-all disabled:opacity-50"
+                    className="px-2.5 py-1.5 rounded bg-emerald-500/15 hover:bg-emerald-500/25 font-medium text-[11px] border border-emerald-500/35 text-emerald-200 cursor-pointer transition-colors disabled:opacity-50"
                   >
                     Add to Workspace
                   </button>
                 </div>
               </div>
               <div className="grid grid-rows-3 gap-2 flex-1 min-h-0">
-                <div className="min-w-0 flex flex-col rounded-lg border border-white/10 bg-black/45 overflow-hidden">
-                  <div className="flex items-center justify-between gap-2 border-b border-white/10 px-2 py-1.5 font-mono text-[9px] uppercase">
-                    <span className="font-bold text-slate-400">Base XML</span>
-                    <span className="truncate text-slate-600" title={targetFile}>{targetFile}</span>
+                <div className="min-w-0 flex flex-col rounded-lg border border-[#262c36] bg-[#090b0f] overflow-hidden">
+                  <div className="flex items-center justify-between gap-2 border-b border-[#262c36] px-2.5 py-1.5 font-mono text-[11px]">
+                    <span className="font-semibold text-[#a0aab8]">Base XML</span>
+                    <span className="truncate text-[#687385]" title={targetFile}>{targetFile}</span>
                   </div>
-                  <pre className="flex-1 min-h-0 overflow-auto custom-scrollbar p-2 font-mono text-[9.5px] leading-relaxed text-slate-400 whitespace-pre-wrap break-all select-text">
+                  <pre className="flex-1 min-h-0 overflow-auto custom-scrollbar p-2.5 font-mono text-[11px] leading-relaxed text-[#a0aab8] whitespace-pre-wrap break-all select-text">
                     {baseFileLoading ? 'Loading vanilla content...' : (baseFileError || dtBasePreview || 'No vanilla content loaded.')}
                   </pre>
                 </div>
 
-                <div className="min-w-0 flex flex-col rounded-lg border border-fuchsia-500/25 bg-black/45 overflow-hidden">
-                  <div className="flex items-center justify-between gap-2 border-b border-fuchsia-500/20 px-2 py-1.5 font-mono text-[9px] uppercase">
-                    <span className="font-bold text-fuchsia-300">Edited XML</span>
-                    <span className="text-slate-600">candidate</span>
+                <div className="min-w-0 flex flex-col rounded-lg border border-fuchsia-500/30 bg-[#090b0f] overflow-hidden">
+                  <div className="flex items-center justify-between gap-2 border-b border-fuchsia-500/20 px-2.5 py-1.5 font-mono text-[11px]">
+                    <span className="font-semibold text-fuchsia-300">Edited XML</span>
+                    <span className="text-[#687385]">candidate</span>
                   </div>
                   <textarea
                     data-testid="diff-patch-edited-xml"
@@ -1672,27 +1664,27 @@ export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceB
                     spellCheck={false}
                     disabled={!baseFileContent}
                     placeholder={baseFileLoading ? 'Loading vanilla content...' : (baseFileError || 'No vanilla content available for this target.')}
-                    className="flex-1 min-h-0 bg-transparent p-2 font-mono text-[9.5px] leading-relaxed text-slate-200 resize-none focus:outline-none custom-scrollbar"
+                    className="flex-1 min-h-0 bg-transparent p-2.5 font-mono text-[11px] leading-relaxed text-[#eef2f7] resize-none focus:outline-none custom-scrollbar"
                   />
                 </div>
 
-                <div className="min-w-0 flex flex-col rounded-lg border border-emerald-500/20 bg-black/45 overflow-hidden">
-                  <div className="flex items-center justify-between gap-2 border-b border-emerald-500/15 px-2 py-1.5 font-mono text-[9px] uppercase">
-                    <span className="font-bold text-emerald-300">Patch XML</span>
-                    <span className="text-slate-600">generated</span>
+                <div className="min-w-0 flex flex-col rounded-lg border border-emerald-500/25 bg-[#090b0f] overflow-hidden">
+                  <div className="flex items-center justify-between gap-2 border-b border-emerald-500/20 px-2.5 py-1.5 font-mono text-[11px]">
+                    <span className="font-semibold text-emerald-300">Patch XML</span>
+                    <span className="text-[#687385]">generated</span>
                   </div>
-                  <div className="flex-1 min-h-0 overflow-auto custom-scrollbar p-2">
+                  <div className="flex-1 min-h-0 overflow-auto custom-scrollbar p-2.5">
                     {dtError ? (
-                      <div className="text-red-300 text-[10px] bg-red-500/5 border border-red-500/20 rounded p-2 font-sans">{dtError}</div>
+                      <div className="text-rose-300 text-xs bg-rose-500/10 border border-rose-500/25 rounded p-2">{dtError}</div>
                     ) : dtResult ? (
                       <div className="space-y-1.5">
                         {(dtResult.warnings || []).map((w, i) => (
-                          <div key={i} className="text-amber-300 text-[9px] font-sans leading-snug">{w}</div>
+                          <div key={i} className="text-amber-300 text-[11px] leading-snug">{w}</div>
                         ))}
-                        <pre className="whitespace-pre-wrap break-all font-mono text-[9.5px] leading-relaxed text-slate-300 select-text">{dtPatchPreview}</pre>
+                        <pre className="whitespace-pre-wrap break-all font-mono text-[11px] leading-relaxed text-[#eef2f7] select-text">{dtPatchPreview}</pre>
                       </div>
                     ) : (
-                      <div className="h-full flex items-center justify-center text-center text-[10px] font-mono text-slate-600 px-4">
+                      <div className="h-full flex items-center justify-center text-center text-[11px] text-[#687385] px-4">
                         Run synthesis to generate the minimal X4 diff patch for the edited candidate.
                       </div>
                     )}
@@ -1701,26 +1693,26 @@ export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceB
               </div>
             </div>
           ) : rightPanelTab === 'patch' ? (
-            <div className="flex-1 bg-black/50 rounded-lg p-3 font-mono text-[10.5px] text-slate-400 overflow-y-auto relative custom-scrollbar border border-white/5 leading-normal select-text selection:bg-emerald-500/25">
+            <div className="flex-1 bg-[#090b0f] rounded-lg p-3 font-mono text-[11px] text-[#eef2f7] overflow-y-auto relative custom-scrollbar border border-[#262c36] leading-relaxed select-text">
               <pre className="whitespace-pre">
                 {compileDiffDocument()}
               </pre>
             </div>
           ) : (
-            <div className="flex-1 bg-black/50 rounded-lg p-3 font-mono text-[10px] overflow-y-auto relative custom-scrollbar border border-white/5 leading-relaxed select-text flex flex-col gap-0.5">
+            <div className="flex-1 bg-[#090b0f] rounded-lg p-3 font-mono text-[11px] overflow-y-auto relative custom-scrollbar border border-[#262c36] leading-relaxed select-text flex flex-col gap-0.5">
               {baseFileLoading ? (
-                <div className="text-center py-20 text-slate-500 font-mono text-xs">Loading base game XML...</div>
+                <div className="text-center py-20 text-[#687385] text-xs">Loading base game XML...</div>
               ) : baseFileError ? (
-                <div className="text-center py-16 text-slate-500 text-[10.5px] whitespace-pre-line px-4 font-mono leading-relaxed">
+                <div className="text-center py-16 text-[#687385] text-xs whitespace-pre-line px-4 leading-relaxed">
                   {baseFileError || `Effective canonical file '${targetFile}' is unavailable.`}
                 </div>
               ) : (
-                <div className="flex flex-col font-mono text-[9.5px]">
-                  <div className="text-[9px] uppercase tracking-wide text-slate-500 border-b border-white/5 pb-1 mb-1 font-bold">
+                <div className="flex flex-col font-mono text-[11px]">
+                  <div className="text-[11px] text-[#a0aab8] border-b border-[#262c36] pb-1.5 mb-1.5 font-semibold">
                     Unified Diff: {targetFile}
                   </div>
                   {diffSnippet.map((line, idx) => {
-                    let lineClass = 'text-slate-400';
+                    let lineClass = 'text-[#a0aab8]';
                     let prefix = ' ';
                     if (line.type === 'addition') {
                       lineClass = 'bg-emerald-950/45 text-emerald-300 border-l-2 border-emerald-500 px-1';
@@ -1729,15 +1721,15 @@ export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceB
                       lineClass = 'bg-rose-950/45 text-rose-300 border-l-2 border-red-500 px-1';
                       prefix = '-';
                     } else if (line.label === '...') {
-                      lineClass = 'text-slate-600 bg-slate-900/20 px-1 border-y border-white/5 py-0.5 my-0.5';
+                      lineClass = 'text-[#687385] bg-[#141820] px-1 border-y border-[#262c36] py-0.5 my-0.5';
                       prefix = '';
                     }
                     return (
                       <div key={idx} className={`flex items-start font-mono transition-colors ${lineClass}`}>
-                        <span className="w-10 select-none text-[8px] text-slate-600 mr-2 border-r border-white/5 pr-1.5 text-right font-normal shrink-0">
+                        <span className="w-10 select-none text-[11px] text-[#687385] mr-2 border-r border-[#262c36] pr-1.5 text-right font-normal shrink-0">
                           {line.label}
                         </span>
-                        <span className="select-none font-bold text-slate-600 mr-1 shrink-0 w-3 text-center">{prefix}</span>
+                        <span className="select-none font-bold text-[#687385] mr-1 shrink-0 w-3 text-center">{prefix}</span>
                         <span className="whitespace-pre flex-1 overflow-x-auto break-all select-text">{line.value}</span>
                       </div>
                     );

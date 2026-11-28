@@ -16,7 +16,14 @@
  * carrying unmodeled fields should stay passthrough rather than be flattened here.
  */
 
-import type { WareDef, JobDef } from '../types';
+import type {
+  JobDef,
+  JobOrderParamDef,
+  JobShipSize,
+  JobSubordinateDef,
+  WareDef,
+  WareProductionDef,
+} from '../types';
 import { compileWaresXML, compileJobsXML } from './modCompiler';
 
 function attr(tag: string, name: string): string {
@@ -33,7 +40,22 @@ function decodeXmlAttr(s: string): string {
   return s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
 }
 
-const TRANSPORTS = new Set(['container', 'liquid', 'solid', 'energy']);
+const TRANSPORTS = new Set(['container', 'liquid', 'solid', 'energy', 'inventory', 'equipment', 'ship']);
+const SHIP_SIZES = new Set<JobShipSize>(['ship_xs', 'ship_s', 'ship_m', 'ship_l', 'ship_xl']);
+const LOCATION_CLASSES = new Set<'galaxy' | 'cluster' | 'sector' | 'zone'>(['galaxy', 'cluster', 'sector', 'zone']);
+
+function parsePrimaryWaresBlock(xmlFragment: string): Array<{ ware: string; amount: number | string }> {
+  const out: Array<{ ware: string; amount: number | string }> = [];
+  const primaryBlock = (xmlFragment.match(/<primary\b[^>]*>([\s\S]*?)<\/primary>/i) || ['', ''])[1];
+  if (!primaryBlock) return out;
+  for (const pm of primaryBlock.matchAll(/<ware\b[^>]*\bware\s*=\s*"([^"]+)"[^>]*>/gi)) {
+    const pt = pm[0];
+    const amtRaw = attr(pt, 'amount');
+    const amtNum = Number(amtRaw);
+    out.push({ ware: decodeXmlAttr(pm[1]), amount: Number.isFinite(amtNum) && amtRaw !== '' ? amtNum : amtRaw });
+  }
+  return out;
+}
 
 /**
  * True when the document is a FOREIGN `<diff>` patch — one using operations beyond the
@@ -68,18 +90,17 @@ export function parseWaresXml(content: string): WareDef[] | null {
     const inner = m[2];
     const transportRaw = attr(openTag, 'transport');
     const priceTag = (inner.match(/<price\b[^>]*\/?>/i) || [''])[0];
-    const prodTag = (inner.match(/<production\b[^>]*?\/?>/i) || [''])[0];
-
-    const primaryWares: Array<{ ware: string; amount: number | string }> = [];
-    const primaryBlock = (inner.match(/<primary\b[^>]*>([\s\S]*?)<\/primary>/i) || ['', ''])[1];
-    if (primaryBlock) {
-      for (const pm of primaryBlock.matchAll(/<ware\b[^>]*\bware\s*=\s*"([^"]+)"[^>]*>/gi)) {
-        const pt = pm[0];
-        const amtRaw = attr(pt, 'amount');
-        const amtNum = Number(amtRaw);
-        primaryWares.push({ ware: decodeXmlAttr(pm[1]), amount: Number.isFinite(amtNum) && amtRaw !== '' ? amtNum : amtRaw });
-      }
-    }
+    const prodBlocks = Array.from(
+      inner.matchAll(
+        /<production\b((?:"[^"]*"|'[^']*'|[^>"'/])*)\s*\/>|<production\b((?:"[^"]*"|'[^']*'|[^>"'])*)>([\s\S]*?)<\/production>/gi,
+      ),
+    ).map(pm => ({
+      openTag: `<production ${pm[1] ?? pm[2] ?? ''}>`,
+      body: pm[3] || '',
+    }));
+    const primaryProd = prodBlocks[0];
+    const prodTag = primaryProd?.openTag || '';
+    const primaryWares = parsePrimaryWaresBlock(primaryProd ? primaryProd.body : inner);
 
     const ware: WareDef = {
       id: attr(openTag, 'id'),
@@ -94,10 +115,28 @@ export function parseWaresXml(content: string): WareDef[] | null {
       prodAmount: num(prodTag, 'amount'),
       includeInBuild: true,
     };
+    const factoryName = attr(openTag, 'factoryname'); if (factoryName) ware.factoryName = factoryName;
+    const group = attr(openTag, 'group'); if (group) ware.group = group;
     const tags = attr(openTag, 'tags'); if (tags) ware.tags = tags;
     const method = attr(prodTag, 'method'); if (method) ware.productionMethod = method;
     const pname = attr(prodTag, 'name'); if (pname) ware.productionName = pname;
     if (primaryWares.length) ware.primaryWares = primaryWares;
+    if (prodBlocks.length > 1) {
+      const extras: WareProductionDef[] = prodBlocks.slice(1).map(pb => {
+        const extraPrimary = parsePrimaryWaresBlock(pb.body);
+        const extraName = attr(pb.openTag, 'name');
+        return {
+          method: attr(pb.openTag, 'method') || 'default',
+          ...(extraName ? { name: extraName } : {}),
+          time: num(pb.openTag, 'time'),
+          amount: num(pb.openTag, 'amount'),
+          ...(extraPrimary.length ? { primaryWares: extraPrimary } : {}),
+        };
+      });
+      if (extras.length) ware.additionalProductions = extras;
+    }
+    const componentTag = (inner.match(/<component\b[^>]*\/?>/i) || [''])[0];
+    const componentRef = attr(componentTag, 'ref'); if (componentRef) ware.componentRef = componentRef;
     wares.push(ware);
   }
   // COMPLETENESS GUARD: the paired-tag regex cannot see self-closing top-level wares
@@ -125,13 +164,19 @@ export function parseJobsXml(content: string): JobDef[] | null {
     const quotaTag = (inner.match(/<quota\b[^>]*\/?>/i) || [''])[0];
     const taskTag = (inner.match(/<task\b[^>]*\/?>/i) || [''])[0];
     const modsTag = (inner.match(/<modifiers\b[^>]*\/?>/i) || [''])[0];
+    const basketTag = (inner.match(/<basket\b[^>]*\/?>/i) || [''])[0];
+    const categoryTag = (inner.match(/<category\b[^>]*\/?>/i) || [''])[0];
+    const locationTag = (inner.match(/<location\b[^>]*\/?>/i) || [''])[0];
+    const envTag = (inner.match(/<environment\b[^>]*\/?>/i) || [''])[0];
+    const ordersBlock = (inner.match(/<orders\b[^>]*>([\s\S]*?)<\/orders>/i) || ['', ''])[1];
+    const orderMatch = (ordersBlock || inner).match(/<order\b((?:"[^"]*"|'[^']*'|[^>"'/])*)\s*\/>|<order\b((?:"[^"]*"|'[^']*'|[^>"'])*)>([\s\S]*?)<\/order>/i);
 
     // shipClass is encoded by the studio as tags="military <class>" — take the class token.
     const tags = attr(selectTag, 'tags').split(/[^A-Za-z0-9_]+/).filter(Boolean);
     const VALID = new Set(['fighter', 'corvette', 'destroyer', 'carrier', 'freighter']);
     const shipClass = (tags.find(t => VALID.has(t.toLowerCase())) || 'fighter') as JobDef['shipClass'];
 
-    jobs.push({
+    const job: JobDef = {
       id: attr(openTag, 'id'),
       name: attr(openTag, 'name'),
       faction: attr(selectTag, 'faction'),
@@ -142,7 +187,64 @@ export function parseJobsXml(content: string): JobDef[] | null {
       taskScript: attr(taskTag, 'task') || attr(taskTag, 'script'),
       rebuildOnDestroy: /\btrue\b/i.test(attr(modsTag, 'rebuild')),
       includeInBuild: true,
-    });
+    };
+
+    const startActiveRaw = attr(openTag, 'startactive');
+    if (/\bfalse\b/i.test(startActiveRaw)) job.startActive = false;
+    const commandRaw = attr(modsTag, 'commandeerable');
+    if (commandRaw) job.commandeerable = /\btrue\b/i.test(commandRaw);
+
+    if (orderMatch) {
+      const orderOpen = `<order ${orderMatch[1] ?? orderMatch[2] ?? ''}>`;
+      const orderId = attr(orderOpen, 'order');
+      if (orderId) job.orderId = orderId;
+      const orderBody = orderMatch[3] || '';
+      const orderParams: JobOrderParamDef[] = [];
+      for (const pm of orderBody.matchAll(/<param\b[^>]*>/gi)) {
+        const pName = attr(pm[0], 'name');
+        if (pName) orderParams.push({ name: pName, value: attr(pm[0], 'value') });
+      }
+      if (orderParams.length) job.orderParams = orderParams;
+    }
+
+    const basket = attr(basketTag, 'basket');
+    if (basket) job.basket = basket;
+    const categoryTags = attr(categoryTag, 'tags');
+    if (categoryTags) job.categoryTags = categoryTags;
+    const sizeRaw = (attr(selectTag, 'size') || attr(categoryTag, 'size')) as JobShipSize;
+    if (SHIP_SIZES.has(sizeRaw)) job.shipSize = sizeRaw;
+
+    if (locationTag) {
+      const lClass = attr(locationTag, 'class') as 'galaxy' | 'cluster' | 'sector' | 'zone';
+      if (LOCATION_CLASSES.has(lClass)) job.locationClass = lClass;
+      const lMacro = attr(locationTag, 'macro');
+      if (lMacro) job.locationMacro = lMacro;
+      const lFaction = attr(locationTag, 'faction');
+      if (lFaction) job.locationFaction = lFaction;
+    }
+
+    const buildAtShipyardRaw = attr(envTag, 'buildatshipyard');
+    if (buildAtShipyardRaw) job.buildAtShipyard = /\btrue\b/i.test(buildAtShipyardRaw);
+
+    const subsBlock = (inner.match(/<subordinates\b[^>]*>([\s\S]*?)<\/subordinates>/i) || ['', ''])[1];
+    if (subsBlock) {
+      const subs: JobSubordinateDef[] = [];
+      for (const sm of subsBlock.matchAll(/<subordinate\b[^>]*>/gi)) {
+        const subJob = attr(sm[0], 'job');
+        if (!subJob) continue;
+        const assignment = attr(sm[0], 'assignment');
+        const groupRaw = attr(sm[0], 'group');
+        const rebuildRaw = attr(sm[0], 'rebuild');
+        const sub: JobSubordinateDef = { job: subJob };
+        if (assignment) sub.assignment = assignment;
+        if (groupRaw && Number.isFinite(Number(groupRaw))) sub.group = Number(groupRaw);
+        if (rebuildRaw) sub.rebuild = /\btrue\b/i.test(rebuildRaw);
+        subs.push(sub);
+      }
+      if (subs.length) job.subordinates = subs;
+    }
+
+    jobs.push(job);
   }
   // COMPLETENESS GUARD (same rationale as wares): partial capture → null → passthrough.
   const idBearing = (content.match(/<job\b[^>]*\bid\s*=/gi) || []).length;
@@ -234,6 +336,60 @@ export function runWaresJobsRoundtripSelftest(): {
   const multiParsed = parseWaresXml(compileWaresXML(multi));
   ok('multi-ware count', !!multiParsed && multiParsed.length === 2);
   ok('xml-attr escaping round-trips', !!multiParsed && multiParsed[0].name === 'A & B' && multiParsed[0].description === 'q"q', JSON.stringify(multiParsed?.[0]));
+
+  // ---- X4 9.00 multi-method <production> + <component ref> + <orders>/<basket>/<location>/<subordinates> round-trips ----
+  const x4WareFixture: WareDef[] = [{
+    id: 'x4_multi_ware',
+    name: 'Quantum Hull',
+    description: 'Multi-method ware.',
+    factoryName: '{20201,9904}',
+    group: 'shiptech',
+    transport: 'ship',
+    tags: 'ship',
+    volume: 1,
+    minPrice: 10000,
+    avgPrice: 12000,
+    maxPrice: 14000,
+    prodTime: 120,
+    prodAmount: 1,
+    productionMethod: 'default',
+    productionName: 'Universal',
+    primaryWares: [{ ware: 'energycells', amount: 200 }, { ware: 'hullparts', amount: 300 }],
+    additionalProductions: [
+      { method: 'teladi', name: 'Teladi', time: 140, amount: 1, primaryWares: [{ ware: 'teladianium', amount: 180 }] },
+    ],
+    componentRef: 'ship_arg_m_corvette_01_a_macro',
+    includeInBuild: true,
+  }];
+  const x4WareParsed = parseWaresXml(compileWaresXML(x4WareFixture));
+  ok('x4 9.00 ware round-trip deep-equal', eq(x4WareParsed, x4WareFixture), JSON.stringify(x4WareParsed));
+
+  const x4JobFixture: JobDef[] = [{
+    id: 'x4_trader_wing',
+    name: 'Argon Quantum Trader',
+    faction: 'argon',
+    shipClass: 'freighter',
+    shipMacro: 'ship_arg_l_trans_container_01_a_macro',
+    galaxyQuota: 8,
+    sectorQuota: 2,
+    taskScript: '',
+    rebuildOnDestroy: true,
+    startActive: false,
+    commandeerable: true,
+    orderId: 'TradeRoutine',
+    orderParams: [{ name: 'minbuy', value: '0' }, { name: 'maxbuy', value: '5' }],
+    basket: 'hightech',
+    categoryTags: '[factionlogic, freighter, trader]',
+    shipSize: 'ship_l',
+    locationClass: 'galaxy',
+    locationMacro: 'xu_ep2_universe_macro',
+    locationFaction: 'argon',
+    buildAtShipyard: true,
+    subordinates: [{ job: 'argon_fighter_escort_s', assignment: 'interception', group: 1, rebuild: true }],
+    includeInBuild: true,
+  }];
+  const x4JobParsed = parseJobsXml(compileJobsXML(x4JobFixture));
+  ok('x4 9.00 job round-trip deep-equal', eq(x4JobParsed, x4JobFixture), JSON.stringify(x4JobParsed));
 
   const passed = checks.filter(c => c.pass).length;
   const allPassed = passed === checks.length;

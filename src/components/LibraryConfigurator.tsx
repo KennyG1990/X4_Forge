@@ -3,21 +3,67 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useRef, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
-  Trash,
-  Plus,
-  Sparkles,
-  Database,
-  GitPullRequest,
   BadgeAlert,
-  ExternalLink
+  Check,
+  Copy,
+  Database,
+  ExternalLink,
+  FileCode2,
+  GitPullRequest,
+  Plus,
+  Trash,
 } from 'lucide-react';
-import { ModWorkspace } from '../types';
+import type {
+  JobDef,
+  JobShipSize,
+  ModWorkspace,
+  PatchBlock,
+  WareDef,
+  WareProductionDef,
+  WareTransport,
+} from '../types';
 import ObjectIndexPicker, { type IndexItem } from './ObjectIndexPicker';
 import { toast } from '../lib/uiDialogs';
 import { openOrMaterializeInNativeEditor } from '../lib/nativeEditor';
 import { scanLibraryConflictsWithDisk, type ConflictWarning } from '../lib/libraryConflicts';
+import {
+  compileDiffDocument,
+  compileJobsXML,
+  compileWaresXML,
+} from '../lib/modCompiler';
+import {
+  ALL_WARE_TRANSPORTS,
+  createStarterBasket,
+  createStarterGodProduct,
+  createStarterGodStation,
+  parseBasketPatchBlocks,
+  parseGodPatchBlocks,
+  removeEconomyPatchBlock,
+  serializeBasketXml,
+  serializeGodEntryXml,
+  SUBORDINATE_ASSIGNMENTS,
+  upsertBasketPatchBlock,
+  upsertGodPatchBlock,
+  validateEconomyDefinitions,
+  VANILLA_BASKET_PRESETS,
+  VANILLA_JOB_ORDERS,
+  WARE_GROUPS,
+} from '../lib/economyLibraryHelpers';
+import { EmptyState, StatusPill } from './ui';
+import {
+  BasketEditorPanel,
+  ECO_CARD_CLS,
+  ECO_INPUT_CLS,
+  ECO_LABEL_CLS,
+  ECO_SECTION_TITLE_CLS,
+  ECO_SELECT_CLS,
+  GodEntryEditorPanel,
+} from './libraries/EconomyDiffEditors';
+
+export type { WareDef, JobDef } from '../types';
+export type { ConflictWarning };
 
 interface LibraryConfiguratorProps {
   workspace: ModWorkspace;
@@ -27,53 +73,74 @@ interface LibraryConfiguratorProps {
   onOpenConflicts?: () => void;
 }
 
-export interface WareDef {
-  id: string;
-  name: string;
-  description: string;
-  transport: 'container' | 'liquid' | 'solid' | 'energy';
-  tags?: string;
-  volume: number;
-  minPrice: number;
-  avgPrice: number;
-  maxPrice: number;
-  prodTime: number;
-  prodAmount: number;
-  productionMethod?: string;
-  productionName?: string;
-  primaryWares?: Array<{ ware: string; amount: number | string }>;
+type LibrarySubTab = 'wares' | 'baskets' | 'jobs' | 'god';
+
+const SHIP_CLASSES: Array<{ value: JobDef['shipClass']; label: string }> = [
+  { value: 'fighter', label: 'Fighter (S)' },
+  { value: 'corvette', label: 'Corvette / Frigate (M)' },
+  { value: 'freighter', label: 'Freighter / Miner (M/L)' },
+  { value: 'destroyer', label: 'Destroyer (L)' },
+  { value: 'carrier', label: 'Carrier / Battleship (XL)' },
+];
+
+const SHIP_SIZES: Array<{ value: '' | JobShipSize; label: string }> = [
+  { value: '', label: 'Infer from tags / macro' },
+  { value: 'ship_xs', label: 'ship_xs (XS Drone / Suit)' },
+  { value: 'ship_s', label: 'ship_s (Small Fighter / Scout)' },
+  { value: 'ship_m', label: 'ship_m (Medium Corvette / Freighter)' },
+  { value: 'ship_l', label: 'ship_l (Large Destroyer / Freighter)' },
+  { value: 'ship_xl', label: 'ship_xl (XL Carrier / Auxiliary)' },
+];
+
+function stripDiffWrapper(xml: string, rootTag: 'wares' | 'jobs'): string {
+  const inner = xml.match(new RegExp(`<add\\s+sel="\\/${rootTag}">([\\s\\S]*?)<\\/add>`, 'i'))?.[1];
+  if (!inner) return `<?xml version="1.0" encoding="utf-8"?>\n<${rootTag} />`;
+  return `<?xml version="1.0" encoding="utf-8"?>\n<${rootTag}>\n${inner.replace(/^\n+|\n+$/g, '')}\n</${rootTag}>`;
 }
 
-export interface JobDef {
-  id: string;
-  name: string;
-  faction: string;
-  shipClass: 'fighter' | 'corvette' | 'destroyer' | 'carrier' | 'freighter';
-  shipMacro: string;
-  galaxyQuota: number;
-  sectorQuota: number;
-  taskScript: string;
-  rebuildOnDestroy: boolean;
-}
-
-export type { ConflictWarning };
-
-export default function LibraryConfigurator({ workspace, setWorkspace, saveCheckpoint, onOpenConflicts }: LibraryConfiguratorProps) {
-  const [activeSubTab, setActiveSubTab] = useState<'wares' | 'jobs'>('wares');
+export default function LibraryConfigurator({
+  workspace,
+  setWorkspace,
+  saveCheckpoint,
+  onOpenConflicts,
+}: LibraryConfiguratorProps) {
+  const [activeSubTab, setActiveSubTab] = useState<LibrarySubTab>('wares');
   const [activeItemIndex, setActiveItemIndex] = useState<number>(0);
   const [isPatchMode, setIsPatchMode] = useState<boolean>(true);
+  const [showXmlPreview, setShowXmlPreview] = useState<boolean>(false);
+  const [copiedXml, setCopiedXml] = useState<boolean>(false);
   const [warnings, setWarnings] = useState<ConflictWarning[]>([]);
   const [isScanning, setIsScanning] = useState<boolean>(false);
-  // Inline "new item id" entry (replaces a blocking window.prompt). null = not adding.
+
+  // Inline "new item id" entry (non-blocking, replaces window.prompt). null = not adding.
   const [addingId, setAddingId] = useState<string | null>(null);
+  const [addingGodKind, setAddingGodKind] = useState<'product' | 'station'>('product');
   const [addingCollision, setAddingCollision] = useState<IndexItem | null>(null);
   const [addingCommitBusy, setAddingCommitBusy] = useState(false);
-  // Invalidates in-flight commit lookups whenever the author edits/cancels/switches the add form.
-  // Without this token, a slow response for a previous id or tab could create the wrong definition.
   const addingSessionRef = useRef(0);
 
-  const wares = workspace.wares || [];
-  const jobs = workspace.jobs || [];
+  const wares = useMemo(() => workspace.wares || [], [workspace.wares]);
+  const jobs = useMemo(() => workspace.jobs || [], [workspace.jobs]);
+  const xmlPatches = useMemo(() => workspace.xmlPatches || [], [workspace.xmlPatches]);
+  const baskets = useMemo(() => parseBasketPatchBlocks(xmlPatches), [xmlPatches]);
+  const godEntries = useMemo(() => parseGodPatchBlocks(xmlPatches), [xmlPatches]);
+
+  const workspaceOrderIds = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          (workspace.aiScripts || [])
+            .map(s => s.order?.id?.trim())
+            .filter((v): v is string => Boolean(v)),
+        ),
+      ),
+    [workspace.aiScripts],
+  );
+
+  const economyDiagnostics = useMemo(
+    () => validateEconomyDefinitions({ wares, jobs, baskets, godEntries }),
+    [wares, jobs, baskets, godEntries],
+  );
 
   const scanProjectFilesForConflicts = async () => {
     setIsScanning(true);
@@ -86,33 +153,29 @@ export default function LibraryConfigurator({ workspace, setWorkspace, saveCheck
   };
 
   React.useEffect(() => {
-    scanProjectFilesForConflicts();
-    // reason: scanProjectFilesForConflicts is a non-memoized component-body function; re-running only on the actual scan inputs (wares/jobs/xmlPatches) is intended and avoids a per-render rescan loop.
+    void scanProjectFilesForConflicts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspace.wares, workspace.jobs, workspace.xmlPatches]);
 
   const saveWares = (newWares: WareDef[]) => {
-    setWorkspace(prev => ({
-      ...prev,
-      wares: newWares
-    }));
+    setWorkspace(prev => ({ ...prev, wares: newWares }));
   };
 
   const saveJobs = (newJobs: JobDef[]) => {
-    setWorkspace(prev => ({
-      ...prev,
-      jobs: newJobs
-    }));
+    setWorkspace(prev => ({ ...prev, jobs: newJobs }));
+  };
+
+  const savePatches = (newPatches: PatchBlock[]) => {
+    setWorkspace(prev => ({ ...prev, xmlPatches: newPatches }));
   };
 
   const handleCreateWare = (rawId: string) => {
     const wId = (rawId || '').trim();
     if (!wId) return;
-
     const nWare: WareDef = {
       id: wId,
-      name: "Quantum Focus Crystals",
-      description: "Highly volatile carbon lattices that refract focus laser beam emitters.",
+      name: 'Quantum Focus Crystals',
+      description: 'Highly volatile carbon lattices that refract focus laser beam emitters.',
       transport: 'container',
       tags: 'economy equipment',
       volume: 4,
@@ -123,9 +186,8 @@ export default function LibraryConfigurator({ workspace, setWorkspace, saveCheck
       prodAmount: 10,
       productionMethod: 'default',
       productionName: 'Assembly output',
-      primaryWares: []
+      primaryWares: [],
     };
-
     const next = [...wares, nWare];
     saveWares(next);
     setActiveItemIndex(wares.length);
@@ -134,25 +196,49 @@ export default function LibraryConfigurator({ workspace, setWorkspace, saveCheck
   const handleCreateJob = (rawId: string) => {
     const jId = (rawId || '').trim();
     if (!jId) return;
-
     const nJob: JobDef = {
       id: jId,
-      name: "Demolition Patrol Squad",
+      name: 'Demolition Patrol Squad',
       faction: 'yaki',
       shipClass: 'corvette',
       shipMacro: 'ship_split_m_corvette_01_a_macro',
       galaxyQuota: 6,
       sectorQuota: 2,
       taskScript: '',
-      rebuildOnDestroy: true
+      rebuildOnDestroy: true,
     };
-
     const next = [...jobs, nJob];
     saveJobs(next);
     setActiveItemIndex(jobs.length);
   };
 
-  // Inline-add controls (non-blocking, replaces window.prompt).
+  const handleCreateBasket = (rawId: string) => {
+    const id = (rawId || '').trim();
+    if (!id) return;
+    if (baskets.some(b => b.id.toLowerCase() === id.toLowerCase())) {
+      toast(`Basket "${id}" already exists in this workspace.`, 'warning');
+      return;
+    }
+    const starter = createStarterBasket(id, wares[0]?.id || 'energycells');
+    savePatches(upsertBasketPatchBlock(xmlPatches, starter));
+    setActiveItemIndex(baskets.length);
+  };
+
+  const handleCreateGodEntry = (rawId: string, kind: 'product' | 'station') => {
+    const id = (rawId || '').trim();
+    if (!id) return;
+    if (godEntries.some(g => g.id.toLowerCase() === id.toLowerCase())) {
+      toast(`God entry "${id}" already exists in this workspace.`, 'warning');
+      return;
+    }
+    const starter =
+      kind === 'product'
+        ? createStarterGodProduct(id, wares[0]?.id || 'energycells')
+        : createStarterGodStation(id);
+    savePatches(upsertGodPatchBlock(xmlPatches, starter));
+    setActiveItemIndex(godEntries.length);
+  };
+
   const beginAdd = () => {
     addingSessionRef.current += 1;
     setAddingCommitBusy(false);
@@ -171,23 +257,42 @@ export default function LibraryConfigurator({ workspace, setWorkspace, saveCheck
     setAddingId(value);
     setAddingCollision(null);
   };
+
   const commitAdd = async () => {
     const id = (addingId || '').trim();
+    if (!id) return;
+
+    if (activeSubTab === 'baskets') {
+      handleCreateBasket(id);
+      cancelAdd();
+      return;
+    }
+    if (activeSubTab === 'god') {
+      handleCreateGodEntry(id, addingGodKind);
+      cancelAdd();
+      return;
+    }
+
     const kind = activeSubTab === 'wares' ? 'ware' : 'job';
-    const projectCollision = (kind === 'ware' ? wares : jobs).some(item => item.id.toLowerCase() === id.toLowerCase());
-    if (!id || projectCollision) return;
+    const projectCollision = (kind === 'ware' ? wares : jobs).some(
+      item => item.id.toLowerCase() === id.toLowerCase(),
+    );
+    if (projectCollision) return;
+
     const session = addingSessionRef.current;
     setAddingCommitBusy(true);
     try {
-      // The dropdown is advisory UI; this exact commit-time lookup is the authority gate.
-      // It closes the debounce/network race where Add could otherwise run before the
-      // collision badge had arrived.
-      const response = await fetch(`/api/reference/suggest?kind=${kind}&q=${encodeURIComponent(id)}&intent=new-definition&limit=10`);
+      const response = await fetch(
+        `/api/reference/suggest?kind=${kind}&q=${encodeURIComponent(id)}&intent=new-definition&limit=10`,
+      );
       if (!response.ok) throw new Error(`canonical lookup failed (${response.status})`);
       const body = await response.json();
       if (addingSessionRef.current !== session) return;
-      const exact = (Array.isArray(body.items) ? body.items : []).find((item: IndexItem) =>
-        String(item.insertText || item.id || item.label || '').trim().toLowerCase() === id.toLowerCase());
+      const exact = (Array.isArray(body.items) ? body.items : []).find(
+        (item: IndexItem) =>
+          String(item.insertText || item.id || item.label || '').trim().toLowerCase() ===
+          id.toLowerCase(),
+      );
       if (exact) {
         setAddingCollision(exact);
         toast(`"${id}" already exists in the X4 corpus. Patch the existing definition instead.`, 'warning');
@@ -200,7 +305,10 @@ export default function LibraryConfigurator({ workspace, setWorkspace, saveCheck
       setAddingCollision(null);
     } catch (error) {
       if (addingSessionRef.current !== session) return;
-      toast(`Could not verify "${id}" against the canonical corpus; no definition was created. ${error instanceof Error ? error.message : String(error)}`, 'error');
+      toast(
+        `Could not verify "${id}" against the canonical corpus; no definition was created. ${error instanceof Error ? error.message : String(error)}`,
+        'error',
+      );
     } finally {
       if (addingSessionRef.current === session) setAddingCommitBusy(false);
     }
@@ -209,51 +317,60 @@ export default function LibraryConfigurator({ workspace, setWorkspace, saveCheck
   const patchExisting = (item: IndexItem) => {
     const targetFile = item.path?.toLowerCase().includes('/libraries/')
       ? item.path.slice(item.path.toLowerCase().indexOf('libraries/'))
-      : activeSubTab === 'wares' ? 'libraries/wares.xml' : 'libraries/jobs.xml';
-    window.dispatchEvent(new CustomEvent('xmlpatch-pretarget', {
-      detail: { targetFile, selector: item.selector || `/${activeSubTab}/${activeSubTab === 'wares' ? 'ware' : 'job'}[@id='${item.insertText || item.id || item.label || ''}']` },
-    }));
+      : activeSubTab === 'wares'
+        ? 'libraries/wares.xml'
+        : 'libraries/jobs.xml';
+    window.dispatchEvent(
+      new CustomEvent('xmlpatch-pretarget', {
+        detail: {
+          targetFile,
+          selector:
+            item.selector ||
+            `/${activeSubTab}/${activeSubTab === 'wares' ? 'ware' : 'job'}[@id='${item.insertText || item.id || item.label || ''}']`,
+        },
+      }),
+    );
     cancelAdd();
   };
 
   const handleDeleteActiveItem = () => {
-    // B13: checkpoint BEFORE the destructive edit so Ctrl+Z restores it, and say so.
-    // 2026-07-11 visual pass: the old "keep at least one" guard made the (valid, designed)
-    // zero-item empty state unreachable by deletion — an accidental ADD was permanent.
-    // Zero wares/jobs is a legal mod shape; deleting the last item now returns to the
-    // empty-state skeleton like any other delete, undoable the same way.
     if (activeSubTab === 'wares') {
       const victim = wares[activeItemIndex];
       if (!victim) return;
       saveCheckpoint?.();
-      const next = wares.filter((_, i) => i !== activeItemIndex);
-      saveWares(next);
+      saveWares(wares.filter((_, i) => i !== activeItemIndex));
       setActiveItemIndex(0);
-      toast(`Deleted ware "${victim?.id || 'ware'}" — Ctrl+Z to undo.`);
-    } else {
+      toast(`Deleted ware "${victim.id || 'ware'}" — Ctrl+Z to undo.`);
+    } else if (activeSubTab === 'jobs') {
       const victim = jobs[activeItemIndex];
       if (!victim) return;
       saveCheckpoint?.();
-      const next = jobs.filter((_, i) => i !== activeItemIndex);
-      saveJobs(next);
+      saveJobs(jobs.filter((_, i) => i !== activeItemIndex));
       setActiveItemIndex(0);
-      toast(`Deleted job "${victim?.id || 'job'}" — Ctrl+Z to undo.`);
+      toast(`Deleted job "${victim.id || 'job'}" — Ctrl+Z to undo.`);
+    } else if (activeSubTab === 'baskets') {
+      const victim = baskets[activeItemIndex];
+      if (!victim?.patchId) return;
+      saveCheckpoint?.();
+      savePatches(removeEconomyPatchBlock(xmlPatches, victim.patchId));
+      setActiveItemIndex(0);
+      toast(`Deleted basket "${victim.id}" — Ctrl+Z to undo.`);
+    } else {
+      const victim = godEntries[activeItemIndex];
+      if (!victim?.patchId) return;
+      saveCheckpoint?.();
+      savePatches(removeEconomyPatchBlock(xmlPatches, victim.patchId));
+      setActiveItemIndex(0);
+      toast(`Deleted God entry "${victim.id}" — Ctrl+Z to undo.`);
     }
   };
 
-  const handleUpdateActiveWareProp = (key: keyof WareDef, val: any) => {
-    const next = wares.map((w, idx) => {
-      if (idx === activeItemIndex) {
-        return { ...w, [key]: val };
-      }
-      return w;
-    });
-    saveWares(next);
+  const handleUpdateActiveWareProp = <K extends keyof WareDef>(key: K, val: WareDef[K]) => {
+    saveWares(wares.map((w, idx) => (idx === activeItemIndex ? { ...w, [key]: val } : w)));
   };
 
-  // --- Production-input row helpers (ware picker + amount) -----------------
   const getPrimaryWares = (): NonNullable<WareDef['primaryWares']> =>
-    ((activeItem as WareDef)?.primaryWares || []) as NonNullable<WareDef['primaryWares']>;
+    ((activeWare as WareDef)?.primaryWares || []) as NonNullable<WareDef['primaryWares']>;
 
   const updatePrimaryWare = (index: number, key: 'ware' | 'amount', val: string | number) => {
     const next = getPrimaryWares().map((entry, i) => (i === index ? { ...entry, [key]: val } : entry));
@@ -265,140 +382,301 @@ export default function LibraryConfigurator({ workspace, setWorkspace, saveCheck
   };
 
   const removePrimaryWare = (index: number) => {
-    handleUpdateActiveWareProp('primaryWares', getPrimaryWares().filter((_, i) => i !== index));
+    handleUpdateActiveWareProp(
+      'primaryWares',
+      getPrimaryWares().filter((_, i) => i !== index),
+    );
   };
 
-  const handleUpdateActiveJobProp = (key: keyof JobDef, val: any) => {
-    const next = jobs.map((j, idx) => {
-      if (idx === activeItemIndex) {
-        return { ...j, [key]: val };
+  const handleUpdateActiveJobProp = <K extends keyof JobDef>(key: K, val: JobDef[K]) => {
+    saveJobs(jobs.map((j, idx) => (idx === activeItemIndex ? { ...j, [key]: val } : j)));
+  };
+
+  const activeWare = activeSubTab === 'wares' ? wares[activeItemIndex] : undefined;
+  const activeJob = activeSubTab === 'jobs' ? jobs[activeItemIndex] : undefined;
+  const activeBasket = activeSubTab === 'baskets' ? baskets[activeItemIndex] : undefined;
+  const activeGod = activeSubTab === 'god' ? godEntries[activeItemIndex] : undefined;
+  const activeId =
+    activeSubTab === 'wares'
+      ? activeWare?.id
+      : activeSubTab === 'jobs'
+        ? activeJob?.id
+        : activeSubTab === 'baskets'
+          ? activeBasket?.id
+          : activeGod?.id;
+
+  const projectPath = `libraries/${activeSubTab}.xml`;
+
+  const compiledPreviewXml = useMemo(() => {
+    if (activeSubTab === 'wares') {
+      const diffXml = compileWaresXML(wares.filter(w => w.includeInBuild !== false));
+      return isPatchMode ? diffXml : stripDiffWrapper(diffXml, 'wares');
+    }
+    if (activeSubTab === 'jobs') {
+      const diffXml = compileJobsXML(jobs.filter(j => j.includeInBuild !== false));
+      return isPatchMode ? diffXml : stripDiffWrapper(diffXml, 'jobs');
+    }
+    if (activeSubTab === 'baskets') {
+      if (!isPatchMode) {
+        return [
+          '<?xml version="1.0" encoding="utf-8"?>',
+          '<baskets>',
+          ...baskets.map(b =>
+            serializeBasketXml(b)
+              .split('\n')
+              .map(line => `  ${line}`)
+              .join('\n'),
+          ),
+          '</baskets>',
+        ].join('\n');
       }
-      return j;
-    });
-    saveJobs(next);
-  };
+      return compileDiffDocument(
+        xmlPatches.filter(p => p.targetFile === 'libraries/baskets.xml'),
+        'libraries/baskets.xml',
+      );
+    }
+    if (!isPatchMode) {
+      const stations = godEntries.filter(g => g.kind === 'station');
+      const products = godEntries.filter(g => g.kind === 'product');
+      const lines = ['<?xml version="1.0" encoding="utf-8"?>', '<god>'];
+      if (stations.length) {
+        lines.push('  <stations>');
+        stations.forEach(s =>
+          serializeGodEntryXml(s)
+            .split('\n')
+            .forEach(l => lines.push(`    ${l}`)),
+        );
+        lines.push('  </stations>');
+      }
+      if (products.length) {
+        lines.push('  <products>');
+        products.forEach(p =>
+          serializeGodEntryXml(p)
+            .split('\n')
+            .forEach(l => lines.push(`    ${l}`)),
+        );
+        lines.push('  </products>');
+      }
+      lines.push('</god>');
+      return lines.join('\n');
+    }
+    return compileDiffDocument(
+      xmlPatches.filter(p => p.targetFile === 'libraries/god.xml'),
+      'libraries/god.xml',
+    );
+  }, [activeSubTab, baskets, godEntries, isPatchMode, jobs, wares, xmlPatches]);
 
-  const activeItem = activeSubTab === 'wares' ? wares[activeItemIndex] : jobs[activeItemIndex];
+  const activeItemDiskWarnings = activeId
+    ? warnings.filter(w => w.affectedIds.includes(activeId))
+    : [];
+  const activeItemEconomyDiagnostics = activeId
+    ? economyDiagnostics.filter(d => d.targetId === activeId)
+    : [];
+
+  const switchSubTab = (tab: LibrarySubTab) => {
+    setActiveSubTab(tab);
+    setActiveItemIndex(0);
+    cancelAdd();
+  };
 
   return (
-    <div id="libraries_configurator_view" className="flex-1 bg-[#0a0c10] flex flex-col h-full overflow-hidden text-slate-300">
-      {/* Simulation HUD Controls bar */}
-      <div className="bg-[#161920]/90 border-b border-white/10 p-3 flex items-center justify-between font-mono text-xs">
-        <div className="flex items-center gap-3">
-          <Database className="w-4 h-4 text-cyan-400" />
-          <span className="font-semibold text-slate-200 uppercase tracking-tight">X4 Game Libraries Configurator (/libraries/)</span>
+    <div
+      id="libraries_configurator_view"
+      className="flex-1 bg-[#0c0e12] flex flex-col h-full overflow-hidden text-[#eef2f7]"
+    >
+      {/* Concept A Header Bar */}
+      <div className="bg-[#141820] border-b border-[#262c36] px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <Database className="w-4 h-4 text-blue-400 shrink-0" />
+          <span className="font-semibold text-[#eef2f7] truncate">
+            X4 Economy &amp; Population Libraries
+          </span>
+          <StatusPill tone={economyDiagnostics.some(d => d.severity === 'error') ? 'error' : 'info'}>
+            {wares.length}W · {baskets.length}B · {jobs.length}J · {godEntries.length}G
+          </StatusPill>
         </div>
-        
-        {/* Toggle Mode button */}
-        <div className="flex items-center gap-2">
+
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={async () => {
-              const projectPath = `libraries/${activeSubTab === 'wares' ? 'wares.xml' : 'jobs.xml'}`;
               const result = await openOrMaterializeInNativeEditor(workspace, projectPath);
               toast(result.message, result.ok ? 'success' : 'error');
             }}
-            className="px-3 py-1 rounded text-[10px] uppercase font-bold border border-cyan-500/25 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20 transition-all cursor-pointer flex items-center gap-1.5"
-            title={`Open libraries/${activeSubTab === 'wares' ? 'wares.xml' : 'jobs.xml'} as a real Antigravity file tab`}
+            className="px-2.5 py-1 rounded text-[11px] font-medium border border-blue-500/30 bg-blue-500/12 text-blue-200 hover:bg-blue-500/20 transition-colors cursor-pointer flex items-center gap-1.5"
+            title={`Open ${projectPath} as a real Antigravity file tab`}
           >
-            <ExternalLink className="w-3 h-3" />
+            <ExternalLink className="w-3.5 h-3.5" />
             Open in Antigravity
           </button>
-          {/* XML Patch / Pure toggle */}
+
           <button
-            onClick={() => setIsPatchMode(prev => !prev)}
-            className={`px-3 py-1 rounded text-[10px] uppercase font-bold border transition-all cursor-pointer flex items-center gap-1.5 ${
-              isPatchMode
-                ? 'border-cyan-500 bg-cyan-600/15 text-cyan-400'
-                : 'border-white/10 bg-black/45 text-slate-400 hover:text-white'
+            type="button"
+            data-testid="library-xml-preview-toggle"
+            onClick={() => setShowXmlPreview(prev => !prev)}
+            className={`px-2.5 py-1 rounded text-[11px] font-medium border transition-colors cursor-pointer flex items-center gap-1.5 ${
+              showXmlPreview
+                ? 'border-blue-500/40 bg-blue-500/20 text-blue-200'
+                : 'border-[#262c36] bg-[#171b23] text-[#a0aab8] hover:text-white'
             }`}
-            title="Convert code output into a modular XML diff patch or standard XML"
           >
-            <GitPullRequest className="w-3 h-3" />
-            {isPatchMode ? "Mode: XML Diff (Patches)" : "Mode: Standalone XML"}
+            <FileCode2 className="w-3.5 h-3.5" />
+            Preview XML
           </button>
 
-          {/* Sub menu selector */}
-          <div className="flex items-center border border-white/10 bg-black/45 p-0.5 rounded-md">
-            <button
-              onClick={() => { setActiveSubTab('wares'); setActiveItemIndex(0); cancelAdd(); }}
-              className={`px-3 py-1 rounded text-[10px] uppercase font-bold transition-all cursor-pointer ${
-                activeSubTab === 'wares' ? 'bg-cyan-500/15 text-cyan-400 font-extrabold' : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              wares.xml
-            </button>
-            <button
-              onClick={() => { setActiveSubTab('jobs'); setActiveItemIndex(0); cancelAdd(); }}
-              className={`px-3 py-1 rounded text-[10px] uppercase font-bold transition-all cursor-pointer ${
-                activeSubTab === 'jobs' ? 'bg-cyan-500/15 text-cyan-400 font-extrabold' : 'text-slate-500 hover:text-white'
-              }`}
-            >
-              jobs.xml
-            </button>
+          <button
+            type="button"
+            onClick={() => setIsPatchMode(prev => !prev)}
+            className={`px-2.5 py-1 rounded text-[11px] font-medium border transition-colors cursor-pointer flex items-center gap-1.5 ${
+              isPatchMode
+                ? 'border-emerald-500/35 bg-emerald-500/12 text-emerald-300'
+                : 'border-[#262c36] bg-[#171b23] text-[#a0aab8] hover:text-white'
+            }`}
+            title="Switch between modular RFC 5261 XML diff patches and standalone root XML"
+          >
+            <GitPullRequest className="w-3.5 h-3.5" />
+            {isPatchMode ? 'Mode: XML Diff (Patches)' : 'Mode: Standalone XML'}
+          </button>
+
+          <div className="flex items-center border border-[#262c36] bg-[#090b0f] p-0.5 rounded-md">
+            {(
+              [
+                ['wares', 'wares.xml'],
+                ['baskets', 'baskets.xml'],
+                ['jobs', 'jobs.xml'],
+                ['god', 'god.xml'],
+              ] as const
+            ).map(([tab, label]) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => switchSubTab(tab)}
+                className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer ${
+                  activeSubTab === tab
+                    ? 'bg-blue-500/20 text-blue-200 font-semibold'
+                    : 'text-[#a0aab8] hover:text-white'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
         </div>
       </div>
 
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left Side: Libraries assets items selector */}
-        <div className="w-72 border-r border-white/10 flex flex-col bg-[#11131c]/60 overflow-hidden">
-          <div className="p-3 border-b border-white/10 shrink-0 flex items-center justify-between bg-[#161a24]">
-            <span className="font-mono text-[10px] font-bold text-slate-400 uppercase tracking-wider font-bold">
-              {activeSubTab === 'wares' ? 'wares hierarchy' : 'npc jobs hierarchy'}
+      <div className="flex-1 flex min-h-0 overflow-hidden">
+        {/* Left Side: Economy Asset List */}
+        <div className="w-[264px] shrink-0 border-r border-[#262c36] flex flex-col bg-[#11141a] overflow-hidden">
+          <div className="px-3 py-2 border-b border-[#262c36] shrink-0 flex items-center justify-between bg-[#141820]">
+            <span className="text-[11px] font-semibold text-[#a0aab8]">
+              {activeSubTab === 'wares'
+                ? 'Wares Hierarchy'
+                : activeSubTab === 'baskets'
+                  ? 'Trade Baskets'
+                  : activeSubTab === 'jobs'
+                    ? 'NPC Jobs Hierarchy'
+                    : 'God Spawns'}
             </span>
             <button
+              type="button"
               onClick={beginAdd}
-              className="px-2 py-1 rounded hover:bg-[#202533] text-cyan-400 hover:text-white transition-all cursor-pointer flex items-center gap-1 text-[9px] font-bold tracking-wide border border-cyan-400/25 font-mono"
-              title={`Create custom ${activeSubTab === 'wares' ? 'Ware asset ID' : 'Pilot quota Job group'}`}
+              className="px-2 py-1 rounded hover:bg-[#1e2430] text-blue-300 hover:text-white transition-colors cursor-pointer flex items-center gap-1 text-[11px] font-medium border border-blue-500/30 bg-blue-500/10"
+              title={`Create new ${activeSubTab} entry`}
             >
               <Plus className="w-3 h-3" /> ADD
             </button>
           </div>
 
           {addingId !== null && (
-            <div className="p-2 border-b border-white/10 bg-[#0d1018] shrink-0 space-y-1.5">
+            <div className="p-2.5 border-b border-[#262c36] bg-[#090b0f] shrink-0 space-y-2">
+              {activeSubTab === 'god' && (
+                <div className="flex items-center gap-1 rounded border border-[#262c36] bg-[#11141a] p-0.5 text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() => setAddingGodKind('product')}
+                    className={`flex-1 py-0.5 rounded font-medium cursor-pointer ${
+                      addingGodKind === 'product' ? 'bg-blue-500/20 text-blue-200' : 'text-[#687385]'
+                    }`}
+                  >
+                    Product
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAddingGodKind('station')}
+                    className={`flex-1 py-0.5 rounded font-medium cursor-pointer ${
+                      addingGodKind === 'station' ? 'bg-blue-500/20 text-blue-200' : 'text-[#687385]'
+                    }`}
+                  >
+                    Station
+                  </button>
+                </div>
+              )}
               <div className="flex items-start gap-1.5">
-              <div className="flex-1 min-w-0">
-              <ObjectIndexPicker
-                value={addingId}
-                onChange={changeAddingId}
-                kind={activeSubTab === 'wares' ? 'ware' : 'job'}
-                endpoint="/api/reference/suggest"
-                intent="new-definition"
-                autoFocus
-                onExactMatchChange={setAddingCollision}
-                onExistingSelect={patchExisting}
-                placeholder={activeSubTab === 'wares' ? 'ware_antimatter_capsules' : 'job_trader_hauler'}
-                existingActionLabel="Patch existing"
-              />
-              </div>
-              <button
-                onClick={() => void commitAdd()}
-                title="Create new definition"
-                disabled={Boolean(addingCollision) || addingCommitBusy}
-                className="px-2 py-1.5 rounded bg-cyan-500/15 hover:bg-cyan-500/30 border border-cyan-400/30 text-cyan-300 text-[9px] font-bold uppercase font-mono disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                {addingCommitBusy ? 'Checking…' : 'Add'}
-              </button>
-              <button
-                onClick={cancelAdd}
-                title="Cancel (Esc)"
-                className="px-2 py-1 rounded text-slate-500 hover:text-red-400 hover:bg-red-500/10 text-[9px] font-bold uppercase font-mono"
-              >
-                Esc
-              </button>
+                <div className="flex-1 min-w-0">
+                  {activeSubTab === 'wares' || activeSubTab === 'jobs' ? (
+                    <ObjectIndexPicker
+                      value={addingId}
+                      onChange={changeAddingId}
+                      kind={activeSubTab === 'wares' ? 'ware' : 'job'}
+                      endpoint="/api/reference/suggest"
+                      intent="new-definition"
+                      autoFocus
+                      onExactMatchChange={setAddingCollision}
+                      onExistingSelect={patchExisting}
+                      placeholder={
+                        activeSubTab === 'wares' ? 'ware_antimatter_capsules' : 'job_trader_hauler'
+                      }
+                      existingActionLabel="Patch existing"
+                    />
+                  ) : (
+                    <input
+                      type="text"
+                      autoFocus
+                      value={addingId}
+                      onChange={e => changeAddingId(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') void commitAdd();
+                        else if (e.key === 'Escape') cancelAdd();
+                      }}
+                      placeholder={
+                        activeSubTab === 'baskets' ? 'mod_basket_quantum' : 'god_quantum_factory'
+                      }
+                      className={ECO_INPUT_CLS}
+                    />
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void commitAdd()}
+                  title="Create new definition"
+                  disabled={Boolean(addingCollision) || addingCommitBusy}
+                  className="px-2.5 py-1.5 rounded bg-blue-500/15 hover:bg-blue-500/30 border border-blue-500/35 text-blue-200 text-[11px] font-semibold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {addingCommitBusy ? 'Checking…' : 'Add'}
+                </button>
+                <button
+                  type="button"
+                  onClick={cancelAdd}
+                  title="Cancel (Esc)"
+                  className="px-2 py-1.5 rounded text-[#a0aab8] hover:text-rose-300 hover:bg-rose-500/10 text-[11px] font-medium cursor-pointer"
+                >
+                  Esc
+                </button>
               </div>
               {addingCollision && (
-                <div className="flex items-center justify-between gap-2 rounded border border-amber-400/20 bg-amber-500/5 px-2 py-1.5">
-                  <p className="min-w-0 text-[9px] text-amber-300 leading-snug">
-                    <span className="mr-1 inline-flex rounded border border-amber-400/30 px-1 py-0.5 text-[8px] font-bold">EXISTS</span>
-                    <strong>{addingCollision.insertText || addingCollision.id || addingCollision.label}</strong> already exists in {addingCollision.source || 'the corpus'}. Patch it instead of creating a duplicate.
+                <div className="flex items-center justify-between gap-2 rounded border border-amber-400/25 bg-amber-500/10 px-2.5 py-2">
+                  <p className="min-w-0 text-[11px] text-amber-200 leading-snug">
+                    <span className="mr-1.5 inline-flex rounded border border-amber-400/35 px-1 py-0.5 text-[11px] font-bold">
+                      EXISTS
+                    </span>
+                    <strong>{addingCollision.insertText || addingCollision.id || addingCollision.label}</strong>{' '}
+                    already exists in {addingCollision.source || 'the corpus'}. Patch it instead of creating a
+                    duplicate.
                   </p>
                   <button
                     type="button"
                     onClick={() => patchExisting(addingCollision)}
-                    className="shrink-0 rounded border border-amber-400/30 bg-amber-500/10 px-2 py-1 text-[8px] font-bold uppercase text-amber-300 hover:bg-amber-500/20"
+                    className="shrink-0 rounded border border-amber-400/35 bg-amber-500/15 px-2 py-1 text-[11px] font-semibold text-amber-200 hover:bg-amber-500/25 cursor-pointer"
                   >
                     Patch existing {addingCollision.insertText || addingCollision.id || addingCollision.label}
                   </button>
@@ -407,50 +685,50 @@ export default function LibraryConfigurator({ workspace, setWorkspace, saveCheck
             </div>
           )}
 
-          <div className="flex-1 overflow-y-auto p-2 space-y-3 font-mono text-[11px] scrollbar-thin">
+          <div className="flex-1 overflow-y-auto p-2.5 space-y-3 text-xs custom-scrollbar">
             {activeSubTab === 'wares' ? (
               wares.length === 0 ? (
-                <div className="text-[10px] text-slate-500 italic p-4 text-center">No Wares catalogued. click "ADD".</div>
+                <div className="text-xs text-[#687385] p-4 text-center">
+                  No wares catalogued yet. Click ADD above to create one.
+                </div>
               ) : (
-                ['container', 'solid', 'liquid', 'energy'].map(transport => {
+                ALL_WARE_TRANSPORTS.map(({ value: transport }) => {
                   const transportWares = wares.filter(w => (w.transport || 'container') === transport);
                   if (transportWares.length === 0) return null;
                   return (
                     <div key={transport} className="space-y-1">
-                      <div className="text-[9.5px] font-bold text-[#4dd0e1] uppercase flex items-center gap-1 select-none py-1 border-b border-white/[0.03]">
-                        <span>📁 {transport} transport</span>
-                        <span className="text-slate-500 text-[8.5px]">({transportWares.length})</span>
+                      <div className="text-[11px] font-semibold text-blue-300 uppercase flex items-center justify-between py-1 border-b border-white/[0.06]">
+                        <span>{transport}</span>
+                        <span className="text-[#687385]">{transportWares.length}</span>
                       </div>
-                      <div className="pl-2 border-l border-white/5 space-y-0.5">
+                      <div className="pl-2 border-l border-[#262c36] space-y-1">
                         {transportWares.map(item => {
                           const idx = wares.findIndex(w => w.id === item.id);
-                          const itemHasWarning = warnings.filter(w => w.affectedIds.includes(item.id));
-                          const hasError = itemHasWarning.some(w => w.severity === 'error');
-                          const hasWarn = itemHasWarning.some(w => w.severity === 'warning');
+                          const itemWarn = warnings.filter(w => w.affectedIds.includes(item.id));
+                          const hasError =
+                            itemWarn.some(w => w.severity === 'error') ||
+                            economyDiagnostics.some(d => d.targetId === item.id && d.severity === 'error');
+                          const hasWarn = itemWarn.some(w => w.severity === 'warning');
                           const isSelected = activeItemIndex === idx;
-
                           return (
                             <button
                               key={item.id}
-                              onClick={() => {
-                                setActiveItemIndex(idx);
-                              }}
-                              className={`w-full text-left py-1.5 px-2 rounded font-mono transition-all flex items-center justify-between group cursor-pointer ${
+                              type="button"
+                              onClick={() => setActiveItemIndex(idx)}
+                              className={`w-full text-left py-1.5 px-2 rounded transition-colors flex items-center justify-between gap-2 cursor-pointer ${
                                 isSelected
                                   ? hasError
-                                    ? 'bg-red-950/20 text-red-400 font-bold border-l-2 border-red-500 pl-1.5'
+                                    ? 'bg-rose-500/15 text-rose-200 font-semibold border-l-2 border-rose-500'
                                     : hasWarn
-                                      ? 'bg-amber-950/20 text-amber-400 font-bold border-l-2 border-amber-500 pl-1.5'
-                                      : 'bg-cyan-500/10 text-cyan-400 font-bold border-l-2 border-cyan-500 pl-1.5'
-                                  : 'text-slate-400 hover:bg-white/5 hover:text-white'
+                                      ? 'bg-amber-500/15 text-amber-200 font-semibold border-l-2 border-amber-500'
+                                      : 'bg-blue-500/15 text-blue-200 font-semibold border-l-2 border-blue-500'
+                                  : 'text-[#a0aab8] hover:bg-white/[0.04] hover:text-white'
                               }`}
                             >
-                              <div className="truncate flex-1 pr-1">
-                                <span className="truncate flex items-center gap-1">
-                                  💎 {item.name}
-                                </span>
-                              </div>
-                              <span className="text-[8.5px] text-slate-600 group-hover:text-slate-400 truncate scale-90">{item.id}</span>
+                              <span className="truncate flex-1">{item.name}</span>
+                              <span className="text-[11px] font-mono text-[#687385] truncate max-w-[90px]">
+                                {item.id}
+                              </span>
                             </button>
                           );
                         })}
@@ -459,48 +737,74 @@ export default function LibraryConfigurator({ workspace, setWorkspace, saveCheck
                   );
                 })
               )
-            ) : (
+            ) : activeSubTab === 'baskets' ? (
+              baskets.length === 0 ? (
+                <div className="text-xs text-[#687385] p-4 text-center">
+                  No trade baskets authored yet. Click ADD to define one for <code className="font-mono">libraries/baskets.xml</code>.
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {baskets.map((basket, idx) => (
+                    <button
+                      key={basket.patchId || basket.id}
+                      type="button"
+                      onClick={() => setActiveItemIndex(idx)}
+                      className={`w-full text-left py-1.5 px-2.5 rounded transition-colors flex items-center justify-between gap-2 cursor-pointer ${
+                        activeItemIndex === idx
+                          ? 'bg-blue-500/15 text-blue-200 font-semibold border-l-2 border-blue-500'
+                          : 'text-[#a0aab8] hover:bg-white/[0.04] hover:text-white'
+                      }`}
+                    >
+                      <span className="truncate font-mono">{basket.id}</span>
+                      <span className="text-[11px] text-[#687385] shrink-0">
+                        {basket.wares.length}w
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )
+            ) : activeSubTab === 'jobs' ? (
               jobs.length === 0 ? (
-                <div className="text-[10px] text-slate-500 italic p-4 text-center">No Jobs catalogued. click "ADD".</div>
+                <div className="text-xs text-[#687385] p-4 text-center">
+                  No NPC jobs catalogued yet. Click ADD above to create one.
+                </div>
               ) : (
                 Array.from(new Set(jobs.map(j => j.faction || 'other'))).map(faction => {
                   const factionJobs = jobs.filter(j => (j.faction || 'other') === faction);
                   return (
                     <div key={faction} className="space-y-1">
-                      <div className="text-[9.5px] font-bold text-yellow-400 uppercase flex items-center gap-1 select-none py-1 border-b border-white/[0.03]">
-                        <span>📁 {faction.toUpperCase()} Faction</span>
-                        <span className="text-slate-500 text-[8.5px]">({factionJobs.length})</span>
+                      <div className="text-[11px] font-semibold text-amber-300 uppercase flex items-center justify-between py-1 border-b border-white/[0.06]">
+                        <span>{faction}</span>
+                        <span className="text-[#687385]">{factionJobs.length}</span>
                       </div>
-                      <div className="pl-2 border-l border-white/5 space-y-0.5">
+                      <div className="pl-2 border-l border-[#262c36] space-y-1">
                         {factionJobs.map(item => {
                           const idx = jobs.findIndex(j => j.id === item.id);
-                          const itemHasWarning = warnings.filter(w => w.affectedIds.includes(item.id));
-                          const hasError = itemHasWarning.some(w => w.severity === 'error');
-                          const hasWarn = itemHasWarning.some(w => w.severity === 'warning');
+                          const itemWarn = warnings.filter(w => w.affectedIds.includes(item.id));
+                          const hasError =
+                            itemWarn.some(w => w.severity === 'error') ||
+                            economyDiagnostics.some(d => d.targetId === item.id && d.severity === 'error');
+                          const hasWarn = itemWarn.some(w => w.severity === 'warning');
                           const isSelected = activeItemIndex === idx;
-
                           return (
                             <button
                               key={item.id}
-                              onClick={() => {
-                                setActiveItemIndex(idx);
-                              }}
-                              className={`w-full text-left py-1.5 px-2 rounded font-mono transition-all flex items-center justify-between group cursor-pointer ${
+                              type="button"
+                              onClick={() => setActiveItemIndex(idx)}
+                              className={`w-full text-left py-1.5 px-2 rounded transition-colors flex items-center justify-between gap-2 cursor-pointer ${
                                 isSelected
                                   ? hasError
-                                    ? 'bg-red-950/20 text-red-400 font-bold border-l-2 border-red-500 pl-1.5'
+                                    ? 'bg-rose-500/15 text-rose-200 font-semibold border-l-2 border-rose-500'
                                     : hasWarn
-                                      ? 'bg-amber-950/20 text-amber-400 font-bold border-l-2 border-amber-500 pl-1.5'
-                                      : 'bg-yellow-500/10 text-yellow-400 font-bold border-l-2 border-yellow-500 pl-1.5'
-                                  : 'text-slate-400 hover:bg-white/5 hover:text-white'
+                                      ? 'bg-amber-500/15 text-amber-200 font-semibold border-l-2 border-amber-500'
+                                      : 'bg-blue-500/15 text-blue-200 font-semibold border-l-2 border-blue-500'
+                                  : 'text-[#a0aab8] hover:bg-white/[0.04] hover:text-white'
                               }`}
                             >
-                              <div className="truncate flex-1 pr-1">
-                                <span className="truncate flex items-center gap-1">
-                                  ⚓ {item.name}
-                                </span>
-                              </div>
-                              <span className="text-[8.5px] text-slate-600 group-hover:text-slate-400 truncate scale-90">{item.id}</span>
+                              <span className="truncate flex-1">{item.name}</span>
+                              <span className="text-[11px] font-mono text-[#687385] truncate max-w-[90px]">
+                                {item.orderId || item.id}
+                              </span>
                             </button>
                           );
                         })}
@@ -509,28 +813,73 @@ export default function LibraryConfigurator({ workspace, setWorkspace, saveCheck
                   );
                 })
               )
+            ) : godEntries.length === 0 ? (
+              <div className="text-xs text-[#687385] p-4 text-center">
+                No God product factories or station spawns defined yet.
+              </div>
+            ) : (
+              (['product', 'station'] as const).map(kind => {
+                const subset = godEntries.filter(g => g.kind === kind);
+                if (subset.length === 0) return null;
+                return (
+                  <div key={kind} className="space-y-1">
+                    <div className="text-[11px] font-semibold text-blue-300 uppercase flex items-center justify-between py-1 border-b border-white/[0.06]">
+                      <span>{kind === 'product' ? 'Products' : 'Stations'}</span>
+                      <span className="text-[#687385]">{subset.length}</span>
+                    </div>
+                    <div className="pl-2 border-l border-[#262c36] space-y-1">
+                      {subset.map(entry => {
+                        const idx = godEntries.findIndex(
+                          g => (g.patchId || g.id) === (entry.patchId || entry.id),
+                        );
+                        return (
+                          <button
+                            key={entry.patchId || entry.id}
+                            type="button"
+                            onClick={() => setActiveItemIndex(idx)}
+                            className={`w-full text-left py-1.5 px-2 rounded transition-colors flex items-center justify-between gap-2 cursor-pointer ${
+                              activeItemIndex === idx
+                                ? 'bg-blue-500/15 text-blue-200 font-semibold border-l-2 border-blue-500'
+                                : 'text-[#a0aab8] hover:bg-white/[0.04] hover:text-white'
+                            }`}
+                          >
+                            <span className="truncate font-mono">{entry.id}</span>
+                            <span className="text-[11px] text-[#687385] shrink-0">
+                              {entry.owner} · {entry.galaxyQuota}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })
             )}
           </div>
 
           {/* Compact single-owner conflict status footer (detailed issues live in Diagnostics -> Mod Conflicts) */}
           <div
             data-testid="library-conflicts-handoff"
-            className="border-t border-white/[0.08] shrink-0 bg-[#11141a] px-3 py-2 flex items-center justify-between gap-2 text-[11px]"
+            className="border-t border-[#262c36] shrink-0 bg-[#141820] px-3 py-2 flex items-center justify-between gap-2 text-[11px]"
           >
             <div className="flex items-center gap-1.5 min-w-0">
-              <BadgeAlert className={`w-4 h-4 shrink-0 ${
-                warnings.filter(w => w.severity === 'error').length > 0
-                  ? 'text-red-400'
-                  : warnings.length > 0
-                    ? 'text-amber-400'
-                    : 'text-emerald-400'
-              }`} />
+              <BadgeAlert
+                className={`w-4 h-4 shrink-0 ${
+                  warnings.some(w => w.severity === 'error')
+                    ? 'text-rose-400'
+                    : warnings.length > 0
+                      ? 'text-amber-400'
+                      : 'text-emerald-400'
+                }`}
+              />
               {warnings.length > 0 ? (
-                <span className={`px-1.5 py-0.5 rounded font-medium ${
-                  warnings.filter(w => w.severity === 'error').length > 0
-                    ? 'bg-red-500/15 text-red-300'
-                    : 'bg-amber-500/15 text-amber-300'
-                }`}>
+                <span
+                  className={`px-1.5 py-0.5 rounded font-medium ${
+                    warnings.some(w => w.severity === 'error')
+                      ? 'bg-rose-500/15 text-rose-300'
+                      : 'bg-amber-500/15 text-amber-300'
+                  }`}
+                >
                   {warnings.length} conflict{warnings.length === 1 ? '' : 's'}
                 </span>
               ) : (
@@ -542,7 +891,7 @@ export default function LibraryConfigurator({ workspace, setWorkspace, saveCheck
                 type="button"
                 onClick={() => void scanProjectFilesForConflicts()}
                 disabled={isScanning}
-                className="px-2 py-1 rounded border border-white/[0.08] bg-[#171b23] hover:text-white text-slate-300 text-[11px] cursor-pointer disabled:opacity-50"
+                className="px-2 py-1 rounded border border-[#262c36] bg-[#171b23] hover:text-white text-[#a0aab8] text-[11px] cursor-pointer disabled:opacity-50"
                 title="Re-scan Wares & Jobs for collisions"
               >
                 {isScanning ? 'Scanning…' : 'Scan'}
@@ -562,181 +911,291 @@ export default function LibraryConfigurator({ workspace, setWorkspace, saveCheck
         </div>
 
         {/* Center portion: Visual controls detail editor sheet */}
-        <div className="flex-1 flex flex-col border-r border-white/10 overflow-hidden">
-          {!activeItem ? (
-            <div className="flex-1 flex flex-col items-center justify-center p-8 bg-black/5 text-center font-mono select-none">
-              <Sparkles className="w-12 h-12 text-slate-700 mb-3 stroke-[1.5]" />
-              <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest">NO ACTIVE ASSET SELECTED</h3>
-              <p className="text-[10px] text-slate-500 max-w-sm mt-1 leading-relaxed font-sans">
-                Select an existing library ware or cargo job item in the sidebar, or click the corresponding "+" create button to begin configuring!
-              </p>
-            </div>
+        <div className="flex-1 min-w-0 flex flex-col overflow-hidden bg-[#0c0e12]">
+          {!activeId ? (
+            <EmptyState
+              icon={<Database className="w-5 h-5" />}
+              title={`No ${activeSubTab} entry selected`}
+              description={
+                activeSubTab === 'baskets'
+                  ? 'Trade baskets group custom or vanilla wares so NPC Jobs and Traders can trade them across the galaxy.'
+                  : activeSubTab === 'god'
+                    ? 'God entries spawn dynamic faction factories and defensive stations via libraries/god.xml.'
+                    : 'Select an asset from the left hierarchy or click ADD to author a new X4 9.00 definition.'
+              }
+            >
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                {activeSubTab === 'baskets' && (
+                  <button
+                    type="button"
+                    data-testid="create-starter-basket-btn"
+                    onClick={() => handleCreateBasket('mod_trade_basket')}
+                    className="px-3 py-1.5 rounded border border-blue-500/35 bg-blue-500/15 hover:bg-blue-500/25 text-blue-200 text-xs font-medium cursor-pointer"
+                  >
+                    + Create Starter Trade Basket
+                  </button>
+                )}
+                {activeSubTab === 'god' && (
+                  <>
+                    <button
+                      type="button"
+                      data-testid="create-starter-god-product-btn"
+                      onClick={() => handleCreateGodEntry('mod_god_product', 'product')}
+                      className="px-3 py-1.5 rounded border border-blue-500/35 bg-blue-500/15 hover:bg-blue-500/25 text-blue-200 text-xs font-medium cursor-pointer"
+                    >
+                      + Add Product Factory
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="create-starter-god-station-btn"
+                      onClick={() => handleCreateGodEntry('mod_god_station', 'station')}
+                      className="px-3 py-1.5 rounded border border-[#262c36] bg-[#171b23] hover:text-white text-[#a0aab8] text-xs font-medium cursor-pointer"
+                    >
+                      + Add Station Spawn
+                    </button>
+                  </>
+                )}
+              </div>
+            </EmptyState>
           ) : (
             <>
-              <div className="p-4 border-b border-white/10 shrink-0 flex items-center justify-between bg-black/25">
-            <div>
-              <h2 className="text-sm font-mono font-bold text-slate-200">
-                {activeItem?.name || 'Selected Asset'}
-              </h2>
-              <p className="text-[10.5px] text-slate-500 font-mono mt-0.5">
-                Target ID: {activeItem?.id}
-              </p>
-            </div>
-            <button
-              onClick={handleDeleteActiveItem}
-              className="px-2.5 py-1 text-red-400 border border-red-500/15 bg-red-500/5 hover:bg-red-500/10 hover:border-red-500/30 rounded font-mono text-[10px] font-bold uppercase cursor-pointer transition-all flex items-center gap-1"
-            >
-              <Trash className="w-3.5 h-3.5" />
-              Remove Item
-            </button>
-          </div>
+              <div className="px-4 py-3 border-b border-[#262c36] shrink-0 flex items-center justify-between gap-2 bg-[#11141a]">
+                <div className="min-w-0">
+                  <h2 className="text-sm font-semibold text-[#eef2f7] truncate">
+                    {activeSubTab === 'wares'
+                      ? activeWare?.name
+                      : activeSubTab === 'jobs'
+                        ? activeJob?.name
+                        : activeId}
+                  </h2>
+                  <p className="text-[11px] text-[#687385] font-mono mt-0.5 truncate">
+                    {projectPath} · ID: {activeId}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleDeleteActiveItem}
+                  className="px-2.5 py-1.5 text-rose-300 border border-rose-500/25 bg-rose-500/10 hover:bg-rose-500/20 rounded text-[11px] font-medium cursor-pointer transition-colors flex items-center gap-1.5 shrink-0"
+                >
+                  <Trash className="w-3.5 h-3.5" />
+                  Remove Item
+                </button>
+              </div>
 
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {activeItem && (() => {
-              const itemHasWarning = warnings.filter(w => w.affectedIds.includes(activeItem.id));
-              if (itemHasWarning.length === 0) return null;
-              
-              const hasError = itemHasWarning.some(w => w.severity === 'error');
-              return (
-                <div className={`p-3 rounded-lg border space-y-2 select-none animate-fadeIn ${
-                  hasError 
-                    ? 'bg-red-500/10 border-red-500/25' 
-                    : 'bg-amber-500/10 border-amber-500/25'
-                }`}>
-                  <div className={`text-xs font-bold uppercase tracking-wide flex items-center gap-1.5 ${
-                    hasError ? 'text-red-400' : 'text-amber-400'
-                  }`}>
-                    <BadgeAlert className="w-4 h-4" />
-                    <span>Mod Conflicts &amp; Warnings detected for this item</span>
-                  </div>
-                  <div className="space-y-1.5">
-                    {itemHasWarning.map(w => (
-                      <div key={w.id} className="text-[11px] leading-relaxed text-slate-300">
-                        • <strong className="text-slate-200 font-sans">{w.title}:</strong> {w.message}
-                        <div className="text-[9.5px] text-slate-500 font-mono mt-0.5 ml-2.5">Intersection Target: {w.location}</div>
+              <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
+                {activeItemEconomyDiagnostics.length > 0 && (
+                  <div
+                    data-testid="economy-inline-diagnostics"
+                    className={`p-3 rounded-lg border space-y-1.5 ${
+                      activeItemEconomyDiagnostics.some(d => d.severity === 'error')
+                        ? 'bg-rose-500/10 border-rose-500/30'
+                        : 'bg-amber-500/10 border-amber-500/30'
+                    }`}
+                  >
+                    {activeItemEconomyDiagnostics.map(diag => (
+                      <div
+                        key={`${diag.code}:${diag.targetId}`}
+                        className="flex items-center gap-2 text-xs text-[#eef2f7]"
+                      >
+                        <StatusPill tone={diag.severity}>{diag.code}</StatusPill>
+                        <span>{diag.message}</span>
                       </div>
                     ))}
                   </div>
-                </div>
-              );
-            })()}
+                )}
 
-            {activeSubTab === 'wares' ? (
-              <div className="space-y-4 max-w-2xl">
-                <div className="space-y-3 font-mono text-xs">
-                  <div>
-                    <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider font-bold">Ware Display Name</label>
-                    <input
-                      type="text"
-                      value={(activeItem as WareDef).name}
-                      onChange={e => handleUpdateActiveWareProp('name', e.target.value)}
-                      className="w-full p-2 rounded bg-black/50 border border-white/10 text-white focus:outline-none focus:border-cyan-500 transition-colors"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider font-bold">Cargo Transport Method</label>
-                    <select
-                      value={(activeItem as WareDef).transport}
-                      onChange={e => handleUpdateActiveWareProp('transport', e.target.value)}
-                      className="w-full p-2 rounded bg-[#0F1115] border border-white/10 text-white cursor-pointer focus:outline-none focus:border-cyan-500 transition-colors"
+                {activeItemDiskWarnings.length > 0 && (
+                  <div
+                    className={`p-3 rounded-lg border space-y-1.5 ${
+                      activeItemDiskWarnings.some(w => w.severity === 'error')
+                        ? 'bg-rose-500/10 border-rose-500/25'
+                        : 'bg-amber-500/10 border-amber-500/25'
+                    }`}
+                  >
+                    <div
+                      className={`text-xs font-semibold flex items-center gap-1.5 ${
+                        activeItemDiskWarnings.some(w => w.severity === 'error')
+                          ? 'text-rose-300'
+                          : 'text-amber-300'
+                      }`}
                     >
-                      <option value="container">Container Cargo (Equipment/Metals/Computers)</option>
-                      <option value="solid">Solid Minerals (Ore/Silicon/Ice)</option>
-                      <option value="liquid">Liquid Fluids (Helium/Hydrogen/Gases)</option>
-                      <option value="energy">Energy Coils (Energy Cells/Plasma)</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider font-bold">Ware Tags</label>
-                    <input
-                      type="text"
-                      value={(activeItem as WareDef).tags || ''}
-                      onChange={e => handleUpdateActiveWareProp('tags', e.target.value)}
-                      placeholder="economy equipment"
-                      className="w-full p-2 rounded bg-black/50 border border-white/10 text-white focus:outline-none focus:border-cyan-500 transition-colors"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3 pb-1">
-                    <div>
-                      <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider font-bold">Cargo Volume (m³)</label>
-                      <input
-                        type="number"
-                        value={(activeItem as WareDef).volume}
-                        onChange={e => handleUpdateActiveWareProp('volume', Number(e.target.value))}
-                        className="w-full p-2 rounded bg-black/50 border border-white/10 text-white font-bold"
-                      />
+                      <BadgeAlert className="w-4 h-4" />
+                      <span>Mod Conflicts &amp; Warnings</span>
                     </div>
-                    <div>
-                      <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider font-bold">Production Assembly Cycle</label>
-                      <div className="flex gap-1">
-                        <input
-                          type="number"
-                          value={(activeItem as WareDef).prodTime}
-                          onChange={e => handleUpdateActiveWareProp('prodTime', Number(e.target.value))}
-                          className="w-1/2 p-2 rounded bg-black/50 border border-white/10 text-emerald-400 text-center font-bold"
-                          placeholder="time"
-                        />
-                        <span className="self-center text-[10px] text-slate-500">sec for</span>
-                        <input
-                          type="number"
-                          value={(activeItem as WareDef).prodAmount}
-                          onChange={e => handleUpdateActiveWareProp('prodAmount', Number(e.target.value))}
-                          className="w-1/3 p-2 rounded bg-black/50 border border-white/10 text-white text-center font-bold"
-                          placeholder="qty"
-                        />
+                    {activeItemDiskWarnings.map(w => (
+                      <div key={w.id} className="text-xs text-[#a0aab8]">
+                        <strong className="text-[#eef2f7]">{w.title}:</strong> {w.message}
+                        <div className="text-[11px] font-mono text-[#687385]">Target: {w.location}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {activeSubTab === 'wares' && activeWare && (
+                  <div className="space-y-4 max-w-2xl">
+                    <datalist id="ware-group-suggestions">
+                      {WARE_GROUPS.map(g => (
+                        <option key={g} value={g} />
+                      ))}
+                    </datalist>
+
+                    <div className={ECO_CARD_CLS}>
+                      <div className={ECO_SECTION_TITLE_CLS}>
+                        <span>Ware Identity &amp; X4 9.00 Classification</span>
+                        <StatusPill tone="info">{activeWare.transport}</StatusPill>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className={ECO_LABEL_CLS}>Ware Display Name</label>
+                          <input
+                            type="text"
+                            value={activeWare.name}
+                            onChange={e => handleUpdateActiveWareProp('name', e.target.value)}
+                            className={ECO_INPUT_CLS}
+                          />
+                        </div>
+                        <div>
+                          <label className={ECO_LABEL_CLS}>Cargo Transport Method</label>
+                          <select
+                            value={activeWare.transport}
+                            onChange={e =>
+                              handleUpdateActiveWareProp('transport', e.target.value as WareTransport)
+                            }
+                            className={ECO_SELECT_CLS}
+                          >
+                            {ALL_WARE_TRANSPORTS.map(t => (
+                              <option key={t.value} value={t.value}>
+                                {t.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className={ECO_LABEL_CLS}>Ware Group (group)</label>
+                          <input
+                            type="text"
+                            data-testid="ware-group-input"
+                            list="ware-group-suggestions"
+                            value={activeWare.group || ''}
+                            onChange={e =>
+                              handleUpdateActiveWareProp('group', e.target.value || undefined)
+                            }
+                            placeholder="hightech, refined, shiptech..."
+                            className={ECO_INPUT_CLS}
+                          />
+                        </div>
+                        <div>
+                          <label className={ECO_LABEL_CLS}>Factory Name (factoryname)</label>
+                          <input
+                            type="text"
+                            data-testid="ware-factoryname-input"
+                            value={activeWare.factoryName || ''}
+                            onChange={e =>
+                              handleUpdateActiveWareProp('factoryName', e.target.value || undefined)
+                            }
+                            placeholder="{20201,404} or custom name"
+                            className={ECO_INPUT_CLS}
+                          />
+                        </div>
+                        <div>
+                          <label className={ECO_LABEL_CLS}>Ware Tags</label>
+                          <input
+                            type="text"
+                            value={activeWare.tags || ''}
+                            onChange={e => handleUpdateActiveWareProp('tags', e.target.value)}
+                            placeholder="economy equipment"
+                            className={ECO_INPUT_CLS}
+                          />
+                        </div>
+                        <div>
+                          <label className={ECO_LABEL_CLS}>Component Macro Ref (&lt;component ref&gt;)</label>
+                          <input
+                            type="text"
+                            data-testid="ware-componentref-input"
+                            value={activeWare.componentRef || ''}
+                            onChange={e =>
+                              handleUpdateActiveWareProp('componentRef', e.target.value || undefined)
+                            }
+                            placeholder="ship_arg_m_corvette_01_a_macro"
+                            className={ECO_INPUT_CLS}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className={ECO_LABEL_CLS}>Cargo Volume (m3)</label>
+                          <input
+                            type="number"
+                            value={activeWare.volume}
+                            onChange={e => handleUpdateActiveWareProp('volume', Number(e.target.value))}
+                            className={ECO_INPUT_CLS}
+                          />
+                        </div>
+                        <div>
+                          <label className={ECO_LABEL_CLS}>Production Assembly Cycle</label>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number"
+                              value={activeWare.prodTime}
+                              onChange={e => handleUpdateActiveWareProp('prodTime', Number(e.target.value))}
+                              className={ECO_INPUT_CLS}
+                              placeholder="sec"
+                            />
+                            <span className="text-[11px] text-[#687385] shrink-0">sec for</span>
+                            <input
+                              type="number"
+                              value={activeWare.prodAmount}
+                              onChange={e => handleUpdateActiveWareProp('prodAmount', Number(e.target.value))}
+                              className={ECO_INPUT_CLS}
+                              placeholder="qty"
+                            />
+                          </div>
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  <div className="p-3 bg-black/35 rounded-lg border border-white/5 space-y-3">
-                    <span className="font-bold text-[9px] text-slate-400 tracking-wider block uppercase border-b border-white/5 pb-1">
-                      Explicit Production Recipe
-                    </span>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="text-slate-500 block mb-1 text-[8.5px] uppercase font-bold">Method</label>
-                        <input
-                          type="text"
-                          value={(activeItem as WareDef).productionMethod || 'default'}
-                          onChange={e => handleUpdateActiveWareProp('productionMethod', e.target.value)}
-                          className="w-full p-1.5 rounded bg-black border border-white/10 text-slate-200"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-slate-500 block mb-1 text-[8.5px] uppercase font-bold">Recipe Name</label>
-                        <input
-                          type="text"
-                          value={(activeItem as WareDef).productionName || ''}
-                          onChange={e => handleUpdateActiveWareProp('productionName', e.target.value)}
-                          placeholder="Assembly output"
-                          className="w-full p-1.5 rounded bg-black border border-white/10 text-slate-200"
-                        />
-                      </div>
-                    </div>
-                    <div>
-                      <div className="flex items-center justify-between mb-1.5">
-                        <label className="text-slate-500 text-[8.5px] uppercase font-bold">
-                          Production Inputs (live ware index)
-                        </label>
+                    <div className={ECO_CARD_CLS}>
+                      <div className={ECO_SECTION_TITLE_CLS}>
+                        <span>Primary Production Recipe (&lt;production&gt;)</span>
                         <button
                           type="button"
                           onClick={addPrimaryWare}
-                          className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 text-[9px] font-bold transition-colors"
+                          className="flex items-center gap-1 px-2 py-1 rounded bg-blue-500/15 hover:bg-blue-500/25 border border-blue-500/35 text-blue-200 text-[11px] font-medium cursor-pointer"
                         >
-                          <Plus className="w-2.5 h-2.5" /> Add input
+                          <Plus className="w-3 h-3" /> Add input
                         </button>
                       </div>
-                      <div className="space-y-1.5">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className={ECO_LABEL_CLS}>Method</label>
+                          <input
+                            type="text"
+                            value={activeWare.productionMethod || 'default'}
+                            onChange={e => handleUpdateActiveWareProp('productionMethod', e.target.value)}
+                            className={ECO_INPUT_CLS}
+                          />
+                        </div>
+                        <div>
+                          <label className={ECO_LABEL_CLS}>Recipe Name</label>
+                          <input
+                            type="text"
+                            value={activeWare.productionName || ''}
+                            onChange={e => handleUpdateActiveWareProp('productionName', e.target.value)}
+                            placeholder="Assembly output"
+                            className={ECO_INPUT_CLS}
+                          />
+                        </div>
+                      </div>
+                      <div className="space-y-2">
                         {getPrimaryWares().length === 0 && (
-                          <p className="text-[9px] text-slate-600 italic">
-                            No inputs — produced from nothing (e.g. a raw resource harvested in-field).
+                          <p className="text-[11px] text-[#687385]">
+                            No primary inputs — raw harvestable resource or external input.
                           </p>
                         )}
                         {getPrimaryWares().map((entry, i) => (
-                          <div key={i} className="flex items-center gap-1.5">
+                          <div key={i} className="flex items-center gap-2">
                             <div className="flex-1 min-w-0">
                               <ObjectIndexPicker
                                 kind="ware"
@@ -750,15 +1209,17 @@ export default function LibraryConfigurator({ workspace, setWorkspace, saveCheck
                               type="number"
                               min={1}
                               value={entry.amount}
-                              onChange={e => updatePrimaryWare(i, 'amount', Number(e.target.value) || e.target.value)}
+                              onChange={e =>
+                                updatePrimaryWare(i, 'amount', Number(e.target.value) || e.target.value)
+                              }
                               title="Amount consumed per production cycle"
-                              className="w-20 p-1.5 rounded bg-black border border-white/10 text-emerald-300 text-center font-mono text-[11px] focus:outline-none focus:border-cyan-500"
+                              className="w-24 px-2 py-1.5 rounded bg-[#090b0f] border border-[#262c36] text-emerald-300 text-center font-mono text-xs focus:outline-none focus:border-blue-500"
                             />
                             <button
                               type="button"
                               onClick={() => removePrimaryWare(i)}
                               title="Remove input"
-                              className="p-1.5 rounded text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                              className="p-1.5 rounded text-[#687385] hover:text-rose-300 hover:bg-rose-500/10 cursor-pointer"
                             >
                               <Trash className="w-3.5 h-3.5" />
                             </button>
@@ -766,143 +1227,622 @@ export default function LibraryConfigurator({ workspace, setWorkspace, saveCheck
                         ))}
                       </div>
                     </div>
-                  </div>
 
-                  <div className="p-3 bg-black/35 rounded-lg border border-white/5 space-y-3">
-                    <span className="font-bold text-[9px] text-slate-400 tracking-wider block uppercase border-b border-white/5 pb-1">
-                      Dynamic Profit & Pricing Matrix (Credits)
-                    </span>
-                    <div className="grid grid-cols-3 gap-2">
-                      <div>
-                        <label className="text-slate-500 block mb-1 text-[8.5px] uppercase font-bold">Min Floor</label>
-                        <input
-                          type="number"
-                          value={(activeItem as WareDef).minPrice}
-                          onChange={e => handleUpdateActiveWareProp('minPrice', Number(e.target.value))}
-                          className="w-full p-1.5 rounded bg-black border border-white/10 text-red-400 text-center"
-                        />
+                    {/* Multi-method Additional Production Recipes */}
+                    <div className={ECO_CARD_CLS}>
+                      <div className={ECO_SECTION_TITLE_CLS}>
+                        <span>Additional Production Methods (Terran / Teladi / Closed Loop)</span>
+                        <button
+                          type="button"
+                          data-testid="ware-add-method-btn"
+                          onClick={() => {
+                            const existing = activeWare.additionalProductions || [];
+                            const nextProd: WareProductionDef = {
+                              method: 'teladi',
+                              name: 'Teladi Method',
+                              time: activeWare.prodTime || 30,
+                              amount: activeWare.prodAmount || 10,
+                              primaryWares: [{ ware: 'teladianium', amount: 10 }],
+                            };
+                            handleUpdateActiveWareProp('additionalProductions', [...existing, nextProd]);
+                          }}
+                          className="flex items-center gap-1 px-2 py-1 rounded bg-blue-500/15 hover:bg-blue-500/25 border border-blue-500/35 text-blue-200 text-[11px] font-medium cursor-pointer"
+                        >
+                          <Plus className="w-3 h-3" /> Add method
+                        </button>
+                      </div>
+                      {(activeWare.additionalProductions || []).length === 0 ? (
+                        <p className="text-[11px] text-[#687385]">
+                          Single production method only. Add alternate faction recipes (e.g. <code className="font-mono">teladi</code>, <code className="font-mono">terran</code>,
+                          <code className="font-mono">closedloop</code>) to support multiple shipyard/station blueprints.
+                        </p>
+                      ) : (
+                        <div className="space-y-3">
+                          {(activeWare.additionalProductions || []).map((alt, altIdx) => (
+                            <div
+                              key={altIdx}
+                              className="p-3 rounded border border-[#262c36] bg-[#090b0f] space-y-2"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-[11px] font-semibold text-blue-300">
+                                  Method #{altIdx + 2}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleUpdateActiveWareProp(
+                                      'additionalProductions',
+                                      (activeWare.additionalProductions || []).filter((_, i) => i !== altIdx),
+                                    )
+                                  }
+                                  className="text-[11px] text-[#687385] hover:text-rose-300 cursor-pointer"
+                                >
+                                  Remove method
+                                </button>
+                              </div>
+                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                                <input
+                                  type="text"
+                                  data-testid={`ware-alt-method-${altIdx}`}
+                                  value={alt.method}
+                                  onChange={e => {
+                                    const list = [...(activeWare.additionalProductions || [])];
+                                    list[altIdx] = { ...alt, method: e.target.value };
+                                    handleUpdateActiveWareProp('additionalProductions', list);
+                                  }}
+                                  placeholder="teladi"
+                                  className={ECO_INPUT_CLS}
+                                />
+                                <input
+                                  type="text"
+                                  value={alt.name || ''}
+                                  onChange={e => {
+                                    const list = [...(activeWare.additionalProductions || [])];
+                                    list[altIdx] = { ...alt, name: e.target.value || undefined };
+                                    handleUpdateActiveWareProp('additionalProductions', list);
+                                  }}
+                                  placeholder="Recipe name"
+                                  className={ECO_INPUT_CLS}
+                                />
+                                <input
+                                  type="number"
+                                  value={alt.time}
+                                  onChange={e => {
+                                    const list = [...(activeWare.additionalProductions || [])];
+                                    list[altIdx] = { ...alt, time: Number(e.target.value) || 0 };
+                                    handleUpdateActiveWareProp('additionalProductions', list);
+                                  }}
+                                  placeholder="sec"
+                                  className={ECO_INPUT_CLS}
+                                />
+                                <input
+                                  type="number"
+                                  value={alt.amount}
+                                  onChange={e => {
+                                    const list = [...(activeWare.additionalProductions || [])];
+                                    list[altIdx] = { ...alt, amount: Number(e.target.value) || 0 };
+                                    handleUpdateActiveWareProp('additionalProductions', list);
+                                  }}
+                                  placeholder="amount"
+                                  className={ECO_INPUT_CLS}
+                                />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className={ECO_CARD_CLS}>
+                      <div className={ECO_SECTION_TITLE_CLS}>
+                        <span>Dynamic Pricing Matrix (Credits)</span>
+                      </div>
+                      <div className="grid grid-cols-3 gap-3">
+                        <div>
+                          <label className={ECO_LABEL_CLS}>Min Floor</label>
+                          <input
+                            type="number"
+                            data-testid="ware-min-price-input"
+                            value={activeWare.minPrice}
+                            onChange={e => handleUpdateActiveWareProp('minPrice', Number(e.target.value))}
+                            className={ECO_INPUT_CLS}
+                          />
+                        </div>
+                        <div>
+                          <label className={ECO_LABEL_CLS}>Average</label>
+                          <input
+                            type="number"
+                            data-testid="ware-avg-price-input"
+                            value={activeWare.avgPrice}
+                            onChange={e => handleUpdateActiveWareProp('avgPrice', Number(e.target.value))}
+                            className={ECO_INPUT_CLS}
+                          />
+                        </div>
+                        <div>
+                          <label className={ECO_LABEL_CLS}>Max Ceiling</label>
+                          <input
+                            type="number"
+                            data-testid="ware-max-price-input"
+                            value={activeWare.maxPrice}
+                            onChange={e => handleUpdateActiveWareProp('maxPrice', Number(e.target.value))}
+                            className={ECO_INPUT_CLS}
+                          />
+                        </div>
                       </div>
                       <div>
-                        <label className="text-slate-500 block mb-1 text-[8.5px] uppercase font-bold text-cyan-400">Average</label>
-                        <input
-                          type="number"
-                          value={(activeItem as WareDef).avgPrice}
-                          onChange={e => handleUpdateActiveWareProp('avgPrice', Number(e.target.value))}
-                          className="w-full p-1.5 rounded bg-black border border-white/10 text-cyan-400 text-center font-extrabold"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-slate-500 block mb-1 text-[8.5px] uppercase font-bold">Max Ceiling</label>
-                        <input
-                          type="number"
-                          value={(activeItem as WareDef).maxPrice}
-                          onChange={e => handleUpdateActiveWareProp('maxPrice', Number(e.target.value))}
-                          className="w-full p-1.5 rounded bg-black border border-white/10 text-emerald-400 text-center"
+                        <label className={ECO_LABEL_CLS}>Economic Description</label>
+                        <textarea
+                          value={activeWare.description}
+                          onChange={e => handleUpdateActiveWareProp('description', e.target.value)}
+                          className="w-full p-2.5 h-16 rounded-md bg-[#090b0f] border border-[#262c36] text-[#eef2f7] text-xs focus:outline-none focus:border-blue-500 resize-none"
                         />
                       </div>
                     </div>
                   </div>
+                )}
 
-                  <div>
-                    <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider font-bold">Economic Description</label>
-                    <textarea
-                      value={(activeItem as WareDef).description}
-                      onChange={e => handleUpdateActiveWareProp('description', e.target.value)}
-                      className="w-full p-2 h-16 rounded bg-black/50 border border-white/10 text-white focus:outline-none focus:border-cyan-500 transition-colors resize-none font-sans"
-                    />
+                {activeSubTab === 'baskets' && activeBasket && (
+                  <BasketEditorPanel
+                    basket={activeBasket}
+                    workspaceWareIds={wares.map(w => w.id)}
+                    onChange={updated => savePatches(upsertBasketPatchBlock(xmlPatches, updated))}
+                  />
+                )}
+
+                {activeSubTab === 'jobs' && activeJob && (
+                  <div className="space-y-4 max-w-2xl">
+                    <datalist id="job-order-suggestions">
+                      {workspaceOrderIds.map(oid => (
+                        <option key={`ws:${oid}`} value={oid} />
+                      ))}
+                      {VANILLA_JOB_ORDERS.map(oid => (
+                        <option key={`ego:${oid}`} value={oid} />
+                      ))}
+                    </datalist>
+                    <datalist id="job-basket-suggestions">
+                      {baskets.map(b => (
+                        <option key={`ws:${b.id}`} value={b.id} />
+                      ))}
+                      {VANILLA_BASKET_PRESETS.map(b => (
+                        <option key={`ego:${b}`} value={b} />
+                      ))}
+                    </datalist>
+
+                    <div className={ECO_CARD_CLS}>
+                      <div className={ECO_SECTION_TITLE_CLS}>
+                        <span>Job Identity, Ship &amp; Faction</span>
+                        <StatusPill tone="info">{activeJob.faction}</StatusPill>
+                      </div>
+                      <div>
+                        <label className={ECO_LABEL_CLS}>Job Name Description</label>
+                        <input
+                          type="text"
+                          value={activeJob.name}
+                          onChange={e => handleUpdateActiveJobProp('name', e.target.value)}
+                          className={ECO_INPUT_CLS}
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className={ECO_LABEL_CLS}>Owning Faction</label>
+                          <ObjectIndexPicker
+                            kind="faction"
+                            endpoint="/api/reference/suggest"
+                            value={activeJob.faction}
+                            onChange={v => handleUpdateActiveJobProp('faction', v)}
+                            placeholder="Search factions… (stores the short code)"
+                          />
+                        </div>
+                        <div>
+                          <label className={ECO_LABEL_CLS}>Legacy Task Script (or leave blank when using Order)</label>
+                          <ObjectIndexPicker
+                            kind="aiscript"
+                            endpoint="/api/reference/suggest"
+                            value={activeJob.taskScript}
+                            onChange={value => handleUpdateActiveJobProp('taskScript', value)}
+                            placeholder="Search canonical/project AI scripts…"
+                          />
+                        </div>
+                        <div>
+                          <label className={ECO_LABEL_CLS}>Ship Class</label>
+                          <select
+                            value={activeJob.shipClass}
+                            onChange={e =>
+                              handleUpdateActiveJobProp(
+                                'shipClass',
+                                e.target.value as JobDef['shipClass'],
+                              )
+                            }
+                            className={ECO_SELECT_CLS}
+                          >
+                            {SHIP_CLASSES.map(c => (
+                              <option key={c.value} value={c.value}>
+                                {c.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className={ECO_LABEL_CLS}>Ship Size (&lt;select size=&quot;...&quot;&gt;)</label>
+                          <select
+                            data-testid="job-ship-size-select"
+                            value={activeJob.shipSize || ''}
+                            onChange={e =>
+                              handleUpdateActiveJobProp(
+                                'shipSize',
+                                (e.target.value || undefined) as JobShipSize | undefined,
+                              )
+                            }
+                            className={ECO_SELECT_CLS}
+                          >
+                            {SHIP_SIZES.map(s => (
+                              <option key={s.value || 'auto'} value={s.value}>
+                                {s.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className={ECO_LABEL_CLS}>Ship Macro</label>
+                        <ObjectIndexPicker
+                          kind="macro"
+                          endpoint="/api/reference/suggest"
+                          value={activeJob.shipMacro}
+                          onChange={value => handleUpdateActiveJobProp('shipMacro', value)}
+                          placeholder="Search canonical ship macros…"
+                        />
+                      </div>
+                    </div>
+
+                    {/* X4 9.00 Default Order & Trade Basket */}
+                    <div className={ECO_CARD_CLS}>
+                      <div className={ECO_SECTION_TITLE_CLS}>
+                        <span>X4 9.00 Default Order (&lt;orders&gt;) &amp; Trade Basket</span>
+                        <button
+                          type="button"
+                          data-testid="job-add-order-param-btn"
+                          onClick={() =>
+                            handleUpdateActiveJobProp('orderParams', [
+                              ...(activeJob.orderParams || []),
+                              { name: 'range', value: 'sector' },
+                            ])
+                          }
+                          className="flex items-center gap-1 px-2 py-1 rounded bg-blue-500/15 hover:bg-blue-500/25 border border-blue-500/35 text-blue-200 text-[11px] font-medium cursor-pointer"
+                        >
+                          <Plus className="w-3 h-3" /> Add param
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className={ECO_LABEL_CLS}>
+                            Default Order ID (links AI Scripts &lt;order id&gt; or Vanilla)
+                          </label>
+                          <input
+                            type="text"
+                            data-testid="job-order-id-input"
+                            list="job-order-suggestions"
+                            value={activeJob.orderId || ''}
+                            onChange={e =>
+                              handleUpdateActiveJobProp('orderId', e.target.value || undefined)
+                            }
+                            placeholder="Patrol, TradeRoutine, MiningRoutine..."
+                            className={ECO_INPUT_CLS}
+                          />
+                        </div>
+                        <div>
+                          <label className={ECO_LABEL_CLS}>Ware Basket (&lt;basket basket=&quot;...&quot;&gt;)</label>
+                          <input
+                            type="text"
+                            data-testid="job-basket-input"
+                            list="job-basket-suggestions"
+                            value={activeJob.basket || ''}
+                            onChange={e =>
+                              handleUpdateActiveJobProp('basket', e.target.value || undefined)
+                            }
+                            placeholder="bio, hightech, or custom basket..."
+                            className={ECO_INPUT_CLS}
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className={ECO_LABEL_CLS}>Category Tags (&lt;category tags=&quot;...&quot;&gt;)</label>
+                        <input
+                          type="text"
+                          value={activeJob.categoryTags || ''}
+                          onChange={e =>
+                            handleUpdateActiveJobProp('categoryTags', e.target.value || undefined)
+                          }
+                          placeholder="[factionlogic, freighter, trader]"
+                          className={ECO_INPUT_CLS}
+                        />
+                      </div>
+
+                      {(activeJob.orderParams || []).length > 0 && (
+                        <div className="space-y-2 pt-1">
+                          {(activeJob.orderParams || []).map((param, pIdx) => (
+                            <div key={pIdx} className="flex items-center gap-2">
+                              <input
+                                type="text"
+                                value={param.name}
+                                onChange={e => {
+                                  const next = [...(activeJob.orderParams || [])];
+                                  next[pIdx] = { ...param, name: e.target.value };
+                                  handleUpdateActiveJobProp('orderParams', next);
+                                }}
+                                placeholder="param name"
+                                className={ECO_INPUT_CLS}
+                              />
+                              <input
+                                type="text"
+                                value={param.value}
+                                onChange={e => {
+                                  const next = [...(activeJob.orderParams || [])];
+                                  next[pIdx] = { ...param, value: e.target.value };
+                                  handleUpdateActiveJobProp('orderParams', next);
+                                }}
+                                placeholder="value"
+                                className={ECO_INPUT_CLS}
+                              />
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleUpdateActiveJobProp(
+                                    'orderParams',
+                                    (activeJob.orderParams || []).filter((_, i) => i !== pIdx),
+                                  )
+                                }
+                                className="p-1.5 rounded text-[#687385] hover:text-rose-300 cursor-pointer"
+                              >
+                                <Trash className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Spawn Quotas, Location & Environment */}
+                    <div className={ECO_CARD_CLS}>
+                      <div className={ECO_SECTION_TITLE_CLS}>
+                        <span>Quotas, Spawn Location (&lt;location&gt;) &amp; Environment</span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className={ECO_LABEL_CLS}>Max Galaxy Spawns</label>
+                          <input
+                            type="number"
+                            value={activeJob.galaxyQuota}
+                            onChange={e =>
+                              handleUpdateActiveJobProp('galaxyQuota', Number(e.target.value))
+                            }
+                            className={ECO_INPUT_CLS}
+                          />
+                        </div>
+                        <div>
+                          <label className={ECO_LABEL_CLS}>Max Sector Spawns</label>
+                          <input
+                            type="number"
+                            value={activeJob.sectorQuota}
+                            onChange={e =>
+                              handleUpdateActiveJobProp('sectorQuota', Number(e.target.value))
+                            }
+                            className={ECO_INPUT_CLS}
+                          />
+                        </div>
+                        <div>
+                          <label className={ECO_LABEL_CLS}>Location Class</label>
+                          <select
+                            value={activeJob.locationClass || ''}
+                            onChange={e =>
+                              handleUpdateActiveJobProp(
+                                'locationClass',
+                                (e.target.value || undefined) as JobDef['locationClass'],
+                              )
+                            }
+                            className={ECO_SELECT_CLS}
+                          >
+                            <option value="">Default (none emitted)</option>
+                            <option value="galaxy">galaxy</option>
+                            <option value="cluster">cluster</option>
+                            <option value="sector">sector</option>
+                            <option value="zone">zone</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className={ECO_LABEL_CLS}>Location Macro</label>
+                          <input
+                            type="text"
+                            value={activeJob.locationMacro || ''}
+                            onChange={e =>
+                              handleUpdateActiveJobProp('locationMacro', e.target.value || undefined)
+                            }
+                            placeholder="xu_ep2_universe_macro"
+                            className={ECO_INPUT_CLS}
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-4 pt-1 text-xs text-[#a0aab8]">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={activeJob.rebuildOnDestroy}
+                            onChange={e =>
+                              handleUpdateActiveJobProp('rebuildOnDestroy', e.target.checked)
+                            }
+                            className="rounded border-[#262c36] bg-[#090b0f] text-blue-500 focus:ring-0"
+                          />
+                          <span>Rebuild if destroyed</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            data-testid="job-buildatshipyard-checkbox"
+                            checked={Boolean(activeJob.buildAtShipyard)}
+                            onChange={e =>
+                              handleUpdateActiveJobProp(
+                                'buildAtShipyard',
+                                e.target.checked ? true : undefined,
+                              )
+                            }
+                            className="rounded border-[#262c36] bg-[#090b0f] text-blue-500 focus:ring-0"
+                          />
+                          <span>Build at Shipyard (<code className="font-mono">buildatshipyard</code>)</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(activeJob.commandeerable)}
+                            onChange={e =>
+                              handleUpdateActiveJobProp(
+                                'commandeerable',
+                                e.target.checked ? true : undefined,
+                              )
+                            }
+                            className="rounded border-[#262c36] bg-[#090b0f] text-blue-500 focus:ring-0"
+                          />
+                          <span>Commandeerable</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* Subordinate Fleet Wings */}
+                    <div className={ECO_CARD_CLS}>
+                      <div className={ECO_SECTION_TITLE_CLS}>
+                        <span>Subordinate Escort Wings (&lt;subordinates&gt;)</span>
+                        <button
+                          type="button"
+                          data-testid="job-add-subordinate-btn"
+                          onClick={() =>
+                            handleUpdateActiveJobProp('subordinates', [
+                              ...(activeJob.subordinates || []),
+                              {
+                                job: jobs[0]?.id || 'argon_fighter_patrol_s',
+                                assignment: 'interception',
+                                group: 1,
+                                rebuild: true,
+                              },
+                            ])
+                          }
+                          className="flex items-center gap-1 px-2 py-1 rounded bg-blue-500/15 hover:bg-blue-500/25 border border-blue-500/35 text-blue-200 text-[11px] font-medium cursor-pointer"
+                        >
+                          <Plus className="w-3 h-3" /> Add subordinate
+                        </button>
+                      </div>
+                      {(activeJob.subordinates || []).length === 0 ? (
+                        <p className="text-[11px] text-[#687385]">
+                          No subordinate wings assigned. Attach fighter/escort jobs using valid X4 9.00
+                          assignments (<code className="font-mono">interception</code>, <code className="font-mono">defence</code>, <code className="font-mono">attack</code>, <code className="font-mono">trade</code>).
+                        </p>
+                      ) : (
+                        <div className="space-y-2">
+                          {(activeJob.subordinates || []).map((sub, sIdx) => (
+                            <div key={sIdx} className="grid grid-cols-1 sm:grid-cols-[1fr_150px_70px_auto] gap-2 items-center">
+                              <input
+                                type="text"
+                                data-testid={`job-sub-id-${sIdx}`}
+                                value={sub.job}
+                                onChange={e => {
+                                  const next = [...(activeJob.subordinates || [])];
+                                  next[sIdx] = { ...sub, job: e.target.value };
+                                  handleUpdateActiveJobProp('subordinates', next);
+                                }}
+                                placeholder="subordinate job id"
+                                className={ECO_INPUT_CLS}
+                              />
+                              <select
+                                value={sub.assignment || 'defence'}
+                                onChange={e => {
+                                  const next = [...(activeJob.subordinates || [])];
+                                  next[sIdx] = { ...sub, assignment: e.target.value };
+                                  handleUpdateActiveJobProp('subordinates', next);
+                                }}
+                                className={ECO_SELECT_CLS}
+                              >
+                                {SUBORDINATE_ASSIGNMENTS.map(a => (
+                                  <option key={a} value={a}>
+                                    {a}
+                                  </option>
+                                ))}
+                              </select>
+                              <input
+                                type="number"
+                                min={1}
+                                max={10}
+                                value={sub.group ?? 1}
+                                onChange={e => {
+                                  const next = [...(activeJob.subordinates || [])];
+                                  next[sIdx] = { ...sub, group: Number(e.target.value) || 1 };
+                                  handleUpdateActiveJobProp('subordinates', next);
+                                }}
+                                title="Wing group 1-10"
+                                className={ECO_INPUT_CLS}
+                              />
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleUpdateActiveJobProp(
+                                    'subordinates',
+                                    (activeJob.subordinates || []).filter((_, i) => i !== sIdx),
+                                  )
+                                }
+                                className="p-1.5 rounded text-[#687385] hover:text-rose-300 cursor-pointer"
+                              >
+                                <Trash className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
+                )}
+
+                {activeSubTab === 'god' && activeGod && (
+                  <GodEntryEditorPanel
+                    entry={activeGod}
+                    workspaceWareIds={wares.map(w => w.id)}
+                    onChange={updated => savePatches(upsertGodPatchBlock(xmlPatches, updated))}
+                  />
+                )}
               </div>
-            ) : (
-              <div className="space-y-4 max-w-2xl">
-                <div className="space-y-3 font-mono text-xs">
-                  <div>
-                    <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider font-bold">Job Name Description</label>
-                    <input
-                      type="text"
-                      value={(activeItem as JobDef).name}
-                      onChange={e => handleUpdateActiveJobProp('name', e.target.value)}
-                      className="w-full p-2 rounded bg-black/50 border border-white/10 text-white focus:outline-none focus:border-cyan-500"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider font-bold">Owning Combatant Faction</label>
-                      <ObjectIndexPicker
-                        kind="faction"
-                        endpoint="/api/reference/suggest"
-                        value={(activeItem as JobDef).faction}
-                        onChange={v => handleUpdateActiveJobProp('faction', v)}
-                        placeholder="Search factions… (stores the short code)"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider font-bold">Target Flight Code Behavior</label>
-                      <ObjectIndexPicker
-                        kind="aiscript"
-                        endpoint="/api/reference/suggest"
-                        value={(activeItem as JobDef).taskScript}
-                        onChange={value => handleUpdateActiveJobProp('taskScript', value)}
-                        placeholder="Search canonical/project AI scripts…"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider font-bold">Ship Macro</label>
-                    <ObjectIndexPicker
-                      kind="macro"
-                      endpoint="/api/reference/suggest"
-                      value={(activeItem as JobDef).shipMacro}
-                      onChange={value => handleUpdateActiveJobProp('shipMacro', value)}
-                      placeholder="Search canonical ship macros…"
-                    />
-                  </div>
-
-                  <div className="p-3 bg-black/35 rounded-lg border border-white/5 space-y-3">
-                    <span className="font-bold text-[9px] text-slate-400 tracking-wider block uppercase border-b border-white/5 pb-1">
-                      Spawn Active Quota Volume Matrix
-                    </span>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="text-slate-500 block mb-1 text-[8.5px] uppercase font-bold">Max Galaxy Spawns</label>
-                        <input
-                          type="number"
-                          value={(activeItem as JobDef).galaxyQuota}
-                          onChange={e => handleUpdateActiveJobProp('galaxyQuota', Number(e.target.value))}
-                          className="w-full p-1.5 rounded bg-black border border-white/10 text-cyan-400 text-center font-bold"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-slate-500 block mb-1 text-[8.5px] uppercase font-bold">Max Local Sector Spawns</label>
-                        <input
-                          type="number"
-                          value={(activeItem as JobDef).sectorQuota}
-                          onChange={e => handleUpdateActiveJobProp('sectorQuota', Number(e.target.value))}
-                          className="w-full p-1.5 rounded bg-black border border-white/10 text-white text-center"
-                        />
-                      </div>
-                    </div>
-                    
-                    <label className="flex items-center gap-2 text-[10px] text-slate-400 cursor-pointer pt-1">
-                      <input
-                        type="checkbox"
-                        checked={(activeItem as JobDef).rebuildOnDestroy}
-                        onChange={e => handleUpdateActiveJobProp('rebuildOnDestroy', e.target.checked)}
-                        className="rounded border-white/20 bg-black text-cyan-500 focus:ring-0"
-                      />
-                      <span>Rebuild Vessel automatically if destroyed in battles (Maintain Quota)</span>
-                    </label>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
             </>
           )}
         </div>
 
+        {/* Collapsible Live XML Preview Pane */}
+        {showXmlPreview && (
+          <div
+            data-testid="library-xml-preview"
+            className="w-[380px] xl:w-[440px] shrink-0 border-l border-[#262c36] bg-[#090b0f] flex flex-col overflow-hidden"
+          >
+            <div className="px-3 py-2 border-b border-[#262c36] bg-[#141820] flex items-center justify-between gap-2 shrink-0">
+              <span className="text-[11px] font-semibold text-[#eef2f7] truncate">
+                {projectPath} ({isPatchMode ? 'RFC 5261 Diff' : 'Standalone XML'})
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(compiledPreviewXml);
+                  setCopiedXml(true);
+                  setTimeout(() => setCopiedXml(false), 1800);
+                }}
+                className="px-2 py-1 rounded border border-[#262c36] bg-[#171b23] text-[11px] text-[#a0aab8] hover:text-white flex items-center gap-1 cursor-pointer shrink-0"
+              >
+                {copiedXml ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                {copiedXml ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+            <pre className="flex-1 overflow-auto p-3 font-mono text-[11px] leading-relaxed text-[#a0aab8] select-text custom-scrollbar">
+              {compiledPreviewXml}
+            </pre>
+          </div>
+        )}
       </div>
     </div>
   );

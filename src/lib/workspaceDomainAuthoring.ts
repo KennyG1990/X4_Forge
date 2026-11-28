@@ -66,8 +66,10 @@ const DOMAIN_ALLOWED_CHANGE_KEYS: Record<WorkspaceAuthoringDomain, ReadonlySet<s
   xml_patches: new Set(['xmlPatches', 'compileEnabled']),
 };
 
-const VALID_WARE_TRANSPORTS = new Set(['container', 'liquid', 'solid', 'energy']);
+const VALID_WARE_TRANSPORTS = new Set(['container', 'liquid', 'solid', 'energy', 'inventory', 'equipment', 'ship']);
 const VALID_JOB_SHIP_CLASSES = new Set(['fighter', 'corvette', 'destroyer', 'carrier', 'freighter']);
+const VALID_JOB_SHIP_SIZES = new Set(['ship_xs', 'ship_s', 'ship_m', 'ship_l', 'ship_xl']);
+const VALID_JOB_LOCATION_CLASSES = new Set(['galaxy', 'cluster', 'sector', 'zone']);
 const VALID_WIDGET_TYPES = new Set([
   'window',
   'table',
@@ -491,12 +493,32 @@ function validateLibrariesFields(changes: Record<string, unknown>): string | nul
         return `changes.wares[${i}].name must be a non-empty bounded string.`;
       }
       if (!VALID_WARE_TRANSPORTS.has(String(ware.transport))) {
-        return `changes.wares[${i}].transport must be container, liquid, solid, or energy.`;
+        return `changes.wares[${i}].transport must be container, liquid, solid, energy, inventory, equipment, or ship.`;
       }
       for (const numKey of ['volume', 'minPrice', 'avgPrice', 'maxPrice', 'prodTime', 'prodAmount'] as const) {
         const num = ware[numKey];
         if (typeof num !== 'number' || !Number.isFinite(num) || num < 0) {
           return `changes.wares[${i}].${numKey} must be a non-negative finite number.`;
+        }
+      }
+      for (const strKey of ['group', 'factoryName', 'componentRef'] as const) {
+        if (ware[strKey] !== undefined && (typeof ware[strKey] !== 'string' || String(ware[strKey]).length > 512)) {
+          return `changes.wares[${i}].${strKey} must be a bounded string.`;
+        }
+      }
+      if (ware.additionalProductions !== undefined) {
+        if (!Array.isArray(ware.additionalProductions) || ware.additionalProductions.length > 32) {
+          return `changes.wares[${i}].additionalProductions must be a bounded array.`;
+        }
+        for (let ap = 0; ap < ware.additionalProductions.length; ap += 1) {
+          const prod = ware.additionalProductions[ap];
+          if (!isPlainRecord(prod) || typeof prod.method !== 'string' || !prod.method.trim()) {
+            return `changes.wares[${i}].additionalProductions[${ap}].method must be a non-empty string.`;
+          }
+          if (typeof prod.time !== 'number' || !Number.isFinite(prod.time) || prod.time < 0 ||
+              typeof prod.amount !== 'number' || !Number.isFinite(prod.amount) || prod.amount < 0) {
+            return `changes.wares[${i}].additionalProductions[${ap}] requires non-negative finite time and amount.`;
+          }
         }
       }
       if (ware.includeInBuild !== undefined && typeof ware.includeInBuild !== 'boolean') {
@@ -522,8 +544,8 @@ function validateLibrariesFields(changes: Record<string, unknown>): string | nul
       if (!VALID_JOB_SHIP_CLASSES.has(String(job.shipClass))) {
         return `changes.jobs[${i}].shipClass must be fighter, corvette, destroyer, carrier, or freighter.`;
       }
-      if (typeof job.shipMacro !== 'string' || !job.shipMacro.trim() || job.shipMacro.length > 256) {
-        return `changes.jobs[${i}].shipMacro must be a non-empty bounded string.`;
+      if (typeof job.shipMacro !== 'string' || (!job.shipMacro.trim() && !job.shipSize) || job.shipMacro.length > 256) {
+        return `changes.jobs[${i}].shipMacro must be a bounded string (or specify shipSize).`;
       }
       for (const numKey of ['galaxyQuota', 'sectorQuota'] as const) {
         const num = job[numKey];
@@ -531,8 +553,27 @@ function validateLibrariesFields(changes: Record<string, unknown>): string | nul
           return `changes.jobs[${i}].${numKey} must be a non-negative finite number.`;
         }
       }
-      if (typeof job.taskScript !== 'string' || !job.taskScript.trim() || job.taskScript.length > 256) {
-        return `changes.jobs[${i}].taskScript must be a non-empty bounded string.`;
+      const hasOrderId = typeof job.orderId === 'string' && job.orderId.trim().length > 0 && job.orderId.length <= 256;
+      const hasTaskScript = typeof job.taskScript === 'string' && job.taskScript.trim().length > 0 && job.taskScript.length <= 256;
+      if (!hasTaskScript && !hasOrderId) {
+        return `changes.jobs[${i}] must specify a non-empty taskScript or orderId.`;
+      }
+      if (job.shipSize !== undefined && !VALID_JOB_SHIP_SIZES.has(String(job.shipSize))) {
+        return `changes.jobs[${i}].shipSize must be ship_xs, ship_s, ship_m, ship_l, or ship_xl.`;
+      }
+      if (job.locationClass !== undefined && !VALID_JOB_LOCATION_CLASSES.has(String(job.locationClass))) {
+        return `changes.jobs[${i}].locationClass must be galaxy, cluster, sector, or zone.`;
+      }
+      if (job.subordinates !== undefined) {
+        if (!Array.isArray(job.subordinates) || job.subordinates.length > 32) {
+          return `changes.jobs[${i}].subordinates must be a bounded array.`;
+        }
+        for (let si = 0; si < job.subordinates.length; si += 1) {
+          const sub = job.subordinates[si];
+          if (!isPlainRecord(sub) || typeof sub.job !== 'string' || !sub.job.trim()) {
+            return `changes.jobs[${i}].subordinates[${si}].job must be a non-empty string.`;
+          }
+        }
       }
       if (typeof job.rebuildOnDestroy !== 'boolean') {
         return `changes.jobs[${i}].rebuildOnDestroy must be boolean.`;

@@ -435,6 +435,8 @@ export const compileWaresXML = (wares: WareDef[]): string => {
   xml += `  <!-- XML Diff Patch adding to core wares database file: libraries/wares.xml -->\n`;
   xml += `  <add sel="/wares">\n`;
   wares.forEach((item) => {
+    const factoryNameAttr = item.factoryName?.trim() ? ` factoryname="${escapeXmlAttr(item.factoryName.trim())}"` : '';
+    const groupAttr = item.group?.trim() ? ` group="${escapeXmlAttr(item.group.trim())}"` : '';
     const tagsAttr = item.tags ? ` tags="${escapeXmlAttr(item.tags)}"` : '';
     const productionMethod = item.productionMethod || 'default';
     const productionNameAttr = item.productionName ? ` name="${escapeXmlAttr(item.productionName)}"` : '';
@@ -442,7 +444,7 @@ export const compileWaresXML = (wares: WareDef[]): string => {
       ? item.primaryWares.filter((ware) => String(ware?.ware || '').trim() && Number(ware?.amount) > 0)
       : [];
 
-    xml += `    <ware id="${escapeXmlAttr(item.id)}" name="${escapeXmlAttr(item.name)}" description="${escapeXmlAttr(item.description)}" transport="${escapeXmlAttr(item.transport)}" volume="${item.volume}"${tagsAttr}>\n`;
+    xml += `    <ware id="${escapeXmlAttr(item.id)}" name="${escapeXmlAttr(item.name)}" description="${escapeXmlAttr(item.description)}"${factoryNameAttr}${groupAttr} transport="${escapeXmlAttr(item.transport)}" volume="${item.volume}"${tagsAttr}>\n`;
     xml += `      <price min="${item.minPrice}" average="${item.avgPrice}" max="${item.maxPrice}" />\n`;
     xml += `      <production time="${item.prodTime}" amount="${item.prodAmount}" method="${escapeXmlAttr(productionMethod)}"${productionNameAttr}`;
     if (primaryWares.length === 0) {
@@ -455,6 +457,31 @@ export const compileWaresXML = (wares: WareDef[]): string => {
       });
       xml += `        </primary>\n`;
       xml += `      </production>\n`;
+    }
+    if (Array.isArray(item.additionalProductions)) {
+      item.additionalProductions.forEach((alt) => {
+        const altMethod = String(alt?.method || '').trim();
+        if (!altMethod) return;
+        const altNameAttr = alt.name?.trim() ? ` name="${escapeXmlAttr(alt.name.trim())}"` : '';
+        const altPrimary = Array.isArray(alt.primaryWares)
+          ? alt.primaryWares.filter((w) => String(w?.ware || '').trim() && Number(w?.amount) > 0)
+          : [];
+        xml += `      <production time="${alt.time}" amount="${alt.amount}" method="${escapeXmlAttr(altMethod)}"${altNameAttr}`;
+        if (altPrimary.length === 0) {
+          xml += ` />\n`;
+        } else {
+          xml += `>\n`;
+          xml += `        <primary>\n`;
+          altPrimary.forEach((w) => {
+            xml += `          <ware ware="${escapeXmlAttr(w.ware)}" amount="${escapeXmlAttr(String(w.amount))}" />\n`;
+          });
+          xml += `        </primary>\n`;
+          xml += `      </production>\n`;
+        }
+      });
+    }
+    if (item.componentRef?.trim()) {
+      xml += `      <component ref="${escapeXmlAttr(item.componentRef.trim())}" />\n`;
     }
     xml += `    </ware>\n`;
   });
@@ -469,15 +496,70 @@ export const compileJobsXML = (jobs: JobDef[]): string => {
   xml += `  <!-- XML Diff Patch adding new AI pilot squad to core jobs database: libraries/jobs.xml -->\n`;
   xml += `  <add sel="/jobs">\n`;
   jobs.forEach((item) => {
-    xml += `    <job id="${escapeXmlAttr(item.id)}" name="${escapeXmlAttr(item.name)}" startactive="true">\n`;
-    xml += `      <modifiers rebuild="${item.rebuildOnDestroy ? 'true' : 'false'}" />\n`;
+    const startActive = item.startActive === false ? 'false' : 'true';
+    const commandAttr = item.commandeerable !== undefined
+      ? ` commandeerable="${item.commandeerable ? 'true' : 'false'}"`
+      : '';
+    const hasExtendedOrder = Boolean(item.orderId?.trim());
+    const orderParams = Array.isArray(item.orderParams)
+      ? item.orderParams.filter((p) => String(p?.name || '').trim())
+      : [];
+    const hasLocation = Boolean(item.locationClass || item.locationMacro?.trim() || item.locationFaction?.trim());
+    const validSubs = Array.isArray(item.subordinates)
+      ? item.subordinates.filter((s) => String(s?.job || '').trim())
+      : [];
+
+    xml += `    <job id="${escapeXmlAttr(item.id)}" name="${escapeXmlAttr(item.name)}" startactive="${startActive}">\n`;
+    xml += `      <modifiers rebuild="${item.rebuildOnDestroy ? 'true' : 'false'}"${commandAttr} />\n`;
+    if (hasExtendedOrder) {
+      xml += `      <orders>\n`;
+      if (orderParams.length === 0) {
+        xml += `        <order order="${escapeXmlAttr(item.orderId!.trim())}" default="true" />\n`;
+      } else {
+        xml += `        <order order="${escapeXmlAttr(item.orderId!.trim())}" default="true">\n`;
+        orderParams.forEach((p) => {
+          xml += `          <param name="${escapeXmlAttr(p.name.trim())}" value="${escapeXmlAttr(p.value ?? '')}" />\n`;
+        });
+        xml += `        </order>\n`;
+      }
+      xml += `      </orders>\n`;
+    }
+    if (item.basket?.trim()) {
+      xml += `      <basket basket="${escapeXmlAttr(item.basket.trim())}" />\n`;
+    }
+    if (item.categoryTags?.trim()) {
+      const catSize = item.shipSize ? ` size="${escapeXmlAttr(item.shipSize)}"` : '';
+      xml += `      <category faction="${escapeXmlAttr(item.faction)}" tags="${escapeXmlAttr(item.categoryTags.trim())}"${catSize} />\n`;
+    }
     xml += `      <quota galaxy="${item.galaxyQuota}" sector="${item.sectorQuota}" />\n`;
+    if (hasLocation) {
+      const lClass = item.locationClass || 'galaxy';
+      const lMacro = item.locationMacro?.trim() ? ` macro="${escapeXmlAttr(item.locationMacro.trim())}"` : '';
+      const lFaction = item.locationFaction?.trim() ? ` faction="${escapeXmlAttr(item.locationFaction.trim())}"` : '';
+      xml += `      <location class="${escapeXmlAttr(lClass)}"${lMacro}${lFaction} />\n`;
+    }
+    if (item.buildAtShipyard !== undefined) {
+      xml += `      <environment buildatshipyard="${item.buildAtShipyard ? 'true' : 'false'}" />\n`;
+    }
     xml += `      <expirationtime min="7200" max="14400" />\n`;
-    if (item.taskScript) xml += `      <task task="${escapeXmlAttr(item.taskScript)}" />\n`;
+    if (!hasExtendedOrder && item.taskScript) {
+      xml += `      <task task="${escapeXmlAttr(item.taskScript)}" />\n`;
+    }
+    const selectSizeAttr = item.shipSize ? ` size="${escapeXmlAttr(item.shipSize)}"` : '';
     xml += `      <ship macro="${escapeXmlAttr(item.shipMacro)}">\n`;
-    xml += `        <select faction="${escapeXmlAttr(item.faction)}" tags="[military, ${escapeXmlAttr(item.shipClass)}]" />\n`;
+    xml += `        <select faction="${escapeXmlAttr(item.faction)}" tags="[military, ${escapeXmlAttr(item.shipClass)}]"${selectSizeAttr} />\n`;
     xml += `        <owner exact="${escapeXmlAttr(item.faction)}" overridenpc="true" />\n`;
     xml += `      </ship>\n`;
+    if (validSubs.length > 0) {
+      xml += `      <subordinates>\n`;
+      validSubs.forEach((sub) => {
+        const assignAttr = sub.assignment?.trim() ? ` assignment="${escapeXmlAttr(sub.assignment.trim())}"` : '';
+        const groupAttr = typeof sub.group === 'number' && Number.isFinite(sub.group) ? ` group="${Math.min(10, Math.max(1, Math.round(sub.group)))}"` : '';
+        const rebuildAttr = sub.rebuild !== undefined ? ` rebuild="${sub.rebuild ? 'true' : 'false'}"` : '';
+        xml += `        <subordinate job="${escapeXmlAttr(sub.job.trim())}"${assignAttr}${groupAttr}${rebuildAttr} />\n`;
+      });
+      xml += `      </subordinates>\n`;
+    }
     xml += `    </job>\n`;
   });
   xml += `  </add>\n`;

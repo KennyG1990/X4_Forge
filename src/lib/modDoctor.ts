@@ -329,7 +329,10 @@ export function runModDoctor(
 
     active(workspace.jobs).forEach(job => {
       const filePath = 'libraries/jobs.xml';
-      const missing = ['id', 'name', 'faction', 'shipMacro', 'taskScript'].filter(key => !String((job as any)[key] || '').trim());
+      const missing = ['id', 'name', 'faction', 'shipMacro'].filter(key => !String((job as any)[key] || '').trim());
+      if (!String(job.taskScript || '').trim() && !String(job.orderId || '').trim()) {
+        missing.push('taskScript/orderId');
+      }
       if (missing.length > 0) {
         push(diagnostics, {
           severity: 'error',

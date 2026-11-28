@@ -148,7 +148,7 @@ export default function WorkspaceNavigationBar({
                   onClick={() => onNavigate(id)}
                   aria-label={item.label}
                   className={`h-[28px] shrink-0 border px-2 inline-flex items-center gap-1.5 text-[11.5px] font-medium transition-colors cursor-pointer ${severityClass}`}
-                  title={`${item.label} (drag to reorder)`}
+                  title={item.label}
                 >
                   <Icon className="w-3.5 h-3.5 shrink-0" />
                   <span className={`${layout.density === 'compact' ? 'hidden xl:inline text-[11.5px]' : 'hidden lg:inline text-[11.5px]'}`}>

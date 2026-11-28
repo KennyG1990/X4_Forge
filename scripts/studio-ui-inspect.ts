@@ -21,7 +21,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chromium, type Frame, type Page } from '@playwright/test';
+import { chromium, type Frame, type Page, type Request } from '@playwright/test';
 import { ACTION_OPERATION_ID_HEADER, createActionOperationId } from '../shared/actionOperationId';
 import { buildTemplateWorkspace } from '../src/lib/modTemplates';
 import type { WorkspaceView } from '../src/lib/experienceMode';
@@ -1161,8 +1161,30 @@ async function readShellDiagnostics(page: Page, shell: InspectShellMode): Promis
   });
 }
 
-async function settleLayout(frame: Frame): Promise<void> {
-  await frame.waitForTimeout(250);
+export async function waitForApiQuiet(
+  inFlight: ReadonlySet<unknown>,
+  maxWaitMs = 5_000,
+  quietMs = 150,
+): Promise<boolean> {
+  const deadline = Date.now() + maxWaitMs;
+  let quietSince: number | null = inFlight.size === 0 ? Date.now() : null;
+  while (Date.now() < deadline) {
+    if (inFlight.size === 0) {
+      if (quietSince === null) quietSince = Date.now();
+      if (Date.now() - quietSince >= quietMs) return true;
+    } else {
+      quietSince = null;
+    }
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  return false;
+}
+
+async function settleLayout(frame: Frame, inFlightApiRequests?: ReadonlySet<unknown>): Promise<void> {
+  await frame.waitForTimeout(150);
+  if (inFlightApiRequests) {
+    await waitForApiQuiet(inFlightApiRequests, 5_000, 150);
+  }
   await frame.evaluate(() => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))).catch(() => undefined);
 }
 
@@ -1195,6 +1217,7 @@ export async function runVisualInspection(
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
   const requestFailures: string[] = [];
+  const inFlightApiRequests = new Set<Request>();
   const httpServerErrors: Array<{ url: string; status: number }> = [];
   const httpClientResponses: Array<{ url: string; status: number }> = [];
 
@@ -1216,7 +1239,20 @@ export async function runVisualInspection(
     page.on('pageerror', (err) => {
       pageErrors.push(err.message);
     });
+    page.on('request', (req) => {
+      try {
+        if (new URL(req.url()).pathname.startsWith('/api/')) {
+          inFlightApiRequests.add(req);
+        }
+      } catch {
+        /* ignore non-HTTP/data URLs */
+      }
+    });
+    page.on('requestfinished', (req) => {
+      inFlightApiRequests.delete(req);
+    });
     page.on('requestfailed', (req) => {
+      inFlightApiRequests.delete(req);
       requestFailures.push(`${req.method()} ${req.url()} (${req.failure()?.errorText ?? 'failed'})`);
     });
     page.on('response', (res) => {
@@ -1289,7 +1325,7 @@ export async function runVisualInspection(
       if (rustBootstrapNotice) {
         notes.push(`Rust Slice 3A pre-bootstrap notice in #forge-frame: ${rustBootstrapNotice}`);
       }
-      await settleLayout(frame);
+      await settleLayout(frame, inFlightApiRequests);
       const { snapshot, selectorMatches } = await collectFrameSnapshot(frame, opts.selector);
       const geometry = analyzeGeometryDefects(snapshot);
       const shellDiag = await readShellDiagnostics(page, opts.shell);
@@ -1332,7 +1368,7 @@ export async function runVisualInspection(
 
     for (const vp of opts.viewports) {
       await page.setViewportSize({ width: vp.width, height: vp.height });
-      await settleLayout(frame);
+      await settleLayout(frame, inFlightApiRequests);
 
       for (const viewId of opts.views) {
         const notes: string[] = [];
@@ -1550,6 +1586,13 @@ export function runUnitSelftest(): void {
 
 async function runFullSelftest(): Promise<void> {
   runUnitSelftest();
+
+  assert.equal(await waitForApiQuiet(new Set(), 500, 30), true, 'empty in-flight set should settle immediately');
+  const draining = new Set(['req1']);
+  setTimeout(() => draining.delete('req1'), 60);
+  assert.equal(await waitForApiQuiet(draining, 1_000, 40), true, 'draining in-flight set should settle after completion');
+  const stuck = new Set(['hung']);
+  assert.equal(await waitForApiQuiet(stuck, 120, 40), false, 'stuck in-flight set should hit bounded timeout');
 
   const scratch = fs.mkdtempSync(path.join(physicalTempBase(), 'x4-ui-inspect-e2e-'));
   try {
