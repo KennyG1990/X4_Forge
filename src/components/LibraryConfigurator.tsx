@@ -26,6 +26,11 @@ import type {
 } from '../types';
 import ObjectIndexPicker, { type IndexItem } from './ObjectIndexPicker';
 import { toast } from '../lib/uiDialogs';
+import {
+  indexSourceBackedAiScripts,
+  indexSourceBackedLibraries,
+  type SourceBackedLibraryItem,
+} from '../lib/domainSourceIndex';
 import { openOrMaterializeInNativeEditor } from '../lib/nativeEditor';
 import { scanLibraryConflictsWithDisk, type ConflictWarning } from '../lib/libraryConflicts';
 import {
@@ -118,6 +123,7 @@ export default function LibraryConfigurator({
   const [addingCollision, setAddingCollision] = useState<IndexItem | null>(null);
   const [addingCommitBusy, setAddingCommitBusy] = useState(false);
   const addingSessionRef = useRef(0);
+  const [selectedSourceKey, setSelectedSourceKey] = useState<string | null>(null);
 
   const wares = useMemo(() => workspace.wares || [], [workspace.wares]);
   const jobs = useMemo(() => workspace.jobs || [], [workspace.jobs]);
@@ -125,16 +131,28 @@ export default function LibraryConfigurator({
   const baskets = useMemo(() => parseBasketPatchBlocks(xmlPatches), [xmlPatches]);
   const godEntries = useMemo(() => parseGodPatchBlocks(xmlPatches), [xmlPatches]);
 
+  const sourceLibs = useMemo(
+    () => indexSourceBackedLibraries(workspace),
+    [workspace],
+  );
+  const sourceAiScripts = useMemo(
+    () => indexSourceBackedAiScripts(workspace),
+    [workspace],
+  );
+
   const workspaceOrderIds = useMemo(
     () =>
       Array.from(
-        new Set(
-          (workspace.aiScripts || [])
+        new Set([
+          ...(workspace.aiScripts || [])
             .map(s => s.order?.id?.trim())
             .filter((v): v is string => Boolean(v)),
-        ),
+          ...sourceAiScripts
+            .map(s => s.order?.id?.trim())
+            .filter((v): v is string => Boolean(v)),
+        ]),
       ),
-    [workspace.aiScripts],
+    [workspace.aiScripts, sourceAiScripts],
   );
 
   const economyDiagnostics = useMemo(
@@ -190,6 +208,7 @@ export default function LibraryConfigurator({
     };
     const next = [...wares, nWare];
     saveWares(next);
+    setSelectedSourceKey(null);
     setActiveItemIndex(wares.length);
   };
 
@@ -209,6 +228,7 @@ export default function LibraryConfigurator({
     };
     const next = [...jobs, nJob];
     saveJobs(next);
+    setSelectedSourceKey(null);
     setActiveItemIndex(jobs.length);
   };
 
@@ -221,6 +241,7 @@ export default function LibraryConfigurator({
     }
     const starter = createStarterBasket(id, wares[0]?.id || 'energycells');
     savePatches(upsertBasketPatchBlock(xmlPatches, starter));
+    setSelectedSourceKey(null);
     setActiveItemIndex(baskets.length);
   };
 
@@ -236,6 +257,7 @@ export default function LibraryConfigurator({
         ? createStarterGodProduct(id, wares[0]?.id || 'energycells')
         : createStarterGodStation(id);
     savePatches(upsertGodPatchBlock(xmlPatches, starter));
+    setSelectedSourceKey(null);
     setActiveItemIndex(godEntries.length);
   };
 
@@ -396,6 +418,19 @@ export default function LibraryConfigurator({
   const activeJob = activeSubTab === 'jobs' ? jobs[activeItemIndex] : undefined;
   const activeBasket = activeSubTab === 'baskets' ? baskets[activeItemIndex] : undefined;
   const activeGod = activeSubTab === 'god' ? godEntries[activeItemIndex] : undefined;
+  const activeSourceItems: SourceBackedLibraryItem[] = sourceLibs[activeSubTab];
+  const editableCountForTab =
+    activeSubTab === 'wares'
+      ? wares.length
+      : activeSubTab === 'jobs'
+        ? jobs.length
+        : activeSubTab === 'baskets'
+          ? baskets.length
+          : godEntries.length;
+  const activeSourceItem: SourceBackedLibraryItem | null =
+    (selectedSourceKey ? activeSourceItems.find(item => item.key === selectedSourceKey) : null) ||
+    (editableCountForTab === 0 ? activeSourceItems[0] || null : null);
+
   const activeId =
     activeSubTab === 'wares'
       ? activeWare?.id
@@ -408,6 +443,9 @@ export default function LibraryConfigurator({
   const projectPath = `libraries/${activeSubTab}.xml`;
 
   const compiledPreviewXml = useMemo(() => {
+    if (activeSourceItem) {
+      return activeSourceItem.fullFileXml;
+    }
     if (activeSubTab === 'wares') {
       const diffXml = compileWaresXML(wares.filter(w => w.includeInBuild !== false));
       return isPatchMode ? diffXml : stripDiffWrapper(diffXml, 'wares');
@@ -464,7 +502,7 @@ export default function LibraryConfigurator({
       xmlPatches.filter(p => p.targetFile === 'libraries/god.xml'),
       'libraries/god.xml',
     );
-  }, [activeSubTab, baskets, godEntries, isPatchMode, jobs, wares, xmlPatches]);
+  }, [activeSourceItem, activeSubTab, baskets, godEntries, isPatchMode, jobs, wares, xmlPatches]);
 
   const activeItemDiskWarnings = activeId
     ? warnings.filter(w => w.affectedIds.includes(activeId))
@@ -476,6 +514,7 @@ export default function LibraryConfigurator({
   const switchSubTab = (tab: LibrarySubTab) => {
     setActiveSubTab(tab);
     setActiveItemIndex(0);
+    setSelectedSourceKey(null);
     cancelAdd();
   };
 
@@ -492,7 +531,7 @@ export default function LibraryConfigurator({
             X4 Economy &amp; Population Libraries
           </span>
           <StatusPill tone={economyDiagnostics.some(d => d.severity === 'error') ? 'error' : 'info'}>
-            {wares.length}W · {baskets.length}B · {jobs.length}J · {godEntries.length}G
+            {wares.length + sourceLibs.wares.length}W · {baskets.length + sourceLibs.baskets.length}B · {jobs.length + sourceLibs.jobs.length}J · {godEntries.length + sourceLibs.god.length}G
           </StatusPill>
         </div>
 
@@ -687,7 +726,7 @@ export default function LibraryConfigurator({
 
           <div className="flex-1 overflow-y-auto p-2.5 space-y-3 text-xs custom-scrollbar">
             {activeSubTab === 'wares' ? (
-              wares.length === 0 ? (
+              wares.length === 0 && activeSourceItems.length === 0 ? (
                 <div className="text-xs text-[#687385] p-4 text-center">
                   No wares catalogued yet. Click ADD above to create one.
                 </div>
@@ -709,12 +748,15 @@ export default function LibraryConfigurator({
                             itemWarn.some(w => w.severity === 'error') ||
                             economyDiagnostics.some(d => d.targetId === item.id && d.severity === 'error');
                           const hasWarn = itemWarn.some(w => w.severity === 'warning');
-                          const isSelected = activeItemIndex === idx;
+                          const isSelected = !activeSourceItem && activeItemIndex === idx;
                           return (
                             <button
                               key={item.id}
                               type="button"
-                              onClick={() => setActiveItemIndex(idx)}
+                              onClick={() => {
+                                setSelectedSourceKey(null);
+                                setActiveItemIndex(idx);
+                              }}
                               className={`w-full text-left py-1.5 px-2 rounded transition-colors flex items-center justify-between gap-2 cursor-pointer ${
                                 isSelected
                                   ? hasError
@@ -738,7 +780,7 @@ export default function LibraryConfigurator({
                 })
               )
             ) : activeSubTab === 'baskets' ? (
-              baskets.length === 0 ? (
+              baskets.length === 0 && activeSourceItems.length === 0 ? (
                 <div className="text-xs text-[#687385] p-4 text-center">
                   No trade baskets authored yet. Click ADD to define one for <code className="font-mono">libraries/baskets.xml</code>.
                 </div>
@@ -748,9 +790,12 @@ export default function LibraryConfigurator({
                     <button
                       key={basket.patchId || basket.id}
                       type="button"
-                      onClick={() => setActiveItemIndex(idx)}
+                      onClick={() => {
+                        setSelectedSourceKey(null);
+                        setActiveItemIndex(idx);
+                      }}
                       className={`w-full text-left py-1.5 px-2.5 rounded transition-colors flex items-center justify-between gap-2 cursor-pointer ${
-                        activeItemIndex === idx
+                        !activeSourceItem && activeItemIndex === idx
                           ? 'bg-blue-500/15 text-blue-200 font-semibold border-l-2 border-blue-500'
                           : 'text-[#a0aab8] hover:bg-white/[0.04] hover:text-white'
                       }`}
@@ -764,7 +809,7 @@ export default function LibraryConfigurator({
                 </div>
               )
             ) : activeSubTab === 'jobs' ? (
-              jobs.length === 0 ? (
+              jobs.length === 0 && activeSourceItems.length === 0 ? (
                 <div className="text-xs text-[#687385] p-4 text-center">
                   No NPC jobs catalogued yet. Click ADD above to create one.
                 </div>
@@ -785,12 +830,15 @@ export default function LibraryConfigurator({
                             itemWarn.some(w => w.severity === 'error') ||
                             economyDiagnostics.some(d => d.targetId === item.id && d.severity === 'error');
                           const hasWarn = itemWarn.some(w => w.severity === 'warning');
-                          const isSelected = activeItemIndex === idx;
+                          const isSelected = !activeSourceItem && activeItemIndex === idx;
                           return (
                             <button
                               key={item.id}
                               type="button"
-                              onClick={() => setActiveItemIndex(idx)}
+                              onClick={() => {
+                                setSelectedSourceKey(null);
+                                setActiveItemIndex(idx);
+                              }}
                               className={`w-full text-left py-1.5 px-2 rounded transition-colors flex items-center justify-between gap-2 cursor-pointer ${
                                 isSelected
                                   ? hasError
@@ -813,7 +861,7 @@ export default function LibraryConfigurator({
                   );
                 })
               )
-            ) : godEntries.length === 0 ? (
+            ) : godEntries.length === 0 && activeSourceItems.length === 0 ? (
               <div className="text-xs text-[#687385] p-4 text-center">
                 No God product factories or station spawns defined yet.
               </div>
@@ -836,9 +884,12 @@ export default function LibraryConfigurator({
                           <button
                             key={entry.patchId || entry.id}
                             type="button"
-                            onClick={() => setActiveItemIndex(idx)}
+                            onClick={() => {
+                              setSelectedSourceKey(null);
+                              setActiveItemIndex(idx);
+                            }}
                             className={`w-full text-left py-1.5 px-2 rounded transition-colors flex items-center justify-between gap-2 cursor-pointer ${
-                              activeItemIndex === idx
+                              !activeSourceItem && activeItemIndex === idx
                                 ? 'bg-blue-500/15 text-blue-200 font-semibold border-l-2 border-blue-500'
                                 : 'text-[#a0aab8] hover:bg-white/[0.04] hover:text-white'
                             }`}
@@ -854,6 +905,46 @@ export default function LibraryConfigurator({
                   </div>
                 );
               })
+            )}
+
+            {activeSourceItems.length > 0 && (
+              <div
+                data-testid={`library-source-list-${activeSubTab}`}
+                className="space-y-1 pt-2 border-t border-white/[0.06]"
+              >
+                <div className="text-[11px] font-semibold text-emerald-300 uppercase flex items-center justify-between py-1 border-b border-white/[0.06]">
+                  <span>Source-Backed (Disk)</span>
+                  <span className="text-[#687385]">{activeSourceItems.length}</span>
+                </div>
+                <div className="pl-2 border-l border-emerald-500/30 space-y-1">
+                  {activeSourceItems.map(item => {
+                    const selected = activeSourceItem?.key === item.key;
+                    return (
+                      <button
+                        key={item.key}
+                        type="button"
+                        data-testid={`library-source-item-${item.id}`}
+                        onClick={() => setSelectedSourceKey(item.key)}
+                        className={`w-full text-left py-1.5 px-2 rounded transition-colors cursor-pointer ${
+                          selected
+                            ? 'bg-emerald-500/15 text-emerald-200 font-semibold border-l-2 border-emerald-500'
+                            : 'text-[#a0aab8] hover:bg-white/[0.04] hover:text-white'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1.5">
+                          <span className="truncate font-mono text-[11px]">{item.label}</span>
+                          <span className="shrink-0 rounded bg-emerald-500/15 border border-emerald-500/30 px-1.5 py-0.5 text-[11px] font-mono text-emerald-300">
+                            {item.subKind || item.op || 'disk'}
+                          </span>
+                        </div>
+                        <div className="mt-0.5 truncate text-[11px] font-mono text-[#687385]">
+                          {item.summary}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             )}
           </div>
 
@@ -912,7 +1003,85 @@ export default function LibraryConfigurator({
 
         {/* Center portion: Visual controls detail editor sheet */}
         <div className="flex-1 min-w-0 flex flex-col overflow-hidden bg-[#0c0e12]">
-          {!activeId ? (
+          {activeSourceItem ? (
+            <div data-testid="library-source-backed-panel" className="flex-1 flex flex-col min-h-0 overflow-hidden">
+              <div className="px-4 py-3 border-b border-[#262c36] shrink-0 flex items-center justify-between gap-2 bg-[#11141a]">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="shrink-0 rounded border border-emerald-500/40 bg-emerald-500/15 px-1.5 py-0.5 text-[11px] font-mono text-emerald-300">
+                      Source-Backed (Disk)
+                    </span>
+                    <h2 className="text-sm font-semibold text-[#eef2f7] truncate">
+                      {activeSourceItem.label}
+                    </h2>
+                  </div>
+                  <p className="text-[11px] text-[#687385] font-mono mt-0.5 truncate">
+                    {activeSourceItem.path} · ID: {activeSourceItem.id} · Preserved byte-losslessly on deploy
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const result = await openOrMaterializeInNativeEditor(workspace, activeSourceItem.path);
+                    toast(result.message, result.ok ? 'success' : 'error');
+                  }}
+                  className="px-2.5 py-1.5 rounded border border-emerald-500/35 bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-200 text-[11px] font-medium cursor-pointer inline-flex items-center gap-1.5 shrink-0"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  Open File
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
+                {activeSourceItem.parseError && (
+                  <div className="rounded-lg border border-rose-500/40 bg-rose-950/25 p-3 text-xs text-rose-200">
+                    <span className="font-semibold mr-2">XML Parse Error:</span>
+                    <span className="font-mono">{activeSourceItem.parseError}</span>
+                  </div>
+                )}
+
+                <div className={ECO_CARD_CLS}>
+                  <div className={ECO_SECTION_TITLE_CLS}>Indexed Disk Entry</div>
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 text-[11px]">
+                    <div className="rounded border border-[#262c36] bg-[#0a0c10] p-2.5">
+                      <div className="text-[#687385]">Entry ID</div>
+                      <div className="font-mono text-[#eef2f7] mt-0.5 truncate">{activeSourceItem.id}</div>
+                    </div>
+                    <div className="rounded border border-[#262c36] bg-[#0a0c10] p-2.5">
+                      <div className="text-[#687385]">Kind</div>
+                      <div className="font-mono text-[#eef2f7] mt-0.5">
+                        {activeSourceItem.entryKind}{activeSourceItem.subKind ? ` (${activeSourceItem.subKind})` : ''}
+                      </div>
+                    </div>
+                    <div className="rounded border border-[#262c36] bg-[#0a0c10] p-2.5">
+                      <div className="text-[#687385]">Source File</div>
+                      <div className="font-mono text-[#eef2f7] mt-0.5 truncate">{activeSourceItem.path}</div>
+                    </div>
+                    <div className="rounded border border-[#262c36] bg-[#0a0c10] p-2.5">
+                      <div className="text-[#687385]">Summary</div>
+                      <div className="font-mono text-[#eef2f7] mt-0.5 truncate">{activeSourceItem.summary}</div>
+                    </div>
+                  </div>
+                  {activeSourceItem.sel && (
+                    <div className="mt-2 rounded border border-[#262c36] bg-[#0a0c10] px-2.5 py-2 text-[11px] font-mono text-[#cbd5e1] break-all">
+                      <span className="text-[#687385] mr-2">sel:</span>
+                      {activeSourceItem.sel}
+                    </div>
+                  )}
+                </div>
+
+                <div className={ECO_CARD_CLS}>
+                  <div className={ECO_SECTION_TITLE_CLS}>Exact Source XML Fragment</div>
+                  <pre
+                    data-testid="library-source-snippet"
+                    className="rounded border border-[#262c36] bg-[#090b0f] p-3 font-mono text-[11px] leading-relaxed text-[#cbd5e1] overflow-x-auto whitespace-pre"
+                  >
+                    {activeSourceItem.rawSnippet}
+                  </pre>
+                </div>
+              </div>
+            </div>
+          ) : !activeId ? (
             <EmptyState
               icon={<Database className="w-5 h-5" />}
               title={`No ${activeSubTab} entry selected`}

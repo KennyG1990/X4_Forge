@@ -1,6 +1,22 @@
 import type { ModWorkspace } from '../types';
 import type { ReadinessStage, ReadinessStatus } from './readiness';
 
+function detectSourceBackedContent(workspace: Pick<ModWorkspace, 'passthroughFiles'>) {
+  let hasSourceAiScripts = false;
+  let hasSourceLibraries = false;
+  let hasSourceDiffs = false;
+  for (const pf of workspace.passthroughFiles || []) {
+    if (!pf || typeof pf.path !== 'string' || pf.omitted || pf.contentEncoding === 'base64') continue;
+    if (typeof pf.content !== 'string' || !pf.content.trim()) continue;
+    const rel = pf.path.replace(/\\/g, '/').replace(/^\/+/, '');
+    if (!/\.xml$/i.test(rel)) continue;
+    if (/^aiscripts\/.+\.xml$/i.test(rel)) hasSourceAiScripts = true;
+    if (/^libraries\/(wares|baskets|jobs|god)\.xml$/i.test(rel)) hasSourceLibraries = true;
+    if (/<diff\b/i.test(pf.content)) hasSourceDiffs = true;
+  }
+  return { hasSourceAiScripts, hasSourceLibraries, hasSourceDiffs };
+}
+
 export const EXPERIENCE_MODE_KEY = 'x4_forge_experience_mode';
 export type ExperienceMode = 'beginner' | 'expert';
 export type BeginnerStep = 'idea' | 'customize' | 'validate' | 'deploy' | 'confirm';
@@ -19,13 +35,17 @@ export function parseExperienceMode(raw: string | null | undefined): ExperienceM
 }
 
 export function workspaceHasBeginnerContent(workspace: ModWorkspace): boolean {
+  const source = detectSourceBackedContent(workspace);
   return workspace.nodes.some(node => node.type !== 'comment')
     || workspace.uiWidgets.length > 0
     || (workspace.xmlPatches?.length ?? 0) > 0
+    || source.hasSourceDiffs
     || (workspace.tFiles?.length ?? 0) > 0
     || (workspace.aiScripts?.length ?? 0) > 0
+    || source.hasSourceAiScripts
     || (workspace.wares?.length ?? 0) > 0
     || (workspace.jobs?.length ?? 0) > 0
+    || source.hasSourceLibraries
     || Boolean(workspace.customLua?.trim());
 }
 
@@ -33,14 +53,18 @@ export function beginnerEditorForWorkspace(
   workspace: ModWorkspace,
   selection: 'node' | 'widget' | null = null,
 ): WorkspaceView {
+  const source = detectSourceBackedContent(workspace);
+  const editablePatches = workspace.xmlPatches?.length ?? 0;
   if (selection === 'widget') return 'ui-designer';
   if (selection === 'node') return 'blueprint';
   if (workspace.nodes.some(node => node.type !== 'comment')) return 'blueprint';
   if (workspace.uiWidgets.length > 0 || workspace.customLua?.trim()) return 'ui-designer';
-  if ((workspace.xmlPatches?.length ?? 0) > 0) return 'xmlpatch';
+  if (((workspace.aiScripts?.length ?? 0) > 0 || source.hasSourceAiScripts) && editablePatches === 0) return 'aiscripts';
+  if (((workspace.wares?.length ?? 0) > 0 || (workspace.jobs?.length ?? 0) > 0 || source.hasSourceLibraries) && editablePatches === 0) return 'libraries';
+  if (editablePatches > 0 || source.hasSourceDiffs) return 'xmlpatch';
   if ((workspace.tFiles?.length ?? 0) > 0) return 'translation';
-  if ((workspace.aiScripts?.length ?? 0) > 0) return 'aiscripts';
-  if ((workspace.wares?.length ?? 0) > 0 || (workspace.jobs?.length ?? 0) > 0) return 'libraries';
+  if ((workspace.aiScripts?.length ?? 0) > 0 || source.hasSourceAiScripts) return 'aiscripts';
+  if ((workspace.wares?.length ?? 0) > 0 || (workspace.jobs?.length ?? 0) > 0 || source.hasSourceLibraries) return 'libraries';
   return 'blueprint';
 }
 
@@ -80,6 +104,9 @@ export function runExperienceModeSelftest() {
   ok('translation_routes_to_tfile_editor', beginnerEditorForWorkspace(workspace({ tFiles: [{ languageId: '44', fileName: '0001-L044.xml', pages: [] }] })) === 'translation');
   ok('selected_widget_wins_in_mixed_workspace', beginnerEditorForWorkspace(workspace({ nodes: [{ id: 'n', type: 'action', xmlTag: 'set_value', label: 'Set', x: 0, y: 0, properties: {}, propertiesSchema: [], inputs: [], outputs: [], includeInBuild: true }], uiWidgets: [{ id: 'u', type: 'button', label: 'Button', x: 0, y: 0, w: 1, h: 1, properties: {} }] }), 'widget') === 'ui-designer');
   ok('comment_only_is_empty', !workspaceHasBeginnerContent(workspace({ nodes: [{ id: 'c', type: 'comment', xmlTag: 'comment', label: 'Note', x: 0, y: 0, properties: {}, propertiesSchema: [], inputs: [], outputs: [], includeInBuild: false }] })));
+  const passthroughAiWs = workspace({ passthroughFiles: [{ path: 'aiscripts/order.custom.xml', content: '<aiscript name="order.custom"><attention min="unknown"><actions/></attention></aiscript>', reason: 'partial' }] });
+  ok('passthrough_aiscript_has_beginner_content', workspaceHasBeginnerContent(passthroughAiWs));
+  ok('passthrough_aiscript_routes_to_aiscripts', beginnerEditorForWorkspace(passthroughAiWs) === 'aiscripts');
   ok('package_failure_cannot_be_green', combinedValidationStatus([stage('graph', 'pass'), stage('package', 'fail')]) === 'fail');
   ok('offline_package_cannot_be_green', combinedValidationStatus([stage('graph', 'pass'), stage('package', 'unavailable')]) === 'unavailable');
 

@@ -17,15 +17,18 @@ import {
   Copy,
   PlusCircle,
   FileText,
-  GitCompare
+  GitCompare,
+  ExternalLink,
 } from 'lucide-react';
 import { ModWorkspace } from '../types';
 import { compileDiffDocument as compileSharedDiffDocument } from '../lib/modCompiler';
+import { indexSourceBackedDiffFiles } from '../lib/domainSourceIndex';
 import { escapeXPathLiteral } from '../lib/xpathSynth';
 import ObjectIndexPicker from './ObjectIndexPicker';
 import XPathInput from './XPathInput';
 import BulkTransformPanel, { type BulkWorkspaceBinding, type GuidedHullTarget } from './BulkTransformPanel';
-import { openNativeTextDiff } from '../lib/nativeEditor';
+import { openNativeTextDiff, openOrMaterializeInNativeEditor } from '../lib/nativeEditor';
+import { toast } from '../lib/uiDialogs';
 
 interface XMLPatchSystemProps {
   workspace: ModWorkspace;
@@ -224,6 +227,14 @@ export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceB
 
   const patchBlocks = workspace.xmlPatches || [];
   const filteredBlocks = patchBlocks.filter(b => !b.targetFile || b.targetFile === targetFile);
+  const sourceDiffFiles = useMemo(
+    () => indexSourceBackedDiffFiles(workspace),
+    [workspace],
+  );
+  const activeSourceDiff = useMemo(
+    () => sourceDiffFiles.find(f => f.path.toLowerCase() === targetFile.toLowerCase()) || null,
+    [sourceDiffFiles, targetFile],
+  );
 
   const readDiffAuthority = (): DiffWorkspaceAuthority => {
     const { workspaceId, authorityEpoch } = readWorkspaceBinding();
@@ -473,13 +484,28 @@ export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceB
     };
   }, [parsedBaseDoc, baseFileSession, targetFile, effectiveSources]);
 
+  const previewSourceBlocks = useMemo<PatchBlock[]>(() => {
+    if (filteredBlocks.length > 0 || !activeSourceDiff) return filteredBlocks;
+    return activeSourceDiff.ops.map(op => ({
+      id: `${activeSourceDiff.id}_op_${op.index}`,
+      sel: op.sel,
+      action: op.op,
+      content: op.content,
+      note: activeSourceDiff.path,
+      pos: op.pos,
+      attrType: op.attrType,
+      targetFile: activeSourceDiff.path,
+      includeInBuild: true,
+    }));
+  }, [filteredBlocks, activeSourceDiff]);
+
   const applyPatchesResult = useMemo(() => {
     if (!parsedBaseDoc) return { doc: null, errors: {} as Record<string, string> };
     
     const doc = parsedBaseDoc.cloneNode(true) as Document;
     const errors: Record<string, string> = {};
 
-    filteredBlocks.forEach(b => {
+    previewSourceBlocks.forEach(b => {
       if (!b.sel || b.includeInBuild === false) return;
       try {
         const nodes = doc.evaluate(
@@ -588,7 +614,7 @@ export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceB
     });
 
     return { doc, errors };
-  }, [parsedBaseDoc, filteredBlocks]);
+  }, [parsedBaseDoc, previewSourceBlocks]);
 
   const validateBlockXPath = (b: PatchBlock) => {
     if (baseFileLoading) {
@@ -937,11 +963,15 @@ export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceB
   // modCompiler.compileDiffDocument (which escapes sel/attrs and emits the
   // attrType + attribute-replace forms). A local duplicate of this function
   // silently diverged once (dropped type="@attr") — do not reintroduce one.
-  const compileDiffDocument = (): string =>
-    compileSharedDiffDocument(
+  const compileDiffDocument = (): string => {
+    if (filteredBlocks.length === 0 && activeSourceDiff) {
+      return activeSourceDiff.rawXml;
+    }
+    return compileSharedDiffDocument(
       patchBlocks.filter(b => !b.targetFile || b.targetFile === targetFile),
       targetFile
     );
+  };
 
   const copyToClipboard = () => {
     navigator.clipboard.writeText(compileDiffDocument());
@@ -1082,69 +1112,131 @@ export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceB
                 </p>
 
                 <div className="space-y-3 font-mono text-[11px] max-h-[460px] overflow-y-auto custom-scrollbar pr-1">
-                  {patchBlocks.length === 0 ? (
+                  {patchBlocks.length === 0 && sourceDiffFiles.length === 0 ? (
                     <div className="text-xs text-[#687385] p-4 text-center border border-[#262c36] bg-[#090b0f] rounded">
                       No XML patches registered yet. Use the Patch Blocks workbench to add a diff operation.
                     </div>
                   ) : (
-                    Array.from(new Set(patchBlocks.map(p => p.targetFile || targetFile))).map(tFile => {
-                      const filePatches = patchBlocks.filter(p => (p.targetFile || targetFile) === tFile);
-                      return (
-                        <div key={tFile} className="space-y-1.5">
-                          <button
-                            onClick={() => setTargetFile(tFile)}
-                            className={`w-full p-2 rounded font-semibold text-left flex items-center gap-1.5 transition-colors border cursor-pointer ${
-                              targetFile === tFile ? 'bg-emerald-500/15 text-emerald-200 border-emerald-500/30' : 'bg-[#090b0f] text-[#a0aab8] border-[#262c36] hover:text-white'
-                            }`}
-                          >
-                            <span className="truncate flex-1">{tFile}</span>
-                            <span className="text-[11px] bg-[#171b23] px-1.5 rounded text-[#eef2f7]">{filePatches.length}</span>
-                          </button>
+                    <>
+                      {Array.from(new Set(patchBlocks.map(p => p.targetFile || targetFile))).map(tFile => {
+                        const filePatches = patchBlocks.filter(p => (p.targetFile || targetFile) === tFile);
+                        return (
+                          <div key={tFile} className="space-y-1.5">
+                            <button
+                              onClick={() => setTargetFile(tFile)}
+                              className={`w-full p-2 rounded font-semibold text-left flex items-center gap-1.5 transition-colors border cursor-pointer ${
+                                targetFile === tFile ? 'bg-emerald-500/15 text-emerald-200 border-emerald-500/30' : 'bg-[#090b0f] text-[#a0aab8] border-[#262c36] hover:text-white'
+                              }`}
+                            >
+                              <span className="truncate flex-1">{tFile}</span>
+                              <span className="text-[11px] bg-[#171b23] px-1.5 rounded text-[#eef2f7]">{filePatches.length}</span>
+                            </button>
 
-                          <div className="pl-3 border-l border-[#262c36] space-y-1">
-                            {filePatches.map(patch => (
-                              <div
-                                key={patch.id}
-                                className="p-1.5 rounded bg-[#090b0f] border border-[#262c36] hover:border-blue-500/35 flex items-start justify-between gap-1 group/pnode"
-                              >
-                                <button
-                                  onClick={() => {
-                                    setTargetFile(tFile);
-                                  }}
-                                  className="flex-1 min-w-0 text-left cursor-pointer"
+                            <div className="pl-3 border-l border-[#262c36] space-y-1">
+                              {filePatches.map(patch => (
+                                <div
+                                  key={patch.id}
+                                  className="p-1.5 rounded bg-[#090b0f] border border-[#262c36] hover:border-blue-500/35 flex items-start justify-between gap-1 group/pnode"
                                 >
-                                  <div className="flex items-center gap-1.5">
-                                    <span className={`text-[11px] uppercase font-semibold px-1.5 rounded shrink-0 ${
-                                      patch.action === 'add' ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/25' :
-                                      patch.action === 'replace' ? 'bg-amber-500/15 text-amber-300 border border-amber-500/25' :
-                                      'bg-rose-500/15 text-rose-300 border border-rose-500/25'
-                                    }`}>
-                                      {patch.action}
-                                    </span>
-                                    <span className="truncate text-[#eef2f7] font-medium" title={patch.sel}>{patch.sel}</span>
-                                  </div>
-                                  {patch.note && (
-                                    <span className="text-[11px] text-[#687385] block truncate mt-0.5">{patch.note}</span>
-                                  )}
-                                </button>
+                                  <button
+                                    onClick={() => {
+                                      setTargetFile(tFile);
+                                    }}
+                                    className="flex-1 min-w-0 text-left cursor-pointer"
+                                  >
+                                    <div className="flex items-center gap-1.5">
+                                      <span className={`text-[11px] uppercase font-semibold px-1.5 rounded shrink-0 ${
+                                        patch.action === 'add' ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/25' :
+                                        patch.action === 'replace' ? 'bg-amber-500/15 text-amber-300 border border-amber-500/25' :
+                                        'bg-rose-500/15 text-rose-300 border border-rose-500/25'
+                                      }`}>
+                                        {patch.action}
+                                      </span>
+                                      <span className="truncate text-[#eef2f7] font-medium" title={patch.sel}>{patch.sel}</span>
+                                    </div>
+                                    {patch.note && (
+                                      <span className="text-[11px] text-[#687385] block truncate mt-0.5">{patch.note}</span>
+                                    )}
+                                  </button>
 
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    const updated = patchBlocks.filter(p => p.id !== patch.id);
-                                    savePatches(updated);
-                                  }}
-                                  className="p-1 text-[#687385] hover:text-rose-300 cursor-pointer ml-1 shrink-0"
-                                  title="Delete patch specification element"
-                                >
-                                  <Trash className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-                            ))}
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const updated = patchBlocks.filter(p => p.id !== patch.id);
+                                      savePatches(updated);
+                                    }}
+                                    className="p-1 text-[#687385] hover:text-rose-300 cursor-pointer ml-1 shrink-0"
+                                    title="Delete patch specification element"
+                                  >
+                                    <Trash className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
                           </div>
+                        );
+                      })}
+
+                      {sourceDiffFiles.length > 0 && (
+                        <div data-testid="xmlpatch-source-diff-tree" className="pt-2 border-t border-[#262c36] space-y-2">
+                          <div className="text-[11px] font-sans font-semibold text-emerald-300 flex items-center justify-between">
+                            <span>Source-Backed Diffs (Disk)</span>
+                            <span className="font-mono text-[#687385]">{sourceDiffFiles.length}</span>
+                          </div>
+                          {sourceDiffFiles.map(file => {
+                            const selected = targetFile.toLowerCase() === file.path.toLowerCase();
+                            const safeTestId = file.path.replace(/[^a-zA-Z0-9_-]/g, '_');
+                            return (
+                              <div key={file.id} className="space-y-1">
+                                <button
+                                  type="button"
+                                  data-testid={`xmlpatch-source-file-${safeTestId}`}
+                                  onClick={() => {
+                                    setTargetFile(file.path);
+                                    setCompactPane('blocks');
+                                  }}
+                                  className={`w-full p-2 rounded font-semibold text-left flex items-center gap-1.5 transition-colors border cursor-pointer ${
+                                    selected
+                                      ? 'bg-emerald-500/15 text-emerald-200 border-emerald-500/40'
+                                      : 'bg-[#090b0f] text-[#a0aab8] border-[#262c36] hover:text-white'
+                                  }`}
+                                >
+                                  <span className="truncate flex-1">{file.path}</span>
+                                  <span className="text-[11px] bg-[#171b23] px-1.5 rounded text-[#eef2f7]">
+                                    {file.ops.length}
+                                  </span>
+                                  <span className="text-[11px] rounded bg-emerald-500/15 border border-emerald-500/30 px-1 text-emerald-300 shrink-0">
+                                    disk
+                                  </span>
+                                </button>
+                                <div className="pl-3 border-l border-emerald-500/30 space-y-1">
+                                  {file.ops.map(op => (
+                                    <button
+                                      type="button"
+                                      key={`${file.id}_op_${op.index}`}
+                                      onClick={() => {
+                                        setTargetFile(file.path);
+                                        setCompactPane('blocks');
+                                      }}
+                                      className="w-full p-1.5 rounded bg-[#090b0f] border border-[#262c36] hover:border-emerald-500/35 text-left flex items-center gap-1.5 cursor-pointer"
+                                    >
+                                      <span className={`text-[11px] uppercase font-semibold px-1.5 rounded shrink-0 ${
+                                        op.op === 'add' ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/25' :
+                                        op.op === 'replace' ? 'bg-amber-500/15 text-amber-300 border border-amber-500/25' :
+                                        'bg-rose-500/15 text-rose-300 border border-rose-500/25'
+                                      }`}>
+                                        {op.op}
+                                      </span>
+                                      <span className="truncate text-[#eef2f7]">{op.sel || '(empty sel)'}</span>
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
-                      );
-                    })
+                      )}
+                    </>
                   )}
                 </div>
               </div>
@@ -1446,10 +1538,98 @@ export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceB
           </div>
 
           <div className="flex-1 overflow-y-auto space-y-3 pr-1 py-1 custom-scrollbar">
-            {filteredBlocks.length === 0 ? (
-              <div className="text-center py-24 text-xs text-[#687385]">
-                No patch blocks for this file. Click a header action to add a custom patch.
+            {activeSourceDiff && (
+              <div
+                data-testid="xmlpatch-source-diff-panel"
+                className="bg-[#11141a] border border-emerald-500/35 p-3.5 rounded-lg space-y-3"
+              >
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="rounded border border-emerald-500/40 bg-emerald-500/15 px-1.5 py-0.5 text-[11px] font-mono text-emerald-300">
+                        Source-Backed (Disk)
+                      </span>
+                      <span className="font-mono text-xs font-semibold text-[#eef2f7] truncate">
+                        {activeSourceDiff.path}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-[#687385] mt-0.5">
+                      {activeSourceDiff.ops.length} RFC 5261 operation{activeSourceDiff.ops.length === 1 ? '' : 's'} preserved byte-losslessly on disk.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const result = await openOrMaterializeInNativeEditor(workspace, activeSourceDiff.path);
+                      toast(result.message, result.ok ? 'success' : 'error');
+                    }}
+                    className="px-2.5 py-1 rounded border border-emerald-500/35 bg-emerald-500/15 hover:bg-emerald-500/25 text-[11px] font-medium text-emerald-200 cursor-pointer inline-flex items-center gap-1 shrink-0"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    Open File
+                  </button>
+                </div>
+
+                {activeSourceDiff.parseError && (
+                  <div className="rounded border border-rose-500/40 bg-rose-950/25 p-2.5 text-[11px] text-rose-200 font-mono">
+                    XML Parse Error: {activeSourceDiff.parseError}
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  {activeSourceDiff.ops.map(op => {
+                    const syntheticBlock: PatchBlock = {
+                      id: `${activeSourceDiff.id}_op_${op.index}`,
+                      sel: op.sel,
+                      action: op.op,
+                      content: op.content,
+                      note: activeSourceDiff.path,
+                      pos: op.pos,
+                      attrType: op.attrType,
+                      targetFile: activeSourceDiff.path,
+                    };
+                    const xpathCheck = validateBlockXPath(syntheticBlock);
+                    return (
+                      <div
+                        key={syntheticBlock.id}
+                        data-testid={`xmlpatch-source-op-${op.index}`}
+                        className="rounded border border-[#262c36] bg-[#090b0f] p-3 space-y-1.5 text-[11px]"
+                      >
+                        <div className="flex items-center gap-2 flex-wrap font-mono">
+                          <span className="rounded border border-emerald-500/30 bg-emerald-500/15 px-1.5 py-0.5 text-emerald-300 font-semibold uppercase">
+                            #{op.index + 1} {op.op}
+                          </span>
+                          {op.pos && (
+                            <span className="rounded border border-[#262c36] bg-[#11141a] px-1.5 py-0.5 text-[#a0aab8]">
+                              pos={op.pos}
+                            </span>
+                          )}
+                          {op.attrType && (
+                            <span className="rounded border border-[#262c36] bg-[#11141a] px-1.5 py-0.5 text-[#a0aab8]">
+                              type={op.attrType}
+                            </span>
+                          )}
+                          <span className="text-[#eef2f7] break-all">{op.sel || '(empty sel)'}</span>
+                        </div>
+                        <div className="font-mono text-[11px] text-[#687385]">{xpathCheck.message}</div>
+                        {op.content && (
+                          <pre className="rounded border border-[#262c36] bg-[#0c0e12] p-2 font-mono text-[11px] text-[#cbd5e1] overflow-x-auto whitespace-pre">
+                            {op.content}
+                          </pre>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
+            )}
+
+            {filteredBlocks.length === 0 ? (
+              !activeSourceDiff && (
+                <div className="text-center py-24 text-xs text-[#687385]">
+                  No patch blocks for this file. Click a header action to add a custom patch.
+                </div>
+              )
             ) : (
               filteredBlocks.map((b, bidx) => (
                 <div
@@ -1694,7 +1874,10 @@ export default function XMLPatchSystem({ workspace, setWorkspace, readWorkspaceB
             </div>
           ) : rightPanelTab === 'patch' ? (
             <div className="flex-1 bg-[#090b0f] rounded-lg p-3 font-mono text-[11px] text-[#eef2f7] overflow-y-auto relative custom-scrollbar border border-[#262c36] leading-relaxed select-text">
-              <pre className="whitespace-pre">
+              <pre
+                data-testid={filteredBlocks.length === 0 && activeSourceDiff ? 'xmlpatch-source-raw-xml' : 'xmlpatch-generated-xml'}
+                className="whitespace-pre"
+              >
                 {compileDiffDocument()}
               </pre>
             </div>

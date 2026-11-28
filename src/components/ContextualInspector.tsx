@@ -29,6 +29,7 @@ import {
   type UIWidget,
 } from '../types';
 import type { WorkspaceView } from '../lib/experienceMode';
+import { countWorkspaceDomainAssets } from '../lib/domainSourceIndex';
 import { applyNodePropertyChange, isNodeSelectionFailure } from '../lib/nodeSelectionDocument';
 import PropertiesInspector from './PropertiesInspector';
 
@@ -111,6 +112,8 @@ export default function ContextualInspector({
       return `<!-- Could not preview XML for ${selectedNode.xmlTag} -->`;
     }
   }, [selectedNode, workspace]);
+
+  const domainCounts = useMemo(() => countWorkspaceDomainAssets(workspace), [workspace]);
 
   if (!isOpen) return null;
 
@@ -301,13 +304,19 @@ export default function ContextualInspector({
                   <span className="text-[#a0aab8]">Wires</span>
                   <span className="text-[#eef2f7] font-semibold">{workspace.links?.length ?? 0}</span>
                 </div>
-                <div className="rounded bg-[#0a0c10] border border-[#262c36] px-2 py-1.5 flex items-center justify-between">
+                <div
+                  className="rounded bg-[#0a0c10] border border-[#262c36] px-2 py-1.5 flex items-center justify-between"
+                  title={`${domainCounts.editablePatches} modeled · ${domainCounts.sourceDiffFiles} disk diff`}
+                >
                   <span className="text-[#a0aab8]">XML Patches</span>
-                  <span className="text-[#eef2f7] font-semibold">{workspace.xmlPatches?.length ?? 0}</span>
+                  <span className="text-[#eef2f7] font-semibold">{domainCounts.totalPatches}</span>
                 </div>
-                <div className="rounded bg-[#0a0c10] border border-[#262c36] px-2 py-1.5 flex items-center justify-between">
+                <div
+                  className="rounded bg-[#0a0c10] border border-[#262c36] px-2 py-1.5 flex items-center justify-between"
+                  title={`${domainCounts.totalAiScripts} AI (${domainCounts.sourceAiScripts} disk) · ${domainCounts.totalWares} wares (${domainCounts.sourceWares} disk)`}
+                >
                   <span className="text-[#a0aab8]">AI / Wares</span>
-                  <span className="text-[#eef2f7] font-semibold">{(workspace.aiScripts?.length ?? 0) + (workspace.wares?.length ?? 0)}</span>
+                  <span className="text-[#eef2f7] font-semibold">{domainCounts.totalAiScripts + domainCounts.totalWares}</span>
                 </div>
               </div>
             </div>

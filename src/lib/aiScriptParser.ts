@@ -56,11 +56,12 @@ const ORDER_CATEGORIES = new Set<string>(AI_ORDER_CATEGORIES);
  * Parse one aiscript XML document (or RFC 5261 `<diff>` patch for an aiscript) into the
  * editable AIBehaviorScript model, or null if it is neither `<aiscript>` nor `<diff>`.
  */
-export function parseAiScriptXml(content: string): AIBehaviorScript | null {
+export function parseAiScriptXml(content: string, fallbackName?: string): AIBehaviorScript | null {
   if (!content) return null;
 
   // Optional RFC 5261 <diff> mode (used to patch vanilla aiscripts without overriding)
   if (/<diff\b/i.test(content) && !/<aiscript\b/i.test(content)) {
+    const resolvedName = (fallbackName || '').trim();
     const diffInner = (content.match(/<diff\b[^>]*>([\s\S]*?)<\/diff>/i) || ['', ''])[1];
     const diffOps: AIScriptDiffOp[] = [];
     let di = 0;
@@ -79,8 +80,8 @@ export function parseAiScriptXml(content: string): AIBehaviorScript | null {
       });
     }
     return {
-      id: 'imported_aiscript_diff',
-      name: '',
+      id: resolvedName ? `imported_aiscript_diff_${resolvedName}` : 'imported_aiscript_diff',
+      name: resolvedName,
       description: '',
       command: '',
       attentionLevel: 'unknown',
@@ -418,6 +419,11 @@ export function runAiScriptRoundtripSelftest(): {
   const diffXml = compileScriptToXML(diffFixture);
   const diffParsed = parseAiScriptXml(diffXml);
   ok('diff mode round-trips cleanly', !!diffParsed && diffParsed.mode === 'diff' && compileScriptToXML(diffParsed) === diffXml);
+  const diffParsedWithStem = parseAiScriptXml(diffXml, 'move.flee');
+  ok(
+    'diff mode preserves fallback stem name for import guard',
+    !!diffParsedWithStem && diffParsedWithStem.name === 'move.flee' && compileScriptToXML(diffParsedWithStem) === diffXml,
+  );
 
   // null on non-aiscript content
   ok('non-aiscript → null', parseAiScriptXml('<mdscript name="X"><cues/></mdscript>') === null);

@@ -11183,9 +11183,9 @@ function importModFolderWithIndex(absDir: string, previous?: ModWorkspace, sourc
     try {
       const content = readSourceText(rel);
       if (content === undefined) continue;
-      const parsed = parseAiScriptXml(content);
-      if (!parsed) continue;
       const stem = path.basename(rel).replace(/\.xml$/i, '');
+      const parsed = parseAiScriptXml(content, stem);
+      if (!parsed) continue;
       if (parsed.name !== stem) continue;                      // guard 2: name === filename
       if (compileScriptToXML(parsed) !== content) continue;    // guard 1: byte-faithful re-compile
       if (!importedAiScripts) importedAiScripts = [];
