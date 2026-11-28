@@ -1160,12 +1160,13 @@ export function runProjectValidation(
     const resolvedRoot = mdReferenceRoot ?? (() => {
       try { return resolveXsdConfig().x4ReferenceRoot; } catch { return ''; }
     })();
-    const catalog = resolvedRoot && canonicalMd
-      ? canonicalMd.read(resolvedRoot)
+    const canConsultCanonicalMd = Boolean(resolvedRoot && canonicalMd && !hasSkippedMdInventory);
+    const catalog = canConsultCanonicalMd
+      ? (additiveEnforced ? canonicalMd!.read(resolvedRoot) : canonicalMdReadCache.get(resolvedRoot))
       : undefined;
     additiveVanillaIndex = loadVanillaAdditiveIndex(resolvedRoot, {
       canonicalMdCatalog: catalog,
-      allowSyncMdCatalog: additiveEnforced || !canonicalMd,
+      allowSyncMdCatalog: additiveEnforced && !hasSkippedMdInventory,
     });
   }
   const additiveGuard = evaluateAdditiveOnlyGuard({
