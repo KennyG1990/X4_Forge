@@ -33,6 +33,7 @@ import X4UiSourceEditor, {
   type X4UiWorkspaceEditRequest,
   type X4UiWorkspaceEditSubmission,
 } from './X4UiSourceEditor';
+import { UiGeometryStatusCard, UiLintStatusCard } from './ui-workbench/UiStatusSummary';
 
 interface UIBuilderProps {
   workspace: ModWorkspace;
@@ -341,37 +342,37 @@ export default function UIBuilder({
   };
 
   return (
-    <div className="flex-1 bg-[#0b0e14] flex flex-col h-full overflow-hidden text-slate-200">
+    <div className="flex-1 bg-[#0c0e12] flex flex-col h-full overflow-hidden text-[#eef2f7]">
       {/* Compact UI & Lua Workbench Header */}
-      <div className="h-9 bg-[#131822] border-b border-slate-800/90 px-3 flex items-center justify-between gap-3 shrink-0">
+      <div className="min-h-10 bg-[#141820] border-b border-[#262c36] px-3 py-1.5 flex flex-wrap items-center justify-between gap-3 shrink-0">
         <div className="flex items-center gap-2 min-w-0">
-          <Palette className="w-4 h-4 text-sky-400 shrink-0" />
-          <span className="font-semibold text-xs text-slate-100 truncate">HUD &amp; Lua UI Workbench</span>
+          <Palette className="w-4 h-4 text-[#60a5fa] shrink-0" />
+          <span className="font-semibold text-xs text-[#eef2f7] truncate">HUD &amp; Lua UI Workbench</span>
         </div>
 
         {/* Mode Subtabs + Canvas Theme Presets */}
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className="flex items-center bg-[#0c1017] border border-slate-800 p-0.5 rounded-md">
+        <div className="flex flex-wrap items-center gap-2.5 min-w-0">
+          <div className="flex items-center bg-[#090b0f] border border-[#262c36] p-0.5 rounded-md">
             <button
               onClick={() => setActiveUiSubTab('source')}
-              className={`px-2.5 py-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer ${
-                activeUiSubTab === 'source' ? 'bg-sky-500/20 text-sky-200 font-semibold' : 'text-slate-400 hover:text-slate-200'
+              className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer ${
+                activeUiSubTab === 'source' ? 'bg-[#3b82f6]/20 text-[#93c5fd] font-semibold' : 'text-[#a0aab8] hover:text-[#eef2f7]'
               }`}
             >
               X4 Source Preview
             </button>
             <button
               onClick={() => setActiveUiSubTab('canvas')}
-              className={`px-2.5 py-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer ${
-                activeUiSubTab === 'canvas' ? 'bg-sky-500/20 text-sky-200 font-semibold' : 'text-slate-400 hover:text-slate-200'
+              className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer ${
+                activeUiSubTab === 'canvas' ? 'bg-[#3b82f6]/20 text-[#93c5fd] font-semibold' : 'text-[#a0aab8] hover:text-[#eef2f7]'
               }`}
             >
               Legacy pixel designer
             </button>
             <button
               onClick={() => setActiveUiSubTab('lua')}
-              className={`px-2.5 py-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer ${
-                activeUiSubTab === 'lua' ? 'bg-sky-500/20 text-sky-200 font-semibold' : 'text-slate-400 hover:text-slate-200'
+              className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer ${
+                activeUiSubTab === 'lua' ? 'bg-[#3b82f6]/20 text-[#93c5fd] font-semibold' : 'text-[#a0aab8] hover:text-[#eef2f7]'
               }`}
             >
               LUA Script Event Manager
@@ -380,16 +381,16 @@ export default function UIBuilder({
 
           {activeUiSubTab === 'canvas' && (
             <>
-              <div className="h-4 w-px bg-slate-800" />
-              <div className="flex items-center gap-1">
+              <div className="h-4 w-px bg-[#262c36]" />
+              <div className="flex flex-wrap items-center gap-1">
                 {THEME_PRESETS.map(preset => (
                   <button
                     key={preset.id}
                     onClick={() => applyThemePreset(preset.id)}
-                    className={`px-2 py-0.5 rounded text-[10px] font-medium border transition-colors cursor-pointer ${
+                    className={`px-2 py-1 rounded text-[11px] font-medium border transition-colors cursor-pointer ${
                       activePresetTheme === preset.id
-                        ? 'border-sky-500/45 bg-sky-500/15 text-sky-300'
-                        : 'border-slate-800 bg-[#0c1017] text-slate-400 hover:text-slate-200'
+                        ? 'border-[#3b82f6]/45 bg-[#3b82f6]/15 text-[#93c5fd]'
+                        : 'border-[#262c36] bg-[#0a0c10] text-[#a0aab8] hover:text-[#eef2f7]'
                     }`}
                   >
                     {preset.label}
@@ -402,90 +403,69 @@ export default function UIBuilder({
       </div>
 
       {/* Compact 4-card UI Verification & Static Lint Strip */}
-      <div className="border-b border-slate-800/80 bg-[#0e1219] px-2.5 py-1.5 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-1.5 font-mono text-[10px] shrink-0">
-        <div data-testid="ui-game-verification-status" className={`rounded-md border px-2 py-1.5 ${externalVerification.status === 'verified' ? 'border-emerald-500/30 bg-emerald-950/15' : 'border-amber-500/25 bg-amber-950/10'}`}>
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[9px] font-sans font-semibold text-slate-400">External game verification</span>
-            <span className={`font-semibold truncate ${externalVerification.status === 'verified' ? 'text-emerald-300' : 'text-amber-300'}`}>{externalVerification.label}</span>
+      <div className="border-b border-[#262c36] bg-[#0e1117] px-3 py-2 grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-4 gap-2 text-[11px] shrink-0">
+        <div
+          data-testid="ui-game-verification-status"
+          className={`rounded-md border px-2.5 py-2 min-w-0 overflow-hidden flex flex-col justify-between ${
+            externalVerification.status === 'verified'
+              ? 'border-emerald-500/35 bg-emerald-950/15'
+              : 'border-amber-500/30 bg-amber-950/15'
+          }`}
+        >
+          <div>
+            <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5 min-w-0">
+              <span className="text-[11px] font-sans font-semibold text-[#a0aab8]">External game verification</span>
+              <span className={`shrink-0 text-[11px] font-semibold ${externalVerification.status === 'verified' ? 'text-emerald-300' : 'text-amber-300'}`}>
+                {externalVerification.label}
+              </span>
+            </div>
+            <div className="mt-1 font-mono text-[11px] text-[#a0aab8] break-words leading-snug">
+              {externalVerification.detail}
+            </div>
           </div>
-          <div className="mt-0.5 flex items-center justify-between gap-2">
-            <span className="text-[9.5px] text-slate-500 truncate" title={externalVerification.detail}>{externalVerification.detail}</span>
-            {externalVerification.status !== 'verified' && (
+          {externalVerification.status !== 'verified' && (
+            <div className="mt-2">
               <button
                 type="button"
                 data-testid="ui-game-verification-confirm"
                 disabled={!canInvokeExternalConfirmation}
                 onClick={canInvokeExternalConfirmation ? onConfirmX4UiVerification : undefined}
-                className="shrink-0 rounded border border-sky-500/35 px-1.5 py-0.5 text-[9px] font-semibold text-sky-300 enabled:hover:bg-sky-500/15 disabled:cursor-not-allowed disabled:border-slate-800 disabled:text-slate-600"
+                className="rounded border border-[#3b82f6]/40 px-2 py-0.5 text-[11px] font-semibold text-[#93c5fd] enabled:hover:bg-[#3b82f6]/15 cursor-pointer disabled:cursor-not-allowed disabled:border-[#262c36] disabled:text-[#687385]"
               >
                 {canInvokeExternalConfirmation ? 'Confirm X4 UI in game' : 'Confirm after exact clean deploy'}
               </button>
-            )}
-          </div>
-        </div>
-
-        <div data-testid="ui-generated-lint-status" className="rounded-md border border-slate-800 bg-[#0b0e14]/80 px-2 py-1.5 min-w-0">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[9px] font-sans font-semibold text-slate-400">Generated Lua static status</span>
-            <span className={`font-semibold text-right ${uiLintStatusClass(generatedLuaSummary, true)}`}>
-              {uiLintStatusText(generatedLuaSummary, true)}
-            </span>
-          </div>
-          <div className="mt-0.5 flex items-center justify-between gap-2 text-[9.5px] text-slate-500">
-            <span className="truncate" title={generatedUiPath}>{generatedUiPath}</span>
-            <span className="shrink-0">{uiLintAxisText(generatedLuaSummary, true)}</span>
-          </div>
-          {generatedLuaFindings.length > 0 && (
-            <div className="mt-1 max-h-14 overflow-y-auto custom-scrollbar pr-1 space-y-0.5 break-words whitespace-pre-wrap text-[9.5px] leading-snug">
-              {generatedLuaFindings.slice(0, 3).map((fd, idx) => (
-                <div key={`generated-${idx}`} className={fd.severity === 'error' ? 'text-red-300' : fd.severity === 'warning' ? 'text-amber-300' : 'text-slate-400'}>
-                  {generatedUiPath}{fd.line ? `:${fd.line}` : ''} {fd.code ? `${fd.code} ` : ''}{fd.message}
-                </div>
-              ))}
             </div>
           )}
         </div>
 
-        <div data-testid="ui-custom-lint-status" className="rounded-md border border-slate-800 bg-[#0b0e14]/80 px-2 py-1.5 min-w-0">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[9px] font-sans font-semibold text-slate-400">Custom Lua static status</span>
-            <span className={`font-semibold text-right ${uiLintStatusClass(customLuaSummary, customLuaAnalyzed)}`}>
-              {uiLintStatusText(customLuaSummary, customLuaAnalyzed)}
-            </span>
-          </div>
-          <div className="mt-0.5 flex items-center justify-between gap-2 text-[9.5px] text-slate-500">
-            <span className="truncate" title={customUiPath}>{customUiPath}</span>
-            <span className="shrink-0">{uiLintAxisText(customLuaSummary, customLuaAnalyzed)}</span>
-          </div>
-          {customLuaFindings.length > 0 && (
-            <div className="mt-1 max-h-14 overflow-y-auto custom-scrollbar pr-1 space-y-0.5 break-words whitespace-pre-wrap text-[9.5px] leading-snug">
-              {customLuaFindings.slice(0, 3).map((fd, idx) => (
-                <div key={`custom-${idx}`} className={fd.severity === 'error' ? 'text-red-300' : fd.severity === 'warning' ? 'text-amber-300' : 'text-slate-400'}>
-                  {customUiPath}{fd.line ? `:${fd.line}` : ''} {fd.code ? `${fd.code} ` : ''}{fd.message}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        <UiLintStatusCard
+          testId="ui-generated-lint-status"
+          title="Generated Lua static status"
+          statusText={uiLintStatusText(generatedLuaSummary, true)}
+          statusClass={uiLintStatusClass(generatedLuaSummary, true)}
+          filePath={generatedUiPath}
+          axisText={uiLintAxisText(generatedLuaSummary, true)}
+          findings={generatedLuaFindings}
+        />
 
-        <div data-testid="ui-geometry-status" className="rounded-md border border-slate-800 bg-[#0b0e14]/80 px-2 py-1.5 min-w-0" title="Pixel geometry summary for the design map only; not an X4 renderer.">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[9px] font-sans font-semibold text-slate-400">Geometry design map</span>
-            <span className={`font-semibold ${widgetErrors > 0 ? 'text-red-400' : widgetWarns > 0 ? 'text-amber-400' : 'text-emerald-400'}`}>
-              {widgetErrors > 0 || widgetWarns > 0
-                ? `${widgetErrors} geometry errors · ${widgetWarns} warnings`
-                : 'No geometry issues detected'}
-            </span>
-          </div>
-          <div className="mt-0.5 text-[9.5px] text-slate-500">
-            {(workspace.uiWidgets || []).length > 0 ? `Legacy pixel map ${derivedGrid.rows}×${derivedGrid.cols}` : 'No widgets in design map'}
-          </div>
-          {widgetFindings.slice(0, 2).map((fd, idx) => (
-            <div key={`geometry-${idx}`} className={fd.severity === 'error' ? 'text-red-300' : 'text-amber-300'}>
-              {fd.message}
-            </div>
-          ))}
-        </div>
+        <UiLintStatusCard
+          testId="ui-custom-lint-status"
+          title="Custom Lua static status"
+          statusText={uiLintStatusText(customLuaSummary, customLuaAnalyzed)}
+          statusClass={uiLintStatusClass(customLuaSummary, customLuaAnalyzed)}
+          filePath={customUiPath}
+          axisText={uiLintAxisText(customLuaSummary, customLuaAnalyzed)}
+          findings={customLuaFindings}
+        />
+
+        <UiGeometryStatusCard
+          widgetErrors={widgetErrors}
+          widgetWarns={widgetWarns}
+          widgetCount={(workspace.uiWidgets || []).length}
+          gridRows={derivedGrid.rows}
+          gridCols={derivedGrid.cols}
+          findings={widgetFindings}
+        />
       </div>
 
       {activeUiSubTab === 'source' ? (
@@ -501,22 +481,22 @@ export default function UIBuilder({
               
               {/* SECTION 1: Widgets Hierarchy Tree section */}
               <div className="space-y-2">
-                <h4 className="text-slate-200 uppercase font-bold text-[10px] tracking-wider mb-2.5 flex items-center gap-1.5 border-b border-white/5 pb-1">
-                  <Layers className="w-3.5 h-3.5 text-cyan-400" /> cockpit modules tree
+                <h4 className="text-[#eef2f7] font-semibold text-[11px] mb-2.5 flex items-center gap-1.5 border-b border-[#262c36] pb-1.5">
+                  <Layers className="w-3.5 h-3.5 text-[#60a5fa]" /> Cockpit modules tree
                 </h4>
 
                 <div className="space-y-3 font-mono text-[11px] max-h-60 overflow-y-auto custom-scrollbar pr-1">
                   {workspace.uiWidgets.length === 0 ? (
-                    <div className="text-[10px] text-slate-500 italic p-3 text-center border border-white/5 bg-black/10 rounded">
-                      No viewport cockpit widgets created yet. Use the sidebar "+ Add Widget" to create some!
+                    <div className="text-[11px] text-[#687385] p-3 text-center border border-[#262c36] bg-[#0a0c10] rounded">
+                      No viewport cockpit widgets created yet. Use the sidebar &quot;+ Add Widget&quot; to create some.
                     </div>
                   ) : (
                     <>
                       {/* Subcategory 1: Panels and Containers */}
                       {workspace.uiWidgets.some(w => w.type === 'window' || w.type === 'table') && (
                         <div className="space-y-1">
-                          <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wide block">🖥 Layout & Panels</span>
-                          <div className="pl-2 border-l border-white/5 space-y-1">
+                          <span className="text-[11px] text-[#a0aab8] font-semibold block">Layout &amp; Panels</span>
+                          <div className="pl-2 border-l border-[#262c36] space-y-1">
                             {workspace.uiWidgets
                               .filter(w => w.type === 'window' || w.type === 'table')
                               .map(widget => {
@@ -524,23 +504,23 @@ export default function UIBuilder({
                                 return (
                                   <div 
                                     key={widget.id}
-                                    className={`flex items-center justify-between p-1 px-2 rounded group transition-all text-[10px] ${
-                                      isSel ? 'bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 font-bold' : 'hover:bg-white/5 text-slate-400'
+                                    className={`flex items-center justify-between p-1.5 px-2 rounded group transition-all text-[11px] ${
+                                      isSel ? 'bg-[#3b82f6]/15 border border-[#3b82f6]/35 text-[#93c5fd] font-semibold' : 'hover:bg-white/5 text-[#a0aab8]'
                                     }`}
                                   >
                                     <button 
                                       onClick={() => setSelectedWidget(widget)}
                                       className="flex-1 text-left cursor-pointer truncate"
                                     >
-                                      <span>{widget.type === 'window' ? '🔲 Window' : '📊 Grid Table'}</span>
-                                      <span className="text-[8.5px] text-slate-500 font-normal block">ID: {widget.id.substring(7, 13)} ({widget.w}x{widget.h})</span>
+                                      <span>{widget.type === 'window' ? 'Window' : 'Grid Table'}</span>
+                                      <span className="text-[11px] text-[#687385] font-normal block">ID: {widget.id.substring(7, 13)} ({widget.w}x{widget.h})</span>
                                     </button>
                                     <button 
                                       onClick={(e) => deleteWidget(widget.id, e)}
-                                      className="opacity-0 group-hover:opacity-100 text-slate-600 hover:text-rose-400 transition-opacity p-0.5"
+                                      className="opacity-0 group-hover:opacity-100 text-[#687385] hover:text-rose-400 transition-opacity p-0.5 cursor-pointer"
                                       title="Delete widget node"
                                     >
-                                      <Trash2 className="w-3 h-3" />
+                                      <Trash2 className="w-3.5 h-3.5" />
                                     </button>
                                   </div>
                                 );
@@ -552,8 +532,8 @@ export default function UIBuilder({
                       {/* Subcategory 2: Interactive Controls / Actions */}
                       {workspace.uiWidgets.some(w => w.type === 'button' || w.type === 'dropdown' || w.type === 'input') && (
                         <div className="space-y-1 pt-1">
-                          <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wide block">🔘 Signals & Controls</span>
-                          <div className="pl-2 border-l border-white/5 space-y-1">
+                          <span className="text-[11px] text-[#a0aab8] font-semibold block">Signals &amp; Controls</span>
+                          <div className="pl-2 border-l border-[#262c36] space-y-1">
                             {workspace.uiWidgets
                               .filter(w => w.type === 'button' || w.type === 'dropdown' || w.type === 'input')
                               .map(widget => {
@@ -561,8 +541,8 @@ export default function UIBuilder({
                                 return (
                                   <div 
                                     key={widget.id}
-                                    className={`flex items-center justify-between p-1 px-2 rounded group transition-all text-[10px] ${
-                                      isSel ? 'bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 font-bold' : 'hover:bg-white/5 text-slate-400'
+                                    className={`flex items-center justify-between p-1.5 px-2 rounded group transition-all text-[11px] ${
+                                      isSel ? 'bg-[#3b82f6]/15 border border-[#3b82f6]/35 text-[#93c5fd] font-semibold' : 'hover:bg-white/5 text-[#a0aab8]'
                                     }`}
                                   >
                                     <button 
@@ -570,16 +550,16 @@ export default function UIBuilder({
                                       className="flex-1 text-left cursor-pointer truncate"
                                     >
                                       <span className="truncate block font-medium">
-                                        {widget.type === 'button' ? '🔘 Addon Action Key' : widget.type === 'dropdown' ? '⚙ Option Selector' : '📥 Field Input'}
+                                        {widget.type === 'button' ? 'Action Key' : widget.type === 'dropdown' ? 'Option Selector' : 'Field Input'}
                                       </span>
-                                      <span className="text-[8.5px] text-slate-500 font-normal block truncate">Label: "{widget.label || 'None'}"</span>
+                                      <span className="text-[11px] text-[#687385] font-normal block truncate">Label: &quot;{widget.label || 'None'}&quot;</span>
                                     </button>
                                     <button 
                                       onClick={(e) => deleteWidget(widget.id, e)}
-                                      className="opacity-0 group-hover:opacity-100 text-slate-600 hover:text-rose-400 transition-opacity p-0.5"
+                                      className="opacity-0 group-hover:opacity-100 text-[#687385] hover:text-rose-400 transition-opacity p-0.5 cursor-pointer"
                                       title="Delete widget node"
                                     >
-                                      <Trash2 className="w-3 h-3" />
+                                      <Trash2 className="w-3.5 h-3.5" />
                                     </button>
                                   </div>
                                 );
@@ -591,8 +571,8 @@ export default function UIBuilder({
                       {/* Subcategory 3: Telemetry Feedback Display */}
                       {workspace.uiWidgets.some(w => w.type === 'progressbar' || w.type === 'chat' || w.type === 'text' || w.type === 'header') && (
                         <div className="space-y-1 pt-1">
-                          <span className="text-[9px] text-slate-500 font-bold uppercase tracking-wide block">📡 Gauges & Telemetry</span>
-                          <div className="pl-2 border-l border-white/5 space-y-1">
+                          <span className="text-[11px] text-[#a0aab8] font-semibold block">Gauges &amp; Telemetry</span>
+                          <div className="pl-2 border-l border-[#262c36] space-y-1">
                             {workspace.uiWidgets
                               .filter(w => w.type === 'progressbar' || w.type === 'chat' || w.type === 'text' || w.type === 'header')
                               .map(widget => {
@@ -600,8 +580,8 @@ export default function UIBuilder({
                                 return (
                                   <div 
                                     key={widget.id}
-                                    className={`flex items-center justify-between p-1 px-2 rounded group transition-all text-[10px] ${
-                                      isSel ? 'bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 font-bold' : 'hover:bg-white/5 text-slate-400'
+                                    className={`flex items-center justify-between p-1.5 px-2 rounded group transition-all text-[11px] ${
+                                      isSel ? 'bg-[#3b82f6]/15 border border-[#3b82f6]/35 text-[#93c5fd] font-semibold' : 'hover:bg-white/5 text-[#a0aab8]'
                                     }`}
                                   >
                                     <button 
@@ -609,16 +589,16 @@ export default function UIBuilder({
                                       className="flex-1 text-left cursor-pointer truncate"
                                     >
                                       <span className="truncate block">
-                                        {widget.type === 'progressbar' ? '⚡ Shield Rate Tube' : widget.type === 'chat' ? '💬 Fleet Audio Feed' : widget.type === 'text' ? '📝 Static Title' : '🛰 Title Bar'}
+                                        {widget.type === 'progressbar' ? 'Shield Rate Bar' : widget.type === 'chat' ? 'Fleet Audio Feed' : widget.type === 'text' ? 'Static Label' : 'Title Bar'}
                                       </span>
-                                      <span className="text-[8.5px] text-slate-500 font-normal block truncate">ID: {widget.id.substring(7, 13)}</span>
+                                      <span className="text-[11px] text-[#687385] font-normal block truncate">ID: {widget.id.substring(7, 13)}</span>
                                     </button>
                                     <button 
                                       onClick={(e) => deleteWidget(widget.id, e)}
-                                      className="opacity-0 group-hover:opacity-100 text-slate-600 hover:text-rose-400 transition-opacity p-0.5"
+                                      className="opacity-0 group-hover:opacity-100 text-[#687385] hover:text-rose-400 transition-opacity p-0.5 cursor-pointer"
                                       title="Delete widget node"
                                     >
-                                      <Trash2 className="w-3 h-3" />
+                                      <Trash2 className="w-3.5 h-3.5" />
                                     </button>
                                   </div>
                                 );
@@ -632,53 +612,53 @@ export default function UIBuilder({
               </div>
 
               {/* SECTION 2: Custom Theme Parameter selection */}
-              <div className="space-y-2 pt-2 border-t border-white/5">
-                <h4 className="text-slate-200 uppercase font-bold text-[10px] tracking-wider mb-2 flex items-center gap-1.5 pb-1">
-                  <Palette className="w-3.5 h-3.5 text-cyan-400" /> HUD Aesthetics
+              <div className="space-y-2 pt-2 border-t border-[#262c36]">
+                <h4 className="text-[#eef2f7] font-semibold text-[11px] mb-2 flex items-center gap-1.5 pb-1">
+                  <Palette className="w-3.5 h-3.5 text-[#60a5fa]" /> HUD Aesthetics
                 </h4>
 
                 <div className="space-y-3">
                   <div>
-                    <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider">Window Background Color</label>
+                    <label className="text-[#a0aab8] block mb-1 text-[11px]">Window Background Color</label>
                     <div className="flex items-center gap-2">
                       <input
                         type="color"
                         value={theme.backgroundColor}
                         onChange={e => updateThemeProp('backgroundColor', e.target.value)}
-                        className="w-8 h-8 rounded border border-white/15 bg-transparent p-0 cursor-pointer"
+                        className="w-8 h-8 rounded border border-[#262c36] bg-transparent p-0 cursor-pointer"
                       />
-                      <span className="text-[10px] text-slate-400 uppercase">{theme.backgroundColor}</span>
+                      <span className="text-[11px] font-mono text-[#a0aab8]">{theme.backgroundColor}</span>
                     </div>
                   </div>
 
                   <div>
-                    <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider">Primary Neon Border</label>
+                    <label className="text-[#a0aab8] block mb-1 text-[11px]">Primary Border</label>
                     <div className="flex items-center gap-2">
                       <input
                         type="color"
                         value={theme.borderColor}
                         onChange={e => updateThemeProp('borderColor', e.target.value)}
-                        className="w-8 h-8 rounded border border-white/15 bg-transparent p-0 cursor-pointer"
+                        className="w-8 h-8 rounded border border-[#262c36] bg-transparent p-0 cursor-pointer"
                       />
-                      <span className="text-[10px] text-slate-400 uppercase">{theme.borderColor}</span>
+                      <span className="text-[11px] font-mono text-[#a0aab8]">{theme.borderColor}</span>
                     </div>
                   </div>
 
                   <div>
-                    <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider">Accent Command Elements</label>
+                    <label className="text-[#a0aab8] block mb-1 text-[11px]">Accent Command Elements</label>
                     <div className="flex items-center gap-2">
                       <input
                         type="color"
                         value={theme.accentColor}
                         onChange={e => updateThemeProp('accentColor', e.target.value)}
-                        className="w-8 h-8 rounded border border-white/15 bg-transparent p-0 cursor-pointer"
+                        className="w-8 h-8 rounded border border-[#262c36] bg-transparent p-0 cursor-pointer"
                       />
-                      <span className="text-[10px] text-slate-400 uppercase">{theme.accentColor}</span>
+                      <span className="text-[11px] font-mono text-[#a0aab8]">{theme.accentColor}</span>
                     </div>
                   </div>
 
                   <div>
-                    <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider">HUD Panel Opacity ({Math.round(theme.opacity * 100)}%)</label>
+                    <label className="text-[#a0aab8] block mb-1 text-[11px]">HUD Panel Opacity ({Math.round(theme.opacity * 100)}%)</label>
                     <input
                       type="range"
                       min="0.3"
@@ -686,17 +666,17 @@ export default function UIBuilder({
                       step="0.05"
                       value={theme.opacity}
                       onChange={e => updateThemeProp('opacity', parseFloat(e.target.value))}
-                      className="w-full accent-cyan-500"
+                      className="w-full accent-[#3b82f6]"
                     />
                   </div>
 
-                  <div className="flex items-center justify-between border-t border-white/5 pt-3 mt-3">
-                    <label className="text-slate-400 uppercase text-[9px] tracking-wider">Display Interaction Icons</label>
+                  <div className="flex items-center justify-between border-t border-[#262c36] pt-3 mt-3">
+                    <label className="text-[#a0aab8] text-[11px]">Display Interaction Icons</label>
                     <input
                       type="checkbox"
                       checked={theme.showIcons}
                       onChange={e => updateThemeProp('showIcons', e.target.checked)}
-                      className="rounded accent-cyan-500 w-3.5 h-3.5 bg-black border-slate-600 focus:outline-none"
+                      className="rounded accent-[#3b82f6] w-3.5 h-3.5 bg-[#0a0c10] border-[#262c36] focus:outline-none"
                     />
                   </div>
                 </div>
@@ -704,21 +684,21 @@ export default function UIBuilder({
 
             </div>
 
-            <div className="p-3 bg-cyan-950/20 border-t border-white/5 shrink-0 select-none">
-              <span className="text-cyan-400 font-bold block text-[10px] uppercase mb-1">Cockpit simulation active</span>
-              <p className="text-[9.5px] text-slate-500 leading-normal font-sans">
-                Widget parameters synchronize live. Select any element inside the cockpit simulation grid structure or direct list tree to manipulate its coordinate properties.
+            <div className="p-3 bg-[#141820] border-t border-[#262c36] shrink-0 select-none">
+              <span className="text-[#93c5fd] font-semibold block text-[11px] mb-1">Cockpit simulation active</span>
+              <p className="text-[11px] text-[#687385] leading-normal font-sans">
+                Widget parameters synchronize live. Select any element inside the cockpit simulation grid structure or tree to edit coordinates.
               </p>
             </div>
           </div>
 
           {/* Large Game Cockpit Simulator Window Frame */}
-          <div className="flex-1 bg-[#07080b] p-6 flex items-center justify-center relative overflow-auto">
+          <div className="flex-1 bg-[#090b0f] p-6 flex items-center justify-center relative overflow-auto">
             
             {/* Simulated flight cockpit monitor overlay background */}
             <div className="absolute inset-0 pointer-events-none bg-radial-gradient flex items-center justify-center opacity-35 select-none">
-              <div className="border border-cyan-500/10 w-[80%] h-[80%] rounded-full animate-pulse" />
-              <div className="absolute text-[8px] font-mono text-cyan-500/45 tracking-widest bottom-6">HUD RADAR SCANNER ACTIVE</div>
+              <div className="border border-cyan-500/10 w-[80%] h-[80%] rounded-full" />
+              <div className="absolute text-[11px] font-mono text-cyan-500/45 tracking-widest bottom-6">HUD Scanner Active</div>
             </div>
 
             {/* Interactive Custom Menu Screen Frame */}
@@ -738,10 +718,10 @@ export default function UIBuilder({
                 className="px-4 py-2 border-b flex items-center justify-between font-mono"
               >
                 <div className="flex items-center gap-1.5">
-                  <span style={{ color: theme.borderColor }} className="font-extrabold text-xs tracking-wider uppercase">
-                    {workspace.name || 'COCKPIT MENU'} MODULE
+                  <span style={{ color: theme.borderColor }} className="font-bold text-xs tracking-wider">
+                    {workspace.name || 'Cockpit Menu'} Module
                   </span>
-                  <span className="text-[9px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded">v{workspace.version}</span>
+                  <span className="text-[11px] bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded">v{workspace.version}</span>
                 </div>
                 <div style={{ backgroundColor: theme.borderColor }} className="w-2.5 h-2.5 rounded-full hover:opacity-85 cursor-pointer" />
               </div>
@@ -754,11 +734,11 @@ export default function UIBuilder({
                   }}>
                 
                 {workspace.uiWidgets.length === 0 ? (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-500 font-mono text-xs text-center p-8 space-y-2">
+                  <div className="absolute inset-0 flex flex-col items-center justify-center text-[#687385] font-mono text-xs text-center p-8 space-y-2">
                     <div className="p-3 rounded-full bg-white/5 border border-white/5">
-                      <Layers className="w-6 h-6 text-slate-400" />
+                      <Layers className="w-6 h-6 text-[#a0aab8]" />
                     </div>
-                    <span>Dashboard menu is empty. click "Menu Widgets" tab in the Left sidebar to build game controls.</span>
+                    <span>Dashboard menu is empty. Click &quot;Menu Widgets&quot; tab in the Left sidebar to build game controls.</span>
                   </div>
                 ) : (
                   workspace.uiWidgets.map(widget => {
@@ -777,7 +757,7 @@ export default function UIBuilder({
                         }}
                         onMouseDown={(e) => startDragWidget(widget.id, e)}
                         className={`absolute rounded border flex flex-col justify-between group p-1.5 transition-shadow shadow-md hover:border-white/20 select-none cursor-move ${
-                          isSelected ? 'ring-1 ring-cyan-500/50' : ''
+                          isSelected ? 'ring-1 ring-[#3b82f6]/50' : ''
                         }`}
                       >
                         {/* Drag handles & widgets rendering */}
@@ -785,7 +765,7 @@ export default function UIBuilder({
                           
                           {/* Windows Type Container */}
                           {widget.type === 'window' && (
-                            <div className="w-full h-full border border-dashed border-slate-700 rounded-sm flex items-center justify-center font-mono text-[9px] uppercase text-slate-500">
+                            <div className="w-full h-full border border-dashed border-slate-700 rounded-sm flex items-center justify-center font-mono text-[11px] text-slate-400">
                               Nested Window Workspace
                             </div>
                           )}
@@ -794,9 +774,9 @@ export default function UIBuilder({
                           {widget.type === 'header' && (
                             <div 
                               style={{ borderLeftColor: theme.borderColor, backgroundColor: `${theme.borderColor}10` }}
-                              className="w-full py-1 px-2 border-l-2 font-mono text-[10px] font-bold text-slate-200 tracking-wider flex items-center"
+                              className="w-full py-1 px-2 border-l-2 font-mono text-[11px] font-bold text-slate-200 tracking-wider flex items-center"
                             >
-                              {widget.label.toUpperCase()}
+                              {widget.label}
                             </div>
                           )}
 
@@ -808,16 +788,16 @@ export default function UIBuilder({
                                 backgroundColor: `${theme.borderColor}15`,
                                 color: theme.borderColor
                               }}
-                              className="w-full h-full border font-mono text-[10px] font-bold uppercase rounded flex items-center justify-center"
+                              className="w-full h-full border font-mono text-[11px] font-bold rounded flex items-center justify-center"
                             >
-                              {widget.label || 'COMMAND'}
+                              {widget.label || 'Command'}
                             </div>
                           )}
 
                           {/* Stat/Cap progress bars */}
                           {widget.type === 'progressbar' && (
                             <div className="flex flex-col justify-center h-full gap-0.5 pointer-events-none px-1">
-                              <div className="flex justify-between items-center text-[9px] font-mono text-slate-400 font-semibold uppercase">
+                              <div className="flex justify-between items-center text-[11px] font-mono text-slate-300 font-semibold">
                                 <span>{widget.label || 'Metric'}</span>
                                 <span style={{ color: theme.accentColor }}>{widget.properties.value || 75}%</span>
                               </div>
@@ -835,8 +815,8 @@ export default function UIBuilder({
 
                           {/* Standard Table mock designer widget */}
                           {widget.type === 'table' && (
-                            <div className="w-full h-full border border-white/5 rounded p-1 flex flex-col justify-between font-mono text-[8px] bg-black/40">
-                              <div className="grid grid-cols-3 border-b border-white/10 pb-0.5 text-slate-400 uppercase font-bold tracking-tight">
+                            <div className="w-full h-full border border-white/5 rounded p-1 flex flex-col justify-between font-mono text-[11px] bg-black/40">
+                              <div className="grid grid-cols-3 border-b border-white/10 pb-0.5 text-slate-300 font-semibold">
                                 <span>Entity</span>
                                 <span>Target</span>
                                 <span className="text-right">Reputation</span>
@@ -856,23 +836,23 @@ export default function UIBuilder({
 
                           {/* Standard text widget */}
                           {widget.type === 'text' && (
-                            <div className="text-[10px] font-mono text-slate-300 flex items-center h-full px-1">
+                            <div className="text-[11px] font-mono text-slate-300 flex items-center h-full px-1">
                               {widget.label}
                             </div>
                           )}
 
                           {/* Select element box */}
                           {widget.type === 'dropdown' && (
-                            <div style={{ borderColor: `${theme.borderColor}40` }} className="border rounded bg-black/80 flex items-center justify-between p-1 text-[8px] font-mono text-slate-400">
+                            <div style={{ borderColor: `${theme.borderColor}40` }} className="border rounded bg-black/80 flex items-center justify-between p-1 text-[11px] font-mono text-slate-300">
                               <span>{widget.label || 'Select Mode...'}</span>
-                              <span className="text-slate-500">▼</span>
+                              <span className="text-slate-400">▼</span>
                             </div>
                           )}
 
                           {/* Input element box */}
                           {widget.type === 'input' && (
-                            <div style={{ borderColor: `${theme.borderColor}60` }} className="border rounded bg-black/80 flex items-center p-1.5 text-[8.5px] font-mono text-slate-350 w-full h-full">
-                              <span className="text-slate-550 mr-1 select-none">&gt;</span>
+                            <div style={{ borderColor: `${theme.borderColor}60` }} className="border rounded bg-black/80 flex items-center p-1.5 text-[11px] font-mono text-slate-300 w-full h-full">
+                              <span className="text-slate-400 mr-1 select-none">&gt;</span>
                               <span className="flex-1 overflow-hidden truncate text-slate-300">{widget.properties.placeholder || 'Type transmission command...'}</span>
                               <span style={{ backgroundColor: theme.borderColor }} className="w-1.5 h-2.5 animate-pulse ml-0.5" />
                             </div>
@@ -880,21 +860,21 @@ export default function UIBuilder({
 
                           {/* Chat / Terminal log box */}
                           {widget.type === 'chat' && (
-                            <div style={{ borderColor: `${theme.borderColor}30` }} className="w-full h-full border border-dashed rounded bg-black/60 p-2 flex flex-col justify-between font-mono text-[8px] leading-tight text-left">
-                              <div style={{ color: theme.borderColor, borderBottomColor: `${theme.borderColor}20` }} className={`text-[7.5px] font-bold border-b pb-1 mb-1.5 flex items-center gap-1.5 uppercase tracking-wide`}>
+                            <div style={{ borderColor: `${theme.borderColor}30` }} className="w-full h-full border border-dashed rounded bg-black/60 p-2 flex flex-col justify-between font-mono text-[11px] leading-tight text-left">
+                              <div style={{ color: theme.borderColor, borderBottomColor: `${theme.borderColor}20` }} className="text-[11px] font-bold border-b pb-1 mb-1.5 flex items-center gap-1.5">
                                 <span className="relative flex h-1.5 w-1.5">
                                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                                   <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
                                 </span>
-                                <span>{widget.label || 'COMMS INTEL FEED'}</span>
+                                <span>{widget.label || 'Comms Intel Feed'}</span>
                               </div>
                               <div className="flex-1 space-y-1 overflow-y-auto scrollbar-thin scrollbar-thumb-zinc-800">
                                 {(widget.properties.messages || [
                                   '[SYSTEM]: Channel initialized',
-                                  '[COCOPILOT]: Welcome back, Captain.',
+                                  '[COPILOT]: Welcome back, Captain.',
                                   '[ARGON COMMAND]: Patrol Sector prime.'
                                 ]).map((msg: string, i: number) => (
-                                  <div key={i} className="text-slate-300 font-mono text-[7.5px] leading-tight break-all border-l border-white/5 pl-1">
+                                  <div key={i} className="text-slate-300 font-mono text-[11px] leading-tight break-all border-l border-white/5 pl-1">
                                     {msg}
                                   </div>
                                 ))}
@@ -919,21 +899,21 @@ export default function UIBuilder({
                           <button
                             onClick={(e) => resizeWidget(widget.id, 20, 0, e)}
                             title="Widen Width"
-                            className="w-3.5 h-3.5 rounded bg-slate-800 text-[8px] font-bold text-slate-400 hover:bg-slate-700 flex items-center justify-center font-mono border border-white/5"
+                            className="px-1 h-4 rounded bg-slate-800 text-[11px] font-bold text-slate-300 hover:bg-slate-700 flex items-center justify-center font-mono border border-white/5"
                           >
                             +W
                           </button>
                           <button
                             onClick={(e) => resizeWidget(widget.id, -20, 0, e)}
                             title="Shrink Width"
-                            className="w-3.5 h-3.5 rounded bg-slate-800 text-[8px] font-bold text-slate-400 hover:bg-slate-700 flex items-center justify-center font-mono border border-white/5"
+                            className="px-1 h-4 rounded bg-slate-800 text-[11px] font-bold text-slate-300 hover:bg-slate-700 flex items-center justify-center font-mono border border-white/5"
                           >
                             -W
                           </button>
                           <button
                             onClick={(e) => resizeWidget(widget.id, 0, 15, e)}
                             title="Extend Height"
-                            className="w-3.5 h-3.5 rounded bg-slate-800 text-[8px] font-bold text-slate-400 hover:bg-slate-700 flex items-center justify-center font-mono border border-white/5"
+                            className="px-1 h-4 rounded bg-slate-800 text-[11px] font-bold text-slate-300 hover:bg-slate-700 flex items-center justify-center font-mono border border-white/5"
                           >
                             +H
                           </button>
@@ -948,16 +928,16 @@ export default function UIBuilder({
         </div>
       ) : (
         /* LUA Script Event Manager Tab content */
-        <div id="lua_menu_manager_panel" className="flex-1 flex overflow-hidden bg-[#0a0c11]">
+        <div id="lua_menu_manager_panel" className="flex-1 flex overflow-hidden bg-[#0c0e12]">
           {/* Left panel recipes for LUA */}
-          <div className="w-72 border-r border-white/10 p-4 space-y-4 overflow-y-auto shrink-0 font-mono text-xs bg-[#11131c]/60">
+          <div className="w-72 border-r border-[#262c36] p-4 space-y-4 overflow-y-auto shrink-0 font-mono text-xs bg-[#11141a]">
             <div>
-              <h3 className="text-xs font-bold text-cyan-400 border-b border-white/10 pb-1.5 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                <FileCode className="w-3.5 h-3.5" />
-                LUA API TEMPLATES
+              <h3 className="text-xs font-semibold text-[#eef2f7] border-b border-[#262c36] pb-1.5 mb-2 flex items-center gap-1.5">
+                <FileCode className="w-3.5 h-3.5 text-[#60a5fa]" />
+                Lua API Templates
               </h3>
-              <p className="text-[10px] text-slate-500 mb-3 font-mono leading-relaxed bg-black/10 p-2 border border-white/5 rounded">
-                Choose basic Lua frameworks to coordinate HUD window interaction callbacks, signals routing and player stats telemetry.
+              <p className="text-[11px] text-[#a0aab8] mb-3 font-sans leading-relaxed bg-[#0a0c10] p-2.5 border border-[#262c36] rounded">
+                Choose basic Lua frameworks to coordinate HUD window interaction callbacks, signal routing, and player telemetry.
               </p>
 
               <div className="space-y-1.5">
@@ -966,12 +946,12 @@ export default function UIBuilder({
                   onClick={() => setSelectedLuaTemplate('standard')}
                   className={`w-full text-left p-2.5 rounded border transition-all flex flex-col justify-start gap-1 cursor-pointer ${
                     selectedLuaTemplate === 'standard'
-                      ? 'border-cyan-500 bg-cyan-600/10 text-cyan-300'
-                      : 'border-white/5 bg-[#171a24] text-slate-400 hover:text-white'
+                      ? 'border-[#3b82f6]/50 bg-[#3b82f6]/15 text-[#93c5fd]'
+                      : 'border-[#262c36] bg-[#171b23] text-[#a0aab8] hover:text-white'
                   }`}
                 >
-                  <div className="text-[11px] font-bold uppercase">HUD Buttons Trigger Hooks</div>
-                  <div className="text-[9.5px] text-slate-500">Catch cockpit events & send cues signals</div>
+                  <div className="text-[11px] font-semibold">HUD Buttons Trigger Hooks</div>
+                  <div className="text-[11px] font-sans text-[#687385]">Catch cockpit events &amp; send cue signals</div>
                 </button>
 
                 <button
@@ -979,12 +959,12 @@ export default function UIBuilder({
                   onClick={() => setSelectedLuaTemplate('telemetry')}
                   className={`w-full text-left p-2.5 rounded border transition-all flex flex-col justify-start gap-1 cursor-pointer ${
                     selectedLuaTemplate === 'telemetry'
-                      ? 'border-cyan-500 bg-cyan-600/10 text-cyan-300'
-                      : 'border-white/5 bg-[#171a24] text-slate-400 hover:text-white'
+                      ? 'border-[#3b82f6]/50 bg-[#3b82f6]/15 text-[#93c5fd]'
+                      : 'border-[#262c36] bg-[#171b23] text-[#a0aab8] hover:text-white'
                   }`}
                 >
-                  <div className="text-[11px] font-bold uppercase">Dynamic Shield Telemetry</div>
-                  <div className="text-[9.5px] text-slate-500">Inject raw real-time stats into HUD charts</div>
+                  <div className="text-[11px] font-semibold">Dynamic Shield Telemetry</div>
+                  <div className="text-[11px] font-sans text-[#687385]">Inject live stats into HUD charts</div>
                 </button>
 
                 <button
@@ -992,62 +972,62 @@ export default function UIBuilder({
                   onClick={() => setSelectedLuaTemplate('custom')}
                   className={`w-full text-left p-2.5 rounded border transition-all flex flex-col justify-start gap-1 cursor-pointer ${
                     selectedLuaTemplate === 'custom'
-                      ? 'border-cyan-500 bg-cyan-600/10 text-cyan-300'
-                      : 'border-white/5 bg-[#171a24] text-slate-400 hover:text-white'
+                      ? 'border-[#3b82f6]/50 bg-[#3b82f6]/15 text-[#93c5fd]'
+                      : 'border-[#262c36] bg-[#171b23] text-[#a0aab8] hover:text-white'
                   }`}
                 >
-                  <div className="text-[11px] font-bold uppercase font-sans">LUA Custom Setup Script</div>
-                  <div className="text-[9.5px] text-slate-500 font-mono">Custom console print logger loop</div>
+                  <div className="text-[11px] font-semibold font-sans">Lua Custom Setup Script</div>
+                  <div className="text-[11px] font-sans text-[#687385]">Custom console print logger loop</div>
                 </button>
               </div>
 
-              <div className="mt-3 pt-3 border-t border-white/10 space-y-1.5">
-                <div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">Structured Lua logic blocks</div>
+              <div className="mt-3 pt-3 border-t border-[#262c36] space-y-1.5">
+                <div className="text-[11px] font-sans font-semibold text-[#a0aab8]">Structured Lua logic blocks</div>
                 <button type="button" onClick={insertAiInfluenceBlocks}
-                  className={`w-full text-left p-2.5 rounded border transition-all flex flex-col justify-start gap-1 cursor-pointer ${selectedLuaTemplate === 'ai_influence_blocks' ? 'border-emerald-500 bg-emerald-600/10 text-emerald-300' : 'border-white/5 bg-[#171a24] text-slate-400 hover:text-white'}`}>
-                  <div className="text-[11px] font-bold uppercase">AI Influence chat script</div>
-                  <div className="text-[9.5px] text-slate-500">Event handler + djfhe_http call + JSON parse + response poll.</div>
+                  className={`w-full text-left p-2.5 rounded border transition-all flex flex-col justify-start gap-1 cursor-pointer ${selectedLuaTemplate === 'ai_influence_blocks' ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-200' : 'border-[#262c36] bg-[#171b23] text-[#a0aab8] hover:text-white'}`}>
+                  <div className="text-[11px] font-semibold">AI Influence chat script</div>
+                  <div className="text-[11px] font-sans text-[#687385]">Event handler + http call + JSON parse + response poll.</div>
                 </button>
               </div>
 
-              <div className="mt-3 pt-3 border-t border-white/10 space-y-1.5">
-                <div className="text-[9px] uppercase font-bold text-slate-500 tracking-wider">Vetted X4 patterns (the hard ones, done right)</div>
+              <div className="mt-3 pt-3 border-t border-[#262c36] space-y-1.5">
+                <div className="text-[11px] font-sans font-semibold text-[#a0aab8]">Vetted X4 patterns</div>
                 {LUA_SNIPPETS.map(sn => (
                   <button key={sn.id} type="button" onClick={() => setSelectedLuaTemplate(sn.id)}
-                    className={`w-full text-left p-2.5 rounded border transition-all flex flex-col justify-start gap-1 cursor-pointer ${selectedLuaTemplate === sn.id ? 'border-cyan-500 bg-cyan-600/10 text-cyan-300' : 'border-white/5 bg-[#171a24] text-slate-400 hover:text-white'}`}>
-                    <div className="text-[11px] font-bold uppercase">{sn.title}</div>
-                    <div className="text-[9.5px] text-slate-500">{sn.description}</div>
+                    className={`w-full text-left p-2.5 rounded border transition-all flex flex-col justify-start gap-1 cursor-pointer ${selectedLuaTemplate === sn.id ? 'border-[#3b82f6]/50 bg-[#3b82f6]/15 text-[#93c5fd]' : 'border-[#262c36] bg-[#171b23] text-[#a0aab8] hover:text-white'}`}>
+                    <div className="text-[11px] font-semibold">{sn.title}</div>
+                    <div className="text-[11px] font-sans text-[#687385]">{sn.description}</div>
                   </button>
                 ))}
               </div>
             </div>
 
-            <div className="p-3 bg-cyan-900/15 rounded-md border border-cyan-500/20 text-[10.5px] leading-relaxed text-slate-400 space-y-1.5">
-              <span className="font-bold text-cyan-400 uppercase tracking-tight flex items-center gap-1">
-                <Cpu className="w-3.5 h-3.5" /> LUA UI Execution Context:
+            <div className="p-3 bg-[#141820] rounded-md border border-[#262c36] text-[11px] leading-relaxed text-[#a0aab8] space-y-1.5">
+              <span className="font-semibold text-[#93c5fd] flex items-center gap-1">
+                <Cpu className="w-3.5 h-3.5" /> Lua UI Execution Context
               </span>
-              <p className="font-sans text-[10px]">
-                In X4, LUA runs inside the client GUI sandboxed state. It binds to widgets defined in XML layouts and fires actions towards the Mission Director (MD) script for state changes.
+              <p className="font-sans text-[11px] text-[#687385]">
+                In X4, Lua runs inside the client GUI sandboxed state. It binds to widgets in UI layouts and raises events toward Mission Director cues.
               </p>
             </div>
           </div>
 
           {/* Center portion Lua Editor preview */}
-          <div className="flex-1 flex flex-col border-r border-white/10 overflow-hidden">
-            <div className="p-3 border-b border-white/10 shrink-0 flex items-center justify-between bg-black/25">
-              <div className="flex items-center gap-1">
-                <Terminal className="w-4 h-4 text-cyan-400 animate-pulse" />
-                <span className="font-sans text-xs font-bold text-slate-200">Interactive Lua Interface Controller (/ui/addon_menu.lua)</span>
+          <div className="flex-1 flex flex-col border-r border-[#262c36] overflow-hidden">
+            <div className="p-3 border-b border-[#262c36] shrink-0 flex items-center justify-between bg-[#141820]">
+              <div className="flex items-center gap-1.5">
+                <Terminal className="w-4 h-4 text-[#60a5fa]" />
+                <span className="font-sans text-xs font-semibold text-[#eef2f7]">Interactive Lua Interface Controller (/ui/addon_menu.lua)</span>
               </div>
               <div className="flex items-center gap-1.5">
                 {luaMode === 'edit' && (
                   <button type="button" onClick={insertSelectedPattern} title="Append the selected left-hand pattern to the buffer"
-                    className="text-[9px] px-1.5 py-0.5 rounded bg-cyan-500/15 hover:bg-cyan-500/30 border border-cyan-500/30 text-cyan-300 font-bold uppercase font-mono">Insert pattern</button>
+                    className="text-[11px] px-2 py-1 rounded bg-[#3b82f6]/15 hover:bg-[#3b82f6]/30 border border-[#3b82f6]/35 text-[#93c5fd] font-medium font-mono cursor-pointer">Insert pattern</button>
                 )}
                 <button type="button" onClick={() => setLuaMode('preview')}
-                  className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase font-mono ${luaMode === 'preview' ? 'bg-cyan-500/20 text-cyan-300' : 'text-slate-500 hover:text-white'}`}>Preview</button>
+                  className={`text-[11px] px-2 py-1 rounded font-medium font-mono cursor-pointer ${luaMode === 'preview' ? 'bg-[#3b82f6]/20 text-[#93c5fd]' : 'text-[#a0aab8] hover:text-white'}`}>Preview</button>
                 <button type="button" onClick={() => setLuaMode('edit')}
-                  className={`text-[9px] px-1.5 py-0.5 rounded font-bold uppercase font-mono ${luaMode === 'edit' ? 'bg-cyan-500/20 text-cyan-300' : 'text-slate-500 hover:text-white'}`}>Edit Buffer</button>
+                  className={`text-[11px] px-2 py-1 rounded font-medium font-mono cursor-pointer ${luaMode === 'edit' ? 'bg-[#3b82f6]/20 text-[#93c5fd]' : 'text-[#a0aab8] hover:text-white'}`}>Edit Buffer</button>
               </div>
             </div>
 
@@ -1124,25 +1104,25 @@ end`
             )}
 
             {luaMode === 'edit' && (
-              <div className="shrink-0 border-t border-white/10 bg-black/40 px-3 py-2 text-[10px] font-mono">
-                <div className={`font-bold ${uiLintStatusClass(customLuaSummary, customLuaAnalyzed)}`}>
+              <div className="shrink-0 border-t border-[#262c36] bg-[#11141a] px-3 py-2 text-[11px] font-mono">
+                <div className={`font-semibold ${uiLintStatusClass(customLuaSummary, customLuaAnalyzed)}`}>
                   Lua analysis: {customLuaAnalyzed
                     ? `${uiLintStatusText(customLuaSummary, true)} · ${uiLintAxisText(customLuaSummary, true)}`
                     : uiLintStatusText(customLuaSummary, false)}
                 </div>
                 {customLuaFindings.slice(0, 3).map((fd, idx) => (
-                  <div key={idx} className={fd.severity === 'error' ? 'text-red-300' : fd.severity === 'warning' ? 'text-amber-300' : 'text-slate-400'}>
+                  <div key={idx} className={fd.severity === 'error' ? 'text-rose-300' : fd.severity === 'warning' ? 'text-amber-300' : 'text-[#a0aab8]'}>
                     {fd.code}{fd.line ? `:${fd.line}` : ''} {fd.message}
                   </div>
                 ))}
-                <div data-testid="lua-runtime-log-inspector" className="mt-2 pt-2 border-t border-white/10 grid grid-cols-1 xl:grid-cols-[minmax(260px,1fr)_minmax(260px,1fr)] gap-2">
+                <div data-testid="lua-runtime-log-inspector" className="mt-2 pt-2 border-t border-[#262c36] grid grid-cols-1 xl:grid-cols-[minmax(260px,1fr)_minmax(260px,1fr)] gap-2">
                   <div>
                     <div className="flex items-center justify-between mb-1">
-                      <span className="font-bold text-slate-300 uppercase">Runtime log paste</span>
+                      <span className="font-semibold text-[#eef2f7]">Runtime log paste</span>
                       <button
                         type="button"
                         onClick={() => setRuntimeLogText('')}
-                        className="text-[9px] px-1.5 py-0.5 rounded border border-white/10 text-slate-500 hover:text-white hover:bg-white/5 uppercase"
+                        className="text-[11px] px-2 py-0.5 rounded border border-[#262c36] text-[#a0aab8] hover:text-white hover:bg-white/5 cursor-pointer"
                       >
                         Clear
                       </button>
@@ -1153,26 +1133,26 @@ end`
                       onChange={event => setRuntimeLogText(event.target.value)}
                       spellCheck={false}
                       placeholder={`ui/${workspace.id || 'custom'}_custom.lua:42: attempt to index a nil value`}
-                      className="h-24 w-full resize-none rounded border border-white/10 bg-black/45 p-2 text-[10px] leading-normal text-slate-300 outline-none focus:border-cyan-500/50"
+                      className="h-24 w-full resize-none rounded border border-[#262c36] bg-[#0a0c10] p-2 text-[11px] leading-normal text-[#eef2f7] outline-none focus:border-[#3b82f6]"
                     />
                   </div>
-                  <div data-testid="lua-runtime-log-summary" className="rounded border border-white/10 bg-black/25 p-2 overflow-hidden">
-                    <div className={`font-bold ${runtimeLogAnalysis.totals.errors ? 'text-red-400' : runtimeLogAnalysis.totals.warnings ? 'text-amber-400' : 'text-emerald-400'}`}>
+                  <div data-testid="lua-runtime-log-summary" className="rounded border border-[#262c36] bg-[#0a0c10] p-2 overflow-hidden">
+                    <div className={`font-semibold ${runtimeLogAnalysis.totals.errors ? 'text-rose-400' : runtimeLogAnalysis.totals.warnings ? 'text-amber-400' : 'text-emerald-400'}`}>
                       Runtime log: {runtimeLogText.trim() ? `${runtimeLogAnalysis.totals.errors} errors / ${runtimeLogAnalysis.totals.warnings} warnings / ${runtimeLogAnalysis.totals.matchedFiles} matched files` : 'empty'}
                     </div>
                     <div className="mt-1 max-h-20 overflow-y-auto space-y-1">
                       {runtimeLogAnalysis.issues.slice(0, 4).map((issue, idx) => (
-                        <div key={`${issue.lineNo}-${idx}`} className={issue.severity === 'error' ? 'text-red-300' : issue.severity === 'warning' ? 'text-amber-300' : 'text-slate-400'}>
+                        <div key={`${issue.lineNo}-${idx}`} className={issue.severity === 'error' ? 'text-rose-300' : issue.severity === 'warning' ? 'text-amber-300' : 'text-[#a0aab8]'}>
                           {issue.code}{issue.line ? `:${issue.line}` : ''}{issue.matchedRel ? ` ${issue.matchedRel}` : ''} {issue.restrictedFunction ? `${issue.restrictedFunction} ` : ''}{issue.message}
                           {issue.frames.length > 0 && (
-                            <span className="block text-slate-500">
+                            <span className="block text-[#687385]">
                               frame {issue.frames[0].matchedRel || issue.frames[0].file}{issue.frames[0].line ? `:${issue.frames[0].line}` : ''}{issue.frames[0].functionName ? ` ${issue.frames[0].functionName}` : ''}
                             </span>
                           )}
                         </div>
                       ))}
                       {runtimeLogText.trim() && runtimeLogAnalysis.issues.length === 0 && (
-                        <div className="text-slate-500">No Lua/XPL runtime findings parsed.</div>
+                        <div className="text-[#687385]">No Lua/XPL runtime findings parsed.</div>
                       )}
                     </div>
                   </div>
@@ -1180,7 +1160,7 @@ end`
               </div>
             )}
             
-            <div className="p-3 border-t border-white/5 bg-[#12141a] flex justify-between shrink-0 font-mono text-[10px] text-slate-500">
+            <div className="p-3 border-t border-[#262c36] bg-[#141820] flex justify-between shrink-0 font-mono text-[11px] text-[#687385]">
               <span>Status: Synchronized with visual widget IDs</span>
               <button
                 onClick={() => {
@@ -1191,9 +1171,9 @@ end`
                   navigator.clipboard.writeText(snip ? fillLuaSnippet(selectedLuaTemplate, snippetValues) : code);
                   alert("LUA Code template copied!");
                 }}
-                className="hover:text-cyan-400 font-bold uppercase transition-all cursor-pointer"
+                className="hover:text-[#93c5fd] font-semibold transition-all cursor-pointer"
               >
-                Copy LUA Code To Clipboard
+                Copy Lua Code
               </button>
             </div>
           </div>

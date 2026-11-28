@@ -17,7 +17,7 @@ import DialogHost, { confirmDialog, promptDialog, toast } from './lib/uiDialogs'
 import SyncModal from './components/SyncModal';
 import WorkspaceConflictDialog, { type WorkspaceConflictDetail } from './components/WorkspaceConflictDialog';
 import Canvas from './components/Canvas';
-import UIBuilder from './components/UIBuilder';
+const UIBuilder = React.lazy(() => import('./components/UIBuilder'));
 import NativeProjectFiles from './components/NativeProjectFiles';
 import StudioActionsMenu from './components/StudioActionsMenu';
 import { notifyNativeWorkspaceAuthority, openInNativeEditor, openNativeNodeSelection, postNativeNodeSelectionResult, type NativeNodeApplyRequest } from './lib/nativeEditor';
@@ -3470,15 +3470,23 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
               filesystemPath={filesystemPath}
             />
           ) : workspaceView === 'ui-designer' ? (
-            <UIBuilder
-              workspace={workspace}
-              setWorkspace={setWorkspace}
-              selectedWidget={selectedWidget}
-              setSelectedWidget={setSelectedWidget}
-              x4UiVerification={x4UiVerification}
-              onConfirmX4UiVerification={confirmCurrentX4UiExperience}
-              onX4UiVerificationSnapshotChange={setX4UiVerificationSnapshot}
-            />
+            <React.Suspense
+              fallback={
+                <div className="flex-1 flex items-center justify-center bg-[#0c0e12] text-xs text-[#a0aab8]">
+                  Loading HUD &amp; Lua UI Workbench…
+                </div>
+              }
+            >
+              <UIBuilder
+                workspace={workspace}
+                setWorkspace={setWorkspace}
+                selectedWidget={selectedWidget}
+                setSelectedWidget={setSelectedWidget}
+                x4UiVerification={x4UiVerification}
+                onConfirmX4UiVerification={confirmCurrentX4UiExperience}
+                onX4UiVerificationSnapshotChange={setX4UiVerificationSnapshot}
+              />
+            </React.Suspense>
           ) : workspaceView === 'aiscripts' ? (
             <AIScriptEditor
               workspace={workspace}

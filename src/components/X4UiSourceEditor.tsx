@@ -80,6 +80,9 @@ import {
   buildX4UiGameVerificationCurrentSnapshot,
   type X4UiGameVerificationCurrentSnapshot,
 } from '../lib/x4UiGameVerification';
+import { UiDisplayProfileForm } from './ui-workbench/UiDisplayProfileForm';
+import { UiCorpusCard } from './ui-workbench/UiCorpusCard';
+import { UiCanvasStage } from './ui-workbench/UiCanvasStage';
 
 /** The editor deliberately receives the workspace as an opaque session input. */
 export interface X4UiSourceEditorProps {
@@ -2144,10 +2147,10 @@ export function X4UiSourceEditorSourceEdits({
     entry.kind === 'insert-block' && entry.anchor === 'frame-display'
   ));
   return (
-    <section data-testid="x4-ui-source-edits" className="mt-3 rounded border border-white/10 bg-black/20 p-3">
+    <section data-testid="x4-ui-source-edits" className="mt-3 rounded-lg border border-[#262c36] bg-[#11141a] p-3.5">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">Source-safe property controls</h2>
-        <span data-testid="x4-ui-source-edit-verification" className="text-[9px] font-bold text-amber-300">{X4_UI_EDITOR_SESSION_GAME_TRUTH}</span>
+        <h2 className="text-xs font-sans font-semibold text-[#eef2f7]">Source-safe property controls</h2>
+        <span data-testid="x4-ui-source-edit-verification" className="text-[11px] font-sans font-semibold text-amber-300">{X4_UI_EDITOR_SESSION_GAME_TRUTH}</span>
       </div>
       <div data-testid="x4-ui-source-edit-catalog-detail" className="mt-1 break-words text-slate-500">{catalog.detail}</div>
       {receipt !== undefined && (
@@ -2167,7 +2170,7 @@ export function X4UiSourceEditorSourceEdits({
           const hasStaged = Object.prototype.hasOwnProperty.call(staged, entry.id);
           const stagedValue = hasStaged ? staged[entry.id] : undefined;
           return (
-            <article key={entry.id} data-testid={`x4-ui-source-edit-entry-${entry.id}`} className="rounded border border-white/10 bg-black/30 p-2">
+            <article key={entry.id} data-testid={`x4-ui-source-edit-entry-${entry.id}`} className="rounded border border-[#262c36] bg-black/30 p-2">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div className="min-w-0">
                   <div className="font-bold text-slate-200">{entry.path ?? entry.id} · {entry.id}</div>
@@ -2176,9 +2179,9 @@ export function X4UiSourceEditorSourceEdits({
                   <div className="break-words text-slate-500">current literal: <code className="text-slate-200">{sourceEditLiteralLabel(entry)}</code></div>
                 </div>
                 {entry.kind === 'locked' ? (
-                  <span data-testid={`x4-ui-source-edit-locked-${entry.id}`} className="rounded border border-amber-500/30 px-2 py-1 text-[9px] font-bold uppercase text-amber-300">Read-only · {entry.reason}</span>
+                  <span data-testid={`x4-ui-source-edit-locked-${entry.id}`} className="rounded border border-amber-500/30 px-2 py-1 text-[11px] font-sans font-medium text-amber-300">Read-only · {entry.reason}</span>
                 ) : (
-                  <span className="rounded border border-emerald-500/30 px-2 py-1 text-[9px] font-bold uppercase text-emerald-300">Owner-issued literal</span>
+                  <span className="rounded border border-emerald-500/30 px-2 py-1 text-[11px] font-sans font-medium text-emerald-300">Owner-issued literal</span>
                 )}
               </div>
                 {entry.kind === 'locked' ? (
@@ -2197,7 +2200,7 @@ export function X4UiSourceEditorSourceEdits({
                          value={stagedValue ?? ''}
                          disabled={parentCommitPending}
                          onChange={event => onStage(entry.id, event.target.value)}
-                        className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200"
+                        className="rounded border border-[#262c36] bg-[#0a0c10] px-2 py-1 text-slate-200"
                       />
                     )}
                     {entry.valueType === 'string' && (
@@ -2207,11 +2210,11 @@ export function X4UiSourceEditorSourceEdits({
                          value={stagedValue ?? ''}
                          disabled={parentCommitPending}
                          onChange={event => onStage(entry.id, event.target.value)}
-                        className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200"
+                        className="rounded border border-[#262c36] bg-[#0a0c10] px-2 py-1 text-slate-200"
                       />
                     )}
                     {entry.valueType === 'boolean' && (
-                      <span className="flex items-center gap-2 rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200">
+                      <span className="flex items-center gap-2 rounded border border-[#262c36] bg-[#0a0c10] px-2 py-1 text-slate-200">
                         <input
                           data-testid={sourceEditInputTestId(entry.id)}
                            type="checkbox"
@@ -2228,7 +2231,7 @@ export function X4UiSourceEditorSourceEdits({
                      data-testid={`x4-ui-source-edit-apply-${entry.id}`}
                      disabled={!hasStaged || parentCommitPending}
                     onClick={() => onApply(entry.id)}
-                    className="rounded border border-cyan-500/30 px-2 py-1 text-[9px] font-bold uppercase text-cyan-300 disabled:cursor-not-allowed disabled:opacity-40"
+                    className="rounded border border-cyan-500/30 px-2 py-1 text-[11px] font-sans font-medium text-cyan-300 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     Apply
                   </button>
@@ -2242,8 +2245,8 @@ export function X4UiSourceEditorSourceEdits({
       {catalog.entries.length === 0 && <div className="mt-2 text-slate-500">No owner-issued source properties were exposed for this exact target.</div>}
       <section data-testid="x4-ui-source-edit-frame-blocks" className="mt-3 rounded border border-violet-500/30 bg-violet-950/10 p-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-[10px] font-bold uppercase tracking-wider text-violet-300">Frame-level direct X4 UI insertion block</h3>
-          <span className="text-[9px] font-bold text-amber-300">{X4_UI_EDITOR_SESSION_GAME_TRUTH}</span>
+          <h3 className="text-xs font-sans font-semibold text-[#eef2f7]">Frame-level direct X4 UI insertion block</h3>
+          <span className="text-[11px] font-sans font-semibold text-amber-300">{X4_UI_EDITOR_SESSION_GAME_TRUTH}</span>
         </div>
         <div data-testid="x4-ui-source-edit-frame-block-detail" className="mt-1 break-words text-slate-500">
           Only the owner-issued frame/display authority may stage a bounded direct-UI construction block. Parent acknowledgement remains required before adopting changed source.
@@ -2255,7 +2258,7 @@ export function X4UiSourceEditorSourceEdits({
             {frameBlockEntries.map(entry => {
               const hasStaged = Object.prototype.hasOwnProperty.call(staged, entry.id);
               return (
-                <article key={entry.id} data-testid={`x4-ui-source-edit-frame-block-${entry.id}`} className="rounded border border-white/10 bg-black/30 p-2">
+                <article key={entry.id} data-testid={`x4-ui-source-edit-frame-block-${entry.id}`} className="rounded border border-[#262c36] bg-black/30 p-2">
                   <div className="font-bold text-slate-200">{entry.id}</div>
                   <div className="mt-1 break-words text-slate-500">authority: <span className="text-slate-300">{sourceEditBlockLocationLabel(entry)}</span></div>
                   <div className="break-words text-slate-500">owner proof: <span className="text-slate-300">{sourceEditBlockOwnerLabel(entry)}</span></div>
@@ -2269,7 +2272,7 @@ export function X4UiSourceEditorSourceEdits({
                       rows={8}
                       spellCheck={false}
                       onChange={event => onStage(entry.id, event.target.value)}
-                      className="min-h-32 rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200"
+                      className="min-h-32 rounded border border-[#262c36] bg-[#0a0c10] px-2 py-1 text-slate-200"
                     />
                   </label>
                   <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
@@ -2279,7 +2282,7 @@ export function X4UiSourceEditorSourceEdits({
                       data-testid={`x4-ui-source-edit-apply-block-${entry.id}`}
                       disabled={!hasStaged || parentCommitPending}
                       onClick={() => onApply(entry.id)}
-                      className="rounded border border-violet-400/40 px-2 py-1 text-[9px] font-bold uppercase text-violet-300 disabled:cursor-not-allowed disabled:opacity-40"
+                      className="rounded border border-violet-400/40 px-2 py-1 text-[11px] font-sans font-medium text-violet-300 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       Apply frame block
                     </button>
@@ -2315,9 +2318,9 @@ export const reconcileX4UiSourceEditDraftContext = (
 export function X4UiSourceEditorLinter({ inspection }: { readonly inspection: X4UiLintInspection }) {
   const summary = classifyX4UiLintState(inspection);
   return (
-    <section data-testid="x4-ui-linter-region" className="mt-3 rounded border border-white/10 bg-black/20 p-3">
+    <section data-testid="x4-ui-linter-region" className="mt-3 rounded-lg border border-[#262c36] bg-[#11141a] p-3.5">
       <div className="flex items-center justify-between gap-2">
-        <h2 className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">Imported-source linter</h2>
+        <h2 className="text-xs font-sans font-semibold text-[#eef2f7]">Imported-source linter</h2>
         <span data-testid="x4-ui-linter-summary" className={`font-bold ${summary.kind === 'static-errors-found' ? 'text-red-300' : summary.kind === 'static-warnings-found' || summary.kind === 'static-checks-incomplete' ? 'text-amber-300' : 'text-emerald-300'}`}>{summary.label}</span>
       </div>
       {inspection.findings.length === 0 ? (
@@ -2325,7 +2328,7 @@ export function X4UiSourceEditorLinter({ inspection }: { readonly inspection: X4
       ) : (
         <div className="mt-2 space-y-2">
           {inspection.findings.map((finding, index) => (
-            <article key={`${finding.code}:${finding.location}:${index}`} className="rounded border border-white/10 bg-black/30 p-2">
+            <article key={`${finding.code}:${finding.location}:${index}`} className="rounded border border-[#262c36] bg-black/30 p-2">
               <div className="flex flex-wrap gap-x-3 gap-y-1">
                 <span>severity: <strong className="text-slate-200">{finding.severity}</strong></span>
                 <span>code: <strong className="text-slate-200">{finding.code}</strong></span>
@@ -2370,7 +2373,7 @@ export function X4UiSourceEditorPreviewGeometry({ scene }: { readonly scene: unk
   return (
     <section data-testid="x4-ui-preview-geometry-region" className="mt-3 rounded border border-violet-500/30 bg-violet-950/10 p-3">
       <div className="flex items-center justify-between gap-2">
-        <h2 className="text-[10px] font-bold uppercase tracking-wider text-violet-300">Preview geometry diagnostics</h2>
+        <h2 className="text-xs font-sans font-semibold text-[#eef2f7]">Preview geometry diagnostics</h2>
         <span data-testid="x4-ui-preview-geometry-state" className="font-bold text-violet-200">{stateLabel}</span>
       </div>
       <div data-testid="x4-ui-preview-geometry-filter" className="mt-2 text-slate-500">Source-linked geometry filter: only height/width evidence is shown. Paint/text/kernel/scrollbar/state/data-flow gaps are not shown.</div>
@@ -2386,7 +2389,7 @@ export function X4UiSourceEditorPreviewGeometry({ scene }: { readonly scene: unk
       ) : (
         <div className="mt-2 space-y-2">
           {inspection.diagnostics.map((diagnostic, index) => (
-            <article key={`${diagnostic.file}:${previewGeometryRangeLabel(diagnostic.range)}:${diagnostic.category}:${diagnostic.status}:${diagnostic.nodeId ?? ''}:${diagnostic.reason}:${index}`} data-testid={`x4-ui-preview-geometry-diagnostic-${index}`} className="rounded border border-white/10 bg-black/25 p-2">
+            <article key={`${diagnostic.file}:${previewGeometryRangeLabel(diagnostic.range)}:${diagnostic.category}:${diagnostic.status}:${diagnostic.nodeId ?? ''}:${diagnostic.reason}:${index}`} data-testid={`x4-ui-preview-geometry-diagnostic-${index}`} className="rounded border border-[#262c36] bg-black/25 p-2">
               <div className="flex flex-wrap gap-x-3 gap-y-1">
                 <span>category: <strong className="text-slate-200">{diagnostic.category}</strong></span>
                 <span>status: <strong className="text-slate-200">{diagnostic.status}</strong></span>
@@ -2464,7 +2467,7 @@ export function X4UiSourceEditorSamples({
   return (
     <section data-testid="x4-ui-samples-region" className="mt-3 rounded border border-cyan-500/30 bg-cyan-950/10 p-3">
       <div className="flex items-start justify-between gap-2">
-        <h2 className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">Preview-only samples</h2>
+        <h2 className="text-xs font-sans font-semibold text-[#eef2f7]">Preview-only samples</h2>
         <span data-testid="x4-ui-samples-preview-only" className="font-bold text-amber-300">Preview only</span>
       </div>
       <div className="mt-2 text-amber-200">Samples affect preview measurement only. They never change source, workspace, export bytes, linter truth, or <span className="font-bold">Not verified in game</span>.</div>
@@ -2482,17 +2485,17 @@ export function X4UiSourceEditorSamples({
               ? draft.values[entry.id]!
               : sampleControlValue(entry.expectedType, value);
             return (
-              <label key={entry.id} data-testid={`x4-ui-sample-${entry.id}`} className="flex flex-col gap-1 rounded border border-white/10 bg-black/25 p-2 text-slate-400">
+              <label key={entry.id} data-testid={`x4-ui-sample-${entry.id}`} className="flex flex-col gap-1 rounded border border-[#262c36] bg-black/25 p-2 text-slate-400">
                 <span className="font-bold text-slate-200">{`{${entry.expression}}`} · {entry.expectedType} · {entry.id}</span>
                 <span className="break-all text-slate-500">{sampleSourceLabel(catalog, entry)}</span>
                 {entry.expectedType === 'boolean' ? (
-                  <select data-testid={`x4-ui-sample-control-${entry.id}`} value={controlValue} onChange={event => onSampleInput(entry.id, event.target.value)} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200">
+                  <select data-testid={`x4-ui-sample-control-${entry.id}`} value={controlValue} onChange={event => onSampleInput(entry.id, event.target.value)} className="rounded border border-[#262c36] bg-[#0a0c10] px-2 py-1 text-slate-200">
                     <option value="">Reset sample</option>
                     <option value="true">true</option>
                     <option value="false">false</option>
                   </select>
                 ) : (
-                  <input data-testid={`x4-ui-sample-control-${entry.id}`} type={entry.expectedType === 'number' ? 'number' : 'text'} step={entry.expectedType === 'number' ? 'any' : undefined} value={controlValue} onChange={event => onSampleInput(entry.id, event.target.value)} placeholder={`{${entry.expression}}`} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200" />
+                  <input data-testid={`x4-ui-sample-control-${entry.id}`} type={entry.expectedType === 'number' ? 'number' : 'text'} step={entry.expectedType === 'number' ? 'any' : undefined} value={controlValue} onChange={event => onSampleInput(entry.id, event.target.value)} placeholder={`{${entry.expression}}`} className="rounded border border-[#262c36] bg-[#0a0c10] px-2 py-1 text-slate-200" />
                 )}
               </label>
             );
@@ -2500,8 +2503,8 @@ export function X4UiSourceEditorSamples({
         </div>
       )}
       <div className="mt-2 flex flex-wrap items-center gap-2">
-        <button type="button" data-testid="x4-ui-samples-apply" onClick={onApply} disabled={draft === undefined || onApply === undefined} className="rounded border border-cyan-500/30 px-2 py-1 text-[9px] font-bold uppercase text-cyan-300 disabled:border-white/10 disabled:text-slate-600">Apply staged samples</button>
-        <button type="button" data-testid="x4-ui-samples-reset" onClick={onReset} disabled={draft === undefined || onReset === undefined} className="rounded border border-white/10 px-2 py-1 text-[9px] font-bold uppercase text-slate-300 disabled:border-white/10 disabled:text-slate-600">Reset staged samples</button>
+        <button type="button" data-testid="x4-ui-samples-apply" onClick={onApply} disabled={draft === undefined || onApply === undefined} className="rounded border border-cyan-500/30 px-2 py-1 text-[11px] font-sans font-medium text-cyan-300 disabled:border-[#262c36] disabled:text-slate-600">Apply staged samples</button>
+        <button type="button" data-testid="x4-ui-samples-reset" onClick={onReset} disabled={draft === undefined || onReset === undefined} className="rounded border border-[#262c36] px-2 py-1 text-[11px] font-sans font-medium text-slate-300 disabled:border-[#262c36] disabled:text-slate-600">Reset staged samples</button>
         <span data-testid="x4-ui-samples-truth" className="font-bold text-amber-300">{X4_UI_EDITOR_SESSION_GAME_TRUTH}</span>
       </div>
       {error !== undefined && <div data-testid="x4-ui-samples-error" className="mt-2 text-red-300">{error}</div>}
@@ -2545,7 +2548,7 @@ export function X4UiSourceEditorPreviewPaths({
   return (
     <section data-testid="x4-ui-preview-paths-region" className="mt-3 rounded border border-fuchsia-500/30 bg-fuchsia-950/10 p-3">
       <div className="flex items-start justify-between gap-2">
-        <h2 className="text-[10px] font-bold uppercase tracking-wider text-fuchsia-300">Preview branch paths</h2>
+        <h2 className="text-xs font-sans font-semibold text-[#eef2f7]">Preview branch paths</h2>
         <span data-testid="x4-ui-preview-paths-preview-only" className="font-bold text-amber-300">Preview only</span>
       </div>
       <div className="mt-2 text-amber-200">Selected arms affect source preview only. They never change source, workspace, export bytes, linter truth, deploy state, or <span className="font-bold">Not verified in game</span>.</div>
@@ -2559,13 +2562,13 @@ export function X4UiSourceEditorPreviewPaths({
             const boundaryId = entries[0]!.boundaryId;
             const selectedId = pathSelectionFor(paths, boundaryId);
             return (
-              <fieldset key={boundaryId} data-testid={`x4-ui-preview-path-boundary-${boundaryId}`} className="rounded border border-white/10 bg-black/25 p-2">
-                <legend className="break-all px-1 text-[10px] font-bold text-slate-200">Source boundary · {pathBoundaryLabel(entries[0]!)}</legend>
+              <fieldset key={boundaryId} data-testid={`x4-ui-preview-path-boundary-${boundaryId}`} className="rounded border border-[#262c36] bg-black/25 p-2">
+                <legend className="break-all px-1 text-[11px] font-sans font-semibold text-slate-200">Source boundary · {pathBoundaryLabel(entries[0]!)}</legend>
                 <div className="mt-1 space-y-1">
                   {entries.map(entry => {
                     const unavailable = entry.reachability === 'unreachable';
                     return (
-                      <label key={entry.id} data-testid={`x4-ui-preview-path-${entry.id}`} className={`flex items-start gap-2 rounded border border-white/5 px-2 py-1 text-[10px] ${unavailable ? 'text-slate-600' : 'text-slate-400'}`}>
+                      <label key={entry.id} data-testid={`x4-ui-preview-path-${entry.id}`} className={`flex items-start gap-2 rounded border border-white/5 px-2 py-1 text-[11px] ${unavailable ? 'text-slate-600' : 'text-slate-400'}`}>
                         <input
                           type="radio"
                           name={`x4-ui-preview-path-${boundaryId}`}
@@ -2589,7 +2592,7 @@ export function X4UiSourceEditorPreviewPaths({
         </div>
       )}
       <div className="mt-2 flex flex-wrap items-center gap-2">
-        <button type="button" data-testid="x4-ui-preview-paths-reset" onClick={onReset} disabled={paths === undefined} className="rounded border border-fuchsia-500/30 px-2 py-1 text-[9px] font-bold uppercase text-fuchsia-300 disabled:border-white/10 disabled:text-slate-600">Reset path selections</button>
+        <button type="button" data-testid="x4-ui-preview-paths-reset" onClick={onReset} disabled={paths === undefined} className="rounded border border-fuchsia-500/30 px-2 py-1 text-[11px] font-sans font-medium text-fuchsia-300 disabled:border-[#262c36] disabled:text-slate-600">Reset path selections</button>
         <span data-testid="x4-ui-preview-paths-truth" className="font-bold text-amber-300">{X4_UI_EDITOR_SESSION_GAME_TRUTH}</span>
       </div>
       {error !== undefined && <div data-testid="x4-ui-preview-paths-error" className="mt-2 break-words text-red-300">{error}</div>}
@@ -2631,7 +2634,7 @@ export function X4UiSourceEditorPreviewLoops({
   return (
     <section data-testid="x4-ui-preview-loops-region" className="mt-3 rounded border border-indigo-500/30 bg-indigo-950/10 p-3">
       <div className="flex items-start justify-between gap-2">
-        <h2 className="text-[10px] font-bold uppercase tracking-wider text-indigo-300">Preview Loop Iterations</h2>
+        <h2 className="text-xs font-sans font-semibold text-[#eef2f7]">Preview Loop Iterations</h2>
         <span data-testid="x4-ui-preview-loops-preview-only" className="font-bold text-amber-300">Preview only</span>
       </div>
       <div className="mt-2 text-amber-200">Finite loop selections affect preview replay only. They never change source, workspace, export bytes, linter truth, deploy state, or <span className="font-bold">Not verified in game</span>.</div>
@@ -2642,7 +2645,7 @@ export function X4UiSourceEditorPreviewLoops({
       ) : (
         <div className="mt-2 space-y-2">
           {catalog.entries.map(entry => (
-            <label key={entry.id} data-testid={`x4-ui-preview-loop-${entry.id}`} className="flex flex-col gap-1 rounded border border-white/10 bg-black/25 p-2 text-slate-400">
+            <label key={entry.id} data-testid={`x4-ui-preview-loop-${entry.id}`} className="flex flex-col gap-1 rounded border border-[#262c36] bg-black/25 p-2 text-slate-400">
               <span className="font-bold text-slate-200">Loop {entry.id}</span>
               <span data-testid={`x4-ui-preview-loop-source-${entry.id}`} className="break-all">Source range: {loopSourceLabel(entry)}</span>
               <span data-testid={`x4-ui-preview-loop-metadata-${entry.id}`} className="break-all">Kind: {entry.kind} · multiplicity: {entry.multiplicity} · ID: {entry.id} · depth: {entry.depth} · provenance: {entry.provenance}</span>
@@ -2657,7 +2660,7 @@ export function X4UiSourceEditorPreviewLoops({
                   value={loopControlValue(loops, entry.id)}
                   onChange={event => onLoopIteration(entry.id, event.target.value)}
                   placeholder=""
-                  className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200"
+                  className="rounded border border-[#262c36] bg-[#0a0c10] px-2 py-1 text-slate-200"
                 />
               </span>
             </label>
@@ -2665,7 +2668,7 @@ export function X4UiSourceEditorPreviewLoops({
         </div>
       )}
       <div className="mt-2 flex flex-wrap items-center gap-2">
-        <button type="button" data-testid="x4-ui-preview-loops-reset" onClick={onReset} disabled={!hasEntries || loops === undefined} className="rounded border border-indigo-500/30 px-2 py-1 text-[9px] font-bold uppercase text-indigo-300 disabled:border-white/10 disabled:text-slate-600">Reset preview loop iterations</button>
+        <button type="button" data-testid="x4-ui-preview-loops-reset" onClick={onReset} disabled={!hasEntries || loops === undefined} className="rounded border border-indigo-500/30 px-2 py-1 text-[11px] font-sans font-medium text-indigo-300 disabled:border-[#262c36] disabled:text-slate-600">Reset preview loop iterations</button>
         <span data-testid="x4-ui-preview-loops-truth" className="font-bold text-amber-300">{X4_UI_EDITOR_SESSION_GAME_TRUTH}</span>
       </div>
       {error !== undefined && <div data-testid="x4-ui-preview-loops-error" className="mt-2 break-words text-red-300">{error}</div>}
@@ -3655,73 +3658,54 @@ export default function X4UiSourceEditor({
   const normalizedProfile = asRecord(projectionView.normalizedProfile);
 
   return (
-    <section data-testid="x4-ui-source-editor" className="flex-1 min-h-0 overflow-y-auto bg-[#090c12] p-3 text-slate-300 font-mono text-[11px]">
-      <div className="mb-3 rounded border border-amber-500/30 bg-amber-950/15 p-3">
-        <div data-testid="x4-ui-game-truth" className="font-bold text-amber-300">{X4_UI_EDITOR_SESSION_GAME_TRUTH}</div>
-        <div className="mt-1 text-slate-500">Preview is for layout inspection; static analysis is not engine acceptance.</div>
+    <section data-testid="x4-ui-source-editor" className="flex-1 min-h-0 overflow-y-auto bg-[#0c0e12] p-3.5 text-[#a0aab8] font-mono text-[11px]">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-950/15 px-3 py-1.5 text-[11px]">
+        <div data-testid="x4-ui-game-truth" className="font-sans font-semibold text-amber-300">{X4_UI_EDITOR_SESSION_GAME_TRUTH}</div>
+        <div className="font-sans text-[#a0aab8]">Preview is for layout inspection; static analysis is not engine acceptance.</div>
       </div>
 
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-        <section data-testid="x4-ui-profile-region" className="rounded border border-white/10 bg-black/20 p-3">
-          <h2 className="mb-2 text-[10px] font-bold uppercase tracking-wider text-cyan-300">Profile controls</h2>
-          <div className="grid grid-cols-2 gap-2">
-            <label className="flex flex-col gap-1 text-slate-500">
-              Drawable width
-              <input data-testid="x4-ui-profile-width" type="number" min="0.000001" step="any" value={width === null ? '' : width} onChange={event => updateProfileDimension('width', event.target.value)} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200" />
-            </label>
-            <label className="flex flex-col gap-1 text-slate-500">
-              Drawable height
-              <input data-testid="x4-ui-profile-height" type="number" min="0.000001" step="any" value={height === null ? '' : height} onChange={event => updateProfileDimension('height', event.target.value)} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200" />
-            </label>
-          </div>
-          <div className="mt-2 grid grid-cols-1 gap-2 lg:grid-cols-3">
-            <label className="flex flex-col gap-1 text-slate-500">
-              Source Editor scale mode
-              <select data-testid="x4-ui-profile-scale-mode" value={scaleMode} onChange={event => updateScaleMode(event.target.value)} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200">
-                <option value={X4_UI_SOURCE_EDITOR_SCALE_MODE_DERIVED}>Derived from X4 user scale</option>
-                <option value={X4_UI_SOURCE_EDITOR_SCALE_MODE_CUSTOM}>Custom effective Helper scale</option>
-              </select>
-            </label>
-            <label className="flex flex-col gap-1 text-slate-500">
-              X4 user scale factor
-              <input data-testid="x4-ui-profile-user-scale" type="number" min="0.000001" step="any" value={userScale} onChange={event => updateUserScale(event.target.value)} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200" />
-            </label>
-            <label className="flex flex-col gap-1 text-slate-500">
-              Effective Helper scale
-              <input data-testid="x4-ui-profile-scale" type="number" min="0.000001" step="any" value={uiScale === null ? '' : uiScale} disabled={scaleMode !== X4_UI_SOURCE_EDITOR_SCALE_MODE_CUSTOM} onChange={event => updateProfileDimension('uiScale', event.target.value)} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200" />
-            </label>
-          </div>
-          <div data-testid="x4-ui-profile-scale-derivation" className="mt-2 text-slate-500">Derived effective Helper scale = X4 user scale × drawable height ÷ 1080. Drawable width does not affect the derived value. Custom mode retains its effective value across height changes.</div>
-          <div className="mt-2 text-slate-500">Truth grade: <span data-testid="x4-ui-profile-truth" className="text-amber-300">{stringValue(normalizedProfile?.truthGrade, 'unverified-default')}</span></div>
-          <div className="text-slate-500">Profile: <span>{stringValue(normalizedProfile?.id, 'x4-ui-editor-default')}</span> · drawable {formatNumber(width)} × {formatNumber(height)} · effective Helper scale {formatNumber(uiScale)} · {X4_UI_EDITOR_SESSION_GAME_TRUTH}</div>
-        </section>
+        <UiDisplayProfileForm
+          width={width}
+          height={height}
+          scaleMode={scaleMode}
+          scaleModeDerivedValue={X4_UI_SOURCE_EDITOR_SCALE_MODE_DERIVED}
+          scaleModeCustomValue={X4_UI_SOURCE_EDITOR_SCALE_MODE_CUSTOM}
+          userScale={userScale}
+          uiScale={uiScale}
+          profileId={stringValue(normalizedProfile?.id, 'x4-ui-editor-default')}
+          truthGrade={stringValue(normalizedProfile?.truthGrade, 'unverified-default')}
+          formattedWidth={formatNumber(width)}
+          formattedHeight={formatNumber(height)}
+          formattedScale={formatNumber(uiScale)}
+          gameTruth={X4_UI_EDITOR_SESSION_GAME_TRUTH}
+          onUpdateDimension={updateProfileDimension}
+          onUpdateScaleMode={updateScaleMode}
+          onUpdateUserScale={updateUserScale}
+        />
 
-        <section data-testid="x4-ui-corpus-region" className="rounded border border-white/10 bg-black/20 p-3">
-          <div className="flex items-start justify-between gap-2">
-            <h2 className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">Configured X4 corpus</h2>
-            <button type="button" data-testid="x4-ui-corpus-reload" onClick={() => setCorpusGeneration(value => value + 1)} className="rounded border border-cyan-500/30 px-2 py-1 text-[9px] font-bold uppercase text-cyan-300">Reload</button>
-          </div>
-          <div className="mt-2 text-slate-400">Status: <span data-testid="x4-ui-corpus-status" className="font-bold text-slate-200">{statusLabel(corpusState.status)}</span></div>
-          <div data-testid="x4-ui-corpus-detail" className="mt-1 break-words text-slate-500">{corpusState.detail}</div>
-          <div className="mt-2 text-slate-400">Canonical-default color: <span data-testid="x4-ui-corpus-color-status" className="font-bold text-slate-200">{statusLabel(corpusState.colorStatus)}</span></div>
-          <div data-testid="x4-ui-corpus-color-detail" className="mt-1 break-words text-slate-500">{corpusState.colorDetail}</div>
-          <div className="mt-1 text-slate-600">Canonical status is accepted only from the configured loader.</div>
-        </section>
+        <UiCorpusCard
+          statusLabel={statusLabel(corpusState.status)}
+          detail={corpusState.detail}
+          colorStatusLabel={statusLabel(corpusState.colorStatus)}
+          colorDetail={corpusState.colorDetail}
+          onReload={() => setCorpusGeneration(value => value + 1)}
+        />
       </div>
 
-      <section data-testid="x4-ui-source-region" className="mt-3 rounded border border-white/10 bg-black/20 p-3">
-        <h2 className="mb-2 text-[10px] font-bold uppercase tracking-wider text-cyan-300">Source and target selection</h2>
+      <section data-testid="x4-ui-source-region" className="mt-3 rounded-lg border border-[#262c36] bg-[#11141a] p-3.5">
+        <h2 className="mb-2 text-xs font-sans font-semibold text-[#eef2f7]">Source and target selection</h2>
         <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
           <label className="flex flex-col gap-1 text-slate-500">
             Exact source
-            <select data-testid="x4-ui-source-selector" value={sourceSelector} onChange={event => selectSource(event.target.value)} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200">
+            <select data-testid="x4-ui-source-selector" value={sourceSelector} onChange={event => selectSource(event.target.value)} className="rounded border border-[#262c36] bg-[#0a0c10] px-2 py-1 text-slate-200">
               <option value="">Select source…</option>
               {selection.candidates.map(candidate => <option key={candidate.key} value={candidate.key}>{candidate.path}</option>)}
             </select>
           </label>
           <label className="flex flex-col gap-1 text-slate-500">
             Exact target
-            <select data-testid="x4-ui-target-selector" value={targetSelector} onChange={event => setTargetSelector(event.target.value)} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200">
+            <select data-testid="x4-ui-target-selector" value={targetSelector} onChange={event => setTargetSelector(event.target.value)} className="rounded border border-[#262c36] bg-[#0a0c10] px-2 py-1 text-slate-200">
               <option value="">Select target…</option>
               {targetOptions.map(target => <option key={target.key} value={target.key}>{target.label}</option>)}
             </select>
@@ -3730,8 +3714,8 @@ export default function X4UiSourceEditor({
         <div className="mt-2 text-slate-500">Selected source identity: <span data-testid="x4-ui-selected-source-identity" className="break-all text-slate-300">{selectedSourceFile} · {selectedSourceHash}</span></div>
       </section>
 
-      <section data-testid="x4-ui-source-authority" className="mt-3 rounded border border-white/10 bg-black/20 p-3">
-        <h2 className="mb-2 text-[10px] font-bold uppercase tracking-wider text-cyan-300">Source authority</h2>
+      <section data-testid="x4-ui-source-authority" className="mt-3 rounded-lg border border-[#262c36] bg-[#11141a] p-3.5">
+        <h2 className="mb-2 text-xs font-sans font-semibold text-[#eef2f7]">Source authority</h2>
         <div className="grid grid-cols-2 gap-x-4 gap-y-1 lg:grid-cols-4">
           <div>Status: <span className="text-slate-200">{sourceStatusText(source, 'status')}</span></div>
           <div>Availability: <span className="text-slate-200">{sourceStatusText(source, 'availability')}</span></div>
@@ -3746,10 +3730,10 @@ export default function X4UiSourceEditor({
       </section>
 
       {sourceEditCatalog === undefined ? (
-        <section data-testid="x4-ui-source-edits" className="mt-3 rounded border border-white/10 bg-black/20 p-3">
+        <section data-testid="x4-ui-source-edits" className="mt-3 rounded-lg border border-[#262c36] bg-[#11141a] p-3.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">Source-safe property controls</h2>
-            <span data-testid="x4-ui-source-edit-verification" className="text-[9px] font-bold text-amber-300">{X4_UI_EDITOR_SESSION_GAME_TRUTH}</span>
+            <h2 className="text-xs font-sans font-semibold text-[#eef2f7]">Source-safe property controls</h2>
+            <span data-testid="x4-ui-source-edit-verification" className="text-[11px] font-sans font-semibold text-amber-300">{X4_UI_EDITOR_SESSION_GAME_TRUTH}</span>
           </div>
           <div className="mt-2 text-slate-500">Select an exact source and target with a projected current session to expose owner-issued scalar literals. No caller-supplied catalog, program, evidence, source, target, or profile is accepted.</div>
         </section>
@@ -3793,19 +3777,19 @@ export default function X4UiSourceEditor({
         error={sampleError}
       />
 
-      <section data-testid="x4-ui-keepout-region" className="mt-3 rounded border border-white/10 bg-black/20 p-3">
+      <section data-testid="x4-ui-keepout-region" className="mt-3 rounded-lg border border-[#262c36] bg-[#11141a] p-3.5">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">Context keep-outs</h2>
+          <h2 className="text-xs font-sans font-semibold text-[#eef2f7]">Context keep-outs</h2>
           <div className="flex flex-wrap gap-1">
-            <button type="button" data-testid="x4-ui-keepout-off" onClick={() => selectPreset(null)} className={`rounded border px-2 py-1 text-[9px] uppercase ${activePresetId === null ? 'border-cyan-400 text-cyan-300' : 'border-white/10 text-slate-500'}`}>Off</button>
-            {KEEP_OUT_PRESETS.map(preset => <button type="button" key={preset.id} data-testid={`x4-ui-keepout-preset-${preset.id}`} onClick={() => selectPreset(preset.id)} className={`rounded border px-2 py-1 text-[9px] uppercase ${activePresetId === preset.id ? 'border-cyan-400 text-cyan-300' : 'border-white/10 text-slate-500'}`}>{preset.label}</button>)}
+            <button type="button" data-testid="x4-ui-keepout-off" onClick={() => selectPreset(null)} className={`rounded border px-2 py-1 text-[11px] font-sans font-medium ${activePresetId === null ? 'border-cyan-400 text-cyan-300' : 'border-[#262c36] text-slate-500'}`}>Off</button>
+            {KEEP_OUT_PRESETS.map(preset => <button type="button" key={preset.id} data-testid={`x4-ui-keepout-preset-${preset.id}`} onClick={() => selectPreset(preset.id)} className={`rounded border px-2 py-1 text-[11px] font-sans font-medium ${activePresetId === preset.id ? 'border-cyan-400 text-cyan-300' : 'border-[#262c36] text-slate-500'}`}>{preset.label}</button>)}
           </div>
         </div>
         <div className="mt-2 grid grid-cols-1 gap-2 xl:grid-cols-2">
           {KEEP_OUT_PRESETS.map(preset => {
             const sessionPreset = sourceKeepOutPresets.find(value => asRecord(value)?.id === preset.id);
             return (
-              <article key={preset.id} className="rounded border border-white/10 bg-black/25 p-2">
+              <article key={preset.id} className="rounded border border-[#262c36] bg-black/25 p-2">
                 <div className="font-bold text-slate-200">{preset.label}</div>
                 <div className="mt-1 space-y-1">
                   {preset.members.map(member => {
@@ -3830,7 +3814,7 @@ export default function X4UiSourceEditor({
         <div data-testid="x4-ui-manual-calibration-region" className="mt-3 rounded border border-violet-500/30 bg-violet-950/10 p-3">
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
-              <h3 className="text-[10px] font-bold uppercase tracking-wider text-violet-300">Manual screenshot-polygon calibration</h3>
+              <h3 className="text-xs font-sans font-semibold text-[#eef2f7]">Manual screenshot-polygon calibration</h3>
               <div className="mt-1 text-slate-500">Session-local draft only. Add stores the plain calibration input; the accepted Session, Paint, and Canvas owners remain authoritative.</div>
             </div>
             <span data-testid="x4-ui-manual-calibration-truth" className="font-bold text-amber-300">Advisory only · {X4_UI_EDITOR_SESSION_GAME_TRUTH}</span>
@@ -3838,50 +3822,50 @@ export default function X4UiSourceEditor({
           <div className="mt-2 grid grid-cols-1 gap-2 lg:grid-cols-2">
             <label className="flex flex-col gap-1 text-slate-500">
               Stable ID
-              <input data-testid="x4-ui-manual-calibration-stable-id" type="text" value={manualCalibrationState.draft.stableId} onChange={event => updateManualDraftField('stableId', event.target.value)} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200" />
+              <input data-testid="x4-ui-manual-calibration-stable-id" type="text" value={manualCalibrationState.draft.stableId} onChange={event => updateManualDraftField('stableId', event.target.value)} className="rounded border border-[#262c36] bg-[#0a0c10] px-2 py-1 text-slate-200" />
             </label>
             <label className="flex flex-col gap-1 text-slate-500">
               Context
-              <input data-testid="x4-ui-manual-calibration-context" type="text" value={manualCalibrationState.draft.context} onChange={event => updateManualDraftField('context', event.target.value)} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200" />
+              <input data-testid="x4-ui-manual-calibration-context" type="text" value={manualCalibrationState.draft.context} onChange={event => updateManualDraftField('context', event.target.value)} className="rounded border border-[#262c36] bg-[#0a0c10] px-2 py-1 text-slate-200" />
             </label>
             <label className="flex flex-col gap-1 text-slate-500 lg:col-span-2">
               Source note
-              <input data-testid="x4-ui-manual-calibration-source-note" type="text" value={manualCalibrationState.draft.sourceNote} onChange={event => updateManualDraftField('sourceNote', event.target.value)} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200" />
+              <input data-testid="x4-ui-manual-calibration-source-note" type="text" value={manualCalibrationState.draft.sourceNote} onChange={event => updateManualDraftField('sourceNote', event.target.value)} className="rounded border border-[#262c36] bg-[#0a0c10] px-2 py-1 text-slate-200" />
             </label>
             <label className="flex flex-col gap-1 text-slate-500">
               Screenshot SHA-256/hash
-              <input data-testid="x4-ui-manual-calibration-screenshot-hash" type="text" value={manualCalibrationState.draft.screenshotHash} onChange={event => updateManualDraftField('screenshotHash', event.target.value)} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200" />
+              <input data-testid="x4-ui-manual-calibration-screenshot-hash" type="text" value={manualCalibrationState.draft.screenshotHash} onChange={event => updateManualDraftField('screenshotHash', event.target.value)} className="rounded border border-[#262c36] bg-[#0a0c10] px-2 py-1 text-slate-200" />
             </label>
             <label className="flex flex-col gap-1 text-slate-500">
               Screenshot profile
-              <input data-testid="x4-ui-manual-calibration-profile" type="text" value={manualCalibrationState.draft.profile} onChange={event => updateManualDraftField('profile', event.target.value)} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200" />
+              <input data-testid="x4-ui-manual-calibration-profile" type="text" value={manualCalibrationState.draft.profile} onChange={event => updateManualDraftField('profile', event.target.value)} className="rounded border border-[#262c36] bg-[#0a0c10] px-2 py-1 text-slate-200" />
             </label>
           </div>
-          <div className="mt-2 rounded border border-white/10 bg-black/20 p-2">
+          <div className="mt-2 rounded border border-[#262c36] bg-black/20 p-2">
             <div className="font-bold text-slate-300">Drawable bounds (screenshot pixels)</div>
             <div className="mt-2 grid grid-cols-2 gap-2 lg:grid-cols-4">
-              <label className="flex flex-col gap-1 text-slate-500">Left<input data-testid="x4-ui-manual-calibration-drawable-left" type="number" step="any" value={manualCalibrationState.draft.drawableLeft} onChange={event => updateManualDraftField('drawableLeft', event.target.value)} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200" /></label>
-              <label className="flex flex-col gap-1 text-slate-500">Top<input data-testid="x4-ui-manual-calibration-drawable-top" type="number" step="any" value={manualCalibrationState.draft.drawableTop} onChange={event => updateManualDraftField('drawableTop', event.target.value)} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200" /></label>
-              <label className="flex flex-col gap-1 text-slate-500">Width<input data-testid="x4-ui-manual-calibration-drawable-width" type="number" step="any" value={manualCalibrationState.draft.drawableWidth} onChange={event => updateManualDraftField('drawableWidth', event.target.value)} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200" /></label>
-              <label className="flex flex-col gap-1 text-slate-500">Height<input data-testid="x4-ui-manual-calibration-drawable-height" type="number" step="any" value={manualCalibrationState.draft.drawableHeight} onChange={event => updateManualDraftField('drawableHeight', event.target.value)} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200" /></label>
+              <label className="flex flex-col gap-1 text-slate-500">Left<input data-testid="x4-ui-manual-calibration-drawable-left" type="number" step="any" value={manualCalibrationState.draft.drawableLeft} onChange={event => updateManualDraftField('drawableLeft', event.target.value)} className="rounded border border-[#262c36] bg-[#0a0c10] px-2 py-1 text-slate-200" /></label>
+              <label className="flex flex-col gap-1 text-slate-500">Top<input data-testid="x4-ui-manual-calibration-drawable-top" type="number" step="any" value={manualCalibrationState.draft.drawableTop} onChange={event => updateManualDraftField('drawableTop', event.target.value)} className="rounded border border-[#262c36] bg-[#0a0c10] px-2 py-1 text-slate-200" /></label>
+              <label className="flex flex-col gap-1 text-slate-500">Width<input data-testid="x4-ui-manual-calibration-drawable-width" type="number" step="any" value={manualCalibrationState.draft.drawableWidth} onChange={event => updateManualDraftField('drawableWidth', event.target.value)} className="rounded border border-[#262c36] bg-[#0a0c10] px-2 py-1 text-slate-200" /></label>
+              <label className="flex flex-col gap-1 text-slate-500">Height<input data-testid="x4-ui-manual-calibration-drawable-height" type="number" step="any" value={manualCalibrationState.draft.drawableHeight} onChange={event => updateManualDraftField('drawableHeight', event.target.value)} className="rounded border border-[#262c36] bg-[#0a0c10] px-2 py-1 text-slate-200" /></label>
             </div>
           </div>
-          <div className="mt-2 rounded border border-white/10 bg-black/20 p-2">
+          <div className="mt-2 rounded border border-[#262c36] bg-black/20 p-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="font-bold text-slate-300">Polygon points (screenshot pixels)</div>
-              <button type="button" data-testid="x4-ui-manual-calibration-add-point" onClick={addManualDraftPoint} className="rounded border border-violet-500/30 px-2 py-1 text-[9px] font-bold uppercase text-violet-300">Add point</button>
+              <button type="button" data-testid="x4-ui-manual-calibration-add-point" onClick={addManualDraftPoint} className="rounded border border-violet-500/30 px-2 py-1 text-[11px] font-sans font-medium text-violet-300">Add point</button>
             </div>
             <div className="mt-2 space-y-1">
               {manualCalibrationState.draft.points.map((point, index) => (
                 <div key={index} data-testid={`x4-ui-manual-calibration-point-${index}`} className="flex flex-wrap items-end gap-2">
-                  <label className="flex min-w-28 flex-1 flex-col gap-1 text-slate-500">Point {index + 1} x<input data-testid={`x4-ui-manual-calibration-point-${index}-x`} type="number" step="any" value={point.x} onChange={event => updateManualDraftPoint(index, 'x', event.target.value)} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200" /></label>
-                  <label className="flex min-w-28 flex-1 flex-col gap-1 text-slate-500">Point {index + 1} y<input data-testid={`x4-ui-manual-calibration-point-${index}-y`} type="number" step="any" value={point.y} onChange={event => updateManualDraftPoint(index, 'y', event.target.value)} className="rounded border border-white/10 bg-black/40 px-2 py-1 text-slate-200" /></label>
-                  <button type="button" data-testid={`x4-ui-manual-calibration-remove-point-${index}`} onClick={() => removeManualDraftPoint(index)} className="rounded border border-white/10 px-2 py-1 text-[9px] uppercase text-slate-400">Remove point</button>
+                  <label className="flex min-w-28 flex-1 flex-col gap-1 text-slate-500">Point {index + 1} x<input data-testid={`x4-ui-manual-calibration-point-${index}-x`} type="number" step="any" value={point.x} onChange={event => updateManualDraftPoint(index, 'x', event.target.value)} className="rounded border border-[#262c36] bg-[#0a0c10] px-2 py-1 text-slate-200" /></label>
+                  <label className="flex min-w-28 flex-1 flex-col gap-1 text-slate-500">Point {index + 1} y<input data-testid={`x4-ui-manual-calibration-point-${index}-y`} type="number" step="any" value={point.y} onChange={event => updateManualDraftPoint(index, 'y', event.target.value)} className="rounded border border-[#262c36] bg-[#0a0c10] px-2 py-1 text-slate-200" /></label>
+                  <button type="button" data-testid={`x4-ui-manual-calibration-remove-point-${index}`} onClick={() => removeManualDraftPoint(index)} className="rounded border border-[#262c36] px-2 py-1 text-[11px] font-sans font-medium text-slate-400">Remove point</button>
                 </div>
               ))}
             </div>
           </div>
-          <button type="button" data-testid="x4-ui-manual-calibration-add" onClick={addManualCalibration} className="mt-2 rounded border border-violet-500/30 px-2 py-1 text-[9px] font-bold uppercase text-violet-300">Add calibration · reset draft</button>
+          <button type="button" data-testid="x4-ui-manual-calibration-add" onClick={addManualCalibration} className="mt-2 rounded border border-violet-500/30 px-2 py-1 text-[11px] font-sans font-medium text-violet-300">Add calibration · reset draft</button>
           <div className="mt-2 space-y-2">
             {manualCalibrationState.rows.map(row => {
               const acceptedIndex = manualSessionInput.acceptedRowIds.indexOf(row.rowId);
@@ -3899,18 +3883,18 @@ export default function X4UiSourceEditor({
               const refusedMessage = localRefusal?.message ?? stringValue(sessionProjectionRecord?.message, 'Session did not accept this calibration.');
               const calibrated = localRefusal === undefined && sessionProjectionRecord?.status === 'success';
               return (
-                <article key={row.rowId} data-testid={`x4-ui-manual-calibration-row-${row.rowId}`} className="rounded border border-white/10 bg-black/30 p-2">
+                <article key={row.rowId} data-testid={`x4-ui-manual-calibration-row-${row.rowId}`} className="rounded border border-[#262c36] bg-black/30 p-2">
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="font-bold text-slate-200">{row.draft.stableId || '(empty stable ID)'} · {row.draft.context || '(empty context)'}</div>
                       <div data-testid={`x4-ui-manual-calibration-status-${row.rowId}`} className={calibrated ? 'mt-1 text-emerald-300' : 'mt-1 text-red-300'}>{calibrated ? `Calibrated · ${explicitEnabled ? 'enabled' : 'disabled'}` : `Refused: ${refusedReason} · ${refusedMessage}`}</div>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <label className="flex items-center gap-1 text-[9px] uppercase text-slate-400">
+                      <label className="flex items-center gap-1 text-[11px] font-sans font-medium text-slate-400">
                         <input type="checkbox" data-testid={`x4-ui-manual-calibration-enable-${row.rowId}`} checked={explicitEnabled} disabled={row.draft.stableId.trim().length === 0} onChange={() => toggleManualCalibration(row.rowId)} />
                         Enabled
                       </label>
-                      <button type="button" data-testid={`x4-ui-manual-calibration-remove-${row.rowId}`} onClick={() => removeManualCalibration(row.rowId)} className="rounded border border-red-500/30 px-2 py-1 text-[9px] font-bold uppercase text-red-300">Remove</button>
+                      <button type="button" data-testid={`x4-ui-manual-calibration-remove-${row.rowId}`} onClick={() => removeManualCalibration(row.rowId)} className="rounded border border-red-500/30 px-2 py-1 text-[11px] font-sans font-medium text-red-300">Remove</button>
                     </div>
                   </div>
                   {calibrated && (
@@ -3930,28 +3914,28 @@ export default function X4UiSourceEditor({
         <div className="mt-2 text-slate-600">Measured guides remain advisory: y=0.788, y=0.74, x=0.664. Screenshot-calibrated Mission/MESSAGES ticker and Top HUD strip polygons retain their capture evidence. All keep-outs remain Advisory only · Not verified in game; no INFORMATION rectangle is inferred.</div>
       </section>
 
-      <section data-testid="x4-ui-preview-region" className="mt-3 rounded border border-white/10 bg-black/20 p-3">
-        <div className="flex items-center justify-between gap-2">
-          <h2 className="text-[10px] font-bold uppercase tracking-wider text-cyan-300">Source preview canvas</h2>
-          <span data-testid="x4-ui-canvas-status" className={canvasDescription.status === 'current' ? 'text-slate-300' : 'text-amber-300'}>{canvasDescription.label}</span>
-        </div>
-        <section data-testid="x4-ui-canvas-export-region" className="mt-2 rounded border border-emerald-500/30 bg-emerald-950/10 p-2">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-[10px] font-bold uppercase tracking-wider text-emerald-300">Current PNG evidence export</h3>
-            <button type="button" data-testid="x4-ui-canvas-export" disabled={!canvasExportReady || canvasExportInFlightRef.current} onClick={handleCanvasExport} className="rounded border border-emerald-500/40 px-2 py-1 text-[9px] font-bold uppercase text-emerald-300 disabled:cursor-not-allowed disabled:border-white/10 disabled:text-slate-600">Export current PNG</button>
-          </div>
-          <div data-testid="x4-ui-canvas-export-status" className="mt-2 break-words text-amber-200">{canvasExportStatusText}</div>
-          <div data-testid="x4-ui-canvas-export-metadata" className="mt-2 grid grid-cols-1 gap-1 text-slate-400 lg:grid-cols-2">
-            <div data-testid="x4-ui-canvas-export-source">Source file: <span className="break-all text-slate-200">{selectedSourceFile} · sha256 {selectedSourceHash}</span></div>
-            <div data-testid="x4-ui-canvas-export-target">Target: <span className="break-all text-slate-200">{selectedTargetName} · id {selectedTargetId} · kind {selectedTargetKind}</span></div>
-            <div data-testid="x4-ui-canvas-export-profile">Profile: <span className="text-slate-200">{exportProfileId} · drawable {exportProfileWidth} × {exportProfileHeight} · Effective Helper scale {exportEffectiveScale}</span></div>
-            <div data-testid="x4-ui-canvas-export-native-bitmap">Native bitmap: <span data-testid="x4-ui-canvas-export-native-width" className="text-slate-200">{nativeBitmapWidth}</span> × <span data-testid="x4-ui-canvas-export-native-height" className="text-slate-200">{nativeBitmapHeight}</span></div>
-          </div>
-          <div data-testid="x4-ui-canvas-export-boundary" className="mt-2 font-bold text-amber-300">Preview evidence only · {X4_UI_EDITOR_SESSION_GAME_TRUTH}</div>
-        </section>
-        <div data-testid="x4-ui-canvas-host" ref={canvasHostRef} className="mt-2 flex min-h-24 max-h-[70vh] items-start justify-start overflow-auto rounded border border-white/10 bg-black/40 p-2" />
-        <div data-testid="x4-ui-canvas-detail" className="mt-2 text-slate-500">{canvasDescription.detail} · {X4_UI_EDITOR_SESSION_GAME_TRUTH}</div>
-      </section>
+      <UiCanvasStage
+        canvasHostRef={canvasHostRef}
+        canvasStatus={canvasDescription.status}
+        canvasStatusLabel={canvasDescription.label}
+        canvasDetail={canvasDescription.detail}
+        canvasExportReady={canvasExportReady}
+        canvasExportBusy={canvasExportInFlightRef.current}
+        canvasExportStatusText={canvasExportStatusText}
+        selectedSourceFile={selectedSourceFile}
+        selectedSourceHash={selectedSourceHash}
+        selectedTargetName={selectedTargetName}
+        selectedTargetId={selectedTargetId}
+        selectedTargetKind={selectedTargetKind}
+        exportProfileId={exportProfileId}
+        exportProfileWidth={exportProfileWidth}
+        exportProfileHeight={exportProfileHeight}
+        exportEffectiveScale={exportEffectiveScale}
+        nativeBitmapWidth={nativeBitmapWidth}
+        nativeBitmapHeight={nativeBitmapHeight}
+        gameTruth={X4_UI_EDITOR_SESSION_GAME_TRUTH}
+        onExportCanvas={handleCanvasExport}
+      />
     </section>
   );
 }
