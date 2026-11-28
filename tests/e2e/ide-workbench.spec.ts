@@ -135,19 +135,47 @@ test('Unified IDE Workbench provides right contextual inspector, bottom dock, co
   await expect(bottomDock).toHaveCount(0);
   await page.screenshot({ path: screenshotTarget(testInfo, '03-compact-ui-workbench.png'), fullPage: true });
 
-  // 5. Two-pane Studio Settings category filtering keeps Save Paths sticky and filters cleanly
+  // 5. Two-pane Studio Settings category filtering keeps fixed dialog bounds, resets scrollTop, and filters cleanly
   await page.getByTestId('studio-settings-tool').click();
+  const settingsDialog = page.getByTestId('studio-settings-dialog');
+  const settingsContent = page.getByTestId('studio-settings-content');
+  await expect(settingsDialog).toBeVisible();
   await expect(page.getByTestId('settings-category-all')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByTestId('studio-layout-settings')).toBeVisible();
   await expect(page.getByTestId('x4-corpus-settings')).toBeVisible();
+  const initialDialogBox = await settingsDialog.boundingBox();
+  expect(initialDialogBox).not.toBeNull();
+  expect(initialDialogBox!.height).toBeGreaterThanOrEqual(500);
+  const initialScroll = await settingsContent.evaluate(el => {
+    const canScroll = el.scrollHeight > el.clientHeight;
+    el.scrollTop = 240;
+    return { canScroll, scrollTop: el.scrollTop };
+  });
+  expect(initialScroll.canScroll).toBe(true);
+  expect(initialScroll.scrollTop).toBeGreaterThan(0);
   await page.screenshot({ path: screenshotTarget(testInfo, '04-two-pane-studio-settings.png'), fullPage: true });
 
-  await page.getByTestId('settings-category-paths').click();
-  await expect(page.getByTestId('x4-corpus-settings')).toBeVisible();
-  await expect(page.getByTestId('studio-layout-settings')).toHaveCount(0);
-  await page.getByTestId('settings-category-workbench').click();
-  await expect(page.getByTestId('studio-layout-settings')).toBeVisible();
-  await expect(page.getByTestId('x4-corpus-settings')).toHaveCount(0);
+  for (const cat of ['paths', 'workbench', 'packaging', 'ai', 'community'] as const) {
+    await page.getByTestId(`settings-category-${cat}`).click();
+    await expect(page.getByTestId(`settings-category-${cat}`)).toHaveAttribute('aria-pressed', 'true');
+    const box = await settingsDialog.boundingBox();
+    expect(box).not.toBeNull();
+    expect(Math.abs(box!.x - initialDialogBox!.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(box!.y - initialDialogBox!.y)).toBeLessThanOrEqual(1);
+    expect(Math.abs(box!.width - initialDialogBox!.width)).toBeLessThanOrEqual(1);
+    expect(Math.abs(box!.height - initialDialogBox!.height)).toBeLessThanOrEqual(1);
+    if (cat === 'paths') {
+      const resetTop = await settingsContent.evaluate(el => el.scrollTop);
+      expect(resetTop).toBe(0);
+      await expect(page.getByTestId('x4-corpus-settings')).toBeVisible();
+      await expect(page.getByTestId('studio-layout-settings')).toHaveCount(0);
+      await page.screenshot({ path: screenshotTarget(testInfo, '04b-studio-settings-paths.png'), fullPage: true });
+    } else if (cat === 'workbench') {
+      await expect(page.getByTestId('studio-layout-settings')).toBeVisible();
+      await expect(page.getByTestId('x4-corpus-settings')).toHaveCount(0);
+      await page.screenshot({ path: screenshotTarget(testInfo, '04c-studio-settings-workbench.png'), fullPage: true });
+    }
+  }
   await page.getByRole('button', { name: 'Close settings' }).click();
 
   // 6. Narrow 800x900 responsive viewport with open inspector overlays cleanly without overflow

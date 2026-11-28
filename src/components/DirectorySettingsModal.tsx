@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   X,
   FolderOpen,
@@ -206,6 +206,7 @@ export default function DirectorySettingsModal({
   const [directoryIssues, setDirectoryIssues] = useState<DirectoryPathIssue[]>([]);
   const [detection, setDetection] = useState<{ state: 'idle' | 'scanning' | 'found' | 'notfound' | 'error'; source?: string; message?: string }>({ state: 'idle' });
   const [activeCategory, setActiveCategory] = useState<'all' | 'paths' | 'workbench' | 'packaging' | 'ai' | 'community'>('all');
+  const contentScrollRef = useRef<HTMLDivElement | null>(null);
 
   const detectGameInstall = React.useCallback(async (overwrite = false) => {
     setDetection({ state: 'scanning' });
@@ -423,7 +424,11 @@ export default function DirectorySettingsModal({
       onClick={onClose}
     >
       <div
-        className="w-[min(920px,calc(100vw-24px))] max-h-[88vh] flex flex-col bg-[#0c1017] border border-slate-700/80 rounded-xl shadow-2xl overflow-hidden"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Studio Settings"
+        data-testid="studio-settings-dialog"
+        className="w-[min(920px,calc(100vw-24px))] h-[min(760px,88vh)] flex flex-col bg-[#0c1017] border border-slate-700/80 rounded-xl shadow-2xl overflow-hidden"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
@@ -455,7 +460,10 @@ export default function DirectorySettingsModal({
                   type="button"
                   data-testid={`settings-category-${cat.id}`}
                   aria-pressed={selected}
-                  onClick={() => setActiveCategory(cat.id)}
+                  onClick={() => {
+                    setActiveCategory(cat.id);
+                    if (contentScrollRef.current) contentScrollRef.current.scrollTop = 0;
+                  }}
                   className={`flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left text-[11.5px] font-medium whitespace-nowrap transition-colors cursor-pointer ${
                     selected
                       ? 'bg-sky-500/15 text-sky-200 border border-sky-500/30 font-semibold'
@@ -470,7 +478,11 @@ export default function DirectorySettingsModal({
           </nav>
 
           {/* Right Settings Scroll Area */}
-          <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-4 space-y-3">
+          <div
+            ref={contentScrollRef}
+            data-testid="studio-settings-content"
+            className="flex-1 min-h-0 overflow-y-auto [scrollbar-gutter:stable] custom-scrollbar p-4 space-y-3"
+          >
           {showSection('workbench') && <DirectoryRow
             icon={<PanelLeft className="w-4 h-4" />}
             title="Navigation & Layout"
