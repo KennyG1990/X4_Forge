@@ -537,7 +537,7 @@ export default function Sidebar({
           {activeTab === 'ai' && (
             <button
               onClick={() => setIsAiFloatingVisible(!isAiFloatingVisible)}
-              className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors border cursor-pointer ${
+              className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors border cursor-pointer ${
                 isAiFloatingVisible 
                   ? 'bg-amber-500/12 hover:bg-amber-500/20 border-amber-500/30 text-amber-300' 
                   : 'bg-slate-800/80 hover:bg-slate-700 border-slate-700 text-slate-300'
@@ -560,7 +560,7 @@ export default function Sidebar({
             <button
               type="button"
               onClick={() => setWorkspaceView('blueprint')}
-              className="shrink-0 rounded bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/35 px-2 py-0.5 text-[10.5px] font-semibold text-sky-100 cursor-pointer"
+              className="shrink-0 rounded bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/35 px-2 py-0.5 text-[11px] font-semibold text-sky-100 cursor-pointer"
             >
               Open MD Scripts
             </button>
@@ -572,7 +572,7 @@ export default function Sidebar({
             <button
               type="button"
               onClick={() => setWorkspaceView('ui-designer')}
-              className="shrink-0 rounded bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/35 px-2 py-0.5 text-[10.5px] font-semibold text-sky-100 cursor-pointer"
+              className="shrink-0 rounded bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/35 px-2 py-0.5 text-[11px] font-semibold text-sky-100 cursor-pointer"
             >
               Open HUD &amp; Lua UI
             </button>
@@ -667,16 +667,16 @@ export default function Sidebar({
         {activeTab === 'script' && (
           <div className="space-y-4">
             <div>
-              <h3 className="text-xs font-mono font-semibold text-cyan-400 mb-2 tracking-wider uppercase">Node Types</h3>
-              <div className="grid grid-cols-2 gap-1 bg-black/20 p-1 rounded border border-white/5">
+              <h3 className="text-xs font-semibold text-slate-200 mb-2">Node types</h3>
+              <div className="grid grid-cols-2 gap-1 bg-[#0a0d12] p-1 rounded-md border border-white/[0.08]">
                 {(['all', 'cue', 'event', 'condition', 'action'] as const).map(type => (
                   <button
                     key={type}
                     onClick={() => setNodeFilter(type)}
-                    className={`px-2 py-1 text-[10px] font-mono rounded capitalize transition-all cursor-pointer ${
+                    className={`px-2 py-1 text-[11px] font-medium rounded capitalize transition-colors cursor-pointer ${
                       nodeFilter === type
-                        ? 'bg-cyan-600/20 text-cyan-400 border border-cyan-500/30'
-                        : 'text-slate-400 hover:bg-white/5 border border-transparent'
+                        ? 'bg-sky-500/15 text-sky-200 border border-sky-500/35'
+                        : 'text-slate-400 hover:bg-white/[0.04] hover:text-slate-200 border border-transparent'
                     }`}
                   >
                     {type}
@@ -686,9 +686,9 @@ export default function Sidebar({
             </div>
 
             <div className="space-y-2">
-              <h3 className="text-[10px] font-mono font-semibold text-slate-400 mb-1.5 tracking-wider uppercase flex items-center gap-1">
-                <Wrench className="w-3.5 h-3.5 text-cyan-400" />
-                TOOLBOX (CLICK TO CREATE)
+              <h3 className="text-xs font-medium text-slate-300 mb-1.5 flex items-center gap-1.5">
+                <Wrench className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                <span>Toolbox (click to create)</span>
               </h3>
               <VirtualizedNodeToolbox templates={allTemplates} nodeType={nodeFilter} onAddNode={onAddNode} />
             </div>
@@ -698,31 +698,31 @@ export default function Sidebar({
         {/* UI MOD CUSTOMIZER WIDGETS (Tab: ui) */}
         {activeTab === 'ui' && (
           <div className="space-y-4">
-            <div className="bg-cyan-950/10 border border-cyan-500/15 p-2.5 rounded text-[10px] leading-relaxed text-slate-400">
-              <span className="text-cyan-400 font-bold block mb-0.5">X4 Custom UI Rules:</span>
-              Design working contextual HUD menus or consoles. Add containers, tables, lists, progress bars and macro buttons.
+            <div className="bg-sky-950/15 border border-sky-500/25 p-2.5 rounded-md text-[11px] leading-relaxed text-slate-300">
+              <span className="text-sky-300 font-semibold block mb-0.5">X4 Custom UI rules</span>
+              Design working contextual HUD menus or consoles. Add containers, tables, lists, progress bars, and macro buttons.
             </div>
 
             <div className="space-y-2">
-              <h3 className="text-[10px] font-mono font-semibold text-slate-400 mb-1.5 tracking-wider uppercase">UI Widgets Library</h3>
+              <h3 className="text-xs font-medium text-slate-300 mb-1.5">UI widgets library</h3>
               {[
                 { type: 'window', title: 'Context Window Frame', desc: 'Outer widget window layout container' },
-                { type: 'header', title: 'Tactical Title / Header', desc: 'Wide high-contrast cyber decoration line' },
+                { type: 'header', title: 'Tactical Title / Header', desc: 'Wide high-contrast tactical title bar' },
                 { type: 'table', title: 'Standard Data Table', desc: 'Pre-styled multi-row grid framework' },
                 { type: 'button', title: 'Macro Menu Button', desc: 'Fires visual cues on selection click' },
-                { type: 'progressbar', title: 'Status Progress Bar', desc: 'Elegant status / shield indicator' },
+                { type: 'progressbar', title: 'Status Progress Bar', desc: 'Clean status / shield indicator' },
                 { type: 'text', title: 'Display Label', desc: 'Human-readable description labels' },
                 { type: 'dropdown', title: 'Interactive Selector', desc: 'Drop-down values list widget' },
                 { type: 'input', title: 'Text Input Box', desc: 'Custom command or log entry text field' },
                 { type: 'chat', title: 'Dialogue Chat Logs', desc: 'Scrollable live dialogue transmissions list' }
               ].map(widget => {
-                let widgetIcon = <Layout className="w-3.5 h-3.5 text-cyan-400 shrink-0" />;
+                let widgetIcon = <Layout className="w-3.5 h-3.5 text-sky-400 shrink-0" />;
                 if (widget.type === 'header') widgetIcon = <Layers className="w-3.5 h-3.5 text-purple-400 shrink-0" />;
                 if (widget.type === 'table') widgetIcon = <Library className="w-3.5 h-3.5 text-blue-400 shrink-0" />;
                 if (widget.type === 'button') widgetIcon = <Plus className="w-3.5 h-3.5 text-emerald-400 shrink-0" />;
                 if (widget.type === 'progressbar') widgetIcon = <Sliders className="w-3.5 h-3.5 text-amber-400 shrink-0" />;
                 if (widget.type === 'text') widgetIcon = <Info className="w-3.5 h-3.5 text-slate-400 shrink-0" />;
-                if (widget.type === 'dropdown') widgetIcon = <ChevronRight className="w-3.5 h-3.5 text-cyan-400 shrink-0" />;
+                if (widget.type === 'dropdown') widgetIcon = <ChevronRight className="w-3.5 h-3.5 text-sky-400 shrink-0" />;
                 if (widget.type === 'input') widgetIcon = <Settings className="w-3.5 h-3.5 text-slate-400 shrink-0" />;
                 if (widget.type === 'chat') widgetIcon = <BookOpen className="w-3.5 h-3.5 text-purple-400 shrink-0" />;
 
@@ -730,18 +730,18 @@ export default function Sidebar({
                   <button
                     key={widget.type}
                     onClick={() => onAddUIWidget(widget.type)}
-                    className="w-full text-left p-2 rounded bg-black/20 border border-white/5 hover:bg-cyan-600/5 hover:border-cyan-500/50 transition-all flex items-center gap-2.5 group cursor-pointer"
+                    className="w-full text-left p-2.5 rounded-md bg-[#0a0d12] border border-white/[0.08] hover:bg-sky-500/[0.06] hover:border-sky-500/40 transition-colors flex items-center gap-2.5 group cursor-pointer"
                   >
                     {widgetIcon}
                     <div className="flex-1 min-w-0">
-                      <div className="text-xs font-semibold text-slate-200 group-hover:text-white capitalize truncate leading-none">
+                      <div className="text-xs font-medium text-slate-200 group-hover:text-white truncate leading-tight">
                         {widget.title}
                       </div>
-                      <div className="text-[9px] text-slate-550 font-sans mt-1 truncate">
+                      <div className="text-[11px] text-slate-400 mt-0.5 truncate">
                         {widget.desc}
                       </div>
                     </div>
-                    <Plus className="w-3.5 h-3.5 text-slate-500 opacity-0 group-hover:opacity-100 group-hover:text-cyan-400 transition-all" />
+                    <Plus className="w-3.5 h-3.5 text-slate-500 opacity-0 group-hover:opacity-100 group-hover:text-sky-300 transition-opacity shrink-0" />
                   </button>
                 );
               })}
@@ -751,32 +751,32 @@ export default function Sidebar({
 
         {/* METADATA CONFIG (Tab: config) */}
         {activeTab === 'config' && (
-          <div className="space-y-4 font-mono text-xs">
+          <div className="space-y-4 text-xs">
             <div className="space-y-3">
               <div>
-                <label className="text-slate-400 block mb-1 uppercase text-[10px] tracking-wider">Mod Script Identifier</label>
+                <label className="text-[11px] font-medium text-slate-300 block mb-1">Mod script identifier</label>
                 <input
                   type="text"
                   value={workspace.name}
                   onChange={e => setWorkspace(prev => ({ ...prev, name: e.target.value }))}
-                  className="w-full p-2 rounded bg-black/50 border border-white/10 text-white focus:outline-none focus:border-cyan-500 transition-colors"
+                  className="w-full p-2 rounded-md bg-[#0a0d12] border border-white/[0.08] text-xs font-mono text-white focus:outline-none focus:border-sky-500/60 transition-colors"
                   placeholder="e.g. My_Elite_Mod"
                 />
               </div>
 
               <div>
-                <label className="text-slate-400 block mb-1 uppercase text-[10px] tracking-wider">Version String</label>
+                <label className="text-[11px] font-medium text-slate-300 block mb-1">Version string</label>
                 <input
                   type="text"
                   value={workspace.version}
                   onChange={e => setWorkspace(prev => ({ ...prev, version: e.target.value }))}
-                  className="w-full p-2 rounded bg-black/50 border border-white/10 text-white focus:outline-none focus:border-cyan-500 transition-colors"
+                  className="w-full p-2 rounded-md bg-[#0a0d12] border border-white/[0.08] text-xs font-mono text-white focus:outline-none focus:border-sky-500/60 transition-colors"
                   placeholder="e.g. 1.0.0 or 100"
                 />
                 {/* Audit #1: live X4-version preview — semver ("1.0.0") and X4 integers ("100")
                     are both accepted; this shows exactly what content.xml will carry. */}
                 <p className="text-[11px] text-slate-400 mt-1 font-mono" data-testid="x4-version-preview">
-                  → content.xml version: <span className="text-cyan-300">{toContentVersion(workspace.version)}</span>
+                  → content.xml version: <span className="text-sky-300">{toContentVersion(workspace.version)}</span>
                   {' '}(shown in-game as v{(parseInt(toContentVersion(workspace.version), 10) / 100).toFixed(2)})
                 </p>
                 {sourceSync?.known && sourceSync.diskMeta?.version && sourceSync.versionDrifted && (
@@ -808,97 +808,97 @@ export default function Sidebar({
               </div>
 
               <div>
-                <label className="text-slate-400 block mb-1 uppercase text-[10px] tracking-wider">Author Name</label>
+                <label className="text-[11px] font-medium text-slate-300 block mb-1">Author name</label>
                 <input
                   type="text"
                   value={workspace.author}
                   onChange={e => setWorkspace(prev => ({ ...prev, author: e.target.value }))}
-                  className="w-full p-2 rounded bg-black/50 border border-white/10 text-white focus:outline-none focus:border-cyan-500 transition-colors"
+                  className="w-full p-2 rounded-md bg-[#0a0d12] border border-white/[0.08] text-xs font-mono text-white focus:outline-none focus:border-sky-500/60 transition-colors"
                   placeholder="Your Name"
                 />
               </div>
 
               <div>
-                <label className="text-slate-400 block mb-1 uppercase text-[10px] tracking-wider">Mod Description</label>
+                <label className="text-[11px] font-medium text-slate-300 block mb-1">Mod description</label>
                 <textarea
                   value={workspace.description}
                   onChange={e => setWorkspace(prev => ({ ...prev, description: e.target.value }))}
-                  className="w-full p-2 h-20 rounded bg-black/50 border border-white/10 text-white focus:outline-none focus:border-cyan-500 transition-colors resize-none"
+                  className="w-full p-2 h-20 rounded-md bg-[#0a0d12] border border-white/[0.08] text-xs font-mono text-white focus:outline-none focus:border-sky-500/60 transition-colors resize-none"
                   placeholder="Mod brief synopsis..."
                 />
               </div>
             </div>
 
-            <div className="border-t border-white/10 pt-4 space-y-3">
-              <h3 className="text-xs font-mono font-semibold text-cyan-400 tracking-wider uppercase flex items-center gap-1.5">
-                <Settings className="w-3.5 h-3.5" />
-                XSD Schema Source
+            <div className="border-t border-white/[0.08] pt-4 space-y-3">
+              <h3 className="text-xs font-semibold text-sky-300 flex items-center gap-1.5">
+                <Settings className="w-3.5 h-3.5 shrink-0" />
+                XSD schema source
               </h3>
 
               <div>
-                <label className="text-slate-400 block mb-1 uppercase text-[10px] tracking-wider">Schema Directory</label>
-                <div className="w-full p-2 rounded bg-black/40 border border-white/10 text-slate-300 font-mono text-[10px] break-all min-h-[34px] flex items-center">
-                  {schemaDir || <span className="text-slate-500 italic">Not configured — set it in Directory Settings</span>}
+                <label className="text-[11px] font-medium text-slate-300 block mb-1">Schema directory</label>
+                <div className="w-full p-2 rounded-md bg-[#0a0d12] border border-white/[0.08] text-slate-300 font-mono text-[11px] break-all min-h-[34px] flex items-center">
+                  {schemaDir || <span className="text-slate-400 italic font-sans">Not configured — set it in Directory Settings</span>}
                 </div>
-                <p className="text-slate-500 text-[9px] mt-1 leading-snug">
-                  Configured in <span className="text-cyan-400">Directory Settings</span> (the single source of truth). This panel is read-only.
+                <p className="text-slate-400 text-[11px] mt-1 leading-snug">
+                  Configured in <span className="text-sky-300">Directory Settings</span> (single source of truth). This view is read-only.
                 </p>
               </div>
 
-              <details className="group rounded bg-black/30 border border-white/10 text-[10px]">
-                <summary className="cursor-pointer list-none p-2 flex items-center justify-between gap-2 text-slate-300 hover:text-white">
-                  <span className="font-bold uppercase tracking-wider">
+              <details className="group rounded-md bg-[#0a0d12] border border-white/[0.08] text-[11px]">
+                <summary className="cursor-pointer list-none p-2.5 flex items-center justify-between gap-2 text-slate-200 hover:text-white">
+                  <span className="font-medium">
                     {schemaStatus.files?.length
                       ? `Found ${schemaStatus.files.length} schema files`
                       : schemaStatus.mdExists || schemaStatus.commonExists
                         ? 'Schema files found'
                         : 'No schema files found'}
                   </span>
-                  <ChevronRight className="w-3.5 h-3.5 text-cyan-400 transition-transform group-open:rotate-90" />
+                  <ChevronRight className="w-3.5 h-3.5 text-sky-400 transition-transform group-open:rotate-90" />
                 </summary>
-                <div className="max-h-56 overflow-y-auto border-t border-white/10 p-2 space-y-2 custom-scrollbar">
+                <div className="max-h-56 overflow-y-auto border-t border-white/[0.08] p-2 space-y-2 custom-scrollbar">
                   {(schemaStatus.files || []).length > 0 ? schemaStatus.files!.map(file => (
-                    <div key={`${file.domain}:${file.file}`} className="rounded border border-white/5 bg-black/25 p-1.5">
+                    <div key={`${file.domain}:${file.file}`} className="rounded border border-white/[0.06] bg-white/[0.02] p-2">
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-cyan-300 font-bold uppercase">{file.domain}</span>
-                        <span className="text-slate-600">{Math.max(1, Math.round(file.sizeBytes / 1024))} KB</span>
+                        <span className="text-sky-300 font-semibold font-mono">{file.domain}</span>
+                        <span className="text-slate-400 font-mono">{Math.max(1, Math.round(file.sizeBytes / 1024))} KB</span>
                       </div>
-                      <div className="mt-1 text-slate-500 break-all">{file.file}</div>
+                      <div className="mt-1 text-slate-400 font-mono break-all">{file.file}</div>
                       {file.includes.length > 0 && (
-                        <div className="mt-1 text-slate-600">includes: {file.includes.join(', ')}</div>
+                        <div className="mt-1 text-slate-400 font-mono">includes: {file.includes.join(', ')}</div>
                       )}
                       {file.missingIncludes.length > 0 && (
-                        <div className="mt-1 text-amber-300">missing: {file.missingIncludes.join(', ')}</div>
+                        <div className="mt-1 text-amber-300 font-mono">missing: {file.missingIncludes.join(', ')}</div>
                       )}
                     </div>
                   )) : (
-                    <div className="text-slate-500">No registry entries were returned.</div>
+                    <div className="text-slate-400">No registry entries were returned.</div>
                   )}
                 </div>
               </details>
 
               {schemaStatus.counts && (
-                <div className="flex flex-wrap gap-x-3 gap-y-1 rounded bg-black/30 border border-white/10 p-2 text-[9px] uppercase text-slate-500">
-                  <span>Events <strong className="text-white">{schemaStatus.counts.events}</strong></span>
-                  <span>Actions <strong className="text-white">{schemaStatus.counts.actions}</strong></span>
-                  <span>Conditions <strong className="text-white">{schemaStatus.counts.conditions}</strong></span>
-                  <span>Control <strong className="text-white">{schemaStatus.counts.control_flow}</strong></span>
+                <div className="flex flex-wrap gap-x-3 gap-y-1 rounded-md bg-[#0a0d12] border border-white/[0.08] p-2 text-[11px] text-slate-400">
+                  <span>Events <strong className="text-slate-100">{schemaStatus.counts.events}</strong></span>
+                  <span>Actions <strong className="text-slate-100">{schemaStatus.counts.actions}</strong></span>
+                  <span>Conditions <strong className="text-slate-100">{schemaStatus.counts.conditions}</strong></span>
+                  <span>Control <strong className="text-slate-100">{schemaStatus.counts.control_flow}</strong></span>
                 </div>
               )}
 
               <button
                 onClick={() => onOpenDirectorySettings?.()}
-                className="w-full px-3 py-2 rounded bg-cyan-600/20 border border-cyan-500/30 text-cyan-200 hover:bg-cyan-600/30 transition-colors font-bold uppercase text-[10px] tracking-wider flex items-center justify-center gap-1.5"
+                className="w-full px-3 py-2 rounded-md bg-sky-600/20 border border-sky-500/35 text-sky-200 hover:bg-sky-600/30 transition-colors font-medium text-xs flex items-center justify-center gap-1.5 cursor-pointer"
               >
                 <Settings className="w-3.5 h-3.5" />
                 Edit in Directory Settings
               </button>
 
               {(schemaMessage || schemaStatus.error) && (
-                <div className={`text-[10px] leading-relaxed rounded border p-2 ${
+                <div className={`text-[11px] leading-relaxed rounded-md border p-2.5 ${
                   schemaMessageType === 'success' && !schemaStatus.error
-                    ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300'
-                    : 'bg-red-500/10 border-red-500/20 text-red-300'
+                    ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-300'
+                    : 'bg-rose-500/10 border-rose-500/25 text-rose-300'
                 }`}>
                   {schemaMessage || schemaStatus.error}
                 </div>
@@ -906,31 +906,31 @@ export default function Sidebar({
             </div>
 
             {/* EXTENSION COMPILER & WORKSPACE STAGING */}
-            <div className="border-t border-white/10 pt-4 space-y-3">
-              <h3 className="text-xs font-mono font-semibold text-cyan-400 tracking-wider uppercase flex items-center gap-1.5">
-                <PackageCheck className="w-3.5 h-3.5" />
-                Extension Package Compiler
+            <div className="border-t border-white/[0.08] pt-4 space-y-3">
+              <h3 className="text-xs font-semibold text-sky-300 flex items-center gap-1.5">
+                <PackageCheck className="w-3.5 h-3.5 shrink-0" />
+                Extension package compiler
               </h3>
 
               {/* Local Directory Link state */}
               {modWorkspacePath ? (
                 <div className="space-y-3">
-                  <div className="p-2 rounded bg-emerald-500/5 border border-emerald-500/20 text-[10px] space-y-1">
-                    <div className="flex items-center justify-between text-slate-400 font-bold uppercase text-[9px]">
-                       <span>Workspace Path</span>
-                       <span className="text-emerald-400 flex items-center gap-1 font-semibold text-[9px]">● Configured</span>
+                  <div className="p-2.5 rounded-md bg-emerald-500/[0.06] border border-emerald-500/25 text-[11px] space-y-1">
+                    <div className="flex items-center justify-between text-slate-300 font-medium">
+                       <span>Workspace path</span>
+                       <span className="text-emerald-300 flex items-center gap-1 font-medium">● Configured</span>
                     </div>
-                    <div className="text-white break-all flex items-center gap-1 text-[10px]">
-                      <Folder className="w-3.5 h-3.5 text-yellow-400 shrink-0" />
+                    <div className="text-slate-100 font-mono break-all flex items-center gap-1.5 text-[11px]">
+                      <Folder className="w-3.5 h-3.5 text-amber-400 shrink-0" />
                       {modWorkspacePath}
                     </div>
                   </div>
 
                   {/* Staging Directory Layout Choice */}
                   <div>
-                    <label className="text-slate-400 block mb-1 uppercase text-[9px] tracking-wider flex items-center gap-1">
-                      <HardDrive className="w-3 h-3 text-cyan-400" />
-                      Staging Directory Layout
+                    <label className="text-[11px] font-medium text-slate-300 block mb-1 flex items-center gap-1.5">
+                      <HardDrive className="w-3.5 h-3.5 text-sky-400" />
+                      Staging directory layout
                     </label>
                     <select
                       value={workspaceDirMode}
@@ -939,24 +939,24 @@ export default function Sidebar({
                         if (setWorkspaceDirMode) setWorkspaceDirMode(val);
                         localStorage.setItem('x4_workspace_dir_mode', val);
                       }}
-                      className="w-full bg-[#0F1115] border border-white/10 p-1.5 rounded text-[10px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500 cursor-pointer"
+                      className="w-full bg-[#0a0d12] border border-white/[0.08] p-2 rounded-md text-[11px] font-mono text-slate-200 focus:outline-none focus:border-sky-500/60 cursor-pointer"
                     >
                       <option value="store">Extensions Parent Folder (extensions/&lt;mod_id&gt;/)</option>
                       <option value="candy">Direct Mod Folder (content.xml at root)</option>
                     </select>
-                    <p className="text-[9px] text-slate-500 leading-normal mt-1 italic">
-                      {workspaceDirMode === 'store' 
-                        ? 'Stages files in extensions/ folder inside a subdirectory named after your mod.' 
-                        : 'Writes files (content.xml, md/, etc) directly inside connected directory.'}
+                    <p className="text-[11px] text-slate-400 leading-snug mt-1">
+                      {workspaceDirMode === 'store'
+                        ? 'Stages files in extensions/ inside a subdirectory named after your mod.'
+                        : 'Writes files (content.xml, md/, etc.) directly inside connected directory.'}
                     </p>
                   </div>
 
                   {/* Compilation scope targets choice */}
-                  <div className="bg-[#0F1115]/50 border border-white/5 rounded p-2.5 space-y-2 select-none">
-                    <label className="text-slate-400 block uppercase text-[8.5px] tracking-wider font-bold">
-                      🛠️ active modules to compile
+                  <div className="bg-[#0a0d12] border border-white/[0.08] rounded-md p-2.5 space-y-2 select-none">
+                    <label className="text-slate-300 block text-[11px] font-medium">
+                      Active modules to compile
                     </label>
-                    <div className="grid grid-cols-2 gap-2 font-mono text-[9.5px]">
+                    <div className="grid grid-cols-2 gap-2 text-[11px]">
                       <label className="flex items-center gap-2 text-slate-300 hover:text-white cursor-pointer select-none">
                         <input
                           type="checkbox"
@@ -973,7 +973,7 @@ export default function Sidebar({
                           onChange={() => handleToggleCompileSetting('ui')}
                           className="accent-emerald-500 rounded cursor-pointer"
                         />
-                        HUD & LUA UI
+                        HUD &amp; Lua UI
                       </label>
                       <label className="flex items-center gap-2 text-slate-300 hover:text-white cursor-pointer select-none">
                         <input
@@ -991,7 +991,7 @@ export default function Sidebar({
                           onChange={() => handleToggleCompileSetting('library')}
                           className="accent-emerald-500 rounded cursor-pointer"
                         />
-                        Wares & Jobs
+                        Wares &amp; Jobs
                       </label>
                       <label className="flex items-center gap-2 text-slate-300 hover:text-white cursor-pointer select-none">
                         <input
@@ -1018,7 +1018,7 @@ export default function Sidebar({
                   <button
                     onClick={handleCompileModProject}
                     disabled={compileStatus === 'compiling'}
-                    className="w-full py-1.5 bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-800 disabled:text-slate-500 text-black font-mono font-bold text-[10px] rounded transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed uppercase shadow shadow-emerald-500/25 shrink-0"
+                    className="w-full py-2 bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-800 disabled:text-slate-500 text-black font-semibold text-xs rounded-md transition-colors flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed shrink-0"
                   >
                     <PackageCheck className={`w-4 h-4 ${compileStatus === 'compiling' ? 'animate-pulse' : ''}`} />
                     Compile Mod Extension
@@ -1026,7 +1026,7 @@ export default function Sidebar({
                 </div>
               ) : (
                 <div className="space-y-2">
-                  <p className="text-[9.5px] text-slate-500 leading-relaxed italic text-center py-2">
+                  <p className="text-[11px] text-slate-400 leading-relaxed text-center py-2">
                     No workspace staging folder configured. Configure it in Settings to enable compiler.
                   </p>
                 </div>
@@ -1034,10 +1034,10 @@ export default function Sidebar({
 
               {/* Compile results log notification */}
               {compileMessage && (
-                <div className={`p-2 rounded border font-mono text-[9.5px] ${
+                <div className={`p-2.5 rounded-md border font-mono text-[11px] ${
                   compileStatus === 'error'
-                    ? 'bg-red-500/10 border-red-500/20 text-red-300'
-                    : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                    ? 'bg-rose-500/10 border-rose-500/25 text-rose-300'
+                    : 'bg-emerald-500/10 border-emerald-500/25 text-emerald-300'
                 }`}>
                   {compileMessage}
                 </div>
@@ -1060,42 +1060,40 @@ export default function Sidebar({
           <div className="space-y-4">
             {/* Title */}
             <div>
-              <h3 className="text-xs font-mono font-semibold text-cyan-400 mb-1 tracking-wider uppercase flex items-center gap-1.5 leading-none">
-                <Library className="w-4 h-4 text-cyan-400" />
-                TEMPLATE BLUEPRINTS
+              <h3 className="text-xs font-semibold text-sky-300 mb-1 flex items-center gap-1.5 leading-tight">
+                <Library className="w-4 h-4 text-sky-400 shrink-0" />
+                <span>Template blueprints</span>
               </h3>
-              <p className="text-[10px] text-slate-500 leading-normal font-sans">
-                Non-compilable visual templates. Drag them onto the canvas or drag-start, select, and customize them.
+              <p className="text-[11px] text-slate-400 leading-snug">
+                Non-compilable visual templates. Drag them onto the canvas or stamp reusable patterns below.
               </p>
             </div>
 
-            {/* B22s2: proven patterns, stampable MID-CANVAS (onboarding covers only the
-                empty canvas; this is the same library for a working graph). */}
-            <div className="space-y-2 bg-black/40 p-3 rounded border border-amber-500/10 font-mono">
-              <span className="text-amber-400 uppercase font-bold text-[9px] tracking-wider block">
+            {/* B22s2: proven patterns, stampable MID-CANVAS */}
+            <div className="space-y-2 bg-[#0a0d12] p-3 rounded-lg border border-amber-500/20">
+              <span className="text-amber-300 font-semibold text-xs block">
                 Proven patterns — stamp onto canvas
               </span>
-              <p className="text-[9px] text-slate-500 leading-snug font-sans">
-                Working fragments from shipping mods. Stamping ADDS the pattern below your
-                current graph — nothing is replaced. Rename the $variables to make it yours.
+              <p className="text-[11px] text-slate-400 leading-snug">
+                Working fragments from shipping mods. Stamping adds the pattern below your current graph without replacing nodes.
               </p>
               {MOD_PATTERNS.map(p => (
-                <div key={p.id} className="rounded border border-amber-500/15 bg-amber-500/[0.03] p-2">
+                <div key={p.id} className="rounded-md border border-amber-500/20 bg-amber-500/[0.04] p-2.5">
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <div className="text-amber-300 font-semibold text-[10px] leading-tight">{p.title}</div>
-                      <div className="text-slate-500 text-[9px] mt-0.5 leading-snug font-sans">{p.blurb}</div>
-                      <div className="text-slate-600 text-[8.5px] mt-0.5 truncate" title={`${p.provenance.provenMod} — ${p.provenance.file}\n${p.provenance.note}`}>
-                        ⛏ {p.provenance.provenMod}
+                      <div className="text-amber-200 font-semibold text-[11px] leading-tight">{p.title}</div>
+                      <div className="text-slate-300 text-[11px] mt-1 leading-snug">{p.blurb}</div>
+                      <div className="text-slate-400 text-[11px] font-mono mt-1 truncate" title={`${p.provenance.provenMod} — ${p.provenance.file}\n${p.provenance.note}`}>
+                        {p.provenance.provenMod}
                       </div>
                     </div>
                     <button
                       data-testid={`stamp-pattern-${p.id}`}
                       onClick={() => setWorkspace(ws => stampPatternIntoWorkspace(ws, p.id))}
-                      className="shrink-0 px-2 py-1 rounded bg-amber-600/30 border border-amber-400/30 hover:bg-amber-600/50 text-amber-100 text-[9px] font-bold cursor-pointer"
+                      className="shrink-0 px-2.5 py-1 rounded bg-amber-600/25 border border-amber-400/35 hover:bg-amber-600/40 text-amber-100 text-[11px] font-medium cursor-pointer transition-colors"
                       title="Add this pattern below your current graph."
                     >
-                      STAMP
+                      Stamp
                     </button>
                   </div>
                 </div>
@@ -1103,27 +1101,27 @@ export default function Sidebar({
             </div>
 
             {/* Part 1: CREATE REUSABLE BLUEPRINT */}
-            <div className="space-y-3 bg-black/40 p-3 rounded border border-white/5 font-mono text-[11px]">
-              <span className="text-sky-400 uppercase font-bold text-[9.5px] tracking-wider block">
-                Create Reusable Blueprint
+            <div className="space-y-3 bg-[#0a0d12] p-3 rounded-lg border border-white/[0.08] text-xs">
+              <span className="text-sky-300 font-semibold block">
+                Create reusable blueprint
               </span>
-              
+
               <div>
-                <label className="text-slate-400 block mb-1 uppercase text-[8.5px] tracking-wider">Blueprint Title</label>
+                <label className="text-[11px] font-medium text-slate-300 block mb-1">Blueprint title</label>
                 <input
                   type="text"
                   value={newTemplateName}
                   onChange={e => setNewTemplateName(e.target.value)}
-                  className="w-full p-1.5 rounded bg-black/50 border border-white/10 text-white focus:outline-none focus:border-cyan-500 text-[10px]"
+                  className="w-full p-2 rounded-md bg-[#11151d] border border-white/[0.08] text-white focus:outline-none focus:border-sky-500/60 text-[11px]"
                 />
               </div>
 
               <div>
-                <label className="text-slate-400 block mb-1 uppercase text-[8.5px] tracking-wider">Base Node Structure</label>
+                <label className="text-[11px] font-medium text-slate-300 block mb-1">Base node structure</label>
                 <select
                   value={newTemplateTypeIdx}
                   onChange={e => setNewTemplateTypeIdx(Number(e.target.value))}
-                  className="w-full p-1.5 rounded bg-[#0b0c10] border border-white/10 text-slate-300 focus:outline-none focus:border-cyan-500 text-[10px] cursor-pointer"
+                  className="w-full p-2 rounded-md bg-[#11151d] border border-white/[0.08] text-slate-200 focus:outline-none focus:border-sky-500/60 text-[11px] cursor-pointer"
                 >
                   {NODE_TEMPLATES.map((nodeT, idx) => (
                     <option key={idx} value={idx}>
@@ -1160,20 +1158,20 @@ export default function Sidebar({
                   }));
                   setNewTemplateName('New Custom Blueprint');
                 }}
-                className="w-full py-1.5 font-bold uppercase transition-all bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-300 hover:text-white rounded border border-cyan-500/30 cursor-pointer text-[10px] tracking-wider text-center"
+                className="w-full py-1.5 font-medium transition-colors bg-sky-600/20 hover:bg-sky-600/30 text-sky-200 hover:text-white rounded-md border border-sky-500/35 cursor-pointer text-xs text-center"
               >
-                + Save as Blueprint
+                + Save as blueprint
               </button>
             </div>
 
             {/* Part 2: LIST AND EDITING */}
             <div className="space-y-2">
-              <span className="text-slate-400 uppercase font-bold text-[9px] tracking-wider flex items-center justify-between">
-                <span>AVAILABLE BLUEPRINTS</span>
-                <span className="text-slate-500 text-[8px] lowercase">drag or click to add</span>
-              </span>
+              <div className="text-slate-300 font-medium text-[11px] flex items-center justify-between">
+                <span>Available blueprints</span>
+                <span className="text-slate-400">Drag or click to add</span>
+              </div>
 
-              <div className="space-y-1.5 max-h-[300px] overflow-y-auto pr-1">
+              <div className="space-y-1.5 max-h-[300px] overflow-y-auto pr-1 custom-scrollbar">
                 {[
                   {
                     id: 'preseed_sample_cue',
@@ -1216,12 +1214,13 @@ export default function Sidebar({
                   },
                   ...(workspace.templates || [])
                 ].map((tNode, idx) => {
-                  let badgeColors = 'bg-blue-500/10 text-blue-400 border-blue-500/20';
-                  if (tNode.type === 'cue') badgeColors = 'bg-purple-500/10 text-purple-400 border-purple-500/20';
-                  if (tNode.type === 'event') badgeColors = 'bg-amber-500/10 text-amber-400 border-amber-500/30';
-                  if (tNode.type === 'condition') badgeColors = 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20';
-                  if (tNode.type === 'action') badgeColors = 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
+                  let badgeColors = 'bg-blue-500/10 text-blue-300 border-blue-500/25';
+                  if (tNode.type === 'cue') badgeColors = 'bg-purple-500/10 text-purple-300 border-purple-500/25';
+                  if (tNode.type === 'event') badgeColors = 'bg-amber-500/10 text-amber-300 border-amber-500/30';
+                  if (tNode.type === 'condition') badgeColors = 'bg-sky-500/10 text-sky-300 border-sky-500/25';
+                  if (tNode.type === 'action') badgeColors = 'bg-emerald-500/10 text-emerald-300 border-emerald-500/25';
 
+                  const typeLabel = tNode.type.charAt(0).toUpperCase() + tNode.type.slice(1);
                   const isCustom = !tNode.id.startsWith('preseed_');
 
                   return (
@@ -1243,25 +1242,23 @@ export default function Sidebar({
                           setEditedTemplateId(null);
                         }
                       }}
-                      className={`p-2 rounded bg-[#1c1f26] border hover:border-cyan-500/50 transition-all flex flex-col gap-1.5 cursor-grab active:cursor-grabbing font-mono text-[10px] ${
-                        editedTemplateId === tNode.id ? 'border-cyan-500 text-white bg-cyan-700/5' : 'border-white/5 text-slate-300'
+                      className={`p-2.5 rounded-md bg-[#161b24] border hover:border-sky-500/45 transition-colors flex flex-col gap-1.5 cursor-grab active:cursor-grabbing text-[11px] ${
+                        editedTemplateId === tNode.id ? 'border-sky-500 text-white bg-sky-500/[0.08]' : 'border-white/[0.08] text-slate-300'
                       }`}
                       title="Drag this card onto the visual canvas to spawn it, or click to edit item attributes."
                     >
-                      <div className="flex items-center justify-between">
-                        <span className="font-semibold text-slate-200 select-none">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-medium text-slate-200 select-none truncate">
                           {tNode.label}
                         </span>
-                        <div className="flex items-center gap-1">
-                          <span className={`text-[8px] font-bold border px-1 rounded scale-90 ${badgeColors}`}>
-                            {tNode.type.toUpperCase()}
-                          </span>
-                        </div>
+                        <span className={`text-[11px] font-medium border px-1.5 py-0.5 rounded shrink-0 ${badgeColors}`}>
+                          {typeLabel}
+                        </span>
                       </div>
 
-                      <div className="flex items-center justify-between text-[9px] text-slate-400 select-none border-t border-white/5 pt-1 font-mono">
+                      <div className="flex items-center justify-between text-[11px] text-slate-400 select-none border-t border-white/[0.06] pt-1.5 font-mono">
                         <span>&lt;{tNode.xmlTag}&gt;</span>
-                        <div className="flex gap-1.5">
+                        <div className="flex gap-1.5 font-sans">
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
@@ -1279,7 +1276,7 @@ export default function Sidebar({
                                 nodes: [...prev.nodes, instNode]
                               }));
                             }}
-                            className="text-cyan-400 hover:text-cyan-200 transition-all cursor-pointer font-bold leading-none bg-cyan-500/10 px-1 py-0.5 rounded uppercase text-[8px]"
+                            className="text-sky-300 hover:text-sky-100 transition-colors cursor-pointer font-medium bg-sky-500/12 hover:bg-sky-500/20 px-1.5 py-0.5 rounded text-[11px]"
                           >
                             + Insert active
                           </button>
@@ -1296,10 +1293,10 @@ export default function Sidebar({
                                   setEditedTemplateId(null);
                                 }
                               }}
-                              className="text-red-400 hover:text-red-300 hover:bg-red-500/10 px-1 py-0.5 rounded cursor-pointer leading-none"
+                              className="text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 px-1 py-0.5 rounded cursor-pointer leading-none"
                               title="Delete this template blueprint"
                             >
-                              <Trash2 className="w-3 h-3" />
+                              <Trash2 className="w-3.5 h-3.5" />
                             </button>
                           )}
                         </div>
@@ -1312,21 +1309,21 @@ export default function Sidebar({
 
             {/* PART 3: VISUALLY SEE & EDIT CUSTOM TEMPLATE ATTRIBUTES */}
             {editedTemplateId && (
-              <div className="border-t border-cyan-500/20 pt-3 space-y-3 bg-[#0F1115] p-3 rounded border border-white/10 font-mono text-[11px]">
+              <div className="space-y-3 bg-[#0a0d12] p-3 rounded-lg border border-sky-500/25 text-xs">
                 <div className="flex items-center justify-between">
-                  <span className="text-cyan-400 font-bold text-[9px] uppercase tracking-wider">
-                    Edit Blueprint Fields
+                  <span className="text-sky-300 font-semibold text-[11px]">
+                    Edit blueprint fields
                   </span>
                   <button
                     onClick={() => setEditedTemplateId(null)}
-                    className="text-slate-400 hover:text-white cursor-pointer"
+                    className="text-[11px] text-slate-400 hover:text-white cursor-pointer"
                   >
                     Close
                   </button>
                 </div>
 
                 <div>
-                  <label className="text-slate-400 block mb-1 uppercase text-[8.5px] tracking-wider">Display Label</label>
+                  <label className="text-[11px] font-medium text-slate-300 block mb-1">Display label</label>
                   <input
                     type="text"
                     value={editedTemplateLabel}
@@ -1340,12 +1337,12 @@ export default function Sidebar({
                         )
                       }));
                     }}
-                    className="w-full p-1.5 rounded bg-black/60 border border-white/10 text-white focus:outline-none focus:border-cyan-500 text-[10px]"
+                    className="w-full p-2 rounded-md bg-[#11151d] border border-white/[0.08] text-white focus:outline-none focus:border-sky-500/60 text-[11px]"
                   />
                 </div>
 
                 <div>
-                  <label className="text-slate-400 block mb-1 uppercase text-[8.5px] tracking-wider">XML Tag Node</label>
+                  <label className="text-[11px] font-medium text-slate-300 block mb-1">XML tag node</label>
                   <input
                     type="text"
                     value={editedTemplateXmlTag}
@@ -1359,12 +1356,12 @@ export default function Sidebar({
                         )
                       }));
                     }}
-                    className="w-full p-1.5 rounded bg-black/60 border border-white/10 text-white focus:outline-none focus:border-cyan-500 text-[10px]"
+                    className="w-full p-2 rounded-md bg-[#11151d] border border-white/[0.08] text-white focus:outline-none focus:border-sky-500/60 font-mono text-[11px]"
                   />
                 </div>
-                
-                <p className="text-[8px] text-slate-500 leading-normal italic select-none font-sans">
-                  Editing values instantly refreshes blueprint configurations safely without altering canvas assets.
+
+                <p className="text-[11px] text-slate-400 leading-snug select-none">
+                  Editing values refreshes blueprint configurations safely without altering canvas assets.
                 </p>
               </div>
             )}

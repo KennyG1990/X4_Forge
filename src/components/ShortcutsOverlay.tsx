@@ -8,68 +8,58 @@
  * list — when a new binding is added elsewhere, add its row here in the same task.
  */
 
-import { X, Keyboard } from 'lucide-react';
+import { Keyboard } from 'lucide-react';
 import { STUDIO_SHORTCUTS } from '../lib/forgeKnowledge';
+import { ModalShell } from './ui';
 
 const SHORTCUTS = STUDIO_SHORTCUTS;
 
 const Key = ({ k }: { k: string }) => (
-  <kbd className="px-1.5 py-0.5 rounded border border-white/20 bg-white/10 text-[10px] font-mono text-slate-200 shadow-[0_1px_0_rgba(255,255,255,0.08)]">
+  <kbd className="px-1.5 py-0.5 rounded border border-white/15 bg-white/[0.06] text-[11px] font-mono text-slate-200 shadow-[0_1px_0_rgba(255,255,255,0.06)]">
     {k}
   </kbd>
 );
 
 export default function ShortcutsOverlay({ onClose }: { onClose: () => void }) {
   return (
-    <div
-      data-testid="shortcuts-overlay"
-      className="fixed inset-0 z-[200] bg-black/60 backdrop-blur-sm flex items-center justify-center"
-      onClick={onClose}
+    <ModalShell
+      title="Keyboard shortcuts"
+      icon={<Keyboard className="w-4 h-4 text-sky-400" />}
+      onClose={onClose}
+      dataTestId="shortcuts-overlay"
+      closeButtonTestId="shortcuts-close-btn"
+      closeButtonTitle="Close (Esc)"
+      maxWidthClass="max-w-[460px]"
+      zIndexClass="z-[200]"
+      bodyClassName="min-h-0 flex-1 overflow-y-auto custom-scrollbar p-4"
+      footer={(
+        <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
+          Press <Key k="?" /> anywhere outside an input to reopen this list.
+        </div>
+      )}
     >
-      <div
-        className="w-[440px] max-w-[92vw] rounded-lg border border-white/15 bg-[#161920] p-4 shadow-2xl"
-        onClick={e => e.stopPropagation()}
-      >
-        <div className="flex items-center gap-2 mb-3">
-          <Keyboard className="w-4 h-4 text-cyan-400" />
-          <h2 className="text-[12px] font-bold font-mono uppercase tracking-wider text-cyan-300">
-            Keyboard shortcuts
-          </h2>
-          <button
-            onClick={onClose}
-            data-testid="shortcuts-close-btn"
-            className="ml-auto p-1 rounded text-slate-500 hover:text-slate-200 hover:bg-white/10 cursor-pointer"
-            title="Close (Esc)"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-        <table className="w-full">
-          <tbody>
-            {SHORTCUTS.map((s, i) => (
-              <tr key={i} className="border-t border-white/5">
-                <td className="py-1.5 pr-3 whitespace-nowrap">
-                  <span className="inline-flex items-center gap-1">
-                    {s.keys.map((k, j) => (
-                      <span key={j} className="inline-flex items-center gap-1">
-                        {j > 0 && <span className="text-slate-600 text-[10px]">+</span>}
-                        <Key k={k} />
-                      </span>
-                    ))}
-                  </span>
-                </td>
-                <td className="py-1.5 text-[12px] text-slate-300">{s.what}</td>
-                <td className="py-1.5 pl-2 text-[10px] font-mono uppercase text-slate-600 text-right whitespace-nowrap">
-                  {s.where}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <div className="mt-3 text-[10px] text-slate-600 font-mono">
-          Press <Key k="?" /> anywhere to reopen this list.
-        </div>
-      </div>
-    </div>
+      <table className="w-full">
+        <tbody>
+          {SHORTCUTS.map((s, i) => (
+            <tr key={i} className="border-t first:border-t-0 border-white/[0.06]">
+              <td className="py-2 pr-3 whitespace-nowrap">
+                <span className="inline-flex items-center gap-1">
+                  {s.keys.map((k, j) => (
+                    <span key={j} className="inline-flex items-center gap-1">
+                      {j > 0 && <span className="text-slate-500 text-[11px]">+</span>}
+                      <Key k={k} />
+                    </span>
+                  ))}
+                </span>
+              </td>
+              <td className="py-2 text-xs text-slate-200">{s.what}</td>
+              <td className="py-2 pl-2 text-[11px] font-mono text-slate-400 text-right whitespace-nowrap">
+                {s.where}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </ModalShell>
   );
 }

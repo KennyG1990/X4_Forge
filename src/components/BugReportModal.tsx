@@ -10,8 +10,9 @@
  */
 
 import React, { useMemo, useState } from 'react';
-import { Bug, Copy, ExternalLink, X, Check } from 'lucide-react';
+import { Bug, Copy, ExternalLink, Check } from 'lucide-react';
 import { buildBugReport, BUG_TRACKER_REPO } from '../lib/bugReport';
+import { ModalShell } from './ui';
 
 interface BugReportModalProps {
   isOpen: boolean;
@@ -51,91 +52,92 @@ export default function BugReportModal({ isOpen, onClose, context }: BugReportMo
   };
 
   return (
-    <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/70 backdrop-blur-sm" data-testid="bug-report-modal">
-      <div className="w-[560px] max-w-[94vw] max-h-[88vh] overflow-y-auto rounded-xl border border-amber-500/25 bg-[#0d1017] shadow-[0_10px_40px_rgba(0,0,0,0.6)]">
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-white/5">
-          <div className="flex items-center gap-2 font-mono text-[12px] font-bold text-amber-300">
-            <Bug className="w-4 h-4" /> REPORT A BUG
-          </div>
-          <button onClick={onClose} title="Close" className="p-1 rounded text-slate-400 hover:text-white hover:bg-white/5 cursor-pointer">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        <div className="p-4 space-y-3 text-[12px] text-slate-300">
-          <p className="text-slate-400 leading-relaxed">
-            This opens a <span className="text-slate-200">pre-filled bug report</span> on the X4 Forge GitHub page
-            (<span className="font-mono text-[11px]">{BUG_TRACKER_REPO}</span>) — review it there and press
-            <span className="text-slate-200"> Submit</span>. Submitting needs a free GitHub account; no GitHub?
-            Use <span className="text-slate-200">Copy report</span> and paste it in Discord instead.
-          </p>
-
-          <div>
-            <label className="block font-mono text-[10px] uppercase text-slate-500 mb-1">Short title *</label>
-            <input
-              data-testid="bug-title"
-              value={title}
-              onChange={e => { setTitle(e.target.value); setError(''); }}
-              placeholder="e.g. Deploy button does nothing after switching workspace"
-              className="w-full bg-black/40 border border-white/10 rounded px-2.5 py-2 text-slate-200 outline-none focus:border-amber-500/50"
-            />
-          </div>
-
-          <div>
-            <label className="block font-mono text-[10px] uppercase text-slate-500 mb-1">What happened? Steps to reproduce?</label>
-            <textarea
-              data-testid="bug-description"
-              value={description}
-              onChange={e => setDescription(e.target.value)}
-              rows={6}
-              placeholder={'1. What you did\n2. What you expected\n3. What actually happened'}
-              className="w-full bg-black/40 border border-white/10 rounded px-2.5 py-2 text-slate-200 outline-none focus:border-amber-500/50 resize-y font-mono text-[11.5px] leading-relaxed"
-            />
-          </div>
-
-          {/* Context — shown verbatim so nothing rides along invisibly */}
-          <div className="rounded-lg border border-white/5 bg-white/[0.02] p-2.5">
-            <label className="flex items-center gap-2 cursor-pointer select-none">
-              <input type="checkbox" checked={includeContext} onChange={e => setIncludeContext(e.target.checked)} />
-              <span className="font-mono text-[10px] uppercase text-slate-400 font-bold">Attach technical details (recommended)</span>
-            </label>
-            {includeContext && (
-              <div className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 font-mono text-[10.5px] text-slate-500">
-                {Object.entries(context).map(([k, v]) => (
-                  <React.Fragment key={k}><span>{k}</span><span className="text-slate-400 truncate">{v}</span></React.Fragment>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {error && <div className="rounded border border-red-500/40 bg-red-500/10 text-red-300 px-3 py-2 font-mono text-[11px]">{error}</div>}
-
-          <div className="flex items-center gap-2 pt-1">
+    <ModalShell
+      title="Report a Bug"
+      subtitle={`Pre-filled GitHub issue for ${BUG_TRACKER_REPO}`}
+      icon={<Bug className="w-4 h-4 text-amber-400" />}
+      borderTone="amber"
+      onClose={onClose}
+      dataTestId="bug-report-modal"
+      maxWidthClass="max-w-[560px]"
+      zIndexClass="z-[300]"
+      bodyClassName="min-h-0 flex-1 overflow-y-auto custom-scrollbar p-4 space-y-3 text-xs text-slate-300"
+      footer={(
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
             <button
+              type="button"
               data-testid="bug-open-github"
               onClick={openIssue}
               disabled={!title.trim()}
-              className="flex-1 px-3 py-2 rounded font-mono text-[11px] font-bold bg-amber-600/20 text-amber-300 border border-amber-500/30 hover:bg-amber-600/30 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-1.5"
+              className="flex-1 px-3 py-2 rounded-md text-xs font-medium bg-amber-600/20 text-amber-200 border border-amber-500/35 hover:bg-amber-600/30 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer flex items-center justify-center gap-1.5 transition-colors"
             >
-              <ExternalLink className="w-3.5 h-3.5" /> OPEN GITHUB ISSUE
+              <ExternalLink className="w-3.5 h-3.5" /> Open GitHub issue
             </button>
             <button
+              type="button"
               data-testid="bug-copy"
               onClick={() => void copyReport()}
-              className="px-3 py-2 rounded font-mono text-[11px] font-bold bg-white/5 text-slate-300 border border-white/10 hover:bg-white/10 cursor-pointer flex items-center gap-1.5"
+              className="px-3 py-2 rounded-md text-xs font-medium bg-white/[0.04] text-slate-200 border border-white/10 hover:bg-white/[0.08] cursor-pointer flex items-center gap-1.5 transition-colors"
               title="Copy the full report as text (fallback if you don't use GitHub)"
             >
-              {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />} {copied ? 'COPIED' : 'COPY REPORT'}
+              {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />} {copied ? 'Copied' : 'Copy report'}
             </button>
           </div>
           {report.ok && report.truncated && (
-            <p className="text-[10px] text-amber-300/80 font-mono">
-              Long report: the GitHub page will show a shortened version — the FULL text is copied to your clipboard automatically; paste it into the issue.
+            <p className="text-[11px] text-amber-300/90 leading-snug">
+              Long report: the GitHub page will show a shortened version — the full text is copied to your clipboard automatically; paste it into the issue.
             </p>
           )}
         </div>
+      )}
+    >
+      <p className="text-slate-400 leading-relaxed">
+        This opens a <span className="text-slate-200">pre-filled bug report</span> on the X4 Forge GitHub page
+        (<span className="font-mono text-[11px] text-slate-300">{BUG_TRACKER_REPO}</span>) — review it there and press
+        <span className="text-slate-200"> Submit</span>. Submitting needs a free GitHub account; no GitHub?
+        Use <span className="text-slate-200">Copy report</span> and paste it in Discord instead.
+      </p>
+
+      <div>
+        <label className="block text-[11px] font-medium text-slate-300 mb-1">Short title *</label>
+        <input
+          data-testid="bug-title"
+          value={title}
+          onChange={e => { setTitle(e.target.value); setError(''); }}
+          placeholder="e.g. Deploy button does nothing after switching workspace"
+          className="w-full bg-[#0a0d12] border border-white/10 rounded-md px-2.5 py-2 text-xs text-slate-100 outline-none focus:border-amber-500/50 transition-colors"
+        />
       </div>
-    </div>
+
+      <div>
+        <label className="block text-[11px] font-medium text-slate-300 mb-1">What happened? Steps to reproduce?</label>
+        <textarea
+          data-testid="bug-description"
+          value={description}
+          onChange={e => setDescription(e.target.value)}
+          rows={6}
+          placeholder={'1. What you did\n2. What you expected\n3. What actually happened'}
+          className="w-full bg-[#0a0d12] border border-white/10 rounded-md px-2.5 py-2 text-slate-100 outline-none focus:border-amber-500/50 resize-y font-mono text-[11.5px] leading-relaxed transition-colors"
+        />
+      </div>
+
+      {/* Context — shown verbatim so nothing rides along invisibly */}
+      <div className="rounded-lg border border-white/[0.08] bg-white/[0.02] p-3">
+        <label className="flex items-center gap-2 cursor-pointer select-none">
+          <input type="checkbox" checked={includeContext} onChange={e => setIncludeContext(e.target.checked)} className="accent-sky-500" />
+          <span className="text-[11px] text-slate-300 font-medium">Attach technical details (recommended)</span>
+        </label>
+        {includeContext && (
+          <div className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 font-mono text-[11px] text-slate-400">
+            {Object.entries(context).map(([k, v]) => (
+              <React.Fragment key={k}><span>{k}</span><span className="text-slate-300 truncate">{v}</span></React.Fragment>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {error && <div className="rounded-md border border-rose-500/40 bg-rose-500/10 text-rose-200 px-3 py-2 text-[11px]">{error}</div>}
+    </ModalShell>
   );
 }

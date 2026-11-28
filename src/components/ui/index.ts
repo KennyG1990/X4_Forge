@@ -4,3 +4,4 @@ export { default as StatusPill, type StatusPillProps, type StatusPillTone } from
 export { default as HelpPopover, type HelpPopoverProps } from './HelpPopover';
 export { default as CompactCard, type CompactCardProps } from './CompactCard';
 export { default as DisclosureRow, type DisclosureRowProps } from './DisclosureRow';
+export { default as ModalShell, type ModalShellProps } from './ModalShell';

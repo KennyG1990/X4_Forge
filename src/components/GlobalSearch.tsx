@@ -538,7 +538,7 @@ export default function GlobalSearch({
                 type="button"
                 tabIndex={-1}
                 onClick={() => openSearch('>')}
-                className="text-[9.5px] font-mono text-slate-400 hover:text-sky-300 bg-slate-800/70 border border-slate-700/70 px-1.5 py-0.5 rounded cursor-pointer"
+                className="text-[11px] font-mono text-slate-400 hover:text-sky-300 bg-slate-800/70 border border-slate-700/70 px-1.5 py-0.5 rounded cursor-pointer"
                 title="Open Command Palette (>)"
               >
                 &gt;
@@ -551,15 +551,15 @@ export default function GlobalSearch({
         {isOpen && query.trim() && (
           <div className="mt-1.5 w-full lg:absolute lg:left-0 lg:w-[420px] bg-[#11161f] border border-slate-700/80 shadow-2xl rounded-lg overflow-hidden z-50">
             <div className="px-2.5 py-1.5 border-b border-slate-800 bg-[#151b26] flex items-center justify-between">
-              <span className="text-[10.5px] text-sky-300 font-semibold">
+              <span className="text-[11px] text-sky-300 font-semibold">
                 {isCommandMode ? `Workbench Commands (${results.length})` : `Matched Search Targets (${results.length})`}
               </span>
-              <span className="text-[10px] text-slate-500">↑↓ Navigate · Enter</span>
+              <span className="text-[11px] text-slate-400">↑↓ Navigate · Enter</span>
             </div>
 
             <div className="max-h-[min(22rem,calc(100dvh-9rem))] overflow-y-auto custom-scrollbar p-1.5 space-y-1">
               {navigableList.length === 0 ? (
-                <div className="p-6 text-center text-slate-500 text-xs">
+                <div className="p-6 text-center text-slate-400 text-xs">
                   No matching mod elements, commands, or docs found.
                 </div>
               ) : (
@@ -583,13 +583,13 @@ export default function GlobalSearch({
                         <div className="flex-1 min-w-0 flex flex-col gap-0.5">
                           <div className="flex items-center justify-between gap-2">
                             <span className="font-semibold text-[11.5px] truncate">{item.title}</span>
-                            <span className="text-[9.5px] px-1.5 py-0.5 font-medium rounded bg-slate-800 text-slate-300 border border-slate-700/70 shrink-0">
+                            <span className="text-[11px] px-1.5 py-0.5 font-medium rounded bg-slate-800 text-slate-300 border border-slate-700/70 shrink-0">
                               {badgeLabel(item.category)}
                             </span>
                           </div>
-                          <span className="text-[10.5px] text-slate-400 truncate">{item.subtitle}</span>
+                          <span className="text-[11px] text-slate-400 truncate">{item.subtitle}</span>
                           {item.meta && (
-                            <span className="text-[10px] text-slate-500 truncate font-mono mt-0.5">
+                            <span className="text-[11px] text-slate-400 truncate font-mono mt-0.5">
                               {item.meta}
                             </span>
                           )}
@@ -605,7 +605,7 @@ export default function GlobalSearch({
 
                   {secondaryMatches.length > 0 && (
                     <div className="pt-1.5 mt-1 border-t border-slate-800/80 space-y-1">
-                      <div className="px-2 py-0.5 text-[10px] font-semibold text-slate-500">
+                      <div className="px-2 py-0.5 text-[11px] font-semibold text-slate-400">
                         Views, Commands &amp; Docs
                       </div>
                       {secondaryMatches.map((item, offset) => {
@@ -624,7 +624,7 @@ export default function GlobalSearch({
                           >
                             <span className="text-slate-400 shrink-0">{renderIcon(item.category)}</span>
                             <span className="text-[11px] font-medium truncate flex-1">{item.title}</span>
-                            <span className="text-[9.5px] text-slate-500 shrink-0">{badgeLabel(item.category)}</span>
+                            <span className="text-[11px] text-slate-400 shrink-0">{badgeLabel(item.category)}</span>
                           </div>
                         );
                       })}
@@ -634,7 +634,7 @@ export default function GlobalSearch({
               )}
             </div>
 
-            <div className="px-2.5 py-1.5 border-t border-slate-800 bg-[#0d1118] flex items-center justify-between text-[10px] text-slate-500">
+            <div className="px-2.5 py-1.5 border-t border-slate-800 bg-[#0d1118] flex items-center justify-between text-[11px] text-slate-400">
               <span>{isCommandMode ? 'Command Palette active' : 'Tip: prefix with > for Studio commands'}</span>
               <span className="inline-flex items-center gap-1">
                 <CornerDownLeft className="w-2.5 h-2.5" />

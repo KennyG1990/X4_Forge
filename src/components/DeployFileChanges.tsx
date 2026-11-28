@@ -59,7 +59,7 @@ export default function DeployFileChanges({ effect, label = 'File changes' }: {
         setPage(0);
       }}
     >
-      <summary className="cursor-pointer rounded focus-visible:outline focus-visible:outline-cyan-400">
+      <summary className="cursor-pointer rounded focus-visible:outline focus-visible:outline-sky-400">
         {label} · {counts}
       </summary>
       {open && (

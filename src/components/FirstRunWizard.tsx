@@ -17,6 +17,7 @@
 import React, { useEffect, useState } from 'react';
 import { Rocket, Search, FolderCog, CheckCircle2, AlertTriangle, Loader2 } from 'lucide-react';
 import { ttfm } from '../lib/ttfm';
+import { ModalShell } from './ui';
 
 interface DetectResult {
   found: boolean;
@@ -100,129 +101,142 @@ const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ onClose, onOpenManualSe
   };
 
   const row = (label: string, value: string) => (
-    <div className="flex items-baseline gap-2 text-[11px]">
-      <span className="text-slate-500 w-28 shrink-0 text-right">{label}</span>
+    <div className="flex items-baseline gap-2.5 text-[11px]">
+      <span className="text-slate-400 w-36 shrink-0 text-right">{label}</span>
       <span className="text-slate-200 font-mono break-all">{value}</span>
     </div>
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="w-[520px] max-w-[90%] bg-[#0f131a]/97 border border-cyan-500/25 rounded-xl shadow-2xl glass-effect p-6">
-        <div className="flex items-center gap-2.5 mb-1">
-          <Rocket size={18} className="text-cyan-300" />
-          <div className="text-white font-bold text-sm tracking-wide flex-1">Welcome to X4 Forge</div>
-          {/* 2026-07-11 visual pass: the found-state trapped look-around users between two
-              commitments — every phase except mid-apply is dismissible. */}
-          {phase !== 'applying' && (
-            <button onClick={onClose} aria-label="Dismiss setup" className="text-slate-500 hover:text-slate-300 cursor-pointer text-sm leading-none">✕</button>
-          )}
+    <ModalShell
+      title="Welcome to X4 Forge"
+      subtitle="Locate X4: Foundations and extract schemas — nothing saves until you confirm"
+      icon={<Rocket size={16} className="text-sky-400" />}
+      onClose={onClose}
+      dismissible={phase !== 'applying'}
+      closeOnBackdrop={phase !== 'applying'}
+      closeOnEscape={phase !== 'applying'}
+      closeButtonAriaLabel="Dismiss setup"
+      dataTestId="first-run-wizard"
+      maxWidthClass="max-w-[540px]"
+      zIndexClass="z-50"
+      bodyClassName="min-h-0 flex-1 overflow-y-auto custom-scrollbar p-5 space-y-4"
+    >
+      <p className="text-slate-400 text-[11px] leading-relaxed">
+        The Forge needs to know where X4: Foundations lives. It can detect your installation automatically or let you configure directories manually.
+      </p>
+
+      {phase === 'scanning' && (
+        <div className="flex items-center gap-2 text-sky-300 text-xs py-6 justify-center">
+          <Loader2 size={14} className="animate-spin" /> Scanning for your X4 installation…
         </div>
-        <div className="text-slate-400 text-[11px] mb-4 leading-relaxed">
-          The Forge needs to know where X4: Foundations lives. It can find everything itself — nothing is
-          saved until you confirm.
-        </div>
+      )}
 
-        {phase === 'scanning' && (
-          <div className="flex items-center gap-2 text-cyan-300 text-xs py-6 justify-center">
-            <Loader2 size={14} className="animate-spin" /> Scanning for your X4 installation…
+      {phase === 'found' && detect?.proposal && (
+        <>
+          <div className="flex items-center gap-2 text-emerald-300 text-xs">
+            <CheckCircle2 size={14} />
+            Found X4: Foundations ({detect.source === 'gog' ? 'GOG' : 'Steam'})
+            {detect.canHarvestSchemas === false && (
+              <span className="text-amber-300 ml-1">— but its schema archives were unreadable</span>
+            )}
           </div>
-        )}
-
-        {phase === 'found' && detect?.proposal && (
-          <>
-            <div className="flex items-center gap-2 text-emerald-300 text-xs mb-3">
-              <CheckCircle2 size={14} />
-              Found X4: Foundations ({detect.source === 'gog' ? 'GOG' : 'Steam'})
-              {detect.canHarvestSchemas === false && (
-                <span className="text-amber-300 ml-1">— but its schema archives were unreadable</span>
-              )}
-            </div>
-            <div className="bg-white/[0.03] border border-white/10 rounded-lg p-3 space-y-1.5 mb-4">
-              {row('Game', detect.proposal.x4GamePath)}
-              {row('Dev workspace', detect.proposal.modWorkspacePath)}
-              {row('Installed extensions (browse/import)', detect.proposal.filesystemPath)}
-              {row('Deploy target', `${detect.proposal.x4GamePath}\\extensions (only when you choose Deploy)`)}
-              {row('Schemas', `${detect.proposal.xsdSchemaPath} (extracted from the game)`)}
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={applyAutomatic}
-                disabled={detect.canHarvestSchemas === false}
-                className="flex-1 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-semibold transition-colors cursor-pointer"
-              >
-                Set up automatically
-              </button>
-              <button
-                onClick={() => { onClose(); onOpenManualSetup(); }}
-                className="px-4 py-2 rounded-lg border border-white/15 text-slate-300 hover:border-cyan-500/40 text-xs transition-colors cursor-pointer"
-              >
-                <span className="inline-flex items-center gap-1.5"><FolderCog size={12} /> Manual setup</span>
-              </button>
-            </div>
-          </>
-        )}
-
-        {phase === 'notfound' && (
-          <>
-            <div className="flex items-center gap-2 text-amber-300 text-xs mb-3">
-              <AlertTriangle size={14} /> {detect?.hint || 'No X4: Foundations install was found automatically.'}
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={() => { onClose(); onOpenManualSetup(); }}
-                className="flex-1 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold transition-colors cursor-pointer"
-              >
-                <span className="inline-flex items-center gap-1.5 justify-center"><FolderCog size={12} /> Set up manually</span>
-              </button>
-              <button onClick={onClose} className="px-4 py-2 rounded-lg border border-white/15 text-slate-300 text-xs cursor-pointer">
-                Later
-              </button>
-            </div>
-          </>
-        )}
-
-        {phase === 'applying' && (
-          <div className="flex items-center gap-2 text-cyan-300 text-xs py-6 justify-center">
-            <Loader2 size={14} className="animate-spin" /> {applyStep}
+          <div className="bg-[#0d1118] border border-white/[0.08] rounded-lg p-3 space-y-1.5">
+            {row('Game', detect.proposal.x4GamePath)}
+            {row('Dev workspace', detect.proposal.modWorkspacePath)}
+            {row('Installed extensions', detect.proposal.filesystemPath)}
+            {row('Deploy target', `${detect.proposal.x4GamePath}\\extensions (only when you choose Deploy)`)}
+            {row('Schemas', `${detect.proposal.xsdSchemaPath} (extracted from the game)`)}
           </div>
-        )}
-
-        {phase === 'done' && (
-          <>
-            <div className="flex items-center gap-2 text-emerald-300 text-xs mb-4">
-              <CheckCircle2 size={14} /> You&rsquo;re set up. The canvas is ready — pick a starter mod and it
-              will run in your game.
-            </div>
+          <div className="flex gap-2">
             <button
-              onClick={() => { onApplied(); onClose(); }}
-              className="w-full py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors cursor-pointer"
+              type="button"
+              onClick={applyAutomatic}
+              disabled={detect.canHarvestSchemas === false}
+              className="flex-1 py-2 rounded-md bg-sky-600 hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-medium transition-colors cursor-pointer"
             >
-              Start building
+              Set up automatically
             </button>
-          </>
-        )}
+            <button
+              type="button"
+              onClick={() => { onClose(); onOpenManualSetup(); }}
+              className="px-4 py-2 rounded-md border border-white/15 bg-white/[0.03] text-slate-200 hover:border-sky-500/40 text-xs transition-colors cursor-pointer"
+            >
+              <span className="inline-flex items-center gap-1.5"><FolderCog size={12} /> Manual setup</span>
+            </button>
+          </div>
+        </>
+      )}
 
-        {phase === 'error' && (
-          <>
-            <div className="flex items-center gap-2 text-red-300 text-xs mb-3">
-              <AlertTriangle size={14} /> {errorMsg}
-            </div>
-            <div className="flex gap-2">
-              <button onClick={applyAutomatic} className="flex-1 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-semibold cursor-pointer">
-                <span className="inline-flex items-center gap-1.5 justify-center"><Search size={12} /> Try again</span>
-              </button>
-              <button
-                onClick={() => { onClose(); onOpenManualSetup(); }}
-                className="px-4 py-2 rounded-lg border border-white/15 text-slate-300 hover:border-cyan-500/40 text-xs cursor-pointer"
-              >
-                Manual setup
-              </button>
-            </div>
-          </>
-        )}
-      </div>
-    </div>
+      {phase === 'notfound' && (
+        <>
+          <div className="flex items-center gap-2 text-amber-300 text-xs">
+            <AlertTriangle size={14} /> {detect?.hint || 'No X4: Foundations install was found automatically.'}
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => { onClose(); onOpenManualSetup(); }}
+              className="flex-1 py-2 rounded-md bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium transition-colors cursor-pointer"
+            >
+              <span className="inline-flex items-center gap-1.5 justify-center"><FolderCog size={12} /> Set up manually</span>
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 rounded-md border border-white/15 bg-white/[0.03] text-slate-300 hover:text-white text-xs cursor-pointer transition-colors"
+            >
+              Later
+            </button>
+          </div>
+        </>
+      )}
+
+      {phase === 'applying' && (
+        <div className="flex items-center gap-2 text-sky-300 text-xs py-6 justify-center">
+          <Loader2 size={14} className="animate-spin" /> {applyStep}
+        </div>
+      )}
+
+      {phase === 'done' && (
+        <>
+          <div className="flex items-center gap-2 text-emerald-300 text-xs">
+            <CheckCircle2 size={14} /> You&rsquo;re set up. The canvas is ready — pick a starter mod and it will run in your game.
+          </div>
+          <button
+            type="button"
+            onClick={() => { onApplied(); onClose(); }}
+            className="w-full py-2 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition-colors cursor-pointer"
+          >
+            Start building
+          </button>
+        </>
+      )}
+
+      {phase === 'error' && (
+        <>
+          <div className="flex items-center gap-2 text-rose-300 text-xs">
+            <AlertTriangle size={14} /> {errorMsg}
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={applyAutomatic}
+              className="flex-1 py-2 rounded-md bg-sky-600 hover:bg-sky-500 text-white text-xs font-medium cursor-pointer transition-colors"
+            >
+              <span className="inline-flex items-center gap-1.5 justify-center"><Search size={12} /> Try again</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => { onClose(); onOpenManualSetup(); }}
+              className="px-4 py-2 rounded-md border border-white/15 bg-white/[0.03] text-slate-200 hover:border-sky-500/40 text-xs cursor-pointer transition-colors"
+            >
+              Manual setup
+            </button>
+          </div>
+        </>
+      )}
+    </ModalShell>
   );
 };
 

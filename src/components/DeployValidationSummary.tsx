@@ -131,7 +131,7 @@ export default function DeployValidationSummary({ result }: { result: DeployRevi
     <p data-testid="deploy-review-counts" className="text-slate-300">{view.countText}</p>
     {Array.isArray(gaps) && gapCount > 0 && <details data-testid="deploy-coverage-details" className="text-slate-300"
       open={coverageOpen} onToggle={event => setCoverageOpen(event.currentTarget.open)}>
-      <summary className="cursor-pointer rounded focus-visible:outline focus-visible:outline-cyan-400">Coverage gaps ({gapCount})</summary>
+      <summary className="cursor-pointer rounded focus-visible:outline focus-visible:outline-sky-400">Coverage gaps ({gapCount})</summary>
       {coverageOpen && <DeployCoverageGaps gaps={gaps} directPage={coveragePage} setDirectPage={setCoveragePage} />}
     </details>}
     <p className="text-slate-400">{view.confirmed ? 'Deployed file bytes confirmed. ' : ''}This result does not verify behavior in X4.</p>
